@@ -1010,129 +1010,150 @@ Retention in use: `migrationCheckpointRetention = 5` for both `"pre-migrate"` an
 
 ## PART 11 — `internal/merge`: every merge and conflict rule
 
-Files: `/Users/bmf/code/links-issue-tracker/internal/merge/merge.go`, `resolve.go`, `resolve_prose.go`.
+Files: `/Users/bmf/code/links-issue-tracker/internal/merge/merge.go`, `collision.go`, `resolve.go`, `resolve_prose.go`.
 
 ### 11.1 Signatures
 
-merge.go: `MergeResult struct{ export model.Export; Pending []ProsePending }` (merge.go:19-22); `(MergeResult) Settled() (model.Export, bool)` (merge.go:29); `(MergeResult) Provisional() model.Export` (merge.go:37); `ThreeWay(base, local, remote model.Export) MergeResult` (merge.go:41); `mapIssues` (:115); `optionalIssuePtr` (:123); `unionIssueIDs` (:131); `issueChanged` (:146); `issueEqual` (:150); `issueProjection` struct (:160-179); `issueProjectionFrom` (:181); `mergeRelations` (:207); `enforceSingleParent` (:246); `breakParentCycles` (:272); `maxString` (:304); `mergeComments` (:314); `mergeLabels` (:337); `mergeEvents` (:391); `maxInt` (:407).
+merge.go: `MergeResult struct{ export model.Export; Pending []ProsePending; Collisions []Collision }` (merge.go:19-27; `Collision` is declared at collision.go:16); `(MergeResult) Settled() (model.Export, bool)`, ok only when `Pending` and `Collisions` are both empty (merge.go:35-37); `(MergeResult) Provisional() (model.Export, bool)`, ok only when `Collisions` is empty (merge.go:47-49); `side uint8` (:53); `issueScope map[string]side` (:67) with `admits` (:71); `sidedRows[T any]` (:74-77); `bothSidesOf[T any]` (:81); `ThreeWay(base model.Export, local model.Export, remote model.Export) MergeResult` (merge.go:85); `mapIssues` (:175); `optionalIssuePtr` (:183); `unionIssueIDs` (:191); `issueChanged` (:206); `issueEqual` (:210); `issueProjection` struct (:220-239); `issueProjectionFrom` (:241); `mergeRelations` (:267); `enforceSingleParent` (:305); `breakParentCycles` (:331); `maxString` (:363); `mergeComments` (:373); `mergeLabels` (:398); `mergeEvents` (:462); `maxInt` (:480).
 
-resolve.go: `ProseField string` (:15) with `ProseTitle="title"` (:18), `ProseDescription="description"` (:19), `ProsePrompt="agent_prompt"` (:20); `ProsePending{IssueID,Field,Base,Ours,Theirs}` with JSON tags `issue_id/field/base/ours/theirs` (:26-32); `IssueResolution{merged model.Issue; Pending []ProsePending}` (:41-44) with `Settled()` (:50) and `Provisional()` (:60); `ResolveIssue(base, ours, theirs *model.Issue, oursWS, theirsWS string) IssueResolution` (:77); `resolver` struct (:139-147); `twoTier[T comparable]` (:155); `(*resolver).prose` (:174); `(*resolver).resolveStatus` (:187); `(*resolver).tiebreak` (:231); `typedTiebreak[T ~string]` (:247); `resolveClosePayload` (:264); `closePayload` (:310-313); `closePayloadOf` (:319); `(*resolver).derivedFlagTime` (:336); `higher[T cmp.Ordered]` (:346); `stateRank` (:353); `stateFromRank` (:364); `boolBase` (:375); `mergeLabelNames` (:386); `presentOr` (:404); `nameSet` (:406); `unionNameSet` (:414); `earliest` (:424); `latest` (:431); `earliestTime` (:438); `cloneTimePtr` (:451).
+collision.go: `Collision{IssueID string; Ours model.Issue; Theirs model.Issue}` with JSON tags `issue_id/ours/theirs` (:16-20); `SameEntity{base *model.Issue; ours, theirs model.Issue; oursWS, theirsWS string}` — every field unexported, so outside the package `Classify` is the only way to obtain one (:29-33); `Classify(base *model.Issue, ours, theirs model.Issue, oursWS, theirsWS string) (SameEntity, *Collision)` (:64); `ancestorOf(base *model.Issue, ours model.Issue) *model.Issue` (:80); `SortCollisions(collisions []Collision) []Collision` (:90).
 
-resolve_prose.go: `(ProsePending) Fingerprint() string` (:18); `ProseResolution{IssueID, Field, Fingerprint, Text}` — **no JSON tags** (:33-38); `proseKey{IssueID, Field}` (:44-47); `ApplyProseResolutions(result MergeResult, resolutions []ProseResolution) (model.Export, bool)` (:62); `applyIssueProse` (:113); `SortPending` (:128).
+resolve.go: `ProseField string` (:15) with `ProseTitle="title"` (:18), `ProseDescription="description"` (:19), `ProsePrompt="agent_prompt"` (:20); `ProsePending{IssueID,Field,Base,Ours,Theirs}` with JSON tags `issue_id/field/base/ours/theirs` (:26-32); `IssueResolution{merged model.Issue; Pending []ProsePending}` (:41-44) with `Settled() (model.Issue, bool)` (:50) and `Provisional() model.Issue` (:60); `ResolveIssue(in SameEntity) IssueResolution` (:85); `resolver` struct (:151-159); `twoTier[T comparable]` (:167); `(*resolver).prose` (:186); `(*resolver).resolveStatus` (:199); `(*resolver).tiebreak` (:243); `typedTiebreak[T ~string]` (:259); `resolveClosePayload` (:276); `closePayload` (:322-325); `closePayloadOf` (:331); `(*resolver).derivedFlagTime` (:348); `higher[T cmp.Ordered]` (:358); `stateRank` (:365); `stateFromRank` (:376); `boolBase` (:387); `mergeLabelNames` (:398); `presentOr` (:416); `nameSet` (:418); `unionNameSet` (:426); `latest` (:436); `earliestTime` (:443); `cloneTimePtr` (:456).
+
+resolve_prose.go: `type Fingerprint string` (:23); `fingerprintBytes = 6` (:28); `(ProsePending) Fingerprint() Fingerprint` (:30); `ParseFingerprint(text string) (Fingerprint, bool)` (:39); `ProseResolution{Fingerprint, Text}` — **no JSON tags** (:57-60); `proseKey{IssueID, Field}` (:66-69); `ApplyProseResolutions(result MergeResult, resolutions []ProseResolution) (model.Export, bool)` (:85); `applyIssueProse` (:138); `SortPending` (:153).
 
 ### 11.2 `ThreeWay` — export-level algorithm
 
-1. Three id→issue maps from `base.Issues`, `local.Issues`, `remote.Issues`; a duplicate id within one export lets the **last row in slice order** win (merge.go:42-44, :115-121).
-2. Candidate id set = union of all three, **sorted ascending** (merge.go:46, :131-144).
-3. Per id, a copied `*model.Issue` per side, `nil` when absent (merge.go:54-56, :123-129).
-4. `localChanged := issueChanged(base, local)`, `remoteChanged := issueChanged(base, remote)` (merge.go:58-59).
+1. Three id→issue maps from `base.Issues`, `local.Issues`, `remote.Issues`; a duplicate id within one export lets the **last row in slice order** win (merge.go:86-88, :175-181).
+2. Candidate id set = union of all three, **sorted ascending** (merge.go:90, :191-204).
+3. Per id, a copied `*model.Issue` per side, `nil` when absent (merge.go:99-101, :183-189).
+4. `localChanged := issueChanged(basePtr, localPtr)`, `remoteChanged := issueChanged(basePtr, remotePtr)` (merge.go:103-104).
 
-The four-way presence/change branch (merge.go:61-93):
+The four-way presence/change branch (merge.go:106-150):
 
 | Condition | Result |
 |---|---|
-| neither changed | append `baseIssue` if `hasBase`; else nothing (merge.go:62-65) |
-| only local changed | append `localIssue` if present; else nothing — local deleted, remote untouched → row dropped (merge.go:66-69) |
-| only remote changed | append `remoteIssue` if present; else nothing (merge.go:70-73) |
-| both changed, both present | `ResolveIssue(basePtr, localPtr, remotePtr, local.WorkspaceID, remote.WorkspaceID)`; append `resolution.Provisional()` and append its `Pending...` to the export pending list (merge.go:81-84) |
-| both changed, local only | append `localIssue` — remote removed it, local edited → the surviving edit is preserved (merge.go:85-87) |
-| both changed, remote only | append `remoteIssue` (merge.go:88-90) |
-| both changed, neither present | append nothing — converged removal (merge.go:91) |
+| neither changed | append `baseIssue` if `hasBase`; else nothing (merge.go:107-110) |
+| only local changed | append `localIssue` if present; else nothing — local deleted, remote untouched → row dropped (merge.go:111-114) |
+| only remote changed | append `remoteIssue` if present; else nothing (merge.go:115-118) |
+| both changed, both present, `Classify` returns a `*Collision` | append the collision to the collision list and append `localIssue` unchanged; `ResolveIssue` is not called and no pending entry is added (merge.go:127-138) |
+| both changed, both present, `Classify` returns a `SameEntity` | `ResolveIssue(same)`; append `resolution.Provisional()` and append its `Pending...` to the export pending list (merge.go:139-141) |
+| both changed, local only | append `localIssue` — remote removed it, local edited → the surviving edit is preserved (merge.go:142-144) |
+| both changed, remote only | append `remoteIssue` (merge.go:145-147) |
+| both changed, neither present | append nothing — converged removal (merge.go:148) |
 
-Note: `ours` = local, `theirs` = remote; `oursWS = local.WorkspaceID`, `theirsWS = remote.WorkspaceID` (merge.go:82). Deletion here is whole-row absence; soft deletion is a `DeletedAt` stamp on a present row and travels through the retention field instead (merge.go:75-79).
+`Classify` is called as `Classify(basePtr, localIssue, remoteIssue, local.WorkspaceID, remote.WorkspaceID)` (merge.go:127), so `ours` = local, `theirs` = remote, `oursWS = local.WorkspaceID`, `theirsWS = remote.WorkspaceID`. Deletion here is whole-row absence; soft deletion is a `DeletedAt` stamp on a present row and travels through the retention field instead (merge.go:120-124). The result's `Collisions` is `SortCollisions(collisions)` (merge.go:172).
+
+**`Classify`** (collision.go:64-71): when `ours.CreatedAt.Equal(theirs.CreatedAt)` is false it returns `(SameEntity{}, &Collision{IssueID: ours.ID, Ours: ours, Theirs: theirs})`; otherwise it returns a `SameEntity` carrying `ours`, `theirs`, both workspace ids and `ancestorOf(base, ours)`, with a nil `*Collision`. The test is `time.Time.Equal`, so two encodings of one instant in different offsets compare equal (collision.go:65-67). The base row takes no part in deciding a collision.
+
+**`ancestorOf`** (collision.go:80-85): returns `nil` when `base` is nil or `base.CreatedAt` is not `Equal` to `ours.CreatedAt`; otherwise returns `base`. A base row whose `CreatedAt` differs from the shared instant reaches `ResolveIssue` as no base.
+
+**`SortCollisions`** (collision.go:90-95): copies the slice and sorts it by `IssueID`; the input is not mutated.
+
+Collision tests (`collision_test.go`), fixture `plantCollision` (`:15-34`) = a shared `epic.1` plus an `epic.16` created at a different instant on local (`wsA`) and remote (`wsB`), with different titles and descriptions:
+- `:40-85` — `ThreeWay` reports one collision on `epic.16` carrying both rows whole; `Settled()` and `Provisional()` both return `ok=false`; the provisional export's `epic.16` is the local row with its own title and description.
+- `:94-118` — identical title and description on both sides, different `CreatedAt`, empty base → zero pending, one collision, `Settled()` `ok=false`.
+- `:124-146` — one `CreatedAt` on both sides and no base → `Classify` reports no collision, and `ThreeWay` returns no collisions with `Settled()` `ok=true`.
+- `:154-168` — base and ours share `CreatedAt`, theirs differs → collision.
+- `:175-190` — ours and theirs share `CreatedAt`, base differs → no collision, and the `SameEntity` has a nil base.
+- `:195-207` — base, ours and theirs share `CreatedAt` → no collision, and the base is kept.
+- `:216-237` — base, ours and theirs carry three different instants → collision carrying both rows whole.
+- `:244-298` — a collided `epic.16` with one relation, comment, label and event per side → the provisional export holds exactly the local side's four rows.
 
 ### 11.3 Change detection
 
-`issueChanged = !issueEqual` (merge.go:146-148). `issueEqual`: both nil → true; exactly one nil → false; else `reflect.DeepEqual` of the two `issueProjection`s (merge.go:150-158).
+`issueChanged = !issueEqual` (merge.go:206-208). `issueEqual`: both nil → true; exactly one nil → false; else `reflect.DeepEqual` of the two `issueProjection`s (merge.go:210-218).
 
-`issueProjection` (merge.go:160-179), built by `issueProjectionFrom` (merge.go:181-205), captures: `ID`, `Title`, `Description`, `Prompt`, `Priority`, `IssueType`, `Topic`, `Assignee` (via `issue.AssigneeValue()`), `Rank`, `Lane`, `Labels` (copied via `append([]string{}, issue.Labels...)`, normalizing `nil` and `[]string{}` to the same value), `CreatedAt`, `UpdatedAt`, `Retention` (via `issue.Retention()`), `Capabilities` (via `issue.Capabilities()`).
+`issueProjection` (merge.go:220-239), built by `issueProjectionFrom` (merge.go:241-265), captures: `ID`, `Title`, `Description`, `Prompt`, `Priority`, `IssueType`, `Topic`, `Assignee` (via `issue.AssigneeValue()`), `Rank`, `Lane`, `Labels` (copied via `append([]string{}, issue.Labels...)`, normalizing `nil` and `[]string{}` to the same value), `CreatedAt`, `UpdatedAt`, `Retention` (via `issue.Retention()`), `Capabilities` (via `issue.Capabilities()`).
 
-`Capabilities` carries the whole leaf lifecycle payload — status value, `closed_at`, `resolution`, `redirect_target` (`model.StatusView`, `/Users/bmf/code/links-issue-tracker/internal/model/capabilities.go:20-28`) — so a change to any of those four registers as "this side moved" (merge.go:175-178). `issue.Capabilities()` returns the empty `Capabilities{}` for containers (`/Users/bmf/code/links-issue-tracker/internal/model/model.go:244-249`); for an unhydrated leaf it **panics** (`model.go:432-434`), so `ThreeWay` panics on an unhydrated leaf issue.
+`Capabilities` carries the whole leaf lifecycle payload — status value, `closed_at`, `resolution`, `redirect_target` (`model.StatusView`, `/Users/bmf/code/links-issue-tracker/internal/model/capabilities.go:20-28`) — so a change to any of those four registers as "this side moved" (merge.go:235-238). `issue.Capabilities()` returns the empty `Capabilities{}` for containers (`/Users/bmf/code/links-issue-tracker/internal/model/model.go:245-250`); for an unhydrated leaf it **panics** through `mustLifecycle` (`model.go:258-261`, `:429-435`), so `ThreeWay` panics on an unhydrated leaf issue.
 
-Tests: `merge_test.go:115-125` (nil vs empty `Labels` compare equal, so JSON round-trip drift does not synthesize changes); `merge_test.go:148-155` (`issueChanged` is true for a resolution-only re-close `wontfix`→`duplicate` at identical status and `closed_at`); `merge_test.go:88-113` (a JSON-round-tripped hydrated **epic** compares clean); `resolve_test.go:560-583` (a `Prompt`-only or `Lane`-only edit is detected and survives).
+Tests: `merge_test.go:115-125` (nil vs empty `Labels` compare equal, so JSON round-trip drift does not synthesize changes); `merge_test.go:148-155` (`issueChanged` is true for a resolution-only re-close `wontfix`→`duplicate` at identical status and `closed_at`); `merge_test.go:88-113` (a JSON-round-tripped hydrated **epic** compares clean); `resolve_test.go:592-615` (a `Prompt`-only or `Lane`-only edit is detected and survives).
 
-### 11.4 Merged export assembly (merge.go:96-113)
+### 11.4 Merged export assembly (merge.go:153-172)
 
-- `mergedIssues` sorted ascending by `ID` (merge.go:96).
-- `issueSet` = surviving issue ids; it gates every side-table (merge.go:97-100).
-- `Version = maxInt(local.Version, remote.Version, base.Version)` (merge.go:103; `maxInt` returns 1 for an empty argument list, merge.go:408-410).
-- `WorkspaceID = local.WorkspaceID` — remote's is discarded (merge.go:104).
-- `ExportedAt = local.ExportedAt` — remote's is discarded (merge.go:105).
-- `Relations = mergeRelations(issueSet, local.Relations, remote.Relations)` — **base not passed** (merge.go:107).
-- `Comments = mergeComments(issueSet, local.Comments, remote.Comments)` — base not passed (merge.go:108).
-- `Labels = mergeLabels(issueSet, base.Labels, local.Labels, remote.Labels)` — the only three-way side-table (merge.go:109).
-- `Events = mergeEvents(issueSet, local.Events, remote.Events)` — base not passed (merge.go:110).
+- `mergedIssues` sorted ascending by `ID` (merge.go:153).
+- `scope` is an `issueScope` (`map[string]side`, where `side` is the bit set `fromLocal = 1`, `fromRemote = 2`, `bothSides = 3`, merge.go:53-59, :67). Every surviving issue id is set to `bothSides` (merge.go:154-157); each collided id is then set to `fromLocal` (merge.go:158-160). `scope.admits(id, from)` is `scope[id]&from != 0`, so an id absent from the merged issues admits no side (merge.go:71). The scope gates every side-table.
+- `Version = maxInt(local.Version, remote.Version, base.Version)` (merge.go:163; `maxInt` returns 1 for an empty argument list, merge.go:481-483).
+- `WorkspaceID = local.WorkspaceID` — remote's is discarded (merge.go:164).
+- `ExportedAt = local.ExportedAt` — remote's is discarded (merge.go:165).
+- `Relations = mergeRelations(scope, local.Relations, remote.Relations)` — **base not passed** (merge.go:167).
+- `Comments = mergeComments(scope, local.Comments, remote.Comments)` — base not passed (merge.go:168).
+- `Labels = mergeLabels(scope, base.Labels, local.Labels, remote.Labels)` — the only three-way side-table (merge.go:169).
+- `Events = mergeEvents(scope, local.Events, remote.Events)` — base not passed (merge.go:170).
 
-`Settled()` returns `(export, len(Pending)==0)` (merge.go:29-31); `Provisional()` returns the export unconditionally (merge.go:37-39). The export field is unexported, so those two methods are the only access. Test `resolve_test.go:537-558`.
+`Settled()` returns `(export, len(Pending)==0 && len(Collisions)==0)` (merge.go:35-37); `Provisional()` returns `(export, len(Collisions)==0)` (merge.go:47-49). Both return the export value alongside `ok`, including when `ok` is false. The export field is unexported, so those two methods are the only access. Tests `resolve_test.go:569-590` (pending prose → `Settled()` `ok=false`; a clean merge → `ok=true`) and `collision_test.go:40-85` (a collision → `Settled()` and `Provisional()` both `ok=false`).
 
 ### 11.5 Side-table rules
 
-**Relations** (`mergeRelations`, merge.go:207-237): key is the triple `{SrcID, DstID, Type}` (merge.go:208-211). Iterates `append(locals, remotes...)` — locals first — writing into `merged[key]`, so on an identical key the **remote row wins** its `CreatedAt`/`CreatedBy` (merge.go:213, :220). Referential filter: dropped unless **both** `SrcID` and `DstID` are in `issueSet` (merge.go:214-219). Then `enforceSingleParent` (merge.go:226), then sort by `SrcID`, `DstID`, `Type` (merge.go:227-235). `Type` values: `"blocks"`, `"parent-child"`, `"related-to"` (`/Users/bmf/code/links-issue-tracker/internal/model/relation_type.go:17-19`). `blocks` and `related-to` are purely additive — test `resolve_test.go:172-202` asserts a local `blocks` edge and a remote `related-to` edge both survive (2 relations).
+**Relations** (`mergeRelations`, merge.go:267-296): key is the triple `{Src, Dst, Type}` (merge.go:268-271). Iterates `bothSidesOf(locals, remotes)` — locals first, then remotes (merge.go:81-83) — writing into `merged[key]`, so on an identical key the **remote row wins** its `CreatedAt`/`CreatedBy` (merge.go:273-279). Referential filter: a row is dropped unless `scope` admits **both** `SrcID` and `DstID` from the side the row was read from (merge.go:275-277), so a relation touching a collided id survives only from the local side. Then `enforceSingleParent` (merge.go:285), then sort by `SrcID`, `DstID`, `Type` (merge.go:286-294). `Type` values: `"blocks"`, `"parent-child"`, `"related-to"` (`/Users/bmf/code/links-issue-tracker/internal/model/relation_type.go:17-19`). `blocks` and `related-to` are purely additive — test `resolve_test.go:186-216` asserts a local `blocks` edge and a remote `related-to` edge both survive (2 relations).
 
-**Single parent** (`enforceSingleParent`, merge.go:246-264): non-`parent-child` relations pass straight through (merge.go:250-253). Parent-child edges are keyed by `SrcID` (the child); the child keeps exactly one edge — the one with the **lexicographically greatest `DstID`** (`!seen || relation.DstID > existing.DstID`) (merge.go:254-257). Order-independent. Then `breakParentCycles(parentOf)` (merge.go:259) and the survivors are appended (merge.go:260-262); the caller sorts. Test `resolve_test.go:660-683`.
+**Single parent** (`enforceSingleParent`, merge.go:305-323): non-`parent-child` relations pass straight through (merge.go:309-312). Parent-child edges are keyed by `SrcID` (the child); the child keeps exactly one edge — the one with the **lexicographically greatest `DstID`** (`!seen || relation.DstID > existing.DstID`) (merge.go:313-316). Order-independent. Then `breakParentCycles(parentOf)` (merge.go:318) and the survivors are appended (merge.go:319-321); the caller sorts. Test `resolve_test.go:692-715`.
 
-**Cycle breaking** (`breakParentCycles`, merge.go:272-302): walks parent edges from each unsettled key (merge.go:279-281); a walk stops at a node with no parent edge or already `settled` (merge.go:286-288). On revisiting a node already on the current path at index `idx`, it **deletes the map entry keyed by `maxString(path[idx:])`** — the lexicographically greatest child id inside the loop — and stops (merge.go:290-293). The victim child becomes a root; nothing is reparented. Every node on the path is then marked `settled` (merge.go:298-300). `maxString` panics on an empty slice (merge.go:304-312) but is only ever called with the non-empty `path[idx:]`. Tests: `merge_test.go:238-258` (tail-entered cycle `a→b→c→b` → `c`'s edge deleted, `a→b`/`b→c` untouched); `merge_test.go:260-279` (clean 3-cycle `a→b→c→a` → exactly one edge removed, victim `c`); `resolve_test.go:630-658` (end-to-end: local `a→b`, remote `b→a` → exactly one parent edge).
+**Cycle breaking** (`breakParentCycles`, merge.go:331-361): walks parent edges from each unsettled key (merge.go:338-341); a walk stops at a node with no parent edge or already `settled` (merge.go:346-348). On revisiting a node already on the current path at index `idx`, it **deletes the map entry keyed by `maxString(path[idx:])`** — the lexicographically greatest child id inside the loop — and stops (merge.go:349-352). The victim child becomes a root; nothing is reparented. Every node on the path is then marked `settled` (merge.go:357-359). `maxString` panics on an empty slice (merge.go:363-371) but is only ever called with the non-empty `path[idx:]`. Tests: `merge_test.go:238-258` (tail-entered cycle `a→b→c→b` → `c`'s edge deleted, `a→b`/`b→c` untouched); `merge_test.go:260-279` (clean 3-cycle `a→b→c→a` → exactly one edge removed, victim `c`); `resolve_test.go:662-690` (end-to-end: local `a→b`, remote `b→a` → exactly one parent edge).
 
-**Comments** (`mergeComments`, merge.go:314-328): two-way union keyed by `Comment.ID`; locals then remotes, so **remote wins an id collision** (merge.go:316-321); dropped unless `IssueID ∈ issueSet` (merge.go:317-319); sorted by `ID` (merge.go:326). Test `resolve_test.go:608-628`.
+**Comments** (`mergeComments`, merge.go:373-389): two-way union keyed by `Comment.ID` over `bothSidesOf(locals, remotes)`, so when both sides carry one comment id the **remote row wins** (merge.go:375-382); a row is dropped unless `scope` admits its `IssueID` from the side it was read from (merge.go:377-379); sorted by `ID` (merge.go:387). Test `resolve_test.go:640-660`.
 
-**Events** (`mergeEvents`, merge.go:391-405): identical shape — union keyed by `IssueEvent.ID`, remote wins collisions, dropped unless `IssueID ∈ issueSet`, sorted by `ID`.
+**Events** (`mergeEvents`, merge.go:462-478): identical shape — union keyed by `IssueEvent.ID`, remote row wins when both sides carry one event id, dropped unless `scope` admits its `IssueID` from the side it was read from, sorted by `ID`.
 
-**Labels table** (`mergeLabels`, merge.go:337-389) — the only three-way side-table. Key `{IssueID, Name}` (merge.go:338-339). `baseSet`/`localSet`/`remoteSet` computed (merge.go:340-347). Metadata rows: locals first then remotes, so **remote wins ties** on `CreatedAt`/`CreatedBy` (merge.go:351-357). Candidate keys = base ∪ local ∪ remote (merge.go:359-364); dropped unless `IssueID ∈ issueSet` (merge.go:368-370). Membership: `twoTier(true, inBase, inLocal, inRemote, presentOr)` — `hasBase` **hardcoded `true`**, so an empty base makes every present label an add (merge.go:376-377). A key passing the membership test but with no row in `rows` (i.e. only in base) contributes nothing (merge.go:378-380). Sorted by `IssueID`, `Name` (merge.go:382-387). Test `resolve_test.go:482-507`: base `[a,b]`, local `[a]`, remote `[a,b]` → merged table is `[a]`; `b` is not resurrected.
+**Labels table** (`mergeLabels`, merge.go:398-460) — the only three-way side-table. Key `{IssueID, Name}` (merge.go:399-400). Local rows are kept only when `scope` admits their `IssueID` from `fromLocal`, remote rows only from `fromRemote`; base rows are not filtered (merge.go:401-410). `baseSet`/`localSet`/`remoteSet` are computed from the base rows and the filtered side rows (merge.go:411-418). Metadata rows: filtered locals first then filtered remotes, so **remote wins ties** on `CreatedAt`/`CreatedBy` (merge.go:422-428). Candidate keys = base ∪ local ∪ remote (merge.go:430-435); dropped unless `scope.admits(IssueID, bothSides)`, which holds for every id in the scope (merge.go:439-441). Membership: `twoTier(true, inBase, inLocal, inRemote, presentOr)` — `hasBase` **hardcoded `true`**, so an empty base makes every present label an add (merge.go:445-448). A key passing the membership test but with no row in `rows` (i.e. only in base) contributes nothing (merge.go:449-451). Sorted by `IssueID`, `Name` (merge.go:453-458). Test `resolve_test.go:496-521`: base `[a,b]`, local `[a]`, remote `[a,b]` → merged table is `[a]`; `b` is not resurrected.
+
+Test `collision_test.go:244-298` pins the side filter on all four side-tables: for a collided id, only the local side's relation, comment, label and event survive, and none of the local rows is dropped.
 
 ### 11.6 `ResolveIssue` — per-row field merge
 
-`ResolveIssue(base, ours, theirs *model.Issue, oursWS, theirsWS string)` (resolve.go:77). `base == nil` means no merge-base; `hasBase = base != nil` (resolve.go:78-81). `r.id = ours.ID` (resolve.go:84). `ours` and `theirs` are dereferenced unconditionally (resolve.go:82-83), so both must be non-nil.
+`ResolveIssue(in SameEntity) IssueResolution` (resolve.go:85). `base, ours, theirs := in.base, &in.ours, &in.theirs`; `hasBase = base != nil`, and `r.base` is assigned only when `hasBase` (resolve.go:86-90). `r.id = ours.ID` (resolve.go:93). `ours` and `theirs` point at values inside the `SameEntity`, so neither is nil. Outside the package a `SameEntity` comes only from `Classify` (collision.go:29-33, :64), so `ours.CreatedAt` and `theirs.CreatedAt` are `Equal`, and `base` is nil unless its `CreatedAt` is `Equal` to that instant too (collision.go:67, :80-85).
 
-**The one merge primitive — `twoTier`** (resolve.go:155-168):
+**The one merge primitive — `twoTier`** (resolve.go:167-180):
 ```
 oursChanged   := !hasBase || ours != base
 theirsChanged := !hasBase || theirs != base
 ```
 | Case | Result |
 |---|---|
-| ours moved, theirs didn't | `ours` (resolve.go:159-160) |
-| theirs moved, ours didn't | `theirs` (resolve.go:161-162) |
-| neither moved | `ours` (resolve.go:163-164) |
-| both moved | `tier2(ours, theirs)` (resolve.go:165-166) |
+| ours moved, theirs didn't | `ours` (resolve.go:171-172) |
+| theirs moved, ours didn't | `theirs` (resolve.go:173-174) |
+| neither moved | `ours` (resolve.go:175-176) |
+| both moved | `tier2(ours, theirs)` (resolve.go:177-178) |
 
-With `hasBase == false`, both sides count as changed, so **every field goes straight to Tier 2** (resolve.go:156-157). Tier 2 is entered even when both sides moved to the same value, so every tier2 function must be idempotent on equal inputs — all of them are (`higher`, `tiebreak`, `presentOr`, the prose closure).
+With `hasBase == false`, both sides count as changed, so **every field goes straight to Tier 2** (resolve.go:168-169). Tier 2 is entered even when both sides moved to the same value, so every tier2 function must be idempotent on equal inputs — all of them are (`higher`, `tiebreak`, `presentOr`, the prose closure).
 
-**Type resolution and basis selection**: `merged.IssueType = twoTier(hasBase, base.IssueType, ours.IssueType, theirs.IssueType, typedTiebreak[model.IssueType](&r))` (resolve.go:86, :97). The merged row is built by copying **`ours`**, except when the resolved type differs from `ours.IssueType` and equals `theirs.IssueType`, in which case **`theirs`** is the basis (resolve.go:91-95). Consequence: every field `ResolveIssue` does not explicitly re-merge is inherited verbatim from that basis side — lifecycle, and (for containers) status/assignee/close payload.
+**Type resolution and basis selection**: `mergedType := twoTier(hasBase, base.IssueType, ours.IssueType, theirs.IssueType, typedTiebreak[model.IssueType](&r))` (resolve.go:95), assigned with `merged.IssueType = mergedType` (resolve.go:106). The merged row is built by copying **`ours`**, except when the resolved type differs from `ours.IssueType` and equals `theirs.IssueType`, in which case **`theirs`** is the basis (resolve.go:100-104). Consequence: every field `ResolveIssue` does not explicitly re-merge is inherited verbatim from that basis side — lifecycle, and (for containers) status/assignee/close payload.
 
-**Field-by-field** (resolve.go:97-134):
+**Field-by-field** (resolve.go:106-146):
 
 | Field | Base operand | Tier 2 policy | Line |
 |---|---|---|---|
-| `IssueType` | `base.IssueType` | symmetric workspace tiebreak | :86, :97 |
-| `Title` | `base.Title` | prose → `ProsePending{Field:"title"}`, returns `ours` provisionally | :98 |
-| `Description` | `base.Description` | prose → `ProsePending{Field:"description"}` | :99 |
-| `Prompt` | `base.Prompt` | prose → `ProsePending{Field:"agent_prompt"}` | :100 |
-| `Priority` | `base.Priority` | `higher` — numerically greater wins; `PriorityUrgent=1` beats `PriorityNormal=0` (`/Users/bmf/code/links-issue-tracker/internal/model/priority.go:15-16`) | :101 |
-| `Topic` | `base.Topic` | symmetric workspace tiebreak | :102 |
-| `Lane` | `base.Lane` | symmetric workspace tiebreak | :103 |
-| `Rank` | `base.Rank` | symmetric workspace tiebreak | :104 |
-| `Labels` | `base.Labels` | per-name two-tier, `presentOr` at Tier 2 | :105 |
-| `ID` | — | always `ours.ID`; never merged | :110 |
-| `CreatedAt` | — | `base.CreatedAt` when `hasBase`; else `earliest(ours, theirs)` | :111-115 |
-| `UpdatedAt` | — | always `latest(ours.UpdatedAt, theirs.UpdatedAt)`; never two-tier | :116 |
-| retention | per-flag booleans | `presentOr`, timestamp slaved | :122-128 |
-| status/assignee/closed_at/resolution/redirect_target | see below | leaves only | :130-134 |
+| `IssueType` | `base.IssueType` | symmetric workspace tiebreak | :95, :106 |
+| `Title` | `base.Title` | prose → `ProsePending{Field:"title"}`, returns `ours` provisionally | :107 |
+| `Description` | `base.Description` | prose → `ProsePending{Field:"description"}` | :108 |
+| `Prompt` | `base.Prompt` | prose → `ProsePending{Field:"agent_prompt"}` | :109 |
+| `Priority` | `base.Priority` | `higher` — numerically greater wins; `PriorityUrgent=1` beats `PriorityNormal=0` (`/Users/bmf/code/links-issue-tracker/internal/model/priority.go:15-16`) | :110 |
+| `Topic` | `base.Topic` | symmetric workspace tiebreak | :111 |
+| `Lane` | `base.Lane` | symmetric workspace tiebreak | :112 |
+| `Rank` | `base.Rank` | symmetric workspace tiebreak | :113 |
+| `Labels` | `base.Labels` | per-name two-tier, `presentOr` at Tier 2 | :114 |
+| `ID` | — | always `ours.ID`; never merged | :119 |
+| `CreatedAt` | — | `base.CreatedAt` when `hasBase`; else `ours.CreatedAt`, which `Classify` has proven `Equal` to `theirs.CreatedAt` | :120-127 |
+| `UpdatedAt` | — | always `latest(ours.UpdatedAt, theirs.UpdatedAt)`; never two-tier | :128 |
+| retention | per-flag booleans | `presentOr`, timestamp slaved | :134-140 |
+| status/assignee/closed_at/resolution/redirect_target | see below | leaves only | :144-146 |
 
-When `hasBase == false`, `r.base` is the zero `model.Issue`, so all base operands are zero values — and they are ignored anyway since both sides count as changed (resolve.go:78-81, :156-157).
+When `hasBase == false`, `r.base` is the zero `model.Issue`, so all base operands are zero values — and they are ignored anyway since both sides count as changed (resolve.go:86-90, :168-169).
 
-**Prose** (`(*resolver).prose`, resolve.go:174-182): Tier 1 takes whichever single side moved the text off base, with **no** agent involvement and no pending entry. Tier 2 (both moved): if `ours == theirs`, the agreed text is returned with **no** pending entry (resolve.go:176-178). Otherwise a `ProsePending{IssueID: r.id, Field: field, Base: base, Ours: ours, Theirs: theirs}` is appended and **`ours` is returned as a provisional value** (resolve.go:179-180). The engine never picks a prose winner. Pending entries are appended in field order title → description → prompt (resolve.go:98-100).
+**Prose** (`(*resolver).prose`, resolve.go:186-194): Tier 1 takes whichever single side moved the text off base, with **no** agent involvement and no pending entry. Tier 2 (both moved): if `ours == theirs`, the agreed text is returned with **no** pending entry (resolve.go:188-190). Otherwise a `ProsePending{IssueID: r.id, Field: field, Base: base, Ours: ours, Theirs: theirs}` is appended and **`ours` is returned as a provisional value** (resolve.go:191-192). The engine never picks a prose winner. Pending entries are appended in field order title → description → prompt (resolve.go:107-109).
 
-**Label names** (`mergeLabelNames`, resolve.go:386-402): converts base/ours/theirs to sets (:387), iterates the union (:389), applies `twoTier(hasBase, inBase, inOurs, inTheirs, presentOr)` per name (:393). Semantics: added by either → kept; removed by exactly one while the other left it → **stays removed**; removed by both → removed; both add → kept. Returns `nil` (not an empty slice) when nothing survives (:397-399); else sorted ascending (:400). Tests `resolve_test.go:454-468` (base `[keep]`, ours `[keep,ours]`, theirs `[keep,theirs]` → `[keep, ours, theirs]`), `resolve_test.go:470-480`.
+**Label names** (`mergeLabelNames`, resolve.go:398-414): converts base/ours/theirs to sets (:399), iterates the union (:401), applies `twoTier(hasBase, inBase, inOurs, inTheirs, presentOr)` per name (:405). Semantics: added by either → kept; removed by exactly one while the other left it → **stays removed**; removed by both → removed; both add → kept. Returns `nil` (not an empty slice) when nothing survives (:409-411); else sorted ascending (:412). Tests `resolve_test.go:468-482` (base `[keep]`, ours `[keep,ours]`, theirs `[keep,theirs]` → `[keep, ours, theirs]`), `resolve_test.go:484-494` (base `[a,b]`, ours `[a]`, theirs `[a,b]` → `[a]`).
 
-**Leaf lifecycle** (`resolveStatus`, resolve.go:187-226) — runs only when `!mergedType.IsContainer()` (resolve.go:132-134; `IsContainer()` is true only for `epic`, `/Users/bmf/code/links-issue-tracker/internal/model/issue_type.go:56-58`):
-- Base operands read only when `hasBase`; else `baseState = 0`, `baseAssignee = ""` (resolve.go:191-196).
-- **status**: `stateFromRank(twoTier(hasBase, baseRank, rank(ours), rank(theirs), higher))` (resolve.go:198). Ranks: `closed = 2`, `in_progress = 1`, everything else `0` → `open` (resolve.go:353-373). Tier 2 is the dominant-state join.
-- **assignee**: `twoTier(hasBase, baseAssignee, ours.AssigneeValue(), theirs.AssigneeValue(), r.tiebreak)` written to `merged.Assignee` (resolve.go:199-201).
-- **closed_at / resolution / redirect_target**: all three stay `nil` unless the merged state is `closed` (resolve.go:203-217). When closed: `closedAt = earliestTime(ours.ClosedAtValue(), theirs.ClosedAtValue())` — earliest non-nil, cloned (resolve.go:207, :438-457); `resolution, redirectTarget = resolveClosePayload(ours, theirs, r.tiebreak)` (resolve.go:216).
-- Re-hydration via `model.HydrateStatus(merged, model.StatusView{...})` (resolve.go:219); a returned error **panics** (resolve.go:220-224).
+**Leaf lifecycle** (`resolveStatus`, resolve.go:199-238) — runs only when `!mergedType.IsContainer()` (resolve.go:144-146; `IsContainer()` is true only for `epic`, `/Users/bmf/code/links-issue-tracker/internal/model/issue_type.go:56-58`):
+- Base operands read only when `hasBase`; else `baseState = 0`, `baseAssignee = ""` (resolve.go:204-209).
+- **status**: `stateFromRank(twoTier(hasBase, baseState, stateRank(ours), stateRank(theirs), higher))` (resolve.go:210). Ranks: `closed = 2`, `in_progress = 1`, everything else `0` → `open` (resolve.go:365-385). Tier 2 is the dominant-state join.
+- **assignee**: `twoTier(hasBase, baseAssignee, ours.AssigneeValue(), theirs.AssigneeValue(), r.tiebreak)` written to `merged.Assignee` (resolve.go:213).
+- **closed_at / resolution / redirect_target**: all three stay `nil` unless the merged state is `closed` (resolve.go:215-229). When closed: `closedAt = earliestTime(ours.ClosedAtValue(), theirs.ClosedAtValue())` — earliest non-nil, cloned (resolve.go:219, :443-462); `resolution, redirectTarget = resolveClosePayload(ours, theirs, r.tiebreak)` (resolve.go:228).
+- Re-hydration via `model.HydrateStatus(merged, model.StatusView{...})` (resolve.go:231); a returned error **panics** (resolve.go:232-236).
 - A merged **container** inherits its lifecycle, status, assignee, and close payload untouched from the basis side — never merged.
 
-Status table test `TestResolveIssueStatusTwoTier` (resolve_test.go:36-62), all asserting zero pending:
+Status table test `TestResolveIssueStatusTwoTier` (resolve_test.go:50-76), all asserting zero pending:
 
 | base | ours | theirs | want |
 |---|---|---|---|
@@ -1142,21 +1163,21 @@ Status table test `TestResolveIssueStatusTwoTier` (resolve_test.go:36-62), all a
 | open | in_progress | closed | closed |
 | closed | open | in_progress | in_progress (both moved off closed; higher rank) |
 
-Also: `resolve_test.go:64-72` (priority base normal / ours urgent / theirs normal → urgent); `resolve_test.go:204-229` (both closed at t2/t1 → `closed_at` = t1; reopen → `closed_at` **nil** even though theirs carries one); `resolve_test.go:509-520` (`ID` stays `i1`, `CreatedAt` stays base `t0` even when both sides moved it); `resolve_test.go:522-535` (`base = nil`: `in_progress` vs `closed` → closed, and the diverged title yields exactly one `ProseTitle` pending).
+Also: `resolve_test.go:78-86` (priority base normal / ours urgent / theirs normal → urgent); `resolve_test.go:218-243` (both closed at t2/t1 → `closed_at` = t1; reopen → `closed_at` **nil** even though theirs carries one); `resolve_test.go:527-548` (`ID` stays `i1` and `CreatedAt` is the shared instant `t0`, both with a base carrying `t0` and with a base carrying `t2`, which `Classify` drops); `resolve_test.go:550-567` (`base = nil`: `in_progress` vs `closed` → closed, and the diverged title yields exactly one `ProseTitle` pending).
 
-**Tiebreak** (`(*resolver).tiebreak`, resolve.go:231-242): if `oursWS != theirsWS`, the value from the **lexicographically greater workspace id** wins (`oursWS > theirsWS` → `ours`, else `theirs`). If the workspace ids are equal (the code calls this "defensive"), the **lexicographically greater value** wins (`ours >= theirs` → `ours`, else `theirs`). Symmetric by construction. `typedTiebreak[T ~string]` wraps it for named string types (resolve.go:247-251). Tests `resolve_test.go:123-140` (topic base `root`, ours `alice`@wsA, theirs `bob`@wsB → `bob`, same under argument swap), `resolve_test.go:142-170` (same for `Assignee`).
+**Tiebreak** (`(*resolver).tiebreak`, resolve.go:243-254): if `oursWS != theirsWS`, the value from the **lexicographically greater workspace id** wins (`oursWS > theirsWS` → `ours`, else `theirs`). If the workspace ids are equal (the code calls this "defensive"), the **lexicographically greater value** wins (`ours >= theirs` → `ours`, else `theirs`). Symmetric by construction. `typedTiebreak[T ~string]` wraps it for named string types (resolve.go:259-263). Tests `resolve_test.go:137-154` (topic base `root`, ours `alice`@wsA, theirs `bob`@wsB → `bob`, same under argument swap), `resolve_test.go:156-184` (same for `Assignee`).
 
-**Close payload atom** (`resolveClosePayload`, resolve.go:264-302; `closePayloadOf`, resolve.go:319-329): `closePayloadOf` projects a side to `{resolution, target}`; if `ResolutionValue()` is nil the whole payload is empty and `target` is read only under a non-nil resolution — so `{resolution:"", target:"x"}` is unconstructible. Branch order (resolve.go:267-292):
-1. `o == t` (struct equality) → that payload (:269-270).
-2. `o.resolution == ""` → `t` wins (:271-272).
-3. `t.resolution == ""` → `o` wins (:273-274).
-4. resolutions differ → `tiebreak(o.resolution, t.resolution)`; the winning resolution's **own** payload, target included, is taken whole (:275-280).
-5. same resolution, `o.target == ""` → `t` (:283-284).
-6. same resolution, `t.target == ""` → `o` (:285-286).
-7. same resolution, two real targets → `tiebreak(o.target, t.target)` selects the whole payload (:287-291).
-Return `(nil, nil)` when the winning resolution is empty; else `(*model.Resolution, *string)` with `target` nil when the winner's target is empty (:293-301). It never mixes one side's resolution with the other side's target.
+**Close payload atom** (`resolveClosePayload`, resolve.go:276-314; `closePayloadOf`, resolve.go:331-341): `closePayloadOf` projects a side to `{resolution, target}`; if `ResolutionValue()` is nil the whole payload is empty and `target` is read only under a non-nil resolution — so `{resolution:"", target:"x"}` is unconstructible. Branch order (resolve.go:280-304):
+1. `o == t` (struct equality) → that payload (:281-282).
+2. `o.resolution == ""` → `t` wins (:283-284).
+3. `t.resolution == ""` → `o` wins (:285-286).
+4. resolutions differ → `tiebreak(o.resolution, t.resolution)`; the winning resolution's **own** payload, target included, is taken whole (:287-292).
+5. same resolution, `o.target == ""` → `t` (:295-296).
+6. same resolution, `t.target == ""` → `o` (:297-298).
+7. same resolution, two real targets → `tiebreak(o.target, t.target)` selects the whole payload (:299-303).
+Return `(nil, nil)` when the winning resolution is empty; else `(*model.Resolution, *string)` with `target` nil when the winner's target is empty (:305-313). It never mixes one side's resolution with the other side's target.
 
-`TestResolveClosePayloadAtomicity` (resolve_test.go:246-326) runs each row in **both** argument orders (:320-323) with a "larger string wins" stand-in tiebreak (:251-256):
+`TestResolveClosePayloadAtomicity` (resolve_test.go:260-340) runs each row in **both** argument orders (:334-337) with a "larger string wins" stand-in tiebreak (:265-270):
 
 | ours | theirs | want resolution | want target |
 |---|---|---|---|
@@ -1167,11 +1188,11 @@ Return `(nil, nil)` when the winning resolution is empty; else `(*model.Resoluti
 | duplicate/`links-aaa` | duplicate/`links-bbb` | `duplicate` | `links-bbb` |
 | duplicate/`links-canon` | duplicate/`links-canon` | `duplicate` | `links-canon` |
 
-End-to-end guard `resolve_test.go:332-355`: open-vs-redirecting-close → closed with `redirect_target = links-canon`; a reopen winning on state → `RedirectTargetValue() == nil`.
+End-to-end guard `resolve_test.go:346-369`: open-vs-redirecting-close → closed with `redirect_target = links-canon`; a reopen winning on state → `RedirectTargetValue() == nil`.
 
-**Retention** (resolve.go:118-128, :336-342): each side's retention is projected to the two-timestamp wire pair via `model.RetentionTimestamps` (resolve.go:122-124; encoder at `/Users/bmf/code/links-issue-tracker/internal/model/lifecycle/retention.go:136-150`). Each flag merges independently through `derivedFlagTime(base bool, ours, theirs *time.Time)`: `set := twoTier(hasBase, base, ours != nil, theirs != nil, presentOr)`; `!set` → `nil`; else `earliestTime(ours, theirs)` (resolve.go:336-342). The timestamp is **derived** from the resolved flag, never merged on its own. `boolBase(t, hasBase) = hasBase && t != nil` (resolve.go:375-377). The pair is folded back via `model.RetentionFromTimestamps`, whose rule is `deletedAt != nil → Deleted; archivedAt != nil → Archived; else Live` — **deletion dominates** (`/Users/bmf/code/links-issue-tracker/internal/model/lifecycle/retention.go:120-131`). Retention merges for containers as well as leaves — it runs before the `IsContainer` gate (resolve.go:122-134).
+**Retention** (resolve.go:129-140, :348-354): each side's retention is projected to the two-timestamp wire pair via `model.RetentionTimestamps` (resolve.go:134-136; encoder at `/Users/bmf/code/links-issue-tracker/internal/model/lifecycle/retention.go:157-175`). Each flag merges independently through `derivedFlagTime(base bool, ours, theirs *time.Time)`: `set := twoTier(hasBase, base, ours != nil, theirs != nil, presentOr)`; `!set` → `nil`; else `earliestTime(ours, theirs)` (resolve.go:348-354). The timestamp is **derived** from the resolved flag, never merged on its own. `boolBase(t, hasBase) = hasBase && t != nil` (resolve.go:387-389). The pair is folded back via `model.RetentionFromTimestamps`, whose rule is `deletedAt != nil → Deleted; archivedAt != nil → Archived; else Live` — **deletion dominates** (`/Users/bmf/code/links-issue-tracker/internal/model/lifecycle/retention.go:141-150`). Retention merges for containers as well as leaves — it runs before the `IsContainer` gate (resolve.go:134-146).
 
-`TestResolveIssueRetentionRaces` (resolve_test.go:381-452):
+`TestResolveIssueRetentionRaces` (resolve_test.go:395-466):
 
 | scenario | result |
 |---|---|
@@ -1183,56 +1204,60 @@ End-to-end guard `resolve_test.go:332-355`: open-vs-redirecting-close → closed
 | Archived@t1 base; both unarchived | `Live` (convergent clear via Tier 2) |
 | Deleted@t1 base; both restored | `Live` |
 
-Plus `resolve_test.go:357-374`: both archive (t2 vs t1) off a live base → `Archived{At: t1}`; only ours archives at t2 → `Archived{At: t2}`.
+Plus `resolve_test.go:371-388`: both archive (t2 vs t1) off a live base → `Archived{At: t1}`; only ours archives at t2 → `Archived{At: t2}`.
 
-**Time helpers**: `earliest(a,b)` = `a.Before(b) ? a : b`, ties yield `b` (resolve.go:424-429). `latest(a,b)` = `a.After(b) ? a : b`, ties yield `b` (resolve.go:431-436). `earliestTime(a,b *time.Time)` is nil-tolerant and always returns a fresh pointer via `cloneTimePtr` (resolve.go:438-457). `higher[T cmp.Ordered]` = `ours >= theirs ? ours : theirs` (resolve.go:346-351).
+**Time helpers**: `latest(a,b)` = `a.After(b) ? a : b`, ties yield `b` (resolve.go:436-441). `earliestTime(a,b *time.Time)`: `a == nil` → clone of `b`; `b == nil` → clone of `a`; `a.Before(*b)` → clone of `a`; else clone of `b`, so ties yield `b`; every result is a fresh pointer via `cloneTimePtr`, which returns nil for nil (resolve.go:443-462). `higher[T cmp.Ordered]` = `ours >= theirs ? ours : theirs` (resolve.go:358-363).
 
-`IssueResolution.Settled()` → `(merged, len(Pending)==0)` (resolve.go:50-52); `Provisional()` → `merged` unconditionally (resolve.go:60-62); `merged` is unexported. Test `resolve_test.go:87-104`.
+`IssueResolution.Settled()` → `(merged, len(Pending)==0)` (resolve.go:50-52); `Provisional()` → `merged` unconditionally (resolve.go:60-62); `merged` is unexported. Test `resolve_test.go:101-118`.
 
 ### 11.7 Prose resolution surface (`resolve_prose.go`)
 
-**There is no text-diff machinery in this package.** No line-level or hunk-level diffing, no `<<<<<<<`/`=======`/`>>>>>>>` conflict markers, no diff3, no similarity heuristics. A prose conflict is whole-field: the three complete strings travel in `ProsePending{Base, Ours, Theirs}` (resolve.go:26-32, populated at resolve.go:179), and the agent's answer is one complete replacement string `ProseResolution.Text` (resolve_prose.go:37) assigned wholesale to the field (resolve_prose.go:115-117).
+**There is no text-diff machinery in this package.** No line-level or hunk-level diffing, no `<<<<<<<`/`=======`/`>>>>>>>` conflict markers, no diff3, no similarity heuristics. A prose conflict is whole-field: the three complete strings travel in `ProsePending{Base, Ours, Theirs}` (resolve.go:26-32, populated at resolve.go:179), and the agent's answer is one complete replacement string `ProseResolution.Text` (resolve_prose.go:59) assigned wholesale to the field (resolve_prose.go:139-147).
 
-**`Fingerprint()`** (resolve_prose.go:18-21): `hex.EncodeToString(sha256.Sum256([]byte(string(p.Field) + "\x00" + p.Base + "\x00" + p.Ours + "\x00" + p.Theirs))[:6])` — a **12-hex-character** truncation of SHA-256 over the field name and the three texts joined by NUL bytes. **`IssueID` is not part of the digest.**
+**`Fingerprint()`** (resolve_prose.go:30-33): `Fingerprint(hex.EncodeToString(sha256.Sum256([]byte(p.IssueID + "\x00" + string(p.Field) + "\x00" + p.Base + "\x00" + p.Ours + "\x00" + p.Theirs))[:fingerprintBytes]))` with `fingerprintBytes = 6` (resolve_prose.go:28) — a **12-lowercase-hex-character** truncation of SHA-256 over the issue id, the field name and the three texts joined by NUL bytes. The same field text diverged identically on two issues yields two different fingerprints.
 
-**`ApplyProseResolutions(result, resolutions) (model.Export, bool)`** (resolve_prose.go:62-107):
-1. Builds `pendingByKey map[proseKey]string` from `result.Pending`: key `{IssueID, Field}` → live `Fingerprint()` (resolve_prose.go:66-69). Duplicate pending keys collapse (last wins).
-2. Per supplied resolution, keyed by `{IssueID, Field}`:
-   - **Reject** (`return model.Export{}, false`) if the key is not in the pending set, or `resolution.Fingerprint != liveFingerprint` (resolve_prose.go:78-81).
-   - **Reject** if the same key already appeared in this call — a duplicate resolution for one field (resolve_prose.go:87-89).
-   - Else record `resolvedByKey[key] = resolution.Text` (resolve_prose.go:90).
-3. **Reject** if `len(resolvedByKey) != len(pendingByKey)` — the bijection/completeness gate catching a partial set (resolve_prose.go:95-97).
-4. On success: takes `result.Provisional()`, allocates a **fresh** `[]model.Issue` and copies the slice (resolve_prose.go:99-102), applies `applyIssueProse` to each element (:103), assigns the new slice, returns `(export, true)` (:105-106). The original `MergeResult`'s issue slice is not mutated; Relations/Comments/Labels/Events are shared by reference with the provisional export.
-5. Pure — no IO, no clock (resolve_prose.go:60-61).
+**`ParseFingerprint(text)`** (resolve_prose.go:39-45): returns `(Fingerprint(text), true)` only when `hex.DecodeString(text)` succeeds, yields exactly `fingerprintBytes` bytes, and `hex.EncodeToString` of those bytes equals `text`, so only exactly 12 lowercase hex characters pass; anything else returns `("", false)`.
 
-Every rejection returns the **zero** `model.Export{}` paired with `false` (resolve_prose.go:80, :88, :96) — never a partially-spliced export.
+**`ApplyProseResolutions(result, resolutions) (model.Export, bool)`** (resolve_prose.go:85-132):
+1. Builds `pendingByFingerprint map[Fingerprint]proseKey` from `result.Pending`: live `Fingerprint()` → `{IssueID, Field}` (resolve_prose.go:89-92). Pending fields that share a fingerprint collapse to one entry (last wins).
+2. Per supplied resolution, looked up by `resolution.Fingerprint`:
+   - **Reject** (`return model.Export{}, false`) if the fingerprint is not in `pendingByFingerprint` (resolve_prose.go:99-102).
+   - **Reject** if the looked-up `{IssueID, Field}` already has a text in this call — a second resolution for one field (resolve_prose.go:108-110).
+   - Else record `resolvedByKey[key] = resolution.Text` (resolve_prose.go:111).
+3. **Reject** if `len(resolvedByKey) != len(result.Pending)` — the completeness gate, counted against the pending slice rather than `pendingByFingerprint`, so pending fields that collapsed to one fingerprint entry fail it (resolve_prose.go:117-119).
+4. **Reject** if `result.Provisional()` returns `ok=false`, which it does when the merge holds an id collision (resolve_prose.go:121-124; merge.go:47-49).
+5. On success: allocates a **fresh** `[]model.Issue` and copies the provisional slice (resolve_prose.go:125-126), applies `applyIssueProse` to each element (:127-129), assigns the new slice, returns `(export, true)` (:130-131). The original `MergeResult`'s issue slice is not mutated; Relations/Comments/Labels/Events are shared by reference with the provisional export.
+6. Pure — no IO, no clock (resolve_prose.go:83-84).
 
-**`applyIssueProse`** (resolve_prose.go:113-123): the single `ProseField` → field mapping as a map of setter closures — `ProseTitle → issue.Title`, `ProseDescription → issue.Description`, `ProsePrompt → issue.Prompt`. A field is written only if `resolved[{issue.ID, field}]` exists.
+Every rejection returns the **zero** `model.Export{}` paired with `false` (resolve_prose.go:101, :109, :118, :123) — never a partially-spliced export.
 
-**`SortPending`** (resolve_prose.go:128-138): copies the slice and sorts by `IssueID`, then `Field` (raw string, so `"agent_prompt" < "description" < "title"`). Does not mutate the input. Not called anywhere inside the package.
+**`applyIssueProse`** (resolve_prose.go:138-148): the single `ProseField` → field mapping as a map of setter closures — `ProseTitle → issue.Title`, `ProseDescription → issue.Description`, `ProsePrompt → issue.Prompt`. A field is written only if `resolved[{issue.ID, field}]` exists.
 
-Prose tests (`resolve_prose_test.go`), fixture `prosePendingFixture` (`:13-29`) = one issue `i1` with concurrent title *and* description rewrites → exactly 2 pending:
+**`SortPending`** (resolve_prose.go:153-163): copies the slice and sorts by `IssueID`, then `Field` (raw string, so `"agent_prompt" < "description" < "title"`). Does not mutate the input. Not called anywhere inside the package.
+
+Prose tests (`resolve_prose_test.go`), fixture `prosePendingFixture` (`:13-29`) = one issue `i1` with concurrent title *and* description rewrites → exactly 2 pending; `fingerprintOf` (`:33-42`) returns a pending field's live fingerprint:
 - `:44-64` — exact bijection with live fingerprints splices `merged-title`/`merged-desc`, and the original provisional export is asserted **not** mutated in place.
 - `:66-73` — one resolution for a two-field pending set → rejected.
-- `:75-85` — fingerprint `"deadbeefcafe"` on an otherwise-valid key → whole set rejected.
-- `:87-97` — a resolution for `ProsePrompt`, which is not pending → rejected.
-- `:99-112` — two resolutions for the same pending field (both correctly fingerprinted) plus the second field → rejected; the comment notes the count gate alone cannot catch this.
-- `:114-122` — resolution for `IssueID: "nope"` → rejected.
+- `:75-86` — fingerprint `"deadbeefcafe"`, which names no live conflict, plus a valid description resolution → whole set rejected.
+- `:88-101` — two resolutions carrying the title's fingerprint plus the description's → rejected; the comment notes the count gate alone cannot catch this.
+- `:108-138` — issues `i1` and `i2` with the same title rewrite on each → 2 pending fields; resolving each by its own fingerprint succeeds and gives each issue its own merged text.
+- `:144-154` — `ParseFingerprint` returns a live fingerprint unchanged and refuses `""`, `"deadbeef"`, `"deadbeefcafe00"`, `"DEADBEEFCAFE"`, `"deadbeefcafg"`, and `"i1:title:<live fingerprint>"`.
+- `:187-198` — fixture `proseAndCollisionFixture` (`:161-176`) holds one pending title and one id collision; an exact bijection is rejected and the returned export has no issues.
 
 ### 11.8 Errors, sentinels, aborts in `internal/merge`
 
-The package declares **no** error type, no sentinel `var Err...`, and **no function returns `error`**. Every failure is a `bool` second return: `MergeResult.Settled` (merge.go:29), `IssueResolution.Settled` (resolve.go:50), `ApplyProseResolutions` (resolve_prose.go:62).
+The package declares **no** error type, no sentinel `var Err...`, and **no function returns `error`**. Every failure is a `bool` second return: `MergeResult.Settled` (merge.go:35), `MergeResult.Provisional` (merge.go:47), `IssueResolution.Settled` (resolve.go:50), `ParseFingerprint` (resolve_prose.go:39), `ApplyProseResolutions` (resolve_prose.go:85).
 
-The only explicit abort is `panic(err)` when `model.HydrateStatus` returns an error inside `resolveStatus` (resolve.go:219-224). Implicit panics reachable from this package: `maxString` on an empty slice (merge.go:305, only called with non-empty `path[idx:]`); `ResolveIssue` dereferencing a nil `ours`/`theirs` (resolve.go:82-84, guarded by `ThreeWay` at merge.go:81-82); `issueProjectionFrom → issue.Capabilities() → mustLifecycle` on an unhydrated non-container (`/Users/bmf/code/links-issue-tracker/internal/model/model.go:244-252, 428-435`), reached from `issueChanged` for every id (merge.go:58-59); `merged.SetRetention(...)` on an illegal retention variant (`model.go:133-140`), called at resolve.go:125.
+The only explicit abort is `panic(err)` when `model.HydrateStatus` returns an error inside `resolveStatus` (resolve.go:231-236). Implicit panics reachable from this package: `maxString` on an empty slice (merge.go:363-371, only called at merge.go:350 with the non-empty `path[idx:]`); `issueProjectionFrom → issue.Capabilities() → mustLifecycle` on an unhydrated non-container (`/Users/bmf/code/links-issue-tracker/internal/model/model.go:245-250, 258-261, 429-435`), reached from `issueChanged` for every id (merge.go:103-104); `model.RetentionTimestamps` on an illegal retention variant (`/Users/bmf/code/links-issue-tracker/internal/model/lifecycle/retention.go:157-175`), called at resolve.go:134-136; `merged.SetRetention(...)` on an illegal retention variant (`model.go:134-141`), called at resolve.go:137. `ResolveIssue` dereferences no caller-supplied pointer that can be nil: `ours` and `theirs` are addresses of `SameEntity` fields, and `base` is dereferenced only when `hasBase` (resolve.go:86-92).
 
 ### 11.9 Ordering and determinism
 
-- Candidate issue ids sorted ascending before iteration (merge.go:142, :46-50) — pending order and merge order are deterministic.
-- Merged issues sorted by `ID` (merge.go:96); relations by `(SrcID, DstID, Type)` (merge.go:227-235); comments by `ID` (merge.go:326); events by `ID` (merge.go:403); label table by `(IssueID, Name)` (merge.go:382-387); label names on a row ascending (resolve.go:400); `SortPending` by `(IssueID, Field)` (resolve_prose.go:131-136).
-- Every Tier-2 policy is symmetric in its two inputs — `higher` (resolve.go:346), `presentOr` (resolve.go:404), workspace `tiebreak` (resolve.go:231-242), `resolveClosePayload` (resolve.go:264, verified in both orders at resolve_test.go:320-323) — so both machines compute the same winner without a clock and without knowing which side is "ours".
-- Causality comes from the merge-base, not timestamps: `UpdatedAt`/`CreatedAt` are never consulted to pick a field winner; they are themselves outputs (resolve.go:111-116, stated at resolve.go:73-76).
-- The single-parent winner (`max DstID`, merge.go:255) and the cycle victim (`max child id in the loop`, merge.go:291) are order-independent functions of the data.
-- Non-deterministic residue: map-iteration order feeds `enforceSingleParent` (merge.go:223-226) and `breakParentCycles`' start-node choice (merge.go:279); both are followed by an order-independent selection rule and a final sort.
+- Candidate issue ids sorted ascending before iteration (merge.go:202, :90-95) — pending order, collision discovery order and merge order are deterministic.
+- Merged issues sorted by `ID` (merge.go:153); collisions by `IssueID` (merge.go:172, collision.go:90-95); relations by `(SrcID, DstID, Type)` (merge.go:286-294); comments by `ID` (merge.go:387); events by `ID` (merge.go:476); label table by `(IssueID, Name)` (merge.go:453-458); label names on a row ascending (resolve.go:412); `SortPending` by `(IssueID, Field)` (resolve_prose.go:156-161).
+- Every Tier-2 policy is symmetric in its two inputs — `higher` (resolve.go:358), `presentOr` (resolve.go:416), workspace `tiebreak` (resolve.go:243-254), `resolveClosePayload` (resolve.go:276, verified in both orders at resolve_test.go:334-337) — so both machines compute the same winner without a clock and without knowing which side is "ours".
+- Causality comes from the merge-base, not timestamps: `UpdatedAt` is never consulted to pick a field winner and is itself an output (resolve.go:128). `CreatedAt` is consulted only by `Classify` and `ancestorOf`, to decide whether two rows are one ticket and whether the base row is its ancestor (collision.go:67, :81); the merged `CreatedAt` is an output (resolve.go:120-127). The merge-base rule is stated at resolve.go:82-84.
+- The single-parent winner (`max DstID`, merge.go:314) and the cycle victim (`max child id in the loop`, merge.go:350) are order-independent functions of the data.
+- Non-deterministic residue: map-iteration order feeds `enforceSingleParent` (merge.go:281-285) and `breakParentCycles`' start-node choice (merge.go:338); both are followed by an order-independent selection rule and a final sort.
 
 ### 11.10 Additional test-pinned merge behaviors
 
@@ -1240,11 +1265,11 @@ The only explicit abort is `panic(err)` when `model.HydrateStatus` returns an er
 - `merge_test.go:57-86` — with a completely **empty base** `model.Export{}`, `ThreeWay` degrades to a two-way union: `only-local`, `only-remote`, and `shared` all appear; the shared id's diverged title is held with `Base=""`, `Ours="from-B"` (local, wsB), `Theirs="from-A"` (remote, wsA), never auto-picked. *(This is exactly the combine path's projection — see §5.13.)*
 - `merge_test.go:157-177` — a lone-side resolution-only re-close (`wontfix` base, local `duplicate`, remote unchanged) merges to `duplicate` with zero pending.
 - `merge_test.go:179-207` — disjoint edits (local changed `i1`, remote changed `i2`) both survive, zero pending.
-- `resolve_test.go:74-85` — Tier-1 prose: only ours rewrote the title (`a`→`b`) → title `b`, zero pending.
-- `resolve_test.go:106-121` — Tier-2 prose is limited to the field that actually diverged: title and prompt identical, description divergent → exactly one pending carrying all three description versions.
-- `resolve_test.go:585-594` — local removed the whole row, remote edited it → the remote edit survives (`Title == "edited"`).
-- `resolve_test.go:596-606` — a base-only id absent on both sides → zero issues; no zero-value row is appended.
-- Fixtures/clocks: `issueWithStatus` (merge_test.go:11-18), `jsonRoundTripIssue` (merge_test.go:20-31), `leaf` (resolve_test.go:19-30), `open` (resolve_test.go:32-34), `closedLeaf` (resolve_test.go:233-240), `issueClosedWith` (merge_test.go:130-142), `parentEdges` (merge_test.go:210-216), `hasParentCycle` (merge_test.go:219-236); `t0 = 2026-01-01`, `t1 = 2026-02-01`, `t2 = 2026-03-01` UTC (resolve_test.go:10-14).
+- `resolve_test.go:88-99` — Tier-1 prose: only ours rewrote the title (`a`→`b`) → title `b`, zero pending.
+- `resolve_test.go:120-135` — Tier-2 prose is limited to the field that actually diverged: title and prompt identical, description divergent → exactly one pending carrying all three description versions.
+- `resolve_test.go:617-626` — local removed the whole row, remote edited it → the remote edit survives (`Title == "edited"`).
+- `resolve_test.go:628-638` — a base-only id absent on both sides → zero issues; no zero-value row is appended.
+- Fixtures/clocks: `issueWithStatus` (merge_test.go:11-18), `jsonRoundTripIssue` (merge_test.go:20-31), `provisional` (merge_test.go:284-291), `leaf` (resolve_test.go:19-30), `open` (resolve_test.go:32-34), `same` (resolve_test.go:40-48; routes a fixture through `Classify` and fails the test if it is a collision), `closedLeaf` (resolve_test.go:247-254), `issueClosedWith` (merge_test.go:130-142), `parentEdges` (merge_test.go:210-216), `hasParentCycle` (merge_test.go:219-236), `plantCollision` (collision_test.go:15-34); `t0 = 2026-01-01`, `t1 = 2026-02-01`, `t2 = 2026-03-01` UTC (resolve_test.go:10-14).
 
 ## PART 12 — The migration registry (`internal/store/migrations/`)
 
