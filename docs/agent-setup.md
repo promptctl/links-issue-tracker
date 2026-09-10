@@ -79,14 +79,14 @@ lit hooks install
 ## 4. Install the `/next` skill (optional, recommended)
 
 `lit init` sets up the workspace's data and docs, but the `/next` skill — the slash
-command that pulls and starts the next ticket — ships separately, from the `links`
+command that pulls and starts the next ticket — ships separately, from the `lit`
 Claude Code plugin declared at this repo's own root
 (`.claude-plugin/marketplace.json`, plugin `claude-plugin/`). It is not written into
 the target repo. Install commands and the team-wide `.claude/settings.json` wiring
 are in the main README's
 [Claude Code plugin section](https://github.com/promptctl/links-issue-tracker#claude-code-plugin)
 — that's the canonical copy; install the plugin once and `/next` (namespaced
-`/links:next`) is available in every session.
+`/lit:next`) is available in every session.
 
 ## 5. The core work loop
 
