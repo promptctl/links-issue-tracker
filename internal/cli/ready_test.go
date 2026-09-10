@@ -33,15 +33,16 @@ func newTestCLIApp(t *testing.T) *app.App {
 	t.Cleanup(func() {
 		_ = st.Close()
 	})
-	return &app.App{
-		Workspace: workspace.Info{
-			Location:    workspace.Location{DatabasePath: filepath.Join(workspaceRoot, "dolt")},
-			RootDir:     workspaceRoot,
-			WorkspaceID: "test-workspace-id",
-			IssuePrefix: testIssuePrefix(t, "test"),
-		},
-		Store: st,
+	stream, err := workspace.EnsureStream(t.TempDir())
+	if err != nil {
+		t.Fatalf("workspace.EnsureStream() error = %v", err)
 	}
+	return app.New(workspace.Info{
+		Location:    workspace.Location{DatabasePath: filepath.Join(workspaceRoot, "dolt")},
+		RootDir:     workspaceRoot,
+		WorkspaceID: "test-workspace-id",
+		IssuePrefix: testIssuePrefix(t, "test"),
+	}, st, stream)
 }
 
 type readyTestHarness struct {

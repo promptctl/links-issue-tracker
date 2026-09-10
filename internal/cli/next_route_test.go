@@ -874,32 +874,26 @@ func TestRouteNextDoesNotAdoptStalePublicHistory(t *testing.T) {
 	}
 }
 
-// TestRouteNextResumesAFreshPublicHoldAsItsOwn is the other half, and the
-// reason the staleness qualifier above is not simply "the public checkout owns
-// nothing". A FRESH unattributed hold is still this checkout's own work: the
-// write path mints a token before it can record anything, so fresh
-// unattributed evidence in a store an unminted checkout is reading is
-// evidence it produced itself, within the freshness window.
-//
-// Losing this half would restore the "infinite lanes" degeneracy the ticket
-// exists to close -- a checkout with no identity owning no lane, being served
-// a brand-new one on every invocation -- and would put the CLI harness's own
-// claim-aware outcomes back out of reach, since the harness mints no token.
-func TestRouteNextResumesAFreshPublicHoldAsItsOwn(t *testing.T) {
+// TestRouteNextRoutesAroundAFreshPublicHold is the fresh half. A checkout with
+// no token has recorded nothing, so a fresh unattributed hold is somebody else's
+// work in flight — a binary older than attribution, or history from the hours
+// before an upgrade — and routing walks around it rather than resuming it.
+func TestRouteNextRoutesAroundAFreshPublicHold(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
-	h.transition(a1.ID, model.Start{Assignee: "tester"})
+	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 1})
+	h.transition(a1.ID, model.Start{Assignee: "whoever-is-working-it"})
 
 	rows, details := h.gather()
 	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, a1.ID)): heldBy(publicAttribution)}
 
 	outcome := routeNext(rows, details, standings, publicAttribution)
-	resumed, ok := outcome.(ResumedOwnWork)
+	served, ok := outcome.(ServedFromNewLane)
 	if !ok {
-		t.Fatalf("routeNext = %#v (%T), want ResumedOwnWork: a fresh unattributed hold is this checkout's own work in flight", outcome, outcome)
+		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane: a fresh public hold is foreign work in flight", outcome, outcome)
 	}
-	if resumed.Row.ID != a1.ID {
-		t.Fatalf("resumed = %q, want %q", resumed.Row.ID, a1.ID)
+	if served.Row.ID != b1.ID {
+		t.Fatalf("served = %q, want %q (the held lane routed around)", served.Row.ID, b1.ID)
 	}
 }

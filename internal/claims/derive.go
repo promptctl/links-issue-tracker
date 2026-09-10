@@ -80,30 +80,13 @@ func standingOf(members []model.Issue, events []model.IssueEvent, fresh Freshnes
 		return local.Void(event.Attribution)
 	})
 
-	// Leg 2 — the holder produced the latest establishing event. Exactly one way
-	// for that to name nobody: no lifecycle transition ever happened in this
-	// lane, so there is no holder to find rather than one we cannot address.
+	// Leg 2 — the holder produced the latest admissible establishing event. With
+	// none left, nobody holds the lane.
 	//
-	// An establishing event carrying no attribution names the PUBLIC CHECKOUT
-	// (model.Attribution.Present) and holds the lane like any other holder. The
-	// derivation still stops at it rather than scanning back to the newest
-	// ancestor that does carry attribution, and that restraint is the point: an
-	// unattributed `start` supersedes every older event, so an attributed
-	// ancestor is not the best available answer — it is an answer we have
-	// positive evidence was replaced.
-	//
-	// What changed is only who the superseding event belongs to. Reading it as
-	// nobody made the lane Unclaimed, which meant an unidentified checkout could
-	// never hold a lane, never be served out of one, and never resume its own
-	// work — it re-entered the global pool on every invocation. Reading it as
-	// the public checkout keeps the honest "we cannot address this holder"
-	// (nothing here resolves a token that was never minted) while restoring the
-	// one thing that reading cost: the holder is a stable identity, so the
-	// checkout that produced the event recognises the lane as its own.
-	//
-	// The pre-attribution history this makes visible is old by construction, so
-	// leg 3 reads it as Stale — available, with provenance — rather than as a
-	// live hold that would route identified checkouts away from real work.
+	// An establishing event with no attribution belongs to the public checkout
+	// (model.Attribution.Present) and holds the lane like any other. Derivation
+	// stops at it rather than scanning back to an older attributed event,
+	// because that older event is one we have positive evidence was superseded.
 	establisher, found := LatestEstablisher(admissible)
 	if !found {
 		return Unclaimed{}

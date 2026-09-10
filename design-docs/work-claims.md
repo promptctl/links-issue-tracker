@@ -149,18 +149,15 @@ An event carrying no pair belongs to the **public checkout**: the single holder
 every unattributed write in a workspace shares. It is a holder like any other —
 it takes lanes, ages out, and can be contested — with one difference that
 follows from having no token: nothing can address it, so no machine's liveness
-prune can void it and no claim line can walk you over to it. A checkout that has
-minted no token *is* the public checkout, which is the point of collapsing all
-of them to one identity rather than to a fresh nobody each time: read as nobody,
-such a checkout owns no lane, so every pick is a new lane and it wanders the
-backlog; read as the public checkout, it holds what it worked and is served out
-of it only while that hold is fresh (see cold start, under "Distribution,
-races, and failure modes"). Lanes are unaffected — the public checkout occupies
-ordinary lanes on ordinary terms.
+prune can void it and no claim line can walk you over to it. It is also never
+the checkout reading it. Only a mutating command records events, and it mints a
+token first, so a checkout that has minted no token has recorded nothing and no
+public-checkout lane is its own. Lanes are unaffected — the public checkout
+occupies ordinary lanes on ordinary terms.
 
-The price is that two checkouts with no token are indistinguishable. That is the
-definition of the bucket rather than a defect in it: an identity nobody minted
-is one nobody can tell apart.
+The price is that two writers with no token are indistinguishable, so they never
+contest each other. That is the definition of the bucket rather than a defect in
+it: an identity nobody minted is one nobody can tell apart.
 
 Sessions, agent identities, and user names play no role in claims. Many
 sessions in one checkout are one claimant; a new session inherits its
@@ -375,25 +372,20 @@ metadata.
 
 Cold start is graceful by construction, but by freshness rather than by
 absence. Historical events carry no attribution, so a freshly upgraded
-repository derives claims held by the **public checkout**, and that history is
-far older than the freshness window, so every one of them reads as stale:
-available for takeover, carrying its provenance.
+repository derives claims held by the **public checkout**. Nearly all of that
+history is older than the freshness window and reads as stale: available for
+takeover, carrying its provenance. A pre-attribution `start` still inside the
+window reads as a fresh hold and is routed around until it ages out, like any
+fresh hold.
 
-One qualifier is what makes that true, and the design is wrong without it. A
-checkout that has minted no token of its own computes the *same* zero
-attribution as the history it is reading — `next` opens read-only, and the read
-path never mints — so equality between the two sides establishes that both are
-unaddressable, not that both are the same checkout. Read as identity, it
-adopted the entire pre-attribution backlog on the very first `next`, announcing
-lanes the checkout had never touched as work already in flight in lanes it
-holds. A **stale** public lane is therefore nobody's own work; a **fresh** one
-still is, because the write path mints a token before it can record anything,
-so fresh unattributed evidence is evidence this checkout produced itself.
+No checkout reads a public-checkout lane as its own, fresh or stale. A checkout
+that has minted no token computes the *same* zero attribution as that history —
+`next` opens read-only, and the read path never mints — so equality between the
+two proves only that both are unaddressable. Read as identity, it would adopt
+the entire pre-attribution backlog on its first `next`.
 
-Scoped that way, cold start withholds no work that was on offer before — but it
-does not behave identically to a pre-claims repository, and the earlier claim
-that it did was wrong. Those lanes now carry provenance, and taking one is
-announced as the takeover it is.
+Cold start does not behave identically to a pre-claims repository: those lanes
+now carry provenance, and taking one is announced as the takeover it is.
 
 ## The privacy invariant
 

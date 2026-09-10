@@ -208,26 +208,19 @@ func TestDescribeClaimantNamesAnUnaddressableHolder(t *testing.T) {
 }
 
 // TestTransferNoticeNamesAPredecessorThatMintedNoToken takes a ticket over from
-// a hold that carries no stream token and reads the notice a reader actually
-// sees. The harness app opens its store with no Stream, so its own start records
-// exactly that hold: the public checkout, with no assignee beside it.
+// a hold recorded with no stream token and reads the notice a reader actually
+// sees: the public checkout, with no assignee beside it.
 func TestTransferNoticeNamesAPredecessorThatMintedNoToken(t *testing.T) {
 	h := newReadyTestHarness(t)
 	issue := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "unattributed hold", Topic: "claims", IssueType: "task"})
+	h.asCheckout("")
 	h.transition(issue.ID, model.Start{})
 
-	stream, err := workspace.EnsureStream(t.TempDir())
-	if err != nil {
-		t.Fatalf("EnsureStream error = %v", err)
-	}
-	taker := *h.ap
-	taker.Stream = stream
-
-	notice, err := transferNotice(h.ctx, &taker, issue.ID, model.Start{Assignee: "bravo-agent"})
+	notice, err := transferNotice(h.ctx, h.ap, issue.ID, model.Start{Assignee: "bravo-agent"})
 	if err != nil {
 		t.Fatalf("transferNotice error = %v", err)
 	}
-	want := fmt.Sprintf("claim transferred: the public checkout -> bravo-agent (%s)\n", nameCheckout(ownAttribution(&taker)))
+	want := fmt.Sprintf("claim transferred: the public checkout -> bravo-agent (%s)\n", nameCheckout(ownAttribution(h.ap)))
 	if notice != want {
 		t.Fatalf("transferNotice = %q, want %q", notice, want)
 	}

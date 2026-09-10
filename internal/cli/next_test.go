@@ -17,13 +17,8 @@ import (
 // row came out. [LAW:single-enforcer] one reproduction of the pipeline; the
 // narrowing helpers below all read through it.
 //
-// This harness mints no stream token (newTestCLIApp builds the App directly,
-// with no app.Open to mint one), which is not the absence of an identity: an
-// unattributed checkout IS the public checkout, and so is every write it makes,
-// so the harness holds the lanes it works exactly as a token-carrying checkout
-// holds its own. That is what makes ServedFromClaim, ResumedOwnWork and
-// Exhausted reachable from here at all. Use asCheckout to write as somebody
-// else.
+// The harness mints a stream token the way app.Open does, so its own writes
+// hold lanes as this checkout. Use asCheckout to write as somebody else.
 func (h readyTestHarness) runNextOutcome() NextOutcome {
 	h.t.Helper()
 	annotated, details, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
@@ -68,9 +63,8 @@ func (h readyTestHarness) runNextRow() annotation.AnnotatedIssue {
 // stamp a real checkout's identity onto its work, which is why a test driving
 // it produces evidence indistinguishable from a second checkout's.
 //
-// It is how a test spells "somebody else did this". Without it every write
-// belongs to the public checkout, which is this checkout's own identity, so an
-// unswitched write can only ever produce work of our own.
+// It is how a test spells "somebody else did this"; an empty token writes as
+// the public checkout. Without it every write is this checkout's own.
 func (h readyTestHarness) asCheckout(streamToken string) {
 	h.t.Helper()
 	h.ap.Store.AttributeTo(streamToken)
@@ -128,9 +122,6 @@ func TestRunNextRoutesAroundAnInProgressLeafHeldElsewhere(t *testing.T) {
 // open leaf. Skipping it is what once hid the very ticket a checkout was
 // working from that checkout (links-claims-1b0p, N8) — the agent asked what to
 // do next and was told to start something else.
-//
-// The harness mints no stream token, so its writes and its identity are alike
-// the public checkout, and starting a ticket is enough to hold the lane.
 func TestRunNextResumesOwnWorkInFlight(t *testing.T) {
 	h := newReadyTestHarness(t)
 	inProgress := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Already started", Topic: "next", IssueType: "task", Priority: 1})
@@ -334,9 +325,8 @@ func TestRunNextCarriesParentEpic(t *testing.T) {
 }
 
 // Every announcement renderNextOutcome can print, asserted as bytes. The
-// outcome is constructed rather than routed to, which is what lets all four
-// served variants be reached from a harness that mints no stream token — the
-// routing that produces each one is pinned separately in next_route_test.go.
+// outcome is constructed rather than routed to, so each announcement is asserted
+// alone; the routing that produces each one is pinned in next_route_test.go.
 // Standings are left empty deliberately: formatClaimLine stays on its
 // ("", false) arm, so nothing but the announcement is under assertion.
 func TestRenderNextOutcomeAnnouncesEachClaimEstablishingPick(t *testing.T) {

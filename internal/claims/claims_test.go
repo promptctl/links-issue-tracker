@@ -399,19 +399,10 @@ func TestParentlessTicketIsItsOwnLane(t *testing.T) {
 }
 
 // TestColdStartDerivesThePublicCheckout is the design's graceful-upgrade
-// promise in its post-public-checkout form. A repository whose whole history
-// predates attribution derives a HOLDER rather than nothing, which is the whole
-// point: a checkout that has minted no token is that same public checkout, so
-// it is served out of the lanes it worked instead of re-entering the global
-// pool on every invocation.
-//
-// The aged half is the promise that matters to an IDENTIFIED checkout arriving
-// at such a repository, and it is why deriving a holder here costs nobody
-// anything. Real pre-attribution evidence is far older than the freshness
-// window, so it reads Stale — available for takeover, carrying its provenance —
-// and routes no one away from work. Only a FRESH unattributed establisher holds
-// a lane against an identified checkout, and the write path mints a token
-// before it can record one.
+// promise: a repository whose whole history predates attribution derives the
+// public checkout as holder rather than nothing. Recent history holds the lane;
+// real pre-attribution evidence is far older than the freshness window, so it
+// reads Stale — available for takeover, carrying its provenance.
 func TestColdStartDerivesThePublicCheckout(t *testing.T) {
 	issues, parents := epicOf(t, leaf(t, "T1", "", model.StateInProgress), leaf(t, "T2", "", model.StateOpen))
 	lane := laneIn(epicID, "")

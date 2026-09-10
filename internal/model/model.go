@@ -673,44 +673,22 @@ func (a Attribution) Workspace() string { return a.workspace }
 // than writing an empty object into every historical record.
 func (a Attribution) IsZero() bool { return a == Attribution{} }
 
-// Present reports whether this event names an IDENTIFIED checkout — one with a
-// stream token another checkout can address, route around, and prove absent.
+// Present reports whether this event names an identified checkout: one with a
+// stream token that can be addressed, voided by a liveness prune, and matched as
+// this checkout.
 //
-// What absence means is the whole ruling this type carries, so it is stated
-// here and nowhere else. An unattributed event is NOT missing data and NOT
-// "derives no claim": it is work done by THE PUBLIC CHECKOUT, the single holder
-// every unattributed write in a workspace shares. Absence is permanent and
-// legal — events predating the attribution feature carry none and never will,
-// because attribution is historical fact and is never backfilled — and the
-// public checkout is what those events, and every future write from a checkout
-// that has minted no token, belong to.
-//
-// Collapsing them all to ONE holder rather than to a fresh nobody each time is
-// what makes an unidentified checkout recognise its own work. Read as nobody,
-// such a checkout owns no lane, so every pick is a fresh lane and it wanders
-// the backlog forever — the "infinite lanes" degeneracy. Read as the public
-// checkout, it holds the lanes it worked and routing serves it out of them.
-// Nothing about lanes changes: LaneOf still partitions an epic's children and
-// still gives a parentless issue a lane of one, so the public checkout occupies
-// ordinary lanes on ordinary terms.
-//
-// It is a holder, never a proof of identity, and the difference decides what
-// may be matched against it. Equality with an identified holder proves the same
-// checkout minted that token; equality with the public checkout proves only
-// that both sides are unaddressable. So a STALE public lane is nobody's own
-// work — see relationOf — which is what keeps a fresh checkout from adopting a
-// repository's whole pre-attribution history the moment it runs `next`.
-//
-// The price is that two unidentified checkouts are indistinguishable, which is
-// the definition of the bucket rather than a defect in it — an identity nobody
-// minted is one nobody can tell apart. That is also why an identified checkout
-// is the only kind LocalCheckouts can void (local.go) and the only kind a
-// contest names by token: those need an address, and the public checkout has
-// none.
+// An unattributed event is work by THE PUBLIC CHECKOUT, the one holder every
+// unattributed write in a workspace shares. Events older than attribution carry
+// none and never will, because attribution is never backfilled. The public
+// checkout holds and contests lanes like any holder, but it is never the
+// checkout reading it: only a mutating command records events, and it mints a
+// token first, so a checkout with no token has recorded nothing (relationOf).
+// Two unattributed writers are indistinguishable, so they never contest each
+// other.
 //
 // Defined against IsZero rather than repeating the comparison: "present" and
 // "not zero" are one fact, and two spellings of it could later disagree.
-// [LAW:one-source-of-truth] [LAW:types-are-the-program]
+// [LAW:one-source-of-truth]
 func (a Attribution) Present() bool { return !a.IsZero() }
 
 // attributionWire is the serialized shape, kept as a separate type so that

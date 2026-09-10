@@ -60,23 +60,21 @@ const (
 )
 
 // relationOf is the one place a Standing is read against an identity.
+//
+// Only a minted token can match. The public checkout is every unattributed
+// writer at once, and a checkout with no token has recorded nothing, so a zero
+// self equal to a zero holder proves nothing about whose lane it is.
+// [LAW:single-enforcer]
 func relationOf(standing claims.Standing, self model.Attribution) laneRelation {
+	ours := func(by model.Attribution) bool { return self.Present() && by == self }
 	switch s := standing.(type) {
 	case claims.Held:
-		if s.By == self {
+		if ours(s.By) {
 			return laneOurs
 		}
 		return laneHeldForeign
 	case claims.Stale:
-		// An identified holder equal to self proves continuity: the token was
-		// minted by this checkout and by nothing else, so a lane it left is
-		// still its own to resume. The public checkout proves nothing of the
-		// kind -- it is a bucket every unattributed write shares, so equality
-		// against it means "both unaddressable", not "both us". Pre-attribution
-		// history is stale by construction, so without this a brand-new
-		// checkout that has minted no token would adopt every historical lane
-		// in the repository as its own work. [LAW:types-are-the-program]
-		if s.By == self && self.Present() {
+		if ours(s.By) {
 			return laneOurs
 		}
 		return laneStaleForeign
