@@ -32,7 +32,7 @@ func (e *blocksCycleError) Error() string {
 }
 
 // repairRankOrder returns the rank writes that make every dependency outrank
-// its dependent while moving as few issues as possible.
+// its dependent: the fewest writes that realize the stable topological order.
 //
 // [LAW:effects-at-boundaries] The new order and the writes that realize it are
 // values computed here; the caller owns the transaction that applies them, so

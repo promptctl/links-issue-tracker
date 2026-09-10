@@ -146,10 +146,10 @@ func SpacedRanks(n int) []string {
 // upper bounds (exclusive). Empty lower means "before everything", empty upper
 // means "after everything".
 //
-// It fails when the bounds admit nothing: bounds that pad to the same value —
-// one being the other extended by zeros — leave no room for a rank longer than
-// both, and callers reading their bounds out of a store can be handed such a
-// pair. That is the failure arm, and it is the whole of it.
+// It fails on a negative n, on a non-empty lower at or above a non-empty upper,
+// and on bounds that admit nothing: bounds that pad to the same value — one
+// being the other extended by zeros — leave no room for a rank longer than
+// both, and a caller reading its bounds out of a store can be handed such a pair.
 func SpacedRanksBetween(lower, upper string, n int) ([]string, error) {
 	if n == 0 {
 		return nil, nil

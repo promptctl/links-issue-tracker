@@ -749,9 +749,9 @@ func loadRankOrder(ctx context.Context, q rowQueryer, liveIDs map[string]struct{
 }
 
 // FixRankInversions re-ranks the backlog so every dependency outranks its
-// dependent, moving as few issues as possible: it computes the stable
-// topological order of the live rank sequence (see repairRankOrder) and writes
-// only the issues that order actually moved. Returns that count.
+// dependent. It computes the stable topological order of the live rank
+// sequence (see repairRankOrder), writes only the issues that order moved, and
+// returns how many it wrote.
 //
 // [LAW:single-enforcer] Doctor's rank_inversions count and this repair read the
 // same blocks edges over the same live set, so "no edge is inverted" is one
