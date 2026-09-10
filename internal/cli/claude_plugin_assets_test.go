@@ -2,27 +2,14 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
-
-type pluginHookEntry struct {
-	Type    string `json:"type"`
-	Command string `json:"command"`
-}
-
-type pluginEvent struct {
-	Matcher string            `json:"matcher"`
-	Hooks   []pluginHookEntry `json:"hooks"`
-}
-
-type pluginManifest struct {
-	Name  string                   `json:"name"`
-	Hooks map[string][]pluginEvent `json:"hooks"`
-}
 
 type marketplaceManifest struct {
 	Plugins []struct {
@@ -31,22 +18,14 @@ type marketplaceManifest struct {
 	} `json:"plugins"`
 }
 
-func TestClaudePluginAssetsUseQuickstartHooks(t *testing.T) {
+func TestClaudeMarketplaceListsPlugin(t *testing.T) {
 	t.Parallel()
 	root := mustRepoRoot(t)
 
-	marketplacePath := filepath.Join(root, ".claude-plugin", "marketplace.json")
-	pluginPath := filepath.Join(root, "claude-plugin", ".claude-plugin", "plugin.json")
-
-	marketplaceBytes, err := os.ReadFile(marketplacePath)
+	marketplaceBytes, err := os.ReadFile(filepath.Join(root, ".claude-plugin", "marketplace.json"))
 	if err != nil {
 		t.Fatalf("ReadFile(marketplace.json) error = %v", err)
 	}
-	pluginBytes, err := os.ReadFile(pluginPath)
-	if err != nil {
-		t.Fatalf("ReadFile(plugin.json) error = %v", err)
-	}
-
 	var marketplace marketplaceManifest
 	if err := json.Unmarshal(marketplaceBytes, &marketplace); err != nil {
 		t.Fatalf("marketplace json parse error = %v", err)
@@ -57,26 +36,30 @@ func TestClaudePluginAssetsUseQuickstartHooks(t *testing.T) {
 	if marketplace.Plugins[0].Name != "links" || marketplace.Plugins[0].Source != "./claude-plugin" {
 		t.Fatalf("unexpected marketplace plugin entry: %#v", marketplace.Plugins[0])
 	}
+}
 
-	var plugin pluginManifest
+// TestClaudePluginShipsNoHooks pins that installing the plugin runs nothing on
+// its own. A plugin is installed per user, so any hook it ships fires in every
+// repository Claude Code opens, lit-initialized or not. Claude Code loads plugin
+// hooks from plugin.json's "hooks" field and from the plugin's hooks/ directory,
+// so both are checked. [LAW:behavior-not-structure]
+func TestClaudePluginShipsNoHooks(t *testing.T) {
+	t.Parallel()
+	pluginDir := filepath.Join(mustRepoRoot(t), "claude-plugin")
+
+	pluginBytes, err := os.ReadFile(filepath.Join(pluginDir, ".claude-plugin", "plugin.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(plugin.json) error = %v", err)
+	}
+	var plugin map[string]json.RawMessage
 	if err := json.Unmarshal(pluginBytes, &plugin); err != nil {
 		t.Fatalf("plugin json parse error = %v", err)
 	}
-	if plugin.Name != "links" {
-		t.Fatalf("plugin name = %q, want links", plugin.Name)
+	if hooks, ok := plugin["hooks"]; ok {
+		t.Fatalf("plugin.json declares hooks: %s", hooks)
 	}
-
-	for _, event := range []string{"SessionStart", "PreCompact"} {
-		events := plugin.Hooks[event]
-		if len(events) == 0 || len(events[0].Hooks) == 0 {
-			t.Fatalf("hook event %s missing command hooks: %#v", event, plugin.Hooks)
-		}
-		if events[0].Hooks[0].Type != "command" {
-			t.Fatalf("%s hook type = %q, want command", event, events[0].Hooks[0].Type)
-		}
-		if events[0].Hooks[0].Command != "lit quickstart --refresh" {
-			t.Fatalf("%s hook command = %q, want lit quickstart --refresh", event, events[0].Hooks[0].Command)
-		}
+	if _, err := os.Stat(filepath.Join(pluginDir, "hooks")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("plugin ships a hooks directory (stat error = %v)", err)
 	}
 }
 

@@ -86,8 +86,7 @@ the target repo. Install commands and the team-wide `.claude/settings.json` wiri
 are in the main README's
 [Claude Code plugin section](https://github.com/promptctl/links-issue-tracker#claude-code-plugin)
 — that's the canonical copy; install the plugin once and `/next` (namespaced
-`/links:next`) is available in every session, along with the `SessionStart`/`PreCompact`
-hooks that run `lit quickstart --refresh`.
+`/links:next`) is available in every session.
 
 ## 5. The core work loop
 
