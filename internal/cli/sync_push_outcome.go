@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -61,6 +62,12 @@ type pushOutcomeRecord struct {
 	Reason   string `json:"reason,omitempty"`
 	Remote   string `json:"remote,omitempty"`
 	Branch   string `json:"branch,omitempty"`
+	// ObservedBy is the lit version that ran the attempt. Reason is frozen at
+	// write time and replayed verbatim, so this stamp is what tells a reader
+	// whether the binary has changed since the verdict was reached. Empty for a
+	// dev build, an unreadable build stamp, or a record written before the field
+	// existed: "no observer to compare", not an error.
+	ObservedBy string `json:"observed_by,omitempty"`
 }
 
 // failed reports whether the record describes a push attempt that did not
@@ -89,7 +96,17 @@ func pushOutcomeMarkerPath(ws workspace.Info) string {
 // the generic error arms so the two failure-keyed consumers (banner, owner
 // page) can never see them as channel degradation, whichever stage of the
 // attempt they interrupted.
-func pushOutcomeOf(outcome syncPushOutcome, err error) pushOutcomeRecord {
+func pushOutcomeOf(outcome syncPushOutcome, err error, observedBy string) pushOutcomeRecord {
+	rec := classifyPushOutcome(outcome, err)
+	// [LAW:dataflow-not-control-flow] Every outcome is stamped, so an empty
+	// ObservedBy means only "no observer", never "not a failure".
+	rec.ObservedBy = observedBy
+	return rec
+}
+
+// classifyPushOutcome decides which decision an attempt's ending was, and the
+// remote, branch and reason that name it; pushOutcomeOf dates what it classifies.
+func classifyPushOutcome(outcome syncPushOutcome, err error) pushOutcomeRecord {
 	switch {
 	case errors.Is(err, context.Canceled) || errors.Is(outcome.pushErr, context.Canceled):
 		return pushOutcomeRecord{
@@ -129,7 +146,7 @@ func pushOutcomeOf(outcome syncPushOutcome, err error) pushOutcomeRecord {
 // [LAW:single-enforcer] Callers construct nothing themselves: the record is
 // derived once, from the same two values, for every producer.
 func completePushAttempt(ctx context.Context, ws workspace.Info, outcome syncPushOutcome, attemptErr error) {
-	rec := pushOutcomeOf(outcome, attemptErr)
+	rec := pushOutcomeOf(outcome, attemptErr, runningBinaryVersion())
 	recordPushOutcome(ws, rec)
 	observePushOutcomeForOwner(ctx, ws, rec)
 }
@@ -150,6 +167,34 @@ func recordPushOutcome(ws workspace.Info, rec pushOutcomeRecord) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "lit: push-outcome marker not written: %v\n", err)
 	}
+}
+
+// runningBinaryVersion reads this binary's version at the boundary, so the
+// renderers below stay pure over a string. [LAW:effects-at-boundaries] An
+// unreadable version is reported on stderr and returned as "", the value a dev
+// build has: bookkeeping must not fail a push whose outcome is already decided.
+// [LAW:no-silent-failure]
+func runningBinaryVersion() string {
+	info, err := version.Get()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "lit: push-outcome provenance unavailable, build version unreadable: %v\n", err)
+		return ""
+	}
+	return info.Version
+}
+
+// pushOutcomeProvenance renders the clause that stops a recorded failure reading
+// as a live one: when the binary has changed since the attempt, it says so. It
+// claims only a change, never which version is newer, because after a rollback
+// the recorded verdict may still hold. Empty when there is nothing to compare or
+// nothing changed; callers interpolate it unconditionally.
+// [LAW:dataflow-not-control-flow] [LAW:single-enforcer] the banner and doctor
+// both date a recorded failure through this one function.
+func pushOutcomeProvenance(rec pushOutcomeRecord, running string) string {
+	if rec.ObservedBy == "" || running == "" || rec.ObservedBy == running {
+		return ""
+	}
+	return fmt.Sprintf(" (recorded by lit %s; you are now running %s, so the binary has changed since this verdict)", rec.ObservedBy, running)
 }
 
 // lastPushOutcome reads the marker. ok is false when no push has ever been

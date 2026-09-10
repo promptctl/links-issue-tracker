@@ -45,6 +45,7 @@ var Canonical = newMarkerSet(
 	"LAW:types-are-the-program",
 	"LAW:composability",
 	"LAW:carrying-cost",
+	"LAW:polishing-by-subtraction",
 	"LAW:no-ambient-temporal-coupling",
 	"LAW:effects-at-boundaries",
 	"LAW:one-source-of-truth",

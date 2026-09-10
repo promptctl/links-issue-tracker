@@ -151,7 +151,11 @@ func resolveDoctorSyncFreshness(ctx context.Context, ws workspace.Info, st stora
 // the full story. A healthy or never-pushed workspace prints nothing — the
 // freshness line above already covers those states, and a second line about
 // them would be a drifting copy. [LAW:one-source-of-truth]
-func printPushOutcomeHealth(w io.Writer, ws workspace.Info, now time.Time) error {
+//
+// The line is a past observation and says so: its age, the provenance clause
+// when the binary has changed since, and `lit sync push`, the command that
+// produces a current verdict. Doctor is read-only, so it cannot re-test a push.
+func printPushOutcomeHealth(w io.Writer, ws workspace.Info, now time.Time, running string) error {
 	rec, age, known := lastPushOutcome(ws, now)
 	if !known || !rec.failed() {
 		return nil
@@ -161,8 +165,8 @@ func printPushOutcomeHealth(w io.Writer, ws workspace.Info, now time.Time) error
 	if info, err := os.Stat(logPath); err == nil {
 		logNote = fmt.Sprintf(" — mirror log: %s (last written %s ago)", logPath, humanizeCoarseDuration(now.Sub(info.ModTime())))
 	}
-	_, err := fmt.Fprintf(w, "sync: last push attempt FAILED %s ago: %s%s\n",
-		humanizeCoarseDuration(age), oneLineReason(rec.Reason), logNote)
+	_, err := fmt.Fprintf(w, "sync: last push attempt FAILED %s ago%s: %s%s — run 'lit sync push' to re-test\n",
+		humanizeCoarseDuration(age), pushOutcomeProvenance(rec, running), oneLineReason(rec.Reason), logNote)
 	return err
 }
 
@@ -306,7 +310,7 @@ func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	if err := printSyncFreshness(stdout, syncReport); err != nil {
 		return err
 	}
-	if err := printPushOutcomeHealth(stdout, ap.Workspace, time.Now()); err != nil {
+	if err := printPushOutcomeHealth(stdout, ap.Workspace, time.Now(), runningBinaryVersion()); err != nil {
 		return err
 	}
 	// [LAW:single-enforcer] Corruption classification is output-format agnostic and always enforced here.

@@ -199,7 +199,7 @@ func TestObservePushOutcomeForOwner(t *testing.T) {
 		t.Fatalf("a landed push did not end the episode (stat err=%v)", err)
 	}
 
-	cancelled := pushOutcomeOf(syncPushOutcome{}, context.Canceled)
+	cancelled := pushOutcomeOf(syncPushOutcome{}, context.Canceled, "")
 	if cancelled.Decision != pushDecisionCanceled || cancelled.failed() {
 		t.Fatalf("pushOutcomeOf(canceled) = %+v, want the non-failed canceled decision", cancelled)
 	}
