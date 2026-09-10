@@ -6,9 +6,12 @@ import (
 )
 
 // agentInstructionsOpen and agentInstructionsClose are the envelope delimiters
-// the sync-failure block writes. Named once so the renderer that emits them and
-// the quoter that defuses them in embedded text cannot drift — a renamed tag
-// the quoter no longer matches is a reopened injection. [LAW:one-source-of-truth]
+// every agent-instruction block lit prints is written with. Named once so the
+// renderers that emit them and the quoter that defuses them in embedded text
+// cannot drift — a renamed tag the quoter no longer matches is a reopened
+// injection. The embedded templates cannot name a Go constant, so
+// TestEnvelopeDelimitersHaveOneSpelling holds them to these spellings.
+// [LAW:one-source-of-truth]
 const (
 	agentInstructionsOpen  = "<agent-instructions>"
 	agentInstructionsClose = "</agent-instructions>"

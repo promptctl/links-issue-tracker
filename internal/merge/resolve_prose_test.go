@@ -30,7 +30,7 @@ func prosePendingFixture(t *testing.T) MergeResult {
 
 // fingerprintOf returns the live fingerprint of a pending field in the result, so
 // tests pin a resolution to the conflict the fixture actually produced.
-func fingerprintOf(t *testing.T, result MergeResult, field ProseField) string {
+func fingerprintOf(t *testing.T, result MergeResult, field ProseField) Fingerprint {
 	t.Helper()
 	for _, p := range result.Pending {
 		if p.Field == field {
@@ -44,8 +44,8 @@ func fingerprintOf(t *testing.T, result MergeResult, field ProseField) string {
 func TestApplyProseResolutionsSplicesExactBijection(t *testing.T) {
 	result := prosePendingFixture(t)
 	export, ok := ApplyProseResolutions(result, []ProseResolution{
-		{IssueID: "i1", Field: ProseTitle, Fingerprint: fingerprintOf(t, result, ProseTitle), Text: "merged-title"},
-		{IssueID: "i1", Field: ProseDescription, Fingerprint: fingerprintOf(t, result, ProseDescription), Text: "merged-desc"},
+		{Fingerprint: fingerprintOf(t, result, ProseTitle), Text: "merged-title"},
+		{Fingerprint: fingerprintOf(t, result, ProseDescription), Text: "merged-desc"},
 	})
 	if !ok {
 		t.Fatalf("exact bijection rejected")
@@ -66,7 +66,7 @@ func TestApplyProseResolutionsSplicesExactBijection(t *testing.T) {
 func TestApplyProseResolutionsRejectsPartialSet(t *testing.T) {
 	result := prosePendingFixture(t)
 	if _, ok := ApplyProseResolutions(result, []ProseResolution{
-		{IssueID: "i1", Field: ProseTitle, Fingerprint: fingerprintOf(t, result, ProseTitle), Text: "merged-title"},
+		{Fingerprint: fingerprintOf(t, result, ProseTitle), Text: "merged-title"},
 	}); ok {
 		t.Fatalf("partial resolution accepted; a pending field would keep its provisional value")
 	}
@@ -74,25 +74,14 @@ func TestApplyProseResolutionsRejectsPartialSet(t *testing.T) {
 
 func TestApplyProseResolutionsRejectsStaleFingerprint(t *testing.T) {
 	result := prosePendingFixture(t)
-	// Right key, but the fingerprint is from a different conflict — the agent merged
-	// against a since-changed base/ours/theirs. The text must not be committed.
+	// A fingerprint that names no live conflict — the agent merged against a
+	// since-changed base/ours/theirs, or a field that is not pending at all. The text
+	// must not be committed.
 	if _, ok := ApplyProseResolutions(result, []ProseResolution{
-		{IssueID: "i1", Field: ProseTitle, Fingerprint: "deadbeefcafe", Text: "merged-title"},
-		{IssueID: "i1", Field: ProseDescription, Fingerprint: fingerprintOf(t, result, ProseDescription), Text: "merged-desc"},
+		{Fingerprint: "deadbeefcafe", Text: "merged-title"},
+		{Fingerprint: fingerprintOf(t, result, ProseDescription), Text: "merged-desc"},
 	}); ok {
 		t.Fatalf("stale fingerprint accepted; a merge of an old conflict would be committed")
-	}
-}
-
-func TestApplyProseResolutionsRejectsUnknownField(t *testing.T) {
-	result := prosePendingFixture(t)
-	// Resolving a field that is not pending (agent_prompt here) means the agent
-	// merged against a divergence that does not match the live one.
-	if _, ok := ApplyProseResolutions(result, []ProseResolution{
-		{IssueID: "i1", Field: ProseTitle, Fingerprint: fingerprintOf(t, result, ProseTitle), Text: "merged-title"},
-		{IssueID: "i1", Field: ProsePrompt, Fingerprint: "0", Text: "stray"},
-	}); ok {
-		t.Fatalf("resolution for a non-pending field accepted")
 	}
 }
 
@@ -103,21 +92,64 @@ func TestApplyProseResolutionsRejectsDuplicateField(t *testing.T) {
 	// duplicate keeps the map the same size), so the duplicate itself must reject.
 	titleFP := fingerprintOf(t, result, ProseTitle)
 	if _, ok := ApplyProseResolutions(result, []ProseResolution{
-		{IssueID: "i1", Field: ProseTitle, Fingerprint: titleFP, Text: "first"},
-		{IssueID: "i1", Field: ProseTitle, Fingerprint: titleFP, Text: "second"},
-		{IssueID: "i1", Field: ProseDescription, Fingerprint: fingerprintOf(t, result, ProseDescription), Text: "merged-desc"},
+		{Fingerprint: titleFP, Text: "first"},
+		{Fingerprint: titleFP, Text: "second"},
+		{Fingerprint: fingerprintOf(t, result, ProseDescription), Text: "merged-desc"},
 	}); ok {
 		t.Fatalf("duplicate resolution for one field accepted; the last would silently win")
 	}
 }
 
-func TestApplyProseResolutionsRejectsWrongIssue(t *testing.T) {
-	result := prosePendingFixture(t)
-	if _, ok := ApplyProseResolutions(result, []ProseResolution{
-		{IssueID: "i1", Field: ProseTitle, Fingerprint: fingerprintOf(t, result, ProseTitle), Text: "merged-title"},
-		{IssueID: "nope", Field: ProseDescription, Fingerprint: "0", Text: "merged-desc"},
-	}); ok {
-		t.Fatalf("resolution for a non-pending issue accepted")
+// TestApplyProseResolutionsTellsIdenticalConflictsApart pins what makes a
+// fingerprint a whole address. The resolve command carries nothing else, so the
+// same title rewrite landing on two tickets must still be two conflicts: a digest
+// that left the issue out would give both one fingerprint, and neither could be
+// resolved.
+func TestApplyProseResolutionsTellsIdenticalConflictsApart(t *testing.T) {
+	now := time.Now().UTC()
+	issue := func(id string) model.Issue {
+		return issueWithStatus(t, model.Issue{ID: id, Title: "base-title", Description: "desc", Priority: 0, IssueType: "task", CreatedAt: now, UpdatedAt: now}, model.StateOpen)
+	}
+	base := model.Export{Issues: []model.Issue{issue("i1"), issue("i2")}}
+	local := model.Export{Issues: append([]model.Issue(nil), base.Issues...)}
+	remote := model.Export{Issues: append([]model.Issue(nil), base.Issues...)}
+	for i := range base.Issues {
+		local.Issues[i].Title = "ours-title"
+		remote.Issues[i].Title = "theirs-title"
+	}
+	result := ThreeWay(base, local, remote)
+	if len(result.Pending) != 2 {
+		t.Fatalf("fixture expected 2 pending fields, got %#v", result.Pending)
+	}
+
+	resolutions := make([]ProseResolution, 0, len(result.Pending))
+	for _, p := range result.Pending {
+		resolutions = append(resolutions, ProseResolution{Fingerprint: p.Fingerprint(), Text: "merged for " + p.IssueID})
+	}
+	export, ok := ApplyProseResolutions(result, resolutions)
+	if !ok {
+		t.Fatalf("the same title conflict on two tickets could not be resolved apart")
+	}
+	for _, got := range export.Issues {
+		if got.Title != "merged for "+got.ID {
+			t.Errorf("issue %s title = %q, want its own merged text", got.ID, got.Title)
+		}
+	}
+}
+
+// TestParseFingerprintAdmitsOnlyWhatFingerprintRenders keeps the command boundary
+// exact: the one shape Fingerprint prints goes through, and every near miss —
+// including the retired ID:FIELD:FINGERPRINT address — is refused there rather
+// than reaching the store as a fingerprint that matches nothing.
+func TestParseFingerprintAdmitsOnlyWhatFingerprintRenders(t *testing.T) {
+	live := ProsePending{IssueID: "i1", Field: ProseTitle, Base: "b", Ours: "o", Theirs: "t"}.Fingerprint()
+	if got, ok := ParseFingerprint(string(live)); !ok || got != live {
+		t.Fatalf("ParseFingerprint(%q) = %q, %v; want the fingerprint back", live, got, ok)
+	}
+	for _, text := range []string{"", "deadbeef", "deadbeefcafe00", "DEADBEEFCAFE", "deadbeefcafg", "i1:title:" + string(live)} {
+		if _, ok := ParseFingerprint(text); ok {
+			t.Errorf("ParseFingerprint(%q) admitted a value Fingerprint never renders", text)
+		}
 	}
 }
 
@@ -146,16 +178,16 @@ func proseAndCollisionFixture(t *testing.T) MergeResult {
 // TestApplyProseResolutionsRefusesCollisionDespiteExactBijection pins the gate that
 // stands between the agent's merged prose and an export in which one of two
 // colliding tickets is silently the survivor. The resolutions here are a PERFECT
-// bijection with the live pending set — right key, right fingerprint, no
-// duplicates — so every other refusal in this function is satisfied and the only
-// thing that can return ok=false is the collision gate itself. Its one production
-// caller cannot reach it today, which is exactly why it is pinned here: reordering
-// Provisional's tuple or dropping the early return upstream would otherwise remove
-// it with nothing failing. [LAW:no-silent-failure]
+// bijection with the live pending set — right fingerprint, no duplicates — so
+// every other refusal in this function is satisfied and the only thing that can
+// return ok=false is the collision gate itself. Its one production caller cannot
+// reach it today, which is exactly why it is pinned here: reordering Provisional's
+// tuple or dropping the early return upstream would otherwise remove it with
+// nothing failing. [LAW:no-silent-failure]
 func TestApplyProseResolutionsRefusesCollisionDespiteExactBijection(t *testing.T) {
 	result := proseAndCollisionFixture(t)
 	export, ok := ApplyProseResolutions(result, []ProseResolution{
-		{IssueID: "epic.2", Field: ProseTitle, Fingerprint: fingerprintOf(t, result, ProseTitle), Text: "merged-title"},
+		{Fingerprint: fingerprintOf(t, result, ProseTitle), Text: "merged-title"},
 	})
 	if ok {
 		t.Fatalf("an id collision spliced into a committable export; two tickets under one id have no merged text an agent can supply")

@@ -459,7 +459,7 @@ func TestSyncReconcileCombineHoldsAndFinalizesProse(t *testing.T) {
 	// Finalize through the SAME resolve path the three-way reconcile uses: the divergence is
 	// re-derived (no base), the merged text spliced, and the union committed as one commit.
 	res, err := syncB.SyncReconcileResolved(ctx, "origin", "master", []merge.ProseResolution{
-		{IssueID: shared, Field: merge.ProseTitle, Fingerprint: p.Fingerprint(), Text: "merged A and B shared title"},
+		{Fingerprint: p.Fingerprint(), Text: "merged A and B shared title"},
 	})
 	if err != nil {
 		t.Fatalf("SyncReconcileResolved(B) finalizing combine: %v", err)

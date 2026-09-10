@@ -8,16 +8,40 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
-// Fingerprint identifies the EXACT three-way conflict this pending field
-// represents — a digest of base/ours/theirs. The agent merges against a specific
-// (base, ours, theirs); if any of those changed before it finalizes (the remote
-// advanced, or a local edit landed), the fingerprint changes, so a merged text
-// produced for the old conflict no longer matches and must not be committed.
-// [LAW:types-are-the-program] the fingerprint makes "this text was merged against
-// THIS conflict" a checkable value rather than an assumption.
-func (p ProsePending) Fingerprint() string {
-	sum := sha256.Sum256([]byte(string(p.Field) + "\x00" + p.Base + "\x00" + p.Ours + "\x00" + p.Theirs))
-	return hex.EncodeToString(sum[:6])
+// Fingerprint names the EXACT three-way conflict one pending field represents — a
+// digest of the issue, the field and base/ours/theirs. The agent merges against a
+// specific (base, ours, theirs); if any of those changed before it finalizes (the
+// remote advanced, or a local edit landed), the fingerprint changes, so a merged
+// text produced for the old conflict matches nothing and is not committed.
+// [LAW:types-are-the-program] "this text was merged against THIS conflict" is a
+// checkable value rather than an assumption.
+//
+// It is the whole address a resolution carries, which is why it covers the issue
+// id. An id is remote-authored and unconstrained, so a resolve command that
+// repeated it would carry remote text into a shell line the agent runs; the
+// fingerprint is lowercase hex lit computed, whatever the id holds.
+type Fingerprint string
+
+// fingerprintBytes is how much of the digest a Fingerprint keeps. A pending set is
+// a handful of fields, and two of them sharing a truncation fail the bijection in
+// ApplyProseResolutions rather than receiving one text.
+const fingerprintBytes = 6
+
+func (p ProsePending) Fingerprint() Fingerprint {
+	sum := sha256.Sum256([]byte(p.IssueID + "\x00" + string(p.Field) + "\x00" + p.Base + "\x00" + p.Ours + "\x00" + p.Theirs))
+	return Fingerprint(hex.EncodeToString(sum[:fingerprintBytes]))
+}
+
+// ParseFingerprint admits exactly the rendering Fingerprint produces, so a value in
+// any other shape — the retired ID:FIELD:FINGERPRINT address among them — is
+// refused where it enters instead of reaching the store as a fingerprint that
+// quietly matches nothing. [LAW:parse-dont-validate]
+func ParseFingerprint(text string) (Fingerprint, bool) {
+	raw, err := hex.DecodeString(text)
+	if err != nil || len(raw) != fingerprintBytes || hex.EncodeToString(raw) != text {
+		return "", false
+	}
+	return Fingerprint(text), true
 }
 
 // ProseResolution is the calling agent's semantic merge of one prose field that
@@ -26,21 +50,19 @@ func (p ProsePending) Fingerprint() string {
 // deliberately refuses to make. [LAW:decomposition] The agent owns the decision
 // (the Text); this package owns only where that text lands in the export.
 //
-// Fingerprint is the digest of the conflict the agent merged against, copied from
-// the pending field's guidance. It is compared to the LIVE conflict's fingerprint
-// before the text is spliced, so a merge produced for a since-changed conflict is
+// Fingerprint names the conflict the agent merged against, copied from the pending
+// field's guidance. It is looked up among the LIVE conflicts before the text is
+// spliced, so a merge produced for a since-changed conflict finds nothing and is
 // rejected rather than silently applied. [LAW:no-silent-failure]
 type ProseResolution struct {
-	IssueID     string
-	Field       ProseField
-	Fingerprint string
+	Fingerprint Fingerprint
 	Text        string
 }
 
-// proseKey identifies one prose field of one issue — the unit a ProsePending and
-// a ProseResolution must agree on. [LAW:types-are-the-program] Making the pairing
-// a comparable key lets the bijection check be a set comparison, not field-by-
-// field prose.
+// proseKey identifies one prose field of one issue — the place a resolved text
+// lands, reached through the live conflict a resolution's fingerprint names.
+// [LAW:types-are-the-program] Making the place a comparable key lets the bijection
+// check be a set comparison, not field-by-field prose.
 type proseKey struct {
 	IssueID string
 	Field   ProseField
@@ -61,23 +83,21 @@ type proseKey struct {
 // It is pure: the live pending set comes from the MergeResult, the merged text
 // from the agent — no IO, no clock. [LAW:effects-at-boundaries]
 func ApplyProseResolutions(result MergeResult, resolutions []ProseResolution) (model.Export, bool) {
-	// Each pending field carries the fingerprint of its LIVE conflict, so a
-	// resolution must match both the key (this field is pending) AND the
-	// fingerprint (it was merged against THIS conflict, not a since-changed one).
-	pendingByKey := make(map[proseKey]string, len(result.Pending))
+	// Each pending field is addressed by the fingerprint of its LIVE conflict, so
+	// one lookup settles both which field a resolution is for and that it was
+	// merged against THIS conflict, not a since-changed one.
+	pendingByFingerprint := make(map[Fingerprint]proseKey, len(result.Pending))
 	for _, pending := range result.Pending {
-		pendingByKey[proseKey{IssueID: pending.IssueID, Field: pending.Field}] = pending.Fingerprint()
+		pendingByFingerprint[pending.Fingerprint()] = proseKey{IssueID: pending.IssueID, Field: pending.Field}
 	}
 
 	resolvedByKey := make(map[proseKey]string, len(resolutions))
 	for _, resolution := range resolutions {
-		key := proseKey{IssueID: resolution.IssueID, Field: resolution.Field}
-		// A resolution for a field that is not pending, or one whose fingerprint
-		// does not match the live conflict, means the agent merged against a
-		// divergence that no longer matches the current one. Reject the whole set
+		// A fingerprint that names no live conflict means the agent merged against
+		// a divergence that no longer matches the current one. Reject the whole set
 		// rather than apply a stale merge. [LAW:no-silent-failure]
-		liveFingerprint, ok := pendingByKey[key]
-		if !ok || resolution.Fingerprint != liveFingerprint {
+		key, ok := pendingByFingerprint[resolution.Fingerprint]
+		if !ok {
 			return model.Export{}, false
 		}
 		// A second resolution for the same field is an ambiguous, malformed set:
@@ -91,9 +111,10 @@ func ApplyProseResolutions(result MergeResult, resolutions []ProseResolution) (m
 		resolvedByKey[key] = resolution.Text
 	}
 	// Every pending field must be resolved, or the export would still carry a
-	// provisional prose value. The two equal-size maps with no rejected key above
-	// make this an exact bijection.
-	if len(resolvedByKey) != len(pendingByKey) {
+	// provisional prose value. Counted against the pending set itself rather than
+	// the fingerprint index: two live conflicts that truncate to one fingerprint
+	// share an index entry, and must fail here instead of passing as one field.
+	if len(resolvedByKey) != len(result.Pending) {
 		return model.Export{}, false
 	}
 

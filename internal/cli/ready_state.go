@@ -676,6 +676,6 @@ func printRankInversions(w io.Writer, issues []annotation.AnnotatedIssue) error 
 	if count == 0 {
 		return nil
 	}
-	_, err := fmt.Fprintf(w, "\nWarning: %d rank inversion(s) — dependencies ranked below their dependents. Run `lit doctor --fix` to repair. <agent-instructions>This command is idempotent and safe to run without confirmation.</agent-instructions>\n", count)
+	_, err := fmt.Fprintf(w, "\nWarning: %d rank inversion(s) — dependencies ranked below their dependents. Run `lit doctor --fix` to repair. "+agentInstructionsOpen+"This command is idempotent and safe to run without confirmation."+agentInstructionsClose+"\n", count)
 	return err
 }
