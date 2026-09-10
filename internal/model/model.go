@@ -79,10 +79,10 @@ var (
 // capability data carries the behavior distinction without splitting shared
 // issue behavior across duplicate types.
 type Issue struct {
-	ID          string `json:"id"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	Prompt      string `json:"prompt,omitempty"`
+	ID          string    `json:"id"`
+	Title       string    `json:"title"`
+	Description string    `json:"description"`
+	Prompt      string    `json:"prompt,omitempty"`
 	Priority    Priority  `json:"priority"`
 	IssueType   IssueType `json:"issue_type"`
 	Topic       string    `json:"topic"`
