@@ -390,12 +390,12 @@ func TestSpacedRanksPanicsOnNegativeN(t *testing.T) {
 // — one is the other extended by zeros. The pair is representable in a real
 // store (54 of the 683 ranks in this repo's own store end in '0'), and both
 // callers of this primitive, the doctor repair and the smoothing pass, take
-// their bounds straight from stored ranks. Every such pair used to spin the
-// length search forever; the contract is that the primitive says so instead.
+// their bounds straight from stored ranks, so the primitive must report such a
+// pair rather than search forever.
 //
 // The goroutine IS the assertion. A regression here is a hang, and a hang left
 // to the package timeout burns a CI runner for ten minutes before naming
-// anything, which is the whole reason this defect blocked a merge.
+// anything.
 func TestSpacedRanksBetweenRejectsBoundsWithNoRoom(t *testing.T) {
 	t.Parallel()
 	for _, bounds := range []struct{ lower, upper string }{

@@ -175,7 +175,7 @@ type Repairer interface {
 	// edges do not constrain in the relative order it found them. That is what
 	// lets callers offer this as safe to run unattended — a repair free to
 	// choose any satisfying order would silently discard the priority order
-	// the backlog was ranked into (links-doctor-e91j). A second run over a
+	// the backlog was ranked into. A second run over a
 	// repaired store writes nothing.
 	FixRankInversions(ctx context.Context) (int, error)
 }

@@ -74,18 +74,10 @@ func projectEdges(edges []blocksEdge, position map[string]int) []blocksEdge {
 // precedes its dependent, choosing at each step the issue that stood earliest
 // in order among those whose dependencies are all placed.
 //
-// That tie-break is the fix. The previous repair walked the inverted edges and
-// hoisted each dependency to a midpoint immediately above its dependent, so the
-// resulting sequence was whatever order the candidate scan returned — for a
-// band of tickets sharing one dependent, the join's id order, which is why a
-// deliberately severity-ordered backlog came back alphabetical
-// (links-doctor-e91j). Preferring the earliest-standing issue instead means an
-// issue changes place only when an edge pushes it past something, so a band
-// with no edges among its own members comes out exactly as it went in.
-//
-// Ordering by position rather than by id is load-bearing: "earliest in the
-// backlog" is a numeric comparison, and the tie-break cannot drift back to id
-// spelling.
+// With that tie-break an issue changes place only when an edge pushes it past
+// something, so a band with no edges among its own members comes out exactly
+// as it went in. It compares positions, never ids, so id spelling cannot
+// reorder the backlog.
 func stableTopoOrder(order []rankedIssue, edges []blocksEdge) ([]string, error) {
 	position := make(map[string]int, len(order))
 	for at, item := range order {
