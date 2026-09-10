@@ -151,8 +151,23 @@ func TestWaitAnnouncesItselfRepeatedly(t *testing.T) {
 // acquisition that does not wait must print nothing at all. A channel that
 // narrates every uncontended lock trains its reader to ignore it, which costs
 // exactly the signal the notice exists to carry.
+//
+// [LAW:no-ambient-temporal-coupling] The grace is an hour, where the tests
+// that assert a wait DOES report shrink it to milliseconds, and the asymmetry
+// is the point. The reporter fires on wall-clock elapsed, so a grace set near
+// an uncontended acquisition's own duration hands the verdict to the
+// scheduler: this test's premise is that the acquisition never waits, and a
+// 10ms grace made ordinary delay -- a parallel package, a loaded runner -- into
+// a printed line and a red test. It failed exactly that way against a full
+// `go test ./...`, reporting a wait on a lock held by the acquirer's own pid.
+// An hour is a grace an uncontended acquisition cannot reach on any machine,
+// so the only thing that can print here is the defect being pinned.
+//
+// The reporter's stop is not asserted here any more; it is a contract of
+// announceLockWait rather than of acquisition, and
+// TestStoppedNoticeReporterStaysStopped pins it directly and without a race.
 func TestPromptAcquisitionAnnouncesNothing(t *testing.T) {
-	notices := captureLockNotices(t, 10*time.Millisecond, 10*time.Millisecond)
+	notices := captureLockNotices(t, time.Hour, time.Hour)
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
 
 	release, err := acquireStoreLock(context.Background(), storageDirOf(lockPath), lockPath, true, 1, 0)
@@ -162,10 +177,46 @@ func TestPromptAcquisitionAnnouncesNothing(t *testing.T) {
 	if err := release(); err != nil {
 		t.Fatalf("release: %v", err)
 	}
-	// Outlast the grace: a reporter that survived its stop would print here.
-	time.Sleep(50 * time.Millisecond)
 	if printed := notices.String(); printed != "" {
 		t.Errorf("uncontended acquisition printed:\n%s", printed)
+	}
+}
+
+// TestStoppedNoticeReporterStaysStopped pins announceLockWait's stop contract:
+// once stop returns, the reporter has returned too and writes nothing further.
+// A reporter outliving its acquisition narrates a wait that is already over --
+// a notice describing a lock nobody is waiting on, which is worse than silence
+// because it is false, and false in the direction that makes an operator go
+// looking for a holder that has already left.
+//
+// [LAW:no-ambient-temporal-coupling] The verdict is "no growth after stop",
+// never "nothing printed", so no clock decides it. Load changes how many lines
+// land BEFORE the stop, which this test does not measure, and it gives a
+// leaked reporter MORE room to betray itself afterwards rather than less --
+// the two ways the machine can be slow both push toward the honest answer.
+func TestStoppedNoticeReporterStaysStopped(t *testing.T) {
+	notices := captureLockNotices(t, 0, time.Millisecond)
+	lockPath := filepath.Join(t.TempDir(), "test.lock")
+
+	stop := announceLockWait(context.Background(), storageDirOf(lockPath), lockPath)
+
+	// A reporter that never started would satisfy "stopped" vacuously, so the
+	// test earns its assertion by waiting for real output first.
+	deadline := time.Now().Add(10 * time.Second)
+	for notices.String() == "" {
+		if time.Now().After(deadline) {
+			stop()
+			t.Fatalf("reporter printed nothing within 10s; the stop contract cannot be pinned against a reporter that never ran")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	stop()
+
+	settled := notices.String()
+	// Many intervals: a reporter still alive prints repeatedly in this window.
+	time.Sleep(50 * time.Millisecond)
+	if grown := notices.String(); grown != settled {
+		t.Errorf("reporter wrote after stop returned:\n%s", strings.TrimPrefix(grown, settled))
 	}
 }
 
