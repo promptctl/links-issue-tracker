@@ -29,9 +29,9 @@ The five states (`internal/storage/sync.go:95`): `never_synced`, `up_to_date`, `
 
 ## Receive, pull, push
 
-**`SyncReceive`** (`sync.go:394`) = fetch + fast-forward only. After `DOLT_FETCH` and one freshness read: `behind` → `DOLT_MERGE --ff-only` onto the tracking ref (state `fast_forwarded`); `diverged` → state `diverged`, **no merge performed**; `ahead`/`never_synced`/default map to their states. Fast-forward is the only outcome that touches local data.
+**`SyncReceive`** (`sync.go:408`) = fetch + fast-forward only. After `DOLT_FETCH` and one freshness read: `behind` → `DOLT_MERGE --ff-only` onto the tracking ref (state `fast_forwarded`); `diverged` → state `diverged`, **no merge performed**; `ahead`/`never_synced`/default map to their states. Fast-forward is the only outcome that touches local data.
 
-**`SyncPull`** (`sync.go:239`) = receive, then reconcile only on divergence, all under **one** commit lock (nested acquisitions are context-reentrant). Receive states map 1:1 to pull states; `diverged` runs `SyncReconcile` and maps its result: `linearized` → pull `linearized` with ahead/behind/fork-time **re-read** from a fresh freshness call; `prose_pending` carries the pending set; `unrelated_histories` carries the inventory; `not_diverged` → `up_to_date` with the fork timestamp zeroed. Any unhandled state is an error (`"sync pull: unhandled receive state %q"` / `"…reconcile state %q"`). lit deliberately does not use Dolt's native `DOLT_PULL`: its three-way working-set merge requires `autocommit` off and aborts under the driver's default (`sync.go:206-213`).
+**`SyncPull`** (`sync.go:245`) = receive, then reconcile only on divergence, all under **one** commit lock (nested acquisitions are context-reentrant). Receive states map 1:1 to pull states; `diverged` runs `SyncReconcile` and maps its result (`sync.go:269-320`): `linearized` → pull `linearized` with ahead/behind/fork-time **re-read** from a fresh freshness call; `prose_pending` carries the pending set; `unrelated_histories` carries the inventory; `id_collision` → pull `id_collision` (`internal/storage/sync.go:183`) carrying the reconcile's `Collisions`, with the counts and fork timestamp not re-read; `not_diverged` → `up_to_date` with the fork timestamp zeroed. Any unhandled state is an error (`"sync pull: unhandled receive state %q"` / `"…reconcile state %q"`). lit deliberately does not use Dolt's native `DOLT_PULL`: its three-way working-set merge requires `autocommit` off and aborts under the driver's default (`sync.go:212-219`).
 
 **`SyncPush`** (`sync.go:543`) runs `pushWithinLock` under the sync-mutation envelope and performs **no compaction** (`DOLT_GC` turns the embedded store read-only mid-run). The branch argument may be empty; a non-empty branch first runs the remote-schema-ahead guard (an empty branch skips it). Args build in order: `--set-upstream` if requested, `--force` if requested, the remote, then `HEAD:<branch>` if branch non-empty; `CALL DOLT_PUSH` returns a status int and message (NULL → `""`).
 
@@ -57,7 +57,7 @@ Who is guarded: pushes with a non-empty branch; every reconcile that replays (th
 
 ## Reconcile: field-aware merge of divergence
 
-Reconcile is the operation that resolves a diverged local/remote pair. Three public entry points (`internal/store/sync_reconcile.go:211-249`):
+Reconcile is the operation that resolves a diverged local/remote pair. Three public entry points (`internal/store/sync_reconcile.go:213-254`):
 
 | Entry | Settle policy | Unrelated-history handling |
 |---|---|---|
@@ -65,27 +65,28 @@ Reconcile is the operation that resolves a diverged local/remote pair. Three pub
 | `SyncReconcileResolved` | agent-supplied prose resolutions | union combine |
 | `SyncReconcileCombine` | autonomous | union combine (with a shared base, merges through it like an ordinary reconcile) |
 
-**Plan capture** (under the already-held commit lock): freshness → if not diverged, return `not_diverged` with no anchors. Otherwise capture the data branch, local head, remote head, and the merge base via `SELECT DOLT_MERGE_BASE(?, ?)`. "No common ancestor" — detected by `sql.ErrNoRows` or the message substring `"no common ancestor"`, deliberately not error code 1105 (MySQL's catch-all) — means unrelated histories.
+**Plan capture** (under the already-held commit lock): freshness → if not diverged, return `not_diverged` with no anchors. Otherwise capture the data branch, local head, remote head, and the merge base via `SELECT DOLT_MERGE_BASE(?, ?)`. "No common ancestor" — detected by `sql.ErrNoRows`, by the message substring `"no common ancestor"` (deliberately not error code 1105, MySQL's catch-all), or by a NULL or blank merge-base value — means unrelated histories (`sync_reconcile.go:1115-1143`).
 
 **Unrelated histories**: the store reads both sides' issue-ID sets with pure `AS OF` queries (no branch moves, no writes; a missing `issues` table reads as the empty set — a pristine bootstrap root) and partitions them into `only_local` / `only_remote` / `on_both` — sorted, mutually disjoint. Detect-only mode returns `unrelated_histories` with that inventory **before** the schema guard, scratch sweep, snapshot, or any reset. Union-combine mode proceeds to replay with an empty merge base.
 
-**The replay envelope** (`replayUnderGuard`, `sync_reconcile.go:389`): schema guard first; then sweep stale scratch branches (`links-reconcile-scratch-%` — every failure prints to stderr and never fails the reconcile; the commit lock guarantees any such branch is an orphan); mint fresh scratch names `links-reconcile-scratch-<pid>-<unixnano>` with `-spine` and `-read` suffixes; create **one** snapshot guard carried across all retries (exactly one pre-reconcile snapshot however many GC-contention retries run); then run the body under the transient retry.
+**The replay envelope** (`replayUnderGuard`, `sync_reconcile.go:392`): schema guard first; then sweep stale scratch branches (`links-reconcile-scratch-%` — every failure prints to stderr and never fails the reconcile; the commit lock guarantees any such branch is an orphan); mint fresh scratch names `links-reconcile-scratch-<pid>-<unixnano>` with `-spine` and `-read` suffixes; create **one** snapshot guard carried across all retries (exactly one pre-reconcile snapshot however many GC-contention retries run); then run the body under the transient retry.
 
-Scratch roles: `read` is hard-reset once per folded commit and keeps nothing; `spine` is hard-reset exactly once (to adopt the remote head) and thereafter only advances by commit. Both are created with `DOLT_CHECKOUT('-B', name, localHead)` (`-B` recreates leftovers from a prior retry), with a cleanup defer armed before the first creation. Cleanup checks out the data branch and deletes the created branches (a delete failure prints to stderr, not promoted); if the checkout back fails, the connection is rotated and the checkout retried — if that also fails, the error `"reconcile left the store on the scratch branch and could not recover…"` is unrecoverable, and a leftover scratch branch is deliberately left behind.
+Scratch roles: `read` is hard-reset once per folded commit and keeps nothing; `spine` is hard-reset exactly once (to adopt the remote head) and thereafter only advances by commit. Both are created with `DOLT_CHECKOUT('-B', name, localHead)` (`-B` recreates leftovers from a prior retry), with a cleanup defer armed before the first creation. Cleanup checks out the data branch and deletes the created branches (a delete failure prints to stderr, not promoted). If the checkout back fails, the connection is rotated and the checkout retried on the new connection; on that path the created branches are not deleted and are left for the next reconcile's sweep. A failed rotation returns `"reconcile left the store on the scratch branch and could not recover…"`, and a failed retried checkout returns `"reconcile could not restore the data branch %q after rotating the connection…"`. A cleanup error becomes the reconcile's error only when the body returned none (`sync_reconcile.go:787-791`, `:958-980`).
 
-**The merge/settle/replay tail** (`mergeAndReplay`, `sync_reconcile.go:665`):
+**The merge/settle/replay tail** (`mergeAndReplay`, `sync_reconcile.go:700`):
 
 1. Export the local head and the remote head at fixed anchors (each read = checkout the read branch, hard-reset to the commit, **lift the working set to the current schema**, then run the normal export — so schema skew between the two sides is healed before comparison).
 2. `merge.ThreeWay(base, ours, theirs)` — the base is the export at the merge-base commit for a shared-history reconcile, or the empty `model.Export{}` for combine, which the merge reads as "both sides changed every field from empty", i.e. a two-way union.
-3. Apply the settle policy. If any prose conflicts remain pending, return `prose_pending` with the pending set and **nothing committed** — the data branch is still at the local head.
-4. Otherwise replay: read the folded chain (`dolt_log('<remoteHead>..<localHead>')` — on unrelated histories this is the entire local chain; on a shared base, exactly the ahead commits; abort if the newest entry isn't the local head: `"folded chain starts at %q, want local head %q"`; reversed to oldest-first), then `commitReplayAndAdvance`.
+3. If the merge holds any id collision, set state `id_collision`, carry the collisions, clear the pending set, and return with **nothing committed** — the data branch is still at the local head. This check runs before the settle policy, so neither policy proceeds past a collision (`sync_reconcile.go:683-687`, `:710-724`).
+4. Apply the settle policy. If any prose conflicts remain pending, return `prose_pending` with the pending set and **nothing committed** — the data branch is still at the local head.
+5. Otherwise replay: read the folded chain (`dolt_log('<remoteHead>..<localHead>')` — on unrelated histories this is the entire local chain; on a shared base, exactly the ahead commits; abort if the newest entry isn't the local head: `"folded chain starts at %q, want local head %q"`; reversed to oldest-first), then `commitReplayAndAdvance`.
 
-**Settle policies** (`sync_reconcile.go:152-207`): `autonomousSettle` accepts a merge that settled on its own; otherwise surfaces the pending set — prose is never auto-committed by picking a side. `resolvedSettle` first honors self-settlement (the divergence may have converged between the agent reading and finalizing), then applies the supplied prose resolutions, accepted **only** when they form an exact bijection with the live pending set; a stale or partial set falls through and re-surfaces the current pending.
+**Settle policies** (`sync_reconcile.go:142-182`): `autonomousSettle` accepts a merge that settled on its own; otherwise surfaces the pending set — prose is never auto-committed by picking a side. `resolvedSettle` first honors self-settlement (the divergence may have converged between the agent reading and finalizing), then applies the supplied prose resolutions, accepted **only** when they form an exact bijection with the live pending set; a stale or partial set falls through and re-surfaces the current pending.
 
-**`commitReplayAndAdvance`** (`sync_reconcile.go:778`), the safe replay:
+**`commitReplayAndAdvance`** (`sync_reconcile.go:836`), the safe replay:
 
 1. Checkout the spine; hard-reset it to the remote head (its one and only reset); lift to the current schema; commit the lift as its own named commit `"reconcile: lift remote head to current schema"` — or no commit at all on a current-schema head (empty diff).
-2. Seed a spine writer from a real export read. For each folded commit, oldest first: re-merge that commit's export against base and theirs (`ThreeWay(...).Provisional()`), and land the delta on the spine as a commit stamped with the **original commit's message, date, and author** — provenance is preserved. One step is read and landed before the next is read, so memory stays bounded. The Go-side diff decides which rows to write; Dolt decides whether a commit exists (empty diff → no commit).
+2. Seed a spine writer from a real export read. For each folded commit, oldest first: re-merge that commit's export against base and theirs with `ThreeWay`, take the export from `Provisional()`, and land the delta on the spine as a commit stamped with the **original commit's message, date, and author** — provenance is preserved. `Provisional()` returns the export and a `bool`; the `bool` is false when that step's merge holds an id collision. A row that a folded commit holds but the local head does not reaches `Classify` only in this step. On a false `bool` the step returns the collisions as an error value, the replay stops before the snapshot and the data-branch advance, and the reconcile returns `id_collision` with those collisions and nothing committed to the data branch (`sync_reconcile.go:568-586`, `:750-754`). The fold runs only after prose settles, so a collision that exists only in the folded chain is reported after any held prose is resolved (`:736-738`). One step is read and landed before the next is read, so memory stays bounded. The Go-side diff decides which rows to write; Dolt decides whether a commit exists (empty diff → no commit).
 3. Land the final merged export as an unconditional marker commit (`--allow-empty`) with the operation's message: `"reconcile: field-aware merge of remote divergence"` (three-way), `"reconcile: combine unrelated histories (union of both backlogs)"`, or `"reconcile: take local backlog over unrelated remote history"`.
 4. Count the landed commits off the spine; `Replayed` = landed − 1 (excluding the marker).
 5. **Snapshot-first**: ensure the pre-reconcile snapshot exists; a snapshot failure aborts before the data branch moves.
@@ -94,7 +95,7 @@ Scratch roles: `read` is hard-reset once per folded commit and keeps nothing; `s
 
 Each landing on the spine is a single attempt deliberately **without** the self-rotating transient retry — a rotation would reopen on the default branch and resume committing onto the data branch. A transient failure bubbles to the outer retry, which recreates both scratch branches and rebuilds the whole spine from the fixed anchors.
 
-**Result vocabulary** (`internal/storage/sync.go:300-384`): states `not_diverged`, `linearized`, `prose_pending`, `unrelated_histories`, `took_local`, `took_remote`, `combined`; fields `Ahead`, `Behind`, `LocalHead`, `RemoteHead`, `BaseCommit`, `Pending`, `Unrelated`, `Replayed`. `Replayed` counts folded commits that actually landed — zero for non-mutating outcomes and for a fold whose every projection was already contained in the spine.
+**Result vocabulary** (`internal/storage/sync.go:351-451`): states `not_diverged`, `linearized`, `prose_pending`, `id_collision`, `unrelated_histories`, `took_local`, `took_remote`, `combined`; fields `Ahead`, `Behind`, `LocalHead`, `RemoteHead`, `BaseCommit`, `Pending`, `Collisions`, `Unrelated`, `Replayed`. `Pending` is non-empty only for `prose_pending`, and `Collisions` only for `id_collision`. `Replayed` counts folded commits that actually landed — zero for non-mutating outcomes and for a fold whose every projection was already contained in the spine.
 
 ## Unrelated histories: the take flow
 
@@ -119,7 +120,7 @@ The replay never issues UPDATEs. `diffExports` (`internal/store/export_delta.go`
 
 ## Merge rules (`internal/merge`)
 
-The merge is pure — no IO, no clock, no error returns (every failure is a `bool`), fully deterministic, and symmetric: both machines compute the same winner without knowing which side is "ours". Causality comes from the merge-base, never from timestamps — `UpdatedAt`/`CreatedAt` are outputs, never used to pick winners.
+The merge is pure — no IO, no clock, no error returns (a refused merge is reported as a `bool` or a `*Collision` value) — and fully deterministic. Field-level tie-breaks are symmetric: both machines compute the same winner without knowing which side is "ours". The export's `WorkspaceID` and `ExportedAt` come from the local side, as do a collided id's row and child rows. Causality comes from the merge-base, never from timestamps. Both `UpdatedAt` and `CreatedAt` are part of the change-detection projection. Beyond that, `UpdatedAt` decides nothing, and `CreatedAt` decides one thing: whether two rows that share an id are one ticket, and with it whether a base row is that ticket's ancestor (`collision.go:64-85`). Neither picks a winner between two versions of one ticket.
 
 ### Export level (`ThreeWay`)
 
@@ -129,22 +130,32 @@ Issue IDs from base ∪ local ∪ remote, sorted ascending (a duplicate ID withi
 |---|---|
 | neither changed | keep base row (if it exists) |
 | only one side changed | that side's row; if that side deleted it, the row is dropped |
-| both changed, both present | field-wise `ResolveIssue` (below) |
+| both changed, both present, equal `CreatedAt` instants | field-wise `ResolveIssue` (below) |
+| both changed, both present, different `CreatedAt` instants | id collision: local row kept unchanged, collision recorded (below) |
 | both changed, one present | the surviving edit is preserved (edit beats concurrent delete) |
 | both changed, neither present | converged removal |
 
 Deletion here is whole-row absence; soft deletion (retention) travels as a field on a present row. Change detection compares a projection of every persisted field including the whole leaf-lifecycle payload (status, closed_at, resolution, redirect_target — so a resolution-only re-close registers as a change) with nil and empty label slices normalized equal (JSON round-trip drift does not synthesize changes). `ThreeWay` panics on an unhydrated leaf issue.
 
-Merged-export assembly: issues sorted by ID; `Version` = max of the three (empty ⇒ 1); `WorkspaceID` and `ExportedAt` are taken from local, remote's discarded. Side tables:
+**Id collisions** (`internal/merge/collision.go`). In the both-changed, both-present case `ThreeWay` calls `Classify(base, local, remote, localWorkspaceID, remoteWorkspaceID)` before any field merge (`merge.go:126-138`). `Classify` compares the two rows' `CreatedAt` with `time.Time.Equal`, so two encodings of one instant in different UTC offsets count as equal (`collision.go:64-71`):
+
+- **Equal instants**: the rows are two versions of one ticket. `Classify` returns a `SameEntity` holding both rows, both workspace IDs, and the base row — but only when the base row's `CreatedAt` equals the pair's. A base row with any other `CreatedAt` is dropped, and the field merge runs as if there were no base (`ancestorOf`, `collision.go:80-85`). `SameEntity`'s fields are unexported, so outside the package `Classify` is the only way to build one, and `ResolveIssue` accepts nothing else (`collision.go:29-33`, `resolve.go:85`).
+- **Different instants**: the rows are two tickets that share an id. `Classify` returns a `*Collision{IssueID, Ours, Theirs}` (JSON `issue_id`, `ours`, `theirs`) carrying the local and remote rows whole (`collision.go:16-20`). `ThreeWay` appends it, keeps the local row unchanged in the merged issues, and does not call `ResolveIssue`, so the id adds no pending prose.
+
+`MergeResult.Collisions` holds the collisions sorted by issue id (`merge.go:172`, `collision.go:90-95`). A merge that holds any collision withholds its export: `Settled()` reports ok only when both `Pending` and `Collisions` are empty, and `Provisional()` reports ok only when `Collisions` is empty (`merge.go:35-49`).
+
+Merged-export assembly: issues sorted by ID; `Version` = max of the three exports' versions (`merge.go:163`); `WorkspaceID` and `ExportedAt` are taken from local, remote's discarded. Side tables:
 
 | Table | Merge | Collision rule | Referential filter |
 |---|---|---|---|
-| relations | two-way union by `(src, dst, type)` | remote's metadata wins an identical key | dropped unless **both** endpoints survive |
-| comments | two-way union by ID | remote wins | issue must survive |
-| events | two-way union by ID | remote wins | issue must survive |
-| labels | **three-way** by `(issue_id, name)` | remote's metadata wins ties | issue must survive |
+| relations | two-way union by `(src, dst, type)` | remote's metadata wins an identical key | dropped unless **both** endpoints admit the row's side |
+| comments | two-way union by ID | remote wins | issue must admit the row's side |
+| events | two-way union by ID | remote wins | issue must admit the row's side |
+| labels | **three-way** by `(issue_id, name)` | remote's metadata wins ties | issue must admit the row's side |
 
-Labels are the only three-way side table: membership per key runs the two-tier rule over (in-base, in-local, in-remote) with presence-or at tier 2 — so a label removed by one side while the other left it alone **stays removed** (not resurrected), and the membership call treats the base as always present, making every present label an add when the base is empty. A key present only in base contributes nothing.
+**Admission** (`merge.go:61-71`, `:153-160`): every issue id in the merged issues admits child rows from both sides, except a collided id, which admits local rows only; an id absent from the merged issues admits neither. A collided id therefore keeps only the local relations, comments, labels, and events that name it, and a remote relation with a collided endpoint is dropped (`mergeRelations` `merge.go:275`, `mergeComments` `:377`, `mergeLabels` `:401-410`, `mergeEvents` `:466`).
+
+Labels are the only three-way side table: membership per key runs the two-tier rule over (in-base, in-local, in-remote) with presence-or at tier 2 — so a label removed by one side while the other left it alone **stays removed** (not resurrected), and the membership call treats the base as always present, making every present label an add when the base is empty. A key present only in base contributes nothing. The side filter runs before the membership rule, so for a collided id the rule sees no remote labels: a label present in both base and local reads as removed by remote and is dropped (`merge.go:410`, `:439-448`).
 
 After the relation union: **single parent** — parent-child edges are keyed by child; a child with multiple candidate parents keeps the edge with the lexicographically greatest parent ID (order-independent). Then **cycle breaking**: parent chains are walked; on detecting a cycle, the edge belonging to the lexicographically greatest child ID inside the loop is deleted (that child becomes a root; nothing is reparented); exactly one edge is removed per cycle. Final sorts: relations by (src, dst, type); comments/events by ID; label rows by (issue, name).
 
@@ -159,14 +170,14 @@ The one primitive is `twoTier`: if exactly one side moved a field off the base, 
 | priority | numerically higher wins (urgent beats normal) |
 | labels | per-name membership (presence-or; single-side removal sticks) |
 | id | always ours; never merged |
-| created_at | base's value; with no base, the earlier of the two |
+| created_at | base's value; with no base, ours, which `Classify` has proved names the same instant as theirs; never two-tier (`resolve.go:120-127`) |
 | updated_at | always the later of the two; never two-tier |
 | retention (archive/delete flags) | per-flag presence-or; the timestamp is derived — earliest non-nil — never merged on its own; deletion dominates on decode |
 | status (leaves only) | dominant-state join: closed(2) > in_progress(1) > open(0) |
 | assignee (leaves only) | workspace tiebreak |
 | closed_at / resolution / redirect_target (leaves only) | see close payload below |
 
-The **workspace tiebreak**: the value from the lexicographically greater workspace ID wins; if the workspace IDs are equal (defensive), the lexicographically greater value wins. Symmetric by construction.
+The **workspace tiebreak**: the value from the lexicographically greater workspace ID wins; if the workspace IDs are equal, the lexicographically greater value wins (`resolve.go:243-254`). Symmetric by construction. In a store reconcile the IDs are always equal: every export the reconcile merges comes from the reconciling store's own `Export`, which stamps that store's workspace ID, so the value comparison decides (`sync_reconcile.go:1049-1056`, `internal/store/import_export.go:39`).
 
 The merged row is built by copying ours — except when the resolved type equals theirs' and differs from ours', in which case theirs is the basis; every field not explicitly re-merged is inherited verbatim from the basis side. A merged **container** (epic) inherits lifecycle, status, assignee, and close payload untouched from the basis; retention still merges for containers (it runs before the container gate).
 

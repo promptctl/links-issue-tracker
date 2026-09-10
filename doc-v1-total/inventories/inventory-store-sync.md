@@ -1212,7 +1212,7 @@ Plus `resolve_test.go:371-388`: both archive (t2 vs t1) off a live base → `Arc
 
 ### 11.7 Prose resolution surface (`resolve_prose.go`)
 
-**There is no text-diff machinery in this package.** No line-level or hunk-level diffing, no `<<<<<<<`/`=======`/`>>>>>>>` conflict markers, no diff3, no similarity heuristics. A prose conflict is whole-field: the three complete strings travel in `ProsePending{Base, Ours, Theirs}` (resolve.go:26-32, populated at resolve.go:179), and the agent's answer is one complete replacement string `ProseResolution.Text` (resolve_prose.go:59) assigned wholesale to the field (resolve_prose.go:139-147).
+**There is no text-diff machinery in this package.** No line-level or hunk-level diffing, no `<<<<<<<`/`=======`/`>>>>>>>` conflict markers, no diff3, no similarity heuristics. A prose conflict is whole-field: the three complete strings travel in `ProsePending{Base, Ours, Theirs}` (resolve.go:26-32, populated by `resolver.prose` at resolve.go:186-194, the append at resolve.go:191), and the agent's answer is one complete replacement string `ProseResolution.Text` (resolve_prose.go:59) assigned wholesale to the field (resolve_prose.go:139-147).
 
 **`Fingerprint()`** (resolve_prose.go:30-33): `Fingerprint(hex.EncodeToString(sha256.Sum256([]byte(p.IssueID + "\x00" + string(p.Field) + "\x00" + p.Base + "\x00" + p.Ours + "\x00" + p.Theirs))[:fingerprintBytes]))` with `fingerprintBytes = 6` (resolve_prose.go:28) — a **12-lowercase-hex-character** truncation of SHA-256 over the issue id, the field name and the three texts joined by NUL bytes. The same field text diverged identically on two issues yields two different fingerprints.
 
