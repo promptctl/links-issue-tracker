@@ -17,10 +17,15 @@ import (
 type Standing interface{ isStanding() }
 
 // Unclaimed is a lane no checkout holds and none is recorded as having held:
-// the lane is finished, or nothing in it was ever started or completed by an
-// identifiable checkout. It is the zero state the whole design is built around
-// — a repository whose history predates attribution derives nothing but this,
-// and behaves exactly as it did before claims existed.
+// the lane is finished, or nothing in it was ever started or completed at all.
+// It is the zero state the whole design is built around.
+//
+// Note the second condition is about the ABSENCE OF AN EVENT, not the absence
+// of an identity. An establishing event that names no checkout still produces a
+// holder — the public checkout — so a repository whose history predates
+// attribution derives Stale here, not Unclaimed: somebody worked this lane and
+// walked away, which is a different offer from "nobody has ever worked this"
+// and is exactly the distinction Stale exists to carry.
 type Unclaimed struct{}
 
 // Tenure is the evidence trail behind a holder, shared by the two variants that

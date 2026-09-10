@@ -45,16 +45,19 @@ func NewLocalCheckouts(workspaceID string, liveStreams []string) LocalCheckouts 
 //
 // Voiding is stronger than ignoring, and the difference is why derivation drops
 // these events outright rather than merely refusing to let them hold a claim. An
-// *unattributed* establishing event is unknown — somebody took this lane and the
-// record does not say who — and reading past it to an older, attributed ancestor
-// would invent a holder that the unknown event already superseded. A void event
-// is *disproven*: we know exactly which checkout produced it and we know it is
-// gone, so the lane genuinely reverts to whoever else has standing in it. Unknown
-// stops the search; disproven falls through.
+// *unattributed* establishing event belongs to the public checkout, an
+// unaddressable holder that still holds; reading past it to an older, attributed
+// ancestor would invent a holder that the public one already superseded. A void
+// event is *disproven*: we know exactly which checkout produced it and we know
+// it is gone, so the lane genuinely reverts to whoever else has standing in it.
+// Unaddressable stops the search; disproven falls through.
 //
-// An event with no attribution at all names no checkout and so can never be
-// proven absent — which is also what keeps the zero LocalCheckouts inert, since
-// otherwise its empty workspace would match an absent pair's empty workspace.
+// The public checkout is precisely the holder no machine can prove absent: it
+// names no worktree to go looking for, so its evidence outlives every
+// enumeration and is retired by freshness alone. That is also what keeps the
+// zero LocalCheckouts inert, since otherwise its empty workspace would match the
+// public checkout's empty workspace and void every unattributed event on the
+// strength of having enumerated nothing.
 func (l LocalCheckouts) Void(at model.Attribution) bool {
 	if !at.Present() || at.Workspace() != l.workspace {
 		return false

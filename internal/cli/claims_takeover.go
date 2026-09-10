@@ -60,15 +60,21 @@ const (
 )
 
 // relationOf is the one place a Standing is read against an identity.
+//
+// Only a minted token can match. The public checkout is every unattributed
+// writer at once, and a checkout with no token has recorded nothing, so a zero
+// self equal to a zero holder proves nothing about whose lane it is.
+// [LAW:single-enforcer]
 func relationOf(standing claims.Standing, self model.Attribution) laneRelation {
+	ours := func(by model.Attribution) bool { return self.Present() && by == self }
 	switch s := standing.(type) {
 	case claims.Held:
-		if s.By == self {
+		if ours(s.By) {
 			return laneOurs
 		}
 		return laneHeldForeign
 	case claims.Stale:
-		if s.By == self {
+		if ours(s.By) {
 			return laneOurs
 		}
 		return laneStaleForeign

@@ -27,6 +27,13 @@ import (
 var (
 	selfAttribution  = model.NewAttribution("self-stream", "ws")
 	otherAttribution = model.NewAttribution("other-stream", "ws")
+
+	// publicAttribution is what a checkout that has minted no stream token
+	// computes as its own identity. `next` opens in app.AccessRead, which
+	// resolves the stream through workspace.ReadStream and never mints, so
+	// this is the ordinary self of any checkout before its first write --
+	// including a brand-new clone, the design's own headline scenario.
+	publicAttribution = model.Attribution{}
 )
 
 func heldBy(who model.Attribution) claims.Standing {
@@ -824,5 +831,69 @@ func TestRouteNextServesOpenWorkInOurOwnStaleLane(t *testing.T) {
 	}
 	if served.Row.ID != a1.ID {
 		t.Fatalf("served = %q, want %q (open work in our own lane, stale or not)", served.Row.ID, a1.ID)
+	}
+}
+
+// TestRouteNextDoesNotAdoptStalePublicHistory is the routing half of the ruling
+// that a bucket identity is a holder but never a proof of identity, and it
+// pins the regression the public-checkout change introduced before it was
+// caught in review.
+//
+// The setup is the normal state of a freshly upgraded repository read by a
+// brand-new checkout: pre-attribution history derives as a STALE hold by the
+// public checkout, and the checkout asking is itself unminted, so both sides
+// of the comparison are the zero Attribution. On bare equality that reads as
+// "our own lane we stepped away from", and `next` would hand back an epic this
+// checkout never touched -- announcing it as work already in flight in a lane
+// it holds. Every such lane in the backlog matches, so the failure is not one
+// stray pick but the whole backlog being adopted at once.
+//
+// What must NOT come back is ResumedOwnWork; that is the load-bearing half.
+// The lane is a stale foreign one, so the orphan in it is offered as the
+// takeover it actually is, with the provenance a takeover carries.
+func TestRouteNextDoesNotAdoptStalePublicHistory(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	h.transition(a1.ID, model.Start{Assignee: "whoever-came-before"})
+
+	rows, details := h.gather()
+	orphan(t, rows, a1.ID)
+	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, a1.ID)): staleBy(publicAttribution)}
+
+	outcome := routeNext(rows, details, standings, publicAttribution)
+	if resumed, adopted := outcome.(ResumedOwnWork); adopted {
+		t.Fatalf("routeNext resumed %q as this checkout's own work; an unminted self shares the public bucket with the history, which proves both unaddressable, not both us", resumed.Row.ID)
+	}
+	served, ok := outcome.(ServedFromNewLane)
+	if !ok {
+		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane: a stale public lane is a takeover, carrying its provenance", outcome, outcome)
+	}
+	if served.Row.ID != a1.ID {
+		t.Fatalf("served = %q, want %q", served.Row.ID, a1.ID)
+	}
+}
+
+// TestRouteNextRoutesAroundAFreshPublicHold is the fresh half. A checkout with
+// no token has recorded nothing, so a fresh unattributed hold is somebody else's
+// work in flight — a binary older than attribution, or history from the hours
+// before an upgrade — and routing walks around it rather than resuming it.
+func TestRouteNextRoutesAroundAFreshPublicHold(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 1})
+	h.transition(a1.ID, model.Start{Assignee: "whoever-is-working-it"})
+
+	rows, details := h.gather()
+	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, a1.ID)): heldBy(publicAttribution)}
+
+	outcome := routeNext(rows, details, standings, publicAttribution)
+	served, ok := outcome.(ServedFromNewLane)
+	if !ok {
+		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane: a fresh public hold is foreign work in flight", outcome, outcome)
+	}
+	if served.Row.ID != b1.ID {
+		t.Fatalf("served = %q, want %q (the held lane routed around)", served.Row.ID, b1.ID)
 	}
 }

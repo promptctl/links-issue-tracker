@@ -80,24 +80,15 @@ func standingOf(members []model.Issue, events []model.IssueEvent, fresh Freshnes
 		return local.Void(event.Attribution)
 	})
 
-	// Leg 2 — the holder produced the latest establishing event. Two ways for
-	// that to name nobody, and they are one answer: no lifecycle transition ever
-	// happened here, or the one that did carries no attribution.
+	// Leg 2 — the holder produced the latest admissible establishing event. With
+	// none left, nobody holds the lane.
 	//
-	// The unattributed case is the common one on any repository with history,
-	// because attribution was added to events that already existed and is never
-	// backfilled — it is historical fact, so the events that predate it will
-	// carry none forever. The derivation stops at it rather than scanning back to
-	// the newest ancestor that does carry attribution, and that restraint is the
-	// point: an unattributed `start` says somebody took this lane and the record
-	// does not say who, so an older attributed event is not the best available
-	// answer — it is an answer we have positive evidence was superseded. Handing
-	// the lane to a checkout that demonstrably walked away from it, more
-	// confidently the older the repository, is worse than admitting we cannot
-	// tell. Unclaimed is the honest reading, and it is also the pre-claims
-	// behavior, so the cost of admitting it is nil.
+	// An establishing event with no attribution belongs to the public checkout
+	// (model.Attribution.Present) and holds the lane like any other. Derivation
+	// stops at it rather than scanning back to an older attributed event,
+	// because that older event is one we have positive evidence was superseded.
 	establisher, found := LatestEstablisher(admissible)
-	if !found || !establisher.Attribution.Present() {
+	if !found {
 		return Unclaimed{}
 	}
 	holder := establisher.Attribution
@@ -140,12 +131,18 @@ func trails(events []model.IssueEvent) (activity map[model.Attribution]time.Time
 // the looser reading every lane anyone had ever glanced at would report as
 // contested, and an annotation that fires constantly is one nobody reads.
 //
+// The public checkout contests on the same terms as any identified one: it is a
+// holder, so it can be the OTHER holder. Excluding it would have made the one
+// race an unidentified checkout can lose the one race nobody is told about, and
+// freshness already keeps the pre-attribution backlog out — that evidence is
+// old, so it never covers.
+//
 // Most recently active first, then by stream token so that two checkouts
 // last seen in the same instant still render in a stable order.
 func contestants(holder model.Attribution, activity map[model.Attribution]time.Time, establishers map[model.Attribution]struct{}, fresh Freshness) []model.Attribution {
 	contested := []model.Attribution{}
 	for candidate := range establishers {
-		if candidate == holder || !candidate.Present() || !fresh.Covers(activity[candidate]) {
+		if candidate == holder || !fresh.Covers(activity[candidate]) {
 			continue
 		}
 		contested = append(contested, candidate)

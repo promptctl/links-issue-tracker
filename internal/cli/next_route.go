@@ -219,10 +219,9 @@ func capacityFor(row annotation.AnnotatedIssue, standing claims.Standing, self m
 // epics because it asked for one issue type (links-claims-1b0p, N1). Ownership
 // is a fact about the workspace; a display filter must not be able to change it.
 //
-// An absent self needs no guard here: claims.Derive refuses to build a Held or
-// Stale standing from an unattributed establisher (derive.go), so no standing
-// carries the zero Attribution and relationOf can never call a lane ours by
-// matching absence against absence.
+// An unidentified self needs no guard here: relationOf owns what a
+// public-checkout self may match, so ownership and takeover cannot drift apart
+// on it. [LAW:single-enforcer]
 func ownScope(standings claims.Standings, self model.Attribution) (map[model.LaneID]bool, map[string]bool) {
 	lanes := map[model.LaneID]bool{}
 	epics := map[string]bool{}

@@ -11,14 +11,15 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-// runNextRow reproduces exactly what `lit next` picks — the shared workable
-// pipeline and claim routing — and returns the chosen annotated row. This
-// harness never mints a stream token or attributes a write (newTestCLIApp
-// opens the store directly, bypassing app.Open's AttributeTo), so every lane
-// derives Unclaimed and routing always lands on ServedFromNewLane — the
-// claims-aware routing degenerating to exactly the pre-claims "first ready
-// row" pick these tests pin. [LAW:single-enforcer]
-func (h readyTestHarness) runNextRow() annotation.AnnotatedIssue {
+// runNextOutcome reproduces exactly what `lit next` decides — the shared
+// workable pipeline and claim routing — and hands back the routing verdict
+// itself, so a test can assert WHICH case picked a row rather than only which
+// row came out. [LAW:single-enforcer] one reproduction of the pipeline; the
+// narrowing helpers below all read through it.
+//
+// The harness mints a stream token the way app.Open does, so its own writes
+// hold lanes as this checkout. Use asCheckout to write as somebody else.
+func (h readyTestHarness) runNextOutcome() NextOutcome {
 	h.t.Helper()
 	annotated, details, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
 	if err != nil {
@@ -28,12 +29,45 @@ func (h readyTestHarness) runNextRow() annotation.AnnotatedIssue {
 	if err != nil {
 		h.t.Fatalf("gatherClaimContext error = %v", err)
 	}
-	outcome := routeNext(annotated, details, cc.standings, cc.self)
-	served, ok := outcome.(ServedFromNewLane)
-	if !ok {
-		h.t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane (harness carries no claims)", outcome, outcome)
+	return routeNext(annotated, details, cc.standings, cc.self)
+}
+
+// runNextRow narrows an outcome to the row it served, for the ordering and
+// filter tests that care which ticket came back and not how routing reached it.
+//
+// [LAW:parse-dont-validate] The switch is the boundary between "routing served
+// something" and "routing declined to", and it is total over the sealed set:
+// every served variant carries a Row, and the two that carry none fail here, by
+// name, instead of yielding the zero AnnotatedIssue — a ticket with an empty id
+// that would read as an ordinary answer and fail some later assertion far from
+// the cause.
+func (h readyTestHarness) runNextRow() annotation.AnnotatedIssue {
+	h.t.Helper()
+	outcome := h.runNextOutcome()
+	switch served := outcome.(type) {
+	case ServedFromClaim:
+		return served.Row
+	case ResumedOwnWork:
+		return served.Row
+	case ServedFromEpicLane:
+		return served.Row
+	case ServedFromNewLane:
+		return served.Row
 	}
-	return served.Row
+	h.t.Fatalf("routeNext = %#v (%T), want an outcome carrying a served row", outcome, outcome)
+	return annotation.AnnotatedIssue{}
+}
+
+// asCheckout re-attributes everything the harness writes from here on to
+// another checkout's stream token — the same store-level seam app.Open uses to
+// stamp a real checkout's identity onto its work, which is why a test driving
+// it produces evidence indistinguishable from a second checkout's.
+//
+// It is how a test spells "somebody else did this"; an empty token writes as
+// the public checkout. Without it every write is this checkout's own.
+func (h readyTestHarness) asCheckout(streamToken string) {
+	h.t.Helper()
+	h.ap.Store.AttributeTo(streamToken)
 }
 
 func (h readyTestHarness) runNextErr(args ...string) error {
@@ -64,20 +98,132 @@ func TestRunNextReturnsTopReadyLeaf(t *testing.T) {
 	}
 }
 
-// In-progress leaves are not workable starts; `lit next` skips them and returns
-// the next open one. The agent should `lit done` an in-progress leaf, not
-// `lit start` it again.
-func TestRunNextSkipsInProgressLeaf(t *testing.T) {
+// An in-progress leaf in a lane ANOTHER checkout holds is not a workable start;
+// `lit next` routes around it and returns the next open one. The claim is what
+// makes it untouchable — its holder is working it right now — so this is the
+// half of the old "in-progress leaves are skipped" rule that survives, and it
+// is stated against a foreign holder rather than against the state alone.
+func TestRunNextRoutesAroundAnInProgressLeafHeldElsewhere(t *testing.T) {
 	h := newReadyTestHarness(t)
 	inProgress := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Already started", Topic: "next", IssueType: "task", Priority: 1})
-	if _, err := h.ap.Store.Apply(h.ctx, inProgress.ID, storage.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
-		t.Fatalf("StartIssue error = %v", err)
-	}
 	openLeaf := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Workable", Topic: "next", IssueType: "task", Priority: 0})
+	h.asCheckout("otherstream01")
+	h.applyAction(inProgress.ID, model.Start{Assignee: "tester"}, "")
 
 	got := h.runNextRow()
 	if got.ID != openLeaf.ID {
-		t.Fatalf("next.ID = %q, want %q (in-progress leaves are not startable)", got.ID, openLeaf.ID)
+		t.Fatalf("next.ID = %q, want %q (a lane held elsewhere is routed around)", got.ID, openLeaf.ID)
+	}
+}
+
+// The other half is the one the harness could not reach before, and it is the
+// opposite answer on the same shape: work in flight in a lane THIS checkout
+// holds is handed back to be resumed, not skipped in favour of a lower-ranked
+// open leaf. Skipping it is what once hid the very ticket a checkout was
+// working from that checkout (links-claims-1b0p, N8) — the agent asked what to
+// do next and was told to start something else.
+func TestRunNextResumesOwnWorkInFlight(t *testing.T) {
+	h := newReadyTestHarness(t)
+	inProgress := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Already started", Topic: "next", IssueType: "task", Priority: 1})
+	lowerRanked := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Workable", Topic: "next", IssueType: "task", Priority: 0})
+	h.applyAction(inProgress.ID, model.Start{Assignee: "tester"}, "")
+
+	outcome := h.runNextOutcome()
+	resumed, ok := outcome.(ResumedOwnWork)
+	if !ok {
+		t.Fatalf("routeNext = %#v (%T), want ResumedOwnWork", outcome, outcome)
+	}
+	if resumed.Row.ID != inProgress.ID {
+		t.Fatalf("resumed.ID = %q, want %q (our own work in flight)", resumed.Row.ID, inProgress.ID)
+	}
+
+	text := h.runNextText()
+	if !strings.Contains(text, "resuming "+inProgress.ID) {
+		t.Fatalf("next output = %q, want it to announce resuming %s", text, inProgress.ID)
+	}
+	if strings.Contains(text, lowerRanked.ID) {
+		t.Fatalf("next output = %q, want %q not served while our own work is in flight", text, lowerRanked.ID)
+	}
+}
+
+// A lane we hold whose next ticket is startable serves it with NO announcement:
+// no claim is established, because we already hold the lane, so `next` prints
+// exactly what it always printed. This is the routing case with the quietest
+// output and therefore the one most easily broken without anyone noticing.
+//
+// The hold rests on a `done`, not a `start` — completing a ticket mid-lane
+// keeps the lane you are halfway through — so this also pins that the lane
+// survives the ticket that established it being closed.
+func TestRunNextServesTheNextTicketOfALaneWeHold(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Our epic", Topic: "next", IssueType: "epic", Priority: 1})
+	finished := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "First", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
+	nextUp := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Second", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID})
+	h.applyAction(finished.ID, model.Done{}, "finished")
+
+	outcome := h.runNextOutcome()
+	served, ok := outcome.(ServedFromClaim)
+	if !ok {
+		t.Fatalf("routeNext = %#v (%T), want ServedFromClaim", outcome, outcome)
+	}
+	if served.Row.ID != nextUp.ID {
+		t.Fatalf("served.ID = %q, want %q (the next ticket of the lane we hold)", served.Row.ID, nextUp.ID)
+	}
+
+	text := h.runNextText()
+	if !strings.Contains(text, nextUp.ID) {
+		t.Fatalf("next output = %q, want %q served", text, nextUp.ID)
+	}
+	for _, announcement := range []string{"starting", "claims", "taking over", "resuming", "continuing epic"} {
+		if strings.Contains(text, announcement) {
+			t.Fatalf("next output = %q, want no %q announcement — the lane was already ours", text, announcement)
+		}
+	}
+}
+
+// Exhaustion is the loud refusal: our epic still has open work, none of it is
+// reachable, and `next` says so instead of hopping to a leaf outside the epic.
+// It is an error and not a row, so a caller that ignored the distinction would
+// hand an agent the zero ticket — which is why the outcome type seals the two
+// apart and why this asserts through runNext, where the exit path is decided.
+//
+// The gating dependency is itself blocked, so it is on our path and NOT ours to
+// take: that is what forecloses routing step 1b and leaves exhaustion as the
+// only honest answer.
+func TestRunNextExhaustedNamesTheBlockerGatingOurEpic(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Our epic", Topic: "next", IssueType: "epic", Priority: 1})
+	finished := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "First", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
+	gated := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Second", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
+	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Outside dependency", Topic: "next", IssueType: "task", Priority: 0})
+	blockersBlocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Deeper still", Topic: "next", IssueType: "task", Priority: 0})
+	h.addDependency(gated.ID, blocker.ID)
+	h.addDependency(blocker.ID, blockersBlocker.ID)
+	h.applyAction(finished.ID, model.Done{}, "finished")
+
+	outcome := h.runNextOutcome()
+	exhausted, ok := outcome.(Exhausted)
+	if !ok {
+		t.Fatalf("routeNext = %#v (%T), want Exhausted", outcome, outcome)
+	}
+	if len(exhausted.Epics) != 1 || exhausted.Epics[0] != epic.ID {
+		t.Fatalf("exhausted.Epics = %v, want [%s]", exhausted.Epics, epic.ID)
+	}
+	if len(exhausted.Blocked) != 1 || exhausted.Blocked[0].ID != blocker.ID {
+		t.Fatalf("exhausted.Blocked = %+v, want the one gating dependency %s", exhausted.Blocked, blocker.ID)
+	}
+
+	err := h.runNextErr()
+	if err == nil {
+		t.Fatalf("runNext on an exhausted epic = nil error, want the loud diagnostic")
+	}
+	for _, want := range []string{epic.ID, blocker.ID, "not startable right now"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("runNext error = %q, want it to name %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), blockersBlocker.ID) {
+		t.Fatalf("runNext error = %q, want it to stop at our own path and not walk %q", err, blockersBlocker.ID)
 	}
 }
 
@@ -179,9 +325,8 @@ func TestRunNextCarriesParentEpic(t *testing.T) {
 }
 
 // Every announcement renderNextOutcome can print, asserted as bytes. The
-// outcome is constructed rather than routed to, which is what lets all four
-// served variants be reached from a harness that mints no stream token — the
-// routing that produces each one is pinned separately in next_route_test.go.
+// outcome is constructed rather than routed to, so each announcement is asserted
+// alone; the routing that produces each one is pinned in next_route_test.go.
 // Standings are left empty deliberately: formatClaimLine stays on its
 // ("", false) arm, so nothing but the announcement is under assertion.
 func TestRenderNextOutcomeAnnouncesEachClaimEstablishingPick(t *testing.T) {

@@ -110,8 +110,9 @@ func gatherClaimContext(ctx context.Context, stdout io.Writer, ap *app.App) (cla
 // report itself as nothing.
 //
 // NewAttribution collapses an absent stream (a checkout that has never mutated)
-// to the zero Attribution, which is exactly "no live claims" — no branch needed
-// here for the never-minted case.
+// to the zero Attribution, the public checkout's. No branch is needed for that
+// case: relationOf never counts a zero self as holding anything.
+// [LAW:dataflow-not-control-flow]
 func ownAttribution(ap *app.App) model.Attribution {
 	return model.NewAttribution(ap.Stream.Value(), ap.Workspace.WorkspaceID)
 }

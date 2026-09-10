@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -160,6 +162,131 @@ func TestFormatClaimLineStaleHolderStillResolvesALiveAddress(t *testing.T) {
 	}
 }
 
+// TestDescribeClaimantNamesAnUnaddressableHolder pins the transfer notice's
+// half of the public-checkout ruling: the four renderings describeClaimant can
+// produce, each against the exact string a reader sees. The unattributed row is
+// driven through the notice it appears in by
+// TestTransferNoticeNamesAPredecessorThatMintedNoToken.
+//
+// The empty-assignee rows are the ruling: the old text read "(unassigned)",
+// which described the empty field while saying nothing about the holder being
+// announced -- and the record carries an establishing event, so somebody
+// demonstrably took this ticket.
+func TestDescribeClaimantNamesAnUnaddressableHolder(t *testing.T) {
+	for _, row := range []struct {
+		name     string
+		claimant claims.Claimant
+		want     string
+	}{
+		{
+			name:     "no assignee and no token: the bucket is the whole answer",
+			claimant: claims.Claimant{Established: true},
+			want:     "the public checkout",
+		},
+		{
+			name:     "no assignee, identified checkout: the token carries it alone",
+			claimant: claims.Claimant{Established: true, Checkout: elsewhereHolder},
+			want:     "stream aaaaaaaa",
+		},
+		{
+			name:     "assignee and no token: the bucket discriminates nothing beside a name",
+			claimant: claims.Claimant{Established: true, Assignee: "alpha-agent"},
+			want:     "alpha-agent",
+		},
+		{
+			name:     "both halves: either one can be the half that moved",
+			claimant: claims.Claimant{Established: true, Assignee: "alpha-agent", Checkout: elsewhereHolder},
+			want:     "alpha-agent (stream aaaaaaaa)",
+		},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			if got := describeClaimant(row.claimant); got != row.want {
+				t.Fatalf("describeClaimant(%+v) = %q, want %q", row.claimant, got, row.want)
+			}
+		})
+	}
+}
+
+// TestTransferNoticeNamesAPredecessorThatMintedNoToken takes a ticket over from
+// a hold recorded with no stream token and reads the notice a reader actually
+// sees: the public checkout, with no assignee beside it.
+func TestTransferNoticeNamesAPredecessorThatMintedNoToken(t *testing.T) {
+	h := newReadyTestHarness(t)
+	issue := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "unattributed hold", Topic: "claims", IssueType: "task"})
+	h.asCheckout("")
+	h.transition(issue.ID, model.Start{})
+
+	notice, err := transferNotice(h.ctx, h.ap, issue.ID, model.Start{Assignee: "bravo-agent"})
+	if err != nil {
+		t.Fatalf("transferNotice error = %v", err)
+	}
+	want := fmt.Sprintf("claim transferred: the public checkout -> bravo-agent (%s)\n", nameCheckout(ownAttribution(h.ap)))
+	if notice != want {
+		t.Fatalf("transferNotice = %q, want %q", notice, want)
+	}
+}
+
+// TestFormatClaimLinePublicCheckoutIsNeverHere pins the rendering half of the
+// public-checkout ruling, and the regression that deleting claimPrefix's self
+// arm was meant to close.
+//
+// Every other standing literal in this file names a holder with a real stream
+// token, so none of them could reach the branch an unattributed holder takes.
+// A zero Attribution is both a legitimate holder and the zero value of
+// claimContext.self, and the two coincide on exactly the reports that build a
+// context carrying no Stream at all -- `lit sync`'s contested-lane report among
+// them. The old arm read that coincidence as proof of ownership and announced
+// a foreign lane as "claimed here: this checkout".
+//
+// So cc.self varies down the rows and the expected badge does not: rendering
+// reads the holder and the addresses this machine actually resolved, never who
+// is asking. An identified self must not make the public lane foreign, and an
+// absent self must not make it ours.
+func TestFormatClaimLinePublicCheckoutIsNeverHere(t *testing.T) {
+	publicHolder := model.Attribution{}
+	for _, row := range []struct {
+		name     string
+		self     model.Attribution
+		standing claims.Standing
+		want     string
+	}{
+		{
+			name:     "held, asked by an identified checkout",
+			self:     hereHolder,
+			standing: claims.Held{Tenure: claims.Tenure{By: publicHolder, LastActivity: renderNow.Add(-2 * time.Hour)}},
+			want:     "claimed: the public checkout (unaddressed)",
+		},
+		{
+			name:     "held, asked by a checkout that minted no token of its own",
+			self:     publicHolder,
+			standing: claims.Held{Tenure: claims.Tenure{By: publicHolder, LastActivity: renderNow.Add(-2 * time.Hour)}},
+			want:     "claimed: the public checkout (unaddressed)",
+		},
+		{
+			name:     "stale, asked by a checkout that minted no token of its own",
+			self:     publicHolder,
+			standing: claims.Stale{Tenure: claims.Tenure{By: publicHolder, LastActivity: renderNow.Add(-49 * time.Hour)}},
+			want:     "claimed: the public checkout (stale)",
+		},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			evidence, lane := laneWithProgress(t, 0, 1, "")
+			cc := claimContext{standings: claims.Standings{lane: row.standing}, evidence: evidence, self: row.self}
+
+			line, ok := formatClaimLine(cc, lane, renderNow)
+			if !ok {
+				t.Fatalf("formatClaimLine on a %T lane returned ok=false", row.standing)
+			}
+			if !strings.Contains(line, row.want) {
+				t.Fatalf("line = %q, want it to contain %q", line, row.want)
+			}
+			if strings.Contains(line, "claimed here") {
+				t.Fatalf("line = %q, must never announce the public checkout as this one", line)
+			}
+		})
+	}
+}
+
 // TestFormatClaimLineContestedAppendsContestants: contest is an annotation
 // on a Held lane, not a routing decision — the line names every contestant
 // alongside the holder.
@@ -175,7 +302,7 @@ func TestFormatClaimLineContestedAppendsContestants(t *testing.T) {
 	if !ok {
 		t.Fatalf("formatClaimLine on a contested lane returned ok=false")
 	}
-	if !strings.Contains(line, "contested by "+shortStream(contestant)) {
+	if !strings.Contains(line, "contested by "+nameCheckout(contestant)) {
 		t.Fatalf("line = %q, want the contestant named", line)
 	}
 }

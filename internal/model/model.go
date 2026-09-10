@@ -643,10 +643,11 @@ type Attribution struct {
 //
 // The collapse is deliberately quiet rather than an error. A half pair cannot be
 // produced by any writer, so the only thing that can present one is a corrupted
-// or hand-edited export, and reading corrupt attribution as "unattributed" lands
+// or hand-edited export, and reading corrupt attribution as unattributed lands
 // on a state that is already legal and meaningful everywhere. Nothing is skipped
 // and no operation is abandoned, so there is no failure here to be loud about —
-// claim derivation simply learns that this event names no producer.
+// claim derivation simply reads the event as the public checkout's (see
+// Present), which is a holder it can route, not a hole it has to work around.
 //
 // [LAW:parse-dont-validate] Two loose strings go in and a value whose
 // complete-or-zero invariant already holds comes out, which is why nothing
@@ -672,10 +673,18 @@ func (a Attribution) Workspace() string { return a.workspace }
 // than writing an empty object into every historical record.
 func (a Attribution) IsZero() bool { return a == Attribution{} }
 
-// Present reports whether this event carries attribution at all. Absence is a
-// permanent, legal state — events predating the attribution feature carry none
-// and never will, because attribution is historical fact and is never
-// backfilled — and it reads as "derives no claim", never as missing data.
+// Present reports whether this event names an identified checkout: one with a
+// stream token that can be addressed, voided by a liveness prune, and matched as
+// this checkout.
+//
+// An unattributed event is work by THE PUBLIC CHECKOUT, the one holder every
+// unattributed write in a workspace shares. Events older than attribution carry
+// none and never will, because attribution is never backfilled. The public
+// checkout holds and contests lanes like any holder, but it is never the
+// checkout reading it: only a mutating command records events, and it mints a
+// token first, so a checkout with no token has recorded nothing (relationOf).
+// Two unattributed writers are indistinguishable, so they never contest each
+// other.
 //
 // Defined against IsZero rather than repeating the comparison: "present" and
 // "not zero" are one fact, and two spellings of it could later disagree.

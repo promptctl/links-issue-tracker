@@ -95,15 +95,19 @@ func Open(ctx context.Context, cwd string, mode AccessMode) (*App, error) {
 		return nil, errors.Join(err, st.Close())
 	}
 	// Every mode attributes, and the mode's own identity contract decides what
-	// that means: a write open has just minted a token, so its store stamps a
-	// complete pair, while a read open in a never-mutated checkout passes an
-	// empty token and its store stamps nothing. Handing the store the value
-	// unconditionally is what keeps the difference in accessContracts, where
-	// AccessMode is already decided exactly once.
-	// [LAW:dataflow-not-control-flow] the operation always runs; only the value
-	// flowing through it varies.
+	// that means: a write open has just minted a token, while a read open in a
+	// never-mutated checkout passes an empty one and its store stamps nothing.
+	// [LAW:dataflow-not-control-flow]
+	return New(ws, st, stream), nil
+}
+
+// New pairs an opened store with this checkout's stream: the store stamps
+// exactly the identity the App reports as Stream, so the attribution on this
+// checkout's writes and the "us" that claim routing compares against cannot
+// differ. [LAW:single-enforcer]
+func New(ws workspace.Info, st storage.Store, stream workspace.StreamID) *App {
 	st.AttributeTo(stream.Value())
-	return &App{Workspace: ws, Store: st, Stream: stream}, nil
+	return &App{Workspace: ws, Store: st, Stream: stream}
 }
 
 // OpenLocationForRead opens the store at an already-derived Location strictly
