@@ -78,10 +78,7 @@ func projectEdges(edges []blocksEdge, position map[string]int) []blocksEdge {
 // dependency, and an order that already satisfies every edge comes back
 // unchanged. Positions are compared, never ids.
 func stableTopoOrder(order []rankedIssue, edges []blocksEdge) ([]string, error) {
-	position := make(map[string]int, len(order))
-	for at, item := range order {
-		position[item.id] = at
-	}
+	position := positions(order)
 	constraints := projectEdges(edges, position)
 	dependents := make([][]int, len(order))
 	blockedBy := make([]int, len(order))
@@ -170,8 +167,8 @@ func rankRewrites(order []rankedIssue, target []string) ([]rankRewrite, error) {
 
 // anchorRun returns the indices in target whose stored ranks already ascend —
 // a longest subsequence of target strictly increasing by significant rank.
-// These are the issues the repair leaves alone, so the count of everything else
-// is the honest answer to "how many issues did this move".
+// These are the issues the repair does not write, so the count of everything
+// else is the honest answer to "how many issues did this move".
 //
 // The movers between two anchors are spaced into the gap they bound, and only
 // ranks whose significant parts differ leave one. [LAW:one-source-of-truth]
@@ -223,10 +220,7 @@ func anchorRun(target []string, rankOf map[string]string) []int {
 // projection. Doctor's count and the repaired state cannot disagree about what
 // an inversion is, because only one function decides.
 func invertedEdges(order []rankedIssue, edges []blocksEdge) []blocksEdge {
-	position := make(map[string]int, len(order))
-	for at, item := range order {
-		position[item.id] = at
-	}
+	position := positions(order)
 	inverted := make([]blocksEdge, 0)
 	for _, e := range projectEdges(edges, position) {
 		if position[e.dependency] > position[e.dependent] {
@@ -234,4 +228,25 @@ func invertedEdges(order []rankedIssue, edges []blocksEdge) []blocksEdge {
 		}
 	}
 	return inverted
+}
+
+// blocksCycle returns one blocks dependency cycle among the issues in order, as
+// a repeated-endpoint path, or nil when the edges that constrain order are
+// acyclic.
+//
+// [LAW:single-enforcer] It asks findBlocksCycle about exactly the constraints
+// stableTopoOrder sorts, so Doctor reports a cycle precisely when the repair
+// refuses on one, and names the path the refusal names.
+func blocksCycle(order []rankedIssue, edges []blocksEdge) []string {
+	return findBlocksCycle(projectEdges(edges, positions(order)))
+}
+
+// positions maps each issue id in order to its index: the coordinate every
+// constraint over that order is compared in.
+func positions(order []rankedIssue) map[string]int {
+	position := make(map[string]int, len(order))
+	for at, item := range order {
+		position[item.id] = at
+	}
+	return position
 }

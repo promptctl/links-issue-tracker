@@ -80,33 +80,38 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 	if report.OrphanHistoryRows > 0 {
 		report.Warnings = append(report.Warnings, fmt.Sprintf("orphan issue event rows: %d", report.OrphanHistoryRows))
 	}
-	// Rank inversions: blocks relations where the dependency (dst) is ranked
-	// below the dependent (src) among lifecycle-live issues. (Pre-fix this read
-	// used a SQL `status != 'closed'` filter that silently excluded every
-	// blocks-edge pointing at an epic, since epics carry status=NULL by design.)
+	// Rank inversions and a blocks dependency cycle are two questions about one
+	// snapshot — the live rank order and the blocks edges — so it is read once.
+	// Liveness is the lifecycle's classification, never a SQL filter; see
+	// liveIssueIDs.
+	liveIDs, err := s.liveIssueIDs(ctx)
+	if err != nil {
+		return report, fmt.Errorf("rank checks: %w", err)
+	}
+	order, err := loadRankOrder(ctx, s.db, liveIDs)
+	if err != nil {
+		return report, fmt.Errorf("rank checks: %w", err)
+	}
+	edges, err := loadBlocksEdges(ctx, s.db)
+	if err != nil {
+		return report, fmt.Errorf("rank checks: %w", err)
+	}
 	// [LAW:single-enforcer] This number and what `--fix` leaves behind read the
 	// same edges through the same projection (store.projectEdges), and
 	// store.invertedEdges is the one function that decides what "inverted"
 	// means. TestRepairRankOrderProperties asserts the join: the order the
 	// repair returns leaves invertedEdges empty, so this count going to zero is
 	// a property of the repair rather than a second opinion about it.
-	inversions, err := s.liveRankInversions(ctx)
-	if err != nil {
-		return report, fmt.Errorf("count rank inversions: %w", err)
-	}
-	report.RankInversions = len(inversions)
+	report.RankInversions = len(invertedEdges(order, edges))
 	if report.RankInversions > 0 {
 		report.Warnings = append(report.Warnings, fmt.Sprintf("rank inversions: %d (dependencies ranked below dependents)", report.RankInversions))
 	}
 	// A blocks dependency cycle is the root cause behind a rank inversion that
 	// --fix can never clear: it is unsatisfiable by any rank order. Surface the
 	// members so the operator knows exactly which edge to remove.
-	// [LAW:single-enforcer] Same classifier FixRankInversions refuses on.
-	cycle, err := s.liveBlocksCycle(ctx)
-	if err != nil {
-		return report, fmt.Errorf("detect blocks dependency cycle: %w", err)
-	}
-	if len(cycle) > 0 {
+	// [LAW:single-enforcer] blocksCycle reads the constraints the repair sorts,
+	// so this reports a cycle exactly when FixRankInversions refuses on one.
+	if cycle := blocksCycle(order, edges); len(cycle) > 0 {
 		report.DependencyCycle = cycle
 		report.Warnings = append(report.Warnings, fmt.Sprintf("blocks dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)", strings.Join(cycle, " -> ")))
 	}

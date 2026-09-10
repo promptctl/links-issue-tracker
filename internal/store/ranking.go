@@ -394,10 +394,11 @@ func (s *Store) RankBelow(ctx context.Context, issueID, targetID string) (storag
 	})
 }
 
-// smoothRanksIfNeeded checks whether the given rank string has grown past the
+// smoothRanksIfNeededTx checks whether the given rank string has grown past the
 // smoothing threshold and, if so, re-spaces a local window of items around the
-// insertion point. This keeps rank strings short with O(SmoothingWindow) cost
-// instead of a full O(n) rebalance.
+// insertion point, at O(SmoothingWindow) cost instead of a full O(n) rebalance.
+// The window keeps its order, and its new ranks are longer than both ranks just
+// outside it, so a window bounded by long ranks comes out long.
 func smoothRanksIfNeededTx(ctx context.Context, tx *sql.Tx, triggerRank string) error {
 	if len(triggerRank) < rank.SmoothingThreshold {
 		return nil
@@ -537,31 +538,6 @@ func (s *Store) liveIssueIDs(ctx context.Context) (map[string]struct{}, error) {
 	return out, nil
 }
 
-// liveRankInversions returns the blocks edges the stored rank order
-// contradicts: those whose dependency sits below the dependent it blocks,
-// among lifecycle-live issues.
-//
-// [LAW:single-enforcer] It reads the same order and the same edges the repair
-// reads, through the same projection, and asks the question the repair answers
-// — repairRankOrder returns an order for which this set is empty. What Doctor
-// counts and what --fix leaves at zero are therefore one predicate, not two
-// that have to be kept in agreement.
-func (s *Store) liveRankInversions(ctx context.Context) ([]blocksEdge, error) {
-	liveIDs, err := s.liveIssueIDs(ctx)
-	if err != nil {
-		return nil, err
-	}
-	order, err := loadRankOrder(ctx, s.db, liveIDs)
-	if err != nil {
-		return nil, fmt.Errorf("load rank order: %w", err)
-	}
-	edges, err := loadBlocksEdges(ctx, s.db)
-	if err != nil {
-		return nil, fmt.Errorf("load blocks edges: %w", err)
-	}
-	return invertedEdges(order, edges), nil
-}
-
 // blocksEdge is one blocks relation hydrated as a precedence constraint: the
 // dependent must be ranked below the dependency, i.e. the dependency comes
 // first. A rank order is a total order over issues, and a total order that
@@ -576,8 +552,8 @@ type blocksEdge struct {
 
 // loadBlocksEdges returns every blocks relation whose endpoints are both
 // non-deleted. It does not filter on rank: the constraint graph is what it is
-// whatever the current ranks say, and both callers — cycle detection and the
-// repair — ask about the graph rather than about placement.
+// whatever the current ranks say, and every caller asks about the graph rather
+// than about placement.
 func loadBlocksEdges(ctx context.Context, q rowQueryer) ([]blocksEdge, error) {
 	// ORDER BY makes edge iteration — and therefore the adjacency order that
 	// findBlocksCycle's DFS follows — stable across runs and engines, so the
@@ -640,21 +616,6 @@ func blocksPrecedes(adj map[string][]string, from, to string) bool {
 	return walk(from)
 }
 
-// filterLiveBlocksEdges keeps only edges whose endpoints are both
-// lifecycle-live: a cycle through closed work cannot block the rank order of
-// live work.
-func filterLiveBlocksEdges(edges []blocksEdge, liveIDs map[string]struct{}) []blocksEdge {
-	out := make([]blocksEdge, 0, len(edges))
-	for _, e := range edges {
-		_, depLive := liveIDs[e.dependency]
-		_, dependentLive := liveIDs[e.dependent]
-		if depLive && dependentLive {
-			out = append(out, e)
-		}
-	}
-	return out
-}
-
 // findBlocksCycle returns one cycle in the blocks precedence graph as an
 // ordered, repeated-endpoint path (a -> b -> ... -> a), or nil when the graph
 // is acyclic. Node iteration is sorted so the reported cycle is deterministic.
@@ -704,23 +665,6 @@ func findBlocksCycle(edges []blocksEdge) []string {
 	return nil
 }
 
-// liveBlocksCycle returns the issue IDs forming a blocks dependency cycle among
-// lifecycle-live issues, or nil if none. Doctor reports it and
-// FixRankInversions refuses on it; both route through this one classifier so
-// they cannot disagree about whether the store holds an unsatisfiable cycle.
-// [LAW:single-enforcer]
-func (s *Store) liveBlocksCycle(ctx context.Context) ([]string, error) {
-	liveIDs, err := s.liveIssueIDs(ctx)
-	if err != nil {
-		return nil, err
-	}
-	edges, err := loadBlocksEdges(ctx, s.db)
-	if err != nil {
-		return nil, fmt.Errorf("load blocks edges: %w", err)
-	}
-	return findBlocksCycle(filterLiveBlocksEdges(edges, liveIDs)), nil
-}
-
 // loadRankOrder returns the live issues in the order the store ranks them:
 // item_rank ascending, with id breaking ties so the sequence is total even
 // where two rows share a rank. This sequence is both the repair's input order
@@ -750,8 +694,8 @@ func loadRankOrder(ctx context.Context, q rowQueryer, liveIDs map[string]struct{
 
 // FixRankInversions re-ranks the backlog so every dependency outranks its
 // dependent. It computes the stable topological order of the live rank
-// sequence (see repairRankOrder), writes only the issues that order moved, and
-// returns how many it wrote.
+// sequence (see repairRankOrder), rewrites the issues that order moved, and
+// returns how many it moved.
 //
 // [LAW:single-enforcer] Doctor's rank_inversions count and this repair read the
 // same blocks edges over the same live set, so "no edge is inverted" is one
@@ -791,7 +735,8 @@ func (s *Store) FixRankInversions(ctx context.Context) (int, error) {
 		// Smoothing runs once the repair is fully applied, never interleaved
 		// with it: a pass that re-spaced a window mid-repair would move the
 		// anchor ranks the remaining placements were computed against. It
-		// preserves relative order, so it can only shorten rank strings.
+		// preserves relative order, so it never undoes the repair and moves no
+		// issue; the ranks it re-spaces, anchors included, are not counted.
 		for _, rewrite := range rewrites {
 			if err := smoothRanksIfNeededTx(ctx, tx, rewrite.newRank); err != nil {
 				return fmt.Errorf("fix rank inversions: smooth ranks: %w", err)

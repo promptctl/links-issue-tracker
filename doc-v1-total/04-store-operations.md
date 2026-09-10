@@ -24,7 +24,7 @@ Three surfaces write the export to disk or stdout:
 
 ## The export delta
 
-`diffExports(prev, next)` is a **pure value diff between two in-memory `model.Export` values** — not a commit range, checkpoint, or timestamp comparison; no SQL is issued to compute it (`internal/store/export_delta.go:141-142`). `prev` is never taken from a caller's belief: the restore path supplies the empty export (making everything an add), and the sync reconcile spine writer seeds its `landed` state from an actual `Store.Export` of the spine branch, advancing it only after a successful landing (`import_export.go:172-179`; `sync_reconcile.go:628-652`).
+`diffExports(prev, next)` is a **pure value diff between two in-memory `model.Export` values** — not a commit range, checkpoint, or timestamp comparison; no SQL is issued to compute it (`internal/store/export_delta.go:141-142`). `prev` is never taken from a caller's belief: the restore path supplies the empty export (making everything an add), and the sync reconcile spine writer seeds its `landed` state from an actual `Store.Export` of the spine branch, advancing it only after a successful landing (`import_export.go:179-186`; `sync_reconcile.go:628-652`).
 
 Mechanics (`export_delta.go:32-123`):
 
@@ -41,13 +41,13 @@ Tests pin, among other shapes: a delta of an export against itself is empty; cha
 
 ## Full-replace import
 
-`ReplaceFromExport` → `replaceFromExport(ctx, export, commitStamp{Message: "replace from export"})` — the Dolt commit message for a restore is the literal `replace from export` (`import_export.go:138-140`). It runs under the commit lock, inside one SQL transaction, followed by one Dolt commit, with the transient-GC retry wrapping the whole unit — all-or-nothing at the SQL level (`import_export.go:149-153`; `commit_lock.go:156-177`).
+`ReplaceFromExport` → `replaceFromExport(ctx, export, commitStamp{Message: "replace from export"})` — the Dolt commit message for a restore is the literal `replace from export` (`import_export.go:145-147`). It runs under the commit lock, inside one SQL transaction, followed by one Dolt commit, with the transient-GC retry wrapping the whole unit — all-or-nothing at the SQL level (`import_export.go:156-160`; `commit_lock.go:156-177`).
 
-`writeExportTx` clears tables in the literal order `labels, comments, relations, issues` (issue_events and issue_event_changes are deliberately not named — they cascade from issues), then applies `diffExports(empty, export)` (`import_export.go:168-179`).
+`writeExportTx` clears tables in the literal order `labels, comments, relations, issues` (issue_events and issue_event_changes are deliberately not named — they cascade from issues), then applies `diffExports(empty, export)` (`import_export.go:175-186`).
 
 **No ID remapping, no dedup, no conflict policy**: IDs are written verbatim; duplicate ids in the input reach the INSERT and fail on the primary key, aborting the transaction (`export_delta.go:73-77`).
 
-Input normalization on the issue insert (`import_export.go:190-242`), values worth pinning:
+Input normalization on the issue insert (`import_export.go:197-249`), values worth pinning:
 
 | Column | Rule |
 |---|---|
@@ -59,13 +59,13 @@ Input normalization on the issue insert (`import_export.go:190-242`), values wor
 | timestamps | RFC3339Nano strings |
 | `archived_at`/`deleted_at` | projected from sealed retention; both-set is unrepresentable |
 
-Events replay attribution **verbatim from the dump** — the restoring checkout never substitutes its own; `Attribution.UnmarshalJSON` has already collapsed half pairs (`import_export.go:270-281`). Unknown top-level keys in the export JSON are silently ignored (`syncfile.go:49`).
+Events replay attribution **verbatim from the dump** — the restoring checkout never substitutes its own; `Attribution.UnmarshalJSON` has already collapsed half pairs (`import_export.go:277-288`). Unknown top-level keys in the export JSON are silently ignored (`syncfile.go:49`).
 
 The CLI restore flow (`lit backup restore`, `internal/cli/backup.go:73-186`): usage is `lit backup restore (--latest | --path <export.json>) [--force]`; `--latest` and `--path` are mutually exclusive; `--latest` with no snapshots errors `no backups available`. The sequence: acquire the Sync and Import capabilities; read the restore file; export local state; if a sync state exists and `--force` was not passed, hash `last-sync-base.json` and compare against the hash of the local export — mismatch → `MergeConflictError` "restore conflict: local workspace has unsynced changes since last sync base"; take a pre-restore backup snapshot; prune to 20; `ReplaceFromExport`; re-export and atomically write the new sync base; record the sync state with the restore file's path and content hash. Note `hashExport` marshals with no trailing newline, unlike `syncfile.marshalExport` (`backup.go:188-193`).
 
 ## Doctor and FixIntegrity
 
-`Doctor` (`import_export.go:42-112`) initializes `IntegrityCheck` to `"ok"` and runs, in order:
+`Doctor` (`import_export.go:42-119`) initializes `IntegrityCheck` to `"ok"` and runs, in order:
 
 | Check | Mechanism | On hit |
 |---|---|---|
@@ -73,10 +73,10 @@ The CLI restore flow (`lit backup restore`, `internal/cli/backup.go:73-186`): us
 | FK orphans | three LEFT-JOIN counts (relations' endpoints, comments' issue, labels' issue), summed | **error** `foreign key violations: %d` |
 | invalid related-to ordering | `COUNT(*) ... type='related-to' AND src_id >= dst_id` | **warning** `invalid related-to ordering rows: %d` |
 | orphan event rows | events joined to missing issues | **warning** `orphan issue event rows: %d` |
-| rank inversions | `liveRankInversions` (computed in Go) | **warning** `rank inversions: %d (dependencies ranked below dependents)` |
-| blocks cycle | `liveBlocksCycle` | **warning** `blocks dependency cycle: <a -> b -> ...> (no rank order exists; remove one edge with 'lit dep rm' to break it)` |
+| rank inversions | `len(invertedEdges(order, edges))` over the live rank order and blocks edges, loaded once for this row and the next (computed in Go) | **warning** `rank inversions: %d (dependencies ranked below dependents)` |
+| blocks cycle | `blocksCycle(order, edges)` — the constraints `FixRankInversions` refuses on | **warning** `blocks dependency cycle: <a -> b -> ...> (no rank order exists; remove one edge with 'lit dep rm' to break it)` |
 
-`FixIntegrity` (`import_export.go:117-136`) runs under a mutation with Dolt commit message `fsck repair`, executing exactly three statements — delete orphan events, delete self-referential related-to rows, swap mis-ordered related-to endpoints — then returns a fresh `Doctor` report. It does not touch FK violations, rank inversions, or cycles.
+`FixIntegrity` (`import_export.go:124-143`) runs under a mutation with Dolt commit message `fsck repair`, executing exactly three statements — delete orphan events, delete self-referential related-to rows, swap mis-ordered related-to endpoints — then returns a fresh `Doctor` report. It does not touch FK violations, rank inversions, or cycles.
 
 ## Tree import (`lit import`, JSON)
 
