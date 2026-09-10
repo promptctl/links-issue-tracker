@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -60,9 +61,8 @@ func rewrittenIDs(rewrites []rankRewrite) []string {
 	return ids
 }
 
-// The defect in one assertion: a band whose members carry no edges among
-// themselves must survive the repair in the order it was ranked, whatever
-// order its ids would sort into. The observed failure was a 28-ticket band
+// The defect in one assertion: a band that waits on nothing must survive the
+// repair in the order it was ranked, whatever order its ids would sort into. The observed failure was a 28-ticket band
 // blocking one gate coming back alphabetical end to end (links-doctor-e91j),
 // so the fixture is ranked against its own id order — an implementation that
 // re-sorts by id cannot pass it by luck.
@@ -82,7 +82,7 @@ func TestRepairRankOrderKeepsBandOrderWhileSinkingTheirDependent(t *testing.T) {
 		t.Fatalf("repairRankOrder() error = %v", err)
 	}
 	if got := rewrittenIDs(rewrites); len(got) != 1 || got[0] != "gate" {
-		t.Fatalf("repairRankOrder() rewrote %v, want only [gate] — the band carries no edges among its members, so nothing in it had to move", got)
+		t.Fatalf("repairRankOrder() rewrote %v, want only [gate] — the band waits on nothing, so nothing in it had to move", got)
 	}
 	want := []string{"zulu", "yankee", "xray", "whiskey", "victor", "gate"}
 	if got := applyRewrites(order, rewrites); !equalIDs(got, want) {
@@ -90,8 +90,8 @@ func TestRepairRankOrderKeepsBandOrderWhileSinkingTheirDependent(t *testing.T) {
 	}
 }
 
-// Acceptance #1 at its sharpest: the pair the edge does not constrain keeps
-// its relative order, and the pair it does constrain is the only one to change.
+// One edge, one mover: b waits on e, so b falls behind everything up to e and
+// nothing else changes place.
 func TestRepairRankOrderMovesOnlyWhatTheEdgeForces(t *testing.T) {
 	t.Parallel()
 	order := seq("a", "b", "c", "d", "e", "f")
@@ -168,6 +168,44 @@ func TestRepairRankOrderGivesUnrankedIssuesARank(t *testing.T) {
 	}
 	if rewrites[0].newRank >= "10" {
 		t.Fatalf("unranked issue placed at %q, want a rank above %q that keeps it first", rewrites[0].newRank, "10")
+	}
+}
+
+// A gap bounded by ranks that pad to the same value holds nothing, so those two
+// ranks cannot both anchor a run with a mover between them.
+func TestRepairRankOrderNeverAnchorsAGapWithNoRoom(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		order []rankedIssue
+		edge  blocksEdge
+		want  []string
+	}{
+		{
+			name:  "ranks differing only by trailing zeros",
+			order: []rankedIssue{{id: "u", rank: "U"}, {id: "v", rank: "V"}, {id: "v0", rank: "V0"}, {id: "w", rank: "W"}},
+			edge:  blocksEdge{dependent: "v0", dependency: "w"},
+			want:  []string{"u", "v", "w", "v0"},
+		},
+		{
+			name:  "an all-zero rank",
+			order: []rankedIssue{{id: "zero", rank: "0"}, {id: "one", rank: "1"}},
+			edge:  blocksEdge{dependent: "zero", dependency: "one"},
+			want:  []string{"one", "zero"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rewrites, err := repairRankOrder(tc.order, []blocksEdge{tc.edge})
+			if err != nil {
+				t.Fatalf("repairRankOrder() error = %v", err)
+			}
+			if len(rewrites) != 1 {
+				t.Fatalf("repairRankOrder() rewrote %v, want exactly one issue", rewrittenIDs(rewrites))
+			}
+			if got := applyRewrites(tc.order, rewrites); !equalIDs(got, tc.want) {
+				t.Fatalf("order after repair = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -336,7 +374,7 @@ func TestFixRankInversionsPreservesTheBandBlockingOneGate(t *testing.T) {
 	after := ranksByID(t, ctx, st, deliberate)
 	for _, id := range band {
 		if after[id] != before[id] {
-			t.Fatalf("band member %s rank %q -> %q; the band carries no edges among its members and must come out as it went in", id, before[id], after[id])
+			t.Fatalf("band member %s rank %q -> %q; the band waits on nothing and must come out as it went in", id, before[id], after[id])
 		}
 	}
 	if got := orderByRank(after); !equalIDs(got, append(append([]string(nil), band...), gate)) {
@@ -370,10 +408,11 @@ func applyToOrder(order []rankedIssue, rewrites []rankRewrite) []rankedIssue {
 
 // The repair's contract stated as properties and checked over shapes no
 // hand-written fixture would cover: whatever the graph, the result must be a
-// permutation of the input that satisfies every edge, and running the repair
-// again must write nothing. The third property is the one that makes the first
-// two trustworthy — a repair that converges only sometimes would still pass a
-// single-pass assertion.
+// permutation of the input that satisfies every edge, an issue may fall behind
+// one that stood after it only if a dependency of it is placed no earlier than
+// that one, and running the repair again must write nothing. Idempotence is what
+// makes the single-pass properties trustworthy — a repair that converges only
+// sometimes would still pass a single-pass assertion.
 func TestRepairRankOrderProperties(t *testing.T) {
 	t.Parallel()
 	rng := rand.New(rand.NewSource(1))
@@ -416,6 +455,25 @@ func TestRepairRankOrderProperties(t *testing.T) {
 		}
 		if left := invertedEdges(repaired, edges); len(left) != 0 {
 			t.Fatalf("trial %d: %d edge(s) still inverted after the repair, want 0", trial, len(left))
+		}
+		placed := make(map[string]int, size)
+		for at, item := range repaired {
+			placed[item.id] = at
+		}
+		dependencies := make(map[string][]string, size)
+		for _, e := range edges {
+			dependencies[e.dependent] = append(dependencies[e.dependent], e.dependency)
+		}
+		// seq ranks ids in slice order, so q ranging past p means q stood after p.
+		for i, p := range ids {
+			for _, q := range ids[i+1:] {
+				overtaken := placed[q] < placed[p]
+				// q may itself be the dependency p was waiting on.
+				waiting := slices.ContainsFunc(dependencies[p], func(d string) bool { return placed[d] >= placed[q] })
+				if overtaken && !waiting {
+					t.Fatalf("trial %d: %s now stands ahead of %s, yet no dependency of %s is placed at or after %s — an issue may fall behind only while it waits on a dependency", trial, q, p, p, q)
+				}
+			}
 		}
 		again, err := repairRankOrder(repaired, edges)
 		if err != nil {

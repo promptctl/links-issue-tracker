@@ -35,6 +35,23 @@ func TestValid(t *testing.T) {
 	}
 }
 
+// Ranks that pad to the same value share a significant part.
+func TestSignificant(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"V", "V"},
+		{"V0", "V"},
+		{"V00", "V"},
+		{"V0z", "V0z"}, // an inner zero is significant
+		{"100", "1"},
+		{"0", ""}, // an all-zero rank has no significant part
+		{"", ""},
+	} {
+		if got := Significant(c.in); got != c.want {
+			t.Errorf("Significant(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 func TestMidpointBasic(t *testing.T) {
 	tests := []struct {
 		a, b string

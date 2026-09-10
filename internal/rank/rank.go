@@ -62,6 +62,13 @@ func Valid(s string) bool {
 	return true
 }
 
+// Significant returns s without its trailing zeros: the part that decides where
+// s sorts once padded. Two ranks with the same significant part leave
+// SpacedRanksBetween no room between them.
+func Significant(s string) string {
+	return strings.TrimRight(s, "0")
+}
+
 // Midpoint returns a string that sorts strictly between a and b.
 // Precondition: a < b (lexicographic). Returns an error if a >= b.
 // Either a or b (but not both) may be empty: empty-a means "before everything",

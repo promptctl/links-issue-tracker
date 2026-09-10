@@ -74,10 +74,9 @@ func projectEdges(edges []blocksEdge, position map[string]int) []blocksEdge {
 // precedes its dependent, choosing at each step the issue that stood earliest
 // in order among those whose dependencies are all placed.
 //
-// With that tie-break an issue changes place only when an edge pushes it past
-// something, so a band with no edges among its own members comes out exactly
-// as it went in. It compares positions, never ids, so id spelling cannot
-// reorder the backlog.
+// So an issue falls behind one that stood after it only while it waits on a
+// dependency, and an order that already satisfies every edge comes back
+// unchanged. Positions are compared, never ids.
 func stableTopoOrder(order []rankedIssue, edges []blocksEdge) ([]string, error) {
 	position := make(map[string]int, len(order))
 	for at, item := range order {
@@ -170,17 +169,21 @@ func rankRewrites(order []rankedIssue, target []string) ([]rankRewrite, error) {
 }
 
 // anchorRun returns the indices in target whose stored ranks already ascend —
-// a longest strictly-increasing subsequence of target by rank. These are the
-// issues the repair leaves alone, so the count of everything else is the honest
-// answer to "how many issues did this move".
+// a longest subsequence of target strictly increasing by significant rank.
+// These are the issues the repair leaves alone, so the count of everything else
+// is the honest answer to "how many issues did this move".
 //
-// An anchor must be strictly above the one before it because the movers between
-// two anchors are spaced into the open interval they bound, and it must be a
-// stored rank (rank.Valid) because nothing sorts below the empty rank: an
-// unranked issue can bound no gap. Unranked issues are therefore always movers,
-// which hands them a real rank on the way past.
+// The movers between two anchors are spaced into the gap they bound, and only
+// ranks whose significant parts differ leave one. [LAW:one-source-of-truth]
+// rank.Significant is that definition of room, so anchors are compared by it.
+// An issue whose significant rank is not rank.Valid — unranked, or all zeros —
+// bounds no gap at all, so it is always a mover and gets a real rank.
 func anchorRun(target []string, rankOf map[string]string) []int {
-	// tails[k] is the index in target of the smallest-ranked issue that ends an
+	keys := make([]string, len(target))
+	for i, id := range target {
+		keys[i] = rank.Significant(rankOf[id])
+	}
+	// tails[k] is the index in target of the smallest-keyed issue that ends an
 	// ascending run of length k+1; prev[i] links i back to its predecessor in
 	// the run it extends. Standard patience-sort reconstruction.
 	tails := make([]int, 0, len(target))
@@ -188,12 +191,11 @@ func anchorRun(target []string, rankOf map[string]string) []int {
 	for i := range prev {
 		prev[i] = -1
 	}
-	for i, id := range target {
-		r := rankOf[id]
-		if !rank.Valid(r) {
+	for i, key := range keys {
+		if !rank.Valid(key) {
 			continue
 		}
-		k := sort.Search(len(tails), func(k int) bool { return rankOf[target[tails[k]]] >= r })
+		k := sort.Search(len(tails), func(k int) bool { return keys[tails[k]] >= key })
 		if k > 0 {
 			prev[i] = tails[k-1]
 		}
