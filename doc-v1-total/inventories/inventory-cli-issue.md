@@ -259,7 +259,7 @@ and transitions via the table below.
 
 - Read commands print `printSyncStalenessWarning(ctx, w, ws, store, now)` FIRST,
   before their payload: `backlog` (`workable.go:137`), `next` (`next.go:53`),
-  `show` **only in full-detail mode** (`cli.go:828-832`) — deliberately suppressed
+  `show` **only in full-detail mode** (`cli.go:841-845`) — deliberately suppressed
   under `--field` so the machine-parseable output isn't corrupted
   (`cli.go:863-868`). Defined at `sync_staleness.go:186`.
 - Write commands get `printMutationSyncStalenessWarning(stdout, ws, now)` after
@@ -608,17 +608,17 @@ and both columns render `-`.
 ### 2.4 `lit show` — Show issue details
 
 - Registration `register.go:312-313`, `app.AccessRead`. Handler `runShow`
-  (`cli.go:809-857`).
+  (`cli.go:822-871`).
 - Args: exactly one positional id; flag `--field` (string, `""`, help:
   "Comma-separated field names (e.g. description) to print with no surrounding
-  context; omit for the full detail view") (`cli.go:810-812`).
+  context; omit for the full detail view") (`cli.go:823-825`).
 - Refusals: `len(positional) != 1` or `fs.NArg() != 0` →
   `UsageError{"usage: lit show <id> [--field <name>[,<name>...]]"}` → exit 2
-  (`cli.go:815-821`).
+  (`cli.go:828-834`).
 - Sync-staleness banner is printed first **only when `--field` is blank**
-  (`cli.go:828-832`).
-- Reads `GetIssueDetail(id)`; missing → exit 4 (`cli.go:833-836`).
-- Dispatches `EventShowTicket` in **both** modes (`cli.go:837-840`).
+  (`cli.go:841-845`).
+- Reads `GetIssueDetail(id)`; missing → exit 4 (`cli.go:846-849`).
+- Dispatches `EventShowTicket` in **both** modes (`cli.go:850-853`).
 
 **`--field` mode** (`printIssueFields`, `output.go:221-245`):
 - Accepted field names and their renderings (`issueFieldNames`, `output.go:183-198`):
@@ -634,7 +634,7 @@ and both columns render `-`.
   `output.go:203-210`).
 - Exactly one field → the bare value, no label (`output.go:235-238`).
 - Two or more → `name: value` lines, in the requested order (`output.go:239-244`).
-- No epic context, no parent block, no siblings (`cli.go:841-845`).
+- No epic context, no parent block, no siblings (`cli.go:854-858`).
 
 **Full-detail mode** (`printIssueDetail`, `output.go:78-176`), in exact order:
 1. `<id>\n<title>\n\n` then
@@ -663,16 +663,16 @@ and both columns render `-`.
    to the literal `\n` (`output.go:161-170`).
 9. **No** history block — history lives behind `lit history` (`output.go:171-175`).
 10. Then `writeEpicContext` appends the epic plan block (§2.5). The block is
-    **resolved before step 1 writes anything** (`cli.go:846-856`), so the body and
+    **resolved before step 1 writes anything** (`cli.go:859-870`), so the body and
     the block are all-or-nothing: a failure to build the block exits nonzero with
     neither printed, rather than after a partial body. The staleness banner and any
     fired show-ticket workflow body are written before that point either way.
 
 ### 2.5 Epic-context block appended by `lit show`
 
-`resolveEpicContext` (`epic_context.go:265-290`) and `writeEpicContext`
+`resolveEpicContext` (`epic_context.go:265-281`) and `writeEpicContext`
 (`epic_context.go:292-298`):
-- `epicViewFor(issue, parent)` (`epic_context.go:242-249`): a container shows its
+- `epicViewFor(issue, parent)` (`epic_context.go:242-250`): a container shows its
   own children with no focused child; a leaf whose parent is a container shows the
   parent's plan with itself focused; anything else returns nil and **nothing is
   printed**.
