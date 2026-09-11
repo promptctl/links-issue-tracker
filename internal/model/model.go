@@ -222,15 +222,43 @@ func LaneOf(issue Issue, parent *Issue) LaneID {
 func (l LaneID) Epic() string { return l.epic }
 func (l LaneID) Key() string  { return l.key }
 
-// String renders the lane for logs and test failures. Epic-scoped lanes read as
-// "epic#lane" and a lane of one as the bare issue id; the unnamed default lane
-// of an epic renders as "epic#" rather than as the epic alone, so a lane is
-// never mistaken for the epic that contains it.
+// String renders the lane for logs and test failures — a reader who is grepping
+// output and knows the grammar. Epic-scoped lanes read as "epic#lane" and a lane
+// of one as the bare issue id; the unnamed default lane of an epic renders as
+// "epic#" rather than as the epic alone, so a lane is never mistaken for the
+// epic that contains it.
 func (l LaneID) String() string {
 	if l.solo {
 		return l.key
 	}
 	return l.epic + "#" + l.key
+}
+
+// Describe renders the lane for a sentence a person or an agent reads, and
+// reports whether the lane is anything the sentence should name at all.
+//
+// It exists because String's "#" is punctuation doing a word's job. That earns
+// its place where String is read — "A#" must not be mistaken for epic "A" in a
+// test failure — and loses it in prose, where the words "epic" and "lane" draw
+// the same distinction themselves and the default lane's empty key rendered as a
+// trailing bare "#", which reads as an unfilled template slot to anyone who does
+// not already know the grammar (links-next-output-5aee).
+//
+// A solo lane describes as nothing: it holds exactly the ticket that names it,
+// so any phrase for it only repeats what the surrounding sentence has already
+// said. What to say in its place is the caller's, because only the caller knows
+// whether the ticket was just named. [LAW:composability]
+//
+// Reading the shape off the tag rather than off an empty epic is the point of
+// the tag — see LaneID. [LAW:one-source-of-truth]
+func (l LaneID) Describe() (string, bool) {
+	if l.solo {
+		return "", false
+	}
+	if l.key == "" {
+		return fmt.Sprintf("the default lane of epic %s", l.epic), true
+	}
+	return fmt.Sprintf("lane %s of epic %s", l.key, l.epic), true
 }
 
 // Capabilities reports the issue's structural lifecycle capabilities. Whether an

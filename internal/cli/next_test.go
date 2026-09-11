@@ -138,8 +138,8 @@ func TestRunNextResumesOwnWorkInFlight(t *testing.T) {
 	}
 
 	text := h.runNextText()
-	if !strings.Contains(text, "resuming "+inProgress.ID) {
-		t.Fatalf("next output = %q, want it to announce resuming %s", text, inProgress.ID)
+	if !strings.Contains(text, inProgress.ID+" is already in progress in a lane you hold") {
+		t.Fatalf("next output = %q, want it to say %s is already in flight and ours", text, inProgress.ID)
 	}
 	if strings.Contains(text, lowerRanked.ID) {
 		t.Fatalf("next output = %q, want %q not served while our own work is in flight", text, lowerRanked.ID)
@@ -174,9 +174,12 @@ func TestRunNextServesTheNextTicketOfALaneWeHold(t *testing.T) {
 	if !strings.Contains(text, nextUp.ID) {
 		t.Fatalf("next output = %q, want %q served", text, nextUp.ID)
 	}
-	for _, announcement := range []string{"starting", "claims", "taking over", "resuming", "continuing epic"} {
-		if strings.Contains(text, announcement) {
-			t.Fatalf("next output = %q, want no %q announcement — the lane was already ours", text, announcement)
+	// The claim line beneath the row still prints "claimed here: …" — that is a
+	// true report of a hold we already have. What must be absent is every phrase
+	// that offers a commitment, because there is none left to make.
+	for _, advice := range []string{"run `lit start", "to claim", "to take over", "is already in progress"} {
+		if strings.Contains(text, advice) {
+			t.Fatalf("next output = %q, want no %q line — the lane was already ours, so there is nothing to commit and nothing to say", text, advice)
 		}
 	}
 }
@@ -296,8 +299,8 @@ func TestRunNextStatusInProgressResumesOurOwnWorkInFlight(t *testing.T) {
 	if !strings.Contains(text, mine.ID) {
 		t.Fatalf("next --status in_progress = %q, want it to hand back %q — narrowing to in_progress is how an agent asks what it already holds", text, mine.ID)
 	}
-	if !strings.Contains(text, "resuming "+mine.ID) {
-		t.Fatalf("next --status in_progress = %q, want it announced as a resumption of %q and not a fresh start", text, mine.ID)
+	if !strings.Contains(text, mine.ID+" is already in progress in a lane you hold") {
+		t.Fatalf("next --status in_progress = %q, want it reported as a resumption of %q and not a fresh start", text, mine.ID)
 	}
 }
 
@@ -466,12 +469,12 @@ func TestRunNextCarriesParentEpic(t *testing.T) {
 	}
 }
 
-// Every announcement renderNextOutcome can print, asserted as bytes. The
-// outcome is constructed rather than routed to, so each announcement is asserted
-// alone; the routing that produces each one is pinned in next_route_test.go.
-// Standings are left empty deliberately: formatClaimLine stays on its
-// ("", false) arm, so nothing but the announcement is under assertion.
-func TestRenderNextOutcomeAnnouncesEachClaimEstablishingPick(t *testing.T) {
+// Every line renderNextOutcome can print, asserted as bytes. The outcome is
+// constructed rather than routed to, so each line is asserted alone; the routing
+// that produces each one is pinned in next_route_test.go. Standings are left
+// empty deliberately: formatClaimLine stays on its ("", false) arm, so nothing
+// but this line is under assertion.
+func TestRenderNextOutcomeSpeaksOnlyInTheConditional(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	fresh := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
@@ -482,6 +485,8 @@ func TestRenderNextOutcomeAnnouncesEachClaimEstablishingPick(t *testing.T) {
 	cc := claimContext{self: selfAttribution}
 	freshRow := rowByID(t, rows, fresh.ID)
 	inFlightRow := rowByID(t, rows, inFlight.ID)
+	freshLane := laneOf(t, details, freshRow)
+	inFlightLane := laneOf(t, details, inFlightRow)
 
 	for _, tc := range []struct {
 		name    string
@@ -489,9 +494,18 @@ func TestRenderNextOutcomeAnnouncesEachClaimEstablishingPick(t *testing.T) {
 		want    string
 	}{
 		{"a lane already held says nothing", ServedFromClaim{Row: freshRow}, ""},
-		{"own work in flight is resumed, not started", ResumedOwnWork{Row: inFlightRow}, "resuming " + inFlight.ID + " — already in progress in a lane you hold"},
-		{"the epic's next lane names the claim it establishes", ServedFromEpicLane{Row: freshRow, Epic: epicA.ID, Lane: "A#1"}, "continuing epic " + epicA.ID + ": starting " + fresh.ID + " claims A#1"},
-		{"abandoned work is taken over, not started", ServedFromNewLane{Row: inFlightRow, Lane: "A#2"}, "taking over " + inFlight.ID + " (in progress, abandoned) — claims A#2"},
+		{"own work in flight is reported as the state it is in", ResumedOwnWork{Row: inFlightRow},
+			inFlight.ID + " is already in progress in a lane you hold — continue where you left off"},
+		{"the epic's next lane names what a start would lock", ServedFromEpicLane{Row: freshRow, Lane: freshLane},
+			"run `lit start " + fresh.ID + "` to claim lane a1 of epic " + epicA.ID + " (a second lane of an epic you already hold a lane in)"},
+		{"abandoned work is taken over, not claimed fresh", ServedFromNewLane{Row: inFlightRow, Lane: inFlightLane},
+			inFlight.ID + " is in progress and abandoned — run `lit start " + inFlight.ID + "` to take over lane a2 of epic " + epicA.ID},
+		// Step 2 admits takeoverWork, so the epic's next lane can carry an
+		// abandoned row: the one place the verb-dependent sentence and the
+		// fixed suffix are concatenated. Pinned whole, because a product left
+		// partly covered is where this ticket's tautology survived.
+		{"the epic's next lane takes over abandoned work, qualifier and all", ServedFromEpicLane{Row: inFlightRow, Lane: inFlightLane},
+			inFlight.ID + " is in progress and abandoned — run `lit start " + inFlight.ID + "` to take over lane a2 of epic " + epicA.ID + " (a second lane of an epic you already hold a lane in)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer
@@ -500,10 +514,8 @@ func TestRenderNextOutcomeAnnouncesEachClaimEstablishingPick(t *testing.T) {
 			}
 			out := buf.String()
 			if tc.want == "" {
-				for _, verb := range []string{"resuming", "starting", "continuing", "taking over"} {
-					if strings.HasPrefix(out, verb) {
-						t.Fatalf("ServedFromClaim announced %q; its contract is that no claim is established and nothing is said", out)
-					}
+				if !strings.HasPrefix(out, fresh.ID) {
+					t.Fatalf("ServedFromClaim printed %q; its contract is that no claim is established and nothing is said above the row", out)
 				}
 				return
 			}
@@ -511,5 +523,49 @@ func TestRenderNextOutcomeAnnouncesEachClaimEstablishingPick(t *testing.T) {
 				t.Fatalf("renderNextOutcome printed %q, want it to open with %q", out, tc.want)
 			}
 		})
+	}
+}
+
+// `lit next` reports a pick; `lit start` takes it. This is that contract as the
+// only thing that finally settles it — not what the output says, but what the
+// store holds after the command has run.
+//
+// Asserted through runNext rather than renderNextOutcome so the whole command
+// path is under it, and over the pick that had the most to lie about: an
+// unclaimed solo ticket, the case whose line once read "starting X claims X".
+// The wording assertions elsewhere in this file all become vacuous if the
+// command ever does start claiming, and this is what would still fail.
+func TestRunNextClaimsNothingAndStartsNothing(t *testing.T) {
+	h := newReadyTestHarness(t)
+	target := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Unclaimed", Topic: "next", IssueType: "task", Priority: 0})
+
+	before := h.issueDetail(target.ID)
+	text := h.runNextText()
+	after := h.issueDetail(target.ID)
+
+	if !strings.Contains(text, target.ID) {
+		t.Fatalf("next output = %q, want it to serve %q — this test asserts nothing if the row was never picked", text, target.ID)
+	}
+	if after.State() != before.State() {
+		t.Fatalf("status moved %v → %v across `lit next`; only `lit start` may move it", before.State(), after.State())
+	}
+	if after.Assignee != before.Assignee {
+		t.Fatalf("assignee moved %q → %q across `lit next`; only `lit start` may set it", before.Assignee, after.Assignee)
+	}
+	if after.State() != model.StateOpen || after.Assignee != "" {
+		t.Fatalf("ticket is %v assigned to %q after `lit next`, want it still open and unassigned", after.State(), after.Assignee)
+	}
+
+	// The output must not claim otherwise either: a reader who believes the
+	// perfect tense skips `lit start` and works unclaimed, which is the harm the
+	// state assertions above prove has not happened but the line could still
+	// report (links-next-output-5aee).
+	for _, lie := range []string{"starting " + target.ID, "claims " + target.ID, "taking over " + target.ID, "resuming " + target.ID} {
+		if strings.Contains(text, lie) {
+			t.Fatalf("next output = %q contains %q — it reports a side effect this command does not have", text, lie)
+		}
+	}
+	if !strings.Contains(text, "run `lit start "+target.ID+"`") {
+		t.Fatalf("next output = %q, want it to name the command that would actually claim %q", text, target.ID)
 	}
 }

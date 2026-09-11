@@ -188,8 +188,8 @@ func TestRouteNextContinuesEpicBeforeHigherRankedOtherEpic(t *testing.T) {
 	if served.Row.ID != a2.ID {
 		t.Fatalf("served = %q, want %q (epic A's other lane before epic B)", served.Row.ID, a2.ID)
 	}
-	if served.Epic != epicA.ID {
-		t.Fatalf("served.Epic = %q, want %q", served.Epic, epicA.ID)
+	if served.Lane.Epic() != epicA.ID {
+		t.Fatalf("served.Lane.Epic() = %q, want %q", served.Lane.Epic(), epicA.ID)
 	}
 }
 
@@ -273,8 +273,8 @@ func TestRouteNextOffersOnPathDependencyAsANewLane(t *testing.T) {
 	if served.Row.ID != dep.ID {
 		t.Fatalf("served = %q, want %q (the on-path external dependency)", served.Row.ID, dep.ID)
 	}
-	if served.Lane == "" {
-		t.Fatal("served.Lane is empty; the pick claims a lane this checkout does not hold and must name it")
+	if want := laneOf(t, details, served.Row); served.Lane != want {
+		t.Fatalf("served.Lane = %v, want %v; the pick would claim a lane this checkout does not hold, and it is the dependency's own lane that gets claimed", served.Lane, want)
 	}
 }
 
@@ -617,12 +617,12 @@ func TestRouteNextTakesOverAnAbandonedSiblingLane(t *testing.T) {
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromEpicLane — an abandoned sibling lane of our own epic is takeable", outcome, outcome)
 	}
-	if served.Row.ID != a2.ID || served.Epic != epicA.ID {
-		t.Fatalf("served = %q in epic %q, want %q in %q", served.Row.ID, served.Epic, a2.ID, epicA.ID)
+	if served.Row.ID != a2.ID || served.Lane.Epic() != epicA.ID {
+		t.Fatalf("served = %q in epic %q, want %q in %q", served.Row.ID, served.Lane.Epic(), a2.ID, epicA.ID)
 	}
-	announcement := claimAnnouncement(served.Row, served.Lane)
-	if !strings.Contains(announcement, "taking over") || !strings.Contains(announcement, "(in progress, abandoned)") {
-		t.Fatalf("claimAnnouncement = %q, want a takeover — this pick inherits %q's unfinished work rather than beginning it", announcement, a2.ID)
+	advice := startAdvice(served.Row, served.Lane)
+	if !strings.Contains(advice, "take over") || !strings.Contains(advice, "in progress and abandoned") {
+		t.Fatalf("startAdvice = %q, want a takeover — this pick inherits %q's unfinished work rather than beginning it", advice, a2.ID)
 	}
 }
 
@@ -680,37 +680,97 @@ func TestRouteNextContinuesEpicIntoForeignStaleLane(t *testing.T) {
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromEpicLane (a stale sibling lane of our own epic is admitted)", outcome, outcome)
 	}
-	if served.Row.ID != a2.ID || served.Epic != epicA.ID {
-		t.Fatalf("served = %q in epic %q, want %q in %q", served.Row.ID, served.Epic, a2.ID, epicA.ID)
+	if served.Row.ID != a2.ID || served.Lane.Epic() != epicA.ID {
+		t.Fatalf("served = %q in epic %q, want %q in %q", served.Row.ID, served.Lane.Epic(), a2.ID, epicA.ID)
 	}
 	if served.Row.State() != model.StateOpen {
 		t.Fatalf("served row state = %v, want open — the pick must rest on staleness alone, never on an orphan", served.Row.State())
 	}
 }
 
-// The announcement is the visible half of the takeover verdicts above. An
-// in-progress row reaches a lane this checkout does not hold only once the
-// orphan annotation has refuted its holder's claim, so calling that "starting"
-// promises greenfield on a ticket that may carry another checkout's unmerged
-// working tree.
-func TestClaimAnnouncementDistinguishesTakeoverFromFreshStart(t *testing.T) {
+// startAdvice varies on two axes, and this pins every cell of the product.
+//
+// The verb is the takeover verdicts above made visible. An in-progress row
+// reaches a lane this checkout does not hold only once the orphan annotation has
+// refuted its holder's claim, so calling that a plain claim promises greenfield
+// on a ticket that may carry another checkout's unmerged working tree.
+//
+// The object is the lane, and each of LaneID's three shapes once rendered
+// through String() into a sentence that misinformed the reader
+// (links-next-output-5aee): a solo lane spelled the ticket's own id, so the line
+// read "starting X claims X" and no reader could take a tautology as advice
+// about a command they had yet to run; an epic's default lane, whose key is
+// empty, trailed a bare "#" that reads as an unfilled template slot. Only the
+// named lane ever carried information, and it is the rarest of the three.
+//
+// Both unnamed cells read "it", and they read it in different places: "claim
+// it", but "take it over", because a particle verb splits around a pronoun.
+// That is why startAdvice spells its four sentences out instead of substituting
+// one object into two.
+//
+// Whatever else changes here, no cell may contain "#" or say the ticket's id
+// where a lane belongs — that is the whole of the ticket's second defect, and a
+// table is the only way to see all three shapes fail at once.
+func TestStartAdviceNamesTheCommandAndTheLaneShape(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	fresh := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
-	inFlight := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
-	h.transition(inFlight.ID, model.Start{Assignee: "other"})
+	named := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
+	unnamed := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	solo := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Parentless", Topic: "next", IssueType: "task", Priority: 0})
+	inFlight := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.3", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a3"})
+	unnamedInFlight := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.4", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	soloInFlight := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Parentless, abandoned", Topic: "next", IssueType: "task", Priority: 0})
+	for _, abandoned := range []string{inFlight.ID, unnamedInFlight.ID, soloInFlight.ID} {
+		h.transition(abandoned, model.Start{Assignee: "other"})
+	}
 
-	rows, _ := h.gather()
+	rows, details := h.gather()
 
 	for _, tc := range []struct{ name, id, want string }{
-		{"an open row begins the work", fresh.ID, "starting " + fresh.ID + " claims A#1"},
-		{"an in-flight row inherits it", inFlight.ID, "taking over " + inFlight.ID + " (in progress, abandoned) — claims A#1"},
+		{"a named lane is the one shape worth naming", named.ID,
+			"run `lit start " + named.ID + "` to claim lane a1 of epic " + epicA.ID},
+		{"an epic's default lane is words, not a trailing #", unnamed.ID,
+			"run `lit start " + unnamed.ID + "` to claim the default lane of epic " + epicA.ID},
+		{"a solo lane is the ticket, so the lane goes unnamed", solo.ID,
+			"run `lit start " + solo.ID + "` to claim it"},
+		{"an in-flight row is taken over, not claimed fresh", inFlight.ID,
+			inFlight.ID + " is in progress and abandoned — run `lit start " + inFlight.ID + "` to take over lane a3 of epic " + epicA.ID},
+		{"a default lane is still words on the takeover verb", unnamedInFlight.ID,
+			unnamedInFlight.ID + " is in progress and abandoned — run `lit start " + unnamedInFlight.ID + "` to take over the default lane of epic " + epicA.ID},
+		{"a solo lane still goes unnamed on the takeover verb", soloInFlight.ID,
+			soloInFlight.ID + " is in progress and abandoned — run `lit start " + soloInFlight.ID + "` to take it over"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := claimAnnouncement(rowByID(t, rows, tc.id), "A#1"); got != tc.want {
-				t.Fatalf("claimAnnouncement = %q, want %q", got, tc.want)
+			row := rowByID(t, rows, tc.id)
+			got := startAdvice(row, laneOf(t, details, row))
+			if got != tc.want {
+				t.Fatalf("startAdvice = %q, want %q", got, tc.want)
+			}
+			if strings.Contains(got, "#") {
+				t.Fatalf("startAdvice = %q, want no %q — String()'s lane grammar is for logs, not for a sentence", got, "#")
+			}
+			if !strings.Contains(got, "run `lit start "+tc.id+"`") {
+				t.Fatalf("startAdvice = %q, want it to name the command the reader would run", got)
 			}
 		})
+	}
+}
+
+// The tautology, stated as its own premise rather than left implicit in the
+// table above. A parentless ticket's lane IS that ticket — LaneOf keys a solo
+// lane by the issue id — so any advice that names both says one id twice. The
+// table's expected string would survive a rename of the phrase "it"; this does
+// not survive naming the lane at all.
+func TestStartAdviceNeverSpellsASoloTicketTwice(t *testing.T) {
+	h := newReadyTestHarness(t)
+	solo := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Parentless", Topic: "next", IssueType: "task", Priority: 0})
+
+	rows, details := h.gather()
+	row := rowByID(t, rows, solo.ID)
+	got := startAdvice(row, laneOf(t, details, row))
+
+	if n := strings.Count(got, solo.ID); n != 1 {
+		t.Fatalf("startAdvice = %q names %q %d times, want exactly 1 — a solo lane is its ticket, so naming the lane repeats the id and reads as a log line rather than as advice", got, solo.ID, n)
 	}
 }
 

@@ -1,6 +1,7 @@
 package model_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -90,6 +91,39 @@ func TestLaneStringDistinguishesTheEpicFromItsDefaultLane(t *testing.T) {
 	}
 	if got, want := model.LaneOf(task("A", "ignored"), nil).String(), "A"; got != want {
 		t.Fatalf("solo lane string = %q, want %q", got, want)
+	}
+}
+
+// TestLaneDescribeSpeaksInWordsWhereStringSpeaksInPunctuation: the two
+// renderings answer to different readers, and this is the contrast stated as a
+// test. String's "#" keeps a lane from reading as its epic in a log line;
+// Describe drops it because the words "epic" and "lane" draw the same
+// distinction, and the default lane's empty key left String trailing a bare "#"
+// that reads as an unfilled template slot (links-next-output-5aee).
+//
+// The solo case is why Describe answers in two parts: a lane of one holds
+// exactly the ticket that names it, so every phrase for it repeats the id the
+// sentence has already said.
+func TestLaneDescribeSpeaksInWordsWhereStringSpeaksInPunctuation(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		lane model.LaneID
+		want string
+		ok   bool
+	}{
+		{"a named lane", model.LaneOf(task("A", "bugs"), epic("E")), "lane bugs of epic E", true},
+		{"an epic's default lane", model.LaneOf(task("A", ""), epic("E")), "the default lane of epic E", true},
+		{"a lane of one", model.LaneOf(task("A", "ignored"), nil), "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := tc.lane.Describe()
+			if got != tc.want || ok != tc.ok {
+				t.Fatalf("Describe() = (%q, %v), want (%q, %v)", got, ok, tc.want, tc.ok)
+			}
+			if strings.Contains(got, "#") {
+				t.Fatalf("Describe() = %q, want no %q — that grammar belongs to String(), whose reader knows it", got, "#")
+			}
+		})
 	}
 }
 

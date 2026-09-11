@@ -97,6 +97,19 @@ func (h readyTestHarness) createIssue(input storage.CreateIssueInput) model.Issu
 	return issue
 }
 
+// issueDetail re-reads one issue from the store, for a test that asserts what a
+// command left behind rather than what it printed. Reading through the store —
+// not through a gathered row a command handed back — is the point: a read-only
+// command's whole contract is about the store, and only the store can settle it.
+func (h readyTestHarness) issueDetail(issueID string) model.Issue {
+	h.t.Helper()
+	detail, err := h.ap.Store.GetIssueDetail(h.ctx, issueID)
+	if err != nil {
+		h.t.Fatalf("GetIssueDetail(%q) error = %v", issueID, err)
+	}
+	return detail.Issue
+}
+
 func (h readyTestHarness) closeIssue(issueID, reason string) {
 	h.t.Helper()
 	if _, err := h.ap.Store.Apply(h.ctx, issueID, storage.Change{Action: model.Done{}, Actor: "tester", Reason: reason}); err != nil {

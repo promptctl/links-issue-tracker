@@ -165,6 +165,13 @@ cannot reach gets a diagnostic naming what blocks it, never a silent hop out of 
 epic; a checkout holding no claims of its own starts straight at the global pool.
 See design-docs/work-claims.md for the full precedence.
 
+`next` is read-only. It claims nothing and starts nothing — `lit start` does both
+— so where a pick's start would establish a claim, the line above the row says so
+in the conditional and names that command: "run `lit start <id>` to claim lane
+one of epic E". A lane of one is not named, because it is the ticket already on
+the line. A pick that the epic-continuation step reached closes on a qualifier
+saying so, which the same line from the global pool does not carry.
+
 Both endings that hand back no ticket — the exhaustion diagnostic and an empty
 result — exit 6 rather than 1, and their remediation names the deliberate act each
 calls for. Neither tells you to retry: both answers are deterministic and repeat
