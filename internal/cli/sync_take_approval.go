@@ -31,7 +31,7 @@ func (e ownerApprovalRefusalError) Error() string {
 func (e ownerApprovalRefusalError) blockString() string {
 	kept, dropped := takeSideEffects(e.Approval.Choice)
 	var b strings.Builder
-	b.WriteString("<agent-instructions>\n")
+	b.WriteString(agentInstructionsOpen + "\n")
 	fmt.Fprintf(&b, "lit sync reconcile take %s is DESTRUCTIVE and did not run: it needs the owner's explicit approval.\n\n", e.Approval.Choice)
 
 	fmt.Fprintf(&b,
@@ -52,7 +52,7 @@ func (e ownerApprovalRefusalError) blockString() string {
 	fmt.Fprintf(&b, "     lit sync reconcile take %s --owner-approved %s\n\n", e.Approval.Choice, e.Approval.ApprovalToken)
 
 	fmt.Fprintf(&b, "%s\n", e.bindingLine())
-	b.WriteString("</agent-instructions>")
+	b.WriteString(agentInstructionsClose)
 	return b.String()
 }
 

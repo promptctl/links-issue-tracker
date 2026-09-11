@@ -99,7 +99,8 @@ type SyncFailure struct {
 	// syncFailureDivergedUnresolved that arose from a reconcile hard-failure. It
 	// renders as a trailing cause line, never as the headline. [LAW:no-silent-failure]
 	// the backend detail is preserved; it is just demoted below the directive so
-	// it can no longer read as the whole (ignorable) message.
+	// it can no longer read as the whole (ignorable) message. Its text can carry
+	// what a remote server sent, so it renders fenced, through quoteRemote.
 	Cause error
 	// RemoteSchemaVersion and LocalSupportedMax are populated only for
 	// syncFailureRemoteSchemaAhead: the remote head's applied schema version and
@@ -241,8 +242,10 @@ func (f SyncFailure) blockString() string {
 	// (4) Escalation — selected by the divergence's age and span.
 	fmt.Fprintf(&b, "%s\n", f.escalationLine())
 
-	if f.Cause != nil {
-		fmt.Fprintf(&b, "\ncause (backend detail, for diagnosis only — the steps above are the fix): %v\n", f.Cause)
+	// (5) Backend cause — trailing, never the headline; causeLines yields nothing
+	// when no backend error prevented convergence. [LAW:dataflow-not-control-flow]
+	for _, line := range f.causeLines() {
+		fmt.Fprintf(&b, "%s\n", line)
 	}
 	b.WriteString(agentInstructionsClose)
 	return b.String()
@@ -393,6 +396,19 @@ func (f SyncFailure) agePhrase() string {
 		return "an unknown duration"
 	}
 	return humanizeCoarseDuration(f.Age)
+}
+
+// causeLines renders the backend error that prevented convergence, or nothing when
+// none did. That text is not lit's own words: Dolt's git remote folds git's output
+// into its error, and git prints the server's sideband messages there as
+// `remote:` lines; its SSH remote does the same with the far side's stderr. So the
+// cause reaches the envelope only through quoteRemote. [LAW:single-enforcer]
+func (f SyncFailure) causeLines() []string {
+	if f.Cause == nil {
+		return nil
+	}
+	lines := []string{"", "cause (backend detail, for diagnosis only — the steps above are the fix):"}
+	return append(lines, quoteRemote(f.Cause.Error()).fenced("  ")...)
 }
 
 // inventoryLines renders the both-sides issue-id partition as its own labeled

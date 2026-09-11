@@ -41,32 +41,37 @@ func renderProsePendingGuidance(w io.Writer, pending []merge.ProsePending, build
 	ordered := merge.SortPending(pending)
 	var b strings.Builder
 
-	b.WriteString("<agent-instructions>\n")
+	b.WriteString(agentInstructionsOpen + "\n")
 	b.WriteString("A clone of this backlog diverged from the remote. The field-aware merge settled every field except the free-text below, which was rewritten on both sides. This is a transient state you can resolve inline now — local reads still serve the clone's own data, and nothing is committed until you finalize.\n\n")
 	b.WriteString("For each field, merge 'ours' and 'theirs' into one coherent text that preserves both intents. You are not picking a winner — that is exactly why this is yours to merge and not the engine's. 'base' is the common ancestor, shown so you can see what each side changed.\n\n")
 	if buildNote != "" {
 		fmt.Fprintf(&b, "%s\n\n", buildNote)
 	}
 
+	// The id and the three texts are ticket data — base and theirs authored on a
+	// machine this one does not control, and no ingest boundary constrains the id —
+	// so each reaches the envelope only through quoteRemote. [LAW:single-enforcer]
 	for _, p := range ordered {
-		fmt.Fprintf(&b, "── %s · %s ──\n", p.IssueID, p.Field)
+		fmt.Fprintf(&b, "── %s · %s · fingerprint %s ──\n", quoteRemote(p.IssueID).inline(), p.Field, p.Fingerprint())
 		writeProseSection(&b, "base", p.Base)
 		writeProseSection(&b, "ours", p.Ours)
 		writeProseSection(&b, "theirs", p.Theirs)
 		b.WriteString("\n")
 	}
 
-	b.WriteString("To finalize, supply your merged text for every field above in one command (the divergence is re-derived live, so partial or stale resolutions are rejected and re-surfaced — copy the prefix verbatim, the trailing token pins your merge to this conflict):\n\n")
+	b.WriteString("To finalize, supply your merged text for every field above in one command, each under the fingerprint in its heading (the divergence is re-derived live, so partial or stale resolutions are rejected and re-surfaced — the fingerprint pins your merge to that exact conflict):\n\n")
 	b.WriteString("  ")
 	b.WriteString(proseResolveCommand)
+	// Each field is addressed by its fingerprint alone — hex lit computed — so
+	// nothing a remote wrote reaches a line the agent runs in a shell.
 	for _, p := range ordered {
-		fmt.Fprintf(&b, " \\\n    --resolve '%s:%s:%s=<your merged text>'", p.IssueID, p.Field, p.Fingerprint())
+		fmt.Fprintf(&b, " \\\n    --resolve '%s=<your merged text>'", p.Fingerprint())
 	}
 	b.WriteString("\n\n")
 	fmt.Fprintf(&b, "To leave the clone diverged for now (it stays usable, and a later command re-surfaces this): %s\n\n", proseReconcileAbortHint)
 
 	b.WriteString(guidanceClose)
-	b.WriteString("\n</agent-instructions>\n")
+	b.WriteString("\n" + agentInstructionsClose + "\n")
 
 	_, err := io.WriteString(w, b.String())
 	return err
@@ -83,60 +88,37 @@ const proseReconcileAbortHint = "lit sync reconcile abort"
 // file keeps only renderProsePendingGuidance — the deep base/ours/theirs workbench
 // the compact contract points at.
 
-// writeProseSection prints one labeled version, making an empty value explicit
-// rather than rendering a blank the agent might misread as "missing". [LAW:no-silent-failure]
+// writeProseSection prints one labeled version as a quoted span, making an empty
+// value explicit rather than rendering a blank the agent might misread as
+// "missing". [LAW:no-silent-failure]
 func writeProseSection(b *strings.Builder, label, text string) {
 	if strings.TrimSpace(text) == "" {
 		fmt.Fprintf(b, "  %s: (empty)\n", label)
 		return
 	}
-	fmt.Fprintf(b, "  %s: %s\n", label, text)
+	fmt.Fprintf(b, "  %s:\n", label)
+	for _, line := range quoteRemote(text).fenced("    ") {
+		fmt.Fprintf(b, "%s\n", line)
+	}
 }
 
-// parseProseResolutions turns the repeated `--resolve ID:FIELD:FINGERPRINT=TEXT`
-// values into resolutions. The prefix before the FIRST '=' splits on ':' into
-// exactly three parts (issue id, field, and the conflict fingerprint — none of
-// which contain ':' or '='), so the remaining TEXT may hold any character,
-// including ':' '=' and newlines. A malformed token or an unknown field is a
-// usage error, surfaced loudly rather than silently dropped. [LAW:no-silent-failure]
+// parseProseResolutions turns the repeated `--resolve FINGERPRINT=TEXT` values
+// into resolutions. The prefix before the FIRST '=' is the conflict fingerprint,
+// which is hex and never holds '=', so the remaining TEXT may hold any character,
+// including '=' and newlines. A prefix that is not a fingerprint — the retired
+// ID:FIELD:FINGERPRINT form among them — is a usage error, surfaced loudly rather
+// than sent on to match no conflict and read as a divergence that changed.
+// [LAW:no-silent-failure]
 func parseProseResolutions(values []string) ([]merge.ProseResolution, error) {
-	const shape = "expected ISSUE_ID:FIELD:FINGERPRINT=TEXT (copy the prefix from `lit sync reconcile`)"
+	const shape = "expected FINGERPRINT=TEXT (copy the fingerprint from `lit sync reconcile`)"
 	resolutions := make([]merge.ProseResolution, 0, len(values))
 	for _, raw := range values {
-		eq := strings.IndexByte(raw, '=')
-		if eq <= 0 {
+		prefix, text, found := strings.Cut(raw, "=")
+		fingerprint, ok := merge.ParseFingerprint(prefix)
+		if !found || !ok {
 			return nil, UsageError{Message: fmt.Sprintf("invalid --resolve %q: %s", raw, shape)}
 		}
-		parts := strings.Split(raw[:eq], ":")
-		if len(parts) != 3 || parts[0] == "" || parts[2] == "" {
-			return nil, UsageError{Message: fmt.Sprintf("invalid --resolve %q: %s", raw, shape)}
-		}
-		field, err := parseProseField(parts[1])
-		if err != nil {
-			return nil, err
-		}
-		resolutions = append(resolutions, merge.ProseResolution{
-			IssueID:     parts[0],
-			Field:       field,
-			Fingerprint: parts[2],
-			Text:        raw[eq+1:],
-		})
+		resolutions = append(resolutions, merge.ProseResolution{Fingerprint: fingerprint, Text: text})
 	}
 	return resolutions, nil
-}
-
-// parseProseField maps a field token to its ProseField. Only the three free-text
-// fields that ever reach this surface are legal; every other field converges
-// deterministically in the engine and can never be pending. [LAW:single-enforcer]
-func parseProseField(token string) (merge.ProseField, error) {
-	switch merge.ProseField(token) {
-	case merge.ProseTitle:
-		return merge.ProseTitle, nil
-	case merge.ProseDescription:
-		return merge.ProseDescription, nil
-	case merge.ProsePrompt:
-		return merge.ProsePrompt, nil
-	default:
-		return "", UsageError{Message: fmt.Sprintf("unknown reconcile field %q: expected one of %s, %s, %s", token, merge.ProseTitle, merge.ProseDescription, merge.ProsePrompt)}
-	}
 }

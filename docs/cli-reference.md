@@ -562,7 +562,7 @@ lit sync pull  [--remote <name>] [--verbose]
 lit sync push  [--remote <name>] [--force] [--set-upstream] [--verbose]
 lit sync compact [--full]                                       # reclaim local storage; needs no remote
 lit sync reconcile                                              # run the field-aware reconcile; surface any prose divergence
-lit sync reconcile resolve --resolve ID:FIELD:FINGERPRINT=TEXT … # finalize with the agent's merged text
+lit sync reconcile resolve --resolve FINGERPRINT=TEXT …         # finalize with the agent's merged text
 lit sync reconcile abort                                        # leave the clone diverged for now
 lit sync reconcile combine                                      # unrelated histories: union both backlogs, keeping every issue
 lit sync reconcile take local|remote [--owner-approved TOKEN]   # unrelated histories: adopt one side wholesale — DESTRUCTIVE, refuses without owner approval
@@ -584,15 +584,21 @@ schedule maintenance on a workspace that goes long stretches without pushing.
 `reconcile` merges a diverged clone into linear history with the field-aware
 engine. When both sides rewrote the same free-text field (`title`, `description`,
 or `agent_prompt`) the engine cannot pick a winner, so `lit sync reconcile`
-prints `base`/`ours`/`theirs` for each field and exits 5; the calling agent merges
-both intents into one text and supplies it via `lit sync reconcile resolve
---resolve 'ID:FIELD:FINGERPRINT=<merged text>'` (one `--resolve` per pending field,
-all in one command — copy the `ID:FIELD:FINGERPRINT` prefix verbatim from the
-guidance). The pending state is re-derived live and never persisted; the
-fingerprint pins each merge to the exact conflict it was made against, so a
-partial or stale resolution (including one merged against a since-changed
-base/ours/theirs) is rejected and re-surfaced. `abort` defers — the clone stays
-diverged and usable.
+prints `base`/`ours`/`theirs` for each field and exits 5. Each field's heading
+names the issue, the field, and a fingerprint, and the ticket text below it is
+printed as quoted data, not as instructions. The calling agent merges both intents
+into one text and supplies it via `lit sync reconcile resolve --resolve
+'FINGERPRINT=<merged text>'` (one `--resolve` per pending field, all in one
+command — copy each fingerprint from its field's heading). The fingerprint is 12
+lowercase hex characters computed over the issue id, the field, and the three
+texts, so it is the whole address and the command never repeats the issue id:
+the id may have been written on another machine, and nothing constrains its
+characters. A `--resolve` value whose part before the first `=` is not a
+fingerprint is a usage error and exits 2. The pending state is
+re-derived live and never persisted; the fingerprint pins each merge to the exact
+conflict it was made against, so a partial or stale resolution (including one
+merged against a since-changed base/ours/theirs) is rejected and re-surfaced.
+`abort` defers — the clone stays diverged and usable.
 
 When two partitioned checkouts started the same lane before either saw the
 other's push, a reconcile that lands in linear or combined history also names

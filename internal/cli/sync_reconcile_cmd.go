@@ -31,7 +31,7 @@ const (
 // [LAW:decomposition] Running/surfacing, finalizing, and deferring are three
 // distinct acts, each its own handler.
 var reconcileFamily = commandFamily[syncRunFn]{
-	usage: "usage: lit sync reconcile [resolve --resolve ID:FIELD:FINGERPRINT=TEXT ... | abort | take local|remote | combine]",
+	usage: "usage: lit sync reconcile [resolve --resolve FINGERPRINT=TEXT ... | abort | take local|remote | combine]",
 	subcommands: []subcommandRow[syncRunFn]{
 		{name: "resolve", payload: runSyncReconcileResolve},
 		{name: "abort", payload: runSyncReconcileAbort},
@@ -128,7 +128,7 @@ func runSyncReconcileShow(ctx context.Context, stdout io.Writer, ws workspace.In
 // the CURRENT conflicts, which this re-surfaces. [LAW:no-silent-failure]
 func runSyncReconcileResolve(ctx context.Context, stdout io.Writer, ws workspace.Info, session syncSession, args []string) error {
 	fs := newCobraFlagSet("sync reconcile resolve")
-	resolveValues := fs.StringArray("resolve", "Merged text for one diverged field, as ISSUE_ID:FIELD:FINGERPRINT=TEXT (repeat for every pending field)")
+	resolveValues := fs.StringArray("resolve", "Merged text for one diverged field, as FINGERPRINT=TEXT with the fingerprint from that field's heading (repeat for every pending field)")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -136,7 +136,7 @@ func runSyncReconcileResolve(ctx context.Context, stdout io.Writer, ws workspace
 		return err
 	}
 	if len(*resolveValues) == 0 {
-		return UsageError{Message: "sync reconcile resolve needs at least one --resolve ID:FIELD:FINGERPRINT=TEXT"}
+		return UsageError{Message: "sync reconcile resolve needs at least one --resolve FINGERPRINT=TEXT"}
 	}
 	resolutions, err := parseProseResolutions(*resolveValues)
 	if err != nil {

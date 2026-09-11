@@ -55,7 +55,7 @@ lit sync push
 - `lit sync pull [--remote <name>] [--verbose]`
 - `lit sync push [--remote <name>] [--set-upstream] [--force] [--verbose]`
 - `lit sync reconcile` — merge a diverged clone into linear history; surfaces a concurrent free-text rewrite for the calling agent to merge
-- `lit sync reconcile resolve --resolve ID:FIELD:FINGERPRINT=TEXT …` — finalize the reconcile with the agent's merged text (one `--resolve` per pending field; the fingerprint, copied from the guidance, pins the merge to the exact conflict)
+- `lit sync reconcile resolve --resolve FINGERPRINT=TEXT …` — finalize the reconcile with the agent's merged text (one `--resolve` per pending field; the fingerprint, copied from that field's heading in the guidance, names the issue and field and pins the merge to the exact conflict)
 - `lit sync reconcile abort` — leave the clone diverged for now
 
 Sync branch selection:

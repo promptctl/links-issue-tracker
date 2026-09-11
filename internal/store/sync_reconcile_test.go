@@ -216,7 +216,7 @@ func TestSyncReconcileResolvedFinalizesWithAgentText(t *testing.T) {
 		t.Fatalf("expected one pending field, got %+v", pendingRes.Pending)
 	}
 	res, err := syncB.SyncReconcileResolved(ctx, "origin", "master", []merge.ProseResolution{
-		{IssueID: id, Field: merge.ProseTitle, Fingerprint: pendingRes.Pending[0].Fingerprint(), Text: "both A's and B's intent merged"},
+		{Fingerprint: pendingRes.Pending[0].Fingerprint(), Text: "both A's and B's intent merged"},
 	})
 	if err != nil {
 		t.Fatalf("SyncReconcileResolved(B): %v", err)
@@ -263,9 +263,10 @@ func TestSyncReconcileResolvedRejectsStaleResolutions(t *testing.T) {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	headBefore := headCommit(t, ctx, syncB)
-	// Only the title diverged; resolving the description is a stale/mismatched set.
+	// Only the title diverged; a resolution addressed to a description conflict names
+	// no live conflict, so the set is stale.
 	res, err := syncB.SyncReconcileResolved(ctx, "origin", "master", []merge.ProseResolution{
-		{IssueID: id, Field: merge.ProseDescription, Text: "wrong field"},
+		{Fingerprint: merge.ProsePending{IssueID: id, Field: merge.ProseDescription}.Fingerprint(), Text: "wrong field"},
 	})
 	if err != nil {
 		t.Fatalf("SyncReconcileResolved(B): %v", err)

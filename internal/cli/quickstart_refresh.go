@@ -182,7 +182,7 @@ func quickstartHookRefreshItem(result hookInstallResult) quickstartRefreshItem {
 // it is an opt-in personal convention, not consumer-facing guidance.
 const soilSection = `
 ## Soil
-<agent-instructions>When you notice how well — or poorly — this loop was *prepared* for you by what came before (the ticket's clarity, a doc's currency, a skill's presence, a deposit left), record it inline in chat as ` + "`" + `[SOIL:<judgement>]` + "`" + ` in your own words. This is about inherited preparation conditions, not transient in-the-moment friction or your own ongoing thinking — soil, not wind. Don't investigate; just express the judgement and continue. Chat only — never commit messages or code. The corpus is the only signal we have that garden-tending is doing anything; trivially cheap and disproportionately effective.</agent-instructions>`
+` + agentInstructionsOpen + `When you notice how well — or poorly — this loop was *prepared* for you by what came before (the ticket's clarity, a doc's currency, a skill's presence, a deposit left), record it inline in chat as ` + "`" + `[SOIL:<judgement>]` + "`" + ` in your own words. This is about inherited preparation conditions, not transient in-the-moment friction or your own ongoing thinking — soil, not wind. Don't investigate; just express the judgement and continue. Chat only — never commit messages or code. The corpus is the only signal we have that garden-tending is doing anything; trivially cheap and disproportionately effective.` + agentInstructionsClose
 
 func renderQuickstartGuidance(workspaceRoot string) (string, error) {
 	tmpl, err := templates.Load(templates.QuickstartTemplateName, workspaceRoot)
