@@ -277,6 +277,61 @@ func TestRunNextRejectsLimitAndColumns(t *testing.T) {
 	}
 }
 
+// `lit next --status in_progress` is a documented flag combination that had no
+// test at all, which is how it stayed unable to return anything for as long as
+// routing gated servability on model.StateOpen (links-cli-q7hg). It is the
+// question an agent asks after a crash or a context reset — "what was I already
+// on?" — so these two tests pin both answers it can get, and the wording that
+// separates them.
+//
+// Driven through runNext rather than routeNext: what was untested is the FLAG,
+// and only the real command proves --status reaches the gather that makes the
+// in_progress row available to route at all.
+func TestRunNextStatusInProgressResumesOurOwnWorkInFlight(t *testing.T) {
+	h := newReadyTestHarness(t)
+	mine := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Already started", Topic: "next", IssueType: "task", Priority: 1})
+	h.applyAction(mine.ID, model.Start{Assignee: "tester"}, "")
+
+	text := h.runNextText("--status", "in_progress")
+	if !strings.Contains(text, mine.ID) {
+		t.Fatalf("next --status in_progress = %q, want it to hand back %q — narrowing to in_progress is how an agent asks what it already holds", text, mine.ID)
+	}
+	if !strings.Contains(text, "resuming "+mine.ID) {
+		t.Fatalf("next --status in_progress = %q, want it announced as a resumption of %q and not a fresh start", text, mine.ID)
+	}
+}
+
+// The half that survived links-claims-1b0p: when the only in_progress rows are
+// held fresh by other checkouts, every one verdicts routeAround and the walk
+// ends at NoWork. That used to print "no ready work" — byte-identical to an
+// empty backlog, telling an agent asking what it was on that its work is gone.
+func TestRunNextStatusInProgressNamesForeignHeldWorkRatherThanReadingEmpty(t *testing.T) {
+	h := newReadyTestHarness(t)
+	theirs := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Theirs, in flight", Topic: "next", IssueType: "task", Priority: 1})
+	h.asCheckout("otherstream01")
+	h.applyAction(theirs.ID, model.Start{Assignee: "tester"}, "")
+
+	err := h.runNextErr("--status", "in_progress")
+	if err == nil {
+		t.Fatal("next --status in_progress error = nil, want the loud diagnostic: the row exists and is not ours to take")
+	}
+	if err.Error() == "no ready work" {
+		t.Fatal("next --status in_progress = \"no ready work\" — the exact empty-backlog wording, for a backlog holding one live in_progress ticket")
+	}
+	if !strings.Contains(err.Error(), theirs.ID) {
+		t.Fatalf("next --status in_progress = %q, want it to name %q rather than report the queue empty", err.Error(), theirs.ID)
+	}
+	if !strings.Contains(err.Error(), "another checkout holds right now") {
+		t.Fatalf("next --status in_progress = %q, want it to say why %q is not servable", err.Error(), theirs.ID)
+	}
+	// Still an answer and not a fault: naming the row must not have moved this
+	// off the exit code a looping caller reads (links-cli-cpou).
+	var stderr bytes.Buffer
+	if code := WriteCommandError(&stderr, err); code != ExitNoWork {
+		t.Fatalf("exit code = %d, want %d (ExitNoWork) — work held elsewhere is the backlog's state, not a fault", code, ExitNoWork)
+	}
+}
+
 // No ready work → non-nil error so the calling shell exits non-zero.
 // Agents script `lit next` in loops; silent empty success would be a hang.
 //
@@ -289,8 +344,12 @@ func TestRunNextErrorsWhenNoReadyWork(t *testing.T) {
 	if err == nil {
 		t.Fatal("runNext() error = nil, want non-nil for empty ready set")
 	}
-	if !strings.Contains(err.Error(), "no ready work") {
-		t.Fatalf("runNext() error = %q, want contains \"no ready work\"", err.Error())
+	// Exactly, not merely contains: NoWork now appends a clause naming the rows
+	// the pool walk went past, and an empty backlog has none, so the sentence
+	// stays the one `next` has always printed (links-cli-q7hg, criterion 2). A
+	// contains-check would pass on a message that had grown a clause here.
+	if err.Error() != "no ready work" {
+		t.Fatalf("runNext() error = %q, want exactly %q — an empty backlog gained no clause", err.Error(), "no ready work")
 	}
 	var stderr bytes.Buffer
 	if code := WriteCommandError(&stderr, err); code != ExitNoWork {

@@ -456,8 +456,8 @@ func TestRouteNextRoutesAroundOnPathDependencyHeldFresh(t *testing.T) {
 			continue
 		}
 		named = true
-		if blocked.Kind != blockerHeldFresh {
-			t.Fatalf("blocked dependency %q classified %v, want blockerHeldFresh — another checkout holds its lane fresh", dep.ID, blocked.Kind)
+		if blocked.Kind != reachHeldFresh {
+			t.Fatalf("blocked dependency %q classified %v, want reachHeldFresh — another checkout holds its lane fresh", dep.ID, blocked.Kind)
 		}
 	}
 	if !named {
@@ -519,8 +519,8 @@ func TestExhaustionNamesABlockerOutsideThisViewAsSuch(t *testing.T) {
 			continue
 		}
 		named = true
-		if blocked.Kind != blockerOutOfView {
-			t.Fatalf("blocked dependency %q classified %v, want blockerOutOfView — it is absent from the gathered rows", dep.ID, blocked.Kind)
+		if blocked.Kind != reachOutOfView {
+			t.Fatalf("blocked dependency %q classified %v, want reachOutOfView — it is absent from the gathered rows", dep.ID, blocked.Kind)
 		}
 	}
 	if !named {
@@ -571,8 +571,8 @@ func TestExhaustionNamesAnUnreadyBlockerWithoutNamingAHolder(t *testing.T) {
 			continue
 		}
 		named = true
-		if blocked.Kind != blockerNotReady {
-			t.Fatalf("blocked dependency %q classified %v, want blockerNotReady — nobody holds its lane; it is blocked by %q", dep.ID, blocked.Kind, deeper.ID)
+		if blocked.Kind != reachNotReady {
+			t.Fatalf("blocked dependency %q classified %v, want reachNotReady — nobody holds its lane; it is blocked by %q", dep.ID, blocked.Kind, deeper.ID)
 		}
 	}
 	if !named {
@@ -895,5 +895,111 @@ func TestRouteNextRoutesAroundAFreshPublicHold(t *testing.T) {
 	}
 	if served.Row.ID != b1.ID {
 		t.Fatalf("served = %q, want %q (the held lane routed around)", served.Row.ID, b1.ID)
+	}
+}
+
+// reachNotes is indexed by the kind, so no diagnostic can drop a kind's ids the
+// way a list of pairs could — but Go fills an unlisted index with "", and the
+// renderer would then print those ids under an empty parenthetical. The array
+// makes the failure loud; only this makes it impossible.
+//
+// It asserts over reachKindCount rather than over four names on purpose: a fifth
+// kind added to the enum fails here until both diagnostics have words for it,
+// which is the whole reason the bound exists.
+func TestEveryReachKindHasWordsInBothDiagnostics(t *testing.T) {
+	t.Parallel()
+	for _, diagnostic := range []struct {
+		name  string
+		notes reachNotes
+	}{
+		{"exhausted", exhaustedNotes},
+		{"pool", poolNotes},
+	} {
+		for kind := reachKind(0); kind < reachKindCount; kind++ {
+			if diagnostic.notes[kind] == "" {
+				t.Fatalf("%s notes have nothing to say about reachKind %d — its ids would render under an empty parenthetical", diagnostic.name, kind)
+			}
+		}
+	}
+}
+
+// NoWork was an empty struct, so "no ready work" answered two opposite
+// questions in identical words: an empty backlog, and a backlog full of work
+// this checkout may not have. The walk knew every row and every verdict at the
+// moment it threw them away (links-cli-q7hg).
+//
+// Both surviving kinds are put in one pool on purpose. A single-kind fixture
+// passes against a renderer that prints one note for everything it went past,
+// which is the bool this type replaced: the message has to say that one row is
+// somebody's live work and the other is merely gated, because those call for
+// different acts.
+func TestNoWorkNamesEachRowThePoolWalkWentPast(t *testing.T) {
+	h := newReadyTestHarness(t)
+	held := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Theirs, in flight", Topic: "next", IssueType: "task", Priority: 1})
+	h.transition(held.ID, model.Start{Assignee: "tester"})
+	// Gated by the row above, so the whole pool is unstartable without either
+	// row being takeable — and for two different reasons.
+	gated := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Ours to want, not to start", Topic: "next", IssueType: "task", Priority: 0})
+	h.addDependency(gated.ID, held.ID)
+
+	rows, details := h.gather()
+	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, held.ID)): heldBy(otherAttribution)}
+
+	// This checkout holds nothing, so routing starts straight at the global pool.
+	outcome := routeNext(rows, details, standings, selfAttribution)
+	noWork, ok := outcome.(NoWork)
+	if !ok {
+		t.Fatalf("routeNext = %#v (%T), want NoWork — nothing in the pool is takeable", outcome, outcome)
+	}
+	want := map[string]reachKind{held.ID: reachHeldFresh, gated.ID: reachNotReady}
+	got := map[string]reachKind{}
+	for _, row := range noWork.Unreachable {
+		got[row.ID] = row.Kind
+	}
+	for id, kind := range want {
+		if got[id] != kind {
+			t.Fatalf("NoWork.Unreachable[%q] = %v, want %v — the walk's own verdict, kept rather than discarded (got %v)", id, got[id], kind, got)
+		}
+	}
+
+	msg := noWork.Error()
+	if msg == "no ready work" {
+		t.Fatalf("NoWork.Error() = %q — the bare sentence is the empty-backlog answer, and this backlog has %d rows in it", msg, len(rows))
+	}
+	if !strings.Contains(msg, "the backlog is not empty") {
+		t.Fatalf("NoWork.Error() = %q, want it to refute the empty reading outright", msg)
+	}
+	for _, id := range []string{held.ID, gated.ID} {
+		if !strings.Contains(msg, id) {
+			t.Fatalf("NoWork.Error() = %q, want it to name %q — a row walked past and not named is a row the agent is told does not exist", msg, id)
+		}
+	}
+	if !strings.Contains(msg, "another checkout holds right now") {
+		t.Fatalf("NoWork.Error() = %q, want %q reported as another checkout's live work", msg, held.ID)
+	}
+	if !strings.Contains(msg, "blocked by a dependency") {
+		t.Fatalf("NoWork.Error() = %q, want %q reported as gated rather than as somebody's live work", msg, gated.ID)
+	}
+}
+
+// The other half of the same type, and criterion 2 of the ticket: an empty
+// backlog answers exactly as it always has. The new clause is driven entirely by
+// the rows the walk went past, so no rows means no clause — pinned byte-for-byte,
+// because "no ready work" is still the whole truth when there is nothing to say
+// why about.
+func TestNoWorkOnAGenuinelyEmptyBacklogIsUnchanged(t *testing.T) {
+	h := newReadyTestHarness(t)
+
+	rows, details := h.gather()
+	outcome := routeNext(rows, details, claims.Standings{}, selfAttribution)
+	noWork, ok := outcome.(NoWork)
+	if !ok {
+		t.Fatalf("routeNext = %#v (%T), want NoWork for an empty backlog", outcome, outcome)
+	}
+	if len(noWork.Unreachable) != 0 {
+		t.Fatalf("NoWork.Unreachable = %v, want empty — nothing was gathered, so nothing was gone past", noWork.Unreachable)
+	}
+	if got := noWork.Error(); got != "no ready work" {
+		t.Fatalf("NoWork.Error() = %q, want exactly %q unchanged", got, "no ready work")
 	}
 }

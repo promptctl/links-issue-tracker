@@ -82,67 +82,88 @@ type ServedFromNewLane struct {
 // from these fields. [LAW:one-source-of-truth]
 type Exhausted struct {
 	Epics   []string
-	Blocked []blockedDep
+	Blocked []rowReach
 }
 
-// blockerKind is what a gating dependency is to this checkout — the one fact
-// the exhaustion diagnostic needs, and the limit of what it may say. A bool
-// here read "takeable or not", so a blocker outside this run's filtered view,
-// or one not startable itself, rendered as the one reason the message named:
-// claimed by another checkout. The renderer picks a note per value rather than
-// asserting a cause it cannot see.
-// [LAW:types-are-the-program] [LAW:no-silent-failure]
-type blockerKind int
+// reachKind is what one row is to this checkout right now — the one fact both
+// terminal diagnostics need, and the limit of what either may say. A bool here
+// read "takeable or not", so a row outside this run's filtered view, or one not
+// startable itself, rendered as the one reason the message named: claimed by
+// another checkout. The renderer picks a note per value rather than asserting a
+// cause it cannot see.
+//
+// Exhaustion asks it of the dependencies gating our scope; an empty global pool
+// asks it of every row the walk went past. Same question, same four answers, so
+// one type answers it — a second enum beside this one, saying the same things
+// about a different set of rows, is two clocks.
+// [LAW:types-are-the-program] [LAW:one-type-per-behavior] [LAW:no-silent-failure]
+type reachKind int
 
 const (
-	blockerTakeable blockerKind = iota
-	// blockerHeldFresh: another checkout holds its lane right now.
-	blockerHeldFresh
-	// blockerNotReady: gathered and not held elsewhere, but not startable —
+	reachTakeable reachKind = iota
+	// reachHeldFresh: another checkout holds its lane right now.
+	reachHeldFresh
+	// reachNotReady: gathered and not held elsewhere, but not startable —
 	// blocked by a further dependency, or in flight and not abandoned. One
 	// value for both, because the note says only what both share.
-	blockerNotReady
-	// blockerOutOfView: absent from the gathered rows, so this run knows
+	reachNotReady
+	// reachOutOfView: absent from the gathered rows, so this run knows
 	// nothing about it. --type/--labels/--assignee and leaf-only membership
 	// narrow the gather; the dependency annotation is read from the store and
-	// does not.
-	blockerOutOfView
+	// does not. Only the exhaustion walk can reach it — that one reads
+	// dependency ids off annotations, while the pool walk classifies rows it is
+	// already holding.
+	reachOutOfView
+	// reachKindCount bounds reachNotes and is never a classification: reachOf
+	// returns one of the four above.
+	reachKindCount
 )
 
-// blockedDep is an open dependency gating work in scope, carrying what this
-// checkout may do about it. Row is the gathered dependency for every kind but
-// blockerOutOfView.
-type blockedDep struct {
+// rowReach is a row a walk went past, carrying what this checkout may do about
+// it. Row is the gathered issue for every kind but reachOutOfView.
+type rowReach struct {
 	ID   string
 	Row  annotation.AnnotatedIssue
-	Kind blockerKind
+	Kind reachKind
 }
 
-// blockerKindFor classifies a gating dependency, consuming capacityFor rather
-// than re-deriving takeability so routing and the diagnostic read one
-// authority. [LAW:one-source-of-truth]
+// reachOf classifies one row, consuming capacityFor rather than re-deriving
+// takeability so routing and the diagnostics read one authority.
+// [LAW:one-source-of-truth]
 //
 // Total by construction: relationOf covers four lane relations, and the
 // fallthrough takes every routeAround reached for a reason other than a
-// foreign hold. A blocker that is both held fresh and not ready reports as
+// foreign hold. A row that is both held fresh and not ready reports as
 // held — ownership decides whether this checkout may act at all, readiness
 // only whether acting would get anywhere.
-func blockerKindFor(dep annotation.AnnotatedIssue, gathered bool, standing claims.Standing, self model.Attribution) blockerKind {
+func reachOf(row annotation.AnnotatedIssue, gathered bool, standing claims.Standing, self model.Attribution) reachKind {
 	switch {
 	case !gathered:
-		return blockerOutOfView
-	case capacityFor(dep, standing, self) != routeAround:
-		return blockerTakeable
+		return reachOutOfView
+	case capacityFor(row, standing, self) != routeAround:
+		return reachTakeable
 	case relationOf(standing, self) == laneHeldForeign:
-		return blockerHeldFresh
+		return reachHeldFresh
 	}
-	return blockerNotReady
+	return reachNotReady
 }
 
-// NoWork is the truly empty backlog: nothing ready anywhere, claimed or not
-// — the pre-claims "no ready work" case, unchanged. An error on the same terms
+// NoWork is the global pool handing back nothing. Unreachable is every row that
+// walk went past, each carrying why — empty exactly when the gather itself came
+// back empty, which is the genuinely empty backlog. An error on the same terms
 // as Exhausted.
-type NoWork struct{}
+//
+// It carried nothing at all before, and "no ready work" is an answer-shaped
+// void the moment it does: one sentence for "the backlog is empty" and for "the
+// backlog is full of work you may not have", two facts a caller can never pull
+// back apart. An agent narrowing `next` to --status in_progress is asking what
+// it was already on — the question asked after a crash — and got the empty-queue
+// wording back, which tells it its work is gone (links-cli-q7hg). The walk knew
+// every row and every verdict at the moment it discarded them; keeping them is
+// what lets the message name which emptiness this is, instead of the remediation
+// listing all three and hoping. [LAW:parse-dont-validate]
+// [LAW:types-are-the-program]
+type NoWork struct{ Unreachable []rowReach }
 
 func (ServedFromClaim) isNextOutcome()    {}
 func (ResumedOwnWork) isNextOutcome()     {}
@@ -270,8 +291,8 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 	verdict := func(row annotation.AnnotatedIssue) capacity {
 		return capacityFor(row, standings.Of(laneOf(row)), self)
 	}
-	blockerOf := func(dep annotation.AnnotatedIssue, gathered bool) blockerKind {
-		return blockerKindFor(dep, gathered, standings.Of(laneOf(dep)), self)
+	reachFor := func(row annotation.AnnotatedIssue, gathered bool) reachKind {
+		return reachOf(row, gathered, standings.Of(laneOf(row)), self)
 	}
 	// pick keeps the first row, in rank order, that sits in an admitted lane
 	// and carries one of the accepted verdicts.
@@ -306,7 +327,7 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 		// establishes a claim on a lane we do not hold, so it is announced as
 		// one (N3) and its own lane's standing is honoured rather than
 		// ignored (N2).
-		if dep, ok := onPathDependency(rows, laneOf, mine, blockerOf); ok {
+		if dep, ok := onPathDependency(rows, laneOf, mine, reachFor); ok {
 			return ServedFromNewLane{Row: dep, Lane: laneOf(dep).String()}
 		}
 		// Step 2 — the rest of our epic, in lanes we do not already hold.
@@ -322,15 +343,31 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 			Epics: slices.Sorted(maps.Keys(ownEpics)),
 			Blocked: gatingDependencies(rows, laneOf, func(lane model.LaneID) bool {
 				return mine(lane) || ourEpic(lane)
-			}, blockerOf),
+			}, reachFor),
 		}
 	}
 
-	// Step 4 — the global pool.
+	// Step 4 — the global pool, and the diagnostic half of the same walk: what
+	// the pick declined is what NoWork reports, classified by the verdict the
+	// pick itself just read. [LAW:one-source-of-truth]
 	if row, _, ok := pick(func(model.LaneID) bool { return true }, serveWork, takeoverWork); ok {
 		return ServedFromNewLane{Row: row, Lane: laneOf(row).String()}
 	}
-	return NoWork{}
+	return NoWork{Unreachable: passedOver(rows, reachFor)}
+}
+
+// passedOver classifies every gathered row, in the rank order the pool walk
+// went through them. It is called only where that walk found nothing, so every
+// row here is routeAround by construction — a takeable one would have been
+// served — which is what makes "the rows we went past" and "all the rows" the
+// same list, and lets NoWork say why the pool was empty without asking the data
+// a second question.
+func passedOver(rows []annotation.AnnotatedIssue, reachFor func(annotation.AnnotatedIssue, bool) reachKind) []rowReach {
+	passed := make([]rowReach, 0, len(rows))
+	for _, row := range rows {
+		passed = append(passed, rowReach{ID: row.ID, Row: row, Kind: reachFor(row, true)})
+	}
+	return passed
 }
 
 // gatingDependencies collects the distinct open dependencies that gate the open
@@ -340,13 +377,13 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 // all so the diagnostic can say which is which. They differ in the scope they
 // pass and in what they do with the answer — never in how it is found, and
 // neither re-derives it. [LAW:one-source-of-truth]
-func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID, inScope func(model.LaneID) bool, blockerOf func(annotation.AnnotatedIssue, bool) blockerKind) []blockedDep {
+func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID, inScope func(model.LaneID) bool, reachFor func(annotation.AnnotatedIssue, bool) reachKind) []rowReach {
 	byID := make(map[string]annotation.AnnotatedIssue, len(rows))
 	for _, row := range rows {
 		byID[row.ID] = row
 	}
 	seen := map[string]bool{}
-	var deps []blockedDep
+	var deps []rowReach
 	for _, row := range rows {
 		if !inScope(laneOf(row)) || row.State() != model.StateOpen {
 			continue
@@ -357,7 +394,7 @@ func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation
 			}
 			seen[id] = true
 			dep, gathered := byID[id]
-			deps = append(deps, blockedDep{ID: id, Row: dep, Kind: blockerOf(dep, gathered)})
+			deps = append(deps, rowReach{ID: id, Row: dep, Kind: reachFor(dep, gathered)})
 		}
 	}
 	return deps
@@ -376,9 +413,9 @@ func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation
 // longer re-checks that the gated row is unservable: step 1 accepts every
 // capacity an own lane can produce, so by the time we are here every row in
 // `mine` is routeAround by construction.
-func onPathDependency(rows []annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID, mine func(model.LaneID) bool, blockerOf func(annotation.AnnotatedIssue, bool) blockerKind) (annotation.AnnotatedIssue, bool) {
-	for _, dep := range gatingDependencies(rows, laneOf, mine, blockerOf) {
-		if dep.Kind == blockerTakeable {
+func onPathDependency(rows []annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID, mine func(model.LaneID) bool, reachFor func(annotation.AnnotatedIssue, bool) reachKind) (annotation.AnnotatedIssue, bool) {
+	for _, dep := range gatingDependencies(rows, laneOf, mine, reachFor) {
+		if dep.Kind == reachTakeable {
 			return dep.Row, true
 		}
 	}
@@ -395,31 +432,75 @@ func (o Exhausted) Error() string {
 	if len(o.Blocked) == 0 {
 		return fmt.Sprintf("no ready work in %s — nothing else is queued behind what's already in progress; picking up other work is a deliberate re-focus, not a bare `next`", scope)
 	}
-	byKind := map[blockerKind][]string{}
-	for _, dep := range o.Blocked {
-		byKind[dep.Kind] = append(byKind[dep.Kind], dep.ID)
+	return fmt.Sprintf("no ready work in %s — %s; picking up other work is a deliberate re-focus, not a bare `next`", scope, describeReach(o.Blocked, "blocked on ", exhaustedNotes))
+}
+
+// reachNotes is what a diagnostic says about the rows of each kind, indexed by
+// the kind itself. Both diagnostics group the same type the same way and differ
+// only in this wording and in the lead introducing each clause, so the grouping
+// is written once and the words travel as data.
+// [LAW:dataflow-not-control-flow]
+//
+// An array indexed by the kind, not a list of pairs: a pair list can omit a
+// kind and silently drop its ids from the message, which is the class of defect
+// this whole type exists to end. The array cannot drop them — a kind with no
+// words still renders its ids, under an empty parenthetical, which is loud
+// rather than silent. It is not total on its own, since Go does not require an
+// indexed array literal to fill every slot, so
+// TestEveryReachKindHasWordsInBothDiagnostics closes that gap.
+// [LAW:types-are-the-program] [LAW:no-silent-failure]
+type reachNotes [reachKindCount]string
+
+// The wording each diagnostic carries, named so the totality test can reach
+// them and so neither is rebuilt on every render.
+var (
+	exhaustedNotes = reachNotes{
+		reachTakeable:  "on your path and yours to take — `lit start` it",
+		reachHeldFresh: "on your path but claimed by another checkout right now",
+		reachNotReady:  "on your path but not startable right now — `lit show` it",
+		reachOutOfView: "on your path but outside this view — `lit show` it",
+	}
+	poolNotes = reachNotes{
+		reachTakeable:  "startable — `lit start` it",
+		reachHeldFresh: "in progress or claimed in a lane another checkout holds right now",
+		reachNotReady:  "not startable — blocked by a dependency, or in flight and not abandoned",
+		reachOutOfView: "outside this view — `lit show` it",
+	}
+)
+
+// describeReach renders "<lead><ids> (<note>)" for each kind that has rows,
+// joined by "; ", in reachKind's own declaration order — one ordering for both
+// diagnostics rather than a per-caller one that could disagree.
+// [LAW:one-source-of-truth]
+func describeReach(rows []rowReach, lead string, notes reachNotes) string {
+	byKind := map[reachKind][]string{}
+	for _, row := range rows {
+		byKind[row.Kind] = append(byKind[row.Kind], row.ID)
 	}
 	var parts []string
-	for _, group := range []struct {
-		kind blockerKind
-		note string
-	}{
-		{blockerTakeable, "on your path and yours to take — `lit start` it"},
-		{blockerHeldFresh, "on your path but claimed by another checkout right now"},
-		{blockerNotReady, "on your path but not startable right now — `lit show` it"},
-		{blockerOutOfView, "on your path but outside this view — `lit show` it"},
-	} {
-		ids := byKind[group.kind]
+	for kind, note := range notes {
+		ids := byKind[reachKind(kind)]
 		if len(ids) == 0 {
 			continue
 		}
-		parts = append(parts, fmt.Sprintf("blocked on %s (%s)", strings.Join(ids, ", "), group.note))
+		parts = append(parts, fmt.Sprintf("%s%s (%s)", lead, strings.Join(ids, ", "), note))
 	}
-	return fmt.Sprintf("no ready work in %s — %s; picking up other work is a deliberate re-focus, not a bare `next`", scope, strings.Join(parts, "; "))
+	return strings.Join(parts, "; ")
 }
 
-// Error states the one fact NoWork carries. The guidance an agent needs — which
-// of the three shapes of emptiness this is, and what to do about each — is the
-// reason's remediation, not this line, because the line has no data to tell
-// them apart with. [LAW:comments-carry-meaning]
-func (NoWork) Error() string { return "no ready work" }
+// Error names which emptiness this is, which the line could not do while the
+// type held nothing to tell them apart with.
+//
+// Nothing walked past: the gather came back empty and the backlog really is, so
+// this is the sentence `next` has always printed, unchanged. Rows walked past:
+// they are named and classified, because the fact is then the opposite one — the
+// pool was full, of work this checkout may not have — and it used to arrive in
+// identical words. The clause leads by refuting the empty reading outright,
+// since that reading is what the bare sentence cost an agent asking, after a
+// crash, what it was already on (links-cli-q7hg).
+func (o NoWork) Error() string {
+	if len(o.Unreachable) == 0 {
+		return "no ready work"
+	}
+	return fmt.Sprintf("no ready work — the backlog is not empty, but nothing in it is startable here: %s", describeReach(o.Unreachable, "", poolNotes))
+}
