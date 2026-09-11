@@ -77,6 +77,20 @@ func commandErrorReason(err error) string {
 	if errors.As(err, &storeValidation) {
 		return "validation_refused"
 	}
+	// The router's two terminal answers. Neither is a fault: routing asked a
+	// well-formed question and the honest reply was "nothing to hand you". They
+	// are separate reasons because the act each calls for is different — one
+	// asks you to move work you already hold, the other to widen the question or
+	// create work — and a single reason could only name one of them.
+	// [LAW:one-type-per-behavior]
+	var exhausted Exhausted
+	if errors.As(err, &exhausted) {
+		return "scope_exhausted"
+	}
+	var noWork NoWork
+	if errors.As(err, &noWork) {
+		return "no_ready_work"
+	}
 	var unsupported UnsupportedError
 	if errors.As(err, &unsupported) {
 		if unsupported.Feature == "--output" {
@@ -156,6 +170,18 @@ func commandErrorRemediation(reason string) string {
 		// process holds the store), so the remediation jumps straight to the steps,
 		// like every other case here. [LAW:one-source-of-truth]
 		return "Wait a moment and retry — a normal command releases the store in well under a second. If it persists, a lit process is stuck: find it with `ps aux | grep '[l]it'` and terminate it, then retry; if none is running the hold is stale, so run `lit doctor --fix`. " + agentInstructionsOpen + "This is a mechanical, self-diagnosable state — the steps above resolve it without needing the user's input." + agentInstructionsClose
+	case "scope_exhausted":
+		// Stands where the message cannot: the message names the blockers and
+		// says a re-focus must be deliberate, but never says with which
+		// commands. No agent-instructions envelope — the envelopes elsewhere
+		// mean "mechanical, run it without asking", and choosing to leave a
+		// claimed scope is the opposite of mechanical.
+		return "Do not retry unchanged — routing is deterministic and repeats this answer until the work named above moves. Act on what the message names: start a blocker it marks as yours to take, or finish or hand off what you already hold. Leaving the scope is a re-focus, not a retry — choose a ticket from `lit backlog` and name it to `lit start <id>`."
+	case "no_ready_work":
+		// Three different situations reach one message ("no ready work"), which
+		// has no data to tell them apart; the remediation is where they get
+		// separated, cheapest test first. [LAW:no-silent-failure]
+		return "Do not retry unchanged — nothing is startable, which is the backlog's state rather than a fault. If `--type`, `--labels`, `--assignee`, or `--status` narrowed this run, drop the filter and ask again. Otherwise `lit backlog` shows whether every open ticket is blocked, and `lit new` adds work."
 	case "outside_git_workspace":
 		return "Run the command inside a git repository/worktree with links initialized."
 	case "bulk_partial_failure":

@@ -235,8 +235,8 @@ func TestRouteNextExhaustionNeverFallsToAnotherEpic(t *testing.T) {
 			if len(exhausted.Blocked) != 0 {
 				t.Fatalf("exhausted.Blocked = %v, want none (epic A has nothing queued)", exhausted.Blocked)
 			}
-			if err := exhaustedError(exhausted); err == nil {
-				t.Fatal("exhaustedError(exhausted) = nil, want a diagnostic error")
+			if msg := exhausted.Error(); !strings.Contains(msg, epicA.ID) {
+				t.Fatalf("exhausted.Error() = %q, want the diagnostic to name the exhausted scope %q", msg, epicA.ID)
 			}
 		})
 	}
@@ -466,15 +466,15 @@ func TestRouteNextRoutesAroundOnPathDependencyHeldFresh(t *testing.T) {
 	// The diagnostic must not undo the routing decision one line later: `lit
 	// start` on this dependency hits the fresh-takeover gate, so telling the
 	// agent to start it is N2 in the message instead of the pick.
-	msg := exhaustedError(exhausted).Error()
+	msg := exhausted.Error()
 	if !strings.Contains(msg, dep.ID) {
-		t.Fatalf("exhaustedError = %q, want it to name the blocker %q", msg, dep.ID)
+		t.Fatalf("exhausted.Error() = %q, want it to name the blocker %q", msg, dep.ID)
 	}
 	if !strings.Contains(msg, "claimed by another checkout") {
-		t.Fatalf("exhaustedError = %q, want it to name %q as held elsewhere rather than as work to pick up", msg, dep.ID)
+		t.Fatalf("exhausted.Error() = %q, want it to name %q as held elsewhere rather than as work to pick up", msg, dep.ID)
 	}
 	if strings.Contains(msg, "`lit start` it") {
-		t.Fatalf("exhaustedError = %q, want no instruction to start %q — `lit start` would hit the fresh-takeover gate", msg, dep.ID)
+		t.Fatalf("exhausted.Error() = %q, want no instruction to start %q — `lit start` would hit the fresh-takeover gate", msg, dep.ID)
 	}
 }
 
@@ -526,15 +526,15 @@ func TestExhaustionNamesABlockerOutsideThisViewAsSuch(t *testing.T) {
 	if !named {
 		t.Fatalf("exhausted.Blocked = %v, want it to name %q", exhausted.Blocked, dep.ID)
 	}
-	msg := exhaustedError(exhausted).Error()
+	msg := exhausted.Error()
 	if !strings.Contains(msg, "outside this view") {
-		t.Fatalf("exhaustedError = %q, want %q named as outside this view", msg, dep.ID)
+		t.Fatalf("exhausted.Error() = %q, want %q named as outside this view", msg, dep.ID)
 	}
 	if strings.Contains(msg, "claimed by another checkout") {
-		t.Fatalf("exhaustedError = %q, want no claim about who holds %q — this run never gathered it", msg, dep.ID)
+		t.Fatalf("exhausted.Error() = %q, want no claim about who holds %q — this run never gathered it", msg, dep.ID)
 	}
 	if strings.Contains(msg, "`lit start` it") {
-		t.Fatalf("exhaustedError = %q, want no instruction to start %q", msg, dep.ID)
+		t.Fatalf("exhausted.Error() = %q, want no instruction to start %q", msg, dep.ID)
 	}
 }
 
@@ -578,15 +578,15 @@ func TestExhaustionNamesAnUnreadyBlockerWithoutNamingAHolder(t *testing.T) {
 	if !named {
 		t.Fatalf("exhausted.Blocked = %v, want it to name %q", exhausted.Blocked, dep.ID)
 	}
-	msg := exhaustedError(exhausted).Error()
+	msg := exhausted.Error()
 	if !strings.Contains(msg, "not startable right now") {
-		t.Fatalf("exhaustedError = %q, want %q named as not startable", msg, dep.ID)
+		t.Fatalf("exhausted.Error() = %q, want %q named as not startable", msg, dep.ID)
 	}
 	if strings.Contains(msg, "claimed by another checkout") {
-		t.Fatalf("exhaustedError = %q, want no holder named for %q — its lane is unclaimed", msg, dep.ID)
+		t.Fatalf("exhausted.Error() = %q, want no holder named for %q — its lane is unclaimed", msg, dep.ID)
 	}
 	if strings.Contains(msg, "`lit start` it") {
-		t.Fatalf("exhaustedError = %q, want no instruction to start %q — it is blocked by %q", msg, dep.ID, deeper.ID)
+		t.Fatalf("exhausted.Error() = %q, want no instruction to start %q — it is blocked by %q", msg, dep.ID, deeper.ID)
 	}
 }
 

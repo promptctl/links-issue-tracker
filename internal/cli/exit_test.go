@@ -27,6 +27,12 @@ func TestExitCodeMappings(t *testing.T) {
 		{name: "unsupported feature", err: UnsupportedError{Message: "unsupported --format \"csv\"", Feature: "--format"}, want: ExitValidation},
 		{name: "outside workspace", err: OutsideWorkspaceError{Message: "links requires running inside a git repository/worktree"}, want: ExitGeneric},
 		{name: "generic", err: ValidationError{Message: "boom"}, want: ExitValidation},
+		// Both of `lit next`'s terminal answers exit ExitNoWork: the command ran
+		// correctly and simply has no ticket to hand back. Sharing one code is
+		// deliberate — the caller's question is binary, and which emptiness it
+		// was is carried by the reason and the message (links-cli-cpou).
+		{name: "router scope exhausted", err: Exhausted{Epics: []string{"links-epic-abcd"}}, want: ExitNoWork},
+		{name: "router no ready work", err: NoWork{}, want: ExitNoWork},
 	}
 
 	for _, tc := range tests {

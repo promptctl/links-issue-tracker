@@ -73,6 +73,13 @@ type ServedFromNewLane struct {
 // lane of the same epic. Routing step 3 — loud and diagnostic, never a
 // silent hop to a leaf outside the epic. Blocked names the open dependencies
 // gating that work, if any (an in-progress-only lane names none).
+//
+// It is also an error, for the same reason HelpRequestedError is: it is an
+// answer, not a failure, and the error channel is the only channel runNext has
+// for an answer that hands back no row. Being the error itself — rather than
+// being rendered into a separate error type — is what keeps the reason and exit
+// sinks reading the routing verdict rather than a copy of it that could drift
+// from these fields. [LAW:one-source-of-truth]
 type Exhausted struct {
 	Epics   []string
 	Blocked []blockedDep
@@ -133,7 +140,8 @@ func blockerKindFor(dep annotation.AnnotatedIssue, gathered bool, standing claim
 }
 
 // NoWork is the truly empty backlog: nothing ready anywhere, claimed or not
-// — the pre-claims "no ready work" case, unchanged.
+// — the pre-claims "no ready work" case, unchanged. An error on the same terms
+// as Exhausted.
 type NoWork struct{}
 
 func (ServedFromClaim) isNextOutcome()    {}
@@ -377,15 +385,15 @@ func onPathDependency(rows []annotation.AnnotatedIssue, laneOf func(annotation.A
 	return annotation.AnnotatedIssue{}, false
 }
 
-// exhaustedError renders Exhausted as the loud diagnostic the design
-// demands in place of a silent hop to another epic's leaf.
-func exhaustedError(o Exhausted) error {
+// Error renders Exhausted as the loud diagnostic the design demands in place
+// of a silent hop to another epic's leaf.
+func (o Exhausted) Error() string {
 	scope := "your claimed lane(s)"
 	if len(o.Epics) > 0 {
 		scope = fmt.Sprintf("epic(s) %s", strings.Join(o.Epics, ", "))
 	}
 	if len(o.Blocked) == 0 {
-		return fmt.Errorf("no ready work in %s — nothing else is queued behind what's already in progress; picking up other work is a deliberate re-focus, not a bare `next`", scope)
+		return fmt.Sprintf("no ready work in %s — nothing else is queued behind what's already in progress; picking up other work is a deliberate re-focus, not a bare `next`", scope)
 	}
 	byKind := map[blockerKind][]string{}
 	for _, dep := range o.Blocked {
@@ -407,5 +415,11 @@ func exhaustedError(o Exhausted) error {
 		}
 		parts = append(parts, fmt.Sprintf("blocked on %s (%s)", strings.Join(ids, ", "), group.note))
 	}
-	return fmt.Errorf("no ready work in %s — %s; picking up other work is a deliberate re-focus, not a bare `next`", scope, strings.Join(parts, "; "))
+	return fmt.Sprintf("no ready work in %s — %s; picking up other work is a deliberate re-focus, not a bare `next`", scope, strings.Join(parts, "; "))
 }
+
+// Error states the one fact NoWork carries. The guidance an agent needs — which
+// of the three shapes of emptiness this is, and what to do about each — is the
+// reason's remediation, not this line, because the line has no data to tell
+// them apart with. [LAW:comments-carry-meaning]
+func (NoWork) Error() string { return "no ready work" }
