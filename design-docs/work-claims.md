@@ -239,6 +239,11 @@ step, so each step below says only which lanes it looks in:
   lane's history, the claim line printed beneath the row carrying the provenance
   of a lane whose holder has gone stale.
 
+  A pick that continues the checkout's own epic (step 2) closes on a qualifier
+  naming why it was reached — "… to claim lane one of epic B (a second lane of
+  an epic you already hold a lane in)" — which the same ticket drawn from the
+  global pool does not carry.
+
   Nothing here may be said in the perfect tense. A line that reports a start or
   a claim describes a side effect `next` does not have, and an agent that
   believes it holds a claim it does not either works unclaimed or spends a turn
