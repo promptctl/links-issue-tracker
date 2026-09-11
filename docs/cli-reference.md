@@ -110,7 +110,7 @@ overwritten — so it is also safe to re-run after a transient network failure.
 ### `lit ready` / `lit queue` (retired → `lit backlog` / `lit next`)
 
 Both workable views are retired. `next` (the single leaf to start) and `backlog`
-(the full ranked queue, blocked items inline) are the only named workable views; an
+(the ranked queue, blocked items inline) are the only named workable views; an
 old `lit ready` or `lit queue` invocation returns a pointer to them (exit 3). The
 retired presentations — ready's blocked-to-bottom re-sort and coaching preamble,
 queue's terse pullable-only list — are dropped; `backlog` and `next` carry the
@@ -125,8 +125,8 @@ lit backlog [--assignee <a>] [--labels <csv>] [--status open|in_progress] [--typ
 Workable items in rank order with blocked items shown **inline**, so the shape of
 the queue is legible. Use when grooming or re-ranking. A `focus` label narrows which
 rows the view answers over (see `lit label add` / `lit label rm`), and each run states
-on its own first line what it is listing — so completeness is read there, not assumed
-here. `--all` lifts the scope for one run.
+what it is listing on the line just above the rows — so completeness is read there,
+not assumed here. `--all` lifts the scope for one run.
 
 `--status` accepts exactly `open` or `in_progress` on the workable commands
 (`backlog`, `next`); anything else — including `closed`, which could only ever match
@@ -790,7 +790,8 @@ Every store opens strictly read-only, never contending with a project's own writ
 Readiness under `--counts` is **store-intrinsic**: a repo's own `required_fields`
 policy is not applied across the boundary (a discovered store carries no repo root to
 load it from), so counts can differ from that project's own `lit backlog` when it
-configures `required_fields`.
+configures `required_fields`. A `focus` label is the other source of divergence: it
+narrows that project's `lit backlog` but never these counts (see `lit label add`).
 
 ### `lit prefix set`
 

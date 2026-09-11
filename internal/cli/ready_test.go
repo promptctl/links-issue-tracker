@@ -829,9 +829,8 @@ func (h readyTestHarness) setLabels(issueID string, labels ...string) {
 }
 
 // Focusing a blocked goal surfaces its earliest unfinished same-lane
-// prerequisite at the top of ready — above unrelated standing-urgent work —
-// and the path auto-advances as each prerequisite closes. The blocked path
-// members stay blocked: FocusPath affects ordering, never membership.
+// prerequisite to start next, and the path auto-advances as each closes.
+// Focus never unblocks a gated path member.
 func TestFocusPathSurfacesEarliestPrerequisiteAndAdvances(t *testing.T) {
 	h := newReadyTestHarness(t)
 

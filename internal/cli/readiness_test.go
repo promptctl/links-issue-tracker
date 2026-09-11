@@ -10,7 +10,7 @@ import (
 // TestClassifyReadinessPerKind is the contract test for the single
 // annotation→readiness enforcer: every annotation kind maps to exactly one
 // classification family (blocking, orphaned, rank hygiene) or to none
-// (FocusPath — an ordering fact, deliberately invisible to readiness).
+// (FocusPath — the view-scope fact, deliberately invisible to readiness).
 func TestClassifyReadinessPerKind(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

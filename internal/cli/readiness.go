@@ -11,10 +11,10 @@ import (
 // result instead of re-walking annotation.Kind.
 // [LAW:single-enforcer] Single annotation→readiness interpreter.
 //
-// RoleNone kinds (e.g. FocusPath, an ordering fact consumed by sortByFocusPath)
-// contribute nothing here. That is an explicit, classified case — not an
-// unhandled default — so folding ordering back into membership would require a
-// deliberate role change, not a silent omission.
+// RoleNone kinds (e.g. FocusPath, the view-scope fact) contribute nothing here.
+// That is an explicit, classified case — not an unhandled default — so folding
+// view scope back into readiness would require a deliberate role change, not a
+// silent omission.
 
 // BlockingReason is one classified fact that prevents pulling an issue now.
 // Detail carries the annotation message: the missing field name, the open

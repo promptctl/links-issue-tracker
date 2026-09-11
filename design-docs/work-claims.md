@@ -513,7 +513,7 @@ sidecar maps.
   are no heartbeats and no liveness probes here, only staleness heuristics —
   the same family as orphan detection, applied one level up (lane instead of
   ticket, T instead of the orphan threshold).
-- **The focus label** — the shared label that hoists a goal's prerequisite
+- **The focus label** — the shared label that scopes a goal's prerequisite
   chain for everyone — is orthogonal and unchanged: it expresses *project*
   intent ("this goal matters most"), a statement to all streams. A claim
   expresses *stream* commitment ("this lane is being executed here").
