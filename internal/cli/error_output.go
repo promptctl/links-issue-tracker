@@ -204,7 +204,13 @@ func commandErrorRemediation(reason string) string {
 		// a message that just said the backlog is not empty is exactly the
 		// remediation-contradicts-message defect links-cli-cpou removed one
 		// level up. [LAW:no-silent-failure]
-		return "Do not retry unchanged — nothing here is startable, which is the backlog's state rather than a fault. If `--type`, `--labels`, `--assignee`, or `--status` narrowed this run, drop the filter and ask again. If a `focus` label narrowed it, `lit next --all` routes over the whole queue for one run and `lit label rm <id> focus` lifts the scope. Otherwise `lit backlog` shows the whole queue and who holds what, and `lit new` adds work if it is genuinely empty."
+		//
+		// The lead obeys that rule too, which is why it claims determinism and
+		// not startability: withheldByScope stamps every scope-excluded row
+		// off-path without ever running capacityFor on it, so "nothing here is
+		// startable" was a verdict this line had no reading to support — and
+		// NoWork.Error() already declines to make it. [LAW:one-source-of-truth]
+		return "Do not retry unchanged — routing is deterministic and repeats this answer until something in the backlog moves. That is the backlog's state, not a fault. If `--type`, `--labels`, `--assignee`, or `--status` narrowed this run, drop the filter and ask again. If a `focus` label narrowed it, `lit next --all` routes over the whole queue for one run and `lit label rm <id> focus` lifts the scope. Otherwise `lit backlog` shows the whole queue and who holds what, and `lit new` adds work if it is genuinely empty."
 	case "state_already_holds":
 		// No act to name, because there is none: the caller asked for a state
 		// the workspace is already in. It must still say "do not retry" — this

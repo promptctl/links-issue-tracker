@@ -388,6 +388,10 @@ func TestRenderNextOutcomeTerminalOutcomesKeepTheirType(t *testing.T) {
 		// wantAct is the deliberate act the message calls for but cannot name,
 		// which is the whole job the remediation line has left to do.
 		wantAct string
+		// wantAbsent are claims the remediation may not make about this
+		// outcome's rows. Checked as a list so every case runs the same loop
+		// over whatever it forbids. [LAW:dataflow-not-control-flow]
+		wantAbsent []string
 	}{
 		{
 			name:       "exhausted",
@@ -415,6 +419,14 @@ func TestRenderNextOutcomeTerminalOutcomesKeepTheirType(t *testing.T) {
 			}},
 			wantReason: "no_ready_work",
 			wantAct:    "lit next --all",
+			// withheldByScope stamps the off-path row without ever running
+			// capacityFor on it, so the remediation holds no reading of its
+			// capacity and may pass no verdict on it — in any wording, which
+			// is why the pin is the bare word and not one sentence's phrasing.
+			// NoWork.Error() already declines the same verdict; a remediation
+			// that makes it contradicts the message it prints under
+			// (links-cli-cpou).
+			wantAbsent: []string{"startable"},
 		},
 	}
 	for _, tc := range tests {
@@ -453,6 +465,11 @@ func TestRenderNextOutcomeTerminalOutcomesKeepTheirType(t *testing.T) {
 			rem := commandErrorRemediation(commandErrorReason(err))
 			if !strings.Contains(rem, tc.wantAct) {
 				t.Fatalf("remediation does not name the deliberate act %q: %q", tc.wantAct, rem)
+			}
+			for _, claim := range tc.wantAbsent {
+				if strings.Contains(rem, claim) {
+					t.Fatalf("remediation claims %q over rows whose capacity was never read: %q", claim, rem)
+				}
 			}
 		})
 	}
