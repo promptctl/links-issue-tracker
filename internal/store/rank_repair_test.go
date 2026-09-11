@@ -620,3 +620,52 @@ func TestSmoothingWidensPastRanksThatLeaveNoRoom(t *testing.T) {
 		}
 	}
 }
+
+// An all-zero run is the same shape with nothing below it: every member's
+// significant part is the empty string, which is also the sentinel for the open
+// end of the keyspace. The bounds are chosen from those significant parts, so
+// this is the case where the lower bound and the run's floor coincide, and
+// smoothing must still widen rather than ask for room that does not exist.
+func TestSmoothingWidensPastAnAllZeroRun(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	run := rank.SmoothingWindow + 2
+	ids := make([]string, 0, run+1)
+	for i := 0; i < run+1; i++ {
+		ids = append(ids, createRankTestIssue(t, ctx, st, fmt.Sprintf("Issue %d", i)))
+	}
+	planted := make(map[string]string, len(ids))
+	for i := 0; i < run; i++ {
+		planted[ids[i]] = strings.Repeat("0", rank.SmoothingThreshold+i)
+	}
+	planted[ids[run]] = "W"
+	for id, stored := range planted {
+		if err := st.ExecRawForTest(ctx, "UPDATE issues SET item_rank = ? WHERE id = ?", stored, id); err != nil {
+			t.Fatalf("plant rank for %s: %v", id, err)
+		}
+	}
+	trigger := planted[ids[rank.SmoothingWindow/2]]
+
+	tx, err := st.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx() error = %v", err)
+	}
+	if err := smoothRanksIfNeededTx(ctx, tx, trigger); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("smoothRanksIfNeededTx(%q) error = %v, want the window widened past the all-zero run", trigger, err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+
+	after := ranksByID(t, ctx, st, ids)
+	if got := orderByRank(after); !equalIDs(got, ids) {
+		t.Fatalf("order after smoothing = %v, want %v — smoothing must never reorder", got, ids)
+	}
+	if after[ids[run]] != planted[ids[run]] {
+		t.Fatalf("smoothing rewrote %s from %q to %q; the window must stop at the first rank outside the run",
+			ids[run], planted[ids[run]], after[ids[run]])
+	}
+}

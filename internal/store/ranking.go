@@ -398,12 +398,15 @@ func (s *Store) RankBelow(ctx context.Context, issueID, targetID string) (storag
 // smoothRanksIfNeededTx checks whether the given rank string has grown past the
 // smoothing threshold and, if so, re-spaces a local window of items around the
 // insertion point, at O(SmoothingWindow) cost instead of a full O(n) rebalance.
-// The window is bounded by the nearest rank on each side whose significant part
-// differs from the window's end there; the rows passed on the way join the
-// window, so a run of zero-extensions widens it past SmoothingWindow. Only
-// ranks whose significant parts differ leave room between them, so those bounds
-// always do. The window keeps its order, and its new ranks are
-// longer than both bounds, so a window bounded by long ranks comes out long.
+// Ranks sharing a significant part — one being the other extended by zeros —
+// pad to the same value and so leave no room between them, and they sort
+// contiguously. The window therefore swallows the whole run its ends sit in, so
+// a run of zero-extensions widens it past SmoothingWindow, and each bound is
+// taken from outside that run: below the run's own least rank, and at or above
+// the least rank sorting past every member of the top run. Bounds picked that
+// way can never share a significant part, so the primitive always has room.
+// The window keeps its order, and its new ranks are longer than both bounds,
+// so a window bounded by long ranks comes out long.
 func smoothRanksIfNeededTx(ctx context.Context, tx *sql.Tx, triggerRank string) error {
 	if len(triggerRank) < rank.SmoothingThreshold {
 		return nil
@@ -412,69 +415,60 @@ func smoothRanksIfNeededTx(ctx context.Context, tx *sql.Tx, triggerRank string) 
 
 	// Collect the window: up to half items at or below the trigger, plus
 	// up to half items above it.
-	var window []rankedIssue
-
-	belowRows, err := tx.QueryContext(ctx,
+	below, err := rankRowsTx(ctx, tx,
 		`SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank <= ? ORDER BY item_rank DESC LIMIT ?`,
 		triggerRank, half)
 	if err != nil {
-		return fmt.Errorf("smooth: query below: %w", err)
-	}
-	var below []rankedIssue
-	for belowRows.Next() {
-		var r rankedIssue
-		if err := belowRows.Scan(&r.id, &r.rank); err != nil {
-			belowRows.Close()
-			return fmt.Errorf("smooth: scan below: %w", err)
-		}
-		below = append(below, r)
-	}
-	belowRows.Close()
-	if err := belowRows.Err(); err != nil {
-		return fmt.Errorf("smooth: below rows: %w", err)
+		return fmt.Errorf("smooth: below: %w", err)
 	}
 	slices.Reverse(below)
-	window = append(window, below...)
 
-	aboveRows, err := tx.QueryContext(ctx,
+	above, err := rankRowsTx(ctx, tx,
 		`SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank > ? ORDER BY item_rank ASC LIMIT ?`,
 		triggerRank, half)
 	if err != nil {
-		return fmt.Errorf("smooth: query above: %w", err)
+		return fmt.Errorf("smooth: above: %w", err)
 	}
-	for aboveRows.Next() {
-		var r rankedIssue
-		if err := aboveRows.Scan(&r.id, &r.rank); err != nil {
-			aboveRows.Close()
-			return fmt.Errorf("smooth: scan above: %w", err)
-		}
-		window = append(window, r)
-	}
-	aboveRows.Close()
-	if err := aboveRows.Err(); err != nil {
-		return fmt.Errorf("smooth: above rows: %w", err)
-	}
+	window := slices.Concat(below, above)
 
 	if len(window) < 2 {
 		return nil
 	}
 
 	// [LAW:one-source-of-truth] rank.Significant is the definition of room, as in
-	// anchorRun, so the bounds are chosen by it rather than by raw adjacency.
-	lowerRun, lowerBound, err := significantRun(ctx, tx,
-		`SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank < ? ORDER BY item_rank DESC`,
-		window[0].rank)
+	// anchorRun, so the window is widened by it rather than by raw adjacency.
+	// runFloor is the least rank sharing the window's bottom significant part and
+	// runCeiling the least rank sorting above every rank sharing its top one, so
+	// each bound below is addressed directly rather than scanned for.
+	runFloor := rank.Significant(window[0].rank)
+	runCeiling := rank.Significant(window[len(window)-1].rank) + "1"
+
+	lowerRun, err := rankRowsTx(ctx, tx,
+		`SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank >= ? AND item_rank < ? ORDER BY item_rank ASC`,
+		runFloor, window[0].rank)
+	if err != nil {
+		return fmt.Errorf("smooth: lower run: %w", err)
+	}
+	upperRun, err := rankRowsTx(ctx, tx,
+		`SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank > ? AND item_rank < ? ORDER BY item_rank ASC`,
+		window[len(window)-1].rank, runCeiling)
+	if err != nil {
+		return fmt.Errorf("smooth: upper run: %w", err)
+	}
+	window = slices.Concat(lowerRun, window, upperRun)
+
+	lowerBound, err := nearestRankTx(ctx, tx,
+		`SELECT item_rank FROM issues WHERE deleted_at IS NULL AND item_rank < ? ORDER BY item_rank DESC LIMIT 1`,
+		runFloor)
 	if err != nil {
 		return fmt.Errorf("smooth: lower bound: %w", err)
 	}
-	upperRun, upperBound, err := significantRun(ctx, tx,
-		`SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank > ? ORDER BY item_rank ASC`,
-		window[len(window)-1].rank)
+	upperBound, err := nearestRankTx(ctx, tx,
+		`SELECT item_rank FROM issues WHERE deleted_at IS NULL AND item_rank >= ? ORDER BY item_rank ASC LIMIT 1`,
+		runCeiling)
 	if err != nil {
 		return fmt.Errorf("smooth: upper bound: %w", err)
 	}
-	slices.Reverse(lowerRun)
-	window = slices.Concat(lowerRun, window, upperRun)
 
 	newRanks, err := rank.SpacedRanksBetween(lowerBound, upperBound, len(window))
 	if err != nil {
@@ -491,29 +485,38 @@ func smoothRanksIfNeededTx(ctx context.Context, tx *sql.Tx, triggerRank string) 
 	return nil
 }
 
-// significantRun reads the rows query returns outward from edge, nearest first,
-// and returns the leading rows whose significant rank equals edge's, then the
-// first rank whose significant part differs — or "", the open end of the
-// keyspace, when the rows run out first.
-func significantRun(ctx context.Context, tx *sql.Tx, query, edge string) ([]rankedIssue, string, error) {
-	rows, err := tx.QueryContext(ctx, query, edge)
+// rankRowsTx runs a rank query and returns every row it matches, in the order
+// the query asks for. Every caller bounds its own query — by range or by LIMIT
+// — so the rows read stay proportional to the window, never to the backlog.
+func rankRowsTx(ctx context.Context, tx *sql.Tx, query string, args ...any) ([]rankedIssue, error) {
+	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	defer rows.Close()
-	stem := rank.Significant(edge)
-	var run []rankedIssue
+	var out []rankedIssue
 	for rows.Next() {
 		var item rankedIssue
 		if err := rows.Scan(&item.id, &item.rank); err != nil {
-			return nil, "", err
+			return nil, err
 		}
-		if rank.Significant(item.rank) != stem {
-			return run, item.rank, nil
-		}
-		run = append(run, item)
+		out = append(out, item)
 	}
-	return run, "", rows.Err()
+	return out, rows.Err()
+}
+
+// nearestRankTx returns the single rank a LIMIT 1 query selects, or "" — the
+// open end of the keyspace — when it selects nothing.
+func nearestRankTx(ctx context.Context, tx *sql.Tx, query string, args ...any) (string, error) {
+	var found string
+	err := tx.QueryRowContext(ctx, query, args...).Scan(&found)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return found, nil
 }
 
 // rowQueryer abstracts the QueryContext surface that *sql.DB and *sql.Tx
