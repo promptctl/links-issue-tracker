@@ -58,7 +58,7 @@ func TestClassifyReadinessPerKind(t *testing.T) {
 			wantInversions: []string{"dep-1"},
 		},
 		{
-			name:      "focus_path is ordering, invisible to readiness",
+			name:      "focus_path is scope, invisible to readiness",
 			ann:       annotation.Annotation{Kind: annotation.FocusPath, Message: "goal-1"},
 			wantReady: true,
 		},
