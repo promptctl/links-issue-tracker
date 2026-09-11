@@ -38,6 +38,7 @@ type workableKnobs struct {
 	labels    []string
 	limit     int
 	columns   []columnSpec
+	all       bool
 }
 
 // workableView is the preset that specializes the one workable runner into a
@@ -57,7 +58,7 @@ type workableView struct {
 	// rather than each renderer, which is what keeps the next view added here
 	// from re-introducing a projection whose `parent` and `blocked` cells are
 	// permanently "-". [LAW:one-source-of-truth]
-	render func(w io.Writer, columns []columnSpec, rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, rels map[string]relationColumns, cc claimContext) error
+	render func(w io.Writer, columns []columnSpec, rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, rels map[string]relationColumns, cc claimContext, notice focusNotice) error
 	// occasion builds the workflow event this view fires once render has
 	// already succeeded on the same rows — backlog's is a constant (a
 	// backlog-wide view names no single ticket), next's reads the one row
@@ -75,7 +76,7 @@ func (v workableView) usage() string {
 	if v.hasFilters {
 		parts = append(parts, "[--type ...] [--status ...] [--labels ...]")
 	}
-	parts = append(parts, "[--assignee <user>]")
+	parts = append(parts, "[--assignee <user>]", "[--all]")
 	if v.hasLimit {
 		parts = append(parts, "[--limit N]")
 	}
@@ -137,6 +138,13 @@ func workableRun(view workableView) appRunFn {
 func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []string, view workableView) error {
 	fs := newCobraFlagSet(view.name)
 	assignee := fs.String("assignee", "", "Filter by assignee")
+	// [LAW:no-mode-explosion] This flag's cap is the focus label: it selects
+	// between two values of ONE scope, it is deleted the day `focus` is, and no
+	// stage downstream branches on it — runWorkable resolves it to a scope and
+	// the pipeline consumes that. It exists so a scope stays a groove with the
+	// way out written on it rather than a wall an agent can only escape by
+	// deleting someone else's label.
+	all := fs.Bool("all", false, "Ignore the focus scope and list the whole queue")
 	issueType := optionalString(fs, view.hasFilters, "type", "Filter by issue type")
 	status := optionalString(fs, view.hasFilters, "status", "Filter by status: open|in_progress")
 	labels := optionalString(fs, view.hasFilters, "labels", "Comma-separated labels all of which must match")
@@ -178,8 +186,9 @@ func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 		labels:    splitCSV(*labels),
 		limit:     *limit,
 		columns:   columns,
+		all:       *all,
 	}
-	annotated, details, err := gatherWorkableAnnotated(ctx, ap, workableFilter{
+	annotated, details, focus, err := gatherWorkableAnnotated(ctx, ap, workableFilter{
 		Assignee:  knobs.assignee,
 		IssueType: knobs.issueType,
 		Status:    knobs.status,
@@ -188,8 +197,16 @@ func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	if err != nil {
 		return err
 	}
-	view.order(annotated, details, knobs)
-	rows := view.keep(annotated)
+	// The scope narrows MEMBERSHIP and nothing else, which is why it runs before
+	// ordering rather than as one more sort: what is left is then in stored rank
+	// order and the preamble that says so is true again. --all resolves to the
+	// unfocused scope — the same value an unlabeled workspace produces — so one
+	// partition serves every case and nothing downstream learns the flag exists.
+	// [LAW:dataflow-not-control-flow]
+	scoped, excluded := focus.scopeFor(knobs.all).partition(annotated)
+	notice := focusNotice{scope: focus, applied: !knobs.all, hidden: len(excluded), escape: "`lit " + view.name + " --all`"}
+	view.order(scoped, details, knobs)
+	rows := view.keep(scoped)
 	rows = applyLimit(rows, knobs.limit)
 	cc, err := gatherClaimContext(ctx, stdout, ap)
 	if err != nil {
@@ -198,7 +215,7 @@ func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	// Derived unconditionally from the rows and graph data already gathered
 	// above: no extra query, and no branch deciding whether the renderer gets
 	// its data. [LAW:dataflow-not-control-flow]
-	if err := view.render(stdout, knobs.columns, rows, details, workableRelationColumns(rows, details), cc); err != nil {
+	if err := view.render(stdout, knobs.columns, rows, details, workableRelationColumns(rows, details), cc, notice); err != nil {
 		return err
 	}
 	return workflows.Dispatch(stdout, os.Stderr, ap.Workspace, view.occasion(rows))

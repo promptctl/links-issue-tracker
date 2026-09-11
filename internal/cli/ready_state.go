@@ -445,6 +445,94 @@ func newFocusPathAnnotator(pathGoals map[string]string) annotation.Annotator {
 	}
 }
 
+// focusScope is the row set a focused view answers over: the prerequisite
+// closure of every focus-labeled goal, or the whole queue when nothing is
+// labeled. It is what replaced sortByFocusPath, which hoisted every path row
+// above every other row BEFORE rank was consulted — a second ordering authority
+// competing with the stored rank, while `lit backlog` went on describing itself
+// as "priority/rank order". With ~38 rows wired to one focused goal the hoisted
+// set simply was the top of the view, so a `lit rank <id> --top` that the store
+// honored landed at position 39 and no surface said why (links-listing-ju7i).
+//
+// A scope changes MEMBERSHIP and leaves ordering alone, which is why it fixes
+// what a reworded preamble could only have documented: there is no second answer
+// to "what order is this in" left to keep in agreement, and `--top` reaches the
+// top of whatever view it is aimed at. [LAW:one-source-of-truth] rank is the one
+// ordering authority.
+//
+// goals is read from the walk's own output and never from the gathered rows,
+// because "focus is on" and "some path row survived" are different facts. A goal
+// whose path rows are all narrowed away by --type/--labels, or a childless epic
+// goal whose only path row is the container that leaf-only membership drops,
+// leaves no annotated row behind; a scope derived from the rows would read that
+// as "nothing is focused" and silently serve the whole queue back — the exact
+// substitution this type exists to make unrepresentable.
+// [LAW:parse-dont-validate] the walk's answer is kept, not re-derived downstream.
+type focusScope struct{ goals []string }
+
+// focusScopeOf reads the goals out of the walk's path map, where a goal is
+// exactly an issue attributed to itself: fetchFocusPathGoals seeds every goal as
+// path[id] = id before the BFS and attributes each prerequisite to the goal that
+// reached it, so self-attribution is the goal set with no second query and
+// nothing to drift. [LAW:one-source-of-truth]
+func focusScopeOf(pathGoals map[string]string) focusScope {
+	var goals []string
+	for id, goal := range pathGoals {
+		if id == goal {
+			goals = append(goals, id)
+		}
+	}
+	sort.Strings(goals)
+	return focusScope{goals: goals}
+}
+
+// active reports whether any goal carries the focus label. The zero value is
+// the unfocused workspace, whose scope is the whole queue.
+func (s focusScope) active() bool { return len(s.goals) > 0 }
+
+// holds reports whether a row belongs to the scope. An inactive scope holds
+// every row, so callers run the same partition over focused and unfocused
+// workspaces alike rather than asking first whether focus is on.
+// [LAW:dataflow-not-control-flow]
+//
+// Membership is read off the FocusPath annotation the walk already emitted, so
+// the rule that decides what is on the path lives in fetchFocusPathGoals alone.
+// [LAW:single-enforcer]
+func (s focusScope) holds(row annotation.AnnotatedIssue) bool {
+	return !s.active() || annotation.HasAny(row.Annotations, annotation.FocusPath)
+}
+
+// scopeFor answers which scope a run narrows by. --all asks for the whole
+// queue, which is exactly the value an unfocused workspace already produces, so
+// the flag picks a VALUE here and every stage after it stays unconditional.
+// [LAW:dataflow-not-control-flow] the mode dies at the boundary that parsed it.
+func (s focusScope) scopeFor(all bool) focusScope {
+	if all {
+		return focusScope{}
+	}
+	return s
+}
+
+// partition splits rows into the ones the scope answers over and the ones it
+// excludes, preserving rank order within each. Both halves come back because
+// the excluded half is not discardable: a view that drops it silently cannot
+// tell "there is no work" from "there is no work ON YOUR PATH", and those are
+// the two facts an agent most needs kept apart. [LAW:parse-dont-validate]
+func (s focusScope) partition(rows []annotation.AnnotatedIssue) (inScope, excluded []annotation.AnnotatedIssue) {
+	for _, row := range rows {
+		if s.holds(row) {
+			inScope = append(inScope, row)
+			continue
+		}
+		excluded = append(excluded, row)
+	}
+	return inScope, excluded
+}
+
+// describe names the focused goals for a reader, in the fixed rendering both
+// views use. [LAW:one-source-of-truth] one wording for one fact.
+func (s focusScope) describe() string { return strings.Join(s.goals, ", ") }
+
 // newOrphanedAnnotator returns an annotator that flags in_progress issues
 // with no update in the given threshold as orphaned.
 func newOrphanedAnnotator(threshold time.Duration) annotation.Annotator {
@@ -556,28 +644,6 @@ func sortByCompositeRank(rows []annotation.AnnotatedIssue, details map[string]st
 func sortByPriority(issues []annotation.AnnotatedIssue) {
 	sort.SliceStable(issues, func(i, j int) bool {
 		return issues[i].Priority > issues[j].Priority
-	})
-}
-
-// sortByFocusPath places issues carrying a FocusPath annotation before all
-// others, preserving the prior (priority, composite-rank) order within each
-// group. Layered LAST in the shared gather so the focus path outranks standing
-// urgent priority: focus is the deliberate "get me here now" directive, urgent
-// is a standing attribute. Flipping that precedence is a one-line reorder
-// against sortByPriority.
-//
-// This reads the FocusPath fact directly rather than through ClassifyReadiness:
-// focus is an ORDERING interpretation, readiness a MEMBERSHIP one, and routing
-// the ordering fact through the readiness classifier would re-tangle the two
-// concerns the focus design keeps apart. [LAW:decomposition]
-// [LAW:dataflow-not-control-flow] Same comparator runs over every pair; the
-// derived annotation decides ordering, not whether the comparator runs.
-func sortByFocusPath(issues []annotation.AnnotatedIssue) {
-	onPath := func(row annotation.AnnotatedIssue) bool {
-		return annotation.HasAny(row.Annotations, annotation.FocusPath)
-	}
-	sort.SliceStable(issues, func(i, j int) bool {
-		return onPath(issues[i]) && !onPath(issues[j])
 	})
 }
 

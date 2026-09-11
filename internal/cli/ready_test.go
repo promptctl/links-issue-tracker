@@ -162,7 +162,7 @@ func (h readyTestHarness) addDependency(dependentID, dependencyID string) {
 // read real domain values rather than re-parsing text. [LAW:single-enforcer]
 func (h readyTestHarness) runWorkableAnnotated(rf workableFilter, limit int) []annotation.AnnotatedIssue {
 	h.t.Helper()
-	annotated, _, err := gatherWorkableAnnotated(h.ctx, h.ap, rf)
+	annotated, _, _, err := gatherWorkableAnnotated(h.ctx, h.ap, rf)
 	if err != nil {
 		h.t.Fatalf("gatherWorkableAnnotated(%+v) error = %v", rf, err)
 	}

@@ -31,7 +31,7 @@ func TestAnnotateIssuesRowsComeFromTheRelationsFetch(t *testing.T) {
 	stale := created
 	stale.Title = "Title from an older read"
 
-	annotated, details, err := annotateIssues(ctx, ap.Store, nil, []model.Issue{stale})
+	annotated, details, _, err := annotateIssues(ctx, ap.Store, nil, []model.Issue{stale})
 	if err != nil {
 		t.Fatalf("annotateIssues() error = %v", err)
 	}

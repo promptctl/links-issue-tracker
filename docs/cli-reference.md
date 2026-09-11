@@ -312,10 +312,18 @@ lit label rm <issue-id> <label>
 Incremental label edits. Two labels are reserved and carry derived behavior:
 `needs-design` marks an issue blocked (membership), and `focus` marks an issue
 as a goal whose unfinished prerequisite chain — explicit dependencies, epic
-children, and earlier same-lane siblings, transitively — sorts to the top of
-`ready`/`queue`/`next` (ordering only; blocked path items stay blocked, and
-the path re-derives as items close). Focus outranks urgent priority; urgent
-alone never propagates to prerequisites.
+children, and earlier same-lane siblings, transitively — becomes the row set
+`lit backlog` lists and `lit next` routes its global pool over. The path
+re-derives as items close, and blocked path items stay blocked: the scope
+decides which rows a view answers over, never whether one is ready.
+
+Focus narrows membership and leaves ordering alone — within the scope, rank is
+still the only order, so `lit rank --top` reaches the top of the view. Pass
+`--all` to either command to ignore the scope for one run. Two things the scope
+deliberately does not reach: `lit next` still serves work in a lane this
+checkout already holds even when it is off the path (your own work in flight
+stays yours), and the cross-project counts in `lit stores --counts` stay
+whole-project.
 
 ### `lit followup`
 

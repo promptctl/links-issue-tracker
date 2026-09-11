@@ -6,7 +6,7 @@ selects that ticket for the same field patch `lit update` applies — see `lit i
 docs/cli-reference.md.
 Rerank: `lit rank <id> [--top] [--bottom] [--above <other-id>] [--below <other-id>]`
 Block/unblock: `lit label add <id> needs-design` / `lit label rm <id> needs-design`
-Focus a goal: `lit label add <id> focus` surfaces the goal's unfinished prerequisite chain at the top of next/backlog (ordering only — blocked items stay blocked); `lit label rm <id> focus` restores normal order
+Focus a goal: `lit label add <id> focus` narrows next/backlog to the goal's unfinished prerequisite chain (membership only — blocked items stay blocked, and rank still orders what is left); `--all` on either command ignores the scope for one run, and `lit label rm <id> focus` lifts it
 Set parent: `lit parent set --child <child-id> --parent <parent-id>`
 Set dependency: `lit dep add --from <blocker-id> --to <blocked-id> --type blocks` (not allowed between two issues in the same epic — within one epic, rank is the ordering signal; cross-epic and free-floating issues are unrestricted)
 Set related: `lit dep add --from <issue-id> --to <peer-id> --type related-to`

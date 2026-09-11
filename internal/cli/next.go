@@ -25,7 +25,7 @@ import (
 // honest move once the shapes diverge (backlog stays exactly what it was);
 // stretching the shared preset to fit would have re-tangled the two.
 // [LAW:decomposition] [LAW:carrying-cost]
-const nextUsage = "usage: lit next [--type ...] [--status ...] [--labels ...] [--assignee <user>]"
+const nextUsage = "usage: lit next [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--all]"
 
 func runNext(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	fs := newCobraFlagSet("next")
@@ -33,6 +33,10 @@ func runNext(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	issueType := fs.String("type", "", "Filter by issue type")
 	status := fs.String("status", "", "Filter by status: open|in_progress")
 	labels := fs.String("labels", "", "Comma-separated labels all of which must match")
+	// Same flag, same meaning, same deletion condition as `lit backlog --all`:
+	// route over the whole queue rather than the focused goal's path.
+	// [LAW:one-source-of-truth] one name for one idea across both surfaces.
+	all := fs.Bool("all", false, "Ignore the focus scope and route over the whole queue")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -52,7 +56,7 @@ func runNext(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	if err := printSyncStalenessWarning(ctx, stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
 		return err
 	}
-	rows, details, err := gatherWorkableAnnotated(ctx, ap, workableFilter{
+	rows, details, focus, err := gatherWorkableAnnotated(ctx, ap, workableFilter{
 		Assignee:  strings.TrimSpace(*assignee),
 		IssueType: issueTypeValue,
 		Status:    statusState,
@@ -65,7 +69,7 @@ func runNext(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	if err != nil {
 		return err
 	}
-	occasion, err := renderNextOutcome(stdout, routeNext(rows, details, cc.standings, cc.self), details, cc)
+	occasion, err := renderNextOutcome(stdout, routeNext(rows, details, cc.standings, cc.self, focus.scopeFor(*all)), details, cc)
 	if err != nil {
 		return err
 	}

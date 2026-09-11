@@ -85,7 +85,7 @@ func (h readyTestHarness) transition(id string, action model.Action) {
 
 func (h readyTestHarness) gather() ([]annotation.AnnotatedIssue, map[string]storage.IssueRelations) {
 	h.t.Helper()
-	rows, details, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
+	rows, details, _, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
 	if err != nil {
 		h.t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}
@@ -112,7 +112,7 @@ func TestRouteNextServesOwnClaimOverHigherRankedUnclaimedLane(t *testing.T) {
 	rows, details := h.gather()
 	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, a2.ID)): heldBy(selfAttribution)}
 
-	outcome := routeNext(rows, details, standings, selfAttribution)
+	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
 	served, ok := outcome.(ServedFromClaim)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromClaim", outcome, outcome)
@@ -142,7 +142,7 @@ func TestRouteNextRoutesAroundLaneHeldByAnother(t *testing.T) {
 	// This checkout holds no claims of its own, so routing starts straight at
 	// the global pool, exactly as design-docs/work-claims.md specifies for the
 	// zero state.
-	outcome := routeNext(rows, details, standings, model.Attribution{})
+	outcome := routeNext(rows, details, standings, model.Attribution{}, focusScope{})
 	served, ok := outcome.(ServedFromNewLane)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane", outcome, outcome)
@@ -180,7 +180,7 @@ func TestRouteNextContinuesEpicBeforeHigherRankedOtherEpic(t *testing.T) {
 	// a claim outlives the ticket that established it.
 	standings := claims.Standings{model.LaneOf(a1, &epicA): heldBy(selfAttribution)}
 
-	outcome := routeNext(rows, details, standings, selfAttribution)
+	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
 	served, ok := outcome.(ServedFromEpicLane)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromEpicLane", outcome, outcome)
@@ -225,7 +225,7 @@ func TestRouteNextExhaustionNeverFallsToAnotherEpic(t *testing.T) {
 			rows, details := h.gather()
 			standings := claims.Standings{model.LaneOf(a1, &epicA): tc.claim(selfAttribution)}
 
-			outcome := routeNext(rows, details, standings, selfAttribution)
+			outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
 			exhausted, ok := outcome.(Exhausted)
 			if !ok {
 				t.Fatalf("routeNext = %#v (%T), want Exhausted (never epic B's B.1)", outcome, outcome)
@@ -265,7 +265,7 @@ func TestRouteNextOffersOnPathDependencyAsANewLane(t *testing.T) {
 		laneOf(t, details, rowByID(t, rows, a2.ID)): heldBy(selfAttribution),
 	}
 
-	outcome := routeNext(rows, details, standings, selfAttribution)
+	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
 	served, ok := outcome.(ServedFromNewLane)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane (on-path dependency)", outcome, outcome)
@@ -299,7 +299,7 @@ func TestRouteNextResumesOwnInFlightTicket(t *testing.T) {
 	rows, details := h.gather()
 	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, a1.ID)): heldBy(selfAttribution)}
 
-	outcome := routeNext(rows, details, standings, selfAttribution)
+	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
 	resumed, ok := outcome.(ResumedOwnWork)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ResumedOwnWork (the ticket this checkout is on)", outcome, outcome)
@@ -328,7 +328,7 @@ func TestRouteNextResumesOwnOrphanInStaleLane(t *testing.T) {
 	orphan(t, rows, a1.ID)
 	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, a1.ID)): staleBy(selfAttribution)}
 
-	outcome := routeNext(rows, details, standings, selfAttribution)
+	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
 	resumed, ok := outcome.(ResumedOwnWork)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ResumedOwnWork, never epic B's %q", outcome, outcome, b1.ID)
@@ -356,7 +356,7 @@ func TestRouteNextTakesOverOrphanInForeignStaleLane(t *testing.T) {
 	orphan(t, rows, b1.ID)
 	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, b1.ID)): staleBy(otherAttribution)}
 
-	outcome := routeNext(rows, details, standings, selfAttribution)
+	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
 	served, ok := outcome.(ServedFromNewLane)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane (takeover of the stale lane)", outcome, outcome)
@@ -383,7 +383,7 @@ func TestRouteNextLeavesUnabandonedInFlightWorkAlone(t *testing.T) {
 	rows, details := h.gather()
 	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, b1.ID)): staleBy(otherAttribution)}
 
-	outcome := routeNext(rows, details, standings, selfAttribution)
+	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
 	served, ok := outcome.(ServedFromNewLane)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane", outcome, outcome)
@@ -407,13 +407,13 @@ func TestRouteNextKeepsOwnershipUnderADisplayFilter(t *testing.T) {
 	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
 	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicB.ID})
 
-	rows, details, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{IssueType: model.TypeBug})
+	rows, details, _, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{IssueType: model.TypeBug})
 	if err != nil {
 		t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}
 	standings := claims.Standings{model.LaneOf(a1, &epicA): heldBy(selfAttribution)}
 
-	outcome := routeNext(rows, details, standings, selfAttribution)
+	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
 	exhausted, ok := outcome.(Exhausted)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want Exhausted (epic B's bug is a hop)", outcome, outcome)
@@ -446,7 +446,7 @@ func TestRouteNextRoutesAroundOnPathDependencyHeldFresh(t *testing.T) {
 		laneOf(t, details, rowByID(t, rows, dep.ID)): heldBy(otherAttribution),
 	}
 
-	outcome := routeNext(rows, details, standings, selfAttribution)
+	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
 	exhausted, ok := outcome.(Exhausted)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want Exhausted — the on-path dependency's lane is held fresh elsewhere, so `next` must not offer what `start` would refuse", outcome, outcome)
@@ -509,7 +509,7 @@ func TestExhaustionNamesABlockerOutsideThisViewAsSuch(t *testing.T) {
 		inView = append(inView, row)
 	}
 
-	outcome := routeNext(inView, details, standings, selfAttribution)
+	outcome := routeNext(inView, details, standings, selfAttribution, focusScope{})
 	exhausted, ok := outcome.(Exhausted)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want Exhausted — the gating dependency is not in view, so nothing here is startable", outcome, outcome)
@@ -561,7 +561,7 @@ func TestExhaustionNamesAnUnreadyBlockerWithoutNamingAHolder(t *testing.T) {
 		laneOf(t, details, rowByID(t, rows, a2.ID)): heldBy(selfAttribution),
 	}
 
-	outcome := routeNext(rows, details, standings, selfAttribution)
+	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
 	exhausted, ok := outcome.(Exhausted)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want Exhausted — the on-path dependency is itself blocked", outcome, outcome)
@@ -612,7 +612,7 @@ func TestRouteNextTakesOverAnAbandonedSiblingLane(t *testing.T) {
 		laneOf(t, details, rowByID(t, rows, a2.ID)): staleBy(otherAttribution),
 	}
 
-	outcome := routeNext(rows, details, standings, selfAttribution)
+	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
 	served, ok := outcome.(ServedFromEpicLane)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromEpicLane — an abandoned sibling lane of our own epic is takeable", outcome, outcome)
@@ -642,7 +642,7 @@ func TestRouteNextServesOpenTicketInForeignStaleLane(t *testing.T) {
 	rows, details := h.gather()
 	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, b1.ID)): staleBy(otherAttribution)}
 
-	outcome := routeNext(rows, details, standings, selfAttribution)
+	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
 	served, ok := outcome.(ServedFromNewLane)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane (the stale lane is admitted, not skipped)", outcome, outcome)
@@ -675,7 +675,7 @@ func TestRouteNextContinuesEpicIntoForeignStaleLane(t *testing.T) {
 		laneOf(t, details, rowByID(t, rows, a2.ID)): staleBy(otherAttribution),
 	}
 
-	outcome := routeNext(rows, details, standings, selfAttribution)
+	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
 	served, ok := outcome.(ServedFromEpicLane)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromEpicLane (a stale sibling lane of our own epic is admitted)", outcome, outcome)
@@ -807,7 +807,7 @@ func TestRouteNextStep1RanksAcrossCapacitiesRatherThanBetweenThem(t *testing.T) 
 				laneOf(t, details, rowByID(t, rows, ready.ID)):    heldBy(selfAttribution),
 			}
 
-			outcome := routeNext(rows, details, standings, selfAttribution)
+			outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
 			if tc.resumeFirst {
 				resumed, ok := outcome.(ResumedOwnWork)
 				if !ok || resumed.Row.ID != inFlight.ID {
@@ -846,7 +846,7 @@ func TestRouteNextTakesOverAnAbandonedOnPathDependency(t *testing.T) {
 		laneOf(t, details, rowByID(t, rows, dep.ID)): staleBy(otherAttribution),
 	}
 
-	outcome := routeNext(rows, details, standings, selfAttribution)
+	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
 	served, ok := outcome.(ServedFromNewLane)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane (the abandoned on-path dependency is takeable)", outcome, outcome)
@@ -885,7 +885,7 @@ func TestRouteNextServesOpenWorkInOurOwnStaleLane(t *testing.T) {
 	}
 	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, a1.ID)): staleBy(selfAttribution)}
 
-	outcome := routeNext(rows, details, standings, selfAttribution)
+	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
 	served, ok := outcome.(ServedFromClaim)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromClaim — never a fresh lane in epic B (%s)", outcome, outcome, b1.ID)
@@ -922,7 +922,7 @@ func TestRouteNextDoesNotAdoptStalePublicHistory(t *testing.T) {
 	orphan(t, rows, a1.ID)
 	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, a1.ID)): staleBy(publicAttribution)}
 
-	outcome := routeNext(rows, details, standings, publicAttribution)
+	outcome := routeNext(rows, details, standings, publicAttribution, focusScope{})
 	if resumed, adopted := outcome.(ResumedOwnWork); adopted {
 		t.Fatalf("routeNext resumed %q as this checkout's own work; an unminted self shares the public bucket with the history, which proves both unaddressable, not both us", resumed.Row.ID)
 	}
@@ -949,7 +949,7 @@ func TestRouteNextRoutesAroundAFreshPublicHold(t *testing.T) {
 	rows, details := h.gather()
 	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, a1.ID)): heldBy(publicAttribution)}
 
-	outcome := routeNext(rows, details, standings, publicAttribution)
+	outcome := routeNext(rows, details, standings, publicAttribution, focusScope{})
 	served, ok := outcome.(ServedFromNewLane)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane: a fresh public hold is foreign work in flight", outcome, outcome)
@@ -1007,7 +1007,7 @@ func TestNoWorkNamesEachRowThePoolWalkWentPast(t *testing.T) {
 	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, held.ID)): heldBy(otherAttribution)}
 
 	// This checkout holds nothing, so routing starts straight at the global pool.
-	outcome := routeNext(rows, details, standings, selfAttribution)
+	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
 	noWork, ok := outcome.(NoWork)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want NoWork — nothing in the pool is takeable", outcome, outcome)
@@ -1052,7 +1052,7 @@ func TestNoWorkOnAGenuinelyEmptyBacklogIsUnchanged(t *testing.T) {
 	h := newReadyTestHarness(t)
 
 	rows, details := h.gather()
-	outcome := routeNext(rows, details, claims.Standings{}, selfAttribution)
+	outcome := routeNext(rows, details, claims.Standings{}, selfAttribution, focusScope{})
 	noWork, ok := outcome.(NoWork)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want NoWork for an empty backlog", outcome, outcome)

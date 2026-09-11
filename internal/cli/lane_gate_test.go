@@ -13,7 +13,7 @@ import (
 // public ClassifyReadiness rather than any retired command's private filter.
 func (h readyTestHarness) runPullableAnnotated(rf workableFilter) []annotation.AnnotatedIssue {
 	h.t.Helper()
-	annotated, _, err := gatherWorkableAnnotated(h.ctx, h.ap, rf)
+	annotated, _, _, err := gatherWorkableAnnotated(h.ctx, h.ap, rf)
 	if err != nil {
 		h.t.Fatalf("gatherWorkableAnnotated(%+v) error = %v", rf, err)
 	}

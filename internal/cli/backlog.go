@@ -22,7 +22,7 @@ import (
 // then finds nine of ten siblings without an epic line will conclude those nine
 // have no epic. [FRAMING:representation] The preamble is a map of the view and
 // has to be redrawn whenever the view moves.
-const backlogPreamble = `This is the full backlog in priority/rank order — every workable item, blocked or not.
+const backlogPreamble = `This is the backlog in priority/rank order — every workable item, blocked or not.
 Items at the top are ranked higher than items below them. Blocked items stay where they were ranked
 so you can see WHY the queue is shaped this way, not just what is ready next.
 Read every row: each carries its dependencies, blocking reasons, and what closing it would unblock.
@@ -35,12 +35,57 @@ Rows claimed by another checkout show who holds them and how fresh, but claim vi
 just that — visibility; only 'lit next' routes by claim, serving this checkout's own lanes first.
 Use 'lit next' to pick the top workable item to start.`
 
+// focusNotice is the one sentence a view owes its reader about WHICH rows it is
+// answering over. It is printed on every run, focused or not, because "every
+// workable item is here" and "only the focus path is here" are the two readings
+// a reader picks between, and a view that says nothing leaves them picking by
+// assumption — which is how a `--top` that landed at position 39 read as a
+// ranking bug rather than a scoped view (links-listing-ju7i).
+//
+// [FRAMING:representation] The notice is a map of the row set, derived from the
+// same scope that produced it, so it cannot describe a narrowing that did not
+// happen or stay silent about one that did.
+type focusNotice struct {
+	scope   focusScope
+	applied bool // false when --all asked for the whole queue anyway
+	hidden  int  // rows the scope excluded from this view
+	escape  string
+}
+
+// line renders the notice. The unfocused workspace states the completeness the
+// preamble used to assert on its own; a scope in force names the goals, the
+// count it withheld, and the flag that lifts it — a groove with the way out
+// written on it, never a wall.
+func (n focusNotice) line() string {
+	if !n.scope.active() {
+		return "Nothing is hidden: every workable item is listed."
+	}
+	if !n.applied {
+		return fmt.Sprintf("Focus is on %s; this run bypassed it and lists the whole queue.", n.scope.describe())
+	}
+	return fmt.Sprintf("Focused on %s — listing only its unfinished prerequisite path, in rank order; %d workable row(s) off that path are not shown (%s for the whole queue).", n.scope.describe(), n.hidden, n.escape)
+}
+
+// emptyLine says WHICH emptiness this is. An empty focused view over a backlog
+// that still holds off-path work is not an empty backlog, and answering both
+// with "(backlog empty)" collapses two facts into one value the reader cannot
+// pull apart again. [LAW:parse-dont-validate]
+func (n focusNotice) emptyLine() string {
+	if n.scope.active() && n.applied && n.hidden > 0 {
+		return fmt.Sprintf("(nothing workable on the focus path — %d row(s) off it, %s to see them)", n.hidden, n.escape)
+	}
+	return "(backlog empty)"
+}
+
 // printBacklogOutput renders the backlog as a numbered list with inline
 // per-row context (parent epic, dependencies, blocking reasons, in-progress
-// suffix, unblocks). Empty data flows through the same path — the "(backlog
-// empty)" message is one path-end, not a branch around the rendering loop.
-func printBacklogOutput(w io.Writer, columns []columnSpec, issues []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, rels map[string]relationColumns, cc claimContext) error {
+// suffix, unblocks). Empty data flows through the same path — the empty
+// message is one path-end, not a branch around the rendering loop.
+func printBacklogOutput(w io.Writer, columns []columnSpec, issues []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, rels map[string]relationColumns, cc claimContext, notice focusNotice) error {
 	if _, err := fmt.Fprintln(w, backlogPreamble); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w, notice.line()); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintln(w, strings.Repeat("─", 80)); err != nil {
@@ -51,7 +96,7 @@ func printBacklogOutput(w io.Writer, columns []columnSpec, issues []annotation.A
 	}
 
 	if len(issues) == 0 {
-		if _, err := fmt.Fprintln(w, "(backlog empty)"); err != nil {
+		if _, err := fmt.Fprintln(w, notice.emptyLine()); err != nil {
 			return err
 		}
 		return nil

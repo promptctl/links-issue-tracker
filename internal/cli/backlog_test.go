@@ -119,8 +119,14 @@ func TestBacklogTextShowsPreamble(t *testing.T) {
 	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Anything", Topic: "any", IssueType: "task", Priority: 1})
 
 	text := h.runBacklogText()
-	if !strings.Contains(text, "full backlog in priority/rank order") {
+	if !strings.Contains(text, "backlog in priority/rank order") {
 		t.Fatalf("missing preamble; got:\n%s", text)
+	}
+	// The completeness claim moved out of the preamble and into the notice, so
+	// that it can say the other thing when the view is scoped instead of
+	// asserting "full" over a narrowed list (links-listing-ju7i).
+	if !strings.Contains(text, "Nothing is hidden: every workable item is listed.") {
+		t.Fatalf("missing scope notice; got:\n%s", text)
 	}
 	if !strings.Contains(text, "─") {
 		t.Fatalf("missing separator; got:\n%s", text)
@@ -254,11 +260,11 @@ func TestBacklogNamesTheSiblingGateAndNextAgreesWithIt(t *testing.T) {
 		t.Fatalf("backlog does not say why %s is held back: want %q; got:\n%s", second, want, text)
 	}
 
-	rows, details, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
+	rows, details, _, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
 	if err != nil {
 		t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}
-	outcome := routeNext(rows, details, claims.Standings{}, selfAttribution)
+	outcome := routeNext(rows, details, claims.Standings{}, selfAttribution, focusScope{})
 	served, ok := outcome.(ServedFromNewLane)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane", outcome, outcome)
