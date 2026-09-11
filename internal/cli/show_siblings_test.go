@@ -10,9 +10,14 @@ import (
 // never through a separate "siblings:" group.
 func TestRunShowListsSiblingsExcludingSelfOnce(t *testing.T) {
 	f := newEpicFixture(t, "Plan epic", "the why")
-	first := f.addChild("First sibling")
-	focus := f.addChild("Focused child")
-	third := f.addChild("Third sibling")
+	// A lane apiece. The duplication this test guards is counted by raw id
+	// occurrences, and in one shared lane a sibling's id legitimately appears a
+	// second time — inside the next child's "earlier sibling <id> still open"
+	// marker. Separate lanes keep each child's prerequisites to itself, so a
+	// second occurrence means what this test says it means.
+	first := f.addChildLane("First sibling", "a")
+	focus := f.addChildLane("Focused child", "b")
+	third := f.addChildLane("Third sibling", "c")
 
 	out := showOutput(t, f.ap, focus)
 

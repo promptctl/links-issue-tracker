@@ -234,30 +234,24 @@ func printBacklogContext(w io.Writer, entry annotation.AnnotatedIssue, unblocksM
 // remedy differs from a declared edge's — close, re-rank, or re-lane the
 // sibling, never `lit dep`.
 //
-// Total over RoleBlocking, and the default is why. Of the registry's four
-// blocking kinds this switch phrased two and left OpenDependency to the line
-// below, but EarlierSiblingPending — registered after the switch was written —
-// fell through into silence: the backlog said "top of the queue, nothing
-// blocking" while routing skipped the row, which is the divergence
-// links-claims-gxxw was filed for. A code gap that hides a blocker must be
-// louder than the blocker it hides — the call ClassifyReadiness makes one seam
-// over. [LAW:no-silent-failure] [LAW:one-source-of-truth] the registry is the
-// single authority on what blocks; rendering may not carry a shorter list.
+// Open dependencies are the ONE omission, and it is a placement choice rather
+// than a silence: this view prints them as concrete ids on its own "depends
+// on:" line. Every other blocking kind reaches the reader through
+// BlockingReason.Phrase, the single vocabulary — the phrasing switch used to
+// live here, where it was one surface's private list and fell a kind behind the
+// registry (EarlierSiblingPending, registered after the switch was written,
+// dropped into silence: the backlog said "top of the queue, nothing blocking"
+// while routing skipped the row — links-claims-gxxw).
+// [LAW:one-source-of-truth] the registry is the single authority on what
+// blocks, Phrase on how it reads; rendering may not carry a shorter list of
+// either.
 func nonDependencyBlockingReasons(readiness IssueReadiness) []string {
 	var reasons []string
 	for _, reason := range readiness.BlockingReasons() {
-		switch reason.Kind {
-		case annotation.OpenDependency:
-			// carried by the "depends on:" line, as concrete blocker IDs
-		case annotation.MissingField:
-			reasons = append(reasons, "missing "+reason.Detail)
-		case annotation.NeedsDesign:
-			reasons = append(reasons, "needs-design")
-		case annotation.EarlierSiblingPending:
-			reasons = append(reasons, "earlier sibling "+reason.Detail+" still open")
-		default:
-			panic("nonDependencyBlockingReasons: blocking kind with no phrasing: " + reason.Kind.String())
+		if reason.Kind == annotation.OpenDependency {
+			continue
 		}
+		reasons = append(reasons, reason.Phrase())
 	}
 	return reasons
 }

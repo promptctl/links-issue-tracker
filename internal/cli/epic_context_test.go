@@ -5,7 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
@@ -13,10 +15,14 @@ import (
 // epicFixture builds an epic and returns the app plus a helper to add children
 // in rank order (creation order = bottom rank, so children stack in call order).
 type epicFixture struct {
-	t      *testing.T
-	ctx    context.Context
-	ap     *app.App
-	epicID string
+	t   *testing.T
+	ctx context.Context
+	ap  *app.App
+	// requiredFields is the repo ready-policy the plan slice is built under.
+	// Nil — the default — is the no-policy case every test but the missing-field
+	// one wants; a test that sets it is asking that gate to fire.
+	requiredFields []string
+	epicID         string
 }
 
 func newEpicFixture(t *testing.T, epicTitle, epicDesc string) epicFixture {
@@ -69,7 +75,7 @@ func (f epicFixture) block(blocked, blocker string) {
 
 func (f epicFixture) render(focused string) string {
 	f.t.Helper()
-	ec, err := buildEpicContext(f.ctx, f.ap.Store, f.epicID, focused)
+	ec, err := buildEpicContext(f.ctx, f.ap.Store, f.requiredFields, f.epicID, focused)
 	if err != nil {
 		f.t.Fatalf("buildEpicContext error = %v", err)
 	}
@@ -122,7 +128,7 @@ func TestRenderEpicContextFrozenBlockerStopsBlocking(t *testing.T) {
 	if !strings.Contains(out, want) {
 		t.Errorf("missing line %q in:\n%s", want, out)
 	}
-	if strings.Contains(out, "[blocked-by "+blocker+"]") {
+	if strings.Contains(out, blocker+" still open") || strings.Contains(out, "depends on "+blocker) {
 		t.Errorf("deleted blocker %s should not block, got:\n%s", blocker, out)
 	}
 }
@@ -161,12 +167,17 @@ func TestRenderEpicContextAllClosed(t *testing.T) {
 	}
 }
 
+// Every marker the sum can render, in one epic. Each child sits in its own lane
+// so the only thing holding the blocked one back is its declared dependency —
+// in the default (empty) lane these four would be one sequential chain and the
+// later ones would be held back by the earlier ones, which is its own test
+// below.
 func TestRenderEpicContextMixedStatesWithFocus(t *testing.T) {
 	f := newEpicFixture(t, "Mixed epic", "# Mixed\nplan context")
-	closed := f.addChild("Closed one")
-	inProgress := f.addChild("Working one")
-	ready := f.addChild("Ready one")
-	blocked := f.addChild("Blocked one")
+	closed := f.addChildLane("Closed one", "a")
+	inProgress := f.addChildLane("Working one", "b")
+	ready := f.addChildLane("Ready one", "c")
+	blocked := f.addChildLane("Blocked one", "d")
 
 	f.transition(closed, model.Done{})
 	f.transition(inProgress, model.Start{Assignee: "test"})
@@ -175,10 +186,10 @@ func TestRenderEpicContextMixedStatesWithFocus(t *testing.T) {
 	out := f.render(ready)
 
 	wantLines := []string{
-		"    [closed]      " + closed + "  Closed one",
-		"    [in_progress] " + inProgress + "  Working one",
-		"  ▶ [ready]       " + ready + "  Ready one   (you are here)",
-		"    [blocked-by " + ready + "] " + blocked + "  Blocked one",
+		"    [closed]      " + closed + "  Closed one  [lane: a]",
+		"    [in_progress] " + inProgress + "  Working one  [lane: b]",
+		"  ▶ [ready]       " + ready + "  Ready one  [lane: c]   (you are here)",
+		"    [blocked: depends on " + ready + "] " + blocked + "  Blocked one  [lane: d]",
 	}
 	for _, want := range wantLines {
 		if !strings.Contains(out, want) {
@@ -198,6 +209,9 @@ func (f epicFixture) addChildLane(title, lane string) string {
 	f.t.Helper()
 	child, err := f.ap.Store.CreateIssue(f.ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: title, Topic: "epic-view", IssueType: "task", Priority: 0, ParentID: f.epicID, Lane: lane,
+		// Same premise as addChild: creation order is rank order, stated here
+		// rather than inherited from the product default.
+		Placement: storage.RankBottom,
 	})
 	if err != nil {
 		f.t.Fatalf("CreateIssue(child %q) error = %v", title, err)
@@ -226,6 +240,125 @@ func TestRenderEpicContextShowsLaneGrouping(t *testing.T) {
 	}
 }
 
+// The repro for links-epic-context-oezb: two children in one lane, the first
+// still open. The lane gate holds the second back — `lit next` refuses to serve
+// it and `lit backlog` prints the reason — so the plan slice calling it [ready]
+// was the one surface of the three answering differently.
+func TestRenderEpicContextEarlierLaneMateHoldsSiblingBack(t *testing.T) {
+	f := newEpicFixture(t, "Sequential epic", "one lane, two children")
+	first := f.addChild("First")
+	second := f.addChild("Second")
+
+	out := f.render("")
+
+	want := "[blocked: earlier sibling " + first + " still open] " + second + "  Second"
+	if !strings.Contains(out, want) {
+		t.Errorf("second child is held back by %s; want %q in:\n%s", first, want, out)
+	}
+
+	// The other half of the claim: routing, over the same store, serves the
+	// first child and not the second. The plan slice and the pick are pinned
+	// together here, so a future change that moves one has to move both.
+	rows, details, err := gatherWorkableAnnotated(f.ctx, f.ap, workableFilter{})
+	if err != nil {
+		t.Fatalf("gatherWorkableAnnotated error = %v", err)
+	}
+	outcome := routeNext(rows, details, claims.Standings{}, selfAttribution)
+	served, ok := outcome.(ServedFromNewLane)
+	if !ok {
+		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane", outcome, outcome)
+	}
+	if served.Row.ID != first {
+		t.Fatalf("served = %q, want %q — the child the plan slice marks ready", served.Row.ID, first)
+	}
+}
+
+// Acceptance 2: the ready-policy gate. A child with an empty description under
+// a repo that requires one is unservable, and the marker says which field —
+// this kind has no id to name, which is why the marker stopped being
+// "[blocked-by <id>]"-shaped.
+func TestRenderEpicContextMissingRequiredFieldIsNotReady(t *testing.T) {
+	f := newEpicFixture(t, "Policy epic", "required fields")
+	f.requiredFields = []string{"description"}
+	child := f.addChild("No description")
+
+	out := f.render("")
+
+	want := "[blocked: missing description] " + child + "  No description"
+	if !strings.Contains(out, want) {
+		t.Errorf("child with no description is held back by the ready policy; want %q in:\n%s", want, out)
+	}
+}
+
+// An epic nested under an epic is a child like any other. It matters because
+// the workable pipeline excludes containers by construction (a container owns
+// no status of its own), so routing the plan slice through that pipeline's
+// annotators put a container in front of them for the first time: the field
+// annotator marshals it, the orphan annotator reads its derived state, the lane
+// gate asks for its lane. This pins that the whole set tolerates one, rather
+// than the plan slice failing on an epic shape it used to render.
+func TestRenderEpicContextNestedEpicChildIsClassified(t *testing.T) {
+	f := newEpicFixture(t, "Outer epic", "an epic under an epic")
+	f.requiredFields = []string{"description"}
+	inner, err := f.ap.Store.CreateIssue(f.ctx, storage.CreateIssueInput{
+		Prefix: "test", Title: "Inner epic", Topic: "epic-view", IssueType: "epic", Priority: 0,
+		ParentID: f.epicID, Placement: storage.RankBottom,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue(inner epic) error = %v", err)
+	}
+
+	out := f.render("")
+
+	if !strings.Contains(out, inner.ID+"  Inner epic") {
+		t.Errorf("a nested epic should render as a child row, got:\n%s", out)
+	}
+	// It has no description, and the fixture requires one, so the ready policy
+	// reaches a container exactly as it reaches a leaf.
+	if !strings.Contains(out, "[blocked: missing description] "+inner.ID) {
+		t.Errorf("nested epic should carry the ready-policy reason, got:\n%s", out)
+	}
+}
+
+// Acceptance 3, and the gate that keeps this bug from returning in a fifth
+// kind's clothing: EVERY kind the registry classifies as blocking must move a
+// child off [ready] and reach the reader as words. Driven off the registry
+// rather than a list maintained beside it — the counterpart of
+// TestBacklogPhrasesEveryBlockingKind, which pins the same property for the
+// backlog's "blocked:" line.
+//
+// This asserts the classifier is total over the verdict; that the verdict
+// reaching it is the FULL one is what the two tests above cover, each through
+// a kind the old edge-walking derivation could not see.
+// [LAW:one-source-of-truth] [LAW:verifiable-goals]
+func TestEpicContextMarkerReflectsEveryBlockingKind(t *testing.T) {
+	t.Parallel()
+	child, err := model.HydrateStatus(model.Issue{ID: "test-1", IssueType: model.TypeTask}, model.StatusView{Value: model.StateOpen})
+	if err != nil {
+		t.Fatalf("HydrateStatus error = %v", err)
+	}
+	readyMarker := statusReady{}.marker()
+	for _, kind := range annotation.Kinds() {
+		if kind.ReadinessRole() != annotation.RoleBlocking {
+			continue
+		}
+		t.Run(kind.String(), func(t *testing.T) {
+			readiness := ClassifyReadiness([]annotation.Annotation{{Kind: kind, Message: "test-detail"}})
+			marker := classifyChildStatus(child, readiness).marker()
+			if marker == readyMarker {
+				t.Fatalf("kind %s left the child marked %s — a child the gate holds back must never read as startable", kind, marker)
+			}
+			if !strings.HasPrefix(marker, "[blocked: ") || marker == "[blocked: ]" {
+				t.Errorf("kind %s rendered %q, want a blocked marker carrying a reason", kind, marker)
+			}
+		})
+	}
+}
+
+// A declared edge onto an earlier lane-mate is two prerequisites at once, and
+// the marker names both: closing the sibling discharges them together, but a
+// marker that mentioned only the edge would leave a reader who re-laned the
+// child expecting it to come free.
 func TestRenderEpicContextChildBlockedBySibling(t *testing.T) {
 	f := newEpicFixture(t, "Sibling block", "deps")
 	blocker := f.addChild("Blocker sibling")
@@ -233,7 +366,7 @@ func TestRenderEpicContextChildBlockedBySibling(t *testing.T) {
 	f.block(blocked, blocker)
 
 	out := f.render("")
-	want := "[blocked-by " + blocker + "] " + blocked + "  Blocked sibling"
+	want := "[blocked: depends on " + blocker + "; earlier sibling " + blocker + " still open] " + blocked + "  Blocked sibling"
 	if !strings.Contains(out, want) {
 		t.Errorf("sibling blocker should be named, want %q in:\n%s", want, out)
 	}
@@ -252,7 +385,7 @@ func TestRenderEpicContextChildBlockedByNonChild(t *testing.T) {
 	f.block(blocked, outsider.ID)
 
 	out := f.render("")
-	want := "[blocked-by " + outsider.ID + "] " + blocked + "  Blocked by outsider"
+	want := "[blocked: depends on " + outsider.ID + "] " + blocked + "  Blocked by outsider"
 	if !strings.Contains(out, want) {
 		t.Errorf("external blocker should be named inline, want %q in:\n%s", want, out)
 	}
@@ -274,8 +407,8 @@ func TestRenderEpicContextClosedBlockerUnblocks(t *testing.T) {
 	if !strings.Contains(out, "[ready]       "+blocked+"  Now ready") {
 		t.Errorf("dependent should be ready once blocker closed:\n%s", out)
 	}
-	if strings.Contains(out, "blocked-by") {
-		t.Errorf("no open blockers remain, should not render blocked-by:\n%s", out)
+	if strings.Contains(out, "[blocked:") {
+		t.Errorf("no open blockers remain, should not render a blocked marker:\n%s", out)
 	}
 }
 

@@ -676,13 +676,16 @@ and both columns render `-`.
 `buildEpicContext` (`epic_context.go:116-166`):
 - `GetRelationsByIDs([epicID])`; a missing epic → `storage.NotFoundError`
   (`epic_context.go:125-128`).
-- One batch `GetRelationsByIDs(childIDs)`; a child listed but absent →
-  `storage.NotFoundError` (`epic_context.go:136-157`).
-- Per child, `classifyChildStatus(child, openBlockers(childRel))`
-  (`epic_context.go:98-109`): `closed` → `[closed]`; `in_progress` →
-  `[in_progress]`; else if it has ≥1 open blocker → `[blocked-by <firstBlockerID>]`;
-  else `[ready]` (markers at `epic_context.go:28-42`). Blockers are the issue's
-  non-closed `DependsOn`, sorted by id (`openBlockers`, `epic_context.go:233-240`).
+- The children run through `annotateIssues` (`cli.go`) — the same annotator set
+  the workable pipeline uses — which batches their relations; a child listed but
+  absent → `storage.NotFoundError`.
+- Per child, `classifyChildStatus(child, ClassifyReadiness(row.Annotations))`:
+  archived/deleted → `[archived]` / `[deleted]`; `closed` → `[closed]`;
+  `in_progress` → `[in_progress]`; else the readiness verdict decides — ready →
+  `[ready]`, otherwise `[blocked: <reason>[; <reason>…]]` over every blocking
+  reason the annotation registry minted, phrased by `BlockingReason.Phrase`
+  (`readiness.go`): `depends on <id>`, `earlier sibling <id> still open`,
+  `missing <field>`, `needs-design`.
 - Cross-epic edges: for the epic node and every child that is not closed, each
   open `DependsOn` outside the epic membership set becomes a `BlockedExternally`
   edge, and each open `Blocks` outside becomes a `BlocksExternally` edge

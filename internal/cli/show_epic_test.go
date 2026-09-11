@@ -40,7 +40,12 @@ func TestRunShowChildRendersEpicBlockWithFocus(t *testing.T) {
 	if !strings.Contains(out, "Why: Why this exists") {
 		t.Errorf("epic block should carry the why:\n%s", out)
 	}
-	want := "  ▶ [ready]       " + focus + "  Focused child   (you are here)"
+	// Both children sit in the default lane, which is one sequential chain, so
+	// the focused child is genuinely held back by the sibling ranked ahead of
+	// it. Asserted through runShow rather than the builder: this is the whole
+	// path — show → epic block → the readiness gate `lit next` routes on —
+	// answering with one verdict. (links-epic-context-oezb)
+	want := "  ▶ [blocked: earlier sibling " + sibling + " still open] " + focus + "  Focused child   (you are here)"
 	if !strings.Contains(out, want) {
 		t.Errorf("focused child should be marked you-are-here, want %q in:\n%s", want, out)
 	}
@@ -60,9 +65,11 @@ func TestRunShowEpicRendersChildrenNoFocus(t *testing.T) {
 	if !strings.Contains(out, "Epic: "+f.epicID+" — Top epic") {
 		t.Errorf("epic show should append the epic block:\n%s", out)
 	}
+	// One lane, so B waits on A — the epic-level view answers exactly as the
+	// leaf-level one above does.
 	for _, want := range []string{
 		"    [ready]       " + a + "  Child A",
-		"    [ready]       " + b + "  Child B",
+		"    [blocked: earlier sibling " + a + " still open] " + b + "  Child B",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("epic show should list children, missing %q in:\n%s", want, out)

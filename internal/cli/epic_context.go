@@ -17,9 +17,9 @@ import (
 // aren't sealed — exhaustiveness here rests on locality (all variants live in
 // this file), not the compiler.
 // [LAW:types-are-the-program] What the compiler *does* enforce is the per-variant
-// payload: a "blocked" child carries its blocker id in the type, and
-// closed/in_progress/ready have no field to carry one — so the
-// blocked-with-no-blocker state is unrepresentable and no callsite defends
+// payload: a "blocked" child carries at least one blocking reason in the type,
+// and closed/in_progress/ready have no field to carry one — so the
+// blocked-with-no-reason state is unrepresentable and no callsite defends
 // against it.
 type childStatus interface {
 	marker() string
@@ -37,9 +37,33 @@ type statusReady struct{}
 
 func (statusReady) marker() string { return "[ready]" }
 
-type statusBlocked struct{ blocker string }
+// statusBlocked is a child the readiness gate holds back, carrying every reason
+// it holds it back FOR. The payload is head-plus-tail rather than a slice so a
+// blocked child with no reason cannot be constructed: the marker's claim is
+// "not startable, and here is why", and a why-less blocked marker would be the
+// [ready] bug in the other direction.
+//
+// The marker used to read "[blocked-by <id>]", a shape that only fits a reason
+// whose detail IS an id. Two of the registry's four blocking kinds have no id
+// to name — a missing field, a needs-design label — so the id-shaped marker is
+// gone: one phrasing (BlockingReason.Phrase) covers every kind, and the
+// renderer never asks which kind it holds. [LAW:dataflow-not-control-flow]
+type statusBlocked struct {
+	reason BlockingReason   // the witness — a blocked child always has at least one
+	more   []BlockingReason // any further reasons, in annotation order
+}
 
-func (s statusBlocked) marker() string { return "[blocked-by " + s.blocker + "]" }
+func (s statusBlocked) marker() string {
+	phrases := []string{s.reason.Phrase()}
+	for _, reason := range s.more {
+		phrases = append(phrases, reason.Phrase())
+	}
+	// Every reason, not the first: naming one of three invites closing it and
+	// finding the child still unservable — the smaller version of the same lie
+	// this marker was filed for (links-epic-context-oezb). The backlog names
+	// them all too, so the two surfaces read alike.
+	return "[blocked: " + strings.Join(phrases, "; ") + "]"
+}
 
 // statusFrozen is a child that has left the flow — archived or deleted. The
 // sum expressed four display states where the domain has five: a deleted child
@@ -93,23 +117,30 @@ type crossEpicEdges struct {
 }
 
 // statusMarkerWidth pads the fixed-form markers ([closed]/[in_progress]/[ready])
-// to a common column so child titles align. blocked-by markers carry an issue
-// id of unbounded width and intentionally overflow this column rather than
-// pushing every title rightward to accommodate the longest id.
+// to a common column so child titles align. Blocked markers carry reasons of
+// unbounded width and intentionally overflow this column rather than pushing
+// every title rightward to accommodate the longest one.
 const statusMarkerWidth = len("[in_progress]")
 
-// classifyChildStatus maps a child issue and its live-blocker ids to a display
-// status. blockers is the child's live blocker ids in a deterministic order;
-// the first entry names the blocker in a blocked status.
+// classifyChildStatus maps a child issue and the readiness verdict for it to a
+// display status.
 // [LAW:dataflow-not-control-flow] The match is over the child's discriminated
-// lifecycle state; open vs blocked is decided by the blocker-count value, not
-// by whether some branch runs.
+// lifecycle state; ready vs blocked is decided by the verdict value, not by
+// whether some branch runs.
 //
 // The retention axis is read first because it dominates: an archived or deleted
 // child's status describes work nobody may do, so reporting it as ready or
 // blocked would answer a question the reader did not ask. [LAW:one-source-of-truth]
 // The word comes from issueStanding, the one composer of the two axes.
-func classifyChildStatus(child model.Issue, blockers []string) childStatus {
+//
+// [LAW:single-enforcer] readiness is the gate's verdict, read here, never
+// recomputed here. This display used to derive its own blocker list from
+// `blocks` edges alone, so a child held back by any of the registry's three
+// other blocking kinds — a missing required field, needs-design, an earlier
+// same-lane sibling — was drawn [ready] while `lit next` refused to serve it
+// (links-epic-context-oezb). IsReady is false exactly when BlockingReasons is
+// non-empty, by that type's construction, so the head index below is total.
+func classifyChildStatus(child model.Issue, readiness IssueReadiness) childStatus {
 	if model.Frozen(child.Retention()) {
 		return statusFrozen{standing: issueStanding(child)}
 	}
@@ -119,18 +150,23 @@ func classifyChildStatus(child model.Issue, blockers []string) childStatus {
 	case model.StateInProgress:
 		return statusInProgress{}
 	}
-	if len(blockers) > 0 {
-		return statusBlocked{blocker: blockers[0]}
+	if readiness.IsReady() {
+		return statusReady{}
 	}
-	return statusReady{}
+	reasons := readiness.BlockingReasons()
+	return statusBlocked{reason: reasons[0], more: reasons[1:]}
 }
 
 // buildEpicContext resolves an epic and its children into an EpicContext.
 // focusedChildID is the child the caller is "at" ("" for none, e.g. an
-// epic-level call). Each child's detail is fetched once and feeds both its
+// epic-level call). requiredFields is the repo's ready-policy, passed as a
+// value exactly as classifyWorkable takes it, so the annotation that a required
+// field is missing reaches this slice too.
+//
+// Each child is annotated once and its relations fetched once; both feed its
 // status classification and the cross-epic edge collection, so there is one
 // resolved source per child rather than a separate fetch per concern.
-func buildEpicContext(ctx context.Context, st storage.Store, epicID, focusedChildID string) (EpicContext, error) {
+func buildEpicContext(ctx context.Context, st storage.Store, requiredFields []string, epicID, focusedChildID string) (EpicContext, error) {
 	epicRels, err := st.GetRelationsByIDs(ctx, []string{epicID})
 	if err != nil {
 		return EpicContext{}, err
@@ -144,17 +180,17 @@ func buildEpicContext(ctx context.Context, st storage.Store, epicID, focusedChil
 		return EpicContext{}, storage.NotFoundError{Entity: "issue", ID: epicID}
 	}
 	internal := epicMemberIDs(epic.Issue.ID, epic.Children)
-	childIDs := make([]string, len(epic.Children))
-	for i, child := range epic.Children {
-		childIDs[i] = child.ID
-	}
-	// [LAW:dataflow-not-control-flow] One batch resolves every child's relations
-	// at once; the loop below is pure map lookups, not a fetch per child.
-	childRels, err := st.GetRelationsByIDs(ctx, childIDs)
+	// The children go through the SAME annotator set `lit next` and `lit backlog`
+	// route on, so all three surfaces answer "can this be started" from one
+	// verdict. [LAW:single-enforcer] Annotate preserves input order, so the rows
+	// come back in the epic-rank order epic.Children arrived in, and the batch
+	// fetch inside makes the loop below pure map lookups rather than a fetch per
+	// child. [LAW:dataflow-not-control-flow]
+	annotated, childRels, err := annotateIssues(ctx, st, requiredFields, epic.Children)
 	if err != nil {
 		return EpicContext{}, err
 	}
-	children := make([]epicChild, 0, len(epic.Children))
+	children := make([]epicChild, 0, len(annotated))
 	var cross crossEpicEdges
 	// [LAW:one-source-of-truth] "Inside the epic" is one boundary used two ways:
 	// epicMemberIDs excludes intra-epic edges, and collect gathers the crossing
@@ -162,19 +198,21 @@ func buildEpicContext(ctx context.Context, st storage.Store, epicID, focusedChil
 	// boundary exactly as a child's do — collect from the epic too, or the two
 	// uses of "inside" would disagree.
 	cross.collect(epic, internal)
-	// Children are iterated in epic-rank order; each one's data comes from its
-	// own freshly-resolved bundle, never the epic snapshot.
-	for _, child := range epic.Children {
+	for _, row := range annotated {
 		// A child listed as an epic member but absent from the batch is a data
 		// inconsistency, not a row to fabricate — fail loudly rather than append
 		// a zero-value Issue. [LAW:no-defensive-null-guards]
-		childRel, ok := childRels[child.ID]
+		childRel, ok := childRels[row.ID]
 		if !ok {
-			return EpicContext{}, storage.NotFoundError{Entity: "issue", ID: child.ID}
+			return EpicContext{}, storage.NotFoundError{Entity: "issue", ID: row.ID}
 		}
+		// The lifecycle marker and the readiness verdict describe row.Issue, the
+		// one value the annotators read, so the two halves of a child's status
+		// can never be drawn from two different snapshots of it.
+		// [LAW:one-source-of-truth]
 		children = append(children, epicChild{
-			Issue:  childRel.Issue,
-			Status: classifyChildStatus(childRel.Issue, liveBlockers(childRel)),
+			Issue:  row.Issue,
+			Status: classifyChildStatus(row.Issue, ClassifyReadiness(row.Annotations)),
 		})
 		cross.collect(childRel, internal)
 	}
@@ -216,12 +254,17 @@ func epicViewFor(issue model.Issue, parent *model.Issue) *epicTarget {
 // resolution meets the show text path — the build/render seam stays pure.
 // [LAW:no-defensive-null-guards] target is an explicit optional: nil is the
 // real "no epic membership" case, not a defended-against bug.
-func writeEpicContext(ctx context.Context, st storage.Store, w io.Writer, detail model.IssueDetail) error {
+//
+// The required-fields policy arrives as a value rather than an *app.App for the
+// reason classifyWorkable states: the policy is repo config, the rest of this
+// path is store data, and keeping them apart is what lets a plain store drive
+// the builder. [LAW:locality-or-seam]
+func writeEpicContext(ctx context.Context, st storage.Store, requiredFields []string, w io.Writer, detail model.IssueDetail) error {
 	target := epicViewFor(detail.Issue, detail.Parent)
 	if target == nil {
 		return nil
 	}
-	ec, err := buildEpicContext(ctx, st, target.EpicID, target.Focused)
+	ec, err := buildEpicContext(ctx, st, requiredFields, target.EpicID, target.Focused)
 	if err != nil {
 		return err
 	}
@@ -240,22 +283,6 @@ func epicMemberIDs(epicID string, children []model.Issue) map[string]struct{} {
 		set[child.ID] = struct{}{}
 	}
 	return set
-}
-
-// liveBlockers returns the ids of a resolved issue's direct blockers that are
-// still in play, sorted by id so the blocker named in a blocked marker is
-// deterministic. Same-epic blockers are kept — an inline blocked-by marker
-// names whichever live blocker comes first, sibling or not — so nothing is
-// excluded. The set matches newBlockerAnnotator's exactly, so the epic plan's
-// blocked markers and the readiness gate never disagree about one edge.
-// [LAW:one-source-of-truth]
-func liveBlockers(rel storage.IssueRelations) []string {
-	var ids []string
-	for _, dep := range inPlayExcluding(rel.DependsOn, nil) {
-		ids = append(ids, dep.ID)
-	}
-	sort.Strings(ids)
-	return ids
 }
 
 // collect appends the boundary-crossing blocks edges incident to one epic

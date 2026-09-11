@@ -24,6 +24,31 @@ type BlockingReason struct {
 	Detail string
 }
 
+// Phrase renders one blocking reason as the words a reader sees. Every surface
+// that names a blocker reads this one vocabulary: the backlog's "blocked:"
+// line (minus open dependencies, which it gives their own line) and the epic
+// plan's blocked marker.
+// [LAW:one-source-of-truth] A second surface phrasing kinds for itself is a
+// second list to keep current, and the shorter of the two lists is always the
+// one nobody notices — the epic plan carried exactly that gap.
+// [LAW:no-silent-failure] The default panics rather than rendering a blocking
+// kind as empty text: a fifth kind must fail loudly here instead of arriving on
+// screen as a blank reason or, worse, no reason at all.
+func (r BlockingReason) Phrase() string {
+	switch r.Kind {
+	case annotation.OpenDependency:
+		return "depends on " + r.Detail
+	case annotation.MissingField:
+		return "missing " + r.Detail
+	case annotation.NeedsDesign:
+		return NeedsDesignLabel
+	case annotation.EarlierSiblingPending:
+		return "earlier sibling " + r.Detail + " still open"
+	default:
+		panic("BlockingReason.Phrase: blocking kind with no phrasing: " + r.Kind.String())
+	}
+}
+
 // IssueReadiness is the sealed readiness classification of one issue's
 // annotations. The three fields mirror the three interpretation families:
 // membership (blocking), staleness (orphaned), and rank hygiene (inversions).
