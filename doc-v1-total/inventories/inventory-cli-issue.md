@@ -260,8 +260,8 @@ and transitions via the table below.
 - Read commands print `printSyncStalenessWarning(ctx, w, ws, store, now)` FIRST,
   before their payload: `backlog` (`workable.go:137`), `next` (`next.go:53`),
   `show` **only in full-detail mode** (`cli.go:841-845`) — deliberately suppressed
-  under `--field` so the machine-parseable output isn't corrupted
-  (`cli.go:863-868`). Defined at `sync_staleness.go:186`.
+  under `--field` so the machine-parseable output isn't corrupted.
+  Defined at `sync_staleness.go:186`.
 - Write commands get `printMutationSyncStalenessWarning(stdout, ws, now)` after
   the handler succeeds and after the engine closes (`cli.go:135-137`,
   `sync_staleness.go:217`).
