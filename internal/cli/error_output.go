@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
@@ -75,6 +76,22 @@ func commandErrorReason(err error) string {
 	}
 	var storeValidation storage.ValidationError
 	if errors.As(err, &storeValidation) {
+		return "validation_refused"
+	}
+	// An action on an epic is refused because an epic's state is its children's
+	// to set. Both halves are terminal — no retry of the same command can move
+	// either — so neither may reach the default's "Retry the command", which is
+	// what told the agent closing a finished epic to loop on a condition that
+	// cannot change (links-cli-errors-1u9g). They are separate reasons because
+	// the act each calls for is different: one asks for a state that already
+	// holds and wants nothing done at all, the other asks for something only the
+	// children can do, and a single reason could only name one of them.
+	// [LAW:one-type-per-behavior]
+	var containerAction model.ContainerActionError
+	if errors.As(err, &containerAction) {
+		if containerAction.Satisfied() {
+			return "state_already_holds"
+		}
 		return "validation_refused"
 	}
 	// The router's two terminal answers. Neither is a fault: routing asked a
@@ -188,6 +205,14 @@ func commandErrorRemediation(reason string) string {
 		// remediation-contradicts-message defect links-cli-cpou removed one
 		// level up. [LAW:no-silent-failure]
 		return "Do not retry unchanged — nothing here is startable, which is the backlog's state rather than a fault. If `--type`, `--labels`, `--assignee`, or `--status` narrowed this run, drop the filter and ask again. Otherwise `lit backlog` shows the whole queue and who holds what, and `lit new` adds work if it is genuinely empty."
+	case "state_already_holds":
+		// No act to name, because there is none: the caller asked for a state
+		// the workspace is already in. It must still say "do not retry" — this
+		// is the exact condition whose old remediation sent an unattended agent
+		// back around a loop on a state nothing it runs can change. How the
+		// state was reached is the message's to say, not this line's, so nothing
+		// here restates it. [LAW:one-source-of-truth]
+		return "No action is needed — the command asked for a state the workspace is already in, and the message above says how that state was reached. Do not retry: running it again cannot change the answer, and `lit doctor` has nothing to diagnose because nothing is broken."
 	case "outside_git_workspace":
 		return "Run the command inside a git repository/worktree with links initialized."
 	case "bulk_partial_failure":

@@ -31,12 +31,14 @@ Exit codes are a contract, not just 0/1:
 | 3 | Validation error (missing required value, unsupported value) |
 | 4 | Issue or resource not found |
 | 5 | Conflict (e.g. sync merge conflict) |
-| 6 | Nothing to hand back (`lit next` had no ticket for you) |
+| 6 | Nothing to hand back (`lit next` had no ticket for you), or nothing to do (the state the command asked for already holds) |
 | 7 | Data corruption detected |
 
-Code 6 is not a failure: the command ran correctly and the honest answer was empty. It
-exists so a caller looping `lit next` can tell "stop, there is nothing for you" from
-"lit is broken" without reading the message.
+Code 6 is not a failure: the command ran correctly and changed nothing. It exists so a
+caller looping `lit next` can tell "stop, there is nothing for you" from "lit is broken"
+without reading the message, and it carries the same answer for a mutation that was
+already satisfied — `lit done` on an epic whose children are all closed, where the epic
+closed itself when its last child did and there is no transition left to make.
 
 ### Identity
 

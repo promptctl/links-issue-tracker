@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
@@ -58,6 +59,28 @@ func TestCommandErrorReason(t *testing.T) {
 		// reason it always had. The arms above dispatch on their concrete types,
 		// so adding them shadowed nothing.
 		{"genuine fault still classifies", CorruptionError{Message: "integrity_check failed"}, "corruption_detected"},
+		// A container action carries its own split: the request the children
+		// already satisfy needs nothing done, while the one they do not is a
+		// deterministic refusal joining the existing validation reason. Both
+		// must stay off the default's retry advice (links-cli-errors-1u9g).
+		{
+			"container action already satisfied",
+			model.ContainerActionError{
+				ID: "links-epic-abcd", Action: model.ActionDone,
+				Target: model.StateClosed, State: model.StateClosed,
+				Progress: model.Progress{Total: 3, Closed: 3},
+			},
+			"state_already_holds",
+		},
+		{
+			"container action refused",
+			model.ContainerActionError{
+				ID: "links-epic-abcd", Action: model.ActionDone,
+				Target: model.StateClosed, State: model.StateOpen,
+				Progress: model.Progress{Total: 3, Closed: 1},
+			},
+			"validation_refused",
+		},
 	}
 	for _, tc := range tests {
 		tc := tc

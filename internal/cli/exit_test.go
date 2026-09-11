@@ -3,6 +3,7 @@ package cli
 import (
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -33,6 +34,30 @@ func TestExitCodeMappings(t *testing.T) {
 		// was is carried by the reason and the message (links-cli-cpou).
 		{name: "router scope exhausted", err: Exhausted{Epics: []string{"links-epic-abcd"}}, want: ExitNoWork},
 		{name: "router no ready work", err: NoWork{}, want: ExitNoWork},
+		// A container action splits on whether the children already establish
+		// the state that was asked for: a satisfied request changed nothing and
+		// shares the "nothing to hand back" code, while a refusal is an ordinary
+		// domain-constraint rejection. Neither is ExitGeneric any more
+		// (links-cli-errors-1u9g). The command-driven proof is in
+		// container_action_error_test.go; these two pin the mapping itself.
+		{
+			name: "container action already satisfied",
+			err: model.ContainerActionError{
+				ID: "links-epic-abcd", Action: model.ActionDone,
+				Target: model.StateClosed, State: model.StateClosed,
+				Progress: model.Progress{Total: 3, Closed: 3},
+			},
+			want: ExitNoWork,
+		},
+		{
+			name: "container action refused",
+			err: model.ContainerActionError{
+				ID: "links-epic-abcd", Action: model.ActionStart,
+				Target: model.StateInProgress, State: model.StateClosed,
+				Progress: model.Progress{Total: 3, Closed: 3},
+			},
+			want: ExitValidation,
+		},
 	}
 
 	for _, tc := range tests {

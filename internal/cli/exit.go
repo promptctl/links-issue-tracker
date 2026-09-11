@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
@@ -14,11 +15,14 @@ const (
 	ExitValidation = 3
 	ExitNotFound   = 4
 	ExitConflict   = 5
-	// ExitNoWork: the command ran correctly and has no ticket to hand back.
+	// ExitNoWork: the command ran correctly and changed nothing — it had no
+	// ticket to hand back, or the state it was asked for already held.
 	// Distinct from ExitGeneric because a caller looping `lit next` has to tell
 	// "stop, there is nothing for you" from "lit is broken", and under one code
 	// its only way to do that was to parse the English — the thing every other
-	// sink in this package exists to stop callers doing.
+	// sink in this package exists to stop callers doing. The already-in-state
+	// half is the same question asked of a mutation ("did I need to do
+	// anything?") and gets the same answer rather than a code of its own.
 	//
 	// Not ExitOK: for `lit next`, 0 means "a ticket is on stdout". Exiting 0
 	// with no row would hand the caller a success-shaped void.
@@ -81,6 +85,21 @@ func ExitCode(err error) int {
 	}
 	var storeValidation storage.ValidationError
 	if errors.As(err, &storeValidation) {
+		return ExitValidation
+	}
+	// The two halves of a container refusal are different answers and exit
+	// differently. A request the children already satisfy ran correctly and
+	// changed nothing — the same shape as the router's "nothing to hand back",
+	// so it shares that code rather than inventing a second one for it. A
+	// refusal is a domain-constraint rejection like any other. Neither is
+	// ExitGeneric, which is what made the release-closing `lit done <epic>`
+	// report its workflow's final step as a failure while the state it asked
+	// for was exactly the state that held. [LAW:no-mode-explosion]
+	var containerAction model.ContainerActionError
+	if errors.As(err, &containerAction) {
+		if containerAction.Satisfied() {
+			return ExitNoWork
+		}
 		return ExitValidation
 	}
 	var unsupported UnsupportedError
