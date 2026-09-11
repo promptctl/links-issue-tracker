@@ -151,8 +151,9 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 // The two verbs spell their sentences out rather than sharing one with the
 // object substituted, because English puts the pronoun in different places:
 // "claim it", but "take it over" — a particle verb splits around a pronoun and
-// reads wrong with one trailing it. All four are pinned as the product of verb
-// and lane shape in next_route_test.go.
+// reads wrong with one trailing it. next_route_test.go pins all six cells of
+// verb and lane shape across these four sentences: a named lane and an epic's
+// default lane differ only in the words Describe hands back.
 func startAdvice(row annotation.AnnotatedIssue, lane model.LaneID) string {
 	described, named := lane.Describe()
 	if row.State() == model.StateInProgress {
