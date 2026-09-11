@@ -1,5 +1,25 @@
 version: "2"
 
+# [LAW:single-enforcer] formatting is gated here rather than by a separate
+# `gofmt -l` workflow step, so one configuration decides it for CI (the lint
+# job) and for `just lint` alike. A second step would be a second rulebook to
+# drift from this one, and only CI would ever run it.
+#
+# gofmt's output is toolchain-dependent, so the gate is only deterministic
+# because both ends are pinned: golangci-lint at v2.8.0 in ci.yml, and the Go
+# it formats with via setup-go's go-version-file: go.mod. An unpinned gate
+# fails a PR for drift its author never wrote.
+#
+# Do not "simplify" this into a `gofmt -l .` step. A developer checkout carries
+# nested git worktrees under .claude/worktrees/ holding other sessions'
+# branches — 36 gofmt-dirty files there as this landed — and a bare walk reports
+# every one of them. golangci-lint skips hidden directories, so it sees only
+# this tree. CI checks out clean, so that difference is invisible there and
+# would surface only locally, which is to say only as noise nobody can act on.
+formatters:
+  enable:
+    - gofmt
+
 linters:
   default: none
   enable:
