@@ -19,8 +19,8 @@ type epicFixture struct {
 	ctx context.Context
 	ap  *app.App
 	// requiredFields is the repo ready-policy the plan slice is built under.
-	// Nil — the default — is the no-policy case every test but the missing-field
-	// one wants; a test that sets it is asking that gate to fire.
+	// Nil — the default — is the no-policy case; a test that sets it is asking
+	// the missing-field gate to fire.
 	requiredFields []string
 	epicID         string
 }

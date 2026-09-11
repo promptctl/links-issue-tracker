@@ -285,7 +285,7 @@ func resolveEpicContext(ctx context.Context, ap *app.App, detail model.IssueDeta
 // nil context — writes nothing.
 //
 // Rendering is split from resolution so the show path can fail before printing
-// anything. A body written ahead of a resolution error is shaped exactly like
+// the body. A body written ahead of a resolution error is shaped exactly like
 // the legitimate "this ticket has no epic" output, so a reader holding only
 // stdout cannot tell an absent plan slice from one that could not be computed.
 // [LAW:parse-dont-validate]

@@ -703,6 +703,19 @@ func annotateIssues(ctx context.Context, st storage.Store, requiredFields []stri
 	if err != nil {
 		return nil, nil, err
 	}
+	// Annotate the subjects as this fetch returned them, not as the caller passed
+	// them in. The caller's copies came from an earlier read — a list query, or an
+	// epic's child set — and every annotator already reads its relations out of
+	// details, so annotating the caller's copies would classify one snapshot of a
+	// child using another snapshot's edges, and hand back rows whose Issue is
+	// older than the details returned beside them. One fetch, one snapshot, for
+	// the annotations and for everything downstream that renders from either.
+	// [LAW:one-source-of-truth] fetchIssueRelations fails loudly on a subject it
+	// cannot resolve, so every input issue has an entry here.
+	subjects := make([]model.Issue, len(issues))
+	for i, issue := range issues {
+		subjects[i] = details[issue.ID].Issue
+	}
 	// The lane gate reads the parent epics' FULL child sets (unfiltered by the
 	// CLI assignee/type/label narrowing) so an earlier sibling hidden by those
 	// filters still gates its later same-lane mates.
@@ -723,7 +736,7 @@ func annotateIssues(ctx context.Context, st storage.Store, requiredFields []stri
 	if err != nil {
 		return nil, nil, err
 	}
-	annotated, err := annotation.Annotate(ctx, issues,
+	annotated, err := annotation.Annotate(ctx, subjects,
 		fieldAnnotator,
 		newBlockerAnnotator(details),
 		newSiblingGateAnnotator(details, pendingSiblingsByEpic(siblingRelations)),
@@ -843,9 +856,10 @@ func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	if fields := splitCSV(*fieldsExpr); len(fields) > 0 {
 		return printIssueFields(stdout, detail.Issue, fields)
 	}
-	// Resolved before the body is printed, so a plan slice that cannot be built
-	// fails with clean stdout instead of a body that reads as a complete show of
-	// an epic-less ticket. [LAW:parse-dont-validate]
+	// Resolved before the body is printed, so the body and the plan block are
+	// all-or-nothing: a slice that cannot be built fails without a body, rather
+	// than after one that reads as a complete show of an epic-less ticket.
+	// [LAW:parse-dont-validate]
 	plan, err := resolveEpicContext(ctx, ap, detail)
 	if err != nil {
 		return err

@@ -663,8 +663,10 @@ and both columns render `-`.
    to the literal `\n` (`output.go:161-170`).
 9. **No** history block — history lives behind `lit history` (`output.go:171-175`).
 10. Then `writeEpicContext` appends the epic plan block (§2.5). The block is
-    **resolved before step 1 writes anything** (`cli.go:846-855`), so a failure to
-    build it exits nonzero with stdout untouched rather than after a partial body.
+    **resolved before step 1 writes anything** (`cli.go:846-856`), so the body and
+    the block are all-or-nothing: a failure to build the block exits nonzero with
+    neither printed, rather than after a partial body. The staleness banner and any
+    fired show-ticket workflow body are written before that point either way.
 
 ### 2.5 Epic-context block appended by `lit show`
 

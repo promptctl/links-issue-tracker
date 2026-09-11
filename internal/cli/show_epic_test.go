@@ -142,7 +142,9 @@ func TestRunShowParentlessTicketIgnoresUnreadableConfig(t *testing.T) {
 // An epic member genuinely needs the policy, so an unreadable config is a real
 // failure — but it must arrive before the body is written. A body printed ahead
 // of the error is shaped exactly like the legitimate "no epic block" output, so
-// a caller holding only stdout could not tell the two apart.
+// a caller holding only stdout could not tell the two apart. The guarantee is
+// body-and-block or neither, not an empty stdout: the staleness banner and any
+// fired workflow body legitimately precede resolution.
 func TestRunShowEpicMemberFailsBeforeWritingBodyOnUnreadableConfig(t *testing.T) {
 	f := newEpicFixture(t, "Plan epic", "the why")
 	child := f.addChild("A child")
@@ -153,8 +155,10 @@ func TestRunShowEpicMemberFailsBeforeWritingBodyOnUnreadableConfig(t *testing.T)
 	if err == nil {
 		t.Fatalf("show of an epic member under an unreadable config must fail, got nil; output:\n%s", buf.String())
 	}
-	if buf.Len() != 0 {
-		t.Errorf("failed plan resolution must leave stdout empty, got:\n%s", buf.String())
+	for _, unwanted := range []string{child, "A child", "Epic: "} {
+		if strings.Contains(buf.String(), unwanted) {
+			t.Errorf("failed plan resolution must print neither body nor block, found %q in:\n%s", unwanted, buf.String())
+		}
 	}
 }
 
