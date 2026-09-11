@@ -178,10 +178,16 @@ func commandErrorRemediation(reason string) string {
 		// claimed scope is the opposite of mechanical.
 		return "Do not retry unchanged — routing is deterministic and repeats this answer until the work named above moves. Act on what the message names: start a blocker it marks as yours to take, or finish or hand off what you already hold. Leaving the scope is a re-focus, not a retry — choose a ticket from `lit backlog` and name it to `lit start <id>`."
 	case "no_ready_work":
-		// Three different situations reach one message ("no ready work"), which
-		// has no data to tell them apart; the remediation is where they get
-		// separated, cheapest test first. [LAW:no-silent-failure]
-		return "Do not retry unchanged — nothing is startable, which is the backlog's state rather than a fault. If `--type`, `--labels`, `--assignee`, or `--status` narrowed this run, drop the filter and ask again. Otherwise `lit backlog` shows whether every open ticket is blocked, and `lit new` adds work."
+		// Three different situations used to reach one message ("no ready
+		// work") with no data to tell them apart, so this line separated them
+		// itself, cheapest test first. NoWork now carries the rows the pool walk
+		// went past, and the message names them (links-cli-q7hg) — so what is
+		// left here is the act for each, and the standing rule that this line
+		// must never assert which situation it was: "`lit new` adds work" under
+		// a message that just said the backlog is not empty is exactly the
+		// remediation-contradicts-message defect links-cli-cpou removed one
+		// level up. [LAW:no-silent-failure]
+		return "Do not retry unchanged — nothing here is startable, which is the backlog's state rather than a fault. If `--type`, `--labels`, `--assignee`, or `--status` narrowed this run, drop the filter and ask again. Otherwise `lit backlog` shows the whole queue and who holds what, and `lit new` adds work if it is genuinely empty."
 	case "outside_git_workspace":
 		return "Run the command inside a git repository/worktree with links initialized."
 	case "bulk_partial_failure":

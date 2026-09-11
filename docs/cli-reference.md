@@ -166,9 +166,15 @@ epic; a checkout holding no claims of its own starts straight at the global pool
 See design-docs/work-claims.md for the full precedence.
 
 Both endings that hand back no ticket — the exhaustion diagnostic and an empty
-backlog — exit 6 rather than 1, and their remediation names the deliberate act each
+result — exit 6 rather than 1, and their remediation names the deliberate act each
 calls for. Neither tells you to retry: both answers are deterministic and repeat
 unchanged until the work or the question does.
+
+An empty result says which emptiness it is. A backlog with nothing in it answers
+`no ready work`; one whose every row was passed over names those rows and why each
+is not yours to start — held by another checkout, or gated by something unfinished.
+So `lit next --status in_progress` can tell "you hold nothing" from "your work is in
+another checkout's hands" instead of answering both the same way.
 
 ### `lit orphaned`
 
