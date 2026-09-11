@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 	"testing"
 
@@ -979,10 +978,17 @@ func TestRouteNextRoutesAroundAFreshPublicHold(t *testing.T) {
 func TestEveryReachKindHasWordsInBothDiagnostics(t *testing.T) {
 	t.Parallel()
 	// reachOf's switch is total and returns these four and nothing else, so they
-	// are what the exhaustion walk can stamp. The pool walk stamps the same four
-	// through the same reachOf, plus reachOffFocusPath via withheldByScope.
+	// are what the exhaustion walk can stamp — it reaches laneOurs rows and, via
+	// gatingDependencies, deps the gather never returned.
+	//
+	// The pool walk stamps a strictly smaller set through the same reachOf:
+	// step 4 runs only with no lane held, so nothing there is laneOurs and the
+	// pick has already declined every takeable row, leaving routeAround as the
+	// only verdict passedOver sees; and it asks reachOf about gathered rows
+	// only. So reachTakeable and reachOutOfView are unreachable here, and words
+	// for them would describe an answer this walk can never give.
 	exhaustedSpeaks := []reachKind{reachTakeable, reachHeldFresh, reachNotReady, reachOutOfView}
-	poolSpeaks := append(slices.Clone(exhaustedSpeaks), reachOffFocusPath)
+	poolSpeaks := []reachKind{reachHeldFresh, reachNotReady, reachOffFocusPath}
 
 	spoken := map[reachKind]bool{}
 	for _, diagnostic := range []struct {

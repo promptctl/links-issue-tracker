@@ -290,7 +290,12 @@ step, so each step below says only which lanes it looks in:
    action.
 4. **Then the global pool**: the top-ranked candidate in any lane, labeled as
    what it is, so the commitment is visible before it is made rather than
-   discovered after.
+   discovered after. An active `focus` label narrows this pool — and only this
+   pool — to the focused goal's unfinished prerequisite chain, with
+   `lit next --all` or removing the label as the escapes. Steps 1–3 never read
+   it, so a lane this checkout already holds is served whether or not it sits
+   on the path: focus decides where a fresh session goes, not whether work in
+   flight is still yours.
    Reached
    directly, with no detour through steps 1–3, by a checkout that holds no
    live claims at all — unfocus is the zero state, not a hop through the

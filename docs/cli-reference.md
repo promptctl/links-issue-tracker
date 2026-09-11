@@ -125,8 +125,8 @@ lit backlog [--assignee <a>] [--labels <csv>] [--status open|in_progress] [--typ
 Workable items in rank order with blocked items shown **inline**, so the shape of
 the queue is legible. Use when grooming or re-ranking. A `focus` label narrows which
 rows the view answers over (see `lit label add` / `lit label rm`), and each run states
-what it is listing on the line just above the rows — so completeness is read there,
-not assumed here. `--all` lifts the scope for one run.
+what it is listing on its own line, just before the separator that opens the row list
+— so completeness is read there, not assumed here. `--all` lifts the scope for one run.
 
 `--status` accepts exactly `open` or `in_progress` on the workable commands
 (`backlog`, `next`); anything else — including `closed`, which could only ever match

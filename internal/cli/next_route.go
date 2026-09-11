@@ -500,9 +500,16 @@ func (o Exhausted) Error() string {
 type reachNotes [reachKindCount]string
 
 // The wording each diagnostic carries, named so the totality test can reach
-// them and so neither is rebuilt on every render. The exhaustion walk speaks
-// only the kinds reachOf returns; reachOffFocusPath is the pool walk's alone,
-// stamped by withheldByScope, so exhaustedNotes has no slot for it.
+// them and so neither is rebuilt on every render. Each walk words exactly the
+// kinds it can stamp, and the two sets differ at both ends.
+//
+// reachOffFocusPath is the pool walk's alone, stamped by withheldByScope.
+// reachTakeable and reachOutOfView are the exhaustion walk's alone: step 4 runs
+// only when this checkout holds no lane, so no pool row is laneOurs and
+// capacityFor cannot answer resumeWork, while the pick just declined every
+// serveWork and takeoverWork over that same set — leaving routeAround as the
+// only verdict passedOver can see. It also classifies gathered rows only, where
+// gatingDependencies reaches deps the gather never returned.
 var (
 	exhaustedNotes = reachNotes{
 		reachTakeable:  "on your path and yours to take — `lit start` it",
@@ -511,10 +518,8 @@ var (
 		reachOutOfView: "on your path but outside this view — `lit show` it",
 	}
 	poolNotes = reachNotes{
-		reachTakeable:     "startable — `lit start` it",
 		reachHeldFresh:    "in progress or claimed in a lane another checkout holds right now",
 		reachNotReady:     "not startable — blocked by a dependency, or in flight and not abandoned",
-		reachOutOfView:    "outside this view — `lit show` it",
 		reachOffFocusPath: "off the focus path this run answered over — `lit next --all` to route over the whole queue",
 	}
 )
