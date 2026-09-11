@@ -687,7 +687,7 @@ and both columns render `-`.
 
 `buildEpicContext` (`epic_context.go:170-222`):
 - `GetRelationsByIDs([epicID])`; a missing epic → `storage.NotFoundError`
-  (`epic_context.go:178-181`).
+  (`epic_context.go:171-182`).
 - The children run through `annotateIssues` (`cli.go`) — the same annotator set
   the workable pipeline uses — which batches their relations; a child listed but
   absent → `storage.NotFoundError`.
@@ -701,11 +701,11 @@ and both columns render `-`.
 - Cross-epic edges: for the epic node and every child that is not closed, each
   open `DependsOn` outside the epic membership set becomes a `BlockedExternally`
   edge, and each open `Blocks` outside becomes a `BlocksExternally` edge
-  (`epic_context.go:321-339`). Membership = the epic id plus all child ids
+  (`epic_context.go:321-332`). Membership = the epic id plus all child ids
   (`epicMemberIDs`, `epic_context.go:304-311`). Edges are sorted by
-  (blocked, blocker) (`epic_context.go:358-371`).
+  (blocked, blocker) (`epic_context.go:358-369`).
 
-`renderEpicContext` output shape (`epic_context.go:381-392`):
+`renderEpicContext` output shape (`epic_context.go:381-389`):
 ```
 Epic: <epicID> — <epicTitle>
 Why: <first non-blank line of epic description, leading '#'s stripped>
@@ -714,15 +714,15 @@ Children:
 <child lines>
 [Cross-epic dependencies block]
 ```
-- `firstLine` strips whitespace and leading `#` characters (`epic_context.go:388-396`).
-- Child line (`renderChildLine`, `epic_context.go:363-369`):
+- `firstLine` strips whitespace and leading `#` characters (`epic_context.go:465-473`).
+- Child line (`renderChildLine`, `epic_context.go:440-446`):
   `"    "` gutter (or `"  ▶ "` when focused), the status marker padded to
-  `len("[in_progress]")` = 13 (`epic_context.go:90`), two spaces, the id, two
+  `len("[in_progress]")` = 13 (`epic_context.go:124`), two spaces, the id, two
   spaces, the title, then `"  [lane: <lane>]"` when the lane is non-empty
-  (`laneTag`, `epic_context.go:377-382`), then `"   (you are here)"` when focused.
-- No children → `"  (none)\n"` (`epic_context.go:317-320`).
+  (`laneTag`, `epic_context.go:454-459`), then `"   (you are here)"` when focused.
+- No children → `"  (none)\n"` (`epic_context.go:394-403`).
 - Cross-epic block, omitted entirely when both directions are empty
-  (`epic_context.go:333-342`):
+  (`epic_context.go:410-419`):
 ```
 
 Cross-epic dependencies:
@@ -731,7 +731,7 @@ Cross-epic dependencies:
   Blocked externally:
     <blocked> blocked by <blocker>
 ```
-  Each subsection is omitted when its slice is empty (`epic_context.go:348-358`).
+  Each subsection is omitted when its slice is empty (`epic_context.go:425-435`).
 
 ### 2.6 `lit history` — State-transition history
 
