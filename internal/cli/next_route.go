@@ -31,8 +31,8 @@ type ServedFromClaim struct{ Row annotation.AnnotatedIssue }
 
 // ResumedOwnWork is a ticket already in flight in a lane this checkout holds,
 // handed back to its holder — routing step 1 for work that is started rather
-// than startable. Nothing is claimed and nothing is begun, so it announces
-// "resuming" and not "starting". Being reachable at all is this ticket's
+// than startable. Nothing is claimed and nothing is begun, so it reports a
+// state rather than an act. Being reachable at all is this ticket's
 // headline: while routing gated servability on model.StateOpen, an in_progress
 // row was servable to nobody, which hid every orphan (links-claims-1b0p, G2)
 // and — with no staleness involved anywhere — the very ticket the checkout was

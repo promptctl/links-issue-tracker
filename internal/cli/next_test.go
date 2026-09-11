@@ -299,8 +299,8 @@ func TestRunNextStatusInProgressResumesOurOwnWorkInFlight(t *testing.T) {
 	if !strings.Contains(text, mine.ID) {
 		t.Fatalf("next --status in_progress = %q, want it to hand back %q — narrowing to in_progress is how an agent asks what it already holds", text, mine.ID)
 	}
-	if !strings.Contains(text, "resuming "+mine.ID) {
-		t.Fatalf("next --status in_progress = %q, want it announced as a resumption of %q and not a fresh start", text, mine.ID)
+	if !strings.Contains(text, mine.ID+" is already in progress in a lane you hold") {
+		t.Fatalf("next --status in_progress = %q, want it reported as a resumption of %q and not a fresh start", text, mine.ID)
 	}
 }
 
