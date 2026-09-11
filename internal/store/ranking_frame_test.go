@@ -573,6 +573,71 @@ func TestWriteRankRefusesAnIssueDeletedUnderTheLock(t *testing.T) {
 	}
 }
 
+// TestMutationValueYieldsTheZeroValueWhenTheMutationFails pins the contract
+// that lets every rank verb return its result and its error together without
+// the two disagreeing.
+//
+// The verbs used to declare the result outside the closure and assign to it
+// partway through, so a step failing afterwards returned a populated value
+// beside a non-nil error — a RankEnd naming the frame of a move that never
+// happened. Callers check the error first, so nothing observed it; that is why
+// it survived three review rounds, not why it was safe.
+//
+// Asserting it here rather than through a verb is deliberate: forcing a verb to
+// fail midway needs an injection seam that exists for no other reason, and the
+// guarantee belongs to this helper, which is what every verb now returns
+// through. [LAW:behavior-not-structure]
+func TestMutationValueYieldsTheZeroValueWhenTheMutationFails(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	want := storage.RankEnd{Frame: "an-epic", Moved: true}
+
+	// The closure failing is the easy half, and on its own it proves nothing: a
+	// closure that returns an error never reaches the assignment, so the result
+	// is zero whether or not anything zeroes it. The case that needs the guard
+	// is the closure SUCCEEDING and the commit after it failing — withMutation
+	// runs tx.Commit and the working-set commit once fn has already returned its
+	// value. Cancelling the context from inside the closure stages exactly that:
+	// the value is computed and assigned, then the commit it was computed for
+	// cannot land.
+	cancelCtx, cancel := context.WithCancel(ctx)
+	got, err := mutationValue(cancelCtx, st, "mutation-value-commit-failure-test", func(ctx context.Context, tx *sql.Tx) (storage.RankEnd, error) {
+		cancel()
+		return want, nil
+	})
+	if err == nil {
+		t.Fatalf("mutationValue succeeded with a cancelled commit; want a failure")
+	}
+	if got != (storage.RankEnd{}) {
+		t.Errorf("mutationValue returned %+v beside an error; want the zero value, since a populated result reads as a move that happened", got)
+	}
+
+	boom := errors.New("the closure itself failed")
+	got, err = mutationValue(ctx, st, "mutation-value-failure-test", func(ctx context.Context, tx *sql.Tx) (storage.RankEnd, error) {
+		return want, boom
+	})
+	if !errors.Is(err, boom) {
+		t.Fatalf("mutationValue error = %v, want the failure the closure reported", err)
+	}
+	if got != (storage.RankEnd{}) {
+		t.Errorf("mutationValue returned %+v beside a closure error; want the zero value", got)
+	}
+
+	// The other half of the contract: a successful mutation hands its value back
+	// unchanged, or the zeroing above would be indistinguishable from losing it.
+	got, err = mutationValue(ctx, st, "mutation-value-success-test", func(ctx context.Context, tx *sql.Tx) (storage.RankEnd, error) {
+		return want, nil
+	})
+	if err != nil {
+		t.Fatalf("mutationValue error = %v, want success", err)
+	}
+	if got != want {
+		t.Errorf("mutationValue returned %+v, want %+v", got, want)
+	}
+}
+
 // TestFrameResolutionRefusesADeletedNamedIssue covers the case writeRankTx
 // cannot: an id that frame resolution substitutes away.
 //

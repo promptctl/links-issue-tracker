@@ -133,6 +133,36 @@ func (s *Store) mustRankable(ctx context.Context, id string) (model.Issue, error
 	return issue, nil
 }
 
+// mutationValue runs a mutation that computes a result, and yields the zero
+// value whenever that mutation fails.
+//
+// The rank verbs used to declare the result in the enclosing scope, assign to it
+// partway through the closure, and return it beside whatever error came back.
+// A step failing after that assignment then returned a populated result
+// alongside a non-nil error: a RankEnd naming the frame of a move that never
+// happened. Every caller checks the error first, so nothing was observably
+// wrong — which is the reason it survived, not a reason it was safe.
+//
+// Taking the result as the closure's own return value is what removes the state
+// rather than guarding against it: there is no partially-assigned result to
+// return early, and no verb can forget a guard that no longer exists.
+// [LAW:types-are-the-program]
+func mutationValue[T any](ctx context.Context, s *Store, message string, fn func(context.Context, *sql.Tx) (T, error)) (T, error) {
+	var out T
+	if err := s.withMutation(ctx, message, func(ctx context.Context, tx *sql.Tx) error {
+		v, err := fn(ctx, tx)
+		if err != nil {
+			return err
+		}
+		out = v
+		return nil
+	}); err != nil {
+		var zero T
+		return zero, err
+	}
+	return out, nil
+}
+
 // requireLiveTx refuses an issue deleted since the verb started. It is the one
 // rendering of "still live under this lock", so the rank paths that need that
 // answer ask the same question in the same words rather than each carrying its
@@ -216,7 +246,6 @@ func (s *Store) rankToEdge(ctx context.Context, issueID string, placement storag
 	if err != nil {
 		return storage.RankEnd{}, err
 	}
-	var result storage.RankEnd
 	// Both the frame and its edge are read inside the mutation, under the same
 	// commit lock as the write they seed. Reading the frame before the lock
 	// would leave a window in which a concurrent reparent moves the issue: the
@@ -224,31 +253,29 @@ func (s *Store) rankToEdge(ctx context.Context, issueID string, placement storag
 	// left, and the key written would be drawn from a keyspace it is never read
 	// against — this bug, reached through timing instead of through arithmetic.
 	// [LAW:no-ambient-temporal-coupling]
-	err = s.withMutation(ctx, "rank to "+edge.name, func(ctx context.Context, tx *sql.Tx) error {
+	return mutationValue(ctx, s, "rank to "+edge.name, func(ctx context.Context, tx *sql.Tx) (storage.RankEnd, error) {
 		f, err := frameOfTx(ctx, tx, issueID)
 		if err != nil {
-			return err
+			return storage.RankEnd{}, err
 		}
-		result.Frame = f
 		holderID, holderRank, err := frameEdgeHolderTx(ctx, tx, f, edge)
 		if err != nil {
-			return err
+			return storage.RankEnd{}, err
 		}
 		// An issue already holding its frame's edge has nowhere to go. Writing
 		// its own rank back would bump updated_at and report a promotion that
 		// never happened; the caller is told instead. [LAW:no-silent-failure]
-		result.Moved = holderID != issueID
-		if !result.Moved {
-			return nil
+		end := storage.RankEnd{Frame: f, Moved: holderID != issueID}
+		if !end.Moved {
+			return end, nil
 		}
 		newRank := edge.rankBeyond(holderRank)
 		now := s.clock.Now().Format(time.RFC3339Nano)
 		if err := writeRankTx(ctx, tx, issueID, newRank, now); err != nil {
-			return err
+			return storage.RankEnd{}, err
 		}
-		return smoothRanksIfNeededTx(ctx, tx, newRank)
+		return end, smoothRanksIfNeededTx(ctx, tx, newRank)
 	})
-	return result, err
 }
 
 func rankSetValidateIDs(ids []string) error {
@@ -333,13 +360,11 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 			return storage.RankSetResult{}, err
 		}
 	}
-	var result storage.RankSetResult
-	err := s.withMutation(ctx, "rank set", func(ctx context.Context, tx *sql.Tx) error {
+	return mutationValue(ctx, s, "rank set", func(ctx context.Context, tx *sql.Tx) (storage.RankSetResult, error) {
 		resolutions, f, err := resolveRankSet(ctx, tx, ids)
 		if err != nil {
-			return err
+			return storage.RankSetResult{}, err
 		}
-		result = storage.RankSetResult{Resolutions: resolutions, Frame: f}
 		ranked := make([]string, len(resolutions))
 		for i, r := range resolutions {
 			ranked[i] = r.RankedID
@@ -360,7 +385,7 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 			ORDER BY item_rank ASC LIMIT 1`, strings.Join(placeholders, ","), frameColumn)
 		var topRank sql.NullString
 		if err := tx.QueryRowContext(ctx, query, args...).Scan(&topRank); err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("rank-set: query top: %w", err)
+			return storage.RankSetResult{}, fmt.Errorf("rank-set: query top: %w", err)
 		}
 
 		// Walk IDs in reverse, assigning each a rank just above the previous one.
@@ -384,18 +409,15 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 		}
 		for i, id := range ranked {
 			if err := writeRankTx(ctx, tx, id, newRanks[i], now); err != nil {
-				return err
+				return storage.RankSetResult{}, err
 			}
 		}
-		if len(newRanks) > 0 {
-			return smoothRanksIfNeededTx(ctx, tx, newRanks[0])
+		result := storage.RankSetResult{Resolutions: resolutions, Frame: f}
+		if len(newRanks) == 0 {
+			return result, nil
 		}
-		return nil
+		return result, smoothRanksIfNeededTx(ctx, tx, newRanks[0])
 	})
-	if err != nil {
-		return storage.RankSetResult{}, err
-	}
-	return result, nil
 }
 
 // ancestorChain returns the parent-child ancestry of an issue, self first,
@@ -610,14 +632,10 @@ func (s *Store) RankAbove(ctx context.Context, issueID, targetID string) (storag
 	if err := s.checkRankPair(ctx, issueID, targetID); err != nil {
 		return storage.RankMove{}, err
 	}
-	var move storage.RankMove
-	err := s.withMutation(ctx, "rank above", func(ctx context.Context, tx *sql.Tx) error {
-		var f storage.Frame
-		var anchorRank string
-		var err error
-		move, f, anchorRank, err = rankPairTx(ctx, tx, issueID, targetID)
+	return mutationValue(ctx, s, "rank above", func(ctx context.Context, tx *sql.Tx) (storage.RankMove, error) {
+		move, f, anchorRank, err := rankPairTx(ctx, tx, issueID, targetID)
 		if err != nil {
-			return err
+			return storage.RankMove{}, err
 		}
 		// The neighbor is drawn from the anchor's frame, not the workspace: a
 		// closer key belonging to some other epic's child would still land the
@@ -630,7 +648,7 @@ func (s *Store) RankAbove(ctx context.Context, issueID, targetID string) (storag
 			ORDER BY item_rank DESC LIMIT 1`, frameColumn)
 		err = tx.QueryRowContext(ctx, query, anchorRank, move.MovedID, string(f)).Scan(&aboveRank)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("rank-above: query neighbor: %w", err)
+			return storage.RankMove{}, fmt.Errorf("rank-above: query neighbor: %w", err)
 		}
 		var newRank string
 		if !aboveRank.Valid || aboveRank.String == "" {
@@ -638,16 +656,15 @@ func (s *Store) RankAbove(ctx context.Context, issueID, targetID string) (storag
 		} else {
 			newRank, err = rank.Midpoint(aboveRank.String, anchorRank)
 			if err != nil {
-				return fmt.Errorf("rank-above: midpoint: %w", err)
+				return storage.RankMove{}, fmt.Errorf("rank-above: midpoint: %w", err)
 			}
 		}
 		now := s.clock.Now().Format(time.RFC3339Nano)
 		if err := writeRankTx(ctx, tx, move.MovedID, newRank, now); err != nil {
-			return err
+			return storage.RankMove{}, err
 		}
-		return smoothRanksIfNeededTx(ctx, tx, newRank)
+		return move, smoothRanksIfNeededTx(ctx, tx, newRank)
 	})
-	return move, err
 }
 
 // RankBelow moves an issue to rank immediately below the target issue,
@@ -656,14 +673,10 @@ func (s *Store) RankBelow(ctx context.Context, issueID, targetID string) (storag
 	if err := s.checkRankPair(ctx, issueID, targetID); err != nil {
 		return storage.RankMove{}, err
 	}
-	var move storage.RankMove
-	err := s.withMutation(ctx, "rank below", func(ctx context.Context, tx *sql.Tx) error {
-		var f storage.Frame
-		var anchorRank string
-		var err error
-		move, f, anchorRank, err = rankPairTx(ctx, tx, issueID, targetID)
+	return mutationValue(ctx, s, "rank below", func(ctx context.Context, tx *sql.Tx) (storage.RankMove, error) {
+		move, f, anchorRank, err := rankPairTx(ctx, tx, issueID, targetID)
 		if err != nil {
-			return err
+			return storage.RankMove{}, err
 		}
 		// Scoped to the anchor's frame for the same reason RankAbove is: the
 		// midpoint is only meaningful against a key this order actually reads.
@@ -673,7 +686,7 @@ func (s *Store) RankBelow(ctx context.Context, issueID, targetID string) (storag
 			ORDER BY item_rank ASC LIMIT 1`, frameColumn)
 		err = tx.QueryRowContext(ctx, query, anchorRank, move.MovedID, string(f)).Scan(&belowRank)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("rank-below: query neighbor: %w", err)
+			return storage.RankMove{}, fmt.Errorf("rank-below: query neighbor: %w", err)
 		}
 		var newRank string
 		if !belowRank.Valid || belowRank.String == "" {
@@ -681,16 +694,15 @@ func (s *Store) RankBelow(ctx context.Context, issueID, targetID string) (storag
 		} else {
 			newRank, err = rank.Midpoint(anchorRank, belowRank.String)
 			if err != nil {
-				return fmt.Errorf("rank-below: midpoint: %w", err)
+				return storage.RankMove{}, fmt.Errorf("rank-below: midpoint: %w", err)
 			}
 		}
 		now := s.clock.Now().Format(time.RFC3339Nano)
 		if err := writeRankTx(ctx, tx, move.MovedID, newRank, now); err != nil {
-			return err
+			return storage.RankMove{}, err
 		}
-		return smoothRanksIfNeededTx(ctx, tx, newRank)
+		return move, smoothRanksIfNeededTx(ctx, tx, newRank)
 	})
-	return move, err
 }
 
 // smoothRanksIfNeededTx checks whether the given rank string has grown past the
