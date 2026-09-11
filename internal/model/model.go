@@ -293,12 +293,24 @@ func (e ContainerActionError) Unfinished() int {
 }
 
 // Satisfied reports whether the children already establish the state the action
-// asked for, which is the whole difference between a call that needs nothing
-// done and one that is refused. [LAW:one-source-of-truth] Both the message
-// below and the CLI's reason and exit-code mappings read this one comparison;
-// deriving it from progress counts instead would be a second, divergable copy
-// of AllOf.State's rule.
-func (e ContainerActionError) Satisfied() bool { return e.Target == e.State }
+// asked for AND have no work left in them, which is the whole difference
+// between a call that needs nothing done and one that is refused.
+// [LAW:one-source-of-truth] Both the message below and the CLI's reason and
+// exit-code mappings read this one predicate.
+//
+// Matching the target is not enough on its own, because two derived states
+// match one while work remains. AllOf.State returns InProgress only when
+// Closed < Total, so `start` on a part-done epic would match its own target
+// with every child still to do; and it returns Open for a childless epic as a
+// fallback carrying no information, so `open` would match there too. Both then
+// reported "nothing to do" at the exit code that exists to let a caller stop
+// without reading the message — an answer-shaped void aimed at exactly the
+// agent with the most work left. Closed is the only derived state that means
+// nothing remains, and the two counts say so directly rather than by naming it,
+// so this stays true if the state set ever grows.
+func (e ContainerActionError) Satisfied() bool {
+	return e.Target == e.State && e.Progress.Total > 0 && e.Unfinished() == 0
+}
 
 // [LAW:dataflow-not-control-flow] The wording varies with the values the error
 // carries — the requested action, the two states, the counts — not with which
@@ -309,9 +321,9 @@ func (e ContainerActionError) Satisfied() bool { return e.Target == e.State }
 // being closed is the actual obstacle.
 func (e ContainerActionError) Error() string {
 	if e.Satisfied() {
-		return fmt.Sprintf("epic %s is already %s, so `%s` has nothing to do: an epic's state derives from its children (%d of %d done)", e.ID, e.State, e.Action, e.Progress.Closed, e.Progress.Total)
+		return fmt.Sprintf("epic %s is already %s, so `%s` has nothing to do: an epic's state derives from its children (%d of %d done)", e.ID, e.State.Display(), e.Action, e.Progress.Closed, e.Progress.Total)
 	}
-	return fmt.Sprintf("cannot `%s` epic %s: it is %s, and an epic's state derives from its children rather than from this command (%s)", e.Action, e.ID, e.State, e.childClause())
+	return fmt.Sprintf("cannot `%s` epic %s: it is %s, and an epic's state derives from its children rather than from this command (%s)", e.Action, e.ID, e.State.Display(), e.childClause())
 }
 
 // childClause says why the epic sits in the state it does — the one part of a
