@@ -52,27 +52,115 @@ func (e *Engine) rankRelative(issueID, targetID string, at side) (storage.RankMo
 	return move, nil
 }
 
-// RankToTop and RankToBottom name the two ends of the order directly, so they
-// need no anchor and no frame: every issue is comparable with the ends.
-func (e *Engine) RankToTop(ctx context.Context, issueID string) error {
+// RankToTop moves an issue to the top of its own frame.
+func (e *Engine) RankToTop(ctx context.Context, issueID string) (storage.RankEnd, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.rankToEnd(issueID, storage.RankTop)
+	return e.rankToEdge(issueID, storage.RankTop)
 }
 
-func (e *Engine) RankToBottom(ctx context.Context, issueID string) error {
+// RankToBottom moves an issue to the bottom of its own frame.
+func (e *Engine) RankToBottom(ctx context.Context, issueID string) (storage.RankEnd, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.rankToEnd(issueID, storage.RankBottom)
+	return e.rankToEdge(issueID, storage.RankBottom)
 }
 
-func (e *Engine) rankToEnd(issueID string, end storage.RankPlacement) error {
+// rankToEdge moves an issue to one end of its own frame.
+//
+// The ends are a frame's, not the slice's. One sequence holds every frame here,
+// so "the top" is a position found among the issue's frame-mates — immediately
+// before the first of them — and an epic's child sent there leads its siblings
+// while every issue outside its frame stays exactly where it was. Index zero
+// would instead read as leading the whole backlog, which is a position the
+// child's rank never claims.
+func (e *Engine) rankToEdge(issueID string, placement storage.RankPlacement) (storage.RankEnd, error) {
 	if _, err := e.mustRecord(issueID); err != nil {
-		return err
+		return storage.RankEnd{}, err
+	}
+	result := storage.RankEnd{Frame: e.frameOf(issueID)}
+	mates := e.frameMateIndexes(result.Frame, issueID)
+	// An issue alone in its frame has no end to move to: there is nothing its
+	// position is read against. Said out loud, never implied by a success.
+	// [LAW:no-silent-failure]
+	if len(mates) == 0 {
+		return result, nil
+	}
+	edge, err := orderEdgeFor(mates, placement)
+	if err != nil {
+		return storage.RankEnd{}, err
+	}
+	result.Moved = !edge.holds(slices.Index(e.order, issueID))
+	if !result.Moved {
+		return result, nil
 	}
 	e.detach(issueID)
-	e.place(issueID, end)
-	return nil
+	// The mates' indexes shift when the issue leaves the order, so the landing
+	// slot is read off the order it will actually be inserted into. Detaching
+	// removes only the issue, which frameMateIndexes was already excluding, so
+	// this is the same set of mates at new positions — never an empty one.
+	landing, err := orderEdgeFor(e.frameMateIndexes(result.Frame, issueID), placement)
+	if err != nil {
+		return storage.RankEnd{}, err
+	}
+	e.insertAt(landing.insertAt, issueID)
+	return result, nil
+}
+
+// orderEdge is one end of a frame expressed as positions in the single order:
+// the slot an issue takes to land at that end, and the test for an issue
+// already sitting past it. The end a caller asked for crosses as this value,
+// so both ends share one placement path. [LAW:dataflow-not-control-flow]
+type orderEdge struct {
+	insertAt int
+	holds    func(issueIndex int) bool
+}
+
+// orderEdgeFor is the single dispatch point on RankPlacement for positions:
+// creation's placement and both edge verbs resolve their end here.
+// [LAW:single-enforcer]
+//
+// The population must be non-empty — an empty one has no end to speak of, and
+// every caller has already answered that question by the time it gets here.
+// Reaching this with none is a resolution bug, and it panics rather than
+// picking a position, for the reason insertAt gives: a clamp would turn that
+// bug into a silent placement at the head of the backlog, the one outcome
+// nobody would report. [LAW:no-defensive-null-guards]
+func orderEdgeFor(mateIndexes []int, p storage.RankPlacement) (orderEdge, error) {
+	switch p {
+	case storage.RankTop:
+		first := mateIndexes[0]
+		return orderEdge{insertAt: first, holds: func(issueIndex int) bool { return issueIndex < first }}, nil
+	case storage.RankBottom:
+		last := mateIndexes[len(mateIndexes)-1]
+		return orderEdge{insertAt: last + 1, holds: func(issueIndex int) bool { return issueIndex > last }}, nil
+	default:
+		return orderEdge{}, fmt.Errorf("unknown rank placement: %d", p)
+	}
+}
+
+// frameMateIndexes lists where an issue's frame-mates sit in the order,
+// ascending, leaving the issue itself out.
+func (e *Engine) frameMateIndexes(f storage.Frame, exclude string) []int {
+	var indexes []int
+	for index, id := range e.order {
+		if id == exclude || e.frameOf(id) != f {
+			continue
+		}
+		indexes = append(indexes, index)
+	}
+	return indexes
+}
+
+// frameOf names the frame an issue's position is read within: its container,
+// or the top level. Built on parentOf, the one place here that knows what
+// contains what. [LAW:one-source-of-truth]
+func (e *Engine) frameOf(id string) storage.Frame {
+	parent, ok := e.parentOf(id)
+	if !ok {
+		return storage.TopLevel
+	}
+	return storage.Frame(parent)
 }
 
 // RankSet imposes a total order on the named issues at once, stacking them at

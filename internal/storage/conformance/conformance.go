@@ -180,6 +180,7 @@ var cases = []engineCase{
 	{"events_are_totally_ordered", eventsAreTotallyOrdered},
 	{"rank_intents_reorder", rankIntentsReorder},
 	{"rank_intents_resolve_across_frames", rankIntentsResolveAcrossFrames},
+	{"rank_to_edge_stays_inside_its_frame", rankToEdgeStaysInsideItsFrame},
 	{"rank_set_imposes_order", rankSetImposesOrder},
 	{"close_redirects_to_a_canonical", closeRedirectsToCanonical},
 	{"comments_roundtrip", commentsRoundtrip},
@@ -1035,13 +1036,38 @@ func rankIntentsReorder(t *testing.T, ctx context.Context, st storage.Store, clk
 	}
 	assertOrder(t, ctx, st, "after RankBelow", a.ID, b.ID, c.ID)
 
-	if err := st.RankToTop(ctx, b.ID); err != nil {
+	end, err := st.RankToTop(ctx, b.ID)
+	if err != nil {
 		t.Fatalf("RankToTop error = %v", err)
+	}
+	// These three are top-level, so the frame the move was scoped to is the
+	// top level and there is no substitution for a caller to report.
+	if end.Frame != storage.TopLevel {
+		t.Errorf("RankToTop reported frame %q, want the top level", end.Frame)
+	}
+	if !end.Moved {
+		t.Error("RankToTop reported no move, but b was not at the top")
 	}
 	assertOrder(t, ctx, st, "after RankToTop", b.ID, a.ID, c.ID)
 
-	if err := st.RankToBottom(ctx, b.ID); err != nil {
+	// Ranking to an edge the issue already holds changes nothing, and the
+	// contract is that the caller is told so rather than handed a success it
+	// cannot distinguish from a real move. [LAW:no-silent-failure]
+	end, err = st.RankToTop(ctx, b.ID)
+	if err != nil {
+		t.Fatalf("RankToTop of the top issue error = %v", err)
+	}
+	if end.Moved {
+		t.Error("RankToTop of the already-top issue reported a move; want none")
+	}
+	assertOrder(t, ctx, st, "after a no-op RankToTop", b.ID, a.ID, c.ID)
+
+	end, err = st.RankToBottom(ctx, b.ID)
+	if err != nil {
 		t.Fatalf("RankToBottom error = %v", err)
+	}
+	if !end.Moved {
+		t.Error("RankToBottom reported no move, but b was at the top")
 	}
 	assertOrder(t, ctx, st, "after RankToBottom", a.ID, c.ID, b.ID)
 
@@ -1050,8 +1076,75 @@ func rankIntentsReorder(t *testing.T, ctx context.Context, st storage.Store, clk
 	if _, err := st.RankAbove(ctx, a.ID, "no-such-issue"); err == nil {
 		t.Error("RankAbove a missing anchor succeeded; want an error")
 	}
-	if err := st.RankToTop(ctx, "no-such-issue"); err == nil {
+	if _, err := st.RankToTop(ctx, "no-such-issue"); err == nil {
 		t.Error("RankToTop of a missing issue succeeded; want an error")
+	}
+}
+
+// rankToEdgeStaysInsideItsFrame is the contract behind `lit rank <child>
+// --top`: the ends a child is sent to are its epic's, not the workspace's.
+// Both engines must leave every issue outside the frame exactly where it was,
+// and must name the frame they moved within so the caller can say which order
+// changed.
+func rankToEdgeStaysInsideItsFrame(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first", Topic: "core", ParentID: epic.ID})
+	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second", Topic: "core", ParentID: epic.ID})
+	standalone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "standalone", Topic: "core"})
+
+	end, err := st.RankToTop(ctx, second.ID)
+	if err != nil {
+		t.Fatalf("RankToTop of a child error = %v", err)
+	}
+	// The frame is the epic, not the top level: a caller printing "moved to the
+	// top" without this would be describing a promotion that did not happen.
+	if end.Frame != storage.Frame(epic.ID) {
+		t.Errorf("RankToTop of a child reported frame %q, want the epic %q", end.Frame, epic.ID)
+	}
+	if !end.Moved {
+		t.Error("RankToTop of the second child reported no move; want one")
+	}
+	listed := mustList(t, ctx, st, storage.ListIssuesFilter{})
+	assertPrecedes(t, listed, second.ID, first.ID)
+	// The epic itself never moved, so the standalone filed after it still
+	// follows it. A child's edge move that reshuffles the top level is the
+	// defect this case exists for.
+	assertPrecedes(t, listed, epic.ID, standalone.ID)
+
+	// The child now leads its frame, so the same intent is a no-op — and the
+	// epic keeps its own place either way.
+	end, err = st.RankToTop(ctx, second.ID)
+	if err != nil {
+		t.Fatalf("repeat RankToTop of a child error = %v", err)
+	}
+	if end.Moved {
+		t.Error("RankToTop of the leading child reported a move; want none")
+	}
+	if end.Frame != storage.Frame(epic.ID) {
+		t.Errorf("no-op RankToTop reported frame %q, want the epic %q", end.Frame, epic.ID)
+	}
+
+	// An only child holds both ends of its frame at once: there is no
+	// frame-mate its position is read against, so neither end can move it.
+	lone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "lone epic", Topic: "core", IssueType: model.TypeEpic})
+	only := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "only", Topic: "core", ParentID: lone.ID})
+	for _, tc := range []struct {
+		name string
+		run  func() (storage.RankEnd, error)
+	}{
+		{"RankToTop", func() (storage.RankEnd, error) { return st.RankToTop(ctx, only.ID) }},
+		{"RankToBottom", func() (storage.RankEnd, error) { return st.RankToBottom(ctx, only.ID) }},
+	} {
+		end, err := tc.run()
+		if err != nil {
+			t.Fatalf("%s of an only child error = %v", tc.name, err)
+		}
+		if end.Moved {
+			t.Errorf("%s of an only child reported a move; want none", tc.name)
+		}
+		if end.Frame != storage.Frame(lone.ID) {
+			t.Errorf("%s of an only child reported frame %q, want %q", tc.name, end.Frame, lone.ID)
+		}
 	}
 }
 

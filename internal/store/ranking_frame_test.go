@@ -3,10 +3,12 @@ package store
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/rank"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -276,27 +278,147 @@ func TestRankSetWithOwnContainerRejected(t *testing.T) {
 	}
 }
 
+// TestRankToEdgeDrawsItsKeyFromItsOwnFrame asserts the rank STRINGS, not the
+// rendered order. The order can be right while the keyspace is already
+// contaminated — a child holding a key below every top-level row still lists
+// among its siblings correctly — and it is the keyspace, not the order, that
+// decides what the NEXT rank is computed against. An order-only case would
+// have passed throughout the defect this test exists for.
+func TestRankToEdgeDrawsItsKeyFromItsOwnFrame(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	fx := newFrameFixture(t, ctx, st)
+	all := append([]model.Issue{fx.epic, fx.standalone}, fx.children...)
+	before := currentRanks(t, ctx, st, all)
+
+	end, err := st.RankToTop(ctx, fx.children[2].ID)
+	if err != nil {
+		t.Fatalf("RankToTop(C3) error = %v", err)
+	}
+	if end.Frame != storage.Frame(fx.epic.ID) {
+		t.Fatalf("RankToTop(C3) frame = %q, want the epic %q", end.Frame, fx.epic.ID)
+	}
+	if !end.Moved {
+		t.Fatal("RankToTop(C3) reported no move; C3 was last among its siblings")
+	}
+
+	after := currentRanks(t, ctx, st, all)
+	// C3's key is seeded from C1's — the key that led C3's own frame — and from
+	// nothing else.
+	if want := rank.Before(before[fx.children[0].ID]); after[fx.children[2].ID] != want {
+		t.Errorf("C3 rank = %q, want %q = Before(C1 %q), its frame's leading key", after[fx.children[2].ID], want, before[fx.children[0].ID])
+	}
+	for _, issue := range []model.Issue{fx.epic, fx.standalone, fx.children[0], fx.children[1]} {
+		if after[issue.ID] != before[issue.ID] {
+			t.Errorf("issue %s rank changed %q -> %q; only C3 moves", issue.ID, before[issue.ID], after[issue.ID])
+		}
+	}
+
+	// The precondition that gives the rest of this case its teeth: C3's new key
+	// now sorts below every top-level key, so an unscoped "first rank" query
+	// WOULD return it. Without this the assertions below pass vacuously — which
+	// is the shape of an invariant test that proves nothing.
+	if after[fx.children[2].ID] >= after[fx.epic.ID] {
+		t.Fatalf("C3 rank %q does not sort below the top-level leader %q; this case cannot tell a scoped query from an unscoped one", after[fx.children[2].ID], after[fx.epic.ID])
+	}
+	if after[fx.epic.ID] >= after[fx.standalone.ID] {
+		t.Fatalf("epic rank %q is not the top-level leader (standalone %q); the fixture no longer sets up this case", after[fx.epic.ID], after[fx.standalone.ID])
+	}
+
+	// A top-level --top now: its key must come from the top-level leader, never
+	// from the child that happens to hold a smaller string.
+	if _, err := st.RankToTop(ctx, fx.standalone.ID); err != nil {
+		t.Fatalf("RankToTop(standalone) error = %v", err)
+	}
+	final := currentRanks(t, ctx, st, all)
+	if want := rank.Before(after[fx.epic.ID]); final[fx.standalone.ID] != want {
+		t.Errorf("standalone rank = %q, want %q = Before(the top-level leader %q)", final[fx.standalone.ID], want, after[fx.epic.ID])
+	}
+	if contaminated := rank.Before(after[fx.children[2].ID]); final[fx.standalone.ID] == contaminated {
+		t.Errorf("standalone rank = %q was computed against C3 %q, a key in another frame", final[fx.standalone.ID], after[fx.children[2].ID])
+	}
+
+	// The bottom edge is scoped the same way: C3 back to the bottom of its
+	// frame is seeded from C2, the key that trails its siblings — not from the
+	// workspace's last key.
+	if _, err := st.RankToBottom(ctx, fx.children[2].ID); err != nil {
+		t.Fatalf("RankToBottom(C3) error = %v", err)
+	}
+	bottom := currentRanks(t, ctx, st, all)
+	if want := rank.After(final[fx.children[1].ID]); bottom[fx.children[2].ID] != want {
+		t.Errorf("C3 rank = %q, want %q = After(C2 %q), its frame's trailing key", bottom[fx.children[2].ID], want, final[fx.children[1].ID])
+	}
+}
+
+// TestRankToEdgeReportsAnUnmovableIssue covers the outcome that looks exactly
+// like success: the issue already holds the edge, so nothing is written and the
+// caller has to be told, or it reads an unchanged order as a promotion.
+func TestRankToEdgeReportsAnUnmovableIssue(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	fx := newFrameFixture(t, ctx, st)
+	all := append([]model.Issue{fx.epic, fx.standalone}, fx.children...)
+	before := currentRanks(t, ctx, st, all)
+
+	// C1 already leads its siblings, and the epic already leads the top level.
+	for _, tc := range []struct {
+		name      string
+		id        string
+		wantFrame storage.Frame
+	}{
+		{"leading child", fx.children[0].ID, storage.Frame(fx.epic.ID)},
+		{"leading top-level issue", fx.epic.ID, storage.TopLevel},
+	} {
+		end, err := st.RankToTop(ctx, tc.id)
+		if err != nil {
+			t.Fatalf("RankToTop(%s) error = %v", tc.name, err)
+		}
+		if end.Moved {
+			t.Errorf("RankToTop(%s) reported a move; it already held the edge", tc.name)
+		}
+		if end.Frame != tc.wantFrame {
+			t.Errorf("RankToTop(%s) frame = %q, want %q", tc.name, end.Frame, tc.wantFrame)
+		}
+	}
+
+	// A no-op writes nothing at all — not the same rank back, which would bump
+	// updated_at and land a commit for a move that did not happen.
+	after := currentRanks(t, ctx, st, all)
+	for id, r := range before {
+		if after[id] != r {
+			t.Errorf("issue %s rank changed %q -> %q on a no-op rank", id, r, after[id])
+		}
+	}
+}
+
 func TestResolveFrameRepresentatives(t *testing.T) {
 	t.Parallel()
+	// wantFrame is asserted alongside the representatives because the frame is
+	// what every neighbor lookup seeded by them gets scoped to: representatives
+	// that are right in a frame that is wrong still write a key into the wrong
+	// keyspace.
 	cases := []struct {
-		name    string
-		chains  [][]string
-		want    []string
-		wantErr bool
+		name      string
+		chains    [][]string
+		want      []string
+		wantFrame storage.Frame
+		wantErr   bool
 	}{
-		{name: "all top-level", chains: [][]string{{"x"}, {"y"}, {"z"}}, want: []string{"x", "y", "z"}},
-		{name: "siblings same epic", chains: [][]string{{"c1", "e"}, {"c2", "e"}, {"c3", "e"}}, want: []string{"c1", "c2", "c3"}},
-		{name: "children plus outsider resolve to roots", chains: [][]string{{"c1", "e"}, {"x"}, {"c2", "e"}}, want: []string{"e", "x", "e"}},
-		{name: "children of two epics under shared parent with outsider", chains: [][]string{{"c1", "e1", "p"}, {"c2", "e2", "p"}, {"x"}}, want: []string{"p", "p", "x"}},
-		{name: "children of two epics under shared parent", chains: [][]string{{"c1", "e1", "p"}, {"c2", "e2", "p"}}, want: []string{"e1", "e2"}},
-		{name: "grandchild vs child of shared epic", chains: [][]string{{"g", "s", "e"}, {"c", "e"}}, want: []string{"s", "c"}},
+		{name: "all top-level", chains: [][]string{{"x"}, {"y"}, {"z"}}, want: []string{"x", "y", "z"}, wantFrame: storage.TopLevel},
+		{name: "siblings same epic", chains: [][]string{{"c1", "e"}, {"c2", "e"}, {"c3", "e"}}, want: []string{"c1", "c2", "c3"}, wantFrame: "e"},
+		{name: "children plus outsider resolve to roots", chains: [][]string{{"c1", "e"}, {"x"}, {"c2", "e"}}, want: []string{"e", "x", "e"}, wantFrame: storage.TopLevel},
+		{name: "children of two epics under shared parent with outsider", chains: [][]string{{"c1", "e1", "p"}, {"c2", "e2", "p"}, {"x"}}, want: []string{"p", "p", "x"}, wantFrame: storage.TopLevel},
+		{name: "children of two epics under shared parent", chains: [][]string{{"c1", "e1", "p"}, {"c2", "e2", "p"}}, want: []string{"e1", "e2"}, wantFrame: "p"},
+		{name: "grandchild vs child of shared epic", chains: [][]string{{"g", "s", "e"}, {"c", "e"}}, want: []string{"s", "c"}, wantFrame: "e"},
 		{name: "issue with its own container", chains: [][]string{{"c", "e"}, {"e"}}, wantErr: true},
 		{name: "container with deep descendant", chains: [][]string{{"e"}, {"g", "s", "e"}}, wantErr: true},
 		{name: "container alongside outsider and descendant", chains: [][]string{{"e"}, {"x"}, {"c", "e"}}, wantErr: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			reps, err := resolveFrameRepresentatives(tc.chains)
+			reps, frame, err := resolveFrameRepresentatives(tc.chains)
 			if tc.wantErr {
 				var containment *frameContainmentError
 				if !errors.As(err, &containment) {
@@ -315,6 +437,21 @@ func TestResolveFrameRepresentatives(t *testing.T) {
 					t.Fatalf("resolveFrameRepresentatives() = %v, want %v", reps, tc.want)
 				}
 			}
+			if frame != tc.wantFrame {
+				t.Fatalf("resolveFrameRepresentatives() frame = %q, want %q", frame, tc.wantFrame)
+			}
+			// Every representative is a member of the frame it came back with,
+			// which is the property that makes scoping a query by that frame
+			// find exactly the rows these keys are compared against.
+			for i, chain := range tc.chains {
+				container := storage.TopLevel
+				if idx := slices.Index(chain, reps[i]); idx >= 0 && idx+1 < len(chain) {
+					container = storage.Frame(chain[idx+1])
+				}
+				if container != frame {
+					t.Fatalf("representative %s sits in frame %q, not the reported %q", reps[i], container, frame)
+				}
+			}
 		})
 	}
 }
@@ -325,20 +462,21 @@ func TestResolveComparableFrame(t *testing.T) {
 		name                    string
 		issueChain, targetChain []string
 		wantMoved, wantAnchor   string
+		wantFrame               storage.Frame
 		wantErr                 bool
 	}{
-		{name: "both top-level", issueChain: []string{"x"}, targetChain: []string{"y"}, wantMoved: "x", wantAnchor: "y"},
-		{name: "siblings same epic", issueChain: []string{"c1", "e"}, targetChain: []string{"c2", "e"}, wantMoved: "c1", wantAnchor: "c2"},
-		{name: "standalone vs child", issueChain: []string{"x"}, targetChain: []string{"c", "e"}, wantMoved: "x", wantAnchor: "e"},
-		{name: "child vs standalone", issueChain: []string{"c", "e"}, targetChain: []string{"x"}, wantMoved: "e", wantAnchor: "x"},
-		{name: "children of two epics", issueChain: []string{"c1", "e1"}, targetChain: []string{"c2", "e2"}, wantMoved: "e1", wantAnchor: "e2"},
-		{name: "grandchild vs child of shared epic", issueChain: []string{"g", "s", "e"}, targetChain: []string{"c", "e"}, wantMoved: "s", wantAnchor: "c"},
+		{name: "both top-level", issueChain: []string{"x"}, targetChain: []string{"y"}, wantMoved: "x", wantAnchor: "y", wantFrame: storage.TopLevel},
+		{name: "siblings same epic", issueChain: []string{"c1", "e"}, targetChain: []string{"c2", "e"}, wantMoved: "c1", wantAnchor: "c2", wantFrame: "e"},
+		{name: "standalone vs child", issueChain: []string{"x"}, targetChain: []string{"c", "e"}, wantMoved: "x", wantAnchor: "e", wantFrame: storage.TopLevel},
+		{name: "child vs standalone", issueChain: []string{"c", "e"}, targetChain: []string{"x"}, wantMoved: "e", wantAnchor: "x", wantFrame: storage.TopLevel},
+		{name: "children of two epics", issueChain: []string{"c1", "e1"}, targetChain: []string{"c2", "e2"}, wantMoved: "e1", wantAnchor: "e2", wantFrame: storage.TopLevel},
+		{name: "grandchild vs child of shared epic", issueChain: []string{"g", "s", "e"}, targetChain: []string{"c", "e"}, wantMoved: "s", wantAnchor: "c", wantFrame: "e"},
 		{name: "issue inside target", issueChain: []string{"c", "e"}, targetChain: []string{"e"}, wantErr: true},
 		{name: "target inside issue", issueChain: []string{"e"}, targetChain: []string{"c", "e"}, wantErr: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			moved, anchor, err := resolveComparableFrame(tc.issueChain, tc.targetChain)
+			moved, anchor, frame, err := resolveComparableFrame(tc.issueChain, tc.targetChain)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("resolveComparableFrame() error = nil, want containment error")
@@ -350,6 +488,9 @@ func TestResolveComparableFrame(t *testing.T) {
 			}
 			if moved != tc.wantMoved || anchor != tc.wantAnchor {
 				t.Fatalf("resolveComparableFrame() = (%s, %s), want (%s, %s)", moved, anchor, tc.wantMoved, tc.wantAnchor)
+			}
+			if frame != tc.wantFrame {
+				t.Fatalf("resolveComparableFrame() frame = %q, want %q", frame, tc.wantFrame)
 			}
 		})
 	}

@@ -77,7 +77,9 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 		retention:   model.Live{},
 	}
 	e.issues[id] = rec
-	e.place(id, in.Placement)
+	if err := e.place(id, in.Placement); err != nil {
+		return model.Issue{}, err
+	}
 	e.setLabels(id, labels, now, createdBy)
 	if parentID != "" {
 		e.relations = append(e.relations, model.Relation{
@@ -98,12 +100,32 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 // place files a newly created issue in the rank order. RankBottom is the zero
 // value, so a create that says nothing about placement appends — which is what
 // keeps an authored batch in the order its file states it.
-func (e *Engine) place(id string, placement storage.RankPlacement) {
-	if placement == storage.RankTop {
-		e.order = append([]string{id}, e.order...)
-		return
+//
+// Filing is scoped to the whole order, not to the issue's frame the way the
+// rank verbs are: landing after everything that exists is also landing after
+// every frame-mate, so the default satisfies the frame-local reading for free,
+// and scoping it would drop a first child into the middle of the order
+// instead. The remaining unscoped edge is RankTop, tracked on its own
+// (links-rank-t2vl) because narrowing it changes what filing order
+// means.
+func (e *Engine) place(id string, placement storage.RankPlacement) error {
+	if len(e.order) == 0 {
+		e.order = append(e.order, id)
+		return nil
 	}
-	e.order = append(e.order, id)
+	// The population is every position in the order — the same edge dispatch the
+	// rank verbs use, asked about the workspace instead of one frame.
+	// [LAW:dataflow-not-control-flow]
+	population := make([]int, len(e.order))
+	for index := range e.order {
+		population[index] = index
+	}
+	edge, err := orderEdgeFor(population, placement)
+	if err != nil {
+		return err
+	}
+	e.insertAt(edge.insertAt, id)
+	return nil
 }
 
 // mintID names a new issue. Top-level and child ids differ only in the

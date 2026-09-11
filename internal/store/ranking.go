@@ -15,28 +15,155 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-func (s *Store) RankToTop(ctx context.Context, issueID string) error {
-	if _, err := s.GetIssue(ctx, issueID); err != nil {
-		return err
+// frameColumn is the SQL scalar for an issue's frame: the id of its live
+// container, or the empty string — storage.TopLevel — for an issue no
+// container holds. Every rank neighbor lookup is scoped with it, which is what
+// confines a written rank to the keyspace it will actually be read in.
+//
+// A deleted container frames nothing, so the join drops those rows and an
+// orphan falls back to the top level — the same rule ancestorChain walks by,
+// spelled for the query planner. [LAW:one-source-of-truth] The two must agree
+// about what contains what; this is that rule's SQL rendering, not a second
+// rule. The expression correlates on issues.id, so it belongs only in a query
+// selecting FROM issues.
+const frameColumn = `COALESCE((SELECT r.dst_id FROM relations r
+		JOIN issues p ON p.id = r.dst_id
+		WHERE r.src_id = issues.id AND r.type = 'parent-child' AND p.deleted_at IS NULL), '')`
+
+// rankEdge is one end of a frame's keyspace as the query and the key algebra
+// see it: the ordering that brings that end to the front of a result, the step
+// that lands just past it, and the word for it. The end a caller asked for
+// crosses as this value, so one statement and one assignment serve both ends
+// instead of two near-copies free to drift.
+// [LAW:dataflow-not-control-flow]
+type rankEdge struct {
+	name   string
+	order  string
+	beyond func(string) string
+}
+
+// edgeFor is the single dispatch point on RankPlacement for rank keys: both
+// edge verbs and issue creation's placement resolve their end here, so there
+// is no second opinion about which direction "top" is.
+// [LAW:single-enforcer]
+func edgeFor(p storage.RankPlacement) (rankEdge, error) {
+	switch p {
+	case storage.RankTop:
+		return rankEdge{name: "top", order: "ASC", beyond: rank.Before}, nil
+	case storage.RankBottom:
+		return rankEdge{name: "bottom", order: "DESC", beyond: rank.After}, nil
+	default:
+		return rankEdge{}, fmt.Errorf("unknown rank placement: %d", p)
 	}
-	return s.withMutation(ctx, "rank to top", func(ctx context.Context, tx *sql.Tx) error {
-		var firstRank sql.NullString
-		err := tx.QueryRowContext(ctx, "SELECT item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' AND id != ? ORDER BY item_rank ASC LIMIT 1", issueID).Scan(&firstRank)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("rank-to-top: query first: %w", err)
+}
+
+// rankBeyond is the key just past a frame's edge — or the frame's first key
+// when the frame holds nothing ranked yet. Absorbing the empty frame here is
+// what lets every caller assign unconditionally instead of repeating the same
+// "is there anything to anchor against" branch.
+// [LAW:dataflow-not-control-flow]
+func (e rankEdge) rankBeyond(edgeRank string) string {
+	if edgeRank == "" {
+		return rank.Initial()
+	}
+	return e.beyond(edgeRank)
+}
+
+// frameEdgeHolderTx names the issue holding one end of a frame's rank order
+// and the rank it holds there. Both come back empty when the frame has nothing
+// ranked in it — a fact about the frame, not a failure, and the one input
+// rankBeyond needs to seed a fresh frame.
+func frameEdgeHolderTx(ctx context.Context, tx *sql.Tx, f storage.Frame, edge rankEdge) (holderID, holderRank string, err error) {
+	query := fmt.Sprintf(`SELECT id, item_rank FROM issues
+		WHERE deleted_at IS NULL AND item_rank != '' AND %s = ?
+		ORDER BY item_rank %s LIMIT 1`, frameColumn, edge.order)
+	err = tx.QueryRowContext(ctx, query, string(f)).Scan(&holderID, &holderRank)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", nil
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("query %s of frame %q: %w", edge.name, f, err)
+	}
+	return holderID, holderRank, nil
+}
+
+// frameOf names the frame an issue's own rank lives in: its container, or the
+// top level. Derived from the one ancestry walk, so "what frame is this in"
+// cannot drift from "what contains this". [LAW:one-source-of-truth]
+func (s *Store) frameOf(ctx context.Context, issueID string) (storage.Frame, error) {
+	chain, err := s.ancestorChain(ctx, issueID)
+	if err != nil {
+		return storage.TopLevel, err
+	}
+	// The chain is self first, so its second element is the container and a
+	// chain that ends at self is an issue at the top level.
+	if len(chain) < 2 {
+		return storage.TopLevel, nil
+	}
+	return storage.Frame(chain[1]), nil
+}
+
+// RankToTop moves an issue to the top of its own frame.
+func (s *Store) RankToTop(ctx context.Context, issueID string) (storage.RankEnd, error) {
+	return s.rankToEdge(ctx, issueID, storage.RankTop)
+}
+
+// RankToBottom moves an issue to the bottom of its own frame.
+func (s *Store) RankToBottom(ctx context.Context, issueID string) (storage.RankEnd, error) {
+	return s.rankToEdge(ctx, issueID, storage.RankBottom)
+}
+
+// rankToEdge moves an issue to one end of its own frame.
+//
+// The end is a frame's end, never the workspace's. A child ranked to the top
+// leads its siblings, and seeding its key from the globally-first rank would
+// draw that key from a keyspace shared with issues it is never compared
+// against — which is how one epic's edits came to displace the top level's
+// keys, and how the next top-level promotion came to be computed against a
+// child. Scoping the lookup keeps the written key comparable only to the keys
+// it is actually read against. [LAW:types-are-the-program]
+//
+// [LAW:single-enforcer] Both edge verbs take their key from
+// frameEdgeHolderTx, so there is no second notion of the rank at a frame's
+// edge. Creation asks a deliberately different question — the edge of the
+// whole workspace, see nextRankForPlacement — and shares the direction and the
+// empty-keyspace default through edgeFor rather than its own copy of them.
+func (s *Store) rankToEdge(ctx context.Context, issueID string, placement storage.RankPlacement) (storage.RankEnd, error) {
+	if _, err := s.GetIssue(ctx, issueID); err != nil {
+		return storage.RankEnd{}, err
+	}
+	edge, err := edgeFor(placement)
+	if err != nil {
+		return storage.RankEnd{}, err
+	}
+	f, err := s.frameOf(ctx, issueID)
+	if err != nil {
+		return storage.RankEnd{}, err
+	}
+	result := storage.RankEnd{Frame: f}
+	// The edge is read inside the mutation, under the same commit lock as the
+	// write it seeds, so no other writer can change the frame's end in between.
+	// [LAW:no-ambient-temporal-coupling]
+	err = s.withMutation(ctx, "rank to "+edge.name, func(ctx context.Context, tx *sql.Tx) error {
+		holderID, holderRank, err := frameEdgeHolderTx(ctx, tx, f, edge)
+		if err != nil {
+			return err
 		}
-		var newRank string
-		if !firstRank.Valid || firstRank.String == "" {
-			newRank = rank.Initial()
-		} else {
-			newRank = rank.Before(firstRank.String)
+		// An issue already holding its frame's edge has nowhere to go. Writing
+		// its own rank back would bump updated_at and report a promotion that
+		// never happened; the caller is told instead. [LAW:no-silent-failure]
+		result.Moved = holderID != issueID
+		if !result.Moved {
+			return nil
 		}
+		newRank := edge.rankBeyond(holderRank)
 		now := s.clock.Now().Format(time.RFC3339Nano)
 		if _, err := tx.ExecContext(ctx, "UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?", newRank, now, issueID); err != nil {
-			return fmt.Errorf("rank-to-top: update: %w", err)
+			return fmt.Errorf("rank to %s: update: %w", edge.name, err)
 		}
 		return smoothRanksIfNeededTx(ctx, tx, newRank)
 	})
+	return result, err
 }
 
 func rankSetValidateIDs(ids []string) error {
@@ -63,32 +190,32 @@ func rankSetValidateIDs(ids []string) error {
 // no frame-coherent write can express — honoring part of the order while
 // silently discarding the rest would misrepresent the request.
 // [LAW:no-silent-failure]
-func (s *Store) resolveRankSet(ctx context.Context, ids []string) ([]storage.RankSetResolution, error) {
+func (s *Store) resolveRankSet(ctx context.Context, ids []string) ([]storage.RankSetResolution, storage.Frame, error) {
 	chains := make([][]string, len(ids))
 	for i, id := range ids {
 		if _, err := s.GetIssue(ctx, id); err != nil {
-			return nil, err
+			return nil, storage.TopLevel, err
 		}
 		chain, err := s.ancestorChain(ctx, id)
 		if err != nil {
-			return nil, err
+			return nil, storage.TopLevel, err
 		}
 		chains[i] = chain
 	}
-	reps, err := resolveFrameRepresentatives(chains)
+	reps, f, err := resolveFrameRepresentatives(chains)
 	if err != nil {
-		return nil, fmt.Errorf("rank set: %w", err)
+		return nil, storage.TopLevel, fmt.Errorf("rank set: %w", err)
 	}
 	resolutions := make([]storage.RankSetResolution, len(ids))
 	repToNamed := make(map[string]string, len(ids))
 	for i, id := range ids {
 		if prior, dup := repToNamed[reps[i]]; dup {
-			return nil, fmt.Errorf("rank set: %s and %s both resolve to %s — their relative order is internal to %s and cannot be set against outside issues; run rank set among siblings instead", prior, id, reps[i], reps[i])
+			return nil, storage.TopLevel, fmt.Errorf("rank set: %s and %s both resolve to %s — their relative order is internal to %s and cannot be set against outside issues; run rank set among siblings instead", prior, id, reps[i], reps[i])
 		}
 		repToNamed[reps[i]] = id
 		resolutions[i] = storage.RankSetResolution{NamedID: id, RankedID: reps[i]}
 	}
-	return resolutions, nil
+	return resolutions, f, nil
 }
 
 // RankSet establishes absolute order across the given IDs by stacking them at
@@ -104,7 +231,7 @@ func (s *Store) RankSet(ctx context.Context, ids []string) ([]storage.RankSetRes
 	if err := rankSetValidateIDs(ids); err != nil {
 		return nil, err
 	}
-	resolutions, err := s.resolveRankSet(ctx, ids)
+	resolutions, f, err := s.resolveRankSet(ctx, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -113,17 +240,22 @@ func (s *Store) RankSet(ctx context.Context, ids []string) ([]storage.RankSetRes
 		ranked[i] = r.RankedID
 	}
 	return resolutions, s.withMutation(ctx, "rank set", func(ctx context.Context, tx *sql.Tx) error {
-		// Find the current topmost rank, excluding any of the IDs being reassigned
-		// (so we anchor against rows that aren't moving).
-		excludeIDs := make([]any, 0, len(ranked))
+		// Find the topmost rank in the representatives' own frame, excluding the
+		// IDs being reassigned (so we anchor against rows that aren't moving).
+		// Every representative is a frame-mate by construction, so that frame is
+		// the whole keyspace this stack is read in.
+		args := make([]any, 0, len(ranked)+1)
 		placeholders := make([]string, 0, len(ranked))
 		for _, id := range ranked {
-			excludeIDs = append(excludeIDs, id)
+			args = append(args, id)
 			placeholders = append(placeholders, "?")
 		}
-		query := fmt.Sprintf(`SELECT item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' AND id NOT IN (%s) ORDER BY item_rank ASC LIMIT 1`, strings.Join(placeholders, ","))
+		args = append(args, string(f))
+		query := fmt.Sprintf(`SELECT item_rank FROM issues
+			WHERE deleted_at IS NULL AND item_rank != '' AND id NOT IN (%s) AND %s = ?
+			ORDER BY item_rank ASC LIMIT 1`, strings.Join(placeholders, ","), frameColumn)
 		var topRank sql.NullString
-		if err := tx.QueryRowContext(ctx, query, excludeIDs...).Scan(&topRank); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		if err := tx.QueryRowContext(ctx, query, args...).Scan(&topRank); err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("rank-set: query top: %w", err)
 		}
 
@@ -155,31 +287,6 @@ func (s *Store) RankSet(ctx context.Context, ids []string) ([]storage.RankSetRes
 			return smoothRanksIfNeededTx(ctx, tx, newRanks[0])
 		}
 		return nil
-	})
-}
-
-// RankToBottom moves an issue to rank below all other issues.
-func (s *Store) RankToBottom(ctx context.Context, issueID string) error {
-	if _, err := s.GetIssue(ctx, issueID); err != nil {
-		return err
-	}
-	return s.withMutation(ctx, "rank to bottom", func(ctx context.Context, tx *sql.Tx) error {
-		var lastRank sql.NullString
-		err := tx.QueryRowContext(ctx, "SELECT item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' AND id != ? ORDER BY item_rank DESC LIMIT 1", issueID).Scan(&lastRank)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("rank-to-bottom: query last: %w", err)
-		}
-		var newRank string
-		if !lastRank.Valid || lastRank.String == "" {
-			newRank = rank.Initial()
-		} else {
-			newRank = rank.After(lastRank.String)
-		}
-		now := s.clock.Now().Format(time.RFC3339Nano)
-		if _, err := tx.ExecContext(ctx, "UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?", newRank, now, issueID); err != nil {
-			return fmt.Errorf("rank-to-bottom: update: %w", err)
-		}
-		return smoothRanksIfNeededTx(ctx, tx, newRank)
 	})
 }
 
@@ -231,10 +338,17 @@ func (e *frameContainmentError) Error() string {
 // under the lowest common ancestor of all chains — and to their roots when
 // the ancestries share none, the top level being the comparable frame.
 // Nothing inside any epic is ever reordered by a cross-frame request.
+//
+// The frame the representatives live in comes back with them: it is the lowest
+// common ancestor the walk already found, and it is the scope every neighbor
+// lookup seeded by these representatives must be taken in. Returning it here
+// rather than re-deriving it at each callsite keeps the representatives and
+// their keyspace from ever disagreeing. [LAW:one-source-of-truth]
+//
 // [LAW:types-are-the-program] Cross-frame midpoints are an illegal state of
 // the rank keyspace; this resolution makes every write frame-coherent.
 // [LAW:single-enforcer] The one resolution core behind every rank verb.
-func resolveFrameRepresentatives(chains [][]string) ([]string, error) {
+func resolveFrameRepresentatives(chains [][]string) ([]string, storage.Frame, error) {
 	memberships := make([]map[string]int, len(chains))
 	for i, chain := range chains {
 		m := make(map[string]int, len(chain))
@@ -249,7 +363,7 @@ func resolveFrameRepresentatives(chains [][]string) ([]string, error) {
 				continue
 			}
 			if idx, ok := m[chain[0]]; ok && idx > 0 {
-				return nil, &frameContainmentError{containerID: chain[0], containedID: chains[j][0]}
+				return nil, storage.TopLevel, &frameContainmentError{containerID: chain[0], containedID: chains[j][0]}
 			}
 		}
 	}
@@ -277,7 +391,10 @@ func resolveFrameRepresentatives(chains [][]string) ([]string, error) {
 		}
 		reps[i] = chain[memberships[i][lcaID]-1]
 	}
-	return reps, nil
+	// No common ancestor means the representatives are roots, and the frame
+	// holding every root is the top level — which storage.Frame spells as the
+	// same empty string lcaID already carries.
+	return reps, storage.Frame(lcaID), nil
 }
 
 // resolveComparableFrame maps a relative rank request onto the pair it is
@@ -286,65 +403,74 @@ func resolveFrameRepresentatives(chains [][]string) ([]string, error) {
 // standalone moves the epic (see resolveFrameRepresentatives). Ranking an
 // issue relative to its own container (or descendant) has no frame-coherent
 // meaning and is rejected. [LAW:no-silent-failure]
-func resolveComparableFrame(issueChain, targetChain []string) (movedID, anchorID string, err error) {
-	reps, err := resolveFrameRepresentatives([][]string{issueChain, targetChain})
+func resolveComparableFrame(issueChain, targetChain []string) (movedID, anchorID string, f storage.Frame, err error) {
+	reps, f, err := resolveFrameRepresentatives([][]string{issueChain, targetChain})
 	var containment *frameContainmentError
 	if errors.As(err, &containment) {
 		if containment.containerID == issueChain[0] {
-			return "", "", fmt.Errorf("cannot rank %s relative to %s: %s contains it; rank it against a sibling instead", issueChain[0], targetChain[0], issueChain[0])
+			return "", "", storage.TopLevel, fmt.Errorf("cannot rank %s relative to %s: %s contains it; rank it against a sibling instead", issueChain[0], targetChain[0], issueChain[0])
 		}
-		return "", "", fmt.Errorf("cannot rank %s relative to %s: %s is inside %s; rank it against a sibling instead", issueChain[0], targetChain[0], issueChain[0], targetChain[0])
+		return "", "", storage.TopLevel, fmt.Errorf("cannot rank %s relative to %s: %s is inside %s; rank it against a sibling instead", issueChain[0], targetChain[0], issueChain[0], targetChain[0])
 	}
 	if err != nil {
-		return "", "", err
+		return "", "", storage.TopLevel, err
 	}
-	return reps[0], reps[1], nil
+	return reps[0], reps[1], f, nil
 }
 
 // resolveRankPair validates a relative rank request and resolves it to the
 // frame-comparable pair, returning the hydrated anchor (its rank seeds the
-// midpoint math) and the move record.
+// midpoint math), the move record, and the frame both representatives live in
+// — which is the scope the midpoint's neighbor must be drawn from.
 // [LAW:single-enforcer] Both relative rank ops route through this one
 // resolution so cross-frame semantics cannot drift between above and below.
-func (s *Store) resolveRankPair(ctx context.Context, issueID, targetID string) (model.Issue, storage.RankMove, error) {
+func (s *Store) resolveRankPair(ctx context.Context, issueID, targetID string) (model.Issue, storage.RankMove, storage.Frame, error) {
 	if issueID == targetID {
-		return model.Issue{}, storage.RankMove{}, errors.New("cannot rank an issue relative to itself")
+		return model.Issue{}, storage.RankMove{}, storage.TopLevel, errors.New("cannot rank an issue relative to itself")
 	}
 	if _, err := s.GetIssue(ctx, targetID); err != nil {
-		return model.Issue{}, storage.RankMove{}, err
+		return model.Issue{}, storage.RankMove{}, storage.TopLevel, err
 	}
 	if _, err := s.GetIssue(ctx, issueID); err != nil {
-		return model.Issue{}, storage.RankMove{}, err
+		return model.Issue{}, storage.RankMove{}, storage.TopLevel, err
 	}
 	issueChain, err := s.ancestorChain(ctx, issueID)
 	if err != nil {
-		return model.Issue{}, storage.RankMove{}, err
+		return model.Issue{}, storage.RankMove{}, storage.TopLevel, err
 	}
 	targetChain, err := s.ancestorChain(ctx, targetID)
 	if err != nil {
-		return model.Issue{}, storage.RankMove{}, err
+		return model.Issue{}, storage.RankMove{}, storage.TopLevel, err
 	}
-	movedID, anchorID, err := resolveComparableFrame(issueChain, targetChain)
+	movedID, anchorID, f, err := resolveComparableFrame(issueChain, targetChain)
 	if err != nil {
-		return model.Issue{}, storage.RankMove{}, err
+		return model.Issue{}, storage.RankMove{}, storage.TopLevel, err
 	}
 	anchor, err := s.GetIssue(ctx, anchorID)
 	if err != nil {
-		return model.Issue{}, storage.RankMove{}, err
+		return model.Issue{}, storage.RankMove{}, storage.TopLevel, err
 	}
-	return anchor, storage.RankMove{MovedID: movedID, AnchorID: anchorID}, nil
+	return anchor, storage.RankMove{MovedID: movedID, AnchorID: anchorID}, f, nil
 }
 
 // RankAbove moves an issue to rank immediately above the target issue,
 // after resolving both to their comparable frame (see resolveComparableFrame).
 func (s *Store) RankAbove(ctx context.Context, issueID, targetID string) (storage.RankMove, error) {
-	target, move, err := s.resolveRankPair(ctx, issueID, targetID)
+	target, move, f, err := s.resolveRankPair(ctx, issueID, targetID)
 	if err != nil {
 		return storage.RankMove{}, err
 	}
 	return move, s.withMutation(ctx, "rank above", func(ctx context.Context, tx *sql.Tx) error {
+		// The neighbor is drawn from the anchor's frame, not the workspace: a
+		// closer key belonging to some other epic's child would still land the
+		// issue above its anchor, but it would halve the gap against a row this
+		// order never reads, spending precision and mixing the keyspaces for
+		// nothing. [LAW:types-are-the-program]
 		var aboveRank sql.NullString
-		err := tx.QueryRowContext(ctx, "SELECT item_rank FROM issues WHERE item_rank < ? AND deleted_at IS NULL AND id != ? ORDER BY item_rank DESC LIMIT 1", target.Rank, move.MovedID).Scan(&aboveRank)
+		query := fmt.Sprintf(`SELECT item_rank FROM issues
+			WHERE item_rank < ? AND deleted_at IS NULL AND id != ? AND %s = ?
+			ORDER BY item_rank DESC LIMIT 1`, frameColumn)
+		err := tx.QueryRowContext(ctx, query, target.Rank, move.MovedID, string(f)).Scan(&aboveRank)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("rank-above: query neighbor: %w", err)
 		}
@@ -368,13 +494,18 @@ func (s *Store) RankAbove(ctx context.Context, issueID, targetID string) (storag
 // RankBelow moves an issue to rank immediately below the target issue,
 // after resolving both to their comparable frame (see resolveComparableFrame).
 func (s *Store) RankBelow(ctx context.Context, issueID, targetID string) (storage.RankMove, error) {
-	target, move, err := s.resolveRankPair(ctx, issueID, targetID)
+	target, move, f, err := s.resolveRankPair(ctx, issueID, targetID)
 	if err != nil {
 		return storage.RankMove{}, err
 	}
 	return move, s.withMutation(ctx, "rank below", func(ctx context.Context, tx *sql.Tx) error {
+		// Scoped to the anchor's frame for the same reason RankAbove is: the
+		// midpoint is only meaningful against a key this order actually reads.
 		var belowRank sql.NullString
-		err := tx.QueryRowContext(ctx, "SELECT item_rank FROM issues WHERE item_rank > ? AND deleted_at IS NULL AND id != ? ORDER BY item_rank ASC LIMIT 1", target.Rank, move.MovedID).Scan(&belowRank)
+		query := fmt.Sprintf(`SELECT item_rank FROM issues
+			WHERE item_rank > ? AND deleted_at IS NULL AND id != ? AND %s = ?
+			ORDER BY item_rank ASC LIMIT 1`, frameColumn)
+		err := tx.QueryRowContext(ctx, query, target.Rank, move.MovedID, string(f)).Scan(&belowRank)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("rank-below: query neighbor: %w", err)
 		}

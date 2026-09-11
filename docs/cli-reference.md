@@ -313,6 +313,17 @@ lit rank <id> --top | --bottom | --above <other-id> | --below <other-id>
 
 Moves one issue in the rank order. Exactly one placement flag is required.
 
+Edge placement (`--top`/`--bottom`) moves the issue to an end of *its own
+frame* — the epic that contains it, or the top-level order if nothing does.
+`lit rank <child> --top` makes that child first among its siblings; it does not
+move it, or its epic, anywhere in the queue at large, and it leaves every issue
+outside the epic exactly where it was. The output says which frame the move was
+scoped to whenever that frame is an epic. An issue that already holds the end
+it was sent to is reported as such and nothing is written — an unchanged order
+is never printed as a successful move. To promote a ticket out of its epic's
+lane, rank the epic instead, or use `--above`/`--below` against an outside
+issue, which resolves to the epic and carries the whole lane with it.
+
 Relative placement (`--above`/`--below`) operates between *peers*: two siblings
 inside the same epic, or two top-level items. When the named issue and the
 anchor live in different epics (or one is standalone), the request is resolved

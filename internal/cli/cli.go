@@ -957,6 +957,15 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	return emitBreadcrumb(stdout, "update")
 }
 
+// frameLabel names a rank frame for a reader: an epic by its id, and the top
+// level by what a reader actually sees there.
+func frameLabel(f storage.Frame) string {
+	if f == storage.TopLevel {
+		return "the backlog"
+	}
+	return string(f)
+}
+
 func runRank(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	// Subcommand dispatch: 'lit rank set <id1> <id2> ...' is a separate verb
 	// that establishes absolute order across N issues atomically. Issue IDs
@@ -1001,12 +1010,19 @@ func runRank(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	// happened so the substitution is reported, never silent.
 	// [LAW:no-silent-failure]
 	move := storage.RankMove{MovedID: issueID, AnchorID: issueID}
+	// edgeWord is the user's own word for the end they asked for, and it is
+	// empty for the relative verbs — which is what tells the reporting below
+	// that `end` describes a real edge move rather than an unset zero value.
+	edgeWord := ""
+	var end storage.RankEnd
 	var err error
 	switch {
 	case visited["top"]:
-		err = ap.Store.RankToTop(ctx, issueID)
+		edgeWord = "top"
+		end, err = ap.Store.RankToTop(ctx, issueID)
 	case visited["bottom"]:
-		err = ap.Store.RankToBottom(ctx, issueID)
+		edgeWord = "bottom"
+		end, err = ap.Store.RankToBottom(ctx, issueID)
 	case visited["above"]:
 		move, err = ap.Store.RankAbove(ctx, issueID, *above)
 	case visited["below"]:
@@ -1014,6 +1030,34 @@ func runRank(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	}
 	if err != nil {
 		return err
+	}
+	// Both edge outcomes read `end`, so both sit under the one discriminator
+	// that says an edge verb ran and left it meaningful. The relative verbs
+	// never assign it, and TopLevel being the zero Frame is not allowed to be
+	// what keeps their reporting correct — that coincidence is one constant's
+	// edit away from printing an empty frame at a reader.
+	// [LAW:types-are-the-program]
+	if edgeWord != "" {
+		switch {
+		// An issue already holding its frame's edge did not move. Printing the
+		// summary as though it had is the one outcome a reader cannot tell from
+		// success — the command exits 0 and shows the ticket either way.
+		// [LAW:no-silent-failure]
+		case !end.Moved:
+			if _, err := fmt.Fprintf(stdout, "%s is already at the %s of %s; nothing to rank\n", issueID, edgeWord, frameLabel(end.Frame)); err != nil {
+				return err
+			}
+			return emitBreadcrumb(stdout, "update")
+		// --top/--bottom move within the issue's own frame, so a ticket inside
+		// an epic goes to the head of that epic's children and nowhere in the
+		// queue at large. Say which frame: the reader has just watched the
+		// relative verbs explain their substitution, and an unqualified "moved
+		// to the top" reads as the top of the backlog. [LAW:no-silent-failure]
+		case end.Frame != storage.TopLevel:
+			if _, err := fmt.Fprintf(stdout, "%s is inside %s; ranked it to the %s of %s's children, leaving the rest of the queue unchanged\n", issueID, end.Frame, edgeWord, end.Frame); err != nil {
+				return err
+			}
+		}
 	}
 	namedAnchor := *above + *below // exactly one mode is set; empty for --top/--bottom
 	// A relative op against an issue inside an epic ranks the epic as its

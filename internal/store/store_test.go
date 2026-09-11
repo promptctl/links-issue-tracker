@@ -411,7 +411,7 @@ func TestFixRankInversionsDetectsEpicDependency(t *testing.T) {
 	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Epic child", Topic: "rank", IssueType: "task", Priority: 0, ParentID: epic.ID, Placement: storage.RankBottom}); err != nil {
 		t.Fatalf("CreateIssue(epic child) error = %v", err)
 	}
-	if err := st.RankToBottom(ctx, epic.ID); err != nil {
+	if _, err := st.RankToBottom(ctx, epic.ID); err != nil {
 		t.Fatalf("RankToBottom(epic) error = %v", err)
 	}
 	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: dependent.ID, DstID: epic.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
@@ -466,7 +466,7 @@ func TestFixRankInversionsIgnoresClosedEpic(t *testing.T) {
 	if _, err := st.Apply(ctx, child.ID, storage.Change{Action: model.Done{}, Actor: "tester"}); err != nil {
 		t.Fatalf("Apply(child done) error = %v", err)
 	}
-	if err := st.RankToBottom(ctx, epic.ID); err != nil {
+	if _, err := st.RankToBottom(ctx, epic.ID); err != nil {
 		t.Fatalf("RankToBottom(epic) error = %v", err)
 	}
 	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: dependent.ID, DstID: epic.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {

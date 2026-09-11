@@ -169,15 +169,19 @@ type RelationStore interface {
 // hand back the concurrency problem the intents exist to avoid.
 // (design-docs/event-store/design.md §rank)
 //
-// The two anchored verbs report a RankMove because rank frames are nested:
-// an intent naming two issues in different epics is honored against the
-// containing ancestors that ARE comparable, and the substitution is returned
-// so the caller can surface it. [LAW:no-silent-failure]
+// Every verb here reports what it resolved to, because rank frames are nested
+// and the naive reading of each verb is the wrong one. The two anchored verbs
+// report a RankMove: an intent naming two issues in different epics is honored
+// against the containing ancestors that ARE comparable. The two edge verbs
+// report a RankEnd: "the top" is the top of the issue's own frame, so an epic's
+// child sent there leads its siblings and moves nowhere in the queue at large.
+// Both substitutions are returned rather than assumed, so a caller can surface
+// them. [LAW:no-silent-failure]
 type Ranker interface {
 	RankAbove(ctx context.Context, issueID, targetID string) (RankMove, error)
 	RankBelow(ctx context.Context, issueID, targetID string) (RankMove, error)
-	RankToTop(ctx context.Context, issueID string) error
-	RankToBottom(ctx context.Context, issueID string) error
+	RankToTop(ctx context.Context, issueID string) (RankEnd, error)
+	RankToBottom(ctx context.Context, issueID string) (RankEnd, error)
 
 	// RankSet imposes a total order on the named issues at once, returning
 	// which representative each name resolved to.
