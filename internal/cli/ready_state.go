@@ -235,10 +235,10 @@ func nearestPendingLaneMate(pending []model.Issue, leaf model.Issue) []annotatio
 }
 
 // isEarlierSameLaneSibling reports whether sib precedes leaf within the same
-// lane — the ONE intra-epic implicit-prerequisite rule. Both the membership
-// gate (newSiblingGateAnnotator) and the focus-path derivation
-// (fetchFocusPathGoals) read it, so "earlier sibling" cannot drift between
-// the membership and ordering consumers.
+// lane — the ONE intra-epic implicit-prerequisite rule. Both the lane gate
+// (newSiblingGateAnnotator) and the focus-path derivation
+// (fetchFocusPathGoals) read it, so "earlier sibling" cannot drift between the
+// consumer that blocks a row and the one that admits it to the focus scope.
 // [LAW:single-enforcer] Single definition of the intra-epic prerequisite edge.
 func isEarlierSameLaneSibling(sib, leaf model.Issue) bool {
 	return sib.ID != leaf.ID && sib.Lane == leaf.Lane && sib.Rank < leaf.Rank

@@ -109,7 +109,7 @@ func TestClassifyReadinessCoversEveryRegisteredKind(t *testing.T) {
 				}
 			case annotation.RoleNone:
 				if !r.IsReady() || r.IsOrphaned() || len(r.RankInversions()) != 0 {
-					t.Errorf("ordering kind %q must be invisible to readiness, got ready=%v orphaned=%v inversions=%d", kind.String(), r.IsReady(), r.IsOrphaned(), len(r.RankInversions()))
+					t.Errorf("role-none kind %q must be invisible to readiness, got ready=%v orphaned=%v inversions=%d", kind.String(), r.IsReady(), r.IsOrphaned(), len(r.RankInversions()))
 				}
 			default:
 				t.Fatalf("kind %q has an uninterpreted readiness role", kind.String())
