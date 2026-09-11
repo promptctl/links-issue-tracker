@@ -185,7 +185,7 @@ type Ranker interface {
 
 	// RankSet imposes a total order on the named issues at once, returning
 	// which representative each name resolved to.
-	RankSet(ctx context.Context, ids []string) ([]RankSetResolution, error)
+	RankSet(ctx context.Context, ids []string) (RankSetResult, error)
 }
 
 // BulkWriter applies a batch of authored issue documents in one call,

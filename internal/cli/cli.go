@@ -1096,22 +1096,26 @@ func runRankSet(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 	if len(positional) < 2 {
 		return UsageError{Message: "usage: lit rank set <id1> <id2> [<id3> ...]"}
 	}
-	resolutions, err := ap.Store.RankSet(ctx, positional)
+	result, err := ap.Store.RankSet(ctx, positional)
 	if err != nil {
 		return err
 	}
-	ranked := make([]string, len(resolutions))
-	for i, r := range resolutions {
+	ranked := make([]string, len(result.Resolutions))
+	for i, r := range result.Resolutions {
 		ranked[i] = r.RankedID
 	}
-	for _, r := range resolutions {
+	for _, r := range result.Resolutions {
 		if r.RankedID != r.NamedID {
 			if _, err := fmt.Fprintf(stdout, "%s is inside %s; ranked the epic %s instead, leaving its internal order unchanged\n", r.NamedID, r.RankedID, r.RankedID); err != nil {
 				return err
 			}
 		}
 	}
-	if _, err := fmt.Fprintf(stdout, "ranked %d issues at top in order: %s\n", len(ranked), strings.Join(ranked, ", ")); err != nil {
+	// Name the frame the stack landed in, for the reason the edge verbs do: this
+	// verb anchors at the top of the representatives' own frame, so an
+	// unqualified "at top" reads as the head of the backlog when the set was
+	// three children leading one epic. [LAW:no-silent-failure]
+	if _, err := fmt.Fprintf(stdout, "ranked %d issues at the top of %s in order: %s\n", len(ranked), frameLabel(result.Frame), strings.Join(ranked, ", ")); err != nil {
 		return err
 	}
 	return emitBreadcrumb(stdout, "update")

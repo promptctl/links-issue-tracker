@@ -226,20 +226,20 @@ func (e *Engine) frameOf(id string) storage.Frame {
 // the top of the representatives' own frame in the order named, and reports
 // which representative each name resolved to. The anchor is that frame's top,
 // never the whole order's.
-func (e *Engine) RankSet(ctx context.Context, ids []string) ([]storage.RankSetResolution, error) {
+func (e *Engine) RankSet(ctx context.Context, ids []string) (storage.RankSetResult, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	if len(ids) < 2 {
-		return nil, errors.New("rank set: need at least 2 IDs to establish order")
+		return storage.RankSetResult{}, errors.New("rank set: need at least 2 IDs to establish order")
 	}
 	seen := map[string]struct{}{}
 	for _, id := range ids {
 		if id == "" {
-			return nil, errors.New("rank set: empty ID in input")
+			return storage.RankSetResult{}, errors.New("rank set: empty ID in input")
 		}
 		if _, dup := seen[id]; dup {
-			return nil, fmt.Errorf("rank set: duplicate ID %q in input", id)
+			return storage.RankSetResult{}, fmt.Errorf("rank set: duplicate ID %q in input", id)
 		}
 		seen[id] = struct{}{}
 		// Unwrapped, unlike the two input-shape errors above: this refusal has a
@@ -248,20 +248,20 @@ func (e *Engine) RankSet(ctx context.Context, ids []string) ([]storage.RankSetRe
 		// the errors that are about this call's arguments and have no twin.
 		// [LAW:one-source-of-truth]
 		if err := e.mustRankable(id); err != nil {
-			return nil, err
+			return storage.RankSetResult{}, err
 		}
 	}
 	chains := make([][]string, len(ids))
 	for i, id := range ids {
 		chain, err := e.ancestorChain(id)
 		if err != nil {
-			return nil, err
+			return storage.RankSetResult{}, err
 		}
 		chains[i] = chain
 	}
 	reps, err := frameRepresentatives(chains)
 	if err != nil {
-		return nil, fmt.Errorf("rank set: %w", err)
+		return storage.RankSetResult{}, fmt.Errorf("rank set: %w", err)
 	}
 	// Two named ids collapsing onto one representative is refused: the order
 	// asked for places issues from inside one epic against outsiders, which no
@@ -271,7 +271,7 @@ func (e *Engine) RankSet(ctx context.Context, ids []string) ([]storage.RankSetRe
 	resolutions := make([]storage.RankSetResolution, len(ids))
 	for i, id := range ids {
 		if prior, dup := namedByRep[reps[i]]; dup {
-			return nil, fmt.Errorf("rank set: %s and %s both resolve to %s — their relative order is internal to %s and cannot be set against outside issues; run rank set among siblings instead", prior, id, reps[i], reps[i])
+			return storage.RankSetResult{}, fmt.Errorf("rank set: %s and %s both resolve to %s — their relative order is internal to %s and cannot be set against outside issues; run rank set among siblings instead", prior, id, reps[i], reps[i])
 		}
 		namedByRep[reps[i]] = id
 		resolutions[i] = storage.RankSetResolution{NamedID: id, RankedID: reps[i]}
@@ -310,12 +310,12 @@ func (e *Engine) RankSet(ctx context.Context, ids []string) ([]storage.RankSetRe
 	// is a resolution bug, and it stops here rather than committing the half of
 	// itself that fits. [LAW:no-silent-failure]
 	if len(ordered) != len(slots) {
-		return nil, fmt.Errorf("rank set: %d issues resolved into %s but the frame holds %d ranked — refusing to rewrite a partial order", len(ordered), f, len(slots))
+		return storage.RankSetResult{}, fmt.Errorf("rank set: %d issues resolved into %s but the frame holds %d ranked — refusing to rewrite a partial order", len(ordered), f, len(slots))
 	}
 	for i, slot := range slots {
 		e.order[slot] = ordered[i]
 	}
-	return resolutions, nil
+	return storage.RankSetResult{Resolutions: resolutions, Frame: f}, nil
 }
 
 // detach lifts an id out of the order, leaving the rest of the sequence

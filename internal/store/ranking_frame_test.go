@@ -167,9 +167,15 @@ func TestRankSetMixedFrameResolvesChildToEpic(t *testing.T) {
 	fx := newFrameFixture(t, ctx, st)
 	before := currentRanks(t, ctx, st, fx.children)
 
-	resolutions, err := st.RankSet(ctx, []string{fx.standalone.ID, fx.children[1].ID})
+	result, err := st.RankSet(ctx, []string{fx.standalone.ID, fx.children[1].ID})
 	if err != nil {
 		t.Fatalf("RankSet(standalone, child) error = %v", err)
+	}
+	resolutions := result.Resolutions
+	// A standalone ranked against an epic's child resolves to the epic, so the
+	// stack lands at the top level, not inside the epic.
+	if result.Frame != storage.TopLevel {
+		t.Errorf("RankSet frame = %q, want the top level", result.Frame)
 	}
 	want := []storage.RankSetResolution{
 		{NamedID: fx.standalone.ID, RankedID: fx.standalone.ID},
@@ -198,9 +204,13 @@ func TestRankSetAcrossTwoEpicsRanksRepresentatives(t *testing.T) {
 	fx2 := newFrameFixture(t, ctx, st)
 	before := currentRanks(t, ctx, st, append(fx1.children, fx2.children...))
 
-	resolutions, err := st.RankSet(ctx, []string{fx2.children[0].ID, fx1.children[2].ID})
+	result, err := st.RankSet(ctx, []string{fx2.children[0].ID, fx1.children[2].ID})
 	if err != nil {
 		t.Fatalf("RankSet(child2, child1) error = %v", err)
+	}
+	resolutions := result.Resolutions
+	if result.Frame != storage.TopLevel {
+		t.Errorf("RankSet frame = %q, want the top level the two epics share", result.Frame)
 	}
 	if resolutions[0].RankedID != fx2.epic.ID || resolutions[1].RankedID != fx1.epic.ID {
 		t.Fatalf("resolutions = %+v, want ranked %s then %s", resolutions, fx2.epic.ID, fx1.epic.ID)
@@ -224,9 +234,16 @@ func TestRankSetSameEpicSiblingsRanksSiblingsDirectly(t *testing.T) {
 	fx := newFrameFixture(t, ctx, st)
 	before := currentRanks(t, ctx, st, []model.Issue{fx.epic, fx.standalone})
 
-	resolutions, err := st.RankSet(ctx, []string{fx.children[2].ID, fx.children[0].ID, fx.children[1].ID})
+	result, err := st.RankSet(ctx, []string{fx.children[2].ID, fx.children[0].ID, fx.children[1].ID})
 	if err != nil {
 		t.Fatalf("RankSet(siblings) error = %v", err)
+	}
+	resolutions := result.Resolutions
+	// Siblings rank inside their epic, and the frame says so. This is the value
+	// the CLI names in its summary: "at the top of <epic>" rather than a bare
+	// "at top", which would read as the head of the backlog.
+	if result.Frame != storage.Frame(fx.epic.ID) {
+		t.Errorf("RankSet frame = %q, want the epic %s the siblings live in", result.Frame, fx.epic.ID)
 	}
 	for _, r := range resolutions {
 		if r.NamedID != r.RankedID {
@@ -553,5 +570,59 @@ func TestWriteRankRefusesAnIssueDeletedUnderTheLock(t *testing.T) {
 	}
 	if after.Rank != before.Rank {
 		t.Errorf("a refused write still moved the deleted %s: rank %q -> %q", issue.ID, before.Rank, after.Rank)
+	}
+}
+
+// TestFrameResolutionRefusesADeletedNamedIssue covers the case writeRankTx
+// cannot: an id that frame resolution substitutes away.
+//
+// writeRankTx re-reads the row it is about to write, which closes the race for
+// every id that reaches the write. A named id does not always reach it. Naming
+// a child of an epic beside a top-level issue resolves the child to its epic,
+// and from there the epic is what every later check sees — so a delete of the
+// child landing after the pre-lock gate went unnoticed, and the set proceeded to
+// rank the epic on behalf of an issue that no longer existed. The refusal the
+// CHANGELOG promises for "every form of the command" was not the refusal the
+// substitution path gave.
+//
+// White-box for the same reason as the write-side case above: the public verb
+// refuses this id at the gate and so can never reach resolution with it.
+func TestFrameResolutionRefusesADeletedNamedIssue(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	fx := newFrameFixture(t, ctx, st)
+	child := fx.children[0]
+
+	if err := st.ExecRawForTest(ctx, `UPDATE issues SET deleted_at = ? WHERE id = ?`, "2026-09-11T00:00:00Z", child.ID); err != nil {
+		t.Fatalf("soft-delete %s: %v", child.ID, err)
+	}
+
+	// The child resolves to its epic, which is live and untouched — which is
+	// exactly why nothing downstream would have caught the deletion.
+	var resolveErr error
+	if err := st.withMutation(ctx, "frame-resolution-liveness-test", func(ctx context.Context, tx *sql.Tx) error {
+		_, _, resolveErr = resolveRankSet(ctx, tx, []string{child.ID, fx.standalone.ID})
+		return nil
+	}); err != nil {
+		t.Fatalf("withMutation error = %v", err)
+	}
+	if resolveErr == nil {
+		t.Fatalf("resolveRankSet accepted the deleted %s by substituting its epic %s; want a refusal", child.ID, fx.epic.ID)
+	}
+	if !strings.Contains(resolveErr.Error(), "deleted while the move was being applied") {
+		t.Errorf("resolveRankSet error = %q, want it to name the mid-flight deletion", resolveErr)
+	}
+
+	// The same gap on the relative verbs, which resolve through the same walk.
+	var pairErr error
+	if err := st.withMutation(ctx, "frame-resolution-liveness-test-pair", func(ctx context.Context, tx *sql.Tx) error {
+		_, _, _, pairErr = rankPairTx(ctx, tx, child.ID, fx.standalone.ID)
+		return nil
+	}); err != nil {
+		t.Fatalf("withMutation error = %v", err)
+	}
+	if pairErr == nil {
+		t.Fatalf("rankPairTx accepted the deleted %s by substituting its epic %s; want a refusal", child.ID, fx.epic.ID)
 	}
 }

@@ -60,3 +60,60 @@ func TestRankCrossFrameReportsResolution(t *testing.T) {
 		t.Errorf("rank output = %q, want anchor-side resolution note", stdout.String())
 	}
 }
+
+// TestRankSetNamesTheFrameItStackedIn covers the summary line of lit rank set,
+// which had no CLI-level test at all.
+//
+// rank set anchors at the top of the representatives' own frame, so ordering
+// three children of an epic leads that epic's children and moves nothing in the
+// queue at large. The summary said "ranked 3 issues at top", which reads as the
+// head of the backlog — the same ambiguity the edge verbs were given frameLabel
+// to remove, left standing on the one verb whose whole subject is the frame.
+// Agents read this output as ground truth, so a summary that overstates the
+// scope of the move is a wrong answer, not a cosmetic one.
+// [LAW:no-silent-failure]
+func TestRankSetNamesTheFrameItStackedIn(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+
+	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "set", IssueType: "epic", Placement: storage.RankBottom})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	children := make([]string, 0, 2)
+	for _, title := range []string{"C1", "C2"} {
+		child, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "set", IssueType: "task", ParentID: epic.ID, Placement: storage.RankBottom})
+		if err != nil {
+			t.Fatalf("CreateIssue(%s) error = %v", title, err)
+		}
+		children = append(children, child.ID)
+	}
+	outsider, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Outsider", Topic: "set", IssueType: "task", Placement: storage.RankBottom})
+	if err != nil {
+		t.Fatalf("CreateIssue(outsider) error = %v", err)
+	}
+
+	// Siblings: the stack lands inside the epic, and the summary must say so.
+	var stdout bytes.Buffer
+	if err := runRankSet(ctx, &stdout, ap, []string{children[1], children[0]}); err != nil {
+		t.Fatalf("rank set siblings error = %v", err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "at the top of "+epic.ID) {
+		t.Errorf("rank set output = %q, want it to name the epic %s the stack landed in", out, epic.ID)
+	}
+
+	// Top level: the summary must name the backlog rather than an epic, or the
+	// frame-naming would be worse than the bare wording it replaced.
+	stdout.Reset()
+	if err := runRankSet(ctx, &stdout, ap, []string{outsider.ID, epic.ID}); err != nil {
+		t.Fatalf("rank set top-level error = %v", err)
+	}
+	out = stdout.String()
+	if !strings.Contains(out, "at the top of the backlog") {
+		t.Errorf("rank set output = %q, want it to name the backlog for a top-level stack", out)
+	}
+	if strings.Contains(out, "at the top of "+epic.ID) {
+		t.Errorf("rank set output = %q, named the epic %s for a stack that landed at the top level", out, epic.ID)
+	}
+}

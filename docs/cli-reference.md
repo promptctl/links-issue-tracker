@@ -350,7 +350,10 @@ below, and so on. Either every assignment applies or none does.
 
 The anchor is that frame's top, not the workspace's. Naming several children of
 one epic leads *that epic's children* and moves nothing outside it — the same
-frame-local rule `--top`/`--bottom` follow.
+frame-local rule `--top`/`--bottom` follow. The summary line names the frame the
+stack landed in (`ranked 3 issues at the top of <epic> in order: …`, or `at the
+top of the backlog`), because the top of an epic's children is not the top of
+the queue and an unqualified "at top" reads as the latter.
 
 The same peer rule as relative placement applies: each named ID is resolved to
 its representative in the comparable frame, so naming an epic's child alongside

@@ -133,6 +133,22 @@ func (s *Store) mustRankable(ctx context.Context, id string) (model.Issue, error
 	return issue, nil
 }
 
+// requireLiveTx refuses an issue deleted since the verb started. It is the one
+// rendering of "still live under this lock", so the rank paths that need that
+// answer ask the same question in the same words rather than each carrying its
+// own copy of the predicate. [LAW:single-enforcer]
+func requireLiveTx(ctx context.Context, q rowQueryer, id string) error {
+	var live string
+	err := q.QueryRowContext(ctx, `SELECT id FROM issues WHERE id = ? AND deleted_at IS NULL`, id).Scan(&live)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("cannot rank %s: it was deleted while the move was being applied", id)
+	}
+	if err != nil {
+		return fmt.Errorf("liveness of %s: %w", id, err)
+	}
+	return nil
+}
+
 // writeRankTx puts a key on an issue, and refuses to put one on an issue that
 // has been deleted since the verb started.
 //
@@ -154,13 +170,8 @@ func (s *Store) mustRankable(ctx context.Context, id string) (model.Issue, error
 // across every row it touches; deriving it per write would stamp one logical
 // move with a spread of instants.
 func writeRankTx(ctx context.Context, tx *sql.Tx, id, newRank, now string) error {
-	var live string
-	err := tx.QueryRowContext(ctx, `SELECT id FROM issues WHERE id = ? AND deleted_at IS NULL`, id).Scan(&live)
-	if errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("cannot rank %s: it was deleted while the move was being applied", id)
-	}
-	if err != nil {
-		return fmt.Errorf("liveness of %s: %w", id, err)
+	if err := requireLiveTx(ctx, tx, id); err != nil {
+		return err
 	}
 	// The predicate rides on the UPDATE as well, so the write cannot land on a
 	// deleted row even if the read above is ever removed or reordered.
@@ -307,9 +318,9 @@ func resolveRankSet(ctx context.Context, q rowQueryer, ids []string) ([]storage.
 // Validates IDs exist and rejects duplicates before any write.
 // [LAW:single-enforcer] Multi-issue rank reassignment lives in this one
 // transaction so partial-application states cannot occur.
-func (s *Store) RankSet(ctx context.Context, ids []string) ([]storage.RankSetResolution, error) {
+func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResult, error) {
 	if err := rankSetValidateIDs(ids); err != nil {
-		return nil, err
+		return storage.RankSetResult{}, err
 	}
 	// Existence and liveness run before the lock so a caller naming a missing or
 	// deleted issue gets that answer directly, rather than out of a transaction.
@@ -319,17 +330,16 @@ func (s *Store) RankSet(ctx context.Context, ids []string) ([]storage.RankSetRes
 	// [LAW:parse-dont-validate]
 	for _, id := range ids {
 		if _, err := s.mustRankable(ctx, id); err != nil {
-			return nil, err
+			return storage.RankSetResult{}, err
 		}
 	}
-	var resolutions []storage.RankSetResolution
+	var result storage.RankSetResult
 	err := s.withMutation(ctx, "rank set", func(ctx context.Context, tx *sql.Tx) error {
-		var f storage.Frame
-		var err error
-		resolutions, f, err = resolveRankSet(ctx, tx, ids)
+		resolutions, f, err := resolveRankSet(ctx, tx, ids)
 		if err != nil {
 			return err
 		}
+		result = storage.RankSetResult{Resolutions: resolutions, Frame: f}
 		ranked := make([]string, len(resolutions))
 		for i, r := range resolutions {
 			ranked[i] = r.RankedID
@@ -383,16 +393,30 @@ func (s *Store) RankSet(ctx context.Context, ids []string) ([]storage.RankSetRes
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return storage.RankSetResult{}, err
 	}
-	return resolutions, nil
+	return result, nil
 }
 
 // ancestorChain returns the parent-child ancestry of an issue, self first,
 // root last, following only non-deleted parents. The on-disk relation rows
 // are a trust boundary: a parent cycle is corrupt data and fails loudly
 // rather than looping. [LAW:no-silent-failure]
+//
+// The walk refuses a deleted starting id for the same reason it refuses a
+// deleted parent, and refusing only the latter was what let a deleted issue be
+// ranked. Frame resolution substitutes a representative for an id it cannot
+// compare directly — a child of an epic named beside a top-level issue resolves
+// to the epic — and from there on it is the representative that every later
+// check sees. writeRankTx re-reads the row it writes, but that row is the
+// representative; the named id, live when the pre-lock gate read it and deleted
+// a moment later, was re-read by nothing. Seeding the chain unconditionally is
+// where that id stopped being examined, so it is where the examination belongs.
+// [LAW:single-enforcer]
 func ancestorChain(ctx context.Context, q rowQueryer, id string) ([]string, error) {
+	if err := requireLiveTx(ctx, q, id); err != nil {
+		return nil, err
+	}
 	chain := []string{id}
 	seen := map[string]struct{}{id: {}}
 	for cur := id; ; {

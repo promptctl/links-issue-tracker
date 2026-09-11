@@ -1348,7 +1348,7 @@ func rankSetImposesOrder(t *testing.T, ctx context.Context, st storage.Store, cl
 	b := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "b", Topic: "core"})
 	c := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "c", Topic: "core"})
 
-	resolutions, err := st.RankSet(ctx, []string{c.ID, a.ID, b.ID})
+	result, err := st.RankSet(ctx, []string{c.ID, a.ID, b.ID})
 	if err != nil {
 		t.Fatalf("RankSet error = %v", err)
 	}
@@ -1356,6 +1356,7 @@ func rankSetImposesOrder(t *testing.T, ctx context.Context, st storage.Store, cl
 
 	// Every named id is accounted for, in the order named, so a caller can
 	// report substitutions without matching up two lists itself.
+	resolutions := result.Resolutions
 	if len(resolutions) != 3 {
 		t.Fatalf("RankSet returned %d resolutions, want 3", len(resolutions))
 	}
@@ -1366,6 +1367,12 @@ func rankSetImposesOrder(t *testing.T, ctx context.Context, st storage.Store, cl
 		if resolutions[i].RankedID != want {
 			t.Errorf("resolution %d RankedID = %q, want the same frame-mate %q", i, resolutions[i].RankedID, want)
 		}
+	}
+	// Three top-level issues stack in the top-level frame, and both engines must
+	// say so — the frame is what the CLI names in its summary, so a wrong one
+	// there tells the reader the backlog head moved when it did not.
+	if result.Frame != storage.TopLevel {
+		t.Errorf("RankSet frame = %q, want the top level", result.Frame)
 	}
 }
 

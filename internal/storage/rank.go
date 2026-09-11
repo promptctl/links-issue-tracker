@@ -56,3 +56,19 @@ type RankSetResolution struct {
 	NamedID  string `json:"named_id"`
 	RankedID string `json:"ranked_id"`
 }
+
+// RankSetResult reports what a rank-set request did: the per-id substitutions,
+// and the one frame the whole set was stacked at the top of.
+//
+// Frame belongs to the call rather than to each resolution because a set has a
+// single anchor — every representative lands in the same keyspace, so carrying
+// it per-resolution would be N copies of one fact, free to disagree.
+// [LAW:one-source-of-truth]
+//
+// The caller needs it for the same reason RankEnd carries one: the top of an
+// epic's children is not the top of the queue, and "ranked 3 issues at top"
+// reads as the latter. [LAW:no-silent-failure]
+type RankSetResult struct {
+	Resolutions []RankSetResolution
+	Frame       Frame
+}
