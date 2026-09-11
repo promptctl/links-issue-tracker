@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -1002,4 +1003,71 @@ func TestNoWorkOnAGenuinelyEmptyBacklogIsUnchanged(t *testing.T) {
 	if got := noWork.Error(); got != "no ready work" {
 		t.Fatalf("NoWork.Error() = %q, want exactly %q unchanged", got, "no ready work")
 	}
+}
+
+// The pool walk hands NoWork every row it went past, which in a busy workspace
+// is the whole filtered backlog rather than the epic-scoped handful Exhausted
+// reports. The clause has to stay one readable line at that size without lying
+// about how much of it went unnamed.
+//
+// Asserted per kind rather than per message on purpose: describeReach groups the
+// rows by kind and renders a clause each, so a cap applied to the joined message
+// would pass a single-kind fixture and still emit an unbounded line the moment a
+// second kind appeared.
+func TestReachClauseNamesABoundedPrefixAndCountsTheRest(t *testing.T) {
+	t.Parallel()
+
+	rowsOfKind := func(kind reachKind, prefix string, n int) []rowReach {
+		rows := make([]rowReach, 0, n)
+		for i := range n {
+			rows = append(rows, rowReach{ID: fmt.Sprintf("%s-%03d", prefix, i), Kind: kind})
+		}
+		return rows
+	}
+
+	t.Run("a pool over the cap names the cap's worth and counts the remainder", func(t *testing.T) {
+		over := 7
+		msg := NoWork{Unreachable: rowsOfKind(reachHeldFresh, "held", maxNamedPerKind+over)}.Error()
+
+		if want := fmt.Sprintf("and %d more", over); !strings.Contains(msg, want) {
+			t.Fatalf("NoWork.Error() = %q, want %q — a truncation that omits the count tells the agent the backlog is smaller than it is", msg, want)
+		}
+		if named := fmt.Sprintf("held-%03d", maxNamedPerKind-1); !strings.Contains(msg, named) {
+			t.Fatalf("NoWork.Error() = %q, want it to name %q — the last id inside the cap is named, not counted", msg, named)
+		}
+		if dropped := fmt.Sprintf("held-%03d", maxNamedPerKind); strings.Contains(msg, dropped) {
+			t.Fatalf("NoWork.Error() = %q, want %q left to the count — naming it means the cap never bit", msg, dropped)
+		}
+	})
+
+	t.Run("a pool at the cap is named whole", func(t *testing.T) {
+		msg := NoWork{Unreachable: rowsOfKind(reachHeldFresh, "held", maxNamedPerKind)}.Error()
+
+		if strings.Contains(msg, "more") {
+			t.Fatalf("NoWork.Error() = %q, want no remainder clause — every row is named, so there is nothing left to count", msg)
+		}
+		for i := range maxNamedPerKind {
+			if id := fmt.Sprintf("held-%03d", i); !strings.Contains(msg, id) {
+				t.Fatalf("NoWork.Error() = %q, want it to name %q — a set at the cap loses nothing", msg, id)
+			}
+		}
+	})
+
+	t.Run("the cap is per kind, so one kind cannot spend another's budget", func(t *testing.T) {
+		over := 4
+		pool := append(
+			rowsOfKind(reachHeldFresh, "held", maxNamedPerKind+over),
+			rowsOfKind(reachNotReady, "gated", maxNamedPerKind+over)...,
+		)
+		msg := NoWork{Unreachable: pool}.Error()
+
+		if got := strings.Count(msg, fmt.Sprintf("and %d more", over)); got != 2 {
+			t.Fatalf("NoWork.Error() = %q, counted %d remainder clauses, want 2 — each kind reports its own tail, or the second kind's rows vanish into the first kind's count", msg, got)
+		}
+		for _, id := range []string{"held-000", "gated-000"} {
+			if !strings.Contains(msg, id) {
+				t.Fatalf("NoWork.Error() = %q, want it to name %q — both kinds get a clause, and each names its own prefix", msg, id)
+			}
+		}
+	})
 }

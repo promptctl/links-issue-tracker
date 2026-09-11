@@ -468,10 +468,33 @@ var (
 	}
 )
 
+// maxNamedPerKind caps how many ids one clause names outright. NoWork's rows
+// are every row the pool walk went past — the whole filtered backlog, not the
+// epic-scoped handful Exhausted reports — so an uncapped join answers a busy
+// workspace with a single line of hundreds of ids, which is worse for the agent
+// reading it than a dozen and a count. Naming some is what makes the diagnostic
+// actionable; naming all of them is what makes it unreadable.
+const maxNamedPerKind = 12
+
+// nameIDs names at most maxNamedPerKind ids and states how many it left out, so
+// the clause reads the same at any pool size. The remainder is counted rather
+// than dropped: an agent told "and 135 more" still learns the true scale of what
+// it cannot start. [LAW:no-silent-failure]
+func nameIDs(ids []string) string {
+	// [LAW:dataflow-not-control-flow] the last inch of rendering, where the two
+	// arms are different sentences rather than an operation one of them skips.
+	if len(ids) <= maxNamedPerKind {
+		return strings.Join(ids, ", ")
+	}
+	return fmt.Sprintf("%s and %d more", strings.Join(ids[:maxNamedPerKind], ", "), len(ids)-maxNamedPerKind)
+}
+
 // describeReach renders "<lead><ids> (<note>)" for each kind that has rows,
 // joined by "; ", in reachKind's own declaration order — one ordering for both
-// diagnostics rather than a per-caller one that could disagree.
-// [LAW:one-source-of-truth]
+// diagnostics rather than a per-caller one that could disagree. The cap lives
+// here for the same reason the ordering does: both diagnostics render through
+// this one function, so neither can grow a second answer to how long a clause
+// may get. [LAW:one-source-of-truth] [LAW:single-enforcer]
 func describeReach(rows []rowReach, lead string, notes reachNotes) string {
 	byKind := map[reachKind][]string{}
 	for _, row := range rows {
@@ -483,7 +506,7 @@ func describeReach(rows []rowReach, lead string, notes reachNotes) string {
 		if len(ids) == 0 {
 			continue
 		}
-		parts = append(parts, fmt.Sprintf("%s%s (%s)", lead, strings.Join(ids, ", "), note))
+		parts = append(parts, fmt.Sprintf("%s%s (%s)", lead, nameIDs(ids), note))
 	}
 	return strings.Join(parts, "; ")
 }
