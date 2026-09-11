@@ -51,7 +51,7 @@ On failure the process prints to stderr: `error (code=N): <message>`, then a `re
 
 ## The workability predicate
 
-`backlog` and `next` share one pipeline (`cli.go:714-779`; annotators in `ready_state.go`):
+`backlog` and `next` share one pipeline (`cli.go:618-751`; annotators in `ready_state.go`):
 
 1. **Candidate set**: list issues with statuses `[open, in_progress]` (or the single `--status` value), plus any type/assignee/labels filters; archived and deleted excluded; store order is rank-ascending.
 2. **Leaves only**: containers (epics) and closed issues are dropped — an epic is never a workable row (`cli.go:1151-1160`).
@@ -63,7 +63,7 @@ On failure the process prints to stderr: `error (code=N): <message>`, then a `re
    - *Needs-design* — the reserved label `needs-design` → `NeedsDesign`.
    - *Focus path* — issues on the prerequisite closure of any open goal labeled `focus`, computed by BFS over dependencies, container children, and earlier same-lane siblings; shared prerequisites attribute to the first goal reached (`ready_state.go:246-401`).
 4. **Classification**: annotations map to roles — blocking (`MissingField`, `OpenDependency`, `EarlierSiblingPending`, `NeedsDesign`), orphaned, rank-inversion, or none (`FocusPath`). **Ready = zero blocking annotations** (`readiness.go:42-90`). An unclassified kind panics.
-5. **Ordering**, three stable sorts in sequence: composite rank (a leaf inside an epic sorts by the epic's rank, then its own), then priority (urgent first), then focus-path rows first — so focus outranks urgent (`cli.go:775-777`, `ready_state.go:490-537`).
+5. **Ordering**, three stable sorts in sequence: composite rank (a leaf inside an epic sorts by the epic's rank, then its own), then priority (urgent first), then focus-path rows first — so focus outranks urgent (`cli.go:677-679`, `ready_state.go:490-537`).
 
 Rollups partition rows as: `in_progress` first (even if also blocked), else blocked, else ready (`ready_state.go:582-595`).
 

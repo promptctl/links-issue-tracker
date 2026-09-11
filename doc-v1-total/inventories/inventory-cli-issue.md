@@ -365,7 +365,7 @@ prefix (`cli.go:1036-1042`).
 
 ### 1.18 Readiness / workability — the exact predicate
 
-**Step 1 — candidate set** (`classifyWorkable`, `cli.go:714-779`):
+**Step 1 — candidate set** (`classifyWorkable`, `cli.go:652-682`):
 `ListIssues` with `Statuses = [open, in_progress]` (or the single `--status`
 value if given), `IssueTypes`/`Assignees`/`LabelsAll` from the CLI filter,
 `IncludeArchived=false`, `IncludeDeleted=false`, `Limit=0` (`cli.go:715-730`).
@@ -432,7 +432,7 @@ iff it has no `MissingField`, no `OpenDependency`, no `EarlierSiblingPending`, a
 no `NeedsDesign` annotation. `DependencyIDs()` returns only the `OpenDependency`
 details (`readiness.go:55-63`).
 
-**Step 5 — canonical ordering**, applied in this sequence (`cli.go:775-777`):
+**Step 5 — canonical ordering**, applied in this sequence (`cli.go:677-679`):
 1. `sortByCompositeRank(rows, details)` — stable sort by
    (effective epic rank, own rank); a leaf whose parent is a container uses the
    parent's rank as its epic-position, otherwise its own rank
