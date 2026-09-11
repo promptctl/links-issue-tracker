@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -397,8 +398,12 @@ func (s *Store) RankBelow(ctx context.Context, issueID, targetID string) (storag
 // smoothRanksIfNeededTx checks whether the given rank string has grown past the
 // smoothing threshold and, if so, re-spaces a local window of items around the
 // insertion point, at O(SmoothingWindow) cost instead of a full O(n) rebalance.
-// The window keeps its order, and its new ranks are longer than both ranks just
-// outside it, so a window bounded by long ranks comes out long.
+// The window is bounded by the nearest rank on each side whose significant part
+// differs from the window's end there; the rows passed on the way join the
+// window, so a run of zero-extensions widens it past SmoothingWindow. Only
+// ranks whose significant parts differ leave room between them, so those bounds
+// always do. The window keeps its order, and its new ranks are
+// longer than both bounds, so a window bounded by long ranks comes out long.
 func smoothRanksIfNeededTx(ctx context.Context, tx *sql.Tx, triggerRank string) error {
 	if len(triggerRank) < rank.SmoothingThreshold {
 		return nil
@@ -407,11 +412,7 @@ func smoothRanksIfNeededTx(ctx context.Context, tx *sql.Tx, triggerRank string) 
 
 	// Collect the window: up to half items at or below the trigger, plus
 	// up to half items above it.
-	type ranked struct {
-		id   string
-		rank string
-	}
-	var window []ranked
+	var window []rankedIssue
 
 	belowRows, err := tx.QueryContext(ctx,
 		`SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank <= ? ORDER BY item_rank DESC LIMIT ?`,
@@ -419,9 +420,9 @@ func smoothRanksIfNeededTx(ctx context.Context, tx *sql.Tx, triggerRank string) 
 	if err != nil {
 		return fmt.Errorf("smooth: query below: %w", err)
 	}
-	var below []ranked
+	var below []rankedIssue
 	for belowRows.Next() {
-		var r ranked
+		var r rankedIssue
 		if err := belowRows.Scan(&r.id, &r.rank); err != nil {
 			belowRows.Close()
 			return fmt.Errorf("smooth: scan below: %w", err)
@@ -432,10 +433,7 @@ func smoothRanksIfNeededTx(ctx context.Context, tx *sql.Tx, triggerRank string) 
 	if err := belowRows.Err(); err != nil {
 		return fmt.Errorf("smooth: below rows: %w", err)
 	}
-	// Reverse below so it's in ascending order.
-	for i, j := 0, len(below)-1; i < j; i, j = i+1, j-1 {
-		below[i], below[j] = below[j], below[i]
-	}
+	slices.Reverse(below)
 	window = append(window, below...)
 
 	aboveRows, err := tx.QueryContext(ctx,
@@ -445,7 +443,7 @@ func smoothRanksIfNeededTx(ctx context.Context, tx *sql.Tx, triggerRank string) 
 		return fmt.Errorf("smooth: query above: %w", err)
 	}
 	for aboveRows.Next() {
-		var r ranked
+		var r rankedIssue
 		if err := aboveRows.Scan(&r.id, &r.rank); err != nil {
 			aboveRows.Close()
 			return fmt.Errorf("smooth: scan above: %w", err)
@@ -461,29 +459,22 @@ func smoothRanksIfNeededTx(ctx context.Context, tx *sql.Tx, triggerRank string) 
 		return nil
 	}
 
-	// Find the boundary ranks just outside the window.
-	var lowerBound, upperBound string
-	loRow := tx.QueryRowContext(ctx,
-		`SELECT item_rank FROM issues WHERE deleted_at IS NULL AND item_rank < ? ORDER BY item_rank DESC LIMIT 1`,
+	// [LAW:one-source-of-truth] rank.Significant is the definition of room, as in
+	// anchorRun, so the bounds are chosen by it rather than by raw adjacency.
+	lowerRun, lowerBound, err := significantRun(ctx, tx,
+		`SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank < ? ORDER BY item_rank DESC`,
 		window[0].rank)
-	var lb sql.NullString
-	if err := loRow.Scan(&lb); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err != nil {
 		return fmt.Errorf("smooth: lower bound: %w", err)
 	}
-	if lb.Valid {
-		lowerBound = lb.String
-	}
-
-	hiRow := tx.QueryRowContext(ctx,
-		`SELECT item_rank FROM issues WHERE deleted_at IS NULL AND item_rank > ? ORDER BY item_rank ASC LIMIT 1`,
+	upperRun, upperBound, err := significantRun(ctx, tx,
+		`SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank > ? ORDER BY item_rank ASC`,
 		window[len(window)-1].rank)
-	var ub sql.NullString
-	if err := hiRow.Scan(&ub); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err != nil {
 		return fmt.Errorf("smooth: upper bound: %w", err)
 	}
-	if ub.Valid {
-		upperBound = ub.String
-	}
+	slices.Reverse(lowerRun)
+	window = slices.Concat(lowerRun, window, upperRun)
 
 	newRanks, err := rank.SpacedRanksBetween(lowerBound, upperBound, len(window))
 	if err != nil {
@@ -498,6 +489,31 @@ func smoothRanksIfNeededTx(ctx context.Context, tx *sql.Tx, triggerRank string) 
 		}
 	}
 	return nil
+}
+
+// significantRun reads the rows query returns outward from edge, nearest first,
+// and returns the leading rows whose significant rank equals edge's, then the
+// first rank whose significant part differs — or "", the open end of the
+// keyspace, when the rows run out first.
+func significantRun(ctx context.Context, tx *sql.Tx, query, edge string) ([]rankedIssue, string, error) {
+	rows, err := tx.QueryContext(ctx, query, edge)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+	stem := rank.Significant(edge)
+	var run []rankedIssue
+	for rows.Next() {
+		var item rankedIssue
+		if err := rows.Scan(&item.id, &item.rank); err != nil {
+			return nil, "", err
+		}
+		if rank.Significant(item.rank) != stem {
+			return run, item.rank, nil
+		}
+		run = append(run, item)
+	}
+	return run, "", rows.Err()
 }
 
 // rowQueryer abstracts the QueryContext surface that *sql.DB and *sql.Tx

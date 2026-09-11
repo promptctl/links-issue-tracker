@@ -557,3 +557,66 @@ func TestFixRankInversionsTwiceWritesNothingWithSmoothing(t *testing.T) {
 		t.Fatalf("Doctor(after).RankInversions = %d, want 0", report.RankInversions)
 	}
 }
+
+// Stored ranks that are zero-extensions of one another — "V", "V0", "V00" —
+// share one significant part, and no rank longer than two of them sorts between
+// them. A smoothing window planted inside such a run has neighbours of that
+// kind on both sides, so re-spacing between them is impossible; smoothing must
+// widen the window past the run instead of failing the rank write that
+// triggered it, and must stop at the first rank outside the run.
+func TestSmoothingWidensPastRanksThatLeaveNoRoom(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	// The run is long enough that a full window around its middle leaves a
+	// member of the run on each side: SmoothingWindow/2 at or below the trigger,
+	// as many above, and one more past each end.
+	run := rank.SmoothingWindow + 2
+	ids := make([]string, 0, run+2)
+	for i := 0; i < run+2; i++ {
+		ids = append(ids, createRankTestIssue(t, ctx, st, fmt.Sprintf("Issue %d", i)))
+	}
+	planted := make(map[string]string, len(ids))
+	planted[ids[0]] = "U"
+	for i := 1; i <= run; i++ {
+		planted[ids[i]] = "V" + strings.Repeat("0", i-1)
+	}
+	planted[ids[run+1]] = "W"
+	for id, stored := range planted {
+		if err := st.ExecRawForTest(ctx, "UPDATE issues SET item_rank = ? WHERE id = ?", stored, id); err != nil {
+			t.Fatalf("plant rank for %s: %v", id, err)
+		}
+	}
+	trigger := planted[ids[1+rank.SmoothingWindow/2]]
+	if len(trigger) < rank.SmoothingThreshold {
+		t.Fatalf("trigger rank %q is shorter than rank.SmoothingThreshold; the fixture would not smooth at all", trigger)
+	}
+
+	tx, err := st.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx() error = %v", err)
+	}
+	if err := smoothRanksIfNeededTx(ctx, tx, trigger); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("smoothRanksIfNeededTx(%q) error = %v, want the window widened past the zero-extension run", trigger, err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+
+	after := ranksByID(t, ctx, st, ids)
+	if got := orderByRank(after); !equalIDs(got, ids) {
+		t.Fatalf("order after smoothing = %v, want %v — smoothing must never reorder", got, ids)
+	}
+	for _, outside := range []string{ids[0], ids[run+1]} {
+		if after[outside] != planted[outside] {
+			t.Fatalf("smoothing rewrote %s from %q to %q; the window must stop at the first rank outside the run", outside, planted[outside], after[outside])
+		}
+	}
+	for _, member := range ids[1 : run+1] {
+		if after[member] == planted[member] {
+			t.Fatalf("%s kept its planted rank %q; every member of the run lies in the widened window and is re-spaced", member, planted[member])
+		}
+	}
+}

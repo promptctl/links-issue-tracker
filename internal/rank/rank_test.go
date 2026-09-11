@@ -394,6 +394,14 @@ func TestSpacedRanksBetweenRejectsNegativeN(t *testing.T) {
 	}
 }
 
+func TestSpacedRanksBetweenRejectsInvertedBoundsForAnyN(t *testing.T) {
+	for _, n := range []int{0, 1} {
+		if ranks, err := SpacedRanksBetween("Z", "A", n); err == nil {
+			t.Fatalf("SpacedRanksBetween(%q, %q, %d) = %q, want an error: the bounds are inverted however many ranks are asked for", "Z", "A", n, ranks)
+		}
+	}
+}
+
 func TestSpacedRanksPanicsOnNegativeN(t *testing.T) {
 	defer func() {
 		if recover() == nil {
