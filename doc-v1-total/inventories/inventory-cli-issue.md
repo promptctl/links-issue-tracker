@@ -417,7 +417,7 @@ shared prerequisites attribute to the first goal reached and cycles terminate
 (`:297-299`). Relations are memoized through `relationsByID` (`:358-381`); a
 frontier id missing from the store → `storage.NotFoundError` (`:313-317`).
 
-**Step 4 — readiness classification** (`ClassifyReadiness`, `readiness.go:73-90`):
+**Step 4 — readiness classification** (`ClassifyReadiness`, `readiness.go:98-115`):
 each annotation is dispatched on its declared `ReadinessRole`:
 - `RoleBlocking` → appended to `blocking`
 - `RoleOrphaned` → sets `orphaned = true`
@@ -425,9 +425,9 @@ each annotation is dispatched on its declared `ReadinessRole`:
 - `RoleNone` → contributes nothing (this is where `FocusPath` lands)
 - anything else → **panics** with
   `"ClassifyReadiness: annotation carries an unclassified kind: <kind>"`
-  (`readiness.go:85-87`).
+  (`readiness.go:110-112`).
 
-`IsReady() := len(blocking) == 0` (`readiness.go:42`). So an issue is **ready**
+`IsReady() := len(blocking) == 0` (`readiness.go:67`). So an issue is **ready**
 iff it has no `MissingField`, no `OpenDependency`, no `EarlierSiblingPending`, and
 no `NeedsDesign` annotation. `DependencyIDs()` returns only the `OpenDependency`
 details (`readiness.go:80-88`).
@@ -1574,7 +1574,7 @@ plus at most one positional topic.
    `:92-96`); `next` routes by claim but never writes (`next_route.go:81-128`);
    `start` is the only gate (`cli.go:1279-1284`, `claims_takeover.go:65-87`).
 7. **Three functions panic on unreachable states** and would abort the process:
-   `ClassifyReadiness` on an unclassified annotation kind (`readiness.go:86`),
+   `ClassifyReadiness` on an unclassified annotation kind (`readiness.go:111`),
    `renderNextOutcome` on an unhandled outcome type (`next.go:99`),
    `transitionOccasion` on an unmapped status action (`workflow_events.go:106`),
    `emitBreadcrumb`/`quickstartBreadcrumb` on an unknown topic
