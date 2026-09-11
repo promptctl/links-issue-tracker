@@ -259,7 +259,7 @@ and transitions via the table below.
 
 - Read commands print `printSyncStalenessWarning(ctx, w, ws, store, now)` FIRST,
   before their payload: `backlog` (`workable.go:137`), `next` (`next.go:53`),
-  `show` **only in full-detail mode** (`cli.go:869-873`) — deliberately suppressed
+  `show` **only in full-detail mode** (`cli.go:828-832`) — deliberately suppressed
   under `--field` so the machine-parseable output isn't corrupted
   (`cli.go:863-868`). Defined at `sync_staleness.go:186`.
 - Write commands get `printMutationSyncStalenessWarning(stdout, ws, now)` after
@@ -608,17 +608,17 @@ and both columns render `-`.
 ### 2.4 `lit show` — Show issue details
 
 - Registration `register.go:312-313`, `app.AccessRead`. Handler `runShow`
-  (`cli.go:850-891`).
+  (`cli.go:809-857`).
 - Args: exactly one positional id; flag `--field` (string, `""`, help:
   "Comma-separated field names (e.g. description) to print with no surrounding
-  context; omit for the full detail view") (`cli.go:851-853`).
+  context; omit for the full detail view") (`cli.go:810-812`).
 - Refusals: `len(positional) != 1` or `fs.NArg() != 0` →
   `UsageError{"usage: lit show <id> [--field <name>[,<name>...]]"}` → exit 2
-  (`cli.go:857-862`).
+  (`cli.go:815-821`).
 - Sync-staleness banner is printed first **only when `--field` is blank**
-  (`cli.go:869-873`).
-- Reads `GetIssueDetail(id)`; missing → exit 4 (`cli.go:874-877`).
-- Dispatches `EventShowTicket` in **both** modes (`cli.go:878-881`).
+  (`cli.go:828-832`).
+- Reads `GetIssueDetail(id)`; missing → exit 4 (`cli.go:833-836`).
+- Dispatches `EventShowTicket` in **both** modes (`cli.go:837-840`).
 
 **`--field` mode** (`printIssueFields`, `output.go:221-245`):
 - Accepted field names and their renderings (`issueFieldNames`, `output.go:183-198`):
@@ -634,7 +634,7 @@ and both columns render `-`.
   `output.go:203-210`).
 - Exactly one field → the bare value, no label (`output.go:235-238`).
 - Two or more → `name: value` lines, in the requested order (`output.go:239-244`).
-- No epic context, no parent block, no siblings (`cli.go:882-886`).
+- No epic context, no parent block, no siblings (`cli.go:841-845`).
 
 **Full-detail mode** (`printIssueDetail`, `output.go:78-176`), in exact order:
 1. `<id>\n<title>\n\n` then
@@ -662,20 +662,30 @@ and both columns render `-`.
 8. `\ncomments:` then `- [<createdBy>] <body>` with newlines in the body escaped
    to the literal `\n` (`output.go:161-170`).
 9. **No** history block — history lives behind `lit history` (`output.go:171-175`).
-10. Then `writeEpicContext` appends the epic plan block (§2.5).
+10. Then `writeEpicContext` appends the epic plan block (§2.5). The block is
+    **resolved before step 1 writes anything** (`cli.go:846-855`), so a failure to
+    build it exits nonzero with stdout untouched rather than after a partial body.
 
 ### 2.5 Epic-context block appended by `lit show`
 
-`writeEpicContext` (`epic_context.go:202-213`):
-- `epicViewFor(issue, parent)` (`epic_context.go:186-194`): a container shows its
+`resolveEpicContext` (`epic_context.go:265-290`) and `writeEpicContext`
+(`epic_context.go:292-298`):
+- `epicViewFor(issue, parent)` (`epic_context.go:242-249`): a container shows its
   own children with no focused child; a leaf whose parent is a container shows the
   parent's plan with itself focused; anything else returns nil and **nothing is
   printed**.
-- Prints a leading blank line then `renderEpicContext(ec)` (`epic_context.go:211`).
+- The target is resolved first, so the `ready.required_fields` policy is read
+  from repo config (`readyRequiredFields` → `config.Load`, `cli.go:637-643`)
+  **only when a plan slice exists**. An issue in no epic reads no repo config, so
+  a `.lit/config.toml` that fails validation for an unrelated reason (for example
+  `snapshot.retention_budget <= 0`) does not affect `lit show` on it; for an epic
+  member the same config error fails the command, before any output.
+- Prints a leading blank line then `renderEpicContext(ec)` (`epic_context.go:296`);
+  a nil context (no plan slice) writes nothing.
 
-`buildEpicContext` (`epic_context.go:116-166`):
+`buildEpicContext` (`epic_context.go:170-222`):
 - `GetRelationsByIDs([epicID])`; a missing epic → `storage.NotFoundError`
-  (`epic_context.go:125-128`).
+  (`epic_context.go:178-181`).
 - The children run through `annotateIssues` (`cli.go`) — the same annotator set
   the workable pipeline uses — which batches their relations; a child listed but
   absent → `storage.NotFoundError`.
@@ -689,11 +699,11 @@ and both columns render `-`.
 - Cross-epic edges: for the epic node and every child that is not closed, each
   open `DependsOn` outside the epic membership set becomes a `BlockedExternally`
   edge, and each open `Blocks` outside becomes a `BlocksExternally` edge
-  (`epic_context.go:247-258`). Membership = the epic id plus all child ids
-  (`epicMemberIDs`, `epic_context.go:219-226`). Edges are sorted by
-  (blocked, blocker) (`epic_context.go:281-292`).
+  (`epic_context.go:321-339`). Membership = the epic id plus all child ids
+  (`epicMemberIDs`, `epic_context.go:304-311`). Edges are sorted by
+  (blocked, blocker) (`epic_context.go:358-371`).
 
-`renderEpicContext` output shape (`epic_context.go:304-312`):
+`renderEpicContext` output shape (`epic_context.go:381-392`):
 ```
 Epic: <epicID> — <epicTitle>
 Why: <first non-blank line of epic description, leading '#'s stripped>

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
@@ -248,27 +249,51 @@ func epicViewFor(issue model.Issue, parent *model.Issue) *epicTarget {
 	return nil
 }
 
-// writeEpicContext appends the epic plan block for one shown issue when it
-// belongs to an epic. A leading blank line separates the block from the issue
-// body; an issue in no epic writes nothing. This is the single point where store
-// resolution meets the show text path — the build/render seam stays pure.
-// [LAW:no-defensive-null-guards] target is an explicit optional: nil is the
-// real "no epic membership" case, not a defended-against bug.
+// resolveEpicContext resolves the plan slice one shown issue belongs to, or nil
+// when it belongs to none. It is the show path's entire store-and-config stage,
+// which is what lets the config read be conditional on need: epicViewFor is pure
+// over the detail already in hand, so the required-fields policy — a config.Load
+// off disk that also validates unrelated settings — is read only once a real
+// plan slice is known to want it. An issue in no epic reads no repo config at
+// all, so a plain `lit show` keeps its independence from config it never uses.
+// [LAW:effects-at-boundaries]
 //
-// The required-fields policy arrives as a value rather than an *app.App for the
-// reason classifyWorkable states: the policy is repo config, the rest of this
-// path is store data, and keeping them apart is what lets a plain store drive
-// the builder. [LAW:locality-or-seam]
-func writeEpicContext(ctx context.Context, st storage.Store, requiredFields []string, w io.Writer, detail model.IssueDetail) error {
+// The policy still reaches buildEpicContext as a value rather than as an
+// *app.App it could load from, for the reason classifyWorkable states: the
+// policy is repo config, the rest of that path is store data, and keeping them
+// apart is what lets a plain store drive the builder. [LAW:locality-or-seam]
+func resolveEpicContext(ctx context.Context, ap *app.App, detail model.IssueDetail) (*EpicContext, error) {
+	// [LAW:no-defensive-null-guards] target is an explicit optional: nil is the
+	// real "no epic membership" case, not a defended-against bug.
 	target := epicViewFor(detail.Issue, detail.Parent)
 	if target == nil {
+		return nil, nil
+	}
+	requiredFields, err := readyRequiredFields(ap)
+	if err != nil {
+		return nil, err
+	}
+	ec, err := buildEpicContext(ctx, ap.Store, requiredFields, target.EpicID, target.Focused)
+	if err != nil {
+		return nil, err
+	}
+	return &ec, nil
+}
+
+// writeEpicContext appends the epic plan block for one shown issue. A leading
+// blank line separates the block from the issue body; an issue in no epic — a
+// nil context — writes nothing.
+//
+// Rendering is split from resolution so the show path can fail before printing
+// anything. A body written ahead of a resolution error is shaped exactly like
+// the legitimate "this ticket has no epic" output, so a reader holding only
+// stdout cannot tell an absent plan slice from one that could not be computed.
+// [LAW:parse-dont-validate]
+func writeEpicContext(w io.Writer, ec *EpicContext) error {
+	if ec == nil {
 		return nil
 	}
-	ec, err := buildEpicContext(ctx, st, requiredFields, target.EpicID, target.Focused)
-	if err != nil {
-		return err
-	}
-	_, err = fmt.Fprintf(w, "\n%s", renderEpicContext(ec))
+	_, err := fmt.Fprintf(w, "\n%s", renderEpicContext(*ec))
 	return err
 }
 

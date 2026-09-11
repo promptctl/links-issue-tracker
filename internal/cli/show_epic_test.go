@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -97,6 +99,62 @@ func TestRunShowParentlessTicketHasNoEpicBlock(t *testing.T) {
 	}
 	if strings.Contains(out, "Epic:") {
 		t.Errorf("an issue in no epic must render no epic block:\n%s", out)
+	}
+}
+
+// writeUnrelatedlyBrokenConfig writes a repo config whose only defect is in a
+// setting the show path never reads. snapshot.retention_budget is validated by
+// config.Load like every other field, so it stands in for "this repo's config
+// cannot be loaded, for reasons that have nothing to do with the ready policy".
+func writeUnrelatedlyBrokenConfig(t *testing.T, ap *app.App) {
+	t.Helper()
+	configDir := filepath.Join(ap.Workspace.RootDir, ".lit")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(configDir) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte("[snapshot]\nretention_budget = -1\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(config.toml) error = %v", err)
+	}
+}
+
+// An issue in no epic needs no ready policy, so it must not be coupled to
+// whether this repo's config loads at all. The plan slice is what wants the
+// policy, and a parentless ticket has none.
+func TestRunShowParentlessTicketIgnoresUnreadableConfig(t *testing.T) {
+	ap := newTestCLIApp(t)
+	free, err := ap.Store.CreateIssue(context.Background(), storage.CreateIssueInput{
+		Prefix: "test", Title: "Free floating", Topic: "misc", IssueType: "task", Priority: 0,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue(free) error = %v", err)
+	}
+	writeUnrelatedlyBrokenConfig(t, ap)
+
+	var buf bytes.Buffer
+	if err := runShow(context.Background(), &buf, ap, []string{free.ID}); err != nil {
+		t.Fatalf("show of a ticket in no epic must not read repo config, got error = %v", err)
+	}
+	if !strings.Contains(buf.String(), "Free floating") {
+		t.Errorf("show output missing the issue body:\n%s", buf.String())
+	}
+}
+
+// An epic member genuinely needs the policy, so an unreadable config is a real
+// failure — but it must arrive before the body is written. A body printed ahead
+// of the error is shaped exactly like the legitimate "no epic block" output, so
+// a caller holding only stdout could not tell the two apart.
+func TestRunShowEpicMemberFailsBeforeWritingBodyOnUnreadableConfig(t *testing.T) {
+	f := newEpicFixture(t, "Plan epic", "the why")
+	child := f.addChild("A child")
+	writeUnrelatedlyBrokenConfig(t, f.ap)
+
+	var buf bytes.Buffer
+	err := runShow(context.Background(), &buf, f.ap, []string{child})
+	if err == nil {
+		t.Fatalf("show of an epic member under an unreadable config must fail, got nil; output:\n%s", buf.String())
+	}
+	if buf.Len() != 0 {
+		t.Errorf("failed plan resolution must leave stdout empty, got:\n%s", buf.String())
 	}
 }
 

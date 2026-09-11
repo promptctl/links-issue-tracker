@@ -843,14 +843,17 @@ func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	if fields := splitCSV(*fieldsExpr); len(fields) > 0 {
 		return printIssueFields(stdout, detail.Issue, fields)
 	}
-	if err := printIssueDetail(stdout, detail); err != nil {
-		return err
-	}
-	requiredFields, err := readyRequiredFields(ap)
+	// Resolved before the body is printed, so a plan slice that cannot be built
+	// fails with clean stdout instead of a body that reads as a complete show of
+	// an epic-less ticket. [LAW:parse-dont-validate]
+	plan, err := resolveEpicContext(ctx, ap, detail)
 	if err != nil {
 		return err
 	}
-	return writeEpicContext(ctx, ap.Store, requiredFields, stdout, detail)
+	if err := printIssueDetail(stdout, detail); err != nil {
+		return err
+	}
+	return writeEpicContext(stdout, plan)
 }
 
 // runHistory renders a ticket's state-transition trail — the per-field
