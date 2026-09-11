@@ -519,19 +519,33 @@ never mistaken for the epic itself. Pinned by
 `TestLaneAccessorsReportBothHalves` (`:98`).
 
 ### Action dispatch
-`ContainerActionError` — `model.go:272-276`: fields `ID string`,
-`Action ActionName`, `Progress Progress`.
-- `Unfinished() int` — `model.go:280-282`: `Progress.Total - Progress.Closed`.
-- `Error() string` — `model.go:286-295`, three exact wordings:
-  - `Progress.Total == 0` → `epic %s has no children; an epic's state derives from its children and cannot be set directly`
-  - `Unfinished() == 0` → `epic %s is already closed: all %d children are done, and an epic's state derives from its children`
-  - else → `epic %s has %d children that are not done. Complete the children to close the epic`
+`ContainerActionError` — `model.go:281-287`: fields `ID string`,
+`Action ActionName`, `Target State`, `State State`, `Progress Progress`.
+`Target` is the state the action asked for; `State` is the one the children
+establish.
+- `Unfinished() int` — `model.go:291-293`: `Progress.Total - Progress.Closed`.
+- `Satisfied() bool` — `model.go:301`: `Target == State`. The one comparison
+  separating a request the children already meet from a refusal; the CLI's
+  reason and exit-code mappings read it rather than re-deriving it from counts.
+- `Error() string` — `model.go:310-315`, two exact wordings (the action name is
+  rendered inside backticks in both):
+  - `Satisfied()` → ``epic %s is already %s, so `%s` has nothing to do: an epic's state derives from its children (%d of %d done)``
+  - else → ``cannot `%s` epic %s: it is %s, and an epic's state derives from its children rather than from this command (%s)``, where the final clause is `childClause()`.
+- `childClause() string` — `model.go:319-328`, three exact wordings:
+  - `Progress.Total == 0` → `it has no children`
+  - `Unfinished() == 0` → `all %d are done`
+  - else → `%d of %d are not done`
 
 `(Issue).Apply(action lifecycle.StatusAction) (Issue, error)` — `model.go:310-324`:
 1. `lifecycleOrError()`; on error returns `(Issue{}, err)` (`:311-314`).
 2. If the root lifecycle is a `lifecycle.Container` → returns
-   `ContainerActionError{ID, action.Name(), root.Progress()}` (`:315-317`).
-   Pinned by `TestApplyRefusesContainerForEveryAction`, `model_test.go:19`.
+   `ContainerActionError{ID, action.Name(), State(action.Target()), State(root.State()), root.Progress()}`
+   (`:348-363`). Every status action on a container is refused, including one
+   whose target the children already establish — the refusal is what keeps a
+   `start` that changes nothing from reaching the engines' no-op rule, which
+   compares `StatusValue` (vacuously `""` for a container) and would decide on
+   the claimant alone. Pinned by `TestApplyRefusesContainerForEveryAction`,
+   `model_test.go:19`.
 3. If the root is not `lifecycle.Actionable` → error
    `no %s action available on this issue` (`:318-321`).
 4. Otherwise replaces the lifecycle with `actionable.Apply(action)` and returns

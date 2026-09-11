@@ -270,9 +270,19 @@ func (i Issue) mustLifecycle() lifecycle.Lifecycle {
 // rejection is owned here at the dispatch boundary.
 // [LAW:single-enforcer] Error() is the only source of the container-rejection
 // wording; tests and callers discriminate on the type, not the prose.
+//
+// Target is the state the action asked for and State is the one the children
+// already establish. Both are carried because whether the call asked for
+// anything at all is exactly their comparison — a fact the raise site holds and
+// used to throw away, leaving one sentence to serve two opposite situations:
+// `done` on a closed epic, whose request is already met, and `start` on that
+// same epic, which is refused. [LAW:parse-dont-validate] the discriminator is
+// kept in the type rather than re-derived downstream from progress counts.
 type ContainerActionError struct {
 	ID       string
 	Action   ActionName
+	Target   State
+	State    State
 	Progress Progress
 }
 
@@ -282,16 +292,38 @@ func (e ContainerActionError) Unfinished() int {
 	return e.Progress.Total - e.Progress.Closed
 }
 
-// [LAW:dataflow-not-control-flow] The wording varies with the progress values
-// the error carries, not with which callsite produced it.
+// Satisfied reports whether the children already establish the state the action
+// asked for, which is the whole difference between a call that needs nothing
+// done and one that is refused. [LAW:one-source-of-truth] Both the message
+// below and the CLI's reason and exit-code mappings read this one comparison;
+// deriving it from progress counts instead would be a second, divergable copy
+// of AllOf.State's rule.
+func (e ContainerActionError) Satisfied() bool { return e.Target == e.State }
+
+// [LAW:dataflow-not-control-flow] The wording varies with the values the error
+// carries — the requested action, the two states, the counts — not with which
+// callsite produced it. There are two sentences because there are two
+// situations, and the refusal names the state it is refusing from rather than a
+// child count: `start` on a finished epic was once told "0 of its 1 children
+// are not done", which is true, unreadable, and never mentions that the epic
+// being closed is the actual obstacle.
 func (e ContainerActionError) Error() string {
+	if e.Satisfied() {
+		return fmt.Sprintf("epic %s is already %s, so `%s` has nothing to do: an epic's state derives from its children (%d of %d done)", e.ID, e.State, e.Action, e.Progress.Closed, e.Progress.Total)
+	}
+	return fmt.Sprintf("cannot `%s` epic %s: it is %s, and an epic's state derives from its children rather than from this command (%s)", e.Action, e.ID, e.State, e.childClause())
+}
+
+// childClause says why the epic sits in the state it does — the one part of a
+// refusal that varies, and the part naming what the agent can actually act on.
+func (e ContainerActionError) childClause() string {
 	switch {
 	case e.Progress.Total == 0:
-		return fmt.Sprintf("epic %s has no children; an epic's state derives from its children and cannot be set directly", e.ID)
+		return "it has no children"
 	case e.Unfinished() == 0:
-		return fmt.Sprintf("epic %s is already closed: all %d children are done, and an epic's state derives from its children", e.ID, e.Progress.Total)
+		return fmt.Sprintf("all %d are done", e.Progress.Total)
 	default:
-		return fmt.Sprintf("epic %s has %d children that are not done. Complete the children to close the epic", e.ID, e.Unfinished())
+		return fmt.Sprintf("%d of %d are not done", e.Unfinished(), e.Progress.Total)
 	}
 }
 
@@ -314,7 +346,21 @@ func (i Issue) Apply(action lifecycle.StatusAction) (Issue, error) {
 		return Issue{}, err
 	}
 	if _, ok := root.(lifecycle.Container); ok {
-		return Issue{}, ContainerActionError{ID: i.ID, Action: action.Name(), Progress: root.Progress()}
+		// Every status action on a container is refused, including one whose
+		// target the children already establish: a container has no transition
+		// to make, so "already there" is a fact about the request rather than a
+		// licence to treat the call as a no-op. Letting it through would reach
+		// the engines' no-op rule, which compares StatusValue — vacuously "" for
+		// a container — and so would decide on the claimant alone, silently
+		// writing a claim onto an epic for a `start` that changed nothing.
+		// The refusal stays; what the caller is TOLD is what Satisfied decides.
+		return Issue{}, ContainerActionError{
+			ID:       i.ID,
+			Action:   action.Name(),
+			Target:   State(action.Target()),
+			State:    State(root.State()),
+			Progress: root.Progress(),
+		}
 	}
 	actionable, ok := root.(lifecycle.Actionable)
 	if !ok {
