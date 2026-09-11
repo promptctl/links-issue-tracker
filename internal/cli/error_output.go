@@ -204,7 +204,7 @@ func commandErrorRemediation(reason string) string {
 		// a message that just said the backlog is not empty is exactly the
 		// remediation-contradicts-message defect links-cli-cpou removed one
 		// level up. [LAW:no-silent-failure]
-		return "Do not retry unchanged — nothing here is startable, which is the backlog's state rather than a fault. If `--type`, `--labels`, `--assignee`, or `--status` narrowed this run, drop the filter and ask again. Otherwise `lit backlog` shows the whole queue and who holds what, and `lit new` adds work if it is genuinely empty."
+		return "Do not retry unchanged — nothing here is startable, which is the backlog's state rather than a fault. If `--type`, `--labels`, `--assignee`, or `--status` narrowed this run, drop the filter and ask again. If a `focus` label narrowed it, `lit next --all` routes over the whole queue for one run and `lit label rm <id> focus` lifts the scope. Otherwise `lit backlog` shows the whole queue and who holds what, and `lit new` adds work if it is genuinely empty."
 	case "state_already_holds":
 		// No act to name, because there is none: the caller asked for a state
 		// the workspace is already in. It must still say "do not retry" — this

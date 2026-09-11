@@ -401,6 +401,21 @@ func TestRenderNextOutcomeTerminalOutcomesKeepTheirType(t *testing.T) {
 			wantReason: "no_ready_work",
 			wantAct:    "lit new",
 		},
+		{
+			// The focus scope withheld every startable row, so the message
+			// says the backlog is NOT empty — the situation in which offering
+			// `lit new` is the remediation-contradicts-message defect. Both
+			// populations are present because the real outcome carries both:
+			// an on-path row step 4 walked and rejected, and an off-path row
+			// it never examined.
+			name: "no work withheld by focus scope",
+			outcome: NoWork{Unreachable: []rowReach{
+				{ID: "links-gate-onpath", Kind: reachNotReady},
+				{ID: "links-other-offpath", Kind: reachOffFocusPath},
+			}},
+			wantReason: "no_ready_work",
+			wantAct:    "lit next --all",
+		},
 	}
 	for _, tc := range tests {
 		tc := tc
@@ -431,8 +446,13 @@ func TestRenderNextOutcomeTerminalOutcomesKeepTheirType(t *testing.T) {
 			if !strings.Contains(out, tc.outcome.(error).Error()) {
 				t.Fatalf("stderr dropped the outcome's own message: %q", out)
 			}
-			if !strings.Contains(out, tc.wantAct) {
-				t.Fatalf("remediation does not name the deliberate act %q: %q", tc.wantAct, out)
+			// Asserted against the remediation alone rather than all of stderr:
+			// the withheld case's per-row note already names `lit next --all`
+			// in the message body, so a stderr-wide check would stay green with
+			// the remediation silent — the exact gap this case exists to close.
+			rem := commandErrorRemediation(commandErrorReason(err))
+			if !strings.Contains(rem, tc.wantAct) {
+				t.Fatalf("remediation does not name the deliberate act %q: %q", tc.wantAct, rem)
 			}
 		})
 	}

@@ -185,9 +185,9 @@ unchanged until the work or the question does.
 An empty result says which emptiness it is. A backlog with nothing in it answers
 `no ready work`; one whose every row was passed over names those rows and why each
 is not yours to start — held by another checkout, or gated by something unfinished;
-and one whose focus path is stuck says that instead, naming the rows the scope
-withheld and pointing at `lit next --all`, rather than quietly serving one of them
-as if it were next. So `lit next --status in_progress` can tell "you hold nothing"
+and one whose focus path is stuck says that instead, naming what gates the path
+itself alongside the rows the scope withheld off it, and pointing at
+`lit next --all`, rather than quietly serving one of them as if it were next. So `lit next --status in_progress` can tell "you hold nothing"
 from "your work is in another checkout's hands" instead of answering both the same
 way.
 
