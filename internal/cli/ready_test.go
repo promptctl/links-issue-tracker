@@ -155,8 +155,9 @@ func (h readyTestHarness) addDependency(dependentID, dependencyID string) {
 }
 
 // runWorkableAnnotated reproduces what the surviving workable views compute: the
-// shared gather (which already surfaces any focus path to the top) plus the
-// limit, returning the rows in backlog order — canonical rank/priority, with
+// shared gather, which is focus-neutral — it returns the scope beside the rows
+// for a view to narrow by, and orders nothing by it — plus the limit, returning
+// the rows in backlog order — canonical rank/priority, with
 // blocked items kept inline at their ranked position. It inspects the same
 // prepared rows the text renderer consumes, so annotation/parent-epic assertions
 // read real domain values rather than re-parsing text. [LAW:single-enforcer]

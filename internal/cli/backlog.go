@@ -81,7 +81,14 @@ func (n focusNotice) emptyLine() string {
 // per-row context (parent epic, dependencies, blocking reasons, in-progress
 // suffix, unblocks). Empty data flows through the same path — the empty
 // message is one path-end, not a branch around the rendering loop.
-func printBacklogOutput(w io.Writer, columns []columnSpec, issues []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, rels map[string]relationColumns, cc claimContext, notice focusNotice) error {
+//
+// issues are the rows to print; gathered is the whole workable set they were
+// drawn from. The aggregates below read gathered, because a row's "unblocks"
+// line and the inversion count describe the backlog, not this view of it: with
+// them read off issues, a focused scope or a --limit that excluded the
+// dependent row deleted the surviving row's own unblocks line, and the preamble
+// went on promising "what closing it would unblock" one screen above the gap.
+func printBacklogOutput(w io.Writer, columns []columnSpec, issues, gathered []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, rels map[string]relationColumns, cc claimContext, notice focusNotice) error {
 	if _, err := fmt.Fprintln(w, backlogPreamble); err != nil {
 		return err
 	}
@@ -102,7 +109,7 @@ func printBacklogOutput(w io.Writer, columns []columnSpec, issues []annotation.A
 		return nil
 	}
 
-	unblocksMap := buildUnblocksMap(issues)
+	unblocksMap := buildUnblocksMap(gathered)
 	now := time.Now()
 	var above backlogRun
 	for i, entry := range issues {
@@ -117,7 +124,7 @@ func printBacklogOutput(w io.Writer, columns []columnSpec, issues []annotation.A
 		}
 		above = group.run
 	}
-	return printRankInversions(w, issues)
+	return printRankInversions(w, gathered)
 }
 
 // backlogRun is the group-scoped context the rows above already put on screen:

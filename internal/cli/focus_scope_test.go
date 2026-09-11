@@ -353,6 +353,22 @@ func TestFocusPathDeadEndDoesNotClaimOffPathWorkIsStartable(t *testing.T) {
 		t.Fatalf("NoWork.Error() lead = %q — nothing off the focus path is startable in this fixture, and the walk never read those rows' capacity, so the lead may not claim it", lead)
 	}
 
+	// The same lead introduces two populations: goal and gate are ON the path and
+	// were walked and rejected by step 4, while off and offGate were never
+	// examined. A header claiming location for the whole list is false for one
+	// half of it, and the on-path half is the news the agent has to act on.
+	if strings.Contains(lead, "off that path") || strings.Contains(lead, "off the focus path") {
+		t.Fatalf("NoWork.Error() lead = %q describes every row it introduces as off the focus path, but %s and %s are on it", lead, goal.ID, gate.ID)
+	}
+	for _, note := range []string{poolNotes[reachNotReady], poolNotes[reachOffFocusPath]} {
+		if !strings.Contains(got, note) {
+			t.Fatalf("NoWork.Error() = %q lists two populations but is missing the words one of them owns: %q", got, note)
+		}
+	}
+	if !strings.Contains(got, gate.ID) {
+		t.Fatalf("NoWork.Error() = %q must name the on-path gate %s — that is the row the agent has to act on", got, gate.ID)
+	}
+
 	// It still has to say the rows are there and how to reach them; refusing the
 	// unchecked claim must not cost the reader the honest half of the answer.
 	if !strings.Contains(got, off.ID) {

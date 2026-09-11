@@ -58,7 +58,13 @@ type workableView struct {
 	// rather than each renderer, which is what keeps the next view added here
 	// from re-introducing a projection whose `parent` and `blocked` cells are
 	// permanently "-". [LAW:one-source-of-truth]
-	render func(w io.Writer, columns []columnSpec, rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, rels map[string]relationColumns, cc claimContext, notice focusNotice) error
+	// rows are what the view prints; gathered is every workable row the pipeline
+	// produced, before the scope or --limit narrowed it. They are separate
+	// parameters because the per-row facts a renderer prints are not all facts
+	// about the printed rows: "what closing this unblocks" and the rank-inversion
+	// count are properties of the whole workable set, and computing them from the
+	// view makes them shrink as the view does, silently. [LAW:one-source-of-truth]
+	render func(w io.Writer, columns []columnSpec, rows, gathered []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, rels map[string]relationColumns, cc claimContext, notice focusNotice) error
 	// occasion builds the workflow event this view fires once render has
 	// already succeeded on the same rows — backlog's is a constant (a
 	// backlog-wide view names no single ticket), next's reads the one row
@@ -68,7 +74,7 @@ type workableView struct {
 }
 
 // usage derives the positional-argument error string from the knob set, in the
-// fixed fragment order filters, assignee, limit, columns.
+// fixed fragment order filters, assignee, all, limit, columns.
 // [LAW:one-source-of-truth] the knobs a view exposes and the usage line that
 // names them cannot drift.
 func (v workableView) usage() string {
@@ -215,7 +221,7 @@ func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	// Derived unconditionally from the rows and graph data already gathered
 	// above: no extra query, and no branch deciding whether the renderer gets
 	// its data. [LAW:dataflow-not-control-flow]
-	if err := view.render(stdout, knobs.columns, rows, details, workableRelationColumns(rows, details), cc, notice); err != nil {
+	if err := view.render(stdout, knobs.columns, rows, annotated, details, workableRelationColumns(rows, details), cc, notice); err != nil {
 		return err
 	}
 	return workflows.Dispatch(stdout, os.Stderr, ap.Workspace, view.occasion(rows))

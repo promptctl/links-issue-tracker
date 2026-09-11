@@ -578,10 +578,14 @@ func (o NoWork) Error() string {
 	}
 	// A third emptiness, and it needs its own lead: with rows withheld by the
 	// focus scope, "nothing in it is startable here" is false — those rows were
-	// never asked. It claims no more, because nothing here read their capacity
-	// either; asserting they ARE startable is that same unchecked claim, one out.
+	// never asked. The lead claims neither startability nor location, because
+	// Unreachable mixes two populations here: on-path rows step 4 walked and
+	// rejected, and off-path rows it never examined. A header asserting either
+	// fact over the whole list is false for one of them — and the on-path half
+	// is the news the agent has to act on. Only poolNotes can tell them apart,
+	// and it already does, per row.
 	if o.withheld() {
-		return fmt.Sprintf("no ready work on the focus path — the backlog holds rows off that path this run did not route over: %s", describeReach(o.Unreachable, "", poolNotes))
+		return fmt.Sprintf("no ready work on the focus path — the backlog is not empty, and each row below says why this run did not serve it: %s", describeReach(o.Unreachable, "", poolNotes))
 	}
 	return fmt.Sprintf("no ready work — the backlog is not empty, but nothing in it is startable here: %s", describeReach(o.Unreachable, "", poolNotes))
 }

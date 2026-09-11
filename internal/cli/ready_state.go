@@ -427,9 +427,10 @@ func relationsByID(ctx context.Context, src focusGraphSource, cache map[string]s
 
 // newFocusPathAnnotator returns an annotator that emits a FocusPath annotation
 // for any issue on a focused goal's derived prerequisite path; the message is
-// the goal's ID. FocusPath is an ORDERING fact and is deliberately invisible
-// to ClassifyReadiness — it can never change membership, so a blocked path
-// item stays blocked and only the already-ready path items surface.
+// the goal's ID. FocusPath is the fact focusScope.holds reads to decide which
+// rows a VIEW answers over, and it stays deliberately invisible to
+// ClassifyReadiness: scoping a view and gating readiness are different
+// memberships, so a blocked path item is still listed and still blocked.
 // [LAW:dataflow-not-control-flow] Pure map lookup for every issue; absence
 // yields nil, not a skipped operation.
 func newFocusPathAnnotator(pathGoals map[string]string) annotation.Annotator {
@@ -671,6 +672,13 @@ func printNextSummary(w io.Writer, row annotation.AnnotatedIssue, cc claimContex
 // issues that depend on it.
 // [LAW:dataflow-not-control-flow] The map is derived from existing annotation data;
 // no extra store queries needed.
+//
+// issues must be the whole gathered workable set, never the rows a view prints.
+// The reverse index is a fact about the backlog: a dependent the caller filtered
+// out still gets unblocked by closing its prerequisite, and handing this the
+// narrowed rows deletes that line from the prerequisite's own row instead of
+// from the dependent's. Both narrowings reached it — the focus scope and
+// --limit (links-listing-85sd).
 func buildUnblocksMap(issues []annotation.AnnotatedIssue) map[string][]string {
 	m := make(map[string][]string)
 	for _, issue := range issues {
@@ -734,6 +742,12 @@ func inProgressSuffix(entry annotation.AnnotatedIssue) string {
 
 // printRankInversions prints a count-only warning when dependencies are ranked
 // below the issues they block, with instructions to fix.
+//
+// issues must be the whole gathered workable set, for the same reason
+// buildUnblocksMap needs it: rank is stored globally, so an inversion is a
+// property of the backlog rather than of whichever slice of it is on screen,
+// and counting over the narrowed rows under-reports the repair `lit doctor
+// --fix` would make.
 func printRankInversions(w io.Writer, issues []annotation.AnnotatedIssue) error {
 	count := 0
 	for _, issue := range issues {

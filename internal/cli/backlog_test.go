@@ -74,6 +74,80 @@ func (h backlogTestHarness) runBacklogText(args ...string) string {
 	return stdout.String()
 }
 
+// unblocksLineNames reports whether any "unblocks:" line names the id. Scoped to
+// that line rather than to the whole text, because an id also appears in
+// dependency lines and proves nothing there about the leverage line under test.
+func unblocksLineNames(text, id string) bool {
+	for _, line := range strings.Split(text, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "unblocks:") && strings.Contains(trimmed, id) {
+			return true
+		}
+	}
+	return false
+}
+
+// rankInversionWarning returns the inversion warning line, or "" when the view
+// printed none.
+func rankInversionWarning(text string) string {
+	for _, line := range strings.Split(text, "\n") {
+		if strings.Contains(line, "rank inversion(s)") {
+			return strings.TrimSpace(line)
+		}
+	}
+	return ""
+}
+
+// A row's "unblocks" line and the rank-inversion count are facts about the whole
+// workable set, not about whichever slice of it is on screen. Both were read off
+// the printed rows, so either narrowing deleted them silently — and the one that
+// gets deleted belongs to the row that SURVIVED: exclude the dependent and its
+// prerequisite keeps its place in the list with its leverage line quietly
+// shortened, under a preamble still promising "what closing it would unblock".
+//
+// Two narrowings reach it. The focus scope is this change's own (a dependent off
+// the focused path), and --limit is links-listing-85sd, which predates it; one
+// population fixes both, which is why they are pinned together here.
+func TestBacklogUnblocksLinesSurviveTheFocusScope(t *testing.T) {
+	h := newBacklogTestHarness(t)
+	// Creation order is rank order here, and it is load-bearing: offPath is
+	// created FIRST so it outranks the prerequisite it depends on, which is what
+	// makes the inversion it carries an OFF-path one. Built the other way round
+	// every inversion sits on an on-path row, both views count it, and the
+	// warning compares equal no matter which population it was counted over —
+	// the assertion passes against the defect it was written to catch.
+	offPath := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Off-path dependent", Topic: "noise", IssueType: "task"})
+	goal := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Goal", Topic: "goal", IssueType: "task", Labels: []string{FocusLabel}})
+	onPath := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Path work", Topic: "goal", IssueType: "task"})
+	h.addDependency(goal, onPath)
+	// Off the focused path, and unblocked by an on-path row all the same.
+	h.addDependency(offPath, onPath)
+
+	text := h.runBacklogText()
+	if !unblocksLineNames(text, offPath) {
+		t.Fatalf("focused backlog names no unblocks line for %s — it sits off the focus path, but closing %s still unblocks it, and %s's row is on screen making the claim; got:\n%s", offPath, onPath, onPath, text)
+	}
+
+	// The count describes the stored ranks, so narrowing the view must not move
+	// it: same warning, whether or not the scope is in force.
+	if got, want := rankInversionWarning(text), rankInversionWarning(h.runBacklogText("--all")); got != want {
+		t.Fatalf("rank inversion warning differs by view:\n  focused: %q\n  --all:   %q\nthe count is a property of the backlog, not of the rows on screen", got, want)
+	}
+}
+
+func TestBacklogUnblocksLinesSurviveLimit(t *testing.T) {
+	h := newBacklogTestHarness(t)
+	first := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Blocker", Topic: "lim", IssueType: "task"})
+	second := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Dependent", Topic: "lim", IssueType: "task"})
+	h.addDependency(second, first)
+
+	// --limit 1 cuts the dependent's own row, not the fact that it is a dependent.
+	text := h.runBacklogText("--limit", "1")
+	if !unblocksLineNames(text, second) {
+		t.Fatalf("`--limit 1` names no unblocks line for %s on %s's surviving row — the preamble promises what closing it would unblock, and --limit removed only the dependent's own row; got:\n%s", second, first, text)
+	}
+}
+
 // Backlog must keep blocked items at their ranked position rather than push
 // them to the bottom — that's the whole reason it exists alongside `lit ready`.
 func TestBacklogKeepsBlockedItemsInRankOrder(t *testing.T) {
