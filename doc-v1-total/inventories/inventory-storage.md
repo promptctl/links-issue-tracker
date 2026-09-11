@@ -174,9 +174,9 @@ Interface-wide failure contract: **compensated, not transactional**. A batch tha
 - `Error()` returns `Message` verbatim (`internal/storage/errors.go:28`).
 - Returned when a domain constraint (field value, type, range) is violated (`internal/storage/errors.go:22-23`).
 
-**`UnsupportedError{Capability, Engine string}`** — `internal/storage/capabilities.go:219-225`
-- `Error()` renders `fmt.Sprintf("%s engine does not offer the %s capability", e.Engine, e.Capability)` (`internal/storage/capabilities.go:227-229`).
-- `Capability` is the capability's name as `Capability.Name()` reports it; `Engine` names the concrete engine asked (`internal/storage/capabilities.go:220-224`).
+**`UnsupportedError{Capability, Engine string}`** — `internal/storage/capabilities.go:223-229`
+- `Error()` renders `fmt.Sprintf("%s engine does not offer the %s capability", e.Engine, e.Capability)` (`internal/storage/capabilities.go:231-233`).
+- `Capability` is the capability's name as `Capability.Name()` reports it; `Engine` names the concrete engine asked (`internal/storage/capabilities.go:224-228`).
 
 Other error surfaces in the contract package: `ParseSortSpecs` returns `ValidationError` for an unrecognized direction (`internal/storage/sort.go:41`); `ParseBulkSpecs` returns `fmt.Errorf("bulk: parse spec: %w", err)` (`internal/storage/bulk.go` → `internal/storage/specs.go:35`); `ParseImportTreeSpecs` returns `fmt.Errorf("import: parse spec: %w", err)` (`internal/storage/specs.go:55`) and `errors.New("import: unexpected trailing data after spec array")` (`internal/storage/specs.go:58`).
 
@@ -347,17 +347,17 @@ They live beside the specs rather than in an engine because the schema is the co
 **Granularity rule**: two operations share a capability only when no engine could plausibly offer one without the other (`internal/storage/capabilities.go:24-28`).
 **Absence rule**: absence is answered, never guessed or faked — a caller asks with `Of`, which returns the interface or an `UnsupportedError` (`internal/storage/capabilities.go:30-34`).
 
-#### `Capability` interface (`internal/storage/capabilities.go:239-251`)
-- `Name() string` — stable identifier used in messages and listings (`internal/storage/capabilities.go:241-242`).
-- `OfferedBy(engine Store) bool` — the enumeration question (`internal/storage/capabilities.go:244-247`).
-- `unexported()` — seals the interface to this package (`internal/storage/capabilities.go:249-250`); type is closed so only this package can mint a capability (`internal/storage/capabilities.go:236-238`).
+#### `Capability` interface (`internal/storage/capabilities.go:243-255`)
+- `Name() string` — stable identifier used in messages and listings (`internal/storage/capabilities.go:245-246`).
+- `OfferedBy(engine Store) bool` — the enumeration question (`internal/storage/capabilities.go:248-251`).
+- `unexported()` — seals the interface to this package (`internal/storage/capabilities.go:253-254`); type is closed so only this package can mint a capability (`internal/storage/capabilities.go:240-242`).
 
-#### `capability[C any]{name string}` (`internal/storage/capabilities.go:255-285`)
-- `Name()` returns `c.name` (`internal/storage/capabilities.go:257`).
-- `OfferedBy(engine)` is derived from `Of` (`_, err := c.Of(engine); return err == nil`) so the two cannot disagree (`internal/storage/capabilities.go:264-267`).
-- `Of(engine Store) (C, error)`: type-asserts `any(engine).(C)`; on failure returns the zero `C` and `UnsupportedError{Capability: c.name, Engine: fmt.Sprintf("%T", engine)}` (`internal/storage/capabilities.go:278-285`).
+#### `capability[C any]{name string}` (`internal/storage/capabilities.go:259-289`)
+- `Name()` returns `c.name` (`internal/storage/capabilities.go:261`).
+- `OfferedBy(engine)` is derived from `Of` (`_, err := c.Of(engine); return err == nil`) so the two cannot disagree (`internal/storage/capabilities.go:268-271`).
+- `Of(engine Store) (C, error)`: type-asserts `any(engine).(C)`; on failure returns the zero `C` and `UnsupportedError{Capability: c.name, Engine: fmt.Sprintf("%T", engine)}` (`internal/storage/capabilities.go:282-289`).
 
-#### The seven capabilities (`internal/storage/capabilities.go:291-299`)
+#### The seven capabilities (`internal/storage/capabilities.go:295-303`)
 | Value | Name string | Interface |
 |---|---|---|
 | `Sync` | `"sync"` | `Syncer` |
@@ -368,9 +368,9 @@ They live beside the specs rather than in an engine because the schema is the co
 | `Import` | `"import"` | `Importer` |
 | `TestSupport` | `"test-support"` | `RawExecutor` |
 
-- `all` is the enumeration every listing derives from (`internal/storage/capabilities.go:304-312`).
-- `Capabilities() []Capability` returns `slices.Clone(all)` — the caller's own slice (`internal/storage/capabilities.go:317`).
-- `Offered(engine Store) []Capability` returns the capabilities the engine implements, **in `Capabilities()` order** (`internal/storage/capabilities.go:323-331`).
+- `all` is the enumeration every listing derives from (`internal/storage/capabilities.go:308-316`).
+- `Capabilities() []Capability` returns `slices.Clone(all)` — the caller's own slice (`internal/storage/capabilities.go:321`).
+- `Offered(engine Store) []Capability` returns the capabilities the engine implements, **in `Capabilities()` order** (`internal/storage/capabilities.go:327-335`).
 
 #### `Syncer` (`internal/storage/capabilities.go:55-96`)
 - `SyncAddRemote(ctx, name, url string) error` (`:56`)
@@ -402,20 +402,20 @@ They live beside the specs rather than in an engine because the schema is the co
 - `PruneCheckpoints(ctx, prefix string, retain int) error` — keeps the newest `retain` checkpoints under prefix and drops the rest (`:140-142`)
 - `ResetToCheckpoint(ctx, name string) error` (`:143`)
 
-#### `Repairer` (`internal/storage/capabilities.go:154-173`)
+#### `Repairer` (`internal/storage/capabilities.go:154-177`)
 - `Doctor(ctx) (HealthReport, error)` — examines and reports; changes nothing (`:155-156`)
 - `FixIntegrity(ctx) (HealthReport, error)` — repairs dangling rows, self-referential edges, edges stored in the wrong order; reports the state it left behind. Takes **no** "actually repair" flag because the examine-only arm is `Doctor` (`:158-166`)
-- `FixRankInversions(ctx) (int, error)` — repairs orderings that contradict themselves and reports how many it corrected; exists only because rank may be stored as a fractional position that concurrent writers can invert (`:168-172`)
+- `FixRankInversions(ctx) (int, error)` — repairs orderings that contradict themselves and reports how many it corrected; exists only because rank may be stored as a fractional position that concurrent writers can invert; keeps the existing order wherever the edges allow — an issue falls behind one that stood after it only while it waits on a dependency — and a second run over a repaired store writes nothing (`:168-176`)
 
-#### `SchemaMigrator` (`internal/storage/capabilities.go:182-189`)
-- `AppliedSchemaVersion(ctx) (int64, error)` — the shape version the store is currently at (`:183-184`)
-- `Downgrade(ctx, targetSchemaVersion int64) error` — moves the store back to an older shape so a binary that predates the current one can open it (`:186-188`)
+#### `SchemaMigrator` (`internal/storage/capabilities.go:186-193`)
+- `AppliedSchemaVersion(ctx) (int64, error)` — the shape version the store is currently at (`:187-188`)
+- `Downgrade(ctx, targetSchemaVersion int64) error` — moves the store back to an older shape so a binary that predates the current one can open it (`:190-192`)
 
-#### `Importer` (`internal/storage/capabilities.go:198-200`)
-- `ReplaceFromExport(ctx, export model.Export) error` — replaces the store's entire contents with an export (`:191`, `:199`). Only the import half is optional; `Export` is core (`:192-196`).
+#### `Importer` (`internal/storage/capabilities.go:202-204`)
+- `ReplaceFromExport(ctx, export model.Export) error` — replaces the store's entire contents with an export (`:195`, `:203`). Only the import half is optional; `Export` is core (`:196-200`).
 
-#### `RawExecutor` (`internal/storage/capabilities.go:210-212`)
-- `ExecRawForTest(ctx, query string, args ...any) error` — runs an engine-native statement so tests can plant states the contract cannot express (a corrupted row, a stale schema) (`:202-211`).
+#### `RawExecutor` (`internal/storage/capabilities.go:214-216`)
+- `ExecRawForTest(ctx, query string, args ...any) error` — runs an engine-native statement so tests can plant states the contract cannot express (a corrupted row, a stale schema) (`:206-215`).
 
 ---
 

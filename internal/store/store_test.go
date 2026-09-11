@@ -648,8 +648,8 @@ func TestAddRelationRejectsSelfBlock(t *testing.T) {
 
 // Cycles that slip past AddRelation (e.g. bulk import, which bypasses the
 // interactive guard) must be diagnosable. Doctor names the cycle and
-// FixRankInversions refuses with an actionable message instead of looping into
-// the opaque "unable to converge" failure.
+// FixRankInversions refuses with a message that names its members, because no
+// rank order satisfies a cycle and there is nothing else useful to say.
 func TestDoctorAndFixDetectImportedBlocksCycle(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -687,9 +687,6 @@ func TestDoctorAndFixDetectImportedBlocksCycle(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "cycle") {
 		t.Fatalf("FixRankInversions() error = %v, want it to name the cycle", err)
-	}
-	if strings.Contains(err.Error(), "unable to converge") {
-		t.Fatalf("FixRankInversions() error = %v, want actionable message, not opaque non-convergence", err)
 	}
 }
 

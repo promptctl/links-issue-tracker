@@ -424,7 +424,7 @@ INSERT INTO issues(
 7. If `parentID != ""`: builds `model.Relation{SrcID: issue.ID, DstID: parentID, Type: model.RelParentChild, CreatedAt: issue.CreatedAt, CreatedBy: "links"}` and routes it through `insertRelationTx` (`store.go:538-551`; `internal/store/relations.go:348`).
 8. `s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, createdBy)` (`store.go:552`; `internal/store/labels.go:95`).
 9. Event: `createChanges := []model.FieldChange{}`; for **non-container** types appends `{Field:"status", From:"", To:"open"}`; containers get none (`store.go:556-560`). Then `s.recordEvent(ctx, tx, issue.ID, "created", "issue created", "links", createChanges)` (`store.go:561`) — action `"created"`, reason `"issue created"`, actor `"links"`.
-10. `smoothRanksIfNeededTx(ctx, tx, issue.Rank)` (`store.go:564`; `internal/store/ranking.go:401`).
+10. `smoothRanksIfNeededTx(ctx, tx, issue.Rank)` (`store.go:564`; `internal/store/ranking.go:407`).
 
 Returns the **in-memory** `issue` value (not a re-read) (`store.go:568`).
 
@@ -943,7 +943,7 @@ Called on every write open (`store.go:152`) and by the bootstrap (`store.go:2540
 | `newIssueID` | `issue_ids.go:14` | `store.go:522` |
 | `canonicalizeLabels` / `replaceLabelsTx` | `labels.go:112` / `:95` | `store.go:482`, `:640`, `:995`; `:552`, `:1052` |
 | `insertRelationTx` / `bucketRelations` / `relatedFrom` / `siblingsOf` / `ListChildren` | `relations.go:348` / `:22` / `:64` / `:88` / `:494` | `store.go:548`; `:809`; `:832`; `:820`; `:816` |
-| `smoothRanksIfNeededTx` | `ranking.go:401` | `store.go:564` |
+| `smoothRanksIfNeededTx` | `ranking.go:407` | `store.go:564` |
 | `deleteCommentTx` | `row_deletes.go:93` | `store.go:1189` |
 | `rank.Initial/After/Before` | `internal/rank` | `store.go:2065`, `:2067`, `:2081` |
 
@@ -2639,7 +2639,7 @@ Error-vs-not-found distinction: `execDelete` wraps a delete failure as `fmt.Erro
 - `loadLabelsByIssueIDs` — `internal/store/store.go:2366-2387`: `SELECT issue_id, label FROM labels WHERE issue_id IN (?, ?, …) ORDER BY label ASC`; error → `fmt.Errorf("load labels by issue ids: %w", err)`.
 - `listAllLabels` — `internal/store/store.go:1782-1790`: `SELECT issue_id, label, created_at, created_by FROM labels ORDER BY issue_id ASC, label ASC`; error → `fmt.Errorf("list all labels: %w", err)`.
 - List filtering by label — `internal/store/store.go:639-648`: `filter.LabelsAll` is run through `canonicalizeLabels` and each label adds a conjunct `EXISTS (SELECT 1 FROM labels l WHERE l.issue_id = i.id AND l.label = ?)` (AND semantics, one clause per label).
-- Import/restore insert: `INSERT INTO labels(issue_id, label, created_at, created_by) VALUES (?, ?, ?, ?)` with error `fmt.Errorf("restore label %s:%s: %w", label.IssueID, label.Name, err)` — `internal/store/import_export.go:259-265`.
+- Import/restore insert: `INSERT INTO labels(issue_id, label, created_at, created_by) VALUES (?, ?, ?, ?)` with error `fmt.Errorf("restore label %s:%s: %w", label.IssueID, label.Name, err)` — `internal/store/import_export.go:266-272`.
 - Orphan check: `SELECT COUNT(*) FROM labels l LEFT JOIN issues i ON i.id = l.issue_id WHERE i.id IS NULL` — `internal/store/import_export.go:60`.
 - Delta replay uses `deleteLabelTx` + `insertLabelTx` keyed on `labelKey{issueID, name}` — `internal/store/export_delta.go:165`, `:227`.
 
@@ -2727,7 +2727,7 @@ subject string `fmt.Sprintf("relation %s->%s (%s)", key.srcID, key.dstID, key.ki
 
 `rejectBlocksCycle(ctx, tx, dependent, dependency)` — `internal/store/relations.go:378-390`:
 - Self-edge: `dependent == dependency` → `fmt.Errorf("blocks: %s cannot block itself", dependent)` (`:379-381`).
-- Loads every live blocks edge with `loadBlocksEdges` (see §5.7); load error → `fmt.Errorf("blocks cycle check: %w", err)` (`:384`).
+- Loads every live blocks edge with `loadBlocksEdges` (see §5.9); load error → `fmt.Errorf("blocks cycle check: %w", err)` (`:384`).
 - `blocksPrecedes(blocksPrecedenceAdj(edges), dependent, dependency)` true → error text (`:387`):
   `"blocks: cannot add %s depends-on %s — %s already depends on %s (directly or transitively), so this edge would close a dependency cycle, which has no valid rank order"` with args `(dependent, dependency, dependency, dependent)`.
 
@@ -2830,9 +2830,9 @@ via `fmt.Sprintf` with placeholder lists from `repeatPlaceholder` (`internal/sto
 - `alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"` — `internal/rank/rank.go:17` (base-62, digits then uppercase then lowercase, so ASCII order equals alphabet order).
 - `base = len(alphabet)` = 62 — `internal/rank/rank.go:19`.
 - `charIndex [256]int` maps byte→ordinal, `-1` for non-members, initialized in `init()` — `internal/rank/rank.go:22`, `:29-36`.
-- `SmoothingThreshold = 8` — `internal/rank/rank.go:123`.
-- `SmoothingWindow = 32` — `internal/rank/rank.go:126`.
-- `minGap = 16` (local const inside `spacedRanks`) — `internal/rank/rank.go:160`.
+- `SmoothingThreshold = 8` — `internal/rank/rank.go:130`.
+- `SmoothingWindow = 32` — `internal/rank/rank.go:133`.
+- `minGap = 16` (local const inside `spacedRanks`) — `internal/rank/rank.go:170`.
 - The empty string is the "unranked" sentinel: `Valid("")` is false — `internal/rank/rank.go:53-63`. Every rank query in the store excludes `item_rank != ''`.
 
 `Initial()` returns `string(alphabet[base/2])` = `"V"` — `internal/rank/rank.go:39-41`.
@@ -2841,31 +2841,32 @@ via `fmt.Sprintf` with placeholder lists from `repeatPlaceholder` (`internal/sto
 
 ### 5.2 Midpoint / Before / After
 
-`Midpoint(a, b)` — `internal/rank/rank.go:69-118`:
-- `a == b` → `errors.New("rank: a and b are equal")` (`:70-72`).
-- both non-empty and `a >= b` → `errors.New("rank: a must be less than b")` (`:73-75`).
-- Walks positions: missing/short `a` contributes virtual char index 0 ("below the floor"), missing/short `b` contributes virtual index `base` ("above the ceiling") (`:80-93`). An out-of-alphabet byte gives `errors.New("rank: invalid character in a")` (`:84`) or `"rank: invalid character in b"` (`:91`).
-- If `bChar - aChar > 1`, emits `alphabet[aChar + (bChar-aChar)/2]` and returns (`:96-100`).
-- Otherwise emits `alphabet[aChar]` and advances a position, growing the string by one char per adjacent/equal position (`:106-107`).
-- Empty `a` means "before everything"; empty `b` means "after everything" (`:67-68`).
+`Midpoint(a, b)` — `internal/rank/rank.go:76-125`:
+- `a == b` → `errors.New("rank: a and b are equal")` (`:77-79`).
+- both non-empty and `a >= b` → `errors.New("rank: a must be less than b")` (`:80-82`).
+- Walks positions: missing/short `a` contributes virtual char index 0 ("below the floor"), missing/short `b` contributes virtual index `base` ("above the ceiling") (`:87-100`). An out-of-alphabet byte gives `errors.New("rank: invalid character in a")` (`:91`) or `"rank: invalid character in b"` (`:98`).
+- If `bChar - aChar > 1`, emits `alphabet[aChar + (bChar-aChar)/2]` and returns (`:103-107`).
+- Otherwise emits `alphabet[aChar]` and advances a position, growing the string by one char per adjacent/equal position (`:113-114`).
+- Empty `a` means "before everything"; empty `b` means "after everything" (`:74-75`).
 
-`Before(a)` = `Midpoint("", a)`, panicking `"rank.Before called with empty string"` on error — `internal/rank/rank.go:284-291`.
-`After(a)` = `Midpoint(a, "")`, panicking `"rank.After called with empty string"` on error — `internal/rank/rank.go:295-302`.
+`Before(a)` = `Midpoint("", a)`, panicking `"rank.Before called with empty string"` on error — `internal/rank/rank.go:299-308`.
+`After(a)` = `Midpoint(a, "")`, panicking `"rank.After called with empty string"` on error — `internal/rank/rank.go:310-319`.
 
 ### 5.3 Spaced ranks (used by smoothing)
 
-`SpacedRanks(n)` — `internal/rank/rank.go:129-136`: `spacedRanks(n, "", "")`; panics `fmt.Sprintf("rank: spaced ranks with empty bounds failed: %v", err)` if that ever errors.
+`SpacedRanks(n)` — `internal/rank/rank.go:135-143`: `spacedRanks(n, "", "")`; panics `fmt.Sprintf("rank: spaced ranks with empty bounds failed: %v", err)` if that ever errors.
 
-`SpacedRanksBetween(lower, upper, n)` — `internal/rank/rank.go:141-149`: `n == 0` → `(nil, nil)`; both bounds non-empty with `lower >= upper` → `errors.New("rank: lower must be less than upper")`; else `spacedRanks`.
+`SpacedRanksBetween(lower, upper, n)` — `internal/rank/rank.go:145-159`: both bounds non-empty with `lower >= upper` → `errors.New("rank: lower must be less than upper")`; else `spacedRanks`. That guard admits bounds nothing can sort between (`"10"` and `"100"`); `spacedRanks` enforces the rest.
 
-`spacedRanks(n, lower, upper)` — `internal/rank/rank.go:151-196`:
-- `n < 0` → `errors.New("rank: n must be non-negative")` (`:153-155`); `n == 0` → `(nil, nil)` (`:156-158`).
-- Starting at `length = max(len(lower), len(upper)) + 1`, increments length until the integer span between the bounds divided by `n+1` is at least `minGap` (16) (`:161-183`). Lengths whose span is `<= 0` are skipped (`:177-179`).
-- Emits `n` values at `lo + step*(i+1)` encoded fixed-width via `encodeBase62` (`:184-193`). All returned ranks share one length.
-- `lowerBoundInt(s, length)` — `:200-212`: empty → 0; else `stringToInt(s, length)`, plus 1 when `len(s) >= length`.
-- `upperBoundInt(s, length)` — `:216-232`: empty → `pow62(length)`; else `stringToInt(s,length) - 1`; a zero value → `errors.New("rank: upper bound too low to generate spaced ranks")`.
-- `stringToInt` — `:236-250`: base-62 accumulation, right-padded with index 0; invalid byte → `errors.New("rank: invalid character in bounds")`.
-- `encodeBase62(value, length)` — `:261-280`: negative → `errors.New("rank: cannot encode negative value")`; remainder out of `[0,62)` → `errors.New("rank: base62 remainder out of range")`; leftover quotient → `errors.New("rank: value does not fit fixed-width encoding")`.
+`spacedRanks(n, lower, upper)` — `internal/rank/rank.go:161-213`:
+- `n < 0` → `errors.New("rank: n must be non-negative")` (`:163-165`); `n == 0` → `(nil, nil)` (`:166-168`).
+- Starting at `length = max(len(lower), len(upper)) + 1`, increments length until the integer span between the bounds divided by `n+1` is at least `minGap` (16) (`:177-200`).
+- A **negative** span ends the search instead of skipping the length: `fmt.Errorf("rank: no room between %q and %q: the bounds pad to the same value, so no rank longer than both sorts between them", lower, upper)` (`:194-196`). Every candidate is longer than both bounds, so `span(L+1) = 62*(span(L)+1) - 1`; a negative span stays negative at every greater length, while a non-negative one grows 62-fold, so this is the only case that would not terminate.
+- Emits `n` values at `lo + step*(i+1)` encoded fixed-width via `encodeBase62` (`:201-211`). All returned ranks share one length.
+- `lowerBoundInt(s, length)` — `:215-229`: empty → 0; else `stringToInt(s, length)`, plus 1 when `len(s) >= length`.
+- `upperBoundInt(s, length)` — `:231-249`: empty → `pow62(length)`; else `stringToInt(s,length) - 1`, unchecked; an all-zero bound yields `-1`, which the negative-span arm above reports.
+- `stringToInt` — `:251-267`: base-62 accumulation, right-padded with index 0; invalid byte → `errors.New("rank: invalid character in bounds")`.
+- `encodeBase62(value, length)` — `:277-297`: negative → `errors.New("rank: cannot encode negative value")`; remainder out of `[0,62)` → `errors.New("rank: base62 remainder out of range")`; leftover quotient → `errors.New("rank: value does not fit fixed-width encoding")`.
 
 ### 5.4 Rank at creation
 
@@ -2885,25 +2886,25 @@ Called inside `CreateIssue`'s mutation right after ID minting — `internal/stor
 
 ### 5.5 The frame concept
 
-Rank meaning is frame-local: an issue's rank is only compared against frame-mates (siblings under the same container, or fellow top-level items) — `internal/store/ranking.go:225-235`.
+Rank meaning is frame-local: an issue's rank is only compared against frame-mates (siblings under the same container, or fellow top-level items) — `internal/store/ranking.go:226-236`.
 
-`ancestorChain(ctx, id)` — `internal/store/ranking.go:189-210`:
+`ancestorChain(ctx, id)` — `internal/store/ranking.go:190-211`:
 ```sql
 SELECT r.dst_id FROM relations r JOIN issues p ON p.id = r.dst_id
 WHERE r.src_id = ? AND r.type = 'parent-child' AND p.deleted_at IS NULL
 ```
-- Chain is self-first, root-last, starting `[id]` (`:190`).
-- `sql.ErrNoRows` terminates the walk (`:197-199`); other error → `fmt.Errorf("ancestor chain of %s: %w", id, err)` (`:200-202`).
-- Revisiting a seen node → `fmt.Errorf("ancestor chain of %s: parent cycle at %s", id, parent)` (`:203-205`).
+- Chain is self-first, root-last, starting `[id]` (`:191`).
+- `sql.ErrNoRows` terminates the walk (`:198-200`); other error → `fmt.Errorf("ancestor chain of %s: %w", id, err)` (`:201-203`).
+- Revisiting a seen node → `fmt.Errorf("ancestor chain of %s: parent cycle at %s", id, parent)` (`:204-206`).
 - Only non-deleted parents are followed, so a soft-deleted parent truncates the chain.
 
-`frameContainmentError` — `internal/store/ranking.go:216-223`: fields `containerID`, `containedID`; `Error()` = `fmt.Sprintf("%s is inside %s; no comparable frame contains both — rank it against a sibling instead", e.containedID, e.containerID)`.
+`frameContainmentError` — `internal/store/ranking.go:217-224`: fields `containerID`, `containedID`; `Error()` = `fmt.Sprintf("%s is inside %s; no comparable frame contains both — rank it against a sibling instead", e.containedID, e.containerID)`.
 
-`resolveFrameRepresentatives(chains)` — `internal/store/ranking.go:236-280`:
-1. Builds per-chain membership maps id→index (`:237-244`).
-2. Containment check: if any chain's head (`chain[0]`) appears in another chain at index > 0, returns `&frameContainmentError{containerID: chain[0], containedID: chains[j][0]}` (`:245-254`).
-3. LCA: the first element of `chains[0]` present in every other chain (`:257-270`); `lcaID == ""` means no shared ancestor.
-4. Representatives: with no LCA, each chain's **root** (`chain[len-1]`) (`:273-276`); with an LCA, the element **one level below** the LCA in each chain: `chain[memberships[i][lcaID]-1]` (`:277`). Frame-mates therefore resolve to themselves.
+`resolveFrameRepresentatives(chains)` — `internal/store/ranking.go:237-281`:
+1. Builds per-chain membership maps id→index (`:238-245`).
+2. Containment check: if any chain's head (`chain[0]`) appears in another chain at index > 0, returns `&frameContainmentError{containerID: chain[0], containedID: chains[j][0]}` (`:246-255`).
+3. LCA: the first element of `chains[0]` present in every other chain (`:258-271`); `lcaID == ""` means no shared ancestor.
+4. Representatives: with no LCA, each chain's **root** (`chain[len-1]`) (`:274-277`); with an LCA, the element **one level below** the LCA in each chain: `chain[memberships[i][lcaID]-1]` (`:278`). Frame-mates therefore resolve to themselves.
 
 Pinned cases — `internal/store/ranking_frame_test.go:279-320`:
 - `{{x},{y},{z}}` → `[x y z]`
@@ -2914,136 +2915,139 @@ Pinned cases — `internal/store/ranking_frame_test.go:279-320`:
 - `{{g,s,e},{c,e}}` → `[s c]`
 - `{{c,e},{e}}`, `{{e},{g,s,e}}`, `{{e},{x},{c,e}}` → `frameContainmentError`
 
-`resolveComparableFrame(issueChain, targetChain)` — `internal/store/ranking.go:288-301`: wraps `resolveFrameRepresentatives` for the pair and rewrites containment errors:
-- when the container is the issue itself: `fmt.Errorf("cannot rank %s relative to %s: %s contains it; rank it against a sibling instead", issueChain[0], targetChain[0], issueChain[0])` (`:293`);
-- otherwise: `fmt.Errorf("cannot rank %s relative to %s: %s is inside %s; rank it against a sibling instead", issueChain[0], targetChain[0], issueChain[0], targetChain[0])` (`:295`).
+`resolveComparableFrame(issueChain, targetChain)` — `internal/store/ranking.go:289-302`: wraps `resolveFrameRepresentatives` for the pair and rewrites containment errors:
+- when the container is the issue itself: `fmt.Errorf("cannot rank %s relative to %s: %s contains it; rank it against a sibling instead", issueChain[0], targetChain[0], issueChain[0])` (`:294`);
+- otherwise: `fmt.Errorf("cannot rank %s relative to %s: %s is inside %s; rank it against a sibling instead", issueChain[0], targetChain[0], issueChain[0], targetChain[0])` (`:296`).
 Returns `(reps[0], reps[1])` as `(movedID, anchorID)`.
 
 Pinned pair cases — `internal/store/ranking_frame_test.go:322-356`: top-level pair unchanged; same-epic siblings unchanged; standalone vs child → `(x, e)`; child vs standalone → `(e, x)`; two epics' children → `(e1, e2)`; grandchild vs child of shared epic → `(s, c)`; either containment direction errors.
 
-`resolveRankPair(ctx, issueID, targetID)` — `internal/store/ranking.go:308-335`:
-- `issueID == targetID` → `errors.New("cannot rank an issue relative to itself")` (`:309-311`).
-- `GetIssue(targetID)` then `GetIssue(issueID)` — in that order (`:312-317`).
-- Both ancestor chains, then `resolveComparableFrame` (`:318-329`).
-- `GetIssue(anchorID)` for the hydrated anchor whose `Rank` seeds midpoint math (`:330-333`).
+`resolveRankPair(ctx, issueID, targetID)` — `internal/store/ranking.go:309-336`:
+- `issueID == targetID` → `errors.New("cannot rank an issue relative to itself")` (`:310-312`).
+- `GetIssue(targetID)` then `GetIssue(issueID)` — in that order (`:313-318`).
+- Both ancestor chains, then `resolveComparableFrame` (`:319-330`).
+- `GetIssue(anchorID)` for the hydrated anchor whose `Rank` seeds midpoint math (`:331-334`).
 - Returns `(anchor, storage.RankMove{MovedID: movedID, AnchorID: anchorID})`.
 
 `storage.RankMove{MovedID, AnchorID}` — `internal/storage/rank.go:9-12`; `storage.RankSetResolution{NamedID, RankedID}` with json tags `named_id`/`ranked_id` — `internal/storage/rank.go:19-22`.
 
 ### 5.6 The five rank verbs
 
-**RankToTop(issueID)** — `internal/store/ranking.go:17-39`:
+**RankToTop(issueID)** — `internal/store/ranking.go:18-40`:
 - `GetIssue` precheck.
 - In `withMutation(ctx, "rank to top", …)`:
   ```sql
   SELECT item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' AND id != ? ORDER BY item_rank ASC LIMIT 1
   ```
-  non-`ErrNoRows` error → `fmt.Errorf("rank-to-top: query first: %w", err)` (`:23-26`).
-- No/blank first rank → `rank.Initial()`; else `rank.Before(firstRank)` (`:28-32`).
-- `UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?` with `time.Now().UTC().Format(time.RFC3339Nano)`; error → `fmt.Errorf("rank-to-top: update: %w", err)` (`:33-36`).
-- Then `smoothRanksIfNeededTx(ctx, tx, newRank)` (`:37`).
+  non-`ErrNoRows` error → `fmt.Errorf("rank-to-top: query first: %w", err)` (`:24-27`).
+- No/blank first rank → `rank.Initial()`; else `rank.Before(firstRank)` (`:29-33`).
+- `UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?` with `time.Now().UTC().Format(time.RFC3339Nano)`; error → `fmt.Errorf("rank-to-top: update: %w", err)` (`:34-37`).
+- Then `smoothRanksIfNeededTx(ctx, tx, newRank)` (`:38`).
 - No frame resolution: the top is the global top.
 
-**RankToBottom(issueID)** — `internal/store/ranking.go:161-183`: identical shape with `ORDER BY item_rank DESC`, errors `"rank-to-bottom: query last: %w"` (`:169`) and `"rank-to-bottom: update: %w"` (`:179`), and `rank.After(lastRank)` (`:175`).
+**RankToBottom(issueID)** — `internal/store/ranking.go:162-184`: identical shape with `ORDER BY item_rank DESC`, errors `"rank-to-bottom: query last: %w"` (`:170`) and `"rank-to-bottom: update: %w"` (`:180`), and `rank.After(lastRank)` (`:176`).
 
-**RankAbove(issueID, targetID)** — `internal/store/ranking.go:339-365`:
+**RankAbove(issueID, targetID)** — `internal/store/ranking.go:340-366`:
 - `resolveRankPair` first (all its errors propagate).
 - In `withMutation(ctx, "rank above", …)`:
   ```sql
   SELECT item_rank FROM issues WHERE item_rank < ? AND deleted_at IS NULL AND id != ? ORDER BY item_rank DESC LIMIT 1
   ```
-  bound `(target.Rank, move.MovedID)`; error → `fmt.Errorf("rank-above: query neighbor: %w", err)` (`:346-349`). Note this neighbor query has no `item_rank != ''` filter, so unranked rows sort as the empty string.
-- No neighbor → `rank.Before(target.Rank)`; else `rank.Midpoint(aboveRank, target.Rank)` with error `fmt.Errorf("rank-above: midpoint: %w", err)` (`:350-358`).
-- `UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?` on `move.MovedID`; error → `fmt.Errorf("rank-above: update: %w", err)` (`:359-362`).
-- `smoothRanksIfNeededTx(ctx, tx, newRank)` (`:363`). Returns the `RankMove` regardless of which id the caller named.
+  bound `(target.Rank, move.MovedID)`; error → `fmt.Errorf("rank-above: query neighbor: %w", err)` (`:347-350`). Note this neighbor query has no `item_rank != ''` filter, so unranked rows sort as the empty string.
+- No neighbor → `rank.Before(target.Rank)`; else `rank.Midpoint(aboveRank, target.Rank)` with error `fmt.Errorf("rank-above: midpoint: %w", err)` (`:351-359`).
+- `UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?` on `move.MovedID`; error → `fmt.Errorf("rank-above: update: %w", err)` (`:360-363`).
+- `smoothRanksIfNeededTx(ctx, tx, newRank)` (`:364`). Returns the `RankMove` regardless of which id the caller named.
 
-**RankBelow(issueID, targetID)** — `internal/store/ranking.go:369-395`: mirror image — `item_rank > ? … ORDER BY item_rank ASC LIMIT 1`, errors `"rank-below: query neighbor: %w"` (`:378`), `"rank-below: midpoint: %w"` (`:386`), `"rank-below: update: %w"` (`:390`); no neighbor → `rank.After(target.Rank)`, else `rank.Midpoint(target.Rank, belowRank)`.
+**RankBelow(issueID, targetID)** — `internal/store/ranking.go:370-396`: mirror image — `item_rank > ? … ORDER BY item_rank ASC LIMIT 1`, errors `"rank-below: query neighbor: %w"` (`:379`), `"rank-below: midpoint: %w"` (`:387`), `"rank-below: update: %w"` (`:391`); no neighbor → `rank.After(target.Rank)`, else `rank.Midpoint(target.Rank, belowRank)`.
 
 Frame behavior pinned by tests — `internal/store/ranking_frame_test.go`:
-- Standalone above an epic child anchors to the epic; epic and all children keep their exact rank strings; standalone ends above the epic (`:55-79`).
-- Child above a standalone moves the **epic**; children and anchor unchanged (`:81-105`).
-- Across two epics, `RankBelow(child1, child2)` moves epic1 relative to epic2 (`:107-125`).
-- Same-epic siblings rank directly (`:127-144`).
-- `RankAbove(child, own epic)` errors containing `"inside"`; `RankBelow(epic, own child)` errors containing `"contains"` (`:146-158`).
+- Standalone above an epic child anchors to the epic; epic and all children keep their exact rank strings; standalone ends above the epic (`:56-80`).
+- Child above a standalone moves the **epic**; children and anchor unchanged (`:82-106`).
+- Across two epics, `RankBelow(child1, child2)` moves epic1 relative to epic2 (`:108-126`).
+- Same-epic siblings rank directly (`:128-145`).
+- `RankAbove(child, own epic)` errors containing `"inside"`; `RankBelow(epic, own child)` errors containing `"contains"` (`:147-159`).
 
-**RankSet(ids)** — `internal/store/ranking.go:102-158`:
-- Validation `rankSetValidateIDs` — `internal/store/ranking.go:41-56`: fewer than 2 ids → `errors.New("rank set: need at least 2 IDs to establish order")`; an empty-string id → `errors.New("rank set: empty ID in input")`; a repeated id → `fmt.Errorf("rank set: duplicate ID %q in input", id)`.
-- `resolveRankSet` — `internal/store/ranking.go:65-91`: per id, `GetIssue` then `ancestorChain`; `resolveFrameRepresentatives` errors are wrapped `fmt.Errorf("rank set: %w", err)` (`:79`); two named ids collapsing to the same representative →
-  `fmt.Errorf("rank set: %s and %s both resolve to %s — their relative order is internal to %s and cannot be set against outside issues; run rank set among siblings instead", prior, id, reps[i], reps[i])` (`:85`).
+**RankSet(ids)** — `internal/store/ranking.go:103-159`:
+- Validation `rankSetValidateIDs` — `internal/store/ranking.go:42-57`: fewer than 2 ids → `errors.New("rank set: need at least 2 IDs to establish order")`; an empty-string id → `errors.New("rank set: empty ID in input")`; a repeated id → `fmt.Errorf("rank set: duplicate ID %q in input", id)`.
+- `resolveRankSet` — `internal/store/ranking.go:66-92`: per id, `GetIssue` then `ancestorChain`; `resolveFrameRepresentatives` errors are wrapped `fmt.Errorf("rank set: %w", err)` (`:80`); two named ids collapsing to the same representative →
+  `fmt.Errorf("rank set: %s and %s both resolve to %s — their relative order is internal to %s and cannot be set against outside issues; run rank set among siblings instead", prior, id, reps[i], reps[i])` (`:86`).
   Returns `[]storage.RankSetResolution{{NamedID, RankedID}}` parallel to the input order.
 - In `withMutation(ctx, "rank set", …)`:
   ```sql
   SELECT item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' AND id NOT IN (?,…) ORDER BY item_rank ASC LIMIT 1
   ```
-  built with one placeholder per ranked id (`:117-127`); non-`ErrNoRows` error → `fmt.Errorf("rank-set: query top: %w", err)` (`:125-127`).
-- Walks the ranked ids in reverse, assigning `rank.Initial()` for the first assignment when there is no cursor, else `rank.Before(cursor)`; cursor becomes the just-assigned rank (`:133-147`). Final order: `ids[0] < ids[1] < … < ids[N-1] < existing top` — the whole set is stacked at the top of the keyspace.
-- One `UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?` per id, sharing a single `now` timestamp; error → `fmt.Errorf("rank-set: update %s: %w", id, err)` (`:148-152`).
-- `smoothRanksIfNeededTx(ctx, tx, newRanks[0])` when the set is non-empty (`:153-156`).
-- Atomic: all assignments in one mutation (`:96-101`).
-- Note: `RankSet` returns `resolutions` alongside the mutation error, so resolutions are non-nil even when the write fails (`:114`).
+  built with one placeholder per ranked id (`:118-128`); non-`ErrNoRows` error → `fmt.Errorf("rank-set: query top: %w", err)` (`:126-128`).
+- Walks the ranked ids in reverse, assigning `rank.Initial()` for the first assignment when there is no cursor, else `rank.Before(cursor)`; cursor becomes the just-assigned rank (`:134-148`). Final order: `ids[0] < ids[1] < … < ids[N-1] < existing top` — the whole set is stacked at the top of the keyspace.
+- One `UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?` per id, sharing a single `now` timestamp; error → `fmt.Errorf("rank-set: update %s: %w", id, err)` (`:149-153`).
+- `smoothRanksIfNeededTx(ctx, tx, newRanks[0])` when the set is non-empty (`:154-157`).
+- Atomic: all assignments in one mutation (`:97-102`).
+- Note: `RankSet` returns `resolutions` alongside the mutation error, so resolutions are non-nil even when the write fails (`:115`).
 
 Tests: absolute top ordering — `internal/store/store_test.go:2700-2730`; duplicates rejected with an error containing `"duplicate"` — `:2732-2743`; single id rejected with `"at least 2"` — `:2745-2756`; mixed-frame resolves child→epic with children unmoved — `internal/store/ranking_frame_test.go:160-188`; two epics' children resolve to their epics — `:190-215`; same-epic siblings resolve to themselves and only they move — `:217-243`; duplicate representatives rejected with `"both resolve to"` and **no** rank changed — `:245-263`; naming an epic with its own child rejected with `"inside"` in both orders — `:265-277`.
 
 ### 5.7 Smoothing (rebalancing)
 
-`smoothRanksIfNeededTx(ctx, tx, triggerRank)` — `internal/store/ranking.go:401-500`:
-1. Trigger: `len(triggerRank) < rank.SmoothingThreshold` (8) → no-op (`:402-404`). So smoothing fires only once a rank string reaches 8 characters.
-2. `half := rank.SmoothingWindow / 2` = 16 (`:405`).
+`smoothRanksIfNeededTx(ctx, tx, triggerRank)` — `internal/store/ranking.go:410-486`:
+1. Trigger: `len(triggerRank) < rank.SmoothingThreshold` (8) → no-op (`:411-413`). So smoothing fires only once a rank string reaches 8 characters.
+2. `half := rank.SmoothingWindow / 2` = 16 (`:414`).
 3. Below half:
    ```sql
    SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank <= ? ORDER BY item_rank DESC LIMIT ?
    ```
-   bound `(triggerRank, half)` (`:415-417`); errors `"smooth: query below: %w"` (`:419`), `"smooth: scan below: %w"` (`:426`), `"smooth: below rows: %w"` (`:432`). The slice is then reversed to ascending (`:435-437`).
+   bound `(triggerRank, half)` (`:418-420`); error → `"smooth: below: %w"` (`:422`). The rows come back descending and are reversed to ascending (`:424`).
 4. Above half:
    ```sql
    SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank > ? ORDER BY item_rank ASC LIMIT ?
    ```
-   (`:440-442`); errors `"smooth: query above: %w"` (`:444`), `"smooth: scan above: %w"` (`:449`), `"smooth: above rows: %w"` (`:456`).
-5. Window fewer than 2 entries → no-op (`:459-461`).
-6. Outside bounds:
+   bound `(triggerRank, half)` (`:426-428`); error → `"smooth: above: %w"` (`:430`). The two halves concatenate into the window (`:432`).
+5. Window fewer than 2 entries → no-op (`:434-436`).
+6. The run bounds are computed from the window's own ends rather than scanned for (`:443-444`): `runFloor` is `rank.Significant(window[0].rank)`, the least rank sharing the bottom end's significant part; `runCeiling` is `rank.Significant(window[len-1].rank) + "1"`, the least rank sorting above every rank sharing the top end's. Ranks sharing a significant part sort contiguously, so these two values delimit exactly the runs the window's ends sit in.
+7. Two bounded range queries pick up the rest of each run:
    ```sql
-   SELECT item_rank FROM issues WHERE deleted_at IS NULL AND item_rank < ? ORDER BY item_rank DESC LIMIT 1
+   SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank >= ? AND item_rank < ? ORDER BY item_rank ASC
    ```
-   against `window[0].rank`, error → `"smooth: lower bound: %w"` (`:465-473`); and
+   bound `(runFloor, window[0].rank)`, error → `"smooth: lower run: %w"` (`:446-451`); and
    ```sql
-   SELECT item_rank FROM issues WHERE deleted_at IS NULL AND item_rank > ? ORDER BY item_rank ASC LIMIT 1
+   SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank > ? AND item_rank < ? ORDER BY item_rank ASC
    ```
-   against the last window rank, error → `"smooth: upper bound: %w"` (`:476-485`). Missing bounds stay `""` (meaning open-ended).
-7. `rank.SpacedRanksBetween(lowerBound, upperBound, len(window))`; error → `fmt.Errorf("smooth: compute ranks: %w", err)` (`:487-490`).
-8. `UPDATE issues SET item_rank = ? WHERE id = ?` for each window entry whose new rank differs from the old — `updated_at` is **not** touched here (`:492-498`); error → `fmt.Errorf("smooth: update %s: %w", item.id, err)` (`:495`).
+   bound `(window[len-1].rank, runCeiling)`, error → `"smooth: upper run: %w"` (`:452-457`). Both already ascend, so they concatenate around the window in order (`:458`). Both ranges are bounded on each side, so a run costs the rows it holds rather than a scan of the sorted set.
+8. The bounds themselves, one row each: the greatest rank below `runFloor` (`ORDER BY item_rank DESC LIMIT 1`), error → `"smooth: lower bound: %w"` (`:460-465`); and the least rank at or above `runCeiling` (`ORDER BY item_rank ASC LIMIT 1`), error → `"smooth: upper bound: %w"` (`:466-471`). A side with no such row leaves the bound `""` (meaning open-ended).
+9. `rank.SpacedRanksBetween(lowerBound, upperBound, len(window))`; error → `fmt.Errorf("smooth: compute ranks: %w", err)` (`:473-476`). The two bounds cannot pad to the same value — the one pair that primitive rejects (`internal/rank/rank.go:194-196`) is unreachable from here. `lowerBound` sorts below `runFloor`, so it cannot share the bottom end's significant part; and were the two bounds to share one with each other, every rank between them would belong to that single run, while `window[0]` lies between them with a different significant part.
+10. `UPDATE issues SET item_rank = ? WHERE id = ?` for each window entry whose new rank differs from the old — `updated_at` is **not** touched here (`:478-484`); error → `fmt.Errorf("smooth: update %s: %w", item.id, err)` (`:481`).
 
-Smoothing is invoked from `RankToTop` (`:37`), `RankSet` (`:154`), `RankToBottom` (`:181`), `RankAbove` (`:363`), `RankBelow` (`:393`), and `FixRankInversions` (`:872`). It ignores parent/epic frames entirely: the window is whatever is adjacent in the global rank keyspace.
+An all-zero rank at the bottom end takes the same path with no special case: its `rank.Significant` is `""`, so `runFloor` is `""`; `item_rank < ''` matches nothing and leaves `lowerBound` the open end, which is correct, while `item_rank >= '' AND item_rank < window[0].rank` is exactly the all-zero ranks below the window, everything sorting below an all-zero rank being itself all-zero.
+
+`rankRowsTx(ctx, tx, query, args…)` — `internal/store/ranking.go:488-506`: runs a rank query and returns every row it matches, in the order the query asks for. Every caller bounds its own query — by range or by `LIMIT` — so the rows read stay proportional to the window rather than to the backlog.
+
+`nearestRankTx(ctx, tx, query, args…)` — `internal/store/ranking.go:508-520`: returns the single rank a `LIMIT 1` query selects, mapping `sql.ErrNoRows` to `""`, the open end of the keyspace (`:513-515`).
+
+[LAW:one-source-of-truth] `rank.Significant` is the one definition of room here, the same one `anchorRun` compares anchors by: ranks sharing a significant part leave nothing between them, so a bound sharing the window's would leave the window nowhere to go.
+
+Smoothing is invoked from `RankToTop` (`:38`), `RankSet` (`:155`), `RankToBottom` (`:182`), `RankAbove` (`:364`), `RankBelow` (`:394`), and `FixRankInversions` (`:760`, once per rewritten rank after every repair write has landed). It ignores parent/epic frames entirely: the window is whatever is adjacent in the global rank keyspace.
 
 ### 5.8 Rank inversions
 
-`rankInversionCandidatesClause` — `internal/store/ranking.go:518-523`:
-```sql
-FROM relations r
-JOIN issues src ON src.id = r.src_id
-JOIN issues dst ON dst.id = r.dst_id
-WHERE r.type = 'blocks'
-AND src.deleted_at IS NULL AND dst.deleted_at IS NULL
-AND dst.item_rank > src.item_rank
-```
-Deliberately no status filter, because epics store `status IS NULL` and a SQL `status != 'closed'` would evaluate NULL for them (`:502-517`).
+`rowQueryer` interface with just `QueryContext` so the same loaders run on `*sql.DB` and `*sql.Tx` — `internal/store/ranking.go:522-530`.
 
-`rankInversion{depID, dependentID}` — `internal/store/ranking.go:525-528` (depID = dependency/blocker, dependentID = blocks-src).
+`liveIssueIDs(ctx)` — `internal/store/ranking.go:532-558`: `s.ListIssues(ctx, storage.ListIssuesFilter{Statuses: []model.State{model.StateOpen, model.StateInProgress}})`; error → `fmt.Errorf("list live issues: %w", err)` (`:551`). Archived and deleted issues are excluded by that listing; epics get their state by rollup over children rather than a column peek.
 
-`rowQueryer` interface with just `QueryContext` so the same loader runs on `*sql.DB` and `*sql.Tx` — `internal/store/ranking.go:535-537`.
+`loadRankOrder(ctx, q, liveIDs)` — `internal/store/ranking.go:687-712`: `SELECT id, item_rank FROM issues WHERE deleted_at IS NULL ORDER BY item_rank ASC, id ASC`, appending only rows present in `liveIDs`; errors `fmt.Errorf("query rank order: %w", err)` (`:694`), `fmt.Errorf("scan rank order: %w", err)` (`:701`), `fmt.Errorf("rank order rows: %w", err)` (`:709`). The `id ASC` tiebreak makes the sequence deterministic where two rows share a rank. This sequence is both the repair's input order and its membership test for which blocks edges constrain live work.
 
-`loadInversionCandidates(ctx, q)` — `internal/store/ranking.go:543-562`: `SELECT r.dst_id, r.src_id ` + the clause + ` ORDER BY src.item_rank ASC`; errors `fmt.Errorf("query: %w", err)` (`:547`), `fmt.Errorf("scan: %w", err)` (`:553`), `fmt.Errorf("rows: %w", err)` (`:559`).
+`rankedIssue{id, rank}` — `internal/store/rank_repair.go:12-17`: one row of that sequence.
 
-`filterLiveInversions(candidates, liveIDs)` — `internal/store/ranking.go:568-578`: keeps a candidate only when both endpoints are in the live set.
+`projectEdges(edges, position)` — `internal/store/rank_repair.go:48-71`: drops any edge with an endpoint outside `position` and dedupes the rest, so every surviving edge indexes in range and is counted exactly once.
 
-`liveIssueIDs(ctx)` — `internal/store/ranking.go:588-598`: `s.ListIssues(ctx, storage.ListIssuesFilter{Statuses: []model.State{model.StateOpen, model.StateInProgress}})`; error → `fmt.Errorf("list live issues: %w", err)`. Archived and deleted issues are excluded by that listing; epics get their state by rollup over children rather than a column peek (`:580-587`).
+`positions(order)` — `internal/store/rank_repair.go:244-252`: maps each id in `order` to its index; `stableTopoOrder`, `invertedEdges` and `blocksCycle` all index through it.
 
-`liveRankInversions(ctx)` — `internal/store/ranking.go:604-614`: live set + `loadInversionCandidates(ctx, s.db)` (error `fmt.Errorf("load inversion candidates: %w", err)`) + filter. Doctor counts `len(...)` of this and `FixRankInversions` consumes the same set (`:600-603`).
+`invertedEdges(order, edges)` — `internal/store/rank_repair.go:215-231`: over `projectEdges(edges, positions(order))` keeps every edge with `position[dependency] > position[dependent]`. Pure; no DB access. Doctor counts `len(...)` of this; `FixRankInversions` produces an order for which it is empty, so the reported count and the repaired state are one predicate rather than two kept in agreement.
+
+`blocksCycle(order, edges)` — `internal/store/rank_repair.go:233-242`: `findBlocksCycle(projectEdges(edges, positions(order)))`, the constraints `stableTopoOrder` sorts, so Doctor reports a cycle exactly when the repair refuses on one, and names the same path. Pure; no DB access.
 
 ### 5.9 Blocks graph helpers
 
-`blocksEdge{dependent, dependency}` — `internal/store/ranking.go:623-626` (src = dependent, ranked below; dst = dependency, ranked above).
+`blocksEdge{dependent, dependency}` — `internal/store/ranking.go:560-570` (src = dependent, ranked below; dst = dependency, ranked above).
 
-`loadBlocksEdges(ctx, q)` — `internal/store/ranking.go:632-658`:
+`loadBlocksEdges(ctx, q)` — `internal/store/ranking.go:572-602`:
 ```sql
 SELECT r.src_id, r.dst_id FROM relations r
 JOIN issues src ON src.id = r.src_id
@@ -3052,53 +3056,60 @@ WHERE r.type = 'blocks'
 AND src.deleted_at IS NULL AND dst.deleted_at IS NULL
 ORDER BY r.src_id, r.dst_id
 ```
-No rank pre-filter; the ORDER BY exists to make DFS adjacency order — and therefore the reported cycle path — deterministic (`:633-635`). Errors: `"query blocks edges: %w"` (`:643`), `"scan blocks edge: %w"` (`:650`), `"blocks edges rows: %w"` (`:655`).
+No rank filter; the ORDER BY exists to make DFS adjacency order — and therefore the reported cycle path — deterministic. Errors: `"query blocks edges: %w"` (`:587`), `"scan blocks edge: %w"` (`:594`), `"blocks edges rows: %w"` (`:599`).
 
-`blocksPrecedenceAdj(edges)` — `internal/store/ranking.go:661-667`: adjacency `dependency -> []dependent`.
+`blocksPrecedenceAdj(edges)` — `internal/store/ranking.go:604-611`: adjacency `dependency -> []dependent`.
 
-`blocksPrecedes(adj, from, to)` — `internal/store/ranking.go:673-692`: recursive DFS with a `seen` set; returns true as soon as `to` is reached. (The `seen` set is populated after the `next == to` check, so a node is compared before being marked.)
+`blocksPrecedes(adj, from, to)` — `internal/store/ranking.go:613-636`: recursive DFS with a `seen` set; returns true as soon as `to` is reached. (The `seen` set is populated after the `next == to` check, so a node is compared before being marked.)
 
-`filterLiveBlocksEdges(edges, liveIDs)` — `internal/store/ranking.go:697-707`: both endpoints must be live.
+`findBlocksCycle(edges)` — `internal/store/ranking.go:638-685`: three-color DFS (`white = 0`, `gray = 1`, `black = 2`) over adjacency keys sorted with `sort.Strings`; on hitting a gray node it slices the current stack from that node and appends it again, returning a repeated-endpoint path `a -> b -> … -> a`; returns nil for an acyclic graph.
 
-`findBlocksCycle(edges)` — `internal/store/ranking.go:712-756`: three-color DFS (`white = 0`, `gray = 1`, `black = 2` — `:719-723`) over adjacency keys sorted with `sort.Strings` (`:715-718`); on hitting a gray node it slices the current stack from that node and appends it again, returning a repeated-endpoint path `a -> b -> … -> a` (`:731-737`); returns nil for an acyclic graph.
+### 5.10 The rank repair
 
-`liveBlocksCycle(ctx)` — `internal/store/ranking.go:763-773`: live set, `loadBlocksEdges(ctx, s.db)` (error `fmt.Errorf("load blocks edges: %w", err)`), live filter, `findBlocksCycle`.
+Pure and DB-free, in `internal/store/rank_repair.go`; `FixRankInversions` supplies its inputs and applies its outputs.
 
-### 5.10 FixRankInversions
+`rankRewrite{id, newRank}` — `internal/store/rank_repair.go:19-23`: one issue whose rank must change, and the value to write.
 
-`Store.FixRankInversions(ctx) (int, error)` — `internal/store/ranking.go:778-882`:
-1. Live set snapshotted **before** the transaction; error → `fmt.Errorf("fix rank inversions: snapshot live set: %w", err)` (`:785-788`). Liveness is not recomputed per iteration (`:779-784`).
+`blocksCycleError{path}` — `internal/store/rank_repair.go:25-32`: `Error()` renders `blocks dependency cycle <a -> b -> … -> a> — a cycle has no valid rank order; break it by removing one edge with 'lit dep rm'`.
+
+`repairRankOrder(order, edges)` — `internal/store/rank_repair.go:34-46`: `stableTopoOrder(order, edges)`, then `rankRewrites(order, target)`.
+
+`stableTopoOrder(order, edges)` — `internal/store/rank_repair.go:73-120`: Kahn's algorithm over `projectEdges`, with the ready set held ascending by position in `order` (`slices.Insert` at `sort.SearchInts`), so each step emits the issue that stood earliest in the backlog among those whose dependencies are all placed. An issue falls behind one that stood after it only while it waits on a dependency, so an order that already satisfies every edge comes back unchanged. Ordering by position rather than by id is what keeps the tiebreak off id spelling. When Kahn stalls (`len(sorted) < len(order)`) it returns `&blocksCycleError{path: findBlocksCycle(constraints)}` rather than the partial sequence.
+
+`rankRewrites(order, target)` — `internal/store/rank_repair.go:122-166`: marks the indices `anchorRun` returns and walks `target` as runs of movers delimited by anchors, closing the final run at the sentinel index past the end. Each run is spaced into the open interval its neighbouring anchors bound, via `rank.SpacedRanksBetween(lower, upper, len(movers))`; an absent bound is `""`, which that primitive reads as "past that end", so a run at either extreme — and a target with no anchors at all — needs no special case. Error → `fmt.Errorf("space %d rank(s) between %q and %q: %w", len(movers), lower, upper, err)` (`:158`).
+
+`anchorRun(target, rankOf)` — `internal/store/rank_repair.go:168-213`: a longest subsequence of `target` strictly increasing by `rank.Significant` of the stored rank, by patience sort (`keys` computed once, `tails` + `prev`, `sort.Search` over `tails`). The repair does not write issues in the run, so they keep their place and their `updated_at`, and the rewrite count is the count of issues the new order actually moved; smoothing may still re-space their rank strings (see `FixRankInversions`). Movers are spaced into the gap two anchors bound, and two ranks with the same significant part (`"V"` and `"V0"`) leave none, so an anchor's significant rank must sort strictly above the one before it. It must also satisfy `rank.Valid`, which the empty significant rank of an unranked or all-zero issue does not; those issues are therefore always movers, which hands them a real rank on the way past.
+
+`Store.FixRankInversions(ctx) (int, error)` — `internal/store/ranking.go:714-773`:
+1. `liveIssueIDs(ctx)` **before** the transaction; error → `fmt.Errorf("fix rank inversions: snapshot live set: %w", err)` (`:732`). The repair mutates only `item_rank`, so closure status is invariant across the write.
 2. In `withMutation(ctx, "fix rank inversions", …)`:
-   - `loadBlocksEdges(ctx, tx)`; error → `fmt.Errorf("fix rank inversions: load blocks edges: %w", err)` (`:812-815`).
-   - If `findBlocksCycle(filterLiveBlocksEdges(edges, liveIDs)) != nil` → `fmt.Errorf("fix rank inversions: blocks dependency cycle %s — a cycle has no valid rank order; break it by removing one edge with 'lit dep rm'", strings.Join(cycle, " -> "))` (`:816-818`).
-   - Loop:
-     a. `loadInversions` = candidates in-tx filtered by the snapshot live set (`:789-795`); error → `fmt.Errorf("fix rank inversions: %w", err)` (`:823`).
-     b. Zero inversions → return nil (loop exit) (`:825-827`).
-     c. Snapshot key = `strings.Join(parts, "|")` where each part is `inv.depID + "<-" + inv.dependentID` (`:796-802`, `:828`). A repeated snapshot → `fmt.Errorf("fix rank inversions: unable to converge in one run; remaining inversions=%d", len(inversions))` (`:829-831`).
-     d. Targets: first inversion per distinct `depID` (later inversions sharing a dependency are skipped in this pass) (`:836-844`). Because candidates are ordered by `src.item_rank ASC`, the retained dependent is the highest-priority one.
-     e. Per target: `SELECT item_rank FROM issues WHERE id = ?` for the dependent, error → `fmt.Errorf("fix rank inversions: read target rank %s: %w", target.dependentID, err)` (`:848-851`).
-     f. `SELECT item_rank FROM issues WHERE item_rank < ? AND deleted_at IS NULL AND id != ? ORDER BY item_rank DESC LIMIT 1` bound `(targetRank, target.depID)`; non-`ErrNoRows` error → `fmt.Errorf("fix rank inversions: query neighbor: %w", err)` (`:852-858`).
-     g. No neighbor → `rank.Before(targetRank)`, else `rank.Midpoint(aboveRank, targetRank)` with error `fmt.Errorf("fix rank inversions: midpoint: %w", err)` (`:859-867`).
-     h. `UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?` on the dependency; error → `fmt.Errorf("fix rank inversions: update %s: %w", target.depID, err)` (`:868-871`).
-     i. `smoothRanksIfNeededTx`; error → `fmt.Errorf("fix rank inversions: smooth ranks: %w", err)` (`:872-874`).
-     j. `rerankedCount++` per re-ranked dependency (`:875`).
-3. On mutation error returns `(0, err)`; otherwise `(rerankedCount, nil)` (`:878-881`). The count counts dependency re-rank operations across all passes, not distinct issues.
+   - `loadRankOrder(ctx, tx, liveIDs)`; error → `fmt.Errorf("fix rank inversions: %w", err)` (`:738`).
+   - `loadBlocksEdges(ctx, tx)`; error → `fmt.Errorf("fix rank inversions: load blocks edges: %w", err)` (`:742`).
+   - `repairRankOrder(order, edges)`; error → `fmt.Errorf("fix rank inversions: %w", err)` (`:746`). This is the arm a dependency cycle takes.
+   - `UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?` per rewrite, stamped `s.clock.Now().Format(time.RFC3339Nano)`; error → `fmt.Errorf("fix rank inversions: update %s: %w", rewrite.id, err)` (`:751`).
+   - `smoothRanksIfNeededTx` per rewritten rank, in a second loop after every write has landed rather than interleaved with them: a pass that re-spaced a window mid-repair would move the anchor ranks the remaining placements were computed against. Error → `fmt.Errorf("fix rank inversions: smooth ranks: %w", err)` (`:761`).
+   - `rerankedCount = len(rewrites)`, assigned rather than accumulated, because `withStampedMutation` may re-run the function after a transient failure rolls its writes back.
+3. On mutation error returns `(0, err)`; otherwise `(rerankedCount, nil)`. The count is issues whose rank was rewritten by the repair, one per issue. Smoothing may rewrite further ranks, anchors included, without changing order or `updated_at`, and those are not counted.
 
 Test-pinned behavior in `internal/store/store_test.go`:
-- One dependency blocking two dependents: Doctor reports 2 inversions before, `FixRankInversions` returns 1, Doctor reports 0 after — `:294-342`.
-- A pass that creates a new inversion still converges: 1 before, `>= 1` fixed, 0 after — `:344-391`.
-- An epic dependency ranked below its dependent counts as 1 inversion and is fixed — `:399-444`.
-- A closed epic dependency yields 0 inversions — `:447-483`.
-- Deleted issues yield 0 inversions and 0 fixes — `:486-519`.
-- A cycle injected past `AddRelation` makes `FixRankInversions` fail with a message naming the cycle rather than an opaque non-convergence — `:650-694`.
+- One dependency blocking two dependents: Doctor reports 2 inversions before, `FixRankInversions` reports 1, 0 after — `:293-341`.
+- A pass that creates a new inversion still resolves: 1 before, `>= 1` fixed, 0 after — `:343-392`.
+- An epic dependency ranked below its dependent counts as 1 inversion and is fixed — `:393-444`.
+- A closed epic dependency yields 0 inversions — `:446-483`.
+- Deleted issues yield 0 inversions and 0 fixes — `:485-520`.
+- A cycle injected past `AddRelation` makes `FixRankInversions` fail with a message naming the cycle — `:649-692`.
+
+Test-pinned behavior in `internal/store/rank_repair_test.go`, against the pure repair with no database: a band that waits on nothing keeps its ranked order while the dependent it blocks sinks below it (`:65-92`); one edge moves only its dependent (`:94-111`); an already-ordered sequence produces no writes (`:113-124`); duplicate edges change nothing (`:126-139`); a cycle returns `blocksCycleError` (`:141-156`); unranked issues are always movers and come back with a real rank (`:158-173`); ranks that differ only by trailing zeros, and an all-zero rank, never both bound a gap a mover must fill (`:175-211`). Two tests cover the same shapes through the store end to end (`:275-338`, `:340-392`), and a 300-trial property run over random acyclic layerings asserts the repair permutes the backlog without resizing it, leaves no inverted edge, lets an issue fall behind one that stood after it only if a dependency of it is placed no earlier than that one, and writes nothing on a second pass (`:410-487`). That property run never reaches smoothing, so a last store test plants every rank longer than `rank.SmoothingThreshold` via `ExecRawForTest` and adds three inverted edges; one `FixRankInversions` call moves three issues, each to a rank past the threshold, and must leave the expected order with no inversions; a second call must return 0 and leave every rank byte-identical (`:489-559`).
+
+`seq(ids...)` (`:17-32`) builds those fixtures' ranks with a field width derived from the length of the run, because ranks compare lexicographically: a fixed two-digit width stops ascending at the tenth id, where `"100"` sorts between `"10"` and `"20"`, which violates the sorted-by-rank precondition `rankRewrites` reads its anchors under.
 
 ---
 
 ## 6. Cross-cutting notes on these four subsystems
 
-- Every mutation in labels.go, relations.go and ranking.go runs through `s.withMutation(ctx, <label>, fn)` with labels: `"add label"`, `"remove label"`, `"replace labels"` (`internal/store/labels.go:27`, `:49`, `:73`), `"add relation"`, `"remove relation"`, `"set parent"`, `"clear parent"` (`internal/store/relations.go:305`, `:394`, `:454`, `:478`), `"rank to top"`, `"rank set"`, `"rank to bottom"`, `"rank above"`, `"rank below"`, `"fix rank inversions"` (`internal/store/ranking.go:21`, `:114`, `:165`, `:344`, `:374`, `:804`).
+- Every mutation in labels.go, relations.go and ranking.go runs through `s.withMutation(ctx, <label>, fn)` with labels: `"add label"`, `"remove label"`, `"replace labels"` (`internal/store/labels.go:27`, `:49`, `:73`), `"add relation"`, `"remove relation"`, `"set parent"`, `"clear parent"` (`internal/store/relations.go:305`, `:394`, `:454`, `:478`), `"rank to top"`, `"rank set"`, `"rank to bottom"`, `"rank above"`, `"rank below"`, `"fix rank inversions"` (`internal/store/ranking.go:22`, `:115`, `:166`, `:345`, `:375`, `:735`).
 - Author attribution defaults to the literal `"unknown"` in `AddLabel` (`internal/store/labels.go:25`), `replaceLabelsTx` (`internal/store/labels.go:101`), `AddRelation` (`internal/store/relations.go:303`) and `SetParent` (`internal/store/relations.go:452`). `CreateIssue` uses `createdBy := "links"` for both the parent edge and the initial labels (`internal/store/store.go:490`, `:544`, `:553`).
-- Rank queries split on the `deleted_at IS NULL` filter inconsistently: the top/bottom/creation queries and smoothing include it plus `item_rank != ''`; the `RankAbove`/`RankBelow`/`FixRankInversions` neighbor queries include `deleted_at IS NULL` but not `item_rank != ''` (`internal/store/ranking.go:346`, `:376`, `:853`).
+- Every rank query filters `deleted_at IS NULL`, but they split on `item_rank != ''`: the `RankToTop`, `RankSet` and `RankToBottom` end queries and the creation placement queries include it (`internal/store/ranking.go:24`, `:124`, `:168`; `internal/store/store.go:2026`, `:2040`); the `RankAbove`/`RankBelow` neighbor queries, the smoothing window, run and bound queries, and `loadRankOrder` do not (`internal/store/ranking.go:347`, `:377`, `:419`, `:427`, `:447`, `:453`, `:461`, `:467`, `:692`).
 
 
 ---
@@ -3357,7 +3368,7 @@ There is **no manifest or index file**: `backup.List` derives the listing by rea
 It is **not** a commit range, checkpoint, or timestamp comparison. It is a pure value diff between **two `model.Export` values held in memory**: `diffExports(prev, next model.Export) exportDelta` (`export_delta.go:142`). `prev` is "what the live tables currently hold"; `next` is "what they must hold". No SQL query is issued to compute it (`export_delta.go:141`: "pure: the SQL lives in applyExportDelta").
 
 Who supplies `prev`:
-- `writeExportTx` supplies `model.Export{}` — the empty export — after having deleted every row, making the restore the degenerate "everything is an add" case (`import_export.go:172-179`).
+- `writeExportTx` supplies `model.Export{}` — the empty export — after having deleted every row, making the restore the degenerate "everything is an add" case (`import_export.go:179-186`).
 - `spineWriter` owns `landed`, seeded by an actual `Store.Export(ctx)` read of the spine branch in `newSpineWriter` (`internal/store/sync_reconcile.go:628-637`), and advanced to `next` only after a successful landing (`sync_reconcile.go:644-652`). The comment at `export_delta.go:17-20` states the previous export is never taken from a caller's belief.
 
 ### 2.2 The delta record types
@@ -3431,9 +3442,9 @@ Statements bound per table:
 |---|---|---|
 | issues | `DELETE FROM issues WHERE id = ?` (`row_deletes.go:84`) | `insertIssueStmt` (below) |
 | relations | `DELETE FROM relations WHERE src_id = ? AND dst_id = ? AND type = ?` (`row_deletes.go:88`) | `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, ?, ?, ?)` (`internal/store/relations.go:349`) |
-| comments | `DELETE FROM comments WHERE id = ?` (`row_deletes.go:94`) | `INSERT INTO comments(id, issue_id, body, created_at, created_by) VALUES (?, ?, ?, ?, ?)` (`import_export.go:252`) |
-| labels | `DELETE FROM labels WHERE issue_id = ? AND label = ?` (`row_deletes.go:98`) | `INSERT INTO labels(issue_id, label, created_at, created_by) VALUES (?, ?, ?, ?)` (`import_export.go:260`) |
-| events | `DELETE FROM issue_events WHERE id = ?` (`row_deletes.go:104`) | `INSERT INTO issue_events(...)` + N `INSERT INTO issue_event_changes(...)` (`import_export.go:287`, `:293`) |
+| comments | `DELETE FROM comments WHERE id = ?` (`row_deletes.go:94`) | `INSERT INTO comments(id, issue_id, body, created_at, created_by) VALUES (?, ?, ?, ?, ?)` (`import_export.go:259`) |
+| labels | `DELETE FROM labels WHERE issue_id = ? AND label = ?` (`row_deletes.go:98`) | `INSERT INTO labels(issue_id, label, created_at, created_by) VALUES (?, ?, ?, ?)` (`import_export.go:267`) |
+| events | `DELETE FROM issue_events WHERE id = ?` (`row_deletes.go:104`) | `INSERT INTO issue_events(...)` + N `INSERT INTO issue_event_changes(...)` (`import_export.go:294`, `:300`) |
 
 Delete error text: `execDelete` wraps as `"delete %s: %w"` and `"delete %s: rows affected: %w"` with subjects `"issue <id>"`, `"relation <src>-><dst> (<type>)"`, `"comment <id>"`, `"label <issue>:<name>"`, `"issue event <id>"` (`row_deletes.go:84-118`).
 
@@ -3465,13 +3476,13 @@ Delete error text: `execDelete` wraps as `"delete %s: %w"` and `"delete %s: rows
 
 ### 3.1 Entry point and transaction
 
-`func (s *Store) ReplaceFromExport(ctx context.Context, export model.Export) error` → `s.replaceFromExport(ctx, export, commitStamp{Message: "replace from export"})` (`import_export.go:138-140`). The Dolt commit message for a restore is the literal string **`replace from export`**.
+`func (s *Store) ReplaceFromExport(ctx context.Context, export model.Export) error` → `s.replaceFromExport(ctx, export, commitStamp{Message: "replace from export"})` (`import_export.go:145-147`). The Dolt commit message for a restore is the literal string **`replace from export`**.
 
-`replaceFromExport` (`import_export.go:149-153`) runs `writeExportTx` under `withStampedMutation`, i.e. under the commit lock, inside one `sql.Tx`, followed by `commitWorkingSetOnce`, with the transient-GC retry wrapping the whole staging+versioning unit (`commit_lock.go:156-177`). So it **is transactional** at the SQL level and **does commit** a Dolt commit.
+`replaceFromExport` (`import_export.go:156-160`) runs `writeExportTx` under `withStampedMutation`, i.e. under the commit lock, inside one `sql.Tx`, followed by `commitWorkingSetOnce`, with the transient-GC retry wrapping the whole staging+versioning unit (`commit_lock.go:156-177`). So it **is transactional** at the SQL level and **does commit** a Dolt commit.
 
 ### 3.2 What it does
 
-`writeExportTx` (`import_export.go:172-179`):
+`writeExportTx` (`import_export.go:179-186`):
 
 ```go
 for _, table := range []string{"labels", "comments", "relations", "issues"} {
@@ -3482,7 +3493,7 @@ for _, table := range []string{"labels", "comments", "relations", "issues"} {
 return applyExportDelta(ctx, tx, diffExports(model.Export{}, export))
 ```
 
-Deletion order is literally `labels, comments, relations, issues`. `issue_events` and `issue_event_changes` are deliberately **not** named — they cascade from `issues` (`import_export.go:168-171`). Error text: `"clear labels: …"`, `"clear comments: …"`, etc.
+Deletion order is literally `labels, comments, relations, issues`. `issue_events` and `issue_event_changes` are deliberately **not** named — they cascade from `issues` (`import_export.go:175-178`). Error text: `"clear labels: …"`, `"clear comments: …"`, etc.
 
 Because `prev` is the empty export, every row in the input is an add and nothing is a remove.
 
@@ -3490,15 +3501,15 @@ Because `prev` is the empty export, every row in the input is an add and nothing
 
 The input is a `model.Export` value. On the CLI path it arrives from `syncfile.Read(path)` → `json.Unmarshal` into `model.Export` (`internal/syncfile/syncfile.go:43-53`), i.e. the shape in §1.2 with the v1 `history` fallback of §1.5. `json.Unmarshal` here does **not** disallow unknown fields — unrecognized top-level keys are silently ignored (`syncfile.go:49`).
 
-Field-by-field parsing/normalization happens in `issueRowValues` (`import_export.go:218-242`), the tuple bound to `insertIssueStmt`:
+Field-by-field parsing/normalization happens in `issueRowValues` (`import_export.go:225-249`), the tuple bound to `insertIssueStmt`:
 
 ```sql
 INSERT INTO issues(id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, lane, created_at, updated_at, closed_at, resolution, redirect_target, archived_at, deleted_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'misc'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ```
-(`import_export.go:190-191`.)
+(`import_export.go:197-198`.)
 
-Value-by-value (`import_export.go:235-241`):
+Value-by-value (`import_export.go:242-248`):
 
 | column | value | rule |
 |---|---|---|
@@ -3507,7 +3518,7 @@ Value-by-value (`import_export.go:235-241`):
 | `description` | `issue.Description` | verbatim |
 | `agent_prompt` | `nullableString(issue.Prompt)` | `""` → SQL NULL (`store.go:2419-2424`) |
 | `status` | `statusForStorage(issue)` | leaf → `sql.NullString{string(status.Value), Valid:true}`; container (no Status capability) → **NULL** (`store.go:2238-2243`) |
-| `priority` | `model.CanonicalPriority(int(issue.Priority))` | any int ≠ 1 coerces to 0; 1 stays 1 (`priority.go:24-29`). **Never rejects** — legacy out-of-range priorities are coerced so the CHECK constraint cannot fail a restore (`import_export.go:228-233`) |
+| `priority` | `model.CanonicalPriority(int(issue.Priority))` | any int ≠ 1 coerces to 0; 1 stays 1 (`priority.go:24-29`). **Never rejects** — legacy out-of-range priorities are coerced so the CHECK constraint cannot fail a restore (`import_export.go:235-240`) |
 | `issue_type` | `issue.IssueType` | verbatim, no parse gate on this path |
 | `topic` | `issueid.NormalizeSlug(issue.Topic)` then `COALESCE(NULLIF(?, ''), 'misc')` | lowercased, non-`[a-z0-9]` runs collapsed to single `-`, trimmed of `-` (`internal/issueid/slug.go:15-29`); an empty result becomes the literal **`misc`** |
 | `assignee` | `issue.AssigneeValue()` | |
@@ -3515,21 +3526,21 @@ Value-by-value (`import_export.go:235-241`):
 | `lane` | `issue.Lane` | verbatim |
 | `created_at` | `issue.CreatedAt.Format(time.RFC3339Nano)` | |
 | `updated_at` | `issue.UpdatedAt.Format(time.RFC3339Nano)` | |
-| `closed_at` | RFC3339Nano of `issue.ClosedAtValue()`, else nil | (`import_export.go:219-222`) |
+| `closed_at` | RFC3339Nano of `issue.ClosedAtValue()`, else nil | (`import_export.go:226-229`) |
 | `resolution` | `nullableResolution(issue.ResolutionValue())` | nil → NULL, else the string (`store.go:2409-2414`) |
 | `redirect_target` | `nullableStringPtr(issue.RedirectTargetValue())` | nil → NULL (`store.go:2490-2495`) |
 | `archived_at`, `deleted_at` | `retentionColumns(issue)` | projected from the sealed Retention; archived-and-deleted is unrepresentable (`store.go:2401-2405`) |
 
-`insertIssueTx` error text: `"restore issue %s: %w"` (`import_export.go:246`).
+`insertIssueTx` error text: `"restore issue %s: %w"` (`import_export.go:253`).
 
-Comments (`insertCommentTx`, `import_export.go:251-257`): `id, issue_id, body, created_at (RFC3339Nano), created_by` verbatim; error `"restore comment %s: %w"`.
+Comments (`insertCommentTx`, `import_export.go:258-264`): `id, issue_id, body, created_at (RFC3339Nano), created_by` verbatim; error `"restore comment %s: %w"`.
 
-Labels (`insertLabelTx`, `import_export.go:259-265`): `issue_id, label(=Name), created_at (RFC3339Nano), created_by`; error `"restore label %s:%s: %w"` (issue id, name).
+Labels (`insertLabelTx`, `import_export.go:266-272`): `issue_id, label(=Name), created_at (RFC3339Nano), created_by`; error `"restore label %s:%s: %w"` (issue id, name).
 
-Events (`insertEventTx`, `import_export.go:282-299`):
-- `action` binds `nil` when `event.Action == ""`, else the string (`import_export.go:283-286`).
+Events (`insertEventTx`, `import_export.go:289-306`):
+- `action` binds `nil` when `event.Action == ""`, else the string (`import_export.go:290-293`).
 - `created_at` RFC3339Nano.
-- `stream_id` = `nullableString(event.Attribution.Stream())`, `workspace_id` = `nullableString(event.Attribution.Workspace())` — **attribution is replayed verbatim from the dump; the restoring checkout never substitutes its own** (`import_export.go:270-281`). No re-validation of the pair here: `Attribution.UnmarshalJSON` already collapsed half pairs.
+- `stream_id` = `nullableString(event.Attribution.Stream())`, `workspace_id` = `nullableString(event.Attribution.Workspace())` — **attribution is replayed verbatim from the dump; the restoring checkout never substitutes its own** (`import_export.go:277-288`). No re-validation of the pair here: `Attribution.UnmarshalJSON` already collapsed half pairs.
 - error `"restore issue event %s: %w"`.
 - Then one `INSERT INTO issue_event_changes(event_id, field, from_value, to_value)` per `event.Changes` entry, with `from`/`to` through `nullableString` (`""` → NULL); error `"restore issue event change %s.%s: %w"` (event id, field).
 
@@ -3547,7 +3558,7 @@ Usage strings: `restoreUsage = "usage: lit backup restore (--latest | --path <ex
 
 ### 3.6 Doctor / FixIntegrity (same file)
 
-`Doctor` (`import_export.go:42-112`) initializes `DependencyCycle`, `Errors`, `Warnings` to empty slices and `IntegrityCheck = "ok"`, then:
+`Doctor` (`import_export.go:42-119`) initializes `DependencyCycle`, `Errors`, `Warnings` to empty slices and `IntegrityCheck = "ok"`, then:
 - `CALL DOLT_VERIFY_CONSTRAINTS()` scanned into `violations`; error wrap `"verify constraints: %w"`. `violations > 0` → `IntegrityCheck = "constraint_violations"` and error line `fmt.Sprintf("constraint violations: %d", violations)`.
 - Three FK-orphan counts summed into `ForeignKeyIssues` (error wrap `"count foreign key issues: %w"`):
   - `SELECT COUNT(*) FROM relations r LEFT JOIN issues s ON s.id = r.src_id LEFT JOIN issues d ON d.id = r.dst_id WHERE s.id IS NULL OR d.id IS NULL`
@@ -3556,10 +3567,11 @@ Usage strings: `restoreUsage = "usage: lit backup restore (--latest | --path <ex
   - `> 0` → error line `"foreign key violations: %d"`.
 - `SELECT COUNT(*) FROM relations WHERE type='related-to' AND src_id >= dst_id` → `InvalidRelatedRows`; wrap `"count invalid related rows: %w"`; warning `"invalid related-to ordering rows: %d"`.
 - `SELECT COUNT(*) FROM issue_events e LEFT JOIN issues i ON i.id = e.issue_id WHERE i.id IS NULL` → `OrphanHistoryRows`; wrap `"count orphan event rows: %w"`; warning `"orphan issue event rows: %d"`.
-- `s.liveRankInversions(ctx)` → `RankInversions = len(...)`; wrap `"count rank inversions: %w"`; warning `"rank inversions: %d (dependencies ranked below dependents)"`.
-- `s.liveBlocksCycle(ctx)` → `DependencyCycle`; wrap `"detect blocks dependency cycle: %w"`; warning `"blocks dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)"` with members joined by `" -> "`.
+- `s.liveIssueIDs(ctx)`, `loadRankOrder(ctx, s.db, liveIDs)` and `loadBlocksEdges(ctx, s.db)`, loaded once for both rank checks; each error wraps `"rank checks: %w"`.
+- `RankInversions = len(invertedEdges(order, edges))`; warning `"rank inversions: %d (dependencies ranked below dependents)"`.
+- `blocksCycle(order, edges)` non-empty → `DependencyCycle`; warning `"blocks dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)"` with members joined by `" -> "`.
 
-`FixIntegrity` (`import_export.go:117-136`) always runs the repair under `withMutation(ctx, "fsck repair", …)` — Dolt commit message literal **`fsck repair`** — executing exactly three statements:
+`FixIntegrity` (`import_export.go:124-143`) always runs the repair under `withMutation(ctx, "fsck repair", …)` — Dolt commit message literal **`fsck repair`** — executing exactly three statements:
 ```sql
 DELETE FROM issue_events WHERE issue_id NOT IN (SELECT id FROM issues)   -- "repair orphan events: %w"
 DELETE FROM relations WHERE type='related-to' AND src_id = dst_id        -- "repair self related rows: %w"
@@ -3853,12 +3865,12 @@ updated %d issues\n         (len(result.Updated))
 | constant / literal | value | site |
 |---|---|---|
 | export `Version` | `2` | `import_export.go:39` |
-| restore Dolt commit message | `"replace from export"` | `import_export.go:139` |
-| fsck Dolt commit message | `"fsck repair"` | `import_export.go:118` |
+| restore Dolt commit message | `"replace from export"` | `import_export.go:146` |
+| fsck Dolt commit message | `"fsck repair"` | `import_export.go:125` |
 | Doctor healthy `IntegrityCheck` | `"ok"` | `import_export.go:48` |
 | Doctor failing `IntegrityCheck` | `"constraint_violations"` | `import_export.go:54` |
-| clear order in `writeExportTx` | `labels, comments, relations, issues` | `import_export.go:173` |
-| `insertIssueStmt` topic default | `COALESCE(NULLIF(?, ''), 'misc')` → `misc` | `import_export.go:191` |
+| clear order in `writeExportTx` | `labels, comments, relations, issues` | `import_export.go:180` |
+| `insertIssueStmt` topic default | `COALESCE(NULLIF(?, ''), 'misc')` → `misc` | `import_export.go:198` |
 | relation type written by both importers | `"blocks"` | `import_bulk.go:112`, `import_tree.go:79` |
 | relation `CreatedBy` written by both importers | `"links"` | `import_bulk.go:112`, `import_tree.go:79` |
 | rollback Change actor / reason | `"links"` / `"import rollback"` | `import_tree.go:97` |
@@ -3944,7 +3956,7 @@ Order of operations:
    - `rankFindings(export)` (`verify.go:136`)
 4. Returns `VerifyReport{Findings: findings}, nil` (`verify.go:137`).
 
-**No repair-on-verify.** `VerifyCandidate` performs no writes: it calls only `Doctor` (read-only queries — `internal/store/import_export.go:42-108`) and `Export` (read-only lists — `import_export.go:15-39`). The repair sibling `FixIntegrity` (`import_export.go:113-136`) exists but is never called from verify.go. There is no re-validation of the mapping — the comment at `verify.go:110-116` states the gate deliberately does not re-run `Validate`.
+**No repair-on-verify.** `VerifyCandidate` performs no writes: it calls only `Doctor` (read-only queries — `internal/store/import_export.go:42-119`) and `Export` (read-only lists — `import_export.go:15-39`). The repair sibling `FixIntegrity` (`import_export.go:124-143`) exists but is never called from verify.go. There is no re-validation of the mapping — the comment at `verify.go:110-116` states the gate deliberately does not re-run `Validate`.
 
 Findings are **all treated identically** — any finding at all makes `Reconciled()` false (`verify.go:88`). There is no advisory/warning tier inside the report: the only severity filtering happens when folding Doctor's output (§1.4).
 
@@ -3956,7 +3968,7 @@ Findings are **all treated identically** — any finding at all makes `Reconcile
 - `h.Warnings` are **discarded** — explicitly, so a faithful rebuild of messy source is not rejected (`verify.go:140-146`). This is the one advisory-vs-fatal split in the whole gate.
 - The slice is preallocated `make([]VerifyFinding, 0, len(h.Errors))` — non-nil even when empty (`verify.go:148`).
 
-The concrete checks whose text can appear as a `health` finding, in `Doctor`'s execution order (`internal/store/import_export.go:42-108`):
+The concrete checks whose text can appear as a `health` finding, in `Doctor`'s execution order (`internal/store/import_export.go:42-119`):
 
 1. **Constraint verification.** SQL: `CALL DOLT_VERIFY_CONSTRAINTS()` scanned into an int (`import_export.go:49`). Query error → `Doctor` returns `fmt.Errorf("verify constraints: %w", err)` (`import_export.go:50`), which `VerifyCandidate` wraps as `verify health gate (doctor): ...`. If `violations > 0`: sets `IntegrityCheck = "constraint_violations"` and appends **error** `constraint violations: %d` (`import_export.go:52-54`). Default `IntegrityCheck` is `"ok"` (`import_export.go:47`).
 2. **Foreign-key counts** — three queries summed into `ForeignKeyIssues` (`import_export.go:56-67`):
@@ -3966,8 +3978,8 @@ The concrete checks whose text can appear as a `health` finding, in `Doctor`'s e
    Query error → `fmt.Errorf("count foreign key issues: %w", err)` (`import_export.go:63`). If sum > 0, appends **error** `foreign key violations: %d` (`import_export.go:67`).
 3. **Invalid related-to ordering.** SQL: `SELECT COUNT(*) FROM relations WHERE type='related-to' AND src_id >= dst_id` (`import_export.go:69`). Error → `count invalid related rows: %w`. If > 0, appends **warning** `invalid related-to ordering rows: %d` (`import_export.go:72`) — a warning, therefore **ignored by verify**.
 4. **Orphan event rows.** SQL: `SELECT COUNT(*) FROM issue_events e LEFT JOIN issues i ON i.id = e.issue_id WHERE i.id IS NULL` (`import_export.go:74`). Error → `count orphan event rows: %w`. If > 0, **warning** `orphan issue event rows: %d` (`import_export.go:77`) — ignored by verify.
-5. **Rank inversions.** Computed in Go via `s.liveRankInversions(ctx)` (`import_export.go:88`); error → `count rank inversions: %w`. If > 0, **warning** `rank inversions: %d (dependencies ranked below dependents)` (`import_export.go:93`) — ignored by verify.
-6. **Blocks dependency cycle.** `s.liveBlocksCycle(ctx)` (`import_export.go:99`); error → `detect blocks dependency cycle: %w`. If non-empty, sets `DependencyCycle` and appends **warning** `blocks dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)` with members joined by `" -> "` (`import_export.go:104-105`) — ignored by verify.
+5. **Rank inversions.** Computed in Go: `s.liveIssueIDs(ctx)`, `loadRankOrder(ctx, s.db, liveIDs)` and `loadBlocksEdges(ctx, s.db)` load once for this check and the next (`import_export.go:87-98`); each error → `rank checks: %w`. `RankInversions = len(invertedEdges(order, edges))` (`import_export.go:105`); if > 0, **warning** `rank inversions: %d (dependencies ranked below dependents)` (`import_export.go:107`) — ignored by verify.
+6. **Blocks dependency cycle.** `blocksCycle(order, edges)` over the same load (`import_export.go:114`). If non-empty, sets `DependencyCycle` and appends **warning** `blocks dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)` with members joined by `" -> "` (`import_export.go:115-116`) — ignored by verify.
 
 Net effect: only checks 1 and 2 (constraint violations, foreign-key violations) can ever fail the verify health half.
 
@@ -4086,7 +4098,7 @@ Signature: `Recover(ctx, canonicalDoltDir string, dump RawDump, mapper Mapper, m
 - `os.MkdirTemp(parentDir, "lit-candidate-*")` creates the candidate root (`candidate.go:85`); the literal pattern is `lit-candidate-*`.
 - On any failure after that point, a deferred cleanup closes the store (if opened) and runs `os.RemoveAll(root)`, joining errors into the return (`candidate.go:89-104`).
 - `Open(ctx, filepath.Join(root, "workspace"), dump.WorkspaceID)` — the Dolt workspace is nested at `<root>/workspace` so the workspace lock and migration snapshots land inside the owned root (`candidate.go:106-111`). Error: `open candidate workspace: %w`.
-- `st.ReplaceFromExport(ctx, export)` loads the data (`candidate.go:112`), error `load export into candidate: %w`. That path commits inside the candidate's own Dolt database with commit message `"replace from export"` (`internal/store/import_export.go:130-132`) — the only commit any recovery pass makes, and it is made in the throwaway candidate, never in the canonical workspace.
+- `st.ReplaceFromExport(ctx, export)` loads the data (`candidate.go:112`), error `load export into candidate: %w`. That path commits inside the candidate's own Dolt database with commit message `"replace from export"` (`internal/store/import_export.go:137-139`) — the only commit any recovery pass makes, and it is made in the throwaway candidate, never in the canonical workspace.
 - The candidate stamps `expectedHead: dump.DoltHead` and `workspaceID: dump.WorkspaceID` for a later promotion's lost-update check (`candidate.go:117`).
 - `Candidate.Discard()` closes the store then `os.RemoveAll(c.root)`; `root` is cleared only on successful removal, so a later `Discard` retries. It is documented and implemented as **idempotent** (`candidate.go:157-179`).
 
@@ -4216,7 +4228,7 @@ Bind order for relations is `key.srcID, key.dstID, string(key.kind)` (`row_delet
 
 ### 4.6 Deletes deliberately NOT routed here
 
-Set-matching deletes are separate statements on purpose (`row_deletes.go:63-74`): `setSingleValuedEdgeTx` (relations.go), `ClearParent` (relations.go), `replaceLabelsTx` (labels.go), and the self-edge sweep in import_export.go. Also outside: `writeExportTx`'s wholesale clear, which issues `DELETE FROM` for `labels, comments, relations, issues` in that order and deliberately does not name `issue_events`/`issue_event_changes` because they cascade from issues (`internal/store/import_export.go:160-172`), and `FixIntegrity`'s repairs (`import_export.go:114-124`).
+Set-matching deletes are separate statements on purpose (`row_deletes.go:63-74`): `setSingleValuedEdgeTx` (relations.go), `ClearParent` (relations.go), `replaceLabelsTx` (labels.go), and the self-edge sweep in import_export.go. Also outside: `writeExportTx`'s wholesale clear, which issues `DELETE FROM` for `labels, comments, relations, issues` in that order and deliberately does not name `issue_events`/`issue_event_changes` because they cascade from issues (`internal/store/import_export.go:167-179`), and `FixIntegrity`'s repairs (`import_export.go:121-131`).
 
 ---
 
@@ -4230,7 +4242,7 @@ Concretely, **a Dolt branch created at the current HEAD** — not a tag, not a f
 - `CreatedAt time.Time` — parsed from the unix-nano suffix in Name (`maintenance.go:22`)
 - `Anchor string` — opaque engine-side identity of the captured state; the Dolt engine fills it with a commit hash (`maintenance.go:23-28`, `checkpoint.go:22`).
 
-The capability interface is `storage.Checkpointer` with exactly `CreateCheckpoint`, `ListCheckpoints`, `PruneCheckpoints`, `ResetToCheckpoint` (`internal/storage/capabilities.go:136-144`); the capability token is `Checkpoints = capability[Checkpointer]{name: "checkpoints"}` (`capabilities.go:294`).
+The capability interface is `storage.Checkpointer` with exactly `CreateCheckpoint`, `ListCheckpoints`, `PruneCheckpoints`, `ResetToCheckpoint` (`internal/storage/capabilities.go:136-144`); the capability token is `Checkpoints = capability[Checkpointer]{name: "checkpoints"}` (`capabilities.go:298`).
 
 ### 5.2 Naming format string
 
@@ -4546,7 +4558,7 @@ Ordered:
 2. `os.MkdirTemp(parentDir, "lit-candidate-*")`; on error → `"create candidate workspace dir: %w"` (`candidate.go:85-88`).
 3. Installs the unconditional cleanup defer keyed on a `success bool` (`candidate.go:94-104`): if not successful, `err = errors.Join(err, st.Close())` when `st != nil`, then `err = errors.Join(err, os.RemoveAll(root))`.
 4. `Open(ctx, filepath.Join(root, "workspace"), dump.WorkspaceID)`; on error → `"open candidate workspace: %w"` (`candidate.go:108-111`).
-5. `st.ReplaceFromExport(ctx, export)` (defined `internal/store/import_export.go:138`); on error → `"load export into candidate: %w"` (`candidate.go:112-114`).
+5. `st.ReplaceFromExport(ctx, export)` (defined `internal/store/import_export.go:145`); on error → `"load export into candidate: %w"` (`candidate.go:112-114`).
 6. `success = true`; returns `&Candidate{store: st, root: root, expectedHead: dump.DoltHead, workspaceID: dump.WorkspaceID}` (`candidate.go:116-117`).
 
 Documented: `dump` is read-only and reusable unchanged across attempts; `Apply` never mutates it, so two attempts from one dump yield identical candidates (`candidate.go:66-68`).

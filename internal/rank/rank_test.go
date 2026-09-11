@@ -3,6 +3,7 @@ package rank
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestInitial(t *testing.T) {
@@ -30,6 +31,23 @@ func TestValid(t *testing.T) {
 	for _, c := range cases {
 		if got := Valid(c.in); got != c.want {
 			t.Errorf("Valid(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+// Ranks that pad to the same value share a significant part.
+func TestSignificant(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"V", "V"},
+		{"V0", "V"},
+		{"V00", "V"},
+		{"V0z", "V0z"}, // an inner zero is significant
+		{"100", "1"},
+		{"0", ""}, // an all-zero rank has no significant part
+		{"", ""},
+	} {
+		if got := Significant(c.in); got != c.want {
+			t.Errorf("Significant(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }
@@ -376,6 +394,14 @@ func TestSpacedRanksBetweenRejectsNegativeN(t *testing.T) {
 	}
 }
 
+func TestSpacedRanksBetweenRejectsInvertedBoundsForAnyN(t *testing.T) {
+	for _, n := range []int{0, 1} {
+		if ranks, err := SpacedRanksBetween("Z", "A", n); err == nil {
+			t.Fatalf("SpacedRanksBetween(%q, %q, %d) = %q, want an error: the bounds are inverted however many ranks are asked for", "Z", "A", n, ranks)
+		}
+	}
+}
+
 func TestSpacedRanksPanicsOnNegativeN(t *testing.T) {
 	defer func() {
 		if recover() == nil {
@@ -385,12 +411,45 @@ func TestSpacedRanksPanicsOnNegativeN(t *testing.T) {
 	_ = SpacedRanks(-1)
 }
 
-func TestSpacedRanksBetweenRejectsZeroUpperBound(t *testing.T) {
-	_, err := SpacedRanksBetween("", "0", 1)
-	if err == nil {
-		t.Fatal("expected error for zero upper bound")
-	}
-	if !strings.Contains(err.Error(), "upper bound too low") {
-		t.Fatalf("error = %q, want upper-bound validation", err)
+// Bounds with no room are two adjacent stored ranks that pad to the same value
+// — one is the other extended by zeros. The pair is representable in a real
+// store (54 of the 683 ranks in this repo's own store end in '0'), and both
+// callers of this primitive, the doctor repair and the smoothing pass, take
+// their bounds straight from stored ranks, so the primitive must report such a
+// pair rather than search forever.
+//
+// The goroutine IS the assertion. A regression here is a hang, and a hang left
+// to the package timeout burns a CI runner for ten minutes before naming
+// anything.
+func TestSpacedRanksBetweenRejectsBoundsWithNoRoom(t *testing.T) {
+	t.Parallel()
+	for _, bounds := range []struct{ lower, upper string }{
+		{"10", "100"},    // upper is lower plus one zero: nothing sorts between at all
+		{"1", "100"},     // "10" sorts between, but no rank longer than both does
+		{"0V", "0V0000"}, // the shape a spaced rank and its zero-extension make
+		{"", "0"},        // an all-zero upper bound: nothing sorts below it
+	} {
+		t.Run(bounds.lower+"_"+bounds.upper, func(t *testing.T) {
+			t.Parallel()
+			type outcome struct {
+				ranks []string
+				err   error
+			}
+			returned := make(chan outcome, 1)
+			go func() {
+				ranks, err := SpacedRanksBetween(bounds.lower, bounds.upper, 1)
+				returned <- outcome{ranks, err}
+			}()
+			select {
+			case got := <-returned:
+				if got.err == nil {
+					t.Fatalf("SpacedRanksBetween(%q, %q, 1) = %q, want an error: no rank longer than both bounds sorts between them",
+						bounds.lower, bounds.upper, got.ranks)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatalf("SpacedRanksBetween(%q, %q, 1) did not return within 5s — the length search is looping on bounds it can never satisfy",
+					bounds.lower, bounds.upper)
+			}
+		})
 	}
 }

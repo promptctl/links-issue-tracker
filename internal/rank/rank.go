@@ -62,6 +62,13 @@ func Valid(s string) bool {
 	return true
 }
 
+// Significant returns s without its trailing zeros: the part that decides where
+// s sorts once padded. Two ranks with the same significant part leave
+// SpacedRanksBetween no room between them.
+func Significant(s string) string {
+	return strings.TrimRight(s, "0")
+}
+
 // Midpoint returns a string that sorts strictly between a and b.
 // Precondition: a < b (lexicographic). Returns an error if a >= b.
 // Either a or b (but not both) may be empty: empty-a means "before everything",
@@ -138,10 +145,13 @@ func SpacedRanks(n int) []string {
 // SpacedRanksBetween returns n evenly-spaced rank strings between lower and
 // upper bounds (exclusive). Empty lower means "before everything", empty upper
 // means "after everything".
+//
+// It fails on a negative n, on a non-empty lower at or above a non-empty upper,
+// and on bounds with no room for the ranks asked for: bounds that pad to the
+// same value — one being the other extended by zeros — leave no room for a rank
+// longer than both, and a caller reading its bounds out of a store can be
+// handed such a pair.
 func SpacedRanksBetween(lower, upper string, n int) ([]string, error) {
-	if n == 0 {
-		return nil, nil
-	}
 	if lower != "" && upper != "" && lower >= upper {
 		return nil, errors.New("rank: lower must be less than upper")
 	}
@@ -174,8 +184,15 @@ func spacedRanks(n int, lower, upper string) ([]string, error) {
 			return nil, err
 		}
 		span := new(big.Int).Sub(hi, lo)
-		if span.Sign() <= 0 {
-			continue
+		// [LAW:no-silent-failure] A negative span means lower and upper pad to the
+		// same integer. Since span(L+1) = 62*(span(L)+1) - 1, that stays true at
+		// every greater length, so continuing the search is an unbounded loop
+		// hunting a string that does not exist. Reporting it is the honest answer,
+		// and only this first length can be negative: once the span is
+		// non-negative it grows 62-fold per length, which is what makes the
+		// remaining search for a wide-enough step terminate.
+		if span.Sign() < 0 {
+			return nil, fmt.Errorf("rank: no room between %q and %q: the bounds pad to the same value, so no rank longer than both sorts between them", lower, upper)
 		}
 		step := new(big.Int).Div(span, denominator)
 		if step.Cmp(minGapBig) < 0 {
@@ -225,9 +242,9 @@ func upperBoundInt(s string, length int) (*big.Int, error) {
 	if err != nil {
 		return nil, err
 	}
-	if v.Sign() == 0 {
-		return nil, errors.New("rank: upper bound too low to generate spaced ranks")
-	}
+	// An all-zero upper bound yields -1 here, which spacedRanks reads as the
+	// negative span it already reports. [LAW:single-enforcer] one place decides
+	// that a pair of bounds admits nothing, so there is one message to chase.
 	return new(big.Int).Sub(v, bigOne), nil
 }
 

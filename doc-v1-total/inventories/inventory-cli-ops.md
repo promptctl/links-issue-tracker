@@ -648,7 +648,7 @@ Handler `runDoctor` — `doctor.go:252-331`. Access mode is resolved from the ar
 
 `doctorFixes` (`doctor.go:230-250`) — the single authority for valid fix names:
 - `integrity` → `repairer.FixIntegrity(ctx)`; prints `Integrity repair: foreign_key_issues=<n> invalid_related_rows=<n> orphan_history_rows=<n>` (`doctor.go:231-239`).
-- `rank` → `repairer.FixRankInversions(ctx)`; prints `Re-ranked <n> dependency issue(s) to repair rank order.` only when `n > 0` (`doctor.go:240-249`).
+- `rank` → `repairer.FixRankInversions(ctx)`; prints `Re-ranked <n> issue(s) to place every dependency above its dependent.` only when `n > 0` (`doctor.go:240-253`).
 
 `allDoctorFixNames()` returns them sorted (`doctor.go:219-226`) → `integrity, rank`.
 `--fix` (bare, i.e. `all`) runs every fix in sorted order; a comma list runs the named ones in the given order (`doctor.go:262-271`). An unknown name → `fmt.Errorf("unknown fix %q; available: integrity, rank")`, exit 1 (`doctor.go:274-276`). **Fix progress writes to `os.Stderr`, not stdout** (`doctor.go:272-278`).
