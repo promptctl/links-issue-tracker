@@ -323,6 +323,17 @@ lit rank <id> --top | --bottom | --above <other-id> | --below <other-id>
 
 Moves one issue in the rank order. Exactly one placement flag is required.
 
+Edge placement (`--top`/`--bottom`) moves the issue to an end of *its own
+frame* — the epic that contains it, or the top-level order if nothing does.
+`lit rank <child> --top` makes that child first among its siblings; it does not
+move it, or its epic, anywhere in the queue at large, and it leaves every issue
+outside the epic exactly where it was. The output says which frame the move was
+scoped to whenever that frame is an epic. An issue that already holds the end
+it was sent to is reported as such and nothing is written — an unchanged order
+is never printed as a successful move. To promote a ticket out of its epic's
+lane, rank the epic instead, or use `--above`/`--below` against an outside
+issue, which resolves to the epic and carries the whole lane with it.
+
 Relative placement (`--above`/`--below`) operates between *peers*: two siblings
 inside the same epic, or two top-level items. When the named issue and the
 anchor live in different epics (or one is standalone), the request is resolved
@@ -332,6 +343,11 @@ epic, never reordering anything inside an epic. The output states the
 resolution whenever it substitutes an epic for a named issue. Ranking an issue
 relative to its own epic (either direction) is an error.
 
+Naming a deleted issue is an error in every form of the command, including
+`lit rank set`: rank is a position among the issues a listing shows, and a
+deleted issue holds none. Restore it first (`lit restore <id>`) and rank it
+after.
+
 ### `lit rank set`
 
 ```text
@@ -339,8 +355,15 @@ lit rank set <id1> <id2> [<id3> ...]
 ```
 
 Establishes absolute order across N issues atomically by stacking them at the
-top of the rank order: `id1` becomes topmost, `id2` ranks just below, and so
-on. Either every assignment applies or none does.
+top of the representatives' own frame: `id1` becomes topmost, `id2` ranks just
+below, and so on. Either every assignment applies or none does.
+
+The anchor is that frame's top, not the workspace's. Naming several children of
+one epic leads *that epic's children* and moves nothing outside it — the same
+frame-local rule `--top`/`--bottom` follow. The summary line names the frame the
+stack landed in (`ranked 3 issues at the top of <epic> in order: …`, or `at the
+top of the backlog`), because the top of an epic's children is not the top of
+the queue and an unqualified "at top" reads as the latter.
 
 The same peer rule as relative placement applies: each named ID is resolved to
 its representative in the comparable frame, so naming an epic's child alongside

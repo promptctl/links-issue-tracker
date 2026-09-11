@@ -2,11 +2,14 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/rank"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -164,9 +167,15 @@ func TestRankSetMixedFrameResolvesChildToEpic(t *testing.T) {
 	fx := newFrameFixture(t, ctx, st)
 	before := currentRanks(t, ctx, st, fx.children)
 
-	resolutions, err := st.RankSet(ctx, []string{fx.standalone.ID, fx.children[1].ID})
+	result, err := st.RankSet(ctx, []string{fx.standalone.ID, fx.children[1].ID})
 	if err != nil {
 		t.Fatalf("RankSet(standalone, child) error = %v", err)
+	}
+	resolutions := result.Resolutions
+	// A standalone ranked against an epic's child resolves to the epic, so the
+	// stack lands at the top level, not inside the epic.
+	if result.Frame != storage.TopLevel {
+		t.Errorf("RankSet frame = %q, want the top level", result.Frame)
 	}
 	want := []storage.RankSetResolution{
 		{NamedID: fx.standalone.ID, RankedID: fx.standalone.ID},
@@ -195,9 +204,13 @@ func TestRankSetAcrossTwoEpicsRanksRepresentatives(t *testing.T) {
 	fx2 := newFrameFixture(t, ctx, st)
 	before := currentRanks(t, ctx, st, append(fx1.children, fx2.children...))
 
-	resolutions, err := st.RankSet(ctx, []string{fx2.children[0].ID, fx1.children[2].ID})
+	result, err := st.RankSet(ctx, []string{fx2.children[0].ID, fx1.children[2].ID})
 	if err != nil {
 		t.Fatalf("RankSet(child2, child1) error = %v", err)
+	}
+	resolutions := result.Resolutions
+	if result.Frame != storage.TopLevel {
+		t.Errorf("RankSet frame = %q, want the top level the two epics share", result.Frame)
 	}
 	if resolutions[0].RankedID != fx2.epic.ID || resolutions[1].RankedID != fx1.epic.ID {
 		t.Fatalf("resolutions = %+v, want ranked %s then %s", resolutions, fx2.epic.ID, fx1.epic.ID)
@@ -221,9 +234,16 @@ func TestRankSetSameEpicSiblingsRanksSiblingsDirectly(t *testing.T) {
 	fx := newFrameFixture(t, ctx, st)
 	before := currentRanks(t, ctx, st, []model.Issue{fx.epic, fx.standalone})
 
-	resolutions, err := st.RankSet(ctx, []string{fx.children[2].ID, fx.children[0].ID, fx.children[1].ID})
+	result, err := st.RankSet(ctx, []string{fx.children[2].ID, fx.children[0].ID, fx.children[1].ID})
 	if err != nil {
 		t.Fatalf("RankSet(siblings) error = %v", err)
+	}
+	resolutions := result.Resolutions
+	// Siblings rank inside their epic, and the frame says so. This is the value
+	// the CLI names in its summary: "at the top of <epic>" rather than a bare
+	// "at top", which would read as the head of the backlog.
+	if result.Frame != storage.Frame(fx.epic.ID) {
+		t.Errorf("RankSet frame = %q, want the epic %s the siblings live in", result.Frame, fx.epic.ID)
 	}
 	for _, r := range resolutions {
 		if r.NamedID != r.RankedID {
@@ -276,27 +296,147 @@ func TestRankSetWithOwnContainerRejected(t *testing.T) {
 	}
 }
 
+// TestRankToEdgeDrawsItsKeyFromItsOwnFrame asserts the rank STRINGS, not the
+// rendered order. The order can be right while the keyspace is already
+// contaminated — a child holding a key below every top-level row still lists
+// among its siblings correctly — and it is the keyspace, not the order, that
+// decides what the NEXT rank is computed against. An order-only case would
+// have passed throughout the defect this test exists for.
+func TestRankToEdgeDrawsItsKeyFromItsOwnFrame(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	fx := newFrameFixture(t, ctx, st)
+	all := append([]model.Issue{fx.epic, fx.standalone}, fx.children...)
+	before := currentRanks(t, ctx, st, all)
+
+	end, err := st.RankToTop(ctx, fx.children[2].ID)
+	if err != nil {
+		t.Fatalf("RankToTop(C3) error = %v", err)
+	}
+	if end.Frame != storage.Frame(fx.epic.ID) {
+		t.Fatalf("RankToTop(C3) frame = %q, want the epic %q", end.Frame, fx.epic.ID)
+	}
+	if !end.Moved {
+		t.Fatal("RankToTop(C3) reported no move; C3 was last among its siblings")
+	}
+
+	after := currentRanks(t, ctx, st, all)
+	// C3's key is seeded from C1's — the key that led C3's own frame — and from
+	// nothing else.
+	if want := rank.Before(before[fx.children[0].ID]); after[fx.children[2].ID] != want {
+		t.Errorf("C3 rank = %q, want %q = Before(C1 %q), its frame's leading key", after[fx.children[2].ID], want, before[fx.children[0].ID])
+	}
+	for _, issue := range []model.Issue{fx.epic, fx.standalone, fx.children[0], fx.children[1]} {
+		if after[issue.ID] != before[issue.ID] {
+			t.Errorf("issue %s rank changed %q -> %q; only C3 moves", issue.ID, before[issue.ID], after[issue.ID])
+		}
+	}
+
+	// The precondition that gives the rest of this case its teeth: C3's new key
+	// now sorts below every top-level key, so an unscoped "first rank" query
+	// WOULD return it. Without this the assertions below pass vacuously — which
+	// is the shape of an invariant test that proves nothing.
+	if after[fx.children[2].ID] >= after[fx.epic.ID] {
+		t.Fatalf("C3 rank %q does not sort below the top-level leader %q; this case cannot tell a scoped query from an unscoped one", after[fx.children[2].ID], after[fx.epic.ID])
+	}
+	if after[fx.epic.ID] >= after[fx.standalone.ID] {
+		t.Fatalf("epic rank %q is not the top-level leader (standalone %q); the fixture no longer sets up this case", after[fx.epic.ID], after[fx.standalone.ID])
+	}
+
+	// A top-level --top now: its key must come from the top-level leader, never
+	// from the child that happens to hold a smaller string.
+	if _, err := st.RankToTop(ctx, fx.standalone.ID); err != nil {
+		t.Fatalf("RankToTop(standalone) error = %v", err)
+	}
+	final := currentRanks(t, ctx, st, all)
+	if want := rank.Before(after[fx.epic.ID]); final[fx.standalone.ID] != want {
+		t.Errorf("standalone rank = %q, want %q = Before(the top-level leader %q)", final[fx.standalone.ID], want, after[fx.epic.ID])
+	}
+	if contaminated := rank.Before(after[fx.children[2].ID]); final[fx.standalone.ID] == contaminated {
+		t.Errorf("standalone rank = %q was computed against C3 %q, a key in another frame", final[fx.standalone.ID], after[fx.children[2].ID])
+	}
+
+	// The bottom edge is scoped the same way: C3 back to the bottom of its
+	// frame is seeded from C2, the key that trails its siblings — not from the
+	// workspace's last key.
+	if _, err := st.RankToBottom(ctx, fx.children[2].ID); err != nil {
+		t.Fatalf("RankToBottom(C3) error = %v", err)
+	}
+	bottom := currentRanks(t, ctx, st, all)
+	if want := rank.After(final[fx.children[1].ID]); bottom[fx.children[2].ID] != want {
+		t.Errorf("C3 rank = %q, want %q = After(C2 %q), its frame's trailing key", bottom[fx.children[2].ID], want, final[fx.children[1].ID])
+	}
+}
+
+// TestRankToEdgeReportsAnUnmovableIssue covers the outcome that looks exactly
+// like success: the issue already holds the edge, so nothing is written and the
+// caller has to be told, or it reads an unchanged order as a promotion.
+func TestRankToEdgeReportsAnUnmovableIssue(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	fx := newFrameFixture(t, ctx, st)
+	all := append([]model.Issue{fx.epic, fx.standalone}, fx.children...)
+	before := currentRanks(t, ctx, st, all)
+
+	// C1 already leads its siblings, and the epic already leads the top level.
+	for _, tc := range []struct {
+		name      string
+		id        string
+		wantFrame storage.Frame
+	}{
+		{"leading child", fx.children[0].ID, storage.Frame(fx.epic.ID)},
+		{"leading top-level issue", fx.epic.ID, storage.TopLevel},
+	} {
+		end, err := st.RankToTop(ctx, tc.id)
+		if err != nil {
+			t.Fatalf("RankToTop(%s) error = %v", tc.name, err)
+		}
+		if end.Moved {
+			t.Errorf("RankToTop(%s) reported a move; it already held the edge", tc.name)
+		}
+		if end.Frame != tc.wantFrame {
+			t.Errorf("RankToTop(%s) frame = %q, want %q", tc.name, end.Frame, tc.wantFrame)
+		}
+	}
+
+	// A no-op writes nothing at all — not the same rank back, which would bump
+	// updated_at and land a commit for a move that did not happen.
+	after := currentRanks(t, ctx, st, all)
+	for id, r := range before {
+		if after[id] != r {
+			t.Errorf("issue %s rank changed %q -> %q on a no-op rank", id, r, after[id])
+		}
+	}
+}
+
 func TestResolveFrameRepresentatives(t *testing.T) {
 	t.Parallel()
+	// wantFrame is asserted alongside the representatives because the frame is
+	// what every neighbor lookup seeded by them gets scoped to: representatives
+	// that are right in a frame that is wrong still write a key into the wrong
+	// keyspace.
 	cases := []struct {
-		name    string
-		chains  [][]string
-		want    []string
-		wantErr bool
+		name      string
+		chains    [][]string
+		want      []string
+		wantFrame storage.Frame
+		wantErr   bool
 	}{
-		{name: "all top-level", chains: [][]string{{"x"}, {"y"}, {"z"}}, want: []string{"x", "y", "z"}},
-		{name: "siblings same epic", chains: [][]string{{"c1", "e"}, {"c2", "e"}, {"c3", "e"}}, want: []string{"c1", "c2", "c3"}},
-		{name: "children plus outsider resolve to roots", chains: [][]string{{"c1", "e"}, {"x"}, {"c2", "e"}}, want: []string{"e", "x", "e"}},
-		{name: "children of two epics under shared parent with outsider", chains: [][]string{{"c1", "e1", "p"}, {"c2", "e2", "p"}, {"x"}}, want: []string{"p", "p", "x"}},
-		{name: "children of two epics under shared parent", chains: [][]string{{"c1", "e1", "p"}, {"c2", "e2", "p"}}, want: []string{"e1", "e2"}},
-		{name: "grandchild vs child of shared epic", chains: [][]string{{"g", "s", "e"}, {"c", "e"}}, want: []string{"s", "c"}},
+		{name: "all top-level", chains: [][]string{{"x"}, {"y"}, {"z"}}, want: []string{"x", "y", "z"}, wantFrame: storage.TopLevel},
+		{name: "siblings same epic", chains: [][]string{{"c1", "e"}, {"c2", "e"}, {"c3", "e"}}, want: []string{"c1", "c2", "c3"}, wantFrame: "e"},
+		{name: "children plus outsider resolve to roots", chains: [][]string{{"c1", "e"}, {"x"}, {"c2", "e"}}, want: []string{"e", "x", "e"}, wantFrame: storage.TopLevel},
+		{name: "children of two epics under shared parent with outsider", chains: [][]string{{"c1", "e1", "p"}, {"c2", "e2", "p"}, {"x"}}, want: []string{"p", "p", "x"}, wantFrame: storage.TopLevel},
+		{name: "children of two epics under shared parent", chains: [][]string{{"c1", "e1", "p"}, {"c2", "e2", "p"}}, want: []string{"e1", "e2"}, wantFrame: "p"},
+		{name: "grandchild vs child of shared epic", chains: [][]string{{"g", "s", "e"}, {"c", "e"}}, want: []string{"s", "c"}, wantFrame: "e"},
 		{name: "issue with its own container", chains: [][]string{{"c", "e"}, {"e"}}, wantErr: true},
 		{name: "container with deep descendant", chains: [][]string{{"e"}, {"g", "s", "e"}}, wantErr: true},
 		{name: "container alongside outsider and descendant", chains: [][]string{{"e"}, {"x"}, {"c", "e"}}, wantErr: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			reps, err := resolveFrameRepresentatives(tc.chains)
+			reps, frame, err := resolveFrameRepresentatives(tc.chains)
 			if tc.wantErr {
 				var containment *frameContainmentError
 				if !errors.As(err, &containment) {
@@ -315,6 +455,21 @@ func TestResolveFrameRepresentatives(t *testing.T) {
 					t.Fatalf("resolveFrameRepresentatives() = %v, want %v", reps, tc.want)
 				}
 			}
+			if frame != tc.wantFrame {
+				t.Fatalf("resolveFrameRepresentatives() frame = %q, want %q", frame, tc.wantFrame)
+			}
+			// Every representative is a member of the frame it came back with,
+			// which is the property that makes scoping a query by that frame
+			// find exactly the rows these keys are compared against.
+			for i, chain := range tc.chains {
+				container := storage.TopLevel
+				if idx := slices.Index(chain, reps[i]); idx >= 0 && idx+1 < len(chain) {
+					container = storage.Frame(chain[idx+1])
+				}
+				if container != frame {
+					t.Fatalf("representative %s sits in frame %q, not the reported %q", reps[i], container, frame)
+				}
+			}
 		})
 	}
 }
@@ -325,20 +480,21 @@ func TestResolveComparableFrame(t *testing.T) {
 		name                    string
 		issueChain, targetChain []string
 		wantMoved, wantAnchor   string
+		wantFrame               storage.Frame
 		wantErr                 bool
 	}{
-		{name: "both top-level", issueChain: []string{"x"}, targetChain: []string{"y"}, wantMoved: "x", wantAnchor: "y"},
-		{name: "siblings same epic", issueChain: []string{"c1", "e"}, targetChain: []string{"c2", "e"}, wantMoved: "c1", wantAnchor: "c2"},
-		{name: "standalone vs child", issueChain: []string{"x"}, targetChain: []string{"c", "e"}, wantMoved: "x", wantAnchor: "e"},
-		{name: "child vs standalone", issueChain: []string{"c", "e"}, targetChain: []string{"x"}, wantMoved: "e", wantAnchor: "x"},
-		{name: "children of two epics", issueChain: []string{"c1", "e1"}, targetChain: []string{"c2", "e2"}, wantMoved: "e1", wantAnchor: "e2"},
-		{name: "grandchild vs child of shared epic", issueChain: []string{"g", "s", "e"}, targetChain: []string{"c", "e"}, wantMoved: "s", wantAnchor: "c"},
+		{name: "both top-level", issueChain: []string{"x"}, targetChain: []string{"y"}, wantMoved: "x", wantAnchor: "y", wantFrame: storage.TopLevel},
+		{name: "siblings same epic", issueChain: []string{"c1", "e"}, targetChain: []string{"c2", "e"}, wantMoved: "c1", wantAnchor: "c2", wantFrame: "e"},
+		{name: "standalone vs child", issueChain: []string{"x"}, targetChain: []string{"c", "e"}, wantMoved: "x", wantAnchor: "e", wantFrame: storage.TopLevel},
+		{name: "child vs standalone", issueChain: []string{"c", "e"}, targetChain: []string{"x"}, wantMoved: "e", wantAnchor: "x", wantFrame: storage.TopLevel},
+		{name: "children of two epics", issueChain: []string{"c1", "e1"}, targetChain: []string{"c2", "e2"}, wantMoved: "e1", wantAnchor: "e2", wantFrame: storage.TopLevel},
+		{name: "grandchild vs child of shared epic", issueChain: []string{"g", "s", "e"}, targetChain: []string{"c", "e"}, wantMoved: "s", wantAnchor: "c", wantFrame: "e"},
 		{name: "issue inside target", issueChain: []string{"c", "e"}, targetChain: []string{"e"}, wantErr: true},
 		{name: "target inside issue", issueChain: []string{"e"}, targetChain: []string{"c", "e"}, wantErr: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			moved, anchor, err := resolveComparableFrame(tc.issueChain, tc.targetChain)
+			moved, anchor, frame, err := resolveComparableFrame(tc.issueChain, tc.targetChain)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("resolveComparableFrame() error = nil, want containment error")
@@ -351,6 +507,187 @@ func TestResolveComparableFrame(t *testing.T) {
 			if moved != tc.wantMoved || anchor != tc.wantAnchor {
 				t.Fatalf("resolveComparableFrame() = (%s, %s), want (%s, %s)", moved, anchor, tc.wantMoved, tc.wantAnchor)
 			}
+			if frame != tc.wantFrame {
+				t.Fatalf("resolveComparableFrame() frame = %q, want %q", frame, tc.wantFrame)
+			}
 		})
+	}
+}
+
+// TestWriteRankRefusesAnIssueDeletedUnderTheLock pins the guarantee that
+// mustRankable cannot give on its own. That gate runs before the commit lock, so
+// its answer is only as fresh as the instant it was read, and a delete landing
+// between it and the write would otherwise leave a key on a row no listing
+// shows.
+//
+// The race has no seam to stage — there is no point between the gate and the
+// write where a test can land a concurrent delete — so this asserts the property
+// the race depends on, directly against the statement that would have carried it
+// out. Deleting the row before the transaction opens produces exactly the state
+// such a delete produces: a row the pre-lock gate would have passed, gone by the
+// time the key is written.
+//
+// White-box on purpose. Every public rank verb refuses this issue at the gate and
+// so can never reach writeRankTx with a deleted row, which is what made this
+// second line of defence untestable from outside the package — and what let it
+// be missing from every write site unnoticed.
+func TestWriteRankRefusesAnIssueDeletedUnderTheLock(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Doomed", Topic: "frame", IssueType: "task", Placement: storage.RankBottom})
+	if err != nil {
+		t.Fatalf("CreateIssue error = %v", err)
+	}
+	before, err := st.GetIssue(ctx, issue.ID)
+	if err != nil {
+		t.Fatalf("GetIssue(before) error = %v", err)
+	}
+	if err := st.ExecRawForTest(ctx, `UPDATE issues SET deleted_at = ? WHERE id = ?`, "2026-09-11T00:00:00Z", issue.ID); err != nil {
+		t.Fatalf("soft-delete %s: %v", issue.ID, err)
+	}
+
+	var writeErr error
+	if err := st.withMutation(ctx, "write-rank-under-lock-test", func(ctx context.Context, tx *sql.Tx) error {
+		writeErr = writeRankTx(ctx, tx, issue.ID, "zzzz", "2026-09-11T00:00:01Z")
+		return nil
+	}); err != nil {
+		t.Fatalf("withMutation error = %v", err)
+	}
+	if writeErr == nil {
+		t.Fatalf("writeRankTx put a key on the deleted %s; want a refusal", issue.ID)
+	}
+	if !strings.Contains(writeErr.Error(), "deleted while the move was being applied") {
+		t.Errorf("writeRankTx error = %q, want it to name the mid-flight deletion", writeErr)
+	}
+
+	// The refusal has to be a refusal, not a complaint after the fact. GetIssue
+	// carries no deleted_at filter, so the trashed row is still readable and its
+	// key can be compared directly.
+	after, err := st.GetIssue(ctx, issue.ID)
+	if err != nil {
+		t.Fatalf("GetIssue(after) error = %v", err)
+	}
+	if after.Rank != before.Rank {
+		t.Errorf("a refused write still moved the deleted %s: rank %q -> %q", issue.ID, before.Rank, after.Rank)
+	}
+}
+
+// TestMutationValueYieldsTheZeroValueWhenTheMutationFails pins the contract
+// that lets every rank verb return its result and its error together without
+// the two disagreeing.
+//
+// The verbs used to declare the result outside the closure and assign to it
+// partway through, so a step failing afterwards returned a populated value
+// beside a non-nil error — a RankEnd naming the frame of a move that never
+// happened. Callers check the error first, so nothing observed it; that is why
+// it survived three review rounds, not why it was safe.
+//
+// Asserting it here rather than through a verb is deliberate: forcing a verb to
+// fail midway needs an injection seam that exists for no other reason, and the
+// guarantee belongs to this helper, which is what every verb now returns
+// through. [LAW:behavior-not-structure]
+func TestMutationValueYieldsTheZeroValueWhenTheMutationFails(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	want := storage.RankEnd{Frame: "an-epic", Moved: true}
+
+	// The closure failing is the easy half, and on its own it proves nothing: a
+	// closure that returns an error never reaches the assignment, so the result
+	// is zero whether or not anything zeroes it. The case that needs the guard
+	// is the closure SUCCEEDING and the commit after it failing — withMutation
+	// runs tx.Commit and the working-set commit once fn has already returned its
+	// value. Cancelling the context from inside the closure stages exactly that:
+	// the value is computed and assigned, then the commit it was computed for
+	// cannot land.
+	cancelCtx, cancel := context.WithCancel(ctx)
+	got, err := mutationValue(cancelCtx, st, "mutation-value-commit-failure-test", func(ctx context.Context, tx *sql.Tx) (storage.RankEnd, error) {
+		cancel()
+		return want, nil
+	})
+	if err == nil {
+		t.Fatalf("mutationValue succeeded with a cancelled commit; want a failure")
+	}
+	if got != (storage.RankEnd{}) {
+		t.Errorf("mutationValue returned %+v beside an error; want the zero value, since a populated result reads as a move that happened", got)
+	}
+
+	boom := errors.New("the closure itself failed")
+	got, err = mutationValue(ctx, st, "mutation-value-failure-test", func(ctx context.Context, tx *sql.Tx) (storage.RankEnd, error) {
+		return want, boom
+	})
+	if !errors.Is(err, boom) {
+		t.Fatalf("mutationValue error = %v, want the failure the closure reported", err)
+	}
+	if got != (storage.RankEnd{}) {
+		t.Errorf("mutationValue returned %+v beside a closure error; want the zero value", got)
+	}
+
+	// The other half of the contract: a successful mutation hands its value back
+	// unchanged, or the zeroing above would be indistinguishable from losing it.
+	got, err = mutationValue(ctx, st, "mutation-value-success-test", func(ctx context.Context, tx *sql.Tx) (storage.RankEnd, error) {
+		return want, nil
+	})
+	if err != nil {
+		t.Fatalf("mutationValue error = %v, want success", err)
+	}
+	if got != want {
+		t.Errorf("mutationValue returned %+v, want %+v", got, want)
+	}
+}
+
+// TestFrameResolutionRefusesADeletedNamedIssue covers the case writeRankTx
+// cannot: an id that frame resolution substitutes away.
+//
+// writeRankTx re-reads the row it is about to write, which closes the race for
+// every id that reaches the write. A named id does not always reach it. Naming
+// a child of an epic beside a top-level issue resolves the child to its epic,
+// and from there the epic is what every later check sees — so a delete of the
+// child landing after the pre-lock gate went unnoticed, and the set proceeded to
+// rank the epic on behalf of an issue that no longer existed. The refusal the
+// CHANGELOG promises for "every form of the command" was not the refusal the
+// substitution path gave.
+//
+// White-box for the same reason as the write-side case above: the public verb
+// refuses this id at the gate and so can never reach resolution with it.
+func TestFrameResolutionRefusesADeletedNamedIssue(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	fx := newFrameFixture(t, ctx, st)
+	child := fx.children[0]
+
+	if err := st.ExecRawForTest(ctx, `UPDATE issues SET deleted_at = ? WHERE id = ?`, "2026-09-11T00:00:00Z", child.ID); err != nil {
+		t.Fatalf("soft-delete %s: %v", child.ID, err)
+	}
+
+	// The child resolves to its epic, which is live and untouched — which is
+	// exactly why nothing downstream would have caught the deletion.
+	var resolveErr error
+	if err := st.withMutation(ctx, "frame-resolution-liveness-test", func(ctx context.Context, tx *sql.Tx) error {
+		_, _, resolveErr = resolveRankSet(ctx, tx, []string{child.ID, fx.standalone.ID})
+		return nil
+	}); err != nil {
+		t.Fatalf("withMutation error = %v", err)
+	}
+	if resolveErr == nil {
+		t.Fatalf("resolveRankSet accepted the deleted %s by substituting its epic %s; want a refusal", child.ID, fx.epic.ID)
+	}
+	if !strings.Contains(resolveErr.Error(), "deleted while the move was being applied") {
+		t.Errorf("resolveRankSet error = %q, want it to name the mid-flight deletion", resolveErr)
+	}
+
+	// The same gap on the relative verbs, which resolve through the same walk.
+	var pairErr error
+	if err := st.withMutation(ctx, "frame-resolution-liveness-test-pair", func(ctx context.Context, tx *sql.Tx) error {
+		_, _, _, pairErr = rankPairTx(ctx, tx, child.ID, fx.standalone.ID)
+		return nil
+	}); err != nil {
+		t.Fatalf("withMutation error = %v", err)
+	}
+	if pairErr == nil {
+		t.Fatalf("rankPairTx accepted the deleted %s by substituting its epic %s; want a refusal", child.ID, fx.epic.ID)
 	}
 }

@@ -22,7 +22,6 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/issueid"
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/rank"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -2005,46 +2004,38 @@ type partialIssue struct {
 }
 
 // nextRankForPlacement resolves a new issue's rank from its requested
-// placement. The single dispatch point on RankPlacement: the two edge helpers
-// stay branch-free, and the runtime variability (which edge the caller chose)
-// lives in this one exhaustive match.
+// placement, against every existing rank rather than the frame it is filed
+// into.
+//
+// Filing is deliberately not scoped the way the rank verbs are. RankBottom is
+// the zero value and so the default, and it has to land the issue after
+// everything that already exists — that is what keeps an authored batch in the
+// order its file states — while a rank after every rank is also a rank after
+// every frame-mate, so the frame-local reading holds for free. Scoping this
+// would seed a first child from an empty frame and file it into the middle of
+// the order instead.
+//
+// RankTop against the whole workspace is the remaining unscoped edge: a child
+// filed there takes a key below every top-level issue. That is the same
+// keyspace bleed the rank verbs were fixed for, tracked on its own because
+// changing it changes what filing order means (links-rank-t2vl).
+//
+// [LAW:one-source-of-truth] The direction and the empty-keyspace default come
+// from edgeFor and rankBeyond, the same two the rank verbs use. Only the
+// population being asked differs.
 func nextRankForPlacement(ctx context.Context, tx *sql.Tx, p storage.RankPlacement) (string, error) {
-	switch p {
-	case storage.RankTop:
-		return nextRankAtTop(ctx, tx)
-	case storage.RankBottom:
-		return nextRankAtBottom(ctx, tx)
-	default:
-		return "", fmt.Errorf("unknown rank placement: %d", p)
+	edge, err := edgeFor(p)
+	if err != nil {
+		return "", err
 	}
-}
-
-// nextRankAtBottom returns a rank that sorts after all existing items.
-// Called within a transaction to ensure consistency.
-func nextRankAtBottom(ctx context.Context, tx *sql.Tx) (string, error) {
-	var lastRank sql.NullString
-	err := tx.QueryRowContext(ctx, "SELECT item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' ORDER BY item_rank DESC LIMIT 1").Scan(&lastRank)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("query last rank: %w", err)
+	var edgeRank sql.NullString
+	query := fmt.Sprintf(`SELECT item_rank FROM issues
+		WHERE deleted_at IS NULL AND item_rank != ''
+		ORDER BY item_rank %s LIMIT 1`, edge.order)
+	if err := tx.QueryRowContext(ctx, query).Scan(&edgeRank); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("query %s rank: %w", edge.name, err)
 	}
-	if !lastRank.Valid || lastRank.String == "" {
-		return rank.Initial(), nil
-	}
-	return rank.After(lastRank.String), nil
-}
-
-// nextRankAtTop returns a rank that sorts before all existing items.
-// Called within a transaction to ensure consistency.
-func nextRankAtTop(ctx context.Context, tx *sql.Tx) (string, error) {
-	var firstRank sql.NullString
-	err := tx.QueryRowContext(ctx, "SELECT item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' ORDER BY item_rank ASC LIMIT 1").Scan(&firstRank)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("query first rank: %w", err)
-	}
-	if !firstRank.Valid || firstRank.String == "" {
-		return rank.Initial(), nil
-	}
-	return rank.Before(firstRank.String), nil
+	return edge.rankBeyond(edgeRank.String), nil
 }
 
 // issueColumns is the single authoritative ordered projection of the issues

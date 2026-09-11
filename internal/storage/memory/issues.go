@@ -76,8 +76,17 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 		status:      model.StatusView{Value: model.StateOpen},
 		retention:   model.Live{},
 	}
+	// Placement runs before the record is committed to e.issues. place became
+	// fallible when it started dispatching through orderEdgeFor, and a failure
+	// after the map write would strand the record in e.issues while absent from
+	// e.order — findable by GetIssue, hydrated through a missing pos key, and so
+	// reported at a fabricated rank. place reads only e.order, so ordering the
+	// two this way removes that state rather than unwinding it.
+	// [LAW:polishing-by-subtraction]
+	if err := e.place(id, in.Placement); err != nil {
+		return model.Issue{}, err
+	}
 	e.issues[id] = rec
-	e.place(id, in.Placement)
 	e.setLabels(id, labels, now, createdBy)
 	if parentID != "" {
 		e.relations = append(e.relations, model.Relation{
@@ -98,12 +107,33 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 // place files a newly created issue in the rank order. RankBottom is the zero
 // value, so a create that says nothing about placement appends — which is what
 // keeps an authored batch in the order its file states it.
-func (e *Engine) place(id string, placement storage.RankPlacement) {
-	if placement == storage.RankTop {
-		e.order = append([]string{id}, e.order...)
-		return
+//
+// Filing is scoped to the whole order, not to the issue's frame the way the
+// rank verbs are: landing after everything that exists is also landing after
+// every frame-mate, so the default satisfies the frame-local reading for free,
+// and scoping it would drop a first child into the middle of the order
+// instead. The remaining unscoped edge is RankTop, tracked on its own
+// (links-rank-t2vl) because narrowing it changes what filing order
+// means.
+func (e *Engine) place(id string, placement storage.RankPlacement) error {
+	// The placement is dispatched before the population is even built, so an
+	// unrecognized one is refused the same way whether the workspace is empty or
+	// full. Answering the empty order first — the shortcut this had — skipped the
+	// dispatch entirely, so the very first issue in a workspace was created with
+	// any placement at all while the second was correctly refused.
+	// [LAW:dataflow-not-control-flow]
+	edge, err := orderEdgeFor(placement)
+	if err != nil {
+		return err
 	}
-	e.order = append(e.order, id)
+	// The population is every position in the order — the same edge dispatch the
+	// rank verbs use, asked about the workspace instead of one frame.
+	population := make([]int, len(e.order))
+	for index := range e.order {
+		population[index] = index
+	}
+	e.insertAt(edge.positionIn(population), id)
+	return nil
 }
 
 // mintID names a new issue. Top-level and child ids differ only in the
