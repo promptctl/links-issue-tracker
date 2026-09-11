@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -964,22 +965,49 @@ func TestRouteNextRoutesAroundAFreshPublicHold(t *testing.T) {
 // renderer would then print those ids under an empty parenthetical. The array
 // makes the failure loud; only this makes it impossible.
 //
-// It asserts over reachKindCount rather than over four names on purpose: a fifth
-// kind added to the enum fails here until both diagnostics have words for it,
-// which is the whole reason the bound exists.
+// Words and speakability are asserted as one biconditional because the two ways
+// they can disagree are both defects and only one of them is obvious. A
+// speakable kind with no words renders ids under an empty parenthetical. Words
+// for a kind the walk cannot stamp are a promise about a different walk:
+// exhaustedNotes carried reachOffFocusPath until this test was rewritten,
+// telling a reader that an epic's own gating blocker wanted `lit next --all`
+// when steps 1-3 never scope and so never needed it (links-listing-ju7i).
+//
+// The union is asserted separately, which is what the old reachKindCount sweep
+// was really protecting: a sixth kind still cannot enter the enum until some
+// walk claims it.
 func TestEveryReachKindHasWordsInBothDiagnostics(t *testing.T) {
 	t.Parallel()
+	// reachOf's switch is total and returns these four and nothing else, so they
+	// are what the exhaustion walk can stamp. The pool walk stamps the same four
+	// through the same reachOf, plus reachOffFocusPath via withheldByScope.
+	exhaustedSpeaks := []reachKind{reachTakeable, reachHeldFresh, reachNotReady, reachOutOfView}
+	poolSpeaks := append(slices.Clone(exhaustedSpeaks), reachOffFocusPath)
+
+	spoken := map[reachKind]bool{}
 	for _, diagnostic := range []struct {
-		name  string
-		notes reachNotes
+		name   string
+		notes  reachNotes
+		speaks []reachKind
 	}{
-		{"exhausted", exhaustedNotes},
-		{"pool", poolNotes},
+		{"exhausted", exhaustedNotes, exhaustedSpeaks},
+		{"pool", poolNotes, poolSpeaks},
 	} {
+		speakable := map[reachKind]bool{}
+		for _, kind := range diagnostic.speaks {
+			speakable[kind] = true
+			spoken[kind] = true
+		}
 		for kind := reachKind(0); kind < reachKindCount; kind++ {
-			if diagnostic.notes[kind] == "" {
-				t.Fatalf("%s notes have nothing to say about reachKind %d — its ids would render under an empty parenthetical", diagnostic.name, kind)
+			if speakable[kind] != (diagnostic.notes[kind] != "") {
+				t.Errorf("%s notes: reachKind %d is speakable=%v but its words are %q — a speakable kind with no words renders its ids under an empty parenthetical, and words for an unspeakable kind describe an answer this walk can never give",
+					diagnostic.name, kind, speakable[kind], diagnostic.notes[kind])
 			}
+		}
+	}
+	for kind := reachKind(0); kind < reachKindCount; kind++ {
+		if !spoken[kind] {
+			t.Errorf("reachKind %d is stamped by no diagnostic — a new kind needs a walk that says it before it can mean anything", kind)
 		}
 	}
 }

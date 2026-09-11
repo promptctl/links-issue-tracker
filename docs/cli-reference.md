@@ -119,7 +119,7 @@ surviving intent.
 ### `lit backlog`
 
 ```text
-lit backlog [--assignee <a>] [--labels <csv>] [--status open|in_progress] [--type <t>] [--limit <n>] [--columns <csv>]
+lit backlog [--assignee <a>] [--labels <csv>] [--status open|in_progress] [--type <t>] [--all] [--limit <n>] [--columns <csv>]
 ```
 
 Every workable item in rank order with blocked items shown **inline**, so the shape of
@@ -145,7 +145,7 @@ only the dependency reason; that gap is tracked as `links-columns-4hdq`.
 ### `lit next`
 
 ```text
-lit next [--type <t>] [--status open|in_progress] [--labels <csv>] [--assignee <a>]
+lit next [--type <t>] [--status open|in_progress] [--labels <csv>] [--assignee <a>] [--all]
 ```
 
 Prints the single next workable leaf to `lit start`, narrowed by the same filters as
@@ -181,9 +181,12 @@ unchanged until the work or the question does.
 
 An empty result says which emptiness it is. A backlog with nothing in it answers
 `no ready work`; one whose every row was passed over names those rows and why each
-is not yours to start — held by another checkout, or gated by something unfinished.
-So `lit next --status in_progress` can tell "you hold nothing" from "your work is in
-another checkout's hands" instead of answering both the same way.
+is not yours to start — held by another checkout, or gated by something unfinished;
+and one whose focus path is stuck says that instead, naming the rows the scope
+withheld and pointing at `lit next --all`, rather than quietly serving one of them
+as if it were next. So `lit next --status in_progress` can tell "you hold nothing"
+from "your work is in another checkout's hands" instead of answering both the same
+way.
 
 ### `lit orphaned`
 

@@ -297,6 +297,72 @@ func TestNextRefusesToSubstituteOffPathWorkForAStuckFocusPath(t *testing.T) {
 	}
 }
 
+// The focus-scoped lead may say rows sit off the path. It may not say they are
+// startable: withheldByScope stamps reachOffFocusPath on every excluded row
+// without consulting capacityFor, because the kind records which question the
+// run asked rather than a verdict about the row. A lead promising startable
+// work off the path is therefore an assertion nothing checked — the same
+// answer-shaped void links-cli-q7hg closed, one scope further out.
+//
+// The fixture makes that claim false and not merely unverified: every off-path
+// row is itself blocked, so an agent sent to `lit next --all` finds nothing.
+// The sibling test above covers the case where the withheld row IS ready, which
+// is why the wrong lead survived it.
+func TestFocusPathDeadEndDoesNotClaimOffPathWorkIsStartable(t *testing.T) {
+	h := newReadyTestHarness(t)
+
+	goal := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Goal", Topic: "goal", IssueType: "task",
+	})
+	gate := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Design gate", Topic: "goal", IssueType: "task",
+	})
+	h.addDependency(goal.ID, gate.ID)
+	h.setLabels(gate.ID, NeedsDesignLabel)
+	h.setLabels(goal.ID, FocusLabel)
+
+	// Off the path, and not startable either: blocked by its own open
+	// prerequisite, which is likewise off the path and likewise gated.
+	off := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Off-path, blocked", Topic: "noise", IssueType: "task",
+	})
+	offGate := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Off-path blocker", Topic: "noise", IssueType: "task",
+	})
+	h.addDependency(off.ID, offGate.ID)
+	h.setLabels(offGate.ID, NeedsDesignLabel)
+
+	err := h.runNextErr()
+	if err == nil {
+		t.Fatal("next served a row, want the focus-path diagnostic")
+	}
+	var outcome NoWork
+	if !errors.As(err, &outcome) {
+		t.Fatalf("next error = %#v (%T), want NoWork", err, err)
+	}
+	got := outcome.Error()
+
+	// Only the lead is under test. The per-row clauses legitimately say "not
+	// startable" about rows whose capacity the walk DID read, and matching the
+	// whole message would pass on that.
+	lead, _, found := strings.Cut(got, ": ")
+	if !found {
+		t.Fatalf("NoWork.Error() = %q, want a lead ending in %q before the row clauses", got, ": ")
+	}
+	if strings.Contains(lead, "startable") {
+		t.Fatalf("NoWork.Error() lead = %q — nothing off the focus path is startable in this fixture, and the walk never read those rows' capacity, so the lead may not claim it", lead)
+	}
+
+	// It still has to say the rows are there and how to reach them; refusing the
+	// unchecked claim must not cost the reader the honest half of the answer.
+	if !strings.Contains(got, off.ID) {
+		t.Fatalf("NoWork.Error() = %q, must name the withheld row %s", got, off.ID)
+	}
+	if want := "`lit next --all`"; !strings.Contains(got, want) {
+		t.Fatalf("NoWork.Error() = %q, must name the escape %q", got, want)
+	}
+}
+
 // The regression this design is most exposed to: scoping the rows BEFORE
 // routing would hide a lane this checkout already holds, and an agent with work
 // in flight off the focused path would be told to start something else. Focus

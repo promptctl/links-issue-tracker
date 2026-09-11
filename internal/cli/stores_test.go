@@ -367,6 +367,83 @@ func TestGatherCrossProjectRollupCountsWorkable(t *testing.T) {
 	}
 }
 
+// rollupLocation shares classifyWorkable with `lit backlog` and `lit next`, and
+// drops the focus scope that call returns. The drop is the whole point: these
+// are whole-project counts, and a project that happens to carry a focus label
+// would otherwise report "ready 1" meaning "ready on that project's focus path"
+// — the same column, the same number shape, a different fact, which is the
+// silent-substitution class this PR exists to remove everywhere else.
+//
+// Nothing checked it, so it was a claim in a comment rather than a property of
+// the code. The fixture puts the majority of the work OFF the focused path, so
+// a scope that leaked into the rollup cannot produce these numbers by accident:
+// it would report ready 1 / in-flight 0 / blocked 1.
+func TestGatherCrossProjectRollupCountsIgnoreTheFocusScope(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("LIT_CONFIG_GLOBAL_PATH", "")
+	t.Setenv("LIT_CONFIG_PROJECT_PATH", "")
+
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks(root) error = %v", err)
+	}
+	repo := filepath.Join(root, "repoReal")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatalf("mkdir repoReal: %v", err)
+	}
+	gitInit(t, repo)
+	// The base seed is four rows — ready 2 / in-flight 1 / blocked 1 — and every
+	// one of them is off the path focused below.
+	storageDir, _ := seedDiscoverableStore(t, repo, "real", "real-workspace-id")
+
+	ctx := context.Background()
+	st, err := engine.Open(ctx, engine.ReadWrite, filepath.Join(storageDir, "dolt"), "real-workspace-id")
+	if err != nil {
+		t.Fatalf("engine.Open error = %v", err)
+	}
+	newLeaf := func(title string) model.Issue {
+		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{
+			Title: title, Topic: "focus", Prefix: "real", Placement: storage.RankBottom,
+		})
+		if err != nil {
+			t.Fatalf("CreateIssue(%q) error = %v", title, err)
+		}
+		return issue
+	}
+	// A focused goal and the one prerequisite on its path: +1 ready, +1 blocked.
+	goal := newLeaf("focused goal")
+	prereq := newLeaf("on the focus path")
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{
+		SrcID: goal.ID, DstID: prereq.ID, Type: "blocks", CreatedBy: "tester",
+	}); err != nil {
+		t.Fatalf("AddRelation(blocks) error = %v", err)
+	}
+	labels := []string{FocusLabel}
+	if _, err := st.Apply(ctx, goal.ID, storage.Change{Fields: storage.UpdateIssueInput{Labels: &labels}}); err != nil {
+		t.Fatalf("Apply(labels) error = %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("store.Close() error = %v", err)
+	}
+
+	rows, err := gatherCrossProjectRollup(ctx, []string{root})
+	if err != nil {
+		t.Fatalf("gatherCrossProjectRollup() error = %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("gatherCrossProjectRollup() returned %d rows, want 1:\n%+v", len(rows), rows)
+	}
+	row := rows[0]
+	if row.Err != nil {
+		t.Fatalf("row.Err = %v; want a clean read of the seeded store", row.Err)
+	}
+	if row.Ready != 3 || row.InFlight != 1 || row.Blocked != 2 {
+		t.Fatalf("row counts = ready %d / in-flight %d / blocked %d; want 3 / 1 / 2 (the whole project). "+
+			"ready 1 / in-flight 0 / blocked 1 means the focus scope reached the rollup and these are focus-path counts wearing project-total labels",
+			row.Ready, row.InFlight, row.Blocked)
+	}
+}
+
 // TestRunStoresCountsRendersRollup is the fold's acceptance: `stores --counts`
 // routes the same discovery walk into the cross-project count rollup (the former
 // `lit overview`), while bare `stores` still lists storage paths. Proves the flag

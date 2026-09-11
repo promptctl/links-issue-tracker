@@ -335,7 +335,7 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		// dispatchable specs so an old invocation gets the documented pointer, not
 		// cobra's bare unknown-command error. [LAW:no-silent-failure]
 		retiredSpec("ready", "operations", "use `lit backlog` or `lit next`", workableRetirementGuidance),
-		{Name: "backlog", Summary: "List the full workable backlog in priority/rank order (blocked items inline)", GroupID: "operations",
+		{Name: "backlog", Summary: "List the workable backlog in priority/rank order (blocked items inline)", GroupID: "operations",
 			Run: r.appCmd(app.AccessRead, workableRun(backlogView))},
 		retiredSpec("queue", "operations", "use `lit backlog` or `lit next`", workableRetirementGuidance),
 		{Name: "next", Summary: "Print the next workable leaf to lit start", GroupID: "operations",

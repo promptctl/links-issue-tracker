@@ -13,16 +13,16 @@ import (
 
 // backlogPreamble explains what the backlog view is so an agent reading top to
 // bottom understands the ordering story before scanning rows. It stresses what
-// makes this the full workable view: nothing is hidden, blocked items keep their
-// ranked position, and the surrounding context (epic, depends-on, blocking
-// reasons) is visible so the order is auditable.
+// makes the order auditable: blocked items keep their ranked position, and the
+// surrounding context (epic, depends-on, blocking reasons) is visible. What the
+// view does and does not contain is focusNotice's to say, not this constant's.
 //
 // It also has to state how the view says a group-scoped fact, because the view
 // only says it once. An agent that reads "each row carries its parent epic" and
 // then finds nine of ten siblings without an epic line will conclude those nine
 // have no epic. [FRAMING:representation] The preamble is a map of the view and
 // has to be redrawn whenever the view moves.
-const backlogPreamble = `This is the backlog in priority/rank order — every workable item, blocked or not.
+const backlogPreamble = `This is the backlog in priority/rank order.
 Items at the top are ranked higher than items below them. Blocked items stay where they were ranked
 so you can see WHY the queue is shaped this way, not just what is ready next.
 Read every row: each carries its dependencies, blocking reasons, and what closing it would unblock.

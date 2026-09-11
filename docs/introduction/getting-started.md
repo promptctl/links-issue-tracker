@@ -50,7 +50,7 @@ Pass `--top` for a ticket that genuinely belongs at the front, or `lit rank <id>
 lit backlog
 ```
 
-`backlog` is the pull view: every workable item in rank order, blocked items shown inline so
+`backlog` is the pull view: workable items in rank order, blocked items shown inline so
 the queue shape is legible, the top item being what should be picked up next. With one ticket
 filed, yours is the top item. (Want just the single next leaf to start, without the list? Use
 `lit next`.)

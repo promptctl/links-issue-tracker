@@ -126,8 +126,7 @@ const (
 	// which is why it is classified where the scope is applied (routeNext step
 	// 4) rather than inside reachOf, whose other caller walks an unscoped set.
 	reachOffFocusPath
-	// reachKindCount bounds reachNotes and is never a classification: reachOf
-	// returns one of the four above.
+	// reachKindCount bounds reachNotes and is never a classification.
 	reachKindCount
 )
 
@@ -494,19 +493,22 @@ func (o Exhausted) Error() string {
 // words still renders its ids, under an empty parenthetical, which is loud
 // rather than silent. It is not total on its own, since Go does not require an
 // indexed array literal to fill every slot, so
-// TestEveryReachKindHasWordsInBothDiagnostics closes that gap.
-// [LAW:types-are-the-program] [LAW:no-silent-failure]
+// TestEveryReachKindHasWordsInBothDiagnostics closes that gap — in both
+// directions, because a slot a diagnostic can never reach is its own defect:
+// worded text for an impossible kind reads as a capability the walk does not
+// have. [LAW:types-are-the-program] [LAW:no-silent-failure]
 type reachNotes [reachKindCount]string
 
 // The wording each diagnostic carries, named so the totality test can reach
-// them and so neither is rebuilt on every render.
+// them and so neither is rebuilt on every render. The exhaustion walk speaks
+// only the kinds reachOf returns; reachOffFocusPath is the pool walk's alone,
+// stamped by withheldByScope, so exhaustedNotes has no slot for it.
 var (
 	exhaustedNotes = reachNotes{
-		reachTakeable:     "on your path and yours to take — `lit start` it",
-		reachHeldFresh:    "on your path but claimed by another checkout right now",
-		reachNotReady:     "on your path but not startable right now — `lit show` it",
-		reachOutOfView:    "on your path but outside this view — `lit show` it",
-		reachOffFocusPath: "gating your epic from off the focus scope — `lit next --all` to route over it",
+		reachTakeable:  "on your path and yours to take — `lit start` it",
+		reachHeldFresh: "on your path but claimed by another checkout right now",
+		reachNotReady:  "on your path but not startable right now — `lit show` it",
+		reachOutOfView: "on your path but outside this view — `lit show` it",
 	}
 	poolNotes = reachNotes{
 		reachTakeable:     "startable — `lit start` it",
@@ -575,12 +577,11 @@ func (o NoWork) Error() string {
 		return "no ready work"
 	}
 	// A third emptiness, and it needs its own lead: with rows withheld by the
-	// focus scope, "nothing in it is startable here" is false — some of those
-	// rows may be perfectly startable, they were simply not the question this
-	// run asked. Saying it the other way would be the same collapse of two facts
-	// into one sentence that cost links-cli-q7hg, one scope further out.
+	// focus scope, "nothing in it is startable here" is false — those rows were
+	// never asked. It claims no more, because nothing here read their capacity
+	// either; asserting they ARE startable is that same unchecked claim, one out.
 	if o.withheld() {
-		return fmt.Sprintf("no ready work on the focus path — the backlog is not empty, and some of it is startable off that path: %s", describeReach(o.Unreachable, "", poolNotes))
+		return fmt.Sprintf("no ready work on the focus path — the backlog holds rows off that path this run did not route over: %s", describeReach(o.Unreachable, "", poolNotes))
 	}
 	return fmt.Sprintf("no ready work — the backlog is not empty, but nothing in it is startable here: %s", describeReach(o.Unreachable, "", poolNotes))
 }
