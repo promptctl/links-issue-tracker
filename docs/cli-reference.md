@@ -31,7 +31,12 @@ Exit codes are a contract, not just 0/1:
 | 3 | Validation error (missing required value, unsupported value) |
 | 4 | Issue or resource not found |
 | 5 | Conflict (e.g. sync merge conflict) |
+| 6 | Nothing to hand back (`lit next` had no ticket for you) |
 | 7 | Data corruption detected |
+
+Code 6 is not a failure: the command ran correctly and the honest answer was empty. It
+exists so a caller looping `lit next` can tell "stop, there is nothing for you" from
+"lit is broken" without reading the message.
 
 ### Identity
 
@@ -159,6 +164,11 @@ deliberate `lit start` on it, which asks to confirm the takeover or requires
 cannot reach gets a diagnostic naming what blocks it, never a silent hop out of the
 epic; a checkout holding no claims of its own starts straight at the global pool.
 See design-docs/work-claims.md for the full precedence.
+
+Both endings that hand back no ticket — the exhaustion diagnostic and an empty
+backlog — exit 6 rather than 1, and their remediation names the deliberate act each
+calls for. Neither tells you to retry: both answers are deterministic and repeat
+unchanged until the work or the question does.
 
 ### `lit orphaned`
 

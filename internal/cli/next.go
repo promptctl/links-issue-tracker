@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -97,10 +96,19 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 	case ServedFromNewLane:
 		row = o.Row
 		announce = claimAnnouncement(o.Row, o.Lane) + "\n"
+	// The two terminal outcomes travel outward AS THEMSELVES. Rendering them
+	// into an untyped error here discarded the very discriminator routing had
+	// just established, so both sinks — ExitCode and commandErrorReason — fell
+	// through to "command_failed", whose remediation told the agent to retry a
+	// deterministic answer and then run `lit doctor` on a healthy workspace
+	// (links-cli-cpou). That is the second instance of the class register.go's
+	// resolve fixed for command paths; see the citation there.
+	// [LAW:types-are-the-program] classification is carried by the type, never
+	// re-derived from the message.
 	case Exhausted:
-		return workflows.Occasion{}, exhaustedError(o)
+		return workflows.Occasion{}, o
 	case NoWork:
-		return workflows.Occasion{}, errors.New("no ready work")
+		return workflows.Occasion{}, o
 	default:
 		panic(fmt.Sprintf("renderNextOutcome: unhandled NextOutcome %T", outcome))
 	}

@@ -279,6 +279,10 @@ func TestRunNextRejectsLimitAndColumns(t *testing.T) {
 
 // No ready work → non-nil error so the calling shell exits non-zero.
 // Agents script `lit next` in loops; silent empty success would be a hang.
+//
+// The exit code separates the two nonzero meanings a looping caller has to tell
+// apart — "stop, there is nothing for you" versus "lit is broken" — so that
+// telling them apart never requires parsing the English (links-cli-cpou).
 func TestRunNextErrorsWhenNoReadyWork(t *testing.T) {
 	h := newReadyTestHarness(t)
 	err := h.runNextErr()
@@ -287,6 +291,85 @@ func TestRunNextErrorsWhenNoReadyWork(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no ready work") {
 		t.Fatalf("runNext() error = %q, want contains \"no ready work\"", err.Error())
+	}
+	var stderr bytes.Buffer
+	if code := WriteCommandError(&stderr, err); code != ExitNoWork {
+		t.Fatalf("exit code = %d, want %d (ExitNoWork) — an empty backlog is not a generic fault", code, ExitNoWork)
+	}
+	if out := stderr.String(); strings.Contains(out, "Retry the command") || strings.Contains(out, "lit doctor") {
+		t.Fatalf("an empty backlog must not be described as a retryable fault: %q", out)
+	}
+}
+
+// TestRenderNextOutcomeTerminalOutcomesKeepTheirType pins links-cli-cpou at the
+// seam that caused it. renderNextOutcome used to render the router's two
+// terminal outcomes into UNTYPED errors, throwing away the discriminator
+// routeNext had just established for the express purpose of keeping the
+// exhaustion case distinguishable. Both sinks dispatch by type, so both fell
+// through to "command_failed", whose remediation tells the agent to retry an
+// answer that is deterministic and then to run `lit doctor` against a perfectly
+// healthy workspace — two dead ends, attached to a message saying the situation
+// calls for a deliberate act.
+//
+// The test drives the real seam rather than the error types in isolation:
+// asserting commandErrorReason(Exhausted{}) alone would still pass if this
+// function went back to wrapping the outcome in errors.New.
+func TestRenderNextOutcomeTerminalOutcomesKeepTheirType(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		outcome    NextOutcome
+		wantReason string
+		// wantAct is the deliberate act the message calls for but cannot name,
+		// which is the whole job the remediation line has left to do.
+		wantAct string
+	}{
+		{
+			name:       "exhausted",
+			outcome:    Exhausted{Epics: []string{"links-epic-abcd"}},
+			wantReason: "scope_exhausted",
+			wantAct:    "lit start <id>",
+		},
+		{
+			name:       "no work",
+			outcome:    NoWork{},
+			wantReason: "no_ready_work",
+			wantAct:    "lit new",
+		},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			occasion, err := renderNextOutcome(io.Discard, tc.outcome, nil, claimContext{})
+			if err == nil {
+				t.Fatalf("renderNextOutcome(%T) error = nil, want the terminal answer", tc.outcome)
+			}
+			// No ticket was handed back, so no next_pulled event fires — the
+			// workflow dispatch must not be told a pull happened.
+			if occasion.Event != "" || occasion.IssueID != "" {
+				t.Fatalf("renderNextOutcome(%T) occasion = %#v, want none — no ticket was handed back", tc.outcome, occasion)
+			}
+			if got := commandErrorReason(err); got != tc.wantReason {
+				t.Fatalf("commandErrorReason = %q, want %q — the outcome lost its type crossing the seam", got, tc.wantReason)
+			}
+			var stderr bytes.Buffer
+			if code := WriteCommandError(&stderr, err); code != ExitNoWork {
+				t.Fatalf("exit code = %d, want %d (ExitNoWork)", code, ExitNoWork)
+			}
+			out := stderr.String()
+			if strings.Contains(out, "Retry the command") || strings.Contains(out, "lit doctor") {
+				t.Fatalf("a deterministic terminal answer must carry neither a retry nor a doctor referral: %q", out)
+			}
+			// The remediation must agree with the message body, so the body has
+			// to still be there to agree with.
+			if !strings.Contains(out, tc.outcome.(error).Error()) {
+				t.Fatalf("stderr dropped the outcome's own message: %q", out)
+			}
+			if !strings.Contains(out, tc.wantAct) {
+				t.Fatalf("remediation does not name the deliberate act %q: %q", tc.wantAct, out)
+			}
+		})
 	}
 }
 

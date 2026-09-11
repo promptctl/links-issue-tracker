@@ -49,6 +49,15 @@ func TestCommandErrorReason(t *testing.T) {
 			fmt.Errorf("another lit process is writing to this workspace; retry after it completes: %w", store.ErrWorkspaceBusy),
 			"workspace_busy",
 		},
+		// The router's terminal answers are answers, not faults, and each names
+		// a different act — so each is its own reason rather than both sharing
+		// one, and neither may fall through to "command_failed" (links-cli-cpou).
+		{"router scope exhausted", Exhausted{Epics: []string{"links-epic-abcd"}}, "scope_exhausted"},
+		{"router no ready work", NoWork{}, "no_ready_work"},
+		// Acceptance 4: a genuine fault reaching the same surface keeps the
+		// reason it always had. The arms above dispatch on their concrete types,
+		// so adding them shadowed nothing.
+		{"genuine fault still classifies", CorruptionError{Message: "integrity_check failed"}, "corruption_detected"},
 	}
 	for _, tc := range tests {
 		tc := tc

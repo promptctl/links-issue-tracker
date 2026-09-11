@@ -14,6 +14,16 @@ const (
 	ExitValidation = 3
 	ExitNotFound   = 4
 	ExitConflict   = 5
+	// ExitNoWork: the command ran correctly and has no ticket to hand back.
+	// Distinct from ExitGeneric because a caller looping `lit next` has to tell
+	// "stop, there is nothing for you" from "lit is broken", and under one code
+	// its only way to do that was to parse the English — the thing every other
+	// sink in this package exists to stop callers doing.
+	//
+	// Not ExitOK: for `lit next`, 0 means "a ticket is on stdout". Exiting 0
+	// with no row would hand the caller a success-shaped void.
+	// [LAW:parse-dont-validate]
+	ExitNoWork     = 6
 	ExitCorruption = 7
 )
 
@@ -76,6 +86,18 @@ func ExitCode(err error) int {
 	var unsupported UnsupportedError
 	if errors.As(err, &unsupported) {
 		return ExitValidation
+	}
+	// Both of the router's terminal answers share one code: the caller's
+	// question here is binary — was a ticket handed back? — and which of the two
+	// emptinesses it was is carried by the reason string and the message.
+	// [LAW:no-mode-explosion]
+	var exhausted Exhausted
+	if errors.As(err, &exhausted) {
+		return ExitNoWork
+	}
+	var noWork NoWork
+	if errors.As(err, &noWork) {
+		return ExitNoWork
 	}
 	var outsideWorkspace OutsideWorkspaceError
 	if errors.As(err, &outsideWorkspace) {
