@@ -230,12 +230,27 @@ step, so each step below says only which lanes it looks in:
   abandoned in flight (step 6), and, in a lane of the checkout's own, the work
   already in flight there, which is resumed rather than started. A lane
   another checkout holds fresh offers none of the three (step 5).
-- **What a pick announces** — a pick that establishes a claim names the lane
-  it claims, and says "taking over" only where the ticket was abandoned in
-  flight: "taking over B.1 (in progress, abandoned) — claims B#1". A ready
-  ticket announces as a fresh start whatever its lane's history — "starting
-  B.1 claims B#1" — and the claim line printed beneath the row carries the
-  provenance of a lane whose holder has gone stale.
+- **What a pick says** — `next` reports a pick; `start` takes it. So a pick
+  whose start *would* establish a claim names the lane that start would lock,
+  in the conditional and naming the command: "run `lit start B.1` to claim lane
+  one of epic B". It says "take over" only where the ticket was abandoned in
+  flight — "B.1 is in progress and abandoned — run `lit start B.1` to take over
+  lane one of epic B" — and a ready ticket reads as a fresh start whatever its
+  lane's history, the claim line printed beneath the row carrying the provenance
+  of a lane whose holder has gone stale.
+
+  Nothing here may be said in the perfect tense. A line that reports a start or
+  a claim describes a side effect `next` does not have, and an agent that
+  believes it holds a claim it does not either works unclaimed or spends a turn
+  proving the tool wrong — both observed (links-next-output-5aee).
+
+  The lane is named in words, not in `LaneID.String()`'s "epic#lane" grammar:
+  that spelling exists so a lane never reads as its epic in a log line, and in a
+  sentence the words "epic" and "lane" already draw that distinction. Two of the
+  three lane shapes rendered badly through it — an epic's default lane trailed a
+  bare "#", and a solo lane, which *is* its ticket, spelled the ticket's own id,
+  so the line read "starting X claims X". A lane of one is therefore not named
+  at all; there is nothing to say about it that the ticket has not already said.
 
 1. **The checkout's own live claims come first**: ready tickets within claimed
    lanes and the work already in flight there — a ticket in progress in the
@@ -260,7 +275,8 @@ step, so each step below says only which lanes it looks in:
    dissolved by predicate, and the checkout is global again. Unfocus is not an
    action.
 4. **Then the global pool**: the top-ranked candidate in any lane, labeled as
-   what it is, so the act of commitment is visible at the moment it happens.
+   what it is, so the commitment is visible before it is made rather than
+   discovered after.
    Reached
    directly, with no detour through steps 1–3, by a checkout that holds no
    live claims at all — unfocus is the zero state, not a hop through the

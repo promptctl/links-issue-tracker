@@ -41,31 +41,37 @@ type ResumedOwnWork struct{ Row annotation.AnnotatedIssue }
 
 // ServedFromEpicLane is a pick from a different lane of the same epic this
 // checkout already holds a lane in — the GRANULARITY RULING's new step 2,
-// epic-major before global. It establishes a fresh claim on Lane, which is why
-// it carries the label to announce, and admits a takeover exactly as
+// epic-major before global. Starting it would establish a fresh claim on Lane,
+// which is why it carries the lane to name, and it admits a takeover exactly as
 // ServedFromNewLane does.
+//
+// The epic is Lane.Epic() and is not carried beside it: two fields for one fact
+// are two clocks. [LAW:one-source-of-truth]
 type ServedFromEpicLane struct {
 	Row  annotation.AnnotatedIssue
-	Epic string
-	Lane string
+	Lane model.LaneID
 }
 
-// ServedFromNewLane is a ready ticket in a lane this checkout does NOT hold,
-// so starting it establishes a claim — announced by Lane exactly as the
-// design's example spells it: "starting B.1 claims B#1". Two steps produce it:
-// the global pool (step 4) and the on-path dependency gating one of our own
-// blocked rows (step 1b). The dependency used to come back as ServedFromClaim,
-// whose contract is that no claim is established and nothing is announced,
-// which left the one pick an agent is least likely to predict as the only
-// silent one (links-claims-1b0p, N3).
+// ServedFromNewLane is a ready ticket in a lane this checkout does NOT hold, so
+// starting it would establish a claim — which is what Lane is carried to name.
+// Two steps produce it: the global pool (step 4) and the on-path dependency
+// gating one of our own blocked rows (step 1b). The dependency used to come back
+// as ServedFromClaim, whose contract is that no claim is established and nothing
+// is announced, which left the one pick an agent is least likely to predict as
+// the only silent one (links-claims-1b0p, N3).
 //
-// A takeover arrives here too. Work abandoned in flight announces itself as
-// one — claimAnnouncement reads the row's state; a ready ticket in a stale
-// lane announces exactly like a fresh start, its provenance carried by the
-// claim line printNextSummary prints beneath the row.
+// A takeover arrives here too. Work abandoned in flight says so — startAdvice
+// reads the row's state; a ready ticket in a stale lane reads exactly like a
+// fresh start, its provenance carried by the claim line printNextSummary prints
+// beneath the row.
+//
+// Lane is the LaneID and not its String(): the rendering belongs to whoever
+// knows the reader, and stringifying here threw away the discriminator the
+// renderer needs to tell a lane worth naming from one that would only repeat the
+// ticket (links-next-output-5aee). [LAW:types-are-the-program]
 type ServedFromNewLane struct {
 	Row  annotation.AnnotatedIssue
-	Lane string
+	Lane model.LaneID
 }
 
 // Exhausted is the checkout's own claimed epic(s) having open work with none
@@ -328,15 +334,14 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 		// one (N3) and its own lane's standing is honoured rather than
 		// ignored (N2).
 		if dep, ok := onPathDependency(rows, laneOf, mine, reachFor); ok {
-			return ServedFromNewLane{Row: dep, Lane: laneOf(dep).String()}
+			return ServedFromNewLane{Row: dep, Lane: laneOf(dep)}
 		}
 		// Step 2 — the rest of our epic, in lanes we do not already hold.
 		ourEpic := func(lane model.LaneID) bool {
 			return lane.Epic() != "" && ownEpics[lane.Epic()]
 		}
 		if row, _, ok := pick(func(lane model.LaneID) bool { return ourEpic(lane) && !mine(lane) }, serveWork, takeoverWork); ok {
-			lane := laneOf(row)
-			return ServedFromEpicLane{Row: row, Epic: lane.Epic(), Lane: lane.String()}
+			return ServedFromEpicLane{Row: row, Lane: laneOf(row)}
 		}
 		// Step 3 — loud, and never a hop.
 		return Exhausted{
@@ -351,7 +356,7 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 	// the pick declined is what NoWork reports, classified by the verdict the
 	// pick itself just read. [LAW:one-source-of-truth]
 	if row, _, ok := pick(func(model.LaneID) bool { return true }, serveWork, takeoverWork); ok {
-		return ServedFromNewLane{Row: row, Lane: laneOf(row).String()}
+		return ServedFromNewLane{Row: row, Lane: laneOf(row)}
 	}
 	return NoWork{Unreachable: passedOver(rows, reachFor)}
 }

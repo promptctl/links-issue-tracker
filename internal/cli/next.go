@@ -74,13 +74,19 @@ func runNext(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 
 // renderNextOutcome prints the row routeNext selected — or, for Exhausted
 // and NoWork, returns the loud diagnostic instead of printing a ticket that
-// was never picked. A claim this pick establishes (EpicLane, NewLane) is
-// announced before the row, visible at the moment the commitment happens
-// (design-docs/work-claims.md, Routing step 4); a lane already held announces
-// only what changed — nothing for ServedFromClaim, which prints exactly as
-// `next` always has, and the resumption itself for ResumedOwnWork, since being
-// handed back a ticket already in flight is the one pick that looks like a
-// fresh start but is not one.
+// was never picked. A claim this pick WOULD establish (EpicLane, NewLane) is
+// named above the row, so the commitment is visible before it is made
+// (design-docs/work-claims.md, Routing step 4); a lane already held names
+// nothing to commit — nothing at all for ServedFromClaim, which prints exactly
+// as `next` always has, and the state it is already in for ResumedOwnWork,
+// since being handed back a ticket already in flight is the one pick that looks
+// like a fresh start but is not one.
+//
+// Every line here is in the conditional or reports a state that already holds.
+// `lit next` claims nothing and starts nothing — `lit start` does — so a line
+// in the perfect tense would be reporting a side effect this command does not
+// have, which is exactly how an agent came to believe it held a claim it did
+// not (links-next-output-5aee).
 func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]storage.IssueRelations, cc claimContext) (workflows.Occasion, error) {
 	var row annotation.AnnotatedIssue
 	var announce string
@@ -89,13 +95,13 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 		row = o.Row
 	case ResumedOwnWork:
 		row = o.Row
-		announce = fmt.Sprintf("resuming %s — already in progress in a lane you hold\n", o.Row.ID)
+		announce = fmt.Sprintf("%s is already in progress in a lane you hold — continue where you left off\n", o.Row.ID)
 	case ServedFromEpicLane:
 		row = o.Row
-		announce = fmt.Sprintf("continuing epic %s: %s\n", o.Epic, claimAnnouncement(o.Row, o.Lane))
+		announce = startAdvice(o.Row, o.Lane) + " (a second lane of an epic you already hold a lane in)\n"
 	case ServedFromNewLane:
 		row = o.Row
-		announce = claimAnnouncement(o.Row, o.Lane) + "\n"
+		announce = startAdvice(o.Row, o.Lane) + "\n"
 	// The two terminal outcomes travel outward AS THEMSELVES. Rendering them
 	// into an untyped error here discarded the very discriminator routing had
 	// just established, so both sinks — ExitCode and commandErrorReason — fell
@@ -124,15 +130,29 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 	return nextPulledOccasion(row.Issue), nil
 }
 
-// claimAnnouncement is the line every claim-establishing pick prints above its
-// row. The verb turns on the row's own lifecycle state: routing admits an
+// startAdvice is the line every pick that would establish a claim prints above
+// its row: what running `lit start` would lock, never what this command did.
+// It was `claimAnnouncement`, and the rename is the fix — an announcement
+// reports, and reporting is the one thing a read-only command must not do.
+//
+// The verb turns on the row's own lifecycle state: routing admits an
 // in-progress row into a lane this checkout does not hold only once the orphan
 // annotation has proven its holder's claim self-refuting (capacityFor), so
-// "starting" would promise greenfield on a ticket that may carry another
+// plain "claim" would promise greenfield on a ticket that may carry another
 // checkout's unmerged working tree.
-func claimAnnouncement(row annotation.AnnotatedIssue, lane string) string {
-	if row.State() == model.StateInProgress {
-		return fmt.Sprintf("taking over %s (in progress, abandoned) — claims %s", row.ID, lane)
+//
+// The object turns on the lane's shape, which is why Describe answers in two
+// parts. A solo lane IS the ticket, so naming it spelled the same id twice
+// ("starting X claims X") — a tautology no reader could take as advice about a
+// command they had yet to run. "it" is the caller's answer to that, available
+// here and nowhere else because the ticket is named one clause earlier.
+func startAdvice(row annotation.AnnotatedIssue, lane model.LaneID) string {
+	target := "it"
+	if described, ok := lane.Describe(); ok {
+		target = described
 	}
-	return fmt.Sprintf("starting %s claims %s", row.ID, lane)
+	if row.State() == model.StateInProgress {
+		return fmt.Sprintf("%s is in progress and abandoned — run `lit start %s` to take over %s", row.ID, row.ID, target)
+	}
+	return fmt.Sprintf("run `lit start %s` to claim %s", row.ID, target)
 }
