@@ -616,7 +616,7 @@ type workableFilter struct {
 // read from this single pipeline so their "what is workable, in what
 // order" model cannot drift.
 func gatherWorkableAnnotated(ctx context.Context, ap *app.App, rf workableFilter) ([]annotation.AnnotatedIssue, map[string]storage.IssueRelations, error) {
-	cfg, err := config.Load(pathspec.New(ap.Workspace.RootDir))
+	requiredFields, err := readyRequiredFields(ap)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -626,7 +626,20 @@ func gatherWorkableAnnotated(ctx context.Context, ap *app.App, rf workableFilter
 	// lets the cross-project rollup run the SAME pipeline over a read-only
 	// foreign store — which has no repo root and so no per-repo config — by
 	// passing the policy as a value. [LAW:single-enforcer]
-	return classifyWorkable(ctx, ap.Store, cfg.Ready.RequiredFields, rf)
+	return classifyWorkable(ctx, ap.Store, requiredFields, rf)
+}
+
+// readyRequiredFields reads this repo's ready required-fields policy. Every
+// surface that annotates — the workable pipeline and `lit show`'s epic plan
+// slice — reads it through here, so the two cannot disagree about which fields
+// a ticket must fill before it counts as startable.
+// [LAW:one-source-of-truth] One read of the policy, one place it is named.
+func readyRequiredFields(ap *app.App) ([]string, error) {
+	cfg, err := config.Load(pathspec.New(ap.Workspace.RootDir))
+	if err != nil {
+		return nil, err
+	}
+	return cfg.Ready.RequiredFields, nil
 }
 
 // classifyWorkable is the store-facing core of the workable pipeline: list
@@ -657,6 +670,31 @@ func classifyWorkable(ctx context.Context, st storage.Store, requiredFields []st
 		return nil, nil, err
 	}
 	issues = filterWorkableIssues(issues)
+	annotated, details, err := annotateIssues(ctx, st, requiredFields, issues)
+	if err != nil {
+		return nil, nil, err
+	}
+	sortByCompositeRank(annotated, details)
+	sortByPriority(annotated)
+	sortByFocusPath(annotated)
+	enrichWithParentEpic(annotated, details)
+	return annotated, details, nil
+}
+
+// annotateIssues runs every registered annotator over the given issues and
+// returns the annotated rows alongside the relations fetched to compute them.
+// It asks nothing about where the issues came from, so the list pipeline above
+// and the epic plan slice (buildEpicContext) put the SAME facts in front of
+// ClassifyReadiness — the whole registry, not the subset a caller happened to
+// derive for itself.
+// [LAW:single-enforcer] The annotator set lives here alone. A surface that
+// assembled its own shorter set would be a second opinion on what blocks, which
+// is exactly how the epic plan came to call a gated child [ready]
+// (links-epic-context-oezb).
+// [LAW:decomposition] The joint is between WHICH issues a surface is about and
+// WHAT the registry says about them; cutting here lets a caller with an already
+// resolved set — an epic's children — skip the workable list query entirely.
+func annotateIssues(ctx context.Context, st storage.Store, requiredFields []string, issues []model.Issue) ([]annotation.AnnotatedIssue, map[string]storage.IssueRelations, error) {
 	fieldAnnotator, err := newFieldAnnotator(requiredFields)
 	if err != nil {
 		return nil, nil, err
@@ -664,6 +702,19 @@ func classifyWorkable(ctx context.Context, st storage.Store, requiredFields []st
 	details, err := fetchIssueRelations(ctx, st, issues)
 	if err != nil {
 		return nil, nil, err
+	}
+	// Annotate the subjects as this fetch returned them, not as the caller passed
+	// them in. The caller's copies came from an earlier read — a list query, or an
+	// epic's child set — and every annotator already reads its relations out of
+	// details, so annotating the caller's copies would classify one snapshot of a
+	// child using another snapshot's edges, and hand back rows whose Issue is
+	// older than the details returned beside them. One fetch, one snapshot, for
+	// the annotations and for everything downstream that renders from either.
+	// [LAW:one-source-of-truth] fetchIssueRelations fails loudly on a subject it
+	// cannot resolve, so every input issue has an entry here.
+	subjects := make([]model.Issue, len(issues))
+	for i, issue := range issues {
+		subjects[i] = details[issue.ID].Issue
 	}
 	// The lane gate reads the parent epics' FULL child sets (unfiltered by the
 	// CLI assignee/type/label narrowing) so an earlier sibling hidden by those
@@ -677,7 +728,7 @@ func classifyWorkable(ctx context.Context, st storage.Store, requiredFields []st
 	// ticket; chain membership is never stored, so it cannot drift.
 	// [LAW:one-source-of-truth]
 	//
-	// The walk reuses the relations already fetched for the workable leaves
+	// The walk reuses the relations already fetched for the subject issues
 	// (details) and their parent epics (siblingRelations) rather than re-querying
 	// the same subjects; both are GetRelationsByIDs results, so a seeded hit is
 	// byte-identical to a refetch. (links-query-efficiency-988d.2)
@@ -685,7 +736,7 @@ func classifyWorkable(ctx context.Context, st storage.Store, requiredFields []st
 	if err != nil {
 		return nil, nil, err
 	}
-	annotated, err := annotation.Annotate(ctx, issues,
+	annotated, err := annotation.Annotate(ctx, subjects,
 		fieldAnnotator,
 		newBlockerAnnotator(details),
 		newSiblingGateAnnotator(details, pendingSiblingsByEpic(siblingRelations)),
@@ -696,10 +747,6 @@ func classifyWorkable(ctx context.Context, st storage.Store, requiredFields []st
 	if err != nil {
 		return nil, nil, err
 	}
-	sortByCompositeRank(annotated, details)
-	sortByPriority(annotated)
-	sortByFocusPath(annotated)
-	enrichWithParentEpic(annotated, details)
 	return annotated, details, nil
 }
 
@@ -809,10 +856,18 @@ func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	if fields := splitCSV(*fieldsExpr); len(fields) > 0 {
 		return printIssueFields(stdout, detail.Issue, fields)
 	}
+	// Resolved before the body is printed, so the body and the plan block are
+	// all-or-nothing: a slice that cannot be built fails without a body, rather
+	// than after one that reads as a complete show of an epic-less ticket.
+	// [LAW:parse-dont-validate]
+	plan, err := resolveEpicContext(ctx, ap, detail)
+	if err != nil {
+		return err
+	}
 	if err := printIssueDetail(stdout, detail); err != nil {
 		return err
 	}
-	return writeEpicContext(ctx, ap.Store, stdout, detail)
+	return writeEpicContext(stdout, plan)
 }
 
 // runHistory renders a ticket's state-transition trail — the per-field

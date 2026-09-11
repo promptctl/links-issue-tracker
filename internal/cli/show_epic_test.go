@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -40,7 +42,12 @@ func TestRunShowChildRendersEpicBlockWithFocus(t *testing.T) {
 	if !strings.Contains(out, "Why: Why this exists") {
 		t.Errorf("epic block should carry the why:\n%s", out)
 	}
-	want := "  ▶ [ready]       " + focus + "  Focused child   (you are here)"
+	// Both children sit in the default lane, which is one sequential chain, so
+	// the focused child is genuinely held back by the sibling ranked ahead of
+	// it. Asserted through runShow rather than the builder: this is the whole
+	// path — show → epic block → the readiness gate `lit next` routes on —
+	// answering with one verdict. (links-epic-context-oezb)
+	want := "  ▶ [blocked: earlier sibling " + sibling + " still open] " + focus + "  Focused child   (you are here)"
 	if !strings.Contains(out, want) {
 		t.Errorf("focused child should be marked you-are-here, want %q in:\n%s", want, out)
 	}
@@ -60,9 +67,11 @@ func TestRunShowEpicRendersChildrenNoFocus(t *testing.T) {
 	if !strings.Contains(out, "Epic: "+f.epicID+" — Top epic") {
 		t.Errorf("epic show should append the epic block:\n%s", out)
 	}
+	// One lane, so B waits on A — the epic-level view answers exactly as the
+	// leaf-level one above does.
 	for _, want := range []string{
 		"    [ready]       " + a + "  Child A",
-		"    [ready]       " + b + "  Child B",
+		"    [blocked: earlier sibling " + a + " still open] " + b + "  Child B",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("epic show should list children, missing %q in:\n%s", want, out)
@@ -90,6 +99,66 @@ func TestRunShowParentlessTicketHasNoEpicBlock(t *testing.T) {
 	}
 	if strings.Contains(out, "Epic:") {
 		t.Errorf("an issue in no epic must render no epic block:\n%s", out)
+	}
+}
+
+// writeUnrelatedlyBrokenConfig writes a repo config whose only defect is in a
+// setting the show path never reads. snapshot.retention_budget is validated by
+// config.Load like every other field, so it stands in for "this repo's config
+// cannot be loaded, for reasons that have nothing to do with the ready policy".
+func writeUnrelatedlyBrokenConfig(t *testing.T, ap *app.App) {
+	t.Helper()
+	configDir := filepath.Join(ap.Workspace.RootDir, ".lit")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(configDir) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte("[snapshot]\nretention_budget = -1\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(config.toml) error = %v", err)
+	}
+}
+
+// An issue in no epic needs no ready policy, so it must not be coupled to
+// whether this repo's config loads at all. The plan slice is what wants the
+// policy, and a parentless ticket has none.
+func TestRunShowParentlessTicketIgnoresUnreadableConfig(t *testing.T) {
+	ap := newTestCLIApp(t)
+	free, err := ap.Store.CreateIssue(context.Background(), storage.CreateIssueInput{
+		Prefix: "test", Title: "Free floating", Topic: "misc", IssueType: "task", Priority: 0,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue(free) error = %v", err)
+	}
+	writeUnrelatedlyBrokenConfig(t, ap)
+
+	var buf bytes.Buffer
+	if err := runShow(context.Background(), &buf, ap, []string{free.ID}); err != nil {
+		t.Fatalf("show of a ticket in no epic must not read repo config, got error = %v", err)
+	}
+	if !strings.Contains(buf.String(), "Free floating") {
+		t.Errorf("show output missing the issue body:\n%s", buf.String())
+	}
+}
+
+// An epic member genuinely needs the policy, so an unreadable config is a real
+// failure — but it must arrive before the body is written. A body printed ahead
+// of the error is shaped exactly like the legitimate "no epic block" output, so
+// a caller holding only stdout could not tell the two apart. The guarantee is
+// body-and-block or neither, not an empty stdout: the staleness banner and any
+// fired workflow body legitimately precede resolution.
+func TestRunShowEpicMemberFailsBeforeWritingBodyOnUnreadableConfig(t *testing.T) {
+	f := newEpicFixture(t, "Plan epic", "the why")
+	child := f.addChild("A child")
+	writeUnrelatedlyBrokenConfig(t, f.ap)
+
+	var buf bytes.Buffer
+	err := runShow(context.Background(), &buf, f.ap, []string{child})
+	if err == nil {
+		t.Fatalf("show of an epic member under an unreadable config must fail, got nil; output:\n%s", buf.String())
+	}
+	for _, unwanted := range []string{child, "A child", "Epic: "} {
+		if strings.Contains(buf.String(), unwanted) {
+			t.Errorf("failed plan resolution must print neither body nor block, found %q in:\n%s", unwanted, buf.String())
+		}
 	}
 }
 
