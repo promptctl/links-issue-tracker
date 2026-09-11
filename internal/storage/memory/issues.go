@@ -76,10 +76,17 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 		status:      model.StatusView{Value: model.StateOpen},
 		retention:   model.Live{},
 	}
-	e.issues[id] = rec
+	// Placement runs before the record is committed to e.issues. place became
+	// fallible when it started dispatching through orderEdgeFor, and a failure
+	// after the map write would strand the record in e.issues while absent from
+	// e.order — findable by GetIssue, hydrated through a missing pos key, and so
+	// reported at a fabricated rank. place reads only e.order, so ordering the
+	// two this way removes that state rather than unwinding it.
+	// [LAW:polishing-by-subtraction]
 	if err := e.place(id, in.Placement); err != nil {
 		return model.Issue{}, err
 	}
+	e.issues[id] = rec
 	e.setLabels(id, labels, now, createdBy)
 	if parentID != "" {
 		e.relations = append(e.relations, model.Relation{

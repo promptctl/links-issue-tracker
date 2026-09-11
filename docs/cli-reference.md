@@ -340,8 +340,12 @@ lit rank set <id1> <id2> [<id3> ...]
 ```
 
 Establishes absolute order across N issues atomically by stacking them at the
-top of the rank order: `id1` becomes topmost, `id2` ranks just below, and so
-on. Either every assignment applies or none does.
+top of the representatives' own frame: `id1` becomes topmost, `id2` ranks just
+below, and so on. Either every assignment applies or none does.
+
+The anchor is that frame's top, not the workspace's. Naming several children of
+one epic leads *that epic's children* and moves nothing outside it — the same
+frame-local rule `--top`/`--bottom` follow.
 
 The same peer rule as relative placement applies: each named ID is resolved to
 its representative in the comparable frame, so naming an epic's child alongside

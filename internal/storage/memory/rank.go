@@ -139,12 +139,28 @@ func orderEdgeFor(mateIndexes []int, p storage.RankPlacement) (orderEdge, error)
 	}
 }
 
-// frameMateIndexes lists where an issue's frame-mates sit in the order,
-// ascending, leaving the issue itself out.
+// live reports whether an id is still present and undeleted. Deleting an issue
+// only flips its retention — it keeps its slot in e.order forever — so every
+// lookup here that mirrors a SQL query carrying `deleted_at IS NULL` has to ask
+// this rather than trust the slice. [LAW:one-source-of-truth]
+func (e *Engine) live(id string) bool {
+	rec, ok := e.issues[id]
+	if !ok {
+		return false
+	}
+	_, gone := rec.retention.(model.Deleted)
+	return !gone
+}
+
+// frameMateIndexes lists where an issue's live frame-mates sit in the order,
+// ascending, leaving the issue itself out. Liveness is part of the question:
+// the SQL engine's matching lookup carries `deleted_at IS NULL`, and an engine
+// that anchored against a deleted mate would report moving past a row nobody
+// can see. [LAW:one-source-of-truth]
 func (e *Engine) frameMateIndexes(f storage.Frame, exclude string) []int {
 	var indexes []int
 	for index, id := range e.order {
-		if id == exclude || e.frameOf(id) != f {
+		if id == exclude || !e.live(id) || e.frameOf(id) != f {
 			continue
 		}
 		indexes = append(indexes, index)
@@ -164,8 +180,9 @@ func (e *Engine) frameOf(id string) storage.Frame {
 }
 
 // RankSet imposes a total order on the named issues at once, stacking them at
-// the top of the order in the order named, and reports which representative
-// each name resolved to.
+// the top of the representatives' own frame in the order named, and reports
+// which representative each name resolved to. The anchor is that frame's top,
+// never the whole order's.
 func (e *Engine) RankSet(ctx context.Context, ids []string) ([]storage.RankSetResolution, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -208,10 +225,33 @@ func (e *Engine) RankSet(ctx context.Context, ids []string) ([]storage.RankSetRe
 		namedByRep[reps[i]] = id
 		resolutions[i] = storage.RankSetResolution{NamedID: id, RankedID: reps[i]}
 	}
+	// The stack lands at the head of the representatives' own frame. Every
+	// representative is a frame-mate by construction, so that frame is the only
+	// keyspace this order is ever read in; prepending to e.order — what this did
+	// before — shoved an epic's children ahead of every top-level issue and every
+	// other epic's, the cross-frame bleed the SQL engine stopped committing.
+	// [LAW:one-source-of-truth] the two engines are one behavior.
+	//
+	// The frame's slots are rewritten in place rather than detached and
+	// reinserted: the positions the frame already occupies stay exactly where
+	// they are and only their occupants are permuted, so nothing outside the
+	// frame moves and the frame keeps its place even when the representatives
+	// are all of it.
+	f := e.frameOf(reps[0])
+	slots := e.frameMateIndexes(f, "")
+	named := make(map[string]struct{}, len(reps))
 	for _, rep := range reps {
-		e.detach(rep)
+		named[rep] = struct{}{}
 	}
-	e.order = append(slices.Clone(reps), e.order...)
+	ordered := slices.Clone(reps)
+	for _, slot := range slots {
+		if _, isRep := named[e.order[slot]]; !isRep {
+			ordered = append(ordered, e.order[slot])
+		}
+	}
+	for i, slot := range slots {
+		e.order[slot] = ordered[i]
+	}
 	return resolutions, nil
 }
 
@@ -223,11 +263,10 @@ func (e *Engine) detach(id string) {
 	e.order = slices.DeleteFunc(e.order, func(existing string) bool { return existing == id })
 }
 
-// insertAt puts an id back at a position. It clamps nothing: the only caller
-// hands it an anchor's index — or one past it — taken after the moved id was
-// detached, so the position is in range by construction. A clamp here would
-// turn a resolution bug into a silent placement at the top of the backlog,
-// which is the one outcome nobody would report. [LAW:no-defensive-null-guards]
+// insertAt puts an id at a position. It clamps nothing: every caller derives
+// the index from a population it has already read, so the position is in range
+// by construction, and a clamp would turn a resolution bug into a silent
+// placement at the top of the backlog. [LAW:no-defensive-null-guards]
 func (e *Engine) insertAt(index int, id string) {
 	e.order = slices.Insert(e.order, index, id)
 }

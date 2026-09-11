@@ -87,20 +87,20 @@ func frameEdgeHolderTx(ctx context.Context, tx *sql.Tx, f storage.Frame, edge ra
 	return holderID, holderRank, nil
 }
 
-// frameOf names the frame an issue's own rank lives in: its container, or the
-// top level. Derived from the one ancestry walk, so "what frame is this in"
-// cannot drift from "what contains this". [LAW:one-source-of-truth]
-func (s *Store) frameOf(ctx context.Context, issueID string) (storage.Frame, error) {
-	chain, err := s.ancestorChain(ctx, issueID)
-	if err != nil {
-		return storage.TopLevel, err
+// frameOfTx names the frame an issue's own rank lives in: its container, or the
+// top level. It reads inside the caller's transaction so the frame a write is
+// scoped to is established under the same commit lock as the write itself.
+//
+// Built on frameColumn, the one SQL rendering of what contains what, so this
+// cannot drift from the rule every neighbor lookup is already scoped by.
+// [LAW:one-source-of-truth]
+func frameOfTx(ctx context.Context, tx *sql.Tx, issueID string) (storage.Frame, error) {
+	query := fmt.Sprintf(`SELECT %s FROM issues WHERE id = ? AND deleted_at IS NULL`, frameColumn)
+	var f string
+	if err := tx.QueryRowContext(ctx, query, issueID).Scan(&f); err != nil {
+		return storage.TopLevel, fmt.Errorf("frame of %s: %w", issueID, err)
 	}
-	// The chain is self first, so its second element is the container and a
-	// chain that ends at self is an issue at the top level.
-	if len(chain) < 2 {
-		return storage.TopLevel, nil
-	}
-	return storage.Frame(chain[1]), nil
+	return storage.Frame(f), nil
 }
 
 // RankToTop moves an issue to the top of its own frame.
@@ -136,15 +136,20 @@ func (s *Store) rankToEdge(ctx context.Context, issueID string, placement storag
 	if err != nil {
 		return storage.RankEnd{}, err
 	}
-	f, err := s.frameOf(ctx, issueID)
-	if err != nil {
-		return storage.RankEnd{}, err
-	}
-	result := storage.RankEnd{Frame: f}
-	// The edge is read inside the mutation, under the same commit lock as the
-	// write it seeds, so no other writer can change the frame's end in between.
+	var result storage.RankEnd
+	// Both the frame and its edge are read inside the mutation, under the same
+	// commit lock as the write they seed. Reading the frame before the lock
+	// would leave a window in which a concurrent reparent moves the issue: the
+	// edge lookup would then be scoped to a container the issue has already
+	// left, and the key written would be drawn from a keyspace it is never read
+	// against — this bug, reached through timing instead of through arithmetic.
 	// [LAW:no-ambient-temporal-coupling]
 	err = s.withMutation(ctx, "rank to "+edge.name, func(ctx context.Context, tx *sql.Tx) error {
+		f, err := frameOfTx(ctx, tx, issueID)
+		if err != nil {
+			return err
+		}
+		result.Frame = f
 		holderID, holderRank, err := frameEdgeHolderTx(ctx, tx, f, edge)
 		if err != nil {
 			return err
@@ -219,11 +224,13 @@ func (s *Store) resolveRankSet(ctx context.Context, ids []string) ([]storage.Ran
 }
 
 // RankSet establishes absolute order across the given IDs by stacking them at
-// the top of the rank space in the order supplied: ids[0] becomes topmost,
-// ids[1] ranks just below, etc. IDs are first resolved to their
-// frame-comparable representatives (a child's stand-in is its epic), so the
-// order written is always frame-coherent and nothing inside any epic is
-// reordered. Atomic — every assignment commits together or none does.
+// the top of the representatives' own frame in the order supplied: ids[0]
+// becomes topmost, ids[1] ranks just below, etc. IDs are first resolved to
+// their frame-comparable representatives (a child's stand-in is its epic), so
+// the order written is always frame-coherent and nothing inside any epic is
+// reordered. The anchor is that frame's top, never the workspace's: setting an
+// order among one epic's children leads that epic's children and moves nothing
+// outside it. Atomic — every assignment commits together or none does.
 // Validates IDs exist and rejects duplicates before any write.
 // [LAW:single-enforcer] Multi-issue rank reassignment lives in this one
 // transaction so partial-application states cannot occur.

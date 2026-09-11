@@ -181,7 +181,9 @@ var cases = []engineCase{
 	{"rank_intents_reorder", rankIntentsReorder},
 	{"rank_intents_resolve_across_frames", rankIntentsResolveAcrossFrames},
 	{"rank_to_edge_stays_inside_its_frame", rankToEdgeStaysInsideItsFrame},
+	{"rank_to_edge_ignores_a_deleted_frame_mate", rankToEdgeIgnoresADeletedFrameMate},
 	{"rank_set_imposes_order", rankSetImposesOrder},
+	{"rank_set_stays_inside_its_frame", rankSetStaysInsideItsFrame},
 	{"close_redirects_to_a_canonical", closeRedirectsToCanonical},
 	{"comments_roundtrip", commentsRoundtrip},
 	{"labels_roundtrip", labelsRoundtrip},
@@ -1148,6 +1150,80 @@ func rankToEdgeStaysInsideItsFrame(t *testing.T, ctx context.Context, st storage
 	}
 }
 
+// rankToEdgeIgnoresADeletedFrameMate pins that a deleted issue is not a
+// frame-mate. Deleting an issue only flips its retention — the memory engine
+// keeps its slot in the order forever — so an engine reading frame membership
+// off slice position alone anchors against a row no view shows and reports
+// stepping past something invisible. The SQL engine excludes it with
+// `deleted_at IS NULL`; this case is what keeps the two answering alike.
+func rankToEdgeIgnoresADeletedFrameMate(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	gone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "gone", Topic: "core", ParentID: epic.ID})
+	lead := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "lead", Topic: "core", ParentID: epic.ID})
+	tail := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "tail", Topic: "core", ParentID: epic.ID})
+
+	// The deleted child holds the frame's first slot, which is precisely the row
+	// an unfiltered edge lookup would anchor against.
+	if _, err := st.Apply(ctx, gone.ID, storage.Change{Action: model.Delete{}, Actor: "tester"}); err != nil {
+		t.Fatalf("delete the leading child: %v", err)
+	}
+
+	// lead already leads every child anyone can see, so the top edge is a no-op.
+	// An engine counting the deleted child as a mate reports a move here — the
+	// false success RankEnd.Moved exists to prevent.
+	end, err := st.RankToTop(ctx, lead.ID)
+	if err != nil {
+		t.Fatalf("RankToTop of the leading live child error = %v", err)
+	}
+	if end.Moved {
+		t.Error("RankToTop of the leading live child reported a move; the only child above it is deleted")
+	}
+	if end.Frame != storage.Frame(epic.ID) {
+		t.Errorf("RankToTop reported frame %q, want the epic %q", end.Frame, epic.ID)
+	}
+	assertPrecedes(t, mustList(t, ctx, st, storage.ListIssuesFilter{}), lead.ID, tail.ID)
+}
+
+// rankSetStaysInsideItsFrame pins RankSet's anchor as the representatives' own
+// frame. Setting an order among one epic's children leads that epic's children
+// and moves nothing outside them.
+//
+// The assertion is on an outsider's rank rather than on the rendered order,
+// because the rendered order cannot see this bug: children sort under their
+// epic whatever keys they hold, so stacking them at the front of the whole
+// workspace leaves the listing identical and only the keyspace wrong. An
+// outsider whose rank changed is the observable that a write reached outside
+// the frame it named.
+func rankSetStaysInsideItsFrame(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	outsider := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "outsider", Topic: "core"})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	c1 := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "c1", Topic: "core", ParentID: epic.ID})
+	c2 := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "c2", Topic: "core", ParentID: epic.ID})
+	c3 := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "c3", Topic: "core", ParentID: epic.ID})
+
+	before := mustGet(t, ctx, st, outsider.ID).Rank
+	epicBefore := mustGet(t, ctx, st, epic.ID).Rank
+
+	if _, err := st.RankSet(ctx, []string{c3.ID, c1.ID}); err != nil {
+		t.Fatalf("RankSet among siblings error = %v", err)
+	}
+
+	// The named order holds among the siblings, and the unnamed one keeps its
+	// place behind them.
+	listed := mustList(t, ctx, st, storage.ListIssuesFilter{})
+	assertPrecedes(t, listed, c3.ID, c1.ID)
+	assertPrecedes(t, listed, c1.ID, c2.ID)
+
+	// Nothing outside the frame was rewritten. Neither the epic nor an unrelated
+	// top-level issue was named, so neither key may move.
+	if after := mustGet(t, ctx, st, outsider.ID).Rank; after != before {
+		t.Errorf("rank set among an epic's children moved an outside issue: %s rank %q -> %q", outsider.ID, before, after)
+	}
+	if after := mustGet(t, ctx, st, epic.ID).Rank; after != epicBefore {
+		t.Errorf("rank set among an epic's children moved the epic itself: rank %q -> %q", epicBefore, after)
+	}
+}
+
 // rankIntentsResolveAcrossFrames is why the anchored verbs report a RankMove
 // at all. Rank meaning is frame-local — an issue's position is only ever read
 // against its frame-mates — so an intent naming two issues from different
@@ -1830,6 +1906,15 @@ func mustList(t *testing.T, ctx context.Context, st storage.Store, filter storag
 		t.Fatalf("ListIssues(%+v) error = %v", filter, err)
 	}
 	return issues
+}
+
+func mustGet(t *testing.T, ctx context.Context, st storage.Store, id string) model.Issue {
+	t.Helper()
+	issue, err := st.GetIssue(ctx, id)
+	if err != nil {
+		t.Fatalf("GetIssue(%q) error = %v", id, err)
+	}
+	return issue
 }
 
 func mustChildren(t *testing.T, ctx context.Context, st storage.Store, parentID string) []model.Issue {
