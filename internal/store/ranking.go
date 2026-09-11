@@ -311,10 +311,12 @@ func (s *Store) RankSet(ctx context.Context, ids []string) ([]storage.RankSetRes
 	if err := rankSetValidateIDs(ids); err != nil {
 		return nil, err
 	}
-	// Existence and liveness are error quality, not keyspace correctness: they
-	// tell a caller it named something it cannot rank, and a stale answer here
-	// costs only a worse message. The frame below is the opposite, so it is read
-	// under the lock instead.
+	// Existence and liveness run before the lock so a caller naming a missing or
+	// deleted issue gets that answer directly, rather than out of a transaction.
+	// The answer cannot stay true — the row can be deleted between here and the
+	// write — so this gate decides the message, never the invariant: writeRankTx
+	// owns liveness under the lock, as resolveRankSet owns the frame.
+	// [LAW:parse-dont-validate]
 	for _, id := range ids {
 		if _, err := s.mustRankable(ctx, id); err != nil {
 			return nil, err

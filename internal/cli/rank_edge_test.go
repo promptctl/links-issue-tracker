@@ -166,7 +166,7 @@ func TestRankToBottomReportsItsFrame(t *testing.T) {
 		t.Fatalf("GetIssue(last) error = %v", err)
 	}
 	if demoted.Rank <= passed.Rank {
-		t.Errorf("after --bottom the demoted child ranks %q, want it above its sibling's %q", demoted.Rank, passed.Rank)
+		t.Errorf("after --bottom the demoted child ranks %q, want it after its sibling's %q", demoted.Rank, passed.Rank)
 	}
 
 	// Repeating it writes nothing, and says so in the same words as the top edge.
