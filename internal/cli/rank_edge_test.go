@@ -113,3 +113,72 @@ func TestRankToEdgeReportsItsFrame(t *testing.T) {
 		t.Errorf("top-level no-op output = %q, want it to name the backlog", stdout.String())
 	}
 }
+
+// TestRankToBottomReportsItsFrame is the --bottom half of the case above, and it
+// is a separate function rather than more assertions inside that one because the
+// two arms of runRank's switch pair their own edge word with their own store
+// call. Nothing shared decides that pairing, so `--top` assertions cannot reach a
+// defect that exists only in the `--bottom` arm: an edge word left reading "top"
+// there, or RankToTop called where RankToBottom belongs, would ship green.
+//
+// Each of those two mistakes fails a different assertion here on purpose — the
+// printed word is checked against "bottom", and the resulting order is checked
+// independently, so neither can stand in for the other. [LAW:behavior-not-structure]
+func TestRankToBottomReportsItsFrame(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+
+	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "edge", IssueType: "epic", Placement: storage.RankBottom})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	first, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "First", Topic: "edge", IssueType: "task", ParentID: epic.ID, Placement: storage.RankBottom})
+	if err != nil {
+		t.Fatalf("CreateIssue(first) error = %v", err)
+	}
+	last, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Last", Topic: "edge", IssueType: "task", ParentID: epic.ID, Placement: storage.RankBottom})
+	if err != nil {
+		t.Fatalf("CreateIssue(last) error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	if err := runRank(ctx, &stdout, ap, []string{first.ID, "--bottom"}); err != nil {
+		t.Fatalf("rank first --bottom error = %v", err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, first.ID+" is inside "+epic.ID) {
+		t.Errorf("rank --bottom output = %q, want it to name the epic %s the move was scoped to", out, epic.ID)
+	}
+	// The word the user asked for, echoed back. An arm that kept "top" here
+	// would otherwise report the opposite of what it did.
+	if !strings.Contains(out, "ranked it to the bottom of "+epic.ID+"'s children") {
+		t.Errorf("rank --bottom output = %q, want it to say the move went to the bottom of the epic's children", out)
+	}
+
+	// The order, checked on its own: a --bottom arm wired to RankToTop prints
+	// nothing wrong and still moves the issue the wrong way.
+	demoted, err := ap.Store.GetIssue(ctx, first.ID)
+	if err != nil {
+		t.Fatalf("GetIssue(first) error = %v", err)
+	}
+	passed, err := ap.Store.GetIssue(ctx, last.ID)
+	if err != nil {
+		t.Fatalf("GetIssue(last) error = %v", err)
+	}
+	if demoted.Rank <= passed.Rank {
+		t.Errorf("after --bottom the demoted child ranks %q, want it above its sibling's %q", demoted.Rank, passed.Rank)
+	}
+
+	// Repeating it writes nothing, and says so in the same words as the top edge.
+	stdout.Reset()
+	if err := runRank(ctx, &stdout, ap, []string{first.ID, "--bottom"}); err != nil {
+		t.Fatalf("repeat rank first --bottom error = %v", err)
+	}
+	out = stdout.String()
+	if !strings.Contains(out, "is already at the bottom of "+epic.ID) {
+		t.Errorf("no-op rank --bottom output = %q, want it to report the edge was already held", out)
+	}
+	if !strings.Contains(out, "nothing to rank") {
+		t.Errorf("no-op rank --bottom output = %q, want it to say nothing was written", out)
+	}
+}

@@ -40,6 +40,7 @@ package conformance
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -1271,9 +1272,21 @@ func rankVerbsRefuseADeletedIssue(t *testing.T, ctx context.Context, st storage.
 		{"RankAbove(anchor)", func() error { _, err := st.RankAbove(ctx, sibling.ID, gone.ID); return err }},
 		{"RankSet", func() error { _, err := st.RankSet(ctx, []string{gone.ID, sibling.ID}); return err }},
 	}
+	// The message is asserted whole, not merely as "some error", and compared
+	// against one expectation for both engines — which is the only thing that
+	// makes the parity claim testable. Containment would not do it: the memory
+	// engine's RankSet once wrapped this refusal with a "rank set: " prefix its
+	// SQL counterpart did not, and a substring check passes straight through a
+	// divergence like that. [LAW:one-source-of-truth]
+	wantRefusal := fmt.Sprintf("cannot rank deleted issue %s; restore it first", gone.ID)
 	for _, r := range refusals {
-		if err := r.call(); err == nil {
+		err := r.call()
+		if err == nil {
 			t.Errorf("%s naming the deleted issue %s succeeded; want a refusal", r.verb, gone.ID)
+			continue
+		}
+		if err.Error() != wantRefusal {
+			t.Errorf("%s refused with %q; want exactly %q", r.verb, err.Error(), wantRefusal)
 		}
 	}
 

@@ -133,6 +133,45 @@ func (s *Store) mustRankable(ctx context.Context, id string) (model.Issue, error
 	return issue, nil
 }
 
+// writeRankTx puts a key on an issue, and refuses to put one on an issue that
+// has been deleted since the verb started.
+//
+// The liveness predicate belongs on the write rather than beside it.
+// mustRankable asks the same question before the commit lock, where the answer
+// is only as fresh as the instant it was read; a delete landing between that
+// gate and this statement would otherwise leave a rank on a row no listing
+// shows — the state the gate exists to prevent, reached through timing instead
+// of through a plain bug. The anchor of a relative move was already re-read
+// under the lock because its key was needed, while the issue being moved was
+// not, for no better reason than that nothing happened to need a read from it.
+// Asymmetry that arrives by accident is exactly what drifts.
+//
+// [LAW:single-enforcer] Every rank verb writes its key through here, so "a rank
+// never lands on a deleted issue" has one enforcement site instead of four
+// near-copies of an UPDATE, none of which carried it.
+//
+// now is supplied rather than read here because a set writes one timestamp
+// across every row it touches; deriving it per write would stamp one logical
+// move with a spread of instants.
+func writeRankTx(ctx context.Context, tx *sql.Tx, id, newRank, now string) error {
+	var live string
+	err := tx.QueryRowContext(ctx, `SELECT id FROM issues WHERE id = ? AND deleted_at IS NULL`, id).Scan(&live)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("cannot rank %s: it was deleted while the move was being applied", id)
+	}
+	if err != nil {
+		return fmt.Errorf("liveness of %s: %w", id, err)
+	}
+	// The predicate rides on the UPDATE as well, so the write cannot land on a
+	// deleted row even if the read above is ever removed or reordered.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`,
+		newRank, now, id); err != nil {
+		return fmt.Errorf("set rank of %s: %w", id, err)
+	}
+	return nil
+}
+
 // RankToTop moves an issue to the top of its own frame.
 func (s *Store) RankToTop(ctx context.Context, issueID string) (storage.RankEnd, error) {
 	return s.rankToEdge(ctx, issueID, storage.RankTop)
@@ -193,8 +232,8 @@ func (s *Store) rankToEdge(ctx context.Context, issueID string, placement storag
 		}
 		newRank := edge.rankBeyond(holderRank)
 		now := s.clock.Now().Format(time.RFC3339Nano)
-		if _, err := tx.ExecContext(ctx, "UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?", newRank, now, issueID); err != nil {
-			return fmt.Errorf("rank to %s: update: %w", edge.name, err)
+		if err := writeRankTx(ctx, tx, issueID, newRank, now); err != nil {
+			return err
 		}
 		return smoothRanksIfNeededTx(ctx, tx, newRank)
 	})
@@ -332,8 +371,8 @@ func (s *Store) RankSet(ctx context.Context, ids []string) ([]storage.RankSetRes
 			cursor = newRank
 		}
 		for i, id := range ranked {
-			if _, err := tx.ExecContext(ctx, `UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?`, newRanks[i], now, id); err != nil {
-				return fmt.Errorf("rank-set: update %s: %w", id, err)
+			if err := writeRankTx(ctx, tx, id, newRanks[i], now); err != nil {
+				return err
 			}
 		}
 		if len(newRanks) > 0 {
@@ -478,11 +517,16 @@ func resolveComparableFrame(issueChain, targetChain []string) (movedID, anchorID
 // checkRankPair refuses a relative rank request that cannot be served at all:
 // an issue ranked against itself, one that does not exist, one in the trash.
 //
-// It runs before the commit lock, and everything it asks is safe to ask there.
-// These are facts about whether the caller named something rankable, so a stale
-// answer costs a worse error message and nothing else — where a stale frame
-// costs a key written into a keyspace nobody reads it in, which is why that one
-// is resolved in rankPairTx instead. [LAW:parse-dont-validate]
+// It runs before the commit lock so that a caller naming a deleted or missing
+// issue gets that answer directly, rather than as a failure surfacing from
+// inside a transaction. What it cannot do is keep the answer true: the row can
+// be deleted between here and the write. So this gate decides the message, and
+// never the invariant — writeRankTx re-establishes liveness under the lock and
+// owns "a rank never lands on a deleted issue", exactly as rankPairTx owns the
+// frame for the same reason. An earlier version of this comment claimed a stale
+// answer here cost only a worse error message; that was true of the anchor,
+// which is re-read for its key, and false of the issue being moved, which
+// nothing re-read at all. [LAW:parse-dont-validate]
 func (s *Store) checkRankPair(ctx context.Context, issueID, targetID string) error {
 	if issueID == targetID {
 		return errors.New("cannot rank an issue relative to itself")
@@ -572,8 +616,8 @@ func (s *Store) RankAbove(ctx context.Context, issueID, targetID string) (storag
 			}
 		}
 		now := s.clock.Now().Format(time.RFC3339Nano)
-		if _, err := tx.ExecContext(ctx, "UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?", newRank, now, move.MovedID); err != nil {
-			return fmt.Errorf("rank-above: update: %w", err)
+		if err := writeRankTx(ctx, tx, move.MovedID, newRank, now); err != nil {
+			return err
 		}
 		return smoothRanksIfNeededTx(ctx, tx, newRank)
 	})
@@ -615,8 +659,8 @@ func (s *Store) RankBelow(ctx context.Context, issueID, targetID string) (storag
 			}
 		}
 		now := s.clock.Now().Format(time.RFC3339Nano)
-		if _, err := tx.ExecContext(ctx, "UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?", newRank, now, move.MovedID); err != nil {
-			return fmt.Errorf("rank-below: update: %w", err)
+		if err := writeRankTx(ctx, tx, move.MovedID, newRank, now); err != nil {
+			return err
 		}
 		return smoothRanksIfNeededTx(ctx, tx, newRank)
 	})

@@ -242,8 +242,13 @@ func (e *Engine) RankSet(ctx context.Context, ids []string) ([]storage.RankSetRe
 			return nil, fmt.Errorf("rank set: duplicate ID %q in input", id)
 		}
 		seen[id] = struct{}{}
+		// Unwrapped, unlike the two input-shape errors above: this refusal has a
+		// counterpart on the SQL engine, which returns it bare, and the two must
+		// read identically for the same request. The "rank set: " prefix stays on
+		// the errors that are about this call's arguments and have no twin.
+		// [LAW:one-source-of-truth]
 		if err := e.mustRankable(id); err != nil {
-			return nil, fmt.Errorf("rank set: %w", err)
+			return nil, err
 		}
 	}
 	chains := make([][]string, len(ids))

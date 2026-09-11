@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"slices"
 	"strings"
@@ -493,5 +494,64 @@ func TestResolveComparableFrame(t *testing.T) {
 				t.Fatalf("resolveComparableFrame() frame = %q, want %q", frame, tc.wantFrame)
 			}
 		})
+	}
+}
+
+// TestWriteRankRefusesAnIssueDeletedUnderTheLock pins the guarantee that
+// mustRankable cannot give on its own. That gate runs before the commit lock, so
+// its answer is only as fresh as the instant it was read, and a delete landing
+// between it and the write would otherwise leave a key on a row no listing
+// shows.
+//
+// The race has no seam to stage — there is no point between the gate and the
+// write where a test can land a concurrent delete — so this asserts the property
+// the race depends on, directly against the statement that would have carried it
+// out. Deleting the row before the transaction opens produces exactly the state
+// such a delete produces: a row the pre-lock gate would have passed, gone by the
+// time the key is written.
+//
+// White-box on purpose. Every public rank verb refuses this issue at the gate and
+// so can never reach writeRankTx with a deleted row, which is what made this
+// second line of defence untestable from outside the package — and what let it
+// be missing from every write site unnoticed.
+func TestWriteRankRefusesAnIssueDeletedUnderTheLock(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Doomed", Topic: "frame", IssueType: "task", Placement: storage.RankBottom})
+	if err != nil {
+		t.Fatalf("CreateIssue error = %v", err)
+	}
+	before, err := st.GetIssue(ctx, issue.ID)
+	if err != nil {
+		t.Fatalf("GetIssue(before) error = %v", err)
+	}
+	if err := st.ExecRawForTest(ctx, `UPDATE issues SET deleted_at = ? WHERE id = ?`, "2026-09-11T00:00:00Z", issue.ID); err != nil {
+		t.Fatalf("soft-delete %s: %v", issue.ID, err)
+	}
+
+	var writeErr error
+	if err := st.withMutation(ctx, "write-rank-under-lock-test", func(ctx context.Context, tx *sql.Tx) error {
+		writeErr = writeRankTx(ctx, tx, issue.ID, "zzzz", "2026-09-11T00:00:01Z")
+		return nil
+	}); err != nil {
+		t.Fatalf("withMutation error = %v", err)
+	}
+	if writeErr == nil {
+		t.Fatalf("writeRankTx put a key on the deleted %s; want a refusal", issue.ID)
+	}
+	if !strings.Contains(writeErr.Error(), "deleted while the move was being applied") {
+		t.Errorf("writeRankTx error = %q, want it to name the mid-flight deletion", writeErr)
+	}
+
+	// The refusal has to be a refusal, not a complaint after the fact. GetIssue
+	// carries no deleted_at filter, so the trashed row is still readable and its
+	// key can be compared directly.
+	after, err := st.GetIssue(ctx, issue.ID)
+	if err != nil {
+		t.Fatalf("GetIssue(after) error = %v", err)
+	}
+	if after.Rank != before.Rank {
+		t.Errorf("a refused write still moved the deleted %s: rank %q -> %q", issue.ID, before.Rank, after.Rank)
 	}
 }
