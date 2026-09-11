@@ -62,7 +62,7 @@ On failure the process prints to stderr: `error (code=N): <message>`, then a `re
    - *Orphaned* — `in_progress` issues untouched for ≥ 6 hours (constant, `ready_state.go:48`).
    - *Needs-design* — the reserved label `needs-design` → `NeedsDesign`.
    - *Focus path* — issues on the prerequisite closure of any open goal labeled `focus`, computed by BFS over dependencies, container children, and earlier same-lane siblings; shared prerequisites attribute to the first goal reached (`ready_state.go:246-401`).
-4. **Classification**: annotations map to roles — blocking (`MissingField`, `OpenDependency`, `EarlierSiblingPending`, `NeedsDesign`), orphaned, rank-inversion, or none (`FocusPath`). **Ready = zero blocking annotations** (`readiness.go:42-90`). An unclassified kind panics.
+4. **Classification**: annotations map to roles — blocking (`MissingField`, `OpenDependency`, `EarlierSiblingPending`, `NeedsDesign`), orphaned, rank-inversion, or none (`FocusPath`). **Ready = zero blocking annotations** (`readiness.go:67-115`). An unclassified kind panics.
 5. **Ordering**, three stable sorts in sequence: composite rank (a leaf inside an epic sorts by the epic's rank, then its own), then priority (urgent first), then focus-path rows first — so focus outranks urgent (`cli.go:677-679`, `ready_state.go:490-537`).
 
 Rollups partition rows as: `in_progress` first (even if also blocked), else blocked, else ready (`ready_state.go:582-595`).

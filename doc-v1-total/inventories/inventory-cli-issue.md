@@ -368,7 +368,7 @@ prefix (`cli.go:1036-1042`).
 **Step 1 — candidate set** (`classifyWorkable`, `cli.go:652-682`):
 `ListIssues` with `Statuses = [open, in_progress]` (or the single `--status`
 value if given), `IssueTypes`/`Assignees`/`LabelsAll` from the CLI filter,
-`IncludeArchived=false`, `IncludeDeleted=false`, `Limit=0` (`cli.go:715-730`).
+`IncludeArchived=false`, `IncludeDeleted=false`, `Limit=0` (`cli.go:659-667`).
 The store's default ordering is `item_rank ASC` (`cli.go:719-720`).
 
 **Step 2 — leaves only**: `filterWorkableIssues` keeps issues whose
@@ -430,7 +430,7 @@ each annotation is dispatched on its declared `ReadinessRole`:
 `IsReady() := len(blocking) == 0` (`readiness.go:42`). So an issue is **ready**
 iff it has no `MissingField`, no `OpenDependency`, no `EarlierSiblingPending`, and
 no `NeedsDesign` annotation. `DependencyIDs()` returns only the `OpenDependency`
-details (`readiness.go:55-63`).
+details (`readiness.go:80-88`).
 
 **Step 5 — canonical ordering**, applied in this sequence (`cli.go:677-679`):
 1. `sortByCompositeRank(rows, details)` — stable sort by
