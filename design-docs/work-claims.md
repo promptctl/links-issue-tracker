@@ -244,6 +244,15 @@ step, so each step below says only which lanes it looks in:
   an epic you already hold a lane in)" — which the same ticket drawn from the
   global pool does not carry.
 
+  The qualifier is keyed to the step, not to the fact it states, and an on-path
+  dependency (step 1b) does not carry it even when its lane belongs to an epic
+  this checkout holds another lane in — which `gatingDependencies` permits,
+  since it scopes the blocked rows and not the dependencies it collects from
+  them. The clause answers "why was I handed a lane I do not hold?", and step
+  1b's answer is that the row gates work of ours, which is the more specific
+  reason and the one worth saying; the epic it happens to share would explain
+  the pick less well, not better.
+
   Nothing here may be said in the perfect tense. A line that reports a start or
   a claim describes a side effect `next` does not have, and an agent that
   believes it holds a claim it does not either works unclaimed or spends a turn

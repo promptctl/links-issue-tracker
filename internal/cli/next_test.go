@@ -500,6 +500,12 @@ func TestRenderNextOutcomeSpeaksOnlyInTheConditional(t *testing.T) {
 			"run `lit start " + fresh.ID + "` to claim lane a1 of epic " + epicA.ID + " (a second lane of an epic you already hold a lane in)"},
 		{"abandoned work is taken over, not claimed fresh", ServedFromNewLane{Row: inFlightRow, Lane: inFlightLane},
 			inFlight.ID + " is in progress and abandoned — run `lit start " + inFlight.ID + "` to take over lane a2 of epic " + epicA.ID},
+		// Step 2 admits takeoverWork, so the epic's next lane can carry an
+		// abandoned row: the one place the verb-dependent sentence and the
+		// fixed suffix are concatenated. Pinned whole, because a product left
+		// partly covered is where this ticket's tautology survived.
+		{"the epic's next lane takes over abandoned work, qualifier and all", ServedFromEpicLane{Row: inFlightRow, Lane: inFlightLane},
+			inFlight.ID + " is in progress and abandoned — run `lit start " + inFlight.ID + "` to take over lane a2 of epic " + epicA.ID + " (a second lane of an epic you already hold a lane in)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer
