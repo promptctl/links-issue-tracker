@@ -144,15 +144,25 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 // The object turns on the lane's shape, which is why Describe answers in two
 // parts. A solo lane IS the ticket, so naming it spelled the same id twice
 // ("starting X claims X") — a tautology no reader could take as advice about a
-// command they had yet to run. "it" is the caller's answer to that, available
-// here and nowhere else because the ticket is named one clause earlier.
+// command they had yet to run. The pronoun is the caller's answer to that,
+// available here and nowhere else because the ticket is named one clause
+// earlier.
+//
+// The two verbs spell their sentences out rather than sharing one with the
+// object substituted, because English puts the pronoun in different places:
+// "claim it", but "take it over" — a particle verb splits around a pronoun and
+// reads wrong with one trailing it. All four are pinned as the product of verb
+// and lane shape in next_route_test.go.
 func startAdvice(row annotation.AnnotatedIssue, lane model.LaneID) string {
-	target := "it"
-	if described, ok := lane.Describe(); ok {
-		target = described
-	}
+	described, named := lane.Describe()
 	if row.State() == model.StateInProgress {
-		return fmt.Sprintf("%s is in progress and abandoned — run `lit start %s` to take over %s", row.ID, row.ID, target)
+		if !named {
+			return fmt.Sprintf("%s is in progress and abandoned — run `lit start %s` to take it over", row.ID, row.ID)
+		}
+		return fmt.Sprintf("%s is in progress and abandoned — run `lit start %s` to take over %s", row.ID, row.ID, described)
 	}
-	return fmt.Sprintf("run `lit start %s` to claim %s", row.ID, target)
+	if !named {
+		return fmt.Sprintf("run `lit start %s` to claim it", row.ID)
+	}
+	return fmt.Sprintf("run `lit start %s` to claim %s", row.ID, described)
 }

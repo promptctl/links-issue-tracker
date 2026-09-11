@@ -474,32 +474,19 @@ func TestRunNextCarriesParentEpic(t *testing.T) {
 // that produces each one is pinned in next_route_test.go. Standings are left
 // empty deliberately: formatClaimLine stays on its ("", false) arm, so nothing
 // but this line is under assertion.
-//
-// All three lane shapes are here, not just the one an epic-scoped pick happens
-// to have. Describe's shapes are pinned in internal/model, but the pronoun that
-// stands in for a lane of one is startAdvice's answer and lives only here: with
-// the named-lane rows alone, reverting startAdvice to LaneID.String() still
-// passed while a solo pick went back to "run `lit start X` to claim X" — the
-// original tautology in the new phrasing (links-next-output-5aee).
 func TestRenderNextOutcomeSpeaksOnlyInTheConditional(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	fresh := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
 	inFlight := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
 	h.transition(inFlight.ID, model.Start{Assignee: "other"})
-	unlaned := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.0", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
-	solo := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Standalone", Topic: "next", IssueType: "task", Priority: 0})
 
 	rows, details := h.gather()
 	cc := claimContext{self: selfAttribution}
 	freshRow := rowByID(t, rows, fresh.ID)
 	inFlightRow := rowByID(t, rows, inFlight.ID)
-	unlanedRow := rowByID(t, rows, unlaned.ID)
-	soloRow := rowByID(t, rows, solo.ID)
 	freshLane := laneOf(t, details, freshRow)
 	inFlightLane := laneOf(t, details, inFlightRow)
-	unlanedLane := laneOf(t, details, unlanedRow)
-	soloLane := laneOf(t, details, soloRow)
 
 	for _, tc := range []struct {
 		name    string
@@ -513,10 +500,6 @@ func TestRenderNextOutcomeSpeaksOnlyInTheConditional(t *testing.T) {
 			"run `lit start " + fresh.ID + "` to claim lane a1 of epic " + epicA.ID + " (a second lane of an epic you already hold a lane in)"},
 		{"abandoned work is taken over, not claimed fresh", ServedFromNewLane{Row: inFlightRow, Lane: inFlightLane},
 			inFlight.ID + " is in progress and abandoned — run `lit start " + inFlight.ID + "` to take over lane a2 of epic " + epicA.ID},
-		{"an epic's default lane is named, not left as a bare hash", ServedFromNewLane{Row: unlanedRow, Lane: unlanedLane},
-			"run `lit start " + unlaned.ID + "` to claim the default lane of epic " + epicA.ID},
-		{"a lane of one is not named at all, because it is the ticket", ServedFromNewLane{Row: soloRow, Lane: soloLane},
-			"run `lit start " + solo.ID + "` to claim it"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer

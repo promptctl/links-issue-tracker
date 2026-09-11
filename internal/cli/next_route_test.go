@@ -703,6 +703,11 @@ func TestRouteNextContinuesEpicIntoForeignStaleLane(t *testing.T) {
 // empty, trailed a bare "#" that reads as an unfilled template slot. Only the
 // named lane ever carried information, and it is the rarest of the three.
 //
+// Both unnamed cells read "it", and they read it in different places: "claim
+// it", but "take it over", because a particle verb splits around a pronoun.
+// That is why startAdvice spells its four sentences out instead of substituting
+// one object into two.
+//
 // Whatever else changes here, no cell may contain "#" or say the ticket's id
 // where a lane belongs — that is the whole of the ticket's second defect, and a
 // table is the only way to see all three shapes fail at once.
@@ -713,7 +718,11 @@ func TestStartAdviceNamesTheCommandAndTheLaneShape(t *testing.T) {
 	unnamed := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
 	solo := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Parentless", Topic: "next", IssueType: "task", Priority: 0})
 	inFlight := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.3", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a3"})
-	h.transition(inFlight.ID, model.Start{Assignee: "other"})
+	unnamedInFlight := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.4", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	soloInFlight := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Parentless, abandoned", Topic: "next", IssueType: "task", Priority: 0})
+	for _, abandoned := range []string{inFlight.ID, unnamedInFlight.ID, soloInFlight.ID} {
+		h.transition(abandoned, model.Start{Assignee: "other"})
+	}
 
 	rows, details := h.gather()
 
@@ -726,6 +735,10 @@ func TestStartAdviceNamesTheCommandAndTheLaneShape(t *testing.T) {
 			"run `lit start " + solo.ID + "` to claim it"},
 		{"an in-flight row is taken over, not claimed fresh", inFlight.ID,
 			inFlight.ID + " is in progress and abandoned — run `lit start " + inFlight.ID + "` to take over lane a3 of epic " + epicA.ID},
+		{"a default lane is still words on the takeover verb", unnamedInFlight.ID,
+			unnamedInFlight.ID + " is in progress and abandoned — run `lit start " + unnamedInFlight.ID + "` to take over the default lane of epic " + epicA.ID},
+		{"a solo lane still goes unnamed on the takeover verb", soloInFlight.ID,
+			soloInFlight.ID + " is in progress and abandoned — run `lit start " + soloInFlight.ID + "` to take it over"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			row := rowByID(t, rows, tc.id)
