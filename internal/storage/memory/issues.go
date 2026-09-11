@@ -116,22 +116,23 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 // (links-rank-t2vl) because narrowing it changes what filing order
 // means.
 func (e *Engine) place(id string, placement storage.RankPlacement) error {
-	if len(e.order) == 0 {
-		e.order = append(e.order, id)
-		return nil
+	// The placement is dispatched before the population is even built, so an
+	// unrecognized one is refused the same way whether the workspace is empty or
+	// full. Answering the empty order first — the shortcut this had — skipped the
+	// dispatch entirely, so the very first issue in a workspace was created with
+	// any placement at all while the second was correctly refused.
+	// [LAW:dataflow-not-control-flow]
+	edge, err := orderEdgeFor(placement)
+	if err != nil {
+		return err
 	}
 	// The population is every position in the order — the same edge dispatch the
 	// rank verbs use, asked about the workspace instead of one frame.
-	// [LAW:dataflow-not-control-flow]
 	population := make([]int, len(e.order))
 	for index := range e.order {
 		population[index] = index
 	}
-	edge, err := orderEdgeFor(population, placement)
-	if err != nil {
-		return err
-	}
-	e.insertAt(edge.insertAt, id)
+	e.insertAt(edge.positionIn(population), id)
 	return nil
 }
 

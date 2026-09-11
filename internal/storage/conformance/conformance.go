@@ -184,6 +184,7 @@ var cases = []engineCase{
 	{"rank_to_edge_ignores_a_deleted_frame_mate", rankToEdgeIgnoresADeletedFrameMate},
 	{"rank_set_imposes_order", rankSetImposesOrder},
 	{"rank_set_stays_inside_its_frame", rankSetStaysInsideItsFrame},
+	{"rank_verbs_refuse_a_deleted_issue", rankVerbsRefuseADeletedIssue},
 	{"close_redirects_to_a_canonical", closeRedirectsToCanonical},
 	{"comments_roundtrip", commentsRoundtrip},
 	{"labels_roundtrip", labelsRoundtrip},
@@ -1222,6 +1223,76 @@ func rankSetStaysInsideItsFrame(t *testing.T, ctx context.Context, st storage.St
 	if after := mustGet(t, ctx, st, epic.ID).Rank; after != epicBefore {
 		t.Errorf("rank set among an epic's children moved the epic itself: rank %q -> %q", epicBefore, after)
 	}
+}
+
+// rankVerbsRefuseADeletedIssue pins that naming a trashed issue in any rank
+// verb is refused, and that the refusal costs the order nothing.
+//
+// Rank is a position among issues that are actually listed, so a deleted issue
+// has none — but nothing used to say so, and each verb improvised differently:
+// the SQL edge verbs failed deep inside their transaction on a row their own
+// precheck had just accepted (GetIssue carries no deleted_at filter), the
+// relative verbs wrote a key onto a row no view shows, and RankSet — once it
+// began rewriting its frame's slots in place — had the worst answer of the
+// three. Its slot list counts only live members while its replacement list
+// counted every representative, so a deleted one made the second longer than
+// the first and the rewrite committed the prefix that fit, dropping whichever
+// live sibling owned the slots that ran out. That issue then belonged to no
+// position at all.
+//
+// The survivor assertion is the point of this case and outlives the particular
+// answer: whatever a rank verb decides to do about a deleted issue, an issue
+// nobody named must still be listed afterwards. [LAW:no-silent-failure]
+func rankVerbsRefuseADeletedIssue(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	gone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "gone", Topic: "core", ParentID: epic.ID})
+	sibling := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "sibling", Topic: "core", ParentID: epic.ID})
+	// bystander is named by nothing below. It is the issue the truncated rewrite
+	// used to drop, so its survival is what separates a refused write from a
+	// half-applied one.
+	bystander := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "bystander", Topic: "core", ParentID: epic.ID})
+
+	if _, err := st.Apply(ctx, gone.ID, storage.Change{Action: model.Delete{}, Actor: "tester"}); err != nil {
+		t.Fatalf("delete the child: %v", err)
+	}
+	bystanderRank := mustGet(t, ctx, st, bystander.ID).Rank
+
+	// Every verb, named the same deleted issue. Listing them as values rather
+	// than writing four near-identical blocks keeps a verb added later from
+	// quietly skipping this case. [LAW:dataflow-not-control-flow]
+	refusals := []struct {
+		verb string
+		call func() error
+	}{
+		{"RankToTop", func() error { _, err := st.RankToTop(ctx, gone.ID); return err }},
+		{"RankToBottom", func() error { _, err := st.RankToBottom(ctx, gone.ID); return err }},
+		{"RankAbove", func() error { _, err := st.RankAbove(ctx, gone.ID, sibling.ID); return err }},
+		{"RankBelow", func() error { _, err := st.RankBelow(ctx, gone.ID, sibling.ID); return err }},
+		{"RankAbove(anchor)", func() error { _, err := st.RankAbove(ctx, sibling.ID, gone.ID); return err }},
+		{"RankSet", func() error { _, err := st.RankSet(ctx, []string{gone.ID, sibling.ID}); return err }},
+	}
+	for _, r := range refusals {
+		if err := r.call(); err == nil {
+			t.Errorf("%s naming the deleted issue %s succeeded; want a refusal", r.verb, gone.ID)
+		}
+	}
+
+	// Nothing that was not named may have moved, and nothing may have fallen out
+	// of the order entirely.
+	listed := mustList(t, ctx, st, storage.ListIssuesFilter{})
+	found := false
+	for _, issue := range listed {
+		if issue.ID == bystander.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("%s is no longer listed after refused rank writes; a partial rewrite dropped it from the order", bystander.ID)
+	}
+	if after := mustGet(t, ctx, st, bystander.ID).Rank; after != bystanderRank {
+		t.Errorf("a refused rank write moved the unnamed %s: rank %q -> %q", bystander.ID, bystanderRank, after)
+	}
+	assertPrecedes(t, listed, sibling.ID, bystander.ID)
 }
 
 // rankIntentsResolveAcrossFrames is why the anchored verbs report a RankMove

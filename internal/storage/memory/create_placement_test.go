@@ -30,6 +30,42 @@ import (
 //
 // The unrecognized placement is the one input that reaches place's error arm,
 // and it is the same input the engine's own dispatch rejects.
+// TestCreateIssueRefusesAnUnknownPlacementInAnEmptyWorkspace pins that the
+// placement is judged before the workspace is consulted.
+//
+// place used to answer the empty order first and append unconditionally, which
+// meant the dispatch that rejects an unrecognized placement never ran for the
+// very first issue: the same call that is refused once a second issue exists
+// was accepted as the first, and the workspace a caller happened to be pointed
+// at decided whether its input was valid. The population is a question about
+// where an issue lands, never about whether the request makes sense.
+//
+// It is deliberately the sibling of the test below rather than another case
+// inside it: that one always creates an anchor first, so e.order is never empty
+// by the time it makes its bad-placement call, and it cannot reach this arm.
+func TestCreateIssueRefusesAnUnknownPlacementInAnEmptyWorkspace(t *testing.T) {
+	ctx := context.Background()
+	engine, err := New("memory-create-placement-empty", storage.SystemClock)
+	if err != nil {
+		t.Fatalf("New error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := engine.Close(); err != nil {
+			t.Errorf("Close error = %v", err)
+		}
+	})
+
+	if _, err := engine.CreateIssue(ctx, storage.CreateIssueInput{
+		Prefix: "mem", Title: "first", Topic: "place", IssueType: "task",
+		Placement: storage.RankPlacement(99),
+	}); err == nil {
+		t.Fatal("the first issue in a workspace was created with an unrecognized placement; want the same refusal the second would get")
+	}
+	if len(engine.issues) != 0 || len(engine.order) != 0 {
+		t.Errorf("a refused creation left %d records and %d positions behind, want none", len(engine.issues), len(engine.order))
+	}
+}
+
 func TestCreateIssueLeavesNoRecordWhenPlacementFails(t *testing.T) {
 	ctx := context.Background()
 	engine, err := New("memory-create-placement", storage.SystemClock)

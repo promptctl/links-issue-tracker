@@ -97,10 +97,40 @@ func frameEdgeHolderTx(ctx context.Context, tx *sql.Tx, f storage.Frame, edge ra
 func frameOfTx(ctx context.Context, tx *sql.Tx, issueID string) (storage.Frame, error) {
 	query := fmt.Sprintf(`SELECT %s FROM issues WHERE id = ? AND deleted_at IS NULL`, frameColumn)
 	var f string
-	if err := tx.QueryRowContext(ctx, query, issueID).Scan(&f); err != nil {
+	err := tx.QueryRowContext(ctx, query, issueID).Scan(&f)
+	// mustRankable has already refused a deleted issue outside the lock, so no
+	// row here means it was deleted in the window between that check and this
+	// one. Saying so beats surfacing "sql: no rows in result set", which names
+	// neither the issue nor what a caller could do about it.
+	// [LAW:no-silent-failure]
+	if errors.Is(err, sql.ErrNoRows) {
+		return storage.TopLevel, fmt.Errorf("cannot rank %s: it was deleted while the move was being applied", issueID)
+	}
+	if err != nil {
 		return storage.TopLevel, fmt.Errorf("frame of %s: %w", issueID, err)
 	}
 	return storage.Frame(f), nil
+}
+
+// mustRankable is the one gate every rank verb passes a named issue through:
+// it must exist, and it must not be in the trash. It mirrors the memory
+// engine's gate of the same name, so the two engines refuse the same requests.
+// [LAW:single-enforcer] [LAW:parse-dont-validate]
+//
+// GetIssue alone will not do it: that read carries no deleted_at filter by
+// design, so it hands back trashed issues quite happily. Every ranking query
+// here does filter them, which left the verbs disagreeing about what a deleted
+// issue even is — one wrote a key onto a row no view shows, another failed deep
+// inside its transaction on a missing row.
+func (s *Store) mustRankable(ctx context.Context, id string) (model.Issue, error) {
+	issue, err := s.GetIssue(ctx, id)
+	if err != nil {
+		return model.Issue{}, err
+	}
+	if _, gone := issue.Retention().(model.Deleted); gone {
+		return model.Issue{}, fmt.Errorf("cannot rank deleted issue %s; restore it first", id)
+	}
+	return issue, nil
 }
 
 // RankToTop moves an issue to the top of its own frame.
@@ -129,7 +159,7 @@ func (s *Store) RankToBottom(ctx context.Context, issueID string) (storage.RankE
 // whole workspace, see nextRankForPlacement — and shares the direction and the
 // empty-keyspace default through edgeFor rather than its own copy of them.
 func (s *Store) rankToEdge(ctx context.Context, issueID string, placement storage.RankPlacement) (storage.RankEnd, error) {
-	if _, err := s.GetIssue(ctx, issueID); err != nil {
+	if _, err := s.mustRankable(ctx, issueID); err != nil {
 		return storage.RankEnd{}, err
 	}
 	edge, err := edgeFor(placement)
@@ -195,13 +225,17 @@ func rankSetValidateIDs(ids []string) error {
 // no frame-coherent write can express — honoring part of the order while
 // silently discarding the rest would misrepresent the request.
 // [LAW:no-silent-failure]
-func (s *Store) resolveRankSet(ctx context.Context, ids []string) ([]storage.RankSetResolution, storage.Frame, error) {
+//
+// It reads through whatever querier it is handed so the caller decides whether
+// the parentage is walked under the commit lock. RankSet hands it the
+// transaction, because the frame this returns is what scopes the anchor query:
+// resolved beforehand, a concurrent reparent leaves it naming a container the
+// representatives have already left, and the stack is written into a keyspace
+// nothing reads it in. [LAW:no-ambient-temporal-coupling]
+func resolveRankSet(ctx context.Context, q rowQueryer, ids []string) ([]storage.RankSetResolution, storage.Frame, error) {
 	chains := make([][]string, len(ids))
 	for i, id := range ids {
-		if _, err := s.GetIssue(ctx, id); err != nil {
-			return nil, storage.TopLevel, err
-		}
-		chain, err := s.ancestorChain(ctx, id)
+		chain, err := ancestorChain(ctx, q, id)
 		if err != nil {
 			return nil, storage.TopLevel, err
 		}
@@ -238,15 +272,27 @@ func (s *Store) RankSet(ctx context.Context, ids []string) ([]storage.RankSetRes
 	if err := rankSetValidateIDs(ids); err != nil {
 		return nil, err
 	}
-	resolutions, f, err := s.resolveRankSet(ctx, ids)
-	if err != nil {
-		return nil, err
+	// Existence and liveness are error quality, not keyspace correctness: they
+	// tell a caller it named something it cannot rank, and a stale answer here
+	// costs only a worse message. The frame below is the opposite, so it is read
+	// under the lock instead.
+	for _, id := range ids {
+		if _, err := s.mustRankable(ctx, id); err != nil {
+			return nil, err
+		}
 	}
-	ranked := make([]string, len(resolutions))
-	for i, r := range resolutions {
-		ranked[i] = r.RankedID
-	}
-	return resolutions, s.withMutation(ctx, "rank set", func(ctx context.Context, tx *sql.Tx) error {
+	var resolutions []storage.RankSetResolution
+	err := s.withMutation(ctx, "rank set", func(ctx context.Context, tx *sql.Tx) error {
+		var f storage.Frame
+		var err error
+		resolutions, f, err = resolveRankSet(ctx, tx, ids)
+		if err != nil {
+			return err
+		}
+		ranked := make([]string, len(resolutions))
+		for i, r := range resolutions {
+			ranked[i] = r.RankedID
+		}
 		// Find the topmost rank in the representatives' own frame, excluding the
 		// IDs being reassigned (so we anchor against rows that aren't moving).
 		// Every representative is a frame-mate by construction, so that frame is
@@ -295,18 +341,22 @@ func (s *Store) RankSet(ctx context.Context, ids []string) ([]storage.RankSetRes
 		}
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	return resolutions, nil
 }
 
 // ancestorChain returns the parent-child ancestry of an issue, self first,
 // root last, following only non-deleted parents. The on-disk relation rows
 // are a trust boundary: a parent cycle is corrupt data and fails loudly
 // rather than looping. [LAW:no-silent-failure]
-func (s *Store) ancestorChain(ctx context.Context, id string) ([]string, error) {
+func ancestorChain(ctx context.Context, q rowQueryer, id string) ([]string, error) {
 	chain := []string{id}
 	seen := map[string]struct{}{id: {}}
 	for cur := id; ; {
 		var parent string
-		err := s.db.QueryRowContext(ctx,
+		err := q.QueryRowContext(ctx,
 			`SELECT r.dst_id FROM relations r JOIN issues p ON p.id = r.dst_id
 			 WHERE r.src_id = ? AND r.type = 'parent-child' AND p.deleted_at IS NULL`, cur).Scan(&parent)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -425,49 +475,80 @@ func resolveComparableFrame(issueChain, targetChain []string) (movedID, anchorID
 	return reps[0], reps[1], f, nil
 }
 
-// resolveRankPair validates a relative rank request and resolves it to the
-// frame-comparable pair, returning the hydrated anchor (its rank seeds the
-// midpoint math), the move record, and the frame both representatives live in
-// — which is the scope the midpoint's neighbor must be drawn from.
+// checkRankPair refuses a relative rank request that cannot be served at all:
+// an issue ranked against itself, one that does not exist, one in the trash.
+//
+// It runs before the commit lock, and everything it asks is safe to ask there.
+// These are facts about whether the caller named something rankable, so a stale
+// answer costs a worse error message and nothing else — where a stale frame
+// costs a key written into a keyspace nobody reads it in, which is why that one
+// is resolved in rankPairTx instead. [LAW:parse-dont-validate]
+func (s *Store) checkRankPair(ctx context.Context, issueID, targetID string) error {
+	if issueID == targetID {
+		return errors.New("cannot rank an issue relative to itself")
+	}
+	if _, err := s.mustRankable(ctx, targetID); err != nil {
+		return err
+	}
+	if _, err := s.mustRankable(ctx, issueID); err != nil {
+		return err
+	}
+	return nil
+}
+
+// rankPairTx resolves a relative rank request into the pair it is actually
+// about, the frame both representatives live in, and the anchor's current key —
+// all read inside the caller's transaction.
+//
+// The frame is why this runs under the lock rather than beside it. It scopes the
+// neighbor query, so a frame resolved beforehand and invalidated by a concurrent
+// reparent sends the midpoint into a keyspace the issue no longer belongs to:
+// the cross-frame bleed these verbs exist to avoid, reached through timing
+// instead of arithmetic. The anchor's key rides along for the same reason — a
+// midpoint computed against a key some other writer has already replaced lands
+// somewhere nobody asked for. [LAW:no-ambient-temporal-coupling]
+//
 // [LAW:single-enforcer] Both relative rank ops route through this one
 // resolution so cross-frame semantics cannot drift between above and below.
-func (s *Store) resolveRankPair(ctx context.Context, issueID, targetID string) (model.Issue, storage.RankMove, storage.Frame, error) {
-	if issueID == targetID {
-		return model.Issue{}, storage.RankMove{}, storage.TopLevel, errors.New("cannot rank an issue relative to itself")
-	}
-	if _, err := s.GetIssue(ctx, targetID); err != nil {
-		return model.Issue{}, storage.RankMove{}, storage.TopLevel, err
-	}
-	if _, err := s.GetIssue(ctx, issueID); err != nil {
-		return model.Issue{}, storage.RankMove{}, storage.TopLevel, err
-	}
-	issueChain, err := s.ancestorChain(ctx, issueID)
+func rankPairTx(ctx context.Context, tx *sql.Tx, issueID, targetID string) (storage.RankMove, storage.Frame, string, error) {
+	issueChain, err := ancestorChain(ctx, tx, issueID)
 	if err != nil {
-		return model.Issue{}, storage.RankMove{}, storage.TopLevel, err
+		return storage.RankMove{}, storage.TopLevel, "", err
 	}
-	targetChain, err := s.ancestorChain(ctx, targetID)
+	targetChain, err := ancestorChain(ctx, tx, targetID)
 	if err != nil {
-		return model.Issue{}, storage.RankMove{}, storage.TopLevel, err
+		return storage.RankMove{}, storage.TopLevel, "", err
 	}
 	movedID, anchorID, f, err := resolveComparableFrame(issueChain, targetChain)
 	if err != nil {
-		return model.Issue{}, storage.RankMove{}, storage.TopLevel, err
+		return storage.RankMove{}, storage.TopLevel, "", err
 	}
-	anchor, err := s.GetIssue(ctx, anchorID)
+	var anchorRank string
+	err = tx.QueryRowContext(ctx, `SELECT item_rank FROM issues WHERE id = ? AND deleted_at IS NULL`, anchorID).Scan(&anchorRank)
+	if errors.Is(err, sql.ErrNoRows) {
+		return storage.RankMove{}, storage.TopLevel, "", fmt.Errorf("cannot rank against %s: it was deleted while the move was being applied", anchorID)
+	}
 	if err != nil {
-		return model.Issue{}, storage.RankMove{}, storage.TopLevel, err
+		return storage.RankMove{}, storage.TopLevel, "", fmt.Errorf("rank of %s: %w", anchorID, err)
 	}
-	return anchor, storage.RankMove{MovedID: movedID, AnchorID: anchorID}, f, nil
+	return storage.RankMove{MovedID: movedID, AnchorID: anchorID}, f, anchorRank, nil
 }
 
 // RankAbove moves an issue to rank immediately above the target issue,
 // after resolving both to their comparable frame (see resolveComparableFrame).
 func (s *Store) RankAbove(ctx context.Context, issueID, targetID string) (storage.RankMove, error) {
-	target, move, f, err := s.resolveRankPair(ctx, issueID, targetID)
-	if err != nil {
+	if err := s.checkRankPair(ctx, issueID, targetID); err != nil {
 		return storage.RankMove{}, err
 	}
-	return move, s.withMutation(ctx, "rank above", func(ctx context.Context, tx *sql.Tx) error {
+	var move storage.RankMove
+	err := s.withMutation(ctx, "rank above", func(ctx context.Context, tx *sql.Tx) error {
+		var f storage.Frame
+		var anchorRank string
+		var err error
+		move, f, anchorRank, err = rankPairTx(ctx, tx, issueID, targetID)
+		if err != nil {
+			return err
+		}
 		// The neighbor is drawn from the anchor's frame, not the workspace: a
 		// closer key belonging to some other epic's child would still land the
 		// issue above its anchor, but it would halve the gap against a row this
@@ -477,15 +558,15 @@ func (s *Store) RankAbove(ctx context.Context, issueID, targetID string) (storag
 		query := fmt.Sprintf(`SELECT item_rank FROM issues
 			WHERE item_rank < ? AND deleted_at IS NULL AND id != ? AND %s = ?
 			ORDER BY item_rank DESC LIMIT 1`, frameColumn)
-		err := tx.QueryRowContext(ctx, query, target.Rank, move.MovedID, string(f)).Scan(&aboveRank)
+		err = tx.QueryRowContext(ctx, query, anchorRank, move.MovedID, string(f)).Scan(&aboveRank)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("rank-above: query neighbor: %w", err)
 		}
 		var newRank string
 		if !aboveRank.Valid || aboveRank.String == "" {
-			newRank = rank.Before(target.Rank)
+			newRank = rank.Before(anchorRank)
 		} else {
-			newRank, err = rank.Midpoint(aboveRank.String, target.Rank)
+			newRank, err = rank.Midpoint(aboveRank.String, anchorRank)
 			if err != nil {
 				return fmt.Errorf("rank-above: midpoint: %w", err)
 			}
@@ -496,31 +577,39 @@ func (s *Store) RankAbove(ctx context.Context, issueID, targetID string) (storag
 		}
 		return smoothRanksIfNeededTx(ctx, tx, newRank)
 	})
+	return move, err
 }
 
 // RankBelow moves an issue to rank immediately below the target issue,
 // after resolving both to their comparable frame (see resolveComparableFrame).
 func (s *Store) RankBelow(ctx context.Context, issueID, targetID string) (storage.RankMove, error) {
-	target, move, f, err := s.resolveRankPair(ctx, issueID, targetID)
-	if err != nil {
+	if err := s.checkRankPair(ctx, issueID, targetID); err != nil {
 		return storage.RankMove{}, err
 	}
-	return move, s.withMutation(ctx, "rank below", func(ctx context.Context, tx *sql.Tx) error {
+	var move storage.RankMove
+	err := s.withMutation(ctx, "rank below", func(ctx context.Context, tx *sql.Tx) error {
+		var f storage.Frame
+		var anchorRank string
+		var err error
+		move, f, anchorRank, err = rankPairTx(ctx, tx, issueID, targetID)
+		if err != nil {
+			return err
+		}
 		// Scoped to the anchor's frame for the same reason RankAbove is: the
 		// midpoint is only meaningful against a key this order actually reads.
 		var belowRank sql.NullString
 		query := fmt.Sprintf(`SELECT item_rank FROM issues
 			WHERE item_rank > ? AND deleted_at IS NULL AND id != ? AND %s = ?
 			ORDER BY item_rank ASC LIMIT 1`, frameColumn)
-		err := tx.QueryRowContext(ctx, query, target.Rank, move.MovedID, string(f)).Scan(&belowRank)
+		err = tx.QueryRowContext(ctx, query, anchorRank, move.MovedID, string(f)).Scan(&belowRank)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("rank-below: query neighbor: %w", err)
 		}
 		var newRank string
 		if !belowRank.Valid || belowRank.String == "" {
-			newRank = rank.After(target.Rank)
+			newRank = rank.After(anchorRank)
 		} else {
-			newRank, err = rank.Midpoint(target.Rank, belowRank.String)
+			newRank, err = rank.Midpoint(anchorRank, belowRank.String)
 			if err != nil {
 				return fmt.Errorf("rank-below: midpoint: %w", err)
 			}
@@ -531,6 +620,7 @@ func (s *Store) RankBelow(ctx context.Context, issueID, targetID string) (storag
 		}
 		return smoothRanksIfNeededTx(ctx, tx, newRank)
 	})
+	return move, err
 }
 
 // smoothRanksIfNeededTx checks whether the given rank string has grown past the
@@ -553,7 +643,7 @@ func smoothRanksIfNeededTx(ctx context.Context, tx *sql.Tx, triggerRank string) 
 
 	// Collect the window: up to half items at or below the trigger, plus
 	// up to half items above it.
-	below, err := rankRowsTx(ctx, tx,
+	below, err := rankRows(ctx, tx,
 		`SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank <= ? ORDER BY item_rank DESC LIMIT ?`,
 		triggerRank, half)
 	if err != nil {
@@ -561,7 +651,7 @@ func smoothRanksIfNeededTx(ctx context.Context, tx *sql.Tx, triggerRank string) 
 	}
 	slices.Reverse(below)
 
-	above, err := rankRowsTx(ctx, tx,
+	above, err := rankRows(ctx, tx,
 		`SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank > ? ORDER BY item_rank ASC LIMIT ?`,
 		triggerRank, half)
 	if err != nil {
@@ -581,13 +671,13 @@ func smoothRanksIfNeededTx(ctx context.Context, tx *sql.Tx, triggerRank string) 
 	runFloor := rank.Significant(window[0].rank)
 	runCeiling := rank.Significant(window[len(window)-1].rank) + "1"
 
-	lowerRun, err := rankRowsTx(ctx, tx,
+	lowerRun, err := rankRows(ctx, tx,
 		`SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank >= ? AND item_rank < ? ORDER BY item_rank ASC`,
 		runFloor, window[0].rank)
 	if err != nil {
 		return fmt.Errorf("smooth: lower run: %w", err)
 	}
-	upperRun, err := rankRowsTx(ctx, tx,
+	upperRun, err := rankRows(ctx, tx,
 		`SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank > ? AND item_rank < ? ORDER BY item_rank ASC`,
 		window[len(window)-1].rank, runCeiling)
 	if err != nil {
@@ -595,13 +685,13 @@ func smoothRanksIfNeededTx(ctx context.Context, tx *sql.Tx, triggerRank string) 
 	}
 	window = slices.Concat(lowerRun, window, upperRun)
 
-	lowerBound, err := nearestRankTx(ctx, tx,
+	lowerBound, err := nearestRank(ctx, tx,
 		`SELECT item_rank FROM issues WHERE deleted_at IS NULL AND item_rank < ? ORDER BY item_rank DESC LIMIT 1`,
 		runFloor)
 	if err != nil {
 		return fmt.Errorf("smooth: lower bound: %w", err)
 	}
-	upperBound, err := nearestRankTx(ctx, tx,
+	upperBound, err := nearestRank(ctx, tx,
 		`SELECT item_rank FROM issues WHERE deleted_at IS NULL AND item_rank >= ? ORDER BY item_rank ASC LIMIT 1`,
 		runCeiling)
 	if err != nil {
@@ -623,11 +713,11 @@ func smoothRanksIfNeededTx(ctx context.Context, tx *sql.Tx, triggerRank string) 
 	return nil
 }
 
-// rankRowsTx runs a rank query and returns every row it matches, in the order
+// rankRows runs a rank query and returns every row it matches, in the order
 // the query asks for. Every caller bounds its own query — by range or by LIMIT
 // — so the rows read stay proportional to the window, never to the backlog.
-func rankRowsTx(ctx context.Context, tx *sql.Tx, query string, args ...any) ([]rankedIssue, error) {
-	rows, err := tx.QueryContext(ctx, query, args...)
+func rankRows(ctx context.Context, q rowQueryer, query string, args ...any) ([]rankedIssue, error) {
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -643,11 +733,11 @@ func rankRowsTx(ctx context.Context, tx *sql.Tx, query string, args ...any) ([]r
 	return out, rows.Err()
 }
 
-// nearestRankTx returns the single rank a LIMIT 1 query selects, or "" — the
+// nearestRank returns the single rank a LIMIT 1 query selects, or "" — the
 // open end of the keyspace — when it selects nothing.
-func nearestRankTx(ctx context.Context, tx *sql.Tx, query string, args ...any) (string, error) {
+func nearestRank(ctx context.Context, q rowQueryer, query string, args ...any) (string, error) {
 	var found string
-	err := tx.QueryRowContext(ctx, query, args...).Scan(&found)
+	err := q.QueryRowContext(ctx, query, args...).Scan(&found)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
@@ -657,14 +747,16 @@ func nearestRankTx(ctx context.Context, tx *sql.Tx, query string, args ...any) (
 	return found, nil
 }
 
-// rowQueryer abstracts the QueryContext surface that *sql.DB and *sql.Tx
-// share, so one loader serves Doctor (reading, no tx) and FixRankInversions
-// (reading inside its own mutating tx).
-// [LAW:single-enforcer] Each thing the two need to read — the blocks edges and
-// the live rank order — is loaded by exactly one function taking this
-// interface, so neither caller can read a different store than the other.
+// rowQueryer abstracts the query surface that *sql.DB and *sql.Tx share, so one
+// implementation of a read serves callers that hold the commit lock and callers
+// that do not.
+// [LAW:single-enforcer] A read reachable from both stances is written once,
+// against this interface, so Doctor's lock-free pass and the mutating rank paths
+// cannot read the store two different ways. Naming the readers here is what went
+// stale twice; the rule is that there is no second site, whoever the readers are.
 type rowQueryer interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
 // liveIssueIDs returns the set of non-archived, non-deleted issue IDs whose

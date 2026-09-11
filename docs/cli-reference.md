@@ -333,6 +333,11 @@ epic, never reordering anything inside an epic. The output states the
 resolution whenever it substitutes an epic for a named issue. Ranking an issue
 relative to its own epic (either direction) is an error.
 
+Naming a deleted issue is an error in every form of the command, including
+`lit rank set`: rank is a position among the issues a listing shows, and a
+deleted issue holds none. Restore it first (`lit restore <id>`) and rank it
+after.
+
 ### `lit rank set`
 
 ```text

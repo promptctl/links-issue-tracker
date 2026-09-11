@@ -75,7 +75,11 @@ func (e *Engine) RankToBottom(ctx context.Context, issueID string) (storage.Rank
 // would instead read as leading the whole backlog, which is a position the
 // child's rank never claims.
 func (e *Engine) rankToEdge(issueID string, placement storage.RankPlacement) (storage.RankEnd, error) {
-	if _, err := e.mustRecord(issueID); err != nil {
+	if err := e.mustRankable(issueID); err != nil {
+		return storage.RankEnd{}, err
+	}
+	edge, err := orderEdgeFor(placement)
+	if err != nil {
 		return storage.RankEnd{}, err
 	}
 	result := storage.RankEnd{Frame: e.frameOf(issueID)}
@@ -86,11 +90,7 @@ func (e *Engine) rankToEdge(issueID string, placement storage.RankPlacement) (st
 	if len(mates) == 0 {
 		return result, nil
 	}
-	edge, err := orderEdgeFor(mates, placement)
-	if err != nil {
-		return storage.RankEnd{}, err
-	}
-	result.Moved = !edge.holds(slices.Index(e.order, issueID))
+	result.Moved = !edge.past(mates, slices.Index(e.order, issueID))
 	if !result.Moved {
 		return result, nil
 	}
@@ -99,44 +99,87 @@ func (e *Engine) rankToEdge(issueID string, placement storage.RankPlacement) (st
 	// slot is read off the order it will actually be inserted into. Detaching
 	// removes only the issue, which frameMateIndexes was already excluding, so
 	// this is the same set of mates at new positions — never an empty one.
-	landing, err := orderEdgeFor(e.frameMateIndexes(result.Frame, issueID), placement)
-	if err != nil {
-		return storage.RankEnd{}, err
-	}
-	e.insertAt(landing.insertAt, issueID)
+	e.insertAt(edge.positionIn(e.frameMateIndexes(result.Frame, issueID)), issueID)
 	return result, nil
 }
 
-// orderEdge is one end of a frame expressed as positions in the single order:
-// the slot an issue takes to land at that end, and the test for an issue
-// already sitting past it. The end a caller asked for crosses as this value,
-// so both ends share one placement path. [LAW:dataflow-not-control-flow]
+// orderEdge is one end of a frame expressed as questions about positions in
+// the single order: the slot an issue takes to land at that end, and the test
+// for an issue already sitting past it. The end a caller asked for crosses as
+// this value, so both ends share one placement path.
+// [LAW:dataflow-not-control-flow]
 type orderEdge struct {
-	insertAt int
-	holds    func(issueIndex int) bool
+	name string
+	// slot answers for a population that has members; positionIn wraps it with
+	// the answer for one that has none.
+	slot func(mateIndexes []int) int
+	past func(mateIndexes []int, issueIndex int) bool
+}
+
+// positionIn is where an id lands at this end of a population.
+//
+// A population with no members has exactly one position, and it is zero.
+// Absorbing that here is what lets place assign unconditionally, the way
+// rankBeyond absorbs the empty frame for the SQL engine. The alternative —
+// answering it in the caller, before the dispatch — is what this had before,
+// and it meant the first issue created in a workspace never reached the
+// dispatch at all, so it accepted any placement whatsoever while the second
+// issue with the same placement was correctly refused.
+// [LAW:dataflow-not-control-flow]
+func (e orderEdge) positionIn(mateIndexes []int) int {
+	if len(mateIndexes) == 0 {
+		return 0
+	}
+	return e.slot(mateIndexes)
 }
 
 // orderEdgeFor is the single dispatch point on RankPlacement for positions:
 // creation's placement and both edge verbs resolve their end here.
 // [LAW:single-enforcer]
 //
-// The population must be non-empty — an empty one has no end to speak of, and
-// every caller has already answered that question by the time it gets here.
-// Reaching this with none is a resolution bug, and it panics rather than
-// picking a position, for the reason insertAt gives: a clamp would turn that
-// bug into a silent placement at the head of the backlog, the one outcome
-// nobody would report. [LAW:no-defensive-null-guards]
-func orderEdgeFor(mateIndexes []int, p storage.RankPlacement) (orderEdge, error) {
+// It dispatches on the placement alone. The population is a separate question,
+// asked of the resolved edge, so an unrecognized placement is refused whatever
+// population it was asked about — including none, where there is no end to
+// speak of but the placement is just as wrong. [LAW:parse-dont-validate]
+func orderEdgeFor(p storage.RankPlacement) (orderEdge, error) {
 	switch p {
 	case storage.RankTop:
-		first := mateIndexes[0]
-		return orderEdge{insertAt: first, holds: func(issueIndex int) bool { return issueIndex < first }}, nil
+		return orderEdge{
+			name: "top",
+			slot: func(mateIndexes []int) int { return mateIndexes[0] },
+			past: func(mateIndexes []int, issueIndex int) bool { return issueIndex < mateIndexes[0] },
+		}, nil
 	case storage.RankBottom:
-		last := mateIndexes[len(mateIndexes)-1]
-		return orderEdge{insertAt: last + 1, holds: func(issueIndex int) bool { return issueIndex > last }}, nil
+		return orderEdge{
+			name: "bottom",
+			slot: func(mateIndexes []int) int { return mateIndexes[len(mateIndexes)-1] + 1 },
+			past: func(mateIndexes []int, issueIndex int) bool {
+				return issueIndex > mateIndexes[len(mateIndexes)-1]
+			},
+		}, nil
 	default:
 		return orderEdge{}, fmt.Errorf("unknown rank placement: %d", p)
 	}
+}
+
+// mustRankable is the one gate every rank verb passes a named issue through:
+// it must exist, and it must not be in the trash.
+//
+// Rank is a position in an order that only lists live issues, so a deleted one
+// has no position to hold and nothing to hold it against. Letting it through
+// used to mean one of two silent wrongs depending on the verb — a key written
+// onto a row no view shows, or, once RankSet began rewriting its frame's slots
+// in place, a live sibling dropped out of the order to make room for it.
+// Refusing here is what makes both unrepresentable rather than handled.
+// [LAW:single-enforcer] [LAW:parse-dont-validate]
+func (e *Engine) mustRankable(id string) error {
+	if _, err := e.mustRecord(id); err != nil {
+		return err
+	}
+	if !e.live(id) {
+		return fmt.Errorf("cannot rank deleted issue %s; restore it first", id)
+	}
+	return nil
 }
 
 // live reports whether an id is still present and undeleted. Deleting an issue
@@ -199,6 +242,9 @@ func (e *Engine) RankSet(ctx context.Context, ids []string) ([]storage.RankSetRe
 			return nil, fmt.Errorf("rank set: duplicate ID %q in input", id)
 		}
 		seen[id] = struct{}{}
+		if err := e.mustRankable(id); err != nil {
+			return nil, fmt.Errorf("rank set: %w", err)
+		}
 	}
 	chains := make([][]string, len(ids))
 	for i, id := range ids {
@@ -249,6 +295,18 @@ func (e *Engine) RankSet(ctx context.Context, ids []string) ([]storage.RankSetRe
 			ordered = append(ordered, e.order[slot])
 		}
 	}
+	// The rewrite permutes the frame's occupants among the frame's own slots, so
+	// the two sides have to name the same set. They do once every representative
+	// is a live frame-mate, which mustRankable is what guarantees: slots counts
+	// only live members, so a deleted representative reaching here would make
+	// ordered the longer of the two and the loop below would write a prefix of it
+	// — dropping whichever live sibling sat in the slots that ran out, and leaving
+	// it in no position at all. A permutation that cannot account for every slot
+	// is a resolution bug, and it stops here rather than committing the half of
+	// itself that fits. [LAW:no-silent-failure]
+	if len(ordered) != len(slots) {
+		return nil, fmt.Errorf("rank set: %d issues resolved into %s but the frame holds %d ranked — refusing to rewrite a partial order", len(ordered), f, len(slots))
+	}
 	for i, slot := range slots {
 		e.order[slot] = ordered[i]
 	}
@@ -281,10 +339,10 @@ func (e *Engine) resolveRankPair(issueID, targetID string) (storage.RankMove, er
 	if issueID == targetID {
 		return storage.RankMove{}, errors.New("cannot rank an issue relative to itself")
 	}
-	if _, err := e.mustRecord(targetID); err != nil {
+	if err := e.mustRankable(targetID); err != nil {
 		return storage.RankMove{}, err
 	}
-	if _, err := e.mustRecord(issueID); err != nil {
+	if err := e.mustRankable(issueID); err != nil {
 		return storage.RankMove{}, err
 	}
 	issueChain, err := e.ancestorChain(issueID)
