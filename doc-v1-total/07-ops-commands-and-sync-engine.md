@@ -178,7 +178,7 @@ Three signals (`sync_staleness.go`):
 - **Fetch-staleness line** — when the last successful fetch (marker `fetch-success.last`, written by `sync fetch`, `sync pull`, the reconcile pre-step, and inline receive) is ≥ 24 hours old: `sync: last successful fetch[ from <ref>] was <age> ago (over 24h0m0s) — run 'lit sync fetch'`.
 - **Ahead line** — read commands with a resolved freshness in state ahead: `sync: <N> local change(s) not pushed to <r>/<b>, as of last fetch — run 'lit sync push'`. Deliberately not emitted for diverged (that has the heavier failure block) and not special-cased for never-synced.
 
-Read commands print push-failure first, then ahead/fetch lines. Write commands, at the `runWithApp` seam, read only the storage-dir markers and print the push-failure line plus a ref-less fetch line; banner write failures never change the exit code (`sync_staleness.go:186-228`).
+Read commands print push-failure first, then ahead/fetch lines. Write commands, at the `runWithApp` seam, read only the storage-dir markers and print the push-failure line plus a ref-less fetch line; banner write failures never change the exit code (`sync_staleness.go:191-240`).
 
 ### The sync-failure contract
 
@@ -285,7 +285,7 @@ Commands emit **breadcrumbs** — `deeper guidance: lit quickstart <topic>` as a
 
 ## `lit version` and the build-status note
 
-`lit version` (no positionals) prints: `lit <version|dev> (commit <sha|unknown>, built <date|unknown>)`; `built <age> ago` when the build date parses; a staleness warning when `Info.StaleSourceBuild` reports true ("run `just build` (or `just install`)…"); and always `schema versions supported: <min>–<max>` (`version.go:17-70`).
+`lit version` (no positionals) prints: `lit <version|dev> (commit <sha|unknown>, built <date|unknown>)`; `built <age> ago` when the build date parses; a staleness warning when `Info.StaleSourceBuild` reports true ("run `just build` (or `just install`)…"); and always `schema versions supported: <min>–<max>` (`internal/cli/version.go:17-75`).
 
 `Info.StaleSourceBuild(now)` is the one staleness verdict every surface reads, returning the age alongside it. It reports stale only for a build whose `Origin` is not `release` (`Info.FromSource`) whose parsed build date is at or past `StaleBuildThreshold`; a release build at any age, a build inside the threshold, and a build whose date is absent, unparseable, or in the future all report fresh. Provenance comes from the stamped `Origin`, not from `IsDev` — `scripts/install.sh` source mode stamps a `git describe` `Version`, so `IsDev` is false for a binary built from a working tree.
 

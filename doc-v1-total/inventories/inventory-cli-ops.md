@@ -507,8 +507,8 @@ Flag parse output is `io.Discard` (`sync_bg.go:148`).
   `sync: last successful fetch[ from <ref>] was <age> ago (over <threshold>) — run 'lit sync fetch'`.
 - `syncStalenessLines` (`sync_staleness.go:96-111`) — only for a RESOLVED doctor sync report; when `State() == storage.SyncAhead`:
   `sync: <N> local change(s) not pushed to <r>/<b>, as of last fetch — run 'lit sync push'`; then the fetch-staleness line. Deliberately does NOT fire on `SyncDiverged` (that has the heavier failure block) nor special-case `SyncNeverSynced` (`sync_staleness.go:83-95`).
-- `printSyncStalenessWarning` (read commands) — `sync_staleness.go:186-200`: push-failure line FIRST, then the ahead/fetch lines. Write errors are returned to the caller.
-- `printMutationSyncStalenessWarning` (every write command, at the `runWithApp` seam) — `sync_staleness.go:217-228`: reads ONLY the storage-dir markers (push outcome, fetch success), emits the push-failure line then a ref-less fetch-staleness line. Write failures print `lit: staleness banner not written: <err>` to stderr and never change the exit code.
+- `printStalenessWarning` (read commands) — `sync_staleness.go:191-212`: the build-drift line FIRST (at most one, only for a stale source build), then the push-failure line, then the ahead/fetch lines. Write errors are returned to the caller.
+- `printMutationSyncStalenessWarning` (every write command, at the `runWithApp` seam) — `sync_staleness.go:229-240`: reads ONLY the storage-dir markers (push outcome, fetch success), emits the push-failure line then a ref-less fetch-staleness line. Write failures print `lit: staleness banner not written: <err>` to stderr and never change the exit code.
 
 ### 3.10 Sync-failure contract (`sync_failure.go`)
 

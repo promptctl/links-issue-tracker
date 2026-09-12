@@ -11,7 +11,7 @@
 // derived from internal/store/migrations at call time, not stored as separate
 // constants that could drift.
 // [LAW:single-enforcer] Only the package-level variables below are written at
-// link time (by goreleaser or scripts/install.sh). No other code mutates them.
+// link time. No other code mutates them.
 package version
 
 import (
@@ -20,17 +20,15 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 )
 
-// Build-time identity. Populated by `-ldflags "-X .../internal/version.Version=...
-// -X .../internal/version.Commit=... -X .../internal/version.Date=..."` at link
-// time. Empty strings indicate a build that did not stamp them — treated as a
-// development build in Info.IsDev.
+// Build-time identity, stamped at link time via
+// `-ldflags "-X .../internal/version.<field>=..."`. An unstamped field falls to
+// the cautious reading: no Version is Info.IsDev, no Origin is Info.FromSource.
 //
-// [LAW:single-enforcer] Three writers stamp these, and only these: goreleaser
-// (all three fields, for tagged releases), scripts/install.sh's source mode
-// (all three, Version via `git describe`), and the Justfile's `build` recipe
-// (Commit + Date only, via scripts/version-ldflags.sh — deliberately NOT
-// Version, so a plain `just build` stays IsDev==true; see BuildAge below for
-// why Commit/Date alone are still worth stamping).
+// [LAW:single-enforcer] Which producer stamps which field is checked against the
+// producers themselves by TestEveryProducerStampsOrigin, not recited here —
+// reciting it here is what went stale the first time a field was added. A plain
+// `just build` still omits Version deliberately, so it stays IsDev==true; see
+// BuildAge for why Commit/Date alone are worth stamping.
 var (
 	Version string
 	Commit  string

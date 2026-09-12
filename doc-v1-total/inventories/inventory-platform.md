@@ -480,7 +480,7 @@ All geometry git calls use `context.Background()` deliberately (`internal/worksp
 - `BuildAge(now)` returns `(0,false)` when `Date` is empty, unparseable as RFC3339, or in the
   future; otherwise `now.Sub(stamped)` (`:101-113`).
 
-`lit version` output (`internal/cli/version.go:17-68`):
+`lit version` output (`internal/cli/version.go:17-75`):
 
 - Rejects any positional argument: `usage: lit version` (`:22-24`).
 - Line 1: `lit %s (commit %s, built %s)\n`, where an `IsDev` build prints `dev`, an empty commit
