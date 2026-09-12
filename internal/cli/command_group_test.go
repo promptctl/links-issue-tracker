@@ -74,6 +74,114 @@ func commandGroupPaths() [][]string {
 	return paths
 }
 
+// commandLeafPaths derives every advertised path that is NOT a command group —
+// the leaves, the ones that dispatch to a handler rather than to a further
+// resolve. It is the exact complement of commandGroupPaths over the same
+// registry, so between them the two cover the advertised surface with no gap a
+// newly registered command could fall through. [LAW:one-source-of-truth]
+func commandLeafPaths() [][]string {
+	var paths [][]string
+	var walk func(prefix []string, subs []SubcommandSpec)
+	walk = func(prefix []string, subs []SubcommandSpec) {
+		for _, sub := range subs {
+			path := append(append([]string{}, prefix...), sub.Name)
+			if len(sub.Subcommands) == 0 {
+				paths = append(paths, path)
+				continue
+			}
+			walk(path, sub.Subcommands)
+		}
+	}
+	for _, spec := range commandSpecs(context.Background(), io.Discard, io.Discard) {
+		// Hidden rows are off the advertised surface, and a retired row answers
+		// every invocation — help included — with its replacement pointer rather
+		// than a flag surface, which is the documented break, not a help answer.
+		if spec.Hidden || spec.Retired {
+			continue
+		}
+		if len(spec.Subcommands) == 0 {
+			paths = append(paths, []string{spec.Name})
+			continue
+		}
+		walk([]string{spec.Name}, spec.Subcommands)
+	}
+	return paths
+}
+
+// leafHelpSubject reads the command a leaf's help output declares itself to be
+// about, from the `Usage of <command>:` header printHelp writes. The bool is a
+// typed absence rather than an empty name, so help with no header at all is a
+// distinct answer from help about a command named "".
+// [LAW:parse-dont-validate]
+func leafHelpSubject(help string) (string, bool) {
+	const header = "Usage of "
+	firstLine, _, _ := strings.Cut(help, "\n")
+	if !strings.HasPrefix(firstLine, header) || !strings.HasSuffix(firstLine, ":") {
+		return "", false
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(firstLine, header), ":"), true
+}
+
+// A LEAF command's help must be answered before the dispatch pipeline acquires
+// the workspace, store, or app that leaf's work needs (links-cli-1lxr). Asking
+// for help is a question about the binary, so it cannot be made to wait on — or
+// fail because of — whatever else holds the workspace: the reported defect was
+// `lit export --help` printing a store-contention notice and stalling on a lock
+// a background mirror held, and `lit workflows --help` failing outright outside
+// a git repository.
+//
+// Running outside any git repository is the machine-checkable proxy: no
+// workspace resolves and no store opens there, so success is only possible if
+// help acquired nothing. [LAW:verifiable-goals] Paths come from the registry, so
+// a leaf registered later without pre-acquisition help fails this test.
+func TestLeafHelpAnswersWithoutAcquiringResources(t *testing.T) {
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatalf("Chdir(nonRepo) error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(prevWD) })
+
+	paths := commandLeafPaths()
+	if len(paths) == 0 {
+		t.Fatal("registry advertises no leaf commands; the test asserted nothing")
+	}
+	for _, path := range paths {
+		for _, helpFlag := range []string{"-h", "--help"} {
+			args := append(append([]string{}, path...), helpFlag)
+			var stdout, stderr bytes.Buffer
+			if err := Run(context.Background(), &stdout, &stderr, args); err != nil {
+				t.Errorf("Run(%v) outside a repo error = %v, want help answered without any workspace/store/app", args, err)
+				continue
+			}
+			if stdout.Len() == 0 {
+				t.Errorf("Run(%v) printed no help on stdout", args)
+			}
+			// One help answer names one command. Cobra derives the -h line from the
+			// first word of the flagset's name while the header uses the whole of
+			// it, so a multi-word leaf contradicted itself: `rank set --help`
+			// printed "Usage of rank set:" above "help for rank", pointing the
+			// reader at its family as though that were the command they had asked
+			// about. The two lines are one fact and must agree.
+			// [LAW:one-source-of-truth]
+			named, ok := leafHelpSubject(stdout.String())
+			if !ok {
+				t.Errorf("Run(%v) stdout = %q, want a `Usage of <command>:` header", args, stdout.String())
+				continue
+			}
+			if want := "help for " + named; !strings.Contains(stdout.String(), want) {
+				t.Errorf("Run(%v) stdout = %q: header names %q but the -h line disagrees, want %q",
+					args, stdout.String(), named, want)
+			}
+			if got := stderr.String(); got != "" {
+				t.Errorf("Run(%v) stderr = %q, want empty — no error framing on a help answer", args, got)
+			}
+		}
+	}
+}
+
 // Asking a command group for help is answered as help: the group's usage on
 // stdout, nothing on stderr, and success — Run returning nil is what main maps
 // to exit 0 (links-cli-zc3r). The shape this pins out was an error-framed usage

@@ -224,7 +224,7 @@ func rankPlacement(top bool) storage.RankPlacement {
 	return unflagged
 }
 
-func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+func newLeaf() appLeaf {
 	fs := newCobraFlagSet("new")
 	title := fs.String("title", "", "Issue title")
 	description := fs.String("description", "", "Issue description")
@@ -237,32 +237,31 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	labels := fs.String("labels", "", "Comma-separated labels")
 	lane := fs.String("lane", "", "Lane key partitioning an epic's children into parallel rank-ordered sub-sequences; shared lane serializes, distinct lane parallelizes")
 	top := fs.Bool("top", false, "Promote the new issue to the top of the order (the default appends it to the bottom of its frame)")
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	issueTypeValue, err := parseIssueTypeFlag(*issueType)
-	if err != nil {
-		return err
-	}
-	priorityValue, err := parsePriorityFlag(*priority)
-	if err != nil {
-		return err
-	}
-	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
-		Title: *title, Description: *description, Prompt: *prompt, IssueType: issueTypeValue, Topic: *topic, ParentID: *parentID, Priority: priorityValue, Assignee: strings.TrimSpace(*assignee), Labels: splitCSV(*labels), Lane: *lane,
-		Placement: rankPlacement(*top),
-		Prefix:    ap.Workspace.IssuePrefix.Value(),
-	})
-	if err != nil {
-		return err
-	}
-	if err := workflows.Dispatch(stdout, os.Stderr, ap.Workspace, ticketCreatedOccasion(issue)); err != nil {
-		return err
-	}
-	if err := printIssueSummary(stdout, issue); err != nil {
-		return err
-	}
-	return emitBreadcrumb(stdout, "new")
+	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		issueTypeValue, err := parseIssueTypeFlag(*issueType)
+		if err != nil {
+			return err
+		}
+		priorityValue, err := parsePriorityFlag(*priority)
+		if err != nil {
+			return err
+		}
+		issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
+			Title: *title, Description: *description, Prompt: *prompt, IssueType: issueTypeValue, Topic: *topic, ParentID: *parentID, Priority: priorityValue, Assignee: strings.TrimSpace(*assignee), Labels: splitCSV(*labels), Lane: *lane,
+			Placement: rankPlacement(*top),
+			Prefix:    ap.Workspace.IssuePrefix.Value(),
+		})
+		if err != nil {
+			return err
+		}
+		if err := workflows.Dispatch(stdout, os.Stderr, ap.Workspace, ticketCreatedOccasion(issue)); err != nil {
+			return err
+		}
+		if err := printIssueSummary(stdout, issue); err != nil {
+			return err
+		}
+		return emitBreadcrumb(stdout, "new")
+	}}
 }
 
 // runFollowup creates a child issue parented to --on, intended for the
@@ -272,7 +271,7 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 //
 // See design-docs/preparing-the-next-loop.md for the principle this
 // implements (capture-at-close affordances).
-func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+func followupLeaf() appLeaf {
 	fs := newCobraFlagSet("followup")
 	on := fs.String("on", "", "Required parent issue ID (typically the just-closed ticket)")
 	title := fs.String("title", "", "Required follow-up title")
@@ -284,82 +283,100 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	assignee := fs.String("assignee", "", "Assignee")
 	labels := fs.String("labels", "", "Comma-separated labels")
 	top := fs.Bool("top", false, "Promote the follow-up to the top of the order (the default appends it to the bottom of its frame)")
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	parentID := strings.TrimSpace(*on)
-	titleValue := strings.TrimSpace(*title)
-	if parentID == "" || titleValue == "" {
-		return UsageError{Message: "usage: lit followup --on <id> --title <text> [--description <text>] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--top]"}
-	}
-	parent, err := ap.Store.GetIssue(ctx, parentID)
-	if err != nil {
-		return err
-	}
-	resolvedTopic := strings.TrimSpace(*topic)
-	if resolvedTopic == "" {
-		resolvedTopic = parent.Topic
-	}
-	resolvedDescription := strings.TrimSpace(*description)
-	if resolvedDescription == "" {
-		resolvedDescription = fmt.Sprintf("Follow-up surfaced at the close of %s: %s", parent.ID, parent.Title)
-	}
-	issueTypeValue, err := parseIssueTypeFlag(*issueType)
-	if err != nil {
-		return err
-	}
-	priorityValue, err := parsePriorityFlag(*priority)
-	if err != nil {
-		return err
-	}
-	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
-		Title:       titleValue,
-		Description: resolvedDescription,
-		Prompt:      strings.TrimSpace(*prompt),
-		IssueType:   issueTypeValue,
-		Topic:       resolvedTopic,
-		ParentID:    parent.ID,
-		Priority:    priorityValue,
-		Assignee:    strings.TrimSpace(*assignee),
-		Labels:      splitCSV(*labels),
-		Placement:   rankPlacement(*top),
-		Prefix:      ap.Workspace.IssuePrefix.Value(),
-	})
-	if err != nil {
-		return err
-	}
-	if err := workflows.Dispatch(stdout, os.Stderr, ap.Workspace, ticketCreatedOccasion(issue)); err != nil {
-		return err
-	}
-	if err := printIssueSummary(stdout, issue); err != nil {
-		return err
-	}
-	return emitBreadcrumb(stdout, "new")
+	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		parentID := strings.TrimSpace(*on)
+		titleValue := strings.TrimSpace(*title)
+		if parentID == "" || titleValue == "" {
+			return UsageError{Message: "usage: lit followup --on <id> --title <text> [--description <text>] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--top]"}
+		}
+		parent, err := ap.Store.GetIssue(ctx, parentID)
+		if err != nil {
+			return err
+		}
+		resolvedTopic := strings.TrimSpace(*topic)
+		if resolvedTopic == "" {
+			resolvedTopic = parent.Topic
+		}
+		resolvedDescription := strings.TrimSpace(*description)
+		if resolvedDescription == "" {
+			resolvedDescription = fmt.Sprintf("Follow-up surfaced at the close of %s: %s", parent.ID, parent.Title)
+		}
+		issueTypeValue, err := parseIssueTypeFlag(*issueType)
+		if err != nil {
+			return err
+		}
+		priorityValue, err := parsePriorityFlag(*priority)
+		if err != nil {
+			return err
+		}
+		issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
+			Title:       titleValue,
+			Description: resolvedDescription,
+			Prompt:      strings.TrimSpace(*prompt),
+			IssueType:   issueTypeValue,
+			Topic:       resolvedTopic,
+			ParentID:    parent.ID,
+			Priority:    priorityValue,
+			Assignee:    strings.TrimSpace(*assignee),
+			Labels:      splitCSV(*labels),
+			Placement:   rankPlacement(*top),
+			Prefix:      ap.Workspace.IssuePrefix.Value(),
+		})
+		if err != nil {
+			return err
+		}
+		if err := workflows.Dispatch(stdout, os.Stderr, ap.Workspace, ticketCreatedOccasion(issue)); err != nil {
+			return err
+		}
+		if err := printIssueSummary(stdout, issue); err != nil {
+			return err
+		}
+		return emitBreadcrumb(stdout, "new")
+	}}
 }
 
-// runList is the `ls` entrypoint. It chooses which store to query, then runs the
-// shared query logic (runListWithStore) against it. With no --at it opens the
-// current workspace's store read-only; with --at <dir> it opens a foreign store
-// by its storage directory (one of the paths `lit stores` prints), WITHOUT
-// depending on the current directory being a lit workspace — this is the folded-in
-// former `lit ls-at`, now `ls` scoped by a flag rather than its own command.
+// listScope is what `ls` queries: the store, and the ready policy that store can
+// answer for. Two acquisition paths produce it — the current workspace's own
+// store, and a foreign store named by --at — and everything after is the same
+// query, which is why the pair is a VALUE the work receives rather than a fork
+// inside it. [LAW:dataflow-not-control-flow]
+type listScope struct {
+	store  storage.Store
+	policy readyPolicy
+}
+
+// runList is the `ls` entrypoint. It declares and parses the flag surface, then
+// chooses which store to query and runs the shared query (lsLeaf's work) against
+// it. With no --at it opens the current workspace's store read-only; with --at
+// <dir> it opens a foreign store by its storage directory (one of the paths `lit
+// stores` prints), WITHOUT depending on the current directory being a lit
+// workspace — this is the folded-in former `lit ls-at`, now `ls` scoped by a flag
+// rather than its own command.
 //
 // The store choice is routed here rather than through the standard appCmd wrapper
 // because appCmd opens the cwd workspace before the handler runs, which would make
 // `ls --at <foreign>` fail outside a workspace even though it never needed the cwd
-// store. extractAtDir is a routing hint only; runListWithStore performs the
-// authoritative flag parse (including --at) so a malformed invocation still errors
-// through the one parser.
+// store. The parse precedes BOTH openings, so `ls --help` and a malformed flag are
+// answered with no store at all (links-cli-1lxr), and the routing reads --at from
+// that parse rather than rescanning argv — pflag is the one reader of the flag
+// grammar, so the `--` terminator and every other flag's arity are its rules alone.
+// [LAW:one-source-of-truth]
 func runList(ctx context.Context, stdout io.Writer, args []string) error {
-	atDir, hasAt := extractAtDir(args)
-	if hasAt {
-		// A missing value, or a flag-shaped one (`--at --help`, `--at --status`,
-		// `--at=`), is a usage error, not a store path — reject it here rather than
-		// handing "--help" to the store layer as a directory to open.
-		if strings.TrimSpace(atDir) == "" || strings.HasPrefix(atDir, "-") {
+	l, atDir := lsLeaf()
+	positional, err := parseLeaf(l, args, stdout)
+	if err != nil {
+		return err
+	}
+	if l.fs.Changed(lsAtFlag) {
+		// pflag accepts any string as the value, so a flag-shaped one (`--at
+		// --help`, `--at --status`) and an empty one (`--at=`, `--at ""`) still
+		// reach here. Reject them as usage rather than handing "--help" to the
+		// store layer as a directory to open. A bare `--at` never arrives: pflag
+		// itself refuses the missing argument at the parse above.
+		if strings.TrimSpace(*atDir) == "" || strings.HasPrefix(*atDir, "-") {
 			return UsageError{Message: "usage: lit ls --at <store-dir>  (a storage directory from `lit stores`)"}
 		}
-		loc := workspace.LocationFromStorageDir(atDir)
+		loc := workspace.LocationFromStorageDir(*atDir)
 		st, err := app.OpenLocationForRead(ctx, loc)
 		if err != nil {
 			// [LAW:no-silent-failure] Name the path so a wrong or un-initialized
@@ -368,7 +385,7 @@ func runList(ctx context.Context, stdout io.Writer, args []string) error {
 			// reaches through it) bound to the --at TARGET, so the trace files
 			// beside the traces of whatever holds that store — from any cwd,
 			// including no workspace at all.
-			return fmt.Errorf("open store at %q read-only: %w", atDir, markEngineOpenContention(err, infoForLocation(loc)))
+			return fmt.Errorf("open store at %q read-only: %w", *atDir, markEngineOpenContention(err, infoForLocation(loc)))
 		}
 		defer func() { _ = st.Close() }()
 		// noReadyPolicy, for the reason gatherCrossProjectRollup states at its own
@@ -377,45 +394,27 @@ func runList(ctx context.Context, stdout io.Writer, args []string) error {
 		// store-intrinsic annotation — blockers, the lane gate, needs-design —
 		// still runs, so `--columns blocked` over a foreign store answers the
 		// registry's question minus the one input that store cannot supply.
-		return runListWithStore(ctx, stdout, st, noReadyPolicy, args)
+		return l.work(ctx, stdout, listScope{store: st, policy: noReadyPolicy}, positional)
 	}
 	return runWithApp(ctx, stdout, app.AccessRead, func(ctx context.Context, ap *app.App) error {
-		return runListWithStore(ctx, stdout, ap.Store, workspaceReadyPolicy(ap), args)
+		return l.work(ctx, stdout, listScope{store: ap.Store, policy: workspaceReadyPolicy(ap)}, positional)
 	})
 }
 
-// extractAtDir returns the value of a --at / --at=<dir> flag if present in args.
-// It is a lightweight routing scan, not the authoritative parse: it lets runList
-// decide which store to open before the full flag parse runs. A present-but-empty
-// or flag-shaped --at is returned as-is so the caller rejects it with a usage
-// error. It honors the `--` terminator — a bare `--` ends flag parsing, so any
-// later `--at` is a positional literal, not a route. It does not model other
-// flags' arities (that would duplicate the ls flagset, [LAW:one-source-of-truth]),
-// so the implausible case of another flag's value being literally `--at` is not
-// disambiguated here.
-func extractAtDir(args []string) (string, bool) {
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--" {
-			return "", false
-		}
-		switch {
-		case args[i] == "--at":
-			if i+1 < len(args) {
-				return args[i+1], true
-			}
-			return "", true
-		case strings.HasPrefix(args[i], "--at="):
-			return strings.TrimPrefix(args[i], "--at="), true
-		}
-	}
-	return "", false
-}
+// lsLeaf declares the `ls` flag surface. It returns the --at value alongside the
+// leaf because --at selects the store the work runs against, so runList must read
+// it between the parse and the work — the one flag whose value is routing rather
+// than query. Every other flag is read inside the work closure.
+// lsAtFlag names the routing flag in the two places that must agree: the
+// declaration that registers it and the presence check that reads it back off
+// the parse. Spelled once, so renaming it cannot leave the check silently
+// answering false and routing every --at to the workspace store.
+// [LAW:one-source-of-truth]
+const lsAtFlag = "at"
 
-func runListWithStore(ctx context.Context, stdout io.Writer, st storage.Store, policy readyPolicy, args []string) error {
+func lsLeaf() (leaf[listScope], *string) {
 	fs := newCobraFlagSet("ls")
-	// --at is registered so the shared parse accepts it; the store it selects was
-	// already opened by runList, so its value is not re-read here.
-	fs.String("at", "", "List a discovered store by its storage directory (from `lit stores`), read-only, instead of the current workspace")
+	at := fs.String(lsAtFlag, "", "List a discovered store by its storage directory (from `lit stores`), read-only, instead of the current workspace")
 	// StringArray, not String: the filter this feeds is a set both engines OR
 	// together, so a second --status has to widen the listing rather than
 	// silently keep the last value and drop the first.
@@ -440,109 +439,109 @@ func runListWithStore(ctx context.Context, stdout io.Writer, st storage.Store, p
 	columnsExpr := fs.String("columns", "", columnsFlagUsage())
 	format := fs.String("format", "lines", "Output format: lines|table")
 	limit := fs.Int("limit", 0, "Limit results")
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	// Parsed before the query runs and before anything prints: a rejection that
-	// had already emitted rows would be a partial answer, which is the silent
-	// drop this boundary exists to prevent, wearing an error message.
-	columns, err := parseColumnSelection(*columnsExpr)
-	if err != nil {
-		return err
-	}
-	visited := map[string]bool{}
-	fs.Visit(func(f *pflag.Flag) { visited[f.Name] = true })
-	statuses, err := model.ParseStates(*status...)
-	if err != nil {
-		return fmt.Errorf("parse --status: %w", err)
-	}
-	issueTypes, err := parseIssueTypeSlice(*issueType)
-	if err != nil {
-		return fmt.Errorf("parse --type: %w", err)
-	}
-	filter := storage.ListIssuesFilter{
-		Statuses:        statuses,
-		IssueTypes:      issueTypes,
-		Assignees:       toSlice(strings.TrimSpace(*assignee)),
-		IncludeArchived: *includeArchived,
-		IncludeDeleted:  *includeDeleted,
-		Limit:           *limit,
-	}
-	if strings.TrimSpace(*sortExpr) != "" {
-		// [LAW:one-source-of-truth] Reuse the one store sort parser; the
-		// --query sort: token routes through the same function.
-		sortSpecs, err := storage.ParseSortSpecs(*sortExpr)
+	return leaf[listScope]{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope listScope, _ []string) error {
+		st, policy := scope.store, scope.policy
+		// Parsed before the query runs and before anything prints: a rejection that
+		// had already emitted rows would be a partial answer, which is the silent
+		// drop this boundary exists to prevent, wearing an error message.
+		columns, err := parseColumnSelection(*columnsExpr)
 		if err != nil {
 			return err
 		}
-		filter.SortBy = sortSpecs
-	}
-	if visited["search"] {
-		filter.SearchTerms = append(filter.SearchTerms, strings.TrimSpace(*search))
-	}
-	if visited["ids"] {
-		filter.IDs = splitCSV(*ids)
-	}
-	if visited["labels"] {
-		filter.LabelsAll = splitCSV(*labels)
-	}
-	if visited["has-comments"] {
-		value := *hasComments
-		filter.HasComments = &value
-	}
-	if visited["updated-after"] {
-		parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(*updatedAfter))
+		visited := map[string]bool{}
+		fs.Visit(func(f *pflag.Flag) { visited[f.Name] = true })
+		statuses, err := model.ParseStates(*status...)
 		if err != nil {
-			return fmt.Errorf("parse --updated-after: %w", err)
+			return fmt.Errorf("parse --status: %w", err)
 		}
-		filter.UpdatedAfter = &parsed
-	}
-	if visited["updated-before"] {
-		parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(*updatedBefore))
+		issueTypes, err := parseIssueTypeSlice(*issueType)
 		if err != nil {
-			return fmt.Errorf("parse --updated-before: %w", err)
+			return fmt.Errorf("parse --type: %w", err)
 		}
-		filter.UpdatedBefore = &parsed
-	}
-	if strings.TrimSpace(*queryExpr) != "" {
-		parsed, err := query.Parse(*queryExpr)
+		filter := storage.ListIssuesFilter{
+			Statuses:        statuses,
+			IssueTypes:      issueTypes,
+			Assignees:       toSlice(strings.TrimSpace(*assignee)),
+			IncludeArchived: *includeArchived,
+			IncludeDeleted:  *includeDeleted,
+			Limit:           *limit,
+		}
+		if strings.TrimSpace(*sortExpr) != "" {
+			// [LAW:one-source-of-truth] Reuse the one store sort parser; the
+			// --query sort: token routes through the same function.
+			sortSpecs, err := storage.ParseSortSpecs(*sortExpr)
+			if err != nil {
+				return err
+			}
+			filter.SortBy = sortSpecs
+		}
+		if visited["search"] {
+			filter.SearchTerms = append(filter.SearchTerms, strings.TrimSpace(*search))
+		}
+		if visited["ids"] {
+			filter.IDs = splitCSV(*ids)
+		}
+		if visited["labels"] {
+			filter.LabelsAll = splitCSV(*labels)
+		}
+		if visited["has-comments"] {
+			value := *hasComments
+			filter.HasComments = &value
+		}
+		if visited["updated-after"] {
+			parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(*updatedAfter))
+			if err != nil {
+				return fmt.Errorf("parse --updated-after: %w", err)
+			}
+			filter.UpdatedAfter = &parsed
+		}
+		if visited["updated-before"] {
+			parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(*updatedBefore))
+			if err != nil {
+				return fmt.Errorf("parse --updated-before: %w", err)
+			}
+			filter.UpdatedBefore = &parsed
+		}
+		if strings.TrimSpace(*queryExpr) != "" {
+			parsed, err := query.Parse(*queryExpr)
+			if err != nil {
+				return err
+			}
+			filter, err = query.Merge(filter, parsed.Filter)
+			if err != nil {
+				return err
+			}
+		}
+		// [LAW:dataflow-not-control-flow] Default status filter is data, not a branch
+		// around ListIssues. Apply the active-work default (exclude closed) only when
+		// the user has expressed no intent implying closed issues. Two filter fields
+		// carry that intent: an explicit status selection (--status / --query
+		// status:..., which also covers status:closed), and a resolution filter —
+		// resolutions exist ONLY on closed issues, so `--query resolution:wontfix` is a
+		// request to see closed work.
+		// [LAW:no-silent-failure] Without the resolution guard a closed-only filter
+		// clamps to open+in_progress and returns silently empty.
+		if len(filter.Statuses) == 0 && len(filter.Resolutions) == 0 {
+			filter.Statuses = []model.State{model.StateOpen, model.StateInProgress}
+		}
+		issues, err := st.ListIssues(ctx, filter)
 		if err != nil {
 			return err
 		}
-		filter, err = query.Merge(filter, parsed.Filter)
+		cells, err := listDerivedColumns(ctx, st, policy, columns, issues)
 		if err != nil {
 			return err
 		}
-	}
-	// [LAW:dataflow-not-control-flow] Default status filter is data, not a branch
-	// around ListIssues. Apply the active-work default (exclude closed) only when
-	// the user has expressed no intent implying closed issues. Two filter fields
-	// carry that intent: an explicit status selection (--status / --query
-	// status:..., which also covers status:closed), and a resolution filter —
-	// resolutions exist ONLY on closed issues, so `--query resolution:wontfix` is a
-	// request to see closed work.
-	// [LAW:no-silent-failure] Without the resolution guard a closed-only filter
-	// clamps to open+in_progress and returns silently empty.
-	if len(filter.Statuses) == 0 && len(filter.Resolutions) == 0 {
-		filter.Statuses = []model.State{model.StateOpen, model.StateInProgress}
-	}
-	issues, err := st.ListIssues(ctx, filter)
-	if err != nil {
-		return err
-	}
-	cells, err := listDerivedColumns(ctx, st, policy, columns, issues)
-	if err != nil {
-		return err
-	}
-	formatMode := strings.ToLower(strings.TrimSpace(*format))
-	switch formatMode {
-	case "", "lines":
-		return printIssueLines(stdout, issues, columns, cells)
-	case "table":
-		return printIssueTable(stdout, issues, columns, cells)
-	default:
-		return UnsupportedError{Message: fmt.Sprintf("unsupported --format %q", formatMode), Feature: "--format"}
-	}
+		formatMode := strings.ToLower(strings.TrimSpace(*format))
+		switch formatMode {
+		case "", "lines":
+			return printIssueLines(stdout, issues, columns, cells)
+		case "table":
+			return printIssueTable(stdout, issues, columns, cells)
+		default:
+			return UnsupportedError{Message: fmt.Sprintf("unsupported --format %q", formatMode), Feature: "--format"}
+		}
+	}}, at
 }
 
 // listDerivedColumns builds the per-issue cells the projected columns render,
@@ -838,47 +837,46 @@ func annotateIssues(ctx context.Context, st storage.Store, requiredFields []stri
 // newOrphanedAnnotator; this command only filters and presents.
 // [LAW:one-source-of-truth] Threshold comes from orphanedThreshold,
 // not a re-declared local constant.
-func runOrphaned(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+func orphanedLeaf() appLeaf {
 	fs := newCobraFlagSet("orphaned")
 	assignee := fs.String("assignee", "", "Filter by assignee")
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit orphaned [--assignee <user>]"}
-	}
-	listFilter := storage.ListIssuesFilter{
-		Statuses:        []model.State{model.StateInProgress},
-		Assignees:       toSlice(strings.TrimSpace(*assignee)),
-		IncludeArchived: false,
-		IncludeDeleted:  false,
-	}
-	issues, err := ap.Store.ListIssues(ctx, listFilter)
-	if err != nil {
-		return err
-	}
-	// Containers (epics) derive state from children; their own UpdatedAt
-	// has no relationship to whether any agent is working on them, so
-	// orphaning them based on it is meaningless. Drop them — orphan is
-	// a leaf-only concept here, same as in `lit backlog`/`lit next`.
-	issues = filterWorkableIssues(issues)
-	annotated, err := annotation.Annotate(ctx, issues, newOrphanedAnnotator(orphanedThreshold))
-	if err != nil {
-		return err
-	}
-	orphaned := make([]annotation.AnnotatedIssue, 0, len(annotated))
-	for _, entry := range annotated {
-		if ClassifyReadiness(entry.Annotations).IsOrphaned() {
-			orphaned = append(orphaned, entry)
+	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		if fs.NArg() != 0 {
+			return UsageError{Message: "usage: lit orphaned [--assignee <user>]"}
 		}
-	}
-	// Sort oldest-first so the most stale work surfaces at the top —
-	// the row most likely to need reclamation. Same UpdatedAt the
-	// annotator keyed off, so order matches staleness directly.
-	sort.SliceStable(orphaned, func(i, j int) bool {
-		return orphaned[i].UpdatedAt.Before(orphaned[j].UpdatedAt)
-	})
-	return printOrphanedText(stdout, orphaned)
+		listFilter := storage.ListIssuesFilter{
+			Statuses:        []model.State{model.StateInProgress},
+			Assignees:       toSlice(strings.TrimSpace(*assignee)),
+			IncludeArchived: false,
+			IncludeDeleted:  false,
+		}
+		issues, err := ap.Store.ListIssues(ctx, listFilter)
+		if err != nil {
+			return err
+		}
+		// Containers (epics) derive state from children; their own UpdatedAt
+		// has no relationship to whether any agent is working on them, so
+		// orphaning them based on it is meaningless. Drop them — orphan is
+		// a leaf-only concept here, same as in `lit backlog`/`lit next`.
+		issues = filterWorkableIssues(issues)
+		annotated, err := annotation.Annotate(ctx, issues, newOrphanedAnnotator(orphanedThreshold))
+		if err != nil {
+			return err
+		}
+		orphaned := make([]annotation.AnnotatedIssue, 0, len(annotated))
+		for _, entry := range annotated {
+			if ClassifyReadiness(entry.Annotations).IsOrphaned() {
+				orphaned = append(orphaned, entry)
+			}
+		}
+		// Sort oldest-first so the most stale work surfaces at the top —
+		// the row most likely to need reclamation. Same UpdatedAt the
+		// annotator keyed off, so order matches staleness directly.
+		sort.SliceStable(orphaned, func(i, j int) bool {
+			return orphaned[i].UpdatedAt.Before(orphaned[j].UpdatedAt)
+		})
+		return printOrphanedText(stdout, orphaned)
+	}}
 }
 
 func printOrphanedText(w io.Writer, rows []annotation.AnnotatedIssue) error {
@@ -898,55 +896,53 @@ func printOrphanedText(w io.Writer, rows []annotation.AnnotatedIssue) error {
 	return nil
 }
 
-func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	positional, flagArgs := splitArgs(args, 1)
+func showLeaf() appLeaf {
 	fs := newCobraFlagSet("show")
 	fieldsExpr := fs.String("field", "", "Comma-separated field names (e.g. description) to print with no surrounding context; omit for the full detail view")
-	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
-		return err
-	}
-	if len(positional) != 1 {
-		return UsageError{Message: "usage: lit show <id> [--field <name>[,<name>...]]"}
-	}
-	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit show <id> [--field <name>[,<name>...]]"}
-	}
-	// links-sync-pgct.2: `lit show` is named explicitly as one of the ordinary
-	// read commands unpushed/unfetched drift must surface on — but only ahead
-	// of the full-detail view. --field is the compact, machine-parseable
-	// contract (bare value(s), no surrounding context) automation round-trips
-	// into `lit update`; prepending the banner there would corrupt it.
-	// [LAW:dataflow-not-control-flow]
-	if strings.TrimSpace(*fieldsExpr) == "" {
-		if err := printSyncStalenessWarning(ctx, stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
+	return appLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		if len(positional) != 1 {
+			return UsageError{Message: "usage: lit show <id> [--field <name>[,<name>...]]"}
+		}
+		if fs.NArg() != 0 {
+			return UsageError{Message: "usage: lit show <id> [--field <name>[,<name>...]]"}
+		}
+		// links-sync-pgct.2: `lit show` is named explicitly as one of the ordinary
+		// read commands unpushed/unfetched drift must surface on — but only ahead
+		// of the full-detail view. --field is the compact, machine-parseable
+		// contract (bare value(s), no surrounding context) automation round-trips
+		// into `lit update`; prepending the banner there would corrupt it.
+		// [LAW:dataflow-not-control-flow]
+		if strings.TrimSpace(*fieldsExpr) == "" {
+			if err := printSyncStalenessWarning(ctx, stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
+				return err
+			}
+		}
+		detail, err := ap.Store.GetIssueDetail(ctx, positional[0])
+		if err != nil {
 			return err
 		}
-	}
-	detail, err := ap.Store.GetIssueDetail(ctx, positional[0])
-	if err != nil {
-		return err
-	}
-	// The agent viewed the ticket's details either way, --field or full view.
-	if err := workflows.Dispatch(stdout, os.Stderr, ap.Workspace, showTicketOccasion(detail.Issue)); err != nil {
-		return err
-	}
-	// --field is the compact, edit-oriented view: exactly the requested
-	// fields, none of the parent/epic/siblings context below. [LAW:dataflow-not-control-flow]
-	if fields := splitCSV(*fieldsExpr); len(fields) > 0 {
-		return printIssueFields(stdout, detail.Issue, fields)
-	}
-	// Resolved before the body is printed, so the body and the plan block are
-	// all-or-nothing: a slice that cannot be built fails without a body, rather
-	// than after one that reads as a complete show of an epic-less ticket.
-	// [LAW:parse-dont-validate]
-	plan, err := resolveEpicContext(ctx, ap, detail)
-	if err != nil {
-		return err
-	}
-	if err := printIssueDetail(stdout, detail); err != nil {
-		return err
-	}
-	return writeEpicContext(stdout, plan)
+		// The agent viewed the ticket's details either way, --field or full view.
+		if err := workflows.Dispatch(stdout, os.Stderr, ap.Workspace, showTicketOccasion(detail.Issue)); err != nil {
+			return err
+		}
+		// --field is the compact, edit-oriented view: exactly the requested
+		// fields, none of the parent/epic/siblings context below. [LAW:dataflow-not-control-flow]
+		if fields := splitCSV(*fieldsExpr); len(fields) > 0 {
+			return printIssueFields(stdout, detail.Issue, fields)
+		}
+		// Resolved before the body is printed, so the body and the plan block are
+		// all-or-nothing: a slice that cannot be built fails without a body, rather
+		// than after one that reads as a complete show of an epic-less ticket.
+		// [LAW:parse-dont-validate]
+		plan, err := resolveEpicContext(ctx, ap, detail)
+		if err != nil {
+			return err
+		}
+		if err := printIssueDetail(stdout, detail); err != nil {
+			return err
+		}
+		return writeEpicContext(stdout, plan)
+	}}
 }
 
 // runHistory renders a ticket's state-transition trail — the per-field
@@ -954,20 +950,18 @@ func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 // dedicated read-only surface. It reads the same GetIssueDetail as `lit show`
 // and renders only the event trail, so the two views share one data source
 // and one formatter (printHistoryEvents). [LAW:one-source-of-truth]
-func runHistory(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	positional, flagArgs := splitArgs(args, 1)
+func historyLeaf() appLeaf {
 	fs := newCobraFlagSet("history")
-	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
-		return err
-	}
-	if len(positional) != 1 || fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit history <id>"}
-	}
-	detail, err := ap.Store.GetIssueDetail(ctx, positional[0])
-	if err != nil {
-		return err
-	}
-	return printIssueHistory(stdout, detail)
+	return appLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		if len(positional) != 1 || fs.NArg() != 0 {
+			return UsageError{Message: "usage: lit history <id>"}
+		}
+		detail, err := ap.Store.GetIssueDetail(ctx, positional[0])
+		if err != nil {
+			return err
+		}
+		return printIssueHistory(stdout, detail)
+	}}
 }
 
 // statusViaVerbsGuidance is returned when `lit update --status` is used. Status
@@ -979,8 +973,7 @@ func runHistory(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 // the capability is fully reachable, just under the verbs. [LAW:no-silent-failure]
 const statusViaVerbsGuidance = "lit update no longer changes status — the transition verbs are the single enforcer of the transition guardrails. Use: `lit start <id>` (claim → in_progress), `lit done <id>` (finish → closed), `lit close <id> --resolution <duplicate|superseded|obsolete|wontfix>` (close with an outcome), `lit open <id>` (reopen)"
 
-func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	positional, flagArgs := splitArgs(args, 1)
+func updateLeaf() appLeaf {
 	fs := newCobraFlagSet("update")
 	title := fs.String("title", "", "Issue title")
 	description := fs.String("description", "", "Issue description")
@@ -996,99 +989,98 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	fs.String("status", "", "(removed) change status with the transition verbs: lit start|done|close|open")
 	reason := fs.String("reason", "", "Reason recorded on the field-change event")
 	resolveActor := registerActor(fs)
-	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
-		return err
-	}
-	if len(positional) != 1 {
-		return UsageError{Message: "usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--lane <key>] [--reason <text>]"}
-	}
-	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--lane <key>] [--reason <text>]"}
-	}
-	visited := map[string]bool{}
-	fs.Visit(func(flag *pflag.Flag) { visited[flag.Name] = true })
-	// Status is moved only by the transition verbs; `update` is field mutation.
-	// Rejecting --status here (rather than routing it through an action) keeps
-	// the verbs the single enforcer of the transition guardrails and stops
-	// `update` from being a second, divergent face of the same mutation — most
-	// concretely, no `--status closed` back door around `close`'s required
-	// resolution. The capability is fully reachable under the verbs; the break
-	// is deliberate and named, not silent. [LAW:single-enforcer] [LAW:no-silent-failure]
-	if visited["status"] {
-		return UsageError{Message: statusViaVerbsGuidance}
-	}
+	return appLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		if len(positional) != 1 {
+			return UsageError{Message: "usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--lane <key>] [--reason <text>]"}
+		}
+		if fs.NArg() != 0 {
+			return UsageError{Message: "usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--lane <key>] [--reason <text>]"}
+		}
+		visited := map[string]bool{}
+		fs.Visit(func(flag *pflag.Flag) { visited[flag.Name] = true })
+		// Status is moved only by the transition verbs; `update` is field mutation.
+		// Rejecting --status here (rather than routing it through an action) keeps
+		// the verbs the single enforcer of the transition guardrails and stops
+		// `update` from being a second, divergent face of the same mutation — most
+		// concretely, no `--status closed` back door around `close`'s required
+		// resolution. The capability is fully reachable under the verbs; the break
+		// is deliberate and named, not silent. [LAW:single-enforcer] [LAW:no-silent-failure]
+		if visited["status"] {
+			return UsageError{Message: statusViaVerbsGuidance}
+		}
 
-	// [LAW:dataflow-not-control-flow] Always build one Change; variability lives
-	// in which field pointers are set, not in which branch runs. The actor
-	// resolves through the same identity rule as the assignee — the agent's
-	// session wins, else --by/$USER — and is recorded on the field-change event.
-	// Fields.Reason annotates that event; with no action, there is no transition
-	// event for update to reason about. [LAW:single-enforcer]
-	in := storage.Change{
-		Actor: resolveActor(),
-		Fields: storage.UpdateIssueInput{
-			Reason: strings.TrimSpace(*reason),
-		},
-	}
-	if visited["title"] {
-		value := *title
-		in.Fields.Title = &value
-	}
-	if visited["description"] {
-		value := *description
-		in.Fields.Description = &value
-	}
-	if visited["prompt"] {
-		value := *prompt
-		in.Fields.Prompt = &value
-	}
-	if visited["type"] {
-		value, err := parseIssueTypeFlag(*issueType)
+		// [LAW:dataflow-not-control-flow] Always build one Change; variability lives
+		// in which field pointers are set, not in which branch runs. The actor
+		// resolves through the same identity rule as the assignee — the agent's
+		// session wins, else --by/$USER — and is recorded on the field-change event.
+		// Fields.Reason annotates that event; with no action, there is no transition
+		// event for update to reason about. [LAW:single-enforcer]
+		in := storage.Change{
+			Actor: resolveActor(),
+			Fields: storage.UpdateIssueInput{
+				Reason: strings.TrimSpace(*reason),
+			},
+		}
+		if visited["title"] {
+			value := *title
+			in.Fields.Title = &value
+		}
+		if visited["description"] {
+			value := *description
+			in.Fields.Description = &value
+		}
+		if visited["prompt"] {
+			value := *prompt
+			in.Fields.Prompt = &value
+		}
+		if visited["type"] {
+			value, err := parseIssueTypeFlag(*issueType)
+			if err != nil {
+				return err
+			}
+			in.Fields.IssueType = &value
+		}
+		if visited["priority"] {
+			value, err := parsePriorityFlag(*priority)
+			if err != nil {
+				return err
+			}
+			in.Fields.Priority = &value
+		}
+		if visited["assignee"] {
+			// Update is a field write, not a claim: the explicit value is honored
+			// verbatim and empty means clear. Session-identity resolution
+			// (resolveIdentity) is a claim-time convenience that belongs to
+			// `start` only — applying it here would silently turn an explicit
+			// clear (or an explicit third-party assignee) into "assign to me".
+			// A Start action built above already carries this same value, so the
+			// transition and the field write cannot disagree. [LAW:no-silent-failure]
+			value := strings.TrimSpace(*assignee)
+			in.Fields.Assignee = &value
+		}
+		if visited["labels"] {
+			value := splitCSV(*labels)
+			in.Fields.Labels = &value
+		}
+		if visited["lane"] {
+			value := strings.TrimSpace(*lane)
+			in.Fields.Lane = &value
+		}
+		if in.IsEmpty() {
+			return errors.New("lit update requires at least one field flag")
+		}
+		issue, err := ap.Store.Apply(ctx, positional[0], in)
 		if err != nil {
 			return err
 		}
-		in.Fields.IssueType = &value
-	}
-	if visited["priority"] {
-		value, err := parsePriorityFlag(*priority)
-		if err != nil {
+		if err := workflows.Dispatch(stdout, os.Stderr, ap.Workspace, ticketUpdatedOccasion(issue)); err != nil {
 			return err
 		}
-		in.Fields.Priority = &value
-	}
-	if visited["assignee"] {
-		// Update is a field write, not a claim: the explicit value is honored
-		// verbatim and empty means clear. Session-identity resolution
-		// (resolveIdentity) is a claim-time convenience that belongs to
-		// `start` only — applying it here would silently turn an explicit
-		// clear (or an explicit third-party assignee) into "assign to me".
-		// A Start action built above already carries this same value, so the
-		// transition and the field write cannot disagree. [LAW:no-silent-failure]
-		value := strings.TrimSpace(*assignee)
-		in.Fields.Assignee = &value
-	}
-	if visited["labels"] {
-		value := splitCSV(*labels)
-		in.Fields.Labels = &value
-	}
-	if visited["lane"] {
-		value := strings.TrimSpace(*lane)
-		in.Fields.Lane = &value
-	}
-	if in.IsEmpty() {
-		return errors.New("lit update requires at least one field flag")
-	}
-	issue, err := ap.Store.Apply(ctx, positional[0], in)
-	if err != nil {
-		return err
-	}
-	if err := workflows.Dispatch(stdout, os.Stderr, ap.Workspace, ticketUpdatedOccasion(issue)); err != nil {
-		return err
-	}
-	if err := printIssueSummary(stdout, issue); err != nil {
-		return err
-	}
-	return emitBreadcrumb(stdout, "update")
+		if err := printIssueSummary(stdout, issue); err != nil {
+			return err
+		}
+		return emitBreadcrumb(stdout, "update")
+	}}
 }
 
 // frameLabel names a rank frame for a reader: an epic by its id, and the top
@@ -1100,159 +1092,167 @@ func frameLabel(f storage.Frame) string {
 	return string(f)
 }
 
-func runRank(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	// Subcommand dispatch: 'lit rank set <id1> <id2> ...' is a separate verb
-	// that establishes absolute order across N issues atomically. Issue IDs
-	// always carry a workspace-configured prefix (e.g. <prefix>-<n>), so the
-	// literal 'set' is unambiguous.
-	if len(args) > 0 && args[0] == "set" {
-		return runRankSet(ctx, stdout, ap, args[1:])
+// rankSetSubcommand is the one token that selects `lit rank`'s second surface.
+// rankDispatch matches it and the registry advertises it from this one name, so
+// completion cannot offer a subcommand dispatch does not honor — nor miss one it
+// does. [LAW:one-source-of-truth]
+const rankSetSubcommand = "set"
+
+// rankDispatch picks between the two surfaces registered under `rank`:
+// 'lit rank set <id1> <id2> ...' is a separate verb that establishes absolute
+// order across N issues atomically. Issue IDs always carry a
+// workspace-configured prefix (e.g. <prefix>-<n>), so the literal 'set' is
+// unambiguous. The choice reads argv only, so `lit rank set --help` renders the
+// rank-set surface with nothing open.
+func rankDispatch(args []string) (appLeaf, []string) {
+	if len(args) > 0 && args[0] == rankSetSubcommand {
+		return rankSetLeaf(), args[1:]
 	}
-	positional, flagArgs := splitArgs(args, 1)
+	return rankLeaf(), args
+}
+
+func rankLeaf() appLeaf {
 	fs := newCobraFlagSet("rank")
 	_ = fs.Bool("top", false, "Move to highest rank")
 	_ = fs.Bool("bottom", false, "Move to lowest rank")
 	above := fs.String("above", "", "Rank above this issue ID")
 	below := fs.String("below", "", "Rank below this issue ID")
-	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
-		return err
-	}
-	if len(positional) != 1 {
-		return UsageError{Message: "usage: lit rank <id> --top|--bottom|--above <id>|--below <id>"}
-	}
-	visited := map[string]bool{}
-	fs.Visit(func(flag *pflag.Flag) { visited[flag.Name] = true })
-	modeCount := 0
-	if visited["top"] {
-		modeCount++
-	}
-	if visited["bottom"] {
-		modeCount++
-	}
-	if visited["above"] {
-		modeCount++
-	}
-	if visited["below"] {
-		modeCount++
-	}
-	if modeCount != 1 {
-		return ValidationError{Message: "exactly one of --top, --bottom, --above, --below is required"}
-	}
-	issueID := positional[0]
-	// Relative ops resolve cross-frame requests to the comparable pair (a
-	// child's stand-in is its epic); the move record carries what actually
-	// happened so the substitution is reported, never silent.
-	// [LAW:no-silent-failure]
-	move := storage.RankMove{MovedID: issueID, AnchorID: issueID}
-	// edgeWord is the user's own word for the end they asked for, and it is
-	// empty for the relative verbs — which is what tells the reporting below
-	// that `end` describes a real edge move rather than an unset zero value.
-	edgeWord := ""
-	var end storage.RankEnd
-	var err error
-	switch {
-	case visited["top"]:
-		edgeWord = "top"
-		end, err = ap.Store.RankToTop(ctx, issueID)
-	case visited["bottom"]:
-		edgeWord = "bottom"
-		end, err = ap.Store.RankToBottom(ctx, issueID)
-	case visited["above"]:
-		move, err = ap.Store.RankAbove(ctx, issueID, *above)
-	case visited["below"]:
-		move, err = ap.Store.RankBelow(ctx, issueID, *below)
-	}
-	if err != nil {
-		return err
-	}
-	// Both edge outcomes read `end`, so both sit under the one discriminator
-	// that says an edge verb ran and left it meaningful. The relative verbs
-	// never assign it, and TopLevel being the zero Frame is not allowed to be
-	// what keeps their reporting correct — that coincidence is one constant's
-	// edit away from printing an empty frame at a reader.
-	// [LAW:types-are-the-program]
-	if edgeWord != "" {
-		switch {
-		// An issue already holding its frame's edge did not move. Printing the
-		// summary as though it had is the one outcome a reader cannot tell from
-		// success — the command exits 0 and shows the ticket either way.
+	return appLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		if len(positional) != 1 {
+			return UsageError{Message: "usage: lit rank <id> --top|--bottom|--above <id>|--below <id>"}
+		}
+		visited := map[string]bool{}
+		fs.Visit(func(flag *pflag.Flag) { visited[flag.Name] = true })
+		modeCount := 0
+		if visited["top"] {
+			modeCount++
+		}
+		if visited["bottom"] {
+			modeCount++
+		}
+		if visited["above"] {
+			modeCount++
+		}
+		if visited["below"] {
+			modeCount++
+		}
+		if modeCount != 1 {
+			return ValidationError{Message: "exactly one of --top, --bottom, --above, --below is required"}
+		}
+		issueID := positional[0]
+		// Relative ops resolve cross-frame requests to the comparable pair (a
+		// child's stand-in is its epic); the move record carries what actually
+		// happened so the substitution is reported, never silent.
 		// [LAW:no-silent-failure]
-		case !end.Moved:
-			if _, err := fmt.Fprintf(stdout, "%s is already at the %s of %s; nothing to rank\n", issueID, edgeWord, frameLabel(end.Frame)); err != nil {
-				return err
-			}
-			return emitBreadcrumb(stdout, "update")
-		// --top/--bottom move within the issue's own frame, so a ticket inside
-		// an epic goes to the head of that epic's children and nowhere in the
-		// queue at large. Say which frame: the reader has just watched the
-		// relative verbs explain their substitution, and an unqualified "moved
-		// to the top" reads as the top of the backlog. [LAW:no-silent-failure]
-		case end.Frame != storage.TopLevel:
-			if _, err := fmt.Fprintf(stdout, "%s is inside %s; ranked it to the %s of %s's children, leaving the rest of the queue unchanged\n", issueID, end.Frame, edgeWord, end.Frame); err != nil {
-				return err
-			}
+		move := storage.RankMove{MovedID: issueID, AnchorID: issueID}
+		// edgeWord is the user's own word for the end they asked for, and it is
+		// empty for the relative verbs — which is what tells the reporting below
+		// that `end` describes a real edge move rather than an unset zero value.
+		edgeWord := ""
+		var end storage.RankEnd
+		var err error
+		switch {
+		case visited["top"]:
+			edgeWord = "top"
+			end, err = ap.Store.RankToTop(ctx, issueID)
+		case visited["bottom"]:
+			edgeWord = "bottom"
+			end, err = ap.Store.RankToBottom(ctx, issueID)
+		case visited["above"]:
+			move, err = ap.Store.RankAbove(ctx, issueID, *above)
+		case visited["below"]:
+			move, err = ap.Store.RankBelow(ctx, issueID, *below)
 		}
-	}
-	namedAnchor := *above + *below // exactly one mode is set; empty for --top/--bottom
-	// A relative op against an issue inside an epic ranks the epic as its
-	// stand-in; report the substitution so it is never silent. [LAW:no-silent-failure]
-	if move.MovedID != issueID {
-		if _, err := fmt.Fprintf(stdout, "%s is inside %s; ranked the epic %s instead, leaving its internal order unchanged\n", issueID, move.MovedID, move.MovedID); err != nil {
+		if err != nil {
 			return err
 		}
-	}
-	if namedAnchor != "" && move.AnchorID != namedAnchor {
-		if _, err := fmt.Fprintf(stdout, "%s is inside %s; ranked relative to the epic %s instead\n", namedAnchor, move.AnchorID, move.AnchorID); err != nil {
+		// Both edge outcomes read `end`, so both sit under the one discriminator
+		// that says an edge verb ran and left it meaningful. The relative verbs
+		// never assign it, and TopLevel being the zero Frame is not allowed to be
+		// what keeps their reporting correct — that coincidence is one constant's
+		// edit away from printing an empty frame at a reader.
+		// [LAW:types-are-the-program]
+		if edgeWord != "" {
+			switch {
+			// An issue already holding its frame's edge did not move. Printing the
+			// summary as though it had is the one outcome a reader cannot tell from
+			// success — the command exits 0 and shows the ticket either way.
+			// [LAW:no-silent-failure]
+			case !end.Moved:
+				if _, err := fmt.Fprintf(stdout, "%s is already at the %s of %s; nothing to rank\n", issueID, edgeWord, frameLabel(end.Frame)); err != nil {
+					return err
+				}
+				return emitBreadcrumb(stdout, "update")
+			// --top/--bottom move within the issue's own frame, so a ticket inside
+			// an epic goes to the head of that epic's children and nowhere in the
+			// queue at large. Say which frame: the reader has just watched the
+			// relative verbs explain their substitution, and an unqualified "moved
+			// to the top" reads as the top of the backlog. [LAW:no-silent-failure]
+			case end.Frame != storage.TopLevel:
+				if _, err := fmt.Fprintf(stdout, "%s is inside %s; ranked it to the %s of %s's children, leaving the rest of the queue unchanged\n", issueID, end.Frame, edgeWord, end.Frame); err != nil {
+					return err
+				}
+			}
+		}
+		namedAnchor := *above + *below // exactly one mode is set; empty for --top/--bottom
+		// A relative op against an issue inside an epic ranks the epic as its
+		// stand-in; report the substitution so it is never silent. [LAW:no-silent-failure]
+		if move.MovedID != issueID {
+			if _, err := fmt.Fprintf(stdout, "%s is inside %s; ranked the epic %s instead, leaving its internal order unchanged\n", issueID, move.MovedID, move.MovedID); err != nil {
+				return err
+			}
+		}
+		if namedAnchor != "" && move.AnchorID != namedAnchor {
+			if _, err := fmt.Fprintf(stdout, "%s is inside %s; ranked relative to the epic %s instead\n", namedAnchor, move.AnchorID, move.AnchorID); err != nil {
+				return err
+			}
+		}
+		issue, err := ap.Store.GetIssue(ctx, move.MovedID)
+		if err != nil {
 			return err
 		}
-	}
-	issue, err := ap.Store.GetIssue(ctx, move.MovedID)
-	if err != nil {
-		return err
-	}
-	if err := printIssueSummary(stdout, issue); err != nil {
-		return err
-	}
-	return emitBreadcrumb(stdout, "update")
+		if err := printIssueSummary(stdout, issue); err != nil {
+			return err
+		}
+		return emitBreadcrumb(stdout, "update")
+	}}
 }
 
-// runRankSet establishes absolute order across N issues by stacking them at
+// rankSetLeaf establishes absolute order across N issues by stacking them at
 // the top in the given sequence: id1 becomes the topmost, id2 ranks just
 // below, etc. Atomic: the store either applies all or none. IDs inside an
 // epic resolve to the epic itself; the substitution is reported, never
 // silent. [LAW:no-silent-failure]
-func runRankSet(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	positional, flagArgs := splitArgs(args, len(args))
+func rankSetLeaf() appLeaf {
 	fs := newCobraFlagSet("rank set")
-	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
-		return err
-	}
-	if len(positional) < 2 {
-		return UsageError{Message: "usage: lit rank set <id1> <id2> [<id3> ...]"}
-	}
-	result, err := ap.Store.RankSet(ctx, positional)
-	if err != nil {
-		return err
-	}
-	ranked := make([]string, len(result.Resolutions))
-	for i, r := range result.Resolutions {
-		ranked[i] = r.RankedID
-	}
-	for _, r := range result.Resolutions {
-		if r.RankedID != r.NamedID {
-			if _, err := fmt.Fprintf(stdout, "%s is inside %s; ranked the epic %s instead, leaving its internal order unchanged\n", r.NamedID, r.RankedID, r.RankedID); err != nil {
-				return err
+	return appLeaf{fs: fs, positionals: allPositionals, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		if len(positional) < 2 {
+			return UsageError{Message: "usage: lit rank set <id1> <id2> [<id3> ...]"}
+		}
+		result, err := ap.Store.RankSet(ctx, positional)
+		if err != nil {
+			return err
+		}
+		ranked := make([]string, len(result.Resolutions))
+		for i, r := range result.Resolutions {
+			ranked[i] = r.RankedID
+		}
+		for _, r := range result.Resolutions {
+			if r.RankedID != r.NamedID {
+				if _, err := fmt.Fprintf(stdout, "%s is inside %s; ranked the epic %s instead, leaving its internal order unchanged\n", r.NamedID, r.RankedID, r.RankedID); err != nil {
+					return err
+				}
 			}
 		}
-	}
-	// Name the frame the stack landed in, for the reason the edge verbs do: this
-	// verb anchors at the top of the representatives' own frame, so an
-	// unqualified "at top" reads as the head of the backlog when the set was
-	// three children leading one epic. [LAW:no-silent-failure]
-	if _, err := fmt.Fprintf(stdout, "ranked %d issues at the top of %s in order: %s\n", len(ranked), frameLabel(result.Frame), strings.Join(ranked, ", ")); err != nil {
-		return err
-	}
-	return emitBreadcrumb(stdout, "update")
+		// Name the frame the stack landed in, for the reason the edge verbs do: this
+		// verb anchors at the top of the representatives' own frame, so an
+		// unqualified "at top" reads as the head of the backlog when the set was
+		// three children leading one epic. [LAW:no-silent-failure]
+		if _, err := fmt.Fprintf(stdout, "ranked %d issues at the top of %s in order: %s\n", len(ranked), frameLabel(result.Frame), strings.Join(ranked, ", ")); err != nil {
+			return err
+		}
+		return emitBreadcrumb(stdout, "update")
+	}}
 }
 
 // filterWorkableIssues keeps the leaves that are still work anyone might do.
@@ -1454,111 +1454,110 @@ func closeOutcomeFromFlags(resolution, target, usage string) (model.Outcome, err
 	return nil, fmt.Errorf("resolution %q has no close outcome", parsed)
 }
 
-func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []string, spec transitionSpec) error {
+func transitionLeaf(spec transitionSpec) appLeaf {
 	fs := newCobraFlagSet(spec.name)
 	reason := fs.String("reason", "", "Transition reason")
 	resolveActor := registerActor(fs)
 	buildAction := spec.registerFlags(fs)
 	authorize := spec.authorize(fs)
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	remaining := fs.cmd.Flags().Args()
-	usage := fmt.Sprintf("usage: lit %s <id> [--reason <text>]", spec.name)
-	if len(remaining) != 1 {
-		return errors.New(usage)
-	}
-
-	issueID := remaining[0]
-
-	// The pre-transition read is the state `authorize` gates on and the
-	// before-half of the workflow occasion below. It is the ROW only: the
-	// claim-transfer notice needs the issue's history too, and reads it
-	// separately after authorization, because that is the read authorization
-	// can invalidate.
-	prior, err := ap.Store.GetIssue(ctx, issueID)
-	if err != nil {
-		return err
-	}
-
-	action, err := buildAction()
-	if err != nil {
-		return err
-	}
-
-	// [LAW:single-enforcer] The one gate every transition's authorization
-	// passes through, ahead of Apply — a no-op for every transition but
-	// `start`. See transitionSpec.authorize and authorizeStart
-	// (claims_takeover.go).
-	if err := authorize(ctx, stdout, ap, issueID, prior); err != nil {
-		return err
-	}
-
-	// Composed AFTER authorize, not beside the row above: authorizing a start
-	// walks every lane and, on a fresh foreign hold, waits on the operator at a
-	// prompt with no timeout. A claimant read before that wait describes whoever
-	// held the lane when the question was asked, which is not who holds it when
-	// the answer arrives. [LAW:no-ambient-temporal-coupling] Decided here on
-	// pre-Apply state and rendered below, so a failed Apply announces nothing.
-	transfer, err := transferNotice(ctx, ap, issueID, action)
-	if err != nil {
-		return err
-	}
-
-	// [LAW:single-enforcer] The event actor resolves through the same identity
-	// rule as the assignee: the agent's session wins, else --by/$USER. History
-	// must record who actually performed the transition (claude_<session>), not
-	// the shell user, now that ownership survives close as an orthogonal field.
-	actor := resolveActor()
-	issue, err := ap.Store.Apply(ctx, issueID, storage.Change{Action: action, Actor: actor, Reason: *reason})
-	if err != nil {
-		return err
-	}
-
-	// [LAW:single-enforcer] runTransition is the one status-transition path
-	// (start/done/close/open all arrive here), so it is the one place that
-	// dispatches their events — no per-command re-derivation. Retention
-	// actions (archive/unarchive/delete/restore) are not StatusActions, so
-	// the type assertion excludes them the same way the close-adjacency
-	// block below does. Dispatch is also where any matching workflow
-	// definition's guidance is injected — `done`'s embedded default is what
-	// prints the post-close capture reminder below.
-	if statusAction, ok := action.(model.StatusAction); ok {
-		if err := workflows.Dispatch(stdout, os.Stderr, ap.Workspace, transitionOccasion(statusAction, prior, issue)); err != nil {
-			return err
+	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		remaining := fs.cmd.Flags().Args()
+		usage := fmt.Sprintf("usage: lit %s <id> [--reason <text>]", spec.name)
+		if len(remaining) != 1 {
+			return errors.New(usage)
 		}
-	}
 
-	// A hand-off is said out loud; every other transition has nothing to say and
-	// says it as the empty string, so this write always runs and only its value
-	// varies. transferNotice holds the rule. [LAW:dataflow-not-control-flow]
-	if _, err := io.WriteString(stdout, transfer); err != nil {
-		return err
-	}
+		issueID := remaining[0]
 
-	if err := printIssueSummary(stdout, issue); err != nil {
-		return err
-	}
-	// At the capture moment a closing agent's freshest need is "which adjacent
-	// tickets just became actionable or stale" — a relationship question the
-	// one-line summary above answers with nothing. Render the live neighborhood
-	// from the canonical graph, in the command already running.
-	// [LAW:one-source-of-truth] "Closes the issue" is the variant's Target fact
-	// (done and close both target Closed), not a re-enumerated action list here,
-	// so a future closing action inherits this block for free.
-	if statusAction, ok := action.(model.StatusAction); ok && statusAction.Target() == model.StateClosed {
-		detail, err := ap.Store.GetIssueDetail(ctx, issueID)
+		// The pre-transition read is the state `authorize` gates on and the
+		// before-half of the workflow occasion below. It is the ROW only: the
+		// claim-transfer notice needs the issue's history too, and reads it
+		// separately after authorization, because that is the read authorization
+		// can invalidate.
+		prior, err := ap.Store.GetIssue(ctx, issueID)
 		if err != nil {
 			return err
 		}
-		if err := printCloseAdjacency(stdout, detail); err != nil {
+
+		action, err := buildAction()
+		if err != nil {
 			return err
 		}
-	}
-	if topic, ok := transitionBreadcrumbTopics[action.Name()]; ok {
-		return emitBreadcrumb(stdout, topic)
-	}
-	return nil
+
+		// [LAW:single-enforcer] The one gate every transition's authorization
+		// passes through, ahead of Apply — a no-op for every transition but
+		// `start`. See transitionSpec.authorize and authorizeStart
+		// (claims_takeover.go).
+		if err := authorize(ctx, stdout, ap, issueID, prior); err != nil {
+			return err
+		}
+
+		// Composed AFTER authorize, not beside the row above: authorizing a start
+		// walks every lane and, on a fresh foreign hold, waits on the operator at a
+		// prompt with no timeout. A claimant read before that wait describes whoever
+		// held the lane when the question was asked, which is not who holds it when
+		// the answer arrives. [LAW:no-ambient-temporal-coupling] Decided here on
+		// pre-Apply state and rendered below, so a failed Apply announces nothing.
+		transfer, err := transferNotice(ctx, ap, issueID, action)
+		if err != nil {
+			return err
+		}
+
+		// [LAW:single-enforcer] The event actor resolves through the same identity
+		// rule as the assignee: the agent's session wins, else --by/$USER. History
+		// must record who actually performed the transition (claude_<session>), not
+		// the shell user, now that ownership survives close as an orthogonal field.
+		actor := resolveActor()
+		issue, err := ap.Store.Apply(ctx, issueID, storage.Change{Action: action, Actor: actor, Reason: *reason})
+		if err != nil {
+			return err
+		}
+
+		// [LAW:single-enforcer] runTransition is the one status-transition path
+		// (start/done/close/open all arrive here), so it is the one place that
+		// dispatches their events — no per-command re-derivation. Retention
+		// actions (archive/unarchive/delete/restore) are not StatusActions, so
+		// the type assertion excludes them the same way the close-adjacency
+		// block below does. Dispatch is also where any matching workflow
+		// definition's guidance is injected — `done`'s embedded default is what
+		// prints the post-close capture reminder below.
+		if statusAction, ok := action.(model.StatusAction); ok {
+			if err := workflows.Dispatch(stdout, os.Stderr, ap.Workspace, transitionOccasion(statusAction, prior, issue)); err != nil {
+				return err
+			}
+		}
+
+		// A hand-off is said out loud; every other transition has nothing to say and
+		// says it as the empty string, so this write always runs and only its value
+		// varies. transferNotice holds the rule. [LAW:dataflow-not-control-flow]
+		if _, err := io.WriteString(stdout, transfer); err != nil {
+			return err
+		}
+
+		if err := printIssueSummary(stdout, issue); err != nil {
+			return err
+		}
+		// At the capture moment a closing agent's freshest need is "which adjacent
+		// tickets just became actionable or stale" — a relationship question the
+		// one-line summary above answers with nothing. Render the live neighborhood
+		// from the canonical graph, in the command already running.
+		// [LAW:one-source-of-truth] "Closes the issue" is the variant's Target fact
+		// (done and close both target Closed), not a re-enumerated action list here,
+		// so a future closing action inherits this block for free.
+		if statusAction, ok := action.(model.StatusAction); ok && statusAction.Target() == model.StateClosed {
+			detail, err := ap.Store.GetIssueDetail(ctx, issueID)
+			if err != nil {
+				return err
+			}
+			if err := printCloseAdjacency(stdout, detail); err != nil {
+				return err
+			}
+		}
+		if topic, ok := transitionBreadcrumbTopics[action.Name()]; ok {
+			return emitBreadcrumb(stdout, topic)
+		}
+		return nil
+	}}
 }
 
 // assign is retired: reassigning is a single-field write, so it folds into
@@ -1570,54 +1569,50 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 var commentFamily = commandFamily[appSubcommand]{
 	usage: "usage: lit comment <add|rm> ...",
 	subcommands: []subcommandRow[appSubcommand]{
-		{name: "add", payload: appSubcommand{access: app.AccessWrite, run: runCommentAdd}},
-		{name: "rm", payload: appSubcommand{access: app.AccessWrite, run: runCommentRm}},
+		{name: "add", payload: appSubcommand{access: app.AccessWrite, declare: commentAddLeaf}},
+		{name: "rm", payload: appSubcommand{access: app.AccessWrite, declare: commentRmLeaf}},
 	},
 }
 
-func runCommentAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	positional, flagArgs := splitArgs(args, 1)
+func commentAddLeaf() appLeaf {
 	fs := newCobraFlagSet("comment add")
 	body := fs.String("body", "", "Comment body")
 	resolveActor := registerActor(fs)
-	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
-		return err
-	}
-	if len(positional) != 1 {
-		return UsageError{Message: "usage: lit comment add <id> --body <text>"}
-	}
-	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit comment add <id> --body <text>"}
-	}
-	// [LAW:single-enforcer] A comment is a recorded event; its author resolves
-	// through the same identity rule as every other actor.
-	comment, issue, err := ap.Store.AddComment(ctx, storage.AddCommentInput{IssueID: positional[0], Body: *body, CreatedBy: resolveActor()})
-	if err != nil {
-		return err
-	}
-	if err := workflows.Dispatch(stdout, os.Stderr, ap.Workspace, commentAddedOccasion(issue)); err != nil {
-		return err
-	}
-	return printComment(stdout, comment)
+	return appLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		if len(positional) != 1 {
+			return UsageError{Message: "usage: lit comment add <id> --body <text>"}
+		}
+		if fs.NArg() != 0 {
+			return UsageError{Message: "usage: lit comment add <id> --body <text>"}
+		}
+		// [LAW:single-enforcer] A comment is a recorded event; its author resolves
+		// through the same identity rule as every other actor.
+		comment, issue, err := ap.Store.AddComment(ctx, storage.AddCommentInput{IssueID: positional[0], Body: *body, CreatedBy: resolveActor()})
+		if err != nil {
+			return err
+		}
+		if err := workflows.Dispatch(stdout, os.Stderr, ap.Workspace, commentAddedOccasion(issue)); err != nil {
+			return err
+		}
+		return printComment(stdout, comment)
+	}}
 }
 
-func runCommentRm(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	positional, flagArgs := splitArgs(args, 1)
+func commentRmLeaf() appLeaf {
 	fs := newCobraFlagSet("comment rm")
-	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
-		return err
-	}
-	if len(positional) != 1 {
-		return UsageError{Message: "usage: lit comment rm <comment-id>"}
-	}
-	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit comment rm <comment-id>"}
-	}
-	comment, err := ap.Store.DeleteComment(ctx, positional[0])
-	if err != nil {
-		return err
-	}
-	return printComment(stdout, comment)
+	return appLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		if len(positional) != 1 {
+			return UsageError{Message: "usage: lit comment rm <comment-id>"}
+		}
+		if fs.NArg() != 0 {
+			return UsageError{Message: "usage: lit comment rm <comment-id>"}
+		}
+		comment, err := ap.Store.DeleteComment(ctx, positional[0])
+		if err != nil {
+			return err
+		}
+		return printComment(stdout, comment)
+	}}
 }
 
 func printComment(w io.Writer, c model.Comment) error {
@@ -1625,17 +1620,16 @@ func printComment(w io.Writer, c model.Comment) error {
 	return err
 }
 
-func runExport(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+func exportLeaf() appLeaf {
 	fs := newCobraFlagSet("export")
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	export, err := ap.Store.Export(ctx)
-	if err != nil {
-		return err
-	}
-	// Export is JSON-only — there is no text representation of a full database export.
-	return writeJSON(stdout, export)
+	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		export, err := ap.Store.Export(ctx)
+		if err != nil {
+			return err
+		}
+		// Export is JSON-only — there is no text representation of a full database export.
+		return writeJSON(stdout, export)
+	}}
 }
 
 // importUsage is shared by every usage error runImportTree can raise, so a
@@ -1648,39 +1642,38 @@ const importUsage = "usage: lit import --path <tree-spec.json | bulk-file.yaml> 
 // (runImportTreeJSON, unchanged) or a YAML bulk create/update file
 // (runImportBulk). [LAW:dataflow-not-control-flow] the format is a value —
 // the file's own extension — not a second flag or mode.
-func runImportTree(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+func importTreeLeaf() appLeaf {
 	fs := newCobraFlagSet("import")
 	path := fs.String("path", "", "Path to a JSON tree-spec file or a YAML bulk create/update file")
 	resolveActor := registerActor(fs)
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	if strings.TrimSpace(*path) == "" {
-		return UsageError{Message: importUsage}
-	}
-	if fs.NArg() != 0 {
-		return UsageError{Message: importUsage}
-	}
-	data, err := os.ReadFile(*path)
-	if err != nil {
-		return fmt.Errorf("read import spec: %w", err)
-	}
-	switch strings.ToLower(filepath.Ext(*path)) {
-	case ".yaml", ".yml":
-		return runImportBulk(ctx, stdout, ap, data, resolveActor(), fs.Changed("by"))
-	default:
-		// --by only has a consumer on the YAML update path (it attributes each
-		// update's field-change event); the JSON tree spec always attributes
-		// creates to "links", same as it did before --by existed on this
-		// command. Rejecting a set-but-unused --by here, rather than silently
-		// discarding it, keeps a JSON import with --by behaving the way it did
-		// before this command grew the flag: an error, not a quiet no-op.
-		// [LAW:no-silent-failure]
-		if fs.Changed("by") {
-			return UsageError{Message: "usage: --by only applies to a YAML bulk-update file (--path *.yaml|*.yml); JSON tree-spec import always attributes creates to \"links\""}
+	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		if strings.TrimSpace(*path) == "" {
+			return UsageError{Message: importUsage}
 		}
-		return runImportTreeJSON(ctx, stdout, ap, data)
-	}
+		if fs.NArg() != 0 {
+			return UsageError{Message: importUsage}
+		}
+		data, err := os.ReadFile(*path)
+		if err != nil {
+			return fmt.Errorf("read import spec: %w", err)
+		}
+		switch strings.ToLower(filepath.Ext(*path)) {
+		case ".yaml", ".yml":
+			return runImportBulk(ctx, stdout, ap, data, resolveActor(), fs.Changed("by"))
+		default:
+			// --by only has a consumer on the YAML update path (it attributes each
+			// update's field-change event); the JSON tree spec always attributes
+			// creates to "links", same as it did before --by existed on this
+			// command. Rejecting a set-but-unused --by here, rather than silently
+			// discarding it, keeps a JSON import with --by behaving the way it did
+			// before this command grew the flag: an error, not a quiet no-op.
+			// [LAW:no-silent-failure]
+			if fs.Changed("by") {
+				return UsageError{Message: "usage: --by only applies to a YAML bulk-update file (--path *.yaml|*.yml); JSON tree-spec import always attributes creates to \"links\""}
+			}
+			return runImportTreeJSON(ctx, stdout, ap, data)
+		}
+	}}
 }
 
 // runImportTreeJSON consumes a JSON tree spec and creates issues in
@@ -1785,29 +1778,28 @@ func bulkSpecsHaveUpdate(specs []storage.BulkIssueSpec) bool {
 	return false
 }
 
-func runWorkspace(stdout io.Writer, ws workspace.Info, args []string) error {
+func workspaceLeaf() wsLeaf {
 	fs := newCobraFlagSet("workspace")
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	// [LAW:one-source-of-truth] The ordered slice is the single source of the
-	// output's field order; each line is `key: value`, parseable by an agent
-	// that needs one field (e.g. `lit workspace | sed -n 's/^traces_dir: //p'`).
-	fields := []struct{ key, value string }{
-		{"workspace_id", ws.WorkspaceID},
-		{"issue_prefix", ws.IssuePrefix.Value()},
-		{"git_common_dir", ws.GitCommonDir},
-		{"storage_dir", ws.StorageDir},
-		{"database_path", ws.DatabasePath},
-		{"dolt_repo_path", ws.DoltRepoPath},
-		{"traces_dir", automationTraceDir(ws)},
-	}
-	for _, f := range fields {
-		if _, err := fmt.Fprintf(stdout, "%s: %s\n", f.key, f.value); err != nil {
-			return err
+	return wsLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+		// [LAW:one-source-of-truth] The ordered slice is the single source of the
+		// output's field order; each line is `key: value`, parseable by an agent
+		// that needs one field (e.g. `lit workspace | sed -n 's/^traces_dir: //p'`).
+		fields := []struct{ key, value string }{
+			{"workspace_id", ws.WorkspaceID},
+			{"issue_prefix", ws.IssuePrefix.Value()},
+			{"git_common_dir", ws.GitCommonDir},
+			{"storage_dir", ws.StorageDir},
+			{"database_path", ws.DatabasePath},
+			{"dolt_repo_path", ws.DoltRepoPath},
+			{"traces_dir", automationTraceDir(ws)},
 		}
-	}
-	return nil
+		for _, f := range fields {
+			if _, err := fmt.Fprintf(stdout, "%s: %s\n", f.key, f.value); err != nil {
+				return err
+			}
+		}
+		return nil
+	}}
 }
 
 // completionFamily is the single source of the supported shells: its rows both
@@ -1827,88 +1819,96 @@ var completionFamily = commandFamily[string]{
 }
 
 func runCompletion(stdout io.Writer, args []string) error {
-	if len(args) != 1 {
-		return errors.New(completionFamily.usage)
-	}
 	shell, err := completionFamily.resolve(args)
 	if err != nil {
 		return err
+	}
+	// The shell name is the whole surface — a completion script takes no flags —
+	// but the surface still has to be PARSED, because that parse is what answers
+	// `lit completion bash --help`. The former arity test ahead of resolve read
+	// the help flag as a second subcommand and refused it with the family usage.
+	// [LAW:single-enforcer] every advertised leaf answers help through the one
+	// parse, this one included.
+	fs := newCobraFlagSet("completion " + shell)
+	if err := parseFlagSet(fs, args[1:], stdout); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return UsageError{Message: completionFamily.usage}
 	}
 	_, err = io.WriteString(stdout, completionRenderer(shell)())
 	return err
 }
 
-func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
-	_ = ctx
+func quickstartLeaf() wsLeaf {
 	fs := newCobraFlagSet("quickstart")
 	refresh := fs.Bool("refresh", false, "Refresh managed repo assets and report quickstart override status (never overwrites overrides)")
 	eject := fs.StringOptional("eject", "all", "", "Eject embedded default(s) to the global override path (comma-separated short names; empty = all)")
 	force := fs.Bool("force", false, "With --eject, overwrite existing override files")
-	if err := parseFlagSet(fs, args, stdout); err != nil {
+	return wsLeaf{fs: fs, positionals: 0, work: func(_ context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+		if fs.NArg() > 1 {
+			return UsageError{Message: quickstartUsage}
+		}
+		ejectChanged := fs.Changed("eject")
+		ejectValue := *eject
+		if ejectChanged && ejectValue == "" {
+			ejectValue = "all"
+		}
+		if ejectChanged && *refresh {
+			return UsageError{Message: "usage: --refresh and --eject are mutually exclusive"}
+		}
+		if *force && !ejectChanged {
+			return UsageError{Message: "usage: --force is only valid with --eject"}
+		}
+
+		if fs.NArg() == 1 {
+			// [LAW:dataflow-not-control-flow] Topic dispatch is a value lookup; every topic shares one render path.
+			if *refresh || ejectChanged || *force {
+				return UsageError{Message: "usage: lit quickstart <topic> takes no flags"}
+			}
+			templateName, ok := quickstartTopicTemplate(fs.Arg(0))
+			if !ok {
+				return UsageError{Message: fmt.Sprintf("usage: unknown quickstart topic %q (must be one of: %s)", fs.Arg(0), strings.Join(quickstartTopicTokens(), ", "))}
+			}
+			guidance, err := renderQuickstartTopic(ws.RootDir, templateName)
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintln(stdout, guidance)
+			return err
+		}
+
+		if ejectChanged {
+			results, err := ejectTemplates(ejectValue, *force)
+			if err != nil {
+				return err
+			}
+			return writeEjectReport(stdout, results, *force)
+		}
+
+		// [LAW:one-source-of-truth] Quickstart guidance is loaded from the managed quickstart template instead of being re-encoded in CLI data structures.
+		guidance, err := renderQuickstartGuidance(ws.RootDir)
+		if err != nil {
+			return err
+		}
+
+		lines := []string{}
+		if *refresh {
+			// [LAW:single-enforcer] Quickstart refresh resolves the workspace once and delegates all file rewrites to the managed asset writers.
+			ws, err := workspace.Resolve(".")
+			if err != nil {
+				return err
+			}
+			refreshReport, err := refreshQuickstartManagedAssets(ws)
+			if err != nil {
+				return err
+			}
+			lines = append(lines, formatQuickstartRefreshSummary(refreshReport), "")
+		}
+		lines = append(lines, guidance)
+		_, err = fmt.Fprintln(stdout, strings.Join(lines, "\n"))
 		return err
-	}
-	if fs.NArg() > 1 {
-		return UsageError{Message: quickstartUsage}
-	}
-	ejectChanged := fs.Changed("eject")
-	ejectValue := *eject
-	if ejectChanged && ejectValue == "" {
-		ejectValue = "all"
-	}
-	if ejectChanged && *refresh {
-		return UsageError{Message: "usage: --refresh and --eject are mutually exclusive"}
-	}
-	if *force && !ejectChanged {
-		return UsageError{Message: "usage: --force is only valid with --eject"}
-	}
-
-	if fs.NArg() == 1 {
-		// [LAW:dataflow-not-control-flow] Topic dispatch is a value lookup; every topic shares one render path.
-		if *refresh || ejectChanged || *force {
-			return UsageError{Message: "usage: lit quickstart <topic> takes no flags"}
-		}
-		templateName, ok := quickstartTopicTemplate(fs.Arg(0))
-		if !ok {
-			return UsageError{Message: fmt.Sprintf("usage: unknown quickstart topic %q (must be one of: %s)", fs.Arg(0), strings.Join(quickstartTopicTokens(), ", "))}
-		}
-		guidance, err := renderQuickstartTopic(ws.RootDir, templateName)
-		if err != nil {
-			return err
-		}
-		_, err = fmt.Fprintln(stdout, guidance)
-		return err
-	}
-
-	if ejectChanged {
-		results, err := ejectTemplates(ejectValue, *force)
-		if err != nil {
-			return err
-		}
-		return writeEjectReport(stdout, results, *force)
-	}
-
-	// [LAW:one-source-of-truth] Quickstart guidance is loaded from the managed quickstart template instead of being re-encoded in CLI data structures.
-	guidance, err := renderQuickstartGuidance(ws.RootDir)
-	if err != nil {
-		return err
-	}
-
-	lines := []string{}
-	if *refresh {
-		// [LAW:single-enforcer] Quickstart refresh resolves the workspace once and delegates all file rewrites to the managed asset writers.
-		ws, err := workspace.Resolve(".")
-		if err != nil {
-			return err
-		}
-		refreshReport, err := refreshQuickstartManagedAssets(ws)
-		if err != nil {
-			return err
-		}
-		lines = append(lines, formatQuickstartRefreshSummary(refreshReport), "")
-	}
-	lines = append(lines, guidance)
-	_, err = fmt.Fprintln(stdout, strings.Join(lines, "\n"))
-	return err
+	}}
 }
 
 func writeJSON(w io.Writer, v any) error {

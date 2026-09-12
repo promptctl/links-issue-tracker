@@ -160,7 +160,7 @@ func mirrorEnv() []string {
 	)
 }
 
-// runBackgroundMirror is the detached worker. It runs as its own process after
+// backgroundMirrorLeaf is the detached worker. It runs as its own process after
 // the spawning command has returned, so it establishes the engine-release
 // invariant first (wait-for-parent), then runs single-flight push cycles until
 // no mirror-pending claim remains. [LAW:no-ambient-temporal-coupling]
@@ -175,116 +175,114 @@ func mirrorEnv() []string {
 // Losing therefore never strands a claim, and the loser still exits without
 // opening a store, writing a trace, or creating a file — the quiescence
 // property test cleanups rely on.
-func runBackgroundMirror(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
+func backgroundMirrorLeaf() wsLeaf {
 	fs := newCobraFlagSet("sync " + backgroundMirrorSubcommand)
 	parentPID := fs.Int("parent-pid", 0, "PID of the spawning command; the mirror waits for it to exit")
-	if err := parseFlagSet(fs, args, io.Discard); err != nil {
-		return err
-	}
-
-	// A live mirror IS the coverage the claim protocol counts on, and its
-	// liveness is proven by the kernel: hold the beacon shared from entry —
-	// before the parent-exit wait, so mutations claiming during that wait read
-	// this mirror as alive — until the process ends, when the kernel releases
-	// it on any death mode. A mirror that cannot take the hold must not run:
-	// its work would be invisible to every claimant's probe, so each would
-	// spawn a redundant sibling anyway. [LAW:no-ambient-temporal-coupling]
-	// stopAnswering is the idempotent release the dying paths run BEFORE their
-	// completion effects (see the helpers); a no-op until the hold exists.
-	stopAnswering := func() {}
-	releaseBeacon, beaconErr := store.HoldMirrorBeacon(ctx, ws.DatabasePath)
-	if beaconErr != nil {
-		if ctx.Err() != nil {
-			return teardownMirror(ws, ctx.Err(), stopAnswering)
-		}
-		return completeMirrorWithoutAttempt(ctx, ws, fmt.Errorf("hold mirror liveness beacon: %w", beaconErr), stopAnswering)
-	}
-	var stopOnce sync.Once
-	stopAnswering = func() {
-		stopOnce.Do(func() {
-			// A failed release matters on the stop-before-effects path: the
-			// dying mirror keeps reading as a live answerer through the
-			// completion effects (the owner-notify hook's cap included) until
-			// process exit finally drops the hold. Loud, not fatal — the
-			// kernel's on-exit release remains the backstop.
-			// [LAW:no-silent-failure]
-			if relErr := releaseBeacon(); relErr != nil {
-				fmt.Fprintf(os.Stderr, "lit: mirror beacon not released (%v); concurrent claims may read this dying mirror as live until process exit\n", relErr)
+	return wsLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+		// A live mirror IS the coverage the claim protocol counts on, and its
+		// liveness is proven by the kernel: hold the beacon shared from entry —
+		// before the parent-exit wait, so mutations claiming during that wait read
+		// this mirror as alive — until the process ends, when the kernel releases
+		// it on any death mode. A mirror that cannot take the hold must not run:
+		// its work would be invisible to every claimant's probe, so each would
+		// spawn a redundant sibling anyway. [LAW:no-ambient-temporal-coupling]
+		// stopAnswering is the idempotent release the dying paths run BEFORE their
+		// completion effects (see the helpers); a no-op until the hold exists.
+		stopAnswering := func() {}
+		releaseBeacon, beaconErr := store.HoldMirrorBeacon(ctx, ws.DatabasePath)
+		if beaconErr != nil {
+			if ctx.Err() != nil {
+				return teardownMirror(ws, ctx.Err(), stopAnswering)
 			}
-		})
-	}
-	defer stopAnswering()
+			return completeMirrorWithoutAttempt(ctx, ws, fmt.Errorf("hold mirror liveness beacon: %w", beaconErr), stopAnswering)
+		}
+		var stopOnce sync.Once
+		stopAnswering = func() {
+			stopOnce.Do(func() {
+				// A failed release matters on the stop-before-effects path: the
+				// dying mirror keeps reading as a live answerer through the
+				// completion effects (the owner-notify hook's cap included) until
+				// process exit finally drops the hold. Loud, not fatal — the
+				// kernel's on-exit release remains the backstop.
+				// [LAW:no-silent-failure]
+				if relErr := releaseBeacon(); relErr != nil {
+					fmt.Fprintf(os.Stderr, "lit: mirror beacon not released (%v); concurrent claims may read this dying mirror as live until process exit\n", relErr)
+				}
+			})
+		}
+		defer stopAnswering()
 
-	// Wait for the spawning command's embedded engine to be released. Opening
-	// a second engine on the same path while the first is live collides on
-	// Dolt's online garbage collection. If the parent outlives the timeout, the
-	// precondition is unmet — abort rather than race a live engine. A wait cut
-	// short by teardown is not that failure: it ends as a teardown, below.
-	// [LAW:no-ambient-temporal-coupling]
-	if !waitForParentExit(ctx, *parentPID, os.Getppid, mirrorParentWaitTimeout, mirrorParentPollDelay) {
-		if ctx.Err() != nil {
-			return teardownMirror(ws, ctx.Err(), stopAnswering)
+		// Wait for the spawning command's embedded engine to be released. Opening
+		// a second engine on the same path while the first is live collides on
+		// Dolt's online garbage collection. If the parent outlives the timeout, the
+		// precondition is unmet — abort rather than race a live engine. A wait cut
+		// short by teardown is not that failure: it ends as a teardown, below.
+		// [LAW:no-ambient-temporal-coupling]
+		if !waitForParentExit(ctx, *parentPID, os.Getppid, mirrorParentWaitTimeout, mirrorParentPollDelay) {
+			if ctx.Err() != nil {
+				return teardownMirror(ws, ctx.Err(), stopAnswering)
+			}
+			return completeMirrorWithoutAttempt(ctx, ws, fmt.Errorf(
+				"spawning command (pid %d) still running after %s; skipping mirror to avoid racing its engine",
+				*parentPID, mirrorParentWaitTimeout), stopAnswering)
 		}
-		return completeMirrorWithoutAttempt(ctx, ws, fmt.Errorf(
-			"spawning command (pid %d) still running after %s; skipping mirror to avoid racing its engine",
-			*parentPID, mirrorParentWaitTimeout), stopAnswering)
-	}
 
-	for {
-		// Teardown owns the loop's lifetime: once the context is done (the
-		// SIGTERM grace window), starting another engine cycle would fight the
-		// shutdown for its last seconds. [LAW:no-ambient-temporal-coupling]
-		if ctx.Err() != nil {
-			return teardownMirror(ws, ctx.Err(), stopAnswering)
+		for {
+			// Teardown owns the loop's lifetime: once the context is done (the
+			// SIGTERM grace window), starting another engine cycle would fight the
+			// shutdown for its last seconds. [LAW:no-ambient-temporal-coupling]
+			if ctx.Err() != nil {
+				return teardownMirror(ws, ctx.Err(), stopAnswering)
+			}
+			release, acquired, err := store.TryAcquireSyncPushLock(ws.DatabasePath)
+			if err != nil {
+				return completeMirrorWithoutAttempt(ctx, ws, fmt.Errorf("acquire sync-push lock: %w", err), stopAnswering)
+			}
+			if !acquired {
+				// Lost the single-flight race: the holder's post-release re-check
+				// below now owns any claim this mirror was spawned for. Exit with
+				// no store open, no trace, no file — see the function comment.
+				return nil
+			}
+			// The cycle-start instant is the re-check's ordering witness: any
+			// marker older than it existed before this cycle's entry-clear ran,
+			// so its survival means the clear is failing, not that a claim landed.
+			cycleStart := time.Now()
+			attempted := mirrorCycle(ctx, stdout, ws, stopAnswering)
+			// Released only after the cycle's engine has closed (mirrorCycle's
+			// deferred Close), so the lock brackets the whole session. The kernel
+			// drops the flock on process exit, so an unlock error cannot strand
+			// the lock; surfacing it would only add noise to a detached worker.
+			_ = release()
+			if !attempted {
+				// The failure was already completed through the push-outcome seam;
+				// looping again would hot-spin on the same broken precondition.
+				// Any surviving claim ages into crash recovery.
+				return nil
+			}
+			again, recheckErr := recheckMirrorPending(ws, cycleStart)
+			if recheckErr != nil {
+				// A re-check that cannot give a truthful verdict (unreadable
+				// marker, or a marker this cycle's own clear failed to remove) is
+				// terminal, loudly: cycling on it would push forever against a
+				// marker that never goes away. [LAW:no-silent-failure]
+				recordMirrorTraceError(ws, recheckErr)
+				return nil
+			}
+			if !again {
+				return nil
+			}
+			// A claim landed after this cycle began, so its claimant's commit may
+			// postdate this cycle's HEAD read (its commit preceded this cycle's
+			// open only if its command's session did — a claim alone cannot prove
+			// that). Run another cycle on a fresh engine: its open postdates the
+			// claimant's closed session, which is the proof. An extra cycle for a
+			// claim that WAS already covered is an up-to-date push — cheap, and
+			// always on the correct side. [LAW:dataflow-not-control-flow] every
+			// cycle runs the same path; only the marker decides whether another
+			// begins.
 		}
-		release, acquired, err := store.TryAcquireSyncPushLock(ws.DatabasePath)
-		if err != nil {
-			return completeMirrorWithoutAttempt(ctx, ws, fmt.Errorf("acquire sync-push lock: %w", err), stopAnswering)
-		}
-		if !acquired {
-			// Lost the single-flight race: the holder's post-release re-check
-			// below now owns any claim this mirror was spawned for. Exit with
-			// no store open, no trace, no file — see the function comment.
-			return nil
-		}
-		// The cycle-start instant is the re-check's ordering witness: any
-		// marker older than it existed before this cycle's entry-clear ran,
-		// so its survival means the clear is failing, not that a claim landed.
-		cycleStart := time.Now()
-		attempted := mirrorCycle(ctx, stdout, ws, stopAnswering)
-		// Released only after the cycle's engine has closed (mirrorCycle's
-		// deferred Close), so the lock brackets the whole session. The kernel
-		// drops the flock on process exit, so an unlock error cannot strand
-		// the lock; surfacing it would only add noise to a detached worker.
-		_ = release()
-		if !attempted {
-			// The failure was already completed through the push-outcome seam;
-			// looping again would hot-spin on the same broken precondition.
-			// Any surviving claim ages into crash recovery.
-			return nil
-		}
-		again, recheckErr := recheckMirrorPending(ws, cycleStart)
-		if recheckErr != nil {
-			// A re-check that cannot give a truthful verdict (unreadable
-			// marker, or a marker this cycle's own clear failed to remove) is
-			// terminal, loudly: cycling on it would push forever against a
-			// marker that never goes away. [LAW:no-silent-failure]
-			recordMirrorTraceError(ws, recheckErr)
-			return nil
-		}
-		if !again {
-			return nil
-		}
-		// A claim landed after this cycle began, so its claimant's commit may
-		// postdate this cycle's HEAD read (its commit preceded this cycle's
-		// open only if its command's session did — a claim alone cannot prove
-		// that). Run another cycle on a fresh engine: its open postdates the
-		// claimant's closed session, which is the proof. An extra cycle for a
-		// claim that WAS already covered is an up-to-date push — cheap, and
-		// always on the correct side. [LAW:dataflow-not-control-flow] every
-		// cycle runs the same path; only the marker decides whether another
-		// begins.
-	}
+	}}
 }
 
 // teardownMirror is the ending for a mirror dismantled by its own context (the

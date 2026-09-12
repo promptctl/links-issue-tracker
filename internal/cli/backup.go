@@ -23,48 +23,46 @@ var backupFamily = commandFamily[appSubcommand]{
 	subcommands: []subcommandRow[appSubcommand]{
 		// create only reads the store: it exports issue data and writes the
 		// snapshot file outside the database, so a write lock is unnecessary.
-		{name: "create", payload: appSubcommand{access: app.AccessRead, run: runBackupCreate}},
-		{name: "list", payload: appSubcommand{access: app.AccessRead, run: runBackupList}},
-		{name: "restore", payload: appSubcommand{access: app.AccessWrite, run: runBackupRestore}},
+		{name: "create", payload: appSubcommand{access: app.AccessRead, declare: backupCreateLeaf}},
+		{name: "list", payload: appSubcommand{access: app.AccessRead, declare: backupListLeaf}},
+		{name: "restore", payload: appSubcommand{access: app.AccessWrite, declare: backupRestoreLeaf}},
 	},
 }
 
-func runBackupCreate(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+func backupCreateLeaf() appLeaf {
 	fs := newCobraFlagSet("backup create")
 	keep := fs.Int("keep", 20, "Snapshots to keep after rotation")
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	export, err := ap.Store.Export(ctx)
-	if err != nil {
-		return err
-	}
-	snapshot, err := backup.Create(ap.Workspace.StorageDir, export)
-	if err != nil {
-		return err
-	}
-	if err := backup.Prune(ap.Workspace.StorageDir, *keep); err != nil {
-		return err
-	}
-	_, err = fmt.Fprintf(stdout, "%s %s\n", snapshot.Name, snapshot.Path)
-	return err
-}
-
-func runBackupList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	fs := newCobraFlagSet("backup list")
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	snapshots, err := backup.List(ap.Workspace.StorageDir)
-	if err != nil {
-		return err
-	}
-	for _, snapshot := range snapshots {
-		if _, err := fmt.Fprintf(stdout, "%s %d %s\n", snapshot.Name, snapshot.Size, snapshot.Path); err != nil {
+	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		export, err := ap.Store.Export(ctx)
+		if err != nil {
 			return err
 		}
-	}
-	return nil
+		snapshot, err := backup.Create(ap.Workspace.StorageDir, export)
+		if err != nil {
+			return err
+		}
+		if err := backup.Prune(ap.Workspace.StorageDir, *keep); err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(stdout, "%s %s\n", snapshot.Name, snapshot.Path)
+		return err
+	}}
+}
+
+func backupListLeaf() appLeaf {
+	fs := newCobraFlagSet("backup list")
+	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		snapshots, err := backup.List(ap.Workspace.StorageDir)
+		if err != nil {
+			return err
+		}
+		for _, snapshot := range snapshots {
+			if _, err := fmt.Fprintf(stdout, "%s %d %s\n", snapshot.Name, snapshot.Size, snapshot.Path); err != nil {
+				return err
+			}
+		}
+		return nil
+	}}
 }
 
 // restoreUsage is the one canonical restore surface. [LAW:no-mode-explosion]
@@ -100,23 +98,22 @@ func resolveRestorePath(ap *app.App, explicitPath string, latest bool) (string, 
 	return path, nil
 }
 
-func runBackupRestore(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+func backupRestoreLeaf() appLeaf {
 	fs := newCobraFlagSet("backup restore")
 	path := fs.String("path", "", "Path to an export JSON (backup snapshot or sync file)")
 	latest := fs.Bool("latest", false, "Restore latest backup snapshot")
 	force := fs.Bool("force", false, "Force restore over unsynced state")
-	if err := parseFlagSet(fs, args, stdout); err != nil {
+	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		restorePath, err := resolveRestorePath(ap, *path, *latest)
+		if err != nil {
+			return err
+		}
+		if err := restoreFromExportPath(ctx, ap, restorePath, *force); err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(stdout, "restored %s\n", restorePath)
 		return err
-	}
-	restorePath, err := resolveRestorePath(ap, *path, *latest)
-	if err != nil {
-		return err
-	}
-	if err := restoreFromExportPath(ctx, ap, restorePath, *force); err != nil {
-		return err
-	}
-	_, err = fmt.Fprintf(stdout, "restored %s\n", restorePath)
-	return err
+	}}
 }
 
 func syncBasePath(ap *app.App) string {

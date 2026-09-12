@@ -134,18 +134,16 @@ var backlogView = workableView{
 	occasion: func([]annotation.AnnotatedIssue) workflows.Occasion { return backlogOccasion() },
 }
 
-// workableRun adapts a preset to the registry's appRunFn shape.
-func workableRun(view workableView) appRunFn {
-	return func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-		return runWorkable(ctx, stdout, ap, args, view)
-	}
+// workableLeafFn binds a preset to the registry's leaf-declaration shape.
+func workableLeafFn(view workableView) appLeafFn {
+	return func() appLeaf { return workableLeaf(view) }
 }
 
-// runWorkable is the single runner behind every workable command. It declares
+// workableLeaf is the single leaf behind every workable command. It declares
 // the shared flags exactly once, marshals the workableFilter exactly once, and
 // executes the fixed pipeline parse → gather → order → keep → limit → render.
 // [LAW:single-enforcer] the flag surface and its marshaling live only here.
-func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []string, view workableView) error {
+func workableLeaf(view workableView) appLeaf {
 	fs := newCobraFlagSet(view.name)
 	assignee := fs.String("assignee", "", "Filter by assignee")
 	// [LAW:no-mode-explosion] This flag's cap is the focus label: it selects
@@ -160,93 +158,92 @@ func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	labels := optionalString(fs, view.hasFilters, "labels", "Comma-separated labels all of which must match")
 	limit := optionalInt(fs, view.hasLimit, "limit", "Limit results")
 	columnsExpr := optionalString(fs, view.hasColumns, "columns", columnsFlagUsage())
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return UsageError{Message: view.usage()}
-	}
-	statusState, err := parseWorkableStatus(*status)
-	if err != nil {
-		return err
-	}
-	issueTypeValue, err := parseWorkableType(*issueType)
-	if err != nil {
-		return err
-	}
-	// Parsed alongside the other flag boundaries, and so before the staleness
-	// warning below prints: a bad column name must not reach the caller as a
-	// rejection that already emitted output.
-	columns, err := parseColumnSelection(*columnsExpr)
-	if err != nil {
-		return err
-	}
-	// Backlog is exactly the "ordinary read command" surface links-sync-pgct.2
-	// targets: printed first, so unpushed/unfetched drift is the first thing
-	// on screen rather than a diagnostic nobody runs. (`next` — next.go —
-	// prints the same warning at the same position, independently, since it
-	// no longer runs through this pipeline.)
-	if err := printSyncStalenessWarning(ctx, stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
-		return err
-	}
-	knobs := workableKnobs{
-		assignee:  strings.TrimSpace(*assignee),
-		issueType: issueTypeValue,
-		status:    statusState,
-		labels:    splitCSV(*labels),
-		limit:     *limit,
-		columns:   columns,
-		all:       *all,
-	}
-	annotated, details, focus, err := gatherWorkableAnnotated(ctx, ap, workableFilter{
-		Assignee:  knobs.assignee,
-		IssueType: knobs.issueType,
-		Status:    knobs.status,
-		Labels:    knobs.labels,
-	})
-	if err != nil {
-		return err
-	}
-	// The scope narrows MEMBERSHIP and nothing else, which is why it runs before
-	// ordering rather than as one more sort: what is left is then in stored rank
-	// order and the preamble that says so is true again. --all resolves to the
-	// unfocused scope — the same value an unlabeled workspace produces — so one
-	// partition serves every case and nothing downstream learns the flag exists.
-	// [LAW:dataflow-not-control-flow]
-	scoped, excluded := focus.scopeFor(knobs.all).partition(annotated)
-	view.order(scoped, details, knobs)
-	kept := view.keep(scoped)
-	rows := applyLimit(kept, knobs.limit)
-	// Built AFTER the trim it reports, not beside the partition: --limit cuts
-	// rows the scope kept, so a notice constructed two lines up could only ever
-	// describe half the gap between what was gathered and what is printed — and
-	// printed "Nothing is hidden" over the other half.
-	//
-	// trimmed spans keep → limit, not scope → limit, because the sentence it
-	// feeds names --limit as the cause. keepAll is identity today, so the two
-	// spans are equal and no output changes; they stop being equal the moment a
-	// view keeps a subset, and the wider span would then report that view's own
-	// drops as a --limit trim — this ticket's defect, one narrowing further out.
-	// The endpoints say which narrowing is being measured.
-	// [LAW:one-source-of-truth]
-	notice := focusNotice{
-		scope:   focus,
-		applied: !knobs.all,
-		hidden:  len(excluded),
-		trimmed: len(kept) - len(rows),
-		escape:  "`lit " + view.name + " --all`",
-	}
-	cc, err := gatherClaimContext(ctx, stdout, ap)
-	if err != nil {
-		return err
-	}
-	// Derived unconditionally from the rows and graph data already gathered
-	// above: no extra query, and no branch deciding whether the renderer gets
-	// its data. [LAW:dataflow-not-control-flow]
-	if err := view.render(stdout, knobs.columns, rows, annotated, details, readinessColumnsFor(rows, details), cc, notice); err != nil {
-		return err
-	}
-	return workflows.Dispatch(stdout, os.Stderr, ap.Workspace, view.occasion(rows))
+	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		if fs.NArg() != 0 {
+			return UsageError{Message: view.usage()}
+		}
+		statusState, err := parseWorkableStatus(*status)
+		if err != nil {
+			return err
+		}
+		issueTypeValue, err := parseWorkableType(*issueType)
+		if err != nil {
+			return err
+		}
+		// Parsed alongside the other flag boundaries, and so before the staleness
+		// warning below prints: a bad column name must not reach the caller as a
+		// rejection that already emitted output.
+		columns, err := parseColumnSelection(*columnsExpr)
+		if err != nil {
+			return err
+		}
+		// Backlog is exactly the "ordinary read command" surface links-sync-pgct.2
+		// targets: printed first, so unpushed/unfetched drift is the first thing
+		// on screen rather than a diagnostic nobody runs. (`next` — next.go —
+		// prints the same warning at the same position, independently, since it
+		// no longer runs through this pipeline.)
+		if err := printSyncStalenessWarning(ctx, stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
+			return err
+		}
+		knobs := workableKnobs{
+			assignee:  strings.TrimSpace(*assignee),
+			issueType: issueTypeValue,
+			status:    statusState,
+			labels:    splitCSV(*labels),
+			limit:     *limit,
+			columns:   columns,
+			all:       *all,
+		}
+		annotated, details, focus, err := gatherWorkableAnnotated(ctx, ap, workableFilter{
+			Assignee:  knobs.assignee,
+			IssueType: knobs.issueType,
+			Status:    knobs.status,
+			Labels:    knobs.labels,
+		})
+		if err != nil {
+			return err
+		}
+		// The scope narrows MEMBERSHIP and nothing else, which is why it runs before
+		// ordering rather than as one more sort: what is left is then in stored rank
+		// order and the preamble that says so is true again. --all resolves to the
+		// unfocused scope — the same value an unlabeled workspace produces — so one
+		// partition serves every case and nothing downstream learns the flag exists.
+		// [LAW:dataflow-not-control-flow]
+		scoped, excluded := focus.scopeFor(knobs.all).partition(annotated)
+		view.order(scoped, details, knobs)
+		kept := view.keep(scoped)
+		rows := applyLimit(kept, knobs.limit)
+		// Built AFTER the trim it reports, not beside the partition: --limit cuts
+		// rows the scope kept, so a notice constructed two lines up could only ever
+		// describe half the gap between what was gathered and what is printed — and
+		// printed "Nothing is hidden" over the other half.
+		//
+		// trimmed spans keep → limit, not scope → limit, because the sentence it
+		// feeds names --limit as the cause. keepAll is identity today, so the two
+		// spans are equal and no output changes; they stop being equal the moment a
+		// view keeps a subset, and the wider span would then report that view's own
+		// drops as a --limit trim — this ticket's defect, one narrowing further out.
+		// The endpoints say which narrowing is being measured.
+		// [LAW:one-source-of-truth]
+		notice := focusNotice{
+			scope:   focus,
+			applied: !knobs.all,
+			hidden:  len(excluded),
+			trimmed: len(kept) - len(rows),
+			escape:  "`lit " + view.name + " --all`",
+		}
+		cc, err := gatherClaimContext(ctx, stdout, ap)
+		if err != nil {
+			return err
+		}
+		// Derived unconditionally from the rows and graph data already gathered
+		// above: no extra query, and no branch deciding whether the renderer gets
+		// its data. [LAW:dataflow-not-control-flow]
+		if err := view.render(stdout, knobs.columns, rows, annotated, details, readinessColumnsFor(rows, details), cc, notice); err != nil {
+			return err
+		}
+		return workflows.Dispatch(stdout, os.Stderr, ap.Workspace, view.occasion(rows))
+	}}
 }
 
 // parseWorkableStatus is the strict trust boundary for --status: blank means

@@ -28,7 +28,7 @@ import (
 // [LAW:decomposition] [LAW:carrying-cost]
 const nextUsage = "usage: lit next [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--all]"
 
-func runNext(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+func nextLeaf() appLeaf {
 	fs := newCobraFlagSet("next")
 	assignee := fs.String("assignee", "", "Filter by assignee")
 	issueType := fs.String("type", "", "Filter by issue type")
@@ -38,43 +38,42 @@ func runNext(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	// route over the whole queue rather than the focused goal's path.
 	// [LAW:one-source-of-truth] one name for one idea across both surfaces.
 	all := fs.Bool("all", false, "Ignore the focus scope and route over the whole queue")
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return UsageError{Message: nextUsage}
-	}
-	statusState, err := parseWorkableStatus(*status)
-	if err != nil {
-		return err
-	}
-	issueTypeValue, err := parseWorkableType(*issueType)
-	if err != nil {
-		return err
-	}
-	// [LAW:single-enforcer] Same staleness warning, same position, as every
-	// other ordinary read command (links-sync-pgct.2).
-	if err := printSyncStalenessWarning(ctx, stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
-		return err
-	}
-	rows, details, focus, err := gatherWorkableAnnotated(ctx, ap, workableFilter{
-		Assignee:  strings.TrimSpace(*assignee),
-		IssueType: issueTypeValue,
-		Status:    statusState,
-		Labels:    splitCSV(*labels),
-	})
-	if err != nil {
-		return err
-	}
-	cc, err := gatherClaimContext(ctx, stdout, ap)
-	if err != nil {
-		return err
-	}
-	occasion, err := renderNextOutcome(stdout, routeNext(rows, details, cc.standings, cc.self, focus.scopeFor(*all)), details, cc)
-	if err != nil {
-		return err
-	}
-	return workflows.Dispatch(stdout, os.Stderr, ap.Workspace, occasion)
+	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		if fs.NArg() != 0 {
+			return UsageError{Message: nextUsage}
+		}
+		statusState, err := parseWorkableStatus(*status)
+		if err != nil {
+			return err
+		}
+		issueTypeValue, err := parseWorkableType(*issueType)
+		if err != nil {
+			return err
+		}
+		// [LAW:single-enforcer] Same staleness warning, same position, as every
+		// other ordinary read command (links-sync-pgct.2).
+		if err := printSyncStalenessWarning(ctx, stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
+			return err
+		}
+		rows, details, focus, err := gatherWorkableAnnotated(ctx, ap, workableFilter{
+			Assignee:  strings.TrimSpace(*assignee),
+			IssueType: issueTypeValue,
+			Status:    statusState,
+			Labels:    splitCSV(*labels),
+		})
+		if err != nil {
+			return err
+		}
+		cc, err := gatherClaimContext(ctx, stdout, ap)
+		if err != nil {
+			return err
+		}
+		occasion, err := renderNextOutcome(stdout, routeNext(rows, details, cc.standings, cc.self, focus.scopeFor(*all)), details, cc)
+		if err != nil {
+			return err
+		}
+		return workflows.Dispatch(stdout, os.Stderr, ap.Workspace, occasion)
+	}}
 }
 
 // renderNextOutcome prints the row routeNext selected — or, for Exhausted

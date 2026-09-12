@@ -15,14 +15,12 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-var snapshotsFamily = commandFamily[wsRunFn]{
+var snapshotsFamily = commandFamily[wsSubcommand]{
 	usage: "usage: lit snapshots <new|list|restore> ...",
-	subcommands: []subcommandRow[wsRunFn]{
-		{name: "new", payload: runSnapshotsNew},
-		{name: "list", payload: func(_ context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
-			return runSnapshotsList(stdout, ws, args)
-		}},
-		{name: "restore", payload: runSnapshotsRestore},
+	subcommands: []subcommandRow[wsSubcommand]{
+		{name: "new", payload: wsSubcommand{declare: snapshotsNewLeaf}},
+		{name: "list", payload: wsSubcommand{declare: snapshotsListLeaf}},
+		{name: "restore", payload: wsSubcommand{declare: snapshotsRestoreLeaf}},
 	},
 }
 
@@ -78,54 +76,53 @@ func withCommitLock(ctx context.Context, ws workspace.Info, fn func() error) (er
 	return fn()
 }
 
-func runSnapshotsNew(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
+func snapshotsNewLeaf() wsLeaf {
 	fs := newCobraFlagSet("snapshots new")
 	label := fs.String("label", "", "Optional human-readable label appended to the snapshot name")
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	// [LAW:no-silent-failure] A stray positional is a misfired intent (the
-	// sibling restore takes its argument positionally, so `snapshots new
-	// nightly` is a natural typo for `--label nightly`); accepting it would
-	// mint an unlabeled snapshot the operator then can't find by the name
-	// they thought they gave it.
-	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit snapshots new [--label <text>]"}
-	}
-	cfg, err := config.Load(pathspec.New(ws.RootDir))
-	if err != nil {
-		return err
-	}
-	snap, err := takeUserSnapshot(ctx, ws, strings.TrimSpace(*label))
-	// The record prints the moment it exists — before the prune, and even
-	// beside a failure that landed after the take (a lock release, the
-	// retention prune). [FRAMING:representation] the snapshot is durable and
-	// listed from the instant Take returned; a non-zero exit that hides its
-	// name sends the operator retrying into a duplicate of a snapshot they
-	// already have.
-	if snap.Name != "" {
-		if _, printErr := fmt.Fprintf(stdout, "%s %s\n", snap.Name, snap.Path); printErr != nil {
-			err = errors.Join(err, printErr)
+	return wsLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+		// [LAW:no-silent-failure] A stray positional is a misfired intent (the
+		// sibling restore takes its argument positionally, so `snapshots new
+		// nightly` is a natural typo for `--label nightly`); accepting it would
+		// mint an unlabeled snapshot the operator then can't find by the name
+		// they thought they gave it.
+		if fs.NArg() != 0 {
+			return UsageError{Message: "usage: lit snapshots new [--label <text>]"}
 		}
-	}
-	if err != nil {
-		return err
-	}
-	// Prune runs after the workspace hold is released: it deletes only aged
-	// snapshot directories under the storage dir and never reads the Dolt
-	// directory, so a multi-gigabyte RemoveAll must not keep rotators
-	// refusing workspace-busy (their exclusive acquisition is one-attempt).
-	// The commit lock still serializes it against concurrent snapshot
-	// producers, exactly as before the copy grew its workspace hold.
-	//
-	// [LAW:single-enforcer] User-snapshot retention bounds *user* snapshots
-	// only; migration snapshots share the directory but are pruned
-	// independently by migrate() under its own budget. Without the kind
-	// filter, `lit snapshots new` could evict a recovery snapshot the
-	// migration system is depending on.
-	return withCommitLock(ctx, ws, func() error {
-		return dbsnapshot.PruneMatching(snapshotsDirFor(ws), cfg.Snapshot.RetentionBudget, isUserSnapshotName)
-	})
+		cfg, err := config.Load(pathspec.New(ws.RootDir))
+		if err != nil {
+			return err
+		}
+		snap, err := takeUserSnapshot(ctx, ws, strings.TrimSpace(*label))
+		// The record prints the moment it exists — before the prune, and even
+		// beside a failure that landed after the take (a lock release, the
+		// retention prune). [FRAMING:representation] the snapshot is durable and
+		// listed from the instant Take returned; a non-zero exit that hides its
+		// name sends the operator retrying into a duplicate of a snapshot they
+		// already have.
+		if snap.Name != "" {
+			if _, printErr := fmt.Fprintf(stdout, "%s %s\n", snap.Name, snap.Path); printErr != nil {
+				err = errors.Join(err, printErr)
+			}
+		}
+		if err != nil {
+			return err
+		}
+		// Prune runs after the workspace hold is released: it deletes only aged
+		// snapshot directories under the storage dir and never reads the Dolt
+		// directory, so a multi-gigabyte RemoveAll must not keep rotators
+		// refusing workspace-busy (their exclusive acquisition is one-attempt).
+		// The commit lock still serializes it against concurrent snapshot
+		// producers, exactly as before the copy grew its workspace hold.
+		//
+		// [LAW:single-enforcer] User-snapshot retention bounds *user* snapshots
+		// only; migration snapshots share the directory but are pruned
+		// independently by migrate() under its own budget. Without the kind
+		// filter, `lit snapshots new` could evict a recovery snapshot the
+		// migration system is depending on.
+		return withCommitLock(ctx, ws, func() error {
+			return dbsnapshot.PruneMatching(snapshotsDirFor(ws), cfg.Snapshot.RetentionBudget, isUserSnapshotName)
+		})
+	}}
 }
 
 // takeUserSnapshot brackets the Dolt-directory copy in exactly the holds the
@@ -196,86 +193,83 @@ func takeUserSnapshot(ctx context.Context, ws workspace.Info, label string) (sna
 	return snap, err
 }
 
-func runSnapshotsList(stdout io.Writer, ws workspace.Info, args []string) error {
+func snapshotsListLeaf() wsLeaf {
 	fs := newCobraFlagSet("snapshots list")
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	snapshots, err := dbsnapshot.List(snapshotsDirFor(ws))
-	if err != nil {
-		return err
-	}
-	for _, snap := range snapshots {
-		if _, err := fmt.Fprintf(stdout, "%s %s %s\n", snap.Name, snap.Created.Format("2006-01-02T15:04:05Z"), snap.Path); err != nil {
+	return wsLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+		snapshots, err := dbsnapshot.List(snapshotsDirFor(ws))
+		if err != nil {
 			return err
 		}
-	}
-	return nil
+		for _, snap := range snapshots {
+			if _, err := fmt.Fprintf(stdout, "%s %s %s\n", snap.Name, snap.Created.Format("2006-01-02T15:04:05Z"), snap.Path); err != nil {
+				return err
+			}
+		}
+		return nil
+	}}
 }
 
-func runSnapshotsRestore(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) (err error) {
-	positional, flagArgs := splitArgs(args, 1)
+func snapshotsRestoreLeaf() wsLeaf {
 	fs := newCobraFlagSet("snapshots restore")
-	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
+	return wsLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+		if len(positional) != 1 || fs.NArg() != 0 {
+			return UsageError{Message: "usage: lit snapshots restore <name>"}
+		}
+		name := strings.TrimSpace(positional[0])
+		if name == "" {
+			return UsageError{Message: "usage: lit snapshots restore <name>"}
+		}
+		// [LAW:single-enforcer] Exclusive workspace lock owns reader-vs-restore
+		// exclusion; commit lock (held inside withCommitLock below) owns
+		// writer-vs-restore exclusion. Both held while the Dolt directory is
+		// rotated so no Store — open or about to open — can observe the rename.
+		releaseWorkspace, err := store.LockWorkspaceExclusive(ctx, ws.DatabasePath)
+		if err != nil {
+			// An open boundary like takeUserSnapshot's: stamp holder contention
+			// for Run's dispatch trace.
+			return markEngineOpenContention(err, ws)
+		}
+		// [LAW:no-silent-failure] A release failure is rare but real (e.g.
+		// EBADF on a torn FD) and signals workspace-lock state the operator
+		// needs to know about; surface it via the named return rather than
+		// discarding. errors.Join keeps both observable — a release failure
+		// matters whether or not the restore itself succeeded, because either
+		// way it can leave the workspace stuck busy for subsequent commands.
+		defer func() {
+			if relErr := releaseWorkspace(); relErr != nil {
+				err = errors.Join(err, relErr)
+			}
+		}()
+		var rotated string
+		restored := false
+		err = withCommitLock(ctx, ws, func() error {
+			// rotated is captured even when Restore then fails: a non-empty path
+			// beside an error means the pre-restore directory was already moved
+			// aside (Restore's install step failed after its rotation step), and
+			// that path is the operator's only pointer to their displaced data.
+			r, restoreErr := dbsnapshot.Restore(ws.DatabasePath, snapshotsDirFor(ws), name)
+			rotated = r
+			restored = restoreErr == nil
+			return restoreErr
+		})
+		if !restored && rotated != "" {
+			err = fmt.Errorf("the pre-restore database directory was moved aside to %s before this failure and holds the workspace's data: %w", rotated, err)
+		}
+		// The record prints the moment the restore is durable, even beside a
+		// failure that lands after it (the workspace release joined in the defer
+		// above). [FRAMING:representation] the snapshot was consumed and the old
+		// directory moved the instant Restore returned; an error exit that hides
+		// the record sends the operator retrying a name that now reports missing,
+		// with no pointer to the rotated-aside pre-restore directory.
+		if restored {
+			line := fmt.Sprintf("restored %s\n", name)
+			if rotated != "" {
+				line = fmt.Sprintf("restored %s rotated_to=%s\n", name, rotated)
+			}
+			if _, printErr := fmt.Fprint(stdout, line); printErr != nil {
+				err = errors.Join(err, printErr)
+			}
+		}
 		return err
-	}
-	if len(positional) != 1 || fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit snapshots restore <name>"}
-	}
-	name := strings.TrimSpace(positional[0])
-	if name == "" {
-		return UsageError{Message: "usage: lit snapshots restore <name>"}
-	}
-	// [LAW:single-enforcer] Exclusive workspace lock owns reader-vs-restore
-	// exclusion; commit lock (held inside withCommitLock below) owns
-	// writer-vs-restore exclusion. Both held while the Dolt directory is
-	// rotated so no Store — open or about to open — can observe the rename.
-	releaseWorkspace, err := store.LockWorkspaceExclusive(ctx, ws.DatabasePath)
-	if err != nil {
-		// An open boundary like takeUserSnapshot's: stamp holder contention
-		// for Run's dispatch trace.
-		return markEngineOpenContention(err, ws)
-	}
-	// [LAW:no-silent-failure] A release failure is rare but real (e.g.
-	// EBADF on a torn FD) and signals workspace-lock state the operator
-	// needs to know about; surface it via the named return rather than
-	// discarding. errors.Join keeps both observable — a release failure
-	// matters whether or not the restore itself succeeded, because either
-	// way it can leave the workspace stuck busy for subsequent commands.
-	defer func() {
-		if relErr := releaseWorkspace(); relErr != nil {
-			err = errors.Join(err, relErr)
-		}
-	}()
-	var rotated string
-	restored := false
-	err = withCommitLock(ctx, ws, func() error {
-		// rotated is captured even when Restore then fails: a non-empty path
-		// beside an error means the pre-restore directory was already moved
-		// aside (Restore's install step failed after its rotation step), and
-		// that path is the operator's only pointer to their displaced data.
-		r, restoreErr := dbsnapshot.Restore(ws.DatabasePath, snapshotsDirFor(ws), name)
-		rotated = r
-		restored = restoreErr == nil
-		return restoreErr
-	})
-	if !restored && rotated != "" {
-		err = fmt.Errorf("the pre-restore database directory was moved aside to %s before this failure and holds the workspace's data: %w", rotated, err)
-	}
-	// The record prints the moment the restore is durable, even beside a
-	// failure that lands after it (the workspace release joined in the defer
-	// above). [FRAMING:representation] the snapshot was consumed and the old
-	// directory moved the instant Restore returned; an error exit that hides
-	// the record sends the operator retrying a name that now reports missing,
-	// with no pointer to the rotated-aside pre-restore directory.
-	if restored {
-		line := fmt.Sprintf("restored %s\n", name)
-		if rotated != "" {
-			line = fmt.Sprintf("restored %s rotated_to=%s\n", name, rotated)
-		}
-		if _, printErr := fmt.Fprint(stdout, line); printErr != nil {
-			err = errors.Join(err, printErr)
-		}
-	}
-	return err
+	}}
 }

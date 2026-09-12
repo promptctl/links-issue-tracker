@@ -4,11 +4,20 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
+	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 	"github.com/spf13/cobra"
 )
+
+// allPositionals lets every non-flag token reach a leaf's positionals, for the
+// leaves whose argument list has no fixed arity (`rank set` takes a whole id
+// sequence). splitArgs treats the count as a ceiling, so this admits any number
+// rather than demanding one. [LAW:types-are-the-program] the unbounded arity is
+// stated in the leaf's own declaration, not left for the body to re-derive.
+const allPositionals = math.MaxInt
 
 // CommandSpec is the data form of a CLI subcommand. The 28-call hand registration
 // in newRootCommand was [LAW:dataflow-not-control-flow] variability encoded in
@@ -195,26 +204,85 @@ func nestUnder(subs []SubcommandSpec, name string, children []SubcommandSpec) []
 }
 
 // appSubcommand is the row payload for app-mode families: the access the
-// subcommand needs and the handler that runs once the app is open in that
+// subcommand needs and the leaf that runs once the app is open in that
 // mode. One row answers legality, access, and dispatch together, so the
 // three can never disagree. [LAW:one-source-of-truth]
 type appSubcommand struct {
-	access app.AccessMode
-	run    appRunFn
-	// skipApp runs the handler WITHOUT opening a workspace. A retired subcommand
-	// answers with its documented pointer, which must be reachable from anywhere —
-	// like the top-level retirements — not gated behind a cwd-workspace open that
-	// fails outside a git repo. When set, familyCmd calls run with a nil app.
-	// [LAW:dataflow-not-control-flow] "does this subcommand need an app" is data on
-	// the row, not a branch on the subcommand name.
-	skipApp bool
+	access  app.AccessMode
+	declare appLeafFn
+	// retired, when non-nil, is the answer a withdrawn subcommand gives every
+	// invocation. A retirement pointer must be reachable from anywhere — like
+	// the top-level retirements — so a row carrying one dispatches to the
+	// pointer and never to a leaf, ahead of any flag parse or workspace open.
+	// [LAW:dataflow-not-control-flow] retirement is data on the row, not a
+	// handler that happens to ignore its app. The whole answer is carried, not
+	// just its guidance half: the invoked path the message names is the family's
+	// name joined to the row's, which resolve's argv cannot supply — args[0] is
+	// the bare subcommand token, so an error built from it would tell a caller
+	// who typed `lit bulk import` that "import" was retired.
+	retired *RetiredCommandError
 }
 
-// appRunFn is the canonical signature for app-mode handlers.
-type appRunFn func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error
+// retiredSubcommand builds the whole row for a subcommand retired from a
+// family's surface, mirroring retiredSpec at the top level: the path the error
+// names is this call's own two arguments joined, and the row is hidden so the
+// family's advertised surface — usage, help, completion — no longer lists it.
+// [LAW:single-enforcer] one authoring path for a subcommand retirement, so a
+// row cannot state the pointer without also leaving the surface.
+func retiredSubcommand(family, name, replacement string) subcommandRow[appSubcommand] {
+	return subcommandRow[appSubcommand]{
+		name:   name,
+		hidden: true,
+		payload: appSubcommand{retired: &RetiredCommandError{
+			Command:     family + " " + name,
+			Replacement: replacement,
+		}},
+	}
+}
 
-// wsRunFn is the canonical signature for workspace-mode handlers.
-type wsRunFn func(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error
+// leaf is a leaf command's two phases, split at the line acquisition must not
+// cross. fs and positionals are the DECLARATION — the flag surface, plus how
+// many leading argv tokens are the command's own positionals rather than flag
+// values — and work is everything that needs the acquired resource R. Building
+// this value opens nothing, which is precisely what lets the pipeline below
+// render help, or reject a bad flag, with no workspace, store, or app.
+//
+// [LAW:decomposition] The two phases used to be fused inside each handler body:
+// the handler declared its flags and parsed them, so the only way to reach the
+// flag surface was to run the handler, and the only way to run the handler was
+// through an acquisition help never needed (links-cli-1lxr).
+// [LAW:one-type-per-behavior] app-mode and workspace-mode leaves differ only in
+// which resource their work takes, so they are one type over R, not two.
+type leaf[R any] struct {
+	fs          *cobraFlagSet
+	positionals int
+	work        func(ctx context.Context, stdout io.Writer, res R, positional []string) error
+}
+
+// The two resources a leaf's work can need. A declaration function returns one
+// of these; the pipeline holds it only after declaring, and calls its work only
+// after acquiring. [LAW:types-are-the-program] the ordering the handlers used to
+// carry as a convention is now the only order these types can be used in.
+type (
+	appLeaf   = leaf[*app.App]
+	wsLeaf    = leaf[workspace.Info]
+	appLeafFn = func() appLeaf
+	wsLeafFn  = func() wsLeaf
+)
+
+// parseLeaf runs the whole pre-acquisition phase: split argv into the leaf's
+// positionals and its flag tokens, then parse. A help request is answered right
+// here — by the same parse every leaf already used — and comes back as
+// errHelpHandled, which Run maps to exit 0, so every caller below returns before
+// acquiring anything. [LAW:single-enforcer] one parse path for every leaf, at
+// the one altitude that precedes acquisition.
+func parseLeaf[R any](l leaf[R], args []string, stdout io.Writer) ([]string, error) {
+	positional, flagArgs := splitArgs(args, l.positionals)
+	if err := parseFlagSet(l.fs, flagArgs, stdout); err != nil {
+		return nil, err
+	}
+	return positional, nil
+}
 
 // commandRegistrar carries the entrypoint context shared by every spec's Run
 // closure. Building specs through these methods absorbs the per-call variance
@@ -225,69 +293,144 @@ type commandRegistrar struct {
 	stderr io.Writer
 }
 
-func (r *commandRegistrar) appCmd(access app.AccessMode, fn appRunFn) CommandRunner {
-	return r.appCmdDynamic(func([]string) app.AccessMode { return access }, fn)
+func (r *commandRegistrar) appCmd(access app.AccessMode, declare appLeafFn) CommandRunner {
+	return r.appCmdDynamic(func([]string) app.AccessMode { return access }, declare)
 }
 
-func (r *commandRegistrar) appCmdDynamic(resolve func([]string) app.AccessMode, fn appRunFn) CommandRunner {
+func (r *commandRegistrar) appCmdDynamic(resolve func([]string) app.AccessMode, declare appLeafFn) CommandRunner {
+	return r.appCmdPipeline(resolve, func(args []string) (appLeaf, []string) { return declare(), args })
+}
+
+// appCmdDispatch is appCmd for a command whose flag surface depends on a leading
+// subcommand token — `lit rank <id> --top` and `lit rank set <id>...` are two
+// surfaces under one name. The token picks a leaf VALUE from argv alone, with
+// nothing open, so either surface answers help before acquisition.
+// [LAW:dataflow-not-control-flow] the token selects a value; it does not fork
+// the pipeline.
+func (r *commandRegistrar) appCmdDispatch(access app.AccessMode, dispatch func(args []string) (appLeaf, []string)) CommandRunner {
+	return r.appCmdPipeline(func([]string) app.AccessMode { return access }, dispatch)
+}
+
+// appCmdPipeline seals the declare→parse→open→work ordering for every app-mode
+// leaf; the three entrypoints above are specializations that differ only in how
+// the access mode and the leaf are chosen. Declaration and parse precede the
+// open, so a help request — and a malformed flag, equally a question the
+// workspace has no part in — is answered without one.
+// [LAW:no-ambient-temporal-coupling] the ordering has one owner here instead of
+// being whatever order each handler body happened to write it in.
+// [LAW:single-enforcer] one pipeline, so no entrypoint can acquire earlier than
+// another.
+func (r *commandRegistrar) appCmdPipeline(resolve func([]string) app.AccessMode, dispatch func(args []string) (appLeaf, []string)) CommandRunner {
 	return func(args []string) error {
+		l, rest := dispatch(args)
+		positional, err := parseLeaf(l, rest, r.stdout)
+		if err != nil {
+			return err
+		}
 		return runWithApp(r.ctx, r.stdout, resolve(args), func(commandCtx context.Context, ap *app.App) error {
-			return fn(commandCtx, r.stdout, ap, args)
+			return l.work(commandCtx, r.stdout, ap, positional)
 		})
 	}
 }
 
-// familyCmd seals the resolve→open→dispatch pipeline for an app-mode
-// subcommand family: the table yields the row (or rejects the path), the app
-// opens in the row's access mode, and the row's handler runs on the remaining
-// arguments. Callers compose nothing; the ordering lives here.
+// familyCmd seals the same pipeline for an app-mode subcommand family: the
+// table yields the row (or rejects the path), the row's leaf declares and
+// parses, and only then does the app open in the row's access mode.
 func (r *commandRegistrar) familyCmd(f commandFamily[appSubcommand]) CommandRunner {
 	return func(args []string) error {
 		sub, err := f.resolve(args)
 		if err != nil {
 			return err
 		}
-		// A no-app subcommand (a retirement pointer) runs before any workspace
-		// open, so its message reaches the caller even outside a git repo — the
-		// break is reachable, never masked by a workspace error. [LAW:no-silent-failure]
-		if sub.skipApp {
-			return sub.run(r.ctx, r.stdout, nil, args[1:])
+		// A retired subcommand answers before any parse or workspace open, so its
+		// pointer reaches the caller even outside a git repo — the break is
+		// reachable, never masked by a workspace error. [LAW:no-silent-failure]
+		if sub.retired != nil {
+			return *sub.retired
+		}
+		l := sub.declare()
+		positional, err := parseLeaf(l, args[1:], r.stdout)
+		if err != nil {
+			return err
 		}
 		return runWithApp(r.ctx, r.stdout, sub.access, func(commandCtx context.Context, ap *app.App) error {
-			return sub.run(commandCtx, r.stdout, ap, args[1:])
+			return l.work(commandCtx, r.stdout, ap, positional)
 		})
 	}
 }
 
-// wsFamilyCmd is familyCmd for workspace-mode families: resolve rejects bad
-// paths before the workspace resolves, then the row's handler runs on the
-// remaining arguments. [LAW:no-ambient-temporal-coupling] Usage failures must
-// surface even outside a git repository, so resolution precedes workspace
-// lookup here rather than relying on caller ordering.
-func (r *commandRegistrar) wsFamilyCmd(f commandFamily[wsRunFn]) CommandRunner {
+// wsSubcommand is one workspace-family row: either the leaf that serves it, or a
+// nested family that resolves one more argv token first. A nested family may
+// also name the leaf for its BARE path — `lit sync reconcile` with no
+// subcommand is the reconcile action itself, not a usage error.
+// [LAW:types-are-the-program] Go has no sum type to say "leaf xor family", so
+// resolveWsLeaf reads nested first and this table is the only author of either.
+type wsSubcommand struct {
+	declare wsLeafFn
+	nested  *commandFamily[wsSubcommand]
+	bare    wsLeafFn
+}
+
+// resolveWsLeaf walks a workspace family — to any depth — down to the leaf the
+// argv names, returning it with the argv left for that leaf to parse. The whole
+// walk is table lookups and pure declarations, so a help request nested two
+// families deep (`lit sync reconcile take --help`) is still resolved, declared,
+// and answered with no workspace, sync store, or app open. [LAW:one-way-deps]
+// resolution flows strictly downward through the tables; no level reaches back
+// for a resource to decide the next.
+func resolveWsLeaf(f commandFamily[wsSubcommand], args []string) (wsLeaf, []string, error) {
+	sub, err := f.resolve(args)
+	if err != nil {
+		return wsLeaf{}, nil, err
+	}
+	rest := args[1:]
+	if sub.nested == nil {
+		return sub.declare(), rest, nil
+	}
+	// A bare path is the nested family's default action, selected by the absence
+	// of a subcommand name rather than by a flag. [LAW:dataflow-not-control-flow]
+	if sub.bare != nil && (len(rest) == 0 || strings.HasPrefix(rest[0], "-")) {
+		return sub.bare(), rest, nil
+	}
+	return resolveWsLeaf(*sub.nested, rest)
+}
+
+// wsCmdPipeline is appCmdPipeline's workspace-mode twin: it seals the
+// dispatch→parse→resolve-workspace→work ordering for every workspace command,
+// and the entrypoints below differ only in how argv chooses the leaf.
+// [LAW:no-ambient-temporal-coupling] Usage failures and help must surface even
+// outside a git repository, so dispatch and parse precede the workspace lookup
+// here rather than relying on each caller to order them.
+// [LAW:single-enforcer] one pipeline, so no entrypoint can acquire earlier than
+// another.
+func (r *commandRegistrar) wsCmdPipeline(dispatch func(args []string) (wsLeaf, []string, error)) CommandRunner {
 	return func(args []string) error {
-		run, err := f.resolve(args)
+		l, rest, err := dispatch(args)
+		if err != nil {
+			return err
+		}
+		positional, err := parseLeaf(l, rest, r.stdout)
 		if err != nil {
 			return err
 		}
 		return runWithWorkspace(func(ws workspace.Info) error {
-			return run(r.ctx, r.stdout, ws, args[1:])
+			return l.work(r.ctx, r.stdout, ws, positional)
 		})
 	}
 }
 
-func (r *commandRegistrar) wsCmd(fn wsRunFn) CommandRunner {
-	return func(args []string) error {
-		return runWithWorkspace(func(ws workspace.Info) error {
-			return fn(r.ctx, r.stdout, ws, args)
-		})
-	}
+// wsFamilyCmd is familyCmd for workspace-mode families: the family table
+// rejects bad paths, and the leaf it yields declares the surface help answers.
+func (r *commandRegistrar) wsFamilyCmd(f commandFamily[wsSubcommand]) CommandRunner {
+	return r.wsCmdPipeline(func(args []string) (wsLeaf, []string, error) { return resolveWsLeaf(f, args) })
+}
+
+func (r *commandRegistrar) wsCmd(declare wsLeafFn) CommandRunner {
+	return r.wsCmdPipeline(func(args []string) (wsLeaf, []string, error) { return declare(), args, nil })
 }
 
 func (r *commandRegistrar) transitionCmd(spec transitionSpec) CommandRunner {
-	return r.appCmd(app.AccessWrite, func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-		return runTransition(ctx, stdout, ap, args, spec)
-	})
+	return r.appCmd(app.AccessWrite, func() appLeaf { return transitionLeaf(spec) })
 }
 
 // commandSpecs returns the full registry. New commands are added here as a
@@ -313,11 +456,11 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 
 	return []CommandSpec{
 		{Name: "init", Summary: "Initialize links", Long: humanBootstrapHelp, GroupID: "bootstrap",
-			Run: r.wsCmd(runInit)},
+			Run: r.wsCmd(initLeaf)},
 		{Name: "quickstart", Summary: "Agent quickstart workflow", GroupID: "guidance",
-			Run: r.wsCmd(runQuickstart)},
+			Run: r.wsCmd(quickstartLeaf)},
 		{Name: "workflows", Summary: "See the work lifecycle and the guidance active at each point (`workflows show <id>` resolved, `edit <id-or-point>` to customize, `dry-run` to explain a hypothetical)", GroupID: "guidance",
-			Run: r.wsCmd(runWorkflows), Subcommands: []SubcommandSpec{{Name: "show"}, {Name: "edit"}, {Name: "dry-run"}}},
+			Run: r.wsCmdPipeline(workflowsDispatch), Subcommands: workflowsFamily.visibleSubcommands()},
 		{Name: "completion", Summary: "Generate shell completion script", GroupID: "guidance",
 			Run: completionRun, Subcommands: completionFamily.visibleSubcommands()},
 		{Name: "version", Summary: "Print binary version, build metadata, and supported schema range", GroupID: "guidance",
@@ -327,21 +470,21 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		{Name: "sync", Summary: "Mirror Dolt data through git remotes", GroupID: "data",
 			Run: r.wsFamilyCmd(syncFamily), Subcommands: syncSubcommands},
 		{Name: "new", Summary: "Create an issue", GroupID: "operations",
-			Run: r.appCmd(app.AccessWrite, runNew)},
+			Run: r.appCmd(app.AccessWrite, newLeaf)},
 		{Name: "followup", Summary: "File a follow-up issue parented to a just-closed ticket", GroupID: "operations",
-			Run: r.appCmd(app.AccessWrite, runFollowup)},
+			Run: r.appCmd(app.AccessWrite, followupLeaf)},
 		// ready and queue are retired: next (one leaf) and backlog (the ranked
 		// queue, blocked inline) are the only named workable views. Kept as hidden,
 		// dispatchable specs so an old invocation gets the documented pointer, not
 		// cobra's bare unknown-command error. [LAW:no-silent-failure]
 		retiredSpec("ready", "operations", "use `lit backlog` or `lit next`", workableRetirementGuidance),
 		{Name: "backlog", Summary: "List the workable backlog in priority/rank order (blocked items inline)", GroupID: "operations",
-			Run: r.appCmd(app.AccessRead, workableRun(backlogView))},
+			Run: r.appCmd(app.AccessRead, workableLeafFn(backlogView))},
 		retiredSpec("queue", "operations", "use `lit backlog` or `lit next`", workableRetirementGuidance),
 		{Name: "next", Summary: "Print the next workable leaf to lit start", GroupID: "operations",
-			Run: r.appCmd(app.AccessRead, runNext)},
+			Run: r.appCmd(app.AccessRead, nextLeaf)},
 		{Name: "orphaned", Summary: "List in_progress issues with no recent updates", GroupID: "operations",
-			Run: r.appCmd(app.AccessRead, runOrphaned)},
+			Run: r.appCmd(app.AccessRead, orphanedLeaf)},
 		// ls is a raw runner (not appCmd) because `--at <store-dir>` points it at a
 		// foreign store by path and must work outside the current workspace; the
 		// standard appCmd wrapper would open the cwd store before the handler runs.
@@ -349,13 +492,13 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		{Name: "ls", Summary: "List issues (rank by default; --at <store-dir> lists a discovered store read-only)", GroupID: "operations",
 			Run: func(args []string) error { return runList(ctx, stdout, args) }},
 		{Name: "show", Summary: "Show issue details", GroupID: "operations",
-			Run: r.appCmd(app.AccessRead, runShow)},
+			Run: r.appCmd(app.AccessRead, showLeaf)},
 		{Name: "history", Summary: "Show an issue's state-transition history", GroupID: "operations",
-			Run: r.appCmd(app.AccessRead, runHistory)},
+			Run: r.appCmd(app.AccessRead, historyLeaf)},
 		{Name: "update", Summary: "Update issue fields", GroupID: "operations",
-			Run: r.appCmd(app.AccessWrite, runUpdate)},
+			Run: r.appCmd(app.AccessWrite, updateLeaf)},
 		{Name: "rank", Summary: "Reorder an issue's rank", GroupID: "operations",
-			Run: r.appCmd(app.AccessWrite, runRank)},
+			Run: r.appCmdDispatch(app.AccessWrite, rankDispatch), Subcommands: []SubcommandSpec{{Name: rankSetSubcommand}}},
 		{Name: "start", Summary: "Claim issue work", GroupID: "operations",
 			Run: r.transitionCmd(startSpec)},
 		// assign is retired: reassigning is a single-field write folded into
@@ -386,7 +529,7 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		{Name: "parent", Summary: "Manage parent relationships", GroupID: "structure",
 			Run: r.familyCmd(parentFamily), Subcommands: parentFamily.visibleSubcommands()},
 		{Name: "children", Summary: "List child issues by rank", GroupID: "structure",
-			Run: r.appCmd(app.AccessRead, runChildren)},
+			Run: r.appCmd(app.AccessRead, childrenLeaf)},
 		{Name: "dep", Summary: "Manage dependency edges", GroupID: "structure",
 			Run: r.familyCmd(depFamily), Subcommands: depFamily.visibleSubcommands()},
 		// export/backup/snapshots are three snapshot-shaped names over two distinct
@@ -394,13 +537,11 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		// JSON data-export family (export → backup) from the Dolt filesystem/database
 		// snapshots (snapshots). The mechanisms are deliberately NOT merged.
 		{Name: "export", Summary: "Write the backlog out as a portable JSON tree (the data-export primitive; `import`'s inverse)", GroupID: "data",
-			Run: r.appCmd(app.AccessRead, runExport)},
+			Run: r.appCmd(app.AccessRead, exportLeaf)},
 		{Name: "import", Summary: "Bulk-create/update issues from a file (the one bulk-ingest home): a JSON tree spec, or a YAML file for create-or-update by id selector", GroupID: "data",
-			Run: r.appCmd(app.AccessWrite, runImportTree)},
+			Run: r.appCmd(app.AccessWrite, importTreeLeaf)},
 		{Name: "workspace", Summary: "Show workspace metadata", GroupID: "maintenance",
-			Run: r.wsCmd(func(_ context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
-				return runWorkspace(stdout, ws, args)
-			})},
+			Run: r.wsCmd(workspaceLeaf)},
 		{Name: "stores", Summary: "List discovered lit store locations under the given roots (default: current directory); --counts reports each store's ready / in-flight / blocked counts instead. Readiness is store-intrinsic; per-repo required-fields policy is not applied, so counts can differ from a project's own `lit backlog` when it configures required_fields", GroupID: "maintenance",
 			Run: func(args []string) error { return runStores(ctx, stdout, args) }},
 		// ls-at is folded into `lit ls --at <store-dir>`; overview is folded into
@@ -409,11 +550,9 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		retiredSpec("ls-at", "maintenance", "use `lit ls --at <store-dir>`", lsAtRetirementGuidance),
 		retiredSpec("overview", "maintenance", "use `lit stores --counts`", overviewRetirementGuidance),
 		{Name: "prefix", Summary: "Manage the cosmetic issue ID prefix", GroupID: "maintenance",
-			Run: r.wsCmd(func(_ context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
-				return runPrefix(stdout, ws, args)
-			})},
+			Run: r.wsFamilyCmd(prefixFamily), Subcommands: prefixFamily.visibleSubcommands()},
 		{Name: "doctor", Summary: "Health check", GroupID: "maintenance",
-			Run: r.appCmdDynamic(resolveDoctorAccessMode, runDoctor)},
+			Run: r.appCmdDynamic(resolveDoctorAccessMode, doctorLeaf)},
 		{Name: "backup", Summary: "Rotating JSON data-export backups — create/list/restore (wraps `export`; the data-recovery family, distinct from `snapshots`)", GroupID: "data",
 			Run: r.familyCmd(backupFamily), Subcommands: backupFamily.visibleSubcommands()},
 		{Name: "snapshots", Summary: "Dolt filesystem-level database snapshots — new/list/restore (the whole-database mechanism, distinct from JSON `backup`)", GroupID: "data",
@@ -421,9 +560,9 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		{Name: "lifeboat", Summary: "Below-the-gate data recovery: dump a workspace's raw contents at any schema version, or recover it to a clean rebuild", GroupID: "maintenance",
 			Run: r.wsFamilyCmd(lifeboatFamily), Subcommands: lifeboatFamily.visibleSubcommands()},
 		{Name: "downgrade", Summary: "Reverse schema migrations and atomically install a prior lit binary", GroupID: "maintenance",
-			Run: r.appCmd(app.AccessWrite, runDowngrade)},
+			Run: r.appCmd(app.AccessWrite, downgradeLeaf)},
 		{Name: "upgrade", Summary: "Atomically install a newer lit binary to operate a workspace whose schema is ahead of this one", GroupID: "maintenance",
-			Run: r.wsCmd(runUpgrade)},
+			Run: r.wsCmd(upgradeLeaf)},
 		{Name: "bulk", Summary: "Bulk issue operations", GroupID: "operations",
 			Run: r.familyCmd(bulkFamily), Subcommands: bulkSubcommands},
 	}

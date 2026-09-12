@@ -13,7 +13,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-// runDowngrade composes the schema-side Downgrade boundary (internal/store)
+// downgradeLeaf composes the schema-side Downgrade boundary (internal/store)
 // and the binary-side release pipeline (internal/release) into a single
 // user-facing command.
 //
@@ -35,20 +35,36 @@ import (
 // invocation; --to is data, not a mode toggle.
 // [LAW:no-mode-explosion] One flag (--to). No --dry-run, --force, or
 // --skip-snapshot; each would have to earn its way via a concrete user need.
-func runDowngrade(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	// [LAW:parse-dont-validate] Schema migration is a capability: an engine
-	// whose data has no shape versioned apart from the data itself has nothing
-	// to downgrade. Asking here yields the migrator, which already satisfies
-	// the narrower schemaDowngrader below — so the pipeline never sees an
-	// engine that cannot revert.
-	migrator, err := storage.SchemaMigration.Of(ap.Store)
-	if err != nil {
-		return err
-	}
-	return runDowngradeWith(ctx, stdout, migrator, args, &release.HTTPResolver{}, &release.HTTPInstaller{}, currentBinaryPath)
+func downgradeLeaf() appLeaf {
+	return withSchemaMigrator(func() downgradeLeafShape {
+		return downgradeLeafWith(&release.HTTPResolver{}, &release.HTTPInstaller{}, currentBinaryPath)
+	})()
 }
 
-// schemaDowngrader is the schema-side dependency runDowngradeWith calls. The
+// withSchemaMigrator adapts a downgrade leaf to the app pipeline, asking the
+// opened store for the one verb the work needs.
+// [LAW:parse-dont-validate] Schema migration is a capability: an engine whose
+// data has no shape versioned apart from the data itself has nothing to
+// downgrade. Asking here yields the migrator, which already satisfies the
+// narrower schemaDowngrader below — so the work never sees an engine that
+// cannot revert.
+// [LAW:no-ambient-temporal-coupling] The declaration passes straight through —
+// only the WORK is wrapped, so the capability is requested after the parse that
+// a help request never gets past (links-cli-1lxr).
+func withSchemaMigrator(declare func() downgradeLeafShape) appLeafFn {
+	return func() appLeaf {
+		l := declare()
+		return appLeaf{fs: l.fs, positionals: l.positionals, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+			migrator, err := storage.SchemaMigration.Of(ap.Store)
+			if err != nil {
+				return err
+			}
+			return l.work(ctx, stdout, migrator, positional)
+		}}
+	}
+}
+
+// schemaDowngrader is the schema-side dependency downgrade's work calls. The
 // production implementation is the engine's storage.SchemaMigrator; tests
 // substitute a fake.
 //
@@ -60,67 +76,69 @@ type schemaDowngrader interface {
 	Downgrade(ctx context.Context, targetSchemaVersion int64) error
 }
 
-// runDowngradeWith is the body parameterised over the typed dependencies so
-// tests can substitute fakes. The exported runDowngrade picks the production
-// implementations: ap.Store for the schema side, HTTPResolver/HTTPInstaller
-// for the release side, and currentBinaryPath for binary-path resolution.
-func runDowngradeWith(
-	ctx context.Context,
-	stdout io.Writer,
-	store schemaDowngrader,
-	args []string,
+// downgradeLeafShape is downgrade's leaf over the one verb its work needs,
+// rather than over a whole opened app. [LAW:types-are-the-program] the narrow
+// resource is what lets a test drive the real declaration→parse→work path
+// against a fake, with no store and no app anywhere in the picture.
+type downgradeLeafShape = leaf[schemaDowngrader]
+
+// downgradeLeafWith is the leaf parameterised over the typed dependencies so
+// tests can substitute fakes. downgradeLeaf picks the production
+// implementations: the store's own migrator for the schema side,
+// HTTPResolver/HTTPInstaller for the release side, and currentBinaryPath for
+// binary-path resolution.
+func downgradeLeafWith(
 	resolver release.Resolver,
 	installer release.Installer,
 	binPathFn func() (string, error),
-) error {
+) downgradeLeafShape {
 	fs := newCobraFlagSet("downgrade")
 	to := fs.String("to", "", "Target binary version (v-prefixed git tag, e.g. v0.4.1)")
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit downgrade --to <version>"}
-	}
-	tag, err := normalizeReleaseTag(*to, "downgrade")
-	if err != nil {
-		return err
-	}
+	return downgradeLeafShape{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, store schemaDowngrader, _ []string) error {
+		if fs.NArg() != 0 {
+			return UsageError{Message: "usage: lit downgrade --to <version>"}
+		}
+		tag, err := normalizeReleaseTag(*to, "downgrade")
+		if err != nil {
+			return err
+		}
 
-	platform := release.CurrentPlatform()
-	target, err := resolver.Resolve(ctx, tag, platform)
-	if err != nil {
-		return err
-	}
+		platform := release.CurrentPlatform()
+		target, err := resolver.Resolve(ctx, tag, platform)
+		if err != nil {
+			return err
+		}
 
-	if err := store.Downgrade(ctx, target.Manifest.Schema.Max); err != nil {
-		return err
-	}
+		if err := store.Downgrade(ctx, target.Manifest.Schema.Max); err != nil {
+			return err
+		}
 
-	binPath, err := binPathFn()
-	if err != nil {
-		return fmt.Errorf("downgrade: resolve current binary: %w", err)
-	}
+		binPath, err := binPathFn()
+		if err != nil {
+			return fmt.Errorf("downgrade: resolve current binary: %w", err)
+		}
 
-	if err := installer.Install(ctx, target, binPath); err != nil {
-		// [LAW:no-silent-failure] schema is already downgraded at this point;
-		// surface the install failure with the exact recovery the operator
-		// needs (run the prior binary themselves, or restore the snapshot).
-		return fmt.Errorf(
-			"downgrade: schema reversed to v%d but installing prior binary failed: %w\n\nrecover by either:\n  - installing %s manually (download from %s), then re-running lit; or\n  - restoring the pre-downgrade snapshot via `lit snapshots list` + `lit snapshots restore <name>`",
-			target.Manifest.Schema.Max, err, tag, target.Artifact.URL,
+		if err := installer.Install(ctx, target, binPath); err != nil {
+			// [LAW:no-silent-failure] schema is already downgraded at this point;
+			// surface the install failure with the exact recovery the operator
+			// needs (run the prior binary themselves, or restore the snapshot).
+			return fmt.Errorf(
+				"downgrade: schema reversed to v%d but installing prior binary failed: %w\n\nrecover by either:\n  - installing %s manually (download from %s), then re-running lit; or\n  - restoring the pre-downgrade snapshot via `lit snapshots list` + `lit snapshots restore <name>`",
+				target.Manifest.Schema.Max, err, tag, target.Artifact.URL,
+			)
+		}
+
+		// [LAW:dataflow-not-control-flow] The post-install step is a single print.
+		// An earlier draft re-exec'd into the prior binary on Unix and printed a
+		// human re-run line on Windows, but both branches added a platform mode for
+		// no measurable benefit — the rename has already happened, the user's next
+		// shell prompt runs the prior binary.
+		_, err = fmt.Fprintf(stdout,
+			"downgraded to %s (schema v%d) installed at %s\nre-run `lit version` to confirm.\n",
+			tag, target.Manifest.Schema.Max, binPath,
 		)
-	}
-
-	// [LAW:dataflow-not-control-flow] The post-install step is a single print.
-	// An earlier draft re-exec'd into the prior binary on Unix and printed a
-	// human re-run line on Windows, but both branches added a platform mode for
-	// no measurable benefit — the rename has already happened, the user's next
-	// shell prompt runs the prior binary.
-	_, err = fmt.Fprintf(stdout,
-		"downgraded to %s (schema v%d) installed at %s\nre-run `lit version` to confirm.\n",
-		tag, target.Manifest.Schema.Max, binPath,
-	)
-	return err
+		return err
+	}}
 }
 
 // normalizeReleaseTag is the shared --to normalizer for both version-traversal

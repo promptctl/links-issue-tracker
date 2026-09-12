@@ -60,7 +60,7 @@ func (e *UpgradeTargetBehindError) Error() string {
 	)
 }
 
-// runUpgrade composes the release pipeline (internal/release) into the
+// upgradeLeaf composes the release pipeline (internal/release) into the
 // forward-direction counterpart of `lit downgrade`. Where downgrade must reverse
 // the schema itself before installing the older binary — because only the
 // current, newer binary holds those down-migrations — upgrade does NOT touch the
@@ -88,12 +88,43 @@ func (e *UpgradeTargetBehindError) Error() string {
 // workspaceSchemaReader, rather than letting the app pre-open (and dead-end) the
 // store before this code runs. It also never writes the store — the only write
 // is to the binary on disk — so read-only best-effort access is exactly right.
-func runUpgrade(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
-	current, err := version.Get()
-	if err != nil {
-		return fmt.Errorf("upgrade: read this binary's version info: %w", err)
+func upgradeLeaf() wsLeaf {
+	return withWorkspaceSchema(func() upgradeLeafShape {
+		return upgradeLeafWith(&release.HTTPResolver{}, &release.HTTPInstaller{}, currentBinaryPath)
+	})()
+}
+
+// upgradeScope is what an upgrade leaf's work runs against: the target
+// workspace's schema reader and this binary's own version info — the two facts
+// the backward-move refusal and the already-current no-op compare.
+// [LAW:types-are-the-program] the pair travels together, so no consumer can
+// hold one without the other.
+type upgradeScope struct {
+	schema  schemaReader
+	current version.Info
+}
+
+// upgradeLeafShape is upgrade's leaf over exactly those two facts rather than
+// over a resolved workspace, which is what lets a test drive the real
+// declaration→parse→work path against fakes with no Dolt workspace anywhere.
+type upgradeLeafShape = leaf[upgradeScope]
+
+// withWorkspaceSchema adapts an upgrade leaf to the workspace pipeline, binding
+// the best-effort schema reader for the resolved workspace to this binary's
+// version info. [LAW:no-ambient-temporal-coupling] Only the WORK is wrapped, so
+// the declaration — and therefore `lit upgrade --help` — precedes both
+// (links-cli-1lxr).
+func withWorkspaceSchema(declare func() upgradeLeafShape) wsLeafFn {
+	return func() wsLeaf {
+		l := declare()
+		return wsLeaf{fs: l.fs, positionals: l.positionals, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+			current, err := version.Get()
+			if err != nil {
+				return fmt.Errorf("upgrade: read this binary's version info: %w", err)
+			}
+			return l.work(ctx, stdout, upgradeScope{schema: workspaceSchemaReader{ws: ws}, current: current}, positional)
+		}}
 	}
-	return runUpgradeWith(ctx, stdout, workspaceSchemaReader{ws: ws}, args, current, &release.HTTPResolver{}, &release.HTTPInstaller{}, currentBinaryPath)
 }
 
 // upgradeResolver is upgrade's release-side dependency: tag→Target resolution
@@ -116,7 +147,7 @@ type workspaceSchema struct {
 	Openable       bool
 }
 
-// schemaReader is the schema-side dependency runUpgradeWith reads to make the
+// schemaReader is the schema-side dependency upgrade's work reads to make the
 // symmetric backward-move refusal. The production implementation is
 // workspaceSchemaReader; tests substitute a fake.
 //
@@ -208,115 +239,109 @@ func appliedVersionFromOpenErr(err error) (version int64, handled bool) {
 // [LAW:dataflow-not-control-flow] The pipeline runs the same stages every
 // invocation; the tag, its origin (pinned or defaulted), and the
 // applied/target versions are data, not mode toggles.
-func runUpgradeWith(
-	ctx context.Context,
-	stdout io.Writer,
-	schema schemaReader,
-	args []string,
-	current version.Info,
+func upgradeLeafWith(
 	resolver upgradeResolver,
 	installer release.Installer,
 	binPathFn func() (string, error),
-) error {
+) upgradeLeafShape {
 	fs := newCobraFlagSet("upgrade")
 	to := fs.String("to", "", "Target binary version (v-prefixed git tag, e.g. v0.9.0); omit to upgrade to the latest release")
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit upgrade [--to <version>]"}
-	}
-	// [LAW:parse-dont-validate] --to's default value is the latest published
-	// release. The flag set carries omitted-vs-given as typed data (Changed),
-	// so only a truly omitted flag selects the feed as the tag's source — an
-	// explicitly empty --to (a broken shell expansion, say) still fails
-	// normalizeReleaseTag's validation loudly rather than silently installing
-	// an unrequested "latest". pinned also decides whether already-current is
-	// a no-op or a reinstall.
-	pinned := fs.Changed("to")
-	var tag string
-	var err error
-	if pinned {
-		tag, err = normalizeReleaseTag(*to, "upgrade")
-	} else {
-		tag, err = resolver.LatestTag(ctx)
-	}
-	if err != nil {
-		return err
-	}
-
-	platform := release.CurrentPlatform()
-	target, err := resolver.Resolve(ctx, tag, platform)
-	if err != nil {
-		return err
-	}
-
-	// [LAW:no-silent-failure] Read the workspace schema BEFORE installing so a
-	// backward-move request is refused without having overwritten the binary.
-	// A target whose schema support ends below the workspace could not open it,
-	// so installing it would strand the user; the refusal names the right remedy
-	// (downgrade vs. a newer target) from whether this binary can open it.
-	ws, err := schema.ReadWorkspaceSchema(ctx)
-	if err != nil {
-		return fmt.Errorf("upgrade: read workspace schema version: %w", err)
-	}
-	if target.Manifest.Schema.Max < ws.AppliedVersion {
-		return &UpgradeTargetBehindError{
-			Current:           ws.AppliedVersion,
-			Target:            target.Manifest.Schema.Max,
-			Tag:               tag,
-			WorkspaceOpenable: ws.Openable,
+	return upgradeLeafShape{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope upgradeScope, _ []string) error {
+		if fs.NArg() != 0 {
+			return UsageError{Message: "usage: lit upgrade [--to <version>]"}
 		}
-	}
+		// [LAW:parse-dont-validate] --to's default value is the latest published
+		// release. The flag set carries omitted-vs-given as typed data (Changed),
+		// so only a truly omitted flag selects the feed as the tag's source — an
+		// explicitly empty --to (a broken shell expansion, say) still fails
+		// normalizeReleaseTag's validation loudly rather than silently installing
+		// an unrequested "latest". pinned also decides whether already-current is
+		// a no-op or a reinstall.
+		pinned := fs.Changed("to")
+		var tag string
+		var err error
+		if pinned {
+			tag, err = normalizeReleaseTag(*to, "upgrade")
+		} else {
+			tag, err = resolver.LatestTag(ctx)
+		}
+		if err != nil {
+			return err
+		}
 
-	// An unpinned invocation asked for "current"; a binary at or ahead of the
-	// resolved latest already satisfies it. Ordering, not equality: the feed
-	// names the most recently CREATED release, so a backport tag for an older
-	// line can be "latest" while the installed binary is newer — moving
-	// backward stays a deliberate act (--to, or lit downgrade), never the
-	// default path's doing. A pinned --to falls through and installs — the
-	// explicit tag is a command, and the reinstall path for a damaged binary.
-	// A dev build always proceeds: IsDev is the typed fact, so the guarantee
-	// does not rest on version-string comparisons. The tag must be orderable
-	// (strict semver) for the no-op to fire at all: acceptTag deliberately
-	// admits looser v-tags, and semver.Compare sorts any invalid operand
-	// below every valid one, so without IsValid an unorderable feed tag would
-	// read as "behind" and a real release would be kept-past silently —
-	// unorderable installs as asked, failing toward action. This check runs
-	// AFTER the backward-move refusal: a workspace ahead of even the latest
-	// release must be refused loudly (naming both schema ranges), never
-	// soothed with "already current".
-	if !pinned && !current.IsDev && semver.IsValid(tag) && semver.Compare("v"+current.Version, tag) >= 0 {
+		platform := release.CurrentPlatform()
+		target, err := resolver.Resolve(ctx, tag, platform)
+		if err != nil {
+			return err
+		}
+
+		// [LAW:no-silent-failure] Read the workspace schema BEFORE installing so a
+		// backward-move request is refused without having overwritten the binary.
+		// A target whose schema support ends below the workspace could not open it,
+		// so installing it would strand the user; the refusal names the right remedy
+		// (downgrade vs. a newer target) from whether this binary can open it.
+		ws, err := scope.schema.ReadWorkspaceSchema(ctx)
+		if err != nil {
+			return fmt.Errorf("upgrade: read workspace schema version: %w", err)
+		}
+		if target.Manifest.Schema.Max < ws.AppliedVersion {
+			return &UpgradeTargetBehindError{
+				Current:           ws.AppliedVersion,
+				Target:            target.Manifest.Schema.Max,
+				Tag:               tag,
+				WorkspaceOpenable: ws.Openable,
+			}
+		}
+
+		// An unpinned invocation asked for "current"; a binary at or ahead of the
+		// resolved latest already satisfies it. Ordering, not equality: the feed
+		// names the most recently CREATED release, so a backport tag for an older
+		// line can be "latest" while the installed binary is newer — moving
+		// backward stays a deliberate act (--to, or lit downgrade), never the
+		// default path's doing. A pinned --to falls through and installs — the
+		// explicit tag is a command, and the reinstall path for a damaged binary.
+		// A dev build always proceeds: IsDev is the typed fact, so the guarantee
+		// does not rest on version-string comparisons. The tag must be orderable
+		// (strict semver) for the no-op to fire at all: acceptTag deliberately
+		// admits looser v-tags, and semver.Compare sorts any invalid operand
+		// below every valid one, so without IsValid an unorderable feed tag would
+		// read as "behind" and a real release would be kept-past silently —
+		// unorderable installs as asked, failing toward action. This check runs
+		// AFTER the backward-move refusal: a workspace ahead of even the latest
+		// release must be refused loudly (naming both schema ranges), never
+		// soothed with "already current".
+		if !pinned && !scope.current.IsDev && semver.IsValid(tag) && semver.Compare("v"+scope.current.Version, tag) >= 0 {
+			_, err = fmt.Fprintf(stdout,
+				"already current: keeping v%s (latest published release is %s); nothing to install.\n",
+				scope.current.Version, tag,
+			)
+			return err
+		}
+
+		binPath, err := binPathFn()
+		if err != nil {
+			return fmt.Errorf("upgrade: resolve current binary: %w", err)
+		}
+
+		if err := installer.Install(ctx, target, binPath); err != nil {
+			// [LAW:no-silent-failure] Nothing about the workspace schema has changed
+			// yet (upgrade never touches it), so recovery is simply "install the
+			// target yourself, or stay on this binary."
+			return fmt.Errorf(
+				"upgrade: installing %s failed: %w\n\nrecover by installing %s manually (download from %s), then re-running lit",
+				tag, err, tag, target.Artifact.URL,
+			)
+		}
+
+		// [LAW:dataflow-not-control-flow] One print, every invocation. The forward
+		// migration (if the workspace trails the new registry) is the installed
+		// binary's job on its next Open — this command does not and cannot run it.
 		_, err = fmt.Fprintf(stdout,
-			"already current: keeping v%s (latest published release is %s); nothing to install.\n",
-			current.Version, tag,
+			"upgraded %s → %s (schema support through v%d) installed at %s\nthe next lit run migrates this workspace forward if it trails; re-run `lit version` to confirm.\n",
+			fromLabel(scope.current), tag, target.Manifest.Schema.Max, binPath,
 		)
 		return err
-	}
-
-	binPath, err := binPathFn()
-	if err != nil {
-		return fmt.Errorf("upgrade: resolve current binary: %w", err)
-	}
-
-	if err := installer.Install(ctx, target, binPath); err != nil {
-		// [LAW:no-silent-failure] Nothing about the workspace schema has changed
-		// yet (upgrade never touches it), so recovery is simply "install the
-		// target yourself, or stay on this binary."
-		return fmt.Errorf(
-			"upgrade: installing %s failed: %w\n\nrecover by installing %s manually (download from %s), then re-running lit",
-			tag, err, tag, target.Artifact.URL,
-		)
-	}
-
-	// [LAW:dataflow-not-control-flow] One print, every invocation. The forward
-	// migration (if the workspace trails the new registry) is the installed
-	// binary's job on its next Open — this command does not and cannot run it.
-	_, err = fmt.Fprintf(stdout,
-		"upgraded %s → %s (schema support through v%d) installed at %s\nthe next lit run migrates this workspace forward if it trails; re-run `lit version` to confirm.\n",
-		fromLabel(current), tag, target.Manifest.Schema.Max, binPath,
-	)
-	return err
+	}}
 }
 
 // fromLabel renders the running binary's identity for the from → to line: the

@@ -257,83 +257,82 @@ var doctorFixes = map[string]func(context.Context, io.Writer, storage.Repairer) 
 	},
 }
 
-func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+func doctorLeaf() appLeaf {
 	fs := newCobraFlagSet("doctor")
 	fix := fs.String("fix", "", "Apply fixes: --fix (all) or --fix rank,thingA")
 	fs.cmd.Flags().Lookup("fix").NoOptDefVal = "all"
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	// [LAW:parse-dont-validate] Repair is a capability, not a duty every engine
-	// owes: what counts as a fault is engine-specific. Doctor asks once, here,
-	// and the fixes below take the interface rather than the app, so no fix can
-	// reach an engine that has nothing to repair.
-	repairer, err := storage.Repair.Of(ap.Store)
-	if err != nil {
-		return err
-	}
-	if *fix != "" {
-		fixNames := allDoctorFixNames()
-		if *fix != "all" {
-			fixNames = splitCSV(*fix)
+	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		// [LAW:parse-dont-validate] Repair is a capability, not a duty every engine
+		// owes: what counts as a fault is engine-specific. Doctor asks once, here,
+		// and the fixes below take the interface rather than the app, so no fix can
+		// reach an engine that has nothing to repair.
+		repairer, err := storage.Repair.Of(ap.Store)
+		if err != nil {
+			return err
 		}
-		// Fix progress writes to stderr so stdout carries only the health report.
-		for _, name := range fixNames {
-			fn, ok := doctorFixes[name]
-			if !ok {
-				return fmt.Errorf("unknown fix %q; available: %s", name, strings.Join(allDoctorFixNames(), ", "))
+		if *fix != "" {
+			fixNames := allDoctorFixNames()
+			if *fix != "all" {
+				fixNames = splitCSV(*fix)
 			}
-			if err := fn(ctx, os.Stderr, repairer); err != nil {
-				return err
+			// Fix progress writes to stderr so stdout carries only the health report.
+			for _, name := range fixNames {
+				fn, ok := doctorFixes[name]
+				if !ok {
+					return fmt.Errorf("unknown fix %q; available: %s", name, strings.Join(allDoctorFixNames(), ", "))
+				}
+				if err := fn(ctx, os.Stderr, repairer); err != nil {
+					return err
+				}
 			}
 		}
-	}
-	report, err := repairer.Doctor(ctx)
-	if err != nil {
-		return err
-	}
-	// [LAW:effects-at-boundaries] Freshness resolution shells out to git
-	// (including a possible `ls-remote` against the remote), so it runs here, at
-	// the boundary, before the pure text rendering below.
-	syncReport := resolveDoctorSyncFreshness(ctx, ap.Workspace, ap.Store)
-	if err := printWorkspaceIdentity(stdout, ap.Workspace); err != nil {
-		return err
-	}
-	// [LAW:one-source-of-truth] version.Info is the only source; resolved here
-	// (not inside a pure renderer) because it is itself a boundary read.
-	if _, err := fmt.Fprintln(stdout, resolveBuildStatusNote(time.Now())); err != nil {
-		return err
-	}
-	dependencyCycle := "none"
-	if len(report.DependencyCycle) > 0 {
-		dependencyCycle = strings.Join(report.DependencyCycle, "->")
-	}
-	if _, err := fmt.Fprintf(stdout, "integrity_check=%s foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d rank_inversions=%d dependency_cycle=%s\n", report.IntegrityCheck, report.ForeignKeyIssues, report.InvalidRelatedRows, report.OrphanHistoryRows, report.RankInversions, dependencyCycle); err != nil {
-		return err
-	}
-	if err := printSyncFreshness(stdout, syncReport); err != nil {
-		return err
-	}
-	if err := printPushOutcomeHealth(stdout, ap.Workspace, time.Now(), runningBinaryVersion()); err != nil {
-		return err
-	}
-	// [LAW:single-enforcer] Corruption classification is output-format agnostic and always enforced here.
-	if len(report.Errors) > 0 {
-		return CorruptionError{Message: strings.Join(report.Errors, "; ")}
-	}
-	// A divergence that has festered past the persistence threshold surfaces the
-	// sync-failure contract on stderr and exits nonzero — the stdout freshness line
-	// above stays the routine diagnostic; this is the escalation. Corruption (a
-	// harder failure) already returned above, so it wins when both hold.
-	// Doctor can be the FIRST detector when auto-sync is disabled, so its
-	// escalation feeds the owner channel like every other surface, de-duplicated
-	// per episode (links-sync-pgct.4).
-	exitErr := doctorDivergenceExit(syncReport)
-	var syncFailure SyncFailureError
-	if errors.As(exitErr, &syncFailure) {
-		if ev, ok := ownerNotifyEventForFailure(syncFailure.Failure); ok {
-			maybeNotifyOwner(ctx, ap.Workspace, ev)
+		report, err := repairer.Doctor(ctx)
+		if err != nil {
+			return err
 		}
-	}
-	return exitErr
+		// [LAW:effects-at-boundaries] Freshness resolution shells out to git
+		// (including a possible `ls-remote` against the remote), so it runs here, at
+		// the boundary, before the pure text rendering below.
+		syncReport := resolveDoctorSyncFreshness(ctx, ap.Workspace, ap.Store)
+		if err := printWorkspaceIdentity(stdout, ap.Workspace); err != nil {
+			return err
+		}
+		// [LAW:one-source-of-truth] version.Info is the only source; resolved here
+		// (not inside a pure renderer) because it is itself a boundary read.
+		if _, err := fmt.Fprintln(stdout, resolveBuildStatusNote(time.Now())); err != nil {
+			return err
+		}
+		dependencyCycle := "none"
+		if len(report.DependencyCycle) > 0 {
+			dependencyCycle = strings.Join(report.DependencyCycle, "->")
+		}
+		if _, err := fmt.Fprintf(stdout, "integrity_check=%s foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d rank_inversions=%d dependency_cycle=%s\n", report.IntegrityCheck, report.ForeignKeyIssues, report.InvalidRelatedRows, report.OrphanHistoryRows, report.RankInversions, dependencyCycle); err != nil {
+			return err
+		}
+		if err := printSyncFreshness(stdout, syncReport); err != nil {
+			return err
+		}
+		if err := printPushOutcomeHealth(stdout, ap.Workspace, time.Now(), runningBinaryVersion()); err != nil {
+			return err
+		}
+		// [LAW:single-enforcer] Corruption classification is output-format agnostic and always enforced here.
+		if len(report.Errors) > 0 {
+			return CorruptionError{Message: strings.Join(report.Errors, "; ")}
+		}
+		// A divergence that has festered past the persistence threshold surfaces the
+		// sync-failure contract on stderr and exits nonzero — the stdout freshness line
+		// above stays the routine diagnostic; this is the escalation. Corruption (a
+		// harder failure) already returned above, so it wins when both hold.
+		// Doctor can be the FIRST detector when auto-sync is disabled, so its
+		// escalation feeds the owner channel like every other surface, de-duplicated
+		// per episode (links-sync-pgct.4).
+		exitErr := doctorDivergenceExit(syncReport)
+		var syncFailure SyncFailureError
+		if errors.As(exitErr, &syncFailure) {
+			if ev, ok := ownerNotifyEventForFailure(syncFailure.Failure); ok {
+				maybeNotifyOwner(ctx, ap.Workspace, ev)
+			}
+		}
+		return exitErr
+	}}
 }
