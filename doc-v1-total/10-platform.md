@@ -147,7 +147,7 @@ Link-time variables `Version`, `Commit`, `Date`, `Origin` are stamped by three w
 
 ### Manifest
 
-Each release publishes `release-manifest.json`: the `version.Info` fields plus an `artifacts` array of `{platform: "<goos>/<goarch>", url, sha256}` and a reserved, currently-unverified `signature` (`internal/release/manifest.go:35-61`). `is_dev` always serializes false for published manifests.
+Each release publishes `release-manifest.json`: the `version.Info` fields plus an `artifacts` array of `{platform: "<goos>/<goarch>", url, sha256}` and a reserved, currently-unverified `signature` (`internal/release/manifest.go:35-61`). `is_dev` and `from_source` both always serialize false for published manifests.
 
 ### Resolution
 

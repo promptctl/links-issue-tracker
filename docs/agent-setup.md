@@ -128,11 +128,13 @@ lit doctor [--fix]        # health check; run --fix yourself before escalating a
   nested checkout), you are silently looking at a *different* backlog. If `lit ls` shows
   tickets you don't recognize, check where you are: `lit workspace`.
 - **A stale binary lies.** If a documented `lit` subcommand prints an unrelated usage error,
-  the installed binary is older than the source. Rebuild it onto your `PATH` with
-  `just install` from the checkout. Use that rather than a bare
-  `go build -o "$(which lit)" ./cmd/lit`: only the `just` recipes stamp the build date and
-  provenance, and a binary built without them cannot tell you its own age, so `lit next`
-  and `lit backlog` lose the warning that would have caught this for you next time.
+  the installed binary is older than the source. Rebuild it onto your `PATH` from the
+  checkout with `./scripts/install.sh` — the same command section 2 uses, and what
+  `just install` runs if you have `just`. Use either rather than a bare
+  `go build -o "$(which lit)" ./cmd/lit`: both stamp the build date and provenance and a
+  bare `go build` stamps neither, and a binary built without them cannot tell you its own
+  age, so `lit next` and `lit backlog` lose the warning that would have caught this for
+  you next time.
 
 ## 7. Finishing
 

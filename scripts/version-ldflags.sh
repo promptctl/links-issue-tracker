@@ -1,17 +1,19 @@
 # shellcheck shell=bash
-# version-ldflags.sh — single source of truth for the git commit and build
-# timestamp every from-source build stamps into internal/version.{Commit,Date}.
+# version-ldflags.sh — single source of truth for the git commit, build
+# timestamp and provenance every from-source build stamps into
+# internal/version.{Commit,Date,Origin}.
 # Source it, then build with:
 #
 #     source scripts/version-ldflags.sh
 #     go build -ldflags "-X ${pkg}.Commit=$LIT_BUILD_COMMIT -X ${pkg}.Date=$LIT_BUILD_DATE -X ${pkg}.Origin=$LIT_BUILD_ORIGIN" ...
 #
-# Both values come from local commands only (git rev-parse --short HEAD, the
-# local system clock) — no network call, so a from-source build stamps
-# identically on a restricted or air-gapped machine. [LAW:one-source-of-truth] the
-# Justfile's `build` recipe and scripts/install.sh's source mode both source
-# this and nowhere else computes these two strings, so they cannot drift
-# apart the way install.sh's now-removed inline copy could have.
+# None of the three needs the network: Commit and Date come from local commands
+# (git rev-parse --short HEAD, the local system clock) and Origin is a literal,
+# so a from-source build stamps identically on a restricted or air-gapped
+# machine. [LAW:one-source-of-truth] the Justfile's `build` recipe and
+# scripts/install.sh's source mode both source this and nowhere else computes
+# these three strings, so they cannot drift apart the way install.sh's
+# now-removed inline copy could have.
 #
 # Deliberately does NOT set Version. internal/version.Version == "" is the
 # IsDev discriminator (internal/version/version.go) that

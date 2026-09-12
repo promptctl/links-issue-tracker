@@ -95,6 +95,44 @@ func TestEveryProducerStampsOrigin(t *testing.T) {
 	}
 }
 
+// TestOnlyTheJustfileOmitsVersion pins the omission the IsDev discriminator is
+// built on, and it is the half the doc comment above the var block used to
+// assert in prose and nothing checked. `just build` deliberately does not stamp
+// Version; that is what leaves internal/version.Version empty, and so IsDev
+// true, which internal/store/migration_runner.go's producer-binary-version
+// guard relies on to keep an ordinary local build from overwriting a real
+// release's downgrade stamp. The other two producers must stamp it —
+// scripts/install.sh from `git describe`, goreleaser from the tag — each
+// opting its own binary out of that guard on purpose.
+//
+// Both halves are asserted because only one of them is the interesting failure
+// today and either is fatal. An edit adding -X .../version.Version=… to the
+// build recipe would flip every `just build` binary out of dev mode; an edit
+// dropping it from install.sh would put every installed binary INTO dev mode
+// and back under a guard it is meant to be exempt from. A test that checked
+// only the omission would pass through the second one unchanged.
+func TestOnlyTheJustfileOmitsVersion(t *testing.T) {
+	t.Parallel()
+
+	// Matched in both spellings a producer could use: the recipes build the
+	// flag from a ${pkg} variable, goreleaser writes the import path out.
+	justfile := repoFile(t, "Justfile")
+	for _, form := range []string{"${pkg}.Version=", "internal/version.Version="} {
+		if strings.Contains(justfile, form) {
+			t.Errorf("the Justfile stamps %s — `just build` would stop being IsDev, and the migration runner's producer guard would treat a local build as a release", form)
+		}
+	}
+
+	for _, site := range []struct{ file, want string }{
+		{"scripts/install.sh", "${pkg}.Version="},
+		{".goreleaser.yml", "internal/version.Version="},
+	} {
+		if !strings.Contains(repoFile(t, site.file), site.want) {
+			t.Errorf("%s no longer stamps %s — the binaries it produces would read as dev builds and fall back under the downgrade guard they are meant to be exempt from", site.file, site.want)
+		}
+	}
+}
+
 // TestOnlyGoreleaserClaimsReleaseProvenance pins the asymmetry that makes the
 // default safe. Exactly one producer may say "release"; everything else — the
 // from-source entrypoints, and any build that stamps nothing at all — must land

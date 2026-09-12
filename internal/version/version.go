@@ -25,10 +25,11 @@ import (
 // the cautious reading: no Version is Info.IsDev, no Origin is Info.FromSource.
 //
 // [LAW:single-enforcer] Which producer stamps which field is checked against the
-// producers themselves by TestEveryProducerStampsOrigin, not recited here —
-// reciting it here is what went stale the first time a field was added. A plain
-// `just build` still omits Version deliberately, so it stays IsDev==true; see
-// BuildAge for why Commit/Date alone are worth stamping.
+// producers themselves, in stamp_sites_test.go, not recited here — reciting it
+// here is what went stale the first time a field was added.
+// TestEveryProducerStampsOrigin owns Origin; TestOnlyTheJustfileOmitsVersion
+// owns the deliberate omission that keeps a plain `just build` on IsDev==true.
+// See BuildAge for why Commit/Date alone are worth stamping.
 var (
 	Version string
 	Commit  string

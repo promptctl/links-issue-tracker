@@ -655,12 +655,12 @@ Three modes, one target-resolution rule (`scripts/install.sh:3-18`):
 
 ### 7.7 `scripts/version-ldflags.sh`
 
-- Must be sourced; executing it prints a message and exits **64** (`:26-29`).
+- Must be sourced; executing it prints a message and exits **64** (`:28-31`).
 - `LIT_BUILD_COMMIT="$(git rev-parse --short HEAD)"`; empty ⇒ message and `return 1`
-  (`:35-40`). `LIT_BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"` (`:41`).
+  (`:37-42`). `LIT_BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"` (`:43`).
   `LIT_BUILD_ORIGIN="source"`, the constant both from-source entrypoints stamp so
-  `internal/version.FromSource` reads true for them (`:42-47`). All three exported (`:48`).
-- Deliberately never sets `Version` (`:16-22`).
+  `internal/version.FromSource` reads true for them (`:44-49`). All three exported (`:50`).
+- Deliberately never sets `Version` (`:18-24`).
 
 ### 7.8 `scripts/cgo-env.sh`
 
