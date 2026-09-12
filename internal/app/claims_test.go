@@ -161,7 +161,7 @@ func TestDeletedCheckoutReleasesItsClaimHereAndAgesOutElsewhere(t *testing.T) {
 
 	// The second clone: a different workspace id, and checkouts of its own that
 	// have nothing to say about this workspace's evidence.
-	elsewhere := claims.NewLocalCheckouts(workspaceID+"-a-different-clone", []string{"othr23456defgh"})
+	elsewhere := claims.NewLocalCheckouts(workspaceID+"-a-different-clone", []claims.LiveCheckout{{Stream: "othr23456defgh"}})
 	remote := claims.Derive(evidence, fresh(), elsewhere).Of(lane)
 	held, ok := remote.(claims.Held)
 	if !ok {
@@ -172,18 +172,23 @@ func TestDeletedCheckoutReleasesItsClaimHereAndAgesOutElsewhere(t *testing.T) {
 	}
 }
 
-// TestStreamTokensCountsOnlyMintedIdentities states the projection's contract
-// on its own, because the enumeration's live checkouts and the live TOKENS are
-// different sets and the difference is exactly the never-mutated checkout. The
-// zero StreamID is the only one constructible from outside its package, which is
-// the case that matters here.
-func TestStreamTokensCountsOnlyMintedIdentities(t *testing.T) {
-	got := streamTokens([]workspace.Checkout{
+// TestLiveCheckoutsOfCountsOnlyMintedIdentities states the projection's
+// contract on its own, because the enumeration's live checkouts and the ones
+// the predicate reads are different sets and the difference is exactly the
+// never-mutated checkout. The zero StreamID is the only one constructible from
+// outside its package, which is the case that matters here.
+//
+// The locked tree is in the fixture to pin that a lock does not rescue a
+// checkout with no identity: it has minted no token, so it can hold no claim,
+// and there is nothing for its lock to sustain.
+func TestLiveCheckoutsOfCountsOnlyMintedIdentities(t *testing.T) {
+	got := LiveCheckoutsOf([]workspace.Checkout{
 		{Path: "/never-mutated", Branch: "main"},
 		{Path: "/also-never-mutated"},
+		{Path: "/never-mutated-but-locked", Locked: true},
 	})
 	if len(got) != 0 {
-		t.Fatalf("streamTokens() = %q, want none: a checkout that has minted no identity contributes no token", got)
+		t.Fatalf("LiveCheckoutsOf() = %+v, want none: a checkout that has minted no identity contributes nothing", got)
 	}
 }
 

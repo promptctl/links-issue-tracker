@@ -100,8 +100,15 @@ func standingOf(members []model.Issue, events []model.IssueEvent, fresh Freshnes
 	// ordinary working commentary carries a claim through a long stretch on a
 	// single ticket. Past the window the lane is available again, but it keeps
 	// its provenance: somebody was here, and whoever takes it over should know.
+	//
+	// The provenance includes what the machine can still SEE of that holder.
+	// Leg 4 already enumerated it and spent the answer on one question — is
+	// this evidence disproven — discarding the rest, so an expired clock was
+	// the only fact a reader downstream ever got. Carrying the full finding
+	// here costs nothing (the enumeration is the same one) and is what lets a
+	// stale lane distinguish a holder who left from one who is merely quiet.
 	if !fresh.Covers(tenure.LastActivity) {
-		return Stale{Tenure: tenure}
+		return Stale{Tenure: tenure, Holder: local.PresenceOf(holder)}
 	}
 	return Held{Tenure: tenure, Contested: contestants(holder, activity, establishers, fresh)}
 }

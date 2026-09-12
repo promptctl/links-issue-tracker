@@ -64,7 +64,7 @@ func deriveClaims(t *testing.T, ctx context.Context, st *Store) claims.Standings
 	}
 	return claims.Derive(evidence,
 		claims.Freshness{Now: time.Now(), Window: 24 * time.Hour},
-		claims.NewLocalCheckouts("test-workspace-id", []string{"abc23456defgh"}),
+		claims.NewLocalCheckouts("test-workspace-id", []claims.LiveCheckout{{Stream: "abc23456defgh"}}),
 	)
 }
 

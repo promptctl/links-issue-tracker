@@ -77,6 +77,23 @@ func relationOf(standing claims.Standing, self model.Attribution) laneRelation {
 		if ours(s.By) {
 			return laneOurs
 		}
+		// A locked worktree outranks the expired clock. Every other liveness
+		// signal this machine has says a tree EXISTS, which a deleted session
+		// leaves behind just as readily; `git worktree lock` is the holder
+		// speaking — a deliberate do-not-disturb nobody sets by walking away.
+		// So the hold stands, and this lane is routed around and gated exactly
+		// as a fresh one is, which is the whole of links-claims-2wk2's fix: the
+		// lane it was reported on sat locked on an open PR while `lit next`
+		// offered it as abandoned work.
+		//
+		// Presence WITHOUT a lock deliberately does not reach here. A worktree
+		// outliving its session is ordinary, so letting mere presence sustain a
+		// claim would make every abandoned-but-uncleaned tree unclaimable
+		// forever — the age-out exists precisely for that case. Presence
+		// changes what the lane is CALLED, not who may take it.
+		if s.Holder == claims.Locked {
+			return laneHeldForeign
+		}
 		return laneStaleForeign
 	default:
 		return laneUnclaimed

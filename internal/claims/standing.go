@@ -74,8 +74,25 @@ type Held struct {
 // compensation for it. Read this variant against an identity and the ambiguity
 // is gone — which is why exactly one place in the CLI does that reading, and
 // everything else consumes its verdict.
+//
+// Holder is what this machine can still see of the checkout named by Tenure.By,
+// and it is on this variant because expiry is exactly where it starts to
+// matter: a held lane routes around its holder whatever the disk says, while a
+// stale one is an offer whose terms this value sets. An expired clock says only
+// that the lane went quiet; it never said the holder left, and reporting one as
+// the other is what let a locked worktree on an open PR read as free work
+// (links-claims-2wk2).
+//
+// Gone is unreachable here, and structurally so rather than by convention: leg
+// 4 voids a proven-absent checkout's events before leg 2 looks for a holder, so
+// a holder that reaches leg 3 is one whose evidence survived that filter. A
+// lane whose only holder was gone derives Unclaimed, which is the standing that
+// carries "somebody walked away" — and it is the reason this field's absence
+// was invisible for so long: the abandoned case really did exist, just never in
+// this variant.
 type Stale struct {
 	Tenure
+	Holder Presence
 }
 
 func (Unclaimed) isStanding() {}

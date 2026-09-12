@@ -24,10 +24,17 @@ import (
 // is the same one that knows where it is. They stay on this machine — the
 // shared database admits only opaque discriminators (design-docs/work-claims.md,
 // "The privacy invariant"). Branch is empty for a detached HEAD.
+//
+// Locked is `git worktree lock`'s marker: the holder's own explicit statement
+// that this tree is not to be disturbed. It is the strongest presence evidence
+// a machine can read locally — every other signal here says a tree EXISTS,
+// while this one says somebody deliberately said so — which is why the claim
+// predicate lets it, and only it, sustain a hold past the freshness window.
 type Checkout struct {
 	Stream StreamID
 	Path   string
 	Branch string
+	Locked bool
 }
 
 // LiveCheckouts enumerates every working tree of the repository containing cwd,
@@ -106,19 +113,21 @@ func LiveCheckouts(cwd string) ([]Checkout, error) {
 		if err != nil {
 			return nil, err
 		}
-		checkouts = append(checkouts, Checkout{Stream: stream, Path: record.path, Branch: record.branch})
+		checkouts = append(checkouts, Checkout{Stream: stream, Path: record.path, Branch: record.branch, Locked: record.locked})
 	}
 	return checkouts, nil
 }
 
 // worktreeRecord is one `git worktree list --porcelain` entry reduced to what
-// bears on identity: where the working tree is, what it has checked out, and the
-// two ways git says a record has no working tree to hold a claim.
+// bears on identity: where the working tree is, what it has checked out, the
+// two ways git says a record has no working tree to hold a claim, and whether
+// its holder has locked it.
 type worktreeRecord struct {
 	path     string
 	branch   string
 	prunable bool
 	bare     bool
+	locked   bool
 }
 
 // uninhabited reports that this record describes no working tree, which is the
@@ -148,9 +157,12 @@ func (w worktreeRecord) uninhabited() bool { return w.prunable || w.bare }
 //	detached              no branch — a real state, so Branch is left empty
 //	bare                  a repository with no working tree
 //	prunable [<reason>]   git has determined the working tree is gone
-//	locked [<reason>]     deliberately ignored: git already withholds `prunable`
-//	                      from a locked record, so honoring it would be voting a
-//	                      second time on a question git has answered
+//	locked [<reason>]     read, but never as a vote on liveness: git already
+//	                      withholds `prunable` from a locked record, so letting
+//	                      it speak to uninhabited() would be voting a second
+//	                      time on a question git has answered. It is carried out
+//	                      to answer a different one — whether the holder has
+//	                      said do-not-disturb — which git answers for nobody
 //	HEAD <sha>, anything  ignored — git has grown record attributes over
 //	  else                releases (`locked` and `prunable` are both younger than
 //	                      the format), and an unrecognized one must not break an
@@ -202,6 +214,8 @@ func parseWorktreeList(output string) ([]worktreeRecord, error) {
 			current.prunable = true
 		case "bare":
 			current.bare = true
+		case "locked":
+			current.locked = true
 		}
 	}
 	if len(records) == 0 {
