@@ -341,7 +341,7 @@ Retention actions (archive/unarchive/delete/restore) are **not** `StatusAction`s
 | `internal/cli/cli.go:1026` (`runUpdate`) | `ticket_updated` | after `Store.Apply`, before summary/breadcrumb |
 | `internal/cli/cli.go:1409` (`runTransition`) | one of the four transition events | after `Store.Apply` and after `authorize`; **before** the claim-transfer notice at `internal/cli/cli.go:1417-1420`. Guarded by `action.(model.StatusAction)` (`internal/cli/cli.go:1408`) |
 | `internal/cli/cli.go:1484` (`runCommentAdd`) | `comment_added` | after `AddComment`, before `printComment` |
-| `internal/cli/next.go:73` (`runNext`) | `next_pulled` | **last** — after the claim announcement and `printNextSummary` (`internal/cli/next.go:101-110`). Only reached when a row was actually served; `Exhausted`/`NoWork` return an error before any occasion is built (`internal/cli/next.go:94-97`) |
+| `internal/cli/next.go:73` (`runNext`) | `next_pulled` | **last** — after the start advice and `printNextSummary` (`internal/cli/next.go:101-110`). Only reached when a row was actually served; `Exhausted`/`NoWork` return an error before any occasion is built (`internal/cli/next.go:94-97`) |
 | `internal/cli/workable.go:167` (`runWorkable`) | `show_backlog` | **last** — after the table render (`internal/cli/workable.go:164-167`) |
 
 `backlogView` is the only `workableView` that sets an `occasion` function

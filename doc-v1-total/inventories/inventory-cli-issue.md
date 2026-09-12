@@ -962,21 +962,21 @@ positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason 
 ### 2.11 `lit start` takeover gate
 
 `startSpec.authorize` → `authorizeStart(ctx, stdout, ap, issueID, prior, *take)`
-(`cli.go:1279-1284`, implementation `claims_takeover.go:65-87`):
+(`cli.go:1383-1388`, implementation `claims_takeover.go:132-154`):
 1. `GetRelationsByIDs([issueID])` and `model.LaneOf(prior, parent)`
-   (`claims_takeover.go:66-70`).
-2. `gatherClaimContext(ctx, stdout, ap)` (`claims_takeover.go:71-74`).
-3. `classifyTakeover(standing, self)` (`claims_takeover.go:37-51`):
+   (`claims_takeover.go:133-137`).
+2. `gatherClaimContext(ctx, stdout, ap)` (`claims_takeover.go:138-141`).
+3. `classifyTakeover(standing, self)` (`claims_takeover.go:110-119`), switching on `relationOf` rather than on the standing directly:
    - `Held` by self, `Stale` by self, or `Unclaimed` → `takeoverNone` (no-op).
-   - `Stale` by another → `takeoverStaleInformed`.
+   - `Stale` by another → `takeoverStaleInformed`, **except** when `s.Holder == claims.Locked`, which `relationOf` reports as `laneHeldForeign` (`:94`) and which therefore takes the `takeoverFreshConfirm` path below.
    - `Held` by another → `takeoverFreshConfirm`.
 4. **Stale, foreign**: prints
    `"<claim line> — check for unmerged branches or PRs on this lane before building on it\n"`
-   and proceeds (`claims_takeover.go:110-118`).
-5. **Fresh, foreign** (`confirmFreshTakeover`, `claims_takeover.go:129-152`):
+   and proceeds (`printStaleProvenance`, `claims_takeover.go:177-184`).
+5. **Fresh, foreign** (`confirmFreshTakeover`, `claims_takeover.go:195-218`):
    - Non-interactive stdout (`!isTerminal(stdout)`) and no `--take` →
      `fmt.Errorf("<claim line> — this lane is claimed and active; pass --take to confirm the takeover")`
-     → exit 1 (`claims_takeover.go:134-137`).
+     → exit 1 (`claims_takeover.go:200-202`).
    - Non-interactive with `--take` → prints `"<claim line> — taking over (--take)\n"`
      and proceeds (`claims_takeover.go:138-140`).
    - Interactive → prints `"<claim line>\ntake over this lane? [y/N] "`, reads a

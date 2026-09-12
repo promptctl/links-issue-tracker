@@ -424,28 +424,31 @@ Callers: `next` (`internal/cli/next.go:65`), `workable`/`backlog` runner (`inter
 
 ### 9.1 `lit start` — the takeover gate (the only write gate)
 
-`transitionSpec.authorize` is an optional hook that runs after the action is built and **before** `Store.Apply`, and may abort the transition by returning an error; only `start` supplies one, the other seven transitions use `noAuthorize` (`internal/cli/cli.go:1237-1250`, `:1252-1256`). Wired at `internal/cli/cli.go:1277-1283`, invoked at `internal/cli/cli.go:1381-1386`. The flag: `--take`, help string `"Confirm taking over a lane another checkout claims right now (required for non-interactive callers; an interactive terminal is prompted instead)"` (`internal/cli/cli.go:1278`).
+`transitionSpec.authorize` is an optional hook that runs after the action is built and **before** `Store.Apply`, and may abort the transition by returning an error; only `start` supplies one, the other seven transitions use `noAuthorize` (`internal/cli/cli.go:1237-1250`, `:1252-1256`). Wired at `internal/cli/cli.go:1277-1283`, invoked at `internal/cli/cli.go:1383-1388`. The flag: `--take`, help string `"Confirm taking over a lane another checkout claims right now (required for non-interactive callers; an interactive terminal is prompted instead)"` (`internal/cli/cli.go:1278`).
 
-**`classifyTakeover(standing, self) takeoverRequirement`** — pure, no I/O (`internal/cli/claims_takeover.go:38-53`):
+**`classifyTakeover(standing, self) takeoverRequirement`** — pure, no I/O (`internal/cli/claims_takeover.go:110-119`). It does not read the standing itself: it switches on `relationOf(standing, self)`, the same relation routing admits on, so the gate and the router cannot disagree about whose lane it is.
 
-| standing | condition | requirement |
-|---|---|---|
-| `Held` | `s.By == self` | `takeoverNone` |
-| `Held` | otherwise | `takeoverFreshConfirm` |
-| `Stale` | `s.By == self` | `takeoverNone` |
-| `Stale` | otherwise | `takeoverStaleInformed` |
-| `Unclaimed` (default arm) | — | `takeoverNone` |
+| standing | condition | relation | requirement |
+|---|---|---|---|
+| `Held` | `s.By == self` | `laneOurs` | `takeoverNone` |
+| `Held` | otherwise | `laneHeldForeign` | `takeoverFreshConfirm` |
+| `Stale` | `s.By == self` | `laneOurs` | `takeoverNone` |
+| `Stale` | `s.Holder == claims.Locked` | `laneHeldForeign` | `takeoverFreshConfirm` |
+| `Stale` | otherwise | `laneStaleForeign` | `takeoverStaleInformed` |
+| `Unclaimed` (default arm) | — | `laneUnclaimed` | `takeoverNone` |
+
+The `claims.Locked` row is the one a reader is likeliest to miss: an expired claim whose holder's worktree is locked is gated as a fresh hold, not waved through with a warning (`:94`).
 
 Sealed int enum: `takeoverNone`, `takeoverStaleInformed`, `takeoverFreshConfirm` (`internal/cli/claims_takeover.go:27-33`). Pinned across all five standings by `TestClassifyTakeover` (`internal/cli/claims_takeover_test.go:14-33`).
 
-**`authorizeStart(ctx, stdout, ap, issueID, prior, take)`** (`internal/cli/claims_takeover.go:66-88`):
-1. `ap.Store.GetRelationsByIDs(ctx, []string{issueID})` → `lane := model.LaneOf(prior, relations[issueID].Parent)` (`:67-71`).
-2. `gatherClaimContext` (`:72-75`).
-3. Dispatch on `classifyTakeover(cc.standings.Of(lane), cc.self)`:
-   - `takeoverNone` → `return nil`; the happy path pays one extra evidence gather and nothing else (`:77-78`, rationale `:58-61`).
-   - `takeoverStaleInformed` → `printStaleProvenance` (`:79-80`).
-   - `takeoverFreshConfirm` → `confirmFreshTakeover` (`:81-82`).
-   - default (unreachable) → `fmt.Errorf("claims: %s has no recognized takeover requirement", issueID)` (`:83-87`).
+**`authorizeStart(ctx, stdout, ap, issueID, prior, take)`** (`internal/cli/claims_takeover.go:132-154`):
+1. `ap.Store.GetRelationsByIDs(ctx, []string{issueID})` → `lane := model.LaneOf(prior, relations[issueID].Parent)` (`:133-137`).
+2. `gatherClaimContext` (`:138-141`).
+3. Dispatch on `classifyTakeover(cc.standings.Of(lane), cc.self)` (`:142`):
+   - `takeoverNone` → `return nil`; the happy path pays one extra evidence gather and nothing else (`:143-144`, rationale `:124-127`).
+   - `takeoverStaleInformed` → `printStaleProvenance` (`:145-146`).
+   - `takeoverFreshConfirm` → `confirmFreshTakeover` (`:147-148`).
+   - default (unreachable) → `fmt.Errorf("claims: %s has no recognized takeover requirement", issueID)` (`:149-152`).
 
 **`claimLineOrPanic`** reuses `formatClaimLine(cc, lane, time.Now())`; `ok == false` → error `claims: %s has a takeover requirement on %v but no claim line to show` (`internal/cli/claims_takeover.go:98-104`).
 
