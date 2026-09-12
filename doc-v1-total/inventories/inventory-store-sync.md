@@ -20,7 +20,7 @@ Repo: `/Users/bmf/code/links-issue-tracker`. Derived entirely from Go/SQL source
 8. Branch normalization: `masterRenameSource(ctx, s.db)` is read lock-free; only when it returns a non-empty source is `ensureMasterDefaultBranch` run inside `s.withCommitLock` (`sync.go:82-87`). A read-only OpenSync therefore takes no commit lock.
 9. On error in step 8: `wrapEngineOpenContention(err)`, then `s.db.Close()` whose error is joined unless it is `context.Canceled`; `s.releaseWorkspaceLock` is set to nil (`sync.go:88-95`).
 
-`engineOpenRetryMaxElapsed` is `30 * time.Second`, a package var (`/Users/bmf/code/links-issue-tracker/internal/store/store.go:2607`), assigned to `bo.MaxElapsedTime` at `store.go:2633`.
+`engineOpenRetryMaxElapsed` is `coResidentHolderWait` = 70s, a package var (`/Users/bmf/code/links-issue-tracker/internal/store/store.go:2669`), assigned to `bo.MaxElapsedTime` at `store.go:2714`. `coResidentHolderWait` is itself derived (`store.go:2564-2662`): `mirrorCycleObservedTail` 20s × `mirrorHoldStallFactor` 2 = `mirrorHoldBudget` 40s; + `mirrorCancelLagObserved` 22s = `mirrorHoldCeiling` 62s; + `coResidentWaitHeadroom` 8s = 70s.
 
 ### 1.2 Embedded-dependency version floor
 

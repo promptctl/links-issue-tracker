@@ -380,14 +380,16 @@ const (
 	// doltJournalRetryDelay/doltJournalRetryAttempts bound the wait for a
 	// co-resident engine holder — a live write Store in this or another
 	// process, which holds the journal lock for its whole lifetime — to
-	// close before the caller's exclusive hold is taken. ~30s wall-clock cap
-	// matches engineOpenRetryMaxElapsed and mirrorParentWaitTimeout's budget
-	// for "how long do we wait on a co-resident holder of this store" —
-	// long enough to outlast a real push, short enough that a genuinely
-	// wedged holder still surfaces as a clear, actionable error rather than
-	// hanging forever.
+	// close before the caller's exclusive hold is taken. The delay is this
+	// wait's polling granularity; the attempt count is not a number of its
+	// own but coResidentHolderWait (store.go) divided by it, so this wait and
+	// engineOpenRetryMaxElapsed cannot drift apart the way two hand-kept
+	// figures for one fact always eventually do. [LAW:one-source-of-truth]
+	// Long enough to outlast a legal mirror hold, short enough that a
+	// genuinely wedged holder still surfaces as a clear, actionable error
+	// rather than hanging forever.
 	doltJournalRetryDelay    = 100 * time.Millisecond
-	doltJournalRetryAttempts = 300
+	doltJournalRetryAttempts = int(coResidentHolderWait / doltJournalRetryDelay)
 )
 
 // LockDoltJournalExclusive takes an exclusive hold on Dolt's own journal lock
@@ -397,7 +399,7 @@ const (
 // flush, by one of two arms: a read open demotes to Dolt's read-only
 // fallback after its 100ms attempt (read-only is purely this lock's
 // contention fallback — lit never requests it), while a write-capable open
-// refuses the fallback, retries ~30s (engineOpenRetryMaxElapsed), and fails
+// refuses the fallback, retries engineOpenRetryMaxElapsed, and fails
 // with holder-naming guidance. Fallback or refusal, nothing writes, so a
 // file walk under this hold cannot capture a torn journal. Take it AFTER
 // the workspace lock and BEFORE the commit lock, per the acquisition order

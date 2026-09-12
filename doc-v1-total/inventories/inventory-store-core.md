@@ -72,7 +72,7 @@ const (
 | Field | Type | Set where | Meaning per code |
 |---|---|---|---|
 | `db` | `*sql.DB` | `store.go:392`; replaced by `reconnect` at `store.go:432` | the one pooled embedded-Dolt connection |
-| `workspaceID` | `string` | `store.go:393` | the workspace id passed to `Open`/`OpenForRead`; also the Dolt commit author basis (`store.go:2648-2656`) |
+| `workspaceID` | `string` | `store.go:393` | the workspace id passed to `Open`/`OpenForRead`; also the Dolt commit author basis (`store.go:2729-2737`) |
 | `doltRootDir` | `string` | `store.go:394` (raw arg, not cleaned) | Dolt root dir |
 | `access` | `engineAccess` | `store.go:395` | reused verbatim by `reconnect` (`store.go:427`) |
 | `commitLockPath` | `string` | `store.go:396` = `commitLockPathForDolt(doltRootDir)` | flock path, `filepath.Join(filepath.Dir(filepath.Clean(doltRootDir)), ".links-commit-flock.lock")` (`commit_lock.go:394-403`) |
@@ -86,20 +86,20 @@ Both hooks are per-`Store` instance state, not package globals (`store.go:66-81`
 
 #### 1.4 `engineOpenRetryMaxElapsed`
 
-`var engineOpenRetryMaxElapsed = 30 * time.Second` (`store.go:2607`). A package **variable**, not a const, so tests can shrink it; `engine_open_contract_test.go:53-55` sets it to `700 * time.Millisecond` and restores it in cleanup. It is `MaxElapsedTime` of the write-open backoff (`store.go:2633`).
+`var engineOpenRetryMaxElapsed = coResidentHolderWait` (`store.go:2669`), = 70s. A package **variable**, not a const, so tests can shrink it; `engine_open_contract_test.go:53-55` sets it to `700 * time.Millisecond` and restores it in cleanup. It is `MaxElapsedTime` of the write-open backoff (`store.go:2714`). `coResidentHolderWait` is a const derived from two measured facts (`store.go:2564-2662`): `mirrorCycleObservedTail` 20s × `mirrorHoldStallFactor` 2 = `mirrorHoldBudget` 40s; + `mirrorCancelLagObserved` 22s = `mirrorHoldCeiling` 62s; + `coResidentWaitHeadroom` 8s = 70s.
 
 #### 1.5 `newEngineOpenBackOff`
 
-`store.go:2629-2635`. Fresh `backoff.NewExponentialBackOff()` per connector with:
-- `InitialInterval = 50 * time.Millisecond` (`store.go:2631`)
-- `MaxInterval = time.Second` (`store.go:2632`)
-- `MaxElapsedTime = engineOpenRetryMaxElapsed` (`store.go:2633`)
+`store.go:2710-2716`. Fresh `backoff.NewExponentialBackOff()` per connector with:
+- `InitialInterval = 50 * time.Millisecond` (`store.go:2712`)
+- `MaxInterval = engineOpenRetryMaxInterval` = 1s (`store.go:2713`)
+- `MaxElapsedTime = engineOpenRetryMaxElapsed` (`store.go:2714`)
 
-All other `ExponentialBackOff` fields keep library defaults. Only attached for `engineWrite` (`store.go:2660-2662`).
+All other `ExponentialBackOff` fields keep library defaults. Only attached for `engineWrite` (`store.go:2741-2743`).
 
 #### 1.6 `wrapEngineOpenContention`
 
-`store.go:2619-2624`. If `err != nil && errors.Is(err, nbs.ErrDatabaseLocked)`, returns exactly:
+`store.go:2692-2697`. If `err != nil && errors.Is(err, nbs.ErrDatabaseLocked)`, returns exactly:
 
 ```
 fmt.Errorf("another process is holding this workspace's Dolt store open (a background sync mirror, another lit command, or a snapshot copy in progress); retry after it completes: %w (%w)", ErrWorkspaceBusy, err)
@@ -113,7 +113,7 @@ Test evidence: a foreign holder of `<doltRoot>/links/.dolt/noms/LOCK` makes `Ope
 
 #### 1.7 Other free helpers defined in store.go
 
-- `dirExists(path string) bool` — `os.Stat` + `IsDir` (`store.go:2685-2688`).
+- `dirExists(path string) bool` — `os.Stat` + `IsDir` (`store.go:2766-2769`).
 - `scanTime(value string) (time.Time, error)` = `time.Parse(time.RFC3339Nano, value)` (`store.go:2215-2217`). Single parse boundary for every timestamp column.
 - `scanNullableTime(sql.NullString) (*time.Time, error)` — invalid → `(nil, nil)` (`store.go:2221-2230`).
 - `nullableTime(*time.Time) any` — nil → `nil`, else `RFC3339Nano` string (`store.go:2389-2394`).
@@ -228,16 +228,16 @@ Read engines stay lazy deliberately (`store.go:372-380`).
 
 #### 2.7 `newDoltConnector` / `openDoltPool`
 
-`newDoltConnector(doltRootDir, workspaceID, database string, access engineAccess) (*embedded.Connector, error)` (`store.go:2647-2668`):
-- `author := strings.TrimSpace(workspaceID)`; if empty → `"links"` (`store.go:2648-2651`);
-- `author = strings.ReplaceAll(author, "@", "_")` (`store.go:2652`);
-- `embedded.Config{ Directory: filepath.Clean(doltRootDir), CommitName: author, CommitEmail: fmt.Sprintf("%s@links.local", author), Database: database, DisableSingletonCache: true }` (`store.go:2653-2659`);
-- `if access == engineWrite { cfg.BackOff = newEngineOpenBackOff() }` (`store.go:2660-2662`);
-- connector construction failure → `fmt.Errorf("open dolt: %w", err)` (`store.go:2665`).
+`newDoltConnector(doltRootDir, workspaceID, database string, access engineAccess) (*embedded.Connector, error)` (`store.go:2728-2749`):
+- `author := strings.TrimSpace(workspaceID)`; if empty → `"links"` (`store.go:2729-2732`);
+- `author = strings.ReplaceAll(author, "@", "_")` (`store.go:2733`);
+- `embedded.Config{ Directory: filepath.Clean(doltRootDir), CommitName: author, CommitEmail: fmt.Sprintf("%s@links.local", author), Database: database, DisableSingletonCache: true }` (`store.go:2734-2740`);
+- `if access == engineWrite { cfg.BackOff = newEngineOpenBackOff() }` (`store.go:2741-2743`);
+- connector construction failure → `fmt.Errorf("open dolt: %w", err)` (`store.go:2746`).
 
 **Dolt commit identity** therefore comes entirely from `workspaceID`: name = workspace id with `@`→`_`, email = `<name>@links.local`. `DisableSingletonCache: true` ties engine (and journal-lock) lifetime to the pool's lifetime.
 
-`openDoltPool` (`store.go:2672-2683`): `sql.OpenDB(connector)`, then `SetMaxOpenConns(1)`, `SetMaxIdleConns(1)`, `SetConnMaxLifetime(0)` — exactly one connection per Store.
+`openDoltPool` (`store.go:2753-2764`): `sql.OpenDB(connector)`, then `SetMaxOpenConns(1)`, `SetMaxIdleConns(1)`, `SetConnMaxLifetime(0)` — exactly one connection per Store.
 
 #### 2.8 `reconnect(ctx) error`
 
@@ -247,7 +247,7 @@ Read engines stay lazy deliberately (`store.go:372-380`).
 3. `prev.Close()`; a `context.Canceled` is tolerated, anything else → `fmt.Errorf("close prior dolt connection after reconnect: %w", err)` (`store.go:433-435`).
 4. `next.PingContext(ctx)`; failure → `fmt.Errorf("reopen dolt: %w", wrapEngineOpenContention(err))` (`store.go:436-438`).
 
-Doc: must be called under the commit lock; it is the one site where the journal lock is taken while the commit lock is held, bounded by `engineOpenRetryMaxElapsed` (~30 s) against the ~15-minute commit-lock budget (`store.go:401-424`). `reconnect` is the `connectionRotator` passed into every retry loop (`commit_lock.go:175`, `commit_lock.go:274`).
+Doc: must be called under the commit lock; it is the one site where the journal lock is taken while the commit lock is held, bounded by `engineOpenRetryMaxElapsed` (70s) against the ~15-minute commit-lock budget (`store.go:401-424`). `reconnect` is the `connectionRotator` passed into every retry loop (`commit_lock.go:175`, `commit_lock.go:274`).
 
 #### 2.9 `Close() error`
 
@@ -912,18 +912,18 @@ Round-trip evidence: `store_test.go:1295-1306`.
 
 ### 10. Branch normalization
 
-`masterRenameSource(ctx, db *sql.DB) (string, error)` (`store.go:2553-2580`), lock-free:
+`masterRenameSource(ctx, db *sql.DB) (string, error)` (`store.go:2519-2546`), lock-free:
 - `SELECT active_branch()`; failure → `fmt.Errorf("query dolt active branch: %w", err)`;
 - `SELECT name FROM dolt_branches ORDER BY name`; failure → `fmt.Errorf("query dolt branches: %w", err)`; scan failure → `"scan dolt branch: %w"`; iteration failure → `"iterate dolt branches: %w"`;
 - counts branches and notes whether `"master"` exists;
 - returns `""` (nothing to rename) when `activeBranch == "master"` **or** master already exists **or** `branchCount != 1`;
 - otherwise returns the active branch name.
 
-`ensureMasterDefaultBranch(ctx, db)` (`store.go:2582-2596`): consults `masterRenameSource`; on error or empty answer returns immediately; otherwise runs
+`ensureMasterDefaultBranch(ctx, db)` (`store.go:2548-2562`): consults `masterRenameSource`; on error or empty answer returns immediately; otherwise runs
 ```sql
 CALL DOLT_BRANCH('-m', '<activeBranch with ' doubled>', 'master')
 ```
-built by `fmt.Sprintf` with `strings.ReplaceAll(activeBranch, "'", "''")` (`store.go:2588-2591`); failure → `fmt.Errorf("rename dolt default branch to master: %w", err)`.
+built by `fmt.Sprintf` with `strings.ReplaceAll(activeBranch, "'", "''")` (`store.go:2554-2557`); failure → `fmt.Errorf("rename dolt default branch to master: %w", err)`.
 
 Called on every write open (`store.go:152`) and by the bootstrap (`store.go:2540`).
 
@@ -934,7 +934,7 @@ Called on every write open (`store.go:152`) and by the bootstrap (`store.go:2540
 | Symbol | Defined at | Called from store.go |
 |---|---|---|
 | `acquireWorkspaceShared` | `workspace_lock.go:81` | `store.go:107`, `:176`, `:280` |
-| `ErrWorkspaceBusy` | `workspace_lock.go:53` | `store.go:2621` |
+| `ErrWorkspaceBusy` | `workspace_lock.go:53` | `store.go:2694` |
 | `requireNoPendingAdopt` | `adopt.go:124` | `store.go:134`, `:202`, `:292` |
 | `withCommitLock` / `withMutation` / `commitWorkingSet` / `isManifestReadOnlyError` | `commit_lock.go:322` / `:122` / `:268` / `:483` | `store.go:151`, `:212`; `:457`, `:509`, `:1115`, `:1153`, `:1172`; `:224` |
 | `commitLockPathForDolt` | `commit_lock.go:394` | `store.go:396` |
@@ -4324,9 +4324,9 @@ All claims cite `file:line` in `/Users/bmf/code/links-issue-tracker`. Derived fr
 | Exclusive lock | `LockWorkspaceExclusive` → `acquireWorkspaceLock(ctx, doltRootDir, true, 1, 0)` — **1 attempt, 0 delay, no retry**; on `ErrWorkspaceBusy` wraps with `"another lit process is using this workspace; close other lit commands and retry: %w"` | `internal/store/workspace_lock.go:118-124` |
 | Shared lock | `acquireWorkspaceShared` → 100 attempts × 50ms (`workspaceSharedRetryAttempts = 100`, `workspaceSharedRetryDelay = 50 * time.Millisecond`, ~5s cap); busy message: `"a lit operation is rebuilding this workspace's Dolt directory (e.g. snapshots restore, an init backlog adopt, or lifeboat recover); retry after it completes: %w"` | `internal/store/workspace_lock.go:55-61`, `:81-89` |
 | Busy sentinel | `var ErrWorkspaceBusy = errors.New("workspace busy")` | `internal/store/workspace_lock.go:53` |
-| `dirExists` | `info, err := os.Stat(path); return err == nil && info.IsDir()` | `internal/store/store.go:2685-2688` |
-| Dolt pool shape | `sql.OpenDB(connector)` with `SetMaxOpenConns(1)`, `SetMaxIdleConns(1)`, `SetConnMaxLifetime(0)` | `internal/store/store.go:2672-2683` |
-| Connector config | `embedded.Config{Directory: filepath.Clean(doltRootDir), CommitName: author, CommitEmail: fmt.Sprintf("%s@links.local", author), Database: database, DisableSingletonCache: true}`; author = trimmed workspaceID, `""`→`"links"`, `@`→`_`; `engineWrite` also sets `cfg.BackOff = newEngineOpenBackOff()` | `internal/store/store.go:2647-2666` |
+| `dirExists` | `info, err := os.Stat(path); return err == nil && info.IsDir()` | `internal/store/store.go:2766-2769` |
+| Dolt pool shape | `sql.OpenDB(connector)` with `SetMaxOpenConns(1)`, `SetMaxIdleConns(1)`, `SetConnMaxLifetime(0)` | `internal/store/store.go:2753-2764` |
+| Connector config | `embedded.Config{Directory: filepath.Clean(doltRootDir), CommitName: author, CommitEmail: fmt.Sprintf("%s@links.local", author), Database: database, DisableSingletonCache: true}`; author = trimmed workspaceID, `""`→`"links"`, `@`→`_`; `engineWrite` also sets `cfg.BackOff = newEngineOpenBackOff()` | `internal/store/store.go:2728-2746` |
 | Procedure call builder | `CALL <PROC>()` when no args, else `CALL <PROC>(?,?,…)`; `callIntProcedure` scans **one int64 status column** | `internal/store/sync.go:823-830`, `:849-856` |
 | Snapshots dir | `filepath.Join(filepath.Dir(filepath.Clean(databaseDir)), "snapshots")` | `internal/store/migrate_snapshot.go:177-180` |
 | Stamped-snapshot shape | `<all-digits>-<label>-<all-digits>` | `internal/store/migrate_snapshot.go:67-81` |
@@ -4474,7 +4474,7 @@ Two best-effort calls, both return values discarded:
 _ = dbfactory.DeleteFromSingletonCache(filepath.ToSlash(filepath.Join(dbDir, ".dolt", "noms")), false)
 _ = dbfactory.DeleteFromSingletonCache(filepath.ToSlash(filepath.Join(dbDir, ".dolt", "stats", ".dolt", "noms")), false)
 ```
-Documented: lit's own opens bypass the cache (`DisableSingletonCache: true`, `store.go:2655`), so any entry found was left by a dolt-internal load path (e.g. during `DOLT_CLONE`); the entry is **dropped, not closed**, because closing the carcass a second time trips dolt's refcount assert on shared archive readers (`adopt.go:372-381`).
+Documented: lit's own opens bypass the cache (`DisableSingletonCache: true`, `store.go:2739`), so any entry found was left by a dolt-internal load path (e.g. during `DOLT_CLONE`); the entry is **dropped, not closed**, because closing the carcass a second time trips dolt's refcount assert on shared archive readers (`adopt.go:372-381`).
 
 ### 1.12 Idempotency / re-run behavior
 
@@ -4921,7 +4921,7 @@ workspace → Dolt's own .dolt/noms/LOCK → commit → snapshot producer beacon
 
 A holder of an inner lock never waits on an outer one (`internal/store/doc.go:44`). Two locks sit outside the order: the sync-push lock, because every acquisition of it is a non-blocking probe so nothing ever waits on it (`internal/store/doc.go:80-84`); and the mirror liveness beacon, whose acquisitions all happen holding nothing (`internal/store/doc.go:86-98`).
 
-`internal/store/doc.go:60-71` states one tolerated deviation: a GC-contention retry rotates the store's connection mid-mutation, re-acquiring Dolt's LOCK under the held commit lock, bounded at ~30s (`engineOpenRetryMaxElapsed`) strictly inside every commit-lock waiter's ~15-minute budget.
+`internal/store/doc.go:60-71` states one tolerated deviation: a GC-contention retry rotates the store's connection mid-mutation, re-acquiring Dolt's LOCK under the held commit lock, bounded at `engineOpenRetryMaxElapsed` strictly inside every commit-lock waiter's ~15-minute budget.
 
 `internal/store/doc.go:100-111` — ONE HOME: every lit-minted lock file sits at `dirname(databasePath)`, so a `lit snapshots restore` that rotates the dolt directory cannot move the lock out from under acquirers. Three stated exceptions: the snapshot producer beacon (inside `snapshots/`), the adopt-pending marker (inside the dolt root), and Dolt's own journal `LOCK`.
 
@@ -5157,15 +5157,15 @@ Classification predicates:
 #### 6.3 Dolt's own journal lock
 
 - Path (`workspace_lock.go:351`): `filepath.Join(filepath.Clean(databasePath), doltDatabaseName, ".dolt", "noms", "LOCK")` — i.e. `<databasePath>/<doltDatabaseName>/.dolt/noms/LOCK`. This is **Dolt's** file, not lit-minted, and is the ONE HOME exception stated at the mint site (`workspace_lock.go:335-343`).
-- Budget (`workspace_lock.go:365-366`): `doltJournalRetryDelay = 100 * time.Millisecond`, `doltJournalRetryAttempts = 300` → **~30s**, matching `engineOpenRetryMaxElapsed`.
+- Budget (`workspace_lock.go:391-392`): `doltJournalRetryDelay = 100 * time.Millisecond`, `doltJournalRetryAttempts = int(coResidentHolderWait / doltJournalRetryDelay)` = 700 → **70s**. Not a figure of its own: it is `coResidentHolderWait` divided by the delay, which is the same constant `engineOpenRetryMaxElapsed` is.
 - `LockDoltJournalExclusive(ctx, databasePath)` (`workspace_lock.go:389`):
   1. `os.Stat(filepath.Dir(lockPath))` **first** — this helper contends on Dolt's lock and never mints Dolt's tree (`workspace_lock.go:391-399`). On `os.ErrNotExist` returns exactly:
      `repository not initialized with lit — run 'lit init' first` (`workspace_lock.go:402`).
      Any other stat failure returns `stat dolt journal dir: %w` (`workspace_lock.go:404`).
-  2. `acquireStoreLock(ctx, lockPath, true /*exclusive*/, 300, 100ms)`.
+  2. `acquireStoreLock(ctx, lockPath, true /*exclusive*/, 700, 100ms)`.
   3. On `ErrWorkspaceBusy`, wraps (preserving the sentinel):
      `another process is holding this workspace's Dolt store open (a background sync mirror or another lit command still running); retry: %w` (`workspace_lock.go:411`).
-- Engine-open interaction stated at `workspace_lock.go:326-333` and `internal/store/doc.go:46-57`: a **read** engine opens lazily at first SQL, attempts the journal lock for **100ms**, and falls back to Dolt's read-only mode; a **write** engine opens eagerly inside `openStoreConnection`, **refuses** the read-only fallback, and retries boundedly (~30s, `engineOpenRetryMaxElapsed`). A live write Store holds the journal lock for its entire lifetime.
+- Engine-open interaction stated at `workspace_lock.go:326-333` and `internal/store/doc.go:46-57`: a **read** engine opens lazily at first SQL, attempts the journal lock for **100ms**, and falls back to Dolt's read-only mode; a **write** engine opens eagerly inside `openStoreConnection`, **refuses** the read-only fallback, and retries boundedly (`engineOpenRetryMaxElapsed`, 70s). A live write Store holds the journal lock for its entire lifetime.
 - `workspace_lock.go:384-388` records the one lifecycle write this hold does not stop: `journal.idx` is opened `O_RDWR` and truncated on every engine bootstrap with no can-write gate, so a snapshot copy can capture a torn index; Dolt's `corruptIndexRecovery` truncates it to zero and rebuilds from the journal on next open.
 
 ---

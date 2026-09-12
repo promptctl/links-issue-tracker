@@ -109,11 +109,13 @@ var doltWorkspaceMachinery = map[string][]string{
 		"ColumnRef", "FromColumn",
 		"Reconciled", "Unconverged", "UnexplainedDrop", "RequiresDrop",
 	},
-	// The detached mirror's engine-hold bound. It cannot go through the
-	// contract because it is not storage behavior: it is the sizing partner of
-	// the engine package's own open-retry budget — one design, pinned
-	// in-package by TestMirrorHoldBudgetFitsInsideOpenRetryBudget — and it is
-	// mirror machinery, deleted at S4 with the rest. [LAW:one-source-of-truth]
+	// The detached mirror's engine-hold deadline. It cannot go through the
+	// contract because it is not storage behavior: it is one link of the
+	// store's co-resident-holder sizing chain, which derives every wait in the
+	// package from the measured cost of a mirror cycle and is pinned in-package
+	// by TestMirrorHoldBudgetExceedsObservedCycleCost and
+	// TestCoResidentWaitOutlastsMirrorHoldCeiling — and it is mirror machinery,
+	// deleted at S4 with the rest. [LAW:one-source-of-truth]
 	"mirror hold budget": {
 		"MirrorHoldBudget",
 	},

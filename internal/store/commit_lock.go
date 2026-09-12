@@ -34,11 +34,20 @@ import (
 var ErrTransientGCContention = errors.New("transient online-gc contention")
 
 // transientRetryMaxAttempts/transientRetryBaseDelay/transientRetryMaxDelay
-// bound the total wait (~25s: five uncapped doublings then 25 more attempts
-// at the 1s cap) for a transient online-GC contention to clear. Sized to
-// match engineOpenRetryMaxElapsed's ~30s budget for "how long do we wait
-// on a co-resident holder of this store" (links-sync-pgct.11): that retry
-// bounds how long two engines can contend at OPEN, but this one is what
+// bound the SLEEPING a retry does (~25s: five uncapped doublings then 25 more
+// attempts at the 1s cap) while waiting for a transient online-GC contention
+// to clear. Sleep, not wall clock: each attempt also rotates the connection,
+// which is a real engine open, so the loop's own elapsed time is bounded
+// separately against commitLockWaiterBudget in retryTransientGCContention —
+// reading ~25s as the whole hold is the misreading that let the two budgets
+// multiply (links-sync-dauk). Originally
+// sized to match engineOpenRetryMaxElapsed's then-~30s budget for "how long
+// do we wait on a co-resident holder of this store" (links-sync-pgct.11);
+// the two are no longer equal and deliberately so — links-sync-dauk derived
+// that holder wait from the mirror's measured hold ceiling, while this wait
+// answers a different question and keeps the value its own field evidence
+// argued for. Kept as a reference point, not a copy to keep in step: that
+// retry bounds how long two engines can contend at OPEN, but this one is what
 // absorbs the brief settle window right after one releases — under real
 // system load (a slower/contended CI runner, an earlier mirror's real
 // network push taking longer) that window is not always sub-second, and a
@@ -181,14 +190,68 @@ func (s *Store) withStampedMutation(ctx context.Context, stamp commitStamp, fn f
 	})
 }
 
+// rotationCloseReserve is what the retry loop sets aside for the one part of a
+// connection rotation nothing can bound: Store.reconnect closes the previous,
+// live engine before opening the next, and `*sql.DB.Close()` takes no context,
+// so engineOpenRetryMaxElapsed — which bounds only the new engine's ping —
+// says nothing about it.
+//
+// Measured 2026-09-12 rather than guessed, off the same sample the mirror's
+// sizing uses: three `lit sync status` runs, each a whole process that opens a
+// sync session and closes it with no push, took 0.26s, 0.31s and 0.39s end to
+// end. That bounds open AND close together at under 0.4s in the healthy case,
+// so a second is comfortable headroom over the close alone — and it is 1.4% of
+// the engine-open budget it is added to, which is the point: the term is small,
+// but a reservation that assumed it was zero would be asserting something
+// nobody had measured. [FRAMING:representation]
+//
+// A variable, by the same convention the other budgets in this package follow:
+// a pin whose premise is that the reservation covers this term has to be able
+// to make the term large enough to matter, and at production scale it is
+// deliberately too small to change the loop's iteration count.
+var rotationCloseReserve = time.Second
+
+// commitLockWaiterBudget is how long a commit-lock waiter is sized to wait for
+// the holder to release: the one home for a figure that was previously spelled
+// as "~15 minutes" in three comments and two docs, none of which could notice
+// when it stopped being true. [LAW:one-source-of-truth] A function, not a
+// constant, because both halves are variables a contention test shrinks — the
+// derived budget has to shrink with them or a test would be measured against
+// production's number.
+func commitLockWaiterBudget() time.Duration {
+	return time.Duration(commitLockRetryAttempts) * commitLockRetryDelay
+}
+
 // retryTransientGCContention runs operation, and on a transient online-GC
 // contention failure backs off, rotates the (poisoned) connection, and retries.
 // The rotate-between-attempts step is load-bearing: the GC reset invalidates the
 // connection that observed it, so re-running on the same handle would fail
 // identically — only a fresh connection can make progress. [LAW:single-enforcer]
 // All GC-contention recovery lives here; callers supply the rotate effect.
+//
+// The loop has two termination conditions because it is spending two different
+// budgets. The attempt count bounds how many times it retries; the hold check
+// below bounds the WALL CLOCK it may spend doing so, because every rotation is
+// an engine open that can wait out a co-resident holder for
+// engineOpenRetryMaxElapsed, and all of it accrues while this mutation holds
+// the commit lock.
+//
+// Without that second condition the two budgets multiply: 29 rotations at
+// engineOpenRetryMaxElapsed is 33.8 minutes against a commitLockWaiterBudget of
+// 15, so a holder retrying exactly as designed would blow past what every
+// waiter on that lock is sized to tolerate, and they would fail with the
+// workspace-busy sentinel naming a holder that was never wedged — the precise
+// wedge Store.reconnect's comment promises cannot happen. It did not happen
+// before links-sync-dauk only because engineOpenRetryMaxElapsed was 30s, where
+// 29 rotations came to 14.5 minutes and fit by about half a minute. That fit
+// was the real constraint pinning the old 30s, and it was recorded nowhere;
+// deriving the open budget from the mirror's hold ceiling is what surfaced it.
+// [LAW:no-ambient-temporal-coupling] the hold's own owner bounds it, rather
+// than the bound emerging from an arithmetic coincidence between two constants
+// that never referenced each other.
 func retryTransientGCContention(ctx context.Context, operation retryOperation, rotate connectionRotator, delayForAttempt retryDelayFunc, sleep retrySleepFunc) error {
 	var lastErr error
+	start := time.Now()
 	for attempt := 1; attempt <= transientRetryMaxAttempts; attempt++ {
 		err := classifyTransientGCError(operation(ctx))
 		if err == nil {
@@ -196,6 +259,26 @@ func retryTransientGCContention(ctx context.Context, operation retryOperation, r
 		}
 		lastErr = err
 		if !errors.Is(err, ErrTransientGCContention) || attempt == transientRetryMaxAttempts {
+			break
+		}
+		// Checked before the sleep, and reserving room for EVERY term that
+		// runs between here and the next check — the inter-attempt sleep, and
+		// both halves of the rotation. A reservation that omits a term it
+		// cannot see is the prose bound this loop replaced, with a smaller
+		// error, so each one is named: the sleep (up to
+		// transientRetryMaxDelay), the new engine's open (bounded by
+		// engineOpenRetryMaxElapsed), and the PREVIOUS engine's close
+		// (rotationCloseReserve). That last one is the term to be careful
+		// about — Store.reconnect closes the old engine before pinging the
+		// new one, `*sql.DB.Close()` takes no context, so no deadline
+		// anywhere can cut it and engineOpenRetryMaxElapsed does not cover
+		// it. Its cost is reserved rather than bounded, which makes the
+		// honest statement of the hold "the budget, plus at most one engine
+		// close" rather than the budget flat. Stopping here ends the same way
+		// exhausting the attempts does: the manifest never cleared, which is
+		// what exhaustedContentionError already says.
+		rotationReserve := engineOpenRetryMaxElapsed + rotationCloseReserve
+		if time.Since(start)+delayForAttempt(attempt)+rotationReserve >= commitLockWaiterBudget() {
 			break
 		}
 		if waitErr := sleep(ctx, delayForAttempt(attempt)); waitErr != nil {
