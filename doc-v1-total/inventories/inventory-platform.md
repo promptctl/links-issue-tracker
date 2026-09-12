@@ -530,22 +530,23 @@ manifests (`internal/release/manifest.go:32-34`). `Signature` is reserved and un
 ### 7.3 Manifest resolution (`internal/release/resolver.go`)
 
 - `DefaultBaseURL = "https://github.com/promptctl/links-issue-tracker/releases/download"`
-  (`:58`).
-- URL fetched: `<base>/<tag>/release-manifest.json` (trailing `/` trimmed from base) (`:94`).
-- Tag validation, all applied inside `Resolve` (`:76-84`):
+  (`:69`).
+- URL fetched: `<base>/<tag>/release-manifest.json` (trailing `/` trimmed from base) (`:172`).
+- Tag validation, in `acceptTag` (`:100-111`), applied by `Resolve` before any fetch
+  (`:165-167`):
   - must start with `v` ⇒ else `release: tag must be v-prefixed (got %q)`;
   - must match `^v[A-Za-z0-9._+-]+$` (`tagAcceptPattern`, `:28`) ⇒ else
     `release: tag %q must match %s (v-prefix + alphanumerics, dots, dashes, underscores, plus)`;
   - must not contain `..` ⇒ else `release: tag %q contains path-traversal sequence`.
 - Default HTTP client timeout `defaultResolverTimeout = 60 * time.Second` when `Client` is nil
-  (`:39`, `:89-93`).
-- Non-200 ⇒ `release: fetch %s: HTTP %d: %s` with the first 256 body bytes (`:104-107`).
-- Body is decoded through `io.LimitReader(resp.Body, 1<<20)` with
-  `dec.DisallowUnknownFields()` (`:113-114`); decode failure ⇒ `release: decode %s: %w`.
+  (`:39`, `:114-120`).
+- Non-200 ⇒ `release: fetch %s: HTTP %d: %s` with the first 256 body bytes (`:182-185`).
+- Body is decoded through `io.LimitReader(resp.Body, 1<<20)` into a `Manifest` (`:211-213`);
+  decode failure ⇒ `release: decode %s: %w` (`:214`).
 - A second `Decode` must return `io.EOF`; a second document ⇒
   `release: decode %s: unexpected trailing JSON after manifest`; any other error ⇒
-  `release: decode %s: unexpected trailing data after manifest: %w` (`:123-132`).
-- Finally `SelectArtifact` (`:133-137`).
+  `release: decode %s: unexpected trailing data after manifest: %w` (`:220-229`).
+- Finally `SelectArtifact` (`:230-234`).
 
 ### 7.4 Installer (`internal/release/installer.go`)
 
