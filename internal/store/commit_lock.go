@@ -240,12 +240,15 @@ func retryTransientGCContention(ctx context.Context, operation retryOperation, r
 		if !errors.Is(err, ErrTransientGCContention) || attempt == transientRetryMaxAttempts {
 			break
 		}
-		// Checked before the rotation, not after: it is the rotation that can
-		// cost a whole engine-open budget, so the hold has to have room for
-		// one before it starts. Stopping here ends the same way exhausting the
-		// attempts does — the manifest never cleared, which is what
-		// exhaustedContentionError already says.
-		if time.Since(start)+engineOpenRetryMaxElapsed >= commitLockWaiterBudget() {
+		// Checked before the sleep, and reserving room for everything that
+		// runs between here and the next check: the inter-attempt sleep AND
+		// the rotation's engine open. Reserving only the rotation would leave
+		// the sleep — up to transientRetryMaxDelay — outside the arithmetic,
+		// and a bound that omits a term it cannot see is the prose bound this
+		// loop just replaced, only with a smaller error. Stopping here ends
+		// the same way exhausting the attempts does: the manifest never
+		// cleared, which is what exhaustedContentionError already says.
+		if time.Since(start)+delayForAttempt(attempt)+engineOpenRetryMaxElapsed >= commitLockWaiterBudget() {
 			break
 		}
 		if waitErr := sleep(ctx, delayForAttempt(attempt)); waitErr != nil {

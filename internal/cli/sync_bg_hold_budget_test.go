@@ -291,3 +291,44 @@ func shrinkMirrorHoldBudget(t *testing.T, budget time.Duration) {
 	store.MirrorHoldBudget = budget
 	t.Cleanup(func() { store.MirrorHoldBudget = restore })
 }
+
+// TestHoldBudgetCutFramingSurvivesTheBanner pins the claim
+// holdBudgetCutExplanation's comment makes about its own word order: the
+// FAILING banner renders this message through oneLineReason, which keeps the
+// first line and caps it at 160 runes, so the part that stops a reader
+// blaming the network has to survive that cut.
+//
+// links-sync-dauk's first wording left five runes of margin and nothing
+// measured it, which is the same shape as the defect the ticket was about — an
+// invariant asserted in a comment and enforced nowhere. A later reword, or a
+// MirrorHoldBudget whose Duration formats longer than "40s", would have
+// truncated the framing away silently and left the banner saying only that a
+// budget was exceeded.
+//
+// The budget cases are the enumeration this needs: the production value, and a
+// value in minutes, which Go renders as "1h40m0s" — more than twice the runes.
+// Not parallel: it mutates store.MirrorHoldBudget.
+func TestHoldBudgetCutFramingSurvivesTheBanner(t *testing.T) {
+	for _, budget := range []time.Duration{40 * time.Second, 100 * time.Minute} {
+		func() {
+			restore := store.MirrorHoldBudget
+			store.MirrorHoldBudget = budget
+			defer func() { store.MirrorHoldBudget = restore }()
+
+			banner := oneLineReason(holdBudgetCutExplanation().Error())
+			for _, want := range []string{
+				budget.String(),
+				"a deadline, not a diagnosis",
+				"mirror.log",
+			} {
+				if !strings.Contains(banner, want) {
+					t.Fatalf("with MirrorHoldBudget=%s the banner dropped %q — the 160-rune cut landed before the framing, so the one line a reader sees says a budget was exceeded and nothing about how to tell a slow remote from an undersized budget.\nbanner: %s",
+						budget, want, banner)
+				}
+			}
+			if strings.HasSuffix(banner, "…") && !strings.Contains(banner, "before blaming the remote") {
+				t.Fatalf("with MirrorHoldBudget=%s the banner truncated mid-framing: %s", budget, banner)
+			}
+		}()
+	}
+}

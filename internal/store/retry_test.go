@@ -486,14 +486,25 @@ func TestRetryTransientGCContentionStopsBeforeOutlastingCommitLockWaiters(t *tes
 		time.Sleep(engineOpenRetryMaxElapsed)
 		return nil
 	}
+	// A REAL inter-attempt delay, really slept. Stubbing the delay to zero
+	// would leave the sleep out of the measured hold, and the sleep is one of
+	// the two terms the budget check has to reserve for — a pin driven with a
+	// zero delay cannot tell a check that reserves both terms from one that
+	// reserves only the rotation, which is exactly the gap this assertion
+	// exists to close.
+	const interAttemptDelay = 30 * time.Millisecond
+	delayForAttempt := func(int) time.Duration { return interAttemptDelay }
 
 	start := time.Now()
 	err := retryTransientGCContention(
 		context.Background(),
 		op,
 		rotate,
-		func(int) time.Duration { return 0 },
-		func(context.Context, time.Duration) error { return nil },
+		delayForAttempt,
+		func(_ context.Context, d time.Duration) error {
+			time.Sleep(d)
+			return nil
+		},
 	)
 	elapsed := time.Since(start)
 

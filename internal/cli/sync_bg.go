@@ -400,10 +400,15 @@ func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnsw
 //
 // Order matters as much as content: the FAILING banner prints this through
 // oneLineReason, which keeps the first line and caps it at 160 runes, so the
-// honest framing has to arrive before the truncation rather than after it.
+// honest framing has to arrive before the truncation rather than after it —
+// and with enough margin that a reworded lead or a budget that formats longer
+// (a value in minutes renders as "1h40m0s", not "40s") cannot push it over.
+// TestHoldBudgetCutFramingSurvivesTheBanner pins that, because a margin
+// nobody measures is how an invariant asserted in a comment stops being one:
+// the first wording of this message left five runes of it.
 func holdBudgetCutExplanation() error {
 	return fmt.Errorf(
-		"mirror cycle exceeded its %s hold budget — a deadline, not a diagnosis: compare mirror.log's elapsed= values against the budget before blaming the remote. Cycles clustered just under the budget mean the budget is sized under this workspace's real cycle cost; one cycle far past it means the transport stopped answering. The engine closes as the cut unwinds, so the hold ends after the budget rather than at it, and the next mutation's mirror retries the push",
+		"mirror cycle exceeded its %s hold budget — a deadline, not a diagnosis: check mirror.log's elapsed= values before blaming the remote. Cycles clustered just under the budget mean the budget is sized under this workspace's real cycle cost; one cycle far past it means the transport stopped answering. The engine closes as the cut unwinds, so the hold ends after the budget rather than at it, and the next mutation's mirror retries the push",
 		store.MirrorHoldBudget)
 }
 
