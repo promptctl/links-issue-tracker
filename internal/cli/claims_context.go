@@ -94,7 +94,7 @@ func gatherClaimContext(ctx context.Context, stdout io.Writer, ap *app.App) (cla
 			return claimContext{}, printErr
 		}
 	} else {
-		local = claims.NewLocalCheckouts(ap.Workspace.WorkspaceID, checkoutStreamTokens(checkouts))
+		local = claims.NewLocalCheckouts(ap.Workspace.WorkspaceID, app.LiveCheckoutsOf(checkouts))
 		addresses = addressesByAttribution(ap.Workspace.WorkspaceID, checkouts)
 	}
 
@@ -174,20 +174,6 @@ func transferNotice(ctx context.Context, ap *app.App, issueID string, action mod
 		return "", nil
 	}
 	return fmt.Sprintf("claim transferred: %s -> %s\n", describeClaimant(prior), describeClaimant(taker)), nil
-}
-
-// checkoutStreamTokens projects enumerated checkouts onto the tokens claim
-// derivation's liveness leg compares evidence against. Mirrors
-// app.streamTokens: a checkout that has never mutated carries no token and
-// contributes none, since it holds no claim either way.
-func checkoutStreamTokens(checkouts []workspace.Checkout) []string {
-	tokens := make([]string, 0, len(checkouts))
-	for _, checkout := range checkouts {
-		if checkout.Stream.Present() {
-			tokens = append(tokens, checkout.Stream.Value())
-		}
-	}
-	return tokens
 }
 
 // addressesByAttribution indexes this machine's live checkouts by the

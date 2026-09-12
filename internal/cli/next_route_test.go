@@ -620,7 +620,7 @@ func TestRouteNextTakesOverAnAbandonedSiblingLane(t *testing.T) {
 	if served.Row.ID != a2.ID || served.Lane.Epic() != epicA.ID {
 		t.Fatalf("served = %q in epic %q, want %q in %q", served.Row.ID, served.Lane.Epic(), a2.ID, epicA.ID)
 	}
-	advice := startAdvice(served.Row, served.Lane)
+	advice := startAdvice(served.Row, served.Lane, expiredHolder(standings.Of(served.Lane)))
 	if !strings.Contains(advice, "take over") || !strings.Contains(advice, "in progress and abandoned") {
 		t.Fatalf("startAdvice = %q, want a takeover — this pick inherits %q's unfinished work rather than beginning it", advice, a2.ID)
 	}
@@ -742,7 +742,10 @@ func TestStartAdviceNamesTheCommandAndTheLaneShape(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			row := rowByID(t, rows, tc.id)
-			got := startAdvice(row, laneOf(t, details, row))
+			// Unprovable: this table is about grammar, and the holder it holds
+			// fixed is the one the wording never changed for — a lapsed claim
+			// this machine can say nothing about still reads "abandoned".
+			got := startAdvice(row, laneOf(t, details, row), claims.Unprovable)
 			if got != tc.want {
 				t.Fatalf("startAdvice = %q, want %q", got, tc.want)
 			}
@@ -767,7 +770,7 @@ func TestStartAdviceNeverSpellsASoloTicketTwice(t *testing.T) {
 
 	rows, details := h.gather()
 	row := rowByID(t, rows, solo.ID)
-	got := startAdvice(row, laneOf(t, details, row))
+	got := startAdvice(row, laneOf(t, details, row), claims.Unprovable)
 
 	if n := strings.Count(got, solo.ID); n != 1 {
 		t.Fatalf("startAdvice = %q names %q %d times, want exactly 1 — a solo lane is its ticket, so naming the lane repeats the id and reads as a log line rather than as advice", got, solo.ID, n)

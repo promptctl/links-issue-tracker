@@ -33,9 +33,20 @@ var (
 	// bothLive is a machine that enumerated its worktrees and found both local
 	// streams present. assumeLive is the zero value — a machine that cannot
 	// check and therefore prunes nothing.
-	bothLive   = claims.NewLocalCheckouts(workspaceID, []string{streamA.Stream(), streamB.Stream()})
+	bothLive   = claims.NewLocalCheckouts(workspaceID, unlocked(streamA.Stream(), streamB.Stream()))
 	assumeLive = claims.LocalCheckouts{}
 )
+
+// unlocked enumerates the given streams as live working trees none of which
+// carries a lock — the ordinary shape, spelled once so a fixture that DOES
+// lock one stands out as the deliberate case it is.
+func unlocked(streams ...string) []claims.LiveCheckout {
+	live := make([]claims.LiveCheckout, len(streams))
+	for i, stream := range streams {
+		live[i] = claims.LiveCheckout{Stream: stream}
+	}
+	return live
+}
 
 func ago(d time.Duration) time.Time { return now.Add(-d) }
 
@@ -177,7 +188,13 @@ func TestPredicateGrid(t *testing.T) {
 				event("e2", "T1", "", ago(48*time.Hour), streamA),
 			},
 			local: bothLive,
-			want:  claims.Stale{Tenure: claims.Tenure{By: streamA, Since: ago(72 * time.Hour), LastActivity: ago(48 * time.Hour)}},
+			// Present, not the zero Presence: this machine enumerated streamA
+			// and found it. Only the clock lapsed. TestStalePresenceGrid below
+			// is where that distinction is the subject rather than a detail.
+			want: claims.Stale{
+				Tenure: claims.Tenure{By: streamA, Since: ago(72 * time.Hour), LastActivity: ago(48 * time.Hour)},
+				Holder: claims.Present,
+			},
 		},
 		{
 			name:     "leg 4 dropped — this machine has proven the holder's checkout gone",
@@ -185,7 +202,7 @@ func TestPredicateGrid(t *testing.T) {
 			events: []model.IssueEvent{
 				event("e1", "T1", model.ActionStart, ago(2*time.Hour), streamA),
 			},
-			local: claims.NewLocalCheckouts(workspaceID, []string{streamB.Stream()}),
+			local: claims.NewLocalCheckouts(workspaceID, unlocked(streamB.Stream())),
 			want:  claims.Unclaimed{},
 		},
 	}
@@ -234,9 +251,83 @@ func TestVoidEvidenceFallsThroughToTheNextEstablisher(t *testing.T) {
 	standings := derive(t, issues, parents, []model.IssueEvent{
 		event("e1", "T1", model.ActionStart, ago(4*time.Hour), streamB),
 		event("e2", "T2", model.ActionStart, ago(time.Hour), streamA),
-	}, claims.NewLocalCheckouts(workspaceID, []string{streamB.Stream()}))
+	}, claims.NewLocalCheckouts(workspaceID, unlocked(streamB.Stream())))
 
 	assertStanding(t, standings.Of(laneIn(epicID, "")), held(streamB, ago(4*time.Hour), ago(4*time.Hour)))
+}
+
+// TestStalePresenceGrid runs one expired claim against every state its holder's
+// worktree can be in, because the clock is held identical across all four rows
+// and the worktree is the only thing that moves. That is the whole content of
+// links-claims-2wk2: the derivation had the enumeration in hand and spent it on
+// a single yes/no question, so an expired window was the only fact a reader
+// downstream ever received, and "the clock lapsed" reached them wearing the
+// words for "the holder left".
+//
+// The gone row is the reason this is a grid and not a pair. A proven-absent
+// holder does not produce a Stale carrying Gone — its evidence is voided before
+// any holder is chosen, so the lane comes out Unclaimed — and pinning that here
+// is what keeps a later reader from "completing" the enum by routing Gone
+// through Stale and quietly reviving the claim this leg exists to bury.
+func TestStalePresenceGrid(t *testing.T) {
+	// One lane, one holder, one establishing act well outside the window. Every
+	// row below shares it.
+	expired := []model.IssueEvent{
+		event("e1", "T1", model.ActionStart, ago(72*time.Hour), streamA),
+		event("e2", "T1", "", ago(48*time.Hour), streamA),
+	}
+	tenure := claims.Tenure{By: streamA, Since: ago(72 * time.Hour), LastActivity: ago(48 * time.Hour)}
+
+	for _, tc := range []struct {
+		name  string
+		local claims.LocalCheckouts
+		want  claims.Standing
+	}{
+		{
+			name:  "absent — git lists no such worktree, so the evidence is disproven and the lane reverts",
+			local: claims.NewLocalCheckouts(workspaceID, unlocked(streamB.Stream())),
+			want:  claims.Unclaimed{},
+		},
+		{
+			name:  "present — the worktree is on disk, so the claim lapsed but its holder was never shown to have left",
+			local: claims.NewLocalCheckouts(workspaceID, unlocked(streamA.Stream())),
+			want:  claims.Stale{Tenure: tenure, Holder: claims.Present},
+		},
+		{
+			name:  "locked — the holder set an explicit do-not-disturb, the strongest local evidence there is",
+			local: claims.NewLocalCheckouts(workspaceID, []claims.LiveCheckout{{Stream: streamA.Stream(), Locked: true}}),
+			want:  claims.Stale{Tenure: tenure, Holder: claims.Locked},
+		},
+		{
+			name:  "unenumerable — a machine that checked nothing proves nothing, and freshness alone governs",
+			local: assumeLive,
+			want:  claims.Stale{Tenure: tenure, Holder: claims.Unprovable},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			issues, parents := epicOf(t, leaf(t, "T1", "", model.StateInProgress))
+			standings := derive(t, issues, parents, expired, tc.local)
+			assertStanding(t, standings.Of(laneIn(epicID, "")), tc.want)
+		})
+	}
+}
+
+// TestLockDoesNotOutrankProvenAbsence pins the one precedence that could be got
+// backwards. A lock is the strongest thing a HOLDER can say, and this leg is
+// not about deference: git withholds `prunable` from a locked record, so a
+// checkout reaching the derivation as locked was listed, and a stream absent
+// from the listing is absent no matter what else it once claimed about itself.
+// Read the other way, a lock would be an unkillable claim — set it once, delete
+// the tree, and the lane could never be taken again.
+func TestLockDoesNotOutrankProvenAbsence(t *testing.T) {
+	issues, parents := epicOf(t, leaf(t, "T1", "", model.StateInProgress))
+	// streamB is enumerated and locked; streamA, the holder, is not listed at all.
+	local := claims.NewLocalCheckouts(workspaceID, []claims.LiveCheckout{{Stream: streamB.Stream(), Locked: true}})
+	standings := derive(t, issues, parents, []model.IssueEvent{
+		event("e1", "T1", model.ActionStart, ago(72*time.Hour), streamA),
+	}, local)
+
+	assertStanding(t, standings.Of(laneIn(epicID, "")), claims.Unclaimed{})
 }
 
 // TestForeignWorkspaceIsNeverPruned holds the other half of the liveness rule: a
@@ -487,6 +578,13 @@ func TestUnknownLaneReadsAsUnclaimed(t *testing.T) {
 // comparable with ==; the comparison is spelled out rather than reached for
 // through reflect, and it never compares an interface directly, which would
 // panic the moment a Held turned up on either side.
+//
+// Spelled out means every field must be spelled: a variant that grows one and
+// does not grow a line here goes on passing, and passing is what it will look
+// like. Stale.Holder was added with the arm left alone, and a grid written
+// specifically to tell three holder states apart went green against a
+// derivation that reported the same state for all three — caught by mutating
+// the derivation, not by reading the assertion. [LAW:one-source-of-truth]
 func assertStanding(t *testing.T, got, want claims.Standing) {
 	t.Helper()
 	switch expected := want.(type) {
@@ -500,6 +598,9 @@ func assertStanding(t *testing.T, got, want claims.Standing) {
 			t.Fatalf("standing = %#v, want Stale%+v", got, expected.Tenure)
 		}
 		assertTenure(t, actual.Tenure, expected.Tenure)
+		if actual.Holder != expected.Holder {
+			t.Fatalf("stale holder presence = %v, want %v", actual.Holder, expected.Holder)
+		}
 	case claims.Held:
 		actual, ok := got.(claims.Held)
 		if !ok {

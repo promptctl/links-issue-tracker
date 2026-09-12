@@ -33,11 +33,18 @@ func (a *App) LocalCheckouts() (claims.LocalCheckouts, error) {
 	if err != nil {
 		return claims.LocalCheckouts{}, err
 	}
-	return claims.NewLocalCheckouts(a.Workspace.WorkspaceID, streamTokens(checkouts)), nil
+	return claims.NewLocalCheckouts(a.Workspace.WorkspaceID, LiveCheckoutsOf(checkouts)), nil
 }
 
-// streamTokens projects enumerated checkouts onto the tokens claim derivation
-// compares evidence against.
+// LiveCheckoutsOf projects enumerated checkouts onto the values claim
+// derivation's liveness leg reads: the token it compares evidence against, and
+// whether the holder has locked the tree.
+//
+// It is exported because the CLI enumerates for itself — it needs the addresses
+// off the same listing — and this projection used to exist twice, once here and
+// once there under a comment reading "Mirrors app.streamTokens". Mirrored is
+// what two representations of one fact call themselves right up until they
+// drift, and this one had a second field to grow. [LAW:one-source-of-truth]
 //
 // Checkouts that have never mutated carry no token and contribute none. They are
 // live, and they hold no claim either — a checkout produces its first token and
@@ -46,17 +53,16 @@ func (a *App) LocalCheckouts() (claims.LocalCheckouts, error) {
 //
 // The filter is not a backstop against a bug: model.Attribution collapses a
 // half pair to the absent one, so an empty token could never reach the live set
-// through a lookup anyway. It is here because the set means "the tokens of the
-// live checkouts", and "" is not one — a member that stands for no checkout
-// makes the set's own description false for whatever reads it next.
-// [LAW:types-are-the-program]
-func streamTokens(checkouts []workspace.Checkout) []string {
-	tokens := make([]string, 0, len(checkouts))
+// through a lookup anyway. It is here because the set means "the live
+// checkouts", and one standing for no checkout makes the set's own description
+// false for whatever reads it next. [LAW:types-are-the-program]
+func LiveCheckoutsOf(checkouts []workspace.Checkout) []claims.LiveCheckout {
+	live := make([]claims.LiveCheckout, 0, len(checkouts))
 	for _, checkout := range checkouts {
 		if !checkout.Stream.Present() {
 			continue
 		}
-		tokens = append(tokens, checkout.Stream.Value())
+		live = append(live, claims.LiveCheckout{Stream: checkout.Stream.Value(), Locked: checkout.Locked})
 	}
-	return tokens
+	return live
 }

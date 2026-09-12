@@ -10,6 +10,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workflows"
@@ -102,10 +103,10 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 		announce = fmt.Sprintf("%s is already in progress in a lane you hold — continue where you left off\n", o.Row.ID)
 	case ServedFromEpicLane:
 		row = o.Row
-		announce = startAdvice(o.Row, o.Lane) + " (a second lane of an epic you already hold a lane in)\n"
+		announce = startAdvice(o.Row, o.Lane, expiredHolder(cc.standings.Of(o.Lane))) + " (a second lane of an epic you already hold a lane in)\n"
 	case ServedFromNewLane:
 		row = o.Row
-		announce = startAdvice(o.Row, o.Lane) + "\n"
+		announce = startAdvice(o.Row, o.Lane, expiredHolder(cc.standings.Of(o.Lane))) + "\n"
 	// The two terminal outcomes travel outward AS THEMSELVES. Rendering them
 	// into an untyped error here discarded the very discriminator routing had
 	// just established, so both sinks — ExitCode and commandErrorReason — fell
@@ -134,6 +135,28 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 	return nextPulledOccasion(row.Issue), nil
 }
 
+// inFlightState is the clause naming what happened to the work a takeover pick
+// would inherit — the one word of that sentence that turns on evidence rather
+// than on grammar, which is why it is a value the sentences interpolate instead
+// of a fifth and sixth sentence beside them. [LAW:dataflow-not-control-flow]
+//
+// "abandoned" is a claim about the holder, and the routing that reaches here
+// used to make it on the strength of a clock alone. Against a worktree this
+// machine can still see, it is not merely alarming but false, and it was
+// telling agents to take lanes whose owning session was running — the pick it
+// was reported on had its holder locked on an open PR (links-claims-2wk2). The
+// command is still offered in every case: what this changes is what the reader
+// is told they are taking, never whether they may.
+func inFlightState(holder claims.Presence) string {
+	switch holder {
+	case claims.Locked:
+		return "claimed by a locked worktree whose claim has gone stale"
+	case claims.Present:
+		return "stale, though its holder's worktree is still on disk"
+	}
+	return "abandoned"
+}
+
 // startAdvice is the line every pick that would establish a claim prints above
 // its row: what running `lit start` would lock, never what this command did.
 // It was `claimAnnouncement`, and the rename is the fix — an announcement
@@ -158,13 +181,14 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 // reads wrong with one trailing it. next_route_test.go pins all six cells of
 // verb and lane shape across these four sentences: a named lane and an epic's
 // default lane differ only in the words Describe hands back.
-func startAdvice(row annotation.AnnotatedIssue, lane model.LaneID) string {
+func startAdvice(row annotation.AnnotatedIssue, lane model.LaneID, holder claims.Presence) string {
 	described, named := lane.Describe()
 	if row.State() == model.StateInProgress {
+		state := inFlightState(holder)
 		if !named {
-			return fmt.Sprintf("%s is in progress and abandoned — run `lit start %s` to take it over", row.ID, row.ID)
+			return fmt.Sprintf("%s is in progress and %s — run `lit start %s` to take it over", row.ID, state, row.ID)
 		}
-		return fmt.Sprintf("%s is in progress and abandoned — run `lit start %s` to take over %s", row.ID, row.ID, described)
+		return fmt.Sprintf("%s is in progress and %s — run `lit start %s` to take over %s", row.ID, state, row.ID, described)
 	}
 	if !named {
 		return fmt.Sprintf("run `lit start %s` to claim it", row.ID)

@@ -126,6 +126,51 @@ func TestLiveCheckoutsCarriesTheAddress(t *testing.T) {
 	}
 }
 
+// TestLiveCheckoutsReportsTheLock runs the lock all the way through real git,
+// because the parser table above proves only that this code reads a string it
+// wrote itself. The claim predicate lets a lock, and nothing else, carry a hold
+// past the freshness window (links-claims-2wk2), so a `locked` field that were
+// quietly never set would restore the whole bug with every unit test green.
+//
+// The unlocked neighbor is the control: the lock has to distinguish, not just
+// appear.
+func TestLiveCheckoutsReportsTheLock(t *testing.T) {
+	primary := litRepoWithCommit(t)
+	held := filepath.Join(t.TempDir(), "held")
+	open := filepath.Join(t.TempDir(), "open")
+	run(t, primary, "git", "worktree", "add", held)
+	run(t, primary, "git", "worktree", "add", open)
+	run(t, primary, "git", "worktree", "lock", held)
+
+	checkouts, err := LiveCheckouts(primary)
+	if err != nil {
+		t.Fatalf("LiveCheckouts() error = %v", err)
+	}
+
+	locks := map[string]bool{}
+	for _, checkout := range checkouts {
+		resolved, err := filepath.EvalSymlinks(checkout.Path)
+		if err != nil {
+			t.Fatalf("EvalSymlinks(%q) error = %v", checkout.Path, err)
+		}
+		locks[resolved] = checkout.Locked
+	}
+
+	for path, want := range map[string]bool{held: true, open: false} {
+		resolved, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			t.Fatalf("EvalSymlinks(%q) error = %v", path, err)
+		}
+		got, listed := locks[resolved]
+		if !listed {
+			t.Fatalf("worktree %q missing from the enumeration: %v", resolved, locks)
+		}
+		if got != want {
+			t.Fatalf("Checkout{Path: %q}.Locked = %v, want %v", resolved, got, want)
+		}
+	}
+}
+
 // TestRemovedWorktreeIsGoneFromTheEnumeration is the acceptance at this layer:
 // `git worktree remove` takes the checkout's identity with the directory, and
 // the very next enumeration no longer counts it live. Nothing of lit's runs to
@@ -368,9 +413,18 @@ func TestParseWorktreeListReadsEveryDocumentedShape(t *testing.T) {
 			want:   []worktreeRecord{{path: "/w", prunable: true}},
 		},
 		{
-			name:   "locked is not prunable",
+			// Two facts, and the record carries both separately. `locked` is
+			// read now — the claim predicate treats it as the holder's
+			// do-not-disturb — but it still says nothing about prunability,
+			// which is git's call and stays git's call.
+			name:   "locked is recorded and is still not prunable",
 			output: "worktree /w\x00HEAD abc\x00branch refs/heads/held\x00locked on a usb stick\x00\x00",
-			want:   []worktreeRecord{{path: "/w", branch: "held"}},
+			want:   []worktreeRecord{{path: "/w", branch: "held", locked: true}},
+		},
+		{
+			name:   "locked with no reason",
+			output: "worktree /w\x00HEAD abc\x00branch refs/heads/held\x00locked\x00\x00",
+			want:   []worktreeRecord{{path: "/w", branch: "held", locked: true}},
 		},
 		{
 			name:   "a bare repository",

@@ -114,6 +114,9 @@ hold:
    older than T no longer holds.
 4. **S is live, as far as this machine can tell.** See the liveness prune
    below; machines that cannot check assume liveness and rely on freshness.
+   The prune answers with what it found, not merely whether to void, and a
+   worktree the holder has locked carries its claim past T — leg 3 defers to
+   leg 4 in that one case, and in no other.
 
 Derived annotations accompany the predicate:
 
@@ -173,6 +176,30 @@ this filesystem, so for them the same claim ends by aging out. The asymmetry
 is deliberate and honest: deletion is a local fact, and only its owner can
 observe it instantly. A different clone on the same machine has a different
 workspace id and is never pruned by this one.
+
+The enumeration answers with more than a yes or no, and the difference decides
+what an expired claim is CALLED. The finding is one of four: *gone* (this
+machine enumerated and the worktree is absent — the void above), *present*,
+*locked* (`git worktree lock`), or *unprovable* (another clone, or the public
+checkout, which names no worktree to look for). Only *gone* voids. What the
+other three change is the language: past T, a holder whose worktree this
+machine can still see is never described as abandoned or orphaned, because it
+has not been shown to have left — only to have gone quiet. Presence and absence
+were one bit until links-claims-2wk2, so "the clock expired" and "the holder
+walked away" reached readers in the same words, and an agent took that as
+permission.
+
+*Locked* is the one finding that outranks the clock: it carries the claim past
+T, and the lane is routed around and gated exactly as a fresh one is. Every
+other signal here says a worktree EXISTS, which a dead session leaves behind
+just as readily; a lock is the holder speaking, and nobody sets it by walking
+away. Mere presence deliberately does not sustain a claim — a worktree outliving
+its session is ordinary, and letting that hold a lane would strand every
+uncleaned tree's work with the age-out that exists to release it never firing.
+A lock never outranks proven absence in the other direction either: git
+withholds `prunable` from a locked record, so a stream missing from the listing
+is gone whatever it once claimed about itself, and reading it the other way
+would make a lock an unkillable claim.
 
 ### Granularity: why the lane
 
