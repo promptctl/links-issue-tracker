@@ -587,3 +587,47 @@ func TestFirstLineStripsHeadingAndBlanks(t *testing.T) {
 func idx(haystack, needle string) int {
 	return strings.Index(haystack, needle)
 }
+
+// The epic plan is the other surface that names a referenced ticket's standing,
+// and the one an agent reads to judge whether an epic is finished. It rendered
+// a bare "[closed]" for every close, so a sibling declined wontfix — work
+// nobody did — read exactly like a sibling somebody finished, and the reader
+// had no cue to run a second command (promptctl-output-p60y). The five closed
+// shapes are asserted in one epic, each carrying what its close recorded.
+//
+// [LAW:behavior-not-structure] Every arm goes through the store's real close
+// actions rather than a hand-built display status, so the test would catch the
+// plan disagreeing with what was actually recorded, not merely a renamed field.
+func TestRenderEpicContextNamesTheCloseReason(t *testing.T) {
+	f := newEpicFixture(t, "Verdict epic", "five ways to be closed")
+	canonical := f.addChild("The canonical one")
+	done := f.addChild("Finished one")
+	duplicate := f.addChild("Duplicated one")
+	superseded := f.addChild("Superseded one")
+	obsolete := f.addChild("Obsolete one")
+	wontfix := f.addChild("Declined one")
+
+	f.transition(done, model.Done{})
+	f.transition(duplicate, model.Close{Outcome: model.Duplicate{Of: canonical}})
+	f.transition(superseded, model.Close{Outcome: model.Superseded{By: canonical}})
+	f.transition(obsolete, model.Close{Outcome: model.Obsolete{}})
+	f.transition(wontfix, model.Close{Outcome: model.Wontfix{}})
+
+	out := f.render("")
+
+	// The four reason-bearing markers are wider than the alignment column and
+	// overflow it, exactly as a blocked child's reasons do: the rare loud row
+	// gives up alignment so the common rows keep it.
+	wantLines := []string{
+		"    [closed]      " + done + "  Finished one",
+		"    [closed:duplicate] " + duplicate + "  Duplicated one",
+		"    [closed:superseded] " + superseded + "  Superseded one",
+		"    [closed:obsolete] " + obsolete + "  Obsolete one",
+		"    [closed:wontfix] " + wontfix + "  Declined one",
+	}
+	for _, want := range wantLines {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing line %q in:\n%s", want, out)
+		}
+	}
+}

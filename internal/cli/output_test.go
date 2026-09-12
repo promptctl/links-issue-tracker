@@ -132,3 +132,71 @@ func TestPrintIssueGroupNamesRetentionRatherThanStatus(t *testing.T) {
 		})
 	}
 }
+
+// TestPrintIssueGroupNamesTheCloseReason pins the resolution into every
+// relation group. A closed ticket's resolution is stored, sealed, and rendered
+// in the `lit show` header, but the relation groups printed a bare "[closed]"
+// — so in exactly the views used to judge "is this area finished?", a wontfix
+// declination read identically to finished work. The loss was directional: it
+// could only make a body of work look MORE finished than it is, which is the
+// error that never prompts anyone to go check. An agent acted on it and
+// reported three declined tickets as folded-in work (promptctl-output-p60y).
+//
+// [LAW:behavior-not-structure] The contract is the line a reader acts on, so
+// the arms differ only in what was recorded at close. One renderer produces
+// every relation group `lit show` prints — parent, depends_on, blocks,
+// redirect, related — so pinning it here pins all of them; the epic plan's
+// Children block is the other surface and is pinned in epic_context_test.go.
+func TestPrintIssueGroupNamesTheCloseReason(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		resolution *model.Resolution
+		want       string
+	}{
+		// The `lit done` close records no reason: the absence is the data, and
+		// the bare word stays the rendering for genuinely finished work.
+		{name: "done", resolution: nil, want: "[closed]"},
+		{name: "duplicate", resolution: resolutionOf(model.ResolutionDuplicate), want: "[closed:duplicate]"},
+		{name: "superseded", resolution: resolutionOf(model.ResolutionSuperseded), want: "[closed:superseded]"},
+		{name: "obsolete", resolution: resolutionOf(model.ResolutionObsolete), want: "[closed:obsolete]"},
+		{name: "wontfix", resolution: resolutionOf(model.ResolutionWontfix), want: "[closed:wontfix]"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dep, err := model.HydrateStatus(model.Issue{
+				ID: "links-test.1", Title: "The blocker", IssueType: "task", Topic: "output",
+			}, model.StatusView{Value: model.StateClosed, Resolution: tc.resolution})
+			if err != nil {
+				t.Fatalf("HydrateStatus() error = %v", err)
+			}
+
+			var buf bytes.Buffer
+			if err := printIssueGroup(&buf, "depends_on", []model.Issue{dep}); err != nil {
+				t.Fatalf("printIssueGroup() error = %v", err)
+			}
+
+			want := "- links-test.1 " + tc.want + " The blocker\n"
+			if !strings.Contains(buf.String(), want) {
+				t.Fatalf("printIssueGroup() = %q, want a line %q", buf.String(), want)
+			}
+		})
+	}
+
+	// The acceptance is that a reader can tell the five shapes APART, which no
+	// per-arm assertion states: five arms could each pass while two of them
+	// rendered the same word. [LAW:verifiable-goals]
+	seen := map[string]string{}
+	for _, tc := range cases {
+		if first, collision := seen[tc.want]; collision {
+			t.Errorf("%s and %s both render %q, so a reader cannot tell them apart", first, tc.name, tc.want)
+		}
+		seen[tc.want] = tc.name
+	}
+}
+
+// resolutionOf addresses a sealed-set constant for the *Resolution the status
+// view carries. Every arm above needs one, and a shared helper keeps the table
+// from growing a local variable per arm.
+func resolutionOf(r model.Resolution) *model.Resolution { return &r }
