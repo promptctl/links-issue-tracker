@@ -190,6 +190,27 @@ func (s *Store) withStampedMutation(ctx context.Context, stamp commitStamp, fn f
 	})
 }
 
+// rotationCloseReserve is what the retry loop sets aside for the one part of a
+// connection rotation nothing can bound: Store.reconnect closes the previous,
+// live engine before opening the next, and `*sql.DB.Close()` takes no context,
+// so engineOpenRetryMaxElapsed — which bounds only the new engine's ping —
+// says nothing about it.
+//
+// Measured 2026-09-12 rather than guessed, off the same sample the mirror's
+// sizing uses: three `lit sync status` runs, each a whole process that opens a
+// sync session and closes it with no push, took 0.26s, 0.31s and 0.39s end to
+// end. That bounds open AND close together at under 0.4s in the healthy case,
+// so a second is comfortable headroom over the close alone — and it is 1.4% of
+// the engine-open budget it is added to, which is the point: the term is small,
+// but a reservation that assumed it was zero would be asserting something
+// nobody had measured. [FRAMING:representation]
+//
+// A variable, by the same convention the other budgets in this package follow:
+// a pin whose premise is that the reservation covers this term has to be able
+// to make the term large enough to matter, and at production scale it is
+// deliberately too small to change the loop's iteration count.
+var rotationCloseReserve = time.Second
+
 // commitLockWaiterBudget is how long a commit-lock waiter is sized to wait for
 // the holder to release: the one home for a figure that was previously spelled
 // as "~15 minutes" in three comments and two docs, none of which could notice
@@ -240,15 +261,24 @@ func retryTransientGCContention(ctx context.Context, operation retryOperation, r
 		if !errors.Is(err, ErrTransientGCContention) || attempt == transientRetryMaxAttempts {
 			break
 		}
-		// Checked before the sleep, and reserving room for everything that
-		// runs between here and the next check: the inter-attempt sleep AND
-		// the rotation's engine open. Reserving only the rotation would leave
-		// the sleep — up to transientRetryMaxDelay — outside the arithmetic,
-		// and a bound that omits a term it cannot see is the prose bound this
-		// loop just replaced, only with a smaller error. Stopping here ends
-		// the same way exhausting the attempts does: the manifest never
-		// cleared, which is what exhaustedContentionError already says.
-		if time.Since(start)+delayForAttempt(attempt)+engineOpenRetryMaxElapsed >= commitLockWaiterBudget() {
+		// Checked before the sleep, and reserving room for EVERY term that
+		// runs between here and the next check — the inter-attempt sleep, and
+		// both halves of the rotation. A reservation that omits a term it
+		// cannot see is the prose bound this loop replaced, with a smaller
+		// error, so each one is named: the sleep (up to
+		// transientRetryMaxDelay), the new engine's open (bounded by
+		// engineOpenRetryMaxElapsed), and the PREVIOUS engine's close
+		// (rotationCloseReserve). That last one is the term to be careful
+		// about — Store.reconnect closes the old engine before pinging the
+		// new one, `*sql.DB.Close()` takes no context, so no deadline
+		// anywhere can cut it and engineOpenRetryMaxElapsed does not cover
+		// it. Its cost is reserved rather than bounded, which makes the
+		// honest statement of the hold "the budget, plus at most one engine
+		// close" rather than the budget flat. Stopping here ends the same way
+		// exhausting the attempts does: the manifest never cleared, which is
+		// what exhaustedContentionError already says.
+		rotationReserve := engineOpenRetryMaxElapsed + rotationCloseReserve
+		if time.Since(start)+delayForAttempt(attempt)+rotationReserve >= commitLockWaiterBudget() {
 			break
 		}
 		if waitErr := sleep(ctx, delayForAttempt(attempt)); waitErr != nil {

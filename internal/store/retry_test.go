@@ -449,86 +449,99 @@ func TestWithCommitLockSerializesConcurrentOperations(t *testing.T) {
 // inside every commit-lock waiter's budget.
 //
 // That was asserted in prose and enforced by nothing. The retry loop rotates
-// the connection up to transientRetryMaxAttempts-1 times, each rotation an
-// engine open bounded by engineOpenRetryMaxElapsed, and every second of it
-// accrues while the commit lock is held — so the real hold is the product of
+// the connection up to transientRetryMaxAttempts-1 times, and every second of
+// it accrues while the commit lock is held, so the real hold is the product of
 // two budgets that never referenced each other. It fit only by coincidence
 // (29 x 30s = 14.5min against 15min) until links-sync-dauk derived the open
 // budget from the mirror's measured hold ceiling and the product became
 // 33.8min.
 //
-// The test drives the loop with a rotation that actually costs its open budget
-// and asserts the loop gives up on the hold rather than on the attempts: it
-// must stop early, and the whole call must return inside the waiter budget.
-// Not parallel: it shrinks package budget variables.
+// The loop's reservation has to cover every term that runs between one check
+// and the next, and there are three: the inter-attempt sleep, the new engine's
+// open, and the previous engine's close. Two rows, because which omission a
+// behavioural pin can SEE depends on whether the omitted term is big enough to
+// cost an iteration — so each row makes one term dominant and would lose an
+// iteration's worth of budget if the reservation dropped it. One row would
+// pass while a term it never weighted went unreserved, which is exactly how
+// the first version of this pin missed the sleep.
+// [LAW:dataflow-not-control-flow] one body, the weighting is data.
+//
+// Not parallel: it mutates package budget variables.
 func TestRetryTransientGCContentionStopsBeforeOutlastingCommitLockWaiters(t *testing.T) {
-	restoreOpen := engineOpenRetryMaxElapsed
-	engineOpenRetryMaxElapsed = 200 * time.Millisecond
-	t.Cleanup(func() { engineOpenRetryMaxElapsed = restoreOpen })
-	restoreAttempts := commitLockRetryAttempts
-	commitLockRetryAttempts = 20
-	t.Cleanup(func() { commitLockRetryAttempts = restoreAttempts })
-	// commitLockWaiterBudget() is now 20 x 100ms = 2s against a 550ms
-	// sleep-plus-rotation, so the loop has room for three of them and stops far
-	// short of its 30 attempts.
-	//
-	// The shape is chosen for two margins, not one. Stopping at ~1650ms leaves
-	// 350ms under the budget, which is what keeps the assertion from failing on
-	// scheduler jitter across six real sleeps on a loaded runner. And dropping
-	// the sleep term from the check under test buys one more iteration, landing
-	// at ~2200ms — 200ms PAST the budget, so the pin still reddens for the
-	// defect it exists to catch. Tightening either number shrinks both margins
-	// at once: a pin that cannot flake because it can no longer fail is not a
-	// pin. [LAW:verifiable-goals]
-	waiterBudget := commitLockWaiterBudget()
+	for _, tc := range []struct {
+		name      string
+		open      time.Duration
+		closeCost time.Duration
+		delay     time.Duration
+	}{
+		{name: "sleep dominates the reservation", open: 100 * time.Millisecond, closeCost: 100 * time.Millisecond, delay: 450 * time.Millisecond},
+		{name: "engine close dominates the reservation", open: 100 * time.Millisecond, closeCost: 450 * time.Millisecond, delay: 100 * time.Millisecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			restoreOpen := engineOpenRetryMaxElapsed
+			engineOpenRetryMaxElapsed = tc.open
+			t.Cleanup(func() { engineOpenRetryMaxElapsed = restoreOpen })
+			restoreClose := rotationCloseReserve
+			rotationCloseReserve = tc.closeCost
+			t.Cleanup(func() { rotationCloseReserve = restoreClose })
+			restoreAttempts := commitLockRetryAttempts
+			commitLockRetryAttempts = 30
+			t.Cleanup(func() { commitLockRetryAttempts = restoreAttempts })
 
-	// Always contended, and shaped through wrapCommitWorkingSetError — the real
-	// entry a Dolt commit error flows through — so this is a map of the
-	// production error rather than a bare-string approximation. An operation
-	// that never clears is exactly the sustained contention the invariant is
-	// about.
-	op := func(context.Context) error {
-		return wrapCommitWorkingSetError(errors.New("Error 1105: cannot update manifest: database is read only"))
-	}
-	rotations := 0
-	rotate := func(context.Context) error {
-		rotations++
-		time.Sleep(engineOpenRetryMaxElapsed)
-		return nil
-	}
-	// A REAL inter-attempt delay, really slept. Stubbing the delay to zero
-	// would leave the sleep out of the measured hold, and the sleep is one of
-	// the two terms the budget check has to reserve for — a pin driven with a
-	// zero delay cannot tell a check that reserves both terms from one that
-	// reserves only the rotation, which is exactly the gap this assertion
-	// exists to close.
-	const interAttemptDelay = 350 * time.Millisecond
-	delayForAttempt := func(int) time.Duration { return interAttemptDelay }
+			// A 3s budget against a 650ms reservation leaves room for four
+			// rotations, so the loop stops on the hold and nowhere near its
+			// 30 attempts. It lands at ~2.6s, 400ms clear of the budget —
+			// margin enough to survive scheduler jitter across eight real
+			// sleeps on a loaded runner, which the first version of this pin
+			// (50ms of room across ten) was not.
+			waiterBudget := commitLockWaiterBudget()
 
-	start := time.Now()
-	err := retryTransientGCContention(
-		context.Background(),
-		op,
-		rotate,
-		delayForAttempt,
-		func(_ context.Context, d time.Duration) error {
-			time.Sleep(d)
-			return nil
-		},
-	)
-	elapsed := time.Since(start)
+			// Contended forever, shaped through wrapCommitWorkingSetError so
+			// this is a map of the production error rather than a bare-string
+			// approximation. An operation that never clears is the sustained
+			// contention the invariant is about.
+			op := func(context.Context) error {
+				return wrapCommitWorkingSetError(errors.New("Error 1105: cannot update manifest: database is read only"))
+			}
+			rotations := 0
+			// The rotation really costs what reconnect costs: closing the old
+			// engine plus opening the new one. Sleeping only the open would
+			// leave the close out of the measured hold and the row that
+			// weights it could not fail.
+			rotate := func(context.Context) error {
+				rotations++
+				time.Sleep(engineOpenRetryMaxElapsed + rotationCloseReserve)
+				return nil
+			}
+			// A real delay, really slept, for the same reason.
+			delayForAttempt := func(int) time.Duration { return tc.delay }
 
-	if err == nil {
-		t.Fatal("retryTransientGCContention() error = nil, want the exhausted-contention error")
-	}
-	var blocked WorkspaceWriteBlockedError
-	if !errors.As(err, &blocked) {
-		t.Fatalf("retryTransientGCContention() error = %v, want a WorkspaceWriteBlockedError; giving up on the hold must fail the same way giving up on the attempts does", err)
-	}
-	if elapsed >= waiterBudget {
-		t.Fatalf("the retry held for %s against a commitLockWaiterBudget of %s; a commit-lock waiter arriving behind this holder fails with the workspace-busy sentinel naming a holder that was never wedged", elapsed, waiterBudget)
-	}
-	if rotations >= transientRetryMaxAttempts-1 {
-		t.Fatalf("rotations = %d, want fewer than the %d the attempt count alone allows; the loop ran its attempts out instead of stopping on the hold budget, so nothing is bounding the product of the two budgets", rotations, transientRetryMaxAttempts-1)
+			start := time.Now()
+			err := retryTransientGCContention(
+				context.Background(),
+				op,
+				rotate,
+				delayForAttempt,
+				func(_ context.Context, d time.Duration) error {
+					time.Sleep(d)
+					return nil
+				},
+			)
+			elapsed := time.Since(start)
+
+			if err == nil {
+				t.Fatal("retryTransientGCContention() error = nil, want the exhausted-contention error")
+			}
+			var blocked WorkspaceWriteBlockedError
+			if !errors.As(err, &blocked) {
+				t.Fatalf("retryTransientGCContention() error = %v, want a WorkspaceWriteBlockedError; giving up on the hold must fail the same way giving up on the attempts does", err)
+			}
+			if elapsed >= waiterBudget {
+				t.Fatalf("the retry held for %s against a commitLockWaiterBudget of %s; a commit-lock waiter arriving behind this holder fails with the workspace-busy sentinel naming a holder that was never wedged", elapsed, waiterBudget)
+			}
+			if rotations >= transientRetryMaxAttempts-1 {
+				t.Fatalf("rotations = %d, want fewer than the %d the attempt count alone allows; the loop ran its attempts out instead of stopping on the hold budget, so nothing is bounding the product of the two budgets", rotations, transientRetryMaxAttempts-1)
+			}
+		})
 	}
 }
