@@ -1,6 +1,6 @@
 Managing existing tickets (lit)
 
-Update fields: `lit update <issue-id> --title "..." --description "..." --priority 1 [--labels a,b]`
+Update fields: `lit update <issue-id> --title "..." --description "..." --priority urgent [--labels a,b]`
 Update many at once: `lit import --path <file.yaml>` with an `id:` in each YAML document
 selects that ticket for the same field patch `lit update` applies — see `lit import` in
 docs/cli-reference.md.

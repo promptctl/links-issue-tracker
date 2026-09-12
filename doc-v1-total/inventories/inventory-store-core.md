@@ -3896,7 +3896,7 @@ updated %d issues\n         (len(result.Updated))
 
 Parsers (`internal/storage/specs.go`): `bulk: parse spec: %w`, `import: parse spec: %w`, `import: unexpected trailing data after spec array`.
 
-Shared parse gates: `issue type must be task, feature, bug, chore, or epic` (`internal/model/issue_type.go:35` + `oxfordOr`, `:74-87`), `priority must be 0 (normal) or 1 (urgent)` (`internal/model/priority.go:40`).
+Shared parse gates: `issue type must be task, feature, bug, chore, or epic` (`internal/model/issue_type.go:35` + `oxfordOr`, `:73-94`), `priority must be normal (0) or urgent (1)` (`internal/model/priority.go:87`, built from `priorityTokens()` through the same `oxfordOr`, and returned by both `ParsePriority` and `ParsePriorityName`).
 
 
 ---

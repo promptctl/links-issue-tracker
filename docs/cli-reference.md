@@ -299,7 +299,7 @@ status and any cross-epic dependencies. Exits 4 if the ID doesn't exist.
 
 ```text
 lit new --title <text> --topic <slug> [--type task|feature|bug|chore|epic]
-        [--description <text>] [--parent <id>] [--lane <key>] [--priority 0|1]
+        [--description <text>] [--parent <id>] [--lane <key>] [--priority normal|urgent]
         [--labels <csv>] [--assignee <a>] [--prompt <text>] [--top]
 ```
 
@@ -314,11 +314,18 @@ partitions an epic's children into parallel rank-ordered sub-sequences: a shared
 serializes, distinct lanes parallelize. `--prompt` stores a reusable agent prompt for
 the work the issue captures.
 
+`--priority` takes the word every read surface prints — `normal` or `urgent`, as
+`lit show` and the issue rows render it — so a priority you read back can be pasted
+straight into the flag that sets it. The numeric spelling `lit export` writes and the
+`lit import` payload carries (`0`, `1`) is accepted too, and the two are the same
+value. Anything else is refused: the domain has exactly these two levels, so
+`--priority 2` is an error rather than a silent coercion to `normal`.
+
 ### `lit update`
 
 ```text
 lit update <id> [--title <text>] [--description <text>] [--prompt <text>]
-           [--type <t>] [--priority 0|1] [--assignee <a>] [--labels <csv>]
+           [--type <t>] [--priority normal|urgent] [--assignee <a>] [--labels <csv>]
            [--lane <key>] [--reason <text>]
 ```
 
@@ -368,7 +375,7 @@ whole-project.
 
 ```text
 lit followup --on <closed-id> --title <text> [--description <text>] [--topic <slug>]
-             [--type <t>] [--priority 0|1] [--assignee <a>] [--labels <csv>]
+             [--type <t>] [--priority normal|urgent] [--assignee <a>] [--labels <csv>]
              [--top]
 ```
 

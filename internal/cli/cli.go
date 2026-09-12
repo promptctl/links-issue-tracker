@@ -232,7 +232,7 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	issueType := fs.String("type", string(model.TypeTask), "Issue type: "+issueTypeChoices())
 	topic := fs.String("topic", "", "Required immutable issue topic slug (1-2 words; stable area of focus; e.g., 'refactor' or 'field-history')")
 	parentID := fs.String("parent", "", "Optional parent issue ID; child IDs become parentID.<hash>")
-	priority := fs.Int("priority", int(model.PriorityNormal), "Priority: 0=normal, 1=urgent")
+	priority := fs.String("priority", model.PriorityNormal.String(), "Priority: "+priorityChoices())
 	assignee := fs.String("assignee", "", "Assignee")
 	labels := fs.String("labels", "", "Comma-separated labels")
 	lane := fs.String("lane", "", "Lane key partitioning an epic's children into parallel rank-ordered sub-sequences; shared lane serializes, distinct lane parallelizes")
@@ -280,7 +280,7 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	prompt := fs.String("prompt", "", "Optional reusable agent prompt for the follow-up")
 	issueType := fs.String("type", string(model.TypeTask), "Issue type: "+issueTypeChoices())
 	topic := fs.String("topic", "", "Topic slug; inherits from --on when omitted")
-	priority := fs.Int("priority", int(model.PriorityNormal), "Priority: 0=normal, 1=urgent")
+	priority := fs.String("priority", model.PriorityNormal.String(), "Priority: "+priorityChoices())
 	assignee := fs.String("assignee", "", "Assignee")
 	labels := fs.String("labels", "", "Comma-separated labels")
 	top := fs.Bool("top", false, "Promote the follow-up to the top of the order (the default appends it to the bottom of its frame)")
@@ -290,7 +290,7 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	parentID := strings.TrimSpace(*on)
 	titleValue := strings.TrimSpace(*title)
 	if parentID == "" || titleValue == "" {
-		return UsageError{Message: "usage: lit followup --on <id> --title <text> [--description <text>] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--top]"}
+		return UsageError{Message: "usage: lit followup --on <id> --title <text> [--description <text>] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--top]"}
 	}
 	parent, err := ap.Store.GetIssue(ctx, parentID)
 	if err != nil {
@@ -986,7 +986,7 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	description := fs.String("description", "", "Issue description")
 	prompt := fs.String("prompt", "", "Reusable agent prompt for the work this issue captures")
 	issueType := fs.String("type", "", "Issue type: "+issueTypeChoices())
-	priority := fs.Int("priority", int(model.PriorityNormal), "Priority: 0=normal, 1=urgent") // [LAW:one-source-of-truth] default derives from model constant; matches runNew/runFollowup
+	priority := fs.String("priority", model.PriorityNormal.String(), "Priority: "+priorityChoices()) // [LAW:one-source-of-truth] default derives from model constant; matches runNew/runFollowup
 	assignee := fs.String("assignee", "", "Assignee")
 	labels := fs.String("labels", "", "Comma-separated labels")
 	lane := fs.String("lane", "", "Lane key partitioning an epic's children into parallel rank-ordered sub-sequences; shared lane serializes, distinct lane parallelizes")
@@ -1000,10 +1000,10 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		return err
 	}
 	if len(positional) != 1 {
-		return UsageError{Message: "usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--lane <key>] [--reason <text>]"}
+		return UsageError{Message: "usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--lane <key>] [--reason <text>]"}
 	}
 	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--lane <key>] [--reason <text>]"}
+		return UsageError{Message: "usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--lane <key>] [--reason <text>]"}
 	}
 	visited := map[string]bool{}
 	fs.Visit(func(flag *pflag.Flag) { visited[flag.Name] = true })
@@ -1948,12 +1948,33 @@ func parseIssueTypeFlag(raw string) (model.IssueType, error) {
 // flags (new/followup/update). The ValidationError wrapper keeps the exit-code
 // contract these commands have always had: a bad priority is ExitValidation,
 // as it was when the store performed this check.
-func parsePriorityFlag(raw int) (model.Priority, error) {
-	p, err := model.ParsePriority(raw)
+//
+// It takes the raw string rather than an int because the flag is declared with
+// fs.String: an fs.Int let pflag's own strconv.ParseInt refuse "urgent" before
+// this gate ever ran, which both rejected the word every read surface prints
+// and returned a bare pflag error — one that misses the validation_refused arm
+// in commandErrorReason and so drew the default "Retry the command" remediation
+// on a refusal no retry can change (links-cli-bvko). Routing the value through
+// model.ParsePriorityName puts the whole domain behind one gate that answers in
+// ValidationError. [LAW:single-enforcer] [LAW:no-silent-failure]
+func parsePriorityFlag(raw string) (model.Priority, error) {
+	p, err := model.ParsePriorityName(raw)
 	if err != nil {
 		return 0, ValidationError{Message: err.Error()}
 	}
 	return p, nil
+}
+
+// priorityChoices renders the sealed priority vocabulary for flag help, derived
+// from the canonical list so help text cannot drift from the parse gate.
+// Mirrors issueTypeChoices. [LAW:one-source-of-truth]
+func priorityChoices() string {
+	priorities := model.Priorities()
+	names := make([]string, len(priorities))
+	for i, p := range priorities {
+		names[i] = p.String()
+	}
+	return strings.Join(names, "|")
 }
 
 // issueTypeChoices renders the sealed vocabulary for flag help, derived from
