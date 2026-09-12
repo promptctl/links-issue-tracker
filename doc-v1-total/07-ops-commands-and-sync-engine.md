@@ -285,9 +285,13 @@ Commands emit **breadcrumbs** — `deeper guidance: lit quickstart <topic>` as a
 
 ## `lit version` and the build-status note
 
-`lit version` (no positionals) prints: `lit <version|dev> (commit <sha|unknown>, built <date|unknown>)`; `built <age> ago` when the build date parses; a staleness warning when the age crosses the threshold ("run `just build`…"); and always `schema versions supported: <min>–<max>` (`version.go:17-68`).
+`lit version` (no positionals) prints: `lit <version|dev> (commit <sha|unknown>, built <date|unknown>)`; `built <age> ago` when the build date parses; a staleness warning when `Info.StaleSourceBuild` reports true ("run `just build` (or `just install`)…"); and always `schema versions supported: <min>–<max>` (`version.go:17-70`).
 
-The build-status note (`build_status.go:20-54`) renders `build: release <v>`, `build: dev build (build date unknown)`, `build: dev build, built <age> ago` — or the same with `— STALE (at least <threshold> old; run `just build` to refresh)`. A version-read failure yields `build: status unavailable (<err>)` rather than aborting. The note appears in `init` output, the init sync trace, `doctor`, every sync-failure block, and every sync trace.
+`Info.StaleSourceBuild(now)` is the one staleness verdict every surface reads, returning the age alongside it. It reports stale only for a build whose `Origin` is not `release` (`Info.FromSource`) whose parsed build date is at or past `StaleBuildThreshold`; a release build at any age, a build inside the threshold, and a build whose date is absent, unparseable, or in the future all report fresh. Provenance comes from the stamped `Origin`, not from `IsDev` — `scripts/install.sh` source mode stamps a `git describe` `Version`, so `IsDev` is false for a binary built from a working tree.
+
+The build-status note (`build_status.go`) renders `build: release <v>` for a non-source build, and otherwise `build: dev build (build date unknown)`, `build: dev build, built <age> ago`, or `build: dev build, built <age> ago — STALE (at least <threshold> old; run `just build` (or `just install`) to refresh)`. A version-read failure yields `build: status unavailable (<err>)` rather than aborting. The note appears in `init` output, the init sync trace, `doctor`, every sync-failure block, and every sync trace.
+
+A separate, rarer line carries build drift onto the ordinary read commands. `buildStalenessLines` renders at most one line — `build: this binary was built <age> ago (over <threshold>) — it may predate fixes already on master, including the routing behind this answer; run `just install` to refresh` — and only for a stale source build, so a release build, a fresh build, and a build with no trustworthy date print nothing. `printStalenessWarning` emits it ahead of the sync push-failure, ahead-count, and stale-fetch lines, which puts it first on screen for `lit next`, `lit backlog`, and the full-detail `lit show`.
 
 ## Managed sections and embedded templates
 

@@ -169,13 +169,13 @@ One flag, `--to <version>` (v-prefixed tag; a missing `v` is added; `/`, `\`, `.
 
 Three modes: source build (default), `--from-release <tag>`, `--latest-release` (mutually exclusive; `--latest-release` needs `jq` and reads the GitHub API) (`scripts/install.sh:103-136, 241-254`). Target-directory priority: existing `lit` on PATH → `$GOBIN` → `go env GOBIN` → first `go env GOPATH` entry + `/bin` → `$HOME/.local/bin` (error if `HOME` unset) (`:141-187`).
 
-- **Source mode**: version from `git describe --tags --always --dirty` (leading `v` stripped; empty stays empty so the build is dev), then `go build` with `-buildvcs=false` and ldflags for all three version variables (`:192-229`).
+- **Source mode**: version from `git describe --tags --always --dirty` (leading `v` stripped; empty stays empty so the build is dev), then `go build` with `-buildvcs=false` and ldflags for all four version variables — `Version`, `Commit`, `Date`, and `Origin` (`source`), the last of which is what keeps the stamped `Version` from making an installed working-tree build read as a release (`:192-234`).
 - **Release mode**: tag must be canonical `vX.Y.Z`; archive name `lit_<ver>_<os>_<arch>.<ext>` with an arch map (amd64/arm64 only) and OS map (linux/darwin → tar.gz, Windows shells → zip); downloads archive + `checksums.txt` into a temp dir created inside the target dir so the final `mv` is atomic; checksum extracted by exact awk field match and verified; tar/zip entry names are structurally validated *before* extraction (flat, regular files only); the extracted binary must not be a symlink, must be a regular file, and must be executable (`:230-456`).
 - Post-install, unconditionally: removes stale `lnks` binaries in the target dir, prints `Installed lit -> <path>`, runs `lit version`, and warns about any other `lit` on PATH whose realpath differs from the just-installed one (`:459-492`).
 
 ### Helper scripts
 
-- `scripts/version-ldflags.sh`: must be sourced (executing exits 64); exports `LIT_BUILD_COMMIT` (short HEAD) and `LIT_BUILD_DATE` (UTC RFC3339-like); deliberately never sets `Version`.
+- `scripts/version-ldflags.sh`: must be sourced (executing exits 64); exports `LIT_BUILD_COMMIT` (short HEAD), `LIT_BUILD_DATE` (UTC RFC3339-like), and `LIT_BUILD_ORIGIN` (the constant `source`, shared by both from-source entrypoints); deliberately never sets `Version`.
 - `scripts/cgo-env.sh`: must be sourced (executing exits 64); a no-op off macOS; on Darwin requires Homebrew, locates `icu4c@78` (falling back to `icu4c`) and `zstd`, verifies headers exist, and exports `CGO_CPPFLAGS`/`CGO_LDFLAGS` preserving caller values.
 - `scripts/next-version.sh <minor|patch>`: computes the next tag from the latest clean `vX.Y.Z` tag; major is frozen for this repo; distinct exit codes 2 (usage), 3 (no/malformed latest tag), 4 (computed tag already exists).
 - `scripts/cleanroom-*.sh` exist but are referenced by no Justfile target or workflow.
@@ -190,7 +190,7 @@ Every compile recipe sources `cgo-env.sh` first (`Justfile:1-5`).
 |---|---|
 | `default` | `just --list` |
 | `setup` | Darwin: require Homebrew, `brew install icu4c@78 zstd`, persist `CGO_*` flags via `go env -w` when needed |
-| `build` | `go build -buildvcs=false` with Commit + Date ldflags — deliberately no `Version`, so the result is a dev build |
+| `build` | `go build -buildvcs=false` with Commit + Date + Origin (`source`) ldflags — deliberately no `Version`, so the result is a dev build |
 | `test-short` | `go test -short ./...` |
 | `test *args` | `go test -timeout 30m <args or ./...>`; a caller-supplied `-timeout` wins |
 | `lint` | `golangci-lint run` |
@@ -253,7 +253,7 @@ Push to `master` + manual dispatch; never on PRs; concurrency without cancellati
 
 ### goreleaser configuration
 
-One build, `./cmd/lit`, CGO enabled, cross-compiled with per-target zig wrapper compilers (`zig-cc-<triple>`); ICU headers/libs from `/opt/icu/<os>_<arch>`; `-static` on linux only; `-tags=icu_static`; `-trimpath -buildvcs=false`; `-s -w` plus the three version ldflags. Targets: linux/darwin/windows × amd64/arm64 minus windows/arm64 = five. Archives are `lit_<version>_<os>_<arch>.tar.gz` (zip on Windows), no wrapper directory, bundling `LICENSE`, `README*`, `THIRD_PARTY_LICENSES`, `LICENSE-REPORT.md`, `FORKS.md`; sha256 `checksums.txt`; snapshot versions are `<incpatch>-snapshot+<shortcommit>`. Goreleaser itself never publishes (`release.disable: true`) — the workflow's publish job does (`.goreleaser.yml:21-225`).
+One build, `./cmd/lit`, CGO enabled, cross-compiled with per-target zig wrapper compilers (`zig-cc-<triple>`); ICU headers/libs from `/opt/icu/<os>_<arch>`; `-static` on linux only; `-tags=icu_static`; `-trimpath -buildvcs=false`; `-s -w` plus the four version ldflags (`Origin` is the literal `release`, the only producer that stamps it). Targets: linux/darwin/windows × amd64/arm64 minus windows/arm64 = five. Archives are `lit_<version>_<os>_<arch>.tar.gz` (zip on Windows), no wrapper directory, bundling `LICENSE`, `README*`, `THIRD_PARTY_LICENSES`, `LICENSE-REPORT.md`, `FORKS.md`; sha256 `checksums.txt`; snapshot versions are `<incpatch>-snapshot+<shortcommit>`. Goreleaser itself never publishes (`release.disable: true`) — the workflow's publish job does (`.goreleaser.yml:21-225`).
 
 ### Release toolchain image
 

@@ -233,7 +233,7 @@ func TestMarkFetchSuccessBackdatedMarkerIsStale(t *testing.T) {
 }
 
 // TestPrintSyncStalenessWarningResolvesAgainstRealWorkspace drives
-// printSyncStalenessWarning's boundary step (resolveDoctorSyncFreshness +
+// printStalenessWarning's boundary step (resolveDoctorSyncFreshness +
 // lastFetchSuccessAge) against a real git repo with no remote — the common
 // single-machine case — and confirms it stays silent rather than printing a
 // no-remote warning: this banner is supplementary, not a diagnostic in its
@@ -248,11 +248,11 @@ func TestPrintSyncStalenessWarningResolvesAgainstRealWorkspace(t *testing.T) {
 	defer st.Close()
 
 	var buf bytes.Buffer
-	if err := printSyncStalenessWarning(ctx, &buf, ws, st, time.Now()); err != nil {
-		t.Fatalf("printSyncStalenessWarning() error = %v", err)
+	if err := printStalenessWarning(ctx, &buf, ws, st, time.Now()); err != nil {
+		t.Fatalf("printStalenessWarning() error = %v", err)
 	}
 	if buf.Len() != 0 {
-		t.Fatalf("printSyncStalenessWarning() = %q, want silence for a no-remote workspace", buf.String())
+		t.Fatalf("printStalenessWarning() = %q, want silence for a no-remote workspace", buf.String())
 	}
 }
 

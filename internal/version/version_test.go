@@ -62,10 +62,13 @@ func TestIsDevPromotesVersionAbsence(t *testing.T) {
 	}
 }
 
-// TestInfoFieldsRoundTripFromLinkTimeVariables pins that all three link-time
-// strings reach Info verbatim — no transformation, no parsing. The string the
-// linker writes is the string consumers see. This is the contract that lets
-// goreleaser inject `-ldflags -X ...=<value>` without any further processing.
+// TestInfoFieldsRoundTripFromLinkTimeVariables pins that the link-time strings
+// reach Info verbatim — no transformation, no parsing. The string the linker
+// writes is the string consumers see. This is the contract that lets goreleaser
+// inject `-ldflags -X ...=<value>` without any further processing. Origin is
+// the exception that proves the rule: it is the one link-time string Info reads
+// rather than republishes, and FromSource is that reading, pinned separately by
+// TestFromSourceReadsStampedOriginNotVersion.
 func TestInfoFieldsRoundTripFromLinkTimeVariables(t *testing.T) {
 	origV, origC, origD := Version, Commit, Date
 	t.Cleanup(func() { Version, Commit, Date = origV, origC, origD })
@@ -137,5 +140,94 @@ func TestBuildAgeRejectsFutureDate(t *testing.T) {
 
 	if _, ok := info.BuildAge(now); ok {
 		t.Error("BuildAge ok = true for a future Date, want false")
+	}
+}
+
+// TestFromSourceReadsStampedOriginNotVersion is the regression pin for
+// links-build-status-1svs. `scripts/install.sh` source mode stamps Version from
+// `git describe`, so the binary this repo installs onto a PATH has IsDev ==
+// false while being built from a working tree. Provenance must come from the
+// stamped Origin, never from the presence of a Version — that inference is what
+// made a `just install` binary present itself as a release and stop reporting
+// its own age.
+func TestFromSourceReadsStampedOriginNotVersion(t *testing.T) {
+	origV, origO := Version, Origin
+	t.Cleanup(func() { Version, Origin = origV, origO })
+
+	// The exact shape `just install` produces: a git-describe Version AND
+	// source provenance.
+	Version = "0.14.0-21-g613d76e"
+	Origin = OriginSource
+	installed, err := Get()
+	if err != nil {
+		t.Fatalf("Get() (installed source build) error = %v", err)
+	}
+	if installed.IsDev {
+		t.Error("IsDev = true for a git-describe Version, want false — IsDev still means 'no Version stamped'")
+	}
+	if !installed.FromSource {
+		t.Error("FromSource = false for a `just install` binary, want true — a stamped Version must not read as a release")
+	}
+
+	Origin = OriginRelease
+	released, err := Get()
+	if err != nil {
+		t.Fatalf("Get() (release) error = %v", err)
+	}
+	if released.FromSource {
+		t.Error("FromSource = true for Origin=release, want false")
+	}
+
+	// An unstamped Origin — a bare `go build`, or `go test` — is an unknown
+	// producer, and an unknown producer reads as from-source: the direction
+	// that warns rather than the one that goes quiet.
+	Origin = ""
+	unstamped, err := Get()
+	if err != nil {
+		t.Fatalf("Get() (unstamped) error = %v", err)
+	}
+	if !unstamped.FromSource {
+		t.Error("FromSource = false for an unstamped Origin, want true — unknown provenance must not be read as a release")
+	}
+}
+
+// TestStaleSourceBuildShapeTable is the accept/reject table for the one
+// staleness predicate every surface reads. The reject rows carry the weight:
+// each is a binary that must NOT be called stale, and each corresponds to one
+// invariant perturbed on its own — provenance, age, and a trustworthy Date.
+func TestStaleSourceBuildShapeTable(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	at := func(d time.Duration) string { return now.Add(-d).Format(time.RFC3339) }
+
+	cases := []struct {
+		name      string
+		info      Info
+		wantStale bool
+	}{
+		{"source build past the threshold", Info{FromSource: true, Date: at(10 * 24 * time.Hour)}, true},
+		{"source build exactly at the threshold", Info{FromSource: true, Date: at(StaleBuildThreshold)}, true},
+		{"installed source build with a git-describe Version", Info{Version: "0.14.0-21-g613d76e", FromSource: true, Date: at(21 * 24 * time.Hour)}, true},
+		{"release build, however old", Info{Version: "0.14.0", FromSource: false, Date: at(365 * 24 * time.Hour)}, false},
+		{"source build inside the threshold", Info{FromSource: true, Date: at(StaleBuildThreshold - time.Minute)}, false},
+		{"source build with no stamped Date", Info{FromSource: true}, false},
+		{"source build with an unparseable Date", Info{FromSource: true, Date: "last tuesday"}, false},
+		{"source build dated in the future", Info{FromSource: true, Date: now.Add(48 * time.Hour).Format(time.RFC3339)}, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			age, stale := tc.info.StaleSourceBuild(now)
+			if stale != tc.wantStale {
+				t.Fatalf("StaleSourceBuild() stale = %v, want %v", stale, tc.wantStale)
+			}
+			// The verdict carries the age it was reached on, so no caller has
+			// to re-ask BuildAge for the number it is about to print.
+			if stale {
+				wantAge, _ := tc.info.BuildAge(now)
+				if age != wantAge {
+					t.Errorf("StaleSourceBuild() age = %v, want %v (the age behind the verdict)", age, wantAge)
+				}
+			}
+		})
 	}
 }

@@ -4,7 +4,7 @@
 # Source it, then build with:
 #
 #     source scripts/version-ldflags.sh
-#     go build -ldflags "-X ${pkg}.Commit=$LIT_BUILD_COMMIT -X ${pkg}.Date=$LIT_BUILD_DATE" ...
+#     go build -ldflags "-X ${pkg}.Commit=$LIT_BUILD_COMMIT -X ${pkg}.Date=$LIT_BUILD_DATE -X ${pkg}.Origin=$LIT_BUILD_ORIGIN" ...
 #
 # Both values come from local commands only (git rev-parse --short HEAD, the
 # local system clock) — no network call, so a from-source build stamps
@@ -39,4 +39,10 @@ if [ -z "$LIT_BUILD_COMMIT" ]; then
     return 1
 fi
 LIT_BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-export LIT_BUILD_COMMIT LIT_BUILD_DATE
+# Provenance. Both entrypoints that source this file build from a working tree,
+# so both stamp the same value — the discriminator internal/version.FromSource
+# reads to decide whether build age means anything. It lives here, beside Commit
+# and Date, for the reason they do: one string, two callers, no way to drift.
+# [LAW:one-source-of-truth]
+LIT_BUILD_ORIGIN="source"
+export LIT_BUILD_COMMIT LIT_BUILD_DATE LIT_BUILD_ORIGIN

@@ -49,17 +49,24 @@ func runVersion(stdout io.Writer, args []string) error {
 	// no age line rather than a fabricated one. [LAW:no-defensive-null-guards]
 	// this is a trust-boundary check on link-time-injected input, not a guard
 	// papering over a value that should never be absent.
-	if age, ok := info.BuildAge(time.Now()); ok {
+	now := time.Now()
+	if age, ok := info.BuildAge(now); ok {
 		if _, err := fmt.Fprintf(stdout, "built %s ago\n", humanizeCoarseDuration(age)); err != nil {
 			return err
 		}
-		if age >= version.StaleBuildThreshold {
-			if _, err := fmt.Fprintf(stdout,
-				"WARNING: binary is older than %s — run `just build` (or `just install`) to pick up recent fixes\n",
-				humanizeCoarseDuration(version.StaleBuildThreshold),
-			); err != nil {
-				return err
-			}
+	}
+	// The verdict comes from version.StaleSourceBuild, not from a second
+	// comparison against StaleBuildThreshold here. This surface used to warn on
+	// age alone, which told the holder of a months-old *release* binary to run
+	// `just build` — advice that does not refresh it — while the build-status
+	// note on doctor/sync/init reached the opposite verdict about that same
+	// binary. One predicate now answers for both. [LAW:single-enforcer]
+	if _, stale := info.StaleSourceBuild(now); stale {
+		if _, err := fmt.Fprintf(stdout,
+			"WARNING: this build is older than %s — run `just build` (or `just install`) to pick up recent fixes\n",
+			humanizeCoarseDuration(version.StaleBuildThreshold),
+		); err != nil {
+			return err
 		}
 	}
 

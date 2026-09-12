@@ -11,9 +11,10 @@
 # toolchains (zig cc for every target: darwin, windows, and linux via musl),
 # invoked via the per-target CC env entries below.
 #
-# [LAW:one-source-of-truth] The version/commit/date a release reports come from
-# a single place: the ldflags injected here. internal/version.{Version,Commit,Date}
-# are the only sinks; no other code computes those fields.
+# [LAW:one-source-of-truth] The version/commit/date/origin a release reports come
+# from a single place: the ldflags injected here.
+# internal/version.{Version,Commit,Date,Origin} are the only sinks; no other code
+# computes those fields.
 #
 # [LAW:single-enforcer] release-validate.yml is the one place that builds,
 # validates, AND publishes a release; goreleaser's job ends at dist/.
@@ -142,6 +143,13 @@ builds:
       - -X github.com/promptctl/links-issue-tracker/internal/version.Version={{ .Version }}
       - -X github.com/promptctl/links-issue-tracker/internal/version.Commit={{ .ShortCommit }}
       - -X github.com/promptctl/links-issue-tracker/internal/version.Date={{ .Date }}
+      # The only producer that stamps "release". internal/version.FromSource
+      # reads this to decide whether build age is a staleness signal: a release
+      # binary ages by design and is refreshed with `lit upgrade`, while a
+      # binary built from a working tree falls behind that tree and says so.
+      # The value is a literal, not a template, because the fact it records is
+      # about this producer rather than about any particular build of it.
+      - -X github.com/promptctl/links-issue-tracker/internal/version.Origin=release
 
 archives:
   - id: lit

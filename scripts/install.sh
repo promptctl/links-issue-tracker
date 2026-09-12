@@ -224,8 +224,13 @@ case "$mode" in
         # checkout. [LAW:one-source-of-truth]
         # shellcheck source=scripts/version-ldflags.sh
         . "$ROOT_DIR/scripts/version-ldflags.sh"
+        # Origin comes from version-ldflags.sh too, and it is what keeps this
+        # mode honest: the `git describe` Version above makes IsDev false, so
+        # without a stamped provenance a binary installed from a working tree
+        # would present itself as a release and its build age would stop being
+        # reported at all. [LAW:one-source-of-truth]
         GOFLAGS="${GOFLAGS:+$GOFLAGS }-buildvcs=false" go build \
-            -ldflags "-X ${pkg}.Version=${ver} -X ${pkg}.Commit=${LIT_BUILD_COMMIT} -X ${pkg}.Date=${LIT_BUILD_DATE}" \
+            -ldflags "-X ${pkg}.Version=${ver} -X ${pkg}.Commit=${LIT_BUILD_COMMIT} -X ${pkg}.Date=${LIT_BUILD_DATE} -X ${pkg}.Origin=${LIT_BUILD_ORIGIN}" \
             -o "$TARGET_DIR/$BIN_NAME" ./cmd/lit
         ;;
     release|latest)

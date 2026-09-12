@@ -15,22 +15,30 @@ import (
 // to prevent: knowing "this decision was made by a dev build" turns a
 // mysterious failure into a five-minute diagnosis instead of a multi-step
 // forensic reconstruction. [LAW:one-source-of-truth] version.Info (and its
-// BuildAge method) is the only data source; this never re-derives IsDev or
-// re-parses Date.
+// BuildAge and StaleSourceBuild methods) is the only data source; this never
+// re-derives provenance or re-parses Date.
+//
+// Keyed on FromSource, not IsDev. IsDev asks whether a Version was stamped, and
+// `just install` stamps one from `git describe` — so every binary this repo
+// installs onto a PATH used to render as "build: release 0.14.0-21-g…" with its
+// age unmentioned, while being exactly the locally-built binary whose age is
+// the whole point of the note.
 func buildStatusNote(info version.Info, now time.Time) string {
-	if !info.IsDev {
+	if !info.FromSource {
 		return fmt.Sprintf("build: release %s", info.Version)
 	}
 	age, ok := info.BuildAge(now)
 	if !ok {
 		return "build: dev build (build date unknown)"
 	}
-	if age >= version.StaleBuildThreshold {
-		// "at least", not "older than": the guard is >=, so age can equal the
-		// threshold exactly, and "built 7 days ago — older than 7 days" would
-		// contradict itself at that exact boundary.
+	if _, stale := info.StaleSourceBuild(now); stale {
+		// "at least", not "older than": the comparison is >=, so age can equal
+		// the threshold exactly, and "built 7 days ago — older than 7 days"
+		// would contradict itself at that exact boundary. The remedy names both
+		// from-source entrypoints because this note now covers both, and
+		// `just build` alone would leave a `just install` binary unrefreshed.
 		return fmt.Sprintf(
-			"build: dev build, built %s ago — STALE (at least %s old; run `just build` to refresh)",
+			"build: dev build, built %s ago — STALE (at least %s old; run `just build` (or `just install`) to refresh)",
 			humanizeCoarseDuration(age), humanizeCoarseDuration(version.StaleBuildThreshold),
 		)
 	}
@@ -51,4 +59,52 @@ func resolveBuildStatusNote(now time.Time) string {
 		return fmt.Sprintf("build: status unavailable (%v)", err)
 	}
 	return buildStatusNote(info, now)
+}
+
+// buildStalenessLines renders the rare, loud warning that the decision about to
+// be printed is being made by a binary its own working tree has moved past —
+// the links-build-status-1svs surface. Zero or one line, in the shape and voice
+// syncStalenessLines uses, because build drift is drift of the same kind as an
+// unpushed commit or an unfetched remote and earns the same position: first on
+// screen, on the commands an agent actually runs, rather than in a diagnostic
+// nobody runs unasked.
+//
+// Rarity is the contract, not a nicety: a note that prints on every invocation
+// gets tuned out and takes the loud case with it. version.Info's accept/reject
+// table is what keeps it rare — a release build, a fresh source build, and a
+// source build with no trustworthy Date are all silent, which is every ordinary
+// invocation, leaving only the binary that has actually fallen behind. Pure
+// over its inputs so that table is testable with no live store, mirroring
+// syncStalenessLines' split from its own resolve step.
+// [LAW:dataflow-not-control-flow]
+func buildStalenessLines(info version.Info, now time.Time) []string {
+	age, stale := info.StaleSourceBuild(now)
+	if !stale {
+		return nil
+	}
+	return []string{fmt.Sprintf(
+		"build: this binary was built %s ago (over %s) — it may predate fixes already on master, including the routing behind this answer; run `just install` to refresh",
+		humanizeCoarseDuration(age), humanizeCoarseDuration(version.StaleBuildThreshold),
+	)}
+}
+
+// resolveBuildStalenessLines resolves this binary's version.Info and renders it
+// via buildStalenessLines — the one-call ergonomic resolveBuildStatusNote gives
+// the always-present note. A failure to resolve Info is not silence here: it
+// means the embedded migration registry could not be read, which is a binary
+// unable to account for itself at all — strictly worse news than the stale
+// binary this banner exists to announce, and so announced rather than
+// swallowed. It stays a banner line rather than an error because this surface
+// is supplementary: a read command must still answer.
+// [LAW:no-silent-failure] [LAW:effects-at-boundaries] the version lookup
+// happens here, at the boundary, so the renderer above stays pure.
+func resolveBuildStalenessLines(now time.Time) []string {
+	info, err := version.Get()
+	if err != nil {
+		return []string{fmt.Sprintf(
+			"build: this binary cannot report its own identity (%v) — its age and provenance are unknown",
+			err,
+		)}
+	}
+	return buildStalenessLines(info, now)
 }
