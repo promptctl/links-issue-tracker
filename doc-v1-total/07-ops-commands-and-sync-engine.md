@@ -19,16 +19,17 @@ Family commands (`sync`, `hooks`, `backup`, `snapshots`, `lifeboat`, …) resolv
 
 ### Exit codes
 
-The complete taxonomy (`internal/cli/exit.go:10-91`):
+The complete taxonomy (constants `internal/cli/exit.go:11-32`, dispatch `:37-144`):
 
 | Code | Meaning | Producing error types |
 |---|---|---|
 | 0 | success | nil (including handled `--help`) |
 | 1 | generic | plain errors, `OutsideWorkspaceError`, `BulkFailureError`, transient GC contention |
 | 2 | usage | `UsageError` |
-| 3 | validation | `UnknownCommandError`, `RetiredCommandError`, `ValidationError` (CLI and storage), `UnsupportedError` |
+| 3 | validation | `UnknownCommandError`, `RetiredCommandError`, `ValidationError` (CLI and storage), `UnsupportedError`, `templateShapeError`, `model.ContainerActionError` when not satisfied |
 | 4 | not found | `storage.NotFoundError` |
 | 5 | conflict | `MergeConflictError`, `SyncFailureError`, owner-approval refusal |
+| 6 | no work | `Exhausted`, `NoWork`, `model.ContainerActionError` when `Satisfied()` |
 | 7 | corruption | `CorruptionError` |
 
 Commands are organized into help groups: `bootstrap` ("Human Bootstrap"), `operations` ("Agent Operations"), `structure`, `data` ("Sync & Data"), `maintenance` ("Setup & Maintenance"), `retention`, and `guidance` (`register.go:61-76`). Access modes vary per command: `upgrade` is workspace-only and never opens the app store, `doctor` resolves read-vs-write from its args, `backup` sets access per row, and `stores`/`completion`/`version` open no workspace at all (`register.go:273-393`).

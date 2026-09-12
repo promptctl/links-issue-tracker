@@ -445,7 +445,7 @@ This is the single shared "why" computation behind both the real firing trace an
   (`internal/workflows/dispatch.go:68-72`). Every CLI call site passes `os.Stderr` as `errOut`.
 - Exit codes are unaffected by workflow firing; the general mapping is
   `ExitOK=0, ExitGeneric=1, ExitUsage=2, ExitValidation=3, ExitNotFound=4, ExitConflict=5,
-  ExitCorruption=7` (`internal/cli/exit.go:10-18`).
+  ExitNoWork=6, ExitCorruption=7` (`internal/cli/exit.go:11-32`).
 
 ---
 

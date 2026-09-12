@@ -34,16 +34,17 @@ Acceptance tests pin two shutdown properties (`cmd/lit/main_signal_test.go:146-1
 
 ### Exit codes
 
-Seven codes (`internal/cli/exit.go:10-18`); no code 6 exists.
+Eight codes (`internal/cli/exit.go:11-32`).
 
-| Code | Name | Produced by (dispatch order, `exit.go:23-95`) |
+| Code | Name | Produced by (dispatch order, `exit.go:37-144`) |
 |---|---|---|
 | 0 | `ExitOK` | success |
 | 1 | `ExitGeneric` | `OutsideWorkspaceError`, `BulkFailureError`, `ErrTransientGCContention`, anything unclassified |
 | 2 | `ExitUsage` | `UsageError` (flag/arg misuse) |
-| 3 | `ExitValidation` | `UnknownCommandError`, `RetiredCommandError`, CLI and storage `ValidationError`, `UnsupportedError` |
+| 3 | `ExitValidation` | `UnknownCommandError`, `RetiredCommandError`, CLI and storage `ValidationError`, `UnsupportedError`, `templateShapeError`, `model.ContainerActionError` when not satisfied |
 | 4 | `ExitNotFound` | `storage.NotFoundError` |
 | 5 | `ExitConflict` | `MergeConflictError`, `SyncFailureError`, `ownerApprovalRefusalError` |
+| 6 | `ExitNoWork` | `Exhausted`, `NoWork`, `model.ContainerActionError` when `Satisfied()` |
 | 7 | `ExitCorruption` | `CorruptionError` |
 
 Error rendering (`internal/cli/error_output.go:17-46`): stderr gets `error (code=%d): %v`, then `remediation: %s` when a remediation exists for the error's machine reason (reasons include `entity_not_found`, `merge_conflict`, `sync_divergence`, `owner_approval_required`).

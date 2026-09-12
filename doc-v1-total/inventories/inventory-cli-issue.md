@@ -140,7 +140,7 @@ into* one of those, the call and its observable effect are recorded here.
 
 ### 1.8 Exit-code taxonomy
 
-Constants (`exit.go:10-18`):
+Constants (`exit.go:11-32`):
 
 | Name | Value |
 |---|---|
@@ -150,26 +150,29 @@ Constants (`exit.go:10-18`):
 | `ExitValidation` | 3 |
 | `ExitNotFound` | 4 |
 | `ExitConflict` | 5 |
+| `ExitNoWork` | 6 |
 | `ExitCorruption` | 7 |
 
-(6 is unused.)
-
-`ExitCode(err)` dispatches by `errors.As`, in this order (`exit.go:23-95`):
-1. `storage.NotFoundError` → 4 (`exit.go:27-30`)
-2. `MergeConflictError` → 5 (`exit.go:31-34`)
-3. `SyncFailureError` → 5 (`exit.go:39-42`)
-4. `ownerApprovalRefusalError` → 5 (`exit.go:46-49`)
-5. `CorruptionError` → 7 (`exit.go:50-53`)
-6. `UsageError` → 2 (`exit.go:54-57`)
-7. `UnknownCommandError` → 3 (`exit.go:58-61`)
-8. `RetiredCommandError` → 3 (`exit.go:64-67`)
-9. `ValidationError` → 3 (`exit.go:68-71`)
-10. `storage.ValidationError` → 3 (`exit.go:72-75`)
-11. `UnsupportedError` → 3 (`exit.go:76-79`)
-12. `OutsideWorkspaceError` → 1 (`exit.go:80-83`)
-13. `BulkFailureError` → 1 (`exit.go:84-90`)
-14. `errors.Is(err, store.ErrTransientGCContention)` → 1 (`exit.go:91-93`)
-15. anything else → 1 (`exit.go:94`)
+`ExitCode(err)` dispatches by `errors.As`, in this order (`exit.go:37-144`):
+1. `storage.NotFoundError` → 4 (`exit.go:41-43`)
+2. `MergeConflictError` → 5 (`exit.go:45-47`)
+3. `SyncFailureError` → 5 (`exit.go:53-55`)
+4. `templateShapeError` → 3 (`exit.go:61-63`)
+5. `ownerApprovalRefusalError` → 5 (`exit.go:68-70`)
+6. `CorruptionError` → 7 (`exit.go:72-74`)
+7. `UsageError` → 2 (`exit.go:76-78`)
+8. `UnknownCommandError` → 3 (`exit.go:80-82`)
+9. `RetiredCommandError` → 3 (`exit.go:86-88`)
+10. `ValidationError` → 3 (`exit.go:90-92`)
+11. `storage.ValidationError` → 3 (`exit.go:94-96`)
+12. `model.ContainerActionError` → 6 when `Satisfied()`, else 3 (`exit.go:106-112`)
+13. `UnsupportedError` → 3 (`exit.go:113-115`)
+14. `Exhausted` → 6 (`exit.go:121-123`)
+15. `NoWork` → 6 (`exit.go:125-127`)
+16. `OutsideWorkspaceError` → 1 (`exit.go:129-131`)
+17. `BulkFailureError` → 1 (`exit.go:133-138`)
+18. `errors.Is(err, store.ErrTransientGCContention)` → 1 (`exit.go:140-142`)
+19. anything else → 1 (`exit.go:143`)
 
 Error types defined in `cli.go`: `MergeConflictError` (`cli.go:1890-1896`),
 `CorruptionError` (`cli.go:1898-1902`), `UsageError` (`cli.go:1906-1910`),
