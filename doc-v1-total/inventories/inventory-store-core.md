@@ -1712,9 +1712,9 @@ And from `internal/store/downgrade.go:197`:
 Three CHECK clause fragments are generated in Go from the sealed model
 vocabularies rather than hand-written:
 
-- `priorityCheckClause = fmt.Sprintf("priority >= %d AND priority <= %d", model.PriorityNormal, model.PriorityUrgent)` (`internal/store/schema_reconcile.go:77`), with `PriorityNormal = 0`, `PriorityUrgent = 1` (`internal/model/priority.go:15-16`).
+- `priorityCheckClause = fmt.Sprintf("priority >= %d AND priority <= %d", model.PriorityNormal, model.PriorityUrgent)` (`internal/store/schema_reconcile.go:77`), with `PriorityNormal = 0`, `PriorityUrgent = 1` (`internal/model/priority.go:19-20`).
 - `issueTypeCheckClause = "issue_type IN (" + quoted(model.IssueTypes()) + ")"` (`internal/store/schema_reconcile.go:96`), where `IssueTypes()` returns `task, feature, bug, chore, epic` in that order (`internal/model/issue_type.go:31-33`).
-- `containerTypeMembership = "issue_type IN (" + quoted(model.ContainerTypes()) + ")"` (`internal/store/schema_reconcile.go:97`), where `ContainerTypes()` is the `IsContainer()` subset — only `epic` (`internal/model/issue_type.go:56-58,63-70`).
+- `containerTypeMembership = "issue_type IN (" + quoted(model.ContainerTypes()) + ")"` (`internal/store/schema_reconcile.go:97`), where `ContainerTypes()` is the `IsContainer()` subset — only `epic` (`internal/model/issue_type.go:56-58,63-71`).
 - `canonicalStatusCheckClause` composes the container list twice (`internal/store/schema_reconcile.go:105-107`).
 - `quotedIssueTypeList` renders `'a','b','c'` with no spaces (`internal/store/schema_reconcile.go:81-87`).
 
@@ -3205,8 +3205,8 @@ Marshal rules (`model.go:488-533`):
 - `status`, `closed_at`, `resolution`, `redirect_target` are populated **only when the lifecycle exposes a Status capability** (`model.go:503-510`). Containers (`epic`) expose none, so an epic's JSON object has **no `status`, no `closed_at`, no `resolution`, no `redirect_target` keys at all**.
 - `archived_at`/`deleted_at` come from `lifecycle.RetentionTimestamps(i.Retention())` (`model.go:511`); both omitted when nil (a Live issue).
 - `Labels` has no `omitempty`, so `"labels": null` appears when the slice is nil, `[]` when empty-non-nil.
-- `Priority` is `type Priority int` (`internal/model/priority.go:12`) with constants `PriorityNormal = 0`, `PriorityUrgent = 1` (`priority.go:14-17`) — serializes as a bare **integer**.
-- `IssueType` is `type IssueType string` (`internal/model/issue_type.go:16`) with values `"task"`, `"feature"`, `"bug"`, `"chore"`, `"epic"` (`issue_type.go:18-24`) — serializes as a **string**.
+- `Priority` is `type Priority int` (`internal/model/priority.go:16`) with constants `PriorityNormal = 0`, `PriorityUrgent = 1` (`priority.go:18-21`) — serializes as a bare **integer**.
+- `IssueType` is `type IssueType string` (`internal/model/issue_type.go:15`) with values `"task"`, `"feature"`, `"bug"`, `"chore"`, `"epic"` (`issue_type.go:17-23`) — serializes as a **string**.
 - `State` = `lifecycle.State`, a string (`model.go:15`; `internal/model/lifecycle/lifecycle.go:18-23`), values `"open"`, `"in_progress"`, `"closed"`.
 - `Resolution` = `lifecycle.Resolution`, a string (`model.go:18`; `internal/model/lifecycle/resolution.go:20-26`), values `"duplicate"`, `"superseded"`, `"obsolete"`, `"wontfix"`.
 - `time.Time` fields serialize as Go's RFC3339 with nanoseconds (encoding/json default).
@@ -3518,7 +3518,7 @@ Value-by-value (`import_export.go:242-248`):
 | `description` | `issue.Description` | verbatim |
 | `agent_prompt` | `nullableString(issue.Prompt)` | `""` → SQL NULL (`store.go:2419-2424`) |
 | `status` | `statusForStorage(issue)` | leaf → `sql.NullString{string(status.Value), Valid:true}`; container (no Status capability) → **NULL** (`store.go:2238-2243`) |
-| `priority` | `model.CanonicalPriority(int(issue.Priority))` | any int ≠ 1 coerces to 0; 1 stays 1 (`priority.go:24-29`). **Never rejects** — legacy out-of-range priorities are coerced so the CHECK constraint cannot fail a restore (`import_export.go:235-240`) |
+| `priority` | `model.CanonicalPriority(int(issue.Priority))` | any int ≠ 1 coerces to 0; 1 stays 1 (`priority.go:61-64`). **Never rejects** — legacy out-of-range priorities are coerced so the CHECK constraint cannot fail a restore (`import_export.go:235-240`) |
 | `issue_type` | `issue.IssueType` | verbatim, no parse gate on this path |
 | `topic` | `issueid.NormalizeSlug(issue.Topic)` then `COALESCE(NULLIF(?, ''), 'misc')` | lowercased, non-`[a-z0-9]` runs collapsed to single `-`, trimmed of `-` (`internal/issueid/slug.go:15-29`); an empty result becomes the literal **`misc`** |
 | `assignee` | `issue.AssigneeValue()` | |
@@ -3896,7 +3896,7 @@ updated %d issues\n         (len(result.Updated))
 
 Parsers (`internal/storage/specs.go`): `bulk: parse spec: %w`, `import: parse spec: %w`, `import: unexpected trailing data after spec array`.
 
-Shared parse gates: `issue type must be task, feature, bug, chore, or epic` (`internal/model/issue_type.go:35` + `oxfordOr`, `:74-87`), `priority must be 0 (normal) or 1 (urgent)` (`internal/model/priority.go:40`).
+Shared parse gates: `issue type must be task, feature, bug, chore, or epic` (`internal/model/issue_type.go:35` + `oxfordOr`, `:73-95`), `priority must be normal (0) or urgent (1)` (`internal/model/priority.go:87`, built from `priorityTokens()` through the same `oxfordOr`, and returned by both `ParsePriority` and `ParsePriorityName`).
 
 
 ---

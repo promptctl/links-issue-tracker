@@ -341,10 +341,14 @@ prefix (`cli.go:1036-1042`).
 - Issue types: `task, feature, bug, chore, epic` (`internal/model/issue_type.go:31-33`).
   `ParseIssueType` lowercases and trims; error text
   `"issue type must be <oxford-or list>"` (`issue_type.go:35`, `:42-50`).
-  `epic` is the only container type (`issue_type.go:55-58`).
-- Priorities: `0` normal, `1` urgent (`internal/model/priority.go:14-17`).
-  `ParsePriority` rejects anything else with
-  `"priority must be 0 (normal) or 1 (urgent)"` (`priority.go:38-44`).
+  `epic` is the only container type (`issue_type.go:56-58`).
+- Priorities: `0` normal, `1` urgent (`internal/model/priority.go:18-21`), both
+  spellings held in one `priorityVocabulary` table (`priority.go:35-41`).
+  `ParsePriority` gates the int payloads (`priority.go:95-101`) and
+  `ParsePriorityName` gates the `--priority` flag (`:112-120`), the latter
+  lowercasing and trimming, then taking the display word or the decimal. Both
+  reject anything else with the shared
+  `"priority must be normal (0) or urgent (1)"` (`priority.go:87`).
 - States: `open, in_progress, closed`; `in-progress` is normalized to
   `in_progress`; error `invalid status "<x>" (valid: open, in_progress, closed)`
   (`internal/model/lifecycle/lifecycle.go:98-109`).
@@ -354,13 +358,19 @@ prefix (`cli.go:1036-1042`).
 - Relation types: `blocks, parent-child, related-to`; error
   `"relation type must be blocks, parent-child, or related-to"`
   (`internal/model/relation_type.go:16-33`).
-- CLI parse-boundary wrappers: `parseIssueTypeFlag` and `parsePriorityFlag` wrap
-  failures in `ValidationError` → exit 3 (`cli.go:1836-1854`);
+- CLI parse-boundary wrappers: `parseIssueTypeFlag` (`cli.go:1939-1945`) and
+  `parsePriorityFlag` (`:1960-1966`) wrap failures in `ValidationError` → exit 3.
+  `parsePriorityFlag` takes the raw **string**: the `ValidationError` is also what
+  routes the refusal to the `validation_refused` remediation, which a bare pflag
+  `ParseInt` error missed — it fell through to the default "Retry the command" on
+  a refusal no retry can change (links-cli-bvko).
   `parseIssueTypeSlice` (read path `--type`) returns the bare model error
-  (`cli.go:1821-1830`); the read path `--status` returns the bare model error
+  (`cli.go:1924-1933`); the read path `--status` returns the bare model error
   from `model.ParseStates` (`internal/model/lifecycle/lifecycle.go`).
 - `issueTypeChoices()` renders `task|feature|bug|chore|epic` into flag help
-  (`cli.go:1859-1866`).
+  (`cli.go:1983-1990`), and `priorityChoices()` renders `normal|urgent` the same
+  way (`:1971-1978`) — into both the `--priority` help string and the `followup`
+  and `update` usage lines, so neither can drift from the parse gate.
 - `splitCSV` splits on `,`, trims each part, drops empties, returns nil for a
   blank input (`cli.go:1875-1888`).
 
@@ -469,7 +479,7 @@ else ready.
 | `--type` | string | `task` | "Issue type: task\|feature\|bug\|chore\|epic" |
 | `--topic` | string | `""` | "Required immutable issue topic slug (1-2 words; stable area of focus; e.g., 'refactor' or 'field-history')" |
 | `--parent` | string | `""` | "Optional parent issue ID; child IDs become parentID.\<n>" |
-| `--priority` | int | `0` | "Priority: 0=normal, 1=urgent" |
+| `--priority` | string | `normal` | "Priority: normal\|urgent", the choice list derived from `model.Priorities()` via `priorityChoices()`. A string, not an int, deliberately: an `fs.Int` let pflag's `strconv.ParseInt` refuse the display word before lit's own gate ran (links-cli-bvko). The decimal spelling is still accepted, by `ParsePriorityName` rather than by pflag |
 | `--assignee` | string | `""` | "Assignee" (trimmed, `cli.go:352`) |
 | `--labels` | string | `""` | "Comma-separated labels" (split by `splitCSV`) |
 | `--lane` | string | `""` | "Lane key partitioning an epic's children into parallel rank-ordered sub-sequences; shared lane serializes, distinct lane parallelizes" |

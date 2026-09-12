@@ -1128,7 +1128,7 @@ With `hasBase == false`, both sides count as changed, so **every field goes stra
 | `Title` | `base.Title` | prose → `ProsePending{Field:"title"}`, returns `ours` provisionally | :107 |
 | `Description` | `base.Description` | prose → `ProsePending{Field:"description"}` | :108 |
 | `Prompt` | `base.Prompt` | prose → `ProsePending{Field:"agent_prompt"}` | :109 |
-| `Priority` | `base.Priority` | `higher` — numerically greater wins; `PriorityUrgent=1` beats `PriorityNormal=0` (`/Users/bmf/code/links-issue-tracker/internal/model/priority.go:15-16`) | :110 |
+| `Priority` | `base.Priority` | `higher` — numerically greater wins; `PriorityUrgent=1` beats `PriorityNormal=0` (`/Users/bmf/code/links-issue-tracker/internal/model/priority.go:19-20`) | :110 |
 | `Topic` | `base.Topic` | symmetric workspace tiebreak | :111 |
 | `Lane` | `base.Lane` | symmetric workspace tiebreak | :112 |
 | `Rank` | `base.Rank` | symmetric workspace tiebreak | :113 |

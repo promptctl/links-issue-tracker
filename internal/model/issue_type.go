@@ -70,18 +70,26 @@ func ContainerTypes() []IssueType {
 	return out
 }
 
-// oxfordOr renders the vocabulary as prose ("a, b, or c") for the parse error,
-// so the message the user sees names exactly the sealed set. Total over every
-// non-empty list; the empty list is out of domain — the input is the sealed
-// vocabulary whose constants are defined in this file, so an empty call is
+// oxfordOr renders a sealed vocabulary as prose ("a, b, or c") for a parse
+// error, so the message the user sees names exactly the sealed set. Shared by
+// every vocabulary in this package rather than reimplemented per domain — the
+// type parameter is what lets the issue types pass their own named string type
+// and the priorities pass rendered tokens. [LAW:one-type-per-behavior]
+//
+// Total over every non-empty list; the empty list is out of domain — the inputs
+// are sealed vocabularies defined in this package, so an empty call is
 // unconstructible without editing the package itself.
-func oxfordOr(types []IssueType) string {
-	names := make([]string, len(types))
-	for i, t := range types {
-		names[i] = string(t)
+func oxfordOr[T ~string](values []T) string {
+	names := make([]string, len(values))
+	for i, v := range values {
+		names[i] = string(v)
 	}
 	if len(names) == 1 {
 		return names[0]
+	}
+	// Two items take no comma ("a or b"); three or more take the serial comma.
+	if len(names) == 2 {
+		return names[0] + " or " + names[1]
 	}
 	return strings.Join(names[:len(names)-1], ", ") + ", or " + names[len(names)-1]
 }

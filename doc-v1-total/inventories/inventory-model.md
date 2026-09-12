@@ -348,35 +348,75 @@ Complete value set (`issue_type.go:17-23`): `TypeTask="task"`,
   returns the package-level `errInvalidIssueType` whose text is
   `issue type must be ` + `oxfordOr(IssueTypes())` =
   `"issue type must be task, feature, bug, chore, or epic"`
-  (`issue_type.go:35`, `:78-87`). Pinned by `TestParseIssueType`,
+  (`issue_type.go:35`, `:82-95`). Pinned by `TestParseIssueType`,
   `model_test.go:300`.
 - `(IssueType).IsContainer() bool` — `issue_type.go:56-58`: true **only** for
   `TypeEpic`.
 - `ContainerTypes() []IssueType` — `issue_type.go:63-71`: the subset of
   `IssueTypes()` for which `IsContainer()` holds (today: `[epic]`); returns nil
   if the subset is empty.
-- `oxfordOr(types []IssueType) string` — `issue_type.go:78-87`: single element →
-  that element; otherwise `strings.Join(all but last, ", ") + ", or " + last`.
+- `oxfordOr[T ~string](values []T) string` — `issue_type.go:82-95`: single element
+  → that element; two → `a + " or " + b` (no comma); three or more →
+  `strings.Join(all but last, ", ") + ", or " + last`. Generic over `~string` so
+  one renderer serves every sealed vocabulary in the package — `IssueTypes()`
+  passes its own named string type, `priorityTokens()` passes rendered `[]string`
+  — instead of each domain reimplementing the phrasing.
 
 ## 2.3 `Priority` — `priority.go`
 
-`type Priority int` — `priority.go:12`. Complete value set (`priority.go:14-17`):
+`type Priority int` — `priority.go:16`. Complete value set (`priority.go:18-21`):
 `PriorityNormal = 0`, `PriorityUrgent = 1`.
 
-- `CanonicalPriority(v int) Priority` — `priority.go:25-30`: returns
+- `priorityVocabulary` — `priority.go:35-41`: the one table the domain is spelled
+  in, in canonical order, each entry pairing a `Priority` with its display word;
+  its first entry is where out-of-domain ints coerce. Every other function in the
+  file is a read of it in some direction, which is what makes the word a read
+  surface prints the same word the write flag accepts.
+- `priorityEntry(v int) (Priority, string)` — `priority.go:47-54`: the table's
+  only scan-by-value, resolving any raw int onto its entry and coercing
+  out-of-domain values onto the first. `CanonicalPriority` and `String` are each
+  one line of it, so a priority's number and its word cannot resolve differently.
+- `CanonicalPriority(v int) Priority` — `priority.go:61-64`: returns
   `PriorityUrgent` iff `v == 1`; **every other int** (including negatives and
   anything ≥2) maps to `PriorityNormal`. Idempotent — its fixed points are the
   legal priorities (pinned by `TestCanonicalPriorityIsIdempotent`,
-  `priority_test.go:40`).
-- `ParsePriority(v int) (Priority, error)` — `priority.go:38-44`: accepts only
-  values already canonical (0 and 1); otherwise returns `0` and error
-  `priority must be 0 (normal) or 1 (urgent)` (`priority.go:41`). Pinned by
-  `TestParsePriorityAcceptsExactlyCanonicalFixedPoints` (`priority_test.go:15`),
-  `TestCanonicalizedPriorityAlwaysParses` (`:29`),
-  `TestCanonicalPriorityPreservesRestoreTolerance` (`:52`).
-- `(Priority).String() string` — `priority.go:47-52`: `"urgent"` for
-  `PriorityUrgent`, `"normal"` for **everything else**. Pinned by
-  `TestPriorityString`, `priority_test.go:68`.
+  `priority_test.go:44`).
+- `ParsePriority(v int) (Priority, error)` — `priority.go:95-101`: the int gate,
+  for the import and bulk payloads; accepts only values already canonical
+  (0 and 1), otherwise returns `0` and the shared `errInvalidPriority`. Pinned by
+  `TestParsePriorityAcceptsExactlyCanonicalFixedPoints` (`priority_test.go:19`),
+  `TestCanonicalizedPriorityAlwaysParses` (`:33`),
+  `TestCanonicalPriorityPreservesRestoreTolerance` (`:56`).
+- `ParsePriorityName(raw string) (Priority, error)` — `priority.go:112-120`: the
+  string gate, and the only string-to-Priority conversion; backs the `--priority`
+  flag on `new`/`followup`/`update`. Lowercases and trims, then accepts either
+  spelling a read surface emits — the display word (`lit show`, the issue rows) or
+  the decimal (`lit export`, the `lit import` payload) — and refuses every other
+  token, so `--priority 7` cannot reach the store and `--priority 2` does not
+  inherit `CanonicalPriority`'s salvage coercion. Added by links-cli-bvko, which
+  fixed a `--priority` declared as an `fs.Int`: pflag's `strconv.ParseInt` refused
+  the very word every read surface printed, and its bare error missed the
+  `validation_refused` arm, drawing the default "Retry the command" remediation on
+  a refusal no retry can change. Pinned by
+  `TestPriorityWordRoundTripsThroughTheWriteGate` (`priority_test.go:86`),
+  `TestPriorityDecimalRoundTripsThroughTheWriteGate` (`:103`),
+  `TestParsePriorityNameAgreesWithParsePriorityOnTheDecimalDomain` (`:122`),
+  `TestParsePriorityNameRejectsEverythingOutsideTheVocabulary` (`:136`),
+  `TestParsePriorityNameCanonicalizesCaseAndSpace` (`:157`).
+- `errInvalidPriority` — `priority.go:87`: the one refusal both gates return,
+  built at init from `priorityTokens()` through `oxfordOr`, so it names every
+  accepted token in both spellings (`priority must be normal (0) or urgent (1)`)
+  rather than a fixed string that could drift from the domain. Pinned by
+  `TestPriorityRefusalNamesEveryAcceptedToken` (`priority_test.go:179`).
+- `Priorities() []Priority` — `priority.go:69-75`: the legal priorities in
+  canonical order, for callers that render the vocabulary (flag help, usage
+  strings) instead of spelling the set again.
+- `(Priority).String() string` — `priority.go:125-128`: the word for the
+  priority `priorityEntry` resolves the receiver to, so `"urgent"` for
+  `PriorityUrgent` and `"normal"` for **everything else** — total over raw ints,
+  which the salvage paths rely on. Pinned by `TestPriorityString`,
+  `priority_test.go:72`, and — as the round trip against the write gate —
+  `TestPriorityWordRoundTripsThroughTheWriteGate` (`:86`).
 
 ## 2.4 `RelationType` — `relation_type.go`
 
@@ -1287,7 +1327,7 @@ cancellation.
 `interrupt.go:84-124`:
 - First `select`: `done` → return immediately, nothing to escalate (`:93-96`);
   `sigs` → capture the signal and continue (`:97`).
-- On interrupt: `cancel()` (`:101`), then `restoreDefault()` so a **second**
+- On interrupt: `cancel()` (`:103`), then `restoreDefault()` so a **second**
   interrupt terminates the process at once via the OS default disposition
   (`:102-105`).
 - Arms `time.NewTimer(grace)` (deferred `Stop`) and a second `select`
