@@ -45,6 +45,11 @@ func TestCommandErrorReason(t *testing.T) {
 		// default "Retry the command" remediation.
 		{"cli validation refusal", ValidationError{Message: "Do not set 'blocks' relationships between two issues in the same epic."}, "validation_refused"},
 		{"storage validation refusal", storage.ValidationError{Message: "priority out of range"}, "validation_refused"},
+		// A managed template that cannot converge is refused deterministically
+		// like a validation failure, but the act it calls for is editing a file
+		// on disk — so it carries its own reason rather than inheriting
+		// validation_refused's "adjust the command" (links-templates-1bai).
+		{"template shape refusal", templateShapeError{Message: "template must contain either no markers or be exactly one such block"}, "template_shape_refused"},
 		{
 			"workspace busy",
 			fmt.Errorf("another lit process is writing to this workspace; retry after it completes: %w", store.ErrWorkspaceBusy),

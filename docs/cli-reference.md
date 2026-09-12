@@ -903,7 +903,10 @@ tickets), `update` (managing existing tickets), `done` (finishing work), `doctor
 (troubleshooting). `--eject` copies the embedded default templates to the global
 override path so you can customize them (`LIST` is comma-separated short names, e.g.
 `quickstart,quickstart-work,agents,hook`; `--force` overwrites existing
-overrides);
+overrides). The `agents` and `hook` templates are written into a marker-delimited
+region of a file you own, so an override of either must be plain content carrying no
+`LIT INTEGRATION` markers — lit wraps it — or exactly one whole marked block with
+nothing outside it; any other shape is refused by name at exit 3 rather than written.
 `--refresh` re-syncs managed repo assets and reports override drift without touching
 overrides. Topics take no flags.
 
