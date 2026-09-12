@@ -14,120 +14,116 @@ import (
 var depFamily = commandFamily[appSubcommand]{
 	usage: "usage: lit dep <add|rm|ls> ...",
 	subcommands: []subcommandRow[appSubcommand]{
-		{name: "add", payload: appSubcommand{access: app.AccessWrite, run: runDepAdd}},
-		{name: "rm", payload: appSubcommand{access: app.AccessWrite, run: runDepRm}},
-		{name: "ls", payload: appSubcommand{access: app.AccessRead, run: runDepLs}},
+		{name: "add", payload: appSubcommand{access: app.AccessWrite, declare: depAddLeaf}},
+		{name: "rm", payload: appSubcommand{access: app.AccessWrite, declare: depRmLeaf}},
+		{name: "ls", payload: appSubcommand{access: app.AccessRead, declare: depLsLeaf}},
 	},
 }
 
-func runDepAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+func depAddLeaf() appLeaf {
 	fs := newCobraFlagSet("dep add")
 	relType := fs.String("type", "blocks", "Relation type: blocks|parent-child|related-to")
 	from := fs.String("from", "", "Source issue ID (required)")
 	to := fs.String("to", "", "Target issue ID (required)")
 	resolveActor := registerActor(fs)
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	if *from == "" || *to == "" || fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit dep add --from <id> --to <id> [--type blocks|parent-child|related-to]"}
-	}
-	// [LAW:single-enforcer] The CLI flag is the trust boundary; everything
-	// downstream receives the sealed RelationType.
-	rt, err := model.ParseRelationType(*relType)
-	if err != nil {
-		return err
-	}
-	fromID, toID := *from, *to
-	// Self-loop check: a relation from an issue to itself is meaningless and
-	// would otherwise corrupt downstream blocker traversals. Cheap to catch
-	// here; transitive cycle detection is a follow-up.
-	if fromID == toID {
-		return fmt.Errorf("dep add: self-loop rejected (%s -> %s)", fromID, toID)
-	}
-	// [LAW:single-enforcer] Same-epic blocks are rejected at the CLI policy
-	// boundary so the store stays a thin substrate. Within one epic, rank is
-	// the canonical ordering; a 'blocks' edge would duplicate that signal.
-	if rt == model.RelBlocks {
-		if err := rejectSameEpicBlocks(ctx, ap, fromID, toID); err != nil {
-			return err
+	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		if *from == "" || *to == "" || fs.NArg() != 0 {
+			return UsageError{Message: "usage: lit dep add --from <id> --to <id> [--type blocks|parent-child|related-to]"}
 		}
-	}
-	srcID, dstID := rt.StoreEndpoints(fromID, toID)
-	rel, err := ap.Store.AddRelation(ctx, storage.AddRelationInput{SrcID: srcID, DstID: dstID, Type: rt, CreatedBy: resolveActor()})
-	if err != nil {
-		return err
-	}
-	cliRel := depRelationForCLI(rel)
-	if _, err := fmt.Fprintln(stdout, depRelationLine(cliRel)); err != nil {
-		return err
-	}
-	return emitBreadcrumb(stdout, "update")
-}
-
-func runDepRm(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	fs := newCobraFlagSet("dep rm")
-	relType := fs.String("type", "blocks", "Relation type: blocks|parent-child|related-to")
-	from := fs.String("from", "", "Source issue ID (required)")
-	to := fs.String("to", "", "Target issue ID (required)")
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	if *from == "" || *to == "" || fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit dep rm --from <id> --to <id> [--type blocks|parent-child|related-to]"}
-	}
-	rt, err := model.ParseRelationType(*relType)
-	if err != nil {
-		return err
-	}
-	srcID, dstID := rt.StoreEndpoints(*from, *to)
-	if err := ap.Store.RemoveRelation(ctx, srcID, dstID, rt); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintln(stdout, "ok"); err != nil {
-		return err
-	}
-	return emitBreadcrumb(stdout, "update")
-}
-
-func runDepLs(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	positional, flagArgs := splitArgs(args, 1)
-	fs := newCobraFlagSet("dep ls")
-	relType := fs.String("type", "", "Filter relation type")
-	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
-		return err
-	}
-	if len(positional) != 1 {
-		return UsageError{Message: "usage: lit dep ls <issue-id> [--type blocks|parent-child|related-to]"}
-	}
-	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit dep ls <issue-id> [--type blocks|parent-child|related-to]"}
-	}
-	// [LAW:dataflow-not-control-flow] An absent --type is the empty filter
-	// set; a present one is parsed at this trust boundary, so a bad value
-	// errors loudly instead of silently matching nothing.
-	var typeFilter []model.RelationType
-	if strings.TrimSpace(*relType) != "" {
+		// [LAW:single-enforcer] The CLI flag is the trust boundary; everything
+		// downstream receives the sealed RelationType.
 		rt, err := model.ParseRelationType(*relType)
 		if err != nil {
 			return err
 		}
-		typeFilter = append(typeFilter, rt)
-	}
-	relations, err := ap.Store.ListRelationsForIssue(ctx, positional[0], typeFilter...)
-	if err != nil {
-		return err
-	}
-	cliRelations := make([]model.Relation, 0, len(relations))
-	for _, rel := range relations {
-		cliRelations = append(cliRelations, depRelationForCLI(rel))
-	}
-	for _, rel := range cliRelations {
-		if _, err := fmt.Fprintln(stdout, depRelationLine(rel)); err != nil {
+		fromID, toID := *from, *to
+		// Self-loop check: a relation from an issue to itself is meaningless and
+		// would otherwise corrupt downstream blocker traversals. Cheap to catch
+		// here; transitive cycle detection is a follow-up.
+		if fromID == toID {
+			return fmt.Errorf("dep add: self-loop rejected (%s -> %s)", fromID, toID)
+		}
+		// [LAW:single-enforcer] Same-epic blocks are rejected at the CLI policy
+		// boundary so the store stays a thin substrate. Within one epic, rank is
+		// the canonical ordering; a 'blocks' edge would duplicate that signal.
+		if rt == model.RelBlocks {
+			if err := rejectSameEpicBlocks(ctx, ap, fromID, toID); err != nil {
+				return err
+			}
+		}
+		srcID, dstID := rt.StoreEndpoints(fromID, toID)
+		rel, err := ap.Store.AddRelation(ctx, storage.AddRelationInput{SrcID: srcID, DstID: dstID, Type: rt, CreatedBy: resolveActor()})
+		if err != nil {
 			return err
 		}
-	}
-	return nil
+		cliRel := depRelationForCLI(rel)
+		if _, err := fmt.Fprintln(stdout, depRelationLine(cliRel)); err != nil {
+			return err
+		}
+		return emitBreadcrumb(stdout, "update")
+	}}
+}
+
+func depRmLeaf() appLeaf {
+	fs := newCobraFlagSet("dep rm")
+	relType := fs.String("type", "blocks", "Relation type: blocks|parent-child|related-to")
+	from := fs.String("from", "", "Source issue ID (required)")
+	to := fs.String("to", "", "Target issue ID (required)")
+	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		if *from == "" || *to == "" || fs.NArg() != 0 {
+			return UsageError{Message: "usage: lit dep rm --from <id> --to <id> [--type blocks|parent-child|related-to]"}
+		}
+		rt, err := model.ParseRelationType(*relType)
+		if err != nil {
+			return err
+		}
+		srcID, dstID := rt.StoreEndpoints(*from, *to)
+		if err := ap.Store.RemoveRelation(ctx, srcID, dstID, rt); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintln(stdout, "ok"); err != nil {
+			return err
+		}
+		return emitBreadcrumb(stdout, "update")
+	}}
+}
+
+func depLsLeaf() appLeaf {
+	fs := newCobraFlagSet("dep ls")
+	relType := fs.String("type", "", "Filter relation type")
+	return appLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		if len(positional) != 1 {
+			return UsageError{Message: "usage: lit dep ls <issue-id> [--type blocks|parent-child|related-to]"}
+		}
+		if fs.NArg() != 0 {
+			return UsageError{Message: "usage: lit dep ls <issue-id> [--type blocks|parent-child|related-to]"}
+		}
+		// [LAW:dataflow-not-control-flow] An absent --type is the empty filter
+		// set; a present one is parsed at this trust boundary, so a bad value
+		// errors loudly instead of silently matching nothing.
+		var typeFilter []model.RelationType
+		if strings.TrimSpace(*relType) != "" {
+			rt, err := model.ParseRelationType(*relType)
+			if err != nil {
+				return err
+			}
+			typeFilter = append(typeFilter, rt)
+		}
+		relations, err := ap.Store.ListRelationsForIssue(ctx, positional[0], typeFilter...)
+		if err != nil {
+			return err
+		}
+		cliRelations := make([]model.Relation, 0, len(relations))
+		for _, rel := range relations {
+			cliRelations = append(cliRelations, depRelationForCLI(rel))
+		}
+		for _, rel := range cliRelations {
+			if _, err := fmt.Fprintln(stdout, depRelationLine(rel)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}}
 }
 
 // depRelationForCLI flips a store-oriented relation back into the CLI's human

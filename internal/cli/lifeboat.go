@@ -19,11 +19,11 @@ const lifeboatUsage = "usage: lit lifeboat <dump|recover> ..."
 // the recovery path that reads a workspace's data below the migration gate, so
 // a workspace store.Open() refuses can still be released and rebuilt. Later
 // verbs in the epic (map/apply/verify/run) attach here as rows.
-var lifeboatFamily = commandFamily[wsRunFn]{
+var lifeboatFamily = commandFamily[wsSubcommand]{
 	usage: lifeboatUsage,
-	subcommands: []subcommandRow[wsRunFn]{
-		{name: "dump", payload: runLifeboatDump},
-		{name: "recover", payload: runLifeboatRecover},
+	subcommands: []subcommandRow[wsSubcommand]{
+		{name: "dump", payload: wsSubcommand{declare: lifeboatDumpLeaf}},
+		{name: "recover", payload: wsSubcommand{declare: lifeboatRecoverLeaf}},
 	},
 }
 
@@ -72,50 +72,49 @@ func recoverMapper(mappingPath string) (store.Mapper, error) {
 //   - RequiresDrop  → notify once and refuse to commit (exit non-zero); the
 //     unexplained drops need a human decision before any data is discarded.
 //   - Unconverged   → loud failure with the residual (exit non-zero).
-func runLifeboatRecover(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
+func lifeboatRecoverLeaf() wsLeaf {
 	fs := newCobraFlagSet("lifeboat recover")
 	mappingPath := fs.String("mapping", "", "Path to an operator-authored ShapeMapping JSON; default uses the built-in deterministic mapper")
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit lifeboat recover [--mapping <file>]"}
-	}
-	mapper, err := recoverMapper(*mappingPath)
-	if err != nil {
-		return err
-	}
-	// [LAW:dataflow-not-control-flow] Always heal first: a prior promotion crashed
-	// between its two renames leaves the canonical directory absent, which the
-	// read path below would reject before the swap's own heal could run. The
-	// presence of the directory is the datum that decides whether this acts; a
-	// healthy workspace makes it a no-op.
-	if err := store.HealWorkspace(ctx, ws.DatabasePath); err != nil {
-		return err
-	}
-	dump, err := store.DumpRaw(ctx, ws.DatabasePath, ws.WorkspaceID)
-	if err != nil {
-		return err
-	}
-	outcome, err := store.Recover(ctx, ws.DatabasePath, dump, mapper, recoverAttempts)
-	if err != nil {
-		return err
-	}
-	switch o := outcome.(type) {
-	case store.Reconciled:
-		return promoteReconciled(ctx, stdout, ws, o)
-	case store.RequiresDrop:
-		// [LAW:no-silent-failure] Discard the rebuild and refuse to commit: an
-		// unexplained drop silently loses data, so the human is notified and
-		// nothing changes on disk until they decide.
-		discardErr := o.Candidate.Discard()
-		return errors.Join(fmt.Errorf("recovery needs a human decision: the mapping discards %d source column(s) with no recorded justification:\n%s\nnothing was changed; supply a mapping that maps or intentionally drops these before recovering",
-			len(o.Drops), formatDrops(o.Drops)), discardErr)
-	case store.Unconverged:
-		return fmt.Errorf("recovery did not converge after %d attempt(s); nothing was changed:\n%s", o.Attempts, o.Residual)
-	default:
-		return fmt.Errorf("unknown recovery outcome %T", outcome)
-	}
+	return wsLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+		if fs.NArg() != 0 {
+			return UsageError{Message: "usage: lit lifeboat recover [--mapping <file>]"}
+		}
+		mapper, err := recoverMapper(*mappingPath)
+		if err != nil {
+			return err
+		}
+		// [LAW:dataflow-not-control-flow] Always heal first: a prior promotion crashed
+		// between its two renames leaves the canonical directory absent, which the
+		// read path below would reject before the swap's own heal could run. The
+		// presence of the directory is the datum that decides whether this acts; a
+		// healthy workspace makes it a no-op.
+		if err := store.HealWorkspace(ctx, ws.DatabasePath); err != nil {
+			return err
+		}
+		dump, err := store.DumpRaw(ctx, ws.DatabasePath, ws.WorkspaceID)
+		if err != nil {
+			return err
+		}
+		outcome, err := store.Recover(ctx, ws.DatabasePath, dump, mapper, recoverAttempts)
+		if err != nil {
+			return err
+		}
+		switch o := outcome.(type) {
+		case store.Reconciled:
+			return promoteReconciled(ctx, stdout, ws, o)
+		case store.RequiresDrop:
+			// [LAW:no-silent-failure] Discard the rebuild and refuse to commit: an
+			// unexplained drop silently loses data, so the human is notified and
+			// nothing changes on disk until they decide.
+			discardErr := o.Candidate.Discard()
+			return errors.Join(fmt.Errorf("recovery needs a human decision: the mapping discards %d source column(s) with no recorded justification:\n%s\nnothing was changed; supply a mapping that maps or intentionally drops these before recovering",
+				len(o.Drops), formatDrops(o.Drops)), discardErr)
+		case store.Unconverged:
+			return fmt.Errorf("recovery did not converge after %d attempt(s); nothing was changed:\n%s", o.Attempts, o.Residual)
+		default:
+			return fmt.Errorf("unknown recovery outcome %T", outcome)
+		}
+	}}
 }
 
 func promoteReconciled(ctx context.Context, stdout io.Writer, ws workspace.Info, o store.Reconciled) (err error) {
@@ -155,17 +154,16 @@ func formatDrops(drops []store.UnexplainedDrop) string {
 // JSON artifact, read below the migration gate. Like `lit export`, it is
 // JSON-only: there is no meaningful text rendering of a full database dump, and
 // the artifact is consumed by tools, not read by hand.
-func runLifeboatDump(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
+func lifeboatDumpLeaf() wsLeaf {
 	fs := newCobraFlagSet("lifeboat dump")
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit lifeboat dump"}
-	}
-	dump, err := store.DumpRaw(ctx, ws.DatabasePath, ws.WorkspaceID)
-	if err != nil {
-		return err
-	}
-	return writeJSON(stdout, dump)
+	return wsLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+		if fs.NArg() != 0 {
+			return UsageError{Message: "usage: lit lifeboat dump"}
+		}
+		dump, err := store.DumpRaw(ctx, ws.DatabasePath, ws.WorkspaceID)
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, dump)
+	}}
 }

@@ -186,51 +186,68 @@ func TestLsAtRejectsMissingStore(t *testing.T) {
 	}
 }
 
-// TestLsAtRejectsEmptyOrFlagShapedDir pins that an --at with no value or a
-// flag-shaped value (`--at --help`, `--at --status`) is a usage error naming the
-// flag, rejected before any store opens — a flag-shaped token is never handed to
-// the store layer as a path (so `--at --help` doesn't try to open a store named
-// "--help").
+// TestLsAtRejectsEmptyOrFlagShapedDir pins that an --at carrying no usable store
+// directory is a typed UsageError naming the flag, rejected before any store
+// opens — a flag-shaped token is never handed to the store layer as a path (so
+// `--at --help` doesn't try to open a store named "--help").
+//
+// The rejection has two authors, and the table says which is which. A bare `--at`
+// is a grammar error pflag itself refuses; every other shape is grammatically
+// fine — pflag takes any string as a value — so runList rejects it on the parsed
+// value. Both arrive as UsageError, which is the contract callers dispatch on;
+// the per-case message only records where the refusal came from.
 func TestLsAtRejectsEmptyOrFlagShapedDir(t *testing.T) {
 	t.Parallel()
-	for _, args := range [][]string{
-		{"--at"}, {"--at="}, {"--at", ""},
-		{"--at", "--help"}, {"--at", "--status"}, {"--at=--nope"},
-	} {
+	cases := []struct {
+		args    []string
+		wantMsg string
+	}{
+		{[]string{"--at"}, "flag needs an argument: --at"}, // pflag: no value at all
+		{[]string{"--at="}, "--at <store-dir>"},
+		{[]string{"--at", ""}, "--at <store-dir>"},
+		{[]string{"--at", "--help"}, "--at <store-dir>"},
+		{[]string{"--at", "--status"}, "--at <store-dir>"},
+		{[]string{"--at=--nope"}, "--at <store-dir>"},
+	}
+	for _, tc := range cases {
 		var out bytes.Buffer
-		err := runList(context.Background(), &out, args)
+		err := runList(context.Background(), &out, tc.args)
 		if err == nil {
-			t.Fatalf("ls %v = nil error, want a usage error", args)
+			t.Fatalf("ls %v = nil error, want a usage error", tc.args)
 		}
-		if !strings.Contains(err.Error(), "--at <store-dir>") {
-			t.Fatalf("ls %v error = %v, want it to name the --at usage", args, err)
+		var usage UsageError
+		if !errors.As(err, &usage) {
+			t.Fatalf("ls %v error = %#v, want a UsageError", tc.args, err)
+		}
+		if !strings.Contains(err.Error(), tc.wantMsg) {
+			t.Fatalf("ls %v error = %v, want it to name %q", tc.args, err, tc.wantMsg)
+		}
+		if out.Len() != 0 {
+			t.Fatalf("ls %v emitted %q before failing; want no output on the error path", tc.args, out.String())
 		}
 	}
 }
 
-// TestExtractAtDir pins the routing scan directly: it recognizes both --at forms,
-// honors the `--` terminator (a later --at is a positional literal, not a route),
-// and reports a present-but-empty --at so the caller can reject it.
-func TestExtractAtDir(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		args    []string
-		wantDir string
-		wantOK  bool
-	}{
-		{[]string{"--at", "/p"}, "/p", true},
-		{[]string{"--at=/p"}, "/p", true},
-		{[]string{"--search", "x", "--at", "/p"}, "/p", true},
-		{[]string{"--status", "open"}, "", false},
-		{[]string{}, "", false},
-		{[]string{"--at"}, "", true},                 // present, no value
-		{[]string{"--at", "--help"}, "--help", true}, // flag-shaped value (caller rejects)
-		{[]string{"--", "--at", "/p"}, "", false},    // terminator: not a route
+// TestLsAtAfterTerminatorIsNotARoute pins that `--` ends flag parsing, so a later
+// `--at` is a positional literal and ls stays on the cwd workspace. The rule is
+// pflag's, not ls's — this test exists because runList reads --at from the parse
+// rather than rescanning argv, and a rescan is exactly what would get this wrong.
+//
+// Not parallel: it chdirs.
+func TestLsAtAfterTerminatorIsNotARoute(t *testing.T) {
+	storeDir, issueID := foreignStore(t, "ws-foreign", "proj")
+	chdir(t, t.TempDir()) // no workspace anywhere near the cwd
+
+	var out bytes.Buffer
+	err := runList(context.Background(), &out, []string{"--", "--at", storeDir})
+
+	// Routing would have listed the foreign store's issue; staying on the cwd
+	// means the workspace acquisition refuses instead.
+	if strings.Contains(out.String(), issueID) {
+		t.Fatalf("ls -- --at %s listed the foreign issue %q; `--` must end flag parsing", storeDir, issueID)
 	}
-	for _, tc := range cases {
-		gotDir, gotOK := extractAtDir(tc.args)
-		if gotDir != tc.wantDir || gotOK != tc.wantOK {
-			t.Errorf("extractAtDir(%v) = (%q, %v), want (%q, %v)", tc.args, gotDir, gotOK, tc.wantDir, tc.wantOK)
-		}
+	var outside OutsideWorkspaceError
+	if !errors.As(err, &outside) {
+		t.Fatalf("ls -- --at %s error = %#v, want OutsideWorkspaceError from the cwd path", storeDir, err)
 	}
 }

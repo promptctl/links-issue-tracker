@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strings"
@@ -9,7 +10,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-// runWorkflowsDryRun answers "what would inject on <event> for a ticket
+// workflowsDryRunLeaf answers "what would inject on <event> for a ticket
 // labeled <label>?" without a real occasion ever happening: it builds an
 // Occasion from flags alone, matches it against the loaded Set, and prints
 // every match with why it matched (Definition.MatchReasons) and the body
@@ -20,34 +21,33 @@ import (
 // Never writes a firing trace itself — nothing actually fired, there is
 // nothing to record — and needs no store access, only the loaded definition
 // Set, so it stays a wsCmd like the rest of `lit workflows`.
-func runWorkflowsDryRun(stdout io.Writer, ws workspace.Info, flagArgs []string) error {
+func workflowsDryRunLeaf() wsLeaf {
 	fs := newCobraFlagSet("workflows dry-run")
 	event := fs.String("event", "", "Semantic event the hypothetical occasion fires (see the event catalog in 'lit workflows')")
 	labels := fs.StringArray("label", "Label the hypothetical ticket carries (repeatable)")
 	enter := fs.String("enter", "", "State the hypothetical ticket enters")
 	exit := fs.String("exit", "", "State the hypothetical ticket exits")
 	issue := fs.String("issue", "", "Issue id to interpolate into <id> in previewed bodies")
-	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return UsageError{Message: workflowsUsage}
-	}
+	return wsLeaf{fs: fs, positionals: 0, work: func(_ context.Context, stdout io.Writer, ws workspace.Info, _ []string) error {
+		if fs.NArg() != 0 {
+			return UsageError{Message: workflowsUsage}
+		}
 
-	occasion := workflows.Occasion{
-		Event:   workflows.Event(*event),
-		IssueID: *issue,
-		Labels:  *labels,
-		Entered: *enter,
-		Exited:  *exit,
-	}
-	set := workflows.Load(ws.RootDir)
-	matched := set.Matching(occasion)
+		occasion := workflows.Occasion{
+			Event:   workflows.Event(*event),
+			IssueID: *issue,
+			Labels:  *labels,
+			Entered: *enter,
+			Exited:  *exit,
+		}
+		set := workflows.Load(ws.RootDir)
+		matched := set.Matching(occasion)
 
-	if err := printDryRunOccasion(stdout, occasion); err != nil {
-		return err
-	}
-	return printDryRunMatches(stdout, matched, occasion)
+		if err := printDryRunOccasion(stdout, occasion); err != nil {
+			return err
+		}
+		return printDryRunMatches(stdout, matched, occasion)
+	}}
 }
 
 func printDryRunOccasion(w io.Writer, o workflows.Occasion) error {

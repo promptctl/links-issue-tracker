@@ -91,9 +91,9 @@ func TestFoldedCommandsPointToTheirFlags(t *testing.T) {
 // `backup restore` (which owns the same export-restore mechanism) even OUTSIDE a
 // workspace. It drives the production dispatch (`Run`) from a non-repo cwd: the
 // retirement must surface before any workspace open, so a user in a plain
-// directory gets the pointer, not "requires a git repository". This is the
-// skipApp path — a `runAppFamily`-with-nil-app test would skip `runWithApp`
-// entirely and so never exercise the bug this guards.
+// directory gets the pointer, not "requires a git repository". Only the
+// production path proves that — `runAppFamily` never opens an app at all, so a
+// test through it would pass whether or not the row is reached before the open.
 func TestBulkImportRetiredPointsToBackupRestore(t *testing.T) {
 	prevWD, err := os.Getwd()
 	if err != nil {

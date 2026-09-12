@@ -21,54 +21,74 @@ import (
 
 const workflowsUsage = "usage: lit workflows [show <id> | edit <id-or-point> | dry-run [--event <name>] [--label <name>]... [--enter <state>] [--exit <state>] [--issue <id>]]"
 
-// runWorkflows routes the command's shapes: bare (the overview), `show <id>`
-// (one definition, resolved), `edit <id-or-point>` (scaffold/open an
-// override), and `dry-run` (explain a hypothetical occasion). Extends the
-// hand-rolled positional switch .4 established rather than migrating to
-// commandFamily — see promptctl-orchestration-ffqz.4's comment on why bare
-// `lit workflows` (overview-by-default) doesn't fit that helper.
-// [LAW:dataflow-not-control-flow] every shape but dry-run runs the same
-// load-then-render pipeline; only which render function receives the Set
-// varies. dry-run alone needs its own flagset, since it is the only shape
-// with flags of its own.
-func runWorkflows(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
-	_ = ctx
-	positional, flagArgs := splitArgs(args, 2)
-	switch {
-	case len(positional) == 0:
-		if err := parseNoWorkflowsFlags(flagArgs, stdout); err != nil {
-			return err
-		}
-		return renderWorkflowsOverview(stdout, workflows.Load(ws.RootDir))
-	case len(positional) == 2 && positional[0] == "show":
-		if err := parseNoWorkflowsFlags(flagArgs, stdout); err != nil {
-			return err
-		}
-		return renderWorkflowDefinition(stdout, workflows.Load(ws.RootDir), positional[1])
-	case len(positional) == 2 && positional[0] == "edit":
-		if err := parseNoWorkflowsFlags(flagArgs, stdout); err != nil {
-			return err
-		}
-		return runWorkflowsEdit(stdout, ws, positional[1])
-	case len(positional) == 1 && positional[0] == "dry-run":
-		return runWorkflowsDryRun(stdout, ws, flagArgs)
-	default:
-		return UsageError{Message: workflowsUsage}
-	}
+// workflowsFamily is the named surface under `workflows`: one definition
+// resolved (`show <id>`), an override scaffolded or opened (`edit
+// <id-or-point>`), and a hypothetical occasion explained (`dry-run`). The
+// hand-rolled positional switch .4 established is gone: the legal-name set now
+// comes from this table like every other family's, and each shape's flag
+// surface is its own leaf's declaration. [LAW:one-source-of-truth]
+var workflowsFamily = commandFamily[wsSubcommand]{
+	usage: workflowsUsage,
+	subcommands: []subcommandRow[wsSubcommand]{
+		{name: "show", payload: wsSubcommand{declare: workflowsShowLeaf}},
+		{name: "edit", payload: wsSubcommand{declare: workflowsEditLeaf}},
+		{name: "dry-run", payload: wsSubcommand{declare: workflowsDryRunLeaf}},
+	},
 }
 
-// parseNoWorkflowsFlags is the shared "this shape takes no flags" guard the
-// overview/show/edit shapes all run: any flag-shaped or oversupplied
-// positional argument fails loudly rather than being silently ignored.
-func parseNoWorkflowsFlags(flagArgs []string, stdout io.Writer) error {
+// workflowsDispatch turns argv into the leaf that serves it, with nothing open:
+// bare `lit workflows` is the overview, a subcommand name walks the family, and
+// -h/--help is the family's usage — the same answer resolve gives at every
+// other level. [LAW:parse-dont-validate] the token is recognized once here and
+// comes back as a wsLeaf, so no shape downstream re-reads argv to learn which
+// one it is.
+//
+// The bare default is selected by the ABSENCE of a subcommand name, never by a
+// flag, exactly as a nested family's bare path is (`lit sync reconcile`). A
+// top-level command has no owning subcommandRow to carry `bare`, so that
+// pairing is stated here instead. [LAW:dataflow-not-control-flow]
+func workflowsDispatch(args []string) (wsLeaf, []string, error) {
+	if len(args) > 0 && isHelpFlag(args[0]) {
+		return wsLeaf{}, nil, HelpRequestedError{Usage: workflowsUsage}
+	}
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		return workflowsOverviewLeaf(), args, nil
+	}
+	return resolveWsLeaf(workflowsFamily, args)
+}
+
+// workflowsOverviewLeaf renders the lifecycle spine annotated with what is
+// active at each point. It takes no flags and no positionals, so its whole
+// declaration is the empty surface that makes `lit workflows --bogus` a usage
+// error instead of a silently ignored token.
+func workflowsOverviewLeaf() wsLeaf {
 	fs := newCobraFlagSet("workflows")
-	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return UsageError{Message: workflowsUsage}
-	}
-	return nil
+	return wsLeaf{fs: fs, positionals: 0, work: func(_ context.Context, stdout io.Writer, ws workspace.Info, _ []string) error {
+		if fs.NArg() != 0 {
+			return UsageError{Message: workflowsUsage}
+		}
+		return renderWorkflowsOverview(stdout, workflows.Load(ws.RootDir))
+	}}
+}
+
+func workflowsShowLeaf() wsLeaf {
+	fs := newCobraFlagSet("workflows show")
+	return wsLeaf{fs: fs, positionals: 1, work: func(_ context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+		if len(positional) != 1 || fs.NArg() != 0 {
+			return UsageError{Message: workflowsUsage}
+		}
+		return renderWorkflowDefinition(stdout, workflows.Load(ws.RootDir), positional[0])
+	}}
+}
+
+func workflowsEditLeaf() wsLeaf {
+	fs := newCobraFlagSet("workflows edit")
+	return wsLeaf{fs: fs, positionals: 1, work: func(_ context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+		if len(positional) != 1 || fs.NArg() != 0 {
+			return UsageError{Message: workflowsUsage}
+		}
+		return runWorkflowsEdit(stdout, ws, positional[0])
+	}}
 }
 
 // builtinStates is the lifecycle's own state order — the spine every

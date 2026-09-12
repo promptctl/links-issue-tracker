@@ -30,30 +30,14 @@ const (
 // finalizes it with the agent's merged text; `abort` leaves the clone diverged.
 // [LAW:decomposition] Running/surfacing, finalizing, and deferring are three
 // distinct acts, each its own handler.
-var reconcileFamily = commandFamily[syncRunFn]{
+var reconcileFamily = commandFamily[wsSubcommand]{
 	usage: "usage: lit sync reconcile [resolve --resolve FINGERPRINT=TEXT ... | abort | take local|remote | combine]",
-	subcommands: []subcommandRow[syncRunFn]{
-		{name: "resolve", payload: runSyncReconcileResolve},
-		{name: "abort", payload: runSyncReconcileAbort},
-		{name: "take", payload: runSyncReconcileTake},
-		{name: "combine", payload: runSyncReconcileCombine},
+	subcommands: []subcommandRow[wsSubcommand]{
+		{name: "resolve", payload: wsSubcommand{declare: withSyncStore(syncReconcileResolveLeaf)}},
+		{name: "abort", payload: wsSubcommand{declare: withSyncStore(syncReconcileAbortLeaf)}},
+		{name: "take", payload: wsSubcommand{declare: withSyncStore(syncReconcileTakeLeaf)}},
+		{name: "combine", payload: wsSubcommand{declare: withSyncStore(syncReconcileCombineLeaf)}},
 	},
-}
-
-// runSyncReconcile dispatches the reconcile family. A first argument naming a
-// subcommand routes to it; anything else (no argument, or a leading flag) is the
-// bare run-and-surface action. [LAW:dataflow-not-control-flow] The presence of a
-// subcommand name selects the handler; the bare path is the default, not a
-// special case threaded through a flag.
-func runSyncReconcile(ctx context.Context, stdout io.Writer, ws workspace.Info, session syncSession, args []string) error {
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		run, err := reconcileFamily.resolve(args)
-		if err != nil {
-			return err
-		}
-		return run(ctx, stdout, ws, session, args[1:])
-	}
-	return runSyncReconcileShow(ctx, stdout, ws, session, args)
 }
 
 // reconcilerFor resolves the reconcile capability for one reconcile subcommand.
@@ -92,76 +76,76 @@ func guardReconcileInput(fs *cobraFlagSet, cmd string) error {
 // ExitConflict — the explicit counterpart to the inline auto-reconcile's passive
 // nudge. [LAW:no-silent-failure] An unresolved divergence is a conflict, surfaced
 // with the guidance that resolves it, never a silent success.
-func runSyncReconcileShow(ctx context.Context, stdout io.Writer, ws workspace.Info, session syncSession, args []string) error {
+func syncReconcileShowLeaf() syncLeaf {
 	fs := newCobraFlagSet("sync reconcile")
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	if err := guardReconcileInput(fs, "sync reconcile"); err != nil {
-		return err
-	}
-	reconciler, err := reconcilerFor(ws, session, reconcileShowCommand)
-	if err != nil {
-		return err
-	}
-	remote, branch, ok, err := freshReconcileTarget(ctx, session, ws)
-	if err != nil {
-		recordSyncCommandTrace(ws, reconcileShowCommand, "error", err, nil)
-		return err
-	}
-	if !ok {
-		recordSyncCommandTrace(ws, reconcileShowCommand, "nothing_to_reconcile", nil, nil)
-		_, writeErr := fmt.Fprintln(stdout, "nothing to reconcile: no remote with shared ticket history yet")
-		return writeErr
-	}
-	result, err := reconciler.SyncReconcile(ctx, remote, branch)
-	if err != nil {
-		recordSyncCommandTrace(ws, reconcileShowCommand, "error", err, map[string]string{"remote": remote, "sync_branch": branch})
-		return asSyncFailure(err)
-	}
-	return reportReconcileResult(ctx, stdout, ws, session, reconcileShowCommand, remote, branch, result, false)
+	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope syncScope, positional []string) error {
+		ws, session := scope.ws, scope.session
+		if err := guardReconcileInput(fs, "sync reconcile"); err != nil {
+			return err
+		}
+		reconciler, err := reconcilerFor(ws, session, reconcileShowCommand)
+		if err != nil {
+			return err
+		}
+		remote, branch, ok, err := freshReconcileTarget(ctx, session, ws)
+		if err != nil {
+			recordSyncCommandTrace(ws, reconcileShowCommand, "error", err, nil)
+			return err
+		}
+		if !ok {
+			recordSyncCommandTrace(ws, reconcileShowCommand, "nothing_to_reconcile", nil, nil)
+			_, writeErr := fmt.Fprintln(stdout, "nothing to reconcile: no remote with shared ticket history yet")
+			return writeErr
+		}
+		result, err := reconciler.SyncReconcile(ctx, remote, branch)
+		if err != nil {
+			recordSyncCommandTrace(ws, reconcileShowCommand, "error", err, map[string]string{"remote": remote, "sync_branch": branch})
+			return asSyncFailure(err)
+		}
+		return reportReconcileResult(ctx, stdout, ws, session, reconcileShowCommand, remote, branch, result, false)
+	}}
 }
 
 // runSyncReconcileResolve finalizes a prose-pending reconcile with the agent's
 // merged text. The resolutions must cover the live divergence exactly; if they no
 // longer match (it changed, or is partial), the store returns prose-pending with
 // the CURRENT conflicts, which this re-surfaces. [LAW:no-silent-failure]
-func runSyncReconcileResolve(ctx context.Context, stdout io.Writer, ws workspace.Info, session syncSession, args []string) error {
+func syncReconcileResolveLeaf() syncLeaf {
 	fs := newCobraFlagSet("sync reconcile resolve")
 	resolveValues := fs.StringArray("resolve", "Merged text for one diverged field, as FINGERPRINT=TEXT with the fingerprint from that field's heading (repeat for every pending field)")
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	if err := guardReconcileInput(fs, "sync reconcile resolve"); err != nil {
-		return err
-	}
-	if len(*resolveValues) == 0 {
-		return UsageError{Message: "sync reconcile resolve needs at least one --resolve FINGERPRINT=TEXT"}
-	}
-	resolutions, err := parseProseResolutions(*resolveValues)
-	if err != nil {
-		return err
-	}
-	reconciler, err := reconcilerFor(ws, session, proseResolveCommand)
-	if err != nil {
-		return err
-	}
-	remote, branch, ok, err := freshReconcileTarget(ctx, session, ws)
-	if err != nil {
-		recordSyncCommandTrace(ws, proseResolveCommand, "error", err, nil)
-		return err
-	}
-	if !ok {
-		recordSyncCommandTrace(ws, proseResolveCommand, "nothing_to_reconcile", nil, nil)
-		_, writeErr := fmt.Fprintln(stdout, "nothing to reconcile: no remote with shared ticket history yet")
-		return writeErr
-	}
-	result, err := reconciler.SyncReconcileResolved(ctx, remote, branch, resolutions)
-	if err != nil {
-		recordSyncCommandTrace(ws, proseResolveCommand, "error", err, map[string]string{"remote": remote, "sync_branch": branch})
-		return asSyncFailure(err)
-	}
-	return reportReconcileResult(ctx, stdout, ws, session, proseResolveCommand, remote, branch, result, true)
+	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope syncScope, positional []string) error {
+		ws, session := scope.ws, scope.session
+		if err := guardReconcileInput(fs, "sync reconcile resolve"); err != nil {
+			return err
+		}
+		if len(*resolveValues) == 0 {
+			return UsageError{Message: "sync reconcile resolve needs at least one --resolve FINGERPRINT=TEXT"}
+		}
+		resolutions, err := parseProseResolutions(*resolveValues)
+		if err != nil {
+			return err
+		}
+		reconciler, err := reconcilerFor(ws, session, proseResolveCommand)
+		if err != nil {
+			return err
+		}
+		remote, branch, ok, err := freshReconcileTarget(ctx, session, ws)
+		if err != nil {
+			recordSyncCommandTrace(ws, proseResolveCommand, "error", err, nil)
+			return err
+		}
+		if !ok {
+			recordSyncCommandTrace(ws, proseResolveCommand, "nothing_to_reconcile", nil, nil)
+			_, writeErr := fmt.Fprintln(stdout, "nothing to reconcile: no remote with shared ticket history yet")
+			return writeErr
+		}
+		result, err := reconciler.SyncReconcileResolved(ctx, remote, branch, resolutions)
+		if err != nil {
+			recordSyncCommandTrace(ws, proseResolveCommand, "error", err, map[string]string{"remote": remote, "sync_branch": branch})
+			return asSyncFailure(err)
+		}
+		return reportReconcileResult(ctx, stdout, ws, session, proseResolveCommand, remote, branch, result, true)
+	}}
 }
 
 // runSyncReconcileAbort defers the reconcile: the clone stays diverged and usable.
@@ -170,20 +154,20 @@ func runSyncReconcileResolve(ctx context.Context, stdout io.Writer, ws workspace
 // the clean exit-zero escape the agent takes when it chooses to escalate to the
 // user instead of merging inline, distinct from the unresolved state's
 // ExitConflict.
-func runSyncReconcileAbort(ctx context.Context, stdout io.Writer, ws workspace.Info, session syncSession, args []string) error {
+func syncReconcileAbortLeaf() syncLeaf {
 	fs := newCobraFlagSet("sync reconcile abort")
-	if err := parseFlagSet(fs, args, stdout); err != nil {
+	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope syncScope, positional []string) error {
+		ws := scope.ws
+		if err := guardReconcileInput(fs, "sync reconcile abort"); err != nil {
+			return err
+		}
+		// abort is a real decision — the agent choosing to defer/escalate rather
+		// than merge inline — not merely a usage no-op, so it gets the same durable
+		// trace its three siblings (resolve/take/combine) do. [LAW:no-silent-failure]
+		recordSyncCommandTrace(ws, "lit sync reconcile abort", "aborted", nil, nil)
+		_, err := fmt.Fprintln(stdout, "reconcile deferred: the clone remains diverged and usable; a later command re-surfaces the divergence, or run `lit sync reconcile` when ready")
 		return err
-	}
-	if err := guardReconcileInput(fs, "sync reconcile abort"); err != nil {
-		return err
-	}
-	// abort is a real decision — the agent choosing to defer/escalate rather
-	// than merge inline — not merely a usage no-op, so it gets the same durable
-	// trace its three siblings (resolve/take/combine) do. [LAW:no-silent-failure]
-	recordSyncCommandTrace(ws, "lit sync reconcile abort", "aborted", nil, nil)
-	_, err := fmt.Fprintln(stdout, "reconcile deferred: the clone remains diverged and usable; a later command re-surfaces the divergence, or run `lit sync reconcile` when ready")
-	return err
+	}}
 }
 
 // runSyncReconcileTake resolves an unrelated-history divergence by taking one side
@@ -196,66 +180,66 @@ func runSyncReconcileAbort(ctx context.Context, stdout io.Writer, ws workspace.I
 // the owner's approval (links-sync-pgct.4): without a matching --owner-approved
 // token the store's gate refuses, and this surfaces the refusal block naming what
 // the take would destroy and how the owner authorizes it.
-func runSyncReconcileTake(ctx context.Context, stdout io.Writer, ws workspace.Info, session syncSession, args []string) error {
+func syncReconcileTakeLeaf() syncLeaf {
 	fs := newCobraFlagSet("sync reconcile take")
 	ownerApproved := fs.String("owner-approved", "", "Owner-issued approval token for this exact divergence and side (printed by the refusal this command gives without it)")
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	if fs.NArg() != 1 {
-		return UsageError{Message: "sync reconcile take needs exactly one side: 'local' (keep your backlog) or 'remote' (adopt theirs)"}
-	}
-	choice, err := parseUnrelatedSide(fs.Arg(0))
-	if err != nil {
-		return err
-	}
-	// The chosen side is part of what command ran — "took local" and "took remote"
-	// are different decisions, so the trace command names which. [LAW:one-source-of-truth]
-	command := "lit sync reconcile take " + string(choice)
-	reconciler, err := reconcilerFor(ws, session, command)
-	if err != nil {
-		return err
-	}
-	remote, branch, ok, err := freshReconcileTarget(ctx, session, ws)
-	if err != nil {
-		recordSyncCommandTrace(ws, command, "error", err, nil)
-		return err
-	}
-	if !ok {
-		recordSyncCommandTrace(ws, command, "nothing_to_reconcile", nil, nil)
-		_, writeErr := fmt.Fprintln(stdout, "nothing to reconcile: no remote with shared ticket history yet")
-		return writeErr
-	}
-	result, err := reconciler.SyncResolveUnrelated(ctx, remote, branch, choice, strings.TrimSpace(*ownerApproved))
-	if err != nil {
-		var approval store.OwnerApprovalRequiredError
-		if errors.As(err, &approval) {
-			// The gate firing is a real decision, durably traced like its sibling
-			// outcomes; the refusal also re-surfaces the unrelated-histories state,
-			// so the owner hears about the fork an agent just tried to resolve
-			// destructively (deduplicated with the detection-time notification).
-			// [LAW:no-silent-failure]
-			recordSyncTraceLogged(ws, syncTraceRecord{
-				Command:   command,
-				Decision:  "owner_approval_required",
-				Status:    "ok",
-				Reason:    approval.Error(),
-				BuildNote: resolveBuildStatusNote(time.Now()),
-				Metadata:  map[string]string{"remote": remote, "sync_branch": branch},
-			})
-			if ev, ok := ownerNotifyEventForFailure(SyncFailure{
-				Class:  syncFailureUnrelatedHistories,
-				Remote: remote,
-				Branch: branch,
-			}); ok {
-				maybeNotifyOwner(ctx, ws, ev)
-			}
-			return ownerApprovalRefusalError{Approval: approval, Remote: remote, Branch: branch}
+	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope syncScope, positional []string) error {
+		ws, session := scope.ws, scope.session
+		if fs.NArg() != 1 {
+			return UsageError{Message: "sync reconcile take needs exactly one side: 'local' (keep your backlog) or 'remote' (adopt theirs)"}
 		}
-		recordSyncCommandTrace(ws, command, "error", err, map[string]string{"remote": remote, "sync_branch": branch})
-		return asSyncFailure(err)
-	}
-	return reportTakeOutcome(stdout, ws, command, remote, branch, result)
+		choice, err := parseUnrelatedSide(fs.Arg(0))
+		if err != nil {
+			return err
+		}
+		// The chosen side is part of what command ran — "took local" and "took remote"
+		// are different decisions, so the trace command names which. [LAW:one-source-of-truth]
+		command := "lit sync reconcile take " + string(choice)
+		reconciler, err := reconcilerFor(ws, session, command)
+		if err != nil {
+			return err
+		}
+		remote, branch, ok, err := freshReconcileTarget(ctx, session, ws)
+		if err != nil {
+			recordSyncCommandTrace(ws, command, "error", err, nil)
+			return err
+		}
+		if !ok {
+			recordSyncCommandTrace(ws, command, "nothing_to_reconcile", nil, nil)
+			_, writeErr := fmt.Fprintln(stdout, "nothing to reconcile: no remote with shared ticket history yet")
+			return writeErr
+		}
+		result, err := reconciler.SyncResolveUnrelated(ctx, remote, branch, choice, strings.TrimSpace(*ownerApproved))
+		if err != nil {
+			var approval store.OwnerApprovalRequiredError
+			if errors.As(err, &approval) {
+				// The gate firing is a real decision, durably traced like its sibling
+				// outcomes; the refusal also re-surfaces the unrelated-histories state,
+				// so the owner hears about the fork an agent just tried to resolve
+				// destructively (deduplicated with the detection-time notification).
+				// [LAW:no-silent-failure]
+				recordSyncTraceLogged(ws, syncTraceRecord{
+					Command:   command,
+					Decision:  "owner_approval_required",
+					Status:    "ok",
+					Reason:    approval.Error(),
+					BuildNote: resolveBuildStatusNote(time.Now()),
+					Metadata:  map[string]string{"remote": remote, "sync_branch": branch},
+				})
+				if ev, ok := ownerNotifyEventForFailure(SyncFailure{
+					Class:  syncFailureUnrelatedHistories,
+					Remote: remote,
+					Branch: branch,
+				}); ok {
+					maybeNotifyOwner(ctx, ws, ev)
+				}
+				return ownerApprovalRefusalError{Approval: approval, Remote: remote, Branch: branch}
+			}
+			recordSyncCommandTrace(ws, command, "error", err, map[string]string{"remote": remote, "sync_branch": branch})
+			return asSyncFailure(err)
+		}
+		return reportTakeOutcome(stdout, ws, command, remote, branch, result)
+	}}
 }
 
 // runSyncReconcileCombine resolves an unrelated-history divergence by COMBINING both
@@ -263,34 +247,34 @@ func runSyncReconcileTake(ctx context.Context, stdout io.Writer, ws workspace.In
 // It surfaces an on-both prose conflict for inline resolution exactly as the three-way
 // reconcile does (the SAME `lit sync reconcile resolve` finalizes it), so no shared-id
 // free-text is ever auto-picked and no unique issue is dropped. [LAW:no-silent-failure]
-func runSyncReconcileCombine(ctx context.Context, stdout io.Writer, ws workspace.Info, session syncSession, args []string) error {
+func syncReconcileCombineLeaf() syncLeaf {
 	fs := newCobraFlagSet("sync reconcile combine")
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	if err := guardReconcileInput(fs, "sync reconcile combine"); err != nil {
-		return err
-	}
-	reconciler, err := reconcilerFor(ws, session, reconcileCombineCommand)
-	if err != nil {
-		return err
-	}
-	remote, branch, ok, err := freshReconcileTarget(ctx, session, ws)
-	if err != nil {
-		recordSyncCommandTrace(ws, reconcileCombineCommand, "error", err, nil)
-		return err
-	}
-	if !ok {
-		recordSyncCommandTrace(ws, reconcileCombineCommand, "nothing_to_reconcile", nil, nil)
-		_, writeErr := fmt.Fprintln(stdout, "nothing to reconcile: no remote with shared ticket history yet")
-		return writeErr
-	}
-	result, err := reconciler.SyncReconcileCombine(ctx, remote, branch)
-	if err != nil {
-		recordSyncCommandTrace(ws, reconcileCombineCommand, "error", err, map[string]string{"remote": remote, "sync_branch": branch})
-		return asSyncFailure(err)
-	}
-	return reportReconcileResult(ctx, stdout, ws, session, reconcileCombineCommand, remote, branch, result, false)
+	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope syncScope, positional []string) error {
+		ws, session := scope.ws, scope.session
+		if err := guardReconcileInput(fs, "sync reconcile combine"); err != nil {
+			return err
+		}
+		reconciler, err := reconcilerFor(ws, session, reconcileCombineCommand)
+		if err != nil {
+			return err
+		}
+		remote, branch, ok, err := freshReconcileTarget(ctx, session, ws)
+		if err != nil {
+			recordSyncCommandTrace(ws, reconcileCombineCommand, "error", err, nil)
+			return err
+		}
+		if !ok {
+			recordSyncCommandTrace(ws, reconcileCombineCommand, "nothing_to_reconcile", nil, nil)
+			_, writeErr := fmt.Fprintln(stdout, "nothing to reconcile: no remote with shared ticket history yet")
+			return writeErr
+		}
+		result, err := reconciler.SyncReconcileCombine(ctx, remote, branch)
+		if err != nil {
+			recordSyncCommandTrace(ws, reconcileCombineCommand, "error", err, map[string]string{"remote": remote, "sync_branch": branch})
+			return asSyncFailure(err)
+		}
+		return reportReconcileResult(ctx, stdout, ws, session, reconcileCombineCommand, remote, branch, result, false)
+	}}
 }
 
 // parseUnrelatedSide maps the take command's positional to the store resolution

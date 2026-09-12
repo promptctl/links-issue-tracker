@@ -14,17 +14,17 @@ import (
 var bulkFamily = commandFamily[appSubcommand]{
 	usage: "usage: lit bulk <label|close|archive> ...",
 	subcommands: []subcommandRow[appSubcommand]{
-		{name: "label", nestedUsage: bulkLabelFamily.usage, payload: appSubcommand{access: app.AccessWrite, run: runBulkLabel}},
-		{name: "close", payload: appSubcommand{access: app.AccessWrite, run: runBulkClose}},
-		{name: "archive", payload: appSubcommand{access: app.AccessWrite, run: runBulkTransition(model.Archive{})}},
+		{name: "label", nestedUsage: bulkLabelFamily.usage, payload: appSubcommand{access: app.AccessWrite, declare: bulkLabelLeaf}},
+		{name: "close", payload: appSubcommand{access: app.AccessWrite, declare: bulkCloseLeaf}},
+		{name: "archive", payload: appSubcommand{access: app.AccessWrite, declare: bulkTransitionLeaf(model.Archive{})}},
 		// `bulk import` is retired: it was a second name for the export-restore
 		// that `backup restore` already owns (both call restoreFromExportPath),
 		// and it is the odd verb out in a family of per-`--ids` fan-out ops. Kept
 		// hidden+dispatchable so an old invocation returns the documented pointer
-		// instead of the bare family usage error. skipApp so the pointer reaches
-		// the caller even outside a workspace, like the top-level retirements.
-		// [LAW:no-silent-failure]
-		{name: "import", payload: appSubcommand{run: runBulkImportRetired, skipApp: true}, hidden: true},
+		// instead of the bare family usage error. The pointer is the row's own
+		// data, so it reaches the caller ahead of any parse or workspace open,
+		// like the top-level retirements. [LAW:no-silent-failure]
+		retiredSubcommand("bulk", "import", bulkImportRetirementGuidance),
 	},
 }
 
@@ -97,36 +97,38 @@ var bulkLabelFamily = commandFamily[bulkLabelOp]{
 	},
 }
 
-func runBulkLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	if len(args) == 0 {
-		return UsageError{Message: bulkLabelFamily.usage}
-	}
+// bulkLabelLeaf serves the whole `bulk label <add|rm>` surface: the action name
+// is this leaf's one positional, so the nested family resolve reads it from the
+// parse rather than re-slicing raw argv.
+func bulkLabelLeaf() appLeaf {
 	fs := newCobraFlagSet("bulk label")
 	ids := fs.String("ids", "", "Comma-separated issue IDs")
 	label := fs.String("label", "", "Label name")
 	resolveActor := registerActor(fs)
-	if err := parseFlagSet(fs, args[1:], stdout); err != nil {
-		return err
-	}
-	issueIDs := splitCSV(*ids)
-	if len(issueIDs) == 0 {
-		return ValidationError{Message: "--ids is required"}
-	}
-	if strings.TrimSpace(*label) == "" {
-		return ValidationError{Message: "--label is required"}
-	}
-	// Resolved after the flag checks to preserve the established error
-	// precedence: missing --ids/--label surface before an unknown action does.
-	// A help-shaped action never reaches here — the outer bulkFamily resolve
-	// answers `bulk label --help` before the app is even opened (links-cli-zc3r).
-	op, err := bulkLabelFamily.resolve(args)
-	if err != nil {
-		return err
-	}
-	actor := resolveActor()
-	return runBulkOver(stdout, issueIDs, func(issueID string) error {
-		return op(ctx, ap, issueID, *label, actor)
-	})
+	return appLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		if len(positional) == 0 {
+			return UsageError{Message: bulkLabelFamily.usage}
+		}
+		issueIDs := splitCSV(*ids)
+		if len(issueIDs) == 0 {
+			return ValidationError{Message: "--ids is required"}
+		}
+		if strings.TrimSpace(*label) == "" {
+			return ValidationError{Message: "--label is required"}
+		}
+		// Resolved after the flag checks to preserve the established error
+		// precedence: missing --ids/--label surface before an unknown action does.
+		// A help-shaped action never reaches here — the outer bulkFamily resolve
+		// answers `bulk label --help` before the app is even opened (links-cli-zc3r).
+		op, err := bulkLabelFamily.resolve(positional)
+		if err != nil {
+			return err
+		}
+		actor := resolveActor()
+		return runBulkOver(stdout, issueIDs, func(issueID string) error {
+			return op(ctx, ap, issueID, *label, actor)
+		})
+	}}
 }
 
 // runBulkClose closes every listed issue with one shared outcome. The outcome
@@ -134,62 +136,52 @@ func runBulkLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []str
 // longer record the resolution-less close that the close command itself
 // forbids — the two boundaries agree about what a close requires by sharing
 // the enforcer. [LAW:single-enforcer]
-func runBulkClose(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+func bulkCloseLeaf() appLeaf {
 	fs := newCobraFlagSet("bulk close")
 	ids := fs.String("ids", "", "Comma-separated issue IDs")
 	reason := fs.String("reason", "", "Lifecycle reason")
 	resolution, target := registerCloseOutcomeFlags(fs)
 	resolveActor := registerActor(fs)
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	issueIDs := splitCSV(*ids)
-	if len(issueIDs) == 0 {
-		return ValidationError{Message: "--ids is required"}
-	}
-	outcome, err := closeOutcomeFromFlags(*resolution, *target, "usage: lit bulk close --ids <id,id,...> --resolution <duplicate|superseded|obsolete|wontfix> [--of <canonical-id>] [--reason <text>]")
-	if err != nil {
-		return err
-	}
-	actor := resolveActor()
-	return runBulkOver(stdout, issueIDs, func(issueID string) error {
-		_, err := ap.Store.Apply(ctx, issueID, storage.Change{
-			Action: model.Close{Outcome: outcome},
-			Actor:  actor,
-			Reason: *reason,
-		})
-		return err
-	})
-}
-
-// runBulkTransition builds the handler for a bulk retention action. The
-// action is fixed by the family row, so the body never re-reads argv to
-// learn which subcommand it is serving. [LAW:dataflow-not-control-flow]
-func runBulkTransition(action model.Action) appRunFn {
-	return func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-		fs := newCobraFlagSet("bulk " + string(action.Name()))
-		ids := fs.String("ids", "", "Comma-separated issue IDs")
-		reason := fs.String("reason", "", "Lifecycle reason")
-		resolveActor := registerActor(fs)
-		if err := parseFlagSet(fs, args, stdout); err != nil {
-			return err
-		}
+	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		issueIDs := splitCSV(*ids)
 		if len(issueIDs) == 0 {
 			return ValidationError{Message: "--ids is required"}
 		}
+		outcome, err := closeOutcomeFromFlags(*resolution, *target, "usage: lit bulk close --ids <id,id,...> --resolution <duplicate|superseded|obsolete|wontfix> [--of <canonical-id>] [--reason <text>]")
+		if err != nil {
+			return err
+		}
 		actor := resolveActor()
 		return runBulkOver(stdout, issueIDs, func(issueID string) error {
-			_, err := ap.Store.Apply(ctx, issueID, storage.Change{Action: action, Actor: actor, Reason: *reason})
+			_, err := ap.Store.Apply(ctx, issueID, storage.Change{
+				Action: model.Close{Outcome: outcome},
+				Actor:  actor,
+				Reason: *reason,
+			})
 			return err
 		})
-	}
+	}}
 }
 
-// runBulkImportRetired answers a retired `bulk import` invocation with the
-// documented pointer to `backup restore`, which owns the same export-restore
-// mechanism. It ignores the opened app; the row is registered only so the
-// retirement message reaches the caller instead of the family's bare usage error.
-func runBulkImportRetired(_ context.Context, _ io.Writer, _ *app.App, _ []string) error {
-	return RetiredCommandError{Command: "bulk import", Replacement: bulkImportRetirementGuidance}
+// bulkTransitionLeaf builds the leaf for a bulk retention action. The action is
+// fixed by the family row, so the body never re-reads argv to learn which
+// subcommand it is serving. [LAW:dataflow-not-control-flow]
+func bulkTransitionLeaf(action model.Action) appLeafFn {
+	return func() appLeaf {
+		fs := newCobraFlagSet("bulk " + string(action.Name()))
+		ids := fs.String("ids", "", "Comma-separated issue IDs")
+		reason := fs.String("reason", "", "Lifecycle reason")
+		resolveActor := registerActor(fs)
+		return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+			issueIDs := splitCSV(*ids)
+			if len(issueIDs) == 0 {
+				return ValidationError{Message: "--ids is required"}
+			}
+			actor := resolveActor()
+			return runBulkOver(stdout, issueIDs, func(issueID string) error {
+				_, err := ap.Store.Apply(ctx, issueID, storage.Change{Action: action, Actor: actor, Reason: *reason})
+				return err
+			})
+		}}
+	}
 }

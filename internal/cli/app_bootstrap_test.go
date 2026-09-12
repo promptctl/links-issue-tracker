@@ -166,8 +166,8 @@ func TestCommandFamilyResolve(t *testing.T) {
 			if got.access != tc.want {
 				t.Fatalf("resolve(%v) access = %v, want %v", tc.args, got.access, tc.want)
 			}
-			if got.run == nil {
-				t.Fatalf("resolve(%v) returned a row with no handler", tc.args)
+			if got.declare == nil {
+				t.Fatalf("resolve(%v) returned a row with no leaf", tc.args)
 			}
 		})
 	}

@@ -28,31 +28,28 @@ type hookInstallResult struct {
 	Reason   string
 }
 
-var hooksFamily = commandFamily[wsRunFn]{
+var hooksFamily = commandFamily[wsSubcommand]{
 	usage: "usage: lit hooks install",
-	subcommands: []subcommandRow[wsRunFn]{
-		{name: "install", payload: func(_ context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
-			return runHooksInstall(stdout, ws, args)
-		}},
+	subcommands: []subcommandRow[wsSubcommand]{
+		{name: "install", payload: wsSubcommand{declare: hooksInstallLeaf}},
 	},
 }
 
-func runHooksInstall(stdout io.Writer, ws workspace.Info, args []string) error {
+func hooksInstallLeaf() wsLeaf {
 	fs := newCobraFlagSet("hooks install")
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit hooks install"}
-	}
+	return wsLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+		if fs.NArg() != 0 {
+			return UsageError{Message: "usage: lit hooks install"}
+		}
 
-	result, err := installHooks(ws)
-	if err != nil {
-		return err
-	}
+		result, err := installHooks(ws)
+		if err != nil {
+			return err
+		}
 
-	_, err = fmt.Fprintf(stdout, "installed %s\n", result.HookPath)
-	return err
+		_, err = fmt.Fprintf(stdout, "installed %s\n", result.HookPath)
+		return err
+	}}
 }
 
 func installHooks(ws workspace.Info) (hookInstallResult, error) {

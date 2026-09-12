@@ -34,6 +34,12 @@ func newCobraFlagSet(use string) *cobraFlagSet {
 		SilenceUsage:  true,
 	}
 	cmd.InitDefaultHelpFlag()
+	// Cobra writes that flag's text from cmd.Name(), which is the FIRST word of
+	// Use — so every multi-word leaf described itself by its family: `rank set`
+	// advertised "help for rank", `dep add` "help for dep". A leaf's name here is
+	// its whole invocation path, which is what the caller typed and what the
+	// surrounding "Usage of rank set:" line already says.
+	cmd.Flags().Lookup("help").Usage = "help for " + use
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
 	cmd.Flags().SetOutput(io.Discard)
@@ -130,7 +136,15 @@ func parseFlagSet(fs *cobraFlagSet, args []string, stdout io.Writer) error {
 			strings.Contains(msg, "unknown flag: --continue") {
 			return UnsupportedError{Message: "--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag", Feature: "--continue"}
 		}
-		if strings.HasPrefix(msg, "unknown flag:") || strings.HasPrefix(msg, "flag provided but not defined:") {
+		// "flag needs an argument" joins the unknown-flag family: all three are the
+		// user mis-writing the flag surface, so all three reach a sink as one type.
+		// It classified as a bare error until links-cli-1lxr, which is only visible
+		// now that the parse runs before acquisition — the arity error used to be
+		// reached after a store was already open, where the store's own error
+		// shadowed it. [LAW:types-are-the-program] [LAW:single-enforcer]
+		if strings.HasPrefix(msg, "unknown flag:") ||
+			strings.HasPrefix(msg, "flag provided but not defined:") ||
+			strings.HasPrefix(msg, "flag needs an argument:") {
 			return UsageError{Message: msg}
 		}
 		return err
@@ -146,7 +160,12 @@ func parseFlagSet(fs *cobraFlagSet, args []string, stdout io.Writer) error {
 }
 
 func splitArgs(args []string, positionalCount int) ([]string, []string) {
-	positionals := make([]string, 0, positionalCount)
+	// positionalCount is a CEILING, and an unbounded-arity leaf states it as
+	// allPositionals — so it is not a capacity. argv is the real bound: no more
+	// positionals can land here than there are tokens to put in them.
+	// [LAW:types-are-the-program] the allocation asks the input how big it can
+	// get instead of trusting a number that is allowed to mean "no limit".
+	positionals := make([]string, 0, min(positionalCount, len(args)))
 	flags := make([]string, 0, len(args))
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
