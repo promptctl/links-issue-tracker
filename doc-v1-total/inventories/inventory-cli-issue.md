@@ -658,17 +658,25 @@ and both columns render `-`.
    (`output.go:99-104`).
 3. `unblocks: <ids>` — the IDs from `detail.Blocks` that are still `InPlay()`;
    omitted when empty (`output.go:105-112`, `openUnblockIDs` at `output.go:466-475`).
-4. `\nparent:\n- <id> <title>\n`, and, when the parent has one, its description
-   indented by two spaces (`output.go:117-126`).
+4. The `parent` group — one optional issue adapted to a slice and rendered by
+   the shared group renderer, so the parent line carries a standing marker like
+   every other relation line: `\nparent:\n- <id> [<standing>] <title>\n`, and,
+   when the parent has one, its description indented by two spaces
+   (`output.go:146-153`, `optionalGroup` at `output.go:326-331`).
 5. `\ndescription:\n<text>\n` when non-empty (`output.go:127-131`).
 6. `\nprompt:\n<text>\n` when non-empty (`output.go:132-136`).
 7. Group blocks, each rendered as `\n<label>:\n` followed by
-   `- <id> [<state>] <title>` lines and omitted entirely when empty
-   (`printIssueGroup`, `output.go:297-313`), in this order:
-   `children` (`output.go:137`), `depends_on` (`output.go:146`),
-   `blocks` (`output.go:149`), `redirect` (single optional target adapted to a
-   slice, `output.go:155`, `redirectGroup` at `output.go:290-295`),
-   `related` (`output.go:158`).
+   `- <id> [<standing>] <title>` lines and omitted entirely when empty
+   (`printIssueGroup`, `output.go:333-349`), in this order:
+   `children` (`output.go:164`), `depends_on` (`output.go:173`),
+   `blocks` (`output.go:176`), `redirect` (single optional target adapted to a
+   slice, `output.go:182`, `optionalGroup` at `output.go:326-331`),
+   `related` (`output.go:185`).
+   `<standing>` is `issueStanding` (`output.go:372-378`): the retention name
+   when the issue is frozen, else its state, and a closed state carries the
+   resolution the close recorded as a `:<resolution>` tail —
+   `[closed:duplicate]`, `[closed:superseded]`, `[closed:obsolete]`,
+   `[closed:wontfix]` — with a bare `[closed]` for a close that recorded none.
    There is deliberately **no** `siblings` group here (`output.go:140-145`).
 8. `\ncomments:` then `- [<createdBy>] <body>` with newlines in the body escaped
    to the literal `\n` (`output.go:161-170`).
@@ -703,8 +711,12 @@ and both columns render `-`.
   the workable pipeline uses — which batches their relations; a child listed but
   absent → `storage.NotFoundError`.
 - Per child, `classifyChildStatus(child, ClassifyReadiness(row.Annotations))`:
-  archived/deleted → `[archived]` / `[deleted]`; `closed` → `[closed]`;
-  `in_progress` → `[in_progress]`; else the readiness verdict decides — ready →
+  any child that is frozen or not `open` renders the word `issueStanding`
+  composes, bracketed — archived/deleted → `[archived]` / `[deleted]`;
+  `in_progress` → `[in_progress]`; `closed` → `[closed]` for a close that
+  recorded no resolution, else `[closed:<resolution>]`
+  (`[closed:duplicate]`, `[closed:superseded]`, `[closed:obsolete]`,
+  `[closed:wontfix]`). An `open` child gets the readiness verdict — ready →
   `[ready]`, otherwise `[blocked: <reason>[; <reason>…]]` over every blocking
   reason the annotation registry minted, phrased by `BlockingReason.Phrase`
   (`readiness.go`): `depends on <id>`, `earlier sibling <id> still open`,

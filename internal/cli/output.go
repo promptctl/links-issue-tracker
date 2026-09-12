@@ -143,14 +143,12 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 	// so an agent reading top-to-bottom encounters containing context before
 	// the specific leaf details. When the parent has a description, it inlines
 	// indented under the parent line. (links-agent-epic-model-uew.3)
-	if detail.Parent != nil {
-		if _, err := fmt.Fprintf(w, "\nparent:\n- %s %s\n", detail.Parent.ID, detail.Parent.Title); err != nil {
+	if err := printIssueGroup(w, "parent", optionalGroup(detail.Parent)); err != nil {
+		return err
+	}
+	if detail.Parent != nil && detail.Parent.Description != "" {
+		if _, err := fmt.Fprintf(w, "%s\n", indentLines(detail.Parent.Description, "  ")); err != nil {
 			return err
-		}
-		if detail.Parent.Description != "" {
-			if _, err := fmt.Fprintf(w, "%s\n", indentLines(detail.Parent.Description, "  ")); err != nil {
-				return err
-			}
 		}
 	}
 	if issue.Description != "" {
@@ -181,7 +179,7 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 	// redirect precedes related: it is the canonical "where did this work go"
 	// edge, distinct from incidental peer links. The store already excluded it
 	// from Related, so the two groups never overlap. [LAW:dataflow-not-control-flow]
-	if err := printIssueGroup(w, "redirect", redirectGroup(detail.RedirectTarget)); err != nil {
+	if err := printIssueGroup(w, "redirect", optionalGroup(detail.RedirectTarget)); err != nil {
 		return err
 	}
 	if err := printIssueGroup(w, "related", detail.Related); err != nil {
@@ -316,15 +314,20 @@ func printIssueHistory(w io.Writer, detail model.IssueDetail) error {
 	return printHistoryEvents(w, detail.Events)
 }
 
-// redirectGroup adapts the single optional redirect target to the slice
-// printIssueGroup renders, so the redirect reuses the one definition of the
-// "- id [state] title" line format and the omit-when-empty rule. A nil target
-// yields the empty slice, which printIssueGroup omits.
-func redirectGroup(target *model.Issue) []model.Issue {
-	if target == nil {
+// optionalGroup adapts a single optional issue — a redirect target, a parent —
+// to the slice printIssueGroup renders, so every such group reuses the one
+// definition of the "- id [standing] title" line format and the omit-when-empty
+// rule. A nil issue yields the empty slice, which printIssueGroup omits.
+// [LAW:one-type-per-behavior] The redirect and the parent differ only in the
+// label printIssueGroup is given; both are one optional issue rendered as a
+// group, so one adapter serves them. The parent had its own hand-rolled line
+// instead, which is how it came to print no standing at all — a closed epic
+// parent read exactly like an open one (promptctl-output-p60y).
+func optionalGroup(issue *model.Issue) []model.Issue {
+	if issue == nil {
 		return nil
 	}
-	return []model.Issue{*target}
+	return []model.Issue{*issue}
 }
 
 func printIssueGroup(w io.Writer, label string, issues []model.Issue) error {
@@ -345,8 +348,9 @@ func printIssueGroup(w io.Writer, label string, issues []model.Issue) error {
 	return nil
 }
 
-// issueStanding is the one word for where an issue stands, composed from the
-// two orthogonal lifecycle axes with retention dominating status.
+// issueStanding is the one standing word for where an issue stands: the
+// retention axis when it dominates, otherwise the status axis carrying the
+// close's recorded reason.
 //
 // State() alone is shape-agnostic — leaves return their owned status, containers
 // return state derived from children — but it is only half the truth: a deleted
@@ -354,6 +358,13 @@ func printIssueGroup(w io.Writer, label string, issues []model.Issue) error {
 // "[open]" and sent readers hunting for an id that appears in no listing. A
 // frozen issue's status describes work nobody may do, which is why the retention
 // name replaces it rather than joining it.
+//
+// The close reason joins the status because "closed" alone is a directional
+// lie: dropping it can only make a body of work look MORE finished than it is,
+// never less, so a wontfix declination read as completed work and an agent
+// acted on the wrong picture (promptctl-output-p60y). A `lit done` close
+// records no reason and renders the bare word — the absence is the data, not a
+// fifth member of the sealed set.
 // [LAW:one-source-of-truth] Every surface that names a referenced issue's state
 // reads this, so the epic plan's markers and the relationship groups cannot
 // disagree about one ticket; Frozen and RetentionName stay the sole owners of
@@ -362,7 +373,25 @@ func issueStanding(issue model.Issue) string {
 	if model.Frozen(issue.Retention()) {
 		return model.RetentionName(issue.Retention())
 	}
-	return string(issue.State())
+	return string(issue.State()) + resolutionSuffix(issue.ResolutionValue())
+}
+
+// resolutionSuffix renders a recorded close reason as the tail of a standing
+// word — ":wontfix" — and "" for a close that recorded none, which is the
+// identity for the concatenation above rather than a case its caller steers
+// around. [LAW:dataflow-not-control-flow] absence is a value here, exactly as
+// in formatEpicLine and laneTag.
+//
+// ":" and not "+": the "+" in formatIssueState means both lifecycle axes are
+// true of one ticket ("open+deleted"), while a resolution is the closed state's
+// own payload — it exists on no other state — so it refines the word rather
+// than standing beside it. [LAW:comments-carry-meaning] the distinction is the
+// notation's whole meaning and is invisible in the code.
+func resolutionSuffix(resolution *model.Resolution) string {
+	if resolution == nil {
+		return ""
+	}
+	return ":" + string(*resolution)
 }
 
 // derivedColumns carries the per-issue facts that cannot be read off the issue
@@ -494,11 +523,7 @@ func liveIssues(issues []model.Issue) []model.Issue {
 // now-unblocked-dependents derivation rather than minting a second
 // representation of the same graph.
 func printCloseAdjacency(w io.Writer, detail model.IssueDetail) error {
-	parent := []model.Issue{}
-	if detail.Parent != nil {
-		parent = append(parent, *detail.Parent)
-	}
-	if err := printIssueGroup(w, "parent", parent); err != nil {
+	if err := printIssueGroup(w, "parent", optionalGroup(detail.Parent)); err != nil {
 		return err
 	}
 	if err := printIssueGroup(w, "siblings", liveIssues(detail.Siblings)); err != nil {
@@ -507,7 +532,7 @@ func printCloseAdjacency(w io.Writer, detail model.IssueDetail) error {
 	// Surface the redirect at the close moment too: closing as duplicate/
 	// superseded, the freshest fact is where the work went. Same store-shaped
 	// IssueDetail, same omit-when-empty group as lit show.
-	if err := printIssueGroup(w, "redirect", redirectGroup(detail.RedirectTarget)); err != nil {
+	if err := printIssueGroup(w, "redirect", optionalGroup(detail.RedirectTarget)); err != nil {
 		return err
 	}
 	if err := printIssueGroup(w, "related", detail.Related); err != nil {

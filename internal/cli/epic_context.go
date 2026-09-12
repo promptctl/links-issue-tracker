@@ -13,26 +13,36 @@ import (
 )
 
 // childStatus is the display state of one epic child. The variants defined in
-// this file (closed/in_progress/ready/blocked) each render their own marker, so
-// the render loop never branches on which state a child is in. Go interfaces
-// aren't sealed — exhaustiveness here rests on locality (all variants live in
-// this file), not the compiler.
+// this file (standing/ready/blocked) each render their own marker, so the render
+// loop never branches on which state a child is in. Go interfaces aren't sealed
+// — exhaustiveness here rests on locality (all variants live in this file), not
+// the compiler.
 // [LAW:types-are-the-program] What the compiler *does* enforce is the per-variant
 // payload: a "blocked" child carries at least one blocking reason in the type,
-// and closed/in_progress/ready have no field to carry one — so the
-// blocked-with-no-reason state is unrepresentable and no callsite defends
-// against it.
+// and no other variant can hold a reason at all — standing carries a word and
+// ready carries nothing — so the blocked-with-no-reason state is
+// unrepresentable and no callsite defends against it.
 type childStatus interface {
 	marker() string
 }
 
-type statusClosed struct{}
+// statusStanding is a child whose lifecycle already answers the reader: it has
+// left the flow (archived, deleted), or it is closed — with the close's reason
+// when one was recorded — or somebody is working it. The payload is the word
+// issueStanding composed, never a literal spelled here, so this marker cannot
+// name a variant that composer did not produce.
+//
+// [LAW:one-source-of-truth] Three separate variants used to mint "[closed]",
+// "[in_progress]", and the retention word independently, and the words they
+// spelled were issueStanding's to own. The closed literal is what hid a
+// wontfix declination behind the same marker finished work gets
+// (promptctl-output-p60y); the fix is that the epic plan no longer spells any
+// standing word, so it cannot fall behind the one that does.
+// [LAW:one-type-per-behavior] Nothing differed between those three but the
+// name — all rendered one word in brackets.
+type statusStanding struct{ standing string }
 
-func (statusClosed) marker() string { return "[closed]" }
-
-type statusInProgress struct{}
-
-func (statusInProgress) marker() string { return "[in_progress]" }
+func (s statusStanding) marker() string { return "[" + s.standing + "]" }
 
 type statusReady struct{}
 
@@ -65,15 +75,6 @@ func (s statusBlocked) marker() string {
 	// them all too, so the two surfaces read alike.
 	return "[blocked: " + strings.Join(phrases, "; ") + "]"
 }
-
-// statusFrozen is a child that has left the flow — archived or deleted. The
-// sum expressed four display states where the domain has five: a deleted child
-// rendered as "[ready]", inviting an agent to start a ticket every transition
-// refuses. The standing word is the payload rather than the retention value so
-// the marker cannot name a variant issueStanding did not produce.
-type statusFrozen struct{ standing string }
-
-func (s statusFrozen) marker() string { return "[" + s.standing + "]" }
 
 // epicChild pairs a child issue with its already-classified display status, so
 // rendering is pure formatting over resolved values.
@@ -117,10 +118,12 @@ type crossEpicEdges struct {
 	BlockedExternally []crossEpicEdge // internal ticket blocked by an external one
 }
 
-// statusMarkerWidth pads the fixed-form markers ([closed]/[in_progress]/[ready])
-// to a common column so child titles align. Blocked markers carry reasons of
-// unbounded width and intentionally overflow this column rather than pushing
-// every title rightward to accommodate the longest one.
+// statusMarkerWidth pads the short markers ([closed]/[in_progress]/[ready]) to
+// a common column so child titles align. Markers wider than the column — a
+// blocked child's reasons, which are of unbounded width, and a close carrying
+// its reason ([closed:superseded]) — intentionally overflow it rather than
+// pushing every title rightward to accommodate the longest one. So the row that
+// overflows is in each case the rare loud one, and the common rows stay aligned.
 const statusMarkerWidth = len("[in_progress]")
 
 // classifyChildStatus maps a child issue and the readiness verdict for it to a
@@ -129,10 +132,15 @@ const statusMarkerWidth = len("[in_progress]")
 // lifecycle state; ready vs blocked is decided by the verdict value, not by
 // whether some branch runs.
 //
-// The retention axis is read first because it dominates: an archived or deleted
-// child's status describes work nobody may do, so reporting it as ready or
-// blocked would answer a question the reader did not ask. [LAW:one-source-of-truth]
-// The word comes from issueStanding, the one composer of the two axes.
+// The readiness verdict describes exactly one child — live and open. Every
+// other child's own lifecycle already names where it stands, and reporting such
+// a child as ready or blocked answers a question the reader did not ask: an
+// archived child's status describes work nobody may do, and a closed one's work
+// is over. So the lifecycle arm is read first, and a state added to the enum
+// later lands there — carrying the composer's word — instead of falling through
+// to a gate that would call it [ready].
+// [LAW:one-source-of-truth] The word comes from issueStanding, the one composer
+// of retention, status, and the close's reason; this file spells none of them.
 //
 // [LAW:single-enforcer] readiness is the gate's verdict, read here, never
 // recomputed here. This display used to derive its own blocker list from
@@ -142,14 +150,8 @@ const statusMarkerWidth = len("[in_progress]")
 // (links-epic-context-oezb). IsReady is false exactly when BlockingReasons is
 // non-empty, by that type's construction, so the head index below is total.
 func classifyChildStatus(child model.Issue, readiness IssueReadiness) childStatus {
-	if model.Frozen(child.Retention()) {
-		return statusFrozen{standing: issueStanding(child)}
-	}
-	switch child.State() {
-	case model.StateClosed:
-		return statusClosed{}
-	case model.StateInProgress:
-		return statusInProgress{}
+	if model.Frozen(child.Retention()) || child.State() != model.StateOpen {
+		return statusStanding{standing: issueStanding(child)}
 	}
 	if readiness.IsReady() {
 		return statusReady{}
