@@ -429,13 +429,22 @@ func openStoreConnection(ctx context.Context, doltRootDir string, workspaceID st
 //
 // This re-open is the ONE place Dolt's journal lock is acquired while the
 // commit lock is held — the inverted order this package's doc documents
-// as this site's tolerated deviation. It cannot wedge: the re-open waits at
-// most engineOpenRetryMaxElapsed before failing the mutation loudly —
-// with wrapEngineOpenContention's holder guidance, from the ping that makes
-// the open (and its contention) surface here rather than at whichever query
-// runs next — strictly inside every commit-lock waiter's ~15-minute budget,
-// so any holder this re-open waits on either releases or outlives this
-// mutation's bounded failure, and the commit lock is released either way.
+// as this site's tolerated deviation. It cannot wedge, and the reason is two
+// bounds and not one. Per call, the re-open waits at most
+// engineOpenRetryMaxElapsed before failing the mutation loudly — with
+// wrapEngineOpenContention's holder guidance, from the ping that makes the
+// open (and its contention) surface here rather than at whichever query runs
+// next. Across a mutation, this call is the rotate step of
+// retryTransientGCContention's loop, which runs it up to
+// transientRetryMaxAttempts-1 times, so the per-call bound says nothing about
+// the hold a commit-lock waiter actually faces; that aggregate is bounded
+// there, against commitLockWaiterBudget, and pinned by
+// TestRetryTransientGCContentionStopsBeforeOutlastingCommitLockWaiters.
+// Reading the per-call bound as the aggregate is what let the product of the
+// two budgets reach 33.8 minutes against a 15-minute waiter budget
+// (links-sync-dauk). With both in place, any holder this re-open waits on
+// either releases or outlives this mutation's bounded failure, and the commit
+// lock is released either way.
 func (s *Store) reconnect(ctx context.Context) error {
 	// [LAW:dataflow-not-control-flow] Reconnect runs unconditionally on every invocation; what varies is the Store's path/identity/access, not whether the rotation occurs.
 	next, err := openDoltPool(s.doltRootDir, s.workspaceID, doltDatabaseName, s.access)
@@ -2567,21 +2576,27 @@ const (
 	// one the mirror keeps for itself is censored by the very budget sized
 	// from it:
 	//
-	//   - .git/links/mirror.log, 279 cycles: min 10.6s, p50 13.2s, slowest
-	//     uncut cycle 20.0s. 44 of the 279 (15.8%) were cut at the then-20s
-	//     budget, so every cycle that would have run longer is recorded as a
-	//     cut and the log cannot show the tail. A floor, never a ceiling.
+	//   - .git/links/mirror.log, 279 cycles: min 10.6s; p50 13.2s over all of
+	//     them, 12.7s over the 235 that were not cut; slowest uncut cycle
+	//     20.0s. 44 of the 279 (15.8%) were cut at the then-20s budget, so
+	//     every cycle that would have run longer is recorded as a cut and the
+	//     log cannot show the tail. A floor, never a ceiling.
 	//   - 20 foreground `lit sync push` runs of the same store: min 9.8s,
 	//     p50 12.2s, max 17.0s. Uncensored — the foreground push shares
 	//     performSyncPush with the mirror and is deliberately unbounded — so
 	//     this is the sample the budget can honestly be sized against.
 	//
-	// The two agree within half a second at the median, which also answers the
-	// question links-sync-dauk raised off a single 6.8s foreground sample: the
-	// background path does not cost twice the foreground one. Both paths ARE
-	// the push. The engine open and close bracketing it measure ~0.3s together
-	// (`lit sync status`, same session open, no push), so the cycle's cost is
-	// the network round trip and nothing else.
+	// Compared like with like — completed work against completed work, the
+	// mirror's uncut p50 of 12.7s against the foreground's 12.2s — the two
+	// agree to about half a second, which answers the question links-sync-dauk
+	// raised off a single 6.8s foreground sample: the background path does not
+	// cost twice the foreground one. The all-cycles p50 is the wrong half of
+	// that comparison, and specifically so: the 44 cuts contribute the latency
+	// of being cancelled, not the duration of work that finished, which is the
+	// same censoring this whole comment is about. Both paths ARE the push. The
+	// engine open and close bracketing it measure ~0.3s together (`lit sync
+	// status`, same session open, no push), so the cycle's cost is the network
+	// round trip and nothing else.
 	//
 	// [FRAMING:representation] This is a map of an operation whose territory —
 	// a push against a remote holding a repository that grows — moves. Now

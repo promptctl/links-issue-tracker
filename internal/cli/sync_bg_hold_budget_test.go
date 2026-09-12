@@ -42,7 +42,8 @@ func (l *lockedBuffer) String() string {
 // this process holds the store's one read-write engine (and its journal lock),
 // and before the fix NOTHING bounded that hold — a hung transport held the
 // lock for as long as the remote cared to stall, starving every foreground
-// command past its ~30s open-retry budget.
+// command past its own open-retry budget (store.engineOpenRetryMaxElapsed —
+// named rather than restated, since links-sync-dauk made it a derived value).
 //
 // The test reproduces the exact field topology with no network: a git shim on
 // PATH wedges `git push` (the engine-side subprocess DOLT_PUSH spawns) in an

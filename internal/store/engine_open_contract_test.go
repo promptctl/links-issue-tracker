@@ -65,7 +65,9 @@ func TestOpenFailsLoudWhenForeignEngineHoldsJournalLock(t *testing.T) {
 		t.Fatalf("Open() error = %v; want the nbs.ErrDatabaseLocked contention classification to survive the chain", err)
 	}
 	// Bounded: the shrunken budget (plus dolt's own per-attempt lock waits)
-	// must not balloon toward the production 30s.
+	// must not balloon toward the production engineOpenRetryMaxElapsed, whose
+	// value this comment deliberately does not restate — it is derived, and a
+	// figure copied here is one more thing to remember into agreement.
 	if elapsed > 10*time.Second {
 		t.Fatalf("Open() took %s to fail against a held journal lock; the retry budget is not bounding the wait", elapsed)
 	}

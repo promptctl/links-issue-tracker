@@ -62,11 +62,13 @@
 // inverts the order against every live write Store. Take it before commit
 // or not at all. One deviation is tolerated, not copied: a GC-contention
 // retry rotates the store's connection mid-mutation, re-acquiring LOCK
-// under the held commit lock. It cannot wedge — the re-open's wait is
-// bounded (engineOpenRetryMaxElapsed) strictly inside every
-// commit-lock waiter's ~15-minute budget, so the inverted edge always
-// breaks by the re-open failing the mutation loudly — and the bound is the
-// tolerance's whole justification; see Store.reconnect. (The one write
+// under the held commit lock. It cannot wedge — each re-open's wait is
+// bounded (engineOpenRetryMaxElapsed) and the retry loop bounds how much of
+// them one mutation may accumulate (against commitLockWaiterBudget), so the
+// inverted edge always breaks by the re-open failing the mutation loudly —
+// and BOTH bounds are the tolerance's whole justification, because the
+// per-open one alone leaves the aggregate free to outlast every waiter on
+// the lock; see Store.reconnect and retryTransientGCContention. (The one write
 // engine outside the Store lifecycle, the adopt clone's, runs under the
 // exclusive workspace hold and never takes the commit lock.)
 //

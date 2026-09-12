@@ -441,3 +441,73 @@ func TestWithCommitLockSerializesConcurrentOperations(t *testing.T) {
 		t.Fatal("second operation never entered critical section")
 	}
 }
+
+// TestRetryTransientGCContentionStopsBeforeOutlastingCommitLockWaiters is the
+// regression pin for the invariant Store.reconnect, this package's doc, and the
+// store-operations doc all assert: the one site that takes Dolt's journal lock
+// while holding the commit lock "cannot wedge" because its wait stays strictly
+// inside every commit-lock waiter's budget.
+//
+// That was asserted in prose and enforced by nothing. The retry loop rotates
+// the connection up to transientRetryMaxAttempts-1 times, each rotation an
+// engine open bounded by engineOpenRetryMaxElapsed, and every second of it
+// accrues while the commit lock is held — so the real hold is the product of
+// two budgets that never referenced each other. It fit only by coincidence
+// (29 x 30s = 14.5min against 15min) until links-sync-dauk derived the open
+// budget from the mirror's measured hold ceiling and the product became
+// 33.8min.
+//
+// The test drives the loop with a rotation that actually costs its open budget
+// and asserts the loop gives up on the hold rather than on the attempts: it
+// must stop early, and the whole call must return inside the waiter budget.
+// Not parallel: it shrinks package budget variables.
+func TestRetryTransientGCContentionStopsBeforeOutlastingCommitLockWaiters(t *testing.T) {
+	restoreOpen := engineOpenRetryMaxElapsed
+	engineOpenRetryMaxElapsed = 40 * time.Millisecond
+	t.Cleanup(func() { engineOpenRetryMaxElapsed = restoreOpen })
+	restoreAttempts := commitLockRetryAttempts
+	commitLockRetryAttempts = 4
+	t.Cleanup(func() { commitLockRetryAttempts = restoreAttempts })
+	// commitLockWaiterBudget() is now 4 x 100ms = 400ms, and one rotation costs
+	// 40ms, so the loop has room for far fewer than its attempt count.
+	waiterBudget := commitLockWaiterBudget()
+
+	// Always contended, and shaped through wrapCommitWorkingSetError — the real
+	// entry a Dolt commit error flows through — so this is a map of the
+	// production error rather than a bare-string approximation. An operation
+	// that never clears is exactly the sustained contention the invariant is
+	// about.
+	op := func(context.Context) error {
+		return wrapCommitWorkingSetError(errors.New("Error 1105: cannot update manifest: database is read only"))
+	}
+	rotations := 0
+	rotate := func(context.Context) error {
+		rotations++
+		time.Sleep(engineOpenRetryMaxElapsed)
+		return nil
+	}
+
+	start := time.Now()
+	err := retryTransientGCContention(
+		context.Background(),
+		op,
+		rotate,
+		func(int) time.Duration { return 0 },
+		func(context.Context, time.Duration) error { return nil },
+	)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("retryTransientGCContention() error = nil, want the exhausted-contention error")
+	}
+	var blocked WorkspaceWriteBlockedError
+	if !errors.As(err, &blocked) {
+		t.Fatalf("retryTransientGCContention() error = %v, want a WorkspaceWriteBlockedError; giving up on the hold must fail the same way giving up on the attempts does", err)
+	}
+	if elapsed >= waiterBudget {
+		t.Fatalf("the retry held for %s against a commitLockWaiterBudget of %s; a commit-lock waiter arriving behind this holder fails with the workspace-busy sentinel naming a holder that was never wedged", elapsed, waiterBudget)
+	}
+	if rotations >= transientRetryMaxAttempts-1 {
+		t.Fatalf("rotations = %d, want fewer than the %d the attempt count alone allows; the loop ran its attempts out instead of stopping on the hold budget, so nothing is bounding the product of the two budgets", rotations, transientRetryMaxAttempts-1)
+	}
+}

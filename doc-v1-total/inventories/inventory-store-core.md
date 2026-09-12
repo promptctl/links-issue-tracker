@@ -86,14 +86,14 @@ Both hooks are per-`Store` instance state, not package globals (`store.go:66-81`
 
 #### 1.4 `engineOpenRetryMaxElapsed`
 
-`var engineOpenRetryMaxElapsed = coResidentHolderWait` (`store.go:2654`), = 70s. A package **variable**, not a const, so tests can shrink it; `engine_open_contract_test.go:53-55` sets it to `700 * time.Millisecond` and restores it in cleanup. It is `MaxElapsedTime` of the write-open backoff (`store.go:2699`). `coResidentHolderWait` is a const derived from two measured facts (`store.go:2555-2647`): `mirrorCycleObservedTail` 20s × `mirrorHoldStallFactor` 2 = `mirrorHoldBudget` 40s; + `mirrorCancelLagObserved` 22s = `mirrorHoldCeiling` 62s; + `coResidentWaitHeadroom` 8s = 70s.
+`var engineOpenRetryMaxElapsed = coResidentHolderWait` (`store.go:2663`), = 70s. A package **variable**, not a const, so tests can shrink it; `engine_open_contract_test.go:53-55` sets it to `700 * time.Millisecond` and restores it in cleanup. It is `MaxElapsedTime` of the write-open backoff (`store.go:2708`). `coResidentHolderWait` is a const derived from two measured facts (`store.go:2564-2656`): `mirrorCycleObservedTail` 20s × `mirrorHoldStallFactor` 2 = `mirrorHoldBudget` 40s; + `mirrorCancelLagObserved` 22s = `mirrorHoldCeiling` 62s; + `coResidentWaitHeadroom` 8s = 70s.
 
 #### 1.5 `newEngineOpenBackOff`
 
-`store.go:2629-2635`. Fresh `backoff.NewExponentialBackOff()` per connector with:
-- `InitialInterval = 50 * time.Millisecond` (`store.go:2631`)
-- `MaxInterval = time.Second` (`store.go:2632`)
-- `MaxElapsedTime = engineOpenRetryMaxElapsed` (`store.go:2699`)
+`store.go:2704-2710`. Fresh `backoff.NewExponentialBackOff()` per connector with:
+- `InitialInterval = 50 * time.Millisecond` (`store.go:2706`)
+- `MaxInterval = engineOpenRetryMaxInterval` (`store.go:2707`)
+- `MaxElapsedTime = engineOpenRetryMaxElapsed` (`store.go:2708`)
 
 All other `ExponentialBackOff` fields keep library defaults. Only attached for `engineWrite` (`store.go:2660-2662`).
 
