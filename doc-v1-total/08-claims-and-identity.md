@@ -126,19 +126,51 @@ Proven over two real clones and a git remote: the second clone's plain `start` f
 
 ### `lit next` — claim-aware routing (a read gate)
 
-`next` routes over rows in composite-rank order to one of five sealed outcomes (`internal/cli/next_route.go:21-58`):
+`next` routes over rows in composite-rank order to one of six sealed outcomes (`internal/cli/next_route.go:26-184`). It is registered `app.AccessRead` and writes nothing: it claims no lane and starts no ticket, so every line it prints either reports a state that already holds or is advice about a command the reader has yet to run (`internal/cli/next.go:79-93`).
 
-| Outcome | Meaning | Announcement |
+| Outcome | Meaning | Printed above the row |
 |---|---|---|
-| `ServedFromClaim` | a ready ticket in a lane this checkout already holds | none |
-| `ServedFromEpicLane` | an unclaimed lane of an epic this checkout holds a lane in | `continuing epic <epic>: starting <id> claims <lane>` |
-| `ServedFromGlobal` | a ready ticket in an unclaimed lane (only when the checkout has no live claims) | `starting <id> claims <lane>` |
-| `Exhausted` | own claimed epics have open work, none reachable | error (below) |
-| `NoWork` | nothing ready anywhere | error `no ready work` |
+| `ServedFromClaim{Row}` | a startable ticket in a lane this checkout already holds | nothing |
+| `ResumedOwnWork{Row}` | a ticket already in flight in a lane this checkout holds, handed back to its holder | `<id> is already in progress in a lane you hold — continue where you left off` |
+| `ServedFromEpicLane{Row, Lane}` | a pick from a different lane of an epic this checkout already holds a lane in | `startAdvice` plus ` (a second lane of an epic you already hold a lane in)` |
+| `ServedFromNewLane{Row, Lane}` | a pick in a lane this checkout does not hold — from the global pool or from an on-path dependency | `startAdvice` |
+| `Exhausted{Epics, Blocked}` | the checkout's own epic(s) have open work, none of it reachable | nothing; returned as an error |
+| `NoWork{Unreachable}` | the global pool produced nothing | nothing; returned as an error |
 
-Precedence (`next_route.go:81-128`): if the caller has an attribution and holds lanes (`Held` by self), serve (a) the first ready row in an own lane; else (b) the first ready *dependency* of a blocked open row in an own lane (`onPathDependency` — a same-lane gate would already have been served by (a)); else (c) the first ready row in an **unclaimed** lane of one of the caller's epics, announced as continuing the epic; else (d) `Exhausted`, naming the epics and the distinct unclaimed open-dependency IDs blocking them. Without an attribution or without own lanes: the first ready row whose lane is **unclaimed**, else `NoWork`.
+`ServedFromEpicLane` carries exactly `Row` and `Lane model.LaneID`; there is no `Epic` field, because the epic is `Lane.Epic()` and storing it beside the lane was two clocks for one fact. `ServedFromNewLane` likewise carries a `model.LaneID`, not a pre-rendered string.
 
-"Ready" is `open` + readiness-classified ready (see `06-issue-commands.md`); "unclaimed" admits only `Unclaimed` — **held-by-another and `Stale` are both excluded**, so a bare `next` never reaches a stale lane; takeover is `lit start`'s deliberate act (`next_route.go:133-151`). The `Exhausted` error reads `no ready work in <scope> — nothing else is queued behind what's already in progress; picking up other work is a deliberate re-focus, not a bare 'next'`, or with blockers `… — blocked on <ids> (unclaimed, on your path — 'lit start' it); …` (`next_route.go:213-222`). After routing, `next` prints the ticket summary with the claim line and dispatches the pulled-ticket workflow occasion (`internal/cli/next.go:73-111`).
+**Precedence** (`routeNext`, `next_route.go:307-390`). `ownScope` (`next_route.go:265`) derives the checkout's own lanes and epics from the **standings**, not from the gathered rows: rows are already narrowed by `--type/--labels/--assignee`, and deriving ownership from them let a display filter empty the set and drop the whole self-aware branch. If the checkout holds at least one lane:
+
+1. **Step 1 — own lanes**, accepting `{serveWork, resumeWork}` — whichever the backlog ranks first. `resumeWork` yields `ResumedOwnWork`; `serveWork` yields `ServedFromClaim`.
+2. **Step 1b — an on-path dependency** (`onPathDependency`, `next_route.go:469`): a dependency outside our lanes that gates one of them. It yields `ServedFromNewLane`, because it would establish a claim on a lane we do not hold and so prints start advice like any other new-lane pick. It previously returned `ServedFromClaim`, whose contract is that nothing is printed, which left the one pick an agent is least likely to predict as the only silent one.
+3. **Step 2 — the rest of our epic**, in lanes we do not already hold — predicate `lane.Epic() != "" && ownEpics[lane.Epic()] && !mine(lane)`, accepting `{serveWork, takeoverWork}`. Yields `ServedFromEpicLane`.
+4. **Step 3 — `Exhausted`** — loud, and never a hop. Exhaustion never falls through to the global pool.
+
+A checkout holding no lanes starts instead at **step 4**, the global pool. `scope.partition(rows)` splits the gathered rows into `pool` and `offPath` (the scope comes from `--all`, "Ignore the focus scope and route over the whole queue"); the pool accepts `{serveWork, takeoverWork}` and yields `ServedFromNewLane`, otherwise `NoWork`, whose `Unreachable` is `passedOver(pool)` plus `withheldByScope(offPath)` — the scope-withheld rows travel into the diagnostic rather than vanishing, because "nothing is startable" and "nothing on your focus path is startable" are different answers. Steps 1-3 walk every gathered row and step 4 walks the focus-scoped pool; the row set is passed explicitly per step so that difference stays visible.
+
+**Admission** is `capacityFor` (`next_route.go:229`), reading the row's readiness classification, its lifecycle state, and the lane's relation to this checkout (`relationOf`, `internal/cli/claims_takeover.go:68`), and returning one of four capacities. In a lane this checkout holds — `laneOurs`, fresh or stale — an in-progress row is `resumeWork`, a ready row is `serveWork`, anything else `routeAround`. Elsewhere a row is takeable when it is in progress and classified orphaned, or not in progress and ready; a takeable row is `takeoverWork` if it is in progress or its lane is `laneStaleForeign`, and `serveWork` otherwise. `laneHeldForeign` — a lane another checkout holds fresh — is always `routeAround`. Because steps 2 and 4 accept the set `{serveWork, takeoverWork}`, a lane whose foreign holder's evidence has aged out is a legitimate bare-`next` target; the lane held fresh by another checkout is the one routing goes around. `accept` is a set and never a preference order: composite rank is the only tiebreak routing applies, and ranking capacities against each other would reintroduce the symptom the set fixed — the backlog's #1 row, an orphan, passed over for a lower-ranked leaf that needed no takeover.
+
+Servability does not require `status == open`. Step 1 accepts `resumeWork`, so an in-progress row in the checkout's own lane is handed back to resume; while routing gated servability on `model.StateOpen`, an `in_progress` row was servable to nobody, which hid every orphan and the very ticket the checkout was working at that moment.
+
+**`startAdvice`** (`next.go:182`) is the line above every pick that would establish a claim, naming what running `lit start` would lock rather than what `next` did — it was `claimAnnouncement`, and the rename is the fix, since an announcement reports and reporting is the one thing a read-only command must not do. Four sentences, selected by the row's lifecycle state and by whether the lane names itself: for a row in progress, `` <id> is in progress and <state> — run `lit start <id>` to take it over `` or `` … to take over <described> ``; otherwise `` run `lit start <id>` to claim it `` or `` run `lit start <id>` to claim <described> ``. `<state>` comes from `inFlightState(holder)`, one of whose values is `abandoned`. `LaneID.Describe()` (`internal/model/model.go:255`) returns the description and whether the lane is named: a solo lane gives `("", false)`, because a solo lane *is* the ticket that names it and naming it only repeats what the sentence already said; an empty lane key gives `the default lane of epic <epic>`; any other key gives `lane <key> of epic <epic>`. The two verbs spell their sentences out separately rather than sharing one with the object substituted, because English puts the pronoun in different places: "claim it", but "take it over" — a particle verb splits around a pronoun.
+
+`Exhausted` and `NoWork` implement `error` and travel outward as themselves rather than being rendered into a generic error, which is what keeps the exit-code and reason sinks reading the routing verdict instead of a copy that could drift. Both exit **6** (`ExitNoWork`, `internal/cli/exit.go:30`), with reasons `scope_exhausted` and `no_ready_work` (`internal/cli/error_output.go:113,117`). Six rather than `ExitGeneric`, because a caller looping `lit next` has to tell "stop, there is nothing for you" from "lit is broken", and under one code its only way to do that was to parse the English; not `ExitOK`, because for `lit next` 0 means a ticket is on stdout, and exiting 0 with no row would hand the caller a success-shaped void.
+
+`Exhausted.Error()` (`next_route.go:480`) names the scope as `epic(s) <joined>` when epics are named and `your claimed lane(s)` otherwise. With no blockers it reads ``no ready work in %s — nothing else is queued behind what's already in progress; picking up other work is a deliberate re-focus, not a bare `next` ``; with blockers the middle clause is `describeReach(Blocked, "blocked on ", exhaustedNotes)`. `NoWork.Error()` (`next_route.go:587`) reads `no ready work` when nothing is unreachable, `no ready work on the focus path — the backlog is not empty, and each row below says why this run did not serve it: %s` when the scope withheld rows, and `no ready work — the backlog is not empty, but nothing in it is startable here: %s` otherwise.
+
+Both diagnostics are written in `reachKind`, which says what one row is to this checkout right now: `reachTakeable`, `reachHeldFresh`, `reachNotReady`, `reachOutOfView`, and `reachOffFocusPath`, the last used only by the pool diagnostic. A bool here read "takeable or not", so a row outside the run's filtered view, or one not startable itself, rendered as the one reason the message named: claimed by another checkout. Exhaustion asks `reachKind` of the dependencies gating our scope; an empty global pool asks it of every row the walk went past. The clauses (`next_route.go:521-532`):
+
+| Kind | `exhaustedNotes` | `poolNotes` |
+|---|---|---|
+| `reachTakeable` | `` on your path and yours to take — `lit start` it `` | — |
+| `reachHeldFresh` | `on your path but claimed by another checkout right now` | `in progress or claimed in a lane another checkout holds right now` |
+| `reachNotReady` | `` on your path but not startable right now — `lit show` it `` | `not startable — blocked by a dependency, or in flight and not abandoned` |
+| `reachOutOfView` | `` on your path but outside this view — `lit show` it `` | — |
+| `reachOffFocusPath` | — | `` off the focus path this run answered over — `lit next --all` to route over the whole queue `` |
+
+`maxNamedPerKind = 12` (`next_route.go:540`): one clause names at most twelve ids and states how many it left out.
+
+After routing, `next` prints any advice line, then the ticket summary with its claim line, and dispatches the pulled-ticket workflow occasion (`next.go:94-135`).
 
 ### `lit sync reconcile` — the contest report
 

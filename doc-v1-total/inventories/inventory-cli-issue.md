@@ -1088,79 +1088,210 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
 
 ### 2.14 `lit next` — Print the next workable leaf
 
-- Registration `register.go:302-303`, `app.AccessRead`. Handler `runNext`
-  (`next.go:31-74`).
-- Flags (`next.go:33-36`): `--assignee`, `--type`, `--status`, `--labels` — same
-  parsing/refusals as `backlog` (`next.go:43-50`). **No** `--limit`, **no**
-  `--columns`.
-- Refusal: any positional → `UsageError{nextUsage}` where `nextUsage` =
-  `"usage: lit next [--type ...] [--status ...] [--labels ...] [--assignee <user>]"`
-  (`next.go:29`, `next.go:40-42`).
-- Retired flag: `--continue` is intercepted by the shared parser with
-  `UnsupportedError` → exit 3 (`cli.go:290-294`).
-- Prints the sync-staleness warning first (`next.go:53`).
-- Gathers the workable set, then the claim context (`next.go:56-68`), then routes
-  (`next.go:69`).
+- Registration `register.go:484-485`, `app.AccessRead`, handler `nextLeaf`
+  (`next.go:31-77`). Summary: "Print the next workable leaf to lit start".
+- Flags (`next.go:32-40`):
 
-**Routing precedence** — `routeNext(rows, details, standings, self)`
-(`next_route.go:81-128`). `rows` are already in canonical order (§1.18).
+| Flag | Type | Default | Effect |
+|---|---|---|---|
+| `--assignee` | string | `""` | "Filter by assignee" |
+| `--type` | string | `""` | "Filter by issue type" |
+| `--status` | string | `""` | "Filter by status: open\|in_progress" |
+| `--labels` | string | `""` | "Comma-separated labels all of which must match" |
+| `--all` | bool | `false` | "Ignore the focus scope and route over the whole queue" |
 
-Let `laneOf(row) = model.LaneOf(row.Issue, details[row.ID].Parent)`
-(`next_route.go:82-84`), and
-`isReadyRow(row) := row.State() == open && ClassifyReadiness(row.Annotations).IsReady()`
-(`next_route.go:133-135`).
+- `--status` and `--type` go through the same `parseWorkableStatus` /
+  `parseWorkableType` refusals as `backlog` (`next.go:45-52`). **No** `--limit`,
+  **no** `--columns`.
+- Refusal: any positional → `UsageError{nextUsage}` → exit 2, where `nextUsage` =
+  `"usage: lit next [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--all]"`
+  (`next.go:29`, `next.go:42-44`).
+- Retired flag: `--continue` is intercepted at the shared parse boundary as
+  `UnsupportedError{Feature: "--continue"}` → exit 3, message
+  ``"--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag"``
+  (`flagset.go:134-138`).
+- Prints the sync-staleness warning first (`next.go:55`).
+- Gathers the workable set — rows, relation details, **and the focus scope** —
+  via `gatherWorkableAnnotated` (`next.go:58-63`, `cli.go:655`), then the claim
+  context (`next.go:67`), then routes (`next.go:71`):
+  `routeNext(rows, details, cc.standings, cc.self, focus.scopeFor(*all))`.
+  `scopeFor(true)` returns the zero `focusScope`, which holds every row
+  (`ready_state.go:511-516`, `ready_state.go:493`, `ready_state.go:503-505`).
 
-1. If `self.Present()` (`next_route.go:86`):
-   - `ownLanes` = the lanes of rows whose standing is `claims.Held` with
-     `By == self` (`next_route.go:87-92`).
-   - If `ownLanes` is non-empty:
-     a. First row in own lanes that `isReadyRow` → **`ServedFromClaim{Row}`**
-        (`next_route.go:94-98`).
-     b. Else `onPathDependency` — walk own-lane rows that are open but not ready,
-        and return the first of their open dependencies that is itself present in
-        the row set and ready → **`ServedFromClaim{Row: dep}`**
-        (`next_route.go:99-101`, `next_route.go:160-176`).
-     c. Else, in the epics of the own lanes: the first row whose lane belongs to
-        one of those epics, is not an own lane, `isReadyRow`, and whose standing
-        is `claims.Unclaimed` → **`ServedFromEpicLane{Row, Epic, Lane}`**
-        (`next_route.go:102-113`).
-     d. Else → **`Exhausted{Epics: sorted, Blocked: blockedDependencyIDs(...)}`**
-        (`next_route.go:114-117`). `blockedDependencyIDs` collects distinct
-        open-dependency IDs of the **open** rows in scope (own lanes plus the rest
-        of their epics), in encounter order (`next_route.go:183-200`).
-2. Otherwise (no self, or no own lanes): the first row that `isReadyRow` and whose
-   lane is `claims.Unclaimed` → **`ServedFromGlobal{Row, Lane}`**
-   (`next_route.go:121-126`).
-3. Else → **`NoWork{}`** (`next_route.go:127`).
+**`NextOutcome`** — a sealed sum interface (`next_route.go:26`,
+`next_route.go:179-184`) with **six** cases:
 
-`isUnclaimed` accepts only `claims.Unclaimed` — a `Stale` lane is never routed
-into by bare `next` (`next_route.go:148-151`).
+| Case | Fields | Meaning |
+|---|---|---|
+| `ServedFromClaim` | `Row` | a ready ticket in a lane this checkout already holds — step 1 (`next_route.go:30`) |
+| `ResumedOwnWork` | `Row` | a ticket already in flight in a lane this checkout holds, handed back to its holder — also step 1 (`next_route.go:40`) |
+| `ServedFromEpicLane` | `Row`, `Lane model.LaneID` | a pick from a different lane of the same epic this checkout already holds a lane in — step 2. The epic is `Lane.Epic()`; there is no `Epic` field (`next_route.go:50-53`) |
+| `ServedFromNewLane` | `Row`, `Lane model.LaneID` | a ticket in a lane this checkout does **not** hold — produced by step 1b **and** step 4 (`next_route.go:72-75`) |
+| `Exhausted` | `Epics []string`, `Blocked []rowReach` | the checkout's own epic(s) have open work, none of it reachable — step 3 (`next_route.go:89-92`) |
+| `NoWork` | `Unreachable []rowReach` | the global pool produced nothing — step 4 (`next_route.go:177`) |
 
-**Rendering** — `renderNextOutcome` (`next.go:82-111`):
-- `ServedFromClaim` → no announcement (`next.go:86-87`).
-- `ServedFromEpicLane` → prints
-  `"continuing epic <Epic>: starting <RowID> claims <Lane>\n"` (`next.go:88-91`).
-- `ServedFromGlobal` → prints `"starting <RowID> claims <Lane>\n"` (`next.go:92-94`).
-- `Exhausted` → returns `exhaustedError(o)` and prints no ticket (`next.go:95`).
-  Message (`next_route.go:213-222`): scope is `"epic(s) <a, b>"` when epics are
-  known else `"your claimed lane(s)"`; with no blockers:
-  `"no ready work in <scope> — nothing else is queued behind what's already in progress; picking up other work is a deliberate re-focus, not a bare \`next\`"`;
-  with blockers:
-  `"no ready work in <scope> — blocked on <ids> (unclaimed, on your path — \`lit start\` it); picking up other work is a deliberate re-focus, not a bare \`next\`"`.
-  Both exit 1.
-- `NoWork` → `errors.New("no ready work")` → exit 1 (`next.go:96-97`).
-- Any other outcome type → panic (`next.go:98-99`).
-- On a served row: `printNextSummary(w, row, cc, lane)` (`next.go:106-109`), which
-  prints the **default columns** (`id state topic title`) joined by two spaces
-  (`ready_state.go:550-557`), then `printInlineDeps`
-  (`ready_state.go:601-614`): `    epic: …`, `    depends on: …`, the claim line,
-  and `    unblocks: …` — but `next` passes a **nil** unblocks map, so the
-  unblocks line never appears (`ready_state.go:556`).
-- On success it dispatches `EventNextPulled` (`next.go:73`, `next.go:110`).
+`Exhausted` and `NoWork` implement `error` and travel outward as themselves
+rather than being rendered into a generic error (`next_route.go:480`,
+`next_route.go:587`).
+
+**Admission** — `capacityFor(row, standing, self) capacity`
+(`next_route.go:229-250`) is the single eligibility verdict. The four capacities
+are `routeAround`, `serveWork`, `resumeWork`, `takeoverWork`
+(`next_route.go:196-208`). With `readiness = ClassifyReadiness(row.Annotations)`,
+`relation = relationOf(standing, self)` (`claims_takeover.go:68-101`), and
+`started = row.State() == model.StateInProgress`:
+
+1. `relation == laneOurs`: `started` → `resumeWork`; else `readiness.IsReady()` →
+   `serveWork`; else `routeAround`.
+2. Otherwise `takeable := (started && readiness.IsOrphaned()) || (!started && readiness.IsReady())`,
+   then: `!takeable` **or** `relation == laneHeldForeign` → `routeAround`;
+   `started` **or** `relation == laneStaleForeign` → `takeoverWork`; else
+   `serveWork`.
+
+So a `laneStaleForeign` lane yields `takeoverWork`, and steps 2 and 4 accept it.
+Only `laneHeldForeign` is routed around — which includes a `claims.Stale`
+standing whose `Holder` is `claims.Locked`, since `relationOf` reads a locked
+worktree as a fresh foreign hold (`claims_takeover.go:48-60`,
+`claims_takeover.go:94-96`). Servability is not gated on `model.StateOpen`.
+
+**Routing precedence** — `routeNext(rows, details, standings, self, scope focusScope)`
+(`next_route.go:307`). `rows` are already in composite-rank order (§1.18).
+`laneOf(row) = model.LaneOf(row.Issue, details[row.ID].Parent)`
+(`next_route.go:308-310`);
+`verdict(row) = capacityFor(row, standings.Of(laneOf(row)), self)`
+(`next_route.go:311-313`);
+`reachFor(row, gathered) = reachOf(row, gathered, standings.Of(laneOf(row)), self)`
+(`next_route.go:314-316`).
+`pickFrom(from, inScope, accept ...capacity)` keeps the first row of `from`, in
+rank order, whose lane `inScope` admits and whose verdict is in `accept`
+(`next_route.go:330-337`); `pick` is `pickFrom` over all `rows`
+(`next_route.go:338-340`). `accept` is a **set**, never a preference order —
+composite rank is the only tiebreak routing applies (`next_route.go:320-325`).
+`ownScope(standings, self)` yields `ownLanes` and `ownEpics`, read from the
+**standings** and not from the gathered rows (`next_route.go:265-278`);
+`mine(lane) = ownLanes[lane]` (`next_route.go:343`).
+
+If `len(ownLanes) > 0` (`next_route.go:344`):
+
+1. **Own lanes**, accepting `{serveWork, resumeWork}`, whichever the backlog ranks
+   first (`next_route.go:347-352`). `resumeWork` → **`ResumedOwnWork{Row}`**;
+   `serveWork` → **`ServedFromClaim{Row}`**.
+   - 1b. Else `onPathDependency(rows, laneOf, mine, reachFor)` — the first
+     dependency gating one of our own lanes whose `reachKind` is `reachTakeable`
+     (`next_route.go:469-476`), drawn from `gatingDependencies`, which collects
+     the distinct open dependency IDs of the in-scope **open** rows in rank order
+     and stamps each with `reachFor` (`next_route.go:433-454`) →
+     **`ServedFromNewLane{Row: dep, Lane: laneOf(dep)}`** (`next_route.go:357-359`).
+2. Else **the rest of our epic, in lanes we do not already hold** — predicate
+   `lane.Epic() != "" && ownEpics[lane.Epic()] && !mine(lane)`, accepting
+   `{serveWork, takeoverWork}` → **`ServedFromEpicLane{Row, Lane: laneOf(row)}`**
+   (`next_route.go:360-366`).
+3. Else → **`Exhausted{Epics, Blocked}`** (`next_route.go:367-373`), where `Epics`
+   is `slices.Sorted(maps.Keys(ownEpics))` and `Blocked` is
+   `gatingDependencies` over the lanes admitted by
+   `func(lane) bool { return mine(lane) || ourEpic(lane) }`. Exhaustion never
+   falls through to the global pool.
+
+Step 4 is reached only by a checkout holding no lanes, which starts there
+directly:
+
+4. **The global pool, focus-scoped.** `pool, offPath := scope.partition(rows)`
+   (`next_route.go:385`, `ready_state.go:523-532`), then
+   `pickFrom(pool, func(model.LaneID) bool { return true }, serveWork, takeoverWork)` →
+   **`ServedFromNewLane{Row, Lane: laneOf(row)}`** (`next_route.go:386-388`).
+   Else → **`NoWork{Unreachable: append(passedOver(pool, reachFor), withheldByScope(offPath)...)}`**
+   (`next_route.go:389`), where `passedOver` stamps every walked pool row with
+   `reachFor(row, true)` (`next_route.go:418-424`) and `withheldByScope` stamps
+   every scope-excluded row `reachOffFocusPath` (`next_route.go:397-403`).
+
+Steps 1-3 walk every gathered row; step 4 walks the focus-scoped pool. The row
+set is passed to `pickFrom` explicitly at each step so that difference stays
+visible (`next_route.go:326-329`).
+
+**`reachKind`** (`next_route.go:106-131`) — what one row is to this checkout right
+now: `reachTakeable`, `reachHeldFresh`, `reachNotReady`, `reachOutOfView`, plus
+`reachOffFocusPath`, which only the pool diagnostic stamps, and the bound
+`reachKindCount`. `reachOf(row, gathered, standing, self)` answers
+`reachOutOfView` when `!gathered`, `reachTakeable` when
+`capacityFor(...) != routeAround`, `reachHeldFresh` when
+`relationOf(...) == laneHeldForeign`, else `reachNotReady`
+(`next_route.go:150-160`). `rowReach{ID string, Row annotation.AnnotatedIssue, Kind reachKind}`
+(`next_route.go:135-139`) is what both terminal outcomes carry.
+
+`exhaustedNotes` (`next_route.go:521-526`):
+- `reachTakeable`: ``"on your path and yours to take — `lit start` it"``
+- `reachHeldFresh`: `"on your path but claimed by another checkout right now"`
+- `reachNotReady`: ``"on your path but not startable right now — `lit show` it"``
+- `reachOutOfView`: ``"on your path but outside this view — `lit show` it"``
+
+`poolNotes` (`next_route.go:527-531`):
+- `reachHeldFresh`: `"in progress or claimed in a lane another checkout holds right now"`
+- `reachNotReady`: `"not startable — blocked by a dependency, or in flight and not abandoned"`
+- `reachOffFocusPath`: ``"off the focus path this run answered over — `lit next --all` to route over the whole queue"``
+
+`describeReach(rows, lead, notes)` renders `"<lead><ids> (<note>)"` for each kind
+that has rows, joined by `"; "`, in `reachKind` declaration order
+(`next_route.go:561-575`). `nameIDs` names at most `maxNamedPerKind = 12` ids and
+otherwise appends `" and <n> more"` (`next_route.go:540`, `next_route.go:546-553`).
+
+**Terminal messages.** `Exhausted.Error()` (`next_route.go:480-489`): `scope` is
+`"epic(s) <Epics joined by ", ">"` when `Epics` is non-empty, else
+`"your claimed lane(s)"`.
+- `Blocked` empty: ``"no ready work in <scope> — nothing else is queued behind what's already in progress; picking up other work is a deliberate re-focus, not a bare `next`"``
+- Otherwise: ``"no ready work in <scope> — <describeReach(Blocked, "blocked on ", exhaustedNotes)>; picking up other work is a deliberate re-focus, not a bare `next`"``
+
+`NoWork.Error()` (`next_route.go:587-603`):
+- `Unreachable` empty: `"no ready work"`
+- Any row `reachOffFocusPath` (`NoWork.withheld()`, `next_route.go:608-615`):
+  `"no ready work on the focus path — the backlog is not empty, and each row below says why this run did not serve it: <describeReach(Unreachable, "", poolNotes)>"`
+- Otherwise: `"no ready work — the backlog is not empty, but nothing in it is startable here: <describeReach(Unreachable, "", poolNotes)>"`
+
+Both map to `ExitNoWork` = **6** (`exit.go:30`, `exit.go:121-128`), with reasons
+`scope_exhausted` and `no_ready_work` respectively (`error_output.go:111-118`).
+
+**Rendering** — `renderNextOutcome(w, outcome, details, cc)` (`next.go:94-135`):
+- `ServedFromClaim` → no announcement at all (`next.go:98-99`).
+- `ResumedOwnWork` → `"<RowID> is already in progress in a lane you hold — continue where you left off\n"`
+  (`next.go:100-102`).
+- `ServedFromEpicLane` → `startAdvice(o.Row, o.Lane, expiredHolder(cc.standings.Of(o.Lane)))`
+  + `" (a second lane of an epic you already hold a lane in)\n"` (`next.go:103-105`).
+- `ServedFromNewLane` → the same `startAdvice(...)` + `"\n"` (`next.go:106-108`).
+- `Exhausted`, `NoWork` → returned as themselves; no ticket printed
+  (`next.go:118-121`).
+- Any other outcome type → panic (`next.go:122-123`).
+
+`startAdvice(row, lane, holder)` (`next.go:183-196`) is exactly four sentences,
+selected by the row's state and by whether `lane.Describe()` reports a named lane:
+- in progress, lane not named: ``"<id> is in progress and <state> — run `lit start <id>` to take it over"``
+- in progress, lane named: ``"<id> is in progress and <state> — run `lit start <id>` to take over <described>"``
+- not in progress, lane not named: ``"run `lit start <id>` to claim it"``
+- not in progress, lane named: ``"run `lit start <id>` to claim <described>"``
+
+`<state>` is `inFlightState(holder)` (`next.go:149-157`): `claims.Locked` →
+`"claimed by a locked worktree whose claim has gone stale"`; `claims.Present` →
+`"stale, though its holder's worktree is still on disk"`; otherwise
+`"abandoned"`. `holder` is `expiredHolder(standing)` — the `Stale` standing's
+`Holder`, and `claims.Unprovable` for every other standing
+(`claims_render.go:89-94`).
+
+`LaneID.Describe() (string, bool)` (`model.go:255-263`):
+- solo lane → `("", false)`
+- empty key → `("the default lane of epic <epic>", true)`
+- otherwise → `("lane <key> of epic <epic>", true)`
+
+On a served row, `renderNextOutcome` calls `printNextSummary(w, row, cc, lane)`
+with `lane = model.LaneOf(row.Issue, details[row.ID].Parent)` (`next.go:130-133`),
+which prints the **default columns** (`id state topic title`) joined by two
+spaces (`ready_state.go:663-669`, `columns.go:158-160`), then `printInlineDeps`
+(`ready_state.go:720-733`): `    epic: …`, `    depends on: …`, the claim line,
+and `    unblocks: …` — but `next` passes a **nil** unblocks map, so the unblocks
+line never appears (`ready_state.go:668`). It then returns
+`nextPulledOccasion(row.Issue)` (`next.go:134`, `workflow_events.go:39-45`),
+dispatched as `EventNextPulled` (`next.go:75`).
 
 `lit next` performs **no writes** — it is registered `app.AccessRead`
-(`register.go:303`); the "claims <lane>" announcement describes what a subsequent
-`lit start` would claim.
+(`register.go:485`). `startAdvice` names what a subsequent `lit start` would
+claim; this command claims nothing.
 
 ### 2.15 `lit orphaned` — Stale in-progress issues
 
