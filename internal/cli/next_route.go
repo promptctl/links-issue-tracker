@@ -402,12 +402,19 @@ func withheldByScope(rows []annotation.AnnotatedIssue) []rowReach {
 	return withheld
 }
 
-// passedOver classifies every gathered row, in the rank order the pool walk
-// went through them. It is called only where that walk found nothing, so every
-// row here is routeAround by construction — a takeable one would have been
-// served — which is what makes "the rows we went past" and "all the rows" the
-// same list, and lets NoWork say why the pool was empty without asking the data
-// a second question.
+// passedOver classifies every row in the pool it is handed, in the rank order
+// the pool walk went through them. It is called only where that walk found
+// nothing, so every row here is routeAround by construction — a takeable one
+// would have been served — which lets NoWork say why the pool was empty without
+// asking the data a second question.
+//
+// The pool is every gathered row only when no focus scope narrowed it. Under a
+// scope the walk never sees the off-path rows at all: withheldByScope stamps
+// those, and the call site appends the two lists, so it is NoWork.Unreachable —
+// not this function — that accounts for every gathered row. Saying "all the
+// rows" here would hand the next reader the conclusion that the off-path rows
+// are already covered, and the separate function that exists to cover them
+// would read as redundant. [LAW:one-source-of-truth]
 func passedOver(rows []annotation.AnnotatedIssue, reachFor func(annotation.AnnotatedIssue, bool) reachKind) []rowReach {
 	passed := make([]rowReach, 0, len(rows))
 	for _, row := range rows {
