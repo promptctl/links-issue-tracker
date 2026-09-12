@@ -54,6 +54,14 @@ func ExitCode(err error) int {
 	if errors.As(err, &syncFailure) {
 		return ExitConflict
 	}
+	// A template whose shape cannot converge is a deterministic refusal of the
+	// data the command was given, which is what ExitValidation means — the act
+	// it asks for differs (edit the file, not the flags), and that difference is
+	// carried by the reason, not by a code of its own. [LAW:one-source-of-truth]
+	var templateShape templateShapeError
+	if errors.As(err, &templateShape) {
+		return ExitValidation
+	}
 	// The take gate's refusal is the same unresolved-divergence condition
 	// persisting — the take did not run — so it shares the conflict exit.
 	// [LAW:one-source-of-truth]

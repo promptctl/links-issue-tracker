@@ -78,6 +78,14 @@ func commandErrorReason(err error) string {
 	if errors.As(err, &storeValidation) {
 		return "validation_refused"
 	}
+	// A malformed managed template is a refusal of a file on disk, not of the
+	// command as issued, so it must not inherit validation_refused's "adjust the
+	// command" — the command is already right and rerunning it unchanged is the
+	// loop this whole mapping exists to prevent. [LAW:one-type-per-behavior]
+	var templateShape templateShapeError
+	if errors.As(err, &templateShape) {
+		return "template_shape_refused"
+	}
 	// An action on an epic is refused because an epic's state is its children's
 	// to set. Both halves are terminal — no retry of the same command can move
 	// either — so neither may reach the default's "Retry the command", which is
@@ -169,6 +177,8 @@ func commandErrorRemediation(reason string) string {
 		// are involved — the workspace is healthy. [LAW:no-silent-failure] the
 		// guidance points at the real fault domain, not a generic retry.
 		return "The remote host was unreachable over the network; credentials are not the problem, and lit already retried with backoff. Check connectivity to the remote host (for SSH remotes: `ssh -o BatchMode=yes git@<host>`), then retry once the network path is restored."
+	case "template_shape_refused":
+		return "Edit the template override the message names so it is either plain content with no LIT INTEGRATION markers or exactly one whole marked block, or delete the override to fall back to lit's bundled default. The command itself is fine; rerunning it unchanged repeats this refusal."
 	case "validation_refused":
 		return "Do not retry unchanged — this refusal is deterministic and will repeat until the command or the data changes. The error message above states the rule it enforces; adjust the command to satisfy it."
 	case "workspace_busy":

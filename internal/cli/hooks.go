@@ -13,12 +13,10 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-const (
+var (
 	// [LAW:one-source-of-truth] Only the section between these markers is owned by lit.
-	litHookBeginMarker    = "# --- BEGIN LIT INTEGRATION ---"
-	litHookEndMarker      = "# --- END LIT INTEGRATION ---"
-	legacyHookBeginMarker = "# --- BEGIN LINKS INTEGRATION ---"
-	legacyHookEndMarker   = "# --- END LINKS INTEGRATION ---"
+	litHookMarkers    = markerPair{begin: "# --- BEGIN LIT INTEGRATION ---", end: "# --- END LIT INTEGRATION ---"}
+	legacyHookMarkers = markerPair{begin: "# --- BEGIN LINKS INTEGRATION ---", end: "# --- END LINKS INTEGRATION ---"}
 )
 
 type hookInstallResult struct {
@@ -61,7 +59,7 @@ func installHooks(ws workspace.Info) (hookInstallResult, error) {
 
 	section, err := renderLinksPrePushHookSection(ws.RootDir)
 	if err != nil {
-		return hookInstallResult{}, fmt.Errorf("load pre-push hook template: %w", err)
+		return hookInstallResult{}, err
 	}
 	existing, err := os.ReadFile(hookPath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -70,7 +68,7 @@ func installHooks(ws workspace.Info) (hookInstallResult, error) {
 
 	mode := os.FileMode(0o755)
 	if errors.Is(err, os.ErrNotExist) {
-		updated := "#!/usr/bin/env bash\n" + section
+		updated := "#!/usr/bin/env bash\n" + section.text
 		if writeErr := os.WriteFile(hookPath, []byte(updated), mode); writeErr != nil {
 			return hookInstallResult{}, fmt.Errorf("write pre-push hook: %w", writeErr)
 		}
@@ -109,8 +107,8 @@ func installHooks(ws workspace.Info) (hookInstallResult, error) {
 			Reason:   "incompatible",
 		}, nil
 	}
-	existingStr = migrateMarkers(existingStr, legacyHookBeginMarker, legacyHookEndMarker, litHookBeginMarker, litHookEndMarker)
-	updated, changed := upsertManagedSection(existingStr, section, litHookBeginMarker, litHookEndMarker)
+	existingStr = migrateMarkers(existingStr, legacyHookMarkers, litHookMarkers)
+	updated, changed := upsertManagedSection(existingStr, section)
 	if !changed {
 		return hookInstallResult{HookPath: hookPath, Changed: false, Managed: true}, nil
 	}
@@ -121,6 +119,18 @@ func installHooks(ws workspace.Info) (hookInstallResult, error) {
 	return hookInstallResult{HookPath: hookPath, Changed: true, Managed: true}, nil
 }
 
-func renderLinksPrePushHookSection(workspaceRoot string) (string, error) {
-	return templates.Load(templates.PrePushHookTemplateName, workspaceRoot)
+// renderLinksPrePushHookSection is the crossing where resolved template content —
+// an override the user wrote, or the embedded default — becomes a managed section.
+// [LAW:parse-dont-validate] Nothing downstream re-checks the shape, because
+// downstream only ever holds a managedSection.
+func renderLinksPrePushHookSection(workspaceRoot string) (managedSection, error) {
+	content, source, err := templates.LoadWithSource(templates.PrePushHookTemplateName, workspaceRoot)
+	if err != nil {
+		return managedSection{}, fmt.Errorf("load pre-push hook template: %w", err)
+	}
+	section, err := litHookMarkers.parse(content)
+	if err != nil {
+		return managedSection{}, fmt.Errorf("pre-push hook template (via %s): %w", source, err)
+	}
+	return section, nil
 }
