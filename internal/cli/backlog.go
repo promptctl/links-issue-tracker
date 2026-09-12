@@ -42,28 +42,55 @@ Use 'lit next' to pick the top workable item to start.`
 // assumption — which is how a `--top` that landed at position 39 read as a
 // ranking bug rather than a scoped view (links-listing-ju7i).
 //
-// [FRAMING:representation] The notice is a map of the row set, derived from the
-// same scope that produced it, so it cannot describe a narrowing that did not
-// happen or stay silent about one that did.
+// [FRAMING:representation] The notice is a map of the row set, so it carries
+// every narrowing that stands between the gathered rows and the printed ones —
+// the focus scope AND the --limit trim that runs after it. A notice derived
+// from the scope alone could not see the second, and printed "Nothing is
+// hidden" over a truncated list: the completeness claim this ticket moved out
+// of the preamble, made false again one narrowing over.
 type focusNotice struct {
 	scope   focusScope
 	applied bool // false when --all asked for the whole queue anyway
 	hidden  int  // rows the scope excluded from this view
+	trimmed int  // rows --limit cut AFTER the scope partition
 	escape  string
 }
 
-// line renders the notice. The unfocused workspace states the completeness the
-// preamble used to assert on its own; a scope in force names the goals, the
-// count it withheld, and the flag that lifts it — a groove with the way out
-// written on it, never a wall.
+// line renders the notice: what the scope did, then what --limit did. Two
+// clauses because they are two narrowings with two escapes, and one number
+// covering both would tell a reader rows are off the focus path when --limit
+// is what removed them. [LAW:one-source-of-truth]
 func (n focusNotice) line() string {
-	if !n.scope.active() {
+	return n.scopeClause() + n.trimClause()
+}
+
+// scopeClause states what the focus scope did — the unfocused workspace stating
+// the completeness the preamble used to assert on its own, or a scope in force
+// naming the goals, the count it withheld, and the flag that lifts it: a groove
+// with the way out written on it, never a wall. It claims completeness only
+// when --limit left the list whole, since "nothing is hidden" is a claim about
+// the printed rows and not about the scope alone.
+func (n focusNotice) scopeClause() string {
+	switch {
+	case !n.scope.active() && n.trimmed == 0:
 		return "Nothing is hidden: every workable item is listed."
-	}
-	if !n.applied {
+	case !n.scope.active():
+		return "Every workable item is in scope."
+	case !n.applied:
 		return fmt.Sprintf("Focus is on %s; this run bypassed it and lists the whole queue.", n.scope.describe())
 	}
 	return fmt.Sprintf("Focused on %s — listing only its unfinished prerequisite path, in rank order; %d workable row(s) off that path are not shown (%s for the whole queue).", n.scope.describe(), n.hidden, n.escape)
+}
+
+// trimClause names the narrowing the scope cannot see. It is empty when --limit
+// cut nothing, so a run without the flag reads exactly as it did before the
+// clause existed. [LAW:dataflow-not-control-flow] the zero trim renders the
+// identity string rather than selecting a different notice.
+func (n focusNotice) trimClause() string {
+	if n.trimmed == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" --limit trimmed this run: %d more workable row(s) are not shown.", n.trimmed)
 }
 
 // emptyLine says WHICH emptiness this is. An empty focused view over a backlog

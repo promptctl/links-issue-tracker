@@ -210,10 +210,20 @@ func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	// partition serves every case and nothing downstream learns the flag exists.
 	// [LAW:dataflow-not-control-flow]
 	scoped, excluded := focus.scopeFor(knobs.all).partition(annotated)
-	notice := focusNotice{scope: focus, applied: !knobs.all, hidden: len(excluded), escape: "`lit " + view.name + " --all`"}
 	view.order(scoped, details, knobs)
 	rows := view.keep(scoped)
 	rows = applyLimit(rows, knobs.limit)
+	// Built AFTER the trim it reports, not beside the partition: --limit cuts
+	// rows the scope kept, so a notice constructed two lines up could only ever
+	// describe half the gap between what was gathered and what is printed — and
+	// printed "Nothing is hidden" over the other half.
+	notice := focusNotice{
+		scope:   focus,
+		applied: !knobs.all,
+		hidden:  len(excluded),
+		trimmed: len(scoped) - len(rows),
+		escape:  "`lit " + view.name + " --all`",
+	}
 	cc, err := gatherClaimContext(ctx, stdout, ap)
 	if err != nil {
 		return err

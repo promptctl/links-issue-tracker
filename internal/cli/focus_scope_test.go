@@ -165,6 +165,66 @@ func TestTopRankReachesTheTopOfTheFocusedView(t *testing.T) {
 	}
 }
 
+// --limit narrows the printed rows AFTER the scope partition, so the notice has
+// to report it or the completeness sentence describes a list that was cut after
+// it was written. This is the ticket's own defect one narrowing over: "Nothing
+// is hidden" printed above a truncated view is the same false claim the
+// preamble used to make, and the notice exists to stop making it.
+//
+// The wants are literal sentences for the same reason the scope test uses them:
+// a want rebuilt from focusNotice would agree with whatever focusNotice said.
+func TestBacklogNoticeReportsTheLimitTrimNotJustTheScope(t *testing.T) {
+	h := newReadyTestHarness(t)
+
+	goal := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Goal", Topic: "goal", IssueType: "task",
+	})
+	prereqA := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Prereq A", Topic: "goal", IssueType: "task",
+	})
+	prereqB := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Prereq B", Topic: "goal", IssueType: "task",
+	})
+	_ = h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Unrelated", Topic: "noise", IssueType: "task",
+	})
+	h.addDependency(goal.ID, prereqA.ID)
+	h.addDependency(goal.ID, prereqB.ID)
+
+	// Unfocused and untrimmed: the strong completeness sentence is true, and the
+	// trim clause is absent rather than reading "0 more row(s)".
+	text := h.runWorkableText()
+	if want := "Nothing is hidden: every workable item is listed."; !strings.Contains(text, want) {
+		t.Fatalf("untrimmed backlog missing %q\n%s", want, text)
+	}
+	if strings.Contains(text, "--limit trimmed this run") {
+		t.Fatalf("untrimmed backlog must not mention a trim\n%s", text)
+	}
+
+	// Unfocused and trimmed: four workable rows, two shown. The completeness
+	// claim must be gone — it is the one sentence --limit falsifies outright.
+	text = h.runWorkableText("--limit", "2")
+	if strings.Contains(text, "Nothing is hidden") {
+		t.Fatalf("`--limit 2` over 4 rows must not claim nothing is hidden\n%s", text)
+	}
+	if want := "Every workable item is in scope. --limit trimmed this run: 2 more workable row(s) are not shown."; !strings.Contains(text, want) {
+		t.Fatalf("trimmed backlog missing %q\n%s", want, text)
+	}
+
+	// Focused AND trimmed: two numbers, two causes, two escapes. One combined
+	// count would tell the reader rows are off the focus path when --limit is
+	// what removed them.
+	h.setLabels(goal.ID, FocusLabel)
+	text = h.runWorkableText("--limit", "1")
+	wantScope := "Focused on " + goal.ID + " — listing only its unfinished prerequisite path, in rank order; 1 workable row(s) off that path are not shown (`lit backlog --all` for the whole queue)."
+	if !strings.Contains(text, wantScope) {
+		t.Fatalf("focused+trimmed backlog missing scope clause %q\n%s", wantScope, text)
+	}
+	if want := "--limit trimmed this run: 2 more workable row(s) are not shown."; !strings.Contains(text, want) {
+		t.Fatalf("focused+trimmed backlog missing trim clause %q\n%s", want, text)
+	}
+}
+
 // A focused backlog lists the path and says so, naming the goal, the count it
 // withheld, and the flag that lifts the scope. The wants are the literal
 // sentences: a test that rebuilt them from focusNotice would pass whatever
