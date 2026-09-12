@@ -18,6 +18,36 @@ func repoFile(t *testing.T, rel string) string {
 	return string(b)
 }
 
+// exportedNames returns the variable names carried on a shell script's `export`
+// statements.
+//
+// The membership question has to be asked of the statement, never of the file.
+// scripts/version-ldflags.sh contains the word "export" and the word
+// "LIT_BUILD_ORIGIN" whichever way it is written — the first on the line
+// exporting Commit and Date, the second on its own assignment — so a pair of
+// substring tests over the file body is true even when the export line has
+// dropped the variable entirely, which is precisely the regression worth
+// catching. Parsing returns the set the caller actually needs, leaving no way
+// to satisfy the check except by exporting. [LAW:parse-dont-validate]
+//
+// Membership rather than a match on the literal `export A B C` line, because
+// the contract is that the variable leaves the script, not the order the three
+// names are written in. [LAW:behavior-not-structure]
+func exportedNames(script string) map[string]bool {
+	names := map[string]bool{}
+	for _, line := range strings.Split(script, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 || fields[0] != "export" {
+			continue
+		}
+		// `export FOO=bar` names FOO just as `export FOO` does.
+		for _, field := range fields[1:] {
+			names[strings.SplitN(field, "=", 2)[0]] = true
+		}
+	}
+	return names
+}
+
 // TestEveryProducerStampsOrigin is the machine-checked half of the contract this
 // package's doc comment states in prose: the link-time variables have exactly
 // three writers, and every one of them stamps every variable a consumer reads.
@@ -40,8 +70,11 @@ func TestEveryProducerStampsOrigin(t *testing.T) {
 	if !strings.Contains(ldflags, `LIT_BUILD_ORIGIN="`+OriginSource+`"`) {
 		t.Errorf("scripts/version-ldflags.sh does not set LIT_BUILD_ORIGIN to %q", OriginSource)
 	}
-	if !strings.Contains(ldflags, "export") || !strings.Contains(ldflags, "LIT_BUILD_ORIGIN") {
-		t.Error("scripts/version-ldflags.sh does not export LIT_BUILD_ORIGIN, so neither caller would receive it")
+	exported := exportedNames(ldflags)
+	for _, name := range []string{"LIT_BUILD_COMMIT", "LIT_BUILD_DATE", "LIT_BUILD_ORIGIN"} {
+		if !exported[name] {
+			t.Errorf("scripts/version-ldflags.sh assigns but never exports %s, so neither caller would receive it", name)
+		}
 	}
 
 	for _, site := range []struct{ file, want string }{
