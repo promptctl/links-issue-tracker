@@ -26,9 +26,9 @@ setup:
         echo "No extra cgo flags needed on this platform; go build/test work as-is."
     fi
 
-# Build the lit binary. Stamps internal/version.{Commit,Date} (not Version —
-# see scripts/version-ldflags.sh) so `lit version` reports a real commit and
-# build age instead of "commit unknown, built unknown" for every local build.
+# Build the lit binary. Stamps internal/version.{Commit,Date,Origin} (not
+# Version — see scripts/version-ldflags.sh) so `lit version` reports a real
+# commit, build age and provenance rather than "commit unknown, built unknown".
 build:
     #!/usr/bin/env bash
     set -euo pipefail

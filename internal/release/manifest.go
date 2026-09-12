@@ -23,15 +23,15 @@ package release
 import "github.com/promptctl/links-issue-tracker/internal/version"
 
 // Manifest is the per-release index. It embeds version.Info so a release's
-// identity (Version, Commit, Date, Schema) is recorded in exactly the same
-// shape a running binary reports. Artifacts and Signature are release-only
-// metadata.
+// identity is recorded in exactly the same shape a running binary reports.
+// Artifacts and Signature are release-only metadata.
 //
 // [LAW:types-are-the-program] Embedding version.Info means any change to that
 // shape propagates automatically; the release format does not maintain its
-// own copy of the binary-identity fields. IsDev will always serialize false
-// for published manifests (a release is by definition not a dev build); the
-// field is left in place for symmetry rather than diverging the schemas.
+// own copy of the binary-identity fields. IsDev and FromSource both always
+// serialize false for published manifests (a release is by definition neither
+// a dev build nor built from a working tree); the fields are left in place for
+// symmetry rather than diverging the schemas.
 type Manifest struct {
 	version.Info
 	Artifacts []Artifact `json:"artifacts"`

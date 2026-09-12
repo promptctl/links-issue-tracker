@@ -264,7 +264,7 @@ and transitions via the table below.
   Defined at `sync_staleness.go:191`.
 - Write commands get `printMutationSyncStalenessWarning(stdout, ws, now)` after
   the handler succeeds and after the engine closes (`cli.go:135-137`,
-  `sync_staleness.go:217`).
+  `sync_staleness.go:229`).
 
 ### 1.14 Workflow event dispatch
 

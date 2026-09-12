@@ -657,7 +657,9 @@ Three modes, one target-resolution rule (`scripts/install.sh:3-18`):
 
 - Must be sourced; executing it prints a message and exits **64** (`:26-29`).
 - `LIT_BUILD_COMMIT="$(git rev-parse --short HEAD)"`; empty ⇒ message and `return 1`
-  (`:35-40`). `LIT_BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"` (`:41`). Both exported (`:42`).
+  (`:35-40`). `LIT_BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"` (`:41`).
+  `LIT_BUILD_ORIGIN="source"`, the constant both from-source entrypoints stamp so
+  `internal/version.FromSource` reads true for them (`:42-47`). All three exported (`:48`).
 - Deliberately never sets `Version` (`:16-22`).
 
 ### 7.8 `scripts/cgo-env.sh`
@@ -1021,9 +1023,9 @@ setup-go@v5 (`cache: true`) → `go mod download` → `go run ./tools/licenses -
 
 ## 12. `.goreleaser.yml`
 
-- `version: 2`, `project_name: lit` (`.goreleaser.yml:21`, `:23`). No `before.hooks` — the
-  removed `go mod tidy` hook is called out at `.goreleaser.yml:25-30`.
-- One build (`.goreleaser.yml:32-144`): `id: lit`, `main: ./cmd/lit`, `binary: lit`.
+- `version: 2`, `project_name: lit` (`.goreleaser.yml:22`, `:24`). No `before.hooks` — the
+  removed `go mod tidy` hook is called out at `.goreleaser.yml:26-31`.
+- One build (`.goreleaser.yml:33-153`): `id: lit`, `main: ./cmd/lit`, `binary: lit`.
   - `env` sets `CGO_ENABLED=1` (`:47`) and, by Go template on `.Os`/`.Arch`, the zig cross
     wrappers: `zig-cc-aarch64-apple-darwin` / `zig-cc-x86_64-apple-darwin` (+ `CXX` twins)
     for darwin (`:55-64`), `zig-cc-x86_64-windows-gnu` (+ CXX) for windows (`:65-72`), and

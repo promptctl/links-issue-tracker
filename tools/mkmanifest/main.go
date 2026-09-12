@@ -130,7 +130,11 @@ func main() {
 			Commit:  *commit,
 			Date:    *date,
 			IsDev:   false, // releases are by definition not dev
-			Schema:  version.SchemaSupport{Min: migrations.Baseline, Max: max},
+			// Stated rather than left to the zero value, for the reason IsDev
+			// is: a release is not built from a working tree that can move on
+			// without it, so it never reports build-age staleness.
+			FromSource: false,
+			Schema:     version.SchemaSupport{Min: migrations.Baseline, Max: max},
 		},
 		Artifacts: artifacts,
 	}

@@ -167,11 +167,11 @@ One flag, `--to <version>` (v-prefixed tag; a missing `v` is added; `/`, `\`, `.
 
 ### `scripts/install.sh`
 
-Three modes: source build (default), `--from-release <tag>`, `--latest-release` (mutually exclusive; `--latest-release` needs `jq` and reads the GitHub API) (`scripts/install.sh:103-136, 241-254`). Target-directory priority: existing `lit` on PATH → `$GOBIN` → `go env GOBIN` → first `go env GOPATH` entry + `/bin` → `$HOME/.local/bin` (error if `HOME` unset) (`:141-187`).
+Three modes: source build (default), `--from-release <tag>`, `--latest-release` (mutually exclusive; `--latest-release` needs `jq` and reads the GitHub API) (`scripts/install.sh:103-136, 246-259`). Target-directory priority: existing `lit` on PATH → `$GOBIN` → `go env GOBIN` → first `go env GOPATH` entry + `/bin` → `$HOME/.local/bin` (error if `HOME` unset) (`:141-187`).
 
 - **Source mode**: version from `git describe --tags --always --dirty` (leading `v` stripped; empty stays empty so the build is dev), then `go build` with `-buildvcs=false` and ldflags for all four version variables — `Version`, `Commit`, `Date`, and `Origin` (`source`), the last of which is what keeps the stamped `Version` from making an installed working-tree build read as a release (`:192-234`).
-- **Release mode**: tag must be canonical `vX.Y.Z`; archive name `lit_<ver>_<os>_<arch>.<ext>` with an arch map (amd64/arm64 only) and OS map (linux/darwin → tar.gz, Windows shells → zip); downloads archive + `checksums.txt` into a temp dir created inside the target dir so the final `mv` is atomic; checksum extracted by exact awk field match and verified; tar/zip entry names are structurally validated *before* extraction (flat, regular files only); the extracted binary must not be a symlink, must be a regular file, and must be executable (`:230-456`).
-- Post-install, unconditionally: removes stale `lnks` binaries in the target dir, prints `Installed lit -> <path>`, runs `lit version`, and warns about any other `lit` on PATH whose realpath differs from the just-installed one (`:459-492`).
+- **Release mode**: tag must be canonical `vX.Y.Z`; archive name `lit_<ver>_<os>_<arch>.<ext>` with an arch map (amd64/arm64 only) and OS map (linux/darwin → tar.gz, Windows shells → zip); downloads archive + `checksums.txt` into a temp dir created inside the target dir so the final `mv` is atomic; checksum extracted by exact awk field match and verified; tar/zip entry names are structurally validated *before* extraction (flat, regular files only); the extracted binary must not be a symlink, must be a regular file, and must be executable (`:235-461`).
+- Post-install, unconditionally: removes stale `lnks` binaries in the target dir, prints `Installed lit -> <path>`, runs `lit version`, and warns about any other `lit` on PATH whose realpath differs from the just-installed one (`:464-497`).
 
 ### Helper scripts
 
@@ -253,7 +253,7 @@ Push to `master` + manual dispatch; never on PRs; concurrency without cancellati
 
 ### goreleaser configuration
 
-One build, `./cmd/lit`, CGO enabled, cross-compiled with per-target zig wrapper compilers (`zig-cc-<triple>`); ICU headers/libs from `/opt/icu/<os>_<arch>`; `-static` on linux only; `-tags=icu_static`; `-trimpath -buildvcs=false`; `-s -w` plus the four version ldflags (`Origin` is the literal `release`, the only producer that stamps it). Targets: linux/darwin/windows × amd64/arm64 minus windows/arm64 = five. Archives are `lit_<version>_<os>_<arch>.tar.gz` (zip on Windows), no wrapper directory, bundling `LICENSE`, `README*`, `THIRD_PARTY_LICENSES`, `LICENSE-REPORT.md`, `FORKS.md`; sha256 `checksums.txt`; snapshot versions are `<incpatch>-snapshot+<shortcommit>`. Goreleaser itself never publishes (`release.disable: true`) — the workflow's publish job does (`.goreleaser.yml:21-225`).
+One build, `./cmd/lit`, CGO enabled, cross-compiled with per-target zig wrapper compilers (`zig-cc-<triple>`); ICU headers/libs from `/opt/icu/<os>_<arch>`; `-static` on linux only; `-tags=icu_static`; `-trimpath -buildvcs=false`; `-s -w` plus the four version ldflags (`Origin` is the literal `release`, the only producer that stamps it). Targets: linux/darwin/windows × amd64/arm64 minus windows/arm64 = five. Archives are `lit_<version>_<os>_<arch>.tar.gz` (zip on Windows), no wrapper directory, bundling `LICENSE`, `README*`, `THIRD_PARTY_LICENSES`, `LICENSE-REPORT.md`, `FORKS.md`; sha256 `checksums.txt`; snapshot versions are `<incpatch>-snapshot+<shortcommit>`. Goreleaser itself never publishes (`release.disable: true`) — the workflow's publish job does (`.goreleaser.yml:21-233`).
 
 ### Release toolchain image
 

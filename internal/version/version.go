@@ -71,9 +71,9 @@ const StaleBuildThreshold = 7 * 24 * time.Hour
 // `lit version` human output to reconstruct any field on this struct.
 //
 // [LAW:types-are-the-program] Every field is either link-time identity
-// (Version/Commit/Date) or registry-derived (Schema). IsDev is the explicit
-// boolean for the "no version stamped at link time" case, promoted to a field
-// so consumers don't reimplement `info.Version == ""`.
+// (Version/Commit/Date/Origin), registry-derived (Schema), or a question about
+// that identity promoted to a field so consumers need not reimplement it —
+// IsDev ("no Version stamped") and FromSource ("Origin is not release").
 type Info struct {
 	Version string `json:"version"`
 	Commit  string `json:"commit"`
