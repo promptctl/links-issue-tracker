@@ -39,7 +39,7 @@ Containers differ from leaves in three ways:
 
 ### Priorities
 
-Two values (`internal/model/priority.go:18-21`): `0` (normal) and `1` (urgent). Both spellings — the number and the display word — come from one table, `priorityVocabulary` (`priority.go:34-40`), which every direction reads: `priorityEntry` resolves an int onto it (`:47-54`), `String` renders through it (`:125-128`), `ParsePriorityName` inverts it (`:112-120`), and `Priorities` lists it (`:69-75`). `CanonicalPriority` maps every other integer — negative or ≥2 — to normal (`priority.go:61-64`). Two strict gates share the domain and the refusal `errInvalidPriority` (`:87`): `ParsePriority(int)` for the import/bulk payloads (`:95-101`) and `ParsePriorityName(string)` for the `--priority` flag (`:112-120`), the latter accepting the word or the decimal and lowercasing/trimming first.
+Two values (`internal/model/priority.go:18-21`): `0` (normal) and `1` (urgent). Both spellings — the number and the display word — come from one table, `priorityVocabulary` (`priority.go:35-41`), which every direction reads: `priorityEntry` resolves an int onto it (`:47-54`), `String` renders through it (`:125-128`), `ParsePriorityName` inverts it (`:112-120`), and `Priorities` lists it (`:69-75`). `CanonicalPriority` maps every other integer — negative or ≥2 — to normal (`priority.go:61-64`). Two strict gates share the domain and the refusal `errInvalidPriority` (`:87`): `ParsePriority(int)` for the import/bulk payloads (`:95-101`) and `ParsePriorityName(string)` for the `--priority` flag (`:112-120`), the latter accepting the word or the decimal and lowercasing/trimming first.
 
 ## The status lifecycle
 

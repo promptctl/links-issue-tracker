@@ -343,7 +343,7 @@ prefix (`cli.go:1036-1042`).
   `"issue type must be <oxford-or list>"` (`issue_type.go:35`, `:42-50`).
   `epic` is the only container type (`issue_type.go:55-58`).
 - Priorities: `0` normal, `1` urgent (`internal/model/priority.go:18-21`), both
-  spellings held in one `priorityVocabulary` table (`priority.go:34-40`).
+  spellings held in one `priorityVocabulary` table (`priority.go:35-41`).
   `ParsePriority` gates the int payloads (`priority.go:95-101`) and
   `ParsePriorityName` gates the `--priority` flag (`:112-120`), the latter
   lowercasing and trimming, then taking the display word or the decimal. Both

@@ -24,23 +24,36 @@ import (
 func TestPriorityFlagAcceptsEveryWordTheReadSurfacesPrint(t *testing.T) {
 	ctx := context.Background()
 
+	// Both spellings a read surface emits, carried as a value rather than
+	// branched on: the word from `lit show` and the issue rows, the decimal from
+	// `lit export` and the `lit import` payload. Holding it as a function lets
+	// every command below be driven in whichever spelling the subtest is
+	// exercising, including for a priority the loop variable does not name.
+	// [LAW:dataflow-not-control-flow]
+	spellings := []struct {
+		name string
+		of   func(model.Priority) string
+	}{
+		{"word", func(p model.Priority) string { return p.String() }},
+		{"decimal", func(p model.Priority) string { return strconv.Itoa(int(p)) }},
+	}
+
 	for _, want := range model.Priorities() {
 		word := want.String()
 
-		// Both spellings a read surface emits: the word from `lit show`, and the
-		// decimal from `lit export` / the `lit import` payload.
-		for _, spelling := range []string{word, strconv.Itoa(int(want))} {
-			t.Run(word+"/"+spelling, func(t *testing.T) {
+		for _, spelling := range spellings {
+			t.Run(word+"/"+spelling.name, func(t *testing.T) {
 				ap := newTestCLIApp(t)
+				raw := spelling.of(want)
 
 				var newOut bytes.Buffer
 				if err := runNew(ctx, &newOut, ap, []string{
 					"--title", "priority round trip",
 					"--topic", "priority",
 					"--type", "task",
-					"--priority", spelling,
+					"--priority", raw,
 				}); err != nil {
-					t.Fatalf("runNew(--priority %q) error = %v", spelling, err)
+					t.Fatalf("runNew(--priority %q) error = %v", raw, err)
 				}
 				createdID := firstIssueID(t, newOut.String())
 				created, err := ap.Store.GetIssue(ctx, createdID)
@@ -48,7 +61,7 @@ func TestPriorityFlagAcceptsEveryWordTheReadSurfacesPrint(t *testing.T) {
 					t.Fatalf("GetIssue(%s) error = %v", createdID, err)
 				}
 				if created.Priority != want {
-					t.Fatalf("runNew(--priority %q) stored priority %d, want %d", spelling, int(created.Priority), int(want))
+					t.Fatalf("runNew(--priority %q) stored priority %d, want %d", raw, int(created.Priority), int(want))
 				}
 
 				// The round trip closes here: what the read surface prints for the
@@ -61,18 +74,31 @@ func TestPriorityFlagAcceptsEveryWordTheReadSurfacesPrint(t *testing.T) {
 					t.Fatalf("the word the read surface printed (%q) is refused by the write gate: %v", printed, err)
 				}
 
+				// Update moves the row to a DIFFERENT priority. Re-applying `want`
+				// would pass against an update that silently applied nothing, since
+				// the row was created at `want` — so the value has to change for this
+				// arm to test anything.
+				other := priorityOtherThan(want)
+				otherRaw := spelling.of(other)
 				var updateOut bytes.Buffer
-				if err := runUpdate(ctx, &updateOut, ap, []string{createdID, "--priority", spelling}); err != nil {
-					t.Fatalf("runUpdate(--priority %q) error = %v", spelling, err)
+				if err := runUpdate(ctx, &updateOut, ap, []string{createdID, "--priority", otherRaw}); err != nil {
+					t.Fatalf("runUpdate(--priority %q) error = %v", otherRaw, err)
+				}
+				updated, err := ap.Store.GetIssue(ctx, createdID)
+				if err != nil {
+					t.Fatalf("GetIssue(%s) after update error = %v", createdID, err)
+				}
+				if updated.Priority != other {
+					t.Fatalf("runUpdate(--priority %q) stored priority %d, want %d", otherRaw, int(updated.Priority), int(other))
 				}
 
 				var followupOut bytes.Buffer
 				if err := runFollowup(ctx, &followupOut, ap, []string{
 					"--on", createdID,
 					"--title", "priority follow-up",
-					"--priority", spelling,
+					"--priority", raw,
 				}); err != nil {
-					t.Fatalf("runFollowup(--priority %q) error = %v", spelling, err)
+					t.Fatalf("runFollowup(--priority %q) error = %v", raw, err)
 				}
 				followupID := firstIssueID(t, followupOut.String())
 				followup, err := ap.Store.GetIssue(ctx, followupID)
@@ -80,11 +106,25 @@ func TestPriorityFlagAcceptsEveryWordTheReadSurfacesPrint(t *testing.T) {
 					t.Fatalf("GetIssue(%s) error = %v", followupID, err)
 				}
 				if followup.Priority != want {
-					t.Fatalf("runFollowup(--priority %q) stored priority %d, want %d", spelling, int(followup.Priority), int(want))
+					t.Fatalf("runFollowup(--priority %q) stored priority %d, want %d", raw, int(followup.Priority), int(want))
 				}
 			})
 		}
 	}
+}
+
+// priorityOtherThan returns a legal priority that is not the given one, read off
+// the vocabulary rather than hardcoded, so a third priority does not turn this
+// into a wrong constant. A single-valued domain has no other priority and
+// returns the input; the update assertion is then trivially satisfied, which is
+// the honest answer for a domain where update cannot change anything.
+func priorityOtherThan(p model.Priority) model.Priority {
+	for _, candidate := range model.Priorities() {
+		if candidate != p {
+			return candidate
+		}
+	}
+	return p
 }
 
 // The ticket's second half. A flag value outside the domain is a deterministic

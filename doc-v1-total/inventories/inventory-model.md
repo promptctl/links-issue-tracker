@@ -367,7 +367,7 @@ Complete value set (`issue_type.go:17-23`): `TypeTask="task"`,
 `type Priority int` — `priority.go:16`. Complete value set (`priority.go:18-21`):
 `PriorityNormal = 0`, `PriorityUrgent = 1`.
 
-- `priorityVocabulary` — `priority.go:34-40`: the one table the domain is spelled
+- `priorityVocabulary` — `priority.go:35-41`: the one table the domain is spelled
   in, in canonical order, each entry pairing a `Priority` with its display word;
   its first entry is where out-of-domain ints coerce. Every other function in the
   file is a read of it in some direction, which is what makes the word a read
