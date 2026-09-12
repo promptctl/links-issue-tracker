@@ -13,8 +13,9 @@ import (
 
 type marketplaceManifest struct {
 	Plugins []struct {
-		Name   string `json:"name"`
-		Source string `json:"source"`
+		Name    string `json:"name"`
+		Source  string `json:"source"`
+		Version string `json:"version"`
 	} `json:"plugins"`
 }
 
@@ -35,6 +36,51 @@ func TestClaudeMarketplaceListsPlugin(t *testing.T) {
 	}
 	if marketplace.Plugins[0].Name != "lit" || marketplace.Plugins[0].Source != "./claude-plugin" {
 		t.Fatalf("unexpected marketplace plugin entry: %#v", marketplace.Plugins[0])
+	}
+}
+
+// TestClaudeMarketplaceVersionMatchesPlugin pins one released version across the
+// two manifests that publish it. Claude Code reads the marketplace listing and
+// the plugin's own manifest independently, so neither is derived from the other
+// and a bump that lands in only one ships a listing misreporting the version the
+// plugin declares — silently, since nothing else in the install path compares
+// them. An absent version on either side is the same defect as a mismatched one:
+// two empty strings agree while guarding nothing. [LAW:one-source-of-truth]
+func TestClaudeMarketplaceVersionMatchesPlugin(t *testing.T) {
+	t.Parallel()
+	root := mustRepoRoot(t)
+
+	marketplacePath := filepath.Join(root, ".claude-plugin", "marketplace.json")
+	marketplaceBytes, err := os.ReadFile(marketplacePath)
+	if err != nil {
+		t.Fatalf("ReadFile(marketplace.json) error = %v", err)
+	}
+	var marketplace marketplaceManifest
+	if err := json.Unmarshal(marketplaceBytes, &marketplace); err != nil {
+		t.Fatalf("marketplace json parse error = %v", err)
+	}
+	if len(marketplace.Plugins) == 0 {
+		t.Fatalf("marketplace plugins missing: %#v", marketplace)
+	}
+
+	pluginPath := filepath.Join(root, "claude-plugin", ".claude-plugin", "plugin.json")
+	pluginBytes, err := os.ReadFile(pluginPath)
+	if err != nil {
+		t.Fatalf("ReadFile(plugin.json) error = %v", err)
+	}
+	var plugin struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(pluginBytes, &plugin); err != nil {
+		t.Fatalf("plugin json parse error = %v", err)
+	}
+
+	marketplaceVersion := marketplace.Plugins[0].Version
+	if marketplaceVersion == "" || plugin.Version == "" {
+		t.Fatalf("plugin version absent: %s declares %q, %s declares %q", marketplacePath, marketplaceVersion, pluginPath, plugin.Version)
+	}
+	if marketplaceVersion != plugin.Version {
+		t.Fatalf("plugin version disagrees: %s declares %q, %s declares %q", marketplacePath, marketplaceVersion, pluginPath, plugin.Version)
 	}
 }
 

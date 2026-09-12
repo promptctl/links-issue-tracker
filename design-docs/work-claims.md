@@ -586,9 +586,19 @@ sidecar maps.
 
 ## Parameters and open edges
 
-- **Freshness window T**: default 24 hours, per-repository configurable.
+- **Freshness window T**: default 6 hours, per-repository configurable.
   Repositories where humans idle over weekends may prefer ~72h; agent-heavy
-  repositories may tighten it. Revisit with usage.
+  repositories may tighten it further. It was 24 hours until the routing defect
+  in links-claims-1b0p was fixed: while a stale claim made a checkout disown its
+  own lane and silently hop epics, the long window was armor against that
+  failure rather than a considered reading of when a claim goes cold. With the
+  defect gone, staleness means "still routed back to you first, and now
+  available to others with notice", and 6 hours of lane-wide silence — measured
+  from the holder's last event anywhere in the lane, so finishing a ticket
+  restarts the clock — is the weaker claim of activity it was always meant to
+  be. T equals the orphaned-ticket threshold in value only: separate policies
+  over separate subjects (an abandoned claim vs. an abandoned ticket), derived
+  separately, deliberately not backed by a shared constant.
 - **Takeover confirmation shape** for fresh-claim override (interactive
   confirm vs. explicit flag for non-interactive agents): decide at
   implementation; the invariant is that overriding fresh evidence is always
