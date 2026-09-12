@@ -416,7 +416,15 @@ func runListWithStore(ctx context.Context, stdout io.Writer, st storage.Store, p
 	// --at is registered so the shared parse accepts it; the store it selects was
 	// already opened by runList, so its value is not re-read here.
 	fs.String("at", "", "List a discovered store by its storage directory (from `lit stores`), read-only, instead of the current workspace")
-	status := fs.String("status", "", "Filter by status: open|in_progress|closed")
+	// StringArray, not String: the filter this feeds is a set both engines OR
+	// together, so a second --status has to widen the listing rather than
+	// silently keep the last value and drop the first.
+	// [LAW:no-silent-failure] [LAW:types-are-the-program]
+	// StringArray rather than StringSlice deliberately: pflag's slice flag would
+	// split on commas itself, leaving two splitters for one grammar. Handing the
+	// raw occurrences to model.ParseStates keeps that rule in one place, shared
+	// with the query term. [LAW:single-enforcer]
+	status := fs.StringArray("status", "Filter by status, comma-separated or repeated: open|in_progress|closed")
 	issueType := fs.String("type", "", "Filter by issue type")
 	assignee := fs.String("assignee", "", "Filter by assignee")
 	search := fs.String("search", "", "Search title and description text")
@@ -427,7 +435,7 @@ func runListWithStore(ctx context.Context, stdout io.Writer, st storage.Store, p
 	includeDeleted := fs.Bool("include-deleted", false, "Include deleted issues")
 	updatedAfter := fs.String("updated-after", "", "Only include issues updated at or after RFC3339 timestamp")
 	updatedBefore := fs.String("updated-before", "", "Only include issues updated at or before RFC3339 timestamp")
-	queryExpr := fs.String("query", "", "Query language: status:in_progress resolution:wontfix type:task has:comments sort:rank:asc limit:5 archived deleted text")
+	queryExpr := fs.String("query", "", "Query language: status:closed,in_progress resolution:wontfix type:task has:comments sort:rank:asc limit:5 archived deleted text")
 	sortExpr := fs.String("sort", "", "Sort fields, e.g. rank:asc,updated_at:desc")
 	columnsExpr := fs.String("columns", "", columnsFlagUsage())
 	format := fs.String("format", "lines", "Output format: lines|table")
@@ -444,7 +452,7 @@ func runListWithStore(ctx context.Context, stdout io.Writer, st storage.Store, p
 	}
 	visited := map[string]bool{}
 	fs.Visit(func(f *pflag.Flag) { visited[f.Name] = true })
-	statuses, err := parseStateSlice(strings.TrimSpace(*status))
+	statuses, err := model.ParseStates(*status...)
 	if err != nil {
 		return fmt.Errorf("parse --status: %w", err)
 	}
@@ -1907,17 +1915,6 @@ func writeJSON(w io.Writer, v any) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
-}
-
-func parseStateSlice(s string) ([]model.State, error) {
-	if strings.TrimSpace(s) == "" {
-		return nil, nil
-	}
-	state, err := model.ParseState(s)
-	if err != nil {
-		return nil, err
-	}
-	return []model.State{state}, nil
 }
 
 // parseIssueTypeSlice is the strict trust boundary for the read-path --type

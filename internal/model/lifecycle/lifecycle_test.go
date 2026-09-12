@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"reflect"
 	"testing"
 	"time"
 )
@@ -427,6 +428,65 @@ func TestParseStateNormalizes(t *testing.T) {
 		}
 		if got != tt.want {
 			t.Fatalf("ParseState(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+// ParseStates is the one place a status set is spelled out, so both the
+// `--status` flag and the query grammar's `status:` term inherit exactly these
+// answers. The two spellings of a set — one comma-joined argument and repeated
+// arguments — must land on the same slice, because that is the whole reason
+// both callers share this function rather than splitting on their own.
+func TestParseStatesAcceptsBothSpellingsOfASet(t *testing.T) {
+	tests := []struct {
+		name   string
+		inputs []string
+		want   []State
+	}{
+		{"absent", nil, nil},
+		{"one value", []string{"open"}, []State{Open}},
+		{"comma-joined", []string{"closed,in_progress"}, []State{Closed, InProgress}},
+		{"repeated", []string{"closed", "in_progress"}, []State{Closed, InProgress}},
+		{"repeated and comma-joined together", []string{"closed,in_progress", "open"}, []State{Closed, InProgress, Open}},
+		{"normalizing per fragment", []string{" CLOSED , in-progress "}, []State{Closed, InProgress}},
+		// Order is the caller's, preserved as given: the store ORs the set, so
+		// this pins that nothing here sorts or reorders behind the caller's back.
+		{"caller order preserved", []string{"in_progress,open,closed"}, []State{InProgress, Open, Closed}},
+		// Repeats survive: the store's allow-map absorbs them, and deduping here
+		// would be a third copy of a rule two other layers already apply.
+		{"repeats pass through", []string{"open,open"}, []State{Open, Open}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseStates(tt.inputs...)
+			if err != nil {
+				t.Fatalf("ParseStates(%q) error = %v", tt.inputs, err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("ParseStates(%q) = %#v, want %#v", tt.inputs, got, tt.want)
+			}
+		})
+	}
+}
+
+// Every fragment goes through the sealed gate and none is skipped, so a typo
+// anywhere in a set is loud. Without this, `--status open,todo` would narrow to
+// `open` and `status:` would mean "no status filter" — each returning a listing
+// shaped exactly like a real answer while quietly meaning something else.
+// [LAW:no-silent-failure]
+func TestParseStatesRejectsAnyBadFragment(t *testing.T) {
+	for _, inputs := range [][]string{
+		{"todo"},
+		{"open,todo"},    // a good fragment must not launder a bad one
+		{"todo,open"},    // nor in the other order
+		{"open", "todo"}, // nor across repeated arguments
+		{""},             // `status:` with nothing after it
+		{"open,"},        // a trailing comma is a dropped value, not an empty set
+		{","},            //
+		{"open,,closed"}, // nor a hole in the middle
+	} {
+		if _, err := ParseStates(inputs...); err == nil {
+			t.Fatalf("ParseStates(%q) expected error, got none", inputs)
 		}
 	}
 }

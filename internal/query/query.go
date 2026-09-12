@@ -30,15 +30,11 @@ func Parse(input string) (ParseResult, error) {
 
 func Merge(base storage.ListIssuesFilter, incoming storage.ListIssuesFilter) (storage.ListIssuesFilter, error) {
 	filter := base
-	normalizedBase, err := normalizeQueryStatuses(filter.Statuses)
-	if err != nil {
-		return storage.ListIssuesFilter{}, err
-	}
-	normalizedIncoming, err := normalizeQueryStatuses(incoming.Statuses)
-	if err != nil {
-		return storage.ListIssuesFilter{}, err
-	}
-	filter.Statuses = mergeSlice(normalizedBase, normalizedIncoming)
+	// [LAW:parse-dont-validate] Both sides are already []model.State — a type
+	// only model.ParseStates can mint — so statuses merge like every other
+	// filter slice. The re-parse that used to stand here asked a question the
+	// element type had already answered at the flag and grammar boundaries.
+	filter.Statuses = mergeSlice(filter.Statuses, incoming.Statuses)
 	// Resolution filtering is OR within the set, so duplicates are absorbed by the
 	// allow-map in the store; a plain append needs no dedup.
 	filter.Resolutions = append(filter.Resolutions, incoming.Resolutions...)
@@ -76,11 +72,15 @@ func Merge(base storage.ListIssuesFilter, incoming storage.ListIssuesFilter) (st
 func applyTerm(filter *storage.ListIssuesFilter, term string) error {
 	switch {
 	case strings.HasPrefix(term, "status:"):
-		parsed, err := model.ParseState(strings.TrimPrefix(term, "status:"))
+		// [LAW:one-source-of-truth] The status: term and the --status flag both
+		// route through the one model.ParseStates, exactly as sort: and --sort
+		// share ParseSortSpecs; the query grammar owns no second copy of what a
+		// comma-separated state set means.
+		parsed, err := model.ParseStates(strings.TrimPrefix(term, "status:"))
 		if err != nil {
 			return err
 		}
-		filter.Statuses = append(filter.Statuses, parsed)
+		filter.Statuses = append(filter.Statuses, parsed...)
 		return nil
 	case strings.HasPrefix(term, "resolution:"):
 		// [LAW:single-enforcer] The sealed resolution set is gated by the one
@@ -161,24 +161,6 @@ func applyTerm(filter *storage.ListIssuesFilter, term string) error {
 		filter.SearchTerms = append(filter.SearchTerms, term)
 		return nil
 	}
-}
-
-func normalizeQueryStatuses(statuses []model.State) ([]model.State, error) {
-	// [LAW:one-source-of-truth] Preserve nil for "no status filter" so the merged
-	// filter matches the flag path's nil rather than diverging as an empty slice —
-	// the two grammars must produce byte-identical filters.
-	if len(statuses) == 0 {
-		return nil, nil
-	}
-	result := make([]model.State, 0, len(statuses))
-	for _, s := range statuses {
-		parsed, err := model.ParseState(string(s))
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, parsed)
-	}
-	return result, nil
 }
 
 // mergeSlice appends incoming onto base, dropping values base already carries.

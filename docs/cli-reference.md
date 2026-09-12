@@ -128,9 +128,12 @@ rows the view answers over (see `lit label add` / `lit label rm`), and each run 
 what it is listing on its own line, just before the separator that opens the row list
 — so completeness is read there, not assumed here. `--all` lifts the scope for one run.
 
-`--status` accepts exactly `open` or `in_progress` on the workable commands
+`--status` accepts exactly one of `open` or `in_progress` on the workable commands
 (`backlog`, `next`); anything else — including `closed`, which could only ever match
-nothing — is a usage error (exit 2) naming the legal values.
+nothing — is a usage error (exit 2) naming the legal values. This is narrower than
+`lit ls --status`, which takes a set, and deliberately: a workable row can only be
+`open` or `in_progress`, so the only set these commands could add is both of them,
+which is already what they list when the flag is absent.
 
 `--columns` takes the same vocabulary `lit ls` documents below and rejects an unknown
 name the same way, exit 2. Here the rejection lands ahead of the sync-staleness
@@ -205,7 +208,7 @@ needs someone to finish or release it.
 ### `lit ls`
 
 ```text
-lit ls [--at <store-dir>] [--ids <csv>] [--search <text>] [--query <q>] [--status open|in_progress|closed]
+lit ls [--at <store-dir>] [--ids <csv>] [--search <text>] [--query <q>] [--status <csv of open|in_progress|closed>]
        [--type <t>] [--labels <csv>] [--assignee <a>] [--has-comments]
        [--updated-after <rfc3339>] [--updated-before <rfc3339>]
        [--include-archived] [--include-deleted]
@@ -224,7 +227,8 @@ former `lit ls-at`; an old `lit ls-at <dir>` invocation returns a pointer to
 text; `--query` is a compact query language combining filters and text (e.g.
 `status:in_progress type:task has:comments login`). It is a strict superset of the
 discrete filter and list-shaping flags: every flag above has an equivalent token, so
-`--query` alone can express any filter. The token spellings are `status:`,
+`--query` alone can express any filter. The token spellings are `status:` (e.g.
+`status:closed,in_progress`, comma-separate multiple states),
 `resolution:`, `type:`, `assignee:`, `id:`, `label:`, `has:comments`,
 `updated>=`/`updated<=`, `sort:` (e.g. `sort:rank:asc`, comma-separate multiple keys),
 `limit:` (e.g. `limit:5`), and the bare keywords `archived` and `deleted` (the
@@ -232,6 +236,14 @@ discrete filter and list-shaping flags: every flag above has an equivalent token
 recognized token is a search term. Archived and deleted issues are hidden unless
 explicitly included. Output-shaping flags (`--columns`, `--format`) have no token —
 they are not filter concerns.
+
+`--status` takes a set, not one state: `--status closed,in_progress` and the
+repeated `--status closed --status in_progress` are the same request, and both
+return one listing spanning both buckets in a single ordering rather than two
+listings the caller merges by hand. The query term widens the same way
+(`--query "status:closed,in_progress"`), because the flag and the token share one
+parser. Every member must be a legal state — a typo anywhere in the set, or an
+empty value, is an error, never a silently narrower listing.
 
 `--columns` projects a chosen subset, default `id,state,topic,title`. Beyond the
 issue's own fields (`id`, `state`, `type`, `topic`, `priority`, `rank`, `title`,

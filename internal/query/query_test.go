@@ -32,6 +32,10 @@ func TestQueryTokenSupersetOfDiscreteFlags(t *testing.T) {
 		want  storage.ListIssuesFilter
 	}{
 		{"status", "--status open", "status:open", storage.ListIssuesFilter{Statuses: []model.State{model.StateOpen}}},
+		// The superset claim has to hold at every arity, not just one value. Both
+		// spellings route through model.ParseStates, so this row fails the moment
+		// one grammar grows a comma rule the other does not.
+		{"status set", "--status closed,in_progress", "status:closed,in_progress", storage.ListIssuesFilter{Statuses: []model.State{model.StateClosed, model.StateInProgress}}},
 		{"type", "--type task", "type:task", storage.ListIssuesFilter{IssueTypes: []model.IssueType{model.TypeTask}}},
 		{"assignee", "--assignee bmf", "assignee:bmf", storage.ListIssuesFilter{Assignees: []string{"bmf"}}},
 		{"search", "--search login", "login", storage.ListIssuesFilter{SearchTerms: []string{"login"}}},

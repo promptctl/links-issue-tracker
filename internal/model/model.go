@@ -63,6 +63,7 @@ const (
 
 var (
 	ParseState      = lifecycle.ParseState
+	ParseStates     = lifecycle.ParseStates
 	ParseAction     = lifecycle.ParseAction
 	Actions         = lifecycle.Actions
 	DefaultOpen     = lifecycle.DefaultOpen

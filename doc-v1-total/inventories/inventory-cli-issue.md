@@ -357,7 +357,8 @@ prefix (`cli.go:1036-1042`).
 - CLI parse-boundary wrappers: `parseIssueTypeFlag` and `parsePriorityFlag` wrap
   failures in `ValidationError` → exit 3 (`cli.go:1836-1854`);
   `parseIssueTypeSlice` (read path `--type`) returns the bare model error
-  (`cli.go:1821-1830`); `parseStateSlice` likewise (`cli.go:1806-1815`).
+  (`cli.go:1821-1830`); the read path `--status` returns the bare model error
+  from `model.ParseStates` (`internal/model/lifecycle/lifecycle.go`).
 - `issueTypeChoices()` renders `task|feature|bug|chore|epic` into flag help
   (`cli.go:1859-1866`).
 - `splitCSV` splits on `,`, trims each part, drops empties, returns nil for a
@@ -542,7 +543,7 @@ else ready.
 | Flag | Type | Default | Effect |
 |---|---|---|---|
 | `--at` | string | `""` | Registered so the shared parse accepts it; value already consumed by `runList` and *not re-read* (`cli.go:506-508`) |
-| `--status` | string | `""` | Single state via `parseStateSlice`; error wrapped `parse --status: %w` (`cli.go:530-532`) |
+| `--status` | string array | `nil` | State set via `model.ParseStates` — comma-separated and/or repeated, every fragment parsed; error wrapped `parse --status: %w` |
 | `--type` | string | `""` | Single issue type via `parseIssueTypeSlice`; error wrapped `parse --type: %w` (`cli.go:534-537`) |
 | `--assignee` | string | `""` | Trimmed, single-element `Assignees` (`cli.go:541`) |
 | `--search` | string | `""` | Appended to `SearchTerms` **only if the flag was visited** (`cli.go:555-557`) |
@@ -570,7 +571,7 @@ else ready.
 **`--query` grammar** (`internal/query/query.go`):
 - Tokenizer honors single and double quotes; an unterminated quote →
   `"unterminated quote in query"` (`query.go:241-274`).
-- Terms (`query.go:76-164`): `status:<state>`, `resolution:<res>`, `type:<type>`,
+- Terms (`query.go:76-164`): `status:<state>[,<state>...]`, `resolution:<res>`, `type:<type>`,
   `assignee:<v>`, `id:<v>`, `label:<v>`, `has:comments` (any other `has:` →
   `unsupported has: filter %q`), `sort:<spec>`, `limit:<int>` (non-numeric →
   `limit must be an integer, got %q`; negative → `limit must be non-negative,
