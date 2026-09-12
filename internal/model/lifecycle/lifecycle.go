@@ -108,6 +108,43 @@ func ParseState(value string) (State, error) {
 	}
 }
 
+// ParseStates turns however a caller spelled a set of states into the set the
+// storage filter ORs together: a comma list (`--status closed,in_progress`,
+// `status:closed,in_progress`), a repeated flag, or both at once. No inputs is
+// the empty set — the shape an absent flag already has — so "no narrowing"
+// needs no encoding of its own.
+//
+// [LAW:single-enforcer] Comma-splitting a status set lives here and nowhere
+// else. The `--status` flag and the query grammar's `status:` term are two
+// spellings of one question, and the day they own separate splitters is the day
+// they disagree about what a set looks like — which is the defect this
+// replaced, where the flag silently kept the last value and the query rejected
+// the comma outright.
+// [LAW:dataflow-not-control-flow] Widening is a longer slice, never a second
+// code path: one state and three states leave here as the same type, and every
+// stage downstream already ORs whatever it is handed.
+// [LAW:no-silent-failure] Every fragment goes through the sealed ParseState
+// gate and nothing is skipped, so `status:`, `--status ,` and `--status open,`
+// stay the loud errors they were rather than degrading into "no status filter"
+// and handing back the default listing wearing the shape of an answer.
+func ParseStates(inputs ...string) ([]State, error) {
+	var out []State
+	for _, input := range inputs {
+		for _, field := range strings.Split(input, ",") {
+			state, err := ParseState(field)
+			if err != nil {
+				return nil, err
+			}
+			// No dedup: the store builds an allow-map from this slice, so a
+			// repeat is already absorbed, and query.Merge dedups across the two
+			// grammars. A third copy of that rule here would be one more thing
+			// to keep in agreement.
+			out = append(out, state)
+		}
+	}
+	return out, nil
+}
+
 // DefaultOpen parses a state, defaulting to Open for blank or unrecognized
 // input. Use this for lenient boundaries (import, hydration, storage) where
 // the data may be absent or legacy. Strict boundaries (CLI flags, query

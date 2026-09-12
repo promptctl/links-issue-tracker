@@ -1135,7 +1135,7 @@ A listing that says nothing about retention sees only live issues
 
 | Term prefix | Behavior | Cites |
 |---|---|---|
-| `status:<v>` | `model.ParseState` (lowercased, `in-progress` alias); appended to `Statuses`; parse error propagates | `:78-84` |
+| `status:<v>[,<v>...]` | `model.ParseStates` (comma-split, each fragment lowercased with the `in-progress` alias); appended to `Statuses`; parse error propagates | `:78-84` |
 | `resolution:<v>` | `model.ParseResolution` (trim only); appended to `Resolutions` | `:85-94` |
 | `type:<v>` | `model.ParseIssueType`; appended to `IssueTypes`; a typo is an error, never an empty result | `:95-104` |
 | `assignee:<v>` | value trimmed, appended to `Assignees` (no validation, empty allowed) | `:105-107` |
@@ -1175,8 +1175,9 @@ Pinned by: `TestQueryTokenSupersetOfDiscreteFlags` (`query_test.go:21`),
   `updated supports only >=, >, <=, <` (`:222-223`).
 
 ## 9.4 `Merge(base, incoming storage.ListIssuesFilter) (storage.ListIssuesFilter, error)` — `query.go:31-74`
-- `Statuses`: both sides re-validated through `normalizeQueryStatuses`, then
-  dedup-merged (`:33-41`).
+- `Statuses`: dedup-merged, no re-validation — both sides are already
+  `[]model.State`, minted by `model.ParseStates` at the flag and grammar
+  boundaries.
 - `Resolutions`: plain append, no dedup (duplicates are absorbed downstream by
   the store's allow-map) (`:42-44`).
 - `IssueTypes`, `Assignees`: dedup-merged (`:45-46`).
@@ -1198,10 +1199,10 @@ Pinned by: `TestQueryTokenSupersetOfDiscreteFlags` (`query_test.go:21`),
 - Pinned by `TestMergeMultipleStatusesCombines`, `query_test.go:180`.
 
 ## 9.5 Helpers
-- `normalizeQueryStatuses([]model.State) ([]model.State, error)` — `query.go:166-182`:
-  an empty/nil input returns **nil** (preserving "no status filter" so query and
-  flag paths produce byte-identical filters); otherwise each element is
-  re-parsed through `model.ParseState`, propagating errors.
+- Statuses merge through `mergeSlice` like every other filter slice. Both sides
+  are already `[]model.State`, a type only `model.ParseStates` mints at the flag
+  and grammar boundaries, so `Merge` re-parses nothing; nil survives as nil
+  because `mergeSlice` returns `base` untouched when `incoming` is empty.
 - `mergeSlice[T comparable](base, incoming []T) []T` — `query.go:187-203`: if
   `incoming` is empty, returns `base` unchanged (nil stays nil); otherwise
   returns a new slice = base plus incoming values not already present in base.
