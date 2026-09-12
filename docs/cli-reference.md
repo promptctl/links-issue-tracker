@@ -143,8 +143,9 @@ lines: `depends on:` names the still-open dependencies as concrete blocker ids, 
 `blocked:` carries the other three. A ticket held up by nothing but a dependency
 therefore prints `blocked` in the column with a `depends on:` line under it and no
 `blocked:` line at all. `lit ls --columns blocked` reads that same verdict and so
-answers the same question; what stays particular to `backlog` is the context block,
-which is where the reason is named.
+answers the same question — except over a foreign store, where `lit ls --at <dir>`
+evaluates three of the four reasons (see `lit ls` below); what stays particular to
+`backlog` is the context block, which is where the reason is named.
 
 ### `lit next`
 
@@ -215,7 +216,9 @@ lit ls [--at <store-dir>] [--ids <csv>] [--search <text>] [--query <q>] [--statu
 General-purpose listing, ranked by default. `--at <store-dir>` points `ls` at a
 discovered store by its storage directory (a path from `lit stores`), read-only,
 without depending on the current directory being a lit workspace — every filter,
-sort, column, and format below applies to that foreign store. This is the folded-in
+sort, column, and format below applies to that foreign store, with one narrowing:
+the `blocked` column evaluates three of its four reasons across a store boundary,
+described with that column below. This is the folded-in
 former `lit ls-at`; an old `lit ls-at <dir>` invocation returns a pointer to
 `lit ls --at <dir>`. `--search` matches title and description
 text; `--query` is a compact query language combining filters and text (e.g.
