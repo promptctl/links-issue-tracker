@@ -133,7 +133,7 @@ There are **no wildcards, globs, regexes, or negation** anywhere in matching; th
 - A write failure aborts and propagates as the command's error; since that is the only error path, in practice a workflow can never fail a command, and a malformed file degrades to a load warning rather than breaking any invocation.
 - Load warnings are deliberately never printed by dispatch (so authoring diagnostics don't appear on every command); they surface only in `lit workflows` (`dispatch.go:48-59`).
 - A trace-write failure never fails dispatch: the guidance was already written, and the failure goes to stderr as `lit: workflow firing trace could not be recorded (<err>); guidance was still injected` (`dispatch.go:68-72`).
-- Exit codes are unaffected by workflow firing. (The general CLI mapping, for reference: 0 OK, 1 generic, 2 usage, 3 validation, 4 not-found, 5 conflict, 7 corruption — `internal/cli/exit.go:10-18`.)
+- Exit codes are unaffected by workflow firing. The general CLI mapping is the exit-code table in `06-issue-commands.md`, which is where it is maintained; restating it here is what let this line drift to a set missing exit 6.
 
 ## Firing traces
 
