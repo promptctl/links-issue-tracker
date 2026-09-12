@@ -61,8 +61,8 @@ func resolveBuildStatusNote(now time.Time) string {
 	return buildStatusNote(info, now)
 }
 
-// buildStalenessLines renders the rare, loud warning that the decision about to
-// be printed is being made by a binary its own working tree has moved past —
+// buildStalenessLines renders the rare, loud warning that the answer about to
+// be printed is being produced by a binary its own working tree has moved past —
 // the links-build-status-1svs surface. Zero or one line, in the shape and voice
 // syncStalenessLines uses, because build drift is drift of the same kind as an
 // unpushed commit or an unfetched remote and earns the same position: first on
@@ -82,8 +82,15 @@ func buildStalenessLines(info version.Info, now time.Time) []string {
 	if !stale {
 		return nil
 	}
+	// One banner serves three call sites — `lit next`, `lit backlog` and the
+	// full-detail `lit show` — so every claim it makes has to hold at all
+	// three. It named "the routing behind this answer" until review caught
+	// that `lit show <id>` routes nothing: the caller names the ticket, so the
+	// line described two of its sites and invented a concern on the third. It
+	// names the binary and the answer, never the work behind the answer.
+	// [LAW:one-source-of-truth] one claim, one meaning, at every site it reaches.
 	return []string{fmt.Sprintf(
-		"build: this binary was built %s ago (over %s) — it may predate fixes already on master, including the routing behind this answer; run `just install` to refresh",
+		"build: this binary was built %s ago (over %s) — the answer below may predate fixes already on master; run `just install` to refresh",
 		humanizeCoarseDuration(age), humanizeCoarseDuration(version.StaleBuildThreshold),
 	)}
 }

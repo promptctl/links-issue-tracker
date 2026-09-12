@@ -982,9 +982,9 @@ Output lines:
 
 `resolveBuildStatusNote(now)` — `build_status.go:56-62`: `version.Get()` failure yields `build: status unavailable (<err>)` rather than aborting the caller.
 
-`buildStalenessLines(info, now)` — `build_status.go:80-89`: zero or one line, the rare loud banner for the ordinary read commands. Only for a stale source build → `build: this binary was built <age> ago (over <threshold>) — it may predate fixes already on master, including the routing behind this answer; run \`just install\` to refresh`. A release build at any age, a fresh source build, and a source build with no trustworthy date all render nothing. Pure over its inputs.
+`buildStalenessLines(info, now)` — `build_status.go:80-96`: zero or one line, the rare loud banner for the ordinary read commands. Only for a stale source build → `build: this binary was built <age> ago (over <threshold>) — the answer below may predate fixes already on master; run \`just install\` to refresh`. A release build at any age, a fresh source build, and a source build with no trustworthy date all render nothing. Pure over its inputs.
 
-`resolveBuildStalenessLines(now)` — `build_status.go:101-110`: a `version.Get()` failure is announced here rather than swallowed → `build: this binary cannot report its own identity (<err>) — its age and provenance are unknown`, since a binary that cannot account for itself is worse news than the stale one the banner exists to report.
+`resolveBuildStalenessLines(now)` — `build_status.go:108-117`: a `version.Get()` failure is announced here rather than swallowed → `build: this binary cannot report its own identity (<err>) — its age and provenance are unknown`, since a binary that cannot account for itself is worse news than the stale one the banner exists to report.
 
 Consumers: `lit init` human output and its adopt progress line (`init.go:143`, `init_sync.go:130`), the init sync trace (`init_sync.go:351`), `lit doctor`'s second output line (`doctor.go:296`), every `SyncFailure.BuildNote` boundary (`sync_failure.go:139`, `sync.go:294`, `sync_receive.go:139`, `doctor.go:82`, `sync_reconcile_cmd.go:467`), and every sync trace record (`sync_trace.go:112`, `:143`, etc.).
 
