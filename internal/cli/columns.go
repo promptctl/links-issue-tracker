@@ -56,9 +56,17 @@ type columnSpec struct {
 // the two surfaces (links-columns-4hdq). A bool had no way to say the column
 // was under-served, so nothing failed; the cell just quietly meant less.
 // [LAW:types-are-the-program] the ladder is the strongest true theorem about
-// this domain — three levels, strictly ordered — and it makes "a column served
-// less data than its cell is computed from" unrepresentable rather than merely
-// absent today.
+// this domain — three levels, strictly ordered — and it moves the guarantee off
+// the loader and onto the declaration: given what each column declares,
+// columnSourceFor makes "served less than the projection's maximum rung"
+// unrepresentable rather than merely absent today.
+//
+// Be precise about what that does NOT cover: the type cannot check that a
+// column declares the RIGHT rung. Writing `source: sourceRelations` on `blocked`
+// compiles cleanly and reinstates this exact bug, so the compiler is not the
+// thing standing between the repo and a regression here — TestColumnSourceLadder
+// is, alongside both blocked-column agreement tests. Verified by mutation: that
+// one-word downgrade builds with no error and fails four tests.
 // [LAW:no-mode-explosion] a new level is a new constant here, not a new flag
 // threaded through every loader.
 type columnSource int
