@@ -47,7 +47,7 @@ lit tracks tickets, not GitHub PRs, so no lit command will surface one.  Two che
 **This branch.**
 
 ```
-gh pr list --head "$(git branch --show-current)" --state open
+gh pr list --head "$(git branch --show-current)" --state open --limit 1000
 ```
 
 A PR here is your ticket.  Skip the selection steps and work it through `/memento:address-pr-reviews` — a globally installed skill, not one this repo ships, so don't go looking for it in the tree; if it isn't installed, work the review threads to a clean, merged close-out by hand.  Then pick up the working steps under "Working the ticket".
@@ -55,7 +55,7 @@ A PR here is your ticket.  Skip the selection steps and work it through `/mement
 **Your PRs elsewhere.**
 
 ```
-gh pr list --author @me --state open
+gh pr list --author @me --state open --limit 1000
 ```
 
 A fresh session sitting on the trunk has no head branch to match, so the branch check alone reports nothing and the wrap-up rule never fires — you start new work on top of your own unfinished PR and find out at merge time.
@@ -106,15 +106,19 @@ However you arrived at a ticket — uncommitted work, an open PR, an orphan, or 
    - **Does an older open PR touch the files this ticket will touch?** Rebuilding on top of stale code risks merge conflicts you cannot untangle later.
 
      ```
-     gh pr list --state open --json number,headRefName,title,files \
-       --jq '.[] | select(.headRefName | test("^<ticket-id>($|[_/])") | not) | "\(.number) \(.headRefName) :: \(.files | map(.path) | join(", "))"'
+     gh pr list --state open --limit 1000 --json number,headRefName,title,files \
+       --jq '.[] | select(.headRefName | . == "<ticket-id>" or startswith("<ticket-id>_") or startswith("<ticket-id>/") | not) | "\(.number) \(.headRefName) :: \(.files | map(.path) | join(", "))"'
      ```
 
      The `select` drops *this ticket's own* PR, and it keys on the ticket id for a reason worth keeping.  You reach this step from every arrival path, including one where you are still standing on the previous ticket's branch — step 3 has not switched you to the trunk yet.  Filtering on the checked-out branch instead would there hide the previous ticket's open PR: the single most likely overlap, and the one the very next step warns you about building on top of.
 
-     Keep the match anchored, and keep the boundary.  A bare `startswith` would also drop a *different* ticket whose id merely begins with yours — ids are minted at a hash length that grows only as the namespace fills, so a short id and a longer one extending it can both exist — and dropping it is the one outcome this check must never produce.  `($|[_/])` ends the match at the id, and no id contains `_` or `/`, so both characters can only ever begin a slug or a path segment on your own branch.
+     Two things about that filter are load-bearing, and both look like clutter you could tidy away.
 
-     What the filter then removes is exactly your ticket's own branch and its slugged forms.  Everything else survives to be read, including a PR whose branch carries no ticket id at all — you read that one and dismiss it, which is the direction to err in.
+     It compares literal strings — an equality and two `startswith` — rather than matching a pattern.  A pattern has to be told where the id ends, and every way of saying that has been wrong once already: a bare prefix match also swallows a *longer* id that begins with yours (ids are minted at a hash length that widens only as a namespace fills, so both can exist), and a regex reads `.` as "any character", which quietly widens the match at every dot in a child ticket's id.  Literal comparison cannot be widened by anything an id contains, so it stays right as id shapes change.
+
+     `--limit 1000` is there because `gh pr list` fetches 30 by default and says nothing when it stops.  A truncated page looks exactly like a complete one, so the check would report a clean bill while the overlapping PR sat at position 31 — and this check hunts *older* PRs, which are the ones a default listing pushes off the end.
+
+     What the filter removes is your ticket's own branch and its slugged forms.  Everything else survives to be read, including a PR whose branch carries no ticket id at all — you read that one and dismiss it, which is the direction to err in.
 
      If a *different* PR overlaps, surface it to the user with both the ticket and PR references before starting, rather than silently building over it.
    - Don't paper over ambiguity with assumptions — confirm scope first.
