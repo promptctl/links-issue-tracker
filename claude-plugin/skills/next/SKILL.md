@@ -60,11 +60,13 @@ gh pr list --author @me --state open
 
 A fresh session sitting on the trunk has no head branch to match, so the branch check alone reports nothing and the wrap-up rule never fires — you start new work on top of your own unfinished PR and find out at merge time.
 
-These are candidates, not assignments.  One `gh` account is shared by every checkout on the machine and by the human, so a PR authored by `@me` may belong to a checkout that is actively working it right now.  Before adopting one, take the ticket id from its branch name and check who holds that lane: `lit backlog` prints the holder and how stale the claim is.  A lane another checkout holds fresh is theirs — leave it, say so, and move on.
+These are candidates, not assignments, and there may be several — every checkout on this machine shares the one `gh` account, so each of them can have left a PR behind here.  Classify the whole list before you act on any of it; an agent that starts merging partway down a list rarely comes back for the tail, and the one it walks past is the one the next session picks up instead of its own work.
+
+For each PR the query returned, take the ticket id from its branch name and check who holds that lane: `lit backlog` prints the holder and how stale the claim is.  A lane another checkout holds fresh is theirs — leave it, say so, and move on.
 
 A branch whose name carries no ticket id at all — someone's typo fix, a hand-cut experiment — is not lit-tracked work, so there is no lane to look up and nothing here for you to adopt.  Leave it where it is.
 
-A lane nobody holds, or one whose claim has gone stale, is yours to wrap up, and wrapping up means the same thing it meant above: check that branch out, treat its ticket as the one you now hold, and take it through `/memento:address-pr-reviews` to a merged close-out.  Then pick up the working steps under "Working the ticket".  Finish it before you pull anything new — a PR you leave open here is the one the next session finds and wraps up instead of its own work.
+Every lane nobody holds, or whose claim has gone stale, is yours to wrap up, and wrapping up means the same thing it meant above: check that branch out, treat its ticket as the one you now hold, take it through `/memento:address-pr-reviews` to a merged close-out, then the working steps under "Working the ticket".  Work them one at a time, and do not pull new work until the last one is closed out.
 
 **If nothing is in flight,** proceed to "Pull new work" below.  Open PRs stay relevant after that — an older one may touch the files your new ticket touches — which is why the overlap check is a step in "Working the ticket".
 
@@ -82,7 +84,7 @@ So reach for it only when `lit next` has nothing left to give, and read which of
 
 - **`no ready work — the backlog is not empty, but nothing in it is startable here`**, naming ids.  Work exists; none of it is yours to take.  `lit orphaned` will not rescue this, and not by luck: the rows in that message are the ones held fresh by another checkout, or in flight and *not* abandoned, which is the exact complement of the stale claims `lit orphaned` lists.  Report what `lit next` named and stop.  Taking a lane another checkout holds fresh is `lit start --take`, a deliberate takeover the user directs — never your way around an empty-handed `next`.
 
-- **`no ready work in <your epic>`**, naming what blocks it.  Then every orphan on that list is in somebody else's epic, and taking one is the epic-hop the order forbids — see "What the pick means" below, which is written for this exact moment.  Report the blocker and stop.  If a cross-epic orphan looks urgent, say so and let the user direct it; do not adopt it on your own initiative.
+- **`no ready work in ...`** — the scoped answer.  Read the words straight after `no ready work`: the two above break off into a dash, and this one names a scope first — `epic(s) <ids>`, or `your claimed lane(s)` when the lane you hold has no epic over it.  Past the scope its tail is either what blocks the work or `nothing else is queued behind what's already in progress`, and both mean the same thing to you.  Every orphan on that list is outside the scope `lit next` just named, and taking one is the epic-hop the order forbids — see "What the pick means" below, which is written for this exact moment.  Report the blocker and stop.  If a cross-epic orphan looks urgent, say so and let the user direct it; do not adopt it on your own initiative.
 
 #### What the pick means
 
@@ -105,12 +107,14 @@ However you arrived at a ticket — uncommitted work, an open PR, an orphan, or 
 
      ```
      gh pr list --state open --json number,headRefName,title,files \
-       --jq '.[] | select(.headRefName | startswith("<ticket-id>") | not) | "\(.number) \(.headRefName) :: \(.files | map(.path) | join(", "))"'
+       --jq '.[] | select(.headRefName | test("^<ticket-id>($|[_/])") | not) | "\(.number) \(.headRefName) :: \(.files | map(.path) | join(", "))"'
      ```
 
      The `select` drops *this ticket's own* PR, and it keys on the ticket id for a reason worth keeping.  You reach this step from every arrival path, including one where you are still standing on the previous ticket's branch — step 3 has not switched you to the trunk yet.  Filtering on the checked-out branch instead would there hide the previous ticket's open PR: the single most likely overlap, and the one the very next step warns you about building on top of.
 
-     It fails in the safe direction.  A PR whose branch does not carry its ticket id is not recognized as this ticket's own and shows up as a candidate — a false positive you read and dismiss, never a real overlap silently swallowed.
+     Keep the match anchored, and keep the boundary.  A bare `startswith` would also drop a *different* ticket whose id merely begins with yours — ids are minted at a hash length that grows only as the namespace fills, so a short id and a longer one extending it can both exist — and dropping it is the one outcome this check must never produce.  `($|[_/])` ends the match at the id, and no id contains `_` or `/`, so both characters can only ever begin a slug or a path segment on your own branch.
+
+     What the filter then removes is exactly your ticket's own branch and its slugged forms.  Everything else survives to be read, including a PR whose branch carries no ticket id at all — you read that one and dismiss it, which is the direction to err in.
 
      If a *different* PR overlaps, surface it to the user with both the ticket and PR references before starting, rather than silently building over it.
    - Don't paper over ambiguity with assumptions — confirm scope first.
