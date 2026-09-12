@@ -52,8 +52,8 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Sync.OwnerNotifyCmd != "" {
 		t.Fatalf("expected sync.owner_notify_cmd empty by default (no channel configured), got %q", cfg.Sync.OwnerNotifyCmd)
 	}
-	if cfg.Claims.FreshnessWindow != 24*time.Hour {
-		t.Fatalf("expected claims.freshness_window=24h by default, got %s", cfg.Claims.FreshnessWindow)
+	if cfg.Claims.FreshnessWindow != 6*time.Hour {
+		t.Fatalf("expected claims.freshness_window=6h by default, got %s", cfg.Claims.FreshnessWindow)
 	}
 }
 

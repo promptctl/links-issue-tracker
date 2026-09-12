@@ -63,7 +63,7 @@ Derivation produces a **Standing** per lane, a sealed three-variant sum (`intern
 
 `Freshness{Now, Window}` travels as data — the derivation reads no clock. The single comparison is `Covers(t) = !t.Before(Now-Window)`, i.e. `t >= Now-Window`: **evidence exactly on the boundary is covered** (`internal/claims/derive.go:20-32`).
 
-The window comes from config key `claims.freshness_window`, default `"24h"` (`internal/config/config.go:228`). It is parsed as a duration *string*, deliberately not struct-tag decoded: a bare `72` would weak-decode to 72 nanoseconds, positive and passing validation, expiring every claim instantly. A non-duration value or a non-positive duration is a config error with a message naming the required form (`config.go:56-95, 262-266`). At runtime `Now` is `time.Now()` taken in `gatherClaimContext` (`internal/cli/claims_context.go:101`).
+The window comes from config key `claims.freshness_window`, default `"6h"` (`internal/config/config.go:228`). It is parsed as a duration *string*, deliberately not struct-tag decoded: a bare `72` would weak-decode to 72 nanoseconds, positive and passing validation, expiring every claim instantly. A non-duration value or a non-positive duration is a config error with a message naming the required form (`config.go:56-95, 262-266`). At runtime `Now` is `time.Now()` taken in `gatherClaimContext` (`internal/cli/claims_context.go:101`).
 
 ## Local liveness
 

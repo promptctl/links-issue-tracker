@@ -58,11 +58,11 @@ type ClaimsConfig struct {
 	// holding that lane. Past it the lane is available again, with provenance.
 	//
 	// It is the same family of staleness heuristic as the orphaned-ticket
-	// threshold, applied one level up — lane instead of ticket — and it is a
-	// heuristic for the same reason: there are no heartbeats and no liveness
-	// probes anywhere in lit, so age is the only honest evidence that a stream
-	// walked away. Repositories where humans idle over weekends may want "72h";
-	// agent-heavy ones may tighten it.
+	// threshold, one level up — lane instead of ticket — and a heuristic for the
+	// same reason: lit has no heartbeats and no liveness probes, so age is the
+	// only honest evidence that a stream walked away. [LAW:one-source-of-truth]
+	// It shares that threshold's value, not its subject (abandoned claim vs.
+	// abandoned ticket), so the two stay separate constants, free to move apart.
 	//
 	// Filled by parseFreshnessWindow rather than by struct-tag decoding, which
 	// is why the tag excludes it. Every other numeric setting in this file is a
@@ -75,7 +75,7 @@ type ClaimsConfig struct {
 
 // parseFreshnessWindow turns the raw claims.freshness_window value into a
 // duration, and it is the reason that key is not decoded by struct tag. Its wire
-// type is a duration *string* — "24h", "72h" — and viper's decode hook only
+// type is a duration *string* — "72h", "90m" — and viper's decode hook only
 // converts a string source, so a bare number silently bypasses it and weak-decodes
 // into nanoseconds. Reading the raw value as a string and parsing it here means a
 // bare `72` fails as "missing unit in duration" instead of arriving as a plausible
@@ -89,7 +89,7 @@ type ClaimsConfig struct {
 func parseFreshnessWindow(raw string) (time.Duration, error) {
 	window, err := time.ParseDuration(raw)
 	if err != nil {
-		return 0, fmt.Errorf("config: claims.freshness_window must be a duration with a unit, like \"24h\" or \"90m\" (got %q): %w", raw, err)
+		return 0, fmt.Errorf("config: claims.freshness_window must be a duration with a unit, like \"72h\" or \"90m\" (got %q): %w", raw, err)
 	}
 	if window <= 0 {
 		return 0, fmt.Errorf("config: claims.freshness_window must be positive, got %s", window)
@@ -225,7 +225,7 @@ func Load(workspaceRoot pathspec.PathSpec) (Config, error) {
 	v.SetDefault("sync.cadence", string(SyncCadenceOnChange))
 	v.SetDefault("sync.receive", true)
 	v.SetDefault("sync.owner_notify_cmd", "")
-	v.SetDefault("claims.freshness_window", "24h")
+	v.SetDefault("claims.freshness_window", "6h")
 
 	required, err := configLayers(workspaceRoot).merge(v)
 	if err != nil {

@@ -208,8 +208,8 @@ func (f Freshness) Covers(t time.Time) bool { return !t.Before(f.Now.Add(-f.Wind
 - **Boundary rule: evidence exactly on the boundary is covered** — `!t.Before(Now-Window)`, i.e. `t >= Now-Window` (`internal/claims/derive.go:25-31`).
 - `Covers` is the single place a timestamp is compared against the window (`internal/claims/derive.go:27-29`).
 
-**Configuration**: `claims.freshness_window`, default `"24h"` (`internal/config/config.go:228`). Field `ClaimsConfig.FreshnessWindow time.Duration` with `mapstructure:"-"` — deliberately NOT struct-tag decoded (`internal/config/config.go:56-74`). Parsed once by `parseFreshnessWindow` (`internal/config/config.go:262-266`):
-- `time.ParseDuration(raw)` failure → `config: claims.freshness_window must be a duration with a unit, like "24h" or "90m" (got %q): %w` (`internal/config/config.go:92`).
+**Configuration**: `claims.freshness_window`, default `"6h"` (`internal/config/config.go:228`). Field `ClaimsConfig.FreshnessWindow time.Duration` with `mapstructure:"-"` — deliberately NOT struct-tag decoded (`internal/config/config.go:56-74`). Parsed once by `parseFreshnessWindow` (`internal/config/config.go:262-266`):
+- `time.ParseDuration(raw)` failure → `config: claims.freshness_window must be a duration with a unit, like "72h" or "90m" (got %q): %w` (`internal/config/config.go:92`).
 - `window <= 0` → `config: claims.freshness_window must be positive, got %s` (`internal/config/config.go:95`).
 - The reason for string parsing: viper weak-decoding a bare `72` would land as 72 **nanoseconds**, positive and passing validation, expiring every claim instantly (`internal/config/config.go:67-72`, `internal/config/config.go:79-88`).
 

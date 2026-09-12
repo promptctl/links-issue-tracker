@@ -16,7 +16,7 @@ import (
 // [LAW:effects-at-boundaries]
 //
 // Window is the configured freshness window T (claims.freshness_window,
-// default 24h), validated positive where the config is loaded.
+// default 6h), validated positive where the config is loaded.
 type Freshness struct {
 	Now    time.Time
 	Window time.Duration
