@@ -430,7 +430,7 @@ func openStoreConnection(ctx context.Context, doltRootDir string, workspaceID st
 // This re-open is the ONE place Dolt's journal lock is acquired while the
 // commit lock is held — the inverted order this package's doc documents
 // as this site's tolerated deviation. It cannot wedge: the re-open waits at
-// most engineOpenRetryMaxElapsed (~30s) before failing the mutation loudly —
+// most engineOpenRetryMaxElapsed before failing the mutation loudly —
 // with wrapEngineOpenContention's holder guidance, from the ping that makes
 // the open (and its contention) surface here rather than at whichever query
 // runs next — strictly inside every commit-lock waiter's ~15-minute budget,
@@ -2552,31 +2552,117 @@ func ensureMasterDefaultBranch(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
+// The co-resident-holder sizing chain. Two measured facts at the root — what a
+// mirror cycle costs, and how late its cut actually lands — and every wait in
+// the store derived from them by arithmetic. [LAW:one-source-of-truth] The
+// waits used to be three hand-set round numbers (a 20s hold budget, a 30s
+// engine-open retry, 300 journal-lock attempts at 100ms) that each had to be
+// remembered into agreement; links-sync-dauk is what happens when one of them
+// is set below the cost of the work it bounds and nothing in the code can
+// notice. Change the measurements; the waits follow.
+const (
+	// mirrorCycleObservedTail is the slowest a HEALTHY mirror cycle — open,
+	// push, close — has been measured to run on a real workspace. Measured
+	// 2026-09-12 against this repo's own store, from two samples, because the
+	// one the mirror keeps for itself is censored by the very budget sized
+	// from it:
+	//
+	//   - .git/links/mirror.log, 279 cycles: min 10.6s, p50 13.2s, slowest
+	//     uncut cycle 20.0s. 44 of the 279 (15.8%) were cut at the then-20s
+	//     budget, so every cycle that would have run longer is recorded as a
+	//     cut and the log cannot show the tail. A floor, never a ceiling.
+	//   - 20 foreground `lit sync push` runs of the same store: min 9.8s,
+	//     p50 12.2s, max 17.0s. Uncensored — the foreground push shares
+	//     performSyncPush with the mirror and is deliberately unbounded — so
+	//     this is the sample the budget can honestly be sized against.
+	//
+	// The two agree within half a second at the median, which also answers the
+	// question links-sync-dauk raised off a single 6.8s foreground sample: the
+	// background path does not cost twice the foreground one. Both paths ARE
+	// the push. The engine open and close bracketing it measure ~0.3s together
+	// (`lit sync status`, same session open, no push), so the cycle's cost is
+	// the network round trip and nothing else.
+	//
+	// [FRAMING:representation] This is a map of an operation whose territory —
+	// a push against a remote holding a repository that grows — moves. Now
+	// that the budget sits above the tail instead of inside it, mirror.log's
+	// elapsed= values are uncensored and are the place to re-measure from.
+	mirrorCycleObservedTail = 20 * time.Second
+
+	// mirrorHoldStallFactor is what separates "slow" from "stalled". The hold
+	// budget exists for links-sync-pgct.11.1 — a `kex_exchange_identification`
+	// SSH hang that pinned the journal lock for as long as the remote cared to
+	// stall — and a transport that has stopped answering is not a cycle
+	// running a bit long, it is a cycle that will never end. So the budget is
+	// sized to fire at twice the slowest healthy cycle ever recorded, where
+	// the only thing on the far side is a stall. A budget set AT the cost of
+	// the work is not a safety valve; it is a scheduled failure, which is
+	// exactly the 15.8% deferral rate links-sync-dauk measured.
+	mirrorHoldStallFactor = 2
+
+	// mirrorHoldBudget is the deadline the mirror cycle runs under. The
+	// exported MirrorHoldBudget below is the variable the cli reads and the
+	// deadline regression test shrinks; this const is what it starts at, so
+	// the waits derived from it further down stay const arithmetic.
+	mirrorHoldBudget = mirrorCycleObservedTail * mirrorHoldStallFactor
+
+	// mirrorCancelLagObserved is how much longer a cut cycle keeps holding the
+	// engine after its deadline has already fired: cancellation reaches the
+	// transport, but the push does not unwind instantly. Measured 2026-09-12
+	// over the 44 cut cycles in mirror.log as elapsed-minus-budget: p50 1.3s,
+	// but 21.4s at the tail.
+	//
+	// That tail is the whole reason this constant exists rather than a round
+	// figure for "the mirror's engine close plus the waiter's retry
+	// granularity", which is what the retired 5s headroom claimed to cover and
+	// undercounted fourfold. The budget is when the cut BEGINS. The hold ends
+	// at mirrorHoldCeiling, and a waiter sized against the budget alone is
+	// sized against a number the hold does not respect.
+	mirrorCancelLagObserved = 22 * time.Second
+
+	// mirrorHoldCeiling is the longest a mirror can hold the store's engine
+	// and journal lock: its deadline plus the lag its cut takes to land. This
+	// — not the budget — is the number every co-resident waiter must outlast.
+	mirrorHoldCeiling = mirrorHoldBudget + mirrorCancelLagObserved
+
+	// coResidentWaitHeadroom is scheduling slop above the ceiling, and the one
+	// number here that is a judgment rather than a measurement — so it is
+	// pinned to something real: eight times the waiter's own retry interval
+	// (engineOpenRetryMaxInterval), which is how much of the wait can be spent
+	// asleep between polls on a machine under load. It is deliberately not
+	// folded into the steps above; slop hidden inside a measured step is how a
+	// measured step stops being measurable.
+	coResidentWaitHeadroom = 8 * engineOpenRetryMaxInterval
+
+	// coResidentHolderWait is the ONE answer to "how long does a caller wait
+	// for a co-resident holder of this store to let go" — a live write Store
+	// in this or another process, a non-lit dolt process, or the snapshot
+	// copy's LockDoltJournalExclusive hold. It is derived from the mirror's
+	// hold ceiling because the mirror IS the co-resident holder every one of
+	// these waits was sized for: a wait shorter than a legal hold does not
+	// protect anyone, it manufactures "another process is holding this
+	// workspace's Dolt store open" out of a workspace behaving exactly as
+	// designed. engineOpenRetryMaxElapsed and doltJournalRetryAttempts are
+	// both this number; neither restates it.
+	coResidentHolderWait = mirrorHoldCeiling + coResidentWaitHeadroom
+)
+
 // engineOpenRetryMaxElapsed bounds how long a write-capable engine open keeps
 // retrying while another engine holds Dolt's journal lock (DoltJournalLockPath).
-// This retry is the ONE wait for a co-resident write holder — a live write
-// Store in this or another process, a non-lit dolt process, or the snapshot
-// copy's LockDoltJournalExclusive hold — so its ~30s budget is the same
-// "how long do we wait on a co-resident holder of this store" number
-// doltJournalRetryAttempts and mirrorParentWaitTimeout size against. A
-// package variable so tests can shrink the budget without sleeping through
-// the production one.
-var engineOpenRetryMaxElapsed = 30 * time.Second
+// A package variable so tests can shrink the wait without sleeping through the
+// production one.
+var engineOpenRetryMaxElapsed = coResidentHolderWait
 
-// MirrorHoldBudget bounds one background-mirror engine session — open, push,
-// close — end to end. It lives beside engineOpenRetryMaxElapsed because the two
-// are one design: a foreground write open waits out a co-resident holder for at
-// most that budget, so the longest hold the detached mirror may impose must fit
-// inside it with headroom for the mirror's own engine close and the waiter's
-// retry granularity. A foreground command arriving the instant a mirror cycle
-// begins still opens within its own budget. [LAW:one-source-of-truth] the pair
-// is sized here, together; TestMirrorHoldBudgetFitsInsideOpenRetryBudget pins
-// the relation. The mirror's push traverses the network with no inherent bound
-// (links-sync-pgct.11.1: a hung SSH transport holds the journal lock for as
-// long as the remote cares to stall), so the bound has to be imposed from
-// outside, by the actor that owns the hold. A package variable so the mirror's
-// deadline regression test can shrink it without a 20-second wall-clock hang.
-var MirrorHoldBudget = 20 * time.Second
+// MirrorHoldBudget is the deadline one background-mirror engine session — open,
+// push, close — runs under. The mirror's push traverses the network with no
+// inherent bound, so the bound is imposed by the actor that owns the hold
+// (links-sync-pgct.11.1). It is a deadline, not a bound on the hold:
+// cancellation lands mirrorCancelLagObserved later, and mirrorHoldCeiling is
+// the number that follows from that. TestMirrorHoldBudgetExceedsObservedCycleCost
+// and TestCoResidentWaitOutlastsMirrorHoldCeiling pin both relations. A package
+// variable so the deadline regression test can shrink it without sleeping
+// through the production one.
+var MirrorHoldBudget = mirrorHoldBudget
 
 // wrapEngineOpenContention attaches operator guidance to an engine open that
 // exhausted its retry budget against a held Dolt journal lock; every other
@@ -2595,13 +2681,21 @@ func wrapEngineOpenContention(err error) error {
 	return err
 }
 
+// engineOpenRetryMaxInterval is the longest this retry sleeps between polls,
+// and so the granularity of every wait built on it: a holder that releases is
+// noticed within this much. coResidentWaitHeadroom is a multiple of it for
+// that reason — the headroom has to cover sleeping through the release, not a
+// step of the hold. [LAW:one-source-of-truth] declared once, read by the
+// backoff below and by the sizing chain above.
+const engineOpenRetryMaxInterval = time.Second
+
 // newEngineOpenBackOff builds the per-connector retry policy for write-capable
 // engine opens. Fresh instance per connector — backoff state is per-open, and
 // the connector Resets it before each engine open.
 func newEngineOpenBackOff() backoff.BackOff {
 	bo := backoff.NewExponentialBackOff()
 	bo.InitialInterval = 50 * time.Millisecond
-	bo.MaxInterval = time.Second
+	bo.MaxInterval = engineOpenRetryMaxInterval
 	bo.MaxElapsedTime = engineOpenRetryMaxElapsed
 	return bo
 }

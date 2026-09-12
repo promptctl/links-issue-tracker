@@ -86,14 +86,14 @@ Both hooks are per-`Store` instance state, not package globals (`store.go:66-81`
 
 #### 1.4 `engineOpenRetryMaxElapsed`
 
-`var engineOpenRetryMaxElapsed = 30 * time.Second` (`store.go:2607`). A package **variable**, not a const, so tests can shrink it; `engine_open_contract_test.go:53-55` sets it to `700 * time.Millisecond` and restores it in cleanup. It is `MaxElapsedTime` of the write-open backoff (`store.go:2633`).
+`var engineOpenRetryMaxElapsed = coResidentHolderWait` (`store.go:2654`), = 70s. A package **variable**, not a const, so tests can shrink it; `engine_open_contract_test.go:53-55` sets it to `700 * time.Millisecond` and restores it in cleanup. It is `MaxElapsedTime` of the write-open backoff (`store.go:2699`). `coResidentHolderWait` is a const derived from two measured facts (`store.go:2555-2647`): `mirrorCycleObservedTail` 20s × `mirrorHoldStallFactor` 2 = `mirrorHoldBudget` 40s; + `mirrorCancelLagObserved` 22s = `mirrorHoldCeiling` 62s; + `coResidentWaitHeadroom` 8s = 70s.
 
 #### 1.5 `newEngineOpenBackOff`
 
 `store.go:2629-2635`. Fresh `backoff.NewExponentialBackOff()` per connector with:
 - `InitialInterval = 50 * time.Millisecond` (`store.go:2631`)
 - `MaxInterval = time.Second` (`store.go:2632`)
-- `MaxElapsedTime = engineOpenRetryMaxElapsed` (`store.go:2633`)
+- `MaxElapsedTime = engineOpenRetryMaxElapsed` (`store.go:2699`)
 
 All other `ExponentialBackOff` fields keep library defaults. Only attached for `engineWrite` (`store.go:2660-2662`).
 
@@ -247,7 +247,7 @@ Read engines stay lazy deliberately (`store.go:372-380`).
 3. `prev.Close()`; a `context.Canceled` is tolerated, anything else → `fmt.Errorf("close prior dolt connection after reconnect: %w", err)` (`store.go:433-435`).
 4. `next.PingContext(ctx)`; failure → `fmt.Errorf("reopen dolt: %w", wrapEngineOpenContention(err))` (`store.go:436-438`).
 
-Doc: must be called under the commit lock; it is the one site where the journal lock is taken while the commit lock is held, bounded by `engineOpenRetryMaxElapsed` (~30 s) against the ~15-minute commit-lock budget (`store.go:401-424`). `reconnect` is the `connectionRotator` passed into every retry loop (`commit_lock.go:175`, `commit_lock.go:274`).
+Doc: must be called under the commit lock; it is the one site where the journal lock is taken while the commit lock is held, bounded by `engineOpenRetryMaxElapsed` (70s) against the ~15-minute commit-lock budget (`store.go:401-424`). `reconnect` is the `connectionRotator` passed into every retry loop (`commit_lock.go:175`, `commit_lock.go:274`).
 
 #### 2.9 `Close() error`
 
@@ -4921,7 +4921,7 @@ workspace → Dolt's own .dolt/noms/LOCK → commit → snapshot producer beacon
 
 A holder of an inner lock never waits on an outer one (`internal/store/doc.go:44`). Two locks sit outside the order: the sync-push lock, because every acquisition of it is a non-blocking probe so nothing ever waits on it (`internal/store/doc.go:80-84`); and the mirror liveness beacon, whose acquisitions all happen holding nothing (`internal/store/doc.go:86-98`).
 
-`internal/store/doc.go:60-71` states one tolerated deviation: a GC-contention retry rotates the store's connection mid-mutation, re-acquiring Dolt's LOCK under the held commit lock, bounded at ~30s (`engineOpenRetryMaxElapsed`) strictly inside every commit-lock waiter's ~15-minute budget.
+`internal/store/doc.go:60-71` states one tolerated deviation: a GC-contention retry rotates the store's connection mid-mutation, re-acquiring Dolt's LOCK under the held commit lock, bounded at `engineOpenRetryMaxElapsed` strictly inside every commit-lock waiter's ~15-minute budget.
 
 `internal/store/doc.go:100-111` — ONE HOME: every lit-minted lock file sits at `dirname(databasePath)`, so a `lit snapshots restore` that rotates the dolt directory cannot move the lock out from under acquirers. Three stated exceptions: the snapshot producer beacon (inside `snapshots/`), the adopt-pending marker (inside the dolt root), and Dolt's own journal `LOCK`.
 
@@ -5157,15 +5157,15 @@ Classification predicates:
 #### 6.3 Dolt's own journal lock
 
 - Path (`workspace_lock.go:351`): `filepath.Join(filepath.Clean(databasePath), doltDatabaseName, ".dolt", "noms", "LOCK")` — i.e. `<databasePath>/<doltDatabaseName>/.dolt/noms/LOCK`. This is **Dolt's** file, not lit-minted, and is the ONE HOME exception stated at the mint site (`workspace_lock.go:335-343`).
-- Budget (`workspace_lock.go:365-366`): `doltJournalRetryDelay = 100 * time.Millisecond`, `doltJournalRetryAttempts = 300` → **~30s**, matching `engineOpenRetryMaxElapsed`.
+- Budget (`workspace_lock.go:391-392`): `doltJournalRetryDelay = 100 * time.Millisecond`, `doltJournalRetryAttempts = int(coResidentHolderWait / doltJournalRetryDelay)` = 700 → **70s**. Not a figure of its own: it is `coResidentHolderWait` divided by the delay, which is the same constant `engineOpenRetryMaxElapsed` is.
 - `LockDoltJournalExclusive(ctx, databasePath)` (`workspace_lock.go:389`):
   1. `os.Stat(filepath.Dir(lockPath))` **first** — this helper contends on Dolt's lock and never mints Dolt's tree (`workspace_lock.go:391-399`). On `os.ErrNotExist` returns exactly:
      `repository not initialized with lit — run 'lit init' first` (`workspace_lock.go:402`).
      Any other stat failure returns `stat dolt journal dir: %w` (`workspace_lock.go:404`).
-  2. `acquireStoreLock(ctx, lockPath, true /*exclusive*/, 300, 100ms)`.
+  2. `acquireStoreLock(ctx, lockPath, true /*exclusive*/, 700, 100ms)`.
   3. On `ErrWorkspaceBusy`, wraps (preserving the sentinel):
      `another process is holding this workspace's Dolt store open (a background sync mirror or another lit command still running); retry: %w` (`workspace_lock.go:411`).
-- Engine-open interaction stated at `workspace_lock.go:326-333` and `internal/store/doc.go:46-57`: a **read** engine opens lazily at first SQL, attempts the journal lock for **100ms**, and falls back to Dolt's read-only mode; a **write** engine opens eagerly inside `openStoreConnection`, **refuses** the read-only fallback, and retries boundedly (~30s, `engineOpenRetryMaxElapsed`). A live write Store holds the journal lock for its entire lifetime.
+- Engine-open interaction stated at `workspace_lock.go:326-333` and `internal/store/doc.go:46-57`: a **read** engine opens lazily at first SQL, attempts the journal lock for **100ms**, and falls back to Dolt's read-only mode; a **write** engine opens eagerly inside `openStoreConnection`, **refuses** the read-only fallback, and retries boundedly (`engineOpenRetryMaxElapsed`, 70s). A live write Store holds the journal lock for its entire lifetime.
 - `workspace_lock.go:384-388` records the one lifecycle write this hold does not stop: `journal.idx` is opened `O_RDWR` and truncated on every engine bootstrap with no can-write gate, so a snapshot copy can capture a torn index; Dolt's `corruptIndexRecovery` truncates it to zero and rebuilds from the journal on next open.
 
 ---

@@ -63,7 +63,7 @@
 // or not at all. One deviation is tolerated, not copied: a GC-contention
 // retry rotates the store's connection mid-mutation, re-acquiring LOCK
 // under the held commit lock. It cannot wedge — the re-open's wait is
-// bounded (~30s, engineOpenRetryMaxElapsed) strictly inside every
+// bounded (engineOpenRetryMaxElapsed) strictly inside every
 // commit-lock waiter's ~15-minute budget, so the inverted edge always
 // breaks by the re-open failing the mutation loudly — and the bound is the
 // tolerance's whole justification; see Store.reconnect. (The one write

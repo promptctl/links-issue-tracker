@@ -315,8 +315,14 @@ func teardownMirror(ws workspace.Info, cause error, stopAnswering func()) error 
 // The whole session runs under store.MirrorHoldBudget. The push crosses the
 // network while this process holds the store's one read-write engine (and its
 // journal lock), and nothing on the transport side bounds how long a hung
-// remote can stall it — so the bound is imposed here, by the holder
-// (links-sync-pgct.11.1). The deadline must wrap the ctx the session is OPENED
+// remote can stall it — so the deadline is imposed here, by the holder
+// (links-sync-pgct.11.1). It is a deadline and not the hold's end: measured
+// over 44 cut cycles, cancellation reaches the transport but the push takes
+// another 1.3s at the median and 21.4s at the tail to unwind, which is why the
+// store's mirrorHoldCeiling rather than this budget is what every co-resident
+// waiter is sized against (links-sync-dauk).
+//
+// The deadline must wrap the ctx the session is OPENED
 // with, not just the push's: the embedded driver builds the connection's
 // execution context at Connect, and only a deadline present there reaches the
 // engine's git subprocesses; a per-query deadline is inert.
@@ -379,9 +385,25 @@ func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnsw
 // own record, mirrorCycle joining it to a could-not-attempt failure — say it
 // through this function, so the durable trail names the budget identically
 // wherever the cut landed. [LAW:one-source-of-truth]
+//
+// It refuses to name a cause, and that refusal is the point. A deadline knows
+// only that the work ran long; the previous wording turned that into "a hung
+// or slow remote transport", a diagnosis nothing had observed, and it read as
+// environmental and transient — something to retry past rather than a defect
+// to file. links-sync-dauk is the bill: with the budget sized under the
+// operation's own cost, 15.8% of cycles were cut, the condition was hit three
+// times in one session, and each time the message sent the reader hunting a
+// network fault that was not there. So the text names what the deadline
+// actually established, names both causes that land here, and points at the
+// evidence that separates them. [FRAMING:representation] a message that
+// asserts more than its signal carries is a map of a territory nobody visited.
+//
+// Order matters as much as content: the FAILING banner prints this through
+// oneLineReason, which keeps the first line and caps it at 160 runes, so the
+// honest framing has to arrive before the truncation rather than after it.
 func holdBudgetCutExplanation() error {
 	return fmt.Errorf(
-		"mirror cycle exceeded its %s hold budget (a hung or slow remote transport while holding the store's engine); the engine was released so foreground commands can proceed, and the next mutation's mirror retries the push",
+		"mirror cycle exceeded its %s hold budget — a deadline, not a diagnosis: compare mirror.log's elapsed= values against the budget before blaming the remote. Cycles clustered just under the budget mean the budget is sized under this workspace's real cycle cost; one cycle far past it means the transport stopped answering. The engine closes as the cut unwinds, so the hold ends after the budget rather than at it, and the next mutation's mirror retries the push",
 		store.MirrorHoldBudget)
 }
 

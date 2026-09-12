@@ -35,10 +35,14 @@ var ErrTransientGCContention = errors.New("transient online-gc contention")
 
 // transientRetryMaxAttempts/transientRetryBaseDelay/transientRetryMaxDelay
 // bound the total wait (~25s: five uncapped doublings then 25 more attempts
-// at the 1s cap) for a transient online-GC contention to clear. Sized to
-// match engineOpenRetryMaxElapsed's ~30s budget for "how long do we wait
-// on a co-resident holder of this store" (links-sync-pgct.11): that retry
-// bounds how long two engines can contend at OPEN, but this one is what
+// at the 1s cap) for a transient online-GC contention to clear. Originally
+// sized to match engineOpenRetryMaxElapsed's then-~30s budget for "how long
+// do we wait on a co-resident holder of this store" (links-sync-pgct.11);
+// the two are no longer equal and deliberately so — links-sync-dauk derived
+// that holder wait from the mirror's measured hold ceiling, while this wait
+// answers a different question and keeps the value its own field evidence
+// argued for. Kept as a reference point, not a copy to keep in step: that
+// retry bounds how long two engines can contend at OPEN, but this one is what
 // absorbs the brief settle window right after one releases — under real
 // system load (a slower/contended CI runner, an earlier mirror's real
 // network push taking longer) that window is not always sub-second, and a
