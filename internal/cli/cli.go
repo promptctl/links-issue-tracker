@@ -371,20 +371,16 @@ func runList(ctx context.Context, stdout io.Writer, args []string) error {
 			return fmt.Errorf("open store at %q read-only: %w", atDir, markEngineOpenContention(err, infoForLocation(loc)))
 		}
 		defer func() { _ = st.Close() }()
-		// nil required-fields, for the reason gatherCrossProjectRollup states at
-		// its own foreign-store call: a Location carries no repo root, so there is
-		// no ready policy to read. It opts out of ONLY the field-presence gate;
-		// every store-intrinsic annotation — blockers, the lane gate, needs-design
-		// — still runs, so `--columns blocked` over a foreign store answers the
+		// noReadyPolicy, for the reason gatherCrossProjectRollup states at its own
+		// foreign-store call: a Location carries no repo root, so there is no ready
+		// policy to read. It opts out of ONLY the field-presence gate; every
+		// store-intrinsic annotation — blockers, the lane gate, needs-design —
+		// still runs, so `--columns blocked` over a foreign store answers the
 		// registry's question minus the one input that store cannot supply.
-		return runListWithStore(ctx, stdout, st, nil, args)
+		return runListWithStore(ctx, stdout, st, noReadyPolicy, args)
 	}
 	return runWithApp(ctx, stdout, app.AccessRead, func(ctx context.Context, ap *app.App) error {
-		requiredFields, err := readyRequiredFields(ap)
-		if err != nil {
-			return err
-		}
-		return runListWithStore(ctx, stdout, ap.Store, requiredFields, args)
+		return runListWithStore(ctx, stdout, ap.Store, workspaceReadyPolicy(ap), args)
 	})
 }
 
@@ -415,7 +411,7 @@ func extractAtDir(args []string) (string, bool) {
 	return "", false
 }
 
-func runListWithStore(ctx context.Context, stdout io.Writer, st storage.Store, requiredFields []string, args []string) error {
+func runListWithStore(ctx context.Context, stdout io.Writer, st storage.Store, policy readyPolicy, args []string) error {
 	fs := newCobraFlagSet("ls")
 	// --at is registered so the shared parse accepts it; the store it selects was
 	// already opened by runList, so its value is not re-read here.
@@ -526,7 +522,7 @@ func runListWithStore(ctx context.Context, stdout io.Writer, st storage.Store, r
 	if err != nil {
 		return err
 	}
-	cells, err := listDerivedColumns(ctx, st, requiredFields, columns, issues)
+	cells, err := listDerivedColumns(ctx, st, policy, columns, issues)
 	if err != nil {
 		return err
 	}
@@ -550,19 +546,22 @@ func runListWithStore(ctx context.Context, stdout io.Writer, st storage.Store, r
 // A nil result means "no derived column asked for", and every formatter lookup
 // then yields the zero derivedColumns.
 //
-// requiredFields is the repo's ready policy, passed as a value exactly as
-// classifyWorkable and buildEpicContext take it — `lit ls --at <dir>` reads a
-// foreign store that has no repo root and so no config, and passes nil there for
-// the reason stores.go states: nil opts out of ONLY the field-presence gate, and
-// every store-intrinsic annotation still runs.
+// policy is the repo's ready policy, resolved HERE rather than by the caller and
+// only on the rung that consults it — `lit ls --columns id,title` never reads
+// config at all, which is what keeps a defect in an unrelated setting from
+// taking out the plain listing. `lit ls --at <dir>` supplies noReadyPolicy: a
+// foreign store has no repo root and so no config, and that opts out of ONLY the
+// field-presence gate, leaving every store-intrinsic annotation to run.
 //
 // [LAW:dataflow-not-control-flow] which data to load is a value (the column
 // set's maximum rung); the switch below branches on that domain enum alone,
-// which is the entire point of having it.
+// which is the entire point of having it. The policy is a value for the same
+// reason — the foreign-store case differs by what it was handed, not by a branch
+// here.
 // [LAW:no-silent-failure] the default arm panics rather than returning nil: a
 // fourth rung added without a loader would otherwise render "-" in a column it
 // could not compute, and "-" is shaped exactly like a true answer.
-func listDerivedColumns(ctx context.Context, st storage.Store, requiredFields []string, columns []columnSpec, issues []model.Issue) (map[string]derivedColumns, error) {
+func listDerivedColumns(ctx context.Context, st storage.Store, policy readyPolicy, columns []columnSpec, issues []model.Issue) (map[string]derivedColumns, error) {
 	switch source := columnSourceFor(columns); source {
 	case sourceIssue:
 		return nil, nil
@@ -577,6 +576,10 @@ func listDerivedColumns(ctx context.Context, st storage.Store, requiredFields []
 		// the epic plan route on, and it returns the relations it fetched to
 		// compute them — so this rung pays one pipeline, not a graph load plus a
 		// classification. [LAW:single-enforcer]
+		requiredFields, err := policy()
+		if err != nil {
+			return nil, err
+		}
 		annotated, relations, _, err := annotateIssues(ctx, st, requiredFields, issues)
 		if err != nil {
 			return nil, err
@@ -668,6 +671,31 @@ func readyRequiredFields(ap *app.App) ([]string, error) {
 	}
 	return cfg.Ready.RequiredFields, nil
 }
+
+// readyPolicy defers the required-fields read to the point of use, for callers
+// that do not yet know whether they need it. `lit ls` is the one: which columns
+// were projected is not known until the flag parse inside runListWithStore, and
+// only a readiness-sourced column consults the policy at all.
+//
+// Deferring is not a micro-optimization over one file read. config.Load
+// validates the whole config — snapshot.retention_budget, sync.cadence,
+// claims.freshness_window — and fails on any of them, so reading it eagerly
+// made `lit ls` fail on defects in settings it does not render. That takes out
+// the plain listing exactly when a repo's config is broken, which is when a
+// reader most needs to see their tickets. [LAW:no-silent-failure] the policy
+// still fails loudly, at the one projection that depends on it.
+type readyPolicy func() ([]string, error)
+
+// workspaceReadyPolicy reads the repo's policy when asked.
+func workspaceReadyPolicy(ap *app.App) readyPolicy {
+	return func() ([]string, error) { return readyRequiredFields(ap) }
+}
+
+// noReadyPolicy is the policy of a store with no repo root to read one from.
+// A foreign store opened through --at gets this rather than a nil check at the
+// point of use, so the field-presence gate opts out by the value it was handed.
+// [LAW:dataflow-not-control-flow]
+func noReadyPolicy() ([]string, error) { return nil, nil }
 
 // classifyWorkable is the store-facing core of the workable pipeline: list
 // workable leaves, fetch details, annotate against the given required-fields

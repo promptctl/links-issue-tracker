@@ -238,7 +238,12 @@ from the canonical graph, `-` if none) and `blocked` (`blocked` when the readine
 classifier says the ticket cannot be pulled, else `-`). That classifier is the one
 `lit backlog --columns blocked` reads, over all four reasons it knows — a still-open
 dependency, an earlier same-lane sibling still open, a missing required field,
-needs-design — so the cell means the same thing on both commands. What `ls` reports
+needs-design — so the cell means the same thing on both commands. Across a store
+boundary it narrows by one reason: under `--at <dir>` readiness is
+**store-intrinsic**, because a discovered store carries no repo root to load a
+`required_fields` policy from (the same caveat `lit stores --counts` carries), so
+the missing-required-field reason cannot fire there. A `-` from `--at` is
+authoritative about the other three reasons and silent about that one. What `ls` reports
 is the fact, never which of the four reasons applies: it is a flat projection, one
 cell per column and no context block, so a reader who needs the why runs
 `lit backlog`, where the `depends on:` and `blocked:` lines name it. The two

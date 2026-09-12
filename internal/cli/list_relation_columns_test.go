@@ -77,7 +77,7 @@ func TestListRelationColumns(t *testing.T) {
 
 	// --columns id,parent,blocked surfaces the relationship facts.
 	var relOut bytes.Buffer
-	if err := runListWithStore(ctx, &relOut, ap.Store, nil, []string{"--columns", "id,parent,blocked"}); err != nil {
+	if err := runListWithStore(ctx, &relOut, ap.Store, noReadyPolicy, []string{"--columns", "id,parent,blocked"}); err != nil {
 		t.Fatalf("runListWithStore(--columns): %v", err)
 	}
 
@@ -106,7 +106,7 @@ func TestListRelationColumns(t *testing.T) {
 
 	// Default projection is unchanged: id | state | topic | title, no parent/blocked.
 	var defOut bytes.Buffer
-	if err := runListWithStore(ctx, &defOut, ap.Store, nil, nil); err != nil {
+	if err := runListWithStore(ctx, &defOut, ap.Store, noReadyPolicy, nil); err != nil {
 		t.Fatalf("runListWithStore(default): %v", err)
 	}
 	childLine := fieldsOf(lineForID(t, defOut.String(), child.ID))
@@ -179,13 +179,13 @@ func TestListDerivedColumnsLoadsOnlyWhatIsProjected(t *testing.T) {
 	issues := []model.Issue{issue, blocker}
 
 	for _, columns := range [][]columnSpec{defaultColumns(), mustColumns("id", "title")} {
-		cells, err := listDerivedColumns(ctx, ap.Store, nil, columns, issues)
+		cells, err := listDerivedColumns(ctx, ap.Store, noReadyPolicy, columns, issues)
 		if err != nil || cells != nil {
 			t.Fatalf("%v: want nil map, got %v (err %v)", columnNames(columns), cells, err)
 		}
 	}
 
-	graphOnly, err := listDerivedColumns(ctx, ap.Store, nil, mustColumns("id", "parent"), issues)
+	graphOnly, err := listDerivedColumns(ctx, ap.Store, noReadyPolicy, mustColumns("id", "parent"), issues)
 	if err != nil {
 		t.Fatalf("parent projection: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestListDerivedColumnsLoadsOnlyWhatIsProjected(t *testing.T) {
 			"ClassifyReadiness's to write and this rung never ran it", issue.ID)
 	}
 
-	classified, err := listDerivedColumns(ctx, ap.Store, nil, mustColumns("id", "blocked"), issues)
+	classified, err := listDerivedColumns(ctx, ap.Store, noReadyPolicy, mustColumns("id", "blocked"), issues)
 	if err != nil {
 		t.Fatalf("blocked projection: %v", err)
 	}

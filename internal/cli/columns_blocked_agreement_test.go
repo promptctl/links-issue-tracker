@@ -23,16 +23,12 @@ import (
 
 // blockedCellFromLS runs `lit ls --columns id,blocked` and returns the cell for
 // id. It routes through runListWithStore with the harness's own ready policy,
-// which is how runList calls it for a workspace store, so the required-field
-// reason is genuinely in play rather than configured away.
+// built exactly as runList builds it for a workspace store, so the
+// required-field reason is genuinely in play rather than configured away.
 func blockedCellFromLS(h readyTestHarness, id string) string {
 	h.t.Helper()
-	requiredFields, err := readyRequiredFields(h.ap)
-	if err != nil {
-		h.t.Fatalf("readyRequiredFields: %v", err)
-	}
 	var out bytes.Buffer
-	if err := runListWithStore(h.ctx, &out, h.ap.Store, requiredFields, []string{"--columns", "id,blocked"}); err != nil {
+	if err := runListWithStore(h.ctx, &out, h.ap.Store, workspaceReadyPolicy(h.ap), []string{"--columns", "id,blocked"}); err != nil {
 		h.t.Fatalf("ls --columns id,blocked: %v", err)
 	}
 	cells := fieldsOf(lineForID(h.t, out.String(), id))
