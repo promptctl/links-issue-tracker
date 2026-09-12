@@ -211,17 +211,25 @@ func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	// [LAW:dataflow-not-control-flow]
 	scoped, excluded := focus.scopeFor(knobs.all).partition(annotated)
 	view.order(scoped, details, knobs)
-	rows := view.keep(scoped)
-	rows = applyLimit(rows, knobs.limit)
+	kept := view.keep(scoped)
+	rows := applyLimit(kept, knobs.limit)
 	// Built AFTER the trim it reports, not beside the partition: --limit cuts
 	// rows the scope kept, so a notice constructed two lines up could only ever
 	// describe half the gap between what was gathered and what is printed — and
 	// printed "Nothing is hidden" over the other half.
+	//
+	// trimmed spans keep → limit, not scope → limit, because the sentence it
+	// feeds names --limit as the cause. keepAll is identity today, so the two
+	// spans are equal and no output changes; they stop being equal the moment a
+	// view keeps a subset, and the wider span would then report that view's own
+	// drops as a --limit trim — this ticket's defect, one narrowing further out.
+	// The endpoints say which narrowing is being measured.
+	// [LAW:one-source-of-truth]
 	notice := focusNotice{
 		scope:   focus,
 		applied: !knobs.all,
 		hidden:  len(excluded),
-		trimmed: len(scoped) - len(rows),
+		trimmed: len(kept) - len(rows),
 		escape:  "`lit " + view.name + " --all`",
 	}
 	cc, err := gatherClaimContext(ctx, stdout, ap)

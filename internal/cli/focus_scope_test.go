@@ -225,6 +225,45 @@ func TestBacklogNoticeReportsTheLimitTrimNotJustTheScope(t *testing.T) {
 	}
 }
 
+// The trim count names the --limit narrowing and no other. It is measured
+// across applyLimit alone, not across the whole keep→limit stretch, because the
+// sentence it feeds names --limit as the cause: a count spanning both would
+// report a view's own keep() drops as a trim the reader never asked for and
+// cannot undo by dropping the flag. That is this ticket's defect — a notice
+// asserting a cause it never established — one narrowing further out.
+//
+// backlogView keeps every row, so the two spans are equal there and no existing
+// want can tell them apart; this drives a view that filters, which is what keep
+// being a function value is for. Under a count measured from the scope the
+// dropped row surfaces as a phantom --limit trim on a run that passed no
+// --limit at all.
+func TestBacklogTrimCountNamesOnlyTheLimitNarrowing(t *testing.T) {
+	h := newReadyTestHarness(t)
+
+	for _, title := range []string{"Alpha", "Beta", "Gamma", "Delta"} {
+		_ = h.createIssue(storage.CreateIssueInput{Prefix: "test",
+			Title: title, Topic: "noise", IssueType: "task",
+		})
+	}
+
+	dropLast := backlogView
+	dropLast.keep = func(rows []annotation.AnnotatedIssue) []annotation.AnnotatedIssue {
+		if len(rows) == 0 {
+			return rows
+		}
+		return rows[:len(rows)-1]
+	}
+
+	var stdout bytes.Buffer
+	if err := runWorkable(h.ctx, &stdout, h.ap, nil, dropLast); err != nil {
+		t.Fatalf("runWorkable(dropLast) error = %v", err)
+	}
+	text := stdout.String()
+	if strings.Contains(text, "--limit trimmed this run") {
+		t.Fatalf("no --limit was passed, so the view's own keep() drop must not be reported as a trim\n%s", text)
+	}
+}
+
 // A focused backlog lists the path and says so, naming the goal, the count it
 // withheld, and the flag that lifts the scope. The wants are the literal
 // sentences: a test that rebuilt them from focusNotice would pass whatever
