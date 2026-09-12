@@ -193,17 +193,21 @@ func (r *HTTPResolver) Resolve(ctx context.Context, tag, platform string) (*Targ
 	// DisallowUnknownFields, which made that case a hard failure and turned
 	// every additive field into an unrecoverable break of the upgrade path —
 	// unrecoverable because the in-band remedy for a broken `lit upgrade` is
-	// `lit upgrade`. Producer-side drift is caught where it is actionable, at
-	// the producer: release-validate.yml's "Assert manifest shape" step runs
-	// against the manifest before it is ever published.
-	// [LAW:single-enforcer] one checkpoint for manifest shape, and it is that
-	// one — a second check here could only fire after publication, on the
-	// user's machine, where nobody can act on it.
+	// `lit upgrade`. Nothing on either side of the wire rejects an unknown
+	// field now, and that is the intent rather than a gap left behind:
+	// release-validate.yml's "Assert manifest shape" step asserts presence and
+	// format of the fields this decoder needs — `.version` a non-empty string,
+	// `.schema_support.min`/`.max` numbers, every artifact's platform, url and
+	// sha256 matching their patterns with the tag segment present in the url —
+	// and that the artifact platform set is exactly the release contract. It
+	// never inspects the manifest's key set, and no check anywhere else does.
 	//
-	// Nothing that decides anything is trusted on shape alone: the artifact is
-	// matched to runtime.GOOS/GOARCH exactly and verified against its recorded
-	// SHA256 (installer.go) before a byte of it is run. The trailing-data
-	// check below still rejects multi-document and junk-suffix payloads.
+	// Shape is not what protects the consumer in any case: SelectArtifact
+	// takes only the artifact whose Platform equals
+	// runtime.GOOS+"/"+runtime.GOARCH exactly (target.go), and Install
+	// verifies the downloaded bytes against that artifact's recorded SHA256
+	// before extracting anything (installer.go). The trailing-data check below
+	// still rejects multi-document and junk-suffix payloads.
 	dec := json.NewDecoder(io.LimitReader(resp.Body, 1<<20))
 	var m Manifest
 	if err := dec.Decode(&m); err != nil {
