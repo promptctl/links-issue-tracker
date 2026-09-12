@@ -341,7 +341,7 @@ prefix (`cli.go:1036-1042`).
 - Issue types: `task, feature, bug, chore, epic` (`internal/model/issue_type.go:31-33`).
   `ParseIssueType` lowercases and trims; error text
   `"issue type must be <oxford-or list>"` (`issue_type.go:35`, `:42-50`).
-  `epic` is the only container type (`issue_type.go:55-58`).
+  `epic` is the only container type (`issue_type.go:56-58`).
 - Priorities: `0` normal, `1` urgent (`internal/model/priority.go:18-21`), both
   spellings held in one `priorityVocabulary` table (`priority.go:35-41`).
   `ParsePriority` gates the int payloads (`priority.go:95-101`) and

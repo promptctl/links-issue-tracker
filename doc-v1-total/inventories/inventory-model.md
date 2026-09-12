@@ -348,14 +348,14 @@ Complete value set (`issue_type.go:17-23`): `TypeTask="task"`,
   returns the package-level `errInvalidIssueType` whose text is
   `issue type must be ` + `oxfordOr(IssueTypes())` =
   `"issue type must be task, feature, bug, chore, or epic"`
-  (`issue_type.go:35`, `:78-87`). Pinned by `TestParseIssueType`,
+  (`issue_type.go:35`, `:82-95`). Pinned by `TestParseIssueType`,
   `model_test.go:300`.
 - `(IssueType).IsContainer() bool` — `issue_type.go:56-58`: true **only** for
   `TypeEpic`.
 - `ContainerTypes() []IssueType` — `issue_type.go:63-71`: the subset of
   `IssueTypes()` for which `IsContainer()` holds (today: `[epic]`); returns nil
   if the subset is empty.
-- `oxfordOr[T ~string](values []T) string` — `issue_type.go:82-94`: single element
+- `oxfordOr[T ~string](values []T) string` — `issue_type.go:82-95`: single element
   → that element; two → `a + " or " + b` (no comma); three or more →
   `strings.Join(all but last, ", ") + ", or " + last`. Generic over `~string` so
   one renderer serves every sealed vocabulary in the package — `IssueTypes()`
