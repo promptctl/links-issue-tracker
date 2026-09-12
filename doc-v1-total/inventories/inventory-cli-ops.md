@@ -500,15 +500,15 @@ Flag parse output is `io.Discard` (`sync_bg.go:148`).
 - `unfetchedStalenessThreshold = 24 * time.Hour` (`sync_staleness.go:23`).
 - Fetch-success marker `<StorageDir>/fetch-success.last` (`sync_staleness.go:31-33`), written by every successful DOLT_FETCH call site (`markFetchSuccess`, `sync_staleness.go:40-48`): `lit sync fetch`, `lit sync pull`, `freshReconcileTarget`, and the inline receive.
 - `lastFetchSuccessAge` (`sync_staleness.go:62-71`): missing → `ok=false` silently; other stat error → stderr `lit: fetch-success marker unreadable: <err>` and `ok=false`.
-- `syncPushFailureLines` (`sync_staleness.go:142-154`) — only when a record is known AND `failed()`:
+- `syncPushFailureLines` (`sync_staleness.go:147-159`) — only when a record is known AND `failed()`:
   `sync: automatic push[ to <r>/<b>] is FAILING — last attempt <age> ago: <reason> — changes stay on this machine until a push succeeds; run 'lit sync push'`.
-- `oneLineReason` (`sync_staleness.go:160-174`): first line only, trimmed, capped at 160 runes with a `…` suffix; empty → `(no reason recorded)`.
-- `fetchStalenessLines` (`sync_staleness.go:119-131`) — only when the age is known and `>= 24h`:
+- `oneLineReason` (`sync_staleness.go:165-179`): first line only, trimmed, capped at 160 runes with a `…` suffix; empty → `(no reason recorded)`.
+- `fetchStalenessLines` (`sync_staleness.go:119-136`) — only when the age is known and `>= 24h`:
   `sync: last successful fetch[ from <ref>] was <age> ago (over <threshold>) — run 'lit sync fetch'`.
 - `syncStalenessLines` (`sync_staleness.go:96-111`) — only for a RESOLVED doctor sync report; when `State() == storage.SyncAhead`:
   `sync: <N> local change(s) not pushed to <r>/<b>, as of last fetch — run 'lit sync push'`; then the fetch-staleness line. Deliberately does NOT fire on `SyncDiverged` (that has the heavier failure block) nor special-case `SyncNeverSynced` (`sync_staleness.go:83-95`).
-- `printStalenessWarning` (read commands) — `sync_staleness.go:191-212`: the build-drift line FIRST (at most one, only for a stale source build), then the push-failure line, then the ahead/fetch lines. Write errors are returned to the caller.
-- `printMutationSyncStalenessWarning` (every write command, at the `runWithApp` seam) — `sync_staleness.go:229-240`: reads ONLY the storage-dir markers (push outcome, fetch success), emits the push-failure line then a ref-less fetch-staleness line. Write failures print `lit: staleness banner not written: <err>` to stderr and never change the exit code.
+- `printStalenessWarning` (read commands) — `sync_staleness.go:196-217`: the build-drift line FIRST (at most one, only for a stale source build), then the push-failure line, then the ahead/fetch lines. Write errors are returned to the caller.
+- `printMutationSyncStalenessWarning` (every write command, at the `runWithApp` seam) — `sync_staleness.go:234-245`: reads ONLY the storage-dir markers (push outcome, fetch success), emits the push-failure line then a ref-less fetch-staleness line. Write failures print `lit: staleness banner not written: <err>` to stderr and never change the exit code.
 
 ### 3.10 Sync-failure contract (`sync_failure.go`)
 
@@ -974,17 +974,17 @@ Output lines:
 
 ## 14. Build status note (`build_status.go`)
 
-`buildStatusNote(info, now)` — `build_status.go:26-46`. Keyed on `info.FromSource`, not `IsDev`: `scripts/install.sh` source mode stamps a `git describe` `Version`, so an installed working-tree build has `IsDev == false` and used to render as a release with its age unmentioned.
+`buildStatusNote(info, now)` — `build_status.go:52-69`. Keyed on `info.FromSource`, not `IsDev`: `scripts/install.sh` source mode stamps a `git describe` `Version`, so an installed working-tree build has `IsDev == false` and used to render as a release with its age unmentioned.
 - Non-source (release) build → `build: release <version>`.
 - Source build, no parsable date → `build: dev build (build date unknown)`.
-- Source build, `info.StaleSourceBuild` true → `build: dev build, built <age> ago — STALE (at least <threshold> old; run \`just build\` (or \`just install\`) to refresh)` — "at least", because the comparison is `>=`; the remedy names both from-source entrypoints because `just build` alone leaves a `just install` binary unrefreshed (`build_status.go:35-39`).
+- Source build, `info.StaleSourceBuild` true → ``build: dev build, built <age> ago — STALE (at least <threshold> old; run `just build` (or `just install`) to refresh)`` — "at least", because the comparison is `>=`; the remedy names both from-source entrypoints because `just build` alone leaves a `just install` binary unrefreshed (`build_status.go:61-67`).
 - Source build, fresh → `build: dev build, built <age> ago`.
 
-`resolveBuildStatusNote(now)` — `build_status.go:56-62`: `version.Get()` failure yields `build: status unavailable (<err>)` rather than aborting the caller.
+`resolveBuildStatusNote(now)` — `build_status.go:80-86`: `version.Get()` failure yields `build: status unavailable (<err>)` rather than aborting the caller.
 
-`buildStalenessLines(info, now)` — `build_status.go:80-96`: zero or one line, the rare loud banner for the ordinary read commands. Only for a stale source build → `build: this binary was built <age> ago (over <threshold>) — the answer below may predate fixes already on master; run \`just install\` to refresh`. A release build at any age, a fresh source build, and a source build with no trustworthy date all render nothing. Pure over its inputs.
+`buildStalenessLines(info, now)` — `build_status.go:104-121`: zero or one line, the rare loud banner for the ordinary read commands. Only for a stale source build → ``build: this binary was built <age> ago (at least <threshold> old) — the answer below may predate fixes already on master; run `just build` (or `just install`) to refresh``. A release build at any age, a fresh source build, and a source build with no trustworthy date all render nothing. Pure over its inputs.
 
-`resolveBuildStalenessLines(now)` — `build_status.go:108-117`: a `version.Get()` failure is announced here rather than swallowed → `build: this binary cannot report its own identity (<err>) — its age and provenance are unknown`, since a binary that cannot account for itself is worse news than the stale one the banner exists to report.
+`resolveBuildStalenessLines(now)` — `build_status.go:133-142`: a `version.Get()` failure is announced here rather than swallowed → `build: this binary cannot report its own identity (<err>) — its age and provenance are unknown`, since a binary that cannot account for itself is worse news than the stale one the banner exists to report.
 
 Consumers: `lit init` human output and its adopt progress line (`init.go:143`, `init_sync.go:130`), the init sync trace (`init_sync.go:351`), `lit doctor`'s second output line (`doctor.go:296`), every `SyncFailure.BuildNote` boundary (`sync_failure.go:139`, `sync.go:294`, `sync_receive.go:139`, `doctor.go:82`, `sync_reconcile_cmd.go:467`), and every sync trace record (`sync_trace.go:112`, `:143`, etc.).
 

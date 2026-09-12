@@ -184,12 +184,27 @@ func (r *HTTPResolver) Resolve(ctx context.Context, tag, platform string) (*Targ
 		return nil, fmt.Errorf("release: fetch %s: HTTP %d: %s", url, resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	// [LAW:types-are-the-program] Manifest decoding is a trust boundary — the
-	// JSON comes from the network. DisallowUnknownFields rejects schema drift
-	// (a field added in a future producer without a consumer-side migration);
-	// the trailing-data check rejects multi-document or junk-suffix payloads.
-	// Both refuse silently-different-shape inputs by construction.
+	// JSON comes from the network — but the strongest TRUE theorem about this
+	// payload is "it carries at least the fields I need", never "exactly the
+	// fields I know". `lit upgrade` is run by the INSTALLED binary to discover
+	// a newer release, so a manifest's consumer is by construction older than
+	// its producer, and a field the producer added after this binary shipped
+	// is the normal case rather than an attack. This decoder used to set
+	// DisallowUnknownFields, which made that case a hard failure and turned
+	// every additive field into an unrecoverable break of the upgrade path —
+	// unrecoverable because the in-band remedy for a broken `lit upgrade` is
+	// `lit upgrade`. Producer-side drift is caught where it is actionable, at
+	// the producer: release-validate.yml's "Assert manifest shape" step runs
+	// against the manifest before it is ever published.
+	// [LAW:single-enforcer] one checkpoint for manifest shape, and it is that
+	// one — a second check here could only fire after publication, on the
+	// user's machine, where nobody can act on it.
+	//
+	// Nothing that decides anything is trusted on shape alone: the artifact is
+	// matched to runtime.GOOS/GOARCH exactly and verified against its recorded
+	// SHA256 (installer.go) before a byte of it is run. The trailing-data
+	// check below still rejects multi-document and junk-suffix payloads.
 	dec := json.NewDecoder(io.LimitReader(resp.Body, 1<<20))
-	dec.DisallowUnknownFields()
 	var m Manifest
 	if err := dec.Decode(&m); err != nil {
 		return nil, fmt.Errorf("release: decode %s: %w", url, err)

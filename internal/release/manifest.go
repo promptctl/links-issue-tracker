@@ -28,10 +28,17 @@ import "github.com/promptctl/links-issue-tracker/internal/version"
 //
 // [LAW:types-are-the-program] Embedding version.Info means any change to that
 // shape propagates automatically; the release format does not maintain its
-// own copy of the binary-identity fields. IsDev and FromSource both always
-// serialize false for published manifests (a release is by definition neither
-// a dev build nor built from a working tree); the fields are left in place for
-// symmetry rather than diverging the schemas.
+// own copy of the binary-identity fields. That propagation is the reason the
+// wire shape has to be guarded: a field added to version.Info lands in every
+// published manifest, and manifests are read by binaries older than the
+// producer. IsDev always serializes false for a published manifest (a release
+// is by definition not a dev build) and stays on the wire because it has
+// always been there. FromSource is tagged `json:"-"` at its declaration and
+// never appears: the question is meaningless for a release, and every lit
+// already installed would fail to decode a manifest carrying it. Adding a
+// field to Info is therefore a wire-format change — see the note on
+// FromSource for what it costs and HTTPResolver.Resolve for what now absorbs
+// it going forward.
 type Manifest struct {
 	version.Info
 	Artifacts []Artifact `json:"artifacts"`

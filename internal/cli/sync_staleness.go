@@ -124,8 +124,13 @@ func fetchStalenessLines(ref string, fetchAge time.Duration, fetchAgeKnown bool)
 	if ref != "" {
 		from = " from " + ref
 	}
+	// "at least", not "over", for the reason build_status.go states at length:
+	// the gate is `fetchAge < threshold` returns nil, so a fetch exactly at the
+	// threshold warns, and "was 7 days ago (over 7 days)" is false at that
+	// reachable boundary. Same defect the build banner shipped with; found by
+	// grepping the claim rather than the cited line.
 	return []string{fmt.Sprintf(
-		"sync: last successful fetch%s was %s ago (over %s) — run 'lit sync fetch'",
+		"sync: last successful fetch%s was %s ago (at least %s old) — run 'lit sync fetch'",
 		from, humanizeCoarseDuration(fetchAge), humanizeCoarseDuration(unfetchedStalenessThreshold),
 	)}
 }

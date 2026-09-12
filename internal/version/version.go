@@ -90,7 +90,22 @@ type Info struct {
 	// this binary be behind its own tree" are different questions, and each
 	// gets its own field instead of one field answering both wrongly.
 	// [LAW:one-source-of-truth]
-	FromSource bool          `json:"from_source"`
+	//
+	// Never serialized. Info's only JSON encoding is release.Manifest, and
+	// this question is meaningless for a release: a published artifact is not
+	// a working tree that can move on without it, so the answer is a constant
+	// false carrying no information. Keeping it off the wire is not tidiness
+	// but compatibility — `lit upgrade` is run BY the old binary to discover a
+	// new release, so every manifest consumer is older than its producer, and
+	// every binary already installed decodes manifests with
+	// DisallowUnknownFields (see release.HTTPResolver.Resolve, which no longer
+	// does). Emitting `from_source` would have made the next release's
+	// manifest undecodable to every lit in the field, breaking the upgrade
+	// path at exactly the release that shipped it — and the in-band remedy for
+	// a broken upgrade is the upgrade. [LAW:types-are-the-program] the tag is
+	// what makes that unrepresentable, rather than a rule mkmanifest must
+	// remember.
+	FromSource bool          `json:"-"`
 	Schema     SchemaSupport `json:"schema_support"`
 }
 

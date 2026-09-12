@@ -132,7 +132,10 @@ func main() {
 			IsDev:   false, // releases are by definition not dev
 			// Stated rather than left to the zero value, for the reason IsDev
 			// is: a release is not built from a working tree that can move on
-			// without it, so it never reports build-age staleness.
+			// without it, so it never reports build-age staleness. It does not
+			// reach the file — the field is tagged `json:"-"` so it cannot —
+			// and is set here so the value this tool means is on the page next
+			// to the one it writes.
 			FromSource: false,
 			Schema:     version.SchemaSupport{Min: migrations.Baseline, Max: max},
 		},
