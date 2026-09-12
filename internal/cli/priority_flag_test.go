@@ -172,20 +172,33 @@ func TestPriorityChoicesNamesExactlyTheVocabulary(t *testing.T) {
 	}
 }
 
-// Guards the seam the fix depends on: parsePriorityFlag must answer in
-// ValidationError, because that type is what routes a bad priority to
-// ExitValidation and to the deterministic-refusal remediation.
-func TestParsePriorityFlagAnswersInValidationError(t *testing.T) {
-	if _, err := parsePriorityFlag("7"); err == nil {
-		t.Fatal("parsePriorityFlag(\"7\") succeeded")
-	} else if _, ok := err.(ValidationError); !ok {
-		t.Fatalf("parsePriorityFlag(\"7\") error type = %T, want ValidationError", err)
-	}
-	got, err := parsePriorityFlag(" URGENT ")
-	if err != nil {
-		t.Fatalf("parsePriorityFlag(\" URGENT \") error = %v", err)
-	}
-	if got != model.PriorityUrgent {
-		t.Fatalf("parsePriorityFlag(\" URGENT \") = %d, want %d", int(got), int(model.PriorityUrgent))
+// The flag tolerates the surrounding space and casing a pasted value carries.
+// Driven through runNew rather than through parsePriorityFlag directly: a test
+// that named the wrapper would pin its signature, and the signature is the very
+// thing this ticket changed. [LAW:behavior-not-structure]
+func TestPriorityFlagToleratesPastedCaseAndSpace(t *testing.T) {
+	ctx := context.Background()
+
+	for _, raw := range []string{" urgent ", "URGENT", "Urgent"} {
+		t.Run("value="+raw, func(t *testing.T) {
+			ap := newTestCLIApp(t)
+
+			var stdout bytes.Buffer
+			if err := runNew(ctx, &stdout, ap, []string{
+				"--title", "pasted priority",
+				"--topic", "priority",
+				"--type", "task",
+				"--priority", raw,
+			}); err != nil {
+				t.Fatalf("runNew(--priority %q) error = %v", raw, err)
+			}
+			created, err := ap.Store.GetIssue(ctx, firstIssueID(t, stdout.String()))
+			if err != nil {
+				t.Fatalf("GetIssue() error = %v", err)
+			}
+			if created.Priority != model.PriorityUrgent {
+				t.Fatalf("runNew(--priority %q) stored %d, want %d", raw, int(created.Priority), int(model.PriorityUrgent))
+			}
+		})
 	}
 }
