@@ -219,20 +219,26 @@ func TestBuildStalenessLineNamesAgeAndRemedy(t *testing.T) {
 	}
 }
 
-// TestBothStalenessSurfacesAgreeAtTheBoundary runs the two surfaces at the one
-// age where their wording can lie and holds them to the same story. Both gate
-// on StaleSourceBuild, which fires at age >= threshold, so a binary built
-// exactly StaleBuildThreshold ago is stale — and the banner used to render
-// that reachable case as "built 7 days ago (over 7 days)", which is false.
-// buildStatusNote had a comment explaining precisely this trap and said "at
-// least"; the banner, written later, re-derived the sentence and walked into
-// it. The existing shape table could not catch it: its "exactly at the
-// threshold" row asserts only that a line is emitted, never what the line says.
+// TestEveryStalenessSurfaceAgreesAtItsBoundary runs every staleness surface at
+// the one age where its wording can lie — exactly its own threshold — and holds
+// each to the shared vocabulary. Every gate stays silent on `age < threshold`,
+// so a value sitting exactly on the threshold warns, and "(over 7 days)" is
+// false at that reachable age. Two surfaces shipped that contradiction:
+// buildStalenessLines and fetchStalenessLines each re-derived a sentence
+// buildStatusNote had already gotten right and documented. Neither shape table
+// could catch it — both spend their "exactly at the threshold" row asserting
+// that a line is emitted, never what the line says.
 //
-// The remedy is checked in the same place for the same reason. One predicate
+// The surfaces are rows, so covering a fourth is a row rather than another
+// test, and the expected phrases stay literal: deriving them from
+// stalenessThresholdClause would pass for whatever that function happens to
+// return, which is the vacuous test this one exists to not be.
+//
+// The remedy travels with its surface. The build pair share one — one predicate
 // means one population, and the banner had prescribed `just install` alone,
-// which does not refresh the ./lit a developer runs out of the repo.
-func TestBothStalenessSurfacesAgreeAtTheBoundary(t *testing.T) {
+// which does not refresh the ./lit a developer runs out of the repo — while the
+// fetch surface prescribes its own.
+func TestEveryStalenessSurfaceAgreesAtItsBoundary(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
 	info := version.Info{
@@ -240,25 +246,30 @@ func TestBothStalenessSurfacesAgreeAtTheBoundary(t *testing.T) {
 		Date:       now.Add(-version.StaleBuildThreshold).Format(time.RFC3339),
 	}
 
-	lines := buildStalenessLines(info, now)
-	if len(lines) != 1 {
-		t.Fatalf("buildStalenessLines() = %q, want one line at the threshold", lines)
+	banner := buildStalenessLines(info, now)
+	if len(banner) != 1 {
+		t.Fatalf("buildStalenessLines() = %q, want one line at the threshold", banner)
 	}
-	for _, surface := range []struct{ name, got string }{
-		{"buildStalenessLines", lines[0]},
-		{"buildStatusNote", buildStatusNote(info, now)},
+	fetch := fetchStalenessLines("origin/master", unfetchedStalenessThreshold, true)
+	if len(fetch) != 1 {
+		t.Fatalf("fetchStalenessLines() = %q, want one line at the threshold", fetch)
+	}
+
+	for _, surface := range []struct{ name, got, threshold, remedy string }{
+		{"buildStalenessLines", banner[0], "7 days", buildRefreshRemedy},
+		{"buildStatusNote", buildStatusNote(info, now), "7 days", buildRefreshRemedy},
+		{"fetchStalenessLines", fetch[0], "24 hours", "lit sync fetch"},
 	} {
-		// "over 7 days" is the false claim; at the boundary the age IS the
-		// threshold. Matched as the rendered phrase rather than the bare word
-		// so an unrelated future use of "over" does not redden this.
-		if strings.Contains(surface.got, "over 7 days") {
-			t.Errorf("%s = %q: says \"over 7 days\" for a binary built exactly 7 days ago", surface.name, surface.got)
+		// Matched as the rendered phrase rather than the bare word, so an
+		// unrelated future use of "over" does not redden this.
+		if lie := "over " + surface.threshold; strings.Contains(surface.got, lie) {
+			t.Errorf("%s = %q: says %q at exactly the threshold", surface.name, surface.got, lie)
 		}
-		if !strings.Contains(surface.got, "at least 7 days") {
-			t.Errorf("%s = %q: must say \"at least 7 days\" at the threshold", surface.name, surface.got)
+		if want := "at least " + surface.threshold + " old"; !strings.Contains(surface.got, want) {
+			t.Errorf("%s = %q: must say %q at the threshold", surface.name, surface.got, want)
 		}
-		if !strings.Contains(surface.got, buildRefreshRemedy) {
-			t.Errorf("%s = %q: must name the shared remedy %q", surface.name, surface.got, buildRefreshRemedy)
+		if !strings.Contains(surface.got, surface.remedy) {
+			t.Errorf("%s = %q: must name its remedy %q", surface.name, surface.got, surface.remedy)
 		}
 	}
 }

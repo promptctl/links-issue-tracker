@@ -9,28 +9,17 @@ import (
 
 // buildStatusNote and buildStalenessLines gate on the same
 // version.Info.StaleSourceBuild predicate, so they speak about the same
-// binaries at the same ages and cannot describe them differently. They had
-// drifted in both available directions before review caught it, so the shared
-// vocabulary is stated here once.
+// binaries at the same ages and cannot prescribe different cures.
+// buildRefreshRemedy is the one they both name. The predicate covers both
+// from-source shapes, so the remedy has to as well: `just build` refreshes the
+// ./lit a developer runs out of the repo, `just install` the one on PATH.
+// Naming either alone tells half the population to rebuild a binary they are
+// not running — the banner named only `just install`, which does not refresh
+// the ./lit in front of the reader. [LAW:one-source-of-truth]
 //
-// The threshold reads "at least", never "over" or "older than": the comparison
-// is >=, so a binary exactly at the threshold is stale, and "built 7 days ago
-// (over 7 days)" contradicts itself at that reachable boundary. The banner
-// carried "over" until review caught it, while buildStatusNote had documented
-// that exact trap and avoided it — which is why the second line should never
-// have been writing its own vocabulary. The wording stays inline in each
-// format string rather than behind a constant, because a two-word constant
-// spliced into a sentence hides the sentence without binding anything;
-// TestBothStalenessSurfacesAgreeAtTheBoundary is what actually holds the pair
-// together, at the one age where the wording can lie.
-// [LAW:one-source-of-truth]
-//
-// buildRefreshRemedy is the one cure both surfaces name. The predicate covers
-// both from-source shapes, so the remedy has to as well: `just build`
-// refreshes the ./lit a developer runs out of the repo, `just install` the one
-// on PATH. Naming either alone tells half the population to rebuild a binary
-// they are not running — the banner named only `just install`, which does not
-// refresh the ./lit in front of the reader.
+// The other half of the shared vocabulary — how the threshold itself is
+// phrased — belongs to stalenessThresholdClause, which every staleness surface
+// calls and which owns the reason it reads "at least".
 const buildRefreshRemedy = "run `just build` (or `just install`) to refresh"
 
 // buildStatusNote renders a short, always-present fragment naming whether this
@@ -58,11 +47,9 @@ func buildStatusNote(info version.Info, now time.Time) string {
 		return "build: dev build (build date unknown)"
 	}
 	if _, stale := info.StaleSourceBuild(now); stale {
-		// "at least", not "over" — see the shared-vocabulary note above
-		// buildRefreshRemedy for why the boundary case makes it false.
 		return fmt.Sprintf(
-			"build: dev build, built %s ago — STALE (at least %s old; %s)",
-			humanizeCoarseDuration(age), humanizeCoarseDuration(version.StaleBuildThreshold),
+			"build: dev build, built %s ago — STALE (%s; %s)",
+			humanizeCoarseDuration(age), stalenessThresholdClause(version.StaleBuildThreshold),
 			buildRefreshRemedy,
 		)
 	}
@@ -114,8 +101,8 @@ func buildStalenessLines(info version.Info, now time.Time) []string {
 	// names the binary and the answer, never the work behind the answer.
 	// [LAW:one-source-of-truth] one claim, one meaning, at every site it reaches.
 	return []string{fmt.Sprintf(
-		"build: this binary was built %s ago (at least %s old) — the answer below may predate fixes already on master; %s",
-		humanizeCoarseDuration(age), humanizeCoarseDuration(version.StaleBuildThreshold),
+		"build: this binary was built %s ago (%s) — the answer below may predate fixes already on master; %s",
+		humanizeCoarseDuration(age), stalenessThresholdClause(version.StaleBuildThreshold),
 		buildRefreshRemedy,
 	)}
 }

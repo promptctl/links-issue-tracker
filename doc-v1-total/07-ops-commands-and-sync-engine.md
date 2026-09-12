@@ -178,7 +178,7 @@ Three signals (`sync_staleness.go`):
 - **Fetch-staleness line** — when the last successful fetch (marker `fetch-success.last`, written by `sync fetch`, `sync pull`, the reconcile pre-step, and inline receive) is ≥ 24 hours old: `sync: last successful fetch[ from <ref>] was <age> ago (over 24h0m0s) — run 'lit sync fetch'`.
 - **Ahead line** — read commands with a resolved freshness in state ahead: `sync: <N> local change(s) not pushed to <r>/<b>, as of last fetch — run 'lit sync push'`. Deliberately not emitted for diverged (that has the heavier failure block) and not special-cased for never-synced.
 
-Read commands print the build-drift line first when it fires (see the build-status section below), then push-failure, then ahead/fetch lines. Write commands, at the `runWithApp` seam, read only the storage-dir markers and print the push-failure line plus a ref-less fetch line; banner write failures never change the exit code (`sync_staleness.go:196-245`).
+Read commands print the build-drift line first when it fires (see the build-status section below), then push-failure, then ahead/fetch lines. Write commands, at the `runWithApp` seam, read only the storage-dir markers and print the push-failure line plus a ref-less fetch line; banner write failures never change the exit code (`sync_staleness.go:191-240`).
 
 ### The sync-failure contract
 
@@ -293,7 +293,7 @@ The build-status note (`build_status.go`) renders `build: release <v>` for a non
 
 A separate, rarer line carries build drift onto the ordinary read commands. `buildStalenessLines` renders at most one line — ``build: this binary was built <age> ago (at least <threshold> old) — the answer below may predate fixes already on master; run `just build` (or `just install`) to refresh`` — and only for a stale source build, so a release build, a fresh build, and a build with no trustworthy date print nothing. Both surfaces say "at least", never "over": the staleness comparison is `>=`, so a binary exactly at the threshold is stale and "over <threshold>" would contradict itself there. They name the same remedy for the same reason — one predicate covers both from-source shapes, and `just build` alone leaves a PATH binary unrefreshed while `just install` alone leaves the repo's `./lit` unrefreshed. `printStalenessWarning` emits the line ahead of the sync push-failure, ahead-count, and stale-fetch lines, which puts it first on screen for `lit next`, `lit backlog`, and the full-detail `lit show`.
 
-`resolveBuildStalenessLines` fails loud rather than silent, the way the note's own resolve step does: when `version.Get()` errors it emits `build: this binary cannot report its own identity (<err>) — its age and provenance are unknown` on every one of those three commands instead of returning no line, because a binary that cannot account for itself at all is worse news than the stale binary this banner exists to announce (`build_status.go:133-142`).
+`resolveBuildStalenessLines` fails loud rather than silent, the way the note's own resolve step does: when `version.Get()` errors it emits `build: this binary cannot report its own identity (<err>) — its age and provenance are unknown` on every one of those three commands instead of returning no line, because a binary that cannot account for itself at all is worse news than the stale binary this banner exists to announce (`build_status.go:120-129`).
 
 ## Managed sections and embedded templates
 

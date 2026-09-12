@@ -86,7 +86,7 @@ into* one of those, the call and its observable effect are recorded here.
   - **After a successful write command** (`accessMode == app.AccessWrite`), the
     mutation sync-staleness warning is printed at this one seam
     (`cli.go:135-137`, `printMutationSyncStalenessWarning` at
-    `sync_staleness.go:234`).
+    `sync_staleness.go:229`).
   - Then `maybeAutoSyncAfterCommand(ctx, accessMode, ws)` runs (`cli.go:145`).
   - Both only run when the command returned nil (`cli.go:123-125`).
 - `runWithWorkspace` / `resolveWorkspaceFromWD` (`cli.go:94-163`): same
@@ -261,10 +261,10 @@ and transitions via the table below.
   before their payload: `backlog` (`workable.go:185`), `next` (`next.go:55`),
   `show` **only in full-detail mode** (`cli.go:915-919`) — deliberately suppressed
   under `--field` so the machine-parseable output isn't corrupted.
-  Defined at `sync_staleness.go:196`.
+  Defined at `sync_staleness.go:191`.
 - Write commands get `printMutationSyncStalenessWarning(stdout, ws, now)` after
   the handler succeeds and after the engine closes (`cli.go:135-137`,
-  `sync_staleness.go:234`).
+  `sync_staleness.go:229`).
 
 ### 1.14 Workflow event dispatch
 

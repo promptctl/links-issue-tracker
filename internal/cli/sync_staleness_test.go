@@ -77,7 +77,7 @@ func TestSyncStalenessLines(t *testing.T) {
 			fetchAge:      staleAge,
 			fetchAgeKnown: true,
 			wantLines:     1,
-			wantSubstrs:   []string{"sync:", "last successful fetch from origin/master", "ago", "over 24 hours", "lit sync fetch"},
+			wantSubstrs:   []string{"sync:", "last successful fetch from origin/master", "ago", "at least 24 hours old", "lit sync fetch"},
 		},
 		{
 			name: "ahead AND stale fetch produce both lines",
