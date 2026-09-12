@@ -24,54 +24,102 @@ import (
 // table and nothing else.
 type columnSpec struct {
 	name string
-	// needsRelations marks a column served from the relationship graph rather
-	// than from the issue row. Selecting one is what makes the list path pay
-	// for the relation query. [LAW:dataflow-not-control-flow] the load is
-	// chosen by a value carried on the selected columns, never by a branch on
-	// column identity.
+	// source names the data this column's cell is computed from. Selecting a
+	// column above sourceIssue is what makes the list path pay for the load it
+	// names. [LAW:dataflow-not-control-flow] the load is chosen by a value
+	// carried on the selected columns, never by a branch on column identity.
 	//
-	// A nil rels map renders these as "-" for every row, which is the honest
-	// zero only for a projection that names no relation column — the case of
+	// A nil cells map renders these as "-" for every row, which is the honest
+	// zero only for a projection that names no derived column — the case of
 	// the fixed, source-constant projections that pass nil. A surface whose
 	// caller CHOOSES the columns has to supply the map, or it accepts a name
 	// it cannot render and prints a dash indistinguishable from a real "no
 	// parent". That is why the workable runner derives the map for its views
 	// instead of leaving each renderer to remember.
-	needsRelations bool
-	// render receives the issue's own relationColumns rather than the whole
+	source columnSource
+	// render receives the issue's own derivedColumns rather than the whole
 	// map, so a renderer cannot read another issue's relations.
-	render func(issue model.Issue, rels relationColumns) string
+	render func(issue model.Issue, cells derivedColumns) string
 }
+
+// columnSource is the data a column's cell is computed from, as an ORDERED
+// ladder: each level subsumes the one below it, so a projection's requirement
+// is the maximum over its columns and one load satisfies every column at or
+// below it.
+//
+// It replaced a `needsRelations bool`, and the ordering is the whole point.
+// Two levels cannot express "this column needs strictly more than that one",
+// so `blocked` — which needs the annotation registry's verdict — could only
+// declare the relation graph, and was served it: `lit ls --columns blocked`
+// answered "a still-open dependency edge" while `lit backlog` answered the
+// registry's four kinds, and the same column name printed different values on
+// the two surfaces (links-columns-4hdq). A bool had no way to say the column
+// was under-served, so nothing failed; the cell just quietly meant less.
+// [LAW:types-are-the-program] the ladder is the strongest true theorem about
+// this domain — three levels, strictly ordered — and it moves the guarantee off
+// the loader and onto the declaration: given what each column declares,
+// columnSourceFor makes "served less than the projection's maximum rung"
+// unrepresentable rather than merely absent today.
+//
+// Be precise about what that does NOT cover: the type cannot check that a
+// column declares the RIGHT rung. Writing `source: sourceRelations` on `blocked`
+// compiles cleanly and reinstates this exact bug, so the compiler is not the
+// thing standing between the repo and a regression here — TestColumnSourceLadder
+// is, alongside both blocked-column agreement tests. Verified by mutation: that
+// one-word downgrade builds with no error and fails four tests.
+// [LAW:no-mode-explosion] a new level is a new constant here, not a new flag
+// threaded through every loader.
+type columnSource int
+
+const (
+	// sourceIssue: the issue row alone, no store round-trip beyond the listing.
+	// The zero value, so a registry entry that names no source costs nothing —
+	// which is the truth for every column rendered off model.Issue.
+	sourceIssue columnSource = iota
+	// sourceRelations: the canonical relation graph (storage.IssueRelations).
+	sourceRelations
+	// sourceReadiness: the annotation registry's readiness verdict, which is
+	// computed over the relation graph and so subsumes sourceRelations.
+	sourceReadiness
+)
 
 // columnRegistry is the vocabulary. Adding a column here is the whole change:
 // the accept-set, the `--columns` help text, the rejection message's list of
-// valid names, and the relation-load decision are all derived from this slice,
-// so none of them can be updated late or forgotten.
+// valid names, and the decision of what data to load are all derived from this
+// slice, so none of them can be updated late or forgotten. The load follows
+// because each entry declares its own source; a new column cannot be added and
+// then served less data than its cell needs.
 var columnRegistry = []columnSpec{
-	{name: "id", render: func(i model.Issue, _ relationColumns) string { return i.ID }},
-	{name: "state", render: func(i model.Issue, _ relationColumns) string { return formatIssueState(i) }},
-	{name: "type", render: func(i model.Issue, _ relationColumns) string { return string(i.IssueType) }},
-	{name: "topic", render: func(i model.Issue, _ relationColumns) string { return i.Topic }},
-	{name: "priority", render: func(i model.Issue, _ relationColumns) string { return i.Priority.String() }},
-	{name: "title", render: func(i model.Issue, _ relationColumns) string { return i.Title }},
+	{name: "id", render: func(i model.Issue, _ derivedColumns) string { return i.ID }},
+	{name: "state", render: func(i model.Issue, _ derivedColumns) string { return formatIssueState(i) }},
+	{name: "type", render: func(i model.Issue, _ derivedColumns) string { return string(i.IssueType) }},
+	{name: "topic", render: func(i model.Issue, _ derivedColumns) string { return i.Topic }},
+	{name: "priority", render: func(i model.Issue, _ derivedColumns) string { return i.Priority.String() }},
+	{name: "title", render: func(i model.Issue, _ derivedColumns) string { return i.Title }},
 	// rank is printable because it is the key `lit ls` orders by; a listing
 	// that cannot show its own sort key forces the reader to infer the order.
-	{name: "rank", render: func(i model.Issue, _ relationColumns) string { return emptyDash(i.Rank) }},
-	{name: "assignee", render: func(i model.Issue, _ relationColumns) string { return emptyDash(i.AssigneeValue()) }},
-	{name: "labels", render: func(i model.Issue, _ relationColumns) string {
+	{name: "rank", render: func(i model.Issue, _ derivedColumns) string { return emptyDash(i.Rank) }},
+	{name: "assignee", render: func(i model.Issue, _ derivedColumns) string { return emptyDash(i.AssigneeValue()) }},
+	{name: "labels", render: func(i model.Issue, _ derivedColumns) string {
 		return emptyDash(strings.Join(i.Labels, ","))
 	}},
-	{name: "updated_at", render: func(i model.Issue, _ relationColumns) string {
+	{name: "updated_at", render: func(i model.Issue, _ derivedColumns) string {
 		return i.UpdatedAt.Format(time.RFC3339)
 	}},
-	{name: "created_at", render: func(i model.Issue, _ relationColumns) string {
+	{name: "created_at", render: func(i model.Issue, _ derivedColumns) string {
 		return i.CreatedAt.Format(time.RFC3339)
 	}},
-	{name: "parent", needsRelations: true, render: func(_ model.Issue, rels relationColumns) string {
-		return emptyDash(rels.parentID)
+	{name: "parent", source: sourceRelations, render: func(_ model.Issue, cells derivedColumns) string {
+		return emptyDash(cells.parentID)
 	}},
-	{name: "blocked", needsRelations: true, render: func(_ model.Issue, rels relationColumns) string {
-		return blockedLabel(rels.blocked)
+	// blocked is sourceReadiness, not sourceRelations: it means "the annotation
+	// registry says this cannot be pulled", which is a still-open dependency, an
+	// earlier same-lane sibling still open, a missing required field, or
+	// needs-design. The registry is the single authority on what blocks and
+	// rendering may not carry a shorter list, so the cell is computed from the
+	// verdict and never re-derived from edges. [LAW:one-source-of-truth]
+	{name: "blocked", source: sourceReadiness, render: func(_ model.Issue, cells derivedColumns) string {
+		return blockedLabel(cells.blocked)
 	}},
 }
 
@@ -172,9 +220,19 @@ func columnNames(columns []columnSpec) []string {
 	return names
 }
 
-// projectsRelationColumn reports whether any selected column is served from the
-// relationship graph — the data-shaped signal the list path uses to decide
-// whether to pay for the relation-graph query.
-func projectsRelationColumn(columns []columnSpec) bool {
-	return slices.ContainsFunc(columns, func(spec columnSpec) bool { return spec.needsRelations })
+// columnSourceFor reports the data a projection needs: the maximum over its
+// columns, because the ladder is ordered and each level subsumes the one below.
+// This is the data-shaped signal the list path uses to decide what to load, and
+// taking the MAXIMUM is what makes the decision total — every column in the
+// projection is served at least what its cell is computed from, so no column can
+// be quietly answered from less. A projection naming no derived column comes
+// back sourceIssue, the zero, and costs nothing.
+// [LAW:dataflow-not-control-flow] the load is a value derived from the selected
+// columns; the loader's only branch is on this domain enum.
+func columnSourceFor(columns []columnSpec) columnSource {
+	source := sourceIssue
+	for _, spec := range columns {
+		source = max(source, spec.source)
+	}
+	return source
 }

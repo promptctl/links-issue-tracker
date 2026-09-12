@@ -371,10 +371,16 @@ func runList(ctx context.Context, stdout io.Writer, args []string) error {
 			return fmt.Errorf("open store at %q read-only: %w", atDir, markEngineOpenContention(err, infoForLocation(loc)))
 		}
 		defer func() { _ = st.Close() }()
-		return runListWithStore(ctx, stdout, st, args)
+		// noReadyPolicy, for the reason gatherCrossProjectRollup states at its own
+		// foreign-store call: a Location carries no repo root, so there is no ready
+		// policy to read. It opts out of ONLY the field-presence gate; every
+		// store-intrinsic annotation — blockers, the lane gate, needs-design —
+		// still runs, so `--columns blocked` over a foreign store answers the
+		// registry's question minus the one input that store cannot supply.
+		return runListWithStore(ctx, stdout, st, noReadyPolicy, args)
 	}
 	return runWithApp(ctx, stdout, app.AccessRead, func(ctx context.Context, ap *app.App) error {
-		return runListWithStore(ctx, stdout, ap.Store, args)
+		return runListWithStore(ctx, stdout, ap.Store, workspaceReadyPolicy(ap), args)
 	})
 }
 
@@ -405,7 +411,7 @@ func extractAtDir(args []string) (string, bool) {
 	return "", false
 }
 
-func runListWithStore(ctx context.Context, stdout io.Writer, st storage.Store, args []string) error {
+func runListWithStore(ctx context.Context, stdout io.Writer, st storage.Store, policy readyPolicy, args []string) error {
 	fs := newCobraFlagSet("ls")
 	// --at is registered so the shared parse accepts it; the store it selects was
 	// already opened by runList, so its value is not re-read here.
@@ -516,75 +522,94 @@ func runListWithStore(ctx context.Context, stdout io.Writer, st storage.Store, a
 	if err != nil {
 		return err
 	}
-	rels, err := listRelationColumns(ctx, st, columns, issues)
+	cells, err := listDerivedColumns(ctx, st, policy, columns, issues)
 	if err != nil {
 		return err
 	}
 	formatMode := strings.ToLower(strings.TrimSpace(*format))
 	switch formatMode {
 	case "", "lines":
-		return printIssueLines(stdout, issues, columns, rels)
+		return printIssueLines(stdout, issues, columns, cells)
 	case "table":
-		return printIssueTable(stdout, issues, columns, rels)
+		return printIssueTable(stdout, issues, columns, cells)
 	default:
 		return UnsupportedError{Message: fmt.Sprintf("unsupported --format %q", formatMode), Feature: "--format"}
 	}
 }
 
-// listRelationColumns builds the per-issue relationship facts the relationship
-// columns project, but only when one is actually selected — the default and
-// every non-relationship projection load no relation-graph data and render
-// byte-for-byte as before. The projected column set is the data that selects the
-// load; a nil result means "no relationship column asked for", and every
-// formatter lookup then yields the zero relationColumns.
-// [LAW:dataflow-not-control-flow] which data to load is a value (the column set),
-// not a forked code path.
-// [LAW:one-source-of-truth] reuses fetchIssueRelations + the canonical graph
-// rather than reinterpreting parent/blocks edges for the list view.
-func listRelationColumns(ctx context.Context, st storage.Store, columns []columnSpec, issues []model.Issue) (map[string]relationColumns, error) {
-	if !projectsRelationColumn(columns) {
+// listDerivedColumns builds the per-issue cells the projected columns render,
+// loading exactly the rung of the ladder the projection asks for and no more.
+// The default and every issue-only projection load nothing and render
+// byte-for-byte as before; naming `parent` buys the relation graph; naming
+// `blocked` buys the annotation pipeline, which is what makes this surface's
+// answer the registry's answer rather than a shorter one (links-columns-4hdq).
+// A nil result means "no derived column asked for", and every formatter lookup
+// then yields the zero derivedColumns.
+//
+// policy is the repo's ready policy, resolved HERE rather than by the caller and
+// only on the rung that consults it — `lit ls --columns id,title` never reads
+// config at all, which is what keeps a defect in an unrelated setting from
+// taking out the plain listing. `lit ls --at <dir>` supplies noReadyPolicy: a
+// foreign store has no repo root and so no config, and that opts out of ONLY the
+// field-presence gate, leaving every store-intrinsic annotation to run.
+//
+// [LAW:dataflow-not-control-flow] which data to load is a value (the column
+// set's maximum rung); the switch below branches on that domain enum alone,
+// which is the entire point of having it. The policy is a value for the same
+// reason — the foreign-store case differs by what it was handed, not by a branch
+// here.
+// [LAW:no-silent-failure] the default arm panics rather than returning nil: a
+// fourth rung added without a loader would otherwise render "-" in a column it
+// could not compute, and "-" is shaped exactly like a true answer.
+func listDerivedColumns(ctx context.Context, st storage.Store, policy readyPolicy, columns []columnSpec, issues []model.Issue) (map[string]derivedColumns, error) {
+	switch source := columnSourceFor(columns); source {
+	case sourceIssue:
 		return nil, nil
+	case sourceRelations:
+		relations, err := fetchIssueRelations(ctx, st, issues)
+		if err != nil {
+			return nil, err
+		}
+		return parentColumnsFor(relations), nil
+	case sourceReadiness:
+		// annotateIssues is the one annotator set `lit next`, `lit backlog` and
+		// the epic plan route on, and it returns the relations it fetched to
+		// compute them — so this rung pays one pipeline, not a graph load plus a
+		// classification. [LAW:single-enforcer]
+		requiredFields, err := policy()
+		if err != nil {
+			return nil, err
+		}
+		annotated, relations, _, err := annotateIssues(ctx, st, requiredFields, issues)
+		if err != nil {
+			return nil, err
+		}
+		return readinessColumnsFor(annotated, relations), nil
+	default:
+		panic(fmt.Sprintf("cli: no loader for column source %d", source))
 	}
-	relations, err := fetchIssueRelations(ctx, st, issues)
-	if err != nil {
-		return nil, err
-	}
-	return relationColumnsFor(relations), nil
 }
 
-// relationColumnsFor projects a whole relation graph down to the per-issue facts
-// the relationship columns render on the list path, where no annotators have
-// run: `blocked` here can only mean "a still-open dependency edge".
-//
-// The workable views build these cells through workableRelationColumns instead,
-// because they hold each row's annotations and so can ask the readiness
-// classifier the fuller question their own context lines already ask. A row
-// gated by an earlier sibling is blocked there and "-" here — a gap on this
-// path, not a second opinion, and one that closes by running the annotators for
-// the list view rather than by teaching this function a shorter answer.
-// Tracked as links-columns-4hdq.
-func relationColumnsFor(relations map[string]storage.IssueRelations) map[string]relationColumns {
-	out := make(map[string]relationColumns, len(relations))
+// parentColumnsFor projects a relation graph down to the cells that graph alone
+// can answer. It cannot set blocked, and that is the point: a `blocked` derived
+// from dependency edges alone is the shorter list this ticket removed, so there
+// is no longer a function in the package able to produce one.
+func parentColumnsFor(relations map[string]storage.IssueRelations) map[string]derivedColumns {
+	out := make(map[string]derivedColumns, len(relations))
 	for id, rel := range relations {
-		out[id] = deriveRelationColumns(rel)
+		out[id] = derivedColumns{parentID: parentIDOf(rel)}
 	}
 	return out
 }
 
-// deriveRelationColumns projects one issue's graph edges down to the flat facts
-// the list columns show: its parent/epic id, and whether a still-live dependency
-// blocks it. Blocked reuses liveIssues — the single liveness predicate — so the
-// list's "blocked" cannot drift from the close view's "unblocks".
-// [LAW:single-enforcer] liveness decided once, in model.Issue.InPlay.
-func deriveRelationColumns(rel storage.IssueRelations) relationColumns {
-	parentID := ""
-	if rel.Parent != nil {
-		parentID = rel.Parent.ID
+// parentIDOf reads an issue's parent/epic id off the canonical graph, "" for a
+// top-level issue. One reading of that edge, shared by both producers of
+// derivedColumns.parentID.
+func parentIDOf(rel storage.IssueRelations) string {
+	if rel.Parent == nil {
+		return ""
 	}
-	return relationColumns{
-		parentID: parentID,
-		blocked:  len(liveIssues(rel.DependsOn)) > 0,
-	}
+	return rel.Parent.ID
 }
 
 // workableFilter carries the user-supplied narrowing options for the
@@ -646,6 +671,31 @@ func readyRequiredFields(ap *app.App) ([]string, error) {
 	}
 	return cfg.Ready.RequiredFields, nil
 }
+
+// readyPolicy defers the required-fields read to the point of use, for callers
+// that do not yet know whether they need it. `lit ls` is the one: which columns
+// were projected is not known until the flag parse inside runListWithStore, and
+// only a readiness-sourced column consults the policy at all.
+//
+// Deferring is not a micro-optimization over one file read. config.Load
+// validates the whole config — snapshot.retention_budget, sync.cadence,
+// claims.freshness_window — and fails on any of them, so reading it eagerly
+// made `lit ls` fail on defects in settings it does not render. That takes out
+// the plain listing exactly when a repo's config is broken, which is when a
+// reader most needs to see their tickets. [LAW:no-silent-failure] the policy
+// still fails loudly, at the one projection that depends on it.
+type readyPolicy func() ([]string, error)
+
+// workspaceReadyPolicy reads the repo's policy when asked.
+func workspaceReadyPolicy(ap *app.App) readyPolicy {
+	return func() ([]string, error) { return readyRequiredFields(ap) }
+}
+
+// noReadyPolicy is the policy of a store with no repo root to read one from.
+// A foreign store opened through --at gets this rather than a nil check at the
+// point of use, so the field-presence gate opts out by the value it was handed.
+// [LAW:dataflow-not-control-flow]
+func noReadyPolicy() ([]string, error) { return nil, nil }
 
 // classifyWorkable is the store-facing core of the workable pipeline: list
 // workable leaves, fetch details, annotate against the given required-fields

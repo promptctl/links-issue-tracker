@@ -134,16 +134,18 @@ nothing — is a usage error (exit 2) naming the legal values.
 
 `--columns` takes the same vocabulary `lit ls` documents below and rejects an unknown
 name the same way, exit 2. Here the rejection lands ahead of the sync-staleness
-warning, so a rejected `lit backlog` prints nothing at all. One column means more on
-this command than it does on `ls`: `blocked` marks a ticket that is not workable, for
-any of the four reasons the readiness classifier knows — a still-open dependency, an
-earlier same-lane sibling still open, a missing required field, or needs-design. The
-column agrees with that classification, and so with the context block printed under
-the row, but the block splits the reasons across two lines: `depends on:` names the
-still-open dependencies as concrete blocker ids, and `blocked:` carries the other
-three. A ticket held up by nothing but a dependency therefore prints `blocked` in the
-column with a `depends on:` line under it and no `blocked:` line at all. `lit ls` sees
-only the dependency reason; that gap is tracked as `links-columns-4hdq`.
+warning, so a rejected `lit backlog` prints nothing at all. `blocked` marks a ticket
+that is not workable, for any of the four reasons the readiness classifier knows — a
+still-open dependency, an earlier same-lane sibling still open, a missing required
+field, or needs-design. The column agrees with that classification, and so with the
+context block printed under the row, but the block splits the reasons across two
+lines: `depends on:` names the still-open dependencies as concrete blocker ids, and
+`blocked:` carries the other three. A ticket held up by nothing but a dependency
+therefore prints `blocked` in the column with a `depends on:` line under it and no
+`blocked:` line at all. `lit ls --columns blocked` reads that same verdict and so
+answers the same question — except over a foreign store, where `lit ls --at <dir>`
+evaluates three of the four reasons (see `lit ls` below); what stays particular to
+`backlog` is the context block, which is where the reason is named.
 
 ### `lit next`
 
@@ -214,7 +216,9 @@ lit ls [--at <store-dir>] [--ids <csv>] [--search <text>] [--query <q>] [--statu
 General-purpose listing, ranked by default. `--at <store-dir>` points `ls` at a
 discovered store by its storage directory (a path from `lit stores`), read-only,
 without depending on the current directory being a lit workspace — every filter,
-sort, column, and format below applies to that foreign store. This is the folded-in
+sort, column, and format below applies to that foreign store, with one narrowing:
+the `blocked` column evaluates three of its four reasons across a store boundary,
+described with that column below. This is the folded-in
 former `lit ls-at`; an old `lit ls-at <dir>` invocation returns a pointer to
 `lit ls --at <dir>`. `--search` matches title and description
 text; `--query` is a compact query language combining filters and text (e.g.
@@ -231,21 +235,38 @@ they are not filter concerns.
 
 `--columns` projects a chosen subset, default `id,state,topic,title`. Beyond the
 issue's own fields (`id`, `state`, `type`, `topic`, `priority`, `rank`, `title`,
-`assignee`, `labels`, `created_at`, `updated_at`) two opt-in columns surface
-relationships from the canonical graph: `parent` (the parent/epic id, `-` if none) and
-`blocked` (`blocked` when a still-open dependency blocks the ticket, else `-`).
-`blocked` reads dependency edges and nothing else here: `ls` runs no annotators, so
-it cannot see the other things that hold a ticket up — an earlier same-lane sibling
-still open, a missing required field, needs-design. `lit backlog --columns blocked`
-answers that fuller question, so a ticket blocked only by a sibling prints `blocked`
-there and `-` here; closing the gap is tracked as `links-columns-4hdq`.
-`rank` prints the issue's own rank string, the key `ls` orders by. Default output is
-unchanged unless a relationship column is selected. A name outside that set is a usage
-error (exit 2) that quotes the offending word and lists the valid columns — the same
-list the flag's `--help` prints — and the command exits before any row is fetched or
-printed. Watch for near-misses: the status column is spelled `state`, `lane` is a
-`lit show --field` name but not a column, and `description` and `prompt` are
-multi-line, so they are read with `--field` rather than projected into a table.
+`assignee`, `labels`, `created_at`, `updated_at`) two opt-in columns are computed
+rather than read off the row, and from different places: `parent` (the parent/epic id
+from the canonical graph, `-` if none) and `blocked` (`blocked` when the readiness
+classifier says the ticket cannot be pulled, else `-`). That classifier is the one
+`lit backlog --columns blocked` reads, over all four reasons it knows — a still-open
+dependency, an earlier same-lane sibling still open, a missing required field,
+needs-design — so the cell means the same thing on both commands. Across a store
+boundary it narrows by one reason: under `--at <dir>` readiness is
+**store-intrinsic**, because a discovered store carries no repo root to load a
+`required_fields` policy from (the same caveat `lit stores --counts` carries), so
+the missing-required-field reason cannot fire there. A `-` from `--at` is
+authoritative about the other three reasons and silent about that one. What `ls` reports
+is the fact, never which of the four reasons applies: it is a flat projection, one
+cell per column and no context block, so a reader who needs the why runs
+`lit backlog`, where the `depends on:` and `blocked:` lines name it. The two
+commands render different amounts of one verdict; neither holds a second opinion.
+And because the cell is a verdict about the row rather than a property of the
+listing, `ls` prints `blocked` on rows the workable commands never list at all — a
+closed ticket, an epic, or an archived or deleted one surfaced by
+`--include-archived` / `--include-deleted` — since `ls` lists whatever you filtered
+for. On those rows the cell still answers only what the classifier says; whether
+anything can act on the ticket is what `state` reports, which is why such a row
+reads `open+archived` beside its verdict. `rank` prints
+the issue's own rank string, the key `ls` orders by. Cost follows the projection: the
+default and any projection of issue fields alone load nothing, `parent` costs the
+relation-graph query, `blocked` costs the annotation pipeline. A name outside that
+set is a usage error (exit 2) that quotes the offending word and lists the valid
+columns — the same list the flag's `--help` prints — and the command exits before
+any row is fetched or printed. Watch for near-misses: the status column is spelled
+`state`, `lane` is a `lit show --field` name but not a column, and `description` and
+`prompt` are multi-line, so they are read with `--field` rather than projected into
+a table.
 
 ### `lit show`
 

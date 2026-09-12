@@ -116,7 +116,7 @@ func (n focusNotice) emptyLine() string {
 // them read off issues, a focused scope or a --limit that excluded the
 // dependent row deleted the surviving row's own unblocks line, and the preamble
 // went on promising "what closing it would unblock" one screen above the gap.
-func printBacklogOutput(w io.Writer, columns []columnSpec, issues, gathered []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, rels map[string]relationColumns, cc claimContext, notice focusNotice) error {
+func printBacklogOutput(w io.Writer, columns []columnSpec, issues, gathered []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, cells map[string]derivedColumns, cc claimContext, notice focusNotice) error {
 	if _, err := fmt.Fprintln(w, backlogPreamble); err != nil {
 		return err
 	}
@@ -141,7 +141,7 @@ func printBacklogOutput(w io.Writer, columns []columnSpec, issues, gathered []an
 	now := time.Now()
 	var above backlogRun
 	for i, entry := range issues {
-		line := fmt.Sprintf("%2d. %s", i+1, formatIssueColumns(entry.Issue, columns, "  ", rels))
+		line := fmt.Sprintf("%2d. %s", i+1, formatIssueColumns(entry.Issue, columns, "  ", cells))
 		if _, err := fmt.Fprintln(w, line); err != nil {
 			return err
 		}

@@ -29,7 +29,7 @@ func listColumnsOutput(t *testing.T, expr string) (string, error) {
 		t.Fatalf("CreateIssue: %v", err)
 	}
 	var out bytes.Buffer
-	err := runListWithStore(ctx, &out, ap.Store, []string{"--columns", expr})
+	err := runListWithStore(ctx, &out, ap.Store, noReadyPolicy, []string{"--columns", expr})
 	return out.String(), err
 }
 
@@ -146,7 +146,7 @@ func TestColumnsBlankExpressionKeepsDefaultProjection(t *testing.T) {
 		{"--columns", ","},
 	} {
 		var out bytes.Buffer
-		if err := runListWithStore(ctx, &out, ap.Store, args); err != nil {
+		if err := runListWithStore(ctx, &out, ap.Store, noReadyPolicy, args); err != nil {
 			t.Fatalf("lit ls %v: want default projection, got %v", args, err)
 		}
 		got := fieldsOf(lineForID(t, out.String(), issue.ID))
@@ -167,7 +167,7 @@ func TestColumnsRankRendersTheIssueRank(t *testing.T) {
 		t.Fatalf("CreateIssue: %v", err)
 	}
 	var out bytes.Buffer
-	if err := runListWithStore(ctx, &out, ap.Store, []string{"--columns", "id,rank"}); err != nil {
+	if err := runListWithStore(ctx, &out, ap.Store, noReadyPolicy, []string{"--columns", "id,rank"}); err != nil {
 		t.Fatalf("--columns id,rank: %v", err)
 	}
 	fields := fieldsOf(lineForID(t, out.String(), issue.ID))
@@ -187,7 +187,7 @@ func TestColumnsHelpEnumeratesValidNames(t *testing.T) {
 	var out bytes.Buffer
 	// --help is answered by the flag parser, which reports it via a sentinel
 	// error after printing; the output is what this asserts on.
-	_ = runListWithStore(ctx, &out, ap.Store, []string{"--help"})
+	_ = runListWithStore(ctx, &out, ap.Store, noReadyPolicy, []string{"--help"})
 	for _, name := range sortedColumnNames() {
 		if !strings.Contains(out.String(), name) {
 			t.Errorf("`lit ls --help` does not enumerate column %q:\n%s", name, out.String())
