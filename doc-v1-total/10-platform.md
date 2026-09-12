@@ -101,7 +101,7 @@ Defaults set in `Load` (`config.go:217-228`):
 | `sync.cadence` | enum | `"on-change"` | `on-push` or `on-change`; anything else fails `Load` (`config.go:252-254`) |
 | `sync.receive` | bool | `true` | |
 | `sync.owner_notify_cmd` | string | `""` | empty = no owner-notification channel |
-| `claims.freshness_window` | duration string | `"24h"` | read as a string and parsed by `time.ParseDuration`; a bare number or non-positive duration fails `Load` (`config.go:89-98, 262`) |
+| `claims.freshness_window` | duration string | `"6h"` | read as a string and parsed by `time.ParseDuration`; a bare number or non-positive duration fails `Load` (`config.go:89-98, 262`) |
 
 Cadence semantics (`config.go:127-150`): `on-push` mirrors only when the managed pre-push git hook runs; `on-change` (default) mirrors after every mutating command. `shouldSyncAfterMutation` is true only for write access + `on-change` (`sync_cadence.go:64-66`). `maybeAutoSyncAfterCommand` returns immediately under `LIT_DISABLE_AUTO_SYNC`; on an unreadable config it prints `lit: automatic sync skipped, config unreadable: %v` and returns; otherwise it runs mirror coverage per cadence, inline receive per `sync.receive`, and inline compaction for write commands (`sync_cadence.go:78-101`). Timing constants: receive debounce 5 minutes, remote-absent recheck 10 seconds (`sync_cadence.go:45,56`).
 

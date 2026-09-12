@@ -285,11 +285,11 @@ Defaults are set in `Load` (`internal/config/config.go:217-228`).
 | `sync.cadence` | string enum | `"on-change"` | `internal/config/config.go:225`; legal values `on-push`, `on-change` (`:133`, `:140`, `:150`); invalid ⇒ `config: sync.cadence must be one of on-push, on-change, got %q` (`:252-254`) |
 | `sync.receive` | bool | `true` | `internal/config/config.go:226`, `:109` |
 | `sync.owner_notify_cmd` | string | `""` | `internal/config/config.go:227`, `:117`; empty means no owner-notification channel |
-| `claims.freshness_window` | duration string | `"24h"` | `internal/config/config.go:228`, `:73`; read as a **string** (`v.GetString`) and parsed by `time.ParseDuration` (`:262`, `:89-98`) |
+| `claims.freshness_window` | duration string | `"6h"` | `internal/config/config.go:228`, `:73`; read as a **string** (`v.GetString`) and parsed by `time.ParseDuration` (`:262`, `:89-98`) |
 
 - `claims.freshness_window` is explicitly excluded from struct-tag decoding (`mapstructure:"-"`,
   `internal/config/config.go:73`). A bare number fails with
-  `config: claims.freshness_window must be a duration with a unit, like "24h" or "90m" (got %q): %w`
+  `config: claims.freshness_window must be a duration with a unit, like "72h" or "90m" (got %q): %w`
   (`internal/config/config.go:92`); a non-positive duration fails with
   `config: claims.freshness_window must be positive, got %s` (`internal/config/config.go:95`).
 - Decode failure of the whole config yields `decode config: %w` (`internal/config/config.go:237`).
