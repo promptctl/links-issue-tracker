@@ -632,7 +632,7 @@ Three modes, one target-resolution rule (`scripts/install.sh:3-18`):
 - **Source mode** (`:192-229`): `ver=$(git describe --tags --always --dirty)` with a leading `v`
   stripped; empty stays empty so `IsDev` remains true; sources `scripts/cgo-env.sh` and
   `scripts/version-ldflags.sh`; builds with
-  `GOFLAGS=…-buildvcs=false go build -ldflags "-X <pkg>.Version=… -X <pkg>.Commit=… -X <pkg>.Date=…" -o "$TARGET_DIR/$BIN_NAME" ./cmd/lit`.
+  `GOFLAGS=…-buildvcs=false go build -ldflags "-X <pkg>.Version=… -X <pkg>.Commit=… -X <pkg>.Date=… -X <pkg>.Origin=…" -o "$TARGET_DIR/$BIN_NAME" ./cmd/lit`.
 - **Release/latest mode** (`:230-456`):
   - Requires `curl` (`:233-237`); `--latest-release` additionally requires `jq` and reads
     `.tag_name` from the GitHub API (`:241-254`).
@@ -713,7 +713,7 @@ the Justfile or any workflow file in `.github/workflows/`.
 |---|---|
 | `default` | `just --list` (`Justfile:8-9`) |
 | `setup` | On Darwin: requires Homebrew (`Install Homebrew first: https://brew.sh`, exit 1) then `brew install icu4c@78 zstd`; then sources `cgo-env.sh` and, if `CGO_CPPFLAGS` is set, persists `CGO_CPPFLAGS`/`CGO_LDFLAGS` via `go env -w`; otherwise prints that no extra flags are needed (`Justfile:14-27`) |
-| `build` | `go build -buildvcs=false -ldflags "-X <version pkg>.Commit=$LIT_BUILD_COMMIT -X <version pkg>.Date=$LIT_BUILD_DATE" ./cmd/lit` — deliberately does **not** stamp `Version` (`Justfile:32-40`) |
+| `build` | `go build -buildvcs=false -ldflags "-X <version pkg>.Commit=$LIT_BUILD_COMMIT -X <version pkg>.Date=$LIT_BUILD_DATE -X <version pkg>.Origin=$LIT_BUILD_ORIGIN" ./cmd/lit` — deliberately does **not** stamp `Version` (`Justfile:32-40`) |
 | `test-short` | `go test -short ./...` (`Justfile:45-49`) |
 | `test *args` | `go test -timeout 30m ${args:-./...}`; a later `-timeout` in args wins (`Justfile:58-63`) |
 | `lint` | `golangci-lint run` (`Justfile:66-70`) |
@@ -1051,7 +1051,8 @@ setup-go@v5 (`cache: true`) → `go mod download` → `go run ./tools/licenses -
   - `ldflags: -s -w` plus
     `-X …/internal/version.Version={{ .Version }}`,
     `-X …/internal/version.Commit={{ .ShortCommit }}`,
-    `-X …/internal/version.Date={{ .Date }}` (`:131-144`).
+    `-X …/internal/version.Date={{ .Date }}`,
+    `-X …/internal/version.Origin=release` (`:131-152`).
 - Archives (`:146-189`): `name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"`
   — required to match mkmanifest's parser (`:148-151`); `formats: [tar.gz]` with a windows
   override to `[zip]` (`:152-155`); `wrap_in_directory: false` (`:163`); `files:` `LICENSE`,

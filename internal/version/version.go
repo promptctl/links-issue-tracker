@@ -1,7 +1,7 @@
 // Package version is the single source of truth for "what binary am I and
 // what can I do." It exposes a typed Info value carrying the binary's identity
-// (link-time-injected version/commit/build-date) plus its capability bounds
-// (the schema-version range it can produce, derived from the embedded
+// (link-time-injected version/commit/build-date/origin) plus its capability
+// bounds (the schema-version range it can produce, derived from the embedded
 // migration registry). Downstream code — the `lit version` command, the
 // release manifest (internal/release), the `lit downgrade` resolver
 // (downgrade epic .4), and the refusal-message upgrade (.5) — all read this

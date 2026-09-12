@@ -12,7 +12,7 @@
 #
 # [LAW:single-enforcer] One installer, one target-resolution rule, one stale
 # detector. The "what to install" varies; "where + safety checks" do not.
-# [LAW:one-source-of-truth] Source builds inject version/commit/date via
+# [LAW:one-source-of-truth] Source builds inject version/commit/date/origin via
 # ldflags so `lit version` reports something meaningful even for ad-hoc
 # checkouts; release-download mode trusts the prebuilt binary's already-baked
 # stamps (set by goreleaser).

@@ -48,9 +48,11 @@ func exportedNames(script string) map[string]bool {
 	return names
 }
 
-// TestEveryProducerStampsOrigin is the machine-checked half of the contract this
-// package's doc comment states in prose: the link-time variables have exactly
-// three writers, and every one of them stamps every variable a consumer reads.
+// TestEveryProducerStampsOrigin is the machine-checked half of the contract the
+// var block above declines to recite: the link-time variables have exactly
+// three writers, and every one of them stamps Origin. Version is the single
+// field a writer may withhold, and the asymmetry is
+// TestOnlyTheJustfileOmitsVersion's to own.
 //
 // It exists because the alternative — remembering — already failed once.
 // FromSource was inferred from whether a Version was stamped, which made
