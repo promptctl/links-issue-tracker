@@ -492,8 +492,8 @@ func humanizeCoarseDuration(d time.Duration) string {
 // carries: how old a thing must be before that surface speaks up. "at least",
 // never "over" — every staleness gate stays silent on `age < threshold`, so a
 // value sitting exactly on the threshold warns, and "(over 7 days)" is false at
-// that reachable age. Two of the three surfaces shipped that contradiction,
-// each re-deriving a sentence the third had already gotten right, so the
+// that reachable age. Three of the four surfaces shipped that contradiction,
+// each re-deriving a sentence the fourth had already gotten right, so the
 // qualifier is bound to the threshold here instead of retyped per site.
 // [LAW:single-enforcer] the one place the wording and the comparison are
 // paired; TestEveryStalenessSurfaceAgreesAtItsBoundary holds every surface to

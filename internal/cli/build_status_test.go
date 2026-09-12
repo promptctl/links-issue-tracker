@@ -223,16 +223,18 @@ func TestBuildStalenessLineNamesAgeAndRemedy(t *testing.T) {
 // the one age where its wording can lie — exactly its own threshold — and holds
 // each to the shared vocabulary. Every gate stays silent on `age < threshold`,
 // so a value sitting exactly on the threshold warns, and "(over 7 days)" is
-// false at that reachable age. Two surfaces shipped that contradiction:
-// buildStalenessLines and fetchStalenessLines each re-derived a sentence
-// buildStatusNote had already gotten right and documented. Neither shape table
-// could catch it — both spend their "exactly at the threshold" row asserting
-// that a line is emitted, never what the line says.
+// false at that reachable age. Three surfaces shipped that contradiction:
+// buildStalenessLines, fetchStalenessLines and `lit version`'s own WARNING
+// each re-derived a sentence buildStatusNote had already gotten right and
+// documented. No shape table could catch it — each spends its "exactly at the
+// threshold" row asserting that a line is emitted, never what the line says.
 //
-// The surfaces are rows, so covering a fourth is a row rather than another
+// The surfaces are rows, so covering a fifth is a row rather than another
 // test, and the expected phrases stay literal: deriving them from
 // stalenessThresholdClause would pass for whatever that function happens to
-// return, which is the vacuous test this one exists to not be.
+// return, which is the vacuous test this one exists to not be. The fourth row
+// arrived the way the third did — by grepping the claim across the tree rather
+// than re-reading the sites already cited.
 //
 // The remedy travels with its surface. The build pair share one — one predicate
 // means one population, and the banner had prescribed `just install` alone,
@@ -254,10 +256,15 @@ func TestEveryStalenessSurfaceAgreesAtItsBoundary(t *testing.T) {
 	if len(fetch) != 1 {
 		t.Fatalf("fetchStalenessLines() = %q, want one line at the threshold", fetch)
 	}
+	warning := versionStalenessWarning(info, now)
+	if len(warning) != 1 {
+		t.Fatalf("versionStalenessWarning() = %q, want one line at the threshold", warning)
+	}
 
 	for _, surface := range []struct{ name, got, threshold, remedy string }{
 		{"buildStalenessLines", banner[0], "7 days", buildRefreshRemedy},
 		{"buildStatusNote", buildStatusNote(info, now), "7 days", buildRefreshRemedy},
+		{"versionStalenessWarning", warning[0], "7 days", buildRefreshRemedy},
 		{"fetchStalenessLines", fetch[0], "24 hours", "lit sync fetch"},
 	} {
 		// Matched as the rendered phrase rather than the bare word, so an

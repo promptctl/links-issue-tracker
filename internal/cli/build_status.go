@@ -7,12 +7,14 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
-// buildStatusNote and buildStalenessLines gate on the same
-// version.Info.StaleSourceBuild predicate, so they speak about the same
+// buildStatusNote, buildStalenessLines and versionStalenessWarning gate on the
+// same version.Info.StaleSourceBuild predicate, so they speak about the same
 // binaries at the same ages and cannot prescribe different cures.
-// buildRefreshRemedy is the one they both name. The predicate covers both
-// from-source shapes, so the remedy has to as well: `just build` refreshes the
-// ./lit a developer runs out of the repo, `just install` the one on PATH.
+// buildRefreshRemedy is the one all three name — `lit version` prescribed its
+// own "to pick up recent fixes" wording for that same population until the
+// threshold parenthetical it was also retyping gave it away. The predicate
+// covers both from-source shapes, so the remedy has to as well: `just build`
+// refreshes the ./lit a developer runs out of the repo, `just install` the one on PATH.
 // Naming either alone tells half the population to rebuild a binary they are
 // not running — the banner named only `just install`, which does not refresh
 // the ./lit in front of the reader. [LAW:one-source-of-truth]

@@ -468,28 +468,39 @@ All geometry git calls use `context.Background()` deliberately (`internal/worksp
 
 `internal/version/version.go`:
 
-- Link-time variables `Version`, `Commit`, `Date` (`:34-38`). Three writers are named in-source:
-  goreleaser (all three), `scripts/install.sh` source mode (all three), and the Justfile `build`
-  recipe (Commit + Date only) (`:28-33`).
-- `StaleBuildThreshold = 7 * 24 * time.Hour` (`:47`).
-- `Info{Version, Commit, Date, IsDev, Schema}` with JSON tags
-  `version/commit/date/is_dev/schema_support` (`:57-63`).
-- `SchemaSupport{Min int64 "min", Max int64 "max"}` (`:73-76`).
+- Link-time variables `Version`, `Commit`, `Date`, `Origin` (`:33-46`). Which producer stamps
+  which field is asserted against the producer files themselves in `stamp_sites_test.go`, not
+  recited in-source (`:27-31`).
+- `OriginRelease = "release"` — the only value meaning "rebuilding a working tree will not
+  refresh this binary"; every other value, including the empty string a bare `go build` leaves,
+  reads as from-source (`:54`). `OriginSource = "source"`, what both from-source entrypoints
+  stamp through `scripts/version-ldflags.sh` (`:59`).
+- `StaleBuildThreshold = 7 * 24 * time.Hour` (`:68`).
+- `Info{Version, Commit, Date, IsDev, FromSource, Schema}` with JSON tags
+  `version/commit/date/is_dev/schema_support`; `FromSource` is tagged `json:"-"` and never
+  reaches the wire (`:78-110`, the tag at `:108`).
+- `SchemaSupport{Min int64 "min", Max int64 "max"}` (`:120-123`).
 - `Get()` derives `Schema.Max` from `migrations.MaxVersion()` (one ReadDir over the embedded
-  registry) and `Schema.Min` from `migrations.Baseline`; `IsDev = (Version == "")` (`:81-93`).
+  registry) and `Schema.Min` from `migrations.Baseline`; `IsDev = (Version == "")`;
+  `FromSource = (Origin != OriginRelease)` (`:128-141`).
 - `BuildAge(now)` returns `(0,false)` when `Date` is empty, unparseable as RFC3339, or in the
-  future; otherwise `now.Sub(stamped)` (`:101-113`).
+  future; otherwise `now.Sub(stamped)` (`:149-162`).
+- `StaleSourceBuild(now)` returns that age plus the one staleness verdict every surface reads:
+  `ok && FromSource && age >= StaleBuildThreshold` — the comparison is `>=`, so the boundary
+  itself is stale (`:187-190`).
 
-`lit version` output (`internal/cli/version.go:17-75`):
+`lit version` output (`internal/cli/version.go:17-66`):
 
 - Rejects any positional argument: `usage: lit version` (`:22-24`).
 - Line 1: `lit %s (commit %s, built %s)\n`, where an `IsDev` build prints `dev`, an empty commit
   prints `unknown`, an empty date prints `unknown` (`:31-45`).
 - Line 2 (only when `BuildAge` is ok): `built %s ago\n` (`:52-55`).
-- Line 3 (only when the age ≥ `StaleBuildThreshold`):
-  `WARNING: binary is older than %s — run `just build` (or `just install`) to pick up recent fixes\n`
-  (`:56-63`).
-- Final line: `schema versions supported: %d–%d\n` (`:66`).
+- Line 3 (only when `Info.StaleSourceBuild(now)` is true — a from-source build whose age is
+  ≥ `StaleBuildThreshold`):
+  `WARNING: this build is at least <threshold> old — run `just build` (or `just install`) to refresh`
+  — rendered by `versionStalenessWarning` (`:88-96`) from `stalenessThresholdClause` and
+  `buildRefreshRemedy`, so "at least" tracks the `>=` comparison; printed at `:58-62`.
+- Final line: `schema versions supported: %d–%d\n` (`:64`).
 
 ---
 

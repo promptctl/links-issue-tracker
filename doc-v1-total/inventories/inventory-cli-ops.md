@@ -86,7 +86,7 @@ Read commands that additionally print the store-backed banner: `internal/cli/cli
 
 `internal/cli/output.go:451-462` `humanizeCoarseDuration`: `>=48h` → "N days"; `>=2h` → "N hours"; `>=2m` → "N minutes"; else "under a minute". Used by every age line in this inventory.
 
-`internal/cli/output.go:501-503` `stalenessThresholdClause`: renders `at least <coarse duration> old`, the threshold parenthetical carried by every staleness surface (`buildStatusNote`, `buildStalenessLines`, `fetchStalenessLines`). "at least", never "over": every staleness gate stays silent below its threshold, so a value sitting exactly on it warns, and "over 7 days" is false at that reachable age.
+`internal/cli/output.go:501-503` `stalenessThresholdClause`: renders `at least <coarse duration> old`, the threshold parenthetical carried by every staleness surface (`buildStatusNote`, `buildStalenessLines`, `fetchStalenessLines`, `versionStalenessWarning`). "at least", never "over": every staleness gate stays silent below its threshold, so a value sitting exactly on it warns, and "over 7 days" is false at that reachable age.
 
 ---
 
@@ -506,7 +506,7 @@ Flag parse output is `io.Discard` (`sync_bg.go:148`).
   `sync: automatic push[ to <r>/<b>] is FAILING — last attempt <age> ago: <reason> — changes stay on this machine until a push succeeds; run 'lit sync push'`.
 - `oneLineReason` (`sync_staleness.go:160-174`): first line only, trimmed, capped at 160 runes with a `…` suffix; empty → `(no reason recorded)`.
 - `fetchStalenessLines` (`sync_staleness.go:119-131`) — only when the age is known and `>= 24h`:
-  `sync: last successful fetch[ from <ref>] was <age> ago (over <threshold>) — run 'lit sync fetch'`.
+  `sync: last successful fetch[ from <ref>] was <age> ago (at least <threshold> old) — run 'lit sync fetch'` — the parenthetical from `stalenessThresholdClause`, "at least" because the gate is `>=`.
 - `syncStalenessLines` (`sync_staleness.go:96-111`) — only for a RESOLVED doctor sync report; when `State() == storage.SyncAhead`:
   `sync: <N> local change(s) not pushed to <r>/<b>, as of last fetch — run 'lit sync push'`; then the fetch-staleness line. Deliberately does NOT fire on `SyncDiverged` (that has the heavier failure block) nor special-case `SyncNeverSynced` (`sync_staleness.go:83-95`).
 - `printStalenessWarning` (read commands) — `sync_staleness.go:191-212`: the build-drift line FIRST (at most one, only for a stale source build), then the push-failure line, then the ahead/fetch lines. Write errors are returned to the caller.
@@ -963,14 +963,14 @@ Then, when conflicts exist: with `--force` → `MergeConflictError{"eject aborte
 
 ## 13. `lit version`
 
-`runVersion` — `version.go:17-68`. No flags beyond `--help`. Any positional → `UsageError{"usage: lit version"}` (`version.go:22-24`).
+`runVersion` — `version.go:17-66`. No flags beyond `--help`. Any positional → `UsageError{"usage: lit version"}` (`version.go:22-24`).
 `version.Get()` error is returned (`version.go:26-29`).
 
 Output lines:
 1. `lit <version|"dev"> (commit <commit|"unknown">, built <date|"unknown">)` — `dev` substituted when `info.IsDev`; `commit`/`date` fall back to `unknown` when blank (`version.go:31-45`).
 2. Only when `info.BuildAge(now)` reports `ok` (a real, past, parsed date): `built <coarse duration> ago` (`version.go:52-55`).
-3. Only when the age is `>= version.StaleBuildThreshold`: `WARNING: binary is older than <threshold> — run \`just build\` (or \`just install\`) to pick up recent fixes` (`version.go:56-63`).
-4. Always: `schema versions supported: <min>–<max>` (en dash) (`version.go:66`).
+3. Only when `info.StaleSourceBuild(now)` reports true (a from-source build whose age is `>= version.StaleBuildThreshold`; a release build never warns at any age): `WARNING: this build is at least <threshold> old — run \`just build\` (or \`just install\`) to refresh` (`versionStalenessWarning`, `version.go:88-96`; printed at `version.go:58-62`). Both halves are shared, not retyped — the parenthetical from `stalenessThresholdClause`, the cure from `buildRefreshRemedy` — so "at least", because the comparison is `>=`.
+4. Always: `schema versions supported: <min>–<max>` (en dash) (`version.go:64`).
 
 ---
 
