@@ -316,11 +316,13 @@ func teardownMirror(ws workspace.Info, cause error, stopAnswering func()) error 
 // network while this process holds the store's one read-write engine (and its
 // journal lock), and nothing on the transport side bounds how long a hung
 // remote can stall it — so the deadline is imposed here, by the holder
-// (links-sync-pgct.11.1). It is a deadline and not the hold's end: measured
-// over 44 cut cycles, cancellation reaches the transport but the push takes
-// another 1.3s at the median and 21.4s at the tail to unwind, which is why the
-// store's mirrorHoldCeiling rather than this budget is what every co-resident
-// waiter is sized against (links-sync-dauk).
+// (links-sync-pgct.11.1). It is a deadline and not the hold's end: cancellation
+// reaches the transport, but the push takes the store's mirrorCancelLagObserved
+// to unwind, which is why that package's mirrorHoldCeiling rather than this
+// budget is what every co-resident waiter is sized against (links-sync-dauk).
+// The lag's measured figures live on mirrorCancelLagObserved and are
+// deliberately not copied here — it is the constant a re-measurement updates,
+// and a second copy in another package is one nothing would update with it.
 //
 // The deadline must wrap the ctx the session is OPENED
 // with, not just the push's: the embedded driver builds the connection's
@@ -408,8 +410,8 @@ func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnsw
 // the first wording of this message left five runes of it.
 func holdBudgetCutExplanation() error {
 	return fmt.Errorf(
-		"mirror cycle exceeded its %s hold budget — a deadline, not a diagnosis: check mirror.log's elapsed= values before blaming the remote. Cycles clustered just under the budget mean the budget is sized under this workspace's real cycle cost; one cycle far past it means the transport stopped answering. The engine closes as the cut unwinds, so the hold ends after the budget rather than at it, and the next mutation's mirror retries the push",
-		store.MirrorHoldBudget)
+		"mirror cycle exceeded its %s hold budget — a deadline, not a diagnosis: check %s's elapsed= values before blaming the remote. Cycles clustered just under the budget mean the budget is sized under this workspace's real cycle cost; one cycle far past it means the transport stopped answering. The engine closes as the cut unwinds, so the hold ends after the budget rather than at it, and the next mutation's mirror retries the push",
+		store.MirrorHoldBudget, mirrorLogName)
 }
 
 // mirrorOnce runs the one shared push path, without compaction. It is a single

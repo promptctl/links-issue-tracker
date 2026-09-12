@@ -6,16 +6,16 @@ lit's shared backend stores every workspace in an embedded [Dolt](https://github
 
 ### Open modes
 
-A `Store` wraps exactly one pooled SQL connection (`SetMaxOpenConns(1)` in `newDoltPool`, `store.go:2760`) opened through a vendored embedded-Dolt driver. Two access modes (`store.go:37-42`):
+A `Store` wraps exactly one pooled SQL connection (`SetMaxOpenConns(1)` in `openDoltPool`, `store.go:2760`) opened through a vendored embedded-Dolt driver. Two access modes (`store.go:37-42`):
 
 - **Write** (`Open`, and the sync-side `OpenSync`): the connector gets an exponential backoff (initial 50ms, max interval `engineOpenRetryMaxInterval` = 1s, max elapsed `engineOpenRetryMaxElapsed` = `coResidentHolderWait` = 70s, assigned in `newEngineOpenBackOff`, `store.go:2712-2714`) and pings eagerly so lock contention surfaces at open time.
 - **Read** (`OpenForRead`): no backoff, no ping — the engine opens lazily at the first SQL statement (`store.go:381-399`). A read open beside a foreign lock holder succeeds via Dolt's read-only fallback (journal wait ~100ms) and serves reads.
 
-If another process holds Dolt's journal lock (`<root>/links/.dolt/noms/LOCK`), the wrapped error satisfies both `ErrWorkspaceBusy` and `nbs.ErrDatabaseLocked` and reads "another process is holding this workspace's Dolt store open … retry after it completes" (`store.go:2619-2624`).
+If another process holds Dolt's journal lock (`<root>/links/.dolt/noms/LOCK`), the wrapped error satisfies both `ErrWorkspaceBusy` and `nbs.ErrDatabaseLocked` and reads "another process is holding this workspace's Dolt store open … retry after it completes" (`store.go:2692-2697`).
 
 ### Open sequence
 
-`Open(ctx, doltRootDir, workspaceID)` (`store.go:98-165`), in order: validate args (both non-blank; the root is `filepath.Clean`ed) → acquire the **shared workspace flock** → refuse if an adopt is pending → bootstrap the database if absent (`CREATE DATABASE IF NOT EXISTS links` through a first pool that closes before the second opens, `store.go:2497-2544`) → open the write connection → under the **commit lock**: normalize the default branch to `master` (renaming a sole non-master branch via `DOLT_BRANCH('-m', …)`, `store.go:2553-2596`) and run migrations. Failure at any point releases everything and returns the error.
+`Open(ctx, doltRootDir, workspaceID)` (`store.go:98-165`), in order: validate args (both non-blank; the root is `filepath.Clean`ed) → acquire the **shared workspace flock** → refuse if an adopt is pending → bootstrap the database if absent (`CREATE DATABASE IF NOT EXISTS links` through a first pool that closes before the second opens, `store.go:2497-2544`) → open the write connection → under the **commit lock**: normalize the default branch to `master` (renaming a sole non-master branch via `DOLT_BRANCH('-m', …)`, `store.go:2519-2562`) and run migrations. Failure at any point releases everything and returns the error.
 
 `OpenForRead` differs in that it stats the directory first — a missing directory yields "repository not initialized with lit — run 'lit init' first" — never bootstraps, and still runs migrations (a pending migration under a read-only holder fails with a "pending schema migrations" message, `store.go:212-231`). Re-opening a current-schema workspace adds **no** Dolt commit; migration is idempotent across opens.
 
@@ -33,7 +33,7 @@ Two `Open`s on one root serialize: the second blocks until the first `Close`. Af
 
 Every mutation routes through `withMutation(ctx, message, fn)` (`commit_lock.go:122-177`): under the commit lock and a transient-retry loop, `BeginTx` → `fn` → `tx.Commit` → `DOLT_COMMIT('-Am', <message>)`. The `-A` stages everything; there is no separate add step and no `--skip-empty` — a "nothing to commit" error is absorbed as success (`commit_lock.go:286-320`). A retry after a successful `tx.Commit` resumes at the DOLT_COMMIT step without re-running `fn` (the `staged` flag, `commit_lock.go:144-155`). A commit stamp may also carry `--allow-empty`, `--date` (RFC3339 UTC), and `--author`; ordinary store mutations pass only the message. A combined transition+field update is exactly one Dolt commit.
 
-**Dolt commit identity** derives entirely from the workspace id: author name = workspace id with `@`→`_` (blank → `links`), email = `<name>@links.local` (`store.go:2647-2668`).
+**Dolt commit identity** derives entirely from the workspace id: author name = workspace id with `@`→`_` (blank → `links`), email = `<name>@links.local` (`store.go:2729-2737`).
 
 Store-level commit messages used verbatim: `record sync state`, `create issue`, `apply update`, `add comment`, `delete comment` (`store.go:457,509,1115,1153,1172`), plus `add label`, `remove label`, `replace labels`, `add relation`, `remove relation`, `set parent`, `clear parent`, `rank to top`, `rank set`, `rank to bottom`, `rank above`, `rank below`, `fix rank inversions` from their subsystems (`labels.go`, `relations.go`, `ranking.go`).
 

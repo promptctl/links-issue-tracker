@@ -463,13 +463,23 @@ func TestWithCommitLockSerializesConcurrentOperations(t *testing.T) {
 // Not parallel: it shrinks package budget variables.
 func TestRetryTransientGCContentionStopsBeforeOutlastingCommitLockWaiters(t *testing.T) {
 	restoreOpen := engineOpenRetryMaxElapsed
-	engineOpenRetryMaxElapsed = 40 * time.Millisecond
+	engineOpenRetryMaxElapsed = 200 * time.Millisecond
 	t.Cleanup(func() { engineOpenRetryMaxElapsed = restoreOpen })
 	restoreAttempts := commitLockRetryAttempts
-	commitLockRetryAttempts = 4
+	commitLockRetryAttempts = 20
 	t.Cleanup(func() { commitLockRetryAttempts = restoreAttempts })
-	// commitLockWaiterBudget() is now 4 x 100ms = 400ms, and one rotation costs
-	// 40ms, so the loop has room for far fewer than its attempt count.
+	// commitLockWaiterBudget() is now 20 x 100ms = 2s against a 550ms
+	// sleep-plus-rotation, so the loop has room for three of them and stops far
+	// short of its 30 attempts.
+	//
+	// The shape is chosen for two margins, not one. Stopping at ~1650ms leaves
+	// 350ms under the budget, which is what keeps the assertion from failing on
+	// scheduler jitter across six real sleeps on a loaded runner. And dropping
+	// the sleep term from the check under test buys one more iteration, landing
+	// at ~2200ms — 200ms PAST the budget, so the pin still reddens for the
+	// defect it exists to catch. Tightening either number shrinks both margins
+	// at once: a pin that cannot flake because it can no longer fail is not a
+	// pin. [LAW:verifiable-goals]
 	waiterBudget := commitLockWaiterBudget()
 
 	// Always contended, and shaped through wrapCommitWorkingSetError — the real
@@ -492,7 +502,7 @@ func TestRetryTransientGCContentionStopsBeforeOutlastingCommitLockWaiters(t *tes
 	// zero delay cannot tell a check that reserves both terms from one that
 	// reserves only the rotation, which is exactly the gap this assertion
 	// exists to close.
-	const interAttemptDelay = 30 * time.Millisecond
+	const interAttemptDelay = 350 * time.Millisecond
 	delayForAttempt := func(int) time.Duration { return interAttemptDelay }
 
 	start := time.Now()
