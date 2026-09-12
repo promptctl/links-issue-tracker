@@ -253,7 +253,11 @@ cell per column and no context block, so a reader who needs the why runs
 commands render different amounts of one verdict; neither holds a second opinion.
 And because the cell is a verdict about the row rather than a property of the
 listing, `ls` prints `blocked` on rows the workable commands never list at all — a
-closed ticket, an epic — since `ls` lists whatever you filtered for. `rank` prints
+closed ticket, an epic, or an archived or deleted one surfaced by
+`--include-archived` / `--include-deleted` — since `ls` lists whatever you filtered
+for. On those rows the cell still answers only what the classifier says; whether
+anything can act on the ticket is what `state` reports, which is why such a row
+reads `open+archived` beside its verdict. `rank` prints
 the issue's own rank string, the key `ls` orders by. Cost follows the projection: the
 default and any projection of issue fields alone load nothing, `parent` costs the
 relation-graph query, `blocked` costs the annotation pipeline. A name outside that
