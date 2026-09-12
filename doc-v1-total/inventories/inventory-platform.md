@@ -629,40 +629,40 @@ Three modes, one target-resolution rule (`scripts/install.sh:3-18`):
   → `$HOME/.local/bin`. If `HOME` is unset at that last step it errors
   `error: cannot determine install directory — $HOME is unset …` (`:176-184`).
   `mkdir -p "$TARGET_DIR"` (`:187`).
-- **Source mode** (`:192-229`): `ver=$(git describe --tags --always --dirty)` with a leading `v`
+- **Source mode** (`:193-235`): `ver=$(git describe --tags --always --dirty)` with a leading `v`
   stripped; empty stays empty so `IsDev` remains true; sources `scripts/cgo-env.sh` and
   `scripts/version-ldflags.sh`; builds with
   `GOFLAGS=…-buildvcs=false go build -ldflags "-X <pkg>.Version=… -X <pkg>.Commit=… -X <pkg>.Date=… -X <pkg>.Origin=…" -o "$TARGET_DIR/$BIN_NAME" ./cmd/lit`.
-- **Release/latest mode** (`:230-456`):
-  - Requires `curl` (`:233-237`); `--latest-release` additionally requires `jq` and reads
-    `.tag_name` from the GitHub API (`:241-254`).
-  - Tag normalization: strip then re-add a leading `v` (`:271`), then require
+- **Release/latest mode** (`:236-461`):
+  - Requires `curl` (`:238-242`); `--latest-release` additionally requires `jq` and reads
+    `.tag_name` from the GitHub API (`:246-259`).
+  - Tag normalization: strip then re-add a leading `v` (`:276`), then require
     `^v[0-9]+\.[0-9]+\.[0-9]+$` else
-    `error: release tag '<tag>' is not a canonical semver release tag (expected vX.Y.Z)` (`:277-283`).
-  - Archive name `lit_${tag#v}_${os}_${arch}.${ext}` (`:286`, `:321`); arch map
+    `error: release tag '<tag>' is not a canonical semver release tag (expected vX.Y.Z)` (`:282-288`).
+  - Archive name `lit_${tag#v}_${os}_${arch}.${ext}` (`:291`, `:326`); arch map
     `x86_64|amd64→amd64`, `arm64|aarch64→arm64`, else
-    `error: unsupported architecture` (`:294-298`); OS map `linux|darwin→tar.gz`,
-    `mingw*|msys*|cygwin*→windows/zip`, else `error: unsupported OS` (`:299-304`).
-  - Extractor probes: `tar` for `.tar.gz`, `unzip` for `.zip` (`:307-320`).
+    `error: unsupported architecture` (`:299-303`); OS map `linux|darwin→tar.gz`,
+    `mingw*|msys*|cygwin*→windows/zip`, else `error: unsupported OS` (`:304-309`).
+  - Extractor probes: `tar` for `.tar.gz`, `unzip` for `.zip` (`:312-325`).
   - Downloads `<base>/<tag>/<archive>` and `<base>/<tag>/checksums.txt` into a temp dir created
     **inside `$TARGET_DIR`** (`mktemp -d "$TARGET_DIR/.lit-install.XXXXXX"`) so the final `mv` is
-    atomic; `trap rm -rf` on EXIT (`:326-333`).
+    atomic; `trap rm -rf` on EXIT (`:331-338`).
   - Expected checksum is extracted with `awk '$2 == want'` (exact field match, not grep)
-    (`:337-341`); digest computed by `sha256sum` or `shasum -a 256`, else an explicit error
-    naming both tools (`:342-355`); a mismatch prints expected/actual and exits 1 (`:356-362`).
-  - **Structural archive validation before extraction** (`:365-412`): tar entry names must be
+    (`:342-346`); digest computed by `sha256sum` or `shasum -a 256`, else an explicit error
+    naming both tools (`:347-360`); a mismatch prints expected/actual and exits 1 (`:361-367`).
+  - **Structural archive validation before extraction** (`:370-417`): tar entry names must be
     flat (`.`/`..`/`*/*`/`/*` rejected) and `tar -tvzf` column 1 must be `-` (regular) for every
     line; zip names are checked for `/`, `\`, `.`, `..`, leading `/`.
   - Extract, then reject a symlink at the binary path
-    (`error: extracted '<bin>' is a symlink; archive rejected`, `:427-431`), require a regular
-    file (`:432-435`), `chmod +x`, require executable (`:436-446`), then
-    `mv -f "$tmp/$BIN_NAME" "$TARGET_DIR/$BIN_NAME"` (`:449`).
-- Post-install, unconditional (`:459-492`): removes any stale `lnks`/`lnks.exe` in the target
-  dir (`:461`); walks every `PATH` entry, canonicalizing each `lit` candidate, and collects those
-  whose realpath differs from the just-installed binary (`:472-483`); prints
-  `Installed lit -> <path>` and runs `<installed> version` (errors ignored) (`:485-486`); prints a
+    (`error: extracted '<bin>' is a symlink; archive rejected`, `:432-436`), require a regular
+    file (`:437-440`), `chmod +x`, require executable (`:441-451`), then
+    `mv -f "$tmp/$BIN_NAME" "$TARGET_DIR/$BIN_NAME"` (`:454`).
+- Post-install, unconditional (`:464-497`): removes any stale `lnks`/`lnks.exe` in the target
+  dir (`:466`); walks every `PATH` entry, canonicalizing each `lit` candidate, and collects those
+  whose realpath differs from the just-installed binary (`:477-488`); prints
+  `Installed lit -> <path>` and runs `<installed> version` (errors ignored) (`:490-491`); prints a
   `WARNING: other 'lit' binaries found on PATH that were NOT updated:` block listing each
-  (`:487-491`).
+  (`:492-496`).
 
 ### 7.7 `scripts/version-ldflags.sh`
 
@@ -1037,31 +1037,31 @@ setup-go@v5 (`cache: true`) → `go mod download` → `go run ./tools/licenses -
 - `version: 2`, `project_name: lit` (`.goreleaser.yml:22`, `:24`). No `before.hooks` — the
   removed `go mod tidy` hook is called out at `.goreleaser.yml:26-31`.
 - One build (`.goreleaser.yml:33-153`): `id: lit`, `main: ./cmd/lit`, `binary: lit`.
-  - `env` sets `CGO_ENABLED=1` (`:47`) and, by Go template on `.Os`/`.Arch`, the zig cross
+  - `env` sets `CGO_ENABLED=1` (`:48`) and, by Go template on `.Os`/`.Arch`, the zig cross
     wrappers: `zig-cc-aarch64-apple-darwin` / `zig-cc-x86_64-apple-darwin` (+ `CXX` twins)
-    for darwin (`:55-64`), `zig-cc-x86_64-windows-gnu` (+ CXX) for windows (`:65-72`), and
-    `zig-cc-x86_64-linux-musl` / `zig-cc-aarch64-linux-musl` (+ CXX) for linux (`:73-82`).
-  - `CGO_CPPFLAGS=-I/opt/icu/{{ .Os }}_{{ .Arch }}/include` (`:93`).
+    for darwin (`:56-65`), `zig-cc-x86_64-windows-gnu` (+ CXX) for windows (`:66-73`), and
+    `zig-cc-x86_64-linux-musl` / `zig-cc-aarch64-linux-musl` (+ CXX) for linux (`:74-83`).
+  - `CGO_CPPFLAGS=-I/opt/icu/{{ .Os }}_{{ .Arch }}/include` (`:94`).
   - `CGO_LDFLAGS=-L/opt/icu/{{ .Os }}_{{ .Arch }}/lib -static` on linux; without `-static`
-    elsewhere (`:101-106`).
-  - `GOFLAGS=-tags=icu_static` (`:113`).
+    elsewhere (`:102-107`).
+  - `GOFLAGS=-tags=icu_static` (`:114`).
   - `goos: [linux, darwin, windows]`, `goarch: [amd64, arm64]`, with `windows/arm64` ignored
-    (`:116-127`) ⇒ five targets.
-  - `flags: [-trimpath, -buildvcs=false]` (`:128-130`).
+    (`:117-128`) ⇒ five targets.
+  - `flags: [-trimpath, -buildvcs=false]` (`:129-131`).
   - `ldflags: -s -w` plus
     `-X …/internal/version.Version={{ .Version }}`,
     `-X …/internal/version.Commit={{ .ShortCommit }}`,
     `-X …/internal/version.Date={{ .Date }}`,
-    `-X …/internal/version.Origin=release` (`:131-152`).
-- Archives (`:146-189`): `name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"`
-  — required to match mkmanifest's parser (`:148-151`); `formats: [tar.gz]` with a windows
-  override to `[zip]` (`:152-155`); `wrap_in_directory: false` (`:163`); `files:` `LICENSE`,
-  `README*`, `THIRD_PARTY_LICENSES`, `LICENSE-REPORT.md`, `FORKS.md` (`:170-189`).
-- Checksums: `name_template: "checksums.txt"`, `algorithm: sha256` (`:191-194`).
-- Snapshot version template: `"{{ incpatch .Version }}-snapshot+{{.ShortCommit}}"` (`:196-199`).
+    `-X …/internal/version.Origin=release` (`:132-152`).
+- Archives (`:154-197`): `name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"`
+  — required to match mkmanifest's parser (`:156-159`); `formats: [tar.gz]` with a windows
+  override to `[zip]` (`:160-163`); `wrap_in_directory: false` (`:171`); `files:` `LICENSE`,
+  `README*`, `THIRD_PARTY_LICENSES`, `LICENSE-REPORT.md`, `FORKS.md` (`:178-197`).
+- Checksums: `name_template: "checksums.txt"`, `algorithm: sha256` (`:199-202`).
+- Snapshot version template: `"{{ incpatch .Version }}-snapshot+{{.ShortCommit}}"` (`:204-207`).
 - `release: disable: true` — goreleaser never publishes; the workflow's `publish` job does
-  (`:213-214`).
-- `changelog: disable: true` (`:224-225`).
+  (`:221-222`).
+- `changelog: disable: true` (`:232-233`).
 
 ---
 
