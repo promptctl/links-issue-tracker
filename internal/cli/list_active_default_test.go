@@ -17,7 +17,7 @@ import (
 func runLs(t *testing.T, ap *app.App, args ...string) string {
 	t.Helper()
 	var buf bytes.Buffer
-	if err := runListWithStore(context.Background(), &buf, ap.Store, args); err != nil {
+	if err := runListWithStore(context.Background(), &buf, ap.Store, nil, args); err != nil {
 		t.Fatalf("runListWithStore(%v) error = %v", args, err)
 	}
 	return buf.String()

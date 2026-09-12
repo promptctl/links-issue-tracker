@@ -77,7 +77,7 @@ func TestListRelationColumns(t *testing.T) {
 
 	// --columns id,parent,blocked surfaces the relationship facts.
 	var relOut bytes.Buffer
-	if err := runListWithStore(ctx, &relOut, ap.Store, []string{"--columns", "id,parent,blocked"}); err != nil {
+	if err := runListWithStore(ctx, &relOut, ap.Store, nil, []string{"--columns", "id,parent,blocked"}); err != nil {
 		t.Fatalf("runListWithStore(--columns): %v", err)
 	}
 
@@ -106,7 +106,7 @@ func TestListRelationColumns(t *testing.T) {
 
 	// Default projection is unchanged: id | state | topic | title, no parent/blocked.
 	var defOut bytes.Buffer
-	if err := runListWithStore(ctx, &defOut, ap.Store, nil); err != nil {
+	if err := runListWithStore(ctx, &defOut, ap.Store, nil, nil); err != nil {
 		t.Fatalf("runListWithStore(default): %v", err)
 	}
 	childLine := fieldsOf(lineForID(t, defOut.String(), child.ID))
@@ -119,29 +119,95 @@ func TestListRelationColumns(t *testing.T) {
 	}
 }
 
-// TestListRelationColumnsGating proves the relation-graph load is paid only when
-// a relationship column is projected — the byte-for-byte/no-extra-query
-// guarantee for the default and non-relationship projections.
-func TestListRelationColumnsGating(t *testing.T) {
+// TestColumnSourceLadder pins the rule that decides what a projection costs:
+// the requirement is the MAXIMUM rung over the selected columns, not the first
+// or the last one found.
+//
+// The two mixed cases are the whole test. `parent` sits at sourceRelations and
+// `blocked` at sourceReadiness, so a fold that returned the first non-zero rung
+// would answer sourceRelations for `id,parent,blocked`, and one that returned
+// the last would answer sourceRelations for `id,blocked,parent`. Either way the
+// loader would fetch the graph, `blocked` would be computed from data that
+// cannot express it, and the cell would print "-" — the shape of a true answer
+// for a ticket that is genuinely blocked. Both orders are asserted because a max
+// is the only fold that survives both.
+func TestColumnSourceLadder(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		columns []columnSpec
+		want    columnSource
+	}{
+		{"default projection", defaultColumns(), sourceIssue},
+		{"issue fields only", mustColumns("id", "title"), sourceIssue},
+		{"parent alone", mustColumns("id", "parent"), sourceRelations},
+		{"blocked alone", mustColumns("id", "blocked"), sourceReadiness},
+		{"parent before blocked", mustColumns("id", "parent", "blocked"), sourceReadiness},
+		{"blocked before parent", mustColumns("id", "blocked", "parent"), sourceReadiness},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := columnSourceFor(tc.columns); got != tc.want {
+				t.Errorf("columnSourceFor(%v) = %d, want %d", columnNames(tc.columns), got, tc.want)
+			}
+		})
+	}
+}
+
+// TestListDerivedColumnsLoadsOnlyWhatIsProjected proves each rung is paid for
+// only when a column on it is selected — the no-extra-query guarantee for the
+// default and issue-only projections, and the reason `--columns blocked` is
+// allowed to cost the annotation pipeline at all.
+//
+// The `parent` case asserts blocked is FALSE on a genuinely blocked issue, which
+// reads backwards until you see what it pins: that rung loads the graph and
+// nothing else, so it must not be able to answer `blocked`. If some future edit
+// re-derives the cell from dependency edges to "save" the annotation pass, this
+// is where the shorter list comes back, and this line is what fails.
+func TestListDerivedColumnsLoadsOnlyWhatIsProjected(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
+	blocker, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "gate", Title: "Blocker", Topic: "gate", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue(blocker): %v", err)
+	}
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "gate", Title: "X", Topic: "gate", IssueType: "task", Priority: 0})
 	if err != nil {
 		t.Fatalf("CreateIssue: %v", err)
 	}
-	issues := []model.Issue{issue}
+	if _, err := ap.Store.AddRelation(ctx, storage.AddRelationInput{SrcID: issue.ID, DstID: blocker.ID, Type: "blocks", CreatedBy: "test"}); err != nil {
+		t.Fatalf("AddRelation: %v", err)
+	}
+	issues := []model.Issue{issue, blocker}
 
-	if rels, err := listRelationColumns(ctx, ap.Store, defaultColumns(), issues); err != nil || rels != nil {
-		t.Fatalf("default columns: want nil map, got %v (err %v)", rels, err)
+	for _, columns := range [][]columnSpec{defaultColumns(), mustColumns("id", "title")} {
+		cells, err := listDerivedColumns(ctx, ap.Store, nil, columns, issues)
+		if err != nil || cells != nil {
+			t.Fatalf("%v: want nil map, got %v (err %v)", columnNames(columns), cells, err)
+		}
 	}
-	if rels, err := listRelationColumns(ctx, ap.Store, mustColumns("id", "title"), issues); err != nil || rels != nil {
-		t.Fatalf("non-relationship columns: want nil map, got %v (err %v)", rels, err)
-	}
-	rels, err := listRelationColumns(ctx, ap.Store, mustColumns("id", "parent"), issues)
+
+	graphOnly, err := listDerivedColumns(ctx, ap.Store, nil, mustColumns("id", "parent"), issues)
 	if err != nil {
-		t.Fatalf("relationship columns: %v", err)
+		t.Fatalf("parent projection: %v", err)
 	}
-	if _, ok := rels[issue.ID]; !ok {
-		t.Fatalf("relationship columns: want populated map for %s, got %v", issue.ID, rels)
+	if _, ok := graphOnly[issue.ID]; !ok {
+		t.Fatalf("parent projection: want populated map for %s, got %v", issue.ID, graphOnly)
+	}
+	if graphOnly[issue.ID].blocked {
+		t.Errorf("parent projection set blocked for %s from the graph alone; that cell is "+
+			"ClassifyReadiness's to write and this rung never ran it", issue.ID)
+	}
+
+	classified, err := listDerivedColumns(ctx, ap.Store, nil, mustColumns("id", "blocked"), issues)
+	if err != nil {
+		t.Fatalf("blocked projection: %v", err)
+	}
+	if !classified[issue.ID].blocked {
+		t.Errorf("blocked projection: %s has a live open dependency and came back unblocked: %+v",
+			issue.ID, classified[issue.ID])
+	}
+	if classified[blocker.ID].blocked {
+		t.Errorf("blocked projection: %s blocks nothing and has no dependency of its own, "+
+			"so a blocked cell here means the map is populated rather than computed: %+v",
+			blocker.ID, classified[blocker.ID])
 	}
 }

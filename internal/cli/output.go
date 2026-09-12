@@ -82,22 +82,22 @@ func printIssueSummary(w io.Writer, issue model.Issue) error {
 	return err
 }
 
-func printIssueTable(w io.Writer, issues []model.Issue, columns []columnSpec, rels map[string]relationColumns) error {
+func printIssueTable(w io.Writer, issues []model.Issue, columns []columnSpec, cells map[string]derivedColumns) error {
 	tw := tabwriter.NewWriter(w, 2, 2, 2, ' ', 0)
 	if _, err := fmt.Fprintln(tw, strings.ToUpper(strings.Join(columnNames(columns), "\t"))); err != nil {
 		return err
 	}
 	for _, issue := range issues {
-		if _, err := fmt.Fprintln(tw, formatIssueColumns(issue, columns, "\t", rels)); err != nil {
+		if _, err := fmt.Fprintln(tw, formatIssueColumns(issue, columns, "\t", cells)); err != nil {
 			return err
 		}
 	}
 	return tw.Flush()
 }
 
-func printIssueLines(w io.Writer, issues []model.Issue, columns []columnSpec, rels map[string]relationColumns) error {
+func printIssueLines(w io.Writer, issues []model.Issue, columns []columnSpec, cells map[string]derivedColumns) error {
 	for _, issue := range issues {
-		if _, err := fmt.Fprintln(w, formatIssueColumns(issue, columns, " | ", rels)); err != nil {
+		if _, err := fmt.Fprintln(w, formatIssueColumns(issue, columns, " | ", cells)); err != nil {
 			return err
 		}
 	}
@@ -365,25 +365,36 @@ func issueStanding(issue model.Issue) string {
 	return string(issue.State())
 }
 
-// relationColumns carries the per-issue relationship facts the relationship
-// columns project, derived once from the canonical graph (store.IssueRelations)
-// so the list view never reinterprets edge semantics. The zero value is the
-// honest answer for an issue with no relations loaded (no parent, not blocked),
-// which is exactly what a nil rels map yields on lookup.
-type relationColumns struct {
+// derivedColumns carries the per-issue facts that cannot be read off the issue
+// row — one cell per column above sourceIssue. Each field has exactly one
+// producer, and the two producers sit at different rungs of the ladder:
+// parentID comes from the canonical graph (storage.IssueRelations) so the list
+// view never reinterprets edge semantics, and blocked comes from
+// ClassifyReadiness so it cannot carry a shorter list than the annotation
+// registry. Nothing else may write either field.
+// [LAW:one-source-of-truth] It was named relationColumns while both cells were
+// derived from relations, and that name is what made a dependency-edge `blocked`
+// look like it belonged here.
+//
+// The zero value is the honest answer for an issue whose derived data was not
+// loaded (no parent, not blocked), which is exactly what a nil map yields on
+// lookup — and it is reachable only for a projection that named no derived
+// column, because columnSourceFor makes the loader satisfy the maximum rung any
+// selected column asks for.
+type derivedColumns struct {
 	parentID string
 	blocked  bool
 }
 
-// The columns a projection can name — and which of them are served from the
-// relationship graph — are the column registry's to state; see columns.go.
+// The columns a projection can name — and the data each is computed from — are
+// the column registry's to state; see columns.go.
 
-func formatIssueColumns(issue model.Issue, columns []columnSpec, delimiter string, rels map[string]relationColumns) string {
+func formatIssueColumns(issue model.Issue, columns []columnSpec, delimiter string, cells map[string]derivedColumns) string {
 	values := make([]string, 0, len(columns))
 	for _, column := range columns {
-		// Reading a nil map yields the zero relationColumns — "-" for an issue
-		// whose relations weren't loaded — so no renderer needs a guard.
-		values = append(values, column.render(issue, rels[issue.ID]))
+		// Reading a nil map yields the zero derivedColumns — "-" for an issue
+		// whose derived data wasn't loaded — so no renderer needs a guard.
+		values = append(values, column.render(issue, cells[issue.ID]))
 	}
 	return strings.Join(values, delimiter)
 }

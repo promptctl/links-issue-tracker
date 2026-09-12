@@ -64,7 +64,7 @@ type workableView struct {
 	// about the printed rows: "what closing this unblocks" and the rank-inversion
 	// count are properties of the whole workable set, and computing them from the
 	// view makes them shrink as the view does, silently. [LAW:one-source-of-truth]
-	render func(w io.Writer, columns []columnSpec, rows, gathered []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, rels map[string]relationColumns, cc claimContext, notice focusNotice) error
+	render func(w io.Writer, columns []columnSpec, rows, gathered []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, cells map[string]derivedColumns, cc claimContext, notice focusNotice) error
 	// occasion builds the workflow event this view fires once render has
 	// already succeeded on the same rows — backlog's is a constant (a
 	// backlog-wide view names no single ticket), next's reads the one row
@@ -92,23 +92,27 @@ func (v workableView) usage() string {
 	return strings.Join(parts, " ")
 }
 
-// workableRelationColumns builds the relationship cells for a workable view's
-// rows. `parent` comes from the graph; `blocked` comes from ClassifyReadiness.
+// readinessColumnsFor builds the derived cells for annotated rows. `parent`
+// comes from the graph; `blocked` comes from ClassifyReadiness.
 // [LAW:one-source-of-truth] the annotation registry decides what blocks, and
 // rendering may not carry a shorter list; deriving this cell from DependsOn
 // edges alone carried exactly that shorter list, and it disagreed on screen for
 // any row gated by an earlier sibling, a missing field, or needs-design.
 //
-// Deliberately not relationColumnsFor: `lit ls` runs no annotators, so there
-// `blocked` still reflects dependency edges alone. That divergence is a gap on
-// the list path rather than a second opinion, and closing it needs the
-// annotation pipeline there — tracked as links-columns-4hdq.
-func workableRelationColumns(rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations) map[string]relationColumns {
-	out := make(map[string]relationColumns, len(rows))
+// This is the ONLY producer of a blocked cell. It used to serve the workable
+// views alone while `lit ls` built its own from dependency edges, so one column
+// name meant two different things depending on which command printed it
+// (links-columns-4hdq). `lit ls` now runs the annotation pipeline when `blocked`
+// is projected and lands here too, which is why there is one function rather
+// than a shorter sibling — the divergence closed by deleting the second answer,
+// not by teaching both of them to agree.
+func readinessColumnsFor(rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations) map[string]derivedColumns {
+	out := make(map[string]derivedColumns, len(rows))
 	for _, row := range rows {
-		cells := deriveRelationColumns(details[row.ID])
-		cells.blocked = !ClassifyReadiness(row.Annotations).IsReady()
-		out[row.ID] = cells
+		out[row.ID] = derivedColumns{
+			parentID: parentIDOf(details[row.ID]),
+			blocked:  !ClassifyReadiness(row.Annotations).IsReady(),
+		}
 	}
 	return out
 }
@@ -239,7 +243,7 @@ func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	// Derived unconditionally from the rows and graph data already gathered
 	// above: no extra query, and no branch deciding whether the renderer gets
 	// its data. [LAW:dataflow-not-control-flow]
-	if err := view.render(stdout, knobs.columns, rows, annotated, details, workableRelationColumns(rows, details), cc, notice); err != nil {
+	if err := view.render(stdout, knobs.columns, rows, annotated, details, readinessColumnsFor(rows, details), cc, notice); err != nil {
 		return err
 	}
 	return workflows.Dispatch(stdout, os.Stderr, ap.Workspace, view.occasion(rows))
