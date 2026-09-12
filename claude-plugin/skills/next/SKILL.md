@@ -60,21 +60,25 @@ gh pr list --author @me --state open
 
 A fresh session sitting on the trunk has no head branch to match, so the branch check alone reports nothing and the wrap-up rule never fires — you start new work on top of your own unfinished PR and find out at merge time.
 
-These are candidates, not assignments.  One `gh` account is shared by every checkout on the machine and by the human, so a PR authored by `@me` may belong to a checkout that is actively working it right now.  Before adopting one, take the ticket id from its branch name and check who holds that lane: `lit backlog` prints the holder and how stale the claim is.  A lane another checkout holds fresh is theirs — leave it, say so, and move on.  A lane nobody holds, or one whose claim has gone stale, is yours to wrap up.
+These are candidates, not assignments.  One `gh` account is shared by every checkout on the machine and by the human, so a PR authored by `@me` may belong to a checkout that is actively working it right now.  Before adopting one, take the ticket id from its branch name and check who holds that lane: `lit backlog` prints the holder and how stale the claim is.  A lane another checkout holds fresh is theirs — leave it, say so, and move on.
+
+A lane nobody holds, or one whose claim has gone stale, is yours to wrap up, and wrapping up means the same thing it meant above: check that branch out, treat its ticket as the one you now hold, and take it through `/memento:address-pr-reviews` to a merged close-out.  Then pick up the working steps under "Working the ticket".  Finish it before you pull anything new — a PR you leave open here is the one the next session finds and wraps up instead of its own work.
 
 **If nothing is in flight,** proceed to "Pull new work" below.  Open PRs stay relevant after that — an older one may touch the files your new ticket touches — which is why the overlap check is a step in "Working the ticket".
 
 ### Pull new work
 
+Run `lit next` first, always.  It is the routing decision itself, not a suggestion box, and it is the only thing that knows what this checkout holds — a claim in lit is an (assignee, checkout) pair you cannot read off any listing.  It serves your own claims ahead of everything else: lanes you already hold, work you left in progress, other lanes of the epic you are already in, stale claims included.  Only once you hold nothing does it reach the global pool.  Whatever it hands you is your ticket — `lit start` it and go to "Working the ticket".
+
 #### Orphaned tickets
 
-`lit orphaned` lists in_progress tickets that have gone stale: claimed work somebody abandoned.
+`lit orphaned` lists in_progress tickets that have gone stale: claimed work somebody abandoned.  It is a repo-wide diagnostic view, not a queue you pull from, and you do not need it to find your *own* abandoned work — `lit next` hands that back to you already.
 
-**Run it only when this checkout holds nothing.**  If you have an epic in flight, you do not need it and must not shop from it.  `lit next` already serves your own stale lanes within that epic ahead of everything else, so the orphans it has not already handed you are in *other* epics, and pulling one of those is precisely the epic-hop the pick order exists to prevent — see "What the pick means" below.  If a cross-epic orphan looks urgent, report it and let the user decide.  Do not adopt it on your own initiative.
+So reach for it only when `lit next` has nothing left to give, and let what `lit next` actually said decide which of these you are in:
 
-**Idle** — nothing claimed by this checkout, no epic in flight — an orphan is the right first pull: it is the most advanced work in the repo and somebody has to finish it.  `lit start <id>` takes it; a stale claim transfers without prompting but prints who held it and how far they got, so check that lane for unmerged branches or PRs before building on it.  An orphan you take is your ticket — skip ahead to "Working the ticket".
+- **It handed you nothing, because there is nothing queued.**  An orphan is now the right pull: it is the most advanced work in the repo and somebody has to finish it.  `lit start <id>` takes it.  A stale claim transfers without prompting but prints who held it and how far they got, so check that lane for unmerged branches or PRs before building on it.  The orphan you take is your ticket — skip ahead to "Working the ticket".
 
-Nothing orphaned, or you have an epic in flight: run `lit next` and start the ticket it hands you.
+- **It said your epic has open work that is blocked.**  Then every orphan on that list is in somebody else's epic, and taking one is the epic-hop the order forbids — see "What the pick means" below, which is written for this exact moment.  Report the blocker and stop.  If a cross-epic orphan looks urgent, say so and let the user direct it; do not adopt it on your own initiative.
 
 #### What the pick means
 
@@ -97,10 +101,12 @@ However you arrived at a ticket — uncommitted work, an open PR, an orphan, or 
 
      ```
      gh pr list --state open --json number,headRefName,title,files \
-       --jq '.[] | "\(.number) \(.headRefName) :: \(.files | map(.path) | join(", "))"'
+       --jq '.[] | select(.headRefName != "'"$(git branch --show-current)"'") | "\(.number) \(.headRefName) :: \(.files | map(.path) | join(", "))"'
      ```
 
-     If one overlaps, surface it to the user with both the ticket and PR references before starting, rather than silently building over it.
+     The `select` drops your own branch's PR.  Keep it: you reach this step from every arrival path, including the one where you are already sitting on a branch whose PR necessarily touches every file your ticket touches.  Without the filter that path flags you against yourself every time, and a check that cries wolf on its commonest path is one the next agent learns to skip.
+
+     If a *different* PR overlaps, surface it to the user with both the ticket and PR references before starting, rather than silently building over it.
    - Don't paper over ambiguity with assumptions — confirm scope first.
 
 IN ALL CASES YOU MUST DO AS MUCH OBVIOUS PREPARATORY WORK AS YOU CAN BEFORE ASKING THE USER.
@@ -118,13 +124,22 @@ A mature engineer knows when to ask for help, and it isn't at the slightest hint
      git pull --rebase
      ```
 
-   - **Look for an existing branch before you create one.**  A previously-started ticket may already have one, and it may carry a slug — `<ticket-id>_slug` — so an exact-name checkout reads it as missing and you start a duplicate.  Search by prefix, locally and on the remote:
+   - **Look for an existing branch before you create one.**  A previously-started ticket may already have one, and it may carry a slug — `<ticket-id>_slug` — so an exact-name checkout reads it as missing and you start a duplicate.  Search by substring, locally and on the remote, and ask for clean names:
 
      ```
-     git branch --all --list '*<ticket-id>*'
+     git branch --all --list '*<ticket-id>*' --format='%(refname:short)'
      ```
 
-     Judge this on its *output*, not its exit status: the command succeeds with rc=0 and prints nothing when there is no match.  If it names a branch, check that one out.  Only if it names nothing do you create one:
+     Judge this on its *output*, not its exit status: the command succeeds with rc=0 and prints nothing when there is no match.  `--format` is not optional — the default output is decorated (`*` for the current branch, `+` for one checked out in another worktree, `remotes/` on every remote ref), and none of those lines can be pasted into a checkout.
+
+     Then read what it printed:
+
+     - **A bare name** — a local branch.  `git checkout <name>`.
+     - **A bare name *and* `origin/<name>`** — one branch seen twice, local and remote.  Use the bare one.
+     - **Only `origin/<name>`** — a branch pushed from somewhere you have never checked out here.  `git checkout -b <name> origin/<name>`.  Checking out the `origin/...` ref itself lands you on a detached HEAD with no branch and nothing to push to, which you will discover at the end, when you try to open the PR.
+     - **Several genuinely different branches** — the search is a substring match, so a sibling ticket id can collide with yours.  Read them and choose deliberately; don't take the first line.
+
+     Only when it prints nothing do you create one:
 
      ```
      git checkout -b <ticket-id>
