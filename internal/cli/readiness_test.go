@@ -10,7 +10,7 @@ import (
 // TestClassifyReadinessPerKind is the contract test for the single
 // annotation→readiness enforcer: every annotation kind maps to exactly one
 // classification family (blocking, orphaned, rank hygiene) or to none
-// (FocusPath — an ordering fact, deliberately invisible to readiness).
+// (FocusPath — the view-scope fact, deliberately invisible to readiness).
 func TestClassifyReadinessPerKind(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -58,7 +58,7 @@ func TestClassifyReadinessPerKind(t *testing.T) {
 			wantInversions: []string{"dep-1"},
 		},
 		{
-			name:      "focus_path is ordering, invisible to readiness",
+			name:      "focus_path is scope, invisible to readiness",
 			ann:       annotation.Annotation{Kind: annotation.FocusPath, Message: "goal-1"},
 			wantReady: true,
 		},
@@ -109,7 +109,7 @@ func TestClassifyReadinessCoversEveryRegisteredKind(t *testing.T) {
 				}
 			case annotation.RoleNone:
 				if !r.IsReady() || r.IsOrphaned() || len(r.RankInversions()) != 0 {
-					t.Errorf("ordering kind %q must be invisible to readiness, got ready=%v orphaned=%v inversions=%d", kind.String(), r.IsReady(), r.IsOrphaned(), len(r.RankInversions()))
+					t.Errorf("role-none kind %q must be invisible to readiness, got ready=%v orphaned=%v inversions=%d", kind.String(), r.IsReady(), r.IsOrphaned(), len(r.RankInversions()))
 				}
 			default:
 				t.Fatalf("kind %q has an uninterpreted readiness role", kind.String())

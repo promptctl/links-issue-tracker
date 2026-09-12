@@ -290,11 +290,14 @@ step, so each step below says only which lanes it looks in:
    action.
 4. **Then the global pool**: the top-ranked candidate in any lane, labeled as
    what it is, so the commitment is visible before it is made rather than
-   discovered after.
-   Reached
-   directly, with no detour through steps 1–3, by a checkout that holds no
-   live claims at all — unfocus is the zero state, not a hop through the
-   earlier steps.
+   discovered after. Reached directly, with no detour through steps 1–3, by a
+   checkout that holds no live claims at all — unfocus is the zero state, not
+   a hop through the earlier steps. An active `focus` label narrows this
+   pool — and only this pool — to the focused goal's unfinished prerequisite
+   chain, with `lit next --all` or removing the label as the escapes. Steps
+   1–3 never read it, so a lane this checkout already holds is served whether
+   or not it sits on the path: focus decides where a fresh session goes, not
+   whether work in flight is still yours.
 5. **Lanes another checkout holds fresh are routed around, not hidden.**
    `next` skips them silently; listings show everything with claim
    annotations. Visibility is not pullability. A lane whose holder has gone
@@ -513,7 +516,7 @@ sidecar maps.
   are no heartbeats and no liveness probes here, only staleness heuristics —
   the same family as orphan detection, applied one level up (lane instead of
   ticket, T instead of the orphan threshold).
-- **The focus label** — the shared label that hoists a goal's prerequisite
+- **The focus label** — the shared label that scopes a goal's prerequisite
   chain for everyone — is orthogonal and unchanged: it expresses *project*
   intent ("this goal matters most"), a statement to all streams. A claim
   expresses *stream* commitment ("this lane is being executed here").

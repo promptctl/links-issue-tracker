@@ -38,6 +38,7 @@ type workableKnobs struct {
 	labels    []string
 	limit     int
 	columns   []columnSpec
+	all       bool
 }
 
 // workableView is the preset that specializes the one workable runner into a
@@ -57,7 +58,13 @@ type workableView struct {
 	// rather than each renderer, which is what keeps the next view added here
 	// from re-introducing a projection whose `parent` and `blocked` cells are
 	// permanently "-". [LAW:one-source-of-truth]
-	render func(w io.Writer, columns []columnSpec, rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, rels map[string]relationColumns, cc claimContext) error
+	// rows are what the view prints; gathered is every workable row the pipeline
+	// produced, before the scope or --limit narrowed it. They are separate
+	// parameters because the per-row facts a renderer prints are not all facts
+	// about the printed rows: "what closing this unblocks" and the rank-inversion
+	// count are properties of the whole workable set, and computing them from the
+	// view makes them shrink as the view does, silently. [LAW:one-source-of-truth]
+	render func(w io.Writer, columns []columnSpec, rows, gathered []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, rels map[string]relationColumns, cc claimContext, notice focusNotice) error
 	// occasion builds the workflow event this view fires once render has
 	// already succeeded on the same rows — backlog's is a constant (a
 	// backlog-wide view names no single ticket), next's reads the one row
@@ -67,7 +74,7 @@ type workableView struct {
 }
 
 // usage derives the positional-argument error string from the knob set, in the
-// fixed fragment order filters, assignee, limit, columns.
+// fixed fragment order filters, assignee, all, limit, columns.
 // [LAW:one-source-of-truth] the knobs a view exposes and the usage line that
 // names them cannot drift.
 func (v workableView) usage() string {
@@ -75,7 +82,7 @@ func (v workableView) usage() string {
 	if v.hasFilters {
 		parts = append(parts, "[--type ...] [--status ...] [--labels ...]")
 	}
-	parts = append(parts, "[--assignee <user>]")
+	parts = append(parts, "[--assignee <user>]", "[--all]")
 	if v.hasLimit {
 		parts = append(parts, "[--limit N]")
 	}
@@ -137,6 +144,13 @@ func workableRun(view workableView) appRunFn {
 func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []string, view workableView) error {
 	fs := newCobraFlagSet(view.name)
 	assignee := fs.String("assignee", "", "Filter by assignee")
+	// [LAW:no-mode-explosion] This flag's cap is the focus label: it selects
+	// between two values of ONE scope, it is deleted the day `focus` is, and no
+	// stage downstream branches on it — runWorkable resolves it to a scope and
+	// the pipeline consumes that. It exists so a scope stays a groove with the
+	// way out written on it rather than a wall an agent can only escape by
+	// deleting someone else's label.
+	all := fs.Bool("all", false, "Ignore the focus scope and list the whole queue")
 	issueType := optionalString(fs, view.hasFilters, "type", "Filter by issue type")
 	status := optionalString(fs, view.hasFilters, "status", "Filter by status: open|in_progress")
 	labels := optionalString(fs, view.hasFilters, "labels", "Comma-separated labels all of which must match")
@@ -178,8 +192,9 @@ func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 		labels:    splitCSV(*labels),
 		limit:     *limit,
 		columns:   columns,
+		all:       *all,
 	}
-	annotated, details, err := gatherWorkableAnnotated(ctx, ap, workableFilter{
+	annotated, details, focus, err := gatherWorkableAnnotated(ctx, ap, workableFilter{
 		Assignee:  knobs.assignee,
 		IssueType: knobs.issueType,
 		Status:    knobs.status,
@@ -188,9 +203,35 @@ func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	if err != nil {
 		return err
 	}
-	view.order(annotated, details, knobs)
-	rows := view.keep(annotated)
-	rows = applyLimit(rows, knobs.limit)
+	// The scope narrows MEMBERSHIP and nothing else, which is why it runs before
+	// ordering rather than as one more sort: what is left is then in stored rank
+	// order and the preamble that says so is true again. --all resolves to the
+	// unfocused scope — the same value an unlabeled workspace produces — so one
+	// partition serves every case and nothing downstream learns the flag exists.
+	// [LAW:dataflow-not-control-flow]
+	scoped, excluded := focus.scopeFor(knobs.all).partition(annotated)
+	view.order(scoped, details, knobs)
+	kept := view.keep(scoped)
+	rows := applyLimit(kept, knobs.limit)
+	// Built AFTER the trim it reports, not beside the partition: --limit cuts
+	// rows the scope kept, so a notice constructed two lines up could only ever
+	// describe half the gap between what was gathered and what is printed — and
+	// printed "Nothing is hidden" over the other half.
+	//
+	// trimmed spans keep → limit, not scope → limit, because the sentence it
+	// feeds names --limit as the cause. keepAll is identity today, so the two
+	// spans are equal and no output changes; they stop being equal the moment a
+	// view keeps a subset, and the wider span would then report that view's own
+	// drops as a --limit trim — this ticket's defect, one narrowing further out.
+	// The endpoints say which narrowing is being measured.
+	// [LAW:one-source-of-truth]
+	notice := focusNotice{
+		scope:   focus,
+		applied: !knobs.all,
+		hidden:  len(excluded),
+		trimmed: len(kept) - len(rows),
+		escape:  "`lit " + view.name + " --all`",
+	}
 	cc, err := gatherClaimContext(ctx, stdout, ap)
 	if err != nil {
 		return err
@@ -198,7 +239,7 @@ func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	// Derived unconditionally from the rows and graph data already gathered
 	// above: no extra query, and no branch deciding whether the renderer gets
 	// its data. [LAW:dataflow-not-control-flow]
-	if err := view.render(stdout, knobs.columns, rows, details, workableRelationColumns(rows, details), cc); err != nil {
+	if err := view.render(stdout, knobs.columns, rows, annotated, details, workableRelationColumns(rows, details), cc, notice); err != nil {
 		return err
 	}
 	return workflows.Dispatch(stdout, os.Stderr, ap.Workspace, view.occasion(rows))

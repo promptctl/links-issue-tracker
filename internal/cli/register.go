@@ -330,12 +330,12 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 			Run: r.appCmd(app.AccessWrite, runNew)},
 		{Name: "followup", Summary: "File a follow-up issue parented to a just-closed ticket", GroupID: "operations",
 			Run: r.appCmd(app.AccessWrite, runFollowup)},
-		// ready and queue are retired: next (one leaf) and backlog (full ranked
+		// ready and queue are retired: next (one leaf) and backlog (the ranked
 		// queue, blocked inline) are the only named workable views. Kept as hidden,
 		// dispatchable specs so an old invocation gets the documented pointer, not
 		// cobra's bare unknown-command error. [LAW:no-silent-failure]
 		retiredSpec("ready", "operations", "use `lit backlog` or `lit next`", workableRetirementGuidance),
-		{Name: "backlog", Summary: "List the full workable backlog in priority/rank order (blocked items inline)", GroupID: "operations",
+		{Name: "backlog", Summary: "List the workable backlog in priority/rank order (blocked items inline)", GroupID: "operations",
 			Run: r.appCmd(app.AccessRead, workableRun(backlogView))},
 		retiredSpec("queue", "operations", "use `lit backlog` or `lit next`", workableRetirementGuidance),
 		{Name: "next", Summary: "Print the next workable leaf to lit start", GroupID: "operations",
@@ -464,7 +464,7 @@ func buildPassthroughCommand(spec CommandSpec) *cobra.Command {
 // workableRetirementGuidance names where the retired workable views' intent now
 // lives, so `lit ready` and `lit queue` both point the caller at the curated
 // surface. [LAW:one-source-of-truth] one pointer, shared by both retirements.
-const workableRetirementGuidance = "use `lit backlog` for the full ranked queue (blocked items shown inline) or `lit next` for the single leaf to start"
+const workableRetirementGuidance = "use `lit backlog` for the ranked queue (blocked items shown inline) or `lit next` for the single leaf to start"
 
 // Retirement pointers for the single-purpose commands folded into flags in this
 // pass. Each names the surviving flag so a stale invocation is redirected, never

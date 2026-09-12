@@ -110,7 +110,7 @@ overwritten — so it is also safe to re-run after a transient network failure.
 ### `lit ready` / `lit queue` (retired → `lit backlog` / `lit next`)
 
 Both workable views are retired. `next` (the single leaf to start) and `backlog`
-(the full ranked queue, blocked items inline) are the only named workable views; an
+(the ranked queue, blocked items inline) are the only named workable views; an
 old `lit ready` or `lit queue` invocation returns a pointer to them (exit 3). The
 retired presentations — ready's blocked-to-bottom re-sort and coaching preamble,
 queue's terse pullable-only list — are dropped; `backlog` and `next` carry the
@@ -119,11 +119,14 @@ surviving intent.
 ### `lit backlog`
 
 ```text
-lit backlog [--assignee <a>] [--labels <csv>] [--status open|in_progress] [--type <t>] [--limit <n>] [--columns <csv>]
+lit backlog [--assignee <a>] [--labels <csv>] [--status open|in_progress] [--type <t>] [--all] [--limit <n>] [--columns <csv>]
 ```
 
-Every workable item in rank order with blocked items shown **inline**, so the shape of
-the queue is legible. Use when grooming or re-ranking.
+Workable items in rank order with blocked items shown **inline**, so the shape of
+the queue is legible. Use when grooming or re-ranking. A `focus` label narrows which
+rows the view answers over (see `lit label add` / `lit label rm`), and each run states
+what it is listing on its own line, just before the separator that opens the row list
+— so completeness is read there, not assumed here. `--all` lifts the scope for one run.
 
 `--status` accepts exactly `open` or `in_progress` on the workable commands
 (`backlog`, `next`); anything else — including `closed`, which could only ever match
@@ -145,7 +148,7 @@ only the dependency reason; that gap is tracked as `links-columns-4hdq`.
 ### `lit next`
 
 ```text
-lit next [--type <t>] [--status open|in_progress] [--labels <csv>] [--assignee <a>]
+lit next [--type <t>] [--status open|in_progress] [--labels <csv>] [--assignee <a>] [--all]
 ```
 
 Prints the single next workable leaf to `lit start`, narrowed by the same filters as
@@ -181,9 +184,12 @@ unchanged until the work or the question does.
 
 An empty result says which emptiness it is. A backlog with nothing in it answers
 `no ready work`; one whose every row was passed over names those rows and why each
-is not yours to start — held by another checkout, or gated by something unfinished.
-So `lit next --status in_progress` can tell "you hold nothing" from "your work is in
-another checkout's hands" instead of answering both the same way.
+is not yours to start — held by another checkout, or gated by something unfinished;
+and one whose focus path is stuck says that instead, naming what gates the path
+itself alongside the rows the scope withheld off it, and pointing at
+`lit next --all`, rather than quietly serving one of them as if it were next. So `lit next --status in_progress` can tell "you hold nothing"
+from "your work is in another checkout's hands" instead of answering both the same
+way.
 
 ### `lit orphaned`
 
@@ -312,10 +318,18 @@ lit label rm <issue-id> <label>
 Incremental label edits. Two labels are reserved and carry derived behavior:
 `needs-design` marks an issue blocked (membership), and `focus` marks an issue
 as a goal whose unfinished prerequisite chain — explicit dependencies, epic
-children, and earlier same-lane siblings, transitively — sorts to the top of
-`ready`/`queue`/`next` (ordering only; blocked path items stay blocked, and
-the path re-derives as items close). Focus outranks urgent priority; urgent
-alone never propagates to prerequisites.
+children, and earlier same-lane siblings, transitively — becomes the row set
+`lit backlog` lists and `lit next` routes its global pool over. The path
+re-derives as items close, and blocked path items stay blocked: the scope
+decides which rows a view answers over, never whether one is ready.
+
+Focus narrows membership and leaves ordering alone — within the scope, rank is
+still the only order, so `lit rank --top` reaches the top of the view. Pass
+`--all` to either command to ignore the scope for one run. Two things the scope
+deliberately does not reach: `lit next` still serves work in a lane this
+checkout already holds even when it is off the path (your own work in flight
+stays yours), and the cross-project counts in `lit stores --counts` stay
+whole-project.
 
 ### `lit followup`
 
@@ -776,7 +790,8 @@ Every store opens strictly read-only, never contending with a project's own writ
 Readiness under `--counts` is **store-intrinsic**: a repo's own `required_fields`
 policy is not applied across the boundary (a discovered store carries no repo root to
 load it from), so counts can differ from that project's own `lit backlog` when it
-configures `required_fields`.
+configures `required_fields`. A `focus` label is the other source of divergence: it
+narrows that project's `lit backlog` but never these counts (see `lit label add`).
 
 ### `lit prefix set`
 

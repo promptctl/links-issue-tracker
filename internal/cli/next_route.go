@@ -120,8 +120,13 @@ const (
 	// dependency ids off annotations, while the pool walk classifies rows it is
 	// already holding.
 	reachOutOfView
-	// reachKindCount bounds reachNotes and is never a classification: reachOf
-	// returns one of the four above.
+	// reachOffFocusPath: gathered and possibly startable, but outside the focus
+	// scope this run answered over, so the pool walk never offered it. Not a
+	// verdict about the row — a statement about the question that was asked —
+	// which is why it is classified where the scope is applied (routeNext step
+	// 4) rather than inside reachOf, whose other caller walks an unscoped set.
+	reachOffFocusPath
+	// reachKindCount bounds reachNotes and is never a classification.
 	reachKindCount
 )
 
@@ -286,11 +291,20 @@ func ownScope(standings claims.Standings, self model.Attribution) (map[model.Lan
 // own starts straight at the global pool — unfocus is the zero state, not a hop
 // through the earlier steps.
 //
+// The focus scope narrows STEP 4 AND NOTHING ELSE. Steps 1-3 route over lanes
+// this checkout already holds, and ownScope takes pains to read that from the
+// standings rather than the gathered rows precisely so a display narrowing
+// cannot empty the self-aware branch (links-claims-1b0p, N1). A scope applied to
+// `rows` before routing would re-open exactly that hole from the other side: a
+// checkout holding a ticket off the focused path would be told to start
+// something else while its own work sat in flight. Focus decides where a fresh
+// session goes; it does not decide whether your own work is still yours.
+//
 // [LAW:dataflow-not-control-flow] Every step walks the same rows in the same
 // composite-rank order and asks capacityFor the same question; a step differs
 // only in which lanes it admits and which verdicts it accepts. No step decides
 // eligibility on its own.
-func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, standings claims.Standings, self model.Attribution) NextOutcome {
+func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, standings claims.Standings, self model.Attribution, scope focusScope) NextOutcome {
 	laneOf := func(row annotation.AnnotatedIssue) model.LaneID {
 		return model.LaneOf(row.Issue, details[row.ID].Parent)
 	}
@@ -309,13 +323,20 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 	// #1 row, an orphan, passed over for a lower-ranked leaf that happened to
 	// need no takeover. [LAW:one-source-of-truth] one ordering, and the gather
 	// already established it.
-	pick := func(inScope func(model.LaneID) bool, accept ...capacity) (annotation.AnnotatedIssue, capacity, bool) {
-		for _, row := range rows {
+	// pickFrom takes the row set explicitly because the steps no longer share
+	// one: steps 1-3 walk every gathered row, step 4 walks the focus-scoped
+	// pool. Passing the set is what keeps that difference visible at each call
+	// instead of hidden in a closure every step reads differently.
+	pickFrom := func(from []annotation.AnnotatedIssue, inScope func(model.LaneID) bool, accept ...capacity) (annotation.AnnotatedIssue, capacity, bool) {
+		for _, row := range from {
 			if how := verdict(row); inScope(laneOf(row)) && slices.Contains(accept, how) {
 				return row, how, true
 			}
 		}
 		return annotation.AnnotatedIssue{}, routeAround, false
+	}
+	pick := func(inScope func(model.LaneID) bool, accept ...capacity) (annotation.AnnotatedIssue, capacity, bool) {
+		return pickFrom(rows, inScope, accept...)
 	}
 
 	ownLanes, ownEpics := ownScope(standings, self)
@@ -355,18 +376,45 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 	// Step 4 — the global pool, and the diagnostic half of the same walk: what
 	// the pick declined is what NoWork reports, classified by the verdict the
 	// pick itself just read. [LAW:one-source-of-truth]
-	if row, _, ok := pick(func(model.LaneID) bool { return true }, serveWork, takeoverWork); ok {
+	//
+	// The pool is the focus-scoped one, and the rows the scope withheld travel
+	// into the diagnostic rather than vanishing: "nothing is startable" and
+	// "nothing on your focus path is startable" are different answers, and a
+	// pool that quietly served an off-path row instead would be substituting a
+	// similar-looking query for the one asked. [LAW:no-silent-failure]
+	pool, offPath := scope.partition(rows)
+	if row, _, ok := pickFrom(pool, func(model.LaneID) bool { return true }, serveWork, takeoverWork); ok {
 		return ServedFromNewLane{Row: row, Lane: laneOf(row)}
 	}
-	return NoWork{Unreachable: passedOver(rows, reachFor)}
+	return NoWork{Unreachable: append(passedOver(pool, reachFor), withheldByScope(offPath)...)}
 }
 
-// passedOver classifies every gathered row, in the rank order the pool walk
-// went through them. It is called only where that walk found nothing, so every
-// row here is routeAround by construction — a takeable one would have been
-// served — which is what makes "the rows we went past" and "all the rows" the
-// same list, and lets NoWork say why the pool was empty without asking the data
-// a second question.
+// withheldByScope classifies the rows the focus scope kept out of the pool. They
+// are the one group whose kind is decided by the question rather than by the
+// row, which is why they are stamped here — at the only place that applied the
+// scope — instead of inside reachOf, whose other caller walks an unscoped set
+// and would never have a scope to consult. [LAW:single-enforcer]
+func withheldByScope(rows []annotation.AnnotatedIssue) []rowReach {
+	withheld := make([]rowReach, 0, len(rows))
+	for _, row := range rows {
+		withheld = append(withheld, rowReach{ID: row.ID, Row: row, Kind: reachOffFocusPath})
+	}
+	return withheld
+}
+
+// passedOver classifies every row in the pool it is handed, in the rank order
+// the pool walk went through them. It is called only where that walk found
+// nothing, so every row here is routeAround by construction — a takeable one
+// would have been served — which lets NoWork say why the pool was empty without
+// asking the data a second question.
+//
+// The pool is every gathered row only when no focus scope narrowed it. Under a
+// scope the walk never sees the off-path rows at all: withheldByScope stamps
+// those, and the call site appends the two lists, so it is NoWork.Unreachable —
+// not this function — that accounts for every gathered row. Saying "all the
+// rows" here would hand the next reader the conclusion that the off-path rows
+// are already covered, and the separate function that exists to cover them
+// would read as redundant. [LAW:one-source-of-truth]
 func passedOver(rows []annotation.AnnotatedIssue, reachFor func(annotation.AnnotatedIssue, bool) reachKind) []rowReach {
 	passed := make([]rowReach, 0, len(rows))
 	for _, row := range rows {
@@ -452,12 +500,23 @@ func (o Exhausted) Error() string {
 // words still renders its ids, under an empty parenthetical, which is loud
 // rather than silent. It is not total on its own, since Go does not require an
 // indexed array literal to fill every slot, so
-// TestEveryReachKindHasWordsInBothDiagnostics closes that gap.
-// [LAW:types-are-the-program] [LAW:no-silent-failure]
+// TestEveryReachKindHasWordsInBothDiagnostics closes that gap — in both
+// directions, because a slot a diagnostic can never reach is its own defect:
+// worded text for an impossible kind reads as a capability the walk does not
+// have. [LAW:types-are-the-program] [LAW:no-silent-failure]
 type reachNotes [reachKindCount]string
 
 // The wording each diagnostic carries, named so the totality test can reach
-// them and so neither is rebuilt on every render.
+// them and so neither is rebuilt on every render. Each walk words exactly the
+// kinds it can stamp, and the two sets differ at both ends.
+//
+// reachOffFocusPath is the pool walk's alone, stamped by withheldByScope.
+// reachTakeable and reachOutOfView are the exhaustion walk's alone: step 4 runs
+// only when this checkout holds no lane, so no pool row is laneOurs and
+// capacityFor cannot answer resumeWork, while the pick just declined every
+// serveWork and takeoverWork over that same set — leaving routeAround as the
+// only verdict passedOver can see. It also classifies gathered rows only, where
+// gatingDependencies reaches deps the gather never returned.
 var (
 	exhaustedNotes = reachNotes{
 		reachTakeable:  "on your path and yours to take — `lit start` it",
@@ -466,10 +525,9 @@ var (
 		reachOutOfView: "on your path but outside this view — `lit show` it",
 	}
 	poolNotes = reachNotes{
-		reachTakeable:  "startable — `lit start` it",
-		reachHeldFresh: "in progress or claimed in a lane another checkout holds right now",
-		reachNotReady:  "not startable — blocked by a dependency, or in flight and not abandoned",
-		reachOutOfView: "outside this view — `lit show` it",
+		reachHeldFresh:    "in progress or claimed in a lane another checkout holds right now",
+		reachNotReady:     "not startable — blocked by a dependency, or in flight and not abandoned",
+		reachOffFocusPath: "off the focus path this run answered over — `lit next --all` to route over the whole queue",
 	}
 )
 
@@ -530,5 +588,28 @@ func (o NoWork) Error() string {
 	if len(o.Unreachable) == 0 {
 		return "no ready work"
 	}
+	// A third emptiness, and it needs its own lead: with rows withheld by the
+	// focus scope, "nothing in it is startable here" is false — those rows were
+	// never asked. The lead claims neither startability nor location, because
+	// Unreachable mixes two populations here: on-path rows step 4 walked and
+	// rejected, and off-path rows it never examined. A header asserting either
+	// fact over the whole list is false for one of them — and the on-path half
+	// is the news the agent has to act on. Only poolNotes can tell them apart,
+	// and it already does, per row.
+	if o.withheld() {
+		return fmt.Sprintf("no ready work on the focus path — the backlog is not empty, and each row below says why this run did not serve it: %s", describeReach(o.Unreachable, "", poolNotes))
+	}
 	return fmt.Sprintf("no ready work — the backlog is not empty, but nothing in it is startable here: %s", describeReach(o.Unreachable, "", poolNotes))
+}
+
+// withheld reports whether the focus scope kept any row out of the pool this
+// walk went through. Read off the rows the outcome already carries, so the
+// sentence and the clauses beneath it cannot disagree. [LAW:one-source-of-truth]
+func (o NoWork) withheld() bool {
+	for _, row := range o.Unreachable {
+		if row.Kind == reachOffFocusPath {
+			return true
+		}
+	}
+	return false
 }

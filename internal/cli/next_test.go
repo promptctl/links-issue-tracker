@@ -21,7 +21,7 @@ import (
 // hold lanes as this checkout. Use asCheckout to write as somebody else.
 func (h readyTestHarness) runNextOutcome() NextOutcome {
 	h.t.Helper()
-	annotated, details, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
+	annotated, details, focus, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
 	if err != nil {
 		h.t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}
@@ -29,7 +29,10 @@ func (h readyTestHarness) runNextOutcome() NextOutcome {
 	if err != nil {
 		h.t.Fatalf("gatherClaimContext error = %v", err)
 	}
-	return routeNext(annotated, details, cc.standings, cc.self)
+	// The gathered scope, not focusScope{}: this helper stands in for `lit next`
+	// itself, and handing routing an empty scope here would quietly answer every
+	// focus test from the unfocused path — green, and about a command nobody runs.
+	return routeNext(annotated, details, cc.standings, cc.self, focus)
 }
 
 // runNextRow narrows an outcome to the row it served, for the ordering and
@@ -385,6 +388,10 @@ func TestRenderNextOutcomeTerminalOutcomesKeepTheirType(t *testing.T) {
 		// wantAct is the deliberate act the message calls for but cannot name,
 		// which is the whole job the remediation line has left to do.
 		wantAct string
+		// wantAbsent are claims the remediation may not make about this
+		// outcome's rows. Checked as a list so every case runs the same loop
+		// over whatever it forbids. [LAW:dataflow-not-control-flow]
+		wantAbsent []string
 	}{
 		{
 			name:       "exhausted",
@@ -397,6 +404,29 @@ func TestRenderNextOutcomeTerminalOutcomesKeepTheirType(t *testing.T) {
 			outcome:    NoWork{},
 			wantReason: "no_ready_work",
 			wantAct:    "lit new",
+		},
+		{
+			// The focus scope withheld every startable row, so the message
+			// says the backlog is NOT empty — the situation in which offering
+			// `lit new` is the remediation-contradicts-message defect. Both
+			// populations are present because the real outcome carries both:
+			// an on-path row step 4 walked and rejected, and an off-path row
+			// it never examined.
+			name: "no work withheld by focus scope",
+			outcome: NoWork{Unreachable: []rowReach{
+				{ID: "links-gate-onpath", Kind: reachNotReady},
+				{ID: "links-other-offpath", Kind: reachOffFocusPath},
+			}},
+			wantReason: "no_ready_work",
+			wantAct:    "lit next --all",
+			// withheldByScope stamps the off-path row without ever running
+			// capacityFor on it, so the remediation holds no reading of its
+			// capacity and may pass no verdict on it — in any wording, which
+			// is why the pin is the bare word and not one sentence's phrasing.
+			// NoWork.Error() already declines the same verdict; a remediation
+			// that makes it contradicts the message it prints under
+			// (links-cli-cpou).
+			wantAbsent: []string{"startable"},
 		},
 	}
 	for _, tc := range tests {
@@ -428,8 +458,18 @@ func TestRenderNextOutcomeTerminalOutcomesKeepTheirType(t *testing.T) {
 			if !strings.Contains(out, tc.outcome.(error).Error()) {
 				t.Fatalf("stderr dropped the outcome's own message: %q", out)
 			}
-			if !strings.Contains(out, tc.wantAct) {
-				t.Fatalf("remediation does not name the deliberate act %q: %q", tc.wantAct, out)
+			// Asserted against the remediation alone rather than all of stderr:
+			// the withheld case's per-row note already names `lit next --all`
+			// in the message body, so a stderr-wide check would stay green with
+			// the remediation silent — the exact gap this case exists to close.
+			rem := commandErrorRemediation(commandErrorReason(err))
+			if !strings.Contains(rem, tc.wantAct) {
+				t.Fatalf("remediation does not name the deliberate act %q: %q", tc.wantAct, rem)
+			}
+			for _, claim := range tc.wantAbsent {
+				if strings.Contains(rem, claim) {
+					t.Fatalf("remediation claims %q over rows whose capacity was never read: %q", claim, rem)
+				}
 			}
 		})
 	}

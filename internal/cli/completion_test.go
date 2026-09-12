@@ -150,7 +150,7 @@ func TestRunHelpDocumentsRankOrderingDefaults(t *testing.T) {
 		t.Fatalf("Run(help) error = %v", err)
 	}
 	help := normalizeWhitespace(stdout.String())
-	if !strings.Contains(help, "backlog List the full workable backlog in priority/rank order") {
+	if !strings.Contains(help, "backlog List the workable backlog in priority/rank order") {
 		t.Fatalf("help output missing rank-based backlog description: %q", help)
 	}
 	if !strings.Contains(help, "ls List issues (rank by default") {

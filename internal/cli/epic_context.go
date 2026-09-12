@@ -187,7 +187,10 @@ func buildEpicContext(ctx context.Context, st storage.Store, requiredFields []st
 	// come back in the epic-rank order epic.Children arrived in, and the batch
 	// fetch inside makes the loop below pure map lookups rather than a fetch per
 	// child. [LAW:dataflow-not-control-flow]
-	annotated, childRels, err := annotateIssues(ctx, st, requiredFields, epic.Children)
+	// The focus scope is dropped rather than applied: the epic plan is the epic's
+	// own child list, and narrowing it to the focus path would print a partial
+	// plan that still reads as the whole one. [LAW:no-silent-failure]
+	annotated, childRels, _, err := annotateIssues(ctx, st, requiredFields, epic.Children)
 	if err != nil {
 		return EpicContext{}, err
 	}

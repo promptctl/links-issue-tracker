@@ -13,16 +13,16 @@ import (
 
 // backlogPreamble explains what the backlog view is so an agent reading top to
 // bottom understands the ordering story before scanning rows. It stresses what
-// makes this the full workable view: nothing is hidden, blocked items keep their
-// ranked position, and the surrounding context (epic, depends-on, blocking
-// reasons) is visible so the order is auditable.
+// makes the order auditable: blocked items keep their ranked position, and the
+// surrounding context (epic, depends-on, blocking reasons) is visible. What the
+// view does and does not contain is focusNotice's to say, not this constant's.
 //
 // It also has to state how the view says a group-scoped fact, because the view
 // only says it once. An agent that reads "each row carries its parent epic" and
 // then finds nine of ten siblings without an epic line will conclude those nine
 // have no epic. [FRAMING:representation] The preamble is a map of the view and
 // has to be redrawn whenever the view moves.
-const backlogPreamble = `This is the full backlog in priority/rank order — every workable item, blocked or not.
+const backlogPreamble = `This is the backlog in priority/rank order.
 Items at the top are ranked higher than items below them. Blocked items stay where they were ranked
 so you can see WHY the queue is shaped this way, not just what is ready next.
 Read every row: each carries its dependencies, blocking reasons, and what closing it would unblock.
@@ -35,12 +35,91 @@ Rows claimed by another checkout show who holds them and how fresh, but claim vi
 just that — visibility; only 'lit next' routes by claim, serving this checkout's own lanes first.
 Use 'lit next' to pick the top workable item to start.`
 
+// focusNotice is the one sentence a view owes its reader about WHICH rows it is
+// answering over. It is printed on every run, focused or not, because "every
+// workable item is here" and "only the focus path is here" are the two readings
+// a reader picks between, and a view that says nothing leaves them picking by
+// assumption — which is how a `--top` that landed at position 39 read as a
+// ranking bug rather than a scoped view (links-listing-ju7i).
+//
+// [FRAMING:representation] The notice is a map of the row set, so it carries
+// every narrowing that stands between the gathered rows and the printed ones —
+// the focus scope AND the --limit trim that runs after it. A notice derived
+// from the scope alone could not see the second, and printed "Nothing is
+// hidden" over a truncated list: the completeness claim this ticket moved out
+// of the preamble, made false again one narrowing over.
+type focusNotice struct {
+	scope   focusScope
+	applied bool // false when --all asked for the whole queue anyway
+	hidden  int  // rows the scope excluded from this view
+	trimmed int  // rows --limit cut AFTER the scope partition
+	escape  string
+}
+
+// line renders the notice: what the scope did, then what --limit did. Two
+// clauses because they are two narrowings with two escapes, and one number
+// covering both would tell a reader rows are off the focus path when --limit
+// is what removed them. [LAW:one-source-of-truth]
+func (n focusNotice) line() string {
+	return n.scopeClause() + n.trimClause()
+}
+
+// scopeClause states what the focus scope did — the unfocused workspace stating
+// the completeness the preamble used to assert on its own, or a scope in force
+// naming the goals, the count it withheld, and the flag that lifts it: a groove
+// with the way out written on it, never a wall. It claims completeness only
+// when --limit left the list whole, since "nothing is hidden" is a claim about
+// the printed rows and not about the scope alone.
+func (n focusNotice) scopeClause() string {
+	switch {
+	case !n.scope.active() && n.trimmed == 0:
+		return "Nothing is hidden: every workable item is listed."
+	case !n.scope.active():
+		return "Every workable item is in scope."
+	case !n.applied:
+		return fmt.Sprintf("Focus is on %s; this run bypassed it and lists the whole queue.", n.scope.describe())
+	}
+	return fmt.Sprintf("Focused on %s — listing only its unfinished prerequisite path, in rank order; %d workable row(s) off that path are not shown (%s for the whole queue).", n.scope.describe(), n.hidden, n.escape)
+}
+
+// trimClause names the narrowing the scope cannot see. It is empty when --limit
+// cut nothing, so a run without the flag reads exactly as it did before the
+// clause existed. [LAW:dataflow-not-control-flow] the zero trim renders the
+// identity string rather than selecting a different notice.
+func (n focusNotice) trimClause() string {
+	if n.trimmed == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" --limit trimmed this run: %d more workable row(s) are not shown.", n.trimmed)
+}
+
+// emptyLine says WHICH emptiness this is. An empty focused view over a backlog
+// that still holds off-path work is not an empty backlog, and answering both
+// with "(backlog empty)" collapses two facts into one value the reader cannot
+// pull apart again. [LAW:parse-dont-validate]
+func (n focusNotice) emptyLine() string {
+	if n.scope.active() && n.applied && n.hidden > 0 {
+		return fmt.Sprintf("(nothing workable on the focus path — %d row(s) off it, %s to see them)", n.hidden, n.escape)
+	}
+	return "(backlog empty)"
+}
+
 // printBacklogOutput renders the backlog as a numbered list with inline
 // per-row context (parent epic, dependencies, blocking reasons, in-progress
-// suffix, unblocks). Empty data flows through the same path — the "(backlog
-// empty)" message is one path-end, not a branch around the rendering loop.
-func printBacklogOutput(w io.Writer, columns []columnSpec, issues []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, rels map[string]relationColumns, cc claimContext) error {
+// suffix, unblocks). Empty data flows through the same path — the empty
+// message is one path-end, not a branch around the rendering loop.
+//
+// issues are the rows to print; gathered is the whole workable set they were
+// drawn from. The aggregates below read gathered, because a row's "unblocks"
+// line and the inversion count describe the backlog, not this view of it: with
+// them read off issues, a focused scope or a --limit that excluded the
+// dependent row deleted the surviving row's own unblocks line, and the preamble
+// went on promising "what closing it would unblock" one screen above the gap.
+func printBacklogOutput(w io.Writer, columns []columnSpec, issues, gathered []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, rels map[string]relationColumns, cc claimContext, notice focusNotice) error {
 	if _, err := fmt.Fprintln(w, backlogPreamble); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w, notice.line()); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintln(w, strings.Repeat("─", 80)); err != nil {
@@ -51,13 +130,13 @@ func printBacklogOutput(w io.Writer, columns []columnSpec, issues []annotation.A
 	}
 
 	if len(issues) == 0 {
-		if _, err := fmt.Fprintln(w, "(backlog empty)"); err != nil {
+		if _, err := fmt.Fprintln(w, notice.emptyLine()); err != nil {
 			return err
 		}
 		return nil
 	}
 
-	unblocksMap := buildUnblocksMap(issues)
+	unblocksMap := buildUnblocksMap(gathered)
 	now := time.Now()
 	var above backlogRun
 	for i, entry := range issues {
@@ -72,7 +151,7 @@ func printBacklogOutput(w io.Writer, columns []columnSpec, issues []annotation.A
 		}
 		above = group.run
 	}
-	return printRankInversions(w, issues)
+	return printRankInversions(w, gathered)
 }
 
 // backlogRun is the group-scoped context the rows above already put on screen:

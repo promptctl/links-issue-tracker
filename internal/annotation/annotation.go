@@ -108,7 +108,7 @@ var (
 	Orphaned              = register("orphaned", RoleOrphaned)                // in_progress with no update past the orphaned threshold
 	NeedsDesign           = register("needs_design", RoleBlocking)            // carries the needs-design label
 	EarlierSiblingPending = register("earlier_sibling_pending", RoleBlocking) // an earlier same-lane sibling under the parent epic is still open
-	FocusPath             = register("focus_path", RoleNone)                  // a focused goal or a derived prerequisite of one; an ordering signal
+	FocusPath             = register("focus_path", RoleNone)                  // a focused goal or a derived prerequisite of one; the backlog/next focus-scope membership fact
 )
 
 func init() {

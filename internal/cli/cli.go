@@ -607,18 +607,23 @@ type workableFilter struct {
 // map so callers that need extra row context (e.g. claim routing's epic-lane
 // lookups) avoid a second fetch round-trip.
 //
-// The returned order is the canonical backlog order: focus path first, then
-// priority desc, then composite rank asc. Ready-specific presentation (e.g.
-// pushing blocked items to the bottom) is applied by the caller, not here, so
-// consumers that want the unmodified ranking (`lit backlog`) see it as ordered.
+// The returned order is the canonical backlog order: priority desc, then
+// composite rank asc. Ready-specific presentation (e.g. pushing blocked items
+// to the bottom) is applied by the caller, not here, so consumers that want the
+// unmodified ranking (`lit backlog`) see it as ordered.
+//
+// The focus scope comes back BESIDE the rows rather than pre-applied to them,
+// because the two views narrow by it at different points: `lit backlog` scopes
+// the rows it prints, while `lit next` scopes only its global pool and leaves
+// this checkout's own claimed lanes reachable regardless (see routeNext).
 //
 // [LAW:single-enforcer] `lit next` and `lit backlog` both
 // read from this single pipeline so their "what is workable, in what
 // order" model cannot drift.
-func gatherWorkableAnnotated(ctx context.Context, ap *app.App, rf workableFilter) ([]annotation.AnnotatedIssue, map[string]storage.IssueRelations, error) {
+func gatherWorkableAnnotated(ctx context.Context, ap *app.App, rf workableFilter) ([]annotation.AnnotatedIssue, map[string]storage.IssueRelations, focusScope, error) {
 	requiredFields, err := readyRequiredFields(ap)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, focusScope{}, err
 	}
 	// [LAW:locality-or-seam] The pipeline's real inputs are a store surface and
 	// the ready required-fields policy; the *app.App only supplied those two.
@@ -649,7 +654,13 @@ func readyRequiredFields(ap *app.App) ([]string, error) {
 // it, including a read-only foreign store the process is not cd'd into.
 // [LAW:one-source-of-truth] `lit next`/`backlog` and the cross-project
 // rollup share this one definition of "what is workable, annotated how".
-func classifyWorkable(ctx context.Context, st storage.Store, requiredFields []string, rf workableFilter) ([]annotation.AnnotatedIssue, map[string]storage.IssueRelations, error) {
+//
+// The focus scope is returned, never applied here: the rollup counts a whole
+// project's ready/in-flight/blocked rows, and narrowing those to one project's
+// focus path would leave the counts reading as project totals while meaning
+// something else — a query silently swapped for a similar-looking one with
+// different semantics. [LAW:no-silent-failure]
+func classifyWorkable(ctx context.Context, st storage.Store, requiredFields []string, rf workableFilter) ([]annotation.AnnotatedIssue, map[string]storage.IssueRelations, focusScope, error) {
 	statuses := []model.State{model.StateOpen, model.StateInProgress}
 	if rf.Status != "" {
 		statuses = []model.State{rf.Status}
@@ -667,18 +678,23 @@ func classifyWorkable(ctx context.Context, st storage.Store, requiredFields []st
 	}
 	issues, err := st.ListIssues(ctx, listFilter)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, focusScope{}, err
 	}
 	issues = filterWorkableIssues(issues)
-	annotated, details, err := annotateIssues(ctx, st, requiredFields, issues)
+	annotated, details, scope, err := annotateIssues(ctx, st, requiredFields, issues)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, focusScope{}, err
 	}
+	// Two sorts, and they are the whole ordering story: composite rank, then
+	// priority. A third used to run here — sortByFocusPath — hoisting every
+	// focus-path row above every other row and leaving rank to decide only what
+	// happened INSIDE the hoisted set. Focus is a scope now, returned alongside
+	// the rows for the views to answer over, so ordering has one authority again
+	// (links-listing-ju7i). [LAW:one-source-of-truth]
 	sortByCompositeRank(annotated, details)
 	sortByPriority(annotated)
-	sortByFocusPath(annotated)
 	enrichWithParentEpic(annotated, details)
-	return annotated, details, nil
+	return annotated, details, scope, nil
 }
 
 // annotateIssues runs every registered annotator over the given issues and
@@ -694,14 +710,19 @@ func classifyWorkable(ctx context.Context, st storage.Store, requiredFields []st
 // [LAW:decomposition] The joint is between WHICH issues a surface is about and
 // WHAT the registry says about them; cutting here lets a caller with an already
 // resolved set — an epic's children — skip the workable list query entirely.
-func annotateIssues(ctx context.Context, st storage.Store, requiredFields []string, issues []model.Issue) ([]annotation.AnnotatedIssue, map[string]storage.IssueRelations, error) {
+//
+// The focus scope comes back beside the rows because the focus walk runs HERE,
+// and the scope is read from that walk's own output rather than from the rows it
+// annotated — see focusScope, whose goals a row-derived scope would lose exactly
+// when every path row was narrowed away. [LAW:one-source-of-truth]
+func annotateIssues(ctx context.Context, st storage.Store, requiredFields []string, issues []model.Issue) ([]annotation.AnnotatedIssue, map[string]storage.IssueRelations, focusScope, error) {
 	fieldAnnotator, err := newFieldAnnotator(requiredFields)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, focusScope{}, err
 	}
 	details, err := fetchIssueRelations(ctx, st, issues)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, focusScope{}, err
 	}
 	// Annotate the subjects as this fetch returned them, not as the caller passed
 	// them in. The caller's copies came from an earlier read — a list query, or an
@@ -721,7 +742,7 @@ func annotateIssues(ctx context.Context, st storage.Store, requiredFields []stri
 	// filters still gates its later same-lane mates.
 	siblingRelations, err := st.GetRelationsByIDs(ctx, parentEpicIDs(details))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, focusScope{}, err
 	}
 	// The focus path is derived from the full dependency DAG (unfiltered by the
 	// CLI narrowing) on every gather — the focus fact lives on the one goal
@@ -734,7 +755,7 @@ func annotateIssues(ctx context.Context, st storage.Store, requiredFields []stri
 	// byte-identical to a refetch. (links-query-efficiency-988d.2)
 	focusPaths, err := fetchFocusPathGoals(ctx, st, details, siblingRelations)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, focusScope{}, err
 	}
 	annotated, err := annotation.Annotate(ctx, subjects,
 		fieldAnnotator,
@@ -745,9 +766,9 @@ func annotateIssues(ctx context.Context, st storage.Store, requiredFields []stri
 		newFocusPathAnnotator(focusPaths),
 	)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, focusScope{}, err
 	}
-	return annotated, details, nil
+	return annotated, details, focusScopeOf(focusPaths), nil
 }
 
 // runOrphaned lists in_progress issues whose last update is older than

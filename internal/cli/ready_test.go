@@ -155,14 +155,15 @@ func (h readyTestHarness) addDependency(dependentID, dependencyID string) {
 }
 
 // runWorkableAnnotated reproduces what the surviving workable views compute: the
-// shared gather (which already surfaces any focus path to the top) plus the
-// limit, returning the rows in backlog order — canonical rank/priority, with
+// shared gather, which is focus-neutral — it returns the scope beside the rows
+// for a view to narrow by, and orders nothing by it — plus the limit, returning
+// the rows in backlog order — canonical rank/priority, with
 // blocked items kept inline at their ranked position. It inspects the same
 // prepared rows the text renderer consumes, so annotation/parent-epic assertions
 // read real domain values rather than re-parsing text. [LAW:single-enforcer]
 func (h readyTestHarness) runWorkableAnnotated(rf workableFilter, limit int) []annotation.AnnotatedIssue {
 	h.t.Helper()
-	annotated, _, err := gatherWorkableAnnotated(h.ctx, h.ap, rf)
+	annotated, _, _, err := gatherWorkableAnnotated(h.ctx, h.ap, rf)
 	if err != nil {
 		h.t.Fatalf("gatherWorkableAnnotated(%+v) error = %v", rf, err)
 	}
@@ -828,9 +829,8 @@ func (h readyTestHarness) setLabels(issueID string, labels ...string) {
 }
 
 // Focusing a blocked goal surfaces its earliest unfinished same-lane
-// prerequisite at the top of ready — above unrelated standing-urgent work —
-// and the path auto-advances as each prerequisite closes. The blocked path
-// members stay blocked: FocusPath affects ordering, never membership.
+// prerequisite to start next, and the path auto-advances as each closes.
+// Focus never unblocks a gated path member.
 func TestFocusPathSurfacesEarliestPrerequisiteAndAdvances(t *testing.T) {
 	h := newReadyTestHarness(t)
 
@@ -851,8 +851,9 @@ func TestFocusPathSurfacesEarliestPrerequisiteAndAdvances(t *testing.T) {
 	})
 	h.setLabels(c3.ID, FocusLabel)
 
-	// Focusing the goal surfaces its earliest ready prerequisite as the next
-	// thing to start — above the unrelated urgent item, which would otherwise win
+	// Focusing the goal narrows the pool to its prerequisite chain, so the next
+	// thing to start is the earliest ready member of that chain. The unrelated
+	// urgent item is out of scope rather than outranked — it would otherwise win
 	// on priority. `lit next` is the surviving "what should I start" surface.
 	if pick := h.runNextRow(); pick.ID != c1.ID {
 		t.Fatalf("next = %q, want earliest ready prerequisite %q", pick.ID, c1.ID)
@@ -897,7 +898,8 @@ func TestFocusPathSurfacesEarliestPrerequisiteAndAdvances(t *testing.T) {
 func TestFocusPathFollowsExplicitDependenciesTransitively(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	// A standing-urgent, unrelated item that focus must surface work above.
+	// A standing-urgent, unrelated item the focus scope must withhold — it would
+	// otherwise win on priority, so the pick proves the pool narrowed.
 	_ = h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title: "Unrelated urgent", Topic: "noise", IssueType: "task", Priority: 1,
 	})
@@ -921,9 +923,9 @@ func TestFocusPathFollowsExplicitDependenciesTransitively(t *testing.T) {
 	}
 }
 
-// Removing the focus label restores normal priority ordering, and urgent
-// priority alone never propagates to prerequisites.
-func TestFocusRemovalRestoresOrderAndUrgentDoesNotPropagate(t *testing.T) {
+// Removing the focus label restores the whole pool, and urgent priority alone
+// never propagates to prerequisites.
+func TestFocusRemovalRestoresTheWholePoolAndUrgentDoesNotPropagate(t *testing.T) {
 	h := newReadyTestHarness(t)
 
 	urgent := h.createIssue(storage.CreateIssueInput{Prefix: "test",
@@ -943,13 +945,14 @@ func TestFocusRemovalRestoresOrderAndUrgentDoesNotPropagate(t *testing.T) {
 		t.Fatalf("no focus: next = %q, want standing-urgent %q", pick.ID, urgent.ID)
 	}
 
-	// Focusing the goal surfaces its prerequisite above the unrelated urgent item.
+	// Focusing the goal narrows the pool to its prerequisite chain, which puts the
+	// unrelated urgent item out of scope rather than merely below the prerequisite.
 	h.setLabels(goal.ID, FocusLabel)
 	if pick := h.runNextRow(); pick.ID != prereq.ID {
-		t.Fatalf("focused: next = %q, want surfaced prerequisite %q", pick.ID, prereq.ID)
+		t.Fatalf("focused: next = %q, want in-scope prerequisite %q", pick.ID, prereq.ID)
 	}
 
-	// Removing focus restores the standing-urgent ordering.
+	// Removing focus puts the urgent item back in the pool, where priority picks it.
 	h.setLabels(goal.ID)
 	if pick := h.runNextRow(); pick.ID != urgent.ID {
 		t.Fatalf("focus removed: next = %q, want standing-urgent %q", pick.ID, urgent.ID)
@@ -961,7 +964,8 @@ func TestFocusRemovalRestoresOrderAndUrgentDoesNotPropagate(t *testing.T) {
 func TestFocusPathExpandsContainerChildren(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	// A standing-urgent, unrelated item that focus must surface a child above.
+	// A standing-urgent, unrelated item the focus scope must withhold — it would
+	// otherwise win on priority, so the pick proves the pool narrowed.
 	_ = h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title: "Unrelated urgent", Topic: "noise", IssueType: "task", Priority: 1,
 	})
