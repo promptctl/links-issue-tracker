@@ -1,7 +1,7 @@
 // Package version is the single source of truth for "what binary am I and
 // what can I do." It exposes a typed Info value carrying the binary's identity
-// (link-time-injected version/commit/build-date) plus its capability bounds
-// (the schema-version range it can produce, derived from the embedded
+// (link-time-injected version/commit/build-date/origin) plus its capability
+// bounds (the schema-version range it can produce, derived from the embedded
 // migration registry). Downstream code — the `lit version` command, the
 // release manifest (internal/release), the `lit downgrade` resolver
 // (downgrade epic .4), and the refusal-message upgrade (.5) — all read this
@@ -11,7 +11,7 @@
 // derived from internal/store/migrations at call time, not stored as separate
 // constants that could drift.
 // [LAW:single-enforcer] Only the package-level variables below are written at
-// link time (by goreleaser or scripts/install.sh). No other code mutates them.
+// link time. No other code mutates them.
 package version
 
 import (
@@ -20,22 +20,43 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 )
 
-// Build-time identity. Populated by `-ldflags "-X .../internal/version.Version=...
-// -X .../internal/version.Commit=... -X .../internal/version.Date=..."` at link
-// time. Empty strings indicate a build that did not stamp them — treated as a
-// development build in Info.IsDev.
+// Build-time identity, stamped at link time via
+// `-ldflags "-X .../internal/version.<field>=..."`. An unstamped field falls to
+// the cautious reading: no Version is Info.IsDev, no Origin is Info.FromSource.
 //
-// [LAW:single-enforcer] Three writers stamp these, and only these: goreleaser
-// (all three fields, for tagged releases), scripts/install.sh's source mode
-// (all three, Version via `git describe`), and the Justfile's `build` recipe
-// (Commit + Date only, via scripts/version-ldflags.sh — deliberately NOT
-// Version, so a plain `just build` stays IsDev==true; see BuildAge below for
-// why Commit/Date alone are still worth stamping).
+// [LAW:single-enforcer] Which producer stamps which field is checked against the
+// producers themselves, in stamp_sites_test.go, not recited here — reciting it
+// here is what went stale the first time a field was added.
+// TestEveryProducerStampsOrigin owns Origin; TestOnlyTheJustfileOmitsVersion
+// owns the deliberate omission that keeps a plain `just build` on IsDev==true.
+// See BuildAge for why Commit/Date alone are worth stamping.
 var (
 	Version string
 	Commit  string
 	Date    string
+	// Origin names the producer that built this binary. It is stamped rather
+	// than inferred because inference provably does not work here: goreleaser
+	// stamps Version from the tag ("0.14.0") and install.sh's source mode
+	// stamps it from `git describe`, which on a tagged commit emits that exact
+	// same string. No parse of Version can separate the two, and a parse that
+	// tried would be a loose matcher over an exactly-produced value — so
+	// provenance is carried as its own fact, never guessed from another one.
+	// [LAW:types-are-the-program]
+	Origin string
 )
+
+// OriginRelease is the only value meaning "this binary will not be refreshed
+// by rebuilding a working tree". Every other value — including the empty
+// string a bare `go build` or `go test` leaves — describes a binary built from
+// a tree that can land changes without it, so the unstamped case reads as
+// from-source: the direction that warns rather than the one that goes quiet.
+// [LAW:no-silent-failure]
+const OriginRelease = "release"
+
+// OriginSource is what both from-source entrypoints stamp — the Justfile's
+// `build` recipe and scripts/install.sh's source mode, via the shared
+// LIT_BUILD_ORIGIN in scripts/version-ldflags.sh.
+const OriginSource = "source"
 
 // StaleBuildThreshold is the build age past which `lit version` flags a
 // locally built binary as worth rebuilding. This package's build-age
@@ -51,15 +72,41 @@ const StaleBuildThreshold = 7 * 24 * time.Hour
 // `lit version` human output to reconstruct any field on this struct.
 //
 // [LAW:types-are-the-program] Every field is either link-time identity
-// (Version/Commit/Date) or registry-derived (Schema). IsDev is the explicit
-// boolean for the "no version stamped at link time" case, promoted to a field
-// so consumers don't reimplement `info.Version == ""`.
+// (Version/Commit/Date/Origin), registry-derived (Schema), or a question about
+// that identity promoted to a field so consumers need not reimplement it —
+// IsDev ("no Version stamped") and FromSource ("Origin is not release").
 type Info struct {
-	Version string        `json:"version"`
-	Commit  string        `json:"commit"`
-	Date    string        `json:"date"`
-	IsDev   bool          `json:"is_dev"`
-	Schema  SchemaSupport `json:"schema_support"`
+	Version string `json:"version"`
+	Commit  string `json:"commit"`
+	Date    string `json:"date"`
+	IsDev   bool   `json:"is_dev"`
+	// FromSource is true when this binary was built from a working tree that
+	// can move on without it — the discriminator build-age staleness actually
+	// turns on. Deliberately a second field beside IsDev rather than a reading
+	// of it: `just install` stamps a `git describe` Version, so the binary
+	// agents run has IsDev == false while being exactly the locally-built
+	// binary whose age matters. "Was a Version stamped" (what the upgrade
+	// resolver and the migration runner's producer-stamp guard ask) and "can
+	// this binary be behind its own tree" are different questions, and each
+	// gets its own field instead of one field answering both wrongly.
+	// [LAW:one-source-of-truth]
+	//
+	// Never serialized. Info's only JSON encoding is release.Manifest, and
+	// this question is meaningless for a release: a published artifact is not
+	// a working tree that can move on without it, so the answer is a constant
+	// false carrying no information. Keeping it off the wire is not tidiness
+	// but compatibility — `lit upgrade` is run BY the old binary to discover a
+	// new release, so every manifest consumer is older than its producer, and
+	// every binary already installed decodes manifests with
+	// DisallowUnknownFields (see release.HTTPResolver.Resolve, which no longer
+	// does). Emitting `from_source` would have made the next release's
+	// manifest undecodable to every lit in the field, breaking the upgrade
+	// path at exactly the release that shipped it — and the in-band remedy for
+	// a broken upgrade is the upgrade. [LAW:types-are-the-program] the tag is
+	// what makes that unrepresentable, rather than a rule mkmanifest must
+	// remember.
+	FromSource bool          `json:"-"`
+	Schema     SchemaSupport `json:"schema_support"`
 }
 
 // SchemaSupport is the inclusive schema-version range this binary can produce
@@ -84,11 +131,12 @@ func Get() (Info, error) {
 		return Info{}, err
 	}
 	return Info{
-		Version: Version,
-		Commit:  Commit,
-		Date:    Date,
-		IsDev:   Version == "",
-		Schema:  SchemaSupport{Min: migrations.Baseline, Max: max},
+		Version:    Version,
+		Commit:     Commit,
+		Date:       Date,
+		IsDev:      Version == "",
+		FromSource: Origin != OriginRelease,
+		Schema:     SchemaSupport{Min: migrations.Baseline, Max: max},
 	}, nil
 }
 
@@ -111,4 +159,32 @@ func (i Info) BuildAge(now time.Time) (age time.Duration, ok bool) {
 		return 0, false
 	}
 	return age, true
+}
+
+// StaleSourceBuild reports whether this binary is old enough that the working
+// tree it was built from has had time to land fixes it does not carry, and
+// hands back the age behind that verdict so no caller re-asks BuildAge for the
+// number it is about to print.
+//
+// This is the one predicate every staleness surface reads — `lit version`'s
+// warning line, the build-status note on doctor/sync/init, and the next/backlog
+// banner — so the three cannot reach different verdicts about one binary. They
+// did: `lit version` warned on age alone while the build-status note required
+// IsDev, which is how a `just install` binary could be told "run just build" by
+// one command and called a release by the next. [LAW:single-enforcer]
+//
+// MUST REPORT STALE: a source build dated at or past StaleBuildThreshold (the
+// comparison is >=, so the boundary itself is stale); an Origin-unstamped build
+// dated past it, since an unknown producer is read as from-source.
+//
+// MUST REPORT FRESH: a release build at any age — a released binary ages by
+// design and is refreshed by `lit upgrade` rather than a rebuild, so warning
+// there would fire forever on every released install and train its reader past
+// the loud case this exists to make loud; a source build inside the threshold;
+// and a source build whose Date is absent, unparseable, or in the future,
+// because BuildAge refuses to hand back an age it cannot stand behind and a
+// staleness claim is exactly a claim about age.
+func (i Info) StaleSourceBuild(now time.Time) (age time.Duration, stale bool) {
+	age, ok := i.BuildAge(now)
+	return age, ok && i.FromSource && age >= StaleBuildThreshold
 }

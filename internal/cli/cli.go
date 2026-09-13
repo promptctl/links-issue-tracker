@@ -913,7 +913,7 @@ func showLeaf() appLeaf {
 		// into `lit update`; prepending the banner there would corrupt it.
 		// [LAW:dataflow-not-control-flow]
 		if strings.TrimSpace(*fieldsExpr) == "" {
-			if err := printSyncStalenessWarning(ctx, stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
+			if err := printStalenessWarning(ctx, stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
 				return err
 			}
 		}

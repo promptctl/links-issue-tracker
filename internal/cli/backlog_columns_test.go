@@ -281,7 +281,7 @@ func TestBacklogRejectsUnknownColumnBeforeTheSyncWarning(t *testing.T) {
 	}
 	for _, marker := range []string{"sync:", "not pushed", "lit sync push"} {
 		if strings.Contains(out, marker) {
-			t.Errorf("backlog --columns bogus emitted the sync warning %q before rejecting — the parse has fallen below printSyncStalenessWarning in runWorkable:\n%s", marker, out)
+			t.Errorf("backlog --columns bogus emitted the sync warning %q before rejecting — the parse has fallen below printStalenessWarning in runWorkable:\n%s", marker, out)
 		}
 	}
 	// The same fixture printed a warning a moment ago, so an empty stream here

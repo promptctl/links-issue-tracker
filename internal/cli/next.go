@@ -52,7 +52,7 @@ func nextLeaf() appLeaf {
 		}
 		// [LAW:single-enforcer] Same staleness warning, same position, as every
 		// other ordinary read command (links-sync-pgct.2).
-		if err := printSyncStalenessWarning(ctx, stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
+		if err := printStalenessWarning(ctx, stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
 			return err
 		}
 		rows, details, focus, err := gatherWorkableAnnotated(ctx, ap, workableFilter{
