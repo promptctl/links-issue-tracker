@@ -44,7 +44,7 @@ After a successful handler, `runWithApp` (`cli.go:101-147`) — in order, after 
 1. On write-mode commands: print the mutation staleness banner (§ staleness banners below).
 2. `maybeAutoSyncAfterCommand` — the entry to the whole background engine.
 
-A failed handler skips both. Three read surfaces additionally print the store-backed staleness banner: the `show` family, `next`, and the `backlog`/workable views (`cli.go:870`, `next.go:53`, `workable.go:137`).
+A failed handler skips both. Three read surfaces additionally print the store-backed staleness banner: the `show` family, `next`, and the `backlog`/workable views (`cli.go:916`, `next.go:55`, `workable.go:185`).
 
 Durations in every banner and age line render coarsely: ≥48h → "N days", ≥2h → "N hours", ≥2m → "N minutes", else "under a minute" (`output.go:451-462`).
 
@@ -293,7 +293,7 @@ The build-status note (`build_status.go`) renders `build: release <v>` for a non
 
 A separate, rarer line carries build drift onto the ordinary read commands. `buildStalenessLines` renders at most one line — ``build: this binary was built <age> ago (at least <threshold> old) — the answer below may predate fixes already on master; run `just build` (or `just install`) to refresh`` — and only for a stale source build, so a release build, a fresh build, and a build with no trustworthy date print nothing. Every staleness surface says "at least", never "over" — this line, the note above it, `lit version`'s warning, and the fetch-staleness line — because each gate stays silent below its threshold, so a value sitting exactly on the threshold is the first one it speaks about and "over <threshold>" would contradict itself there. The wording is rendered once by `stalenessThresholdClause` (`internal/cli/output.go:501-503`) rather than retyped per surface. The three build surfaces also name one remedy for one reason — one predicate covers both from-source shapes, and `just build` alone leaves a PATH binary unrefreshed while `just install` alone leaves the repo's `./lit` unrefreshed. `printStalenessWarning` emits the line ahead of the sync push-failure, ahead-count, and stale-fetch lines, which puts it first on screen for `lit next`, `lit backlog`, and the full-detail `lit show`.
 
-`resolveBuildStalenessLines` fails loud rather than silent, the way the note's own resolve step does: when `version.Get()` errors it emits `build: this binary cannot report its own identity (<err>) — its age and provenance are unknown` on every one of those three commands instead of returning no line, because a binary that cannot account for itself at all is worse news than the stale binary this banner exists to announce (`build_status.go:120-129`).
+`resolveBuildStalenessLines` fails loud rather than silent, the way the note's own resolve step does: when `version.Get()` errors it emits `build: this binary cannot report its own identity (<err>) — its age and provenance are unknown` on every one of those three commands instead of returning no line, because a binary that cannot account for itself at all is worse news than the stale binary this banner exists to announce (`build_status.go:122-131`).
 
 ## Managed sections and embedded templates
 

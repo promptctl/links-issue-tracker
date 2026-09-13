@@ -1043,7 +1043,7 @@ line for `done` and `close`, each group omitted when empty:
   (`parseWorkableStatus`, `workable.go:176-185`).
 - Bad `--type` → `UsageError{"invalid --type \"<x>\": <err>"}` → exit 2
   (`parseWorkableType`, `workable.go:191-200`).
-- Prints the sync-staleness warning first (`workable.go:137-139`).
+- Prints the sync-staleness warning first (`workable.go:185`).
 - Runs the shared workable pipeline (§1.18) via `gatherWorkableAnnotated`
   (`workable.go:148-156`), then `gatherClaimContext` (`workable.go:160-163`).
 - Dispatches `EventShowBacklog` after rendering (`workable.go:167`).
@@ -1098,7 +1098,7 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
   (`next.go:29`, `next.go:40-42`).
 - Retired flag: `--continue` is intercepted by the shared parser with
   `UnsupportedError` → exit 3 (`cli.go:290-294`).
-- Prints the sync-staleness warning first (`next.go:53`).
+- Prints the sync-staleness warning first (`next.go:55`).
 - Gathers the workable set, then the claim context (`next.go:56-68`), then routes
   (`next.go:69`).
 

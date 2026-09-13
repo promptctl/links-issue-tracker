@@ -494,7 +494,7 @@ All geometry git calls use `context.Background()` deliberately (`internal/worksp
 - Rejects any positional argument: `usage: lit version` (`:22-24`).
 - Line 1: `lit %s (commit %s, built %s)\n`, where an `IsDev` build prints `dev`, an empty commit
   prints `unknown`, an empty date prints `unknown` (`:31-45`).
-- Line 2 (only when `BuildAge` is ok): `built %s ago\n` (`:52-55`).
+- Line 2 (only when `BuildAge` is ok): `built %s ago\n` (`:53-57`).
 - Line 3 (only when `Info.StaleSourceBuild(now)` is true — a from-source build whose age is
   ≥ `StaleBuildThreshold`):
   `WARNING: this build is at least <threshold> old — run `just build` (or `just install`) to refresh`
@@ -515,9 +515,9 @@ Manifest = version.Info (embedded: version, commit, date, is_dev, schema_support
 Artifact = {"platform": "<goos>/<goarch>", "url": string, "sha256": string}
 Signature = {"algorithm": string, "value": string}
 ```
-(`internal/release/manifest.go:35-61`.) `IsDev` always serializes `false` for published
-manifests (`internal/release/manifest.go:32-34`). `Signature` is reserved and unverified today
-(`internal/release/manifest.go:53-57`).
+(`internal/release/manifest.go:42-68`.) `IsDev` always serializes `false` for published
+manifests (`internal/release/manifest.go:34-36`). `Signature` is reserved and unverified today
+(`internal/release/manifest.go:60-64`).
 
 ### 7.2 Target selection (`internal/release/target.go`)
 
@@ -755,12 +755,13 @@ the Justfile or any workflow file in `.github/workflows/`.
   (default `dist`), `-base-url` (required), `-out` (required).
 - All required flags are trimmed in place and checked in a **fixed order** so the first-missing
   diagnostic is reproducible; missing ⇒ `mkmanifest: required flag <name> missing` and exit 1
-  (`tools/mkmanifest/main.go:90-107`, `:341-344`). `-dist` is trimmed too (`:108-112`).
-- `validateVerTag` (`tools/mkmanifest/main.go:165-186`): `-tag` must start with `v`; `-version`
+  (`tools/mkmanifest/main.go:90-107`, `:348-351`). `-dist` is trimmed too (`:108-112`).
+- `validateVerTag` (`tools/mkmanifest/main.go:176-197`): `-tag` must start with `v`; `-version`
   must **not**; `-tag` must contain no `/`, `\`, `..`, or whitespace.
 - Schema range comes from `migrations.Baseline` and `migrations.MaxVersion()`
-  (`tools/mkmanifest/main.go:117-120`, `:130-132`); `IsDev` is hard-coded `false` (`:131`).
-- `collectArtifacts` (`tools/mkmanifest/main.go:206-284`) parses `<dist>/checksums.txt`:
+  (`tools/mkmanifest/main.go:117-120`, `:140`); `IsDev` is hard-coded `false` (`:132`), and
+  `FromSource` is stated `false` beside it but cannot reach the file (`:139`, rationale `:133-138`).
+- `collectArtifacts` (`tools/mkmanifest/main.go:213-291`) parses `<dist>/checksums.txt`:
   - lines are split on exactly two spaces; otherwise
     `%s:%d malformed (want '<sha256>  <filename>'): %q`;
   - the digest must be 64 hex chars, else a length or `sha256 not hex` error;
@@ -771,11 +772,11 @@ the Justfile or any workflow file in `.github/workflows/`.
   - URL = `<base-url>/<tag>/<filename>`;
   - artifacts sorted by platform; zero artifacts ⇒
     `no per-platform artifacts found in <checksums.txt>`.
-- `platformFromFilename` (`tools/mkmanifest/main.go:307-336`) accepts exactly
+- `platformFromFilename` (`tools/mkmanifest/main.go:315-346`) accepts exactly
   `lit_<version>_<goos>_<goarch>.{tar.gz,zip}` — four underscore-separated parts, literal
-  project prefix `lit` (`:306`), and the version segment must equal `-version`.
+  project prefix `lit` (`:313`), and the version segment must equal `-version`.
 - Output is written with `json.Encoder` at two-space indent, and `Close()` is checked explicitly
-  on the success path (`tools/mkmanifest/main.go:136-156`).
+  on the success path (`tools/mkmanifest/main.go:150-165`).
 
 ### 9.3 `tools/licenses`
 
