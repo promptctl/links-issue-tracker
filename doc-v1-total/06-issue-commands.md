@@ -21,18 +21,18 @@ Help groups, in order: Human Bootstrap, Agent Operations, Dependencies & Structu
 
 Eight constants, 0 through 7 (`exit.go:11-32`), mapped from error type by `ExitCode` in a fixed dispatch order (`exit.go:37-144`). Exit 6 is `ExitNoWork` — "ran correctly and changed nothing" — and it is reached by three arms, not just the router's two: a caller looping `lit next` has to tell "stop, there is nothing for you" from "lit is broken", and under `ExitGeneric` its only way to do that was to parse the English.
 
-This table is the corpus's single source for the code-to-error-type mapping; `07-ops-commands-and-sync-engine.md`, `09-workflows.md` and `10-platform.md` point here rather than restating it. Rows are in `ExitCode`'s dispatch order, not numeric order.
+This table is the corpus's single source for the code-to-error-type mapping; `07-ops-commands-and-sync-engine.md`, `09-workflows.md` and `10-platform.md` point here rather than restating it.
 
 | Exit | Constant | Error types |
 |---|---|---|
 | 0 | `ExitOK` | nil error, including a handled `--help` |
-| 4 | `ExitNotFound` | `storage.NotFoundError` |
-| 5 | `ExitConflict` | `MergeConflictError`, `SyncFailureError`, owner-approval refusal |
-| 7 | `ExitCorruption` | `CorruptionError` |
+| 1 | `ExitGeneric` | `OutsideWorkspaceError`, `BulkFailureError`, transient GC contention, everything else |
 | 2 | `ExitUsage` | `UsageError` |
 | 3 | `ExitValidation` | `UnknownCommandError`, `RetiredCommandError`, `ValidationError` (CLI and storage), `UnsupportedError`, `templateShapeError`, `model.ContainerActionError` when not satisfied |
+| 4 | `ExitNotFound` | `storage.NotFoundError` |
+| 5 | `ExitConflict` | `MergeConflictError`, `SyncFailureError`, owner-approval refusal |
 | 6 | `ExitNoWork` | `Exhausted`, `NoWork`, `model.ContainerActionError` when `Satisfied()` |
-| 1 | `ExitGeneric` | `OutsideWorkspaceError`, `BulkFailureError`, transient GC contention, everything else |
+| 7 | `ExitCorruption` | `CorruptionError` |
 
 On failure the process prints to stderr: `error (code=N): <message>`, then a `remediation:` line when the reason has one (`error_output.go:17-24`). Each error type maps to a reason string (`entity_not_found`, `usage_error`, `corruption_detected`, …) and each reason to a fixed remediation sentence — e.g. not-found → "Verify the target ID exists with `lit ls` or `lit show <id>`."; corruption → "Run `lit doctor --fix integrity` and retry." Several remediations embed literal `<agent-instructions>` tags telling agent callers the fix is idempotent and safe (`error_output.go:29-133`). Progress/diagnostic text goes to stderr as `lit: <operation>: <text>`; stdout is the result channel (`progress.go:15-27`).
 
@@ -107,7 +107,7 @@ Admission is one predicate, `capacityFor` (`next_route.go:229`), which classifie
 
 `NextOutcome` is a sealed sum (`isNextOutcome()`) of exactly those six cases. `Exhausted` and `NoWork` are themselves `error` implementations and travel outward as themselves rather than being rendered into a generic error, so the exit-code and reason sinks read the routing verdict instead of a copy. Both exit 6 (`ExitNoWork`, `exit.go:30`) with reasons `scope_exhausted` and `no_ready_work` (`error_output.go:113,117`); the exit-code section above carries why 6 rather than `ExitGeneric`. Both diagnostics are built from `reachKind`, what one row is to this checkout right now (`reachTakeable`, `reachHeldFresh`, `reachNotReady`, `reachOutOfView`, and `reachOffFocusPath` for the pool alone), and each clause names at most `maxNamedPerKind = 12` ids and states how many it left out; the per-kind wordings are in inventory-claims.md §9.2.
 
-`lit next` claims nothing, so nothing it prints is in the perfect tense. A served row prints the default columns plus indented `epic:`, `depends on:`, and claim lines, never `unblocks:` — `printNextSummary` hands `printInlineDeps` a nil unblocks map (`ready_state.go:663-669`) — followed by advice about the `lit start` the reader has yet to run, worded by `startAdvice` (`next.go:183`) on whether the row is in progress and whether `LaneID.Describe()` (`model/model.go:255`) gives the lane a name; a solo lane gets none, being the ticket that names it. `renderNextOutcome` (`next.go:94`) has an arm per case: `ServedFromClaim` (`:98`) announces nothing, the three other served outcomes announce (`:100-108`), the two terminal outcomes return themselves as errors (`:118-121`), and the unreachable `default` (`:123`) panics.
+`lit next` claims nothing, so nothing it prints is in the perfect tense. Any pick that would establish a claim prints advice about running `lit start`, worded by `startAdvice` (`next.go:183`) on whether the row is in progress and whether `LaneID.Describe()` (`model/model.go:255`) gives the lane a name — a solo lane gets none, being the ticket that names it — then the default columns plus indented `epic:`, `depends on:`, and claim lines, never `unblocks:`, since `printNextSummary` hands `printInlineDeps` a nil unblocks map (`ready_state.go:663-669`). `renderNextOutcome` (`next.go:94`) has an arm per case: `ServedFromClaim` (`:98`) announces nothing, the three other served outcomes announce (`:100-108`), the two terminal outcomes return themselves as errors (`:118-121`), and the unreachable `default` (`:123`) panics.
 
 ## Mutating fields and rank
 

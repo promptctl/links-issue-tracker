@@ -189,7 +189,7 @@ Constants (`internal/cli/exit.go:10-18`):
 - `OutsideWorkspaceError` ⇒ 1 (`:129-131`)
 - `BulkFailureError` ⇒ 1 (`:133-138`)
 - `store.ErrTransientGCContention` ⇒ 1 (`:140-142`)
-- anything else ⇒ 1 (`:94`)
+- anything else ⇒ 1 (`:143`)
 
 ### 2.8 Error rendering (`internal/cli/error_output.go`)
 
