@@ -182,7 +182,7 @@ func workableLeaf(view workableView) appLeaf {
 		// on screen rather than a diagnostic nobody runs. (`next` — next.go —
 		// prints the same warning at the same position, independently, since it
 		// no longer runs through this pipeline.)
-		if err := printSyncStalenessWarning(ctx, stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
+		if err := printStalenessWarning(ctx, stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
 			return err
 		}
 		knobs := workableKnobs{

@@ -89,16 +89,50 @@ func TestHTTPResolverRejectsUnprefixedTag(t *testing.T) {
 	}
 }
 
-func TestHTTPResolverRejectsUnknownFields(t *testing.T) {
+// TestHTTPResolverToleratesFieldsFromANewerProducer pins the compatibility
+// direction this format actually has. `lit upgrade` runs the INSTALLED binary
+// to discover a newer release, so the consumer is always older than the
+// producer and a field added after this binary shipped must decode, not fail.
+// The resolver used to set DisallowUnknownFields, which asserted the opposite
+// and would have broken the upgrade path for every binary in the field at the
+// first additive release — with no in-band way out, since the remedy for a
+// broken `lit upgrade` is `lit upgrade`.
+//
+// The payload carries a field no version of this struct has ever had, and the
+// assertions read the fields that decide behavior, so the test fails both if
+// the strict decoder returns and if tolerance were bought by dropping the
+// payload on the floor.
+func TestHTTPResolverToleratesFieldsFromANewerProducer(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// version.Info-shaped payload with a stray field at the top level.
-		_, _ = w.Write([]byte(`{"version":"0.4.1","commit":"x","date":"y","is_dev":false,"schema_support":{"min":1,"max":1},"artifacts":[],"surprise":"hi"}`))
+		_, _ = w.Write([]byte(`{"version":"0.4.1","commit":"x","date":"y","is_dev":false,"schema_support":{"min":1,"max":1},"artifacts":[{"platform":"darwin/arm64","url":"https://example.invalid/lit","sha256":"abc"}],"a_field_from_the_future":"hi"}`))
 	}))
 	t.Cleanup(srv.Close)
 	r := &HTTPResolver{BaseURL: srv.URL}
-	_, err := r.Resolve(context.Background(), "v0.4.1", "darwin/arm64")
-	if err == nil || !strings.Contains(err.Error(), "unknown field") {
-		t.Fatalf("expected unknown-field rejection, got %v", err)
+	target, err := r.Resolve(context.Background(), "v0.4.1", "darwin/arm64")
+	if err != nil {
+		t.Fatalf("a manifest from a newer producer must still resolve, got %v", err)
+	}
+	if target.Artifact.URL != "https://example.invalid/lit" || target.Artifact.SHA256 != "abc" {
+		t.Errorf("known fields must still bind past the unknown one, got %+v", target.Artifact)
+	}
+}
+
+// TestManifestNeverSerializesFromSource is the other half of that
+// compatibility story, and the half that protects binaries ALREADY installed.
+// Those decode with DisallowUnknownFields compiled in; nothing this repo does
+// now can change them, so the only lever left is never emitting a field they
+// do not know. version.Info.FromSource is tagged `json:"-"` for that reason,
+// and this asserts the serialized shape rather than the tag, so re-tagging it
+// or promoting it into Manifest both fail here.
+func TestManifestNeverSerializesFromSource(t *testing.T) {
+	m := fixtureManifest()
+	m.FromSource = true // the value that would leak if the field were ever tagged
+	out, err := json.Marshal(&m)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	if strings.Contains(string(out), "from_source") {
+		t.Errorf("manifest serialized from_source; every already-installed lit decodes with DisallowUnknownFields and would fail to upgrade: %s", out)
 	}
 }
 

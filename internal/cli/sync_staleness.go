@@ -125,8 +125,8 @@ func fetchStalenessLines(ref string, fetchAge time.Duration, fetchAgeKnown bool)
 		from = " from " + ref
 	}
 	return []string{fmt.Sprintf(
-		"sync: last successful fetch%s was %s ago (over %s) — run 'lit sync fetch'",
-		from, humanizeCoarseDuration(fetchAge), humanizeCoarseDuration(unfetchedStalenessThreshold),
+		"sync: last successful fetch%s was %s ago (%s) — run 'lit sync fetch'",
+		from, humanizeCoarseDuration(fetchAge), stalenessThresholdClause(unfetchedStalenessThreshold),
 	)}
 }
 
@@ -173,23 +173,35 @@ func oneLineReason(reason string) string {
 	return line
 }
 
-// printSyncStalenessWarning resolves sync freshness and last-fetch age (the
-// effects), then prints syncStalenessLines' output, one line each. A single
-// call adds the whole banner to a read command — the same one-call ergonomic
-// resolveBuildStatusNote gives dev-build status, and deliberately the same
+// printStalenessWarning resolves build age, sync freshness and last-fetch age
+// (the effects), then prints the resulting lines, one each. A single call adds
+// the whole drift banner to a read command — deliberately the same
 // per-call-site wiring that ticket precedent used rather than a new central
 // hook: each read command that wants this banner adds the call itself.
-// Best-effort like that resolver: an unresolved or no-remote workspace prints
-// nothing rather than aborting the caller, because this banner is
-// supplementary, not itself a diagnostic. [LAW:no-silent-failure]
-// [LAW:effects-at-boundaries]
-func printSyncStalenessWarning(ctx context.Context, w io.Writer, ws workspace.Info, st storage.Store, now time.Time) error {
+//
+// One banner, not one per kind of drift. Build drift and sync drift are the
+// same fact from the reader's side — "something about this answer is older than
+// you think" — and giving each its own print call at each site would leave two
+// banners to keep in the same position and the same voice, with the next read
+// command free to wire up one and forget the other. [LAW:single-enforcer]
+//
+// Best-effort throughout: an unresolved or no-remote workspace prints nothing
+// rather than aborting the caller, because this banner is supplementary, not
+// itself a diagnostic. [LAW:no-silent-failure] [LAW:effects-at-boundaries]
+func printStalenessWarning(ctx context.Context, w io.Writer, ws workspace.Info, st storage.Store, now time.Time) error {
 	report := resolveDoctorSyncFreshness(ctx, ws, st)
 	fetchAge, fetchAgeKnown := lastFetchSuccessAge(ws, now)
-	// The push-failure line leads: it names the CAUSE (pushes are failing),
-	// which the ahead-count line below only shows the accumulating effect of.
+	// Build drift leads the whole banner (links-build-status-1svs). It is the
+	// deepest of the three: a binary that predates master can be the reason the
+	// sync lines below read the way they do, so a reader who takes it in first
+	// interprets everything after it correctly. It is also the rarest, which is
+	// what makes the top slot affordable.
+	lines := resolveBuildStalenessLines(now)
+	// The push-failure line leads the sync pair: it names the CAUSE (pushes are
+	// failing), which the ahead-count line below only shows the accumulating
+	// effect of.
 	rec, pushAge, pushKnown := lastPushOutcome(ws, now)
-	lines := syncPushFailureLines(rec, pushAge, pushKnown, runningBinaryVersion())
+	lines = append(lines, syncPushFailureLines(rec, pushAge, pushKnown, runningBinaryVersion())...)
 	lines = append(lines, syncStalenessLines(report, fetchAge, fetchAgeKnown)...)
 	for _, line := range lines {
 		if _, err := fmt.Fprintln(w, line); err != nil {

@@ -34,7 +34,7 @@ After a successful handler, `runWithApp` (`cli.go:101-147`) — in order, after 
 1. On write-mode commands: print the mutation staleness banner (§ staleness banners below).
 2. `maybeAutoSyncAfterCommand` — the entry to the whole background engine.
 
-A failed handler skips both. Three read surfaces additionally print the store-backed staleness banner: the `show` family, `next`, and the `backlog`/workable views (`cli.go:870`, `next.go:53`, `workable.go:137`).
+A failed handler skips both. Three read surfaces additionally print the store-backed staleness banner: the `show` family, `next`, and the `backlog`/workable views (`cli.go:916`, `next.go:55`, `workable.go:185`).
 
 Durations in every banner and age line render coarsely: ≥48h → "N days", ≥2h → "N hours", ≥2m → "N minutes", else "under a minute" (`output.go:451-462`).
 
@@ -165,10 +165,10 @@ Every push attempt — explicit or mirrored — completes through `completePushA
 Three signals (`sync_staleness.go`):
 
 - **Push-failure line** — when the last push-outcome record failed: `sync: automatic push[ to <r>/<b>] is FAILING — last attempt <age> ago: <reason> — changes stay on this machine until a push succeeds; run 'lit sync push'`. The reason is first-line-only, capped at 160 runes.
-- **Fetch-staleness line** — when the last successful fetch (marker `fetch-success.last`, written by `sync fetch`, `sync pull`, the reconcile pre-step, and inline receive) is ≥ 24 hours old: `sync: last successful fetch[ from <ref>] was <age> ago (over 24h0m0s) — run 'lit sync fetch'`.
+- **Fetch-staleness line** — when the last successful fetch (marker `fetch-success.last`, written by `sync fetch`, `sync pull`, the reconcile pre-step, and inline receive) is ≥ 24 hours old: `sync: last successful fetch[ from <ref>] was <age> ago (at least 24 hours old) — run 'lit sync fetch'`.
 - **Ahead line** — read commands with a resolved freshness in state ahead: `sync: <N> local change(s) not pushed to <r>/<b>, as of last fetch — run 'lit sync push'`. Deliberately not emitted for diverged (that has the heavier failure block) and not special-cased for never-synced.
 
-Read commands print push-failure first, then ahead/fetch lines. Write commands, at the `runWithApp` seam, read only the storage-dir markers and print the push-failure line plus a ref-less fetch line; banner write failures never change the exit code (`sync_staleness.go:186-228`).
+Read commands print the build-drift line first when it fires (see the build-status section below), then push-failure, then ahead/fetch lines. Write commands, at the `runWithApp` seam, read only the storage-dir markers and print the push-failure line plus a ref-less fetch line; banner write failures never change the exit code (`sync_staleness.go:191-240`).
 
 ### The sync-failure contract
 
@@ -275,9 +275,15 @@ Commands emit **breadcrumbs** — `deeper guidance: lit quickstart <topic>` as a
 
 ## `lit version` and the build-status note
 
-`lit version` (no positionals) prints: `lit <version|dev> (commit <sha|unknown>, built <date|unknown>)`; `built <age> ago` when the build date parses; a staleness warning when the age crosses the threshold ("run `just build`…"); and always `schema versions supported: <min>–<max>` (`version.go:17-68`).
+`lit version` (no positionals) prints: `lit <version|dev> (commit <sha|unknown>, built <date|unknown>)`; `built <age> ago` when the build date parses; a staleness warning when `Info.StaleSourceBuild` reports true — ``WARNING: this build is at least <threshold> old — run `just build` (or `just install`) to refresh`` (`versionStalenessWarning`, `internal/cli/version.go:88-96`); and always `schema versions supported: <min>–<max>` (`internal/cli/version.go:17-66`).
 
-The build-status note (`build_status.go:20-54`) renders `build: release <v>`, `build: dev build (build date unknown)`, `build: dev build, built <age> ago` — or the same with `— STALE (at least <threshold> old; run `just build` to refresh)`. A version-read failure yields `build: status unavailable (<err>)` rather than aborting. The note appears in `init` output, the init sync trace, `doctor`, every sync-failure block, and every sync trace.
+`Info.StaleSourceBuild(now)` is the one staleness verdict every surface reads, returning the age alongside it. It reports stale only for a build whose `Origin` is not `release` (`Info.FromSource`) whose parsed build date is at or past `StaleBuildThreshold`; a release build at any age, a build inside the threshold, and a build whose date is absent, unparseable, or in the future all report fresh. Provenance comes from the stamped `Origin`, not from `IsDev` — `scripts/install.sh` source mode stamps a `git describe` `Version`, so `IsDev` is false for a binary built from a working tree.
+
+The build-status note (`build_status.go`) renders `build: release <v>` for a non-source build, and otherwise `build: dev build (build date unknown)`, `build: dev build, built <age> ago`, or ``build: dev build, built <age> ago — STALE (at least <threshold> old; run `just build` (or `just install`) to refresh)``. A version-read failure yields `build: status unavailable (<err>)` rather than aborting. The note appears in `init` output, the init sync trace, `doctor`, every sync-failure block, and every sync trace.
+
+A separate, rarer line carries build drift onto the ordinary read commands. `buildStalenessLines` renders at most one line — ``build: this binary was built <age> ago (at least <threshold> old) — the answer below may predate fixes already on master; run `just build` (or `just install`) to refresh`` — and only for a stale source build, so a release build, a fresh build, and a build with no trustworthy date print nothing. Every staleness surface says "at least", never "over" — this line, the note above it, `lit version`'s warning, and the fetch-staleness line — because each gate stays silent below its threshold, so a value sitting exactly on the threshold is the first one it speaks about and "over <threshold>" would contradict itself there. The wording is rendered once by `stalenessThresholdClause` (`internal/cli/output.go:501-503`) rather than retyped per surface. The three build surfaces also name one remedy for one reason — one predicate covers both from-source shapes, and `just build` alone leaves a PATH binary unrefreshed while `just install` alone leaves the repo's `./lit` unrefreshed. `printStalenessWarning` emits the line ahead of the sync push-failure, ahead-count, and stale-fetch lines, which puts it first on screen for `lit next`, `lit backlog`, and the full-detail `lit show`.
+
+`resolveBuildStalenessLines` fails loud rather than silent, the way the note's own resolve step does: when `version.Get()` errors it emits `build: this binary cannot report its own identity (<err>) — its age and provenance are unknown` on every one of those three commands instead of returning no line, because a binary that cannot account for itself at all is worse news than the stale binary this banner exists to announce (`build_status.go:122-131`).
 
 ## Managed sections and embedded templates
 

@@ -184,12 +184,31 @@ func (r *HTTPResolver) Resolve(ctx context.Context, tag, platform string) (*Targ
 		return nil, fmt.Errorf("release: fetch %s: HTTP %d: %s", url, resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	// [LAW:types-are-the-program] Manifest decoding is a trust boundary — the
-	// JSON comes from the network. DisallowUnknownFields rejects schema drift
-	// (a field added in a future producer without a consumer-side migration);
-	// the trailing-data check rejects multi-document or junk-suffix payloads.
-	// Both refuse silently-different-shape inputs by construction.
+	// JSON comes from the network — but the strongest TRUE theorem about this
+	// payload is "it carries at least the fields I need", never "exactly the
+	// fields I know". `lit upgrade` is run by the INSTALLED binary to discover
+	// a newer release, so a manifest's consumer is by construction older than
+	// its producer, and a field the producer added after this binary shipped
+	// is the normal case rather than an attack. This decoder used to set
+	// DisallowUnknownFields, which made that case a hard failure and turned
+	// every additive field into an unrecoverable break of the upgrade path —
+	// unrecoverable because the in-band remedy for a broken `lit upgrade` is
+	// `lit upgrade`. Nothing on either side of the wire rejects an unknown
+	// field now, and that is the intent rather than a gap left behind:
+	// release-validate.yml's "Assert manifest shape" step asserts presence and
+	// format of the fields this decoder needs — `.version` a non-empty string,
+	// `.schema_support.min`/`.max` numbers, every artifact's platform, url and
+	// sha256 matching their patterns with the tag segment present in the url —
+	// and that the artifact platform set is exactly the release contract. It
+	// never inspects the manifest's key set, and no check anywhere else does.
+	//
+	// Shape is not what protects the consumer in any case: SelectArtifact
+	// takes only the artifact whose Platform equals
+	// runtime.GOOS+"/"+runtime.GOARCH exactly (target.go), and Install
+	// verifies the downloaded bytes against that artifact's recorded SHA256
+	// before extracting anything (installer.go). The trailing-data check below
+	// still rejects multi-document and junk-suffix payloads.
 	dec := json.NewDecoder(io.LimitReader(resp.Body, 1<<20))
-	dec.DisallowUnknownFields()
 	var m Manifest
 	if err := dec.Decode(&m); err != nil {
 		return nil, fmt.Errorf("release: decode %s: %w", url, err)
