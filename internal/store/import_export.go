@@ -122,7 +122,7 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 // re-examines. The repair always runs — the caller that only wanted a look
 // called Doctor. [LAW:dataflow-not-control-flow]
 func (s *Store) FixIntegrity(ctx context.Context) (storage.HealthReport, error) {
-	if err := s.withMutation(ctx, "fsck repair", func(ctx context.Context, tx *sql.Tx) error {
+	if err := s.withMutation(ctx, "fix integrity", func(ctx context.Context, tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM issue_events WHERE issue_id NOT IN (SELECT id FROM issues)`); err != nil {
 			return fmt.Errorf("repair orphan events: %w", err)
 		}
