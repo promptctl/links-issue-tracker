@@ -109,8 +109,8 @@ Where each event actually fires, and where in the command's output the injected 
 | `lit update` (`cli.go:1026`) | `ticket_updated` | after apply, before summary |
 | transitions (`cli.go:1409`) | one of the four transition events | after apply and authorize, before the claim-transfer notice |
 | `lit comment` (`cli.go:1484`) | `comment_added` | after the comment is stored, before it is printed |
-| `lit next` (`internal/cli/next.go:73`) | `next_pulled` | last, after the start advice and summary; only when a row was actually served — exhausted/no-work paths return before any occasion is built |
-| `lit backlog` (`internal/cli/workable.go:167`) | `show_backlog` | last, after the table render |
+| `lit next` (`internal/cli/next.go:75`) | `next_pulled` | last, after the start advice and summary; only when a row was actually served — exhausted/no-work paths return before any occasion is built |
+| `lit backlog` (`internal/cli/workable.go:245`) | `show_backlog` | last, after the table render |
 
 ## Matching
 
