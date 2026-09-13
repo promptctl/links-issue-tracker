@@ -3571,13 +3571,15 @@ Usage strings: `restoreUsage = "usage: lit backup restore (--latest | --path <ex
 - `RankInversions = len(invertedEdges(order, edges))`; warning `"rank inversions: %d (dependencies ranked below dependents)"`.
 - `blocksCycle(order, edges)` non-empty → `DependencyCycle`; warning `"blocks dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)"` with members joined by `" -> "`.
 
-`FixIntegrity` (`import_export.go:124-143`) always runs the repair under `withMutation(ctx, "fsck repair", …)` — Dolt commit message literal **`fsck repair`** — executing exactly three statements:
+`FixIntegrity` (`import_export.go:124-143`) always runs the repair under `withMutation(ctx, "fix integrity", …)` — Dolt commit message literal **`fix integrity`** — executing exactly three statements:
 ```sql
 DELETE FROM issue_events WHERE issue_id NOT IN (SELECT id FROM issues)   -- "repair orphan events: %w"
 DELETE FROM relations WHERE type='related-to' AND src_id = dst_id        -- "repair self related rows: %w"
 UPDATE relations SET src_id = dst_id, dst_id = src_id WHERE type='related-to' AND src_id > dst_id  -- "repair related ordering: %w"
 ```
 then returns `s.Doctor(ctx)`. A mutation failure returns `storage.HealthReport{}` plus the error.
+
+`internal/store/import_export_test.go` holds the one test over this repair. `TestFixIntegrityStampsItsCommitLabel` (`:13`, `t.Parallel()`) creates a single issue (`:18`) and then seeds a self-referential `related-to` row through `st.db` directly (`:27`, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'related-to', ?, 'seed')`, both endpoints that issue's id) because `AddRelation` refuses a self-targeting `related-to` (`internal/store/relations.go:297`, `"related-to cannot target itself"`), so only a path bypassing that guard leaves the row this repair deletes. The seed is committed on its own (`:33`, `st.commitWorkingSetOnce(ctx, commitStamp{Message: "seed self related-to"})`) before `st.FixIntegrity(ctx)` runs (`:42`). Three things are pinned after it: `SELECT COUNT(*) FROM relations WHERE type='related-to' AND src_id = dst_id` is 0 (`:51`); `commit_hash` from `dolt_log('HEAD')` differs from the pre-repair read (`:62`, both via helper `headCommitHash`, `:75`); and that commit's message from `dolt_log('HEAD')` equals `fix integrity` (`:70`), the literal at `import_export.go:125`. The HEAD-moved assertion is what makes the message assertion mean anything: `withMutation` builds `commitStamp{Message: message}` and nothing else (`internal/store/commit_lock.go:136-138`), so with `AllowEmpty` unset a repair that produces no diff lands no commit and HEAD still carries the message of whatever preceded it — committing the seed first is what makes the repair a real diff, since otherwise the seed's insert and the repair's delete cancel inside one working set and the message assertion reads a commit the repair never wrote.
 
 ---
 
@@ -3866,7 +3868,7 @@ updated %d issues\n         (len(result.Updated))
 |---|---|---|
 | export `Version` | `2` | `import_export.go:39` |
 | restore Dolt commit message | `"replace from export"` | `import_export.go:146` |
-| fsck Dolt commit message | `"fsck repair"` | `import_export.go:125` |
+| `FixIntegrity` Dolt commit message | `"fix integrity"` | `import_export.go:125` |
 | Doctor healthy `IntegrityCheck` | `"ok"` | `import_export.go:48` |
 | Doctor failing `IntegrityCheck` | `"constraint_violations"` | `import_export.go:54` |
 | clear order in `writeExportTx` | `labels, comments, relations, issues` | `import_export.go:180` |

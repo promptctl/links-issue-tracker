@@ -76,7 +76,7 @@ The CLI restore flow (`lit backup restore`, `internal/cli/backup.go:73-186`): us
 | rank inversions | `len(invertedEdges(order, edges))` over the live rank order and blocks edges, loaded once for this row and the next (computed in Go) | **warning** `rank inversions: %d (dependencies ranked below dependents)` |
 | blocks cycle | `blocksCycle(order, edges)` — the constraints `FixRankInversions` refuses on | **warning** `blocks dependency cycle: <a -> b -> ...> (no rank order exists; remove one edge with 'lit dep rm' to break it)` |
 
-`FixIntegrity` (`import_export.go:124-143`) runs under a mutation with Dolt commit message `fsck repair`, executing exactly three statements — delete orphan events, delete self-referential related-to rows, swap mis-ordered related-to endpoints — then returns a fresh `Doctor` report. It does not touch FK violations, rank inversions, or cycles.
+`FixIntegrity` (`import_export.go:124-143`) runs under a mutation with Dolt commit message `fix integrity`, executing exactly three statements — delete orphan events, delete self-referential related-to rows, swap mis-ordered related-to endpoints — then returns a fresh `Doctor` report. It does not touch FK violations, rank inversions, or cycles.
 
 ## Tree import (`lit import`, JSON)
 
