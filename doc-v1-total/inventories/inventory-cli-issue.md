@@ -981,12 +981,12 @@ positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason 
      `fmt.Errorf("<claim line> — this lane is claimed and active; pass --take to confirm the takeover")`
      → exit 1 (`claims_takeover.go:200-202`).
    - Non-interactive with `--take` → prints `"<claim line> — taking over (--take)\n"`
-     and proceeds (`claims_takeover.go:138-140`).
+     and proceeds (`claims_takeover.go:204-205`).
    - Interactive → prints `"<claim line>\ntake over this lane? [y/N] "`, reads a
      line from stdin; a read error other than EOF →
      `"read takeover confirmation: %w"`; an answer not starting with `y`
-     (case-insensitive, trimmed) → `errors.New("takeover declined")` → exit 1
-     (`claims_takeover.go:142-151`).
+     (case-insensitive, trimmed) → `fmt.Errorf("takeover declined")` → exit 1
+     (`claims_takeover.go:207-216`).
 
 Claim line format — `formatClaimLine(cc, lane, now)` (`claims_render.go:23-44`):
 returns `false` (no line) for an `Unclaimed` lane. Otherwise

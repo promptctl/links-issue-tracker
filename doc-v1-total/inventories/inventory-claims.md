@@ -416,7 +416,7 @@ That is the entire `internal/app` surface: `App` (3 fields), `AccessMode` + 2 co
 
 `checkoutStreamTokens` mirrors `app.streamTokens`: skips checkouts without a present stream (`internal/cli/claims_context.go:114-122`). `addressesByAttribution` indexes live checkouts by `model.NewAttribution(checkout.Stream.Value(), workspaceID)`, skipping tokenless checkouts (`internal/cli/claims_context.go:128-136`).
 
-Callers: `next` (`internal/cli/next.go:65`), `workable`/`backlog` runner (`internal/cli/workable.go:160`), `authorizeStart` (`internal/cli/claims_takeover.go:72`), `reportContestedLanes` (`internal/cli/claims_contest_report.go:33`).
+Callers: `next` (`internal/cli/next.go:65`), `workable`/`backlog` runner (`internal/cli/workable.go:160`), `authorizeStart` (`internal/cli/claims_takeover.go:132`), `reportContestedLanes` (`internal/cli/claims_contest_report.go:33`).
 
 ---
 
@@ -450,11 +450,11 @@ Sealed int enum: `takeoverNone`, `takeoverStaleInformed`, `takeoverFreshConfirm`
    - `takeoverFreshConfirm` → `confirmFreshTakeover` (`:147-148`).
    - default (unreachable) → `fmt.Errorf("claims: %s has no recognized takeover requirement", issueID)` (`:149-152`).
 
-**`claimLineOrPanic`** reuses `formatClaimLine(cc, lane, time.Now())`; `ok == false` → error `claims: %s has a takeover requirement on %v but no claim line to show` (`internal/cli/claims_takeover.go:98-104`).
+**`claimLineOrPanic`** reuses `formatClaimLine(cc, lane, time.Now())`; `ok == false` → error `claims: %s has a takeover requirement on %v but no claim line to show` (`internal/cli/claims_takeover.go:164-170`).
 
 **`printStaleProvenance`** — proceeds unprompted and prints `"%s — check for unmerged branches or PRs on this lane before building on it\n"` (`internal/cli/claims_takeover.go:111-118`). Checking for unmerged branches or PRs is left to the taking agent; lit stays ignorant of git and the forge (`:109-110`).
 
-**`confirmFreshTakeover(stdout, cc, lane, take)`** (`internal/cli/claims_takeover.go:129-152`):
+**`confirmFreshTakeover(stdout, cc, lane, take)`** (`internal/cli/claims_takeover.go:195-218`):
 - **Non-interactive** (`!isTerminal(stdout)`, the same signal `openOrPrintWorkflowFile` uses — `internal/cli/workflows_edit.go:160`):
   - `take == false` → **refusal**: `fmt.Errorf("%s — this lane is claimed and active; pass --take to confirm the takeover", line)` (`:135-137`).
   - `take == true` → prints `"%s — taking over (--take)\n"` and proceeds (`:138-139`).

@@ -108,7 +108,7 @@ Callers: `lit next`, the backlog/workable runner, `lit start`'s authorization, a
 
 ### `lit start` — the takeover gate (the only write gate)
 
-`start` is the only transition with an authorization hook; it runs after the action is built and before the store apply, and can abort the transition (`internal/cli/cli.go:1237-1283, 1383-1388`). The issue's lane standing and the caller's own attribution classify the requirement (`internal/cli/claims_takeover.go:38-53`):
+`start` is the only transition with an authorization hook; it runs after the action is built and before the store apply, and can abort the transition (`internal/cli/cli.go:1237-1283, 1383-1388`). The issue's lane standing and the caller's own attribution classify the requirement (`internal/cli/claims_takeover.go:110-119`):
 
 | Standing | Condition | Requirement |
 |---|---|---|
@@ -121,7 +121,7 @@ Callers: `lit next`, the backlog/workable runner, `lit start`'s authorization, a
 
 - **None**: proceed; the happy path costs one extra evidence gather and nothing else.
 - **Stale-informed**: proceeds unprompted, printing the claim line plus ` — check for unmerged branches or PRs on this lane before building on it`. Checking is left to the taking agent; lit stays ignorant of git branches and the forge (`printStaleProvenance`, `claims_takeover.go:177-184`). An expired claim reaches this arm only when its holder is not `claims.Locked`; a locked worktree takes fresh-confirm instead, per the row above.
-- **Fresh-confirm**: on a non-interactive stdout, refuses unless `--take` was passed (`… — this lane is claimed and active; pass --take to confirm the takeover`); with `--take`, prints `… — taking over (--take)` and proceeds. On an interactive terminal, prompts `take over this lane? [y/N]` reading stdin; any answer whose trimmed lowercase form starts with `y` proceeds, anything else fails with `takeover declined` (`claims_takeover.go:129-152`). The `--take` flag's help: "Confirm taking over a lane another checkout claims right now (required for non-interactive callers; an interactive terminal is prompted instead)" (`cli.go:1278`).
+- **Fresh-confirm**: on a non-interactive stdout, refuses unless `--take` was passed (`… — this lane is claimed and active; pass --take to confirm the takeover`); with `--take`, prints `… — taking over (--take)` and proceeds. On an interactive terminal, prompts `take over this lane? [y/N]` reading stdin; any answer whose trimmed lowercase form starts with `y` proceeds, anything else fails with `takeover declined` (`claims_takeover.go:195-218`). The `--take` flag's help: "Confirm taking over a lane another checkout claims right now (required for non-interactive callers; an interactive terminal is prompted instead)" (`cli.go:1278`).
 
 Proven over two real clones and a git remote: the second clone's plain `start` fails naming `--take` and `claimed`; with `--take` it succeeds printing "taking over"; a subsequent `start` on the now-transferred lane prompts nothing (`internal/cli/claims_takeover_e2e_test.go:18-80`).
 
