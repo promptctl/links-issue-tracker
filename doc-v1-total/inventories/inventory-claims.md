@@ -424,7 +424,7 @@ Callers: `next` (`internal/cli/next.go:65`), `workable`/`backlog` runner (`inter
 
 ### 9.1 `lit start` — the takeover gate (the only write gate)
 
-`transitionSpec.authorize` is an optional hook that runs after the action is built and **before** `Store.Apply`, and may abort the transition by returning an error; only `start` supplies one, the other seven transitions use `noAuthorize` (`internal/cli/cli.go:1237-1250`, `:1252-1256`). Wired at `internal/cli/cli.go:1277-1283`, invoked at `internal/cli/cli.go:1383-1388`. The flag: `--take`, help string `"Confirm taking over a lane another checkout claims right now (required for non-interactive callers; an interactive terminal is prompted instead)"` (`internal/cli/cli.go:1278`).
+`transitionSpec.authorize` is an optional hook that runs after the action is built and **before** `Store.Apply`, and may abort the transition by returning an error; only `start` supplies one, the other seven transitions use `noAuthorize` (`internal/cli/cli.go:1346-1353`, `noAuthorize` at `:1356-1360`). Wired at `internal/cli/cli.go:1383-1388`, bound at `:1462` and invoked at `:1491`. The flag: `--take`, help string `"Confirm taking over a lane another checkout claims right now (required for non-interactive callers; an interactive terminal is prompted instead)"` (`internal/cli/cli.go:1384`).
 
 **`classifyTakeover(standing, self) takeoverRequirement`** — pure, no I/O (`internal/cli/claims_takeover.go:110-119`). It does not read the standing itself: it switches on `relationOf(standing, self)`, the same relation routing admits on, so the gate and the router cannot disagree about whose lane it is.
 
