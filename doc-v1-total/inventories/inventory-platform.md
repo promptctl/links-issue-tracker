@@ -165,26 +165,31 @@ Constants (`internal/cli/exit.go:10-18`):
 | `ExitValidation` | 3 |
 | `ExitNotFound` | 4 |
 | `ExitConflict` | 5 |
+| `ExitNoWork` | 6 |
 | `ExitCorruption` | 7 |
 
-(No code 6 is defined.) `ExitCode(err)` dispatches by `errors.As` in this order
-(`internal/cli/exit.go:23-95`):
+`ExitCode(err)` dispatches by `errors.As` in this order
+(`internal/cli/exit.go:37-144`):
 
-- `storage.NotFoundError` ⇒ 4 (`:27-30`)
-- `MergeConflictError` ⇒ 5 (`:31-34`)
-- `SyncFailureError` ⇒ 5 (`:39-42`)
-- `ownerApprovalRefusalError` ⇒ 5 (`:46-49`)
-- `CorruptionError` ⇒ 7 (`:50-53`)
-- `UsageError` ⇒ 2 (`:54-57`)
-- `UnknownCommandError` ⇒ 3 (`:58-61`)
-- `RetiredCommandError` ⇒ 3 (`:64-67`)
-- `ValidationError` ⇒ 3 (`:68-71`)
-- `storage.ValidationError` ⇒ 3 (`:72-75`)
-- `UnsupportedError` ⇒ 3 (`:76-79`)
-- `OutsideWorkspaceError` ⇒ 1 (`:80-83`)
-- `BulkFailureError` ⇒ 1 (`:84-90`)
-- `store.ErrTransientGCContention` ⇒ 1 (`:91-93`)
-- anything else ⇒ 1 (`:94`)
+- `storage.NotFoundError` ⇒ 4 (`:41-43`)
+- `MergeConflictError` ⇒ 5 (`:45-47`)
+- `SyncFailureError` ⇒ 5 (`:53-55`)
+- `templateShapeError` ⇒ 3 (`:61-63`)
+- `ownerApprovalRefusalError` ⇒ 5 (`:68-70`)
+- `CorruptionError` ⇒ 7 (`:72-74`)
+- `UsageError` ⇒ 2 (`:76-78`)
+- `UnknownCommandError` ⇒ 3 (`:80-82`)
+- `RetiredCommandError` ⇒ 3 (`:86-88`)
+- `ValidationError` ⇒ 3 (`:90-92`)
+- `storage.ValidationError` ⇒ 3 (`:94-96`)
+- `model.ContainerActionError` ⇒ 6 when `Satisfied()`, else 3 (`:106-112`)
+- `UnsupportedError` ⇒ 3 (`:113-115`)
+- `Exhausted` ⇒ 6 (`:121-123`)
+- `NoWork` ⇒ 6 (`:125-127`)
+- `OutsideWorkspaceError` ⇒ 1 (`:129-131`)
+- `BulkFailureError` ⇒ 1 (`:133-138`)
+- `store.ErrTransientGCContention` ⇒ 1 (`:140-142`)
+- anything else ⇒ 1 (`:143`)
 
 ### 2.8 Error rendering (`internal/cli/error_output.go`)
 

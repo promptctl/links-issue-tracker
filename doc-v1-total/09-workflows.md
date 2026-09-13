@@ -109,8 +109,8 @@ Where each event actually fires, and where in the command's output the injected 
 | `lit update` (`cli.go:1026`) | `ticket_updated` | after apply, before summary |
 | transitions (`cli.go:1409`) | one of the four transition events | after apply and authorize, before the claim-transfer notice |
 | `lit comment` (`cli.go:1484`) | `comment_added` | after the comment is stored, before it is printed |
-| `lit next` (`internal/cli/next.go:73`) | `next_pulled` | last, after the claim announcement and summary; only when a row was actually served — exhausted/no-work paths return before any occasion is built |
-| `lit backlog` (`internal/cli/workable.go:167`) | `show_backlog` | last, after the table render |
+| `lit next` (`internal/cli/next.go:75`) | `next_pulled` | last, after the start advice and summary; only when a row was actually served — exhausted/no-work paths return before any occasion is built |
+| `lit backlog` (`internal/cli/workable.go:245`) | `show_backlog` | last, after the table render |
 
 ## Matching
 
@@ -133,7 +133,7 @@ There are **no wildcards, globs, regexes, or negation** anywhere in matching; th
 - A write failure aborts and propagates as the command's error; since that is the only error path, in practice a workflow can never fail a command, and a malformed file degrades to a load warning rather than breaking any invocation.
 - Load warnings are deliberately never printed by dispatch (so authoring diagnostics don't appear on every command); they surface only in `lit workflows` (`dispatch.go:48-59`).
 - A trace-write failure never fails dispatch: the guidance was already written, and the failure goes to stderr as `lit: workflow firing trace could not be recorded (<err>); guidance was still injected` (`dispatch.go:68-72`).
-- Exit codes are unaffected by workflow firing. (The general CLI mapping, for reference: 0 OK, 1 generic, 2 usage, 3 validation, 4 not-found, 5 conflict, 7 corruption — `internal/cli/exit.go:10-18`.)
+- Exit codes are unaffected by workflow firing. The general CLI mapping is the exit-code table in `06-issue-commands.md`, which is where it is maintained; restating it here is what let this line drift to a set missing exit 6.
 
 ## Firing traces
 

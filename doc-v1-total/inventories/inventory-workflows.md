@@ -341,8 +341,8 @@ Retention actions (archive/unarchive/delete/restore) are **not** `StatusAction`s
 | `internal/cli/cli.go:1026` (`runUpdate`) | `ticket_updated` | after `Store.Apply`, before summary/breadcrumb |
 | `internal/cli/cli.go:1409` (`runTransition`) | one of the four transition events | after `Store.Apply` and after `authorize`; **before** the claim-transfer notice at `internal/cli/cli.go:1417-1420`. Guarded by `action.(model.StatusAction)` (`internal/cli/cli.go:1408`) |
 | `internal/cli/cli.go:1484` (`runCommentAdd`) | `comment_added` | after `AddComment`, before `printComment` |
-| `internal/cli/next.go:73` (`runNext`) | `next_pulled` | **last** — after the claim announcement and `printNextSummary` (`internal/cli/next.go:101-110`). Only reached when a row was actually served; `Exhausted`/`NoWork` return an error before any occasion is built (`internal/cli/next.go:94-97`) |
-| `internal/cli/workable.go:167` (`runWorkable`) | `show_backlog` | **last** — after the table render (`internal/cli/workable.go:164-167`) |
+| `internal/cli/next.go:31-77` (`nextLeaf`) | `next_pulled` | **last** — after the start advice and `printNextSummary` (`internal/cli/next.go:130-133`). Only reached when a row was actually served; `Exhausted`/`NoWork` return an error before any occasion is built (`internal/cli/next.go:118-121`) |
+| `internal/cli/workable.go:146-247` (`workableLeaf`) | `show_backlog` | **last** — after the table render (`internal/cli/workable.go:242-244`) |
 
 `backlogView` is the only `workableView` that sets an `occasion` function
 (`internal/cli/workable.go:90-97`); it is invoked unconditionally at
@@ -445,7 +445,7 @@ This is the single shared "why" computation behind both the real firing trace an
   (`internal/workflows/dispatch.go:68-72`). Every CLI call site passes `os.Stderr` as `errOut`.
 - Exit codes are unaffected by workflow firing; the general mapping is
   `ExitOK=0, ExitGeneric=1, ExitUsage=2, ExitValidation=3, ExitNotFound=4, ExitConflict=5,
-  ExitCorruption=7` (`internal/cli/exit.go:10-18`).
+  ExitNoWork=6, ExitCorruption=7` (`internal/cli/exit.go:11-32`).
 
 ---
 
