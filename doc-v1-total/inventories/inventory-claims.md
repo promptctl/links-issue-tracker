@@ -439,7 +439,7 @@ Callers: `next` (`internal/cli/next.go:67`), `workable`/`backlog` runner (`inter
 
 The `claims.Locked` row is the one a reader is likeliest to miss: an expired claim whose holder's worktree is locked is gated as a fresh hold, not waved through with a warning (`:94`).
 
-Sealed int enum: `takeoverNone`, `takeoverStaleInformed`, `takeoverFreshConfirm` (`internal/cli/claims_takeover.go:27-33`). Pinned by `TestClassifyTakeover` (`internal/cli/claims_takeover_test.go:14-58`) across eight cases: every standing, the three `Holder` sub-cases of a stale foreign claim — gone, present, and `claims.Locked` (`:42-48`) — and a stale locked lane that is ours (`:49-57`).
+Sealed int enum: `takeoverNone`, `takeoverStaleInformed`, `takeoverFreshConfirm` (`internal/cli/claims_takeover.go:27-33`). Pinned by `TestClassifyTakeover` (`internal/cli/claims_takeover_test.go:14-58`) across nine cases: the five base standings (`:20-24`), the three `Holder` sub-cases of a stale foreign claim — gone, present, and `claims.Locked` (`:42-48`) — and a stale locked lane that is ours (`:49-57`).
 
 **`authorizeStart(ctx, stdout, ap, issueID, prior, take)`** (`internal/cli/claims_takeover.go:132-154`):
 1. `ap.Store.GetRelationsByIDs(ctx, []string{issueID})` → `lane := model.LaneOf(prior, relations[issueID].Parent)` (`:133-137`).
