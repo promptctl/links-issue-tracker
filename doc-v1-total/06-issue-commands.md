@@ -19,17 +19,20 @@ Help groups, in order: Human Bootstrap, Agent Operations, Dependencies & Structu
 
 ## Exit codes and error output
 
-Exit constants (`exit.go:11-32`): 0 OK, 1 generic, 2 usage, 3 validation, 4 not found, 5 conflict, 6 no-work, 7 corruption. Exit 6 is `ExitNoWork` — "ran correctly and changed nothing" — and it is reached by three arms, not just the router's two: a caller looping `lit next` has to tell "stop, there is nothing for you" from "lit is broken", and under `ExitGeneric` its only way to do that was to parse the English. `ExitCode(err)` dispatches by error type in a fixed order (`exit.go:37-144`):
+Eight constants, 0 through 7 (`exit.go:11-32`), mapped from error type by `ExitCode` in a fixed dispatch order (`exit.go:37-144`). Exit 6 is `ExitNoWork` — "ran correctly and changed nothing" — and it is reached by three arms, not just the router's two: a caller looping `lit next` has to tell "stop, there is nothing for you" from "lit is broken", and under `ExitGeneric` its only way to do that was to parse the English.
 
-| Exit | Error types |
-|---|---|
-| 4 | `storage.NotFoundError` |
-| 5 | `MergeConflictError`, `SyncFailureError`, owner-approval refusal |
-| 7 | `CorruptionError` |
-| 2 | `UsageError` |
-| 3 | `UnknownCommandError`, `RetiredCommandError`, `ValidationError` (CLI and storage), `UnsupportedError`, `templateShapeError`, `model.ContainerActionError` when not satisfied |
-| 6 | `Exhausted`, `NoWork`, `model.ContainerActionError` when `Satisfied()` |
-| 1 | `OutsideWorkspaceError`, `BulkFailureError`, transient GC contention, everything else |
+This table is the corpus's single source for the code-to-error-type mapping; `07-ops-commands-and-sync-engine.md`, `09-workflows.md` and `10-platform.md` point here rather than restating it. Rows are in `ExitCode`'s dispatch order, not numeric order.
+
+| Exit | Constant | Error types |
+|---|---|---|
+| 0 | `ExitOK` | nil error, including a handled `--help` |
+| 4 | `ExitNotFound` | `storage.NotFoundError` |
+| 5 | `ExitConflict` | `MergeConflictError`, `SyncFailureError`, owner-approval refusal |
+| 7 | `ExitCorruption` | `CorruptionError` |
+| 2 | `ExitUsage` | `UsageError` |
+| 3 | `ExitValidation` | `UnknownCommandError`, `RetiredCommandError`, `ValidationError` (CLI and storage), `UnsupportedError`, `templateShapeError`, `model.ContainerActionError` when not satisfied |
+| 6 | `ExitNoWork` | `Exhausted`, `NoWork`, `model.ContainerActionError` when `Satisfied()` |
+| 1 | `ExitGeneric` | `OutsideWorkspaceError`, `BulkFailureError`, transient GC contention, everything else |
 
 On failure the process prints to stderr: `error (code=N): <message>`, then a `remediation:` line when the reason has one (`error_output.go:17-24`). Each error type maps to a reason string (`entity_not_found`, `usage_error`, `corruption_detected`, …) and each reason to a fixed remediation sentence — e.g. not-found → "Verify the target ID exists with `lit ls` or `lit show <id>`."; corruption → "Run `lit doctor --fix integrity` and retry." Several remediations embed literal `<agent-instructions>` tags telling agent callers the fix is idempotent and safe (`error_output.go:29-133`). Progress/diagnostic text goes to stderr as `lit: <operation>: <text>`; stdout is the result channel (`progress.go:15-27`).
 
