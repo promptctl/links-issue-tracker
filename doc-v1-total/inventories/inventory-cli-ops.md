@@ -32,17 +32,18 @@ data — described as assets, not as documentation of behavior).
 - `internal/cli/register.go:112-123` `commandFamily.resolve`: a missing / unknown / flag-shaped first argument returns `errors.New(family.usage)` — a plain error → exit 1 (`internal/cli/exit.go:90`), not exit 2. Match is exact (no trimming).
 - `internal/cli/register.go:129-138` `visibleSubcommands()` drops `hidden` rows from help/completion.
 
-### 0.3 Exit codes (`internal/cli/exit.go:10-91`)
+### 0.3 Exit codes (constants `internal/cli/exit.go:11-32`, dispatch `:37-144`)
 
 | Code | Constant | Trigger |
 |---|---|---|
-| 0 | `ExitOK` (`exit.go:11`) | nil error |
-| 1 | `ExitGeneric` (`exit.go:12`) | default; also `OutsideWorkspaceError` (`exit.go:77-80`), `BulkFailureError` (`exit.go:81-88`), `store.ErrTransientGCContention` (`exit.go:88-90`) |
-| 2 | `ExitUsage` (`exit.go:13`) | `UsageError` (`exit.go:53-56`) |
-| 3 | `ExitValidation` (`exit.go:14`) | `UnknownCommandError` (`exit.go:57-60`), `RetiredCommandError` (`exit.go:63-66`), `ValidationError` (`exit.go:67-70`), `storage.ValidationError` (`exit.go:71-74`), `UnsupportedError` (`exit.go:74-77`) |
-| 4 | `ExitNotFound` (`exit.go:15`) | `storage.NotFoundError` (`exit.go:27-30`) |
-| 5 | `ExitConflict` (`exit.go:16`) | `MergeConflictError` (`exit.go:31-34`), `SyncFailureError` (`exit.go:38-41`), `ownerApprovalRefusalError` (`exit.go:45-48`) |
-| 7 | `ExitCorruption` (`exit.go:17`) | `CorruptionError` (`exit.go:49-52`) |
+| 0 | `ExitOK` (`exit.go:12`) | nil error |
+| 1 | `ExitGeneric` (`exit.go:13`) | default; also `OutsideWorkspaceError` (`exit.go:129-131`), `BulkFailureError` (`exit.go:133-138`), `store.ErrTransientGCContention` (`exit.go:140-142`) |
+| 2 | `ExitUsage` (`exit.go:14`) | `UsageError` (`exit.go:76-78`) |
+| 3 | `ExitValidation` (`exit.go:15`) | `templateShapeError` (`exit.go:61-63`), `UnknownCommandError` (`exit.go:80-82`), `RetiredCommandError` (`exit.go:86-88`), `ValidationError` (`exit.go:90-92`), `storage.ValidationError` (`exit.go:94-96`), `model.ContainerActionError` when not satisfied (`exit.go:106-112`), `UnsupportedError` (`exit.go:113-115`) |
+| 4 | `ExitNotFound` (`exit.go:16`) | `storage.NotFoundError` (`exit.go:41-43`) |
+| 5 | `ExitConflict` (`exit.go:17`) | `MergeConflictError` (`exit.go:45-47`), `SyncFailureError` (`exit.go:53-55`), `ownerApprovalRefusalError` (`exit.go:68-70`) |
+| 6 | `ExitNoWork` (`exit.go:30`) | `Exhausted` (`exit.go:121-123`), `NoWork` (`exit.go:125-127`), `model.ContainerActionError` when `Satisfied()` (`exit.go:106-109`) |
+| 7 | `ExitCorruption` (`exit.go:31`) | `CorruptionError` (`exit.go:72-74`) |
 
 ### 0.4 Command registry rows relevant to operations (`internal/cli/register.go:273-393`)
 

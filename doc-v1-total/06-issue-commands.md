@@ -19,16 +19,20 @@ Help groups, in order: Human Bootstrap, Agent Operations, Dependencies & Structu
 
 ## Exit codes and error output
 
-Exit constants (`exit.go:10-18`): 0 OK, 1 generic, 2 usage, 3 validation, 4 not found, 5 conflict, 7 corruption (6 unused). `ExitCode(err)` dispatches by error type in a fixed order (`exit.go:23-95`):
+Eight constants, 0 through 7 (`exit.go:11-32`), mapped from error type by `ExitCode` in a fixed dispatch order (`exit.go:37-144`). Exit 6 is `ExitNoWork` — "ran correctly and changed nothing" — and it is reached by three arms, not just the router's two: a caller looping `lit next` has to tell "stop, there is nothing for you" from "lit is broken", and under `ExitGeneric` its only way to do that was to parse the English.
 
-| Exit | Error types |
-|---|---|
-| 4 | `storage.NotFoundError` |
-| 5 | `MergeConflictError`, `SyncFailureError`, owner-approval refusal |
-| 7 | `CorruptionError` |
-| 2 | `UsageError` |
-| 3 | `UnknownCommandError`, `RetiredCommandError`, `ValidationError` (CLI and storage), `UnsupportedError` |
-| 1 | `OutsideWorkspaceError`, `BulkFailureError`, transient GC contention, everything else |
+This table is the corpus's single source for the code-to-error-type mapping; `07-ops-commands-and-sync-engine.md`, `09-workflows.md` and `10-platform.md` point here rather than restating it.
+
+| Exit | Constant | Error types |
+|---|---|---|
+| 0 | `ExitOK` | nil error, including a handled `--help` |
+| 1 | `ExitGeneric` | `OutsideWorkspaceError`, `BulkFailureError`, transient GC contention, everything else |
+| 2 | `ExitUsage` | `UsageError` |
+| 3 | `ExitValidation` | `UnknownCommandError`, `RetiredCommandError`, `ValidationError` (CLI and storage), `UnsupportedError`, `templateShapeError`, `model.ContainerActionError` when not satisfied |
+| 4 | `ExitNotFound` | `storage.NotFoundError` |
+| 5 | `ExitConflict` | `MergeConflictError`, `SyncFailureError`, owner-approval refusal |
+| 6 | `ExitNoWork` | `Exhausted`, `NoWork`, `model.ContainerActionError` when `Satisfied()` |
+| 7 | `ExitCorruption` | `CorruptionError` |
 
 On failure the process prints to stderr: `error (code=N): <message>`, then a `remediation:` line when the reason has one (`error_output.go:17-24`). Each error type maps to a reason string (`entity_not_found`, `usage_error`, `corruption_detected`, …) and each reason to a fixed remediation sentence — e.g. not-found → "Verify the target ID exists with `lit ls` or `lit show <id>`."; corruption → "Run `lit doctor --fix integrity` and retry." Several remediations embed literal `<agent-instructions>` tags telling agent callers the fix is idempotent and safe (`error_output.go:29-133`). Progress/diagnostic text goes to stderr as `lit: <operation>: <text>`; stdout is the result channel (`progress.go:15-27`).
 
@@ -95,13 +99,15 @@ The **epic-context block** (`epic_context.go`): a container shows its own childr
 
 **`lit backlog`** (read; `workable.go`, `backlog.go`). Flags: `--assignee`, `--type`, `--status` (`open`|`in_progress` only — `closed` is refused), `--labels`, `--limit` (applied after ordering), `--columns`. Any positional → usage error. Output: an eight-line fixed preamble explaining the ranked queue, an 80-char rule, then either `(backlog empty)` or numbered rows (`%2d. <columns>`) each followed by an indented context block: `epic:`, `blocked:` (non-dependency reasons only — `missing <field>`, `needs-design`; earlier-sibling gating appears in neither line), `depends on:`, `in_progress: <age>[ (ORPHANED)]`, the claim line when the row's lane is held or stale, and `unblocks:` (derived from the listed rows only). If any row has a rank inversion, a trailing warning tells the user to run `lit doctor --fix`. Claims here are visibility only — they block nothing.
 
-**`lit next`** (read; `next.go`, `next_route.go`). Same filters minus `--limit`/`--columns`; the retired `--continue` flag gets a tailored refusal. Routing precedence over the canonically-ordered rows:
+**`lit next`** (read; `next.go`, `next_route.go`). Flags: `--assignee`, `--type`, `--status` (`open`|`in_progress`), `--labels`, and `--all` ("Ignore the focus scope and route over the whole queue") — no `--limit`, no `--columns` (`next.go:29-40`). The retired `--continue` is refused with an `UnsupportedError` (`flagset.go:137`). The command is registered `app.AccessRead` (`register.go:485`) and performs no writes.
 
-1. With a self identity and lanes currently held by this checkout: (a) first ready row in an own lane; (b) else the first ready open dependency of an own-lane row that is present in the row set ("on-path dependency"); (c) else, within the same epics, the first ready row in an *unclaimed* lane — announced as "continuing epic `<id>`: starting `<row>` claims `<lane>`"; (d) else an exhausted error naming the epics and any unclaimed on-path blockers ("no ready work in … — picking up other work is a deliberate re-focus, not a bare `next`"), exit 1.
-2. Otherwise: the first ready row whose lane is unclaimed — "starting `<row>` claims `<lane>`". A stale lane is never routed into.
-3. Else "no ready work", exit 1.
+Admission is one predicate, `capacityFor` (`next_route.go:229`), which classifies a row into one of four capacities against the lane's standing and this checkout's identity; the capacities and the per-case mapping are in `08-claims-and-identity.md`. A stale foreign lane is a legitimate bare-`next` target, and a lane held fresh by another checkout is routed around — as is a locked one, since a `claims.Stale` standing whose `Holder == claims.Locked` reports `laneHeldForeign` too, so a locked worktree is routed around however far its clock has expired (`claims_takeover.go:68-101`). There is no `status == open` gate on servability, so an in-progress row in a lane this checkout holds is handed back to be resumed rather than hidden.
 
-A served row prints the default columns plus indented `epic:`, `depends on:`, and claim lines (never `unblocks:`). `lit next` performs **no writes** — the "claims" announcement describes what a subsequent `lit start` would do.
+`routeNext` (`next_route.go:307`) is the precedence, over the lanes and epics `ownScope` (`next_route.go:265`) derives from the standings. A checkout holding at least one lane runs steps 1–3. Step 1 takes the first-ranked row of its own lanes, accepting `{serveWork, resumeWork}` — `ResumedOwnWork` or `ServedFromClaim`. Step 1b takes an on-path dependency, a row outside our lanes that gates one of them (`onPathDependency`, `next_route.go:469`), as `ServedFromNewLane`. Step 2 takes the rest of our epic, in lanes we do not already hold, accepting `{serveWork, takeoverWork}`, as `ServedFromEpicLane`. Step 3 is `Exhausted`, which is terminal and **never** falls through to the global pool. A checkout holding no lanes starts at step 4, the focus-scoped global pool, yielding `ServedFromNewLane` or else `NoWork`.
+
+`NextOutcome` is a sealed sum (`isNextOutcome()`) of exactly those six cases. `Exhausted` and `NoWork` are themselves `error` implementations and travel outward as themselves rather than being rendered into a generic error, so the exit-code and reason sinks read the routing verdict instead of a copy. Both exit 6 (`ExitNoWork`, `exit.go:30`) with reasons `scope_exhausted` and `no_ready_work` (`error_output.go:113,117`); the exit-code section above carries why 6 rather than `ExitGeneric`. Both diagnostics are built from `reachKind`, what one row is to this checkout right now (`reachTakeable`, `reachHeldFresh`, `reachNotReady`, `reachOutOfView`, and `reachOffFocusPath` for the pool alone), and each clause names at most `maxNamedPerKind = 12` ids and states how many it left out; the per-kind wordings are in inventory-claims.md §9.2.
+
+`lit next` claims nothing, so nothing it prints is in the perfect tense. Any pick that would establish a claim prints advice about running `lit start`, worded by `startAdvice` (`next.go:183`) on whether the row is in progress and whether `LaneID.Describe()` (`model/model.go:255`) gives the lane a name — a solo lane gets none, being the ticket that names it — then the default columns plus indented `epic:`, `depends on:`, and claim lines, never `unblocks:`, since `printNextSummary` hands `printInlineDeps` a nil unblocks map (`ready_state.go:663-669`). `renderNextOutcome` (`next.go:94`) has an arm per case: `ServedFromClaim` (`:98`) announces nothing, the three other served outcomes announce (`:100-108`), the two terminal outcomes return themselves as errors (`:118-121`), and the unreachable `default` (`:123`) panics.
 
 ## Mutating fields and rank
 
@@ -121,7 +127,7 @@ Sequence: read the issue (missing → exit 4) → authorization (only `start` ha
 
 **Store refusals on every transition**: an archived or deleted issue rejects any status action ("cannot `<action>` archived or deleted issue"); an epic rejects any status action with the container error (chapter 01); `archive`/`unarchive` on a deleted issue are refused. **There is no from-state precondition**: the registry summary for `done` says "requires in_progress" (`register.go:327`), but no code path enforces it — `Store.Apply` checks no prior status, and a same-state transition is a silent no-op that records nothing and preserves an existing resolution (`store.go:1064-1130`, `status_states.go:134-161`).
 
-**The `start` takeover gate** (`claims_takeover.go`). Before applying, `start` derives the issue's lane and the current claim standing: held/stale by self, or unclaimed → proceed silently; **stale foreign** → print the claim line plus "check for unmerged branches or PRs on this lane before building on it" and proceed; **fresh foreign** → non-interactive callers must pass `--take` or get "this lane is claimed and active; pass --take to confirm the takeover" (exit 1); an interactive terminal is prompted `take over this lane? [y/N]` (anything not starting with `y` → "takeover declined", exit 1). The claim line format: `claimed here[ (stale)]: <worktree-path> (<branch>)` when the holder resolves to a live local worktree, else `claimed: stream <8-char token> (elsewhere|stale)`, plus optional contested-by streams, age, and lane progress (`claims_render.go:23-44`). If local-checkout enumeration fails, a warning is printed and freshness alone governs.
+**The `start` takeover gate** (`claims_takeover.go`). Before applying, `start` derives the issue's lane and the current claim standing: held/stale by self, or unclaimed → proceed silently; **stale foreign** → print the claim line plus "check for unmerged branches or PRs on this lane before building on it" and proceed — but a *locked* worktree is not stale foreign here, because `classifyTakeover` dispatches on the same `relationOf` routing uses (`claims_takeover.go:94`, `:110-119`), so an expired claim whose holder is `claims.Locked` is gated as a fresh hold; **fresh foreign** → non-interactive callers must pass `--take` or get "this lane is claimed and active; pass --take to confirm the takeover" (exit 1); an interactive terminal is prompted `take over this lane? [y/N]` (anything not starting with `y` → "takeover declined", exit 1). The claim line format: `claimed here[ (stale)]: <worktree-path> (<branch>)` when the holder resolves to a live local worktree, else `claimed: stream <8-char token> (elsewhere|stale)`, plus optional contested-by streams, age, and lane progress (`claims_render.go:23-44`). If local-checkout enumeration fails, a warning is printed and freshness alone governs.
 
 ## Relations, comments, labels
 
@@ -184,4 +190,4 @@ Stated as facts of the current build:
 - The help summary for `done` claims "requires in_progress"; no code enforces any from-state precondition (`register.go:327` vs `store.go:1073-1130`).
 - Comparable wrong-usage refusals exit differently: family dispatch, transition arity, and `completion` arity are plain errors (exit 1), while per-command usage refusals are exit 2.
 - Boolean flags written as `--flag value` swallow the following token (`splitArgs`).
-- Seven functions panic on states the code treats as unreachable — unclassified readiness kinds, unmapped next-outcomes, unmapped transition occasions, unknown breadcrumb topics, unknown completion shells, bad registry nesting, impostor store actions (`readiness.go:111`, `next.go:99`, `workflow_events.go:106`, `quickstart_topics.go:64`, `completion.go:54`, `register.go:153`, `store.go:1236`).
+- Seven functions panic on states the code treats as unreachable — unclassified readiness kinds, unmapped next-outcomes, unmapped transition occasions, unknown breadcrumb topics, unknown completion shells, bad registry nesting, impostor store actions (`readiness.go:111`, `next.go:123`, `workflow_events.go:106`, `quickstart_topics.go:64`, `completion.go:54`, `register.go:153`, `store.go:1236`).
