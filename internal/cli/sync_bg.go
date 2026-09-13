@@ -317,10 +317,10 @@ func teardownMirror(ws workspace.Info, cause error, stopAnswering func()) error 
 // journal lock), and nothing on the transport side bounds how long a hung
 // remote can stall it — so the deadline is imposed here, by the holder
 // (links-sync-pgct.11.1). It is a deadline and not the hold's end: cancellation
-// reaches the transport, but the push takes the store's mirrorCancelLagObserved
+// reaches the transport, but the push takes the store's MirrorCancelLagObserved
 // to unwind, which is why that package's mirrorHoldCeiling rather than this
 // budget is what every co-resident waiter is sized against (links-sync-dauk).
-// The lag's measured figures live on mirrorCancelLagObserved and are
+// The lag's measured figures live on MirrorCancelLagObserved and are
 // deliberately not copied here — it is the constant a re-measurement updates,
 // and a second copy in another package is one nothing would update with it.
 //

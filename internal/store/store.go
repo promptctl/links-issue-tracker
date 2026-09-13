@@ -2621,11 +2621,16 @@ const (
 	// the waits derived from it further down stay const arithmetic.
 	mirrorHoldBudget = mirrorCycleObservedTail * mirrorHoldStallFactor
 
-	// mirrorCancelLagObserved is how much longer a cut cycle keeps holding the
+	// MirrorCancelLagObserved is how much longer a cut cycle keeps holding the
 	// engine after its deadline has already fired: cancellation reaches the
 	// transport, but the push does not unwind instantly. Measured 2026-09-12
 	// over the 44 cut cycles in mirror.log as elapsed-minus-budget: p50 1.3s,
 	// but 21.4s at the tail.
+	//
+	// Exported because the cli's hold-budget regression tests assert where the
+	// hold ends, and had been restating that bound as a bare 30s — a second,
+	// unattributed copy of this figure, which a re-measurement here would have
+	// left behind (links-testperf-6vfg). [LAW:one-source-of-truth]
 	//
 	// That tail is the whole reason this constant exists rather than a round
 	// figure for "the mirror's engine close plus the waiter's retry
@@ -2633,12 +2638,12 @@ const (
 	// undercounted fourfold. The budget is when the cut BEGINS. The hold ends
 	// at mirrorHoldCeiling, and a waiter sized against the budget alone is
 	// sized against a number the hold does not respect.
-	mirrorCancelLagObserved = 22 * time.Second
+	MirrorCancelLagObserved = 22 * time.Second
 
 	// mirrorHoldCeiling is the longest a mirror can hold the store's engine
 	// and journal lock: its deadline plus the lag its cut takes to land. This
 	// — not the budget — is the number every co-resident waiter must outlast.
-	mirrorHoldCeiling = mirrorHoldBudget + mirrorCancelLagObserved
+	mirrorHoldCeiling = mirrorHoldBudget + MirrorCancelLagObserved
 
 	// coResidentWaitHeadroom is scheduling slop above the ceiling, and the one
 	// number here that is a judgment rather than a measurement — so it is
@@ -2672,7 +2677,7 @@ var engineOpenRetryMaxElapsed = coResidentHolderWait
 // push, close — runs under. The mirror's push traverses the network with no
 // inherent bound, so the bound is imposed by the actor that owns the hold
 // (links-sync-pgct.11.1). It is a deadline, not a bound on the hold:
-// cancellation lands mirrorCancelLagObserved later, and mirrorHoldCeiling is
+// cancellation lands MirrorCancelLagObserved later, and mirrorHoldCeiling is
 // the number that follows from that. TestMirrorHoldBudgetExceedsObservedCycleCost
 // and TestCoResidentWaitOutlastsMirrorHoldCeiling pin both relations. A package
 // variable so the deadline regression test can shrink it without sleeping

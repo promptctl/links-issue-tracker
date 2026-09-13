@@ -109,15 +109,23 @@ var doltWorkspaceMachinery = map[string][]string{
 		"ColumnRef", "FromColumn",
 		"Reconciled", "Unconverged", "UnexplainedDrop", "RequiresDrop",
 	},
-	// The detached mirror's engine-hold deadline. It cannot go through the
-	// contract because it is not storage behavior: it is one link of the
-	// store's co-resident-holder sizing chain, which derives every wait in the
-	// package from the measured cost of a mirror cycle and is pinned in-package
-	// by TestMirrorHoldBudgetExceedsObservedCycleCost and
-	// TestCoResidentWaitOutlastsMirrorHoldCeiling — and it is mirror machinery,
-	// deleted at S4 with the rest. [LAW:one-source-of-truth]
-	"mirror hold budget": {
-		"MirrorHoldBudget",
+	// The detached mirror's engine-hold sizing: the deadline a cycle runs
+	// under, and the lag a cut takes to unwind after that deadline fires.
+	// Neither can go through the contract because neither is storage behavior:
+	// they are two links of the store's co-resident-holder sizing chain, which
+	// derives every wait in the package from the measured cost of a mirror
+	// cycle and is pinned in-package by
+	// TestMirrorHoldBudgetExceedsObservedCycleCost and
+	// TestCoResidentWaitOutlastsMirrorHoldCeiling — and both are mirror
+	// machinery, deleted at S4 with the rest.
+	//
+	// The cli reaches for the lag because the hold-budget regression tests
+	// assert where the hold ENDS, which is the budget plus that lag and not
+	// the budget alone. They had been restating it as a bare 30s — a second,
+	// unattributed copy of a measured figure, which a re-measurement in store
+	// would have left behind (links-testperf-6vfg). [LAW:one-source-of-truth]
+	"mirror hold sizing": {
+		"MirrorHoldBudget", "MirrorCancelLagObserved",
 	},
 	// Typed failures the CLI matches to choose an exit code and a message.
 	// [LAW:parse-dont-validate] — matched as types, never by message text.
