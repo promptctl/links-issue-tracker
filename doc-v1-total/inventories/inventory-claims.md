@@ -416,7 +416,7 @@ That is the entire `internal/app` surface: `App` (3 fields), `AccessMode` + 2 co
 
 `checkoutStreamTokens` mirrors `app.streamTokens`: skips checkouts without a present stream (`internal/cli/claims_context.go:114-122`). `addressesByAttribution` indexes live checkouts by `model.NewAttribution(checkout.Stream.Value(), workspaceID)`, skipping tokenless checkouts (`internal/cli/claims_context.go:128-136`).
 
-Callers: `next` (`internal/cli/next.go:65`), `workable`/`backlog` runner (`internal/cli/workable.go:160`), `authorizeStart` (`internal/cli/claims_takeover.go:132`), `reportContestedLanes` (`internal/cli/claims_contest_report.go:33`).
+Callers: `next` (`internal/cli/next.go:67`), `workable`/`backlog` runner (`internal/cli/workable.go:235`), `authorizeStart` (`internal/cli/claims_takeover.go:138`), `reportContestedLanes` (`internal/cli/claims_contest_report.go:33`).
 
 ---
 
