@@ -2044,7 +2044,7 @@ func nextRankForPlacement(ctx context.Context, tx *sql.Tx, p storage.RankPlaceme
 	if err := tx.QueryRowContext(ctx, query).Scan(&edgeRank); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return "", fmt.Errorf("query %s rank: %w", edge.name, err)
 	}
-	return edge.rankBeyond(edgeRank.String), nil
+	return edge.rankBeyond(edgeRank.String)
 }
 
 // issueColumns is the single authoritative ordered projection of the issues

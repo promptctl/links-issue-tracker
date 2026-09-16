@@ -55,6 +55,88 @@ func currentRanks(t *testing.T, ctx context.Context, st *Store, issues []model.I
 	return out
 }
 
+func mustBefore(t *testing.T, r string) string {
+	t.Helper()
+	before, err := rank.Before(r)
+	if err != nil {
+		t.Fatalf("rank.Before(%q) error = %v", r, err)
+	}
+	return before
+}
+
+// A relative move whose anchor and neighbor leave no room between them still
+// lands between them. The pairs are ones spacing can write — a rank beside
+// itself extended by zeros — and an all-zero anchor at the top of its frame,
+// whose open-ended neighbor has the same problem. rank.Midpoint once returned
+// "100V" for the first pair, and the move wrote it: the issue landed below both
+// neighbors and the command reported success.
+func TestRankMoveMakesRoomBetweenKeysThatPadToTheSameValue(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name         string
+		upper, lower string // the neighbors' planted ranks; "" plants none
+		move         func(st *Store, ctx context.Context, moved, upperID, lowerID string) error
+	}{
+		{"above", "10", "100", func(st *Store, ctx context.Context, moved, _, lowerID string) error {
+			_, err := st.RankAbove(ctx, moved, lowerID)
+			return err
+		}},
+		{"below", "10", "100", func(st *Store, ctx context.Context, moved, upperID, _ string) error {
+			_, err := st.RankBelow(ctx, moved, upperID)
+			return err
+		}},
+		{"above an all-zero frame leader", "", "0", func(st *Store, ctx context.Context, moved, _, lowerID string) error {
+			_, err := st.RankAbove(ctx, moved, lowerID)
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			st := openIssueStore(t, ctx)
+			upperID := createRankTestIssue(t, ctx, st, "Upper")
+			lowerID := createRankTestIssue(t, ctx, st, "Lower")
+			movedID := createRankTestIssue(t, ctx, st, "Moved")
+			planted := map[string]string{lowerID: tc.lower, movedID: "z"}
+			if tc.upper != "" {
+				planted[upperID] = tc.upper
+			} else if err := st.ExecRawForTest(ctx, "UPDATE issues SET deleted_at = ? WHERE id = ?", "2026-01-01T00:00:00Z", upperID); err != nil {
+				t.Fatalf("delete the upper neighbor: %v", err)
+			}
+			for id, r := range planted {
+				if err := st.ExecRawForTest(ctx, "UPDATE issues SET item_rank = ? WHERE id = ?", r, id); err != nil {
+					t.Fatalf("plant rank %q for %s: %v", r, id, err)
+				}
+			}
+			if _, err := rank.Midpoint(tc.upper, tc.lower); !errors.Is(err, rank.ErrNoRoom) {
+				t.Fatalf("rank.Midpoint(%q, %q) error = %v, want ErrNoRoom; this case no longer plants a pair without room", tc.upper, tc.lower, err)
+			}
+
+			if err := tc.move(st, ctx, movedID, upperID, lowerID); err != nil {
+				t.Fatalf("move error = %v", err)
+			}
+
+			order := []string{movedID, lowerID}
+			if tc.upper != "" {
+				order = []string{upperID, movedID, lowerID}
+			}
+			ranks := make([]string, len(order))
+			for i, id := range order {
+				issue, err := st.GetIssue(ctx, id)
+				if err != nil {
+					t.Fatalf("GetIssue(%s) error = %v", id, err)
+				}
+				ranks[i] = issue.Rank
+			}
+			for i := 1; i < len(ranks); i++ {
+				if ranks[i-1] >= ranks[i] {
+					t.Fatalf("ranks %q, want strictly ascending for %v", ranks, order)
+				}
+			}
+		})
+	}
+}
+
 func TestRankAboveStandaloneAgainstEpicChildAnchorsToEpic(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -324,7 +406,7 @@ func TestRankToEdgeDrawsItsKeyFromItsOwnFrame(t *testing.T) {
 	after := currentRanks(t, ctx, st, all)
 	// C3's key is seeded from C1's — the key that led C3's own frame — and from
 	// nothing else.
-	if want := rank.Before(before[fx.children[0].ID]); after[fx.children[2].ID] != want {
+	if want := mustBefore(t, before[fx.children[0].ID]); after[fx.children[2].ID] != want {
 		t.Errorf("C3 rank = %q, want %q = Before(C1 %q), its frame's leading key", after[fx.children[2].ID], want, before[fx.children[0].ID])
 	}
 	for _, issue := range []model.Issue{fx.epic, fx.standalone, fx.children[0], fx.children[1]} {
@@ -350,10 +432,10 @@ func TestRankToEdgeDrawsItsKeyFromItsOwnFrame(t *testing.T) {
 		t.Fatalf("RankToTop(standalone) error = %v", err)
 	}
 	final := currentRanks(t, ctx, st, all)
-	if want := rank.Before(after[fx.epic.ID]); final[fx.standalone.ID] != want {
+	if want := mustBefore(t, after[fx.epic.ID]); final[fx.standalone.ID] != want {
 		t.Errorf("standalone rank = %q, want %q = Before(the top-level leader %q)", final[fx.standalone.ID], want, after[fx.epic.ID])
 	}
-	if contaminated := rank.Before(after[fx.children[2].ID]); final[fx.standalone.ID] == contaminated {
+	if contaminated := mustBefore(t, after[fx.children[2].ID]); final[fx.standalone.ID] == contaminated {
 		t.Errorf("standalone rank = %q was computed against C3 %q, a key in another frame", final[fx.standalone.ID], after[fx.children[2].ID])
 	}
 
@@ -682,7 +764,7 @@ func TestFrameResolutionRefusesADeletedNamedIssue(t *testing.T) {
 	// The same gap on the relative verbs, which resolve through the same walk.
 	var pairErr error
 	if err := st.withMutation(ctx, "frame-resolution-liveness-test-pair", func(ctx context.Context, tx *sql.Tx) error {
-		_, _, _, pairErr = rankPairTx(ctx, tx, child.ID, fx.standalone.ID)
+		_, _, pairErr = rankPairTx(ctx, tx, child.ID, fx.standalone.ID)
 		return nil
 	}); err != nil {
 		t.Fatalf("withMutation error = %v", err)

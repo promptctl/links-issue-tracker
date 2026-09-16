@@ -64,13 +64,22 @@ func Valid(s string) bool {
 
 // Significant returns s without its trailing zeros: the part that decides where
 // s sorts once padded. Two ranks with the same significant part leave
-// SpacedRanksBetween no room between them.
+// SpacedRanksBetween and Midpoint no room between them.
 func Significant(s string) string {
 	return strings.TrimRight(s, "0")
 }
 
+// ErrNoRoom reports a pair of bounds with the same significant part — one is
+// the other extended by zeros, or an empty lower bound meets an all-zero upper
+// one. The only ranks between such a pair are further zero-extensions of the
+// lower bound, each of which leaves no room beside itself, so the primitives
+// refuse the pair instead of spending that sliver. A caller holding one reads
+// it as "respace these ranks first", never as a bad request.
+var ErrNoRoom = errors.New("rank: no room between the bounds")
+
 // Midpoint returns a string that sorts strictly between a and b.
-// Precondition: a < b (lexicographic). Returns an error if a >= b.
+// Precondition: a < b (lexicographic). Returns an error if a >= b, and
+// ErrNoRoom if the bounds share a significant part.
 // Either a or b (but not both) may be empty: empty-a means "before everything",
 // empty-b means "after everything".
 func Midpoint(a, b string) (string, error) {
@@ -79,6 +88,15 @@ func Midpoint(a, b string) (string, error) {
 	}
 	if a != "" && b != "" && a >= b {
 		return "", errors.New("rank: a must be less than b")
+	}
+	// [LAW:one-source-of-truth] Significant is the definition of room that
+	// SpacedRanksBetween and the store's smoothing already use. The walk below
+	// copies a's characters while they match b's, and on this pair they match all
+	// of b: it then runs past b's end and extends b, returning a string that sorts
+	// above b. An empty b is the open end, not an all-zero bound, so it always has
+	// room.
+	if b != "" && Significant(a) == Significant(b) {
+		return "", fmt.Errorf("%w: %q and %q pad to the same value", ErrNoRoom, a, b)
 	}
 	// Walk character positions, building the result.
 	var out strings.Builder
@@ -192,7 +210,7 @@ func spacedRanks(n int, lower, upper string) ([]string, error) {
 		// non-negative it grows 62-fold per length, which is what makes the
 		// remaining search for a wide-enough step terminate.
 		if span.Sign() < 0 {
-			return nil, fmt.Errorf("rank: no room between %q and %q: the bounds pad to the same value, so no rank longer than both sorts between them", lower, upper)
+			return nil, fmt.Errorf("%w: %q and %q pad to the same value, so no rank longer than both sorts between them", ErrNoRoom, lower, upper)
 		}
 		step := new(big.Int).Div(span, denominator)
 		if step.Cmp(minGapBig) < 0 {
@@ -297,14 +315,11 @@ func encodeBase62(value *big.Int, length int) (string, error) {
 }
 
 // Before returns a rank that sorts before the given rank.
-// Equivalent to Midpoint("", a).
-func Before(a string) string {
-	r, err := Midpoint("", a)
-	if err != nil {
-		// Only possible if a is empty, which callers should not do.
-		panic("rank.Before called with empty string")
-	}
-	return r
+// Equivalent to Midpoint("", a), and it fails where Midpoint does: on an empty
+// a, and with ErrNoRoom on an all-zero one, below which only the empty string —
+// "unranked" — sorts.
+func Before(a string) (string, error) {
+	return Midpoint("", a)
 }
 
 // After returns a rank that sorts after the given rank.

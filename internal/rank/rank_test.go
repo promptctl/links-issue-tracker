@@ -1,6 +1,7 @@
 package rank
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -90,7 +91,10 @@ func TestMidpointAdjacentChars(t *testing.T) {
 
 func TestBefore(t *testing.T) {
 	initial := Initial()
-	b := Before(initial)
+	b, err := Before(initial)
+	if err != nil {
+		t.Fatalf("Before(%q) error: %v", initial, err)
+	}
 	if b >= initial {
 		t.Errorf("Before(%q) = %q, want result < %q", initial, b, initial)
 	}
@@ -112,6 +116,68 @@ func TestMidpointErrors(t *testing.T) {
 	_, err = Midpoint("A", "A")
 	if err == nil {
 		t.Error("expected error for a == b")
+	}
+}
+
+// Every pair of strings up to four characters over an alphabet of the floor,
+// the ceiling, and one character beside each. The small alphabet is what makes
+// the pairs this primitive gets wrong common rather than rare: one bound a
+// prefix of the other, one the other extended by zeros, an all-zero bound. The
+// empty string plays both open ends.
+//
+// Midpoint must refuse exactly the pairs sharing a significant part, with
+// ErrNoRoom, and on every other pair return a valid rank strictly between the
+// bounds. Midpoint("10", "100") once returned "100V", which sorts above both.
+func TestMidpointStaysStrictlyBetweenItsBounds(t *testing.T) {
+	t.Parallel()
+	strs := []string{""}
+	for frontier := []string{""}; len(frontier[0]) < 4; {
+		var next []string
+		for _, s := range frontier {
+			for _, c := range "01yz" {
+				next = append(next, s+string(c))
+			}
+		}
+		strs = append(strs, next...)
+		frontier = next
+	}
+	pairs := 0
+	for _, a := range strs {
+		for _, b := range strs {
+			if a == b || (b != "" && a >= b) {
+				continue
+			}
+			pairs++
+			got, err := Midpoint(a, b)
+			if b != "" && Significant(a) == Significant(b) {
+				if !errors.Is(err, ErrNoRoom) {
+					t.Fatalf("Midpoint(%q, %q) = %q, %v; want ErrNoRoom: the bounds pad to the same value", a, b, got, err)
+				}
+				continue
+			}
+			if err != nil {
+				t.Fatalf("Midpoint(%q, %q) error: %v; the bounds have room", a, b, err)
+			}
+			if !Valid(got) || got <= a || (b != "" && got >= b) {
+				t.Fatalf("Midpoint(%q, %q) = %q, want a valid rank strictly between them", a, b, got)
+			}
+		}
+	}
+	// A generator that stopped generating would pass every assertion above. Each
+	// unordered pair of distinct strings is checked once, plus every non-empty
+	// string against the open upper end.
+	if n := len(strs); pairs != n*(n-1)/2+n-1 {
+		t.Fatalf("checked %d pairs of %d strings, want %d", pairs, n, n*(n-1)/2+n-1)
+	}
+}
+
+// Nothing but the empty string, which means unranked, sorts below an all-zero
+// rank, so Before has nothing to return for one.
+func TestBeforeAnAllZeroRankHasNoRoom(t *testing.T) {
+	for _, a := range []string{"0", "000"} {
+		if got, err := Before(a); !errors.Is(err, ErrNoRoom) {
+			t.Errorf("Before(%q) = %q, %v; want ErrNoRoom", a, got, err)
+		}
 	}
 }
 
@@ -155,7 +221,11 @@ func TestSequentialBefore(t *testing.T) {
 	ranks := make([]string, 1001)
 	ranks[0] = Initial()
 	for i := 1; i <= 1000; i++ {
-		ranks[i] = Before(ranks[i-1])
+		r, err := Before(ranks[i-1])
+		if err != nil {
+			t.Fatalf("Before(%q) at step %d error: %v", ranks[i-1], i, err)
+		}
+		ranks[i] = r
 		if ranks[i] >= ranks[i-1] {
 			t.Fatalf("Before(%q) = %q at step %d, not strictly decreasing", ranks[i-1], ranks[i], i)
 		}
@@ -442,9 +512,9 @@ func TestSpacedRanksBetweenRejectsBoundsWithNoRoom(t *testing.T) {
 			}()
 			select {
 			case got := <-returned:
-				if got.err == nil {
-					t.Fatalf("SpacedRanksBetween(%q, %q, 1) = %q, want an error: no rank longer than both bounds sorts between them",
-						bounds.lower, bounds.upper, got.ranks)
+				if !errors.Is(got.err, ErrNoRoom) {
+					t.Fatalf("SpacedRanksBetween(%q, %q, 1) = %q, %v; want ErrNoRoom: no rank longer than both bounds sorts between them",
+						bounds.lower, bounds.upper, got.ranks, got.err)
 				}
 			case <-time.After(5 * time.Second):
 				t.Fatalf("SpacedRanksBetween(%q, %q, 1) did not return within 5s — the length search is looping on bounds it can never satisfy",
