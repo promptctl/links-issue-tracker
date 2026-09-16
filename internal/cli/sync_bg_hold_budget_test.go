@@ -60,23 +60,18 @@ func (l *lockedBuffer) String() string {
 // Not parallel: it mutates PATH (t.Setenv) and store.MirrorHoldBudget.
 func TestMirrorHoldBudgetCutsHungPushAndReleasesEngine(t *testing.T) {
 	base, root, gitPath, runInProcess := setupMirrorHoldBudgetRepo(t)
+	healthyCycle := measureHealthyMirrorCycle(t, root, runInProcess)
+	wedgedBudget := shrinkMirrorHoldBudget(t, healthyCycle)
 	wedgeMarker := installGitWedge(t, base, gitPath, "push")
-	shrinkMirrorHoldBudget(t, 8*time.Second)
 
 	// The mirror's own entrypoint, in the foreground: parent-pid 0 skips the
 	// parent wait, then the cycle opens the engine and pushes into the wedge.
-	started := time.Now()
-	mirrorOut, mirrorErr := runInProcess(90*time.Second, "sync", backgroundMirrorSubcommand, "--parent-pid", "0")
-	elapsed := time.Since(started)
+	mirrorOut, mirrorErr := runInProcess(unboundedHoldTripwire(healthyCycle, wedgedBudget), "sync", backgroundMirrorSubcommand, "--parent-pid", "0")
+	cycleEnded := time.Now()
 	if mirrorErr != nil {
 		t.Fatalf("mirror run returned error (the mirror is best-effort and must exit 0): %v\noutput:\n%s", mirrorErr, mirrorOut.String())
 	}
-	if _, err := os.Stat(wedgeMarker); err != nil {
-		t.Fatalf("the wedge never engaged (marker missing: %v) — the push short-circuited and the test proved nothing:\noutput:\n%s", err, mirrorOut.String())
-	}
-	if elapsed > 30*time.Second {
-		t.Fatalf("mirror held its session %s against a hung push (budget %s) — the hold bound is not working:\noutput:\n%s", elapsed, store.MirrorHoldBudget, mirrorOut.String())
-	}
+	assertHoldEndedWithinItsCeiling(t, wedgeEngagedAt(t, wedgeMarker, "push", mirrorOut), cycleEnded, wedgedBudget, mirrorOut)
 	if !strings.Contains(mirrorOut.String(), "hold_budget_cut=true") {
 		t.Fatalf("cycle log does not report the budget cut:\noutput:\n%s", mirrorOut.String())
 	}
@@ -127,21 +122,16 @@ func TestMirrorHoldBudgetCutsHungPushAndReleasesEngine(t *testing.T) {
 // Not parallel: it mutates PATH (t.Setenv) and store.MirrorHoldBudget.
 func TestMirrorHoldBudgetCutsHungResolveJoinsOneTrace(t *testing.T) {
 	base, root, gitPath, runInProcess := setupMirrorHoldBudgetRepo(t)
+	healthyCycle := measureHealthyMirrorCycle(t, root, runInProcess)
+	wedgedBudget := shrinkMirrorHoldBudget(t, healthyCycle)
 	wedgeMarker := installGitWedge(t, base, gitPath, "ls-remote")
-	shrinkMirrorHoldBudget(t, 8*time.Second)
 
-	started := time.Now()
-	mirrorOut, mirrorErr := runInProcess(90*time.Second, "sync", backgroundMirrorSubcommand, "--parent-pid", "0")
-	elapsed := time.Since(started)
+	mirrorOut, mirrorErr := runInProcess(unboundedHoldTripwire(healthyCycle, wedgedBudget), "sync", backgroundMirrorSubcommand, "--parent-pid", "0")
+	cycleEnded := time.Now()
 	if mirrorErr != nil {
 		t.Fatalf("mirror run returned error (the mirror is best-effort and must exit 0): %v\noutput:\n%s", mirrorErr, mirrorOut.String())
 	}
-	if _, err := os.Stat(wedgeMarker); err != nil {
-		t.Fatalf("the wedge never engaged (marker missing: %v) — the resolve short-circuited and the test proved nothing:\noutput:\n%s", err, mirrorOut.String())
-	}
-	if elapsed > 30*time.Second {
-		t.Fatalf("mirror held its session %s against a hung ls-remote (budget %s) — the hold bound is not working:\noutput:\n%s", elapsed, store.MirrorHoldBudget, mirrorOut.String())
-	}
+	assertHoldEndedWithinItsCeiling(t, wedgeEngagedAt(t, wedgeMarker, "resolve", mirrorOut), cycleEnded, wedgedBudget, mirrorOut)
 	if !strings.Contains(mirrorOut.String(), "hold_budget_cut=true") {
 		t.Fatalf("cycle log does not report the budget cut:\noutput:\n%s", mirrorOut.String())
 	}
@@ -283,13 +273,137 @@ exec %q "$@"
 	return wedgeMarker
 }
 
-// shrinkMirrorHoldBudget lowers store.MirrorHoldBudget for the test's
-// duration so a wedged cycle cuts in seconds, restoring it at cleanup.
-func shrinkMirrorHoldBudget(t *testing.T, budget time.Duration) {
+// shrinkMirrorHoldBudget installs the wedged run's hold budget for the test's
+// duration — margin over the healthy cycle measured on this machine — so a
+// wedged cycle cuts in seconds, and restores the production figure at cleanup.
+//
+// It is the one home of that derivation, and handing the installed budget back
+// is what keeps it one: the tripwire and the ceiling below take the budget as
+// data, so neither reads it back out of a global it would then have to be
+// called after. The ordering is a data dependency rather than a line of prose
+// asking for it. [LAW:one-source-of-truth] [LAW:no-ambient-temporal-coupling]
+func shrinkMirrorHoldBudget(t *testing.T, healthyCycle time.Duration) time.Duration {
 	t.Helper()
+	budget := wedgeHoldBudgetMargin * healthyCycle
 	restore := store.MirrorHoldBudget
 	store.MirrorHoldBudget = budget
 	t.Cleanup(func() { store.MirrorHoldBudget = restore })
+	t.Logf("healthy mirror cycle measured at %s; wedged run budgeted at %s",
+		healthyCycle.Round(time.Millisecond), budget.Round(time.Millisecond))
+	return budget
+}
+
+// wedgeHoldBudgetMargin is how far above a measured healthy cycle the shrunk
+// budget sits, and why these tests no longer name a duration at all.
+//
+// A hold budget is a stall detector: its whole claim is that work still running
+// at the deadline has stopped making progress, and that claim is false the
+// moment the deadline lands inside the cost of healthy work — the defect
+// links-sync-dauk filed against the production figure. The shrink here used to
+// be a flat 8s, which made the same mistake one level down: 8s was a wall-clock
+// bet against setup this test does not own. Measured at load average 270 on the
+// dev box, a cycle spent more than 8s between opening its engine and spawning
+// git push, so the budget fired before the wedge could engage and the run
+// reported the invariant broken when it had only failed to reach it. Raising
+// the number would have moved that threshold without removing the bet
+// (links-testperf-6vfg).
+//
+// So the base is measured rather than named, and this is the margin over it.
+// One whole healthy cycle is already a strict over-estimate of what has to fit
+// under the budget — it includes a completed push and the close, while only the
+// work BEFORE the wedge engages must fit — and the factor covers load moving
+// between the sample and the wedged run. It is deliberately this test's own
+// number and not store's mirrorHoldStallFactor, which is margin over a recorded
+// tail rather than over a single sample; sharing the value would claim a
+// derivation that is not there. [LAW:no-ambient-temporal-coupling]
+const wedgeHoldBudgetMargin = 2
+
+// measureHealthyMirrorCycle runs one unwedged mirror cycle and reports what a
+// healthy cycle costs on THIS machine right now — the figure the wedged run's
+// budget and tripwire are both derived from. It leaves behind the unpushed
+// commit the timed cycle consumed, so it hands back the fixture it was given.
+//
+// It must run BEFORE installGitWedge (a cycle timed through the shim would be
+// timing the wedge). Running before the shrink needs no saying: the shrink
+// takes this function's result. A sample that was itself cut is censored — the
+// budget standing in for the work, which is the very reading error
+// links-sync-dauk had to correct in the field log — so a cut sample is a
+// failure here rather than a smaller number. So is a sample whose push failed
+// fast: the mirror is best-effort and exits clean either way, and a rejected
+// push is cheaper than a landed one. Whether the push landed is read from the
+// push-outcome marker, the one record of that fact, and the marker must be
+// this sample's rather than the bootstrap push's. [LAW:no-silent-failure]
+// [LAW:one-source-of-truth]
+func measureHealthyMirrorCycle(t *testing.T, root string, runInProcess func(time.Duration, ...string) (*lockedBuffer, error)) time.Duration {
+	t.Helper()
+	started := time.Now()
+	// The sample runs under the production budget, so its hung bound is that
+	// budget's, not a figure of this test's choosing. [LAW:one-source-of-truth]
+	out, err := runInProcess(unboundedHoldTripwire(0, store.MirrorHoldBudget), "sync", backgroundMirrorSubcommand, "--parent-pid", "0")
+	healthyCycle := time.Since(started)
+	if err != nil {
+		t.Fatalf("unwedged mirror cycle failed, so there is no healthy cost to size the wedged run against: %v\noutput:\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "attempted=true hold_budget_cut=false") {
+		t.Fatalf("the sample cycle was cut or never attempted under the production budget, so its cost is not the cost of a healthy cycle:\noutput:\n%s", out.String())
+	}
+	ws, err := workspace.Resolve(root)
+	if err != nil {
+		t.Fatalf("resolve workspace: %v", err)
+	}
+	now := time.Now()
+	outcome, age, recorded := lastPushOutcome(ws, now)
+	if !recorded || outcome.Decision != pushDecisionPushed || age > now.Sub(started) {
+		t.Fatalf("the sample cycle did not land a push (outcome %+v, recorded %t, %s old against a %s sample), so its cost is not the cost of a healthy cycle:\noutput:\n%s",
+			outcome, recorded, age, now.Sub(started), out.String())
+	}
+	if probe, probeErr := runInProcess(90*time.Second, "new", "--title", "post-measurement probe", "--topic", "demo"); probeErr != nil {
+		t.Fatalf("re-seed the unpushed commit the sample cycle pushed: %v\noutput:\n%s", probeErr, probe.String())
+	}
+	return healthyCycle
+}
+
+// unboundedHoldTripwire is when a mirror run is hung rather than working: the
+// measured work ahead of the wedge (none for the sample, which has no measure
+// yet and no wedge), the budget in force for this run, and the lag a cut takes
+// to unwind — then the same
+// margin again, because a tripwire that lands on legal work reports the wrong
+// failure, which is the mistake this ticket is about.
+func unboundedHoldTripwire(healthyCycle, wedgedBudget time.Duration) time.Duration {
+	return wedgeHoldBudgetMargin * (healthyCycle + wedgedBudget + store.MirrorCancelLagObserved)
+}
+
+// wedgeEngagedAt is the vacuous-pass guard and the hold's clock in one. The
+// shim stamps its marker before it sleeps, so the marker exists only if the
+// wedged git subcommand genuinely ran, and its timestamp is the instant the
+// hang began. A run whose budget fired first proves nothing and says so.
+func wedgeEngagedAt(t *testing.T, wedgeMarker, wedged string, out *lockedBuffer) time.Time {
+	t.Helper()
+	marker, err := os.Stat(wedgeMarker)
+	if err != nil {
+		t.Fatalf("the wedge never engaged (marker missing: %v) — the %s short-circuited and the test proved nothing:\noutput:\n%s", err, wedged, out.String())
+	}
+	return marker.ModTime()
+}
+
+// assertHoldEndedWithinItsCeiling pins where the hold ends, measured from the
+// wedge and not from the cycle's start: everything before the wedge engaged is
+// work whose cost this test does not own, and folding it into the bound is the
+// same wall-clock bet that made the budget itself flaky.
+//
+// The bound is the ceiling and not the budget, which is why the name says so:
+// the budget is when the cut BEGINS, and the hold outlives it by the lag
+// cancellation takes to unwind — store's own mirrorHoldCeiling relation. Both
+// terms are the system's own, the budget this run installed and store's
+// measured lag, rather than the bare 30s the two tests used to restate.
+// [LAW:one-source-of-truth]
+func assertHoldEndedWithinItsCeiling(t *testing.T, wedgedAt, cycleEnded time.Time, wedgedBudget time.Duration, out *lockedBuffer) {
+	t.Helper()
+	ceiling := wedgedBudget + store.MirrorCancelLagObserved
+	if held := cycleEnded.Sub(wedgedAt); held > ceiling {
+		t.Fatalf("the mirror held its session %s past the wedge (budget %s, ceiling %s) — the hold bound is not working:\noutput:\n%s",
+			held.Round(time.Millisecond), wedgedBudget, ceiling, out.String())
+	}
 }
 
 // TestHoldBudgetCutFramingSurvivesTheBanner pins the claim
