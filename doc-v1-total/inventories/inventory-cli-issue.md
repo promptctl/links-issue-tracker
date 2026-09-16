@@ -116,14 +116,15 @@ into* one of those, the call and its observable effect are recorded here.
   - On `pflag.ErrHelp` it prints `"Usage of <use>:\n"` followed by
     `PrintDefaults()` **to stdout** and returns `errHelpHandled` → exit 0
     (`cli.go:277-283`, printer at `cli.go:265-272`).
-  - A message equal to `unknown flag: --continue` (pflag's spelling for
-    `--continue` and `--continue=<x>`; `--continuex` does not match) →
+  - A `*pflag.NotExistError` whose parsed name is `continue` (from `--continue`
+    or `--continue=<x>`; not `--continuex`, and not `-continue`, which pflag
+    reads as the shorthand group `-c…`) →
     `UnsupportedError{Message: "--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag"}`
-    → exit 3 (`flagset.go:134-136`).
-  - Any other `unknown flag:` / `unknown shorthand flag:` /
-    `flag needs an argument:` → `UsageError{Message: msg}` → exit 2
-    (`flagset.go:143-146`). A leaf-position `--output` is an ordinary unknown
-    flag here; only `parseGlobalArgs` maps `--output` to `UnsupportedError`.
+    → exit 3 (`flagset.go:138-141`).
+  - Every other parse error — unknown flag, missing value, invalid value, bad
+    syntax — → `UsageError{Message: err.Error()}` → exit 2 (`flagset.go:142`).
+    A leaf-position `--output` is an ordinary unknown flag here; only
+    `parseGlobalArgs` maps `--output` to `UnsupportedError`.
   - A parsed-and-changed `--help` flag also prints help and returns
     `errHelpHandled` (`cli.go:300-306`).
 
@@ -1114,7 +1115,7 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
 - Retired flag: `--continue` is intercepted at the shared parse boundary as
   `UnsupportedError` → exit 3, message
   ``"--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag"``
-  (`flagset.go:134-136`).
+  (`flagset.go:138-141`).
 - Prints the sync-staleness warning first (`next.go:55`).
 - Gathers the workable set — rows, relation details, **and the focus scope** —
   via `gatherWorkableAnnotated` (`next.go:58-63`, `cli.go:655`), then the claim

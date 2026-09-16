@@ -125,27 +125,21 @@ func parseFlagSet(fs *cobraFlagSet, args []string, stdout io.Writer) error {
 			}
 			return errHelpHandled
 		}
-		// [LAW:types-are-the-program] Wrap pflag errors at the parse boundary so sinks dispatch on type, not message text.
-		// The spellings matched below are pflag's own (errors.go in spf13/pflag).
-		// Equality, not Contains: pflag names the whole flag, so `--continuex`
-		// reads "unknown flag: --continuex" and is an ordinary unknown flag, not
-		// the retired one.
-		msg := err.Error()
-		if msg == "unknown flag: --continue" {
+		// Past ErrHelp, pflag's Parse fails only with its four typed errors — an
+		// unknown flag, a missing value, an invalid value, bad syntax — and every
+		// one is the caller mis-writing the command line. So all of them are one
+		// UsageError, the same answer the root FlagErrorFunc gives. Classifying by
+		// message prefix instead left `-x`, `--limit abc` and `---x` as bare errors
+		// that exited 1 with "Retry the command" (links-output-format-yxjs).
+		// [LAW:types-are-the-program] [LAW:single-enforcer]
+		//
+		// The retired flag is matched on the name pflag parsed, so `--continue`
+		// and `--continue=x` match while `--continuex` stays an unknown flag.
+		var unknown *pflag.NotExistError
+		if errors.As(err, &unknown) && unknown.GetSpecifiedName() == "continue" {
 			return UnsupportedError{Message: "--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag"}
 		}
-		// "flag needs an argument" and the shorthand spelling join the unknown-flag
-		// family: all are the user mis-writing the flag surface, so all reach a
-		// sink as one type. The arity error classified as a bare error until
-		// links-cli-1lxr, and the shorthand one until links-output-format-yxjs,
-		// where `-x` still exited 1 with "Retry the command".
-		// [LAW:types-are-the-program] [LAW:single-enforcer]
-		if strings.HasPrefix(msg, "unknown flag:") ||
-			strings.HasPrefix(msg, "unknown shorthand flag:") ||
-			strings.HasPrefix(msg, "flag needs an argument:") {
-			return UsageError{Message: msg}
-		}
-		return err
+		return UsageError{Message: err.Error()}
 	}
 	if helpFlag := fs.cmd.Flags().Lookup("help"); helpFlag != nil && helpFlag.Changed {
 		// [LAW:single-enforcer] Parsed help flags follow the same Cobra help rendering path as explicit help errors.

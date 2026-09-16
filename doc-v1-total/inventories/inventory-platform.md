@@ -111,9 +111,9 @@ to `/Users/bmf/code/links-issue-tracker`.
   removed flags to typed errors:
   - `--continue` ⇒ `UnsupportedError` "--continue is retired; claim routing already keeps
     `lit next` in your checkout's own epic first — run `lit next` with no flag"
-    (`internal/cli/flagset.go:134-136`);
-  - any other `unknown flag:` / `unknown shorthand flag:` / `flag needs an argument:` ⇒
-    `UsageError` (`internal/cli/flagset.go:143-146`).
+    (`internal/cli/flagset.go:138-141`);
+  - every other parse error (unknown flag, missing value, invalid value, bad syntax) ⇒
+    `UsageError` (`internal/cli/flagset.go:142`).
   - `--help` (or `pflag.ErrHelp`) prints `Usage of <cmd>:` followed by `PrintDefaults()` to
     stdout and returns the swallowed sentinel (`internal/cli/cli.go:265-272`, `:277-282`, `:300-306`).
 

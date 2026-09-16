@@ -8,12 +8,12 @@ This chapter covers everything in `lit` that manages the workspace rather than i
 
 `main` wraps the context in an interrupt guard — SIGINT/SIGTERM cancels the command context and escalates to a hard exit if in-flight work ignores the cancel — then runs the CLI and exits with the code derived from the returned error (`cmd/lit/main.go:19-21`). Bare `lit` inside a git repo prints the quickstart guidance (identical to `lit quickstart`); outside a git repo it prints help instead; a first argument that is not a registered command returns `UnknownCommandError` (`internal/cli/cli.go:53-87`). Every registered command disables cobra flag parsing and parses its own flags (`register.go:420`).
 
-Flag handling common to every command (`flagset.go:118-158`, `cli.go:187-212`):
+Flag handling common to every command (`flagset.go:118-152`, `cli.go:187-212`):
 
 - `--help` prints usage plus defaults to stdout and exits 0.
 - `--output` or `--output=<x>` before the command name → `UnsupportedError` ("--output is no longer supported; omit it for text output"), exit 3. After the command name it is an unknown flag.
 - `--continue` → `UnsupportedError` (retired; claim routing already keeps `lit next` in the checkout's own epic first), exit 3.
-- Any other unknown flag, long or shorthand, or a flag missing its argument → `UsageError`, exit 2.
+- Any other flag parse error (unknown flag, missing or invalid value, bad syntax) → `UsageError`, exit 2.
 
 Family commands (`sync`, `hooks`, `backup`, `snapshots`, `lifeboat`, …) resolve their subcommand by exact match; a missing, unknown, or flag-shaped first argument returns the family usage string as a plain error — exit 1, not 2 (`register.go:112-123`).
 
