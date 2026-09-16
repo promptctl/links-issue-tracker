@@ -123,8 +123,8 @@ func fetchIssueRelations(ctx context.Context, st storage.Store, issues []model.I
 // fetching from the store, so fetch cost is paid once upstream in
 // fetchIssueRelations and fetchContainerAncestry.
 //
-// A blocks edge onto an epic is a dependency of every issue under that epic, at
-// any depth and in every lane, so each blocker an ancestor epic passes down
+// A blocks edge onto an epic is a dependency of every issue in it or in an epic
+// nested in it, in every lane, so each blocker an ancestor epic passes down
 // (fetchEpicGates) becomes an InheritedDependency here — through the same
 // annotation mechanism, and so the same ClassifyReadiness enforcer, a declared
 // edge uses. It used to
@@ -284,8 +284,8 @@ func fetchEpicGates(ctx context.Context, fetch relationsFetch, epics map[string]
 }
 
 // epicsAbove yields the ids of the epics above rel, nearest first, reading each
-// parent's relations from ancestry. A parent cycle (links-hierarchy-6m14) ends
-// the walk instead of looping forever.
+// parent's relations from ancestry. A parent that is not an epic ends the walk,
+// as `epic: none` in lit backlog says, and so does a parent cycle (6m14).
 func epicsAbove(rel storage.IssueRelations, ancestry map[string]storage.IssueRelations) iter.Seq[string] {
 	return func(yield func(string) bool) {
 		seen := map[string]bool{rel.Issue.ID: true}

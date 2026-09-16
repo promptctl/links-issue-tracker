@@ -237,7 +237,7 @@ func rejectWaitCycle(ctx context.Context, st storage.Store, rt model.RelationTyp
 	for i, l := range path {
 		steps[i] = l.String()
 	}
-	return ValidationError{Message: fmt.Sprintf("refusing %s: %s already waits on %s (%s), so neither could ever start. A blocks edge onto an epic holds back every issue under that epic", link, link.before, link.after, strings.Join(steps, ", "))}
+	return ValidationError{Message: fmt.Sprintf("refusing %s: %s already waits on %s (%s), so this edge would close a loop. A blocks edge onto an epic holds back every issue under that epic", link, link.before, link.after, strings.Join(steps, ", "))}
 }
 
 // findWaitPath returns the steps by which start already comes before goal, in

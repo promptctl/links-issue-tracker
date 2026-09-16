@@ -1540,7 +1540,7 @@ Family `depFamily`, usage `"usage: lit dep <add|rm|ls> ..."` (`dependency.go:15-
      exists and either the path or the new edge contains a hold. A path of
      `blocks` edges closed by a `blocks` edge passes; the store's cycle check then
      refuses it (exit 1). Message:
-     `"refusing <edge>: <first> already waits on <second> (<steps>), so neither could ever start. A blocks edge onto an epic holds back every issue under that epic"`,
+     `"refusing <edge>: <first> already waits on <second> (<steps>), so this edge would close a loop. A blocks edge onto an epic holds back every issue under that epic"`,
      each step and the edge rendered `"<a> blocks <b>"` or
      `"epic <a> holds back <b>"` (`waitLink`, `:181-195`).
 - Endpoint orientation: `rt.StoreEndpoints(from, to)` swaps the pair for `blocks`

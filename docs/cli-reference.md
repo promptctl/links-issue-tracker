@@ -512,7 +512,8 @@ Manages relationship edges. `--from`/`--to` are required for `add` and `rm`; the
 no positional form. The default type is `blocks`, where `--from` is the blocker and
 `--to` is the blocked issue. `blocks` edges are not allowed between two issues in the
 same epic — within an epic, rank is the ordering signal. A `blocks` edge onto an
-epic holds back every issue under that epic, at any depth and in every lane:
+epic holds back every issue in that epic and in epics nested inside it, in every
+lane:
 `lit next` offers none of them until the blocker closes, and `lit backlog` shows
 the blocker on each one as `depends on: <id> (via epic)`. A blocker nested
 inside that epic, or an epic above it, holds back nothing. An edge that would
