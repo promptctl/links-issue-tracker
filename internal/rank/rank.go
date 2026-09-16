@@ -80,10 +80,10 @@ var ErrNoRoom = errors.New("rank: no room between the bounds")
 // Midpoint returns a string that sorts strictly between a and b.
 // Precondition: a < b (lexicographic). Returns an error if a >= b, and
 // ErrNoRoom if the bounds share a significant part.
-// Either a or b (but not both) may be empty: empty-a means "before everything",
-// empty-b means "after everything".
+// An empty a means "before everything" and an empty b "after everything"; both
+// empty is the whole keyspace, whose midpoint is Initial.
 func Midpoint(a, b string) (string, error) {
-	if a == b {
+	if a == b && a != "" {
 		return "", errors.New("rank: a and b are equal")
 	}
 	if a != "" && b != "" && a >= b {

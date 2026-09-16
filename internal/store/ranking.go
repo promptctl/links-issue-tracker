@@ -63,10 +63,17 @@ func edgeFor(p storage.RankPlacement) (rankEdge, error) {
 }
 
 // rankBeyondTx is the key just past a frame's edge, whose key readEdge reads —
-// or the frame's first key when the frame holds nothing ranked yet. Absorbing
-// the empty frame here is what lets every caller assign unconditionally instead
-// of repeating the same "is there anything to anchor against" branch.
-// [LAW:dataflow-not-control-flow]
+// or the frame's first key when the frame holds nothing ranked yet. An empty
+// frame's edge reads as "", so both bounds are open and the key is the midpoint
+// of the whole keyspace, which rank's TestMidpointOfTheWholeKeyspaceIsInitial
+// pins to rank.Initial. The empty frame is a value, not a branch, and every
+// caller assigns unconditionally. [LAW:dataflow-not-control-flow]
+//
+// The edge is read only inside rankBetweenTx, never ahead of it to test for an
+// empty frame. Every create places a key at an edge, so a read ahead of the
+// placement would be a second query on every create. A placement with room
+// costs one read, and one that has to make room costs one more, taken after the
+// respace has rewritten the edge.
 //
 // The edge is read through a function rather than passed as a key because the
 // key past it is placed by rankBetweenTx, which rewrites the edge's key when it
@@ -74,13 +81,6 @@ func edgeFor(p storage.RankPlacement) (rankEdge, error) {
 // goes through that one function, so an edge whose key leaves no room past it
 // is made room for exactly as a relative move's neighbors are.
 func (e rankEdge) rankBeyondTx(ctx context.Context, tx *sql.Tx, readEdge func() (string, error)) (string, error) {
-	edgeRank, err := readEdge()
-	if err != nil {
-		return "", err
-	}
-	if edgeRank == "" {
-		return rank.Initial(), nil
-	}
 	return rankBetweenTx(ctx, tx, func() (string, string, error) {
 		edgeRank, err := readEdge()
 		lower, upper := e.beside(edgeRank)

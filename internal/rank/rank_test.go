@@ -144,7 +144,7 @@ func TestMidpointStaysStrictlyBetweenItsBounds(t *testing.T) {
 	pairs := 0
 	for _, a := range strs {
 		for _, b := range strs {
-			if a == b || (b != "" && a >= b) {
+			if (a == b && a != "") || (b != "" && a >= b) {
 				continue
 			}
 			pairs++
@@ -164,10 +164,10 @@ func TestMidpointStaysStrictlyBetweenItsBounds(t *testing.T) {
 		}
 	}
 	// A generator that stopped generating would pass every assertion above. Each
-	// unordered pair of distinct strings is checked once, plus every non-empty
-	// string against the open upper end.
-	if n := len(strs); pairs != n*(n-1)/2+n-1 {
-		t.Fatalf("checked %d pairs of %d strings, want %d", pairs, n, n*(n-1)/2+n-1)
+	// unordered pair of distinct strings is checked once, plus every string
+	// against the open upper end, the two open ends together included.
+	if n := len(strs); pairs != n*(n-1)/2+n {
+		t.Fatalf("checked %d pairs of %d strings, want %d", pairs, n, n*(n-1)/2+n)
 	}
 }
 
@@ -521,5 +521,14 @@ func TestSpacedRanksBetweenRejectsBoundsWithNoRoom(t *testing.T) {
 					bounds.lower, bounds.upper)
 			}
 		})
+	}
+}
+
+// A frame with nothing ranked has two open ends, and the store seeds it with
+// the midpoint of that pair, so that midpoint must be the one Initial names.
+func TestMidpointOfTheWholeKeyspaceIsInitial(t *testing.T) {
+	t.Parallel()
+	if got, err := Midpoint("", ""); err != nil || got != Initial() {
+		t.Fatalf("Midpoint(\"\", \"\") = %q, %v; want %q", got, err, Initial())
 	}
 }
