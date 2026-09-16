@@ -11,7 +11,7 @@ Dependency and vocabulary rules: engine → contract → model, never back; no t
 
 | Role | Methods |
 |---|---|
-| `IssueReader` | `GetIssue`, `GetIssueDetail`, `ListIssues`, `ListChildren`, `ListTopics`, `ListAllEvents`, `LocalIssueCount` |
+| `IssueReader` | `GetIssue`, `GetIssueDetail`, `ListIssues`, `ListTopics`, `ListAllEvents`, `LocalIssueCount` |
 | `IssueWriter` | `CreateIssue`, `Apply` |
 | `CommentStore` | `AddComment`, `DeleteComment` |
 | `LabelStore` | `AddLabel`, `RemoveLabel`, `ReplaceLabels`, `ListLabels` |

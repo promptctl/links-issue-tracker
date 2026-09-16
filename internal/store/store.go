@@ -676,6 +676,16 @@ func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter)
 			args = append(args, label)
 		}
 	}
+	if err := s.requireIssues(ctx, filter.ParentIDs); err != nil {
+		return nil, err
+	}
+	if len(filter.ParentIDs) > 0 {
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(filter.ParentIDs)), ",")
+		where = append(where, "EXISTS (SELECT 1 FROM relations r WHERE r.type = 'parent-child' AND r.src_id = i.id AND r.dst_id IN ("+placeholders+"))")
+		for _, id := range filter.ParentIDs {
+			args = append(args, id)
+		}
+	}
 	if len(filter.IDs) > 0 {
 		placeholders := make([]string, 0, len(filter.IDs))
 		for _, id := range filter.IDs {
@@ -727,6 +737,42 @@ func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter)
 	// straight pipe.
 	slices.SortStableFunc(hydrated, ordering)
 	return capLimit(filterByResolution(filterByState(hydrated, allowedStates), filter.Resolutions), filter.Limit), nil
+}
+
+// requireIssues answers NotFoundError for the first id naming no issue row, in
+// the order given. It reads existence only — a soft-deleted issue still exists —
+// so it agrees with GetIssue about what an id names.
+func (s *Store) requireIssues(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	args := make([]any, 0, len(ids))
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM issues WHERE id IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return fmt.Errorf("check issues exist: %w", err)
+	}
+	defer rows.Close()
+	found := make(map[string]bool, len(ids))
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		found[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if !found[id] {
+			return storage.NotFoundError{Entity: "issue", ID: id}
+		}
+	}
+	return nil
 }
 
 func parseStatusFilter(input []model.State) ([]model.State, error) {
@@ -840,7 +886,13 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 	// rank-ordered children query other consumers read, minus self.
 	siblings := []model.Issue{}
 	if structural.Parent != nil {
-		parentChildren, err := s.ListChildren(ctx, structural.Parent.ID)
+		// Every retention state, as the children edge records it: a sibling
+		// archived out of the listing is still the parent's child.
+		parentChildren, err := s.ListIssues(ctx, storage.ListIssuesFilter{
+			ParentIDs:       []string{structural.Parent.ID},
+			IncludeArchived: true,
+			IncludeDeleted:  true,
+		})
 		if err != nil {
 			return model.IssueDetail{}, err
 		}

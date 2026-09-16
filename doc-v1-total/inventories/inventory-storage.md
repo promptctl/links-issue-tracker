@@ -46,9 +46,6 @@ General contract: every method is a pure read from the caller's view; two identi
 - The trailing id key is contract, not engine convenience: without it, a sort on any duplicated field value leaves tied rows in engine-incidental order and two engines diverge (`internal/storage/contract.go:31-37`).
 - `SortBy` may name only a `SortFields` member (`internal/storage/contract.go:39-41`).
 
-**`ListChildren(ctx, parentID string) ([]model.Issue, error)`** — `internal/storage/contract.go:46`
-- Returns one epic's children in rank order; an id with no children yields an empty slice; only an unreadable store is an error (`internal/storage/contract.go:44-45`).
-
 **`ListTopics(ctx) ([]string, error)`** — `internal/storage/contract.go:50`
 - Distinct non-empty topics that *live* issues carry, ascending. Derived vocabulary, never stored (`internal/storage/contract.go:48-49`).
 
@@ -253,6 +250,7 @@ Rule for the whole struct: **every slice is an OR within itself and an AND again
 | `Assignees` | `[]string` | `internal/storage/issues.go:160` |
 | `SearchTerms` | `[]string` | `internal/storage/issues.go:161` |
 | `IDs` | `[]string` | `internal/storage/issues.go:162` |
+| `ParentIDs` | `[]string` | direct children of the named issues, read off the parent-child edge, never the id prefix; the one axis whose criteria must exist: an id naming no issue makes `ListIssues` return `NotFoundError` (`internal/storage/issues.go:152-156`, `:165`) |
 | `HasComments` | `*bool` | nil = unconstrained (`internal/storage/issues.go:163`) |
 | `LabelsAll` | `[]string` | `internal/storage/issues.go:164` |
 | `UpdatedAfter` | `*time.Time` | `internal/storage/issues.go:165` |
@@ -578,8 +576,6 @@ Order of checks is stated as contract: the parent must be resolved before the co
 - `Related` — `relatedIssues` (`:188-191`, `:229`)
 - `RedirectTarget` — hydrated from the issue's own close payload (`issue.RedirectTargetValue()`), **never** from the relations graph; nil if the target record is absent (`:208-219`, `:230`)
 
-**`ListChildren`** (`internal/storage/memory/issues.go:235-244`) — `mustRecord(parentID)` (so a missing parent is `NotFoundError`), then hydrated `childRecords` in rank order.
-
 **`ListTopics`** (`internal/storage/memory/issues.go:246-267`) — iterates `issues`; skips records whose retention is `model.Deleted` and records with an empty topic; dedupes; `slices.Sort`. **Deletion removes an issue's topic from the vocabulary; archival does not** (`:254-256`).
 
 **`ListAllEvents`** (`internal/storage/memory/issues.go:279-283`) — `sortEvents(cloneEvents(e.events))`. The append-only slice already holds true recording order, which is a better answer, and it is deliberately not the one given, because a same-tick tie is where two engines would part company (`:269-278`).
@@ -594,12 +590,13 @@ Order of checks is stated as contract: the parent must be resolved before the co
 
 Pipeline is fixed and every stage always runs: **hydrate → select → order → cap** (`internal/storage/memory/list.go:14-19`).
 
-1. `issueOrdering(filter.SortBy)` — parsed first, so an unknown sort field errors before any work (`internal/storage/memory/list.go:27-30`).
-2. `canonicalLabels(filter.LabelsAll)` — the label criteria are normalized the same way stored labels are (`:31-34`).
-3. Hydrates **all** issues in `e.order` sequence (`:35-43`).
-4. `e.selects(issue, filter, labelCriteria)` per issue (`:44-49`).
-5. `slices.SortStableFunc(selected, order)` — the ordering is total (every comparison ends in a distinct id), so the result does not depend on arrival order (`:50-53`).
-6. `capLimit(selected, filter.Limit)` (`:54`).
+1. `issueOrdering(filter.SortBy)` — parsed first, so an unknown sort field errors before any work (`internal/storage/memory/list.go:26-29`).
+2. `canonicalLabels(filter.LabelsAll)` — the label criteria are normalized the same way stored labels are (`:30-33`).
+3. `e.mustRecord(id)` for each of `filter.ParentIDs`, in order — the first id with no record returns `NotFoundError`; a deleted record still exists (`:34-38`).
+4. Hydrates **all** issues in `e.order` sequence (`:39-47`).
+5. `e.selects(issue, filter, labelCriteria)` per issue (`:48-53`).
+6. `slices.SortStableFunc(selected, order)` — the ordering is total (every comparison ends in a distinct id), so the result does not depend on arrival order (`:54-57`).
+7. `capLimit(selected, filter.Limit)` (`:58`).
 
 **`selects`** — every criterion ANDs; every slice ORs within itself (`internal/storage/memory/list.go:57-109`):
 | Criterion | Semantics | Cite |
@@ -611,6 +608,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 | `ExcludeIssueTypes` | if non-empty AND the type is in the list → reject | `:80-82` |
 | `Assignees` | `matchesAny(issue.Assignee, trimmedNonEmpty(...))`: exact match after trimming criteria; blanks in the criteria slice are dropped so a whitespace-only filter constrains nothing | `:83-85`, `:171-182` |
 | `IDs` | `matchesAny(issue.ID, trimmedNonEmpty(...))`: exact match | `:86-88` |
+| `ParentIDs` | `matchesParents(issue.ID, ParentIDs)`: empty = pass; else some `RelParentChild` relation has `SrcID == issue.ID` and `DstID` in the list; the parent's retention is not consulted | `:93-95`, `:118-132` |
 | `UpdatedAfter` | reject if `issue.UpdatedAt.Before(*UpdatedAfter)` (i.e. inclusive of equality) | `:89-91` |
 | `UpdatedBefore` | reject if `issue.UpdatedAt.After(*UpdatedBefore)` (inclusive of equality) | `:92-94` |
 | `HasComments` | reject if `*HasComments != (len(commentsFor(issue.ID)) > 0)` | `:95-97` |
@@ -970,7 +968,7 @@ Stated in `internal/storage/memory/doc.go:26-49`:
 
 ### 3.2 The 36 registered cases (`internal/storage/conformance/conformance.go:81-118`)
 
-`create_read_roundtrip`, `create_defaults`, `create_requires_title`, `create_normalizes_topic`, `create_under_missing_parent_is_not_found`, `get_missing_issue_is_not_found`, `apply_field_patch`, `apply_status_transition`, `apply_missing_issue_is_not_found`, `apply_to_container_is_refused`, `container_state_follows_live_children`, `history_records_mutations`, `list_defaults_to_rank_order`, `list_filters_select`, `list_hides_archived_and_deleted`, `list_sorts_and_limits`, `list_breaks_sort_ties_by_id`, `list_accepts_exactly_the_contract_sort_fields`, `list_sorts_status_by_stored_encoding`, `events_are_totally_ordered`, `rank_intents_reorder`, `rank_intents_resolve_across_frames`, `rank_set_imposes_order`, `close_redirects_to_a_canonical`, `comments_roundtrip`, `labels_roundtrip`, `relations_roundtrip`, `relations_batch_buckets_edges`, `parent_wiring`, `topics_derive_from_issues`, `export_carries_whole_store`, `bulk_apply_creates_and_updates`, `bulk_apply_compensates_a_failed_batch`, `import_tree_maps_local_ids`, `attribution_stamps_events`, `local_issue_count_tracks_creates`.
+`create_read_roundtrip`, `create_defaults`, `create_requires_title`, `create_normalizes_topic`, `create_under_missing_parent_is_not_found`, `get_missing_issue_is_not_found`, `apply_field_patch`, `apply_status_transition`, `apply_missing_issue_is_not_found`, `apply_to_container_is_refused`, `container_state_follows_live_children`, `history_records_mutations`, `list_defaults_to_rank_order`, `list_filters_select`, `list_by_parent`, `list_hides_archived_and_deleted`, `list_sorts_and_limits`, `list_breaks_sort_ties_by_id`, `list_accepts_exactly_the_contract_sort_fields`, `list_sorts_status_by_stored_encoding`, `events_are_totally_ordered`, `rank_intents_reorder`, `rank_intents_resolve_across_frames`, `rank_set_imposes_order`, `close_redirects_to_a_canonical`, `comments_roundtrip`, `labels_roundtrip`, `relations_roundtrip`, `relations_batch_buckets_edges`, `parent_wiring`, `topics_derive_from_issues`, `export_carries_whole_store`, `bulk_apply_creates_and_updates`, `bulk_apply_compensates_a_failed_batch`, `import_tree_maps_local_ids`, `attribution_stamps_events`, `local_issue_count_tracks_creates`.
 
 ### 3.3 Every enforced invariant, by case
 
@@ -1053,6 +1051,17 @@ Stated in `internal/storage/memory/doc.go:26-49`:
 | `UpdatedAfter: now-1h` | both (`:472`) |
 | `IssueTypes:[bug] + Assignees:["grace"]` | nothing — **criteria AND across axes**, so no caller can widen a listing by adding a criterion (`:473-475`) |
 | `Assignees: ["ada","grace"]` | both — **a slice ORs within itself** (`:476-477`) |
+
+**`list_by_parent`** (`:756-788`) — fixture: two epics, two children under the first, a grandchild under the second child, a cousin under the other epic, and one parentless issue; the first child is started:
+| Filter | Expected |
+|---|---|
+| `ParentIDs: [epic]` | the two children, in rank order — not the grandchild (`:775`) |
+| `ParentIDs: [second]` | the grandchild (`:776`) |
+| `ParentIDs: [cousin]` | nothing (`:777`) |
+| `ParentIDs: [epic, other]` | both children and the cousin — **a slice ORs within itself** (`:778`) |
+| `ParentIDs: [epic]` + `Statuses: [in_progress]` | the started child — criteria AND across axes (`:779`) |
+
+`ParentIDs: [epic, "no-such-issue"]` → `NotFoundError{Entity: "issue"}`, not an empty listing (`:786-787`).
 
 **`list_hides_archived_and_deleted`** (`:484-505`)
 - Default listing shows only live issues (`:495-497`).
@@ -1145,7 +1154,7 @@ Stated in `internal/storage/memory/doc.go:26-49`:
 - `GetRelationsByIDs(nil)` returns an empty map, not an error (`:1009-1017`).
 
 **`parent_wiring`** (`:1020-1052`)
-- `SetParent` wires a child under an epic; `ListChildren` shows it (`:1025-1028`).
+- `SetParent` wires a child under an epic; `mustChildren` (a `ListIssues` with `ParentIDs: [parent]`, `IncludeArchived` and `IncludeDeleted`) shows it (`:1676-1679`, `:2046-2051`).
 - **Reparenting replaces rather than adds**: after a second `SetParent`, the old epic has no children and the new one has the child (`:1030-1036`).
 - `ClearParent` detaches; the parent then has no children (`:1038-1041`).
 - `ClearParent` on a parentless child → `NotFoundError{Entity: "parent relation"}` (`:1043-1045`).

@@ -1,6 +1,7 @@
 package query
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -40,6 +41,7 @@ func TestQueryTokenSupersetOfDiscreteFlags(t *testing.T) {
 		{"assignee", "--assignee bmf", "assignee:bmf", storage.ListIssuesFilter{Assignees: []string{"bmf"}}},
 		{"search", "--search login", "login", storage.ListIssuesFilter{SearchTerms: []string{"login"}}},
 		{"ids", "--ids issue-123", "id:issue-123", storage.ListIssuesFilter{IDs: []string{"issue-123"}}},
+		{"parent", "--parent epic-1", "parent:epic-1", storage.ListIssuesFilter{ParentIDs: []string{"epic-1"}}},
 		{"labels", "--labels renderer", "label:renderer", storage.ListIssuesFilter{LabelsAll: []string{"renderer"}}},
 		{"has-comments", "--has-comments", "has:comments", storage.ListIssuesFilter{HasComments: boolPtr(true)}},
 		{"updated-after", "--updated-after 2026-03-07T10:00:00Z", "updated>=2026-03-07T10:00:00Z", storage.ListIssuesFilter{UpdatedAfter: &updatedUTC}},
@@ -88,6 +90,17 @@ func TestQueryMultiTokenAppliesAllFourNewTokens(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("multi-token query produced %#v, want %#v", got, want)
+	}
+}
+
+// TestQueryParentRejectsEmptyID pins that a bare parent: is a loud error: the
+// term names no parent, and dropping it would widen the listing to every issue.
+// [LAW:no-silent-failure]
+func TestQueryParentRejectsEmptyID(t *testing.T) {
+	_, err := Parse(`parent:`)
+	var refusal storage.ValidationError
+	if !errors.As(err, &refusal) {
+		t.Fatalf("Parse(parent:) error = %#v, want a storage.ValidationError", err)
 	}
 }
 

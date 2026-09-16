@@ -113,17 +113,3 @@ func parentClearLeaf() appLeaf {
 		return emitBreadcrumb(stdout, "update")
 	}}
 }
-
-func childrenLeaf() appLeaf {
-	fs := newCobraFlagSet("children")
-	return appLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
-		if len(positional) != 1 {
-			return UsageError{Message: "usage: lit children <parent-id>"}
-		}
-		children, err := ap.Store.ListChildren(ctx, positional[0])
-		if err != nil {
-			return err
-		}
-		return printIssueLines(stdout, children, mustColumns("id", "state", "title"), nil)
-	}}
-}

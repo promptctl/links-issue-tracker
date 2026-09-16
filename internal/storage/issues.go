@@ -148,6 +148,12 @@ var SortFields = []string{
 // IncludeArchived and IncludeDeleted are the two axes whose default is a
 // filter rather than an absence: a listing that says nothing about retention
 // sees only live issues.
+//
+// ParentIDs selects the direct children of the named issues — membership read
+// off the parent-child edge, never off the id prefix. It is the one axis whose
+// criteria must exist: an id naming no issue is a NotFoundError, because "that
+// parent has no children" and "there is no such parent" are different facts,
+// and an empty listing could only say the first. [LAW:no-silent-failure]
 type ListIssuesFilter struct {
 	Statuses          []model.State
 	Resolutions       []model.Resolution
@@ -156,6 +162,7 @@ type ListIssuesFilter struct {
 	Assignees         []string
 	SearchTerms       []string
 	IDs               []string
+	ParentIDs         []string
 	HasComments       *bool
 	LabelsAll         []string
 	UpdatedAfter      *time.Time

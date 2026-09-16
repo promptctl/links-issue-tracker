@@ -267,17 +267,6 @@ func (e *Engine) GetIssueDetail(ctx context.Context, id string) (model.IssueDeta
 	}, nil
 }
 
-func (e *Engine) ListChildren(ctx context.Context, parentID string) ([]model.Issue, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	if _, err := e.mustRecord(parentID); err != nil {
-		return nil, err
-	}
-	pos := e.positions()
-	return e.hydrateAll(e.childRecords(parentID, pos), pos)
-}
-
 func (e *Engine) ListTopics(ctx context.Context) ([]string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()

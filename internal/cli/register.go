@@ -490,7 +490,7 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		// standard appCmd wrapper would open the cwd store before the handler runs.
 		// runList picks the store, then shares one query path. [LAW:one-source-of-truth]
 		{Name: "ls", Summary: "List issues (rank by default; --at <store-dir> lists a discovered store read-only)", GroupID: "operations",
-			Run: func(args []string) error { return runList(ctx, stdout, args) }},
+			Run: func(args []string) error { return runList(ctx, stdout, lsSurface, args) }},
 		{Name: "show", Summary: "Show issue details", GroupID: "operations",
 			Run: r.appCmd(app.AccessRead, showLeaf)},
 		{Name: "history", Summary: "Show an issue's state-transition history", GroupID: "operations",
@@ -528,8 +528,10 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 			Run: r.familyCmd(labelFamily), Subcommands: labelFamily.visibleSubcommands()},
 		{Name: "parent", Summary: "Manage parent relationships", GroupID: "structure",
 			Run: r.familyCmd(parentFamily), Subcommands: parentFamily.visibleSubcommands()},
-		{Name: "children", Summary: "List child issues by rank", GroupID: "structure",
-			Run: r.appCmd(app.AccessRead, childrenLeaf)},
+		// children is `ls --parent <id>` under its own name: the same leaf, so it
+		// takes every ls flag and cannot drift from ls. [LAW:one-type-per-behavior]
+		{Name: "children", Summary: "List an issue's direct children by rank (`lit ls --parent <id>`; takes every ls flag)", GroupID: "structure",
+			Run: func(args []string) error { return runList(ctx, stdout, childrenSurface, args) }},
 		{Name: "dep", Summary: "Manage dependency edges", GroupID: "structure",
 			Run: r.familyCmd(depFamily), Subcommands: depFamily.visibleSubcommands()},
 		// export/backup/snapshots are three snapshot-shaped names over two distinct

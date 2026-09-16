@@ -1114,7 +1114,7 @@ func TestCreateIssuePlacement(t *testing.T) {
 	}
 }
 
-func TestStoreListChildrenDefaultsToRankOrder(t *testing.T) {
+func TestStoreListByParentDefaultsToRankOrder(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
@@ -1138,12 +1138,12 @@ func TestStoreListChildrenDefaultsToRankOrder(t *testing.T) {
 		t.Fatalf("SetParent(childB) error = %v", err)
 	}
 
-	children, err := st.ListChildren(ctx, parent.ID)
+	children, err := st.ListIssues(ctx, storage.ListIssuesFilter{ParentIDs: []string{parent.ID}})
 	if err != nil {
-		t.Fatalf("ListChildren() error = %v", err)
+		t.Fatalf("ListIssues(parent) error = %v", err)
 	}
 	if got, want := issueIDs(children), []string{childA.ID, childB.ID}; strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("ListChildren() ids = %#v, want %#v", got, want)
+		t.Fatalf("ListIssues(parent) ids = %#v, want %#v", got, want)
 	}
 }
 
@@ -1904,7 +1904,7 @@ func TestOpenForReadRefusesUnreconcilableShape(t *testing.T) {
 	}
 }
 
-func TestListChildrenReturnsEpicChildrenWithDerivedLifecycle(t *testing.T) {
+func TestListByParentReturnsEpicChildrenWithDerivedLifecycle(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
@@ -1925,9 +1925,9 @@ func TestListChildrenReturnsEpicChildrenWithDerivedLifecycle(t *testing.T) {
 		t.Fatalf("Apply(close) error = %v", err)
 	}
 
-	children, err := st.ListChildren(ctx, root.ID)
+	children, err := st.ListIssues(ctx, storage.ListIssuesFilter{ParentIDs: []string{root.ID}})
 	if err != nil {
-		t.Fatalf("ListChildren() error = %v", err)
+		t.Fatalf("ListIssues(parent) error = %v", err)
 	}
 	if len(children) != 1 || children[0].ID != sub.ID {
 		t.Fatalf("children = %#v, want sub epic %s", children, sub.ID)

@@ -65,8 +65,10 @@ func runOrphaned(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	return runLeaf(orphanedLeaf(), ctx, stdout, ap, args)
 }
 
+// runChildren drives `children` against the workspace store the test opened —
+// the listing leaf under its children surface, exactly as `lit children` runs it.
 func runChildren(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	return runLeaf(childrenLeaf(), ctx, stdout, ap, args)
+	return runListLeaf(ctx, stdout, childrenSurface, listScope{store: ap.Store, policy: workspaceReadyPolicy(ap)}, args)
 }
 
 func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
@@ -178,6 +180,20 @@ func runDowngradeWith(
 // runListWithStore drives `ls` against a store the test has already opened —
 // the same seam runList hands its two acquisition paths to.
 func runListWithStore(ctx context.Context, stdout io.Writer, st storage.Store, policy readyPolicy, args []string) error {
-	l, _ := lsLeaf() // the store is supplied here, so --at has nothing to route
-	return runLeaf(l, ctx, stdout, listScope{store: st, policy: policy}, args)
+	// the store is supplied here, so --at has nothing to route
+	return runListLeaf(ctx, stdout, lsSurface, listScope{store: st, policy: policy}, args)
+}
+
+// runListLeaf is runList with the acquisition replaced by a supplied scope: the
+// same parse and the same positional read, then the work.
+func runListLeaf(ctx context.Context, stdout io.Writer, surface listSurface, scope listScope, args []string) error {
+	l, _ := listLeaf(surface)
+	if _, err := parseLeaf(l, args, stdout); err != nil {
+		return err
+	}
+	positional, err := listPositionals(l, surface)
+	if err != nil {
+		return err
+	}
+	return l.work(ctx, stdout, scope, positional)
 }

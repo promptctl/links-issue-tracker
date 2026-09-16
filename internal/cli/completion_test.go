@@ -156,7 +156,7 @@ func TestRunHelpDocumentsRankOrderingDefaults(t *testing.T) {
 	if !strings.Contains(help, "ls List issues (rank by default") {
 		t.Fatalf("help output missing default rank ls description: %q", help)
 	}
-	if !strings.Contains(help, "children List child issues by rank") {
+	if !strings.Contains(help, "children List an issue's direct children by rank") {
 		t.Fatalf("help output missing rank-based children description: %q", help)
 	}
 }
