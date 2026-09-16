@@ -872,14 +872,14 @@ func annotateIssues(ctx context.Context, st storage.Store, requiredFields []stri
 	// (details) and their ancestor epics (ancestry) rather than re-querying
 	// the same subjects; both are GetRelationsByIDs results, so a seeded hit is
 	// byte-identical to a refetch. (links-query-efficiency-988d.2)
-	focusPaths, err := fetchFocusPathGoals(ctx, st, details, ancestry)
+	focusPaths, err := fetchFocusPathGoals(ctx, st, details, ancestry.relations)
 	if err != nil {
 		return nil, nil, focusScope{}, err
 	}
 	annotated, err := annotation.Annotate(ctx, subjects,
 		fieldAnnotator,
 		newBlockerAnnotator(details, ancestry),
-		newSiblingGateAnnotator(details, pendingSiblingsByEpic(ancestry)),
+		newSiblingGateAnnotator(details, pendingSiblingsByEpic(ancestry.relations)),
 		newOrphanedAnnotator(orphanedThreshold),
 		newNeedsDesignAnnotator(),
 		newFocusPathAnnotator(focusPaths),

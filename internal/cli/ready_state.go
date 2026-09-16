@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"iter"
 	"sort"
 	"strings"
 	"time"
@@ -123,15 +124,16 @@ func fetchIssueRelations(ctx context.Context, st storage.Store, issues []model.I
 // fetchIssueRelations and fetchContainerAncestry.
 //
 // A blocks edge onto an epic is a dependency of every issue under that epic, at
-// any depth and in every lane, so each unfinished blocker of an ancestor epic
-// becomes an InheritedDependency here — through the same annotation mechanism,
-// and so the same ClassifyReadiness enforcer, a declared edge uses. It used to
+// any depth and in every lane, so each blocker an ancestor epic passes down
+// (fetchEpicGates) becomes an InheritedDependency here — through the same
+// annotation mechanism, and so the same ClassifyReadiness enforcer, a declared
+// edge uses. It used to
 // be accepted and then ignored: `lit dep add` stored the edge, the epic's row
 // showed it, and every child stayed servable (links-epic-block-xpkz). An id the
 // issue already depends on directly is named once, as the direct edge. No
 // inherited edge is a rank inversion of this issue: rank hygiene of the epic's
 // own edge is a fact about the epic, which lit doctor's inversion pass orders.
-func newBlockerAnnotator(details, ancestry map[string]storage.IssueRelations) annotation.Annotator {
+func newBlockerAnnotator(details map[string]storage.IssueRelations, ancestry epicAncestry) annotation.Annotator {
 	// [LAW:dataflow-not-control-flow] Dependency lookup runs for every issue;
 	// empty blockers list means no annotations, not a skipped operation.
 	return func(_ context.Context, issue model.Issue) ([]annotation.Annotation, error) {
@@ -171,7 +173,7 @@ func newBlockerAnnotator(details, ancestry map[string]storage.IssueRelations) an
 		for _, dep := range blockingDeps {
 			direct[dep.ID] = true
 		}
-		for _, dep := range inheritedDependencies(detail, ancestry) {
+		for _, dep := range ancestry.inheritedDependencies(detail) {
 			if direct[dep.ID] {
 				continue
 			}
@@ -184,15 +186,41 @@ func newBlockerAnnotator(details, ancestry map[string]storage.IssueRelations) an
 	}
 }
 
-// fetchContainerAncestry loads the relations of every epic above the given
-// issues, one batched query per nesting level, keyed by epic id. An issue's
-// parent is one level; an epic can itself sit under an epic, so the walk climbs
-// until no level names a parent epic it has not loaded. A top-level epic has no
-// parent, so the common one-level workspace costs exactly the one query it cost
-// before this walk existed.
-//
-// fetch is the relations source: the store itself, or the focus walk's memo.
-func fetchContainerAncestry(ctx context.Context, fetch func(context.Context, []string) (map[string]storage.IssueRelations, error), subjects map[string]storage.IssueRelations) (map[string]storage.IssueRelations, error) {
+// relationsFetch loads relations by id: the store itself, or the focus walk's
+// memo over it.
+type relationsFetch func(context.Context, []string) (map[string]storage.IssueRelations, error)
+
+// epicAncestry is what the readiness gates read about the epics above a set of
+// issues: each epic's relations, keyed by epic id, and the blockers each epic
+// passes down to every issue under it. One fetchContainerAncestry call builds
+// both, so the gates always describe the epics they are read beside.
+// [LAW:one-source-of-truth]
+type epicAncestry struct {
+	relations map[string]storage.IssueRelations
+	gates     map[string][]model.Issue
+}
+
+// fetchContainerAncestry loads the epics above the given issues and the
+// blockers those epics pass down.
+func fetchContainerAncestry(ctx context.Context, fetch relationsFetch, subjects map[string]storage.IssueRelations) (epicAncestry, error) {
+	relations, err := climbContainers(ctx, fetch, subjects)
+	if err != nil {
+		return epicAncestry{}, err
+	}
+	gates, err := fetchEpicGates(ctx, fetch, relations)
+	if err != nil {
+		return epicAncestry{}, err
+	}
+	return epicAncestry{relations: relations, gates: gates}, nil
+}
+
+// climbContainers loads the relations of every epic above the given issues, one
+// batched query per nesting level, keyed by epic id. An issue's parent is one
+// level; an epic can itself sit under an epic, so the walk climbs until no level
+// names a parent epic it has not loaded. A top-level epic has no parent, so the
+// common one-level workspace costs exactly the one query it cost before this
+// walk existed.
+func climbContainers(ctx context.Context, fetch relationsFetch, subjects map[string]storage.IssueRelations) (map[string]storage.IssueRelations, error) {
 	ancestry := make(map[string]storage.IssueRelations)
 	for level := subjects; ; {
 		var ids []string
@@ -215,31 +243,82 @@ func fetchContainerAncestry(ctx context.Context, fetch func(context.Context, []s
 	}
 }
 
-// inheritedDependencies returns the unfinished blockers of every epic above
-// subject, sorted by id, each named once. ancestry must hold the relations of
-// those epics, as fetchContainerAncestry returns them.
+// fetchEpicGates returns, for each epic in epics, the unfinished blockers it
+// passes down to every issue under it. It loads the blockers and the epics above
+// them, which costs no query when no epic has an unfinished blocker.
 //
-// A blocker that is subject itself or one of the epics above it gates nothing
-// here. Such an edge comes from inside the epic it blocks — `lit dep add` still
-// accepts one from two levels down (links-hierarchy-kh57) — and applying it to
-// the blocker's own subtree would make the blocker wait for itself. Everything
-// else under the epic still waits for the blocker.
-func inheritedDependencies(subject storage.IssueRelations, ancestry map[string]storage.IssueRelations) []model.Issue {
-	chain := map[string]bool{subject.Issue.ID: true}
-	var epics []storage.IssueRelations
-	for parent := subject.Parent; parent != nil && parent.IsContainer() && !chain[parent.ID]; parent = ancestry[parent.ID].Parent {
-		chain[parent.ID] = true
-		epics = append(epics, ancestry[parent.ID])
-	}
-	named := map[string]bool{}
-	var deps []model.Issue
+// A blocker the hierarchy already relates to its epic passes nothing down.
+// Inside the epic, it would make everything under the epic wait for it,
+// including the issues it waits for itself (its earlier lane-mates, its own
+// dependencies), and neither side could ever start. Above the epic, it is an epic
+// that cannot finish before this one does. Either edge restates what the
+// hierarchy already says, since an epic finishes only when everything under it
+// has. `lit dep add` still accepts both shapes (links-hierarchy-kh57).
+func fetchEpicGates(ctx context.Context, fetch relationsFetch, epics map[string]storage.IssueRelations) (map[string][]model.Issue, error) {
+	var blockerIDs []string
 	for _, epic := range epics {
 		for _, dep := range epic.DependsOn {
-			if !dep.InPlay() || chain[dep.ID] || named[dep.ID] {
+			if dep.InPlay() {
+				blockerIDs = append(blockerIDs, dep.ID)
+			}
+		}
+	}
+	blockers, err := fetch(ctx, blockerIDs)
+	if err != nil {
+		return nil, err
+	}
+	blockerAncestry, err := climbContainers(ctx, fetch, blockers)
+	if err != nil {
+		return nil, err
+	}
+	gates := make(map[string][]model.Issue, len(epics))
+	for epicID, epic := range epics {
+		for _, dep := range epic.DependsOn {
+			if !dep.InPlay() || sitsUnder(blockers[dep.ID], epicID, blockerAncestry) || sitsUnder(epic, dep.ID, epics) {
 				continue
 			}
-			named[dep.ID] = true
-			deps = append(deps, dep)
+			gates[epicID] = append(gates[epicID], dep)
+		}
+	}
+	return gates, nil
+}
+
+// epicsAbove yields the ids of the epics above rel, nearest first, reading each
+// parent's relations from ancestry. A parent cycle (links-hierarchy-6m14) ends
+// the walk instead of looping forever.
+func epicsAbove(rel storage.IssueRelations, ancestry map[string]storage.IssueRelations) iter.Seq[string] {
+	return func(yield func(string) bool) {
+		seen := map[string]bool{rel.Issue.ID: true}
+		for parent := rel.Parent; parent != nil && parent.IsContainer() && !seen[parent.ID]; parent = ancestry[parent.ID].Parent {
+			seen[parent.ID] = true
+			if !yield(parent.ID) {
+				return
+			}
+		}
+	}
+}
+
+// sitsUnder reports whether epicID is one of the epics above rel.
+func sitsUnder(rel storage.IssueRelations, epicID string, ancestry map[string]storage.IssueRelations) bool {
+	for id := range epicsAbove(rel, ancestry) {
+		if id == epicID {
+			return true
+		}
+	}
+	return false
+}
+
+// inheritedDependencies returns the blockers subject inherits from the epics
+// above it, sorted by id, each named once.
+func (a epicAncestry) inheritedDependencies(subject storage.IssueRelations) []model.Issue {
+	named := map[string]bool{}
+	var deps []model.Issue
+	for epicID := range epicsAbove(subject, a.relations) {
+		for _, dep := range a.gates[epicID] {
+			if !named[dep.ID] {
+				named[dep.ID] = true
+				deps = append(deps, dep)
+			}
 		}
 	}
 	sort.Slice(deps, func(i, j int) bool { return deps[i].ID < deps[j].ID })
@@ -392,7 +471,8 @@ type focusGraphSource interface {
 // the unfinished blockers it inherits from the epics above it, the unfinished
 // children of a container, and its earlier same-lane unfinished siblings — the
 // same implicit edges the membership gate blocks on, read through the shared
-// inheritedDependencies and isEarlierSameLaneSibling and model.Issue.InPlay.
+// epicAncestry.inheritedDependencies and isEarlierSameLaneSibling and
+// model.Issue.InPlay.
 // [LAW:one-type-per-behavior] Explicit deps and intra-epic rank order are the
 // same prerequisite fact here, exactly as they are for the membership gate.
 // [LAW:dataflow-not-control-flow] The walk is a pure expansion over relation
@@ -441,7 +521,7 @@ func fetchFocusPathGoals(ctx context.Context, src focusGraphSource, seeds ...map
 		if err != nil {
 			return nil, err
 		}
-		pending := pendingSiblingsByEpic(ancestry)
+		pending := pendingSiblingsByEpic(ancestry.relations)
 		var next []string
 		for _, id := range frontier {
 			rel, ok := rels[id]
@@ -456,7 +536,7 @@ func fetchFocusPathGoals(ctx context.Context, src focusGraphSource, seeds ...map
 					prereqs = append(prereqs, dep)
 				}
 			}
-			prereqs = append(prereqs, inheritedDependencies(rel, ancestry)...)
+			prereqs = append(prereqs, ancestry.inheritedDependencies(rel)...)
 			if rel.Issue.IsContainer() {
 				for _, child := range rel.Children {
 					if child.InPlay() {

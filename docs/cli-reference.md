@@ -514,7 +514,8 @@ no positional form. The default type is `blocks`, where `--from` is the blocker 
 same epic — within an epic, rank is the ordering signal. A `blocks` edge onto an
 epic holds back every issue under that epic, at any depth and in every lane:
 `lit next` offers none of them until the blocker closes, and `lit backlog` shows
-the blocker on each one as `depends on: <id> (via epic)`. `related-to` is
+the blocker on each one as `depends on: <id> (via epic)`. A blocker nested
+inside that epic, or an epic above it, holds back nothing. `related-to` is
 symmetric annotation with no scheduling effect.
 
 ### `lit parent set` / `lit parent clear`
