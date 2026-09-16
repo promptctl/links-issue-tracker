@@ -532,3 +532,18 @@ func TestMidpointOfTheWholeKeyspaceIsInitial(t *testing.T) {
 		t.Fatalf("Midpoint(\"\", \"\") = %q, %v; want %q", got, err, Initial())
 	}
 }
+
+// The empty string is an unranked row to Before and After, not the open end it
+// is to Midpoint, so neither answers it with the whole keyspace's midpoint.
+func TestBeforeAndAfterRefuseTheEmptyRank(t *testing.T) {
+	t.Parallel()
+	if got, err := Before(""); err == nil {
+		t.Fatalf("Before(\"\") = %q, nil; want an error", got)
+	}
+	defer func() {
+		if recover() == nil {
+			t.Fatal("After(\"\") did not panic")
+		}
+	}()
+	_ = After("")
+}

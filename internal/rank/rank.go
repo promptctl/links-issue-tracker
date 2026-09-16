@@ -314,20 +314,24 @@ func encodeBase62(value *big.Int, length int) (string, error) {
 	return string(buf), nil
 }
 
-// Before returns a rank that sorts before the given rank.
-// Equivalent to Midpoint("", a), and it fails where Midpoint does: on an empty
-// a, and with ErrNoRoom on an all-zero one, below which only the empty string —
-// "unranked" — sorts.
+// Before returns a rank that sorts before the given rank: Midpoint("", a), which
+// fails with ErrNoRoom on an all-zero a, below which only the empty string —
+// "unranked" — sorts. An empty a is an unranked row here, not the open end
+// Midpoint reads it as, so it is refused rather than answered with the midpoint
+// of the whole keyspace.
 func Before(a string) (string, error) {
+	if a == "" {
+		return "", errors.New("rank: Before needs a rank, not the empty string")
+	}
 	return Midpoint("", a)
 }
 
-// After returns a rank that sorts after the given rank.
-// Equivalent to Midpoint(a, "").
+// After returns a rank that sorts after the given rank: Midpoint(a, "").
+// An empty a is an unranked row here, not an open end, and passing one is a
+// caller bug, so it panics rather than answering with the keyspace's midpoint.
 func After(a string) string {
 	r, err := Midpoint(a, "")
-	if err != nil {
-		// Only possible if a is empty, which callers should not do.
+	if a == "" || err != nil {
 		panic("rank.After called with empty string")
 	}
 	return r
