@@ -188,7 +188,7 @@ Reads: `ListRelationsForIssue` returns all incident relations ordered by `create
 
 ### Representation
 
-Ranks are base-62 strings (`0-9A-Za-z`, ASCII order = rank order) compared bytewise; `""` means unranked and every rank query excludes it (with three exceptions noted below). Constants: initial rank `"V"` (the alphabet midpoint), smoothing threshold 8 chars, smoothing window 32 rows, minimum spaced gap 16 code points (`internal/rank/rank.go`). `Midpoint(a,b)` produces a string strictly between two bounds (empty bound = before-/after-everything), growing one character when the gap closes; it refuses, with `rank.ErrNoRoom`, a pair of bounds that are equal once trailing zeros are removed, such as `"10"` and `"100"`. `SpacedRanks`/`SpacedRanksBetween` emit n evenly-spaced fixed-width ranks.
+Ranks are base-62 strings (`0-9A-Za-z`, ASCII order = rank order) compared bytewise; `""` means unranked and every rank query excludes it (with three exceptions noted below). Constants: initial rank `"V"` (the alphabet midpoint), smoothing threshold 8 chars, smoothing window 32 rows, minimum spaced gap 16 code points (`internal/rank/rank.go`). `Midpoint(a,b)` produces a string strictly between two bounds (empty bound = before-/after-everything; both empty gives the initial rank `"V"`), growing one character when the gap closes; it refuses, with `rank.ErrNoRoom`, a pair of bounds that are equal once trailing zeros are removed, such as `"10"` and `"100"`. `SpacedRanks`/`SpacedRanksBetween` emit n evenly-spaced fixed-width ranks.
 
 ### Frames
 

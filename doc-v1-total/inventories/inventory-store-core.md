@@ -2842,16 +2842,16 @@ via `fmt.Sprintf` with placeholder lists from `repeatPlaceholder` (`internal/sto
 ### 5.2 Midpoint / Before / After
 
 `Midpoint(a, b)` — `internal/rank/rank.go:85-143`:
-- `a == b` → `errors.New("rank: a and b are equal")` (`:86-88`).
+- `a == b` with `a` non-empty → `errors.New("rank: a and b are equal")` (`:86-88`); `Midpoint("", "")` is not refused.
 - both non-empty and `a >= b` → `errors.New("rank: a must be less than b")` (`:89-91`).
 - `b` non-empty and `rank.Significant(a) == rank.Significant(b)` → `fmt.Errorf("%w: %q and %q pad to the same value", ErrNoRoom, a, b)` (`:98-100`), where `ErrNoRoom = errors.New("rank: no room between the bounds")` (`:78`). This refuses `b` being `a` extended by zeros (`"10"`, `"100"`) and an empty `a` with an all-zero `b`.
 - Walks positions: missing/short `a` contributes virtual char index 0 ("below the floor"), missing/short `b` contributes virtual index `base` ("above the ceiling") (`:105-118`). An out-of-alphabet byte gives `errors.New("rank: invalid character in a")` (`:109`) or `"rank: invalid character in b"` (`:116`).
 - If `bChar - aChar > 1`, emits `alphabet[aChar + (bChar-aChar)/2]` and returns (`:121-125`).
 - Otherwise emits `alphabet[aChar]` and advances a position, growing the string by one char per adjacent/equal position (`:131-132`).
-- Empty `a` means "before everything"; empty `b` means "after everything" (`:83-84`).
+- Empty `a` means "before everything"; empty `b` means "after everything"; both empty is the whole keyspace, whose midpoint is `Initial()`'s `"V"` (`:83-84`).
 
-`Before(a)` returns `Midpoint("", a)` and its error, so an all-zero `a` fails with `ErrNoRoom` — `internal/rank/rank.go:317-323`.
-`After(a)` = `Midpoint(a, "")`, panicking `"rank.After called with empty string"` on error — `internal/rank/rank.go:325-334`.
+`Before(a)` refuses an empty `a` with `errors.New("rank: Before needs a rank, not the empty string")` (`:323-325`); otherwise it returns `Midpoint("", a)` and its error, so an all-zero `a` fails with `ErrNoRoom` — `internal/rank/rank.go:317-327`.
+`After(a)` = `Midpoint(a, "")`, panicking `"rank.After called with empty string"` when `a` is empty or `Midpoint` errors (`:334-336`) — `internal/rank/rank.go:329-338`.
 
 ### 5.3 Spaced ranks (used by smoothing)
 
@@ -2963,7 +2963,7 @@ Pinned pair cases — `internal/store/ranking_frame_test.go:322-356`: top-level 
 
 `rankBetweenTx(ctx, tx, bounds)` — `internal/store/ranking.go:671-689`: reads the pair through `bounds()` and returns `rank.Midpoint(lower, upper)` unless it fails with `rank.ErrNoRoom` (`:672-679`). On `ErrNoRoom` it runs `smoothRanksTx(ctx, tx, upper)`, which respaces the smoothing window around `upper` with no length threshold; error → `fmt.Errorf("make room between %q and %q: %w", lower, upper, err)` (`:682-684`). It then reads the pair through `bounds()` again and returns the second `rank.Midpoint` result, error included; a second `ErrNoRoom` is not retried (`:685-688`). The `bounds` functions of `RankAbove` and `RankBelow` read the anchor's rank (`anchorRankTx`, `:649-659`) and the neighbor (`nearestRank`) on every call, so the second read sees the respaced ranks (`:711-721`, `:749-759`).
 
-`rankEdge.rankBeyondTx(ctx, tx, readEdge)` — `internal/store/ranking.go:76-89`: the key past a frame's edge. It reads the edge's rank through `readEdge()`; an error is returned as is, and an empty rank returns `rank.Initial()` (`:77-83`). Otherwise the key comes from `rankBetweenTx`, whose `bounds` reads the edge through `readEdge()` again on every call and pairs it through the edge's `beside` (`:84-88`): `topEdge` gives `("", edgeRank)` and `bottomEdge` gives `(edgeRank, "")` (`:45-48`), the two values `edgeFor` returns (`:54-63`). An all-zero rank at the top edge therefore gets room made above it the same way a relative move's pair does; the bottom edge's open upper bound never lacks room. Its callers are `rankToEdge`, reading the frame's edge holder through `frameEdgeHolderTx` and wrapping the error `fmt.Errorf("rank to %s: %w", edge.name, err)` (`:291-297`); `RankSet`, for the key of its last id (`:416-425`); and `nextRankForPlacement` (`internal/store/store.go:2035-2050`).
+`rankEdge.rankBeyondTx(ctx, tx, readEdge)` — `internal/store/ranking.go:83-89`: the key past a frame's edge. Its body is one `rankBetweenTx` call, whose `bounds` reads the edge's rank through `readEdge()` on every call, returns a `readEdge` error as is, and pairs the rank through the edge's `beside` (`:84-88`): `topEdge` gives `("", edgeRank)` and `bottomEdge` gives `(edgeRank, "")` (`:45-48`), the two values `edgeFor` returns (`:54-63`). An all-zero rank at the top edge therefore gets room made above it the same way a relative move's pair does; the bottom edge's open upper bound never lacks room. The edge is not read ahead of `rankBetweenTx`: an empty frame's edge reads as `""`, so both bounds are empty and `rank.Midpoint("", "")` returns `rank.Initial()`'s `"V"` (`internal/rank/rank.go:83-88`). Its callers are `rankToEdge`, reading the frame's edge holder through `frameEdgeHolderTx` and wrapping the error `fmt.Errorf("rank to %s: %w", edge.name, err)` (`:291-297`); `RankSet`, for the key of its last id (`:416-425`); and `nextRankForPlacement` (`internal/store/store.go:2035-2050`).
 
 Frame behavior pinned by tests — `internal/store/ranking_frame_test.go`:
 - Standalone above an epic child anchors to the epic; epic and all children keep their exact rank strings; standalone ends above the epic (`:56-80`).
@@ -2982,7 +2982,7 @@ Frame behavior pinned by tests — `internal/store/ranking_frame_test.go`:
   SELECT item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' AND id NOT IN (?,…) ORDER BY item_rank ASC LIMIT 1
   ```
   built with one placeholder per ranked id (`:118-128`); non-`ErrNoRows` error → `fmt.Errorf("query top: %w", err)`, which the `rank set: %w` wrap below prefixes (`:126-128`).
-- The last ranked id's key comes from `topEdge.rankBeyondTx`, whose `readEdge` runs the query above through `nearestRank`: `rank.Initial()` when the frame has no ranked issue outside the set, otherwise a key sorting before the frame's top rank, made through `rankBetweenTx`, which makes room when that rank is all zeros. Walking the remaining ids in reverse, each gets `rank.Before(cursor)`. An error from either → `fmt.Errorf("rank set: %w", err)`; cursor becomes the just-assigned rank (`:134-148`). Final order: `ids[0] < ids[1] < … < ids[N-1] < existing top` — the whole set is stacked at the top of the keyspace.
+- The last ranked id's key comes from `topEdge.rankBeyondTx`, whose `readEdge` runs the query above through `nearestRank`, so the key is made through `rankBetweenTx`: `rank.Midpoint("", "")`, which is `rank.Initial()`, when the frame has no ranked issue outside the set, otherwise a key sorting before the frame's top rank, with room made when that rank is all zeros. Walking the remaining ids in reverse, each gets `rank.Before(cursor)`. An error from either → `fmt.Errorf("rank set: %w", err)`; cursor becomes the just-assigned rank (`:134-148`). Final order: `ids[0] < ids[1] < … < ids[N-1] < existing top` — the whole set is stacked at the top of the keyspace.
 - One `UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?` per id, sharing a single `now` timestamp; error → `fmt.Errorf("rank-set: update %s: %w", id, err)` (`:149-153`).
 - `smoothRanksIfNeededTx(ctx, tx, newRanks[0])` when the set is non-empty (`:154-157`).
 - Atomic: all assignments in one mutation (`:97-102`).

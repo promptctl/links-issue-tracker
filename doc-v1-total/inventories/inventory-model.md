@@ -835,13 +835,15 @@ significant part leave `SpacedRanksBetween` and `Midpoint` no room between them
 and `"V00"`→`"V"`, `"V0z"`→`"V0z"`, `"100"`→`"1"`, `"0"`→`""`, `""`→`""`.
 
 ## 4.2 `Midpoint(a, b string) (string, error)` — `rank.go:85-143`
-Contract: returns a string strictly between `a` and `b`. Either bound (not both)
-may be empty: empty `a` = "before everything", empty `b` = "after everything"
+Contract: returns a string strictly between `a` and `b`. Either bound may be
+empty: empty `a` = "before everything", empty `b` = "after everything"; both
+empty is the whole keyspace, whose midpoint is `Initial()`'s `"V"`
 (`rank.go:80-84`).
 
 Validation:
-- `a == b` → error `rank: a and b are equal` (`rank.go:86-88`) — this also
-  rejects `Midpoint("", "")`.
+- `a == b` with `a` non-empty → error `rank: a and b are equal`
+  (`rank.go:86-88`). `Midpoint("", "")` passes this check and the walk returns
+  `"V"`.
 - both non-empty and `a >= b` → error `rank: a must be less than b`
   (`rank.go:89-91`).
 - `b` non-empty and `Significant(a) == Significant(b)` → error wrapping
@@ -869,16 +871,22 @@ Consequences pinned by tests: adjacent characters force a longer result
 (`TestRepeatedMidpointInsertion`, `:235`); multi-char strings
 (`TestMidpointMultiCharStrings`, `:260`); over every ordered pair of distinct
 strings of up to four characters from `0`, `1`, `y`, `z`, the empty string
-included as either open end, `Midpoint` returns `ErrNoRoom` exactly for the
-pairs sharing a significant part and a valid rank strictly between the bounds
-for every other pair (`TestMidpointStaysStrictlyBetweenItsBounds`, `:131`).
+included as either open end, and over the pair of two empty strings,
+`Midpoint` returns `ErrNoRoom` exactly for the pairs sharing a significant part
+and a valid rank strictly between the bounds for every other pair
+(`TestMidpointStaysStrictlyBetweenItsBounds`, `:131`); `Midpoint("", "")`
+returns `Initial()` (`TestMidpointOfTheWholeKeyspaceIsInitial`, `:529`).
 
-`Before(a string) (string, error)` — `rank.go:317-323`: returns `Midpoint("", a)`,
-error included, so it fails on an empty `a` and with `ErrNoRoom` on an all-zero
-`a` (`TestBeforeAnAllZeroRankHasNoRoom`, `rank_test.go:176`, for `"0"` and `"000"`).
-`After(a string) string` — `rank.go:325-334`: `Midpoint(a, "")`; **panics**
-`rank.After called with empty string` on error. 1000-step monotonicity pinned by
-`TestSequentialAfter` (`rank_test.go:207`) and `TestSequentialBefore` (`:219`).
+`Before(a string) (string, error)` — `rank.go:317-327`: an empty `a` → error
+`rank: Before needs a rank, not the empty string` (`rank.go:323-325`); otherwise
+returns `Midpoint("", a)`, error included, so it fails with `ErrNoRoom` on an
+all-zero `a` (`TestBeforeAnAllZeroRankHasNoRoom`, `rank_test.go:176`, for `"0"`
+and `"000"`).
+`After(a string) string` — `rank.go:329-338`: `Midpoint(a, "")`; **panics**
+`rank.After called with empty string` when `a` is empty or `Midpoint` errors
+(`rank.go:334-336`). `TestBeforeAndAfterRefuseTheEmptyRank` (`rank_test.go:538`)
+requires `Before("")` to return an error and `After("")` to panic. 1000-step
+monotonicity pinned by `TestSequentialAfter` (`rank_test.go:207`) and `TestSequentialBefore` (`:219`).
 
 ## 4.3 Smoothing constants
 `SmoothingThreshold = 8` — `rank.go:148`: the rank string length that triggers
