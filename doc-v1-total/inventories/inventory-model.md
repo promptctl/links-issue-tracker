@@ -1030,7 +1030,7 @@ valid kinds.
   Pinned by `TestKindJSONRoundTrip` (`annotation_test.go:53`) and
   `TestKindUnmarshalJSONRejectsUnknownKind` (`:78`).
 
-## 7.3 Registry — `annotation.go:81-130`
+## 7.3 Registry — `annotation.go:81-131`
 
 `kindRegistry map[string]Kind` and `registeredKinds []Kind` (`annotation.go:82-83`).
 
@@ -1040,59 +1040,60 @@ valid kinds.
 `annotation: duplicate kind key <key>` on a repeated key (`:95-97`). Otherwise
 mints the kind, adds it to the registry and to the declaration-order list.
 
-Complete registered kind set (`annotation.go:105-112`):
+Complete registered kind set (`annotation.go:105-113`):
 
 | Var | Key | Role | Meaning (per source comment) |
 |---|---|---|---|
 | `MissingField` | `missing_field` | `RoleBlocking` | a required field is empty or unset (`:105`) |
 | `OpenDependency` | `open_dependency` | `RoleBlocking` | issue depends on an open ticket (`:106`) |
-| `RankInversion` | `rank_inversion` | `RoleRankInversion` | dependency is ranked below the dependent (`:107`) |
-| `Orphaned` | `orphaned` | `RoleOrphaned` | in_progress with no update past the orphaned threshold (`:108`) |
-| `NeedsDesign` | `needs_design` | `RoleBlocking` | carries the needs-design label (`:109`) |
-| `EarlierSiblingPending` | `earlier_sibling_pending` | `RoleBlocking` | an earlier same-lane sibling under the parent epic is still open (`:110`) |
-| `FocusPath` | `focus_path` | `RoleNone` | a focused goal or a derived prerequisite of one; an ordering signal (`:111`) |
+| `InheritedDependency` | `inherited_dependency` | `RoleBlocking` | an open ticket blocks an epic this issue sits under (`:107`) |
+| `RankInversion` | `rank_inversion` | `RoleRankInversion` | dependency is ranked below the dependent (`:108`) |
+| `Orphaned` | `orphaned` | `RoleOrphaned` | in_progress with no update past the orphaned threshold (`:109`) |
+| `NeedsDesign` | `needs_design` | `RoleBlocking` | carries the needs-design label (`:110`) |
+| `EarlierSiblingPending` | `earlier_sibling_pending` | `RoleBlocking` | an earlier same-lane sibling under the parent epic is still open (`:111`) |
+| `FocusPath` | `focus_path` | `RoleNone` | a focused goal or a derived prerequisite of one; an ordering signal (`:112`) |
 
-Alias (`annotation.go:114-119`): `init()` maps the registry key `"blocked_by"` to
+Alias (`annotation.go:115-120`): `init()` maps the registry key `"blocked_by"` to
 the **same** `OpenDependency` kind — a deserialization alias for data written
 before the rename. It is never minted as its own kind.
 
-- `Kinds() []Kind` — `annotation.go:123-125`: a fresh copy of the canonical kinds
+- `Kinds() []Kind` — `annotation.go:124-126`: a fresh copy of the canonical kinds
   in declaration order; aliases excluded. Pinned by `TestKindsExcludesAliases`
   (`annotation_test.go:41`) and `TestEveryRegisteredKindHasReadinessRole` (`:26`).
-- `parseKind(key string) (Kind, bool)` — `annotation.go:127-130`: registry lookup
+- `parseKind(key string) (Kind, bool)` — `annotation.go:128-131`: registry lookup
   (so aliases resolve).
 
 ## 7.4 Data types
 
-- `Annotation` — `annotation.go:133-136`: `Kind Kind` (`json:"kind"`),
+- `Annotation` — `annotation.go:134-137`: `Kind Kind` (`json:"kind"`),
   `Message string` (`json:"message"`).
-- `ParentEpicRef` — `annotation.go:142-145`: `ID` (`json:"id"`), `Title`
+- `ParentEpicRef` — `annotation.go:143-146`: `ID` (`json:"id"`), `Title`
   (`json:"title"`). Present only when the issue has a parent AND that parent is
-  type=epic (`annotation.go:138-141`).
-- `AnnotatedIssue` — `annotation.go:150-154`: embeds `model.Issue`, plus
+  type=epic (`annotation.go:139-142`).
+- `AnnotatedIssue` — `annotation.go:151-155`: embeds `model.Issue`, plus
   `Annotations []Annotation` (`json:"annotations"`) and
   `ParentEpic *ParentEpicRef` (`json:"parent_epic,omitempty"`).
-  - `MarshalJSON` — `annotation.go:156-170`: marshals the embedded issue, decodes
+  - `MarshalJSON` — `annotation.go:157-171`: marshals the embedded issue, decodes
     it into a `map[string]any`, then sets `annotations` and (only when non-nil)
     `parent_epic`, and re-marshals — so the output is the flat issue object plus
     those keys. Pinned by `TestAnnotatedIssueJSONShape`, `annotation_test.go:157`.
-  - `UnmarshalJSON` — `annotation.go:172-188`: decodes the same bytes twice, once
+  - `UnmarshalJSON` — `annotation.go:173-189`: decodes the same bytes twice, once
     as `model.Issue` and once for the two extra keys.
 
 ## 7.5 Annotation pipeline
 
 - `type Annotator func(ctx context.Context, issue model.Issue) ([]Annotation, error)`
-  — `annotation.go:191`.
+  — `annotation.go:192`.
 - `Annotate(ctx, issues []model.Issue, annotators ...Annotator) ([]AnnotatedIssue, error)`
-  — `annotation.go:196-216`: every annotator runs against every issue
+  — `annotation.go:197-217`: every annotator runs against every issue
   unconditionally, in argument order; annotations are concatenated in that order;
-  the first annotator error aborts and returns `(nil, err)` (`:201-204`); when an
+  the first annotator error aborts and returns `(nil, err)` (`:202-205`); when an
   issue accumulates no annotations, the field is set to a **non-nil empty slice**
-  `[]Annotation{}` (`:207-209`). `ParentEpic` is never populated here.
+  `[]Annotation{}` (`:208-210`). `ParentEpic` is never populated here.
   Pinned by `TestAnnotateRunsAllAnnotators` (`annotation_test.go:89`),
   `TestAnnotateEmptyAnnotatorsProducesEmptySlice` (`:125`),
   `TestAnnotateAnnotatorError` (`:141`).
-- `HasAny(annotations []Annotation, kinds ...Kind) bool` — `annotation.go:220-229`:
+- `HasAny(annotations []Annotation, kinds ...Kind) bool` — `annotation.go:221-230`:
   true if any annotation's `Kind` equals any of the given kinds (struct equality
   on the `*kindDef` pointer, so registry-minted kinds compare identically, and an
   alias-decoded `blocked_by` equals `OpenDependency`). Pinned by
@@ -1369,7 +1370,7 @@ cancellation.
 1. Every sealed vocabulary exposes its enumeration as a **fresh slice per call**
    rather than an exported slice variable: `model.IssueTypes()`
    (`issue_type.go:31-33`), `lifecycle.Actions()` (`lifecycle.go:135-140`),
-   `annotation.Kinds()` (`annotation.go:123-125`).
+   `annotation.Kinds()` (`annotation.go:124-126`).
 2. Parsers differ in normalization: `ParseState` and `ParseIssueType` and
    `ParseAction` lowercase + trim (`lifecycle.go:99`, `issue_type.go:43`,
    `lifecycle.go:147`); `ParseResolution` and `ParseRelationType` trim only

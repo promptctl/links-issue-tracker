@@ -118,10 +118,20 @@ func fetchIssueRelations(ctx context.Context, st storage.Store, issues []model.I
 
 // newBlockerAnnotator returns an annotator that checks open dependency blockers
 // and flags rank inversions where a dependency is ranked below the dependent.
-// The annotator is pure: it reads from the shared relations map rather than
+// The annotator is pure: it reads from the shared relations maps rather than
 // fetching from the store, so fetch cost is paid once upstream in
-// fetchIssueRelations.
-func newBlockerAnnotator(details map[string]storage.IssueRelations) annotation.Annotator {
+// fetchIssueRelations and fetchContainerAncestry.
+//
+// A blocks edge onto an epic is a dependency of every issue under that epic, at
+// any depth and in every lane, so each unfinished blocker of an ancestor epic
+// becomes an InheritedDependency here — through the same annotation mechanism,
+// and so the same ClassifyReadiness enforcer, a declared edge uses. It used to
+// be accepted and then ignored: `lit dep add` stored the edge, the epic's row
+// showed it, and every child stayed servable (links-epic-block-xpkz). An id the
+// issue already depends on directly is named once, as the direct edge. No
+// inherited edge is a rank inversion of this issue: rank hygiene of the epic's
+// own edge is a fact about the epic, which lit doctor's inversion pass orders.
+func newBlockerAnnotator(details, ancestry map[string]storage.IssueRelations) annotation.Annotator {
 	// [LAW:dataflow-not-control-flow] Dependency lookup runs for every issue;
 	// empty blockers list means no annotations, not a skipped operation.
 	return func(_ context.Context, issue model.Issue) ([]annotation.Annotation, error) {
@@ -157,8 +167,83 @@ func newBlockerAnnotator(details map[string]storage.IssueRelations) annotation.A
 				})
 			}
 		}
+		direct := make(map[string]bool, len(blockingDeps))
+		for _, dep := range blockingDeps {
+			direct[dep.ID] = true
+		}
+		for _, dep := range inheritedDependencies(detail, ancestry) {
+			if direct[dep.ID] {
+				continue
+			}
+			annotations = append(annotations, annotation.Annotation{
+				Kind:    annotation.InheritedDependency,
+				Message: dep.ID,
+			})
+		}
 		return annotations, nil
 	}
+}
+
+// fetchContainerAncestry loads the relations of every epic above the given
+// issues, one batched query per nesting level, keyed by epic id. An issue's
+// parent is one level; an epic can itself sit under an epic, so the walk climbs
+// until no level names a parent epic it has not loaded. A top-level epic has no
+// parent, so the common one-level workspace costs exactly the one query it cost
+// before this walk existed.
+//
+// fetch is the relations source: the store itself, or the focus walk's memo.
+func fetchContainerAncestry(ctx context.Context, fetch func(context.Context, []string) (map[string]storage.IssueRelations, error), subjects map[string]storage.IssueRelations) (map[string]storage.IssueRelations, error) {
+	ancestry := make(map[string]storage.IssueRelations)
+	for level := subjects; ; {
+		var ids []string
+		for _, id := range parentEpicIDs(level) {
+			if _, loaded := ancestry[id]; !loaded {
+				ids = append(ids, id)
+			}
+		}
+		if len(ids) == 0 {
+			return ancestry, nil
+		}
+		fetched, err := fetch(ctx, ids)
+		if err != nil {
+			return nil, err
+		}
+		for id, rel := range fetched {
+			ancestry[id] = rel
+		}
+		level = fetched
+	}
+}
+
+// inheritedDependencies returns the unfinished blockers of every epic above
+// subject, sorted by id, each named once. ancestry must hold the relations of
+// those epics, as fetchContainerAncestry returns them.
+//
+// A blocker that is subject itself or one of the epics above it gates nothing
+// here. Such an edge comes from inside the epic it blocks — `lit dep add` still
+// accepts one from two levels down (links-hierarchy-kh57) — and applying it to
+// the blocker's own subtree would make the blocker wait for itself. Everything
+// else under the epic still waits for the blocker.
+func inheritedDependencies(subject storage.IssueRelations, ancestry map[string]storage.IssueRelations) []model.Issue {
+	chain := map[string]bool{subject.Issue.ID: true}
+	var epics []storage.IssueRelations
+	for parent := subject.Parent; parent != nil && parent.IsContainer() && !chain[parent.ID]; parent = ancestry[parent.ID].Parent {
+		chain[parent.ID] = true
+		epics = append(epics, ancestry[parent.ID])
+	}
+	named := map[string]bool{}
+	var deps []model.Issue
+	for _, epic := range epics {
+		for _, dep := range epic.DependsOn {
+			if !dep.InPlay() || chain[dep.ID] || named[dep.ID] {
+				continue
+			}
+			named[dep.ID] = true
+			deps = append(deps, dep)
+		}
+	}
+	sort.Slice(deps, func(i, j int) bool { return deps[i].ID < deps[j].ID })
+	return deps
 }
 
 // newSiblingGateAnnotator emits an EarlierSiblingPending annotation for a leaf
@@ -304,9 +389,10 @@ type focusGraphSource interface {
 // fetchFocusPathGoals returns issueID -> focused-goal ID for every unfinished
 // issue on the prerequisite closure of a focus-labeled goal, the goal itself
 // included. An issue's prerequisites are its unfinished explicit dependencies,
-// the unfinished children of a container, and its earlier same-lane unfinished
-// siblings — the same implicit edge the lane gate blocks membership on, read
-// through the shared isEarlierSameLaneSibling predicate and model.Issue.InPlay.
+// the unfinished blockers it inherits from the epics above it, the unfinished
+// children of a container, and its earlier same-lane unfinished siblings — the
+// same implicit edges the membership gate blocks on, read through the shared
+// inheritedDependencies and isEarlierSameLaneSibling and model.Issue.InPlay.
 // [LAW:one-type-per-behavior] Explicit deps and intra-epic rank order are the
 // same prerequisite fact here, exactly as they are for the membership gate.
 // [LAW:dataflow-not-control-flow] The walk is a pure expansion over relation
@@ -334,6 +420,9 @@ func fetchFocusPathGoals(ctx context.Context, src focusGraphSource, seeds ...map
 			cache[id] = rel
 		}
 	}
+	memo := func(ctx context.Context, ids []string) (map[string]storage.IssueRelations, error) {
+		return relationsByID(ctx, src, cache, ids)
+	}
 	path := make(map[string]string, len(goals))
 	frontier := make([]string, 0, len(goals))
 	for _, goal := range goals {
@@ -344,15 +433,15 @@ func fetchFocusPathGoals(ctx context.Context, src focusGraphSource, seeds ...map
 	// The path map doubles as the visited set, so shared prerequisites are
 	// attributed to the first goal that reaches them and cycles terminate.
 	for len(frontier) > 0 {
-		rels, err := relationsByID(ctx, src, cache, frontier)
+		rels, err := memo(ctx, frontier)
 		if err != nil {
 			return nil, err
 		}
-		parentRels, err := relationsByID(ctx, src, cache, parentEpicIDs(rels))
+		ancestry, err := fetchContainerAncestry(ctx, memo, rels)
 		if err != nil {
 			return nil, err
 		}
-		pending := pendingSiblingsByEpic(parentRels)
+		pending := pendingSiblingsByEpic(ancestry)
 		var next []string
 		for _, id := range frontier {
 			rel, ok := rels[id]
@@ -367,6 +456,7 @@ func fetchFocusPathGoals(ctx context.Context, src focusGraphSource, seeds ...map
 					prereqs = append(prereqs, dep)
 				}
 			}
+			prereqs = append(prereqs, inheritedDependencies(rel, ancestry)...)
 			if rel.Issue.IsContainer() {
 				for _, child := range rel.Children {
 					if child.InPlay() {
@@ -721,7 +811,7 @@ func printInlineDeps(w io.Writer, entry annotation.AnnotatedIssue, unblocksMap m
 	if err := printEpicLine(w, contextIndent, entry.ParentEpic); err != nil {
 		return err
 	}
-	if err := printIDListLine(w, contextIndent, "depends on", ClassifyReadiness(entry.Annotations).DependencyIDs()); err != nil {
+	if err := printIDListLine(w, contextIndent, "depends on", ClassifyReadiness(entry.Annotations).DependencyLabels()); err != nil {
 		return err
 	}
 	if line, ok := formatClaimLine(cc, lane, time.Now()); ok {

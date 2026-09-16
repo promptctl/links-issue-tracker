@@ -397,41 +397,52 @@ not `closed` (`cli.go:1151-1160`). Epics are therefore never workable rows.
    (`ready_state.go:65-70`). For each unset required field it emits a
    `MissingField` annotation (`ready_state.go:71-86`). "Set" means: non-nil, and
    for strings non-blank, for arrays/maps non-empty; anything else counts as set
-   (`isRequiredFieldSet`, `ready_state.go:447-460`).
-2. `newBlockerAnnotator(details)` — for each `DependsOn` whose `State() != closed`,
-   sorted by ID, emits `OpenDependency{Message: dep.ID}`; and additionally
-   `RankInversion{Message: dep.ID}` when `dep.Rank > issue.Rank`
-   (`ready_state.go:123-152`).
-3. `newSiblingGateAnnotator(details, pendingSiblingsByEpic(siblingRelations))` —
+   (`isRequiredFieldSet`, `ready_state.go:537-550`).
+2. `newBlockerAnnotator(details, ancestry)` — for each `DependsOn` that is
+   `InPlay()`, sorted by ID, emits `OpenDependency{Message: dep.ID}`; and
+   additionally `RankInversion{Message: dep.ID}` when `dep.Rank > issue.Rank`.
+   Then, for each id from `inheritedDependencies(detail, ancestry)` not already
+   a direct dependency, emits `InheritedDependency{Message: dep.ID}` and no rank
+   inversion (`ready_state.go:123-185`). `inheritedDependencies` walks up the
+   parent chain while the parent is a container and not already on the chain,
+   and returns the `InPlay()` `DependsOn` of every epic on it, deduplicated,
+   skipping any id on the chain (the issue itself or one of those epics), sorted
+   by ID (`ready_state.go:218-247`). `ancestry` comes from
+   `fetchContainerAncestry`, which loads `parentEpicIDs` of the subjects, then of
+   each loaded level, one `GetRelationsByIDs` call per level, until a level names
+   no epic it has not loaded (`ready_state.go:187-216`).
+3. `newSiblingGateAnnotator(details, pendingSiblingsByEpic(ancestry))` —
    only when the parent exists and `parent.IsContainer()`; emits
    `EarlierSiblingPending{Message: sib.ID}` for each sibling satisfying
-   `isEarlierSameLaneSibling` (`ready_state.go:173-190`).
+   `isEarlierSameLaneSibling` (`ready_state.go:258-275`).
    `isEarlierSameLaneSibling(sib, leaf) := sib.ID != leaf.ID && sib.Lane == leaf.Lane && sib.Rank < leaf.Rank`
-   (`ready_state.go:198-200`). The sibling set is the epic's **unfiltered**
-   `InPlay()` children (`pendingSiblingsByEpic`, `ready_state.go:228-238`), fetched
-   via `GetRelationsByIDs(parentEpicIDs(details))` (`cli.go:746`), so siblings
+   (`ready_state.go:283-285`). The sibling set is the epic's **unfiltered**
+   `InPlay()` children (`pendingSiblingsByEpic`, `ready_state.go:313-323`), fetched
+   via `fetchContainerAncestry(ctx, st.GetRelationsByIDs, details)` (`cli.go:862`), so siblings
    hidden by `--assignee/--type/--labels` still gate.
 4. `newOrphanedAnnotator(orphanedThreshold)` — only for `in_progress` issues with
    `time.Since(UpdatedAt) >= 6h`; message
    `"in_progress for <dur truncated to minute> with no update"`
-   (`ready_state.go:405-419`; threshold constant `orphanedThreshold = 6 * time.Hour`
+   (`ready_state.go:495-509`; threshold constant `orphanedThreshold = 6 * time.Hour`
    at `ready_state.go:48`).
 5. `newNeedsDesignAnnotator()` — emits `NeedsDesign` for any issue carrying the
    label `needs-design` (`ready_state.go:22`, `:29-41`).
 6. `newFocusPathAnnotator(focusPaths)` — emits `FocusPath{Message: goalID}` for
-   issues on a focused goal's prerequisite closure (`ready_state.go:390-401`).
+   issues on a focused goal's prerequisite closure (`ready_state.go:480-491`).
 
-**Focus path derivation** (`fetchFocusPathGoals`, `ready_state.go:277-349`):
+**Focus path derivation** (`fetchFocusPathGoals`, `ready_state.go:362-438`):
 goals are issues with `Statuses=[open,in_progress]` and label `focus`
-(`FocusLabel = "focus"`, `ready_state.go:246`; query at `:278-281`). BFS over the
-prerequisite DAG: an issue's prerequisites are its `InPlay()` `DependsOn`, plus —
-if it is a container — its `InPlay()` children, plus its earlier same-lane
-`InPlay()` siblings (`:318-337`). The `path` map doubles as the visited set, so
+(`FocusLabel = "focus"`, `ready_state.go:331`; query at `:363-366`). BFS over the
+prerequisite DAG: an issue's prerequisites are its `InPlay()` `DependsOn`, plus
+its `inheritedDependencies` over the level's `fetchContainerAncestry` (loaded
+through the same memo), plus — if it is a container — its `InPlay()` children,
+plus its earlier same-lane
+`InPlay()` siblings (`:404-426`). The `path` map doubles as the visited set, so
 shared prerequisites attribute to the first goal reached and cycles terminate
-(`:297-299`). Relations are memoized through `relationsByID` (`:358-381`); a
-frontier id missing from the store → `storage.NotFoundError` (`:313-317`).
+(`:382-384`). Relations are memoized through `relationsByID` (`:447-471`); a
+frontier id missing from the store → `storage.NotFoundError` (`:399-403`).
 
-**Step 4 — readiness classification** (`ClassifyReadiness`, `readiness.go:98-115`):
+**Step 4 — readiness classification** (`ClassifyReadiness`, `readiness.go:131-148`):
 each annotation is dispatched on its declared `ReadinessRole`:
 - `RoleBlocking` → appended to `blocking`
 - `RoleOrphaned` → sets `orphaned = true`
@@ -439,30 +450,33 @@ each annotation is dispatched on its declared `ReadinessRole`:
 - `RoleNone` → contributes nothing (this is where `FocusPath` lands)
 - anything else → **panics** with
   `"ClassifyReadiness: annotation carries an unclassified kind: <kind>"`
-  (`readiness.go:110-112`).
+  (`readiness.go:143-145`).
 
-`IsReady() := len(blocking) == 0` (`readiness.go:67`). So an issue is **ready**
-iff it has no `MissingField`, no `OpenDependency`, no `EarlierSiblingPending`, and
-no `NeedsDesign` annotation. `DependencyIDs()` returns only the `OpenDependency`
-details (`readiness.go:80-88`).
+`IsReady() := len(blocking) == 0` (`readiness.go:69`). So an issue is **ready**
+iff it has no `MissingField`, no `OpenDependency`, no `InheritedDependency`, no
+`EarlierSiblingPending`, and no `NeedsDesign` annotation. `DependencyIDs()`
+returns the details of the `OpenDependency` and `InheritedDependency` reasons,
+and `DependencyLabels()` the same list with ` (via epic)` appended to each
+inherited one, which the backlog and `lit next` print on their `depends on:`
+lines (`readiness.go:80-121`).
 
 **Step 5 — canonical ordering**, applied in this sequence (`cli.go:677-679`):
 1. `sortByCompositeRank(rows, details)` — stable sort by
    (effective epic rank, own rank); a leaf whose parent is a container uses the
    parent's rank as its epic-position, otherwise its own rank
-   (`ready_state.go:490-505`).
+   (`ready_state.go:580-595`).
 2. `sortByPriority` — stable, urgent (higher `Priority`) first
-   (`ready_state.go:511-515`).
+   (`ready_state.go:601-605`).
 3. `sortByFocusPath` — stable, rows carrying a `FocusPath` annotation first;
-   layered last so focus outranks urgent (`ready_state.go:530-537`).
+   layered last so focus outranks urgent (`ready_state.go:620-627`).
 Then `enrichWithParentEpic` sets `ParentEpic{ID,Title}` on rows whose parent is a
-container (`ready_state.go:468-479`).
+container (`ready_state.go:558-569`).
 
-**Partition used by rollups**: `partitionWorkable` (`ready_state.go:582-595`):
+**Partition used by rollups**: `partitionWorkable` (`ready_state.go:672-685`):
 `in_progress` state wins first (even if also blocked); else not-ready → blocked;
 else ready.
 
-`applyLimit(issues, limit)` truncates when `limit > 0` (`ready_state.go:539-544`).
+`applyLimit(issues, limit)` truncates when `limit > 0` (`ready_state.go:629-634`).
 
 ---
 
@@ -1135,14 +1149,14 @@ Use 'lit next' to pick the top workable item to start.
      blocked line nor the depends-on line.
    - `    depends on: <ids joined by ", ">` (`backlog.go:84`, `output.go:41-47`)
    - `    in_progress: <age truncated to minute>[ (ORPHANED)]` for in-progress
-     rows (`backlog.go:87-91`, `inProgressSuffix` at `ready_state.go:616-623`)
+     rows (`backlog.go:87-91`, `inProgressSuffix` at `ready_state.go:706-713`)
    - `    <claim line>` when the row's lane is Held or Stale (`backlog.go:92-96`)
    - `    unblocks: <ids of rows that depend on this one>` — derived from the
      classified open-dependency facts of the listed rows only
-     (`backlog.go:97`, `buildUnblocksMap` at `ready_state.go:564-572`)
+     (`backlog.go:97`, `buildUnblocksMap` at `ready_state.go:654-662`)
 6. Finally, if any row carries a `RankInversion` annotation:
    `"\nWarning: %d rank inversion(s) — dependencies ranked below their dependents. Run `lit doctor --fix` to repair. <agent-instructions>This command is idempotent and safe to run without confirmation.</agent-instructions>\n"`
-   (`printRankInversions`, `ready_state.go:627-637`).
+   (`printRankInversions`, `ready_state.go:717-727`).
 
 Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
 (`backlog.go:58`).
@@ -1177,7 +1191,7 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
   context (`next.go:67`), then routes (`next.go:71`):
   `routeNext(rows, details, cc.standings, cc.self, focus.scopeFor(*all))`.
   `scopeFor(true)` returns the zero `focusScope`, which holds every row
-  (`ready_state.go:511-516`, `ready_state.go:493`, `ready_state.go:503-505`).
+  (`ready_state.go:601-606`, `ready_state.go:583`, `ready_state.go:593-595`).
 
 **`NextOutcome`** — a sealed sum interface (`next_route.go:26`,
 `next_route.go:179-184`) with **six** cases:
@@ -1257,7 +1271,7 @@ Step 4 is reached only by a checkout holding no lanes, which starts there
 directly:
 
 4. **The global pool, focus-scoped.** `pool, offPath := scope.partition(rows)`
-   (`next_route.go:385`, `ready_state.go:523-532`), then
+   (`next_route.go:385`, `ready_state.go:613-622`), then
    `pickFrom(pool, func(model.LaneID) bool { return true }, serveWork, takeoverWork)` →
    **`ServedFromNewLane{Row, Lane: laneOf(row)}`** (`next_route.go:386-388`).
    Else → **`NoWork{Unreachable: append(passedOver(pool, reachFor), withheldByScope(offPath)...)}`**
@@ -1343,10 +1357,10 @@ selected by the row's state and by whether `lane.Describe()` reports a named lan
 On a served row, `renderNextOutcome` calls `printNextSummary(w, row, cc, lane)`
 with `lane = model.LaneOf(row.Issue, details[row.ID].Parent)` (`next.go:130-133`),
 which prints the **default columns** (`id state topic title`) joined by two
-spaces (`ready_state.go:663-669`, `columns.go:158-160`), then `printInlineDeps`
-(`ready_state.go:720-733`): `    epic: …`, `    depends on: …`, the claim line,
+spaces (`ready_state.go:753-759`, `columns.go:158-160`), then `printInlineDeps`
+(`ready_state.go:810-823`): `    epic: …`, `    depends on: …`, the claim line,
 and `    unblocks: …` — but `next` passes a **nil** unblocks map, so the unblocks
-line never appears (`ready_state.go:668`). It then returns
+line never appears (`ready_state.go:758`). It then returns
 `nextPulledOccasion(row.Issue)` (`next.go:134`, `workflow_events.go:39-45`),
 dispatched as `EventNextPulled` (`next.go:75`).
 
@@ -1451,7 +1465,7 @@ Family `labelFamily`, usage `"usage: lit label <add|rm> ..."`
   `update` breadcrumb.
 
 Reserved label semantics: `needs-design` blocks readiness (§1.18, `ready_state.go:22`);
-`focus` marks a goal for focus-path ordering (`ready_state.go:246`).
+`focus` marks a goal for focus-path ordering (`ready_state.go:331`).
 
 ### 2.19 `lit parent` — Manage parent relationships
 
@@ -1805,7 +1819,7 @@ plus at most one positional topic.
    `:92-96`); `next` routes by claim but never writes (`next_route.go:81-128`);
    `start` is the only gate (`cli.go:1279-1284`, `claims_takeover.go:65-87`).
 7. **Three functions panic on unreachable states** and would abort the process:
-   `ClassifyReadiness` on an unclassified annotation kind (`readiness.go:111`),
+   `ClassifyReadiness` on an unclassified annotation kind (`readiness.go:144`),
    `renderNextOutcome` on an unhandled outcome type (`next.go:99`),
    `transitionOccasion` on an unmapped status action (`workflow_events.go:106`),
    `emitBreadcrumb`/`quickstartBreadcrumb` on an unknown topic
