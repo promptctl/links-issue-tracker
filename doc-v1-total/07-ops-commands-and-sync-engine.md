@@ -8,12 +8,12 @@ This chapter covers everything in `lit` that manages the workspace rather than i
 
 `main` wraps the context in an interrupt guard — SIGINT/SIGTERM cancels the command context and escalates to a hard exit if in-flight work ignores the cancel — then runs the CLI and exits with the code derived from the returned error (`cmd/lit/main.go:19-21`). Bare `lit` inside a git repo prints the quickstart guidance (identical to `lit quickstart`); outside a git repo it prints help instead; a first argument that is not a registered command returns `UnknownCommandError` (`internal/cli/cli.go:53-87`). Every registered command disables cobra flag parsing and parses its own flags (`register.go:420`).
 
-Flag handling common to every command (`cli.go:274-300`):
+Flag handling common to every command (`flagset.go:118-152`, `cli.go:187-212`):
 
 - `--help` prints usage plus defaults to stdout and exits 0.
-- `--output` in any form → `UnsupportedError` ("--output is no longer supported; omit it for text output"), exit 3.
+- `--output` or `--output=<x>` before the command name → `UnsupportedError` ("--output is no longer supported; omit it for text output"), exit 3. After the command name it is an unknown flag.
 - `--continue` → `UnsupportedError` (retired; claim routing already keeps `lit next` in the checkout's own epic first), exit 3.
-- Any other unknown flag → `UsageError`, exit 2.
+- Any other flag parse error (unknown flag, missing or invalid value, bad syntax) → `UsageError`, exit 2.
 
 Family commands (`sync`, `hooks`, `backup`, `snapshots`, `lifeboat`, …) resolve their subcommand by exact match; a missing, unknown, or flag-shaped first argument returns the family usage string as a plain error — exit 1, not 2 (`register.go:112-123`).
 
@@ -311,7 +311,7 @@ The eight embedded assets (all also ejectable):
 | Outside a git repo | any workspace/app command | `OutsideWorkspaceError` | 1 |
 | Missing/unknown family subcommand | all families | family usage as a plain error | 1 |
 | Unknown flag | any command | `UsageError` | 2 |
-| `--output` / `--continue` | any command | `UnsupportedError` | 3 |
+| `--output` before the command name; `--continue` | any command | `UnsupportedError` | 3 |
 | Stray positional | `init`, `version`, `hooks install`, `snapshots new`, `lifeboat *`, `upgrade`, `downgrade`, `sync reconcile` rows | `UsageError` | 2 |
 | Adopt could not confirm workspace state | `init` | refusal, no store created | 1 |
 | Remote schema ahead | push/pull/reconcile, inline receive, mirror | `SyncFailureError` block (mirror: stderr only) | 5 |

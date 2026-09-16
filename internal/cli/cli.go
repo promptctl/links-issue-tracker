@@ -208,7 +208,7 @@ done:
 }
 
 func unsupportedOutputFlagError() error {
-	return UnsupportedError{Message: "--output is no longer supported; omit it for text output", Feature: "--output"}
+	return UnsupportedError{Message: "--output is no longer supported; omit it for text output"}
 }
 
 // rankPlacement translates the CLI's --top boolean into the domain placement
@@ -437,7 +437,7 @@ func lsLeaf() (leaf[listScope], *string) {
 	queryExpr := fs.String("query", "", "Query language: status:closed,in_progress resolution:wontfix type:task has:comments sort:rank:asc limit:5 archived deleted text")
 	sortExpr := fs.String("sort", "", "Sort fields, e.g. rank:asc,updated_at:desc")
 	columnsExpr := fs.String("columns", "", columnsFlagUsage())
-	format := fs.String("format", "lines", "Output format: lines|table")
+	format := fs.String("format", "lines", "Output format: "+strings.Join(sortedListFormatNames(), "|"))
 	limit := fs.Int("limit", 0, "Limit results")
 	return leaf[listScope]{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope listScope, _ []string) error {
 		st, policy := scope.store, scope.policy
@@ -445,6 +445,10 @@ func lsLeaf() (leaf[listScope], *string) {
 		// had already emitted rows would be a partial answer, which is the silent
 		// drop this boundary exists to prevent, wearing an error message.
 		columns, err := parseColumnSelection(*columnsExpr)
+		if err != nil {
+			return err
+		}
+		render, err := parseListFormat(*format)
 		if err != nil {
 			return err
 		}
@@ -532,15 +536,7 @@ func lsLeaf() (leaf[listScope], *string) {
 		if err != nil {
 			return err
 		}
-		formatMode := strings.ToLower(strings.TrimSpace(*format))
-		switch formatMode {
-		case "", "lines":
-			return printIssueLines(stdout, issues, columns, cells)
-		case "table":
-			return printIssueTable(stdout, issues, columns, cells)
-		default:
-			return UnsupportedError{Message: fmt.Sprintf("unsupported --format %q", formatMode), Feature: "--format"}
-		}
+		return render(stdout, issues, columns, cells)
 	}}, at
 }
 

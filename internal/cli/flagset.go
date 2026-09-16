@@ -125,29 +125,21 @@ func parseFlagSet(fs *cobraFlagSet, args []string, stdout io.Writer) error {
 			}
 			return errHelpHandled
 		}
-		// [LAW:types-are-the-program] Wrap pflag errors at the parse boundary so sinks dispatch on type, not message text.
-		msg := err.Error()
-		if strings.Contains(msg, "flag provided but not defined: -output") ||
-			strings.Contains(msg, "flag provided but not defined: --output") {
-			return UnsupportedError{Message: "--output is no longer supported; omit it for text output", Feature: "--output"}
+		// Past ErrHelp, pflag's Parse fails only with its four typed errors — an
+		// unknown flag, a missing value, an invalid value, bad syntax — and every
+		// one is the caller mis-writing the command line. So all of them are one
+		// UsageError, the same answer the root FlagErrorFunc gives. Classifying by
+		// message prefix instead left `-x`, `--limit abc` and `---x` as bare errors
+		// that exited 1 with "Retry the command" (links-output-format-yxjs).
+		// [LAW:types-are-the-program] [LAW:single-enforcer]
+		//
+		// The retired flag is matched on the name pflag parsed, so `--continue`
+		// and `--continue=x` match while `--continuex` stays an unknown flag.
+		var unknown *pflag.NotExistError
+		if errors.As(err, &unknown) && unknown.GetSpecifiedName() == "continue" {
+			return UnsupportedError{Message: "--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag"}
 		}
-		if strings.Contains(msg, "flag provided but not defined: -continue") ||
-			strings.Contains(msg, "flag provided but not defined: --continue") ||
-			strings.Contains(msg, "unknown flag: --continue") {
-			return UnsupportedError{Message: "--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag", Feature: "--continue"}
-		}
-		// "flag needs an argument" joins the unknown-flag family: all three are the
-		// user mis-writing the flag surface, so all three reach a sink as one type.
-		// It classified as a bare error until links-cli-1lxr, which is only visible
-		// now that the parse runs before acquisition — the arity error used to be
-		// reached after a store was already open, where the store's own error
-		// shadowed it. [LAW:types-are-the-program] [LAW:single-enforcer]
-		if strings.HasPrefix(msg, "unknown flag:") ||
-			strings.HasPrefix(msg, "flag provided but not defined:") ||
-			strings.HasPrefix(msg, "flag needs an argument:") {
-			return UsageError{Message: msg}
-		}
-		return err
+		return UsageError{Message: err.Error()}
 	}
 	if helpFlag := fs.cmd.Flags().Lookup("help"); helpFlag != nil && helpFlag.Changed {
 		// [LAW:single-enforcer] Parsed help flags follow the same Cobra help rendering path as explicit help errors.

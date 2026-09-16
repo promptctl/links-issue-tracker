@@ -24,9 +24,8 @@ data — described as assets, not as documentation of behavior).
 - `internal/cli/cli.go:192-203` `newCobraFlagSet(use)` builds a cobra command with a default `--help` flag, output discarded.
 - `internal/cli/cli.go:274-300` `parseFlagSet`:
   - `--help` → prints `Usage of <use>:` plus `PrintDefaults()` to stdout, returns `errHelpHandled` (exit 0) — `cli.go:277-283`, `cli.go:266-273`.
-  - `--output` (any form) → `UnsupportedError{Message: "--output is no longer supported; omit it for text output"}` (exit 3) — `cli.go:287-290`.
-  - `--continue` → `UnsupportedError{Message: "--continue is retired; claim routing already keeps \`lit next\` in your checkout's own epic first — run \`lit next\` with no flag"}` — `cli.go:291-295`.
-  - Any other `unknown flag:` / `flag provided but not defined:` → `UsageError` (exit 2) — `cli.go:296-298`.
+  - `--continue` → `UnsupportedError{Message: "--continue is retired; claim routing already keeps \`lit next\` in your checkout's own epic first — run \`lit next\` with no flag"}` (exit 3) — `flagset.go:138-141`.
+  - Every other parse error (unknown flag, missing value, invalid value, bad syntax) → `UsageError` (exit 2) — `flagset.go:142`.
 - `internal/cli/cli.go:233-241` `StringOptional(name, defaultIfPresent, defaultIfAbsent, usage)` — used only by `quickstart --eject`.
 - `internal/cli/cli.go:1958-1979` `splitArgs(args, n)` splits leading positionals from flags (used by `snapshots restore`).
 - `internal/cli/register.go:112-123` `commandFamily.resolve`: a missing / unknown / flag-shaped first argument returns `errors.New(family.usage)` — a plain error → exit 1 (`internal/cli/exit.go:90`), not exit 2. Match is exact (no trimming).
@@ -1042,8 +1041,8 @@ All eight are also the payload of `lit quickstart --eject`, written to `<config.
 |---|---|---|---|
 | Outside a git repo | any workspace/app command | `OutsideWorkspaceError{"links requires running inside a git repository/worktree"}`, exit 1 | `cli.go:110-112`, `cli.go:156-160` |
 | Missing/unknown family subcommand | `sync`, `hooks`, `backup`, `snapshots`, `lifeboat`, `sync remote`, `sync reconcile` | the family usage string as a plain error, exit 1 | `register.go:112-123` |
-| Unknown flag | any command | `UsageError`, exit 2 | `cli.go:296-298` |
-| `--output` / `--continue` | any command | `UnsupportedError`, exit 3 | `cli.go:287-295` |
+| Unknown flag, missing or invalid flag value | any command | `UsageError`, exit 2 | `flagset.go:142` |
+| `--output` before the command name; `--continue` | any command | `UnsupportedError`, exit 3 | `cli.go:196-201`, `flagset.go:138-141` |
 | Stray positional | `init`, `version`, `hooks install`, `snapshots new`, `lifeboat dump`, `lifeboat recover`, `upgrade`, `downgrade`, `sync reconcile`/`resolve`/`abort`/`combine` | `UsageError`, exit 2 | `init.go:34`, `version.go:22`, `hooks.go:45`, `snapshots.go:87`, `lifeboat.go:163`, `lifeboat.go:81`, `upgrade.go:200`, `downgrade.go:81`, `sync_reconcile_cmd.go:82-87` |
 | Adopt could not confirm workspace state | `init` | refuse to create a store, exit 1 | `init.go:60-74` |
 | Remote-schema-ahead | `sync push/pull/reconcile*`, inline receive, mirror | `SyncFailureError` block, exit 5 (mirror: stderr only) | `sync.go:246`, `sync.go:389`, `sync_reconcile_cmd.go:120`, `sync_receive.go:147`, `sync_bg.go:329` |

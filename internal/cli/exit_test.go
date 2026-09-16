@@ -25,7 +25,7 @@ func TestExitCodeMappings(t *testing.T) {
 		{name: "usage unknown flag", err: UsageError{Message: "unknown flag: --json"}, want: ExitUsage},
 		{name: "string conflict", err: MergeConflictError{Message: "sync import conflict"}, want: ExitConflict},
 		{name: "store validation", err: storage.ValidationError{Message: "issue type must be task, feature, bug, chore, or epic"}, want: ExitValidation},
-		{name: "unsupported feature", err: UnsupportedError{Message: "unsupported --format \"csv\"", Feature: "--format"}, want: ExitValidation},
+		{name: "unsupported flag", err: UnsupportedError{Message: "--output is no longer supported; omit it for text output"}, want: ExitValidation},
 		{name: "outside workspace", err: OutsideWorkspaceError{Message: "links requires running inside a git repository/worktree"}, want: ExitGeneric},
 		{name: "generic", err: ValidationError{Message: "boom"}, want: ExitValidation},
 		// Both of `lit next`'s terminal answers exit ExitNoWork: the command ran

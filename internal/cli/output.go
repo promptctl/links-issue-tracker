@@ -82,6 +82,42 @@ func printIssueSummary(w io.Writer, issue model.Issue) error {
 	return err
 }
 
+// issueListRenderer is what `lit ls --format` selects: one way to print a
+// projected listing.
+type issueListRenderer func(w io.Writer, issues []model.Issue, columns []columnSpec, cells map[string]derivedColumns) error
+
+// listFormats is the whole `--format` vocabulary. The help text, the parser,
+// and the rejection message all read it, so a format added here is advertised
+// and accepted in one edit. [LAW:one-source-of-truth]
+var listFormats = map[string]issueListRenderer{
+	"lines": printIssueLines,
+	"table": printIssueTable,
+}
+
+func sortedListFormatNames() []string {
+	names := make([]string, 0, len(listFormats))
+	for name := range listFormats {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// parseListFormat is the one checkpoint for `--format`, run before the query so
+// a bad value costs no store read. It returns the renderer itself, so nothing
+// downstream holds a format name that could still be wrong. A bad value is a
+// ValidationError naming the valid formats: the same command can never succeed,
+// and the old UnsupportedError reached the "Retry the command" remediation.
+// [LAW:parse-dont-validate] [LAW:no-silent-failure]
+func parseListFormat(expr string) (issueListRenderer, error) {
+	name := strings.ToLower(strings.TrimSpace(expr))
+	render, ok := listFormats[name]
+	if !ok {
+		return nil, ValidationError{Message: fmt.Sprintf("unsupported --format %q (valid: %s)", name, strings.Join(sortedListFormatNames(), ", "))}
+	}
+	return render, nil
+}
+
 func printIssueTable(w io.Writer, issues []model.Issue, columns []columnSpec, cells map[string]derivedColumns) error {
 	tw := tabwriter.NewWriter(w, 2, 2, 2, ' ', 0)
 	if _, err := fmt.Fprintln(tw, strings.ToUpper(strings.Join(columnNames(columns), "\t"))); err != nil {

@@ -28,8 +28,8 @@ into* one of those, the call and its observable effect are recorded here.
   other token stops the scan. Effect: the removed `--output` flag is rejected in
   *global* position before any command runs.
 - `unsupportedOutputFlagError()` returns
-  `UnsupportedError{Message: "--output is no longer supported; omit it for text output", Feature: "--output"}`
-  (`cli.go:310-312`).
+  `UnsupportedError{Message: "--output is no longer supported; omit it for text output"}`
+  (`cli.go:210-212`).
 
 ### 1.2 Root command
 
@@ -116,14 +116,15 @@ into* one of those, the call and its observable effect are recorded here.
   - On `pflag.ErrHelp` it prints `"Usage of <use>:\n"` followed by
     `PrintDefaults()` **to stdout** and returns `errHelpHandled` → exit 0
     (`cli.go:277-283`, printer at `cli.go:265-272`).
-  - `flag provided but not defined: -output|--output` →
-    `UnsupportedError{"--output is no longer supported; omit it for text output", "--output"}`
-    (`cli.go:286-289`).
-  - `flag provided but not defined: -continue|--continue` or
-    `unknown flag: --continue` → `UnsupportedError{Message: "--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag", Feature: "--continue"}`
-    (`cli.go:290-294`).
-  - Any other `unknown flag:` / `flag provided but not defined:` →
-    `UsageError{Message: msg}` → exit 2 (`cli.go:295-297`).
+  - A `*pflag.NotExistError` whose parsed name is `continue` (from `--continue`
+    or `--continue=<x>`; not `--continuex`, and not `-continue`, which pflag
+    reads as the shorthand group `-c…`) →
+    `UnsupportedError{Message: "--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag"}`
+    → exit 3 (`flagset.go:138-141`).
+  - Every other parse error — unknown flag, missing value, invalid value, bad
+    syntax — → `UsageError{Message: err.Error()}` → exit 2 (`flagset.go:142`).
+    A leaf-position `--output` is an ordinary unknown flag here; only
+    `parseGlobalArgs` maps `--output` to `UnsupportedError`.
   - A parsed-and-changed `--help` flag also prints help and returns
     `errHelpHandled` (`cli.go:300-306`).
 
@@ -177,8 +178,8 @@ Constants (`exit.go:11-32`):
 Error types defined in `cli.go`: `MergeConflictError` (`cli.go:1890-1896`),
 `CorruptionError` (`cli.go:1898-1902`), `UsageError` (`cli.go:1906-1910`),
 `UnknownCommandError` — message `unknown command "<x>"` (`cli.go:1913-1917`),
-`ValidationError` (`cli.go:1920-1924`), `UnsupportedError` with a `Feature` field
-(`cli.go:1928-1933`), `RetiredCommandError` — message
+`ValidationError` (`cli.go:1920-1924`), `UnsupportedError` with a single `Message`
+field (`errors.go:52-56`), `RetiredCommandError` — message
 `the "<cmd>" command has been retired; <replacement>` (`cli.go:1942-1949`),
 `OutsideWorkspaceError` (`cli.go:1952-1956`). `BulkFailureError` in
 `bulk.go:48-58`.
@@ -193,8 +194,7 @@ Error types defined in `cli.go`: `MergeConflictError` (`cli.go:1890-1896`),
 `commandErrorReason(err)` maps type → reason string (`error_output.go:29-90`):
 `entity_not_found`, `merge_conflict`, `sync_divergence`, `owner_approval_required`,
 `corruption_detected`, `unknown_command`, `retired_command`, `usage_error`,
-`unsupported_output_flag` (only when `UnsupportedError.Feature == "--output"`;
-other `UnsupportedError`s fall to `command_failed`, `error_output.go:62-68`),
+`unsupported_flag` (every `UnsupportedError`, `error_output.go:121-125`),
 `outside_git_workspace`, `bulk_partial_failure`, `workspace_write_blocked`,
 `transient_gc_contention`, default `command_failed`.
 
@@ -202,7 +202,7 @@ other `UnsupportedError`s fall to `command_failed`, `error_output.go:62-68`),
 - `unknown_command`: "Run `lit --help` (or `lit help <command>`) to select a supported command path."
 - `retired_command`: "" (empty — message is self-contained)
 - `usage_error`: "Run the command with `--help` and retry with valid arguments."
-- `unsupported_output_flag`: "Remove `--output`. lit emits text output; there is no output-format flag."
+- `unsupported_flag`: "Do not retry unchanged — this flag is refused on every run. Drop it and use what the message above names instead."
 - `entity_not_found`: "Verify the target ID exists with `lit ls` or `lit show <id>`."
 - `merge_conflict`: "Sync and retry after resolving conflicts."
 - `sync_divergence`: ""
@@ -612,10 +612,13 @@ relations for the listed issues and derives `parentID` and
 keeps `InPlay()` issues, `output.go:480-488`). Otherwise no relation query is made
 and both columns render `-`.
 
-**Output**: `--format lines` (or empty) → `printIssueLines`; `table` →
-`printIssueTable`; anything else →
-`UnsupportedError{"unsupported --format \"<x>\"", Feature: "--format"}` → exit 3
-(`cli.go:613-621`). Format value is lowercased and trimmed (`cli.go:613`).
+**Output**: `parseListFormat` (`output.go:112-119`) runs before the query
+(`cli.go:451`); it lowercases and trims the value and looks it up in
+`listFormats` (`output.go:92-95`): `lines` → `printIssueLines`, `table` →
+`printIssueTable`. Anything else, including an explicit empty value, →
+`ValidationError{"unsupported --format \"<x>\" (valid: lines, table)"}` → exit 3,
+reason `validation_refused`. The `--format` help string is built from the same
+map.
 
 - No `fs.NArg()` check; stray positionals are ignored.
 
@@ -1110,9 +1113,9 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
   `"usage: lit next [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--all]"`
   (`next.go:29`, `next.go:42-44`).
 - Retired flag: `--continue` is intercepted at the shared parse boundary as
-  `UnsupportedError{Feature: "--continue"}` → exit 3, message
+  `UnsupportedError` → exit 3, message
   ``"--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag"``
-  (`flagset.go:134-138`).
+  (`flagset.go:138-141`).
 - Prints the sync-staleness warning first (`next.go:55`).
 - Gathers the workable set — rows, relation details, **and the focus scope** —
   via `gatherWorkableAnnotated` (`next.go:58-63`, `cli.go:655`), then the claim
