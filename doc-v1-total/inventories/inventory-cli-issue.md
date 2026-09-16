@@ -236,8 +236,8 @@ Stdout stays the result channel.
 
 Commands that register `--by`: `update` (`cli.go:939`), every transition via
 `runTransition` (`cli.go:1356`), `comment add` (`cli.go:1468`), `import`
-(`cli.go:1540`), `dep add` (`dependency.go:29`), `label add`
-(`issue_relations.go:32`), `parent set` (`issue_relations.go:78`), `bulk label`
+(`cli.go:1540`), `dep add` (`dependency.go:28`), `label add`
+(`issue_relations.go:31`), `parent set` (`issue_relations.go:77`), `bulk label`
 (`bulk.go:108`), `bulk close` (`bulk.go:141`), `bulk archive` (`bulk.go:172`).
 
 ### 1.12 Success-output breadcrumb
@@ -249,9 +249,9 @@ quickstart topic (`quickstart_topics.go:63-65`).
 Breadcrumbs are emitted by: `new` → `"new"` (`cli.go:365`), `followup` → `"new"`
 (`cli.go:437`), `update` → `"update"` (`cli.go:1032`), `rank` → `"update"`
 (`cli.go:1113`), `rank set` → `"update"` (`cli.go:1148`), `dep add`/`dep rm` →
-`"update"` (`dependency.go:69`, `dependency.go:94`), `label add`/`label rm` →
-`"update"` (`issue_relations.go:49`, `issue_relations.go:71`), `parent set`/
-`parent clear` → `"update"` (`issue_relations.go:107`, `issue_relations.go:121`),
+`"update"` (`dependency.go:65`, `dependency.go:90`), `label add`/`label rm` →
+`"update"` (`issue_relations.go:48`, `issue_relations.go:70`), `parent set`/
+`parent clear` → `"update"` (`issue_relations.go:103`, `issue_relations.go:121`),
 and transitions via the table below.
 
 `transitionBreadcrumbTopics` (`cli.go:1223-1227`): `start` → `"work"`,
@@ -391,71 +391,71 @@ not `closed` (`cli.go:1151-1160`). Epics are therefore never workable rows.
 
 **Step 3 — annotators** applied via `annotation.Annotate` (`cli.go:763-770`):
 1. `newFieldAnnotator(requiredFields)` — from `config.Load(...).Ready.RequiredFields`
-   (`cli.go:694-704`). Empty policy → no-op annotator (`ready_state.go:61-65`).
+   (`cli.go:694-704`). Empty policy → no-op annotator (`ready_state.go:63-67`).
    A required field name not present in `model.IssueWireFields()` →
    `ValidationError{"required field %q does not exist on issue"}`
-   (`ready_state.go:66-71`). For each unset required field it emits a
-   `MissingField` annotation (`ready_state.go:72-87`). "Set" means: non-nil, and
+   (`ready_state.go:68-73`). For each unset required field it emits a
+   `MissingField` annotation (`ready_state.go:74-89`). "Set" means: non-nil, and
    for strings non-blank, for arrays/maps non-empty; anything else counts as set
-   (`isRequiredFieldSet`, `ready_state.go:672-685`).
+   (`isRequiredFieldSet`, `ready_state.go:676-689`).
 2. `newBlockerAnnotator(details, ancestry)` — for each `DependsOn` that is
    `InPlay()`, sorted by ID, emits `OpenDependency{Message: dep.ID}`; and
    additionally `RankInversion{Message: dep.ID}` when `dep.Rank > issue.Rank`.
    Then, for each id from `ancestry.inheritedDependencies(detail)` not already
    a direct dependency, emits `InheritedDependency{Message: dep.ID}` and no rank
-   inversion (`ready_state.go:120-187`). `ancestry` is an `epicAncestry`: the
-   relations of every epic above the issues, keyed by epic id, and each epic's
-   gates (`ready_state.go:193-201`). `fetchContainerAncestry` builds both
-   (`:203-215`). `climbContainers` loads `parentEpicIDs` of the subjects, then of
-   each loaded level, one `GetRelationsByIDs` call per level, until a level names
-   no epic it has not loaded (`:217-244`). `fetchEpicGates` collects the `InPlay()`
-   `DependsOn` of every loaded epic, loads those blockers and climbs above them
-   the same way, and keeps a blocker as the epic's gate unless the blocker sits
-   under the epic or the epic sits under the blocker (`:246-284`). `epicsAbove`
-   yields the container parents of an issue, nearest first, and stops at a
-   parent it has already yielded; `sitsUnder` tests membership in that sequence
-   (`:286-309`). `inheritedDependencies` returns the gates of every epic
-   `epicsAbove` the subject yields, deduplicated, sorted by ID (`:311-326`).
-3. `newSiblingGateAnnotator(details, pendingSiblingsByEpic(ancestry.relations))` —
+   inversion (`ready_state.go:122-189`). `ancestry` is a `heldAncestry`
+   (`:283-295`), built by `fetchHeldAncestry` (`:300-317`) from an
+   `epicAncestry`: the relations of every epic above the issues, keyed by epic
+   id, and each epic's gates (`:195-202`). `fetchContainerAncestry` builds both,
+   a gate being any `InPlay()` `DependsOn` of a loaded epic (`:206-220`).
+   `climbContainers` loads `parentEpicIDs` of the subjects, then of each loaded
+   level, one fetch per level, until a level names no epic it has not loaded
+   (`:228-249`). `epicsAbove` yields the container parents of an issue, nearest
+   first, and stops at a parent it has already yielded (`:254-264`).
+   `epicAncestry.inheritedDependencies` returns the gates of every epic
+   `epicsAbove` the subject yields, deduplicated, sorted by ID (`:268-281`).
+   `fetchHeldAncestry` then runs `fetchWaitClosure` once per distinct gate: a
+   breadth-first walk of `fetchWaitLinks` from the gate over links that hold,
+   collecting every id reached (`:332-350`). `heldAncestry.inheritedDependencies`
+   drops each gate whose closure contains the subject (`:321-325`), so a blocker
+   never holds back an issue it waits on, itself included.
+3. `newSiblingGateAnnotator(details, pendingSiblingsByEpic(held.ancestry.relations))` —
    only when the parent exists and `parent.IsContainer()`; emits
    `EarlierSiblingPending{Message: sib.ID}` for each sibling satisfying
-   `isEarlierSameLaneSibling` (`ready_state.go:337-354`).
+   `isEarlierSameLaneSibling` (`ready_state.go:361-378`).
    `isEarlierSameLaneSibling(sib, leaf) := sib.ID != leaf.ID && sib.Lane == leaf.Lane && sib.Rank < leaf.Rank`
-   (`ready_state.go:362-364`). The sibling set is the epic's **unfiltered**
-   `InPlay()` children (`pendingSiblingsByEpic`, `ready_state.go:392-402`), fetched
-   via `fetchContainerAncestry(ctx, st.GetRelationsByIDs, details)` (`cli.go:862`), so siblings
+   (`ready_state.go:386-388`). The sibling set is the epic's **unfiltered**
+   `InPlay()` children (`pendingSiblingsByEpic`, `ready_state.go:416-426`), fetched
+   via `fetchHeldAncestry(ctx, memo, details)` (`cli.go:863`), so siblings
    hidden by `--assignee/--type/--labels` still gate.
 4. `newOrphanedAnnotator(orphanedThreshold)` — only for `in_progress` issues with
    `time.Since(UpdatedAt) >= 6h`; message
    `"in_progress for <dur truncated to minute> with no update"`
-   (`ready_state.go:630-644`; threshold constant `orphanedThreshold = 6 * time.Hour`
-   at `ready_state.go:49`).
+   (`ready_state.go:634-648`; threshold constant `orphanedThreshold = 6 * time.Hour`
+   at `ready_state.go:51`).
 5. `newNeedsDesignAnnotator()` — emits `NeedsDesign` for any issue carrying the
-   label `needs-design` (`ready_state.go:23`, `:30-42`).
+   label `needs-design` (`ready_state.go:25`, `:32-44`).
 6. `newFocusPathAnnotator(focusPaths)` — emits `FocusPath{Message: goalID}` for
-   issues on a focused goal's prerequisite closure (`ready_state.go:654-673`).
+   issues on a focused goal's prerequisite closure (`ready_state.go:658-677`).
 
-**Focus path derivation** (`fetchFocusPathGoals`, `ready_state.go:486-528`):
+**Focus path derivation** (`fetchFocusPathGoals`, `ready_state.go:511-545`):
 goals are issues with `Statuses=[open,in_progress]` and label `focus`
-(`FocusLabel = "focus"`, `ready_state.go:456`; query at `:487-490`). BFS over the
-prerequisite DAG, one `fetchWaitLinks` expansion per level (`:509-526`). The
+(`FocusLabel = "focus"`, `ready_state.go:480`; query at `:512-515`). BFS over the
+prerequisite DAG, one `fetchWaitLinks` expansion per level (`:526-543`). The
 `path` map doubles as the visited set, so shared prerequisites attribute to the
 first goal reached and cycles terminate. Relations are memoized through
-`relationsByID` (`:629-652`).
+`memoizeRelations` (`:616-624`) over `relationsByID` (`:633-656`), primed with the
+seeds; `annotateIssues` passes the memo it built for `fetchHeldAncestry`.
 
-**Wait links** (`fetchWaitLinks`, `ready_state.go:575-620`): for each frontier
-issue, in frontier order, a `waitLink{waiter, prereq, kind}` (`:531-545`) for
-each `InPlay()` `DependsOn` (`waitsOnDependency`), each `inheritedDependencies`
-entry over the frontier's `fetchContainerAncestry` (`waitsOnEpicBlocker`), each
-`InPlay()` child of a container (`waitsOnChild`), and each earlier same-lane
-`InPlay()` sibling under a container parent (`waitsOnLaneMate`). A frontier id
-missing from the fetch → `storage.NotFoundError` (`:591`). `String()` renders
-`"<a> depends on <b>"`, `"<a> depends on <b> (via epic)"`,
-`"epic <a> waits on its child <b>"`, or
-`"<a> waits on its earlier lane-mate <b>"` (`:547-558`). `holds()` is true
-unless the waiter is a container and the kind is not `waitsOnChild`
-(`:563-565`): the focus walk follows every link, the wait-loop refusal only
-links that hold.
+**Wait links** (`fetchWaitLinks`, `ready_state.go:565-611`): for each frontier
+issue, in frontier order, a `waitLink{waiter, prereq, holds}` (`:552-555`) for
+each `InPlay()` `DependsOn`, each `epicAncestry.inheritedDependencies` entry over
+the frontier's `fetchContainerAncestry` (every gate, before `heldAncestry` drops
+any), each `InPlay()` child of a container, and each earlier same-lane
+`InPlay()` sibling under a container parent. `holds` is true for a child link,
+and for any other link only when the waiter is not a container. A frontier id
+missing from the fetch → `storage.NotFoundError` (`:581`). The focus walk
+follows every link; `fetchWaitClosure` follows only links that hold.
 
 **Step 4 — readiness classification** (`ClassifyReadiness`, `readiness.go:131-148`):
 each annotation is dispatched on its declared `ReadinessRole`:
@@ -479,19 +479,19 @@ lines (`readiness.go:80-121`).
 1. `sortByCompositeRank(rows, details)` — stable sort by
    (effective epic rank, own rank); a leaf whose parent is a container uses the
    parent's rank as its epic-position, otherwise its own rank
-   (`ready_state.go:715-730`).
+   (`ready_state.go:719-734`).
 2. `sortByPriority` — stable, urgent (higher `Priority`) first
-   (`ready_state.go:736-740`).
+   (`ready_state.go:740-744`).
 3. `sortByFocusPath` — stable, rows carrying a `FocusPath` annotation first;
-   layered last so focus outranks urgent (`ready_state.go:755-762`).
+   layered last so focus outranks urgent (`ready_state.go:759-766`).
 Then `enrichWithParentEpic` sets `ParentEpic{ID,Title}` on rows whose parent is a
-container (`ready_state.go:693-704`).
+container (`ready_state.go:697-708`).
 
-**Partition used by rollups**: `partitionWorkable` (`ready_state.go:807-820`):
+**Partition used by rollups**: `partitionWorkable` (`ready_state.go:811-824`):
 `in_progress` state wins first (even if also blocked); else not-ready → blocked;
 else ready.
 
-`applyLimit(issues, limit)` truncates when `limit > 0` (`ready_state.go:764-769`).
+`applyLimit(issues, limit)` truncates when `limit > 0` (`ready_state.go:768-773`).
 
 ---
 
@@ -679,7 +679,7 @@ column is `sourceIssue` (`columns.go:92-124`).
 - `sourceIssue`: no load; the cell map is nil (`cli.go:635-636`).
 - `sourceRelations`: `fetchIssueRelations` batch-loads relations for the listed
   issues, and `parentColumnsFor` sets only `parentID` (`cli.go:637-642`,
-  `:666-672`; `ready_state.go:99-118`).
+  `:666-672`; `ready_state.go:101-120`).
 - `sourceReadiness`: calls the policy for required fields, runs `annotateIssues`,
   and `readinessColumnsFor` sets `parentID` from the relation graph and
   `blocked = !ClassifyReadiness(row.Annotations).IsReady()` (`cli.go:643-656`;
@@ -709,7 +709,7 @@ lines|table") is built from the same map (`cli.go:488`, `output.go:97-104`).
 ### 2.4 `lit show` — Show issue details
 
 - Registration `register.go:312-313`, `app.AccessRead`. Handler `runShow`
-  (`cli.go:822-871`).
+  (`cli.go:822-872`).
 - Args: exactly one positional id; flag `--field` (string, `""`, help:
   "Comma-separated field names (e.g. description) to print with no surrounding
   context; omit for the full detail view") (`cli.go:823-825`).
@@ -772,7 +772,7 @@ lines|table") is built from the same map (`cli.go:488`, `output.go:97-104`).
    to the literal `\n` (`output.go:161-170`).
 9. **No** history block — history lives behind `lit history` (`output.go:171-175`).
 10. Then `writeEpicContext` appends the epic plan block (§2.5). The block is
-    **resolved before step 1 writes anything** (`cli.go:859-870`), so the body and
+    **resolved before step 1 writes anything** (`cli.go:859-871`), so the body and
     the block are all-or-nothing: a failure to build the block exits nonzero with
     neither printed, rather than after a partial body. The staleness banner and any
     fired show-ticket workflow body are written before that point either way.
@@ -1164,14 +1164,14 @@ Use 'lit next' to pick the top workable item to start.
      blocked line nor the depends-on line.
    - `    depends on: <ids joined by ", ">` (`backlog.go:84`, `output.go:41-47`)
    - `    in_progress: <age truncated to minute>[ (ORPHANED)]` for in-progress
-     rows (`backlog.go:87-91`, `inProgressSuffix` at `ready_state.go:841-848`)
+     rows (`backlog.go:87-91`, `inProgressSuffix` at `ready_state.go:845-852`)
    - `    <claim line>` when the row's lane is Held or Stale (`backlog.go:92-96`)
    - `    unblocks: <ids of rows that depend on this one>` — derived from the
      classified open-dependency facts of the listed rows only
-     (`backlog.go:97`, `buildUnblocksMap` at `ready_state.go:789-797`)
+     (`backlog.go:97`, `buildUnblocksMap` at `ready_state.go:793-801`)
 6. Finally, if any row carries a `RankInversion` annotation:
    `"\nWarning: %d rank inversion(s) — dependencies ranked below their dependents. Run `lit doctor --fix` to repair. <agent-instructions>This command is idempotent and safe to run without confirmation.</agent-instructions>\n"`
-   (`printRankInversions`, `ready_state.go:852-862`).
+   (`printRankInversions`, `ready_state.go:856-866`).
 
 Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
 (`backlog.go:58`).
@@ -1206,7 +1206,7 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
   context (`next.go:67`), then routes (`next.go:71`):
   `routeNext(rows, details, cc.standings, cc.self, focus.scopeFor(*all))`.
   `scopeFor(true)` returns the zero `focusScope`, which holds every row
-  (`ready_state.go:736-741`, `ready_state.go:718`, `ready_state.go:728-730`).
+  (`ready_state.go:740-745`, `ready_state.go:722`, `ready_state.go:732-734`).
 
 **`NextOutcome`** — a sealed sum interface (`next_route.go:26`,
 `next_route.go:179-184`) with **six** cases:
@@ -1286,7 +1286,7 @@ Step 4 is reached only by a checkout holding no lanes, which starts there
 directly:
 
 4. **The global pool, focus-scoped.** `pool, offPath := scope.partition(rows)`
-   (`next_route.go:385`, `ready_state.go:748-757`), then
+   (`next_route.go:385`, `ready_state.go:752-761`), then
    `pickFrom(pool, func(model.LaneID) bool { return true }, serveWork, takeoverWork)` →
    **`ServedFromNewLane{Row, Lane: laneOf(row)}`** (`next_route.go:386-388`).
    Else → **`NoWork{Unreachable: append(passedOver(pool, reachFor), withheldByScope(offPath)...)}`**
@@ -1372,10 +1372,10 @@ selected by the row's state and by whether `lane.Describe()` reports a named lan
 On a served row, `renderNextOutcome` calls `printNextSummary(w, row, cc, lane)`
 with `lane = model.LaneOf(row.Issue, details[row.ID].Parent)` (`next.go:130-133`),
 which prints the **default columns** (`id state topic title`) joined by two
-spaces (`ready_state.go:888-894`, `columns.go:158-160`), then `printInlineDeps`
-(`ready_state.go:945-958`): `    epic: …`, `    depends on: …`, the claim line,
+spaces (`ready_state.go:892-898`, `columns.go:158-160`), then `printInlineDeps`
+(`ready_state.go:949-962`): `    epic: …`, `    depends on: …`, the claim line,
 and `    unblocks: …` — but `next` passes a **nil** unblocks map, so the unblocks
-line never appears (`ready_state.go:893`). It then returns
+line never appears (`ready_state.go:897`). It then returns
 `nextPulledOccasion(row.Issue)` (`next.go:134`, `workflow_events.go:39-45`),
 dispatched as `EventNextPulled` (`next.go:75`).
 
@@ -1461,129 +1461,106 @@ usage string as a plain error → exit 1 (`register.go:112-123`).
 ### 2.18 `lit label` — Manage labels
 
 Family `labelFamily`, usage `"usage: lit label <add|rm> ..."`
-(`issue_relations.go:13-19`); both `app.AccessWrite`.
+(`issue_relations.go:12-18`); both `app.AccessWrite`.
 
-**`lit label add <issue-id> <label>`** (`issue_relations.go:29-50`):
+**`lit label add <issue-id> <label>`** (`issue_relations.go:28-49`):
 - Two positionals via `splitArgs(args, 2)`; hidden `--by` registered.
 - Refusal: `len(positional) != 2` or `fs.NArg() != 0` →
   `UsageError{"usage: lit label add <issue-id> <label>"}` → exit 2
-  (`issue_relations.go:36-41`).
+  (`issue_relations.go:35-40`).
 - Calls `Store.AddLabel(AddLabelInput{IssueID, Name, CreatedBy: resolveActor()})`
-  (`issue_relations.go:42`); labels are normalized through `model.NormalizeLabel`
+  (`issue_relations.go:41`); labels are normalized through `model.NormalizeLabel`
   (`internal/store/labels.go:130-135`).
 - Output: the resulting full label set, comma-joined on one line
   (`printLabels`, `output.go:421-424`), then the `update` breadcrumb.
 
-**`lit label rm <issue-id> <label>`** (`issue_relations.go:52-72`):
+**`lit label rm <issue-id> <label>`** (`issue_relations.go:51-71`):
 - Same shape; no `--by`. Usage `"usage: lit label rm <issue-id> <label>"`.
 - Calls `Store.RemoveLabel(issueID, label)`; prints the remaining labels and the
   `update` breadcrumb.
 
-Reserved label semantics: `needs-design` blocks readiness (§1.18, `ready_state.go:23`);
-`focus` marks a goal for focus-path ordering (`ready_state.go:410`).
+Reserved label semantics: `needs-design` blocks readiness (§1.18, `ready_state.go:25`);
+`focus` marks a goal for focus-path ordering (`ready_state.go:434`).
 
 ### 2.19 `lit parent` — Manage parent relationships
 
 Family `parentFamily`, usage `"usage: lit parent <set|clear> ..."`
-(`issue_relations.go:21-27`); both `app.AccessWrite`. Group `structure`
+(`issue_relations.go:20-26`); both `app.AccessWrite`. Group `structure`
 (`register.go:348-349`).
 
-**`lit parent set --child <id> --parent <id>`** (`issue_relations.go:70-103`):
+**`lit parent set --child <id> --parent <id>`** (`issue_relations.go:73-104`):
 - Flags: `--child` ("Child issue ID (required)"), `--parent` ("Parent issue ID
   (required)"), hidden `--by`.
 - Refusals, in order: blank `--child`, blank `--parent`, or `fs.NArg() != 0` →
   `UsageError{"usage: lit parent set --child <id> --parent <id>"}` → exit 2
-  (`issue_relations.go:76-78`); then
-  `rejectWaitCycle(ctx, ap.Store, model.RelParentChild, child, parent)`, the
-  same check `lit dep add` step 5 runs (`issue_relations.go:79-81`).
+  (`issue_relations.go:81-83`).
 - Calls `Store.SetParent(SetParentInput{ChildID, ParentID, CreatedBy})`
-  (`issue_relations.go:82-86`).
+  (`issue_relations.go:84-88`).
 - Output: the edge rendered through the *same* projection `dep` uses —
-  `"<child> --child-of--> <parent>"` (`issue_relations.go:98`, via
-  `depRelationForCLI`/`depRelationLine`, `dependency.go:141-144`, `:348-359`) —
+  `"<child> --child-of--> <parent>"` (`issue_relations.go:100`, via
+  `depRelationForCLI`/`depRelationLine`, `dependency.go:137-140`, `:181-192`) —
   then the `update` breadcrumb.
 
-**`lit parent clear <child-id>`** (`issue_relations.go:105-119`):
+**`lit parent clear <child-id>`** (`issue_relations.go:106-122`):
 - No flags. Refusal: `len(positional) != 1` →
   `UsageError{"usage: lit parent clear <child-id>"}` → exit 2
-  (`issue_relations.go:116-118`). No `fs.NArg()` check.
+  (`issue_relations.go:112-114`). No `fs.NArg()` check.
 - Calls `Store.ClearParent(childID)`; prints `ok` then the `update` breadcrumb.
 
 ### 2.20 `lit dep` — Manage dependency edges
 
-Family `depFamily`, usage `"usage: lit dep <add|rm|ls> ..."` (`dependency.go:15-22`).
+Family `depFamily`, usage `"usage: lit dep <add|rm|ls> ..."` (`dependency.go:14-21`).
 `add`/`rm` are `app.AccessWrite`, `ls` is `app.AccessRead`. Group `structure`
 (`register.go:352-353`).
 
-**`lit dep add --from <id> --to <id> [--type ...]`** (`dependency.go:24-70`):
+**`lit dep add --from <id> --to <id> [--type ...]`** (`dependency.go:23-66`):
 - Flags: `--type` (string, default `"blocks"`, help "Relation type:
   blocks|parent-child|related-to"), `--from` ("Source issue ID (required)"),
   `--to` ("Target issue ID (required)"), hidden `--by`.
 - Refusals, in order:
   1. Blank `--from` or `--to`, or `fs.NArg() != 0` →
      `UsageError{"usage: lit dep add --from <id> --to <id> [--type blocks|parent-child|related-to]"}`
-     → exit 2 (`dependency.go:33-35`).
+     → exit 2 (`dependency.go:32-34`).
   2. Bad `--type` → the bare `model.ParseRelationType` error → exit 1
-     (`dependency.go:38-41`).
+     (`dependency.go:37-40`).
   3. Self-loop `from == to` → `fmt.Errorf("dep add: self-loop rejected (%s -> %s)")`
-     → exit 1 (`dependency.go:44-46`).
+     → exit 1 (`dependency.go:45-47`). Transitive cycles are **not** detected
+     (`dependency.go:43-44`).
   4. For `blocks` only: `rejectSameEpicBlocks` — if both endpoints resolve to the
      same epic membership, `ValidationError{sameEpicBlocksRejectionMessage}` →
-     exit 3 (`dependency.go:52-59`, `:153-166`). Verbatim message:
+     exit 3 (`dependency.go:51-55`, `:149-162`). Verbatim message:
      "Do not set 'blocks' relationships between two issues in the same epic.  Use
      rank to specify that one issue must be completed before another issue"
-     (`dependency.go:149` — note the double space).
+     (`dependency.go:145` — note the double space).
      Epic membership: the issue's own ID if it is a container, else the parent's
      ID if the parent is a container, else `""` (floating)
-     (`issueEpicID`, `dependency.go:164-179`). Two floating issues are not
-     same-epic (`dependency.go:162`).
-  5. For `blocks` and `parent-child`: `rejectWaitCycle` refuses an edge that
-     would leave unfinished issues waiting on each other forever, as a
-     `ValidationError` → exit 3 (`dependency.go:55-57`, `:248-315`).
-     `proposeEdge` (`:199-246`) returns a `pendingEdge{name, patch, pivot}`
-     (`:185-189`), fetching both endpoints (missing → `storage.NotFoundError`).
-     A `blocks` edge appends `--from` to `--to`'s `DependsOn`. A `parent-child`
-     edge onto a container sets `--from`'s `Parent` to `--to`, appends `--from`
-     to `--to`'s `Children` and drops it from every other issue's `Children`;
-     onto any other parent, and for `related-to`, there is no edge to check and
-     the step passes. The pivot is `--from`. Relations are memoized through
-     `relationsByID`; the patched view applies `patch` to every fetched
-     relation. The starts are the pivot plus the pivot's
-     `inheritedDependencies` in the patched view. For each start, `findWaitLoop`
-     (`:317-346`) walks `fetchWaitLinks` breadth-first over links that
-     `holds()`, in the patched view, and returns a shortest loop back to the
-     start. The edge is refused on the first start with such a loop, unless the
-     loop is all `waitsOnDependency` links and the edge is `blocks` (the store's
-     cycle check refuses that, exit 1), or the unpatched view already has a loop
-     through that start. Message:
-     `"refusing <edge>, which would leave issues waiting on each other forever: <links>"`,
-     the edge rendered `"<from> blocks <to>"` or `"<from> under epic <to>"` and
-     the links by `waitLink.String()`, joined with `", "`.
+     (`issueEpicID`, `dependency.go:167-179`). Two floating issues are not
+     same-epic (`dependency.go:158`).
 - Endpoint orientation: `rt.StoreEndpoints(from, to)` swaps the pair for `blocks`
   (stored dependent→dependency) and is an involution
-  (`dependency.go:60`, `internal/model/relation_type.go:39-44`).
+  (`dependency.go:56`, `internal/model/relation_type.go:39-44`).
 - Output: `depRelationLine(depRelationForCLI(rel))` then the `update` breadcrumb
-  (`dependency.go:65-69`). Line formats (`dependency.go:348-359`):
+  (`dependency.go:61-65`). Line formats (`dependency.go:181-192`):
   - `blocks` → `"<src> --blocks--> <dst>"`
   - `parent-child` → `"<src> --child-of--> <dst>"`
   - `related-to` → `"<src> --related-to--> <dst>"`
   - default → `"<src> --depends-on--> <dst>"`
 
-**`lit dep rm --from <id> --to <id> [--type ...]`** (`dependency.go:72-95`):
+**`lit dep rm --from <id> --to <id> [--type ...]`** (`dependency.go:68-91`):
 - Same flags minus `--by`; same usage refusal string with `rm`
-  (`dependency.go:80-82`). No self-loop or same-epic check.
+  (`dependency.go:76-78`). No self-loop or same-epic check.
 - Calls `Store.RemoveRelation(srcID, dstID, rt)`; prints `ok` and the `update`
-  breadcrumb (`dependency.go:88-94`).
+  breadcrumb (`dependency.go:84-90`).
 
-**`lit dep ls <issue-id> [--type ...]`** (`dependency.go:97-135`):
+**`lit dep ls <issue-id> [--type ...]`** (`dependency.go:93-131`):
 - One positional; `--type` (string, `""`, "Filter relation type").
 - Refusal: `len(positional) != 1` or `fs.NArg() != 0` →
   `UsageError{"usage: lit dep ls <issue-id> [--type blocks|parent-child|related-to]"}`
-  → exit 2 (`dependency.go:104-109`).
+  → exit 2 (`dependency.go:100-105`).
 - A non-blank `--type` is parsed (bad value errors); blank means no filter
-  (`dependency.go:113-120`).
+  (`dependency.go:109-116`).
 - Output: one `depRelationLine` per relation, flipped back to CLI orientation
-  (`dependency.go:125-134`). No breadcrumb, no header, empty output for none.
+  (`dependency.go:121-130`). No breadcrumb, no header, empty output for none.
 
 ### 2.21 `lit bulk` — Bulk issue operations
 
@@ -1839,7 +1816,7 @@ plus at most one positional topic.
 2. **`fs.NArg()` is not checked** by: `new` (`cli.go:340-355`),
    `followup` (`cli.go:387-415`), `ls` (`cli.go:525-621`), `rank`
    (`cli.go:1049-1073`), `export` (`cli.go:1516`), `children`
-   (`issue_relations.go:127-132`), `parent clear` (`issue_relations.go:113-118`).
+   (`issue_relations.go:127-132`), `parent clear` (`issue_relations.go:109-114`).
    Extra positionals on those commands are silently ignored.
 3. **Family dispatch errors are plain errors (exit 1), not `UsageError` (exit 2)**
    (`register.go:112-123`), unlike the per-command usage refusals which are

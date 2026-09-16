@@ -859,7 +859,8 @@ func annotateIssues(ctx context.Context, st storage.Store, requiredFields []stri
 	// The lane gate and the blocker annotator read the ancestor epics' FULL
 	// relations (unfiltered by the CLI assignee/type/label narrowing), so an
 	// earlier sibling or an epic's blocker hidden by those filters still gates.
-	ancestry, err := fetchContainerAncestry(ctx, st.GetRelationsByIDs, details)
+	memo, loaded := memoizeRelations(st.GetRelationsByIDs, details)
+	held, err := fetchHeldAncestry(ctx, memo, details)
 	if err != nil {
 		return nil, nil, focusScope{}, err
 	}
@@ -868,18 +869,17 @@ func annotateIssues(ctx context.Context, st storage.Store, requiredFields []stri
 	// ticket; chain membership is never stored, so it cannot drift.
 	// [LAW:one-source-of-truth]
 	//
-	// The walk reuses the relations already fetched for the subject issues
-	// (details) and their ancestor epics (ancestry) rather than re-querying
-	// the same subjects; both are GetRelationsByIDs results, so a seeded hit is
+	// The walk reuses the relations loaded for the subjects, their ancestor epics
+	// and the blockers' wait walks rather than re-querying them; a seeded hit is
 	// byte-identical to a refetch. (links-query-efficiency-988d.2)
-	focusPaths, err := fetchFocusPathGoals(ctx, st, details, ancestry.relations)
+	focusPaths, err := fetchFocusPathGoals(ctx, st, loaded)
 	if err != nil {
 		return nil, nil, focusScope{}, err
 	}
 	annotated, err := annotation.Annotate(ctx, subjects,
 		fieldAnnotator,
-		newBlockerAnnotator(details, ancestry),
-		newSiblingGateAnnotator(details, pendingSiblingsByEpic(ancestry.relations)),
+		newBlockerAnnotator(details, held),
+		newSiblingGateAnnotator(details, pendingSiblingsByEpic(held.ancestry.relations)),
 		newOrphanedAnnotator(orphanedThreshold),
 		newNeedsDesignAnnotator(),
 		newFocusPathAnnotator(focusPaths),

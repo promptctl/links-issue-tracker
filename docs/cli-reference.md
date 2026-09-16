@@ -515,14 +515,12 @@ same epic — within an epic, rank is the ordering signal. A `blocks` edge onto 
 epic holds back every issue in that epic and in epics nested inside it, in every
 lane:
 `lit next` offers none of them until the blocker closes, and `lit backlog` shows
-the blocker on each one as `depends on: <id> (via epic)`. A blocker nested
-inside that epic, or an epic above it, holds back nothing. An edge that would
-leave unfinished issues waiting on each other forever is refused, and each link
-of the loop is named. The links are the ones `lit next` waits on: dependencies,
-an epic's blockers, an epic waiting on its children, and earlier lane-mates. For
-example, a gate cannot block an epic while one of that epic's children blocks
-the gate, and a leaf cannot block the nested epic ahead of it in its lane.
-`related-to` is symmetric annotation with no scheduling effect.
+the blocker on each one as `depends on: <id> (via epic)`. The one exception is an
+issue the blocker already waits on, directly or through other issues, such as
+its own dependencies, its earlier lane-mates, or the blocker itself when it sits
+in that epic: holding that issue back would leave the two waiting on each other
+forever, so it stays free and the blocker waits on it. `related-to` is symmetric
+annotation with no scheduling effect.
 
 ### `lit parent set` / `lit parent clear`
 
@@ -533,10 +531,7 @@ lit parent clear <child-id>
 
 Manages epic membership. `--child`/`--parent` are required for `set`; there is no
 positional form. Epics contain children; an epic's completion is derived from
-its children rather than tracked as its own status. Putting an issue under an
-epic is refused when that would leave issues waiting on each other forever, for
-example when the epic's blockers already wait on that issue, with each link of
-the loop named.
+its children rather than tracked as its own status.
 
 Parent-child is one of the relation edges `lit dep` manages (`--type parent-child`);
 `parent` is the ergonomic face over that same store write, and both render the

@@ -6,7 +6,6 @@ import (
 	"io"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
-	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -75,9 +74,6 @@ func parentSetLeaf() appLeaf {
 	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if *child == "" || *parent == "" || fs.NArg() != 0 {
 			return UsageError{Message: "usage: lit parent set --child <id> --parent <id>"}
-		}
-		if err := rejectWaitCycle(ctx, ap.Store, model.RelParentChild, *child, *parent); err != nil {
-			return err
 		}
 		rel, err := ap.Store.SetParent(ctx, storage.SetParentInput{
 			ChildID:   *child,

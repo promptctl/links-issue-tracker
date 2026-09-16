@@ -94,58 +94,127 @@ func TestBlockedEpicGatesNestedEpicsAndNamesADirectEdgeOnce(t *testing.T) {
 	}
 }
 
-// A blocker the hierarchy already relates to the epic it blocks gates nothing
-// through that epic. A workspace can hold every shape below: `lit dep add`
-// accepted each one until rejectWaitCycle, and still accepts the last
-// (links-hierarchy-kh57). Each one used to stall an issue that nothing else held
-// back:
-//   - a leaf two levels down blocks the outer epic behind an unfinished
-//     lane-mate. The lane-mate inherited the leaf while the leaf waited on the
-//     lane-mate.
-//   - that leaf also depends on another child of the outer epic. The child
-//     inherited the leaf while the leaf waited on the child.
-//   - the nested epic blocks the outer epic. The leaf waited for its own epic.
-//   - the outer epic blocks the nested epic. The leaf waited for an epic that
-//     cannot finish before the leaf does.
-func TestBlockedEpicIgnoresABlockerItsHierarchyRelates(t *testing.T) {
-	type edge struct{ dependent, blocker string }
+// An epic's blocker holds back every issue under the epic except one the
+// blocker waits on itself, directly or through other issues, because holding
+// that one back would leave the two waiting on each other forever. Every
+// workspace below was reachable through `lit dep add`, `lit parent set`,
+// `lit parent clear`, `lit rank` or a lane change, and each one used to stall
+// the issues in the loop. The exception is read from the workspace as it is,
+// so each case is stated as its final shape. held maps a row to the one
+// blocker it must inherit; every other row inherits none, and pullable lists
+// rows that must be startable.
+func TestAnEpicsBlockerHoldsBackNothingItWaitsOn(t *testing.T) {
+	type expectation struct {
+		held     map[string]string
+		pullable []string
+	}
+	task := func(h readyTestHarness, title, parent, lane string) model.Issue {
+		return h.createIssue(storage.CreateIssueInput{Title: title, Topic: "epic-block", IssueType: "task", ParentID: parent, Lane: lane})
+	}
+	epic := func(h readyTestHarness, title, parent string) model.Issue {
+		return h.createIssue(storage.CreateIssueInput{Title: title, Topic: "epic-block", IssueType: "epic", ParentID: parent})
+	}
+	// outer holds inner, whose first and second share lane a, and other in its
+	// own lane.
+	nested := func(h readyTestHarness) (outer, inner, first, second, other model.Issue) {
+		outer = epic(h, "Outer", "")
+		inner = epic(h, "Inner", outer.ID)
+		first = task(h, "first", inner.ID, "a")
+		second = task(h, "second", inner.ID, "a")
+		other = task(h, "other", outer.ID, "other")
+		return
+	}
 	cases := []struct {
 		name  string
-		edges func(outer, inner, first, second, other model.Issue) []edge
+		build func(h readyTestHarness) expectation
 	}{
-		{"leaf behind a lane-mate", func(outer, inner, first, second, other model.Issue) []edge {
-			return []edge{{outer.ID, second.ID}}
+		{"a leaf blocks its outer epic behind a lane-mate", func(h readyTestHarness) expectation {
+			outer, _, first, second, other := nested(h)
+			h.addDependency(outer.ID, second.ID)
+			return expectation{held: map[string]string{other.ID: second.ID}, pullable: []string{first.ID}}
 		}},
-		{"leaf that depends on a child of the epic", func(outer, inner, first, second, other model.Issue) []edge {
-			return []edge{{outer.ID, second.ID}, {second.ID, other.ID}}
+		{"that leaf also depends on another child of the epic", func(h readyTestHarness) expectation {
+			outer, _, first, second, other := nested(h)
+			h.addDependency(outer.ID, second.ID)
+			h.addDependency(second.ID, other.ID)
+			return expectation{pullable: []string{first.ID, other.ID}}
 		}},
-		{"nested epic", func(outer, inner, first, second, other model.Issue) []edge {
-			return []edge{{outer.ID, inner.ID}}
+		{"a nested epic blocks its outer epic", func(h readyTestHarness) expectation {
+			outer, inner, first, _, other := nested(h)
+			h.addDependency(outer.ID, inner.ID)
+			return expectation{held: map[string]string{other.ID: inner.ID}, pullable: []string{first.ID}}
 		}},
-		{"ancestor epic", func(outer, inner, first, second, other model.Issue) []edge {
-			return []edge{{inner.ID, outer.ID}}
+		{"the outer epic blocks a nested epic", func(h readyTestHarness) expectation {
+			outer, inner, first, _, other := nested(h)
+			h.addDependency(inner.ID, outer.ID)
+			return expectation{pullable: []string{first.ID, other.ID}}
+		}},
+		{"a gate that depends on a child of the epic it blocks", func(h readyTestHarness) expectation {
+			e := epic(h, "E", "")
+			c1 := task(h, "c1", e.ID, "a")
+			c2 := task(h, "c2", e.ID, "b")
+			g := task(h, "gate", "", "")
+			h.addDependency(e.ID, g.ID)
+			h.addDependency(g.ID, c1.ID)
+			return expectation{held: map[string]string{c2.ID: g.ID}, pullable: []string{c1.ID}}
+		}},
+		{"a leaf blocks the nested epic ahead of it in its lane", func(h readyTestHarness) expectation {
+			e0 := epic(h, "E0", "")
+			e1 := epic(h, "E1", e0.ID)
+			c := task(h, "c", e1.ID, "")
+			b := task(h, "b", e0.ID, "")
+			h.addDependency(e1.ID, b.ID)
+			return expectation{pullable: []string{c.ID}}
+		}},
+		{"two epics each blocked by a child of the other", func(h readyTestHarness) expectation {
+			e := epic(h, "E", "")
+			c := task(h, "c", e.ID, "")
+			e2 := epic(h, "E2", "")
+			c2 := task(h, "c2", e2.ID, "")
+			h.addDependency(e.ID, c2.ID)
+			h.addDependency(e2.ID, c.ID)
+			return expectation{pullable: []string{c.ID, c2.ID}}
+		}},
+		// z waits on epic k, and k stands behind l in their lane, but k's child
+		// never waits on l, so neither does z: l depending on c is no loop.
+		{"an epic's lane-mate is not what the epic waits on", func(h readyTestHarness) expectation {
+			e0 := epic(h, "E0", "")
+			l := task(h, "l", e0.ID, "")
+			k := epic(h, "K", e0.ID)
+			task(h, "k child", k.ID, "")
+			e1 := epic(h, "E1", "")
+			c := task(h, "c", e1.ID, "")
+			z := task(h, "z", "", "")
+			h.addDependency(z.ID, k.ID)
+			h.addDependency(l.ID, c.ID)
+			h.addDependency(e1.ID, z.ID)
+			return expectation{held: map[string]string{c.ID: z.ID}}
 		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newReadyTestHarness(t)
-			outer := h.createIssue(storage.CreateIssueInput{Title: "Outer", Topic: "epic-block", IssueType: "epic"})
-			inner := h.createIssue(storage.CreateIssueInput{Title: "Inner", Topic: "epic-block", IssueType: "epic", ParentID: outer.ID})
-			first := h.createIssue(storage.CreateIssueInput{Title: "first", Topic: "epic-block", IssueType: "task", ParentID: inner.ID, Lane: "a"})
-			second := h.createIssue(storage.CreateIssueInput{Title: "second", Topic: "epic-block", IssueType: "task", ParentID: inner.ID, Lane: "a"})
-			other := h.createIssue(storage.CreateIssueInput{Title: "other", Topic: "epic-block", IssueType: "task", ParentID: outer.ID, Lane: "other"})
-			for _, e := range tc.edges(outer, inner, first, second, other) {
-				h.addDependency(e.dependent, e.blocker)
-			}
-
+			want := tc.build(h)
 			for _, row := range h.runWorkableAnnotated(workableFilter{}, 0) {
-				if annotation.HasAny(row.Annotations, annotation.InheritedDependency) {
-					t.Fatalf("%s inherits a blocker from inside its own hierarchy: %v", row.ID, row.Annotations)
+				var got []string
+				for _, ann := range row.Annotations {
+					if ann.Kind == annotation.InheritedDependency {
+						got = append(got, ann.Message)
+					}
+				}
+				var wantGates []string
+				if gate, held := want.held[row.ID]; held {
+					wantGates = []string{gate}
+				}
+				if !slices.Equal(got, wantGates) {
+					t.Fatalf("%s inherits %v, want %v", row.ID, got, wantGates)
 				}
 			}
 			pullable := h.runPullableAnnotated(workableFilter{})
-			if !containsID(pullable, first.ID) || !containsID(pullable, other.ID) {
-				t.Fatalf("pullable = %v, want the lane head %s and %s", ids(pullable), first.ID, other.ID)
+			for _, id := range want.pullable {
+				if !containsID(pullable, id) {
+					t.Fatalf("pullable = %v, want %s among them", ids(pullable), id)
+				}
 			}
 		})
 	}
