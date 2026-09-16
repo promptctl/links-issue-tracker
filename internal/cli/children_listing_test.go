@@ -81,16 +81,49 @@ func TestListingUnderAMissingParentIsNotFound(t *testing.T) {
 	}
 }
 
-// A children listing with no parent id is a usage error answered before any
-// store opens, so none of these cases has a workspace to open.
-func TestChildrenRefusesAMissingPositional(t *testing.T) {
+// A listing given the wrong number of positionals is a usage error answered
+// before any store opens, so none of these cases has a workspace to open. Too
+// many is refused like too few: `children a b` listing only a's children, with
+// exit 0, would be a wrong answer shaped like a right one. [LAW:no-silent-failure]
+func TestListingRefusesTheWrongPositionalCount(t *testing.T) {
 	t.Parallel()
-	for _, args := range [][]string{nil, {"--format", "table"}} {
+	cases := []struct {
+		surface listSurface
+		args    []string
+	}{
+		{childrenSurface, nil},
+		{childrenSurface, []string{"--format", "table"}},
+		{childrenSurface, []string{"test-a", "test-b"}},
+		{childrenSurface, []string{"test-a", "--status", "open", "test-b"}},
+		{lsSurface, []string{"stray"}},
+	}
+	for _, tc := range cases {
 		var out bytes.Buffer
-		err := runList(context.Background(), &out, childrenSurface, args)
+		err := runList(context.Background(), &out, tc.surface, tc.args)
 		var usage UsageError
-		if !errors.As(err, &usage) || !strings.Contains(err.Error(), "usage: lit children <parent-id>") {
-			t.Fatalf("children %v error = %#v, want UsageError naming the usage line", args, err)
+		if !errors.As(err, &usage) || !strings.Contains(err.Error(), "usage: lit "+tc.surface.name) {
+			t.Fatalf("%s %v error = %#v, want a UsageError naming the usage line", tc.surface.name, tc.args, err)
+		}
+	}
+}
+
+// The parent id is found wherever it sits among the flags. A boolean flag takes
+// no value, so `--include-archived <id>` must leave the id a positional, and `--`
+// ends the flags without consuming it.
+func TestChildrenFindsTheParentAmongFlags(t *testing.T) {
+	f := newEpicFixture(t, "Listing epic", "# Why\nthe plan")
+	child := f.addChild("Only child")
+	for _, args := range [][]string{
+		{"--include-archived", f.epicID},
+		{"--has-comments=false", "--include-deleted", f.epicID, "--format", "table"},
+		{"--", f.epicID},
+	} {
+		var out bytes.Buffer
+		if err := runChildren(f.ctx, &out, f.ap, args); err != nil {
+			t.Fatalf("children %v error = %v", args, err)
+		}
+		if !strings.Contains(out.String(), child) {
+			t.Fatalf("children %v =\n%s\nwant the child %s", args, out.String(), child)
 		}
 	}
 }

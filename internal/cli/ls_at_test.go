@@ -229,9 +229,10 @@ func TestLsAtRejectsEmptyOrFlagShapedDir(t *testing.T) {
 }
 
 // TestLsAtAfterTerminatorIsNotARoute pins that `--` ends flag parsing, so a later
-// `--at` is a positional literal and ls stays on the cwd workspace. The rule is
-// pflag's, not ls's — this test exists because runList reads --at from the parse
-// rather than rescanning argv, and a rescan is exactly what would get this wrong.
+// `--at` is a positional literal: ls routes nowhere and refuses the positionals it
+// does not take. The rule is pflag's, not ls's — this test exists because runList
+// reads --at from the parse rather than rescanning argv, and a rescan is exactly
+// what would get this wrong.
 //
 // Not parallel: it chdirs.
 func TestLsAtAfterTerminatorIsNotARoute(t *testing.T) {
@@ -241,13 +242,13 @@ func TestLsAtAfterTerminatorIsNotARoute(t *testing.T) {
 	var out bytes.Buffer
 	err := runList(context.Background(), &out, lsSurface, []string{"--", "--at", storeDir})
 
-	// Routing would have listed the foreign store's issue; staying on the cwd
-	// means the workspace acquisition refuses instead.
+	// Routing would have listed the foreign store's issue; as positionals, the two
+	// tokens are refused as usage before any store opens.
 	if strings.Contains(out.String(), issueID) {
 		t.Fatalf("ls -- --at %s listed the foreign issue %q; `--` must end flag parsing", storeDir, issueID)
 	}
-	var outside OutsideWorkspaceError
-	if !errors.As(err, &outside) {
-		t.Fatalf("ls -- --at %s error = %#v, want OutsideWorkspaceError from the cwd path", storeDir, err)
+	var usage UsageError
+	if !errors.As(err, &usage) || !strings.Contains(err.Error(), `"--at"`) {
+		t.Fatalf("ls -- --at %s error = %#v, want a UsageError naming the stray --at positional", storeDir, err)
 	}
 }

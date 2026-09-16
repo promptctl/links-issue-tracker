@@ -379,12 +379,12 @@ var (
 // [LAW:one-source-of-truth]
 func runList(ctx context.Context, stdout io.Writer, surface listSurface, args []string) error {
 	l, atDir := listLeaf(surface)
-	positional, err := parseLeaf(l, args, stdout)
-	if err != nil {
+	if _, err := parseLeaf(l, args, stdout); err != nil {
 		return err
 	}
-	if len(positional) != len(surface.positionals) {
-		return UsageError{Message: strings.Join(append([]string{"usage: lit", surface.name}, surface.positionals...), " ")}
+	positional, err := listPositionals(l, surface)
+	if err != nil {
+		return err
 	}
 	if l.fs.Changed(lsAtFlag) {
 		// pflag accepts any string as the value, so a flag-shaped one (`--at
@@ -420,6 +420,22 @@ func runList(ctx context.Context, stdout io.Writer, surface listSurface, args []
 	})
 }
 
+// listPositionals reads a listing's positionals off the parse and refuses any
+// count but the surface's own. They come from pflag's leftover arguments rather
+// than from splitArgs' guess, because only pflag knows which flags take a value:
+// splitArgs would hand the id in `lit children --include-archived <id>` to the
+// boolean as its value, and would pass a second id through to be dropped. Too
+// many ids is refused like too few — a silently ignored parent would list the
+// wrong set with exit 0. [LAW:single-enforcer] [LAW:no-silent-failure]
+func listPositionals(l leaf[listScope], surface listSurface) ([]string, error) {
+	positional := l.fs.cmd.Flags().Args()
+	if len(positional) != len(surface.positionals) {
+		usage := strings.Join(append([]string{"usage: lit", surface.name}, surface.positionals...), " ")
+		return nil, UsageError{Message: fmt.Sprintf("%s [flags]  (got %d positional arguments: %q)", usage, len(positional), positional)}
+	}
+	return positional, nil
+}
+
 // listLeaf declares the listing flag surface. It returns the --at value alongside the
 // leaf because --at selects the store the work runs against, so runList must read
 // it between the parse and the work — the one flag whose value is routing rather
@@ -433,7 +449,9 @@ const lsAtFlag = "at"
 
 func listLeaf(surface listSurface) (leaf[listScope], *string) {
 	fs := newCobraFlagSet(surface.name)
-	at := fs.String(lsAtFlag, "", "List a discovered store by its storage directory (from `lit stores`), read-only, instead of the current workspace")
+	// No backquotes in usage text: pflag reads the first backquoted span as the
+	// flag's value placeholder, so help would print `--at lit stores`.
+	at := fs.String(lsAtFlag, "", "List a discovered store by its storage directory (from lit stores), read-only, instead of the current workspace")
 	// StringArray, not String: the filter this feeds is a set both engines OR
 	// together, so a second --status has to widen the listing rather than
 	// silently keep the last value and drop the first.
@@ -447,7 +465,7 @@ func listLeaf(surface listSurface) (leaf[listScope], *string) {
 	assignee := fs.String("assignee", "", "Filter by assignee")
 	search := fs.String("search", "", "Search title and description text")
 	ids := fs.String("ids", "", "Comma-separated issue IDs")
-	parent := fs.String("parent", "", "Only direct children of these comma-separated issue IDs (`lit children <id>` is `lit ls --parent <id>`)")
+	parent := fs.String("parent", "", "Only direct children of these comma-separated issue IDs (lit children <id> is lit ls --parent <id>)")
 	labels := fs.String("labels", "", "Comma-separated labels all of which must match")
 	hasComments := fs.Bool("has-comments", false, "Only include issues with comments")
 	includeArchived := fs.Bool("include-archived", false, "Include archived issues")
@@ -459,7 +477,9 @@ func listLeaf(surface listSurface) (leaf[listScope], *string) {
 	columnsExpr := fs.String("columns", "", columnsFlagUsage())
 	format := fs.String("format", "lines", "Output format: "+strings.Join(sortedListFormatNames(), "|"))
 	limit := fs.Int("limit", 0, "Limit results")
-	return leaf[listScope]{fs: fs, positionals: len(surface.positionals), work: func(ctx context.Context, stdout io.Writer, scope listScope, positional []string) error {
+	// positionals: 0 so every token reaches pflag; listPositionals takes the
+	// surface's positionals from what pflag leaves over.
+	return leaf[listScope]{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope listScope, positional []string) error {
 		st, policy := scope.store, scope.policy
 		// Parsed before the query runs and before anything prints: a rejection that
 		// had already emitted rows would be a partial answer, which is the silent
