@@ -64,43 +64,77 @@ func mustBefore(t *testing.T, r string) string {
 	return before
 }
 
-// A relative move whose anchor and neighbor leave no room between them still
-// lands between them. The pairs are ones spacing can write — a rank beside
-// itself extended by zeros — and an all-zero anchor at the top of its frame,
-// whose open-ended neighbor has the same problem. rank.Midpoint once returned
-// "100V" for the first pair, and the move wrote it: the issue landed below both
+// noRoomFixture names the issues of TestPlacementMakesRoomBetweenKeysThatPadToTheSameValue.
+type noRoomFixture struct{ upper, lower, moved string }
+
+// A key placed against stored keys that leave no room lands where it was asked
+// to anyway: between a relative move's neighbors, or past a frame's edge. The
+// pairs are ones spacing can write — a rank beside itself extended by zeros —
+// and an all-zero rank leading its frame, which leaves no room above it for
+// every placement that passes the top edge. rank.Midpoint once returned "100V"
+// for the first pair, and the move wrote it: the issue landed below both
 // neighbors and the command reported success.
-func TestRankMoveMakesRoomBetweenKeysThatPadToTheSameValue(t *testing.T) {
+func TestPlacementMakesRoomBetweenKeysThatPadToTheSameValue(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name         string
-		upper, lower string // the neighbors' planted ranks; "" plants none
-		move         func(st *Store, ctx context.Context, moved, upperID, lowerID string) error
+		upper, lower string // the neighbors' planted ranks; an empty upper deletes that neighbor
+		// place performs the placement and returns the ids that must now sort
+		// strictly ascending.
+		place func(t *testing.T, ctx context.Context, st *Store, ids noRoomFixture) []string
 	}{
-		{"above", "10", "100", func(st *Store, ctx context.Context, moved, _, lowerID string) error {
-			_, err := st.RankAbove(ctx, moved, lowerID)
-			return err
+		{"above", "10", "100", func(t *testing.T, ctx context.Context, st *Store, ids noRoomFixture) []string {
+			if _, err := st.RankAbove(ctx, ids.moved, ids.lower); err != nil {
+				t.Fatalf("RankAbove error = %v", err)
+			}
+			return []string{ids.upper, ids.moved, ids.lower}
 		}},
-		{"below", "10", "100", func(st *Store, ctx context.Context, moved, upperID, _ string) error {
-			_, err := st.RankBelow(ctx, moved, upperID)
-			return err
+		{"below", "10", "100", func(t *testing.T, ctx context.Context, st *Store, ids noRoomFixture) []string {
+			if _, err := st.RankBelow(ctx, ids.moved, ids.upper); err != nil {
+				t.Fatalf("RankBelow error = %v", err)
+			}
+			return []string{ids.upper, ids.moved, ids.lower}
 		}},
-		{"above an all-zero frame leader", "", "0", func(st *Store, ctx context.Context, moved, _, lowerID string) error {
-			_, err := st.RankAbove(ctx, moved, lowerID)
-			return err
+		{"above an all-zero frame leader", "", "0", func(t *testing.T, ctx context.Context, st *Store, ids noRoomFixture) []string {
+			if _, err := st.RankAbove(ctx, ids.moved, ids.lower); err != nil {
+				t.Fatalf("RankAbove error = %v", err)
+			}
+			return []string{ids.moved, ids.lower}
+		}},
+		{"to the top past an all-zero frame leader", "", "0", func(t *testing.T, ctx context.Context, st *Store, ids noRoomFixture) []string {
+			if _, err := st.RankToTop(ctx, ids.moved); err != nil {
+				t.Fatalf("RankToTop error = %v", err)
+			}
+			return []string{ids.moved, ids.lower}
+		}},
+		{"rank set past an all-zero frame leader", "", "0", func(t *testing.T, ctx context.Context, st *Store, ids noRoomFixture) []string {
+			other := createRankTestIssue(t, ctx, st, "Other")
+			if _, err := st.RankSet(ctx, []string{other, ids.moved}); err != nil {
+				t.Fatalf("RankSet error = %v", err)
+			}
+			return []string{other, ids.moved, ids.lower}
+		}},
+		{"created at the top past an all-zero leader", "", "0", func(t *testing.T, ctx context.Context, st *Store, ids noRoomFixture) []string {
+			created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Created", Topic: "rank", IssueType: "task", Placement: storage.RankTop})
+			if err != nil {
+				t.Fatalf("CreateIssue(top) error = %v", err)
+			}
+			return []string{created.ID, ids.lower}
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
 			st := openIssueStore(t, ctx)
-			upperID := createRankTestIssue(t, ctx, st, "Upper")
-			lowerID := createRankTestIssue(t, ctx, st, "Lower")
-			movedID := createRankTestIssue(t, ctx, st, "Moved")
-			planted := map[string]string{lowerID: tc.lower, movedID: "z"}
+			ids := noRoomFixture{
+				upper: createRankTestIssue(t, ctx, st, "Upper"),
+				lower: createRankTestIssue(t, ctx, st, "Lower"),
+				moved: createRankTestIssue(t, ctx, st, "Moved"),
+			}
+			planted := map[string]string{ids.lower: tc.lower, ids.moved: "z"}
 			if tc.upper != "" {
-				planted[upperID] = tc.upper
-			} else if err := st.ExecRawForTest(ctx, "UPDATE issues SET deleted_at = ? WHERE id = ?", "2026-01-01T00:00:00Z", upperID); err != nil {
+				planted[ids.upper] = tc.upper
+			} else if err := st.ExecRawForTest(ctx, "UPDATE issues SET deleted_at = ? WHERE id = ?", "2026-01-01T00:00:00Z", ids.upper); err != nil {
 				t.Fatalf("delete the upper neighbor: %v", err)
 			}
 			for id, r := range planted {
@@ -112,14 +146,8 @@ func TestRankMoveMakesRoomBetweenKeysThatPadToTheSameValue(t *testing.T) {
 				t.Fatalf("rank.Midpoint(%q, %q) error = %v, want ErrNoRoom; this case no longer plants a pair without room", tc.upper, tc.lower, err)
 			}
 
-			if err := tc.move(st, ctx, movedID, upperID, lowerID); err != nil {
-				t.Fatalf("move error = %v", err)
-			}
+			order := tc.place(t, ctx, st, ids)
 
-			order := []string{movedID, lowerID}
-			if tc.upper != "" {
-				order = []string{upperID, movedID, lowerID}
-			}
 			ranks := make([]string, len(order))
 			for i, id := range order {
 				issue, err := st.GetIssue(ctx, id)

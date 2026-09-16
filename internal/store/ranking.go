@@ -31,16 +31,21 @@ const frameColumn = `COALESCE((SELECT r.dst_id FROM relations r
 		WHERE r.src_id = issues.id AND r.type = 'parent-child' AND p.deleted_at IS NULL), '')`
 
 // rankEdge is one end of a frame's keyspace as the query and the key algebra
-// see it: the ordering that brings that end to the front of a result, the step
-// that lands just past it, and the word for it. The end a caller asked for
-// crosses as this value, so one statement and one assignment serve both ends
-// instead of two near-copies free to drift.
+// see it: the ordering that brings that end to the front of a result, the pair
+// of bounds a key just past it sits between, and the word for it. The end a
+// caller asked for crosses as this value, so one statement and one assignment
+// serve both ends instead of two near-copies free to drift.
 // [LAW:dataflow-not-control-flow]
 type rankEdge struct {
 	name   string
 	order  string
-	beyond func(string) (string, error)
+	beside func(edgeRank string) (lower, upper string)
 }
+
+var (
+	topEdge    = rankEdge{name: "top", order: "ASC", beside: func(r string) (string, string) { return "", r }}
+	bottomEdge = rankEdge{name: "bottom", order: "DESC", beside: func(r string) (string, string) { return r, "" }}
+)
 
 // edgeFor is the single dispatch point on RankPlacement for rank keys: both
 // edge verbs and issue creation's placement resolve their end here, so there
@@ -49,30 +54,44 @@ type rankEdge struct {
 func edgeFor(p storage.RankPlacement) (rankEdge, error) {
 	switch p {
 	case storage.RankTop:
-		return rankEdge{name: "top", order: "ASC", beyond: rank.Before}, nil
+		return topEdge, nil
 	case storage.RankBottom:
-		return rankEdge{name: "bottom", order: "DESC", beyond: func(r string) (string, error) { return rank.After(r), nil }}, nil
+		return bottomEdge, nil
 	default:
 		return rankEdge{}, fmt.Errorf("unknown rank placement: %d", p)
 	}
 }
 
-// rankBeyond is the key just past a frame's edge — or the frame's first key
-// when the frame holds nothing ranked yet. Absorbing the empty frame here is
-// what lets every caller assign unconditionally instead of repeating the same
-// "is there anything to anchor against" branch.
+// rankBeyondTx is the key just past a frame's edge, whose key readEdge reads —
+// or the frame's first key when the frame holds nothing ranked yet. Absorbing
+// the empty frame here is what lets every caller assign unconditionally instead
+// of repeating the same "is there anything to anchor against" branch.
 // [LAW:dataflow-not-control-flow]
-func (e rankEdge) rankBeyond(edgeRank string) (string, error) {
+//
+// The edge is read through a function rather than passed as a key because the
+// key past it is placed by rankBetweenTx, which rewrites the edge's key when it
+// has to make room. [LAW:single-enforcer] Every placement against stored keys
+// goes through that one function, so an edge whose key leaves no room past it
+// is made room for exactly as a relative move's neighbors are.
+func (e rankEdge) rankBeyondTx(ctx context.Context, tx *sql.Tx, readEdge func() (string, error)) (string, error) {
+	edgeRank, err := readEdge()
+	if err != nil {
+		return "", err
+	}
 	if edgeRank == "" {
 		return rank.Initial(), nil
 	}
-	return e.beyond(edgeRank)
+	return rankBetweenTx(ctx, tx, func() (string, string, error) {
+		edgeRank, err := readEdge()
+		lower, upper := e.beside(edgeRank)
+		return lower, upper, err
+	})
 }
 
 // frameEdgeHolderTx names the issue holding one end of a frame's rank order
 // and the rank it holds there. Both come back empty when the frame has nothing
 // ranked in it — a fact about the frame, not a failure, and the one input
-// rankBeyond needs to seed a fresh frame.
+// rankBeyondTx needs to seed a fresh frame.
 func frameEdgeHolderTx(ctx context.Context, tx *sql.Tx, f storage.Frame, edge rankEdge) (holderID, holderRank string, err error) {
 	query := fmt.Sprintf(`SELECT id, item_rank FROM issues
 		WHERE deleted_at IS NULL AND item_rank != '' AND %s = ?
@@ -258,7 +277,7 @@ func (s *Store) rankToEdge(ctx context.Context, issueID string, placement storag
 		if err != nil {
 			return storage.RankEnd{}, err
 		}
-		holderID, holderRank, err := frameEdgeHolderTx(ctx, tx, f, edge)
+		holderID, _, err := frameEdgeHolderTx(ctx, tx, f, edge)
 		if err != nil {
 			return storage.RankEnd{}, err
 		}
@@ -269,7 +288,10 @@ func (s *Store) rankToEdge(ctx context.Context, issueID string, placement storag
 		if !end.Moved {
 			return end, nil
 		}
-		newRank, err := edge.rankBeyond(holderRank)
+		newRank, err := edge.rankBeyondTx(ctx, tx, func() (string, error) {
+			_, edgeRank, err := frameEdgeHolderTx(ctx, tx, f, edge)
+			return edgeRank, err
+		})
 		if err != nil {
 			return storage.RankEnd{}, fmt.Errorf("rank to %s: %w", edge.name, err)
 		}
@@ -386,31 +408,31 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 		query := fmt.Sprintf(`SELECT item_rank FROM issues
 			WHERE deleted_at IS NULL AND item_rank != '' AND id NOT IN (%s) AND %s = ?
 			ORDER BY item_rank ASC LIMIT 1`, strings.Join(placeholders, ","), frameColumn)
-		var topRank sql.NullString
-		if err := tx.QueryRowContext(ctx, query, args...).Scan(&topRank); err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return storage.RankSetResult{}, fmt.Errorf("rank-set: query top: %w", err)
-		}
-
 		// Walk IDs in reverse, assigning each a rank just above the previous one.
-		// The last ID (idx N-1) is anchored just above the existing top; each
-		// earlier ID is anchored just above the previously-assigned rank, so the
-		// final order is ids[0] < ids[1] < ... < ids[N-1] < (existing top).
-		now := s.clock.Now().Format(time.RFC3339Nano)
-		cursor := topRank.String
-		hasCursor := topRank.Valid && topRank.String != ""
-		newRanks := make([]string, len(ranked))
-		for i := len(ranked) - 1; i >= 0; i-- {
-			var newRank string
-			if !hasCursor {
-				newRank = rank.Initial()
-				hasCursor = true
-			} else {
-				if newRank, err = rank.Before(cursor); err != nil {
-					return storage.RankSetResult{}, fmt.Errorf("rank set: %w", err)
-				}
+		// The last ID (idx N-1) is placed past the frame's top, as any top-edge
+		// placement is; each earlier ID is anchored just above the
+		// previously-assigned rank, so the final order is
+		// ids[0] < ids[1] < ... < ids[N-1] < (existing top).
+		cursor, err := topEdge.rankBeyondTx(ctx, tx, func() (string, error) {
+			topRank, err := nearestRank(ctx, tx, query, args...)
+			if err != nil {
+				return "", fmt.Errorf("rank-set: query top: %w", err)
 			}
-			newRanks[i] = newRank
-			cursor = newRank
+			return topRank, nil
+		})
+		if err != nil {
+			return storage.RankSetResult{}, fmt.Errorf("rank set: %w", err)
+		}
+		now := s.clock.Now().Format(time.RFC3339Nano)
+		newRanks := make([]string, len(ranked))
+		newRanks[len(ranked)-1] = cursor
+		for i := len(ranked) - 2; i >= 0; i-- {
+			// A key this loop placed is never all zeros, so Before always has
+			// room here; its error is still returned rather than assumed away.
+			if cursor, err = rank.Before(cursor); err != nil {
+				return storage.RankSetResult{}, fmt.Errorf("rank set: %w", err)
+			}
+			newRanks[i] = cursor
 		}
 		for i, id := range ranked {
 			if err := writeRankTx(ctx, tx, id, newRanks[i], now); err != nil {

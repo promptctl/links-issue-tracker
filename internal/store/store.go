@@ -2030,21 +2030,23 @@ type partialIssue struct {
 // changing it changes what filing order means (links-rank-t2vl).
 //
 // [LAW:one-source-of-truth] The direction and the empty-keyspace default come
-// from edgeFor and rankBeyond, the same two the rank verbs use. Only the
+// from edgeFor and rankBeyondTx, the same two the rank verbs use. Only the
 // population being asked differs.
 func nextRankForPlacement(ctx context.Context, tx *sql.Tx, p storage.RankPlacement) (string, error) {
 	edge, err := edgeFor(p)
 	if err != nil {
 		return "", err
 	}
-	var edgeRank sql.NullString
 	query := fmt.Sprintf(`SELECT item_rank FROM issues
 		WHERE deleted_at IS NULL AND item_rank != ''
 		ORDER BY item_rank %s LIMIT 1`, edge.order)
-	if err := tx.QueryRowContext(ctx, query).Scan(&edgeRank); err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("query %s rank: %w", edge.name, err)
-	}
-	return edge.rankBeyond(edgeRank.String)
+	return edge.rankBeyondTx(ctx, tx, func() (string, error) {
+		edgeRank, err := nearestRank(ctx, tx, query)
+		if err != nil {
+			return "", fmt.Errorf("query %s rank: %w", edge.name, err)
+		}
+		return edgeRank, nil
+	})
 }
 
 // issueColumns is the single authoritative ordered projection of the issues
