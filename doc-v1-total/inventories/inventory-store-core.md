@@ -555,7 +555,7 @@ Errors: `"batch load issues: %w"`, `"scan batch-loaded issue: %w"`, `"iterate ba
 6. If `issue.RedirectTargetValue()` is non-nil and not already in the list, it is appended (`store.go:798-800`).
 7. `getIssuesByIDs(ctx, relatedIDs)` — one batch hydrate (`store.go:801`).
 8. `bucketRelations(id, relations, relatedByID)` → `structural` with `Parent`, `Children`, `DependsOn`, `Blocks` (`store.go:809`; `internal/store/relations.go:22`).
-9. If `structural.Parent != nil`: `ListChildren(ctx, structural.Parent.ID)` then `siblingsOf(id, parentChildren)`; otherwise `siblings := []model.Issue{}` (`store.go:814-821`).
+9. If `structural.Parent != nil`: `ListIssues(ctx, ListIssuesFilter{ParentIDs: [structural.Parent.ID], IncludeArchived: true, IncludeDeleted: true})` — the parent's children in every retention state, rank order then id — then `siblingsOf(id, parentChildren)`; otherwise `siblings := []model.Issue{}` (`store.go:887-900`).
 10. `redirectTarget` is set only if the target id is present in `relatedByID`; a vanished target hydrates as absent (`store.go:826-831`).
 11. `related := relatedFrom(id, relations, relatedByID)` (`store.go:832`).
 12. Assembles `model.IssueDetail{Issue, Relations, Comments, Events, Children, Siblings, DependsOn, Blocks, Parent, Related, RedirectTarget}` (`store.go:833-845`).
@@ -580,6 +580,7 @@ WHERE clauses, appended in this exact order:
 | `filter.HasComments != nil`, true | `EXISTS (SELECT 1 FROM comments c WHERE c.issue_id = i.id)` | `store.go:633-635` |
 | `filter.HasComments != nil`, false | `NOT EXISTS (SELECT 1 FROM comments c WHERE c.issue_id = i.id)` | `store.go:635-637` |
 | each canonicalized label in `filter.LabelsAll` | `EXISTS (SELECT 1 FROM labels l WHERE l.issue_id = i.id AND l.label = ?)` (one clause per label — AND semantics) | `store.go:639-648` |
+| `len(filter.ParentIDs) > 0` (after `requireIssues(ctx, filter.ParentIDs)` passes) | `EXISTS (SELECT 1 FROM relations r WHERE r.type = 'parent-child' AND r.src_id = i.id AND r.dst_id IN (?,...))` | `store.go:679-688` |
 | `len(filter.IDs) > 0` (blank skipped) | `i.id IN (?, ?)` joined with `", "` | `store.go:649-662` |
 | each non-blank `filter.SearchTerms` term, lowercased & trimmed | `(LOWER(i.title) LIKE ? OR LOWER(i.description) LIKE ? OR LOWER(COALESCE(i.agent_prompt, '')) LIKE ? OR LOWER(i.topic) LIKE ?)` with `%term%` bound four times | `store.go:663-671` |
 
@@ -942,7 +943,7 @@ Called on every write open (`store.go:152`) and by the bootstrap (`store.go:2540
 | `snapshotGuard` | `migrate_snapshot.go:109` | `store.go:1702`, `:1719` |
 | `newIssueID` | `issue_ids.go:14` | `store.go:522` |
 | `canonicalizeLabels` / `replaceLabelsTx` | `labels.go:112` / `:95` | `store.go:482`, `:640`, `:995`; `:552`, `:1052` |
-| `insertRelationTx` / `bucketRelations` / `relatedFrom` / `siblingsOf` / `ListChildren` | `relations.go:348` / `:22` / `:64` / `:88` / `:494` | `store.go:548`; `:809`; `:832`; `:820`; `:816` |
+| `insertRelationTx` / `bucketRelations` / `relatedFrom` / `siblingsOf` | `relations.go:348` / `:22` / `:64` / `:88` | `store.go:548`; `:809`; `:832`; `:899` |
 | `smoothRanksIfNeededTx` | `ranking.go:407` | `store.go:564` |
 | `deleteCommentTx` | `row_deletes.go:93` | `store.go:1189` |
 | `rank.Initial/After/Before` | `internal/rank` | `store.go:2065`, `:2067`, `:2081` |
@@ -2805,19 +2806,13 @@ via `fmt.Sprintf` with placeholder lists from `repeatPlaceholder` (`internal/sto
 - For each subject present in `issuesByID`, produces `bucketRelations(id, bySubject[id], issuesByID)` with `.Issue` set; subjects that no longer exist are simply omitted from the result map (`:136-145`).
 - `TestGetRelationsByIDsMatchesIssueDetail` asserts parity with `GetIssueDetail` for Children/DependsOn/Blocks/Parent, absence of a nonexistent subject, epic children in rank order, and the DependsOn/Blocks orientation — `internal/store/relations_batch_test.go:15-92`.
 
-### 4.11 ListChildren
+### 4.11 Listing by parent
 
-`Store.ListChildren(ctx, parentID)` — `internal/store/relations.go:494-519`:
-- `GetIssue(parentID)` precheck (`:495-497`).
-- ```sql
-  SELECT <issueColumnsQualified>
-  FROM relations r
-  JOIN issues i ON i.id = r.src_id
-  WHERE r.type = 'parent-child' AND r.dst_id = ?
-  ORDER BY i.item_rank ASC, i.id ASC
-  ```
-  (`:498-502`). Query error → `fmt.Errorf("list children: %w", err)` (`:504`). Rows scanned with `scanIssue`, then `s.hydrateIssues` (`:507-518`). Note: no `deleted_at` filter on the child rows.
-- `TestStoreListChildrenDefaultsToRankOrder` — `internal/store/store_test.go:1051-1082`.
+Children are read through `Store.ListIssues` with `filter.ParentIDs` set (§5.7); there is no separate children query.
+- `requireIssues(ctx, filter.ParentIDs)` runs before the parent clause is added — `internal/store/store.go:679-681`, defined `:742-776`. Empty ids → nil. Otherwise one `SELECT id FROM issues WHERE id IN (?,…)` (`:754`); query error → `fmt.Errorf("check issues exist: %w", err)` (`:756`). Walking the ids in the order given, the first one absent from the result → `storage.NotFoundError{Entity: "issue", ID: id}` (`:770-774`). The query reads existence only, so a soft-deleted or archived parent passes.
+- Parent clause: `EXISTS (SELECT 1 FROM relations r WHERE r.type = 'parent-child' AND r.src_id = i.id AND r.dst_id IN (?,…))`, one placeholder per parent id — `internal/store/store.go:682-688`. Only direct children match, and several parent ids OR together. The child rows go through the listing's other clauses, so `archived_at IS NULL` and `deleted_at IS NULL` apply unless `IncludeArchived`/`IncludeDeleted` is set, and ordering is `buildIssueOrderClause` (rank ascending, then id, when no `SortBy`).
+- `TestStoreListByParentDefaultsToRankOrder` — two children wired by `SetParent` list in rank order — `internal/store/store_test.go:1117-1148`.
+- `TestListByParentReturnsEpicChildrenWithDerivedLifecycle` — a sub-epic listed under its root carries container progress derived from its closed leaf (closed 1, total 1) — `internal/store/store_test.go:1907-1939`.
 
 ---
 

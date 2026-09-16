@@ -31,6 +31,11 @@ func (e *Engine) listIssues(filter storage.ListIssuesFilter) ([]model.Issue, err
 	if err != nil {
 		return nil, err
 	}
+	for _, id := range filter.ParentIDs {
+		if _, err := e.mustRecord(id); err != nil {
+			return nil, err
+		}
+	}
 	pos := e.positions()
 	ranked := make([]*record, 0, len(e.order))
 	for _, id := range e.order {
@@ -85,6 +90,9 @@ func (e *Engine) selects(issue model.Issue, filter storage.ListIssuesFilter, lab
 	if !matchesAny(issue.ID, trimmedNonEmpty(filter.IDs)) {
 		return false
 	}
+	if !e.matchesParents(issue.ID, filter.ParentIDs) {
+		return false
+	}
 	if filter.UpdatedAfter != nil && issue.UpdatedAt.Before(*filter.UpdatedAfter) {
 		return false
 	}
@@ -105,6 +113,22 @@ func (e *Engine) selects(issue model.Issue, filter storage.ListIssuesFilter, lab
 		}
 	}
 	return true
+}
+
+// matchesParents reads membership off the parent-child edge alone, whatever the
+// parent's retention: the edge is what makes an issue a child, so a deleted
+// parent's children are still its children to a listing that names it. Empty
+// criteria constrain nothing, as on every other axis.
+func (e *Engine) matchesParents(childID string, parentIDs []string) bool {
+	if len(parentIDs) == 0 {
+		return true
+	}
+	for _, rel := range e.relations {
+		if rel.Type == model.RelParentChild && rel.SrcID == childID && slices.Contains(parentIDs, rel.DstID) {
+			return true
+		}
+	}
+	return false
 }
 
 // matchesAny reports whether value is in criteria, treating an empty criteria

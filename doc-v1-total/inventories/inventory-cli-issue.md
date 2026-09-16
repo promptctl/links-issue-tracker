@@ -561,6 +561,7 @@ else ready.
 | `--assignee` | string | `""` | Trimmed, single-element `Assignees` (`cli.go:541`) |
 | `--search` | string | `""` | Appended to `SearchTerms` **only if the flag was visited** (`cli.go:555-557`) |
 | `--ids` | string | `""` | CSV → `filter.IDs`, only if visited (`cli.go:558-560`) |
+| `--parent` | string | `""` | CSV of issue ids, with the surface's positionals appended → `filter.ParentIDs` (direct children, ORed). Visited with no id left (`--parent=`, `--parent " , "`) → `UsageError{"--parent needs an issue id, e.g. --parent <epic-id>"}` → exit 2. An id naming no issue → `NotFoundError` from the store → exit 4 (`cli.go:450`, `:487-492`, `:496`) |
 | `--labels` | string | `""` | CSV → `LabelsAll` (ALL must match), only if visited (`cli.go:561-563`) |
 | `--has-comments` | bool | `false` | Only if visited; sets the pointer to the flag's value — so `--has-comments=false` filters to issues *without* comments (`cli.go:564-567`) |
 | `--include-archived` | bool | `false` | `filter.IncludeArchived` (`cli.go:542`) |
@@ -585,7 +586,9 @@ else ready.
 - Tokenizer honors single and double quotes; an unterminated quote →
   `"unterminated quote in query"` (`query.go:241-274`).
 - Terms (`query.go:76-164`): `status:<state>[,<state>...]`, `resolution:<res>`, `type:<type>`,
-  `assignee:<v>`, `id:<v>`, `label:<v>`, `has:comments` (any other `has:` →
+  `assignee:<v>`, `id:<v>`, `parent:<v>` (bare `parent:` →
+  `storage.ValidationError{"parent: needs an issue id, e.g. parent:<epic-id>"}`,
+  `query.go:112-121`), `label:<v>`, `has:comments` (any other `has:` →
   `unsupported has: filter %q`), `sort:<spec>`, `limit:<int>` (non-numeric →
   `limit must be an integer, got %q`; negative → `limit must be non-negative,
   got %q`), bare `archived`, bare `deleted`, `updated>=|>|<=|<|:<RFC3339>`
@@ -593,7 +596,7 @@ else ready.
   `updated supports only >=, >, <=, <`; missing comparator/value errors wrapped
   `parse updated term %q`). Anything else becomes a free-text search term.
 - `query.Merge(flagFilter, queryFilter)` (`query.go:31-74`): slices dedupe-merge
-  (statuses, types, assignees, sort keys); resolutions/search/ids/labels plain
+  (statuses, types, assignees, parent ids, sort keys); resolutions/search/ids/labels plain
   append; `IncludeArchived`/`IncludeDeleted` OR; `Limit` overwritten when query
   limit > 0. Conflicting `has-comments` → `conflicting has-comments filters`;
   conflicting time bounds → `conflicting updated-after filters <t1> and <t2>`
@@ -1319,14 +1322,23 @@ claim; this command claims nothing.
 
 ### 2.16 `lit children <parent-id>`
 
-- Registration `register.go:350-351`, `app.AccessRead`. Handler `runChildren`
-  (`issue_relations.go:124-138`). Summary: "List child issues by rank".
-- No flags.
-- Refusal: `len(positional) != 1` →
-  `UsageError{"usage: lit children <parent-id>"}` → exit 2
-  (`issue_relations.go:130-132`). No `fs.NArg()` check.
-- Output: `printIssueLines` with the fixed column set `id, state, title` joined by
-  `" | "`, and a nil relations map (`issue_relations.go:137`).
+- Registration `register.go:531-534`: `runList(ctx, stdout, childrenSurface, args)`,
+  the same entrypoint and leaf as `lit ls` (§ `lit ls` above). Summary: "List an
+  issue's direct children by rank (`lit ls --parent <id>`; takes every ls flag)".
+- `childrenSurface = listSurface{name: "children", positionals: []string{"<parent-id>"}}`
+  (`cli.go:354-361`). `listLeaf(surface)` names the flag set after the surface and
+  declares every `ls` flag, so `lit children --help` lists them (`cli.go:434-435`).
+- Refusal: `len(positional) != 1` → `UsageError{"usage: lit children <parent-id>"}`
+  → exit 2, checked after the parse and before any store opens (`cli.go:386-388`).
+  A blank or `-`-prefixed `--at` → `UsageError{"usage: lit children --at <store-dir>  (a storage directory from `lit stores`)"}`
+  (`cli.go:395-397`).
+- Filter: the positional is appended to the `--parent` ids (`cli.go:487`), so
+  `lit children <id> [flags]` builds the filter `lit ls --parent <id> [flags]` builds
+  and prints the same output. The `ls` defaults apply: statuses default to
+  `[open, in_progress]` when no status or resolution filter is set
+  (`cli.go:557-559`), archived and deleted children are excluded unless
+  `--include-archived`/`--include-deleted`, and the default columns are
+  `id,state,topic,title`. A parent id naming no issue → `NotFoundError` → exit 4.
 
 ### 2.17 `lit comment` — Add / remove comments
 

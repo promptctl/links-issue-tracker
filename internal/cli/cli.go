@@ -335,7 +335,7 @@ func followupLeaf() appLeaf {
 	}}
 }
 
-// listScope is what `ls` queries: the store, and the ready policy that store can
+// listScope is what a listing queries: the store, and the ready policy that store can
 // answer for. Two acquisition paths produce it — the current workspace's own
 // store, and a foreign store named by --at — and everything after is the same
 // query, which is why the pair is a VALUE the work receives rather than a fork
@@ -345,9 +345,25 @@ type listScope struct {
 	policy readyPolicy
 }
 
-// runList is the `ls` entrypoint. It declares and parses the flag surface, then
-// chooses which store to query and runs the shared query (lsLeaf's work) against
-// it. With no --at it opens the current workspace's store read-only; with --at
+// listSurface is one command name over the listing leaf. `ls` and `children`
+// are the same listing — one flag surface, one filter, one renderer — and differ
+// only in the positionals they take, each of which names a parent whose direct
+// children the listing selects. `lit children <id>` is therefore exactly
+// `lit ls --parent <id>`, and a fix to either is a fix to both.
+// [LAW:one-type-per-behavior]
+type listSurface struct {
+	name        string
+	positionals []string
+}
+
+var (
+	lsSurface       = listSurface{name: "ls"}
+	childrenSurface = listSurface{name: "children", positionals: []string{"<parent-id>"}}
+)
+
+// runList is the entrypoint for every listing surface. It declares and parses the
+// flag surface, then chooses which store to query and runs the shared query
+// (listLeaf's work) against it. With no --at it opens the current workspace's store read-only; with --at
 // <dir> it opens a foreign store by its storage directory (one of the paths `lit
 // stores` prints), WITHOUT depending on the current directory being a lit
 // workspace — this is the folded-in former `lit ls-at`, now `ls` scoped by a flag
@@ -361,11 +377,14 @@ type listScope struct {
 // that parse rather than rescanning argv — pflag is the one reader of the flag
 // grammar, so the `--` terminator and every other flag's arity are its rules alone.
 // [LAW:one-source-of-truth]
-func runList(ctx context.Context, stdout io.Writer, args []string) error {
-	l, atDir := lsLeaf()
+func runList(ctx context.Context, stdout io.Writer, surface listSurface, args []string) error {
+	l, atDir := listLeaf(surface)
 	positional, err := parseLeaf(l, args, stdout)
 	if err != nil {
 		return err
+	}
+	if len(positional) != len(surface.positionals) {
+		return UsageError{Message: strings.Join(append([]string{"usage: lit", surface.name}, surface.positionals...), " ")}
 	}
 	if l.fs.Changed(lsAtFlag) {
 		// pflag accepts any string as the value, so a flag-shaped one (`--at
@@ -374,7 +393,7 @@ func runList(ctx context.Context, stdout io.Writer, args []string) error {
 		// store layer as a directory to open. A bare `--at` never arrives: pflag
 		// itself refuses the missing argument at the parse above.
 		if strings.TrimSpace(*atDir) == "" || strings.HasPrefix(*atDir, "-") {
-			return UsageError{Message: "usage: lit ls --at <store-dir>  (a storage directory from `lit stores`)"}
+			return UsageError{Message: "usage: lit " + surface.name + " --at <store-dir>  (a storage directory from `lit stores`)"}
 		}
 		loc := workspace.LocationFromStorageDir(*atDir)
 		st, err := app.OpenLocationForRead(ctx, loc)
@@ -401,7 +420,7 @@ func runList(ctx context.Context, stdout io.Writer, args []string) error {
 	})
 }
 
-// lsLeaf declares the `ls` flag surface. It returns the --at value alongside the
+// listLeaf declares the listing flag surface. It returns the --at value alongside the
 // leaf because --at selects the store the work runs against, so runList must read
 // it between the parse and the work — the one flag whose value is routing rather
 // than query. Every other flag is read inside the work closure.
@@ -412,8 +431,8 @@ func runList(ctx context.Context, stdout io.Writer, args []string) error {
 // [LAW:one-source-of-truth]
 const lsAtFlag = "at"
 
-func lsLeaf() (leaf[listScope], *string) {
-	fs := newCobraFlagSet("ls")
+func listLeaf(surface listSurface) (leaf[listScope], *string) {
+	fs := newCobraFlagSet(surface.name)
 	at := fs.String(lsAtFlag, "", "List a discovered store by its storage directory (from `lit stores`), read-only, instead of the current workspace")
 	// StringArray, not String: the filter this feeds is a set both engines OR
 	// together, so a second --status has to widen the listing rather than
@@ -428,6 +447,7 @@ func lsLeaf() (leaf[listScope], *string) {
 	assignee := fs.String("assignee", "", "Filter by assignee")
 	search := fs.String("search", "", "Search title and description text")
 	ids := fs.String("ids", "", "Comma-separated issue IDs")
+	parent := fs.String("parent", "", "Only direct children of these comma-separated issue IDs (`lit children <id>` is `lit ls --parent <id>`)")
 	labels := fs.String("labels", "", "Comma-separated labels all of which must match")
 	hasComments := fs.Bool("has-comments", false, "Only include issues with comments")
 	includeArchived := fs.Bool("include-archived", false, "Include archived issues")
@@ -439,7 +459,7 @@ func lsLeaf() (leaf[listScope], *string) {
 	columnsExpr := fs.String("columns", "", columnsFlagUsage())
 	format := fs.String("format", "lines", "Output format: "+strings.Join(sortedListFormatNames(), "|"))
 	limit := fs.Int("limit", 0, "Limit results")
-	return leaf[listScope]{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope listScope, _ []string) error {
+	return leaf[listScope]{fs: fs, positionals: len(surface.positionals), work: func(ctx context.Context, stdout io.Writer, scope listScope, positional []string) error {
 		st, policy := scope.store, scope.policy
 		// Parsed before the query runs and before anything prints: a rejection that
 		// had already emitted rows would be a partial answer, which is the silent
@@ -462,9 +482,18 @@ func lsLeaf() (leaf[listScope], *string) {
 		if err != nil {
 			return fmt.Errorf("parse --type: %w", err)
 		}
+		// A surface's positionals are parent ids too, so `children <id>` and
+		// `ls --parent <id>` build the same filter. [LAW:one-source-of-truth]
+		parentIDs := append(splitCSV(*parent), positional...)
+		if visited["parent"] && len(parentIDs) == 0 {
+			// [LAW:no-silent-failure] `--parent ""` names no parent; dropping it
+			// would silently widen the listing to every issue.
+			return UsageError{Message: "--parent needs an issue id, e.g. --parent <epic-id>"}
+		}
 		filter := storage.ListIssuesFilter{
 			Statuses:        statuses,
 			IssueTypes:      issueTypes,
+			ParentIDs:       parentIDs,
 			Assignees:       toSlice(strings.TrimSpace(*assignee)),
 			IncludeArchived: *includeArchived,
 			IncludeDeleted:  *includeDeleted,

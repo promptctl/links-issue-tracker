@@ -42,6 +42,7 @@ func Merge(base storage.ListIssuesFilter, incoming storage.ListIssuesFilter) (st
 	filter.Assignees = mergeSlice(filter.Assignees, incoming.Assignees)
 	filter.SearchTerms = append(filter.SearchTerms, incoming.SearchTerms...)
 	filter.IDs = append(filter.IDs, incoming.IDs...)
+	filter.ParentIDs = mergeSlice(filter.ParentIDs, incoming.ParentIDs)
 	filter.LabelsAll = append(filter.LabelsAll, incoming.LabelsAll...)
 	if err := mergeBoolPointer("has-comments", &filter.HasComments, incoming.HasComments); err != nil {
 		return storage.ListIssuesFilter{}, err
@@ -107,6 +108,17 @@ func applyTerm(filter *storage.ListIssuesFilter, term string) error {
 		return nil
 	case strings.HasPrefix(term, "id:"):
 		filter.IDs = append(filter.IDs, strings.TrimSpace(strings.TrimPrefix(term, "id:")))
+		return nil
+	case strings.HasPrefix(term, "parent:"):
+		id := strings.TrimSpace(strings.TrimPrefix(term, "parent:"))
+		if id == "" {
+			// [LAW:no-silent-failure] A bare `parent:` names no parent; dropping it
+			// would silently widen the listing to every issue. Typed as a
+			// validation refusal: it repeats on every retry, so it must not be
+			// answered with retry advice.
+			return storage.ValidationError{Message: "parent: needs an issue id, e.g. parent:<epic-id>"}
+		}
+		filter.ParentIDs = append(filter.ParentIDs, id)
 		return nil
 	case strings.HasPrefix(term, "label:"):
 		filter.LabelsAll = append(filter.LabelsAll, strings.TrimSpace(strings.TrimPrefix(term, "label:")))

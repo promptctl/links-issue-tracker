@@ -41,10 +41,6 @@ type IssueReader interface {
 	// where an engine gets them rather than restating them.
 	ListIssues(ctx context.Context, filter ListIssuesFilter) ([]model.Issue, error)
 
-	// ListChildren returns one epic's children in rank order. An id with no
-	// children yields an empty slice; only an unreadable store is an error.
-	ListChildren(ctx context.Context, parentID string) ([]model.Issue, error)
-
 	// ListTopics returns the distinct non-empty topics live issues carry,
 	// ascending. It is a derived vocabulary, never a stored one.
 	ListTopics(ctx context.Context) ([]string, error)

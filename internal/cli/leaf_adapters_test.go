@@ -65,8 +65,11 @@ func runOrphaned(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	return runLeaf(orphanedLeaf(), ctx, stdout, ap, args)
 }
 
+// runChildren drives `children` against the workspace store the test opened —
+// the listing leaf under its children surface, exactly as `lit children` runs it.
 func runChildren(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	return runLeaf(childrenLeaf(), ctx, stdout, ap, args)
+	l, _ := listLeaf(childrenSurface)
+	return runLeaf(l, ctx, stdout, listScope{store: ap.Store, policy: workspaceReadyPolicy(ap)}, args)
 }
 
 func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
@@ -178,6 +181,6 @@ func runDowngradeWith(
 // runListWithStore drives `ls` against a store the test has already opened —
 // the same seam runList hands its two acquisition paths to.
 func runListWithStore(ctx context.Context, stdout io.Writer, st storage.Store, policy readyPolicy, args []string) error {
-	l, _ := lsLeaf() // the store is supplied here, so --at has nothing to route
+	l, _ := listLeaf(lsSurface) // the store is supplied here, so --at has nothing to route
 	return runLeaf(l, ctx, stdout, listScope{store: st, policy: policy}, args)
 }

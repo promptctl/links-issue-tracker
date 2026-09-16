@@ -171,6 +171,7 @@ var cases = []engineCase{
 	{"one_issues_history_matches_the_whole_log", oneIssuesHistoryMatchesTheWholeLog},
 	{"list_defaults_to_rank_order", listDefaultsToRankOrder},
 	{"list_filters_select", listFiltersSelect},
+	{"list_by_parent", listByParent},
 	{"list_hides_archived_and_deleted", listHidesArchivedAndDeleted},
 	{"list_sorts_and_limits", listSortsAndLimits},
 	{"list_breaks_sort_ties_by_id", listBreaksSortTiesByID},
@@ -750,6 +751,40 @@ func listFiltersSelect(t *testing.T, ctx context.Context, st storage.Store, clk 
 		got := mustList(t, ctx, st, tc.filter)
 		assertIssueIDs(t, tc.name, got, tc.want)
 	}
+}
+
+func listByParent(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	other := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "other epic", Topic: "core", IssueType: model.TypeEpic})
+	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first", Topic: "core", ParentID: epic.ID})
+	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second", Topic: "core", ParentID: epic.ID})
+	grandchild := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "grandchild", Topic: "core", ParentID: second.ID})
+	cousin := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "cousin", Topic: "core", ParentID: other.ID})
+	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "loose", Topic: "core"})
+	if _, err := st.Apply(ctx, first.ID, storage.Change{Action: model.Start{Assignee: "ada"}, Actor: "ada"}); err != nil {
+		t.Fatalf("Apply start error = %v", err)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		filter storage.ListIssuesFilter
+		want   []string
+	}{
+		// Direct children only, in the canonical rank order: the grandchild
+		// belongs to second, not to the epic.
+		{"direct children of one parent", storage.ListIssuesFilter{ParentIDs: []string{epic.ID}}, []string{first.ID, second.ID}},
+		{"a child can itself be a parent", storage.ListIssuesFilter{ParentIDs: []string{second.ID}}, []string{grandchild.ID}},
+		{"a leaf parent has no children", storage.ListIssuesFilter{ParentIDs: []string{cousin.ID}}, nil},
+		{"parents union", storage.ListIssuesFilter{ParentIDs: []string{epic.ID, other.ID}}, []string{first.ID, second.ID, cousin.ID}},
+		{"parent intersects another axis", storage.ListIssuesFilter{ParentIDs: []string{epic.ID}, Statuses: []model.State{model.StateInProgress}}, []string{first.ID}},
+	} {
+		assertIssueIDs(t, tc.name, mustList(t, ctx, st, tc.filter), tc.want)
+	}
+
+	// An unknown parent is not a parent with no children: the listing says so
+	// rather than answering with the empty list a childless parent gets.
+	_, err := st.ListIssues(ctx, storage.ListIssuesFilter{ParentIDs: []string{epic.ID, "no-such-issue"}})
+	assertNotFound(t, err, "issue", "ListIssues under a missing parent")
 }
 
 func listHidesArchivedAndDeleted(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
@@ -2008,13 +2043,11 @@ func mustGet(t *testing.T, ctx context.Context, st storage.Store, id string) mod
 	return issue
 }
 
+// mustChildren lists every child of parentID the edge records, in every
+// retention state, so a membership assertion is never narrowed by visibility.
 func mustChildren(t *testing.T, ctx context.Context, st storage.Store, parentID string) []model.Issue {
 	t.Helper()
-	children, err := st.ListChildren(ctx, parentID)
-	if err != nil {
-		t.Fatalf("ListChildren(%q) error = %v", parentID, err)
-	}
-	return children
+	return mustList(t, ctx, st, storage.ListIssuesFilter{ParentIDs: []string{parentID}, IncludeArchived: true, IncludeDeleted: true})
 }
 
 func mustEvents(t *testing.T, ctx context.Context, st storage.Store) []model.IssueEvent {

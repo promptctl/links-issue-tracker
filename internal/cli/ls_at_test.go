@@ -64,7 +64,7 @@ func TestLsAtListsForeignStoreIssues(t *testing.T) {
 	storeDir, issueID := foreignStore(t, "ws-foreign", "proj")
 
 	var out bytes.Buffer
-	if err := runList(context.Background(), &out, []string{"--at", storeDir}); err != nil {
+	if err := runList(context.Background(), &out, lsSurface, []string{"--at", storeDir}); err != nil {
 		t.Fatalf("ls --at error = %v", err)
 	}
 	if !strings.Contains(out.String(), issueID) {
@@ -80,7 +80,7 @@ func TestLsAtLeavesStoreWritable(t *testing.T) {
 	storeDir, _ := foreignStore(t, "ws-foreign", "proj")
 
 	var out bytes.Buffer
-	if err := runList(context.Background(), &out, []string{"--at", storeDir}); err != nil {
+	if err := runList(context.Background(), &out, lsSurface, []string{"--at", storeDir}); err != nil {
 		t.Fatalf("ls --at error = %v", err)
 	}
 
@@ -174,7 +174,7 @@ func TestLsAtRejectsMissingStore(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "nope", "links")
 
 	var out bytes.Buffer
-	err := runList(context.Background(), &out, []string{"--at", missing})
+	err := runList(context.Background(), &out, lsSurface, []string{"--at", missing})
 	if err == nil {
 		t.Fatalf("ls --at (missing) returned nil error with output %q; want a surfaced failure", out.String())
 	}
@@ -211,7 +211,7 @@ func TestLsAtRejectsEmptyOrFlagShapedDir(t *testing.T) {
 	}
 	for _, tc := range cases {
 		var out bytes.Buffer
-		err := runList(context.Background(), &out, tc.args)
+		err := runList(context.Background(), &out, lsSurface, tc.args)
 		if err == nil {
 			t.Fatalf("ls %v = nil error, want a usage error", tc.args)
 		}
@@ -239,7 +239,7 @@ func TestLsAtAfterTerminatorIsNotARoute(t *testing.T) {
 	chdir(t, t.TempDir()) // no workspace anywhere near the cwd
 
 	var out bytes.Buffer
-	err := runList(context.Background(), &out, []string{"--", "--at", storeDir})
+	err := runList(context.Background(), &out, lsSurface, []string{"--", "--at", storeDir})
 
 	// Routing would have listed the foreign store's issue; staying on the cwd
 	// means the workspace acquisition refuses instead.

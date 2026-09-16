@@ -208,7 +208,7 @@ needs someone to finish or release it.
 ### `lit ls`
 
 ```text
-lit ls [--at <store-dir>] [--ids <csv>] [--search <text>] [--query <q>] [--status <csv of open|in_progress|closed>]
+lit ls [--at <store-dir>] [--ids <csv>] [--parent <csv>] [--search <text>] [--query <q>] [--status <csv of open|in_progress|closed>]
        [--type <t>] [--labels <csv>] [--assignee <a>] [--has-comments]
        [--updated-after <rfc3339>] [--updated-before <rfc3339>]
        [--include-archived] [--include-deleted]
@@ -229,13 +229,19 @@ text; `--query` is a compact query language combining filters and text (e.g.
 discrete filter and list-shaping flags: every flag above has an equivalent token, so
 `--query` alone can express any filter. The token spellings are `status:` (e.g.
 `status:closed,in_progress`, comma-separate multiple states),
-`resolution:`, `type:`, `assignee:`, `id:`, `label:`, `has:comments`,
+`resolution:`, `type:`, `assignee:`, `id:`, `parent:`, `label:`, `has:comments`,
 `updated>=`/`updated<=`, `sort:` (e.g. `sort:rank:asc`, comma-separate multiple keys),
 `limit:` (e.g. `limit:5`), and the bare keywords `archived` and `deleted` (the
 `--include-archived` / `--include-deleted` equivalents). Any bare word that is not a
 recognized token is a search term. Archived and deleted issues are hidden unless
 explicitly included. Output-shaping flags (`--columns`, `--format`) have no token —
 they are not filter concerns.
+
+`--parent <csv>` (token `parent:<id>`) keeps only the direct children of the named
+issues, read from the parent-child edge, so a grandchild is not listed. An id that
+names no issue is a not-found error (exit 4) rather than an empty listing, and an
+empty `--parent` or a bare `parent:` is refused rather than ignored.
+`lit children <id>` is this same listing under its own name.
 
 `--status` takes a set, not one state: `--status closed,in_progress` and the
 repeated `--status closed --status in_progress` are the same request, and both
@@ -527,12 +533,19 @@ they are two faces of one edge, not two writers.
 ### `lit children`
 
 ```text
-lit children <parent-id>
+lit children <parent-id> [any lit ls flag]
 ```
 
-Lists an issue's children in rank order — the ergonomic ranked read of the
-parent-child edge that `lit dep ls <parent> --type parent-child` also exposes as
-raw incident edges. Kept as a convenience distinct from the raw edge list.
+`lit children <parent-id>` is `lit ls --parent <parent-id>` under its own name: it
+lists the issue's direct children in rank order and takes every `lit ls` flag
+(`--status`, `--query`, `--sort`, `--limit`, `--columns`, `--format`, `--at`, and
+the rest), printing exactly what the matching `lit ls --parent` command prints. It
+therefore applies the same defaults as `ls`: closed children are hidden unless a
+status or resolution filter asks for them (`--status open,in_progress,closed`),
+archived and deleted children are hidden unless `--include-archived` /
+`--include-deleted` is given, and the columns are `id,state,topic,title`. A parent id
+that names no issue exits 4. `lit dep ls <parent> --type parent-child` reads the same
+edge as raw incident edges.
 
 ---
 

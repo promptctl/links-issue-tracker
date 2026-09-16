@@ -490,30 +490,3 @@ func (s *Store) ClearParent(ctx context.Context, childID string) error {
 		return nil
 	})
 }
-
-func (s *Store) ListChildren(ctx context.Context, parentID string) ([]model.Issue, error) {
-	if _, err := s.GetIssue(ctx, parentID); err != nil {
-		return nil, err
-	}
-	rows, err := s.db.QueryContext(ctx, `SELECT `+issueColumnsQualified+`
-		FROM relations r
-		JOIN issues i ON i.id = r.src_id
-		WHERE r.type = 'parent-child' AND r.dst_id = ?
-		ORDER BY i.item_rank ASC, i.id ASC`, parentID)
-	if err != nil {
-		return nil, fmt.Errorf("list children: %w", err)
-	}
-	defer rows.Close()
-	children := []issueRow{}
-	for rows.Next() {
-		issue, err := scanIssue(rows)
-		if err != nil {
-			return nil, err
-		}
-		children = append(children, issue)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return s.hydrateIssues(ctx, children)
-}
