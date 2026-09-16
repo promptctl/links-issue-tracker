@@ -397,7 +397,7 @@ not `closed` (`cli.go:1151-1160`). Epics are therefore never workable rows.
    (`ready_state.go:66-71`). For each unset required field it emits a
    `MissingField` annotation (`ready_state.go:72-87`). "Set" means: non-nil, and
    for strings non-blank, for arrays/maps non-empty; anything else counts as set
-   (`isRequiredFieldSet`, `ready_state.go:617-630`).
+   (`isRequiredFieldSet`, `ready_state.go:672-685`).
 2. `newBlockerAnnotator(details, ancestry)` — for each `DependsOn` that is
    `InPlay()`, sorted by ID, emits `OpenDependency{Message: dep.ID}`; and
    additionally `RankInversion{Message: dep.ID}` when `dep.Rank > issue.Rank`.
@@ -428,24 +428,34 @@ not `closed` (`cli.go:1151-1160`). Epics are therefore never workable rows.
 4. `newOrphanedAnnotator(orphanedThreshold)` — only for `in_progress` issues with
    `time.Since(UpdatedAt) >= 6h`; message
    `"in_progress for <dur truncated to minute> with no update"`
-   (`ready_state.go:575-589`; threshold constant `orphanedThreshold = 6 * time.Hour`
+   (`ready_state.go:630-644`; threshold constant `orphanedThreshold = 6 * time.Hour`
    at `ready_state.go:49`).
 5. `newNeedsDesignAnnotator()` — emits `NeedsDesign` for any issue carrying the
    label `needs-design` (`ready_state.go:23`, `:30-42`).
 6. `newFocusPathAnnotator(focusPaths)` — emits `FocusPath{Message: goalID}` for
-   issues on a focused goal's prerequisite closure (`ready_state.go:560-571`).
+   issues on a focused goal's prerequisite closure (`ready_state.go:654-673`).
 
-**Focus path derivation** (`fetchFocusPathGoals`, `ready_state.go:441-518`):
+**Focus path derivation** (`fetchFocusPathGoals`, `ready_state.go:486-528`):
 goals are issues with `Statuses=[open,in_progress]` and label `focus`
-(`FocusLabel = "focus"`, `ready_state.go:410`; query at `:442-445`). BFS over the
-prerequisite DAG: an issue's prerequisites are its `InPlay()` `DependsOn`, plus
-its `inheritedDependencies` over the level's `fetchContainerAncestry` (loaded
-through the same memo, blockers included), plus — if it is a container — its `InPlay()` children,
-plus its earlier same-lane
-`InPlay()` siblings (`:484-506`). The `path` map doubles as the visited set, so
-shared prerequisites attribute to the first goal reached and cycles terminate
-(`:461-463`). Relations are memoized through `relationsByID` (`:527-551`); a
-frontier id missing from the store → `storage.NotFoundError` (`:479-483`).
+(`FocusLabel = "focus"`, `ready_state.go:456`; query at `:487-490`). BFS over the
+prerequisite DAG, one `fetchWaitLinks` expansion per level (`:509-526`). The
+`path` map doubles as the visited set, so shared prerequisites attribute to the
+first goal reached and cycles terminate. Relations are memoized through
+`relationsByID` (`:629-652`).
+
+**Wait links** (`fetchWaitLinks`, `ready_state.go:575-620`): for each frontier
+issue, in frontier order, a `waitLink{waiter, prereq, kind}` (`:531-545`) for
+each `InPlay()` `DependsOn` (`waitsOnDependency`), each `inheritedDependencies`
+entry over the frontier's `fetchContainerAncestry` (`waitsOnEpicBlocker`), each
+`InPlay()` child of a container (`waitsOnChild`), and each earlier same-lane
+`InPlay()` sibling under a container parent (`waitsOnLaneMate`). A frontier id
+missing from the fetch → `storage.NotFoundError` (`:591`). `String()` renders
+`"<a> depends on <b>"`, `"<a> depends on <b> (via epic)"`,
+`"epic <a> waits on its child <b>"`, or
+`"<a> waits on its earlier lane-mate <b>"` (`:547-558`). `holds()` is true
+unless the waiter is a container and the kind is not `waitsOnChild`
+(`:563-565`): the focus walk follows every link, the wait-loop refusal only
+links that hold.
 
 **Step 4 — readiness classification** (`ClassifyReadiness`, `readiness.go:131-148`):
 each annotation is dispatched on its declared `ReadinessRole`:
@@ -469,19 +479,19 @@ lines (`readiness.go:80-121`).
 1. `sortByCompositeRank(rows, details)` — stable sort by
    (effective epic rank, own rank); a leaf whose parent is a container uses the
    parent's rank as its epic-position, otherwise its own rank
-   (`ready_state.go:660-675`).
+   (`ready_state.go:715-730`).
 2. `sortByPriority` — stable, urgent (higher `Priority`) first
-   (`ready_state.go:681-685`).
+   (`ready_state.go:736-740`).
 3. `sortByFocusPath` — stable, rows carrying a `FocusPath` annotation first;
-   layered last so focus outranks urgent (`ready_state.go:700-707`).
+   layered last so focus outranks urgent (`ready_state.go:755-762`).
 Then `enrichWithParentEpic` sets `ParentEpic{ID,Title}` on rows whose parent is a
-container (`ready_state.go:638-649`).
+container (`ready_state.go:693-704`).
 
-**Partition used by rollups**: `partitionWorkable` (`ready_state.go:752-765`):
+**Partition used by rollups**: `partitionWorkable` (`ready_state.go:807-820`):
 `in_progress` state wins first (even if also blocked); else not-ready → blocked;
 else ready.
 
-`applyLimit(issues, limit)` truncates when `limit > 0` (`ready_state.go:709-714`).
+`applyLimit(issues, limit)` truncates when `limit > 0` (`ready_state.go:764-769`).
 
 ---
 
@@ -1154,14 +1164,14 @@ Use 'lit next' to pick the top workable item to start.
      blocked line nor the depends-on line.
    - `    depends on: <ids joined by ", ">` (`backlog.go:84`, `output.go:41-47`)
    - `    in_progress: <age truncated to minute>[ (ORPHANED)]` for in-progress
-     rows (`backlog.go:87-91`, `inProgressSuffix` at `ready_state.go:786-793`)
+     rows (`backlog.go:87-91`, `inProgressSuffix` at `ready_state.go:841-848`)
    - `    <claim line>` when the row's lane is Held or Stale (`backlog.go:92-96`)
    - `    unblocks: <ids of rows that depend on this one>` — derived from the
      classified open-dependency facts of the listed rows only
-     (`backlog.go:97`, `buildUnblocksMap` at `ready_state.go:734-742`)
+     (`backlog.go:97`, `buildUnblocksMap` at `ready_state.go:789-797`)
 6. Finally, if any row carries a `RankInversion` annotation:
    `"\nWarning: %d rank inversion(s) — dependencies ranked below their dependents. Run `lit doctor --fix` to repair. <agent-instructions>This command is idempotent and safe to run without confirmation.</agent-instructions>\n"`
-   (`printRankInversions`, `ready_state.go:797-807`).
+   (`printRankInversions`, `ready_state.go:852-862`).
 
 Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
 (`backlog.go:58`).
@@ -1196,7 +1206,7 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
   context (`next.go:67`), then routes (`next.go:71`):
   `routeNext(rows, details, cc.standings, cc.self, focus.scopeFor(*all))`.
   `scopeFor(true)` returns the zero `focusScope`, which holds every row
-  (`ready_state.go:681-686`, `ready_state.go:663`, `ready_state.go:673-675`).
+  (`ready_state.go:736-741`, `ready_state.go:718`, `ready_state.go:728-730`).
 
 **`NextOutcome`** — a sealed sum interface (`next_route.go:26`,
 `next_route.go:179-184`) with **six** cases:
@@ -1276,7 +1286,7 @@ Step 4 is reached only by a checkout holding no lanes, which starts there
 directly:
 
 4. **The global pool, focus-scoped.** `pool, offPath := scope.partition(rows)`
-   (`next_route.go:385`, `ready_state.go:693-702`), then
+   (`next_route.go:385`, `ready_state.go:748-757`), then
    `pickFrom(pool, func(model.LaneID) bool { return true }, serveWork, takeoverWork)` →
    **`ServedFromNewLane{Row, Lane: laneOf(row)}`** (`next_route.go:386-388`).
    Else → **`NoWork{Unreachable: append(passedOver(pool, reachFor), withheldByScope(offPath)...)}`**
@@ -1362,10 +1372,10 @@ selected by the row's state and by whether `lane.Describe()` reports a named lan
 On a served row, `renderNextOutcome` calls `printNextSummary(w, row, cc, lane)`
 with `lane = model.LaneOf(row.Issue, details[row.ID].Parent)` (`next.go:130-133`),
 which prints the **default columns** (`id state topic title`) joined by two
-spaces (`ready_state.go:833-839`, `columns.go:158-160`), then `printInlineDeps`
-(`ready_state.go:890-903`): `    epic: …`, `    depends on: …`, the claim line,
+spaces (`ready_state.go:888-894`, `columns.go:158-160`), then `printInlineDeps`
+(`ready_state.go:945-958`): `    epic: …`, `    depends on: …`, the claim line,
 and `    unblocks: …` — but `next` passes a **nil** unblocks map, so the unblocks
-line never appears (`ready_state.go:838`). It then returns
+line never appears (`ready_state.go:893`). It then returns
 `nextPulledOccasion(row.Issue)` (`next.go:134`, `workflow_events.go:39-45`),
 dispatched as `EventNextPulled` (`next.go:75`).
 
@@ -1490,7 +1500,7 @@ Family `parentFamily`, usage `"usage: lit parent <set|clear> ..."`
   (`issue_relations.go:82-86`).
 - Output: the edge rendered through the *same* projection `dep` uses —
   `"<child> --child-of--> <parent>"` (`issue_relations.go:98`, via
-  `depRelationForCLI`/`depRelationLine`, `dependency.go:141-144`, `:292-303`) —
+  `depRelationForCLI`/`depRelationLine`, `dependency.go:141-144`, `:348-359`) —
   then the `update` breadcrumb.
 
 **`lit parent clear <child-id>`** (`issue_relations.go:105-119`):
@@ -1528,26 +1538,32 @@ Family `depFamily`, usage `"usage: lit dep <add|rm|ls> ..."` (`dependency.go:15-
      (`issueEpicID`, `dependency.go:164-179`). Two floating issues are not
      same-epic (`dependency.go:162`).
   5. For `blocks` and `parent-child`: `rejectWaitCycle` refuses an edge that
-     would close a wait cycle through an epic's hold on its children, as a
-     `ValidationError` → exit 3 (`dependency.go:55-57`, `:197-241`). A `blocks`
-     edge makes `--to` wait on `--from`. A `parent-child` edge makes `--to` hold
-     back `--from` when `--to` is a container (`Store.GetIssue`); any other
-     parent, and `related-to`, add no wait and pass. `findWaitPath` walks
-     breadth-first from the issue the edge puts second, one `GetRelationsByIDs`
-     call per step, along each issue's `Blocks` and, for a container, its
-     `Children`, and returns a shortest path to the issue the edge puts first
-     (`:243-279`; `tracePath`, `:281-290`). The edge is refused when a path
-     exists and either the path or the new edge contains a hold. A path of
-     `blocks` edges closed by a `blocks` edge passes; the store's cycle check then
-     refuses it (exit 1). Message:
-     `"refusing <edge>: <first> already waits on <second> (<steps>), so this edge would close a loop. A blocks edge onto an epic holds back every issue under that epic"`,
-     each step and the edge rendered `"<a> blocks <b>"` or
-     `"epic <a> holds back <b>"` (`waitLink`, `:181-195`).
+     would leave unfinished issues waiting on each other forever, as a
+     `ValidationError` → exit 3 (`dependency.go:55-57`, `:248-315`).
+     `proposeEdge` (`:199-246`) returns a `pendingEdge{name, patch, pivot}`
+     (`:185-189`), fetching both endpoints (missing → `storage.NotFoundError`).
+     A `blocks` edge appends `--from` to `--to`'s `DependsOn`. A `parent-child`
+     edge onto a container sets `--from`'s `Parent` to `--to`, appends `--from`
+     to `--to`'s `Children` and drops it from every other issue's `Children`;
+     onto any other parent, and for `related-to`, there is no edge to check and
+     the step passes. The pivot is `--from`. Relations are memoized through
+     `relationsByID`; the patched view applies `patch` to every fetched
+     relation. The starts are the pivot plus the pivot's
+     `inheritedDependencies` in the patched view. For each start, `findWaitLoop`
+     (`:317-346`) walks `fetchWaitLinks` breadth-first over links that
+     `holds()`, in the patched view, and returns a shortest loop back to the
+     start. The edge is refused on the first start with such a loop, unless the
+     loop is all `waitsOnDependency` links and the edge is `blocks` (the store's
+     cycle check refuses that, exit 1), or the unpatched view already has a loop
+     through that start. Message:
+     `"refusing <edge>, which would leave issues waiting on each other forever: <links>"`,
+     the edge rendered `"<from> blocks <to>"` or `"<from> under epic <to>"` and
+     the links by `waitLink.String()`, joined with `", "`.
 - Endpoint orientation: `rt.StoreEndpoints(from, to)` swaps the pair for `blocks`
   (stored dependent→dependency) and is an involution
   (`dependency.go:60`, `internal/model/relation_type.go:39-44`).
 - Output: `depRelationLine(depRelationForCLI(rel))` then the `update` breadcrumb
-  (`dependency.go:65-69`). Line formats (`dependency.go:292-303`):
+  (`dependency.go:65-69`). Line formats (`dependency.go:348-359`):
   - `blocks` → `"<src> --blocks--> <dst>"`
   - `parent-child` → `"<src> --child-of--> <dst>"`
   - `related-to` → `"<src> --related-to--> <dst>"`

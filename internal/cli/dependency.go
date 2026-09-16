@@ -178,115 +178,171 @@ func issueEpicID(ctx context.Context, ap *app.App, issueID string) (string, erro
 	return "", nil
 }
 
-// waitLink is one step along which readiness makes an issue wait: a blocks
-// edge, or an epic holding back a child. A blocks edge onto an epic gates every
-// issue under that epic (links-epic-block-xpkz), so an epic's hold carries the
-// epic's blockers down to its children.
-type waitLink struct {
-	before, after string
-	hold          bool
+// pendingEdge is an edge `lit dep add` or `lit parent set` is about to write:
+// how a refusal names it, how it changes the relations of each issue it
+// touches, and the issue every link it adds reaches, directly or through the
+// blockers that issue inherits.
+type pendingEdge struct {
+	name  string
+	patch func(storage.IssueRelations) storage.IssueRelations
+	pivot string
 }
 
-func (l waitLink) String() string {
-	if l.hold {
-		return fmt.Sprintf("epic %s holds back %s", l.before, l.after)
+// proposeEdge describes the edge rt, from, to as `lit dep add` takes it, and
+// reports false when the edge adds no link readiness waits on. A blocks edge
+// makes to depend on from, so every link it adds, to to or to an issue under
+// it, reaches from. A parent-child edge puts from under to: the epic waits on
+// it, it waits on the epic's blockers and its earlier lane-mates, its later
+// lane-mates wait on it, and when it is an epic its own children inherit the
+// new blockers, so every added link reaches from or one of those blockers. A
+// parent that is not an epic adds none of these.
+func proposeEdge(ctx context.Context, fetch relationsFetch, rt model.RelationType, from, to string) (pendingEdge, bool, error) {
+	if rt != model.RelBlocks && rt != model.RelParentChild {
+		return pendingEdge{}, false, nil
 	}
-	return fmt.Sprintf("%s blocks %s", l.before, l.after)
+	rels, err := fetch(ctx, []string{from, to})
+	if err != nil {
+		return pendingEdge{}, false, err
+	}
+	for _, id := range []string{from, to} {
+		if _, ok := rels[id]; !ok {
+			return pendingEdge{}, false, storage.NotFoundError{Entity: "issue", ID: id}
+		}
+	}
+	fromIssue, toIssue := rels[from].Issue, rels[to].Issue
+	if rt == model.RelBlocks {
+		return pendingEdge{
+			name:  fmt.Sprintf("%s blocks %s", from, to),
+			pivot: from,
+			patch: func(rel storage.IssueRelations) storage.IssueRelations {
+				if rel.Issue.ID == to {
+					rel.DependsOn = slices.Concat(rel.DependsOn, []model.Issue{fromIssue})
+				}
+				return rel
+			},
+		}, true, nil
+	}
+	if !toIssue.IsContainer() {
+		return pendingEdge{}, false, nil
+	}
+	withoutChild := func(children []model.Issue) []model.Issue {
+		return slices.DeleteFunc(slices.Clone(children), func(c model.Issue) bool { return c.ID == from })
+	}
+	return pendingEdge{
+		name:  fmt.Sprintf("%s under epic %s", from, to),
+		pivot: from,
+		patch: func(rel storage.IssueRelations) storage.IssueRelations {
+			switch rel.Issue.ID {
+			case from:
+				rel.Parent = &toIssue
+			case to:
+				rel.Children = append(withoutChild(rel.Children), fromIssue)
+			default:
+				rel.Children = withoutChild(rel.Children)
+			}
+			return rel
+		},
+	}, true, nil
 }
 
 // rejectWaitCycle refuses an edge that would leave issues waiting on each other
-// forever. The store already refuses a cycle of blocks edges alone, which rank
-// order needs, and it keeps that refusal. This check adds only the cycles that
-// pass through an epic's hold, which the store's graph does not contain. Before
-// this check, `lit dep add --from gate --to epic` followed by `lit dep add --from
-// child --to gate` was accepted, and the child and the gate then waited on each
-// other with nothing to break the loop.
+// forever. It reads the relations as they will be once the edge is written and
+// walks the links readiness gates on (fetchWaitLinks), so the loops it refuses
+// are the ones readiness would deadlock in, whether they run through an epic's
+// blockers, an epic waiting on its children, or lane order, and closed issues
+// are never part of one. Before this check, `lit dep add --from gate --to epic`
+// followed by `lit dep add --from child --to gate` was accepted, and the child
+// and the gate then waited on each other with nothing to break the loop.
 //
-// rt, from and to name the edge as `lit dep add` takes it. A blocks edge makes
-// to wait on from. A parent-child edge onto an epic makes the epic hold back
-// from. A parent that is not an epic holds nothing back. The edge closes a cycle
-// when the issue it puts second already comes before the one it puts first.
+// A loop that is already there without the edge is not this edge's to refuse.
+// A loop of blocks edges alone, closed by a blocks edge, is the store's: it
+// refuses every such cycle, which rank order needs. [LAW:single-enforcer]
 func rejectWaitCycle(ctx context.Context, st storage.Store, rt model.RelationType, from, to string) error {
-	var link waitLink
-	switch rt {
-	case model.RelBlocks:
-		link = waitLink{before: from, after: to}
-	case model.RelParentChild:
-		parent, err := st.GetIssue(ctx, to)
-		if err != nil {
-			return err
-		}
-		if !parent.IsContainer() {
-			return nil
-		}
-		link = waitLink{before: to, after: from, hold: true}
-	default:
-		return nil
+	cache := map[string]storage.IssueRelations{}
+	before := func(ctx context.Context, ids []string) (map[string]storage.IssueRelations, error) {
+		return relationsByID(ctx, st.GetRelationsByIDs, cache, ids)
 	}
-	path, err := findWaitPath(ctx, st, link.after, link.before)
+	edge, adds, err := proposeEdge(ctx, before, rt, from, to)
+	if err != nil || !adds {
+		return err
+	}
+	after := func(ctx context.Context, ids []string) (map[string]storage.IssueRelations, error) {
+		rels, err := before(ctx, ids)
+		if err != nil {
+			return nil, err
+		}
+		patched := make(map[string]storage.IssueRelations, len(rels))
+		for id, rel := range rels {
+			patched[id] = edge.patch(rel)
+		}
+		return patched, nil
+	}
+	pivot, err := after(ctx, []string{edge.pivot})
 	if err != nil {
 		return err
 	}
-	// A path of blocks edges alone, closed by a blocks edge, is the store's
-	// refusal to make. [LAW:single-enforcer]
-	throughHold := link.hold || slices.ContainsFunc(path, func(l waitLink) bool { return l.hold })
-	if path == nil || !throughHold {
-		return nil
+	ancestry, err := fetchContainerAncestry(ctx, after, pivot)
+	if err != nil {
+		return err
 	}
-	steps := make([]string, len(path))
-	for i, l := range path {
-		steps[i] = l.String()
+	starts := []string{edge.pivot}
+	for _, gate := range ancestry.inheritedDependencies(pivot[edge.pivot]) {
+		starts = append(starts, gate.ID)
 	}
-	return ValidationError{Message: fmt.Sprintf("refusing %s: %s already waits on %s (%s), so this edge would close a loop. A blocks edge onto an epic holds back every issue under that epic", link, link.before, link.after, strings.Join(steps, ", "))}
+	for _, start := range starts {
+		loop, err := findWaitLoop(ctx, after, start)
+		if err != nil {
+			return err
+		}
+		blocksOnly := rt == model.RelBlocks && !slices.ContainsFunc(loop, func(l waitLink) bool { return l.kind != waitsOnDependency })
+		if loop == nil || blocksOnly {
+			continue
+		}
+		existing, err := findWaitLoop(ctx, before, start)
+		if err != nil {
+			return err
+		}
+		if existing != nil {
+			continue
+		}
+		steps := make([]string, len(loop))
+		for i, l := range loop {
+			steps[i] = l.String()
+		}
+		return ValidationError{Message: fmt.Sprintf("refusing %s, which would leave issues waiting on each other forever: %s", edge.name, strings.Join(steps, ", "))}
+	}
+	return nil
 }
 
-// findWaitPath returns the steps by which start already comes before goal, in
-// order, or nil when it does not. It walks breadth-first, one batched relations
-// query per step, so the path it returns is a shortest one.
-func findWaitPath(ctx context.Context, st storage.Store, start, goal string) ([]waitLink, error) {
-	reached := map[string]waitLink{start: {}}
+// findWaitLoop returns a shortest loop of links that hold their waiter, from
+// start back to start in waiting order, or nil when there is none. It walks
+// breadth-first, one fetchWaitLinks expansion per step.
+func findWaitLoop(ctx context.Context, fetch relationsFetch, start string) ([]waitLink, error) {
+	reachedBy := map[string]waitLink{}
 	for frontier := []string{start}; len(frontier) > 0; {
-		relations, err := st.GetRelationsByIDs(ctx, frontier)
+		links, err := fetchWaitLinks(ctx, fetch, frontier)
 		if err != nil {
 			return nil, err
 		}
 		var next []string
-		for _, id := range frontier {
-			rel := relations[id]
-			links := make([]waitLink, 0, len(rel.Blocks)+len(rel.Children))
-			for _, dependent := range rel.Blocks {
-				links = append(links, waitLink{before: id, after: dependent.ID})
+		for _, link := range links {
+			if _, seen := reachedBy[link.prereq]; seen || !link.holds() {
+				continue
 			}
-			if rel.Issue.IsContainer() {
-				for _, child := range rel.Children {
-					links = append(links, waitLink{before: id, after: child.ID, hold: true})
+			reachedBy[link.prereq] = link
+			if link.prereq == start {
+				loop := []waitLink{link}
+				for id := link.waiter.ID; id != start; id = reachedBy[id].waiter.ID {
+					loop = append(loop, reachedBy[id])
 				}
+				slices.Reverse(loop)
+				return loop, nil
 			}
-			for _, l := range links {
-				if _, seen := reached[l.after]; seen {
-					continue
-				}
-				reached[l.after] = l
-				if l.after == goal {
-					return tracePath(reached, start, goal), nil
-				}
-				next = append(next, l.after)
-			}
+			next = append(next, link.prereq)
 		}
 		frontier = next
 	}
 	return nil, nil
-}
-
-// tracePath follows the links findWaitPath recorded back from goal to start and
-// returns them in walking order.
-func tracePath(reached map[string]waitLink, start, goal string) []waitLink {
-	var path []waitLink
-	for id := goal; id != start; id = reached[id].before {
-		path = append(path, reached[id])
-	}
-	slices.Reverse(path)
-	return path
 }
 
 func depRelationLine(rel model.Relation) string {
