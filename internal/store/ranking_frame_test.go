@@ -813,3 +813,38 @@ func TestFrameResolutionRefusesADeletedNamedIssue(t *testing.T) {
 		t.Fatalf("rankPairTx accepted the deleted %s by substituting its epic %s; want a refusal", child.ID, fx.epic.ID)
 	}
 }
+
+// An unranked anchor has no place in the order to stand beside. Its "" once
+// reached rank.Midpoint as an open end, so a move above it landed at the
+// keyspace's midpoint and a move below it above every ranked issue, each
+// reported as a success.
+func TestRelativeMoveRefusesAnUnrankedAnchor(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	moved := createRankTestIssue(t, ctx, st, "Moved")
+	anchor := createRankTestIssue(t, ctx, st, "Anchor")
+	createRankTestIssue(t, ctx, st, "Other")
+	if err := st.ExecRawForTest(ctx, "UPDATE issues SET item_rank = '' WHERE id = ?", anchor); err != nil {
+		t.Fatalf("unrank the anchor: %v", err)
+	}
+	before, err := st.GetIssue(ctx, moved)
+	if err != nil {
+		t.Fatalf("GetIssue(%s) error = %v", moved, err)
+	}
+	for name, move := range map[string]func(context.Context, string, string) (storage.RankMove, error){
+		"above": st.RankAbove,
+		"below": st.RankBelow,
+	} {
+		if _, err := move(ctx, moved, anchor); err == nil || !strings.Contains(err.Error(), "has no rank") {
+			t.Errorf("rank %s an unranked anchor: error = %v, want a refusal naming the missing rank", name, err)
+		}
+	}
+	after, err := st.GetIssue(ctx, moved)
+	if err != nil {
+		t.Fatalf("GetIssue(%s) error = %v", moved, err)
+	}
+	if after.Rank != before.Rank {
+		t.Errorf("a refused move still moved %s: rank %q -> %q", moved, before.Rank, after.Rank)
+	}
+}

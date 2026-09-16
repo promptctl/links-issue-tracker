@@ -643,14 +643,14 @@ func rankPairTx(ctx context.Context, tx *sql.Tx, issueID, targetID string) (stor
 	return storage.RankMove{MovedID: movedID, AnchorID: anchorID}, f, nil
 }
 
-// anchorRankTx reads the anchor's current key inside the caller's transaction:
-// a midpoint computed against a key some other writer has already replaced
-// lands somewhere nobody asked for. [LAW:no-ambient-temporal-coupling]
+// anchorRankTx reads the anchor's key inside the caller's transaction, since a key
+// another writer replaced is not the one asked for [LAW:no-ambient-temporal-coupling],
+// and finds no unranked anchor, whose "" would bound the move as an open end. [LAW:no-silent-failure]
 func anchorRankTx(ctx context.Context, tx *sql.Tx, anchorID string) (string, error) {
 	var anchorRank string
-	err := tx.QueryRowContext(ctx, `SELECT item_rank FROM issues WHERE id = ? AND deleted_at IS NULL`, anchorID).Scan(&anchorRank)
+	err := tx.QueryRowContext(ctx, `SELECT item_rank FROM issues WHERE id = ? AND deleted_at IS NULL AND item_rank != ''`, anchorID).Scan(&anchorRank)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("cannot rank against %s: it was deleted while the move was being applied", anchorID)
+		return "", fmt.Errorf("cannot rank against %s: it was deleted while the move was being applied, or it has no rank", anchorID)
 	}
 	if err != nil {
 		return "", fmt.Errorf("rank of %s: %w", anchorID, err)
