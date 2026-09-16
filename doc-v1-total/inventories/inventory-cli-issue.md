@@ -534,70 +534,70 @@ else ready.
 
 - Registration `register.go:492-493`. **Not** wrapped by `appCmd`; the raw runner
   is `runList(ctx, stdout, lsSurface, args)` so `--at` can target a foreign store
-  outside the current workspace (`register.go:488-493`, `cli.go:380-421`).
+  outside the current workspace (`register.go:488-493`, `cli.go:381-422`).
   `lsSurface` is `listSurface{name: "ls"}`, a surface with no positionals
-  (`cli.go:354-362`); `lit children` runs the same `runList` over
+  (`cli.go:355-363`); `lit children` runs the same `runList` over
   `childrenSurface` (§2.16).
 - Summary text: "List issues (rank by default; --at \<store-dir> lists a discovered
   store read-only)" (`register.go:492`).
 
-**Store routing** (`runList`, `cli.go:380-421`):
+**Store routing** (`runList`, `cli.go:381-422`):
 - `runList` builds the leaf and the `--at` value pointer with `listLeaf(surface)`
-  (`cli.go:381`), parses argv with `parseLeaf` (`cli.go:382-384`), then reads the
-  positionals with `listPositionals` (`cli.go:385-388`). Every step below runs
+  (`cli.go:382`), parses argv with `parseLeaf` (`cli.go:383-385`), then reads the
+  positionals with `listPositionals` (`cli.go:386-389`). Every step below runs
   after the parse, so `lit ls --help` and a malformed flag are answered before any
   store opens. pflag owns the flag grammar: a bare `--` ends flag parsing, so a
   later `--at` is a positional, and a trailing `--at` with no value is refused by
   the parse as a `UsageError` → exit 2 (`flagset.go:120-142`).
 - Presence of `--at` is `l.fs.Changed(lsAtFlag)`, where `lsAtFlag = "at"`
-  (`cli.go:389`, `:448`).
+  (`cli.go:390`, `:455`).
 - If `--at` is present and its value is blank-after-trim or starts with `-` →
   `UsageError{"usage: lit ls --at <store-dir>  (a storage directory from `lit stores`)"}`
-  (`cli.go:395-397`); the command name in the message is `surface.name`.
+  (`cli.go:396-398`); the command name in the message is `surface.name`.
 - Otherwise opens `app.OpenLocationForRead(ctx, workspace.LocationFromStorageDir(atDir))`;
   a failure becomes `fmt.Errorf("open store at %q read-only: %w", atDir, …)`,
   wrapping the open error marked with holder contention for that location
-  (`cli.go:398-408`). The store is closed on return (`cli.go:409`). The work runs
-  with `noReadyPolicy`, which returns no required fields (`cli.go:416`, `:760`).
+  (`cli.go:399-409`). The store is closed on return (`cli.go:410`). The work runs
+  with `noReadyPolicy`, which returns no required fields (`cli.go:417`, `:767`).
 - With no `--at`, opens the cwd workspace store through `runWithApp` with
   `app.AccessRead`, and the work runs with `workspaceReadyPolicy(ap)`
-  (`cli.go:418-420`, `:752-754`).
+  (`cli.go:419-421`, `:759-761`).
 
-**Flags** (declared in `listLeaf`, `cli.go:450-482`; read in its `work` closure,
-`cli.go:485-599`). "Only if visited" means the flag appears on the command line
-(`fs.Visit`, `cli.go:498-499`).
+**Flags** (declared in `listLeaf`, `cli.go:457-489`; read in its `work` closure,
+`cli.go:492-606`). "Only if visited" means the flag appears on the command line
+(`fs.Visit`, `cli.go:505-506`).
 
 | Flag | Type | Default | Effect |
 |---|---|---|---|
-| `--at` | string | `""` | Declared so the parse accepts it (`cli.go:454`); `listLeaf` returns its value pointer to `runList` (`cli.go:599`), which routes on it. The work closure does not read it |
-| `--status` | string array | `nil` | State set via `model.ParseStates` — comma-separated and/or repeated, every fragment parsed; error wrapped `parse --status: %w` (`cli.go:463`, `:500-503`) |
-| `--type` | string | `""` | Single issue type via `parseIssueTypeSlice` (blank → no narrowing); error wrapped `parse --type: %w` (`cli.go:504-507`, `:1979-1988`) |
-| `--assignee` | string | `""` | Trimmed, single-element `Assignees`; blank → none (`cli.go:527`) |
-| `--search` | string | `""` | Trimmed and appended to `SearchTerms` **only if visited** (`cli.go:541-543`) |
-| `--ids` | string | `""` | CSV → `filter.IDs`, only if visited (`cli.go:544-546`) |
-| `--parent` | string array | `nil` | Issue ids, comma-separated and/or repeated; each occurrence is split with `splitCSV` and the ids of all occurrences are collected, then the surface's positionals are appended → `filter.ParentIDs` (direct children, ORed). An occurrence that names no id (`--parent=`, `--parent " , "`) → `UsageError{"--parent needs an issue id, e.g. --parent <epic-id>"}` → exit 2, checked per occurrence before the positionals are appended, so `lit children <id> --parent=` is refused too. An id naming no issue → `NotFoundError` from the store → exit 4 (`cli.go:471`, `:513-522`, `:526`; `store.go:679-681`, `:770-773`) |
-| `--labels` | string | `""` | CSV → `LabelsAll` (ALL must match), only if visited (`cli.go:547-549`) |
-| `--has-comments` | bool | `false` | Only if visited; sets the pointer to the flag's value — so `--has-comments=false` filters to issues *without* comments (`cli.go:550-553`) |
-| `--include-archived` | bool | `false` | `filter.IncludeArchived` (`cli.go:528`) |
-| `--include-deleted` | bool | `false` | `filter.IncludeDeleted` (`cli.go:529`) |
-| `--updated-after` | string | `""` | Only if visited; trimmed, RFC3339; parse error → `parse --updated-after: %w` (`cli.go:554-560`) |
-| `--updated-before` | string | `""` | Only if visited; trimmed, RFC3339; parse error → `parse --updated-before: %w` (`cli.go:561-567`) |
-| `--query` | string | `""` | Query language (see below), applied when non-blank after trim (`cli.go:568-577`) |
-| `--sort` | string | `""` | `storage.ParseSortSpecs`, applied when non-blank after trim (`cli.go:532-540`) |
-| `--columns` | string | `""` | CSV of column names, lowercased, via `parseColumnSelection` (`cli.go:490-493`, `columns.go:192-212`) |
-| `--format` | string | `lines` | `lines` or `table` via `parseListFormat` (`cli.go:481`, `:494-497`) |
-| `--limit` | int | `0` | `filter.Limit` (`cli.go:530`) |
+| `--at` | string | `""` | Declared so the parse accepts it (`cli.go:461`); `listLeaf` returns its value pointer to `runList` (`cli.go:606`), which routes on it. The work closure does not read it |
+| `--status` | string array | `nil` | State set via `model.ParseStates` — comma-separated and/or repeated, every fragment parsed; error wrapped `parse --status: %w` (`cli.go:470`, `:507-510`) |
+| `--type` | string | `""` | Single issue type via `parseIssueTypeSlice` (blank → no narrowing); error wrapped `parse --type: %w` (`cli.go:511-514`, `:1986-1995`) |
+| `--assignee` | string | `""` | Trimmed, single-element `Assignees`; blank → none (`cli.go:534`) |
+| `--search` | string | `""` | Trimmed and appended to `SearchTerms` **only if visited** (`cli.go:548-550`) |
+| `--ids` | string | `""` | CSV → `filter.IDs`, only if visited (`cli.go:551-553`) |
+| `--parent` | string array | `nil` | Issue ids, comma-separated and/or repeated; each occurrence is split with `splitCSV` and the ids of all occurrences are collected, then the surface's positionals are appended → `filter.ParentIDs` (direct children, ORed). An occurrence that names no id (`--parent=`, `--parent " , "`) → `UsageError{"--parent needs an issue id, e.g. --parent <epic-id>"}` → exit 2, checked per occurrence before the positionals are appended, so `lit children <id> --parent=` is refused too. An id naming no issue → `NotFoundError` from the store → exit 4 (`cli.go:478`, `:520-529`, `:533`; `store.go:679-681`, `:770-773`) |
+| `--labels` | string | `""` | CSV → `LabelsAll` (ALL must match), only if visited (`cli.go:554-556`) |
+| `--has-comments` | bool | `false` | Only if visited; sets the pointer to the flag's value — so `--has-comments=false` filters to issues *without* comments (`cli.go:557-560`) |
+| `--include-archived` | bool | `false` | `filter.IncludeArchived` (`cli.go:535`) |
+| `--include-deleted` | bool | `false` | `filter.IncludeDeleted` (`cli.go:536`) |
+| `--updated-after` | string | `""` | Only if visited; trimmed, RFC3339; parse error → `parse --updated-after: %w` (`cli.go:561-567`) |
+| `--updated-before` | string | `""` | Only if visited; trimmed, RFC3339; parse error → `parse --updated-before: %w` (`cli.go:568-574`) |
+| `--query` | string | `""` | Query language (see below), applied when non-blank after trim (`cli.go:575-584`) |
+| `--sort` | string | `""` | `storage.ParseSortSpecs`, applied when non-blank after trim (`cli.go:539-547`) |
+| `--columns` | string | `""` | CSV of column names, lowercased, via `parseColumnSelection` (`cli.go:497-500`, `columns.go:192-212`) |
+| `--format` | string | `lines` | `lines` or `table` via `parseListFormat` (`cli.go:488`, `:501-504`) |
+| `--limit` | int | `0` | `filter.Limit` (`cli.go:537`) |
 
 - Flag help for `--query` (verbatim): "Query language: status:closed,in_progress
   resolution:wontfix type:task has:comments sort:rank:asc limit:5 archived deleted
-  text" (`cli.go:478`).
-- `--sort` help: "Sort fields, e.g. rank:asc,updated_at:desc" (`cli.go:479`).
+  text" (`cli.go:485`).
+- `--sort` help: "Sort fields, e.g. rank:asc,updated_at:desc" (`cli.go:486`).
   `ParseSortSpecs` splits on `,`, skips blank fragments, then reads
   `field[:asc|desc]` (a bare field is ascending); an unrecognized direction →
   `storage.ValidationError{"unsupported sort direction %q"}` → exit 3
   (`internal/storage/sort.go:18-50`).
 - `--columns` help: "Comma-separated output columns: " followed by the sorted
-  registry names (`cli.go:480`, `columns.go:176-178`). An empty selection (or one
+  registry names (`cli.go:487`, `columns.go:176-178`). An empty selection (or one
   holding only commas) is the default `id,state,topic,title`
   (`columns.go:194-200`, `:158-160`). An unknown name →
   `UsageError{"unknown --columns name %q; valid columns: %s"}` → exit 2
@@ -636,24 +636,24 @@ else ready.
   (`query.go:277-303`). `UpdatedAfter > UpdatedBefore` →
   `updated-after cannot be greater than updated-before` (`query.go:270-275`).
 
-**Default active-work filter** (`cli.go:587-589`): if after all merging both
+**Default active-work filter** (`cli.go:594-596`): if after all merging both
 `filter.Statuses` and `filter.Resolutions` are empty, statuses default to
 `[open, in_progress]`. A resolution filter alone therefore *does not* get clamped
 (so `--query resolution:wontfix` reaches closed issues).
 
-**Relation columns**: after `ListIssues` (`cli.go:590`), `listDerivedColumns`
-(`cli.go:594`, `:626-653`) loads the data for the highest source any selected
+**Relation columns**: after `ListIssues` (`cli.go:597`), `listDerivedColumns`
+(`cli.go:601`, `:633-660`) loads the data for the highest source any selected
 column declares (`columnSourceFor`, `columns.go:232-238`; sources
 `sourceIssue < sourceRelations < sourceReadiness`, `columns.go:74-84`). `parent`
 declares `sourceRelations` and `blocked` declares `sourceReadiness`; every other
 column is `sourceIssue` (`columns.go:92-124`).
-- `sourceIssue`: no load; the cell map is nil (`cli.go:628-629`).
+- `sourceIssue`: no load; the cell map is nil (`cli.go:635-636`).
 - `sourceRelations`: `fetchIssueRelations` batch-loads relations for the listed
-  issues, and `parentColumnsFor` sets only `parentID` (`cli.go:630-635`,
-  `:649-655`; `ready_state.go:98-117`).
+  issues, and `parentColumnsFor` sets only `parentID` (`cli.go:637-642`,
+  `:666-672`; `ready_state.go:98-117`).
 - `sourceReadiness`: calls the policy for required fields, runs `annotateIssues`,
   and `readinessColumnsFor` sets `parentID` from the relation graph and
-  `blocked = !ClassifyReadiness(row.Annotations).IsReady()` (`cli.go:636-649`;
+  `blocked = !ClassifyReadiness(row.Annotations).IsReady()` (`cli.go:643-656`;
   `workable.go:109-118`). A policy error fails the command. Over `--at`,
   `noReadyPolicy` supplies no required fields.
 - A missing cell renders as the zero `derivedColumns` (`output.go:457-465`):
@@ -661,20 +661,20 @@ column is `sourceIssue` (`columns.go:92-124`).
   and `-` otherwise (`columns.go:112-123`, `output.go:470-475`).
 
 **Output**: `parseColumnSelection` and then `parseListFormat` run at the top of the
-work closure, before the query (`cli.go:490-497`). `parseListFormat`
+work closure, before the query (`cli.go:497-504`). `parseListFormat`
 (`output.go:112-119`) lowercases and trims the value and looks it up in
 `listFormats` (`output.go:92-95`): `lines` → `printIssueLines` (columns joined with
 `" | "`, no header, `output.go:134-141`), `table` → `printIssueTable` (uppercased
 tab-aligned header, then rows, `output.go:121-132`). Anything else, including an
 explicit empty value, → `ValidationError{"unsupported --format \"<x>\" (valid: lines, table)"}`
 → exit 3, reason `validation_refused`. The `--format` help string ("Output format:
-lines|table") is built from the same map (`cli.go:481`, `output.go:97-104`).
+lines|table") is built from the same map (`cli.go:488`, `output.go:97-104`).
 
-- Stray positionals: the leaf declares `positionals: 0` (`cli.go:485`), and
+- Stray positionals: the leaf declares `positionals: 0` (`cli.go:492`), and
   `listPositionals` reads pflag's leftover arguments and refuses any count other
   than 0 → `UsageError{"usage: lit ls [flags]  (got N positional arguments: [...])"}`
-  → exit 2, checked after the parse and before any store opens (`cli.go:385-388`,
-  `:430-437`). `lit ls stray` is refused this way, and so is `lit ls -- --at <dir>`,
+  → exit 2, checked after the parse and before any store opens (`cli.go:386-389`,
+  `:433-444`). `lit ls stray` is refused this way, and so is `lit ls -- --at <dir>`,
   whose two tokens after `--` are positionals.
 
 ### 2.4 `lit show` — Show issue details
@@ -1378,23 +1378,24 @@ claim; this command claims nothing.
   the same entrypoint and leaf as `lit ls` (§ `lit ls` above). Summary: "List an
   issue's direct children by rank (`lit ls --parent <id>`; takes every ls flag)".
 - `childrenSurface = listSurface{name: "children", positionals: []string{"<parent-id>"}}`
-  (`cli.go:359-362`). `listLeaf(surface)` names the flag set after the surface and
-  declares every `ls` flag, so `lit children --help` lists them (`cli.go:450-451`).
+  (`cli.go:360-363`). `listLeaf(surface)` names the flag set after the surface and
+  declares every `ls` flag, so `lit children --help` lists them (`cli.go:457-458`).
 - Refusal: the leaf declares `positionals: 0`, so every token reaches pflag
-  (`cli.go:485`), and `listPositionals` reads the positionals from pflag's leftover
+  (`cli.go:492`), and `listPositionals` reads the positionals from pflag's leftover
   arguments, `l.fs.cmd.Flags().Args()`. Because pflag knows which flags are
   booleans, the id is found before or after any flag, including after
-  `--include-archived` or `--`. A count other than 1 →
+  `--include-archived` or `--`. Each positional is trimmed. A count other than 1,
+  or a positional that is blank after trimming, →
   `UsageError{"usage: lit children <parent-id> [flags]  (got N positional arguments: [...])"}`
   (the list printed with `%q`) → exit 2, checked after the parse and before any
-  store opens (`cli.go:385-388`, `:430-437`).
+  store opens (`cli.go:386-389`, `:433-444`).
   A blank or `-`-prefixed `--at` → `UsageError{"usage: lit children --at <store-dir>  (a storage directory from `lit stores`)"}`
-  (`cli.go:395-397`).
-- Filter: the positional is appended to the `--parent` ids (`cli.go:522`), so
+  (`cli.go:396-398`).
+- Filter: the positional is appended to the `--parent` ids (`cli.go:529`), so
   `lit children <id> [flags]` builds the filter `lit ls --parent <id> [flags]` builds
   and prints the same output. The `ls` defaults apply: statuses default to
   `[open, in_progress]` when no status or resolution filter is set
-  (`cli.go:587-589`), archived and deleted children are excluded unless
+  (`cli.go:594-596`), archived and deleted children are excluded unless
   `--include-archived`/`--include-deleted`, and the default columns are
   `id,state,topic,title`. A parent id naming no issue → `NotFoundError` → exit 4.
 

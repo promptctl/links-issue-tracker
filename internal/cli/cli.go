@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -426,12 +427,18 @@ func runList(ctx context.Context, stdout io.Writer, surface listSurface, args []
 // splitArgs would hand the id in `lit children --include-archived <id>` to the
 // boolean as its value, and would pass a second id through to be dropped. Too
 // many ids is refused like too few — a silently ignored parent would list the
-// wrong set with exit 0. [LAW:single-enforcer] [LAW:no-silent-failure]
+// wrong set with exit 0. A positional is a parent id, so it is trimmed like a
+// --parent id, and a blank one names no parent and is refused like an empty
+// --parent. [LAW:single-enforcer] [LAW:no-silent-failure]
 func listPositionals(l leaf[listScope], surface listSurface) ([]string, error) {
-	positional := l.fs.cmd.Flags().Args()
-	if len(positional) != len(surface.positionals) {
+	raw := l.fs.cmd.Flags().Args()
+	positional := make([]string, len(raw))
+	for i, arg := range raw {
+		positional[i] = strings.TrimSpace(arg)
+	}
+	if len(positional) != len(surface.positionals) || slices.Contains(positional, "") {
 		usage := strings.Join(append([]string{"usage: lit", surface.name}, surface.positionals...), " ")
-		return nil, UsageError{Message: fmt.Sprintf("%s [flags]  (got %d positional arguments: %q)", usage, len(positional), positional)}
+		return nil, UsageError{Message: fmt.Sprintf("%s [flags]  (got %d positional arguments: %q)", usage, len(raw), raw)}
 	}
 	return positional, nil
 }

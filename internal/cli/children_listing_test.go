@@ -95,6 +95,10 @@ func TestListingRefusesTheWrongPositionalCount(t *testing.T) {
 		{childrenSurface, []string{"--format", "table"}},
 		{childrenSurface, []string{"test-a", "test-b"}},
 		{childrenSurface, []string{"test-a", "--status", "open", "test-b"}},
+		// A blank id names no parent: refused like an empty --parent, never
+		// looked up as the issue "".
+		{childrenSurface, []string{""}},
+		{childrenSurface, []string{" ", "--format", "table"}},
 		{lsSurface, []string{"stray"}},
 	}
 	for _, tc := range cases {
@@ -117,6 +121,8 @@ func TestChildrenFindsTheParentAmongFlags(t *testing.T) {
 		{"--include-archived", f.epicID},
 		{"--has-comments=false", "--include-deleted", f.epicID, "--format", "table"},
 		{"--", f.epicID},
+		// Trimmed like a --parent id.
+		{" " + f.epicID + " "},
 	} {
 		var out bytes.Buffer
 		if err := runChildren(f.ctx, &out, f.ap, args); err != nil {

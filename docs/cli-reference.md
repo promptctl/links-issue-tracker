@@ -548,7 +548,7 @@ that names no issue exits 4. `lit dep ls <parent> --type parent-child` reads the
 edge as raw incident edges.
 
 Flags may appear before or after the id. `lit children` takes exactly one id, and
-any other count is a usage error (exit 2); to list the children of several parents,
+any other count, or a blank id, is a usage error (exit 2); to list the children of several parents,
 use `lit ls --parent a,b`.
 
 ---
