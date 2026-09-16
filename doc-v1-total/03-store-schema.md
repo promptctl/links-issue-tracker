@@ -120,7 +120,7 @@ There is no ID parser/validator on lookup — supplied IDs bind verbatim, with n
 
 ### Rank placement at create
 
-Default placement is bottom (the `RankPlacement` zero value): rank = `After(max live rank)`, or the initial rank `"V"` in an empty workspace; `RankTop` mirrors with `Before(min)` (`store.go:2045-2082`). Consecutive default creates therefore keep authoring order.
+Default placement is bottom (the `RankPlacement` zero value): rank = `After(max live rank)`, or the initial rank `"V"` in an empty workspace; `RankTop` mirrors with `Before(min)`, except that an all-zero `min` leaves no room above it, so the store first respaces the ranks around it and reads `min` again (`store.go:2045-2082`). Consecutive default creates therefore keep authoring order.
 
 ## Reads
 

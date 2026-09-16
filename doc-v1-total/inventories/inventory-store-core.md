@@ -2961,7 +2961,9 @@ Pinned pair cases — `internal/store/ranking_frame_test.go:322-356`: top-level 
 
 **RankBelow(issueID, targetID)** — `internal/store/ranking.go:370-396`: mirror image — `item_rank > ? … ORDER BY item_rank ASC LIMIT 1`, errors `"rank-below: query neighbor: %w"` (`:379`), `"rank-below: %w"` around the `rankBetweenTx` error (`:387`), `"rank-below: update: %w"` (`:391`); the anchor's rank is the lower bound and the neighbor the upper, and no neighbor reads as `""`, so at the frame's bottom the new rank is `rank.Midpoint(anchorRank, "")`.
 
-`rankBetweenTx(ctx, tx, bounds)` — `internal/store/ranking.go:649-667`: reads the pair through `bounds()` and returns `rank.Midpoint(lower, upper)` unless it fails with `rank.ErrNoRoom` (`:650-657`). On `ErrNoRoom` it runs `smoothRanksTx(ctx, tx, upper)`, which respaces the smoothing window around `upper` with no length threshold; error → `fmt.Errorf("make room between %q and %q: %w", lower, upper, err)` (`:660-662`). It then reads the pair through `bounds()` again and returns the second `rank.Midpoint` result, error included; a second `ErrNoRoom` is not retried (`:663-666`). The `bounds` functions of `RankAbove` and `RankBelow` read the anchor's rank (`anchorRankTx`, `:627-637`) and the neighbor (`nearestRank`) on every call, so the second read sees the respaced ranks (`:689-699`, `:727-737`).
+`rankBetweenTx(ctx, tx, bounds)` — `internal/store/ranking.go:671-689`: reads the pair through `bounds()` and returns `rank.Midpoint(lower, upper)` unless it fails with `rank.ErrNoRoom` (`:672-679`). On `ErrNoRoom` it runs `smoothRanksTx(ctx, tx, upper)`, which respaces the smoothing window around `upper` with no length threshold; error → `fmt.Errorf("make room between %q and %q: %w", lower, upper, err)` (`:682-684`). It then reads the pair through `bounds()` again and returns the second `rank.Midpoint` result, error included; a second `ErrNoRoom` is not retried (`:685-688`). The `bounds` functions of `RankAbove` and `RankBelow` read the anchor's rank (`anchorRankTx`, `:649-659`) and the neighbor (`nearestRank`) on every call, so the second read sees the respaced ranks (`:711-721`, `:749-759`).
+
+`rankEdge.rankBeyondTx(ctx, tx, readEdge)` — `internal/store/ranking.go:76-89`: the key past a frame's edge. It reads the edge's rank through `readEdge()`; an error is returned as is, and an empty rank returns `rank.Initial()` (`:77-83`). Otherwise the key comes from `rankBetweenTx`, whose `bounds` reads the edge through `readEdge()` again on every call and pairs it through the edge's `beside` (`:84-88`): `topEdge` gives `("", edgeRank)` and `bottomEdge` gives `(edgeRank, "")` (`:45-48`), the two values `edgeFor` returns (`:54-63`). An all-zero rank at the top edge therefore gets room made above it the same way a relative move's pair does; the bottom edge's open upper bound never lacks room. Its callers are `rankToEdge`, reading the frame's edge holder through `frameEdgeHolderTx` and wrapping the error `fmt.Errorf("rank to %s: %w", edge.name, err)` (`:291-297`); `RankSet`, for the key of its last id (`:416-425`); and `nextRankForPlacement` (`internal/store/store.go:2035-2050`).
 
 Frame behavior pinned by tests — `internal/store/ranking_frame_test.go`:
 - Standalone above an epic child anchors to the epic; epic and all children keep their exact rank strings; standalone ends above the epic (`:56-80`).
@@ -2980,7 +2982,7 @@ Frame behavior pinned by tests — `internal/store/ranking_frame_test.go`:
   SELECT item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' AND id NOT IN (?,…) ORDER BY item_rank ASC LIMIT 1
   ```
   built with one placeholder per ranked id (`:118-128`); non-`ErrNoRows` error → `fmt.Errorf("rank-set: query top: %w", err)` (`:126-128`).
-- Walks the ranked ids in reverse, assigning `rank.Initial()` for the first assignment when there is no cursor, else `rank.Before(cursor)`, whose error → `fmt.Errorf("rank set: %w", err)`; cursor becomes the just-assigned rank (`:134-148`). Final order: `ids[0] < ids[1] < … < ids[N-1] < existing top` — the whole set is stacked at the top of the keyspace.
+- The last ranked id's key comes from `topEdge.rankBeyondTx`, whose `readEdge` runs the query above through `nearestRank`: `rank.Initial()` when the frame has no ranked issue outside the set, otherwise a key sorting before the frame's top rank, made through `rankBetweenTx`, which makes room when that rank is all zeros. Walking the remaining ids in reverse, each gets `rank.Before(cursor)`. An error from either → `fmt.Errorf("rank set: %w", err)`; cursor becomes the just-assigned rank (`:134-148`). Final order: `ids[0] < ids[1] < … < ids[N-1] < existing top` — the whole set is stacked at the top of the keyspace.
 - One `UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?` per id, sharing a single `now` timestamp; error → `fmt.Errorf("rank-set: update %s: %w", id, err)` (`:149-153`).
 - `smoothRanksIfNeededTx(ctx, tx, newRanks[0])` when the set is non-empty (`:154-157`).
 - Atomic: all assignments in one mutation (`:97-102`).
@@ -2991,7 +2993,7 @@ Tests: absolute top ordering — `internal/store/store_test.go:2700-2730`; dupli
 ### 5.7 Smoothing (rebalancing)
 
 `smoothRanksIfNeededTx(ctx, tx, triggerRank)` — `internal/store/ranking.go:410-486`:
-1. Trigger: `len(triggerRank) < rank.SmoothingThreshold` (8) → no-op (`:411-413`); otherwise it calls `smoothRanksTx(ctx, tx, triggerRank)` (`internal/store/ranking.go:769-842`), which performs steps 2-10 and has no threshold of its own. So smoothing through this function fires only once a rank string reaches 8 characters; `rankBetweenTx` calls `smoothRanksTx` directly.
+1. Trigger: `len(triggerRank) < rank.SmoothingThreshold` (8) → no-op (`:411-413`); otherwise it calls `smoothRanksTx(ctx, tx, triggerRank)` (`internal/store/ranking.go:791-864`), which performs steps 2-10 and has no threshold of its own. So smoothing through this function fires only once a rank string reaches 8 characters; `rankBetweenTx` calls `smoothRanksTx` directly.
 2. `half := rank.SmoothingWindow / 2` = 16 (`:414`).
 3. Below half:
    ```sql
@@ -3026,7 +3028,7 @@ An all-zero rank at the bottom end takes the same path with no special case: its
 
 [LAW:one-source-of-truth] `rank.Significant` is the one definition of room here, the same one `anchorRun` compares anchors by: ranks sharing a significant part leave nothing between them, so a bound sharing the window's would leave the window nowhere to go.
 
-Smoothing is invoked from `RankToTop` (`:38`), `RankSet` (`:155`), `RankToBottom` (`:182`), `RankAbove` (`:364`), `RankBelow` (`:394`), `rankBetweenTx` (`:660`, with no length threshold, when a relative move's pair has no room), and `FixRankInversions` (`:760`, once per rewritten rank after every repair write has landed). It ignores parent/epic frames entirely: the window is whatever is adjacent in the global rank keyspace.
+Smoothing is invoked from `RankToTop` (`:38`), `RankSet` (`:155`), `RankToBottom` (`:182`), `RankAbove` (`:364`), `RankBelow` (`:394`), `rankBetweenTx` (`:682`, with no length threshold, when a placement's pair of bounds has no room), and `FixRankInversions` (`:760`, once per rewritten rank after every repair write has landed). It ignores parent/epic frames entirely: the window is whatever is adjacent in the global rank keyspace.
 
 ### 5.8 Rank inversions
 
