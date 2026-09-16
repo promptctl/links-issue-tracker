@@ -126,24 +126,22 @@ func parseFlagSet(fs *cobraFlagSet, args []string, stdout io.Writer) error {
 			return errHelpHandled
 		}
 		// [LAW:types-are-the-program] Wrap pflag errors at the parse boundary so sinks dispatch on type, not message text.
+		// The spellings matched below are pflag's own (errors.go in spf13/pflag).
+		// Equality, not Contains: pflag names the whole flag, so `--continuex`
+		// reads "unknown flag: --continuex" and is an ordinary unknown flag, not
+		// the retired one.
 		msg := err.Error()
-		if strings.Contains(msg, "flag provided but not defined: -output") ||
-			strings.Contains(msg, "flag provided but not defined: --output") {
-			return UnsupportedError{Message: "--output is no longer supported; omit it for text output", Feature: "--output"}
+		if msg == "unknown flag: --continue" {
+			return UnsupportedError{Message: "--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag"}
 		}
-		if strings.Contains(msg, "flag provided but not defined: -continue") ||
-			strings.Contains(msg, "flag provided but not defined: --continue") ||
-			strings.Contains(msg, "unknown flag: --continue") {
-			return UnsupportedError{Message: "--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag", Feature: "--continue"}
-		}
-		// "flag needs an argument" joins the unknown-flag family: all three are the
-		// user mis-writing the flag surface, so all three reach a sink as one type.
-		// It classified as a bare error until links-cli-1lxr, which is only visible
-		// now that the parse runs before acquisition — the arity error used to be
-		// reached after a store was already open, where the store's own error
-		// shadowed it. [LAW:types-are-the-program] [LAW:single-enforcer]
+		// "flag needs an argument" and the shorthand spelling join the unknown-flag
+		// family: all are the user mis-writing the flag surface, so all reach a
+		// sink as one type. The arity error classified as a bare error until
+		// links-cli-1lxr, and the shorthand one until links-output-format-yxjs,
+		// where `-x` still exited 1 with "Retry the command".
+		// [LAW:types-are-the-program] [LAW:single-enforcer]
 		if strings.HasPrefix(msg, "unknown flag:") ||
-			strings.HasPrefix(msg, "flag provided but not defined:") ||
+			strings.HasPrefix(msg, "unknown shorthand flag:") ||
 			strings.HasPrefix(msg, "flag needs an argument:") {
 			return UsageError{Message: msg}
 		}

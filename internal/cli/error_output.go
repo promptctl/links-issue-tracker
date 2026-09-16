@@ -116,12 +116,12 @@ func commandErrorReason(err error) string {
 	if errors.As(err, &noWork) {
 		return "no_ready_work"
 	}
+	// A retired flag is refused on every run, so it must never reach the
+	// default "Retry the command" — the loop links-output-format-yxjs found
+	// `--continue` sending agents around. [LAW:no-silent-failure]
 	var unsupported UnsupportedError
 	if errors.As(err, &unsupported) {
-		if unsupported.Feature == "--output" {
-			return "unsupported_output_flag"
-		}
-		return "command_failed"
+		return "unsupported_flag"
 	}
 	var outsideWorkspace OutsideWorkspaceError
 	if errors.As(err, &outsideWorkspace) {
@@ -160,8 +160,8 @@ func commandErrorRemediation(reason string) string {
 		return ""
 	case "usage_error":
 		return "Run the command with `--help` and retry with valid arguments."
-	case "unsupported_output_flag":
-		return "Remove `--output`. lit emits text output; there is no output-format flag."
+	case "unsupported_flag":
+		return "Do not retry unchanged — this flag is refused on every run. Drop it and use what the message above names instead."
 	case "entity_not_found":
 		return "Verify the target ID exists with `lit ls` or `lit show <id>`."
 	case "merge_conflict":

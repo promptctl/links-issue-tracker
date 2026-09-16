@@ -21,7 +21,10 @@ func TestCommandErrorReason(t *testing.T) {
 	}{
 		{"unknown command", UnknownCommandError{Command: "wat"}, "unknown_command"},
 		{"not found", storage.NotFoundError{Entity: "issue", ID: "lit-abc"}, "entity_not_found"},
-		{"unsupported output flag", UnsupportedError{Feature: "--output"}, "unsupported_output_flag"},
+		// A retired flag fails the same way on every run, so neither retired
+		// flag may fall to the default retry advice (links-output-format-yxjs).
+		{"unsupported output flag", unsupportedOutputFlagError(), "unsupported_flag"},
+		{"unsupported continue flag", UnsupportedError{Message: "--continue is retired"}, "unsupported_flag"},
 		{"generic", UsageError{Message: "bad"}, "usage_error"},
 		// A write blocked by another store holder is its own reason, and wins over
 		// the transient-contention fallthrough it unwraps to. The Cause is the real

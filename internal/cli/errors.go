@@ -49,11 +49,10 @@ type ValidationError struct {
 
 func (e ValidationError) Error() string { return e.Message }
 
-// UnsupportedError signals use of a removed or unsupported feature.
-// Feature names the unsupported capability (e.g. "--output") for targeted remediation.
+// UnsupportedError signals use of a flag lit no longer accepts. Its message
+// names what to use instead, so the type carries no more than the message.
 type UnsupportedError struct {
 	Message string
-	Feature string
 }
 
 func (e UnsupportedError) Error() string { return e.Message }

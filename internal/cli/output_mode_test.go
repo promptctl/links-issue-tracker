@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"io"
 	"reflect"
 	"strings"
 	"testing"
@@ -93,6 +94,43 @@ func TestRejectsJSONFlag(t *testing.T) {
 			}
 			if got := ExitCode(err); got != ExitUsage {
 				t.Fatalf("ExitCode(%v) = %d, want %d", args, got, ExitUsage)
+			}
+		})
+	}
+}
+
+// TestParseFlagSetClassifiesFlagErrors is the accept/reject table for the
+// command-local flag boundary. Every mis-written flag must reach a sink typed,
+// because an untyped one falls to the "Retry the command" remediation: `-x`
+// did, exiting 1. And the retired `--continue` is matched as a whole flag name,
+// so a longer unknown flag that merely starts with it is not misreported as
+// retired.
+func TestParseFlagSetClassifiesFlagErrors(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		arg  string
+		want int
+	}{
+		{arg: "--continue", want: ExitValidation},
+		{arg: "--continue=true", want: ExitValidation},
+		{arg: "--continuex", want: ExitUsage},
+		{arg: "--bogus", want: ExitUsage},
+		{arg: "-x", want: ExitUsage},
+		{arg: "--limit", want: ExitUsage},
+	} {
+		t.Run(tc.arg, func(t *testing.T) {
+			t.Parallel()
+			fs := newCobraFlagSet("probe")
+			fs.Int("limit", 0, "")
+			err := parseFlagSet(fs, []string{tc.arg}, io.Discard)
+			if err == nil {
+				t.Fatalf("parseFlagSet(%q) succeeded; want an error", tc.arg)
+			}
+			if got := ExitCode(err); got != tc.want {
+				t.Errorf("parseFlagSet(%q) = %T %q, exit %d; want exit %d", tc.arg, err, err, got, tc.want)
+			}
+			if reason := commandErrorReason(err); reason == "command_failed" {
+				t.Errorf("parseFlagSet(%q) error %q classified as command_failed", tc.arg, err)
 			}
 		})
 	}

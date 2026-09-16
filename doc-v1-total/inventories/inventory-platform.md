@@ -88,7 +88,7 @@ to `/Users/bmf/code/links-issue-tracker`.
   leading arguments and:
   - `--` stops scanning and everything after is passed through (`internal/cli/cli.go:171-173`);
   - a bare `--output` or any `--output=…` in the leading position returns
-    `UnsupportedError{Message: "--output is no longer supported; omit it for text output", Feature: "--output"}`
+    `UnsupportedError{Message: "--output is no longer supported; omit it for text output"}`
     (`internal/cli/cli.go:174-179`, `:310-312`);
   - any other first token stops scanning (`internal/cli/cli.go:176-181`).
 - The root cobra command: `Use: "lit"`, `Long: "Agent-native issue tracker"`,
@@ -109,12 +109,11 @@ to `/Users/bmf/code/links-issue-tracker`.
   per-command flag sets are constructed by `newCobraFlagSet` (`internal/cli/cli.go:192-203`).
 - Per-command flag parsing (`parseFlagSet`, `internal/cli/cli.go:274-308`) maps specific
   removed flags to typed errors:
-  - `--output` ⇒ `UnsupportedError` "…omit it for text output" (`internal/cli/cli.go:286-288`);
   - `--continue` ⇒ `UnsupportedError` "--continue is retired; claim routing already keeps
     `lit next` in your checkout's own epic first — run `lit next` with no flag"
-    (`internal/cli/cli.go:290-293`);
-  - any other `unknown flag:` / `flag provided but not defined:` ⇒ `UsageError`
-    (`internal/cli/cli.go:295-297`).
+    (`internal/cli/flagset.go:134-136`);
+  - any other `unknown flag:` / `unknown shorthand flag:` / `flag needs an argument:` ⇒
+    `UsageError` (`internal/cli/flagset.go:143-146`).
   - `--help` (or `pflag.ErrHelp`) prints `Usage of <cmd>:` followed by `PrintDefaults()` to
     stdout and returns the swallowed sentinel (`internal/cli/cli.go:265-272`, `:277-282`, `:300-306`).
 
