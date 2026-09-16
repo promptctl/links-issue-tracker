@@ -547,6 +547,10 @@ archived and deleted children are hidden unless `--include-archived` /
 that names no issue exits 4. `lit dep ls <parent> --type parent-child` reads the same
 edge as raw incident edges.
 
+Flags may appear before or after the id. `lit children` takes exactly one id, and
+any other count is a usage error (exit 2); to list the children of several parents,
+use `lit ls --parent a,b`.
+
 ---
 
 ## Bulk operations
