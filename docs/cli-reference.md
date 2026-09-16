@@ -208,7 +208,7 @@ needs someone to finish or release it.
 ### `lit ls`
 
 ```text
-lit ls [--at <store-dir>] [--ids <csv>] [--parent <csv>] [--search <text>] [--query <q>] [--status <csv of open|in_progress|closed>]
+lit ls [--at <store-dir>] [--ids <csv>] [--parent <csv>]... [--search <text>] [--query <q>] [--status <csv of open|in_progress|closed>]
        [--type <t>] [--labels <csv>] [--assignee <a>] [--has-comments]
        [--updated-after <rfc3339>] [--updated-before <rfc3339>]
        [--include-archived] [--include-deleted]
@@ -237,8 +237,8 @@ recognized token is a search term. Archived and deleted issues are hidden unless
 explicitly included. Output-shaping flags (`--columns`, `--format`) have no token —
 they are not filter concerns.
 
-`--parent <csv>` (token `parent:<id>`) keeps only the direct children of the named
-issues, read from the parent-child edge, so a grandchild is not listed. An id that
+`--parent <csv>` (token `parent:<id>`; comma-separated and/or repeated) keeps only the
+direct children of the named issues, read from the parent-child edge, so a grandchild is not listed. An id that
 names no issue is a not-found error (exit 4) rather than an empty listing, and an
 empty `--parent` or a bare `parent:` is refused rather than ignored.
 `lit children <id>` is this same listing under its own name.

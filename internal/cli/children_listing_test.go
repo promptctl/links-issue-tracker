@@ -129,19 +129,49 @@ func TestChildrenFindsTheParentAmongFlags(t *testing.T) {
 }
 
 // An explicitly empty --parent names no parent; it is refused rather than
-// dropped, because dropping it would widen the listing to every issue.
-// [LAW:no-silent-failure]
-func TestLsRefusesAnEmptyParent(t *testing.T) {
+// dropped, because dropping it would widen the listing to every issue — or, next
+// to a real id or under `children`, silently ignore part of the request. The
+// refusal is the same on both surfaces. [LAW:no-silent-failure]
+func TestListingRefusesAnEmptyParent(t *testing.T) {
 	f := newEpicFixture(t, "Listing epic", "# Why\nthe plan")
-	for _, args := range [][]string{{"--parent="}, {"--parent", " , "}} {
+	cases := []struct {
+		surface listSurface
+		args    []string
+	}{
+		{lsSurface, []string{"--parent="}},
+		{lsSurface, []string{"--parent", " , "}},
+		{lsSurface, []string{"--parent", f.epicID, "--parent="}},
+		{childrenSurface, []string{f.epicID, "--parent="}},
+	}
+	for _, tc := range cases {
 		var out bytes.Buffer
-		err := runListWithStore(f.ctx, &out, f.ap.Store, noReadyPolicy, args)
+		err := runListLeaf(f.ctx, &out, tc.surface, listScope{store: f.ap.Store, policy: noReadyPolicy}, tc.args)
 		var usage UsageError
 		if !errors.As(err, &usage) || !strings.Contains(err.Error(), "--parent needs an issue id") {
-			t.Fatalf("ls %v error = %#v, want UsageError naming the empty --parent", args, err)
+			t.Fatalf("%s %v error = %#v, want UsageError naming the empty --parent", tc.surface.name, tc.args, err)
 		}
 		if out.Len() != 0 {
-			t.Fatalf("ls %v emitted %q; want no output on the error path", args, out.String())
+			t.Fatalf("%s %v emitted %q; want no output on the error path", tc.surface.name, tc.args, out.String())
+		}
+	}
+}
+
+// A repeated --parent widens the parent set like a repeated --status widens the
+// status set; the second occurrence never replaces the first.
+func TestLsRepeatedParentIsAUnion(t *testing.T) {
+	f := newEpicFixture(t, "Listing epic", "# Why\nthe plan")
+	first := f.addChild("First child")
+	second := f.addChild("Second child")
+	grandchild, err := f.ap.Store.CreateIssue(f.ctx, storage.CreateIssueInput{
+		Prefix: "test", Title: "Grandchild", Topic: "epic-view", IssueType: "task", ParentID: second,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue(grandchild) error = %v", err)
+	}
+	got := runLs(t, f.ap, "--parent", f.epicID, "--parent", second)
+	for _, id := range []string{first, second, grandchild.ID} {
+		if !strings.Contains(got, id) {
+			t.Fatalf("ls --parent %s --parent %s =\n%s\nwant %s listed", f.epicID, second, got, id)
 		}
 	}
 }

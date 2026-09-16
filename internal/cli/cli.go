@@ -465,7 +465,10 @@ func listLeaf(surface listSurface) (leaf[listScope], *string) {
 	assignee := fs.String("assignee", "", "Filter by assignee")
 	search := fs.String("search", "", "Search title and description text")
 	ids := fs.String("ids", "", "Comma-separated issue IDs")
-	parent := fs.String("parent", "", "Only direct children of these comma-separated issue IDs (lit children <id> is lit ls --parent <id>)")
+	// StringArray for the reason --status is one: the parent ids are a set, so a
+	// second --parent widens it rather than replacing the first.
+	// [LAW:no-silent-failure]
+	parent := fs.StringArray("parent", "Only direct children of these issue IDs, comma-separated or repeated (lit children <id> is lit ls --parent <id>)")
 	labels := fs.String("labels", "", "Comma-separated labels all of which must match")
 	hasComments := fs.Bool("has-comments", false, "Only include issues with comments")
 	includeArchived := fs.Bool("include-archived", false, "Include archived issues")
@@ -502,14 +505,21 @@ func listLeaf(surface listSurface) (leaf[listScope], *string) {
 		if err != nil {
 			return fmt.Errorf("parse --type: %w", err)
 		}
+		// Each --parent occurrence must name an id on its own, before the surface's
+		// positional joins the set: `--parent ""` names no parent whichever command
+		// carries it, and dropping it would silently widen or ignore part of the
+		// request. [LAW:no-silent-failure]
+		var parentIDs []string
+		for _, occurrence := range *parent {
+			ids := splitCSV(occurrence)
+			if len(ids) == 0 {
+				return UsageError{Message: "--parent needs an issue id, e.g. --parent <epic-id>"}
+			}
+			parentIDs = append(parentIDs, ids...)
+		}
 		// A surface's positionals are parent ids too, so `children <id>` and
 		// `ls --parent <id>` build the same filter. [LAW:one-source-of-truth]
-		parentIDs := append(splitCSV(*parent), positional...)
-		if visited["parent"] && len(parentIDs) == 0 {
-			// [LAW:no-silent-failure] `--parent ""` names no parent; dropping it
-			// would silently widen the listing to every issue.
-			return UsageError{Message: "--parent needs an issue id, e.g. --parent <epic-id>"}
-		}
+		parentIDs = append(parentIDs, positional...)
 		filter := storage.ListIssuesFilter{
 			Statuses:        statuses,
 			IssueTypes:      issueTypes,
