@@ -416,7 +416,7 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 		cursor, err := topEdge.rankBeyondTx(ctx, tx, func() (string, error) {
 			topRank, err := nearestRank(ctx, tx, query, args...)
 			if err != nil {
-				return "", fmt.Errorf("rank-set: query top: %w", err)
+				return "", fmt.Errorf("query top: %w", err)
 			}
 			return topRank, nil
 		})
@@ -715,7 +715,7 @@ func (s *Store) RankAbove(ctx context.Context, issueID, targetID string) (storag
 			}
 			aboveRank, err := nearestRank(ctx, tx, query, anchorRank, move.MovedID, string(f))
 			if err != nil {
-				return "", "", fmt.Errorf("rank-above: query neighbor: %w", err)
+				return "", "", fmt.Errorf("query neighbor: %w", err)
 			}
 			return aboveRank, anchorRank, nil
 		})
@@ -753,7 +753,7 @@ func (s *Store) RankBelow(ctx context.Context, issueID, targetID string) (storag
 			}
 			belowRank, err := nearestRank(ctx, tx, query, anchorRank, move.MovedID, string(f))
 			if err != nil {
-				return "", "", fmt.Errorf("rank-below: query neighbor: %w", err)
+				return "", "", fmt.Errorf("query neighbor: %w", err)
 			}
 			return anchorRank, belowRank, nil
 		})

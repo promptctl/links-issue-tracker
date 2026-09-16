@@ -2954,12 +2954,12 @@ Pinned pair cases — `internal/store/ranking_frame_test.go:322-356`: top-level 
   ```sql
   SELECT item_rank FROM issues WHERE item_rank < ? AND deleted_at IS NULL AND id != ? ORDER BY item_rank DESC LIMIT 1
   ```
-  bound `(target.Rank, move.MovedID)`; error → `fmt.Errorf("rank-above: query neighbor: %w", err)` (`:347-350`). Note this neighbor query has no `item_rank != ''` filter, so unranked rows sort as the empty string.
+  bound `(target.Rank, move.MovedID)`; error → `fmt.Errorf("query neighbor: %w", err)`, which the `rank-above: %w` wrap below prefixes (`:347-350`). Note this neighbor query has no `item_rank != ''` filter, so unranked rows sort as the empty string.
 - The new rank comes from `rankBetweenTx` with the neighbor as the lower bound and the anchor's rank as the upper; no neighbor reads as `""`, so at the frame's top it is `rank.Midpoint("", anchorRank)`. Its error → `fmt.Errorf("rank-above: %w", err)` (`:351-359`).
 - `UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?` on `move.MovedID`; error → `fmt.Errorf("rank-above: update: %w", err)` (`:360-363`).
 - `smoothRanksIfNeededTx(ctx, tx, newRank)` (`:364`). Returns the `RankMove` regardless of which id the caller named.
 
-**RankBelow(issueID, targetID)** — `internal/store/ranking.go:370-396`: mirror image — `item_rank > ? … ORDER BY item_rank ASC LIMIT 1`, errors `"rank-below: query neighbor: %w"` (`:379`), `"rank-below: %w"` around the `rankBetweenTx` error (`:387`), `"rank-below: update: %w"` (`:391`); the anchor's rank is the lower bound and the neighbor the upper, and no neighbor reads as `""`, so at the frame's bottom the new rank is `rank.Midpoint(anchorRank, "")`.
+**RankBelow(issueID, targetID)** — `internal/store/ranking.go:370-396`: mirror image — `item_rank > ? … ORDER BY item_rank ASC LIMIT 1`, errors `"query neighbor: %w"` (`:379`) and `"rank-below: %w"` around the `rankBetweenTx` error, which carries it (`:387`), `"rank-below: update: %w"` (`:391`); the anchor's rank is the lower bound and the neighbor the upper, and no neighbor reads as `""`, so at the frame's bottom the new rank is `rank.Midpoint(anchorRank, "")`.
 
 `rankBetweenTx(ctx, tx, bounds)` — `internal/store/ranking.go:671-689`: reads the pair through `bounds()` and returns `rank.Midpoint(lower, upper)` unless it fails with `rank.ErrNoRoom` (`:672-679`). On `ErrNoRoom` it runs `smoothRanksTx(ctx, tx, upper)`, which respaces the smoothing window around `upper` with no length threshold; error → `fmt.Errorf("make room between %q and %q: %w", lower, upper, err)` (`:682-684`). It then reads the pair through `bounds()` again and returns the second `rank.Midpoint` result, error included; a second `ErrNoRoom` is not retried (`:685-688`). The `bounds` functions of `RankAbove` and `RankBelow` read the anchor's rank (`anchorRankTx`, `:649-659`) and the neighbor (`nearestRank`) on every call, so the second read sees the respaced ranks (`:711-721`, `:749-759`).
 
@@ -2981,7 +2981,7 @@ Frame behavior pinned by tests — `internal/store/ranking_frame_test.go`:
   ```sql
   SELECT item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' AND id NOT IN (?,…) ORDER BY item_rank ASC LIMIT 1
   ```
-  built with one placeholder per ranked id (`:118-128`); non-`ErrNoRows` error → `fmt.Errorf("rank-set: query top: %w", err)` (`:126-128`).
+  built with one placeholder per ranked id (`:118-128`); non-`ErrNoRows` error → `fmt.Errorf("query top: %w", err)`, which the `rank set: %w` wrap below prefixes (`:126-128`).
 - The last ranked id's key comes from `topEdge.rankBeyondTx`, whose `readEdge` runs the query above through `nearestRank`: `rank.Initial()` when the frame has no ranked issue outside the set, otherwise a key sorting before the frame's top rank, made through `rankBetweenTx`, which makes room when that rank is all zeros. Walking the remaining ids in reverse, each gets `rank.Before(cursor)`. An error from either → `fmt.Errorf("rank set: %w", err)`; cursor becomes the just-assigned rank (`:134-148`). Final order: `ids[0] < ids[1] < … < ids[N-1] < existing top` — the whole set is stacked at the top of the keyspace.
 - One `UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?` per id, sharing a single `now` timestamp; error → `fmt.Errorf("rank-set: update %s: %w", id, err)` (`:149-153`).
 - `smoothRanksIfNeededTx(ctx, tx, newRanks[0])` when the set is non-empty (`:154-157`).
