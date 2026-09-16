@@ -60,7 +60,7 @@ func (l *lockedBuffer) String() string {
 // Not parallel: it mutates PATH (t.Setenv) and store.MirrorHoldBudget.
 func TestMirrorHoldBudgetCutsHungPushAndReleasesEngine(t *testing.T) {
 	base, root, gitPath, runInProcess := setupMirrorHoldBudgetRepo(t)
-	healthyCycle := measureHealthyMirrorCycle(t, runInProcess)
+	healthyCycle := measureHealthyMirrorCycle(t, root, runInProcess)
 	wedgedBudget := shrinkMirrorHoldBudget(t, healthyCycle)
 	wedgeMarker := installGitWedge(t, base, gitPath, "push")
 
@@ -122,7 +122,7 @@ func TestMirrorHoldBudgetCutsHungPushAndReleasesEngine(t *testing.T) {
 // Not parallel: it mutates PATH (t.Setenv) and store.MirrorHoldBudget.
 func TestMirrorHoldBudgetCutsHungResolveJoinsOneTrace(t *testing.T) {
 	base, root, gitPath, runInProcess := setupMirrorHoldBudgetRepo(t)
-	healthyCycle := measureHealthyMirrorCycle(t, runInProcess)
+	healthyCycle := measureHealthyMirrorCycle(t, root, runInProcess)
 	wedgedBudget := shrinkMirrorHoldBudget(t, healthyCycle)
 	wedgeMarker := installGitWedge(t, base, gitPath, "ls-remote")
 
@@ -328,17 +328,34 @@ const wedgeHoldBudgetMargin = 2
 // takes this function's result. A sample that was itself cut is censored — the
 // budget standing in for the work, which is the very reading error
 // links-sync-dauk had to correct in the field log — so a cut sample is a
-// failure here rather than a smaller number. [LAW:no-silent-failure]
-func measureHealthyMirrorCycle(t *testing.T, runInProcess func(time.Duration, ...string) (*lockedBuffer, error)) time.Duration {
+// failure here rather than a smaller number. So is a sample whose push failed
+// fast: the mirror is best-effort and exits clean either way, and a rejected
+// push is cheaper than a landed one. Whether the push landed is read from the
+// push-outcome marker, the one record of that fact, and the marker must be
+// this sample's rather than the bootstrap push's. [LAW:no-silent-failure]
+// [LAW:one-source-of-truth]
+func measureHealthyMirrorCycle(t *testing.T, root string, runInProcess func(time.Duration, ...string) (*lockedBuffer, error)) time.Duration {
 	t.Helper()
 	started := time.Now()
-	out, err := runInProcess(90*time.Second, "sync", backgroundMirrorSubcommand, "--parent-pid", "0")
+	// The sample runs under the production budget, so its hung bound is that
+	// budget's, not a figure of this test's choosing. [LAW:one-source-of-truth]
+	out, err := runInProcess(unboundedHoldTripwire(0, store.MirrorHoldBudget), "sync", backgroundMirrorSubcommand, "--parent-pid", "0")
 	healthyCycle := time.Since(started)
 	if err != nil {
 		t.Fatalf("unwedged mirror cycle failed, so there is no healthy cost to size the wedged run against: %v\noutput:\n%s", err, out.String())
 	}
 	if !strings.Contains(out.String(), "attempted=true hold_budget_cut=false") {
-		t.Fatalf("the sample cycle did not complete a push under the production budget, so its cost is not the cost of a healthy cycle:\noutput:\n%s", out.String())
+		t.Fatalf("the sample cycle was cut or never attempted under the production budget, so its cost is not the cost of a healthy cycle:\noutput:\n%s", out.String())
+	}
+	ws, err := workspace.Resolve(root)
+	if err != nil {
+		t.Fatalf("resolve workspace: %v", err)
+	}
+	now := time.Now()
+	outcome, age, recorded := lastPushOutcome(ws, now)
+	if !recorded || outcome.Decision != pushDecisionPushed || age > now.Sub(started) {
+		t.Fatalf("the sample cycle did not land a push (outcome %+v, recorded %t, %s old against a %s sample), so its cost is not the cost of a healthy cycle:\noutput:\n%s",
+			outcome, recorded, age, now.Sub(started), out.String())
 	}
 	if probe, probeErr := runInProcess(90*time.Second, "new", "--title", "post-measurement probe", "--topic", "demo"); probeErr != nil {
 		t.Fatalf("re-seed the unpushed commit the sample cycle pushed: %v\noutput:\n%s", probeErr, probe.String())
@@ -346,9 +363,10 @@ func measureHealthyMirrorCycle(t *testing.T, runInProcess func(time.Duration, ..
 	return healthyCycle
 }
 
-// unboundedHoldTripwire is when a wedged mirror run is hung rather than
-// working: a whole healthy cycle of work ahead of the wedge, the budget in
-// force for this run, and the lag the cut takes to unwind — then the same
+// unboundedHoldTripwire is when a mirror run is hung rather than working: the
+// measured work ahead of the wedge (none for the sample, which has no measure
+// yet and no wedge), the budget in force for this run, and the lag a cut takes
+// to unwind — then the same
 // margin again, because a tripwire that lands on legal work reports the wrong
 // failure, which is the mistake this ticket is about.
 func unboundedHoldTripwire(healthyCycle, wedgedBudget time.Duration) time.Duration {
