@@ -809,7 +809,9 @@ func smoothRanksTx(ctx context.Context, tx *sql.Tx, triggerRank string) error {
 	}
 	window := slices.Concat(below, above)
 
-	if len(window) < 2 {
+	// A lone rank is respaced too: rankBetweenTx makes room past an all-zero
+	// rank that may be the only ranked row, and moving it is the room.
+	if len(window) == 0 {
 		return nil
 	}
 

@@ -3005,7 +3005,7 @@ Tests: absolute top ordering — `internal/store/store_test.go:2700-2730`; dupli
    SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank > ? ORDER BY item_rank ASC LIMIT ?
    ```
    bound `(triggerRank, half)` (`:426-428`); error → `"smooth: above: %w"` (`:430`). The two halves concatenate into the window (`:432`).
-5. Window fewer than 2 entries → no-op (`:434-436`).
+5. Empty window → no-op; a window of one entry is respaced like any other (`:434-436`).
 6. The run bounds are computed from the window's own ends rather than scanned for (`:443-444`): `runFloor` is `rank.Significant(window[0].rank)`, the least rank sharing the bottom end's significant part; `runCeiling` is `rank.Significant(window[len-1].rank) + "1"`, the least rank sorting above every rank sharing the top end's. Ranks sharing a significant part sort contiguously, so these two values delimit exactly the runs the window's ends sit in.
 7. Two bounded range queries pick up the rest of each run:
    ```sql

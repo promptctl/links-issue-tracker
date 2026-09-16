@@ -114,6 +114,18 @@ func TestPlacementMakesRoomBetweenKeysThatPadToTheSameValue(t *testing.T) {
 			}
 			return []string{other, ids.moved, ids.lower}
 		}},
+		{"created at the top past the only ranked row, all zeros", "", "0", func(t *testing.T, ctx context.Context, st *Store, ids noRoomFixture) []string {
+			// The issue being created is not stored yet, so the respace around
+			// "0" finds that one row and nothing else.
+			if err := st.ExecRawForTest(ctx, "UPDATE issues SET deleted_at = ? WHERE id = ?", "2026-01-01T00:00:00Z", ids.moved); err != nil {
+				t.Fatalf("delete the moved issue: %v", err)
+			}
+			created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Created", Topic: "rank", IssueType: "task", Placement: storage.RankTop})
+			if err != nil {
+				t.Fatalf("CreateIssue(top) error = %v", err)
+			}
+			return []string{created.ID, ids.lower}
+		}},
 		{"created at the top past an all-zero leader", "", "0", func(t *testing.T, ctx context.Context, st *Store, ids noRoomFixture) []string {
 			created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Created", Topic: "rank", IssueType: "task", Placement: storage.RankTop})
 			if err != nil {
