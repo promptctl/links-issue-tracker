@@ -2830,9 +2830,9 @@ via `fmt.Sprintf` with placeholder lists from `repeatPlaceholder` (`internal/sto
 - `alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"` — `internal/rank/rank.go:17` (base-62, digits then uppercase then lowercase, so ASCII order equals alphabet order).
 - `base = len(alphabet)` = 62 — `internal/rank/rank.go:19`.
 - `charIndex [256]int` maps byte→ordinal, `-1` for non-members, initialized in `init()` — `internal/rank/rank.go:22`, `:29-36`.
-- `SmoothingThreshold = 8` — `internal/rank/rank.go:130`.
-- `SmoothingWindow = 32` — `internal/rank/rank.go:133`.
-- `minGap = 16` (local const inside `spacedRanks`) — `internal/rank/rank.go:170`.
+- `SmoothingThreshold = 8` — `internal/rank/rank.go:148`.
+- `SmoothingWindow = 32` — `internal/rank/rank.go:151`.
+- `minGap = 16` (local const inside `spacedRanks`) — `internal/rank/rank.go:188`.
 - The empty string is the "unranked" sentinel: `Valid("")` is false — `internal/rank/rank.go:53-63`. Every rank query in the store excludes `item_rank != ''`.
 
 `Initial()` returns `string(alphabet[base/2])` = `"V"` — `internal/rank/rank.go:39-41`.
@@ -2841,32 +2841,33 @@ via `fmt.Sprintf` with placeholder lists from `repeatPlaceholder` (`internal/sto
 
 ### 5.2 Midpoint / Before / After
 
-`Midpoint(a, b)` — `internal/rank/rank.go:76-125`:
-- `a == b` → `errors.New("rank: a and b are equal")` (`:77-79`).
-- both non-empty and `a >= b` → `errors.New("rank: a must be less than b")` (`:80-82`).
-- Walks positions: missing/short `a` contributes virtual char index 0 ("below the floor"), missing/short `b` contributes virtual index `base` ("above the ceiling") (`:87-100`). An out-of-alphabet byte gives `errors.New("rank: invalid character in a")` (`:91`) or `"rank: invalid character in b"` (`:98`).
-- If `bChar - aChar > 1`, emits `alphabet[aChar + (bChar-aChar)/2]` and returns (`:103-107`).
-- Otherwise emits `alphabet[aChar]` and advances a position, growing the string by one char per adjacent/equal position (`:113-114`).
-- Empty `a` means "before everything"; empty `b` means "after everything" (`:74-75`).
+`Midpoint(a, b)` — `internal/rank/rank.go:85-143`:
+- `a == b` → `errors.New("rank: a and b are equal")` (`:86-88`).
+- both non-empty and `a >= b` → `errors.New("rank: a must be less than b")` (`:89-91`).
+- `b` non-empty and `rank.Significant(a) == rank.Significant(b)` → `fmt.Errorf("%w: %q and %q pad to the same value", ErrNoRoom, a, b)` (`:98-100`), where `ErrNoRoom = errors.New("rank: no room between the bounds")` (`:78`). This refuses `b` being `a` extended by zeros (`"10"`, `"100"`) and an empty `a` with an all-zero `b`.
+- Walks positions: missing/short `a` contributes virtual char index 0 ("below the floor"), missing/short `b` contributes virtual index `base` ("above the ceiling") (`:105-118`). An out-of-alphabet byte gives `errors.New("rank: invalid character in a")` (`:109`) or `"rank: invalid character in b"` (`:116`).
+- If `bChar - aChar > 1`, emits `alphabet[aChar + (bChar-aChar)/2]` and returns (`:121-125`).
+- Otherwise emits `alphabet[aChar]` and advances a position, growing the string by one char per adjacent/equal position (`:131-132`).
+- Empty `a` means "before everything"; empty `b` means "after everything" (`:83-84`).
 
-`Before(a)` = `Midpoint("", a)`, panicking `"rank.Before called with empty string"` on error — `internal/rank/rank.go:299-308`.
-`After(a)` = `Midpoint(a, "")`, panicking `"rank.After called with empty string"` on error — `internal/rank/rank.go:310-319`.
+`Before(a)` returns `Midpoint("", a)` and its error, so an all-zero `a` fails with `ErrNoRoom` — `internal/rank/rank.go:317-323`.
+`After(a)` = `Midpoint(a, "")`, panicking `"rank.After called with empty string"` on error — `internal/rank/rank.go:325-334`.
 
 ### 5.3 Spaced ranks (used by smoothing)
 
-`SpacedRanks(n)` — `internal/rank/rank.go:135-143`: `spacedRanks(n, "", "")`; panics `fmt.Sprintf("rank: spaced ranks with empty bounds failed: %v", err)` if that ever errors.
+`SpacedRanks(n)` — `internal/rank/rank.go:153-161`: `spacedRanks(n, "", "")`; panics `fmt.Sprintf("rank: spaced ranks with empty bounds failed: %v", err)` if that ever errors.
 
-`SpacedRanksBetween(lower, upper, n)` — `internal/rank/rank.go:145-159`: both bounds non-empty with `lower >= upper` → `errors.New("rank: lower must be less than upper")`; else `spacedRanks`. That guard admits bounds nothing can sort between (`"10"` and `"100"`); `spacedRanks` enforces the rest.
+`SpacedRanksBetween(lower, upper, n)` — `internal/rank/rank.go:163-177`: both bounds non-empty with `lower >= upper` → `errors.New("rank: lower must be less than upper")`; else `spacedRanks`. That guard admits bounds nothing can sort between (`"10"` and `"100"`); `spacedRanks` enforces the rest.
 
-`spacedRanks(n, lower, upper)` — `internal/rank/rank.go:161-213`:
-- `n < 0` → `errors.New("rank: n must be non-negative")` (`:163-165`); `n == 0` → `(nil, nil)` (`:166-168`).
-- Starting at `length = max(len(lower), len(upper)) + 1`, increments length until the integer span between the bounds divided by `n+1` is at least `minGap` (16) (`:177-200`).
-- A **negative** span ends the search instead of skipping the length: `fmt.Errorf("rank: no room between %q and %q: the bounds pad to the same value, so no rank longer than both sorts between them", lower, upper)` (`:194-196`). Every candidate is longer than both bounds, so `span(L+1) = 62*(span(L)+1) - 1`; a negative span stays negative at every greater length, while a non-negative one grows 62-fold, so this is the only case that would not terminate.
-- Emits `n` values at `lo + step*(i+1)` encoded fixed-width via `encodeBase62` (`:201-211`). All returned ranks share one length.
-- `lowerBoundInt(s, length)` — `:215-229`: empty → 0; else `stringToInt(s, length)`, plus 1 when `len(s) >= length`.
-- `upperBoundInt(s, length)` — `:231-249`: empty → `pow62(length)`; else `stringToInt(s,length) - 1`, unchecked; an all-zero bound yields `-1`, which the negative-span arm above reports.
-- `stringToInt` — `:251-267`: base-62 accumulation, right-padded with index 0; invalid byte → `errors.New("rank: invalid character in bounds")`.
-- `encodeBase62(value, length)` — `:277-297`: negative → `errors.New("rank: cannot encode negative value")`; remainder out of `[0,62)` → `errors.New("rank: base62 remainder out of range")`; leftover quotient → `errors.New("rank: value does not fit fixed-width encoding")`.
+`spacedRanks(n, lower, upper)` — `internal/rank/rank.go:179-231`:
+- `n < 0` → `errors.New("rank: n must be non-negative")` (`:181-183`); `n == 0` → `(nil, nil)` (`:184-186`).
+- Starting at `length = max(len(lower), len(upper)) + 1`, increments length until the integer span between the bounds divided by `n+1` is at least `minGap` (16) (`:195-218`).
+- A **negative** span ends the search instead of skipping the length: `fmt.Errorf("%w: %q and %q pad to the same value, so no rank longer than both sorts between them", ErrNoRoom, lower, upper)` (`:212-214`). Every candidate is longer than both bounds, so `span(L+1) = 62*(span(L)+1) - 1`; a negative span stays negative at every greater length, while a non-negative one grows 62-fold, so this is the only case that would not terminate.
+- Emits `n` values at `lo + step*(i+1)` encoded fixed-width via `encodeBase62` (`:219-229`). All returned ranks share one length.
+- `lowerBoundInt(s, length)` — `:233-247`: empty → 0; else `stringToInt(s, length)`, plus 1 when `len(s) >= length`.
+- `upperBoundInt(s, length)` — `:249-267`: empty → `pow62(length)`; else `stringToInt(s,length) - 1`, unchecked; an all-zero bound yields `-1`, which the negative-span arm above reports.
+- `stringToInt` — `:269-285`: base-62 accumulation, right-padded with index 0; invalid byte → `errors.New("rank: invalid character in bounds")`.
+- `encodeBase62(value, length)` — `:295-315`: negative → `errors.New("rank: cannot encode negative value")`; remainder out of `[0,62)` → `errors.New("rank: base62 remainder out of range")`; leftover quotient → `errors.New("rank: value does not fit fixed-width encoding")`.
 
 ### 5.4 Rank at creation
 
@@ -2954,11 +2955,13 @@ Pinned pair cases — `internal/store/ranking_frame_test.go:322-356`: top-level 
   SELECT item_rank FROM issues WHERE item_rank < ? AND deleted_at IS NULL AND id != ? ORDER BY item_rank DESC LIMIT 1
   ```
   bound `(target.Rank, move.MovedID)`; error → `fmt.Errorf("rank-above: query neighbor: %w", err)` (`:347-350`). Note this neighbor query has no `item_rank != ''` filter, so unranked rows sort as the empty string.
-- No neighbor → `rank.Before(target.Rank)`; else `rank.Midpoint(aboveRank, target.Rank)` with error `fmt.Errorf("rank-above: midpoint: %w", err)` (`:351-359`).
+- The new rank comes from `rankBetweenTx` with the neighbor as the lower bound and the anchor's rank as the upper; no neighbor reads as `""`, so at the frame's top it is `rank.Midpoint("", anchorRank)`. Its error → `fmt.Errorf("rank-above: %w", err)` (`:351-359`).
 - `UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?` on `move.MovedID`; error → `fmt.Errorf("rank-above: update: %w", err)` (`:360-363`).
 - `smoothRanksIfNeededTx(ctx, tx, newRank)` (`:364`). Returns the `RankMove` regardless of which id the caller named.
 
-**RankBelow(issueID, targetID)** — `internal/store/ranking.go:370-396`: mirror image — `item_rank > ? … ORDER BY item_rank ASC LIMIT 1`, errors `"rank-below: query neighbor: %w"` (`:379`), `"rank-below: midpoint: %w"` (`:387`), `"rank-below: update: %w"` (`:391`); no neighbor → `rank.After(target.Rank)`, else `rank.Midpoint(target.Rank, belowRank)`.
+**RankBelow(issueID, targetID)** — `internal/store/ranking.go:370-396`: mirror image — `item_rank > ? … ORDER BY item_rank ASC LIMIT 1`, errors `"rank-below: query neighbor: %w"` (`:379`), `"rank-below: %w"` around the `rankBetweenTx` error (`:387`), `"rank-below: update: %w"` (`:391`); the anchor's rank is the lower bound and the neighbor the upper, and no neighbor reads as `""`, so at the frame's bottom the new rank is `rank.Midpoint(anchorRank, "")`.
+
+`rankBetweenTx(ctx, tx, bounds)` — `internal/store/ranking.go:649-667`: reads the pair through `bounds()` and returns `rank.Midpoint(lower, upper)` unless it fails with `rank.ErrNoRoom` (`:650-657`). On `ErrNoRoom` it runs `smoothRanksTx(ctx, tx, upper)`, which respaces the smoothing window around `upper` with no length threshold; error → `fmt.Errorf("make room between %q and %q: %w", lower, upper, err)` (`:660-662`). It then reads the pair through `bounds()` again and returns the second `rank.Midpoint` result, error included; a second `ErrNoRoom` is not retried (`:663-666`). The `bounds` functions of `RankAbove` and `RankBelow` read the anchor's rank (`anchorRankTx`, `:627-637`) and the neighbor (`nearestRank`) on every call, so the second read sees the respaced ranks (`:689-699`, `:727-737`).
 
 Frame behavior pinned by tests — `internal/store/ranking_frame_test.go`:
 - Standalone above an epic child anchors to the epic; epic and all children keep their exact rank strings; standalone ends above the epic (`:56-80`).
@@ -2977,7 +2980,7 @@ Frame behavior pinned by tests — `internal/store/ranking_frame_test.go`:
   SELECT item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' AND id NOT IN (?,…) ORDER BY item_rank ASC LIMIT 1
   ```
   built with one placeholder per ranked id (`:118-128`); non-`ErrNoRows` error → `fmt.Errorf("rank-set: query top: %w", err)` (`:126-128`).
-- Walks the ranked ids in reverse, assigning `rank.Initial()` for the first assignment when there is no cursor, else `rank.Before(cursor)`; cursor becomes the just-assigned rank (`:134-148`). Final order: `ids[0] < ids[1] < … < ids[N-1] < existing top` — the whole set is stacked at the top of the keyspace.
+- Walks the ranked ids in reverse, assigning `rank.Initial()` for the first assignment when there is no cursor, else `rank.Before(cursor)`, whose error → `fmt.Errorf("rank set: %w", err)`; cursor becomes the just-assigned rank (`:134-148`). Final order: `ids[0] < ids[1] < … < ids[N-1] < existing top` — the whole set is stacked at the top of the keyspace.
 - One `UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?` per id, sharing a single `now` timestamp; error → `fmt.Errorf("rank-set: update %s: %w", id, err)` (`:149-153`).
 - `smoothRanksIfNeededTx(ctx, tx, newRanks[0])` when the set is non-empty (`:154-157`).
 - Atomic: all assignments in one mutation (`:97-102`).
@@ -2988,7 +2991,7 @@ Tests: absolute top ordering — `internal/store/store_test.go:2700-2730`; dupli
 ### 5.7 Smoothing (rebalancing)
 
 `smoothRanksIfNeededTx(ctx, tx, triggerRank)` — `internal/store/ranking.go:410-486`:
-1. Trigger: `len(triggerRank) < rank.SmoothingThreshold` (8) → no-op (`:411-413`). So smoothing fires only once a rank string reaches 8 characters.
+1. Trigger: `len(triggerRank) < rank.SmoothingThreshold` (8) → no-op (`:411-413`); otherwise it calls `smoothRanksTx(ctx, tx, triggerRank)` (`internal/store/ranking.go:769-842`), which performs steps 2-10 and has no threshold of its own. So smoothing through this function fires only once a rank string reaches 8 characters; `rankBetweenTx` calls `smoothRanksTx` directly.
 2. `half := rank.SmoothingWindow / 2` = 16 (`:414`).
 3. Below half:
    ```sql
@@ -3012,7 +3015,7 @@ Tests: absolute top ordering — `internal/store/store_test.go:2700-2730`; dupli
    ```
    bound `(window[len-1].rank, runCeiling)`, error → `"smooth: upper run: %w"` (`:452-457`). Both already ascend, so they concatenate around the window in order (`:458`). Both ranges are bounded on each side, so a run costs the rows it holds rather than a scan of the sorted set.
 8. The bounds themselves, one row each: the greatest rank below `runFloor` (`ORDER BY item_rank DESC LIMIT 1`), error → `"smooth: lower bound: %w"` (`:460-465`); and the least rank at or above `runCeiling` (`ORDER BY item_rank ASC LIMIT 1`), error → `"smooth: upper bound: %w"` (`:466-471`). A side with no such row leaves the bound `""` (meaning open-ended).
-9. `rank.SpacedRanksBetween(lowerBound, upperBound, len(window))`; error → `fmt.Errorf("smooth: compute ranks: %w", err)` (`:473-476`). The two bounds cannot pad to the same value — the one pair that primitive rejects (`internal/rank/rank.go:194-196`) is unreachable from here. `lowerBound` sorts below `runFloor`, so it cannot share the bottom end's significant part; and were the two bounds to share one with each other, every rank between them would belong to that single run, while `window[0]` lies between them with a different significant part.
+9. `rank.SpacedRanksBetween(lowerBound, upperBound, len(window))`; error → `fmt.Errorf("smooth: compute ranks: %w", err)` (`:473-476`). The two bounds cannot pad to the same value — the one pair that primitive rejects (`internal/rank/rank.go:212-214`) is unreachable from here. `lowerBound` sorts below `runFloor`, so it cannot share the bottom end's significant part; and were the two bounds to share one with each other, every rank between them would belong to that single run, while `window[0]` lies between them with a different significant part.
 10. `UPDATE issues SET item_rank = ? WHERE id = ?` for each window entry whose new rank differs from the old — `updated_at` is **not** touched here (`:478-484`); error → `fmt.Errorf("smooth: update %s: %w", item.id, err)` (`:481`).
 
 An all-zero rank at the bottom end takes the same path with no special case: its `rank.Significant` is `""`, so `runFloor` is `""`; `item_rank < ''` matches nothing and leaves `lowerBound` the open end, which is correct, while `item_rank >= '' AND item_rank < window[0].rank` is exactly the all-zero ranks below the window, everything sorting below an all-zero rank being itself all-zero.
@@ -3023,7 +3026,7 @@ An all-zero rank at the bottom end takes the same path with no special case: its
 
 [LAW:one-source-of-truth] `rank.Significant` is the one definition of room here, the same one `anchorRun` compares anchors by: ranks sharing a significant part leave nothing between them, so a bound sharing the window's would leave the window nowhere to go.
 
-Smoothing is invoked from `RankToTop` (`:38`), `RankSet` (`:155`), `RankToBottom` (`:182`), `RankAbove` (`:364`), `RankBelow` (`:394`), and `FixRankInversions` (`:760`, once per rewritten rank after every repair write has landed). It ignores parent/epic frames entirely: the window is whatever is adjacent in the global rank keyspace.
+Smoothing is invoked from `RankToTop` (`:38`), `RankSet` (`:155`), `RankToBottom` (`:182`), `RankAbove` (`:364`), `RankBelow` (`:394`), `rankBetweenTx` (`:660`, with no length threshold, when a relative move's pair has no room), and `FixRankInversions` (`:760`, once per rewritten rank after every repair write has landed). It ignores parent/epic frames entirely: the window is whatever is adjacent in the global rank keyspace.
 
 ### 5.8 Rank inversions
 
