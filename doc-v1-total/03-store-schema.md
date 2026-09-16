@@ -120,7 +120,7 @@ There is no ID parser/validator on lookup — supplied IDs bind verbatim, with n
 
 ### Rank placement at create
 
-Default placement is bottom (the `RankPlacement` zero value): rank = `After(max live rank)`, or the initial rank `"V"` in an empty workspace; `RankTop` mirrors with `Before(min)` (`store.go:2045-2082`). Consecutive default creates therefore keep authoring order.
+Default placement is bottom (the `RankPlacement` zero value): rank = `After(max live rank)`, or the initial rank `"V"` in an empty workspace; `RankTop` mirrors with `Before(min)`, except that an all-zero `min` leaves no room above it, so the store first respaces the ranks around it and reads `min` again (`store.go:2045-2082`). Consecutive default creates therefore keep authoring order.
 
 ## Reads
 
@@ -188,7 +188,7 @@ Reads: `ListRelationsForIssue` returns all incident relations ordered by `create
 
 ### Representation
 
-Ranks are base-62 strings (`0-9A-Za-z`, ASCII order = rank order) compared bytewise; `""` means unranked and every rank query excludes it (with three exceptions noted below). Constants: initial rank `"V"` (the alphabet midpoint), smoothing threshold 8 chars, smoothing window 32 rows, minimum spaced gap 16 code points (`internal/rank/rank.go`). `Midpoint(a,b)` produces a string strictly between two bounds (empty bound = before-/after-everything), growing one character when the gap closes, so insertion never renumbers neighbors. `SpacedRanks`/`SpacedRanksBetween` emit n evenly-spaced fixed-width ranks.
+Ranks are base-62 strings (`0-9A-Za-z`, ASCII order = rank order) compared bytewise; `""` means unranked and every rank query excludes it (with three exceptions noted below). Constants: initial rank `"V"` (the alphabet midpoint), smoothing threshold 8 chars, smoothing window 32 rows, minimum spaced gap 16 code points (`internal/rank/rank.go`). `Midpoint(a,b)` produces a string strictly between two bounds (empty bound = before-/after-everything; both empty gives the initial rank `"V"`), growing one character when the gap closes; it refuses, with `rank.ErrNoRoom`, a pair of bounds that are equal once trailing zeros are removed, such as `"10"` and `"100"`. `SpacedRanks`/`SpacedRanksBetween` emit n evenly-spaced fixed-width ranks.
 
 ### Frames
 
@@ -197,7 +197,7 @@ Rank comparisons are **frame-local**: an issue is only comparable to siblings un
 ### The five verbs
 
 - `RankToTop` / `RankToBottom`: global — new rank before the current min / after the current max live rank; no frame resolution.
-- `RankAbove` / `RankBelow`: frame-resolved; the new rank is the midpoint between the anchor and its neighbor (or before/after the anchor at the edge). The neighbor queries filter `deleted_at IS NULL` but **not** `item_rank != ''`, unlike the top/bottom/create queries — unranked rows sort as the empty string there.
+- `RankAbove` / `RankBelow`: frame-resolved; the new rank is the midpoint between the anchor and its neighbor (an open bound at the edge). When that pair has no room, the store respaces the smoothing window around the upper of the two ranks, with no length threshold, reads the anchor and neighbor again, and takes the midpoint of the new pair; a second refusal fails the move. The neighbor queries filter `deleted_at IS NULL` but **not** `item_rank != ''`, unlike the top/bottom/create queries — unranked rows sort as the empty string there.
 - `RankSet(ids)`: ≥2 unique non-blank ids required; each resolves through frames, and two ids collapsing to the same representative are rejected ("their relative order is internal to <epic>…"). The whole resolved set is stacked **at the top** of the keyspace in the given order, atomically, sharing one timestamp. Resolutions are returned even when the mutation fails.
 
 Every rank write also bumps `updated_at`, except smoothing.

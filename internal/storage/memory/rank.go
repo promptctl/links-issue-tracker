@@ -120,7 +120,7 @@ type orderEdge struct {
 //
 // A population with no members has exactly one position, and it is zero.
 // Absorbing that here is what lets place assign unconditionally, the way
-// rankBeyond absorbs the empty frame for the SQL engine. The alternative —
+// rankBeyondTx absorbs the empty frame for the SQL engine. The alternative —
 // answering it in the caller, before the dispatch — is what this had before,
 // and it meant the first issue created in a workspace never reached the
 // dispatch at all, so it accepted any placement whatsoever while the second

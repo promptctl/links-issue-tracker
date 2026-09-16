@@ -170,9 +170,9 @@ Children created under a parent may instead get sequential `parent.N` IDs (see t
 Global ordering uses **lexicographic fractional indexing**: a rank is a string over the 62-character alphabet `0-9A-Za-z`, whose byte-wise string comparison *is* rank order (`internal/rank/rank.go:17-36`). Empty string means unranked and is never a stored rank value (`rank.go:53-63`).
 
 - The first rank issued is `"V"` — the alphabet's midpoint (`rank.go:39-41`).
-- `Midpoint(a, b)` returns a string strictly between two ranks; either bound may be empty, meaning before-everything / after-everything (`rank.go:76-125`). Between adjacent characters the result grows one character longer, so insertion between any two ranks always succeeds without renumbering neighbors.
-- `SpacedRanks(n)` pre-allocates n evenly-spaced, fixed-width ranks with a minimum gap of 16 code points between neighbors, sized to leave room for later midpoint insertion (`rank.go:135-213`).
-- Rank strings reaching **8 characters** trigger local smoothing over a window of **32** items (`rank.go:127-133`); the smoothing operation itself lives in the store (`03-store-schema.md`).
+- `Midpoint(a, b)` returns a string strictly between two ranks; either bound may be empty, meaning before-everything / after-everything, and both empty is the whole keyspace, whose midpoint is `"V"`, the initial rank (`rank.go:83-84`, `rank.go:85-143`). Between adjacent characters the result grows one character longer. It refuses, with `ErrNoRoom`, a pair whose ranks are equal once trailing zeros are removed (`"10"` and `"100"`, or an empty lower bound and an all-zero upper one): nothing sorts between such a pair except further zero-extensions of the lower bound (`rank.go:72-78`, `rank.go:98-100`).
+- `SpacedRanks(n)` pre-allocates n evenly-spaced, fixed-width ranks with a minimum gap of 16 code points between neighbors, sized to leave room for later midpoint insertion (`rank.go:153-231`).
+- Rank strings reaching **8 characters** trigger local smoothing over a window of **32** items (`rank.go:145-151`); the smoothing operation itself lives in the store (`03-store-schema.md`).
 
 ## Export format
 
