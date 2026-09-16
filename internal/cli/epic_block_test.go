@@ -95,9 +95,10 @@ func TestBlockedEpicGatesNestedEpicsAndNamesADirectEdgeOnce(t *testing.T) {
 }
 
 // A blocker the hierarchy already relates to the epic it blocks gates nothing
-// through that epic. Every shape below is one `lit dep add` accepts
-// (links-hierarchy-kh57), and each one used to stall an issue that nothing else
-// held back:
+// through that epic. A workspace can hold every shape below: `lit dep add`
+// accepted each one until rejectWaitCycle, and still accepts the last
+// (links-hierarchy-kh57). Each one used to stall an issue that nothing else held
+// back:
 //   - a leaf two levels down blocks the outer epic behind an unfinished
 //     lane-mate. The lane-mate inherited the leaf while the leaf waited on the
 //     lane-mate.

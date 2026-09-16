@@ -515,7 +515,10 @@ same epic — within an epic, rank is the ordering signal. A `blocks` edge onto 
 epic holds back every issue under that epic, at any depth and in every lane:
 `lit next` offers none of them until the blocker closes, and `lit backlog` shows
 the blocker on each one as `depends on: <id> (via epic)`. A blocker nested
-inside that epic, or an epic above it, holds back nothing. `related-to` is
+inside that epic, or an epic above it, holds back nothing. An edge that would
+make issues wait on each other through an epic is refused and each step of the
+loop is named, for example a gate blocking an epic while the gate depends on one
+of that epic's children. `related-to` is
 symmetric annotation with no scheduling effect.
 
 ### `lit parent set` / `lit parent clear`
@@ -527,7 +530,8 @@ lit parent clear <child-id>
 
 Manages epic membership. `--child`/`--parent` are required for `set`; there is no
 positional form. Epics contain children; an epic's completion is derived from
-its children rather than tracked as its own status.
+its children rather than tracked as its own status. Putting an issue under an
+epic is refused when the epic's blockers already wait on that issue.
 
 Parent-child is one of the relation edges `lit dep` manages (`--type parent-child`);
 `parent` is the ergonomic face over that same store write, and both render the

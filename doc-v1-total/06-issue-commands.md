@@ -131,15 +131,15 @@ Sequence: read the issue (missing → exit 4) → authorization (only `start` ha
 
 ## Relations, comments, labels
 
-**`lit dep add --from <id> --to <id> [--type blocks|parent-child|related-to]`** (`dependency.go:23-66`). Default type `blocks`. Refusals in order: blank endpoints → usage (exit 2); bad type → bare error (exit 1); self-loop → error (exit 1; transitive cycles are **not** detected); for `blocks` only, both endpoints in the same epic → validation error (exit 3): "Do not set 'blocks' relationships between two issues in the same epic.  Use rank…" (two floating issues never trip this). Endpoints are swapped to storage orientation for `blocks` (chapter 01). Output lines: `<src> --blocks--> <dst>`, `--child-of-->`, `--related-to-->`.
+**`lit dep add --from <id> --to <id> [--type blocks|parent-child|related-to]`** (`dependency.go:24-69`). Default type `blocks`. Refusals in order: blank endpoints → usage (exit 2); bad type → bare error (exit 1); self-loop → error (exit 1); for `blocks` only, both endpoints in the same epic → validation error (exit 3): "Do not set 'blocks' relationships between two issues in the same epic.  Use rank…" (two floating issues never trip this); for `blocks` and `parent-child`, an edge that would close a wait cycle through an epic's hold on its children → validation error (exit 3) naming each step of the cycle (`dependency.go:181-290`). A cycle of `blocks` edges alone passes that check and is refused by the store (exit 1). Endpoints are swapped to storage orientation for `blocks` (chapter 01). Output lines: `<src> --blocks--> <dst>`, `--child-of-->`, `--related-to-->`.
 
 **`lit dep rm`** — same shape, no self-loop or same-epic check; prints `ok`. **`lit dep ls <id> [--type ...]`** — one line per relation in CLI orientation; empty output for none.
 
-**`lit parent set --child <id> --parent <id>`** / **`lit parent clear <child-id>`** (`issue_relations.go:73-122`): `set` prints the edge as `<child> --child-of--> <parent>`; `clear` prints `ok`.
+**`lit parent set --child <id> --parent <id>`** / **`lit parent clear <child-id>`** (`issue_relations.go:70-119`): `set` refuses a parent epic that would close a wait cycle, with the same check and message as `lit dep add --type parent-child`, then prints the edge as `<child> --child-of--> <parent>`; `clear` prints `ok`.
 
 **`lit comment add <id> --body <text>`**: blank body → "comment body is required" (exit 1); comment IDs are `cmt-<uuid>`; prints `<issueID> <commentID>`; no breadcrumb. **`lit comment rm <comment-id>`**: unknown ID → exit 4; prints the deleted pair (`cli.go:1464-1512`).
 
-**`lit label add|rm <issue-id> <label>`**: normalizes through the label rules (chapter 01), prints the resulting full label set comma-joined. Reserved labels: `needs-design` blocks readiness; `focus` marks a focus-path goal (`issue_relations.go:28-71`).
+**`lit label add|rm <issue-id> <label>`**: normalizes through the label rules (chapter 01), prints the resulting full label set comma-joined. Reserved labels: `needs-design` blocks readiness; `focus` marks a focus-path goal (`issue_relations.go:29-72`).
 
 ## Bulk operations
 

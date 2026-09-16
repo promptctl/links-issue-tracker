@@ -236,8 +236,8 @@ Stdout stays the result channel.
 
 Commands that register `--by`: `update` (`cli.go:939`), every transition via
 `runTransition` (`cli.go:1356`), `comment add` (`cli.go:1468`), `import`
-(`cli.go:1540`), `dep add` (`dependency.go:28`), `label add`
-(`issue_relations.go:31`), `parent set` (`issue_relations.go:77`), `bulk label`
+(`cli.go:1540`), `dep add` (`dependency.go:29`), `label add`
+(`issue_relations.go:32`), `parent set` (`issue_relations.go:78`), `bulk label`
 (`bulk.go:108`), `bulk close` (`bulk.go:141`), `bulk archive` (`bulk.go:172`).
 
 ### 1.12 Success-output breadcrumb
@@ -249,9 +249,9 @@ quickstart topic (`quickstart_topics.go:63-65`).
 Breadcrumbs are emitted by: `new` → `"new"` (`cli.go:365`), `followup` → `"new"`
 (`cli.go:437`), `update` → `"update"` (`cli.go:1032`), `rank` → `"update"`
 (`cli.go:1113`), `rank set` → `"update"` (`cli.go:1148`), `dep add`/`dep rm` →
-`"update"` (`dependency.go:65`, `dependency.go:90`), `label add`/`label rm` →
-`"update"` (`issue_relations.go:48`, `issue_relations.go:70`), `parent set`/
-`parent clear` → `"update"` (`issue_relations.go:103`, `issue_relations.go:121`),
+`"update"` (`dependency.go:69`, `dependency.go:94`), `label add`/`label rm` →
+`"update"` (`issue_relations.go:49`, `issue_relations.go:71`), `parent set`/
+`parent clear` → `"update"` (`issue_relations.go:107`, `issue_relations.go:121`),
 and transitions via the table below.
 
 `transitionBreadcrumbTopics` (`cli.go:1223-1227`): `start` → `"work"`,
@@ -1451,20 +1451,20 @@ usage string as a plain error → exit 1 (`register.go:112-123`).
 ### 2.18 `lit label` — Manage labels
 
 Family `labelFamily`, usage `"usage: lit label <add|rm> ..."`
-(`issue_relations.go:12-18`); both `app.AccessWrite`.
+(`issue_relations.go:13-19`); both `app.AccessWrite`.
 
-**`lit label add <issue-id> <label>`** (`issue_relations.go:28-49`):
+**`lit label add <issue-id> <label>`** (`issue_relations.go:29-50`):
 - Two positionals via `splitArgs(args, 2)`; hidden `--by` registered.
 - Refusal: `len(positional) != 2` or `fs.NArg() != 0` →
   `UsageError{"usage: lit label add <issue-id> <label>"}` → exit 2
-  (`issue_relations.go:35-40`).
+  (`issue_relations.go:36-41`).
 - Calls `Store.AddLabel(AddLabelInput{IssueID, Name, CreatedBy: resolveActor()})`
-  (`issue_relations.go:41`); labels are normalized through `model.NormalizeLabel`
+  (`issue_relations.go:42`); labels are normalized through `model.NormalizeLabel`
   (`internal/store/labels.go:130-135`).
 - Output: the resulting full label set, comma-joined on one line
   (`printLabels`, `output.go:421-424`), then the `update` breadcrumb.
 
-**`lit label rm <issue-id> <label>`** (`issue_relations.go:51-71`):
+**`lit label rm <issue-id> <label>`** (`issue_relations.go:52-72`):
 - Same shape; no `--by`. Usage `"usage: lit label rm <issue-id> <label>"`.
 - Calls `Store.RemoveLabel(issueID, label)`; prints the remaining labels and the
   `update` breadcrumb.
@@ -1475,82 +1475,99 @@ Reserved label semantics: `needs-design` blocks readiness (§1.18, `ready_state.
 ### 2.19 `lit parent` — Manage parent relationships
 
 Family `parentFamily`, usage `"usage: lit parent <set|clear> ..."`
-(`issue_relations.go:20-26`); both `app.AccessWrite`. Group `structure`
+(`issue_relations.go:21-27`); both `app.AccessWrite`. Group `structure`
 (`register.go:348-349`).
 
-**`lit parent set --child <id> --parent <id>`** (`issue_relations.go:73-104`):
+**`lit parent set --child <id> --parent <id>`** (`issue_relations.go:70-103`):
 - Flags: `--child` ("Child issue ID (required)"), `--parent` ("Parent issue ID
   (required)"), hidden `--by`.
-- Refusal: blank `--child`, blank `--parent`, or `fs.NArg() != 0` →
+- Refusals, in order: blank `--child`, blank `--parent`, or `fs.NArg() != 0` →
   `UsageError{"usage: lit parent set --child <id> --parent <id>"}` → exit 2
-  (`issue_relations.go:81-83`).
+  (`issue_relations.go:76-78`); then
+  `rejectWaitCycle(ctx, ap.Store, model.RelParentChild, child, parent)`, the
+  same check `lit dep add` step 5 runs (`issue_relations.go:79-81`).
 - Calls `Store.SetParent(SetParentInput{ChildID, ParentID, CreatedBy})`
-  (`issue_relations.go:84-88`).
+  (`issue_relations.go:82-86`).
 - Output: the edge rendered through the *same* projection `dep` uses —
-  `"<child> --child-of--> <parent>"` (`issue_relations.go:100`, via
-  `depRelationForCLI`/`depRelationLine`, `dependency.go:137-140`, `:181-192`) —
+  `"<child> --child-of--> <parent>"` (`issue_relations.go:98`, via
+  `depRelationForCLI`/`depRelationLine`, `dependency.go:141-144`, `:292-303`) —
   then the `update` breadcrumb.
 
-**`lit parent clear <child-id>`** (`issue_relations.go:106-122`):
+**`lit parent clear <child-id>`** (`issue_relations.go:105-119`):
 - No flags. Refusal: `len(positional) != 1` →
   `UsageError{"usage: lit parent clear <child-id>"}` → exit 2
-  (`issue_relations.go:112-114`). No `fs.NArg()` check.
+  (`issue_relations.go:116-118`). No `fs.NArg()` check.
 - Calls `Store.ClearParent(childID)`; prints `ok` then the `update` breadcrumb.
 
 ### 2.20 `lit dep` — Manage dependency edges
 
-Family `depFamily`, usage `"usage: lit dep <add|rm|ls> ..."` (`dependency.go:14-21`).
+Family `depFamily`, usage `"usage: lit dep <add|rm|ls> ..."` (`dependency.go:15-22`).
 `add`/`rm` are `app.AccessWrite`, `ls` is `app.AccessRead`. Group `structure`
 (`register.go:352-353`).
 
-**`lit dep add --from <id> --to <id> [--type ...]`** (`dependency.go:23-66`):
+**`lit dep add --from <id> --to <id> [--type ...]`** (`dependency.go:24-70`):
 - Flags: `--type` (string, default `"blocks"`, help "Relation type:
   blocks|parent-child|related-to"), `--from` ("Source issue ID (required)"),
   `--to` ("Target issue ID (required)"), hidden `--by`.
 - Refusals, in order:
   1. Blank `--from` or `--to`, or `fs.NArg() != 0` →
      `UsageError{"usage: lit dep add --from <id> --to <id> [--type blocks|parent-child|related-to]"}`
-     → exit 2 (`dependency.go:32-34`).
+     → exit 2 (`dependency.go:33-35`).
   2. Bad `--type` → the bare `model.ParseRelationType` error → exit 1
-     (`dependency.go:37-40`).
+     (`dependency.go:38-41`).
   3. Self-loop `from == to` → `fmt.Errorf("dep add: self-loop rejected (%s -> %s)")`
-     → exit 1 (`dependency.go:45-47`). Transitive cycles are **not** detected
-     (`dependency.go:43-44`).
+     → exit 1 (`dependency.go:44-46`).
   4. For `blocks` only: `rejectSameEpicBlocks` — if both endpoints resolve to the
      same epic membership, `ValidationError{sameEpicBlocksRejectionMessage}` →
-     exit 3 (`dependency.go:51-55`, `:149-162`). Verbatim message:
+     exit 3 (`dependency.go:52-59`, `:153-166`). Verbatim message:
      "Do not set 'blocks' relationships between two issues in the same epic.  Use
      rank to specify that one issue must be completed before another issue"
-     (`dependency.go:145` — note the double space).
+     (`dependency.go:149` — note the double space).
      Epic membership: the issue's own ID if it is a container, else the parent's
      ID if the parent is a container, else `""` (floating)
-     (`issueEpicID`, `dependency.go:167-179`). Two floating issues are not
-     same-epic (`dependency.go:158`).
+     (`issueEpicID`, `dependency.go:164-179`). Two floating issues are not
+     same-epic (`dependency.go:162`).
+  5. For `blocks` and `parent-child`: `rejectWaitCycle` refuses an edge that
+     would close a wait cycle through an epic's hold on its children, as a
+     `ValidationError` → exit 3 (`dependency.go:55-57`, `:197-241`). A `blocks`
+     edge makes `--to` wait on `--from`. A `parent-child` edge makes `--to` hold
+     back `--from` when `--to` is a container (`Store.GetIssue`); any other
+     parent, and `related-to`, add no wait and pass. `findWaitPath` walks
+     breadth-first from the issue the edge puts second, one `GetRelationsByIDs`
+     call per step, along each issue's `Blocks` and, for a container, its
+     `Children`, and returns a shortest path to the issue the edge puts first
+     (`:243-279`; `tracePath`, `:281-290`). The edge is refused when a path
+     exists and either the path or the new edge contains a hold. A path of
+     `blocks` edges closed by a `blocks` edge passes; the store's cycle check then
+     refuses it (exit 1). Message:
+     `"refusing <edge>: <first> already waits on <second> (<steps>), so neither could ever start. A blocks edge onto an epic holds back every issue under that epic"`,
+     each step and the edge rendered `"<a> blocks <b>"` or
+     `"epic <a> holds back <b>"` (`waitLink`, `:181-195`).
 - Endpoint orientation: `rt.StoreEndpoints(from, to)` swaps the pair for `blocks`
   (stored dependent→dependency) and is an involution
-  (`dependency.go:56`, `internal/model/relation_type.go:39-44`).
+  (`dependency.go:60`, `internal/model/relation_type.go:39-44`).
 - Output: `depRelationLine(depRelationForCLI(rel))` then the `update` breadcrumb
-  (`dependency.go:61-65`). Line formats (`dependency.go:181-192`):
+  (`dependency.go:65-69`). Line formats (`dependency.go:292-303`):
   - `blocks` → `"<src> --blocks--> <dst>"`
   - `parent-child` → `"<src> --child-of--> <dst>"`
   - `related-to` → `"<src> --related-to--> <dst>"`
   - default → `"<src> --depends-on--> <dst>"`
 
-**`lit dep rm --from <id> --to <id> [--type ...]`** (`dependency.go:68-91`):
+**`lit dep rm --from <id> --to <id> [--type ...]`** (`dependency.go:72-95`):
 - Same flags minus `--by`; same usage refusal string with `rm`
-  (`dependency.go:76-78`). No self-loop or same-epic check.
+  (`dependency.go:80-82`). No self-loop or same-epic check.
 - Calls `Store.RemoveRelation(srcID, dstID, rt)`; prints `ok` and the `update`
-  breadcrumb (`dependency.go:84-90`).
+  breadcrumb (`dependency.go:88-94`).
 
-**`lit dep ls <issue-id> [--type ...]`** (`dependency.go:93-131`):
+**`lit dep ls <issue-id> [--type ...]`** (`dependency.go:97-135`):
 - One positional; `--type` (string, `""`, "Filter relation type").
 - Refusal: `len(positional) != 1` or `fs.NArg() != 0` →
   `UsageError{"usage: lit dep ls <issue-id> [--type blocks|parent-child|related-to]"}`
-  → exit 2 (`dependency.go:100-105`).
+  → exit 2 (`dependency.go:104-109`).
 - A non-blank `--type` is parsed (bad value errors); blank means no filter
-  (`dependency.go:109-116`).
+  (`dependency.go:113-120`).
 - Output: one `depRelationLine` per relation, flipped back to CLI orientation
-  (`dependency.go:121-130`). No breadcrumb, no header, empty output for none.
+  (`dependency.go:125-134`). No breadcrumb, no header, empty output for none.
 
 ### 2.21 `lit bulk` — Bulk issue operations
 
@@ -1806,7 +1823,7 @@ plus at most one positional topic.
 2. **`fs.NArg()` is not checked** by: `new` (`cli.go:340-355`),
    `followup` (`cli.go:387-415`), `ls` (`cli.go:525-621`), `rank`
    (`cli.go:1049-1073`), `export` (`cli.go:1516`), `children`
-   (`issue_relations.go:127-132`), `parent clear` (`issue_relations.go:109-114`).
+   (`issue_relations.go:127-132`), `parent clear` (`issue_relations.go:113-118`).
    Extra positionals on those commands are silently ignored.
 3. **Family dispatch errors are plain errors (exit 1), not `UsageError` (exit 2)**
    (`register.go:112-123`), unlike the per-command usage refusals which are

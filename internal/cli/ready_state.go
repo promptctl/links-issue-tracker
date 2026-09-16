@@ -253,7 +253,7 @@ func climbContainers(ctx context.Context, fetch relationsFetch, subjects map[str
 // dependencies), and neither side could ever start. Above the epic, it is an epic
 // that cannot finish before this one does. Either edge restates what the
 // hierarchy already says, since an epic finishes only when everything under it
-// has. `lit dep add` still accepts both shapes (links-hierarchy-kh57).
+// has. A workspace can still hold either shape (links-hierarchy-kh57).
 func fetchEpicGates(ctx context.Context, fetch relationsFetch, epics map[string]storage.IssueRelations) (map[string][]model.Issue, error) {
 	var blockerIDs []string
 	for _, epic := range epics {
