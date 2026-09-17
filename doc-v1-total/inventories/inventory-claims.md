@@ -578,9 +578,9 @@ E2E: two clones partition-start the same lane; `lit sync reconcile` on bravo pri
 ### 9.4 Surfaces that render but do not gate
 
 - `lit backlog` — `printBacklogContext` prints the claim line, indented, after the `in_progress:` line and before `unblocks:` (`internal/cli/backlog.go:92-96`). `backlogView` is the only `workableView` preset (`internal/cli/workable.go:87-95`), and its render function is `printBacklogOutput(w, columns, issues, details, cc)` (`internal/cli/backlog.go:32`).
-- `printInlineDeps` — the shared epic/depends-on/claim/unblocks block used by `lit next`'s summary, printing the claim line between `depends on` and `unblocks` (`internal/cli/ready_state.go:903-916`). `printNextSummary` calls it after the issue's column line (`internal/cli/ready_state.go:852-859`).
+- `printInlineDeps` — the shared epic/depends-on/claim/unblocks block used by `lit next`'s summary, printing the claim line between `depends on` and `unblocks` (`internal/cli/ready_state.go:1022-1035`). `printNextSummary` calls it after the issue's column line (`internal/cli/ready_state.go:965-971`).
 
-No other command consults `claims.Standings`: the only readers of `cc.standings` / `cc.self` outside `internal/cli/claims_*.go` are `next.go:69` (routing) — everything else consumes `cc` only for rendering (`internal/cli/workable.go:54`, `internal/cli/backlog.go:32,72`, `internal/cli/ready_state.go:852,601`).
+No other command consults `claims.Standings`: the only readers of `cc.standings` / `cc.self` outside `internal/cli/claims_*.go` are `next.go:69` (routing) — everything else consumes `cc` only for rendering (`internal/cli/workable.go:54`, `internal/cli/backlog.go:32,72`, `internal/cli/ready_state.go:970,1029`).
 
 ---
 
