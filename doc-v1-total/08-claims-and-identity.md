@@ -75,7 +75,7 @@ The asymmetry (`local.go:11-17`): worktree deletion is a local fact — a claim 
 
 ## Derivation: the four-legged predicate
 
-`Derive(evidence, fresh, local)` computes a standing per lane; it writes nothing (`internal/claims/derive.go:34-43`). Per lane, `standingOf` runs four legs in dependency order **1, 4, 2, 3** (`derive.go:49-55`):
+`Derive(evidence, fresh, local)` computes a standing per lane; it writes nothing (`internal/claims/derive.go:34-43`). Per lane, `standingOf` runs four legs in dependency order **1, 4, 2, 3** (`derive.go:49-54`):
 
 **Leg 1 — the lane is unfinished.** If no member is in play (`InPlay` = not archived/deleted and not closed; see `01-data-model.md`), the lane is `Unclaimed` — a claim on finished work does not exist (`derive.go:62-64`). An all-closed lane and a lane whose sole ticket is archived both derive `Unclaimed`.
 
@@ -166,7 +166,7 @@ After a reconcile whose outcome actually merged histories (linearized or combine
 
 `formatClaimLine` renders `Held` and `Stale` only — an `Unclaimed` lane renders no line at all (`internal/cli/claims_render.go:23-44`). The line joins with ` · `: the holder badge, the coarse age of `LastActivity`, and lane progress when the lane has members.
 
-- **Holder badge** (`claimPrefix`, `claims_render.go:102-111`): if the holder resolves to a live local worktree, `claimed here[ (stale)]: <path> (<branch>)` — branch shown as `detached HEAD` when empty; a stale claim from a still-live local worktree still resolves to its address, stale controlling only the label. Otherwise `claimed: <name> (<state>)`, where `nameCheckout` (`claims_render.go:215-225`) gives the stream's short token or, for the public checkout, the literal `the public checkout`, and `holdState` (`claims_render.go:141-151`) gives `elsewhere` (an identified holder), `stale`, or `unaddressed` (the public checkout, which has no address to compare against).
+- **Holder badge** (`claimPrefix`, `claims_render.go:102-111`): if the holder resolves to a live local worktree, `claimed here[ (stale|locked)]: <path> (<branch>)` — branch shown as `detached HEAD` when empty; a stale or locked claim from a still-live local worktree still resolves to its address, the tag controlling only the label. Otherwise `claimed: <name> (<state>)`, where `nameCheckout` (`claims_render.go:215-225`) gives the stream's short token or, for the public checkout, the literal `the public checkout`, and `holdState` (`claims_render.go:141-151`) gives `elsewhere` (an identified fresh holder), `stale`, `locked` (an expired hold whose worktree is locked), or `unaddressed` (the public checkout, which has no address to compare against).
 - **Contest suffix** on a contested `Held`: ` · contested by <short-streams>`.
 - **Lane progress** (`claims_render.go:158-166`): `""` for an empty lane; `<active-id> in progress, <done>/<total> done` when a member is in progress; else `<done>/<total> done`.
 - **Short streams**: tokens truncated to the first 8 characters for display — a nicety, not a privacy measure, since the full token is already opaque (`nameCheckout`, `claims_render.go:215-225`).

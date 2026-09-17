@@ -149,7 +149,7 @@ Rules enforced at every boundary (`model.go:656-713`):
 
 - The pair is **complete or absent** — a stream without a workspace (or vice versa) collapses to unattributed, including when decoding JSON some other program wrote.
 - Both halves are opaque by mandate: nothing user-, host-, or path-shaped is ever carried, because the database syncs to shared remotes.
-- Attribution is append-only historical fact: written once at event creation, never rewritten, never backfilled. Events predating the feature are permanently unattributed — not missing data, but a claim held by the public checkout, the shared holder every unattributed write belongs to (see `08-claims-and-identity.md`).
+- Attribution is append-only historical fact: written once at event creation, never rewritten, never backfilled. Events predating the feature are permanently unattributed — not missing data, but the work of the public checkout, the shared holder every unattributed write belongs to. An unattributed *establishing* event that is also a lane's latest one derives a claim `Held` by the public checkout exactly like any other holder's; other unattributed events (bare edits, non-establishing ones) never establish a claim on their own (see `08-claims-and-identity.md`).
 
 ## Identifiers
 

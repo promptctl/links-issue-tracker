@@ -1002,7 +1002,7 @@ positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason 
 1. `GetIssue(issueID)` pre-read (`cli.go:1539-1542`) — missing → exit 4.
 2. `buildAction()` (`cli.go:1544-1547`).
 3. `authorize(ctx, stdout, ap, issueID, prior)` — §2.11 (`cli.go:1553-1555`).
-4. `transferNotice(ctx, ap, issueID, action)` (`cli.go:1563-1565`, implementation
+4. `transferNotice(ctx, ap, issueID, action)` (`cli.go:1563-1566`, implementation
    `claims_context.go:163-177`): for a `model.Start` whose prior claimant was
    held and actually changes hands, `"claim transferred: %s -> %s\n"` with
    both sides rendered by `describeClaimant` (`claims_render.go:186-194`),
@@ -1020,7 +1020,7 @@ positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason 
    (`cli.go:1595-1601`).
 8. If the action is a `StatusAction` whose `Target() == model.StateClosed`
    (i.e. `done` and `close`), re-read `GetIssueDetail` and print the close
-   adjacency block (`cli.go:1609-1616`) — §2.12.
+   adjacency block (`cli.go:1609-1617`) — §2.12.
 9. Breadcrumb per `transitionBreadcrumbTopics` (`cli.go:1618-1620`).
 
 **Close outcome validation** — `closeOutcomeFromFlags(resolution, target, usage)`
