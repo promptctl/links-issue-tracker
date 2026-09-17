@@ -1,0 +1,13 @@
+# Hooks managed by the pre-commit framework (https://pre-commit.com).
+# Install once per clone: `pre-commit install` (or `just setup`).
+repos:
+  - repo: local
+    hooks:
+      # Refuse a commit that cites a law or framing token outside the
+      # canonical index. Same check as TestRepoMarkersAreCanonical in CI,
+      # run on the staged files only.
+      - id: lawtokens
+        name: law tokens are canonical
+        entry: go run ./tools/lawtokens-check
+        language: system
+        types: [text]

@@ -43,6 +43,7 @@ you skip `just setup`:
 
 ```sh
 just setup       # one-time per machine: native deps + persist cgo paths (macOS)
+pre-commit install  # one-time per clone: install the commit hooks (see below)
 just build       # build the lit binary
 just test-short  # the inner loop: full suite minus the generated-scale tests
 just test        # run the full suite (needs the dolt CLI; see above) — args pass through
@@ -127,7 +128,13 @@ owned by the [universal-laws code skill](https://github.com/promptctl/laws/blob/
 and [`internal/lawtokens`](internal/lawtokens) holds a copy generated from it,
 `canonical_gen.go`. A gate (`go test ./internal/lawtokens/`, which runs as part
 of `go test ./...`) fails loudly naming any marker whose token is absent from
-that copy. Don't invent a token to make a comment read well. When a citation
+that copy. The same check runs on your staged files at commit time once you
+have installed the hooks in [`.pre-commit-config.yaml`](.pre-commit-config.yaml)
+with [pre-commit](https://pre-commit.com) (`pre-commit install`). If your git
+config sets `core.hooksPath`, pre-commit refuses to install; a hooks directory
+there that runs the repository's `.git/hooks/pre-commit` can host it, installed
+with `GIT_CONFIG_GLOBAL=/dev/null pre-commit install`. Don't invent a token to
+make a comment read well. When a citation
 fails the gate, look the token up in the upstream index. If it is there, the
 copy is behind: run `just lawtokens-sync` and commit the regenerated file. If it
 is not there, fix the token. Never edit `canonical_gen.go` by hand. The nightly

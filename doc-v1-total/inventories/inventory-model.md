@@ -1158,13 +1158,14 @@ be reported as non-canonical rather than silently unmatched
 `"\n"`, finds all matches per line, and returns markers in order with their
 1-based line numbers. Pure — no IO, no globals. Returns nil when there are no
 matches. Pinned by `TestScanMarkersRecognizesShapeRegardlessOfCanonicity`,
-`markers_test.go:23`.
+`markers_test.go:19`.
 
 `NonCanonical(markers []Marker) []Marker` — `markers.go:66-74`: the subset whose
 `Key()` is absent from `Canonical`; nil when all are canonical. Pinned by
-`TestNonCanonicalRejectsExactlyTheDrift` (`markers_test.go:57`),
-`TestEveryCanonicalKeyIsAccepted` (`:85`), and the repo-wide gate
-`TestRepoMarkersAreCanonical` (`:107`).
+`TestNonCanonicalRejectsExactlyTheDrift` (`markers_test.go:53`),
+`TestEveryCanonicalKeyIsAccepted` (`:81`), and the repo-wide gate
+`TestRepoMarkersAreCanonical` (`:103`), which passes every file `git ls-files`
+lists to `CheckFiles` (8.4) and fails with `Report`.
 
 ## 8.3 Upstream index parsing — `internal/lawtokens/tokenindex`
 
@@ -1208,6 +1209,29 @@ file differs from the rendered bytes, naming keys added upstream and keys no
 longer upstream. A missing file, or one that does not parse as Go, is
 rewritten like any other stale file. `.github/workflows/nightly.yml` runs the
 `-check` form.
+
+## 8.4 Checking files — `check.go`, `tools/lawtokens-check`
+
+`type Violation struct { Path string; Marker Marker }` — `check.go:13-16`;
+`(Violation).String()` (`:19-21`) renders `path:line: [NAMESPACE:token]`.
+
+`CheckFiles(fsys fs.FS, paths []string) ([]Violation, error)` — `check.go:31-43`:
+reads each path from `fsys` in the order given and returns the
+`NonCanonical(ScanMarkers(content))` markers of each as violations. A path that
+cannot be read returns an error naming it and no violations. Pinned by
+`TestCheckFilesNamesEveryInventedTokenByFileAndLine` and
+`TestCheckFilesRefusesAFileItCannotRead` (`check_test.go`).
+
+`Report(violations []Violation) string` — `check.go:47-60`: the count, one
+indented line per violation, then the remediation text naming
+`tokenindex.UpstreamURL` and `just lawtokens-sync`.
+
+`tools/lawtokens-check` takes file paths as arguments, relative to the working
+directory, and exits 0 when `CheckFiles` finds no violation, 1 after printing
+`Report` to stderr, and 2 after printing the read error. `.pre-commit-config.yaml`
+declares it as the local hook `lawtokens` (`entry: go run
+./tools/lawtokens-check`, `language: system`, `types: [text]`), which the
+pre-commit framework runs with the staged text files.
 
 ---
 
