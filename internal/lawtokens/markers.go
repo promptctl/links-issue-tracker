@@ -32,7 +32,15 @@ func (m Marker) String() string {
 // marker so it can be reported as non-canonical, rather than silently failing
 // to match and riding in unflagged ([LAW:no-silent-failure]). Canonicity is
 // then decided by exact membership in Canonical, not by the regex.
-var markerPattern = regexp.MustCompile(`\[(LAW|FRAMING):([^\]\n]+)\]`)
+var markerPattern = regexp.MustCompile(`\[(` + namespaceAlternation() + `):([^\]\n]+)\]`)
+
+func namespaceAlternation() string {
+	names := make([]string, len(namespaces))
+	for i, ns := range namespaces {
+		names[i] = regexp.QuoteMeta(ns.name)
+	}
+	return strings.Join(names, "|")
+}
 
 // ScanMarkers returns every architectural-law citation in content, in order,
 // each tagged with its 1-based line number. It is a pure function of content:

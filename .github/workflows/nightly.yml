@@ -55,6 +55,14 @@ jobs:
       - name: Test (full, no -short)
         run: go test -timeout 30m ./...
 
+      # Canonical is generated from a Token index that lives in another
+      # repository, so nothing in the PR gate can see that index change. This
+      # step does, and it runs even when the suite failed so one red night
+      # cannot hide the other. [LAW:no-silent-failure]
+      - name: Law-token index matches upstream
+        if: ${{ !cancelled() }}
+        run: go run ./tools/lawtokens-sync -check
+
       # failure() alone would miss the job-level timeout: GitHub marks a
       # timed-out job cancelled, not failed, so the wedge this workflow's
       # timeout exists to catch is exactly the case a bare failure() guard

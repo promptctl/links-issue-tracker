@@ -4,27 +4,25 @@
 // — and that convention is the codebase's machine-greppable self-audit
 // substrate and its contract with future agents.
 //
-// The set of legal tokens (the "Token index") originates in a human-facing
-// rubric that lives in global agent configuration, OUTSIDE any repository and
-// unreadable by CI. Left there, the index enforces nothing: any author can coin
-// a token and it rides into the tree unflagged until a human-directed cleanup.
-// This package fixes that by making the index live IN-repo as machine-readable
-// data — Canonical below — so a deterministic check can read it and fail loudly
-// on drift.
+// The set of legal tokens (the "Token index") is owned upstream, by the code
+// skill of the universal-laws plugin (UpstreamIndexURL). This package does not
+// transcribe it by hand: tools/lawtokens-sync fetches that document, parses
+// the index, and writes canonical_gen.go, so the in-repo copy is generated
+// output with a checkable source. The nightly workflow runs the same tool with
+// -check and fails when the upstream index and the generated file differ.
 //
-// [LAW:one-source-of-truth] Canonical is the single in-repo authority for which
-// markers are legal; every other consumer (the repo gate test here today, a
-// pre-commit hook or `lit lint` tomorrow) derives from it rather than minting a
-// second list.
+// [LAW:one-source-of-truth] the upstream index is the authority for which
+// markers are legal; Canonical is its derived copy, and every consumer in this
+// tree (the repo gate test here today, a pre-commit hook or `lit lint`
+// tomorrow) reads Canonical rather than minting a second list.
 package lawtokens
 
 import "sort"
 
 // Canonical is the set of legal markers, keyed by the full "NAMESPACE:token"
-// string a citation carries between its brackets. It is transcribed verbatim
-// from the universal-laws Token index. Two namespaces, deliberately kept small;
-// do not coin new tokens here to make code compile — a marker the index does
-// not contain is drift, and the gate is meant to catch it.
+// string a citation carries between its brackets, built from the generated
+// canonicalKeys. Do not add a token here to make code compile: a marker the
+// upstream index does not contain is drift, and the gate is meant to catch it.
 //
 // Keying by the full "NAMESPACE:token" (not the bare token) is load-bearing: it
 // makes a right-token/wrong-namespace citation — one pairing the LAW namespace
@@ -35,34 +33,7 @@ import "sort"
 // form on purpose: the gate scans this file too, so the only bracketed
 // citations it may legally contain are the real canonical ones cited inline,
 // never a non-canonical example.
-var Canonical = newMarkerSet(
-	// Framing — higher-level ideas referenced in reasoning, rarely cited in code.
-	"FRAMING:parts-and-seams",
-	"FRAMING:representation",
-
-	// Laws — cited at the callsite.
-	"LAW:decomposition",
-	"LAW:types-are-the-program",
-	"LAW:composability",
-	"LAW:carrying-cost",
-	"LAW:polishing-by-subtraction",
-	"LAW:no-ambient-temporal-coupling",
-	"LAW:effects-at-boundaries",
-	"LAW:one-source-of-truth",
-	"LAW:single-enforcer",
-	"LAW:comments-carry-meaning",
-	"LAW:dataflow-not-control-flow",
-	"LAW:one-type-per-behavior",
-	"LAW:no-mode-explosion",
-	"LAW:parse-dont-validate",
-	"LAW:no-defensive-null-guards",
-	"LAW:locality-or-seam",
-	"LAW:one-way-deps",
-	"LAW:no-shared-mutable-globals",
-	"LAW:verifiable-goals",
-	"LAW:behavior-not-structure",
-	"LAW:no-silent-failure",
-)
+var Canonical = newMarkerSet(canonicalKeys...)
 
 // markerSet is a membership-only set over canonical "NAMESPACE:token" keys.
 type markerSet map[string]struct{}
