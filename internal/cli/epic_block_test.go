@@ -104,9 +104,12 @@ func TestBlockedEpicGatesNestedEpicsAndNamesADirectEdgeOnce(t *testing.T) {
 // blocker it must inherit; every other row inherits none, and pullable lists
 // rows that must be startable.
 func TestAnEpicsBlockerHoldsBackNothingItWaitsOn(t *testing.T) {
+	// held is checked over every row, and again over the rows labeled view
+	// when it is set, so a blocker no row's epic names is settled too.
 	type expectation struct {
 		held     map[string]string
 		pullable []string
+		view     string
 	}
 	task := func(h readyTestHarness, title, parent, lane string) model.Issue {
 		return h.createIssue(storage.CreateIssueInput{Title: title, Topic: "epic-block", IssueType: "task", ParentID: parent, Lane: lane})
@@ -175,6 +178,24 @@ func TestAnEpicsBlockerHoldsBackNothingItWaitsOn(t *testing.T) {
 			h.addDependency(e2.ID, c.ID)
 			return expectation{pullable: []string{c.ID, c2.ID}}
 		}},
+		// g waits on x, and x's own gate h is dropped because h waits on x, so
+		// the dropped link never carries g on to s: g holds s back, also in a
+		// view that shows s alone.
+		{"a dropped blocker carries no wait further", func(h readyTestHarness) expectation {
+			e := epic(h, "E", "")
+			s := task(h, "s", e.ID, "")
+			f := epic(h, "F", "")
+			x := task(h, "x", f.ID, "")
+			g := task(h, "g", "", "")
+			gh := task(h, "h", "", "")
+			h.addDependency(e.ID, g.ID)
+			h.addDependency(f.ID, gh.ID)
+			h.addDependency(g.ID, x.ID)
+			h.addDependency(gh.ID, x.ID)
+			h.addDependency(gh.ID, s.ID)
+			h.setLabels(s.ID, "shown")
+			return expectation{held: map[string]string{s.ID: g.ID}, pullable: []string{x.ID}, view: "shown"}
+		}},
 		// z waits on epic k, and k stands behind l in their lane, but k's child
 		// never waits on l, so neither does z: l depending on c is no loop.
 		{"an epic's lane-mate is not what the epic waits on", func(h readyTestHarness) expectation {
@@ -195,7 +216,11 @@ func TestAnEpicsBlockerHoldsBackNothingItWaitsOn(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newReadyTestHarness(t)
 			want := tc.build(h)
-			for _, row := range h.runWorkableAnnotated(workableFilter{}, 0) {
+			rows := h.runWorkableAnnotated(workableFilter{}, 0)
+			if want.view != "" {
+				rows = append(rows, h.runWorkableAnnotated(workableFilter{Labels: []string{want.view}}, 0)...)
+			}
+			for _, row := range rows {
 				var got []string
 				for _, ann := range row.Annotations {
 					if ann.Kind == annotation.InheritedDependency {

@@ -295,25 +295,26 @@ type heldAncestry struct {
 }
 
 // fetchHeldAncestry loads the epics above the given issues, their blockers, and
-// what each blocker waits on. The wait walks cost no query when no epic has an
+// what each blocker waits on. It costs no further query when no epic has an
 // unfinished blocker.
+// [LAW:effects-at-boundaries] The wait graph is loaded once; which links hold
+// is settled over it in memory.
 func fetchHeldAncestry(ctx context.Context, fetch relationsFetch, subjects map[string]storage.IssueRelations) (heldAncestry, error) {
 	ancestry, err := fetchContainerAncestry(ctx, fetch, subjects)
 	if err != nil {
 		return heldAncestry{}, err
 	}
-	waitsOn := make(map[string]map[string]bool)
-	for _, gates := range ancestry.gates {
-		for _, gate := range gates {
-			if _, walked := waitsOn[gate.ID]; walked {
-				continue
-			}
-			if waitsOn[gate.ID], err = fetchWaitClosure(ctx, fetch, gate.ID); err != nil {
-				return heldAncestry{}, err
-			}
+	var gates []string
+	for _, blockers := range ancestry.gates {
+		for _, gate := range blockers {
+			gates = append(gates, gate.ID)
 		}
 	}
-	return heldAncestry{ancestry: ancestry, waitsOn: waitsOn}, nil
+	graph, err := fetchWaitGraph(ctx, fetch, gates)
+	if err != nil {
+		return heldAncestry{}, err
+	}
+	return heldAncestry{ancestry: ancestry, waitsOn: settleWaits(graph, gates)}, nil
 }
 
 // inheritedDependencies returns the blockers of the epics above subject that
@@ -324,29 +325,97 @@ func (h heldAncestry) inheritedDependencies(subject storage.IssueRelations) []mo
 	})
 }
 
-// fetchWaitClosure returns the ids of every unfinished issue start waits on
-// through links that hold, start itself included when a loop leads back to it.
-// The walk follows every blocker an epic passes down, including one that holds
-// nothing back because it closes a loop, so an issue in two such loops is never
-// held back by either blocker: the choice between them depends on no order.
-func fetchWaitClosure(ctx context.Context, fetch relationsFetch, start string) (map[string]bool, error) {
-	reached := map[string]bool{}
-	for frontier := []string{start}; len(frontier) > 0; {
+// fetchWaitGraph loads the links that can hold of every issue reachable from
+// starts through them, keyed by waiter.
+func fetchWaitGraph(ctx context.Context, fetch relationsFetch, starts []string) (map[string][]waitLink, error) {
+	graph := make(map[string][]waitLink)
+	seen := make(map[string]bool)
+	var frontier []string
+	enqueue := func(id string) {
+		if !seen[id] {
+			seen[id] = true
+			frontier = append(frontier, id)
+		}
+	}
+	for _, id := range starts {
+		enqueue(id)
+	}
+	for len(frontier) > 0 {
 		links, err := fetchWaitLinks(ctx, fetch, frontier)
 		if err != nil {
 			return nil, err
 		}
-		var next []string
+		frontier = nil
 		for _, link := range links {
-			if !link.holds || reached[link.prereq] {
-				continue
+			if link.holds {
+				graph[link.waiter] = append(graph[link.waiter], link)
+				enqueue(link.prereq)
 			}
-			reached[link.prereq] = true
-			next = append(next, link.prereq)
 		}
-		frontier = next
 	}
-	return reached, nil
+	return graph, nil
+}
+
+// settleWaits returns what each blocker waits on through the links of graph
+// that hold, the blocker itself included when a loop leads back to it. The gates are the
+// blockers of the subjects' epics; every blocker graph passes down is settled
+// alongside them.
+//
+// A passed-down blocker holds its issue back unless the blocker waits on that
+// issue, and what a blocker waits on depends in turn on which passed-down links
+// hold. The answer is the alternating fixpoint, which depends on no order:
+// upper is what each blocker could wait on, read from the links lower lets
+// hold, and lower what it surely waits on, read from the links upper lets hold,
+// until upper stops shrinking. A link upper lets hold closes no loop, since an
+// enforced loop through it would put its issue in upper. Two links that could
+// each hold only while the other does not, as when two epics are each blocked
+// by a child of the other, both drop.
+func settleWaits(graph map[string][]waitLink, gates []string) map[string]map[string]bool {
+	blockers := make(map[string]bool, len(gates))
+	for _, gate := range gates {
+		blockers[gate] = true
+	}
+	for _, links := range graph {
+		for _, link := range links {
+			if link.inherited {
+				blockers[link.prereq] = true
+			}
+		}
+	}
+	closures := func(follows func(waitLink) bool) map[string]map[string]bool {
+		waitsOn := make(map[string]map[string]bool, len(blockers))
+		for blocker := range blockers {
+			reached := map[string]bool{}
+			for frontier := []string{blocker}; len(frontier) > 0; {
+				var next []string
+				for _, waiter := range frontier {
+					for _, link := range graph[waiter] {
+						if follows(link) && !reached[link.prereq] {
+							reached[link.prereq] = true
+							next = append(next, link.prereq)
+						}
+					}
+				}
+				frontier = next
+			}
+			waitsOn[blocker] = reached
+		}
+		return waitsOn
+	}
+	heldAgainst := func(waitsOn map[string]map[string]bool) func(waitLink) bool {
+		return func(link waitLink) bool {
+			return !link.inherited || !waitsOn[link.prereq][link.waiter]
+		}
+	}
+	upper := closures(func(waitLink) bool { return true })
+	for {
+		lower := closures(heldAgainst(upper))
+		next := closures(heldAgainst(lower))
+		if maps.EqualFunc(next, upper, maps.Equal) {
+			return upper
+		}
+		upper = next
+	}
 }
 
 // newSiblingGateAnnotator emits an EarlierSiblingPending annotation for a leaf
@@ -552,6 +621,9 @@ func fetchFocusPathGoals(ctx context.Context, src focusGraphSource, seeds ...map
 type waitLink struct {
 	waiter, prereq string
 	holds          bool
+	// inherited marks a blocker an epic above the waiter passes down, which
+	// heldAncestry drops when it would close a loop.
+	inherited bool
 }
 
 // fetchWaitLinks returns the prerequisite links of every issue in frontier, in
@@ -590,7 +662,7 @@ func fetchWaitLinks(ctx context.Context, fetch relationsFetch, frontier []string
 			}
 		}
 		for _, dep := range ancestry.inheritedDependencies(rel) {
-			link(dep.ID, leaf)
+			links = append(links, waitLink{waiter: id, prereq: dep.ID, holds: leaf, inherited: true})
 		}
 		if !leaf {
 			for _, child := range rel.Children {

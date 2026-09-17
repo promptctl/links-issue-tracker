@@ -397,14 +397,14 @@ not `closed` (`cli.go:1151-1160`). Epics are therefore never workable rows.
    (`ready_state.go:68-73`). For each unset required field it emits a
    `MissingField` annotation (`ready_state.go:74-89`). "Set" means: non-nil, and
    for strings non-blank, for arrays/maps non-empty; anything else counts as set
-   (`isRequiredFieldSet`, `ready_state.go:676-689`).
+   (`isRequiredFieldSet`, `ready_state.go:748-761`).
 2. `newBlockerAnnotator(details, ancestry)` — for each `DependsOn` that is
    `InPlay()`, sorted by ID, emits `OpenDependency{Message: dep.ID}`; and
    additionally `RankInversion{Message: dep.ID}` when `dep.Rank > issue.Rank`.
    Then, for each id from `ancestry.inheritedDependencies(detail)` not already
    a direct dependency, emits `InheritedDependency{Message: dep.ID}` and no rank
    inversion (`ready_state.go:122-189`). `ancestry` is a `heldAncestry`
-   (`:283-295`), built by `fetchHeldAncestry` (`:300-317`) from an
+   (`:283-295`), built by `fetchHeldAncestry` (`:302-318`) from an
    `epicAncestry`: the relations of every epic above the issues, keyed by epic
    id, and each epic's gates (`:195-202`). `fetchContainerAncestry` builds both,
    a gate being any `InPlay()` `DependsOn` of a loaded epic (`:206-220`).
@@ -414,48 +414,54 @@ not `closed` (`cli.go:1151-1160`). Epics are therefore never workable rows.
    first, and stops at a parent it has already yielded (`:254-264`).
    `epicAncestry.inheritedDependencies` returns the gates of every epic
    `epicsAbove` the subject yields, deduplicated, sorted by ID (`:268-281`).
-   `fetchHeldAncestry` then runs `fetchWaitClosure` once per distinct gate: a
-   breadth-first walk of `fetchWaitLinks` from the gate over links that hold,
-   collecting every id reached (`:332-350`). `heldAncestry.inheritedDependencies`
-   drops each gate whose closure contains the subject (`:321-325`), so a blocker
-   never holds back an issue it waits on, itself included.
+   `fetchHeldAncestry` then loads the wait graph once with `fetchWaitGraph`: a
+   breadth-first walk of `fetchWaitLinks` from every gate over links that hold,
+   keyed by waiter (`:330-357`). `settleWaits` computes, in memory, the ids
+   each gate waits on, and each blocker the graph's inherited links name
+   (`:373-419`). An inherited link holds unless its blocker waits on its waiter,
+   so the closures are the alternating fixpoint: `upper` starts as the closure
+   over every link; `lower` is the closure over the links `upper` lets hold, the
+   next `upper` the closure over the links `lower` lets hold, until `upper` is
+   unchanged, which is returned. `heldAncestry.inheritedDependencies` drops each
+   gate whose closure contains the subject (`:322-326`), so a blocker never
+   holds back an issue it waits on, itself included.
 3. `newSiblingGateAnnotator(details, pendingSiblingsByEpic(held.ancestry.relations))` —
    only when the parent exists and `parent.IsContainer()`; emits
    `EarlierSiblingPending{Message: sib.ID}` for each sibling satisfying
-   `isEarlierSameLaneSibling` (`ready_state.go:361-378`).
+   `isEarlierSameLaneSibling` (`ready_state.go:430-447`).
    `isEarlierSameLaneSibling(sib, leaf) := sib.ID != leaf.ID && sib.Lane == leaf.Lane && sib.Rank < leaf.Rank`
-   (`ready_state.go:386-388`). The sibling set is the epic's **unfiltered**
-   `InPlay()` children (`pendingSiblingsByEpic`, `ready_state.go:416-426`), fetched
+   (`ready_state.go:455-457`). The sibling set is the epic's **unfiltered**
+   `InPlay()` children (`pendingSiblingsByEpic`, `ready_state.go:485-495`), fetched
    via `fetchHeldAncestry(ctx, memo, details)` (`cli.go:863`), so siblings
    hidden by `--assignee/--type/--labels` still gate.
 4. `newOrphanedAnnotator(orphanedThreshold)` — only for `in_progress` issues with
    `time.Since(UpdatedAt) >= 6h`; message
    `"in_progress for <dur truncated to minute> with no update"`
-   (`ready_state.go:634-648`; threshold constant `orphanedThreshold = 6 * time.Hour`
+   (`ready_state.go:706-720`; threshold constant `orphanedThreshold = 6 * time.Hour`
    at `ready_state.go:51`).
 5. `newNeedsDesignAnnotator()` — emits `NeedsDesign` for any issue carrying the
    label `needs-design` (`ready_state.go:25`, `:32-44`).
 6. `newFocusPathAnnotator(focusPaths)` — emits `FocusPath{Message: goalID}` for
-   issues on a focused goal's prerequisite closure (`ready_state.go:658-677`).
+   issues on a focused goal's prerequisite closure (`ready_state.go:730-749`).
 
-**Focus path derivation** (`fetchFocusPathGoals`, `ready_state.go:511-545`):
+**Focus path derivation** (`fetchFocusPathGoals`, `ready_state.go:580-614`):
 goals are issues with `Statuses=[open,in_progress]` and label `focus`
-(`FocusLabel = "focus"`, `ready_state.go:480`; query at `:512-515`). BFS over the
-prerequisite DAG, one `fetchWaitLinks` expansion per level (`:526-543`). The
+(`FocusLabel = "focus"`, `ready_state.go:549`; query at `:581-584`). BFS over the
+prerequisite DAG, one `fetchWaitLinks` expansion per level (`:595-612`). The
 `path` map doubles as the visited set, so shared prerequisites attribute to the
 first goal reached and cycles terminate. Relations are memoized through
-`memoizeRelations` (`:616-624`) over `relationsByID` (`:633-656`), primed with the
+`memoizeRelations` (`:688-696`) over `relationsByID` (`:705-728`), primed with the
 seeds; `annotateIssues` passes the memo it built for `fetchHeldAncestry`.
 
-**Wait links** (`fetchWaitLinks`, `ready_state.go:565-611`): for each frontier
-issue, in frontier order, a `waitLink{waiter, prereq, holds}` (`:552-555`) for
+**Wait links** (`fetchWaitLinks`, `ready_state.go:637-683`): for each frontier
+issue, in frontier order, a `waitLink{waiter, prereq, holds, inherited}` (`:621-627`) for
 each `InPlay()` `DependsOn`, each `epicAncestry.inheritedDependencies` entry over
 the frontier's `fetchContainerAncestry` (every gate, before `heldAncestry` drops
-any), each `InPlay()` child of a container, and each earlier same-lane
+any; `inherited` set), each `InPlay()` child of a container, and each earlier same-lane
 `InPlay()` sibling under a container parent. `holds` is true for a child link,
 and for any other link only when the waiter is not a container. A frontier id
-missing from the fetch → `storage.NotFoundError` (`:581`). The focus walk
-follows every link; `fetchWaitClosure` follows only links that hold.
+missing from the fetch → `storage.NotFoundError` (`:653`). The focus walk
+follows every link; `fetchWaitGraph` keeps only links that hold.
 
 **Step 4 — readiness classification** (`ClassifyReadiness`, `readiness.go:131-148`):
 each annotation is dispatched on its declared `ReadinessRole`:
@@ -479,19 +485,19 @@ lines (`readiness.go:80-121`).
 1. `sortByCompositeRank(rows, details)` — stable sort by
    (effective epic rank, own rank); a leaf whose parent is a container uses the
    parent's rank as its epic-position, otherwise its own rank
-   (`ready_state.go:719-734`).
+   (`ready_state.go:791-806`).
 2. `sortByPriority` — stable, urgent (higher `Priority`) first
-   (`ready_state.go:740-744`).
+   (`ready_state.go:812-816`).
 3. `sortByFocusPath` — stable, rows carrying a `FocusPath` annotation first;
-   layered last so focus outranks urgent (`ready_state.go:759-766`).
+   layered last so focus outranks urgent (`ready_state.go:831-838`).
 Then `enrichWithParentEpic` sets `ParentEpic{ID,Title}` on rows whose parent is a
-container (`ready_state.go:697-708`).
+container (`ready_state.go:769-780`).
 
-**Partition used by rollups**: `partitionWorkable` (`ready_state.go:811-824`):
+**Partition used by rollups**: `partitionWorkable` (`ready_state.go:883-896`):
 `in_progress` state wins first (even if also blocked); else not-ready → blocked;
 else ready.
 
-`applyLimit(issues, limit)` truncates when `limit > 0` (`ready_state.go:768-773`).
+`applyLimit(issues, limit)` truncates when `limit > 0` (`ready_state.go:840-845`).
 
 ---
 
@@ -1164,14 +1170,14 @@ Use 'lit next' to pick the top workable item to start.
      blocked line nor the depends-on line.
    - `    depends on: <ids joined by ", ">` (`backlog.go:84`, `output.go:41-47`)
    - `    in_progress: <age truncated to minute>[ (ORPHANED)]` for in-progress
-     rows (`backlog.go:87-91`, `inProgressSuffix` at `ready_state.go:845-852`)
+     rows (`backlog.go:87-91`, `inProgressSuffix` at `ready_state.go:917-924`)
    - `    <claim line>` when the row's lane is Held or Stale (`backlog.go:92-96`)
    - `    unblocks: <ids of rows that depend on this one>` — derived from the
      classified open-dependency facts of the listed rows only
-     (`backlog.go:97`, `buildUnblocksMap` at `ready_state.go:793-801`)
+     (`backlog.go:97`, `buildUnblocksMap` at `ready_state.go:865-873`)
 6. Finally, if any row carries a `RankInversion` annotation:
    `"\nWarning: %d rank inversion(s) — dependencies ranked below their dependents. Run `lit doctor --fix` to repair. <agent-instructions>This command is idempotent and safe to run without confirmation.</agent-instructions>\n"`
-   (`printRankInversions`, `ready_state.go:856-866`).
+   (`printRankInversions`, `ready_state.go:928-938`).
 
 Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
 (`backlog.go:58`).
@@ -1206,7 +1212,7 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
   context (`next.go:67`), then routes (`next.go:71`):
   `routeNext(rows, details, cc.standings, cc.self, focus.scopeFor(*all))`.
   `scopeFor(true)` returns the zero `focusScope`, which holds every row
-  (`ready_state.go:740-745`, `ready_state.go:722`, `ready_state.go:732-734`).
+  (`ready_state.go:812-817`, `ready_state.go:794`, `ready_state.go:804-806`).
 
 **`NextOutcome`** — a sealed sum interface (`next_route.go:26`,
 `next_route.go:179-184`) with **six** cases:
@@ -1286,7 +1292,7 @@ Step 4 is reached only by a checkout holding no lanes, which starts there
 directly:
 
 4. **The global pool, focus-scoped.** `pool, offPath := scope.partition(rows)`
-   (`next_route.go:385`, `ready_state.go:752-761`), then
+   (`next_route.go:385`, `ready_state.go:824-833`), then
    `pickFrom(pool, func(model.LaneID) bool { return true }, serveWork, takeoverWork)` →
    **`ServedFromNewLane{Row, Lane: laneOf(row)}`** (`next_route.go:386-388`).
    Else → **`NoWork{Unreachable: append(passedOver(pool, reachFor), withheldByScope(offPath)...)}`**
@@ -1372,10 +1378,10 @@ selected by the row's state and by whether `lane.Describe()` reports a named lan
 On a served row, `renderNextOutcome` calls `printNextSummary(w, row, cc, lane)`
 with `lane = model.LaneOf(row.Issue, details[row.ID].Parent)` (`next.go:130-133`),
 which prints the **default columns** (`id state topic title`) joined by two
-spaces (`ready_state.go:892-898`, `columns.go:158-160`), then `printInlineDeps`
-(`ready_state.go:949-962`): `    epic: …`, `    depends on: …`, the claim line,
+spaces (`ready_state.go:964-970`, `columns.go:158-160`), then `printInlineDeps`
+(`ready_state.go:1021-1034`): `    epic: …`, `    depends on: …`, the claim line,
 and `    unblocks: …` — but `next` passes a **nil** unblocks map, so the unblocks
-line never appears (`ready_state.go:897`). It then returns
+line never appears (`ready_state.go:969`). It then returns
 `nextPulledOccasion(row.Issue)` (`next.go:134`, `workflow_events.go:39-45`),
 dispatched as `EventNextPulled` (`next.go:75`).
 
@@ -1480,7 +1486,7 @@ Family `labelFamily`, usage `"usage: lit label <add|rm> ..."`
   `update` breadcrumb.
 
 Reserved label semantics: `needs-design` blocks readiness (§1.18, `ready_state.go:25`);
-`focus` marks a goal for focus-path ordering (`ready_state.go:434`).
+`focus` marks a goal for focus-path ordering (`ready_state.go:503`).
 
 ### 2.19 `lit parent` — Manage parent relationships
 
