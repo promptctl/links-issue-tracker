@@ -177,6 +177,16 @@ func TestSyncRegeneratesAFileThatIsNotGoAtAll(t *testing.T) {
 	}
 }
 
+func TestCheckFromTheWrongDirectorySaysSoInsteadOfReportingDrift(t *testing.T) {
+	srv := serve(t, http.StatusOK, upstreamDoc("`decomposition`"))
+	path := filepath.Join(t.TempDir(), "internal", "lawtokens", "canonical_gen.go")
+
+	err := run(context.Background(), srv.Client(), srv.URL, path, true, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "run from the repository root") {
+		t.Fatalf("run error = %v, want the repository-root hint", err)
+	}
+}
+
 // The file this tool writes is compiled into lawtokens. If the tool depended on
 // that package, a broken file would stop the tool that repairs it from
 // building, so this pins the tool's dependencies instead of trusting them.

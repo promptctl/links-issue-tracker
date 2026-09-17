@@ -32,6 +32,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -68,7 +69,12 @@ func run(ctx context.Context, client *http.Client, url, path string, check bool,
 	want := index.Render()
 
 	// A missing file is a state to regenerate from, like any other wrong
-	// content; only a file that exists and cannot be read stops the sync.
+	// content, but a missing directory means the tool is running from the
+	// wrong place, and reporting that as drift would send the reader after
+	// the wrong fault.
+	if _, err := os.Stat(filepath.Dir(path)); err != nil {
+		return fmt.Errorf("finding %s (run from the repository root): %w", filepath.Dir(path), err)
+	}
 	current, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("reading %s: %w", path, err)
@@ -83,7 +89,7 @@ func run(ctx context.Context, client *http.Client, url, path string, check bool,
 		return fmt.Errorf("%s is out of date with %s: %s; run `just lawtokens-sync` and commit the result", path, url, summary)
 	}
 	if err := os.WriteFile(path, want, 0o644); err != nil {
-		return fmt.Errorf("writing %s (run from the repository root): %w", path, err)
+		return fmt.Errorf("writing %s: %w", path, err)
 	}
 	fmt.Fprintf(out, "rewrote %s: %s\n", path, summary)
 	return nil
