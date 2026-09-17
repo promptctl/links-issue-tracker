@@ -81,6 +81,16 @@ func TestParseIndexRefusesAnIndexItCannotReadWhole(t *testing.T) {
 			wantErr: "lists entries under no known namespace header",
 		},
 		{
+			name:    "tokens split off from their header by a blank line",
+			doc:     indexDoc(framings, laws+"\n\n`carrying-cost` · `composability`"),
+			wantErr: "lists entries under no known namespace header",
+		},
+		{
+			name:    "tokens on the header line",
+			doc:     strings.Replace(indexDoc(framings, laws), "`):", "`): `carrying-cost` ·", 1),
+			wantErr: "has entries after its colon",
+		},
+		{
 			name:    "a token outside backticks",
 			doc:     indexDoc(framings, "`decomposition` · no-silent-failure"),
 			wantErr: "has text outside backticked tokens",

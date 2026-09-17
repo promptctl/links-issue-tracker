@@ -1177,22 +1177,24 @@ matches. Pinned by `TestScanMarkersRecognizesShapeRegardlessOfCanonicity`,
 `type Index struct { keys []string }` — `index.go:41-43`; `(Index).Keys()`
 (`:46-48`) returns a copy of the keys in upstream order.
 
-`ParseIndex(doc string) (Index, error)` — `index.go:57-100`. Reads the lines
+`ParseIndex(doc string) (Index, error)` — `index.go:57-105`. Reads the lines
 after the single `## The token index` heading up to the next line starting with
-`#` or equal to `---`, splits them into blank-line-separated paragraphs, and
-skips paragraphs of one line. A paragraph with more lines must start with a
-known namespace header; its remaining lines may hold only backticked spans and
-`·` separators, and each span is a bare token or `[NS:token]` in that
+`#` or equal to `---`, and splits them into blank-line-separated paragraphs. A
+paragraph whose first line does not start with a known namespace header is
+prose and is skipped, unless it contains a backtick. A namespace paragraph's
+header line must end with `:`; its remaining lines may hold only backticked
+spans and `·` separators, and each span is a bare token or `[NS:token]` in that
 paragraph's namespace, with the token matching `^[a-z]+(-[a-z]+)*$`. Errors: no
-heading; heading twice; unknown header; namespace listed twice; text outside
-spans; unclosed marker; malformed token; a namespace with no tokens; a key
-listed twice. Keys are returned FRAMING first, then LAW. Pinned by
+heading; heading twice; a backtick in a non-namespace paragraph; text after a
+header's colon; namespace listed twice; text outside spans; unclosed marker;
+malformed token; a namespace with no tokens; a key listed twice. Keys are
+returned FRAMING first, then LAW. Pinned by
 `TestParseIndexReadsBothNamespacesInUpstreamOrder` (`index_test.go:36`) and
 `TestParseIndexRefusesAnIndexItCannotReadWhole` (`:59`).
 
-`(Index).Render() []byte` — `index.go:103-114`: the Go source of
+`(Index).Render() []byte` — `index.go:108-119`: the Go source of
 `canonical_gen.go`, one quoted key per line. Pinned by
-`TestRenderListsKeysInOrderAsGoSource` (`index_test.go:135`).
+`TestRenderListsKeysInOrderAsGoSource` (`index_test.go:145`).
 
 `tools/lawtokens-sync` fetches `UpstreamIndexURL`, parses and renders it, and
 writes `internal/lawtokens/canonical_gen.go`; with `-check` it exits 1 when the

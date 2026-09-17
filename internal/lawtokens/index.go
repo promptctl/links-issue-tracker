@@ -63,12 +63,17 @@ func ParseIndex(doc string) (Index, error) {
 	byNamespace := map[string][]string{}
 	for _, para := range paragraphs(section) {
 		header, body := para[0], para[1:]
-		if len(body) == 0 {
-			continue // prose, such as the "Definitions follow" line
-		}
 		ns, ok := namespaceFor(header)
 		if !ok {
-			return Index{}, fmt.Errorf("token index: paragraph %q lists entries under no known namespace header", header)
+			// Prose, such as the "Definitions follow" line. A backticked entry
+			// here would be a token no namespace claims, so it is refused.
+			if strings.Contains(strings.Join(para, "\n"), "`") {
+				return Index{}, fmt.Errorf("token index: paragraph %q lists entries under no known namespace header", header)
+			}
+			continue
+		}
+		if !strings.HasSuffix(header, ":") {
+			return Index{}, fmt.Errorf("token index: %s header %q has entries after its colon; tokens belong on the lines below it", ns, header)
 		}
 		if _, seen := byNamespace[ns]; seen {
 			return Index{}, fmt.Errorf("token index: namespace %s is listed twice", ns)
