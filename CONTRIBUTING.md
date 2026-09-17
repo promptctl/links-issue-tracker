@@ -122,12 +122,17 @@ a copyleft import.
 Decisions in this codebase are cited inline against the architectural laws they
 serve — `// [LAW:single-enforcer] ...`, `// [LAW:no-silent-failure] ...`. The
 markers are the codebase's machine-greppable record of *why* a seam is shaped
-the way it is. Every token you cite must be a canonical one: the single in-repo
-authority is [`internal/lawtokens`](internal/lawtokens), and a gate
-(`go test ./internal/lawtokens/`, which runs as part of `go test ./...`) fails
-loudly naming any marker whose token is absent from that set. Don't invent a
-token to make a comment read well — if a citation fails the gate, fix the token;
-adding a genuinely new law means adding it to `lawtokens.Canonical` first.
+the way it is. Every token you cite must be a canonical one. The token index is
+owned by the [universal-laws code skill](https://github.com/promptctl/laws/blob/master/plugins/laws/skills/code/SKILL.md),
+and [`internal/lawtokens`](internal/lawtokens) holds a copy generated from it,
+`canonical_gen.go`. A gate (`go test ./internal/lawtokens/`, which runs as part
+of `go test ./...`) fails loudly naming any marker whose token is absent from
+that copy. Don't invent a token to make a comment read well. When a citation
+fails the gate, look the token up in the upstream index. If it is there, the
+copy is behind: run `just lawtokens-sync` and commit the regenerated file. If it
+is not there, fix the token. Never edit `canonical_gen.go` by hand. The nightly
+workflow runs the same tool with `-check` and fails when the copy and the
+upstream index differ.
 
 ## Issue tracking — this repo uses `lit`
 

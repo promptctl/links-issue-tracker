@@ -69,6 +69,12 @@ lint:
     source "{{justfile_directory()}}/scripts/cgo-env.sh"
     golangci-lint run
 
+# Regenerate internal/lawtokens/canonical_gen.go from the upstream Token index;
+# `just lawtokens-sync -check` only reports whether it is out of date. Nightly
+# runs the check, since the index lives outside this repository.
+lawtokens-sync *args:
+    go run ./tools/lawtokens-sync {{args}}
+
 # Build from source and install onto your PATH.
 install:
     ./scripts/install.sh

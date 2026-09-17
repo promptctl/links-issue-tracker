@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/lawtokens/tokenindex"
 )
 
 // brackets wraps a namespace and token into a citation at runtime. Tests build
@@ -129,10 +131,13 @@ func TestRepoMarkersAreCanonical(t *testing.T) {
 	}
 
 	if len(violations) > 0 {
-		t.Fatalf("found %d non-canonical [LAW]/[FRAMING] marker(s) — every token must "+
-			"appear in lawtokens.Canonical (the universal-laws Token index). Fix the token "+
-			"or, if it is genuinely a new law, add it to Canonical first:\n  %s",
-			len(violations), strings.Join(violations, "\n  "))
+		t.Fatalf("found %d [LAW]/[FRAMING] marker(s) whose token is not in lawtokens.Canonical:\n  %s\n\n"+
+			"Canonical is generated from the upstream Token index (%s), and either side "+
+			"can be the stale one. Look the token up there. If the index lists it, the "+
+			"generated copy is behind: run `just lawtokens-sync` and commit the result, "+
+			"and do not replace a correct citation with an older token to get past this "+
+			"test. If the index does not list it, the citation is wrong: fix the token.",
+			len(violations), strings.Join(violations, "\n  "), tokenindex.UpstreamURL)
 	}
 }
 
