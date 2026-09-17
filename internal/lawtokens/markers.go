@@ -3,6 +3,8 @@ package lawtokens
 import (
 	"regexp"
 	"strings"
+
+	"github.com/promptctl/links-issue-tracker/internal/lawtokens/tokenindex"
 )
 
 // Marker is one architectural-law citation found in some text: the namespace
@@ -35,9 +37,9 @@ func (m Marker) String() string {
 var markerPattern = regexp.MustCompile(`\[(` + namespaceAlternation() + `):([^\]\n]+)\]`)
 
 func namespaceAlternation() string {
-	names := make([]string, len(namespaces))
-	for i, ns := range namespaces {
-		names[i] = regexp.QuoteMeta(ns.name)
+	names := tokenindex.Namespaces()
+	for i, name := range names {
+		names[i] = regexp.QuoteMeta(name)
 	}
 	return strings.Join(names, "|")
 }

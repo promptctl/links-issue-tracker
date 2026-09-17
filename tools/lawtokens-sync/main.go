@@ -1,5 +1,5 @@
 // lawtokens-sync regenerates internal/lawtokens/canonical_gen.go from the
-// upstream Token index (lawtokens.UpstreamIndexURL), or with -check reports
+// upstream Token index (tokenindex.UpstreamURL), or with -check reports
 // whether the committed file still matches it.
 //
 // The Token index lives outside this repository, so the repo gate
@@ -8,6 +8,10 @@
 // source: `just lawtokens-sync` writes it, and the nightly workflow runs
 // `-check` so an upstream change shows up as its own failure, before a correct
 // citation of a new law fails a PR build. [LAW:single-enforcer]
+//
+// It imports tokenindex and never lawtokens, whose package includes the file
+// this tool writes, so the tool still builds when that file is missing or
+// broken. [LAW:one-way-deps]
 //
 // Invocation, from the repository root:
 //
@@ -18,19 +22,21 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/promptctl/links-issue-tracker/internal/lawtokens"
+	"github.com/promptctl/links-issue-tracker/internal/lawtokens/tokenindex"
 )
 
 const generatedPath = "internal/lawtokens/canonical_gen.go"
@@ -41,7 +47,7 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := run(ctx, http.DefaultClient, lawtokens.UpstreamIndexURL, generatedPath, *check, os.Stdout); err != nil {
+	if err := run(ctx, http.DefaultClient, tokenindex.UpstreamURL, generatedPath, *check, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "lawtokens-sync:", err)
 		os.Exit(1)
 	}
@@ -55,15 +61,17 @@ func run(ctx context.Context, client *http.Client, url, path string, check bool,
 	if err != nil {
 		return err
 	}
-	index, err := lawtokens.ParseIndex(doc)
+	index, err := tokenindex.Parse(doc)
 	if err != nil {
 		return fmt.Errorf("parsing %s: %w", url, err)
 	}
 	want := index.Render()
 
+	// A missing file is a state to regenerate from, like any other wrong
+	// content; only a file that exists and cannot be read stops the sync.
 	current, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("reading %s (run from the repository root): %w", path, err)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("reading %s: %w", path, err)
 	}
 	if bytes.Equal(current, want) {
 		fmt.Fprintf(out, "%s matches the upstream token index (%d keys)\n", path, len(index.Keys()))
@@ -75,7 +83,7 @@ func run(ctx context.Context, client *http.Client, url, path string, check bool,
 		return fmt.Errorf("%s is out of date with %s: %s; run `just lawtokens-sync` and commit the result", path, url, summary)
 	}
 	if err := os.WriteFile(path, want, 0o644); err != nil {
-		return fmt.Errorf("writing %s: %w", path, err)
+		return fmt.Errorf("writing %s (run from the repository root): %w", path, err)
 	}
 	fmt.Fprintf(out, "rewrote %s: %s\n", path, summary)
 	return nil

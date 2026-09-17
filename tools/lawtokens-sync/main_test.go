@@ -6,11 +6,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/promptctl/links-issue-tracker/internal/lawtokens"
+	"github.com/promptctl/links-issue-tracker/internal/lawtokens/tokenindex"
 )
 
 // upstreamDoc is a minimal document in the upstream index's shape. The
@@ -36,9 +37,9 @@ func serve(t *testing.T, status int, body string) *httptest.Server {
 
 func rendered(t *testing.T, doc string) []byte {
 	t.Helper()
-	index, err := lawtokens.ParseIndex(doc)
+	index, err := tokenindex.Parse(doc)
 	if err != nil {
-		t.Fatalf("ParseIndex: %v", err)
+		t.Fatalf("Parse: %v", err)
 	}
 	return index.Render()
 }
@@ -147,5 +148,46 @@ func TestSyncLeavesTheFileAloneWhenUpstreamCannotBeRead(t *testing.T) {
 				t.Error("a failed sync rewrote the file")
 			}
 		})
+	}
+}
+
+func TestSyncRegeneratesAFileThatIsNotGoAtAll(t *testing.T) {
+	doc := upstreamDoc("`decomposition`")
+	srv := serve(t, http.StatusOK, doc)
+
+	for name, content := range map[string][]byte{
+		"conflict markers": []byte("<<<<<<< ours\n=======\n>>>>>>> theirs\n"),
+		"missing":          nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "canonical_gen.go")
+			if content != nil {
+				if err := os.WriteFile(path, content, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			if err := run(context.Background(), srv.Client(), srv.URL, path, false, &bytes.Buffer{}); err != nil {
+				t.Fatalf("run: %v", err)
+			}
+			if got := readFile(t, path); !bytes.Equal(got, rendered(t, doc)) {
+				t.Errorf("file after sync =\n%s\nwant the rendered upstream index", got)
+			}
+		})
+	}
+}
+
+// The file this tool writes is compiled into lawtokens. If the tool depended on
+// that package, a broken file would stop the tool that repairs it from
+// building, so this pins the tool's dependencies instead of trusting them.
+func TestToolDoesNotCompileTheFileItWrites(t *testing.T) {
+	out, err := exec.Command("go", "list", "-deps", ".").Output()
+	if err != nil {
+		t.Fatalf("go list -deps: %v", err)
+	}
+	for _, dep := range strings.Fields(string(out)) {
+		if dep == "github.com/promptctl/links-issue-tracker/internal/lawtokens" {
+			t.Fatal("tools/lawtokens-sync depends on internal/lawtokens, which compiles canonical_gen.go")
+		}
 	}
 }

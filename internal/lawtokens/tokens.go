@@ -5,7 +5,7 @@
 // substrate and its contract with future agents.
 //
 // The set of legal tokens (the "Token index") is owned upstream, by the code
-// skill of the universal-laws plugin (UpstreamIndexURL). This package does not
+// skill of the universal-laws plugin (tokenindex.UpstreamURL). This package does not
 // transcribe it by hand: tools/lawtokens-sync fetches that document, parses
 // the index, and writes canonical_gen.go, so the in-repo copy is generated
 // output with a checkable source. The nightly workflow runs the same tool with

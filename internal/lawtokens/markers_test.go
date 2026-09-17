@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/lawtokens/tokenindex"
 )
 
 // brackets wraps a namespace and token into a citation at runtime. Tests build
@@ -135,7 +137,7 @@ func TestRepoMarkersAreCanonical(t *testing.T) {
 			"generated copy is behind: run `just lawtokens-sync` and commit the result, "+
 			"and do not replace a correct citation with an older token to get past this "+
 			"test. If the index does not list it, the citation is wrong: fix the token.",
-			len(violations), strings.Join(violations, "\n  "), UpstreamIndexURL)
+			len(violations), strings.Join(violations, "\n  "), tokenindex.UpstreamURL)
 	}
 }
 
