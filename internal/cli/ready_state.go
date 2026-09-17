@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"iter"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -118,10 +121,21 @@ func fetchIssueRelations(ctx context.Context, st storage.Store, issues []model.I
 
 // newBlockerAnnotator returns an annotator that checks open dependency blockers
 // and flags rank inversions where a dependency is ranked below the dependent.
-// The annotator is pure: it reads from the shared relations map rather than
+// The annotator is pure: it reads from the shared relations maps rather than
 // fetching from the store, so fetch cost is paid once upstream in
-// fetchIssueRelations.
-func newBlockerAnnotator(details map[string]storage.IssueRelations) annotation.Annotator {
+// fetchIssueRelations and fetchHeldAncestry.
+//
+// A blocks edge onto an epic is a dependency of every issue in it or in an epic
+// nested in it, in every lane, except an issue the blocker itself waits on
+// (heldAncestry), so each blocker an ancestor epic holds this issue back on
+// becomes an InheritedDependency here — through the same annotation mechanism,
+// and so the same ClassifyReadiness enforcer, a declared edge uses. It used to
+// be accepted and then ignored: `lit dep add` stored the edge, the epic's row
+// showed it, and every child stayed servable (links-epic-block-xpkz). An id the
+// issue already depends on directly is named once, as the direct edge. No
+// inherited edge is a rank inversion of this issue: rank hygiene of the epic's
+// own edge is a fact about the epic, which lit doctor's inversion pass orders.
+func newBlockerAnnotator(details map[string]storage.IssueRelations, ancestry heldAncestry) annotation.Annotator {
 	// [LAW:dataflow-not-control-flow] Dependency lookup runs for every issue;
 	// empty blockers list means no annotations, not a skipped operation.
 	return func(_ context.Context, issue model.Issue) ([]annotation.Annotation, error) {
@@ -157,7 +171,251 @@ func newBlockerAnnotator(details map[string]storage.IssueRelations) annotation.A
 				})
 			}
 		}
+		direct := make(map[string]bool, len(blockingDeps))
+		for _, dep := range blockingDeps {
+			direct[dep.ID] = true
+		}
+		for _, dep := range ancestry.inheritedDependencies(detail) {
+			if direct[dep.ID] {
+				continue
+			}
+			annotations = append(annotations, annotation.Annotation{
+				Kind:    annotation.InheritedDependency,
+				Message: dep.ID,
+			})
+		}
 		return annotations, nil
+	}
+}
+
+// relationsFetch loads relations by id: the store itself, or a walk's memo
+// over it.
+type relationsFetch func(context.Context, []string) (map[string]storage.IssueRelations, error)
+
+// epicAncestry is what the readiness gates read about the epics above a set of
+// issues: each epic's relations, keyed by epic id, and each epic's unfinished
+// blockers. One fetchContainerAncestry call builds both, so the gates always
+// describe the epics they are read beside. [LAW:one-source-of-truth]
+type epicAncestry struct {
+	relations map[string]storage.IssueRelations
+	gates     map[string][]model.Issue
+}
+
+// fetchContainerAncestry loads the epics above the given issues and their
+// unfinished blockers.
+func fetchContainerAncestry(ctx context.Context, fetch relationsFetch, subjects map[string]storage.IssueRelations) (epicAncestry, error) {
+	relations, err := climbContainers(ctx, fetch, subjects)
+	if err != nil {
+		return epicAncestry{}, err
+	}
+	gates := make(map[string][]model.Issue, len(relations))
+	for epicID, epic := range relations {
+		for _, dep := range epic.DependsOn {
+			if dep.InPlay() {
+				gates[epicID] = append(gates[epicID], dep)
+			}
+		}
+	}
+	return epicAncestry{relations: relations, gates: gates}, nil
+}
+
+// climbContainers loads the relations of every epic above the given issues, one
+// batched query per nesting level, keyed by epic id. An issue's parent is one
+// level; an epic can itself sit under an epic, so the walk climbs until no level
+// names a parent epic it has not loaded. A top-level epic has no parent, so the
+// common one-level workspace costs exactly the one query it cost before this
+// walk existed.
+func climbContainers(ctx context.Context, fetch relationsFetch, subjects map[string]storage.IssueRelations) (map[string]storage.IssueRelations, error) {
+	ancestry := make(map[string]storage.IssueRelations)
+	for level := subjects; ; {
+		var ids []string
+		for _, id := range parentEpicIDs(level) {
+			if _, loaded := ancestry[id]; !loaded {
+				ids = append(ids, id)
+			}
+		}
+		if len(ids) == 0 {
+			return ancestry, nil
+		}
+		fetched, err := fetch(ctx, ids)
+		if err != nil {
+			return nil, err
+		}
+		for id, rel := range fetched {
+			ancestry[id] = rel
+		}
+		level = fetched
+	}
+}
+
+// epicsAbove yields the ids of the epics above rel, nearest first, reading each
+// parent's relations from ancestry. A parent that is not an epic ends the walk,
+// as `epic: none` in lit backlog says, and so does a parent cycle (6m14).
+func epicsAbove(rel storage.IssueRelations, ancestry map[string]storage.IssueRelations) iter.Seq[string] {
+	return func(yield func(string) bool) {
+		seen := map[string]bool{rel.Issue.ID: true}
+		for parent := rel.Parent; parent != nil && parent.IsContainer() && !seen[parent.ID]; parent = ancestry[parent.ID].Parent {
+			seen[parent.ID] = true
+			if !yield(parent.ID) {
+				return
+			}
+		}
+	}
+}
+
+// inheritedDependencies returns the blockers of every epic above subject,
+// sorted by id, each named once. An issue that blocks an epic it sits under is
+// not among its own: nothing waits on itself.
+func (a epicAncestry) inheritedDependencies(subject storage.IssueRelations) []model.Issue {
+	named := map[string]bool{subject.Issue.ID: true}
+	var deps []model.Issue
+	for epicID := range epicsAbove(subject, a.relations) {
+		for _, dep := range a.gates[epicID] {
+			if !named[dep.ID] {
+				named[dep.ID] = true
+				deps = append(deps, dep)
+			}
+		}
+	}
+	sort.Slice(deps, func(i, j int) bool { return deps[i].ID < deps[j].ID })
+	return deps
+}
+
+// heldAncestry is an epicAncestry together with what each epic's blocker
+// already waits on. An epic's blocker holds back every issue under the epic
+// except one it waits on itself, directly or through other issues: holding that
+// one back would leave the two waiting on each other forever. That covers the
+// blocker itself when it sits under the epic, its earlier lane-mates and
+// dependencies there, and every issue under an epic the blocker contains. The
+// exception is read from the relations as they are now, so no write can leave a
+// loop behind it: not a new edge, a move, a lane or rank change, a reopen, nor
+// an import (links-hierarchy-lrz6).
+type heldAncestry struct {
+	ancestry epicAncestry
+	waitsOn  map[string]map[string]bool
+}
+
+// fetchHeldAncestry loads the epics above the given issues, their blockers, and
+// what each blocker waits on. It costs no further query when no epic has an
+// unfinished blocker.
+// [LAW:effects-at-boundaries] The wait graph is loaded once; which links hold
+// is settled over it in memory.
+func fetchHeldAncestry(ctx context.Context, fetch relationsFetch, subjects map[string]storage.IssueRelations) (heldAncestry, error) {
+	ancestry, err := fetchContainerAncestry(ctx, fetch, subjects)
+	if err != nil {
+		return heldAncestry{}, err
+	}
+	var gates []string
+	for _, blockers := range ancestry.gates {
+		for _, gate := range blockers {
+			gates = append(gates, gate.ID)
+		}
+	}
+	graph, err := fetchWaitGraph(ctx, fetch, gates)
+	if err != nil {
+		return heldAncestry{}, err
+	}
+	return heldAncestry{ancestry: ancestry, waitsOn: settleWaits(graph, gates)}, nil
+}
+
+// inheritedDependencies returns the blockers of the epics above subject that
+// hold subject back, sorted by id, each named once.
+func (h heldAncestry) inheritedDependencies(subject storage.IssueRelations) []model.Issue {
+	return slices.DeleteFunc(h.ancestry.inheritedDependencies(subject), func(gate model.Issue) bool {
+		return h.waitsOn[gate.ID][subject.Issue.ID]
+	})
+}
+
+// fetchWaitGraph loads the links that can hold of every issue reachable from
+// starts through them, keyed by waiter.
+func fetchWaitGraph(ctx context.Context, fetch relationsFetch, starts []string) (map[string][]waitLink, error) {
+	graph := make(map[string][]waitLink)
+	seen := make(map[string]bool)
+	var frontier []string
+	enqueue := func(id string) {
+		if !seen[id] {
+			seen[id] = true
+			frontier = append(frontier, id)
+		}
+	}
+	for _, id := range starts {
+		enqueue(id)
+	}
+	for len(frontier) > 0 {
+		links, err := fetchWaitLinks(ctx, fetch, frontier)
+		if err != nil {
+			return nil, err
+		}
+		frontier = nil
+		for _, link := range links {
+			if link.holds {
+				graph[link.waiter] = append(graph[link.waiter], link)
+				enqueue(link.prereq)
+			}
+		}
+	}
+	return graph, nil
+}
+
+// settleWaits returns what each blocker waits on through the links of graph
+// that hold, the blocker itself included when a loop leads back to it. The gates are the
+// blockers of the subjects' epics; every blocker graph passes down is settled
+// alongside them.
+//
+// A passed-down blocker holds its issue back unless the blocker waits on that
+// issue, and what a blocker waits on depends in turn on which passed-down links
+// hold. The answer is the alternating fixpoint, which depends on no order:
+// upper is what each blocker could wait on, read from the links lower lets
+// hold, and lower what it surely waits on, read from the links upper lets hold,
+// until upper stops shrinking. A link upper lets hold closes no loop, since an
+// enforced loop through it would put its issue in upper. Two links that could
+// each hold only while the other does not, as when two epics are each blocked
+// by a child of the other, both drop.
+func settleWaits(graph map[string][]waitLink, gates []string) map[string]map[string]bool {
+	blockers := make(map[string]bool, len(gates))
+	for _, gate := range gates {
+		blockers[gate] = true
+	}
+	for _, links := range graph {
+		for _, link := range links {
+			if link.inherited {
+				blockers[link.prereq] = true
+			}
+		}
+	}
+	closures := func(follows func(waitLink) bool) map[string]map[string]bool {
+		waitsOn := make(map[string]map[string]bool, len(blockers))
+		for blocker := range blockers {
+			reached := map[string]bool{}
+			for frontier := []string{blocker}; len(frontier) > 0; {
+				var next []string
+				for _, waiter := range frontier {
+					for _, link := range graph[waiter] {
+						if follows(link) && !reached[link.prereq] {
+							reached[link.prereq] = true
+							next = append(next, link.prereq)
+						}
+					}
+				}
+				frontier = next
+			}
+			waitsOn[blocker] = reached
+		}
+		return waitsOn
+	}
+	heldAgainst := func(waitsOn map[string]map[string]bool) func(waitLink) bool {
+		return func(link waitLink) bool {
+			return !link.inherited || !waitsOn[link.prereq][link.waiter]
+		}
+	}
+	upper := closures(func(waitLink) bool { return true })
+	for {
+		lower := closures(heldAgainst(upper))
+		next := closures(heldAgainst(lower))
+		if maps.EqualFunc(next, upper, maps.Equal) {
+			return upper
+		}
+		upper = next
 	}
 }
 
@@ -303,10 +561,10 @@ type focusGraphSource interface {
 
 // fetchFocusPathGoals returns issueID -> focused-goal ID for every unfinished
 // issue on the prerequisite closure of a focus-labeled goal, the goal itself
-// included. An issue's prerequisites are its unfinished explicit dependencies,
-// the unfinished children of a container, and its earlier same-lane unfinished
-// siblings — the same implicit edge the lane gate blocks membership on, read
-// through the shared isEarlierSameLaneSibling predicate and model.Issue.InPlay.
+// included. An issue's prerequisites are its links from fetchWaitLinks — the
+// same implicit edges the membership gate blocks on — every one of them, an
+// epic blocker that closes a loop included, since the path scopes a view rather
+// than proving a wait.
 // [LAW:one-type-per-behavior] Explicit deps and intra-epic rank order are the
 // same prerequisite fact here, exactly as they are for the membership gate.
 // [LAW:dataflow-not-control-flow] The walk is a pure expansion over relation
@@ -328,12 +586,7 @@ func fetchFocusPathGoals(ctx context.Context, src focusGraphSource, seeds ...map
 	if err != nil {
 		return nil, err
 	}
-	cache := make(map[string]storage.IssueRelations)
-	for _, seed := range seeds {
-		for id, rel := range seed {
-			cache[id] = rel
-		}
-	}
+	memo, _ := memoizeRelations(src.GetRelationsByIDs, seeds...)
 	path := make(map[string]string, len(goals))
 	frontier := make([]string, 0, len(goals))
 	for _, goal := range goals {
@@ -344,54 +597,103 @@ func fetchFocusPathGoals(ctx context.Context, src focusGraphSource, seeds ...map
 	// The path map doubles as the visited set, so shared prerequisites are
 	// attributed to the first goal that reaches them and cycles terminate.
 	for len(frontier) > 0 {
-		rels, err := relationsByID(ctx, src, cache, frontier)
+		links, err := fetchWaitLinks(ctx, memo, frontier)
 		if err != nil {
 			return nil, err
 		}
-		parentRels, err := relationsByID(ctx, src, cache, parentEpicIDs(rels))
-		if err != nil {
-			return nil, err
-		}
-		pending := pendingSiblingsByEpic(parentRels)
 		var next []string
-		for _, id := range frontier {
-			rel, ok := rels[id]
-			if !ok {
-				// Frontier ids are hydrated issues from this same connection;
-				// a hole means the store lied. [LAW:no-silent-failure]
-				return nil, storage.NotFoundError{Entity: "issue", ID: id}
+		for _, link := range links {
+			if _, seen := path[link.prereq]; seen {
+				continue
 			}
-			var prereqs []model.Issue
-			for _, dep := range rel.DependsOn {
-				if dep.InPlay() {
-					prereqs = append(prereqs, dep)
-				}
-			}
-			if rel.Issue.IsContainer() {
-				for _, child := range rel.Children {
-					if child.InPlay() {
-						prereqs = append(prereqs, child)
-					}
-				}
-			}
-			if rel.Parent != nil && rel.Parent.IsContainer() {
-				for _, sib := range pending[rel.Parent.ID] {
-					if isEarlierSameLaneSibling(sib, rel.Issue) {
-						prereqs = append(prereqs, sib)
-					}
-				}
-			}
-			for _, prereq := range prereqs {
-				if _, seen := path[prereq.ID]; seen {
-					continue
-				}
-				path[prereq.ID] = path[id]
-				next = append(next, prereq.ID)
-			}
+			path[link.prereq] = path[link.waiter]
+			next = append(next, link.prereq)
 		}
 		frontier = next
 	}
 	return path, nil
+}
+
+// waitLink is one prerequisite edge: waiter cannot finish before prereq does.
+// holds reports whether the link can keep its waiter from ever finishing. An
+// epic is finished by its children alone, and what blocks an epic holds back its
+// children instead, so an epic's other links scope a focus path but never hold
+// the epic itself.
+type waitLink struct {
+	waiter, prereq string
+	holds          bool
+	// inherited marks a blocker an epic above the waiter passes down, which
+	// heldAncestry drops when it would close a loop.
+	inherited bool
+}
+
+// fetchWaitLinks returns the prerequisite links of every issue in frontier, in
+// frontier order: its unfinished explicit dependencies, the unfinished blockers
+// of the epics above it, the unfinished children of a container, and its earlier
+// same-lane unfinished siblings. These are the edges readiness gates on, read
+// through the same epicAncestry, isEarlierSameLaneSibling and
+// model.Issue.InPlay, before heldAncestry drops the epic blockers that would
+// close a loop. [LAW:one-source-of-truth] The focus walk and each blocker's
+// wait walk both expand prerequisites here.
+func fetchWaitLinks(ctx context.Context, fetch relationsFetch, frontier []string) ([]waitLink, error) {
+	rels, err := fetch(ctx, frontier)
+	if err != nil {
+		return nil, err
+	}
+	ancestry, err := fetchContainerAncestry(ctx, fetch, rels)
+	if err != nil {
+		return nil, err
+	}
+	pending := pendingSiblingsByEpic(ancestry.relations)
+	var links []waitLink
+	for _, id := range frontier {
+		rel, ok := rels[id]
+		if !ok {
+			// Frontier ids are hydrated issues from this same connection; a
+			// hole means the store lied. [LAW:no-silent-failure]
+			return nil, storage.NotFoundError{Entity: "issue", ID: id}
+		}
+		leaf := !rel.Issue.IsContainer()
+		link := func(prereq string, holds bool) {
+			links = append(links, waitLink{waiter: id, prereq: prereq, holds: holds})
+		}
+		for _, dep := range rel.DependsOn {
+			if dep.InPlay() {
+				link(dep.ID, leaf)
+			}
+		}
+		for _, dep := range ancestry.inheritedDependencies(rel) {
+			links = append(links, waitLink{waiter: id, prereq: dep.ID, holds: leaf, inherited: true})
+		}
+		if !leaf {
+			for _, child := range rel.Children {
+				if child.InPlay() {
+					link(child.ID, true)
+				}
+			}
+		}
+		if rel.Parent != nil && rel.Parent.IsContainer() {
+			for _, sib := range pending[rel.Parent.ID] {
+				if isEarlierSameLaneSibling(sib, rel.Issue) {
+					link(sib.ID, leaf)
+				}
+			}
+		}
+	}
+	return links, nil
+}
+
+// memoizeRelations returns a fetch that loads each subject at most once, and
+// the map it loads into, primed with seeds so a subject the caller already holds
+// is never queried.
+func memoizeRelations(fetch relationsFetch, seeds ...map[string]storage.IssueRelations) (relationsFetch, map[string]storage.IssueRelations) {
+	cache := make(map[string]storage.IssueRelations)
+	for _, seed := range seeds {
+		maps.Copy(cache, seed)
+	}
+	return func(ctx context.Context, ids []string) (map[string]storage.IssueRelations, error) {
+		return relationsByID(ctx, fetch, cache, ids)
+	}, cache
 }
 
 // relationsByID returns the relations for ids, fetching only the subjects not
@@ -399,9 +701,9 @@ func fetchFocusPathGoals(ctx context.Context, src focusGraphSource, seeds ...map
 // loaded at most once per walk. Nonexistent subjects stay absent (mirroring
 // GetRelationsByIDs), so callers' presence checks still fire; only positive
 // results are memoized.
-// [LAW:single-enforcer] Every relation load on the focus walk goes through this
-// one memo, so cross-level repeats and caller-donated subjects never re-query.
-func relationsByID(ctx context.Context, src focusGraphSource, cache map[string]storage.IssueRelations, ids []string) (map[string]storage.IssueRelations, error) {
+// [LAW:single-enforcer] Every relation load on a walk goes through this one
+// memo, so cross-level repeats and caller-donated subjects never re-query.
+func relationsByID(ctx context.Context, fetch relationsFetch, cache map[string]storage.IssueRelations, ids []string) (map[string]storage.IssueRelations, error) {
 	missing := make([]string, 0, len(ids))
 	for _, id := range ids {
 		if _, ok := cache[id]; !ok {
@@ -409,7 +711,7 @@ func relationsByID(ctx context.Context, src focusGraphSource, cache map[string]s
 		}
 	}
 	if len(missing) > 0 {
-		fetched, err := src.GetRelationsByIDs(ctx, missing)
+		fetched, err := fetch(ctx, missing)
 		if err != nil {
 			return nil, err
 		}
@@ -721,7 +1023,7 @@ func printInlineDeps(w io.Writer, entry annotation.AnnotatedIssue, unblocksMap m
 	if err := printEpicLine(w, contextIndent, entry.ParentEpic); err != nil {
 		return err
 	}
-	if err := printIDListLine(w, contextIndent, "depends on", ClassifyReadiness(entry.Annotations).DependencyIDs()); err != nil {
+	if err := printIDListLine(w, contextIndent, "depends on", ClassifyReadiness(entry.Annotations).DependencyLabels()); err != nil {
 		return err
 	}
 	if line, ok := formatClaimLine(cc, lane, time.Now()); ok {

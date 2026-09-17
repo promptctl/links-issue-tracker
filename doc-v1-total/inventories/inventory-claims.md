@@ -466,7 +466,7 @@ E2E, over two real clones and a real git remote (`internal/cli/claims_takeover_e
 
 Registered `app.AccessRead`; it performs no writes (`internal/cli/register.go:484-485`). Flags (`internal/cli/next.go:31-40`): `--assignee`, `--type`, `--status` (`open|in_progress`), `--labels`, and `--all`, help string `"Ignore the focus scope and route over the whole queue"`. No `--limit`, no `--columns`. `--continue` is retired: `--continue` and `--continue=<x>` are wrapped at the parse boundary as an `UnsupportedError` carrying ``--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag`` (`internal/cli/flagset.go:138-141`).
 
-The leaf gathers rows, relation details and the focus scope, then the claim context, then routes: `routeNext(rows, details, cc.standings, cc.self, focus.scopeFor(*all))` (`internal/cli/next.go:58-71`). `focusScope.scopeFor(all)` returns the zero `focusScope` — the whole queue — when `--all` is set, so the flag picks a value and every stage after it stays unconditional (`internal/cli/ready_state.go:507-516`).
+The leaf gathers rows, relation details and the focus scope, then the claim context, then routes: `routeNext(rows, details, cc.standings, cc.self, focus.scopeFor(*all))` (`internal/cli/next.go:58-71`). `focusScope.scopeFor(all)` returns the zero `focusScope` — the whole queue — when `--all` is set, so the flag picks a value and every stage after it stays unconditional (`internal/cli/ready_state.go:809-818`).
 
 **`NextOutcome`** is a sealed sum (`internal/cli/next_route.go:26`, markers `:179-184`) — **six** cases:
 - `ServedFromClaim{Row}` — a ready ticket in a lane this checkout already holds. Routing step 1; no new claim is established, so nothing is announced (`:28-30`).
@@ -558,7 +558,7 @@ The `%s` in both non-empty arms is `describeReach(o.Unreachable, "", poolNotes)`
 - `Exhausted`, `NoWork` → returned as themselves; nothing printed.
 - default → `panic(fmt.Sprintf("renderNextOutcome: unhandled NextOutcome %T", outcome))`.
 
-For the four served cases the announcement is written only when non-empty, then `lane := model.LaneOf(row.Issue, details[row.ID].Parent)` and `printNextSummary(w, row, cc, lane)` (`internal/cli/ready_state.go:663`); finally `nextPulledOccasion(row.Issue)` is returned and dispatched to workflows (`internal/cli/next.go:125-134`, `:75`).
+For the four served cases the announcement is written only when non-empty, then `lane := model.LaneOf(row.Issue, details[row.ID].Parent)` and `printNextSummary(w, row, cc, lane)` (`internal/cli/ready_state.go:965`); finally `nextPulledOccasion(row.Issue)` is returned and dispatched to workflows (`internal/cli/next.go:125-134`, `:75`).
 
 ### 9.3 `lit sync reconcile` — the contest report (a read gate on merge)
 
@@ -578,9 +578,9 @@ E2E: two clones partition-start the same lane; `lit sync reconcile` on bravo pri
 ### 9.4 Surfaces that render but do not gate
 
 - `lit backlog` — `printBacklogContext` prints the claim line, indented, after the `in_progress:` line and before `unblocks:` (`internal/cli/backlog.go:92-96`). `backlogView` is the only `workableView` preset (`internal/cli/workable.go:87-95`), and its render function is `printBacklogOutput(w, columns, issues, details, cc)` (`internal/cli/backlog.go:32`).
-- `printInlineDeps` — the shared epic/depends-on/claim/unblocks block used by `lit next`'s summary, printing the claim line between `depends on` and `unblocks` (`internal/cli/ready_state.go:601-614`). `printNextSummary` calls it after the issue's column line (`internal/cli/ready_state.go:550-557`).
+- `printInlineDeps` — the shared epic/depends-on/claim/unblocks block used by `lit next`'s summary, printing the claim line between `depends on` and `unblocks` (`internal/cli/ready_state.go:1022-1035`). `printNextSummary` calls it after the issue's column line (`internal/cli/ready_state.go:965-971`).
 
-No other command consults `claims.Standings`: the only readers of `cc.standings` / `cc.self` outside `internal/cli/claims_*.go` are `next.go:69` (routing) — everything else consumes `cc` only for rendering (`internal/cli/workable.go:54`, `internal/cli/backlog.go:32,72`, `internal/cli/ready_state.go:550,601`).
+No other command consults `claims.Standings`: the only readers of `cc.standings` / `cc.self` outside `internal/cli/claims_*.go` are `next.go:69` (routing) — everything else consumes `cc` only for rendering (`internal/cli/workable.go:54`, `internal/cli/backlog.go:32,72`, `internal/cli/ready_state.go:970,1029`).
 
 ---
 

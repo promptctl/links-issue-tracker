@@ -856,10 +856,11 @@ func annotateIssues(ctx context.Context, st storage.Store, requiredFields []stri
 	for i, issue := range issues {
 		subjects[i] = details[issue.ID].Issue
 	}
-	// The lane gate reads the parent epics' FULL child sets (unfiltered by the
-	// CLI assignee/type/label narrowing) so an earlier sibling hidden by those
-	// filters still gates its later same-lane mates.
-	siblingRelations, err := st.GetRelationsByIDs(ctx, parentEpicIDs(details))
+	// The lane gate and the blocker annotator read the ancestor epics' FULL
+	// relations (unfiltered by the CLI assignee/type/label narrowing), so an
+	// earlier sibling or an epic's blocker hidden by those filters still gates.
+	memo, loaded := memoizeRelations(st.GetRelationsByIDs, details)
+	held, err := fetchHeldAncestry(ctx, memo, details)
 	if err != nil {
 		return nil, nil, focusScope{}, err
 	}
@@ -868,18 +869,17 @@ func annotateIssues(ctx context.Context, st storage.Store, requiredFields []stri
 	// ticket; chain membership is never stored, so it cannot drift.
 	// [LAW:one-source-of-truth]
 	//
-	// The walk reuses the relations already fetched for the subject issues
-	// (details) and their parent epics (siblingRelations) rather than re-querying
-	// the same subjects; both are GetRelationsByIDs results, so a seeded hit is
+	// The walk reuses the relations loaded for the subjects, their ancestor epics
+	// and the blockers' wait walks rather than re-querying them; a seeded hit is
 	// byte-identical to a refetch. (links-query-efficiency-988d.2)
-	focusPaths, err := fetchFocusPathGoals(ctx, st, details, siblingRelations)
+	focusPaths, err := fetchFocusPathGoals(ctx, st, loaded)
 	if err != nil {
 		return nil, nil, focusScope{}, err
 	}
 	annotated, err := annotation.Annotate(ctx, subjects,
 		fieldAnnotator,
-		newBlockerAnnotator(details),
-		newSiblingGateAnnotator(details, pendingSiblingsByEpic(siblingRelations)),
+		newBlockerAnnotator(details, held),
+		newSiblingGateAnnotator(details, pendingSiblingsByEpic(held.ancestry.relations)),
 		newOrphanedAnnotator(orphanedThreshold),
 		newNeedsDesignAnnotator(),
 		newFocusPathAnnotator(focusPaths),

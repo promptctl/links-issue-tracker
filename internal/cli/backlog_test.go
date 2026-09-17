@@ -350,10 +350,11 @@ func TestBacklogNamesTheSiblingGateAndNextAgreesWithIt(t *testing.T) {
 
 // The gate that keeps the omission from coming back, driven off the annotation
 // registry rather than a list maintained beside it: every kind the registry
-// classifies as blocking must reach the reader. OpenDependency is the one
-// deliberate silence here — printBacklogContext gives it its own "depends on:"
-// line — so it is named as the exception rather than left to a length check
-// that would pass for a kind nobody phrased.
+// classifies as blocking must reach the reader. Dependencies, direct and
+// inherited, are the one deliberate silence here — printBacklogContext gives
+// them their own "depends on:" line — so each one must reach that line instead,
+// rather than being left to a length check that would pass for a kind nobody
+// phrased.
 // [LAW:one-source-of-truth] [LAW:verifiable-goals]
 func TestBacklogPhrasesEveryBlockingKind(t *testing.T) {
 	for _, kind := range annotation.Kinds() {
@@ -362,9 +363,9 @@ func TestBacklogPhrasesEveryBlockingKind(t *testing.T) {
 		}
 		readiness := ClassifyReadiness([]annotation.Annotation{{Kind: kind, Message: "test-detail"}})
 		reasons := nonDependencyBlockingReasons(readiness)
-		if kind == annotation.OpenDependency {
-			if len(reasons) != 0 {
-				t.Errorf("kind %s rendered %v in the \"blocked:\" line; it belongs to \"depends on:\" alone", kind, reasons)
+		if labels := readiness.DependencyLabels(); len(labels) != 0 {
+			if len(labels) != 1 || !strings.HasPrefix(labels[0], "test-detail") || len(reasons) != 0 {
+				t.Errorf("kind %s rendered %v on \"depends on:\" and %v in \"blocked:\"; a dependency belongs on \"depends on:\" alone, named by its id", kind, labels, reasons)
 			}
 			continue
 		}

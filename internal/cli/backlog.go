@@ -301,7 +301,7 @@ func printBacklogContext(w io.Writer, entry annotation.AnnotatedIssue, unblocksM
 			return err
 		}
 	}
-	if err := printIDListLine(w, contextIndent, "depends on", readiness.DependencyIDs()); err != nil {
+	if err := printIDListLine(w, contextIndent, "depends on", readiness.DependencyLabels()); err != nil {
 		return err
 	}
 	if entry.State() == model.StateInProgress {
@@ -322,9 +322,9 @@ func printBacklogContext(w io.Writer, entry annotation.AnnotatedIssue, unblocksM
 // remedy differs from a declared edge's — close, re-rank, or re-lane the
 // sibling, never `lit dep`.
 //
-// Open dependencies are the ONE omission, and it is a placement choice rather
-// than a silence: this view prints them as concrete ids on its own "depends
-// on:" line. Every other blocking kind reaches the reader through
+// Dependencies, direct or inherited, are the ONE omission, and it is a placement
+// choice rather than a silence: this view prints them as concrete ids on its own
+// "depends on:" line. Every other blocking kind reaches the reader through
 // BlockingReason.Phrase, the single vocabulary — the phrasing switch used to
 // live here, where it was one surface's private list and fell a kind behind the
 // registry (EarlierSiblingPending, registered after the switch was written,
@@ -336,7 +336,7 @@ func printBacklogContext(w io.Writer, entry annotation.AnnotatedIssue, unblocksM
 func nonDependencyBlockingReasons(readiness IssueReadiness) []string {
 	var reasons []string
 	for _, reason := range readiness.BlockingReasons() {
-		if reason.Kind == annotation.OpenDependency {
+		if _, ok := reason.dependency(); ok {
 			continue
 		}
 		reasons = append(reasons, reason.Phrase())

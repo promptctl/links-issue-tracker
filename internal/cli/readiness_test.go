@@ -34,6 +34,12 @@ func TestClassifyReadinessPerKind(t *testing.T) {
 			wantBlocking: []BlockingReason{{Kind: annotation.OpenDependency, Detail: "dep-1"}},
 		},
 		{
+			name:         "inherited_dependency blocks",
+			ann:          annotation.Annotation{Kind: annotation.InheritedDependency, Message: "gate-1"},
+			wantReady:    false,
+			wantBlocking: []BlockingReason{{Kind: annotation.InheritedDependency, Detail: "gate-1"}},
+		},
+		{
 			name:         "needs_design blocks",
 			ann:          annotation.Annotation{Kind: annotation.NeedsDesign, Message: NeedsDesignLabel},
 			wantReady:    false,

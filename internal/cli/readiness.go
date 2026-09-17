@@ -18,7 +18,8 @@ import (
 
 // BlockingReason is one classified fact that prevents pulling an issue now.
 // Detail carries the annotation message: the missing field name, the open
-// dependency id, the pending sibling id, or the needs-design label.
+// dependency id (direct or inherited), the pending sibling id, or the
+// needs-design label.
 type BlockingReason struct {
 	Kind   annotation.Kind
 	Detail string
@@ -35,9 +36,10 @@ type BlockingReason struct {
 // kind as empty text: a fifth kind must fail loudly here instead of arriving on
 // screen as a blank reason or, worse, no reason at all.
 func (r BlockingReason) Phrase() string {
+	if label, ok := r.dependency(); ok {
+		return "depends on " + label
+	}
 	switch r.Kind {
-	case annotation.OpenDependency:
-		return "depends on " + r.Detail
 	case annotation.MissingField:
 		return "missing " + r.Detail
 	case annotation.NeedsDesign:
@@ -75,16 +77,47 @@ func (r IssueReadiness) IsOrphaned() bool { return r.orphaned }
 // RankInversions returns the ids of dependencies ranked below this issue.
 func (r IssueReadiness) RankInversions() []string { return r.rankInversions }
 
-// DependencyIDs returns the open-dependency ids among the blocking reasons —
-// the same facts display surfaces render as "depends on:" lines.
+// dependency answers whether this reason is an unfinished issue gating the one
+// classified — declared on it directly, or inherited from an epic it sits under
+// — and, when it is, how a reader sees it. The two kinds are one fact for
+// everything that acts on it (closing the id discharges either), so they share
+// every dependency surface; they differ only in where the edge lives, which is
+// the one thing the label adds, because the remedy for an inherited edge is on
+// the epic, never on this issue.
+// [LAW:one-type-per-behavior] [LAW:one-source-of-truth] the one list of which
+// kinds are dependencies, read by the ids, the labels, and Phrase alike.
+func (r BlockingReason) dependency() (label string, ok bool) {
+	switch r.Kind {
+	case annotation.OpenDependency:
+		return r.Detail, true
+	case annotation.InheritedDependency:
+		return r.Detail + " (via epic)", true
+	}
+	return "", false
+}
+
+// DependencyIDs returns the ids of the dependencies among the blocking reasons,
+// direct and inherited alike: the ids whose closing unblocks this issue.
 func (r IssueReadiness) DependencyIDs() []string {
 	var ids []string
 	for _, reason := range r.blocking {
-		if reason.Kind == annotation.OpenDependency {
+		if _, ok := reason.dependency(); ok {
 			ids = append(ids, reason.Detail)
 		}
 	}
 	return ids
+}
+
+// DependencyLabels returns the same dependencies as DependencyIDs, in the same
+// order, worded for the "depends on:" lines a reader sees.
+func (r IssueReadiness) DependencyLabels() []string {
+	var labels []string
+	for _, reason := range r.blocking {
+		if label, ok := reason.dependency(); ok {
+			labels = append(labels, label)
+		}
+	}
+	return labels
 }
 
 // ClassifyReadiness interprets an issue's annotations into a typed readiness

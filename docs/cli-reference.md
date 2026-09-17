@@ -511,7 +511,16 @@ lit dep ls <issue-id> [--type <t>]
 Manages relationship edges. `--from`/`--to` are required for `add` and `rm`; there is
 no positional form. The default type is `blocks`, where `--from` is the blocker and
 `--to` is the blocked issue. `blocks` edges are not allowed between two issues in the
-same epic — within an epic, rank is the ordering signal. `related-to` is symmetric
+same epic — within an epic, rank is the ordering signal. A `blocks` edge onto an
+epic holds back every issue in that epic and in epics nested inside it, in every
+lane (an issue under a parent that is not an epic belongs to no epic, as
+`epic: none` in `lit backlog` says, and is not held back):
+`lit next` offers none of them until the blocker closes, and `lit backlog` shows
+the blocker on each one as `depends on: <id> (via epic)`. The one exception is an
+issue the blocker already waits on, directly or through other issues, such as
+its own dependencies, its earlier lane-mates, or the blocker itself when it sits
+in that epic: holding that issue back would leave the two waiting on each other
+forever, so it stays free and the blocker waits on it. `related-to` is symmetric
 annotation with no scheduling effect.
 
 ### `lit parent set` / `lit parent clear`

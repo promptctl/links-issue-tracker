@@ -104,6 +104,7 @@ func register(key string, role ReadinessRole) Kind {
 var (
 	MissingField          = register("missing_field", RoleBlocking)           // a required field is empty or unset
 	OpenDependency        = register("open_dependency", RoleBlocking)         // issue depends on an open ticket
+	InheritedDependency   = register("inherited_dependency", RoleBlocking)    // an open ticket blocks an epic this issue sits under
 	RankInversion         = register("rank_inversion", RoleRankInversion)     // dependency is ranked below the dependent
 	Orphaned              = register("orphaned", RoleOrphaned)                // in_progress with no update past the orphaned threshold
 	NeedsDesign           = register("needs_design", RoleBlocking)            // carries the needs-design label
