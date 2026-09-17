@@ -310,43 +310,36 @@ Test `TestSyncCompactRunsCleanlyAndPreservesData` (`sync_test.go:320`).
 
 ### 4.1 `RemoteSchemaAheadError`
 
-Fields (`sync_schema_guard.go:31-37`): `Remote`, `Branch`, `RemoteVersion int64`, `BinarySupportedMax int64`, `RemoteProducerVersion string` (`""` when the remote head records no producer stamp).
+Fields (`sync_schema_guard.go:33-38`): `Remote`, `Branch`, `RemoteVersion int64`, `BinarySupportedMax int64`.
 
-`Error()` (`sync_schema_guard.go:39`) renders:
-`"remote <remote>/<branch> is at schema version %d but this binary supports only up to %d; refusing to write a commit below the remote head's schema"`, then:
-- if `RemoteProducerVersion != ""` → `" — run `lit upgrade --to <version>`"`
-- else → `" — upgrade lit to a version that supports this schema"`.
+`Error()` (`sync_schema_guard.go:40`) renders:
+`"remote %s/%s is at schema version %d but this binary supports only up to %d; refusing to write a commit below the remote head's schema — run `lit upgrade` to install a lit that supports schema version %d"` (Remote, Branch, RemoteVersion, BinarySupportedMax, RemoteVersion).
 
 ### 4.2 Guard paths
 
-`guardRemoteSchemaAhead(ctx, remote, branch)` (`sync_schema_guard.go:62`) — the **push** entry:
+`guardRemoteSchemaAhead(ctx, remote, branch)` (`sync_schema_guard.go:55`) — the **push** entry:
 1. Both args required.
 2. `trackingHeadHash(remote, branch)`; `!synced` → **no-op, return nil** (a branch that never synced has no remote head to fall behind) (`sync_schema_guard.go:75-77`).
 3. else `guardCommitSchemaAhead(remote, branch, head)`.
 
-`guardCommitSchemaAhead(ctx, remote, branch, commitHash)` (`sync_schema_guard.go:88`) — shared core, also called directly by the reconcile with its already-captured `remoteHead`:
+`guardCommitSchemaAhead(ctx, remote, branch, commitHash)` (`sync_schema_guard.go:81`) — shared core, also called directly by the reconcile with its already-captured `remoteHead`:
 1. `migrations.MaxVersion()` → `registryMax`.
-2. `remoteHeadSchema(commitHash)` → `(remoteVersion, producer)`.
+2. `remoteHeadSchema(commitHash)` → `remoteVersion`.
 3. `remoteVersion <= registryMax` → nil.
 4. else `&RemoteSchemaAheadError{...}`.
 
-`trackingHeadHash` (`sync_schema_guard.go:115`): `SELECT COUNT(*) FROM dolt_remote_branches WHERE name = ?` on `remotes/<remote>/<branch>`; count 0 → `("", false, nil)`; else `commitHashOfRef`.
+`trackingHeadHash` (`sync_schema_guard.go:107`): `SELECT COUNT(*) FROM dolt_remote_branches WHERE name = ?` on `remotes/<remote>/<branch>`; count 0 → `("", false, nil)`; else `commitHashOfRef`.
 
-`remoteHeadSchema(commitHash)` (`sync_schema_guard.go:139`):
-1. **Refuses** unless `isDoltCommitHash(commitHash)` — error `"remote head schema: %q is not a Dolt commit hash"` (`sync_schema_guard.go:140-146`). Necessary because `AS OF` cannot take a bound parameter and the hash is interpolated.
-2. `schemaVersionAtCommit` then `producerVersionAtCommit`.
+`remoteHeadSchema(commitHash)` (`sync_schema_guard.go:131`):
+1. **Refuses** unless `isDoltCommitHash(commitHash)` — error `"remote head schema: %q is not a Dolt commit hash"` (`sync_schema_guard.go:132-138`). Necessary because `AS OF` cannot take a bound parameter and the hash is interpolated.
+2. `schemaVersionAtCommit`.
 
-`schemaVersionAtCommit` (`sync_schema_guard.go:163`): `SELECT MAX(version_id) FROM goose_db_version AS OF '<hash>'`.
+`schemaVersionAtCommit` (`sync_schema_guard.go:147`): `SELECT MAX(version_id) FROM goose_db_version AS OF '<hash>'`.
 - MySQL 1146 (missing table) → returns `0` (pre-goose remote, never ahead).
 - NULL max (empty goose table) → `0`.
 - any other error → `"read schema version at %q: %w"`.
 
-`producerVersionAtCommit` (`sync_schema_guard.go:183`): `SELECT meta_value FROM meta AS OF '<hash>' WHERE meta_key = ?` bound to `producerBinaryVersionMetaKey`.
-- `sql.ErrNoRows` or missing table → `("", nil)`.
-- any other error → `"read producer version at %q: %w"`.
-- otherwise `strings.TrimSpace(value.String)`.
-
-`isMissingTableError(err)` (`sync_schema_guard.go:200`): `errors.As` to `*embedded.MySQLError` with `Number == 1146` — matched on the typed error, not message text.
+`isMissingTableError(err)` (`sync_schema_guard.go:167`): `errors.As` to `*embedded.MySQLError` with `Number == 1146` — matched on the typed error, not message text.
 
 `isDoltCommitHash(s)` (`sync_schema_guard.go:209`): exactly **32** characters, each in `0-9` or `a-v` (Dolt's base32 alphabet). Test `TestIsDoltCommitHash` (`sync_schema_guard_test.go:299`).
 
@@ -915,7 +908,7 @@ Tests: `TestPreGooseAdoptionStampsWithoutRerunningBaseline` (`migration_runner_t
 
 ### 8.12 Producer-version stamp
 
-`recordProducerBinaryVersion(ctx)` (`migration_runner.go:1615`): `version.Get()`; error → `"read version info: %w"`. `info.IsDev` → `(false, nil)` — a **dev build records no row**. Otherwise `s.setMeta(ctx, nil, "producer_binary_version", info.Version)` → `(true, nil)`; error → `"record producer binary version: %w"`. Test `TestProducerBinaryVersionUnstampedForDevBuild` (`migration_runner_test.go:502`). Nothing in this binary reads the row.
+`recordProducerBinaryVersion(ctx)` (`migration_runner.go:1326`): `version.Get()`; error → `"read version info: %w"`. `info.IsDev` → `(false, nil)` — a **dev build records no row**. Otherwise `s.setMeta(ctx, nil, "producer_binary_version", info.Version)` → `(true, nil)`; error → `"record producer binary version: %w"`. Test `TestProducerBinaryVersionUnstampedForDevBuild` (`migration_runner_test.go:472`). Nothing in this binary reads the row.
 
 `mostRecentMigrationSnapshotName()` (`migration_runner.go:1578`): `dbsnapshot.List(migrationSnapshotsDir(s.doltRootDir))`; a listing error degrades to `""`; otherwise the first entry passing `IsMigrationSnapshotName` (the list is newest-first).
 
@@ -935,7 +928,7 @@ Tests: `TestPreGooseAdoptionStampsWithoutRerunningBaseline` (`migration_runner_t
 3. `")"`.
 4. Always: `"\n\nto operate this workspace, install a lit that supports schema version %d:\n  lit upgrade\n\n(this is the supported path — `lit upgrade` runs even from this too-old binary, installs the latest release, and refuses a release that cannot operate this workspace.)"` (`WorkspaceVersion`).
 5. If `SnapshotName != ""` → `"\n\nif you are stuck and need to roll back this workspace to match this binary:\n  lit snapshots restore %s\n\nthis is a LOSSY recovery — any data written under the newer binary will be discarded."`; else → `"\n\nno pre-upgrade snapshot available; lossy rollback is not possible from this workspace."`.
-Tests: `TestUnsupportedSchemaVersionMessageShape` (`migration_runner_test.go:339`), `TestRefusalSurfacesRecoveryDataFromWorkspace` (`:444`).
+Tests: `TestUnsupportedSchemaVersionMessageShape` (`migration_runner_test.go:342`), `TestRefusalSurfacesRecoveryDataFromWorkspace` (`:417`).
 
 ### 8.14 The transient schema lift
 
