@@ -19,9 +19,10 @@ import (
 )
 
 // producerBinaryVersionMetaKey names the meta row that records the lit
-// version which last successfully advanced this workspace's schema. The
-// downgrade-refusal message reads it to suggest a specific binary version
-// to reinstall for a lossless `lit downgrade`.
+// version which last successfully advanced this workspace's schema. This binary
+// only writes it: the readers are older lit binaries, whose workspace-ahead
+// refusal names the recorded version as an upgrade target. Keeping the row
+// current keeps that hint pointing at the build that actually wrote the schema.
 //
 // [LAW:one-source-of-truth] Producer version lives in this one meta row,
 // not derived from migration history heuristics.
@@ -124,15 +125,9 @@ type UnsupportedSchemaVersionError struct {
 	// SnapshotName is the most recent migration-recovery snapshot present in
 	// this workspace, when one exists. Populating it offers the user a lossy
 	// rollback path; emptying it means no such snapshot is available.
-	// [LAW:types-are-the-program] Which recovery line the message emits is
-	// encoded by which optional field is populated, not by a flag.
+	// [LAW:types-are-the-program] Which rollback line the message emits is
+	// encoded by whether the optional field is populated, not by a flag.
 	SnapshotName string
-	// ProducerBinaryVersion is the lit version that last advanced this
-	// workspace's schema (recorded in meta.producer_binary_version). The
-	// workspace is AHEAD of this binary, so the lossless fix is to install that
-	// newer binary — `lit upgrade --to <it>` — not to reverse the schema; it
-	// names the concrete upgrade target instead of the lossy snapshot restore.
-	ProducerBinaryVersion string
 }
 
 func (e *UnsupportedSchemaVersionError) Error() string {
@@ -146,28 +141,24 @@ func (e *UnsupportedSchemaVersionError) Error() string {
 			strings.Join(e.MissingBaseline, ", "))
 	}
 	b.WriteString(")")
-	// [LAW:dataflow-not-control-flow] Same renderer every invocation; the
-	// populated optional fields decide which recovery lines appear.
-	if e.SnapshotName == "" && e.ProducerBinaryVersion == "" {
-		return b.String()
-	}
+	// The workspace is ahead of this binary, so the lossless fix is a NEWER
+	// binary, never a schema reverse. The remedy names the schema version that
+	// binary must support, not the build that wrote it: a recorded build can be
+	// describe-stamped, which no release feed resolves. Bare `lit upgrade` is
+	// always executable, and it refuses a release that cannot open this
+	// workspace. RemoteSchemaAheadError names the same remedy for the remote
+	// boundary. [LAW:one-type-per-behavior]
+	// [LAW:dataflow-not-control-flow] The supported path renders on every
+	// refusal; only the lossy rollback line varies, with SnapshotName.
+	fmt.Fprintf(&b,
+		"\n\nto operate this workspace, install a lit that supports schema version %d:\n  lit upgrade\n\n(this is the supported path — `lit upgrade` runs even from this too-old binary, installs the latest release, and refuses a release that cannot operate this workspace.)",
+		e.WorkspaceVersion)
 	if e.SnapshotName != "" {
 		fmt.Fprintf(&b,
 			"\n\nif you are stuck and need to roll back this workspace to match this binary:\n  lit snapshots restore %s\n\nthis is a LOSSY recovery — any data written under the newer binary will be discarded.",
 			e.SnapshotName)
 	} else {
 		b.WriteString("\n\nno pre-upgrade snapshot available; lossy rollback is not possible from this workspace.")
-	}
-	// [LAW:no-silent-failure] The workspace is ahead of this binary, so the
-	// direct fix is a NEWER binary, not a schema reverse: name `lit upgrade`
-	// with the concrete producer version. (The lossy snapshot-restore above
-	// stays as the escape hatch when the user wants to match this old binary
-	// instead.) This is the .3 counterpart to the sync-failure contract's
-	// "run: lit upgrade" resolution step — one remediation for "schema ahead."
-	if e.ProducerBinaryVersion != "" {
-		fmt.Fprintf(&b,
-			"\n\nto operate this workspace, upgrade this binary to the version that wrote it:\n  lit upgrade --to %s\n\n(this is the supported path — `lit upgrade` runs even from this too-old binary and installs the newer one, which can then operate this workspace. snapshot-restore above is the unsupported, lossy escape hatch.)",
-			e.ProducerBinaryVersion)
 	}
 	return b.String()
 }
@@ -461,8 +452,8 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 	}
 	// [LAW:one-source-of-truth] After every successful schema-advancing
 	// migrate, stamp this binary's version into meta. An older binary that
-	// later refuses this workspace reads it to name a specific `lit
-	// downgrade --to` target instead of the generic "please upgrade".
+	// later refuses this workspace reads it to name an upgrade target; this
+	// binary's own refusal does not read it.
 	// [LAW:dataflow-not-control-flow] Always called; the value decides
 	// whether anything is written (dev builds with no stamped Version skip).
 	wrote, err := s.recordProducerBinaryVersion(ctx)
@@ -824,11 +815,10 @@ func (s *Store) refuseIfBaselineMissing(ctx context.Context, state migrationStat
 	}
 	if present == 0 || len(missing) > 0 {
 		return &UnsupportedSchemaVersionError{
-			WorkspaceVersion:      state.appliedVersion,
-			MaxSupported:          state.registryMaxVers,
-			MissingBaseline:       missing,
-			SnapshotName:          s.mostRecentMigrationSnapshotName(),
-			ProducerBinaryVersion: s.readProducerBinaryVersion(ctx),
+			WorkspaceVersion: state.appliedVersion,
+			MaxSupported:     state.registryMaxVers,
+			MissingBaseline:  missing,
+			SnapshotName:     s.mostRecentMigrationSnapshotName(),
 		}
 	}
 	return nil
@@ -1326,30 +1316,13 @@ func (s *Store) mostRecentMigrationSnapshotName() string {
 	return ""
 }
 
-// readProducerBinaryVersion returns the version of the lit binary that last
-// advanced this workspace's schema, or "" if no producer version has been
-// recorded (older workspaces, or recovery paths that bypass the migrate tail).
-// Errors degrade to "" — the refusal must still surface; the downgrade line
-// is suppressed when the value is unavailable.
-//
-// [LAW:one-source-of-truth] meta.producer_binary_version is the authority;
-// this is a typed reader over that single row.
-func (s *Store) readProducerBinaryVersion(ctx context.Context) string {
-	value, err := s.getMeta(ctx, nil, producerBinaryVersionMetaKey)
-	if err != nil {
-		return ""
-	}
-	return value
-}
-
 // recordProducerBinaryVersion stamps this binary's version into meta as the
 // most recent producer of the workspace's schema. Called at the tail of a
 // successful migrate(); a dev build (Version == "") records no row so a stray
 // dev binary does not overwrite a real release stamp.
 //
-// [LAW:one-source-of-truth] One writer (this function), one reader
-// (readProducerBinaryVersion), one row in meta — the producer-version field
-// has a single canonical representation.
+// [LAW:one-source-of-truth] One writer (this function), one row in meta — the
+// producer-version field has a single canonical representation.
 func (s *Store) recordProducerBinaryVersion(ctx context.Context) (wrote bool, err error) {
 	info, err := version.Get()
 	if err != nil {

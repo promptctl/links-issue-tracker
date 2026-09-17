@@ -334,11 +334,14 @@ func TestOpenRefusesAheadOfRegistryWhenBaselineCorrupt(t *testing.T) {
 // TestUnsupportedSchemaVersionMessageShape pins the operator-facing remediation
 // string so it cannot silently regress: it must name both versions and use the
 // forward-only "please upgrade lit" phrasing, never "delete" or "manual SQL".
+// Every refusal states the schema version a binary must support and routes to
+// bare `lit upgrade`, never to a build identity: a named build can be one no
+// release feed resolves, and then the printed instruction fails when followed.
 // When MissingBaseline is populated, the message additionally surfaces the
 // schema gaps so the operator can diagnose the genuine-incompatibility branch.
 func TestUnsupportedSchemaVersionMessageShape(t *testing.T) {
 	t.Parallel()
-	forbidden := []string{"delete", "DELETE", "manual SQL", "drop", "DROP"}
+	forbidden := []string{"delete", "DELETE", "manual SQL", "drop", "DROP", "--to", "lit downgrade"}
 	assertForbiddenAbsent := func(t *testing.T, msg string) {
 		t.Helper()
 		for _, f := range forbidden {
@@ -349,11 +352,15 @@ func TestUnsupportedSchemaVersionMessageShape(t *testing.T) {
 	}
 	const upgradeHead = "please upgrade lit (your workspace is at schema version 7; this binary supports up to 3"
 
-	// Bare refusal: no recovery data — only the upgrade phrase, no recovery
-	// block. Pin exact equality so the bare form cannot silently grow.
+	// No recovery data: the supported path and the unavailable rollback, pinned
+	// by exact equality so the remedy cannot silently change shape.
 	bare := (&UnsupportedSchemaVersionError{WorkspaceVersion: 7, MaxSupported: 3}).Error()
-	if bare != upgradeHead+")" {
-		t.Fatalf("bare Error() = %q, want %q", bare, upgradeHead+")")
+	const wantBare = upgradeHead + ")" +
+		"\n\nto operate this workspace, install a lit that supports schema version 7:\n  lit upgrade" +
+		"\n\n(this is the supported path — `lit upgrade` runs even from this too-old binary, installs the latest release, and refuses a release that cannot operate this workspace.)" +
+		"\n\nno pre-upgrade snapshot available; lossy rollback is not possible from this workspace."
+	if bare != wantBare {
+		t.Fatalf("bare Error() = %q, want %q", bare, wantBare)
 	}
 	assertForbiddenAbsent(t, bare)
 
@@ -372,75 +379,41 @@ func TestUnsupportedSchemaVersionMessageShape(t *testing.T) {
 	}
 	assertForbiddenAbsent(t, withGaps)
 
-	// Snapshot only: lossy-rollback line surfaces the verbatim snapshot
-	// name; the proactive lit-upgrade line is suppressed because no
-	// producer version is recorded.
-	snapOnly := (&UnsupportedSchemaVersionError{
+	// Snapshot present: the lossy-rollback line surfaces the verbatim snapshot
+	// name, and the supported upgrade path still leads.
+	withSnap := (&UnsupportedSchemaVersionError{
 		WorkspaceVersion: 7,
 		MaxSupported:     3,
 		SnapshotName:     "1700000000-pre-migrate-1700000000",
 	}).Error()
-	if !strings.HasPrefix(snapOnly, upgradeHead) {
-		t.Errorf("snapshot-only message lost the upgrade phrase: %q", snapOnly)
+	for _, want := range []string{
+		upgradeHead,
+		"install a lit that supports schema version 7:\n  lit upgrade\n",
+		"lit snapshots restore 1700000000-pre-migrate-1700000000",
+		"LOSSY",
+	} {
+		if !strings.Contains(withSnap, want) {
+			t.Errorf("snapshot message missing %q: %q", want, withSnap)
+		}
 	}
-	if !strings.Contains(snapOnly, "lit snapshots restore 1700000000-pre-migrate-1700000000") {
-		t.Errorf("snapshot-only message did not surface the snapshot name verbatim: %q", snapOnly)
+	if strings.Index(withSnap, "lit upgrade\n") > strings.Index(withSnap, "lit snapshots restore") {
+		t.Errorf("snapshot message placed the lossy rollback ahead of the supported upgrade path: %q", withSnap)
 	}
-	if !strings.Contains(snapOnly, "LOSSY") {
-		t.Errorf("snapshot-only message did not flag the rollback as lossy: %q", snapOnly)
+	if strings.Contains(withSnap, "no pre-upgrade snapshot available") {
+		t.Errorf("snapshot message also declared the snapshot unavailable: %q", withSnap)
 	}
-	if strings.Contains(snapOnly, "lit upgrade --to") {
-		t.Errorf("snapshot-only message included upgrade line without producer version: %q", snapOnly)
-	}
-	assertForbiddenAbsent(t, snapOnly)
-
-	// Producer version only: the workspace is ahead of this binary, so the
-	// remediation is a NEWER binary — `lit upgrade --to <producer>` — not a
-	// schema reverse. The lossy-rollback path is named as unavailable so the
-	// user knows upgrading is their lossless path.
-	verOnly := (&UnsupportedSchemaVersionError{
-		WorkspaceVersion:      7,
-		MaxSupported:          3,
-		ProducerBinaryVersion: "v0.4.2",
-	}).Error()
-	if !strings.Contains(verOnly, "lit upgrade --to v0.4.2") {
-		t.Errorf("producer-only message did not surface the upgrade target verbatim: %q", verOnly)
-	}
-	// The workspace-ahead refusal must NOT tell the user to downgrade the
-	// schema: this old binary lacks the down-migrations, so `lit downgrade`
-	// here is a footgun the .3 remediation retires.
-	if strings.Contains(verOnly, "lit downgrade") {
-		t.Errorf("workspace-ahead refusal wrongly suggested lit downgrade: %q", verOnly)
-	}
-	if !strings.Contains(verOnly, "no pre-upgrade snapshot available") {
-		t.Errorf("producer-only message did not declare the snapshot path unavailable: %q", verOnly)
-	}
-	assertForbiddenAbsent(t, verOnly)
-
-	// Both populated: every recovery line surfaces.
-	both := (&UnsupportedSchemaVersionError{
-		WorkspaceVersion:      7,
-		MaxSupported:          3,
-		SnapshotName:          "1700000000-pre-migrate-1700000000",
-		ProducerBinaryVersion: "v0.4.2",
-	}).Error()
-	if !strings.Contains(both, "lit snapshots restore 1700000000-pre-migrate-1700000000") {
-		t.Errorf("both-populated message missing snapshot line: %q", both)
-	}
-	if !strings.Contains(both, "lit upgrade --to v0.4.2") {
-		t.Errorf("both-populated message missing upgrade line: %q", both)
-	}
-	assertForbiddenAbsent(t, both)
+	assertForbiddenAbsent(t, withSnap)
 }
 
 // TestRefusalSurfacesRecoveryDataFromWorkspace pins the runtime wiring of the
 // remediation hints: when a binary built from a known release version opens a
 // workspace, it stamps meta.producer_binary_version on a successful migrate;
-// when a later refusal fires, refuseIfBaselineMissing reads that row and the
-// most recent migration-recovery snapshot, and surfaces both verbatim in the
-// UnsupportedSchemaVersionError. Without this end-to-end probe the unit test
-// for Error() rendering passes while the lookup layer that populates the
-// fields could regress silently.
+// when a later refusal fires, refuseIfBaselineMissing finds the most recent
+// migration-recovery snapshot and surfaces it verbatim, while the recorded
+// producer build stays out of the message — the remedy names a schema
+// requirement, not a build. Without this end-to-end probe the unit test for
+// Error() rendering passes while the lookup layer that populates the fields
+// could regress silently.
 func TestRefusalSurfacesRecoveryDataFromWorkspace(t *testing.T) {
 	// serial: no t.Parallel — rewrites the process-global version.Version.
 	const sentinel = "vSENTINEL-0.4.2"
@@ -478,9 +451,6 @@ func TestRefusalSurfacesRecoveryDataFromWorkspace(t *testing.T) {
 	if !errors.As(err, &refusal) {
 		t.Fatalf("Open() error = %v (%T); want *UnsupportedSchemaVersionError", err, err)
 	}
-	if refusal.ProducerBinaryVersion != sentinel {
-		t.Errorf("ProducerBinaryVersion = %q, want %q", refusal.ProducerBinaryVersion, sentinel)
-	}
 	if refusal.SnapshotName == "" {
 		t.Errorf("SnapshotName empty; want a migration-recovery snapshot name (one was taken on fresh Open)")
 	}
@@ -488,8 +458,8 @@ func TestRefusalSurfacesRecoveryDataFromWorkspace(t *testing.T) {
 		t.Errorf("SnapshotName %q does not match the migration-stamped shape", refusal.SnapshotName)
 	}
 	msg := refusal.Error()
-	if !strings.Contains(msg, "lit upgrade --to "+sentinel) {
-		t.Errorf("Error() did not surface the producer version verbatim: %q", msg)
+	if strings.Contains(msg, sentinel) {
+		t.Errorf("Error() named the recorded producer build %q; the remedy must name a schema requirement: %q", sentinel, msg)
 	}
 	if !strings.Contains(msg, "lit snapshots restore "+refusal.SnapshotName) {
 		t.Errorf("Error() did not surface the snapshot name verbatim: %q", msg)

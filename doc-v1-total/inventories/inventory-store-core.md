@@ -1243,7 +1243,7 @@ step in reconcile's list).
 - Written through `INSERT ... ON DUPLICATE KEY UPDATE meta_value = VALUES(meta_value)` (`internal/store/store.go:1697-1698`); read at `internal/store/store.go:1671-1673`, absent key yields `""` not an error (`internal/store/store.go:1678-1680`).
 - Keys observed in production code:
   - `workspace_id` — written by reconcile via `ensureMetaValue` (`internal/store/schema_reconcile.go:410`).
-  - `producer_binary_version` — const at `internal/store/migration_runner.go:29`, written at `internal/store/migration_runner.go:1623`, read at `internal/store/migration_runner.go:1600` and via a Dolt `AS OF` query at `internal/store/sync_schema_guard.go:186`.
+  - `producer_binary_version` — const at `internal/store/migration_runner.go:29`, written at `internal/store/migration_runner.go:1334`; nothing in the tree reads it.
   - `last_sync_path`, `last_sync_hash` — read at `internal/store/store.go:445,449`, written at `internal/store/store.go:459-462`.
 
 ### 2.8 `migration_quarantine`
