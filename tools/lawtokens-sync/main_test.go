@@ -155,23 +155,30 @@ func TestSyncRegeneratesAFileThatIsNotGoAtAll(t *testing.T) {
 	doc := upstreamDoc("`decomposition`")
 	srv := serve(t, http.StatusOK, doc)
 
-	for name, content := range map[string][]byte{
-		"conflict markers": []byte("<<<<<<< ours\n=======\n>>>>>>> theirs\n"),
-		"missing":          nil,
+	for name, tc := range map[string]struct {
+		content     []byte
+		wantSummary string
+	}{
+		"conflict markers": {content: []byte("<<<<<<< ours\n=======\n>>>>>>> theirs\n"), wantSummary: "the file is not generator output"},
+		"missing":          {content: nil, wantSummary: "the file does not exist"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "canonical_gen.go")
-			if content != nil {
-				if err := os.WriteFile(path, content, 0o644); err != nil {
+			if tc.content != nil {
+				if err := os.WriteFile(path, tc.content, 0o644); err != nil {
 					t.Fatal(err)
 				}
 			}
 
-			if err := run(context.Background(), srv.Client(), srv.URL, path, false, &bytes.Buffer{}); err != nil {
+			var out bytes.Buffer
+			if err := run(context.Background(), srv.Client(), srv.URL, path, false, &out); err != nil {
 				t.Fatalf("run: %v", err)
 			}
 			if got := readFile(t, path); !bytes.Equal(got, rendered(t, doc)) {
 				t.Errorf("file after sync =\n%s\nwant the rendered upstream index", got)
+			}
+			if !strings.Contains(out.String(), tc.wantSummary) {
+				t.Errorf("output %q does not contain %q", out.String(), tc.wantSummary)
 			}
 		})
 	}

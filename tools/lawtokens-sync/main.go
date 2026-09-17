@@ -75,16 +75,19 @@ func run(ctx context.Context, client *http.Client, url, path string, check bool,
 	if _, err := os.Stat(filepath.Dir(path)); err != nil {
 		return fmt.Errorf("finding %s (run from the repository root): %w", filepath.Dir(path), err)
 	}
-	current, err := os.ReadFile(path)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("reading %s: %w", path, err)
+	current, readErr := os.ReadFile(path)
+	if readErr != nil && !errors.Is(readErr, fs.ErrNotExist) {
+		return fmt.Errorf("reading %s: %w", path, readErr)
 	}
 	if bytes.Equal(current, want) {
 		fmt.Fprintf(out, "%s matches the upstream token index (%d keys)\n", path, len(index.Keys()))
 		return nil
 	}
 
-	summary := describe(current, index.Keys())
+	summary := "the file does not exist"
+	if readErr == nil {
+		summary = describe(current, index.Keys())
+	}
 	if check {
 		return fmt.Errorf("%s is out of date with %s: %s; run `just lawtokens-sync` and commit the result", path, url, summary)
 	}
