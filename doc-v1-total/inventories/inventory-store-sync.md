@@ -892,7 +892,7 @@ Tests: `TestOpenRepairsVersionSlotReuseContentMismatch` (`migration_runner_test.
 `tableColumns(ctx, table)` (`migration_runner.go:1337`): `SELECT column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ?`, lowercasing each name. An absent table yields an empty set.
 `tableExists(ctx, table)` (`migration_runner.go:1361`): `SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ? LIMIT 1`; `sql.ErrNoRows` → `false, nil`.
 
-`refuseIfBaselineMissing(ctx, state)` (`migration_runner.go:821`): `verifyBaselineShape`; refuses when `present == 0 || len(missing) > 0`, returning `&UnsupportedSchemaVersionError{WorkspaceVersion: state.appliedVersion, MaxSupported: state.registryMaxVers, MissingBaseline: missing, SnapshotName: s.mostRecentMigrationSnapshotName()}`. **Performs no write.**
+`refuseIfBaselineMissing(ctx, state)` (`migration_runner.go:811`): `verifyBaselineShape`; refuses when `present == 0 || len(missing) > 0`, returning `&UnsupportedSchemaVersionError{WorkspaceVersion: state.appliedVersion, MaxSupported: state.registryMaxVers, MissingBaseline: missing, SnapshotName: s.mostRecentMigrationSnapshotName()}`. **Performs no write.**
 
 Tests: `TestOpenToleratesAheadOfRegistryWhenBaselineIntact` (`migration_runner_test.go:220`), `TestOpenToleratesGooseLogWithOnlyAheadRow` (`:255`), `TestOpenRefusesAheadOfRegistryWhenBaselineCorrupt` (`:292`), `TestOpenAllowsWorkspaceExactlyAtMax` (`:526`), `TestOpenToleratesHealthyManagedWorkspace` (`:784`).
 
