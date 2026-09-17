@@ -513,7 +513,8 @@ no positional form. The default type is `blocks`, where `--from` is the blocker 
 `--to` is the blocked issue. `blocks` edges are not allowed between two issues in the
 same epic — within an epic, rank is the ordering signal. A `blocks` edge onto an
 epic holds back every issue in that epic and in epics nested inside it, in every
-lane:
+lane (an issue under a parent that is not an epic belongs to no epic, as
+`epic: none` in `lit backlog` says, and is not held back):
 `lit next` offers none of them until the blocker closes, and `lit backlog` shows
 the blocker on each one as `depends on: <id> (via epic)`. The one exception is an
 issue the blocker already waits on, directly or through other issues, such as
