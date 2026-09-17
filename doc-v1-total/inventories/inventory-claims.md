@@ -276,9 +276,9 @@ On error it returns the zero value **and** the error — it reports what it prov
 
 `Derive(evidence, fresh, local) Standings` iterates every lane in `evidence.members` and calls `standingOf(members, events[lane], fresh, local)` (`internal/claims/derive.go:37-43`). It writes nothing (`:34-36`).
 
-`standingOf` (`internal/claims/derive.go:58-116`) runs the legs in dependency order **1, 4, 2, 3** (`internal/claims/derive.go:49-55`):
+`standingOf` (`internal/claims/derive.go:58-114`) runs the legs in dependency order **1, 4, 2, 3** (`internal/claims/derive.go:49-54`):
 
-**Leg 1 — the lane is unfinished.** `if !slices.ContainsFunc(members, model.Issue.InPlay) { return Unclaimed{} }` (`internal/claims/derive.go:62-64`). `Issue.InPlay()` = `!lifecycle.Frozen(i.Retention()) && i.State() != model.StateClosed` (`internal/model/model.go:165-167`) — so archived and deleted issues are out of play as well as closed ones. Pinned: all-closed lane → Unclaimed (`internal/claims/claims_test.go:130-140`); sole ticket archived → Unclaimed (`internal/claims/claims_test.go:141-153`).
+**Leg 1 — the lane is unfinished.** `if !slices.ContainsFunc(members, model.Issue.InPlay) { return Unclaimed{} }` (`internal/claims/derive.go:62-64`). `Issue.InPlay()` = `!lifecycle.Frozen(i.Retention()) && i.State() != model.StateClosed` (`internal/model/model.go:165-167`) — so archived and deleted issues are out of play as well as closed ones. Pinned by `TestPredicateGrid`'s "leg 1 dropped" cases: an all-closed lane and a lane whose sole open ticket is archived both read `Unclaimed` (`internal/claims/claims_test.go:124-217`).
 
 **Leg 4 — the holder is live as far as this machine can tell.** Applied as a *filter* over events, before leg 2:
 ```go
@@ -286,47 +286,47 @@ admissible := slices.DeleteFunc(slices.Clone(events), func(event model.IssueEven
 	return local.Void(event.Attribution)
 })
 ```
-`internal/claims/derive.go:79-81`. The `slices.Clone` is load-bearing: `DeleteFunc` compacts in place, so without it one derivation would strip events out of the shared `Evidence` and a second derivation over the same reading would silently differ (`internal/claims/derive.go:73-78`). Pinned by `TestDeriveDoesNotConsumeItsEvidence`: one `Evidence`, derived twice — once with a pruning `LocalCheckouts` (→ Unclaimed) and once with the zero value (→ Held) (`internal/claims/claims_test.go:422-438`).
+`internal/claims/derive.go:79-81`. The `slices.Clone` is load-bearing: `DeleteFunc` compacts in place, so without it one derivation would strip events out of the shared `Evidence` and a second derivation over the same reading would silently differ (`internal/claims/derive.go:73-78`). Pinned by `TestDeriveDoesNotConsumeItsEvidence`: one `Evidence`, derived twice — once with a pruning `LocalCheckouts` (→ Unclaimed) and once with the zero value (→ Held) (`internal/claims/claims_test.go:547-568`).
 
-Ordering rationale: leg 4 must run before leg 2 asks which establishing event is *latest*, or a lane would read unclaimed where it should revert to whoever else has standing (`internal/claims/derive.go:50-54`). Pinned by `TestVoidEvidenceFallsThroughToTheNextEstablisher`: A's newer `start` is void, so the lane reverts to B's older one (`internal/claims/claims_test.go:227-235`).
+Ordering rationale: leg 4 must run before leg 2 asks which establishing event is *latest*, or a lane would read unclaimed where it should revert to whoever else has standing (`internal/claims/derive.go:49-54`). Pinned by `TestVoidEvidenceFallsThroughToTheNextEstablisher`: A's newer `start` is void, so the lane reverts to B's older one (`internal/claims/claims_test.go:246-257`).
 
 **Leg 2 — the holder produced the latest establishing event.**
 ```go
-establisher, found := latestEstablisher(admissible)
-if !found || !establisher.Attribution.Present() { return Unclaimed{} }
+establisher, found := LatestEstablisher(admissible)
+if !found { return Unclaimed{} }
 holder := establisher.Attribution
 ```
-`internal/claims/derive.go:99-103`. `latestEstablisher` walks the (already totally ordered) slice backwards and returns the last event for which `establishes` is true (`internal/claims/derive.go:119-126`).
+`internal/claims/derive.go:90-94`. `LatestEstablisher` is exported and lives in `internal/claims/establish.go:67-76`, not `derive.go` — it scans the whole slice for the newest event by `byRecency` for which `establishes` is true, **regardless of attribution**.
 
-**The derivation stops at an unattributed latest establisher; it does NOT scan back to an older attributed ancestor** (`internal/claims/derive.go:87-98`). Rationale: an unattributed `start` says somebody took the lane and the record does not say who — an older attributed event is positively known to be superseded. Pinned by `TestUnattributedLatestStopsRatherThanScanning` (`internal/claims/claims_test.go:212-222`). Contrast with a *void* event, which is disproven rather than unknown and therefore falls through (`internal/claims/local.go:44-53`).
+**The derivation stops at the latest establisher, attributed or not; it never scans back to an older ancestor** (`internal/claims/derive.go:83-89`). An establishing event with no attribution belongs to the public checkout — `model.Attribution`'s zero value — and holds the lane exactly like any other holder: an older attributed event is positively known to be superseded, so scanning past the newest establisher would hand the lane to a checkout that has demonstrably moved on. Pinned by `TestUnattributedLatestStopsRatherThanScanning` (`internal/claims/claims_test.go:219-244`): A starts then completes T1, then the public checkout starts T2 later — the lane reads `Held{By: public}` with A contesting, **not** `Held{By: A}`. Contrast with a *void* event, which is disproven rather than merely superseded and therefore falls through at leg 4, before leg 2 ever runs (`internal/claims/local.go:44-53`).
 
-`trails(admissible)` folds the events into two maps (`internal/claims/derive.go:132-142`): `activity[attribution] = event.CreatedAt` (last write wins → each checkout's latest act, because events are oldest-first) and `establishers[attribution] = struct{}{}` for establishing events only.
+`trails(admissible)` folds the events into two maps (`internal/claims/derive.go:120-130`): `activity[attribution] = event.CreatedAt` (last write wins → each checkout's latest act, because events are oldest-first) and `establishers[attribution] = struct{}{}` for establishing events only.
 
-`tenure := Tenure{By: holder, Since: establisher.CreatedAt, LastActivity: activity[holder]}` (`internal/claims/derive.go:105`).
+`tenure := Tenure{By: holder, Since: establisher.CreatedAt, LastActivity: activity[holder]}` (`internal/claims/derive.go:96`).
 
 **Leg 3 — the claim is fresh.**
 ```go
-if !fresh.Covers(tenure.LastActivity) { return Stale{Tenure: tenure} }
+if !fresh.Covers(tenure.LastActivity) { return Stale{Tenure: tenure, Holder: local.PresenceOf(holder)} }
 return Held{Tenure: tenure, Contested: contestants(holder, activity, establishers, fresh)}
 ```
-`internal/claims/derive.go:112-115`. Freshness is measured from the holder's **last mutation of any kind in the lane**, not from the establishing event, so ordinary commentary carries a claim through a long stretch (`internal/claims/derive.go:108-111`). Pinned by `TestAnyMutationRefreshes`: `start` 80 h ago plus a bare field edit 30 min ago → Held with `Since = -80h`, `LastActivity = -30m` under a 24 h window (`internal/claims/claims_test.go:252-260`).
+`internal/claims/derive.go:110-113`. Freshness is measured from the holder's **last mutation of any kind in the lane**, not from the establishing event, so ordinary commentary carries a claim through a long stretch (`internal/claims/derive.go:98-109`). Pinned by `TestAnyMutationRefreshes`: `start` 80 h ago plus a bare field edit 30 min ago → Held with `Since = -80h`, `LastActivity = -30m` under a 24 h window (`internal/claims/claims_test.go:345-356`).
 
-Stale example: `start` at −72 h plus a field edit at −48 h under a 24 h window → `Stale{By: streamA, Since: -72h, LastActivity: -48h}` (`internal/claims/claims_test.go:178-186`).
+Stale example: `start` at −72 h plus a field edit at −48 h under a 24 h window → `Stale{By: streamA, Since: -72h, LastActivity: -48h, Holder: claims.Present}` (`TestPredicateGrid`'s "leg 3 dropped" case, `internal/claims/claims_test.go:124-217`).
 
-**Contest.** `contestants(holder, activity, establishers, fresh)` (`internal/claims/derive.go:155-170`):
-- Candidate set = the keys of `establishers` (so **only checkouts with an establishing act** contest; a drive-by comment or grooming edit never does — `internal/claims/derive.go:147-152`).
-- Skip candidate if `candidate == holder`, or `!candidate.Present()`, or `!fresh.Covers(activity[candidate])` (`:158-160`) — a rival whose own evidence aged out is no longer contesting.
-- Sort: most-recently-active first (`activity[b].Compare(activity[a])`), tie-broken by `strings.Compare(a.Stream(), b.Stream())` (`:163-168`).
-- Returns `[]model.Attribution{}` (non-nil empty) when nobody contests (`:156`).
+**Contest.** `contestants(holder, activity, establishers, fresh)` (`internal/claims/derive.go:149-164`):
+- Candidate set = the keys of `establishers` (so **only checkouts with an establishing act** contest; a drive-by comment or grooming edit never does — pinned by `TestDriveByEditsNeitherEstablishNorContest`, `internal/claims/claims_test.go:369-384`).
+- Skip candidate if `candidate == holder`, or `!fresh.Covers(activity[candidate])` (`:152-154`) — a rival whose own evidence aged out is no longer contesting. **Unattributed candidates are not skipped**: the public checkout contests on the same terms as any identified checkout, pinned by `TestPublicCheckoutContestsAnIdentifiedHolder` (`internal/claims/claims_test.go:402-426`).
+- Sort: most-recently-active first (`activity[b].Compare(activity[a])`), tie-broken by `strings.Compare(a.Stream(), b.Stream())` (`:157-162`).
+- Returns `[]model.Attribution{}` (non-nil empty) when nobody contests (`:150`).
 - Contest is an annotation, not a state: routing is unaffected and the holder remains the holder (`internal/claims/standing.go:41-46`).
 
-Pinned: A starts at −3 h, B starts at −1 h → `Held{By: B, Contested: [A]}` (`internal/claims/claims_test.go:293-304`); A's start at −200 h with B at −1 h → Held by B, no contest (`internal/claims/claims_test.go:308-316`); B's edit + archive + close after A's start → still Held by A with no contest (`internal/claims/claims_test.go:276-288`).
+Pinned: A starts at −3 h, B starts at −1 h → `Held{By: B, Contested: [A]}` (`TestContestedAnnotatesWithoutMovingRouting`, `internal/claims/claims_test.go:386-400`); A's start at −200 h with B at −1 h → Held by B, no contest (`TestContestLapsesWithTheRivalsEvidence`, `internal/claims/claims_test.go:428-438`).
 
-**Cold start.** A repository whose whole history predates attribution derives `Unclaimed` for every lane (`internal/claims/claims_test.go:373-384`), which is exactly the pre-claims behavior (`internal/claims/standing.go:19-23`, `internal/claims/derive.go:96-98`).
+**Cold start.** A repository whose whole history predates attribution derives every lane `Held` by the public checkout, subject to freshness — **not** `Unclaimed`. Real pre-attribution history is almost always older than the freshness window, so in practice this reads `Stale{public}` — available for takeover, carrying its provenance — rather than `Held{public}`, but both are a real claim, never nothing. Pinned by `TestColdStartDerivesThePublicCheckout` (`internal/claims/claims_test.go:492-514`): recent all-public-checkout history reads `Held{public}`; the same shape 89-90 days old under a 24 h window reads `Stale{public}`.
 
-**Foreign workspaces never pruned**: an event from `ws-elsewhere` remains Held even when this machine enumerates zero live streams for `ws-local` (`internal/claims/claims_test.go:240-247`).
+**Foreign workspaces never pruned**: an event from `ws-elsewhere` remains Held even when this machine enumerates zero live streams for `ws-local` (`TestForeignWorkspaceIsNeverPruned`, `internal/claims/claims_test.go:333-343`).
 
-**Grid summary** (all under a 24 h window, `internal/claims/claims_test.go:108-205`):
+**Grid summary** (all under a 24 h window; `TestPredicateGrid`, `internal/claims/claims_test.go:124-217`):
 
 | dropped leg | fixture | result |
 |---|---|---|
@@ -334,9 +334,10 @@ Pinned: A starts at −3 h, B starts at −1 h → `Held{By: B, Contested: [A]}`
 | 1 (closed) | both tickets closed | `Unclaimed` |
 | 1 (archived) | sole open ticket archived | `Unclaimed` |
 | 2 (no establishing verb) | `reopen`, `archive`, `close`, bare edit | `Unclaimed` |
-| 2 (unattributed latest) | A's start at −3 h, unattributed start at −1 h | `Unclaimed` |
-| 3 (stale) | start −72 h, edit −48 h | `Stale{A}` |
+| 3 (stale) | start −72 h, edit −48 h | `Stale{A, Holder: claims.Present}` |
 | 4 (checkout gone) | start by A, live set = {B} | `Unclaimed` |
+
+An unattributed latest establisher is no longer a fifth "dropped leg" row in this grid: it drops no leg at all. `TestUnattributedLatestStopsRatherThanScanning` above derives `Held{public}` with the earlier establisher contesting, and `TestColdStartDerivesThePublicCheckout` shows the all-unattributed case reads `Held`/`Stale` by the public checkout — never `Unclaimed`.
 
 ---
 
@@ -430,12 +431,14 @@ Callers: `next` (`internal/cli/next.go:67`), `workable`/`backlog` runner (`inter
 
 | standing | condition | relation | requirement |
 |---|---|---|---|
-| `Held` | `s.By == self` | `laneOurs` | `takeoverNone` |
+| `Held` | `self.Present() && s.By == self` | `laneOurs` | `takeoverNone` |
 | `Held` | otherwise | `laneHeldForeign` | `takeoverFreshConfirm` |
-| `Stale` | `s.By == self` | `laneOurs` | `takeoverNone` |
+| `Stale` | `self.Present() && s.By == self` | `laneOurs` | `takeoverNone` |
 | `Stale` | `s.Holder == claims.Locked` | `laneHeldForeign` | `takeoverFreshConfirm` |
 | `Stale` | otherwise | `laneStaleForeign` | `takeoverStaleInformed` |
 | `Unclaimed` (default arm) | — | `laneUnclaimed` | `takeoverNone` |
+
+`ours(by) = self.Present() && by == self` (`internal/cli/claims_takeover.go:69`) — the `self.Present()` half is load-bearing, not a redundant guard: a checkout with no minted token has a zero `self`, and a zero `self` compared against a zero holder (the public checkout) would otherwise prove ownership of a lane this checkout never touched. So a lane the public checkout holds is always `laneHeldForeign`/`laneStaleForeign` to every checkout, including one that has itself never minted a token.
 
 The `claims.Locked` row is the one a reader is likeliest to miss: an expired claim whose holder's worktree is locked is gated as a fresh hold, not waved through with a warning (`:94`).
 
@@ -452,13 +455,13 @@ Sealed int enum: `takeoverNone`, `takeoverStaleInformed`, `takeoverFreshConfirm`
 
 **`claimLineOrPanic`** reuses `formatClaimLine(cc, lane, time.Now())`; `ok == false` → error `claims: %s has a takeover requirement on %v but no claim line to show` (`internal/cli/claims_takeover.go:164-170`).
 
-**`printStaleProvenance`** — proceeds unprompted and prints `"%s — check for unmerged branches or PRs on this lane before building on it\n"` (`internal/cli/claims_takeover.go:111-118`). Checking for unmerged branches or PRs is left to the taking agent; lit stays ignorant of git and the forge (`:109-110`).
+**`printStaleProvenance`** — proceeds unprompted and prints `"%s — check for unmerged branches or PRs on this lane before building on it\n"` (`internal/cli/claims_takeover.go:177-184`). Checking for unmerged branches or PRs is left to the taking agent; lit stays ignorant of git and the forge (`:172-176`).
 
 **`confirmFreshTakeover(stdout, cc, lane, take)`** (`internal/cli/claims_takeover.go:195-218`):
 - **Non-interactive** (`!isTerminal(stdout)`, the same signal `openOrPrintWorkflowFile` uses — `internal/cli/workflows_edit.go:160`):
-  - `take == false` → **refusal**: `fmt.Errorf("%s — this lane is claimed and active; pass --take to confirm the takeover", line)` (`:135-137`).
-  - `take == true` → prints `"%s — taking over (--take)\n"` and proceeds (`:138-139`).
-- **Interactive**: prints `"%s\ntake over this lane? [y/N] "`, reads a line from `os.Stdin` via `bufio.NewReader(os.Stdin).ReadString('\n')` (`:141-147`). A read error other than `io.EOF` → `fmt.Errorf("read takeover confirmation: %w", err)`. The answer is accepted iff `strings.HasPrefix(strings.ToLower(strings.TrimSpace(answer)), "y")`; otherwise → `fmt.Errorf("takeover declined")` (`:148-150`).
+  - `take == false` → **refusal**: `fmt.Errorf("%s — this lane is claimed and active; pass --take to confirm the takeover", line)` (`:201-203`).
+  - `take == true` → prints `"%s — taking over (--take)\n"` and proceeds (`:204-205`).
+- **Interactive**: prints `"%s\ntake over this lane? [y/N] "`, reads a line from `os.Stdin` via `bufio.NewReader(os.Stdin).ReadString('\n')` (`:207-210`). A read error other than `io.EOF` → `fmt.Errorf("read takeover confirmation: %w", err)` (`:211-213`). The answer is accepted iff `strings.HasPrefix(strings.ToLower(strings.TrimSpace(answer)), "y")`; otherwise → `fmt.Errorf("takeover declined")` (`:214-216`).
 
 E2E, over two real clones and a real git remote (`internal/cli/claims_takeover_e2e_test.go:18-80`): alpha starts and pushes; bravo's `start` without `--take` fails with an error containing both `--take` and `claimed`; the same command with `--take` prints `"taking over"`; and starting the now-bravo-held lane again produces neither `"claimed"` nor `"--take"` in the output. Stale path (`:88-126`): with `freshness_window = "1ms"` and a 50 ms sleep, bravo's plain `start` succeeds and prints both `"check for unmerged branches or PRs"` and `"stale"`.
 
@@ -588,32 +591,36 @@ No other command consults `claims.Standings`: the only readers of `cc.standings`
 
 ### 10.1 `formatClaimLine(cc, lane, now) (string, bool)`
 
-`internal/cli/claims_render.go:23-44`. Returns `("", false)` for anything that is not `Held` or `Stale` — an Unclaimed lane renders **no line at all**, not an empty or placeholder one (`:36-37`, rationale `:14-15`; pinned `internal/cli/claims_render_test.go:61-67`).
+`internal/cli/claims_render.go:23-44`. Returns `("", false)` for anything that is not `Held` or `Stale` — an Unclaimed lane renders **no line at all**, not an empty or placeholder one (`:36-37`, rationale `:12-15`; pinned `internal/cli/claims_render_test.go:63-69`).
 
-- `Held` → `line = claimPrefix(tenure.By, false, cc)`; if `len(standing.Contested) > 0`, append `fmt.Sprintf(" · contested by %s", strings.Join(shortStreams(standing.Contested), ", "))` (`:27-33`).
-- `Stale` → `line = claimPrefix(tenure.By, true, cc)` (`:34-35`).
+- `Held` → `line = claimPrefix(tenure.By, holdFresh, cc)`; if `len(standing.Contested) > 0`, append `fmt.Sprintf(" · contested by %s", strings.Join(nameCheckouts(standing.Contested), ", "))` (`:27-32`).
+- `Stale` → `line = claimPrefix(tenure.By, holdKindOf(standing.Holder), cc)` — `holdKindOf` (`:71-76`) is `holdLocked` when the expired holder's worktree is locked, else `holdStale` (`:33-35`).
 - Then `parts := []string{line, humanizeCoarseDuration(now.Sub(tenure.LastActivity)) + " ago"}`; if `formatLaneProgress(cc.evidence.LaneProgress(lane))` is non-empty, append it; join with `" · "` (`:39-43`).
 
 **Two tiers**: the dossier (holder badge, freshness, lane progress) comes entirely from `cc.evidence` and `cc.standings` — the shared, synced data — so it renders identically on any clone; the address renders only when `cc.addresses` resolves the holder to a live worktree **this machine** enumerated (`internal/cli/claims_render.go:16-22`).
 
-### 10.2 `claimPrefix(by, stale, cc)`
+### 10.2 `claimPrefix(by, kind, cc)`
 
-`internal/cli/claims_render.go:52-69`:
-- `tag = " (stale)"` when `stale`, else `""`.
-- If `cc.addresses[by]` resolves: `branch := checkout.Branch`; if empty, `branch = "detached HEAD"`; returns `fmt.Sprintf("claimed here%s: %s (%s)", tag, checkout.Path, branch)`.
-- Otherwise: `state := "elsewhere"`, or `"stale"` when `stale`; returns `fmt.Sprintf("claimed: stream %s (%s)", shortStream(by), state)`.
-- A **stale** claim from a still-live local worktree still resolves to that worktree's address; `stale` controls only the label (`:48-51`; pinned `internal/cli/claims_render_test.go:142-161`, expecting `claimed here (stale): ../links-wt-pgct (detached HEAD)`).
+`kind` is a `holdKind` (`holdFresh`, `holdStale`, `holdLocked` — `internal/cli/claims_render.go:56-64`), not a bool — a bool could say fresh-or-not and nothing else, so a locked worktree had to borrow the word for a holder who left (links-claims-2wk2).
+
+`claimPrefix` (`internal/cli/claims_render.go:102-111`):
+- If `cc.addresses[by]` resolves: `branch := checkout.Branch`; if empty, `branch = "detached HEAD"`; returns `fmt.Sprintf("claimed here%s: %s (%s)", claimTag(kind), checkout.Path, branch)`.
+- Otherwise: returns `fmt.Sprintf("claimed: %s (%s)", nameCheckout(by), holdState(by, kind))`.
+- `claimTag(kind)` (`:115-123`): `" (locked)"`, `" (stale)"`, or `""`.
+- `holdState(by, kind)` (`:141-151`): `"locked"`, `"stale"`, `"elsewhere"` (an identified `by`), or `"unaddressed"` — the public checkout, since `by` is the zero Attribution and neither of the first two conditions nor `by.Present()` holds.
+- A **stale** claim from a still-live local worktree still resolves to that worktree's address; `kind` controls only the label, never whether the address shows (pinned `internal/cli/claims_render_test.go:144-163`, expecting `claimed here (stale): ../links-wt-pgct (detached HEAD)`).
+- **The public checkout never renders `claimed here`, whoever is asking.** `by` is the zero Attribution and a live worktree's holder in `cc.addresses` is always an identified checkout, so the first branch above can never match it — an earlier version compared `by` against `cc.self` instead and misread that coincidence as proof of ownership, rendering `"claimed here: this checkout"` for a foreign lane on `lit sync`'s contested-lane report (whose `cc.self` is always the zero Attribution). Pinned by `TestFormatClaimLinePublicCheckoutIsNeverHere` (`internal/cli/claims_render_test.go:245-288`): `"claimed: the public checkout (unaddressed)"` for `Held`, `"claimed: the public checkout (stale)"` for `Stale`, in every row regardless of `cc.self`.
 
 ### 10.3 `formatLaneProgress(progress)`
 
-`internal/cli/claims_render.go:76-84`:
+`internal/cli/claims_render.go:158-166`:
 - `Total == 0` → `""`.
 - `Active != nil` → `fmt.Sprintf("%s in progress, %d/%d done", progress.Active.ID, progress.Done, progress.Total)`.
 - else → `fmt.Sprintf("%d/%d done", progress.Done, progress.Total)`.
 
-### 10.4 `shortStream` / `shortStreams`
+### 10.4 `nameCheckout` / `nameCheckouts`
 
-`internal/cli/claims_render.go:92-107`: truncates the stream token to the first 8 characters when longer (`labelLen = 8`). Explicitly a display nicety, not a privacy measure — the full token is already opaque (`:86-91`).
+`internal/cli/claims_render.go:215-225`: an identified checkout is named `"stream " + <token, truncated to 8 chars>` (`labelLen = 8`) — a display nicety, not a privacy measure, since the full token is already opaque. The zero Attribution — the public checkout — is named the literal `"the public checkout"` instead of being routed through the token label: reading its empty stream through that path produced `"stream "` with nothing after it, an answer-shaped void. `nameCheckouts` (`:227-233`) maps a slice through `nameCheckout`, used for the contest suffix.
 
 ### 10.5 `humanizeCoarseDuration`
 
@@ -625,9 +632,12 @@ No other command consults `claims.Standings`: the only readers of `cc.standings`
 
 ### 10.6 Rendering behavior pinned by test
 
-- Dossier without any local address: line says `"elsewhere"`, carries `"1/2 done"`, names `"active-ticket in progress"`, and reads `"2 hours ago"` (`internal/cli/claims_render_test.go:74-97`).
-- With an address entry: `"claimed here: ../links-wt-pgct (links-claims-1ihf.11)"`; the same standing rendered without addresses must not carry the path and must say `"elsewhere"` (`internal/cli/claims_render_test.go:103-137`).
-- Contested Held: line contains `"contested by " + shortStream(contestant)` (`internal/cli/claims_render_test.go:166-181`).
+- Unclaimed renders no line at all (`internal/cli/claims_render_test.go:63-69`).
+- Dossier without any local address: line says `"elsewhere"`, carries `"1/2 done"`, names `"active-ticket in progress"`, and reads `"2 hours ago"` (`internal/cli/claims_render_test.go:76-99`).
+- With an address entry: `"claimed here: ../links-wt-pgct (links-claims-1ihf.11)"`; the same standing rendered without addresses must not carry the path and must say `"elsewhere"` (`internal/cli/claims_render_test.go:105-139`).
+- A stale claim from a still-live local worktree: `"claimed here (stale): ../links-wt-pgct (detached HEAD)"` (`internal/cli/claims_render_test.go:144-163`).
+- The public checkout, `Held` or `Stale`, whatever `cc.self` is asking: `"claimed: the public checkout (unaddressed)"` or `"claimed: the public checkout (stale)"`, never `"claimed here"` (`internal/cli/claims_render_test.go:245-288`).
+- Contested Held: line contains `"contested by " + nameCheckout(contestant)` (`internal/cli/claims_render_test.go:293-308`).
 
 ---
 
