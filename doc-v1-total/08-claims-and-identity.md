@@ -85,7 +85,7 @@ The asymmetry (`local.go:11-17`): worktree deletion is a local fact — a claim 
 
 **Leg 3 — the claim is fresh.** If the freshness window does not cover `LastActivity`, the standing is `Stale`; otherwise `Held` with contest annotations (`derive.go:110-113`). Because freshness reads `LastActivity`, ordinary commentary or a bare field edit carries a claim through a long stretch: a `start` 80 hours ago plus an edit 30 minutes ago is `Held` under a 24-hour window.
 
-**Contest.** Contestants are checkouts *with an establishing act of their own* in the lane (a drive-by comment or grooming edit never contests), excluding the holder and any candidate whose own last activity aged out of the window — the public checkout is not excluded, and contests on the same terms as any identified checkout. Sorted most-recently-active first, tie-broken by stream string; empty (non-nil) when nobody contests (`derive.go:149-164`). Contest is an annotation, not a state: routing is unaffected and the holder remains the holder (`internal/claims/standing.go:41-46`). Events from foreign workspaces are never pruned by local liveness, so a foreign holder stays `Held` even when this machine enumerates zero live streams.
+**Contest.** Contestants are checkouts *with an establishing act of their own* in the lane (a drive-by comment or grooming edit never contests), excluding the holder and any candidate whose own last activity aged out of the window — the public checkout is not excluded, and contests on the same terms as any identified checkout. Sorted most-recently-active first, tie-broken by stream string; empty (non-nil) when nobody contests (`derive.go:149-164`). Contest is an annotation, not a state: routing is unaffected and the holder remains the holder (`internal/claims/standing.go:45-51`). Events from foreign workspaces are never pruned by local liveness, so a foreign holder stays `Held` even when this machine enumerates zero live streams.
 
 Summary of the legs (all under a 24 h window; from the pinned test grid):
 
@@ -108,20 +108,22 @@ Callers: `lit next`, the backlog/workable runner, `lit start`'s authorization, a
 
 ### `lit start` — the takeover gate (the only write gate)
 
-`start` is the only transition with an authorization hook; it runs after the action is built and before the store apply, and can abort the transition (`internal/cli/cli.go:1346-1353, 1383-1388`). The issue's lane standing and the caller's own attribution classify the requirement (`internal/cli/claims_takeover.go:110-119`):
+`start` is the only transition with an authorization hook; it runs after the action is built and before the store apply, and can abort the transition (`internal/cli/cli.go:1553-1555`). The issue's lane standing and the caller's own attribution classify the requirement (`internal/cli/claims_takeover.go:110-119`):
 
 | Standing | Condition | Requirement |
 |---|---|---|
-| `Held` | held by self | none |
-| `Held` | held by another | fresh-confirm |
-| `Stale` | held by self | none |
+| `Held` | held by self (`self.Present() && By == self`) | none |
+| `Held` | held by another, including the public checkout | fresh-confirm |
+| `Stale` | held by self (`self.Present() && By == self`) | none |
 | `Stale` | held by another, holder `claims.Locked` | fresh-confirm |
 | `Stale` | held by another, otherwise | stale-informed |
 | `Unclaimed` | — | none |
 
+A checkout with no minted token never reads "held by self," even for a lane the public checkout itself holds — `self.Present()` is false, so the `Held`/`Stale`-by-another rows apply instead (`claims_takeover.go:69`, and see the `relationOf` discussion above).
+
 - **None**: proceed; the happy path costs one extra evidence gather and nothing else.
 - **Stale-informed**: proceeds unprompted, printing the claim line plus ` — check for unmerged branches or PRs on this lane before building on it`. Checking is left to the taking agent; lit stays ignorant of git branches and the forge (`printStaleProvenance`, `claims_takeover.go:177-184`). An expired claim reaches this arm only when its holder is not `claims.Locked`; a locked worktree takes fresh-confirm instead, per the row above.
-- **Fresh-confirm**: on a non-interactive stdout, refuses unless `--take` was passed (`… — this lane is claimed and active; pass --take to confirm the takeover`); with `--take`, prints `… — taking over (--take)` and proceeds. On an interactive terminal, prompts `take over this lane? [y/N]` reading stdin; any answer whose trimmed lowercase form starts with `y` proceeds, anything else fails with `takeover declined` (`claims_takeover.go:195-218`). The `--take` flag's help: "Confirm taking over a lane another checkout claims right now (required for non-interactive callers; an interactive terminal is prompted instead)" (`cli.go:1384`).
+- **Fresh-confirm**: on a non-interactive stdout, refuses unless `--take` was passed (`… — this lane is claimed and active; pass --take to confirm the takeover`); with `--take`, prints `… — taking over (--take)` and proceeds. On an interactive terminal, prompts `take over this lane? [y/N]` reading stdin; any answer whose trimmed lowercase form starts with `y` proceeds, anything else fails with `takeover declined` (`claims_takeover.go:195-218`). The `--take` flag's help: "Confirm taking over a lane another checkout claims right now (required for non-interactive callers; an interactive terminal is prompted instead)" (`cli.go:1446`).
 
 Proven over two real clones and a git remote: the second clone's plain `start` fails naming `--take` and `claimed`; with `--take` it succeeds printing "taking over"; a subsequent `start` on the now-transferred lane prompts nothing (`internal/cli/claims_takeover_e2e_test.go:18-80`).
 

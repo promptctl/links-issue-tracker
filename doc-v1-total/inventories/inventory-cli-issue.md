@@ -998,27 +998,30 @@ Registry rows and summaries:
 positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason <text>]")`
 — a **plain error**, so exit code 1, not 2.
 
-**Sequence** (`cli.go:1370-1447`):
-1. `GetIssue(issueID)` pre-read (`cli.go:1372-1375`) — missing → exit 4.
-2. `buildAction()` (`cli.go:1377-1380`).
-3. `authorize(ctx, stdout, ap, issueID, prior)` — §2.11 (`cli.go:1386-1388`).
-4. `actor := resolveActor()`; `Store.Apply(ctx, issueID, Change{Action, Actor, Reason})`
-   (`cli.go:1394-1398`).
-5. If the action is a `StatusAction`, dispatch the transition occasion
-   (`cli.go:1408-1412`).
-6. `transferNotice(ctx, ap, issueID, action)` (`cli.go:1562`, implementation
+**Sequence** (`transitionLeaf`, `cli.go:1519-1622`):
+1. `GetIssue(issueID)` pre-read (`cli.go:1539-1542`) — missing → exit 4.
+2. `buildAction()` (`cli.go:1544-1547`).
+3. `authorize(ctx, stdout, ap, issueID, prior)` — §2.11 (`cli.go:1553-1555`).
+4. `transferNotice(ctx, ap, issueID, action)` (`cli.go:1563-1565`, implementation
    `claims_context.go:163-177`): for a `model.Start` whose prior claimant was
    held and actually changes hands, `"claim transferred: %s -> %s\n"` with
    both sides rendered by `describeClaimant` (`claims_render.go:186-194`),
    which names the assignee when there is one, the checkout via `nameCheckout`
    (`claims_render.go:215-225`) when there isn't or alongside it, and the
    literal `"the public checkout"` — never `"(unassigned)"` — for a prior
-   claimant with no assignee and no minted token.
-7. `printIssueSummary` (`cli.go:1425-1427`).
+   claimant with no assignee and no minted token. Computed here, on
+   pre-Apply state, but not written out until step 7 — a failed `Apply`
+   must announce nothing.
+5. `actor := resolveActor()`; `Store.Apply(ctx, issueID, Change{Action, Actor, Reason})`
+   (`cli.go:1572-1576`).
+6. If the action is a `StatusAction`, dispatch the transition occasion
+   (`cli.go:1586-1590`).
+7. Write the transfer notice string, then `printIssueSummary`
+   (`cli.go:1595-1601`).
 8. If the action is a `StatusAction` whose `Target() == model.StateClosed`
    (i.e. `done` and `close`), re-read `GetIssueDetail` and print the close
-   adjacency block (`cli.go:1435-1443`) — §2.12.
-9. Breadcrumb per `transitionBreadcrumbTopics` (`cli.go:1444-1447`).
+   adjacency block (`cli.go:1609-1616`) — §2.12.
+9. Breadcrumb per `transitionBreadcrumbTopics` (`cli.go:1618-1620`).
 
 **Close outcome validation** — `closeOutcomeFromFlags(resolution, target, usage)`
 (`cli.go:1325-1351`), shared with `bulk close` (`bulk.go:149`):
@@ -1850,7 +1853,7 @@ plus at most one positional topic.
 6. **Claim state never blocks anything except `lit start` on a fresh foreign
    hold.** `backlog` renders claims as visibility only (`backlog.go:24-25`,
    `:92-96`); `next` routes by claim but never writes (`next_route.go:81-128`);
-   `start` is the only gate (`cli.go:1279-1284`, `classifyTakeover` at
+   `start` is the only gate (`cli.go:1434-1449`, `classifyTakeover` at
    `claims_takeover.go:110-119`).
 7. **Three functions panic on unreachable states** and would abort the process:
    `ClassifyReadiness` on an unclassified annotation kind (`readiness.go:144`),
