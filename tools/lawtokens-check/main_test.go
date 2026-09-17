@@ -2,9 +2,10 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
-	"testing/fstest"
 )
 
 // marker assembles a citation at runtime so the repo gate, which scans this
@@ -13,27 +14,42 @@ func marker(namespace, token string) string {
 	return "[" + namespace + ":" + token + "]"
 }
 
-func TestRunExitCodes(t *testing.T) {
-	fsys := fstest.MapFS{
-		"clean.go":    {Data: []byte("// " + marker("LAW", "no-silent-failure") + "\n")},
-		"invented.go": {Data: []byte("// " + marker("LAW", "no-silent-fallbacks") + "\n")},
+func TestRun(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		"clean.go":        "// " + marker("LAW", "no-silent-failure") + "\n",
+		"sub/invented.go": "// " + marker("LAW", "no-silent-fallbacks") + "\n",
 	}
+	for name, content := range files {
+		full := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	invented := "sub/invented.go:1: " + marker("LAW", "no-silent-fallbacks")
 
 	cases := []struct {
 		name       string
-		paths      []string
+		args       []string
 		wantCode   int
 		wantStderr string
 	}{
-		{name: "no files", paths: nil, wantCode: 0},
-		{name: "canonical markers only", paths: []string{"clean.go"}, wantCode: 0},
-		{name: "an invented token", paths: []string{"clean.go", "invented.go"}, wantCode: 1, wantStderr: "invented.go:1: " + marker("LAW", "no-silent-fallbacks")},
-		{name: "an unreadable file", paths: []string{"missing.go"}, wantCode: 2, wantStderr: "missing.go"},
+		{name: "no files", args: nil, wantCode: 0},
+		{name: "canonical markers only", args: []string{"clean.go"}, wantCode: 0},
+		{name: "an invented token", args: []string{"clean.go", "sub/invented.go"}, wantCode: 1, wantStderr: invented},
+		{name: "a dot-slash path", args: []string{"./sub/invented.go"}, wantCode: 1, wantStderr: invented},
+		{name: "an unclean path", args: []string{"sub/../clean.go"}, wantCode: 0},
+		{name: "an absolute path under the root", args: []string{filepath.Join(root, "sub", "invented.go")}, wantCode: 1, wantStderr: invented},
+		{name: "a path outside the root", args: []string{"../elsewhere.go"}, wantCode: 1, wantStderr: "../elsewhere.go is outside the working directory"},
+		{name: "an unreadable file", args: []string{"missing.go"}, wantCode: 1, wantStderr: "missing.go"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var stderr bytes.Buffer
-			if got := run(fsys, tc.paths, &stderr); got != tc.wantCode {
+			if got := run(root, tc.args, &stderr); got != tc.wantCode {
 				t.Errorf("run exit = %d, want %d (stderr: %s)", got, tc.wantCode, stderr.String())
 			}
 			if tc.wantStderr == "" && stderr.Len() != 0 {

@@ -1226,9 +1226,11 @@ cannot be read returns an error naming it and no violations. Pinned by
 indented line per violation, then the remediation text naming
 `tokenindex.UpstreamURL` and `just lawtokens-sync`.
 
-`tools/lawtokens-check` takes file paths as arguments, relative to the working
-directory, and exits 0 when `CheckFiles` finds no violation, 1 after printing
-`Report` to stderr, and 2 after printing the read error. `.pre-commit-config.yaml`
+`tools/lawtokens-check` takes file paths as arguments. `fsNames`
+(`main.go`) resolves each against the working directory into a clean,
+slash-separated name inside it and refuses a path outside it. The tool exits 0
+when `CheckFiles` finds no violation, and 1 after printing `Report`, a read
+error or the refused path to stderr. `.pre-commit-config.yaml`
 declares it as the local hook `lawtokens` (`entry: go run
 ./tools/lawtokens-check`, `language: system`, `types: [text]`), which the
 pre-commit framework runs with the staged text files.

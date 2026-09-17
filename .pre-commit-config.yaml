@@ -1,5 +1,5 @@
 # Hooks managed by the pre-commit framework (https://pre-commit.com).
-# Install once per clone: `pre-commit install` (or `just setup`).
+# Install once per clone: `pre-commit install` (CONTRIBUTING.md has details).
 repos:
   - repo: local
     hooks:
