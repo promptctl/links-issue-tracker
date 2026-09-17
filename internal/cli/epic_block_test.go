@@ -235,6 +235,22 @@ func TestAnEpicsBlockerHoldsBackNothingItWaitsOn(t *testing.T) {
 					t.Fatalf("%s inherits %v, want %v", row.ID, got, wantGates)
 				}
 			}
+			// No issue, epics included, is ever its own blocker.
+			all, err := h.ap.Store.ListIssues(h.ctx, storage.ListIssuesFilter{})
+			if err != nil {
+				t.Fatalf("ListIssues error = %v", err)
+			}
+			annotated, _, _, err := annotateIssues(h.ctx, h.ap.Store, nil, all)
+			if err != nil {
+				t.Fatalf("annotateIssues error = %v", err)
+			}
+			for _, row := range annotated {
+				for _, ann := range row.Annotations {
+					if ann.Kind == annotation.InheritedDependency && ann.Message == row.ID {
+						t.Fatalf("%s inherits itself", row.ID)
+					}
+				}
+			}
 			pullable := h.runPullableAnnotated(workableFilter{})
 			for _, id := range want.pullable {
 				if !containsID(pullable, id) {

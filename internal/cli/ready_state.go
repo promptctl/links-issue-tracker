@@ -264,9 +264,10 @@ func epicsAbove(rel storage.IssueRelations, ancestry map[string]storage.IssueRel
 }
 
 // inheritedDependencies returns the blockers of every epic above subject,
-// sorted by id, each named once.
+// sorted by id, each named once. An issue that blocks an epic it sits under is
+// not among its own: nothing waits on itself.
 func (a epicAncestry) inheritedDependencies(subject storage.IssueRelations) []model.Issue {
-	named := map[string]bool{}
+	named := map[string]bool{subject.Issue.ID: true}
 	var deps []model.Issue
 	for epicID := range epicsAbove(subject, a.relations) {
 		for _, dep := range a.gates[epicID] {
