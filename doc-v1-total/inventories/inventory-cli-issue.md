@@ -156,7 +156,7 @@ Constants (`exit.go:11-32`):
 | `ExitNoWork` | 6 |
 | `ExitCorruption` | 7 |
 
-`ExitCode(err)` dispatches by `errors.As`, in this order (`exit.go:37-144`):
+`ExitCode(err)` dispatches by `errors.As`, in this order (`exit.go:37-157`):
 1. `storage.NotFoundError` → 4 (`exit.go:41-43`)
 2. `MergeConflictError` → 5 (`exit.go:45-47`)
 3. `SyncFailureError` → 5 (`exit.go:53-55`)
@@ -172,10 +172,11 @@ Constants (`exit.go:11-32`):
 13. `UnsupportedError` → 3 (`exit.go:113-115`)
 14. `Exhausted` → 6 (`exit.go:121-123`)
 15. `NoWork` → 6 (`exit.go:125-127`)
-16. `OutsideWorkspaceError` → 1 (`exit.go:129-131`)
-17. `BulkFailureError` → 1 (`exit.go:133-138`)
-18. `errors.Is(err, store.ErrTransientGCContention)` → 1 (`exit.go:140-142`)
-19. anything else → 1 (`exit.go:143`)
+16. `OutsideWorkspaceError` → 3 (`exit.go:139-141`)
+17. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → 3 (`exit.go:143-145`)
+18. `BulkFailureError` → 1 (`exit.go:146-152`)
+19. `errors.Is(err, store.ErrTransientGCContention)` → 1 (`exit.go:153-155`)
+20. anything else → 1 (`exit.go:156`)
 
 Error types defined in `cli.go`: `MergeConflictError` (`cli.go:1890-1896`),
 `CorruptionError` (`cli.go:1898-1902`), `UsageError` (`cli.go:1906-1910`),
@@ -198,7 +199,7 @@ field (`errors.go:52-56`), `RetiredCommandError` — message
 `corruption_detected`, `unknown_command`, `retired_command`, `usage_error`,
 `unsupported_flag` (every `UnsupportedError`, `error_output.go:121-125`),
 `outside_git_workspace`, `bulk_partial_failure`, `workspace_write_blocked`,
-`transient_gc_contention`, default `command_failed`.
+`transient_gc_contention`, `workspace_not_initialized`, default `command_failed`.
 
 `commandErrorRemediation(reason)` (`error_output.go:92-133`), verbatim strings:
 - `unknown_command`: "Run `lit --help` (or `lit help <command>`) to select a supported command path."
@@ -213,6 +214,7 @@ field (`errors.go:52-56`), `RetiredCommandError` — message
 - `transient_gc_contention`: "Retry once. If the error persists, run `lit doctor --fix`. \<agent-instructions>…\</agent-instructions>"
 - `workspace_write_blocked`: "Wait a moment and retry — a normal command releases the store in well under a second. If it persists, a lit process is stuck: find it with `ps aux | grep '[l]it'` and terminate it, then retry; if none is running the hold is stale, so run `lit doctor --fix`. \<agent-instructions>…\</agent-instructions>"
 - `outside_git_workspace`: "Run the command inside a git repository/worktree with links initialized."
+- `workspace_not_initialized`: "Do not retry unchanged — this repository has no lit workspace, and retrying this command cannot create one. Run `lit init` here to create it, or change to a directory that already has one."
 - `bulk_partial_failure`: "Some items failed; see the per-item errors above. Re-run the command for only the failed IDs after addressing each error."
 - default: "Retry the command. If it still fails, run `lit doctor` for diagnostics."
 

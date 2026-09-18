@@ -29,8 +29,8 @@ func TestLockDoltJournalExclusiveRefusesUninitializedWorkspace(t *testing.T) {
 		_ = release()
 		t.Fatal("LockDoltJournalExclusive() succeeded on an uninitialized workspace; want a not-initialized refusal")
 	}
-	if !strings.Contains(err.Error(), "not initialized") {
-		t.Fatalf("LockDoltJournalExclusive() error = %v; want the not-initialized guidance", err)
+	if !errors.Is(err, ErrWorkspaceNotInitialized) {
+		t.Fatalf("LockDoltJournalExclusive() error = %v; want the not-initialized condition", err)
 	}
 	if _, statErr := os.Stat(doltRoot); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("the refusal fabricated %s (stat err = %v); it must create nothing", doltRoot, statErr)

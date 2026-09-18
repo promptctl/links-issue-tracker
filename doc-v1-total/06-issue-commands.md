@@ -13,22 +13,22 @@ The whole command tree is a table of `CommandSpec` rows (`register.go:254-394`).
 - **Per-command flag parsing** (`parseFlagSet`, `cli.go:274-308`): `--help` prints `Usage of <cmd>:` plus flag defaults **to stdout** and exits 0. An unknown `--output` or `--continue` maps to a tailored retirement message (exit 3); any other unknown flag is a usage error, exit 2. Flag kinds include repeatable string-array flags (never comma-split) and "string-optional" flags that take one value when present bare (`cli.go:230-241`). Flags can be registered hidden-but-functional (`cli.go:261-263`).
 - **Positional/flag splitting** (`splitArgs`, `flagset.go:154-180`): a `-`-prefixed token with no `=` consumes the following non-`-` token as its value — so a boolean flag written `--flag value` swallows `value`. Extra non-flag tokens beyond the expected positional count land in the flag slice, where they surface only if the command checks `fs.NArg()`. Several commands do not check: `new`, `followup`, `rank`, `export`, `parent clear` silently ignore stray positionals, because `parseLeaf` never reads pflag's leftover arguments (`register.go:279-285`; `newLeaf`, `cli.go:228-241`; `exportLeaf`, `cli.go:1685-1687`). `ls` and `children` do check: they read their positionals from pflag's leftover arguments rather than from `splitArgs`, so a boolean flag never swallows the next token, and any count other than their own (zero for `ls`, one for `children`) is a usage error (`listPositionals`, `cli.go:433-444`).
 - **Family dispatch** (`register.go:112-123`): multi-word commands (`comment add`, `dep ls`, …) resolve `args[0]` by exact string match against a family table. Zero args or an unknown subcommand return the usage string as a **plain error → exit 1**, whereas per-command usage refusals are `UsageError` → exit 2. The transition commands' wrong-arity refusal and `completion`'s are also plain errors, exit 1 (`cli.go:1365, 1717`).
-- **Store access**: handlers are wrapped with a fixed access mode (read/write). Opening outside a git repository yields "links requires running inside a git repository/worktree" → exit 1 (`cli.go:110-112`). After a successful **write** command, the wrapper prints the mutation sync-staleness warning and then runs post-command auto-sync (`cli.go:135-145`).
+- **Store access**: handlers are wrapped with a fixed access mode (read/write). Opening outside a git repository yields "links requires running inside a git repository/worktree" → exit 3 (`cli.go:110-112`). After a successful **write** command, the wrapper prints the mutation sync-staleness warning and then runs post-command auto-sync (`cli.go:135-145`).
 
 Help groups, in order: Human Bootstrap, Agent Operations, Dependencies & Structure, Sync & Data, Setup & Maintenance, Issue Retention, Guidance & Tooling (`register.go:61-76`).
 
 ## Exit codes and error output
 
-Eight constants, 0 through 7 (`exit.go:11-32`), mapped from error type by `ExitCode` in a fixed dispatch order (`exit.go:37-144`). Exit 6 is `ExitNoWork` — "ran correctly and changed nothing" — and it is reached by three arms, not just the router's two: a caller looping `lit next` has to tell "stop, there is nothing for you" from "lit is broken", and under `ExitGeneric` its only way to do that was to parse the English.
+Eight constants, 0 through 7 (`exit.go:11-32`), mapped from error type by `ExitCode` in a fixed dispatch order (`exit.go:37-157`). Exit 6 is `ExitNoWork` — "ran correctly and changed nothing" — and it is reached by three arms, not just the router's two: a caller looping `lit next` has to tell "stop, there is nothing for you" from "lit is broken", and under `ExitGeneric` its only way to do that was to parse the English.
 
 This table is the corpus's single source for the code-to-error-type mapping; `07-ops-commands-and-sync-engine.md`, `09-workflows.md` and `10-platform.md` point here rather than restating it.
 
 | Exit | Constant | Error types |
 |---|---|---|
 | 0 | `ExitOK` | nil error, including a handled `--help` |
-| 1 | `ExitGeneric` | `OutsideWorkspaceError`, `BulkFailureError`, transient GC contention, everything else |
+| 1 | `ExitGeneric` | `BulkFailureError`, transient GC contention, everything else |
 | 2 | `ExitUsage` | `UsageError` |
-| 3 | `ExitValidation` | `UnknownCommandError`, `RetiredCommandError`, `ValidationError` (CLI and storage), `UnsupportedError`, `templateShapeError`, `model.ContainerActionError` when not satisfied |
+| 3 | `ExitValidation` | `UnknownCommandError`, `RetiredCommandError`, `ValidationError` (CLI and storage), `UnsupportedError`, `templateShapeError`, `OutsideWorkspaceError`, `store.ErrWorkspaceNotInitialized`, `model.ContainerActionError` when not satisfied |
 | 4 | `ExitNotFound` | `storage.NotFoundError` |
 | 5 | `ExitConflict` | `MergeConflictError`, `SyncFailureError`, owner-approval refusal |
 | 6 | `ExitNoWork` | `Exhausted`, `NoWork`, `model.ContainerActionError` when `Satisfied()` |

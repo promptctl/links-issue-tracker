@@ -127,6 +127,17 @@ func commandErrorReason(err error) string {
 	if errors.As(err, &outsideWorkspace) {
 		return "outside_git_workspace"
 	}
+	// The other negative answer to "am I somewhere lit can work?": a git
+	// repository that `lit init` has never run in. Terminal in the same way —
+	// no rerun of the same command can make the workspace exist — so it must
+	// not reach the default's retry advice, which pointed the agent at a loop
+	// and at `lit doctor`, a command that reads the very workspace that is
+	// missing (links-cli-errors-yfbg). It carries its own reason rather than
+	// sharing outside_git_workspace's because the act differs: initialize
+	// here, versus go somewhere already initialized. [LAW:one-type-per-behavior]
+	if errors.Is(err, store.ErrWorkspaceNotInitialized) {
+		return "workspace_not_initialized"
+	}
 	var bulkFailure BulkFailureError
 	if errors.As(err, &bulkFailure) {
 		return "bulk_partial_failure"
@@ -240,6 +251,29 @@ func commandErrorRemediation(reason string) string {
 		return "No action is needed — the command asked for a state the workspace is already in, and the message above says how that state was reached. Do not retry: running it again cannot change the answer, and `lit doctor` has nothing to diagnose because nothing is broken."
 	case "outside_git_workspace":
 		return "Run the command inside a git repository/worktree with links initialized."
+	case "workspace_not_initialized":
+		// Action-only, like its neighbours: the message above already names the
+		// condition and the command that resolves it, so what this line adds is
+		// that the condition is terminal and what the two ways out of it are.
+		//
+		// `lit doctor` is not named even to dismiss it. The default remediation
+		// this reason exists to displace sent agents there, at a workspace that
+		// does not exist for doctor to read; an agent that skims reads the
+		// command, not the negation around it, so the honest way to stop
+		// sending it is to leave the string out.
+		//
+		// No agent-instructions envelope, deliberately. The envelopes elsewhere
+		// mean "mechanical, run it without asking"; `lit init` writes a
+		// workspace and an agents section into someone's repository, which is
+		// the repo owner's decision, not a step an agent takes on its own to
+		// get itself unblocked.
+		// The claim is about *this* command, not about every command. An
+		// earlier draft said every store-touching command repeats this answer
+		// until a workspace exists, which is false: the write paths bootstrap
+		// one. Remediation is the surface an agent acts on, so a convenient
+		// overstatement here is the same defect as the advice it replaces.
+		// [LAW:no-silent-failure]
+		return "Do not retry unchanged — this repository has no lit workspace, and retrying this command cannot create one. Run `lit init` here to create it, or change to a directory that already has one."
 	case "bulk_partial_failure":
 		return "Some items failed; see the per-item errors above. Re-run the command for only the failed IDs after addressing each error."
 	default:

@@ -195,15 +195,8 @@ func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (_
 			err = errors.Join(err, relErr)
 		}
 	}()
-	if _, statErr := os.Stat(doltRootDir); statErr != nil {
-		// [LAW:no-silent-failure] Only ENOENT means "uninitialized";
-		// every other stat error (EACCES, EIO, ELOOP, etc.) is its own
-		// failure mode the operator needs to see, not a vague downstream
-		// Dolt-connection error.
-		if errors.Is(statErr, os.ErrNotExist) {
-			return nil, fmt.Errorf("repository not initialized with lit — run 'lit init' first")
-		}
-		return nil, fmt.Errorf("stat database dir: %w", statErr)
+	if err = requireInitializedWorkspace(doltRootDir); err != nil {
+		return nil, err
 	}
 	// Post-lock, same as Open: a shared hold excludes a live adopt (which
 	// holds the workspace lock exclusively), so a marker seen here always

@@ -31,14 +31,14 @@ data — described as assets, not as documentation of behavior).
 - `internal/cli/register.go:112-123` `commandFamily.resolve`: a missing / unknown / flag-shaped first argument returns `errors.New(family.usage)` — a plain error → exit 1 (`internal/cli/exit.go:90`), not exit 2. Match is exact (no trimming).
 - `internal/cli/register.go:129-138` `visibleSubcommands()` drops `hidden` rows from help/completion.
 
-### 0.3 Exit codes (constants `internal/cli/exit.go:11-32`, dispatch `:37-144`)
+### 0.3 Exit codes (constants `internal/cli/exit.go:11-32`, dispatch `:37-157`)
 
 | Code | Constant | Trigger |
 |---|---|---|
 | 0 | `ExitOK` (`exit.go:12`) | nil error |
-| 1 | `ExitGeneric` (`exit.go:13`) | default; also `OutsideWorkspaceError` (`exit.go:129-131`), `BulkFailureError` (`exit.go:133-138`), `store.ErrTransientGCContention` (`exit.go:140-142`) |
+| 1 | `ExitGeneric` (`exit.go:13`) | default; also `BulkFailureError` (`exit.go:146-152`), `store.ErrTransientGCContention` (`exit.go:153-155`) |
 | 2 | `ExitUsage` (`exit.go:14`) | `UsageError` (`exit.go:76-78`) |
-| 3 | `ExitValidation` (`exit.go:15`) | `templateShapeError` (`exit.go:61-63`), `UnknownCommandError` (`exit.go:80-82`), `RetiredCommandError` (`exit.go:86-88`), `ValidationError` (`exit.go:90-92`), `storage.ValidationError` (`exit.go:94-96`), `model.ContainerActionError` when not satisfied (`exit.go:106-112`), `UnsupportedError` (`exit.go:113-115`) |
+| 3 | `ExitValidation` (`exit.go:15`) | `templateShapeError` (`exit.go:61-63`), `UnknownCommandError` (`exit.go:80-82`), `RetiredCommandError` (`exit.go:86-88`), `ValidationError` (`exit.go:90-92`), `storage.ValidationError` (`exit.go:94-96`), `model.ContainerActionError` when not satisfied (`exit.go:106-112`), `UnsupportedError` (`exit.go:113-115`), `OutsideWorkspaceError` (`exit.go:139-141`), `store.ErrWorkspaceNotInitialized` (`exit.go:143-145`) |
 | 4 | `ExitNotFound` (`exit.go:16`) | `storage.NotFoundError` (`exit.go:41-43`) |
 | 5 | `ExitConflict` (`exit.go:17`) | `MergeConflictError` (`exit.go:45-47`), `SyncFailureError` (`exit.go:53-55`), `ownerApprovalRefusalError` (`exit.go:68-70`) |
 | 6 | `ExitNoWork` (`exit.go:30`) | `Exhausted` (`exit.go:121-123`), `NoWork` (`exit.go:125-127`), `model.ContainerActionError` when `Satisfied()` (`exit.go:106-109`) |
@@ -68,7 +68,7 @@ Retired-but-dispatchable ops-adjacent commands (`Hidden: true`, return `RetiredC
 
 ### 0.5 Workspace resolution
 
-- `internal/cli/cli.go:149-163` `resolveWorkspaceFromWD()`: `os.Getwd()` then `workspace.Resolve(cwd)`; `workspace.ErrNotGitRepo` → `OutsideWorkspaceError{Message: "links requires running inside a git repository/worktree"}` (exit 1).
+- `internal/cli/cli.go:149-163` `resolveWorkspaceFromWD()`: `os.Getwd()` then `workspace.Resolve(cwd)`; `workspace.ErrNotGitRepo` → `OutsideWorkspaceError{Message: "links requires running inside a git repository/worktree"}` (exit 3).
 - `workspace.Resolve` **creates** `<git-common-dir>/links` (`internal/workspace/workspace.go:165`) and loads-or-creates `config.json` (`workspace.go:168`). So even read commands materialize the storage dir.
 - Geometry: `StorageDir = <git-common-dir>/links`, `DatabasePath` under it, `GitCommonDir = filepath.Dir(StorageDir)` (`internal/workspace/workspace.go:284-292`).
 
@@ -1039,7 +1039,7 @@ All eight are also the payload of `lit quickstart --eject`, written to `<config.
 
 | Condition | Surface | Result | Line |
 |---|---|---|---|
-| Outside a git repo | any workspace/app command | `OutsideWorkspaceError{"links requires running inside a git repository/worktree"}`, exit 1 | `cli.go:110-112`, `cli.go:156-160` |
+| Outside a git repo | any workspace/app command | `OutsideWorkspaceError{"links requires running inside a git repository/worktree"}`, exit 3 | `cli.go:110-112`, `cli.go:156-160` |
 | Missing/unknown family subcommand | `sync`, `hooks`, `backup`, `snapshots`, `lifeboat`, `sync remote`, `sync reconcile` | the family usage string as a plain error, exit 1 | `register.go:112-123` |
 | Unknown flag, missing or invalid flag value | any command | `UsageError`, exit 2 | `flagset.go:142` |
 | `--output` before the command name; `--continue` | any command | `UnsupportedError`, exit 3 | `cli.go:196-201`, `flagset.go:138-141` |

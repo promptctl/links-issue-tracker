@@ -27,7 +27,7 @@ Two ops commands are retired but still dispatchable (hidden, exit 3 with redirec
 
 ### Workspace resolution and post-command behavior
 
-Every workspace/app command resolves the workspace from the cwd; outside a git repository this is `OutsideWorkspaceError` ("links requires running inside a git repository/worktree"), exit 1 (`cli.go:149-163`). Resolution itself **creates** `<git-common-dir>/links/` and its `config.json` — even read commands materialize the storage dir (`internal/workspace/workspace.go:165-168`). Geometry: `StorageDir = <git-common-dir>/links`, with the Dolt database under it (`workspace.go:284-292`).
+Every workspace/app command resolves the workspace from the cwd; outside a git repository this is `OutsideWorkspaceError` ("links requires running inside a git repository/worktree"), exit 3 (`cli.go:149-163`). Resolution itself **creates** `<git-common-dir>/links/` and its `config.json` — even read commands materialize the storage dir (`internal/workspace/workspace.go:165-168`). Geometry: `StorageDir = <git-common-dir>/links`, with the Dolt database under it (`workspace.go:284-292`).
 
 After a successful handler, `runWithApp` (`cli.go:101-147`) — in order, after the engine closes:
 
@@ -308,7 +308,7 @@ The eight embedded assets (all also ejectable):
 
 | Condition | Surface | Result | Exit |
 |---|---|---|---|
-| Outside a git repo | any workspace/app command | `OutsideWorkspaceError` | 1 |
+| Outside a git repo | any workspace/app command | `OutsideWorkspaceError` | 3 |
 | Missing/unknown family subcommand | all families | family usage as a plain error | 1 |
 | Unknown flag | any command | `UsageError` | 2 |
 | `--output` before the command name; `--continue` | any command | `UnsupportedError` | 3 |

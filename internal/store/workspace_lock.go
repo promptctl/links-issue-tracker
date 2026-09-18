@@ -421,13 +421,23 @@ func LockDoltJournalExclusive(ctx context.Context, databasePath string) (func() 
 	// database-dir stat would then bless the fabrication as a snapshotable
 	// store. Refuse instead. Stable against rotation/adopt because every
 	// caller holds the workspace lock across this check and the acquisition.
-	// [LAW:no-silent-failure] only ENOENT means uninitialized; any other
-	// stat failure is its own error, not a guessed refusal.
-	if _, statErr := os.Stat(filepath.Dir(lockPath)); statErr != nil {
-		if errors.Is(statErr, os.ErrNotExist) {
-			return nil, fmt.Errorf("repository not initialized with lit — run 'lit init' first")
-		}
-		return nil, fmt.Errorf("stat dolt journal dir: %w", statErr)
+	if err := requireInitializedWorkspace(databasePath); err != nil {
+		return nil, err
+	}
+	// The root exists, so the from-scratch answer — nothing here at all — is
+	// ruled out. What lies under it this code cannot tell apart: a damaged or
+	// half-deleted Dolt tree, or a `lit init` interrupted after it made the root
+	// and before Dolt wrote noms. Both are ENOENT beneath a live root, and no
+	// marker separates them, so no type can. [LAW:types-are-the-program]
+	//
+	// Both get the fault error rather than a confident "run `lit init`", because
+	// that sentence is the one that loops: init refuses a root it cannot read
+	// and says retry, which is the defect this change removes, rebuilt one level
+	// down. For the interrupted half that is an accepted downgrade — re-running
+	// init would in fact fix it — and the trade is deliberate: a diagnosis that
+	// terminates beats an instruction that spins. [LAW:one-type-per-behavior]
+	if _, err := os.Stat(filepath.Dir(lockPath)); err != nil {
+		return nil, fmt.Errorf("stat dolt journal dir: %w", err)
 	}
 	release, err := acquireStoreLock(ctx, workspaceStorageDir(databasePath), lockPath, true, doltJournalRetryAttempts, doltJournalRetryDelay)
 	if errors.Is(err, ErrWorkspaceBusy) {

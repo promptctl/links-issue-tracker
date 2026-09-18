@@ -129,9 +129,15 @@ var doltWorkspaceMachinery = map[string][]string{
 	},
 	// Typed failures the CLI matches to choose an exit code and a message.
 	// [LAW:parse-dont-validate] — matched as types, never by message text.
+	//
+	// ErrWorkspaceNotInitialized has the strongest form of the family's reason:
+	// it reports a repository with no workspace in it at all, so there is no
+	// engine to ask through the contract and never was. The CLI matches it to
+	// answer "your environment is not ready" at a precondition exit code
+	// instead of the unclassified-fault one (links-cli-errors-yfbg).
 	"typed engine failures": {
 		"ErrWorkspaceBusy", "ErrTransientGCContention", "WorkspaceWriteBlockedError",
-		"RemoteUnreachableError",
+		"RemoteUnreachableError", "ErrWorkspaceNotInitialized",
 		"UnsupportedSchemaVersionError", "RemoteSchemaAheadError",
 		"OwnerApprovalRequiredError",
 	},
