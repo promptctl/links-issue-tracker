@@ -119,26 +119,32 @@ func render(claims []docclaims.Claim) string {
 func verify(want []docclaims.Claim, corpus docclaims.Corpus) error {
 	got := docclaims.Manifest
 	only := docclaims.Diff(want, got)
-	stopped, rephrased := docclaims.Vanished(got, want, corpus)
-	if len(only) == 0 && len(stopped) == 0 && len(rephrased) == 0 {
+	drifted := docclaims.Drifted(got, want, corpus)
+	if len(only) == 0 && len(drifted) == 0 {
 		fmt.Printf("docclaims-sync: manifest is current (%d quotations)\n", len(got))
 		return nil
 	}
 	for _, c := range only {
 		fmt.Fprintf(os.Stderr, "  only in a fresh derivation: %s %q\n", c.Doc, c.Text)
 	}
-	for _, c := range rephrased {
-		fmt.Fprintf(os.Stderr, "  no longer quoted by %s: %q\n", c.Doc, c.Text)
+	// Each line carries its own instruction, from the same Explain the
+	// freshness test prints, because two reports of one failure that word the
+	// remedy differently are how a contributor learns to ignore both.
+	count := map[docclaims.DriftKind]int{}
+	for _, d := range drifted {
+		count[d.Kind]++
+		fmt.Fprintf(os.Stderr, "  %s\n", d.Explain())
 	}
-	// Reported apart from the rest, and with the opposite instruction: these
-	// are messages that stopped shipping, and regenerating drops them, turning
-	// the gate green over prose that is now false.
-	for _, c := range stopped {
-		fmt.Fprintf(os.Stderr, "  STOPPED SHIPPING, quoted by %s: %q\n", c.Doc, c.Text)
-	}
-	if len(stopped) > 0 {
+	// The exit line says which of the three happened, because only one of them
+	// has a remedy a contributor can apply without reading anything, and it is
+	// not either of the other two.
+	switch {
+	case count[docclaims.Stopped] > 0:
 		return fmt.Errorf("%d documented message(s) no longer ship: fix the code or the chapter. Regenerating would drop them and leave the specification false",
-			len(stopped))
+			count[docclaims.Stopped])
+	case count[docclaims.AnchorMoved] > 0:
+		return fmt.Errorf("%d documented message(s) are no longer carried by the source they were recorded against: read the lines above and confirm each is the same message reworded before regenerating",
+			count[docclaims.AnchorMoved])
 	}
 	return fmt.Errorf("manifest is stale: committed %d quotations, the tree yields %d; run `go run ./tools/docclaims-sync`",
 		len(got), len(want))

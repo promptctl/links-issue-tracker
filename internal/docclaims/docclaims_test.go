@@ -61,15 +61,13 @@ func TestManifestIsCurrent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ShippedText: %v", err)
 	}
-	// Told apart rather than reported together: for one of these two the
-	// remediation is to regenerate, and for the other regenerating is what
-	// erases the evidence that a documented message stopped shipping.
-	stopped, rephrased := Vanished(Manifest, fresh, corpus)
-	for _, c := range rephrased {
-		t.Errorf("no longer quoted by %s: %q — the prose changed and the manifest needs `go run ./tools/docclaims-sync`", c.Doc, c.Text)
-	}
-	for _, c := range stopped {
-		t.Errorf("%s quotes a message that no longer ships: %q — fix the code or the chapter. Do NOT regenerate: that drops the entry and leaves the sentence false.", c.Doc, c.Text)
+	// Classified rather than reported together: of the three ways an entry
+	// leaves a derivation, two are fixed by regenerating and the third is
+	// destroyed by it. Drift.Explain carries the instruction so this test and
+	// the sync tool cannot tell a contributor opposite things about one
+	// failure.
+	for _, d := range Drifted(Manifest, fresh, corpus) {
+		t.Error(d.Explain())
 	}
 }
 
@@ -169,6 +167,11 @@ func TestShippedTextReadsProductCodeAndItsEmbeddedAssets(t *testing.T) {
 		// part of it something imports.
 		"internal/vendor/driver/d.go":            {Data: []byte("package driver\nvar H = \"vendored linked message\"\n")},
 		"internal/vendor/driver/example/main.go": {Data: []byte("package main\nvar I = \"vendored example message\"\n")},
+		// Two files the go tool leaves out of a build that a naive ".go and
+		// not _test.go" rule takes in. Both sit in a package that certainly
+		// does link, so nothing but the file-selection rule keeps them out.
+		"internal/cli/_scratch.go": {Data: []byte("package cli\nvar J = \"underscored scratch message\"\n")},
+		"internal/cli/generate.go": {Data: []byte("// +build ignore\n\npackage main\nvar K = \"legacy ignored message\"\n")},
 	}
 	corpus, err := ShippedText(fsys)
 	if err != nil {
@@ -195,6 +198,7 @@ func TestShippedTextReadsProductCodeAndItsEmbeddedAssets(t *testing.T) {
 	for _, absent := range []string{
 		"test only message", "testdata only message", "tool only message",
 		"vendored only message", "unlinked message here", "vendored example message",
+		"underscored scratch message", "legacy ignored message",
 	} {
 		if _, ok := corpus[absent]; ok {
 			t.Errorf("%q counted as shipped; nothing links it", absent)
@@ -312,5 +316,73 @@ func TestClosingFenceMustMatchItsOpener(t *testing.T) {
 	}
 	if !slices.Equal(spans, []string{"a real claim here"}) {
 		t.Errorf("spansIn() = %q, want the claim after the closed fence", spans)
+	}
+}
+
+// TestDriftedTellsTheThreeCasesApart is the regression for a report that named
+// the wrong remedy on the ordinary edit.
+//
+// A committed entry leaves a fresh derivation three ways, and the classifier
+// used to ask one question — does the recorded source still carry the words? —
+// which puts a literal reworded around a quotation in the same bucket as a
+// deleted message, under the loudest and most specific instruction in the
+// design: "Do NOT regenerate". Rewording a literal around a fragment a chapter
+// quotes is the common edit, and regenerating is exactly right there. A
+// contributor who meets that warning on ordinary edits learns it is noise, and
+// the one time it is not noise it is the whole gate.
+//
+// The third case, a message deleted while an unrelated string keeps its words
+// alive, is why "still somewhere in the tree" cannot be the discriminator
+// either: it is reported as a moved anchor with the new source named, for a
+// reader to judge, and never as a regeneration to wave through.
+func TestDriftedTellsTheThreeCasesApart(t *testing.T) {
+	const (
+		quoted  = "lit quickstart doctor"
+		was     = "deeper guidance: lit quickstart doctor\n"
+		now     = "further guidance: lit quickstart doctor\n"
+		chapter = "06-issue-commands.md"
+	)
+	entry := Claim{Doc: chapter, Text: quoted, Src: was}
+
+	for _, tc := range []struct {
+		name    string
+		fresh   []Claim
+		corpus  Corpus
+		want    DriftKind
+		wantNow string
+	}{{
+		name:    "the literal was reworded around the quotation",
+		fresh:   []Claim{{Doc: chapter, Text: quoted, Src: now}},
+		corpus:  Corpus{now: now},
+		want:    AnchorMoved,
+		wantNow: now,
+	}, {
+		name:   "the chapter stopped quoting a message that still ships",
+		corpus: Corpus{was: was},
+		want:   QuoteDropped,
+	}, {
+		name:   "the message stopped shipping",
+		corpus: Corpus{"an unrelated message": "an unrelated message"},
+		want:   Stopped,
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Drifted([]Claim{entry}, tc.fresh, tc.corpus)
+			if len(got) != 1 {
+				t.Fatalf("Drifted() reported %d entries, want exactly 1", len(got))
+			}
+			if got[0].Kind != tc.want {
+				t.Errorf("Drifted() classified this as kind %d, want %d — it reports: %s", got[0].Kind, tc.want, got[0].Explain())
+			}
+			if got[0].Now != tc.wantNow {
+				t.Errorf("Drifted() named %q as the source carrying it now, want %q", got[0].Now, tc.wantNow)
+			}
+			// The instruction, not the label: only a message that genuinely
+			// stopped shipping may carry the one warning that tells a
+			// contributor their regeneration would erase the evidence.
+			warned := strings.Contains(got[0].Explain(), "Do NOT regenerate")
+			if warned != (tc.want == Stopped) {
+				t.Errorf("Explain() warns against regenerating = %v, want %v — it reports: %s", warned, tc.want == Stopped, got[0].Explain())
+			}
+		})
 	}
 }

@@ -33,6 +33,7 @@ package docclaims
 import (
 	"fmt"
 	"go/ast"
+	"go/build/constraint"
 	"go/parser"
 	"go/token"
 	"io/fs"
@@ -391,24 +392,50 @@ func eachProductFile(fsys fs.FS, dir string, fn func(name string, src []byte) er
 // two platform variants means deleting one leaves the entry anchored to the
 // other. No manifest entry is anchored into those files today.
 func excludedFromEveryBuild(file *ast.File) bool {
+	// Both spellings, because the go tool honours both: a //go:build line
+	// decides alone when one is present, and a file carrying only the legacy
+	// // +build form is still excluded by it. Reading only the modern spelling
+	// walks a hand-run generator's imports and collects its literals — text no
+	// binary contains, which then competes to anchor a chapter's quotation.
+	legacy := false
 	for _, group := range file.Comments {
 		for _, c := range group.List {
 			if c.Pos() > file.Package {
-				return false
+				return legacy
 			}
-			if constraint := strings.TrimSpace(strings.TrimPrefix(c.Text, "//go:build")); constraint == "ignore" {
-				return true
+			// constraint.Parse decides what a constraint line is; only the
+			// `ignore` tag is evaluated here, and deliberately so — see above.
+			// [LAW:one-source-of-truth] the go tool's own parser rather than a
+			// second reading of its syntax.
+			switch {
+			case constraint.IsGoBuild(c.Text):
+				expr, err := constraint.Parse(c.Text)
+				return err == nil && expr.String() == "ignore"
+			case constraint.IsPlusBuild(c.Text):
+				expr, err := constraint.Parse(c.Text)
+				legacy = legacy || (err == nil && expr.String() == "ignore")
 			}
 		}
 	}
-	return false
+	return legacy
 }
 
 // isProductGo reports whether a file is Go source the product build compiles.
 // A test file ships nothing, and the go tool ignores testdata entirely, so a
 // package stored there is not reachable however it is imported.
+//
+// It also leaves out what the go tool leaves out by name: a file whose basename
+// begins with "_" or "." is invisible to the build — `go list` does not even
+// report it among a package's ignored files. Collecting one would put text no
+// binary contains into the corpus, and because a quotation anchors to the
+// shortest source holding it, that text would become the evidence for a chapter
+// and survive deleting the real message. [LAW:one-source-of-truth] the go tool
+// decides what compiles; this mirrors its rule rather than inventing a second.
 func isProductGo(name string) bool {
 	if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+		return false
+	}
+	if base := path.Base(name); strings.HasPrefix(base, "_") || strings.HasPrefix(base, ".") {
 		return false
 	}
 	return !slices.Contains(strings.Split(path.Dir(name), "/"), "testdata")
@@ -791,10 +818,7 @@ func tightest(text string, corpus Corpus) (string, bool) {
 // drift. That trains a contributor to regenerate without reading the diff,
 // which is the one habit that defeats this gate.
 func Stable(fresh, prior []Claim, corpus Corpus) []Claim {
-	was := make(map[[2]string]string, len(prior))
-	for _, c := range prior {
-		was[[2]string{c.Doc, c.Text}] = c.Src
-	}
+	was := anchors(prior)
 	out := make([]Claim, 0, len(fresh))
 	for _, c := range fresh {
 		if src, ok := was[[2]string{c.Doc, c.Text}]; ok && stillHolds(src, c.Text, corpus) {
@@ -843,30 +867,124 @@ func Diff(a, b []Claim) []Claim {
 	return out
 }
 
-// Vanished splits the committed entries a fresh derivation no longer yields
-// into the two cases that call for opposite responses, so a report can name the
-// right one instead of guessing.
-//
-// An entry can leave a derivation two ways. The chapter stopped quoting the
-// message — an ordinary prose edit, and regenerating is exactly right. Or the
-// message stopped shipping, and regenerating is the one action that defeats the
-// gate: it drops the entry, both tests go green, and the sentence stays in the
-// specification describing a message the binary no longer has. Telling a
-// contributor to regenerate in that second case is worse than saying nothing,
-// because it is an instruction to erase the evidence.
-//
-// The discriminator is the same question Missing asks — does the recorded
-// source still carry the words — so the two reports cannot disagree about what
-// drift is. [LAW:single-enforcer]
-func Vanished(manifest, fresh []Claim, corpus Corpus) (stopped, rephrased []Claim) {
-	for _, c := range Diff(manifest, fresh) {
-		if stillHolds(c.Src, c.Text, corpus) {
-			rephrased = append(rephrased, c)
-			continue
-		}
-		stopped = append(stopped, c)
+// anchors indexes claims by the pair that identifies a quotation — the chapter
+// and the words it quotes — mapping it to the source it is recorded against.
+// The stabiliser and the drift report both need to ask "where is this
+// quotation anchored now", and asking it the same way is what keeps them from
+// disagreeing about what drift is. [LAW:one-source-of-truth]
+func anchors(claims []Claim) map[[2]string]string {
+	out := make(map[[2]string]string, len(claims))
+	for _, c := range claims {
+		out[[2]string{c.Doc, c.Text}] = c.Src
 	}
-	return stopped, rephrased
+	return out
+}
+
+// DriftKind names why a committed entry is absent from a fresh derivation.
+//
+// There are three reasons, not two, and they call for different actions — one
+// of which is destructive. Collapsing them onto a single question ("does the
+// recorded source still carry the words?") answers a contributor's question
+// with the wrong instruction whenever a literal is reworded around a quotation,
+// which is the ordinary edit. [LAW:types-are-the-program] the report carries
+// its own discriminator instead of leaving a reader to infer one.
+type DriftKind int
+
+const (
+	// QuoteDropped: the recorded source still ships and still carries the
+	// words — the chapter simply stopped quoting them. An ordinary prose edit;
+	// regenerating is exactly right.
+	QuoteDropped DriftKind = iota
+
+	// AnchorMoved: the recorded source no longer carries the words, but some
+	// other shipped source does. Two different things look identical from here
+	// and nothing in this package can tell them apart: the literal was reworded
+	// around the quotation, or the documented message was deleted and an
+	// unrelated string happens to contain the same words. The second is not
+	// theoretical — 269 of the 1,102 entries have text sitting in two or more
+	// distinct sources (measured 2026-09-18) — so the report names the source
+	// that carries the words now and leaves the judgment to a reader.
+	// [LAW:no-silent-failure] neither answer is guessed.
+	AnchorMoved
+
+	// Stopped: nothing shipped carries the words any more. Regenerating drops
+	// the entry, turns both checks green, and leaves the specification
+	// describing a message the binary no longer has.
+	Stopped
+)
+
+// Drift is one committed entry that a fresh derivation no longer yields,
+// carrying why it went and the evidence a reader needs to act on it.
+type Drift struct {
+	Claim
+
+	Kind DriftKind
+
+	// Now is the source carrying Text today. It is set when Kind is
+	// AnchorMoved, and empty otherwise: the other two kinds have no such
+	// source, and inventing one would be the guess this type exists to avoid.
+	Now string
+}
+
+// Drifted classifies every committed entry the fresh derivation no longer
+// yields.
+//
+// An entry leaves a derivation three ways, and telling them apart is the whole
+// point of reporting at all. The chapter stopped quoting the message, and
+// regenerating is right. The literal that carried the message was reworded, and
+// what to do next depends on whether it is still the same message — only a
+// reader can say. Or the message stopped shipping, and regenerating is the one
+// action that defeats this gate: it drops the entry, both checks go green, and
+// the sentence stays in the specification describing a message the binary no
+// longer has. Telling a contributor to regenerate in that last case is worse
+// than saying nothing, because it is an instruction to erase the evidence.
+//
+// One classifier, so the tool and the freshness test cannot disagree about what
+// drift is. [LAW:single-enforcer]
+func Drifted(manifest, fresh []Claim, corpus Corpus) []Drift {
+	now := anchors(fresh)
+	var out []Drift
+	for _, c := range Diff(manifest, fresh) {
+		src, reanchored := now[[2]string{c.Doc, c.Text}]
+		switch {
+		case stillHolds(c.Src, c.Text, corpus):
+			out = append(out, Drift{Claim: c, Kind: QuoteDropped})
+		case reanchored:
+			out = append(out, Drift{Claim: c, Kind: AnchorMoved, Now: src})
+		default:
+			out = append(out, Drift{Claim: c, Kind: Stopped})
+		}
+	}
+	return out
+}
+
+// Explain is the line a report prints for this drift: what changed, and what to
+// do about it.
+//
+// It lives here rather than in each caller because the two reports describe the
+// same failure — the freshness test and the sync tool — and a contributor who
+// sees them contradict each other learns to disregard whichever one is louder.
+// [LAW:one-source-of-truth] the remedy is a fact about the failure, not about
+// who is printing it.
+func (d Drift) Explain() string {
+	switch d.Kind {
+	case QuoteDropped:
+		return fmt.Sprintf("no longer quoted by %s: %q — the prose changed; run `go run ./tools/docclaims-sync`", d.Doc, d.Text)
+	case AnchorMoved:
+		return fmt.Sprintf("%s quotes %q, and the source it was recorded against no longer carries it; the words ship today in %q — if that is the same message reworded, run `go run ./tools/docclaims-sync`; if it is an unrelated string, the documented message is gone: fix the code or the chapter", d.Doc, d.Text, ellipsis(d.Now, 120))
+	default:
+		return fmt.Sprintf("%s quotes a message that no longer ships: %q — fix the code or the chapter. Do NOT regenerate: that drops the entry and leaves the sentence false", d.Doc, d.Text)
+	}
+}
+
+// ellipsis shortens a source handle for a report line. A Go literal keys itself
+// in the corpus, so an untruncated one can bury the sentence the error is about.
+func ellipsis(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
 }
 
 // Dedupe sorts by document then text and drops repeats, so a derivation is a
