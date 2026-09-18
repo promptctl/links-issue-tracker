@@ -19,7 +19,7 @@ Family commands (`sync`, `hooks`, `backup`, `snapshots`, `lifeboat`, …) resolv
 
 ### Exit codes
 
-The taxonomy is the exit-code table in `06-issue-commands.md`, which is where it is maintained; ops commands produce the same codes from the same `ExitCode` (constants `internal/cli/exit.go:11-32`, dispatch `:37-144`). Restating it here is what let this chapter's copy stand at seven codes, and call itself complete, after the eighth was added.
+The taxonomy is the exit-code table in `06-issue-commands.md`, which is where it is maintained; ops commands produce the same codes from the same `ExitCode` (constants `internal/cli/exit.go:12-33`, dispatch `:38-167`). Restating it here is what let this chapter's copy stand at seven codes, and call itself complete, after the eighth was added.
 
 Commands are organized into help groups: `bootstrap` ("Human Bootstrap"), `operations` ("Agent Operations"), `structure`, `data` ("Sync & Data"), `maintenance` ("Setup & Maintenance"), `retention`, and `guidance` (`register.go:61-76`). Access modes vary per command: `upgrade` is workspace-only and never opens the app store, `doctor` resolves read-vs-write from its args, `backup` sets access per row, and `stores`/`completion`/`version` open no workspace at all (`register.go:273-393`).
 

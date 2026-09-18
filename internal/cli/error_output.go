@@ -139,15 +139,20 @@ func commandErrorReason(err error) string {
 	if errors.Is(err, store.ErrWorkspaceNotInitialized) {
 		return "workspace_not_initialized"
 	}
-	// lit could not settle on an issue prefix: the repository name yields none,
-	// or an explicit --prefix contradicts the one this workspace already has.
-	// Deterministic and answered by changing the command, which is exactly what
-	// validation_refused means, so it shares that reason rather than taking one
-	// of its own — a reason here could only restate "adjust the command", and the
-	// flag or command that resolves it is named by the message. Before this it
-	// reached the default and told the caller to retry a refusal that repeats
-	// forever, then to run `lit doctor` against a workspace `lit init` had just
-	// declined to create (links-init-hn19). [LAW:one-type-per-behavior]
+	// lit could not settle on an issue prefix. Three ways: the repository name
+	// yields none, an explicit --prefix contradicts the one this workspace
+	// already has, or the stored issue_prefix in config.json is itself illegal.
+	// All three are deterministic and clearable by the caller, which is what
+	// validation_refused means, so they share that reason rather than taking one
+	// of their own — a reason here could only restate "adjust what you passed".
+	// What differs is the ACT, which is why each message names its own rather
+	// than leaning on the reason: the first two name a flag or a command, while
+	// no command clears a stored illegal prefix (`lit prefix set` and `lit
+	// doctor` resolve the workspace before they run, so they die here too) and
+	// that message names the config FILE. Before this it reached the default and
+	// told the caller to retry a refusal that repeats forever, then to run `lit
+	// doctor` against a workspace `lit init` had just declined to create
+	// (links-init-hn19). [LAW:one-type-per-behavior]
 	if errors.Is(err, workspace.ErrIssuePrefixRefused) {
 		return "validation_refused"
 	}
