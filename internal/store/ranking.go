@@ -164,7 +164,13 @@ func (e rankEdge) roomBesideTx(ctx context.Context, tx *sql.Tx, anchorRank strin
 // top-level issue and ensureIssueRanks has ranked it. Both bounds are open
 // there, nothing exists to collide with, and the first issue in a workspace
 // takes rank.Initial.
-func firstInFrameBoundsTx(ctx context.Context, tx *sql.Tx, f storage.Frame) (lower, upper string, err error) {
+//
+// moving carries through for the same reason it exists anywhere: the keys this
+// write is about to vacate are not walls. Dropping it here left rank set
+// bounded by its own previous result, so repeating the same stack — an
+// idempotent request — walked the key longer every round, V then VV then VF,
+// spending the container's gap on a command that changes nothing.
+func firstInFrameBoundsTx(ctx context.Context, tx *sql.Tx, f storage.Frame, moving ...string) (lower, upper string, err error) {
 	if f == storage.TopLevel {
 		return "", "", nil
 	}
@@ -185,9 +191,9 @@ func firstInFrameBoundsTx(ctx context.Context, tx *sql.Tx, f storage.Frame) (low
 		if lastRank == "" {
 			return "", "", nil
 		}
-		return bottomEdge.roomBesideTx(ctx, tx, lastRank)
+		return bottomEdge.roomBesideTx(ctx, tx, lastRank, moving...)
 	}
-	return bottomEdge.roomBesideTx(ctx, tx, containerRank)
+	return bottomEdge.roomBesideTx(ctx, tx, containerRank, moving...)
 }
 
 // filingBoundsTx is the pair a create's key is placed between: the population
@@ -283,7 +289,7 @@ func (e rankEdge) rankBeyondTx(ctx context.Context, tx *sql.Tx, f storage.Frame,
 		// key instead is what sent an issue asked for its frame's bottom to the
 		// top of the workspace. [LAW:one-source-of-truth]
 		if edgeRank == "" {
-			return firstInFrameBoundsTx(ctx, tx, f)
+			return firstInFrameBoundsTx(ctx, tx, f, moving...)
 		}
 		return e.roomBesideTx(ctx, tx, edgeRank, moving...)
 	})

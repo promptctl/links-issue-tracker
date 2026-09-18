@@ -1334,9 +1334,11 @@ func placingAtAFrameEdgeKeepsTheKeyBesideItsFrame(t *testing.T, ctx context.Cont
 // the top edge to the frame is exactly what makes this reachable — the frame's
 // edge reads as absent, and an engine answering "the middle of the keyspace"
 // there hands the issue the key the workspace's first issue already holds. So
-// an empty frame files where the default placement would have filed it, after
-// everything that exists, which is both the position with no order to
-// contradict and the one key nothing can already be using.
+// an empty frame files beside the issue that frames it — just past its
+// container's key, the one key such a frame does offer to sit beside, and a
+// position nothing can already be using. Filing it after everything that exists
+// answers the distinctness law too, but it reads as last rather than first in
+// any view that orders an issue by its own position.
 func createAtTopOfAnEmptyFrameTakesADistinctKey(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	// The first issue in a workspace holds the opening key — the very key a
 	// "middle of the keyspace" answer would hand out a second time.

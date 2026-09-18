@@ -1111,8 +1111,8 @@ func TestRelativeMoveDrawsItsRoomFromTheWholeWorkspace(t *testing.T) {
 	}
 }
 
-// TestRankToEdgeOfAFrameWithNoRankedMemberFilesPastTheWorkspace covers the one
-// input the room lookup has no answer for: an empty key.
+// TestRankToEdgeOfAFrameWithNoRankedMemberFilesBesideItsContainer covers the
+// one input the room lookup has no answer for: an empty key.
 //
 // An issue whose own rank is blank is not in the population frameEdgeHolderTx
 // reads, so a frame holding only that issue reports no edge at all, while the
@@ -1125,7 +1125,7 @@ func TestRelativeMoveDrawsItsRoomFromTheWholeWorkspace(t *testing.T) {
 // A blank rank is not reachable through the API (ensureIssueRanks backfills at
 // open), so it is written here directly: the point of the case is that the
 // absent key is answered rather than averaged, whatever put it there.
-func TestRankToEdgeOfAFrameWithNoRankedMemberFilesPastTheWorkspace(t *testing.T) {
+func TestRankToEdgeOfAFrameWithNoRankedMemberFilesBesideItsContainer(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
@@ -1142,6 +1142,14 @@ func TestRankToEdgeOfAFrameWithNoRankedMemberFilesPastTheWorkspace(t *testing.T)
 	if err != nil {
 		t.Fatalf("CreateIssue(child) error = %v", err)
 	}
+	// Ranked last, so that "beside the container" and "past the workspace" are
+	// different keys. Without it the epic holds the trailing key, the two
+	// answers coincide, and the case cannot tell which rule produced the one it
+	// sees.
+	trailing, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Trailing", Topic: "frame", IssueType: "task"})
+	if err != nil {
+		t.Fatalf("CreateIssue(trailing) error = %v", err)
+	}
 	if _, err := st.db.ExecContext(ctx, `UPDATE issues SET item_rank = '' WHERE id = ?`, only.ID); err != nil {
 		t.Fatalf("blank the child's rank: %v", err)
 	}
@@ -1156,17 +1164,81 @@ func TestRankToEdgeOfAFrameWithNoRankedMemberFilesPastTheWorkspace(t *testing.T)
 	if after.Rank == "" {
 		t.Fatal("RankToBottom left the child with no rank at all")
 	}
-	// Sent to the bottom, it lands past everything — never above the key that
-	// leads the workspace, which is what reading the room beside "" produced.
-	if after.Rank < standalone.Rank {
-		t.Errorf("the child sent to its frame's bottom holds %q, above the workspace's leading key %q", after.Rank, standalone.Rank)
+	// It lands beside the issue that frames it, which is the only key an empty
+	// frame offers. Reading the room beside the absent key instead put it above
+	// the whole workspace; filing it past the workspace's last key would put it
+	// after the trailing issue, which is what --bottom of a frame does not mean.
+	if want := mustBottomOf(t, map[string]string{standalone.ID: standalone.Rank, epic.ID: epic.Rank, trailing.ID: trailing.Rank}, epic.Rank); after.Rank != want {
+		t.Errorf("the child took rank %q, want %q = the room just past its epic %q", after.Rank, want, epic.Rank)
 	}
-	if after.Rank < epic.Rank {
-		t.Errorf("the child sent to its frame's bottom holds %q, above its own epic %q", after.Rank, epic.Rank)
+	if !(after.Rank > epic.Rank && after.Rank < trailing.Rank) {
+		t.Errorf("the child took rank %q, want it between its epic %q and the workspace's trailing key %q", after.Rank, epic.Rank, trailing.Rank)
 	}
-	for _, other := range []model.Issue{standalone, epic} {
+	for _, other := range []model.Issue{standalone, epic, trailing} {
 		if after.Rank == other.Rank {
 			t.Errorf("the child took rank %q, the key %s holds; a rank orders one issue", after.Rank, other.ID)
 		}
+	}
+}
+
+// TestRankSetOverAWholeFrameIsIdempotent pins the rule that a write's own keys
+// are not walls against it, on the one path that reaches an empty frame edge.
+//
+// Every ranked member of the frame is in the stack, so the anchor query returns
+// nothing and the bounds come from the frame's container. Reading that room
+// without excluding the stack bounds each round by the round before it, so
+// repeating a request that changes nothing walks the key longer every time —
+// "V", then "VV", then "VF" — spending the container's gap until a respace is
+// forced. The assertion is on the rank strings, because the rendered order is
+// identical either way.
+func TestRankSetOverAWholeFrameIsIdempotent(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "frame", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	// An outsider ranked after the epic gives the container's gap a far wall,
+	// so a bound that excludes the stack is stable while one that does not
+	// keeps closing in.
+	outsider, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Outsider", Topic: "frame", IssueType: "task"})
+	if err != nil {
+		t.Fatalf("CreateIssue(outsider) error = %v", err)
+	}
+	children := make([]model.Issue, 0, 2)
+	for _, title := range []string{"C1", "C2"} {
+		child, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "frame", IssueType: "task", ParentID: epic.ID})
+		if err != nil {
+			t.Fatalf("CreateIssue(%s) error = %v", title, err)
+		}
+		children = append(children, child)
+	}
+
+	ids := []string{children[1].ID, children[0].ID}
+	if _, err := st.RankSet(ctx, ids); err != nil {
+		t.Fatalf("RankSet error = %v", err)
+	}
+	first := currentRanks(t, ctx, st, children)
+	for round := 2; round <= 4; round++ {
+		if _, err := st.RankSet(ctx, ids); err != nil {
+			t.Fatalf("RankSet round %d error = %v", round, err)
+		}
+		for _, child := range children {
+			after := currentRanks(t, ctx, st, children)
+			if after[child.ID] != first[child.ID] {
+				t.Errorf("round %d rewrote %s from %q to %q; the same stack asked for twice is the same order", round, child.ID, first[child.ID], after[child.ID])
+			}
+		}
+	}
+	// Nothing outside the frame moved, and every key still orders one issue.
+	held := currentRanks(t, ctx, st, append([]model.Issue{epic, outsider}, children...))
+	seen := map[string]string{}
+	for id, r := range held {
+		if other, dup := seen[r]; dup {
+			t.Errorf("issues %s and %s both hold rank %q", other, id, r)
+		}
+		seen[r] = id
 	}
 }
