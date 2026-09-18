@@ -199,7 +199,7 @@ field (`errors.go:52-56`), `RetiredCommandError` — message
 `corruption_detected`, `unknown_command`, `retired_command`, `usage_error`,
 `unsupported_flag` (every `UnsupportedError`, `error_output.go:121-125`),
 `outside_git_workspace`, `bulk_partial_failure`, `workspace_write_blocked`,
-`transient_gc_contention`, default `command_failed`.
+`transient_gc_contention`, `workspace_not_initialized`, default `command_failed`.
 
 `commandErrorRemediation(reason)` (`error_output.go:92-133`), verbatim strings:
 - `unknown_command`: "Run `lit --help` (or `lit help <command>`) to select a supported command path."
@@ -214,6 +214,7 @@ field (`errors.go:52-56`), `RetiredCommandError` — message
 - `transient_gc_contention`: "Retry once. If the error persists, run `lit doctor --fix`. \<agent-instructions>…\</agent-instructions>"
 - `workspace_write_blocked`: "Wait a moment and retry — a normal command releases the store in well under a second. If it persists, a lit process is stuck: find it with `ps aux | grep '[l]it'` and terminate it, then retry; if none is running the hold is stale, so run `lit doctor --fix`. \<agent-instructions>…\</agent-instructions>"
 - `outside_git_workspace`: "Run the command inside a git repository/worktree with links initialized."
+- `workspace_not_initialized`: "Do not retry unchanged — this repository has no lit workspace, and retrying this command cannot create one. Run `lit init` here to create it, or change to a directory that already has one."
 - `bulk_partial_failure`: "Some items failed; see the per-item errors above. Re-run the command for only the failed IDs after addressing each error."
 - default: "Retry the command. If it still fails, run `lit doctor` for diagnostics."
 

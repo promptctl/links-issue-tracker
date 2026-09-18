@@ -424,13 +424,18 @@ func LockDoltJournalExclusive(ctx context.Context, databasePath string) (func() 
 	if err := requireInitializedWorkspace(databasePath); err != nil {
 		return nil, err
 	}
-	// The root exists, so `lit init` has run here and the uninitialized answer
-	// is already ruled out. An absent noms dir *under* that root is a different
-	// fact — a damaged or half-deleted Dolt tree — and it keeps its own error so
-	// it reaches the unclassified default's retry-then-doctor advice instead of
-	// a confident "run `lit init`", which init itself refuses on a root it
-	// cannot read. Answering both conditions with one sentence rebuilt the very
-	// loop this change removes, one level down. [LAW:one-type-per-behavior]
+	// The root exists, so the from-scratch answer — nothing here at all — is
+	// ruled out. What lies under it this code cannot tell apart: a damaged or
+	// half-deleted Dolt tree, or a `lit init` interrupted after it made the root
+	// and before Dolt wrote noms. Both are ENOENT beneath a live root, and no
+	// marker separates them, so no type can. [LAW:types-are-the-program]
+	//
+	// Both get the fault error rather than a confident "run `lit init`", because
+	// that sentence is the one that loops: init refuses a root it cannot read
+	// and says retry, which is the defect this change removes, rebuilt one level
+	// down. For the interrupted half that is an accepted downgrade — re-running
+	// init would in fact fix it — and the trade is deliberate: a diagnosis that
+	// terminates beats an instruction that spins. [LAW:one-type-per-behavior]
 	if _, err := os.Stat(filepath.Dir(lockPath)); err != nil {
 		return nil, fmt.Errorf("stat dolt journal dir: %w", err)
 	}

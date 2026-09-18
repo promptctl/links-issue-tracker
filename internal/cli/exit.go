@@ -135,7 +135,9 @@ func ExitCode(err error) int {
 	// parsing the English — the thing every sink in this package exists to stop
 	// callers doing (links-cli-errors-yfbg). The act each calls for differs —
 	// change directory, or run `lit init` here — and that difference is carried
-	// by the reason, not by a code of its own. [LAW:no-mode-explosion]
+	// by the reason rather than by a code of its own. The reason string is not
+	// itself printed: what the caller reads is the remediation it selects, and
+	// the two remediations name the two different acts. [LAW:no-mode-explosion]
 	var outsideWorkspace OutsideWorkspaceError
 	if errors.As(err, &outsideWorkspace) {
 		return ExitValidation
