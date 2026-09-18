@@ -660,6 +660,15 @@ func collectFile(fsys fs.FS, name string, src []byte, into Corpus) error {
 	}
 	var collision error
 	ast.Inspect(file, func(n ast.Node) bool {
+		// ast.Inspect has no abort, and returning false from a string literal
+		// declines to descend into children a leaf does not have — so the walk
+		// below carried on past its own refusal, kept adding to a corpus it had
+		// just decided to reject, and reported the last collision rather than
+		// the first. This is what actually stops it.
+		// [LAW:dataflow-not-control-flow] one value decides, and it decides once.
+		if collision != nil {
+			return false
+		}
 		lit, ok := n.(*ast.BasicLit)
 		if !ok || lit.Kind != token.STRING {
 			return true
@@ -1281,14 +1290,6 @@ type Drift struct {
 	QuotedBy []string
 }
 
-// Explain is the line a report prints for this drift: what changed, and what to
-// do about it.
-//
-// It lives here rather than in each caller because the two reports describe the
-// same failure — the freshness test and the sync tool — and a contributor who
-// sees them contradict each other learns to disregard whichever one is louder.
-// [LAW:one-source-of-truth] the remedy is a fact about the failure, not about
-// who is printing it.
 // NowBrief is the source carrying the quotation today, shortened the way a
 // report must show it. A Go-literal handle is the whole literal the words were
 // found inside, which runs to kilobytes here, and printing one unedited buries
@@ -1299,6 +1300,14 @@ type Drift struct {
 // handle a reader is shown.
 func (d Drift) NowBrief() string { return ellipsis(d.Now, 120) }
 
+// Explain is the line a report prints for this drift: what changed, and what to
+// do about it.
+//
+// It lives here rather than in each caller because the two reports describe the
+// same failure — the freshness test and the sync tool — and a contributor who
+// sees them contradict each other learns to disregard whichever one is louder.
+// [LAW:one-source-of-truth] the remedy is a fact about the failure, not about
+// who is printing it.
 func (d Drift) Explain() string {
 	switch d.Kind {
 	case QuoteDropped:

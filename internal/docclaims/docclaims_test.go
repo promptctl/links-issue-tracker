@@ -689,3 +689,36 @@ func TestAGoModWithoutAModulePathIsAnError(t *testing.T) {
 		t.Fatal("a go.mod with no module path was accepted; every import would silently fail to resolve")
 	}
 }
+
+// TestTheFirstCollisionStopsTheWalk covers a refusal that did not refuse.
+// ast.Inspect has no abort and the callback returned false from a string
+// literal, which only declines to descend into children a leaf does not have —
+// so the walk continued, kept writing into a corpus it had already decided to
+// reject, and overwrote the recorded error with each later collision until the
+// one reported was the last rather than the first.
+//
+// collectFile is called directly rather than through ShippedText because the
+// question is about one file's walk, and routing it through the package BFS
+// would pin the answer to a traversal order that has nothing to do with it.
+func TestTheFirstCollisionStopsTheWalk(t *testing.T) {
+	into := Corpus{
+		"alpha beta":  "a body this handle already stands for",
+		"gamma delta": "a different body, also already taken",
+	}
+	src := []byte(`package p
+
+var A = "alpha beta"
+var B = "gamma delta"
+var C = "zeta eta"
+`)
+	err := collectFile(fstest.MapFS{}, "internal/p/p.go", src, into)
+	if err == nil {
+		t.Fatal("collectFile accepted a literal colliding with a handle already standing for another body")
+	}
+	if !strings.Contains(err.Error(), "alpha beta") {
+		t.Errorf("collectFile reported %v, want the FIRST collision; reporting a later one means the refusal did not stop the walk", err)
+	}
+	if _, added := into["zeta eta"]; added {
+		t.Error("a literal after the collision was still collected: the walk carried on past its own refusal and went on mutating the corpus")
+	}
+}
