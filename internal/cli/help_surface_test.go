@@ -16,14 +16,32 @@ import (
 	"testing"
 )
 
-// litWritesIntoConsumerRepos names the tracked entries a reader of lit's help
-// output actually has, because `lit init` puts them there. Everything else
-// tracked in this repository — docs/, internal/, README.md — exists here and
-// nowhere the tool runs, so naming one in help text hands the reader a path
-// that resolves only for a contributor standing in this source tree.
-var litWritesIntoConsumerRepos = map[string]bool{
-	"AGENTS.md": true,
-	"CLAUDE.md": true,
+// aConsumerRepoPlausiblyHasThis names the tracked entries help text may still
+// mention, because the reader standing in their own repository plausibly has
+// one too. Two reasons land a name here, and nothing else does:
+//
+//   - `lit init` writes it into a consumer repo, so the reader has it because
+//     lit put it there.
+//   - it is universal repository furniture — a readme, a licence, an ignore
+//     file, a workflows directory, a Go module — present in this checkout for
+//     the same reason it is present in theirs.
+//
+// The second group is the correction to this gate's first premise. "Tracked
+// here" was read as "only here", which is true of `docs/` and `internal/` and
+// false of `.gitignore`: the day help text legitimately says "add `.lit/` to
+// your `.gitignore`", the gate would have refused it while asserting the
+// reader has no such path — a false refusal prescribing a fix that does not
+// apply. [FRAMING:representation] the map has to match the territory in both
+// directions, and the forbidden property is lit-specific, never merely tracked.
+var aConsumerRepoPlausiblyHasThis = map[string]bool{
+	"AGENTS.md":  true, // written by lit init
+	"CLAUDE.md":  true, // written by lit init
+	"README.md":  true,
+	"LICENSE":    true,
+	".gitignore": true,
+	".github":    true,
+	"go.mod":     true,
+	"go.sum":     true,
 }
 
 // repoOnlyNames derives, from the repository itself, every top-level tracked
@@ -36,7 +54,13 @@ var litWritesIntoConsumerRepos = map[string]bool{
 // decide whether this gate passes. [LAW:verifiable-goals]
 func repoOnlyNames(t *testing.T, root string) []string {
 	t.Helper()
-	cmd := exec.Command("git", "ls-files")
+	// -z, because git C-quotes any path holding a non-ASCII or special
+	// character by default: `"doc-v1-total/caf\303\251.md"` would have been cut
+	// at the slash into a token carrying a leading quote, and that entry's real
+	// top-level name would never have entered the forbidden set. A gate that
+	// quietly loses entries passes vacuously for exactly them.
+	// [LAW:no-silent-failure]
+	cmd := exec.Command("git", "ls-files", "-z")
 	cmd.Dir = root
 	out, err := cmd.Output()
 	if err != nil {
@@ -44,9 +68,9 @@ func repoOnlyNames(t *testing.T, root string) []string {
 	}
 	seen := map[string]bool{}
 	var names []string
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for _, line := range strings.Split(strings.TrimRight(string(out), "\x00"), "\x00") {
 		top, _, nested := strings.Cut(line, "/")
-		if litWritesIntoConsumerRepos[top] || seen[top] {
+		if aConsumerRepoPlausiblyHasThis[top] || seen[top] {
 			continue
 		}
 		seen[top] = true

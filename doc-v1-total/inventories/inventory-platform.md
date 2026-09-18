@@ -1196,8 +1196,8 @@ so a missing page or an out-of-tree link fails the merge gate
 
 ## 16. Command registry structure (startup-relevant)
 
-- Commands are data, not imperative registration: `CommandSpec{Name, Summary, Long, GroupID,
-  Run, Subcommands, Hidden}` (`internal/cli/register.go:17-37`), with
+- Commands are data, not imperative registration: `CommandSpec{Name, Summary, GroupID,
+  Run, Subcommands, Hidden, Retired}` (`internal/cli/register.go`), with
   `SubcommandSpec{Name, Subcommands}` for family commands (`internal/cli/register.go:41-45`) and
   `CommandRunner func(args []string) error` as the fully-wrapped handler
   (`internal/cli/register.go:47-52`).
@@ -1208,9 +1208,11 @@ so a missing page or an out-of-tree link fails the merge gate
   `bootstrap` "Human Bootstrap", `operations` "Agent Operations", `structure`
   "Dependencies & Structure", `data` "Sync & Data", `maintenance` "Setup & Maintenance",
   `retention` "Issue Retention", `guidance` "Guidance & Tooling".
-- Two standard help blurbs are defined for the two audiences:
-  `humanBootstrapHelp` = "Human bootstrap command. Run once per repository/worktree setup before
-  autonomous agent operations." and `agentCommandHelp` = "Agent-facing operational command."
-  (`internal/cli/cli.go:30-33`).
+- A command's long-form description is not a registry field. `CommandSpec` carries no
+  `Long`, and the two standard blurbs that once filled it (`humanBootstrapHelp`,
+  `agentCommandHelp`) are deleted: a command's help page is rendered by its own leaf,
+  from text embedded under `internal/cli/helptext/` and declared with
+  `newCobraFlagSet(...).Detail(helpText(...))`. `init`'s blurb now lives in
+  `internal/cli/helptext/init.txt`.
 - The registry is applied by `applyRegistry(root, commandGroups, commandSpecs(ctx, stdout, stderr))`
   (`internal/cli/cli.go:90`).

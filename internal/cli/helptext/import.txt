@@ -5,9 +5,10 @@ any other extension is the JSON tree spec, which only creates.
 Both formats reject any key they do not name, so a misspelled field fails
 the whole file rather than being dropped. Structure is checked before
 anything is written — required keys, duplicate ids, unresolvable
-references, cycles — but the value rules below are enforced as each issue
-is created, so a bad value fails partway through and the creates already
-made are rolled back. See Results for what rollback covers.
+references, cycles, and (in a JSON file) type and priority. The remaining
+value rules below are enforced as each issue is created, so a bad topic
+or label fails partway through and the creates already made are rolled
+back. See Results for what rollback covers.
 
 JSON tree spec (creates only)
 
