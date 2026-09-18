@@ -26,8 +26,13 @@ type hookInstallResult struct {
 	Reason   string
 }
 
+// hooksUsage is spelled once and read by both the family and the leaf. A var
+// referring to the leaf while the leaf refers back to it is an initialization
+// cycle, so the shared fact is a const, not a field read. [LAW:one-source-of-truth]
+const hooksUsage = "usage: lit hooks install"
+
 var hooksFamily = commandFamily[wsSubcommand]{
-	usage: "usage: lit hooks install",
+	usage: hooksUsage,
 	subcommands: []subcommandRow[wsSubcommand]{
 		{name: "install", payload: wsSubcommand{declare: hooksInstallLeaf}},
 	},
@@ -35,7 +40,11 @@ var hooksFamily = commandFamily[wsSubcommand]{
 
 func hooksInstallLeaf() wsLeaf {
 	fs := newCobraFlagSet("hooks install")
-	return wsLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+	// Read from the family rather than spelled twice: this is the message the v1
+	// specification names for the leaf, and it survived the gate only because the
+	// family's literal is identical — a coincidence, not a guarantee.
+	// [LAW:one-source-of-truth]
+	return wsLeaf{fs: fs, positionals: 0, usage: hooksUsage, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
 
 		result, err := installHooks(ws)
 		if err != nil {

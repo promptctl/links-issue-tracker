@@ -84,7 +84,6 @@ func snapshotsNewLeaf() wsLeaf {
 	// `snapshots new nightly` is a natural typo for `--label nightly`, and
 	// accepting it would mint an unlabeled snapshot the operator then cannot find
 	// by the name they thought they gave it. The refusal is parseLeaf's now, and
-	// the sentence it prints names --label because the flag set says this command
 	// the sentence it prints names --label. It carries its own line anyway: the
 	// v1 specification quotes this exact message, and the docclaims gate holds
 	// the code to what the chapter says ships. [LAW:one-source-of-truth]
