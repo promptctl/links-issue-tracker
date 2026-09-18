@@ -231,7 +231,11 @@ func allDoctorFixNames() []string {
 
 // doctorFixes is the registry of available doctor fixes.
 // [LAW:one-source-of-truth] This map is the single authority for valid fix names.
-var doctorFixes = map[string]func(context.Context, io.Writer, storage.Repairer) error{
+// doctorFix repairs one class of fault. Naming the signature lets the command
+// resolve the requested fixes to values before running any of them.
+type doctorFix func(context.Context, io.Writer, storage.Repairer) error
+
+var doctorFixes = map[string]doctorFix{
 	"integrity": func(ctx context.Context, w io.Writer, repairer storage.Repairer) error {
 		report, err := repairer.FixIntegrity(ctx)
 		if err != nil {
@@ -257,6 +261,43 @@ var doctorFixes = map[string]func(context.Context, io.Writer, storage.Repairer) 
 	},
 }
 
+// diagnoseThenRepair runs the health check, then such repairs as it is safe to
+// run, and reports the state left behind.
+//
+// The order is the whole point. Every fix starts from the live-issue
+// classification, which is a walk up the parent chain, and that walk does not
+// return when the hierarchy holds a loop — so repairing first meant `lit doctor
+// --fix` overflowed the stack before it could name the loop, and the operator
+// whose habit is `--fix` got no diagnosis at all. Diagnosis has to survive the
+// state it diagnoses. Store.Doctor answers the same ordering question one level
+// down, for the same reason.
+//
+// [LAW:dataflow-not-control-flow] Whether the repairs run is decided by the
+// report, not by which flag the caller typed; the caller passes the fixes it
+// parsed and this decides what the data permits.
+func diagnoseThenRepair(ctx context.Context, progress io.Writer, repairer storage.Repairer, fixes []doctorFix) (storage.HealthReport, error) {
+	report, err := repairer.Doctor(ctx)
+	if err != nil {
+		return storage.HealthReport{}, err
+	}
+	if len(fixes) == 0 {
+		return report, nil
+	}
+	if len(report.ParentCycle) > 0 {
+		// [LAW:no-silent-failure] The skip is stated. A run that printed only the
+		// cycle would read as though the repairs had run and found nothing.
+		fmt.Fprintf(progress, "doctor: skipping every --fix because the hierarchy holds a cycle (%s); a repair walks up the parent chain and that walk does not return on a loop — break it first, then re-run\n", strings.Join(report.ParentCycle, " -> "))
+		return report, nil
+	}
+	for _, fn := range fixes {
+		if err := fn(ctx, progress, repairer); err != nil {
+			return storage.HealthReport{}, err
+		}
+	}
+	// Re-read, so the report describes the state the repairs left behind.
+	return repairer.Doctor(ctx)
+}
+
 func doctorLeaf() appLeaf {
 	fs := newCobraFlagSet("doctor")
 	fix := fs.String("fix", "", "Apply fixes: --fix (all) or --fix rank,thingA")
@@ -270,23 +311,25 @@ func doctorLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
+		// [LAW:parse-dont-validate] The requested fixes are resolved to functions
+		// before anything runs, so an unknown name is a usage error rather than a
+		// failure discovered halfway through repairing.
+		var fixes []doctorFix
 		if *fix != "" {
 			fixNames := allDoctorFixNames()
 			if *fix != "all" {
 				fixNames = splitCSV(*fix)
 			}
-			// Fix progress writes to stderr so stdout carries only the health report.
 			for _, name := range fixNames {
 				fn, ok := doctorFixes[name]
 				if !ok {
 					return fmt.Errorf("unknown fix %q; available: %s", name, strings.Join(allDoctorFixNames(), ", "))
 				}
-				if err := fn(ctx, os.Stderr, repairer); err != nil {
-					return err
-				}
+				fixes = append(fixes, fn)
 			}
 		}
-		report, err := repairer.Doctor(ctx)
+		// Fix progress writes to stderr so stdout carries only the health report.
+		report, err := diagnoseThenRepair(ctx, os.Stderr, repairer, fixes)
 		if err != nil {
 			return err
 		}

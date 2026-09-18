@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -194,17 +195,29 @@ func TestDoctorNamesAStoredParentCycle(t *testing.T) {
 func TestParentCycleFindsOnlyTheLoop(t *testing.T) {
 	cases := []struct {
 		name     string
-		parentOf map[string]string
+		parentOf map[string][]string
 		want     []string
 	}{
-		{name: "a forest has no cycle", parentOf: map[string]string{"c": "b", "b": "a", "x": "a"}, want: nil},
-		{name: "empty", parentOf: map[string]string{}, want: nil},
-		{name: "a two-node loop", parentOf: map[string]string{"a": "b", "b": "a"}, want: []string{"a", "b"}},
-		{name: "a self parent", parentOf: map[string]string{"a": "a"}, want: []string{"a"}},
+		{name: "a forest has no cycle", parentOf: map[string][]string{"c": {"b"}, "b": {"a"}, "x": {"a"}}, want: nil},
+		{name: "empty", parentOf: map[string][]string{}, want: nil},
+		{name: "a two-node loop", parentOf: map[string][]string{"a": {"b"}, "b": {"a"}}, want: []string{"a", "b"}},
+		{name: "a self parent", parentOf: map[string][]string{"a": {"a"}}, want: []string{"a"}},
 		// "tail" hangs off the loop b->c->d->b. A walk from tail enters the
 		// loop, so a detector that reported its whole path would name tail as a
 		// member of a loop it is not in.
-		{name: "a tail leading into a loop", parentOf: map[string]string{"tail": "b", "b": "c", "c": "d", "d": "b"}, want: []string{"b", "c", "d"}},
+		{name: "a tail leading into a loop", parentOf: map[string][]string{"tail": {"b"}, "b": {"c"}, "c": {"d"}, "d": {"b"}}, want: []string{"b", "c", "d"}},
+		// Restored data can hold two parent edges for one child, because the
+		// reconcile replay writes relation rows verbatim. A detector keeping one
+		// parent per child follows whichever edge it kept and reports a clean
+		// hierarchy while hydration, which joins every matching row, still
+		// recurses through the other one.
+		{name: "a loop reachable only through a second parent edge", parentOf: map[string][]string{"a": {"root", "b"}, "b": {"a"}}, want: []string{"a", "b"}},
+		// The same shape with the loop on the first edge, so the case cannot
+		// pass by always taking the last edge either.
+		{name: "a loop on the first of two parent edges", parentOf: map[string][]string{"a": {"b", "root"}, "b": {"a"}}, want: []string{"a", "b"}},
+		// A node with two parents that both reach roots is still a forest: more
+		// than one parent is not by itself a loop.
+		{name: "two parents, both acyclic", parentOf: map[string][]string{"a": {"p", "q"}, "p": {"root"}, "q": {"root"}}, want: nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -239,5 +252,120 @@ func TestSetParentStillAcceptsANonCyclicMove(t *testing.T) {
 	got := parentOf(t, ctx, st, []model.Issue{chain[2]})
 	if got[chain[2].ID] != other.ID {
 		t.Errorf("parent of %s = %q, want %q", chain[2].ID, got[chain[2].ID], other.ID)
+	}
+}
+
+// seedParentEdge closes a parent edge directly, simulating data that entered
+// through a path the write boundary does not gate — the reconcile replay, or a
+// workspace written before the guard existed.
+func seedParentEdge(t *testing.T, ctx context.Context, st *Store, childID, parentID string) {
+	t.Helper()
+	if _, err := st.db.ExecContext(ctx,
+		`INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'parent-child', ?, 'import')`,
+		childID, parentID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("seed parent edge %s -> %s: %v", childID, parentID, err)
+	}
+}
+
+// Doctor tells the operator to break a reported loop with 'lit parent clear'.
+// That instruction has to work on the state doctor just described: a repair that
+// crashes on the fault it repairs leaves the workspace unreadable, which is the
+// condition this whole rule exists to prevent.
+//
+// The anti-vacuity precondition is the hydration check below: ClearParent used
+// to begin with GetIssue, so on this workspace it recursed until the stack
+// overflowed rather than returning any error at all.
+func TestClearParentBreaksAStoredCycleWithoutHydrating(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	chain := parentChain(t, ctx, st, "E", "S")
+	seedParentEdge(t, ctx, st, chain[0].ID, chain[1].ID)
+
+	// The workspace is genuinely unreadable first — otherwise this case would
+	// pass against a store where hydration never had a problem.
+	report, err := st.Doctor(ctx)
+	if err != nil {
+		t.Fatalf("Doctor() error = %v", err)
+	}
+	if len(report.ParentCycle) == 0 {
+		t.Fatal("Doctor().ParentCycle is empty; the fixture did not create a loop")
+	}
+
+	if err := st.ClearParent(ctx, chain[0].ID); err != nil {
+		t.Fatalf("ClearParent(%s) on a looped hierarchy error = %v, want the loop broken", chain[0].ID, err)
+	}
+
+	after, err := st.Doctor(ctx)
+	if err != nil {
+		t.Fatalf("Doctor() after repair error = %v", err)
+	}
+	if len(after.ParentCycle) != 0 {
+		t.Errorf("Doctor().ParentCycle = %v after 'lit parent clear', want the loop gone", after.ParentCycle)
+	}
+	// The repaired workspace reads again, which is the point of the repair.
+	if _, err := st.GetIssue(ctx, chain[0].ID); err != nil {
+		t.Errorf("GetIssue(%s) after repair error = %v, want the workspace readable", chain[0].ID, err)
+	}
+}
+
+// The rule is about the edges, not the lifecycle of their endpoints. A soft
+// delete is reversible, so a loop tolerated because one member is deleted is a
+// loop waiting to come back: restoring that member yields exactly the hierarchy
+// the guard promised could not exist. Consumers also disagree about which dead
+// edges they climb — lifecycleChildrenByEpicIDs keeps a dead container's
+// membership — so a detector scoped to any one of them misses loops another
+// still walks.
+func TestTheCycleRuleSeesAnEdgeThroughADeletedIssue(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	chain := parentChain(t, ctx, st, "E", "S")
+	parent, child := chain[0], chain[1]
+
+	if _, err := st.db.ExecContext(ctx, `UPDATE issues SET deleted_at = ? WHERE id = ?`,
+		time.Now().UTC().Format(time.RFC3339Nano), child.ID); err != nil {
+		t.Fatalf("soft-delete %s: %v", child.ID, err)
+	}
+
+	// The edge child -> parent is still stored and still climbed. Making the
+	// parent a child of it would therefore close a loop hydration can walk.
+	_, err := st.SetParent(ctx, storage.SetParentInput{ChildID: parent.ID, ParentID: child.ID, CreatedBy: "test"})
+	if err == nil {
+		t.Fatalf("SetParent(child=%s, parent=%s) succeeded, want a refusal: the deleted issue's parent edge is still climbed by hydration", parent.ID, child.ID)
+	}
+
+	// And the refusal left the hierarchy alone.
+	rels, relErr := st.ListRelationsForIssue(ctx, parent.ID, model.RelParentChild)
+	if relErr != nil {
+		t.Fatalf("ListRelationsForIssue error = %v", relErr)
+	}
+	for _, rel := range rels {
+		if rel.SrcID == parent.ID {
+			t.Errorf("the refused write still stored %s -> %s", rel.SrcID, rel.DstID)
+		}
+	}
+}
+
+// VerifyCandidate's health gate exists for untrusted data, and a parent cycle is
+// exactly the untrusted shape that stops the gates below it: they all read
+// through Export, which hydrates. Before the early return, this overflowed the
+// stack instead of reporting.
+func TestVerifyCandidateReportsAParentCycleRatherThanHanging(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	chain := parentChain(t, ctx, st, "E", "S")
+	seedParentEdge(t, ctx, st, chain[0].ID, chain[1].ID)
+
+	report, err := VerifyCandidate(ctx, RawDump{}, ShapeMapping{}, st)
+	if err != nil {
+		t.Fatalf("VerifyCandidate() error = %v, want a report naming the cycle", err)
+	}
+	found := false
+	for _, f := range report.Findings {
+		if f.Law == LawHealth && strings.Contains(f.Detail, "parent cycle") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("VerifyCandidate().Findings = %+v, want a health finding naming the parent cycle", report.Findings)
 	}
 }

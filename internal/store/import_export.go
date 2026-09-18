@@ -104,7 +104,7 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 		// An error, not a warning: this is reported through the arm that makes
 		// `lit doctor` exit nonzero, so the zeros left on the unrun checks below
 		// can never be read as a clean bill of health. [LAW:no-silent-failure]
-		report.Errors = append(report.Errors, fmt.Sprintf("parent cycle: %s (a hierarchy has no root once it loops; every walk up this chain runs forever, so the rank and dependency checks below could not be run — break the loop with 'lit parent clear' on one member, then re-run)", strings.Join(cycle, " -> ")))
+		report.Errors = append(report.Errors, fmt.Sprintf("parent cycle: %s (a hierarchy has no root once it loops; every walk up this chain runs forever, so the rank and dependency checks below could not be run — break the loop with 'lit parent clear' on one member, which detaches without reading the hierarchy, then re-run)", strings.Join(cycle, " -> ")))
 		return report, nil
 	}
 	// Rank inversions and a blocks dependency cycle are two questions about one

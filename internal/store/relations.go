@@ -436,17 +436,40 @@ func rejectParentCycle(ctx context.Context, tx *sql.Tx, childID, parentID string
 	if err != nil {
 		return fmt.Errorf("parent cycle check: %w", err)
 	}
-	// seen bounds the walk on data that already holds a cycle, so a workspace
-	// written before this rule existed reports it rather than hanging here.
+	// Everything the hierarchy can already climb to from the proposed parent.
+	// The edge runs child -> parent, so it closes a loop exactly when the child
+	// is somewhere in here. seen bounds the walk, because data written before
+	// this rule can already hold a loop, and the check meant to prevent one must
+	// not be the thing that hangs on it.
+	above := map[string][]string{}
 	seen := map[string]struct{}{parentID: {}}
-	for at := parentOf[parentID]; at != ""; at = parentOf[at] {
-		if at == childID {
-			return fmt.Errorf("parent-child: cannot make %s a child of %s — %s is already below %s in the hierarchy, so this edge would close a parent cycle, which has no root", childID, parentID, parentID, childID)
+	for stack := []string{parentID}; len(stack) > 0; {
+		at := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		parents := parentOf[at]
+		if len(parents) == 0 {
+			continue
 		}
-		if _, visited := seen[at]; visited {
-			return fmt.Errorf("parent-child: cannot make %s a child of %s — the hierarchy above %s already holds a cycle; run 'lit doctor' to find it", childID, parentID, parentID)
+		above[at] = parents
+		for _, parent := range parents {
+			if parent == childID {
+				return fmt.Errorf("parent-child: cannot make %s a child of %s — %s is already below %s in the hierarchy, so this edge would close a parent cycle, which has no root", childID, parentID, parentID, childID)
+			}
+			if _, visited := seen[parent]; visited {
+				continue
+			}
+			seen[parent] = struct{}{}
+			stack = append(stack, parent)
 		}
-		seen[at] = struct{}{}
+	}
+	// A loop already sitting above the parent is refused too, and named rather
+	// than walked into. The edge would be legal in itself; the hierarchy it
+	// would join is one no consumer can climb, so accepting it would bury a
+	// second issue under the first. [LAW:no-silent-failure]
+	// [LAW:one-source-of-truth] The same detector Doctor reports with, asked
+	// about the subgraph this edge would attach to rather than the workspace.
+	if cycle := parentCycle(above); len(cycle) > 0 {
+		return fmt.Errorf("parent-child: cannot make %s a child of %s — the hierarchy above %s already holds a cycle (%s); break it with 'lit dep rm' on one of those edges, then retry", childID, parentID, parentID, strings.Join(cycle, " -> "))
 	}
 	return nil
 }
@@ -461,13 +484,18 @@ func rejectParentCycle(ctx context.Context, tx *sql.Tx, childID, parentID string
 // division the blocks cycle already uses: refuse at the boundary, report what
 // the boundary was not there to refuse. [LAW:single-enforcer]
 //
-// Each issue has at most one parent, so a walk from any node follows a single
-// path and the first node it revisits is on the loop. Walking from every start
-// and stopping at nodes already proven acyclic keeps the whole scan linear.
-func parentCycle(parentOf map[string]string) []string {
-	// settled holds nodes already known to reach a root or a reported loop, so
-	// no node's ancestry is walked twice.
-	settled := make(map[string]struct{}, len(parentOf))
+// A child can hold more than one parent edge in restored data, so the walk is a
+// depth-first search rather than a single chain, and it carries its path so the
+// loop can be named by its members rather than merely detected. A node still on
+// the current path is the loop; a node already settled reaches a root, and its
+// ancestry is never walked twice, which keeps the whole scan linear in edges.
+func parentCycle(parentOf map[string][]string) []string {
+	const (
+		unvisited = iota
+		onPath
+		settled
+	)
+	state := make(map[string]int, len(parentOf))
 	starts := make([]string, 0, len(parentOf))
 	for child := range parentOf {
 		starts = append(starts, child)
@@ -476,46 +504,83 @@ func parentCycle(parentOf map[string]string) []string {
 	// members in a different order on every run is a fact nobody can act on.
 	slices.Sort(starts)
 	for _, start := range starts {
-		seenAt := map[string]int{}
-		path := []string{}
-		for at := start; at != ""; at = parentOf[at] {
-			if _, done := settled[at]; done {
-				break
-			}
-			if first, looped := seenAt[at]; looped {
-				return path[first:]
-			}
-			seenAt[at] = len(path)
-			path = append(path, at)
+		if state[start] != unvisited {
+			continue
 		}
-		for _, node := range path {
-			settled[node] = struct{}{}
+		// path is the chain of nodes currently being descended; taken[i] counts
+		// how many of path[i]'s parents have been followed already.
+		path := []string{start}
+		taken := []int{0}
+		state[start] = onPath
+		for len(path) > 0 {
+			at := len(path) - 1
+			parents := parentOf[path[at]]
+			if taken[at] >= len(parents) {
+				state[path[at]] = settled
+				path, taken = path[:at], taken[:at]
+				continue
+			}
+			parent := parents[taken[at]]
+			taken[at]++
+			switch state[parent] {
+			case onPath:
+				for i, id := range path {
+					if id == parent {
+						return append([]string{}, path[i:]...)
+					}
+				}
+			case unvisited:
+				state[parent] = onPath
+				path = append(path, parent)
+				taken = append(taken, 0)
+			}
 		}
 	}
 	return nil
 }
 
-// loadParentEdges returns the child -> parent map over issues that both exist
-// and are not deleted. A deleted container frames nothing, so its edge is not
-// part of the hierarchy a walk climbs.
-func loadParentEdges(ctx context.Context, q rowQueryer) (map[string]string, error) {
+// loadParentEdges returns the parent edges as the hierarchy is actually walked:
+// child -> every parent it can climb to. Two details of that are load-bearing.
+//
+// No lifecycle predicate narrows it. Consumers each climb their own subset —
+// lifecycleChildrenByEpicIDs, for one, keeps a dead container's membership and
+// so traverses edges whose parent is archived or deleted — and a detector
+// scoped to any single consumer's subset reports a clean hierarchy while some
+// other walk still runs forever. Reading every stored edge makes this a
+// superset of all of them, which is the only version that cannot drift as
+// consumers change. [LAW:one-source-of-truth]
+//
+// It is also the only version that survives a restore. Soft delete is
+// reversible, so a loop tolerated because one member is currently deleted
+// becomes a live loop the moment that member comes back — a guard that allowed
+// it would have promised an invariant it does not hold. The rule is therefore
+// about the edges, not about the lifecycle of their endpoints: the relations
+// table never holds a parent cycle.
+//
+// The map is multi-valued because single-parent cardinality is enforced at the
+// write boundary, and this reads the rows the boundary was not there to gate:
+// the reconcile replay writes relation rows verbatim through insertRelationTx,
+// so restored data can hold two parents for one child. Keeping one parent per
+// child here would be a theorem about the data that the restore path falsifies,
+// and the detector exists for precisely that data.
+// [LAW:types-are-the-program] The strongest theorem that is still true.
+func loadParentEdges(ctx context.Context, q rowQueryer) (map[string][]string, error) {
 	rows, err := q.QueryContext(ctx, `SELECT r.src_id, r.dst_id FROM relations r
-		JOIN issues src ON src.id = r.src_id
-		JOIN issues dst ON dst.id = r.dst_id
+		JOIN issues i ON i.id = r.src_id
+		JOIN issues p ON p.id = r.dst_id
 		WHERE r.type = 'parent-child'
-		AND src.deleted_at IS NULL AND dst.deleted_at IS NULL
 		ORDER BY r.src_id, r.dst_id`)
 	if err != nil {
 		return nil, fmt.Errorf("query parent edges: %w", err)
 	}
 	defer rows.Close()
-	parentOf := make(map[string]string)
+	parentOf := make(map[string][]string)
 	for rows.Next() {
 		var child, parent string
 		if err := rows.Scan(&child, &parent); err != nil {
 			return nil, fmt.Errorf("scan parent edge: %w", err)
 		}
-		parentOf[child] = parent
+		parentOf[child] = append(parentOf[child], parent)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("parent edge rows: %w", err)
@@ -598,10 +663,17 @@ func (s *Store) SetParent(ctx context.Context, in storage.SetParentInput) (model
 	return rel, nil
 }
 
+// ClearParent detaches a child from its parent.
+//
+// It reads nothing before the DELETE. That is what makes it usable on the one
+// workspace that needs it most: a hierarchy holding a loop, which `lit doctor`
+// names and tells the operator to break here. Hydrating the child first —
+// GetIssue climbs the parent chain — overflowed the stack on exactly that
+// state, so the repair crashed on the fault it was the repair for.
+// [LAW:no-defensive-null-guards] The DELETE already reports absence through
+// rows-affected; a pre-read could only ask the same question earlier, of a
+// walk that cannot answer it.
 func (s *Store) ClearParent(ctx context.Context, childID string) error {
-	if _, err := s.GetIssue(ctx, childID); err != nil {
-		return err
-	}
 	return s.withMutation(ctx, "clear parent", func(ctx context.Context, tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE src_id = ? AND type = 'parent-child'`, childID)
 		if err != nil {
