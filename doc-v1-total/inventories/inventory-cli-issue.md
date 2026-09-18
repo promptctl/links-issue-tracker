@@ -359,7 +359,7 @@ prefix (`cli.go:1036-1042`).
   `"priority must be normal (0) or urgent (1)"` (`priority.go:87`).
 - States: `open, in_progress, closed`; `in-progress` is normalized to
   `in_progress`; error `invalid status "<x>" (valid: open, in_progress, closed)`
-  (`internal/model/lifecycle/lifecycle.go:98-109`).
+  (`internal/model/lifecycle/lifecycle.go:141-152`).
 - Resolutions: `duplicate, superseded, obsolete, wontfix`; error
   `"resolution must be one of: duplicate, superseded, obsolete, wontfix"`
   (`internal/model/lifecycle/resolution.go:47-54`).

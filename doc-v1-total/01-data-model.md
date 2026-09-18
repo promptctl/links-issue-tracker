@@ -25,17 +25,17 @@ An issue carries these persisted fields (`internal/model/model.go:80-111`):
 | status fields | | `status`, `closed_at`, `resolution`, `redirect_target` — present on the wire only for non-epics; see [Status lifecycle](#the-status-lifecycle) |
 | retention fields | | `archived_at`, `deleted_at` — the wire encoding of the retention axis; see [Retention](#the-retention-axis) |
 
-There is no stored `progress` field; an epic's progress counts are computed (`model.go:556-562`).
+There is no stored `progress` field; an epic's progress counts are computed (`model.go:563-569`).
 
 ### Issue types
 
-Five types (`internal/model/issue_type.go:17-23`): `task`, `feature`, `bug`, `chore`, `epic`. Exactly one, `epic`, is a **container** (`issue_type.go:56-58`). Container-ness is decided by the type alone, never by whether the issue has children (`model.go:369-371`). Type parsing lowercases and trims; anything outside the five values is rejected (`issue_type.go:42-50`).
+Five types (`internal/model/issue_type.go:17-23`): `task`, `feature`, `bug`, `chore`, `epic`. Exactly one, `epic`, is a **container** (`issue_type.go:56-58`). Container-ness is decided by the type alone, never by whether the issue has children (`model.go:376-378`). Type parsing lowercases and trims; anything outside the five values is rejected (`issue_type.go:42-50`).
 
 Containers differ from leaves in three ways:
 
 1. **Derived state.** An epic's state is computed from its children: all children closed (and at least one child) → `closed`; any child in progress or closed → `in_progress`; otherwise → `open`. An epic with no children is `open` (`internal/model/lifecycle/all_of.go:17-27`). Progress is the field-wise sum of every non-container descendant's counts (`all_of.go:29-39`).
 2. **No direct transitions.** Applying any status action to an epic returns a typed `ContainerActionError` whose message varies with child progress — no children, all done, or N unfinished (`model.go:272-295, 310-324`).
-3. **No status on the wire.** A serialized epic carries no `status`, `closed_at`, `resolution`, or `redirect_target` keys (`model.go:501-511`), and JSON alone cannot reconstruct an epic's lifecycle — a decoded epic is marked pending until the store re-derives its state from children (`model.go:558-561`).
+3. **No status on the wire.** A serialized epic carries no `status`, `closed_at`, `resolution`, or `redirect_target` keys (`model.go:508-518`), and JSON alone cannot reconstruct an epic's lifecycle — a decoded epic is marked pending until the store re-derives its state from children (`model.go:565-568`).
 
 ### Priorities
 
@@ -49,7 +49,7 @@ A leaf issue's status is one of three states (`internal/model/lifecycle/lifecycl
 - `in_progress`
 - `closed`
 
-State parsing lowercases, trims, and accepts `in-progress` as an alias for `in_progress` (`lifecycle.go:98-109`). Lenient boundaries (import, hydration, storage) default unparseable states to `open`; strict boundaries (CLI flags, query language) reject them (`lifecycle.go:111-121`).
+State parsing lowercases, trims, and accepts `in-progress` as an alias for `in_progress` (`lifecycle.go:141-152`). Lenient boundaries (import, hydration, storage) default unparseable states to `open`; strict boundaries (CLI flags, query language) reject them (`lifecycle.go:154-164`).
 
 ### Transition actions
 
@@ -112,7 +112,7 @@ Lane identity is `(epic, lane-string)` — the same lane spelling under two diff
 
 ## Relations
 
-A relation is a typed directed edge between two issues: `src_id`, `dst_id`, `type`, `created_at`, `created_by` (`model.go:579-585`). Three types (`internal/model/relation_type.go:16-20`):
+A relation is a typed directed edge between two issues: `src_id`, `dst_id`, `type`, `created_at`, `created_by` (`model.go:586-592`). Three types (`internal/model/relation_type.go:16-20`):
 
 | Type | Directionality | Multiplicity |
 |---|---|---|
@@ -129,23 +129,23 @@ Relation-type parsing trims but does not lowercase (`relation_type.go:26-33`).
 
 ## Comments
 
-`id`, `issue_id`, `body`, `created_at`, `created_by` (`model.go:587-593`). Flat — no threading, no edits recorded as separate records.
+`id`, `issue_id`, `body`, `created_at`, `created_by` (`model.go:594-600`). Flat — no threading, no edits recorded as separate records.
 
 ## Labels
 
-A label row is `(issue_id, name, created_at, created_by)` (`model.go:595-600`). Names are normalized to lowercase and trimmed; an empty result is rejected, and commas are forbidden because comma is the list separator on input surfaces (`internal/model/label.go:14-23`). There is no label registry — labels exist only as attachments to issues — and no label-rename operation exists anywhere in the store.
+A label row is `(issue_id, name, created_at, created_by)` (`model.go:602-607`). Names are normalized to lowercase and trimmed; an empty result is rejected, and commas are forbidden because comma is the list separator on input surfaces (`internal/model/label.go:14-23`). There is no label registry — labels exist only as attachments to issues — and no label-rename operation exists anywhere in the store.
 
 One label has behavioral meaning: `needs-design` makes an issue not-ready (see readiness in `06-issue-commands.md`).
 
 ## Events (history)
 
-Every mutation to an issue produces one **IssueEvent**: `id`, `issue_id`, `action` (the named transition verb for status/retention transitions, empty for plain field updates), `reason`, `actor`, `created_at`, `attribution`, and a list of field changes (`model.go:718-733`). Each **FieldChange** is `(field, from, to)` with both values stringified, so every field type lands in one schema shape (`model.go:602-610`). Per-field actions do not exist; one event covers all fields that moved together.
+Every mutation to an issue produces one **IssueEvent**: `id`, `issue_id`, `action` (the named transition verb for status/retention transitions, empty for plain field updates), `reason`, `actor`, `created_at`, `attribution`, and a list of field changes (`model.go:725-740`). Each **FieldChange** is `(field, from, to)` with both values stringified, so every field type lands in one schema shape (`model.go:609-617`). Per-field actions do not exist; one event covers all fields that moved together.
 
 ### Attribution
 
-Attribution answers "which checkout produced this event": an opaque pair of a per-checkout **stream token** and the per-store **workspace id** (`model.go:631-634`). It is the entire shared-data footprint of the claims feature — claims are derived from these stamps at read time and stored nowhere (see `08-claims-and-identity.md`).
+Attribution answers "which checkout produced this event": an opaque pair of a per-checkout **stream token** and the per-store **workspace id** (`model.go:638-641`). It is the entire shared-data footprint of the claims feature — claims are derived from these stamps at read time and stored nowhere (see `08-claims-and-identity.md`).
 
-Rules enforced at every boundary (`model.go:656-713`):
+Rules enforced at every boundary (`model.go:663-720`):
 
 - The pair is **complete or absent** — a stream without a workspace (or vice versa) collapses to unattributed, including when decoding JSON some other program wrote.
 - Both halves are opaque by mandate: nothing user-, host-, or path-shaped is ever carried, because the database syncs to shared remotes.
@@ -176,11 +176,11 @@ Global ordering uses **lexicographic fractional indexing**: a rank is a string o
 
 ## Export format
 
-`Export` is the interchange shape for sync files, backups, and `lit export`: `version`, `workspace_id`, `exported_at`, plus arrays of issues, relations, comments, labels, and events (`model.go:755-764`). Current version is 2. Version 1 files carried a `history` array instead of `events`; the decoder converts each v1 history row into an event with a single `status` field-change and a deterministic content-derived ID (`evt-v1-` + 16 hex chars of SHA-256), so merging two v1 exports cannot mint duplicate IDs for different events (`model.go:766-836`). v2+ files' `history` arrays are ignored.
+`Export` is the interchange shape for sync files, backups, and `lit export`: `version`, `workspace_id`, `exported_at`, plus arrays of issues, relations, comments, labels, and events (`model.go:762-771`). Current version is 2. Version 1 files carried a `history` array instead of `events`; the decoder converts each v1 history row into an event with a single `status` field-change and a deterministic content-derived ID (`evt-v1-` + 16 hex chars of SHA-256), so merging two v1 exports cannot mint duplicate IDs for different events (`model.go:773-843`). v2+ files' `history` arrays are ignored.
 
 ## Serialization boundary rules
 
-Behaviors any reimplementation must preserve at the JSON boundary (`model.go:488-577`):
+Behaviors any reimplementation must preserve at the JSON boundary (`model.go:495-584`):
 
 - A leaf issue on the wire always carries `status`; a leaf without one fails to decode. An epic never carries status keys, and a decoded epic cannot be used for state reads until the store re-derives its lifecycle from children.
 - `archived_at`/`deleted_at` are projections of the retention axis (deletion wins on decode if both are present).

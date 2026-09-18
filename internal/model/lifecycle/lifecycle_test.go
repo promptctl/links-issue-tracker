@@ -652,3 +652,80 @@ func TestStateDisplay(t *testing.T) {
 		}
 	}
 }
+
+// TestEveryActionHasAnInvocationVerb walks Actions(), the sealed enumeration
+// that exists precisely so a consumer deciding something for every action can
+// assert it covered the set rather than hope. A ninth action added without a
+// verb fails here, rather than reaching a reader as a command that does not
+// exist. The length check is the other half of coverage: an action removed
+// from the sum leaves behind an entry nothing walks.
+func TestEveryActionHasAnInvocationVerb(t *testing.T) {
+	all := Actions()
+	for _, action := range all {
+		verb, ok := actionVerbs[action]
+		if !ok {
+			t.Fatalf("action %q has no invocation verb; add it to actionVerbs", action)
+		}
+		if verb == "" {
+			t.Fatalf("action %q has an empty invocation verb", action)
+		}
+		if got := action.Verb(); got != verb {
+			t.Fatalf("%q.Verb() = %q, want %q", action, got, verb)
+		}
+	}
+	if len(actionVerbs) != len(all) {
+		t.Fatalf("actionVerbs has %d entries, Actions() has %d -- every action has exactly one verb and no verb outlives its action", len(actionVerbs), len(all))
+	}
+}
+
+// TestReopenIsInvokedAsOpenAndPersistedAsReopen pins the one action whose two
+// names differ, in both directions, because each direction guards a different
+// mistake. Collapsing the verb to the persisted name puts `reopen` back into a
+// refusal answering `lit open`; renaming the persisted encoding to match the
+// command silently changes what the events table means for every row already
+// written.
+func TestReopenIsInvokedAsOpenAndPersistedAsReopen(t *testing.T) {
+	if got := ActionReopen.Verb(); got != "open" {
+		t.Fatalf("ActionReopen.Verb() = %q, want %q -- the command an agent types is `lit open`", got, "open")
+	}
+	if got := string(ActionReopen); got != "reopen" {
+		t.Fatalf("ActionReopen = %q, want %q -- this is the encoding the events table already holds", got, "reopen")
+	}
+}
+
+// TestOnlyReopenDivergesFromItsPersistedName turns "the two names agree for
+// every action but one" from a remark into a checked claim. That near-agreement
+// is why interpolating the wrong name stayed invisible: it read correctly seven
+// times out of eight. A second divergence appearing here is the signal to
+// re-read every message that names an action, so the test names the set rather
+// than counting it.
+func TestOnlyReopenDivergesFromItsPersistedName(t *testing.T) {
+	diverged := []ActionName{}
+	for _, action := range Actions() {
+		if action.Verb() != string(action) {
+			diverged = append(diverged, action)
+		}
+	}
+	want := []ActionName{ActionReopen}
+	if len(diverged) != len(want) {
+		t.Fatalf("actions whose verb differs from their persisted name = %v, want %v", diverged, want)
+	}
+	for i, action := range diverged {
+		if action != want[i] {
+			t.Fatalf("actions whose verb differs from their persisted name = %v, want %v", diverged, want)
+		}
+	}
+}
+
+// TestVerbRefusesAnActionOutsideTheSealedSet: the behaviour this replaced was a
+// silent fallback to the persisted encoding, which is indistinguishable from
+// correct output for every action whose two names agree. A panic is found by
+// the test above; a fallback is found by a reader holding an unrunnable command.
+func TestVerbRefusesAnActionOutsideTheSealedSet(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal(`ActionName("bogus").Verb() returned normally, want panic -- a missing verb must never fall back to the persisted encoding`)
+		}
+	}()
+	_ = ActionName("bogus").Verb()
+}

@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"io"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 
@@ -302,5 +304,80 @@ func TestContainerActionErrorSatisfiedRequiresNoWorkLeft(t *testing.T) {
 				t.Errorf("Satisfied() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestContainerRefusalNamesTheVerbTheAgentTyped is the whole of
+// links-cli-errors-nvmd. A refusal exists to tell an agent what it just asked
+// for, and an agent reads a backticked word as a command, so that word has to
+// be the one it typed. `lit open` dispatches model.Reopen, whose Name is the
+// persisted event encoding "reopen"; the message printed that encoding, and so
+// answered `lit open` by naming a command lit does not have.
+//
+// Every status spec is driven rather than `open` alone, because a table listing
+// only the known-broken verb passes again the first time a second command's
+// name diverges from its action's. The expectation is read from the SPEC the
+// command was dispatched with, so the assertion is "the refusal quotes the
+// command that produced it" rather than a second copy of the verb list, which
+// could agree with a wrong one as readily as a right one.
+// [LAW:verifiable-goals]
+func TestContainerRefusalNamesTheVerbTheAgentTyped(t *testing.T) {
+	for _, spec := range []transitionSpec{startSpec, doneSpec, closeSpec, openSpec} {
+		t.Run(spec.name, func(t *testing.T) {
+			h := newReadyTestHarness(t)
+			epic := h.epicFixture(2, 0)
+			err := h.runTransitionErr(epic, spec, actionFlags[spec.name]...)
+			if err == nil {
+				t.Fatalf("`lit %s` on an epic with open children = nil error, want a container rejection", spec.name)
+			}
+			rendered := renderCommandError(t, err)
+			if !strings.Contains(rendered, "`"+spec.name+"`") {
+				t.Errorf("`lit %s` is refused without naming `%s`, so the agent cannot copy the command back:\n%s", spec.name, spec.name, rendered)
+			}
+		})
+	}
+}
+
+// TestOpenRefusalNeverNamesThePersistedEncoding is the negative half, and it is
+// the half that fails today's defect. The positive assertion above passes for
+// three of the four verbs whatever the code does, because their two names
+// coincide; only `open` can tell a right answer from a wrong one, and only by
+// looking for the word that must NOT be there.
+func TestOpenRefusalNeverNamesThePersistedEncoding(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epic := h.epicFixture(2, 0)
+	err := h.runTransitionErr(epic, openSpec)
+	if err == nil {
+		t.Fatal("`lit open` on an epic with open children = nil error, want a container rejection")
+	}
+	rendered := renderCommandError(t, err)
+	if strings.Contains(rendered, string(model.ActionReopen)) {
+		t.Errorf("`lit open` is refused by naming %q, the events-table encoding; there is no `lit %s` to run:\n%s", string(model.ActionReopen), string(model.ActionReopen), rendered)
+	}
+}
+
+// TestTheCommandSurfaceAndTheVerbMapNameTheSameWords closes the loop between
+// the two places a verb is written down: the command table in this package, and
+// lifecycle's verb map, which every refusal reads. They are two maps of one
+// territory, so without this the one the messages use is the one nobody looks
+// at, and it can drift from the commands that actually exist without anything
+// failing. [LAW:one-source-of-truth]
+//
+// All eight are covered, not the four status verbs the container rejection can
+// reach, because the retention four reach the same defect through the
+// "cannot %s archived or deleted issue" refusal.
+func TestTheCommandSurfaceAndTheVerbMapNameTheSameWords(t *testing.T) {
+	fromCommands := []string{}
+	for _, spec := range []transitionSpec{startSpec, doneSpec, closeSpec, openSpec, archiveSpec, unarchiveSpec, deleteSpec, restoreSpec} {
+		fromCommands = append(fromCommands, spec.name)
+	}
+	fromVerbMap := []string{}
+	for _, action := range model.Actions() {
+		fromVerbMap = append(fromVerbMap, action.Verb())
+	}
+	sort.Strings(fromCommands)
+	sort.Strings(fromVerbMap)
+	if !slices.Equal(fromCommands, fromVerbMap) {
+		t.Fatalf("the transition commands name %v, lifecycle's verbs name %v -- a message rendering a verb no command answers to hands the agent something it cannot run", fromCommands, fromVerbMap)
 	}
 }

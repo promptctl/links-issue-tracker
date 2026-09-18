@@ -99,7 +99,7 @@ func applyTransition(issue model.Issue, action model.StatusAction) (model.Issue,
 	// [LAW:single-enforcer] What counts as out-of-the-flow is the typed Frozen
 	// predicate beside the Retention sum, not a variant match owned here.
 	if model.Frozen(issue.Retention()) {
-		return model.Issue{}, fmt.Errorf("cannot %s archived or deleted issue", action.Name())
+		return model.Issue{}, fmt.Errorf("cannot %s archived or deleted issue", action.Name().Verb())
 	}
 	return issue.Apply(action)
 }

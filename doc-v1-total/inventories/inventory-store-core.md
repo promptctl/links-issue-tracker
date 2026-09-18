@@ -3155,7 +3155,7 @@ Export does **not** re-check hydration; the comment at `import_export.go:36-38` 
 
 ### 1.2 The `model.Export` JSON envelope
 
-`internal/model/model.go:755-764`:
+`internal/model/model.go:762-771`:
 
 ```go
 type Export struct {
@@ -3174,7 +3174,7 @@ No `omitempty` anywhere on the envelope — all eight keys are always emitted, i
 
 ### 1.3 The serialized issue object
 
-`Issue` has a custom `MarshalJSON` (`model.go:488-533`) that emits the **wire struct `issueJSON`** (`model.go:438-459`), not the in-memory `Issue` (`model.go:80-111`). The wire struct, in emission order:
+`Issue` has a custom `MarshalJSON` (`model.go:495-540`) that emits the **wire struct `issueJSON`** (`model.go:445-466`), not the in-memory `Issue` (`model.go:80-111`). The wire struct, in emission order:
 
 ```go
 type issueJSON struct {
@@ -3200,12 +3200,12 @@ type issueJSON struct {
 }
 ```
 
-Marshal rules (`model.go:488-533`):
+Marshal rules (`model.go:495-540`):
 
-- If `i.pendingHydration` → error `"issue %s requires store hydration"` (`model.go:489-491`).
-- If `i.lifecycle == nil` → error `"issue %s has no hydrated lifecycle"` (`model.go:492-496`).
-- `status`, `closed_at`, `resolution`, `redirect_target` are populated **only when the lifecycle exposes a Status capability** (`model.go:503-510`). Containers (`epic`) expose none, so an epic's JSON object has **no `status`, no `closed_at`, no `resolution`, no `redirect_target` keys at all**.
-- `archived_at`/`deleted_at` come from `lifecycle.RetentionTimestamps(i.Retention())` (`model.go:511`); both omitted when nil (a Live issue).
+- If `i.pendingHydration` → error `"issue %s requires store hydration"` (`model.go:496-498`).
+- If `i.lifecycle == nil` → error `"issue %s has no hydrated lifecycle"` (`model.go:499-503`).
+- `status`, `closed_at`, `resolution`, `redirect_target` are populated **only when the lifecycle exposes a Status capability** (`model.go:510-517`). Containers (`epic`) expose none, so an epic's JSON object has **no `status`, no `closed_at`, no `resolution`, no `redirect_target` keys at all**.
+- `archived_at`/`deleted_at` come from `lifecycle.RetentionTimestamps(i.Retention())` (`model.go:518`); both omitted when nil (a Live issue).
 - `Labels` has no `omitempty`, so `"labels": null` appears when the slice is nil, `[]` when empty-non-nil.
 - `Priority` is `type Priority int` (`internal/model/priority.go:16`) with constants `PriorityNormal = 0`, `PriorityUrgent = 1` (`priority.go:18-21`) — serializes as a bare **integer**.
 - `IssueType` is `type IssueType string` (`internal/model/issue_type.go:15`) with values `"task"`, `"feature"`, `"bug"`, `"chore"`, `"epic"` (`issue_type.go:17-23`) — serializes as a **string**.
@@ -3213,7 +3213,7 @@ Marshal rules (`model.go:488-533`):
 - `Resolution` = `lifecycle.Resolution`, a string (`model.go:18`; `internal/model/lifecycle/resolution.go:20-26`), values `"duplicate"`, `"superseded"`, `"obsolete"`, `"wontfix"`.
 - `time.Time` fields serialize as Go's RFC3339 with nanoseconds (encoding/json default).
 
-`model.IssueWireFields()` (`model.go:468-486`) derives the wire key list by reflecting over `issueJSON`, skipping `json:"-"` and falling back to the Go field name for an empty tag.
+`model.IssueWireFields()` (`model.go:475-493`) derives the wire key list by reflecting over `issueJSON`, skipping `json:"-"` and falling back to the Go field name for an empty tag.
 
 Fully worked leaf issue:
 
@@ -3263,7 +3263,7 @@ Minimal epic (no status axis, Live, no prompt/assignee):
 
 ### 1.4 The other four record shapes
 
-`model.Relation` (`model.go:579-585`) — no omitempty on any field:
+`model.Relation` (`model.go:586-592`) — no omitempty on any field:
 
 ```go
 SrcID     string       `json:"src_id"`
@@ -3277,19 +3277,19 @@ CreatedBy string       `json:"created_by"`
 {"src_id":"links-a-1","dst_id":"links-b-2","type":"blocks","created_at":"2026-08-27T10:00:00Z","created_by":"links"}
 ```
 
-`model.Comment` (`model.go:587-593`):
+`model.Comment` (`model.go:594-600`):
 
 ```json
 {"id":"cmt-...","issue_id":"links-a-1","body":"text","created_at":"2026-08-27T10:00:00Z","created_by":"tester"}
 ```
 
-`model.Label` (`model.go:595-600`) — note the JSON key is `name` while the DB column is `label`:
+`model.Label` (`model.go:602-607`) — note the JSON key is `name` while the DB column is `label`:
 
 ```json
 {"issue_id":"links-a-1","name":"urgent","created_at":"2026-08-27T10:00:00Z","created_by":"tester"}
 ```
 
-`model.IssueEvent` (`model.go:719-728`):
+`model.IssueEvent` (`model.go:726-735`):
 
 ```go
 ID          string        `json:"id"`
@@ -3302,9 +3302,9 @@ Attribution Attribution   `json:"attribution,omitzero"`
 Changes     []FieldChange `json:"changes"`
 ```
 
-`FieldChange` (`model.go:606-610`): `{"field":..,"from":..,"to":..}`, no omitempty.
+`FieldChange` (`model.go:613-617`): `{"field":..,"from":..,"to":..}`, no omitempty.
 
-`Attribution` (`model.go:629-632`) has unexported fields and a custom marshal via `attributionWire` (`model.go:684-692`): `{"stream":"…","workspace":"…"}` with both `omitempty`. `omitzero` on the event field means an absent pair emits **no `attribution` key at all** (`model.go:669-671` — `IsZero` is what encoding/json consults).
+`Attribution` (`model.go:636-639`) has unexported fields and a custom marshal via `attributionWire` (`model.go:691-699`): `{"stream":"…","workspace":"…"}` with both `omitempty`. `omitzero` on the event field means an absent pair emits **no `attribution` key at all** (`model.go:676-678` — `IsZero` is what encoding/json consults).
 
 ```json
 {
@@ -3321,21 +3321,21 @@ Changes     []FieldChange `json:"changes"`
 
 ### 1.5 Export decode (`Export.UnmarshalJSON`) — v1 compatibility
 
-`model.go:794-857`. Decodes into a private `rawExport` that additionally accepts `"history"` (`model.go:797-807`), then copies version/workspace_id/exported_at/issues/relations/comments/labels/events across (`model.go:812-820`).
+`model.go:801-864`. Decodes into a private `rawExport` that additionally accepts `"history"` (`model.go:804-814`), then copies version/workspace_id/exported_at/issues/relations/comments/labels/events across (`model.go:819-827`).
 
-If `raw.Version < 2 && len(raw.History) > 0` (`model.go:824`), every `v1ExportHistory` row (`model.go:767-775`: `issue_id`, `action`, `from_status`, `to_status`, `reason`, `created_by`, `created_at`) is converted into an `IssueEvent` (`model.go:825-835`) with:
-- `ID` = `v1EventID(...)` = `"evt-v1-" + hex(sha256(issueID|action|fromStatus|toStatus|createdBy|createdAt.RFC3339Nano)[:8])` — 16 hex chars after the prefix (`model.go:780-784`).
+If `raw.Version < 2 && len(raw.History) > 0` (`model.go:831`), every `v1ExportHistory` row (`model.go:774-782`: `issue_id`, `action`, `from_status`, `to_status`, `reason`, `created_by`, `created_at`) is converted into an `IssueEvent` (`model.go:832-842`) with:
+- `ID` = `v1EventID(...)` = `"evt-v1-" + hex(sha256(issueID|action|fromStatus|toStatus|createdBy|createdAt.RFC3339Nano)[:8])` — 16 hex chars after the prefix (`model.go:787-791`).
 - `Actor` = the v1 `created_by`.
-- `Changes` = exactly one `{"field":"status","from":<from_status>,"to":<to_status>}` (`model.go:833`).
+- `Changes` = exactly one `{"field":"status","from":<from_status>,"to":<to_status>}` (`model.go:840`).
 
 These are **appended** to any already-present `events`.
 
-Issue decode (`Issue.UnmarshalJSON`, `model.go:536-577`): fields copied straight through; `retention` from `lifecycle.RetentionFromTimestamps(archived_at, deleted_at)` (`model.go:554`); then a three-way dispatch (`model.go:556-575`):
+Issue decode (`Issue.UnmarshalJSON`, `model.go:543-584`): fields copied straight through; `retention` from `lifecycle.RetentionFromTimestamps(archived_at, deleted_at)` (`model.go:561`); then a three-way dispatch (`model.go:563-582`):
 - container type → `pendingHydration = true`, `lifecycle = nil` (so it cannot be re-marshaled until the store hydrates it),
 - non-container with `status` present → `HydrateStatus` with `closed_at`/`resolution`/`redirect_target`,
-- non-container with **no** `status` → error `"issue %s: cannot hydrate lifecycle from JSON (missing status field on non-epic)"` (`model.go:573`).
+- non-container with **no** `status` → error `"issue %s: cannot hydrate lifecycle from JSON (missing status field on non-epic)"` (`model.go:580`).
 
-Attribution decode collapses a half pair to the zero value via `NewAttribution` (`model.go:711-718`, `model.go:656-661`): stream-without-workspace or workspace-without-stream becomes "unattributed", silently.
+Attribution decode collapses a half pair to the zero value via `NewAttribution` (`model.go:718-725`, `model.go:663-668`): stream-without-workspace or workspace-without-stream becomes "unattributed", silently.
 
 ### 1.6 On-disk layout of exported artifacts
 

@@ -57,6 +57,49 @@ const (
 	ActionRestore   ActionName = "restore"
 )
 
+// actionVerbs pairs each action's persisted event encoding with the word a
+// caller types to invoke it. The two are different names for one action, and
+// for one action they disagree: the event log records `reopen`, while the
+// command is `lit open`. Action.Name is documented as the persisted event
+// verb, so a message interpolating it where the reader expects a command
+// quotes the wrong name -- and it reads correctly for seven of the eight
+// actions, which is exactly why the eighth went unnoticed.
+// [LAW:one-source-of-truth] Both names for an action are declared here, on one
+// line each, so neither can be changed with the other out of view.
+//
+// Every action is listed, including the seven whose two names agree. A default
+// arm would be shorter and would hand any future action its persisted encoding
+// silently, reintroducing this defect for the next verb whose names diverge.
+// [LAW:no-silent-failure]
+var actionVerbs = map[ActionName]string{
+	ActionStart:     "start",
+	ActionDone:      "done",
+	ActionClose:     "close",
+	ActionReopen:    "open",
+	ActionArchive:   "archive",
+	ActionUnarchive: "unarchive",
+	ActionDelete:    "delete",
+	ActionRestore:   "restore",
+}
+
+// Verb is the word a caller types to invoke this action: the name to use in
+// any message a reader may copy back as a command. Name is the other name for
+// the same action, and the right one for the event log.
+//
+// An action missing from actionVerbs panics rather than falling back to its
+// persisted encoding. The fallback IS the defect this removes, and a silent
+// one is indistinguishable from correct output for every action whose two
+// names agree, so it would be found by a reader holding an unrunnable command
+// rather than by a test. Actions() anchors the coverage test that keeps the
+// panic unreachable. [LAW:no-silent-failure]
+func (n ActionName) Verb() string {
+	verb, ok := actionVerbs[n]
+	if !ok {
+		panic(fmt.Sprintf("lifecycle: action %q has no invocation verb; add it to actionVerbs", n))
+	}
+	return verb
+}
+
 type Lifecycle interface {
 	State() State
 	Progress() Progress
