@@ -118,20 +118,19 @@ func render(claims []docclaims.Claim) string {
 // they do.
 func verify(want []docclaims.Claim, corpus docclaims.Corpus) error {
 	got := docclaims.Manifest
-	only := docclaims.Diff(want, got)
-	drifted := docclaims.Drifted(got, want, corpus)
-	if len(only) == 0 && len(drifted) == 0 {
+	cmp := docclaims.Compare(got, want, corpus)
+	if cmp.Clean() {
 		fmt.Printf("docclaims-sync: manifest is current (%d quotations)\n", len(got))
 		return nil
 	}
-	for _, c := range only {
+	for _, c := range cmp.Added {
 		fmt.Fprintf(os.Stderr, "  only in a fresh derivation: %s %q\n", c.Doc, c.Text)
 	}
 	// Each line carries its own instruction, from the same Explain the
 	// freshness test prints, because two reports of one failure that word the
 	// remedy differently are how a contributor learns to ignore both.
 	count := map[docclaims.DriftKind]int{}
-	for _, d := range drifted {
+	for _, d := range cmp.Drifted {
 		count[d.Kind]++
 		fmt.Fprintf(os.Stderr, "  %s\n", d.Explain())
 	}

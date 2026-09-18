@@ -36,6 +36,8 @@ import (
 	"go/build/constraint"
 	"go/parser"
 	"go/token"
+
+	"golang.org/x/mod/modfile"
 	"io/fs"
 	"path"
 	"regexp"
@@ -248,37 +250,32 @@ func localSources(fsys fs.FS) (sources, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading go.mod: %w", err)
 	}
+	// go.mod is parsed by the parser the go command uses, not by reading its
+	// syntax a second time here. The hand-rolled version treated any line
+	// holding an arrow as a directive, which reads a commented-out `replace`
+	// as a live one. [LAW:one-source-of-truth]
+	mod, err := modfile.Parse("go.mod", data, nil)
+	if err != nil {
+		return nil, fmt.Errorf("parsing go.mod: %w", err)
+	}
 	var out sources
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if rest, ok := strings.CutPrefix(line, "module "); ok {
-			out = append(out, source{prefix: strings.TrimSpace(rest)})
+	if mod.Module != nil {
+		out = append(out, source{prefix: mod.Module.Mod.Path})
+	}
+	for _, r := range mod.Replace {
+		// A replacement carrying a version is another module, fetched into the
+		// module cache and not in this tree; only a bare filesystem path names
+		// something here. A path that climbs out of the tree (../sibling) is a
+		// checkout this repository does not carry, and following it would fail
+		// the gate on a directory that is not part of it.
+		if r.New.Version != "" {
 			continue
 		}
-		// Every replacement is read, in either of go.mod's two spellings — a
-		// bare `replace a => b` line and a line inside a `replace ( … )` block
-		// — because the arrow is what makes it one, not the keyword.
-		module, target, ok := strings.Cut(line, "=>")
-		if !ok {
+		dir := path.Clean(r.New.Path)
+		if path.IsAbs(dir) || dir == ".." || strings.HasPrefix(dir, "../") {
 			continue
 		}
-		dir := strings.Fields(strings.TrimSpace(target))
-		// A replacement onto another module is that module's source, fetched
-		// into the module cache and not in this tree; only a filesystem path
-		// names something here. A path that climbs out of the tree (../sibling)
-		// is a checkout this repository does not carry, and following it would
-		// fail the gate on a directory that is not part of it.
-		if len(dir) == 0 || !strings.HasPrefix(dir[0], ".") {
-			continue
-		}
-		if cleaned := path.Clean(dir[0]); cleaned == ".." || strings.HasPrefix(cleaned, "../") {
-			continue
-		}
-		prefix := strings.Fields(strings.TrimPrefix(strings.TrimSpace(module), "replace "))
-		if len(prefix) == 0 {
-			continue
-		}
-		out = append(out, source{prefix: prefix[0], dir: path.Clean(dir[0])})
+		out = append(out, source{prefix: r.Old.Path, dir: dir})
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("go.mod declares no module path, so no import can be identified as source this repository ships")
@@ -300,9 +297,18 @@ func entryPackages(fsys fs.FS) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		file, err := parser.ParseFile(token.NewFileSet(), name, src, parser.PackageClauseOnly)
+		file, err := parser.ParseFile(token.NewFileSet(), name, src, parser.PackageClauseOnly|parser.ParseComments)
 		if err != nil {
 			return fmt.Errorf("parsing %s: %w", name, err)
+		}
+		// The same rule the other two readers apply, because a `main` no build
+		// ever compiles is not a binary. Counting one as an entry point also
+		// disarms the guard below: the walk would start from a package whose
+		// files are all skipped, yield an empty corpus, and report every
+		// documented quotation as drifted prose — with err == nil.
+		// [LAW:single-enforcer]
+		if excludedFromEveryBuild(file) {
+			return nil
 		}
 		if dir := path.Dir(name); file.Name.Name == "main" && !slices.Contains(out, dir) {
 			out = append(out, dir)
@@ -504,6 +510,20 @@ func collectEmbeds(fsys fs.FS, dir string, file *ast.File, into Corpus) error {
 	return nil
 }
 
+// closingQuote returns the index of the double quote that ends the interpreted
+// string literal starting at s[0], or -1 when none does.
+func closingQuote(s string) int {
+	for i := 1; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			i++
+		case '"':
+			return i
+		}
+	}
+	return -1
+}
+
 // embedPatterns splits a //go:embed directive's operands.
 //
 // Splitting on whitespace is not enough: go:embed accepts a quoted pattern, in
@@ -519,19 +539,29 @@ func embedPatterns(operands string) []string {
 	for rest != "" {
 		var token string
 		switch rest[0] {
-		case '"', '`':
-			quote := rest[0]
-			end := strings.IndexByte(rest[1:], quote)
+		case '"':
+			// Scanned with escapes honoured, because \" does not end the
+			// literal. Cutting at the first inner quote instead splits a legal
+			// operand into fragments that match no file, and an unmatched
+			// pattern is a hard error — so the gate would fail the build over
+			// source the compiler accepts.
+			end := closingQuote(rest)
+			if end < 0 {
+				token, rest = rest[1:], ""
+				break
+			}
+			token, rest = rest[1:end], rest[end+1:]
+			if unquoted, err := strconv.Unquote(`"` + token + `"`); err == nil {
+				token = unquoted
+			}
+		case '`':
+			// A raw literal has no escapes: the next backquote ends it.
+			end := strings.IndexByte(rest[1:], '`')
 			if end < 0 {
 				token, rest = rest[1:], ""
 				break
 			}
 			token, rest = rest[1:1+end], rest[2+end:]
-			if quote == '"' {
-				if unquoted, err := strconv.Unquote(`"` + token + `"`); err == nil {
-					token = unquoted
-				}
-			}
 		default:
 			if i := strings.IndexAny(rest, " \t"); i >= 0 {
 				token, rest = rest[:i], rest[i:]
@@ -941,6 +971,13 @@ type Drift struct {
 //
 // One classifier, so the tool and the freshness test cannot disagree about what
 // drift is. [LAW:single-enforcer]
+//
+// fresh must be a derivation stabilised against manifest — Derive's output,
+// which is what both callers pass. The classification has no case for an entry
+// that is re-anchored while its recorded source still carries the words, and
+// none is invented, because Stable makes that state unreachable: it pins the
+// recorded source whenever the source still holds, so such an entry never
+// leaves the derivation in the first place.
 func Drifted(manifest, fresh []Claim, corpus Corpus) []Drift {
 	now := anchors(fresh)
 	var out []Drift
@@ -985,6 +1022,48 @@ func ellipsis(s string, n int) string {
 		return s
 	}
 	return string(r[:n]) + "…"
+}
+
+// Comparison is the whole difference between a committed manifest and a fresh
+// derivation, arranged so that one quotation produces one line.
+type Comparison struct {
+	// Drifted holds the committed entries the derivation no longer yields,
+	// each carrying why.
+	Drifted []Drift
+
+	// Added holds the quotations the derivation yields that the manifest does
+	// not record — excluding the ones already reported as a moved anchor,
+	// which are the same quotation seen from its other side. Reported twice
+	// they read as two unrelated facts, one of them ("only in a fresh
+	// derivation") inviting the regeneration the other is warning against.
+	Added []Claim
+}
+
+// Clean reports whether the manifest and the derivation agree entirely.
+func (c Comparison) Clean() bool { return len(c.Drifted) == 0 && len(c.Added) == 0 }
+
+// Compare is the whole manifest-versus-tree comparison both reports print.
+//
+// It exists because each of them had assembled the comparison itself out of
+// two half-answers, and an entry whose anchor moved appeared in both halves —
+// the sync tool and the freshness test each printing one quotation as two
+// findings with different remedies. [LAW:one-source-of-truth] what differs
+// between a manifest and a tree is one fact, computed once.
+func Compare(manifest, fresh []Claim, corpus Corpus) Comparison {
+	out := Comparison{Drifted: Drifted(manifest, fresh, corpus)}
+	moved := make(map[[2]string]bool)
+	for _, d := range out.Drifted {
+		if d.Kind == AnchorMoved {
+			moved[[2]string{d.Doc, d.Text}] = true
+		}
+	}
+	for _, c := range Diff(fresh, manifest) {
+		if moved[[2]string{c.Doc, c.Text}] {
+			continue
+		}
+		out.Added = append(out.Added, c)
+	}
+	return out
 }
 
 // Dedupe sorts by document then text and drops repeats, so a derivation is a

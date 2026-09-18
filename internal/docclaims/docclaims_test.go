@@ -51,22 +51,23 @@ func TestManifestIsCurrent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Derive: %v", err)
 	}
-	// Reported entry by entry, in both directions. A bare length mismatch names
-	// nothing, leaving a reviewer with two totals and no way to tell a new
-	// quotation from a drifted one.
-	for _, c := range Diff(fresh, Manifest) {
-		t.Errorf("not in the committed manifest: %s %q — run `go run ./tools/docclaims-sync`", c.Doc, c.Text)
-	}
 	corpus, err := ShippedText(os.DirFS(repoRoot))
 	if err != nil {
 		t.Fatalf("ShippedText: %v", err)
+	}
+	// Reported entry by entry, in both directions. A bare length mismatch names
+	// nothing, leaving a reviewer with two totals and no way to tell a new
+	// quotation from a drifted one.
+	cmp := Compare(Manifest, fresh, corpus)
+	for _, c := range cmp.Added {
+		t.Errorf("not in the committed manifest: %s %q — run `go run ./tools/docclaims-sync`", c.Doc, c.Text)
 	}
 	// Classified rather than reported together: of the three ways an entry
 	// leaves a derivation, two are fixed by regenerating and the third is
 	// destroyed by it. Drift.Explain carries the instruction so this test and
 	// the sync tool cannot tell a contributor opposite things about one
 	// failure.
-	for _, d := range Drifted(Manifest, fresh, corpus) {
+	for _, d := range cmp.Drifted {
 		t.Error(d.Explain())
 	}
 }
@@ -384,5 +385,104 @@ func TestDriftedTellsTheThreeCasesApart(t *testing.T) {
 				t.Errorf("Explain() warns against regenerating = %v, want %v — it reports: %s", warned, tc.want == Stopped, got[0].Explain())
 			}
 		})
+	}
+}
+
+// TestTheGateIsNotItsOwnEvidence is the one failure this package has already
+// had, pinned so it cannot return quietly.
+//
+// manifest_gen.go holds every documented quotation as a Go string literal, so
+// if this package were ever inside the corpus it collects, each entry would be
+// satisfied by its own recorded copy: `tightest` would anchor every claim to
+// the literal that *is* its text, deleting the real shipped message would change
+// nothing, and both tests would stay green over a gate that checks nothing.
+// That is not hypothetical — an earlier blacklist admitted this package and the
+// gate passed over a deliberately mutated message.
+//
+// Today the exclusion is emergent: nothing under cmd/ imports internal/docclaims,
+// so reachability leaves it out. Emergent is not enforced. One import added for
+// an unrelated reason — a `lit doctor` subcommand that reports manifest health,
+// say — would disable the gate with no failing test anywhere.
+func TestTheGateIsNotItsOwnEvidence(t *testing.T) {
+	dirs, err := shippedPackages(os.DirFS(repoRoot))
+	if err != nil {
+		t.Fatalf("shippedPackages: %v", err)
+	}
+	if slices.Contains(dirs, "internal/docclaims") {
+		t.Fatal("internal/docclaims is now linked into a binary under cmd/, so manifest_gen.go is inside the corpus this gate checks against: every entry now matches its own recorded copy and the gate proves nothing. Move the manifest out of the walked import graph before linking this package in.")
+	}
+}
+
+// TestAnEmbedPatternKeepsItsEscapes covers an operand the compiler accepts and
+// this parser used to split into fragments. Cutting at the first inner quote
+// yields patterns matching no file, and an unmatched pattern is a hard error —
+// so the gate would fail the build over legal source.
+func TestAnEmbedPatternKeepsItsEscapes(t *testing.T) {
+	got := embedPatterns(`"say \"hi\".txt" plain.txt`)
+	want := []string{`say "hi".txt`, "plain.txt"}
+	if !slices.Equal(got, want) {
+		t.Errorf("embedPatterns() = %q, want %q", got, want)
+	}
+}
+
+// TestACommentedReplaceIsNotADirective pins go.mod's syntax to the parser the
+// go command uses. Reading any line holding an arrow as a replacement takes a
+// commented-out one for a live one, and the source list it builds decides which
+// packages are searched for shipped text.
+func TestACommentedReplaceIsNotADirective(t *testing.T) {
+	fsys := fstest.MapFS{"go.mod": {Data: []byte(
+		"module example.test/lit\n\n// replace example.test/x => ./commented\n\nreplace example.test/y => ./live\n",
+	)}}
+	got, err := localSources(fsys)
+	if err != nil {
+		t.Fatalf("localSources: %v", err)
+	}
+	for _, s := range got {
+		if s.dir == "commented" {
+			t.Errorf("a commented-out replace was read as a directive: %+v", s)
+		}
+	}
+	if _, ok := got.dir("example.test/y"); !ok {
+		t.Error("the live replace was not read")
+	}
+}
+
+// TestAnIgnoredMainIsNotAnEntryPoint covers the guard that the gap disarmed. A
+// `main` no build compiles is not a binary, and counting one as an entry point
+// is worse than missing it: the walk starts from a package whose files are all
+// skipped, the corpus comes back empty, and the "no main package" error — whose
+// whole purpose is to say the walk is broken rather than the specification
+// false — never fires.
+func TestAnIgnoredMainIsNotAnEntryPoint(t *testing.T) {
+	fsys := fstest.MapFS{
+		"go.mod":          {Data: []byte("module example.test/lit\n")},
+		"cmd/gen/main.go": {Data: []byte("//go:build ignore\n\npackage main\n\nvar A = \"generator only message\"\n")},
+	}
+	if _, err := entryPackages(fsys); err == nil {
+		t.Fatal("a build-ignored main counted as an entry point; the empty-corpus guard cannot fire")
+	}
+}
+
+// TestAMovedAnchorIsReportedOnce is the double-report regression. One quotation
+// whose literal was reworded leaves the manifest and re-enters the derivation
+// under a new source, so it appears in both halves of the comparison — once as
+// drift and once as a new quotation, with remedies that read as opposites.
+func TestAMovedAnchorIsReportedOnce(t *testing.T) {
+	const (
+		quoted  = "lit quickstart doctor"
+		was     = "deeper guidance: lit quickstart doctor\n"
+		now     = "further guidance: lit quickstart doctor\n"
+		chapter = "06-issue-commands.md"
+	)
+	cmp := Compare(
+		[]Claim{{Doc: chapter, Text: quoted, Src: was}},
+		[]Claim{{Doc: chapter, Text: quoted, Src: now}},
+		Corpus{now: now},
+	)
+	if len(cmp.Drifted) != 1 || cmp.Drifted[0].Kind != AnchorMoved {
+		t.Fatalf("Compare() reported %d drifted entries, want one moved anchor", len(cmp.Drifted))
+	}
+	if len(cmp.Added) != 0 {
+		t.Errorf("the same quotation is also reported as new: %+v — one quotation, two findings, opposite remedies", cmp.Added)
 	}
 }
