@@ -156,9 +156,12 @@ func (e *Engine) place(id string, f storage.Frame, placement storage.RankPlaceme
 // slotInsideContainer is where the first member of a frame goes: immediately
 // after the issue that frames it.
 //
-// The top level has no such issue, and it needs none — it is empty only when
-// the whole order is, every issue's ancestry ending at a top-level one — so
-// the answer there is the only slot an empty order has.
+// The top level has no such issue and needs none: slot zero is the head of the
+// order, which is where a first member belongs when nothing contains it. The
+// population it is asked about reads empty whenever no LIVE issue resolves to
+// the top level — not only in a fresh workspace, since e.order keeps a deleted
+// issue's slot forever and only frameMateIndexes filters it out — and zero is
+// the right answer in both.
 func (e *Engine) slotInsideContainer(f storage.Frame) (int, error) {
 	if f == storage.TopLevel {
 		return 0, nil

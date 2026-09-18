@@ -1322,3 +1322,52 @@ func TestRankSetOverEveryTopLevelIssueTakesADistinctKey(t *testing.T) {
 		t.Errorf("rank set put %s at %q and %s at %q; the named order was other, then epic", other.ID, after[other.ID], epic.ID, after[epic.ID])
 	}
 }
+
+// TestFilingIntoAContainerWithNoRankOfItsOwnFallsBackToTheWorkspace covers the
+// branch firstInFrameBoundsTx takes when the frame names an issue carrying no
+// rank: there is no container key to sit beside, so the placement goes past the
+// workspace's last key instead.
+//
+// A container without a rank is not reachable through the API — ensureIssueRanks
+// backfills at open — but it is reachable between a restore and that backfill,
+// and the branch exists for it. It is written here directly, the same way the
+// child's blank rank is in the case above, because the point is that an absent
+// container key is answered rather than turned into a position.
+func TestFilingIntoAContainerWithNoRankOfItsOwnFallsBackToTheWorkspace(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	standalone, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Standalone", Topic: "frame", IssueType: "task"})
+	if err != nil {
+		t.Fatalf("CreateIssue(standalone) error = %v", err)
+	}
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Rankless epic", Topic: "frame", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	trailing, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Trailing", Topic: "frame", IssueType: "task"})
+	if err != nil {
+		t.Fatalf("CreateIssue(trailing) error = %v", err)
+	}
+	if _, err := st.db.ExecContext(ctx, `UPDATE issues SET item_rank = '' WHERE id = ?`, epic.ID); err != nil {
+		t.Fatalf("blank the epic's rank: %v", err)
+	}
+
+	child, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Child", Topic: "frame", IssueType: "task", ParentID: epic.ID, Placement: storage.RankTop})
+	if err != nil {
+		t.Fatalf("CreateIssue(child, --top) error = %v", err)
+	}
+	if child.Rank == "" {
+		t.Fatal("the child was filed with no rank at all")
+	}
+	// The container offers no key, so the workspace's last one bounds it.
+	if want := mustBottomOf(t, map[string]string{standalone.ID: standalone.Rank, trailing.ID: trailing.Rank}, trailing.Rank); child.Rank != want {
+		t.Errorf("the child took rank %q, want %q = the room past the workspace's last key %q", child.Rank, want, trailing.Rank)
+	}
+	for _, other := range []model.Issue{standalone, trailing} {
+		if child.Rank == other.Rank {
+			t.Errorf("the child took rank %q, the key %s holds; a rank orders one issue", child.Rank, other.ID)
+		}
+	}
+}
