@@ -1540,7 +1540,7 @@ func (w retentionWrite) applyTx(ctx context.Context, s *Store, tx *sql.Tx) error
 		if lookupErr != nil {
 			return lookupErr
 		}
-		return fmt.Errorf("%s conflict: issue retention is %q", w.action, model.RetentionName(current))
+		return fmt.Errorf("%s conflict: issue retention is %q", w.action.Verb(), model.RetentionName(current))
 	}
 	return s.recordEvent(ctx, tx, w.issueID, string(w.action), w.reason, w.actor, w.changes)
 }
