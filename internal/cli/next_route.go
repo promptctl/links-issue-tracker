@@ -453,13 +453,6 @@ func passedOver(rows []annotation.AnnotatedIssue, reachFor func(annotation.Annot
 	return passed
 }
 
-// gatingDependencies collects the distinct open dependencies that gate the open
-// rows whose lane inScope admits, in rank order, each already carrying whether
-// this checkout may take it. Both consumers are this walk plus one question:
-// onPathDependency offers the first takeable one, and Exhausted reports them
-// all so the diagnostic can say which is which. They differ in the scope they
-// pass and in what they do with the answer — never in how it is found, and
-// neither re-derives it. [LAW:one-source-of-truth]
 // gatedDep is one gating dependency together with the row it gates. The gated
 // id is the whole reason step 1b's pick is worth explaining, and this walk is
 // the only place it is ever in scope: the loop below holds the blocked row and
@@ -489,6 +482,13 @@ func blockedRows(deps []gatedDep) []rowReach {
 	return rows
 }
 
+// gatingDependencies collects the distinct open dependencies that gate the open
+// rows whose lane inScope admits, in rank order, each already carrying whether
+// this checkout may take it. Both consumers are this walk plus one question:
+// onPathDependency offers the first takeable one, and Exhausted reports them
+// all so the diagnostic can say which is which. They differ in the scope they
+// pass and in what they do with the answer — never in how it is found, and
+// neither re-derives it. [LAW:one-source-of-truth]
 func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID, inScope func(model.LaneID) bool, reachFor func(annotation.AnnotatedIssue, bool) reachKind) []gatedDep {
 	byID := make(map[string]annotation.AnnotatedIssue, len(rows))
 	for _, row := range rows {

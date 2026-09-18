@@ -78,13 +78,13 @@ func nextLeaf() appLeaf {
 
 // renderNextOutcome prints the row routeNext selected — or, for Exhausted
 // and NoWork, returns the loud diagnostic instead of printing a ticket that
-// was never picked. A claim this pick WOULD establish (EpicLane, NewLane) is
-// named above the row, so the commitment is visible before it is made
-// (design-docs/work-claims.md, Routing step 4); a lane already held names
-// nothing to commit — nothing at all for ServedFromClaim, which prints exactly
-// as `next` always has, and the state it is already in for ResumedOwnWork,
-// since being handed back a ticket already in flight is the one pick that looks
-// like a fresh start but is not one.
+// was never picked. A claim this pick WOULD establish (EpicLane, NewLane,
+// Dependency) is named above the row, so the commitment is visible before it
+// is made (design-docs/work-claims.md, Routing step 4); a lane already held
+// names nothing to commit — nothing at all for ServedFromClaim, which prints
+// exactly as `next` always has, and the state it is already in for
+// ResumedOwnWork, since being handed back a ticket already in flight is the
+// one pick that looks like a fresh start but is not one.
 //
 // Every line here is in the conditional or reports a state that already holds.
 // `lit next` claims nothing and starts nothing — `lit start` does — so a line
