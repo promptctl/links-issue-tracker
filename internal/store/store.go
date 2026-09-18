@@ -99,7 +99,7 @@ func applyTransition(issue model.Issue, action model.StatusAction) (model.Issue,
 	// [LAW:single-enforcer] What counts as out-of-the-flow is the typed Frozen
 	// predicate beside the Retention sum, not a variant match owned here.
 	if model.Frozen(issue.Retention()) {
-		return model.Issue{}, fmt.Errorf("cannot %s archived or deleted issue", action.Name())
+		return model.Issue{}, fmt.Errorf("cannot %s archived or deleted issue", action.Name().Verb())
 	}
 	return issue.Apply(action)
 }
@@ -1433,7 +1433,12 @@ func (s *Store) applyTransitionTx(ctx context.Context, tx *sql.Tx, w transitionW
 		if lookupErr != nil {
 			return lookupErr
 		}
-		return fmt.Errorf("%s conflict: issue status is %q", w.action, currentStatus)
+		// Verb, not the persisted encoding: this is a refusal an agent reads and
+		// may act on, so it names the command it typed. The recordEvent call on
+		// the next line is the opposite case and keeps Name -- that string is
+		// written to the events table. One value, two destinations, two names.
+		// [LAW:one-source-of-truth]
+		return fmt.Errorf("%s conflict: issue status is %q", w.action.Verb(), currentStatus)
 	}
 	return s.recordEvent(ctx, tx, w.issueID, string(w.action), w.reason, w.actor, w.changes)
 }
@@ -1535,7 +1540,7 @@ func (w retentionWrite) applyTx(ctx context.Context, s *Store, tx *sql.Tx) error
 		if lookupErr != nil {
 			return lookupErr
 		}
-		return fmt.Errorf("%s conflict: issue retention is %q", w.action, model.RetentionName(current))
+		return fmt.Errorf("%s conflict: issue retention is %q", w.action.Verb(), model.RetentionName(current))
 	}
 	return s.recordEvent(ctx, tx, w.issueID, string(w.action), w.reason, w.actor, w.changes)
 }

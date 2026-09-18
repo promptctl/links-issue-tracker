@@ -94,9 +94,9 @@ The single payload type is `Occasion` (`match.go:13-35`): `Event` (zero when non
 | `show_ticket`, `next_pulled`, `ticket_created`, `comment_added` | Event, IssueID, Labels |
 | `show_backlog` | Event only — no IssueID, no Labels, no transition |
 | `ticket_updated` | Event, IssueID, Labels; never a transition — `lit update` rejects `--status` (`workflow_events.go:57-59`) |
-| `work_started`/`work_finished`/`ticket_closed`/`ticket_reopened` | Event, IssueID, post-transition Labels, `Entered` = post state, `Exited` = pre state (`workflow_events.go:103-115`) |
+| `work_started`/`work_finished`/`ticket_closed`/`ticket_reopened` | Event, IssueID, post-transition Labels, `Entered` = post state, `Exited` = pre state (`workflow_events.go:103-119`) |
 
-The status-action→event map is `start→work_started`, `done→work_finished`, `close→ticket_closed`, `reopen→ticket_reopened`; an unmapped status action panics (`workflow_events.go:83-88,105-107`). Retention actions (archive/unarchive/delete/restore) are not status actions and fire **no event at all** (`internal/cli/cli.go:1408`, `workflow_events.go:78-82`).
+The status-action→event map is `start→work_started`, `done→work_finished`, `close→ticket_closed`, `reopen→ticket_reopened`; an unmapped status action panics (`workflow_events.go:83-88,105-111`). Retention actions (archive/unarchive/delete/restore) are not status actions and fire **no event at all** (`internal/cli/cli.go:1408`, `workflow_events.go:78-82`).
 
 ### Dispatch call sites
 

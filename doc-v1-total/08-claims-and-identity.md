@@ -29,7 +29,7 @@ Every command that records an actor or assignee resolves it through one rule (`i
 
 ## Attribution: the persisted primitive
 
-`model.Attribution` is the pair `(stream, workspace)` — the checkout's stream token plus the store's workspace id (a UUID generated at init, `internal/workspace/workspace.go:614`). Its rules (detailed in `01-data-model.md`): complete-or-absent (either half empty collapses the pair to zero, silently, at every boundary including JSON decode), opaque by mandate (nothing user-, host-, or path-shaped, because the database syncs to shared remotes), written once at event creation and never backfilled (`internal/model/model.go:631-712`).
+`model.Attribution` is the pair `(stream, workspace)` — the checkout's stream token plus the store's workspace id (a UUID generated at init, `internal/workspace/workspace.go:614`). Its rules (detailed in `01-data-model.md`): complete-or-absent (either half empty collapses the pair to zero, silently, at every boundary including JSON decode), opaque by mandate (nothing user-, host-, or path-shaped, because the database syncs to shared remotes), written once at event creation and never backfilled (`internal/model/model.go:646-727`).
 
 The pair reaches the database through one path: `app.Open` calls `Store.AttributeTo(streamToken)` unconditionally for both access modes; the store pairs the token with its own workspace id and stamps the pair at `recordEvent`, the single insertion point for issue history (`internal/app/app.go:105`, `internal/store/store.go:242-262`). An empty token leaves the store unattributed rather than half-attributed. `OpenSync`, `RebuildCandidate`, adopt, upgrade, and `OpenLocationForRead` do not stamp — they read, or replay dumps preserving the producer's attribution (`store.go:252-259`). Attribution survives a git-remote round trip: a second clone sees the producer's exact pair, never re-stamped (`internal/cli/claims_attribution_test.go:65-129`).
 
@@ -189,7 +189,7 @@ The package emits no events and publishes no observer surface.
 
 ## Privacy invariants
 
-- Both halves of an attribution are opaque by mandate; nothing user-, host-, or path-shaped travels there, because the database syncs to shared remotes. Resolving a token to a physical checkout happens only on the machine that owns it (`internal/model/model.go:624-627`).
+- Both halves of an attribution are opaque by mandate; nothing user-, host-, or path-shaped travels there, because the database syncs to shared remotes. Resolving a token to a physical checkout happens only on the machine that owns it (`internal/model/model.go:639-642`).
 - The stream token is deliberately meaningless — no directory, hostname, or username material (`internal/workspace/stream.go:40-49`).
 - The `--by` fallback is `""` (normalized to `"unknown"`), the old `$USER` default having been removed as an invariant violation (`internal/cli/cli.go:1196-1200`).
 - Checkout paths and branches stay on the local machine; the address map lives only for the process (`internal/workspace/checkouts.go:21-26`, `internal/cli/claims_context.go:30-32`).

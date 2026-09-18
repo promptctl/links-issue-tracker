@@ -84,7 +84,7 @@ func (e *Engine) planLifecycle(current model.Issue, actor, reason string, action
 // integrity floor under a redirecting close.
 func (e *Engine) planStatus(current model.Issue, actor, reason string, action model.StatusAction, now time.Time) (model.Issue, []eventSpec, error) {
 	if model.Frozen(current.Retention()) {
-		return model.Issue{}, nil, fmt.Errorf("cannot %s archived or deleted issue", action.Name())
+		return model.Issue{}, nil, fmt.Errorf("cannot %s archived or deleted issue", action.Name().Verb())
 	}
 	updated, err := current.Apply(action)
 	if err != nil {

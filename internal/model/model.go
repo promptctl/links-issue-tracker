@@ -348,11 +348,18 @@ func (e ContainerActionError) Satisfied() bool {
 // child count: `start` on a finished epic was once told "0 of its 1 children
 // are not done", which is true, unreadable, and never mentions that the epic
 // being closed is the actual obstacle.
+//
+// The backticked word is the action's INVOCATION verb, never its persisted
+// event encoding: an agent reads what is inside the backticks as the command
+// it just ran and may run again. Those two names diverge for exactly one
+// action today, and this sentence used to print the persisted one, answering
+// `lit open` with "cannot `reopen`" -- naming a command that does not exist.
+// [LAW:one-source-of-truth] lifecycle owns the pairing; this reads it.
 func (e ContainerActionError) Error() string {
 	if e.Satisfied() {
-		return fmt.Sprintf("epic %s is already %s, so `%s` has nothing to do: an epic's state derives from its children (%d of %d done)", e.ID, e.State.Display(), e.Action, e.Progress.Closed, e.Progress.Total)
+		return fmt.Sprintf("epic %s is already %s, so `%s` has nothing to do: an epic's state derives from its children (%d of %d done)", e.ID, e.State.Display(), e.Action.Verb(), e.Progress.Closed, e.Progress.Total)
 	}
-	return fmt.Sprintf("cannot `%s` epic %s: it is %s, and an epic's state derives from its children rather than from this command (%s)", e.Action, e.ID, e.State.Display(), e.childClause())
+	return fmt.Sprintf("cannot `%s` epic %s: it is %s, and an epic's state derives from its children rather than from this command (%s)", e.Action.Verb(), e.ID, e.State.Display(), e.childClause())
 }
 
 // childClause says why the epic sits in the state it does — the one part of a
@@ -395,6 +402,14 @@ func (i Issue) Apply(action lifecycle.StatusAction) (Issue, error) {
 		// a container — and so would decide on the claimant alone, silently
 		// writing a claim onto an epic for a `start` that changed nothing.
 		// The refusal stays; what the caller is TOLD is what Satisfied decides.
+		// Action is always set, and Error() depends on that: it renders the
+		// action's invocation verb, and Verb panics on a name outside the sealed
+		// set -- including the zero value. This is the only place the type is
+		// built, action is a sealed StatusAction, and the value is never decoded
+		// from storage, so there is no path to an unset Action. The panic is
+		// deliberately not softened to a fallback here: a fallback is the silent
+		// wrong answer this whole change removed, and it would trade a loud
+		// programmer error for a quiet one. [LAW:no-silent-failure]
 		return Issue{}, ContainerActionError{
 			ID:       i.ID,
 			Action:   action.Name(),
@@ -405,7 +420,7 @@ func (i Issue) Apply(action lifecycle.StatusAction) (Issue, error) {
 	}
 	actionable, ok := root.(lifecycle.Actionable)
 	if !ok {
-		return Issue{}, fmt.Errorf("no %s action available on this issue", action.Name())
+		return Issue{}, fmt.Errorf("no %s action available on this issue", action.Name().Verb())
 	}
 	i.replaceLifecycle(actionable.Apply(action))
 	return i, nil

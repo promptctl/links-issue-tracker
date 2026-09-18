@@ -10,7 +10,7 @@ All paths relative to `/Users/bmf/code/links-issue-tracker`. Every claim below c
 
 A claim is a *read-time derivation* over records the database already holds. `internal/claims/evidence.go:1-15` states the package "derives, at read time, which checkout is working which lane. Nothing here is stored." The package imports only `cmp`, `fmt`, `slices`, `time`, `strings`, and `internal/model` (`internal/claims/evidence.go:17-23`, `internal/claims/derive.go:3-9`); it reads no clock, no store, no filesystem — the clock reading arrives as data (`internal/claims/derive.go:20-23`).
 
-There is no claims table, no claim row, no claim file. The only persisted footprint is `model.Attribution` stamped on each `model.IssueEvent` (`internal/model/model.go:612-616`, `internal/model/model.go:722-733`).
+There is no claims table, no claim row, no claim file. The only persisted footprint is `model.Attribution` stamped on each `model.IssueEvent` (`internal/model/model.go:627-631`, `internal/model/model.go:737-748`).
 
 ### 1.2 The persisted primitive: `model.Attribution`
 
@@ -20,15 +20,15 @@ type Attribution struct {
 	workspace string
 }
 ```
-`internal/model/model.go:631-634`.
+`internal/model/model.go:646-649`.
 
-- Both halves unexported; `NewAttribution` is the only constructor (`internal/model/model.go:656-661`).
-- `NewAttribution(stream, workspace)` returns the zero value if **either** half is empty — "complete pair or nothing" (`internal/model/model.go:657-659`). The collapse is silent by design (`internal/model/model.go:642-647`).
-- Accessors: `Stream()`, `Workspace()` (`internal/model/model.go:666-667`); `IsZero()` = `a == Attribution{}` (`internal/model/model.go:672`); `Present()` = `!IsZero()` (`internal/model/model.go:682`).
-- Wire form is a separate struct `attributionWire{Stream string \`json:"stream,omitempty"\`; Workspace string \`json:"workspace,omitempty"\`}` (`internal/model/model.go:686-690`), marshalled at `internal/model/model.go:692-694`.
-- `UnmarshalJSON` routes through `NewAttribution`, so `{"stream":"x"}` with no workspace decodes to the absent pair (`internal/model/model.go:706-712`).
-- Absence is a permanent legal state: attribution is never backfilled onto events that predate the feature (`internal/model/model.go:674-680`, `internal/model/model.go:722-723`).
-- Field on the event: `Attribution Attribution \`json:"attribution,omitzero"\`` (`internal/model/model.go:731`) — `omitzero` consults `IsZero`, so an unattributed event writes no attribution object at all (`internal/model/model.go:669-671`).
+- Both halves unexported; `NewAttribution` is the only constructor (`internal/model/model.go:671-676`).
+- `NewAttribution(stream, workspace)` returns the zero value if **either** half is empty — "complete pair or nothing" (`internal/model/model.go:672-674`). The collapse is silent by design (`internal/model/model.go:657-662`).
+- Accessors: `Stream()`, `Workspace()` (`internal/model/model.go:681-682`); `IsZero()` = `a == Attribution{}` (`internal/model/model.go:687`); `Present()` = `!IsZero()` (`internal/model/model.go:697`).
+- Wire form is a separate struct `attributionWire{Stream string \`json:"stream,omitempty"\`; Workspace string \`json:"workspace,omitempty"\`}` (`internal/model/model.go:701-705`), marshalled at `internal/model/model.go:707-709`.
+- `UnmarshalJSON` routes through `NewAttribution`, so `{"stream":"x"}` with no workspace decodes to the absent pair (`internal/model/model.go:721-727`).
+- Absence is a permanent legal state: attribution is never backfilled onto events that predate the feature (`internal/model/model.go:689-695`, `internal/model/model.go:737-738`).
+- Field on the event: `Attribution Attribution \`json:"attribution,omitzero"\`` (`internal/model/model.go:746`) — `omitzero` consults `IsZero`, so an unattributed event writes no attribution object at all (`internal/model/model.go:684-686`).
 
 ### 1.3 The derived value: `Standing`
 
@@ -192,7 +192,7 @@ var establishing = map[model.ActionName]bool{
 - `close` (which carries an Outcome: duplicate/superseded/obsolete/wontfix), `reopen`, and the four retention verbs never establish (`internal/claims/establish.go:17-23`).
 - `establishes(event)` looks up `establishing[model.ActionName(event.Action)]`; an empty `Action` (plain field update) and an unrecognized verb both read false through the same lookup (`internal/claims/establish.go:54-56`). Pinned by `TestAbsentVerbDoesNotEstablish` (`internal/claims/establish_internal_test.go:42-49`).
 - A map rather than a switch so `TestEstablishingCoversEveryAction` can assert every verb in `model.Actions()` is classified and that the map names no retired verb (`internal/claims/establish_internal_test.go:14-23`). `TestOnlyStartAndDoneEstablish` pins the exact classification (`:28-38`).
-- Actions vocabulary: `ActionStart = "start"` etc. (`internal/model/lifecycle/lifecycle.go:47`), sealed list at `internal/model/lifecycle/lifecycle.go:137`.
+- Actions vocabulary: `ActionStart = "start"` etc. (`internal/model/lifecycle/lifecycle.go:47`), sealed list at `internal/model/lifecycle/lifecycle.go:182`.
 
 ---
 
@@ -645,7 +645,7 @@ No other command consults `claims.Standings`: the only readers of `cc.standings`
 
 ## 11. Privacy invariants stated in code
 
-- Both halves of `Attribution` are opaque by mandate; nothing user-, host-, or path-shaped may travel there, because the database syncs to shared remotes; resolving a token to a physical checkout happens only on the machine that owns it (`internal/model/model.go:624-627`).
+- Both halves of `Attribution` are opaque by mandate; nothing user-, host-, or path-shaped may travel there, because the database syncs to shared remotes; resolving a token to a physical checkout happens only on the machine that owns it (`internal/model/model.go:639-642`).
 - `StreamID` is deliberately meaningless — no directory name, hostname, or username material (`internal/workspace/stream.go:40-49`).
 - `--by`'s old `os.Getenv("USER")` default was removed as a documented-invariant violation; the fallback is `""` → the opaque `"unknown"` (`internal/cli/cli.go:1196-1200`).
 - `Checkout.Path` / `Checkout.Branch` stay on the local machine (`internal/workspace/checkouts.go:21-26`); `claimContext.addresses` never reaches the shared database and lives only for the process (`internal/cli/claims_context.go:30-32`).

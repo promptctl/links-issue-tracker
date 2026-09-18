@@ -8,13 +8,13 @@ Day-to-day reads and writes are only half of what the store does; the other half
 
 | # | Data | Query semantics | Order |
 |---|---|---|---|
-| 1 | issues | `ListIssues` with `Limit: 0` (uncapped), `IncludeArchived` and `IncludeDeleted` both true — no WHERE clause at all, so **archived and soft-deleted issues are exported** | `item_rank ASC, id ASC` (`store.go:1737-1740`) |
+| 1 | issues | `ListIssues` with `Limit: 0` (uncapped), `IncludeArchived` and `IncludeDeleted` both true — no WHERE clause at all, so **archived and soft-deleted issues are exported** | `item_rank ASC, id ASC` (`store.go:1742-1745`) |
 | 2 | relations | `SELECT ... FROM relations` | `created_at ASC` (no tiebreak) |
 | 3 | comments | `SELECT ... FROM comments` | `created_at ASC` |
 | 4 | labels | `SELECT ... FROM labels` | `issue_id ASC, label ASC` |
-| 5 | events | `issue_events LEFT JOIN issue_event_changes` | events by `(created_at, id)`, each event's changes by `field ASC` (`store.go:1946-1961`) |
+| 5 | events | `issue_events LEFT JOIN issue_event_changes` | events by `(created_at, id)`, each event's changes by `field ASC` (`store.go:1951-1966`) |
 
-The envelope carries `version: 2` (literal), `workspace_id`, `exported_at` (wall-clock UTC at export time), and the five arrays. No key has `omitempty`; every list helper initializes a non-nil slice, so empty tables serialize as `[]`, never `null` (`import_export.go:39`; `store.go:1787`). The per-record wire shapes (issue, relation, comment, label, event, attribution) and the v1 `history` decode fallback are specified in `01-data-model.md`; two facts worth restating from the export side: a label's JSON key is `name` while its DB column is `label`, and an unattributed event omits its `attribution` key entirely.
+The envelope carries `version: 2` (literal), `workspace_id`, `exported_at` (wall-clock UTC at export time), and the five arrays. No key has `omitempty`; every list helper initializes a non-nil slice, so empty tables serialize as `[]`, never `null` (`import_export.go:39`; `store.go:1792`). The per-record wire shapes (issue, relation, comment, label, event, attribution) and the v1 `history` decode fallback are specified in `01-data-model.md`; two facts worth restating from the export side: a label's JSON key is `name` while its DB column is `label`, and an unattributed event omits its `attribution` key entirely.
 
 Three surfaces write the export to disk or stdout:
 

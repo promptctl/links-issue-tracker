@@ -46,9 +46,9 @@ full for commit semantics because every `store.go` mutation routes through it.
 #### 1.1 `doltDatabaseName`
 
 `const doltDatabaseName = "links"` (`internal/store/store.go:28`). Used as:
-- the `Database` field of the embedded-driver config for every non-bootstrap pool (`store.go:382`, `store.go:427`, `store.go:2535`);
-- the `CREATE DATABASE IF NOT EXISTS links` argument (`store.go:2525`);
-- the on-disk directory probed for existence: `<doltRoot>/links/.dolt` (`store.go:2507`).
+- the `Database` field of the embedded-driver config for every non-bootstrap pool (`store.go:382`, `store.go:427`, `store.go:2540`);
+- the `CREATE DATABASE IF NOT EXISTS links` argument (`store.go:2530`);
+- the on-disk directory probed for existence: `<doltRoot>/links/.dolt` (`store.go:2512`).
 
 Tests derive the journal-lock path from it as `<doltRoot>/links/.dolt/noms/LOCK` (`internal/store/engine_open_contract_test.go:20-22`) and the chunk journal as `<doltRoot>/links/.dolt/noms/<chunks.JournalFileID>` (`internal/store/dolt_journal_hold_test.go:44-46`).
 
@@ -72,13 +72,13 @@ const (
 | Field | Type | Set where | Meaning per code |
 |---|---|---|---|
 | `db` | `*sql.DB` | `store.go:392`; replaced by `reconnect` at `store.go:432` | the one pooled embedded-Dolt connection |
-| `workspaceID` | `string` | `store.go:393` | the workspace id passed to `Open`/`OpenForRead`; also the Dolt commit author basis (`store.go:2729-2737`) |
+| `workspaceID` | `string` | `store.go:393` | the workspace id passed to `Open`/`OpenForRead`; also the Dolt commit author basis (`store.go:2734-2742`) |
 | `doltRootDir` | `string` | `store.go:394` (raw arg, not cleaned) | Dolt root dir |
 | `access` | `engineAccess` | `store.go:395` | reused verbatim by `reconnect` (`store.go:427`) |
 | `commitLockPath` | `string` | `store.go:396` = `commitLockPathForDolt(doltRootDir)` | flock path, `filepath.Join(filepath.Dir(filepath.Clean(doltRootDir)), ".links-commit-flock.lock")` (`commit_lock.go:394-403`) |
 | `telemetryDir` | `string` | `store.go:397` = `filepath.Join(filepath.Clean(doltRootDir), "telemetry")` | never read inside `store.go` |
 | `releaseWorkspaceLock` | `func() error` | `store.go:144` (Open), `store.go:209` (OpenForRead); cleared to `nil` on failure at `store.go:160`, `store.go:230`, and in `Close` at `store.go:354` | the workspace shared-lock release |
-| `attribution` | `model.Attribution` | only by `AttributeTo` (`store.go:261`) | stamped on every `recordEvent` row (`store.go:1820`) |
+| `attribution` | `model.Attribution` | only by `AttributeTo` (`store.go:261`) | stamped on every `recordEvent` row (`store.go:1825`) |
 | `applyPreMutationHookForTest` | `func()` | nil in production; fired at `store.go:1111-1113` | test seam between planning and `withMutation` in `Apply` |
 | `commitWorkingSetHookForTest` | `func() error` | nil in production; fired at `commit_lock.go:287-291` | test seam at the top of every `commitWorkingSetOnce` |
 
@@ -86,20 +86,20 @@ Both hooks are per-`Store` instance state, not package globals (`store.go:66-81`
 
 #### 1.4 `engineOpenRetryMaxElapsed`
 
-`var engineOpenRetryMaxElapsed = coResidentHolderWait` (`store.go:2669`), = 70s. A package **variable**, not a const, so tests can shrink it; `engine_open_contract_test.go:53-55` sets it to `700 * time.Millisecond` and restores it in cleanup. It is `MaxElapsedTime` of the write-open backoff (`store.go:2722`). `coResidentHolderWait` is a const derived from two measured facts (`store.go:2564-2662`): `mirrorCycleObservedTail` 20s × `mirrorHoldStallFactor` 2 = `mirrorHoldBudget` 40s; + `mirrorCancelLagObserved` 22s = `mirrorHoldCeiling` 62s; + `coResidentWaitHeadroom` 8s = 70s.
+`var engineOpenRetryMaxElapsed = coResidentHolderWait` (`store.go:2674`), = 70s. A package **variable**, not a const, so tests can shrink it; `engine_open_contract_test.go:53-55` sets it to `700 * time.Millisecond` and restores it in cleanup. It is `MaxElapsedTime` of the write-open backoff (`store.go:2727`). `coResidentHolderWait` is a const derived from two measured facts (`store.go:2569-2667`): `mirrorCycleObservedTail` 20s × `mirrorHoldStallFactor` 2 = `mirrorHoldBudget` 40s; + `mirrorCancelLagObserved` 22s = `mirrorHoldCeiling` 62s; + `coResidentWaitHeadroom` 8s = 70s.
 
 #### 1.5 `newEngineOpenBackOff`
 
-`store.go:2710-2716`. Fresh `backoff.NewExponentialBackOff()` per connector with:
-- `InitialInterval = 50 * time.Millisecond` (`store.go:2712`)
-- `MaxInterval = engineOpenRetryMaxInterval` = 1s (`store.go:2713`)
-- `MaxElapsedTime = engineOpenRetryMaxElapsed` (`store.go:2722`)
+`store.go:2715-2721`. Fresh `backoff.NewExponentialBackOff()` per connector with:
+- `InitialInterval = 50 * time.Millisecond` (`store.go:2717`)
+- `MaxInterval = engineOpenRetryMaxInterval` = 1s (`store.go:2718`)
+- `MaxElapsedTime = engineOpenRetryMaxElapsed` (`store.go:2727`)
 
-All other `ExponentialBackOff` fields keep library defaults. Only attached for `engineWrite` (`store.go:2741-2743`).
+All other `ExponentialBackOff` fields keep library defaults. Only attached for `engineWrite` (`store.go:2746-2748`).
 
 #### 1.6 `wrapEngineOpenContention`
 
-`store.go:2692-2697`. If `err != nil && errors.Is(err, nbs.ErrDatabaseLocked)`, returns exactly:
+`store.go:2697-2702`. If `err != nil && errors.Is(err, nbs.ErrDatabaseLocked)`, returns exactly:
 
 ```
 fmt.Errorf("another process is holding this workspace's Dolt store open (a background sync mirror, another lit command, or a snapshot copy in progress); retry after it completes: %w (%w)", ErrWorkspaceBusy, err)
@@ -107,29 +107,29 @@ fmt.Errorf("another process is holding this workspace's Dolt store open (a backg
 
 so the result satisfies both `errors.Is(err, ErrWorkspaceBusy)` and `errors.Is(err, nbs.ErrDatabaseLocked)`. Every other error passes through unchanged. `ErrWorkspaceBusy` is defined at `internal/store/workspace_lock.go:53` as `errors.New("workspace busy")`.
 
-Call sites: `store.go:388` (eager write ping), `store.go:437` (reconnect ping), `store.go:153` (`ensureMasterDefaultBranch` inside Open), `store.go:2533` (bootstrap CREATE DATABASE), `store.go:2541` (bootstrap branch normalization).
+Call sites: `store.go:388` (eager write ping), `store.go:437` (reconnect ping), `store.go:153` (`ensureMasterDefaultBranch` inside Open), `store.go:2538` (bootstrap CREATE DATABASE), `store.go:2546` (bootstrap branch normalization).
 
 Test evidence: a foreign holder of `<doltRoot>/links/.dolt/noms/LOCK` makes `Open` fail with `nbs.ErrDatabaseLocked` in the chain (`engine_open_contract_test.go:64-66`) and bounded (< 10s under a 700ms budget, `engine_open_contract_test.go:69-71`). `OpenSync` under the same holder carries **both** `ErrWorkspaceBusy` and `nbs.ErrDatabaseLocked` (`engine_open_contract_test.go:153-158`).
 
 #### 1.7 Other free helpers defined in store.go
 
-- `dirExists(path string) bool` — `os.Stat` + `IsDir` (`store.go:2766-2769`).
-- `scanTime(value string) (time.Time, error)` = `time.Parse(time.RFC3339Nano, value)` (`store.go:2215-2217`). Single parse boundary for every timestamp column.
-- `scanNullableTime(sql.NullString) (*time.Time, error)` — invalid → `(nil, nil)` (`store.go:2221-2230`).
-- `nullableTime(*time.Time) any` — nil → `nil`, else `RFC3339Nano` string (`store.go:2389-2394`).
-- `nullableString(string) any` — `""` → SQL `NULL`, else the string (`store.go:2419-2424`).
-- `nullableResolution(*model.Resolution) any` — nil → `NULL` (`store.go:2409-2414`).
-- `nullableStringPtr(*string) any` — nil → `NULL` (`store.go:2490-2495`).
-- `formatNullableTime(*time.Time) string` — nil → `""` (`store.go:2428-2433`).
-- `formatNullableResolution(*model.Resolution) string` — nil → `""` (`store.go:2447-2452`).
-- `formatNullableString(*string) string` — nil → `""` (`store.go:2469-2474`).
-- `timesEqual(a, b *time.Time) bool` — both nil equal; one nil unequal; else `a.Equal(*b)` (`store.go:2437-2445`).
-- `resolutionsEqual(a, b *model.Resolution) bool` — same nil discipline, `*a == *b` (`store.go:2457-2465`).
-- `stringPointersEqual(a, b *string) bool` — same (`store.go:2478-2486`).
-- `retentionColumns(issue model.Issue) (archivedAt, deletedAt any)` — projects `model.RetentionTimestamps(issue.Retention())` through `nullableTime` (`store.go:2401-2404`). Sole feeder of the `archived_at`/`deleted_at` column pair.
-- `statusForStorage(issue model.Issue) sql.NullString` — if `issue.Capabilities().Status != nil` returns `{String: string(status.Value), Valid: true}`, else the zero `NullString` (SQL NULL) (`store.go:2238-2243`). Containers therefore store NULL status.
-- `retentionWord(model.Retention) string` — `"live"` / `"archived"` / `"deleted"`; **panics** `fmt.Sprintf("illegal Retention value %T", r)` on anything else (`store.go:1615-1628`).
-- `sortIssuesByRank([]model.Issue)` — stable sort on `Rank`, tie-break `ID` ascending (`store.go:1771-1780`).
+- `dirExists(path string) bool` — `os.Stat` + `IsDir` (`store.go:2771-2774`).
+- `scanTime(value string) (time.Time, error)` = `time.Parse(time.RFC3339Nano, value)` (`store.go:2220-2222`). Single parse boundary for every timestamp column.
+- `scanNullableTime(sql.NullString) (*time.Time, error)` — invalid → `(nil, nil)` (`store.go:2226-2235`).
+- `nullableTime(*time.Time) any` — nil → `nil`, else `RFC3339Nano` string (`store.go:2394-2399`).
+- `nullableString(string) any` — `""` → SQL `NULL`, else the string (`store.go:2424-2429`).
+- `nullableResolution(*model.Resolution) any` — nil → `NULL` (`store.go:2414-2419`).
+- `nullableStringPtr(*string) any` — nil → `NULL` (`store.go:2495-2500`).
+- `formatNullableTime(*time.Time) string` — nil → `""` (`store.go:2433-2438`).
+- `formatNullableResolution(*model.Resolution) string` — nil → `""` (`store.go:2452-2457`).
+- `formatNullableString(*string) string` — nil → `""` (`store.go:2474-2479`).
+- `timesEqual(a, b *time.Time) bool` — both nil equal; one nil unequal; else `a.Equal(*b)` (`store.go:2442-2450`).
+- `resolutionsEqual(a, b *model.Resolution) bool` — same nil discipline, `*a == *b` (`store.go:2462-2470`).
+- `stringPointersEqual(a, b *string) bool` — same (`store.go:2483-2491`).
+- `retentionColumns(issue model.Issue) (archivedAt, deletedAt any)` — projects `model.RetentionTimestamps(issue.Retention())` through `nullableTime` (`store.go:2406-2409`). Sole feeder of the `archived_at`/`deleted_at` column pair.
+- `statusForStorage(issue model.Issue) sql.NullString` — if `issue.Capabilities().Status != nil` returns `{String: string(status.Value), Valid: true}`, else the zero `NullString` (SQL NULL) (`store.go:2243-2248`). Containers therefore store NULL status.
+- `retentionWord(model.Retention) string` — `"live"` / `"archived"` / `"deleted"`; **panics** `fmt.Sprintf("illegal Retention value %T", r)` on anything else (`store.go:1620-1633`).
+- `sortIssuesByRank([]model.Issue)` — stable sort on `Rank`, tie-break `ID` ascending (`store.go:1776-1785`).
 
 ---
 
@@ -206,16 +206,16 @@ Behavioral evidence:
 
 #### 2.5 `ensureDoltDatabase(ctx, doltRootDir, workspaceID) (bool, error)`
 
-`store.go:2497-2544`:
-1. `root := filepath.Clean(doltRootDir)` (`store.go:2498`).
-2. If `dirExists(filepath.Join(root, "links", ".dolt"))` → returns `(false, nil)` immediately, doing nothing (`store.go:2507-2509`).
-3. `created := !dirExists(root)` (`store.go:2510`).
-4. `os.MkdirAll(root, 0o755)`; on failure `fmt.Errorf("create dolt root dir: %w", err)` (`store.go:2511-2513`).
-5. First bootstrap pool: `openDoltPool(root, workspaceID, "", engineWrite)` (empty database name), `defer db.Close()` inside a closure so it closes before the next open (`store.go:2519-2529`); runs `CREATE DATABASE IF NOT EXISTS links` (`store.go:2525`); failure → `fmt.Errorf("create dolt database: %w", err)` then `wrapEngineOpenContention` (`store.go:2526`, `store.go:2533`).
-6. Second pool: `openDoltPool(root, workspaceID, "links", engineWrite)`, `defer db.Close()`, then `ensureMasterDefaultBranch` wrapped in `wrapEngineOpenContention` (`store.go:2535-2542`).
+`store.go:2502-2549`:
+1. `root := filepath.Clean(doltRootDir)` (`store.go:2503`).
+2. If `dirExists(filepath.Join(root, "links", ".dolt"))` → returns `(false, nil)` immediately, doing nothing (`store.go:2512-2514`).
+3. `created := !dirExists(root)` (`store.go:2515`).
+4. `os.MkdirAll(root, 0o755)`; on failure `fmt.Errorf("create dolt root dir: %w", err)` (`store.go:2516-2518`).
+5. First bootstrap pool: `openDoltPool(root, workspaceID, "", engineWrite)` (empty database name), `defer db.Close()` inside a closure so it closes before the next open (`store.go:2524-2534`); runs `CREATE DATABASE IF NOT EXISTS links` (`store.go:2530`); failure → `fmt.Errorf("create dolt database: %w", err)` then `wrapEngineOpenContention` (`store.go:2531`, `store.go:2538`).
+6. Second pool: `openDoltPool(root, workspaceID, "links", engineWrite)`, `defer db.Close()`, then `ensureMasterDefaultBranch` wrapped in `wrapEngineOpenContention` (`store.go:2540-2547`).
 7. Returns `(created, nil)`.
 
-The two pools run strictly sequentially — the explicit close of the first is the ordering owner (`store.go:2514-2518`).
+The two pools run strictly sequentially — the explicit close of the first is the ordering owner (`store.go:2519-2523`).
 
 #### 2.6 `openStoreConnection(ctx, doltRootDir, workspaceID, access) (*Store, error)`
 
@@ -228,16 +228,16 @@ Read engines stay lazy deliberately (`store.go:372-380`).
 
 #### 2.7 `newDoltConnector` / `openDoltPool`
 
-`newDoltConnector(doltRootDir, workspaceID, database string, access engineAccess) (*embedded.Connector, error)` (`store.go:2728-2749`):
-- `author := strings.TrimSpace(workspaceID)`; if empty → `"links"` (`store.go:2729-2732`);
-- `author = strings.ReplaceAll(author, "@", "_")` (`store.go:2733`);
-- `embedded.Config{ Directory: filepath.Clean(doltRootDir), CommitName: author, CommitEmail: fmt.Sprintf("%s@links.local", author), Database: database, DisableSingletonCache: true }` (`store.go:2734-2740`);
-- `if access == engineWrite { cfg.BackOff = newEngineOpenBackOff() }` (`store.go:2741-2743`);
-- connector construction failure → `fmt.Errorf("open dolt: %w", err)` (`store.go:2746`).
+`newDoltConnector(doltRootDir, workspaceID, database string, access engineAccess) (*embedded.Connector, error)` (`store.go:2733-2754`):
+- `author := strings.TrimSpace(workspaceID)`; if empty → `"links"` (`store.go:2734-2737`);
+- `author = strings.ReplaceAll(author, "@", "_")` (`store.go:2738`);
+- `embedded.Config{ Directory: filepath.Clean(doltRootDir), CommitName: author, CommitEmail: fmt.Sprintf("%s@links.local", author), Database: database, DisableSingletonCache: true }` (`store.go:2739-2745`);
+- `if access == engineWrite { cfg.BackOff = newEngineOpenBackOff() }` (`store.go:2746-2748`);
+- connector construction failure → `fmt.Errorf("open dolt: %w", err)` (`store.go:2751`).
 
 **Dolt commit identity** therefore comes entirely from `workspaceID`: name = workspace id with `@`→`_`, email = `<name>@links.local`. `DisableSingletonCache: true` ties engine (and journal-lock) lifetime to the pool's lifetime.
 
-`openDoltPool` (`store.go:2753-2764`): `sql.OpenDB(connector)`, then `SetMaxOpenConns(1)`, `SetMaxIdleConns(1)`, `SetConnMaxLifetime(0)` — exactly one connection per Store.
+`openDoltPool` (`store.go:2758-2769`): `sql.OpenDB(connector)`, then `SetMaxOpenConns(1)`, `SetMaxIdleConns(1)`, `SetConnMaxLifetime(0)` — exactly one connection per Store.
 
 #### 2.8 `reconnect(ctx) error`
 
@@ -270,7 +270,7 @@ Evidence:
 
 #### 2.11 `ExecRawForTest(ctx, query string, args ...any) error`
 
-`store.go:334-337`: `s.db.ExecContext(ctx, query, args...)`, returning only the error. No commit lock, no `commitWorkingSet` (doc `store.go:331-333`). Used by tests to probe schema CHECK constraints (`store_test.go:2083-2090`, `store_test.go:2104-2111`) and to hard-delete a row (`store_test.go:2609`).
+`store.go:334-337`: `s.db.ExecContext(ctx, query, args...)`, returning only the error. No commit lock, no `commitWorkingSet` (doc `store.go:331-333`). Used by tests to probe schema CHECK constraints (`store_test.go:2083-2090`, `store_test.go:2104-2111`) and to hard-delete a row (`store_test.go:2653`).
 
 ---
 
@@ -452,15 +452,15 @@ Evidence: id shape `^test-renderer-[0-9a-z]{3,8}$` (`store_test.go:777-780`); pr
 
 #### 4.2 Rank placement
 
-`nextRankForPlacement(ctx, tx, p storage.RankPlacement, f storage.Frame) (string, error)` (`store.go:2088-2096`): `edgeFor(p)` resolves the end — `storage.RankTop` → `topEdge`; `storage.RankBottom` → `bottomEdge`; anything else → `fmt.Errorf("unknown rank placement: %d", p)` (`internal/store/ranking.go:267-276`) — then `rankBetweenTx` returns a key between the bounds `edge.filingBoundsTx(ctx, tx, f)` reads (`internal/store/ranking.go:222-231`). `filingBoundsTx` reads that end's filing rank — frame `f`'s leading rank for the top (`frameEdgeRankTx`, `:242-245`), the whole workspace's last rank for the bottom (`workspaceEdgeRankTx`, `:252-261`) — and hands it to `e.roomBesideTx(ctx, tx, anchorRank)` (`:111-144`), which pairs it with the nearest rank the **whole workspace** holds on its far side; a create names no moving ids, so the variadic `moving` is empty and the statement carries no `AND id NOT IN (...)` clause at all (`:131-137`). A create at the top therefore takes the midpoint between the frame's leading rank and the nearest rank below it anywhere in the workspace; with no rank below it that read comes back `""` and the lower bound is open. An **empty** filing rank — a frame with nothing ranked in it — never reaches that read: `roomBesideTx` refuses an empty anchor outright with `fmt.Errorf("no room beside the %s of this frame: the key it was read from is empty", e.name)` (`:122-124`), and `filingBoundsTx` routes the case to `firstInFrameBoundsTx(ctx, tx, f)` (`:227-229`, `:173-210`) instead. For a frame other than `storage.TopLevel` that reads the rank of the issue `f` names — `SELECT item_rank FROM issues WHERE id = ? AND deleted_at IS NULL AND item_rank != ''`, error → `fmt.Errorf("query the rank of frame %q: %w", f, err)` (`:175-178`) — and a non-empty result returns `bottomEdge.roomBesideTx(ctx, tx, containerRank, moving...)` (`:181`), so the frame's first issue lands just past its container's own key; a create reaches that call through the `filingBoundsTx` arm above, which names no moving ids, so `moving` is empty on this path. Everything else — the top level, which names no containing issue, and a container carrying no rank of its own — falls through to one shared arm at the end: `workspaceEdgeRankTx(ctx, tx, storage.TopLevel, bottomEdge)` (`:202`), then `("", "")` when that read is empty (`:206-208`), otherwise `bottomEdge.roomBesideTx(ctx, tx, lastRank)` (`:209`). That workspace read does not exclude `moving`, so its emptiness reports the table rather than this write: it comes back empty only when nothing at all is ranked, the one case where open bounds hold and `rank.Initial()` ("V") is a key no issue holds.
+`nextRankForPlacement(ctx, tx, p storage.RankPlacement, f storage.Frame) (string, error)` (`store.go:2093-2101`): `edgeFor(p)` resolves the end — `storage.RankTop` → `topEdge`; `storage.RankBottom` → `bottomEdge`; anything else → `fmt.Errorf("unknown rank placement: %d", p)` (`internal/store/ranking.go:267-276`) — then `rankBetweenTx` returns a key between the bounds `edge.filingBoundsTx(ctx, tx, f)` reads (`internal/store/ranking.go:222-231`). `filingBoundsTx` reads that end's filing rank — frame `f`'s leading rank for the top (`frameEdgeRankTx`, `:242-245`), the whole workspace's last rank for the bottom (`workspaceEdgeRankTx`, `:252-261`) — and hands it to `e.roomBesideTx(ctx, tx, anchorRank)` (`:111-144`), which pairs it with the nearest rank the **whole workspace** holds on its far side; a create names no moving ids, so the variadic `moving` is empty and the statement carries no `AND id NOT IN (...)` clause at all (`:131-137`). A create at the top therefore takes the midpoint between the frame's leading rank and the nearest rank below it anywhere in the workspace; with no rank below it that read comes back `""` and the lower bound is open. An **empty** filing rank — a frame with nothing ranked in it — never reaches that read: `roomBesideTx` refuses an empty anchor outright with `fmt.Errorf("no room beside the %s of this frame: the key it was read from is empty", e.name)` (`:122-124`), and `filingBoundsTx` routes the case to `firstInFrameBoundsTx(ctx, tx, f)` (`:227-229`, `:173-210`) instead. For a frame other than `storage.TopLevel` that reads the rank of the issue `f` names — `SELECT item_rank FROM issues WHERE id = ? AND deleted_at IS NULL AND item_rank != ''`, error → `fmt.Errorf("query the rank of frame %q: %w", f, err)` (`:175-178`) — and a non-empty result returns `bottomEdge.roomBesideTx(ctx, tx, containerRank, moving...)` (`:181`), so the frame's first issue lands just past its container's own key; a create reaches that call through the `filingBoundsTx` arm above, which names no moving ids, so `moving` is empty on this path. Everything else — the top level, which names no containing issue, and a container carrying no rank of its own — falls through to one shared arm at the end: `workspaceEdgeRankTx(ctx, tx, storage.TopLevel, bottomEdge)` (`:202`), then `("", "")` when that read is empty (`:206-208`), otherwise `bottomEdge.roomBesideTx(ctx, tx, lastRank)` (`:209`). That workspace read does not exclude `moving`, so its emptiness reports the table rather than this write: it comes back empty only when nothing at all is ranked, the one case where open bounds hold and `rank.Initial()` ("V") is a key no issue holds.
 
-`nextRankAtBottom` (`store.go:2058-2068`):
+`nextRankAtBottom` (`store.go:2063-2073`):
 ```sql
 SELECT item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' ORDER BY item_rank DESC LIMIT 1
 ```
 Non-`ErrNoRows` error → `fmt.Errorf("query last rank: %w", err)`. Invalid/empty result → `rank.Initial()`; else `rank.After(lastRank)`.
 
-`nextRankAtTop` (`store.go:2072-2082`): same query with `ORDER BY item_rank ASC`; error text `"query first rank: %w"`; empty → `rank.Initial()`; else `rank.Before(firstRank)`.
+`nextRankAtTop` (`store.go:2077-2087`): same query with `ORDER BY item_rank ASC`; error text `"query first rank: %w"`; empty → `rank.Initial()`; else `rank.Before(firstRank)`.
 
 The **zero value** of `storage.RankPlacement` behaves as bottom/append: consecutive default creates keep authoring order, and an explicit `RankTop` create sorts ahead of them (`store_test.go:1019-1049`).
 
@@ -470,51 +470,51 @@ The **zero value** of `storage.RankPlacement` behaves as bottom/append: consecut
 
 #### 5.1 The issue projection
 
-`issueColumns` (`store.go:2091-2095`), the single ordered projection, 18 columns:
+`issueColumns` (`store.go:2096-2100`), the single ordered projection, 18 columns:
 ```
 id, title, description, agent_prompt, status, priority,
 issue_type, topic, assignee, item_rank, lane, created_at,
 updated_at, closed_at, resolution, redirect_target, archived_at, deleted_at
 ```
-`issueProjection(alias)` (`store.go:2100-2110`) joins them with `", "`, prefixing `alias+"."` when alias is non-empty. Derived once: `issueColumnsBare = issueProjection("")` and `issueColumnsQualified = issueProjection("i")` (`store.go:2114-2117`).
+`issueProjection(alias)` (`store.go:2105-2115`) joins them with `", "`, prefixing `alias+"."` when alias is non-empty. Derived once: `issueColumnsBare = issueProjection("")` and `issueColumnsQualified = issueProjection("i")` (`store.go:2119-2122`).
 
 #### 5.2 Row scanners
 
-`issueScanner interface{ Scan(dest ...any) error }` (`store.go:2014`).
+`issueScanner interface{ Scan(dest ...any) error }` (`store.go:2019`).
 
-`issueRow struct { Issue partialIssue; Status model.StatusView }` (`store.go:2016-2019`).
+`issueRow struct { Issue partialIssue; Status model.StatusView }` (`store.go:2021-2024`).
 
-`partialIssue` (`store.go:2024-2039`): `ID, Title, Description, Prompt string; Priority model.Priority; IssueType model.IssueType; Topic, Assignee, Rank, Lane string; Labels []string; CreatedAt, UpdatedAt time.Time; Retention model.Retention`.
+`partialIssue` (`store.go:2029-2044`): `ID, Title, Description, Prompt string; Priority model.Priority; IssueType model.IssueType; Topic, Assignee, Rank, Lane string; Labels []string; CreatedAt, UpdatedAt time.Time; Retention model.Retention`.
 
-`scanIssue(row)` (`store.go:2122-2134`) scans the 18 columns positionally in `issueColumns` order, with `prompt`, `status`, `closedAt`, `resolution`, `redirectTarget`, `archivedAt`, `deletedAt` as `sql.NullString`; sets `issue.Prompt = prompt.String` (NULL → `""`); delegates to `parsedIssueRow`.
+`scanIssue(row)` (`store.go:2127-2139`) scans the 18 columns positionally in `issueColumns` order, with `prompt`, `status`, `closedAt`, `resolution`, `redirectTarget`, `archivedAt`, `deletedAt` as `sql.NullString`; sets `issue.Prompt = prompt.String` (NULL → `""`); delegates to `parsedIssueRow`.
 
-`scanIssueWithParent(row)` (`store.go:2136-2150`) — identical but with a leading `parentID string` column.
+`scanIssueWithParent(row)` (`store.go:2141-2155`) — identical but with a leading `parentID string` column.
 
-`parsedIssueRow(...)` (`store.go:2152-2209`):
+`parsedIssueRow(...)` (`store.go:2157-2214`):
 - parses `created_at`/`updated_at` via `scanTime` (errors propagate);
 - `statusView := model.StatusView{Value: model.State(status.String)}` — NULL status becomes `model.State("")`;
 - valid `closed_at` → parsed into `statusView.ClosedAt`;
-- valid `resolution` → `model.Resolution(resolution.String)` raw-converted (no re-parse) into `statusView.Resolution` (`store.go:2175-2183`);
-- valid `redirect_target` → `statusView.RedirectTarget` (`store.go:2184-2190`);
-- `archived_at`/`deleted_at` parsed into `*time.Time` and folded through `model.RetentionFromTimestamps` (`store.go:2191-2206`);
-- `issue.Labels = []string{}` (`store.go:2207`).
+- valid `resolution` → `model.Resolution(resolution.String)` raw-converted (no re-parse) into `statusView.Resolution` (`store.go:2180-2188`);
+- valid `redirect_target` → `statusView.RedirectTarget` (`store.go:2189-2195`);
+- `archived_at`/`deleted_at` parsed into `*time.Time` and folded through `model.RetentionFromTimestamps` (`store.go:2196-2211`);
+- `issue.Labels = []string{}` (`store.go:2212`).
 
 #### 5.3 `hydrateIssues(ctx, rows []issueRow) ([]model.Issue, error)`
 
-`store.go:2245-2304`. Query count is **fixed per recursion level**, not per epic:
-1. Empty input → `([]model.Issue{}, nil)` with no query (`store.go:2246-2248`).
-2. One `loadLabelsByIssueIDs` query for all ids (`store.go:2253`).
-3. Collects container ids; one `lifecycleChildrenByEpicIDs` query for all of them (`store.go:2257-2266`).
-4. Per row, builds a `model.Issue` copying every `partialIssue` field, `SetRetention(row.Issue.Retention)`, `Labels` defaulted to `[]string{}` when the map has no entry, and calls `model.HydrateRow(base, row.Status, childrenByEpicID[id])` (`store.go:2268-2294`).
-5. Post-condition: `!issue.IsHydrated()` → `fmt.Errorf("hydrateIssues: produced unhydrated issue %s", issue.ID)` (`store.go:2298-2300`).
+`store.go:2250-2309`. Query count is **fixed per recursion level**, not per epic:
+1. Empty input → `([]model.Issue{}, nil)` with no query (`store.go:2251-2253`).
+2. One `loadLabelsByIssueIDs` query for all ids (`store.go:2258`).
+3. Collects container ids; one `lifecycleChildrenByEpicIDs` query for all of them (`store.go:2262-2271`).
+4. Per row, builds a `model.Issue` copying every `partialIssue` field, `SetRetention(row.Issue.Retention)`, `Labels` defaulted to `[]string{}` when the map has no entry, and calls `model.HydrateRow(base, row.Status, childrenByEpicID[id])` (`store.go:2273-2299`).
+5. Post-condition: `!issue.IsHydrated()` → `fmt.Errorf("hydrateIssues: produced unhydrated issue %s", issue.ID)` (`store.go:2303-2305`).
 
-`loadLabelsByIssueIDs` (`store.go:2366-2387`):
+`loadLabelsByIssueIDs` (`store.go:2371-2392`):
 ```sql
 SELECT issue_id, label FROM labels WHERE issue_id IN (?, ?, ...) ORDER BY label ASC
 ```
 failure → `fmt.Errorf("load labels by issue ids: %w", err)`.
 
-`lifecycleChildrenByEpicIDs(ctx, epicIDs)` (`store.go:2306-2364`) — empty input returns an empty map without querying; otherwise one query:
+`lifecycleChildrenByEpicIDs(ctx, epicIDs)` (`store.go:2311-2369`) — empty input returns an empty map without querying; otherwise one query:
 ```sql
 SELECT r.dst_id, <issueColumnsQualified>
 FROM relations r
@@ -524,9 +524,9 @@ WHERE r.dst_id IN (?, ...) AND r.type = 'parent-child'
     AND (p.archived_at IS NOT NULL OR p.deleted_at IS NOT NULL OR (i.archived_at IS NULL AND i.deleted_at IS NULL))
 ORDER BY r.dst_id ASC, i.item_rank ASC
 ```
-failure → `fmt.Errorf("load lifecycle children: %w", err)`. Visibility truth table (`store.go:2317-2323`): parent live + child live → include; parent live + child dead → exclude; parent dead (archived or deleted) + child either → include. Rows are scanned with `scanIssueWithParent`, hydrated in **one** recursive `hydrateIssues` call, and re-bucketed by the parallel `parentIDs` slice (`store.go:2343-2362`).
+failure → `fmt.Errorf("load lifecycle children: %w", err)`. Visibility truth table (`store.go:2322-2328`): parent live + child live → include; parent live + child dead → exclude; parent dead (archived or deleted) + child either → include. Rows are scanned with `scanIssueWithParent`, hydrated in **one** recursive `hydrateIssues` call, and re-bucketed by the parallel `parentIDs` slice (`store.go:2348-2367`).
 
-Evidence: listing query count for 1 epic equals that for 5 epics, measured by a counting `driver.Conn` that forces every query through `Prepare` (`lifecycle_hydration_query_count_test.go:25-41`, wrapper at `:104-147`). An active epic's `Progress()` excludes archived children (`Total == 0`); the same epic once archived includes them (`Total == 1, Open == 1`) (`store_test.go:2282-2311`).
+Evidence: listing query count for 1 epic equals that for 5 epics, measured by a counting `driver.Conn` that forces every query through `Prepare` (`lifecycle_hydration_query_count_test.go:25-41`, wrapper at `:104-147`). An active epic's `Progress()` excludes archived children (`Total == 0`); the same epic once archived includes them (`Total == 1, Open == 1`) (`store_test.go:2326-2355`).
 
 #### 5.4 `GetIssue(ctx, id) (model.Issue, error)`
 
@@ -560,7 +560,7 @@ Errors: `"batch load issues: %w"`, `"scan batch-loaded issue: %w"`, `"iterate ba
 11. `related := relatedFrom(id, relations, relatedByID)` (`store.go:832`).
 12. Assembles `model.IssueDetail{Issue, Relations, Comments, Events, Children, Siblings, DependsOn, Blocks, Parent, Related, RedirectTarget}` (`store.go:833-845`).
 
-Evidence: `DependsOn`, `Blocks`, `Children`, `Related` all come back in rank order (`store_test.go:1084-1167`); relation counterparties are fully hydrated including container progress and label slices (`store_test.go:1875-1939`); siblings are the parent's other children in rank order excluding self, and empty for parentless issues and only children (`store_test.go:2834-2893`); the redirect target is exposed via `detail.RedirectTarget` with **no** `related-to` edge written (`store_test.go:2347-2388`).
+Evidence: `DependsOn`, `Blocks`, `Children`, `Related` all come back in rank order (`store_test.go:1084-1167`); relation counterparties are fully hydrated including container progress and label slices (`store_test.go:1875-1939`); siblings are the parent's other children in rank order excluding self, and empty for parentless issues and only children (`store_test.go:2878-2937`); the redirect target is exposed via `detail.RedirectTarget` with **no** `related-to` edge written (`store_test.go:2391-2432`).
 
 #### 5.7 `ListIssues(ctx, filter storage.ListIssuesFilter) ([]model.Issue, error)`
 
@@ -588,7 +588,7 @@ Clauses are joined with `" AND "` (`store.go:672-674`).
 
 **Status and resolution are NOT filtered in SQL.** `parseStatusFilter(filter.Statuses)` (`store.go:585`, defined `store.go:705-712`) only maps each raw value through `model.DefaultOpen(string(raw))` and never errors; the actual filtering happens post-hydration.
 
-Ordering: `buildIssueOrderClause(filter.SortBy)` (`store.go:675`, defined `store.go:1737-1769`):
+Ordering: `buildIssueOrderClause(filter.SortBy)` (`store.go:675`, defined `store.go:1742-1774`):
 - no specs → `"i.item_rank ASC, i.id ASC"`;
 - allowed sort fields (case-insensitive, trimmed) and their columns: `id→i.id`, `title→i.title`, `status→i.status`, `priority→i.priority`, `rank→i.item_rank`, `type→i.issue_type`, `topic→i.topic`, `assignee→i.assignee`, `created_at→i.created_at`, `updated_at→i.updated_at`;
 - unknown field → `fmt.Errorf("unsupported sort field %q", spec.Field)`;
@@ -609,7 +609,7 @@ Evidence: epic state is filtered by derived lifecycle, not the dead `i.status` c
 
 #### 5.8 `ListTopics(ctx) ([]string, error)`
 
-`store.go:1630-1645`:
+`store.go:1635-1650`:
 ```sql
 SELECT DISTINCT topic FROM issues WHERE deleted_at IS NULL AND topic <> '' ORDER BY topic ASC
 ```
@@ -617,23 +617,23 @@ failure → `fmt.Errorf("list topics: %w", err)`. Returns `[]string{}` (never ni
 
 #### 5.9 Relation, comment, and label reads
 
-`listRelations(ctx, issueID)` (`store.go:1647-1668`):
+`listRelations(ctx, issueID)` (`store.go:1652-1673`):
 ```sql
 SELECT src_id, dst_id, type, created_at, created_by FROM relations WHERE src_id = ? OR dst_id = ? ORDER BY created_at ASC
 ```
 error → `fmt.Errorf("list relations: %w", err)`; `created_at` parsed via `scanTime`.
 
-`listAllRelations(ctx)` (`store.go:1879-1900`): same projection, no WHERE, `ORDER BY created_at ASC`; error → `"list all relations: %w"`.
+`listAllRelations(ctx)` (`store.go:1884-1905`): same projection, no WHERE, `ORDER BY created_at ASC`; error → `"list all relations: %w"`.
 
-`listComments(ctx, issueID)` (`store.go:1848-1869`):
+`listComments(ctx, issueID)` (`store.go:1853-1874`):
 ```sql
 SELECT id, issue_id, body, created_at, created_by FROM comments WHERE issue_id = ? ORDER BY created_at ASC
 ```
 error → `"list comments: %w"`.
 
-`listAllComments(ctx)` (`store.go:1902-1923`): same without the WHERE; error → `"list all comments: %w"`.
+`listAllComments(ctx)` (`store.go:1907-1928`): same without the WHERE; error → `"list all comments: %w"`.
 
-`listAllLabels(ctx)` (`store.go:1782-1803`):
+`listAllLabels(ctx)` (`store.go:1787-1808`):
 ```sql
 SELECT issue_id, label, created_at, created_by FROM labels ORDER BY issue_id ASC, label ASC
 ```
@@ -641,24 +641,24 @@ error → `"list all labels: %w"`.
 
 #### 5.10 Event reads
 
-`listEvents(ctx, issueID)` (`store.go:1871-1877`): `queryEvents(ctx, "e.issue_id = ?", issueID)`; error → `fmt.Errorf("list issue events: %w", err)`.
+`listEvents(ctx, issueID)` (`store.go:1876-1882`): `queryEvents(ctx, "e.issue_id = ?", issueID)`; error → `fmt.Errorf("list issue events: %w", err)`.
 
-`ListAllEvents(ctx)` (`store.go:1930-1936`): `queryEvents(ctx, "")`; error → `fmt.Errorf("list all issue events: %w", err)`. Doc explains no recency cutoff is applied because claim derivation needs arbitrarily old establishing events (`store.go:1925-1929`).
+`ListAllEvents(ctx)` (`store.go:1935-1941`): `queryEvents(ctx, "")`; error → `fmt.Errorf("list all issue events: %w", err)`. Doc explains no recency cutoff is applied because claim derivation needs arbitrarily old establishing events (`store.go:1930-1934`).
 
-`queryEvents(ctx, whereClause string, args ...any)` (`store.go:1942-2012`):
+`queryEvents(ctx, whereClause string, args ...any)` (`store.go:1947-2017`):
 ```sql
 SELECT e.id, e.issue_id, e.action, e.reason, e.actor, e.created_at, e.stream_id, e.workspace_id, c.field, c.from_value, c.to_value
     FROM issue_events e LEFT JOIN issue_event_changes c ON c.event_id = e.id
 [ WHERE <whereClause> ]
  ORDER BY e.created_at ASC, e.id ASC, c.field ASC
 ```
-(`store.go:1943-1957`). Exactly one query. Nullable columns: `action`, `stream_id`, `workspace_id`, `c.field`, `c.from_value`, `c.to_value`. Collapsing rules:
-- an event is materialized on first sight, keyed by id in `idx` (`store.go:1966`, `:1973-1998`);
-- `Attribution: model.NewAttribution(evtStream.String, evtWorkspace.String)` — NULL becomes `""` which the constructor collapses to absent (`store.go:1985-1990`);
-- `Changes` starts as `[]model.FieldChange{}` (`store.go:1991`);
-- `Action` set only when the column is valid (`store.go:1993-1995`);
-- a change row is appended only when `c.field` is valid; `From`/`To` only when their columns are valid, otherwise left `""` (`store.go:2000-2009`).
-The `c.field ASC` sort is deliberate so two reads of an unchanged event compare identical (`store.go:1948-1956`).
+(`store.go:1948-1962`). Exactly one query. Nullable columns: `action`, `stream_id`, `workspace_id`, `c.field`, `c.from_value`, `c.to_value`. Collapsing rules:
+- an event is materialized on first sight, keyed by id in `idx` (`store.go:1971`, `:1978-2003`);
+- `Attribution: model.NewAttribution(evtStream.String, evtWorkspace.String)` — NULL becomes `""` which the constructor collapses to absent (`store.go:1990-1995`);
+- `Changes` starts as `[]model.FieldChange{}` (`store.go:1996`);
+- `Action` set only when the column is valid (`store.go:1998-2000`);
+- a change row is appended only when `c.field` is valid; `From`/`To` only when their columns are valid, otherwise left `""` (`store.go:2005-2014`).
+The `c.field ASC` sort is deliberate so two reads of an unchanged event compare identical (`store.go:1953-1961`).
 
 ---
 
@@ -690,7 +690,7 @@ Evidence: transition + field lands as exactly one Dolt commit with both halves v
 
 #### 6.3 `applyTransition` (the guard)
 
-`store.go:89-96`: if `model.Frozen(issue.Retention())` → `fmt.Errorf("cannot %s archived or deleted issue", action.Name())`; otherwise `issue.Apply(action)`. Never mutates the store.
+`store.go:89-96`: if `model.Frozen(issue.Retention())` → `fmt.Errorf("cannot %s archived or deleted issue", action.Name().Verb())`; otherwise `issue.Apply(action)`. Never mutates the store.
 
 Evidence: a container refuses `Reopen`; a live leaf accepts `Start`; an archived leaf refuses `Close` (`store_test.go:701-739`).
 
@@ -727,55 +727,55 @@ UPDATE issues SET status = ?, assignee = ?, updated_at = ?, closed_at = ?, resol
 ```
 bound `w.toStatus, w.postAssignee, w.now.Format(time.RFC3339Nano), w.closedAtArg, w.resolutionArg, w.redirectTargetArg, w.issueID, w.fromStatus`. Failure → `fmt.Errorf("update issue status: %w", err)`.
 3. `result.RowsAffected()` failure → `fmt.Errorf("read status transition result: %w", err)` (`store.go:1400-1403`).
-4. `affected == 0` → look up the live status via `currentStatusTx` and return `fmt.Errorf("%s conflict: issue status is %q", w.action, currentStatus)` (`store.go:1404-1410`). Exact observed text: `close conflict: issue status is "closed"` (`store_test.go:2180`).
+4. `affected == 0` → look up the live status via `currentStatusTx` and return `fmt.Errorf("%s conflict: issue status is %q", w.action.Verb(), currentStatus)` (`store.go:1404-1410`). Exact observed text: `close conflict: issue status is "closed"` (`store_test.go:2180`).
 5. `s.recordEvent(ctx, tx, w.issueID, string(w.action), w.reason, w.actor, w.changes)` (`store.go:1411`).
 
 The UPDATE touches only the status-axis columns — a stale transition cannot clobber the retention pair (`store.go:1383-1385`).
 
 #### 6.6 `retentionWrite` and `planRetentionTransition`
 
-`retentionWrite` fields (`store.go:1422-1437`): `issueID string; now time.Time; priorArchived, priorDeleted, nextArchived, nextDeleted any; action model.ActionName; reason, actor string; changes []model.FieldChange; post model.Issue`. `isNoop()` is hardcoded `false` — the Retain table has no same-state success cell (`store.go:1441-1444`).
+`retentionWrite` fields (`store.go:1422-1442`): `issueID string; now time.Time; priorArchived, priorDeleted, nextArchived, nextDeleted any; action model.ActionName; reason, actor string; changes []model.FieldChange; post model.Issue`. `isNoop()` is hardcoded `false` — the Retain table has no same-state success cell (`store.go:1446-1449`).
 
-`planRetentionTransition(issue, actor, reason, action)` (`store.go:1451-1484`):
+`planRetentionTransition(issue, actor, reason, action)` (`store.go:1456-1489`):
 - `now := time.Now().UTC()`;
 - reads `model.RetentionTimestamps(issue.Retention())` and `retentionColumns(issue)` as the CAS guard;
-- `model.Retain(issue.Retention(), action, now)` — its error is the rejection (e.g. `"issue is already archived"`, observed at `store_test.go:2695`);
+- `model.Retain(issue.Retention(), action, now)` — its error is the rejection (e.g. `"issue is already archived"`, observed at `store_test.go:2739`);
 - `post := issue; post.SetRetention(next); post.UpdatedAt = now`;
-- change rows: `archived_at` when the timestamps differ, `deleted_at` when they differ, both via `formatNullableTime` (`store.go:1464-1470`).
+- change rows: `archived_at` when the timestamps differ, `deleted_at` when they differ, both via `formatNullableTime` (`store.go:1469-1475`).
 
-`retentionWrite.applyTx` (`store.go:1493-1511`):
+`retentionWrite.applyTx` (`store.go:1498-1516`):
 ```sql
 UPDATE issues SET updated_at = ?, archived_at = ?, deleted_at = ? WHERE id = ? AND archived_at <=> ? AND deleted_at <=> ?
 ```
 bound `w.now.Format(time.RFC3339Nano), w.nextArchived, w.nextDeleted, w.issueID, w.priorArchived, w.priorDeleted`. Uses MySQL null-safe equality `<=>`. Errors:
 - exec failure → `fmt.Errorf("update issue retention: %w", err)`;
 - `RowsAffected` failure → `fmt.Errorf("read retention transition result: %w", err)`;
-- `affected == 0` → `currentRetentionTx` then `fmt.Errorf("%s conflict: issue retention is %q", w.action, retentionWord(current))`. Observed text: `archive conflict: issue retention is "archived"` (`store_test.go:2211`).
-Then `recordEvent` with the action name, reason, actor, and change rows (`store.go:1510`).
+- `affected == 0` → `currentRetentionTx` then `fmt.Errorf("%s conflict: issue retention is %q", w.action.Verb(), model.RetentionName(current))`. Observed text: `archive conflict: issue retention is "archived"` (`store_test.go:2211`).
+Then `recordEvent` with the action name, reason, actor, and change rows (`store.go:1515`).
 
-Evidence: a stale archive plan loses to a competing archive with the conflict error (`store_test.go:2189-2214`); delete-on-archived drops the archive stamp and a later restore lands on `Live`, not `Archived` (`store_test.go:2900-2926`); an archive event records exactly one `archived_at` change row and no fake status row (`store_test.go:1376-1380`).
+Evidence: a stale archive plan loses to a competing archive with the conflict error (`store_test.go:2189-2214`); delete-on-archived drops the archive stamp and a later restore lands on `Live`, not `Archived` (`store_test.go:2944-2970`); an archive event records exactly one `archived_at` change row and no fake status row (`store_test.go:1376-1380`).
 
 #### 6.7 `validateRedirectTarget`
 
-`store.go:1539-1557` — a free function of `(ctx, tx, closingID string, resolution *model.Resolution, target *string)`:
+`store.go:1544-1562` — a free function of `(ctx, tx, closingID string, resolution *model.Resolution, target *string)`:
 - `target == nil` and `resolution != nil && resolution.RedirectsToCanonical()` → `fmt.Errorf("closing as %s requires a canonical target issue to redirect to", *resolution)`;
 - `target == nil` otherwise → `nil`;
 - `*target == closingID` → `fmt.Errorf("cannot redirect %s to itself", closingID)`;
 - `currentRetentionTx(ctx, tx, *target)` — a missing row surfaces as `storage.NotFoundError`;
 - target retention is `model.Deleted` → `fmt.Errorf("cannot redirect %s to %s: the canonical issue is deleted", closingID, *target)`;
-- `Archived` targets are accepted (matched as the specific `Deleted` variant only, `store.go:1553`).
+- `Archived` targets are accepted (matched as the specific `Deleted` variant only, `store.go:1558`).
 
-Evidence: duplicate close records the redirect target on the issue's own column with no graph edge (`store_test.go:2347-2388`); a terminal `Obsolete` close records the resolution and no redirect (`store_test.go:2392-2414`); a redirect to a nonexistent target rolls the whole close back — status stays `open`, resolution and closed_at nil (`store_test.go:2420-2442`); self-redirect rejected (`store_test.go:2446-2465`); redirect to an **archived** canonical succeeds (`store_test.go:2471-2493`); redirect to a **deleted** canonical is rejected with the target id and `"deleted"` in the message and nothing persisted (`store_test.go:2500-2533`); a delete of the canonical injected in the plan→write window via `applyPreMutationHookForTest` is still observed and the close rejected (`store_test.go:2544-2586`); a redirecting outcome with an empty target is rejected (`store_test.go:2644-2656`).
+Evidence: duplicate close records the redirect target on the issue's own column with no graph edge (`store_test.go:2391-2432`); a terminal `Obsolete` close records the resolution and no redirect (`store_test.go:2436-2458`); a redirect to a nonexistent target rolls the whole close back — status stays `open`, resolution and closed_at nil (`store_test.go:2464-2486`); self-redirect rejected (`store_test.go:2490-2509`); redirect to an **archived** canonical succeeds (`store_test.go:2515-2537`); redirect to a **deleted** canonical is rejected with the target id and `"deleted"` in the message and nothing persisted (`store_test.go:2544-2577`); a delete of the canonical injected in the plan→write window via `applyPreMutationHookForTest` is still observed and the close rejected (`store_test.go:2588-2630`); a redirecting outcome with an empty target is rejected (`store_test.go:2688-2700`).
 
 #### 6.8 In-tx read helpers
 
-`currentStatusTx(ctx, tx, issueID) (string, error)` (`store.go:1559-1570`): `SELECT status FROM issues WHERE id = ?` scanned into `sql.NullString` (status is nullable since containers store NULL). `ErrNoRows` → `storage.NotFoundError{Entity:"issue", ID: issueID}`; other → `fmt.Errorf("read issue status: %w", err)`; returns `status.String` (NULL → `""`).
+`currentStatusTx(ctx, tx, issueID) (string, error)` (`store.go:1564-1575`): `SELECT status FROM issues WHERE id = ?` scanned into `sql.NullString` (status is nullable since containers store NULL). `ErrNoRows` → `storage.NotFoundError{Entity:"issue", ID: issueID}`; other → `fmt.Errorf("read issue status: %w", err)`; returns `status.String` (NULL → `""`).
 
-`currentRetentionTx(ctx, tx, issueID) (model.Retention, error)` (`store.go:1575-1592`): `SELECT archived_at, deleted_at FROM issues WHERE id = ?`; `ErrNoRows` → `storage.NotFoundError`; other → `fmt.Errorf("read issue retention: %w", err)`; both columns through `scanNullableTime` then `model.RetentionFromTimestamps`.
+`currentRetentionTx(ctx, tx, issueID) (model.Retention, error)` (`store.go:1580-1597`): `SELECT archived_at, deleted_at FROM issues WHERE id = ?`; `ErrNoRows` → `storage.NotFoundError`; other → `fmt.Errorf("read issue retention: %w", err)`; both columns through `scanNullableTime` then `model.RetentionFromTimestamps`.
 
-`requireIssueExistsTx(ctx, tx, issueID) error` (`store.go:1603-1612`): `SELECT 1 FROM issues WHERE id = ?`; `ErrNoRows` → `storage.NotFoundError`; other → `fmt.Errorf("check issue exists: %w", err)`. Accepts archived/deleted rows — no `deleted_at` filter (`store.go:1600-1602`).
+`requireIssueExistsTx(ctx, tx, issueID) error` (`store.go:1608-1617`): `SELECT 1 FROM issues WHERE id = ?`; `ErrNoRows` → `storage.NotFoundError`; other → `fmt.Errorf("check issue exists: %w", err)`. Accepts archived/deleted rows — no `deleted_at` filter (`store.go:1605-1607`).
 
-Evidence: a hard-deleted endpoint makes both `AddRelation` and `SetParent` fail with `storage.NotFoundError` naming that id, writing no edge (`store_test.go:2596-2637`).
+Evidence: a hard-deleted endpoint makes both `AddRelation` and `SetParent` fail with `storage.NotFoundError` naming that id, writing no edge (`store_test.go:2640-2681`).
 
 #### 6.9 `fieldWrite`, `planFieldUpdate`, `applyFieldsTx`
 
@@ -813,24 +813,24 @@ Evidence: a field plan taken against a stale snapshot lands its title change whi
 
 ### 7. Event / attribution rows
 
-`recordEvent(ctx, tx, issueID, action, reason, actor string, changes []model.FieldChange) error` — the single insertion point for issue history (`store.go:1808-1846`).
+`recordEvent(ctx, tx, issueID, action, reason, actor string, changes []model.FieldChange) error` — the single insertion point for issue history (`store.go:1813-1851`).
 
-Constructed event (`store.go:1809-1822`):
+Constructed event (`store.go:1814-1827`):
 - `ID = "evt-" + uuid.NewString()`;
 - `Action`, `Reason`, `Actor` each `strings.TrimSpace`d;
 - `CreatedAt = time.Now().UTC()`;
 - `Attribution = s.attribution` — read off the store, never passed in;
 - `Changes = changes`.
 
-Then: `if event.Actor == "" { event.Actor = "unknown" }` (`store.go:1823-1825`); `actionArg` is `nil` when the trimmed action is empty, otherwise the string (`store.go:1826-1829`).
+Then: `if event.Actor == "" { event.Actor = "unknown" }` (`store.go:1828-1830`); `actionArg` is `nil` when the trimmed action is empty, otherwise the string (`store.go:1831-1834`).
 
-The event insert (`store.go:1830-1832`):
+The event insert (`store.go:1835-1837`):
 ```sql
 INSERT INTO issue_events(id, issue_id, action, reason, actor, created_at, stream_id, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ```
 bound `event.ID, event.IssueID, actionArg, event.Reason, event.Actor, event.CreatedAt.Format(time.RFC3339Nano), nullableString(event.Attribution.Stream()), nullableString(event.Attribution.Workspace())`. Failure → `fmt.Errorf("insert issue event: %w", err)`.
 
-Per change row (`store.go:1835-1844`):
+Per change row (`store.go:1840-1849`):
 - a blank trimmed field name → `fmt.Errorf("issue event %s: field name cannot be empty", event.ID)`;
 - otherwise:
 ```sql
@@ -886,22 +886,22 @@ with `created_at` as RFC3339Nano; failure → `fmt.Errorf("insert comment: %w", 
 
 ### 9. Meta and sync state
 
-`getMeta(ctx, tx *sql.Tx, key string) (string, error)` (`store.go:1669-1684`): uses `tx` when non-nil, else `s.db`:
+`getMeta(ctx, tx *sql.Tx, key string) (string, error)` (`store.go:1674-1689`): uses `tx` when non-nil, else `s.db`:
 ```sql
 SELECT meta_value FROM meta WHERE meta_key = ?
 ```
 `sql.ErrNoRows` → `("", nil)` (absence is not an error); other → `fmt.Errorf("get meta %q: %w", key, err)`.
 
-`setMeta(ctx, tx, key, value string) error` (`store.go:1686-1700`): picks `tx` or `s.db` as the execer, then:
+`setMeta(ctx, tx, key, value string) error` (`store.go:1691-1705`): picks `tx` or `s.db` as the execer, then:
 ```sql
 INSERT INTO meta(meta_key, meta_value) VALUES (?, ?)
         ON DUPLICATE KEY UPDATE meta_value = VALUES(meta_value)
 ```
 failure → `fmt.Errorf("set meta %q: %w", key, err)`. Note: called with `tx == nil` from `ensureMetaValue`/`ensureMetaDefault`, i.e. **outside** any transaction.
 
-`ensureMetaValue(ctx, guard *snapshotGuard, key, value string) (bool, error)` (`store.go:1702-1717`): reads current; equal → `(false, nil)` with no write; else `guard.ensure(ctx)` (failure → `fmt.Errorf("ensure meta %s: %w", key, err)`), then `setMeta`, returning `(true, nil)`.
+`ensureMetaValue(ctx, guard *snapshotGuard, key, value string) (bool, error)` (`store.go:1707-1722`): reads current; equal → `(false, nil)` with no write; else `guard.ensure(ctx)` (failure → `fmt.Errorf("ensure meta %s: %w", key, err)`), then `setMeta`, returning `(true, nil)`.
 
-`ensureMetaDefault(ctx, guard, key, value)` (`store.go:1719-1735`): identical except the skip condition is `strings.TrimSpace(current) != ""` — any existing non-blank value is preserved.
+`ensureMetaDefault(ctx, guard, key, value)` (`store.go:1724-1740`): identical except the skip condition is `strings.TrimSpace(current) != ""` — any existing non-blank value is preserved.
 
 `GetSyncState(ctx) (storage.SyncState, error)` (`store.go:442-454`): two `getMeta` reads — `last_sync_path` into `state.Path` and `last_sync_hash` into `state.ContentHash`; on either error returns `(storage.SyncState{}, err)`.
 
@@ -913,20 +913,20 @@ Round-trip evidence: `store_test.go:1295-1306`.
 
 ### 10. Branch normalization
 
-`masterRenameSource(ctx, db *sql.DB) (string, error)` (`store.go:2519-2546`), lock-free:
+`masterRenameSource(ctx, db *sql.DB) (string, error)` (`store.go:2524-2551`), lock-free:
 - `SELECT active_branch()`; failure → `fmt.Errorf("query dolt active branch: %w", err)`;
 - `SELECT name FROM dolt_branches ORDER BY name`; failure → `fmt.Errorf("query dolt branches: %w", err)`; scan failure → `"scan dolt branch: %w"`; iteration failure → `"iterate dolt branches: %w"`;
 - counts branches and notes whether `"master"` exists;
 - returns `""` (nothing to rename) when `activeBranch == "master"` **or** master already exists **or** `branchCount != 1`;
 - otherwise returns the active branch name.
 
-`ensureMasterDefaultBranch(ctx, db)` (`store.go:2548-2562`): consults `masterRenameSource`; on error or empty answer returns immediately; otherwise runs
+`ensureMasterDefaultBranch(ctx, db)` (`store.go:2553-2567`): consults `masterRenameSource`; on error or empty answer returns immediately; otherwise runs
 ```sql
 CALL DOLT_BRANCH('-m', '<activeBranch with ' doubled>', 'master')
 ```
-built by `fmt.Sprintf` with `strings.ReplaceAll(activeBranch, "'", "''")` (`store.go:2554-2557`); failure → `fmt.Errorf("rename dolt default branch to master: %w", err)`.
+built by `fmt.Sprintf` with `strings.ReplaceAll(activeBranch, "'", "''")` (`store.go:2559-2562`); failure → `fmt.Errorf("rename dolt default branch to master: %w", err)`.
 
-Called on every write open (`store.go:152`) and by the bootstrap (`store.go:2540`).
+Called on every write open (`store.go:152`) and by the bootstrap (`store.go:2545`).
 
 ---
 
@@ -935,18 +935,18 @@ Called on every write open (`store.go:152`) and by the bootstrap (`store.go:2540
 | Symbol | Defined at | Called from store.go |
 |---|---|---|
 | `acquireWorkspaceShared` | `workspace_lock.go:81` | `store.go:107`, `:176`, `:280` |
-| `ErrWorkspaceBusy` | `workspace_lock.go:53` | `store.go:2694` |
+| `ErrWorkspaceBusy` | `workspace_lock.go:53` | `store.go:2699` |
 | `requireNoPendingAdopt` | `adopt.go:124` | `store.go:134`, `:202`, `:292` |
 | `withCommitLock` / `withMutation` / `commitWorkingSet` / `isManifestReadOnlyError` | `commit_lock.go:322` / `:122` / `:268` / `:483` | `store.go:151`, `:212`; `:457`, `:509`, `:1115`, `:1153`, `:1172`; `:224` |
 | `commitLockPathForDolt` | `commit_lock.go:394` | `store.go:396` |
 | `s.migrate` | `migration_runner.go:275` | `store.go:155`, `:212` |
-| `snapshotGuard` | `migrate_snapshot.go:109` | `store.go:1702`, `:1719` |
+| `snapshotGuard` | `migrate_snapshot.go:109` | `store.go:1707`, `:1724` |
 | `newIssueID` | `issue_ids.go:14` | `store.go:522` |
 | `canonicalizeLabels` / `replaceLabelsTx` | `labels.go:112` / `:95` | `store.go:482`, `:640`, `:995`; `:552`, `:1052` |
 | `insertRelationTx` / `bucketRelations` / `relatedFrom` / `siblingsOf` | `relations.go:372` / `:22` / `:64` / `:88` | `store.go:548`; `:809`; `:832`; `:899` |
 | `smoothRanksIfNeededTx` | `ranking.go:407` | `store.go:564` |
 | `deleteCommentTx` | `row_deletes.go:93` | `store.go:1189` |
-| `rank.Initial/After/Before` | `internal/rank` | `store.go:2065`, `:2067`, `:2081` |
+| `rank.Initial/After/Before` | `internal/rank` | `store.go:2070`, `:2072`, `:2086` |
 
 ---
 
@@ -1240,7 +1240,7 @@ reconcile copy: `internal/store/schema_reconcile.go:173-176` (the **first**
 step in reconcile's list).
 
 - PRIMARY KEY `(meta_key)`; no indexes, no FKs, no CHECKs.
-- Written through `INSERT ... ON DUPLICATE KEY UPDATE meta_value = VALUES(meta_value)` (`internal/store/store.go:1697-1698`); read at `internal/store/store.go:1671-1673`, absent key yields `""` not an error (`internal/store/store.go:1678-1680`).
+- Written through `INSERT ... ON DUPLICATE KEY UPDATE meta_value = VALUES(meta_value)` (`internal/store/store.go:1702-1703`); read at `internal/store/store.go:1676-1678`, absent key yields `""` not an error (`internal/store/store.go:1683-1685`).
 - Keys observed in production code:
   - `workspace_id` — written by reconcile via `ensureMetaValue` (`internal/store/schema_reconcile.go:410`).
   - `producer_binary_version` — const at `internal/store/migration_runner.go:29`, written at `internal/store/migration_runner.go:1334`; nothing in the tree reads it.
@@ -1419,7 +1419,7 @@ Note the FK-correct ordering: `issues` precedes `relations`/`comments`/`labels`/
 27. `ensureIssueTopics` (`internal/store/schema_reconcile.go:395-399`, implementation `:987-997`) — §5.7.
 28. `ensureIssueRanks` (`internal/store/schema_reconcile.go:400-404`, implementation `:999-1076`) — §5.8.
 29. `resetPrioritiesToNormal` (`internal/store/schema_reconcile.go:405-409`, implementation `:1088-1111`) — §5.9.
-30. `ensureMetaValue(ctx, guard, "workspace_id", s.workspaceID)` (`internal/store/schema_reconcile.go:410-414`; helper at `internal/store/store.go:1702-1717`).
+30. `ensureMetaValue(ctx, guard, "workspace_id", s.workspaceID)` (`internal/store/schema_reconcile.go:410-414`; helper at `internal/store/store.go:1707-1722`).
 
 Any step returning an error aborts immediately, returning the `changed` value
 accumulated so far (`internal/store/schema_reconcile.go:240-242` and each
@@ -2480,7 +2480,7 @@ Scope: `internal/store/issue_ids.go`, `internal/store/labels.go`, `internal/stor
 - `labels` table: `issue_id VARCHAR(191) NOT NULL`, `label VARCHAR(191) NOT NULL`, `created_at VARCHAR(64) NOT NULL`, `created_by TEXT NOT NULL`, `PRIMARY KEY (issue_id, label)`, `FOREIGN KEY (issue_id) REFERENCES issues(id) ON DELETE CASCADE` — `internal/store/migrations/00001_baseline.sql:96-103`.
 - Indexes: `CREATE INDEX idx_issues_rank ON issues(item_rank(191));` (`:133`), `CREATE INDEX idx_relations_src_type ON relations(src_id, type);` (`:136`), `CREATE INDEX idx_relations_dst_type ON relations(dst_id, type);` (`:139`), `CREATE INDEX idx_labels_issue ON labels(issue_id, label);` (`:145`), `CREATE INDEX idx_labels_name ON labels(label, issue_id);` (`:148`).
 - Down section drops `labels` (`:162`) and `relations` (`:168`).
-- All timestamps written by these subsystems use `time.RFC3339Nano` and are read back through `scanTime` = `time.Parse(time.RFC3339Nano, value)` — `internal/store/store.go:2215-2220`.
+- All timestamps written by these subsystems use `time.RFC3339Nano` and are read back through `scanTime` = `time.Parse(time.RFC3339Nano, value)` — `internal/store/store.go:2220-2225`.
 
 ---
 
@@ -2578,7 +2578,7 @@ Determinism: same inputs + same nonce → same ID; different nonce → different
 
 ### 2.7 Parsing / validation of an existing ID
 
-There is no ID parser or validator in this slice: lookups bind the id verbatim (e.g. `requireIssueExistsTx` runs `SELECT 1 FROM issues WHERE id = ?` — `internal/store/store.go:1603-1613`), and `ListIssues`' `IDs` filter only applies `strings.TrimSpace` and drops empties before `i.id IN (...)` — `internal/store/store.go:648-660`. No case normalization is applied to a supplied ID anywhere in these files.
+There is no ID parser or validator in this slice: lookups bind the id verbatim (e.g. `requireIssueExistsTx` runs `SELECT 1 FROM issues WHERE id = ?` — `internal/store/store.go:1608-1618`), and `ListIssues`' `IDs` filter only applies `strings.TrimSpace` and drops empties before `i.id IN (...)` — `internal/store/store.go:648-660`. No case normalization is applied to a supplied ID anywhere in these files.
 
 ---
 
@@ -2637,8 +2637,8 @@ Error-vs-not-found distinction: `execDelete` wraps a delete failure as `fmt.Erro
 ### 3.5 ListLabels and other read paths
 
 - `Store.ListLabels` — `internal/store/labels.go:78-93`: `SELECT label FROM labels WHERE issue_id = ? ORDER BY label ASC`; query error → `fmt.Errorf("list labels: %w", err)` (`:81`); scan errors returned bare; returns `nil` slice when there are no rows (the slice is never pre-allocated, `:84`).
-- `loadLabelsByIssueIDs` — `internal/store/store.go:2366-2387`: `SELECT issue_id, label FROM labels WHERE issue_id IN (?, ?, …) ORDER BY label ASC`; error → `fmt.Errorf("load labels by issue ids: %w", err)`.
-- `listAllLabels` — `internal/store/store.go:1782-1790`: `SELECT issue_id, label, created_at, created_by FROM labels ORDER BY issue_id ASC, label ASC`; error → `fmt.Errorf("list all labels: %w", err)`.
+- `loadLabelsByIssueIDs` — `internal/store/store.go:2371-2392`: `SELECT issue_id, label FROM labels WHERE issue_id IN (?, ?, …) ORDER BY label ASC`; error → `fmt.Errorf("load labels by issue ids: %w", err)`.
+- `listAllLabels` — `internal/store/store.go:1787-1795`: `SELECT issue_id, label, created_at, created_by FROM labels ORDER BY issue_id ASC, label ASC`; error → `fmt.Errorf("list all labels: %w", err)`.
 - List filtering by label — `internal/store/store.go:639-648`: `filter.LabelsAll` is run through `canonicalizeLabels` and each label adds a conjunct `EXISTS (SELECT 1 FROM labels l WHERE l.issue_id = i.id AND l.label = ?)` (AND semantics, one clause per label).
 - Import/restore insert: `INSERT INTO labels(issue_id, label, created_at, created_by) VALUES (?, ?, ?, ?)` with error `fmt.Errorf("restore label %s:%s: %w", label.IssueID, label.Name, err)` — `internal/store/import_export.go:308-314`.
 - Orphan check: `SELECT COUNT(*) FROM labels l LEFT JOIN issues i ON i.id = l.issue_id WHERE i.id IS NULL` — `internal/store/import_export.go:60`.
@@ -2679,7 +2679,7 @@ Bucketing convention, `bucketRelations(focalID, relations, issuesByID)` — `int
 - `RelParentChild` with `rel.SrcID == focalID` → `Parent = &<dst issue>` (`:42-47`); with `rel.DstID == focalID` → append to `Children` (`:48-52`).
 - Counterparts absent from `issuesByID` are silently skipped (every `if …, ok :=` guard).
 - `Children`, `DependsOn`, `Blocks` are initialized to empty (non-nil) slices; `Parent` stays nil (`:23-27`).
-- All three slices are sorted by `sortIssuesByRank` (`:55-57`), which is a stable sort on `Rank` ascending with `ID` ascending as tiebreak — `internal/store/store.go:1771-1779`.
+- All three slices are sorted by `sortIssuesByRank` (`:55-57`), which is a stable sort on `Rank` ascending with `ID` ascending as tiebreak — `internal/store/store.go:1776-1784`.
 - `related-to` is not bucketed here at all.
 
 `relatedFrom(focalID, relations, issuesByID)` — `internal/store/relations.go:64-80`: keeps only `RelRelatedTo` rows; the counterpart is `rel.SrcID`, or `rel.DstID` when `rel.SrcID == focalID` (`:69-72`); result sorted by rank (`:78`); returns an empty non-nil slice (`:65`).
@@ -2693,14 +2693,14 @@ Bucketing convention, `bucketRelations(focalID, relations, issuesByID)` — `int
 2. `srcID, dstID := in.Type.CanonicalEndpoints(in.SrcID, in.DstID)` — related-to endpoints get sorted (`:299`).
 3. `now := time.Now().UTC()`; the returned `model.Relation` is built with the canonical endpoints, the type, `now`, and `strings.TrimSpace(in.CreatedBy)`; empty createdBy → `"unknown"` (`:300-304`).
 4. Inside `s.withMutation(ctx, "add relation", ...)`:
-   - `requireIssueExistsTx(ctx, tx, in.SrcID)` then `requireIssueExistsTx(ctx, tx, in.DstID)` — note these use the **input** ids, not the canonicalized ones (`:309-314`). `requireIssueExistsTx` runs `SELECT 1 FROM issues WHERE id = ?` and maps `sql.ErrNoRows` to `storage.NotFoundError{Entity: "issue", ID: issueID}`, other errors to `fmt.Errorf("check issue exists: %w", err)` — `internal/store/store.go:1603-1613`. It deliberately does not filter on `deleted_at`, so archived/soft-deleted rows count as existing (`internal/store/store.go:1596-1602` comment).
+   - `requireIssueExistsTx(ctx, tx, in.SrcID)` then `requireIssueExistsTx(ctx, tx, in.DstID)` — note these use the **input** ids, not the canonicalized ones (`:309-314`). `requireIssueExistsTx` runs `SELECT 1 FROM issues WHERE id = ?` and maps `sql.ErrNoRows` to `storage.NotFoundError{Entity: "issue", ID: issueID}`, other errors to `fmt.Errorf("check issue exists: %w", err)` — `internal/store/store.go:1608-1618`. It deliberately does not filter on `deleted_at`, so archived/soft-deleted rows count as existing (`internal/store/store.go:1601-1607` comment).
    - If type is `blocks`: `rejectBlocksCycle(ctx, tx, rel.SrcID, rel.DstID)` (`:322-326`).
    - If `rel.Type.SingleValuedFromSrc()` (parent-child only): `setSingleValuedEdgeTx` (`:333-335`); otherwise `insertRelationTx` (`:336`).
 5. Returns the constructed `model.Relation` (with canonical endpoints and the pre-tx timestamp) on success (`:340`).
 
 Duplicate handling: a repeat of the same `(src,dst,type)` for `blocks`/`related-to` goes through the raw INSERT and hits the primary key, surfacing as `fmt.Errorf("insert relation %s->%s (%s): %w", ...)` from `insertRelationTx` (`internal/store/relations.go:372-377`). There is no upsert.
 
-Endpoint-vanished behavior is pinned by `TestRelationEndpointVanishedRejected` — `internal/store/store_test.go:2588-2632`.
+Endpoint-vanished behavior is pinned by `TestRelationEndpointVanishedRejected` — `internal/store/store_test.go:2632-2676`.
 
 ### 4.4 The write statements
 
@@ -2742,7 +2742,7 @@ Tests: `TestAddRelationRejectsBlocksCycle` (A→B then B→A rejected) — `inte
 - `affected == 0` → `storage.NotFoundError{Entity: "relation", ID: fmt.Sprintf("src=%s dst=%s type=%s", srcID, dstID, relType)}` (`:402-404`), rendering as `relation "src=… dst=… type=…" not found`.
 - No existence check on the endpoints; no `GetIssue` precheck.
 
-`TestRemovePerChildBlockAfterRankReorder` — `internal/store/store_test.go:2758-2820` — removes per-child and epic-level blocks edges after a `RankAbove`, asserting store orientation `src=dependent, dst=dependency` holds after reordering.
+`TestRemovePerChildBlockAfterRankReorder` — `internal/store/store_test.go:2802-2864` — removes per-child and epic-level blocks edges after a `RankAbove`, asserting store orientation `src=dependent, dst=dependency` holds after reordering.
 
 ### 4.7 ClearParent
 
@@ -2775,7 +2775,7 @@ Tests: `TestAddRelationRejectsBlocksCycle` (A→B then B→A rejected) — `inte
 - `s.listRelations(ctx, issueID)`; with no `types` the full incident set is returned (`:417-423`).
 - Otherwise filters in Go against a set of wanted types (`:424-433`); order is preserved from the SQL.
 
-`Store.listRelations` — `internal/store/store.go:1647-1668`:
+`Store.listRelations` — `internal/store/store.go:1652-1673`:
 ```sql
 SELECT src_id, dst_id, type, created_at, created_by FROM relations WHERE src_id = ? OR dst_id = ? ORDER BY created_at ASC
 ```
@@ -2866,17 +2866,17 @@ Children are read through `Store.ListIssues` with `filter.ParentIDs` set (§5.7)
 
 ### 5.4 Rank at creation
 
-`nextRankForPlacement(ctx, tx, p, f)` — `internal/store/store.go:2088-2096`: `edgeFor(p)` → `topEdge` for `storage.RankTop`, `bottomEdge` for `storage.RankBottom`, `fmt.Errorf("unknown rank placement: %d", p)` otherwise; then `rankBetweenTx` between the bounds `edge.filingBoundsTx(ctx, tx, f)` reads — the end's filing rank paired with the nearest rank the whole workspace holds on its far side, or, when that filing rank is empty, the pair `firstInFrameBoundsTx` reads just past the rank of the issue the frame names, or past the workspace's last rank when the frame names no ranked issue — `("", "")` only when nothing in the workspace is ranked (`internal/store/ranking.go:222-231`, `:173-210`).
+`nextRankForPlacement(ctx, tx, p, f)` — `internal/store/store.go:2093-2101`: `edgeFor(p)` → `topEdge` for `storage.RankTop`, `bottomEdge` for `storage.RankBottom`, `fmt.Errorf("unknown rank placement: %d", p)` otherwise; then `rankBetweenTx` between the bounds `edge.filingBoundsTx(ctx, tx, f)` reads — the end's filing rank paired with the nearest rank the whole workspace holds on its far side, or, when that filing rank is empty, the pair `firstInFrameBoundsTx` reads just past the rank of the issue the frame names, or past the workspace's last rank when the frame names no ranked issue — `("", "")` only when nothing in the workspace is ranked (`internal/store/ranking.go:222-231`, `:173-210`).
 
 `storage.RankPlacement` is an `int` with `RankBottom = iota` (0, the zero value and default) and `RankTop` (1) — `internal/storage/issues.go:28-33`.
 
-`nextRankAtBottom` — `internal/store/store.go:2058-2068`:
+`nextRankAtBottom` — `internal/store/store.go:2063-2073`:
 ```sql
 SELECT item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' ORDER BY item_rank DESC LIMIT 1
 ```
 non-`ErrNoRows` error → `fmt.Errorf("query last rank: %w", err)`; no row or empty → `rank.Initial()` ("V"); otherwise `rank.After(lastRank)`.
 
-`nextRankAtTop` — `internal/store/store.go:2070-2081`: same query with `ORDER BY item_rank ASC`; error → `fmt.Errorf("query first rank: %w", err)`; no row → `rank.Initial()`; else `rank.Before(firstRank)`.
+`nextRankAtTop` — `internal/store/store.go:2075-2086`: same query with `ORDER BY item_rank ASC`; error → `fmt.Errorf("query first rank: %w", err)`; no row → `rank.Initial()`; else `rank.Before(firstRank)`.
 
 Called inside `CreateIssue`'s mutation right after ID minting — `internal/store/store.go:538`. The keyspace stays one flat space of rank strings across all issues; what is scoped to a frame is the existing key a new key lands beside — the filing frame's leading key at the top edge, the whole workspace's last key at the bottom. The key bounding that one on its far side is read from the whole workspace at both ends.
 
@@ -2985,7 +2985,7 @@ Frame behavior pinned by tests — `internal/store/ranking_frame_test.go`:
 - Atomic: all assignments in one mutation (`:97-102`).
 - Note: `RankSet` returns `resolutions` alongside the mutation error, so resolutions are non-nil even when the write fails (`:115`).
 
-Tests: absolute top ordering — `internal/store/store_test.go:2700-2730`; duplicates rejected with an error containing `"duplicate"` — `:2732-2743`; single id rejected with `"at least 2"` — `:2745-2756`; mixed-frame resolves child→epic with children unmoved — `internal/store/ranking_frame_test.go:160-188`; two epics' children resolve to their epics — `:190-215`; same-epic siblings resolve to themselves and only they move — `:217-243`; duplicate representatives rejected with `"both resolve to"` and **no** rank changed — `:245-263`; naming an epic with its own child rejected with `"inside"` in both orders — `:265-277`.
+Tests: absolute top ordering — `internal/store/store_test.go:2744-2774`; duplicates rejected with an error containing `"duplicate"` — `:2776-2787`; single id rejected with `"at least 2"` — `:2789-2800`; mixed-frame resolves child→epic with children unmoved — `internal/store/ranking_frame_test.go:160-188`; two epics' children resolve to their epics — `:190-215`; same-epic siblings resolve to themselves and only they move — `:217-243`; duplicate representatives rejected with `"both resolve to"` and **no** rank changed — `:245-263`; naming an epic with its own child rejected with `"inside"` in both orders — `:265-277`.
 
 ### 5.7 Smoothing (rebalancing)
 
@@ -3111,7 +3111,7 @@ Test-pinned behavior in `internal/store/rank_repair_test.go`, against the pure r
 
 - Every mutation in labels.go, relations.go and ranking.go runs through `s.withMutation(ctx, <label>, fn)` with labels: `"add label"`, `"remove label"`, `"replace labels"` (`internal/store/labels.go:27`, `:49`, `:73`), `"add relation"`, `"remove relation"`, `"set parent"`, `"clear parent"` (`internal/store/relations.go:305`, `:394`, `:454`, `:478`), `"rank to top"`, `"rank set"`, `"rank to bottom"`, `"rank above"`, `"rank below"`, `"fix rank inversions"` (`internal/store/ranking.go:22`, `:115`, `:166`, `:345`, `:375`, `:735`).
 - Author attribution defaults to the literal `"unknown"` in `AddLabel` (`internal/store/labels.go:25`), `replaceLabelsTx` (`internal/store/labels.go:101`), `AddRelation` (`internal/store/relations.go:303`) and `SetParent` (`internal/store/relations.go:452`). `CreateIssue` uses `createdBy := "links"` for both the parent edge and the initial labels (`internal/store/store.go:490`, `:544`, `:553`).
-- Every rank query filters `deleted_at IS NULL`, but they split on `item_rank != ''`: the `RankToTop`, `RankSet` and `RankToBottom` end queries and the creation placement queries include it (`internal/store/ranking.go:24`, `:124`, `:168`; `internal/store/store.go:2026`, `:2040`); the `RankAbove`/`RankBelow` neighbor queries, the smoothing window, run and bound queries, and `loadRankOrder` do not (`internal/store/ranking.go:347`, `:377`, `:419`, `:427`, `:447`, `:453`, `:461`, `:467`, `:692`).
+- Every rank query filters `deleted_at IS NULL`, but they split on `item_rank != ''`: the `RankToTop`, `RankSet` and `RankToBottom` end queries and the creation placement queries include it (`internal/store/ranking.go:24`, `:124`, `:168`; `internal/store/store.go:2031`, `:2045`); the `RankAbove`/`RankBelow` neighbor queries, the smoothing window, run and bound queries, and `loadRankOrder` do not (`internal/store/ranking.go:347`, `:377`, `:419`, `:427`, `:447`, `:453`, `:461`, `:467`, `:692`).
 
 
 ---
@@ -3130,11 +3130,11 @@ Slice: `internal/store/import_export.go`, `import_bulk.go`, `import_tree.go`, `e
 
 It performs five reads and assembles one value (`import_export.go:16-39`):
 
-1. `s.ListIssues(ctx, storage.ListIssuesFilter{Limit: 0, IncludeArchived: true, IncludeDeleted: true})` (`import_export.go:16`). Limit 0 disables the cap (`capLimit` returns the slice unchanged when `limit <= 0`, `internal/store/store.go:767-772`). `IncludeArchived`/`IncludeDeleted` true means neither `i.archived_at IS NULL` nor `i.deleted_at IS NULL` is added to the WHERE clause (`store.go:575-580`), so **archived and soft-deleted issues are exported**. No other filter is set, so the SQL has no WHERE clause at all. Ordering: with no `SortBy` specs, `buildIssueOrderClause` returns `"i.item_rank ASC, i.id ASC"` (`store.go:1737-1740`), so **issues are ordered by rank ascending, ties broken by id ascending**.
-2. `s.listAllRelations(ctx)` (`import_export.go:20`) — `SELECT src_id, dst_id, type, created_at, created_by FROM relations ORDER BY created_at ASC` (`store.go:1880`). Ordered by created_at ascending only (no tiebreak).
-3. `s.listAllComments(ctx)` (`import_export.go:24`) — `SELECT id, issue_id, body, created_at, created_by FROM comments ORDER BY created_at ASC` (`store.go:1903`).
-4. `s.listAllLabels(ctx)` (`import_export.go:28`) — `SELECT issue_id, label, created_at, created_by FROM labels ORDER BY issue_id ASC, label ASC` (`store.go:1783`).
-5. `s.ListAllEvents(ctx)` (`import_export.go:32`) — `queryEvents(ctx, "")`, i.e. `SELECT e.id, e.issue_id, e.action, e.reason, e.actor, e.created_at, e.stream_id, e.workspace_id, c.field, c.from_value, c.to_value FROM issue_events e LEFT JOIN issue_event_changes c ON c.event_id = e.id ORDER BY e.created_at ASC, e.id ASC, c.field ASC` (`store.go:1946-1961`). The per-change rows are collapsed back into `IssueEvent.Changes`, so **an event's changes are ordered by field name ascending** and events by (created_at, id).
+1. `s.ListIssues(ctx, storage.ListIssuesFilter{Limit: 0, IncludeArchived: true, IncludeDeleted: true})` (`import_export.go:16`). Limit 0 disables the cap (`capLimit` returns the slice unchanged when `limit <= 0`, `internal/store/store.go:767-772`). `IncludeArchived`/`IncludeDeleted` true means neither `i.archived_at IS NULL` nor `i.deleted_at IS NULL` is added to the WHERE clause (`store.go:575-580`), so **archived and soft-deleted issues are exported**. No other filter is set, so the SQL has no WHERE clause at all. Ordering: with no `SortBy` specs, `buildIssueOrderClause` returns `"i.item_rank ASC, i.id ASC"` (`store.go:1742-1745`), so **issues are ordered by rank ascending, ties broken by id ascending**.
+2. `s.listAllRelations(ctx)` (`import_export.go:20`) — `SELECT src_id, dst_id, type, created_at, created_by FROM relations ORDER BY created_at ASC` (`store.go:1885`). Ordered by created_at ascending only (no tiebreak).
+3. `s.listAllComments(ctx)` (`import_export.go:24`) — `SELECT id, issue_id, body, created_at, created_by FROM comments ORDER BY created_at ASC` (`store.go:1908`).
+4. `s.listAllLabels(ctx)` (`import_export.go:28`) — `SELECT issue_id, label, created_at, created_by FROM labels ORDER BY issue_id ASC, label ASC` (`store.go:1788`).
+5. `s.ListAllEvents(ctx)` (`import_export.go:32`) — `queryEvents(ctx, "")`, i.e. `SELECT e.id, e.issue_id, e.action, e.reason, e.actor, e.created_at, e.stream_id, e.workspace_id, c.field, c.from_value, c.to_value FROM issue_events e LEFT JOIN issue_event_changes c ON c.event_id = e.id ORDER BY e.created_at ASC, e.id ASC, c.field ASC` (`store.go:1951-1966`). The per-change rows are collapsed back into `IssueEvent.Changes`, so **an event's changes are ordered by field name ascending** and events by (created_at, id).
 
 Any read error is returned with a zero `model.Export{}` (`import_export.go:17-35`).
 
@@ -3155,7 +3155,7 @@ Export does **not** re-check hydration; the comment at `import_export.go:36-38` 
 
 ### 1.2 The `model.Export` JSON envelope
 
-`internal/model/model.go:755-764`:
+`internal/model/model.go:770-779`:
 
 ```go
 type Export struct {
@@ -3170,11 +3170,11 @@ type Export struct {
 }
 ```
 
-No `omitempty` anywhere on the envelope — all eight keys are always emitted, in this order. Slices from `Store.Export` are never nil (each list helper initializes `out := []model.X{}`, e.g. `store.go:1787`, `1885`, `1908`; `hydrateIssues` returns `[]model.Issue{}` for zero rows, `store.go:2253-2255`), so empty tables serialize as `[]`, not `null`.
+No `omitempty` anywhere on the envelope — all eight keys are always emitted, in this order. Slices from `Store.Export` are never nil (each list helper initializes `out := []model.X{}`, e.g. `store.go:1792`, `1885`, `1908`; `hydrateIssues` returns `[]model.Issue{}` for zero rows, `store.go:2258-2260`), so empty tables serialize as `[]`, not `null`.
 
 ### 1.3 The serialized issue object
 
-`Issue` has a custom `MarshalJSON` (`model.go:488-533`) that emits the **wire struct `issueJSON`** (`model.go:438-459`), not the in-memory `Issue` (`model.go:80-111`). The wire struct, in emission order:
+`Issue` has a custom `MarshalJSON` (`model.go:503-548`) that emits the **wire struct `issueJSON`** (`model.go:453-474`), not the in-memory `Issue` (`model.go:80-111`). The wire struct, in emission order:
 
 ```go
 type issueJSON struct {
@@ -3200,12 +3200,12 @@ type issueJSON struct {
 }
 ```
 
-Marshal rules (`model.go:488-533`):
+Marshal rules (`model.go:503-548`):
 
-- If `i.pendingHydration` → error `"issue %s requires store hydration"` (`model.go:489-491`).
-- If `i.lifecycle == nil` → error `"issue %s has no hydrated lifecycle"` (`model.go:492-496`).
-- `status`, `closed_at`, `resolution`, `redirect_target` are populated **only when the lifecycle exposes a Status capability** (`model.go:503-510`). Containers (`epic`) expose none, so an epic's JSON object has **no `status`, no `closed_at`, no `resolution`, no `redirect_target` keys at all**.
-- `archived_at`/`deleted_at` come from `lifecycle.RetentionTimestamps(i.Retention())` (`model.go:511`); both omitted when nil (a Live issue).
+- If `i.pendingHydration` → error `"issue %s requires store hydration"` (`model.go:504-506`).
+- If `i.lifecycle == nil` → error `"issue %s has no hydrated lifecycle"` (`model.go:507-511`).
+- `status`, `closed_at`, `resolution`, `redirect_target` are populated **only when the lifecycle exposes a Status capability** (`model.go:518-525`). Containers (`epic`) expose none, so an epic's JSON object has **no `status`, no `closed_at`, no `resolution`, no `redirect_target` keys at all**.
+- `archived_at`/`deleted_at` come from `lifecycle.RetentionTimestamps(i.Retention())` (`model.go:526`); both omitted when nil (a Live issue).
 - `Labels` has no `omitempty`, so `"labels": null` appears when the slice is nil, `[]` when empty-non-nil.
 - `Priority` is `type Priority int` (`internal/model/priority.go:16`) with constants `PriorityNormal = 0`, `PriorityUrgent = 1` (`priority.go:18-21`) — serializes as a bare **integer**.
 - `IssueType` is `type IssueType string` (`internal/model/issue_type.go:15`) with values `"task"`, `"feature"`, `"bug"`, `"chore"`, `"epic"` (`issue_type.go:17-23`) — serializes as a **string**.
@@ -3213,7 +3213,7 @@ Marshal rules (`model.go:488-533`):
 - `Resolution` = `lifecycle.Resolution`, a string (`model.go:18`; `internal/model/lifecycle/resolution.go:20-26`), values `"duplicate"`, `"superseded"`, `"obsolete"`, `"wontfix"`.
 - `time.Time` fields serialize as Go's RFC3339 with nanoseconds (encoding/json default).
 
-`model.IssueWireFields()` (`model.go:468-486`) derives the wire key list by reflecting over `issueJSON`, skipping `json:"-"` and falling back to the Go field name for an empty tag.
+`model.IssueWireFields()` (`model.go:483-501`) derives the wire key list by reflecting over `issueJSON`, skipping `json:"-"` and falling back to the Go field name for an empty tag.
 
 Fully worked leaf issue:
 
@@ -3241,7 +3241,7 @@ Fully worked leaf issue:
 }
 ```
 
-(In practice `archived_at` and `deleted_at` are mutually exclusive — `retentionColumns`/`RetentionTimestamps` cannot express both, `internal/store/store.go:2401-2405` — and `deleted_at` is omitted entirely rather than `null` when absent.)
+(In practice `archived_at` and `deleted_at` are mutually exclusive — `retentionColumns`/`RetentionTimestamps` cannot express both, `internal/store/store.go:2406-2410` — and `deleted_at` is omitted entirely rather than `null` when absent.)
 
 Minimal epic (no status axis, Live, no prompt/assignee):
 
@@ -3263,7 +3263,7 @@ Minimal epic (no status axis, Live, no prompt/assignee):
 
 ### 1.4 The other four record shapes
 
-`model.Relation` (`model.go:579-585`) — no omitempty on any field:
+`model.Relation` (`model.go:594-600`) — no omitempty on any field:
 
 ```go
 SrcID     string       `json:"src_id"`
@@ -3277,19 +3277,19 @@ CreatedBy string       `json:"created_by"`
 {"src_id":"links-a-1","dst_id":"links-b-2","type":"blocks","created_at":"2026-08-27T10:00:00Z","created_by":"links"}
 ```
 
-`model.Comment` (`model.go:587-593`):
+`model.Comment` (`model.go:602-608`):
 
 ```json
 {"id":"cmt-...","issue_id":"links-a-1","body":"text","created_at":"2026-08-27T10:00:00Z","created_by":"tester"}
 ```
 
-`model.Label` (`model.go:595-600`) — note the JSON key is `name` while the DB column is `label`:
+`model.Label` (`model.go:610-615`) — note the JSON key is `name` while the DB column is `label`:
 
 ```json
 {"issue_id":"links-a-1","name":"urgent","created_at":"2026-08-27T10:00:00Z","created_by":"tester"}
 ```
 
-`model.IssueEvent` (`model.go:719-728`):
+`model.IssueEvent` (`model.go:734-743`):
 
 ```go
 ID          string        `json:"id"`
@@ -3302,9 +3302,9 @@ Attribution Attribution   `json:"attribution,omitzero"`
 Changes     []FieldChange `json:"changes"`
 ```
 
-`FieldChange` (`model.go:606-610`): `{"field":..,"from":..,"to":..}`, no omitempty.
+`FieldChange` (`model.go:621-625`): `{"field":..,"from":..,"to":..}`, no omitempty.
 
-`Attribution` (`model.go:629-632`) has unexported fields and a custom marshal via `attributionWire` (`model.go:684-692`): `{"stream":"…","workspace":"…"}` with both `omitempty`. `omitzero` on the event field means an absent pair emits **no `attribution` key at all** (`model.go:669-671` — `IsZero` is what encoding/json consults).
+`Attribution` (`model.go:644-647`) has unexported fields and a custom marshal via `attributionWire` (`model.go:699-707`): `{"stream":"…","workspace":"…"}` with both `omitempty`. `omitzero` on the event field means an absent pair emits **no `attribution` key at all** (`model.go:684-686` — `IsZero` is what encoding/json consults).
 
 ```json
 {
@@ -3321,21 +3321,21 @@ Changes     []FieldChange `json:"changes"`
 
 ### 1.5 Export decode (`Export.UnmarshalJSON`) — v1 compatibility
 
-`model.go:794-857`. Decodes into a private `rawExport` that additionally accepts `"history"` (`model.go:797-807`), then copies version/workspace_id/exported_at/issues/relations/comments/labels/events across (`model.go:812-820`).
+`model.go:809-872`. Decodes into a private `rawExport` that additionally accepts `"history"` (`model.go:812-822`), then copies version/workspace_id/exported_at/issues/relations/comments/labels/events across (`model.go:827-835`).
 
-If `raw.Version < 2 && len(raw.History) > 0` (`model.go:824`), every `v1ExportHistory` row (`model.go:767-775`: `issue_id`, `action`, `from_status`, `to_status`, `reason`, `created_by`, `created_at`) is converted into an `IssueEvent` (`model.go:825-835`) with:
-- `ID` = `v1EventID(...)` = `"evt-v1-" + hex(sha256(issueID|action|fromStatus|toStatus|createdBy|createdAt.RFC3339Nano)[:8])` — 16 hex chars after the prefix (`model.go:780-784`).
+If `raw.Version < 2 && len(raw.History) > 0` (`model.go:839`), every `v1ExportHistory` row (`model.go:782-790`: `issue_id`, `action`, `from_status`, `to_status`, `reason`, `created_by`, `created_at`) is converted into an `IssueEvent` (`model.go:840-850`) with:
+- `ID` = `v1EventID(...)` = `"evt-v1-" + hex(sha256(issueID|action|fromStatus|toStatus|createdBy|createdAt.RFC3339Nano)[:8])` — 16 hex chars after the prefix (`model.go:795-799`).
 - `Actor` = the v1 `created_by`.
-- `Changes` = exactly one `{"field":"status","from":<from_status>,"to":<to_status>}` (`model.go:833`).
+- `Changes` = exactly one `{"field":"status","from":<from_status>,"to":<to_status>}` (`model.go:848`).
 
 These are **appended** to any already-present `events`.
 
-Issue decode (`Issue.UnmarshalJSON`, `model.go:536-577`): fields copied straight through; `retention` from `lifecycle.RetentionFromTimestamps(archived_at, deleted_at)` (`model.go:554`); then a three-way dispatch (`model.go:556-575`):
+Issue decode (`Issue.UnmarshalJSON`, `model.go:551-592`): fields copied straight through; `retention` from `lifecycle.RetentionFromTimestamps(archived_at, deleted_at)` (`model.go:569`); then a three-way dispatch (`model.go:571-590`):
 - container type → `pendingHydration = true`, `lifecycle = nil` (so it cannot be re-marshaled until the store hydrates it),
 - non-container with `status` present → `HydrateStatus` with `closed_at`/`resolution`/`redirect_target`,
-- non-container with **no** `status` → error `"issue %s: cannot hydrate lifecycle from JSON (missing status field on non-epic)"` (`model.go:573`).
+- non-container with **no** `status` → error `"issue %s: cannot hydrate lifecycle from JSON (missing status field on non-epic)"` (`model.go:588`).
 
-Attribution decode collapses a half pair to the zero value via `NewAttribution` (`model.go:711-718`, `model.go:656-661`): stream-without-workspace or workspace-without-stream becomes "unattributed", silently.
+Attribution decode collapses a half pair to the zero value via `NewAttribution` (`model.go:726-733`, `model.go:671-676`): stream-without-workspace or workspace-without-stream becomes "unattributed", silently.
 
 ### 1.6 On-disk layout of exported artifacts
 
@@ -3518,8 +3518,8 @@ Value-by-value (`import_export.go:242-248`):
 | `id` | `issue.ID` | verbatim |
 | `title` | `issue.Title` | verbatim |
 | `description` | `issue.Description` | verbatim |
-| `agent_prompt` | `nullableString(issue.Prompt)` | `""` → SQL NULL (`store.go:2419-2424`) |
-| `status` | `statusForStorage(issue)` | leaf → `sql.NullString{string(status.Value), Valid:true}`; container (no Status capability) → **NULL** (`store.go:2238-2243`) |
+| `agent_prompt` | `nullableString(issue.Prompt)` | `""` → SQL NULL (`store.go:2424-2429`) |
+| `status` | `statusForStorage(issue)` | leaf → `sql.NullString{string(status.Value), Valid:true}`; container (no Status capability) → **NULL** (`store.go:2243-2248`) |
 | `priority` | `model.CanonicalPriority(int(issue.Priority))` | any int ≠ 1 coerces to 0; 1 stays 1 (`priority.go:61-64`). **Never rejects** — legacy out-of-range priorities are coerced so the CHECK constraint cannot fail a restore (`import_export.go:235-240`) |
 | `issue_type` | `issue.IssueType` | verbatim, no parse gate on this path |
 | `topic` | `issueid.NormalizeSlug(issue.Topic)` then `COALESCE(NULLIF(?, ''), 'misc')` | lowercased, non-`[a-z0-9]` runs collapsed to single `-`, trimmed of `-` (`internal/issueid/slug.go:15-29`); an empty result becomes the literal **`misc`** |
@@ -3529,9 +3529,9 @@ Value-by-value (`import_export.go:242-248`):
 | `created_at` | `issue.CreatedAt.Format(time.RFC3339Nano)` | |
 | `updated_at` | `issue.UpdatedAt.Format(time.RFC3339Nano)` | |
 | `closed_at` | RFC3339Nano of `issue.ClosedAtValue()`, else nil | (`import_export.go:226-229`) |
-| `resolution` | `nullableResolution(issue.ResolutionValue())` | nil → NULL, else the string (`store.go:2409-2414`) |
-| `redirect_target` | `nullableStringPtr(issue.RedirectTargetValue())` | nil → NULL (`store.go:2490-2495`) |
-| `archived_at`, `deleted_at` | `retentionColumns(issue)` | projected from the sealed Retention; archived-and-deleted is unrepresentable (`store.go:2401-2405`) |
+| `resolution` | `nullableResolution(issue.ResolutionValue())` | nil → NULL, else the string (`store.go:2414-2419`) |
+| `redirect_target` | `nullableStringPtr(issue.RedirectTargetValue())` | nil → NULL (`store.go:2495-2500`) |
+| `archived_at`, `deleted_at` | `retentionColumns(issue)` | projected from the sealed Retention; archived-and-deleted is unrepresentable (`store.go:2406-2410`) |
 
 `insertIssueTx` error text: `"restore issue %s: %w"` (`import_export.go:253`).
 
@@ -4328,9 +4328,9 @@ All claims cite `file:line` in `/Users/bmf/code/links-issue-tracker`. Derived fr
 | Exclusive lock | `LockWorkspaceExclusive` → `acquireWorkspaceLock(ctx, doltRootDir, true, 1, 0)` — **1 attempt, 0 delay, no retry**; on `ErrWorkspaceBusy` wraps with `"another lit process is using this workspace; close other lit commands and retry: %w"` | `internal/store/workspace_lock.go:118-124` |
 | Shared lock | `acquireWorkspaceShared` → 100 attempts × 50ms (`workspaceSharedRetryAttempts = 100`, `workspaceSharedRetryDelay = 50 * time.Millisecond`, ~5s cap); busy message: `"a lit operation is rebuilding this workspace's Dolt directory (e.g. snapshots restore, an init backlog adopt, or lifeboat recover); retry after it completes: %w"` | `internal/store/workspace_lock.go:55-61`, `:81-89` |
 | Busy sentinel | `var ErrWorkspaceBusy = errors.New("workspace busy")` | `internal/store/workspace_lock.go:53` |
-| `dirExists` | `info, err := os.Stat(path); return err == nil && info.IsDir()` | `internal/store/store.go:2766-2769` |
-| Dolt pool shape | `sql.OpenDB(connector)` with `SetMaxOpenConns(1)`, `SetMaxIdleConns(1)`, `SetConnMaxLifetime(0)` | `internal/store/store.go:2753-2764` |
-| Connector config | `embedded.Config{Directory: filepath.Clean(doltRootDir), CommitName: author, CommitEmail: fmt.Sprintf("%s@links.local", author), Database: database, DisableSingletonCache: true}`; author = trimmed workspaceID, `""`→`"links"`, `@`→`_`; `engineWrite` also sets `cfg.BackOff = newEngineOpenBackOff()` | `internal/store/store.go:2728-2746` |
+| `dirExists` | `info, err := os.Stat(path); return err == nil && info.IsDir()` | `internal/store/store.go:2771-2774` |
+| Dolt pool shape | `sql.OpenDB(connector)` with `SetMaxOpenConns(1)`, `SetMaxIdleConns(1)`, `SetConnMaxLifetime(0)` | `internal/store/store.go:2758-2769` |
+| Connector config | `embedded.Config{Directory: filepath.Clean(doltRootDir), CommitName: author, CommitEmail: fmt.Sprintf("%s@links.local", author), Database: database, DisableSingletonCache: true}`; author = trimmed workspaceID, `""`→`"links"`, `@`→`_`; `engineWrite` also sets `cfg.BackOff = newEngineOpenBackOff()` | `internal/store/store.go:2733-2751` |
 | Procedure call builder | `CALL <PROC>()` when no args, else `CALL <PROC>(?,?,…)`; `callIntProcedure` scans **one int64 status column** | `internal/store/sync.go:823-830`, `:849-856` |
 | Snapshots dir | `filepath.Join(filepath.Dir(filepath.Clean(databaseDir)), "snapshots")` | `internal/store/migrate_snapshot.go:177-180` |
 | Stamped-snapshot shape | `<all-digits>-<label>-<all-digits>` | `internal/store/migrate_snapshot.go:67-81` |
@@ -4478,7 +4478,7 @@ Two best-effort calls, both return values discarded:
 _ = dbfactory.DeleteFromSingletonCache(filepath.ToSlash(filepath.Join(dbDir, ".dolt", "noms")), false)
 _ = dbfactory.DeleteFromSingletonCache(filepath.ToSlash(filepath.Join(dbDir, ".dolt", "stats", ".dolt", "noms")), false)
 ```
-Documented: lit's own opens bypass the cache (`DisableSingletonCache: true`, `store.go:2739`), so any entry found was left by a dolt-internal load path (e.g. during `DOLT_CLONE`); the entry is **dropped, not closed**, because closing the carcass a second time trips dolt's refcount assert on shared archive readers (`adopt.go:372-381`).
+Documented: lit's own opens bypass the cache (`DisableSingletonCache: true`, `store.go:2744`), so any entry found was left by a dolt-internal load path (e.g. during `DOLT_CLONE`); the entry is **dropped, not closed**, because closing the carcass a second time trips dolt's refcount assert on shared archive readers (`adopt.go:372-381`).
 
 ### 1.12 Idempotency / re-run behavior
 

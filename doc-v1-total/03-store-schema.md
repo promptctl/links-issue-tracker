@@ -6,16 +6,16 @@ lit's shared backend stores every workspace in an embedded [Dolt](https://github
 
 ### Open modes
 
-A `Store` wraps exactly one pooled SQL connection (`SetMaxOpenConns(1)` in `openDoltPool`, `store.go:2760`) opened through a vendored embedded-Dolt driver. Two access modes (`store.go:37-42`):
+A `Store` wraps exactly one pooled SQL connection (`SetMaxOpenConns(1)` in `openDoltPool`, `store.go:2765`) opened through a vendored embedded-Dolt driver. Two access modes (`store.go:37-42`):
 
-- **Write** (`Open`, and the sync-side `OpenSync`): the connector gets an exponential backoff (initial 50ms, max interval `engineOpenRetryMaxInterval` = 1s, max elapsed `engineOpenRetryMaxElapsed` = `coResidentHolderWait` = 70s, assigned in `newEngineOpenBackOff`, `store.go:2712-2714`) and pings eagerly so lock contention surfaces at open time.
+- **Write** (`Open`, and the sync-side `OpenSync`): the connector gets an exponential backoff (initial 50ms, max interval `engineOpenRetryMaxInterval` = 1s, max elapsed `engineOpenRetryMaxElapsed` = `coResidentHolderWait` = 70s, assigned in `newEngineOpenBackOff`, `store.go:2717-2719`) and pings eagerly so lock contention surfaces at open time.
 - **Read** (`OpenForRead`): no backoff, no ping — the engine opens lazily at the first SQL statement (`store.go:381-399`). A read open beside a foreign lock holder succeeds via Dolt's read-only fallback (journal wait ~100ms) and serves reads.
 
-If another process holds Dolt's journal lock (`<root>/links/.dolt/noms/LOCK`), the wrapped error satisfies both `ErrWorkspaceBusy` and `nbs.ErrDatabaseLocked` and reads "another process is holding this workspace's Dolt store open … retry after it completes" (`store.go:2692-2697`).
+If another process holds Dolt's journal lock (`<root>/links/.dolt/noms/LOCK`), the wrapped error satisfies both `ErrWorkspaceBusy` and `nbs.ErrDatabaseLocked` and reads "another process is holding this workspace's Dolt store open … retry after it completes" (`store.go:2697-2702`).
 
 ### Open sequence
 
-`Open(ctx, doltRootDir, workspaceID)` (`store.go:98-165`), in order: validate args (both non-blank; the root is `filepath.Clean`ed) → acquire the **shared workspace flock** → refuse if an adopt is pending → bootstrap the database if absent (`CREATE DATABASE IF NOT EXISTS links` through a first pool that closes before the second opens, `store.go:2497-2544`) → open the write connection → under the **commit lock**: normalize the default branch to `master` (renaming a sole non-master branch via `DOLT_BRANCH('-m', …)`, `store.go:2519-2562`) and run migrations. Failure at any point releases everything and returns the error.
+`Open(ctx, doltRootDir, workspaceID)` (`store.go:98-165`), in order: validate args (both non-blank; the root is `filepath.Clean`ed) → acquire the **shared workspace flock** → refuse if an adopt is pending → bootstrap the database if absent (`CREATE DATABASE IF NOT EXISTS links` through a first pool that closes before the second opens, `store.go:2502-2549`) → open the write connection → under the **commit lock**: normalize the default branch to `master` (renaming a sole non-master branch via `DOLT_BRANCH('-m', …)`, `store.go:2524-2567`) and run migrations. Failure at any point releases everything and returns the error.
 
 `OpenForRead` differs in that it stats the directory first — a missing directory yields "repository not initialized with lit — run 'lit init' first" — never bootstraps, and still runs migrations (a pending migration under a read-only holder fails with a "pending schema migrations" message, `store.go:212-231`). Re-opening a current-schema workspace adds **no** Dolt commit; migration is idempotent across opens.
 
@@ -33,7 +33,7 @@ Two `Open`s on one root serialize: the second blocks until the first `Close`. Af
 
 Every mutation routes through `withMutation(ctx, message, fn)` (`commit_lock.go:122-177`): under the commit lock and a transient-retry loop, `BeginTx` → `fn` → `tx.Commit` → `DOLT_COMMIT('-Am', <message>)`. The `-A` stages everything; there is no separate add step and no `--skip-empty` — a "nothing to commit" error is absorbed as success (`commit_lock.go:286-320`). A retry after a successful `tx.Commit` resumes at the DOLT_COMMIT step without re-running `fn` (the `staged` flag, `commit_lock.go:144-155`). A commit stamp may also carry `--allow-empty`, `--date` (RFC3339 UTC), and `--author`; ordinary store mutations pass only the message. A combined transition+field update is exactly one Dolt commit.
 
-**Dolt commit identity** derives entirely from the workspace id: author name = workspace id with `@`→`_` (blank → `links`), email = `<name>@links.local` (`store.go:2729-2737`).
+**Dolt commit identity** derives entirely from the workspace id: author name = workspace id with `@`→`_` (blank → `links`), email = `<name>@links.local` (`store.go:2734-2742`).
 
 Store-level commit messages used verbatim: `record sync state`, `create issue`, `apply update`, `add comment`, `delete comment` (`store.go:457,509,1115,1153,1172`), plus `add label`, `remove label`, `replace labels`, `add relation`, `remove relation`, `set parent`, `clear parent`, `rank to top`, `rank set`, `rank to bottom`, `rank above`, `rank below`, `fix rank inversions` from their subsystems (`labels.go`, `relations.go`, `ranking.go`).
 
@@ -79,7 +79,7 @@ Nine tables. `issues` (`schema_snapshot.sql:51-78`):
 | `resolution` | VARCHAR(32) | NULL | — | v3 |
 | `redirect_target` | VARCHAR(191) | NULL | — | v4 |
 
-Timestamps are **strings** (RFC3339Nano), parsed at one boundary (`scanTime`, `store.go:2215-2217`). Indexes: `idx_issues_rank (item_rank(191))`, `idx_issues_status_priority (status, priority, updated_at)`. Five named CHECK constraints: status is NULL exactly for epics and otherwise in (`open`,`in_progress`,`closed`); priority in [0,1]; type in the five-type set; resolution NULL or in the four-resolution set; `redirect_target` non-NULL only when resolution is `duplicate` or `superseded`. `redirect_target` deliberately has **no** foreign key.
+Timestamps are **strings** (RFC3339Nano), parsed at one boundary (`scanTime`, `store.go:2220-2222`). Indexes: `idx_issues_rank (item_rank(191))`, `idx_issues_status_priority (status, priority, updated_at)`. Five named CHECK constraints: status is NULL exactly for epics and otherwise in (`open`,`in_progress`,`closed`); priority in [0,1]; type in the five-type set; resolution NULL or in the four-resolution set; `redirect_target` non-NULL only when resolution is `duplicate` or `superseded`. `redirect_target` deliberately has **no** foreign key.
 
 The other tables:
 
@@ -120,11 +120,11 @@ There is no ID parser/validator on lookup — supplied IDs bind verbatim, with n
 
 ### Rank placement at create
 
-Default placement is bottom (the `RankPlacement` zero value): rank = `After(max live rank)`, or the initial rank `"V"` in an empty workspace; `RankTop` takes the midpoint between the leading rank of the frame the issue is filed into (the live parent named at create, or the top level) and the nearest rank the whole workspace holds below that leader — `Before(leader)` when the workspace holds no rank below it. A frame holding nothing ranked yet offers no leader to measure against, so the key lands just past the rank of the issue that contains it: the midpoint between the container's own rank and the next rank above it, or `After(container rank)` when nothing sorts above it. With no container to sit beside — the top level, or a container carrying no rank — the key goes past the workspace's last rank, and is `rank.Initial()` only when nothing in the workspace is ranked. Bounds leaving no room between them make the store respace the ranks around the upper bound and read both bounds again (`store.go:2088-2096`; `internal/store/ranking.go:222-231`, `:173-210`, `:930-948`). Consecutive default creates therefore keep authoring order.
+Default placement is bottom (the `RankPlacement` zero value): rank = `After(max live rank)`, or the initial rank `"V"` in an empty workspace; `RankTop` takes the midpoint between the leading rank of the frame the issue is filed into (the live parent named at create, or the top level) and the nearest rank the whole workspace holds below that leader — `Before(leader)` when the workspace holds no rank below it. A frame holding nothing ranked yet offers no leader to measure against, so the key lands just past the rank of the issue that contains it: the midpoint between the container's own rank and the next rank above it, or `After(container rank)` when nothing sorts above it. With no container to sit beside — the top level, or a container carrying no rank — the key goes past the workspace's last rank, and is `rank.Initial()` only when nothing in the workspace is ranked. Bounds leaving no room between them make the store respace the ranks around the upper bound and read both bounds again (`store.go:2093-2101`; `internal/store/ranking.go:222-231`, `:173-210`, `:930-948`). Consecutive default creates therefore keep authoring order.
 
 ## Reads
 
-All issue reads share one 18-column projection (`store.go:2091-2117`) and one hydration path. `hydrateIssues` uses a **fixed query count per recursion level**, not per issue: one labels query for all ids, one children query for all container ids (`store.go:2245-2304`). The children query's visibility rule: a live parent sees only live children; an archived/deleted parent sees all its children — so an active epic's progress excludes archived children, but the same epic once archived counts them (`store.go:2317-2323`).
+All issue reads share one 18-column projection (`store.go:2096-2122`) and one hydration path. `hydrateIssues` uses a **fixed query count per recursion level**, not per issue: one labels query for all ids, one children query for all container ids (`store.go:2250-2309`). The children query's visibility rule: a live parent sees only live children; an archived/deleted parent sees all its children — so an active epic's progress excludes archived children, but the same epic once archived counts them (`store.go:2322-2328`).
 
 - `GetIssue`: single-row lookup; missing → `storage.NotFoundError`.
 - `getIssuesByIDs`: one `IN` query; missing ids are silently absent from the map.
@@ -139,7 +139,7 @@ Sorting: default `item_rank ASC, id ASC`. Allowed sort fields (case-insensitive)
 
 ### Event reads
 
-One LEFT JOIN query collapses `issue_events` × `issue_event_changes` into events with ordered change lists, sorted `(created_at, id, field)` so re-reads compare identical (`store.go:1942-2012`). `ListAllEvents` applies **no recency cutoff** — claim derivation needs arbitrarily old establishing events — and reads write nothing (Dolt HEAD unchanged).
+One LEFT JOIN query collapses `issue_events` × `issue_event_changes` into events with ordered change lists, sorted `(created_at, id, field)` so re-reads compare identical (`store.go:1947-2017`). `ListAllEvents` applies **no recency cutoff** — claim derivation needs arbitrarily old establishing events — and reads write nothing (Dolt HEAD unchanged).
 
 ## Updates
 
@@ -147,7 +147,7 @@ One LEFT JOIN query collapses `issue_events` × `issue_event_changes` into event
 
 **Status transitions** (`store.go:1274-1412`): the transition is applied in memory (a frozen — archived/deleted — issue refuses with "cannot <action> archived or deleted issue"); only `Start` rewrites the assignee. A same-status, same-assignee result is a **no-op**: no write, no event, no `UpdatedAt` bump. Otherwise a guarded UPDATE (`… WHERE id = ? AND status = ?`) touches only the status-axis columns (`status`, `assignee`, `updated_at`, `closed_at`, `resolution`, `redirect_target`); zero rows affected means a concurrent transition won, surfaced as e.g. `close conflict: issue status is "closed"`. Change rows are recorded per moved field: status, closed_at, resolution, redirect_target, assignee.
 
-**Redirect-target validation** runs in the same transaction as the close (`store.go:1539-1557`): a redirecting resolution requires a target; self-redirect is rejected; the target must exist and not be deleted (archived is fine). A failed validation rolls back the whole close. A concurrent delete of the target between plan and write is still caught.
+**Redirect-target validation** runs in the same transaction as the close (`store.go:1544-1562`): a redirecting resolution requires a target; self-redirect is rejected; the target must exist and not be deleted (archived is fine). A failed validation rolls back the whole close. A concurrent delete of the target between plan and write is still caught.
 
 **Retention transitions** use a null-safe CAS (`… WHERE archived_at <=> ? AND deleted_at <=> ?`) touching only `updated_at` + the retention pair; a lost race surfaces as e.g. `archive conflict: issue retention is "archived"`. There is no retention no-op — the transition table has no same-state success cell.
 
@@ -155,7 +155,7 @@ One LEFT JOIN query collapses `issue_events` × `issue_event_changes` into event
 
 ## Events
 
-`recordEvent` is the single insertion point (`store.go:1808-1846`): id `evt-<uuid>`, trimmed action/reason/actor (blank actor → `unknown`), `created_at` now-UTC, attribution read off the store. Empty action stores SQL NULL; empty from/to values in change rows store NULL. Which mutation emits what:
+`recordEvent` is the single insertion point (`store.go:1813-1851`): id `evt-<uuid>`, trimmed action/reason/actor (blank actor → `unknown`), `created_at` now-UTC, attribution read off the store. Empty action stores SQL NULL; empty from/to values in change rows store NULL. Which mutation emits what:
 
 | Mutation | `action` | change rows |
 |---|---|---|

@@ -50,9 +50,9 @@ Semantics fixed by the memory engine and conformance:
 
 ### Sort fields
 
-`SortFields` is a closed ten-key set: `id`, `title`, `status`, `priority`, `rank`, `type`, `topic`, `assignee`, `created_at`, `updated_at` (`issues.go:131-142`). Conformance requires every one accepted and requires rejection of `description`, `lane`, `labels`, `issue_type`, `item_rank`, `state` (`conformance.go:561-591`).
+`SortFields` is a closed ten-key set: `id`, `title`, `status`, `priority`, `rank`, `type`, `topic`, `assignee`, `created_at`, `updated_at` (`issues.go:131-142`). Conformance requires every one accepted and requires rejection of `description`, `lane`, `labels`, `issue_type`, `item_rank`, `state` (`conformance.go:592-622`).
 
-**Documented, deliberately-pinned fault**: sorting by `status` orders the *stored* status encoding, not derived state. A container stores no status, so it sorts ahead of every leaf ascending and behind every leaf descending, regardless of its derived state — while the status *filter* in the same listing reads derived state. Both engines ship this identically; the source names ticket `links-store-seam-q35v.6` as the correction (`issues.go:121-130`, `conformance.go:593-626`).
+**Documented, deliberately-pinned fault**: sorting by `status` orders the *stored* status encoding, not derived state. A container stores no status, so it sorts ahead of every leaf ascending and behind every leaf descending, regardless of its derived state — while the status *filter* in the same listing reads derived state. Both engines ship this identically; the source names ticket `links-store-seam-q35v.6` as the correction (`issues.go:121-130`, `conformance.go:624-657`).
 
 ### Rank intents
 

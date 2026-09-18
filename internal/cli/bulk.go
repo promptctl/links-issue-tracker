@@ -168,7 +168,7 @@ func bulkCloseLeaf() appLeaf {
 // subcommand it is serving. [LAW:dataflow-not-control-flow]
 func bulkTransitionLeaf(action model.Action) appLeafFn {
 	return func() appLeaf {
-		fs := newCobraFlagSet("bulk " + string(action.Name()))
+		fs := newCobraFlagSet("bulk " + action.Name().Verb())
 		ids := fs.String("ids", "", "Comma-separated issue IDs")
 		reason := fs.String("reason", "", "Lifecycle reason")
 		resolveActor := registerActor(fs)
