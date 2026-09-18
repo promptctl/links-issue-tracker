@@ -302,12 +302,51 @@ func TestACollidingHandleIsRefusedRatherThanOverwritten(t *testing.T) {
 // that no build compiles and lets its literals compete to anchor a chapter.
 func TestContradictoryLegacyLinesExcludeTheFile(t *testing.T) {
 	src := "// +build linux\n// +build !linux\n\npackage cli\n\nvar A = \"contradictory build message\"\n"
-	file, err := parser.ParseFile(token.NewFileSet(), "a.go", src, parser.ParseComments)
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "a.go", src, parser.ParseComments)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if !excludedFromEveryBuild(file) {
+	if !excludedFromEveryBuild(fset, file) {
 		t.Error("a file whose legacy constraints contradict each other counted as product code; nothing compiles it")
+	}
+}
+
+// TestALegacyConstraintNeedsItsBlankLine covers the one placement rule that
+// separates the two spellings. `// +build ignore` sitting directly above the
+// package clause is package documentation to the go tool, not a constraint:
+// the file builds and ships. `//go:build ignore` in the same position is a
+// constraint either way.
+//
+// Measured with `go list -f '{{.GoFiles}}'` rather than read off the
+// documentation, across every placement below. Reading the legacy line as a
+// constraint here drops a file every binary contains out of the corpus, and
+// the messages it carries then report as having stopped shipping — the gate
+// calling true prose false, which is the one failure it must never produce.
+func TestALegacyConstraintNeedsItsBlankLine(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		src      string
+		excluded bool
+	}{
+		{"legacy with a blank line is a constraint", "// +build ignore\n\npackage cli\n", true},
+		{"legacy without one is documentation", "// +build ignore\npackage cli\n", false},
+		{"legacy separated by another comment then a blank", "// +build ignore\n// and a note\n\npackage cli\n", true},
+		{"legacy after another comment, blank before package", "// a note\n// +build ignore\n\npackage cli\n", true},
+		{"legacy blank-separated from a doc comment", "// +build ignore\n\n// Package cli does things.\npackage cli\n", true},
+		{"go:build needs no blank line", "//go:build ignore\npackage cli\n", true},
+		{"go:build with a comment between and no blank", "//go:build ignore\n// and a note\npackage cli\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, "a.go", tc.src, parser.ParseComments)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if got := excludedFromEveryBuild(fset, file); got != tc.excluded {
+				t.Errorf("excludedFromEveryBuild = %v, want %v — the go tool disagrees, so the corpus holds the wrong set of files", got, tc.excluded)
+			}
+		})
 	}
 }
 

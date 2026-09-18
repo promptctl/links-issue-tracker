@@ -121,3 +121,61 @@ func TestAReanchorReportDoesNotDumpAWholeLiteral(t *testing.T) {
 		t.Error("Explain() and the writer's report no longer show the same shortened handle")
 	}
 }
+
+// TestVerifyGivesEachCaseItsOwnRemedy covers the branch that decides what a
+// -check failure tells a contributor to do. Only the generic stale-manifest
+// fallback was exercised, so a swapped case order or an inverted condition
+// would have handed a contributor the wrong instruction with the suite green
+// — and the two instructions are opposites. One says the words still ship and
+// a reader should confirm the rewording; the other says nothing ships them and
+// regenerating destroys the record that the specification went false.
+//
+// Stopped is tested first here for the same reason write() tests it first: it
+// is the case that must win when both are present.
+func TestVerifyGivesEachCaseItsOwnRemedy(t *testing.T) {
+	drift := func(kind docclaims.DriftKind) docclaims.Comparison {
+		return docclaims.Comparison{Drifted: []docclaims.Drift{{
+			Claim:    docclaims.Claim{Doc: "d.md", Text: "a message", Src: "a message"},
+			Kind:     kind,
+			Now:      "a longer literal saying a message",
+			QuotedBy: []string{"d.md"},
+		}}}
+	}
+	for _, tc := range []struct {
+		name string
+		cmp  docclaims.Comparison
+		want string
+	}{
+		{"a stopped message warns against regenerating", drift(docclaims.Stopped), "Regenerating would drop them"},
+		{"a re-anchor asks a reader to confirm", drift(docclaims.AnchorMoved), "the same message reworded"},
+		{"anything else is an ordinary stale manifest", drift(docclaims.QuoteDropped), "manifest is stale"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := verify(tc.cmp)
+			if err == nil {
+				t.Fatal("verify() accepted a manifest that disagrees with the tree")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("verify() = %q, want it to carry %q — this case's remedy is not the one a contributor is handed", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestVerifyPrefersTheDestructiveRemedyWhenBothApply pins the precedence. A
+// comparison carrying both kinds must report the stopped message, because
+// "confirm the rewording and regenerate" applied to a stopped message is the
+// instruction that erases it.
+func TestVerifyPrefersTheDestructiveRemedyWhenBothApply(t *testing.T) {
+	both := docclaims.Comparison{Drifted: []docclaims.Drift{
+		{Claim: docclaims.Claim{Doc: "a.md", Text: "reworded message", Src: "reworded message"}, Kind: docclaims.AnchorMoved, Now: "a longer literal saying reworded message"},
+		{Claim: docclaims.Claim{Doc: "b.md", Text: "gone message", Src: "gone message"}, Kind: docclaims.Stopped, QuotedBy: []string{"b.md"}},
+	}}
+	err := verify(both)
+	if err == nil {
+		t.Fatal("verify() accepted a manifest carrying a stopped message")
+	}
+	if !strings.Contains(err.Error(), "Regenerating would drop them") {
+		t.Errorf("verify() = %q, want the stopped remedy to win; the re-anchor remedy tells a contributor to regenerate, which erases the stopped entry", err)
+	}
+}

@@ -177,7 +177,7 @@ table in the vendored driver.
 
 Vendored is not the disqualifier; unreachable is. `github.com/dolthub/driver` is
 `replace`d onto `internal/vendor/dolthub-driver` and imported by `internal/store`,
-so its eighteen documented error messages ship and are gated like any other.
+so its documented error messages ship and are gated like any other.
 
 Embedded text assets count too, resolved from the `//go:embed` directives
 themselves rather than guessed from file extensions. They have to: this

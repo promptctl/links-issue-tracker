@@ -328,7 +328,8 @@ func entryPackages(fsys fs.FS) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		file, err := parser.ParseFile(token.NewFileSet(), name, src, parser.PackageClauseOnly|parser.ParseComments)
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, name, src, parser.PackageClauseOnly|parser.ParseComments)
 		if err != nil {
 			return fmt.Errorf("parsing %s: %w", name, err)
 		}
@@ -338,7 +339,7 @@ func entryPackages(fsys fs.FS) ([]string, error) {
 		// files are all skipped, yield an empty corpus, and report every
 		// documented quotation as drifted prose — with err == nil.
 		// [LAW:single-enforcer]
-		if excludedFromEveryBuild(file) {
+		if excludedFromEveryBuild(fset, file) {
 			return nil
 		}
 		if dir := path.Dir(name); file.Name.Name == "main" && !slices.Contains(out, dir) {
@@ -363,11 +364,12 @@ func entryPackages(fsys fs.FS) ([]string, error) {
 func importsOf(fsys fs.FS, dir string) ([]string, error) {
 	var out []string
 	err := eachProductFile(fsys, dir, func(name string, src []byte) error {
-		file, err := parser.ParseFile(token.NewFileSet(), name, src, parser.ImportsOnly|parser.ParseComments)
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, name, src, parser.ImportsOnly|parser.ParseComments)
 		if err != nil {
 			return fmt.Errorf("parsing %s: %w", name, err)
 		}
-		if excludedFromEveryBuild(file) {
+		if excludedFromEveryBuild(fset, file) {
 			return nil
 		}
 		for _, spec := range file.Imports {
@@ -414,6 +416,39 @@ func eachProductFile(fsys fs.FS, dir string, fn func(name string, src []byte) er
 	return nil
 }
 
+// blankLineBefore reports, for a position in a file's leading comments,
+// whether any blank line separates it from the package clause.
+//
+// Only comments and blank lines can precede a package clause, so a line
+// holding no comment is blank by construction and the question is decidable
+// from the comment positions alone — no second read of the source, and no
+// second opinion about what a blank line is. [LAW:one-source-of-truth]
+func blankLineBefore(fset *token.FileSet, file *ast.File) func(token.Pos) bool {
+	line := func(p token.Pos) int { return fset.Position(p).Line }
+	pkg := line(file.Package)
+	commented := make(map[int]bool)
+	for _, group := range file.Comments {
+		for _, c := range group.List {
+			if c.Pos() > file.Package {
+				continue
+			}
+			// A /* */ comment spans lines, and every line it covers is
+			// occupied rather than blank.
+			for l, end := line(c.Pos()), line(c.End()); l <= end; l++ {
+				commented[l] = true
+			}
+		}
+	}
+	return func(p token.Pos) bool {
+		for l := line(p) + 1; l < pkg; l++ {
+			if !commented[l] {
+				return true
+			}
+		}
+		return false
+	}
+}
+
 // excludedFromEveryBuild reports whether a file's build constraints are
 // satisfied by no build at all — in practice the `ignore` tag, the conventional
 // marker for a generator run by hand with `go run`. Following such a file's
@@ -429,7 +464,7 @@ func eachProductFile(fsys fs.FS, dir string, fn func(name string, src []byte) er
 // on. The residual risk is narrow and worth stating: an identical message in
 // two platform variants means deleting one leaves the entry anchored to the
 // other. No manifest entry is anchored into those files today.
-func excludedFromEveryBuild(file *ast.File) bool {
+func excludedFromEveryBuild(fset *token.FileSet, file *ast.File) bool {
 	// Both spellings, because the go tool honours both: a //go:build line
 	// decides alone when one is present, and a file carrying only the legacy
 	// // +build form is still excluded by it. Reading only the modern spelling
@@ -442,6 +477,17 @@ func excludedFromEveryBuild(file *ast.File) bool {
 	// satisfiable. Such a file would stay in the corpus and its literals would
 	// compete to anchor a chapter's quotation, which is the leak class this
 	// package exists to close.
+	//
+	// A legacy line is honoured only when a blank line separates it from the
+	// package clause, and the modern one is honoured either way. That is not a
+	// symmetry worth tidying: it is the go tool's own rule, measured with
+	// `go list -f '{{.GoFiles}}'` across seven placements rather than read off
+	// the documentation. `// +build ignore` sitting directly above `package p`
+	// is package documentation to the compiler, and the file builds. Treating
+	// it as a constraint drops a file every binary contains out of the corpus,
+	// which reports as a message that stopped shipping — the gate calling the
+	// specification false about prose that is perfectly true.
+	blank := blankLineBefore(fset, file)
 	var legacy constraint.Expr
 scan:
 	for _, group := range file.Comments {
@@ -457,6 +503,9 @@ scan:
 			case constraint.IsGoBuild(c.Text):
 				return neverBuilt(c.Text)
 			case constraint.IsPlusBuild(c.Text):
+				if !blank(c.End()) {
+					continue
+				}
 				expr, err := constraint.Parse(c.Text)
 				if err != nil {
 					continue
@@ -601,11 +650,12 @@ func isProductGo(name string) bool {
 // correct, named as false, with the real cause discarded. One unreadable error
 // beats a cascade of confidently wrong ones. [LAW:no-silent-failure]
 func collectFile(fsys fs.FS, name string, src []byte, into Corpus) error {
-	file, err := parser.ParseFile(token.NewFileSet(), name, src, parser.ParseComments)
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, name, src, parser.ParseComments)
 	if err != nil {
 		return fmt.Errorf("parsing %s: %w", name, err)
 	}
-	if excludedFromEveryBuild(file) {
+	if excludedFromEveryBuild(fset, file) {
 		return nil
 	}
 	var collision error
@@ -1196,7 +1246,7 @@ const (
 	// around the quotation, or the documented message was deleted and an
 	// unrelated string happens to contain the same words. The second is not
 	// theoretical — hundreds of entries have text sitting in two or more
-	// distinct sources (measured 2026-09-18) — so the report names the source
+	// distinct sources, as Claim.Src records — so the report names the source
 	// that carries the words now and leaves the judgment to a reader.
 	// [LAW:no-silent-failure] neither answer is guessed.
 	AnchorMoved
