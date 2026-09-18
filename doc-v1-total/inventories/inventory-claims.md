@@ -192,7 +192,7 @@ var establishing = map[model.ActionName]bool{
 - `close` (which carries an Outcome: duplicate/superseded/obsolete/wontfix), `reopen`, and the four retention verbs never establish (`internal/claims/establish.go:17-23`).
 - `establishes(event)` looks up `establishing[model.ActionName(event.Action)]`; an empty `Action` (plain field update) and an unrecognized verb both read false through the same lookup (`internal/claims/establish.go:54-56`). Pinned by `TestAbsentVerbDoesNotEstablish` (`internal/claims/establish_internal_test.go:42-49`).
 - A map rather than a switch so `TestEstablishingCoversEveryAction` can assert every verb in `model.Actions()` is classified and that the map names no retired verb (`internal/claims/establish_internal_test.go:14-23`). `TestOnlyStartAndDoneEstablish` pins the exact classification (`:28-38`).
-- Actions vocabulary: `ActionStart = "start"` etc. (`internal/model/lifecycle/lifecycle.go:47`), sealed list at `internal/model/lifecycle/lifecycle.go:180`.
+- Actions vocabulary: `ActionStart = "start"` etc. (`internal/model/lifecycle/lifecycle.go:47`), sealed list at `internal/model/lifecycle/lifecycle.go:182`.
 
 ---
 

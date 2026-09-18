@@ -359,7 +359,7 @@ prefix (`cli.go:1036-1042`).
   `"priority must be normal (0) or urgent (1)"` (`priority.go:87`).
 - States: `open, in_progress, closed`; `in-progress` is normalized to
   `in_progress`; error `invalid status "<x>" (valid: open, in_progress, closed)`
-  (`internal/model/lifecycle/lifecycle.go:141-152`).
+  (`internal/model/lifecycle/lifecycle.go:143-154`).
 - Resolutions: `duplicate, superseded, obsolete, wontfix`; error
   `"resolution must be one of: duplicate, superseded, obsolete, wontfix"`
   (`internal/model/lifecycle/resolution.go:47-54`).
@@ -1867,7 +1867,7 @@ plus at most one positional topic.
 7. **Three functions panic on unreachable states** and would abort the process:
    `ClassifyReadiness` on an unclassified annotation kind (`readiness.go:144`),
    `renderNextOutcome` on an unhandled outcome type (`next.go:99`),
-   `transitionOccasion` on an unmapped status action (`workflow_events.go:106`),
+   `transitionOccasion` on an unmapped status action (`workflow_events.go:110`),
    `emitBreadcrumb`/`quickstartBreadcrumb` on an unknown topic
    (`quickstart_topics.go:64`), `completionRenderer` on an unknown shell
    (`completion.go:54`), `nestUnder` on a missing nest point (`register.go:153`),

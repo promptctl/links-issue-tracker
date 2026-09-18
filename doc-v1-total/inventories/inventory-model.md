@@ -31,21 +31,21 @@ Complete value set (`lifecycle.go:20-24`):
 State stringifies as itself). Wire/storage keep the underscored form
 (`lifecycle.go:26-27`).
 
-### `ParseState(value string) (State, error)` — `lifecycle.go:141-152`
-- Normalizes: `strings.TrimSpace` then `strings.ToLower` (`lifecycle.go:142`).
+### `ParseState(value string) (State, error)` — `lifecycle.go:143-154`
+- Normalizes: `strings.TrimSpace` then `strings.ToLower` (`lifecycle.go:144`).
 - Alias: the literal normalized string `"in-progress"` (hyphen) is rewritten to
-  `"in_progress"` (`lifecycle.go:143-145`).
-- Accepts exactly `open`, `in_progress`, `closed` (`lifecycle.go:146-148`).
+  `"in_progress"` (`lifecycle.go:145-147`).
+- Accepts exactly `open`, `in_progress`, `closed` (`lifecycle.go:148-150`).
 - Otherwise error text: `invalid status %q (valid: open, in_progress, closed)`
-  where `%q` is the **original** (un-normalized) input (`lifecycle.go:150`).
+  where `%q` is the **original** (un-normalized) input (`lifecycle.go:152`).
 - Blank input is rejected (test `TestParseStateRejectsBlank`,
   `lifecycle_test.go:443`). Case/alias normalization pinned by
   `TestParseStateNormalizes`, `lifecycle_test.go:409`.
 
-### `DefaultOpen(value string) State` — `lifecycle.go:158-164`
+### `DefaultOpen(value string) State` — `lifecycle.go:160-166`
 Parses via `ParseState`; on any error returns `Open`. Documented as the lenient
 boundary (import, hydration, storage); strict boundaries use `ParseState`
-(`lifecycle.go:154-157`). Pinned by `TestDefaultOpenReturnsOpenForInvalid`,
+(`lifecycle.go:156-159`). Pinned by `TestDefaultOpenReturnsOpenForInvalid`,
 `lifecycle_test.go:452`.
 
 ## 1.2 `Progress` — `lifecycle.go:37-42`
@@ -71,7 +71,7 @@ Complete value set (`lifecycle.go:46-58`):
 | `ActionDelete` | `"delete"` | retention |
 | `ActionRestore` | `"restore"` | retention |
 
-### `(ActionName).Verb() string` — `lifecycle.go:85-101`
+### `(ActionName).Verb() string` — `lifecycle.go:85-103`
 `ActionName` is documented as the persisted event verb — the encoding written
 into the events table. `Verb()` returns a different name for the same action:
 the word a caller types to invoke it.
@@ -86,42 +86,42 @@ as `"reopen"`, invoked as `"open"` (the command is `lit open`; there is no
 On an `ActionName` that has no entry, `Verb()` panics; it does not fall back to
 the persisted encoding.
 
-### `Actions() []ActionName` — `lifecycle.go:178-183`
+### `Actions() []ActionName` — `lifecycle.go:180-185`
 Returns a **fresh slice each call** in canonical order: the four status verbs
 then the four retention verbs — `start, done, close, reopen, archive,
 unarchive, delete, restore`.
 
-### `ParseAction(value string) (ActionName, error)` — `lifecycle.go:189-197`
-- Normalizes `TrimSpace` + `ToLower` (`lifecycle.go:190`).
-- Membership tested against `Actions()` (`lifecycle.go:191-195`).
+### `ParseAction(value string) (ActionName, error)` — `lifecycle.go:191-199`
+- Normalizes `TrimSpace` + `ToLower` (`lifecycle.go:192`).
+- Membership tested against `Actions()` (`lifecycle.go:193-197`).
 - Error text on miss: `unsupported lifecycle action %q` with the original input
-  (`lifecycle.go:196`). Pinned by `TestParseActionValid`
+  (`lifecycle.go:198`). Pinned by `TestParseActionValid`
   (`lifecycle_test.go:461`), `TestParseActionRoundTrips` (`:482`),
   `TestParseActionRejectsUnknown` (`:498`).
 
 ## 1.4 Core interfaces
 
-- `Lifecycle` — `lifecycle.go:103-106`: `State() State`, `Progress() Progress`.
-- `Container` — `lifecycle.go:110-113`: `Lifecycle` + `Children() []Lifecycle`.
-- `Actionable` — `lifecycle.go:120-123`: `Lifecycle` + `Apply(action StatusAction) Lifecycle`.
+- `Lifecycle` — `lifecycle.go:105-108`: `State() State`, `Progress() Progress`.
+- `Container` — `lifecycle.go:112-115`: `Lifecycle` + `Children() []Lifecycle`.
+- `Actionable` — `lifecycle.go:122-125`: `Lifecycle` + `Apply(action StatusAction) Lifecycle`.
   `Apply` is documented total — no error return, because `StatusAction.Target()`
   always names a real state and a same-state call returns the receiver
-  (`lifecycle.go:115-119`).
+  (`lifecycle.go:117-121`).
 - `StatusPrimitive` — `status_states.go:25-41`: `Actionable` +
   `ClosedAt() *time.Time`, `Resolution() *Resolution`, `RedirectTarget() *string`.
   `AllOf` is deliberately not a `StatusPrimitive` (`status_states.go:20-23`).
 
-### `Walk(l Lifecycle, visit func(Lifecycle) bool)` — `lifecycle.go:130-139`
+### `Walk(l Lifecycle, visit func(Lifecycle) bool)` — `lifecycle.go:132-141`
 Depth-first. Returns immediately if `l == nil` **or** `visit(l)` returns false
-(`lifecycle.go:131-133`). If `l` implements `Container`, recurses into every
-`Children()` element (`lifecycle.go:134-138`). Pinned by
+(`lifecycle.go:133-135`). If `l` implements `Container`, recurses into every
+`Children()` element (`lifecycle.go:136-140`). Pinned by
 `TestWalkVisitsAllPrimitives`, `lifecycle_test.go:360`.
 
-### `Progresses(l Lifecycle) []Progress` — `lifecycle.go:202-212`
+### `Progresses(l Lifecycle) []Progress` — `lifecycle.go:204-214`
 Walks `l`; skips appending for any node implementing `Container` (but keeps
 descending, since it returns `true`), appends `current.Progress()` for every
-non-container node (`lifecycle.go:204-210`). Returns a non-nil empty slice when
-nothing matches (initialized `out := []Progress{}`, `lifecycle.go:203`).
+non-container node (`lifecycle.go:206-212`). Returns a non-nil empty slice when
+nothing matches (initialized `out := []Progress{}`, `lifecycle.go:205`).
 
 ## 1.5 Sealed action sum — `action.go`
 
@@ -1459,11 +1459,11 @@ cancellation.
 
 1. Every sealed vocabulary exposes its enumeration as a **fresh slice per call**
    rather than an exported slice variable: `model.IssueTypes()`
-   (`issue_type.go:31-33`), `lifecycle.Actions()` (`lifecycle.go:178-183`),
+   (`issue_type.go:31-33`), `lifecycle.Actions()` (`lifecycle.go:180-185`),
    `annotation.Kinds()` (`annotation.go:124-126`).
 2. Parsers differ in normalization: `ParseState` and `ParseIssueType` and
-   `ParseAction` lowercase + trim (`lifecycle.go:142`, `issue_type.go:43`,
-   `lifecycle.go:190`); `ParseResolution` and `ParseRelationType` trim only
+   `ParseAction` lowercase + trim (`lifecycle.go:144`, `issue_type.go:43`,
+   `lifecycle.go:192`); `ParseResolution` and `ParseRelationType` trim only
    (`resolution.go:48`, `relation_type.go:27`).
 3. Illegal sealed-interface values (raw nil / typed-nil pointer variants) panic
    rather than default: `Issue.SetRetention` (`model.go:138`),

@@ -325,7 +325,7 @@ Builders live in `internal/cli/workflow_events.go`:
 Status-action → event mapping (`internal/cli/workflow_events.go:83-88`):
 `ActionStart→work_started`, `ActionDone→work_finished`, `ActionClose→ticket_closed`,
 `ActionReopen→ticket_reopened`. A `StatusAction` with no map entry **panics**:
-`workflow_events: no event mapped for status action %q` (`internal/cli/workflow_events.go:105-107`).
+`workflow_events: no event mapped for status action %q` (`internal/cli/workflow_events.go:105-111`).
 
 Retention actions (archive/unarchive/delete/restore) are **not** `StatusAction`s and therefore fire
 **no event at all** — the type assertion at `internal/cli/cli.go:1408` excludes them

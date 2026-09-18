@@ -49,7 +49,7 @@ A leaf issue's status is one of three states (`internal/model/lifecycle/lifecycl
 - `in_progress`
 - `closed`
 
-State parsing lowercases, trims, and accepts `in-progress` as an alias for `in_progress` (`lifecycle.go:141-152`). Lenient boundaries (import, hydration, storage) default unparseable states to `open`; strict boundaries (CLI flags, query language) reject them (`lifecycle.go:154-164`).
+State parsing lowercases, trims, and accepts `in-progress` as an alias for `in_progress` (`lifecycle.go:143-154`). Lenient boundaries (import, hydration, storage) default unparseable states to `open`; strict boundaries (CLI flags, query language) reject them (`lifecycle.go:156-166`).
 
 ### Transition actions
 
