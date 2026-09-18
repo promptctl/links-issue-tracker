@@ -589,8 +589,6 @@ establish.
   epic as a fallback, so `open` matches there too. The two count conjuncts admit
   only the all-children-closed case without naming `Closed`.
 - `Error() string` — `model.go:344-363`, two exact wordings (the word rendered inside the backticks in both is the action's invocation verb, `ActionName.Verb()`, not its persisted event encoding; the state is substituted as `State.Display()`, so `in_progress` renders `in progress`):
-  rendered inside backticks in both; the state is substituted as
-  `State.Display()`, so `in_progress` renders `in progress`):
   - `Satisfied()` → ``epic %s is already %s, so `%s` has nothing to do: an epic's state derives from its children (%d of %d done)``
   - else → ``cannot `%s` epic %s: it is %s, and an epic's state derives from its children rather than from this command (%s)``, where the final clause is `childClause()`.
 - `childClause() string` — `model.go:331-340`, three exact wordings:
