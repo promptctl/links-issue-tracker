@@ -187,6 +187,7 @@ var cases = []engineCase{
 	{"create_at_top_files_inside_its_frame", createAtTopFilesInsideItsFrame},
 	{"create_at_top_of_an_empty_frame_takes_a_distinct_key", createAtTopOfAnEmptyFrameTakesADistinctKey},
 	{"placing_at_a_frame_edge_keeps_the_key_beside_its_frame", placingAtAFrameEdgeKeepsTheKeyBesideItsFrame},
+	{"a_relative_move_keeps_every_rank_distinct", aRelativeMoveKeepsEveryRankDistinct},
 	{"rank_set_imposes_order", rankSetImposesOrder},
 	{"rank_set_stays_inside_its_frame", rankSetStaysInsideItsFrame},
 	{"rank_verbs_refuse_a_deleted_issue", rankVerbsRefuseADeletedIssue},
@@ -1353,6 +1354,44 @@ func createAtTopOfAnEmptyFrameTakesADistinctKey(t *testing.T, ctx context.Contex
 	listed = mustList(t, ctx, st, storage.ListIssuesFilter{})
 	assertDistinctRanks(t, listed)
 	assertPrecedes(t, listed, second.ID, only.ID)
+}
+
+// aRelativeMoveKeepsEveryRankDistinct is the four-command case: an epic, a
+// top-level issue after it, and a child of the epic after that, then the child
+// ranked below the top-level issue.
+//
+// Rank pair resolution substitutes the epic for the child, which is the frame's
+// say in the move — it picks the key the move lands beside. The room beside
+// that key is not the frame's to answer: the only key past the anchor belongs
+// to another frame, so a frame-scoped read finds nothing and calls the span
+// open, and the midpoint of an open span is a key that other frame is holding.
+//
+// The memory engine cannot express that — it moves the epic to the slot after
+// its anchor and every other position stands — so this case is the store being
+// held to the order the memory engine already produces, and assertDistinctRanks
+// is what names the failure for what it is rather than leaving the listing to
+// an id tiebreak.
+func aRelativeMoveKeepsEveryRankDistinct(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	standalone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "standalone", Topic: "core"})
+	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", ParentID: epic.ID})
+
+	if _, err := st.RankBelow(ctx, child.ID, standalone.ID); err != nil {
+		t.Fatalf("RankBelow(child, standalone) error = %v", err)
+	}
+	listed := mustList(t, ctx, st, storage.ListIssuesFilter{})
+	assertDistinctRanks(t, listed)
+	assertPrecedes(t, listed, standalone.ID, epic.ID)
+	assertPrecedes(t, listed, epic.ID, child.ID)
+
+	// The other end, against the same interleaving.
+	if _, err := st.RankAbove(ctx, child.ID, standalone.ID); err != nil {
+		t.Fatalf("RankAbove(child, standalone) error = %v", err)
+	}
+	listed = mustList(t, ctx, st, storage.ListIssuesFilter{})
+	assertDistinctRanks(t, listed)
+	assertPrecedes(t, listed, epic.ID, standalone.ID)
+	assertPrecedes(t, listed, epic.ID, child.ID)
 }
 
 // rankSetStaysInsideItsFrame pins RankSet's anchor as the representatives' own

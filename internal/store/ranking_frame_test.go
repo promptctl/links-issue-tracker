@@ -1038,3 +1038,61 @@ func TestCreateAtTopOfAnEmptyFrameTakesADistinctKey(t *testing.T) {
 		}
 	}
 }
+
+// TestRelativeMoveDrawsItsRoomFromTheWholeWorkspace is the four-command case.
+// The frame picks the anchor — rank pair resolution substitutes the epic for
+// the child named — and the room beside that anchor used to be read with the
+// frame's scope too. Nothing in the top level sat past the anchor, so the bound
+// came back open, and the midpoint of an open span is a key something outside
+// the frame was already holding.
+//
+// The assertion is on the rank strings. The rendered order cannot see this:
+// two issues sharing a key still list in some order, decided by the id
+// tiebreak, so the listing looks settled while the keyspace has no order in it
+// at all.
+func TestRelativeMoveDrawsItsRoomFromTheWholeWorkspace(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "frame", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	standalone, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Standalone", Topic: "frame", IssueType: "task"})
+	if err != nil {
+		t.Fatalf("CreateIssue(standalone) error = %v", err)
+	}
+	child, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Child", Topic: "frame", IssueType: "task", ParentID: epic.ID})
+	if err != nil {
+		t.Fatalf("CreateIssue(child) error = %v", err)
+	}
+	// The precondition that gives this case its teeth: the child's key is the
+	// one immediately past the anchor in the whole workspace, and it belongs to
+	// another frame — so a frame-scoped read of the room finds nothing there
+	// and calls the span open, while the span is exactly one key wide.
+	if !(standalone.Rank < child.Rank && epic.Rank < standalone.Rank) {
+		t.Fatalf("fixture no longer sets up this case: epic %q, standalone %q, child %q", epic.Rank, standalone.Rank, child.Rank)
+	}
+
+	move, err := st.RankBelow(ctx, child.ID, standalone.ID)
+	if err != nil {
+		t.Fatalf("RankBelow(child, standalone) error = %v", err)
+	}
+	// The pair resolves to the epic: a child named against a top-level issue is
+	// ranked through the ancestor they can be compared in.
+	if move.MovedID != epic.ID {
+		t.Fatalf("RankBelow moved %s, want the epic %s — this case is about the resolved move", move.MovedID, epic.ID)
+	}
+
+	after := currentRanks(t, ctx, st, []model.Issue{epic, standalone, child})
+	if want := mustBottomOf(t, map[string]string{epic.ID: epic.Rank, standalone.ID: standalone.Rank, child.ID: child.Rank}, standalone.Rank); after[epic.ID] != want {
+		t.Errorf("the moved epic has rank %q, want %q = the room below its anchor %q", after[epic.ID], want, standalone.Rank)
+	}
+	if after[epic.ID] == after[child.ID] {
+		t.Errorf("the moved epic took rank %q, the key its own child holds; a rank orders one issue", after[epic.ID])
+	}
+	if !(after[standalone.ID] < after[epic.ID] && after[epic.ID] < after[child.ID]) {
+		t.Errorf("ranks %q (standalone), %q (epic), %q (child) do not place the epic between its anchor and the next key", after[standalone.ID], after[epic.ID], after[child.ID])
+	}
+}
