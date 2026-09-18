@@ -182,7 +182,10 @@ func firstInFrameBoundsTx(ctx context.Context, tx *sql.Tx, f storage.Frame, movi
 	// A container carrying no rank of its own frames nothing this can be
 	// measured against. It is not reachable through the API — ensureIssueRanks
 	// backfills at open — so rather than invent a position, fall back to the
-	// one end nothing can already hold.
+	// one end nothing can already hold. The workspace read behind that fallback
+	// does not take moving, so a mover holding the last key anchors on the key
+	// it is vacating; threading it through a read this branch can only reach
+	// from a corrupt row would buy a tighter bound nobody can ask for.
 	if containerRank == "" {
 		lastRank, err := workspaceEdgeRankTx(ctx, tx, storage.TopLevel, bottomEdge)
 		if err != nil {
@@ -954,6 +957,15 @@ func (s *Store) RankAbove(ctx context.Context, issueID, targetID string) (storag
 		// commands then put a moved issue on a key one of its own children was
 		// holding. [LAW:single-enforcer] The read is topEdge's, the same one
 		// filing at a frame's top measures with.
+		//
+		// A descendant's key can be the wall here, so ranking a container
+		// relative to an outsider can leave it past its own contents. That is
+		// the contract rather than an accident of this read: the memory engine
+		// inserts at the anchor's own index, carrying no notion of containment
+		// either, and the two engines are checked against each other. Excluding
+		// the moved issue's subtree was measured and made things worse — it put
+		// the store back at odds with the memory engine. Tracked as
+		// links-rank-omey.
 		newRank, err := rankBetweenTx(ctx, tx, func() (string, string, error) {
 			anchorRank, err := anchorRankTx(ctx, tx, move.AnchorID)
 			if err != nil {
