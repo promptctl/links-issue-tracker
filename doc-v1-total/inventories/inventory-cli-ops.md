@@ -661,7 +661,7 @@ The repair capability is asked once, up front: `storage.Repair.Of(ap.Store)`; a 
 1. `printWorkspaceIdentity` (`doctor.go:25-35`):
    `workspace: storage_dir="<dir>" workspace_id=<id> issue_prefix=<p> issue_prefix_source=configured|derived git_common_dir="<dir>"` — path fields quoted with `%q`; source is `derived` when `ws.IssuePrefix.Derived()`.
 2. `resolveBuildStatusNote(time.Now())` on its own line (`doctor.go:296`).
-3. `integrity_check=<v> foreign_key_issues=<n> invalid_related_rows=<n> orphan_history_rows=<n> rank_inversions=<n> dependency_cycle=<none|a->b->c>` (`doctor.go:299-305`).
+3. `integrity_check=<v> foreign_key_issues=<n> invalid_related_rows=<n> orphan_history_rows=<n> rank_inversions=<n|unchecked> dependency_cycle=<none|a->b->c|unchecked> parent_cycle=<none|a->b->c>` (`doctor.go:299-305`). Fields named in `HealthReport.Unchecked` render as `unchecked`.
 4. `printSyncFreshness` (`doctor.go:173-204`) — one line:
    - no remote → `sync: no git remote configured — ticket history stays on this machine; add a remote and run 'lit sync push' to share it`
    - unresolved → `sync: freshness unavailable — <detail>`

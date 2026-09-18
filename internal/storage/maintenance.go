@@ -29,6 +29,17 @@ type Checkpoint struct {
 	Anchor string
 }
 
+// The names an engine puts in HealthReport.Unchecked are the report's own json
+// keys, so a reader maps an entry straight to the field it would have filled.
+// They are constants rather than literals at each call site because a parallel
+// list of strings drifts silently: rename the field and the literal still reads
+// "rank_inversions" with nothing to catch it. TestUncheckedNamesMatchJSONTags
+// pins each one to the tag it names. [LAW:one-source-of-truth]
+const (
+	CheckRankInversions  = "rank_inversions"
+	CheckDependencyCycle = "dependency_cycle"
+)
+
 // HealthReport is what an engine found when it examined itself: the structural
 // faults it can name, plus free-text errors and warnings for what it can only
 // describe. An engine reports zeros for the checks it has no analogue for
@@ -47,6 +58,19 @@ type HealthReport struct {
 	// hierarchy meant, and every walk up the parent chain fails to terminate
 	// until someone makes it.
 	ParentCycle []string `json:"parent_cycle"`
-	Errors      []string `json:"errors"`
-	Warnings    []string `json:"warnings"`
+	// Unchecked names the checks this report did not run, by the field they
+	// would have filled. Without it a zero is ambiguous: a check that found
+	// nothing and a check that never happened write the same 0, and a reader —
+	// script or human — cannot tell a clean result from an absent one. An engine
+	// that runs every check leaves this empty.
+	//
+	// A check lands here because it is UNRUNNABLE, not because it was passed
+	// over: the read it needs is the read that crashes. A looped hierarchy stops
+	// the rank and dependency checks, which begin from a status-filtered listing,
+	// and that listing hydrates — a walk that recurses forever through the loop's
+	// members. Naming the state an impossibility rather than a choice is what
+	// tells the operator the ordering is forced. [LAW:no-silent-failure]
+	Unchecked []string `json:"unchecked"`
+	Errors    []string `json:"errors"`
+	Warnings  []string `json:"warnings"`
 }

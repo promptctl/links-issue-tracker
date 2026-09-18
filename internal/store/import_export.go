@@ -43,6 +43,7 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 	report := storage.HealthReport{
 		DependencyCycle: []string{},
 		ParentCycle:     []string{},
+		Unchecked:       []string{},
 		Errors:          []string{},
 		Warnings:        []string{},
 	}
@@ -81,12 +82,22 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 	if report.OrphanHistoryRows > 0 {
 		report.Warnings = append(report.Warnings, fmt.Sprintf("orphan issue event rows: %d", report.OrphanHistoryRows))
 	}
+	// ORDERING IS LOAD-BEARING: this check must precede every hydrating read in
+	// Doctor, and the rank and dependency checks below are hydrating reads. Do
+	// not move it down for readability and do not hoist a shared listing above
+	// it — a Go stack overflow is not recoverable, so the result is not a worse
+	// report but no report at all, from the one command that can explain why the
+	// workspace is unreadable. TestDoctorNamesAStoredParentCycle is what catches
+	// it: with this block moved below, that test dies by stack overflow.
+	//
 	// A parent cycle is checked before everything below it, because it is the
 	// one finding that makes the rest unobtainable rather than merely worse. A
-	// hierarchy with a loop has no root, so every walk up the parent chain runs
-	// forever — and the liveness classification the rank checks start from is
-	// such a walk, which overflows the stack rather than returning a wrong
-	// number. Reading the edges straight from the relations table is the only
+	// hierarchy with a loop has no root, so the walks built on it run forever.
+	// The liveness classification the rank checks start from is s.ListIssues,
+	// which hydrates, and hydration derives container state by descending into
+	// each epic's children — so on a loop it recurses between the loop's members
+	// and overflows the stack rather than returning a wrong number. (The walk
+	// that kills it descends; looking only for an ancestor walk misses it.) Reading the edges straight from the relations table is the only
 	// question that can still be answered on that data, so it is asked first
 	// and answered alone.
 	//
@@ -101,6 +112,10 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 	}
 	if cycle := parentCycle(parentOf); len(cycle) > 0 {
 		report.ParentCycle = cycle
+		// The checks below never run, and the report says so rather than leaving
+		// their zero values to be read as findings of nothing.
+		// [LAW:no-silent-failure]
+		report.Unchecked = []string{storage.CheckRankInversions, storage.CheckDependencyCycle}
 		// An error, not a warning: this is reported through the arm that makes
 		// `lit doctor` exit nonzero, so the zeros left on the unrun checks below
 		// can never be read as a clean bill of health. [LAW:no-silent-failure]

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -187,6 +188,18 @@ func TestDoctorNamesAStoredParentCycle(t *testing.T) {
 	if len(report.Errors) == 0 {
 		t.Error("Doctor().Errors is empty, want the parent cycle reported as an error")
 	}
+	// The checks this report could not run say so. Otherwise their zero values
+	// are indistinguishable from a clean result, and the status line renders a
+	// check that never happened as a check that found nothing.
+	for _, want := range []string{storage.CheckRankInversions, storage.CheckDependencyCycle} {
+		if !slices.Contains(report.Unchecked, want) {
+			t.Errorf("Doctor().Unchecked = %v, want it to name %s as unrun", report.Unchecked, want)
+		}
+	}
+	// And a clean report claims nothing of the sort.
+	if len(clean.Unchecked) != 0 {
+		t.Errorf("Doctor().Unchecked = %v on a tree, want empty: every check ran", clean.Unchecked)
+	}
 }
 
 // parentCycle is the pure half of the detector, so its shapes are pinned
@@ -367,5 +380,41 @@ func TestVerifyCandidateReportsAParentCycleRatherThanHanging(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("VerifyCandidate().Findings = %+v, want a health finding naming the parent cycle", report.Findings)
+	}
+}
+
+// Dropping ClearParent's hydrating pre-read must not also drop the diagnosis it
+// carried. "No such issue" and "that issue has no parent" send the operator to
+// different places, and a typo'd id reported as a missing edge is the opposite
+// answer: it says the hierarchy is fine when the id is not.
+func TestClearParentReportsAnUnknownIssueAsMissing(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	err := st.ClearParent(ctx, "test-hier-nosuchissue")
+	if err == nil {
+		t.Fatal("ClearParent(unknown id) succeeded, want a not-found error")
+	}
+	var notFound storage.NotFoundError
+	if !errors.As(err, &notFound) {
+		t.Fatalf("ClearParent(unknown id) error = %v, want a storage.NotFoundError", err)
+	}
+	if notFound.Entity != "issue" {
+		t.Errorf("ClearParent(unknown id) reported a missing %q; the id names no issue at all, so reporting a missing parent edge is the opposite diagnosis", notFound.Entity)
+	}
+
+	// Anti-vacuity: an issue that exists and simply has no parent still reports
+	// the edge as the missing thing, so the case above is not passing because
+	// every absence is called an issue.
+	solo, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Solo", Topic: "hier", IssueType: "task", Placement: storage.RankBottom})
+	if err != nil {
+		t.Fatalf("CreateIssue error = %v", err)
+	}
+	err = st.ClearParent(ctx, solo.ID)
+	if err == nil {
+		t.Fatal("ClearParent on a parentless issue succeeded, want an absence report")
+	}
+	if !errors.As(err, &notFound) || notFound.Entity != "parent relation" {
+		t.Errorf("ClearParent(parentless issue) error = %v, want a missing \"parent relation\"", err)
 	}
 }

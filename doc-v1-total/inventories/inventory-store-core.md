@@ -3967,7 +3967,7 @@ Findings are **all treated identically** — any finding at all makes `Reconcile
 ### 1.4 Check family 1 — HEALTH (`healthFindings`, `verify.go:147-153`)
 
 - Input is `storage.HealthReport` (`internal/storage/maintenance.go:37-47`), whose fields are:
-  `IntegrityCheck string` (json `integrity_check`), `ForeignKeyIssues int` (`foreign_key_issues`), `InvalidRelatedRows int` (`invalid_related_rows`), `OrphanHistoryRows int` (`orphan_history_rows`), `RankInversions int` (`rank_inversions`), `DependencyCycle []string` (`dependency_cycle`), `Errors []string` (`errors`), `Warnings []string` (`warnings`).
+  `IntegrityCheck string` (json `integrity_check`), `ForeignKeyIssues int` (`foreign_key_issues`), `InvalidRelatedRows int` (`invalid_related_rows`), `OrphanHistoryRows int` (`orphan_history_rows`), `RankInversions int` (`rank_inversions`), `DependencyCycle []string` (`dependency_cycle`), `ParentCycle []string` (`parent_cycle`), `Unchecked []string` (`unchecked`), `Errors []string` (`errors`), `Warnings []string` (`warnings`).
 - Only `h.Errors` become findings; each error string becomes `VerifyFinding{Law: LawHealth, Detail: e}` verbatim (`verify.go:148-151`).
 - `h.Warnings` are **discarded** — explicitly, so a faithful rebuild of messy source is not rejected (`verify.go:140-146`). This is the one advisory-vs-fatal split in the whole gate.
 - The slice is preallocated `make([]VerifyFinding, 0, len(h.Errors))` — non-nil even when empty (`verify.go:148`).

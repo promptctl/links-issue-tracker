@@ -670,11 +670,16 @@ func (s *Store) SetParent(ctx context.Context, in storage.SetParentInput) (model
 // names and tells the operator to break here. Hydrating the child first —
 // GetIssue climbs the parent chain — overflowed the stack on exactly that
 // state, so the repair crashed on the fault it was the repair for.
-// [LAW:no-defensive-null-guards] The DELETE already reports absence through
-// rows-affected; a pre-read could only ask the same question earlier, of a
-// walk that cannot answer it.
+// Existence is still proven, on the tx and without hydrating, because the two
+// absences are different diagnoses: "no such issue" and "that issue has no
+// parent" send the operator to different places, and collapsing them into the
+// DELETE's rows-affected would report a typo'd id as a missing edge. It is the
+// hydration that had to go, not the proof. [LAW:no-silent-failure]
 func (s *Store) ClearParent(ctx context.Context, childID string) error {
 	return s.withMutation(ctx, "clear parent", func(ctx context.Context, tx *sql.Tx) error {
+		if err := requireIssueExistsTx(ctx, tx, childID); err != nil {
+			return err
+		}
 		res, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE src_id = ? AND type = 'parent-child'`, childID)
 		if err != nil {
 			return fmt.Errorf("delete parent relation: %w", err)

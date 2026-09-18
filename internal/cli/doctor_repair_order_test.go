@@ -41,29 +41,38 @@ func TestDoctorSkipsEveryRepairOnALoopedHierarchy(t *testing.T) {
 		ParentCycle: []string{"E", "S"},
 		Errors:      []string{"parent cycle: E -> S"},
 	}}
-	ran := false
-	fixes := []doctorFix{func(context.Context, io.Writer, storage.Repairer) error {
-		ran = true
-		return errors.New("a repair ran on a looped hierarchy and would have overflowed the stack")
-	}}
+	climbed := false
+	cleaned := false
+	fixes := []doctorFix{
+		{name: "rank", climbsHierarchy: true, run: func(context.Context, io.Writer, storage.Repairer) error {
+			climbed = true
+			return errors.New("a climbing repair ran on a looped hierarchy and would have overflowed the stack")
+		}},
+		// A repair that never reads the hierarchy cannot crash on a loop, so
+		// withholding it would strand faults the operator can still fix.
+		{name: "integrity", run: func(context.Context, io.Writer, storage.Repairer) error {
+			cleaned = true
+			return nil
+		}},
+	}
 
 	var progress bytes.Buffer
 	report, err := diagnoseThenRepair(context.Background(), &progress, repairer, fixes)
 	if err != nil {
 		t.Fatalf("diagnoseThenRepair() error = %v, want the cycle reported", err)
 	}
-	if ran {
-		t.Error("a --fix ran on a workspace whose hierarchy holds a cycle")
+	if climbed {
+		t.Error("a repair that climbs the hierarchy ran on a workspace whose hierarchy holds a cycle")
 	}
-	if repairer.doctorCalls != 1 {
-		t.Errorf("Doctor called %d times, want exactly 1 — the diagnosis must come first and stand alone", repairer.doctorCalls)
+	if !cleaned {
+		t.Error("a repair that never reads the hierarchy was withheld; a loop only blocks the repairs it would crash")
 	}
 	if len(report.ParentCycle) == 0 {
 		t.Error("the returned report does not name the cycle, so the operator gets no diagnosis")
 	}
 	// [LAW:no-silent-failure] The skip is stated, not inferred from a quiet run.
-	if !strings.Contains(progress.String(), "skipping every --fix") {
-		t.Errorf("progress = %q, want it to say the repairs were skipped and why", progress.String())
+	if !strings.Contains(progress.String(), "skipping --fix rank") {
+		t.Errorf("progress = %q, want it to name the repair withheld and why", progress.String())
 	}
 }
 
@@ -74,8 +83,8 @@ func TestDoctorStillRunsRepairsOnACleanHierarchy(t *testing.T) {
 	repairer := &cycleRepairer{report: storage.HealthReport{}}
 	ran := 0
 	fixes := []doctorFix{
-		func(context.Context, io.Writer, storage.Repairer) error { ran++; return nil },
-		func(context.Context, io.Writer, storage.Repairer) error { ran++; return nil },
+		{name: "rank", climbsHierarchy: true, run: func(context.Context, io.Writer, storage.Repairer) error { ran++; return nil }},
+		{name: "integrity", run: func(context.Context, io.Writer, storage.Repairer) error { ran++; return nil }},
 	}
 
 	if _, err := diagnoseThenRepair(context.Background(), io.Discard, repairer, fixes); err != nil {
@@ -87,5 +96,32 @@ func TestDoctorStillRunsRepairsOnACleanHierarchy(t *testing.T) {
 	// Once to decide, once to describe what the repairs left behind.
 	if repairer.doctorCalls != 2 {
 		t.Errorf("Doctor called %d times, want 2: one diagnosis before the repairs and one report after", repairer.doctorCalls)
+	}
+}
+
+// The status line is parsed by scripts, so a check that never ran must not
+// render as a check that found nothing. `rank_inversions=0` is a clean result;
+// a workspace whose loop stopped that check has no result to report, and no
+// exit code can correct a number the reader has already been handed.
+func TestDoctorStatusLineSaysUncheckedRatherThanZero(t *testing.T) {
+	t.Parallel()
+	looped := storage.HealthReport{
+		ParentCycle: []string{"E", "S"},
+		Unchecked:   []string{storage.CheckRankInversions, storage.CheckDependencyCycle},
+	}
+	if got := doctorFieldValue(looped, storage.CheckRankInversions, "0"); got != "unchecked" {
+		t.Errorf("rank_inversions rendered %q for a check that never ran, want \"unchecked\"", got)
+	}
+	if got := doctorFieldValue(looped, storage.CheckDependencyCycle, "none"); got != "unchecked" {
+		t.Errorf("dependency_cycle rendered %q for a check that never ran, want \"unchecked\"", got)
+	}
+	// Anti-vacuity: a report that ran its checks still renders their real values,
+	// or this would pass against a renderer that always says "unchecked".
+	clean := storage.HealthReport{}
+	if got := doctorFieldValue(clean, storage.CheckRankInversions, "0"); got != "0" {
+		t.Errorf("rank_inversions rendered %q on a report that ran the check, want \"0\"", got)
+	}
+	if got := doctorFieldValue(clean, storage.CheckDependencyCycle, "none"); got != "none" {
+		t.Errorf("dependency_cycle rendered %q on a report that ran the check, want \"none\"", got)
 	}
 }
