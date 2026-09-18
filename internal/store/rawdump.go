@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"os"
 )
 
 // RawDump is a schema-assumption-free snapshot of every table in a workspace's
@@ -74,13 +73,8 @@ func DumpRaw(ctx context.Context, doltRootDir string, workspaceID string) (_ Raw
 			err = errors.Join(err, relErr)
 		}
 	}()
-	if _, statErr := os.Stat(doltRootDir); statErr != nil {
-		// [LAW:no-silent-failure] Only ENOENT means "uninitialized"; every
-		// other stat error is its own failure mode the operator needs to see.
-		if errors.Is(statErr, os.ErrNotExist) {
-			return RawDump{}, fmt.Errorf("repository not initialized with lit — run 'lit init' first")
-		}
-		return RawDump{}, fmt.Errorf("stat database dir: %w", statErr)
+	if err = requireInitializedDir(doltRootDir, "database dir"); err != nil {
+		return RawDump{}, err
 	}
 	// Post-lock, same as every open: an interrupted adopt's residue is not a
 	// store to dump — nothing local-only can exist under the marker, so the

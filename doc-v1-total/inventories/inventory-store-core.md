@@ -177,9 +177,9 @@ Behavioral evidence:
 
 1. `validateOpenArgs` (`store.go:168-170`).
 2. `acquireWorkspaceShared` **before** the existence stat (`store.go:176`), with the same `success`-guarded deferred release (`store.go:180-188`).
-3. `os.Stat(doltRootDir)` (`store.go:189`):
-   - `errors.Is(statErr, os.ErrNotExist)` → `fmt.Errorf("repository not initialized with lit — run 'lit init' first")` (`store.go:195`);
-   - any other stat error → `fmt.Errorf("stat database dir: %w", statErr)` (`store.go:197`).
+3. `requireInitializedDir(doltRootDir, "database dir")` (`store.go:198`):
+   - `os.ErrNotExist` → the package sentinel `ErrWorkspaceNotInitialized` (`workspace_initialized.go:20`), whose text is unchanged: `repository not initialized with lit — run 'lit init' first`;
+   - any other stat error → `stat database dir: %w`.
 4. `requireNoPendingAdopt` (`store.go:202`).
 5. `openStoreConnection(..., engineRead)` (`store.go:205`) — **lazy** engine, no ping.
 6. `s.releaseWorkspaceLock = release` (`store.go:209`).
@@ -4161,7 +4161,7 @@ Signature `DumpRaw(ctx, doltRootDir string, workspaceID string) (RawDump, error)
 1. `validateOpenArgs(doltRootDir, workspaceID)` (`rawdump.go:62`) — rejects an empty/whitespace root dir with `dolt root dir is required` (`store.go:324-327`) and an empty/whitespace workspace id with `workspace id is required` (`store.go:308-310`).
 2. `acquireWorkspaceShared(ctx, doltRootDir)` — a **shared** workspace lock, excluding directory rotators such as `lit snapshots restore` (`rawdump.go:65`, `rawdump.go:53-57`). On contention the error text is `a lit operation is rebuilding this workspace's Dolt directory (e.g. snapshots restore, an init backlog adopt, or lifeboat recover); retry after it completes: %w` wrapping `ErrWorkspaceBusy` (`internal/store/workspace_lock.go:83-87`).
 3. A deferred release joins any release error into the returned error (`rawdump.go:72-76`).
-4. `os.Stat(doltRootDir)` (`rawdump.go:77`): `os.ErrNotExist` → `repository not initialized with lit — run 'lit init' first` (`rawdump.go:81`); any other stat error → `stat database dir: %w` (`rawdump.go:83`).
+4. `requireInitializedDir(doltRootDir, "database dir")` (`rawdump.go:76`) — the same shared helper `OpenForRead` calls: `os.ErrNotExist` → the package sentinel `ErrWorkspaceNotInitialized` (`workspace_initialized.go:20`), `repository not initialized with lit — run 'lit init' first`; any other stat error → `stat database dir: %w`.
 5. `requireNoPendingAdopt(doltRootDir)` — run **after** the lock is taken (`rawdump.go:90`). Its message (`internal/store/adopt.go:138-144`): `%w: a `+"`lit init`"+` backlog adopt was interrupted before completing (%s; marker %s), so the on-disk store is that adopt's leftover partial state, not a usable backlog. Run `+"`lit init`"+` to retry: it sets the leftover aside and re-clones the remote backlog. If the remote no longer carries the backlog, delete %s to abandon the adopt and start fresh`, with the `%s` context either the literal `a backlog adopt` or `the adopt of %s/%s started %s` (`adopt.go:133-137`); a marker read failure yields `read adopt-pending marker: %w` (`adopt.go:131`).
 6. `openStoreConnection(ctx, doltRootDir, workspaceID, engineRead)` — **no `migrate()` call**, which is what lets it read a workspace `store.Open` refuses (`rawdump.go:93`, doc at `rawdump.go:47-52`). `engineRead` is the first `engineAccess` value (`store.go:40`).
 7. Deferred `s.db.Close()`, whose error is joined into the return unless it is `context.Canceled` (`rawdump.go:97-101`).
@@ -5163,9 +5163,9 @@ Classification predicates:
 - Path (`workspace_lock.go:351`): `filepath.Join(filepath.Clean(databasePath), doltDatabaseName, ".dolt", "noms", "LOCK")` — i.e. `<databasePath>/<doltDatabaseName>/.dolt/noms/LOCK`. This is **Dolt's** file, not lit-minted, and is the ONE HOME exception stated at the mint site (`workspace_lock.go:335-343`).
 - Budget (`workspace_lock.go:391-392`): `doltJournalRetryDelay = 100 * time.Millisecond`, `doltJournalRetryAttempts = int(coResidentHolderWait / doltJournalRetryDelay)` = 700 → **70s**. Not a figure of its own: it is `coResidentHolderWait` divided by the delay, which is the same constant `engineOpenRetryMaxElapsed` is.
 - `LockDoltJournalExclusive(ctx, databasePath)` (`workspace_lock.go:389`):
-  1. `os.Stat(filepath.Dir(lockPath))` **first** — this helper contends on Dolt's lock and never mints Dolt's tree (`workspace_lock.go:391-399`). On `os.ErrNotExist` returns exactly:
-     `repository not initialized with lit — run 'lit init' first` (`workspace_lock.go:402`).
-     Any other stat failure returns `stat dolt journal dir: %w` (`workspace_lock.go:404`).
+  1. `requireInitializedDir(filepath.Dir(lockPath), "dolt journal dir")` **first**, before any acquisition — this helper contends on Dolt's lock and never mints Dolt's tree (`workspace_lock.go:423`). On `os.ErrNotExist` it returns the package sentinel `ErrWorkspaceNotInitialized` (`workspace_initialized.go:20`), whose text is exactly:
+     `repository not initialized with lit — run 'lit init' first`.
+     Any other stat failure returns `stat dolt journal dir: %w`.
   2. `acquireStoreLock(ctx, lockPath, true /*exclusive*/, 700, 100ms)`.
   3. On `ErrWorkspaceBusy`, wraps (preserving the sentinel):
      `another process is holding this workspace's Dolt store open (a background sync mirror or another lit command still running); retry: %w` (`workspace_lock.go:411`).

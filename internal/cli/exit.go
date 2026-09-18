@@ -126,9 +126,22 @@ func ExitCode(err error) int {
 	if errors.As(err, &noWork) {
 		return ExitNoWork
 	}
+	// "Am I somewhere lit can work?" has two negative answers — no git
+	// repository here, and no lit workspace in this one — and they share a code
+	// because the caller's question is identical for both: the environment is
+	// not ready, and no retry changes that. Neither is ExitGeneric any more,
+	// because ExitGeneric also means "lit is broken", and under one code a
+	// script could only tell a self-fixable precondition from a fault by
+	// parsing the English — the thing every sink in this package exists to stop
+	// callers doing (links-cli-errors-yfbg). The act each calls for differs —
+	// change directory, or run `lit init` here — and that difference is carried
+	// by the reason, not by a code of its own. [LAW:no-mode-explosion]
 	var outsideWorkspace OutsideWorkspaceError
 	if errors.As(err, &outsideWorkspace) {
-		return ExitGeneric
+		return ExitValidation
+	}
+	if errors.Is(err, store.ErrWorkspaceNotInitialized) {
+		return ExitValidation
 	}
 	var bulkFailure BulkFailureError
 	if errors.As(err, &bulkFailure) {

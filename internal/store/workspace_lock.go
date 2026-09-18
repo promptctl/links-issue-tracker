@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -421,13 +420,8 @@ func LockDoltJournalExclusive(ctx context.Context, databasePath string) (func() 
 	// database-dir stat would then bless the fabrication as a snapshotable
 	// store. Refuse instead. Stable against rotation/adopt because every
 	// caller holds the workspace lock across this check and the acquisition.
-	// [LAW:no-silent-failure] only ENOENT means uninitialized; any other
-	// stat failure is its own error, not a guessed refusal.
-	if _, statErr := os.Stat(filepath.Dir(lockPath)); statErr != nil {
-		if errors.Is(statErr, os.ErrNotExist) {
-			return nil, fmt.Errorf("repository not initialized with lit — run 'lit init' first")
-		}
-		return nil, fmt.Errorf("stat dolt journal dir: %w", statErr)
+	if err := requireInitializedDir(filepath.Dir(lockPath), "dolt journal dir"); err != nil {
+		return nil, err
 	}
 	release, err := acquireStoreLock(ctx, workspaceStorageDir(databasePath), lockPath, true, doltJournalRetryAttempts, doltJournalRetryDelay)
 	if errors.Is(err, ErrWorkspaceBusy) {

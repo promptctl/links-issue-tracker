@@ -63,6 +63,22 @@ func TestCommandErrorReason(t *testing.T) {
 		// one, and neither may fall through to "command_failed" (links-cli-cpou).
 		{"router scope exhausted", Exhausted{Epics: []string{"links-epic-abcd"}}, "scope_exhausted"},
 		{"router no ready work", NoWork{}, "no_ready_work"},
+		// A repository `lit init` has never run in is terminal: no rerun makes
+		// the workspace exist. It reached "command_failed" while it was a bare
+		// fmt.Errorf, and with it the default's retry-then-doctor advice
+		// (links-cli-errors-yfbg). Both the bare sentinel and a wrapped one are
+		// pinned, because the store returns it bare today and a caller adding
+		// context later must not silently drop back to the default.
+		{"workspace not initialized", store.ErrWorkspaceNotInitialized, "workspace_not_initialized"},
+		{
+			"workspace not initialized wrapped",
+			fmt.Errorf("open store: %w", store.ErrWorkspaceNotInitialized),
+			"workspace_not_initialized",
+		},
+		// Acceptance 4 from the other side: a stat that failed for any reason
+		// but ENOENT is an unclassified fault, and the retry-then-doctor default
+		// is still the right advice for it. The new arm must not widen to it.
+		{"genuine stat fault stays unclassified", errors.New("stat database dir: permission denied"), "command_failed"},
 		// Acceptance 4: a genuine fault reaching the same surface keeps the
 		// reason it always had. The arms above dispatch on their concrete types,
 		// so adding them shadowed nothing.
@@ -167,6 +183,37 @@ func TestWriteCommandErrorValidationRefusalNeverSaysRetry(t *testing.T) {
 	}
 	if !strings.Contains(out, "Do not retry unchanged") {
 		t.Fatalf("missing the no-retry remediation: %q", out)
+	}
+}
+
+// TestWriteCommandErrorUninitializedWorkspace pins links-cli-errors-yfbg at the
+// surface an agent actually reads. The condition is terminal — `lit init` has
+// never run here — so the remediation must agree with the message body instead
+// of contradicting it: no retry advice, and no referral to `lit doctor`, which
+// reads the very workspace that is missing.
+//
+// The absence assertions alone would be vacuous (they hold of any answer that
+// merely avoids the default), so the reason and exit code are pinned as data in
+// the tables above, and this test also asserts the positive: the one act that
+// resolves the condition is named.
+func TestWriteCommandErrorUninitializedWorkspace(t *testing.T) {
+	t.Parallel()
+	var stderr bytes.Buffer
+	if code := WriteCommandError(&stderr, store.ErrWorkspaceNotInitialized); code != ExitValidation {
+		t.Fatalf("exitCode = %d, want %d (ExitValidation)", code, ExitValidation)
+	}
+	out := stderr.String()
+	if !strings.Contains(out, "error (code=3): repository not initialized with lit — run 'lit init' first") {
+		t.Fatalf("missing the message body at the precondition exit code: %q", out)
+	}
+	if strings.Contains(out, "Retry the command") {
+		t.Fatalf("a terminal precondition must not carry the generic retry remediation: %q", out)
+	}
+	if strings.Contains(out, "lit doctor") {
+		t.Fatalf("remediation must not send an agent to `lit doctor` for a workspace that does not exist: %q", out)
+	}
+	if !strings.Contains(out, "Do not retry unchanged") || !strings.Contains(out, "lit init") {
+		t.Fatalf("remediation must say the condition is terminal and name `lit init`: %q", out)
 	}
 }
 

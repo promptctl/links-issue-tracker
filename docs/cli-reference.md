@@ -28,11 +28,16 @@ Exit codes are a contract, not just 0/1:
 | 0 | Success |
 | 1 | Generic failure |
 | 2 | Usage error (bad arguments or flags) |
-| 3 | Validation error (missing required value, unsupported value) |
+| 3 | Validation error (missing required value, unsupported value), or the environment is not ready for lit (outside a git repository/worktree, or inside one where `lit init` has never run) |
 | 4 | Issue or resource not found |
 | 5 | Conflict (e.g. sync merge conflict) |
 | 6 | Nothing to hand back (`lit next` had no ticket for you), or nothing to do (the state the command asked for already holds) |
 | 7 | Data corruption detected |
+
+Code 3 means the command as issued, or the place it was issued, cannot succeed
+unchanged: a value lit does not accept, or a working directory that is not a git
+repository/worktree, or one where `lit init` has never run. Running the same command
+again without changing something reproduces the same refusal.
 
 Code 6 is not a failure: the command ran correctly and changed nothing. It exists so a
 caller looping `lit next` can tell "stop, there is nothing for you" from "lit is broken"

@@ -1,10 +1,13 @@
 package cli
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
 func TestExitCodeMappings(t *testing.T) {
@@ -26,7 +29,16 @@ func TestExitCodeMappings(t *testing.T) {
 		{name: "string conflict", err: MergeConflictError{Message: "sync import conflict"}, want: ExitConflict},
 		{name: "store validation", err: storage.ValidationError{Message: "issue type must be task, feature, bug, chore, or epic"}, want: ExitValidation},
 		{name: "unsupported flag", err: UnsupportedError{Message: "--output is no longer supported; omit it for text output"}, want: ExitValidation},
-		{name: "outside workspace", err: OutsideWorkspaceError{Message: "links requires running inside a git repository/worktree"}, want: ExitGeneric},
+		// "Am I somewhere lit can work?" has two negative answers, and both exit
+		// ExitValidation rather than ExitGeneric: the environment is not ready
+		// and no retry changes that, which a script must be able to tell from
+		// "lit is broken" without parsing the English (links-cli-errors-yfbg).
+		// The act each calls for differs and is carried by the reason.
+		{name: "outside workspace", err: OutsideWorkspaceError{Message: "links requires running inside a git repository/worktree"}, want: ExitValidation},
+		{name: "workspace not initialized", err: store.ErrWorkspaceNotInitialized, want: ExitValidation},
+		{name: "workspace not initialized wrapped", err: fmt.Errorf("open store: %w", store.ErrWorkspaceNotInitialized), want: ExitValidation},
+		// The genuine fault on the same path keeps the unclassified-fault code.
+		{name: "genuine stat fault", err: errors.New("stat database dir: permission denied"), want: ExitGeneric},
 		{name: "generic", err: ValidationError{Message: "boom"}, want: ExitValidation},
 		// Both of `lit next`'s terminal answers exit ExitNoWork: the command ran
 		// correctly and simply has no ticket to hand back. Sharing one code is
