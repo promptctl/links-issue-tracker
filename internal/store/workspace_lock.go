@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -420,8 +421,18 @@ func LockDoltJournalExclusive(ctx context.Context, databasePath string) (func() 
 	// database-dir stat would then bless the fabrication as a snapshotable
 	// store. Refuse instead. Stable against rotation/adopt because every
 	// caller holds the workspace lock across this check and the acquisition.
-	if err := requireInitializedDir(filepath.Dir(lockPath), "dolt journal dir"); err != nil {
+	if err := requireInitializedWorkspace(databasePath); err != nil {
 		return nil, err
+	}
+	// The root exists, so `lit init` has run here and the uninitialized answer
+	// is already ruled out. An absent noms dir *under* that root is a different
+	// fact — a damaged or half-deleted Dolt tree — and it keeps its own error so
+	// it reaches the unclassified default's retry-then-doctor advice instead of
+	// a confident "run `lit init`", which init itself refuses on a root it
+	// cannot read. Answering both conditions with one sentence rebuilt the very
+	// loop this change removes, one level down. [LAW:one-type-per-behavior]
+	if _, err := os.Stat(filepath.Dir(lockPath)); err != nil {
+		return nil, fmt.Errorf("stat dolt journal dir: %w", err)
 	}
 	release, err := acquireStoreLock(ctx, workspaceStorageDir(databasePath), lockPath, true, doltJournalRetryAttempts, doltJournalRetryDelay)
 	if errors.Is(err, ErrWorkspaceBusy) {

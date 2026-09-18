@@ -267,7 +267,13 @@ func commandErrorRemediation(reason string) string {
 		// workspace and an agents section into someone's repository, which is
 		// the repo owner's decision, not a step an agent takes on its own to
 		// get itself unblocked.
-		return "Do not retry unchanged — this repository has no lit workspace, and every store-touching command repeats this answer until one exists. Run `lit init` here to create it, or change to a directory that already has one."
+		// The claim is about *this* command, not about every command. An
+		// earlier draft said every store-touching command repeats this answer
+		// until a workspace exists, which is false: the write paths bootstrap
+		// one. Remediation is the surface an agent acts on, so a convenient
+		// overstatement here is the same defect as the advice it replaces.
+		// [LAW:no-silent-failure]
+		return "Do not retry unchanged — this repository has no lit workspace, and retrying this command cannot create one. Run `lit init` here to create it, or change to a directory that already has one."
 	case "bulk_partial_failure":
 		return "Some items failed; see the per-item errors above. Re-run the command for only the failed IDs after addressing each error."
 	default:

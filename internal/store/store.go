@@ -195,7 +195,7 @@ func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (_
 			err = errors.Join(err, relErr)
 		}
 	}()
-	if err = requireInitializedDir(doltRootDir, "database dir"); err != nil {
+	if err = requireInitializedWorkspace(doltRootDir); err != nil {
 		return nil, err
 	}
 	// Post-lock, same as Open: a shared hold excludes a live adopt (which

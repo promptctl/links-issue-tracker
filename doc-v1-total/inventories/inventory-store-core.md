@@ -177,7 +177,7 @@ Behavioral evidence:
 
 1. `validateOpenArgs` (`store.go:168-170`).
 2. `acquireWorkspaceShared` **before** the existence stat (`store.go:176`), with the same `success`-guarded deferred release (`store.go:180-188`).
-3. `requireInitializedDir(doltRootDir, "database dir")` (`store.go:198`):
+3. `requireInitializedWorkspace(doltRootDir)` (`store.go:198`):
    - `os.ErrNotExist` → the package sentinel `ErrWorkspaceNotInitialized` (`workspace_initialized.go:20`), whose text is unchanged: `repository not initialized with lit — run 'lit init' first`;
    - any other stat error → `stat database dir: %w`.
 4. `requireNoPendingAdopt` (`store.go:202`).
@@ -452,7 +452,7 @@ Evidence: id shape `^test-renderer-[0-9a-z]{3,8}$` (`store_test.go:777-780`); pr
 
 #### 4.2 Rank placement
 
-`nextRankForPlacement(ctx, tx, p storage.RankPlacement, f storage.Frame) (string, error)` (`store.go:2087-2095`): `edgeFor(p)` resolves the end — `storage.RankTop` → `topEdge`; `storage.RankBottom` → `bottomEdge`; anything else → `fmt.Errorf("unknown rank placement: %d", p)` (`internal/store/ranking.go:208-217`) — then `rankBetweenTx` returns a key between the bounds `edge.filingBoundsTx(ctx, tx, f)` reads (`internal/store/ranking.go:163-172`). `filingBoundsTx` reads that end's filing rank — frame `f`'s leading rank for the top (`frameEdgeRankTx`, `:183-186`), the whole workspace's last rank for the bottom (`workspaceEdgeRankTx`, `:193-202`) — and hands it to `e.roomBesideTx(ctx, tx, anchorRank, "")` (`:109-131`), which pairs it with the nearest rank the **whole workspace** holds on its far side; the `""` `excludeID` drops nothing from that read, since no issue's id is empty. A create at the top therefore takes the midpoint between the frame's leading rank and the nearest rank below it anywhere in the workspace; with no rank below it that read comes back `""` and the lower bound is open. An **empty** filing rank — a frame with nothing ranked in it — never reaches that read: `roomBesideTx` refuses an empty anchor outright with `fmt.Errorf("no room beside the %s of this frame: the key it was read from is empty", e.name)` (`:120-122`), and `filingBoundsTx` routes the case to `pastTheWorkspaceTx` (`:142-151`) instead, which reads the workspace's last rank through `workspaceEdgeRankTx(ctx, tx, storage.TopLevel, bottomEdge)` and pairs it through `bottomEdge.roomBesideTx`, where nothing lies further out, so the key lands past the workspace's last. In an empty workspace that read is `""` and `pastTheWorkspaceTx` returns `("", "")` directly, so the key is `rank.Initial()` ("V").
+`nextRankForPlacement(ctx, tx, p storage.RankPlacement, f storage.Frame) (string, error)` (`store.go:2080-2088`): `edgeFor(p)` resolves the end — `storage.RankTop` → `topEdge`; `storage.RankBottom` → `bottomEdge`; anything else → `fmt.Errorf("unknown rank placement: %d", p)` (`internal/store/ranking.go:208-217`) — then `rankBetweenTx` returns a key between the bounds `edge.filingBoundsTx(ctx, tx, f)` reads (`internal/store/ranking.go:163-172`). `filingBoundsTx` reads that end's filing rank — frame `f`'s leading rank for the top (`frameEdgeRankTx`, `:183-186`), the whole workspace's last rank for the bottom (`workspaceEdgeRankTx`, `:193-202`) — and hands it to `e.roomBesideTx(ctx, tx, anchorRank, "")` (`:109-131`), which pairs it with the nearest rank the **whole workspace** holds on its far side; the `""` `excludeID` drops nothing from that read, since no issue's id is empty. A create at the top therefore takes the midpoint between the frame's leading rank and the nearest rank below it anywhere in the workspace; with no rank below it that read comes back `""` and the lower bound is open. An **empty** filing rank — a frame with nothing ranked in it — never reaches that read: `roomBesideTx` refuses an empty anchor outright with `fmt.Errorf("no room beside the %s of this frame: the key it was read from is empty", e.name)` (`:120-122`), and `filingBoundsTx` routes the case to `pastTheWorkspaceTx` (`:142-151`) instead, which reads the workspace's last rank through `workspaceEdgeRankTx(ctx, tx, storage.TopLevel, bottomEdge)` and pairs it through `bottomEdge.roomBesideTx`, where nothing lies further out, so the key lands past the workspace's last. In an empty workspace that read is `""` and `pastTheWorkspaceTx` returns `("", "")` directly, so the key is `rank.Initial()` ("V").
 
 `nextRankAtBottom` (`store.go:2058-2068`):
 ```sql
@@ -1806,7 +1806,7 @@ Package `store`. Files: `internal/store/shapemap.go` (844 lines), `internal/stor
 - `DoltHead string` json:`dolt_head` (rawdump.go:31)
 - `Tables []RawTable` json:`tables` (rawdump.go:32)
 
-`RawTable` — `internal/store/rawdump.go:39-43`:
+`RawTable` — `internal/store/rawdump.go:38-42`:
 - `Name string` json:`name` (rawdump.go:40)
 - `Columns []string` json:`columns` — catalog order (rawdump.go:41)
 - `Rows [][]any` json:`rows` — positional cells; always non-nil, `[]` for an empty table (rawdump.go:42, initialized at rawdump.go:181)
@@ -2866,7 +2866,7 @@ Children are read through `Store.ListIssues` with `filter.ParentIDs` set (§5.7)
 
 ### 5.4 Rank at creation
 
-`nextRankForPlacement(ctx, tx, p, f)` — `internal/store/store.go:2087-2095`: `edgeFor(p)` → `topEdge` for `storage.RankTop`, `bottomEdge` for `storage.RankBottom`, `fmt.Errorf("unknown rank placement: %d", p)` otherwise; then `rankBetweenTx` between the bounds `edge.filingBoundsTx(ctx, tx, f)` reads — the end's filing rank paired with the nearest rank the whole workspace holds on its far side, or, when that filing rank is empty, the pair `pastTheWorkspaceTx` reads past the workspace's last rank (`internal/store/ranking.go:163-172`, `:142-151`).
+`nextRankForPlacement(ctx, tx, p, f)` — `internal/store/store.go:2080-2088`: `edgeFor(p)` → `topEdge` for `storage.RankTop`, `bottomEdge` for `storage.RankBottom`, `fmt.Errorf("unknown rank placement: %d", p)` otherwise; then `rankBetweenTx` between the bounds `edge.filingBoundsTx(ctx, tx, f)` reads — the end's filing rank paired with the nearest rank the whole workspace holds on its far side, or, when that filing rank is empty, the pair `pastTheWorkspaceTx` reads past the workspace's last rank (`internal/store/ranking.go:163-172`, `:142-151`).
 
 `storage.RankPlacement` is an `int` with `RankBottom = iota` (0, the zero value and default) and `RankTop` (1) — `internal/storage/issues.go:28-33`.
 
@@ -4140,12 +4140,12 @@ Signature: `Recover(ctx, canonicalDoltDir string, dump RawDump, mapper Mapper, m
 
 ### 3.1 The artifact shape
 
-`RawDump` fields (`rawdump.go:23-34`):
+`RawDump` fields (`rawdump.go:22-33`):
 - `WorkspaceID string` json `workspace_id` (`rawdump.go:24`)
 - `DoltHead string` json `dolt_head` (`rawdump.go:32`)
 - `Tables []RawTable` json `tables` (`rawdump.go:33`)
 
-`RawTable` fields (`rawdump.go:39-43`):
+`RawTable` fields (`rawdump.go:38-42`):
 - `Name string` json `name`, `Columns []string` json `columns`, `Rows [][]any` json `rows`.
 
 `Rows` is always initialized to `[][]any{}` so an empty table serializes as `[]`, never `null` (`rawdump.go:185`; pinned at `rawdump_test.go:123-126` against the goose bookkeeping table).
@@ -4154,14 +4154,14 @@ Signature: `Recover(ctx, canonicalDoltDir string, dump RawDump, mapper Mapper, m
 
 The dump is a **JSON** document, not SQL and not TSV. The only producer path to a file/stdout is `lit lifeboat dump`, which writes the `RawDump` value to stdout via `writeJSON` (`internal/cli/lifeboat.go:170`), which uses `json.NewEncoder(w)` with `enc.SetIndent("", "  ")` — two-space indentation, one trailing newline from `Encode` (`internal/cli/cli.go:1800-1804`). There is **no header line, no footer line, and no SQL quoting/escaping layer** — escaping is entirely `encoding/json`'s. `runLifeboatDump` takes no flags and rejects extra args with `UsageError{Message: "usage: lit lifeboat dump"}` (`internal/cli/lifeboat.go:158-171`).
 
-### 3.3 `DumpRaw` — exact step order and every error (`rawdump.go:61-123`)
+### 3.3 `DumpRaw` — exact step order and every error (`rawdump.go:60-117`)
 
 Signature `DumpRaw(ctx, doltRootDir string, workspaceID string) (RawDump, error)` with a named error return (`rawdump.go:61`).
 
 1. `validateOpenArgs(doltRootDir, workspaceID)` (`rawdump.go:62`) — rejects an empty/whitespace root dir with `dolt root dir is required` (`store.go:324-327`) and an empty/whitespace workspace id with `workspace id is required` (`store.go:308-310`).
 2. `acquireWorkspaceShared(ctx, doltRootDir)` — a **shared** workspace lock, excluding directory rotators such as `lit snapshots restore` (`rawdump.go:65`, `rawdump.go:53-57`). On contention the error text is `a lit operation is rebuilding this workspace's Dolt directory (e.g. snapshots restore, an init backlog adopt, or lifeboat recover); retry after it completes: %w` wrapping `ErrWorkspaceBusy` (`internal/store/workspace_lock.go:83-87`).
 3. A deferred release joins any release error into the returned error (`rawdump.go:72-76`).
-4. `requireInitializedDir(doltRootDir, "database dir")` (`rawdump.go:76`) — the same shared helper `OpenForRead` calls: `os.ErrNotExist` → the package sentinel `ErrWorkspaceNotInitialized` (`workspace_initialized.go:20`), `repository not initialized with lit — run 'lit init' first`; any other stat error → `stat database dir: %w`.
+4. `requireInitializedWorkspace(doltRootDir)` (`rawdump.go:76`) — the same shared helper `OpenForRead` calls: `os.ErrNotExist` → the package sentinel `ErrWorkspaceNotInitialized` (`workspace_initialized.go:20`), `repository not initialized with lit — run 'lit init' first`; any other stat error → `stat database dir: %w`.
 5. `requireNoPendingAdopt(doltRootDir)` — run **after** the lock is taken (`rawdump.go:90`). Its message (`internal/store/adopt.go:138-144`): `%w: a `+"`lit init`"+` backlog adopt was interrupted before completing (%s; marker %s), so the on-disk store is that adopt's leftover partial state, not a usable backlog. Run `+"`lit init`"+` to retry: it sets the leftover aside and re-clones the remote backlog. If the remote no longer carries the backlog, delete %s to abandon the adopt and start fresh`, with the `%s` context either the literal `a backlog adopt` or `the adopt of %s/%s started %s` (`adopt.go:133-137`); a marker read failure yields `read adopt-pending marker: %w` (`adopt.go:131`).
 6. `openStoreConnection(ctx, doltRootDir, workspaceID, engineRead)` — **no `migrate()` call**, which is what lets it read a workspace `store.Open` refuses (`rawdump.go:93`, doc at `rawdump.go:47-52`). `engineRead` is the first `engineAccess` value (`store.go:40`).
 7. Deferred `s.db.Close()`, whose error is joined into the return unless it is `context.Canceled` (`rawdump.go:97-101`).
@@ -4178,7 +4178,7 @@ The dump is **read-only** on the database — the only SQL issued is the three S
 - Table list: `SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE() ORDER BY table_name` (`rawdump.go:148`) — i.e. **every base table in the database in ascending catalog-name order**, including Dolt/goose bookkeeping tables; there is no hand-maintained include/exclude list (`rawdump.go:142-145`). Errors: `list tables: %w` (`rawdump.go:150`), `scan table name: %w` (`rawdump.go:158`), `iterate tables: %w` (`rawdump.go:162`).
 - Per table: `"SELECT * FROM `" + name + "`"` — the table name is interpolated inside backticks, not parameterized (`rawdump.go:176`). Errors: `select %q: %w` (`rawdump.go:178`), `columns %q: %w` (`rawdump.go:183`), `scan row of %q: %w` (`rawdump.go:193`), `iterate rows of %q: %w` (`rawdump.go:204`).
 
-### 3.5 Cell value rules (`dumpTable`, `rawdump.go:175-206`)
+### 3.5 Cell value rules (`dumpTable`, `rawdump.go:169-200`)
 
 - Columns come from `rows.Columns()` on the live result set — never assumed (`rawdump.go:181`, `rawdump.go:167-168`).
 - Each row is scanned into `[]any` of `len(cols)`; positional order matches `Columns` (`rawdump.go:187-192`).
@@ -4254,7 +4254,7 @@ The capability interface is `storage.Checkpointer` with exactly `CreateCheckpoin
 
 ### 5.3 `CreateCheckpoint(ctx, prefix)` (`checkpoint.go:17-37`)
 
-1. `readDoltHead(ctx, s.db)` — the shared HEAD reader (`checkpoint.go:22`, defined `rawdump.go:134-140`). Error → `checkpoint: %w` (`checkpoint.go:24`).
+1. `readDoltHead(ctx, s.db)` — the shared HEAD reader (`checkpoint.go:22`, defined `rawdump.go:128-134`). Error → `checkpoint: %w` (`checkpoint.go:24`).
 2. Timestamp captured (`checkpoint.go:26`), name formatted (`checkpoint.go:27`).
 3. `s.db.ExecContext(ctx, "CALL DOLT_BRANCH(?)", name)` — parameterized (`checkpoint.go:28`). Error → `checkpoint: create branch %q: %w` (`checkpoint.go:29`).
 4. Returns `storage.Checkpoint{Name: name, Prefix: prefix, CreatedAt: ts, Anchor: commitSHA}` (`checkpoint.go:31-36`).
@@ -5163,11 +5163,12 @@ Classification predicates:
 - Path (`workspace_lock.go:351`): `filepath.Join(filepath.Clean(databasePath), doltDatabaseName, ".dolt", "noms", "LOCK")` — i.e. `<databasePath>/<doltDatabaseName>/.dolt/noms/LOCK`. This is **Dolt's** file, not lit-minted, and is the ONE HOME exception stated at the mint site (`workspace_lock.go:335-343`).
 - Budget (`workspace_lock.go:391-392`): `doltJournalRetryDelay = 100 * time.Millisecond`, `doltJournalRetryAttempts = int(coResidentHolderWait / doltJournalRetryDelay)` = 700 → **70s**. Not a figure of its own: it is `coResidentHolderWait` divided by the delay, which is the same constant `engineOpenRetryMaxElapsed` is.
 - `LockDoltJournalExclusive(ctx, databasePath)` (`workspace_lock.go:389`):
-  1. `requireInitializedDir(filepath.Dir(lockPath), "dolt journal dir")` **first**, before any acquisition — this helper contends on Dolt's lock and never mints Dolt's tree (`workspace_lock.go:423`). On `os.ErrNotExist` it returns the package sentinel `ErrWorkspaceNotInitialized` (`workspace_initialized.go:20`), whose text is exactly:
+  1. `requireInitializedWorkspace(databasePath)` **first**, before any acquisition (`workspace_lock.go:424`). It reads the workspace root, not the journal directory: on `os.ErrNotExist` it returns the package sentinel `ErrWorkspaceNotInitialized` (`workspace_initialized.go:20`), whose text is exactly:
      `repository not initialized with lit — run 'lit init' first`.
-     Any other stat failure returns `stat dolt journal dir: %w`.
-  2. `acquireStoreLock(ctx, lockPath, true /*exclusive*/, 700, 100ms)`.
-  3. On `ErrWorkspaceBusy`, wraps (preserving the sentinel):
+     Any other stat failure returns `stat database dir: %w`.
+  2. `os.Stat(filepath.Dir(lockPath))` second (`workspace_lock.go:434`) — this helper contends on Dolt's lock and never mints Dolt's tree, so an absent noms directory is refused rather than created. Under an existing root that absence is a damaged or half-deleted Dolt tree, **not** an uninitialized repository, so it is never reported as the sentinel; every failure here returns `stat dolt journal dir: %w` and reaches the unclassified-fault default.
+  3. `acquireStoreLock(ctx, lockPath, true /*exclusive*/, 700, 100ms)`.
+  4. On `ErrWorkspaceBusy`, wraps (preserving the sentinel):
      `another process is holding this workspace's Dolt store open (a background sync mirror or another lit command still running); retry: %w` (`workspace_lock.go:411`).
 - Engine-open interaction stated at `workspace_lock.go:326-333` and `internal/store/doc.go:46-57`: a **read** engine opens lazily at first SQL, attempts the journal lock for **100ms**, and falls back to Dolt's read-only mode; a **write** engine opens eagerly inside `openStoreConnection`, **refuses** the read-only fallback, and retries boundedly (`engineOpenRetryMaxElapsed`, 70s). A live write Store holds the journal lock for its entire lifetime.
 - `workspace_lock.go:384-388` records the one lifecycle write this hold does not stop: `journal.idx` is opened `O_RDWR` and truncated on every engine bootstrap with no can-write gate, so a snapshot copy can capture a torn index; Dolt's `corruptIndexRecovery` truncates it to zero and rebuilds from the journal on next open.

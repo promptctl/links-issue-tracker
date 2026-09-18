@@ -73,7 +73,7 @@ func DumpRaw(ctx context.Context, doltRootDir string, workspaceID string) (_ Raw
 			err = errors.Join(err, relErr)
 		}
 	}()
-	if err = requireInitializedDir(doltRootDir, "database dir"); err != nil {
+	if err = requireInitializedWorkspace(doltRootDir); err != nil {
 		return RawDump{}, err
 	}
 	// Post-lock, same as every open: an interrupted adopt's residue is not a

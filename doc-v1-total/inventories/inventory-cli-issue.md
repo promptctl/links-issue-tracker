@@ -156,7 +156,7 @@ Constants (`exit.go:11-32`):
 | `ExitNoWork` | 6 |
 | `ExitCorruption` | 7 |
 
-`ExitCode(err)` dispatches by `errors.As`, in this order (`exit.go:37-144`):
+`ExitCode(err)` dispatches by `errors.As`, in this order (`exit.go:37-157`):
 1. `storage.NotFoundError` → 4 (`exit.go:41-43`)
 2. `MergeConflictError` → 5 (`exit.go:45-47`)
 3. `SyncFailureError` → 5 (`exit.go:53-55`)
@@ -172,10 +172,11 @@ Constants (`exit.go:11-32`):
 13. `UnsupportedError` → 3 (`exit.go:113-115`)
 14. `Exhausted` → 6 (`exit.go:121-123`)
 15. `NoWork` → 6 (`exit.go:125-127`)
-16. `OutsideWorkspaceError` → 1 (`exit.go:129-131`)
-17. `BulkFailureError` → 1 (`exit.go:133-138`)
-18. `errors.Is(err, store.ErrTransientGCContention)` → 1 (`exit.go:140-142`)
-19. anything else → 1 (`exit.go:143`)
+16. `OutsideWorkspaceError` → 3 (`exit.go:139-141`)
+17. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → 3 (`exit.go:143-145`)
+18. `BulkFailureError` → 1 (`exit.go:146-152`)
+19. `errors.Is(err, store.ErrTransientGCContention)` → 1 (`exit.go:153-155`)
+20. anything else → 1 (`exit.go:156`)
 
 Error types defined in `cli.go`: `MergeConflictError` (`cli.go:1890-1896`),
 `CorruptionError` (`cli.go:1898-1902`), `UsageError` (`cli.go:1906-1910`),

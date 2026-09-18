@@ -168,7 +168,7 @@ Constants (`internal/cli/exit.go:10-18`):
 | `ExitCorruption` | 7 |
 
 `ExitCode(err)` dispatches by `errors.As` in this order
-(`internal/cli/exit.go:37-144`):
+(`internal/cli/exit.go:37-157`):
 
 - `storage.NotFoundError` ⇒ 4 (`:41-43`)
 - `MergeConflictError` ⇒ 5 (`:45-47`)
@@ -185,10 +185,11 @@ Constants (`internal/cli/exit.go:10-18`):
 - `UnsupportedError` ⇒ 3 (`:113-115`)
 - `Exhausted` ⇒ 6 (`:121-123`)
 - `NoWork` ⇒ 6 (`:125-127`)
-- `OutsideWorkspaceError` ⇒ 1 (`:129-131`)
-- `BulkFailureError` ⇒ 1 (`:133-138`)
-- `store.ErrTransientGCContention` ⇒ 1 (`:140-142`)
-- anything else ⇒ 1 (`:143`)
+- `OutsideWorkspaceError` ⇒ 3 (`:139-141`)
+- `store.ErrWorkspaceNotInitialized` ⇒ 3 (`:143-145`)
+- `BulkFailureError` ⇒ 1 (`:146-152`)
+- `store.ErrTransientGCContention` ⇒ 1 (`:153-155`)
+- anything else ⇒ 1 (`:156`)
 
 ### 2.8 Error rendering (`internal/cli/error_output.go`)
 

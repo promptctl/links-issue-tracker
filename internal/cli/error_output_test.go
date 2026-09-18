@@ -215,6 +215,14 @@ func TestWriteCommandErrorUninitializedWorkspace(t *testing.T) {
 	if !strings.Contains(out, "Do not retry unchanged") || !strings.Contains(out, "lit init") {
 		t.Fatalf("remediation must say the condition is terminal and name `lit init`: %q", out)
 	}
+	// The terminal claim is about this command, not about all of them. An
+	// earlier draft said every store-touching command repeats this answer until
+	// a workspace exists, which is false — the write paths bootstrap one. A
+	// remediation is acted on, not read for flavour, so an overstatement here is
+	// the same defect as the advice it replaces. [LAW:no-silent-failure]
+	if strings.Contains(out, "every store-touching command") {
+		t.Fatalf("remediation must not claim every command repeats this answer; the write paths bootstrap: %q", out)
+	}
 }
 
 // TestWriteCommandErrorRemoteUnreachable pins defect 2 of links-sync-r779: a

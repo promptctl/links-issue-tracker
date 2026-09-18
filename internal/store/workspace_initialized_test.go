@@ -70,13 +70,13 @@ func TestUninitializedWorkspaceIsOneCondition(t *testing.T) {
 	}
 }
 
-// TestRequireInitializedDirSeparatesGenuineStatFaults pins acceptance 4 of
+// TestRequireInitializedWorkspaceSeparatesGenuineStatFaults pins acceptance 4 of
 // links-cli-errors-yfbg from below: only ENOENT means "never initialized". A
 // stat that fails any other way is a fault the operator has to see, it names
 // the directory that failed, and it must not be laundered into the tidy
 // "run lit init" answer — which would send someone to initialize a workspace
 // over a permissions or path fault that init cannot fix. [LAW:no-silent-failure]
-func TestRequireInitializedDirSeparatesGenuineStatFaults(t *testing.T) {
+func TestRequireInitializedWorkspaceSeparatesGenuineStatFaults(t *testing.T) {
 	t.Parallel()
 
 	notADir := filepath.Join(t.TempDir(), "regular-file")
@@ -84,14 +84,51 @@ func TestRequireInitializedDirSeparatesGenuineStatFaults(t *testing.T) {
 		t.Fatalf("seed the non-directory: %v", err)
 	}
 
-	err := requireInitializedDir(filepath.Join(notADir, "dolt"), "database dir")
+	err := requireInitializedWorkspace(filepath.Join(notADir, "dolt"))
 	if err == nil {
-		t.Fatal("requireInitializedDir() through a non-directory succeeded; want the stat fault surfaced")
+		t.Fatal("requireInitializedWorkspace() through a non-directory succeeded; want the stat fault surfaced")
 	}
 	if errors.Is(err, ErrWorkspaceNotInitialized) {
 		t.Fatalf("a non-ENOENT stat fault was reported as an uninitialized workspace: %v", err)
 	}
 	if !strings.Contains(err.Error(), "stat database dir:") {
 		t.Fatalf("stat fault = %v; want it to name the directory that failed", err)
+	}
+}
+
+// TestDamagedDoltTreeIsNotReportedAsUninitialized pins the boundary the journal
+// lock sits on. LockDoltJournalExclusive refuses when Dolt's noms directory is
+// absent, because acquiring through the shared path would MkdirAll the tree it
+// is supposed to be protecting. What it must not do is answer that refusal with
+// the uninitialized sentence: a missing noms directory *under an existing root*
+// is a damaged or half-deleted workspace, and `lit init` refuses a root it
+// cannot read. Reporting it as uninitialized sent the caller between two
+// commands that each told it to run the other — the loop this ticket exists to
+// remove, rebuilt one level down.
+//
+// The root here is real and the noms directory is not, so a helper that
+// classifies on anything below the root fails this test. [LAW:one-type-per-behavior]
+func TestDamagedDoltTreeIsNotReportedAsUninitialized(t *testing.T) {
+	t.Parallel()
+
+	databasePath := filepath.Join(t.TempDir(), "dolt")
+	if err := os.MkdirAll(databasePath, 0o755); err != nil {
+		t.Fatalf("seed the workspace root: %v", err)
+	}
+
+	release, err := LockDoltJournalExclusive(context.Background(), databasePath)
+	if err == nil {
+		_ = release()
+		t.Fatal("LockDoltJournalExclusive() with no noms directory succeeded; want a refusal that does not mint Dolt's tree")
+	}
+	if errors.Is(err, ErrWorkspaceNotInitialized) {
+		t.Fatalf("a damaged Dolt tree was reported as an uninitialized workspace: %v", err)
+	}
+	if !strings.Contains(err.Error(), "stat dolt journal dir:") {
+		t.Fatalf("refusal = %v; want it to name the directory that failed", err)
+	}
+	// Refusing must not have created what it refused over. [LAW:no-silent-failure]
+	if _, statErr := os.Stat(filepath.Join(databasePath, "links", ".dolt", "noms")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("the refusal minted Dolt's tree; stat = %v", statErr)
 	}
 }

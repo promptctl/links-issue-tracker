@@ -19,9 +19,18 @@ import (
 // it forever (links-cli-errors-yfbg).
 var ErrWorkspaceNotInitialized = errors.New("repository not initialized with lit — run 'lit init' first")
 
-// requireInitializedDir classifies one stat of dir into the two answers its
-// callers act on differently: this repository was never initialized, or the
-// stat itself failed for a reason the operator has to see.
+// requireInitializedWorkspace classifies one stat of the workspace root into
+// the two answers its callers act on differently: `lit init` has never run
+// here, or the stat itself failed for a reason the operator has to see.
+//
+// It takes the root and nothing else, deliberately. An earlier shape took any
+// directory plus a label for the error text, and the journal lock pointed it at
+// <root>/links/.dolt/noms — several levels below the fact being asserted. An
+// absent directory down there is also what a damaged or half-deleted Dolt tree
+// looks like, so that call answered "never initialized" for a workspace that
+// plainly existed, and sent the caller to `lit init`, which refuses a root it
+// cannot read. [LAW:types-are-the-program] With no directory to choose and no
+// label to vary, that call is no longer expressible.
 //
 // It hands back a sentinel rather than a proof-carrying type because no type
 // could honestly carry this proof — the directory can vanish between this stat
@@ -29,17 +38,15 @@ var ErrWorkspaceNotInitialized = errors.New("repository not initialized with lit
 // not about a value. [LAW:parse-dont-validate] What it does keep is the single
 // boundary: the OS answer is classified once, here, instead of at each caller.
 //
-// label names the directory in the non-ENOENT wrap, because which directory
-// failed to stat is the whole content of that error for an operator.
 // [LAW:no-silent-failure] Only ENOENT means uninitialized; every other stat
 // error (EACCES, EIO, ELOOP, …) is its own failure mode, never a guessed
 // refusal and never a vague downstream Dolt-connection error.
-func requireInitializedDir(dir string, label string) error {
-	if _, statErr := os.Stat(dir); statErr != nil {
+func requireInitializedWorkspace(doltRootDir string) error {
+	if _, statErr := os.Stat(doltRootDir); statErr != nil {
 		if errors.Is(statErr, os.ErrNotExist) {
 			return ErrWorkspaceNotInitialized
 		}
-		return fmt.Errorf("stat %s: %w", label, statErr)
+		return fmt.Errorf("stat database dir: %w", statErr)
 	}
 	return nil
 }
