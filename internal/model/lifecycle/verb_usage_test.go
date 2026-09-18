@@ -58,6 +58,15 @@ var (
 	fmtCallHead = regexp.MustCompile(`fmt\.(?:Errorf|Sprintf|Fprintf|Printf|Sprint|Fprint|Print|Sprintln|Fprintln|Println)\(`)
 )
 
+// Go keywords that can stand where a value name would, so that `case
+// model.StatusAction:` and `type Action = ...` do not read as declarations.
+var goKeywords = map[string]bool{
+	"case": true, "type": true, "func": true, "var": true, "const": true,
+	"return": true, "range": true, "for": true, "if": true, "else": true,
+	"switch": true, "default": true, "go": true, "defer": true, "chan": true,
+	"map": true, "struct": true, "interface": true, "package": true, "import": true,
+}
+
 func repoRootForVerbTest(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()
@@ -164,8 +173,16 @@ func namesTypedAction(sources map[string]string) []string {
 			if strings.HasPrefix(strings.TrimSpace(line), "//") {
 				continue
 			}
-			for _, m := range actionValue.FindAllStringSubmatch(line, -1) {
-				seen[m[1]] = true
+			for _, m := range actionValue.FindAllStringSubmatchIndex(line, -1) {
+				name := line[m[2]:m[3]]
+				// `case model.StatusAction:` and `type Action = ...` match the
+				// declaration shape but declare no value, and a quoted
+				// "illegal Action value %T" is not code at all. Each produced a
+				// bearer that matches nothing, so each failed silently.
+				if goKeywords[name] || strings.Count(line[:m[0]], `"`)%2 == 1 {
+					continue
+				}
+				seen[name] = true
 			}
 		}
 	}
@@ -226,7 +243,19 @@ func TestActionNameSpellingsAreAccountedFor(t *testing.T) {
 	if got := len(namesTypedActionName(sources)); got != 2 {
 		t.Errorf("ActionName-typed field NAMES = %d (%v), want 2", got, namesTypedActionName(sources))
 	}
-	if got := len(namesTypedAction(sources)); got == 0 {
-		t.Error("no value declared as an Action was found, so x.Name() sites are not being scanned at all")
+	// Asserted as a SET, not as "at least one". The derivation used to admit
+	// `case`, `type` and a word out of a string literal, each producing a bearer
+	// that matches nothing; a non-empty check passes just as happily over noise
+	// as over the real thing, and would have kept passing after the real names
+	// were renamed away. [LAW:verifiable-goals]
+	wantValues := map[string]bool{"Action": true, "action": true}
+	got := namesTypedAction(sources)
+	if len(got) != len(wantValues) {
+		t.Fatalf("values declared as an Action = %v, want exactly %v", got, []string{"Action", "action"})
+	}
+	for _, name := range got {
+		if !wantValues[name] {
+			t.Errorf("unexpected Action value name %q derived; either a real new spelling (extend this set) or the derivation is matching something that is not a declaration", name)
+		}
 	}
 }
