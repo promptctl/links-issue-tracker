@@ -1225,8 +1225,8 @@ func TestRankSetOverAWholeFrameIsIdempotent(t *testing.T) {
 		if _, err := st.RankSet(ctx, ids); err != nil {
 			t.Fatalf("RankSet round %d error = %v", round, err)
 		}
+		after := currentRanks(t, ctx, st, children)
 		for _, child := range children {
-			after := currentRanks(t, ctx, st, children)
 			if after[child.ID] != first[child.ID] {
 				t.Errorf("round %d rewrote %s from %q to %q; the same stack asked for twice is the same order", round, child.ID, first[child.ID], after[child.ID])
 			}
@@ -1234,11 +1234,91 @@ func TestRankSetOverAWholeFrameIsIdempotent(t *testing.T) {
 	}
 	// Nothing outside the frame moved, and every key still orders one issue.
 	held := currentRanks(t, ctx, st, append([]model.Issue{epic, outsider}, children...))
+	for _, outside := range []model.Issue{epic, outsider} {
+		if held[outside.ID] != outside.Rank {
+			t.Errorf("rank set among an epic's children moved %s: rank %q -> %q", outside.ID, outside.Rank, held[outside.ID])
+		}
+	}
 	seen := map[string]string{}
 	for id, r := range held {
 		if other, dup := seen[r]; dup {
 			t.Errorf("issues %s and %s both hold rank %q", other, id, r)
 		}
 		seen[r] = id
+	}
+}
+
+// TestRankSetOverEveryTopLevelIssueTakesADistinctKey covers the case where a
+// frame reading empty does not mean the workspace is.
+//
+// RankSet's anchor query excludes the ids it is placing, so naming every
+// top-level issue leaves the top level reading empty while issues inside the
+// epics still hold keys. Answering that with open bounds makes rank.Midpoint
+// return rank.Initial — the opening key of a workspace — and hands it to the
+// stack on top of whoever already holds it. The bound has to come from the
+// workspace's own last key, a read that excludes nothing and is therefore
+// empty only when nothing at all is ranked.
+//
+// The fixture reparents the workspace's FIRST issue, the one holding
+// rank.Initial, into an epic. That is what makes the case adversarial: the key
+// an open-bounds answer produces is held by an issue outside the stack, and
+// nothing else in the workspace can reach that key. Without the reparent every
+// surviving key is above rank.Initial, the collision cannot happen, and the
+// case passes whichever bound is used.
+func TestRankSetOverEveryTopLevelIssueTakesADistinctKey(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	opener, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Opener", Topic: "frame", IssueType: "task"})
+	if err != nil {
+		t.Fatalf("CreateIssue(opener) error = %v", err)
+	}
+	if opener.Rank != rank.Initial() {
+		t.Fatalf("the first issue holds %q, want the opening key %q; this case rests on it holding the key open bounds yield", opener.Rank, rank.Initial())
+	}
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "frame", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	other, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Other top-level", Topic: "frame", IssueType: "task"})
+	if err != nil {
+		t.Fatalf("CreateIssue(other) error = %v", err)
+	}
+	// The opener moves inside the epic, keeping its key. The top level now
+	// holds exactly the two issues the stack is about to name.
+	if _, err := st.SetParent(ctx, storage.SetParentInput{ChildID: opener.ID, ParentID: epic.ID, CreatedBy: "tester"}); err != nil {
+		t.Fatalf("SetParent(opener under epic) error = %v", err)
+	}
+	if held := currentRanks(t, ctx, st, []model.Issue{opener})[opener.ID]; held != rank.Initial() {
+		t.Fatalf("the reparented opener holds %q, want the opening key %q; reparenting must not rewrite a rank", held, rank.Initial())
+	}
+
+	if _, err := st.RankSet(ctx, []string{other.ID, epic.ID}); err != nil {
+		t.Fatalf("RankSet(every top-level issue) error = %v", err)
+	}
+
+	after := currentRanks(t, ctx, st, []model.Issue{epic, other, opener})
+	for _, id := range []string{epic.ID, other.ID} {
+		if after[id] == after[opener.ID] {
+			t.Errorf("rank set wrote %q onto %s, the key %s holds inside the epic; a rank orders one issue", after[id], id, opener.ID)
+		}
+	}
+	listed, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
+	if err != nil {
+		t.Fatalf("ListIssues error = %v", err)
+	}
+	holder := map[string]string{}
+	for _, issue := range listed {
+		if issue.Rank == "" {
+			continue
+		}
+		if prior, taken := holder[issue.Rank]; taken {
+			t.Errorf("issues %s and %s both hold rank %q; a rank orders one issue", prior, issue.ID, issue.Rank)
+		}
+		holder[issue.Rank] = issue.ID
+	}
+	if after[other.ID] >= after[epic.ID] {
+		t.Errorf("rank set put %s at %q and %s at %q; the named order was other, then epic", other.ID, after[other.ID], epic.ID, after[epic.ID])
 	}
 }

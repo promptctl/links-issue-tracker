@@ -159,11 +159,11 @@ func (e rankEdge) roomBesideTx(ctx context.Context, tx *sql.Tx, anchorRank strin
 // opposite of what was asked. [LAW:one-source-of-truth] The memory engine says
 // the same thing positionally, inserting immediately after the container.
 //
-// The top level needs no container and has none: it holds nothing ranked only
-// when the whole workspace does, since every issue's ancestry ends at a
-// top-level issue and ensureIssueRanks has ranked it. Both bounds are open
-// there, nothing exists to collide with, and the first issue in a workspace
-// takes rank.Initial.
+// The top level names no containing issue, so it takes the fallback below
+// rather than a container's key. It is NOT answered with open bounds: that
+// would be reading "this frame has nothing ranked" as "the workspace has
+// nothing ranked", and the two part company the moment a write excludes what
+// it is moving.
 //
 // moving carries through for the same reason it exists anywhere: the keys this
 // write is about to vacate are not walls. Dropping it here left rank set
@@ -171,32 +171,42 @@ func (e rankEdge) roomBesideTx(ctx context.Context, tx *sql.Tx, anchorRank strin
 // idempotent request — walked the key longer every round, V then VV then VF,
 // spending the container's gap on a command that changes nothing.
 func firstInFrameBoundsTx(ctx context.Context, tx *sql.Tx, f storage.Frame, moving ...string) (lower, upper string, err error) {
-	if f == storage.TopLevel {
+	if f != storage.TopLevel {
+		containerRank, err := nearestRank(ctx, tx, `SELECT item_rank FROM issues
+			WHERE id = ? AND deleted_at IS NULL AND item_rank != ''`, string(f))
+		if err != nil {
+			return "", "", fmt.Errorf("query the rank of frame %q: %w", f, err)
+		}
+		if containerRank != "" {
+			return bottomEdge.roomBesideTx(ctx, tx, containerRank, moving...)
+		}
+	}
+	// No container names a key to sit beside: the top level has no containing
+	// issue, and a container carrying no rank of its own names none either. The
+	// position then falls back to the far side of the workspace's own last key.
+	//
+	// That read deliberately does NOT exclude moving, and the whole safety of
+	// this arm rests on it. Its emptiness is then a statement about the table
+	// rather than about this write: it comes back empty only when nothing at all
+	// is ranked, which is the one case where open bounds are true and
+	// rank.Midpoint's answer — rank.Initial, the first key in a workspace —
+	// belongs to nobody. Short-circuiting the top level to open bounds instead
+	// read as "nothing is ranked" whenever a write merely excluded everything it
+	// could see: rank set over every top-level issue leaves this read empty
+	// while children inside the epics still hold keys, and the stack was then
+	// handed rank.Initial on top of one of them. [LAW:no-silent-failure]
+	//
+	// A mover holding the last key anchors the pair on a key it is about to
+	// vacate, which is harmless — the key placed past the workspace's maximum
+	// is above every key that stays.
+	lastRank, err := workspaceEdgeRankTx(ctx, tx, storage.TopLevel, bottomEdge)
+	if err != nil {
+		return "", "", err
+	}
+	if lastRank == "" {
 		return "", "", nil
 	}
-	containerRank, err := nearestRank(ctx, tx, `SELECT item_rank FROM issues
-		WHERE id = ? AND deleted_at IS NULL AND item_rank != ''`, string(f))
-	if err != nil {
-		return "", "", fmt.Errorf("query the rank of frame %q: %w", f, err)
-	}
-	// A container carrying no rank of its own frames nothing this can be
-	// measured against. It is not reachable through the API — ensureIssueRanks
-	// backfills at open — so rather than invent a position, fall back to the
-	// one end nothing can already hold. The workspace read behind that fallback
-	// does not take moving, so a mover holding the last key anchors on the key
-	// it is vacating; threading it through a read this branch can only reach
-	// from a corrupt row would buy a tighter bound nobody can ask for.
-	if containerRank == "" {
-		lastRank, err := workspaceEdgeRankTx(ctx, tx, storage.TopLevel, bottomEdge)
-		if err != nil {
-			return "", "", err
-		}
-		if lastRank == "" {
-			return "", "", nil
-		}
-		return bottomEdge.roomBesideTx(ctx, tx, lastRank, moving...)
-	}
-	return bottomEdge.roomBesideTx(ctx, tx, containerRank, moving...)
+	return bottomEdge.roomBesideTx(ctx, tx, lastRank, moving...)
 }
 
 // filingBoundsTx is the pair a create's key is placed between: the population
