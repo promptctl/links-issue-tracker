@@ -364,6 +364,46 @@ func TestTerminatorMakesEverythingAfterItPositional(t *testing.T) {
 	}
 }
 
+// TestTerminatorIsNeverConsumedAsAFlagValue pins a line that used to RUN.
+// `lit label add --by -- <id> <label>` applied the label with --by set to the
+// literal "--": splitArgs withheld "--" from the value slot because it leads
+// with a dash, then emitted it into the flag stream anyway, where pflag consumes
+// whatever follows a value-required flag unconditionally. The real trailing
+// tokens had already been routed to positionals, so parseLeaf saw no leftover
+// and nothing refused the malformed line. The terminator is structure, not data.
+func TestTerminatorIsNeverConsumedAsAFlagValue(t *testing.T) {
+	t.Parallel()
+	fs := newCobraFlagSet("probe")
+	by := fs.String("by", "", "actor")
+
+	_, err := parseLeaf(leaf[struct{}]{fs: fs, positionals: 2}, []string{"--by", "--", "id1", "label1"}, io.Discard)
+	if err == nil {
+		t.Fatalf("parseLeaf(--by -- id1 label1) succeeded with --by = %q; a value-taking flag before the terminator has no value and must be refused", *by)
+	}
+	if *by == "--" {
+		t.Errorf("--by = %q; the terminator was consumed as the flag's value", *by)
+	}
+	if !strings.Contains(err.Error(), "by") {
+		t.Errorf("error = %q, want it to name the flag that is missing its argument", err)
+	}
+
+	// Control, so the fix cannot be "refuse every terminator after a flag": a
+	// value-taking flag that HAS its value still parses, and the terminator
+	// still protects what follows.
+	fs2 := newCobraFlagSet("probe")
+	by2 := fs2.String("by", "", "actor")
+	got, err := parseLeaf(leaf[struct{}]{fs: fs2, positionals: 2}, []string{"--by", "me", "--", "id1", "-x"}, io.Discard)
+	if err != nil {
+		t.Fatalf("parseLeaf(--by me -- id1 -x) error = %v, want it to parse", err)
+	}
+	if *by2 != "me" {
+		t.Errorf("--by = %q, want me", *by2)
+	}
+	if len(got) != 2 || got[0] != "id1" || got[1] != "-x" {
+		t.Errorf("positionals = %q, want [id1 -x]", got)
+	}
+}
+
 // A leaf that says nothing still names the acts that work, because the fallback
 // is derived from the flag set instead of hand-written onto each leaf.
 func TestDerivedUsageNamesTheValueTakingFlags(t *testing.T) {

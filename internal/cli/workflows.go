@@ -63,7 +63,7 @@ func workflowsDispatch(args []string) (wsLeaf, []string, error) {
 // error instead of a silently ignored token.
 func workflowsOverviewLeaf() wsLeaf {
 	fs := newCobraFlagSet("workflows")
-	return wsLeaf{fs: fs, positionals: 0, work: func(_ context.Context, stdout io.Writer, ws workspace.Info, _ []string) error {
+	return wsLeaf{fs: fs, positionals: 0, usage: workflowsUsage, work: func(_ context.Context, stdout io.Writer, ws workspace.Info, _ []string) error {
 		return renderWorkflowsOverview(stdout, workflows.Load(ws.RootDir))
 	}}
 }

@@ -105,6 +105,10 @@ func bulkLabelLeaf() appLeaf {
 	ids := fs.String("ids", "", "Comma-separated issue IDs")
 	label := fs.String("label", "", "Label name")
 	resolveActor := registerActor(fs)
+	// No usage: here, deliberately. Wiring the family's sentence loses --ids and
+	// --label -- the act that actually works -- and measurement said so: the
+	// derived sentence names both, and "takes 1 positional argument" is exactly
+	// true of a command whose one positional is the action. [LAW:one-source-of-truth]
 	return appLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if len(positional) == 0 {
 			return UsageError{Message: bulkLabelFamily.usage}

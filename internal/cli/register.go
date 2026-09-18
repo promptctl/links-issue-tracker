@@ -371,14 +371,24 @@ func derivedUsage(fs *cobraFlagSet, declared int) string {
 	valued := fs.valueTakingFlagNames()
 	switch {
 	case len(valued) == 0:
-		// Nothing takes a value, so the allowance is the whole truth and adding
-		// to it would be padding. [LAW:no-silent-failure] say only what is true.
-		return line
+		// Nothing takes a value this way, so the allowance is the whole truth
+		// and adding to it would be padding. [LAW:no-silent-failure]
 	case len(valued) <= maxNamedFlagsInUsage:
-		return line + "; values are passed as flags: " + strings.Join(valued, ", ")
+		line += "; values are passed as flags: " + strings.Join(valued, ", ")
 	default:
-		return line + fmt.Sprintf("; values are passed as flags — run `lit %s --help`", fs.cmd.Use)
+		line += fmt.Sprintf("; values are passed as flags — run `lit %s --help`", fs.cmd.Use)
 	}
+	// An optional-value flag is the one shape the clause above cannot express:
+	// pflag reads its value only with an equals sign, so written with a space
+	// the token stays a positional and the command is refused for a reason that
+	// names neither the flag nor the form that works. `lit doctor --fix rank`
+	// and `lit quickstart --eject all` are the same defect; deriving the clause
+	// answers both, where a bespoke sentence answered only the one I happened to
+	// run. [LAW:one-source-of-truth]
+	for _, name := range fs.optionalValueFlagNames() {
+		line += fmt.Sprintf("; %s takes its value as %s=<value>", name, name)
+	}
+	return line
 }
 
 // maxNamedFlagsInUsage is where naming the flags stops helping. Four covers the

@@ -1355,9 +1355,14 @@ func rankLeaf() appLeaf {
 // silent. [LAW:no-silent-failure]
 func rankSetLeaf() appLeaf {
 	fs := newCobraFlagSet("rank set")
-	return appLeaf{fs: fs, positionals: allPositionals, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	// Without this the refusal renders the unbounded sentinel — "takes any
+	// number of positional arguments" while refusing one, which is both
+	// self-contradicting and no act a caller can perform. The sentence is one
+	// line below; the declaration and the body read it from here.
+	const usage = "usage: lit rank set <id1> <id2> [<id3> ...]"
+	return appLeaf{fs: fs, positionals: allPositionals, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if len(positional) < 2 {
-			return UsageError{Message: "usage: lit rank set <id1> <id2> [<id3> ...]"}
+			return UsageError{Message: usage}
 		}
 		result, err := ap.Store.RankSet(ctx, positional)
 		if err != nil {

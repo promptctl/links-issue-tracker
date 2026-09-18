@@ -257,6 +257,25 @@ func (fs *cobraFlagSet) valueTakingFlagNames() []string {
 	return names
 }
 
+// optionalValueFlagNames names the flags pflag reads a value from ONLY with an
+// equals sign. They are recorded as NoOptDefVal non-empty — the same field
+// takesValue reads — so they are exactly the flags the value-naming clause must
+// NOT list: written with a space, the value is not a value at all. A boolean is
+// the other NoOptDefVal shape and takes no value in any form, so it is excluded
+// by its type rather than by a name list that would have to be maintained.
+// [LAW:one-source-of-truth]
+func (fs *cobraFlagSet) optionalValueFlagNames() []string {
+	var names []string
+	fs.cmd.Flags().VisitAll(func(flag *pflag.Flag) {
+		if flag.Hidden || flag.Name == "help" || takesValue(flag) || flag.Value.Type() == "bool" {
+			return
+		}
+		names = append(names, "--"+flag.Name)
+	})
+	sort.Strings(names)
+	return names
+}
+
 func splitArgs(args []string, positionalCount int, fs *cobraFlagSet) ([]string, []string) {
 	// positionalCount is a CEILING, and an unbounded-arity leaf states it as
 	// allPositionals — so it is not a capacity. argv is the real bound: no more
@@ -265,6 +284,16 @@ func splitArgs(args []string, positionalCount int, fs *cobraFlagSet) ([]string, 
 	// get instead of trusting a number that is allowed to mean "no limit".
 	positionals := make([]string, 0, min(positionalCount, len(args)))
 	flags := make([]string, 0, len(args))
+	// A value-taking flag whose value was not consumed leaves the flag stream
+	// expecting one, and the terminator is structure rather than data — so it
+	// must never land in that position. pflag consumes whatever follows such a
+	// flag unconditionally, dash or not, so emitting "--" there set the flag to
+	// the literal "--" and, because this branch had already routed the real
+	// trailing tokens into positionals, parseLeaf saw no leftover and the
+	// malformed line ran to completion: `lit label add --by -- <id> <label>`
+	// applied the label. Withholding the terminator lets pflag raise "flag needs
+	// an argument", which names the flag. [LAW:no-silent-failure]
+	awaitingValue := false
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
 		if arg == "--" {
@@ -275,7 +304,9 @@ func splitArgs(args []string, positionalCount int, fs *cobraFlagSet) ([]string, 
 			// ahead of the positionals — harmless while nothing checked the
 			// count, and, once parseLeaf did, a refusal of a command line the
 			// caller had written correctly. [LAW:no-silent-failure]
-			flags = append(flags, arg)
+			if !awaitingValue {
+				flags = append(flags, arg)
+			}
 			for _, rest := range args[index+1:] {
 				if len(positionals) < positionalCount {
 					positionals = append(positionals, rest)
@@ -290,16 +321,23 @@ func splitArgs(args []string, positionalCount int, fs *cobraFlagSet) ([]string, 
 		}
 		if strings.HasPrefix(arg, "-") {
 			flags = append(flags, arg)
-			// The leading-dash test on the NEXT token stays: a value-taking flag
-			// written `--at --help` still reaches pflag with its value missing,
-			// which is the refusal that shape already earned. Only the boolean
-			// case changes, and it changes in one direction — tokens that used
-			// to be swallowed are now left as positionals for the arity check
-			// below to judge.
+			// The leading-dash test on the NEXT token stays, but not because
+			// pflag refuses a dash-leading value — it does not. pflag consumes
+			// the next token as a value-required flag's value unconditionally,
+			// so `lit upgrade --to --help` sets --to to the literal "--help"
+			// and fetches a release tagged `v--help`; only `ls`/`children`
+			// guard that shape themselves. The test stays because withholding
+			// such a token here leaves it where the caller put it, so the
+			// refusal stays about the flag actually mistyped. Only the boolean
+			// case changes, and in one direction — tokens that used to be
+			// swallowed are now left as positionals for the arity check to judge.
 			if index+1 < len(args) && !strings.HasPrefix(args[index+1], "-") && fs.flagTakesValue(arg) {
 				flags = append(flags, args[index+1])
 				index++
+				awaitingValue = false
+				continue
 			}
+			awaitingValue = fs.flagTakesValue(arg)
 			continue
 		}
 		if len(positionals) < positionalCount {
