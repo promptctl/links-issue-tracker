@@ -402,9 +402,9 @@ func resolveWsLeaf(f commandFamily[wsSubcommand], args []string) (wsLeaf, []stri
 // here rather than relying on each caller to order them.
 // [LAW:single-enforcer] one pipeline, so no entrypoint can acquire earlier than
 // another.
-func (r *commandRegistrar) wsCmdPipeline(dispatch func(args []string) (wsLeaf, []string, error)) CommandRunner {
+func (r *commandRegistrar) wsCmdPipeline(dispatch func(args []string) (wsLeaf, wsAcquire, []string, error)) CommandRunner {
 	return func(args []string) error {
-		l, rest, err := dispatch(args)
+		l, acquire, rest, err := dispatch(args)
 		if err != nil {
 			return err
 		}
@@ -412,20 +412,59 @@ func (r *commandRegistrar) wsCmdPipeline(dispatch func(args []string) (wsLeaf, [
 		if err != nil {
 			return err
 		}
-		return runWithWorkspace(func(ws workspace.Info) error {
-			return l.work(r.ctx, r.stdout, ws, positional)
-		})
+		ws, err := acquire()
+		if err != nil {
+			return err
+		}
+		return l.work(r.ctx, r.stdout, ws, positional)
+	}
+}
+
+// wsAcquire supplies the workspace a leaf's work runs against. It is a value
+// the dispatch chooses rather than a call hard-coded into the pipeline, because
+// `lit init --prefix` carries an input to the acquisition ITSELF — creating the
+// workspace is what fails without it — and that input does not exist until the
+// leaf's flags are parsed. [LAW:dataflow-not-control-flow] the pipeline always
+// acquires; only the value it acquires with varies, so the ordering this
+// pipeline owns stays one ordering rather than forking for one command.
+type wsAcquire = func() (workspace.Info, error)
+
+// acquireFromWD is what every command but `lit init` acquires with: the
+// workspace for the working directory, with no prefix of its own to offer.
+func acquireFromWD() (workspace.Info, error) {
+	return resolveWorkspaceFromWD(workspace.PrefixRequest{})
+}
+
+// withWDAcquire lifts a dispatch that only chooses a leaf into the pipeline's
+// shape. It exists so that adding init's acquisition changed no dispatch that
+// had nothing to say about acquisition. [LAW:locality-or-seam]
+func withWDAcquire(dispatch func(args []string) (wsLeaf, []string, error)) func(args []string) (wsLeaf, wsAcquire, []string, error) {
+	return func(args []string) (wsLeaf, wsAcquire, []string, error) {
+		l, rest, err := dispatch(args)
+		return l, acquireFromWD, rest, err
 	}
 }
 
 // wsFamilyCmd is familyCmd for workspace-mode families: the family table
 // rejects bad paths, and the leaf it yields declares the surface help answers.
 func (r *commandRegistrar) wsFamilyCmd(f commandFamily[wsSubcommand]) CommandRunner {
-	return r.wsCmdPipeline(func(args []string) (wsLeaf, []string, error) { return resolveWsLeaf(f, args) })
+	return r.wsCmdPipeline(withWDAcquire(func(args []string) (wsLeaf, []string, error) { return resolveWsLeaf(f, args) }))
 }
 
 func (r *commandRegistrar) wsCmd(declare wsLeafFn) CommandRunner {
-	return r.wsCmdPipeline(func(args []string) (wsLeaf, []string, error) { return declare(), args, nil })
+	return r.wsCmdPipeline(withWDAcquire(func(args []string) (wsLeaf, []string, error) { return declare(), args, nil }))
+}
+
+// wsCmdAcquiring is wsCmd for a command whose own flags decide how the
+// workspace is acquired. The declaration hands back the leaf and the
+// acquisition together so both close over the same parsed flag storage — read
+// from anywhere else, the flag would have a second home and the two could
+// disagree. [LAW:one-source-of-truth]
+func (r *commandRegistrar) wsCmdAcquiring(declare func() (wsLeaf, wsAcquire)) CommandRunner {
+	return r.wsCmdPipeline(func(args []string) (wsLeaf, wsAcquire, []string, error) {
+		l, acquire := declare()
+		return l, acquire, args, nil
+	})
 }
 
 func (r *commandRegistrar) transitionCmd(spec transitionSpec) CommandRunner {
@@ -455,11 +494,11 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 
 	return []CommandSpec{
 		{Name: "init", Summary: "Initialize links", GroupID: "bootstrap",
-			Run: r.wsCmd(initLeaf)},
+			Run: r.wsCmdAcquiring(initLeaf)},
 		{Name: "quickstart", Summary: "Agent quickstart workflow", GroupID: "guidance",
 			Run: r.wsCmd(quickstartLeaf)},
 		{Name: "workflows", Summary: "See the work lifecycle and the guidance active at each point (`workflows show <id>` resolved, `edit <id-or-point>` to customize, `dry-run` to explain a hypothetical)", GroupID: "guidance",
-			Run: r.wsCmdPipeline(workflowsDispatch), Subcommands: workflowsFamily.visibleSubcommands()},
+			Run: r.wsCmdPipeline(withWDAcquire(workflowsDispatch)), Subcommands: workflowsFamily.visibleSubcommands()},
 		{Name: "completion", Summary: "Generate shell completion script", GroupID: "guidance",
 			Run: completionRun, Subcommands: completionFamily.visibleSubcommands()},
 		{Name: "version", Summary: "Print binary version, build metadata, and supported schema range", GroupID: "guidance",

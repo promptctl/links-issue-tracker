@@ -88,13 +88,20 @@ any non-closed state). The distinction is recorded in history.
 ### `lit init`
 
 ```text
-lit init [--skip-hooks] [--skip-agents]
+lit init [--prefix <prefix>] [--skip-hooks] [--skip-agents]
 ```
 
 Initializes the issue store under `$(git rev-parse --git-common-dir)/links/`, adds
 managed `lit` sections to `AGENTS.md` / `CLAUDE.md`, and installs the sync git hook.
 Idempotent: re-running reconciles the managed files. `--skip-hooks` and `--skip-agents`
-suppress the respective side effects.
+suppress the respective side effects. `--prefix` sets the issue ID prefix explicitly; by
+default it is derived from the repository directory name, which a name like `ab` or `___`
+cannot produce, so `--prefix` is the way to initialize those. It applies only to a
+workspace that has no prefix yet — supplying one that contradicts an existing workspace's
+is refused, because `lit prefix set` is what changes a prefix already in use. Every
+run prints `  issue_prefix: <value>`, the prefix actually stored: normalization
+slugifies and truncates at 12 characters, so `--prefix payment_service` stores
+`payment-serv`.
 
 The `/next` skill for pulling the next ticket ships from the `lit` Claude Code plugin
 (`.claude-plugin/marketplace.json` at the repo root), not written into the target
@@ -184,8 +191,10 @@ See design-docs/work-claims.md for the full precedence.
 — so where a pick's start would establish a claim, the line above the row says so
 in the conditional and names that command: "run `lit start <id>` to claim lane
 one of epic E". A lane of one is not named, because it is the ticket already on
-the line. A pick that the epic-continuation step reached closes on a qualifier
-saying so, which the same line from the global pool does not carry.
+the line. A pick that continues an epic you already hold a lane in closes on a
+qualifier saying so, and a pick that gates one of your blocked tickets closes
+on a qualifier naming the ticket it unblocks. The same line from the global
+pool carries neither.
 
 Both endings that hand back no ticket — the exhaustion diagnostic and an empty
 result — exit 6 rather than 1, and their remediation names the deliberate act each

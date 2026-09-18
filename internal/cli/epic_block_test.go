@@ -306,9 +306,14 @@ func TestRouteNextTreatsAnEpicsGateAsOnPath(t *testing.T) {
 	t.Run("holding the gated lane", func(t *testing.T) {
 		standings := claims.Standings{doneLane: heldBy(selfAttribution), gatedLane: heldBy(selfAttribution)}
 		outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
-		served, ok := outcome.(ServedFromNewLane)
+		// An epic's gate reaches us through step 1b, so it arrives as the
+		// dependency outcome and says what it unblocks (links-next-output-4hor).
+		served, ok := outcome.(ServedFromDependency)
 		if !ok || served.Row.ID != gate.ID {
-			t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane serving the gate %s", outcome, outcome, gate.ID)
+			t.Fatalf("routeNext = %#v (%T), want ServedFromDependency serving the gate %s", outcome, outcome, gate.ID)
+		}
+		if served.Gates != gated.ID {
+			t.Fatalf("served.Gates = %q, want %q — an epic's gate reaches us through the gated child, and a non-empty id is not the assertion: the dependency naming itself would satisfy that", served.Gates, gated.ID)
 		}
 	})
 	t.Run("holding only the epic", func(t *testing.T) {

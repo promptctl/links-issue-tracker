@@ -47,18 +47,76 @@ func (h readyTestHarness) runNextOutcome() NextOutcome {
 func (h readyTestHarness) runNextRow() annotation.AnnotatedIssue {
 	h.t.Helper()
 	outcome := h.runNextOutcome()
-	switch served := outcome.(type) {
-	case ServedFromClaim:
-		return served.Row
-	case ResumedOwnWork:
-		return served.Row
-	case ServedFromEpicLane:
-		return served.Row
-	case ServedFromNewLane:
-		return served.Row
+	if row, ok := servedRow(outcome); ok {
+		return row
 	}
 	h.t.Fatalf("routeNext = %#v (%T), want an outcome carrying a served row", outcome, outcome)
 	return annotation.AnnotatedIssue{}
+}
+
+// servedRow is the single place the harness decides which outcomes carry a row.
+// It was inlined in runNextRow, where nothing could reach it but a full routing
+// run — so the totality the comment above asserts was never exercised, and this
+// switch silently fell a variant behind the renderer's when step 1b got its own
+// outcome (links-next-output-4hor). Lifted out, the claim is directly testable
+// by TestServedRowIsTotalOverTheSealedSum. [LAW:one-source-of-truth]
+func servedRow(outcome NextOutcome) (annotation.AnnotatedIssue, bool) {
+	switch served := outcome.(type) {
+	case ServedFromClaim:
+		return served.Row, true
+	case ResumedOwnWork:
+		return served.Row, true
+	case ServedFromEpicLane:
+		return served.Row, true
+	case ServedFromNewLane:
+		return served.Row, true
+	case ServedFromDependency:
+		return served.Row, true
+	}
+	return annotation.AnnotatedIssue{}, false
+}
+
+// Go type switches are not exhaustive, so nothing in the compiler holds
+// servedRow level with the sealed sum — the renderer's default panics, but this
+// helper just reports "routing declined to serve", which is the WRONG answer
+// rather than a loud one. Asserted over every variant the sum has, so a new
+// outcome that carries a row fails here by name instead of turning a served row
+// into a confusing failure far from its cause (links-next-output-4hor).
+func TestServedRowIsTotalOverTheSealedSum(t *testing.T) {
+	row := annotation.AnnotatedIssue{Issue: model.Issue{ID: "test-served-1"}}
+	cases := []struct {
+		name    string
+		outcome NextOutcome
+		served  bool
+	}{
+		{"the claimed lane", ServedFromClaim{Row: row}, true},
+		{"own work resumed", ResumedOwnWork{Row: row}, true},
+		{"the epic's next lane", ServedFromEpicLane{Row: row}, true},
+		{"the global pool", ServedFromNewLane{Row: row}, true},
+		{"the on-path dependency", ServedFromDependency{Row: row, Gates: "test-gated-1"}, true},
+		{"exhausted carries none", Exhausted{}, false},
+		{"no work carries none", NoWork{}, false},
+	}
+	// The sum is sealed at seven cases (isNextOutcome, next_route.go). Counting
+	// them here is what makes an added variant fail loudly at this table instead
+	// of passing unnoticed because nobody thought to cover it.
+	if len(cases) != 7 {
+		t.Fatalf("table covers %d outcomes, want all 7 NextOutcome variants — add the new one", len(cases))
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := servedRow(tc.outcome)
+			if ok != tc.served {
+				t.Fatalf("servedRow(%T) served = %v, want %v", tc.outcome, ok, tc.served)
+			}
+			if tc.served && got.ID != row.ID {
+				t.Fatalf("servedRow(%T) = %q, want the row it carries (%q)", tc.outcome, got.ID, row.ID)
+			}
+			if !tc.served && got.ID != "" {
+				t.Fatalf("servedRow(%T) = %q, want the zero row — a terminal outcome serves nothing", tc.outcome, got.ID)
+			}
+		})
+	}
 }
 
 // asCheckout re-attributes everything the harness writes from here on to
@@ -546,6 +604,16 @@ func TestRenderNextOutcomeSpeaksOnlyInTheConditional(t *testing.T) {
 		// partly covered is where this ticket's tautology survived.
 		{"the epic's next lane takes over abandoned work, qualifier and all", ServedFromEpicLane{Row: inFlightRow, Lane: inFlightLane},
 			inFlight.ID + " is in progress and abandoned — run `lit start " + inFlight.ID + "` to take over lane a2 of epic " + epicA.ID + " (a second lane of an epic you already hold a lane in)"},
+		// Step 1b, both verbs. Its qualifier concatenates onto the
+		// verb-dependent sentence exactly as step 2's does, so the product needs
+		// both cells: a fresh claim and a takeover. This is the pick an agent is
+		// least likely to predict, and it printed the global pool's line verbatim
+		// until links-next-output-4hor — so what these two cells pin is not only
+		// the new clause but that the two picks stopped rendering alike.
+		{"the on-path dependency names the row it unblocks", ServedFromDependency{Row: freshRow, Lane: freshLane, Gates: inFlight.ID},
+			"run `lit start " + fresh.ID + "` to claim lane a1 of epic " + epicA.ID + " (gates " + inFlight.ID + ", which is in a lane you hold)"},
+		{"an abandoned dependency is taken over and still names what it unblocks", ServedFromDependency{Row: inFlightRow, Lane: inFlightLane, Gates: fresh.ID},
+			inFlight.ID + " is in progress and abandoned — run `lit start " + inFlight.ID + "` to take over lane a2 of epic " + epicA.ID + " (gates " + fresh.ID + ", which is in a lane you hold)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer
@@ -607,5 +675,44 @@ func TestRunNextClaimsNothingAndStartsNothing(t *testing.T) {
 	}
 	if !strings.Contains(text, "run `lit start "+target.ID+"`") {
 		t.Fatalf("next output = %q, want it to name the command that would actually claim %q", text, target.ID)
+	}
+}
+
+// The two picks that both establish a claim in a lane we do not hold must remain
+// tellable apart BY THE OUTPUT ALONE — that is the acceptance criterion
+// links-next-output-4hor was filed on, and it is not implied by either line
+// being correct in isolation. Asserted on ONE row deliberately: holding the row,
+// the lane and the standings fixed leaves the routing step as the only variable,
+// so a future edit that made the qualifier unconditional (or dropped it) could
+// not pass this by changing the fixture.
+func TestDependencyPickIsDistinguishableFromThePool(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	fresh := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
+	blocked := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
+
+	rows, details := h.gather()
+	cc := claimContext{self: selfAttribution}
+	row := rowByID(t, rows, fresh.ID)
+	lane := laneOf(t, details, row)
+
+	render := func(o NextOutcome) string {
+		var buf bytes.Buffer
+		if _, err := renderNextOutcome(&buf, o, details, cc); err != nil {
+			t.Fatalf("renderNextOutcome(%T) error = %v", o, err)
+		}
+		return buf.String()
+	}
+	pool := render(ServedFromNewLane{Row: row, Lane: lane})
+	dep := render(ServedFromDependency{Row: row, Lane: lane, Gates: blocked.ID})
+
+	if pool == dep {
+		t.Fatalf("the global pool and the on-path dependency render identically as %q — the pick an agent cannot predict is the one that must explain itself", pool)
+	}
+	if !strings.Contains(dep, blocked.ID) {
+		t.Fatalf("dependency pick rendered %q, want it to name the blocked row %q it unblocks", dep, blocked.ID)
+	}
+	if strings.Contains(pool, "gates") {
+		t.Fatalf("global-pool pick rendered %q, want no gating clause — it gates nothing, and a line that claims otherwise is worse than the silence it replaced", pool)
 	}
 }

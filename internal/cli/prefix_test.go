@@ -189,6 +189,19 @@ func TestPrefixSetRejectsInvalidPrefix(t *testing.T) {
 	if !strings.Contains(err.Error(), "invalid prefix") {
 		t.Fatalf("error = %q, want it to mention invalid prefix", err.Error())
 	}
+	// The message was always right; what was missing was a type for the sinks to
+	// dispatch on, so this reached the unclassified default and told the caller
+	// to retry a refusal that repeats forever, then to run `lit doctor` over a
+	// healthy workspace. The rules refuse this prefix identically every time.
+	// [LAW:no-silent-failure]
+	if got := ExitCode(err); got != ExitValidation {
+		t.Fatalf("ExitCode = %d, want %d", got, ExitValidation)
+	}
+	var stderr bytes.Buffer
+	WriteCommandError(&stderr, err)
+	if rendered := stderr.String(); strings.Contains(rendered, "lit doctor") || strings.Contains(rendered, "Retry the command") {
+		t.Fatalf("rendered error still carries the unclassified-fault advice:\n%s", rendered)
+	}
 }
 
 func TestPrefixSetRejectsExtraPositionalArgs(t *testing.T) {

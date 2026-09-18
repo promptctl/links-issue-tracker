@@ -3,6 +3,7 @@ package workspace
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"os/exec"
@@ -248,10 +249,25 @@ func TestResolveRejectsInvalidConfiguredPrefix(t *testing.T) {
 	}
 	rewriteConfigPrefix(t, info.ConfigPath, "ab")
 
-	// Only an absent prefix falls back to derivation; an invalid configured
-	// value is a loud error, never silently replaced.
-	if _, err := Resolve(repo); err == nil || !strings.Contains(err.Error(), "invalid issue_prefix") {
-		t.Fatalf("Resolve() error = %v, want invalid issue_prefix", err)
+	// Only an absent prefix falls back to derivation; a stored value the rules
+	// refuse is a loud error, never silently replaced.
+	_, err = Resolve(repo)
+	if err == nil {
+		t.Fatalf("Resolve() error = nil, want a refusal for a stored illegal prefix")
+	}
+	// [LAW:behavior-not-structure] the contract is the sentinel — it is what
+	// picks the exit code and the reason — not the wording that carries it.
+	if !errors.Is(err, ErrIssuePrefixRefused) {
+		t.Fatalf("Resolve() error = %v, want it to wrap ErrIssuePrefixRefused", err)
+	}
+	// No command clears this state: `lit prefix set` and `lit doctor` both
+	// resolve the workspace first and die here too. So the remediation must name
+	// the file to edit; naming a command would name an act that does not work.
+	if !strings.Contains(err.Error(), info.ConfigPath) {
+		t.Fatalf("Resolve() error = %v, want it to name the config path %s", err, info.ConfigPath)
+	}
+	if !strings.Contains(err.Error(), "issue_prefix") {
+		t.Fatalf("Resolve() error = %v, want it to name the issue_prefix field", err)
 	}
 }
 

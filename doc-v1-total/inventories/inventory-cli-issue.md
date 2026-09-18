@@ -71,7 +71,7 @@ into* one of those, the call and its observable effect are recorded here.
 - `r.appCmd(access, fn)` → `runWithApp` with a fixed access mode
   (`register.go:187-189`); `r.appCmdDynamic` computes the mode from argv
   (`register.go:191-197`).
-- `r.wsCmd(fn)` → `runWithWorkspace` (workspace metadata only, no store)
+- `r.wsCmd(fn)` → `acquireFromWD` (workspace metadata only, no store)
   (`register.go:238-244`).
 - `r.familyCmd(family)` resolves `args[0]` against the family table *before*
   opening anything; a row with `skipApp: true` runs with a nil app
@@ -91,8 +91,8 @@ into* one of those, the call and its observable effect are recorded here.
     `sync_staleness.go:229`).
   - Then `maybeAutoSyncAfterCommand(ctx, accessMode, ws)` runs (`cli.go:145`).
   - Both only run when the command returned nil (`cli.go:123-125`).
-- `runWithWorkspace` / `resolveWorkspaceFromWD` (`cli.go:94-163`): same
-  `OutsideWorkspaceError` translation (`cli.go:156-159`).
+- `acquireFromWD` / `resolveWorkspaceFromWD` (`register.go:434-436`, `cli.go:170-184`):
+  same `OutsideWorkspaceError` translation (`cli.go:177-180`).
 
 ### 1.5 Family dispatch (`commandFamily[P]`)
 
@@ -114,7 +114,7 @@ into* one of those, the call and its observable effect are recorded here.
   (`--flag` with no value takes `defaultIfPresent`, absent takes
   `defaultIfAbsent` — `cli.go:237-241`), `Hide(name)` marks a flag hidden but
   functional (`cli.go:261-263`).
-- `parseFlagSet(fs, args, stdout)` (`cli.go:274-308`) is the single parse boundary:
+- `parseFlagSet(fs, args, stdout)` (`flagset.go:134-168`) is the single parse boundary:
   - On `pflag.ErrHelp` it prints `"Usage of <use>:\n"` followed by
     `PrintDefaults()` **to stdout** and returns `errHelpHandled` → exit 0
     (`cli.go:277-283`, printer at `cli.go:265-272`).
@@ -143,7 +143,7 @@ into* one of those, the call and its observable effect are recorded here.
 
 ### 1.8 Exit-code taxonomy
 
-Constants (`exit.go:11-32`):
+Constants (`exit.go:12-33`):
 
 | Name | Value |
 |---|---|
@@ -156,48 +156,49 @@ Constants (`exit.go:11-32`):
 | `ExitNoWork` | 6 |
 | `ExitCorruption` | 7 |
 
-`ExitCode(err)` dispatches by `errors.As`, in this order (`exit.go:37-157`):
-1. `storage.NotFoundError` → 4 (`exit.go:41-43`)
-2. `MergeConflictError` → 5 (`exit.go:45-47`)
-3. `SyncFailureError` → 5 (`exit.go:53-55`)
-4. `templateShapeError` → 3 (`exit.go:61-63`)
-5. `ownerApprovalRefusalError` → 5 (`exit.go:68-70`)
-6. `CorruptionError` → 7 (`exit.go:72-74`)
-7. `UsageError` → 2 (`exit.go:76-78`)
-8. `UnknownCommandError` → 3 (`exit.go:80-82`)
-9. `RetiredCommandError` → 3 (`exit.go:86-88`)
-10. `ValidationError` → 3 (`exit.go:90-92`)
-11. `storage.ValidationError` → 3 (`exit.go:94-96`)
-12. `model.ContainerActionError` → 6 when `Satisfied()`, else 3 (`exit.go:106-112`)
-13. `UnsupportedError` → 3 (`exit.go:113-115`)
-14. `Exhausted` → 6 (`exit.go:121-123`)
-15. `NoWork` → 6 (`exit.go:125-127`)
-16. `OutsideWorkspaceError` → 3 (`exit.go:139-141`)
-17. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → 3 (`exit.go:143-145`)
-18. `BulkFailureError` → 1 (`exit.go:146-152`)
-19. `errors.Is(err, store.ErrTransientGCContention)` → 1 (`exit.go:153-155`)
-20. anything else → 1 (`exit.go:156`)
+`ExitCode(err)` dispatches by `errors.As`, in this order (`exit.go:38-170`):
+1. `storage.NotFoundError` → 4 (`exit.go:42-44`)
+2. `MergeConflictError` → 5 (`exit.go:46-48`)
+3. `SyncFailureError` → 5 (`exit.go:54-56`)
+4. `templateShapeError` → 3 (`exit.go:62-64`)
+5. `ownerApprovalRefusalError` → 5 (`exit.go:69-71`)
+6. `CorruptionError` → 7 (`exit.go:73-75`)
+7. `UsageError` → 2 (`exit.go:77-79`)
+8. `UnknownCommandError` → 3 (`exit.go:81-83`)
+9. `RetiredCommandError` → 3 (`exit.go:87-89`)
+10. `ValidationError` → 3 (`exit.go:91-93`)
+11. `storage.ValidationError` → 3 (`exit.go:95-97`)
+12. `model.ContainerActionError` → 6 when `Satisfied()`, else 3 (`exit.go:107-113`)
+13. `UnsupportedError` → 3 (`exit.go:114-116`)
+14. `Exhausted` → 6 (`exit.go:122-124`)
+15. `NoWork` → 6 (`exit.go:126-128`)
+16. `OutsideWorkspaceError` → 3 (`exit.go:142-144`)
+17. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → 3 (`exit.go:146-148`)
+18. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → 3 (`exit.go:156-158`)
+19. `BulkFailureError` → 1 (`exit.go:159-164`)
+20. `errors.Is(err, store.ErrTransientGCContention)` → 1 (`exit.go:166-168`)
+21. anything else → 1 (`exit.go:159`)
 
 Error types defined in `cli.go`: `MergeConflictError` (`cli.go:1890-1896`),
 `CorruptionError` (`cli.go:1898-1902`), `UsageError` (`cli.go:1906-1910`),
 `UnknownCommandError` — message `unknown command "<x>"` (`cli.go:1913-1917`),
 `ValidationError` (`cli.go:1920-1924`), `UnsupportedError` with a single `Message`
 field (`errors.go:52-56`), `RetiredCommandError` — message
-`the "<cmd>" command has been retired; <replacement>` (`cli.go:1942-1949`),
+`the "<cmd>" command has been retired; <replacement>` (`cli.go:1939-1946`),
 `OutsideWorkspaceError` (`cli.go:1952-1956`). `BulkFailureError` in
 `bulk.go:48-58`.
 
 ### 1.9 Error output convention
 
-`WriteCommandError(stderr, err)` (`error_output.go:17-24`) — called from
+`WriteCommandError(stderr, err)` (`error_output.go:18-25`) — called from
 `cmd/lit/main.go:20` as the process exit path:
 - Line 1: `error (code=%d): %v\n` (exit code + `err.Error()`).
 - Line 2 (only when non-empty): `remediation: %s\n`.
 
-`commandErrorReason(err)` maps type → reason string (`error_output.go:29-90`):
+`commandErrorReason(err)` maps type → reason string (`error_output.go:30-91`):
 `entity_not_found`, `merge_conflict`, `sync_divergence`, `owner_approval_required`,
 `corruption_detected`, `unknown_command`, `retired_command`, `usage_error`,
-`unsupported_flag` (every `UnsupportedError`, `error_output.go:121-125`),
+`unsupported_flag` (every `UnsupportedError`, `error_output.go:122-126`),
 `outside_git_workspace`, `bulk_partial_failure`, `workspace_write_blocked`,
 `transient_gc_contention`, `workspace_not_initialized`, default `command_failed`.
 
@@ -576,12 +577,12 @@ else ready.
   is `runList(ctx, stdout, lsSurface, args)` so `--at` can target a foreign store
   outside the current workspace (`register.go:488-493`, `cli.go:381-422`).
   `lsSurface` is `listSurface{name: "ls"}`, a surface with no positionals
-  (`cli.go:355-363`); `lit children` runs the same `runList` over
+  (`cli.go:352-360`); `lit children` runs the same `runList` over
   `childrenSurface` (§2.16).
 - Summary text: "List issues (rank by default; --at \<store-dir> lists a discovered
   store read-only)" (`register.go:492`).
 
-**Store routing** (`runList`, `cli.go:381-422`):
+**Store routing** (`runList`, `cli.go:378-419`):
 - `runList` builds the leaf and the `--at` value pointer with `listLeaf(surface)`
   (`cli.go:382`), parses argv with `parseLeaf` (`cli.go:383-385`), then reads the
   positionals with `listPositionals` (`cli.go:386-389`). Every step below runs
@@ -603,7 +604,7 @@ else ready.
   `app.AccessRead`, and the work runs with `workspaceReadyPolicy(ap)`
   (`cli.go:419-421`, `:759-761`).
 
-**Flags** (declared in `listLeaf`, `cli.go:457-489`; read in its `work` closure,
+**Flags** (declared in `listLeaf`, `cli.go:454-486`; read in its `work` closure,
 `cli.go:492-606`). "Only if visited" means the flag appears on the command line
 (`fs.Visit`, `cli.go:505-506`).
 
@@ -693,7 +694,7 @@ column is `sourceIssue` (`columns.go:92-124`).
   `:666-672`; `ready_state.go:101-120`).
 - `sourceReadiness`: calls the policy for required fields, runs `annotateIssues`,
   and `readinessColumnsFor` sets `parentID` from the relation graph and
-  `blocked = !ClassifyReadiness(row.Annotations).IsReady()` (`cli.go:643-656`;
+  `blocked = !ClassifyReadiness(row.Annotations).IsReady()` (`cli.go:640-653`;
   `workable.go:109-118`). A policy error fails the command. Over `--at`,
   `noReadyPolicy` supplies no required fields.
 - A missing cell renders as the zero `derivedColumns` (`output.go:457-465`):
@@ -1002,7 +1003,7 @@ Registry rows and summaries:
 positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason <text>]")`
 — a **plain error**, so exit code 1, not 2.
 
-**Sequence** (`transitionLeaf`, `cli.go:1519-1622`):
+**Sequence** (`transitionLeaf`, `cli.go:1516-1619`):
 1. `GetIssue(issueID)` pre-read (`cli.go:1539-1542`) — missing → exit 4.
 2. `buildAction()` (`cli.go:1544-1547`).
 3. `authorize(ctx, stdout, ap, issueID, prior)` — §2.11 (`cli.go:1553-1555`).
@@ -1201,7 +1202,7 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
 
 ### 2.14 `lit next` — Print the next workable leaf
 
-- Registration `register.go:484-485`, `app.AccessRead`, handler `nextLeaf`
+- Registration `register.go:523-524`, `app.AccessRead`, handler `nextLeaf`
   (`next.go:31-77`). Summary: "Print the next workable leaf to lit start".
 - Flags (`next.go:32-40`):
 
@@ -1232,25 +1233,26 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
   (`ready_state.go:813-818`, `ready_state.go:795`, `ready_state.go:805-807`).
 
 **`NextOutcome`** — a sealed sum interface (`next_route.go:26`,
-`next_route.go:179-184`) with **six** cases:
+`next_route.go:208-214`) with **seven** cases:
 
 | Case | Fields | Meaning |
 |---|---|---|
 | `ServedFromClaim` | `Row` | a ready ticket in a lane this checkout already holds — step 1 (`next_route.go:30`) |
 | `ResumedOwnWork` | `Row` | a ticket already in flight in a lane this checkout holds, handed back to its holder — also step 1 (`next_route.go:40`) |
 | `ServedFromEpicLane` | `Row`, `Lane model.LaneID` | a pick from a different lane of the same epic this checkout already holds a lane in — step 2. The epic is `Lane.Epic()`; there is no `Epic` field (`next_route.go:50-53`) |
-| `ServedFromNewLane` | `Row`, `Lane model.LaneID` | a ticket in a lane this checkout does **not** hold — produced by step 1b **and** step 4 (`next_route.go:72-75`) |
-| `Exhausted` | `Epics []string`, `Blocked []rowReach` | the checkout's own epic(s) have open work, none of it reachable — step 3 (`next_route.go:89-92`) |
-| `NoWork` | `Unreachable []rowReach` | the global pool produced nothing — step 4 (`next_route.go:177`) |
+| `ServedFromNewLane` | `Row`, `Lane model.LaneID` | a ticket in a lane this checkout does **not** hold — produced by step 4 alone (`next_route.go:75-78`) |
+| `ServedFromDependency` | `Row`, `Lane model.LaneID`, `Gates string` | step 1b's on-path dependency; `Gates` is the id of the blocked row it unblocks, so the pick explains itself (`next_route.go:80-104`) |
+| `Exhausted` | `Epics []string`, `Blocked []rowReach` | the checkout's own epic(s) have open work, none of it reachable — step 3 (`next_route.go:118-121`) |
+| `NoWork` | `Unreachable []rowReach` | the global pool produced nothing — step 4 (`next_route.go:206`) |
 
 `Exhausted` and `NoWork` implement `error` and travel outward as themselves
-rather than being rendered into a generic error (`next_route.go:480`,
-`next_route.go:587`).
+rather than being rendered into a generic error (`next_route.go:551`,
+`next_route.go:658`).
 
 **Admission** — `capacityFor(row, standing, self) capacity`
-(`next_route.go:229-250`) is the single eligibility verdict. The four capacities
+(`next_route.go:259-280`) is the single eligibility verdict. The four capacities
 are `routeAround`, `serveWork`, `resumeWork`, `takeoverWork`
-(`next_route.go:196-208`). With `readiness = ClassifyReadiness(row.Annotations)`,
+(`next_route.go:226-238`). With `readiness = ClassifyReadiness(row.Annotations)`,
 `relation = relationOf(standing, self)` (`claims_takeover.go:68-101` —
 `laneOurs` requires `self.Present() && standing.By == self`, so a checkout with
 no minted token never reads a lane as its own, even one the public checkout
@@ -1270,119 +1272,121 @@ worktree as a fresh foreign hold (`claims_takeover.go:48-60`,
 `claims_takeover.go:94-96`). Servability is not gated on `model.StateOpen`.
 
 **Routing precedence** — `routeNext(rows, details, standings, self, scope focusScope)`
-(`next_route.go:307`). `rows` are already in composite-rank order (§1.18).
+(`next_route.go:337`). `rows` are already in composite-rank order (§1.18).
 `laneOf(row) = model.LaneOf(row.Issue, details[row.ID].Parent)`
-(`next_route.go:308-310`);
+(`next_route.go:338-340`);
 `verdict(row) = capacityFor(row, standings.Of(laneOf(row)), self)`
-(`next_route.go:311-313`);
+(`next_route.go:341-343`);
 `reachFor(row, gathered) = reachOf(row, gathered, standings.Of(laneOf(row)), self)`
-(`next_route.go:314-316`).
+(`next_route.go:344-346`).
 `pickFrom(from, inScope, accept ...capacity)` keeps the first row of `from`, in
 rank order, whose lane `inScope` admits and whose verdict is in `accept`
-(`next_route.go:330-337`); `pick` is `pickFrom` over all `rows`
-(`next_route.go:338-340`). `accept` is a **set**, never a preference order —
-composite rank is the only tiebreak routing applies (`next_route.go:320-325`).
+(`next_route.go:360-367`); `pick` is `pickFrom` over all `rows`
+(`next_route.go:368-370`). `accept` is a **set**, never a preference order —
+composite rank is the only tiebreak routing applies (`next_route.go:350-355`).
 `ownScope(standings, self)` yields `ownLanes` and `ownEpics`, read from the
-**standings** and not from the gathered rows (`next_route.go:265-278`);
-`mine(lane) = ownLanes[lane]` (`next_route.go:343`).
+**standings** and not from the gathered rows (`next_route.go:295-308`);
+`mine(lane) = ownLanes[lane]` (`next_route.go:373`).
 
-If `len(ownLanes) > 0` (`next_route.go:344`):
+If `len(ownLanes) > 0` (`next_route.go:374`):
 
 1. **Own lanes**, accepting `{serveWork, resumeWork}`, whichever the backlog ranks
-   first (`next_route.go:347-352`). `resumeWork` → **`ResumedOwnWork{Row}`**;
+   first (`next_route.go:377-382`). `resumeWork` → **`ResumedOwnWork{Row}`**;
    `serveWork` → **`ServedFromClaim{Row}`**.
    - 1b. Else `onPathDependency(rows, laneOf, mine, reachFor)` — the first
      dependency gating one of our own lanes whose `reachKind` is `reachTakeable`
-     (`next_route.go:469-476`), drawn from `gatingDependencies`, which collects
+     (`next_route.go:540-547`), drawn from `gatingDependencies`, which collects
      the distinct open dependency IDs of the in-scope **open** rows in rank order
-     and stamps each with `reachFor` (`next_route.go:433-454`) →
-     **`ServedFromNewLane{Row: dep, Lane: laneOf(dep)}`** (`next_route.go:357-359`).
+     and stamps each with `reachFor` (`next_route.go:492-525`) →
+     **`ServedFromDependency{Row: dep, Lane: laneOf(dep), Gates: gates}`** (`next_route.go:387-389`), the `Gates` being the blocked row the dependency gates.
 2. Else **the rest of our epic, in lanes we do not already hold** — predicate
    `lane.Epic() != "" && ownEpics[lane.Epic()] && !mine(lane)`, accepting
    `{serveWork, takeoverWork}` → **`ServedFromEpicLane{Row, Lane: laneOf(row)}`**
-   (`next_route.go:360-366`).
-3. Else → **`Exhausted{Epics, Blocked}`** (`next_route.go:367-373`), where `Epics`
-   is `slices.Sorted(maps.Keys(ownEpics))` and `Blocked` is
-   `gatingDependencies` over the lanes admitted by
-   `func(lane) bool { return mine(lane) || ourEpic(lane) }`. Exhaustion never
-   falls through to the global pool.
+   (`next_route.go:390-396`).
+3. Else → **`Exhausted{Epics, Blocked}`** (`next_route.go:398-403`), where `Epics`
+   is `slices.Sorted(maps.Keys(ownEpics))` and `Blocked` is `blockedRows` over
+   `gatingDependencies` for the lanes admitted by
+   `func(lane) bool { return mine(lane) || ourEpic(lane) }`; `blockedRows` drops
+   the gated id, so this diagnostic is unchanged. Exhaustion never falls through
+   to the global pool.
 
 Step 4 is reached only by a checkout holding no lanes, which starts there
 directly:
 
 4. **The global pool, focus-scoped.** `pool, offPath := scope.partition(rows)`
-   (`next_route.go:385`, `ready_state.go:825-834`), then
+   (`next_route.go:415`, `ready_state.go:825-834`), then
    `pickFrom(pool, func(model.LaneID) bool { return true }, serveWork, takeoverWork)` →
-   **`ServedFromNewLane{Row, Lane: laneOf(row)}`** (`next_route.go:386-388`).
+   **`ServedFromNewLane{Row, Lane: laneOf(row)}`** (`next_route.go:416-418`).
    Else → **`NoWork{Unreachable: append(passedOver(pool, reachFor), withheldByScope(offPath)...)}`**
-   (`next_route.go:389`), where `passedOver` stamps every walked pool row with
-   `reachFor(row, true)` (`next_route.go:418-424`) and `withheldByScope` stamps
-   every scope-excluded row `reachOffFocusPath` (`next_route.go:397-403`).
+   (`next_route.go:419`), where `passedOver` stamps every walked pool row with
+   `reachFor(row, true)` (`next_route.go:448-454`) and `withheldByScope` stamps
+   every scope-excluded row `reachOffFocusPath` (`next_route.go:427-433`).
 
 Steps 1-3 walk every gathered row; step 4 walks the focus-scoped pool. The row
 set is passed to `pickFrom` explicitly at each step so that difference stays
-visible (`next_route.go:326-329`).
+visible (`next_route.go:356-359`).
 
-**`reachKind`** (`next_route.go:106-131`) — what one row is to this checkout right
+**`reachKind`** (`next_route.go:135-160`) — what one row is to this checkout right
 now: `reachTakeable`, `reachHeldFresh`, `reachNotReady`, `reachOutOfView`, plus
 `reachOffFocusPath`, which only the pool diagnostic stamps, and the bound
 `reachKindCount`. `reachOf(row, gathered, standing, self)` answers
 `reachOutOfView` when `!gathered`, `reachTakeable` when
 `capacityFor(...) != routeAround`, `reachHeldFresh` when
 `relationOf(...) == laneHeldForeign`, else `reachNotReady`
-(`next_route.go:150-160`). `rowReach{ID string, Row annotation.AnnotatedIssue, Kind reachKind}`
-(`next_route.go:135-139`) is what both terminal outcomes carry.
+(`next_route.go:179-189`). `rowReach{ID string, Row annotation.AnnotatedIssue, Kind reachKind}`
+(`next_route.go:164-168`) is what both terminal outcomes carry.
 
-`exhaustedNotes` (`next_route.go:521-526`):
+`exhaustedNotes` (`next_route.go:592-597`):
 - `reachTakeable`: ``"on your path and yours to take — `lit start` it"``
 - `reachHeldFresh`: `"on your path but claimed by another checkout right now"`
 - `reachNotReady`: ``"on your path but not startable right now — `lit show` it"``
 - `reachOutOfView`: ``"on your path but outside this view — `lit show` it"``
 
-`poolNotes` (`next_route.go:527-531`):
+`poolNotes` (`next_route.go:598-602`):
 - `reachHeldFresh`: `"in progress or claimed in a lane another checkout holds right now"`
 - `reachNotReady`: `"not startable — blocked by a dependency, or in flight and not abandoned"`
 - `reachOffFocusPath`: ``"off the focus path this run answered over — `lit next --all` to route over the whole queue"``
 
 `describeReach(rows, lead, notes)` renders `"<lead><ids> (<note>)"` for each kind
 that has rows, joined by `"; "`, in `reachKind` declaration order
-(`next_route.go:561-575`). `nameIDs` names at most `maxNamedPerKind = 12` ids and
-otherwise appends `" and <n> more"` (`next_route.go:540`, `next_route.go:546-553`).
+(`next_route.go:632-646`). `nameIDs` names at most `maxNamedPerKind = 12` ids and
+otherwise appends `" and <n> more"` (`next_route.go:611`, `next_route.go:617-624`).
 
-**Terminal messages.** `Exhausted.Error()` (`next_route.go:480-489`): `scope` is
+**Terminal messages.** `Exhausted.Error()` (`next_route.go:551-560`): `scope` is
 `"epic(s) <Epics joined by ", ">"` when `Epics` is non-empty, else
 `"your claimed lane(s)"`.
 - `Blocked` empty: ``"no ready work in <scope> — nothing else is queued behind what's already in progress; picking up other work is a deliberate re-focus, not a bare `next`"``
 - Otherwise: ``"no ready work in <scope> — <describeReach(Blocked, "blocked on ", exhaustedNotes)>; picking up other work is a deliberate re-focus, not a bare `next`"``
 
-`NoWork.Error()` (`next_route.go:587-603`):
+`NoWork.Error()` (`next_route.go:658-674`):
 - `Unreachable` empty: `"no ready work"`
-- Any row `reachOffFocusPath` (`NoWork.withheld()`, `next_route.go:608-615`):
+- Any row `reachOffFocusPath` (`NoWork.withheld()`, `next_route.go:679-686`):
   `"no ready work on the focus path — the backlog is not empty, and each row below says why this run did not serve it: <describeReach(Unreachable, "", poolNotes)>"`
 - Otherwise: `"no ready work — the backlog is not empty, but nothing in it is startable here: <describeReach(Unreachable, "", poolNotes)>"`
 
-Both map to `ExitNoWork` = **6** (`exit.go:30`, `exit.go:121-128`), with reasons
-`scope_exhausted` and `no_ready_work` respectively (`error_output.go:111-118`).
+Both map to `ExitNoWork` = **6** (`exit.go:31`, `exit.go:122-129`), with reasons
+`scope_exhausted` and `no_ready_work` respectively (`error_output.go:112-119`).
 
-**Rendering** — `renderNextOutcome(w, outcome, details, cc)` (`next.go:94-135`):
+**Rendering** — `renderNextOutcome(w, outcome, details, cc)` (`next.go:94-144`):
 - `ServedFromClaim` → no announcement at all (`next.go:98-99`).
 - `ResumedOwnWork` → `"<RowID> is already in progress in a lane you hold — continue where you left off\n"`
   (`next.go:100-102`).
 - `ServedFromEpicLane` → `startAdvice(o.Row, o.Lane, expiredHolder(cc.standings.Of(o.Lane)))`
   + `" (a second lane of an epic you already hold a lane in)\n"` (`next.go:103-105`).
 - `ServedFromNewLane` → the same `startAdvice(...)` + `"\n"` (`next.go:106-108`).
+- `ServedFromDependency` → the same `startAdvice(...)` + `" (gates %s, which is in a lane you hold)\n"` on `Gates` (`next.go:114-117`).
 - `Exhausted`, `NoWork` → returned as themselves; no ticket printed
-  (`next.go:118-121`).
-- Any other outcome type → panic (`next.go:122-123`).
+  (`next.go:127-130`).
+- Any other outcome type → panic (`next.go:131-132`).
 
-`startAdvice(row, lane, holder)` (`next.go:183-196`) is exactly four sentences,
+`startAdvice(row, lane, holder)` (`next.go:192-205`) is exactly four sentences,
 selected by the row's state and by whether `lane.Describe()` reports a named lane:
 - in progress, lane not named: ``"<id> is in progress and <state> — run `lit start <id>` to take it over"``
 - in progress, lane named: ``"<id> is in progress and <state> — run `lit start <id>` to take over <described>"``
 - not in progress, lane not named: ``"run `lit start <id>` to claim it"``
 - not in progress, lane named: ``"run `lit start <id>` to claim <described>"``
 
-`<state>` is `inFlightState(holder)` (`next.go:149-157`): `claims.Locked` →
+`<state>` is `inFlightState(holder)` (`next.go:158-166`): `claims.Locked` →
 `"claimed by a locked worktree whose claim has gone stale"`; `claims.Present` →
 `"stale, though its holder's worktree is still on disk"`; otherwise
 `"abandoned"`. `holder` is `expiredHolder(standing)` — the `Stale` standing's
@@ -1395,13 +1399,13 @@ selected by the row's state and by whether `lane.Describe()` reports a named lan
 - otherwise → `("lane <key> of epic <epic>", true)`
 
 On a served row, `renderNextOutcome` calls `printNextSummary(w, row, cc, lane)`
-with `lane = model.LaneOf(row.Issue, details[row.ID].Parent)` (`next.go:130-133`),
+with `lane = model.LaneOf(row.Issue, details[row.ID].Parent)` (`next.go:139-142`),
 which prints the **default columns** (`id state topic title`) joined by two
 spaces (`ready_state.go:965-971`, `columns.go:158-160`), then `printInlineDeps`
 (`ready_state.go:1022-1035`): `    epic: …`, `    depends on: …`, the claim line,
 and `    unblocks: …` — but `next` passes a **nil** unblocks map, so the unblocks
 line never appears (`ready_state.go:970`). It then returns
-`nextPulledOccasion(row.Issue)` (`next.go:134`, `workflow_events.go:39-45`),
+`nextPulledOccasion(row.Issue)` (`next.go:143`, `workflow_events.go:39-45`),
 dispatched as `EventNextPulled` (`next.go:75`).
 
 `lit next` performs **no writes** — it is registered `app.AccessRead`
@@ -1428,7 +1432,7 @@ claim; this command claims nothing.
 
 ### 2.16 `lit children <parent-id>`
 
-- Registration `register.go:531-534`: `runList(ctx, stdout, childrenSurface, args)`,
+- Registration `register.go:570-573`: `runList(ctx, stdout, childrenSurface, args)`,
   the same entrypoint and leaf as `lit ls` (§ `lit ls` above). Summary: "List an
   issue's direct children by rank (`lit ls --parent <id>`; takes every ls flag)".
 - `childrenSurface = listSurface{name: "children", positionals: []string{"<parent-id>"}}`
@@ -1474,7 +1478,7 @@ usage string as a plain error → exit 1 (`register.go:112-123`).
 - Output: `printComment` → `"<issueID> <commentID>\n"` (`cli.go:1509-1512`).
   **No breadcrumb.**
 
-**`lit comment rm <comment-id>`** (`runCommentRm`, `cli.go:1490-1507`):
+**`lit comment rm <comment-id>`** (`runCommentRm`, `cli.go:1487-1504`):
 - No flags (not even `--by`).
 - Refusal: `len(positional) != 1` or `fs.NArg() != 0` →
   `UsageError{"usage: lit comment rm <comment-id>"}` → exit 2 (`cli.go:1496-1501`).
@@ -1722,9 +1726,10 @@ updated <n> issues
   - `len(positional) != 1 || fs.NArg() != 0` → the same usage `UsageError`
     (`prefix.go:35-37`).
   - `workspace.ConfiguredPrefix(requested)` failure →
-    `fmt.Errorf("invalid prefix %q: %w", requested, err)` → exit 1
-    (`prefix.go:41-44`).
-- Three outcomes (`prefixSetTextOutput`, `prefix.go:83-102`):
+    `ValidationError{Message: fmt.Sprintf("invalid prefix %q: %v", requested, err)}` →
+    reason `validation_refused`, exit 3 (`prefix.go:44-51`). Typed so a deterministic
+    refusal does not reach the unclassified default's retry-then-doctor remediation.
+- Three outcomes (`prefixSetTextOutput`, `prefix.go:87-106`):
   - Normalized == current → `"issue_prefix: <p> (prefix unchanged)\n"`
     (`prefix.go:49-56`, `:88-91`).
   - Changed, no `--apply` →
@@ -1826,7 +1831,7 @@ plus at most one positional topic.
 - `--force` without `--eject` → `UsageError{"usage: --force is only valid with --eject"}`
   (`cli.go:1747-1749`).
 - A topic positional combined with any flag →
-  `UsageError{"usage: lit quickstart <topic> takes no flags"}` (`cli.go:1752-1755`).
+  `UsageError{"usage: lit quickstart <topic> takes no flags"}` (`cli.go:1749-1752`).
 - An unknown topic →
   `UsageError{"usage: unknown quickstart topic \"<x>\" (must be one of: <tokens>)"}`
   (`cli.go:1756-1759`).
@@ -1839,7 +1844,7 @@ plus at most one positional topic.
    (`cli.go:1524`). Every other command emits line-oriented text. `--output` is
    rejected globally and per-command (§1.1, §1.6).
 2. **`fs.NArg()` is not checked** by: `new` (`cli.go:340-355`),
-   `followup` (`cli.go:387-415`), `ls` (`cli.go:525-621`), `rank`
+   `followup` (`cli.go:387-415`), `ls` (`cli.go:522-618`), `rank`
    (`cli.go:1049-1073`), `export` (`cli.go:1516`), `children`
    (`issue_relations.go:127-132`), `parent clear` (`issue_relations.go:109-114`).
    Extra positionals on those commands are silently ignored.
@@ -1852,12 +1857,12 @@ plus at most one positional topic.
 5. **Assignee identity diverges by command on purpose**: `start` resolves through
    `resolveIdentity` (env `CLAUDE_CODE_SESSION_ID` wins) (`cli.go:1276`);
    `update --assignee` writes the trimmed literal, empty meaning clear
-   (`cli.go:1000-1010`). `new`/`followup` also write the trimmed literal
+   (`cli.go:997-1007`). `new`/`followup` also write the trimmed literal
    (`cli.go:352`, `cli.go:423`).
 6. **Claim state never blocks anything except `lit start` on a fresh foreign
    hold.** `backlog` renders claims as visibility only (`backlog.go:24-25`,
-   `:92-96`); `next` routes by claim but never writes (`next_route.go:81-128`);
-   `start` is the only gate (`cli.go:1434-1449`, `classifyTakeover` at
+   `:92-96`); `next` routes by claim but never writes (`next_route.go:139-186`);
+   `start` is the only gate (`cli.go:1431-1446`, `classifyTakeover` at
    `claims_takeover.go:110-119`).
 7. **Three functions panic on unreachable states** and would abort the process:
    `ClassifyReadiness` on an unclassified annotation kind (`readiness.go:144`),
