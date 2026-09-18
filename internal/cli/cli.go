@@ -2014,12 +2014,19 @@ func quickstartLeaf() wsLeaf {
 				// works. `--eject` carries an optional value, so pflag takes one
 				// only as `--eject=all`; written `--eject all`, the `all` is not
 				// the flag's value at all, it is the topic, and a topic renders
-				// on its own. Both halves are stated because the two shapes that
-				// arrive here are indistinguishable by the time we see them:
-				// `--eject=all topic` and `--eject topic` leave identical state.
+				// on its own. The --eject half is stated only when --eject is
+				// actually in play: --refresh reaches this same branch, and a
+				// caller who typed no --eject was being answered about one.
+				// When it IS in play both halves are needed, because
+				// `--eject=all topic` and `--eject topic` are indistinguishable
+				// by the time we see them.
 				// [LAW:no-silent-failure] name the act that works, not the shape
 				// of the mistake.
-				return UsageError{Message: quickstartUsage + "; a topic renders on its own, and --eject takes its value as --eject=LIST"}
+				advice := "a topic renders on its own"
+				if ejectChanged {
+					advice += ", and --eject takes its value as --eject=LIST"
+				}
+				return UsageError{Message: quickstartUsage + "; " + advice}
 			}
 			templateName, ok := quickstartTopicTemplate(positional[0])
 			if !ok {
