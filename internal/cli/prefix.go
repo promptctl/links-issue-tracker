@@ -24,8 +24,14 @@ type prefixSetResult struct {
 // other family gets from resolve — legal-name lookup, the shared usage string,
 // and a help request answered as help rather than as a usage error.
 // [LAW:one-type-per-behavior] one subcommand is still a subcommand family.
+// prefixSetUsage is the one spelling of prefix set's shape. It was written
+// twice — once as the family's usage and once inside the leaf — which is the
+// duplication this ticket exists to remove, and the copy the arity refusal
+// needed was a third that nobody wrote. [LAW:one-source-of-truth]
+const prefixSetUsage = "usage: lit prefix set <new-prefix> [--apply]"
+
 var prefixFamily = commandFamily[wsSubcommand]{
-	usage: "usage: lit prefix set <new-prefix> [--apply]",
+	usage: prefixSetUsage,
 	subcommands: []subcommandRow[wsSubcommand]{
 		{name: "set", payload: wsSubcommand{declare: prefixSetLeaf}},
 	},
@@ -34,9 +40,9 @@ var prefixFamily = commandFamily[wsSubcommand]{
 func prefixSetLeaf() wsLeaf {
 	fs := newCobraFlagSet("prefix set")
 	apply := fs.Bool("apply", false, "Apply the rename (without this flag, prints a preview)")
-	return wsLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+	return wsLeaf{fs: fs, positionals: 1, usage: prefixSetUsage, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
 		if len(positional) != 1 {
-			return UsageError{Message: "usage: lit prefix set <new-prefix> [--apply]"}
+			return UsageError{Message: prefixSetUsage}
 		}
 		requested := strings.TrimSpace(positional[0])
 		// [LAW:single-enforcer] workspace.ConfiguredPrefix is the one boundary that

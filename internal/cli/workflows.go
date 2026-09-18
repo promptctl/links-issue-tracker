@@ -70,7 +70,7 @@ func workflowsOverviewLeaf() wsLeaf {
 
 func workflowsShowLeaf() wsLeaf {
 	fs := newCobraFlagSet("workflows show")
-	return wsLeaf{fs: fs, positionals: 1, work: func(_ context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+	return wsLeaf{fs: fs, positionals: 1, usage: workflowsUsage, work: func(_ context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
 		if len(positional) != 1 {
 			return UsageError{Message: workflowsUsage}
 		}
@@ -80,7 +80,7 @@ func workflowsShowLeaf() wsLeaf {
 
 func workflowsEditLeaf() wsLeaf {
 	fs := newCobraFlagSet("workflows edit")
-	return wsLeaf{fs: fs, positionals: 1, work: func(_ context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+	return wsLeaf{fs: fs, positionals: 1, usage: workflowsUsage, work: func(_ context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
 		if len(positional) != 1 {
 			return UsageError{Message: workflowsUsage}
 		}

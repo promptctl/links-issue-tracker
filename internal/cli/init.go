@@ -43,16 +43,22 @@ func initLeaf() (wsLeaf, wsAcquire) {
 	// being demoted to "no flag" and then failing further in with a message
 	// telling them to pass the flag they just passed. [LAW:no-silent-failure]
 	acquire := func() (workspace.Info, error) {
-		// Arity is settled before anything is created. The pipeline acquires
-		// BEFORE it runs the leaf's work, and acquiring resolves the workspace,
-		// which writes config.json -- so an arity check living in work() runs
-		// only after the prefix is already on disk. A `--prefix` typed alongside
-		// a bad argument would be persisted by a command that then reports
-		// failure, and clearing it needs `lit prefix set` rather than a
+		// Arity is settled before anything is created -- upstream now, in
+		// parseLeaf, which every leaf's pipeline runs before it acquires.
+		// The ordering matters more here than anywhere: acquiring resolves the
+		// workspace, which writes config.json, so a check living in work() would
+		// run only after the prefix was already on disk. A `--prefix` typed
+		// alongside a bad argument would be persisted by a command that then
+		// reports failure, and clearing it needs `lit prefix set` rather than a
 		// corrected re-run. The effect must not precede the check that refuses
 		// it. [LAW:effects-at-boundaries] [LAW:parse-dont-validate]
-		// This is init's ONLY arity check; work() does not repeat it.
-		// [LAW:single-enforcer]
+		//
+		// init used to hand-write `fs.NArg() != 0` right here to buy exactly that
+		// ordering, and the sentence this comment replaced said so. The check is
+		// gone from this function because links-cli-errors-rl4s made the ordering
+		// general: the guarantee init had to arrange for itself is the one every
+		// leaf now gets. The usage sentence it prints is `initUsage`, set on the
+		// leaf below. [LAW:single-enforcer]
 		if !fs.Changed("prefix") {
 			return resolveWorkspaceFromWD(workspace.PrefixRequest{})
 		}

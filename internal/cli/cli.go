@@ -1094,9 +1094,13 @@ func updateLeaf() appLeaf {
 	fs.String("status", "", "(removed) change status with the transition verbs: lit start|done|close|open")
 	reason := fs.String("reason", "", "Reason recorded on the field-change event")
 	resolveActor := registerActor(fs)
-	return appLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	// update takes nine value flags, past the point where the derived fallback
+	// stops naming them and points at --help. Its own sentence names them all, so
+	// it supplies it rather than taking the fallback. [LAW:one-source-of-truth]
+	usage := "usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--lane <key>] [--reason <text>]"
+	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
-			return UsageError{Message: "usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--lane <key>] [--reason <text>]"}
+			return UsageError{Message: usage}
 		}
 		visited := map[string]bool{}
 		fs.Visit(func(flag *pflag.Flag) { visited[flag.Name] = true })
