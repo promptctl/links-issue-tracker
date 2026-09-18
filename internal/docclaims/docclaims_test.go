@@ -31,8 +31,11 @@ func TestDocumentedClaimsStillShip(t *testing.T) {
 		t.Fatal("manifest is empty — the gate would pass over anything; regenerate with `go run ./tools/docclaims-sync`")
 	}
 	missing := Missing(Manifest, corpus)
-	for _, c := range missing {
-		t.Errorf("%s quotes a message that no longer ships:\n  %q\nrecorded against:\n  %q\nEither the prose is now false and should be corrected, or the message moved deliberately and the manifest needs `go run ./tools/docclaims-sync`.", c.Doc, c.Text, c.Src)
+	// Printed through the one Explain both reports share. Wording its own
+	// remedy here is how this test and TestManifestIsCurrent came to tell a
+	// contributor opposite things about a single entry in one run.
+	for _, d := range missing {
+		t.Errorf("%s\nrecorded against:\n  %q", d.Explain(), d.Src)
 	}
 	if len(missing) > 0 {
 		t.Logf("%d of %d documented quotations have drifted", len(missing), len(Manifest))
@@ -87,6 +90,9 @@ func TestMissingReportsADroppedMessage(t *testing.T) {
 	if len(missing) != 1 {
 		t.Fatalf("Missing() reported %d claims, want exactly 1 — the gate cannot see a dropped message", len(missing))
 	}
+	if missing[0].Kind != Stopped {
+		t.Errorf("Missing() classified the dropped message as kind %d, want Stopped: %s", missing[0].Kind, missing[0].Explain())
+	}
 	if missing[0].Text != "on your path" {
 		t.Errorf("Missing() reported %q, want the dropped claim", missing[0].Text)
 	}
@@ -104,8 +110,16 @@ func TestMissingSeesThroughACoincidentalSubstring(t *testing.T) {
 		Text: "deleted_at IS NULL",
 		Src:  "SELECT id FROM issues WHERE deleted_at IS NULL",
 	}}
-	if missing := Missing(manifest, corpus); len(missing) != 1 {
+	missing := Missing(manifest, corpus)
+	if len(missing) != 1 {
 		t.Fatal("a deleted message was masked by a coincidental substring in an unrelated source")
+	}
+	// Reported as a moved anchor, naming the source that carries the words now,
+	// because from the corpus alone a reworded message and a coincidence are
+	// the same observation — and the one instruction that must never be wrong,
+	// "Do NOT regenerate", is reserved for the case where nothing carries them.
+	if missing[0].Kind != AnchorMoved || missing[0].Now == "" {
+		t.Errorf("Missing() reported kind %d with Now=%q, want a moved anchor naming the coincidental source: %s", missing[0].Kind, missing[0].Now, missing[0].Explain())
 	}
 }
 
@@ -408,8 +422,16 @@ func TestTheGateIsNotItsOwnEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("shippedPackages: %v", err)
 	}
-	if slices.Contains(dirs, "internal/docclaims") {
-		t.Fatal("internal/docclaims is now linked into a binary under cmd/, so manifest_gen.go is inside the corpus this gate checks against: every entry now matches its own recorded copy and the gate proves nothing. Move the manifest out of the walked import graph before linking this package in.")
+	// Both registries of verbatim document text, not just this one.
+	// internal/docsclaims stores quotations from design-docs as Go literals and
+	// has already produced a false anchor here — `git remote -v` was held up by
+	// its copy of a sentence from docs/architecture.md while the real message
+	// could have been deleted freely. It is unimported today for the same
+	// incidental reason this package is.
+	for _, dir := range []string{"internal/docclaims", "internal/docsclaims"} {
+		if slices.Contains(dirs, dir) {
+			t.Fatalf("%s is now linked into a binary under cmd/, so its verbatim copies of documented text are inside the corpus this gate checks against: entries anchor to the copy rather than to the shipped message, and deleting the real message changes nothing. Move that text out of the walked import graph before linking the package in.", dir)
+		}
 	}
 }
 
@@ -484,5 +506,19 @@ func TestAMovedAnchorIsReportedOnce(t *testing.T) {
 	}
 	if len(cmp.Added) != 0 {
 		t.Errorf("the same quotation is also reported as new: %+v — one quotation, two findings, opposite remedies", cmp.Added)
+	}
+}
+
+// TestAGoModWithoutAModulePathIsAnError covers a guard that tested the wrong
+// condition. modfile accepts a go.mod with no `module` line, so one carrying
+// any local replace left the source list non-empty and the guard silent —
+// after which every import of this repository's own packages fails to resolve,
+// the walk yields only the cmd/ entry directories, and all 1,102 entries report
+// as drifted prose. "The specification is false" is the one thing a broken walk
+// must never say.
+func TestAGoModWithoutAModulePathIsAnError(t *testing.T) {
+	fsys := fstest.MapFS{"go.mod": {Data: []byte("go 1.25\n\nreplace example.test/y => ./live\n")}}
+	if _, err := localSources(fsys); err == nil {
+		t.Fatal("a go.mod with no module path was accepted; every import would silently fail to resolve")
 	}
 }

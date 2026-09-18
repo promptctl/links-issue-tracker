@@ -99,7 +99,14 @@ type Claim struct {
 	// stray recurrence elsewhere in the same file keeps it green. The gap is
 	// narrow because the files are small: the largest an entry anchors to is
 	// 6.3 KB, of 12 such files (measured 2026-09-18). Closing it properly means
-	// anchoring to a span rather than to a whole file.
+	// anchoring to a span rather than to a whole file (links-doc-v1-tepa).
+	//
+	// It also runs the other way, which is easier to meet and worth expecting.
+	// `SHOW CREATE TABLE` is recorded for three chapters against
+	// internal/store/migrations/00001_baseline.sql, where the phrase occurs
+	// only in a SQL comment and in no shipped Go literal at all — so those
+	// entries record protection that does not exist, and reflowing that comment
+	// fails the gate naming three chapters the edit has nothing to do with.
 	Src string
 }
 
@@ -258,10 +265,17 @@ func localSources(fsys fs.FS) (sources, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parsing go.mod: %w", err)
 	}
-	var out sources
-	if mod.Module != nil {
-		out = append(out, source{prefix: mod.Module.Mod.Path})
+	// Guarded on the condition the message names. `len(out) == 0` is a
+	// different question: a go.mod with no module line but any local replace
+	// leaves out non-empty, so the guard stays silent while every import of
+	// this repository's own packages fails to resolve — and the walk then
+	// reports the whole specification false rather than itself broken, which
+	// is exactly what the sibling guard in entryPackages exists to prevent.
+	// [LAW:no-silent-failure]
+	if mod.Module == nil {
+		return nil, fmt.Errorf("go.mod declares no module path, so no import can be identified as source this repository ships")
 	}
+	out := sources{{prefix: mod.Module.Mod.Path}}
 	for _, r := range mod.Replace {
 		// A replacement carrying a version is another module, fetched into the
 		// module cache and not in this tree; only a bare filesystem path names
@@ -276,9 +290,6 @@ func localSources(fsys fs.FS) (sources, error) {
 			continue
 		}
 		out = append(out, source{prefix: r.Old.Path, dir: dir})
-	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("go.mod declares no module path, so no import can be identified as source this repository ships")
 	}
 	// Longest prefix first, so `dir` can return on its first match.
 	sort.Slice(out, func(i, j int) bool { return len(out[i].prefix) > len(out[j].prefix) })
@@ -859,20 +870,48 @@ func Stable(fresh, prior []Claim, corpus Corpus) []Claim {
 	return out
 }
 
-// Missing reports the manifest entries that have drifted: the source the
+// Missing reports the manifest entries that have drifted — the source the
 // quotation was recorded against no longer ships, or no longer carries the
-// words the chapter puts in quotes.
+// words the chapter puts in quotes — each classified, carrying its own remedy.
 //
 // Both halves are checked because either can rot alone. A message can be
 // deleted outright, or reworded around a fragment the chapter quotes.
-func Missing(manifest []Claim, corpus Corpus) []Claim {
-	var out []Claim
+//
+// It returns classified drifts rather than bare claims because it once worded
+// the remedy itself: a single deleted message produced both "the manifest needs
+// `go run ./tools/docclaims-sync`" from this report and "Do NOT regenerate"
+// from the freshness report, in one test run, about one entry. Both print
+// Drift.Explain now. [LAW:one-source-of-truth]
+func Missing(manifest []Claim, corpus Corpus) []Drift {
+	var out []Drift
 	for _, c := range manifest {
-		if !stillHolds(c.Src, c.Text, corpus) {
-			out = append(out, c)
+		// Anything but QuoteDropped is exactly "the recorded source no longer
+		// carries it", which is this report's question.
+		if kind, now := classify(c, corpus); kind != QuoteDropped {
+			out = append(out, Drift{Claim: c, Kind: kind, Now: now})
 		}
 	}
 	return out
+}
+
+// classify decides why a committed entry no longer describes the tree, from the
+// claim and the corpus alone.
+//
+// It asks nothing about a fresh derivation, and that is the point rather than
+// an economy. Whether a documented message still ships is a question about the
+// product: it has stopped shipping when no shipped source carries its words.
+// The source that would carry it now is whichever a derivation would pick —
+// `tightest`, the same choice Matched makes — so the report and the derivation
+// cannot name different sources. Reading the answer off a second list instead
+// let two reports of one failure disagree. [LAW:one-source-of-truth]
+func classify(c Claim, corpus Corpus) (DriftKind, string) {
+	if stillHolds(c.Src, c.Text, corpus) {
+		return QuoteDropped, ""
+	}
+	if now, ok := tightest(c.Text, corpus); ok {
+		return AnchorMoved, now
+	}
+	return Stopped, ""
 }
 
 func stillHolds(src, text string, corpus Corpus) bool {
@@ -972,25 +1011,14 @@ type Drift struct {
 // One classifier, so the tool and the freshness test cannot disagree about what
 // drift is. [LAW:single-enforcer]
 //
-// fresh must be a derivation stabilised against manifest — Derive's output,
-// which is what both callers pass. The classification has no case for an entry
-// that is re-anchored while its recorded source still carries the words, and
-// none is invented, because Stable makes that state unreachable: it pins the
-// recorded source whenever the source still holds, so such an entry never
-// leaves the derivation in the first place.
+// fresh decides only which entries departed; why each departed is classify's
+// question, and it is answered against the corpus. So the report says the same
+// thing about an entry whether it is reached from here or from Missing.
 func Drifted(manifest, fresh []Claim, corpus Corpus) []Drift {
-	now := anchors(fresh)
 	var out []Drift
 	for _, c := range Diff(manifest, fresh) {
-		src, reanchored := now[[2]string{c.Doc, c.Text}]
-		switch {
-		case stillHolds(c.Src, c.Text, corpus):
-			out = append(out, Drift{Claim: c, Kind: QuoteDropped})
-		case reanchored:
-			out = append(out, Drift{Claim: c, Kind: AnchorMoved, Now: src})
-		default:
-			out = append(out, Drift{Claim: c, Kind: Stopped})
-		}
+		kind, now := classify(c, corpus)
+		out = append(out, Drift{Claim: c, Kind: kind, Now: now})
 	}
 	return out
 }
