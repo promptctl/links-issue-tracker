@@ -151,9 +151,20 @@ stayed green over all three, because nothing compared the two.
 
 [`internal/docclaims`](internal/docclaims) is that comparison.
 `manifest_gen.go` records every message literal the specification quotes that
-was present in the shipped Go when it was generated, and a gate
+was present in the shipped Go when it was generated — each entry carrying the
+whole literal it was found inside, so deleting that exact message cannot be
+masked by an unrelated string that happens to contain the same words. A gate
 (`go test ./internal/docclaims/`, which runs as part of `go test ./...`) fails
-naming the chapter and the sentence when one of them no longer ships.
+naming the chapter and the sentence when one of them no longer ships, and a
+second test fails when the committed manifest disagrees with what the tree
+yields. `go run ./tools/docclaims-sync -check` is the same comparison as a
+command.
+
+What counts as shipped is `cmd/` and `internal/` only, minus test files and
+this package's own generated manifest. It is a positive list rather than a
+blacklist of directories to skip, because the blacklist it replaced silently
+swallowed `artifacts/` — a gitignored vendored copy of an unrelated project
+whose literals outnumbered lit's own by three to one.
 
 When you deliberately change a message the specification quotes, the gate
 fails on purpose. Correct the prose first, then run

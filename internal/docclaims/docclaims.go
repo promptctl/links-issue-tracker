@@ -22,15 +22,23 @@
 // shape or a command's exit code still holds is a third, and this package does
 // not answer it. CONTRIBUTING.md records what this gate covers and what it
 // deliberately does not.
+//
+// One blind spot is worth naming here rather than leaving to be rediscovered: a
+// message assembled by concatenation, "… some text " + v + " more text", is
+// several literals to the parser and never seen whole. A chapter quoting across
+// that seam matches nothing, so it never enters the manifest and is silently
+// unprotected — indistinguishable from prose that quotes no code at all.
 package docclaims
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
 	"path"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -58,6 +66,16 @@ var docSpanSingle = regexp.MustCompile("`([^`\n]+)`")
 type Claim struct {
 	Doc  string
 	Text string
+	// Lit is the whole shipped literal this quotation was observed inside.
+	//
+	// Anchoring to it is what gives the gate its teeth. Asking only whether the
+	// quoted words appear SOMEWHERE in the tree is far too weak: measured over
+	// this corpus, 174 of 1,054 quotations are contained in two or more distinct
+	// literals, one in twenty-two of them. Delete the exact query or message a
+	// chapter cites and a coincidental substring elsewhere keeps the gate green
+	// — the precise failure this package exists to end.
+	// [LAW:types-are-the-program] the claim carries its own evidence.
+	Lit string
 }
 
 // ShippedLiterals collects every multi-word string literal in the Go that
@@ -72,66 +90,77 @@ type Claim struct {
 // Test files and the tools/ tree are excluded: neither ships in the binary the
 // specification describes, and a literal that lives only in a test would let a
 // documented message survive its own deletion from the product.
+// shippedRoots is where this module's product code lives. A positive list, not
+// a blacklist of what to skip: "everything in the tree except the names I
+// thought of" admits every directory nobody enumerated, and this one admitted
+// three before it was replaced — .claude/worktrees (whole checkouts of other
+// branches), this package's own generated manifest, and artifacts/, a gitignored
+// vendored copy of an unrelated project whose literals outnumbered lit's by
+// three to one. [LAW:parse-dont-validate] the set is constructed, not filtered.
+var shippedRoots = []string{"cmd", "internal"}
+
+// selfPkg is the one path inside those roots that must not count as shipped.
+// manifest_gen.go holds every documented literal as a Go string, so counting it
+// would let each entry match itself and the gate would pass over any drift.
+const selfPkg = "internal/docclaims"
+
+// ShippedLiterals collects every multi-word string literal in the Go that
+// ships, keyed by the literal itself.
+//
+// It reads literals from source rather than scanning rendered output, because
+// every message this package exists to protect is an error-path string: a
+// refusal, a diagnostic, a remediation. Nothing prints them on a successful
+// run, so a gate built on rendered output would see none of them and report
+// green. [LAW:no-silent-failure]
+//
+// Only tracked product code counts. Test files do not ship, and neither does
+// tools/, so a literal living in either could otherwise let a documented
+// message survive its own deletion from the product.
 func ShippedLiterals(fsys fs.FS) (map[string]bool, error) {
 	literals := map[string]bool{}
-	err := fs.WalkDir(fsys, ".", func(name string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+	for _, root := range shippedRoots {
+		if _, err := fs.Stat(fsys, root); err != nil {
+			// A root that is not present is not an empty corpus, it is a
+			// misconfigured one, and silently returning fewer literals would
+			// report every claim under it as drifted. [LAW:no-silent-failure]
+			return nil, fmt.Errorf("shipped root %q: %w", root, err)
 		}
-		if d.IsDir() {
-			if shippedSkipDir(name) {
-				return fs.SkipDir
+		err := fs.WalkDir(fsys, root, func(name string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
 			}
-			return nil
-		}
-		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			return nil
-		}
-		src, err := fs.ReadFile(fsys, name)
+			if d.IsDir() {
+				if name == selfPkg || path.Base(name) == "testdata" {
+					return fs.SkipDir
+				}
+				return nil
+			}
+			if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+				return nil
+			}
+			src, err := fs.ReadFile(fsys, name)
+			if err != nil {
+				return err
+			}
+			return collectLiterals(name, src, literals)
+		})
 		if err != nil {
-			return err
+			return nil, err
 		}
-		return collectLiterals(name, src, literals)
-	})
-	if err != nil {
-		return nil, err
 	}
 	return literals, nil
 }
 
-// shippedSkipDir names the directories outside the shipped binary. Keeping it a
-// predicate rather than a walk condition means one place decides what "ships"
-// means here. [LAW:single-enforcer]
-func shippedSkipDir(name string) bool {
-	base := path.Base(name)
-	// Any dotted directory, which is what keeps .claude/worktrees out. Those
-	// hold entire checkouts of other branches, and a literal deleted from this
-	// tree but alive in one of them would read as still shipping — the gate
-	// would go green over precisely the drift it exists to catch.
-	if name != "." && strings.HasPrefix(base, ".") {
-		return true
-	}
-	switch base {
-	case "testdata", "tools", "doc-v1-total", "docs", "design-docs", "scratchpad":
-		return true
-	case "docclaims":
-		// This package itself. manifest_gen.go holds every documented literal
-		// as a Go string, so counting it as shipped would let each entry match
-		// itself: the gate would pass over any drift, and a regenerated
-		// manifest could never drop a stale entry. [LAW:no-silent-failure]
-		return true
-	}
-	return false
-}
-
 // collectLiterals parses one file and records its multi-word string literals.
-// A file that does not parse is skipped rather than failing the walk: this
-// package is a documentation check, and it must not be the thing that reports a
-// Go syntax error the compiler and every other gate will report better.
+// A parse failure is returned, not swallowed. Skipping the file would drop
+// every literal that lived only there, and each of them would then be reported
+// as a chapter quoting a message that no longer ships — prose that is in fact
+// correct, named as false, with the real cause discarded. One unreadable error
+// beats a cascade of confidently wrong ones. [LAW:no-silent-failure]
 func collectLiterals(name string, src []byte, into map[string]bool) error {
 	file, err := parser.ParseFile(token.NewFileSet(), name, src, 0)
 	if err != nil {
-		return nil
+		return fmt.Errorf("parsing %s: %w", name, err)
 	}
 	ast.Inspect(file, func(n ast.Node) bool {
 		lit, ok := n.(*ast.BasicLit)
@@ -177,6 +206,7 @@ func DocClaims(fsys fs.FS, names []string) ([]Claim, error) {
 // spansIn pulls the candidate spans out of one document, double-backtick spans
 // first so their contents cannot be re-cut by the single-backtick pattern.
 func spansIn(src string) []string {
+	src = stripFences(src)
 	var out []string
 	keep := func(text string) {
 		text = strings.TrimSpace(text)
@@ -196,46 +226,56 @@ func spansIn(src string) []string {
 	return out
 }
 
-// Matched keeps the claims whose text appears in a shipped literal, which is
-// what makes the manifest self-maintaining: a chapter that starts quoting a
-// real message joins the protected set on the next sync, and one that never
-// quoted code is simply absent rather than allowlisted.
-//
-// A claim matches when a shipped literal contains it. Containment rather than
-// equality, because a chapter routinely quotes the sentence a format string
-// carries while the literal also holds the verb around it.
+// Matched keeps the claims whose text appears in a shipped literal, recording
+// which literal that was. This is what makes the manifest self-maintaining: a
+// chapter that starts quoting a real message joins the protected set on the
+// next sync, and one that never quoted code is simply absent rather than
+// allowlisted.
 func Matched(claims []Claim, shipped map[string]bool) []Claim {
 	var out []Claim
 	for _, c := range claims {
-		if containedIn(c.Text, shipped) {
-			out = append(out, c)
+		lit, ok := tightest(c.Text, shipped)
+		if !ok {
+			continue
 		}
+		c.Lit = lit
+		out = append(out, c)
 	}
 	return out
 }
 
-// Missing reports the manifest entries whose text no longer appears in any
-// shipped literal — the documented messages that have drifted.
+// tightest picks the shortest literal containing the quotation, ties broken
+// lexicographically. Shortest is the tightest evidence — the literal that is
+// most nearly the sentence itself rather than a larger one that happens to
+// enclose it — and fixing the choice keeps the generated manifest a function of
+// the tree alone. [LAW:dataflow-not-control-flow]
+func tightest(text string, shipped map[string]bool) (string, bool) {
+	best, found := "", false
+	for lit := range shipped {
+		if !strings.Contains(lit, text) {
+			continue
+		}
+		if !found || len(lit) < len(best) || (len(lit) == len(best) && lit < best) {
+			best, found = lit, true
+		}
+	}
+	return best, found
+}
+
+// Missing reports the manifest entries that have drifted: the literal the
+// quotation was recorded against no longer ships verbatim, or it no longer
+// contains the words the chapter puts in quotes.
+//
+// Both halves are checked because either can rot on its own. A message can be
+// deleted outright, or it can be reworded around a fragment the chapter quotes.
 func Missing(manifest []Claim, shipped map[string]bool) []Claim {
 	var out []Claim
 	for _, c := range manifest {
-		if !containedIn(c.Text, shipped) {
+		if !shipped[c.Lit] || !strings.Contains(c.Lit, c.Text) {
 			out = append(out, c)
 		}
 	}
 	return out
-}
-
-func containedIn(text string, shipped map[string]bool) bool {
-	if shipped[text] {
-		return true
-	}
-	for lit := range shipped {
-		if strings.Contains(lit, text) {
-			return true
-		}
-	}
-	return false
 }
 
 // SpecDir is the corpus this gate covers. It is named once so the sync tool and
@@ -260,4 +300,54 @@ func SpecFiles(fsys fs.FS) ([]string, error) {
 		return nil, err
 	}
 	return names, nil
+}
+
+// stripFences removes fenced code blocks before any span is read. What sits in
+// a fence is a transcript — a shell command, a schema, an example session — not
+// a chapter asserting what message the binary prints, and reading inside them
+// put `go test -short ./...`, `set -euo pipefail` and `golangci-lint run` into
+// the manifest as though they were claims about lit.
+func stripFences(src string) string {
+	lines := strings.Split(src, "\n")
+	out := make([]string, 0, len(lines))
+	fenced := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+			fenced = !fenced
+			out = append(out, "")
+			continue
+		}
+		if fenced {
+			out = append(out, "")
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
+}
+
+// Dedupe sorts by document then text and drops repeats, so a derivation is a
+// function of the tree alone and a re-run with no source change produces no
+// diff.
+//
+// It lives here rather than in the sync tool because the tool and the freshness
+// test must derive the manifest identically; when only the tool deduped, the
+// two disagreed by 216 entries and the test demanded a regeneration that the
+// tool had already performed. [LAW:single-enforcer]
+func Dedupe(claims []Claim) []Claim {
+	sort.Slice(claims, func(i, j int) bool {
+		if claims[i].Doc != claims[j].Doc {
+			return claims[i].Doc < claims[j].Doc
+		}
+		return claims[i].Text < claims[j].Text
+	})
+	var out []Claim
+	for i, c := range claims {
+		if i > 0 && claims[i-1] == c {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
 }

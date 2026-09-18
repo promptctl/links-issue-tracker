@@ -18,9 +18,9 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -29,7 +29,16 @@ import (
 
 const manifestPath = "internal/docclaims/manifest_gen.go"
 
+// check reports whether to verify the committed manifest instead of rewriting
+// it. The nightly workflow runs tools/lawtokens-sync the same way; without an
+// equivalent here nothing compares what is committed against what the tree
+// would produce, which is exactly how a manifest generated over a dirty working
+// tree — one carrying a gitignored vendored project — was committed and broke
+// CI in a clean checkout. [LAW:single-enforcer]
+var check = flag.Bool("check", false, "verify the committed manifest matches a regeneration; write nothing")
+
 func main() {
+	flag.Parse()
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "docclaims-sync:", err)
 		os.Exit(1)
@@ -56,11 +65,15 @@ func run() error {
 		return err
 	}
 
-	matched := dedupe(docclaims.Matched(claims, shipped))
+	matched := docclaims.Dedupe(docclaims.Matched(claims, shipped))
 	if len(matched) == 0 {
 		// Writing an empty manifest would turn the gate off while leaving every
 		// sign of it in place, which is worse than failing. [LAW:no-silent-failure]
 		return fmt.Errorf("no documented literal matched shipped code; refusing to write an empty manifest to %s", manifestPath)
+	}
+
+	if *check {
+		return verify(matched)
 	}
 
 	if err := os.WriteFile(manifestPath, []byte(render(matched)), 0o644); err != nil {
@@ -69,26 +82,6 @@ func run() error {
 	fmt.Printf("docclaims-sync: %d documented literals across %d files -> %s\n",
 		len(matched), countDocs(matched), manifestPath)
 	return nil
-}
-
-// dedupe sorts by document then text and drops repeats, so the generated file
-// is a function of the tree alone and a re-run with no source change produces
-// no diff. [LAW:dataflow-not-control-flow]
-func dedupe(claims []docclaims.Claim) []docclaims.Claim {
-	sort.Slice(claims, func(i, j int) bool {
-		if claims[i].Doc != claims[j].Doc {
-			return claims[i].Doc < claims[j].Doc
-		}
-		return claims[i].Text < claims[j].Text
-	})
-	var out []docclaims.Claim
-	for i, c := range claims {
-		if i > 0 && claims[i-1] == c {
-			continue
-		}
-		out = append(out, c)
-	}
-	return out
 }
 
 func countDocs(claims []docclaims.Claim) int {
@@ -112,8 +105,51 @@ func render(claims []docclaims.Claim) string {
 	b.WriteString("// `go run ./tools/docclaims-sync`; never hand-edit.\n")
 	b.WriteString("var Manifest = []Claim{\n")
 	for _, c := range claims {
-		fmt.Fprintf(&b, "\t{Doc: %s, Text: %s},\n", strconv.Quote(c.Doc), strconv.Quote(c.Text))
+		fmt.Fprintf(&b, "\t{Doc: %s, Text: %s, Lit: %s},\n",
+			strconv.Quote(c.Doc), strconv.Quote(c.Text), strconv.Quote(c.Lit))
 	}
 	b.WriteString("}\n")
 	return b.String()
+}
+
+// verify compares the committed manifest against a fresh derivation and names
+// the first entries that differ, rather than only reporting that they do.
+func verify(want []docclaims.Claim) error {
+	got := docclaims.Manifest
+	if len(got) == len(want) {
+		same := true
+		for i := range got {
+			if got[i] != want[i] {
+				same = false
+				break
+			}
+		}
+		if same {
+			fmt.Printf("docclaims-sync: manifest is current (%d literals)\n", len(got))
+			return nil
+		}
+	}
+	for _, c := range diff(want, got) {
+		fmt.Fprintf(os.Stderr, "  only in a fresh derivation: %s %q\n", c.Doc, c.Text)
+	}
+	for _, c := range diff(got, want) {
+		fmt.Fprintf(os.Stderr, "  only in the committed manifest: %s %q\n", c.Doc, c.Text)
+	}
+	return fmt.Errorf("manifest is stale: committed %d literals, the tree yields %d; run `go run ./tools/docclaims-sync`",
+		len(got), len(want))
+}
+
+// diff returns the entries of a that are absent from b.
+func diff(a, b []docclaims.Claim) []docclaims.Claim {
+	in := make(map[docclaims.Claim]bool, len(b))
+	for _, c := range b {
+		in[c] = true
+	}
+	var out []docclaims.Claim
+	for _, c := range a {
+		if !in[c] {
+			out = append(out, c)
+		}
+	}
+	return out
 }
