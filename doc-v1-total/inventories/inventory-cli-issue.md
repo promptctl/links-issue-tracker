@@ -1861,7 +1861,7 @@ plus at most one positional topic.
    (`cli.go:352`, `cli.go:423`).
 6. **Claim state never blocks anything except `lit start` on a fresh foreign
    hold.** `backlog` renders claims as visibility only (`backlog.go:24-25`,
-   `:92-96`); `next` routes by claim but never writes (`next_route.go:110-157`);
+   `:92-96`); `next` routes by claim but never writes (`next_route.go:139-186`);
    `start` is the only gate (`cli.go:1431-1446`, `classifyTakeover` at
    `claims_takeover.go:110-119`).
 7. **Three functions panic on unreachable states** and would abort the process:
