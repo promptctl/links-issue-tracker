@@ -2248,6 +2248,37 @@ func TestCloseLeafUsesOptimisticConcurrency(t *testing.T) {
 	}
 }
 
+// TestRetentionUsesOptimisticConcurrency pins the retention axis to the same
+// contention discipline as the status axis: a retention write planned against
+// a snapshot another writer has since moved must surface a conflict, not
+// silently last-write-win.
+func TestRetentionUsesOptimisticConcurrency(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Archive me", Topic: "life", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	// Plan an archive against the LIVE snapshot, then let a competing archive
+	// win the race. (Apply itself re-reads, which would turn the loser into the
+	// already-archived rejection — the contention window under test is
+	// plan-vs-write.)
+	w, err := planRetentionTransition(issue, "tester", "", model.Archive{}, st.clock.Now())
+	if err != nil {
+		t.Fatalf("planRetentionTransition(live) error = %v", err)
+	}
+	if _, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Archive{}, Actor: "tester"}); err != nil {
+		t.Fatalf("Apply(competing archive) error = %v", err)
+	}
+	err = st.withMutation(ctx, "transition issue", func(ctx context.Context, tx *sql.Tx) error {
+		return w.applyTx(ctx, st, tx)
+	})
+	if err == nil || err.Error() != `archive conflict: issue retention is "archived"` {
+		t.Fatalf("retentionWrite.applyTx(stale archive) error = %v, want archive conflict", err)
+	}
+}
+
 // TestConflictNamesTheVerbTheCallerTyped is the sibling of the test above, run
 // with the one action whose two names differ. That test uses `close`, whose
 // persisted event encoding and invocation verb are the same word, so it passes
@@ -2289,37 +2320,6 @@ func TestConflictNamesTheVerbTheCallerTyped(t *testing.T) {
 	want := `open conflict: issue status is "open"`
 	if err.Error() != want {
 		t.Errorf("applyTransitionTx(stale reopen) error = %q, want %q", err.Error(), want)
-	}
-}
-
-// TestRetentionUsesOptimisticConcurrency pins the retention axis to the same
-// contention discipline as the status axis: a retention write planned against
-// a snapshot another writer has since moved must surface a conflict, not
-// silently last-write-win.
-func TestRetentionUsesOptimisticConcurrency(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	st := openIssueStore(t, ctx)
-	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Archive me", Topic: "life", IssueType: "task", Priority: 0})
-	if err != nil {
-		t.Fatalf("CreateIssue() error = %v", err)
-	}
-	// Plan an archive against the LIVE snapshot, then let a competing archive
-	// win the race. (Apply itself re-reads, which would turn the loser into the
-	// already-archived rejection — the contention window under test is
-	// plan-vs-write.)
-	w, err := planRetentionTransition(issue, "tester", "", model.Archive{}, st.clock.Now())
-	if err != nil {
-		t.Fatalf("planRetentionTransition(live) error = %v", err)
-	}
-	if _, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Archive{}, Actor: "tester"}); err != nil {
-		t.Fatalf("Apply(competing archive) error = %v", err)
-	}
-	err = st.withMutation(ctx, "transition issue", func(ctx context.Context, tx *sql.Tx) error {
-		return w.applyTx(ctx, st, tx)
-	})
-	if err == nil || err.Error() != `archive conflict: issue retention is "archived"` {
-		t.Fatalf("retentionWrite.applyTx(stale archive) error = %v, want archive conflict", err)
 	}
 }
 

@@ -369,6 +369,14 @@ func TestOpenRefusalNeverNamesThePersistedEncoding(t *testing.T) {
 func TestEveryVerbAMessageCanPrintIsACommandThatExists(t *testing.T) {
 	registered := map[string]bool{}
 	for _, spec := range commandSpecs(context.Background(), io.Discard, io.Discard) {
+		// A retired row is a pointer to a replacement, not a command that runs:
+		// its Run returns RetiredCommandError. Counting it would let `open` be
+		// retired the way `assign` was while refusals kept printing `open` and
+		// this test kept passing -- the row is still in the registry, so the
+		// word would still be found. [LAW:verifiable-goals]
+		if spec.Retired {
+			continue
+		}
 		registered[spec.Name] = true
 	}
 	if len(registered) == 0 {

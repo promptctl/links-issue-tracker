@@ -320,7 +320,7 @@ Builders live in `internal/cli/workflow_events.go`:
 | `ticket_created` | `ticketCreatedOccasion` `internal/cli/workflow_events.go:49-55` | Event, IssueID, Labels (the labels it was created with). |
 | `ticket_updated` | `ticketUpdatedOccasion` `internal/cli/workflow_events.go:60-66` | Event, IssueID, Labels. **Never carries a transition** — `lit update` rejects `--status` (`internal/cli/workflow_events.go:57-59`; pinned `internal/cli/workflow_events_test.go:65`). |
 | `comment_added` | `commentAddedOccasion` `internal/cli/workflow_events.go:70-76` | Event, IssueID, Labels. |
-| `work_started` / `work_finished` / `ticket_closed` / `ticket_reopened` | `transitionOccasion` `internal/cli/workflow_events.go:103-115` | Event (from the action), IssueID, Labels (post-transition), `Entered = issue.State()` (post), `Exited = prior.State()` (pre). |
+| `work_started` / `work_finished` / `ticket_closed` / `ticket_reopened` | `transitionOccasion` `internal/cli/workflow_events.go:103-119` | Event (from the action), IssueID, Labels (post-transition), `Entered = issue.State()` (post), `Exited = prior.State()` (pre). |
 
 Status-action → event mapping (`internal/cli/workflow_events.go:83-88`):
 `ActionStart→work_started`, `ActionDone→work_finished`, `ActionClose→ticket_closed`,

@@ -750,7 +750,7 @@ UPDATE issues SET updated_at = ?, archived_at = ?, deleted_at = ? WHERE id = ? A
 bound `w.now.Format(time.RFC3339Nano), w.nextArchived, w.nextDeleted, w.issueID, w.priorArchived, w.priorDeleted`. Uses MySQL null-safe equality `<=>`. Errors:
 - exec failure → `fmt.Errorf("update issue retention: %w", err)`;
 - `RowsAffected` failure → `fmt.Errorf("read retention transition result: %w", err)`;
-- `affected == 0` → `currentRetentionTx` then `fmt.Errorf("%s conflict: issue retention is %q", w.action, retentionWord(current))`. Observed text: `archive conflict: issue retention is "archived"` (`store_test.go:2211`).
+- `affected == 0` → `currentRetentionTx` then `fmt.Errorf("%s conflict: issue retention is %q", w.action.Verb(), model.RetentionName(current))`. Observed text: `archive conflict: issue retention is "archived"` (`store_test.go:2211`).
 Then `recordEvent` with the action name, reason, actor, and change rows (`store.go:1515`).
 
 Evidence: a stale archive plan loses to a competing archive with the conflict error (`store_test.go:2189-2214`); delete-on-archived drops the archive stamp and a later restore lands on `Live`, not `Archived` (`store_test.go:2944-2970`); an archive event records exactly one `archived_at` change row and no fake status row (`store_test.go:1376-1380`).
@@ -807,7 +807,7 @@ bound `issue.Title, issue.Description, nullableString(issue.Prompt), issue.Prior
 3. `if w.replaceLabels` → `s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, w.actor)` (`store.go:1051-1055`).
 4. `if len(w.changes) > 0` → `s.recordEvent(ctx, tx, issue.ID, "" /* empty action */, w.reason, w.actor, w.changes)` (`store.go:1056-1060`). A field-only update writes an event with a **NULL** `action` column (see §7).
 
-Evidence: a field plan taken against a stale snapshot lands its title change while a concurrently-applied close and archive both survive untouched (`store_test.go:2223-2303`); container↔leaf type changes are refused in both directions while a same-kind change (`task`→`bug`) succeeds (`store_test.go:2011-2035`); label replacement through `Apply` replaces the whole set (`store_test.go:1196-1202`).
+Evidence: a field plan taken against a stale snapshot lands its title change while a concurrently-applied close and archive both survive untouched (`store_test.go:2223-2259`); container↔leaf type changes are refused in both directions while a same-kind change (`task`→`bug`) succeeds (`store_test.go:2011-2035`); label replacement through `Apply` replaces the whole set (`store_test.go:1196-1202`).
 
 ---
 
