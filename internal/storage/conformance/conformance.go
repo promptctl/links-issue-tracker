@@ -164,6 +164,7 @@ var cases = []engineCase{
 	{"apply_status_transition", applyStatusTransition},
 	{"apply_missing_issue_is_not_found", applyMissingIssue},
 	{"apply_to_container_is_refused", applyToContainer},
+	{"apply_to_archived_names_the_typed_verb", applyToArchivedNamesTheTypedVerb},
 	{"container_state_follows_live_children", containerStateFollowsLiveChildren},
 	{"history_records_mutations", historyRecordsMutations},
 	{"every_editable_field_records_history", everyEditableFieldRecordsHistory},
@@ -417,6 +418,36 @@ func applyToContainer(t *testing.T, ctx context.Context, st storage.Store, clk *
 	}
 	if containerErr.ID != epic.ID {
 		t.Errorf("ContainerActionError.ID = %q, want %q", containerErr.ID, epic.ID)
+	}
+}
+
+// applyToArchivedNamesTheTypedVerb pins which of an action's two names reaches
+// the reader when a retention state refuses it. Name() is the persisted event
+// encoding -- what the events table stores -- and Verb() is the word a caller
+// types; they differ for exactly one action, so `lit open` on an archived issue
+// was refused as "cannot reopen archived or deleted issue", naming a command
+// lit does not have.
+//
+// It lives in the conformance suite because the refusal exists in two copies,
+// one per engine, and a test beside either one would let the other drift. Here
+// both answer to the same statement. [LAW:single-enforcer]
+func applyToArchivedNamesTheTypedVerb(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "archived", Topic: "core"})
+	if _, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Archive{}, Actor: "ada"}); err != nil {
+		t.Fatalf("archive error = %v", err)
+	}
+	_, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Reopen{}, Actor: "ada"})
+	if err == nil {
+		t.Fatal("Apply(Reopen) to an archived issue = nil error, want a refusal")
+	}
+	// "open" is a substring of "reopen", so presence alone proves nothing: the
+	// absence of the persisted encoding is the assertion that can fail.
+	if strings.Contains(err.Error(), string(model.ActionReopen)) {
+		t.Errorf("refusal names %q, the events-table encoding; the caller typed `lit open` and there is no `lit %s`: %v",
+			string(model.ActionReopen), string(model.ActionReopen), err)
+	}
+	if !strings.Contains(err.Error(), "cannot "+model.ActionReopen.Verb()+" ") {
+		t.Errorf("refusal does not name the verb the caller typed (%q): %v", model.ActionReopen.Verb(), err)
 	}
 }
 

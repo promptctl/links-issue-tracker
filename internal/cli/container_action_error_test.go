@@ -381,3 +381,31 @@ func TestTheCommandSurfaceAndTheVerbMapNameTheSameWords(t *testing.T) {
 		t.Fatalf("the transition commands name %v, lifecycle's verbs name %v -- a message rendering a verb no command answers to hands the agent something it cannot run", fromCommands, fromVerbMap)
 	}
 }
+
+// TestSatisfiedSentenceNamesTheTypedVerbToo pins the OTHER sentence
+// ContainerActionError can produce. No CLI call reaches it with an action whose
+// two names differ: Satisfied() requires the children to already establish the
+// target, and a container whose children are all done derives Closed, never
+// Open, so `lit open` cannot arrive here. That unreachability is exactly why the
+// sentence is pinned as a value rather than driven through a command — nothing
+// in the reachable set would notice the persisted encoding coming back, so this
+// branch would silently keep the defect the other branch just had, waiting for
+// the next action whose two names diverge.
+func TestSatisfiedSentenceNamesTheTypedVerbToo(t *testing.T) {
+	err := model.ContainerActionError{
+		ID: "test-epics-1", Action: model.ActionReopen,
+		Target: model.StateOpen, State: model.StateOpen,
+		Progress: model.Progress{Total: 1, Closed: 1},
+	}
+	if !err.Satisfied() {
+		t.Fatalf("fixture does not produce the satisfied sentence, so this test checks nothing: %#v", err)
+	}
+	// "open" is a substring of "reopen", so the absence of the persisted
+	// encoding is the half of this that can fail.
+	if strings.Contains(err.Error(), string(model.ActionReopen)) {
+		t.Errorf("the satisfied sentence names %q, the events-table encoding, where the reader expects the command it typed: %s", string(model.ActionReopen), err.Error())
+	}
+	if !strings.Contains(err.Error(), "`"+model.ActionReopen.Verb()+"`") {
+		t.Errorf("the satisfied sentence does not quote the verb the caller typed (%q): %s", model.ActionReopen.Verb(), err.Error())
+	}
+}
