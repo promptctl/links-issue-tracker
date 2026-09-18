@@ -25,6 +25,14 @@ var errHelpHandled = errors.New("help handled")
 
 type cobraFlagSet struct {
 	cmd *cobra.Command
+	// detail is the command's long-form description, rendered above the flag
+	// table by printHelp. It is the one home for a command's explanatory help:
+	// the binary carries the text, so `lit import --help` answers the same
+	// question in a consumer repo that it answers here. Empty for a command
+	// whose flag table already says everything it has to say.
+	// [LAW:one-source-of-truth] The help answer is carried whole by the value
+	// that renders it; nothing points outward at a file to finish the sentence.
+	detail string
 }
 
 func newCobraFlagSet(use string) *cobraFlagSet {
@@ -106,9 +114,17 @@ func (fs *cobraFlagSet) Hide(name string) {
 	_ = fs.cmd.Flags().MarkHidden(name)
 }
 
+// Detail declares the command's long-form description, next to the flags it
+// describes. Returning the set keeps it chainable onto newCobraFlagSet at the
+// top of a leaf declaration.
+func (fs *cobraFlagSet) Detail(text string) *cobraFlagSet {
+	fs.detail = text
+	return fs
+}
+
 func (fs *cobraFlagSet) printHelp(helpOutput io.Writer) error {
 	fs.SetOutput(helpOutput)
-	if _, writeErr := fmt.Fprintf(helpOutput, "Usage of %s:\n", fs.cmd.Use); writeErr != nil {
+	if _, writeErr := io.WriteString(helpOutput, helpPage(fs.detail, fmt.Sprintf("Usage of %s:", fs.cmd.Use))); writeErr != nil {
 		return writeErr
 	}
 	fs.cmd.Flags().PrintDefaults()

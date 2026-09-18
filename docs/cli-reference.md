@@ -591,90 +591,22 @@ lit import --path <bulk-file.yaml>
 ```
 
 The one home for bulk-ingesting issues from a file: `--path` accepts either of two
-formats, chosen by the file's extension. `.json` (or any extension other than
-`.yaml`/`.yml`) is the JSON **tree spec** below — bulk-*create* only, records wired
-by an opaque `local_id`. `.yaml`/`.yml` is the bulk YAML format below —
-create-**or**-update, selected per document by whether it carries a real issue `id`.
-One command, one mental model for "create/update many issues from a file"; picking
-the file's extension is the only thing that varies, not a separate verb or flag.
+formats, and the file's extension picks between them — there is no format flag.
+`.yaml` or `.yml` is the bulk YAML format, where each document creates or updates
+depending on whether it carries a real issue `id`. Any other extension is the JSON
+tree spec, which only creates, wiring records to one another by an opaque `local_id`.
 
 `lit bulk import` is retired. It loaded a JSON **export** — the same restore that
 `lit backup restore --path <export.json>` already owns — so it was a duplicate
 under a name that also collided with tree-spec `import`. Use `lit backup restore`
 to load an export; an old `lit bulk import` invocation returns a pointer there.
 
-#### JSON tree spec (bulk create)
-
-```json
-[
-  {"local_id": "epic-x", "title": "Build X", "type": "epic", "topic": "x", "priority": 0},
-  {"local_id": "task-1", "parent": "epic-x", "title": "Design", "type": "task", "topic": "x", "priority": 0},
-  {"local_id": "task-2", "parent": "epic-x", "depends_on": ["task-1"], "title": "Build", "type": "task", "topic": "x", "priority": 0}
-]
-```
-
-An array of records. `local_id` is opaque to the store — it exists only to let a
-later record's `parent`/`depends_on` name an earlier one before real IDs are
-minted — and is replaced by the generated issue ID at create time (returned in
-the printed `local_id -> real_id` mapping). Records are created in dependency
-order; a cycle or a `parent`/`depends_on` naming no record in the file is
-rejected before anything is created. `title`, `type`, and `topic` are required
-on every record. On any failure mid-import, already-created records in this
-call are best-effort rolled back (transitioned to deleted); run `lit doctor`
-afterward if the error reports a leaked ID rollback couldn't clean up.
-
-#### YAML bulk file (create or update)
-
-```yaml
-local_id: epic-x        # optional; lets a later document's parent/depends_on name this one
-title: Build X
-type: epic
-topic: x
----
-title: Design
-type: task
-topic: x
-parent: epic-x           # a local_id above, or an existing real issue ID
----
-id: existing-issue-7      # present => update that issue instead of creating
-title: Renamed
-labels: [reviewed]
-```
-
-One file, multiple YAML documents separated by `---`, one issue per document.
-Whether a document creates or updates is decided entirely by the presence of
-`id` — never a flag:
-
-- **No `id`: create.** `title`, `topic`, and `type` are required (same as `lit new`);
-  `priority`, `assignee`, `labels`, `lane`, `description`, and `prompt` are optional.
-  `local_id` (optional) and `parent`/`depends_on` work exactly as in the JSON tree
-  spec above, with one addition: `parent`/`depends_on` may also name a real,
-  already-existing issue ID (not just a `local_id` in this file) — e.g. to bulk-add
-  several new children under an epic that already exists. A name that matches
-  neither a `local_id` in the file nor a real issue is an error.
-- **`id` present: update.** The document is a patch applied to that existing
-  issue via the same field set `lit update` exposes: `title`, `description`,
-  `prompt`, `type`, `priority`, `assignee`, `labels`, `lane`. At least one of
-  those must be set. `reason` (recorded on the field-change event) is
-  optional annotation, not itself a change — a document with only `id` and
-  `reason` is rejected as having nothing to update, the same as `lit update
-  --reason "..."` with no field flags. `topic`, `parent`, `depends_on`, and
-  `local_id` **cannot** appear on an update document — topic is immutable,
-  and reparenting/dependency wiring are `lit parent set`/`lit dep add`'s job,
-  not `import`'s. An `id` that matches no existing issue is a hard error —
-  never a silent create.
-
-A mixed file (some documents creating, some updating) is legal. Duplicate `id`s
-or duplicate `local_id`s across documents in one file are rejected, as is any
-unknown YAML field. Rollback on a mid-batch failure only ever undoes *creates*
-made in that same call; an update that already succeeded is left applied — there
-is no "prior state" to roll an update back to.
-
-This is additive to `lit import`'s existing JSON tree spec, not a replacement:
-JSON stays create-only and tree-shaped; YAML adds update-by-id and is flat
-(dependency wiring is opt-in per document via `parent`/`depends_on`, not the
-file's whole shape). Both are `lit import --path <file>`; only the extension
-changes which one runs.
+Both formats are documented by the command itself. Run `lit import --help` for the
+JSON tree spec and the YAML bulk file in full: every key each one accepts, which of
+them are required, how `local_id` lets one record name another before real IDs exist,
+the value rules the two share — a topic must be 3 to 30 characters after slug
+normalization, `priority` is `0` or `1` and nothing else — and what the command
+reports on success and rolls back when a file fails partway through.
 
 ---
 
@@ -947,7 +879,8 @@ Mutation commands point back here at the moment of need: the text success output
 lit workflows [show <id> | edit <id-or-point> | dry-run [--event <name>] [--label <name>]... [--enter <state>] [--exit <state>] [--issue <id>]]
 ```
 
-See [Workflows](workflows.md) for the full format, semantics, and a worked example.
+See [Workflows](workflows.md) for what the feature is, and run `lit workflows --help`
+for the definition format, the activation rules, and the event catalog.
 Bare `lit workflows` prints the lifecycle spine (every dispatched event, the three
 built-in states with enter/exit, and any bound labels) annotated with the definitions
 active at each point and their source layer; `show <id>` resolves one definition

@@ -26,11 +26,6 @@ import (
 	"github.com/spf13/pflag"
 )
 
-const (
-	humanBootstrapHelp = "Human bootstrap command. Run once per repository/worktree setup before autonomous agent operations."
-	agentCommandHelp   = "Agent-facing operational command."
-)
-
 func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string) error {
 	normalizedArgs, err := parseGlobalArgs(args)
 	if err != nil {
@@ -52,7 +47,7 @@ func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 	// framing, no remediation, exit 0. [LAW:effects-at-boundaries]
 	var helpRequested HelpRequestedError
 	if errors.As(err, &helpRequested) {
-		_, printErr := fmt.Fprintln(stdout, helpRequested.Usage)
+		_, printErr := io.WriteString(stdout, helpRequested.Error())
 		return printErr
 	}
 	// A command starved by a co-resident store holder leaves a durable record
@@ -185,6 +180,25 @@ func resolveWorkspaceFromWD() (workspace.Info, error) {
 	return ws, nil
 }
 
+// rewriteHelpCommand turns `lit help <path...>` into `lit <path...> --help`, so
+// a command's help has exactly one renderer no matter which spelling the caller
+// reached for. Cobra's own help command renders a subcommand from its Long and
+// its cobra-level flag set, and every command here sets DisableFlagParsing and
+// declares its flags on its own leaf — so that path printed a description with
+// a flag table claiming `lit import` accepts only `--help`, while `lit import
+// --help` printed the real flags and no description. Two maps of one territory,
+// each missing the half the other had. [LAW:one-source-of-truth]
+//
+// Bare `lit help` still names no command, so it keeps reaching cobra's root
+// help — the one page cobra does render correctly, because the root is where
+// the group listing lives.
+func rewriteHelpCommand(args []string) []string {
+	if len(args) < 2 || args[0] != "help" {
+		return args
+	}
+	return append(slices.Clone(args[1:]), "--help")
+}
+
 func parseGlobalArgs(args []string) ([]string, error) {
 	// [LAW:single-enforcer] Legacy --output rejection lives in one global parser path.
 	index := 0
@@ -205,7 +219,7 @@ func parseGlobalArgs(args []string) ([]string, error) {
 	}
 
 done:
-	return args[index:], nil
+	return rewriteHelpCommand(args[index:]), nil
 }
 
 func unsupportedOutputFlagError() error {
@@ -1696,7 +1710,7 @@ func exportLeaf() appLeaf {
 
 // importUsage is shared by every usage error runImportTree can raise, so a
 // malformed invocation always points at the same two accepted shapes.
-const importUsage = "usage: lit import --path <tree-spec.json | bulk-file.yaml> (see docs/cli-reference.md for both formats)"
+const importUsage = "usage: lit import --path <tree-spec.json | bulk-file.yaml> (run `lit import --help` for both formats)"
 
 // runImportTree reads --path and dispatches on its extension to one of two
 // bulk-ingest formats sharing this one command surface (never two competing
@@ -1705,7 +1719,7 @@ const importUsage = "usage: lit import --path <tree-spec.json | bulk-file.yaml> 
 // (runImportBulk). [LAW:dataflow-not-control-flow] the format is a value —
 // the file's own extension — not a second flag or mode.
 func importTreeLeaf() appLeaf {
-	fs := newCobraFlagSet("import")
+	fs := newCobraFlagSet("import").Detail(helpText("import"))
 	path := fs.String("path", "", "Path to a JSON tree-spec file or a YAML bulk create/update file")
 	resolveActor := registerActor(fs)
 	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {

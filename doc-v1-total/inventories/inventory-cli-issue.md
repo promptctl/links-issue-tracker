@@ -1665,7 +1665,7 @@ mechanism `bulk import` duplicated" (`register.go:441`). Because the row is
   create/update file"), hidden `--by` (`cli.go:1539-1540`).
 - Refusals: blank `--path` (after trim) or `fs.NArg() != 0` →
   `UsageError{importUsage}` → exit 2. `importUsage` verbatim:
-  `"usage: lit import --path <tree-spec.json | bulk-file.yaml> (see docs/cli-reference.md for both formats)"`
+  `"usage: lit import --path <tree-spec.json | bulk-file.yaml> (run `lit import --help` for both formats)"`
   (`cli.go:1529`, `cli.go:1544-1549`).
 - Reads the file; a read error → `fmt.Errorf("read import spec: %w", err)` → exit 1
   (`cli.go:1550-1553`).

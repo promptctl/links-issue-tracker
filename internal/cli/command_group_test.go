@@ -113,13 +113,25 @@ func commandLeafPaths() [][]string {
 // typed absence rather than an empty name, so help with no header at all is a
 // distinct answer from help about a command named "".
 // [LAW:parse-dont-validate]
+// leafHelpSubject reads the command a leaf's help page says it is about, from
+// the `Usage of <command>:` line that introduces the flag table. The line is
+// found by shape rather than by position: a command that carries a long-form
+// description renders it above the header, and where the header sits on the
+// page is layout, not contract. Two such lines would make the subject
+// ambiguous, so the page is required to hold exactly one.
+// [LAW:behavior-not-structure]
 func leafHelpSubject(help string) (string, bool) {
 	const header = "Usage of "
-	firstLine, _, _ := strings.Cut(help, "\n")
-	if !strings.HasPrefix(firstLine, header) || !strings.HasSuffix(firstLine, ":") {
-		return "", false
+	var subject string
+	found := 0
+	for _, line := range strings.Split(help, "\n") {
+		if !strings.HasPrefix(line, header) || !strings.HasSuffix(line, ":") {
+			continue
+		}
+		subject = strings.TrimSuffix(strings.TrimPrefix(line, header), ":")
+		found++
 	}
-	return strings.TrimSuffix(strings.TrimPrefix(firstLine, header), ":"), true
+	return subject, found == 1
 }
 
 // A LEAF command's help must be answered before the dispatch pipeline acquires

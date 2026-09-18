@@ -1,0 +1,2 @@
+Human bootstrap command. Run once per repository/worktree setup before
+autonomous agent operations.

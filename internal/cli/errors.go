@@ -76,15 +76,25 @@ func (e RetiredCommandError) Error() string {
 // HelpRequestedError signals that the caller asked a command family for help
 // (-h/--help as the first argument). It is an answer, not a failure: like
 // pflag.ErrHelp it travels the error channel only because that is the channel
-// resolve has, and Run — the seam that owns stdout — renders the carried usage
+// resolve has, and Run — the seam that owns stdout — writes the carried page
 // and maps it to success before any error sink sees it.
+//
+// Error composes that page rather than returning the usage line alone, so the
+// description cannot be dropped by a caller that reaches for the error string:
+// there is one composition, and every reader of this value gets all of it.
+// [LAW:one-source-of-truth]
 // [LAW:effects-at-boundaries] resolve stays pure; the type carries the
 // description of the help action outward to the edge that performs it.
 type HelpRequestedError struct {
 	Usage string
+	// Detail is the family's long-form description, rendered above Usage by the
+	// same helpPage a leaf's flag help composes. Carrying it on the value keeps
+	// a family's whole help answer in one place, the way the row-level
+	// retirement pointer carries its whole answer rather than half of it.
+	Detail string
 }
 
-func (e HelpRequestedError) Error() string { return e.Usage }
+func (e HelpRequestedError) Error() string { return helpPage(e.Detail, e.Usage) }
 
 // OutsideWorkspaceError signals that the command requires a git repository context.
 type OutsideWorkspaceError struct {

@@ -2,8 +2,8 @@ Managing existing tickets (lit)
 
 Update fields: `lit update <issue-id> --title "..." --description "..." --priority urgent [--labels a,b]`
 Update many at once: `lit import --path <file.yaml>` with an `id:` in each YAML document
-selects that ticket for the same field patch `lit update` applies — see `lit import` in
-docs/cli-reference.md.
+selects that ticket for the same field patch `lit update` applies — run `lit import --help`
+for the format.
 Rerank: `lit rank <id> [--top] [--bottom] [--above <other-id>] [--below <other-id>]`
 Block/unblock: `lit label add <id> needs-design` / `lit label rm <id> needs-design`
 Focus a goal: `lit label add <id> focus` narrows what `lit backlog` lists, and the pool `lit next` picks a NEW ticket from, to the goal's unfinished prerequisite chain (membership only — blocked items stay blocked, and rank still orders what is left); work this checkout already holds is still served by `lit next` even when it is off the path, so focus decides where a fresh start goes, never whether your own in-flight work is still yours; `--all` on either command ignores the scope for one run, and `lit label rm <id> focus` lifts it
