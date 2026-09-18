@@ -71,6 +71,21 @@ Complete value set (`lifecycle.go:46-58`):
 | `ActionDelete` | `"delete"` | retention |
 | `ActionRestore` | `"restore"` | retention |
 
+### `(ActionName).Verb() string` — `lifecycle.go:85-101`
+`ActionName` is documented as the persisted event verb — the encoding written
+into the events table. `Verb()` returns a different name for the same action:
+the word a caller types to invoke it.
+
+`var actionVerbs = map[ActionName]string` — `lifecycle.go:60-83` — has an entry
+for every one of the eight actions, including the seven whose two names are
+identical: `start`, `done`, `close`, `archive`, `unarchive`, `delete`,
+`restore`. `ActionReopen` is the only action whose two names differ: persisted
+as `"reopen"`, invoked as `"open"` (the command is `lit open`; there is no
+`lit reopen`).
+
+On an `ActionName` that has no entry, `Verb()` panics; it does not fall back to
+the persisted encoding.
+
 ### `Actions() []ActionName` — `lifecycle.go:178-183`
 Returns a **fresh slice each call** in canonical order: the four status verbs
 then the four retention verbs — `start, done, close, reopen, archive,
@@ -573,7 +588,7 @@ establish.
   matches its own target with work left, and it returns `Open` for a childless
   epic as a fallback, so `open` matches there too. The two count conjuncts admit
   only the all-children-closed case without naming `Closed`.
-- `Error() string` — `model.go:322-327`, two exact wordings (the action name is
+- `Error() string` — `model.go:344-363`, two exact wordings (the word rendered inside the backticks in both is the action's invocation verb, `ActionName.Verb()`, not its persisted event encoding; the state is substituted as `State.Display()`, so `in_progress` renders `in progress`):
   rendered inside backticks in both; the state is substituted as
   `State.Display()`, so `in_progress` renders `in progress`):
   - `Satisfied()` → ``epic %s is already %s, so `%s` has nothing to do: an epic's state derives from its children (%d of %d done)``
