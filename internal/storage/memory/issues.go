@@ -133,21 +133,37 @@ func (e *Engine) place(id string, f storage.Frame, placement storage.RankPlaceme
 	// verbs use, asked about filing instead of moving.
 	positions := edge.filingPositions(e, f, id)
 	if len(positions) == 0 {
-		// A frame with nothing in it has no order to lead, so its two ends
-		// asked for the same thing, and the issue files where the default
-		// placement would have put it: after everything that exists. The SQL
-		// engine reaches the same slot from the other direction — an empty
-		// frame leaves it no key to sit beside, and the key past the
-		// workspace's last is the only one nothing already holds. One rule,
-		// stated in each engine's own terms. [LAW:one-type-per-behavior]
-		edge, err = orderEdgeFor(storage.RankBottom)
-		if err != nil {
-			return err
-		}
-		positions = edge.filingPositions(e, f, id)
+		// A frame holding nothing has no order to lead, so its two ends asked
+		// for the same thing and the placement cannot decide the slot. What
+		// can is the frame itself: a first child belongs beside the issue that
+		// contains it, so it lands immediately after it. Filing it at the end
+		// of the whole order instead — what this did — reads as "last" in
+		// every view that sorts a non-epic parent's child by its own position,
+		// which is the opposite of what --top asked for. The SQL engine says
+		// the same thing in keys: the container's own key is the one an empty
+		// frame offers to sit beside. [LAW:one-source-of-truth]
+		e.insertAt(e.slotInsideContainer(f), id)
+		return nil
 	}
 	e.insertAt(edge.positionIn(positions), id)
 	return nil
+}
+
+// slotInsideContainer is where the first member of a frame goes: immediately
+// after the issue that frames it.
+//
+// The top level has no such issue, and it needs none — it is empty only when
+// the whole order is, every issue's ancestry ending at a top-level one — so
+// the answer there is the only slot an empty order has.
+func (e *Engine) slotInsideContainer(f storage.Frame) int {
+	if f == storage.TopLevel {
+		return 0
+	}
+	container := slices.Index(e.order, string(f))
+	if container < 0 {
+		return len(e.order)
+	}
+	return container + 1
 }
 
 // mintID names a new issue. Top-level and child ids differ only in the
