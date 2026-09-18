@@ -7,7 +7,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -231,8 +233,26 @@ func allDoctorFixNames() []string {
 
 // doctorFixes is the registry of available doctor fixes.
 // [LAW:one-source-of-truth] This map is the single authority for valid fix names.
-var doctorFixes = map[string]func(context.Context, io.Writer, storage.Repairer) error{
-	"integrity": func(ctx context.Context, w io.Writer, repairer storage.Repairer) error {
+// doctorFix repairs one class of fault.
+//
+// climbsHierarchy marks a repair whose work begins with the live-issue
+// classification, which is a walk up the parent chain — and that walk does not
+// return when the hierarchy holds a loop. Carrying it as data on the repair,
+// rather than as a branch where the repairs are dispatched, is what keeps the
+// skip honest: a repair that cannot crash is not withheld, and a new repair
+// declares its own reach instead of some caller guessing at it.
+// [LAW:types-are-the-program] [LAW:dataflow-not-control-flow]
+type doctorFix struct {
+	// name is filled in from the map key at parse time, so the two cannot drift.
+	name            string
+	climbsHierarchy bool
+	run             func(context.Context, io.Writer, storage.Repairer) error
+}
+
+var doctorFixes = map[string]doctorFix{
+	// FixIntegrity is three statements over issue_events and related-to rows;
+	// it never reads the hierarchy, so a loop does not stop it.
+	"integrity": {run: func(ctx context.Context, w io.Writer, repairer storage.Repairer) error {
 		report, err := repairer.FixIntegrity(ctx)
 		if err != nil {
 			return err
@@ -240,8 +260,9 @@ var doctorFixes = map[string]func(context.Context, io.Writer, storage.Repairer) 
 		_, err = fmt.Fprintf(w, "Integrity repair: foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d\n",
 			report.ForeignKeyIssues, report.InvalidRelatedRows, report.OrphanHistoryRows)
 		return err
-	},
-	"rank": func(ctx context.Context, w io.Writer, repairer storage.Repairer) error {
+	}},
+	// FixRankInversions starts from the live-issue classification, which climbs.
+	"rank": {climbsHierarchy: true, run: func(ctx context.Context, w io.Writer, repairer storage.Repairer) error {
 		fixed, err := repairer.FixRankInversions(ctx)
 		if err != nil {
 			return err
@@ -254,7 +275,83 @@ var doctorFixes = map[string]func(context.Context, io.Writer, storage.Repairer) 
 			_, err = fmt.Fprintf(w, "Re-ranked %d issue(s) to place every dependency above its dependent.\n", fixed)
 		}
 		return err
-	},
+	}},
+}
+
+// joinCycle renders a cycle field: its members, or "none" for a check that ran
+// and found no loop.
+func joinCycle(members []string) string {
+	if len(members) == 0 {
+		return "none"
+	}
+	return strings.Join(members, "->")
+}
+
+// doctorFieldValue renders one field of the status line, substituting
+// "unchecked" for any check the report says it did not run.
+//
+// The status line is parsed by scripts, and `rank_inversions=0` from a check
+// that never happened is a false clean claim no exit code can correct — the
+// reader has already been told a number. So the absent case gets a value of its
+// own rather than sharing one with the clean case. [LAW:no-silent-failure]
+// [LAW:one-source-of-truth] Which checks were skipped is the report's own
+// statement; this renders it rather than re-deriving it from the faults found.
+func doctorFieldValue(report storage.HealthReport, field, value string) string {
+	if slices.Contains(report.Unchecked, field) {
+		return "unchecked"
+	}
+	return value
+}
+
+// diagnoseThenRepair runs the health check, then such repairs as it is safe to
+// run, and reports the state left behind.
+//
+// The order is the whole point. A repair that climbs the hierarchy starts from
+// the live-issue classification, and that walk does not return when the
+// hierarchy holds a loop — so repairing first meant `lit doctor --fix`
+// overflowed the stack before it could name the loop, and the operator whose
+// habit is `--fix` got no diagnosis at all. Diagnosis has to survive the state
+// it diagnoses. Store.Doctor answers the same ordering question one level down,
+// for the same reason.
+//
+// A loop withholds only the repairs that would crash on it. Repairs that never
+// read the hierarchy still run, because refusing them would strand faults the
+// operator can fix in a workspace they cannot yet climb.
+// [LAW:dataflow-not-control-flow] What runs is decided by the report and by
+// each repair's own declared reach, never by which flag the caller typed.
+func diagnoseThenRepair(ctx context.Context, progress io.Writer, repairer storage.Repairer, fixes []doctorFix) (storage.HealthReport, error) {
+	report, err := repairer.Doctor(ctx)
+	if err != nil {
+		return storage.HealthReport{}, err
+	}
+	if len(report.ParentCycle) > 0 {
+		var runnable []doctorFix
+		var withheld []string
+		for _, fix := range fixes {
+			if fix.climbsHierarchy {
+				withheld = append(withheld, fix.name)
+				continue
+			}
+			runnable = append(runnable, fix)
+		}
+		if len(withheld) > 0 {
+			// [LAW:no-silent-failure] The skip is stated. A run that printed only
+			// the cycle would read as though these repairs had run and found
+			// nothing.
+			fmt.Fprintf(progress, "doctor: skipping --fix %s because the hierarchy holds a cycle (%s); those repairs walk up the parent chain and that walk does not return on a loop — break it first, then re-run\n", strings.Join(withheld, ","), strings.Join(report.ParentCycle, " -> "))
+		}
+		fixes = runnable
+	}
+	if len(fixes) == 0 {
+		return report, nil
+	}
+	for _, fix := range fixes {
+		if err := fix.run(ctx, progress, repairer); err != nil {
+			return storage.HealthReport{}, err
+		}
+	}
+	// Re-read, so the report describes the state the repairs left behind.
+	return repairer.Doctor(ctx)
 }
 
 func doctorLeaf() appLeaf {
@@ -270,23 +367,26 @@ func doctorLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
+		// [LAW:parse-dont-validate] The requested fixes are resolved to functions
+		// before anything runs, so an unknown name is a usage error rather than a
+		// failure discovered halfway through repairing.
+		var fixes []doctorFix
 		if *fix != "" {
 			fixNames := allDoctorFixNames()
 			if *fix != "all" {
 				fixNames = splitCSV(*fix)
 			}
-			// Fix progress writes to stderr so stdout carries only the health report.
 			for _, name := range fixNames {
-				fn, ok := doctorFixes[name]
+				fix, ok := doctorFixes[name]
 				if !ok {
 					return fmt.Errorf("unknown fix %q; available: %s", name, strings.Join(allDoctorFixNames(), ", "))
 				}
-				if err := fn(ctx, os.Stderr, repairer); err != nil {
-					return err
-				}
+				fix.name = name
+				fixes = append(fixes, fix)
 			}
 		}
-		report, err := repairer.Doctor(ctx)
+		// Fix progress writes to stderr so stdout carries only the health report.
+		report, err := diagnoseThenRepair(ctx, os.Stderr, repairer, fixes)
 		if err != nil {
 			return err
 		}
@@ -302,11 +402,13 @@ func doctorLeaf() appLeaf {
 		if _, err := fmt.Fprintln(stdout, resolveBuildStatusNote(time.Now())); err != nil {
 			return err
 		}
-		dependencyCycle := "none"
-		if len(report.DependencyCycle) > 0 {
-			dependencyCycle = strings.Join(report.DependencyCycle, "->")
-		}
-		if _, err := fmt.Fprintf(stdout, "integrity_check=%s foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d rank_inversions=%d dependency_cycle=%s\n", report.IntegrityCheck, report.ForeignKeyIssues, report.InvalidRelatedRows, report.OrphanHistoryRows, report.RankInversions, dependencyCycle); err != nil {
+		dependencyCycle := doctorFieldValue(report, storage.CheckDependencyCycle, joinCycle(report.DependencyCycle))
+		// A parent cycle reads on the same line as the dependency cycle because
+		// it answers the same shape of question about the other graph, and "none"
+		// states a clean check rather than leaving its absence to be read as one.
+		parentCycle := doctorFieldValue(report, "parent_cycle", joinCycle(report.ParentCycle))
+		rankInversions := doctorFieldValue(report, storage.CheckRankInversions, strconv.Itoa(report.RankInversions))
+		if _, err := fmt.Fprintf(stdout, "integrity_check=%s foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d rank_inversions=%s dependency_cycle=%s parent_cycle=%s\n", report.IntegrityCheck, report.ForeignKeyIssues, report.InvalidRelatedRows, report.OrphanHistoryRows, rankInversions, dependencyCycle, parentCycle); err != nil {
 			return err
 		}
 		if err := printSyncFreshness(stdout, syncReport); err != nil {

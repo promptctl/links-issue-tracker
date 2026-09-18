@@ -120,7 +120,7 @@ There is no ID parser/validator on lookup — supplied IDs bind verbatim, with n
 
 ### Rank placement at create
 
-Default placement is bottom (the `RankPlacement` zero value): rank = `After(max live rank)`, or the initial rank `"V"` in an empty workspace; `RankTop` takes the midpoint between the leading rank of the frame the issue is filed into (the live parent named at create, or the top level) and the nearest rank the whole workspace holds below that leader — `Before(leader)` when the workspace holds no rank below it, and `After(max live rank)` when that frame holds nothing ranked yet — except that bounds leaving no room between them make the store respace the ranks around the upper bound and read both bounds again (`store.go:2080-2088`; `internal/store/ranking.go:163-172`, `:142-151`, `:871-889`). Consecutive default creates therefore keep authoring order.
+Default placement is bottom (the `RankPlacement` zero value): rank = `After(max live rank)`, or the initial rank `"V"` in an empty workspace; `RankTop` takes the midpoint between the leading rank of the frame the issue is filed into (the live parent named at create, or the top level) and the nearest rank the whole workspace holds below that leader — `Before(leader)` when the workspace holds no rank below it, and `After(max live rank)` when that frame holds nothing ranked yet — except that bounds leaving no room between them make the store respace the ranks around the upper bound and read both bounds again (`store.go:2088-2096`; `internal/store/ranking.go:163-172`, `:142-151`, `:871-889`). Consecutive default creates therefore keep authoring order.
 
 ## Reads
 
@@ -178,7 +178,7 @@ Normalization is the model rule (lowercase, trimmed, non-empty, no commas — `0
 
 The three types and their store canonicalizations are in `01-data-model.md`: `blocks` stored dependent→dependency, `related-to` endpoint-sorted, `parent-child` single-valued from the child.
 
-`AddRelation` (`relations.go:293-341`): related-to self-edge rejected pre-transaction; endpoints canonicalized; both endpoints must exist (archived/deleted rows count as existing); blocks edges run **cycle detection** — a self-block or any direct/transitive cycle is rejected with a message explaining that a cycle has no valid rank order. Parent-child routes through a delete-then-insert that enforces at most one parent (adding a second parent silently replaces the first); other types use a plain insert, so an exact duplicate surfaces the primary-key error (no upsert).
+`AddRelation` (`relations.go:293-311`): related-to self-edge rejected pre-transaction; endpoints canonicalized; both endpoints must exist (archived/deleted rows count as existing); blocks edges run **cycle detection** — a self-block or any direct/transitive cycle is rejected with a message explaining that a cycle has no valid rank order. Parent-child routes through a delete-then-insert that enforces at most one parent (adding a second parent silently replaces the first); other types use a plain insert, so an exact duplicate surfaces the primary-key error (no upsert).
 
 `SetParent`: blank ids and self-parenting rejected; both must exist; same single-valued replace; **no ancestry cycle check on write** — a parent cycle is only caught at read time by the ancestor-chain walk. `ClearParent` deletes the child's parent edge (zero rows → `NotFoundError`). `RemoveRelation` canonicalizes first (so related-to removal is order-insensitive) and needs no endpoint existence.
 

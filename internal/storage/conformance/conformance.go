@@ -197,6 +197,7 @@ var cases = []engineCase{
 	{"relations_roundtrip", relationsRoundtrip},
 	{"relations_batch_buckets_edges", relationsBatchBucketsEdges},
 	{"parent_wiring", parentWiring},
+	{"the_hierarchy_stays_a_tree", theHierarchyStaysATree},
 	{"topics_derive_from_issues", topicsDeriveFromIssues},
 	{"export_carries_whole_store", exportCarriesWholeStore},
 	{"bulk_apply_creates_and_updates", bulkApplyCreatesAndUpdates},
@@ -1874,6 +1875,56 @@ func parentWiring(t *testing.T, ctx context.Context, st storage.Store, clk *cloc
 	}
 	_, err = st.SetParent(ctx, storage.SetParentInput{ChildID: child.ID, ParentID: "no-such-issue"})
 	assertNotFound(t, err, "issue", "SetParent under a missing parent")
+}
+
+// theHierarchyStaysATree pins the rule both engines owe the parent graph: an
+// issue reaches a root by walking up, so no write may put a would-be parent at
+// or below its own child. Both doors onto the edge are exercised, because a
+// rule that holds for 'lit parent set' and not for 'lit dep add' is not a rule
+// about the hierarchy — it is a rule about which command was typed.
+//
+// The assertion is on the STORED edges after each refusal, not on the error
+// alone: a write that errored and still landed would satisfy an error-only
+// check while leaving exactly the state this case exists to forbid.
+func theHierarchyStaysATree(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	root := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "root epic", Topic: "core", IssueType: model.TypeEpic})
+	mid := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "mid epic", Topic: "core", IssueType: model.TypeEpic, ParentID: root.ID})
+	leaf := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "leaf", Topic: "core", ParentID: mid.ID})
+
+	// Precondition that gives the case teeth: the chain really is root > mid >
+	// leaf, so each refusal below is refusing a loop rather than a nonsense id.
+	assertIssueIDs(t, "children of the root", mustChildren(t, ctx, st, root.ID), []string{mid.ID})
+	assertIssueIDs(t, "children of the mid epic", mustChildren(t, ctx, st, mid.ID), []string{leaf.ID})
+
+	refusals := []struct {
+		what          string
+		child, parent string
+	}{
+		{"a parent under its own child", root.ID, mid.ID},
+		{"a root under its own grandchild", root.ID, leaf.ID},
+		{"a sub-epic under its own child", mid.ID, leaf.ID},
+	}
+	for _, r := range refusals {
+		if _, err := st.SetParent(ctx, storage.SetParentInput{ChildID: r.child, ParentID: r.parent}); err == nil {
+			t.Errorf("SetParent(%s) succeeded; it closes a parent cycle", r.what)
+		}
+		if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: r.child, DstID: r.parent, Type: model.RelParentChild}); err == nil {
+			t.Errorf("AddRelation(%s) succeeded; it closes a parent cycle", r.what)
+		}
+	}
+
+	// Every refusal left the tree exactly as it found it.
+	assertIssueIDs(t, "children of the root after the refusals", mustChildren(t, ctx, st, root.ID), []string{mid.ID})
+	assertIssueIDs(t, "children of the mid epic after the refusals", mustChildren(t, ctx, st, mid.ID), []string{leaf.ID})
+
+	// A move that closes no loop still works, or the rule has simply broken
+	// reparenting.
+	sibling := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "sibling epic", Topic: "core", IssueType: model.TypeEpic})
+	if _, err := st.SetParent(ctx, storage.SetParentInput{ChildID: leaf.ID, ParentID: sibling.ID}); err != nil {
+		t.Fatalf("SetParent(leaf under an unrelated epic) error = %v; this move closes no cycle", err)
+	}
+	assertIssueIDs(t, "children of the sibling epic", mustChildren(t, ctx, st, sibling.ID), []string{leaf.ID})
+	assertIssueIDs(t, "children of the mid epic after the move", mustChildren(t, ctx, st, mid.ID), nil)
 }
 
 func topicsDeriveFromIssues(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {

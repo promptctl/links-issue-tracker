@@ -209,7 +209,7 @@ Checks, printed to stdout in order (`doctor.go:252-331`):
 
 1. Workspace identity: `workspace: storage_dir=… workspace_id=… issue_prefix=… issue_prefix_source=configured|derived git_common_dir=…`.
 2. The build-status note.
-3. `integrity_check=<v> foreign_key_issues=<n> invalid_related_rows=<n> orphan_history_rows=<n> rank_inversions=<n> dependency_cycle=<none|a->b->c>`.
+3. `integrity_check=<v> foreign_key_issues=<n> invalid_related_rows=<n> orphan_history_rows=<n> rank_inversions=<n|unchecked> dependency_cycle=<none|a->b->c|unchecked> parent_cycle=<none|a->b->c>`. A check the report could not run renders as `unchecked` rather than as its zero value, so an absent check is never read as a clean one.
 4. One sync-freshness line — a distinct message per state: no remote, unresolved (with detail), never synced, up to date, ahead (with `[ahead=n behind=0]`), behind, diverged (with both counts); an unhandled state is an error, exit 1. Freshness resolution never errors — every failure becomes an "unresolved" report with a reason (`doctor.go:105-204`).
 5. Only when the last push attempt failed: `sync: last push attempt FAILED <age> ago: <reason>[ — mirror log: <path> (last written <age> ago)]`.
 
