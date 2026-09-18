@@ -3,8 +3,11 @@ format: .yaml or .yml is the YAML bulk format, which creates or updates;
 any other extension is the JSON tree spec, which only creates.
 
 Both formats reject any key they do not name, so a misspelled field fails
-the whole file rather than being dropped, and both are validated in full
-before the first issue is written.
+the whole file rather than being dropped. Structure is checked before
+anything is written — required keys, duplicate ids, unresolvable
+references, cycles — but the value rules below are enforced as each issue
+is created, so a bad value fails partway through and the creates already
+made are rolled back. See Results for what rollback covers.
 
 JSON tree spec (creates only)
 

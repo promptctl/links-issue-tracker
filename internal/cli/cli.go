@@ -32,6 +32,12 @@ func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 		return err
 	}
 	root := newRootCommand(ctx, stdout, stderr)
+	// The help rewrite reads the registered command set, so it runs once the
+	// root exists rather than inside parseGlobalArgs, which precedes it.
+	normalizedArgs, err = rewriteHelpCommand(root, normalizedArgs)
+	if err != nil {
+		return err
+	}
 	root.SetArgs(normalizedArgs)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
@@ -191,12 +197,31 @@ func resolveWorkspaceFromWD() (workspace.Info, error) {
 //
 // Bare `lit help` still names no command, so it keeps reaching cobra's root
 // help — the one page cobra does render correctly, because the root is where
-// the group listing lives.
-func rewriteHelpCommand(args []string) []string {
-	if len(args) < 2 || args[0] != "help" {
-		return args
+// the group listing lives. A flag-shaped topic is cobra's business too.
+//
+// A topic naming no registered command is refused here rather than rewritten.
+// `lit nosuchcmd --help` is answered by cobra's root help at exit 0
+// (links-cli-yn14), so rewriting an unknown topic into that form would answer
+// "what is this command" with the full command list and call it success — an
+// answer-shaped non-answer. [LAW:no-silent-failure] the refusal is lit's own
+// typed error, which carries the exit code and the remediation cobra's bare
+// "Unknown help topic" never did.
+func rewriteHelpCommand(root *cobra.Command, args []string) ([]string, error) {
+	if len(args) < 2 || args[0] != "help" || strings.HasPrefix(args[1], "-") {
+		return args, nil
 	}
-	return append(slices.Clone(args[1:]), "--help")
+	// Cobra adds its own `help` command lazily, inside ExecuteC, which has not
+	// run yet — so without this the registered set is missing the one command
+	// whose name the caller is most likely to type twice, and `lit help help`
+	// refused itself while advising the caller to run `lit help <command>`.
+	// InitDefaultHelpCmd is idempotent; ExecuteC calling it again is a no-op.
+	root.InitDefaultHelpCmd()
+	for _, registered := range root.Commands() {
+		if registered.Name() == args[1] {
+			return append(slices.Clone(args[1:]), "--help"), nil
+		}
+	}
+	return nil, UnknownCommandError{Command: args[1]}
 }
 
 func parseGlobalArgs(args []string) ([]string, error) {
@@ -219,7 +244,7 @@ func parseGlobalArgs(args []string) ([]string, error) {
 	}
 
 done:
-	return rewriteHelpCommand(args[index:]), nil
+	return args[index:], nil
 }
 
 func unsupportedOutputFlagError() error {
@@ -1763,9 +1788,9 @@ func importTreeLeaf() appLeaf {
 // JSON shape (see storage.ImportTreeSpec):
 //
 //	[
-//	  {"local_id": "epic-x", "title": "Build X", "type": "epic", "topic": "x", "priority": 0},
-//	  {"local_id": "task-1", "parent": "epic-x", "title": "Design", "type": "task", "topic": "x", "priority": 0},
-//	  {"local_id": "task-2", "parent": "epic-x", "depends_on": ["task-1"], "title": "Build", "type": "task", "topic": "x", "priority": 0}
+//	  {"local_id": "epic-x", "title": "Build X", "type": "epic", "topic": "exporter", "priority": 0},
+//	  {"local_id": "task-1", "parent": "epic-x", "title": "Design", "type": "task", "topic": "exporter", "priority": 0},
+//	  {"local_id": "task-2", "parent": "epic-x", "depends_on": ["task-1"], "title": "Build", "type": "task", "topic": "exporter", "priority": 0}
 //	]
 func runImportTreeJSON(ctx context.Context, stdout io.Writer, ap *app.App, data []byte) error {
 	specs, err := storage.ParseImportTreeSpecs(data)

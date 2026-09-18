@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -109,20 +110,31 @@ func helpSurface(t *testing.T, root string) map[string]string {
 		surface[name] = literal
 	}
 
+	// Every directory of text the binary embeds and prints at a user: the
+	// long-form command help, the quickstart guidance templates, and the
+	// workflow definitions `lit done` and its siblings inject. Keys are
+	// repo-relative — two of these directories are named `defaults`, and a
+	// base-name key would have silently dropped one of them behind the other.
 	for _, dir := range []string{
 		filepath.Join(root, "internal", "cli", "helptext"),
 		filepath.Join(root, "internal", "templates", "defaults"),
+		filepath.Join(root, "internal", "workflows", "defaults"),
 	} {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			t.Fatalf("ReadDir(%s) error = %v", dir, err)
 		}
 		for _, entry := range entries {
-			body, readErr := os.ReadFile(filepath.Join(dir, entry.Name()))
+			path := filepath.Join(dir, entry.Name())
+			body, readErr := os.ReadFile(path)
 			if readErr != nil {
-				t.Fatalf("ReadFile(%s) error = %v", entry.Name(), readErr)
+				t.Fatalf("ReadFile(%s) error = %v", path, readErr)
 			}
-			surface[filepath.Join(filepath.Base(dir), entry.Name())] = string(body)
+			rel, relErr := filepath.Rel(root, path)
+			if relErr != nil {
+				t.Fatalf("Rel(%s) error = %v", path, relErr)
+			}
+			surface[filepath.ToSlash(rel)] = string(body)
 		}
 	}
 
@@ -203,7 +215,14 @@ func userFacingStringLiterals(t *testing.T, root string) map[string]string {
 					if unquoteErr != nil {
 						return true
 					}
-					literals[fmt.Sprintf("%s:%d", filepath.ToSlash(rel), fset.Position(lit.Pos()).Line)] = value
+					// Keyed by line AND column: a message and its separator commonly
+					// share a line — `fmt.Sprintf("... %s", strings.Join(x, ", "))` —
+					// and a line-only key kept whichever came last, which is the
+					// `", "`. That silently dropped 18% of the shipped literals,
+					// the usage errors this scan exists for among them.
+					// [LAW:one-source-of-truth] one key per literal, not per line.
+					pos := fset.Position(lit.Pos())
+					literals[fmt.Sprintf("%s:%d:%d", filepath.ToSlash(rel), pos.Line, pos.Column)] = value
 					return true
 				})
 			}
@@ -303,4 +322,67 @@ func TestHelpTextPanicsOnAMissingFile(t *testing.T) {
 		}
 	}()
 	_ = helpText("no-such-command")
+}
+
+// `lit help <unknown>` must refuse, not answer. Rewriting the topic into
+// `lit <unknown> --help` would hand it to cobra's root help, which prints the
+// whole command list and exits 0 (links-cli-yn14) — the question "what is this
+// command" answered with an answer-shaped non-answer.
+func TestHelpRefusesATopicThatNamesNoCommand(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repo); err != nil {
+		t.Fatalf("Chdir(repo) error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(prevWD) })
+
+	var stdout, stderr bytes.Buffer
+	runErr := Run(context.Background(), &stdout, &stderr, []string{"help", "nosuchcommand"})
+
+	var unknown UnknownCommandError
+	if !errors.As(runErr, &unknown) {
+		t.Fatalf("Run([help nosuchcommand]) error = %v (stdout %q), want UnknownCommandError", runErr, stdout.String())
+	}
+	if unknown.Command != "nosuchcommand" {
+		t.Errorf("UnknownCommandError.Command = %q, want the topic the caller typed", unknown.Command)
+	}
+	if got := stdout.String(); got != "" {
+		t.Errorf("Run([help nosuchcommand]) stdout = %q, want nothing — a refusal is not a help page", got)
+	}
+}
+
+// `lit help help` asks about cobra's own built-in command. Cobra registers it
+// lazily inside ExecuteC, so a registered-command scan that runs earlier does
+// not see it — and the first version of this rewrite refused `lit help help`
+// as unknown while its own remediation told the caller to run
+// `lit help <command>`. The advertised-path tests cannot catch that: `help` is
+// not a registry row, so nothing else in this package ever types it.
+func TestHelpAnswersForCobrasOwnHelpCommand(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repo); err != nil {
+		t.Fatalf("Chdir(repo) error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(prevWD) })
+
+	var stdout, stderr bytes.Buffer
+	if runErr := Run(context.Background(), &stdout, &stderr, []string{"help", "help"}); runErr != nil {
+		t.Fatalf("Run([help help]) error = %v, want help answered as success", runErr)
+	}
+	if stdout.Len() == 0 {
+		t.Error("Run([help help]) printed nothing; a help request must be answered")
+	}
+	if got := stderr.String(); got != "" {
+		t.Errorf("Run([help help]) stderr = %q, want empty — a help answer is not an error", got)
+	}
 }
