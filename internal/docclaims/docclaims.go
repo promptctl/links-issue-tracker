@@ -81,11 +81,11 @@ type Claim struct {
 	// asset.
 	//
 	// Anchoring to it is what gives the gate teeth. Asking only whether the
-	// quoted words appear SOMEWHERE in the tree is far too weak: measured over
-	// this corpus, 174 of the quotations are contained in two or more distinct
-	// sources, one in twenty-two of them. Delete the exact message a chapter
-	// cites and a coincidental substring elsewhere keeps the gate green — the
-	// precise failure this package exists to end.
+	// quoted words appear SOMEWHERE in the tree is far too weak: of the 1,102
+	// entries, 269 have text contained in two or more distinct corpus sources,
+	// and one sits in 29 of them (measured 2026-09-18). Delete the exact message
+	// a chapter cites and a coincidental substring elsewhere keeps the gate
+	// green — the precise failure this package exists to end.
 	// [LAW:types-are-the-program] the claim carries its own evidence.
 	//
 	// The two kinds do not anchor equally tightly, and the weaker one is worth
@@ -93,9 +93,10 @@ type Claim struct {
 	// so the check is nearly exact. An asset is keyed by path and matched
 	// against its whole contents, so a quotation is only held to "still
 	// somewhere in this file" — delete the sentence a chapter describes and a
-	// stray recurrence elsewhere in the same file keeps it green. The assets
-	// here are small enough (the largest is 6.3 KB) that the gap is narrow, and
-	// closing it properly means anchoring to a span rather than a file.
+	// stray recurrence elsewhere in the same file keeps it green. The gap is
+	// narrow because the files are small: the largest an entry anchors to is
+	// 6.3 KB, of 12 such files (measured 2026-09-18). Closing it properly means
+	// anchoring to a span rather than to a whole file.
 	Src string
 }
 
@@ -227,6 +228,11 @@ type source struct {
 func (s sources) dir(imp string) (string, bool) {
 	for _, src := range s {
 		if imp == src.prefix {
+			// The root module's own prefix maps to the tree root, which io/fs
+			// spells "." and never "".
+			if src.dir == "" {
+				return ".", true
+			}
 			return src.dir, true
 		}
 		if rest, ok := strings.CutPrefix(imp, src.prefix+"/"); ok {
@@ -258,8 +264,13 @@ func localSources(fsys fs.FS) (sources, error) {
 		dir := strings.Fields(strings.TrimSpace(target))
 		// A replacement onto another module is that module's source, fetched
 		// into the module cache and not in this tree; only a filesystem path
-		// names something here.
+		// names something here. A path that climbs out of the tree (../sibling)
+		// is a checkout this repository does not carry, and following it would
+		// fail the gate on a directory that is not part of it.
 		if len(dir) == 0 || !strings.HasPrefix(dir[0], ".") {
+			continue
+		}
+		if cleaned := path.Clean(dir[0]); cleaned == ".." || strings.HasPrefix(cleaned, "../") {
 			continue
 		}
 		prefix := strings.Fields(strings.TrimPrefix(strings.TrimSpace(module), "replace "))
@@ -314,9 +325,12 @@ func entryPackages(fsys fs.FS) ([]string, error) {
 func importsOf(fsys fs.FS, dir string) ([]string, error) {
 	var out []string
 	err := eachProductFile(fsys, dir, func(name string, src []byte) error {
-		file, err := parser.ParseFile(token.NewFileSet(), name, src, parser.ImportsOnly)
+		file, err := parser.ParseFile(token.NewFileSet(), name, src, parser.ImportsOnly|parser.ParseComments)
 		if err != nil {
 			return fmt.Errorf("parsing %s: %w", name, err)
+		}
+		if excludedFromEveryBuild(file) {
+			return nil
 		}
 		for _, spec := range file.Imports {
 			imp, err := strconv.Unquote(spec.Path.Value)
@@ -362,6 +376,34 @@ func eachProductFile(fsys fs.FS, dir string, fn func(name string, src []byte) er
 	return nil
 }
 
+// excludedFromEveryBuild reports whether a file carries the "ignore" build
+// constraint, which no ordinary build ever satisfies — the conventional marker
+// for a generator run by hand with `go run`. Following its imports would pull
+// packages nothing links into the corpus, and collecting its literals would
+// count text no user can reach.
+//
+// This is the one constraint evaluated here, and the limit is deliberate rather
+// than overlooked. GOOS-suffixed files and tagged variants are all collected
+// together — internal/dbsnapshot/clone_linux.go, clone_darwin.go and
+// clone_other.go at once — because "the text that reaches a user" is the union
+// over the platforms lit ships on, not whichever one this test happens to run
+// on. The residual risk is narrow and worth stating: an identical message in
+// two platform variants means deleting one leaves the entry anchored to the
+// other. No manifest entry is anchored into those files today.
+func excludedFromEveryBuild(file *ast.File) bool {
+	for _, group := range file.Comments {
+		for _, c := range group.List {
+			if c.Pos() > file.Package {
+				return false
+			}
+			if constraint := strings.TrimSpace(strings.TrimPrefix(c.Text, "//go:build")); constraint == "ignore" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // isProductGo reports whether a file is Go source the product build compiles.
 // A test file ships nothing, and the go tool ignores testdata entirely, so a
 // package stored there is not reachable however it is imported.
@@ -384,6 +426,9 @@ func collectFile(fsys fs.FS, name string, src []byte, into Corpus) error {
 	file, err := parser.ParseFile(token.NewFileSet(), name, src, parser.ParseComments)
 	if err != nil {
 		return fmt.Errorf("parsing %s: %w", name, err)
+	}
+	if excludedFromEveryBuild(file) {
+		return nil
 	}
 	ast.Inspect(file, func(n ast.Node) bool {
 		lit, ok := n.(*ast.BasicLit)
@@ -411,7 +456,7 @@ func collectFile(fsys fs.FS, name string, src []byte, into Corpus) error {
 // guessed from file extensions: what ships is what the compiler is told to
 // embed, and a .md beside it that nothing embeds does not.
 func collectEmbeds(fsys fs.FS, dir string, file *ast.File, into Corpus) error {
-	for _, group := range file.Comments {
+	for _, group := range embedDocs(file) {
 		for _, c := range group.List {
 			m := embedDirective.FindStringSubmatch(c.Text)
 			if m == nil {
@@ -475,6 +520,31 @@ func embedPatterns(operands string) []string {
 	return out
 }
 
+// embedDocs returns the comment groups that can legally carry a //go:embed
+// directive: the doc comment of a var declaration, and of each spec inside a
+// var block. Scanning every comment in the file instead would treat prose that
+// quotes a directive as one, and pull in assets the compiler never embeds —
+// which, now that an unmatched pattern is an error, would fail the gate over a
+// sentence in a comment. [LAW:parse-dont-validate]
+func embedDocs(file *ast.File) []*ast.CommentGroup {
+	var out []*ast.CommentGroup
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.VAR {
+			continue
+		}
+		if gen.Doc != nil {
+			out = append(out, gen.Doc)
+		}
+		for _, spec := range gen.Specs {
+			if v, ok := spec.(*ast.ValueSpec); ok && v.Doc != nil {
+				out = append(out, v.Doc)
+			}
+		}
+	}
+	return out
+}
+
 // addEmbedded resolves one embed pattern and records every text file it names.
 // A pattern may name a directory, which embeds everything beneath it.
 //
@@ -490,6 +560,15 @@ func addEmbedded(fsys fs.FS, pattern string, all bool, into Corpus) error {
 	matches, err := fs.Glob(fsys, pattern)
 	if err != nil {
 		return fmt.Errorf("embed pattern %q: %w", pattern, err)
+	}
+	if len(matches) == 0 {
+		// The compiler refuses a directive that matches no files, so this is
+		// unreachable for code that builds — which is exactly why it must be
+		// loud here rather than free. Silence would drop the asset from the
+		// corpus and report every chapter quoting it as a message that stopped
+		// shipping: a parse gap wearing the costume of the drift this package
+		// hunts. [LAW:no-silent-failure]
+		return fmt.Errorf("embed pattern %q matched no files", pattern)
 	}
 	for _, match := range matches {
 		info, err := fs.Stat(fsys, match)
@@ -611,28 +690,61 @@ func spansIn(src string) ([]string, error) {
 func stripFences(src string) (string, error) {
 	lines := strings.Split(src, "\n")
 	out := make([]string, 0, len(lines))
-	fenced := false
-	opened := 0
+	open, opened := "", 0
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
-			if !fenced {
-				opened = i + 1
+		if open == "" {
+			if marker := fenceMarker(trimmed); marker != "" {
+				open, opened = marker, i+1
+				out = append(out, "")
+				continue
 			}
-			fenced = !fenced
-			out = append(out, "")
+			out = append(out, line)
 			continue
 		}
-		if fenced {
-			out = append(out, "")
-			continue
+		if closesFence(open, trimmed) {
+			open = ""
 		}
-		out = append(out, line)
+		out = append(out, "")
 	}
-	if fenced {
+	if open != "" {
 		return "", fmt.Errorf("unclosed code fence opened at line %d", opened)
 	}
 	return strings.Join(out, "\n"), nil
+}
+
+// fenceMarker returns the run of backticks or tildes that opens or closes a
+// fence, or "" for an ordinary line.
+func fenceMarker(trimmed string) string {
+	for _, c := range []byte{'`', '~'} {
+		n := 0
+		for n < len(trimmed) && trimmed[n] == c {
+			n++
+		}
+		if n >= 3 {
+			return trimmed[:n]
+		}
+	}
+	return ""
+}
+
+// closesFence reports whether a line ends the fence that open began.
+//
+// CommonMark's rule, not "any marker ends any fence": the closer must use the
+// same character, be at least as long, and carry no trailing text. A single
+// boolean toggled by either marker inverts on a nested fence — a ~~~ inside a
+// ``` block reopens what it should have left alone — and from there the parity
+// is wrong for the rest of the file. The loud outcome is a spurious unclosed
+// fence error naming the wrong line; the quiet one is real prose below the
+// nesting silently treated as code, dropping its claims from the manifest as an
+// ordinary "entries left" diff, which is what CONTRIBUTING tells a reviewer
+// means a sentence stopped describing the binary. [LAW:no-silent-failure]
+func closesFence(open, trimmed string) bool {
+	marker := fenceMarker(trimmed)
+	if marker == "" || marker != trimmed {
+		return false
+	}
+	return marker[0] == open[0] && len(marker) >= len(open)
 }
 
 // Matched keeps the claims whose text appears in shipped text, recording which

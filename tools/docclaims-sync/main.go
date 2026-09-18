@@ -30,11 +30,16 @@ import (
 const manifestPath = "internal/docclaims/manifest_gen.go"
 
 // check reports whether to verify the committed manifest instead of rewriting
-// it. The nightly workflow runs tools/lawtokens-sync the same way; without an
-// equivalent here nothing compares what is committed against what the tree
-// would produce, which is exactly how a manifest generated over a dirty working
-// tree — one carrying a gitignored vendored project — was committed and broke
-// CI in a clean checkout. [LAW:single-enforcer]
+// it, without writing: the form to reach for in a script, or before committing
+// a regeneration.
+//
+// It is not what guards CI. TestManifestIsCurrent asks the same question on
+// every run and is the single enforcer of it; a nightly job running this flag
+// would be a second answer to one question, which is the shape of drift this
+// package exists to remove. What it adds is a check you can run deliberately —
+// the omission it covers is real, since a manifest generated over a dirty
+// working tree carrying a gitignored vendored project was committed once and
+// broke every clean checkout. [LAW:single-enforcer]
 var check = flag.Bool("check", false, "verify the committed manifest matches a regeneration; write nothing")
 
 func main() {

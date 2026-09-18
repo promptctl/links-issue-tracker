@@ -95,8 +95,8 @@ func TestMissingReportsADroppedMessage(t *testing.T) {
 
 // TestMissingSeesThroughACoincidentalSubstring is the reason a claim records
 // the source it was found in. Matching against the union of all shipped text is
-// far too weak: 174 of this corpus's quotations sit inside two or more distinct
-// sources. Here the documented message is deleted and an unrelated one still
+// far too weak: 269 of this corpus's 1,102 entries have text sitting inside two
+// or more distinct sources (measured 2026-09-18). Here the documented message is deleted and an unrelated one still
 // contains its words.
 func TestMissingSeesThroughACoincidentalSubstring(t *testing.T) {
 	corpus := Corpus{"some other sentence about deleted_at IS NULL here": "some other sentence about deleted_at IS NULL here"}
@@ -278,5 +278,39 @@ func TestDirectoryEmbedOmitsUnderscoredFilesButGlobDoesNot(t *testing.T) {
 	}
 	if _, ok := corpus["cmd/lit/sub/_x.txt"]; ok {
 		t.Error("cmd/lit/sub/_x.txt counted as shipped; a directory pattern omits underscored names")
+	}
+}
+
+// TestNestedFenceDoesNotInvertTheRegion is the fence-parity regression. A single
+// boolean toggled by either marker lets a ~~~ inside a ``` block close it, so
+// the next ``` reopens a fence over ordinary prose. The quiet failure is real
+// claims below the nesting dropped from the manifest, which regenerates as an
+// ordinary "entries left" diff — the very signal CONTRIBUTING tells a reviewer
+// means a sentence stopped describing the binary.
+func TestNestedFenceDoesNotInvertTheRegion(t *testing.T) {
+	src := "intro `a real claim here`\n```\n~~~\n```\nafter `another real claim here`\n"
+	spans, err := spansIn(src)
+	if err != nil {
+		t.Fatalf("spansIn: %v", err)
+	}
+	want := []string{"a real claim here", "another real claim here"}
+	if !slices.Equal(spans, want) {
+		t.Errorf("spansIn() = %q, want %q — the fenced region swallowed live prose", spans, want)
+	}
+}
+
+// TestClosingFenceMustMatchItsOpener covers the other half of the rule: a longer
+// run opens a fence that a shorter one cannot close, and a marker carrying an
+// info string is an opener, never a closer.
+func TestClosingFenceMustMatchItsOpener(t *testing.T) {
+	if _, err := spansIn("````\n```\nstill inside\n"); err == nil {
+		t.Error("a ``` did not close a ```` fence, but no unclosed-fence error was reported")
+	}
+	spans, err := spansIn("````\nfenced\n````\nafter `a real claim here`\n")
+	if err != nil {
+		t.Fatalf("spansIn: %v", err)
+	}
+	if !slices.Equal(spans, []string{"a real claim here"}) {
+		t.Errorf("spansIn() = %q, want the claim after the closed fence", spans)
 	}
 }
