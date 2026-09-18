@@ -114,7 +114,7 @@ into* one of those, the call and its observable effect are recorded here.
   (`--flag` with no value takes `defaultIfPresent`, absent takes
   `defaultIfAbsent` — `cli.go:237-241`), `Hide(name)` marks a flag hidden but
   functional (`cli.go:261-263`).
-- `parseFlagSet(fs, args, stdout)` (`cli.go:274-308`) is the single parse boundary:
+- `parseFlagSet(fs, args, stdout)` (`flagset.go:134-168`) is the single parse boundary:
   - On `pflag.ErrHelp` it prints `"Usage of <use>:\n"` followed by
     `PrintDefaults()` **to stdout** and returns `errHelpHandled` → exit 0
     (`cli.go:277-283`, printer at `cli.go:265-272`).
@@ -143,7 +143,7 @@ into* one of those, the call and its observable effect are recorded here.
 
 ### 1.8 Exit-code taxonomy
 
-Constants (`exit.go:11-32`):
+Constants (`exit.go:12-33`):
 
 | Name | Value |
 |---|---|
@@ -156,7 +156,7 @@ Constants (`exit.go:11-32`):
 | `ExitNoWork` | 6 |
 | `ExitCorruption` | 7 |
 
-`ExitCode(err)` dispatches by `errors.As`, in this order (`exit.go:37-160`):
+`ExitCode(err)` dispatches by `errors.As`, in this order (`exit.go:38-170`):
 1. `storage.NotFoundError` → 4 (`exit.go:42-44`)
 2. `MergeConflictError` → 5 (`exit.go:46-48`)
 3. `SyncFailureError` → 5 (`exit.go:54-56`)

@@ -107,7 +107,7 @@ to `/Users/bmf/code/links-issue-tracker`.
   (`internal/cli/cli.go:44-50`, `:28`).
 - There are **no persistent global flags** registered on the root beyond cobra's own `help`;
   per-command flag sets are constructed by `newCobraFlagSet` (`internal/cli/cli.go:192-203`).
-- Per-command flag parsing (`parseFlagSet`, `internal/cli/cli.go:274-308`) maps specific
+- Per-command flag parsing (`parseFlagSet`, `internal/cli/flagset.go:134-168`) maps specific
   removed flags to typed errors:
   - `--continue` ⇒ `UnsupportedError` "--continue is retired; claim routing already keeps
     `lit next` in your checkout's own epic first — run `lit next` with no flag"
@@ -169,7 +169,7 @@ Constants (`internal/cli/exit.go:10-18`):
 | `ExitCorruption` | 7 |
 
 `ExitCode(err)` dispatches by `errors.As` in this order
-(`internal/cli/exit.go:37-160`):
+(`internal/cli/exit.go:38-170`):
 
 - `storage.NotFoundError` ⇒ 4 (`:41-43`)
 - `MergeConflictError` ⇒ 5 (`:45-47`)
@@ -384,7 +384,7 @@ Defaults are set in `Load` (`internal/config/config.go:217-228`).
    `canonicalize git-common-dir %q: %w` (`internal/workspace/workspace.go:310-313`).
 4. `LocationFromStorageDir(filepath.Join(gitCommonDir, "links"))` (`internal/workspace/workspace.go:315`).
 
-### 5.3 `Resolve(cwd)` (`internal/workspace/workspace.go:221-223`, `ResolveWithPrefix` `:196-235`)
+### 5.3 `Resolve(cwd)` (`internal/workspace/workspace.go:221-223`, `ResolveWithPrefix` `:232-271`)
 
 1. `git rev-parse --show-toplevel` ⇒ `RootDir`; failure classified by `classifyGitError`.
 2. `deriveLocation(cwd)`.

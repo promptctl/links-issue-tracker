@@ -31,7 +31,7 @@ data — described as assets, not as documentation of behavior).
 - `internal/cli/register.go:112-123` `commandFamily.resolve`: a missing / unknown / flag-shaped first argument returns `errors.New(family.usage)` — a plain error → exit 1 (`internal/cli/exit.go:90`), not exit 2. Match is exact (no trimming).
 - `internal/cli/register.go:129-138` `visibleSubcommands()` drops `hidden` rows from help/completion.
 
-### 0.3 Exit codes (constants `internal/cli/exit.go:11-32`, dispatch `:37-157`)
+### 0.3 Exit codes (constants `internal/cli/exit.go:12-33`, dispatch `:38-170`)
 
 | Code | Constant | Trigger |
 |---|---|---|
