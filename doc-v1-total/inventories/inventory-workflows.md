@@ -521,21 +521,21 @@ Usage string (`internal/cli/workflows.go:22`):
 usage: lit workflows [show <id> | edit <id-or-point> | dry-run [--event <name>] [--label <name>]... [--enter <state>] [--exit <state>] [--issue <id>]]
 ```
 
-Routing (`internal/cli/workflows.go:34-58`), on `splitArgs(args, 2)`
-(`internal/cli/cli.go:1958-1978` — leading `-`-prefixed tokens and their values go to flags; the
-first up-to-2 bare tokens are positional; extras spill into flagArgs):
+Routing (`internal/cli/workflows.go:50-58`): a help flag gives the family usage;
+zero args or a leading `-` gives `workflowsOverviewLeaf`; anything else goes to
+`resolveWsLeaf(workflowsFamily, args)` against the family table
+(`internal/cli/workflows.go:30-37`). Each shape is its own leaf declaring its own
+arity:
 
 | Shape | Behavior |
 |---|---|
-| 0 positionals | overview (`internal/cli/workflows.go:39-42`) |
-| `show <id>` | one definition resolved (`internal/cli/workflows.go:43-47`) |
-| `edit <id-or-point>` | scaffold/open (`internal/cli/workflows.go:48-52`) |
-| `dry-run` (1 positional) | hypothetical (`internal/cli/workflows.go:53-54`) |
-| anything else | `UsageError{workflowsUsage}` → exit 2 (`internal/cli/workflows.go:56`) |
+| 0 positionals | overview, `positionals: 0` (`internal/cli/workflows.go:64-66`) |
+| `show <id>` | one definition resolved, `positionals: 1` (`internal/cli/workflows.go:71-73`) |
+| `edit <id-or-point>` | scaffold/open, `positionals: 1` (`internal/cli/workflows.go:81-83`) |
+| `dry-run` | hypothetical, `positionals: 0` (`internal/cli/workflows_dryrun.go:24-31`) |
 
-Overview/show/edit take **no flags**: `parseNoWorkflowsFlags` parses an empty cobra flagset and then
-requires `NArg()==0`, so any flag-shaped token or an oversupplied positional is a `UsageError`
-(`internal/cli/workflows.go:60-72`; pinned `internal/cli/workflows_test.go:168`, `:429`).
+All four set `usage: workflowsUsage`. Overview, show, and edit register no flags
+beyond the implicit `--help`.
 
 ### 7.1 Bare `lit workflows` — the overview
 

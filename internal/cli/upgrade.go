@@ -117,13 +117,13 @@ type upgradeLeafShape = leaf[upgradeScope]
 func withWorkspaceSchema(declare func() upgradeLeafShape) wsLeafFn {
 	return func() wsLeaf {
 		l := declare()
-		return wsLeaf{fs: l.fs, positionals: l.positionals, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+		return adaptLeaf[upgradeScope, workspace.Info](l, func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
 			current, err := version.Get()
 			if err != nil {
 				return fmt.Errorf("upgrade: read this binary's version info: %w", err)
 			}
 			return l.work(ctx, stdout, upgradeScope{schema: workspaceSchemaReader{ws: ws}, current: current}, positional)
-		}}
+		})
 	}
 }
 
@@ -246,10 +246,8 @@ func upgradeLeafWith(
 ) upgradeLeafShape {
 	fs := newCobraFlagSet("upgrade")
 	to := fs.String("to", "", "Target binary version (v-prefixed git tag, e.g. v0.9.0); omit to upgrade to the latest release")
-	return upgradeLeafShape{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope upgradeScope, _ []string) error {
-		if fs.NArg() != 0 {
-			return UsageError{Message: "usage: lit upgrade [--to <version>]"}
-		}
+	const usageLine = "usage: lit upgrade [--to <version>]"
+	return upgradeLeafShape{fs: fs, usage: usageLine, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope upgradeScope, _ []string) error {
 		// [LAW:parse-dont-validate] --to's default value is the latest published
 		// release. The flag set carries omitted-vs-given as typed data (Changed),
 		// so only a truly omitted flag selects the feed as the tag's source — an

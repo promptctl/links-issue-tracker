@@ -17,7 +17,7 @@ data — described as assets, not as documentation of behavior).
 - `internal/cli/cli.go:35-50` `Run`: normalizes global args (`parseGlobalArgs`), builds the cobra root, `SilenceErrors`/`SilenceUsage` true; `pflag.ErrHelp` and `errHelpHandled` are swallowed to a nil error (exit 0).
 - `internal/cli/cli.go:53-87` root command `lit`: `Long: "Agent-native issue tracker"`. Bare `lit` with no args prints `renderQuickstartGuidance(ws.RootDir)` (identical to `lit quickstart`) — `cli.go:63-75`. Outside a git repo (`workspace.ErrNotGitRepo`) it prints cobra help instead (`cli.go:66-68`). A non-empty first arg that is not a registered command returns `UnknownCommandError` (`cli.go:59-61`).
 - `internal/cli/cli.go:82-84` root flag errors are wrapped as `UsageError` (exit 2).
-- `internal/cli/register.go:420` every registered command sets `DisableFlagParsing: true` and `Args: cobra.ArbitraryArgs`; each command parses its own flags.
+- `internal/cli/register.go:434` every registered command sets `DisableFlagParsing: true` and `Args: cobra.ArbitraryArgs`; each command parses its own flags.
 
 ### 0.2 Flag set semantics (applies to every command below)
 
@@ -27,7 +27,7 @@ data — described as assets, not as documentation of behavior).
   - `--continue` → `UnsupportedError{Message: "--continue is retired; claim routing already keeps \`lit next\` in your checkout's own epic first — run \`lit next\` with no flag"}` (exit 3) — `flagset.go:138-141`.
   - Every other parse error (unknown flag, missing value, invalid value, bad syntax) → `UsageError` (exit 2) — `flagset.go:142`.
 - `internal/cli/cli.go:233-241` `StringOptional(name, defaultIfPresent, defaultIfAbsent, usage)` — used only by `quickstart --eject`.
-- `internal/cli/cli.go:1958-1979` `splitArgs(args, n)` splits leading positionals from flags (used by `snapshots restore`).
+- `internal/cli/flagset.go:297-363` `splitArgs(args []string, positionalCount int, fs *cobraFlagSet)` splits leading positionals from flags; its one non-test call site is `parseLeaf` (`internal/cli/register.go:308`).
 - `internal/cli/register.go:112-123` `commandFamily.resolve`: a missing / unknown / flag-shaped first argument returns `errors.New(family.usage)` — a plain error → exit 1 (`internal/cli/exit.go:90`), not exit 2. Match is exact (no trimming).
 - `internal/cli/register.go:129-138` `visibleSubcommands()` drops `hidden` rows from help/completion.
 
@@ -299,7 +299,7 @@ Family usage: `usage: lit sync reconcile [resolve --resolve FINGERPRINT=TEXT ...
 Dispatch (`sync_reconcile_cmd.go:48-57`): a first arg not starting with `-` routes to a subcommand; otherwise (no args, or a leading flag) the bare show path runs.
 
 `reconcilerFor` (`sync_reconcile_cmd.go:69-76`) resolves `storage.Reconcile.Of(session.engine)`; a decline is traced under the requesting command and returned.
-`guardReconcileInput` (`sync_reconcile_cmd.go:82-87`): any positional → `UsageError{"<cmd> takes no positional arguments; got \"<arg>\""}` (exit 2) — applied to bare show, `resolve`, `abort`, `combine`.
+Surplus positionals are refused by the shared `refuseSurplusPositionals` (`register.go:342`): `lit sync reconcile abort stray` → `UsageError{"usage: lit sync reconcile abort takes no positional arguments; got unexpected argument(s) [\"stray\"]"}` (exit 2).
 
 `freshReconcileTarget` (`sync_reconcile_cmd.go:614-633`) — shared pre-step, through `resolveSyncTarget` (`sync.go:707-731`) for the steps before the fetch: reconcile remotes → resolve remote (empty ⇒ ok=false) → `RemoteHasRefs` (error wrapped `check remote refs %q`; false ⇒ ok=false) → resolve branch → `syncer.SyncFetch(ctx, remote, false)` (error wrapped `fetch %q before reconcile`) → `markFetchSuccess`.
 `ok=false` at every command prints `nothing to reconcile: no remote with shared ticket history yet` and traces decision `nothing_to_reconcile` (e.g. `sync_reconcile_cmd.go:112-116`).
@@ -810,7 +810,7 @@ Snapshot directory `<StorageDir>/snapshots` (`snapshots.go:32-34`).
 
 ### 8.3 `lit snapshots restore <name>`
 
-`runSnapshotsRestore` — `snapshots.go:208-271`. Positional name split off before flag parsing via `splitArgs(args, 1)` (`snapshots.go:209`).
+`runSnapshotsRestore` — `snapshots.go:208-271`. Declares `positionals: 1` (`snapshots.go:215`); `parseLeaf` splits the positional off before flag parsing.
 - Not exactly one positional, or leftover args → `UsageError{"usage: lit snapshots restore <name>"}` (`snapshots.go:214-216`); an all-whitespace name gets the same error (`snapshots.go:217-220`).
 - Holds `store.LockWorkspaceExclusive` for the whole restore; a release failure is joined into the return via `errors.Join` (`snapshots.go:225-239`).
 - `dbsnapshot.Restore(DatabasePath, snapshotsDir, name)` runs under `withCommitLock` (`snapshots.go:242-251`).
@@ -914,7 +914,7 @@ Usage string, derived from the topic table: `usage: lit quickstart [work|new|upd
 - `--eject` (empty value) is normalized to `all` (`cli.go:1741-1744`).
 - `--refresh` together with `--eject` → `usage: --refresh and --eject are mutually exclusive` (`cli.go:1745-1747`).
 - `--force` without `--eject` → `usage: --force is only valid with --eject` (`cli.go:1748-1750`).
-- Exactly one positional (a topic) with ANY of `--refresh`/`--eject`/`--force` → `usage: lit quickstart <topic> takes no flags` (`cli.go:1754-1755`).
+- Exactly one positional (a topic) with `--refresh` or `--eject` → `quickstartUsage` followed by `a topic renders on its own`; when `--eject` was given it also names `, and --eject takes its value as --eject=LIST` (`cli.go:2025-2029`). `--force` alone never reaches this branch: the `--force` without `--eject` check above returns first.
 - An unknown topic → `usage: unknown quickstart topic "<t>" (must be one of: work, new, update, done, doctor)` (`cli.go:1756-1759`).
 
 ### 12.2 Modes

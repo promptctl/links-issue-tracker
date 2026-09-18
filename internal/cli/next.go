@@ -38,10 +38,7 @@ func nextLeaf() appLeaf {
 	// route over the whole queue rather than the focused goal's path.
 	// [LAW:one-source-of-truth] one name for one idea across both surfaces.
 	all := fs.Bool("all", false, "Ignore the focus scope and route over the whole queue")
-	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
-		if fs.NArg() != 0 {
-			return UsageError{Message: nextUsage}
-		}
+	return appLeaf{fs: fs, positionals: 0, usage: nextUsage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		statusState, err := parseWorkableStatus(*status)
 		if err != nil {
 			return err

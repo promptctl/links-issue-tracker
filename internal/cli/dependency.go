@@ -26,9 +26,10 @@ func depAddLeaf() appLeaf {
 	from := fs.String("from", "", "Source issue ID (required)")
 	to := fs.String("to", "", "Target issue ID (required)")
 	resolveActor := registerActor(fs)
-	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
-		if *from == "" || *to == "" || fs.NArg() != 0 {
-			return UsageError{Message: "usage: lit dep add --from <id> --to <id> [--type blocks|parent-child|related-to]"}
+	const usageLine0 = "usage: lit dep add --from <id> --to <id> [--type blocks|parent-child|related-to]"
+	return appLeaf{fs: fs, usage: usageLine0, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		if *from == "" || *to == "" {
+			return UsageError{Message: usageLine0}
 		}
 		// [LAW:single-enforcer] The CLI flag is the trust boundary; everything
 		// downstream receives the sealed RelationType.
@@ -69,9 +70,10 @@ func depRmLeaf() appLeaf {
 	relType := fs.String("type", "blocks", "Relation type: blocks|parent-child|related-to")
 	from := fs.String("from", "", "Source issue ID (required)")
 	to := fs.String("to", "", "Target issue ID (required)")
-	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
-		if *from == "" || *to == "" || fs.NArg() != 0 {
-			return UsageError{Message: "usage: lit dep rm --from <id> --to <id> [--type blocks|parent-child|related-to]"}
+	const usageLine1 = "usage: lit dep rm --from <id> --to <id> [--type blocks|parent-child|related-to]"
+	return appLeaf{fs: fs, usage: usageLine1, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		if *from == "" || *to == "" {
+			return UsageError{Message: usageLine1}
 		}
 		rt, err := model.ParseRelationType(*relType)
 		if err != nil {
@@ -91,12 +93,10 @@ func depRmLeaf() appLeaf {
 func depLsLeaf() appLeaf {
 	fs := newCobraFlagSet("dep ls")
 	relType := fs.String("type", "", "Filter relation type")
-	return appLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	const usageLine2 = "usage: lit dep ls <issue-id> [--type blocks|parent-child|related-to]"
+	return appLeaf{fs: fs, usage: usageLine2, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
-			return UsageError{Message: "usage: lit dep ls <issue-id> [--type blocks|parent-child|related-to]"}
-		}
-		if fs.NArg() != 0 {
-			return UsageError{Message: "usage: lit dep ls <issue-id> [--type blocks|parent-child|related-to]"}
+			return UsageError{Message: usageLine2}
 		}
 		// [LAW:dataflow-not-control-flow] An absent --type is the empty filter
 		// set; a present one is parsed at this trust boundary, so a bad value

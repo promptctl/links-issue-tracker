@@ -79,15 +79,15 @@ func withCommitLock(ctx context.Context, ws workspace.Info, fn func() error) (er
 func snapshotsNewLeaf() wsLeaf {
 	fs := newCobraFlagSet("snapshots new")
 	label := fs.String("label", "", "Optional human-readable label appended to the snapshot name")
-	return wsLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
-		// [LAW:no-silent-failure] A stray positional is a misfired intent (the
-		// sibling restore takes its argument positionally, so `snapshots new
-		// nightly` is a natural typo for `--label nightly`); accepting it would
-		// mint an unlabeled snapshot the operator then can't find by the name
-		// they thought they gave it.
-		if fs.NArg() != 0 {
-			return UsageError{Message: "usage: lit snapshots new [--label <text>]"}
-		}
+	// [LAW:no-silent-failure] A stray positional here is a misfired intent: the
+	// sibling `snapshots restore` takes its argument positionally, so
+	// `snapshots new nightly` is a natural typo for `--label nightly`, and
+	// accepting it would mint an unlabeled snapshot the operator then cannot find
+	// by the name they thought they gave it. The refusal is parseLeaf's now, and
+	// the sentence it prints names --label. It carries its own line anyway: the
+	// v1 specification quotes this exact message, and the docclaims gate holds
+	// the code to what the chapter says ships. [LAW:one-source-of-truth]
+	return wsLeaf{fs: fs, positionals: 0, usage: "usage: lit snapshots new [--label <text>]", work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
 		cfg, err := config.Load(pathspec.New(ws.RootDir))
 		if err != nil {
 			return err
@@ -211,13 +211,14 @@ func snapshotsListLeaf() wsLeaf {
 
 func snapshotsRestoreLeaf() wsLeaf {
 	fs := newCobraFlagSet("snapshots restore")
-	return wsLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
-		if len(positional) != 1 || fs.NArg() != 0 {
-			return UsageError{Message: "usage: lit snapshots restore <name>"}
+	const usage = "usage: lit snapshots restore <name>"
+	return wsLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+		if len(positional) != 1 {
+			return UsageError{Message: usage}
 		}
 		name := strings.TrimSpace(positional[0])
 		if name == "" {
-			return UsageError{Message: "usage: lit snapshots restore <name>"}
+			return UsageError{Message: usage}
 		}
 		// [LAW:single-enforcer] Exclusive workspace lock owns reader-vs-restore
 		// exclusion; commit lock (held inside withCommitLock below) owns

@@ -255,7 +255,36 @@ func retiredSubcommand(family, name, replacement string) subcommandRow[appSubcom
 type leaf[R any] struct {
 	fs          *cobraFlagSet
 	positionals int
-	work        func(ctx context.Context, stdout io.Writer, res R, positional []string) error
+	// usage is the sentence the arity refusal prints: the act that works, in the
+	// leaf's own words. WHETHER to refuse a surplus positional is a universal
+	// rule and lives in parseLeaf; WHAT to tell the caller instead is local
+	// knowledge and lives here. `lit dep add a b` is a caller who believes the
+	// ids are positional, and "takes no positional arguments" answers the wrong
+	// question — "use --from <id> --to <id>" names the act. A remediation that
+	// names no working act is the defect the whole cli-errors cluster exists to
+	// remove, so the generic phrasing is the fallback, never the goal.
+	// [LAW:decomposition] the rule is shared, the guidance is the leaf's.
+	usage string
+	work  func(ctx context.Context, stdout io.Writer, res R, positional []string) error
+}
+
+// adaptLeaf carries a leaf's DECLARATION across to a leaf over a different
+// resource type, rewiring only the work. The three pipeline adapters
+// (withWorkspaceSchema, withSchemaMigrator, withSyncStore) each used to rebuild
+// the struct inline — `wsLeaf{fs: l.fs, positionals: l.positionals, work: ...}` —
+// and every one of them silently dropped `usage` the moment that field existed,
+// so `lit upgrade v0.9.0` answered with the generic allowance instead of the
+// `usage: lit upgrade [--to <version>]` its leaf declares two lines away.
+//
+// Three hand-written copies of "what a declaration consists of" is the same
+// shape as the thirty hand-written arity guards this ticket removed, and it
+// failed the same way: the copies nobody updated are the bug. This does not make
+// a dropped field a compile error — a field added to leaf and not added here
+// would still vanish — so TestAdaptLeafCarriesTheWholeDeclaration pins it from the
+// outside. What it does buy is that there is now ONE place to update instead of
+// three to remember. [LAW:one-source-of-truth] [LAW:single-enforcer]
+func adaptLeaf[R, S any](from leaf[R], work func(ctx context.Context, stdout io.Writer, res S, positional []string) error) leaf[S] {
+	return leaf[S]{fs: from.fs, positionals: from.positionals, usage: from.usage, work: work}
 }
 
 // The two resources a leaf's work can need. A declaration function returns one
@@ -276,11 +305,133 @@ type (
 // acquiring anything. [LAW:single-enforcer] one parse path for every leaf, at
 // the one altitude that precedes acquisition.
 func parseLeaf[R any](l leaf[R], args []string, stdout io.Writer) ([]string, error) {
-	positional, flagArgs := splitArgs(args, l.positionals)
+	positional, flagArgs, err := splitArgs(args, l.positionals, l.fs)
+	if err != nil {
+		// A shape the split will not perform, refused in the same sentence an
+		// arity refusal uses: the act that works, then what was not understood.
+		return nil, UsageError{Message: fmt.Sprintf("%s; %s", usageSentence(l.fs, l.positionals, l.usage), err)}
+	}
 	if err := parseFlagSet(l.fs, flagArgs, stdout); err != nil {
 		return nil, err
 	}
+	// Anything pflag has left over is a token the leaf's declared arity did not
+	// admit: splitArgs fills positionals up to the ceiling and passes the rest
+	// through, so a leftover here is precisely "one positional too many". Every
+	// leaf used to be free to notice this or not, and most did — about thirty
+	// carried their own `fs.NArg() != 0`, which is one rule written thirty times,
+	// so the ones that forgot (`lit new ... stray`, `lit export stray`) exited 0
+	// having silently ignored part of the command line. One rule, one place.
+	// [LAW:single-enforcer] [LAW:no-silent-failure] [LAW:one-source-of-truth]
+	//
+	// It refuses BEFORE acquisition, so a mistyped command line never creates or
+	// opens a store — the same ordering links-init-hn19 established for init's
+	// arity check, generalized to every leaf.
+	if err := refuseSurplusPositionals(l.fs, l.positionals, l.usage); err != nil {
+		return nil, err
+	}
 	return positional, nil
+}
+
+// refuseSurplusPositionals is the arity refusal itself, as one function, so the
+// handful of handlers that parse without going through parseLeaf (version,
+// completion) refuse identically instead of each wording its own. Those three
+// already refused, but each with a bare usage line that did not say WHICH token
+// was the problem — the caller was told the shape of the command and left to
+// spot the difference. [LAW:single-enforcer] one rule, one implementation, two
+// call sites.
+func refuseSurplusPositionals(fs *cobraFlagSet, declared int, usage string) error {
+	extra := fs.cmd.Flags().Args()
+	if len(extra) == 0 {
+		return nil
+	}
+	usage = usageSentence(fs, declared, usage)
+	// The offending tokens are named either way: the caller is told both what to
+	// type and which part of what they typed was not understood, which is the
+	// pair a bare usage line left them to work out. [LAW:no-silent-failure]
+	return UsageError{Message: fmt.Sprintf("%s; got unexpected argument(s) %q", usage, extra)}
+}
+
+// usageSentence is the one answer to "what does this leaf tell a caller to type":
+// its own sentence when it has one, the derived sentence otherwise. Both
+// refusals in this file need that answer, and they must not be able to give
+// different ones for the same leaf. [LAW:one-source-of-truth]
+func usageSentence(fs *cobraFlagSet, declared int, usage string) string {
+	if usage == "" {
+		return derivedUsage(fs, declared)
+	}
+	return usage
+}
+
+// derivedUsage is the sentence for a leaf that declares no usage of its own. It
+// is BUILT from the flag set rather than written down, because everything it
+// needs is already declared: the command path, the positional ceiling, and which
+// flags take a value.
+//
+// The alternative was to hand-write a sentence onto each of the thirty-seven
+// leaves that lacked one. That is thirty-seven fresh copies of facts the flag
+// set already holds — the same shape as the thirty hand-written arity guards
+// this ticket deleted, and it fails the same way: a flag added later leaves the
+// sentence behind, and nothing says so. A leaf with genuinely local guidance
+// still sets `usage` and wins outright; this only decides what a leaf that said
+// nothing gets to say. [LAW:one-source-of-truth] [LAW:polishing-by-subtraction]
+//
+// Naming the value-taking flags is the whole point: `lit import spec.json` is a
+// caller who thinks the path is positional, and `--path` is the act that works.
+// Past a handful the list stops being readable and starts being a worse `--help`,
+// so beyond that the sentence points at `--help` instead of reciting it —
+// `lit ls` has fifteen.
+func derivedUsage(fs *cobraFlagSet, declared int) string {
+	line := fmt.Sprintf("usage: lit %s %s", fs.cmd.Use, positionalAllowance(declared))
+	valued := fs.valueTakingFlagNames()
+	switch {
+	case len(valued) == 0:
+		// Nothing takes a value this way, so the allowance is the whole truth
+		// and adding to it would be padding. [LAW:no-silent-failure]
+	case len(valued) <= maxNamedFlagsInUsage:
+		line += "; values are passed as flags: " + strings.Join(valued, ", ")
+	default:
+		line += fmt.Sprintf("; values are passed as flags — run `lit %s --help`", fs.cmd.Use)
+	}
+	// An optional-value flag is the one shape the clause above cannot express:
+	// pflag reads its value only with an equals sign, so written with a space
+	// the token stays a positional and the command is refused for a reason that
+	// names neither the flag nor the form that works. `lit doctor --fix rank`
+	// and `lit quickstart --eject all` are the same defect; deriving the clause
+	// answers both, where a bespoke sentence answered only the one I happened to
+	// run. [LAW:one-source-of-truth]
+	for _, name := range fs.optionalValueFlagNames() {
+		line += fmt.Sprintf("; %s takes its value as %s=<value>", name, name)
+	}
+	return line
+}
+
+// maxNamedFlagsInUsage is where naming the flags stops helping. Four covers the
+// leaves where a caller plausibly typed one value in the wrong place
+// (`--path`, `--to`, `--label`, `--mapping`, and the two-flag bulk commands);
+// past it are the list and create commands, whose flag tables are what `--help`
+// is for.
+const maxNamedFlagsInUsage = 4
+
+// positionalAllowance renders a leaf's declared arity as the phrase a usage
+// message needs. It reads the SAME number splitArgs enforces, so the sentence
+// cannot claim a limit the parser does not keep. [LAW:one-source-of-truth]
+func positionalAllowance(count int) string {
+	switch {
+	case count == allPositionals:
+		// The sentinel is a ceiling, not a capacity, and rendering it as a
+		// number once offered the caller 9223372036854775807 arguments. No leaf
+		// reaches this arm today — `rank set` was the only one declaring
+		// allPositionals and it now supplies its own sentence — but the arm
+		// stays because the sentinel is representable here and a leaf added
+		// later would otherwise print it. [LAW:no-silent-failure]
+		return "takes any number of positional arguments"
+	case count == 0:
+		return "takes no positional arguments"
+	case count == 1:
+		return "takes 1 positional argument"
+	default:
+		return fmt.Sprintf("takes %d positional arguments", count)
+	}
 }
 
 // commandRegistrar carries the entrypoint context shared by every spec's Run

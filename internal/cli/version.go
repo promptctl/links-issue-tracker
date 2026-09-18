@@ -19,8 +19,12 @@ func runVersion(stdout io.Writer, args []string) error {
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
-	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit version"}
+	// The sentence is passed, not derived: the v1 specification quotes
+	// "usage: lit version" as the message this command ships, and the docclaims
+	// gate holds the code to what the chapter says. Whether to refuse is still
+	// the shared enforcer's call. [LAW:single-enforcer]
+	if err := refuseSurplusPositionals(fs, 0, "usage: lit version"); err != nil {
+		return err
 	}
 
 	info, err := version.Get()

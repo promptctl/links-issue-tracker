@@ -88,7 +88,7 @@ type (
 func withSyncStore(declare syncLeafFn) wsLeafFn {
 	return func() wsLeaf {
 		l := declare()
-		return wsLeaf{fs: l.fs, positionals: l.positionals, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+		return adaptLeaf[syncScope, workspace.Info](l, func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
 			session, closeStore, err := openSyncSession(ctx, ws)
 			if err != nil {
 				// The open boundary stamps holder contention so Run's trace can
@@ -97,7 +97,7 @@ func withSyncStore(declare syncLeafFn) wsLeafFn {
 			}
 			defer closeStore()
 			return l.work(ctx, stdout, syncScope{ws: ws, session: session}, positional)
-		}}
+		})
 	}
 }
 

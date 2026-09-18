@@ -320,11 +320,16 @@ func followupLeaf() appLeaf {
 	assignee := fs.String("assignee", "", "Assignee")
 	labels := fs.String("labels", "", "Comma-separated labels")
 	top := fs.Bool("top", false, "Promote the follow-up to the top of its frame (the default appends it to the bottom)")
-	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	// One sentence for both of followup's usage failures — a missing --on/--title,
+	// and a value typed where no positional is taken. It was written inside the
+	// work, where the seam's arity check (which runs first) could not reach it.
+	// [LAW:one-source-of-truth]
+	usage := "usage: lit followup --on <id> --title <text> [--description <text>] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--top]"
+	return appLeaf{fs: fs, positionals: 0, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		parentID := strings.TrimSpace(*on)
 		titleValue := strings.TrimSpace(*title)
 		if parentID == "" || titleValue == "" {
-			return UsageError{Message: "usage: lit followup --on <id> --title <text> [--description <text>] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--top]"}
+			return UsageError{Message: usage}
 		}
 		parent, err := ap.Store.GetIssue(ctx, parentID)
 		if err != nil {
@@ -393,6 +398,15 @@ type listSurface struct {
 	positionals []string
 }
 
+// usageLine names what this surface takes, in the surface's own words. Both the
+// too-few refusal in listPositionals and the surplus refusal parseLeaf raises
+// read it, so one command cannot describe itself two ways — which it did: give
+// `children` no id and it said `<parent-id>`, give it two and it said "takes 1
+// positional argument". [LAW:one-source-of-truth]
+func (s listSurface) usageLine() string {
+	return strings.Join(append([]string{"usage: lit", s.name}, s.positionals...), " ") + " [flags]"
+}
+
 var (
 	lsSurface       = listSurface{name: "ls"}
 	childrenSurface = listSurface{name: "children", positionals: []string{"<parent-id>"}}
@@ -416,10 +430,11 @@ var (
 // [LAW:one-source-of-truth]
 func runList(ctx context.Context, stdout io.Writer, surface listSurface, args []string) error {
 	l, atDir := listLeaf(surface)
-	if _, err := parseLeaf(l, args, stdout); err != nil {
+	declared, err := parseLeaf(l, args, stdout)
+	if err != nil {
 		return err
 	}
-	positional, err := listPositionals(l, surface)
+	positional, err := listPositionals(declared, surface)
 	if err != nil {
 		return err
 	}
@@ -457,24 +472,26 @@ func runList(ctx context.Context, stdout io.Writer, surface listSurface, args []
 	})
 }
 
-// listPositionals reads a listing's positionals off the parse and refuses any
-// count but the surface's own. They come from pflag's leftover arguments rather
-// than from splitArgs' guess, because only pflag knows which flags take a value:
-// splitArgs would hand the id in `lit children --include-archived <id>` to the
-// boolean as its value, and would pass a second id through to be dropped. Too
-// many ids is refused like too few — a silently ignored parent would list the
-// wrong set with exit 0. A positional is a parent id, so it is trimmed like a
-// --parent id, and a blank one names no parent and is refused like an empty
-// --parent. [LAW:single-enforcer] [LAW:no-silent-failure]
-func listPositionals(l leaf[listScope], surface listSurface) ([]string, error) {
-	raw := l.fs.cmd.Flags().Args()
+// listPositionals trims a listing's positionals and refuses a count the surface
+// does not take. It reads the leaf's DECLARED positionals now: splitArgs asks
+// the flag set instead of guessing, so `lit children --include-archived <id>`
+// reaches the declared channel directly and the leftover channel this function
+// used to read is gone. The caller sees no change -- reading the leftovers is
+// how that id arrived correctly before, not a bug being fixed.
+//
+// Too many ids is refused like too few — a silently ignored parent would list
+// the wrong set with exit 0 — and parseLeaf already refuses the extra token for
+// every leaf, so the count test here is what catches too FEW. A positional is a
+// parent id, so it is trimmed like a --parent id, and a blank one names no
+// parent and is refused like an empty --parent.
+// [LAW:single-enforcer] [LAW:no-silent-failure]
+func listPositionals(raw []string, surface listSurface) ([]string, error) {
 	positional := make([]string, len(raw))
 	for i, arg := range raw {
 		positional[i] = strings.TrimSpace(arg)
 	}
 	if len(positional) != len(surface.positionals) || slices.Contains(positional, "") {
-		usage := strings.Join(append([]string{"usage: lit", surface.name}, surface.positionals...), " ")
-		return nil, UsageError{Message: fmt.Sprintf("%s [flags]  (got %d positional arguments: %q)", usage, len(raw), raw)}
+		return nil, UsageError{Message: fmt.Sprintf("%s  (got %d positional arguments: %q)", surface.usageLine(), len(raw), raw)}
 	}
 	return positional, nil
 }
@@ -523,9 +540,21 @@ func listLeaf(surface listSurface) (leaf[listScope], *string) {
 	columnsExpr := fs.String("columns", "", columnsFlagUsage())
 	format := fs.String("format", "lines", "Output format: "+strings.Join(sortedListFormatNames(), "|"))
 	limit := fs.Int("limit", 0, "Limit results")
-	// positionals: 0 so every token reaches pflag; listPositionals takes the
-	// surface's positionals from what pflag leaves over.
-	return leaf[listScope]{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope listScope, positional []string) error {
+	// The surface's own arity, declared. It used to be 0 so that every token
+	// reached pflag and listPositionals could read the leftovers, because
+	// splitArgs guessed at flag arity and would hand `children
+	// --include-archived <id>` to the boolean as its value. splitArgs now asks
+	// the flag set instead of guessing, so the declared channel is trustworthy
+	// and the leftover channel is no longer needed here.
+	// [LAW:one-source-of-truth] one positional channel, not two.
+	// A surface that takes positionals names them; one that does not (`ls`)
+	// leaves usage empty and takes the derived sentence, which names its
+	// value-taking flags — strictly more than "usage: lit ls [flags]" says.
+	usage := ""
+	if len(surface.positionals) > 0 {
+		usage = surface.usageLine()
+	}
+	return leaf[listScope]{fs: fs, positionals: len(surface.positionals), usage: usage, work: func(ctx context.Context, stdout io.Writer, scope listScope, positional []string) error {
 		st, policy := scope.store, scope.policy
 		// Parsed before the query runs and before anything prints: a rejection that
 		// had already emitted rows would be a partial answer, which is the silent
@@ -938,10 +967,7 @@ func annotateIssues(ctx context.Context, st storage.Store, requiredFields []stri
 func orphanedLeaf() appLeaf {
 	fs := newCobraFlagSet("orphaned")
 	assignee := fs.String("assignee", "", "Filter by assignee")
-	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
-		if fs.NArg() != 0 {
-			return UsageError{Message: "usage: lit orphaned [--assignee <user>]"}
-		}
+	return appLeaf{fs: fs, positionals: 0, usage: "usage: lit orphaned [--assignee <user>]", work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		listFilter := storage.ListIssuesFilter{
 			Statuses:        []model.State{model.StateInProgress},
 			Assignees:       toSlice(strings.TrimSpace(*assignee)),
@@ -997,12 +1023,10 @@ func printOrphanedText(w io.Writer, rows []annotation.AnnotatedIssue) error {
 func showLeaf() appLeaf {
 	fs := newCobraFlagSet("show")
 	fieldsExpr := fs.String("field", "", "Comma-separated field names (e.g. description) to print with no surrounding context; omit for the full detail view")
-	return appLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	const usage = "usage: lit show <id> [--field <name>[,<name>...]]"
+	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
-			return UsageError{Message: "usage: lit show <id> [--field <name>[,<name>...]]"}
-		}
-		if fs.NArg() != 0 {
-			return UsageError{Message: "usage: lit show <id> [--field <name>[,<name>...]]"}
+			return UsageError{Message: usage}
 		}
 		// links-sync-pgct.2: `lit show` is named explicitly as one of the ordinary
 		// read commands unpushed/unfetched drift must surface on — but only ahead
@@ -1050,9 +1074,10 @@ func showLeaf() appLeaf {
 // and one formatter (printHistoryEvents). [LAW:one-source-of-truth]
 func historyLeaf() appLeaf {
 	fs := newCobraFlagSet("history")
-	return appLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
-		if len(positional) != 1 || fs.NArg() != 0 {
-			return UsageError{Message: "usage: lit history <id>"}
+	const usage = "usage: lit history <id>"
+	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		if len(positional) != 1 {
+			return UsageError{Message: usage}
 		}
 		detail, err := ap.Store.GetIssueDetail(ctx, positional[0])
 		if err != nil {
@@ -1087,12 +1112,13 @@ func updateLeaf() appLeaf {
 	fs.String("status", "", "(removed) change status with the transition verbs: lit start|done|close|open")
 	reason := fs.String("reason", "", "Reason recorded on the field-change event")
 	resolveActor := registerActor(fs)
-	return appLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	// update takes nine value flags, past the point where the derived fallback
+	// stops naming them and points at --help. Its own sentence names them all, so
+	// it supplies it rather than taking the fallback. [LAW:one-source-of-truth]
+	usage := "usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--lane <key>] [--reason <text>]"
+	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
-			return UsageError{Message: "usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--lane <key>] [--reason <text>]"}
-		}
-		if fs.NArg() != 0 {
-			return UsageError{Message: "usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--lane <key>] [--reason <text>]"}
+			return UsageError{Message: usage}
 		}
 		visited := map[string]bool{}
 		fs.Visit(func(flag *pflag.Flag) { visited[flag.Name] = true })
@@ -1209,15 +1235,21 @@ func rankDispatch(args []string) (appLeaf, []string) {
 	return rankLeaf(), args
 }
 
+// rankUsage is rank's own sentence, read by both its body and the arity refusal
+// at the seam. The choice structure (--top|--bottom|--above|--below) is local
+// knowledge no flag list conveys: the flags are mutually exclusive and one is
+// required, which "values are passed as flags" cannot say. [LAW:one-source-of-truth]
+const rankUsage = "usage: lit rank <id> --top|--bottom|--above <id>|--below <id>"
+
 func rankLeaf() appLeaf {
 	fs := newCobraFlagSet("rank")
 	_ = fs.Bool("top", false, "Move to highest rank")
 	_ = fs.Bool("bottom", false, "Move to lowest rank")
 	above := fs.String("above", "", "Rank above this issue ID")
 	below := fs.String("below", "", "Rank below this issue ID")
-	return appLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	return appLeaf{fs: fs, positionals: 1, usage: rankUsage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
-			return UsageError{Message: "usage: lit rank <id> --top|--bottom|--above <id>|--below <id>"}
+			return UsageError{Message: rankUsage}
 		}
 		visited := map[string]bool{}
 		fs.Visit(func(flag *pflag.Flag) { visited[flag.Name] = true })
@@ -1323,9 +1355,14 @@ func rankLeaf() appLeaf {
 // silent. [LAW:no-silent-failure]
 func rankSetLeaf() appLeaf {
 	fs := newCobraFlagSet("rank set")
-	return appLeaf{fs: fs, positionals: allPositionals, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	// Without this the refusal renders the unbounded sentinel — "takes any
+	// number of positional arguments" while refusing one, which is both
+	// self-contradicting and no act a caller can perform. The sentence is one
+	// line below; the declaration and the body read it from here.
+	const usage = "usage: lit rank set <id1> <id2> [<id3> ...]"
+	return appLeaf{fs: fs, positionals: allPositionals, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if len(positional) < 2 {
-			return UsageError{Message: "usage: lit rank set <id1> <id2> [<id3> ...]"}
+			return UsageError{Message: usage}
 		}
 		result, err := ap.Store.RankSet(ctx, positional)
 		if err != nil {
@@ -1558,14 +1595,30 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 	resolveActor := registerActor(fs)
 	buildAction := spec.registerFlags(fs)
 	authorize := spec.authorize(fs)
-	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
-		remaining := fs.cmd.Flags().Args()
-		usage := fmt.Sprintf("usage: lit %s <id> [--reason <text>]", spec.name)
-		if len(remaining) != 1 {
-			return errors.New(usage)
+	// The issue id, declared. It was 0-and-read-the-leftovers for the same reason
+	// ls and children were: splitArgs guessed at flag arity and would have fed
+	// the id to a preceding boolean as its value. splitArgs asks the flag set
+	// now, so the declared channel carries it and parseLeaf refuses a second id
+	// rather than this leaf discovering it. [LAW:one-source-of-truth]
+	// One sentence, read by both the seam and the body. Hoisted out of the work
+	// because the arity refusal in parseLeaf runs BEFORE any work does, so a
+	// usage line computed inside the closure is a line the enforcer can never
+	// see: `lit start a b` got the generic allowance while this exact sentence
+	// sat two lines below it. [LAW:one-source-of-truth]
+	usage := fmt.Sprintf("usage: lit %s <id> [--reason <text>]", spec.name)
+	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		if len(positional) != 1 {
+			// UsageError, not errors.New: a missing id is the caller mis-writing
+			// the command line, which exits 2 and says to re-read --help. As a
+			// bare error it exited 1 carrying "Retry the command. If it still
+			// fails, run `lit doctor`" — advice that cannot work, since retrying
+			// the same line fails the same way. That left one leaf answering its
+			// two arity failures with two exit codes and two remedies, only one
+			// of which was actionable. [LAW:types-are-the-program]
+			return UsageError{Message: usage}
 		}
 
-		issueID := remaining[0]
+		issueID := positional[0]
 
 		// The pre-transition read is the state `authorize` gates on and the
 		// before-half of the workflow occasion below. It is the ROW only: the
@@ -1676,12 +1729,10 @@ func commentAddLeaf() appLeaf {
 	fs := newCobraFlagSet("comment add")
 	body := fs.String("body", "", "Comment body")
 	resolveActor := registerActor(fs)
-	return appLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	const usage = "usage: lit comment add <id> --body <text>"
+	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
-			return UsageError{Message: "usage: lit comment add <id> --body <text>"}
-		}
-		if fs.NArg() != 0 {
-			return UsageError{Message: "usage: lit comment add <id> --body <text>"}
+			return UsageError{Message: usage}
 		}
 		// [LAW:single-enforcer] A comment is a recorded event; its author resolves
 		// through the same identity rule as every other actor.
@@ -1698,12 +1749,10 @@ func commentAddLeaf() appLeaf {
 
 func commentRmLeaf() appLeaf {
 	fs := newCobraFlagSet("comment rm")
-	return appLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	const usage = "usage: lit comment rm <comment-id>"
+	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
-			return UsageError{Message: "usage: lit comment rm <comment-id>"}
-		}
-		if fs.NArg() != 0 {
-			return UsageError{Message: "usage: lit comment rm <comment-id>"}
+			return UsageError{Message: usage}
 		}
 		comment, err := ap.Store.DeleteComment(ctx, positional[0])
 		if err != nil {
@@ -1744,11 +1793,8 @@ func importTreeLeaf() appLeaf {
 	fs := newCobraFlagSet("import").Detail(helpText("import"))
 	path := fs.String("path", "", "Path to a JSON tree-spec file or a YAML bulk create/update file")
 	resolveActor := registerActor(fs)
-	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	return appLeaf{fs: fs, positionals: 0, usage: importUsage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if strings.TrimSpace(*path) == "" {
-			return UsageError{Message: importUsage}
-		}
-		if fs.NArg() != 0 {
 			return UsageError{Message: importUsage}
 		}
 		data, err := os.ReadFile(*path)
@@ -1931,8 +1977,11 @@ func runCompletion(stdout io.Writer, args []string) error {
 	if err := parseFlagSet(fs, args[1:], stdout); err != nil {
 		return err
 	}
-	if fs.NArg() != 0 {
-		return UsageError{Message: completionFamily.usage}
+	// The family's own line, not a derived sentence: a caller who typed a stray
+	// token after `completion bash` needs the shells named, and the family is
+	// where that list already lives. [LAW:one-source-of-truth]
+	if err := refuseSurplusPositionals(fs, 0, completionFamily.usage); err != nil {
+		return err
 	}
 	_, err = io.WriteString(stdout, completionRenderer(shell)())
 	return err
@@ -1943,10 +1992,10 @@ func quickstartLeaf() wsLeaf {
 	refresh := fs.Bool("refresh", false, "Refresh managed repo assets and report quickstart override status (never overwrites overrides)")
 	eject := fs.StringOptional("eject", "all", "", "Eject embedded default(s) to the global override path (comma-separated short names; empty = all)")
 	force := fs.Bool("force", false, "With --eject, overwrite existing override files")
-	return wsLeaf{fs: fs, positionals: 0, work: func(_ context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
-		if fs.NArg() > 1 {
-			return UsageError{Message: quickstartUsage}
-		}
+	// The optional topic, declared. It used to be 0-and-read-the-leftovers, which
+	// meant this leaf carried its own "more than one positional" refusal; that
+	// count is parseLeaf's now, for every leaf at once. [LAW:single-enforcer]
+	return wsLeaf{fs: fs, positionals: 1, usage: quickstartUsage, work: func(_ context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
 		ejectChanged := fs.Changed("eject")
 		ejectValue := *eject
 		if ejectChanged && ejectValue == "" {
@@ -1959,14 +2008,32 @@ func quickstartLeaf() wsLeaf {
 			return UsageError{Message: "usage: --force is only valid with --eject"}
 		}
 
-		if fs.NArg() == 1 {
+		if len(positional) == 1 {
 			// [LAW:dataflow-not-control-flow] Topic dispatch is a value lookup; every topic shares one render path.
 			if *refresh || ejectChanged || *force {
-				return UsageError{Message: "usage: lit quickstart <topic> takes no flags"}
+				// This is where `lit quickstart --eject all` lands, and the old
+				// sentence — "quickstart <topic> takes no flags" — was false
+				// about a command with three of them, and named no act that
+				// works. `--eject` carries an optional value, so pflag takes one
+				// only as `--eject=all`; written `--eject all`, the `all` is not
+				// the flag's value at all, it is the topic, and a topic renders
+				// on its own. The --eject half is stated only when --eject is
+				// actually in play: --refresh reaches this same branch, and a
+				// caller who typed no --eject was being answered about one.
+				// When it IS in play both halves are needed, because
+				// `--eject=all topic` and `--eject topic` are indistinguishable
+				// by the time we see them.
+				// [LAW:no-silent-failure] name the act that works, not the shape
+				// of the mistake.
+				advice := "a topic renders on its own"
+				if ejectChanged {
+					advice += ", and --eject takes its value as --eject=LIST"
+				}
+				return UsageError{Message: quickstartUsage + "; " + advice}
 			}
-			templateName, ok := quickstartTopicTemplate(fs.Arg(0))
+			templateName, ok := quickstartTopicTemplate(positional[0])
 			if !ok {
-				return UsageError{Message: fmt.Sprintf("usage: unknown quickstart topic %q (must be one of: %s)", fs.Arg(0), strings.Join(quickstartTopicTokens(), ", "))}
+				return UsageError{Message: fmt.Sprintf("usage: unknown quickstart topic %q (must be one of: %s)", positional[0], strings.Join(quickstartTopicTokens(), ", "))}
 			}
 			guidance, err := renderQuickstartTopic(ws.RootDir, templateName)
 			if err != nil {

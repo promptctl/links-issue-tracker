@@ -54,13 +54,13 @@ func downgradeLeaf() appLeaf {
 func withSchemaMigrator(declare func() downgradeLeafShape) appLeafFn {
 	return func() appLeaf {
 		l := declare()
-		return appLeaf{fs: l.fs, positionals: l.positionals, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		return adaptLeaf[schemaDowngrader, *app.App](l, func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 			migrator, err := storage.SchemaMigration.Of(ap.Store)
 			if err != nil {
 				return err
 			}
 			return l.work(ctx, stdout, migrator, positional)
-		}}
+		})
 	}
 }
 
@@ -94,10 +94,10 @@ func downgradeLeafWith(
 ) downgradeLeafShape {
 	fs := newCobraFlagSet("downgrade")
 	to := fs.String("to", "", "Target binary version (v-prefixed git tag, e.g. v0.4.1)")
-	return downgradeLeafShape{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, store schemaDowngrader, _ []string) error {
-		if fs.NArg() != 0 {
-			return UsageError{Message: "usage: lit downgrade --to <version>"}
-		}
+	// --to is required, not optional, and the derived sentence cannot say so:
+	// "values are passed as flags: --to" reads exactly like a flag you may omit.
+	// Requiredness is the leaf's own knowledge. [LAW:one-source-of-truth]
+	return downgradeLeafShape{fs: fs, positionals: 0, usage: "usage: lit downgrade --to <version>", work: func(ctx context.Context, stdout io.Writer, store schemaDowngrader, _ []string) error {
 		tag, err := normalizeReleaseTag(*to, "downgrade")
 		if err != nil {
 			return err

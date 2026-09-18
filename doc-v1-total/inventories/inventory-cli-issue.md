@@ -49,10 +49,10 @@ into* one of those, the call and its observable effect are recorded here.
 ### 1.3 Command registry
 
 - The whole command tree is a table: `commandSpecs(ctx, stdout, stderr) []CommandSpec`
-  (`register.go:254-394`). Each `CommandSpec` carries `Name`, `Summary`, `Long`,
+  (`register.go:254-408`). Each `CommandSpec` carries `Name`, `Summary`, `Long`,
   `GroupID`, `Run`, `Subcommands`, `Hidden` (`register.go:18-38`).
-- `applyRegistry` adds every group then every command (`register.go:398-405`).
-- `buildPassthroughCommand` (`register.go:409-426`) creates each cobra command with
+- `applyRegistry` adds every group then every command (`register.go:412-419`).
+- `buildPassthroughCommand` (`register.go:423-440`) creates each cobra command with
   `DisableFlagParsing: true` and `Args: cobra.ArbitraryArgs`. **Consequence:** cobra
   does not parse any per-command flags; each handler parses its own argv slice.
   `CommandSpec` carries no `Long`: because cobra parses no flags here, it cannot
@@ -91,7 +91,7 @@ into* one of those, the call and its observable effect are recorded here.
     `sync_staleness.go:229`).
   - Then `maybeAutoSyncAfterCommand(ctx, accessMode, ws)` runs (`cli.go:145`).
   - Both only run when the command returned nil (`cli.go:123-125`).
-- `acquireFromWD` / `resolveWorkspaceFromWD` (`register.go:434-436`, `cli.go:170-184`):
+- `acquireFromWD` / `resolveWorkspaceFromWD` (`register.go:448-450`, `cli.go:170-184`):
   same `OutsideWorkspaceError` translation (`cli.go:177-180`).
 
 ### 1.5 Family dispatch (`commandFamily[P]`)
@@ -132,14 +132,20 @@ into* one of those, the call and its observable effect are recorded here.
 
 ### 1.7 Positional/flag splitting (`splitArgs`)
 
-`splitArgs(args, positionalCount)` (`cli.go:1958-1978`):
-- Any token starting with `-` goes to the flag slice; if it contains no `=` and
-  the *next* token does not start with `-`, that next token is consumed as its
-  value (`cli.go:1963-1969`).
+`splitArgs(args []string, positionalCount int, fs *cobraFlagSet)`
+(`flagset.go:297-363`):
+- Any token starting with `-` goes to the flag slice; it consumes the *next*
+  token as its value only when the flag set says that flag takes one —
+  `flagTakesValue` (`flagset.go:201`) resolves the token against the command's
+  flags and applies `takesValue` (`flagset.go:239`), which is pflag's own rule:
+  an empty `NoOptDefVal` means the flag consumes the following token whatever
+  that token looks like.
+- A `--` terminator ends flag scanning: every token after it is a positional
+  whatever it looks like, up to `positionalCount`; tokens past that ceiling stay
+  in the flag stream and are refused as surplus.
 - The first `positionalCount` non-flag tokens become positionals; any extra
-  non-flag tokens are appended to the **flag** slice (`cli.go:1971-1975`), where
-  they surface as `fs.NArg() > 0` if the command checks it.
-- Known consequence: a boolean flag written as `--flag value` swallows `value`.
+  non-flag tokens are appended to the **flag** slice, where
+  `refuseSurplusPositionals` (`register.go:342`) refuses them.
 
 ### 1.8 Exit-code taxonomy
 
@@ -532,8 +538,8 @@ else ready.
 
 - `--top` maps to `storage.RankTop`; unflagged uses the zero `RankPlacement`
   (`rankPlacement`, `cli.go:319-325`).
-- **No positional-argument check**: `runNew` never inspects `fs.NArg()`, so stray
-  positionals are silently ignored (`cli.go:340-355`).
+- **Surplus positionals refused before `runNew` runs**: `refuseSurplusPositionals`
+  (`register.go:342`), called from `parseLeaf` (`register.go:307`).
 - Validation order: `--type` then `--priority`, both `ValidationError` → exit 3
   (`cli.go:343-350`).
 - Store refusals (surfaced through `CreateIssue`, `internal/store/store.go:470-…`):
@@ -569,7 +575,8 @@ else ready.
 - Creates with `ParentID = parent.ID` (`cli.go:415-427`), dispatches
   `EventTicketCreated`, prints the summary line, emits breadcrumb `new`
   (`cli.go:431-437`).
-- No `fs.NArg()` check.
+- Surplus positionals refused by `refuseSurplusPositionals` (`register.go:342`),
+  called from `parseLeaf` (`register.go:307`), before `runFollowup` runs.
 
 ### 2.3 `lit ls` — List issues
 
@@ -580,7 +587,7 @@ else ready.
   (`cli.go:352-360`); `lit children` runs the same `runList` over
   `childrenSurface` (§2.16).
 - Summary text: "List issues (rank by default; --at \<store-dir> lists a discovered
-  store read-only)" (`register.go:492`).
+  store read-only)" (`register.go:506`).
 
 **Store routing** (`runList`, `cli.go:378-419`):
 - `runList` builds the leaf and the `--at` value pointer with `listLeaf(surface)`
@@ -720,12 +727,12 @@ lines|table") is built from the same map (`cli.go:488`, `output.go:97-104`).
 
 ### 2.4 `lit show` — Show issue details
 
-- Registration `register.go:312-313`, `app.AccessRead`. Handler `runShow`
+- Registration `register.go:317-318`, `app.AccessRead`. Handler `runShow`
   (`cli.go:822-872`).
 - Args: exactly one positional id; flag `--field` (string, `""`, help:
   "Comma-separated field names (e.g. description) to print with no surrounding
   context; omit for the full detail view") (`cli.go:823-825`).
-- Refusals: `len(positional) != 1` or `fs.NArg() != 0` →
+- Refusals: `len(positional) != 1` →
   `UsageError{"usage: lit show <id> [--field <name>[,<name>...]]"}` → exit 2
   (`cli.go:828-834`).
 - Sync-staleness banner is printed first **only when `--field` is blank**
@@ -860,10 +867,10 @@ Cross-epic dependencies:
 
 ### 2.6 `lit history` — State-transition history
 
-- Registration `register.go:314-315`, `app.AccessRead`. Handler `runHistory`
+- Registration `register.go:319-320`, `app.AccessRead`. Handler `runHistory`
   (`cli.go:898-912`).
 - No flags beyond the implicit `--help`.
-- Refusal: `len(positional) != 1 || fs.NArg() != 0` →
+- Refusal: `len(positional) != 1` →
   `UsageError{"usage: lit history <id>"}` → exit 2 (`cli.go:904-906`).
 - Reads `GetIssueDetail(id)` (`cli.go:907-910`).
 - Output (`printIssueHistory`, `output.go:279-284`):
@@ -882,7 +889,7 @@ history:
 
 ### 2.7 `lit update` — Update issue fields
 
-- Registration `register.go:316-317`, `app.AccessWrite`. Handler `runUpdate`
+- Registration `register.go:321-322`, `app.AccessWrite`. Handler `runUpdate`
   (`cli.go:923-1033`).
 - Flags (`cli.go:925-939`): `--title`, `--description`, `--prompt`, `--type`
   (default `""`), `--priority` (int, default 0), `--assignee`, `--labels`,
@@ -890,7 +897,7 @@ history:
   "(removed) change status with the transition verbs: lit start|done|close|open"),
   `--reason` ("Reason recorded on the field-change event"), and hidden `--by`.
 - Refusals:
-  - `len(positional) != 1` or `fs.NArg() != 0` → `UsageError` with the usage line
+  - `len(positional) != 1` → `UsageError` with the usage line
     `"usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--lane <key>] [--reason <text>]"`
     (`cli.go:943-948`).
   - `--status` present (detected via `fs.Visit`) → `UsageError{statusViaVerbsGuidance}`
@@ -923,7 +930,7 @@ history:
 
 ### 2.8 `lit rank` — Reorder an issue's rank
 
-- Registration `register.go:318-319`, `app.AccessWrite`. Handler `runRank`
+- Registration `register.go:323-324`, `app.AccessWrite`. Handler `runRank`
   (`cli.go:1035-1114`).
 - If `args[0] == "set"`, routes to `runRankSet(args[1:])` (`cli.go:1040-1042`).
 - Flags (`cli.go:1045-1048`): `--top` (bool, "Move to highest rank"),
@@ -937,7 +944,8 @@ history:
     `ValidationError{"exactly one of --top, --bottom, --above, --below is required"}`
     → exit 3 (`cli.go:1055-1072`). Note this counts presence, not truthiness, so
     `--top=false` still counts.
-  - No `fs.NArg()` check.
+  - Surplus positionals refused by `refuseSurplusPositionals` (`register.go:342`),
+    called from `parseLeaf` (`register.go:307`).
 - Store calls (`cli.go:1080-1089`): `RankToTop`, `RankToBottom`,
   `RankAbove(issueID, *above)`, `RankBelow(issueID, *below)`. The relative forms
   return a `storage.RankMove{MovedID, AnchorID}`.
@@ -952,8 +960,8 @@ history:
 
 ### 2.9 `lit rank set <id1> <id2> [...]`
 
-- Handler `runRankSet` (`cli.go:1121-1149`). All args are treated as positionals
-  (`splitArgs(args, len(args))`, `cli.go:1122`).
+- Handler `runRankSet` (`cli.go:1121-1149`). Declares `positionals: allPositionals`
+  (`cli.go:1363`), the unbounded ceiling defined at `register.go:20`.
 - Refusal: fewer than 2 positionals →
   `UsageError{"usage: lit rank set <id1> <id2> [<id3> ...]"}` → exit 2
   (`cli.go:1127-1129`).
@@ -972,12 +980,12 @@ All eight route through one handler `runTransition(ctx, stdout, ap, args, spec)`
 `app.AccessWrite` (`register.go:246-250`).
 
 Registry rows and summaries:
-- `start` — "Claim issue work", group `operations` (`register.go:320-321`)
+- `start` — "Claim issue work", group `operations` (`register.go:325-326`)
 - `done` — "Finish claimed work (success path; requires in_progress)" (`register.go:327-328`)
 - `close` — "Close without finishing (wontfix / obsolete / duplicate; from any non-closed state)" (`register.go:329-330`)
-- `open` — "Reopen issue(s)" (`register.go:331-332`)
-- `archive` — "Archive issue(s)", group `retention` (`register.go:336-337`)
-- `unarchive` — "Unarchive issue(s)" (`register.go:338-339`)
+- `open` — "Reopen issue(s)" (`register.go:336-337`)
+- `archive` — "Archive issue(s)", group `retention` (`register.go:341-342`)
+- `unarchive` — "Unarchive issue(s)" (`register.go:343-344`)
 - `delete` — "Delete issue(s)" (`register.go:340-341`)
 - `restore` — "Restore deleted issue(s)" (`register.go:342-343`)
 
@@ -1064,7 +1072,7 @@ positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason 
   status-precondition check (`internal/store/store.go:1073-1130`), and
   `applyStatusAction` is total over the leaf states
   (`internal/model/lifecycle/status_states.go:134-161`). The registry summary
-  "requires in_progress" (`register.go:327`) is not enforced by any code path in
+  "requires in_progress" (`register.go:332`) is not enforced by any code path in
   this repo. A same-state transition is a no-op that records nothing
   (`status_states.go:136-138`, `internal/store/store.go:1064-1071`).
 
@@ -1202,7 +1210,7 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
 
 ### 2.14 `lit next` — Print the next workable leaf
 
-- Registration `register.go:523-524`, `app.AccessRead`, handler `nextLeaf`
+- Registration `register.go:537-538`, `app.AccessRead`, handler `nextLeaf`
   (`next.go:31-77`). Summary: "Print the next workable leaf to lit start".
 - Flags (`next.go:32-40`):
 
@@ -1409,7 +1417,7 @@ line never appears (`ready_state.go:970`). It then returns
 dispatched as `EventNextPulled` (`next.go:75`).
 
 `lit next` performs **no writes** — it is registered `app.AccessRead`
-(`register.go:485`). `startAdvice` names what a subsequent `lit start` would
+(`register.go:499`). `startAdvice` names what a subsequent `lit start` would
 claim; this command claims nothing.
 
 ### 2.15 `lit orphaned` — Stale in-progress issues
@@ -1465,7 +1473,7 @@ usage string as a plain error → exit 1 (`register.go:112-123`).
 
 **`lit comment add <id> --body <text>`** (`runCommentAdd`, `cli.go:1464-1488`):
 - Flags: `--body` (string, `""`, "Comment body"), hidden `--by`.
-- Refusal: `len(positional) != 1` or `fs.NArg() != 0` →
+- Refusal: `len(positional) != 1` →
   `UsageError{"usage: lit comment add <id> --body <text>"}` → exit 2
   (`cli.go:1472-1477`).
 - Store refusal: a blank body (after trim) →
@@ -1480,7 +1488,7 @@ usage string as a plain error → exit 1 (`register.go:112-123`).
 
 **`lit comment rm <comment-id>`** (`runCommentRm`, `cli.go:1487-1504`):
 - No flags (not even `--by`).
-- Refusal: `len(positional) != 1` or `fs.NArg() != 0` →
+- Refusal: `len(positional) != 1` →
   `UsageError{"usage: lit comment rm <comment-id>"}` → exit 2 (`cli.go:1496-1501`).
 - Store: blank id → `"comment id is required"`; unknown id →
   `storage.NotFoundError{Entity: "comment", ID: id}` → exit 4
@@ -1493,8 +1501,9 @@ Family `labelFamily`, usage `"usage: lit label <add|rm> ..."`
 (`issue_relations.go:12-18`); both `app.AccessWrite`.
 
 **`lit label add <issue-id> <label>`** (`issue_relations.go:28-49`):
-- Two positionals via `splitArgs(args, 2)`; hidden `--by` registered.
-- Refusal: `len(positional) != 2` or `fs.NArg() != 0` →
+- Declares `positionals: 2` (`issue_relations.go:32`); `parseLeaf` splits once.
+  Hidden `--by` registered.
+- Refusal: `len(positional) != 2` →
   `UsageError{"usage: lit label add <issue-id> <label>"}` → exit 2
   (`issue_relations.go:35-40`).
 - Calls `Store.AddLabel(AddLabelInput{IssueID, Name, CreatedBy: resolveActor()})`
@@ -1520,7 +1529,7 @@ Family `parentFamily`, usage `"usage: lit parent <set|clear> ..."`
 **`lit parent set --child <id> --parent <id>`** (`issue_relations.go:73-104`):
 - Flags: `--child` ("Child issue ID (required)"), `--parent` ("Parent issue ID
   (required)"), hidden `--by`.
-- Refusals, in order: blank `--child`, blank `--parent`, or `fs.NArg() != 0` →
+- Refusals, in order: blank `--child` or blank `--parent` →
   `UsageError{"usage: lit parent set --child <id> --parent <id>"}` → exit 2
   (`issue_relations.go:81-83`).
 - Calls `Store.SetParent(SetParentInput{ChildID, ParentID, CreatedBy})`
@@ -1533,21 +1542,22 @@ Family `parentFamily`, usage `"usage: lit parent <set|clear> ..."`
 **`lit parent clear <child-id>`** (`issue_relations.go:106-122`):
 - No flags. Refusal: `len(positional) != 1` →
   `UsageError{"usage: lit parent clear <child-id>"}` → exit 2
-  (`issue_relations.go:112-114`). No `fs.NArg()` check.
+  (`issue_relations.go:112-114`). Surplus positionals refused by
+  `refuseSurplusPositionals` (`register.go:342`) before `parent clear`'s work runs.
 - Calls `Store.ClearParent(childID)`; prints `ok` then the `update` breadcrumb.
 
 ### 2.20 `lit dep` — Manage dependency edges
 
 Family `depFamily`, usage `"usage: lit dep <add|rm|ls> ..."` (`dependency.go:14-21`).
 `add`/`rm` are `app.AccessWrite`, `ls` is `app.AccessRead`. Group `structure`
-(`register.go:352-353`).
+(`register.go:366-367`).
 
 **`lit dep add --from <id> --to <id> [--type ...]`** (`dependency.go:23-66`):
 - Flags: `--type` (string, default `"blocks"`, help "Relation type:
   blocks|parent-child|related-to"), `--from` ("Source issue ID (required)"),
   `--to` ("Target issue ID (required)"), hidden `--by`.
 - Refusals, in order:
-  1. Blank `--from` or `--to`, or `fs.NArg() != 0` →
+  1. Blank `--from` or `--to` →
      `UsageError{"usage: lit dep add --from <id> --to <id> [--type blocks|parent-child|related-to]"}`
      → exit 2 (`dependency.go:32-34`).
   2. Bad `--type` → the bare `model.ParseRelationType` error → exit 1
@@ -1583,7 +1593,7 @@ Family `depFamily`, usage `"usage: lit dep <add|rm|ls> ..."` (`dependency.go:14-
 
 **`lit dep ls <issue-id> [--type ...]`** (`dependency.go:93-131`):
 - One positional; `--type` (string, `""`, "Filter relation type").
-- Refusal: `len(positional) != 1` or `fs.NArg() != 0` →
+- Refusal: `len(positional) != 1` →
   `UsageError{"usage: lit dep ls <issue-id> [--type blocks|parent-child|related-to]"}`
   → exit 2 (`dependency.go:100-105`).
 - A non-blank `--type` is parsed (bad value errors); blank means no filter
@@ -1649,13 +1659,13 @@ Rows: `label` (write), `close` (write), `archive` (write), and hidden
 `RetiredCommandError{Command: "bulk import", Replacement: bulkImportRetirementGuidance}`
 → exit 3 (`bulk.go:192-194`). Guidance verbatim:
 "use `lit backup restore --path <export.json>` — it owns the same export-restore
-mechanism `bulk import` duplicated" (`register.go:441`). Because the row is
+mechanism `bulk import` duplicated" (`register.go:455`). Because the row is
 `skipApp`, the pointer is returned even outside a git repository
 (`register.go:209-214`; asserted in `retired_command_test.go:97-…`).
 
 ### 2.22 `lit export`
 
-- Registration `register.go:358-359`, `app.AccessRead`. Summary: "Write the backlog
+- Registration `register.go:372-373`, `app.AccessRead`. Summary: "Write the backlog
   out as a portable JSON tree (the data-export primitive; `import`'s inverse)".
 - Handler `runExport` (`cli.go:1514-1525`): no flags of its own; parses argv (so
   `--help` works and any flag is an unknown-flag `UsageError`); calls
@@ -1665,13 +1675,13 @@ mechanism `bulk import` duplicated" (`register.go:441`). Because the row is
 
 ### 2.23 `lit import --path <file>`
 
-- Registration `register.go:360-361`, `app.AccessWrite`. Summary: "Bulk-create/update
+- Registration `register.go:374-375`, `app.AccessWrite`. Summary: "Bulk-create/update
   issues from a file (the one bulk-ingest home): a JSON tree spec, or a YAML file
   for create-or-update by id selector".
 - Handler `runImportTree` (`cli.go:1537-1570`).
 - Flags: `--path` (string, `""`, "Path to a JSON tree-spec file or a YAML bulk
   create/update file"), hidden `--by` (`cli.go:1539-1540`).
-- Refusals: blank `--path` (after trim) or `fs.NArg() != 0` →
+- Refusals: blank `--path` (after trim) →
   `UsageError{importUsage}` → exit 2. `importUsage` verbatim:
   `"usage: lit import --path <tree-spec.json | bulk-file.yaml> (run `lit import --help` for both formats)"`
   (`cli.go:1529`, `cli.go:1544-1549`).
@@ -1723,7 +1733,7 @@ updated <n> issues
   `UsageError{"usage: lit prefix set <new-prefix> [--apply]"}` → exit 2.
 - `runPrefixSet` (`prefix.go:28-81`): one positional, flag `--apply` (bool, false,
   "Apply the rename (without this flag, prints a preview)").
-  - `len(positional) != 1 || fs.NArg() != 0` → the same usage `UsageError`
+  - `len(positional) != 1` → the same usage `UsageError`
     (`prefix.go:35-37`).
   - `workspace.ConfiguredPrefix(requested)` failure →
     `ValidationError{Message: fmt.Sprintf("invalid prefix %q: %v", requested, err)}` →
@@ -1745,7 +1755,7 @@ updated <n> issues
 
 ### 2.25 `lit workspace`
 
-- Registration `register.go:362-365`, workspace-mode. Summary: "Show workspace
+- Registration `register.go:376-379`, workspace-mode. Summary: "Show workspace
   metadata". Handler `runWorkspace` (`cli.go:1674-1697`).
 - No flags of its own; parses argv so `--help` works.
 - Output: one `key: value` line per field, in this exact order
@@ -1797,7 +1807,7 @@ declares `show`, `edit`, `dry-run` (`register.go:279`).
 
 Registered with `Hidden: true` and a `retiredCommandRun(command, replacement)`
 handler that runs nothing and returns `RetiredCommandError` → exit 3
-(`register.go:449-453`). Hidden specs are excluded from root `--help` and from
+(`register.go:463-467`). Hidden specs are excluded from root `--help` and from
 completion (`register.go:415-421`, `completion.go:20-29`).
 
 | Command | Group | Replacement guidance (verbatim) | Citation |
@@ -1806,8 +1816,8 @@ completion (`register.go:415-421`, `completion.go:20-29`).
 | `queue` | operations | same as `ready` | `register.go:300-301` |
 | `assign` | operations | "reassigning is a field write: use `lit update <id> --assignee <name>` (with an optional `--reason`)" | `register.go:325-326`, `:438` |
 | `ls-at` | maintenance | "use `lit ls --at <store-dir>` — listing a discovered store read-only is now a flag on `ls`, not a separate command" | `register.go:371-372`, `:439` |
-| `overview` | maintenance | "use `lit stores --counts` — the cross-project ready / in-flight / blocked rollup is now a flag on `stores`" | `register.go:373-374`, `:440` |
-| `bulk import` | (bulk family) | "use `lit backup restore --path <export.json>` — it owns the same export-restore mechanism `bulk import` duplicated" | `bulk.go:28`, `register.go:441` |
+| `overview` | maintenance | "use `lit stores --counts` — the cross-project ready / in-flight / blocked rollup is now a flag on `stores`" | `register.go:387-388`, `:440` |
+| `bulk import` | (bulk family) | "use `lit backup restore --path <export.json>` — it owns the same export-restore mechanism `bulk import` duplicated" | `bulk.go:28`, `register.go:455` |
 
 Full error message form: `the "<command>" command has been retired; <replacement>`
 (`cli.go:1947-1949`). Reason `retired_command`, remediation empty
@@ -1823,7 +1833,9 @@ Retired **flags** (intercepted by the shared parser, §1.6): `--output` anywhere
 `runQuickstart` (`cli.go:1727-1798`) — flags `--refresh` (bool),
 `--eject` (string-optional; present-with-no-value = `"all"`), `--force` (bool),
 plus at most one positional topic.
-- `fs.NArg() > 1` → `UsageError{quickstartUsage}` (`cli.go:1736-1738`), where
+- More than one positional → refused by `refuseSurplusPositionals` (`register.go:342`),
+  called from `parseLeaf` (`register.go:307`), before `quickstartLeaf`'s work
+  (`cli.go:1998`) runs, using `quickstartUsage`, where
   `quickstartUsage = "usage: lit quickstart [<topics|…>] [--refresh] [--eject[=LIST]] [--force]"`
   built from the topic token list (`quickstart_topics.go:55`).
 - `--refresh` with `--eject` → `UsageError{"usage: --refresh and --eject are mutually exclusive"}`
@@ -1843,11 +1855,10 @@ plus at most one positional topic.
 1. **JSON output exists on exactly one command in this scope**: `lit export`
    (`cli.go:1524`). Every other command emits line-oriented text. `--output` is
    rejected globally and per-command (§1.1, §1.6).
-2. **`fs.NArg()` is not checked** by: `new` (`cli.go:340-355`),
-   `followup` (`cli.go:387-415`), `ls` (`cli.go:522-618`), `rank`
-   (`cli.go:1049-1073`), `export` (`cli.go:1516`), `children`
-   (`issue_relations.go:127-132`), `parent clear` (`issue_relations.go:109-114`).
-   Extra positionals on those commands are silently ignored.
+2. **Surplus positionals are refused for every command**: `refuseSurplusPositionals`
+   (`register.go:342`), called once from `parseLeaf` (`register.go:307`) before any
+   leaf's work runs — `new`, `followup`, `ls`, `rank`, `export`, `children`, and
+   `parent clear` included.
 3. **Family dispatch errors are plain errors (exit 1), not `UsageError` (exit 2)**
    (`register.go:112-123`), unlike the per-command usage refusals which are
    `UsageError` (exit 2). Likewise `runTransition`'s wrong-arity refusal
@@ -1874,4 +1885,4 @@ plus at most one positional topic.
    and `store.planLifecycleAction` on an impostor action
    (`internal/store/store.go:1236`).
 8. **The `done` "requires in_progress" claim in the registry summary
-   (`register.go:327`) has no enforcing code path** — see §2.10.
+   (`register.go:332`) has no enforcing code path** — see §2.10.
