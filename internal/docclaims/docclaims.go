@@ -968,9 +968,10 @@ func Stable(fresh, prior []Claim, corpus Corpus) []Claim {
 // Two independent facts decide it, and either one alone gives the wrong
 // instruction in a case that happens routinely:
 //
-//   - does the chapter still quote these words? — asked of the spans the
+//   - do the chapters still quote these words? — asked of the spans the
 //     documents yield, before any of them are matched against shipped text, so
-//     the answer survives the message being deleted;
+//     the answer survives the message being deleted. Asked of this chapter and
+//     of all of them, which are different questions;
 //   - does any shipped source still carry them? — asked of the corpus, because
 //     whether a message ships is a question about the product.
 //
@@ -986,17 +987,81 @@ func Stable(fresh, prior []Claim, corpus Corpus) []Claim {
 // The source that carries the words now is whichever a derivation would pick —
 // `tightest`, the same choice Matched makes — so a report and a derivation
 // cannot name different sources. [LAW:one-source-of-truth]
-func classify(c Claim, quoted map[[2]string]bool, corpus Corpus) (DriftKind, string) {
-	if !quoted[[2]string{c.Doc, c.Text}] {
-		// The chapter no longer asserts it, so dropping the entry is right
-		// whatever became of the code.
-		return QuoteDropped, ""
+//
+// It returns the finding rather than a kind and a loose string for the caller
+// to reassemble. Which fact the report must name follows from the kind — the
+// source carrying the words for AnchorMoved, the chapters still asserting them
+// for Stopped — and assembling that pairing at the callsite is the shape that
+// has produced a wrong report here every previous time.
+// [LAW:types-are-the-program]
+func classify(c Claim, quoted quotations, corpus Corpus) Drift {
+	now, ships := tightest(c.Text, corpus)
+	// The destructive case is tested first and against every chapter, because
+	// "this chapter stopped quoting it" is not the same fact as "nothing quotes
+	// it any more", and only the second makes dropping the entry safe. A
+	// sentence moved between chapters — a renumbering, a section lifted into
+	// another file — in the same change that deletes the message it quotes
+	// leaves the recorded (doc, text) key absent, and asking only about this
+	// chapter answered QuoteDropped: regenerate, entry gone, the chapter it
+	// moved to still asserting a message the binary no longer has, every check
+	// green. [LAW:no-silent-failure]
+	if quoting := quoted.anywhere(c.Text); len(quoting) > 0 && !ships {
+		return Drift{Claim: c, Kind: Stopped, QuotedBy: quoting}
 	}
-	if now, ok := tightest(c.Text, corpus); ok {
-		return AnchorMoved, now
+	// Nobody asserts it here any more, and dropping it erases no live claim —
+	// either the words still ship or no chapter quotes them. This is also the
+	// prescribed workflow's landing place: delete a message and every sentence
+	// quoting it together and no document quotes the text, so the benign
+	// remedy is what a contributor gets.
+	if !quoted.inDoc(c.Doc, c.Text) {
+		return Drift{Claim: c, Kind: QuoteDropped}
 	}
-	return Stopped, ""
+	// What remains: this chapter still quotes the words and something still
+	// ships them, or the branch above would have caught it.
+	return Drift{Claim: c, Kind: AnchorMoved, Now: now}
 }
+
+// quotations is what the chapters assert, read before any of it is matched
+// against shipped text so the answers survive a message being deleted.
+//
+// It is indexed both ways because classify needs both, and conflating them
+// breaks in opposite directions: asking only "does this chapter quote it"
+// misses a sentence that moved to another chapter, and asking only "does any
+// chapter quote it" reports a re-anchor against a source that never moved when
+// one chapter of several drops a quotation the others keep.
+type quotations struct {
+	byDoc  map[[2]string]bool
+	byText map[string][]string
+}
+
+func newQuotations(claims []Claim) quotations {
+	q := quotations{
+		byDoc:  make(map[[2]string]bool, len(claims)),
+		byText: make(map[string][]string, len(claims)),
+	}
+	for _, c := range claims {
+		key := [2]string{c.Doc, c.Text}
+		if q.byDoc[key] {
+			continue
+		}
+		q.byDoc[key] = true
+		q.byText[c.Text] = append(q.byText[c.Text], c.Doc)
+	}
+	for _, docs := range q.byText {
+		sort.Strings(docs)
+	}
+	return q
+}
+
+// inDoc reports whether this document still quotes these words.
+func (q quotations) inDoc(doc, text string) bool { return q.byDoc[[2]string{doc, text}] }
+
+// anywhere names every document that still quotes these words, sorted, so a
+// report reads the same whatever order the walk happened to find them in.
+// The report needs the names and not a count: when a sentence moves between
+// chapters, the entry's own chapter is precisely the one that stopped quoting
+// it, so naming that chapter would state the opposite of what happened.
+func (q quotations) anywhere(text string) []string { return q.byText[text] }
 
 func stillHolds(src, text string, corpus Corpus) bool {
 	body, ok := corpus[src]
@@ -1077,6 +1142,17 @@ type Drift struct {
 	// AnchorMoved, and empty otherwise: the other two kinds have no such
 	// source, and inventing one would be the guess this type exists to avoid.
 	Now string
+
+	// QuotedBy names the chapters still asserting Text, set when Kind is
+	// Stopped. Claim.Doc is the wrong name to print there: a sentence that
+	// moved between chapters leaves the entry recorded against the chapter
+	// that no longer quotes it, and the live false assertion — the thing a
+	// contributor has to go and fix — is in the chapter it moved to.
+	//
+	// A list rather than a rendered sentence, because it is a list; joining it
+	// is Explain's business, and a caller that wants the chapters themselves
+	// should not have to split them back out.
+	QuotedBy []string
 }
 
 // Explain is the line a report prints for this drift: what changed, and what to
@@ -1094,7 +1170,7 @@ func (d Drift) Explain() string {
 	case AnchorMoved:
 		return fmt.Sprintf("%s quotes %q, and the source it was recorded against no longer carries it; the words ship today in %q — if that is the same message reworded, run `go run ./tools/docclaims-sync`; if it is an unrelated string, the documented message is gone: fix the code or the chapter", d.Doc, d.Text, ellipsis(d.Now, 120))
 	default:
-		return fmt.Sprintf("%s quotes a message that no longer ships: %q — fix the code or the chapter. Do NOT regenerate: that drops the entry and leaves the sentence false", d.Doc, d.Text)
+		return fmt.Sprintf("%s quotes a message that no longer ships: %q — fix the code or the chapter. Do NOT regenerate: that drops the entry and leaves the sentence false", strings.Join(d.QuotedBy, ", "), d.Text)
 	}
 }
 
@@ -1132,10 +1208,25 @@ func (c Comparison) Clean() bool { return len(c.Drifted) == 0 && len(c.Added) ==
 // Named once, because it is the one case that must never be written past, and
 // three places need to recognise it — the freshness test, the -check report,
 // and the write path that would do the erasing. [LAW:single-enforcer]
-func (c Comparison) Stopped() []Drift {
+func (c Comparison) Stopped() []Drift { return c.ofKind(Stopped) }
+
+// Reanchored returns the drifts a regeneration would resolve by moving an
+// entry's recorded source: the quotation still ships, inside different words.
+//
+// It is named for the write path, which would otherwise perform exactly the
+// judgement its own report describes as one "only a reader can settle" — and
+// perform it in silence. Rewording a literal around a quoted fragment is the
+// ordinary edit and must not be refused, but the contributor has to be told
+// that the regeneration decided the reworded literal is the same message, so
+// that the manifest diff is read rather than waved through. Regenerating over a
+// genuine replacement is how a chapter keeps a sentence about a message that
+// left, with every check green.
+func (c Comparison) Reanchored() []Drift { return c.ofKind(AnchorMoved) }
+
+func (c Comparison) ofKind(k DriftKind) []Drift {
 	var out []Drift
 	for _, d := range c.Drifted {
-		if d.Kind == Stopped {
+		if d.Kind == k {
 			out = append(out, d)
 		}
 	}
@@ -1153,20 +1244,17 @@ func (c Comparison) Stopped() []Drift {
 // shipped text; travelling together, a caller cannot hold two thirds of one.
 // [LAW:types-are-the-program]
 func (d Derivation) Compare(manifest []Claim) Comparison {
-	quoted := make(map[[2]string]bool, len(d.Quoted))
-	for _, c := range d.Quoted {
-		quoted[[2]string{c.Doc, c.Text}] = true
-	}
+	quoted := newQuotations(d.quoted)
 	var out Comparison
 	moved := make(map[[2]string]bool)
-	for _, c := range Diff(manifest, d.Fresh) {
-		kind, now := classify(c, quoted, d.Corpus)
-		if kind == AnchorMoved {
+	for _, c := range Diff(manifest, d.fresh) {
+		drift := classify(c, quoted, d.corpus)
+		if drift.Kind == AnchorMoved {
 			moved[[2]string{c.Doc, c.Text}] = true
 		}
-		out.Drifted = append(out.Drifted, Drift{Claim: c, Kind: kind, Now: now})
+		out.Drifted = append(out.Drifted, drift)
 	}
-	for _, c := range Diff(d.Fresh, manifest) {
+	for _, c := range Diff(d.fresh, manifest) {
 		if moved[[2]string{c.Doc, c.Text}] {
 			continue
 		}
@@ -1217,9 +1305,9 @@ func Derive(fsys fs.FS, prior []Claim) (Derivation, error) {
 		return Derivation{}, err
 	}
 	return Derivation{
-		Fresh:  Dedupe(Stable(Matched(claims, corpus), prior, corpus)),
-		Quoted: claims,
-		Corpus: corpus,
+		fresh:  Dedupe(Stable(Matched(claims, corpus), prior, corpus)),
+		quoted: claims,
+		corpus: corpus,
 	}, nil
 }
 
@@ -1230,11 +1318,31 @@ func Derive(fsys fs.FS, prior []Claim) (Derivation, error) {
 // The three travel together because a comparison needs all three, and each is
 // derived from the same pass — a caller that fetched one of them separately
 // could compare a manifest against one tree using the corpus of another.
+//
+// The fields are unexported so that Derive is the only way to obtain one
+// outside this package, which is what makes the sentence above enforced rather
+// than merely asserted. An unexported marker field would not have done it: Go
+// permits a keyed composite literal from another package to omit unexported
+// fields, so `docclaims.Derivation{Fresh: x, Corpus: y}` stayed legal and
+// classify then read the missing quotations as "no chapter quotes this" — every
+// departed entry reported as QuoteDropped, the benign remedy, and the
+// destructive-case warning unable to fire at all. A gate that fails open on its
+// one dangerous case is the failure this type was introduced to end.
+// The zero value stays constructible, as it does for every Go struct, and it
+// needs no guard: with no fresh manifest to diff against, Compare reports the
+// whole committed manifest as drifted rather than a handful of entries with the
+// wrong remedy. That fails closed and at full volume. It was the partial literal
+// that was dangerous, because a real Fresh and a real Corpus make the report
+// look ordinary while the missing quotations quietly pick the mild remedy.
+// [LAW:parse-dont-validate] the only Derivation that exists is one Derive built.
 type Derivation struct {
-	Fresh  []Claim
-	Quoted []Claim
-	Corpus Corpus
+	fresh  []Claim
+	quoted []Claim
+	corpus Corpus
 }
+
+// Fresh is the manifest this tree yields — what a regeneration would write.
+func (d Derivation) Fresh() []Claim { return d.fresh }
 
 // SpecDir is the corpus this gate covers. It is named once so the sync tool and
 // the CI test cannot disagree about which files are under the gate — a

@@ -57,7 +57,7 @@ func TestADroppedMessageIsReported(t *testing.T) {
 		{Doc: "06-issue-commands.md", Text: "on your path", Src: "blocked on %s (unclaimed, on your path)"},
 	}
 	// The chapter still quotes both; only one of them still ships.
-	derived := Derivation{Fresh: manifest[:1], Quoted: manifest, Corpus: corpus}
+	derived := Derivation{fresh: manifest[:1], quoted: manifest, corpus: corpus}
 	drifted := derived.Compare(manifest).Drifted
 	if len(drifted) != 1 {
 		t.Fatalf("Compare() reported %d drifted claims, want exactly 1 — the gate cannot see a dropped message", len(drifted))
@@ -82,7 +82,7 @@ func TestTheGateSeesThroughACoincidentalSubstring(t *testing.T) {
 		Text: "deleted_at IS NULL",
 		Src:  "SELECT id FROM issues WHERE deleted_at IS NULL",
 	}}
-	derived := Derivation{Quoted: manifest, Corpus: corpus}
+	derived := Derivation{quoted: manifest, corpus: corpus}
 	missing := derived.Compare(manifest).Drifted
 	if len(missing) != 1 {
 		t.Fatal("a deleted message was masked by a coincidental substring in an unrelated source")
@@ -380,31 +380,60 @@ func TestTheThreeCasesAreToldApart(t *testing.T) {
 	stillQuoted := []Claim{{Doc: chapter, Text: quoted}}
 
 	for _, tc := range []struct {
-		name    string
-		derived Derivation
-		want    DriftKind
-		wantNow string
+		name         string
+		derived      Derivation
+		want         DriftKind
+		wantNow      string
+		wantQuotedBy string
 	}{{
 		name: "the literal was reworded around the quotation",
 		derived: Derivation{
-			Fresh:  []Claim{{Doc: chapter, Text: quoted, Src: now}},
-			Quoted: stillQuoted,
-			Corpus: Corpus{now: now},
+			fresh:  []Claim{{Doc: chapter, Text: quoted, Src: now}},
+			quoted: stillQuoted,
+			corpus: Corpus{now: now},
 		},
 		want:    AnchorMoved,
 		wantNow: now,
 	}, {
 		name:    "the chapter stopped quoting a message that still ships",
-		derived: Derivation{Corpus: Corpus{was: was}},
+		derived: Derivation{corpus: Corpus{was: was}},
 		want:    QuoteDropped,
 	}, {
-		name:    "the message stopped shipping and the chapter still quotes it",
-		derived: Derivation{Quoted: stillQuoted, Corpus: Corpus{"an unrelated message": "an unrelated message"}},
-		want:    Stopped,
+		name:         "the message stopped shipping and the chapter still quotes it",
+		derived:      Derivation{quoted: stillQuoted, corpus: Corpus{"an unrelated message": "an unrelated message"}},
+		want:         Stopped,
+		wantQuotedBy: chapter,
 	}, {
 		name:    "the message and the sentence quoting it were deleted together",
-		derived: Derivation{Corpus: Corpus{"an unrelated message": "an unrelated message"}},
+		derived: Derivation{corpus: Corpus{"an unrelated message": "an unrelated message"}},
 		want:    QuoteDropped,
+	}, {
+		// The recorded (doc, text) key is absent because the sentence is in a
+		// different file now, not because anyone stopped asserting it. Asking
+		// only about this chapter answers "the prose changed; regenerate", and
+		// regenerating leaves 07 describing a message the binary lost.
+		name: "the sentence moved to another chapter in the change that deleted the message",
+		derived: Derivation{
+			quoted: []Claim{{Doc: "07-ops-commands-and-sync-engine.md", Text: quoted}},
+			corpus: Corpus{"an unrelated message": "an unrelated message"},
+		},
+		want: Stopped,
+		// The chapter it moved TO, not the entry's own chapter, which is the
+		// one that stopped quoting it. Naming Claim.Doc here would send a
+		// contributor to the file that is already correct.
+		wantQuotedBy: "07-ops-commands-and-sync-engine.md",
+	}, {
+		// The guard on over-correcting: keying the question on the text alone
+		// reports this as a re-anchor, naming a source that never moved. One
+		// chapter of several dropping a quotation is an ordinary edit and the
+		// entry for THAT chapter should simply go.
+		name: "one chapter stopped quoting a message another still quotes, and it still ships",
+		derived: Derivation{
+			fresh:  []Claim{{Doc: "07-ops-commands-and-sync-engine.md", Text: quoted, Src: was}},
+			quoted: []Claim{{Doc: "07-ops-commands-and-sync-engine.md", Text: quoted}},
+			corpus: Corpus{was: was},
+		},
+		want: QuoteDropped,
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := tc.derived.Compare([]Claim{entry}).Drifted
@@ -416,6 +445,17 @@ func TestTheThreeCasesAreToldApart(t *testing.T) {
 			}
 			if got[0].Now != tc.wantNow {
 				t.Errorf("named %q as the source carrying it now, want %q", got[0].Now, tc.wantNow)
+			}
+			if joined := strings.Join(got[0].QuotedBy, ", "); joined != tc.wantQuotedBy {
+				t.Errorf("named %q as still quoting it, want %q — it reports: %s", joined, tc.wantQuotedBy, got[0].Explain())
+			}
+			// The rendered sentence, not only the field behind it. Pinning the
+			// field alone let a mutation that printed Claim.Doc in the warning
+			// survive: the entry is recorded against the chapter that STOPPED
+			// quoting the message, so that sentence sends a contributor to the
+			// one file with nothing wrong in it.
+			if tc.want == Stopped && !strings.Contains(got[0].Explain(), tc.wantQuotedBy) {
+				t.Errorf("Explain() does not name %q as still quoting it: %s", tc.wantQuotedBy, got[0].Explain())
 			}
 			// The instruction, not the label: only a message that genuinely
 			// stopped shipping, and that a chapter still quotes, may carry the
@@ -436,7 +476,8 @@ func TestTheThreeCasesAreToldApart(t *testing.T) {
 // if this package were ever inside the corpus it collects, each entry would be
 // satisfied by its own recorded copy: `tightest` would anchor every claim to
 // the literal that *is* its text, deleting the real shipped message would change
-// nothing, and both tests would stay green over a gate that checks nothing.
+// nothing, and TestDocumentedClaimsStillShip would stay green over a gate that
+// checks nothing.
 // That is not hypothetical — an earlier blacklist admitted this package and the
 // gate passed over a deliberately mutated message.
 //
@@ -524,9 +565,9 @@ func TestAMovedAnchorIsReportedOnce(t *testing.T) {
 		chapter = "06-issue-commands.md"
 	)
 	derived := Derivation{
-		Fresh:  []Claim{{Doc: chapter, Text: quoted, Src: now}},
-		Quoted: []Claim{{Doc: chapter, Text: quoted}},
-		Corpus: Corpus{now: now},
+		fresh:  []Claim{{Doc: chapter, Text: quoted, Src: now}},
+		quoted: []Claim{{Doc: chapter, Text: quoted}},
+		corpus: Corpus{now: now},
 	}
 	cmp := derived.Compare([]Claim{{Doc: chapter, Text: quoted, Src: was}})
 	if len(cmp.Drifted) != 1 || cmp.Drifted[0].Kind != AnchorMoved {

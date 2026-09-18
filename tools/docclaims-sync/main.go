@@ -33,7 +33,7 @@ const manifestPath = "internal/docclaims/manifest_gen.go"
 // it, without writing: the form to reach for in a script, or before committing
 // a regeneration.
 //
-// It is not what guards CI. TestManifestIsCurrent asks the same question on
+// It is not what guards CI. TestDocumentedClaimsStillShip asks the same question on
 // every run and is the single enforcer of it; a nightly job running this flag
 // would be a second answer to one question, which is the shape of drift this
 // package exists to remove. What it adds is a check you can run deliberately —
@@ -63,7 +63,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	matched := derived.Fresh
+	matched := derived.Fresh()
 	if len(matched) == 0 {
 		// An empty manifest turns the gate off while leaving every sign of it
 		// in place, which is worse than failing. [LAW:no-silent-failure]
@@ -88,6 +88,22 @@ func run() error {
 // silence and left every check green. It refuses instead, which is also the
 // order CONTRIBUTING prescribes — correct the chapter first, then regenerate.
 // [LAW:no-silent-failure]
+//
+// The refusal has no override, and that is the design rather than an omission.
+// A review asked for one on the grounds that a documented false-positive class
+// reaches it: `SHOW CREATE TABLE` is anchored to a SQL COMMENT in
+// 00001_baseline.sql, so reflowing that comment fails the gate naming three
+// chapters the edit has nothing to do with. The noise is real; the deadlock is
+// not. Master is green or the freshness test is red, so an entry reaching this
+// refusal was stopped by something in the contributor's own working tree, and
+// both remedies it names are in their hands — restore the message, or correct
+// the three sentences, which by then genuinely are describing text no binary
+// carries. A flag that writes past it restores the exact hazard the refusal
+// closes, a legitimate regeneration carrying an unrelated stopped message away
+// with every check green, at the cost of typing one more word. The right answer
+// to the noise is to anchor a quotation to its span rather than to a whole
+// asset, which is links-doc-v1-tepa, not a hole in the one path that can turn
+// this gate green over prose that is false.
 func write(manifestPath string, matched []docclaims.Claim, cmp docclaims.Comparison) error {
 	if stopped := cmp.Stopped(); len(stopped) > 0 {
 		for _, d := range stopped {
@@ -96,6 +112,27 @@ func write(manifestPath string, matched []docclaims.Claim, cmp docclaims.Compari
 		return fmt.Errorf("refusing to write: %d documented message(s) the specification still quotes no longer ship. Regenerating would drop them and leave those sentences describing a binary that does not have them — correct the chapter, or restore the message, then run this again",
 			len(stopped))
 	}
+	// A re-anchor is the ordinary edit — a literal reworded around a quotation
+	// the chapter still makes — so it is reported rather than refused. Reported
+	// it must be: writing moves the entry's Src, no entry leaves the manifest,
+	// and "an entry leaving the manifest is the review signal" is what
+	// CONTRIBUTING tells a reviewer to watch. Before this, the prescribed
+	// command settled in silence the one case the package's own report calls
+	// "only a reader can settle", and both checks went green over it.
+	//
+	// The sentence is the writer's own rather than Drift.Explain(), which asks
+	// a reader to confirm a rewording and then run this tool — the wrong tense
+	// for the tool that is running. That is not a second remedy competing with
+	// the first: the remedies stayed single-homed in Explain, and this reports
+	// an action already taken. [LAW:no-silent-failure]
+	if moved := cmp.Reanchored(); len(moved) > 0 {
+		fmt.Fprintf(os.Stderr, "docclaims-sync: %d entry(ies) re-anchored — the quotation still ships, inside different words:\n", len(moved))
+		for _, d := range moved {
+			fmt.Fprintf(os.Stderr, "  %s %q is now carried by %q\n", d.Claim.Doc, d.Claim.Text, d.Now)
+		}
+		fmt.Fprintln(os.Stderr, "  Read the manifest diff: each of these is this tool judging the new literal to be the same message. If one of them is a different string that happens to contain the words, the chapter quoting it is now describing a message the binary no longer has.")
+	}
+
 	if err := os.WriteFile(manifestPath, []byte(render(matched)), 0o644); err != nil {
 		return err
 	}

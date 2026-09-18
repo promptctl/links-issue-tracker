@@ -200,6 +200,9 @@ fails on purpose. Correct the prose first, then run
 `manifest_gen.go` by hand. The diff it produces is the review signal — an entry
 leaving the manifest is a sentence that stopped describing the binary — so
 regenerating without reading what left is the one use that defeats the gate.
+Read the entries that *moved*, too: a re-anchored entry does not leave the
+manifest, only its recorded source changes, and that change is the tool judging
+a reworded literal to be the same message. It prints each one it made.
 
 A failure names which of three things happened, because the remedy differs and
 one of them is destroyed by regenerating.
@@ -207,14 +210,21 @@ one of them is destroyed by regenerating.
 A chapter that stopped quoting a message is fixed by regenerating — and that
 includes the ordinary deliberate change, where you delete a message from the
 code *and* remove the sentence that quoted it. The report tells you **not** to
-regenerate in one case only: a chapter still quotes a message that nothing
-ships any more. There, regenerating drops the entry and leaves that sentence
-describing a binary which does not have it.
+regenerate in one case only: a message that nothing ships any more is still
+quoted somewhere. There, regenerating drops the entry and leaves that sentence
+describing a binary which does not have it. *Somewhere*, not *in the chapter the
+entry names*: move a sentence to another chapter in the same change that deletes
+the message it quotes, and the entry's own chapter has indeed stopped quoting it
+while the assertion is alive and false in its new home.
 
 Where the recorded source no longer carries the quotation but some other
-shipped source does, the report names that source and stops — it cannot tell a
-reworded message from an unrelated string that happens to share the words, and
-that is the one case only a reader can settle.
+shipped source does, the report names that source — it cannot tell a reworded
+message from an unrelated string that happens to share the words, and that is
+the one case only a reader can settle. `-check` stops there. The writer does
+not stop, because rewording a literal around a quotation is an ordinary edit and
+refusing it would put the scary warning on the common path; it names every entry
+it re-anchors and writes, which is what makes that judgement reviewable in the
+manifest diff instead of invisible in it.
 
 The writer enforces the order this section asks for. `go run
 ./tools/docclaims-sync` refuses to write while a chapter still quotes a message
