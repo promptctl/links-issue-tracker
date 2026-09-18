@@ -110,11 +110,11 @@ Any positional argument → `UsageError{initUsage}`, exit 2 (`init.go:56-58`), w
 
 1. **Remote adopt decision runs BEFORE any store is created** — `adoptRemoteTicketsOnInit(ctx, ws)` (`init.go:44`). Comment at `init.go:72-77` states the store must not pre-exist so a clone is the path's first writer.
 2. `recordInitSyncTrace(ws, syncOutcome, time.Now())` (`init.go:45`) — always, for every outcome.
-3. If outcome state is `initSyncFailed`, **hard stop with no store created** (`init.go:94-108`): error text
+3. If outcome state is `initSyncFailed`, **hard stop with no store created** (`init.go:92-106`): error text
    `"could not confirm the workspace state, so init is refusing to create a fresh store: <error> (<buildNote>)"` → exit 1.
 4. Otherwise, unless adopted, `store.EnsureDatabase(ctx, ws.DatabasePath, ws.WorkspaceID)`; `dbCreated` is its `created` result (`init.go:114-120`). Adopted ⇒ `dbCreated` stays `true` (`init.go:115`).
-5. Hooks (unless `--skip-hooks`): `installHooks(ws)`; error aborts init (`init.go:136-146`). Report field is `"installed"` when `Changed`, else `"unchanged"`.
-6. Agents (unless `--skip-agents`): `ensureLinksAgentFiles(ws.RootDir)`; error aborts (`init.go:122-143`). Per-file status `"created"` / `"updated"` / `"unchanged"`, plus `AgentsSource` / `ClaudeSource` = the template layer (`project`/`global`/`embedded`).
+5. Hooks (unless `--skip-hooks`): `installHooks(ws)`; error aborts init (`init.go:134-144`). Report field is `"installed"` when `Changed`, else `"unchanged"`.
+6. Agents (unless `--skip-agents`): `ensureLinksAgentFiles(ws.RootDir)`; error aborts (`init.go:146-155`). Per-file status `"created"` / `"updated"` / `"unchanged"`, plus `AgentsSource` / `ClaudeSource` = the template layer (`project`/`global`/`embedded`).
 7. `buildNote := resolveBuildStatusNote(time.Now())` then `writeInitHumanOutput` (`init.go:152-153`).
 
 ### 1.3 Adopt decision machine (`internal/cli/init_sync.go`)
@@ -1048,7 +1048,7 @@ All eight are also the payload of `lit quickstart --eject`, written to `<config.
 | Unknown flag, missing or invalid flag value | any command | `UsageError`, exit 2 | `flagset.go:142` |
 | `--output` before the command name; `--continue` | any command | `UnsupportedError`, exit 3 | `cli.go:196-201`, `flagset.go:138-141` |
 | Stray positional | `init`, `version`, `hooks install`, `snapshots new`, `lifeboat dump`, `lifeboat recover`, `upgrade`, `downgrade`, `sync reconcile`/`resolve`/`abort`/`combine` | `UsageError`, exit 2 | `init.go:34`, `version.go:22`, `hooks.go:45`, `snapshots.go:87`, `lifeboat.go:163`, `lifeboat.go:81`, `upgrade.go:200`, `downgrade.go:81`, `sync_reconcile_cmd.go:82-87` |
-| Adopt could not confirm workspace state | `init` | refuse to create a store, exit 1 | `init.go:94-108` |
+| Adopt could not confirm workspace state | `init` | refuse to create a store, exit 1 | `init.go:92-106` |
 | Remote-schema-ahead | `sync push/pull/reconcile*`, inline receive, mirror | `SyncFailureError` block, exit 5 (mirror: stderr only) | `sync.go:246`, `sync.go:389`, `sync_reconcile_cmd.go:120`, `sync_receive.go:147`, `sync_bg.go:329` |
 | Held prose conflict | `sync pull` | `SyncFailureError`, exit 5 | `sync.go:260-267` |
 | Held prose conflict | `sync reconcile`/`resolve`/`combine` | guidance printed + `MergeConflictError`, exit 5 | `sync_reconcile_cmd.go:474-509` |
