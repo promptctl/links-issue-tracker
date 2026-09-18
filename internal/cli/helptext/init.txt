@@ -1,2 +1,15 @@
 Human bootstrap command. Run once per repository/worktree setup before
 autonomous agent operations.
+
+Issue IDs are prefixed with a short name for the project. By default lit
+derives it from the repository directory name, which needs three or more
+characters once punctuation is normalized away — a repository named "ab" or
+"___" yields none, and lit refuses to initialize rather than invent one. Pass
+--prefix to supply it yourself:
+
+    lit init --prefix myservice
+
+--prefix only sets the prefix of a workspace that has none yet. Supplying one
+that contradicts the prefix a workspace already uses is refused, because
+existing issue IDs carry the old prefix; `lit prefix set <prefix> --apply`
+is the command that changes it, and it previews the change first.

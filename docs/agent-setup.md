@@ -67,6 +67,9 @@ rather than an empty store. Useful flags:
 
 - `--skip-hooks` — don't install the git sync hook
 - `--skip-agents` — don't touch `AGENTS.md` / `CLAUDE.md`
+- `--prefix <prefix>` — set the issue ID prefix instead of deriving it from the repository
+  directory name. Required in a repository whose name yields no valid prefix (fewer than
+  three characters once punctuation is normalized away, so `ab` or `___`).
 
 Already initialized? `lit init` is safe to run again; it reconciles the integration blocks.
 

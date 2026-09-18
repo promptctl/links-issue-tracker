@@ -8,6 +8,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 func TestExitCodeMappings(t *testing.T) {
@@ -37,6 +38,11 @@ func TestExitCodeMappings(t *testing.T) {
 		{name: "outside workspace", err: OutsideWorkspaceError{Message: "links requires running inside a git repository/worktree"}, want: ExitValidation},
 		{name: "workspace not initialized", err: store.ErrWorkspaceNotInitialized, want: ExitValidation},
 		{name: "workspace not initialized wrapped", err: fmt.Errorf("open store: %w", store.ErrWorkspaceNotInitialized), want: ExitValidation},
+		// A prefix lit cannot settle on is a self-fixable precondition, not
+		// "lit is broken" — ExitGeneric meant both, and a script could only
+		// tell them apart by parsing the English (links-init-hn19).
+		{name: "issue prefix refused", err: workspace.ErrIssuePrefixRefused, want: ExitValidation},
+		{name: "issue prefix refused wrapped", err: fmt.Errorf("resolve workspace: %w", workspace.ErrIssuePrefixRefused), want: ExitValidation},
 		// The genuine fault on the same path keeps the unclassified-fault code.
 		{name: "genuine stat fault", err: errors.New("stat database dir: permission denied"), want: ExitGeneric},
 		{name: "generic", err: ValidationError{Message: "boom"}, want: ExitValidation},

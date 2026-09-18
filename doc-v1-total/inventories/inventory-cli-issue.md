@@ -1722,8 +1722,9 @@ updated <n> issues
   - `len(positional) != 1 || fs.NArg() != 0` → the same usage `UsageError`
     (`prefix.go:35-37`).
   - `workspace.ConfiguredPrefix(requested)` failure →
-    `fmt.Errorf("invalid prefix %q: %w", requested, err)` → exit 1
-    (`prefix.go:41-44`).
+    `ValidationError{Message: fmt.Sprintf("invalid prefix %q: %v", requested, err)}` →
+    reason `validation_refused`, exit 3 (`prefix.go:41-44`). Typed so a deterministic
+    refusal does not reach the unclassified default's retry-then-doctor remediation.
 - Three outcomes (`prefixSetTextOutput`, `prefix.go:83-102`):
   - Normalized == current → `"issue_prefix: <p> (prefix unchanged)\n"`
     (`prefix.go:49-56`, `:88-91`).

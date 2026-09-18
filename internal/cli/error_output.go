@@ -8,6 +8,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 // WriteCommandError renders a failed command to stderr: the exit code and
@@ -137,6 +138,18 @@ func commandErrorReason(err error) string {
 	// here, versus go somewhere already initialized. [LAW:one-type-per-behavior]
 	if errors.Is(err, store.ErrWorkspaceNotInitialized) {
 		return "workspace_not_initialized"
+	}
+	// lit could not settle on an issue prefix: the repository name yields none,
+	// or an explicit --prefix contradicts the one this workspace already has.
+	// Deterministic and answered by changing the command, which is exactly what
+	// validation_refused means, so it shares that reason rather than taking one
+	// of its own — a reason here could only restate "adjust the command", and the
+	// flag or command that resolves it is named by the message. Before this it
+	// reached the default and told the caller to retry a refusal that repeats
+	// forever, then to run `lit doctor` against a workspace `lit init` had just
+	// declined to create (links-init-hn19). [LAW:one-type-per-behavior]
+	if errors.Is(err, workspace.ErrIssuePrefixRefused) {
+		return "validation_refused"
 	}
 	var bulkFailure BulkFailureError
 	if errors.As(err, &bulkFailure) {

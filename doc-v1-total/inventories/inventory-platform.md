@@ -330,13 +330,24 @@ Defaults are set in `Load` (`internal/config/config.go:217-228`).
   rename (`internal/workspace/workspace.go:504-537`).
 - `UpdateConfig(path, mutate)` is the single read-modify-write boundary
   (`internal/workspace/workspace.go:546-560`).
-- Issue-prefix resolution (`internal/workspace/workspace.go:421-434`): a blank configured value
-  is *derived* from the repository directory name; a present value is normalized; an invalid
-  present value errors `invalid issue_prefix: %w`. A derived or renormalized value is persisted
-  back into `config.json` immediately (`internal/workspace/workspace.go:469-477`).
+- Issue-prefix resolution (`internal/workspace/workspace.go:421-434`) ranks three sources: a
+  non-blank configured value wins and is normalized; a blank one is filled by the caller's
+  explicit `PrefixRequest` if present, else by derivation. An invalid present value errors
+  `invalid issue_prefix: %w`. A request that contradicts a non-blank configured value is
+  refused, not applied, naming `lit prefix set <p> --apply`. The resolved value is persisted
+  back into `config.json` immediately (`internal/workspace/workspace.go:469-477`); a value
+  that came from a request persists with `derived=false`, so `lit doctor` reports
+  `issue_prefix_source=configured`.
+- `PrefixRequest` is the optional counterpart to `PrefixSpec`: the zero value is the absence,
+  and `RequestPrefix(raw)` mints only present requests through `ConfiguredPrefix`, so an empty
+  string is an error rather than a silent demotion to "no request".
 - Derivation (`internal/workspace/workspace.go:562-579`): normalize `filepath.Base(rootDir)`,
   split on `-`, take the first hyphen-part that normalizes to a valid prefix, else the whole
-  normalized base; failure ⇒ `derive issue_prefix: repository name %q does not produce a valid prefix`.
+  normalized base. Both ways of coming up short — nothing survives normalization, or too
+  little does — are one failure wrapping `ErrIssuePrefixRefused` ⇒
+  `issue prefix refused: repository name %q yields none (a prefix needs %d or more characters
+  once punctuation is normalized away); run ``lit init --prefix <prefix>`` to set one
+  explicitly`. `internal/cli` maps that sentinel to reason `validation_refused` and exit 3.
 
 ---
 

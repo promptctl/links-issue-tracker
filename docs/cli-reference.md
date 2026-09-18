@@ -88,13 +88,17 @@ any non-closed state). The distinction is recorded in history.
 ### `lit init`
 
 ```text
-lit init [--skip-hooks] [--skip-agents]
+lit init [--prefix <prefix>] [--skip-hooks] [--skip-agents]
 ```
 
 Initializes the issue store under `$(git rev-parse --git-common-dir)/links/`, adds
 managed `lit` sections to `AGENTS.md` / `CLAUDE.md`, and installs the sync git hook.
 Idempotent: re-running reconciles the managed files. `--skip-hooks` and `--skip-agents`
-suppress the respective side effects.
+suppress the respective side effects. `--prefix` sets the issue ID prefix explicitly; by
+default it is derived from the repository directory name, which a name like `ab` or `___`
+cannot produce, so `--prefix` is the way to initialize those. It applies only to a
+workspace that has no prefix yet — supplying one that contradicts an existing workspace's
+is refused, because `lit prefix set` is what changes a prefix already in use.
 
 The `/next` skill for pulling the next ticket ships from the `lit` Claude Code plugin
 (`.claude-plugin/marketplace.json` at the repo root), not written into the target

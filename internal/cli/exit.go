@@ -6,6 +6,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 const (
@@ -143,6 +144,13 @@ func ExitCode(err error) int {
 		return ExitValidation
 	}
 	if errors.Is(err, store.ErrWorkspaceNotInitialized) {
+		return ExitValidation
+	}
+	// Moves this condition off ExitGeneric, which also means "lit is broken":
+	// a prefix lit cannot settle on is a self-fixable precondition, and under
+	// one code a script could only tell the two apart by parsing the English.
+	// [LAW:one-source-of-truth] same code as its reason's other members.
+	if errors.Is(err, workspace.ErrIssuePrefixRefused) {
 		return ExitValidation
 	}
 	var bulkFailure BulkFailureError

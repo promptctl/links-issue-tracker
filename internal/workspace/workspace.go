@@ -18,6 +18,20 @@ import (
 
 var ErrNotGitRepo = errors.New("links requires a git repository/worktree")
 
+// ErrIssuePrefixRefused marks every refusal to settle on a workspace's
+// issue prefix: a repository name that cannot produce one, and an explicit
+// request that contradicts the prefix a workspace already carries. Both are
+// terminal for the command as issued and both are answered by changing the
+// command, which is all the CLI's classification needs to know — so they share
+// one sentinel, and the message each raise site wraps it with carries the act.
+//
+// Without a type these reached the unclassified default, which told the caller
+// to retry a deterministic refusal and then to run `lit doctor` against the
+// very workspace `lit init` had just declined to create (links-init-hn19).
+// [LAW:no-silent-failure] [LAW:types-are-the-program] classification is carried
+// by the error, never re-derived from its text.
+var ErrIssuePrefixRefused = errors.New("issue prefix refused")
+
 type Config struct {
 	WorkspaceID string    `json:"workspace_id"`
 	IssuePrefix string    `json:"issue_prefix"`
@@ -83,6 +97,34 @@ func ConfiguredPrefix(raw string) (PrefixSpec, error) {
 
 func (p PrefixSpec) Value() string { return p.value }
 
+// PrefixRequest is the issue prefix a CALLER asks for — either an explicit one
+// or the absence that means "derive it from the repository name". It is a
+// separate type from PrefixSpec, which is a prefix a workspace HAS: that one is
+// non-empty by construction, and spending its zero value on "absent" would have
+// cost every consumer the guarantee its doc comment makes.
+// [LAW:types-are-the-program] the strongest theorem each side can honestly
+// state: one is always present, the other may not be.
+type PrefixRequest struct {
+	spec    PrefixSpec
+	present bool
+}
+
+// RequestPrefix mints the request an explicit prefix makes, normalizing it
+// through the same boundary every configured prefix crosses. It mints only
+// PRESENT requests: the absence is the zero PrefixRequest, so an empty string
+// reaching here is a caller who typed the flag and gave it nothing, and it is
+// refused rather than quietly demoted to "no flag given".
+// [LAW:single-enforcer] no caller normalizes a prefix on its own.
+// [LAW:parse-dont-validate] what crosses into the workspace has already been
+// checked, so nothing inland checks it again.
+func RequestPrefix(raw string) (PrefixRequest, error) {
+	spec, err := ConfiguredPrefix(raw)
+	if err != nil {
+		return PrefixRequest{}, err
+	}
+	return PrefixRequest{spec: spec, present: true}, nil
+}
+
 // Derived reports whether this load minted the prefix from the repository
 // name rather than reading it from config. The derived value is persisted
 // immediately, so provenance is per-load: the next load reads it back as
@@ -137,7 +179,20 @@ func DefaultRemoteBranch(ctx context.Context, cwd string, remote string) string 
 	return strings.TrimSpace(defaultRemoteBranchFromLSRemote(lsRemoteOutput))
 }
 
+// Resolve finds the workspace containing cwd, creating its config on first
+// sight, with no prefix of its own to offer — the repository name supplies one.
 func Resolve(cwd string) (Info, error) {
+	return ResolveWithPrefix(cwd, PrefixRequest{})
+}
+
+// ResolveWithPrefix is Resolve for the one caller that may carry an explicit
+// issue prefix: `lit init --prefix`. The prefix is an input to CREATING the
+// workspace rather than something a command can apply afterwards — resolution
+// is exactly what fails without it in a repository whose name yields none — so
+// it crosses this boundary as a value, instead of being parked somewhere
+// ambient for this function to read back. [LAW:no-shared-mutable-globals]
+// [LAW:effects-at-boundaries] the request reaches the one write that consumes it.
+func ResolveWithPrefix(cwd string, requested PrefixRequest) (Info, error) {
 	// [LAW:dataflow-not-control-flow] Store-geometry git calls are local rev-parse
 	// queries that cannot hang on a network, so cancellation buys nothing here;
 	// context.Background() is the honest "never cancels" value, and it keeps Resolve's
@@ -165,7 +220,7 @@ func Resolve(cwd string) (Info, error) {
 	if err := os.MkdirAll(loc.StorageDir, 0o755); err != nil {
 		return Info{}, fmt.Errorf("create storage dir: %w", err)
 	}
-	cfg, prefix, err := loadOrCreateConfig(rootDir, loc.ConfigPath)
+	cfg, prefix, err := loadOrCreateConfig(rootDir, loc.ConfigPath, requested)
 	if err != nil {
 		return Info{}, err
 	}
@@ -413,13 +468,26 @@ func GitRemotes(ctx context.Context, cwd string) ([]GitRemote, error) {
 	return remotes, nil
 }
 
-// resolveIssuePrefix is the single enforcer of the prefix rule: an absent
-// (empty after trimming) configured value is derived from the repository
-// name; a present value is normalized; an invalid present value is a loud
-// error, never a silent fallback to derivation. [LAW:single-enforcer]
-// [LAW:no-silent-failure]
-func resolveIssuePrefix(rootDir string, configured string) (PrefixSpec, error) {
+// resolveIssuePrefix is the single enforcer of the prefix rule. A workspace's
+// prefix has three possible sources and this is the one place that ranks them:
+// the value config.json already carries wins, an explicit request supplies one
+// for a workspace that carries none, and derivation from the repository name is
+// the last resort. An invalid configured value is a loud error, never a silent
+// fallback to derivation.
+//
+// A request that CONTRADICTS a stored value is refused rather than applied.
+// Rewriting the prefix of a workspace that already has issues filed under it is
+// `lit prefix set`'s job, which previews the change before writing it; honouring
+// it here would do that consequential thing silently, from a command whose whole
+// contract is to be safe to re-run. [LAW:single-enforcer] [LAW:no-silent-failure]
+func resolveIssuePrefix(rootDir string, configured string, requested PrefixRequest) (PrefixSpec, error) {
 	if strings.TrimSpace(configured) == "" {
+		// The request is consulted BEFORE derivation, not bolted onto one of its
+		// failure exits, so every way the repository name can come up short is
+		// answered by the same flag. [LAW:dataflow-not-control-flow]
+		if requested.present {
+			return requested.spec, nil
+		}
 		derived, err := deriveIssuePrefix(rootDir)
 		if err != nil {
 			return PrefixSpec{}, err
@@ -429,6 +497,12 @@ func resolveIssuePrefix(rootDir string, configured string) (PrefixSpec, error) {
 	spec, err := ConfiguredPrefix(configured)
 	if err != nil {
 		return PrefixSpec{}, fmt.Errorf("invalid issue_prefix: %w", err)
+	}
+	if requested.present && requested.spec.Value() != spec.Value() {
+		return PrefixSpec{}, fmt.Errorf(
+			"%w: this workspace already uses %q, so --prefix %s cannot be honoured here; run `lit prefix set %s --apply` to change the prefix of a workspace that already has one",
+			ErrIssuePrefixRefused, spec.Value(), requested.spec.Value(), requested.spec.Value(),
+		)
 	}
 	return spec, nil
 }
@@ -459,10 +533,10 @@ func ReadConfig(path string) (Config, error) {
 	return cfg, nil
 }
 
-func loadOrCreateConfig(rootDir string, path string) (Config, PrefixSpec, error) {
+func loadOrCreateConfig(rootDir string, path string, requested PrefixRequest) (Config, PrefixSpec, error) {
 	cfg, err := ReadConfig(path)
 	if err == nil {
-		prefix, err := resolveIssuePrefix(rootDir, cfg.IssuePrefix)
+		prefix, err := resolveIssuePrefix(rootDir, cfg.IssuePrefix, requested)
 		if err != nil {
 			return Config{}, PrefixSpec{}, err
 		}
@@ -484,7 +558,7 @@ func loadOrCreateConfig(rootDir string, path string) (Config, PrefixSpec, error)
 	if !errors.Is(err, os.ErrNotExist) {
 		return Config{}, PrefixSpec{}, err
 	}
-	prefix, err := resolveIssuePrefix(rootDir, "")
+	prefix, err := resolveIssuePrefix(rootDir, "", requested)
 	if err != nil {
 		return Config{}, PrefixSpec{}, err
 	}
@@ -559,21 +633,33 @@ func UpdateConfig(path string, mutate func(Config) (Config, error)) (Config, err
 	return writeConfig(path, updated)
 }
 
+// deriveIssuePrefix proposes an issue prefix from the repository's directory
+// name — the convenience default for a caller who supplied none, never the only
+// way in. Normalization can come up short two ways, with nothing legal
+// surviving it (a directory named "___") or with too little (one named "ab"),
+// and both ask the caller for the identical act, so they are one refusal and
+// one sentence rather than two the reader has to tell apart.
+// [LAW:one-type-per-behavior]
+//
+// The message names `lit init --prefix` rather than the bare flag because every
+// workspace command reaches here, not just init: a repository whose name yields
+// no prefix fails `lit ls` too, and running init with a prefix is the act that
+// resolves it for all of them. [LAW:no-silent-failure] the remediation an agent
+// acts on has to name something that actually works.
 func deriveIssuePrefix(rootDir string) (string, error) {
-	base := issueid.NormalizeSlug(filepath.Base(rootDir))
-	if base == "" {
-		return "", fmt.Errorf("derive issue_prefix: repository name %q does not contain at least %d normalized characters", filepath.Base(rootDir), issueid.PrefixMinLength)
-	}
-	parts := strings.Split(base, "-")
-	for _, part := range parts {
-		candidate, err := issueid.NormalizeConfiguredPrefix(part)
-		if err == nil && candidate != "" {
-			return candidate, nil
+	name := filepath.Base(rootDir)
+	base := issueid.NormalizeSlug(name)
+	// Dash-separated parts first and the whole name last, so a repository named
+	// "links-issue-tracker" prefixes its issues "links" and not "links-issue-".
+	// A part that normalizes to nothing is refused by the same boundary that
+	// refuses a short one, so there is no separate emptiness test here.
+	for _, candidate := range append(strings.Split(base, "-"), base) {
+		if prefix, err := issueid.NormalizeConfiguredPrefix(candidate); err == nil {
+			return prefix, nil
 		}
 	}
-	candidate, err := issueid.NormalizeConfiguredPrefix(base)
-	if err != nil || candidate == "" {
-		return "", fmt.Errorf("derive issue_prefix: repository name %q does not produce a valid prefix", filepath.Base(rootDir))
-	}
-	return candidate, nil
+	return "", fmt.Errorf(
+		"%w: repository name %q yields none (a prefix needs %d or more characters once punctuation is normalized away); run `lit init --prefix <prefix>` to set one explicitly",
+		ErrIssuePrefixRefused, name, issueid.PrefixMinLength,
+	)
 }

@@ -98,10 +98,13 @@ Handler `runInit` — `internal/cli/init.go:27`.
 
 | Flag | Default | Effect | Line |
 |---|---|---|---|
+| `--prefix` | `""` | Issue ID prefix for a new workspace (default: derived from the repository name) | `init.go:31` |
 | `--skip-hooks` | `false` | Skip git hook installation | `init.go:29` |
 | `--skip-agents` | `false` | Skip AGENTS.md integration update | `init.go:30` |
 
-Any positional argument → `UsageError{"usage: lit init [--skip-hooks] [--skip-agents]"}`, exit 2 (`init.go:34-36`).
+Any positional argument → `UsageError{initUsage}`, exit 2 (`init.go:34-36`), where `initUsage` is the single constant `"usage: lit init [--prefix <prefix>] [--skip-hooks] [--skip-agents]"`.
+
+`--prefix` is read by the acquisition rather than by the work below. `initLeaf` returns `(wsLeaf, wsAcquire)` and is registered with `wsCmdAcquiring`; the closure calls `workspace.RequestPrefix(*prefix)` only when `fs.Changed("prefix")`, so an untyped flag is the zero request and derivation is untouched, and `--prefix ""` is a `ValidationError` (exit 3) rather than a silent fall back to derivation.
 
 ### 1.2 Sequence
 

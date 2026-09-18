@@ -10,6 +10,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 func TestCommandErrorReason(t *testing.T) {
@@ -70,6 +71,16 @@ func TestCommandErrorReason(t *testing.T) {
 		// pinned, because the store returns it bare today and a caller adding
 		// context later must not silently drop back to the default.
 		{"workspace not initialized", store.ErrWorkspaceNotInitialized, "workspace_not_initialized"},
+		// Shares validation_refused rather than taking a reason of its own: the
+		// act it asks for is "adjust the command", which is exactly what that
+		// reason already means, and the flag or command that resolves it is
+		// named by the message. A reason here could only restate it.
+		{"issue prefix refused", workspace.ErrIssuePrefixRefused, "validation_refused"},
+		{
+			"issue prefix refused wrapped",
+			fmt.Errorf("resolve workspace: %w", workspace.ErrIssuePrefixRefused),
+			"validation_refused",
+		},
 		{
 			"workspace not initialized wrapped",
 			fmt.Errorf("open store: %w", store.ErrWorkspaceNotInitialized),

@@ -40,7 +40,9 @@ Durations in every banner and age line render coarsely: ≥48h → "N days", ≥
 
 ## `lit init`
 
-Flags: `--skip-hooks` (skip git hook installation), `--skip-agents` (skip AGENTS.md/CLAUDE.md update); any positional is a usage error, exit 2 (`init.go:29-36`).
+Flags: `--prefix` (issue ID prefix for a new workspace; default derived from the repository name), `--skip-hooks` (skip git hook installation), `--skip-agents` (skip AGENTS.md/CLAUDE.md update); any positional is a usage error, exit 2 (`init.go:29-36`).
+
+`--prefix` is consumed by the workspace ACQUISITION, not by the sequence below: `initLeaf` returns its leaf together with a `wsAcquire` closure over the same parsed flag, and `wsCmdAcquiring` runs that closure in the pipeline's acquire step. An absent flag is the zero `workspace.PrefixRequest` and derivation runs unchanged; a flag the caller typed is minted through `workspace.RequestPrefix` and an unusable value is a `ValidationError`, exit 3.
 
 Sequence (`init.go:27-144`):
 

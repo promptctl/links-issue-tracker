@@ -24,13 +24,37 @@ type initReport struct {
 	Sync         initSyncOutcome `json:"sync"`
 }
 
-func initLeaf() wsLeaf {
+// initLeaf declares `lit init` together with the acquisition it needs, because
+// --prefix is an input to CREATING the workspace rather than something the work
+// below could apply once it has one: in a repository whose name yields no legal
+// prefix, acquiring the workspace is the step that fails. Returning both from
+// one declaration keeps the flag's parsed storage in a single place that both
+// the acquisition and the work read. [LAW:one-source-of-truth]
+func initLeaf() (wsLeaf, wsAcquire) {
 	fs := newCobraFlagSet("init").Detail(helpText("init"))
 	skipHooks := fs.Bool("skip-hooks", false, "Skip git hook installation")
 	skipAgents := fs.Bool("skip-agents", false, "Skip AGENTS.md integration update")
+	prefix := fs.String("prefix", "", "Issue ID prefix for a new workspace (default: derived from the repository name)")
+
+	// A flag the caller never typed is the zero request, which is the derivation
+	// that has always run. A flag they DID type is minted through the same
+	// boundary `lit prefix set` uses, so `--prefix ""` is refused here instead of
+	// being demoted to "no flag" and then failing further in with a message
+	// telling them to pass the flag they just passed. [LAW:no-silent-failure]
+	acquire := func() (workspace.Info, error) {
+		if !fs.Changed("prefix") {
+			return resolveWorkspaceFromWD(workspace.PrefixRequest{})
+		}
+		requested, err := workspace.RequestPrefix(*prefix)
+		if err != nil {
+			return workspace.Info{}, ValidationError{Message: fmt.Sprintf("invalid --prefix %q: %v", *prefix, err)}
+		}
+		return resolveWorkspaceFromWD(requested)
+	}
+
 	return wsLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
 		if fs.NArg() != 0 {
-			return UsageError{Message: "usage: lit init [--skip-hooks] [--skip-agents]"}
+			return UsageError{Message: initUsage}
 		}
 
 		// Adopt runs BEFORE creating an empty store: when the remote carries a
@@ -128,8 +152,11 @@ func initLeaf() wsLeaf {
 		// [LAW:effects-at-boundaries]
 		buildNote := resolveBuildStatusNote(time.Now())
 		return writeInitHumanOutput(stdout, report, buildNote)
-	}}
+	}}, acquire
 }
+
+// initUsage is the one spelling of init's surface. [LAW:one-source-of-truth]
+const initUsage = "usage: lit init [--prefix <prefix>] [--skip-hooks] [--skip-agents]"
 
 type labeledStatus struct {
 	label  string
