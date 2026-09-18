@@ -508,6 +508,13 @@ func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation
 			dep, gathered := byID[id]
 			// row is the in-scope open row whose dependency this is — the fact
 			// step 1b needs and the one this walk used to drop on the floor.
+			// `seen` keeps the FIRST row to reach a dependency, so when one
+			// dependency gates several of ours, Gates names the one the queue
+			// ranks first. That is the intent, not a leftover: the pick owes the
+			// reader a reason, not an inventory, and the actionable reason is the
+			// highest-ranked thing it unblocks. Naming every gated row would put
+			// an unbounded list in a one-line announcement.
+			// [LAW:polishing-by-subtraction]
 			deps = append(deps, gatedDep{
 				rowReach: rowReach{ID: id, Row: dep, Kind: reachFor(dep, gathered)},
 				Gates:    row.ID,
