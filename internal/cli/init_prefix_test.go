@@ -316,3 +316,44 @@ func TestInitReportsThePrefixItActuallyStored(t *testing.T) {
 		t.Fatalf("stored prefix = %q, want %q — init reported a value the workspace does not carry", got, stored)
 	}
 }
+
+// A refused command line must leave nothing behind. The pipeline acquires the
+// workspace BEFORE it runs a leaf's work, and acquiring resolves the workspace,
+// which writes config.json — so an arity check living inside work() runs only
+// after the prefix is already on disk. The explicit-prefix case is the one that
+// bites: a value the caller typed, in the very command line that also carried
+// the bad argument, outlives a command that reported failure, and clearing it
+// needs `lit prefix set` rather than a corrected re-run.
+//
+// The derived case is here because it is the half that predates `--prefix`, and
+// it proves the fix is about ORDERING rather than about the flag.
+//
+// Asserting the exit code alone would pass against the bug — the refusal was
+// always correct, it just arrived after the write. The assertion that earns its
+// keep is the ABSENCE of config.json. [LAW:effects-at-boundaries]
+func TestAFailedInitLeavesNoWorkspaceBehind(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		args []string
+	}{
+		{"an explicit prefix is not persisted by a command that fails", []string{"--prefix", "demo", "stray"}},
+		{"a derived prefix is not persisted either", []string{"stray"}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			repo := gitRepoNamed(t, "myrepo")
+
+			err := runInit(t, testCase.args...)
+			if err == nil {
+				t.Fatalf("Run(init %v) = nil, want a usage refusal", testCase.args)
+			}
+			if got := ExitCode(err); got != ExitUsage {
+				t.Fatalf("ExitCode(%v) = %d, want ExitUsage (%d)", err, got, ExitUsage)
+			}
+
+			configPath := filepath.Join(repo, ".git", "links", "config.json")
+			if _, statErr := os.Stat(configPath); !os.IsNotExist(statErr) {
+				t.Fatalf("a refused `lit init %v` left %s on disk; the caller's prefix outlives a command that reported failure", testCase.args, configPath)
+			}
+		})
+	}
+}

@@ -43,6 +43,19 @@ func initLeaf() (wsLeaf, wsAcquire) {
 	// being demoted to "no flag" and then failing further in with a message
 	// telling them to pass the flag they just passed. [LAW:no-silent-failure]
 	acquire := func() (workspace.Info, error) {
+		// Arity is settled before anything is created. The pipeline acquires
+		// BEFORE it runs the leaf's work, and acquiring resolves the workspace,
+		// which writes config.json -- so an arity check living in work() runs
+		// only after the prefix is already on disk. A `--prefix` typed alongside
+		// a bad argument would be persisted by a command that then reports
+		// failure, and clearing it needs `lit prefix set` rather than a
+		// corrected re-run. The effect must not precede the check that refuses
+		// it. [LAW:effects-at-boundaries] [LAW:parse-dont-validate]
+		// This is init's ONLY arity check; work() does not repeat it.
+		// [LAW:single-enforcer]
+		if fs.NArg() != 0 {
+			return workspace.Info{}, UsageError{Message: initUsage}
+		}
 		if !fs.Changed("prefix") {
 			return resolveWorkspaceFromWD(workspace.PrefixRequest{})
 		}
@@ -54,10 +67,6 @@ func initLeaf() (wsLeaf, wsAcquire) {
 	}
 
 	return wsLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
-		if fs.NArg() != 0 {
-			return UsageError{Message: initUsage}
-		}
-
 		// Adopt runs BEFORE creating an empty store: when the remote carries a
 		// backlog, adopt clones it directly into the target path, so the path's
 		// first on-disk state is the cloned data (a pre-created empty store would
