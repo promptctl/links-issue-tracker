@@ -103,7 +103,11 @@ var statusTransitionEvents = map[model.ActionName]workflows.Event{
 func transitionOccasion(action model.StatusAction, prior, issue model.Issue) workflows.Occasion {
 	event, ok := statusTransitionEvents[action.Name()]
 	if !ok {
-		panic(fmt.Sprintf("workflow_events: no event mapped for status action %q", action.Name()))
+		// string(), not Verb(): this names the EVENT MAPPING's key, which is the
+		// persisted encoding, and it is a developer diagnostic rather than
+		// guidance an agent will run. The conversion is written out so the gate
+		// in internal/model/lifecycle can hold one rule with no exceptions.
+		panic(fmt.Sprintf("workflow_events: no event mapped for status action %q", string(action.Name())))
 	}
 	return workflows.Occasion{
 		Event:   event,
