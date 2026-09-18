@@ -196,19 +196,24 @@ func verify(cmp docclaims.Comparison) error {
 	for _, d := range cmp.Drifted {
 		fmt.Fprintf(os.Stderr, "  %s\n", d.Explain())
 	}
+	// Each of the first two lines is a remedy for a subset, not a census, and
+	// each says how large that subset is out of what was reported. The
+	// alternative reads as a total: with one entry re-anchored beside one the
+	// prose stopped quoting, a bare "1" under two printed lines told a
+	// contributor to confirm both were rewordings, and one of them was not.
+	switch stopped := len(cmp.Stopped()); {
+	case stopped > 0:
+		return fmt.Errorf("%d of %d reported entry(ies) quote a message that no longer ships: fix the code or the chapter. Regenerating would drop them and leave the specification false",
+			stopped, len(cmp.Drifted))
+	case moved > 0:
+		return fmt.Errorf("%d of %d reported entry(ies) are no longer carried by the source they were recorded against: confirm each of those is the same message reworded before regenerating",
+			moved, len(cmp.Drifted))
+	}
 	// The exit line counts what actually differs. Reporting the two totals
 	// instead stated them as evidence of a difference even when they were
 	// equal — one chapter dropping a quotation while another adds one is an
 	// ordinary prose edit, and "committed 1102, the tree yields 1102" is not
 	// something a reader can act on.
-	switch stopped := len(cmp.Stopped()); {
-	case stopped > 0:
-		return fmt.Errorf("%d documented message(s) no longer ship: fix the code or the chapter. Regenerating would drop them and leave the specification false",
-			stopped)
-	case moved > 0:
-		return fmt.Errorf("%d documented message(s) are no longer carried by the source they were recorded against: read the lines above and confirm each is the same message reworded before regenerating",
-			moved)
-	}
 	return fmt.Errorf("manifest is stale: %d recorded quotation(s) the tree no longer yields, %d the tree yields that it does not record; run `go run ./tools/docclaims-sync`",
 		len(cmp.Drifted), len(cmp.Added))
 }

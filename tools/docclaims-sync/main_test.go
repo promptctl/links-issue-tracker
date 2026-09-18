@@ -178,4 +178,37 @@ func TestVerifyPrefersTheDestructiveRemedyWhenBothApply(t *testing.T) {
 	if !strings.Contains(err.Error(), "Regenerating would drop them") {
 		t.Errorf("verify() = %q, want the stopped remedy to win; the re-anchor remedy tells a contributor to regenerate, which erases the stopped entry", err)
 	}
+	// Winning the branch is not the whole of it: the line that wins still has
+	// to say it speaks for one of the two entries printed above it, or a
+	// reader takes "fix the code or the chapter" as covering the re-anchor too.
+	if !strings.Contains(err.Error(), "1 of 2 reported entry(ies)") {
+		t.Errorf("verify() = %q, want the stopped remedy to scope its count to the entries it covers", err)
+	}
+}
+
+// TestARemedyLineSaysHowMuchOfTheReportItCovers pins the scope of the two
+// remedy lines. Each covers a subset of what was printed above it, and neither
+// number is a total — a comparison holding one re-anchor beside one quotation
+// the prose dropped printed two lines and then a bare "1", under an
+// instruction to confirm each of them was a rewording. One of them was not,
+// and the reader following that instruction regenerates over an entry nobody
+// asked them to look at.
+func TestARemedyLineSaysHowMuchOfTheReportItCovers(t *testing.T) {
+	mixed := docclaims.Comparison{Drifted: []docclaims.Drift{
+		{Claim: docclaims.Claim{Doc: "a.md", Text: "reworded message", Src: "reworded message"}, Kind: docclaims.AnchorMoved, Now: "a longer literal saying reworded message"},
+		{Claim: docclaims.Claim{Doc: "b.md", Text: "unquoted message", Src: "unquoted message"}, Kind: docclaims.QuoteDropped},
+	}}
+	err := verify(mixed)
+	if err == nil {
+		t.Fatal("verify() accepted a manifest that disagrees with the tree")
+	}
+	if !strings.Contains(err.Error(), "1 of 2 reported entry(ies)") {
+		t.Errorf("verify() = %q, want the re-anchor remedy to say it covers 1 of the 2 entries reported; a bare count reads as a total and sends a reader to confirm a rewording that is not one", err)
+	}
+	// The same line over an unmixed comparison still has to say what it covers,
+	// or the scope is only correct by accident of there being one kind present.
+	only := docclaims.Comparison{Drifted: []docclaims.Drift{mixed.Drifted[0]}}
+	if err := verify(only); err == nil || !strings.Contains(err.Error(), "1 of 1 reported entry(ies)") {
+		t.Errorf("verify() on a lone re-anchor = %v, want it to scope its count the same way", err)
+	}
 }

@@ -152,8 +152,11 @@ stayed green over all three, because nothing compared the two.
 [`internal/docclaims`](internal/docclaims) is that comparison.
 `manifest_gen.go` records every message literal the specification quotes that
 was present in the shipped Go when it was generated — each entry carrying the
-whole literal it was found inside, so deleting that exact message cannot be
-masked by an unrelated string that happens to contain the same words. A gate
+whole literal it was found inside, so deleting that exact message is reported
+rather than passing silently when an unrelated string happens to contain the
+same words. An entry anchored to an embedded asset is held only to "still
+somewhere in that file", which is the weaker of the two holds; `Claim.Src`
+says why, and `links-doc-v1-tepa` closes it. A gate
 (`go test ./internal/docclaims/`, which runs as part of `go test ./...`) fails
 naming the chapter and the sentence, in both directions: a quotation the
 manifest records that the tree no longer yields, and a quotation the tree

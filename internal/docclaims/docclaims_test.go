@@ -266,11 +266,6 @@ func TestSpansInReadsBothQuotingShapes(t *testing.T) {
 	}
 }
 
-// TestUnclosedFenceIsAnError covers the silent-truncation case. Blanking the
-// rest of a chapter would drop every claim below the stray fence, and the
-// regeneration would read as an ordinary "entries left the manifest" diff —
-// which CONTRIBUTING tells a reviewer means a sentence stopped describing the
-// binary.
 // TestACollidingHandleIsRefusedRatherThanOverwritten covers the corpus holding
 // two kinds of source in one key space: a Go literal keyed by its own text, an
 // embedded asset keyed by its path. A literal is collected only when it
@@ -367,6 +362,11 @@ func TestAnInlineCodeSpanIsNotAFence(t *testing.T) {
 	}
 }
 
+// TestUnclosedFenceIsAnError covers the silent-truncation case. Blanking the
+// rest of a chapter would drop every claim below the stray fence, and the
+// regeneration would read as an ordinary "entries left the manifest" diff —
+// which CONTRIBUTING tells a reviewer means a sentence stopped describing the
+// binary.
 func TestUnclosedFenceIsAnError(t *testing.T) {
 	if _, err := spansIn("intro\n```\nnever closed\n"); err == nil {
 		t.Fatal("an unclosed fence was accepted; every claim below it would vanish silently")
