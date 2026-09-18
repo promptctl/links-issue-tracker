@@ -141,6 +141,108 @@ is not there, fix the token. Never edit `canonical_gen.go` by hand. The nightly
 workflow runs the same tool with `-check` and fails when the copy and the
 upstream index differ.
 
+## Documented messages
+
+`doc-v1-total/` is a specification of what this binary does, so where a chapter
+quotes a user-facing message it holds a second copy of a string whose original
+is a Go literal. Two copies of one fact drift. Here they drifted in silence:
+three merged tickets each falsified a documented claim and every CI check
+stayed green over all three, because nothing compared the two.
+
+[`internal/docclaims`](internal/docclaims) is that comparison.
+`manifest_gen.go` records every message literal the specification quotes that
+was present in the shipped Go when it was generated — each entry carrying the
+whole literal it was found inside, so deleting that exact message is reported
+rather than passing silently when an unrelated string happens to contain the
+same words. An entry anchored to an embedded asset is held only to "still
+somewhere in that file", which is the weaker of the two holds; `Claim.Src`
+says why, and `links-doc-v1-tepa` closes it. A gate
+(`go test ./internal/docclaims/`, which runs as part of `go test ./...`) fails
+naming the chapter and the sentence, in both directions: a quotation the
+manifest records that the tree no longer yields, and a quotation the tree
+yields that the manifest does not record. It is one test printing one report,
+because when there were two they twice came to tell a contributor opposite
+things about a single entry in a single run. `go run ./tools/docclaims-sync
+-check` is the same comparison as a command.
+
+What counts as shipped is whatever a binary under `cmd/` actually links, walked
+out from each `main` package through the import graph, minus test files. Not a
+list of directories: two successive lists both leaked. The first swallowed
+`artifacts/`, a gitignored vendored copy of an unrelated project whose literals
+outnumbered lit's own by three to one; the `cmd/` and `internal/` list that
+replaced it still admitted `internal/vendor/dolthub-driver/example`, a program
+nothing imports, and `internal/docsclaims`, a registry of quotations from other
+documents. Neither was harmless noise — a quotation anchors to the *shortest*
+source holding it, so a stray copy in unlinked code becomes the evidence for a
+chapter's claim and survives deleting the real message. Three entries were being
+held up that way, including two chapters' `CREATE TABLE` anchored to an example
+table in the vendored driver.
+
+Vendored is not the disqualifier; unreachable is. `github.com/dolthub/driver` is
+`replace`d onto `internal/vendor/dolthub-driver` and imported by `internal/store`,
+so its documented error messages ship and are gated like any other.
+
+Embedded text assets count too, resolved from the `//go:embed` directives
+themselves rather than guessed from file extensions. They have to: this
+repository is moving user-facing text out of Go literals and into embedded
+files — `links-help-h0di` moved whole help pages into
+`internal/cli/helptext/` — so a gate reading only literals would go blind in
+exactly the direction the corpus is travelling. `lit quickstart doctor` is
+quoted by two chapters and exists only in
+`internal/templates/defaults/quickstart.md`.
+
+An entry keeps the source it was anchored to for as long as that source still
+ships and still carries the quotation. Re-anchoring on every run would let any
+newly added shorter literal retarget unrelated entries, failing the freshness
+test on a branch that changed no documented message — wording indistinguishable
+from real drift, which is what trains people to regenerate without reading.
+
+When you deliberately change a message the specification quotes, the gate
+fails on purpose. Correct the prose first, then run
+`go run ./tools/docclaims-sync` and commit the regenerated manifest. Never edit
+`manifest_gen.go` by hand. The diff it produces is the review signal — an entry
+leaving the manifest is a sentence that stopped describing the binary — so
+regenerating without reading what left is the one use that defeats the gate.
+Read the entries that *moved*, too: a re-anchored entry does not leave the
+manifest, only its recorded source changes, and that change is the tool judging
+a reworded literal to be the same message. It prints each one it made.
+
+A failure names which of three things happened, because the remedy differs and
+one of them is destroyed by regenerating.
+
+A chapter that stopped quoting a message is fixed by regenerating — and that
+includes the ordinary deliberate change, where you delete a message from the
+code *and* remove the sentence that quoted it. The report tells you **not** to
+regenerate in one case only: a message that nothing ships any more is still
+quoted somewhere. There, regenerating drops the entry and leaves that sentence
+describing a binary which does not have it. *Somewhere*, not *in the chapter the
+entry names*: move a sentence to another chapter in the same change that deletes
+the message it quotes, and the entry's own chapter has indeed stopped quoting it
+while the assertion is alive and false in its new home.
+
+Where the recorded source no longer carries the quotation but some other
+shipped source does, the report names that source — it cannot tell a reworded
+message from an unrelated string that happens to share the words, and that is
+the one case only a reader can settle. `-check` stops there. The writer does
+not stop, because rewording a literal around a quotation is an ordinary edit and
+refusing it would put the scary warning on the common path; it names every entry
+it re-anchors and writes, which is what makes that judgement reviewable in the
+manifest diff instead of invisible in it.
+
+The writer enforces the order this section asks for. `go run
+./tools/docclaims-sync` refuses to write while a chapter still quotes a message
+that stopped shipping, naming each one, so the regeneration that would erase
+that evidence cannot happen in passing on the way to fixing something else.
+
+The check is one-directional and narrow on purpose. Every literal the manifest
+records must still ship; no chapter is ever required to quote any particular
+string, so prose that never quoted code needs no allowlist and adds no upkeep.
+Literals are all it reads: whether `file.go:12-33` still brackets the
+declaration its sentence names is a different question over a different corpus
+(ticket `links-docs-gwlf`), and whether a chapter's claim about a type's shape
+or a command's exit code still holds is a third that no gate here answers yet.
+A green run means the quoted messages still exist, and nothing more.
+
 ## Issue tracking — this repo uses `lit`
 
 Work is tracked with `lit`, not GitHub Issues. After cloning and building, run:

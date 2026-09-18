@@ -1,0 +1,214 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/docclaims"
+)
+
+// stopped is the drift that regenerating would erase: a message the
+// specification still quotes that nothing in the product carries.
+func stopped() docclaims.Comparison {
+	return docclaims.Comparison{Drifted: []docclaims.Drift{{
+		Claim: docclaims.Claim{Doc: "06-issue-commands.md", Text: "on your path", Src: "blocked on %s (unclaimed, on your path)"},
+		Kind:  docclaims.Stopped,
+	}}}
+}
+
+// TestWriteRefusesToEraseAStoppedMessage covers the one action that can defeat
+// this gate. Every other report compares the manifest against the tree; the
+// write path did not, so a contributor regenerating for a legitimate reason
+// took an unrelated stopped message with them and left every check green.
+func TestWriteRefusesToEraseAStoppedMessage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "manifest_gen.go")
+	err := write(path, []docclaims.Claim{{Doc: "d.md", Text: "some text", Src: "some text"}}, stopped())
+	if err == nil {
+		t.Fatal("write() regenerated over a message that stopped shipping; the specification is now false and every check is green")
+	}
+	if _, statErr := os.Stat(path); statErr == nil {
+		t.Error("write() refused but wrote the file anyway")
+	}
+	if !strings.Contains(err.Error(), "refusing to write") {
+		t.Errorf("write() error = %q, want it to say it refused", err)
+	}
+}
+
+// TestWriteRecordsACleanDerivation is the other side: the refusal must not be
+// so broad that the ordinary regeneration stops working.
+func TestWriteRecordsACleanDerivation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "manifest_gen.go")
+	claims := []docclaims.Claim{{Doc: "d.md", Text: "some text", Src: "some text"}}
+	if err := write(path, claims, docclaims.Comparison{}); err != nil {
+		t.Fatalf("write() on a clean comparison: %v", err)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading what write() produced: %v", err)
+	}
+	if !strings.Contains(string(body), `Text: "some text"`) {
+		t.Error("write() produced a manifest without the derived entry")
+	}
+}
+
+// TestTheExitLineCountsWhatDiffers covers a summary that contradicted the lines
+// above it. One chapter dropping a quotation while another adds one leaves both
+// totals equal, and the old line reported "committed 1102 quotations, the tree
+// yields 1102" as evidence of a difference.
+func TestTheExitLineCountsWhatDiffers(t *testing.T) {
+	err := verify(docclaims.Comparison{
+		Drifted: []docclaims.Drift{{
+			Claim: docclaims.Claim{Doc: "a.md", Text: "one message", Src: "one message"},
+			Kind:  docclaims.QuoteDropped,
+		}},
+		Added: []docclaims.Claim{{Doc: "b.md", Text: "another message", Src: "another message"}},
+	})
+	if err == nil {
+		t.Fatal("verify() accepted a manifest that disagrees with the tree")
+	}
+	if strings.Contains(err.Error(), "the tree yields 0") || !strings.Contains(err.Error(), "1 recorded quotation(s)") {
+		t.Errorf("verify() error = %q, want it to count what differs rather than state two totals", err)
+	}
+}
+
+// TestWriteReportsAReanchorAndStillWrites pins the branch between the other
+// two: a re-anchor is the ordinary edit, so it is reported and then written,
+// never refused. The distinction is the whole reason Stopped is a separate
+// kind, and nothing held it — a refusal widened to cover AnchorMoved would
+// have broken the prescribed workflow with both of the other tests still
+// green.
+//
+// It also pins the order. The report claims an action already taken, so it
+// must follow the write that takes it.
+func TestWriteReportsAReanchorAndStillWrites(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "manifest_gen.go")
+	claims := []docclaims.Claim{{Doc: "d.md", Text: "some text", Src: "now inside a longer literal saying some text"}}
+	reanchored := docclaims.Comparison{Drifted: []docclaims.Drift{{
+		Claim: docclaims.Claim{Doc: "d.md", Text: "some text", Src: "some text"},
+		Kind:  docclaims.AnchorMoved,
+		Now:   "now inside a longer literal saying some text",
+	}}}
+	if err := write(path, claims, reanchored); err != nil {
+		t.Fatalf("write() refused a re-anchor; the ordinary edit is now unprescribable: %v", err)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("write() reported a re-anchor but produced no manifest: %v", err)
+	}
+	if !strings.Contains(string(body), `Src: "now inside a longer literal saying some text"`) {
+		t.Error("write() wrote a manifest that did not carry the re-anchored source")
+	}
+}
+
+// TestAReanchorReportDoesNotDumpAWholeLiteral covers a report that buried its
+// own subject. A Go-literal handle is the entire literal the words were found
+// inside, which reaches kilobytes in this corpus, and the writer printed it
+// unedited while Explain truncated the same value for exactly that reason.
+func TestAReanchorReportDoesNotDumpAWholeLiteral(t *testing.T) {
+	huge := "a shipped literal that begins here " + strings.Repeat("x", 4000)
+	d := docclaims.Drift{
+		Claim: docclaims.Claim{Doc: "d.md", Text: "begins here", Src: "begins here"},
+		Kind:  docclaims.AnchorMoved,
+		Now:   huge,
+	}
+	brief := d.NowBrief()
+	if len(brief) > 200 {
+		t.Errorf("NowBrief() returned %d bytes; a report line carrying it buries the sentence it is about", len(brief))
+	}
+	if !strings.Contains(d.Explain(), brief) {
+		t.Error("Explain() and the writer's report no longer show the same shortened handle")
+	}
+}
+
+// TestVerifyGivesEachCaseItsOwnRemedy covers the branch that decides what a
+// -check failure tells a contributor to do. Only the generic stale-manifest
+// fallback was exercised, so a swapped case order or an inverted condition
+// would have handed a contributor the wrong instruction with the suite green
+// — and the two instructions are opposites. One says the words still ship and
+// a reader should confirm the rewording; the other says nothing ships them and
+// regenerating destroys the record that the specification went false.
+//
+// Stopped is tested first here for the same reason write() tests it first: it
+// is the case that must win when both are present.
+func TestVerifyGivesEachCaseItsOwnRemedy(t *testing.T) {
+	drift := func(kind docclaims.DriftKind) docclaims.Comparison {
+		return docclaims.Comparison{Drifted: []docclaims.Drift{{
+			Claim:    docclaims.Claim{Doc: "d.md", Text: "a message", Src: "a message"},
+			Kind:     kind,
+			Now:      "a longer literal saying a message",
+			QuotedBy: []string{"d.md"},
+		}}}
+	}
+	for _, tc := range []struct {
+		name string
+		cmp  docclaims.Comparison
+		want string
+	}{
+		{"a stopped message warns against regenerating", drift(docclaims.Stopped), "Regenerating would drop them"},
+		{"a re-anchor asks a reader to confirm", drift(docclaims.AnchorMoved), "the same message reworded"},
+		{"anything else is an ordinary stale manifest", drift(docclaims.QuoteDropped), "manifest is stale"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := verify(tc.cmp)
+			if err == nil {
+				t.Fatal("verify() accepted a manifest that disagrees with the tree")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("verify() = %q, want it to carry %q — this case's remedy is not the one a contributor is handed", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestVerifyPrefersTheDestructiveRemedyWhenBothApply pins the precedence. A
+// comparison carrying both kinds must report the stopped message, because
+// "confirm the rewording and regenerate" applied to a stopped message is the
+// instruction that erases it.
+func TestVerifyPrefersTheDestructiveRemedyWhenBothApply(t *testing.T) {
+	both := docclaims.Comparison{Drifted: []docclaims.Drift{
+		{Claim: docclaims.Claim{Doc: "a.md", Text: "reworded message", Src: "reworded message"}, Kind: docclaims.AnchorMoved, Now: "a longer literal saying reworded message"},
+		{Claim: docclaims.Claim{Doc: "b.md", Text: "gone message", Src: "gone message"}, Kind: docclaims.Stopped, QuotedBy: []string{"b.md"}},
+	}}
+	err := verify(both)
+	if err == nil {
+		t.Fatal("verify() accepted a manifest carrying a stopped message")
+	}
+	if !strings.Contains(err.Error(), "Regenerating would drop them") {
+		t.Errorf("verify() = %q, want the stopped remedy to win; the re-anchor remedy tells a contributor to regenerate, which erases the stopped entry", err)
+	}
+	// Winning the branch is not the whole of it: the line that wins still has
+	// to say it speaks for one of the two entries printed above it, or a
+	// reader takes "fix the code or the chapter" as covering the re-anchor too.
+	if !strings.Contains(err.Error(), "1 of 2 reported entry(ies)") {
+		t.Errorf("verify() = %q, want the stopped remedy to scope its count to the entries it covers", err)
+	}
+}
+
+// TestARemedyLineSaysHowMuchOfTheReportItCovers pins the scope of the two
+// remedy lines. Each covers a subset of what was printed above it, and neither
+// number is a total — a comparison holding one re-anchor beside one quotation
+// the prose dropped printed two lines and then a bare "1", under an
+// instruction to confirm each of them was a rewording. One of them was not,
+// and the reader following that instruction regenerates over an entry nobody
+// asked them to look at.
+func TestARemedyLineSaysHowMuchOfTheReportItCovers(t *testing.T) {
+	mixed := docclaims.Comparison{Drifted: []docclaims.Drift{
+		{Claim: docclaims.Claim{Doc: "a.md", Text: "reworded message", Src: "reworded message"}, Kind: docclaims.AnchorMoved, Now: "a longer literal saying reworded message"},
+		{Claim: docclaims.Claim{Doc: "b.md", Text: "unquoted message", Src: "unquoted message"}, Kind: docclaims.QuoteDropped},
+	}}
+	err := verify(mixed)
+	if err == nil {
+		t.Fatal("verify() accepted a manifest that disagrees with the tree")
+	}
+	if !strings.Contains(err.Error(), "1 of 2 reported entry(ies)") {
+		t.Errorf("verify() = %q, want the re-anchor remedy to say it covers 1 of the 2 entries reported; a bare count reads as a total and sends a reader to confirm a rewording that is not one", err)
+	}
+	// The same line over an unmixed comparison still has to say what it covers,
+	// or the scope is only correct by accident of there being one kind present.
+	only := docclaims.Comparison{Drifted: []docclaims.Drift{mixed.Drifted[0]}}
+	if err := verify(only); err == nil || !strings.Contains(err.Error(), "1 of 1 reported entry(ies)") {
+		t.Errorf("verify() on a lone re-anchor = %v, want it to scope its count the same way", err)
+	}
+}
