@@ -218,7 +218,7 @@ func bearerNames(files map[string]*ast.File) (fields, locals, values []string) {
 
 // producesActionName reports whether e reaches an ActionName: a selector ending
 // in a field typed ActionName (`w.action`), or Name() called on a value declared
-// as an Action (`action.Name()`).
+// as an Action (`action.Name()`, and equally `w.action.Name()`).
 func producesActionName(e ast.Expr, fields, locals, values map[string]bool) bool {
 	switch x := e.(type) {
 	case *ast.SelectorExpr:
@@ -230,8 +230,19 @@ func producesActionName(e ast.Expr, fields, locals, values map[string]bool) bool
 		if !ok || sel.Sel.Name != "Name" {
 			return false
 		}
-		recv, ok := sel.X.(*ast.Ident)
-		return ok && values[recv.Name]
+		// The receiver is whatever denotes the Action, and it is a field as
+		// often as it is a bare name: an action stashed at a plan site and read
+		// back at the write site is the shape that beat two hand sweeps, and
+		// requiring a bare identifier here would let exactly that shape past.
+		// [LAW:dataflow-not-control-flow] the question is where the value came
+		// from, not how the call happens to be spelled.
+		switch recv := sel.X.(type) {
+		case *ast.Ident:
+			return values[recv.Name]
+		case *ast.SelectorExpr:
+			return values[recv.Sel.Name]
+		}
+		return false
 	}
 	return false
 }
