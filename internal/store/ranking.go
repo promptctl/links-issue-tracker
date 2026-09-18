@@ -196,9 +196,9 @@ func firstInFrameBoundsTx(ctx context.Context, tx *sql.Tx, f storage.Frame, movi
 	// while children inside the epics still hold keys, and the stack was then
 	// handed rank.Initial on top of one of them. [LAW:no-silent-failure]
 	//
-	// A mover holding the last key anchors the pair on a key it is about to
-	// vacate, which is harmless — the key placed past the workspace's maximum
-	// is above every key that stays.
+	// lastRank IS that maximum, so the far-side read below can never return a
+	// row: moving is not passed to it because there is nothing it could
+	// exclude, and a mover holding that key is bounded past it either way.
 	lastRank, err := workspaceEdgeRankTx(ctx, tx, storage.TopLevel, bottomEdge)
 	if err != nil {
 		return "", "", err
@@ -206,7 +206,7 @@ func firstInFrameBoundsTx(ctx context.Context, tx *sql.Tx, f storage.Frame, movi
 	if lastRank == "" {
 		return "", "", nil
 	}
-	return bottomEdge.roomBesideTx(ctx, tx, lastRank, moving...)
+	return bottomEdge.roomBesideTx(ctx, tx, lastRank)
 }
 
 // filingBoundsTx is the pair a create's key is placed between: the population

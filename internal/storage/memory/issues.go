@@ -142,7 +142,11 @@ func (e *Engine) place(id string, f storage.Frame, placement storage.RankPlaceme
 		// which is the opposite of what --top asked for. The SQL engine says
 		// the same thing in keys: the container's own key is the one an empty
 		// frame offers to sit beside. [LAW:one-source-of-truth]
-		e.insertAt(e.slotInsideContainer(f), id)
+		slot, err := e.slotInsideContainer(f)
+		if err != nil {
+			return err
+		}
+		e.insertAt(slot, id)
 		return nil
 	}
 	e.insertAt(edge.positionIn(positions), id)
@@ -155,15 +159,22 @@ func (e *Engine) place(id string, f storage.Frame, placement storage.RankPlaceme
 // The top level has no such issue, and it needs none — it is empty only when
 // the whole order is, every issue's ancestry ending at a top-level one — so
 // the answer there is the only slot an empty order has.
-func (e *Engine) slotInsideContainer(f storage.Frame) int {
+func (e *Engine) slotInsideContainer(f storage.Frame) (int, error) {
 	if f == storage.TopLevel {
-		return 0
+		return 0, nil
 	}
 	container := slices.Index(e.order, string(f))
+	// A frame names a live issue — filingFrame returns a container only when
+	// e.live says so — and every live issue holds a position. A frame missing
+	// from the order is those two facts having come apart, which is a
+	// resolution bug and is said out loud: appending at the tail instead would
+	// file the issue at the bottom of the backlog and call it a placement, the
+	// silent clamp insertAt refuses for the same reason.
+	// [LAW:no-silent-failure] [LAW:no-defensive-null-guards]
 	if container < 0 {
-		return len(e.order)
+		return 0, fmt.Errorf("frame %s holds no position in the order; an issue cannot be filed inside one that is not there", f)
 	}
-	return container + 1
+	return container + 1, nil
 }
 
 // mintID names a new issue. Top-level and child ids differ only in the
