@@ -1,6 +1,8 @@
 package docclaims
 
 import (
+	"go/parser"
+	"go/token"
 	"os"
 	"slices"
 	"strings"
@@ -269,6 +271,63 @@ func TestSpansInReadsBothQuotingShapes(t *testing.T) {
 // regeneration would read as an ordinary "entries left the manifest" diff —
 // which CONTRIBUTING tells a reviewer means a sentence stopped describing the
 // binary.
+// TestACollidingHandleIsRefusedRatherThanOverwritten covers the corpus holding
+// two kinds of source in one key space: a Go literal keyed by its own text, an
+// embedded asset keyed by its path. A literal is collected only when it
+// contains a space and an embed pattern may be quoted to contain one, so the
+// spaces are not disjoint and the later write would silently win — leaving Src
+// naming a handle that no longer identifies one body.
+func TestACollidingHandleIsRefusedRatherThanOverwritten(t *testing.T) {
+	// The asset's handle is its path from the module root, which is what a
+	// colliding literal has to equal.
+	const asset = "internal/cli/helptext/with space.txt"
+	fsys := fstest.MapFS{
+		"go.mod":          {Data: []byte("module example.test/lit\n")},
+		"cmd/lit/main.go": {Data: []byte("package main\n\nimport _ \"example.test/lit/internal/cli\"\n\nfunc main() {}\n")},
+		// The literal IS the asset's path, which is the collision.
+		"internal/cli/cli.go": {Data: []byte("package cli\n\nimport _ \"embed\"\n\n//go:embed \"helptext/with space.txt\"\nvar help string\n\nvar A = \"" + asset + "\"\n")},
+		asset:                 {Data: []byte("some help body\n")},
+	}
+	_, err := ShippedText(fsys)
+	if err == nil {
+		t.Fatal("a colliding handle was accepted; one source silently replaced the other and Src names neither")
+	}
+	if !strings.Contains(err.Error(), "with space.txt") {
+		t.Errorf("the refusal does not name the colliding handle, so nobody can act on it: %v", err)
+	}
+}
+
+// TestContradictoryLegacyLinesExcludeTheFile covers the AND across legacy
+// lines. Each line here is satisfiable alone, so a per-line test keeps a file
+// that no build compiles and lets its literals compete to anchor a chapter.
+func TestContradictoryLegacyLinesExcludeTheFile(t *testing.T) {
+	src := "// +build linux\n// +build !linux\n\npackage cli\n\nvar A = \"contradictory build message\"\n"
+	file, err := parser.ParseFile(token.NewFileSet(), "a.go", src, parser.ParseComments)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !excludedFromEveryBuild(file) {
+		t.Error("a file whose legacy constraints contradict each other counted as product code; nothing compiles it")
+	}
+}
+
+// TestAnInlineCodeSpanIsNotAFence pins the CommonMark rule that a backtick
+// fence's info string may not contain a backtick. Without it a prose line
+// opening with an inline code span opens a fence nothing closes, and every
+// claim below it leaves the manifest looking like an ordinary deletion.
+func TestAnInlineCodeSpanIsNotAFence(t *testing.T) {
+	doc := "intro\n" +
+		"```lit next``` prints the pick\n" +
+		"and `a quoted message here` follows\n"
+	spans, err := spansIn(doc)
+	if err != nil {
+		t.Fatalf("a line opening with an inline code span was read as a fence: %v", err)
+	}
+	if !slices.Contains(spans, "a quoted message here") {
+		t.Errorf("the span below the inline code span was swallowed as fenced: %q", spans)
+	}
+}
+
 func TestUnclosedFenceIsAnError(t *testing.T) {
 	if _, err := spansIn("intro\n```\nnever closed\n"); err == nil {
 		t.Fatal("an unclosed fence was accepted; every claim below it would vanish silently")

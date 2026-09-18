@@ -36,8 +36,6 @@ import (
 	"go/build/constraint"
 	"go/parser"
 	"go/token"
-
-	"golang.org/x/mod/modfile"
 	"io/fs"
 	"path"
 	"regexp"
@@ -46,6 +44,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"golang.org/x/mod/modfile"
 )
 
 // minClaimLen and the multi-word requirement are what separate a quoted message
@@ -115,6 +115,26 @@ type Claim struct {
 // keys its path. One map rather than two, so every caller asks the same
 // question of both kinds. [LAW:no-mode-explosion]
 type Corpus map[string]string
+
+// add records one source under the handle a claim will anchor to, refusing a
+// handle that already stands for different text.
+//
+// The corpus holds two kinds of source in one key space: a Go literal, whose
+// handle is the text itself, and an embedded asset, whose handle is its path.
+// Nothing makes those spaces disjoint — a literal is collected only when it
+// contains a space, and embedPatterns accepts quoted patterns that contain one
+// — so an asset path can equal a literal. Overwriting silently would leave Src
+// naming a handle that no longer identifies one body, and `stillHolds` would
+// then test a claim against the wrong text while `tightest` offered the wrong
+// evidence. No collision exists today; this is what makes that a checked fact
+// rather than an assumed one. [LAW:no-silent-failure]
+func (c Corpus) add(handle, body string) error {
+	if was, ok := c[handle]; ok && was != body {
+		return fmt.Errorf("two shipped sources share the handle %q, so a claim anchored to it names no single body: rename the embedded asset whose path collides with the literal", ellipsis(handle, 80))
+	}
+	c[handle] = body
+	return nil
+}
 
 // ShippedText collects the text that reaches a user from the product: every
 // multi-word Go string literal, and the contents of every embedded text asset.
@@ -415,11 +435,19 @@ func excludedFromEveryBuild(file *ast.File) bool {
 	// // +build form is still excluded by it. Reading only the modern spelling
 	// walks a hand-run generator's imports and collects its literals — text no
 	// binary contains, which then competes to anchor a chapter's quotation.
-	legacy := false
+	// AND-ed as one expression rather than tested a line at a time. Asking
+	// whether any single line is unsatisfiable misses the file that no build
+	// compiles because its lines contradict each other — `// +build linux`
+	// over `// +build !linux` — where each line alone is perfectly
+	// satisfiable. Such a file would stay in the corpus and its literals would
+	// compete to anchor a chapter's quotation, which is the leak class this
+	// package exists to close.
+	var legacy constraint.Expr
+scan:
 	for _, group := range file.Comments {
 		for _, c := range group.List {
 			if c.Pos() > file.Package {
-				return legacy
+				break scan
 			}
 			// constraint.Parse decides what a constraint line is, and
 			// neverBuilt decides whether anything satisfies it.
@@ -429,13 +457,19 @@ func excludedFromEveryBuild(file *ast.File) bool {
 			case constraint.IsGoBuild(c.Text):
 				return neverBuilt(c.Text)
 			case constraint.IsPlusBuild(c.Text):
-				// Legacy lines are AND-ed, so one unsatisfiable line excludes
-				// the file however the others read.
-				legacy = legacy || neverBuilt(c.Text)
+				expr, err := constraint.Parse(c.Text)
+				if err != nil {
+					continue
+				}
+				if legacy == nil {
+					legacy = expr
+				} else {
+					legacy = &constraint.AndExpr{X: legacy, Y: expr}
+				}
 			}
 		}
 	}
-	return legacy
+	return legacy != nil && unsatisfiable(legacy)
 }
 
 // maxFreeTags bounds the assignment search in neverBuilt. A build constraint
@@ -470,6 +504,13 @@ func neverBuilt(line string) bool {
 	if err != nil {
 		return false
 	}
+	return unsatisfiable(expr)
+}
+
+// unsatisfiable reports whether no assignment of build tags satisfies expr,
+// with `ignore` pinned false. Separate from neverBuilt because the legacy
+// `// +build` path holds an expression it AND-ed together rather than a line.
+func unsatisfiable(expr constraint.Expr) bool {
 	free, walked := freeTags(expr)
 	// An expression shape the walk does not know, or more tags than any
 	// hand-written constraint carries, leaves the assignments unenumerable.
@@ -567,6 +608,7 @@ func collectFile(fsys fs.FS, name string, src []byte, into Corpus) error {
 	if excludedFromEveryBuild(file) {
 		return nil
 	}
+	var collision error
 	ast.Inspect(file, func(n ast.Node) bool {
 		lit, ok := n.(*ast.BasicLit)
 		if !ok || lit.Kind != token.STRING {
@@ -580,10 +622,16 @@ func collectFile(fsys fs.FS, name string, src []byte, into Corpus) error {
 			return true
 		}
 		if strings.Contains(text, " ") {
-			into[text] = text
+			if err := into.add(text, text); err != nil {
+				collision = err
+				return false
+			}
 		}
 		return true
 	})
+	if collision != nil {
+		return collision
+	}
 	return collectEmbeds(fsys, path.Dir(name), file, into)
 }
 
@@ -782,8 +830,7 @@ func addAsset(fsys fs.FS, name string, into Corpus) error {
 	if !utf8.Valid(data) {
 		return nil
 	}
-	into[name] = string(data)
-	return nil
+	return into.add(name, string(data))
 }
 
 // DocClaims collects every backticked span in the given markdown files that is
@@ -882,9 +929,22 @@ func fenceMarker(trimmed string) string {
 		for n < len(trimmed) && trimmed[n] == c {
 			n++
 		}
-		if n >= 3 {
-			return trimmed[:n]
+		if n < 3 {
+			continue
 		}
+		// CommonMark: a backtick fence's info string may not contain a
+		// backtick. That rule is what separates a fence from a prose line
+		// opening with an inline code span — ```lit next``` prints … —
+		// and without it such a line opens a fence that nothing closes,
+		// so stripFences either blanks real prose to the next lone fence
+		// line, dropping its claims as an ordinary "entries left the
+		// manifest" diff, or raises an unclosed-fence error naming a line
+		// that is not one. Both are the silent failure closesFence exists
+		// to prevent.
+		if c == '`' && strings.ContainsRune(trimmed[n:], '`') {
+			return ""
+		}
+		return trimmed[:n]
 	}
 	return ""
 }
