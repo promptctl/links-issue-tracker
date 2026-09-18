@@ -25,7 +25,7 @@ type initReport struct {
 }
 
 func initLeaf() wsLeaf {
-	fs := newCobraFlagSet("init")
+	fs := newCobraFlagSet("init").Detail(helpText("init"))
 	skipHooks := fs.Bool("skip-hooks", false, "Skip git hook installation")
 	skipAgents := fs.Bool("skip-agents", false, "Skip AGENTS.md integration update")
 	return wsLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {

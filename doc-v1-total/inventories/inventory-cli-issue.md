@@ -55,9 +55,11 @@ into* one of those, the call and its observable effect are recorded here.
 - `buildPassthroughCommand` (`register.go:409-426`) creates each cobra command with
   `DisableFlagParsing: true` and `Args: cobra.ArbitraryArgs`. **Consequence:** cobra
   does not parse any per-command flags; each handler parses its own argv slice.
-  `Long` defaults to `agentCommandHelp` = `"Agent-facing operational command."`
-  when the spec sets none (`register.go:410-413`, constant at `cli.go:32`).
-  `humanBootstrapHelp` = `"Human bootstrap command. Run once per repository/worktree setup before autonomous agent operations."` (`cli.go:31`), used only by `init`.
+  `CommandSpec` carries no `Long`: because cobra parses no flags here, it cannot
+  render a command's page either, so `lit help <cmd>` is rewritten in argv to
+  `lit <cmd> --help` (`rewriteHelpCommand`, `cli.go`) and the leaf renders both the
+  description and the real flag table. Descriptions are embedded under
+  `internal/cli/helptext/`; `init`'s is `helptext/init.txt`.
 - Help groups, in order (`register.go:61-76`):
   `bootstrap` "Human Bootstrap", `operations` "Agent Operations",
   `structure` "Dependencies & Structure", `data` "Sync & Data",
@@ -1665,7 +1667,7 @@ mechanism `bulk import` duplicated" (`register.go:441`). Because the row is
   create/update file"), hidden `--by` (`cli.go:1539-1540`).
 - Refusals: blank `--path` (after trim) or `fs.NArg() != 0` →
   `UsageError{importUsage}` → exit 2. `importUsage` verbatim:
-  `"usage: lit import --path <tree-spec.json | bulk-file.yaml> (see docs/cli-reference.md for both formats)"`
+  `"usage: lit import --path <tree-spec.json | bulk-file.yaml> (run `lit import --help` for both formats)"`
   (`cli.go:1529`, `cli.go:1544-1549`).
 - Reads the file; a read error → `fmt.Errorf("read import spec: %w", err)` → exit 1
   (`cli.go:1550-1553`).

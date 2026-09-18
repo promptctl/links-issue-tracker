@@ -40,7 +40,7 @@ Error rendering (`internal/cli/error_output.go:17-46`): stderr gets `error (code
 
 ### Command registry
 
-Commands are data, not imperative registration: `CommandSpec{Name, Summary, Long, GroupID, Run, Subcommands, Hidden}` (`internal/cli/register.go:17-52`). `Hidden` keeps a command dispatchable but out of `--help` and completion. Seven help groups render in a fixed order: Human Bootstrap, Agent Operations, Dependencies & Structure, Sync & Data, Setup & Maintenance, Issue Retention, Guidance & Tooling (`register.go:59-75`). Two standard blurbs distinguish the audiences: "Human bootstrap command…" and "Agent-facing operational command." (`cli.go:30-33`).
+Commands are data, not imperative registration: `CommandSpec{Name, Summary, GroupID, Run, Subcommands, Hidden, Retired}` (`internal/cli/register.go`). `Hidden` keeps a command dispatchable but out of `--help` and completion. Seven help groups render in a fixed order: Human Bootstrap, Agent Operations, Dependencies & Structure, Sync & Data, Setup & Maintenance, Issue Retention, Guidance & Tooling (`register.go`). A command's long-form description is not a registry field: every command sets `DisableFlagParsing`, so its help page is rendered by its own leaf, from text embedded under `internal/cli/helptext/`.
 
 ## Environment variables
 

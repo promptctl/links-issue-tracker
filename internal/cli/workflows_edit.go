@@ -187,7 +187,7 @@ func scaffoldFilenameSlug(input string) string {
 
 // classifyWorkflowPoint turns a `lit workflows edit` target that matched no
 // loaded definition into the activation dimension it names, in one
-// deterministic order documented in docs/workflows.md:
+// deterministic order, the one `lit workflows --help` documents:
 //
 //  1. Explicit `<state>:enter` / `<state>:exit` — states are open strings by
 //     design, so this needs no validation against a known set.

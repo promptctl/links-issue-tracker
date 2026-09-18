@@ -48,7 +48,7 @@ data — described as assets, not as documentation of behavior).
 
 | Command | Group | Wrapper | Access | Line |
 |---|---|---|---|---|
-| `init` | bootstrap | `wsCmd(runInit)`; `Long: humanBootstrapHelp` | workspace | `register.go:274-275` |
+| `init` | bootstrap | `wsCmd(runInit)`; description from `helptext/init.txt` | workspace | `register.go:274-275` |
 | `quickstart` | guidance | `wsCmd(runQuickstart)` | workspace | `register.go:276-277` |
 | `completion` | guidance | `runCompletion` | none | `register.go:280-281` |
 | `version` | guidance | `runVersion` | none | `register.go:282-283` |

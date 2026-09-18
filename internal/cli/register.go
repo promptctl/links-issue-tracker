@@ -26,7 +26,6 @@ const allPositionals = math.MaxInt
 type CommandSpec struct {
 	Name    string
 	Summary string
-	Long    string
 	GroupID string
 	Run     CommandRunner
 	// Subcommands is the visible first-argument tree for a family command (nil
@@ -455,7 +454,7 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 	bulkSubcommands := nestUnder(bulkFamily.visibleSubcommands(), "label", bulkLabelFamily.visibleSubcommands())
 
 	return []CommandSpec{
-		{Name: "init", Summary: "Initialize links", Long: humanBootstrapHelp, GroupID: "bootstrap",
+		{Name: "init", Summary: "Initialize links", GroupID: "bootstrap",
 			Run: r.wsCmd(initLeaf)},
 		{Name: "quickstart", Summary: "Agent quickstart workflow", GroupID: "guidance",
 			Run: r.wsCmd(quickstartLeaf)},
@@ -581,17 +580,16 @@ func applyRegistry(root *cobra.Command, groups []GroupSpec, specs []CommandSpec)
 	}
 }
 
-// buildPassthroughCommand turns a spec row into a cobra command. The Long help
-// is read from the spec; commands without a Long fall back to agentCommandHelp.
+// buildPassthroughCommand turns a spec row into a cobra command. Short is the
+// one-line summary the root help's group listing shows; the command's own help
+// page is not cobra's to render — DisableFlagParsing hands `--help` straight to
+// spec.Run, whose leaf owns both the description and the real flag table, and
+// rewriteHelpCommand sends `lit help <cmd>` down that same path.
+// [LAW:single-enforcer]
 func buildPassthroughCommand(spec CommandSpec) *cobra.Command {
-	long := spec.Long
-	if long == "" {
-		long = agentCommandHelp
-	}
 	return &cobra.Command{
 		Use:                spec.Name,
 		Short:              spec.Summary,
-		Long:               long,
 		GroupID:            spec.GroupID,
 		Hidden:             spec.Hidden,
 		DisableFlagParsing: true,

@@ -50,7 +50,8 @@ func ScaffoldFresh(dimension string, liveLine string) []byte {
 	var b strings.Builder
 	b.WriteString("---\n")
 	b.WriteString("# Uncomment or add any of these activation dimensions; declared dimensions\n")
-	b.WriteString("# combine with AND, values within one dimension combine with OR — see docs/workflows.md.\n")
+	b.WriteString("# combine with AND, values within one dimension combine with OR.\n")
+	b.WriteString("# Run `lit workflows --help` for the full format and the event catalog.\n")
 	if dimension != "labels" {
 		b.WriteString("# labels: [needs-design, blocked]\n")
 	}

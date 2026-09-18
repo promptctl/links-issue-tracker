@@ -734,12 +734,13 @@ writes `workflows.ScaffoldFresh(dimension, liveLine)`, prints
 
 ### 8.3 Fresh-scaffold file content
 
-`ScaffoldFresh(dimension, liveLine)` (`internal/workflows/scaffold.go:49-71`) emits exactly:
+`ScaffoldFresh(dimension, liveLine)` (`internal/workflows/scaffold.go:49-72`) emits exactly:
 
 ```
 ---
 # Uncomment or add any of these activation dimensions; declared dimensions
-# combine with AND, values within one dimension combine with OR — see docs/workflows.md.
+# combine with AND, values within one dimension combine with OR.
+# Run `lit workflows --help` for the full format and the event catalog.
 # labels: [needs-design, blocked]                        ← omitted if dimension=="labels"
 # states: [open]                       # fires when the ticket ENTERS this state    ← omitted if dimension=="states"
 # states: [{name: closed, when: exit}] # fires when the ticket EXITS this state     ← omitted if dimension=="states"

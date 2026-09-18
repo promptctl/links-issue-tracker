@@ -26,17 +26,18 @@ import (
 	"github.com/spf13/pflag"
 )
 
-const (
-	humanBootstrapHelp = "Human bootstrap command. Run once per repository/worktree setup before autonomous agent operations."
-	agentCommandHelp   = "Agent-facing operational command."
-)
-
 func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string) error {
 	normalizedArgs, err := parseGlobalArgs(args)
 	if err != nil {
 		return err
 	}
 	root := newRootCommand(ctx, stdout, stderr)
+	// The help rewrite reads the registered command set, so it runs once the
+	// root exists rather than inside parseGlobalArgs, which precedes it.
+	normalizedArgs, err = rewriteHelpCommand(root, normalizedArgs)
+	if err != nil {
+		return err
+	}
 	root.SetArgs(normalizedArgs)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
@@ -52,7 +53,7 @@ func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 	// framing, no remediation, exit 0. [LAW:effects-at-boundaries]
 	var helpRequested HelpRequestedError
 	if errors.As(err, &helpRequested) {
-		_, printErr := fmt.Fprintln(stdout, helpRequested.Usage)
+		_, printErr := io.WriteString(stdout, helpRequested.Error())
 		return printErr
 	}
 	// A command starved by a co-resident store holder leaves a durable record
@@ -183,6 +184,44 @@ func resolveWorkspaceFromWD() (workspace.Info, error) {
 		return workspace.Info{}, err
 	}
 	return ws, nil
+}
+
+// rewriteHelpCommand turns `lit help <path...>` into `lit <path...> --help`, so
+// a command's help has exactly one renderer no matter which spelling the caller
+// reached for. Cobra's own help command renders a subcommand from its Long and
+// its cobra-level flag set, and every command here sets DisableFlagParsing and
+// declares its flags on its own leaf — so that path printed a description with
+// a flag table claiming `lit import` accepts only `--help`, while `lit import
+// --help` printed the real flags and no description. Two maps of one territory,
+// each missing the half the other had. [LAW:one-source-of-truth]
+//
+// Bare `lit help` still names no command, so it keeps reaching cobra's root
+// help — the one page cobra does render correctly, because the root is where
+// the group listing lives. A flag-shaped topic is cobra's business too.
+//
+// A topic naming no registered command is refused here rather than rewritten.
+// `lit nosuchcmd --help` is answered by cobra's root help at exit 0
+// (links-cli-yn14), so rewriting an unknown topic into that form would answer
+// "what is this command" with the full command list and call it success — an
+// answer-shaped non-answer. [LAW:no-silent-failure] the refusal is lit's own
+// typed error, which carries the exit code and the remediation cobra's bare
+// "Unknown help topic" never did.
+func rewriteHelpCommand(root *cobra.Command, args []string) ([]string, error) {
+	if len(args) < 2 || args[0] != "help" || strings.HasPrefix(args[1], "-") {
+		return args, nil
+	}
+	// Cobra adds its own `help` command lazily, inside ExecuteC, which has not
+	// run yet — so without this the registered set is missing the one command
+	// whose name the caller is most likely to type twice, and `lit help help`
+	// refused itself while advising the caller to run `lit help <command>`.
+	// InitDefaultHelpCmd is idempotent; ExecuteC calling it again is a no-op.
+	root.InitDefaultHelpCmd()
+	for _, registered := range root.Commands() {
+		if registered.Name() == args[1] {
+			return append(slices.Clone(args[1:]), "--help"), nil
+		}
+	}
+	return nil, UnknownCommandError{Command: args[1]}
 }
 
 func parseGlobalArgs(args []string) ([]string, error) {
@@ -1696,7 +1735,7 @@ func exportLeaf() appLeaf {
 
 // importUsage is shared by every usage error runImportTree can raise, so a
 // malformed invocation always points at the same two accepted shapes.
-const importUsage = "usage: lit import --path <tree-spec.json | bulk-file.yaml> (see docs/cli-reference.md for both formats)"
+const importUsage = "usage: lit import --path <tree-spec.json | bulk-file.yaml> (run `lit import --help` for both formats)"
 
 // runImportTree reads --path and dispatches on its extension to one of two
 // bulk-ingest formats sharing this one command surface (never two competing
@@ -1705,7 +1744,7 @@ const importUsage = "usage: lit import --path <tree-spec.json | bulk-file.yaml> 
 // (runImportBulk). [LAW:dataflow-not-control-flow] the format is a value —
 // the file's own extension — not a second flag or mode.
 func importTreeLeaf() appLeaf {
-	fs := newCobraFlagSet("import")
+	fs := newCobraFlagSet("import").Detail(helpText("import"))
 	path := fs.String("path", "", "Path to a JSON tree-spec file or a YAML bulk create/update file")
 	resolveActor := registerActor(fs)
 	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
@@ -1749,9 +1788,9 @@ func importTreeLeaf() appLeaf {
 // JSON shape (see storage.ImportTreeSpec):
 //
 //	[
-//	  {"local_id": "epic-x", "title": "Build X", "type": "epic", "topic": "x", "priority": 0},
-//	  {"local_id": "task-1", "parent": "epic-x", "title": "Design", "type": "task", "topic": "x", "priority": 0},
-//	  {"local_id": "task-2", "parent": "epic-x", "depends_on": ["task-1"], "title": "Build", "type": "task", "topic": "x", "priority": 0}
+//	  {"local_id": "epic-x", "title": "Build X", "type": "epic", "topic": "exporter", "priority": 0},
+//	  {"local_id": "task-1", "parent": "epic-x", "title": "Design", "type": "task", "topic": "exporter", "priority": 0},
+//	  {"local_id": "task-2", "parent": "epic-x", "depends_on": ["task-1"], "title": "Build", "type": "task", "topic": "exporter", "priority": 0}
 //	]
 func runImportTreeJSON(ctx context.Context, stdout io.Writer, ap *app.App, data []byte) error {
 	specs, err := storage.ParseImportTreeSpecs(data)

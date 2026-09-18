@@ -1,0 +1,117 @@
+Bulk-create or update issues from a file. The file's extension picks the
+format: .yaml or .yml is the YAML bulk format, which creates or updates;
+any other extension is the JSON tree spec, which only creates.
+
+Both formats reject any key they do not name, so a misspelled field fails
+the whole file rather than being dropped. Structure is checked before
+anything is written — required keys, duplicate ids, unresolvable
+references, cycles, and (in a JSON file) type and priority. The remaining
+value rules below are enforced as each issue is created, so a bad topic
+or label fails partway through and the creates already made are rolled
+back. See Results for what rollback covers.
+
+JSON tree spec (creates only)
+
+  An array of records, one per issue:
+
+    [
+      {"local_id": "epic-x", "title": "Build the exporter",
+       "type": "epic", "topic": "exporter"},
+      {"local_id": "design", "parent": "epic-x", "title": "Design it",
+       "type": "task", "topic": "exporter", "priority": 1},
+      {"local_id": "build", "parent": "epic-x", "depends_on": ["design"],
+       "title": "Build it", "type": "task", "topic": "exporter"}
+    ]
+
+  Keys: local_id, title, type, topic, priority, description, prompt,
+  assignee, labels, parent, depends_on. Anything after the closing
+  bracket is an error.
+
+  local_id is required on every record: it is how parent and depends_on
+  name another record before real IDs exist. Those two may only name a
+  local_id in this same file — a real, already-existing issue ID is
+  rejected here; use the YAML format to hang new issues off issues that
+  already exist.
+
+  title, type, and topic are required on every record. priority may be
+  omitted and then defaults to 0.
+
+YAML bulk file (creates and updates)
+
+  One issue per YAML document, documents separated by ---. The file is a
+  stream of documents, not a list: a top-level YAML sequence is rejected.
+
+    local_id: epic-x
+    title: Build the exporter
+    type: epic
+    topic: exporter
+    ---
+    title: Design it
+    type: task
+    topic: exporter
+    parent: epic-x
+    ---
+    id: lit-exporter-7fq2
+    title: Build it, renamed
+    labels: [reviewed]
+    reason: retitled after review
+
+  id decides what a document does, and nothing else does. Absent, the
+  document creates. Present, it updates exactly that issue; an id
+  matching no existing issue is an error, never a create. One id may not
+  appear on two documents.
+
+  A create document requires title, type and topic exactly as a JSON
+  record does, and takes the same optional keys plus lane. local_id is
+  optional here (a create without one is reported under its new real ID).
+  parent and depends_on may name either a local_id in this file or the
+  real ID of an issue that already exists. reason is rejected on a
+  create: there is no prior value for it to annotate.
+
+  An update document must set at least one of title, description, prompt,
+  type, priority, assignee, labels, lane. A document carrying only id, or
+  only id and reason, has nothing to apply and is rejected; reason is
+  free text recorded on the change event, not itself a change.
+
+  Four keys are rejected outright on an update document, each belonging
+  to something else: topic (immutable — no command changes it after
+  create), local_id (create-only), parent (reparent with lit parent set),
+  depends_on (wire dependencies with lit dep add).
+
+Values both formats enforce
+
+  type is one of task, feature, bug, chore, epic.
+
+  priority is 0 (normal) or 1 (urgent). No other number is accepted.
+
+  topic is lowercased with runs of non-alphanumerics collapsed to a
+  single dash, and must be 3 to 30 characters after that, so a topic of
+  "x" fails.
+
+  labels are lowercased and deduplicated, and may not contain commas.
+
+  id, local_id, parent and depends_on values are matched literally:
+  leading or trailing whitespace in any of them is rejected, not trimmed.
+
+  A local_id may not be used twice in one file, a record may not name its
+  own local_id in its own depends_on, and parent/depends_on references
+  within the file may not form a cycle. A depends_on pointing at an issue
+  that already exists is also rejected if it would close a cycle in the
+  blocks graph.
+
+  A file with zero records or zero documents is an error.
+
+Results
+
+  Created issues land at the bottom of the ranked order. Output is the
+  number created and one "name -> real id" line each, where the name is
+  the local_id (or the new real ID when the document gave none), followed
+  for a YAML file by the number updated and their IDs.
+
+  On any failure, issues created earlier in the same run are rolled back
+  on a best-effort basis by deleting them; updates already applied are
+  not rolled back, since there is no prior state to restore. If the error
+  reports that rollback leaked IDs, run lit doctor.
+
+  A full-database export is a different shape than either format above;
+  load one with lit backup restore.

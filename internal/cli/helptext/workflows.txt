@@ -1,0 +1,150 @@
+Workflows are user-authored guidance lit injects into its own output at
+declared moments in the work lifecycle. One definition is a markdown file
+with YAML frontmatter: the frontmatter says when to fire, the body says what
+to inject. Nothing here is enforced — a definition only adds text to what a
+command already prints; it never blocks or gates anything.
+
+Where definitions live
+
+  A definition is any *.md file found recursively under a layer root. Three
+  layers, nearest first:
+
+    project    .lit/workflows/ in this repository (checked in, team-wide)
+    global     workflows/ under lit's config directory —
+               $XDG_CONFIG_HOME/links-issue-tracker/ when that is set,
+               otherwise ~/.config/links-issue-tracker/
+    embedded   defaults shipped inside the lit binary
+
+  The folder hierarchy under a root is arbitrary; the path carries no
+  activation meaning, only frontmatter decides when a definition fires.
+  Definitions resolve by id with the nearest layer winning outright: a
+  project file with the same id as a global or embedded one replaces it
+  whole, never field by field. An id defaults to the file's layer-relative
+  path with .md dropped and spaces turned to underscores, so the same
+  relative path at two layers overrides without declaring an id at all.
+  Within one layer a duplicate id keeps the first file in lexical order and
+  warns about the rest. Loading never fails a lit command: an unreadable or
+  malformed file becomes a warning instead.
+
+Format
+
+  A minimal, legal definition:
+
+    ---
+    id: done
+    name: Post-close capture reminder
+    events: [work_finished]
+    labels: [user-facing]
+    ---
+    Ticket <id> is closed. Capture what the next agent needs to know
+    before moving on.
+
+  Every key is optional. In the body, <id> is replaced with the acted-on
+  ticket's id when the moment has one. Unrecognized keys are tolerated, so
+  a file authored against a newer lit still loads here.
+
+Activation
+
+  Three dimensions decide when a definition fires.
+
+  labels   Fires when the acted-on ticket carries any listed label. Labels
+           are lowercased on both sides, so case never matters. A label
+           that no ticket could carry (one containing a comma) is dropped
+           with a warning rather than silently never matching.
+
+  states   Fires when the ticket enters or exits a listed state. Two
+           authored shapes, usable in one list:
+
+             states:
+               - open                        # fires ENTERING open
+               - {name: closed, when: exit}  # fires EXITING closed
+
+           A bare name means enter. State names are open strings, not a
+           closed enum: the built-in open, in_progress and closed and any
+           custom stage a project adopts are the same shape here. A
+           transition is exit-of-one plus enter-of-the-other; there is no
+           separate transition concept. A moment carrying no transition
+           never satisfies a state binding.
+
+  events   Fires when a listed semantic event is dispatched. Commands
+           dispatch events and definitions bind to events, never to
+           command names, so a command can be renamed without breaking an
+           authored definition. An event outside this binary's catalog
+           still loads — it may target a newer lit — but can never fire
+           here, and is reported as a warning.
+
+  Within one dimension the listed values are alternatives (OR). Across
+  dimensions, every dimension the definition declares must be satisfied
+  (AND) — labels plus events fires only on a ticket carrying one of those
+  labels at one of those events. A dimension left out entirely constrains
+  nothing. A definition declaring none of the three is inert: it loads and
+  is listed, but it can never fire, and lit workflows flags it under
+  Warnings.
+
+Event catalog
+
+  Every event lit can dispatch, and what dispatches it today:
+
+    show_backlog       lit backlog
+    next_pulled        lit next, when it has a ticket to hand back
+    show_ticket        lit show
+    work_started       lit start
+    work_finished      lit done
+    ticket_closed      lit close
+    ticket_reopened    lit open
+    ticket_created     lit new, lit followup
+    ticket_updated     lit update
+    comment_added      lit comment add
+
+The subcommands
+
+  Bare lit workflows prints the lifecycle spine — every catalog event; the
+  three built-in states plus any custom stage a loaded definition binds to,
+  each with its enter and exit sides; and every label a loaded definition
+  binds to — annotated with the definitions active at each point and the
+  layer each resolved from, then a Warnings section naming every file that
+  loaded but cannot fully fire: inert, unknown event, malformed
+  frontmatter, duplicate id.
+
+  show <id> prints one resolved definition: id, name, source layer, path,
+  its three activation dimensions, and its body.
+
+  edit <id-or-point> scaffolds a project-layer file and prints its path. It
+  resolves the argument two ways:
+
+    An existing definition's id — override it. A project-layer definition
+    already is the override, so edit just opens it; a global or embedded
+    one is copied verbatim into .lit/workflows/ at the same relative path,
+    ready to change.
+
+    Anything else is a lifecycle point with nothing bound there yet,
+    resolved in this order: <state>:enter or <state>:exit; a catalog event
+    name; one of open, in_progress or closed bare (meaning enter); anything
+    else, a label. The fresh file is scaffolded with every dimension shown
+    as a comment and the requested one live.
+
+  edit never overwrites — an occupied path fails with a conflict message,
+  so edit that file directly or pick another point. It always prints the
+  path, and additionally opens $EDITOR only when stdout is a terminal and
+  $EDITOR is set; an agent, a pipe or a script gets the path alone.
+
+  The guidance printed after lit done is the embedded definition with id
+  done, bound to events: [work_finished]. Run lit workflows edit done to
+  copy it into .lit/workflows/done.md and rewrite the body; add a labels
+  key there to narrow it to matching tickets, since the two dimensions then
+  AND together. Delete that file to fall back to the embedded default.
+
+  dry-run answers "what would inject here" without a real occasion. The
+  flags describe a hypothetical one; the output names every definition that
+  would fire, which specific label, event or state activation matched it,
+  and the body that would be injected, with <id> interpolated from --issue.
+  Pass --event to exercise an event-bound definition and --enter or --exit
+  for a state-bound one: a dimension left unset satisfies no definition
+  that declares it. A hypothetical matching nothing exits cleanly with
+  Fired (0). dry-run writes nothing and reads no ticket data.
+
+  A real occasion that fires at least one definition records a JSON trace —
+  the occasion, every definition that fired, and the same reasons dry-run
+  prints — under traces/workflows/ in the workspace storage directory that
+  lit workspace reports as storage_dir. An occasion matching nothing leaves
+  no trace.

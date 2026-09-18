@@ -11,5 +11,5 @@ Create a follow-up parented to a just-closed ticket: `lit followup --on <closed-
 Creating (or updating) several tickets at once: `lit import --path <file.yaml>` reads a
 multi-document YAML file, one ticket per document — a document without an `id` creates,
 one with an `id` updates that existing ticket. Cheaper than N separate `lit new`/`lit
-update` invocations for a batch. See `lit import` in docs/cli-reference.md for the full
-format (create/update field lists, `parent`/`depends_on` wiring, error behavior).
+update` invocations for a batch. Run `lit import --help` for the full format
+(create/update field lists, `parent`/`depends_on` wiring, error behavior).
