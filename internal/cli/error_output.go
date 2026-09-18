@@ -139,20 +139,30 @@ func commandErrorReason(err error) string {
 	if errors.Is(err, store.ErrWorkspaceNotInitialized) {
 		return "workspace_not_initialized"
 	}
-	// lit could not settle on an issue prefix. Three ways: the repository name
-	// yields none, an explicit --prefix contradicts the one this workspace
-	// already has, or the stored issue_prefix in config.json is itself illegal.
-	// All three are deterministic and clearable by the caller, which is what
-	// validation_refused means, so they share that reason rather than taking one
-	// of their own — a reason here could only restate "adjust what you passed".
-	// What differs is the ACT, which is why each message names its own rather
-	// than leaning on the reason: the first two name a flag or a command, while
-	// no command clears a stored illegal prefix (`lit prefix set` and `lit
-	// doctor` resolve the workspace before they run, so they die here too) and
-	// that message names the config FILE. Before this it reached the default and
-	// told the caller to retry a refusal that repeats forever, then to run `lit
-	// doctor` against a workspace `lit init` had just declined to create
-	// (links-init-hn19). [LAW:one-type-per-behavior]
+	// lit could not settle on an issue prefix, and the three ways it can fail
+	// split by the ACT that clears them, which is what a reason names.
+	//
+	// A stored issue_prefix config.json itself refuses is a refusal of a file on
+	// disk, not of the command as issued, and no command clears it — `lit prefix
+	// set` and `lit doctor` resolve the workspace before they run, so they die
+	// here too. It takes its own reason for the same cause template_shape_refused
+	// has one: validation_refused's remediation ends "adjust the command to
+	// satisfy it", which is false here, and an agent that acts on the remediation
+	// line rather than on the message body is the loop this whole mapping exists
+	// to prevent (links-cli-errors-1u9g, links-sync-r779). Checked BEFORE the
+	// sentinel it unwraps to, so the narrower answer wins.
+	// [LAW:one-type-per-behavior]
+	var storedPrefix workspace.StoredPrefixError
+	if errors.As(err, &storedPrefix) {
+		return "stored_prefix_refused"
+	}
+	// The other two — a repository name that yields no prefix, and an explicit
+	// --prefix contradicting the one this workspace already carries — are both
+	// answered by adjusting the command, which is what validation_refused means,
+	// so they share it and each message names its own act. Before this they
+	// reached the default and told the caller to retry a refusal that repeats
+	// forever, then to run `lit doctor` against a workspace `lit init` had just
+	// declined to create (links-init-hn19).
 	if errors.Is(err, workspace.ErrIssuePrefixRefused) {
 		return "validation_refused"
 	}
@@ -208,6 +218,14 @@ func commandErrorRemediation(reason string) string {
 		return "The remote host was unreachable over the network; credentials are not the problem, and lit already retried with backoff. Check connectivity to the remote host (for SSH remotes: `ssh -o BatchMode=yes git@<host>`), then retry once the network path is restored."
 	case "template_shape_refused":
 		return "Edit the template override the message names so it is either plain content with no LIT INTEGRATION markers or exactly one whole marked block, or delete the override to fall back to lit's bundled default. The command itself is fine; rerunning it unchanged repeats this refusal."
+	case "stored_prefix_refused":
+		// Names no command at all, deliberately. Every lit command resolves the
+		// workspace before its own work runs, so every one of them refuses in
+		// this same place — and a remediation that named one would be handing the
+		// caller an act that does not work, which is the defect this whole
+		// mapping exists to remove. [LAW:no-silent-failure] the advice has to be
+		// true, not merely present.
+		return "Edit `issue_prefix` in the config file named above, setting it to a legal prefix. No lit command can clear this for you: every command resolves the workspace before its own work runs, so each one refuses in this same place. Rerunning this command unchanged repeats this refusal."
 	case "validation_refused":
 		return "Do not retry unchanged — this refusal is deterministic and will repeat until the command or the data changes. The error message above states the rule it enforces; adjust the command to satisfy it."
 	case "workspace_busy":

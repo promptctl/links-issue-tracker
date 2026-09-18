@@ -227,8 +227,11 @@ func TestAStoredIllegalPrefixIsRefusedAndNamesTheFile(t *testing.T) {
 	if got := ExitCode(err); got != ExitValidation {
 		t.Fatalf("ExitCode = %d, want %d — a hand-fixable config is not a fault", got, ExitValidation)
 	}
-	if got := commandErrorReason(err); got != "validation_refused" {
-		t.Fatalf("reason = %q, want validation_refused", got)
+	// Its own reason, not the family's: the two command-fixable prefix refusals
+	// are cleared by adjusting the command, and this one is not, so it cannot
+	// inherit a remediation that says so.
+	if got := commandErrorReason(err); got != "stored_prefix_refused" {
+		t.Fatalf("reason = %q, want stored_prefix_refused", got)
 	}
 
 	var stderr bytes.Buffer
@@ -236,6 +239,13 @@ func TestAStoredIllegalPrefixIsRefusedAndNamesTheFile(t *testing.T) {
 	rendered := stderr.String()
 	if strings.Contains(rendered, "Retry the command") || strings.Contains(rendered, "lit doctor") {
 		t.Fatalf("rendered error still carries the unclassified-fault advice:\n%s", rendered)
+	}
+	// The assertion above is not enough, and its absence is what let this ship:
+	// validation_refused clears "Retry the command" while still ending "adjust
+	// the command to satisfy it", which is the same false instruction in other
+	// words. No command adjusts this one.
+	if strings.Contains(rendered, "adjust the command") {
+		t.Fatalf("rendered error tells the caller to adjust a command that cannot clear this:\n%s", rendered)
 	}
 	// The remediation has to name the config file, because it is the only thing
 	// that clears this state — see the sibling assertion below.

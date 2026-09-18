@@ -137,7 +137,7 @@ There are **no wildcards, globs, regexes, or negation** anywhere in matching; th
 
 ## Firing traces
 
-A JSON trace is written only when at least one definition fired — unmatched occasions leave no trace (`dispatch.go:29-33`). Recording is skipped outright when the workspace storage dir is not an absolute path (`dispatch.go:68`). Traces land in `<StorageDir>/traces/workflows/` where StorageDir is `<git-common-dir>/links` (`internal/trace/trace.go:23-25`, `internal/workspace/workspace.go:223`).
+A JSON trace is written only when at least one definition fired — unmatched occasions leave no trace (`dispatch.go:29-33`). Recording is skipped outright when the workspace storage dir is not an absolute path (`dispatch.go:68`). Traces land in `<StorageDir>/traces/workflows/` where StorageDir is `<git-common-dir>/links` (`internal/trace/trace.go:23-25`, `internal/workspace/workspace.go:259`).
 
 Filename: `<UTC 20060102T150405.000000000Z>-<slug>.json`, where the slug is the event name lowercased with runs of non-`[a-z0-9]` replaced by `-` (so `work_finished` → `work-finished`), falling back to `trace` for an eventless occasion (`trace.go:41-81`). Files are created `O_WRONLY|O_CREATE|O_EXCL` mode 0644 (dirs 0755); on collision up to 5 attempts with a fresh timestamp and an `-<attempt>` suffix; exhaustion yields `create workflows trace: too many id collisions` (`internal/trace/trace.go:36-66`).
 

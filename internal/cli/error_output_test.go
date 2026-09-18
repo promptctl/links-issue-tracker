@@ -71,15 +71,32 @@ func TestCommandErrorReason(t *testing.T) {
 		// pinned, because the store returns it bare today and a caller adding
 		// context later must not silently drop back to the default.
 		{"workspace not initialized", store.ErrWorkspaceNotInitialized, "workspace_not_initialized"},
-		// Shares validation_refused rather than taking a reason of its own: the
-		// act it asks for is "adjust the command", which is exactly what that
-		// reason already means, and the flag or command that resolves it is
-		// named by the message. A reason here could only restate it.
+		// The two command-fixable members of the prefix family share
+		// validation_refused: the act each asks for is "adjust the command",
+		// which is exactly what that reason already means, and the flag or
+		// command that resolves it is named by the message.
 		{"issue prefix refused", workspace.ErrIssuePrefixRefused, "validation_refused"},
 		{
 			"issue prefix refused wrapped",
 			fmt.Errorf("resolve workspace: %w", workspace.ErrIssuePrefixRefused),
 			"validation_refused",
+		},
+		// The third member does not, for the same cause template_shape_refused
+		// exists: a stored issue_prefix config.json refuses is cleared by editing
+		// that file, and no command touches it, so validation_refused's "adjust
+		// the command to satisfy it" would be false advice. Both rows sit after the sentinel
+		// pair they unwrap to, because that unwrap is what keeps the exit code
+		// shared — and is exactly what would silently reclassify them into the row
+		// above if the typed arm were ever removed.
+		{
+			"stored prefix refused",
+			workspace.StoredPrefixError{ConfigPath: "/w/config.json", Stored: "ab", Err: errors.New("too short")},
+			"stored_prefix_refused",
+		},
+		{
+			"stored prefix refused wrapped",
+			fmt.Errorf("resolve workspace: %w", workspace.StoredPrefixError{ConfigPath: "/w/config.json", Stored: "ab", Err: errors.New("too short")}),
+			"stored_prefix_refused",
 		},
 		{
 			"workspace not initialized wrapped",

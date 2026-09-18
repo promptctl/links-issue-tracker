@@ -19,7 +19,7 @@ Help groups, in order: Human Bootstrap, Agent Operations, Dependencies & Structu
 
 ## Exit codes and error output
 
-Eight constants, 0 through 7 (`exit.go:11-32`), mapped from error type by `ExitCode` in a fixed dispatch order (`exit.go:37-157`). Exit 6 is `ExitNoWork` — "ran correctly and changed nothing" — and it is reached by three arms, not just the router's two: a caller looping `lit next` has to tell "stop, there is nothing for you" from "lit is broken", and under `ExitGeneric` its only way to do that was to parse the English.
+Eight constants, 0 through 7 (`exit.go:11-32`), mapped from error type by `ExitCode` in a fixed dispatch order (`exit.go:37-160`). Exit 6 is `ExitNoWork` — "ran correctly and changed nothing" — and it is reached by three arms, not just the router's two: a caller looping `lit next` has to tell "stop, there is nothing for you" from "lit is broken", and under `ExitGeneric` its only way to do that was to parse the English.
 
 This table is the corpus's single source for the code-to-error-type mapping; `07-ops-commands-and-sync-engine.md`, `09-workflows.md` and `10-platform.md` point here rather than restating it.
 

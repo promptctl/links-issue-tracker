@@ -113,7 +113,7 @@ Behavioral consequences pinned by test: a write-mode open mints; a read-mode ope
 
 `app.Open` calls `st.AttributeTo(stream.Value())` unconditionally for both modes (`internal/app/app.go:105`). `Store.AttributeTo` pairs the raw token with the store's own workspace id: `s.attribution = model.NewAttribution(streamToken, s.workspaceID)` (`internal/store/store.go:260-262`). An empty token leaves the store unattributed rather than half-attributed (`internal/store/store.go:248-251`). Stamping happens at `recordEvent`, the single insertion point for issue history (`internal/store/store.go:242-247`). `app.Open` is the only caller of `AttributeTo`; `OpenSync`, `RebuildCandidate`, adopt, upgrade, and `OpenLocationForRead` do not stamp — they read, or replay dumps through `insertEventTx`, which preserves the producer's attribution (`internal/store/store.go:252-259`). The interface is `storage.Attributor` (`internal/storage/contract.go:216-218`).
 
-Workspace id source: `Info.WorkspaceID` (`internal/workspace/workspace.go:36`), read from config (`internal/workspace/workspace.go:175`), generated as a UUID at init (`internal/workspace/workspace.go:492`).
+Workspace id source: `Info.WorkspaceID` (`internal/workspace/workspace.go:72`), read from config (`internal/workspace/workspace.go:211`), generated as a UUID at init (`internal/workspace/workspace.go:528`).
 
 Cross-clone proof: attribution survives a real git-remote round trip and a second clone sees the producer's exact pair, never re-stamped (`internal/cli/claims_attribution_test.go:65-129`).
 

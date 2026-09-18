@@ -149,7 +149,10 @@ func ExitCode(err error) int {
 	// Moves this condition off ExitGeneric, which also means "lit is broken":
 	// a prefix lit cannot settle on is a self-fixable precondition, and under
 	// one code a script could only tell the two apart by parsing the English.
-	// [LAW:one-source-of-truth] same code as its reason's other members.
+	// [LAW:one-source-of-truth] one code for the whole family, including the
+	// typed StoredPrefixError, which unwraps to this sentinel. The act each
+	// refusal asks for differs, and that difference is carried by the reason,
+	// not by a code of its own — the same split templateShapeError takes above.
 	if errors.Is(err, workspace.ErrIssuePrefixRefused) {
 		return ExitValidation
 	}

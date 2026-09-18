@@ -43,6 +43,15 @@ func TestExitCodeMappings(t *testing.T) {
 		// tell them apart by parsing the English (links-init-hn19).
 		{name: "issue prefix refused", err: workspace.ErrIssuePrefixRefused, want: ExitValidation},
 		{name: "issue prefix refused wrapped", err: fmt.Errorf("resolve workspace: %w", workspace.ErrIssuePrefixRefused), want: ExitValidation},
+		// The typed member keeps the family's code: it carries a different
+		// remediation, not a different exit contract, and it reaches this arm only
+		// through its Unwrap. Dropping that Unwrap would move it to ExitGeneric,
+		// which is the "lit is broken" code this ticket moved it off.
+		{
+			name: "stored prefix refused",
+			err:  workspace.StoredPrefixError{ConfigPath: "/w/config.json", Stored: "ab", Err: errors.New("too short")},
+			want: ExitValidation,
+		},
 		// The genuine fault on the same path keeps the unclassified-fault code.
 		{name: "genuine stat fault", err: errors.New("stat database dir: permission denied"), want: ExitGeneric},
 		{name: "generic", err: ValidationError{Message: "boom"}, want: ExitValidation},

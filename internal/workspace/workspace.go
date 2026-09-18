@@ -22,9 +22,13 @@ var ErrNotGitRepo = errors.New("links requires a git repository/worktree")
 // issue prefix: a repository name that cannot produce one, an explicit request
 // that contradicts the prefix a workspace already carries, and a stored
 // issue_prefix the rules refuse. All three are terminal for the command as
-// issued and all three are answered by changing something the caller controls,
-// which is all the CLI's classification needs to know — so they share one
-// sentinel, and the message each raise site wraps it with carries the act.
+// issued, so no caller may retry one unchanged, and that is what the shared
+// sentinel carries.
+//
+// It is not the whole classification. Two of the three are cleared by adjusting
+// the command; the third is cleared only by editing a file, and
+// StoredPrefixError below is how a caller tells them apart without reading the
+// English.
 //
 // Without a type these reached the unclassified default, which told the caller
 // to retry a deterministic refusal and then to run `lit doctor` against the
@@ -32,6 +36,38 @@ var ErrNotGitRepo = errors.New("links requires a git repository/worktree")
 // [LAW:no-silent-failure] [LAW:types-are-the-program] classification is carried
 // by the error, never re-derived from its text.
 var ErrIssuePrefixRefused = errors.New("issue prefix refused")
+
+// StoredPrefixError is the one member of that family no COMMAND can clear:
+// config.json carries an issue_prefix the rules refuse, and every lit command
+// resolves the workspace before its own work runs, so `lit prefix set` and `lit
+// doctor` die here too. The act it asks for is editing a file on disk, where its
+// two siblings ask for a different flag or a different command.
+//
+// That difference has to live in the type, because the CLI picks its remediation
+// from the classification: the shared one ends "adjust the command to satisfy
+// it", which is false here, and an agent that acts on the remediation line
+// rather than on the message body is the loop this whole mapping exists to
+// prevent (links-cli-errors-1u9g, links-sync-r779). templateShapeError already
+// carries exactly this distinction for a malformed managed template
+// (links-templates-1bai). [LAW:one-type-per-behavior] the act each refusal calls
+// for is different, so a single reason could only name one of them.
+//
+// Unwrap returns the family sentinel, so the exit-code mapping and every
+// existing errors.Is check still see one prefix refusal.
+type StoredPrefixError struct {
+	ConfigPath string
+	Stored     string
+	Err        error
+}
+
+func (e StoredPrefixError) Error() string {
+	return fmt.Sprintf(
+		"%s carries issue_prefix %q, which is not a legal prefix (%v); edit issue_prefix in that file to a valid value",
+		e.ConfigPath, e.Stored, e.Err,
+	)
+}
+
+func (e StoredPrefixError) Unwrap() error { return ErrIssuePrefixRefused }
 
 type Config struct {
 	WorkspaceID string    `json:"workspace_id"`
@@ -499,16 +535,16 @@ func resolveIssuePrefix(rootDir string, configPath string, configured string, re
 	if err != nil {
 		// The third way lit fails to settle on a prefix, and the only one no
 		// command can clear: `lit prefix set` and `lit doctor` both resolve the
-		// workspace before they run, so they die here too. The remediation
-		// therefore names the FILE rather than a command, because editing it is
-		// the act that actually works — the same reason the derive message names
-		// `lit init --prefix`. Untyped, this wore the retry-then-doctor default
-		// while sitting three lines from the two refusals this change typed.
+		// workspace before they run, so they die here too. The message therefore
+		// names the FILE rather than a command, because editing it is the act
+		// that actually works — the same reason the derive message names
+		// `lit init --prefix`. It is typed rather than wrapped in a string so the
+		// CLI can route it to a remediation naming that act; sharing its siblings'
+		// reason would print "adjust the command to satisfy it" over a refusal no
+		// command touches. Untyped, it wore the retry-then-doctor default while
+		// sitting three lines from the two refusals this change typed.
 		// [LAW:no-silent-failure] [LAW:one-type-per-behavior]
-		return PrefixSpec{}, fmt.Errorf(
-			"%w: %s carries issue_prefix %q, which is not a legal prefix (%v); edit issue_prefix in that file to a valid value",
-			ErrIssuePrefixRefused, configPath, configured, err,
-		)
+		return PrefixSpec{}, StoredPrefixError{ConfigPath: configPath, Stored: configured, Err: err}
 	}
 	if requested.present && requested.spec.Value() != spec.Value() {
 		return PrefixSpec{}, fmt.Errorf(
