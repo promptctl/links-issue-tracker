@@ -34,7 +34,7 @@ Acceptance tests pin two shutdown properties (`cmd/lit/main_signal_test.go:146-1
 
 ### Exit codes
 
-Eight codes, 0 through 7 (`internal/cli/exit.go:11-32`), mapped from error type by `ExitCode` (`:37-144`). The code-to-error-type table is in `06-issue-commands.md` and is maintained there; what belongs to this chapter is the process-level contract around it: a code is the whole of what the process says on exit, and a signal-terminated run exits `128+signum` instead, from the path above rather than from `ExitCode`.
+Eight codes, 0 through 7 (`internal/cli/exit.go:12-33`), mapped from error type by `ExitCode` (`:38-167`). The code-to-error-type table is in `06-issue-commands.md` and is maintained there; what belongs to this chapter is the process-level contract around it: a code is the whole of what the process says on exit, and a signal-terminated run exits `128+signum` instead, from the path above rather than from `ExitCode`.
 
 Error rendering (`internal/cli/error_output.go:18-47`): stderr gets `error (code=%d): %v`, then `remediation: %s` when a remediation exists for the error's machine reason (reasons include `entity_not_found`, `merge_conflict`, `sync_divergence`, `owner_approval_required`).
 
