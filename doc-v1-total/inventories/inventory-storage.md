@@ -183,7 +183,7 @@ Other error surfaces in the contract package: `ParseSortSpecs` returns `Validati
 
 #### `RankPlacement` (`internal/storage/issues.go:22-27`)
 - `RankBottom RankPlacement = iota` — sorts after all existing items; **the zero value and the default** (`internal/storage/issues.go:25`).
-- `RankTop` — sorts before all existing items (`internal/storage/issues.go:26`).
+- `RankTop` — sorts before every item in the frame it is filed into (`internal/storage/issues.go:32`).
 - The zero value being bottom is the whole enforcement mechanism for "one default across every creation surface" (`internal/storage/issues.go:9-16`).
 - Rationale that bottom-of-order is bottom-of-frame: a child's rank is only compared against siblings', composite rank keyed on the containing epic's rank first (`internal/storage/issues.go:18-21`).
 
@@ -546,12 +546,12 @@ Order of checks is stated as contract: the parent must be resolved before the co
 6. `issueid.NormalizeConfiguredPrefix(in.Prefix)`; error → `fmt.Errorf("normalize issue prefix: %w", err)` (`:56-59`).
 7. `now := e.now()`; `mintID(...)` (`:60-64`).
 8. Builds the record with all string fields `strings.TrimSpace`'d (description, prompt, assignee, lane), `status: model.StatusView{Value: model.StateOpen}`, `retention: model.Live{}` (`:66-80`).
-9. `e.issues[id] = rec`; `e.place(id, in.Placement)`; `e.setLabels(id, labels, now, createdBy)` (`:81-83`).
+9. `e.place(id, e.filingFrame(parentID), in.Placement)` — error propagates; then `e.issues[id] = rec`; `e.setLabels(id, labels, now, createdBy)` (`:86-90`).
 10. If `parentID != ""`, appends `model.Relation{SrcID: id, DstID: parentID, Type: model.RelParentChild, CreatedAt: now, CreatedBy: createdBy}` (`:84-88`).
 11. Records one `created` event, `reason: "issue created"`, `actor: createdBy`. Changes: a leaf records one `FieldChange{Field:"status", From:"", To:"open"}`; **a container records none** (`:89-95`).
 12. Returns `e.hydrate(rec, e.positions())` (`:97`).
 
-**`place(id, placement)`** (`internal/storage/memory/issues.go:103-109`) — `RankTop` prepends; anything else (i.e. `RankBottom`, the zero value) appends.
+**`place(id, f, placement)`** (`internal/storage/memory/issues.go:121-151`) — `RankTop` takes the first slot among the frame `f`'s members; `RankBottom` (the zero value) appends to the whole order; any other value → `fmt.Errorf("unknown rank placement: %d", p)` from `orderEdgeFor`. A population with no members re-resolves the edge to `storage.RankBottom` and re-reads the positions, so an issue filed into a frame holding nothing ranked lands after everything in the order.
 
 **`mintID`** (`internal/storage/memory/issues.go:115-129`)
 - With a parent: `nextChildID(parentID)`.

@@ -114,6 +114,11 @@ type orderEdge struct {
 	// the answer for one that has none.
 	slot func(mateIndexes []int) int
 	past func(mateIndexes []int, issueIndex int) bool
+	// filingPositions is the population a create's placement is taken among at
+	// this end. The two ends genuinely ask different populations — see place —
+	// so the population rides on the edge the dispatch already returns rather
+	// than being chosen by a second test on the placement.
+	filingPositions func(e *Engine, f storage.Frame, id string) []int
 }
 
 // positionIn is where an id lands at this end of a population.
@@ -148,6 +153,11 @@ func orderEdgeFor(p storage.RankPlacement) (orderEdge, error) {
 			name: "top",
 			slot: func(mateIndexes []int) int { return mateIndexes[0] },
 			past: func(mateIndexes []int, issueIndex int) bool { return issueIndex < mateIndexes[0] },
+			// The top files among the new issue's frame-mates, because leading
+			// the whole order is not leading my siblings. It is not a copy of
+			// the population rankToEdge moves a child within — it is that
+			// method. [LAW:single-enforcer]
+			filingPositions: (*Engine).frameMateIndexes,
 		}, nil
 	case storage.RankBottom:
 		return orderEdge{
@@ -156,10 +166,35 @@ func orderEdgeFor(p storage.RankPlacement) (orderEdge, error) {
 			past: func(mateIndexes []int, issueIndex int) bool {
 				return issueIndex > mateIndexes[len(mateIndexes)-1]
 			},
+			filingPositions: everyPosition,
 		}, nil
 	default:
 		return orderEdge{}, fmt.Errorf("unknown rank placement: %d", p)
 	}
+}
+
+// everyPosition is the bottom edge's filing population: every slot in the one
+// order. Filing at the bottom must land the new issue after everything that
+// already exists, which is what keeps an authored batch — an import, a create
+// loop — in the order its file states.
+func everyPosition(e *Engine, _ storage.Frame, _ string) []int {
+	positions := make([]int, len(e.order))
+	for index := range e.order {
+		positions[index] = index
+	}
+	return positions
+}
+
+// filingFrame names the frame a new issue is being created into: the parent it
+// is filed under, or the top level. A deleted container frames nothing, so a
+// child named under one is filed at the top level — the rule parentOf applies
+// once the parent edge exists, asked here of a parent id because placement
+// runs before that edge is recorded. [LAW:one-source-of-truth]
+func (e *Engine) filingFrame(parentID string) storage.Frame {
+	if parentID == "" || !e.live(parentID) {
+		return storage.TopLevel
+	}
+	return storage.Frame(parentID)
 }
 
 // mustRankable is the one gate every rank verb passes a named issue through:

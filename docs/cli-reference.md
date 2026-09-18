@@ -314,7 +314,7 @@ Creates an issue and **prints its generated ID** — capture it; IDs are not gue
 New issues append to the bottom of their frame — the bottom of the epic named by
 `--parent`, or of the top-level order without one — so filing work records it rather
 than promoting it, and a batch authored in order keeps that order with no flag. `--top`
-places the issue at the front of the agenda for the tickets that mean it; `lit rank`
+files the issue at the front of that frame — the epic's children, or the top level; `lit rank`
 moves one afterwards. With `--parent`, the child's ID becomes `<parentID>.<hash>`. `--lane`
 partitions an epic's children into parallel rank-ordered sub-sequences: a shared lane
 serializes, distinct lanes parallelize. `--prompt` stores a reusable agent prompt for

@@ -276,7 +276,7 @@ func newLeaf() appLeaf {
 	assignee := fs.String("assignee", "", "Assignee")
 	labels := fs.String("labels", "", "Comma-separated labels")
 	lane := fs.String("lane", "", "Lane key partitioning an epic's children into parallel rank-ordered sub-sequences; shared lane serializes, distinct lane parallelizes")
-	top := fs.Bool("top", false, "Promote the new issue to the top of the order (the default appends it to the bottom of its frame)")
+	top := fs.Bool("top", false, "Promote the new issue to the top of its frame (the default appends it to the bottom)")
 	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		issueTypeValue, err := parseIssueTypeFlag(*issueType)
 		if err != nil {
@@ -322,7 +322,7 @@ func followupLeaf() appLeaf {
 	priority := fs.String("priority", model.PriorityNormal.String(), "Priority: "+priorityChoices())
 	assignee := fs.String("assignee", "", "Assignee")
 	labels := fs.String("labels", "", "Comma-separated labels")
-	top := fs.Bool("top", false, "Promote the follow-up to the top of the order (the default appends it to the bottom of its frame)")
+	top := fs.Bool("top", false, "Promote the follow-up to the top of its frame (the default appends it to the bottom)")
 	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		parentID := strings.TrimSpace(*on)
 		titleValue := strings.TrimSpace(*title)
