@@ -402,6 +402,14 @@ func (i Issue) Apply(action lifecycle.StatusAction) (Issue, error) {
 		// a container — and so would decide on the claimant alone, silently
 		// writing a claim onto an epic for a `start` that changed nothing.
 		// The refusal stays; what the caller is TOLD is what Satisfied decides.
+		// Action is always set, and Error() depends on that: it renders the
+		// action's invocation verb, and Verb panics on a name outside the sealed
+		// set -- including the zero value. This is the only place the type is
+		// built, action is a sealed StatusAction, and the value is never decoded
+		// from storage, so there is no path to an unset Action. The panic is
+		// deliberately not softened to a fallback here: a fallback is the silent
+		// wrong answer this whole change removed, and it would trade a loud
+		// programmer error for a quiet one. [LAW:no-silent-failure]
 		return Issue{}, ContainerActionError{
 			ID:       i.ID,
 			Action:   action.Name(),

@@ -2248,6 +2248,50 @@ func TestCloseLeafUsesOptimisticConcurrency(t *testing.T) {
 	}
 }
 
+// TestConflictNamesTheVerbTheCallerTyped is the sibling of the test above, run
+// with the one action whose two names differ. That test uses `close`, whose
+// persisted event encoding and invocation verb are the same word, so it passes
+// whichever of the two the message interpolates and cannot see the difference.
+// `lit open` dispatches model.Reopen, persisted as "reopen", so this conflict is
+// the only one that can tell a right answer from a wrong one -- and it read
+// "reopen conflict: ..." until the message was changed to render the verb.
+func TestConflictNamesTheVerbTheCallerTyped(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Reopen me", Topic: "life", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	closed, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Close{Outcome: model.Wontfix{}}, Actor: "tester"})
+	if err != nil {
+		t.Fatalf("Apply(close) error = %v", err)
+	}
+	// Plan the reopen against the CLOSED snapshot, then move the row out from
+	// under it, so the guarded UPDATE matches nothing and reports the conflict.
+	w, err := st.planStatusTransition(ctx, closed, "tester", "", model.Reopen{})
+	if err != nil {
+		t.Fatalf("planStatusTransition(stale reopen) error = %v", err)
+	}
+	if _, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Reopen{}, Actor: "tester"}); err != nil {
+		t.Fatalf("Apply(reopen) error = %v", err)
+	}
+	err = st.withMutation(ctx, "transition issue", func(ctx context.Context, tx *sql.Tx) error {
+		return st.applyTransitionTx(ctx, tx, w)
+	})
+	if err == nil {
+		t.Fatal("applyTransitionTx(stale reopen) error = nil, want a conflict")
+	}
+	if strings.Contains(err.Error(), string(model.ActionReopen)) {
+		t.Errorf("conflict names %q, the events-table encoding; the caller typed `lit %s`: %v",
+			string(model.ActionReopen), model.ActionReopen.Verb(), err)
+	}
+	want := `open conflict: issue status is "open"`
+	if err.Error() != want {
+		t.Errorf("applyTransitionTx(stale reopen) error = %q, want %q", err.Error(), want)
+	}
+}
+
 // TestRetentionUsesOptimisticConcurrency pins the retention axis to the same
 // contention discipline as the status axis: a retention write planned against
 // a snapshot another writer has since moved must surface a conflict, not

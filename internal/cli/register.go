@@ -537,28 +537,28 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 			Run: r.appCmd(app.AccessWrite, updateLeaf)},
 		{Name: "rank", Summary: "Reorder an issue's rank", GroupID: "operations",
 			Run: r.appCmdDispatch(app.AccessWrite, rankDispatch), Subcommands: []SubcommandSpec{{Name: rankSetSubcommand}}},
-		{Name: "start", Summary: "Claim issue work", GroupID: "operations",
+		{Name: startSpec.name, Summary: "Claim issue work", GroupID: "operations",
 			Run: r.transitionCmd(startSpec)},
 		// assign is retired: reassigning is a single-field write folded into
 		// `lit update --assignee`. Hidden+dispatchable so an old invocation gets the
 		// documented pointer, not cobra's unknown-command error. [LAW:no-silent-failure]
 		retiredSpec("assign", "operations", "use `lit update <id> --assignee <name>`", assignRetirementGuidance),
-		{Name: "done", Summary: "Finish claimed work (success path; requires in_progress)", GroupID: "operations",
+		{Name: doneSpec.name, Summary: "Finish claimed work (success path; requires in_progress)", GroupID: "operations",
 			Run: r.transitionCmd(doneSpec)},
-		{Name: "close", Summary: "Close without finishing (wontfix / obsolete / duplicate; from any non-closed state)", GroupID: "operations",
+		{Name: closeSpec.name, Summary: "Close without finishing (wontfix / obsolete / duplicate; from any non-closed state)", GroupID: "operations",
 			Run: r.transitionCmd(closeSpec)},
-		{Name: "open", Summary: "Reopen issue(s)", GroupID: "operations",
+		{Name: openSpec.name, Summary: "Reopen issue(s)", GroupID: "operations",
 			Run: r.transitionCmd(openSpec)},
 		// Retention quartet: distinct RetentionAction transitions, grouped apart
 		// from the status lifecycle so the core verbs stay prominent. Each stays a
 		// first-class command — moved in help, unchanged in dispatch.
-		{Name: "archive", Summary: "Archive issue(s)", GroupID: "retention",
+		{Name: archiveSpec.name, Summary: "Archive issue(s)", GroupID: "retention",
 			Run: r.transitionCmd(archiveSpec)},
-		{Name: "unarchive", Summary: "Unarchive issue(s)", GroupID: "retention",
+		{Name: unarchiveSpec.name, Summary: "Unarchive issue(s)", GroupID: "retention",
 			Run: r.transitionCmd(unarchiveSpec)},
-		{Name: "delete", Summary: "Delete issue(s)", GroupID: "retention",
+		{Name: deleteSpec.name, Summary: "Delete issue(s)", GroupID: "retention",
 			Run: r.transitionCmd(deleteSpec)},
-		{Name: "restore", Summary: "Restore deleted issue(s)", GroupID: "retention",
+		{Name: restoreSpec.name, Summary: "Restore deleted issue(s)", GroupID: "retention",
 			Run: r.transitionCmd(restoreSpec)},
 		{Name: "comment", Summary: "Add issue comments", GroupID: "operations",
 			Run: r.familyCmd(commentFamily), Subcommands: commentFamily.visibleSubcommands()},

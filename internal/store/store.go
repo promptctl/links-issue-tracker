@@ -1433,7 +1433,12 @@ func (s *Store) applyTransitionTx(ctx context.Context, tx *sql.Tx, w transitionW
 		if lookupErr != nil {
 			return lookupErr
 		}
-		return fmt.Errorf("%s conflict: issue status is %q", w.action, currentStatus)
+		// Verb, not the persisted encoding: this is a refusal an agent reads and
+		// may act on, so it names the command it typed. The recordEvent call on
+		// the next line is the opposite case and keeps Name -- that string is
+		// written to the events table. One value, two destinations, two names.
+		// [LAW:one-source-of-truth]
+		return fmt.Errorf("%s conflict: issue status is %q", w.action.Verb(), currentStatus)
 	}
 	return s.recordEvent(ctx, tx, w.issueID, string(w.action), w.reason, w.actor, w.changes)
 }

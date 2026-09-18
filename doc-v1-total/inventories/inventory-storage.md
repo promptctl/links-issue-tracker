@@ -657,7 +657,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 **`planLifecycle`** (`internal/storage/memory/apply.go:67-80`) — a type switch on the sealed `model.Action` sum: `nil` → no transition (`current, nil, nil`); `model.StatusAction` → `planStatus`; `model.RetentionAction` → `planRetention`; `default` → **panics** with `fmt.Sprintf("illegal Action value %T", action)` (only an impostor `Action` reaches here) (`:75-79`).
 
 **`planStatus`** (`internal/storage/memory/apply.go:86-127`)
-- If `model.Frozen(current.Retention())` → `fmt.Errorf("cannot %s archived or deleted issue", action.Name())` (`:87-89`).
+- If `model.Frozen(current.Retention())` → `fmt.Errorf("cannot %s archived or deleted issue", action.Name().Verb())` (`:87-89`).
 - `current.Apply(action)` — the state machine's own rejections propagate (`:90-93`).
 - Assignee rule: `postAssignee = priorAssignee` except for `model.Start`, where it is `strings.TrimSpace(start.Assignee)`. Start is the one variant carrying a new owner (`:94-104`).
 - **No-op rule**: if `updated.StatusValue() == current.StatusValue() && postAssignee == priorAssignee` → return `(current, nil, nil)` with no event. A same-state start with a NEW assignee is the agent reclaim path and falls through, recording the ownership change (`:105-116`).
@@ -962,7 +962,7 @@ Stated in `internal/storage/memory/doc.go:26-49`:
 - `Run(t, newEngine)` walks the `cases` table, running each as a subtest with `context.Background()` and a fresh engine (`internal/storage/conformance/conformance.go:59-66`).
 - `engineCase{name string; run func(t, ctx, st)}` — the suite is a table walked by one loop; adding a statement is adding data (`internal/storage/conformance/conformance.go:68-74`).
 - `const prefix = "conf"` — every case creates under this cosmetic prefix; **cases assert on ids only by comparing ids the engine returned, never by predicting their shape** (`internal/storage/conformance/conformance.go:76-79`).
-- `mustCreate` forcibly sets `in.Prefix = prefix` on every create (`internal/storage/conformance/conformance.go:1320-1328`).
+- `mustCreate` forcibly sets `in.Prefix = prefix` on every create (`internal/storage/conformance/conformance.go:1351-1359`).
 - Rule for what may be asserted: only what a caller can observe through the contract; no case may reach past the interface into engine internals (`internal/storage/conformance/conformance.go:22-27`).
 - Dolt's behavior is the tiebreak where a behavior was ambiguous; where the second engine answered better, it was moved to match rather than the contract moved to meet it (`internal/storage/conformance/conformance.go:29-37`).
 
@@ -972,243 +972,243 @@ Stated in `internal/storage/memory/doc.go:26-49`:
 
 ### 3.3 Every enforced invariant, by case
 
-**`create_read_roundtrip`** (`:120-178`)
+**`create_read_roundtrip`** (`:120-179`)
 - Surrounding whitespace is stripped on the way in for `Title`, `Description`, `Prompt` (`:135-143`).
-- A `GetIssue` read returns the *same* record, field for field: `ID`, `Title`, `Description`, `Prompt`, `Topic`, `Assignee`, `Lane`, `IssueType`, `State()` (`:151-168`).
+- A `GetIssue` read returns the *same* record, field for field: `ID`, `Title`, `Description`, `Prompt`, `Topic`, `Assignee`, `Lane`, `IssueType`, `State()` (`:151-169`).
 - A create with `IssueType: model.TypeBug` reads back `bug`, and `State()` is `open` (`:162-163`).
-- `Priority` survives as `PriorityUrgent` (`:169-171`).
-- `Labels: []string{"perf"}` reads back as `["perf"]` (`:172-174`).
-- `Rank` is non-empty — every issue must land somewhere in the order (`:175-177`).
+- `Priority` survives as `PriorityUrgent` (`:170-172`).
+- `Labels: []string{"perf"}` reads back as `["perf"]` (`:173-175`).
+- `Rank` is non-empty — every issue must land somewhere in the order (`:176-178`).
 
-**`create_defaults`** (`:180-200`)
-- Unspecified `IssueType` → `model.TypeTask` (`:184-186`).
-- New issue's `State()` is `open` (`:187-189`).
-- Unspecified `Priority` → `model.PriorityNormal` (`:190-192`).
-- Default placement **appends**: a second create files below the first (`:194-196`).
-- `Placement: storage.RankTop` leads the whole order (`:198-199`).
+**`create_defaults`** (`:181-201`)
+- Unspecified `IssueType` → `model.TypeTask` (`:185-187`).
+- New issue's `State()` is `open` (`:188-190`).
+- Unspecified `Priority` → `model.PriorityNormal` (`:191-193`).
+- Default placement **appends**: a second create files below the first (`:195-197`).
+- `Placement: storage.RankTop` leads the whole order (`:199-200`).
 
-**`create_requires_title`** (`:202-210`)
-- Both `""` and `"   "` are rejected; the trim happens before the requirement (`:203-209`).
+**`create_requires_title`** (`:203-211`)
+- Both `""` and `"   "` are rejected; the trim happens before the requirement (`:204-210`).
 
-**`create_normalizes_topic`** (`:217-233`)
-- `"  Renderer Cleanup  "` is stored as `"renderer-cleanup"` (`:218-221`).
-- `ListTopics` then returns exactly `["renderer-cleanup"]` (`:222-226`).
-- These topics are refused at create: `""`, `"   "`, `"ab"` (too short), `"-!-"` (`:228-232`).
+**`create_normalizes_topic`** (`:218-234`)
+- `"  Renderer Cleanup  "` is stored as `"renderer-cleanup"` (`:219-222`).
+- `ListTopics` then returns exactly `["renderer-cleanup"]` (`:223-227`).
+- These topics are refused at create: `""`, `"   "`, `"ab"` (too short), `"-!-"` (`:229-233`).
 
-**`create_under_missing_parent_is_not_found`** (`:235-238`)
+**`create_under_missing_parent_is_not_found`** (`:236-239`)
 - Creating with `ParentID: "no-such-issue"` returns `NotFoundError` with `Entity == "issue"`.
 
-**`get_missing_issue_is_not_found`** (`:240-246`)
+**`get_missing_issue_is_not_found`** (`:241-247`)
 - Both `GetIssue` and `GetIssueDetail` on a missing id return `NotFoundError{Entity: "issue"}`.
 
-**`apply_field_patch`** (`:248-276`)
-- A `Change` with `Fields{Title, Priority, Reason}` returns the updated values (`:253-262`).
-- A field the patch never mentions (`Assignee`) is untouched — the whole reason the patch is pointers (`:263-267`).
-- The patch persists: a subsequent `GetIssue` shows the new title (`:269-275`).
+**`apply_field_patch`** (`:249-277`)
+- A `Change` with `Fields{Title, Priority, Reason}` returns the updated values (`:254-263`).
+- A field the patch never mentions (`Assignee`) is untouched — the whole reason the patch is pointers (`:264-268`).
+- The patch persists: a subsequent `GetIssue` shows the new title (`:270-276`).
 
-**`apply_status_transition`** (`:278-309`)
-- `model.Start{Assignee: "ada"}` → `State() == in_progress` and `Assignee == "ada"`; Start is the one action that rewrites ownership (`:281-292`).
-- `model.Done{}` → `State() == closed` (`:294-300`).
-- `model.Reopen{}` → `State() == open` (`:302-308`).
+**`apply_status_transition`** (`:279-310`)
+- `model.Start{Assignee: "ada"}` → `State() == in_progress` and `Assignee == "ada"`; Start is the one action that rewrites ownership (`:282-293`).
+- `model.Done{}` → `State() == closed` (`:295-301`).
+- `model.Reopen{}` → `State() == open` (`:303-309`).
 
-**`apply_missing_issue_is_not_found`** (`:311-314`)
+**`apply_missing_issue_is_not_found`** (`:312-315`)
 - `Apply` on a missing id returns `NotFoundError{Entity: "issue"}`.
 
-**`apply_to_container_is_refused`** (`:316-331`)
-- Applying `model.Start` to an epic with children returns a `model.ContainerActionError` whose `.ID` is the epic's id (`:323-330`).
+**`apply_to_container_is_refused`** (`:317-332`)
+- Applying `model.Start` to an epic with children returns a `model.ContainerActionError` whose `.ID` is the epic's id (`:324-331`).
 
-**`container_state_follows_live_children`** (`:338-361`)
-- Epic with two children, one `Done` → epic derives `in_progress` (`:343-346`).
-- Archiving the unfinished child takes it out of the epic's reading → epic derives `closed` (`:348-353`).
-- Archiving the epic itself freezes its reading: every child counts again, so the epic reverts to `in_progress` — the state it had when it left (`:355-360`).
+**`container_state_follows_live_children`** (`:339-362`)
+- Epic with two children, one `Done` → epic derives `in_progress` (`:344-347`).
+- Archiving the unfinished child takes it out of the epic's reading → epic derives `closed` (`:349-354`).
+- Archiving the epic itself freezes its reading: every child counts again, so the epic reverts to `in_progress` — the state it had when it left (`:356-361`).
 
-**`history_records_mutations`** (`:363-426`)
-- A pure no-op `Apply` (no action, no fields) writes **no** events (`:369-378`).
-- A status action whose target state AND resulting assignee already hold is the same no-op: a repeated `Start{Assignee:"ada"}` writes no event (`:380-393`).
-- A same-state start naming a NEW owner (the reclaim path) **does** record, and the assignee becomes the new owner (`:394-403`).
-- Every event's `IssueID` matches the issue mutated (`:407-410`).
-- A field write records a change row with `Field == "title"` (`:411-419`).
-- Events are oldest-first by `CreatedAt` (`:420-425`).
+**`history_records_mutations`** (`:364-457`)
+- A pure no-op `Apply` (no action, no fields) writes **no** events (`:370-379`).
+- A status action whose target state AND resulting assignee already hold is the same no-op: a repeated `Start{Assignee:"ada"}` writes no event (`:381-394`).
+- A same-state start naming a NEW owner (the reclaim path) **does** record, and the assignee becomes the new owner (`:395-404`).
+- Every event's `IssueID` matches the issue mutated (`:408-411`).
+- A field write records a change row with `Field == "title"` (`:412-420`).
+- Events are oldest-first by `CreatedAt` (`:451-456`).
 
-**`list_defaults_to_rank_order`** (`:428-436`)
+**`list_defaults_to_rank_order`** (`:459-467`)
 - Three creates come back in creation order — an unsorted listing is rank ascending with ties broken by id, and `lit backlog` is this order.
 
-**`list_filters_select`** (`:438-482`) — each filter is asserted to select exactly the listed ids:
+**`list_filters_select`** (`:469-513`) — each filter is asserted to select exactly the listed ids:
 | Filter | Expected |
 |---|---|
-| `Statuses: [in_progress]` | the started task (`:460`) |
-| `IssueTypes: [bug]` | the bug (`:461`) |
-| `ExcludeIssueTypes: [bug]` | the task (`:462`) |
-| `Assignees: ["grace"]` | the task (`:463`) |
-| `IDs: [bug.ID]` | the bug (`:464`) |
-| `SearchTerms: ["widget"]` | the bug — matches title (`:465`) |
-| `SearchTerms: ["parser"]` | the task — **search matches topic too** (`:466`) |
-| `LabelsAll: ["perf","ui"]` | the bug — conjunctive (`:467`) |
-| `LabelsAll: ["perf","absent"]` | nothing — a label the issue lacks excludes it (`:468`) |
-| `HasComments: &true` | the commented bug (`:469`) |
-| `UpdatedBefore: now+1h` | both (`:470`) |
-| `UpdatedAfter: now+1h` | nothing (`:471`) |
-| `UpdatedAfter: now-1h` | both (`:472`) |
-| `IssueTypes:[bug] + Assignees:["grace"]` | nothing — **criteria AND across axes**, so no caller can widen a listing by adding a criterion (`:473-475`) |
-| `Assignees: ["ada","grace"]` | both — **a slice ORs within itself** (`:476-477`) |
+| `Statuses: [in_progress]` | the started task (`:491`) |
+| `IssueTypes: [bug]` | the bug (`:492`) |
+| `ExcludeIssueTypes: [bug]` | the task (`:493`) |
+| `Assignees: ["grace"]` | the task (`:494`) |
+| `IDs: [bug.ID]` | the bug (`:495`) |
+| `SearchTerms: ["widget"]` | the bug — matches title (`:496`) |
+| `SearchTerms: ["parser"]` | the task — **search matches topic too** (`:497`) |
+| `LabelsAll: ["perf","ui"]` | the bug — conjunctive (`:498`) |
+| `LabelsAll: ["perf","absent"]` | nothing — a label the issue lacks excludes it (`:499`) |
+| `HasComments: &true` | the commented bug (`:500`) |
+| `UpdatedBefore: now+1h` | both (`:501`) |
+| `UpdatedAfter: now+1h` | nothing (`:502`) |
+| `UpdatedAfter: now-1h` | both (`:503`) |
+| `IssueTypes:[bug] + Assignees:["grace"]` | nothing — **criteria AND across axes**, so no caller can widen a listing by adding a criterion (`:504-506`) |
+| `Assignees: ["ada","grace"]` | both — **a slice ORs within itself** (`:507-508`) |
 
-**`list_by_parent`** (`:756-788`) — fixture: two epics, two children under the first, a grandchild under the second child, a cousin under the other epic, and one parentless issue; the first child is started:
+**`list_by_parent`** (`:787-819`) — fixture: two epics, two children under the first, a grandchild under the second child, a cousin under the other epic, and one parentless issue; the first child is started:
 | Filter | Expected |
 |---|---|
-| `ParentIDs: [epic]` | the two children, in rank order — not the grandchild (`:775`) |
-| `ParentIDs: [second]` | the grandchild (`:776`) |
-| `ParentIDs: [cousin]` | nothing (`:777`) |
-| `ParentIDs: [epic, other]` | both children and the cousin — **a slice ORs within itself** (`:778`) |
-| `ParentIDs: [epic]` + `Statuses: [in_progress]` | the started child — criteria AND across axes (`:779`) |
+| `ParentIDs: [epic]` | the two children, in rank order — not the grandchild (`:806`) |
+| `ParentIDs: [second]` | the grandchild (`:807`) |
+| `ParentIDs: [cousin]` | nothing (`:808`) |
+| `ParentIDs: [epic, other]` | both children and the cousin — **a slice ORs within itself** (`:809`) |
+| `ParentIDs: [epic]` + `Statuses: [in_progress]` | the started child — criteria AND across axes (`:810`) |
 
-`ParentIDs: [epic, "no-such-issue"]` → `NotFoundError{Entity: "issue"}`, not an empty listing (`:786-787`).
+`ParentIDs: [epic, "no-such-issue"]` → `NotFoundError{Entity: "issue"}`, not an empty listing (`:817-818`).
 
-**`list_hides_archived_and_deleted`** (`:484-505`)
-- Default listing shows only live issues (`:495-497`).
-- `IncludeArchived: true` → live + archived (`:498-499`).
-- `IncludeDeleted: true` → live + deleted (`:500-501`).
-- Both → all three (`:502-504`).
+**`list_hides_archived_and_deleted`** (`:515-536`)
+- Default listing shows only live issues (`:526-528`).
+- `IncludeArchived: true` → live + archived (`:529-530`).
+- `IncludeDeleted: true` → live + deleted (`:531-532`).
+- Both → all three (`:533-535`).
 - Expected order in each case is creation order (live, archived, deleted), i.e. rank order is preserved across the retention filter.
 
-**`list_sorts_and_limits`** (`:507-528`)
-- `SortBy: [{title}]` ascending, `{title, Desc:true}` descending (`:512-517`).
-- `Limit: 2` returns the **head** of the ordered result, not a sample (`:519-521`).
-- `Limit: 0` is the absence of a limit, not a limit of zero (`:522-523`).
-- Sorting by an unknown field (`"nonsense"`) is an error (`:525-527`).
+**`list_sorts_and_limits`** (`:538-559`)
+- `SortBy: [{title}]` ascending, `{title, Desc:true}` descending (`:543-548`).
+- `Limit: 2` returns the **head** of the ordered result, not a sample (`:550-552`).
+- `Limit: 0` is the absence of a limit, not a limit of zero (`:553-554`).
+- Sorting by an unknown field (`"nonsense"`) is an error (`:556-558`).
 
-**`list_breaks_sort_ties_by_id`** (`:535-553`)
-- Three issues sharing one title: the result is ordered by id ascending (`:538-546`).
-- Descending on the named key leaves the id tie-break **ascending** (`:548-552`).
+**`list_breaks_sort_ties_by_id`** (`:566-584`)
+- Three issues sharing one title: the result is ordered by id ascending (`:569-577`).
+- Descending on the named key leaves the id tie-break **ascending** (`:579-583`).
 
-**`list_accepts_exactly_the_contract_sort_fields`** (`:561-591`)
-- **Every** field in `storage.SortFields` must be accepted (`:565-569`).
-- These six must be **rejected**: `"description"`, `"lane"`, `"labels"`, `"issue_type"`, `"item_rank"`, `"state"` — real model fields the contract omits, plus the storage column names an engine binding its own schema would reach for (`:583-590`).
-- The case self-guards: if any of those six is ever added to `SortFields`, the test fatals telling the author to move it (`:584-586`).
+**`list_accepts_exactly_the_contract_sort_fields`** (`:592-622`)
+- **Every** field in `storage.SortFields` must be accepted (`:596-600`).
+- These six must be **rejected**: `"description"`, `"lane"`, `"labels"`, `"issue_type"`, `"item_rank"`, `"state"` — real model fields the contract omits, plus the storage column names an engine binding its own schema would reach for (`:614-621`).
+- The case self-guards: if any of those six is ever added to `SortFields`, the test fatals telling the author to move it (`:615-617`).
 
-**`list_sorts_status_by_stored_encoding`** (`:603-626`)
-- An epic whose only child is in progress derives `in_progress` (`:610-613`).
-- Ascending by `status`: **the epic leads** — its absent stored status is the low key, even though `"in_progress"` would not sort before `"in_progress"` (`:615-619`).
-- Descending by `status`: the epic trails (`:621-625`).
-- The case pins the wrong answer on purpose; deleting it is the first step of `links-store-seam-q35v.6`, not a cleanup (`:593-602`).
+**`list_sorts_status_by_stored_encoding`** (`:634-657`)
+- An epic whose only child is in progress derives `in_progress` (`:641-644`).
+- Ascending by `status`: **the epic leads** — its absent stored status is the low key, even though `"in_progress"` would not sort before `"in_progress"` (`:646-650`).
+- Descending by `status`: the epic trails (`:652-656`).
+- The case pins the wrong answer on purpose; deleting it is the first step of `links-store-seam-q35v.6`, not a cleanup (`:624-633`).
 
-**`events_are_totally_ordered`** (`:636-658`)
-- After a create plus three title changes, `ListAllEvents` returns at least 4 events (`:644-650`).
-- The sequence never steps backwards under `cmp.Or(CreatedAt.Compare, strings.Compare(ID))` — the property that holds tie or no tie (`:651-657`).
+**`events_are_totally_ordered`** (`:667-689`)
+- After a create plus three title changes, `ListAllEvents` returns at least 4 events (`:675-681`).
+- The sequence never steps backwards under `cmp.Or(CreatedAt.Compare, strings.Compare(ID))` — the property that holds tie or no tie (`:682-688`).
 
-**`rank_intents_reorder`** (`:660-700`)
-- Three creates → order a, b, c (`:664`).
-- `RankAbove(c, a)` → order c, a, b; the returned `RankMove` is the inputs unchanged for frame-mates (`:666-675`).
-- `RankBelow(c, b)` → order a, b, c (`:677-680`).
-- `RankToTop(b)` → order b, a, c (`:682-685`).
-- `RankToBottom(b)` → order a, c, b (`:687-690`).
-- `RankAbove` with a missing anchor is an error; `RankToTop` of a missing issue is an error (`:692-699`).
+**`rank_intents_reorder`** (`:691-731`)
+- Three creates → order a, b, c (`:695`).
+- `RankAbove(c, a)` → order c, a, b; the returned `RankMove` is the inputs unchanged for frame-mates (`:697-706`).
+- `RankBelow(c, b)` → order a, b, c (`:708-711`).
+- `RankToTop(b)` → order b, a, c (`:713-716`).
+- `RankToBottom(b)` → order a, c, b (`:718-721`).
+- `RankAbove` with a missing anchor is an error; `RankToTop` of a missing issue is an error (`:723-730`).
 
-**`rank_intents_resolve_across_frames`** (`:707-735`)
-- `RankAbove(child_of_epic, standalone)` succeeds and reports `MovedID == epic.ID`, `AnchorID == standalone.ID` (`:714-720`).
-- Nothing inside the epic is reordered, and the epic precedes the standalone in the listing (`:721-724`).
-- `RankAbove(child, its own epic)` is an error (`:729-731`).
-- `RankBelow(epic, its own child)` is an error (`:732-734`).
+**`rank_intents_resolve_across_frames`** (`:738-766`)
+- `RankAbove(child_of_epic, standalone)` succeeds and reports `MovedID == epic.ID`, `AnchorID == standalone.ID` (`:745-751`).
+- Nothing inside the epic is reordered, and the epic precedes the standalone in the listing (`:752-755`).
+- `RankAbove(child, its own epic)` is an error (`:760-762`).
+- `RankBelow(epic, its own child)` is an error (`:763-765`).
 
-**`rank_set_imposes_order`** (`:737-761`)
-- `RankSet([c, a, b])` yields listing order c, a, b (`:742-746`).
-- Exactly one resolution per named id, in the order named, with `NamedID == RankedID` for frame-mates (`:748-760`).
+**`rank_set_imposes_order`** (`:768-792`)
+- `RankSet([c, a, b])` yields listing order c, a, b (`:773-777`).
+- Exactly one resolution per named id, in the order named, with `NamedID == RankedID` for frame-mates (`:779-791`).
 
-**`close_redirects_to_a_canonical`** (`:767-813`)
-- `Close{Outcome: Duplicate{Of: canonical}}` → `State() == closed`, `ResolutionValue() == ResolutionDuplicate`, `RedirectTargetValue() == canonical.ID`, `ClosedAtValue() != nil` (`:771-790`).
-- `Reopen{}` clears the **whole** close payload together: resolution, redirect target, and closed-at all become nil (`:792-802`).
-- Closing as a duplicate of a missing issue → `NotFoundError{Entity: "issue"}` (`:804-807`).
-- Closing an issue as a duplicate of **itself** is an error (`:808-812`).
+**`close_redirects_to_a_canonical`** (`:798-844`)
+- `Close{Outcome: Duplicate{Of: canonical}}` → `State() == closed`, `ResolutionValue() == ResolutionDuplicate`, `RedirectTargetValue() == canonical.ID`, `ClosedAtValue() != nil` (`:802-821`).
+- `Reopen{}` clears the **whole** close payload together: resolution, redirect target, and closed-at all become nil (`:823-833`).
+- Closing as a duplicate of a missing issue → `NotFoundError{Entity: "issue"}` (`:835-838`).
+- Closing an issue as a duplicate of **itself** is an error (`:839-843`).
 
-**`comments_roundtrip`** (`:815-862`)
-- `AddComment` returns the comment as written (`Body`, `CreatedBy`, `IssueID`) (`:818-824`).
-- The second return is the issue as it stands after the write (`:825-829`).
-- `GetIssueDetail.Comments` holds exactly the added comment (`:831-837`).
-- `DeleteComment` returns the removed comment (id and body) (`:839-847`).
-- After delete, `GetIssueDetail.Comments` is empty (`:849-855`).
-- `DeleteComment("no-such-comment")` → `NotFoundError{Entity: "comment"}` (`:857-858`).
-- `AddComment` on a missing issue → `NotFoundError{Entity: "issue"}` (`:860-861`).
+**`comments_roundtrip`** (`:846-893`)
+- `AddComment` returns the comment as written (`Body`, `CreatedBy`, `IssueID`) (`:849-855`).
+- The second return is the issue as it stands after the write (`:856-860`).
+- `GetIssueDetail.Comments` holds exactly the added comment (`:862-868`).
+- `DeleteComment` returns the removed comment (id and body) (`:870-878`).
+- After delete, `GetIssueDetail.Comments` is empty (`:880-886`).
+- `DeleteComment("no-such-comment")` → `NotFoundError{Entity: "comment"}` (`:888-889`).
+- `AddComment` on a missing issue → `NotFoundError{Entity: "issue"}` (`:891-892`).
 
-**`labels_roundtrip`** (`:864-913`)
-- `AddLabel` returns the resulting set (`:869-873`).
-- The set is **ordered by name**, not by arrival: adding `zeta` then `alpha` yields `["alpha","zeta"]` (`:875-880`).
-- Adding a label twice is the same end state, **not an error** (`:882-888`).
-- `RemoveLabel` returns the resulting set (`:890-894`).
-- Removing an absent label → `NotFoundError{Entity: "label"}` (`:896-899`).
-- `ReplaceLabels` states the whole set: what was there and is not named is gone (`:901-909`).
-- `AddLabel` on a missing issue → `NotFoundError{Entity: "issue"}` (`:911-912`).
+**`labels_roundtrip`** (`:895-944`)
+- `AddLabel` returns the resulting set (`:900-904`).
+- The set is **ordered by name**, not by arrival: adding `zeta` then `alpha` yields `["alpha","zeta"]` (`:906-911`).
+- Adding a label twice is the same end state, **not an error** (`:913-919`).
+- `RemoveLabel` returns the resulting set (`:921-925`).
+- Removing an absent label → `NotFoundError{Entity: "label"}` (`:927-930`).
+- `ReplaceLabels` states the whole set: what was there and is not named is gone (`:932-940`).
+- `AddLabel` on a missing issue → `NotFoundError{Entity: "issue"}` (`:942-943`).
 
-**`relations_roundtrip`** (`:915-977`)
-- `AddRelation` with `RelBlocks` returns the edge with `src == dependent`, `dst == dependency` — the direction convention is contract (`:920-931`).
-- `ListRelationsForIssue(id)` with no type argument returns **every** edge type (2 here) (`:938-944`).
-- `ListRelationsForIssue(id, RelBlocks)` narrows to the one blocks edge — naming no type means every type, never no types (`:946-954`).
-- Edges are readable **from either end**: the dependency sees its dependent (`:956-963`).
-- `RemoveRelation` succeeds once; a second call → `NotFoundError{Entity: "relation"}` (`:965-969`).
-- `related-to` is symmetric, so an issue cannot be related to itself (`:971-976`).
+**`relations_roundtrip`** (`:946-1008`)
+- `AddRelation` with `RelBlocks` returns the edge with `src == dependent`, `dst == dependency` — the direction convention is contract (`:951-962`).
+- `ListRelationsForIssue(id)` with no type argument returns **every** edge type (2 here) (`:969-975`).
+- `ListRelationsForIssue(id, RelBlocks)` narrows to the one blocks edge — naming no type means every type, never no types (`:977-985`).
+- Edges are readable **from either end**: the dependency sees its dependent (`:987-994`).
+- `RemoveRelation` succeeds once; a second call → `NotFoundError{Entity: "relation"}` (`:996-1000`).
+- `related-to` is symmetric, so an issue cannot be related to itself (`:1002-1007`).
 
-**`relations_batch_buckets_edges`** (`:979-1018`)
-- `GetRelationsByIDs([epic, child, dependency])` returns 3 entries (`:989-995`).
-- The child's `Parent` is the epic (`:997-1000`).
-- The child's `DependsOn` is `[dependency]` (`:1001`).
-- The epic's `Children` is `[child]` (`:1003`).
-- The dependency's `Blocks` is `[child]` — `DependsOn` and `Blocks` are the two readings of one edge set, with no second row existing (`:1005-1007`).
-- `GetRelationsByIDs(nil)` returns an empty map, not an error (`:1009-1017`).
+**`relations_batch_buckets_edges`** (`:1010-1049`)
+- `GetRelationsByIDs([epic, child, dependency])` returns 3 entries (`:1020-1026`).
+- The child's `Parent` is the epic (`:1028-1031`).
+- The child's `DependsOn` is `[dependency]` (`:1032`).
+- The epic's `Children` is `[child]` (`:1034`).
+- The dependency's `Blocks` is `[child]` — `DependsOn` and `Blocks` are the two readings of one edge set, with no second row existing (`:1036-1038`).
+- `GetRelationsByIDs(nil)` returns an empty map, not an error (`:1040-1048`).
 
-**`parent_wiring`** (`:1020-1052`)
-- `SetParent` wires a child under an epic; `mustChildren` (a `ListIssues` with `ParentIDs: [parent]`, `IncludeArchived` and `IncludeDeleted`) shows it (`:1676-1679`, `:2046-2051`).
-- **Reparenting replaces rather than adds**: after a second `SetParent`, the old epic has no children and the new one has the child (`:1030-1036`).
-- `ClearParent` detaches; the parent then has no children (`:1038-1041`).
-- `ClearParent` on a parentless child → `NotFoundError{Entity: "parent relation"}` (`:1043-1045`).
-- `SetParent` to itself is an error (`:1047-1049`).
-- `SetParent` under a missing parent → `NotFoundError{Entity: "issue"}` (`:1050-1051`).
+**`parent_wiring`** (`:1051-1083`)
+- `SetParent` wires a child under an epic; `mustChildren` (a `ListIssues` with `ParentIDs: [parent]`, `IncludeArchived` and `IncludeDeleted`) shows it (`:1707-1710`, `:2077-2082`).
+- **Reparenting replaces rather than adds**: after a second `SetParent`, the old epic has no children and the new one has the child (`:1061-1067`).
+- `ClearParent` detaches; the parent then has no children (`:1069-1072`).
+- `ClearParent` on a parentless child → `NotFoundError{Entity: "parent relation"}` (`:1074-1076`).
+- `SetParent` to itself is an error (`:1078-1080`).
+- `SetParent` under a missing parent → `NotFoundError{Entity: "issue"}` (`:1081-1082`).
 
-**`topics_derive_from_issues`** (`:1054-1066`)
+**`topics_derive_from_issues`** (`:1085-1097`)
 - Three issues across two topics yield exactly `["parser","renderer"]` — distinct, ascending, never a stored list that could disagree with the issues.
 
-**`export_carries_whole_store`** (`:1068-1142`)
-- Export carries the **whole** store, archived work included; an export honoring the listing default would silently drop archived work from every backup and every diff (`:1108-1111`).
-- Exported issue ids and their order: epic, child, archived, then the ten tied issues (`:1111`).
-- `export.Relations` holds the one parent edge with `SrcID == child.ID` (`:1112-1114`).
-- `export.Comments` holds the one comment (`:1115-1117`).
-- `export.Labels` holds the one label `"perf"` (`:1118-1120`).
-- `export.Events` is non-empty — the history must travel with the state (`:1121-1123`).
-- `export.Events` order **equals** `ListAllEvents` order, compared by event id (`:1124-1138`). The case deliberately manufactures ten same-tick tie groups (each a create plus a combined action-and-fields `Apply`, which records several events sharing one timestamp) to make ordering observable; ten groups put agreement-by-coincidence at 2^-10 (`:1079-1102`).
-- `export.ExportedAt` is non-zero (`:1139-1141`).
+**`export_carries_whole_store`** (`:1099-1173`)
+- Export carries the **whole** store, archived work included; an export honoring the listing default would silently drop archived work from every backup and every diff (`:1139-1142`).
+- Exported issue ids and their order: epic, child, archived, then the ten tied issues (`:1142`).
+- `export.Relations` holds the one parent edge with `SrcID == child.ID` (`:1143-1145`).
+- `export.Comments` holds the one comment (`:1146-1148`).
+- `export.Labels` holds the one label `"perf"` (`:1149-1151`).
+- `export.Events` is non-empty — the history must travel with the state (`:1152-1154`).
+- `export.Events` order **equals** `ListAllEvents` order, compared by event id (`:1155-1169`). The case deliberately manufactures ten same-tick tie groups (each a create plus a combined action-and-fields `Apply`, which records several events sharing one timestamp) to make ordering observable; ten groups put agreement-by-coincidence at 2^-10 (`:1110-1133`).
+- `export.ExportedAt` is non-zero (`:1170-1172`).
 
-**`bulk_apply_creates_and_updates`** (`:1154-1197`)
-- A batch of two create docs wired by `local_id`/`parent` yields `Created` entries keyed `"root"` and `"leaf"`, and the parent relationship is wired (`:1161-1178`).
-- A doc naming a real `ID` is an **update**, not a second create: `Updated == [leafID]` and `Created` is empty (`:1180-1189`).
-- The update persists (`:1190-1196`).
+**`bulk_apply_creates_and_updates`** (`:1185-1228`)
+- A batch of two create docs wired by `local_id`/`parent` yields `Created` entries keyed `"root"` and `"leaf"`, and the parent relationship is wired (`:1192-1209`).
+- A doc naming a real `ID` is an **update**, not a second create: `Updated == [leafID]` and `Created` is empty (`:1211-1220`).
+- The update persists (`:1221-1227`).
 
-**`bulk_apply_compensates_a_failed_batch`** (`:1204-1221`)
-- A batch whose second doc names a parent that is neither a batch-local name nor a real id passes the file's own validation and fails at the write (`:1210-1219`).
-- After the failure, the default listing is **empty** — the issue created before the failure was undone (`:1220`).
-- The contract trades atomicity for an account: creates are undone and what could not be undone is named in the error (`:1199-1203`).
+**`bulk_apply_compensates_a_failed_batch`** (`:1235-1252`)
+- A batch whose second doc names a parent that is neither a batch-local name nor a real id passes the file's own validation and fails at the write (`:1241-1250`).
+- After the failure, the default listing is **empty** — the issue created before the failure was undone (`:1251`).
+- The contract trades atomicity for an account: creates are undone and what could not be undone is named in the error (`:1230-1234`).
 
-**`import_tree_maps_local_ids`** (`:1223-1246`)
-- A three-spec tree returns an `IDMap` with an entry per spec (`:1224-1234`).
-- `parent: "root"` wires `leaf` as a child of `root` (`:1235`).
-- `depends_on: ["leaf"]` on `other` produces exactly one `RelBlocks` edge with `Src == other`, `Dst == leaf` — the dependent is the edge's src (`:1237-1245`).
+**`import_tree_maps_local_ids`** (`:1254-1277`)
+- A three-spec tree returns an `IDMap` with an entry per spec (`:1255-1265`).
+- `parent: "root"` wires `leaf` as a child of `root` (`:1266`).
+- `depends_on: ["leaf"]` on `other` produces exactly one `RelBlocks` edge with `Src == other`, `Dst == leaf` — the dependent is the edge's src (`:1268-1276`).
 
-**`attribution_stamps_events`** (`:1248-1284`)
-- Before `AttributeTo` is called, every event of an issue created then has `Attribution.Present() == false` — unattributed rather than half-attributed (`:1249-1264`).
-- After `AttributeTo("stream-token")`, an issue created then records at least one event (`:1265-1267`).
-- **Every** event that mutation produced carries attribution — it is stamped at the store's one insertion point, not by call sites that remembered (`:1268-1274`).
-- `Attribution.Stream() == "stream-token"` (`:1275-1277`).
-- `Attribution.Workspace()` is non-empty — the pair is complete or absent (`:1278-1282`).
+**`attribution_stamps_events`** (`:1279-1315`)
+- Before `AttributeTo` is called, every event of an issue created then has `Attribution.Present() == false` — unattributed rather than half-attributed (`:1280-1295`).
+- After `AttributeTo("stream-token")`, an issue created then records at least one event (`:1296-1298`).
+- **Every** event that mutation produced carries attribution — it is stamped at the store's one insertion point, not by call sites that remembered (`:1299-1305`).
+- `Attribution.Stream() == "stream-token"` (`:1306-1308`).
+- `Attribution.Workspace()` is non-empty — the pair is complete or absent (`:1309-1313`).
 
-**`local_issue_count_tracks_creates`** (`:1286-1312`)
-- A fresh engine reports 0 rather than failing (`:1287-1295`).
-- After two creates, one of which is soft-deleted, the count is **2** — it counts what the store holds, because a soft-deleted issue is still work that would be lost (`:1297-1311`).
+**`local_issue_count_tracks_creates`** (`:1317-1343`)
+- A fresh engine reports 0 rather than failing (`:1318-1326`).
+- After two creates, one of which is soft-deleted, the count is **2** — it counts what the store holds, because a soft-deleted issue is still work that would be lost (`:1328-1342`).
 
 ### 3.4 Assertion helpers and what they imply
 
-- `assertOrder` pins the order of a **default (unsorted) listing**, which is the only surface through which rank is observable across engines — **the `Rank` value itself is an engine's own encoding and is deliberately never asserted** (`:1357-1363`).
-- `assertState` reads an issue back with `GetIssue` and pins its derived `State()`, including out-of-flow issues a default listing would not show (`:1365-1376`).
-- `assertPrecedes` pins a relative position without pinning the whole listing (`:1378-1398`).
-- `assertStrings` compares by content and order joined with `"|"`; **a nil result and an empty one compare equal on purpose** — an engine spelling "nothing here" as nil rather than a zero-length slice has not behaved differently (`:1409-1418`).
-- `assertNotFound` requires `errors.As` to a `storage.NotFoundError` **and** an exact `Entity` match — callers dispatch on the type, and the entity tells a user WHICH thing was missing when an operation touches several (`:1420-1432`).
+- `assertOrder` pins the order of a **default (unsorted) listing**, which is the only surface through which rank is observable across engines — **the `Rank` value itself is an engine's own encoding and is deliberately never asserted** (`:1388-1394`).
+- `assertState` reads an issue back with `GetIssue` and pins its derived `State()`, including out-of-flow issues a default listing would not show (`:1396-1407`).
+- `assertPrecedes` pins a relative position without pinning the whole listing (`:1409-1429`).
+- `assertStrings` compares by content and order joined with `"|"`; **a nil result and an empty one compare equal on purpose** — an engine spelling "nothing here" as nil rather than a zero-length slice has not behaved differently (`:1440-1449`).
+- `assertNotFound` requires `errors.As` to a `storage.NotFoundError` **and** an exact `Entity` match — callers dispatch on the type, and the entity tells a user WHICH thing was missing when an operation touches several (`:1451-1463`).
 - Entity strings the suite pins: `"issue"`, `"comment"`, `"label"`, `"relation"`, `"parent relation"`.
-- Every helper fails the test rather than returning an error, so a case body reads as the behavioral statement it is (`:1314-1318`).
+- Every helper fails the test rather than returning an error, so a case body reads as the behavioral statement it is (`:1345-1349`).
 
 ### 3.5 What the conformance suite does NOT require
 

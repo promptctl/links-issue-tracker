@@ -1055,8 +1055,8 @@ positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason 
 - The redirect target must exist, must not be the closing issue itself, and must
   not be deleted: `"closing as <res> requires a canonical target issue to redirect
   to"`, `"cannot redirect <id> to itself"`, `"cannot redirect <id> to <target>:
-  the canonical issue is deleted"` (`internal/store/store.go:1542`, `:1547`,
-  `:1554`).
+  the canonical issue is deleted"` (`internal/store/store.go:1547`, `:1552`,
+  `:1559`).
 - `archive` on a deleted issue → `"cannot archive deleted issue"`;
   `unarchive` on a deleted issue → `"cannot unarchive deleted issue"`
   (`internal/model/lifecycle/retention.go:73`, `:82`).

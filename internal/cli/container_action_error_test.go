@@ -2,9 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"io"
-	"slices"
-	"sort"
 	"strings"
 	"testing"
 
@@ -356,29 +355,30 @@ func TestOpenRefusalNeverNamesThePersistedEncoding(t *testing.T) {
 	}
 }
 
-// TestTheCommandSurfaceAndTheVerbMapNameTheSameWords closes the loop between
-// the two places a verb is written down: the command table in this package, and
-// lifecycle's verb map, which every refusal reads. They are two maps of one
-// territory, so without this the one the messages use is the one nobody looks
-// at, and it can drift from the commands that actually exist without anything
-// failing. [LAW:one-source-of-truth]
+// TestEveryVerbAMessageCanPrintIsACommandThatExists states the claim the
+// refusals actually rest on, and reads it from the command registry itself.
 //
-// All eight are covered, not the four status verbs the container rejection can
-// reach, because the retention four reach the same defect through the
-// "cannot %s archived or deleted issue" refusal.
-func TestTheCommandSurfaceAndTheVerbMapNameTheSameWords(t *testing.T) {
-	fromCommands := []string{}
-	for _, spec := range []transitionSpec{startSpec, doneSpec, closeSpec, openSpec, archiveSpec, unarchiveSpec, deleteSpec, restoreSpec} {
-		fromCommands = append(fromCommands, spec.name)
+// An earlier version of this test compared the verb map against
+// `transitionSpec.name`. That was the wrong subject: `transitionSpec.name` only
+// feeds usage strings, and the word a caller types was a separate literal in
+// `commandSpecs`, with nothing binding the two -- so the test would have stayed
+// green while every refusal quoted a verb no command answered to, which is the
+// exact defect it exists to prevent. The registry row now takes its name from
+// the spec, so there is one spelling of each word, and this reads the registry
+// rather than either copy. [LAW:one-source-of-truth]
+func TestEveryVerbAMessageCanPrintIsACommandThatExists(t *testing.T) {
+	registered := map[string]bool{}
+	for _, spec := range commandSpecs(context.Background(), io.Discard, io.Discard) {
+		registered[spec.Name] = true
 	}
-	fromVerbMap := []string{}
+	if len(registered) == 0 {
+		t.Fatal("the command registry came back empty, so this test checks nothing")
+	}
 	for _, action := range model.Actions() {
-		fromVerbMap = append(fromVerbMap, action.Verb())
-	}
-	sort.Strings(fromCommands)
-	sort.Strings(fromVerbMap)
-	if !slices.Equal(fromCommands, fromVerbMap) {
-		t.Fatalf("the transition commands name %v, lifecycle's verbs name %v -- a message rendering a verb no command answers to hands the agent something it cannot run", fromCommands, fromVerbMap)
+		verb := action.Verb()
+		if !registered[verb] {
+			t.Errorf("action %q renders as `%s` in agent-facing refusals, but `lit %s` is not a registered command", action, verb, verb)
+		}
 	}
 }
 

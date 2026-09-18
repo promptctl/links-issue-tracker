@@ -527,7 +527,7 @@ input surfaces) (`label.go:19-21`). Otherwise returns the normalized form.
   `lifecycle != nil`.
 - `mustLifecycle()` — `model.go:257-263`: panics
   `issue %q: lifecycle read on unhydrated issue: %v`.
-- `lifecycleOrError()` — `model.go:435-443`: if `pendingHydration`, returns error
+- `lifecycleOrError()` — `model.go:443-451`: if `pendingHydration`, returns error
   `issue %s requires store hydration`; if `lifecycle == nil`, **panics**
   `issue %q has no lifecycle (constructed without HydrateStatus/HydrateAllOf)`.
   Pinned by `TestNilLifecycleIssueLifecycleMethodsPanic` (`model_test.go:194`)
@@ -607,14 +607,14 @@ establish.
   `lifecycle.NewStatus(view.Value, view.ClosedAt, view.Resolution, view.RedirectTarget)`.
   Never returns a non-nil error today.
 - `HydrateRow(issue Issue, view StatusView, children []Issue) (Issue, error)` —
-  `model.go:413-418`: dispatches on `issue.IssueType.IsContainer()` →
+  `model.go:421-426`: dispatches on `issue.IssueType.IsContainer()` →
   `HydrateAllOf(issue, children)`, else `HydrateStatus(issue, view)`.
-- `HydrateAllOf(issue Issue, children []Issue) (Issue, error)` — `model.go:422-433`:
+- `HydrateAllOf(issue Issue, children []Issue) (Issue, error)` — `model.go:430-441`:
   collects each child's lifecycle via `child.lifecycleOrError()` (propagating the
   first error, returning `Issue{}`), then sets `lifecycle.AllOf{Members: members}`.
 
 ### JSON encoding
-Wire struct `issueJSON` — `model.go:445-467`. Keys in declaration order:
+Wire struct `issueJSON` — `model.go:453-475`. Keys in declaration order:
 `id`, `title`, `description`, `prompt` (omitempty), `status` (`*State`,
 omitempty), `priority`, `issue_type`, `topic`, `assignee` (omitempty), `rank`,
 `lane`, `labels`, `created_at`, `updated_at`, `closed_at` (omitempty),
@@ -622,14 +622,14 @@ omitempty), `priority`, `issue_type`, `topic`, `assignee` (omitempty), `rank`,
 (omitempty), `deleted_at` (omitempty). Notably: no `progress` key (pinned by
 `TestIssueJSONOmitsProgress`, `model_test.go:270`).
 
-`IssueWireFields() []string` — `model.go:476-493`: reflects over `issueJSON`,
+`IssueWireFields() []string` — `model.go:484-501`: reflects over `issueJSON`,
 cuts each `json` tag at the first comma; skips fields tagged `-`; falls back to
 the Go field name when the tag name is empty. Pinned by
 `TestIssueWireFieldsCoverMarshalOutput`, `model_test.go:341`.
 
-`(Issue).MarshalJSON()` — `model.go:495-541`:
-- `pendingHydration` → error `issue %s requires store hydration` (`:496-498`).
-- `lifecycle == nil` → error `issue %s has no hydrated lifecycle` (`:499-503`).
+`(Issue).MarshalJSON()` — `model.go:503-549`:
+- `pendingHydration` → error `issue %s requires store hydration` (`:504-506`).
+- `lifecycle == nil` → error `issue %s has no hydrated lifecycle` (`:507-511`).
   Pinned by `TestNilLifecycleIssueMarshalJSONErrors`, `model_test.go:263`.
 - Status fields (`status`, `closed_at`, `resolution`, `redirect_target`) are
   emitted only when the root exposes a status capability (`:501-511`) — so a
@@ -637,11 +637,11 @@ the Go field name when the tag name is empty. Pinned by
 - `archived_at`/`deleted_at` come from `lifecycle.RetentionTimestamps(i.Retention())`
   (`:512`).
 
-`(*Issue).UnmarshalJSON(data)` — `model.go:543-584`:
+`(*Issue).UnmarshalJSON(data)` — `model.go:551-592`:
 - Copies the plain fields and sets `retention` from
-  `RetentionFromTimestamps(payload.ArchivedAt, payload.DeletedAt)` (`:548-563`).
+  `RetentionFromTimestamps(payload.ArchivedAt, payload.DeletedAt)` (`:556-571`).
 - If `IssueType.IsContainer()` → sets `pendingHydration = true`,
-  `lifecycle = nil` (JSON may never synthesize container lifecycle) (`:565-568`).
+  `lifecycle = nil` (JSON may never synthesize container lifecycle) (`:573-576`).
   Pinned by `TestIssueJSONRoundTripEpicRequiresStoreHydration`,
   `model_test.go:79`.
 - Else if `status` is present → `HydrateStatus` with the decoded
@@ -655,71 +655,71 @@ the Go field name when the tag name is empty. Pinned by
 
 ## 2.8 Other record types — `model.go`
 
-- `Relation` — `model.go:586-592`: `SrcID` (`src_id`), `DstID` (`dst_id`),
+- `Relation` — `model.go:594-600`: `SrcID` (`src_id`), `DstID` (`dst_id`),
   `Type RelationType` (`type`), `CreatedAt` (`created_at`), `CreatedBy`
   (`created_by`).
-- `Comment` — `model.go:594-600`: `ID` (`id`), `IssueID` (`issue_id`), `Body`
+- `Comment` — `model.go:602-608`: `ID` (`id`), `IssueID` (`issue_id`), `Body`
   (`body`), `CreatedAt` (`created_at`), `CreatedBy` (`created_by`).
-- `Label` — `model.go:602-607`: `IssueID` (`issue_id`), `Name` (`name`),
+- `Label` — `model.go:610-615`: `IssueID` (`issue_id`), `Name` (`name`),
   `CreatedAt` (`created_at`), `CreatedBy` (`created_by`).
-- `FieldChange` — `model.go:613-617`: `Field` (`field`), `From` (`from`), `To`
-  (`to`) — all stringified so the schema is field-agnostic (`model.go:609-612`).
-- `IssueEvent` — `model.go:731-740`: `ID` (`id`), `IssueID` (`issue_id`),
+- `FieldChange` — `model.go:621-625`: `Field` (`field`), `From` (`from`), `To`
+  (`to`) — all stringified so the schema is field-agnostic (`model.go:617-620`).
+- `IssueEvent` — `model.go:739-748`: `ID` (`id`), `IssueID` (`issue_id`),
   `Action` (`action,omitempty` — optional intent metadata populated by named
-  status transitions, empty for plain field updates, `model.go:725-728`),
+  status transitions, empty for plain field updates, `model.go:733-736`),
   `Reason` (`reason`), `Actor` (`actor`), `CreatedAt` (`created_at`),
   `Attribution` (`attribution,omitzero`), `Changes []FieldChange` (`changes`).
-- `IssueDetail` — `model.go:742-760`: `Issue` (`issue`), `Relations`
+- `IssueDetail` — `model.go:750-768`: `Issue` (`issue`), `Relations`
   (`relations`), `Comments` (`comments`), `Children` (`children`), `Siblings`
   (`siblings`), `DependsOn` (`depends_on`), `Related` (`related`), `Blocks`
   (`blocks`), `Parent *Issue` (`parent,omitempty`), `RedirectTarget *Issue`
   (`redirect_target,omitempty` — hydrated from the issue's own redirect target,
   never from the relations graph; `Related` carries only manual peer links,
-  `model.go:752-758`), `Events` (`events`).
-- `Export` — `model.go:762-771`: `Version int` (`version`), `WorkspaceID`
+  `model.go:760-766`), `Events` (`events`).
+- `Export` — `model.go:770-779`: `Version int` (`version`), `WorkspaceID`
   (`workspace_id`), `ExportedAt` (`exported_at`), `Issues`, `Relations`,
   `Comments`, `Labels`, `Events`.
 
-## 2.9 `Attribution` — `model.go:638-720`
+## 2.9 `Attribution` — `model.go:646-728`
 
-Struct with two unexported fields: `stream`, `workspace` (`model.go:638-641`).
+Struct with two unexported fields: `stream`, `workspace` (`model.go:646-649`).
 Both are documented as opaque by mandate: nothing user-, host- or path-shaped
 may be carried, because the database syncs to shared remotes
-(`model.go:632-637`).
+(`model.go:640-645`).
 
-- `NewAttribution(stream, workspace string) Attribution` — `model.go:663-668`:
+- `NewAttribution(stream, workspace string) Attribution` — `model.go:671-676`:
   if **either** is `""`, returns the zero `Attribution{}`; otherwise the complete
-  pair. Half pairs collapse silently to "unattributed" (`model.go:643-662`).
+  pair. Half pairs collapse silently to "unattributed" (`model.go:651-670`).
   Pinned by `TestNewAttributionAdmitsOnlyCompleteOrAbsent`,
   `attribution_test.go:13`.
-- `Stream()` / `Workspace()` — `model.go:673-674`.
-- `IsZero() bool` — `model.go:679`: `a == Attribution{}`; consulted by
+- `Stream()` / `Workspace()` — `model.go:681-682`.
+- `IsZero() bool` — `model.go:687`: `a == Attribution{}`; consulted by
   `encoding/json` for `omitzero`.
-- `Present() bool` — `model.go:689`: `!IsZero()`.
-- `attributionWire` — `model.go:694-697`: JSON keys `stream,omitempty` and
+- `Present() bool` — `model.go:697`: `!IsZero()`.
+- `attributionWire` — `model.go:702-705`: JSON keys `stream,omitempty` and
   `workspace,omitempty`.
-- `MarshalJSON` — `model.go:699-701`.
-- `UnmarshalJSON` — `model.go:713-720`: decodes the wire pair then routes through
+- `MarshalJSON` — `model.go:707-709`.
+- `UnmarshalJSON` — `model.go:721-728`: decodes the wire pair then routes through
   `NewAttribution`, so `{"stream":"x"}` with no workspace decodes to the absent
   pair. Pinned by `TestAttributionDecodeCollapsesAHalfPair`
   (`attribution_test.go:50`), `TestAttributionSurvivesARoundTrip` (`:71`),
   `TestUnattributedEventOmitsAttributionEntirely` (`:94`).
 
-## 2.10 Export v1/v2 decoding — `model.go:773-843`
+## 2.10 Export v1/v2 decoding — `model.go:781-851`
 
-- `v1ExportHistory` (legacy v1 "history" row) — `model.go:775-783`: `issue_id`,
+- `v1ExportHistory` (legacy v1 "history" row) — `model.go:783-791`: `issue_id`,
   `action`, `from_status`, `to_status`, `reason`, `created_by`, `created_at`.
 - `v1EventID(issueID, action, fromStatus, toStatus, createdBy, createdAt)` —
-  `model.go:789-793`: joins the six values with `"|"` (timestamp formatted as
+  `model.go:797-801`: joins the six values with `"|"` (timestamp formatted as
   `time.RFC3339Nano`), SHA-256s the key, and returns
   `"evt-v1-" + hex(first 8 bytes)` — a 16-hex-char suffix. Identical rows produce
   identical IDs (dedup-safe); any differing field produces a distinct ID.
-- `(*Export).UnmarshalJSON` — `model.go:800-843`: decodes into a raw struct
+- `(*Export).UnmarshalJSON` — `model.go:808-851`: decodes into a raw struct
   carrying both `events` and `history`. If `raw.Version < 2` **and**
   `len(raw.History) > 0`, each history row is appended to `Events` as an
   `IssueEvent` with `ID = v1EventID(...)`, `Actor = h.CreatedBy`, and exactly one
   `FieldChange{Field: "status", From: h.FromStatus, To: h.ToStatus}`
-  (`model.go:829-841`). v2+ exports ignore any `history` array.
+  (`model.go:837-849`). v2+ exports ignore any `history` array.
 
 ---
 
@@ -1457,8 +1457,8 @@ cancellation.
    (`retention.go:152`), `closeResolution` on a `Close` with no outcome
    (`status_states.go:173`).
 4. Unhydrated lifecycle reads panic on the accessor path
-   (`model.go:260`, `model.go:440`) but become errors at the JSON boundary
-   (`model.go:497`, `model.go:502`) and at `Apply` (`model.go:311-314`).
+   (`model.go:260`, `model.go:448`) but become errors at the JSON boundary
+   (`model.go:505`, `model.go:510`) and at `Apply` (`model.go:311-314`).
 5. Container-ness is decided by `IssueType` alone (`issue_type.go:56-58`,
    `model.go:376-378`), never by the lifecycle shape.
 6. Two orthogonal axes: activity (`State`, driven by `StatusAction`) and
