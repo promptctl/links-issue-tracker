@@ -19,11 +19,12 @@ import (
 var ErrNotGitRepo = errors.New("links requires a git repository/worktree")
 
 // ErrIssuePrefixRefused marks every refusal to settle on a workspace's
-// issue prefix: a repository name that cannot produce one, and an explicit
-// request that contradicts the prefix a workspace already carries. Both are
-// terminal for the command as issued and both are answered by changing the
-// command, which is all the CLI's classification needs to know — so they share
-// one sentinel, and the message each raise site wraps it with carries the act.
+// issue prefix: a repository name that cannot produce one, an explicit request
+// that contradicts the prefix a workspace already carries, and a stored
+// issue_prefix the rules refuse. All three are terminal for the command as
+// issued and all three are answered by changing something the caller controls,
+// which is all the CLI's classification needs to know — so they share one
+// sentinel, and the message each raise site wraps it with carries the act.
 //
 // Without a type these reached the unclassified default, which told the caller
 // to retry a deterministic refusal and then to run `lit doctor` against the
@@ -472,15 +473,15 @@ func GitRemotes(ctx context.Context, cwd string) ([]GitRemote, error) {
 // prefix has three possible sources and this is the one place that ranks them:
 // the value config.json already carries wins, an explicit request supplies one
 // for a workspace that carries none, and derivation from the repository name is
-// the last resort. An invalid configured value is a loud error, never a silent
-// fallback to derivation.
+// the last resort. A stored value the rules refuse is a loud, typed refusal
+// naming the file to edit — never a silent fallback to derivation.
 //
 // A request that CONTRADICTS a stored value is refused rather than applied.
 // Rewriting the prefix of a workspace that already has issues filed under it is
-// `lit prefix set`'s job, which previews the change before writing it; honouring
+// `lit prefix set`'s job, which previews the change before `--apply` writes it; honouring
 // it here would do that consequential thing silently, from a command whose whole
 // contract is to be safe to re-run. [LAW:single-enforcer] [LAW:no-silent-failure]
-func resolveIssuePrefix(rootDir string, configured string, requested PrefixRequest) (PrefixSpec, error) {
+func resolveIssuePrefix(rootDir string, configPath string, configured string, requested PrefixRequest) (PrefixSpec, error) {
 	if strings.TrimSpace(configured) == "" {
 		// The request is consulted BEFORE derivation, not bolted onto one of its
 		// failure exits, so every way the repository name can come up short is
@@ -496,11 +497,22 @@ func resolveIssuePrefix(rootDir string, configured string, requested PrefixReque
 	}
 	spec, err := ConfiguredPrefix(configured)
 	if err != nil {
-		return PrefixSpec{}, fmt.Errorf("invalid issue_prefix: %w", err)
+		// The third way lit fails to settle on a prefix, and the only one no
+		// command can clear: `lit prefix set` and `lit doctor` both resolve the
+		// workspace before they run, so they die here too. The remediation
+		// therefore names the FILE rather than a command, because editing it is
+		// the act that actually works — the same reason the derive message names
+		// `lit init --prefix`. Untyped, this wore the retry-then-doctor default
+		// while sitting three lines from the two refusals this change typed.
+		// [LAW:no-silent-failure] [LAW:one-type-per-behavior]
+		return PrefixSpec{}, fmt.Errorf(
+			"%w: %s carries issue_prefix %q, which is not a legal prefix (%v); edit issue_prefix in that file to a valid value",
+			ErrIssuePrefixRefused, configPath, configured, err,
+		)
 	}
 	if requested.present && requested.spec.Value() != spec.Value() {
 		return PrefixSpec{}, fmt.Errorf(
-			"%w: this workspace already uses %q, so --prefix %s cannot be honoured here; run `lit prefix set %s --apply` to change the prefix of a workspace that already has one",
+			"%w: this workspace already uses %q, so --prefix %s cannot be honoured here; run `lit prefix set %s` to change the prefix of a workspace that already has one (it previews the change; `--apply` writes it)",
 			ErrIssuePrefixRefused, spec.Value(), requested.spec.Value(), requested.spec.Value(),
 		)
 	}
@@ -536,7 +548,7 @@ func ReadConfig(path string) (Config, error) {
 func loadOrCreateConfig(rootDir string, path string, requested PrefixRequest) (Config, PrefixSpec, error) {
 	cfg, err := ReadConfig(path)
 	if err == nil {
-		prefix, err := resolveIssuePrefix(rootDir, cfg.IssuePrefix, requested)
+		prefix, err := resolveIssuePrefix(rootDir, path, cfg.IssuePrefix, requested)
 		if err != nil {
 			return Config{}, PrefixSpec{}, err
 		}
@@ -558,7 +570,7 @@ func loadOrCreateConfig(rootDir string, path string, requested PrefixRequest) (C
 	if !errors.Is(err, os.ErrNotExist) {
 		return Config{}, PrefixSpec{}, err
 	}
-	prefix, err := resolveIssuePrefix(rootDir, "", requested)
+	prefix, err := resolveIssuePrefix(rootDir, path, "", requested)
 	if err != nil {
 		return Config{}, PrefixSpec{}, err
 	}

@@ -11,5 +11,5 @@ characters once punctuation is normalized away — a repository named "ab" or
 
 --prefix only sets the prefix of a workspace that has none yet. Supplying one
 that contradicts the prefix a workspace already uses is refused, because
-existing issue IDs carry the old prefix; `lit prefix set <prefix> --apply`
-is the command that changes it, and it previews the change first.
+existing issue IDs carry the old prefix; `lit prefix set <prefix>` is the
+command that changes it. It previews the change; `--apply` writes it.

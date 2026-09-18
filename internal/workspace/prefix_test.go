@@ -147,8 +147,8 @@ func TestResolveWithPrefixRefusesToContradictAWorkspaceThatHasOne(t *testing.T) 
 		t.Fatalf("ResolveWithPrefix() error = %v, want it to wrap ErrIssuePrefixRefused", err)
 	}
 	// Changing the prefix of a workspace that already has issues under it is
-	// `lit prefix set`'s job, which previews the change first. The refusal has
-	// to hand the caller that command, not just say no.
+	// `lit prefix set`'s job, which previews the change before `--apply` writes
+	// it. The refusal has to hand the caller that command, not just say no.
 	if !strings.Contains(err.Error(), "lit prefix set") {
 		t.Fatalf("ResolveWithPrefix() error = %v, want it to name `lit prefix set`", err)
 	}

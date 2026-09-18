@@ -14,6 +14,7 @@ import (
 type initReport struct {
 	Status       string          `json:"status"`
 	WorkspaceID  string          `json:"workspace_id"`
+	IssuePrefix  string          `json:"issue_prefix"`
 	DatabasePath string          `json:"database_path"`
 	DBCreated    bool            `json:"db_created"`
 	Hooks        string          `json:"hooks"`
@@ -112,6 +113,7 @@ func initLeaf() (wsLeaf, wsAcquire) {
 		report := initReport{
 			Status:       "initialized",
 			WorkspaceID:  ws.WorkspaceID,
+			IssuePrefix:  ws.IssuePrefix.Value(),
 			DatabasePath: ws.DatabasePath,
 			DBCreated:    dbCreated,
 			Hooks:        "skipped",
@@ -214,6 +216,17 @@ func writeInitHumanOutput(w io.Writer, report initReport, buildNote string) erro
 		if _, err := fmt.Fprintf(w, "lit workspace already initialized\n"); err != nil {
 			return err
 		}
+	}
+	// Always printed, for every init, because the prefix lit STORED is not
+	// always the prefix the caller typed: ConfiguredPrefix slugifies and
+	// truncates at PrefixMaxLength, so `--prefix payment_service` becomes
+	// `payment-serv`. Reporting it is how the caller learns the real value here
+	// rather than from the first issue id — `lit prefix set` already echoes its
+	// normalized result, and the two siblings should not differ on that.
+	// [LAW:no-silent-failure] input we materially changed is reported, not
+	// swallowed. [LAW:dataflow-not-control-flow] one unconditional line.
+	if _, err := fmt.Fprintf(w, "  issue_prefix: %s\n", report.IssuePrefix); err != nil {
+		return err
 	}
 	if err := writeInitSyncLine(w, report.Sync, buildNote); err != nil {
 		return err
