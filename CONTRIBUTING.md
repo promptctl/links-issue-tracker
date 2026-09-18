@@ -199,6 +199,15 @@ fails on purpose. Correct the prose first, then run
 leaving the manifest is a sentence that stopped describing the binary — so
 regenerating without reading what left is the one use that defeats the gate.
 
+A failure names which of three things happened, because the remedy differs and
+one of them is destroyed by regenerating. A chapter that stopped quoting a
+message, and a literal reworded around a quotation, are both fixed by
+regenerating. A message that stopped shipping is not: the report says so in
+those words and tells you not to. Where the recorded source no longer carries
+the quotation but some other shipped source does, the report names that source
+and stops — it cannot tell a reworded message from an unrelated string that
+happens to share the words, and that is the one case only a reader can settle.
+
 The check is one-directional and narrow on purpose. Every literal the manifest
 records must still ship; no chapter is ever required to quote any particular
 string, so prose that never quoted code needs no allowlist and adds no upkeep.
