@@ -47,6 +47,12 @@ var bareFormsThatAreLeaves = map[string]bool{
 type invocablePath struct {
 	path     []string
 	bareForm bool
+	// children are the subcommand names the registry lists under this path,
+	// carried for a bare form so the family assertion can require the refusal to
+	// name one of them. Asserting on the command's OWN name instead passed for
+	// `sync reconcile` only because its usage line happens to contain the word
+	// "reconcile" — a coincidence, not a property. [LAW:behavior-not-structure]
+	children []string
 }
 
 // leafPaths walks the registry and returns every invocable command path.
@@ -72,7 +78,11 @@ func leafPaths(t *testing.T) []invocablePath {
 			return
 		}
 		// The family's own bare form, then each child.
-		paths = append(paths, invocablePath{path: prefix, bareForm: true})
+		names := make([]string, 0, len(subs))
+		for _, sub := range subs {
+			names = append(names, sub.Name)
+		}
+		paths = append(paths, invocablePath{path: prefix, bareForm: true, children: names})
 		for _, sub := range subs {
 			walk(append(append([]string{}, prefix...), sub.Name), sub.Subcommands)
 		}
@@ -139,10 +149,20 @@ func TestEveryLeafRefusesAnUndeclaredPositional(t *testing.T) {
 			}
 			// A stray token after a FAMILY is an unrecognised subcommand, and the
 			// useful answer names the subcommands that do exist rather than
-			// echoing what was typed. Assert it is not vacuous: it must at least
-			// name the command the caller was reaching for.
-			if !strings.Contains(msg, cp.path[len(cp.path)-1]) {
-				t.Errorf("lit %s error = %q, want the family usage naming its subcommands", name, msg)
+			// echoing what was typed. Require one of the registry's OWN child
+			// names: asserting the command's own name instead is satisfied by
+			// any usage line built from `fs.cmd.Use`, which is how a leaf
+			// misclassified as a family passed this branch while asserting
+			// nothing about its guidance.
+			named := false
+			for _, child := range cp.children {
+				if strings.Contains(msg, child) {
+					named = true
+					break
+				}
+			}
+			if !named {
+				t.Errorf("lit %s error = %q, want the family usage naming one of its subcommands %q", name, msg, cp.children)
 			}
 		})
 		checked++
