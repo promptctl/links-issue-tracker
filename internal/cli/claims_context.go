@@ -30,10 +30,20 @@ import (
 // already exists; render it, don't re-enumerate. Nothing in this map ever
 // reaches the shared database: it lives only as long as this command's
 // process. [privacy invariant]
+//
+// actingAs is the session identity this invocation writes under, and it is a
+// different fact from self: self is the checkout, which is what lanes are keyed
+// on, while actingAs is the one session driving it right now. Claims never read
+// it and this does not change them (design-docs/work-claims.md is explicit that
+// many sessions in one checkout are one claimant). It is carried for the
+// renderer alone, which is the only part of `next` that has to name WHO, and it
+// is routinely empty — a checkout driving no agent session resolves no identity
+// at all.
 type claimContext struct {
 	standings claims.Standings
 	evidence  claims.Evidence
 	self      model.Attribution
+	actingAs  string
 	addresses map[model.Attribution]workspace.Checkout
 }
 
@@ -100,7 +110,11 @@ func gatherClaimContext(ctx context.Context, stdout io.Writer, ap *app.App) (cla
 
 	fresh := claims.Freshness{Now: time.Now(), Window: cfg.Claims.FreshnessWindow}
 	standings := claims.Derive(evidence, fresh, local)
-	return claimContext{standings: standings, evidence: evidence, self: ownAttribution(ap), addresses: addresses}, nil
+	// resolveIdentity("") and not the command's own --assignee: on a read
+	// command that flag narrows the VIEW, and letting it answer "who am I"
+	// would let a filter rename the reader. The session env var is the only
+	// thing that speaks for this invocation.
+	return claimContext{standings: standings, evidence: evidence, self: ownAttribution(ap), actingAs: resolveIdentity(""), addresses: addresses}, nil
 }
 
 // ownAttribution is the attribution this checkout's own work carries — the

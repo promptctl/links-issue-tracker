@@ -96,7 +96,7 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 		row = o.Row
 	case ResumedOwnWork:
 		row = o.Row
-		announce = fmt.Sprintf("%s is already in progress in a lane you hold — continue where you left off\n", o.Row.ID)
+		announce = resumeAdvice(o.Row, cc.actingAs) + "\n"
 	case ServedFromEpicLane:
 		row = o.Row
 		announce = startAdvice(o.Row, o.Lane, expiredHolder(cc.standings.Of(o.Lane))) + " (a second lane of an epic you already hold a lane in)\n"
@@ -160,6 +160,39 @@ func inFlightState(holder claims.Presence) string {
 		return "stale, though its holder's worktree is still on disk"
 	}
 	return "abandoned"
+}
+
+// resumeAdvice is what `next` says when it hands back work already in flight in
+// a lane this checkout holds. Two sentences, and the one it picks turns on
+// whether the ticket's assignee names the session reading this line.
+//
+// "continue where you left off" is a claim about WHO, and the lane cannot
+// support it. A lane is keyed on the checkout, deliberately — many sessions in
+// one checkout are one claimant, which is what lets a fresh session inherit its
+// predecessor's work with no re-briefing (design-docs/work-claims.md), and
+// nothing here revises that. But two sessions running in one checkout at once
+// are also one claimant, and there the sentence told the second one it had been
+// working a ticket the first was mid-PR on. Three sessions read it that way,
+// the first of them before this was a ticket, and each time only a hand check of
+// git worktrees and push times disproved it (links-routing-t6fa). The assignee is the finer fact the
+// lane never carried; reading it changes what the pick is CALLED and not which
+// pick it is, which is why routing is untouched and this lives at the render.
+//
+// Both halves must be minted for a mismatch to mean anything, on the rule
+// relationOf already applies to attribution: a command with no session identity
+// cannot prove the row is somebody else's work, and a row with no assignee
+// names nobody to contradict. Either half empty, and the lane is all anyone
+// knows — which is the sentence lit has always printed.
+//
+// It does not say whether the other session is still running, because lit
+// cannot know: claims carry staleness heuristics and no liveness probe, by
+// design. It names the holder and hands the reader both exits, which is the
+// most that is true.
+func resumeAdvice(row annotation.AnnotatedIssue, actingAs string) string {
+	if assignee := strings.TrimSpace(row.AssigneeValue()); assignee != "" && actingAs != "" && assignee != actingAs {
+		return fmt.Sprintf("%s is in progress under %s, a different session in this checkout — continue it only if that session has stopped, or pick other work from `lit backlog`", row.ID, assignee)
+	}
+	return fmt.Sprintf("%s is already in progress in a lane you hold — continue where you left off", row.ID)
 }
 
 // startAdvice is the line every pick that would establish a claim prints above

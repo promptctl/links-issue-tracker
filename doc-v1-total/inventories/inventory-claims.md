@@ -547,7 +547,7 @@ The `%s` in both non-empty arms is `describeReach(o.Unreachable, "", poolNotes)`
 - not in progress, lane not named: ``run `lit start %s` to claim it`` (Row.ID).
 - not in progress, lane named: ``run `lit start %s` to claim %s`` (Row.ID, described).
 
-`state` is `inFlightState(holder)` (`internal/cli/next.go:158-166`): `claims.Locked` → `claimed by a locked worktree whose claim has gone stale`; `claims.Present` → `stale, though its holder's worktree is still on disk`; otherwise `abandoned`. `holder` is `expiredHolder(cc.standings.Of(lane))` — the `Stale` standing's `Holder`, and `claims.Unprovable` for every other standing (`internal/cli/claims_render.go:89-94`). The two verbs spell their sentences out separately rather than sharing one with the object substituted, because English puts the pronoun in different places: "claim it", but "take it over" (`internal/cli/next.go:186-191`).
+`state` is `inFlightState(holder)` (`internal/cli/next.go:158-166`): `claims.Locked` → `claimed by a locked worktree whose claim has gone stale`; `claims.Present` → `stale, though its holder's worktree is still on disk`; otherwise `abandoned`. `holder` is `expiredHolder(cc.standings.Of(lane))` — the `Stale` standing's `Holder`, and `claims.Unprovable` for every other standing (`internal/cli/claims_render.go:89-94`). The two verbs spell their sentences out separately rather than sharing one with the object substituted, because English puts the pronoun in different places: "claim it", but "take it over" (`internal/cli/next.go:219-224`).
 
 **`LaneID.Describe() (string, bool)`** (`internal/model/model.go:255-263`) — three cases:
 - solo lane → `("", false)`. A solo lane is the ticket that names it, so any phrase for it only repeats what the surrounding sentence already said (`:248-251`).
@@ -556,7 +556,15 @@ The `%s` in both non-empty arms is `describeReach(o.Unreachable, "", poolNotes)`
 
 **`renderNextOutcome(w, outcome, details, cc)`** (`internal/cli/next.go:94-144`):
 - `ServedFromClaim` → no announcement at all.
-- `ResumedOwnWork` → `"%s is already in progress in a lane you hold — continue where you left off\n"` (Row.ID).
+- `ResumedOwnWork` → `resumeAdvice(o.Row, cc.actingAs)` + `"\n"`. Two sentences, chosen by
+  whether the row's assignee names a session other than the one running the command
+  (`internal/cli/next.go:194-199`). Both halves must be non-empty and differ, so an
+  unassigned ticket and a command with no session identity both take the lane's own
+  sentence: `"%s is already in progress in a lane you hold — continue where you left off"`
+  (Row.ID). Otherwise: ``%s is in progress under %s, a different session in this checkout — continue it only if that session has stopped, or pick other work from `lit backlog` ``
+  (Row.ID, assignee). Lanes are keyed on the checkout, not the session, so two sessions
+  in one checkout share every lane and the assignee is the only fact that separates them
+  (links-routing-t6fa).
 - `ServedFromEpicLane` → `startAdvice(o.Row, o.Lane, expiredHolder(cc.standings.Of(o.Lane)))` + `" (a second lane of an epic you already hold a lane in)\n"`.
 - `ServedFromNewLane` → `startAdvice(o.Row, o.Lane, expiredHolder(cc.standings.Of(o.Lane)))` + `"\n"`.
 - `ServedFromDependency` → the same `startAdvice(...)` + `" (gates %s, which is in a lane you hold)\n"` formatted on `Gates`.

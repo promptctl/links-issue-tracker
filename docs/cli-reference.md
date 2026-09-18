@@ -196,6 +196,12 @@ qualifier saying so, and a pick that gates one of your blocked tickets closes
 on a qualifier naming the ticket it unblocks. The same line from the global
 pool carries neither.
 
+Work already in flight in one of your own lanes reports the state it is in rather
+than a command to run. When the ticket's assignee names a session other than the
+one asking, that name is printed instead of "continue where you left off": a lane
+is held by the checkout, so every session running in one checkout shares its
+lanes, and lit cannot tell a session that stepped away from one still working.
+
 Both endings that hand back no ticket — the exhaustion diagnostic and an empty
 result — exit 6 rather than 1, and their remediation names the deliberate act each
 calls for. Neither tells you to retry: both answers are deterministic and repeat
