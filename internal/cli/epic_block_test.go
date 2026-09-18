@@ -312,8 +312,8 @@ func TestRouteNextTreatsAnEpicsGateAsOnPath(t *testing.T) {
 		if !ok || served.Row.ID != gate.ID {
 			t.Fatalf("routeNext = %#v (%T), want ServedFromDependency serving the gate %s", outcome, outcome, gate.ID)
 		}
-		if served.Gates == "" {
-			t.Fatalf("served.Gates is empty — an epic's gate still gates a row of ours, and the pick must name it")
+		if served.Gates != gated.ID {
+			t.Fatalf("served.Gates = %q, want %q — an epic's gate reaches us through the gated child, and a non-empty id is not the assertion: the dependency naming itself would satisfy that", served.Gates, gated.ID)
 		}
 	})
 	t.Run("holding only the epic", func(t *testing.T) {

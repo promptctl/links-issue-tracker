@@ -1246,8 +1246,8 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
 | `NoWork` | `Unreachable []rowReach` | the global pool produced nothing — step 4 (`next_route.go:206`) |
 
 `Exhausted` and `NoWork` implement `error` and travel outward as themselves
-rather than being rendered into a generic error (`next_route.go:544`,
-`next_route.go:651`).
+rather than being rendered into a generic error (`next_route.go:551`,
+`next_route.go:658`).
 
 **Admission** — `capacityFor(row, standing, self) capacity`
 (`next_route.go:259-280`) is the single eligibility verdict. The four capacities
@@ -1295,19 +1295,20 @@ If `len(ownLanes) > 0` (`next_route.go:374`):
    `serveWork` → **`ServedFromClaim{Row}`**.
    - 1b. Else `onPathDependency(rows, laneOf, mine, reachFor)` — the first
      dependency gating one of our own lanes whose `reachKind` is `reachTakeable`
-     (`next_route.go:533-540`), drawn from `gatingDependencies`, which collects
+     (`next_route.go:540-547`), drawn from `gatingDependencies`, which collects
      the distinct open dependency IDs of the in-scope **open** rows in rank order
-     and stamps each with `reachFor` (`next_route.go:492-518`) →
+     and stamps each with `reachFor` (`next_route.go:492-525`) →
      **`ServedFromDependency{Row: dep, Lane: laneOf(dep), Gates: gates}`** (`next_route.go:387-389`), the `Gates` being the blocked row the dependency gates.
 2. Else **the rest of our epic, in lanes we do not already hold** — predicate
    `lane.Epic() != "" && ownEpics[lane.Epic()] && !mine(lane)`, accepting
    `{serveWork, takeoverWork}` → **`ServedFromEpicLane{Row, Lane: laneOf(row)}`**
    (`next_route.go:390-396`).
 3. Else → **`Exhausted{Epics, Blocked}`** (`next_route.go:398-403`), where `Epics`
-   is `slices.Sorted(maps.Keys(ownEpics))` and `Blocked` is
-   `gatingDependencies` over the lanes admitted by
-   `func(lane) bool { return mine(lane) || ourEpic(lane) }`. Exhaustion never
-   falls through to the global pool.
+   is `slices.Sorted(maps.Keys(ownEpics))` and `Blocked` is `blockedRows` over
+   `gatingDependencies` for the lanes admitted by
+   `func(lane) bool { return mine(lane) || ourEpic(lane) }`; `blockedRows` drops
+   the gated id, so this diagnostic is unchanged. Exhaustion never falls through
+   to the global pool.
 
 Step 4 is reached only by a checkout holding no lanes, which starts there
 directly:
@@ -1335,31 +1336,31 @@ now: `reachTakeable`, `reachHeldFresh`, `reachNotReady`, `reachOutOfView`, plus
 (`next_route.go:179-189`). `rowReach{ID string, Row annotation.AnnotatedIssue, Kind reachKind}`
 (`next_route.go:164-168`) is what both terminal outcomes carry.
 
-`exhaustedNotes` (`next_route.go:585-590`):
+`exhaustedNotes` (`next_route.go:592-597`):
 - `reachTakeable`: ``"on your path and yours to take — `lit start` it"``
 - `reachHeldFresh`: `"on your path but claimed by another checkout right now"`
 - `reachNotReady`: ``"on your path but not startable right now — `lit show` it"``
 - `reachOutOfView`: ``"on your path but outside this view — `lit show` it"``
 
-`poolNotes` (`next_route.go:591-595`):
+`poolNotes` (`next_route.go:598-602`):
 - `reachHeldFresh`: `"in progress or claimed in a lane another checkout holds right now"`
 - `reachNotReady`: `"not startable — blocked by a dependency, or in flight and not abandoned"`
 - `reachOffFocusPath`: ``"off the focus path this run answered over — `lit next --all` to route over the whole queue"``
 
 `describeReach(rows, lead, notes)` renders `"<lead><ids> (<note>)"` for each kind
 that has rows, joined by `"; "`, in `reachKind` declaration order
-(`next_route.go:625-639`). `nameIDs` names at most `maxNamedPerKind = 12` ids and
-otherwise appends `" and <n> more"` (`next_route.go:604`, `next_route.go:610-617`).
+(`next_route.go:632-646`). `nameIDs` names at most `maxNamedPerKind = 12` ids and
+otherwise appends `" and <n> more"` (`next_route.go:611`, `next_route.go:617-624`).
 
-**Terminal messages.** `Exhausted.Error()` (`next_route.go:544-553`): `scope` is
+**Terminal messages.** `Exhausted.Error()` (`next_route.go:551-560`): `scope` is
 `"epic(s) <Epics joined by ", ">"` when `Epics` is non-empty, else
 `"your claimed lane(s)"`.
 - `Blocked` empty: ``"no ready work in <scope> — nothing else is queued behind what's already in progress; picking up other work is a deliberate re-focus, not a bare `next`"``
 - Otherwise: ``"no ready work in <scope> — <describeReach(Blocked, "blocked on ", exhaustedNotes)>; picking up other work is a deliberate re-focus, not a bare `next`"``
 
-`NoWork.Error()` (`next_route.go:651-667`):
+`NoWork.Error()` (`next_route.go:658-674`):
 - `Unreachable` empty: `"no ready work"`
-- Any row `reachOffFocusPath` (`NoWork.withheld()`, `next_route.go:672-679`):
+- Any row `reachOffFocusPath` (`NoWork.withheld()`, `next_route.go:679-686`):
   `"no ready work on the focus path — the backlog is not empty, and each row below says why this run did not serve it: <describeReach(Unreachable, "", poolNotes)>"`
 - Otherwise: `"no ready work — the backlog is not empty, but nothing in it is startable here: <describeReach(Unreachable, "", poolNotes)>"`
 
@@ -1373,7 +1374,7 @@ Both map to `ExitNoWork` = **6** (`exit.go:31`, `exit.go:122-129`), with reasons
 - `ServedFromEpicLane` → `startAdvice(o.Row, o.Lane, expiredHolder(cc.standings.Of(o.Lane)))`
   + `" (a second lane of an epic you already hold a lane in)\n"` (`next.go:103-105`).
 - `ServedFromNewLane` → the same `startAdvice(...)` + `"\n"` (`next.go:106-108`).
-- `ServedFromDependency` → the same `startAdvice(...)` + `" (gates %s, which you hold)\n"` on `Gates` (`next.go:114-117`).
+- `ServedFromDependency` → the same `startAdvice(...)` + `" (gates %s, which is in a lane you hold)\n"` on `Gates` (`next.go:114-117`).
 - `Exhausted`, `NoWork` → returned as themselves; no ticket printed
   (`next.go:127-130`).
 - Any other outcome type → panic (`next.go:131-132`).

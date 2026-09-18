@@ -502,7 +502,7 @@ Precedence, with `ownLanes, ownEpics := ownScope(standings, self)` and `mine := 
 1. **Step 1** — our own lanes, accepting `{serveWork, resumeWork}`, whichever the backlog ranks first. `resumeWork` → `ResumedOwnWork{Row}`; `serveWork` → `ServedFromClaim{Row}` (`:375-382`).
 2. **Step 1b** — `onPathDependency(rows, laneOf, mine, reachFor)`, a dependency outside our lanes that gates one of them → `ServedFromDependency{Row: dep, Lane: laneOf(dep), Gates: gates}`. It establishes a claim on a lane we do not hold, so it is announced as one, and `Gates` carries the blocked row it unblocks so the line can say what the pick is for (`:383-389`).
 3. **Step 2** — the rest of our epic, in lanes we do not already hold: predicate `lane.Epic() != "" && ownEpics[lane.Epic()] && !mine(lane)`, accepting `{serveWork, takeoverWork}` → `ServedFromEpicLane{Row, Lane}` (`:390-396`).
-4. **Step 3** — `Exhausted{Epics: slices.Sorted(maps.Keys(ownEpics)), Blocked: gatingDependencies(rows, laneOf, mine-or-ourEpic, reachFor)}` (`:367-373`). Loud, and never a hop: **exhaustion does not fall through to the global pool.**
+4. **Step 3** — `Exhausted{Epics: slices.Sorted(maps.Keys(ownEpics)), Blocked: blockedRows(gatingDependencies(rows, laneOf, mine-or-ourEpic, reachFor))}` (`:398-403`). Loud, and never a hop: **exhaustion does not fall through to the global pool.**
 
 **Step 4** is reached only by a checkout holding no lanes, which starts there directly: `pool, offPath := scope.partition(rows)`, then `pickFrom(pool, <every lane>, serveWork, takeoverWork)` → `ServedFromNewLane{Row, Lane}`, else `NoWork{Unreachable: append(passedOver(pool, reachFor), withheldByScope(offPath)...)}` (`:406-419`). The scope-withheld rows travel into the diagnostic rather than vanishing, because "nothing is startable" and "nothing on your focus path is startable" are different answers (`:410-414`). `withheldByScope` stamps them `reachOffFocusPath` at the one place that applied the scope (`:422-433`); `passedOver` classifies every row the pool walk went through, all `routeAround` by construction (`:435-454`).
 
@@ -512,28 +512,28 @@ Steps 1-3 walk every gathered row; step 4 walks the focus-scoped pool. The row s
 
 **`reachOf(row, gathered, standing, self)`** (`:179-189`): `!gathered` → `reachOutOfView`; `capacityFor(...) != routeAround` → `reachTakeable`; `relationOf(...) == laneHeldForeign` → `reachHeldFresh`; otherwise `reachNotReady`. Exhaustion asks it of the dependencies gating our scope; an empty global pool asks it of every row the walk went past (`:130-131`).
 
-**`gatingDependencies`** (`:433-454`): the distinct open dependency ids, in rank order, gating the open rows whose lane `inScope` admits, each already carrying its `reachKind`. **`onPathDependency`** (`:469-476`) returns the first of those whose `Kind == reachTakeable`. A same-lane gate never reaches here: it shares the blocked row's lane, so step 1 already served or resumed it (`:523-524`).
+**`gatingDependencies`** (`:492-525`): the distinct open dependency ids, in rank order, gating the open rows whose lane `inScope` admits, each already carrying its `reachKind` and the id of the in-scope row it gates — the yielded `gatedDep` embeds `rowReach` and adds `Gates`. **`onPathDependency`** (`:540-547`) returns the first of those whose `Kind == reachTakeable`, together with that gated row's id. A same-lane gate never reaches here: it shares the blocked row's lane, so step 1 already served or resumed it (`:530-531`).
 
-**`describeReach(rows, lead, notes)`** (`:625-639`) renders `"<lead><ids> (<note>)"` for each kind that has rows, joined by `"; "`, in `reachKind`'s declaration order. `nameIDs` names at most `maxNamedPerKind = 12` ids and states how many it left out (`:604-617`). `reachNotes` is `[reachKindCount]string`, indexed by the kind itself (`:571`).
+**`describeReach(rows, lead, notes)`** (`:632-646`) renders `"<lead><ids> (<note>)"` for each kind that has rows, joined by `"; "`, in `reachKind`'s declaration order. `nameIDs` names at most `maxNamedPerKind = 12` ids and states how many it left out (`:611-624`). `reachNotes` is `[reachKindCount]string`, indexed by the kind itself (`:578`).
 
-`exhaustedNotes` (`:585-590`), exact strings:
+`exhaustedNotes` (`:592-597`), exact strings:
 - `reachTakeable`: ``on your path and yours to take — `lit start` it``
 - `reachHeldFresh`: `on your path but claimed by another checkout right now`
 - `reachNotReady`: ``on your path but not startable right now — `lit show` it``
 - `reachOutOfView`: ``on your path but outside this view — `lit show` it``
 
-`poolNotes` (`:591-595`), exact strings:
+`poolNotes` (`:598-602`), exact strings:
 - `reachHeldFresh`: `in progress or claimed in a lane another checkout holds right now`
 - `reachNotReady`: `not startable — blocked by a dependency, or in flight and not abandoned`
 - `reachOffFocusPath`: ``off the focus path this run answered over — `lit next --all` to route over the whole queue``
 
-**`Exhausted.Error()`** (`:544-553`). `scope` is `fmt.Sprintf("epic(s) %s", strings.Join(o.Epics, ", "))` when epics are named, else `"your claimed lane(s)"`. The command is in **backticks** in both arms:
+**`Exhausted.Error()`** (`:551-560`). `scope` is `fmt.Sprintf("epic(s) %s", strings.Join(o.Epics, ", "))` when epics are named, else `"your claimed lane(s)"`. The command is in **backticks** in both arms:
 - `len(o.Blocked) == 0`: ``no ready work in %s — nothing else is queued behind what's already in progress; picking up other work is a deliberate re-focus, not a bare `next` ``
 - otherwise: ``no ready work in %s — %s; picking up other work is a deliberate re-focus, not a bare `next` ``, the middle being `describeReach(o.Blocked, "blocked on ", exhaustedNotes)`.
 
-**`NoWork.Error()`** (`:651-667`):
+**`NoWork.Error()`** (`:658-674`):
 - `len(o.Unreachable) == 0` → `no ready work`.
-- `o.withheld()` — any row of kind `reachOffFocusPath` (`:672-679`) → `no ready work on the focus path — the backlog is not empty, and each row below says why this run did not serve it: %s`.
+- `o.withheld()` — any row of kind `reachOffFocusPath` (`:679-686`) → `no ready work on the focus path — the backlog is not empty, and each row below says why this run did not serve it: %s`.
 - otherwise → `no ready work — the backlog is not empty, but nothing in it is startable here: %s`.
 
 The `%s` in both non-empty arms is `describeReach(o.Unreachable, "", poolNotes)`.
@@ -558,11 +558,11 @@ The `%s` in both non-empty arms is `describeReach(o.Unreachable, "", poolNotes)`
 - `ResumedOwnWork` → `"%s is already in progress in a lane you hold — continue where you left off\n"` (Row.ID).
 - `ServedFromEpicLane` → `startAdvice(o.Row, o.Lane, expiredHolder(cc.standings.Of(o.Lane)))` + `" (a second lane of an epic you already hold a lane in)\n"`.
 - `ServedFromNewLane` → `startAdvice(o.Row, o.Lane, expiredHolder(cc.standings.Of(o.Lane)))` + `"\n"`.
-- `ServedFromDependency` → the same `startAdvice(...)` + `" (gates %s, which you hold)\n"` formatted on `Gates`.
+- `ServedFromDependency` → the same `startAdvice(...)` + `" (gates %s, which is in a lane you hold)\n"` formatted on `Gates`.
 - `Exhausted`, `NoWork` → returned as themselves; nothing printed.
 - default → `panic(fmt.Sprintf("renderNextOutcome: unhandled NextOutcome %T", outcome))`.
 
-For the four served cases the announcement is written only when non-empty, then `lane := model.LaneOf(row.Issue, details[row.ID].Parent)` and `printNextSummary(w, row, cc, lane)` (`internal/cli/ready_state.go:965`); finally `nextPulledOccasion(row.Issue)` is returned and dispatched to workflows (`internal/cli/next.go:134-143`, `:75`).
+For the five served cases the announcement is written only when non-empty, then `lane := model.LaneOf(row.Issue, details[row.ID].Parent)` and `printNextSummary(w, row, cc, lane)` (`internal/cli/ready_state.go:965`); finally `nextPulledOccasion(row.Issue)` is returned and dispatched to workflows (`internal/cli/next.go:134-143`, `:75`).
 
 ### 9.3 `lit sync reconcile` — the contest report (a read gate on merge)
 

@@ -114,7 +114,7 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 	case ServedFromDependency:
 		row = o.Row
 		announce = startAdvice(o.Row, o.Lane, expiredHolder(cc.standings.Of(o.Lane))) +
-			fmt.Sprintf(" (gates %s, which you hold)\n", o.Gates)
+			fmt.Sprintf(" (gates %s, which is in a lane you hold)\n", o.Gates)
 	// The two terminal outcomes travel outward AS THEMSELVES. Rendering them
 	// into an untyped error here discarded the very discriminator routing had
 	// just established, so both sinks — ExitCode and commandErrorReason — fell

@@ -909,8 +909,8 @@ func TestRouteNextTakesOverAnAbandonedOnPathDependency(t *testing.T) {
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromDependency (the abandoned on-path dependency is takeable)", outcome, outcome)
 	}
-	if served.Gates == "" {
-		t.Fatalf("served.Gates is empty — a takeover reached through step 1b still has a row it unblocks, and the qualifier must survive the takeover path")
+	if served.Gates != a2.ID {
+		t.Fatalf("served.Gates = %q, want %q — the qualifier must survive the takeover path naming the row it unblocks, and a merely non-empty id would let the dependency name itself", served.Gates, a2.ID)
 	}
 	if served.Row.ID != dep.ID {
 		t.Fatalf("served = %q, want %q (the dependency gating our own blocked lane)", served.Row.ID, dep.ID)

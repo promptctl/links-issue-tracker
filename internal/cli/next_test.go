@@ -611,9 +611,9 @@ func TestRenderNextOutcomeSpeaksOnlyInTheConditional(t *testing.T) {
 		// until links-next-output-4hor — so what these two cells pin is not only
 		// the new clause but that the two picks stopped rendering alike.
 		{"the on-path dependency names the row it unblocks", ServedFromDependency{Row: freshRow, Lane: freshLane, Gates: inFlight.ID},
-			"run `lit start " + fresh.ID + "` to claim lane a1 of epic " + epicA.ID + " (gates " + inFlight.ID + ", which you hold)"},
+			"run `lit start " + fresh.ID + "` to claim lane a1 of epic " + epicA.ID + " (gates " + inFlight.ID + ", which is in a lane you hold)"},
 		{"an abandoned dependency is taken over and still names what it unblocks", ServedFromDependency{Row: inFlightRow, Lane: inFlightLane, Gates: fresh.ID},
-			inFlight.ID + " is in progress and abandoned — run `lit start " + inFlight.ID + "` to take over lane a2 of epic " + epicA.ID + " (gates " + fresh.ID + ", which you hold)"},
+			inFlight.ID + " is in progress and abandoned — run `lit start " + inFlight.ID + "` to take over lane a2 of epic " + epicA.ID + " (gates " + fresh.ID + ", which is in a lane you hold)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer
