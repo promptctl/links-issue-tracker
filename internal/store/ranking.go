@@ -31,15 +31,26 @@ const frameColumn = `COALESCE((SELECT r.dst_id FROM relations r
 		WHERE r.src_id = issues.id AND r.type = 'parent-child' AND p.deleted_at IS NULL), '')`
 
 // rankEdge is one end of a frame's keyspace as the query and the key algebra
-// see it: the ordering that brings that end to the front of a result, the pair
-// of bounds a key just past it sits between, the population a create files
-// against there, and the word for it. The end a caller asked for crosses as
-// this value, so one statement and one assignment serve both ends instead of
-// two near-copies free to drift. [LAW:dataflow-not-control-flow]
+// see it: the ordering that brings that end to the front of a result, the way
+// a new key pairs with the one it lands beside, the step outward to the key
+// that bounds it there, the population a create files against, and the word
+// for it. The end a caller asked for crosses as this value, so one statement
+// and one assignment serve both ends instead of two near-copies free to
+// drift. [LAW:dataflow-not-control-flow]
 type rankEdge struct {
-	name   string
-	order  string
-	beside func(edgeRank string) (lower, upper string)
+	name  string
+	order string
+	// outside is the SQL for the nearest key the whole workspace holds on the
+	// far side of a key at this end: the comparison that steps away from the
+	// edge, and the ordering that brings the closest such key back first. The
+	// two halves are one string because they have to agree about which way
+	// "away" points, and text that sits together cannot drift apart.
+	outside string
+	// beside pairs a key landing next to an anchor with the key bounding it on
+	// the anchor's far side, in (lower, upper) order. An end with nothing
+	// outside it passes "" and gets the open bound, which is then a true
+	// statement about the keyspace rather than an assumption about it.
+	beside func(anchorRank, outsideRank string) (lower, upper string)
 	// filingRank is the key a create's placement is computed against at this
 	// end. The two ends genuinely ask different populations — see
 	// nextRankForPlacement — so the population is carried by the edge the
@@ -52,53 +63,88 @@ var (
 	topEdge = rankEdge{
 		name:       "top",
 		order:      "ASC",
-		beside:     func(r string) (string, string) { return "", r },
+		outside:    `item_rank < ? ORDER BY item_rank DESC`,
+		beside:     func(anchor, outside string) (string, string) { return outside, anchor },
 		filingRank: frameEdgeRankTx,
 	}
 	bottomEdge = rankEdge{
 		name:       "bottom",
 		order:      "DESC",
-		beside:     func(r string) (string, string) { return r, "" },
+		outside:    `item_rank > ? ORDER BY item_rank ASC`,
+		beside:     func(anchor, outside string) (string, string) { return anchor, outside },
 		filingRank: workspaceEdgeRankTx,
 	}
 )
 
-// filingBoundsTx is the pair a create's key is placed between: the keys beside
-// this end of the population the create files against.
+// boundsBesideTx is the pair a new key sits between when it lands beside
+// anchorRank at this edge: the anchor itself, and the nearest key the WHOLE
+// workspace holds on the anchor's far side.
 //
-// The empty population is the case this function exists for, and it is not the
-// same case as an empty workspace. A frame with nothing ranked in it has no key
-// for the named end to sit beside, and its two ends are one position anyway —
-// but the key written still has to be distinct from every key that exists, and
-// the midpoint of the whole keyspace is not distinct: it is rank.Initial, which
-// the workspace's first issue already holds. A first child filed at the top of
-// its epic therefore took a key another issue was already using, which
-// VerifyCandidate's rank law reads as a workspace with no valid order.
+// The split is the whole point, and it is the one this file kept collapsing.
+// Which key you land beside is a question about a FRAME — a child sent to the
+// top leads its siblings and nobody else. How much room there is beside it is
+// a question about the KEYSPACE, and the keyspace is one order shared by every
+// frame. Pairing a frame-local anchor with an open bound answered the second
+// question with the first one's scope: it claimed everything below the frame's
+// leading key was free, when a top-level issue or another epic's child could be
+// sitting right there. Then rank.Midpoint, asked for the middle of a range that
+// was not empty, handed back a key another issue was already holding — which
+// VerifyCandidate's rank law reads as a workspace with no valid order. Bounding
+// the key by its real neighbor is what makes a duplicate unrepresentable rather
+// than checked for afterwards. [LAW:types-are-the-program]
 //
+// It is also what makes the two engines one behavior rather than two that
+// agree by inspection. The memory engine has no keyspace to collide in: it
+// inserts at mateIndexes[0], immediately before the frame's first mate in the
+// one order. "Between that mate and the key before it" is exactly that
+// position, spelled in keys. [LAW:one-source-of-truth]
+//
+// An empty population is the other case, and it is not the same as an empty
+// workspace. A frame with nothing ranked in it offers no key to sit beside, and
+// its two ends are one position anyway — but the key written still has to be
+// distinct from every key that exists, and the midpoint of the whole keyspace
+// is not: it is rank.Initial, which the workspace's first issue already holds.
 // So an empty population files past the workspace's last key — the one end
 // nothing can already hold, and the very key the default placement would have
 // given the same issue, which is the answer an empty frame deserves: no order
-// to lead means the two ends asked for the same thing. The bottom edge asked of
-// an empty WORKSPACE falls through the same path and reads "" again, so the
-// first issue in a workspace still takes rank.Initial.
-//
-// [LAW:one-source-of-truth] Both arms pair their key through the edge's own
-// beside, so the direction of each end is still stated once, in the edge.
-func (e rankEdge) filingBoundsTx(ctx context.Context, tx *sql.Tx, f storage.Frame) (lower, upper string, err error) {
-	edgeRank, err := e.filingRank(ctx, tx, f, e)
+// to lead means both ends asked for the same thing. Asked of an empty
+// WORKSPACE that read comes back empty too, and nothing lies outside a key that
+// is not there, so the first issue in a workspace still takes rank.Initial.
+func (e rankEdge) boundsBesideTx(ctx context.Context, tx *sql.Tx, anchorRank string) (lower, upper string, err error) {
+	if anchorRank == "" {
+		lastRank, err := workspaceEdgeRankTx(ctx, tx, storage.TopLevel, bottomEdge)
+		if err != nil {
+			return "", "", err
+		}
+		return bottomEdge.roomBesideTx(ctx, tx, lastRank)
+	}
+	return e.roomBesideTx(ctx, tx, anchorRank)
+}
+
+// roomBesideTx reads the key bounding anchorRank on this edge's far side and
+// pairs the two. A key at the workspace's own end has nothing outside it, and
+// the read says so by coming back empty, which beside turns into the open
+// bound — the same pair the whole keyspace is measured by, now because it is
+// true rather than because it was assumed.
+func (e rankEdge) roomBesideTx(ctx context.Context, tx *sql.Tx, anchorRank string) (lower, upper string, err error) {
+	query := fmt.Sprintf(`SELECT item_rank FROM issues
+		WHERE deleted_at IS NULL AND item_rank != '' AND %s LIMIT 1`, e.outside)
+	outsideRank, err := nearestRank(ctx, tx, query, anchorRank)
 	if err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("query the key outside the %s: %w", e.name, err)
 	}
-	if edgeRank != "" {
-		lower, upper = e.beside(edgeRank)
-		return lower, upper, nil
-	}
-	lastRank, err := bottomEdge.filingRank(ctx, tx, f, bottomEdge)
-	if err != nil {
-		return "", "", err
-	}
-	lower, upper = bottomEdge.beside(lastRank)
+	lower, upper = e.beside(anchorRank, outsideRank)
 	return lower, upper, nil
+}
+
+// filingBoundsTx is boundsBesideTx asked about a create: the population this
+// end files against, and then the room beside it.
+func (e rankEdge) filingBoundsTx(ctx context.Context, tx *sql.Tx, f storage.Frame) (lower, upper string, err error) {
+	anchorRank, err := e.filingRank(ctx, tx, f, e)
+	if err != nil {
+		return "", "", err
+	}
+	return e.boundsBesideTx(ctx, tx, anchorRank)
 }
 
 // frameEdgeRankTx is the key held at one end of a frame, and it is the whole
@@ -148,13 +194,10 @@ func edgeFor(p storage.RankPlacement) (rankEdge, error) {
 
 // rankBeyondTx is the key just past a frame's edge, whose key readEdge reads.
 //
-// Every caller is a rank verb moving an issue within the frame that already
-// holds it, so the frame here always has a member and its edge always reads a
-// key. Creation is the caller that can be handed a frame holding nothing yet,
-// and it does not come through here: it composes its bounds in filingBoundsTx
-// and calls rankBetweenTx directly, because an empty frame's open bounds yield
-// the midpoint of the whole keyspace — rank.Initial, a key the workspace's
-// first issue is already holding.
+// The bounds come from boundsBesideTx, the same pair a create at this edge is
+// placed between, so moving an issue to a frame's top and filing a new one
+// there cannot hold two notions of where that top is or how much room is
+// beside it. [LAW:single-enforcer]
 //
 // The edge is read only inside rankBetweenTx, never ahead of it. A placement
 // with room costs one read, and one that has to make room costs one more, taken
@@ -168,8 +211,10 @@ func edgeFor(p storage.RankPlacement) (rankEdge, error) {
 func (e rankEdge) rankBeyondTx(ctx context.Context, tx *sql.Tx, readEdge func() (string, error)) (string, error) {
 	return rankBetweenTx(ctx, tx, func() (string, string, error) {
 		edgeRank, err := readEdge()
-		lower, upper := e.beside(edgeRank)
-		return lower, upper, err
+		if err != nil {
+			return "", "", err
+		}
+		return e.boundsBesideTx(ctx, tx, edgeRank)
 	})
 }
 
@@ -370,11 +415,17 @@ func (s *Store) RankToBottom(ctx context.Context, issueID string) (storage.RankE
 // child. Scoping the lookup keeps the written key comparable only to the keys
 // it is actually read against. [LAW:types-are-the-program]
 //
+// Which key is a frame's question; how much room sits beside it is not, and
+// boundsBesideTx is where the two are kept apart — see it for why an open
+// bound beside a frame-local key is how this verb came to mint a rank another
+// issue was already holding.
+//
 // [LAW:single-enforcer] Both edge verbs take their key from
 // frameEdgeHolderTx, so there is no second notion of the rank at a frame's
-// edge. Creation asks a deliberately different question — the edge of the
-// whole workspace, see nextRankForPlacement — and shares the direction and the
-// empty-keyspace default through edgeFor rather than its own copy of them.
+// edge, and they measure the room beside it through the same boundsBesideTx a
+// create does. Creation still asks a different population at the bottom — the
+// whole workspace, see nextRankForPlacement — and every other part of the
+// answer is shared through edgeFor rather than copied.
 func (s *Store) rankToEdge(ctx context.Context, issueID string, placement storage.RankPlacement) (storage.RankEnd, error) {
 	if _, err := s.mustRankable(ctx, issueID); err != nil {
 		return storage.RankEnd{}, err

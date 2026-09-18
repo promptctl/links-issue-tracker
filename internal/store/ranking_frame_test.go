@@ -64,6 +64,49 @@ func mustBefore(t *testing.T, r string) string {
 	return before
 }
 
+// mustTopOf is the key a placement at a frame's top must take when anchor is
+// the key leading that frame: the midpoint between anchor and the nearest key
+// the WHOLE workspace holds below it.
+//
+// Both halves are the rule under test. Which key the placement lands beside is
+// a question about the frame, so anchor is what an assertion varies to tell a
+// scoped query from an unscoped one. How much room there is beside it is a
+// question about the keyspace every frame shares, so the bound is found by
+// scanning the ranks the test already holds — the same population the store
+// queries, read independently of it.
+func mustTopOf(t *testing.T, ranks map[string]string, anchor string) string {
+	t.Helper()
+	below := ""
+	for _, other := range ranks {
+		if other < anchor && other > below {
+			below = other
+		}
+	}
+	return mustBetween(t, below, anchor)
+}
+
+// mustBottomOf is the same statement at the other end: the midpoint between the
+// key trailing a frame and the nearest key the workspace holds above it.
+func mustBottomOf(t *testing.T, ranks map[string]string, anchor string) string {
+	t.Helper()
+	above := ""
+	for _, other := range ranks {
+		if other > anchor && (above == "" || other < above) {
+			above = other
+		}
+	}
+	return mustBetween(t, anchor, above)
+}
+
+func mustBetween(t *testing.T, lower, upper string) string {
+	t.Helper()
+	between, err := rank.Midpoint(lower, upper)
+	if err != nil {
+		t.Fatalf("rank.Midpoint(%q, %q) error = %v", lower, upper, err)
+	}
+	return between
+}
+
 // noRoomFixture names the issues of TestPlacementMakesRoomBetweenKeysThatPadToTheSameValue.
 type noRoomFixture struct{ upper, lower, moved string }
 
@@ -445,9 +488,10 @@ func TestRankToEdgeDrawsItsKeyFromItsOwnFrame(t *testing.T) {
 
 	after := currentRanks(t, ctx, st, all)
 	// C3's key is seeded from C1's — the key that led C3's own frame — and from
-	// nothing else.
-	if want := mustBefore(t, before[fx.children[0].ID]); after[fx.children[2].ID] != want {
-		t.Errorf("C3 rank = %q, want %q = Before(C1 %q), its frame's leading key", after[fx.children[2].ID], want, before[fx.children[0].ID])
+	// nothing else, with the room beside C1 measured across the whole keyspace
+	// so the key landed in cannot be one another issue is holding.
+	if want := mustTopOf(t, before, before[fx.children[0].ID]); after[fx.children[2].ID] != want {
+		t.Errorf("C3 rank = %q, want %q = the room above C1 %q, its frame's leading key", after[fx.children[2].ID], want, before[fx.children[0].ID])
 	}
 	for _, issue := range []model.Issue{fx.epic, fx.standalone, fx.children[0], fx.children[1]} {
 		if after[issue.ID] != before[issue.ID] {
@@ -455,12 +499,12 @@ func TestRankToEdgeDrawsItsKeyFromItsOwnFrame(t *testing.T) {
 		}
 	}
 
-	// The precondition that gives the rest of this case its teeth: C3's new key
-	// now sorts below every top-level key, so an unscoped "first rank" query
-	// WOULD return it. Without this the assertions below pass vacuously — which
-	// is the shape of an invariant test that proves nothing.
-	if after[fx.children[2].ID] >= after[fx.epic.ID] {
-		t.Fatalf("C3 rank %q does not sort below the top-level leader %q; this case cannot tell a scoped query from an unscoped one", after[fx.children[2].ID], after[fx.epic.ID])
+	// The precondition that gives the rest of this case its teeth: the key a
+	// frame-scoped placement takes here and the key an unscoped one would take
+	// are different strings. Without that the assertion above passes whichever
+	// query ran — the shape of an invariant test that proves nothing.
+	if scoped, unscoped := after[fx.children[2].ID], mustTopOf(t, before, before[fx.epic.ID]); scoped == unscoped {
+		t.Fatalf("a frame-scoped placement and an unscoped one both yield %q here; this case cannot tell them apart", scoped)
 	}
 	if after[fx.epic.ID] >= after[fx.standalone.ID] {
 		t.Fatalf("epic rank %q is not the top-level leader (standalone %q); the fixture no longer sets up this case", after[fx.epic.ID], after[fx.standalone.ID])
@@ -472,10 +516,10 @@ func TestRankToEdgeDrawsItsKeyFromItsOwnFrame(t *testing.T) {
 		t.Fatalf("RankToTop(standalone) error = %v", err)
 	}
 	final := currentRanks(t, ctx, st, all)
-	if want := mustBefore(t, after[fx.epic.ID]); final[fx.standalone.ID] != want {
-		t.Errorf("standalone rank = %q, want %q = Before(the top-level leader %q)", final[fx.standalone.ID], want, after[fx.epic.ID])
+	if want := mustTopOf(t, after, after[fx.epic.ID]); final[fx.standalone.ID] != want {
+		t.Errorf("standalone rank = %q, want %q = the room above the top-level leader %q", final[fx.standalone.ID], want, after[fx.epic.ID])
 	}
-	if contaminated := mustBefore(t, after[fx.children[2].ID]); final[fx.standalone.ID] == contaminated {
+	if contaminated := mustTopOf(t, after, after[fx.children[2].ID]); final[fx.standalone.ID] == contaminated {
 		t.Errorf("standalone rank = %q was computed against C3 %q, a key in another frame", final[fx.standalone.ID], after[fx.children[2].ID])
 	}
 
@@ -486,8 +530,8 @@ func TestRankToEdgeDrawsItsKeyFromItsOwnFrame(t *testing.T) {
 		t.Fatalf("RankToBottom(C3) error = %v", err)
 	}
 	bottom := currentRanks(t, ctx, st, all)
-	if want := rank.After(final[fx.children[1].ID]); bottom[fx.children[2].ID] != want {
-		t.Errorf("C3 rank = %q, want %q = After(C2 %q), its frame's trailing key", bottom[fx.children[2].ID], want, final[fx.children[1].ID])
+	if want := mustBottomOf(t, final, final[fx.children[1].ID]); bottom[fx.children[2].ID] != want {
+		t.Errorf("C3 rank = %q, want %q = the room below C2 %q, its frame's trailing key", bottom[fx.children[2].ID], want, final[fx.children[1].ID])
 	}
 }
 
@@ -879,11 +923,12 @@ func TestCreateAtTopDrawsItsKeyFromItsOwnFrame(t *testing.T) {
 		t.Fatalf("CreateIssue(child, --top) error = %v", err)
 	}
 	// The key is seeded from C1's — the key that leads the new child's own
-	// frame — and from nothing else.
-	if want := mustBefore(t, before[fx.children[0].ID]); lead.Rank != want {
-		t.Errorf("child filed --top has rank %q, want %q = Before(C1 %q), its frame's leading key", lead.Rank, want, before[fx.children[0].ID])
+	// frame — and from nothing else, with the room beside C1 measured across
+	// the whole keyspace so the key cannot be one another issue is holding.
+	if want := mustTopOf(t, before, before[fx.children[0].ID]); lead.Rank != want {
+		t.Errorf("child filed --top has rank %q, want %q = the room above C1 %q, its frame's leading key", lead.Rank, want, before[fx.children[0].ID])
 	}
-	if contaminated := mustBefore(t, before[fx.epic.ID]); lead.Rank == contaminated {
+	if contaminated := mustTopOf(t, before, before[fx.epic.ID]); lead.Rank == contaminated {
 		t.Errorf("child filed --top has rank %q, computed against the workspace's first key (the epic, %q) rather than against its frame", lead.Rank, before[fx.epic.ID])
 	}
 	// Filing writes one key. An issue that was already there and was not named
@@ -894,11 +939,18 @@ func TestCreateAtTopDrawsItsKeyFromItsOwnFrame(t *testing.T) {
 		}
 	}
 
-	// The precondition that gives the rest of this case its teeth: the new
-	// child's key sorts below every top-level key, so an unscoped "first rank"
-	// query WOULD return it. Without this the assertions below pass vacuously.
-	if lead.Rank >= before[fx.epic.ID] {
-		t.Fatalf("child rank %q does not sort below the top-level leader %q; this case cannot tell a scoped query from an unscoped one", lead.Rank, before[fx.epic.ID])
+	// The precondition that gives the rest of this case its teeth: the key a
+	// frame-scoped placement takes here and the key an unscoped one would take
+	// are different strings. Without that the assertions above pass whichever
+	// query ran — the shape of an invariant test that proves nothing.
+	if unscoped := mustTopOf(t, before, before[fx.epic.ID]); lead.Rank == unscoped {
+		t.Fatalf("a frame-scoped placement and an unscoped one both yield %q here; this case cannot tell them apart", lead.Rank)
+	}
+	// And the key lands where a frame's top belongs: inside its own epic's
+	// span, above the epic and below the sibling it now leads, rather than
+	// burrowing under every top-level issue the way an unscoped placement did.
+	if !(lead.Rank > before[fx.epic.ID] && lead.Rank < before[fx.children[0].ID]) {
+		t.Errorf("child filed --top has rank %q, want it between its epic %q and C1 %q", lead.Rank, before[fx.epic.ID], before[fx.children[0].ID])
 	}
 
 	// A top-level --top create now: its key must come from the top-level
@@ -907,10 +959,10 @@ func TestCreateAtTopDrawsItsKeyFromItsOwnFrame(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(top-level, --top) error = %v", err)
 	}
-	if want := mustBefore(t, before[fx.epic.ID]); topLead.Rank != want {
-		t.Errorf("top-level issue filed --top has rank %q, want %q = Before(the top-level leader %q)", topLead.Rank, want, before[fx.epic.ID])
+	if want := mustTopOf(t, before, before[fx.epic.ID]); topLead.Rank != want {
+		t.Errorf("top-level issue filed --top has rank %q, want %q = the room above the top-level leader %q", topLead.Rank, want, before[fx.epic.ID])
 	}
-	if contaminated := mustBefore(t, lead.Rank); topLead.Rank == contaminated {
+	if contaminated := mustTopOf(t, before, lead.Rank); topLead.Rank == contaminated {
 		t.Errorf("top-level issue filed --top has rank %q, computed against %q, a key in the epic's frame", topLead.Rank, lead.Rank)
 	}
 
@@ -925,6 +977,12 @@ func TestCreateAtTopDrawsItsKeyFromItsOwnFrame(t *testing.T) {
 	}
 	if want := rank.After(before[fx.standalone.ID]); trail.Rank != want {
 		t.Errorf("child filed at the bottom has rank %q, want %q = After(the workspace's last key %q)", trail.Rank, want, before[fx.standalone.ID])
+	}
+	// Nothing sits outside the workspace's last key, so the room beside it is
+	// the open end — the same answer, reached by the rule the top edge uses
+	// rather than by a second one. [LAW:one-source-of-truth]
+	if want := mustBottomOf(t, before, before[fx.standalone.ID]); trail.Rank != want {
+		t.Errorf("child filed at the bottom has rank %q, want %q = the room below the workspace's last key", trail.Rank, want)
 	}
 }
 
@@ -970,7 +1028,13 @@ func TestCreateAtTopOfAnEmptyFrameTakesADistinctKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(second child, --top) error = %v", err)
 	}
-	if want := mustBefore(t, only.Rank); second.Rank != want {
-		t.Errorf("the second child filed --top took rank %q, want %q = Before(its frame's leading key %q)", second.Rank, want, only.Rank)
+	ranksNow := map[string]string{first.ID: first.Rank, epic.ID: epic.Rank, only.ID: only.Rank}
+	if want := mustTopOf(t, ranksNow, only.Rank); second.Rank != want {
+		t.Errorf("the second child filed --top took rank %q, want %q = the room above its frame's leading key %q", second.Rank, want, only.Rank)
+	}
+	for id, held := range ranksNow {
+		if second.Rank == held {
+			t.Errorf("the second child filed --top took rank %q, the key %s already holds; a rank orders one issue", second.Rank, id)
+		}
 	}
 }

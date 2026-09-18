@@ -186,6 +186,7 @@ var cases = []engineCase{
 	{"rank_to_edge_ignores_a_deleted_frame_mate", rankToEdgeIgnoresADeletedFrameMate},
 	{"create_at_top_files_inside_its_frame", createAtTopFilesInsideItsFrame},
 	{"create_at_top_of_an_empty_frame_takes_a_distinct_key", createAtTopOfAnEmptyFrameTakesADistinctKey},
+	{"placing_at_a_frame_edge_keeps_the_key_beside_its_frame", placingAtAFrameEdgeKeepsTheKeyBesideItsFrame},
 	{"rank_set_imposes_order", rankSetImposesOrder},
 	{"rank_set_stays_inside_its_frame", rankSetStaysInsideItsFrame},
 	{"rank_verbs_refuse_a_deleted_issue", rankVerbsRefuseADeletedIssue},
@@ -1250,6 +1251,7 @@ func createAtTopFilesInsideItsFrame(t *testing.T, ctx context.Context, st storag
 	secondLead := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second lead", Topic: "core", ParentID: secondEpic.ID, Placement: storage.RankTop})
 
 	listed := mustList(t, ctx, st, storage.ListIssuesFilter{})
+	assertDistinctRanks(t, listed)
 	// Each new issue leads the siblings it was filed among. True of the defect
 	// as well, and asserted anyway: it is what filing at the top is for, and a
 	// scoping fix that lost it would be no fix.
@@ -1266,8 +1268,56 @@ func createAtTopFilesInsideItsFrame(t *testing.T, ctx context.Context, st storag
 	// with no parent leads the issues that share that frame.
 	topLead := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "top lead", Topic: "core", Placement: storage.RankTop})
 	listed = mustList(t, ctx, st, storage.ListIssuesFilter{})
+	assertDistinctRanks(t, listed)
 	assertPrecedes(t, listed, topLead.ID, outsider.ID)
 	assertPrecedes(t, listed, topLead.ID, firstEpic.ID)
+}
+
+// placingAtAFrameEdgeKeepsTheKeyBesideItsFrame is the case that separates
+// "which key do I land beside" from "how much room is there beside it".
+//
+// The first question is about a frame: a child sent to the top of its epic
+// leads its siblings and nobody else. The second is about the keyspace, and the
+// keyspace is one order every frame shares. Answering the second with the
+// first's scope — pairing the frame's leading key with an open bound, as though
+// everything below it were free — asks for the middle of a range that is not
+// empty, and hands back a key an issue outside the frame is already holding.
+//
+// The interleaving is what makes that reachable, and it is why this case moves
+// a top-level issue before filing anything: it parks a top-level key underneath
+// the epic, in the span an open bound claims is empty. Both engines are pinned
+// by the same two observables — one rank per issue, and a child whose key sits
+// inside its own epic's span rather than below every top-level issue. The
+// memory engine has no keys to collide, and that is the point of asking it: its
+// answer is the position, which is what the store's keys have to render.
+func placingAtAFrameEdgeKeepsTheKeyBesideItsFrame(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", ParentID: epic.ID})
+	trailing := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "trailing", Topic: "core"})
+	leading := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "leading", Topic: "core", Placement: storage.RankTop})
+	// Parks a top-level key between the two the frame's own placement would
+	// otherwise treat as an empty span.
+	if _, err := st.RankBelow(ctx, trailing.ID, leading.ID); err != nil {
+		t.Fatalf("RankBelow(trailing, leading) error = %v", err)
+	}
+
+	lead := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "new lead", Topic: "core", ParentID: epic.ID, Placement: storage.RankTop})
+	listed := mustList(t, ctx, st, storage.ListIssuesFilter{})
+	assertDistinctRanks(t, listed)
+	assertPrecedes(t, listed, lead.ID, child.ID)
+	// The key belongs to the frame it was filed into: after the epic that holds
+	// it, not below every top-level issue.
+	assertPrecedes(t, listed, epic.ID, lead.ID)
+
+	// The rank verb answers the same question and must answer it the same way.
+	moved := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "moved", Topic: "core", ParentID: epic.ID})
+	if _, err := st.RankToTop(ctx, moved.ID); err != nil {
+		t.Fatalf("RankToTop(moved) error = %v", err)
+	}
+	listed = mustList(t, ctx, st, storage.ListIssuesFilter{})
+	assertDistinctRanks(t, listed)
+	assertPrecedes(t, listed, moved.ID, lead.ID)
+	assertPrecedes(t, listed, epic.ID, moved.ID)
 }
 
 // createAtTopOfAnEmptyFrameTakesADistinctKey pins what filing at the top of a
@@ -1332,6 +1382,7 @@ func rankSetStaysInsideItsFrame(t *testing.T, ctx context.Context, st storage.St
 	// The named order holds among the siblings, and the unnamed one keeps its
 	// place behind them.
 	listed := mustList(t, ctx, st, storage.ListIssuesFilter{})
+	assertDistinctRanks(t, listed)
 	assertPrecedes(t, listed, c3.ID, c1.ID)
 	assertPrecedes(t, listed, c1.ID, c2.ID)
 
