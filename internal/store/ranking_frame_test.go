@@ -1008,18 +1008,32 @@ func TestCreateAtTopOfAnEmptyFrameTakesADistinctKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
+	// Ranked after the epic so that "beside the container" and "past the
+	// workspace's last key" are different answers. With the epic trailing
+	// everything, the two coincide and the case cannot tell them apart.
+	trailing, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Trailing", Topic: "frame", IssueType: "task"})
+	if err != nil {
+		t.Fatalf("CreateIssue(trailing) error = %v", err)
+	}
 
 	only, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Only child", Topic: "frame", IssueType: "task", ParentID: epic.ID, Placement: storage.RankTop})
 	if err != nil {
 		t.Fatalf("CreateIssue(first child, --top) error = %v", err)
 	}
-	if only.Rank == first.Rank {
-		t.Errorf("the first child filed --top took rank %q, the key %s already holds; a rank orders one issue", only.Rank, first.ID)
+	for _, other := range []model.Issue{first, epic, trailing} {
+		if only.Rank == other.Rank {
+			t.Errorf("the first child filed --top took rank %q, the key %s already holds; a rank orders one issue", only.Rank, other.ID)
+		}
 	}
-	// There is no sibling to lead, so it files where the default placement
-	// would have filed it: past the workspace's last key, which is the epic's.
-	if want := rank.After(epic.Rank); only.Rank != want {
-		t.Errorf("the first child filed --top took rank %q, want %q = After(the workspace's last key %q)", only.Rank, want, epic.Rank)
+	// There is no sibling to lead, so the frame's own container is the key it
+	// sits beside: the child lands just past its epic, not past everything in
+	// the workspace. Filing it at the far end would read as LAST in every view
+	// that sorts a child by its own key, which is what --top did not ask for.
+	if want := mustBottomOf(t, map[string]string{first.ID: first.Rank, epic.ID: epic.Rank, trailing.ID: trailing.Rank}, epic.Rank); only.Rank != want {
+		t.Errorf("the first child filed --top took rank %q, want %q = the room just past its epic %q", only.Rank, want, epic.Rank)
+	}
+	if !(only.Rank > epic.Rank && only.Rank < trailing.Rank) {
+		t.Errorf("the first child filed --top took rank %q, want it between its epic %q and the next top-level key %q", only.Rank, epic.Rank, trailing.Rank)
 	}
 
 	// Once the frame holds a key, the top edge has an order to lead again and

@@ -1341,12 +1341,21 @@ func createAtTopOfAnEmptyFrameTakesADistinctKey(t *testing.T, ctx context.Contex
 	// "middle of the keyspace" answer would hand out a second time.
 	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first", Topic: "core"})
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "childless epic", Topic: "core", IssueType: model.TypeEpic})
+	// Filed after the epic so that "beside the container" and "past everything"
+	// are different positions. With the epic trailing the workspace the two
+	// coincide, and the case cannot tell them apart.
+	trailing := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "trailing", Topic: "core"})
 	only := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "only child", Topic: "core", ParentID: epic.ID, Placement: storage.RankTop})
 
 	listed := mustList(t, ctx, st, storage.ListIssuesFilter{})
 	assertDistinctRanks(t, listed)
 	assertPrecedes(t, listed, first.ID, only.ID)
 	assertPrecedes(t, listed, epic.ID, only.ID)
+	// The first member of a frame lands beside the issue that frames it, not at
+	// the end of the workspace. Filed at the end it would come back after
+	// everything — which is what a view sorting a non-epic parent's child by
+	// its own position would then show for an issue that asked for the top.
+	assertPrecedes(t, listed, only.ID, trailing.ID)
 
 	// The second child, filed at the top of a frame that now holds one, leads
 	// it — the frame has an order to lead again.
