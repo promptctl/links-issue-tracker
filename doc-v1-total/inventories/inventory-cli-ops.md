@@ -36,9 +36,9 @@ data — described as assets, not as documentation of behavior).
 | Code | Constant | Trigger |
 |---|---|---|
 | 0 | `ExitOK` (`exit.go:13`) | nil error |
-| 1 | `ExitGeneric` (`exit.go:14`) | default; also `BulkFailureError` (`exit.go:157-163`), `store.ErrTransientGCContention` (`exit.go:164-166`) |
+| 1 | `ExitGeneric` (`exit.go:14`) | default; also `BulkFailureError` (`exit.go:159-164`), `store.ErrTransientGCContention` (`exit.go:166-168`) |
 | 2 | `ExitUsage` (`exit.go:15`) | `UsageError` (`exit.go:77-79`) |
-| 3 | `ExitValidation` (`exit.go:16`) | `templateShapeError` (`exit.go:62-64`), `UnknownCommandError` (`exit.go:81-83`), `RetiredCommandError` (`exit.go:87-89`), `ValidationError` (`exit.go:91-93`), `storage.ValidationError` (`exit.go:95-97`), `model.ContainerActionError` when not satisfied (`exit.go:107-113`), `UnsupportedError` (`exit.go:114-116`), `OutsideWorkspaceError` (`exit.go:140-142`), `store.ErrWorkspaceNotInitialized` (`exit.go:144-146`), `workspace.ErrIssuePrefixRefused` (`exit.go:156-158`) |
+| 3 | `ExitValidation` (`exit.go:16`) | `templateShapeError` (`exit.go:62-64`), `UnknownCommandError` (`exit.go:81-83`), `RetiredCommandError` (`exit.go:87-89`), `ValidationError` (`exit.go:91-93`), `storage.ValidationError` (`exit.go:95-97`), `model.ContainerActionError` when not satisfied (`exit.go:107-113`), `UnsupportedError` (`exit.go:114-116`), `OutsideWorkspaceError` (`exit.go:142-144`), `store.ErrWorkspaceNotInitialized` (`exit.go:146-148`), `workspace.ErrIssuePrefixRefused` (`exit.go:156-158`) |
 | 4 | `ExitNotFound` (`exit.go:17`) | `storage.NotFoundError` (`exit.go:42-44`) |
 | 5 | `ExitConflict` (`exit.go:18`) | `MergeConflictError` (`exit.go:46-48`), `SyncFailureError` (`exit.go:54-56`), `ownerApprovalRefusalError` (`exit.go:69-71`) |
 | 6 | `ExitNoWork` (`exit.go:31`) | `Exhausted` (`exit.go:122-124`), `NoWork` (`exit.go:126-128`), `model.ContainerActionError` when `Satisfied()` (`exit.go:107-110`) |
