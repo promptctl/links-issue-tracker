@@ -160,13 +160,22 @@ second test fails when the committed manifest disagrees with what the tree
 yields. `go run ./tools/docclaims-sync -check` is the same comparison as a
 command.
 
-What counts as shipped is `cmd/` and `internal/` only, minus test files and
-this package's own generated manifest. It is a positive list rather than a
-blacklist of directories to skip, because the blacklist it replaced silently
-swallowed `artifacts/` — a gitignored vendored copy of an unrelated project
-whose literals outnumbered lit's own by three to one. Note that it is a path
-scope and not a tracking claim: nothing consults git, so a vendored tree dropped
-*inside* `internal/` would count.
+What counts as shipped is whatever a binary under `cmd/` actually links, walked
+out from each `main` package through the import graph, minus test files. Not a
+list of directories: two successive lists both leaked. The first swallowed
+`artifacts/`, a gitignored vendored copy of an unrelated project whose literals
+outnumbered lit's own by three to one; the `cmd/` and `internal/` list that
+replaced it still admitted `internal/vendor/dolthub-driver/example`, a program
+nothing imports, and `internal/docsclaims`, a registry of quotations from other
+documents. Neither was harmless noise — a quotation anchors to the *shortest*
+source holding it, so a stray copy in unlinked code becomes the evidence for a
+chapter's claim and survives deleting the real message. Three entries were being
+held up that way, including two chapters' `CREATE TABLE` anchored to an example
+table in the vendored driver.
+
+Vendored is not the disqualifier; unreachable is. `github.com/dolthub/driver` is
+`replace`d onto `internal/vendor/dolthub-driver` and imported by `internal/store`,
+so its eighteen documented error messages ship and are gated like any other.
 
 Embedded text assets count too, resolved from the `//go:embed` directives
 themselves rather than guessed from file extensions. They have to: this

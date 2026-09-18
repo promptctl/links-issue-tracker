@@ -38,6 +38,7 @@ import (
 	"io/fs"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -51,22 +52,10 @@ import (
 // protecting, because a match would as often be a coincidence as a quotation.
 const minClaimLen = 12
 
-// shippedRoots is where this module's product code lives. A positive list, not
-// a blacklist of what to skip: "everything in the tree except the names I
-// thought of" admits every directory nobody enumerated, and the blacklist this
-// replaced admitted three — .claude/worktrees (whole checkouts of other
-// branches), this package's own generated manifest, and artifacts/, a gitignored
-// vendored copy of an unrelated project supplying 78% of the literals collected.
-// [LAW:parse-dont-validate] the set is constructed, not filtered.
-//
-// It is a path scope, not a tracking claim: nothing here consults git, so a
-// vendored or scratch tree dropped INSIDE cmd/ or internal/ would count.
-var shippedRoots = []string{"cmd", "internal"}
-
-// selfPkg is the one path inside those roots that must not count as shipped.
-// manifest_gen.go holds every documented quotation as a Go string, so counting
-// it would let each entry match itself and the gate would pass over any drift.
-const selfPkg = "internal/docclaims"
+// entryRoot is where this module's binaries live. The search for what ships
+// starts here rather than at the module root because tools/ also holds main
+// packages, and a development utility's messages never reach a user of lit.
+const entryRoot = "cmd"
 
 // docSpanDouble matches a “…“ span, which the corpus uses when the quoted
 // string itself contains a backtick. It is tried first: a single-backtick
@@ -98,6 +87,15 @@ type Claim struct {
 	// cites and a coincidental substring elsewhere keeps the gate green — the
 	// precise failure this package exists to end.
 	// [LAW:types-are-the-program] the claim carries its own evidence.
+	//
+	// The two kinds do not anchor equally tightly, and the weaker one is worth
+	// knowing about rather than discovering. A literal is the message itself,
+	// so the check is nearly exact. An asset is keyed by path and matched
+	// against its whole contents, so a quotation is only held to "still
+	// somewhere in this file" — delete the sentence a chapter describes and a
+	// stray recurrence elsewhere in the same file keeps it green. The assets
+	// here are small enough (the largest is 6.3 KB) that the gap is narrow, and
+	// closing it properly means anchoring to a span rather than a file.
 	Src string
 }
 
@@ -123,31 +121,13 @@ type Corpus map[string]string
 // Test files do not ship, and neither does tools/, so a message living only in
 // either could otherwise survive its own deletion from the product.
 func ShippedText(fsys fs.FS) (Corpus, error) {
+	shipped, err := shippedPackages(fsys)
+	if err != nil {
+		return nil, err
+	}
 	corpus := Corpus{}
-	for _, root := range shippedRoots {
-		if _, err := fs.Stat(fsys, root); err != nil {
-			// A root that is not present is a misconfigured corpus, not an
-			// empty one, and returning fewer sources would report every claim
-			// under it as drifted. [LAW:no-silent-failure]
-			return nil, fmt.Errorf("shipped root %q: %w", root, err)
-		}
-		err := fs.WalkDir(fsys, root, func(name string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if d.IsDir() {
-				if name == selfPkg || path.Base(name) == "testdata" {
-					return fs.SkipDir
-				}
-				return nil
-			}
-			if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-				return nil
-			}
-			src, err := fs.ReadFile(fsys, name)
-			if err != nil {
-				return err
-			}
+	for _, dir := range shipped {
+		err := eachProductFile(fsys, dir, func(name string, src []byte) error {
 			return collectFile(fsys, name, src, corpus)
 		})
 		if err != nil {
@@ -155,6 +135,241 @@ func ShippedText(fsys fs.FS) (Corpus, error) {
 		}
 	}
 	return corpus, nil
+}
+
+// shippedPackages lists this module's package directories that a binary under
+// cmd/ actually links, by walking the import graph out from each main package.
+//
+// What this replaced was a hand-kept list of root directories, and it drifted
+// twice inside one ticket: first admitting artifacts/, a gitignored checkout of
+// an unrelated project, then internal/vendor/dolthub-driver, a separate module
+// whose example program nothing imports. Neither was merely noise in the
+// corpus. Matched anchors a quotation to the SHORTEST source containing it, so
+// a coincidental copy of the words in an unlinked tree becomes the recorded
+// evidence for a chapter's claim about lit's own message — and deleting that
+// message then leaves the gate green, which is the precise failure this package
+// exists to end.
+//
+// [LAW:one-source-of-truth] the import graph is where "what ships" is already
+// written down; a list of directories is a second copy of that fact, and the
+// copy is the half that rots. [LAW:parse-dont-validate] the set is constructed
+// by following imports rather than filtered by naming trees to skip, so a
+// vendored module dropped inside internal/ is out because nothing links it —
+// not because somebody remembered to name it. This package's own generated
+// manifest is excluded by the same rule, for the same reason.
+//
+// The test is linked AND sourced here, not "belongs to this module". A module
+// replaced onto a local path is source this repository carries and ships:
+// github.com/dolthub/driver lives in internal/vendor/dolthub-driver, and
+// internal/store imports it, so its eighteen documented error messages reach a
+// user of lit and are gated like any other. Its example/ program is in the same
+// tree and is linked by nothing, so it is out. Being vendored was never the
+// disqualifier — being unreachable is.
+func shippedPackages(fsys fs.FS) ([]string, error) {
+	sources, err := localSources(fsys)
+	if err != nil {
+		return nil, err
+	}
+	queue, err := entryPackages(fsys)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool, len(queue))
+	for _, dir := range queue {
+		seen[dir] = true
+	}
+	for len(queue) > 0 {
+		dir := queue[0]
+		queue = queue[1:]
+		imports, err := importsOf(fsys, dir)
+		if err != nil {
+			return nil, err
+		}
+		for _, imp := range imports {
+			next, ok := sources.dir(imp)
+			if !ok || seen[next] {
+				continue
+			}
+			seen[next] = true
+			queue = append(queue, next)
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for dir := range seen {
+		out = append(out, dir)
+	}
+	// Sorted so a derivation is a function of the tree alone: map order would
+	// otherwise decide which of two equally short sources an error names first.
+	sort.Strings(out)
+	return out, nil
+}
+
+// sources maps an import path to the directory in this tree that holds it, for
+// every package whose source the repository carries.
+//
+// It is read from go.mod rather than stated here, because go.mod is where both
+// facts are already declared — the module's own import prefix, and each module
+// replaced onto a local path. A constant would be a second copy that a rename
+// or a new vendored dependency silently falsifies, and the failure mode is
+// quiet: an import that resolves to nothing is a package never walked, whose
+// messages then report as drifted prose. [LAW:one-source-of-truth]
+type sources []source
+
+type source struct {
+	prefix string // import path of the module
+	dir    string // directory in this tree holding it, "" for the root module
+}
+
+// dir resolves an import path to the directory holding its source, reporting
+// whether this tree holds it at all. Longest prefix wins, so a module replaced
+// into a subdirectory of the root module resolves to the replacement rather
+// than to the path it would otherwise occupy.
+func (s sources) dir(imp string) (string, bool) {
+	for _, src := range s {
+		if imp == src.prefix {
+			return src.dir, true
+		}
+		if rest, ok := strings.CutPrefix(imp, src.prefix+"/"); ok {
+			return path.Join(src.dir, rest), true
+		}
+	}
+	return "", false
+}
+
+func localSources(fsys fs.FS) (sources, error) {
+	data, err := fs.ReadFile(fsys, "go.mod")
+	if err != nil {
+		return nil, fmt.Errorf("reading go.mod: %w", err)
+	}
+	var out sources
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if rest, ok := strings.CutPrefix(line, "module "); ok {
+			out = append(out, source{prefix: strings.TrimSpace(rest)})
+			continue
+		}
+		// Every replacement is read, in either of go.mod's two spellings — a
+		// bare `replace a => b` line and a line inside a `replace ( … )` block
+		// — because the arrow is what makes it one, not the keyword.
+		module, target, ok := strings.Cut(line, "=>")
+		if !ok {
+			continue
+		}
+		dir := strings.Fields(strings.TrimSpace(target))
+		// A replacement onto another module is that module's source, fetched
+		// into the module cache and not in this tree; only a filesystem path
+		// names something here.
+		if len(dir) == 0 || !strings.HasPrefix(dir[0], ".") {
+			continue
+		}
+		prefix := strings.Fields(strings.TrimPrefix(strings.TrimSpace(module), "replace "))
+		if len(prefix) == 0 {
+			continue
+		}
+		out = append(out, source{prefix: prefix[0], dir: path.Clean(dir[0])})
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("go.mod declares no module path, so no import can be identified as source this repository ships")
+	}
+	// Longest prefix first, so `dir` can return on its first match.
+	sort.Slice(out, func(i, j int) bool { return len(out[i].prefix) > len(out[j].prefix) })
+	return out, nil
+}
+
+// entryPackages finds the main packages under entryRoot — the binaries whose
+// text reaches a user, and the roots of the import walk.
+func entryPackages(fsys fs.FS) ([]string, error) {
+	var out []string
+	err := fs.WalkDir(fsys, entryRoot, func(name string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !isProductGo(name) {
+			return err
+		}
+		src, err := fs.ReadFile(fsys, name)
+		if err != nil {
+			return err
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), name, src, parser.PackageClauseOnly)
+		if err != nil {
+			return fmt.Errorf("parsing %s: %w", name, err)
+		}
+		if dir := path.Dir(name); file.Name.Name == "main" && !slices.Contains(out, dir) {
+			out = append(out, dir)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		// An empty set of entry points is a misconfigured corpus, not an empty
+		// product: every documented quotation would report as drifted, naming
+		// the whole specification false rather than this walk broken.
+		// [LAW:no-silent-failure]
+		return nil, fmt.Errorf("no main package under %s/, so nothing is identifiable as shipping", entryRoot)
+	}
+	return out, nil
+}
+
+// importsOf returns the import paths of one package's product files.
+func importsOf(fsys fs.FS, dir string) ([]string, error) {
+	var out []string
+	err := eachProductFile(fsys, dir, func(name string, src []byte) error {
+		file, err := parser.ParseFile(token.NewFileSet(), name, src, parser.ImportsOnly)
+		if err != nil {
+			return fmt.Errorf("parsing %s: %w", name, err)
+		}
+		for _, spec := range file.Imports {
+			imp, err := strconv.Unquote(spec.Path.Value)
+			if err != nil {
+				continue
+			}
+			out = append(out, imp)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// eachProductFile calls fn for every Go file of one package that the product
+// build compiles. One traversal for both callers, so the set of files whose
+// imports are followed cannot differ from the set whose literals are collected
+// — a package reached but not read would report its own messages as drifted.
+// [LAW:single-enforcer]
+func eachProductFile(fsys fs.FS, dir string, fn func(name string, src []byte) error) error {
+	entries, err := fs.ReadDir(fsys, dir)
+	if err != nil {
+		return fmt.Errorf("reading package %s: %w", dir, err)
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := path.Join(dir, e.Name())
+		if !isProductGo(name) {
+			continue
+		}
+		src, err := fs.ReadFile(fsys, name)
+		if err != nil {
+			return err
+		}
+		if err := fn(name, src); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// isProductGo reports whether a file is Go source the product build compiles.
+// A test file ships nothing, and the go tool ignores testdata entirely, so a
+// package stored there is not reachable however it is imported.
+func isProductGo(name string) bool {
+	if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+		return false
+	}
+	return !slices.Contains(strings.Split(path.Dir(name), "/"), "testdata")
 }
 
 // collectFile parses one Go file, recording its multi-word string literals and
@@ -202,9 +417,13 @@ func collectEmbeds(fsys fs.FS, dir string, file *ast.File, into Corpus) error {
 			if m == nil {
 				continue
 			}
-			for _, pattern := range strings.Fields(m[1]) {
-				pattern = strings.TrimPrefix(strings.Trim(pattern, `"`), "all:")
-				if err := addEmbedded(fsys, path.Join(dir, pattern), into); err != nil {
+			for _, pattern := range embedPatterns(m[1]) {
+				// all: is what tells the compiler to include the names a bare
+				// directory pattern omits, so it has to survive as far as the
+				// walk that does the omitting.
+				all := strings.HasPrefix(pattern, "all:")
+				pattern = strings.TrimPrefix(pattern, "all:")
+				if err := addEmbedded(fsys, path.Join(dir, pattern), all, into); err != nil {
 					return err
 				}
 			}
@@ -213,9 +432,61 @@ func collectEmbeds(fsys fs.FS, dir string, file *ast.File, into Corpus) error {
 	return nil
 }
 
+// embedPatterns splits a //go:embed directive's operands.
+//
+// Splitting on whitespace is not enough: go:embed accepts a quoted pattern, in
+// either of Go's two string syntaxes, and a quoted pattern may contain spaces.
+// Cutting one in half yields two patterns that match nothing, and a pattern
+// matching nothing is silent here — the asset simply never enters the corpus,
+// and every chapter quoting it is then reported as prose describing a message
+// that no longer ships. A parse gap would arrive wearing the exact costume of
+// the drift this package hunts. [LAW:no-silent-failure]
+func embedPatterns(operands string) []string {
+	var out []string
+	rest := strings.TrimSpace(operands)
+	for rest != "" {
+		var token string
+		switch rest[0] {
+		case '"', '`':
+			quote := rest[0]
+			end := strings.IndexByte(rest[1:], quote)
+			if end < 0 {
+				token, rest = rest[1:], ""
+				break
+			}
+			token, rest = rest[1:1+end], rest[2+end:]
+			if quote == '"' {
+				if unquoted, err := strconv.Unquote(`"` + token + `"`); err == nil {
+					token = unquoted
+				}
+			}
+		default:
+			if i := strings.IndexAny(rest, " \t"); i >= 0 {
+				token, rest = rest[:i], rest[i:]
+			} else {
+				token, rest = rest, ""
+			}
+		}
+		if token != "" {
+			out = append(out, token)
+		}
+		rest = strings.TrimSpace(rest)
+	}
+	return out
+}
+
 // addEmbedded resolves one embed pattern and records every text file it names.
 // A pattern may name a directory, which embeds everything beneath it.
-func addEmbedded(fsys fs.FS, pattern string, into Corpus) error {
+//
+// all carries the directive's all: prefix, because the two differ in what a
+// directory contributes: without it the go tool omits every name beginning with
+// "." or "_" from the subtree. Measured against the compiler rather than read
+// off the documentation, since the rule is not the one a reader expects — the
+// omission applies to a directory pattern only, and an explicit glob like
+// `defaults/*` does embed a _draft.md. Treating the two alike in either
+// direction puts text in the corpus that no user can reach, or leaves out text
+// that ships.
+func addEmbedded(fsys fs.FS, pattern string, all bool, into Corpus) error {
 	matches, err := fs.Glob(fsys, pattern)
 	if err != nil {
 		return fmt.Errorf("embed pattern %q: %w", pattern, err)
@@ -232,8 +503,17 @@ func addEmbedded(fsys fs.FS, pattern string, into Corpus) error {
 			continue
 		}
 		err = fs.WalkDir(fsys, match, func(name string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() {
+			if err != nil {
 				return err
+			}
+			if !all && name != match && omittedFromDirectoryEmbed(path.Base(name)) {
+				if d.IsDir() {
+					return fs.SkipDir
+				}
+				return nil
+			}
+			if d.IsDir() {
+				return nil
 			}
 			return addAsset(fsys, name, into)
 		})
@@ -242,6 +522,13 @@ func addEmbedded(fsys fs.FS, pattern string, into Corpus) error {
 		}
 	}
 	return nil
+}
+
+// omittedFromDirectoryEmbed reports whether the go tool leaves a name out of a
+// directory pattern's subtree. Verified against the compiler: `//go:embed sub`
+// omits sub/_x.txt and sub/.y.txt, while `//go:embed d/*` embeds both.
+func omittedFromDirectoryEmbed(base string) bool {
+	return strings.HasPrefix(base, ".") || strings.HasPrefix(base, "_")
 }
 
 // addAsset records one embedded file, skipping anything that is not text. A
@@ -442,6 +729,32 @@ func Diff(a, b []Claim) []Claim {
 		}
 	}
 	return out
+}
+
+// Vanished splits the committed entries a fresh derivation no longer yields
+// into the two cases that call for opposite responses, so a report can name the
+// right one instead of guessing.
+//
+// An entry can leave a derivation two ways. The chapter stopped quoting the
+// message — an ordinary prose edit, and regenerating is exactly right. Or the
+// message stopped shipping, and regenerating is the one action that defeats the
+// gate: it drops the entry, both tests go green, and the sentence stays in the
+// specification describing a message the binary no longer has. Telling a
+// contributor to regenerate in that second case is worse than saying nothing,
+// because it is an instruction to erase the evidence.
+//
+// The discriminator is the same question Missing asks — does the recorded
+// source still carry the words — so the two reports cannot disagree about what
+// drift is. [LAW:single-enforcer]
+func Vanished(manifest, fresh []Claim, corpus Corpus) (stopped, rephrased []Claim) {
+	for _, c := range Diff(manifest, fresh) {
+		if stillHolds(c.Src, c.Text, corpus) {
+			rephrased = append(rephrased, c)
+			continue
+		}
+		stopped = append(stopped, c)
+	}
+	return stopped, rephrased
 }
 
 // Dedupe sorts by document then text and drops repeats, so a derivation is a

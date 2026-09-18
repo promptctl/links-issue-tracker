@@ -65,7 +65,11 @@ func run() error {
 	}
 
 	if *check {
-		return verify(matched)
+		corpus, err := docclaims.ShippedText(os.DirFS(root))
+		if err != nil {
+			return err
+		}
+		return verify(matched, corpus)
 	}
 
 	if err := os.WriteFile(manifestPath, []byte(render(matched)), 0o644); err != nil {
@@ -107,19 +111,29 @@ func render(claims []docclaims.Claim) string {
 // verify compares the committed manifest against a fresh derivation and names
 // the entries that differ, in both directions, rather than only reporting that
 // they do.
-func verify(want []docclaims.Claim) error {
+func verify(want []docclaims.Claim, corpus docclaims.Corpus) error {
 	got := docclaims.Manifest
 	only := docclaims.Diff(want, got)
-	stale := docclaims.Diff(got, want)
-	if len(only) == 0 && len(stale) == 0 {
+	stopped, rephrased := docclaims.Vanished(got, want, corpus)
+	if len(only) == 0 && len(stopped) == 0 && len(rephrased) == 0 {
 		fmt.Printf("docclaims-sync: manifest is current (%d quotations)\n", len(got))
 		return nil
 	}
 	for _, c := range only {
 		fmt.Fprintf(os.Stderr, "  only in a fresh derivation: %s %q\n", c.Doc, c.Text)
 	}
-	for _, c := range stale {
-		fmt.Fprintf(os.Stderr, "  only in the committed manifest: %s %q\n", c.Doc, c.Text)
+	for _, c := range rephrased {
+		fmt.Fprintf(os.Stderr, "  no longer quoted by %s: %q\n", c.Doc, c.Text)
+	}
+	// Reported apart from the rest, and with the opposite instruction: these
+	// are messages that stopped shipping, and regenerating drops them, turning
+	// the gate green over prose that is now false.
+	for _, c := range stopped {
+		fmt.Fprintf(os.Stderr, "  STOPPED SHIPPING, quoted by %s: %q\n", c.Doc, c.Text)
+	}
+	if len(stopped) > 0 {
+		return fmt.Errorf("%d documented message(s) no longer ship: fix the code or the chapter. Regenerating would drop them and leave the specification false",
+			len(stopped))
 	}
 	return fmt.Errorf("manifest is stale: committed %d quotations, the tree yields %d; run `go run ./tools/docclaims-sync`",
 		len(got), len(want))

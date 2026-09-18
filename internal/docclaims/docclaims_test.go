@@ -57,8 +57,19 @@ func TestManifestIsCurrent(t *testing.T) {
 	for _, c := range Diff(fresh, Manifest) {
 		t.Errorf("not in the committed manifest: %s %q — run `go run ./tools/docclaims-sync`", c.Doc, c.Text)
 	}
-	for _, c := range Diff(Manifest, fresh) {
-		t.Errorf("in the manifest but not derivable from this tree: %s %q — run `go run ./tools/docclaims-sync`", c.Doc, c.Text)
+	corpus, err := ShippedText(os.DirFS(repoRoot))
+	if err != nil {
+		t.Fatalf("ShippedText: %v", err)
+	}
+	// Told apart rather than reported together: for one of these two the
+	// remediation is to regenerate, and for the other regenerating is what
+	// erases the evidence that a documented message stopped shipping.
+	stopped, rephrased := Vanished(Manifest, fresh, corpus)
+	for _, c := range rephrased {
+		t.Errorf("no longer quoted by %s: %q — the prose changed and the manifest needs `go run ./tools/docclaims-sync`", c.Doc, c.Text)
+	}
+	for _, c := range stopped {
+		t.Errorf("%s quotes a message that no longer ships: %q — fix the code or the chapter. Do NOT regenerate: that drops the entry and leaves the sentence false.", c.Doc, c.Text)
 	}
 }
 
@@ -142,7 +153,8 @@ func TestStableReanchorsWhenTheRecordedSourceGoes(t *testing.T) {
 // in two chapters — exists only in internal/templates/defaults/quickstart.md.
 func TestShippedTextReadsProductCodeAndItsEmbeddedAssets(t *testing.T) {
 	fsys := fstest.MapFS{
-		"cmd/lit/main.go":             {Data: []byte("package main\nvar A = \"shipped message here\"\n")},
+		"go.mod":                      {Data: []byte("module example.test/lit\n\nreplace example.test/driver => ./internal/vendor/driver\n")},
+		"cmd/lit/main.go":             {Data: []byte("package main\n\nimport (\n\t_ \"example.test/lit/internal/cli\"\n\t_ \"example.test/driver\"\n)\n\nvar A = \"shipped message here\"\n")},
 		"internal/cli/real.go":        {Data: []byte("package cli\n\n//go:embed helptext/*\nvar files embed.FS\n")},
 		"internal/cli/helptext/a.txt": {Data: []byte("first embedded message\n")},
 		"internal/cli/helptext/b.txt": {Data: []byte("second embedded message\n")},
@@ -150,13 +162,22 @@ func TestShippedTextReadsProductCodeAndItsEmbeddedAssets(t *testing.T) {
 		"internal/cli/testdata/x.go":  {Data: []byte("package cli\nvar D = \"testdata only message\"\n")},
 		"tools/thing/main.go":         {Data: []byte("package main\nvar E = \"tool only message\"\n")},
 		"artifacts/beads/b.go":        {Data: []byte("package beads\nvar F = \"vendored only message\"\n")},
+		// A package inside internal/ that nothing links: the shape that twice
+		// leaked a foreign tree into the corpus.
+		"internal/unlinked/u.go": {Data: []byte("package unlinked\nvar G = \"unlinked message here\"\n")},
+		// A locally replaced module IS source this repo ships — but only the
+		// part of it something imports.
+		"internal/vendor/driver/d.go":            {Data: []byte("package driver\nvar H = \"vendored linked message\"\n")},
+		"internal/vendor/driver/example/main.go": {Data: []byte("package main\nvar I = \"vendored example message\"\n")},
 	}
 	corpus, err := ShippedText(fsys)
 	if err != nil {
 		t.Fatalf("ShippedText: %v", err)
 	}
-	if corpus["shipped message here"] == "" {
-		t.Error("a literal in shipped code was not collected")
+	for _, want := range []string{"shipped message here", "vendored linked message"} {
+		if _, ok := corpus[want]; !ok {
+			t.Errorf("%q ships and was not collected", want)
+		}
 	}
 	// Both assets, not just the first: an earlier version returned after the
 	// first glob match and silently indexed one file per embed directive.
@@ -165,9 +186,18 @@ func TestShippedTextReadsProductCodeAndItsEmbeddedAssets(t *testing.T) {
 			t.Errorf("embedded asset %s was not collected", want)
 		}
 	}
-	for _, absent := range []string{"test only message", "testdata only message", "tool only message", "vendored only message"} {
+	// "unlinked" and "vendored example" are the regression: both sit under a
+	// root the old scope named wholesale, and neither is reachable from a
+	// binary. Admitting them is not merely noise — Matched anchors a quotation
+	// to the shortest source holding it, so a stray copy in unlinked code
+	// becomes the evidence for a chapter's claim and survives deleting the real
+	// message.
+	for _, absent := range []string{
+		"test only message", "testdata only message", "tool only message",
+		"vendored only message", "unlinked message here", "vendored example message",
+	} {
 		if _, ok := corpus[absent]; ok {
-			t.Errorf("%q counted as shipped; it does not ship", absent)
+			t.Errorf("%q counted as shipped; nothing links it", absent)
 		}
 	}
 }
@@ -206,5 +236,47 @@ func TestSpansInReadsBothQuotingShapes(t *testing.T) {
 func TestUnclosedFenceIsAnError(t *testing.T) {
 	if _, err := spansIn("intro\n```\nnever closed\n"); err == nil {
 		t.Fatal("an unclosed fence was accepted; every claim below it would vanish silently")
+	}
+}
+
+// TestEmbedPatternsSurviveQuotingAndSpaces covers the directive syntax rather
+// than the common case. A quoted pattern holding a space, split on whitespace,
+// becomes two patterns that match nothing — and a pattern matching nothing is
+// silent, so the asset vanishes from the corpus and every chapter quoting it is
+// reported as drifted prose.
+func TestEmbedPatternsSurviveQuotingAndSpaces(t *testing.T) {
+	got := embedPatterns("plain.txt \"with space.txt\" `raw quoted.txt` all:tree")
+	want := []string{"plain.txt", "with space.txt", "raw quoted.txt", "all:tree"}
+	if !slices.Equal(got, want) {
+		t.Errorf("embedPatterns() = %q, want %q", got, want)
+	}
+}
+
+// TestDirectoryEmbedOmitsUnderscoredFilesButGlobDoesNot pins the corpus to the
+// compiler's rule, which is not the one a reader expects: `//go:embed sub`
+// leaves out sub/_x.txt, while `//go:embed d/*` embeds d/_x.txt. Measured
+// against the go tool, not read off the documentation. Getting it wrong in
+// either direction puts unreachable text in the corpus, or drops text that
+// ships.
+func TestDirectoryEmbedOmitsUnderscoredFilesButGlobDoesNot(t *testing.T) {
+	fsys := fstest.MapFS{
+		"go.mod":             {Data: []byte("module example.test/lit\n")},
+		"cmd/lit/main.go":    {Data: []byte("package main\n\n//go:embed sub\n//go:embed d/*\nvar f embed.FS\n")},
+		"cmd/lit/sub/a.txt":  {Data: []byte("subdir kept message\n")},
+		"cmd/lit/sub/_x.txt": {Data: []byte("subdir underscored message\n")},
+		"cmd/lit/d/a.txt":    {Data: []byte("glob kept message\n")},
+		"cmd/lit/d/_x.txt":   {Data: []byte("glob underscored message\n")},
+	}
+	corpus, err := ShippedText(fsys)
+	if err != nil {
+		t.Fatalf("ShippedText: %v", err)
+	}
+	for _, want := range []string{"cmd/lit/sub/a.txt", "cmd/lit/d/a.txt", "cmd/lit/d/_x.txt"} {
+		if _, ok := corpus[want]; !ok {
+			t.Errorf("%s is embedded and was not collected", want)
+		}
+	}
+	if _, ok := corpus["cmd/lit/sub/_x.txt"]; ok {
+		t.Error("cmd/lit/sub/_x.txt counted as shipped; a directory pattern omits underscored names")
 	}
 }
