@@ -51,7 +51,10 @@ import (
 //     site is pinned behaviorally by TestBulkUsageNamesTheTypedVerb instead.
 //   - An ActionName reached through a name no declaration introduces: assigned
 //     to a local by `:=`, or returned through an interface. Declared locals,
-//     parameters, struct fields and package vars are all covered.
+//     parameters, struct fields and package vars are all covered, and a
+//     function literal's own parameters count as declared: it is a declaration
+//     site like any other, and a review found this gate reading it as if it
+//     were not.
 
 // formatters are the fmt functions whose output a caller can read.
 var formatters = map[string]bool{
@@ -78,14 +81,22 @@ func repoRootForVerbTest(t *testing.T) string {
 	}
 }
 
-// parsedTree returns every tracked non-test Go file, parsed. It fails rather
-// than returning an empty set: a scanner handed nothing to scan reports success,
-// which is indistinguishable from one that found nothing wrong.
-// [LAW:no-silent-failure]
+// parsedTree returns every non-test Go file git can see, tracked or newly
+// added, parsed. It fails rather than returning an empty set: a scanner handed
+// nothing to scan reports success, which is indistinguishable from one that
+// found nothing wrong. [LAW:no-silent-failure]
+//
+// --others is not thoroughness for its own sake. A bare ls-files scans only
+// what is already committed, so a brand-new file holding a brand-new site is
+// invisible until it is staged -- and the window in which the author is writing
+// that site is the whole reason this gate exists, three hand sweeps having
+// missed one. CI sees only committed files either way, so this changes nothing
+// about what can merge; it changes when the author hears about it.
+// --exclude-standard keeps ignored files out.
 func parsedTree(t *testing.T) (*token.FileSet, map[string]*ast.File) {
 	t.Helper()
 	root := repoRootForVerbTest(t)
-	out, err := exec.Command("git", "-C", root, "ls-files", "*.go").Output()
+	out, err := exec.Command("git", "-C", root, "ls-files", "--cached", "--others", "--exclude-standard", "*.go").Output()
 	if err != nil {
 		t.Fatalf("git ls-files in %s: %v", root, err)
 	}
@@ -104,7 +115,7 @@ func parsedTree(t *testing.T) (*token.FileSet, map[string]*ast.File) {
 		files[rel] = f
 	}
 	if len(files) == 0 {
-		t.Fatal("no tracked non-test Go files parsed — this scan would pass over an empty set")
+		t.Fatal("no non-test Go files parsed — this scan would pass over an empty set")
 	}
 	return fset, files
 }
@@ -274,15 +285,14 @@ type localScope struct {
 
 func scopedLocals(f *ast.File) []localScope {
 	var out []localScope
-	for _, decl := range f.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok {
-			continue
-		}
+	// The one place that says which ActionName-typed names a function-like node
+	// introduces, so a named function and a literal cannot answer it
+	// differently. [LAW:one-source-of-truth]
+	declared := func(lists ...*ast.FieldList) map[string]bool {
 		names := map[string]bool{}
-		collect := func(list *ast.FieldList) {
+		for _, list := range lists {
 			if list == nil {
-				return
+				continue
 			}
 			for _, fld := range list.List {
 				if typeName(fld.Type) != "ActionName" {
@@ -293,23 +303,42 @@ func scopedLocals(f *ast.File) []localScope {
 				}
 			}
 		}
-		collect(fd.Recv)
-		if fd.Type != nil {
-			collect(fd.Type.Params)
-			collect(fd.Type.Results)
-		}
-		ast.Inspect(fd, func(n ast.Node) bool {
-			if vs, ok := n.(*ast.ValueSpec); ok && typeName(vs.Type) == "ActionName" {
-				for _, nm := range vs.Names {
-					names[nm.Name] = true
-				}
-			}
-			return true
-		})
+		return names
+	}
+	add := func(n ast.Node, names map[string]bool) {
 		if len(names) > 0 {
-			out = append(out, localScope{fd.Pos(), fd.End(), names})
+			out = append(out, localScope{n.Pos(), n.End(), names})
 		}
 	}
+	// Walk the whole file rather than its top-level declarations: a function
+	// literal is a declaration site too, and one can sit in a package-level var
+	// where no FuncDecl encloses it at all. internal/cli is built largely out of
+	// closure factories, so that is where the next site of this class is likeliest
+	// to appear. A literal's scope nests inside its enclosing function's, and
+	// overlapping scopes only ever widen what is examined.
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch fn := n.(type) {
+		case *ast.FuncDecl:
+			var names map[string]bool
+			if fn.Type != nil {
+				names = declared(fn.Recv, fn.Type.Params, fn.Type.Results)
+			} else {
+				names = declared(fn.Recv)
+			}
+			ast.Inspect(fn, func(m ast.Node) bool {
+				if vs, ok := m.(*ast.ValueSpec); ok && typeName(vs.Type) == "ActionName" {
+					for _, nm := range vs.Names {
+						names[nm.Name] = true
+					}
+				}
+				return true
+			})
+			add(fn, names)
+		case *ast.FuncLit:
+			add(fn, declared(fn.Type.Params, fn.Type.Results))
+		}
+		return true
+	})
 	return out
 }
 
