@@ -85,9 +85,6 @@ func snapshotsNewLeaf() wsLeaf {
 		// nightly` is a natural typo for `--label nightly`); accepting it would
 		// mint an unlabeled snapshot the operator then can't find by the name
 		// they thought they gave it.
-		if fs.NArg() != 0 {
-			return UsageError{Message: "usage: lit snapshots new [--label <text>]"}
-		}
 		cfg, err := config.Load(pathspec.New(ws.RootDir))
 		if err != nil {
 			return err
@@ -212,7 +209,7 @@ func snapshotsListLeaf() wsLeaf {
 func snapshotsRestoreLeaf() wsLeaf {
 	fs := newCobraFlagSet("snapshots restore")
 	return wsLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
-		if len(positional) != 1 || fs.NArg() != 0 {
+		if len(positional) != 1 {
 			return UsageError{Message: "usage: lit snapshots restore <name>"}
 		}
 		name := strings.TrimSpace(positional[0])

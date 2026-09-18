@@ -29,9 +29,6 @@ func workflowsDryRunLeaf() wsLeaf {
 	exit := fs.String("exit", "", "State the hypothetical ticket exits")
 	issue := fs.String("issue", "", "Issue id to interpolate into <id> in previewed bodies")
 	return wsLeaf{fs: fs, positionals: 0, work: func(_ context.Context, stdout io.Writer, ws workspace.Info, _ []string) error {
-		if fs.NArg() != 0 {
-			return UsageError{Message: workflowsUsage}
-		}
 
 		occasion := workflows.Occasion{
 			Event:   workflows.Event(*event),

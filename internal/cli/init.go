@@ -53,9 +53,6 @@ func initLeaf() (wsLeaf, wsAcquire) {
 		// it. [LAW:effects-at-boundaries] [LAW:parse-dont-validate]
 		// This is init's ONLY arity check; work() does not repeat it.
 		// [LAW:single-enforcer]
-		if fs.NArg() != 0 {
-			return workspace.Info{}, UsageError{Message: initUsage}
-		}
 		if !fs.Changed("prefix") {
 			return resolveWorkspaceFromWD(workspace.PrefixRequest{})
 		}
@@ -66,7 +63,7 @@ func initLeaf() (wsLeaf, wsAcquire) {
 		return resolveWorkspaceFromWD(requested)
 	}
 
-	return wsLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+	return wsLeaf{fs: fs, usage: initUsage, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
 		// Adopt runs BEFORE creating an empty store: when the remote carries a
 		// backlog, adopt clones it directly into the target path, so the path's
 		// first on-disk state is the cloned data (a pre-created empty store would

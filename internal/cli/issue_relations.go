@@ -28,12 +28,10 @@ var parentFamily = commandFamily[appSubcommand]{
 func labelAddLeaf() appLeaf {
 	fs := newCobraFlagSet("label add")
 	resolveActor := registerActor(fs)
-	return appLeaf{fs: fs, positionals: 2, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	const usageLine0 = "usage: lit label add <issue-id> <label>"
+	return appLeaf{fs: fs, usage: usageLine0, positionals: 2, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if len(positional) != 2 {
-			return UsageError{Message: "usage: lit label add <issue-id> <label>"}
-		}
-		if fs.NArg() != 0 {
-			return UsageError{Message: "usage: lit label add <issue-id> <label>"}
+			return UsageError{Message: usageLine0}
 		}
 		labels, err := ap.Store.AddLabel(ctx, storage.AddLabelInput{IssueID: positional[0], Name: positional[1], CreatedBy: resolveActor()})
 		if err != nil {
@@ -48,12 +46,10 @@ func labelAddLeaf() appLeaf {
 
 func labelRmLeaf() appLeaf {
 	fs := newCobraFlagSet("label rm")
-	return appLeaf{fs: fs, positionals: 2, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	const usageLine1 = "usage: lit label rm <issue-id> <label>"
+	return appLeaf{fs: fs, usage: usageLine1, positionals: 2, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if len(positional) != 2 {
-			return UsageError{Message: "usage: lit label rm <issue-id> <label>"}
-		}
-		if fs.NArg() != 0 {
-			return UsageError{Message: "usage: lit label rm <issue-id> <label>"}
+			return UsageError{Message: usageLine1}
 		}
 		labels, err := ap.Store.RemoveLabel(ctx, positional[0], positional[1])
 		if err != nil {
@@ -71,9 +67,10 @@ func parentSetLeaf() appLeaf {
 	child := fs.String("child", "", "Child issue ID (required)")
 	parent := fs.String("parent", "", "Parent issue ID (required)")
 	resolveActor := registerActor(fs)
-	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
-		if *child == "" || *parent == "" || fs.NArg() != 0 {
-			return UsageError{Message: "usage: lit parent set --child <id> --parent <id>"}
+	const usageLine2 = "usage: lit parent set --child <id> --parent <id>"
+	return appLeaf{fs: fs, usage: usageLine2, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		if *child == "" || *parent == "" {
+			return UsageError{Message: usageLine2}
 		}
 		rel, err := ap.Store.SetParent(ctx, storage.SetParentInput{
 			ChildID:   *child,
@@ -100,9 +97,10 @@ func parentSetLeaf() appLeaf {
 
 func parentClearLeaf() appLeaf {
 	fs := newCobraFlagSet("parent clear")
-	return appLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	const usageLine3 = "usage: lit parent clear <child-id>"
+	return appLeaf{fs: fs, usage: usageLine3, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
-			return UsageError{Message: "usage: lit parent clear <child-id>"}
+			return UsageError{Message: usageLine3}
 		}
 		if err := ap.Store.ClearParent(ctx, positional[0]); err != nil {
 			return err

@@ -35,7 +35,7 @@ func prefixSetLeaf() wsLeaf {
 	fs := newCobraFlagSet("prefix set")
 	apply := fs.Bool("apply", false, "Apply the rename (without this flag, prints a preview)")
 	return wsLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
-		if len(positional) != 1 || fs.NArg() != 0 {
+		if len(positional) != 1 {
 			return UsageError{Message: "usage: lit prefix set <new-prefix> [--apply]"}
 		}
 		requested := strings.TrimSpace(positional[0])

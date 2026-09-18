@@ -59,17 +59,6 @@ func reconcilerFor(ws workspace.Info, session syncSession, command string) (stor
 	return reconciler, nil
 }
 
-// guardReconcileInput rejects a stray positional argument: every reconcile
-// input is a flag, so a positional is a malformed command, never silently
-// ignored. [LAW:no-silent-failure] [LAW:single-enforcer] the three handlers
-// enforce this through one guard.
-func guardReconcileInput(fs *cobraFlagSet, cmd string) error {
-	if fs.NArg() != 0 {
-		return UsageError{Message: fmt.Sprintf("%s takes no positional arguments; got %q", cmd, fs.Arg(0))}
-	}
-	return nil
-}
-
 // runSyncReconcileShow runs the field-aware reconcile and reports the outcome. A
 // settled divergence linearizes transparently; a prose divergence renders the
 // full guidance to stdout and returns a MergeConflictError so the command exits
@@ -80,9 +69,6 @@ func syncReconcileShowLeaf() syncLeaf {
 	fs := newCobraFlagSet("sync reconcile")
 	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope syncScope, positional []string) error {
 		ws, session := scope.ws, scope.session
-		if err := guardReconcileInput(fs, "sync reconcile"); err != nil {
-			return err
-		}
 		reconciler, err := reconcilerFor(ws, session, reconcileShowCommand)
 		if err != nil {
 			return err
@@ -115,9 +101,6 @@ func syncReconcileResolveLeaf() syncLeaf {
 	resolveValues := fs.StringArray("resolve", "Merged text for one diverged field, as FINGERPRINT=TEXT with the fingerprint from that field's heading (repeat for every pending field)")
 	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope syncScope, positional []string) error {
 		ws, session := scope.ws, scope.session
-		if err := guardReconcileInput(fs, "sync reconcile resolve"); err != nil {
-			return err
-		}
 		if len(*resolveValues) == 0 {
 			return UsageError{Message: "sync reconcile resolve needs at least one --resolve FINGERPRINT=TEXT"}
 		}
@@ -158,9 +141,6 @@ func syncReconcileAbortLeaf() syncLeaf {
 	fs := newCobraFlagSet("sync reconcile abort")
 	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope syncScope, positional []string) error {
 		ws := scope.ws
-		if err := guardReconcileInput(fs, "sync reconcile abort"); err != nil {
-			return err
-		}
 		// abort is a real decision — the agent choosing to defer/escalate rather
 		// than merge inline — not merely a usage no-op, so it gets the same durable
 		// trace its three siblings (resolve/take/combine) do. [LAW:no-silent-failure]
@@ -183,12 +163,14 @@ func syncReconcileAbortLeaf() syncLeaf {
 func syncReconcileTakeLeaf() syncLeaf {
 	fs := newCobraFlagSet("sync reconcile take")
 	ownerApproved := fs.String("owner-approved", "", "Owner-issued approval token for this exact divergence and side (printed by the refusal this command gives without it)")
-	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope syncScope, positional []string) error {
+	// The side is a declared positional, so the count travels with the leaf and
+	// parseLeaf refuses a second one. [LAW:one-source-of-truth]
+	return syncLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, scope syncScope, positional []string) error {
 		ws, session := scope.ws, scope.session
-		if fs.NArg() != 1 {
+		if len(positional) != 1 {
 			return UsageError{Message: "sync reconcile take needs exactly one side: 'local' (keep your backlog) or 'remote' (adopt theirs)"}
 		}
-		choice, err := parseUnrelatedSide(fs.Arg(0))
+		choice, err := parseUnrelatedSide(positional[0])
 		if err != nil {
 			return err
 		}
@@ -251,9 +233,6 @@ func syncReconcileCombineLeaf() syncLeaf {
 	fs := newCobraFlagSet("sync reconcile combine")
 	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope syncScope, positional []string) error {
 		ws, session := scope.ws, scope.session
-		if err := guardReconcileInput(fs, "sync reconcile combine"); err != nil {
-			return err
-		}
 		reconciler, err := reconcilerFor(ws, session, reconcileCombineCommand)
 		if err != nil {
 			return err

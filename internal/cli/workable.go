@@ -159,9 +159,6 @@ func workableLeaf(view workableView) appLeaf {
 	limit := optionalInt(fs, view.hasLimit, "limit", "Limit results")
 	columnsExpr := optionalString(fs, view.hasColumns, "columns", columnsFlagUsage())
 	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
-		if fs.NArg() != 0 {
-			return UsageError{Message: view.usage()}
-		}
 		statusState, err := parseWorkableStatus(*status)
 		if err != nil {
 			return err

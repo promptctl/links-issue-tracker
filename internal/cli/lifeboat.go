@@ -76,9 +76,6 @@ func lifeboatRecoverLeaf() wsLeaf {
 	fs := newCobraFlagSet("lifeboat recover")
 	mappingPath := fs.String("mapping", "", "Path to an operator-authored ShapeMapping JSON; default uses the built-in deterministic mapper")
 	return wsLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
-		if fs.NArg() != 0 {
-			return UsageError{Message: "usage: lit lifeboat recover [--mapping <file>]"}
-		}
 		mapper, err := recoverMapper(*mappingPath)
 		if err != nil {
 			return err
@@ -157,9 +154,6 @@ func formatDrops(drops []store.UnexplainedDrop) string {
 func lifeboatDumpLeaf() wsLeaf {
 	fs := newCobraFlagSet("lifeboat dump")
 	return wsLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
-		if fs.NArg() != 0 {
-			return UsageError{Message: "usage: lit lifeboat dump"}
-		}
 		dump, err := store.DumpRaw(ctx, ws.DatabasePath, ws.WorkspaceID)
 		if err != nil {
 			return err

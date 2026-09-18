@@ -36,9 +36,6 @@ var hooksFamily = commandFamily[wsSubcommand]{
 func hooksInstallLeaf() wsLeaf {
 	fs := newCobraFlagSet("hooks install")
 	return wsLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
-		if fs.NArg() != 0 {
-			return UsageError{Message: "usage: lit hooks install"}
-		}
 
 		result, err := installHooks(ws)
 		if err != nil {

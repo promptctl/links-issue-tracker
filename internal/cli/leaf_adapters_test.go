@@ -188,10 +188,11 @@ func runListWithStore(ctx context.Context, stdout io.Writer, st storage.Store, p
 // same parse and the same positional read, then the work.
 func runListLeaf(ctx context.Context, stdout io.Writer, surface listSurface, scope listScope, args []string) error {
 	l, _ := listLeaf(surface)
-	if _, err := parseLeaf(l, args, stdout); err != nil {
+	declared, err := parseLeaf(l, args, stdout)
+	if err != nil {
 		return err
 	}
-	positional, err := listPositionals(l, surface)
+	positional, err := listPositionals(declared, surface)
 	if err != nil {
 		return err
 	}

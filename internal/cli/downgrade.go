@@ -95,9 +95,6 @@ func downgradeLeafWith(
 	fs := newCobraFlagSet("downgrade")
 	to := fs.String("to", "", "Target binary version (v-prefixed git tag, e.g. v0.4.1)")
 	return downgradeLeafShape{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, store schemaDowngrader, _ []string) error {
-		if fs.NArg() != 0 {
-			return UsageError{Message: "usage: lit downgrade --to <version>"}
-		}
 		tag, err := normalizeReleaseTag(*to, "downgrade")
 		if err != nil {
 			return err

@@ -19,8 +19,8 @@ func runVersion(stdout io.Writer, args []string) error {
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
-	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit version"}
+	if err := refuseSurplusPositionals(fs, 0, ""); err != nil {
+		return err
 	}
 
 	info, err := version.Get()

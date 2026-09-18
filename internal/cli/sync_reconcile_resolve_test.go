@@ -135,17 +135,22 @@ func parsedReconcileFlags(t *testing.T, args ...string) *cobraFlagSet {
 	return fs
 }
 
-func TestGuardReconcileInputRejectsStrayPositional(t *testing.T) {
+func TestReconcileRejectsStrayPositional(t *testing.T) {
 	t.Parallel()
 	// A stray positional must fail loudly rather than be silently ignored, or a
-	// malformed finalize could appear to succeed.
-	err := guardReconcileInput(parsedReconcileFlags(t, "junk", "--resolve", "abc123abc123=merged"), "sync reconcile resolve")
+	// malformed finalize could appear to succeed. The reconcile handlers used to
+	// carry their own guard for this; the refusal is parseLeaf's now, shared by
+	// every leaf, so this exercises the one enforcer against the same input.
+	err := refuseSurplusPositionals(parsedReconcileFlags(t, "junk", "--resolve", "abc123abc123=merged"), 0, "")
 	if code := ExitCode(err); code != ExitUsage {
 		t.Fatalf("stray positional exit code = %d, want %d (ExitUsage)", code, ExitUsage)
 	}
+	if msg := err.Error(); !strings.Contains(msg, "junk") {
+		t.Errorf("stray positional error = %q, want it to name the offending token", msg)
+	}
 
-	if err := guardReconcileInput(parsedReconcileFlags(t, "--resolve", "abc123abc123=merged"), "sync reconcile resolve"); err != nil {
-		t.Fatalf("guardReconcileInput() on a clean text command = %v, want nil", err)
+	if err := refuseSurplusPositionals(parsedReconcileFlags(t, "--resolve", "abc123abc123=merged"), 0, ""); err != nil {
+		t.Fatalf("refuseSurplusPositionals() on a clean text command = %v, want nil", err)
 	}
 }
 

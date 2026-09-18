@@ -255,7 +255,17 @@ func retiredSubcommand(family, name, replacement string) subcommandRow[appSubcom
 type leaf[R any] struct {
 	fs          *cobraFlagSet
 	positionals int
-	work        func(ctx context.Context, stdout io.Writer, res R, positional []string) error
+	// usage is the sentence the arity refusal prints: the act that works, in the
+	// leaf's own words. WHETHER to refuse a surplus positional is a universal
+	// rule and lives in parseLeaf; WHAT to tell the caller instead is local
+	// knowledge and lives here. `lit dep add a b` is a caller who believes the
+	// ids are positional, and "takes no positional arguments" answers the wrong
+	// question — "use --from <id> --to <id>" names the act. A remediation that
+	// names no working act is the defect the whole cli-errors cluster exists to
+	// remove, so the generic phrasing is the fallback, never the goal.
+	// [LAW:decomposition] the rule is shared, the guidance is the leaf's.
+	usage string
+	work  func(ctx context.Context, stdout io.Writer, res R, positional []string) error
 }
 
 // The two resources a leaf's work can need. A declaration function returns one
@@ -276,11 +286,61 @@ type (
 // acquiring anything. [LAW:single-enforcer] one parse path for every leaf, at
 // the one altitude that precedes acquisition.
 func parseLeaf[R any](l leaf[R], args []string, stdout io.Writer) ([]string, error) {
-	positional, flagArgs := splitArgs(args, l.positionals)
+	positional, flagArgs := splitArgs(args, l.positionals, l.fs)
 	if err := parseFlagSet(l.fs, flagArgs, stdout); err != nil {
 		return nil, err
 	}
+	// Anything pflag has left over is a token the leaf's declared arity did not
+	// admit: splitArgs fills positionals up to the ceiling and passes the rest
+	// through, so a leftover here is precisely "one positional too many". Every
+	// leaf used to be free to notice this or not, and most did — about thirty
+	// carried their own `fs.NArg() != 0`, which is one rule written thirty times,
+	// so the ones that forgot (`lit new ... stray`, `lit export stray`) exited 0
+	// having silently ignored part of the command line. One rule, one place.
+	// [LAW:single-enforcer] [LAW:no-silent-failure] [LAW:one-source-of-truth]
+	//
+	// It refuses BEFORE acquisition, so a mistyped command line never creates or
+	// opens a store — the same ordering links-init-hn19 established for init's
+	// arity check, generalized to every leaf.
+	if err := refuseSurplusPositionals(l.fs, l.positionals, l.usage); err != nil {
+		return nil, err
+	}
 	return positional, nil
+}
+
+// refuseSurplusPositionals is the arity refusal itself, as one function, so the
+// handful of handlers that parse without going through parseLeaf (version,
+// completion) refuse identically instead of each wording its own. Those three
+// already refused, but each with a bare usage line that did not say WHICH token
+// was the problem — the caller was told the shape of the command and left to
+// spot the difference. [LAW:single-enforcer] one rule, one implementation, two
+// call sites.
+func refuseSurplusPositionals(fs *cobraFlagSet, declared int, usage string) error {
+	extra := fs.cmd.Flags().Args()
+	if len(extra) == 0 {
+		return nil
+	}
+	if usage == "" {
+		usage = fmt.Sprintf("usage: lit %s %s", fs.cmd.Use, positionalAllowance(declared))
+	}
+	// The offending tokens are named either way: the caller is told both what to
+	// type and which part of what they typed was not understood, which is the
+	// pair a bare usage line left them to work out. [LAW:no-silent-failure]
+	return UsageError{Message: fmt.Sprintf("%s; got unexpected argument(s) %q", usage, extra)}
+}
+
+// positionalAllowance renders a leaf's declared arity as the phrase a usage
+// message needs. It reads the SAME number splitArgs enforces, so the sentence
+// cannot claim a limit the parser does not keep. [LAW:one-source-of-truth]
+func positionalAllowance(count int) string {
+	switch {
+	case count == 0:
+		return "takes no positional arguments"
+	case count == 1:
+		return "takes 1 positional argument"
+	default:
+		return fmt.Sprintf("takes %d positional arguments", count)
+	}
 }
 
 // commandRegistrar carries the entrypoint context shared by every spec's Run

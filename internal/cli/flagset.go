@@ -167,7 +167,43 @@ func parseFlagSet(fs *cobraFlagSet, args []string, stdout io.Writer) error {
 	return nil
 }
 
-func splitArgs(args []string, positionalCount int) ([]string, []string) {
+// flagTakesValue answers whether a "-"-prefixed token consumes the NEXT token as
+// its value. pflag already records that per flag — NoOptDefVal is non-empty
+// exactly for the flags that do not — so this ASKS the flag set instead of
+// inferring it from the shape of the following token.
+// [LAW:one-source-of-truth] the flag set is the authority on its own flags'
+// arity. splitArgs used to re-derive it from "the next token has no leading
+// dash", which is a statement about the ARGUMENT and not about the FLAG, and it
+// was wrong in both directions: it fed a boolean the positional that followed it
+// (`lit children --include-archived <id>` lost the id), and it fed `--eject all`
+// a value that pflag accepts only as `--eject=all`, which surfaced as the
+// unrelated "quickstart <topic> takes no flags".
+// An unknown flag consumes nothing: pflag refuses it a moment later, and leaving
+// the following token where the caller put it keeps that refusal about the flag
+// actually mistyped. [LAW:no-silent-failure]
+func (fs *cobraFlagSet) flagTakesValue(token string) bool {
+	if strings.Contains(token, "=") {
+		return false
+	}
+	name := strings.TrimLeft(token, "-")
+	if name == "" {
+		return false
+	}
+	flags := fs.cmd.Flags()
+	var flag *pflag.Flag
+	switch {
+	case strings.HasPrefix(token, "--"):
+		flag = flags.Lookup(name)
+	case len(name) == 1:
+		flag = flags.ShorthandLookup(name)
+	}
+	if flag == nil {
+		return false
+	}
+	return flag.NoOptDefVal == ""
+}
+
+func splitArgs(args []string, positionalCount int, fs *cobraFlagSet) ([]string, []string) {
 	// positionalCount is a CEILING, and an unbounded-arity leaf states it as
 	// allPositionals — so it is not a capacity. argv is the real bound: no more
 	// positionals can land here than there are tokens to put in them.
@@ -179,7 +215,13 @@ func splitArgs(args []string, positionalCount int) ([]string, []string) {
 		arg := args[index]
 		if strings.HasPrefix(arg, "-") {
 			flags = append(flags, arg)
-			if !strings.Contains(arg, "=") && index+1 < len(args) && !strings.HasPrefix(args[index+1], "-") {
+			// The leading-dash test on the NEXT token stays: a value-taking flag
+			// written `--at --help` still reaches pflag with its value missing,
+			// which is the refusal that shape already earned. Only the boolean
+			// case changes, and it changes in one direction — tokens that used
+			// to be swallowed are now left as positionals for the arity check
+			// below to judge.
+			if index+1 < len(args) && !strings.HasPrefix(args[index+1], "-") && fs.flagTakesValue(arg) {
 				flags = append(flags, args[index+1])
 				index++
 			}
