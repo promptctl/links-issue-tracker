@@ -245,10 +245,12 @@ func TestRouteNextExhaustionNeverFallsToAnotherEpic(t *testing.T) {
 
 // An out-of-lane dependency that gates the claimed lane's blocked ticket is
 // offered as on-path — design-docs/work-claims.md, Routing step 1 — and is
-// announced as the claim it establishes. It comes back as ServedFromNewLane
+// announced as the claim it establishes. It comes back as ServedFromDependency
 // and not ServedFromClaim: the dependency is by definition OUTSIDE the claimed
 // lane, so starting it claims a second lane, and ServedFromClaim's contract is
-// that nothing is claimed and nothing is said (links-claims-1b0p, N3).
+// that nothing is claimed and nothing is said (links-claims-1b0p, N3). It is not
+// ServedFromNewLane either: that type is the global pool's, and sharing it left
+// this pick rendering the pool's line verbatim (links-next-output-4hor).
 func TestRouteNextOffersOnPathDependencyAsANewLane(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
@@ -266,15 +268,68 @@ func TestRouteNextOffersOnPathDependencyAsANewLane(t *testing.T) {
 	}
 
 	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
-	served, ok := outcome.(ServedFromNewLane)
+	served, ok := outcome.(ServedFromDependency)
 	if !ok {
-		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane (on-path dependency)", outcome, outcome)
+		t.Fatalf("routeNext = %#v (%T), want ServedFromDependency (on-path dependency)", outcome, outcome)
 	}
 	if served.Row.ID != dep.ID {
 		t.Fatalf("served = %q, want %q (the on-path external dependency)", served.Row.ID, dep.ID)
 	}
+	// The pick is FOR the blocked row, and naming it is the whole point of the
+	// outcome: a step-1b pick that cannot say what it unblocks is the bug
+	// (links-next-output-4hor).
+	if served.Gates != a2.ID {
+		t.Fatalf("served.Gates = %q, want %q — the pick must name the blocked row it unblocks, not merely be correct about which dependency to serve", served.Gates, a2.ID)
+	}
 	if want := laneOf(t, details, served.Row); served.Lane != want {
 		t.Fatalf("served.Lane = %v, want %v; the pick would claim a lane this checkout does not hold, and it is the dependency's own lane that gets claimed", served.Lane, want)
+	}
+}
+
+// One dependency can gate several of our own blocked rows, and only one id fits
+// in the announcement. Which one is therefore part of the contract, not an
+// accident of the walk: the queue-first gated row. The expectation here is read
+// OUT OF the gathered queue rather than written in as an id, so the test pins
+// the rule and cannot be satisfied by a fixture that happens to order the two
+// rows the way the assertion guessed (links-next-output-4hor).
+func TestOnPathDependencyNamesTheQueueFirstRowItGates(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
+	a3 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.3", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a3"})
+	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "External blocker", Topic: "next", IssueType: "task", Priority: 0})
+	h.addDependency(a2.ID, dep.ID)
+	h.addDependency(a3.ID, dep.ID)
+
+	rows, details := h.gather()
+	standings := claims.Standings{
+		laneOf(t, details, rowByID(t, rows, a2.ID)): heldBy(selfAttribution),
+		laneOf(t, details, rowByID(t, rows, a3.ID)): heldBy(selfAttribution),
+	}
+
+	// The rule's own subject, rendered from the queue: the first of the two
+	// gated rows in gather order.
+	var queueFirst string
+	for _, row := range rows {
+		if row.ID == a2.ID || row.ID == a3.ID {
+			queueFirst = row.ID
+			break
+		}
+	}
+	if queueFirst == "" {
+		t.Fatalf("neither %s nor %s is in the gathered queue; the fixture does not exercise the rule", a2.ID, a3.ID)
+	}
+
+	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
+	served, ok := outcome.(ServedFromDependency)
+	if !ok {
+		t.Fatalf("routeNext = %#v (%T), want ServedFromDependency (one dependency gating two of our rows)", outcome, outcome)
+	}
+	if served.Row.ID != dep.ID {
+		t.Fatalf("served = %q, want %q (the shared external dependency)", served.Row.ID, dep.ID)
+	}
+	if served.Gates != queueFirst {
+		t.Fatalf("served.Gates = %q, want %q — a dependency gating several of our rows names the queue-first one, so the announcement is deterministic across runs", served.Gates, queueFirst)
 	}
 }
 
@@ -850,9 +905,12 @@ func TestRouteNextTakesOverAnAbandonedOnPathDependency(t *testing.T) {
 	}
 
 	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
-	served, ok := outcome.(ServedFromNewLane)
+	served, ok := outcome.(ServedFromDependency)
 	if !ok {
-		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane (the abandoned on-path dependency is takeable)", outcome, outcome)
+		t.Fatalf("routeNext = %#v (%T), want ServedFromDependency (the abandoned on-path dependency is takeable)", outcome, outcome)
+	}
+	if served.Gates != a2.ID {
+		t.Fatalf("served.Gates = %q, want %q — the qualifier must survive the takeover path naming the row it unblocks, and a merely non-empty id would let the dependency name itself", served.Gates, a2.ID)
 	}
 	if served.Row.ID != dep.ID {
 		t.Fatalf("served = %q, want %q (the dependency gating our own blocked lane)", served.Row.ID, dep.ID)

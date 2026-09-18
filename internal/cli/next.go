@@ -78,13 +78,13 @@ func nextLeaf() appLeaf {
 
 // renderNextOutcome prints the row routeNext selected — or, for Exhausted
 // and NoWork, returns the loud diagnostic instead of printing a ticket that
-// was never picked. A claim this pick WOULD establish (EpicLane, NewLane) is
-// named above the row, so the commitment is visible before it is made
-// (design-docs/work-claims.md, Routing step 4); a lane already held names
-// nothing to commit — nothing at all for ServedFromClaim, which prints exactly
-// as `next` always has, and the state it is already in for ResumedOwnWork,
-// since being handed back a ticket already in flight is the one pick that looks
-// like a fresh start but is not one.
+// was never picked. A claim this pick WOULD establish (EpicLane, NewLane,
+// Dependency) is named above the row, so the commitment is visible before it
+// is made (design-docs/work-claims.md, Routing step 4); a lane already held
+// names nothing to commit — nothing at all for ServedFromClaim, which prints
+// exactly as `next` always has, and the state it is already in for
+// ResumedOwnWork, since being handed back a ticket already in flight is the
+// one pick that looks like a fresh start but is not one.
 //
 // Every line here is in the conditional or reports a state that already holds.
 // `lit next` claims nothing and starts nothing — `lit start` does — so a line
@@ -106,6 +106,15 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 	case ServedFromNewLane:
 		row = o.Row
 		announce = startAdvice(o.Row, o.Lane, expiredHolder(cc.standings.Of(o.Lane))) + "\n"
+	// Step 1b says what it is for. This is the one pick whose reason the row
+	// cannot show on its own: a global-pool pick is self-explanatory from the
+	// row, and step 2's shared epic is visible in the id, but "this unblocks
+	// work you are already holding" is a fact about the WALK, and it was being
+	// dropped at the seam that knew it (links-next-output-4hor).
+	case ServedFromDependency:
+		row = o.Row
+		announce = startAdvice(o.Row, o.Lane, expiredHolder(cc.standings.Of(o.Lane))) +
+			fmt.Sprintf(" (gates %s, which is in a lane you hold)\n", o.Gates)
 	// The two terminal outcomes travel outward AS THEMSELVES. Rendering them
 	// into an untyped error here discarded the very discriminator routing had
 	// just established, so both sinks — ExitCode and commandErrorReason — fell
