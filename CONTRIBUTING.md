@@ -141,6 +141,36 @@ is not there, fix the token. Never edit `canonical_gen.go` by hand. The nightly
 workflow runs the same tool with `-check` and fails when the copy and the
 upstream index differ.
 
+## Documented messages
+
+`doc-v1-total/` is a specification of what this binary does, so where a chapter
+quotes a user-facing message it holds a second copy of a string whose original
+is a Go literal. Two copies of one fact drift. Here they drifted in silence:
+three merged tickets each falsified a documented claim and every CI check
+stayed green over all three, because nothing compared the two.
+
+[`internal/docclaims`](internal/docclaims) is that comparison.
+`manifest_gen.go` records every message literal the specification quotes that
+was present in the shipped Go when it was generated, and a gate
+(`go test ./internal/docclaims/`, which runs as part of `go test ./...`) fails
+naming the chapter and the sentence when one of them no longer ships.
+
+When you deliberately change a message the specification quotes, the gate
+fails on purpose. Correct the prose first, then run
+`go run ./tools/docclaims-sync` and commit the regenerated manifest. Never edit
+`manifest_gen.go` by hand. The diff it produces is the review signal — an entry
+leaving the manifest is a sentence that stopped describing the binary — so
+regenerating without reading what left is the one use that defeats the gate.
+
+The check is one-directional and narrow on purpose. Every literal the manifest
+records must still ship; no chapter is ever required to quote any particular
+string, so prose that never quoted code needs no allowlist and adds no upkeep.
+Literals are all it reads: whether `file.go:12-33` still brackets the
+declaration its sentence names is a different question over a different corpus
+(ticket `links-docs-gwlf`), and whether a chapter's claim about a type's shape
+or a command's exit code still holds is a third that no gate here answers yet.
+A green run means the quoted messages still exist, and nothing more.
+
 ## Issue tracking — this repo uses `lit`
 
 Work is tracked with `lit`, not GitHub Issues. After cloning and building, run:
