@@ -27,7 +27,7 @@ Two ops commands are retired but still dispatchable (hidden, exit 3 with redirec
 
 ### Workspace resolution and post-command behavior
 
-Every workspace/app command resolves the workspace from the cwd; outside a git repository this is `OutsideWorkspaceError` ("links requires running inside a git repository/worktree"), exit 3 (`cli.go:149-163`). Resolution itself **creates** `<git-common-dir>/links/` and its `config.json` — even read commands materialize the storage dir (`internal/workspace/workspace.go:165-168`). Geometry: `StorageDir = <git-common-dir>/links`, with the Dolt database under it (`workspace.go:340-348`).
+Every workspace/app command resolves the workspace from the cwd; outside a git repository this is `OutsideWorkspaceError` ("links requires running inside a git repository/worktree"), exit 3 (`cli.go:149-163`). Resolution itself **creates** `<git-common-dir>/links/` and its `config.json` — even read commands materialize the storage dir (`internal/workspace/workspace.go:221-224`). Geometry: `StorageDir = <git-common-dir>/links`, with the Dolt database under it (`workspace.go:340-348`).
 
 After a successful handler, `runWithApp` (`cli.go:101-147`) — in order, after the engine closes:
 
@@ -61,9 +61,9 @@ Planning order (`init_sync.go:179-261`): pending-adopt residue check (residue co
 
 ### Output and disk footprint
 
-Human output (`init.go:175-226`): `Initialized lit workspace` (or `lit workspace already initialized`); when adopted, `  Pulled existing backlog from <remote>/<branch> (<build note>)`; then `Updated:` / `Up to date:` / `Skipped:` lines over the entries `pre-push hook`, `AGENTS.md`, `CLAUDE.md` (the latter two annotated `via project|global|embedded`); and always a final guidance line pointing at `lit workflows`.
+Human output (`init.go:175-226`): `Initialized lit workspace` (or `lit workspace already initialized`); then always `  issue_prefix: <value>`, the prefix actually stored rather than the one requested; when adopted, `  Pulled existing backlog from <remote>/<branch> (<build note>)`; then `Updated:` / `Up to date:` / `Skipped:` lines over the entries `pre-push hook`, `AGENTS.md`, `CLAUDE.md` (the latter two annotated `via project|global|embedded`); and always a final guidance line pointing at `lit workflows`.
 
-What init writes to disk (`init.go` §1.7): the `links/` storage dir + `config.json` (via workspace resolution, before the handler), the Dolt store, `<git-common-dir>/hooks/pre-push`, the two managed markdown sections, and a sync trace under `<StorageDir>/traces/sync/`. Init sets **no** git config keys. (An `initReport` JSON struct exists — `status`, `workspace_id`, `database_path`, `db_created`, `hooks`, `agents`, `claude`, `agents_source?`, `claude_source?`, `sync` — but no JSON output path renders it; `init.go:14-25`.)
+What init writes to disk (`init.go` §1.7): the `links/` storage dir + `config.json` (via workspace resolution, before the handler), the Dolt store, `<git-common-dir>/hooks/pre-push`, the two managed markdown sections, and a sync trace under `<StorageDir>/traces/sync/`. Init sets **no** git config keys. (An `initReport` JSON struct exists — `status`, `workspace_id`, `issue_prefix`, `database_path`, `db_created`, `hooks`, `agents`, `claude`, `agents_source?`, `claude_source?`, `sync` — but no JSON output path renders it; `init.go:14-26`.)
 
 ## The `lit sync` family
 

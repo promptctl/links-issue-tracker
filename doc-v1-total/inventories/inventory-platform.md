@@ -326,11 +326,11 @@ Defaults are set in `Load` (`internal/config/config.go:217-228`).
 - Created on first resolve with `WorkspaceID = uuid.NewString()`, `CreatedAt = time.Now().UTC()`,
   `Version = 1` (`internal/workspace/workspace.go:577-582`).
 - `ReadConfig` fails with `read workspace config: %w`, `parse workspace config: %w`, or
-  `workspace config missing workspace_id` (`internal/workspace/workspace.go:533-545`).
+  `workspace config missing workspace_id` (`internal/workspace/workspace.go:533-546`).
 - Writes are atomic: temp file `.config.json.*` in the same directory, chmod 0644, close,
-  rename (`internal/workspace/workspace.go:504-537`).
+  rename (`internal/workspace/workspace.go:590-623`).
 - `UpdateConfig(path, mutate)` is the single read-modify-write boundary
-  (`internal/workspace/workspace.go:546-560`).
+  (`internal/workspace/workspace.go:632-646`).
 - Issue-prefix resolution (`internal/workspace/workspace.go:484-520`, which takes the config
   path as its second parameter so it can name that file in its own remediation) ranks three
   sources: a non-blank configured value wins and is normalized; a blank one is filled by the
@@ -347,7 +347,7 @@ Defaults are set in `Load` (`internal/config/config.go:217-228`).
 - `PrefixRequest` is the optional counterpart to `PrefixSpec`: the zero value is the absence,
   and `RequestPrefix(raw)` mints only present requests through `ConfiguredPrefix`, so an empty
   string is an error rather than a silent demotion to "no request".
-- Derivation (`internal/workspace/workspace.go:562-579`): normalize `filepath.Base(rootDir)`,
+- Derivation (`internal/workspace/workspace.go:661-677`): normalize `filepath.Base(rootDir)`,
   split on `-`, take the first hyphen-part that normalizes to a valid prefix, else the whole
   normalized base. Both ways of coming up short — nothing survives normalization, or too
   little does — are one failure wrapping `ErrIssuePrefixRefused` ⇒
@@ -381,7 +381,7 @@ Defaults are set in `Load` (`internal/config/config.go:217-228`).
    `canonicalize git-common-dir %q: %w` (`internal/workspace/workspace.go:274-277`).
 4. `LocationFromStorageDir(filepath.Join(gitCommonDir, "links"))` (`internal/workspace/workspace.go:279`).
 
-### 5.3 `Resolve(cwd)` (`internal/workspace/workspace.go:140-179`)
+### 5.3 `Resolve(cwd)` (`internal/workspace/workspace.go:185-187`, `ResolveWithPrefix` `:196-235`)
 
 1. `git rev-parse --show-toplevel` ⇒ `RootDir`; failure classified by `classifyGitError`.
 2. `deriveLocation(cwd)`.

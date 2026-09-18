@@ -174,9 +174,10 @@ Constants (`exit.go:11-32`):
 15. `NoWork` → 6 (`exit.go:126-128`)
 16. `OutsideWorkspaceError` → 3 (`exit.go:140-142`)
 17. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → 3 (`exit.go:144-146`)
-18. `BulkFailureError` → 1 (`exit.go:154-160`)
-19. `errors.Is(err, store.ErrTransientGCContention)` → 1 (`exit.go:161-163`)
-20. anything else → 1 (`exit.go:156`)
+18. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → 3 (`exit.go:153-155`)
+19. `BulkFailureError` → 1 (`exit.go:154-160`)
+20. `errors.Is(err, store.ErrTransientGCContention)` → 1 (`exit.go:161-163`)
+21. anything else → 1 (`exit.go:156`)
 
 Error types defined in `cli.go`: `MergeConflictError` (`cli.go:1890-1896`),
 `CorruptionError` (`cli.go:1898-1902`), `UsageError` (`cli.go:1906-1910`),

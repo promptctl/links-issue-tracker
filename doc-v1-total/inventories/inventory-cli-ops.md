@@ -38,7 +38,7 @@ data — described as assets, not as documentation of behavior).
 | 0 | `ExitOK` (`exit.go:13`) | nil error |
 | 1 | `ExitGeneric` (`exit.go:14`) | default; also `BulkFailureError` (`exit.go:154-160`), `store.ErrTransientGCContention` (`exit.go:161-163`) |
 | 2 | `ExitUsage` (`exit.go:15`) | `UsageError` (`exit.go:77-79`) |
-| 3 | `ExitValidation` (`exit.go:16`) | `templateShapeError` (`exit.go:62-64`), `UnknownCommandError` (`exit.go:81-83`), `RetiredCommandError` (`exit.go:87-89`), `ValidationError` (`exit.go:91-93`), `storage.ValidationError` (`exit.go:95-97`), `model.ContainerActionError` when not satisfied (`exit.go:107-113`), `UnsupportedError` (`exit.go:114-116`), `OutsideWorkspaceError` (`exit.go:140-142`), `store.ErrWorkspaceNotInitialized` (`exit.go:144-146`) |
+| 3 | `ExitValidation` (`exit.go:16`) | `templateShapeError` (`exit.go:62-64`), `UnknownCommandError` (`exit.go:81-83`), `RetiredCommandError` (`exit.go:87-89`), `ValidationError` (`exit.go:91-93`), `storage.ValidationError` (`exit.go:95-97`), `model.ContainerActionError` when not satisfied (`exit.go:107-113`), `UnsupportedError` (`exit.go:114-116`), `OutsideWorkspaceError` (`exit.go:140-142`), `store.ErrWorkspaceNotInitialized` (`exit.go:144-146`), `workspace.ErrIssuePrefixRefused` (`exit.go:153-155`) |
 | 4 | `ExitNotFound` (`exit.go:17`) | `storage.NotFoundError` (`exit.go:42-44`) |
 | 5 | `ExitConflict` (`exit.go:18`) | `MergeConflictError` (`exit.go:46-48`), `SyncFailureError` (`exit.go:54-56`), `ownerApprovalRefusalError` (`exit.go:69-71`) |
 | 6 | `ExitNoWork` (`exit.go:31`) | `Exhausted` (`exit.go:122-124`), `NoWork` (`exit.go:126-128`), `model.ContainerActionError` when `Satisfied()` (`exit.go:107-110`) |
@@ -148,7 +148,8 @@ Outcome struct fields JSON-tagged `state`, `remote`, `branch`, `error` (`init_sy
 ### 1.5 Human output (`writeInitHumanOutput`, `init.go:175-226`)
 
 - Line 1: `Initialized lit workspace` when `DBCreated`, else `lit workspace already initialized` (`init.go:195-203`).
-- Line 2 (only when adopted): `  Pulled existing backlog from <remote>/<branch> (<buildNote>)` (`init_sync.go:310-316`). No line for any other state.
+- Line 2, always: `  issue_prefix: <value>` — the prefix the workspace actually stored, which is not always the one `--prefix` was given, because `ConfiguredPrefix` slugifies and truncates at `PrefixMaxLength` (`init.go:228-230`).
+- Line 3 (only when adopted): `  Pulled existing backlog from <remote>/<branch> (<buildNote>)` (`init_sync.go:310-316`). No line for any other state.
 - Then, as applicable:
   - `  Updated: <entries>` for statuses `created|updated|installed` (`init.go:186-187`, `init.go:207-211`)
   - `  Up to date: <entries>` for `unchanged` (`init.go:213-216`)
@@ -158,11 +159,11 @@ Outcome struct fields JSON-tagged `state`, `remote`, `branch`, `error` (`init_sy
 
 ### 1.6 `initReport` JSON shape (struct only; no JSON output path in this command)
 
-`init.go:14-25`: `status`, `workspace_id`, `database_path`, `db_created`, `hooks`, `agents`, `claude`, `agents_source?`, `claude_source?`, `sync` (the `initSyncOutcome`).
+`init.go:14-26`: `status`, `workspace_id`, `issue_prefix`, `database_path`, `db_created`, `hooks`, `agents`, `claude`, `agents_source?`, `claude_source?`, `sync` (the `initSyncOutcome`).
 
 ### 1.7 What `lit init` writes to disk
 
-1. `<git-common-dir>/links/` and `config.json` — via `workspace.Resolve` before the handler (`internal/workspace/workspace.go:165-168`).
+1. `<git-common-dir>/links/` and `config.json` — via `workspace.Resolve` before the handler (`internal/workspace/workspace.go:221-224`).
 2. Dolt store at `ws.DatabasePath` — via `store.EnsureDatabase` (`init.go:83`) or `store.AdoptRemoteByClone` (`init_sync.go:141`).
 3. `<GitCommonDir>/hooks/pre-push` (dir created `0o755`; see §9).
 4. `<RootDir>/AGENTS.md` and `<RootDir>/CLAUDE.md` managed sections (see §10).
