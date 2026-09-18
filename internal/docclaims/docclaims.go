@@ -426,15 +426,36 @@ func excludedFromEveryBuild(file *ast.File) bool {
 			// second reading of its syntax.
 			switch {
 			case constraint.IsGoBuild(c.Text):
-				expr, err := constraint.Parse(c.Text)
-				return err == nil && expr.String() == "ignore"
+				return blockedByIgnore(c.Text)
 			case constraint.IsPlusBuild(c.Text):
-				expr, err := constraint.Parse(c.Text)
-				legacy = legacy || (err == nil && expr.String() == "ignore")
+				// Legacy lines are AND-ed, so one unsatisfiable line excludes
+				// the file however the others read.
+				legacy = legacy || blockedByIgnore(c.Text)
 			}
 		}
 	}
 	return legacy
+}
+
+// blockedByIgnore reports whether a constraint line is unsatisfiable for the
+// sole reason that it demands the `ignore` tag, which no build sets.
+//
+// The expression is evaluated with every other tag true, rather than compared
+// against the string "ignore". Comparing strings recognises only the bare
+// spelling: `// +build ignore,linux` parses to `ignore && linux`, is never
+// built by anything, and would have been read as product code — its imports
+// followed and its literals collected, which is the leak class this package
+// spent two attempts closing. Evaluating also keeps the deliberate inclusion of
+// platform variants: `//go:build linux` is satisfiable, so clone_linux.go and
+// clone_darwin.go are both read, because the text reaching a user is the union
+// over the platforms lit ships on. [LAW:one-source-of-truth] the constraint
+// language's own evaluator decides what a constraint means.
+func blockedByIgnore(line string) bool {
+	expr, err := constraint.Parse(line)
+	if err != nil {
+		return false
+	}
+	return !expr.Eval(func(tag string) bool { return tag != "ignore" })
 }
 
 // isProductGo reports whether a file is Go source the product build compiles.
@@ -870,42 +891,33 @@ func Stable(fresh, prior []Claim, corpus Corpus) []Claim {
 	return out
 }
 
-// Missing reports the manifest entries that have drifted — the source the
-// quotation was recorded against no longer ships, or no longer carries the
-// words the chapter puts in quotes — each classified, carrying its own remedy.
+// classify decides what a contributor should do about one departed entry.
 //
-// Both halves are checked because either can rot alone. A message can be
-// deleted outright, or reworded around a fragment the chapter quotes.
+// Two independent facts decide it, and either one alone gives the wrong
+// instruction in a case that happens routinely:
 //
-// It returns classified drifts rather than bare claims because it once worded
-// the remedy itself: a single deleted message produced both "the manifest needs
-// `go run ./tools/docclaims-sync`" from this report and "Do NOT regenerate"
-// from the freshness report, in one test run, about one entry. Both print
-// Drift.Explain now. [LAW:one-source-of-truth]
-func Missing(manifest []Claim, corpus Corpus) []Drift {
-	var out []Drift
-	for _, c := range manifest {
-		// Anything but QuoteDropped is exactly "the recorded source no longer
-		// carries it", which is this report's question.
-		if kind, now := classify(c, corpus); kind != QuoteDropped {
-			out = append(out, Drift{Claim: c, Kind: kind, Now: now})
-		}
-	}
-	return out
-}
-
-// classify decides why a committed entry no longer describes the tree, from the
-// claim and the corpus alone.
+//   - does the chapter still quote these words? — asked of the spans the
+//     documents yield, before any of them are matched against shipped text, so
+//     the answer survives the message being deleted;
+//   - does any shipped source still carry them? — asked of the corpus, because
+//     whether a message ships is a question about the product.
 //
-// It asks nothing about a fresh derivation, and that is the point rather than
-// an economy. Whether a documented message still ships is a question about the
-// product: it has stopped shipping when no shipped source carries its words.
-// The source that would carry it now is whichever a derivation would pick —
-// `tightest`, the same choice Matched makes — so the report and the derivation
-// cannot name different sources. Reading the answer off a second list instead
-// let two reports of one failure disagree. [LAW:one-source-of-truth]
-func classify(c Claim, corpus Corpus) (DriftKind, string) {
-	if stillHolds(c.Src, c.Text, corpus) {
+// Reading only the corpus is what made the prescribed workflow fire the one
+// warning that must never be wrong. Deleting a message and the sentence that
+// quoted it — together, which is what CONTRIBUTING asks for — leaves no trace
+// of either in the corpus, and the report told the contributor "Do NOT
+// regenerate: that drops the entry and leaves the sentence false" about a
+// sentence they had just removed. Regenerating was the only way to green and it
+// was correct. A warning that is wrong on the ordinary path is a warning people
+// learn to step over, and this is the one they must not.
+//
+// The source that carries the words now is whichever a derivation would pick —
+// `tightest`, the same choice Matched makes — so a report and a derivation
+// cannot name different sources. [LAW:one-source-of-truth]
+func classify(c Claim, quoted map[[2]string]bool, corpus Corpus) (DriftKind, string) {
+	if !quoted[[2]string{c.Doc, c.Text}] {
+		// The chapter no longer asserts it, so dropping the entry is right
+		// whatever became of the code.
 		return QuoteDropped, ""
 	}
 	if now, ok := tightest(c.Text, corpus); ok {
@@ -995,34 +1007,6 @@ type Drift struct {
 	Now string
 }
 
-// Drifted classifies every committed entry the fresh derivation no longer
-// yields.
-//
-// An entry leaves a derivation three ways, and telling them apart is the whole
-// point of reporting at all. The chapter stopped quoting the message, and
-// regenerating is right. The literal that carried the message was reworded, and
-// what to do next depends on whether it is still the same message — only a
-// reader can say. Or the message stopped shipping, and regenerating is the one
-// action that defeats this gate: it drops the entry, both checks go green, and
-// the sentence stays in the specification describing a message the binary no
-// longer has. Telling a contributor to regenerate in that last case is worse
-// than saying nothing, because it is an instruction to erase the evidence.
-//
-// One classifier, so the tool and the freshness test cannot disagree about what
-// drift is. [LAW:single-enforcer]
-//
-// fresh decides only which entries departed; why each departed is classify's
-// question, and it is answered against the corpus. So the report says the same
-// thing about an entry whether it is reached from here or from Missing.
-func Drifted(manifest, fresh []Claim, corpus Corpus) []Drift {
-	var out []Drift
-	for _, c := range Diff(manifest, fresh) {
-		kind, now := classify(c, corpus)
-		out = append(out, Drift{Claim: c, Kind: kind, Now: now})
-	}
-	return out
-}
-
 // Explain is the line a report prints for this drift: what changed, and what to
 // do about it.
 //
@@ -1070,22 +1054,47 @@ type Comparison struct {
 // Clean reports whether the manifest and the derivation agree entirely.
 func (c Comparison) Clean() bool { return len(c.Drifted) == 0 && len(c.Added) == 0 }
 
-// Compare is the whole manifest-versus-tree comparison both reports print.
+// Stopped returns the drifts that regenerating would erase: messages the
+// specification still quotes that nothing in the product carries any more.
 //
-// It exists because each of them had assembled the comparison itself out of
-// two half-answers, and an entry whose anchor moved appeared in both halves —
-// the sync tool and the freshness test each printing one quotation as two
-// findings with different remedies. [LAW:one-source-of-truth] what differs
-// between a manifest and a tree is one fact, computed once.
-func Compare(manifest, fresh []Claim, corpus Corpus) Comparison {
-	out := Comparison{Drifted: Drifted(manifest, fresh, corpus)}
-	moved := make(map[[2]string]bool)
-	for _, d := range out.Drifted {
-		if d.Kind == AnchorMoved {
-			moved[[2]string{d.Doc, d.Text}] = true
+// Named once, because it is the one case that must never be written past, and
+// three places need to recognise it — the freshness test, the -check report,
+// and the write path that would do the erasing. [LAW:single-enforcer]
+func (c Comparison) Stopped() []Drift {
+	var out []Drift
+	for _, d := range c.Drifted {
+		if d.Kind == Stopped {
+			out = append(out, d)
 		}
 	}
-	for _, c := range Diff(fresh, manifest) {
+	return out
+}
+
+// Compare is the whole manifest-versus-tree comparison every report prints.
+//
+// It is a method on Derivation rather than a function over loose slices because
+// each of its inputs was, at some point, assembled at a callsite out of what
+// that caller happened to have — and each time the report came out wrong in a
+// different way: one quotation printed as two findings with opposite remedies,
+// then the prescribed workflow firing the destructive-remedy warning. A
+// comparison needs the derivation, the quotations the chapters make, and the
+// shipped text; travelling together, a caller cannot hold two thirds of one.
+// [LAW:types-are-the-program]
+func (d Derivation) Compare(manifest []Claim) Comparison {
+	quoted := make(map[[2]string]bool, len(d.Quoted))
+	for _, c := range d.Quoted {
+		quoted[[2]string{c.Doc, c.Text}] = true
+	}
+	var out Comparison
+	moved := make(map[[2]string]bool)
+	for _, c := range Diff(manifest, d.Fresh) {
+		kind, now := classify(c, quoted, d.Corpus)
+		if kind == AnchorMoved {
+			moved[[2]string{c.Doc, c.Text}] = true
+		}
+		out.Drifted = append(out.Drifted, Drift{Claim: c, Kind: kind, Now: now})
+	}
+	for _, c := range Diff(d.Fresh, manifest) {
 		if moved[[2]string{c.Doc, c.Text}] {
 			continue
 		}
@@ -1122,20 +1131,37 @@ func Dedupe(claims []Claim) []Claim {
 // Derive produces the manifest this tree yields, stabilised against prior.
 // One function so the sync tool and the freshness test cannot disagree about
 // what "current" means. [LAW:single-enforcer]
-func Derive(fsys fs.FS, prior []Claim) ([]Claim, error) {
+func Derive(fsys fs.FS, prior []Claim) (Derivation, error) {
 	corpus, err := ShippedText(fsys)
 	if err != nil {
-		return nil, err
+		return Derivation{}, err
 	}
 	names, err := SpecFiles(fsys)
 	if err != nil {
-		return nil, err
+		return Derivation{}, err
 	}
 	claims, err := DocClaims(fsys, names)
 	if err != nil {
-		return nil, err
+		return Derivation{}, err
 	}
-	return Dedupe(Stable(Matched(claims, corpus), prior, corpus)), nil
+	return Derivation{
+		Fresh:  Dedupe(Stable(Matched(claims, corpus), prior, corpus)),
+		Quoted: claims,
+		Corpus: corpus,
+	}, nil
+}
+
+// Derivation is what one pass over the tree yields: the manifest it would
+// write, every span the chapters quote before any of them is matched against
+// shipped text, and the text the product ships.
+//
+// The three travel together because a comparison needs all three, and each is
+// derived from the same pass — a caller that fetched one of them separately
+// could compare a manifest against one tree using the corpus of another.
+type Derivation struct {
+	Fresh  []Claim
+	Quoted []Claim
+	Corpus Corpus
 }
 
 // SpecDir is the corpus this gate covers. It is named once so the sync tool and

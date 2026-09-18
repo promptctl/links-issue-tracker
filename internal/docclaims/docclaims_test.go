@@ -20,97 +20,70 @@ const repoRoot = "../.."
 // the text that ships. This is that comparison.
 //
 // A failure here is not a broken test: it is a chapter describing a message the
-// product no longer has. Fix the prose, then regenerate the manifest with
-// `go run ./tools/docclaims-sync`.
+// product no longer has, or a manifest that no longer matches the tree. Each
+// line carries the remedy for its own case — and there is exactly one report,
+// because when there were two they twice came to tell a contributor opposite
+// things about a single entry in a single run.
 func TestDocumentedClaimsStillShip(t *testing.T) {
-	corpus, err := ShippedText(os.DirFS(repoRoot))
-	if err != nil {
-		t.Fatalf("ShippedText: %v", err)
-	}
 	if len(Manifest) == 0 {
 		t.Fatal("manifest is empty — the gate would pass over anything; regenerate with `go run ./tools/docclaims-sync`")
 	}
-	missing := Missing(Manifest, corpus)
-	// Printed through the one Explain both reports share. Wording its own
-	// remedy here is how this test and TestManifestIsCurrent came to tell a
-	// contributor opposite things about a single entry in one run.
-	for _, d := range missing {
-		t.Errorf("%s\nrecorded against:\n  %q", d.Explain(), d.Src)
-	}
-	if len(missing) > 0 {
-		t.Logf("%d of %d documented quotations have drifted", len(missing), len(Manifest))
-	}
-}
-
-// TestManifestIsCurrent fails when the committed manifest disagrees with what
-// this tree yields, naming every entry on both sides.
-//
-// Without it nothing compares the two, which is how a manifest derived over a
-// working tree carrying a gitignored vendored project was committed: 14 of its
-// entries were satisfied only by that project's literals, and the gate passed
-// locally while failing in every clean checkout.
-func TestManifestIsCurrent(t *testing.T) {
-	fresh, err := Derive(os.DirFS(repoRoot), Manifest)
+	derived, err := Derive(os.DirFS(repoRoot), Manifest)
 	if err != nil {
 		t.Fatalf("Derive: %v", err)
-	}
-	corpus, err := ShippedText(os.DirFS(repoRoot))
-	if err != nil {
-		t.Fatalf("ShippedText: %v", err)
 	}
 	// Reported entry by entry, in both directions. A bare length mismatch names
 	// nothing, leaving a reviewer with two totals and no way to tell a new
 	// quotation from a drifted one.
-	cmp := Compare(Manifest, fresh, corpus)
+	cmp := derived.Compare(Manifest)
 	for _, c := range cmp.Added {
 		t.Errorf("not in the committed manifest: %s %q — run `go run ./tools/docclaims-sync`", c.Doc, c.Text)
 	}
-	// Classified rather than reported together: of the three ways an entry
-	// leaves a derivation, two are fixed by regenerating and the third is
-	// destroyed by it. Drift.Explain carries the instruction so this test and
-	// the sync tool cannot tell a contributor opposite things about one
-	// failure.
 	for _, d := range cmp.Drifted {
 		t.Error(d.Explain())
 	}
 }
 
-// TestMissingReportsADroppedMessage is the mutation control on the gate.
+// TestADroppedMessageIsReported is the mutation control on the gate.
 //
-// "Every manifest entry still ships" passes trivially if Missing can never
-// report anything — an empty manifest, or a match that accepts everything.
-func TestMissingReportsADroppedMessage(t *testing.T) {
+// "Every manifest entry still ships" passes trivially if the comparison can
+// never report anything — an empty manifest, or a match that accepts
+// everything.
+func TestADroppedMessageIsReported(t *testing.T) {
 	kept := "no ready work"
 	corpus := Corpus{kept: kept}
 	manifest := []Claim{
 		{Doc: "08-claims-and-identity.md", Text: kept, Src: kept},
 		{Doc: "06-issue-commands.md", Text: "on your path", Src: "blocked on %s (unclaimed, on your path)"},
 	}
-	missing := Missing(manifest, corpus)
-	if len(missing) != 1 {
-		t.Fatalf("Missing() reported %d claims, want exactly 1 — the gate cannot see a dropped message", len(missing))
+	// The chapter still quotes both; only one of them still ships.
+	derived := Derivation{Fresh: manifest[:1], Quoted: manifest, Corpus: corpus}
+	drifted := derived.Compare(manifest).Drifted
+	if len(drifted) != 1 {
+		t.Fatalf("Compare() reported %d drifted claims, want exactly 1 — the gate cannot see a dropped message", len(drifted))
 	}
-	if missing[0].Kind != Stopped {
-		t.Errorf("Missing() classified the dropped message as kind %d, want Stopped: %s", missing[0].Kind, missing[0].Explain())
+	if drifted[0].Kind != Stopped {
+		t.Errorf("Compare() classified the dropped message as kind %d, want Stopped: %s", drifted[0].Kind, drifted[0].Explain())
 	}
-	if missing[0].Text != "on your path" {
-		t.Errorf("Missing() reported %q, want the dropped claim", missing[0].Text)
+	if drifted[0].Text != "on your path" {
+		t.Errorf("Compare() reported %q, want the dropped claim", drifted[0].Text)
 	}
 }
 
-// TestMissingSeesThroughACoincidentalSubstring is the reason a claim records
+// TestTheGateSeesThroughACoincidentalSubstring is the reason a claim records
 // the source it was found in. Matching against the union of all shipped text is
 // far too weak: 269 of this corpus's 1,102 entries have text sitting inside two
 // or more distinct sources (measured 2026-09-18). Here the documented message is deleted and an unrelated one still
 // contains its words.
-func TestMissingSeesThroughACoincidentalSubstring(t *testing.T) {
+func TestTheGateSeesThroughACoincidentalSubstring(t *testing.T) {
 	corpus := Corpus{"some other sentence about deleted_at IS NULL here": "some other sentence about deleted_at IS NULL here"}
 	manifest := []Claim{{
 		Doc:  "03-store-schema.md",
 		Text: "deleted_at IS NULL",
 		Src:  "SELECT id FROM issues WHERE deleted_at IS NULL",
 	}}
-	missing := Missing(manifest, corpus)
+	derived := Derivation{Quoted: manifest, Corpus: corpus}
+	missing := derived.Compare(manifest).Drifted
 	if len(missing) != 1 {
 		t.Fatal("a deleted message was masked by a coincidental substring in an unrelated source")
 	}
@@ -119,7 +92,7 @@ func TestMissingSeesThroughACoincidentalSubstring(t *testing.T) {
 	// the same observation — and the one instruction that must never be wrong,
 	// "Do NOT regenerate", is reserved for the case where nothing carries them.
 	if missing[0].Kind != AnchorMoved || missing[0].Now == "" {
-		t.Errorf("Missing() reported kind %d with Now=%q, want a moved anchor naming the coincidental source: %s", missing[0].Kind, missing[0].Now, missing[0].Explain())
+		t.Errorf("Compare() reported kind %d with Now=%q, want a moved anchor naming the coincidental source: %s", missing[0].Kind, missing[0].Now, missing[0].Explain())
 	}
 }
 
@@ -334,23 +307,25 @@ func TestClosingFenceMustMatchItsOpener(t *testing.T) {
 	}
 }
 
-// TestDriftedTellsTheThreeCasesApart is the regression for a report that named
-// the wrong remedy on the ordinary edit.
+// TestTheThreeCasesAreToldApart is the regression for a report that named the
+// wrong remedy on the ordinary edit.
 //
 // A committed entry leaves a fresh derivation three ways, and the classifier
-// used to ask one question — does the recorded source still carry the words? —
-// which puts a literal reworded around a quotation in the same bucket as a
-// deleted message, under the loudest and most specific instruction in the
-// design: "Do NOT regenerate". Rewording a literal around a fragment a chapter
-// quotes is the common edit, and regenerating is exactly right there. A
-// contributor who meets that warning on ordinary edits learns it is noise, and
-// the one time it is not noise it is the whole gate.
+// has twice been too narrow. First it asked one question — does the recorded
+// source still carry the words — which puts a literal reworded around a
+// quotation in the same bucket as a deleted message, under the loudest
+// instruction in the design: "Do NOT regenerate". Then, asking only the corpus,
+// it put the *prescribed workflow* there too: delete a message and the sentence
+// quoting it together, as CONTRIBUTING asks, and the report told the
+// contributor not to regenerate a sentence they had just removed.
 //
-// The third case, a message deleted while an unrelated string keeps its words
-// alive, is why "still somewhere in the tree" cannot be the discriminator
-// either: it is reported as a moved anchor with the new source named, for a
-// reader to judge, and never as a regeneration to wave through.
-func TestDriftedTellsTheThreeCasesApart(t *testing.T) {
+// Both facts are needed. Whether the chapter still quotes the words comes from
+// the documents; whether anything still ships them comes from the corpus. The
+// case where a message is deleted while an unrelated string keeps its words
+// alive is why "still somewhere in the tree" cannot decide it either: that is
+// reported as a moved anchor with the new source named, for a reader to judge,
+// and never as a regeneration to wave through.
+func TestTheThreeCasesAreToldApart(t *testing.T) {
 	const (
 		quoted  = "lit quickstart doctor"
 		was     = "deeper guidance: lit quickstart doctor\n"
@@ -358,42 +333,50 @@ func TestDriftedTellsTheThreeCasesApart(t *testing.T) {
 		chapter = "06-issue-commands.md"
 	)
 	entry := Claim{Doc: chapter, Text: quoted, Src: was}
+	stillQuoted := []Claim{{Doc: chapter, Text: quoted}}
 
 	for _, tc := range []struct {
 		name    string
-		fresh   []Claim
-		corpus  Corpus
+		derived Derivation
 		want    DriftKind
 		wantNow string
 	}{{
-		name:    "the literal was reworded around the quotation",
-		fresh:   []Claim{{Doc: chapter, Text: quoted, Src: now}},
-		corpus:  Corpus{now: now},
+		name: "the literal was reworded around the quotation",
+		derived: Derivation{
+			Fresh:  []Claim{{Doc: chapter, Text: quoted, Src: now}},
+			Quoted: stillQuoted,
+			Corpus: Corpus{now: now},
+		},
 		want:    AnchorMoved,
 		wantNow: now,
 	}, {
-		name:   "the chapter stopped quoting a message that still ships",
-		corpus: Corpus{was: was},
-		want:   QuoteDropped,
+		name:    "the chapter stopped quoting a message that still ships",
+		derived: Derivation{Corpus: Corpus{was: was}},
+		want:    QuoteDropped,
 	}, {
-		name:   "the message stopped shipping",
-		corpus: Corpus{"an unrelated message": "an unrelated message"},
-		want:   Stopped,
+		name:    "the message stopped shipping and the chapter still quotes it",
+		derived: Derivation{Quoted: stillQuoted, Corpus: Corpus{"an unrelated message": "an unrelated message"}},
+		want:    Stopped,
+	}, {
+		name:    "the message and the sentence quoting it were deleted together",
+		derived: Derivation{Corpus: Corpus{"an unrelated message": "an unrelated message"}},
+		want:    QuoteDropped,
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := Drifted([]Claim{entry}, tc.fresh, tc.corpus)
+			got := tc.derived.Compare([]Claim{entry}).Drifted
 			if len(got) != 1 {
-				t.Fatalf("Drifted() reported %d entries, want exactly 1", len(got))
+				t.Fatalf("Compare() reported %d drifted entries, want exactly 1", len(got))
 			}
 			if got[0].Kind != tc.want {
-				t.Errorf("Drifted() classified this as kind %d, want %d — it reports: %s", got[0].Kind, tc.want, got[0].Explain())
+				t.Errorf("classified as kind %d, want %d — it reports: %s", got[0].Kind, tc.want, got[0].Explain())
 			}
 			if got[0].Now != tc.wantNow {
-				t.Errorf("Drifted() named %q as the source carrying it now, want %q", got[0].Now, tc.wantNow)
+				t.Errorf("named %q as the source carrying it now, want %q", got[0].Now, tc.wantNow)
 			}
 			// The instruction, not the label: only a message that genuinely
-			// stopped shipping may carry the one warning that tells a
-			// contributor their regeneration would erase the evidence.
+			// stopped shipping, and that a chapter still quotes, may carry the
+			// one warning that tells a contributor their regeneration would
+			// erase evidence.
 			warned := strings.Contains(got[0].Explain(), "Do NOT regenerate")
 			if warned != (tc.want == Stopped) {
 				t.Errorf("Explain() warns against regenerating = %v, want %v — it reports: %s", warned, tc.want == Stopped, got[0].Explain())
@@ -496,11 +479,12 @@ func TestAMovedAnchorIsReportedOnce(t *testing.T) {
 		now     = "further guidance: lit quickstart doctor\n"
 		chapter = "06-issue-commands.md"
 	)
-	cmp := Compare(
-		[]Claim{{Doc: chapter, Text: quoted, Src: was}},
-		[]Claim{{Doc: chapter, Text: quoted, Src: now}},
-		Corpus{now: now},
-	)
+	derived := Derivation{
+		Fresh:  []Claim{{Doc: chapter, Text: quoted, Src: now}},
+		Quoted: []Claim{{Doc: chapter, Text: quoted}},
+		Corpus: Corpus{now: now},
+	}
+	cmp := derived.Compare([]Claim{{Doc: chapter, Text: quoted, Src: was}})
 	if len(cmp.Drifted) != 1 || cmp.Drifted[0].Kind != AnchorMoved {
 		t.Fatalf("Compare() reported %d drifted entries, want one moved anchor", len(cmp.Drifted))
 	}

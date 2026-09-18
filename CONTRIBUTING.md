@@ -155,10 +155,12 @@ was present in the shipped Go when it was generated — each entry carrying the
 whole literal it was found inside, so deleting that exact message cannot be
 masked by an unrelated string that happens to contain the same words. A gate
 (`go test ./internal/docclaims/`, which runs as part of `go test ./...`) fails
-naming the chapter and the sentence when one of them no longer ships, and a
-second test fails when the committed manifest disagrees with what the tree
-yields. `go run ./tools/docclaims-sync -check` is the same comparison as a
-command.
+naming the chapter and the sentence, in both directions: a quotation the
+manifest records that the tree no longer yields, and a quotation the tree
+yields that the manifest does not record. It is one test printing one report,
+because when there were two they twice came to tell a contributor opposite
+things about a single entry in a single run. `go run ./tools/docclaims-sync
+-check` is the same comparison as a command.
 
 What counts as shipped is whatever a binary under `cmd/` actually links, walked
 out from each `main` package through the import graph, minus test files. Not a
@@ -200,13 +202,24 @@ leaving the manifest is a sentence that stopped describing the binary — so
 regenerating without reading what left is the one use that defeats the gate.
 
 A failure names which of three things happened, because the remedy differs and
-one of them is destroyed by regenerating. A chapter that stopped quoting a
-message, and a literal reworded around a quotation, are both fixed by
-regenerating. A message that stopped shipping is not: the report says so in
-those words and tells you not to. Where the recorded source no longer carries
-the quotation but some other shipped source does, the report names that source
-and stops — it cannot tell a reworded message from an unrelated string that
-happens to share the words, and that is the one case only a reader can settle.
+one of them is destroyed by regenerating.
+
+A chapter that stopped quoting a message is fixed by regenerating — and that
+includes the ordinary deliberate change, where you delete a message from the
+code *and* remove the sentence that quoted it. The report tells you **not** to
+regenerate in one case only: a chapter still quotes a message that nothing
+ships any more. There, regenerating drops the entry and leaves that sentence
+describing a binary which does not have it.
+
+Where the recorded source no longer carries the quotation but some other
+shipped source does, the report names that source and stops — it cannot tell a
+reworded message from an unrelated string that happens to share the words, and
+that is the one case only a reader can settle.
+
+The writer enforces the order this section asks for. `go run
+./tools/docclaims-sync` refuses to write while a chapter still quotes a message
+that stopped shipping, naming each one, so the regeneration that would erase
+that evidence cannot happen in passing on the way to fixing something else.
 
 The check is one-directional and narrow on purpose. Every literal the manifest
 records must still ship; no chapter is ever required to quote any particular

@@ -59,24 +59,43 @@ func run() error {
 	// Derived against the committed manifest so an entry keeps the source it
 	// was anchored to while that source still carries the quotation. Without
 	// it, any shorter literal added anywhere retargets unrelated entries.
-	matched, err := docclaims.Derive(os.DirFS(root), docclaims.Manifest)
+	derived, err := docclaims.Derive(os.DirFS(root), docclaims.Manifest)
 	if err != nil {
 		return err
 	}
+	matched := derived.Fresh
 	if len(matched) == 0 {
 		// An empty manifest turns the gate off while leaving every sign of it
 		// in place, which is worse than failing. [LAW:no-silent-failure]
 		return fmt.Errorf("no documented quotation matched shipped text; refusing to trust an empty derivation")
 	}
 
+	cmp := derived.Compare(docclaims.Manifest)
 	if *check {
-		corpus, err := docclaims.ShippedText(os.DirFS(root))
-		if err != nil {
-			return err
-		}
-		return verify(matched, corpus)
+		return verify(cmp)
 	}
 
+	return write(manifestPath, matched, cmp)
+}
+
+// write records a fresh derivation, unless doing so would erase the evidence
+// that a documented message stopped shipping.
+//
+// The write is the one action that can turn this gate green over prose that is
+// now false, and it was the only report in the package making no comparison at
+// all: a contributor sent here by a legitimate failure, who also had an
+// unrelated message that had genuinely stopped shipping, took both away in
+// silence and left every check green. It refuses instead, which is also the
+// order CONTRIBUTING prescribes — correct the chapter first, then regenerate.
+// [LAW:no-silent-failure]
+func write(manifestPath string, matched []docclaims.Claim, cmp docclaims.Comparison) error {
+	if stopped := cmp.Stopped(); len(stopped) > 0 {
+		for _, d := range stopped {
+			fmt.Fprintf(os.Stderr, "  %s\n", d.Explain())
+		}
+		return fmt.Errorf("refusing to write: %d documented message(s) the specification still quotes no longer ship. Regenerating would drop them and leave those sentences describing a binary that does not have them — correct the chapter, or restore the message, then run this again",
+			len(stopped))
+	}
 	if err := os.WriteFile(manifestPath, []byte(render(matched)), 0o644); err != nil {
 		return err
 	}
@@ -113,12 +132,11 @@ func render(claims []docclaims.Claim) string {
 	return b.String()
 }
 
-// verify compares the committed manifest against a fresh derivation and names
-// the entries that differ, in both directions, rather than only reporting that
+// verify reports the comparison between the committed manifest and a fresh
+// derivation, naming the entries that differ rather than only reporting that
 // they do.
-func verify(want []docclaims.Claim, corpus docclaims.Corpus) error {
+func verify(cmp docclaims.Comparison) error {
 	got := docclaims.Manifest
-	cmp := docclaims.Compare(got, want, corpus)
 	if cmp.Clean() {
 		fmt.Printf("docclaims-sync: manifest is current (%d quotations)\n", len(got))
 		return nil
@@ -129,22 +147,26 @@ func verify(want []docclaims.Claim, corpus docclaims.Corpus) error {
 	// Each line carries its own instruction, from the same Explain the
 	// freshness test prints, because two reports of one failure that word the
 	// remedy differently are how a contributor learns to ignore both.
-	count := map[docclaims.DriftKind]int{}
+	moved := 0
 	for _, d := range cmp.Drifted {
-		count[d.Kind]++
+		if d.Kind == docclaims.AnchorMoved {
+			moved++
+		}
 		fmt.Fprintf(os.Stderr, "  %s\n", d.Explain())
 	}
-	// The exit line says which of the three happened, because only one of them
-	// has a remedy a contributor can apply without reading anything, and it is
-	// not either of the other two.
-	switch {
-	case count[docclaims.Stopped] > 0:
+	// The exit line counts what actually differs. Reporting the two totals
+	// instead stated them as evidence of a difference even when they were
+	// equal — one chapter dropping a quotation while another adds one is an
+	// ordinary prose edit, and "committed 1102, the tree yields 1102" is not
+	// something a reader can act on.
+	switch stopped := len(cmp.Stopped()); {
+	case stopped > 0:
 		return fmt.Errorf("%d documented message(s) no longer ship: fix the code or the chapter. Regenerating would drop them and leave the specification false",
-			count[docclaims.Stopped])
-	case count[docclaims.AnchorMoved] > 0:
+			stopped)
+	case moved > 0:
 		return fmt.Errorf("%d documented message(s) are no longer carried by the source they were recorded against: read the lines above and confirm each is the same message reworded before regenerating",
-			count[docclaims.AnchorMoved])
+			moved)
 	}
-	return fmt.Errorf("manifest is stale: committed %d quotations, the tree yields %d; run `go run ./tools/docclaims-sync`",
-		len(got), len(want))
+	return fmt.Errorf("manifest is stale: %d recorded quotation(s) the tree no longer yields, %d the tree yields that it does not record; run `go run ./tools/docclaims-sync`",
+		len(cmp.Drifted), len(cmp.Added))
 }
