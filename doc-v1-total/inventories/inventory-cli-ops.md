@@ -112,7 +112,7 @@ Any positional argument → `UsageError{initUsage}`, exit 2 (`init.go:56-58`), w
 2. `recordInitSyncTrace(ws, syncOutcome, time.Now())` (`init.go:45`) — always, for every outcome.
 3. If outcome state is `initSyncFailed`, **hard stop with no store created** (`init.go:94-108`): error text
    `"could not confirm the workspace state, so init is refusing to create a fresh store: <error> (<buildNote>)"` → exit 1.
-4. Otherwise, unless adopted, `store.EnsureDatabase(ctx, ws.DatabasePath, ws.WorkspaceID)`; `dbCreated` is its `created` result (`init.go:115-122`). Adopted ⇒ `dbCreated` stays `true` (`init.go:115`).
+4. Otherwise, unless adopted, `store.EnsureDatabase(ctx, ws.DatabasePath, ws.WorkspaceID)`; `dbCreated` is its `created` result (`init.go:114-120`). Adopted ⇒ `dbCreated` stays `true` (`init.go:115`).
 5. Hooks (unless `--skip-hooks`): `installHooks(ws)`; error aborts init (`init.go:136-146`). Report field is `"installed"` when `Changed`, else `"unchanged"`.
 6. Agents (unless `--skip-agents`): `ensureLinksAgentFiles(ws.RootDir)`; error aborts (`init.go:122-143`). Per-file status `"created"` / `"updated"` / `"unchanged"`, plus `AgentsSource` / `ClaudeSource` = the template layer (`project`/`global`/`embedded`).
 7. `buildNote := resolveBuildStatusNote(time.Now())` then `writeInitHumanOutput` (`init.go:152-153`).

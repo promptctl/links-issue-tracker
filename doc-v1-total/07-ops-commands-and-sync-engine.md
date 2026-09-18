@@ -49,7 +49,7 @@ Sequence (`init.go:34-167`):
 1. **Remote adopt runs before any store exists** — so a clone of a remote backlog is the path's first writer (`init.go:70-76`).
 2. A sync trace is recorded for the adopt decision, always, whatever the outcome (`init_sync.go:333-354`): command `lit init`, decision = the outcome state, status `error` iff failed, plus the build note and `{remote, sync_branch}` metadata. A trace-write failure goes to stderr, non-fatal.
 3. If the adopt outcome is `failed`, init hard-stops with **no store created**: "could not confirm the workspace state, so init is refusing to create a fresh store: <error>", exit 1 (`init.go:92-106`).
-4. Otherwise, unless a remote backlog was adopted, `store.EnsureDatabase` creates the Dolt store (`init.go:115-122`).
+4. Otherwise, unless a remote backlog was adopted, `store.EnsureDatabase` creates the Dolt store (`init.go:114-120`).
 5. Hooks (unless skipped): install the managed `pre-push` hook; an error aborts init (`init.go:134-144`).
 6. Agents (unless skipped): write the managed sections of `AGENTS.md` and `CLAUDE.md`; an error aborts. Each file reports `created`/`updated`/`unchanged` plus which template layer supplied the section (`project`/`global`/`embedded`) (`init.go:146-155`).
 
