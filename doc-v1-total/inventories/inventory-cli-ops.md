@@ -35,14 +35,14 @@ data — described as assets, not as documentation of behavior).
 
 | Code | Constant | Trigger |
 |---|---|---|
-| 0 | `ExitOK` (`exit.go:12`) | nil error |
-| 1 | `ExitGeneric` (`exit.go:13`) | default; also `BulkFailureError` (`exit.go:146-152`), `store.ErrTransientGCContention` (`exit.go:153-155`) |
-| 2 | `ExitUsage` (`exit.go:14`) | `UsageError` (`exit.go:76-78`) |
-| 3 | `ExitValidation` (`exit.go:15`) | `templateShapeError` (`exit.go:61-63`), `UnknownCommandError` (`exit.go:80-82`), `RetiredCommandError` (`exit.go:86-88`), `ValidationError` (`exit.go:90-92`), `storage.ValidationError` (`exit.go:94-96`), `model.ContainerActionError` when not satisfied (`exit.go:106-112`), `UnsupportedError` (`exit.go:113-115`), `OutsideWorkspaceError` (`exit.go:139-141`), `store.ErrWorkspaceNotInitialized` (`exit.go:143-145`) |
-| 4 | `ExitNotFound` (`exit.go:16`) | `storage.NotFoundError` (`exit.go:41-43`) |
-| 5 | `ExitConflict` (`exit.go:17`) | `MergeConflictError` (`exit.go:45-47`), `SyncFailureError` (`exit.go:53-55`), `ownerApprovalRefusalError` (`exit.go:68-70`) |
-| 6 | `ExitNoWork` (`exit.go:30`) | `Exhausted` (`exit.go:121-123`), `NoWork` (`exit.go:125-127`), `model.ContainerActionError` when `Satisfied()` (`exit.go:106-109`) |
-| 7 | `ExitCorruption` (`exit.go:31`) | `CorruptionError` (`exit.go:72-74`) |
+| 0 | `ExitOK` (`exit.go:13`) | nil error |
+| 1 | `ExitGeneric` (`exit.go:14`) | default; also `BulkFailureError` (`exit.go:154-160`), `store.ErrTransientGCContention` (`exit.go:161-163`) |
+| 2 | `ExitUsage` (`exit.go:15`) | `UsageError` (`exit.go:77-79`) |
+| 3 | `ExitValidation` (`exit.go:16`) | `templateShapeError` (`exit.go:62-64`), `UnknownCommandError` (`exit.go:81-83`), `RetiredCommandError` (`exit.go:87-89`), `ValidationError` (`exit.go:91-93`), `storage.ValidationError` (`exit.go:95-97`), `model.ContainerActionError` when not satisfied (`exit.go:107-113`), `UnsupportedError` (`exit.go:114-116`), `OutsideWorkspaceError` (`exit.go:140-142`), `store.ErrWorkspaceNotInitialized` (`exit.go:144-146`) |
+| 4 | `ExitNotFound` (`exit.go:17`) | `storage.NotFoundError` (`exit.go:42-44`) |
+| 5 | `ExitConflict` (`exit.go:18`) | `MergeConflictError` (`exit.go:46-48`), `SyncFailureError` (`exit.go:54-56`), `ownerApprovalRefusalError` (`exit.go:69-71`) |
+| 6 | `ExitNoWork` (`exit.go:31`) | `Exhausted` (`exit.go:122-124`), `NoWork` (`exit.go:126-128`), `model.ContainerActionError` when `Satisfied()` (`exit.go:107-110`) |
+| 7 | `ExitCorruption` (`exit.go:32`) | `CorruptionError` (`exit.go:73-75`) |
 
 ### 0.4 Command registry rows relevant to operations (`internal/cli/register.go:273-393`)
 
@@ -70,7 +70,7 @@ Retired-but-dispatchable ops-adjacent commands (`Hidden: true`, return `RetiredC
 
 - `internal/cli/cli.go:149-163` `resolveWorkspaceFromWD()`: `os.Getwd()` then `workspace.Resolve(cwd)`; `workspace.ErrNotGitRepo` → `OutsideWorkspaceError{Message: "links requires running inside a git repository/worktree"}` (exit 3).
 - `workspace.Resolve` **creates** `<git-common-dir>/links` (`internal/workspace/workspace.go:165`) and loads-or-creates `config.json` (`workspace.go:168`). So even read commands materialize the storage dir.
-- Geometry: `StorageDir = <git-common-dir>/links`, `DatabasePath` under it, `GitCommonDir = filepath.Dir(StorageDir)` (`internal/workspace/workspace.go:284-292`).
+- Geometry: `StorageDir = <git-common-dir>/links`, `DatabasePath` under it, `GitCommonDir = filepath.Dir(StorageDir)` (`internal/workspace/workspace.go:340-348`).
 
 ### 0.6 Post-command automatic behavior (`runWithApp`)
 
@@ -98,22 +98,22 @@ Handler `runInit` — `internal/cli/init.go:27`.
 
 | Flag | Default | Effect | Line |
 |---|---|---|---|
-| `--prefix` | `""` | Issue ID prefix for a new workspace (default: derived from the repository name) | `init.go:31` |
-| `--skip-hooks` | `false` | Skip git hook installation | `init.go:29` |
-| `--skip-agents` | `false` | Skip AGENTS.md integration update | `init.go:30` |
+| `--prefix` | `""` | Issue ID prefix for a new workspace (default: derived from the repository name) | `init.go:38` |
+| `--skip-hooks` | `false` | Skip git hook installation | `init.go:36` |
+| `--skip-agents` | `false` | Skip AGENTS.md integration update | `init.go:37` |
 
-Any positional argument → `UsageError{initUsage}`, exit 2 (`init.go:34-36`), where `initUsage` is the single constant `"usage: lit init [--prefix <prefix>] [--skip-hooks] [--skip-agents]"`.
+Any positional argument → `UsageError{initUsage}`, exit 2 (`init.go:56-59`), where `initUsage` is the single constant (`init.go:161`) `"usage: lit init [--prefix <prefix>] [--skip-hooks] [--skip-agents]"`.
 
 `--prefix` is read by the acquisition rather than by the work below. `initLeaf` returns `(wsLeaf, wsAcquire)` and is registered with `wsCmdAcquiring`; the closure calls `workspace.RequestPrefix(*prefix)` only when `fs.Changed("prefix")`, so an untyped flag is the zero request and derivation is untouched, and `--prefix ""` is a `ValidationError` (exit 3) rather than a silent fall back to derivation.
 
 ### 1.2 Sequence
 
-1. **Remote adopt decision runs BEFORE any store is created** — `adoptRemoteTicketsOnInit(ctx, ws)` (`init.go:44`). Comment at `init.go:38-43` states the store must not pre-exist so a clone is the path's first writer.
+1. **Remote adopt decision runs BEFORE any store is created** — `adoptRemoteTicketsOnInit(ctx, ws)` (`init.go:44`). Comment at `init.go:63-68` states the store must not pre-exist so a clone is the path's first writer.
 2. `recordInitSyncTrace(ws, syncOutcome, time.Now())` (`init.go:45`) — always, for every outcome.
-3. If outcome state is `initSyncFailed`, **hard stop with no store created** (`init.go:60-74`): error text
+3. If outcome state is `initSyncFailed`, **hard stop with no store created** (`init.go:85-99`): error text
    `"could not confirm the workspace state, so init is refusing to create a fresh store: <error> (<buildNote>)"` → exit 1.
-4. Otherwise, unless adopted, `store.EnsureDatabase(ctx, ws.DatabasePath, ws.WorkspaceID)`; `dbCreated` is its `created` result (`init.go:81-88`). Adopted ⇒ `dbCreated` stays `true` (`init.go:81`).
-5. Hooks (unless `--skip-hooks`): `installHooks(ws)`; error aborts init (`init.go:101-111`). Report field is `"installed"` when `Changed`, else `"unchanged"`.
+4. Otherwise, unless adopted, `store.EnsureDatabase(ctx, ws.DatabasePath, ws.WorkspaceID)`; `dbCreated` is its `created` result (`init.go:106-113`). Adopted ⇒ `dbCreated` stays `true` (`init.go:106`).
+5. Hooks (unless `--skip-hooks`): `installHooks(ws)`; error aborts init (`init.go:127-137`). Report field is `"installed"` when `Changed`, else `"unchanged"`.
 6. Agents (unless `--skip-agents`): `ensureLinksAgentFiles(ws.RootDir)`; error aborts (`init.go:113-134`). Per-file status `"created"` / `"updated"` / `"unchanged"`, plus `AgentsSource` / `ClaudeSource` = the template layer (`project`/`global`/`embedded`).
 7. `buildNote := resolveBuildStatusNote(time.Now())` then `writeInitHumanOutput` (`init.go:143-144`).
 
@@ -153,7 +153,7 @@ Outcome struct fields JSON-tagged `state`, `remote`, `branch`, `error` (`init_sy
   - `  Updated: <entries>` for statuses `created|updated|installed` (`init.go:186-187`, `init.go:207-211`)
   - `  Up to date: <entries>` for `unchanged` (`init.go:213-216`)
   - `  Skipped: <entries>` for `skipped` (`init.go:217-221`)
-  - Entry labels: `pre-push hook`, `AGENTS.md`, `CLAUDE.md` (`init.go:176-180`); AGENTS/CLAUDE entries append ` (via project|global|embedded)` (`init.go:153-165`, `init.go:167-173`) — suppressed when status is `skipped` (`init.go:158-160`).
+  - Entry labels: `pre-push hook`, `AGENTS.md`, `CLAUDE.md` (`init.go:205-209`); AGENTS/CLAUDE entries append ` (via project|global|embedded)` (`init.go:182-194`, `init.go:196-202`) — suppressed when status is `skipped` (`init.go:158-160`).
 - Final line, always: `  Guidance: \`lit workflows\` shows the work lifecycle and the guidance active at each point (\`lit workflows edit <id-or-point>\` to customize)` (`init.go:222`).
 
 ### 1.6 `initReport` JSON shape (struct only; no JSON output path in this command)
@@ -1047,7 +1047,7 @@ All eight are also the payload of `lit quickstart --eject`, written to `<config.
 | Unknown flag, missing or invalid flag value | any command | `UsageError`, exit 2 | `flagset.go:142` |
 | `--output` before the command name; `--continue` | any command | `UnsupportedError`, exit 3 | `cli.go:196-201`, `flagset.go:138-141` |
 | Stray positional | `init`, `version`, `hooks install`, `snapshots new`, `lifeboat dump`, `lifeboat recover`, `upgrade`, `downgrade`, `sync reconcile`/`resolve`/`abort`/`combine` | `UsageError`, exit 2 | `init.go:34`, `version.go:22`, `hooks.go:45`, `snapshots.go:87`, `lifeboat.go:163`, `lifeboat.go:81`, `upgrade.go:200`, `downgrade.go:81`, `sync_reconcile_cmd.go:82-87` |
-| Adopt could not confirm workspace state | `init` | refuse to create a store, exit 1 | `init.go:60-74` |
+| Adopt could not confirm workspace state | `init` | refuse to create a store, exit 1 | `init.go:85-99` |
 | Remote-schema-ahead | `sync push/pull/reconcile*`, inline receive, mirror | `SyncFailureError` block, exit 5 (mirror: stderr only) | `sync.go:246`, `sync.go:389`, `sync_reconcile_cmd.go:120`, `sync_receive.go:147`, `sync_bg.go:329` |
 | Held prose conflict | `sync pull` | `SyncFailureError`, exit 5 | `sync.go:260-267` |
 | Held prose conflict | `sync reconcile`/`resolve`/`combine` | guidance printed + `MergeConflictError`, exit 5 | `sync_reconcile_cmd.go:474-509` |

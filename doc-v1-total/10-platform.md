@@ -17,7 +17,7 @@ Argument handling before any command runs (`internal/cli/cli.go`):
 - `parseGlobalArgs` scans leading arguments; `--` stops scanning; a leading `--output`/`--output=…` is a typed `UnsupportedError` ("--output is no longer supported; omit it for text output") (`cli.go:171-181, 310-312`).
 - The root command is `lit` ("Agent-native issue tracker"). With no args it resolves the workspace from cwd: outside a git repo it prints cobra help; inside one it prints the quickstart guidance for the workspace root (`cli.go:64-78`). An unrecognized positional is `UnknownCommandError` (`cli.go:59-61`).
 - Cobra's default `completion` command is disabled; `SilenceErrors`/`SilenceUsage` are both set; help requests are swallowed and reported as success (`cli.go:44-50, 81`).
-- There are no persistent global flags. Per-command flag parsing maps two removed flags to typed errors — `--output` (as above) and `--continue` ("--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag") — and any other unknown flag to `UsageError` (exit 2) (`cli.go:274-308`). `--help` prints `Usage of <cmd>:` plus flag defaults to stdout (`cli.go:265-272`).
+- There are no persistent global flags. Per-command flag parsing maps two removed flags to typed errors — `--output` (as above) and `--continue` ("--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag") — and any other unknown flag to `UsageError` (exit 2) (`cli.go:271-305`). `--help` prints `Usage of <cmd>:` plus flag defaults to stdout (`cli.go:265-272`).
 
 Per-command bootstrap (`runWithApp`, `cli.go:102-147`): get cwd → `app.Open(ctx, cwd, accessMode)` (outside a git repo → `OutsideWorkspaceError`: "links requires running inside a git repository/worktree") → run the handler with `defer Close()` → on success of a write-mode command, print the mutation sync-staleness banner → after the engine is closed, `maybeAutoSyncAfterCommand` (see chapter 07).
 
@@ -36,7 +36,7 @@ Acceptance tests pin two shutdown properties (`cmd/lit/main_signal_test.go:146-1
 
 Eight codes, 0 through 7 (`internal/cli/exit.go:11-32`), mapped from error type by `ExitCode` (`:37-144`). The code-to-error-type table is in `06-issue-commands.md` and is maintained there; what belongs to this chapter is the process-level contract around it: a code is the whole of what the process says on exit, and a signal-terminated run exits `128+signum` instead, from the path above rather than from `ExitCode`.
 
-Error rendering (`internal/cli/error_output.go:17-46`): stderr gets `error (code=%d): %v`, then `remediation: %s` when a remediation exists for the error's machine reason (reasons include `entity_not_found`, `merge_conflict`, `sync_divergence`, `owner_approval_required`).
+Error rendering (`internal/cli/error_output.go:18-47`): stderr gets `error (code=%d): %v`, then `remediation: %s` when a remediation exists for the error's machine reason (reasons include `entity_not_found`, `merge_conflict`, `sync_divergence`, `owner_approval_required`).
 
 ### Command registry
 
@@ -97,17 +97,17 @@ Cadence semantics (`config.go:127-150`): `on-push` mirrors only when the managed
 
 ### Per-workspace store config
 
-`<git-common-dir>/links/config.json` holds `workspace_id`, `issue_prefix`, `created_at` (RFC3339), `schema_version` (`internal/workspace/workspace.go:21-26`). Created on first resolve with a fresh UUID, UTC now, version 1 (`workspace.go:491-496`). Writes are atomic (temp file + chmod 0644 + rename); `UpdateConfig` is the single read-modify-write boundary (`workspace.go:504-560`). A blank `issue_prefix` is filled from one of two sources, ranked by `resolveIssuePrefix`: an explicit `workspace.PrefixRequest` if the caller carries one (`lit init --prefix`), otherwise derivation from the repository directory name — normalize the basename, split on `-`, take the first part that normalizes to a valid prefix, else the whole normalized base. Either way the value is persisted back immediately and reads back as *configured*, not derived, when it came from a request. Derivation failing is `ErrIssuePrefixRefused`, exit 3, and a request that contradicts a non-blank stored prefix is refused with the same sentinel rather than applied — `lit prefix set` is the command that changes a prefix already in use (`workspace.go:421-434, 469-477, 562-579`).
+`<git-common-dir>/links/config.json` holds `workspace_id`, `issue_prefix`, `created_at` (RFC3339), `schema_version` (`internal/workspace/workspace.go:36-41`). Created on first resolve with a fresh UUID, UTC now, version 1 (`workspace.go:491-496`). Writes are atomic (temp file + chmod 0644 + rename); `UpdateConfig` is the single read-modify-write boundary (`workspace.go:590-646`). A blank `issue_prefix` is filled from one of two sources, ranked by `resolveIssuePrefix`: an explicit `workspace.PrefixRequest` if the caller carries one (`lit init --prefix`), otherwise derivation from the repository directory name — normalize the basename, split on `-`, take the first part that normalizes to a valid prefix, else the whole normalized base. Either way the value is persisted back immediately and reads back as *configured*, not derived, when it came from a request. Derivation failing is `ErrIssuePrefixRefused`, exit 3; so is a request that contradicts a non-blank stored prefix, which is refused rather than applied — `lit prefix set` is the command that changes a prefix already in use. The same sentinel covers the third and least escapable case, a STORED `issue_prefix` the rules refuse: no command clears it, because `lit prefix set` and `lit doctor` both resolve the workspace first and die in the same place, so that refusal names the config file by path and says to edit `issue_prefix` in it (`workspace.go:484-520`, `:551-563`, `:661-682`).
 
 ## Workspace discovery
 
 ### One workspace from cwd
 
-A `Location` is pure path geometry derived from the storage dir (`workspace.go:284-295`): `StorageDir` = `<git-common-dir>/links`, `ConfigPath` = `<storage>/config.json`, `DatabasePath` = `<storage>/dolt`, `DoltRepoPath` = `<storage>/dolt/links`.
+A `Location` is pure path geometry derived from the storage dir (`workspace.go:340-351`): `StorageDir` = `<git-common-dir>/links`, `ConfigPath` = `<storage>/config.json`, `DatabasePath` = `<storage>/dolt`, `DoltRepoPath` = `<storage>/dolt/links`.
 
-`deriveLocation(cwd)` (`workspace.go:188-224`): run `git rev-parse --git-common-dir` anchored at cwd; join a relative answer onto the absolute cwd (not the repo toplevel); canonicalize through `filepath.EvalSymlinks`; append `links`. `Resolve(cwd)` adds: `git rev-parse --show-toplevel` for the root, `git rev-parse --git-dir` for the checkout's **private** git dir (deliberately not symlink-canonicalized, `workspace.go:261-275`), `MkdirAll` on the storage dir, and load-or-create of `config.json` (`workspace.go:140-179`). All geometry git calls use `context.Background()` deliberately.
+`deriveLocation(cwd)` (`workspace.go:244-280`): run `git rev-parse --git-common-dir` anchored at cwd; join a relative answer onto the absolute cwd (not the repo toplevel); canonicalize through `filepath.EvalSymlinks`; append `links`. `Resolve(cwd)` adds: `git rev-parse --show-toplevel` for the root, `git rev-parse --git-dir` for the checkout's **private** git dir (deliberately not symlink-canonicalized, `workspace.go:317-331`), `MkdirAll` on the storage dir, and load-or-create of `config.json` (`workspace.go:140-179`). All geometry git calls use `context.Background()` deliberately.
 
-Git-error classification (`workspace.go:337-343`): only an `exec.ExitError` with exit code 128 maps to the sentinel `ErrNotGitRepo`; git missing from PATH, signal-killed git, or any other exit code is surfaced with context.
+Git-error classification (`workspace.go:393-399`): only an `exec.ExitError` with exit code 128 maps to the sentinel `ErrNotGitRepo`; git missing from PATH, signal-killed git, or any other exit code is surfaced with context.
 
 Because everything hangs off the git *common* dir, all worktrees of one repository share one store; each worktree keeps its own private git dir, which is where its stream identity lives.
 
@@ -125,7 +125,7 @@ Each checkout's identity is a token in the file `lit-stream` inside its private 
 
 ### Git-remote helpers
 
-`UpstreamRemote` (first segment of `@{upstream}`), `RemoteHasRefs` (`git ls-remote` non-empty), `RemoteHasDoltData` (`git ls-remote <r> refs/dolt/*` non-empty), `DefaultRemoteBranch` (`symbolic-ref` on the remote-HEAD ref, falling back to `ls-remote --symref`), `GitRemotes` (`git remote -v` fetch lines, deduped, sorted). A blank remote name normalizes to `origin` (`workspace.go:98-138, 345-414`).
+`UpstreamRemote` (first segment of `@{upstream}`), `RemoteHasRefs` (`git ls-remote` non-empty), `RemoteHasDoltData` (`git ls-remote <r> refs/dolt/*` non-empty), `DefaultRemoteBranch` (`symbolic-ref` on the remote-HEAD ref, falling back to `ls-remote --symref`), `GitRemotes` (`git remote -v` fetch lines, deduped, sorted). A blank remote name normalizes to `origin` (`workspace.go:141-181, 345-414`).
 
 ## Version identity
 

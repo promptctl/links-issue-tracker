@@ -27,7 +27,7 @@ Two ops commands are retired but still dispatchable (hidden, exit 3 with redirec
 
 ### Workspace resolution and post-command behavior
 
-Every workspace/app command resolves the workspace from the cwd; outside a git repository this is `OutsideWorkspaceError` ("links requires running inside a git repository/worktree"), exit 3 (`cli.go:149-163`). Resolution itself **creates** `<git-common-dir>/links/` and its `config.json` — even read commands materialize the storage dir (`internal/workspace/workspace.go:165-168`). Geometry: `StorageDir = <git-common-dir>/links`, with the Dolt database under it (`workspace.go:284-292`).
+Every workspace/app command resolves the workspace from the cwd; outside a git repository this is `OutsideWorkspaceError` ("links requires running inside a git repository/worktree"), exit 3 (`cli.go:149-163`). Resolution itself **creates** `<git-common-dir>/links/` and its `config.json` — even read commands materialize the storage dir (`internal/workspace/workspace.go:165-168`). Geometry: `StorageDir = <git-common-dir>/links`, with the Dolt database under it (`workspace.go:340-348`).
 
 After a successful handler, `runWithApp` (`cli.go:101-147`) — in order, after the engine closes:
 
@@ -49,7 +49,7 @@ Sequence (`init.go:27-144`):
 1. **Remote adopt runs before any store exists** — so a clone of a remote backlog is the path's first writer (`init.go:38-44`).
 2. A sync trace is recorded for the adopt decision, always, whatever the outcome (`init_sync.go:333-354`): command `lit init`, decision = the outcome state, status `error` iff failed, plus the build note and `{remote, sync_branch}` metadata. A trace-write failure goes to stderr, non-fatal.
 3. If the adopt outcome is `failed`, init hard-stops with **no store created**: "could not confirm the workspace state, so init is refusing to create a fresh store: <error>", exit 1 (`init.go:60-74`).
-4. Otherwise, unless a remote backlog was adopted, `store.EnsureDatabase` creates the Dolt store (`init.go:81-88`).
+4. Otherwise, unless a remote backlog was adopted, `store.EnsureDatabase` creates the Dolt store (`init.go:106-113`).
 5. Hooks (unless skipped): install the managed `pre-push` hook; an error aborts init (`init.go:101-111`).
 6. Agents (unless skipped): write the managed sections of `AGENTS.md` and `CLAUDE.md`; an error aborts. Each file reports `created`/`updated`/`unchanged` plus which template layer supplied the section (`project`/`global`/`embedded`) (`init.go:113-134`).
 
@@ -267,7 +267,7 @@ One row: `install`. Prints `installed <hookPath>` whether or not anything change
 
 ## `lit quickstart`
 
-`lit quickstart [work|new|update|done|doctor] [--refresh] [--eject[=LIST]] [--force]` (`quickstart_topics.go:55`). Validation (all exit 2): at most one positional; `--refresh` and `--eject` are mutually exclusive; `--force` only with `--eject`; a topic takes no flags; unknown topics are rejected naming the five valid ones (`cli.go:1737-1759`).
+`lit quickstart [work|new|update|done|doctor] [--refresh] [--eject[=LIST]] [--force]` (`quickstart_topics.go:55`). Validation (all exit 2): at most one positional; `--refresh` and `--eject` are mutually exclusive; `--force` only with `--eject`; a topic takes no flags; unknown topics are rejected naming the five valid ones (`cli.go:1734-1756`).
 
 - **Topic mode** renders the topic's template (project > global > embedded), trimmed; topic output never carries the soil section (`quickstart_refresh.go:203-212`).
 - **Bare / `--refresh`** renders `quickstart.md`, appending a "soil" section when config `quickstart.soil_mode = true` (default false). `--refresh` additionally runs the same writers `init` uses — hooks and agent files — plus an **inspection-only** pass over the quickstart templates: per template, `absent` (no override), `unchanged` (override identical to embedded), or `skipped`/`customized` (override drifted; left untouched — refresh never overwrites overrides). The human summary groups items into `Refreshed:` / `Skipped:` / `Up to date:`, or `nothing to refresh` (`quickstart_refresh.go:29-165`).

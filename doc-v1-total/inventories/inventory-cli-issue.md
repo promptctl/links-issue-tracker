@@ -71,7 +71,7 @@ into* one of those, the call and its observable effect are recorded here.
 - `r.appCmd(access, fn)` → `runWithApp` with a fixed access mode
   (`register.go:187-189`); `r.appCmdDynamic` computes the mode from argv
   (`register.go:191-197`).
-- `r.wsCmd(fn)` → `runWithWorkspace` (workspace metadata only, no store)
+- `r.wsCmd(fn)` → `acquireFromWD` (workspace metadata only, no store)
   (`register.go:238-244`).
 - `r.familyCmd(family)` resolves `args[0]` against the family table *before*
   opening anything; a row with `skipApp: true` runs with a nil app
@@ -91,8 +91,8 @@ into* one of those, the call and its observable effect are recorded here.
     `sync_staleness.go:229`).
   - Then `maybeAutoSyncAfterCommand(ctx, accessMode, ws)` runs (`cli.go:145`).
   - Both only run when the command returned nil (`cli.go:123-125`).
-- `runWithWorkspace` / `resolveWorkspaceFromWD` (`cli.go:94-163`): same
-  `OutsideWorkspaceError` translation (`cli.go:156-159`).
+- `acquireFromWD` / `resolveWorkspaceFromWD` (`register.go:434-436`, `cli.go:170-184`):
+  same `OutsideWorkspaceError` translation (`cli.go:177-180`).
 
 ### 1.5 Family dispatch (`commandFamily[P]`)
 
@@ -157,25 +157,25 @@ Constants (`exit.go:11-32`):
 | `ExitCorruption` | 7 |
 
 `ExitCode(err)` dispatches by `errors.As`, in this order (`exit.go:37-157`):
-1. `storage.NotFoundError` → 4 (`exit.go:41-43`)
-2. `MergeConflictError` → 5 (`exit.go:45-47`)
-3. `SyncFailureError` → 5 (`exit.go:53-55`)
-4. `templateShapeError` → 3 (`exit.go:61-63`)
-5. `ownerApprovalRefusalError` → 5 (`exit.go:68-70`)
-6. `CorruptionError` → 7 (`exit.go:72-74`)
-7. `UsageError` → 2 (`exit.go:76-78`)
-8. `UnknownCommandError` → 3 (`exit.go:80-82`)
-9. `RetiredCommandError` → 3 (`exit.go:86-88`)
-10. `ValidationError` → 3 (`exit.go:90-92`)
-11. `storage.ValidationError` → 3 (`exit.go:94-96`)
-12. `model.ContainerActionError` → 6 when `Satisfied()`, else 3 (`exit.go:106-112`)
-13. `UnsupportedError` → 3 (`exit.go:113-115`)
-14. `Exhausted` → 6 (`exit.go:121-123`)
-15. `NoWork` → 6 (`exit.go:125-127`)
-16. `OutsideWorkspaceError` → 3 (`exit.go:139-141`)
-17. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → 3 (`exit.go:143-145`)
-18. `BulkFailureError` → 1 (`exit.go:146-152`)
-19. `errors.Is(err, store.ErrTransientGCContention)` → 1 (`exit.go:153-155`)
+1. `storage.NotFoundError` → 4 (`exit.go:42-44`)
+2. `MergeConflictError` → 5 (`exit.go:46-48`)
+3. `SyncFailureError` → 5 (`exit.go:54-56`)
+4. `templateShapeError` → 3 (`exit.go:62-64`)
+5. `ownerApprovalRefusalError` → 5 (`exit.go:69-71`)
+6. `CorruptionError` → 7 (`exit.go:73-75`)
+7. `UsageError` → 2 (`exit.go:77-79`)
+8. `UnknownCommandError` → 3 (`exit.go:81-83`)
+9. `RetiredCommandError` → 3 (`exit.go:87-89`)
+10. `ValidationError` → 3 (`exit.go:91-93`)
+11. `storage.ValidationError` → 3 (`exit.go:95-97`)
+12. `model.ContainerActionError` → 6 when `Satisfied()`, else 3 (`exit.go:107-113`)
+13. `UnsupportedError` → 3 (`exit.go:114-116`)
+14. `Exhausted` → 6 (`exit.go:122-124`)
+15. `NoWork` → 6 (`exit.go:126-128`)
+16. `OutsideWorkspaceError` → 3 (`exit.go:140-142`)
+17. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → 3 (`exit.go:144-146`)
+18. `BulkFailureError` → 1 (`exit.go:154-160`)
+19. `errors.Is(err, store.ErrTransientGCContention)` → 1 (`exit.go:161-163`)
 20. anything else → 1 (`exit.go:156`)
 
 Error types defined in `cli.go`: `MergeConflictError` (`cli.go:1890-1896`),
@@ -183,21 +183,21 @@ Error types defined in `cli.go`: `MergeConflictError` (`cli.go:1890-1896`),
 `UnknownCommandError` — message `unknown command "<x>"` (`cli.go:1913-1917`),
 `ValidationError` (`cli.go:1920-1924`), `UnsupportedError` with a single `Message`
 field (`errors.go:52-56`), `RetiredCommandError` — message
-`the "<cmd>" command has been retired; <replacement>` (`cli.go:1942-1949`),
+`the "<cmd>" command has been retired; <replacement>` (`cli.go:1939-1946`),
 `OutsideWorkspaceError` (`cli.go:1952-1956`). `BulkFailureError` in
 `bulk.go:48-58`.
 
 ### 1.9 Error output convention
 
-`WriteCommandError(stderr, err)` (`error_output.go:17-24`) — called from
+`WriteCommandError(stderr, err)` (`error_output.go:18-25`) — called from
 `cmd/lit/main.go:20` as the process exit path:
 - Line 1: `error (code=%d): %v\n` (exit code + `err.Error()`).
 - Line 2 (only when non-empty): `remediation: %s\n`.
 
-`commandErrorReason(err)` maps type → reason string (`error_output.go:29-90`):
+`commandErrorReason(err)` maps type → reason string (`error_output.go:30-91`):
 `entity_not_found`, `merge_conflict`, `sync_divergence`, `owner_approval_required`,
 `corruption_detected`, `unknown_command`, `retired_command`, `usage_error`,
-`unsupported_flag` (every `UnsupportedError`, `error_output.go:121-125`),
+`unsupported_flag` (every `UnsupportedError`, `error_output.go:122-126`),
 `outside_git_workspace`, `bulk_partial_failure`, `workspace_write_blocked`,
 `transient_gc_contention`, `workspace_not_initialized`, default `command_failed`.
 
@@ -576,12 +576,12 @@ else ready.
   is `runList(ctx, stdout, lsSurface, args)` so `--at` can target a foreign store
   outside the current workspace (`register.go:488-493`, `cli.go:381-422`).
   `lsSurface` is `listSurface{name: "ls"}`, a surface with no positionals
-  (`cli.go:355-363`); `lit children` runs the same `runList` over
+  (`cli.go:352-360`); `lit children` runs the same `runList` over
   `childrenSurface` (§2.16).
 - Summary text: "List issues (rank by default; --at \<store-dir> lists a discovered
   store read-only)" (`register.go:492`).
 
-**Store routing** (`runList`, `cli.go:381-422`):
+**Store routing** (`runList`, `cli.go:378-419`):
 - `runList` builds the leaf and the `--at` value pointer with `listLeaf(surface)`
   (`cli.go:382`), parses argv with `parseLeaf` (`cli.go:383-385`), then reads the
   positionals with `listPositionals` (`cli.go:386-389`). Every step below runs
@@ -603,7 +603,7 @@ else ready.
   `app.AccessRead`, and the work runs with `workspaceReadyPolicy(ap)`
   (`cli.go:419-421`, `:759-761`).
 
-**Flags** (declared in `listLeaf`, `cli.go:457-489`; read in its `work` closure,
+**Flags** (declared in `listLeaf`, `cli.go:454-486`; read in its `work` closure,
 `cli.go:492-606`). "Only if visited" means the flag appears on the command line
 (`fs.Visit`, `cli.go:505-506`).
 
@@ -693,7 +693,7 @@ column is `sourceIssue` (`columns.go:92-124`).
   `:666-672`; `ready_state.go:101-120`).
 - `sourceReadiness`: calls the policy for required fields, runs `annotateIssues`,
   and `readinessColumnsFor` sets `parentID` from the relation graph and
-  `blocked = !ClassifyReadiness(row.Annotations).IsReady()` (`cli.go:643-656`;
+  `blocked = !ClassifyReadiness(row.Annotations).IsReady()` (`cli.go:640-653`;
   `workable.go:109-118`). A policy error fails the command. Over `--at`,
   `noReadyPolicy` supplies no required fields.
 - A missing cell renders as the zero `derivedColumns` (`output.go:457-465`):
@@ -1002,7 +1002,7 @@ Registry rows and summaries:
 positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason <text>]")`
 — a **plain error**, so exit code 1, not 2.
 
-**Sequence** (`transitionLeaf`, `cli.go:1519-1622`):
+**Sequence** (`transitionLeaf`, `cli.go:1516-1619`):
 1. `GetIssue(issueID)` pre-read (`cli.go:1539-1542`) — missing → exit 4.
 2. `buildAction()` (`cli.go:1544-1547`).
 3. `authorize(ctx, stdout, ap, issueID, prior)` — §2.11 (`cli.go:1553-1555`).
@@ -1201,7 +1201,7 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
 
 ### 2.14 `lit next` — Print the next workable leaf
 
-- Registration `register.go:484-485`, `app.AccessRead`, handler `nextLeaf`
+- Registration `register.go:523-524`, `app.AccessRead`, handler `nextLeaf`
   (`next.go:31-77`). Summary: "Print the next workable leaf to lit start".
 - Flags (`next.go:32-40`):
 
@@ -1361,8 +1361,8 @@ otherwise appends `" and <n> more"` (`next_route.go:540`, `next_route.go:546-553
   `"no ready work on the focus path — the backlog is not empty, and each row below says why this run did not serve it: <describeReach(Unreachable, "", poolNotes)>"`
 - Otherwise: `"no ready work — the backlog is not empty, but nothing in it is startable here: <describeReach(Unreachable, "", poolNotes)>"`
 
-Both map to `ExitNoWork` = **6** (`exit.go:30`, `exit.go:121-128`), with reasons
-`scope_exhausted` and `no_ready_work` respectively (`error_output.go:111-118`).
+Both map to `ExitNoWork` = **6** (`exit.go:31`, `exit.go:122-129`), with reasons
+`scope_exhausted` and `no_ready_work` respectively (`error_output.go:112-119`).
 
 **Rendering** — `renderNextOutcome(w, outcome, details, cc)` (`next.go:94-135`):
 - `ServedFromClaim` → no announcement at all (`next.go:98-99`).
@@ -1428,7 +1428,7 @@ claim; this command claims nothing.
 
 ### 2.16 `lit children <parent-id>`
 
-- Registration `register.go:531-534`: `runList(ctx, stdout, childrenSurface, args)`,
+- Registration `register.go:570-573`: `runList(ctx, stdout, childrenSurface, args)`,
   the same entrypoint and leaf as `lit ls` (§ `lit ls` above). Summary: "List an
   issue's direct children by rank (`lit ls --parent <id>`; takes every ls flag)".
 - `childrenSurface = listSurface{name: "children", positionals: []string{"<parent-id>"}}`
@@ -1474,7 +1474,7 @@ usage string as a plain error → exit 1 (`register.go:112-123`).
 - Output: `printComment` → `"<issueID> <commentID>\n"` (`cli.go:1509-1512`).
   **No breadcrumb.**
 
-**`lit comment rm <comment-id>`** (`runCommentRm`, `cli.go:1490-1507`):
+**`lit comment rm <comment-id>`** (`runCommentRm`, `cli.go:1487-1504`):
 - No flags (not even `--by`).
 - Refusal: `len(positional) != 1` or `fs.NArg() != 0` →
   `UsageError{"usage: lit comment rm <comment-id>"}` → exit 2 (`cli.go:1496-1501`).
@@ -1723,9 +1723,9 @@ updated <n> issues
     (`prefix.go:35-37`).
   - `workspace.ConfiguredPrefix(requested)` failure →
     `ValidationError{Message: fmt.Sprintf("invalid prefix %q: %v", requested, err)}` →
-    reason `validation_refused`, exit 3 (`prefix.go:41-44`). Typed so a deterministic
+    reason `validation_refused`, exit 3 (`prefix.go:44-51`). Typed so a deterministic
     refusal does not reach the unclassified default's retry-then-doctor remediation.
-- Three outcomes (`prefixSetTextOutput`, `prefix.go:83-102`):
+- Three outcomes (`prefixSetTextOutput`, `prefix.go:87-106`):
   - Normalized == current → `"issue_prefix: <p> (prefix unchanged)\n"`
     (`prefix.go:49-56`, `:88-91`).
   - Changed, no `--apply` →
@@ -1827,7 +1827,7 @@ plus at most one positional topic.
 - `--force` without `--eject` → `UsageError{"usage: --force is only valid with --eject"}`
   (`cli.go:1747-1749`).
 - A topic positional combined with any flag →
-  `UsageError{"usage: lit quickstart <topic> takes no flags"}` (`cli.go:1752-1755`).
+  `UsageError{"usage: lit quickstart <topic> takes no flags"}` (`cli.go:1749-1752`).
 - An unknown topic →
   `UsageError{"usage: unknown quickstart topic \"<x>\" (must be one of: <tokens>)"}`
   (`cli.go:1756-1759`).
@@ -1840,7 +1840,7 @@ plus at most one positional topic.
    (`cli.go:1524`). Every other command emits line-oriented text. `--output` is
    rejected globally and per-command (§1.1, §1.6).
 2. **`fs.NArg()` is not checked** by: `new` (`cli.go:340-355`),
-   `followup` (`cli.go:387-415`), `ls` (`cli.go:525-621`), `rank`
+   `followup` (`cli.go:387-415`), `ls` (`cli.go:522-618`), `rank`
    (`cli.go:1049-1073`), `export` (`cli.go:1516`), `children`
    (`issue_relations.go:127-132`), `parent clear` (`issue_relations.go:109-114`).
    Extra positionals on those commands are silently ignored.
@@ -1853,12 +1853,12 @@ plus at most one positional topic.
 5. **Assignee identity diverges by command on purpose**: `start` resolves through
    `resolveIdentity` (env `CLAUDE_CODE_SESSION_ID` wins) (`cli.go:1276`);
    `update --assignee` writes the trimmed literal, empty meaning clear
-   (`cli.go:1000-1010`). `new`/`followup` also write the trimmed literal
+   (`cli.go:997-1007`). `new`/`followup` also write the trimmed literal
    (`cli.go:352`, `cli.go:423`).
 6. **Claim state never blocks anything except `lit start` on a fresh foreign
    hold.** `backlog` renders claims as visibility only (`backlog.go:24-25`,
    `:92-96`); `next` routes by claim but never writes (`next_route.go:81-128`);
-   `start` is the only gate (`cli.go:1434-1449`, `classifyTakeover` at
+   `start` is the only gate (`cli.go:1431-1446`, `classifyTakeover` at
    `claims_takeover.go:110-119`).
 7. **Three functions panic on unreachable states** and would abort the process:
    `ClassifyReadiness` on an unclassified annotation kind (`readiness.go:144`),
