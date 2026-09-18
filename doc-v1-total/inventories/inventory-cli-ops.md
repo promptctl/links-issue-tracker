@@ -658,7 +658,7 @@ The repair capability is asked once, up front: `storage.Repair.Of(ap.Store)`; a 
 
 ### 4.2 Checks and output (stdout, in order)
 
-1. `printWorkspaceIdentity` (`doctor.go:25-35`):
+1. `printWorkspaceIdentity` (`doctor.go:27-37`):
    `workspace: storage_dir="<dir>" workspace_id=<id> issue_prefix=<p> issue_prefix_source=configured|derived git_common_dir="<dir>"` — path fields quoted with `%q`; source is `derived` when `ws.IssuePrefix.Derived()`.
 2. `resolveBuildStatusNote(time.Now())` on its own line (`doctor.go:296`).
 3. `integrity_check=<v> foreign_key_issues=<n> invalid_related_rows=<n> orphan_history_rows=<n> rank_inversions=<n|unchecked> dependency_cycle=<none|a->b->c|unchecked> parent_cycle=<none|a->b->c>` (`doctor.go:299-305`). Fields named in `HealthReport.Unchecked` render as `unchecked`.
@@ -676,12 +676,12 @@ The repair capability is asked once, up front: `storage.Repair.Of(ap.Store)`; a 
 
 ### 4.3 Freshness resolution and refusals
 
-`resolveDoctorSyncFreshness` (`doctor.go:105-144`) never errors; every failure becomes a `doctorSyncUnresolved` report carrying the reason: sync-capability decline (`doctor.go:111-114`), `read git remotes: <err>` (`doctor.go:115-118`), remote-resolution error (`:121-124`), branch-resolution error (`:128-131`), `SyncFreshness` error (`:132-135`). No configured remote → `doctorSyncNoRemote` (`:125-127`). The divergence age is computed here from `freshness.OldestDivergedUnix` (`doctor.go:139-143`).
+`resolveDoctorSyncFreshness` (`doctor.go:107-146`) never errors; every failure becomes a `doctorSyncUnresolved` report carrying the reason: sync-capability decline (`doctor.go:111-114`), `read git remotes: <err>` (`doctor.go:115-118`), remote-resolution error (`:121-124`), branch-resolution error (`:128-131`), `SyncFreshness` error (`:132-135`). No configured remote → `doctorSyncNoRemote` (`:125-127`). The divergence age is computed here from `freshness.OldestDivergedUnix` (`doctor.go:139-143`).
 
 ### 4.4 Exit behavior
 
 - Any `report.Errors` → `CorruptionError{Message: strings.Join(report.Errors, "; ")}` → **exit 7**, and it wins over the divergence exit (`doctor.go:312-315`).
-- A divergence whose failure is `persistent()` (age ≥ 24h or ahead+behind > 10) → `SyncFailureError{Class: diverged_unresolved, …}` → **exit 5**, block printed by the error sink, and the owner is notified for that class (`doctor.go:71-97`, `doctor.go:323-329`).
+- A divergence whose failure is `persistent()` (age ≥ 24h or ahead+behind > 10) → `SyncFailureError{Class: diverged_unresolved, …}` → **exit 5**, block printed by the error sink, and the owner is notified for that class (`doctor.go:73-86`, `doctor.go:323-329`).
 - Otherwise nil → exit 0.
 
 ---
@@ -1050,7 +1050,7 @@ All eight are also the payload of `lit quickstart --eject`, written to `<config.
 | Held prose conflict | `sync reconcile`/`resolve`/`combine` | guidance printed + `MergeConflictError`, exit 5 | `sync_reconcile_cmd.go:474-509` |
 | Unrelated histories | `sync pull`, `sync reconcile*` | `SyncFailureError`, exit 5 | `sync.go:302-304`, `sync_reconcile_cmd.go:455-473` |
 | Take without owner approval | `sync reconcile take` | `ownerApprovalRefusalError` block, exit 5 | `sync_reconcile_cmd.go:230-253` |
-| Persistent divergence (≥24h or >10 commits) | `doctor` | `SyncFailureError`, exit 5 | `doctor.go:92-97`, `doctor.go:323` |
+| Persistent divergence (≥24h or >10 commits) | `doctor` | `SyncFailureError`, exit 5 | `doctor.go:94-99`, `doctor.go:323` |
 | Store corruption | `doctor` | `CorruptionError`, exit 7 | `doctor.go:312-315` |
 | Unsynced local changes | `backup restore` without `--force` | `MergeConflictError`, exit 5 | `backup.go:163-166` |
 | `--latest` + `--path` together | `backup restore` | `UsageError`, exit 2 | `backup.go:86-87` |

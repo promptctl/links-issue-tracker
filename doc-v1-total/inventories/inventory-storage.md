@@ -452,8 +452,8 @@ These types live in the contract, not in an engine, because a capability interfa
 
 - **`Checkpoint`** (`internal/storage/maintenance.go:19-30`) — `Name string` (format `"<prefix>-<unix-nano>"`), `Prefix string` (caller label, e.g. `"pre-migrate"`), `CreatedAt time.Time` (parsed from the unix-nano suffix in `Name`), `Anchor string` (opaque engine-side identity of the captured state; the contract requires only that handing it back names the same state, never that it is a hash or a commit).
   - The name encodes the prefix and timestamp so `ListCheckpoints` can reconstruct the set without external metadata storage (`internal/storage/maintenance.go:16-18`).
-- **`HealthReport`** (`internal/storage/maintenance.go:37-46`) — json keys: `integrity_check` (string), `foreign_key_issues` (int), `invalid_related_rows` (int), `orphan_history_rows` (int), `rank_inversions` (int), `dependency_cycle` ([]string), `parent_cycle` ([]string), `unchecked` ([]string), `errors` ([]string), `warnings` ([]string).
-  - An engine reports **zeros** for checks it has no analogue for rather than omitting them (`internal/storage/maintenance.go:33-36`).
+- **`HealthReport`** (`internal/storage/maintenance.go:48-76`) — json keys: `integrity_check` (string), `foreign_key_issues` (int), `invalid_related_rows` (int), `orphan_history_rows` (int), `rank_inversions` (int), `dependency_cycle` ([]string), `parent_cycle` ([]string), `unchecked` ([]string), `errors` ([]string), `warnings` ([]string).
+  - An engine reports **zeros** for checks it has no analogue for rather than omitting them (`internal/storage/maintenance.go:43-47`).
 
 ---
 

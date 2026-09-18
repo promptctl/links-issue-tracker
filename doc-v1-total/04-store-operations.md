@@ -24,7 +24,7 @@ Three surfaces write the export to disk or stdout:
 
 ## The export delta
 
-`diffExports(prev, next)` is a **pure value diff between two in-memory `model.Export` values** — not a commit range, checkpoint, or timestamp comparison; no SQL is issued to compute it (`internal/store/export_delta.go:141-142`). `prev` is never taken from a caller's belief: the restore path supplies the empty export (making everything an add), and the sync reconcile spine writer seeds its `landed` state from an actual `Store.Export` of the spine branch, advancing it only after a successful landing (`import_export.go:179-186`; `sync_reconcile.go:628-652`).
+`diffExports(prev, next)` is a **pure value diff between two in-memory `model.Export` values** — not a commit range, checkpoint, or timestamp comparison; no SQL is issued to compute it (`internal/store/export_delta.go:141-142`). `prev` is never taken from a caller's belief: the restore path supplies the empty export (making everything an add), and the sync reconcile spine writer seeds its `landed` state from an actual `Store.Export` of the spine branch, advancing it only after a successful landing (`import_export.go:221-228`; `sync_reconcile.go:628-652`).
 
 Mechanics (`export_delta.go:32-123`):
 
@@ -41,13 +41,13 @@ Tests pin, among other shapes: a delta of an export against itself is empty; cha
 
 ## Full-replace import
 
-`ReplaceFromExport` → `replaceFromExport(ctx, export, commitStamp{Message: "replace from export"})` — the Dolt commit message for a restore is the literal `replace from export` (`import_export.go:145-147`). It runs under the commit lock, inside one SQL transaction, followed by one Dolt commit, with the transient-GC retry wrapping the whole unit — all-or-nothing at the SQL level (`import_export.go:156-160`; `commit_lock.go:156-177`).
+`ReplaceFromExport` → `replaceFromExport(ctx, export, commitStamp{Message: "replace from export"})` — the Dolt commit message for a restore is the literal `replace from export` (`import_export.go:187-189`). It runs under the commit lock, inside one SQL transaction, followed by one Dolt commit, with the transient-GC retry wrapping the whole unit — all-or-nothing at the SQL level (`import_export.go:198-202`; `commit_lock.go:156-177`).
 
 `writeExportTx` clears tables in the literal order `labels, comments, relations, issues` (issue_events and issue_event_changes are deliberately not named — they cascade from issues), then applies `diffExports(empty, export)` (`import_export.go:175-186`).
 
 **No ID remapping, no dedup, no conflict policy**: IDs are written verbatim; duplicate ids in the input reach the INSERT and fail on the primary key, aborting the transaction (`export_delta.go:73-77`).
 
-Input normalization on the issue insert (`import_export.go:197-249`), values worth pinning:
+Input normalization on the issue insert (`import_export.go:239-291`), values worth pinning:
 
 | Column | Rule |
 |---|---|
@@ -65,7 +65,7 @@ The CLI restore flow (`lit backup restore`, `internal/cli/backup.go:73-186`): us
 
 ## Doctor and FixIntegrity
 
-`Doctor` (`import_export.go:42-119`) initializes `IntegrityCheck` to `"ok"` and runs, in order:
+`Doctor` (`import_export.go:42-161`) initializes `IntegrityCheck` to `"ok"` and runs, in order:
 
 | Check | Mechanism | On hit |
 |---|---|---|
@@ -76,7 +76,7 @@ The CLI restore flow (`lit backup restore`, `internal/cli/backup.go:73-186`): us
 | rank inversions | `len(invertedEdges(order, edges))` over the live rank order and blocks edges, loaded once for this row and the next (computed in Go) | **warning** `rank inversions: %d (dependencies ranked below dependents)` |
 | blocks cycle | `blocksCycle(order, edges)` — the constraints `FixRankInversions` refuses on | **warning** `blocks dependency cycle: <a -> b -> ...> (no rank order exists; remove one edge with 'lit dep rm' to break it)` |
 
-`FixIntegrity` (`import_export.go:124-143`) runs under a mutation with Dolt commit message `fix integrity`, executing exactly three statements — delete orphan events, delete self-referential related-to rows, swap mis-ordered related-to endpoints — then returns a fresh `Doctor` report. It does not touch FK violations, rank inversions, or cycles.
+`FixIntegrity` (`import_export.go:166-185`) runs under a mutation with Dolt commit message `fix integrity`, executing exactly three statements — delete orphan events, delete self-referential related-to rows, swap mis-ordered related-to endpoints — then returns a fresh `Doctor` report. It does not touch FK violations, rank inversions, or cycles.
 
 ## Tree import (`lit import`, JSON)
 
@@ -109,9 +109,9 @@ CLI: `--by` with a file containing no update document is a usage error. Output: 
 | Law | Value | What it checks |
 |---|---|---|
 | `health` | `"health"` | Doctor **errors** become findings verbatim; Doctor **warnings are discarded**, so a faithful rebuild of messy source is not rejected (`verify.go:140-153`) |
-| `count` | `"count"` | per collection (issues, relations, comments, labels, events, event_changes): rows the dump maps into the collection via unconditional (`Always`) emitters must equal the rebuild's count; any conditional emitter permanently excludes its collection from the law; message `collection %q: source dump carries %d row(s) mapped here, rebuild has %d` (`verify.go:179-222`) |
-| `id_stability` | `"id_stability"` | the set of source cells mapping into `issues.id` (union across all tables/columns) vs rebuilt issue ids; two findings possible — missing and extra, each listing sorted ids; no `issues.id` mapping at all → no findings (`verify.go:233-267, 326-346`) |
-| `rank_permutation` | `"rank_permutation"` | over rebuilt issues only: every non-empty rank must be well-formed base-62 and distinct; empty ranks are skipped as legal (`verify.go:277-314`) |
+| `count` | `"count"` | per collection (issues, relations, comments, labels, events, event_changes): rows the dump maps into the collection via unconditional (`Always`) emitters must equal the rebuild's count; any conditional emitter permanently excludes its collection from the law; message `collection %q: source dump carries %d row(s) mapped here, rebuild has %d` (`verify.go:194-237`) |
+| `id_stability` | `"id_stability"` | the set of source cells mapping into `issues.id` (union across all tables/columns) vs rebuilt issue ids; two findings possible — missing and extra, each listing sorted ids; no `issues.id` mapping at all → no findings (`verify.go:248-282, 326-346`) |
+| `rank_permutation` | `"rank_permutation"` | over rebuilt issues only: every non-empty rank must be well-formed base-62 and distinct; empty ranks are skipped as legal (`verify.go:292-329`) |
 
 `VerifyReport.String()` renders `verify: reconciled — Doctor-clean and all conservation laws hold`, or a numbered finding list under `verify: %d discrepancy(ies) — the rebuild does not conserve the source and cannot be trusted:` (`verify.go:93-103`).
 

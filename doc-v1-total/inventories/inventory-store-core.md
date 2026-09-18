@@ -86,14 +86,14 @@ Both hooks are per-`Store` instance state, not package globals (`store.go:66-81`
 
 #### 1.4 `engineOpenRetryMaxElapsed`
 
-`var engineOpenRetryMaxElapsed = coResidentHolderWait` (`store.go:2669`), = 70s. A package **variable**, not a const, so tests can shrink it; `engine_open_contract_test.go:53-55` sets it to `700 * time.Millisecond` and restores it in cleanup. It is `MaxElapsedTime` of the write-open backoff (`store.go:2714`). `coResidentHolderWait` is a const derived from two measured facts (`store.go:2564-2662`): `mirrorCycleObservedTail` 20s × `mirrorHoldStallFactor` 2 = `mirrorHoldBudget` 40s; + `mirrorCancelLagObserved` 22s = `mirrorHoldCeiling` 62s; + `coResidentWaitHeadroom` 8s = 70s.
+`var engineOpenRetryMaxElapsed = coResidentHolderWait` (`store.go:2669`), = 70s. A package **variable**, not a const, so tests can shrink it; `engine_open_contract_test.go:53-55` sets it to `700 * time.Millisecond` and restores it in cleanup. It is `MaxElapsedTime` of the write-open backoff (`store.go:2722`). `coResidentHolderWait` is a const derived from two measured facts (`store.go:2564-2662`): `mirrorCycleObservedTail` 20s × `mirrorHoldStallFactor` 2 = `mirrorHoldBudget` 40s; + `mirrorCancelLagObserved` 22s = `mirrorHoldCeiling` 62s; + `coResidentWaitHeadroom` 8s = 70s.
 
 #### 1.5 `newEngineOpenBackOff`
 
 `store.go:2710-2716`. Fresh `backoff.NewExponentialBackOff()` per connector with:
 - `InitialInterval = 50 * time.Millisecond` (`store.go:2712`)
 - `MaxInterval = engineOpenRetryMaxInterval` = 1s (`store.go:2713`)
-- `MaxElapsedTime = engineOpenRetryMaxElapsed` (`store.go:2714`)
+- `MaxElapsedTime = engineOpenRetryMaxElapsed` (`store.go:2722`)
 
 All other `ExponentialBackOff` fields keep library defaults. Only attached for `engineWrite` (`store.go:2741-2743`).
 
@@ -421,7 +421,7 @@ INSERT INTO issues(
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
 ```
    Bound values in order: `issue.ID`, `issue.Title`, `issue.Description`, `nullableString(issue.Prompt)`, `statusForStorage(issue)`, `issue.Priority`, `issue.IssueType`, `issue.Topic`, `issue.AssigneeValue()`, `issue.Rank`, `issue.Lane`, `issue.CreatedAt.Format(time.RFC3339Nano)`, `issue.UpdatedAt.Format(time.RFC3339Nano)`, `archivedCol`, `deletedCol`. `closed_at` is a literal `NULL`. Columns `resolution` and `redirect_target` are **not** in the insert list (left to their defaults). Failure → `fmt.Errorf("insert issue: %w", err)` (`store.go:536`).
-7. If `parentID != ""`: builds `model.Relation{SrcID: issue.ID, DstID: parentID, Type: model.RelParentChild, CreatedAt: issue.CreatedAt, CreatedBy: "links"}` and routes it through `insertRelationTx` (`store.go:538-551`; `internal/store/relations.go:348`).
+7. If `parentID != ""`: builds `model.Relation{SrcID: issue.ID, DstID: parentID, Type: model.RelParentChild, CreatedAt: issue.CreatedAt, CreatedBy: "links"}` and routes it through `insertRelationTx` (`store.go:538-551`; `internal/store/relations.go:372`).
 8. `s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, createdBy)` (`store.go:552`; `internal/store/labels.go:95`).
 9. Event: `createChanges := []model.FieldChange{}`; for **non-container** types appends `{Field:"status", From:"", To:"open"}`; containers get none (`store.go:556-560`). Then `s.recordEvent(ctx, tx, issue.ID, "created", "issue created", "links", createChanges)` (`store.go:561`) — action `"created"`, reason `"issue created"`, actor `"links"`.
 10. `smoothRanksIfNeededTx(ctx, tx, issue.Rank)` (`store.go:564`; `internal/store/ranking.go:407`).
@@ -452,7 +452,7 @@ Evidence: id shape `^test-renderer-[0-9a-z]{3,8}$` (`store_test.go:777-780`); pr
 
 #### 4.2 Rank placement
 
-`nextRankForPlacement(ctx, tx, p storage.RankPlacement, f storage.Frame) (string, error)` (`store.go:2080-2088`): `edgeFor(p)` resolves the end — `storage.RankTop` → `topEdge`; `storage.RankBottom` → `bottomEdge`; anything else → `fmt.Errorf("unknown rank placement: %d", p)` (`internal/store/ranking.go:208-217`) — then `rankBetweenTx` returns a key between the bounds `edge.filingBoundsTx(ctx, tx, f)` reads (`internal/store/ranking.go:163-172`). `filingBoundsTx` reads that end's filing rank — frame `f`'s leading rank for the top (`frameEdgeRankTx`, `:183-186`), the whole workspace's last rank for the bottom (`workspaceEdgeRankTx`, `:193-202`) — and hands it to `e.roomBesideTx(ctx, tx, anchorRank, "")` (`:109-131`), which pairs it with the nearest rank the **whole workspace** holds on its far side; the `""` `excludeID` drops nothing from that read, since no issue's id is empty. A create at the top therefore takes the midpoint between the frame's leading rank and the nearest rank below it anywhere in the workspace; with no rank below it that read comes back `""` and the lower bound is open. An **empty** filing rank — a frame with nothing ranked in it — never reaches that read: `roomBesideTx` refuses an empty anchor outright with `fmt.Errorf("no room beside the %s of this frame: the key it was read from is empty", e.name)` (`:120-122`), and `filingBoundsTx` routes the case to `pastTheWorkspaceTx` (`:142-151`) instead, which reads the workspace's last rank through `workspaceEdgeRankTx(ctx, tx, storage.TopLevel, bottomEdge)` and pairs it through `bottomEdge.roomBesideTx`, where nothing lies further out, so the key lands past the workspace's last. In an empty workspace that read is `""` and `pastTheWorkspaceTx` returns `("", "")` directly, so the key is `rank.Initial()` ("V").
+`nextRankForPlacement(ctx, tx, p storage.RankPlacement, f storage.Frame) (string, error)` (`store.go:2088-2096`): `edgeFor(p)` resolves the end — `storage.RankTop` → `topEdge`; `storage.RankBottom` → `bottomEdge`; anything else → `fmt.Errorf("unknown rank placement: %d", p)` (`internal/store/ranking.go:208-217`) — then `rankBetweenTx` returns a key between the bounds `edge.filingBoundsTx(ctx, tx, f)` reads (`internal/store/ranking.go:163-172`). `filingBoundsTx` reads that end's filing rank — frame `f`'s leading rank for the top (`frameEdgeRankTx`, `:183-186`), the whole workspace's last rank for the bottom (`workspaceEdgeRankTx`, `:193-202`) — and hands it to `e.roomBesideTx(ctx, tx, anchorRank, "")` (`:109-131`), which pairs it with the nearest rank the **whole workspace** holds on its far side; the `""` `excludeID` drops nothing from that read, since no issue's id is empty. A create at the top therefore takes the midpoint between the frame's leading rank and the nearest rank below it anywhere in the workspace; with no rank below it that read comes back `""` and the lower bound is open. An **empty** filing rank — a frame with nothing ranked in it — never reaches that read: `roomBesideTx` refuses an empty anchor outright with `fmt.Errorf("no room beside the %s of this frame: the key it was read from is empty", e.name)` (`:120-122`), and `filingBoundsTx` routes the case to `pastTheWorkspaceTx` (`:142-151`) instead, which reads the workspace's last rank through `workspaceEdgeRankTx(ctx, tx, storage.TopLevel, bottomEdge)` and pairs it through `bottomEdge.roomBesideTx`, where nothing lies further out, so the key lands past the workspace's last. In an empty workspace that read is `""` and `pastTheWorkspaceTx` returns `("", "")` directly, so the key is `rank.Initial()` ("V").
 
 `nextRankAtBottom` (`store.go:2058-2068`):
 ```sql
@@ -795,7 +795,7 @@ Change rows, emitted only for fields that actually moved, in this order (`store.
 
 Return: `fieldWrite{issue, replaceLabels: in.Labels != nil, actor, reason: in.Reason, changes}` (`store.go:1029`).
 
-`applyFieldsTx(ctx, tx, w fieldWrite)` (`store.go:1041-1062`):
+`applyFieldsTx(ctx, tx, w fieldWrite)` (`store.go:1049-1070`):
 1. `issue.UpdatedAt = time.Now().UTC()` — the clock is read here, at the write boundary (`store.go:1045`).
 2. The UPDATE (`store.go:1046-1048`):
 ```sql
@@ -943,7 +943,7 @@ Called on every write open (`store.go:152`) and by the bootstrap (`store.go:2540
 | `snapshotGuard` | `migrate_snapshot.go:109` | `store.go:1702`, `:1719` |
 | `newIssueID` | `issue_ids.go:14` | `store.go:522` |
 | `canonicalizeLabels` / `replaceLabelsTx` | `labels.go:112` / `:95` | `store.go:482`, `:640`, `:995`; `:552`, `:1052` |
-| `insertRelationTx` / `bucketRelations` / `relatedFrom` / `siblingsOf` | `relations.go:348` / `:22` / `:64` / `:88` | `store.go:548`; `:809`; `:832`; `:899` |
+| `insertRelationTx` / `bucketRelations` / `relatedFrom` / `siblingsOf` | `relations.go:372` / `:22` / `:64` / `:88` | `store.go:548`; `:809`; `:832`; `:899` |
 | `smoothRanksIfNeededTx` | `ranking.go:407` | `store.go:564` |
 | `deleteCommentTx` | `row_deletes.go:93` | `store.go:1189` |
 | `rank.Initial/After/Before` | `internal/rank` | `store.go:2065`, `:2067`, `:2081` |
@@ -2640,7 +2640,7 @@ Error-vs-not-found distinction: `execDelete` wraps a delete failure as `fmt.Erro
 - `loadLabelsByIssueIDs` — `internal/store/store.go:2366-2387`: `SELECT issue_id, label FROM labels WHERE issue_id IN (?, ?, …) ORDER BY label ASC`; error → `fmt.Errorf("load labels by issue ids: %w", err)`.
 - `listAllLabels` — `internal/store/store.go:1782-1790`: `SELECT issue_id, label, created_at, created_by FROM labels ORDER BY issue_id ASC, label ASC`; error → `fmt.Errorf("list all labels: %w", err)`.
 - List filtering by label — `internal/store/store.go:639-648`: `filter.LabelsAll` is run through `canonicalizeLabels` and each label adds a conjunct `EXISTS (SELECT 1 FROM labels l WHERE l.issue_id = i.id AND l.label = ?)` (AND semantics, one clause per label).
-- Import/restore insert: `INSERT INTO labels(issue_id, label, created_at, created_by) VALUES (?, ?, ?, ?)` with error `fmt.Errorf("restore label %s:%s: %w", label.IssueID, label.Name, err)` — `internal/store/import_export.go:266-272`.
+- Import/restore insert: `INSERT INTO labels(issue_id, label, created_at, created_by) VALUES (?, ?, ?, ?)` with error `fmt.Errorf("restore label %s:%s: %w", label.IssueID, label.Name, err)` — `internal/store/import_export.go:308-314`.
 - Orphan check: `SELECT COUNT(*) FROM labels l LEFT JOIN issues i ON i.id = l.issue_id WHERE i.id IS NULL` — `internal/store/import_export.go:60`.
 - Delta replay uses `deleteLabelTx` + `insertLabelTx` keyed on `labelKey{issueID, name}` — `internal/store/export_delta.go:165`, `:227`.
 
@@ -2688,7 +2688,7 @@ Bucketing convention, `bucketRelations(focalID, relations, issuesByID)` — `int
 
 ### 4.3 AddRelation
 
-`Store.AddRelation(ctx, storage.AddRelationInput{SrcID, DstID, Type, CreatedBy})` — `internal/store/relations.go:293-341`:
+`Store.AddRelation(ctx, storage.AddRelationInput{SrcID, DstID, Type, CreatedBy})` — `internal/store/relations.go:293-311`:
 1. Pre-tx: `in.Type == model.RelRelatedTo && in.SrcID == in.DstID` → `errors.New("related-to cannot target itself")` (`:296-298`). Note this self-check is only for related-to at this point.
 2. `srcID, dstID := in.Type.CanonicalEndpoints(in.SrcID, in.DstID)` — related-to endpoints get sorted (`:299`).
 3. `now := time.Now().UTC()`; the returned `model.Relation` is built with the canonical endpoints, the type, `now`, and `strings.TrimSpace(in.CreatedBy)`; empty createdBy → `"unknown"` (`:300-304`).
@@ -2698,19 +2698,19 @@ Bucketing convention, `bucketRelations(focalID, relations, issuesByID)` — `int
    - If `rel.Type.SingleValuedFromSrc()` (parent-child only): `setSingleValuedEdgeTx` (`:333-335`); otherwise `insertRelationTx` (`:336`).
 5. Returns the constructed `model.Relation` (with canonical endpoints and the pre-tx timestamp) on success (`:340`).
 
-Duplicate handling: a repeat of the same `(src,dst,type)` for `blocks`/`related-to` goes through the raw INSERT and hits the primary key, surfacing as `fmt.Errorf("insert relation %s->%s (%s): %w", ...)` from `insertRelationTx` (`internal/store/relations.go:348-353`). There is no upsert.
+Duplicate handling: a repeat of the same `(src,dst,type)` for `blocks`/`related-to` goes through the raw INSERT and hits the primary key, surfacing as `fmt.Errorf("insert relation %s->%s (%s): %w", ...)` from `insertRelationTx` (`internal/store/relations.go:372-377`). There is no upsert.
 
 Endpoint-vanished behavior is pinned by `TestRelationEndpointVanishedRejected` — `internal/store/store_test.go:2588-2632`.
 
 ### 4.4 The write statements
 
-`insertRelationTx` — `internal/store/relations.go:348-353`:
+`insertRelationTx` — `internal/store/relations.go:372-377`:
 ```sql
 INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, ?, ?, ?)
 ```
 bound with `rel.SrcID, rel.DstID, rel.Type, rel.CreatedAt.Format(time.RFC3339Nano), rel.CreatedBy`. Error: `fmt.Errorf("insert relation %s->%s (%s): %w", rel.SrcID, rel.DstID, rel.Type, err)`. This is the only relations INSERT in the package (also used by `CreateIssue`'s parent edge, `internal/store/store.go:540-551`, and by delta replay, `internal/store/export_delta.go:221`).
 
-`setSingleValuedEdgeTx` — `internal/store/relations.go:365-370`:
+`setSingleValuedEdgeTx` — `internal/store/relations.go:389-394`:
 ```sql
 DELETE FROM relations WHERE src_id = ? AND type = ?
 ```
@@ -2726,7 +2726,7 @@ subject string `fmt.Sprintf("relation %s->%s (%s)", key.srcID, key.dstID, key.ki
 
 ### 4.5 Cycle detection on write
 
-`rejectBlocksCycle(ctx, tx, dependent, dependency)` — `internal/store/relations.go:378-390`:
+`rejectBlocksCycle(ctx, tx, dependent, dependency)` — `internal/store/relations.go:402-414`:
 - Self-edge: `dependent == dependency` → `fmt.Errorf("blocks: %s cannot block itself", dependent)` (`:379-381`).
 - Loads every live blocks edge with `loadBlocksEdges` (see §5.9); load error → `fmt.Errorf("blocks cycle check: %w", err)` (`:384`).
 - `blocksPrecedes(blocksPrecedenceAdj(edges), dependent, dependency)` true → error text (`:387`):
@@ -2736,7 +2736,7 @@ Tests: `TestAddRelationRejectsBlocksCycle` (A→B then B→A rejected) — `inte
 
 ### 4.6 RemoveRelation
 
-`Store.RemoveRelation(ctx, srcID, dstID, relType)` — `internal/store/relations.go:392-407`:
+`Store.RemoveRelation(ctx, srcID, dstID, relType)` — `internal/store/relations.go:591-606`:
 - `srcID, dstID = relType.CanonicalEndpoints(srcID, dstID)` first (so related-to removal is order-insensitive) (`:393`).
 - Inside `s.withMutation(ctx, "remove relation", ...)`: `deleteRelationRowTx` with that key.
 - `affected == 0` → `storage.NotFoundError{Entity: "relation", ID: fmt.Sprintf("src=%s dst=%s type=%s", srcID, dstID, relType)}` (`:402-404`), rendering as `relation "src=… dst=… type=…" not found`.
@@ -2746,7 +2746,7 @@ Tests: `TestAddRelationRejectsBlocksCycle` (A→B then B→A rejected) — `inte
 
 ### 4.7 ClearParent
 
-`Store.ClearParent(ctx, childID)` — `internal/store/relations.go:474-492`:
+`Store.ClearParent(ctx, childID)` — `internal/store/relations.go:678-696`:
 - `GetIssue(ctx, childID)` precheck (`:475-477`).
 - Inside `s.withMutation(ctx, "clear parent", ...)`:
   ```sql
@@ -2759,7 +2759,7 @@ Tests: `TestAddRelationRejectsBlocksCycle` (A→B then B→A rejected) — `inte
 
 ### 4.8 SetParent
 
-`Store.SetParent(ctx, storage.SetParentInput{ChildID, ParentID, CreatedBy})` — `internal/store/relations.go:437-472`:
+`Store.SetParent(ctx, storage.SetParentInput{ChildID, ParentID, CreatedBy})` — `internal/store/relations.go:636-664`:
 - Blank check: either id empty after `strings.TrimSpace` → `errors.New("child and parent ids are required")` (`:438-440`).
 - `in.ChildID == in.ParentID` → `errors.New("child and parent cannot be the same issue")` (`:441-443`).
 - Builds `model.Relation{SrcID: ChildID, DstID: ParentID, Type: RelParentChild, CreatedAt: time.Now().UTC(), CreatedBy: trimmed}`; empty CreatedBy → `"unknown"` (`:444-453`).
@@ -2770,7 +2770,7 @@ Tests: `TestAddRelationRejectsBlocksCycle` (A→B then B→A rejected) — `inte
 
 ### 4.9 ListRelationsForIssue and listRelations
 
-`Store.ListRelationsForIssue(ctx, issueID, types...)` — `internal/store/relations.go:413-435`:
+`Store.ListRelationsForIssue(ctx, issueID, types...)` — `internal/store/relations.go:612-634`:
 - `GetIssue` precheck (`:414-416`).
 - `s.listRelations(ctx, issueID)`; with no `types` the full incident set is returned (`:417-423`).
 - Otherwise filters in Go against a set of wanted types (`:424-433`); order is preserved from the SQL.
@@ -2866,7 +2866,7 @@ Children are read through `Store.ListIssues` with `filter.ParentIDs` set (§5.7)
 
 ### 5.4 Rank at creation
 
-`nextRankForPlacement(ctx, tx, p, f)` — `internal/store/store.go:2080-2088`: `edgeFor(p)` → `topEdge` for `storage.RankTop`, `bottomEdge` for `storage.RankBottom`, `fmt.Errorf("unknown rank placement: %d", p)` otherwise; then `rankBetweenTx` between the bounds `edge.filingBoundsTx(ctx, tx, f)` reads — the end's filing rank paired with the nearest rank the whole workspace holds on its far side, or, when that filing rank is empty, the pair `pastTheWorkspaceTx` reads past the workspace's last rank (`internal/store/ranking.go:163-172`, `:142-151`).
+`nextRankForPlacement(ctx, tx, p, f)` — `internal/store/store.go:2088-2096`: `edgeFor(p)` → `topEdge` for `storage.RankTop`, `bottomEdge` for `storage.RankBottom`, `fmt.Errorf("unknown rank placement: %d", p)` otherwise; then `rankBetweenTx` between the bounds `edge.filingBoundsTx(ctx, tx, f)` reads — the end's filing rank paired with the nearest rank the whole workspace holds on its far side, or, when that filing rank is empty, the pair `pastTheWorkspaceTx` reads past the workspace's last rank (`internal/store/ranking.go:163-172`, `:142-151`).
 
 `storage.RankPlacement` is an `int` with `RankBottom = iota` (0, the zero value and default) and `RankTop` (1) — `internal/storage/issues.go:28-33`.
 
@@ -3370,7 +3370,7 @@ There is **no manifest or index file**: `backup.List` derives the listing by rea
 It is **not** a commit range, checkpoint, or timestamp comparison. It is a pure value diff between **two `model.Export` values held in memory**: `diffExports(prev, next model.Export) exportDelta` (`export_delta.go:142`). `prev` is "what the live tables currently hold"; `next` is "what they must hold". No SQL query is issued to compute it (`export_delta.go:141`: "pure: the SQL lives in applyExportDelta").
 
 Who supplies `prev`:
-- `writeExportTx` supplies `model.Export{}` — the empty export — after having deleted every row, making the restore the degenerate "everything is an add" case (`import_export.go:179-186`).
+- `writeExportTx` supplies `model.Export{}` — the empty export — after having deleted every row, making the restore the degenerate "everything is an add" case (`import_export.go:221-228`).
 - `spineWriter` owns `landed`, seeded by an actual `Store.Export(ctx)` read of the spine branch in `newSpineWriter` (`internal/store/sync_reconcile.go:628-637`), and advanced to `next` only after a successful landing (`sync_reconcile.go:644-652`). The comment at `export_delta.go:17-20` states the previous export is never taken from a caller's belief.
 
 ### 2.2 The delta record types
@@ -3478,13 +3478,13 @@ Delete error text: `execDelete` wraps as `"delete %s: %w"` and `"delete %s: rows
 
 ### 3.1 Entry point and transaction
 
-`func (s *Store) ReplaceFromExport(ctx context.Context, export model.Export) error` → `s.replaceFromExport(ctx, export, commitStamp{Message: "replace from export"})` (`import_export.go:145-147`). The Dolt commit message for a restore is the literal string **`replace from export`**.
+`func (s *Store) ReplaceFromExport(ctx context.Context, export model.Export) error` → `s.replaceFromExport(ctx, export, commitStamp{Message: "replace from export"})` (`import_export.go:187-189`). The Dolt commit message for a restore is the literal string **`replace from export`**.
 
-`replaceFromExport` (`import_export.go:156-160`) runs `writeExportTx` under `withStampedMutation`, i.e. under the commit lock, inside one `sql.Tx`, followed by `commitWorkingSetOnce`, with the transient-GC retry wrapping the whole staging+versioning unit (`commit_lock.go:156-177`). So it **is transactional** at the SQL level and **does commit** a Dolt commit.
+`replaceFromExport` (`import_export.go:198-202`) runs `writeExportTx` under `withStampedMutation`, i.e. under the commit lock, inside one `sql.Tx`, followed by `commitWorkingSetOnce`, with the transient-GC retry wrapping the whole staging+versioning unit (`commit_lock.go:156-177`). So it **is transactional** at the SQL level and **does commit** a Dolt commit.
 
 ### 3.2 What it does
 
-`writeExportTx` (`import_export.go:179-186`):
+`writeExportTx` (`import_export.go:221-228`):
 
 ```go
 for _, table := range []string{"labels", "comments", "relations", "issues"} {
@@ -3503,7 +3503,7 @@ Because `prev` is the empty export, every row in the input is an add and nothing
 
 The input is a `model.Export` value. On the CLI path it arrives from `syncfile.Read(path)` → `json.Unmarshal` into `model.Export` (`internal/syncfile/syncfile.go:43-53`), i.e. the shape in §1.2 with the v1 `history` fallback of §1.5. `json.Unmarshal` here does **not** disallow unknown fields — unrecognized top-level keys are silently ignored (`syncfile.go:49`).
 
-Field-by-field parsing/normalization happens in `issueRowValues` (`import_export.go:225-249`), the tuple bound to `insertIssueStmt`:
+Field-by-field parsing/normalization happens in `issueRowValues` (`import_export.go:267-291`), the tuple bound to `insertIssueStmt`:
 
 ```sql
 INSERT INTO issues(id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, lane, created_at, updated_at, closed_at, resolution, redirect_target, archived_at, deleted_at)
@@ -3535,11 +3535,11 @@ Value-by-value (`import_export.go:242-248`):
 
 `insertIssueTx` error text: `"restore issue %s: %w"` (`import_export.go:253`).
 
-Comments (`insertCommentTx`, `import_export.go:258-264`): `id, issue_id, body, created_at (RFC3339Nano), created_by` verbatim; error `"restore comment %s: %w"`.
+Comments (`insertCommentTx`, `import_export.go:300-306`): `id, issue_id, body, created_at (RFC3339Nano), created_by` verbatim; error `"restore comment %s: %w"`.
 
-Labels (`insertLabelTx`, `import_export.go:266-272`): `issue_id, label(=Name), created_at (RFC3339Nano), created_by`; error `"restore label %s:%s: %w"` (issue id, name).
+Labels (`insertLabelTx`, `import_export.go:308-314`): `issue_id, label(=Name), created_at (RFC3339Nano), created_by`; error `"restore label %s:%s: %w"` (issue id, name).
 
-Events (`insertEventTx`, `import_export.go:289-306`):
+Events (`insertEventTx`, `import_export.go:331-348`):
 - `action` binds `nil` when `event.Action == ""`, else the string (`import_export.go:290-293`).
 - `created_at` RFC3339Nano.
 - `stream_id` = `nullableString(event.Attribution.Stream())`, `workspace_id` = `nullableString(event.Attribution.Workspace())` — **attribution is replayed verbatim from the dump; the restoring checkout never substitutes its own** (`import_export.go:277-288`). No re-validation of the pair here: `Attribution.UnmarshalJSON` already collapsed half pairs.
@@ -3560,7 +3560,7 @@ Usage strings: `restoreUsage = "usage: lit backup restore (--latest | --path <ex
 
 ### 3.6 Doctor / FixIntegrity (same file)
 
-`Doctor` (`import_export.go:42-119`) initializes `DependencyCycle`, `Errors`, `Warnings` to empty slices and `IntegrityCheck = "ok"`, then:
+`Doctor` (`import_export.go:42-161`) initializes `DependencyCycle`, `Errors`, `Warnings` to empty slices and `IntegrityCheck = "ok"`, then:
 - `CALL DOLT_VERIFY_CONSTRAINTS()` scanned into `violations`; error wrap `"verify constraints: %w"`. `violations > 0` → `IntegrityCheck = "constraint_violations"` and error line `fmt.Sprintf("constraint violations: %d", violations)`.
 - Three FK-orphan counts summed into `ForeignKeyIssues` (error wrap `"count foreign key issues: %w"`):
   - `SELECT COUNT(*) FROM relations r LEFT JOIN issues s ON s.id = r.src_id LEFT JOIN issues d ON d.id = r.dst_id WHERE s.id IS NULL OR d.id IS NULL`
@@ -3573,7 +3573,7 @@ Usage strings: `restoreUsage = "usage: lit backup restore (--latest | --path <ex
 - `RankInversions = len(invertedEdges(order, edges))`; warning `"rank inversions: %d (dependencies ranked below dependents)"`.
 - `blocksCycle(order, edges)` non-empty → `DependencyCycle`; warning `"blocks dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)"` with members joined by `" -> "`.
 
-`FixIntegrity` (`import_export.go:124-143`) always runs the repair under `withMutation(ctx, "fix integrity", …)` — Dolt commit message literal **`fix integrity`** — executing exactly three statements:
+`FixIntegrity` (`import_export.go:166-185`) always runs the repair under `withMutation(ctx, "fix integrity", …)` — Dolt commit message literal **`fix integrity`** — executing exactly three statements:
 ```sql
 DELETE FROM issue_events WHERE issue_id NOT IN (SELECT id FROM issues)   -- "repair orphan events: %w"
 DELETE FROM relations WHERE type='related-to' AND src_id = dst_id        -- "repair self related rows: %w"
@@ -3933,7 +3933,7 @@ All paths are relative to `/Users/bmf/code/links-issue-tracker`. Every claim car
 
 There is no separate boolean/status field; `Reconciled()` is derived: `return len(r.Findings) == 0` (`internal/store/verify.go:88`).
 
-`conservationCollections` is the fixed report order (`internal/store/verify.go:157-159`):
+`conservationCollections` is the fixed report order (`internal/store/verify.go:172-174`):
 `collIssues, collRelations, collComments, collLabels, collEvents, collEventChanges`.
 The underlying collection literals (`internal/store/shapemap.go:167-175`): `collIssues = "issues"`, `collRelations = "relations"`, `collComments = "comments"`, `collLabels = "labels"`, `collEvents = "events"`, `collEventChanges = "event_changes"`.
 
@@ -3946,7 +3946,7 @@ The underlying collection literals (`internal/store/shapemap.go:167-175`): `coll
 - Then one line per finding (`verify.go:100`):
   `  %d. [%s] %s\n` = 1-based index, the law string, the detail. Two leading spaces.
 
-### 1.3 `VerifyCandidate` — entry point and error paths (`verify.go:122-138`)
+### 1.3 `VerifyCandidate` — entry point and error paths (`verify.go:122-153`)
 
 Signature: `VerifyCandidate(ctx context.Context, dump RawDump, mapping ShapeMapping, st *Store) (VerifyReport, error)` (`verify.go:122`).
 
@@ -3960,19 +3960,19 @@ Order of operations:
    - `rankFindings(export)` (`verify.go:136`)
 4. Returns `VerifyReport{Findings: findings}, nil` (`verify.go:137`).
 
-**No repair-on-verify.** `VerifyCandidate` performs no writes: it calls only `Doctor` (read-only queries — `internal/store/import_export.go:42-119`) and `Export` (read-only lists — `import_export.go:15-39`). The repair sibling `FixIntegrity` (`import_export.go:124-143`) exists but is never called from verify.go. There is no re-validation of the mapping — the comment at `verify.go:110-116` states the gate deliberately does not re-run `Validate`.
+**No repair-on-verify.** `VerifyCandidate` performs no writes: it calls only `Doctor` (read-only queries — `internal/store/import_export.go:42-161`) and `Export` (read-only lists — `import_export.go:15-39`). The repair sibling `FixIntegrity` (`import_export.go:166-185`) exists but is never called from verify.go. There is no re-validation of the mapping — the comment at `verify.go:110-116` states the gate deliberately does not re-run `Validate`.
 
 Findings are **all treated identically** — any finding at all makes `Reconciled()` false (`verify.go:88`). There is no advisory/warning tier inside the report: the only severity filtering happens when folding Doctor's output (§1.4).
 
-### 1.4 Check family 1 — HEALTH (`healthFindings`, `verify.go:147-153`)
+### 1.4 Check family 1 — HEALTH (`healthFindings`, `verify.go:162-168`)
 
-- Input is `storage.HealthReport` (`internal/storage/maintenance.go:37-47`), whose fields are:
+- Input is `storage.HealthReport` (`internal/storage/maintenance.go:48-76`), whose fields are:
   `IntegrityCheck string` (json `integrity_check`), `ForeignKeyIssues int` (`foreign_key_issues`), `InvalidRelatedRows int` (`invalid_related_rows`), `OrphanHistoryRows int` (`orphan_history_rows`), `RankInversions int` (`rank_inversions`), `DependencyCycle []string` (`dependency_cycle`), `ParentCycle []string` (`parent_cycle`), `Unchecked []string` (`unchecked`), `Errors []string` (`errors`), `Warnings []string` (`warnings`).
 - Only `h.Errors` become findings; each error string becomes `VerifyFinding{Law: LawHealth, Detail: e}` verbatim (`verify.go:148-151`).
 - `h.Warnings` are **discarded** — explicitly, so a faithful rebuild of messy source is not rejected (`verify.go:140-146`). This is the one advisory-vs-fatal split in the whole gate.
 - The slice is preallocated `make([]VerifyFinding, 0, len(h.Errors))` — non-nil even when empty (`verify.go:148`).
 
-The concrete checks whose text can appear as a `health` finding, in `Doctor`'s execution order (`internal/store/import_export.go:42-119`):
+The concrete checks whose text can appear as a `health` finding, in `Doctor`'s execution order (`internal/store/import_export.go:42-161`):
 
 1. **Constraint verification.** SQL: `CALL DOLT_VERIFY_CONSTRAINTS()` scanned into an int (`import_export.go:49`). Query error → `Doctor` returns `fmt.Errorf("verify constraints: %w", err)` (`import_export.go:50`), which `VerifyCandidate` wraps as `verify health gate (doctor): ...`. If `violations > 0`: sets `IntegrityCheck = "constraint_violations"` and appends **error** `constraint violations: %d` (`import_export.go:52-54`). Default `IntegrityCheck` is `"ok"` (`import_export.go:47`).
 2. **Foreign-key counts** — three queries summed into `ForeignKeyIssues` (`import_export.go:56-67`):
@@ -3987,7 +3987,7 @@ The concrete checks whose text can appear as a `health` finding, in `Doctor`'s e
 
 Net effect: only checks 1 and 2 (constraint violations, foreign-key violations) can ever fail the verify health half.
 
-### 1.5 Check family 2 — COUNT conservation (`countFindings`, `verify.go:179-222`)
+### 1.5 Check family 2 — COUNT conservation (`countFindings`, `verify.go:194-237`)
 
 Expected counts are computed from the **raw dump** row counts, never re-derived through the mapping:
 - `mapTables := tablesByName(m)` (`verify.go:180`; helper at `shapemap.go:481-489`, last-wins index by table name).
@@ -4004,29 +4004,29 @@ Tests pin:
 - `TestCountFindingsDetectsRowLoss` — 2 source issue rows vs 1 exported issue yields exactly one finding with `Law == LawCount` whose detail contains `issues`, `2`, and `1` (`verify_test.go:93-107`).
 - `TestCountFindingsExcludesConditionalFanOutChildren` — with a 2-row `issue_history` dump mapped by `DeterministicMap`, an export with 3 nested `Changes` produces **zero** findings (conditional child excluded), while dropping an event to 1 produces exactly one `LawCount` finding containing `events` (`verify_test.go:117-149`).
 
-### 1.6 Check family 3 — ID STABILITY (`idStabilityFindings`, `verify.go:233-267`)
+### 1.6 Check family 3 — ID STABILITY (`idStabilityFindings`, `verify.go:248-282`)
 
 - Reference set built by `sourceValuesFor(dump, m, "issues.id")` (`verify.go:234`). Target key literal is `"issues.id"`.
 - If no source column maps to `issues.id`, returns `nil` — no findings at all (`verify.go:236-239`).
 - Source set = set of raw cell strings; rebuilt set = set of `issue.ID` over `export.Issues` (`verify.go:241-248`).
-- `missing = setDifference(source, rebuilt)`, `extra = setDifference(rebuilt, source)` (`verify.go:250-251`); `setDifference` returns sorted keys of `a` absent from `b` (`verify.go:349-358`).
+- `missing = setDifference(source, rebuilt)`, `extra = setDifference(rebuilt, source)` (`verify.go:250-251`); `setDifference` returns sorted keys of `a` absent from `b` (`verify.go:364-373`).
 - Two possible findings, both `LawIDStability`, emitted in this order:
   - missing (`verify.go:257`): `%d issue id(s) present in the source dump but absent from the rebuild: %s` — count then ids joined with `", "`.
   - extra (`verify.go:263`): `%d issue id(s) present in the rebuild but absent from the source dump: %s`.
 
-`sourceValuesFor` (`verify.go:326-346`) semantics:
+`sourceValuesFor` (`verify.go:341-361`) semantics:
 - Iterates every dumped table; builds `colIndex := rowColumnIndex(table)` (`verify.go:331`; helper at `shapemap.go:528-534`).
 - For each emitter and each `field → src` pair, only `FromColumn` sources count (`verify.go:334`), and the match test is a string equality: `TargetKey(string(em.Collection)+"."+field) == target` (`verify.go:335`).
 - Sets `found = true` on the first match but keeps going — it aggregates the **union** across all tables/columns rather than returning early (`verify.go:337-342`; the union behavior is pinned by `TestSourceValuesForAggregatesAcrossTables`, `verify_test.go:180-202`, expecting `i1,i2,i3` across two tables both mapping into `issues.id`).
 - Cell values are rendered by `cellString` (`verify.go:341`; `shapemap.go:795-804`): `nil → ""`, `string → itself`, anything else → `fmt.Sprint(v)`.
 
-`setIntersection` (`verify.go:363-372`) is declared in verify.go but has no caller in this file; its only use is `internal/store/sync_unrelated.go:30`.
+`setIntersection` (`verify.go:378-387`) is declared in verify.go but has no caller in this file; its only use is `internal/store/sync_unrelated.go:30`.
 
 Test pin: `TestIDStabilityFindingsDetectsLostAndExtraIDs` requires exactly 2 findings (one missing `i2`, one extra `i9`), both `LawIDStability` (`verify_test.go:154-172`).
 
-### 1.7 Check family 4 — RANK PERMUTATION (`rankFindings`, `verify.go:277-314`)
+### 1.7 Check family 4 — RANK PERMUTATION (`rankFindings`, `verify.go:292-329`)
 
-Operates purely on `export.Issues`; the dump/mapping are not consulted (`verify.go:277`).
+Operates purely on `export.Issues`; the dump/mapping are not consulted (`verify.go:292`).
 - Issues with `Rank == ""` are skipped entirely — unranked is legal (`verify.go:281-283`).
 - Well-formedness: `rank.Valid(issue.Rank)` (`verify.go:284`). `rank.Valid` returns false for the empty string and for any string containing a byte outside the base-62 alphabet `0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz` (`internal/rank/rank.go:17`, `rank.go:53-63`). Malformed entries are recorded as `%s=%q` (id, rank) (`verify.go:285`).
 - Distinctness: ranks are grouped into `idsByRank`; any rank with more than one id is a collision, rendered as `%q shared by %s` with the ids sorted and joined by `", "` (`verify.go:287`, `verify.go:291-296`).
@@ -4041,7 +4041,7 @@ Test pins: `TestVerifyCandidateRejectsMisMappedRank` builds a candidate from a p
 
 - **Gate-cannot-run errors** (returned as Go `error`, report is the zero value): Doctor failure, Export failure (`verify.go:124-130`).
 - **Rejecting findings** (all equal weight, none advisory): Doctor `Errors` only, count mismatch, id missing, id extra, rank collision, rank malformed.
-- **Silently tolerated**: every Doctor `Warning` (`verify.go:147-153`), any collection fed by a conditional emitter (`verify.go:192`), empty ranks (`verify.go:281`), an absent `issues.id` mapping (`verify.go:236-239`).
+- **Silently tolerated**: every Doctor `Warning` (`verify.go:162-168`), any collection fed by a conditional emitter (`verify.go:192`), empty ranks (`verify.go:281`), an absent `issues.id` mapping (`verify.go:236-239`).
 
 ---
 
@@ -4562,7 +4562,7 @@ Ordered:
 2. `os.MkdirTemp(parentDir, "lit-candidate-*")`; on error → `"create candidate workspace dir: %w"` (`candidate.go:85-88`).
 3. Installs the unconditional cleanup defer keyed on a `success bool` (`candidate.go:94-104`): if not successful, `err = errors.Join(err, st.Close())` when `st != nil`, then `err = errors.Join(err, os.RemoveAll(root))`.
 4. `Open(ctx, filepath.Join(root, "workspace"), dump.WorkspaceID)`; on error → `"open candidate workspace: %w"` (`candidate.go:108-111`).
-5. `st.ReplaceFromExport(ctx, export)` (defined `internal/store/import_export.go:145`); on error → `"load export into candidate: %w"` (`candidate.go:112-114`).
+5. `st.ReplaceFromExport(ctx, export)` (defined `internal/store/import_export.go:187`); on error → `"load export into candidate: %w"` (`candidate.go:112-114`).
 6. `success = true`; returns `&Candidate{store: st, root: root, expectedHead: dump.DoltHead, workspaceID: dump.WorkspaceID}` (`candidate.go:116-117`).
 
 Documented: `dump` is read-only and reusable unchanged across attempts; `Apply` never mutates it, so two attempts from one dump yield identical candidates (`candidate.go:66-68`).
