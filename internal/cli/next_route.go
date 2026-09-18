@@ -54,11 +54,14 @@ type ServedFromEpicLane struct {
 
 // ServedFromNewLane is a ready ticket in a lane this checkout does NOT hold, so
 // starting it would establish a claim — which is what Lane is carried to name.
-// Two steps produce it: the global pool (step 4) and the on-path dependency
-// gating one of our own blocked rows (step 1b). The dependency used to come back
-// as ServedFromClaim, whose contract is that no claim is established and nothing
-// is announced, which left the one pick an agent is least likely to predict as
-// the only silent one (links-claims-1b0p, N3).
+// The global pool (step 4) is now its only producer. Step 1b once came back here
+// too, and before that as ServedFromClaim, whose contract is that no claim is
+// established and nothing is announced — which left the one pick an agent is
+// least likely to predict as the only silent one (links-claims-1b0p, N3). Being
+// announced fixed the silence but not the sameness: sharing this type with the
+// pool meant the renderer could not tell the two apart, so step 1b now has its
+// own outcome and this one has a single producer again
+// (links-next-output-4hor, ServedFromDependency).
 //
 // A takeover arrives here too. Work abandoned in flight says so — startAdvice
 // reads the row's state; a ready ticket in a stale lane reads exactly like a
@@ -72,6 +75,32 @@ type ServedFromEpicLane struct {
 type ServedFromNewLane struct {
 	Row  annotation.AnnotatedIssue
 	Lane model.LaneID
+}
+
+// ServedFromDependency is routing step 1b: a ready ticket OUTSIDE our lanes that
+// gates one of our own blocked rows. Like ServedFromNewLane it establishes a
+// claim on a lane this checkout does not hold, so Lane is carried for the same
+// reason. Unlike it, the pick has a reason the row cannot show on its own —
+// it unblocks work we are already holding — and Gates names the row it unblocks.
+//
+// It is its own outcome rather than a nullable qualifier on ServedFromNewLane
+// because the two picks answer different questions. A Gates field hanging off
+// the shared type would make "a global-pool pick that gates something" and "a
+// dependency pick that gates nothing" both representable, and neither exists.
+// Here Gates is always set, by construction: gatingDependencies only yields a
+// dependency because some in-scope row depends on it. The renderer's switch
+// panics on an unhandled outcome, so a new type announces itself at the first
+// unhandled call site instead of falling through silently — which is what makes
+// the discriminated form cheaper here than the flag. [LAW:types-are-the-program]
+//
+// Step 2 already qualifies its pick ("a second lane of an epic you already hold
+// a lane in"); this pick has the stronger claim to one and carried none, which
+// left the hardest pick to predict as the only unexplained one
+// (links-next-output-4hor).
+type ServedFromDependency struct {
+	Row   annotation.AnnotatedIssue
+	Lane  model.LaneID
+	Gates string
 }
 
 // Exhausted is the checkout's own claimed epic(s) having open work with none
@@ -176,12 +205,13 @@ func reachOf(row annotation.AnnotatedIssue, gathered bool, standing claims.Stand
 // [LAW:types-are-the-program]
 type NoWork struct{ Unreachable []rowReach }
 
-func (ServedFromClaim) isNextOutcome()    {}
-func (ResumedOwnWork) isNextOutcome()     {}
-func (ServedFromEpicLane) isNextOutcome() {}
-func (ServedFromNewLane) isNextOutcome()  {}
-func (Exhausted) isNextOutcome()          {}
-func (NoWork) isNextOutcome()             {}
+func (ServedFromClaim) isNextOutcome()      {}
+func (ResumedOwnWork) isNextOutcome()       {}
+func (ServedFromEpicLane) isNextOutcome()   {}
+func (ServedFromNewLane) isNextOutcome()    {}
+func (ServedFromDependency) isNextOutcome() {}
+func (Exhausted) isNextOutcome()            {}
+func (NoWork) isNextOutcome()               {}
 
 // capacity is the single answer to "may this checkout take this row, and as
 // what?" — the eligibility verdict the owner ruling on links-claims-1b0p
@@ -354,8 +384,8 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 		// establishes a claim on a lane we do not hold, so it is announced as
 		// one (N3) and its own lane's standing is honoured rather than
 		// ignored (N2).
-		if dep, ok := onPathDependency(rows, laneOf, mine, reachFor); ok {
-			return ServedFromNewLane{Row: dep, Lane: laneOf(dep)}
+		if dep, gates, ok := onPathDependency(rows, laneOf, mine, reachFor); ok {
+			return ServedFromDependency{Row: dep, Lane: laneOf(dep), Gates: gates}
 		}
 		// Step 2 — the rest of our epic, in lanes we do not already hold.
 		ourEpic := func(lane model.LaneID) bool {
@@ -367,9 +397,9 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 		// Step 3 — loud, and never a hop.
 		return Exhausted{
 			Epics: slices.Sorted(maps.Keys(ownEpics)),
-			Blocked: gatingDependencies(rows, laneOf, func(lane model.LaneID) bool {
+			Blocked: blockedRows(gatingDependencies(rows, laneOf, func(lane model.LaneID) bool {
 				return mine(lane) || ourEpic(lane)
-			}, reachFor),
+			}, reachFor)),
 		}
 	}
 
@@ -430,13 +460,42 @@ func passedOver(rows []annotation.AnnotatedIssue, reachFor func(annotation.Annot
 // all so the diagnostic can say which is which. They differ in the scope they
 // pass and in what they do with the answer — never in how it is found, and
 // neither re-derives it. [LAW:one-source-of-truth]
-func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID, inScope func(model.LaneID) bool, reachFor func(annotation.AnnotatedIssue, bool) reachKind) []rowReach {
+// gatedDep is one gating dependency together with the row it gates. The gated
+// id is the whole reason step 1b's pick is worth explaining, and this walk is
+// the only place it is ever in scope: the loop below holds the blocked row and
+// its dependency at the same instant, and used to keep only the dependency.
+// That discard is what left the renderer unable to say why the pick was handed
+// over (links-next-output-4hor).
+//
+// It is a field of this walk's element rather than of rowReach because rowReach
+// serves two other walks — withheldByScope and passedOver — for which a gated id
+// is meaningless and would always be empty. A field that only one producer ever
+// fills is a bag of optionals in miniature, and every later reader would have to
+// learn which walks populate it. [LAW:types-are-the-program]
+type gatedDep struct {
+	rowReach
+	Gates string
+}
+
+// blockedRows drops the gated id, for Exhausted: that diagnostic reports WHICH
+// dependencies gate the epic, not which row each one gates, and widening it here
+// would change an output this ticket has no business changing.
+// [LAW:polishing-by-subtraction]
+func blockedRows(deps []gatedDep) []rowReach {
+	rows := make([]rowReach, 0, len(deps))
+	for _, dep := range deps {
+		rows = append(rows, dep.rowReach)
+	}
+	return rows
+}
+
+func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID, inScope func(model.LaneID) bool, reachFor func(annotation.AnnotatedIssue, bool) reachKind) []gatedDep {
 	byID := make(map[string]annotation.AnnotatedIssue, len(rows))
 	for _, row := range rows {
 		byID[row.ID] = row
 	}
 	seen := map[string]bool{}
-	var deps []rowReach
+	var deps []gatedDep
 	for _, row := range rows {
 		if !inScope(laneOf(row)) || row.State() != model.StateOpen {
 			continue
@@ -447,7 +506,12 @@ func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation
 			}
 			seen[id] = true
 			dep, gathered := byID[id]
-			deps = append(deps, rowReach{ID: id, Row: dep, Kind: reachFor(dep, gathered)})
+			// row is the in-scope open row whose dependency this is — the fact
+			// step 1b needs and the one this walk used to drop on the floor.
+			deps = append(deps, gatedDep{
+				rowReach: rowReach{ID: id, Row: dep, Kind: reachFor(dep, gathered)},
+				Gates:    row.ID,
+			})
 		}
 	}
 	return deps
@@ -466,13 +530,13 @@ func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation
 // longer re-checks that the gated row is unservable: step 1 accepts every
 // capacity an own lane can produce, so by the time we are here every row in
 // `mine` is routeAround by construction.
-func onPathDependency(rows []annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID, mine func(model.LaneID) bool, reachFor func(annotation.AnnotatedIssue, bool) reachKind) (annotation.AnnotatedIssue, bool) {
+func onPathDependency(rows []annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID, mine func(model.LaneID) bool, reachFor func(annotation.AnnotatedIssue, bool) reachKind) (annotation.AnnotatedIssue, string, bool) {
 	for _, dep := range gatingDependencies(rows, laneOf, mine, reachFor) {
 		if dep.Kind == reachTakeable {
-			return dep.Row, true
+			return dep.Row, dep.Gates, true
 		}
 	}
-	return annotation.AnnotatedIssue{}, false
+	return annotation.AnnotatedIssue{}, "", false
 }
 
 // Error renders Exhausted as the loud diagnostic the design demands in place

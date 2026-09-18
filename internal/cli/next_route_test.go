@@ -266,12 +266,18 @@ func TestRouteNextOffersOnPathDependencyAsANewLane(t *testing.T) {
 	}
 
 	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
-	served, ok := outcome.(ServedFromNewLane)
+	served, ok := outcome.(ServedFromDependency)
 	if !ok {
-		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane (on-path dependency)", outcome, outcome)
+		t.Fatalf("routeNext = %#v (%T), want ServedFromDependency (on-path dependency)", outcome, outcome)
 	}
 	if served.Row.ID != dep.ID {
 		t.Fatalf("served = %q, want %q (the on-path external dependency)", served.Row.ID, dep.ID)
+	}
+	// The pick is FOR the blocked row, and naming it is the whole point of the
+	// outcome: a step-1b pick that cannot say what it unblocks is the bug
+	// (links-next-output-4hor).
+	if served.Gates != a2.ID {
+		t.Fatalf("served.Gates = %q, want %q — the pick must name the blocked row it unblocks, not merely be correct about which dependency to serve", served.Gates, a2.ID)
 	}
 	if want := laneOf(t, details, served.Row); served.Lane != want {
 		t.Fatalf("served.Lane = %v, want %v; the pick would claim a lane this checkout does not hold, and it is the dependency's own lane that gets claimed", served.Lane, want)
@@ -850,9 +856,12 @@ func TestRouteNextTakesOverAnAbandonedOnPathDependency(t *testing.T) {
 	}
 
 	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
-	served, ok := outcome.(ServedFromNewLane)
+	served, ok := outcome.(ServedFromDependency)
 	if !ok {
-		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane (the abandoned on-path dependency is takeable)", outcome, outcome)
+		t.Fatalf("routeNext = %#v (%T), want ServedFromDependency (the abandoned on-path dependency is takeable)", outcome, outcome)
+	}
+	if served.Gates == "" {
+		t.Fatalf("served.Gates is empty — a takeover reached through step 1b still has a row it unblocks, and the qualifier must survive the takeover path")
 	}
 	if served.Row.ID != dep.ID {
 		t.Fatalf("served = %q, want %q (the dependency gating our own blocked lane)", served.Row.ID, dep.ID)
