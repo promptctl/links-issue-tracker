@@ -95,7 +95,9 @@ var actionVerbs = map[ActionName]string{
 func (n ActionName) Verb() string {
 	verb, ok := actionVerbs[n]
 	if !ok {
-		panic(fmt.Sprintf("lifecycle: action %q has no invocation verb; add it to actionVerbs", n))
+		// string(n), not n: Verb() is what is missing, so calling it here would
+		// recurse forever. The conversion says the persisted encoding is meant.
+		panic(fmt.Sprintf("lifecycle: action %q has no invocation verb; add it to actionVerbs", string(n)))
 	}
 	return verb
 }

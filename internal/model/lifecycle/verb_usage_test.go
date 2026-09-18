@@ -132,27 +132,24 @@ func typeName(e ast.Expr) string {
 // a scanner that gets deleted.
 //
 //   - fields: struct fields typed ActionName, matched only as `x.<name>`.
-//   - locals: parameters, results, vars and consts typed ActionName, matched as
-//     a bare identifier. This is what makes a parameter visible, which the
-//     regex version could not see at all.
+//   - locals: parameters, results, receivers and vars typed ActionName, matched
+//     as a bare identifier WITHIN THE FUNCTION THAT DECLARES THEM. This is what
+//     makes a parameter visible, which the regex version could not see at all.
+//     The scoping is not fastidiousness: a bare identifier's type is unknowable
+//     without go/types, and `n` is a parameter name throughout this repository,
+//     so matching it package-wide flagged `humanBytes(n int64)`.
+//   - consts: package-level constants typed ActionName, matched anywhere, since
+//     a constant's name is unique in its package.
 //   - values: names declared as an Action, whose `.Name()` produces one.
 //
-// Method receivers are excluded: inside a method ON ActionName the receiver IS
-// the value, and every selector off it is some other type's business.
+// Receivers are collected like any other declaration. The problem they caused —
+// `n.name` in unrelated code matching because the bare `n` was a bearer — is
+// fixed where it belongs, in the walk below: a selector that is NOT itself a
+// bearer is not descended into, so its receiver is never examined on its own.
+// Excluding receiver names instead was aimed at the right problem from the
+// wrong end, and blinded the gate to any parameter sharing the name.
 func bearerNames(files map[string]*ast.File) (fields, locals, values []string) {
-	fs, ls, vs, recv := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
-	for _, f := range files {
-		ast.Inspect(f, func(n ast.Node) bool {
-			if fd, ok := n.(*ast.FuncDecl); ok && fd.Recv != nil {
-				for _, rf := range fd.Recv.List {
-					for _, nm := range rf.Names {
-						recv[nm.Name] = true
-					}
-				}
-			}
-			return true
-		})
-	}
+	fs, ls, vs := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	add := func(into map[string]bool, names []*ast.Ident, typ ast.Expr) {
 		switch typeName(typ) {
 		case "ActionName":
@@ -172,6 +169,12 @@ func bearerNames(files map[string]*ast.File) (fields, locals, values []string) {
 				for _, fld := range d.Fields.List {
 					add(fs, fld.Names, fld.Type)
 				}
+			case *ast.FuncDecl:
+				if d.Recv != nil {
+					for _, fld := range d.Recv.List {
+						add(ls, fld.Names, fld.Type)
+					}
+				}
 			case *ast.FuncType:
 				for _, grp := range []*ast.FieldList{d.Params, d.Results} {
 					if grp == nil {
@@ -186,10 +189,6 @@ func bearerNames(files map[string]*ast.File) (fields, locals, values []string) {
 			}
 			return true
 		})
-	}
-	for n := range recv {
-		delete(ls, n)
-		delete(vs, n)
 	}
 	for n := range fs {
 		fields = append(fields, n)
@@ -247,8 +246,18 @@ func argIsAllowed(e ast.Expr, fields, locals, values map[string]bool) (allowed, 
 		if n == nil || found {
 			return false
 		}
-		if ex, ok := n.(ast.Expr); ok && producesActionName(ex, fields, locals, values) {
+		ex, ok := n.(ast.Expr)
+		if !ok {
+			return true
+		}
+		if producesActionName(ex, fields, locals, values) {
 			found = true
+			return false
+		}
+		// A selector that is not itself a bearer is somebody else's field, and
+		// its receiver is not under discussion: descending into `n.name` to find
+		// a bare `n` is how this gate once flagged `n.license`.
+		if _, isSel := ex.(*ast.SelectorExpr); isSel {
 			return false
 		}
 		return true
@@ -256,24 +265,87 @@ func argIsAllowed(e ast.Expr, fields, locals, values map[string]bool) (allowed, 
 	return !found, found
 }
 
+// scopedLocals returns, for one file, the byte ranges of each function together
+// with the ActionName-typed names declared inside it.
+type localScope struct {
+	start, end token.Pos
+	names      map[string]bool
+}
+
+func scopedLocals(f *ast.File) []localScope {
+	var out []localScope
+	for _, decl := range f.Decls {
+		fd, ok := decl.(*ast.FuncDecl)
+		if !ok {
+			continue
+		}
+		names := map[string]bool{}
+		collect := func(list *ast.FieldList) {
+			if list == nil {
+				return
+			}
+			for _, fld := range list.List {
+				if typeName(fld.Type) != "ActionName" {
+					continue
+				}
+				for _, nm := range fld.Names {
+					names[nm.Name] = true
+				}
+			}
+		}
+		collect(fd.Recv)
+		if fd.Type != nil {
+			collect(fd.Type.Params)
+			collect(fd.Type.Results)
+		}
+		ast.Inspect(fd, func(n ast.Node) bool {
+			if vs, ok := n.(*ast.ValueSpec); ok && typeName(vs.Type) == "ActionName" {
+				for _, nm := range vs.Names {
+					names[nm.Name] = true
+				}
+			}
+			return true
+		})
+		if len(names) > 0 {
+			out = append(out, localScope{fd.Pos(), fd.End(), names})
+		}
+	}
+	return out
+}
+
 func TestNoActionNameReachesAMessageAsItsPersistedEncoding(t *testing.T) {
 	fset, files := parsedTree(t)
-	fieldDecls, localDecls, valueDecls := bearerNames(files)
+	fieldDecls, _, valueDecls := bearerNames(files)
 	if len(fieldDecls) == 0 || len(valueDecls) == 0 {
 		t.Fatalf("derived %d ActionName fields and %d Action values; with neither, this test checks nothing", len(fieldDecls), len(valueDecls))
 	}
-	fields, locals, values := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	fields, values := map[string]bool{}, map[string]bool{}
 	for _, n := range fieldDecls {
 		fields[n] = true
-	}
-	for _, n := range localDecls {
-		locals[n] = true
 	}
 	for _, n := range valueDecls {
 		values[n] = true
 	}
+	// Package-level constants typed ActionName: unique names, matched anywhere.
+	consts := map[string]bool{}
+	for _, f := range files {
+		for _, decl := range f.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				if vs, ok := spec.(*ast.ValueSpec); ok && typeName(vs.Type) == "ActionName" {
+					for _, nm := range vs.Names {
+						consts[nm.Name] = true
+					}
+				}
+			}
+		}
+	}
 	bad := []string{}
 	for rel, f := range files {
+		scopes := scopedLocals(f)
 		ast.Inspect(f, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
@@ -285,6 +357,17 @@ func TestNoActionNameReachesAMessageAsItsPersistedEncoding(t *testing.T) {
 			}
 			if pkg, ok := sel.X.(*ast.Ident); !ok || pkg.Name != "fmt" {
 				return true
+			}
+			locals := map[string]bool{}
+			for k := range consts {
+				locals[k] = true
+			}
+			for _, sc := range scopes {
+				if call.Pos() >= sc.start && call.Pos() < sc.end {
+					for k := range sc.names {
+						locals[k] = true
+					}
+				}
 			}
 			for _, arg := range call.Args {
 				allowed, relevant := argIsAllowed(arg, fields, locals, values)
@@ -308,25 +391,39 @@ func TestNoActionNameReachesAMessageAsItsPersistedEncoding(t *testing.T) {
 // than quietly widening the set the scan never looks at.
 func TestActionNameSpellingsAreAccountedFor(t *testing.T) {
 	_, files := parsedTree(t)
-	fields, locals, values := bearerNames(files)
+	fields, _, values := bearerNames(files)
+	// The scoped locals are recomputed the way the GATE computes them, not the
+	// way a sibling helper happens to. A tripwire that guards a different
+	// derivation from the one the gate reads guards nothing, which is the
+	// mistake this whole ticket is about, one level up.
+	scoped := map[string]bool{}
+	for _, f := range files {
+		for _, sc := range scopedLocals(f) {
+			for n := range sc.names {
+				scoped[n] = true
+			}
+		}
+	}
+	got := []string{}
+	for n := range scoped {
+		got = append(got, n)
+	}
+	sort.Strings(got)
+
 	// ContainerActionError.Action, and the status and retention writers in the
 	// Dolt store, whose fields are both named `action`.
 	wantFields := []string{"Action", "action"}
-	// The eight action constants, declared `ActionX ActionName = "..."`. They
-	// are matched as bare identifiers because formatting one directly would
-	// print the persisted encoding, which is the defect this gate exists for.
-	wantLocals := []string{
-		"ActionArchive", "ActionClose", "ActionDelete", "ActionDone",
-		"ActionReopen", "ActionRestore", "ActionStart", "ActionUnarchive",
-	}
 	// The parameter every Apply and plan path names its action.
 	wantValues := []string{"Action", "action"}
+	// Verb()'s own receiver: the only ActionName declared inside a function.
+	wantScoped := []string{"n"}
+
 	check := func(what string, got, want []string) {
 		if strings.Join(got, ",") != strings.Join(want, ",") {
 			t.Errorf("%s = %v, want %v -- a surprise here is either a real new spelling to add, or a derivation matching something that is not a declaration; both need reading before this gate can be trusted", what, got, want)
 		}
 	}
 	check("struct fields typed ActionName", fields, wantFields)
-	check("locals/params/consts typed ActionName", locals, wantLocals)
 	check("values typed Action", values, wantValues)
+	check("function-scoped locals typed ActionName", got, wantScoped)
 }
