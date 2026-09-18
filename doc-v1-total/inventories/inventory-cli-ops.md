@@ -102,20 +102,20 @@ Handler `runInit` — `internal/cli/init.go:27`.
 | `--skip-hooks` | `false` | Skip git hook installation | `init.go:36` |
 | `--skip-agents` | `false` | Skip AGENTS.md integration update | `init.go:37` |
 
-Any positional argument → `UsageError{initUsage}`, exit 2 (`init.go:56-59`), where `initUsage` is the single constant (`init.go:161`) `"usage: lit init [--prefix <prefix>] [--skip-hooks] [--skip-agents]"`.
+Any positional argument → `UsageError{initUsage}`, exit 2 (`init.go:56-58`), where `initUsage` is the single constant (`init.go:170`) `"usage: lit init [--prefix <prefix>] [--skip-hooks] [--skip-agents]"`.
 
 `--prefix` is read by the acquisition rather than by the work below. `initLeaf` returns `(wsLeaf, wsAcquire)` and is registered with `wsCmdAcquiring`; the closure calls `workspace.RequestPrefix(*prefix)` only when `fs.Changed("prefix")`, so an untyped flag is the zero request and derivation is untouched, and `--prefix ""` is a `ValidationError` (exit 3) rather than a silent fall back to derivation.
 
 ### 1.2 Sequence
 
-1. **Remote adopt decision runs BEFORE any store is created** — `adoptRemoteTicketsOnInit(ctx, ws)` (`init.go:44`). Comment at `init.go:63-68` states the store must not pre-exist so a clone is the path's first writer.
+1. **Remote adopt decision runs BEFORE any store is created** — `adoptRemoteTicketsOnInit(ctx, ws)` (`init.go:44`). Comment at `init.go:72-77` states the store must not pre-exist so a clone is the path's first writer.
 2. `recordInitSyncTrace(ws, syncOutcome, time.Now())` (`init.go:45`) — always, for every outcome.
-3. If outcome state is `initSyncFailed`, **hard stop with no store created** (`init.go:85-99`): error text
+3. If outcome state is `initSyncFailed`, **hard stop with no store created** (`init.go:94-108`): error text
    `"could not confirm the workspace state, so init is refusing to create a fresh store: <error> (<buildNote>)"` → exit 1.
-4. Otherwise, unless adopted, `store.EnsureDatabase(ctx, ws.DatabasePath, ws.WorkspaceID)`; `dbCreated` is its `created` result (`init.go:106-113`). Adopted ⇒ `dbCreated` stays `true` (`init.go:106`).
-5. Hooks (unless `--skip-hooks`): `installHooks(ws)`; error aborts init (`init.go:127-137`). Report field is `"installed"` when `Changed`, else `"unchanged"`.
-6. Agents (unless `--skip-agents`): `ensureLinksAgentFiles(ws.RootDir)`; error aborts (`init.go:113-134`). Per-file status `"created"` / `"updated"` / `"unchanged"`, plus `AgentsSource` / `ClaudeSource` = the template layer (`project`/`global`/`embedded`).
-7. `buildNote := resolveBuildStatusNote(time.Now())` then `writeInitHumanOutput` (`init.go:143-144`).
+4. Otherwise, unless adopted, `store.EnsureDatabase(ctx, ws.DatabasePath, ws.WorkspaceID)`; `dbCreated` is its `created` result (`init.go:115-122`). Adopted ⇒ `dbCreated` stays `true` (`init.go:115`).
+5. Hooks (unless `--skip-hooks`): `installHooks(ws)`; error aborts init (`init.go:136-146`). Report field is `"installed"` when `Changed`, else `"unchanged"`.
+6. Agents (unless `--skip-agents`): `ensureLinksAgentFiles(ws.RootDir)`; error aborts (`init.go:122-143`). Per-file status `"created"` / `"updated"` / `"unchanged"`, plus `AgentsSource` / `ClaudeSource` = the template layer (`project`/`global`/`embedded`).
+7. `buildNote := resolveBuildStatusNote(time.Now())` then `writeInitHumanOutput` (`init.go:152-153`).
 
 ### 1.3 Adopt decision machine (`internal/cli/init_sync.go`)
 
@@ -145,17 +145,17 @@ Outcome struct fields JSON-tagged `state`, `remote`, `branch`, `error` (`init_sy
 
 `recordInitSyncTrace` (`init_sync.go:333-354`) always writes a sync trace with `Command: "lit init"`, `Decision: <state>`, `Status: "error"` iff state is `failed` else `"ok"`, `Reason: outcome.Error`, `BuildNote`, metadata `{remote, sync_branch}`. Written before `EnsureDatabase`/hooks/agents, so it records only the adopt decision (`init_sync.go:326-329`). A trace write failure goes to stderr, not fatal.
 
-### 1.5 Human output (`writeInitHumanOutput`, `init.go:175-226`)
+### 1.5 Human output (`writeInitHumanOutput`, `init.go:200-262`)
 
-- Line 1: `Initialized lit workspace` when `DBCreated`, else `lit workspace already initialized` (`init.go:195-203`).
-- Line 2, always: `  issue_prefix: <value>` — the prefix the workspace actually stored, which is not always the one `--prefix` was given, because `ConfiguredPrefix` slugifies and truncates at `PrefixMaxLength` (`init.go:228-230`).
+- Line 1: `Initialized lit workspace` when `DBCreated`, else `lit workspace already initialized` (`init.go:204-212`).
+- Line 2, always: `  issue_prefix: <value>` — the prefix the workspace actually stored, which is not always the one `--prefix` was given, because `ConfiguredPrefix` slugifies and truncates at `PrefixMaxLength` (`init.go:237-239`).
 - Line 3 (only when adopted): `  Pulled existing backlog from <remote>/<branch> (<buildNote>)` (`init_sync.go:310-316`). No line for any other state.
 - Then, as applicable:
-  - `  Updated: <entries>` for statuses `created|updated|installed` (`init.go:186-187`, `init.go:207-211`)
-  - `  Up to date: <entries>` for `unchanged` (`init.go:213-216`)
-  - `  Skipped: <entries>` for `skipped` (`init.go:217-221`)
-  - Entry labels: `pre-push hook`, `AGENTS.md`, `CLAUDE.md` (`init.go:205-209`); AGENTS/CLAUDE entries append ` (via project|global|embedded)` (`init.go:182-194`, `init.go:196-202`) — suppressed when status is `skipped` (`init.go:158-160`).
-- Final line, always: `  Guidance: \`lit workflows\` shows the work lifecycle and the guidance active at each point (\`lit workflows edit <id-or-point>\` to customize)` (`init.go:222`).
+  - `  Updated: <entries>` for statuses `created|updated|installed` (`init.go:195-196`, `init.go:216-220`)
+  - `  Up to date: <entries>` for `unchanged` (`init.go:222-225`)
+  - `  Skipped: <entries>` for `skipped` (`init.go:226-230`)
+  - Entry labels: `pre-push hook`, `AGENTS.md`, `CLAUDE.md` (`init.go:214-218`); AGENTS/CLAUDE entries append ` (via project|global|embedded)` (`init.go:191-203`, `init.go:205-211`) — suppressed when status is `skipped` (`init.go:167-169`).
+- Final line, always: `  Guidance: \`lit workflows\` shows the work lifecycle and the guidance active at each point (\`lit workflows edit <id-or-point>\` to customize)` (`init.go:231`).
 
 ### 1.6 `initReport` JSON shape (struct only; no JSON output path in this command)
 
@@ -164,7 +164,7 @@ Outcome struct fields JSON-tagged `state`, `remote`, `branch`, `error` (`init_sy
 ### 1.7 What `lit init` writes to disk
 
 1. `<git-common-dir>/links/` and `config.json` — via `workspace.Resolve` before the handler (`internal/workspace/workspace.go:221-224`).
-2. Dolt store at `ws.DatabasePath` — via `store.EnsureDatabase` (`init.go:83`) or `store.AdoptRemoteByClone` (`init_sync.go:141`).
+2. Dolt store at `ws.DatabasePath` — via `store.EnsureDatabase` (`init.go:92`) or `store.AdoptRemoteByClone` (`init_sync.go:141`).
 3. `<GitCommonDir>/hooks/pre-push` (dir created `0o755`; see §9).
 4. `<RootDir>/AGENTS.md` and `<RootDir>/CLAUDE.md` managed sections (see §10).
 5. A sync trace file under `<StorageDir>/traces/sync/` (see §7.6).
@@ -943,7 +943,7 @@ Hook item (`quickstartHookRefreshItem`, `quickstart_refresh.go:167-178`): status
 JSON report shape (structs only; no JSON output path): `{agents, claude, hooks, quickstart[]}` with items `{name?, path, status, managed, reason?, source?}` (`quickstart_refresh.go:13-27`).
 
 Human summary (`formatQuickstartRefreshSummary`, `quickstart_refresh.go:128-165`): labels `pre-push hook`, `AGENTS.md`, `CLAUDE.md`, then `<template-basename> template` per quickstart item; grouped into
-`  Refreshed: …` (created/updated), `  Skipped: …`, `  Up to date: …`; when all three groups are empty the summary is `  nothing to refresh`. AGENTS/CLAUDE reasons compose with the source: `composeSourceReason` yields `"<reason>, via <source>"` or `"via <source>"`, and nothing when the status is `skipped` (`init.go:157-165`).
+`  Refreshed: …` (created/updated), `  Skipped: …`, `  Up to date: …`; when all three groups are empty the summary is `  nothing to refresh`. AGENTS/CLAUDE reasons compose with the source: `composeSourceReason` yields `"<reason>, via <source>"` or `"via <source>"`, and nothing when the status is `skipped` (`init.go:182-190`).
 
 ### 12.4 `--eject` behavior (`quickstart_eject.go`)
 
@@ -992,7 +992,7 @@ Output lines:
 
 `resolveBuildStalenessLines(now)` — `build_status.go:122-131`: a `version.Get()` failure is announced here rather than swallowed → `build: this binary cannot report its own identity (<err>) — its age and provenance are unknown`, since a binary that cannot account for itself is worse news than the stale one the banner exists to report.
 
-Consumers: `lit init` human output and its adopt progress line (`init.go:143`, `init_sync.go:130`), the init sync trace (`init_sync.go:351`), `lit doctor`'s second output line (`doctor.go:296`), every `SyncFailure.BuildNote` boundary (`sync_failure.go:139`, `sync.go:294`, `sync_receive.go:139`, `doctor.go:82`, `sync_reconcile_cmd.go:467`), and every sync trace record (`sync_trace.go:112`, `:143`, etc.).
+Consumers: `lit init` human output and its adopt progress line (`init.go:152`, `init_sync.go:130`), the init sync trace (`init_sync.go:351`), `lit doctor`'s second output line (`doctor.go:296`), every `SyncFailure.BuildNote` boundary (`sync_failure.go:139`, `sync.go:294`, `sync_receive.go:139`, `doctor.go:82`, `sync_reconcile_cmd.go:467`), and every sync trace record (`sync_trace.go:112`, `:143`, etc.).
 
 ---
 
@@ -1048,7 +1048,7 @@ All eight are also the payload of `lit quickstart --eject`, written to `<config.
 | Unknown flag, missing or invalid flag value | any command | `UsageError`, exit 2 | `flagset.go:142` |
 | `--output` before the command name; `--continue` | any command | `UnsupportedError`, exit 3 | `cli.go:196-201`, `flagset.go:138-141` |
 | Stray positional | `init`, `version`, `hooks install`, `snapshots new`, `lifeboat dump`, `lifeboat recover`, `upgrade`, `downgrade`, `sync reconcile`/`resolve`/`abort`/`combine` | `UsageError`, exit 2 | `init.go:34`, `version.go:22`, `hooks.go:45`, `snapshots.go:87`, `lifeboat.go:163`, `lifeboat.go:81`, `upgrade.go:200`, `downgrade.go:81`, `sync_reconcile_cmd.go:82-87` |
-| Adopt could not confirm workspace state | `init` | refuse to create a store, exit 1 | `init.go:85-99` |
+| Adopt could not confirm workspace state | `init` | refuse to create a store, exit 1 | `init.go:94-108` |
 | Remote-schema-ahead | `sync push/pull/reconcile*`, inline receive, mirror | `SyncFailureError` block, exit 5 (mirror: stderr only) | `sync.go:246`, `sync.go:389`, `sync_reconcile_cmd.go:120`, `sync_receive.go:147`, `sync_bg.go:329` |
 | Held prose conflict | `sync pull` | `SyncFailureError`, exit 5 | `sync.go:260-267` |
 | Held prose conflict | `sync reconcile`/`resolve`/`combine` | guidance printed + `MergeConflictError`, exit 5 | `sync_reconcile_cmd.go:474-509` |

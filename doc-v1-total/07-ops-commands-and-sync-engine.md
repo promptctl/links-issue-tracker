@@ -40,18 +40,18 @@ Durations in every banner and age line render coarsely: ≥48h → "N days", ≥
 
 ## `lit init`
 
-Flags: `--prefix` (issue ID prefix for a new workspace; default derived from the repository name), `--skip-hooks` (skip git hook installation), `--skip-agents` (skip AGENTS.md/CLAUDE.md update); any positional is a usage error, exit 2 (`init.go:36-38`, `:57-59`).
+Flags: `--prefix` (issue ID prefix for a new workspace; default derived from the repository name), `--skip-hooks` (skip git hook installation), `--skip-agents` (skip AGENTS.md/CLAUDE.md update); any positional is a usage error, exit 2 (`init.go:36-38`, `:56-58`).
 
 `--prefix` is consumed by the workspace ACQUISITION, not by the sequence below: `initLeaf` returns its leaf together with a `wsAcquire` closure over the same parsed flag, and `wsCmdAcquiring` runs that closure in the pipeline's acquire step. An absent flag is the zero `workspace.PrefixRequest` and derivation runs unchanged; a flag the caller typed is minted through `workspace.RequestPrefix` and an unusable value is a `ValidationError`, exit 3.
 
-Sequence (`init.go:34-158`):
+Sequence (`init.go:34-167`):
 
-1. **Remote adopt runs before any store exists** — so a clone of a remote backlog is the path's first writer (`init.go:61-67`).
+1. **Remote adopt runs before any store exists** — so a clone of a remote backlog is the path's first writer (`init.go:70-76`).
 2. A sync trace is recorded for the adopt decision, always, whatever the outcome (`init_sync.go:333-354`): command `lit init`, decision = the outcome state, status `error` iff failed, plus the build note and `{remote, sync_branch}` metadata. A trace-write failure goes to stderr, non-fatal.
-3. If the adopt outcome is `failed`, init hard-stops with **no store created**: "could not confirm the workspace state, so init is refusing to create a fresh store: <error>", exit 1 (`init.go:83-97`).
-4. Otherwise, unless a remote backlog was adopted, `store.EnsureDatabase` creates the Dolt store (`init.go:106-113`).
-5. Hooks (unless skipped): install the managed `pre-push` hook; an error aborts init (`init.go:125-135`).
-6. Agents (unless skipped): write the managed sections of `AGENTS.md` and `CLAUDE.md`; an error aborts. Each file reports `created`/`updated`/`unchanged` plus which template layer supplied the section (`project`/`global`/`embedded`) (`init.go:137-146`).
+3. If the adopt outcome is `failed`, init hard-stops with **no store created**: "could not confirm the workspace state, so init is refusing to create a fresh store: <error>", exit 1 (`init.go:92-106`).
+4. Otherwise, unless a remote backlog was adopted, `store.EnsureDatabase` creates the Dolt store (`init.go:115-122`).
+5. Hooks (unless skipped): install the managed `pre-push` hook; an error aborts init (`init.go:134-144`).
+6. Agents (unless skipped): write the managed sections of `AGENTS.md` and `CLAUDE.md`; an error aborts. Each file reports `created`/`updated`/`unchanged` plus which template layer supplied the section (`project`/`global`/`embedded`) (`init.go:146-155`).
 
 ### The adopt decision machine
 
@@ -61,7 +61,7 @@ Planning order (`init_sync.go:179-261`): pending-adopt residue check (residue co
 
 ### Output and disk footprint
 
-Human output (`init.go:175-226`): `Initialized lit workspace` (or `lit workspace already initialized`); then always `  issue_prefix: <value>`, the prefix actually stored rather than the one requested; when adopted, `  Pulled existing backlog from <remote>/<branch> (<build note>)`; then `Updated:` / `Up to date:` / `Skipped:` lines over the entries `pre-push hook`, `AGENTS.md`, `CLAUDE.md` (the latter two annotated `via project|global|embedded`); and always a final guidance line pointing at `lit workflows`.
+Human output (`init.go:200-262`): `Initialized lit workspace` (or `lit workspace already initialized`); then always `  issue_prefix: <value>`, the prefix actually stored rather than the one requested; when adopted, `  Pulled existing backlog from <remote>/<branch> (<build note>)`; then `Updated:` / `Up to date:` / `Skipped:` lines over the entries `pre-push hook`, `AGENTS.md`, `CLAUDE.md` (the latter two annotated `via project|global|embedded`); and always a final guidance line pointing at `lit workflows`.
 
 What init writes to disk (`init.go` §1.7): the `links/` storage dir + `config.json` (via workspace resolution, before the handler), the Dolt store, `<git-common-dir>/hooks/pre-push`, the two managed markdown sections, and a sync trace under `<StorageDir>/traces/sync/`. Init sets **no** git config keys. (An `initReport` JSON struct exists — `status`, `workspace_id`, `issue_prefix`, `database_path`, `db_created`, `hooks`, `agents`, `claude`, `agents_source?`, `claude_source?`, `sync` — but no JSON output path renders it; `init.go:14-26`.)
 
