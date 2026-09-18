@@ -176,9 +176,17 @@ func parseFlagSet(fs *cobraFlagSet, args []string, stdout io.Writer) error {
 // arity. splitArgs used to re-derive it from "the next token has no leading
 // dash", which is a statement about the ARGUMENT and not about the FLAG, and it
 // was wrong in both directions: it fed a boolean the positional that followed it
-// (`lit children --include-archived <id>` lost the id), and it fed an
-// optional-value flag a value pflag accepts only as `--flag=value`, so the token
-// arrived where nothing expected it.
+// (`lit prefix set --apply <prefix>` lost the prefix and refused itself as
+// malformed), and it fed an optional-value flag a value pflag accepts only as
+// `--flag=value`, so the token arrived where nothing expected it.
+//
+// `lit children --include-archived <id>` is NOT an instance, though an earlier
+// draft of this comment and of the changelog both said it was. The mis-split
+// happened there too, but the listing surface declared zero positionals and read
+// its id back out of pflag's leftovers precisely to survive it, so the caller
+// always got the right answer. Checked against the master binary, which prints
+// the child. The surface stops needing that workaround now; it was never a bug
+// the caller could see.
 //
 // It does NOT by itself fix `lit quickstart --eject all`. pflag's rule for an
 // optional-value flag is the equals sign, so `all` is the topic no matter how

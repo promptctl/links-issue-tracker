@@ -210,13 +210,14 @@ func snapshotsListLeaf() wsLeaf {
 
 func snapshotsRestoreLeaf() wsLeaf {
 	fs := newCobraFlagSet("snapshots restore")
-	return wsLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+	const usage = "usage: lit snapshots restore <name>"
+	return wsLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
 		if len(positional) != 1 {
-			return UsageError{Message: "usage: lit snapshots restore <name>"}
+			return UsageError{Message: usage}
 		}
 		name := strings.TrimSpace(positional[0])
 		if name == "" {
-			return UsageError{Message: "usage: lit snapshots restore <name>"}
+			return UsageError{Message: usage}
 		}
 		// [LAW:single-enforcer] Exclusive workspace lock owns reader-vs-restore
 		// exclusion; commit lock (held inside withCommitLock below) owns

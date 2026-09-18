@@ -280,7 +280,7 @@ type leaf[R any] struct {
 // shape as the thirty hand-written arity guards this ticket removed, and it
 // failed the same way: the copies nobody updated are the bug. This does not make
 // a dropped field a compile error — a field added to leaf and not added here
-// would still vanish — so TestAdaptersCarryTheWholeDeclaration pins it from the
+// would still vanish — so TestAdaptLeafCarriesTheWholeDeclaration pins it from the
 // outside. What it does buy is that there is now ONE place to update instead of
 // three to remember. [LAW:one-source-of-truth] [LAW:single-enforcer]
 func adaptLeaf[R, S any](from leaf[R], work func(ctx context.Context, stdout io.Writer, res S, positional []string) error) leaf[S] {
@@ -393,6 +393,12 @@ const maxNamedFlagsInUsage = 4
 // cannot claim a limit the parser does not keep. [LAW:one-source-of-truth]
 func positionalAllowance(count int) string {
 	switch {
+	case count == allPositionals:
+		// The sentinel is a ceiling, not a capacity, and rendering it as a
+		// number offered the caller 9223372036854775807 arguments. Reachable:
+		// a bare "-" goes to the flag stream, pflag keeps it as a leftover, and
+		// the refusal renders the declaration. [LAW:no-silent-failure]
+		return "takes any number of positional arguments"
 	case count == 0:
 		return "takes no positional arguments"
 	case count == 1:

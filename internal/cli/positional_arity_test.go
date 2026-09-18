@@ -6,10 +6,9 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
-
-	"github.com/spf13/pflag"
 )
 
 // unboundedArityCommands are the invocations that legitimately take any number
@@ -294,21 +293,46 @@ func TestAdaptedCommandsKeepTheirUsageSentence(t *testing.T) {
 // new arity refusal would reject a correct command line. This fails then, at the
 // flag declaration, instead of at a user's terminal.
 // [LAW:no-silent-failure] the assumption is a test, not a comment.
+// TestNoValueTakingShorthandExists guards flagTakesValue's cluster assumption:
+// it looks a two-character token up as a shorthand and treats anything longer
+// ("-abc") as consuming nothing, which is only safe while there is no shorthand
+// to cluster.
+//
+// The first version of this test built a FRESH cobraFlagSet per path and walked
+// that, so it saw only cobra's auto-added help flag — which its own filter then
+// skipped. It inspected zero real flags across all 83 paths and passed in 0.00s
+// no matter what any leaf declared. It reads the shipped flag set now, through
+// the same --help block the caller is shown, and refuses to pass having looked
+// at nothing. [LAW:verifiable-goals]
 func TestNoValueTakingShorthandExists(t *testing.T) {
 	t.Parallel()
+	// Cobra renders a shorthand as "  -f, --field string".
+	shorthand := regexp.MustCompile(`(?m)^\s+-([A-Za-z]), --([A-Za-z][A-Za-z0-9-]*)`)
+	inspected := 0
 	for _, cp := range leafPaths(t) {
 		name := strings.Join(cp.path, " ")
-		fs := newCobraFlagSet(name)
-		var offenders []string
-		fs.cmd.Flags().VisitAll(func(f *pflag.Flag) {
-			if f.Shorthand != "" && f.Name != "help" && takesValue(f) {
-				offenders = append(offenders, "-"+f.Shorthand+"/--"+f.Name)
+		var out bytes.Buffer
+		_ = Run(context.Background(), &out, &out, append(append([]string{}, cp.path...), "--help"))
+		rendered := out.String()
+		if !strings.Contains(rendered, "--help") {
+			// No flag block to read: a family bare form answers with its
+			// subcommands. Not an offender, but not evidence either.
+			continue
+		}
+		inspected++
+		for _, m := range shorthand.FindAllStringSubmatch(rendered, -1) {
+			if m[2] == "help" {
+				// Cobra's own -h: a boolean, so it consumes nothing and cannot
+				// make a cluster ambiguous.
+				continue
 			}
-		})
-		if len(offenders) > 0 {
-			t.Errorf("lit %s declares value-taking shorthand(s) %v; teach flagTakesValue to decompose clusters before adding one", name, offenders)
+			t.Errorf("lit %s declares shorthand -%s/--%s; teach flagTakesValue to decompose clusters before adding one", name, m[1], m[2])
 		}
 	}
+	if inspected == 0 {
+		t.Fatal("no flag block was inspected; this test is vacuous again, which is exactly how it shipped the first time")
+	}
+	t.Logf("inspected %d rendered flag blocks", inspected)
 }
 
 // Everything after a POSIX `--` is a positional, whatever it looks like.

@@ -165,10 +165,11 @@ func syncReconcileTakeLeaf() syncLeaf {
 	ownerApproved := fs.String("owner-approved", "", "Owner-issued approval token for this exact divergence and side (printed by the refusal this command gives without it)")
 	// The side is a declared positional, so the count travels with the leaf and
 	// parseLeaf refuses a second one. [LAW:one-source-of-truth]
-	return syncLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, scope syncScope, positional []string) error {
+	const usage = "sync reconcile take needs exactly one side: 'local' (keep your backlog) or 'remote' (adopt theirs)"
+	return syncLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, scope syncScope, positional []string) error {
 		ws, session := scope.ws, scope.session
 		if len(positional) != 1 {
-			return UsageError{Message: "sync reconcile take needs exactly one side: 'local' (keep your backlog) or 'remote' (adopt theirs)"}
+			return UsageError{Message: usage}
 		}
 		choice, err := parseUnrelatedSide(positional[0])
 		if err != nil {

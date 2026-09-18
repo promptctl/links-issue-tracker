@@ -398,6 +398,15 @@ type listSurface struct {
 	positionals []string
 }
 
+// usageLine names what this surface takes, in the surface's own words. Both the
+// too-few refusal in listPositionals and the surplus refusal parseLeaf raises
+// read it, so one command cannot describe itself two ways — which it did: give
+// `children` no id and it said `<parent-id>`, give it two and it said "takes 1
+// positional argument". [LAW:one-source-of-truth]
+func (s listSurface) usageLine() string {
+	return strings.Join(append([]string{"usage: lit", s.name}, s.positionals...), " ") + " [flags]"
+}
+
 var (
 	lsSurface       = listSurface{name: "ls"}
 	childrenSurface = listSurface{name: "children", positionals: []string{"<parent-id>"}}
@@ -464,10 +473,11 @@ func runList(ctx context.Context, stdout io.Writer, surface listSurface, args []
 }
 
 // listPositionals trims a listing's positionals and refuses a count the surface
-// does not take. It reads the leaf's DECLARED positionals now: splitArgs no
-// longer guesses at flag arity, so `lit children --include-archived <id>` keeps
-// its id instead of feeding it to the boolean, and the second channel this
-// function used to read is gone.
+// does not take. It reads the leaf's DECLARED positionals now: splitArgs asks
+// the flag set instead of guessing, so `lit children --include-archived <id>`
+// reaches the declared channel directly and the leftover channel this function
+// used to read is gone. The caller sees no change -- reading the leftovers is
+// how that id arrived correctly before, not a bug being fixed.
 //
 // Too many ids is refused like too few — a silently ignored parent would list
 // the wrong set with exit 0 — and parseLeaf already refuses the extra token for
@@ -481,8 +491,7 @@ func listPositionals(raw []string, surface listSurface) ([]string, error) {
 		positional[i] = strings.TrimSpace(arg)
 	}
 	if len(positional) != len(surface.positionals) || slices.Contains(positional, "") {
-		usage := strings.Join(append([]string{"usage: lit", surface.name}, surface.positionals...), " ")
-		return nil, UsageError{Message: fmt.Sprintf("%s [flags]  (got %d positional arguments: %q)", usage, len(raw), raw)}
+		return nil, UsageError{Message: fmt.Sprintf("%s  (got %d positional arguments: %q)", surface.usageLine(), len(raw), raw)}
 	}
 	return positional, nil
 }
@@ -538,7 +547,14 @@ func listLeaf(surface listSurface) (leaf[listScope], *string) {
 	// the flag set instead of guessing, so the declared channel is trustworthy
 	// and the leftover channel is no longer needed here.
 	// [LAW:one-source-of-truth] one positional channel, not two.
-	return leaf[listScope]{fs: fs, positionals: len(surface.positionals), work: func(ctx context.Context, stdout io.Writer, scope listScope, positional []string) error {
+	// A surface that takes positionals names them; one that does not (`ls`)
+	// leaves usage empty and takes the derived sentence, which names its
+	// value-taking flags — strictly more than "usage: lit ls [flags]" says.
+	usage := ""
+	if len(surface.positionals) > 0 {
+		usage = surface.usageLine()
+	}
+	return leaf[listScope]{fs: fs, positionals: len(surface.positionals), usage: usage, work: func(ctx context.Context, stdout io.Writer, scope listScope, positional []string) error {
 		st, policy := scope.store, scope.policy
 		// Parsed before the query runs and before anything prints: a rejection that
 		// had already emitted rows would be a partial answer, which is the silent
@@ -1007,9 +1023,10 @@ func printOrphanedText(w io.Writer, rows []annotation.AnnotatedIssue) error {
 func showLeaf() appLeaf {
 	fs := newCobraFlagSet("show")
 	fieldsExpr := fs.String("field", "", "Comma-separated field names (e.g. description) to print with no surrounding context; omit for the full detail view")
-	return appLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	const usage = "usage: lit show <id> [--field <name>[,<name>...]]"
+	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
-			return UsageError{Message: "usage: lit show <id> [--field <name>[,<name>...]]"}
+			return UsageError{Message: usage}
 		}
 		// links-sync-pgct.2: `lit show` is named explicitly as one of the ordinary
 		// read commands unpushed/unfetched drift must surface on — but only ahead
@@ -1057,9 +1074,10 @@ func showLeaf() appLeaf {
 // and one formatter (printHistoryEvents). [LAW:one-source-of-truth]
 func historyLeaf() appLeaf {
 	fs := newCobraFlagSet("history")
-	return appLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	const usage = "usage: lit history <id>"
+	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
-			return UsageError{Message: "usage: lit history <id>"}
+			return UsageError{Message: usage}
 		}
 		detail, err := ap.Store.GetIssueDetail(ctx, positional[0])
 		if err != nil {
@@ -1706,9 +1724,10 @@ func commentAddLeaf() appLeaf {
 	fs := newCobraFlagSet("comment add")
 	body := fs.String("body", "", "Comment body")
 	resolveActor := registerActor(fs)
-	return appLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	const usage = "usage: lit comment add <id> --body <text>"
+	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
-			return UsageError{Message: "usage: lit comment add <id> --body <text>"}
+			return UsageError{Message: usage}
 		}
 		// [LAW:single-enforcer] A comment is a recorded event; its author resolves
 		// through the same identity rule as every other actor.
@@ -1725,9 +1744,10 @@ func commentAddLeaf() appLeaf {
 
 func commentRmLeaf() appLeaf {
 	fs := newCobraFlagSet("comment rm")
-	return appLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	const usage = "usage: lit comment rm <comment-id>"
+	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
-			return UsageError{Message: "usage: lit comment rm <comment-id>"}
+			return UsageError{Message: usage}
 		}
 		comment, err := ap.Store.DeleteComment(ctx, positional[0])
 		if err != nil {

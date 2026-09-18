@@ -94,7 +94,10 @@ func downgradeLeafWith(
 ) downgradeLeafShape {
 	fs := newCobraFlagSet("downgrade")
 	to := fs.String("to", "", "Target binary version (v-prefixed git tag, e.g. v0.4.1)")
-	return downgradeLeafShape{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, store schemaDowngrader, _ []string) error {
+	// --to is required, not optional, and the derived sentence cannot say so:
+	// "values are passed as flags: --to" reads exactly like a flag you may omit.
+	// Requiredness is the leaf's own knowledge. [LAW:one-source-of-truth]
+	return downgradeLeafShape{fs: fs, positionals: 0, usage: "usage: lit downgrade --to <version>", work: func(ctx context.Context, stdout io.Writer, store schemaDowngrader, _ []string) error {
 		tag, err := normalizeReleaseTag(*to, "downgrade")
 		if err != nil {
 			return err
