@@ -364,13 +364,11 @@ func TestTerminatorMakesEverythingAfterItPositional(t *testing.T) {
 	}
 }
 
-// TestTerminatorIsNeverConsumedAsAFlagValue pins a line that used to RUN.
-// `lit label add --by -- <id> <label>` applied the label with --by set to the
-// literal "--": splitArgs withheld "--" from the value slot because it leads
-// with a dash, then emitted it into the flag stream anyway, where pflag consumes
-// whatever follows a value-required flag unconditionally. The real trailing
-// tokens had already been routed to positionals, so parseLeaf saw no leftover
-// and nothing refused the malformed line. The terminator is structure, not data.
+// TestTerminatorIsNeverConsumedAsAFlagValue pins a line that RAN ON MASTER:
+// `lit new --title -- --topic topics` created an issue titled "--", because
+// pflag consumes whatever follows a value-required flag unconditionally and the
+// terminator was in the stream to be consumed. The terminator is structure, not
+// data, so it never occupies a value position.
 func TestTerminatorIsNeverConsumedAsAFlagValue(t *testing.T) {
 	t.Parallel()
 	fs := newCobraFlagSet("probe")
@@ -385,6 +383,21 @@ func TestTerminatorIsNeverConsumedAsAFlagValue(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "by") {
 		t.Errorf("error = %q, want it to name the flag that is missing its argument", err)
+	}
+
+	// The same intent ONE TOKEN WIDER. The first version of this test stopped at
+	// the shape above, and the fix it pinned stopped there too: tokens past the
+	// declared ceiling were still emitted behind the dangling flag, where pflag
+	// took the first as its value. `lit comment add --body -- <id> hello` wrote
+	// a comment bodied "hello" — a guard failing open into a write.
+	fsOverflow := newCobraFlagSet("probe")
+	body := fsOverflow.String("body", "", "body")
+	_, err = parseLeaf(leaf[struct{}]{fs: fsOverflow, positionals: 1}, []string{"--body", "--", "id1", "hello"}, io.Discard)
+	if err == nil {
+		t.Fatalf("parseLeaf(--body -- id1 hello) succeeded with --body = %q; the token past the ceiling was fed to the dangling flag", *body)
+	}
+	if *body == "hello" {
+		t.Errorf("--body = %q; a post-terminator positional became the flag's value", *body)
 	}
 
 	// Control, so the fix cannot be "refuse every terminator after a flag": a

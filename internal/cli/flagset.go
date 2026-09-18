@@ -287,12 +287,10 @@ func splitArgs(args []string, positionalCount int, fs *cobraFlagSet) ([]string, 
 	// A value-taking flag whose value was not consumed leaves the flag stream
 	// expecting one, and the terminator is structure rather than data — so it
 	// must never land in that position. pflag consumes whatever follows such a
-	// flag unconditionally, dash or not, so emitting "--" there set the flag to
-	// the literal "--" and, because this branch had already routed the real
-	// trailing tokens into positionals, parseLeaf saw no leftover and the
-	// malformed line ran to completion: `lit label add --by -- <id> <label>`
-	// applied the label. Withholding the terminator lets pflag raise "flag needs
-	// an argument", which names the flag. [LAW:no-silent-failure]
+	// flag unconditionally, dash or not, so a terminator left in the stream is
+	// taken as the value: on master `lit new --title -- --topic topics` created
+	// an issue titled "--". Withholding it lets pflag raise "flag needs an
+	// argument", which names the flag. [LAW:no-silent-failure]
 	awaitingValue := false
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
@@ -304,9 +302,23 @@ func splitArgs(args []string, positionalCount int, fs *cobraFlagSet) ([]string, 
 			// ahead of the positionals — harmless while nothing checked the
 			// count, and, once parseLeaf did, a refusal of a command line the
 			// caller had written correctly. [LAW:no-silent-failure]
-			if !awaitingValue {
-				flags = append(flags, arg)
+			if awaitingValue {
+				// The flag before the terminator never got its value, so the
+				// line is malformed AT THAT FLAG and nothing after it can be
+				// classified meaningfully. Handing pflag the dangling flag by
+				// itself makes it say so and name it. Emitting anything more —
+				// the terminator, or the tokens past the ceiling that would sit
+				// behind it — only gives pflag something to swallow as the
+				// value instead. The first draft of this guard withheld only the
+				// terminator and still emitted the overflow, so
+				// `lit comment add --body -- <id> hello` wrote a comment bodied
+				// "hello" — a guard failing open into a write. That shape was
+				// never released; it is recorded because the narrow fix looked
+				// complete and the test pinned exactly the case it handled.
+				// [LAW:no-silent-failure]
+				return positionals, flags
 			}
+			flags = append(flags, arg)
 			for _, rest := range args[index+1:] {
 				if len(positionals) < positionalCount {
 					positionals = append(positionals, rest)
