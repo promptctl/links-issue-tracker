@@ -132,14 +132,20 @@ into* one of those, the call and its observable effect are recorded here.
 
 ### 1.7 Positional/flag splitting (`splitArgs`)
 
-`splitArgs(args, positionalCount)` (`cli.go:1958-1978`):
-- Any token starting with `-` goes to the flag slice; if it contains no `=` and
-  the *next* token does not start with `-`, that next token is consumed as its
-  value (`cli.go:1963-1969`).
+`splitArgs(args []string, positionalCount int, fs *cobraFlagSet)`
+(`flagset.go:279-342`):
+- Any token starting with `-` goes to the flag slice; it consumes the *next*
+  token as its value only when the flag set says that flag takes one —
+  `flagTakesValue` (`flagset.go:201`) resolves the token against the command's
+  flags and applies `takesValue` (`flagset.go:239`), which is pflag's own rule:
+  an empty `NoOptDefVal` means the flag consumes the following token whatever
+  that token looks like.
+- A `--` terminator ends flag scanning: every token after it is a positional
+  whatever it looks like, up to `positionalCount`; tokens past that ceiling stay
+  in the flag stream and are refused as surplus.
 - The first `positionalCount` non-flag tokens become positionals; any extra
-  non-flag tokens are appended to the **flag** slice (`cli.go:1971-1975`), where
-  they surface as `fs.NArg() > 0` if the command checks it.
-- Known consequence: a boolean flag written as `--flag value` swallows `value`.
+  non-flag tokens are appended to the **flag** slice, where
+  `refuseSurplusPositionals` (`register.go:337`) refuses them.
 
 ### 1.8 Exit-code taxonomy
 
