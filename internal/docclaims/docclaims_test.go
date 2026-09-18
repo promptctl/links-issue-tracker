@@ -166,12 +166,21 @@ func TestShippedTextReadsProductCodeAndItsEmbeddedAssets(t *testing.T) {
 		// A satisfiable constraint stays in: the text reaching a user is the
 		// union over the platforms lit ships on, not whichever one runs this.
 		"internal/cli/plat_darwin.go": {Data: []byte("//go:build darwin\n\npackage cli\nvar M = \"platform variant message\"\n")},
+		// A NEGATED constraint is the shape that reads backwards when the
+		// expression is evaluated once with every tag true. This is
+		// internal/cli/detach_posix.go's spelling, and that file is in every
+		// macOS and Linux lit; excluding it drops shipped text from the corpus
+		// while the windows-only variant, which no lit here contains, stays.
+		"internal/cli/plat_posix.go": {Data: []byte("//go:build !windows\n\npackage cli\nvar N = \"posix variant message\"\n")},
 	}
 	corpus, err := ShippedText(fsys)
 	if err != nil {
 		t.Fatalf("ShippedText: %v", err)
 	}
-	for _, want := range []string{"shipped message here", "vendored linked message", "platform variant message"} {
+	for _, want := range []string{
+		"shipped message here", "vendored linked message",
+		"platform variant message", "posix variant message",
+	} {
 		if _, ok := corpus[want]; !ok {
 			t.Errorf("%q ships and was not collected", want)
 		}
@@ -196,6 +205,35 @@ func TestShippedTextReadsProductCodeAndItsEmbeddedAssets(t *testing.T) {
 	} {
 		if _, ok := corpus[absent]; ok {
 			t.Errorf("%q counted as shipped; nothing links it", absent)
+		}
+	}
+}
+
+// TestOnlyAnUnsatisfiableConstraintExcludesAFile pins the predicate itself,
+// because the corpus test can only show the cases its fixture happens to carry.
+// Evaluating a constraint under one assignment — every tag but `ignore` true —
+// passes the two `ignore` spellings and inverts every negation, which is the
+// whole of what four review rounds walked past.
+func TestOnlyAnUnsatisfiableConstraintExcludesAFile(t *testing.T) {
+	for _, tc := range []struct {
+		line    string
+		blocked bool
+		why     string
+	}{
+		{"//go:build ignore", true, "the bare marker no build sets"},
+		{"//go:build ignore && linux", true, "AND with a real tag is still unsatisfiable"},
+		{"// +build ignore,linux", true, "the legacy comma spelling means AND"},
+		{"//go:build linux && !linux", true, "unsatisfiable without naming ignore at all"},
+		{"//go:build !windows", false, "detach_posix.go: in every macOS and Linux lit"},
+		{"//go:build !darwin && !linux", false, "clone_other.go: satisfiable elsewhere"},
+		{"//go:build windows", false, "a platform variant, collected with its siblings"},
+		{"//go:build linux", false, "likewise"},
+		{"//go:build !ignore", false, "every build satisfies this"},
+		{"//go:build (linux && !windows) || (windows && !linux)", false,
+			"satisfiable only at a point no fixed sample visits"},
+	} {
+		if got := neverBuilt(tc.line); got != tc.blocked {
+			t.Errorf("neverBuilt(%q) = %v, want %v — %s", tc.line, got, tc.blocked, tc.why)
 		}
 	}
 }

@@ -394,14 +394,15 @@ func eachProductFile(fsys fs.FS, dir string, fn func(name string, src []byte) er
 	return nil
 }
 
-// excludedFromEveryBuild reports whether a file carries the "ignore" build
-// constraint, which no ordinary build ever satisfies — the conventional marker
-// for a generator run by hand with `go run`. Following its imports would pull
-// packages nothing links into the corpus, and collecting its literals would
-// count text no user can reach.
+// excludedFromEveryBuild reports whether a file's build constraints are
+// satisfied by no build at all — in practice the `ignore` tag, the conventional
+// marker for a generator run by hand with `go run`. Following such a file's
+// imports would pull packages nothing links into the corpus, and collecting its
+// literals would count text no user can reach.
 //
-// This is the one constraint evaluated here, and the limit is deliberate rather
-// than overlooked. GOOS-suffixed files and tagged variants are all collected
+// Only unsatisfiability excludes a file here, and the limit is deliberate
+// rather than overlooked. GOOS-suffixed files and tagged variants are all
+// collected
 // together — internal/dbsnapshot/clone_linux.go, clone_darwin.go and
 // clone_other.go at once — because "the text that reaches a user" is the union
 // over the platforms lit ships on, not whichever one this test happens to run
@@ -420,42 +421,113 @@ func excludedFromEveryBuild(file *ast.File) bool {
 			if c.Pos() > file.Package {
 				return legacy
 			}
-			// constraint.Parse decides what a constraint line is; only the
-			// `ignore` tag is evaluated here, and deliberately so — see above.
+			// constraint.Parse decides what a constraint line is, and
+			// neverBuilt decides whether anything satisfies it.
 			// [LAW:one-source-of-truth] the go tool's own parser rather than a
 			// second reading of its syntax.
 			switch {
 			case constraint.IsGoBuild(c.Text):
-				return blockedByIgnore(c.Text)
+				return neverBuilt(c.Text)
 			case constraint.IsPlusBuild(c.Text):
 				// Legacy lines are AND-ed, so one unsatisfiable line excludes
 				// the file however the others read.
-				legacy = legacy || blockedByIgnore(c.Text)
+				legacy = legacy || neverBuilt(c.Text)
 			}
 		}
 	}
 	return legacy
 }
 
-// blockedByIgnore reports whether a constraint line is unsatisfiable for the
-// sole reason that it demands the `ignore` tag, which no build sets.
+// maxFreeTags bounds the assignment search in neverBuilt. A build constraint
+// names a handful of tags; this is room to spare, and crossing it means the
+// line is not a constraint anyone wrote by hand.
+const maxFreeTags = 16
+
+// neverBuilt reports whether a constraint line excludes its file from every
+// build there is — that no assignment of build tags satisfies it.
 //
-// The expression is evaluated with every other tag true, rather than compared
-// against the string "ignore". Comparing strings recognises only the bare
-// spelling: `// +build ignore,linux` parses to `ignore && linux`, is never
-// built by anything, and would have been read as product code — its imports
-// followed and its literals collected, which is the leak class this package
-// spent two attempts closing. Evaluating also keeps the deliberate inclusion of
-// platform variants: `//go:build linux` is satisfiable, so clone_linux.go and
-// clone_darwin.go are both read, because the text reaching a user is the union
-// over the platforms lit ships on. [LAW:one-source-of-truth] the constraint
-// language's own evaluator decides what a constraint means.
-func blockedByIgnore(line string) bool {
+// Satisfiability is the question, so the answer is a search over assignments
+// rather than a reading of one. Evaluating the expression a single time with
+// every tag but `ignore` set true answers a different question, and gets
+// negation exactly backwards: `//go:build !windows` comes out false under that
+// one assignment and its file reads as excluded. That file is
+// internal/cli/detach_posix.go — the one compiled into every macOS and Linux
+// lit — dropping out of the corpus, while detach_windows.go, which no lit a
+// user runs here contains, stays in. Sampling a second assignment repairs those
+// two spellings and still mis-reads a formula satisfiable only at a point
+// neither sample visits, such as `(linux && !windows) || (windows && !linux)`.
+// Enumerating is not a third sample; it is the predicate itself.
+//
+// `ignore` is pinned false because it is the tag no ordinary build sets — the
+// conventional marker for a generator run by hand with `go run`. Every other
+// tag is free, which is what makes `//go:build linux` satisfiable and keeps
+// clone_linux.go and clone_darwin.go both in: the text reaching a user is the
+// union over the platforms lit ships on, not whichever one this test runs on.
+// [LAW:one-source-of-truth] the constraint language's own evaluator decides
+// what a constraint means, and its tags are the whole of what a build can vary.
+func neverBuilt(line string) bool {
 	expr, err := constraint.Parse(line)
 	if err != nil {
 		return false
 	}
-	return !expr.Eval(func(tag string) bool { return tag != "ignore" })
+	free, walked := freeTags(expr)
+	// An expression shape the walk does not know, or more tags than any
+	// hand-written constraint carries, leaves the assignments unenumerable.
+	// Keeping the file is the one direction that cannot blind the gate: its
+	// text stays in the corpus and a chapter can still anchor to it.
+	// [LAW:no-silent-failure] the bias is stated here, not discovered later as
+	// a chapter that lost its evidence.
+	if !walked || len(free) > maxFreeTags {
+		return false
+	}
+	for mask := 0; mask < 1<<len(free); mask++ {
+		satisfied := expr.Eval(func(tag string) bool {
+			for i, name := range free {
+				if name == tag {
+					return mask&(1<<i) != 0
+				}
+			}
+			// Only `ignore` reaches here: freeTags saw every tag in the
+			// expression, or reported that it could not.
+			return false
+		})
+		if satisfied {
+			return false
+		}
+	}
+	return true
+}
+
+// freeTags lists the tags a build could set to satisfy expr: every tag the
+// expression names except `ignore`, which no build sets.
+//
+// The second result is false when the walk met an expression shape it does not
+// know. That matters more than it looks: a tag missed here is an assignment
+// never tried, and an assignment never tried reads as unsatisfiable, which
+// would drop a file the build does compile. The caller keeps such a file rather
+// than trusting a partial walk.
+func freeTags(expr constraint.Expr) ([]string, bool) {
+	var free []string
+	seen := map[string]bool{"ignore": true}
+	var walk func(constraint.Expr) bool
+	walk = func(e constraint.Expr) bool {
+		switch t := e.(type) {
+		case *constraint.TagExpr:
+			if !seen[t.Tag] {
+				seen[t.Tag] = true
+				free = append(free, t.Tag)
+			}
+			return true
+		case *constraint.NotExpr:
+			return walk(t.X)
+		case *constraint.AndExpr:
+			return walk(t.X) && walk(t.Y)
+		case *constraint.OrExpr:
+			return walk(t.X) && walk(t.Y)
+		}
+		return false
+	}
+	return free, walk(expr)
 }
 
 // isProductGo reports whether a file is Go source the product build compiles.
