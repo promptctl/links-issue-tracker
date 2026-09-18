@@ -43,7 +43,11 @@ func prefixSetLeaf() wsLeaf {
 		// mints a valid prefix; the CLI never normalizes on its own.
 		spec, err := workspace.ConfiguredPrefix(requested)
 		if err != nil {
-			return fmt.Errorf("invalid prefix %q: %w", requested, err)
+			// Typed for the same reason the init path is: a prefix the rules refuse
+			// is refused identically on every rerun, so it must not reach the
+			// default's retry-then-doctor advice. Untyped, the two sibling commands
+			// classified this one condition two different ways. [LAW:no-silent-failure]
+			return ValidationError{Message: fmt.Sprintf("invalid prefix %q: %v", requested, err)}
 		}
 		normalized := spec.Value()
 

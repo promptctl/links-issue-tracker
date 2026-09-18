@@ -107,7 +107,7 @@ to `/Users/bmf/code/links-issue-tracker`.
   (`internal/cli/cli.go:44-50`, `:28`).
 - There are **no persistent global flags** registered on the root beyond cobra's own `help`;
   per-command flag sets are constructed by `newCobraFlagSet` (`internal/cli/cli.go:192-203`).
-- Per-command flag parsing (`parseFlagSet`, `internal/cli/cli.go:274-308`) maps specific
+- Per-command flag parsing (`parseFlagSet`, `internal/cli/flagset.go:134-168`) maps specific
   removed flags to typed errors:
   - `--continue` ⇒ `UnsupportedError` "--continue is retired; claim routing already keeps
     `lit next` in your checkout's own epic first — run `lit next` with no flag"
@@ -117,12 +117,13 @@ to `/Users/bmf/code/links-issue-tracker`.
   - `--help` (or `pflag.ErrHelp`) prints `Usage of <cmd>:` followed by `PrintDefaults()` to
     stdout and returns the swallowed sentinel (`internal/cli/cli.go:265-272`, `:277-282`, `:300-306`).
 
-### 2.5 Per-command bootstrap (`runWithApp` / `runWithWorkspace`)
+### 2.5 Per-command bootstrap (`runWithApp` / `acquireFromWD`)
 
-- `runWithWorkspace` resolves the workspace from `os.Getwd()` and runs the handler
-  (`internal/cli/cli.go:94-100`); `resolveWorkspaceFromWD` maps `workspace.ErrNotGitRepo` to
+- `acquireFromWD` is what every command but `lit init` acquires with: the workspace for the
+  working directory, with no prefix of its own to offer (`internal/cli/register.go:434-436`).
+  It calls `resolveWorkspaceFromWD`, which maps `workspace.ErrNotGitRepo` to
   `OutsideWorkspaceError{Message: "links requires running inside a git repository/worktree"}`
-  and a getcwd failure to `get cwd: %w` (`internal/cli/cli.go:149-163`).
+  and a getcwd failure to `get cwd: %w` (`internal/cli/cli.go:170-184`).
 - `runWithApp` (`internal/cli/cli.go:102-147`):
   1. `os.Getwd()`; failure ⇒ `get cwd: %w` (`internal/cli/cli.go:103-106`).
   2. `app.Open(ctx, cwd, accessMode)`; `workspace.ErrNotGitRepo` ⇒
@@ -154,7 +155,7 @@ to `/Users/bmf/code/links-issue-tracker`.
 
 ### 2.7 Exit codes (`internal/cli/exit.go`)
 
-Constants (`internal/cli/exit.go:10-18`):
+Constants (`internal/cli/exit.go:12-33`):
 
 | Name | Value |
 |---|---|
@@ -168,7 +169,7 @@ Constants (`internal/cli/exit.go:10-18`):
 | `ExitCorruption` | 7 |
 
 `ExitCode(err)` dispatches by `errors.As` in this order
-(`internal/cli/exit.go:37-157`):
+(`internal/cli/exit.go:38-170`):
 
 - `storage.NotFoundError` ⇒ 4 (`:41-43`)
 - `MergeConflictError` ⇒ 5 (`:45-47`)
@@ -320,69 +321,88 @@ Defaults are set in `Load` (`internal/config/config.go:217-228`).
 
 ### 4.4 Per-workspace store config (`<git-common-dir>/links/config.json`)
 
-- Schema (`internal/workspace/workspace.go:21-26`): `workspace_id` (string),
+- Schema (`internal/workspace/workspace.go:72-77`): `workspace_id` (string),
   `issue_prefix` (string), `created_at` (RFC3339 time), `schema_version` (int).
 - Created on first resolve with `WorkspaceID = uuid.NewString()`, `CreatedAt = time.Now().UTC()`,
-  `Version = 1` (`internal/workspace/workspace.go:491-496`).
+  `Version = 1` (`internal/workspace/workspace.go:613-618`).
 - `ReadConfig` fails with `read workspace config: %w`, `parse workspace config: %w`, or
-  `workspace config missing workspace_id` (`internal/workspace/workspace.go:447-459`).
+  `workspace config missing workspace_id` (`internal/workspace/workspace.go:569-582`).
 - Writes are atomic: temp file `.config.json.*` in the same directory, chmod 0644, close,
-  rename (`internal/workspace/workspace.go:504-537`).
+  rename (`internal/workspace/workspace.go:626-659`).
 - `UpdateConfig(path, mutate)` is the single read-modify-write boundary
-  (`internal/workspace/workspace.go:546-560`).
-- Issue-prefix resolution (`internal/workspace/workspace.go:421-434`): a blank configured value
-  is *derived* from the repository directory name; a present value is normalized; an invalid
-  present value errors `invalid issue_prefix: %w`. A derived or renormalized value is persisted
-  back into `config.json` immediately (`internal/workspace/workspace.go:469-477`).
-- Derivation (`internal/workspace/workspace.go:562-579`): normalize `filepath.Base(rootDir)`,
+  (`internal/workspace/workspace.go:668-682`).
+- Issue-prefix resolution (`internal/workspace/workspace.go:520-556`, which takes the config
+  path as its second parameter so it can name that file in its own remediation) ranks three
+  sources: a non-blank configured value wins and is normalized; a blank one is filled by the
+  caller's explicit `PrefixRequest` if present, else by derivation. A stored value the rules
+  refuse is the typed `StoredPrefixError`, whose `Unwrap` returns `ErrIssuePrefixRefused`, so
+  it exits 3 with its siblings but classifies as its own reason `stored_prefix_refused`, and
+  its message names the config file by path and says to edit `issue_prefix` in it — because
+  no command clears that state: `lit prefix set` and `lit doctor` both resolve the workspace
+  first and die in the same place. The separate reason exists for that last fact:
+  `validation_refused`'s remediation ends "adjust the command to satisfy it", which is false
+  for a refusal no command touches, and `stored_prefix_refused`'s names no command at all. A request that contradicts a non-blank configured value is
+  refused, not applied, naming `lit prefix set <p>`, which previews the change while
+  `--apply` writes it. The resolved value is persisted
+  back into `config.json` immediately (`internal/workspace/workspace.go:591-599`); a value
+  that came from a request persists with `derived=false`, so `lit doctor` reports
+  `issue_prefix_source=configured`.
+- `PrefixRequest` is the optional counterpart to `PrefixSpec`: the zero value is the absence,
+  and `RequestPrefix(raw)` mints only present requests through `ConfiguredPrefix`, so an empty
+  string is an error rather than a silent demotion to "no request".
+- Derivation (`internal/workspace/workspace.go:697-713`): normalize `filepath.Base(rootDir)`,
   split on `-`, take the first hyphen-part that normalizes to a valid prefix, else the whole
-  normalized base; failure ⇒ `derive issue_prefix: repository name %q does not produce a valid prefix`.
+  normalized base. Both ways of coming up short — nothing survives normalization, or too
+  little does — are one failure wrapping `ErrIssuePrefixRefused` ⇒
+  `issue prefix refused: repository name %q yields none (a prefix needs %d or more characters
+  once punctuation is normalized away); run ``lit init --prefix <prefix>`` to set one
+  explicitly`. `internal/cli` maps that sentinel to reason `validation_refused` and exit 3.
 
 ---
 
 ## 5. Workspace discovery
 
-### 5.1 `Location` — pure path geometry (`internal/workspace/workspace.go:56-62`)
+### 5.1 `Location` — pure path geometry (`internal/workspace/workspace.go:107-113`)
 
-`LocationFromStorageDir(storageDir)` (`internal/workspace/workspace.go:284-295`) derives:
+`LocationFromStorageDir(storageDir)` (`internal/workspace/workspace.go:376-387`) derives:
 
 | Field | Value |
 |---|---|
-| `StorageDir` | the given dir (in practice `<git-common-dir>/links`, `internal/workspace/workspace.go:223`) |
+| `StorageDir` | the given dir (in practice `<git-common-dir>/links`, `internal/workspace/workspace.go:315`) |
 | `GitCommonDir` | `filepath.Dir(storageDir)` |
 | `ConfigPath` | `<storageDir>/config.json` |
 | `DatabasePath` | `<storageDir>/dolt` |
 | `DoltRepoPath` | `<storageDir>/dolt/links` |
 
-### 5.2 `deriveLocation(cwd)` (`internal/workspace/workspace.go:188-224`)
+### 5.2 `deriveLocation(cwd)` (`internal/workspace/workspace.go:280-316`)
 
-1. `git rev-parse --git-common-dir` run with `cmd.Dir = cwd` (`internal/workspace/workspace.go:200`,
+1. `git rev-parse --git-common-dir` run with `cmd.Dir = cwd` (`internal/workspace/workspace.go:292`,
    `:306-314`).
 2. `anchorGitPath(cwd, out)` — a relative git answer is joined onto the **absolute cwd**, not the
-   repo toplevel; an absolute answer is only cleaned (`internal/workspace/workspace.go:239-248`).
+   repo toplevel; an absolute answer is only cleaned (`internal/workspace/workspace.go:275-284`).
 3. `filepath.EvalSymlinks` canonicalizes the common dir; failure ⇒
-   `canonicalize git-common-dir %q: %w` (`internal/workspace/workspace.go:218-221`).
-4. `LocationFromStorageDir(filepath.Join(gitCommonDir, "links"))` (`internal/workspace/workspace.go:223`).
+   `canonicalize git-common-dir %q: %w` (`internal/workspace/workspace.go:310-313`).
+4. `LocationFromStorageDir(filepath.Join(gitCommonDir, "links"))` (`internal/workspace/workspace.go:315`).
 
-### 5.3 `Resolve(cwd)` (`internal/workspace/workspace.go:140-179`)
+### 5.3 `Resolve(cwd)` (`internal/workspace/workspace.go:221-223`, `ResolveWithPrefix` `:232-271`)
 
 1. `git rev-parse --show-toplevel` ⇒ `RootDir`; failure classified by `classifyGitError`.
 2. `deriveLocation(cwd)`.
 3. `resolvePrivateGitDir(cwd)` = `git rev-parse --git-dir` anchored to cwd
-   (`internal/workspace/workspace.go:266-275`) — **not** symlink-canonicalized
-   (`internal/workspace/workspace.go:261-265`).
+   (`internal/workspace/workspace.go:302-311`) — **not** symlink-canonicalized
+   (`internal/workspace/workspace.go:297-301`).
 4. `os.MkdirAll(loc.StorageDir, 0o755)`; failure ⇒ `create storage dir: %w`
-   (`internal/workspace/workspace.go:165-167`).
+   (`internal/workspace/workspace.go:201-203`).
 5. `loadOrCreateConfig(rootDir, loc.ConfigPath)`.
 6. Returns `Info{Location, RootDir, WorkspaceID, IssuePrefix, PrivateGitDir}`.
 
-All geometry git calls use `context.Background()` deliberately (`internal/workspace/workspace.go:141-146`,
+All geometry git calls use `context.Background()` deliberately (`internal/workspace/workspace.go:233-238`,
 `:197-199`, `:267-269`).
 
-### 5.4 Git-error classification (`internal/workspace/workspace.go:337-343`)
+### 5.4 Git-error classification (`internal/workspace/workspace.go:373-379`)
 
 - Only `*exec.ExitError` with exit code **128** (`gitFatalExitCode`,
-  `internal/workspace/workspace.go:320`) maps to the sentinel `ErrNotGitRepo`
+  `internal/workspace/workspace.go:356`) maps to the sentinel `ErrNotGitRepo`
   (`internal/workspace/workspace.go:19`).
 - Everything else (git not on PATH, killed by signal ⇒ `ExitCode() == -1`, any other exit code)
   is wrapped with context and surfaced.

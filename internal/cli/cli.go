@@ -77,7 +77,7 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 			}
 			// [LAW:one-source-of-truth] Default command reuses renderQuickstartGuidance
 			// so the output is always identical to `lit quickstart`.
-			ws, wsErr := resolveWorkspaceFromWD()
+			ws, wsErr := resolveWorkspaceFromWD(workspace.PrefixRequest{})
 			// [LAW:dataflow-not-control-flow] Only the "outside git repo" case routes to help;
 			// other failures (getcwd, template load) surface so they remain diagnosable.
 			if errors.Is(wsErr, workspace.ErrNotGitRepo) {
@@ -105,14 +105,6 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 	root.SetErr(stderr)
 	applyRegistry(root, commandGroups, commandSpecs(ctx, stdout, stderr))
 	return root
-}
-
-func runWithWorkspace(run func(workspace.Info) error) error {
-	ws, err := resolveWorkspaceFromWD()
-	if err != nil {
-		return err
-	}
-	return run(ws)
 }
 
 func runWithApp(ctx context.Context, stdout io.Writer, accessMode app.AccessMode, run func(context.Context, *app.App) error) error {
@@ -170,12 +162,17 @@ func runWithApp(ctx context.Context, stdout io.Writer, accessMode app.AccessMode
 	return nil
 }
 
-func resolveWorkspaceFromWD() (workspace.Info, error) {
+// resolveWorkspaceFromWD acquires the workspace for the process's working
+// directory, carrying whatever issue prefix the caller's flags asked for — the
+// zero request for every command but `lit init --prefix`.
+// [LAW:single-enforcer] one translation of ErrNotGitRepo into the typed CLI
+// error, for every acquisition.
+func resolveWorkspaceFromWD(requested workspace.PrefixRequest) (workspace.Info, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return workspace.Info{}, fmt.Errorf("get cwd: %w", err)
 	}
-	ws, err := workspace.Resolve(cwd)
+	ws, err := workspace.ResolveWithPrefix(cwd, requested)
 	if err != nil {
 		if errors.Is(err, workspace.ErrNotGitRepo) {
 			// [LAW:types-are-the-program] Typed error carries classification; message preserved for surface display.

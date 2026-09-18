@@ -445,7 +445,7 @@ This is the single shared "why" computation behind both the real firing trace an
   (`internal/workflows/dispatch.go:68-72`). Every CLI call site passes `os.Stderr` as `errOut`.
 - Exit codes are unaffected by workflow firing; the general mapping is
   `ExitOK=0, ExitGeneric=1, ExitUsage=2, ExitValidation=3, ExitNotFound=4, ExitConflict=5,
-  ExitNoWork=6, ExitCorruption=7` (`internal/cli/exit.go:11-32`).
+  ExitNoWork=6, ExitCorruption=7` (`internal/cli/exit.go:12-33`).
 
 ---
 
@@ -456,7 +456,7 @@ This is the single shared "why" computation behind both the real firing trace an
 - Trace kind directory name is `workflows` (`internal/workflows/trace.go:14`), written under
   `trace.Dir(storageDir, kind)` = `<StorageDir>/traces/workflows`
   (`internal/trace/trace.go:23-25`). `StorageDir` is `<git-common-dir>/links`
-  (`internal/workspace/workspace.go:223`).
+  (`internal/workspace/workspace.go:315`).
 - **A trace is written only when at least one definition fired** — an occasion nothing matches
   leaves no trace, so the directory stays proportional to guidance actually injected
   (`internal/workflows/dispatch.go:29-33`, guard at `internal/workflows/dispatch.go:68`; pinned
