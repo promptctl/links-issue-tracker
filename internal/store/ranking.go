@@ -107,6 +107,19 @@ var (
 // vacate is not a wall, and counting it would halve the gap on every repeat of a
 // move that has already arrived.
 func (e rankEdge) roomBesideTx(ctx context.Context, tx *sql.Tx, anchorRank, excludeID string) (lower, upper string, err error) {
+	// An anchor holding no rank is not a key, and the comparison reads it
+	// differently at each end: `item_rank < ''` matches nothing, while
+	// `item_rank > ''` matches every rank there is. The same empty anchor would
+	// therefore mean "nothing lies beside me" at the top and "the whole
+	// workspace lies beside me" at the bottom — which is how an issue sent to
+	// its frame's BOTTOM came to be handed a key above every issue in the
+	// workspace. There is no room to read beside a key that is not there, and
+	// what an absent one means is the caller's to answer, so it is refused here
+	// rather than averaged into a position.
+	// [LAW:parse-dont-validate] [LAW:no-silent-failure]
+	if anchorRank == "" {
+		return "", "", fmt.Errorf("no room beside the %s of this frame: the key it was read from is empty", e.name)
+	}
 	query := fmt.Sprintf(`SELECT item_rank FROM issues
 		WHERE deleted_at IS NULL AND item_rank != '' AND id != ? AND %s LIMIT 1`, e.outside)
 	outsideRank, err := nearestRank(ctx, tx, query, excludeID, anchorRank)
@@ -117,39 +130,43 @@ func (e rankEdge) roomBesideTx(ctx context.Context, tx *sql.Tx, anchorRank, excl
 	return lower, upper, nil
 }
 
+// pastTheWorkspaceTx is the pair for a placement with no key to sit beside: the
+// far side of the workspace's last key.
+//
+// It is the one end nothing can already hold, and it is the very key the default
+// placement would have given the same issue — the answer a population with no
+// members deserves, because there is no order there to lead or trail and both
+// ends are asking for the same position. Asked of an empty WORKSPACE the read
+// comes back empty too, and nothing lies outside a key that is not there, so the
+// first issue in a workspace still takes rank.Initial.
+func pastTheWorkspaceTx(ctx context.Context, tx *sql.Tx) (lower, upper string, err error) {
+	lastRank, err := workspaceEdgeRankTx(ctx, tx, storage.TopLevel, bottomEdge)
+	if err != nil {
+		return "", "", err
+	}
+	if lastRank == "" {
+		return "", "", nil
+	}
+	return bottomEdge.roomBesideTx(ctx, tx, lastRank, "")
+}
+
 // filingBoundsTx is the pair a create's key is placed between: the population
 // this end files against, and then the room beside it.
 //
-// The empty population is the case this function owns, and it is not the same
-// case as an empty workspace. A frame with nothing ranked in it offers no key to
-// sit beside, and its two ends are one position anyway — but the key written
-// still has to be distinct from every key that exists, and the midpoint of the
-// whole keyspace is not: it is rank.Initial, which the workspace's first issue
-// already holds.
-//
-// So an empty population files past the workspace's last key — the one end
-// nothing can already hold, and the very key the default placement would have
-// given the same issue, which is the answer an empty frame deserves: no order to
-// lead means both ends asked for the same thing. Asked of an empty WORKSPACE
-// that read comes back empty too, and nothing lies outside a key that is not
-// there, so the first issue in a workspace still takes rank.Initial.
-//
-// This rule is creation's and stays spelled in creation's function. The rank
-// verbs reach an empty read by a different route and it means something else to
-// them — for rank set, that every ranked member of the frame is in the stack
-// being placed — so handing them this answer would be answering a question they
-// did not ask. [LAW:one-type-per-behavior]
+// A frame with nothing ranked in it offers no key to sit beside, and its two
+// ends are one position anyway — but the key written still has to be distinct
+// from every key that exists, and the midpoint of the whole keyspace is not: it
+// is rank.Initial, which the workspace's first issue already holds. So that
+// case goes to pastTheWorkspaceTx, the same answer rankBeyondTx gives a frame
+// whose edge reads empty, because the two mean the same thing: nothing here is
+// ranked yet. [LAW:one-source-of-truth]
 func (e rankEdge) filingBoundsTx(ctx context.Context, tx *sql.Tx, f storage.Frame) (lower, upper string, err error) {
 	anchorRank, err := e.filingRank(ctx, tx, f, e)
 	if err != nil {
 		return "", "", err
 	}
 	if anchorRank == "" {
-		lastRank, err := workspaceEdgeRankTx(ctx, tx, storage.TopLevel, bottomEdge)
-		if err != nil {
-			return "", "", err
-		}
-		return bottomEdge.roomBesideTx(ctx, tx, lastRank, "")
+		return pastTheWorkspaceTx(ctx, tx)
 	}
 	return e.roomBesideTx(ctx, tx, anchorRank, "")
 }
@@ -219,6 +236,14 @@ func (e rankEdge) rankBeyondTx(ctx context.Context, tx *sql.Tx, movedID string, 
 		edgeRank, err := readEdge()
 		if err != nil {
 			return "", "", err
+		}
+		// A frame whose edge reads empty holds nothing ranked but the issue
+		// being moved, which is the same situation a create meets in an empty
+		// frame and takes the same answer. Reading the room beside the absent
+		// key instead is what sent an issue asked for its frame's bottom to the
+		// top of the workspace. [LAW:one-source-of-truth]
+		if edgeRank == "" {
+			return pastTheWorkspaceTx(ctx, tx)
 		}
 		return e.roomBesideTx(ctx, tx, edgeRank, movedID)
 	})

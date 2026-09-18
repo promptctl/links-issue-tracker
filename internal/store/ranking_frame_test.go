@@ -1096,3 +1096,63 @@ func TestRelativeMoveDrawsItsRoomFromTheWholeWorkspace(t *testing.T) {
 		t.Errorf("ranks %q (standalone), %q (epic), %q (child) do not place the epic between its anchor and the next key", after[standalone.ID], after[epic.ID], after[child.ID])
 	}
 }
+
+// TestRankToEdgeOfAFrameWithNoRankedMemberFilesPastTheWorkspace covers the one
+// input the room lookup has no answer for: an empty key.
+//
+// An issue whose own rank is blank is not in the population frameEdgeHolderTx
+// reads, so a frame holding only that issue reports no edge at all, while the
+// verb still counts the move as real. The comparison then reads that empty key
+// differently at each end — nothing sorts below "" but every rank sorts above
+// it — so asking for the room beside it sent an issue to its frame's BOTTOM and
+// handed it a key above every issue in the workspace, an inversion no duplicate
+// check would catch.
+//
+// A blank rank is not reachable through the API (ensureIssueRanks backfills at
+// open), so it is written here directly: the point of the case is that the
+// absent key is answered rather than averaged, whatever put it there.
+func TestRankToEdgeOfAFrameWithNoRankedMemberFilesPastTheWorkspace(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	standalone, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Standalone", Topic: "frame", IssueType: "task"})
+	if err != nil {
+		t.Fatalf("CreateIssue(standalone) error = %v", err)
+	}
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "frame", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	only, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Only child", Topic: "frame", IssueType: "task", ParentID: epic.ID})
+	if err != nil {
+		t.Fatalf("CreateIssue(child) error = %v", err)
+	}
+	if _, err := st.db.ExecContext(ctx, `UPDATE issues SET item_rank = '' WHERE id = ?`, only.ID); err != nil {
+		t.Fatalf("blank the child's rank: %v", err)
+	}
+
+	if _, err := st.RankToBottom(ctx, only.ID); err != nil {
+		t.Fatalf("RankToBottom(only child) error = %v", err)
+	}
+	after, err := st.GetIssue(ctx, only.ID)
+	if err != nil {
+		t.Fatalf("GetIssue error = %v", err)
+	}
+	if after.Rank == "" {
+		t.Fatal("RankToBottom left the child with no rank at all")
+	}
+	// Sent to the bottom, it lands past everything — never above the key that
+	// leads the workspace, which is what reading the room beside "" produced.
+	if after.Rank < standalone.Rank {
+		t.Errorf("the child sent to its frame's bottom holds %q, above the workspace's leading key %q", after.Rank, standalone.Rank)
+	}
+	if after.Rank < epic.Rank {
+		t.Errorf("the child sent to its frame's bottom holds %q, above its own epic %q", after.Rank, epic.Rank)
+	}
+	for _, other := range []model.Issue{standalone, epic} {
+		if after.Rank == other.Rank {
+			t.Errorf("the child took rank %q, the key %s holds; a rank orders one issue", after.Rank, other.ID)
+		}
+	}
+}
