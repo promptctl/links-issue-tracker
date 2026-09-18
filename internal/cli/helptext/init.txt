@@ -13,3 +13,8 @@ characters once punctuation is normalized away — a repository named "ab" or
 that contradicts the prefix a workspace already uses is refused, because
 existing issue IDs carry the old prefix; `lit prefix set <prefix>` is the
 command that changes it. It previews the change; `--apply` writes it.
+
+Every run prints the prefix lit stored. Normalization can change what you
+passed — it slugifies and truncates at 12 characters, so --prefix
+payment_service stores payment-serv — so you learn the real value here
+rather than from the first issue ID.

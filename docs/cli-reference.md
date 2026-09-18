@@ -98,7 +98,10 @@ suppress the respective side effects. `--prefix` sets the issue ID prefix explic
 default it is derived from the repository directory name, which a name like `ab` or `___`
 cannot produce, so `--prefix` is the way to initialize those. It applies only to a
 workspace that has no prefix yet — supplying one that contradicts an existing workspace's
-is refused, because `lit prefix set` is what changes a prefix already in use.
+is refused, because `lit prefix set` is what changes a prefix already in use. Every
+run prints `  issue_prefix: <value>`, the prefix actually stored: normalization
+slugifies and truncates at 12 characters, so `--prefix payment_service` stores
+`payment-serv`.
 
 The `/next` skill for pulling the next ticket ships from the `lit` Claude Code plugin
 (`.claude-plugin/marketplace.json` at the repo root), not written into the target
