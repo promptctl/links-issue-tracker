@@ -160,12 +160,18 @@ func TestShippedTextReadsProductCodeAndItsEmbeddedAssets(t *testing.T) {
 		// does link, so nothing but the file-selection rule keeps them out.
 		"internal/cli/_scratch.go": {Data: []byte("package cli\nvar J = \"underscored scratch message\"\n")},
 		"internal/cli/generate.go": {Data: []byte("// +build ignore\n\npackage main\nvar K = \"legacy ignored message\"\n")},
+		// The comma spelling means AND, so this is built by nothing either. A
+		// string comparison against "ignore" reads it as product code.
+		"internal/cli/gen_linux.go": {Data: []byte("// +build ignore,linux\n\npackage main\nvar L = \"comma ignored message\"\n")},
+		// A satisfiable constraint stays in: the text reaching a user is the
+		// union over the platforms lit ships on, not whichever one runs this.
+		"internal/cli/plat_darwin.go": {Data: []byte("//go:build darwin\n\npackage cli\nvar M = \"platform variant message\"\n")},
 	}
 	corpus, err := ShippedText(fsys)
 	if err != nil {
 		t.Fatalf("ShippedText: %v", err)
 	}
-	for _, want := range []string{"shipped message here", "vendored linked message"} {
+	for _, want := range []string{"shipped message here", "vendored linked message", "platform variant message"} {
 		if _, ok := corpus[want]; !ok {
 			t.Errorf("%q ships and was not collected", want)
 		}
@@ -186,7 +192,7 @@ func TestShippedTextReadsProductCodeAndItsEmbeddedAssets(t *testing.T) {
 	for _, absent := range []string{
 		"test only message", "testdata only message", "tool only message",
 		"vendored only message", "unlinked message here", "vendored example message",
-		"underscored scratch message", "legacy ignored message",
+		"underscored scratch message", "legacy ignored message", "comma ignored message",
 	} {
 		if _, ok := corpus[absent]; ok {
 			t.Errorf("%q counted as shipped; nothing links it", absent)
