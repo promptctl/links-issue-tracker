@@ -530,13 +530,9 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 	}
 	parentID := strings.TrimSpace(in.ParentID)
 	if err := s.withMutation(ctx, "create issue", func(ctx context.Context, tx *sql.Tx) error {
-		if parentID != "" {
-			if err := tx.QueryRowContext(ctx, `SELECT id FROM issues WHERE id = ?`, parentID).Scan(new(string)); err != nil {
-				if errors.Is(err, sql.ErrNoRows) {
-					return storage.NotFoundError{Entity: "issue", ID: parentID}
-				}
-				return fmt.Errorf("lookup parent issue %q: %w", parentID, err)
-			}
+		frame, err := filingFrameTx(ctx, tx, parentID)
+		if err != nil {
+			return err
 		}
 		prefix, err := issueid.NormalizeConfiguredPrefix(in.Prefix)
 		if err != nil {
@@ -546,7 +542,7 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 		if err != nil {
 			return err
 		}
-		issue.Rank, err = nextRankForPlacement(ctx, tx, in.Placement)
+		issue.Rank, err = nextRankForPlacement(ctx, tx, in.Placement, frame)
 		if err != nil {
 			return err
 		}
@@ -2065,39 +2061,36 @@ type partialIssue struct {
 }
 
 // nextRankForPlacement resolves a new issue's rank from its requested
-// placement, against every existing rank rather than the frame it is filed
-// into.
+// placement and the frame it is being filed into.
 //
-// Filing is deliberately not scoped the way the rank verbs are. RankBottom is
-// the zero value and so the default, and it has to land the issue after
-// everything that already exists — that is what keeps an authored batch in the
-// order its file states — while a rank after every rank is also a rank after
-// every frame-mate, so the frame-local reading holds for free. Scoping this
-// would seed a first child from an empty frame and file it into the middle of
-// the order instead.
+// The two edges ask different populations, and the asymmetry is the contract
+// rather than an oversight. RankBottom asks the whole workspace: it has to
+// land the issue after everything that already exists — that is what keeps an
+// authored batch in the order its file states — and a rank after every rank is
+// also a rank after every frame-mate, so the frame-local reading holds for
+// free. Scoping the bottom would seed a first child from an empty frame and
+// file it into the middle of the order instead.
 //
-// RankTop against the whole workspace is the remaining unscoped edge: a child
-// filed there takes a key below every top-level issue. That is the same
-// keyspace bleed the rank verbs were fixed for, tracked on its own because
-// changing it changes what filing order means (links-rank-t2vl).
+// RankTop asks the frame. Before everything is not before-my-siblings-only, so
+// asking the workspace there drew the key from a keyspace shared with issues
+// the new one is never compared against: a child filed at the top took a
+// midpoint against whichever issue held the workspace's first key, and the
+// next top-level `--top` create then computed its own key against that child's
+// (links-rank-t2vl). It is the same bleed links-rank-o7qn closed for the rank
+// verbs.
 //
-// [LAW:one-source-of-truth] The direction and the empty-keyspace default come
-// from edgeFor and rankBeyondTx, the same two the rank verbs use. Only the
-// population being asked differs.
-func nextRankForPlacement(ctx context.Context, tx *sql.Tx, p storage.RankPlacement) (string, error) {
+// [LAW:one-source-of-truth] The direction, the population, and the answer for
+// a population holding nothing yet all come from the edge — edgeFor resolves
+// it, filingBoundsTx reads it, and rankBetweenTx places the key exactly as it
+// does for every rank verb — so this function names no end, no query and no
+// bound of its own.
+func nextRankForPlacement(ctx context.Context, tx *sql.Tx, p storage.RankPlacement, f storage.Frame) (string, error) {
 	edge, err := edgeFor(p)
 	if err != nil {
 		return "", err
 	}
-	query := fmt.Sprintf(`SELECT item_rank FROM issues
-		WHERE deleted_at IS NULL AND item_rank != ''
-		ORDER BY item_rank %s LIMIT 1`, edge.order)
-	return edge.rankBeyondTx(ctx, tx, func() (string, error) {
-		edgeRank, err := nearestRank(ctx, tx, query)
-		if err != nil {
-			return "", fmt.Errorf("query %s rank: %w", edge.name, err)
-		}
-		return edgeRank, nil
+	return rankBetweenTx(ctx, tx, func() (string, string, error) {
+		return edge.filingBoundsTx(ctx, tx, f)
 	})
 }
 

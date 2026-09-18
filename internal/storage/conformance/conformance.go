@@ -184,6 +184,8 @@ var cases = []engineCase{
 	{"rank_intents_resolve_across_frames", rankIntentsResolveAcrossFrames},
 	{"rank_to_edge_stays_inside_its_frame", rankToEdgeStaysInsideItsFrame},
 	{"rank_to_edge_ignores_a_deleted_frame_mate", rankToEdgeIgnoresADeletedFrameMate},
+	{"create_at_top_files_inside_its_frame", createAtTopFilesInsideItsFrame},
+	{"create_at_top_of_an_empty_frame_takes_a_distinct_key", createAtTopOfAnEmptyFrameTakesADistinctKey},
 	{"rank_set_imposes_order", rankSetImposesOrder},
 	{"rank_set_stays_inside_its_frame", rankSetStaysInsideItsFrame},
 	{"rank_verbs_refuse_a_deleted_issue", rankVerbsRefuseADeletedIssue},
@@ -1221,6 +1223,88 @@ func rankToEdgeIgnoresADeletedFrameMate(t *testing.T, ctx context.Context, st st
 	assertPrecedes(t, mustList(t, ctx, st, storage.ListIssuesFilter{}), lead.ID, tail.ID)
 }
 
+// createAtTopFilesInsideItsFrame is rankToEdgeStaysInsideItsFrame's creation
+// twin: filing an issue at the top places it at the top of the frame it is
+// filed into, never at the top of the workspace.
+//
+// Two epics are what make the defect visible to both engines. One epic cannot
+// show it: a child filed at the top leads its siblings either way, and the
+// engines represent rank too differently for the case to assert a key's value
+// — the SQL store holds fractional strings, the memory engine holds positions.
+// Filing at the top of two frames in turn is the observable they share. Keys
+// taken from each frame leave the frames in the order they were created, so
+// the first epic's new lead precedes the second's. Keys taken from the
+// workspace's first rank chain off each other instead — each filing computes
+// against the one before it and lands below it — so the second epic's lead
+// overtakes the first's and the two frames come back inverted.
+func createAtTopFilesInsideItsFrame(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	// Filed in this order so that each frame's keys sit above the frame filed
+	// before it, and a top-level issue holds the workspace's first key.
+	outsider := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "outsider", Topic: "core"})
+	firstEpic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first epic", Topic: "core", IssueType: model.TypeEpic})
+	firstChild := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first child", Topic: "core", ParentID: firstEpic.ID})
+	secondEpic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second epic", Topic: "core", IssueType: model.TypeEpic})
+	secondChild := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second child", Topic: "core", ParentID: secondEpic.ID})
+
+	firstLead := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first lead", Topic: "core", ParentID: firstEpic.ID, Placement: storage.RankTop})
+	secondLead := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second lead", Topic: "core", ParentID: secondEpic.ID, Placement: storage.RankTop})
+
+	listed := mustList(t, ctx, st, storage.ListIssuesFilter{})
+	// Each new issue leads the siblings it was filed among. True of the defect
+	// as well, and asserted anyway: it is what filing at the top is for, and a
+	// scoping fix that lost it would be no fix.
+	assertPrecedes(t, listed, firstLead.ID, firstChild.ID)
+	assertPrecedes(t, listed, secondLead.ID, secondChild.ID)
+	// The two frames keep the order they were filed in. This is the assertion
+	// the defect fails.
+	assertPrecedes(t, listed, firstLead.ID, secondLead.ID)
+	// The default placement is untouched: it still files after everything that
+	// exists, which is what keeps an authored batch in its file's order.
+	assertPrecedes(t, listed, firstChild.ID, secondChild.ID)
+
+	// The top level is a frame like any other, so an issue filed at the top
+	// with no parent leads the issues that share that frame.
+	topLead := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "top lead", Topic: "core", Placement: storage.RankTop})
+	listed = mustList(t, ctx, st, storage.ListIssuesFilter{})
+	assertPrecedes(t, listed, topLead.ID, outsider.ID)
+	assertPrecedes(t, listed, topLead.ID, firstEpic.ID)
+}
+
+// createAtTopOfAnEmptyFrameTakesADistinctKey pins what filing at the top of a
+// frame that holds nothing yet does — a case that looks like the one above and
+// is not.
+//
+// An empty frame offers no member to lead and no key to sit beside, and its two
+// ends name the same position, so the end a caller asked for cannot decide
+// anything. What still has to hold is that the new rank belongs to that issue
+// alone: an order in which two issues claim one rank is not an order, and it is
+// what VerifyCandidate's rank law rejects when it rebuilds a workspace. Scoping
+// the top edge to the frame is exactly what makes this reachable — the frame's
+// edge reads as absent, and an engine answering "the middle of the keyspace"
+// there hands the issue the key the workspace's first issue already holds. So
+// an empty frame files where the default placement would have filed it, after
+// everything that exists, which is both the position with no order to
+// contradict and the one key nothing can already be using.
+func createAtTopOfAnEmptyFrameTakesADistinctKey(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	// The first issue in a workspace holds the opening key — the very key a
+	// "middle of the keyspace" answer would hand out a second time.
+	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first", Topic: "core"})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "childless epic", Topic: "core", IssueType: model.TypeEpic})
+	only := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "only child", Topic: "core", ParentID: epic.ID, Placement: storage.RankTop})
+
+	listed := mustList(t, ctx, st, storage.ListIssuesFilter{})
+	assertDistinctRanks(t, listed)
+	assertPrecedes(t, listed, first.ID, only.ID)
+	assertPrecedes(t, listed, epic.ID, only.ID)
+
+	// The second child, filed at the top of a frame that now holds one, leads
+	// it — the frame has an order to lead again.
+	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second child", Topic: "core", ParentID: epic.ID, Placement: storage.RankTop})
+	listed = mustList(t, ctx, st, storage.ListIssuesFilter{})
+	assertDistinctRanks(t, listed)
+	assertPrecedes(t, listed, second.ID, only.ID)
+}
+
 // rankSetStaysInsideItsFrame pins RankSet's anchor as the representatives' own
 // frame. Setting an order among one epic's children leads that epic's children
 // and moves nothing outside them.
@@ -2099,6 +2183,27 @@ func assertPrecedes(t *testing.T, issues []model.Issue, first, second string) {
 	}
 	if firstAt > secondAt {
 		t.Errorf("%s follows %s in the listing; want it to precede", first, second)
+	}
+}
+
+// assertDistinctRanks fails when two listed issues carry the same rank. An
+// engine's rank encoding is its own business — this suite reads rank only
+// through the order of a listing — but one rank per issue is the contract
+// behind that order, and the same law VerifyCandidate applies to a rebuilt
+// workspace. Two issues sharing a key are two issues whose order is decided by
+// the id tiebreak instead of by anything a caller ranked.
+func assertDistinctRanks(t *testing.T, issues []model.Issue) {
+	t.Helper()
+	holder := make(map[string]string, len(issues))
+	for _, issue := range issues {
+		if issue.Rank == "" {
+			continue
+		}
+		if other, taken := holder[issue.Rank]; taken {
+			t.Errorf("issues %s and %s both hold rank %q; a rank orders one issue", other, issue.ID, issue.Rank)
+			continue
+		}
+		holder[issue.Rank] = issue.ID
 	}
 }
 

@@ -409,10 +409,10 @@ Test evidence:
 9. `parentID := strings.TrimSpace(in.ParentID)` (`store.go:508`).
 
 Inside `withMutation(ctx, "create issue", ...)` (`store.go:509`):
-1. If `parentID != ""`: `SELECT id FROM issues WHERE id = ?`; `sql.ErrNoRows` → `storage.NotFoundError{Entity: "issue", ID: parentID}`; other error → `fmt.Errorf("lookup parent issue %q: %w", parentID, err)` (`store.go:510-517`).
+1. `frame, err := filingFrameTx(ctx, tx, parentID)` (`store.go:533`; defined `internal/store/ranking.go:234-250`): an empty `parentID` → `storage.TopLevel`; otherwise `SELECT deleted_at FROM issues WHERE id = ?`, with `sql.ErrNoRows` → `storage.NotFoundError{Entity: "issue", ID: parentID}`, other error → `fmt.Errorf("lookup parent issue %q: %w", parentID, err)`, a non-NULL `deleted_at` → `storage.TopLevel`, and a live parent → `storage.Frame(parentID)`.
 2. `issueid.NormalizeConfiguredPrefix(in.Prefix)`; failure → `fmt.Errorf("normalize issue prefix: %w", err)` (`store.go:518-521`).
 3. `issue.ID, err = newIssueID(ctx, tx, prefix, issue.Topic, issue.Title, issue.Description, createdBy, issue.CreatedAt, parentID)` (`store.go:522`; defined `internal/store/issue_ids.go:14`).
-4. `issue.Rank, err = nextRankForPlacement(ctx, tx, in.Placement)` (`store.go:526`).
+4. `issue.Rank, err = nextRankForPlacement(ctx, tx, in.Placement, frame)` (`store.go:545`).
 5. `archivedCol, deletedCol := retentionColumns(issue)` (`store.go:530`).
 6. The INSERT (`store.go:531-535`), verbatim:
 ```sql
@@ -452,7 +452,7 @@ Evidence: id shape `^test-renderer-[0-9a-z]{3,8}$` (`store_test.go:777-780`); pr
 
 #### 4.2 Rank placement
 
-`nextRankForPlacement(ctx, tx, p storage.RankPlacement) (string, error)` (`store.go:2045-2054`): `storage.RankTop` → `nextRankAtTop`; `storage.RankBottom` → `nextRankAtBottom`; default → `fmt.Errorf("unknown rank placement: %d", p)`.
+`nextRankForPlacement(ctx, tx, p storage.RankPlacement, f storage.Frame) (string, error)` (`store.go:2087-2095`): `edgeFor(p)` resolves the end — `storage.RankTop` → `topEdge`; `storage.RankBottom` → `bottomEdge`; anything else → `fmt.Errorf("unknown rank placement: %d", p)` (`internal/store/ranking.go:138-147`) — then `rankBetweenTx` returns a key between the bounds `edge.filingBoundsTx(ctx, tx, f)` reads (`internal/store/ranking.go:87-102`). Those bounds are `edge.beside(edgeRank)` around that end's filing rank: frame `f`'s leading rank for the top (`frameEdgeRankTx`, `:113-116`), the whole workspace's last rank for the bottom (`workspaceEdgeRankTx`, `:123-132`). An **empty** filing rank — a frame with nothing ranked in it — takes the other arm: `bottomEdge.filingRank` is read and paired through `bottomEdge.beside`, so the key lands past the workspace's last. In an empty workspace both reads are `""`, so the pair is `("", "")` and the key is `rank.Initial()` ("V").
 
 `nextRankAtBottom` (`store.go:2058-2068`):
 ```sql
@@ -2866,9 +2866,9 @@ Children are read through `Store.ListIssues` with `filter.ParentIDs` set (§5.7)
 
 ### 5.4 Rank at creation
 
-`nextRankForPlacement(ctx, tx, p)` — `internal/store/store.go:2045-2055`: `storage.RankTop` → `nextRankAtTop`; `storage.RankBottom` → `nextRankAtBottom`; anything else → `fmt.Errorf("unknown rank placement: %d", p)`.
+`nextRankForPlacement(ctx, tx, p, f)` — `internal/store/store.go:2087-2095`: `edgeFor(p)` → `topEdge` for `storage.RankTop`, `bottomEdge` for `storage.RankBottom`, `fmt.Errorf("unknown rank placement: %d", p)` otherwise; then `rankBetweenTx` between the bounds `edge.filingBoundsTx(ctx, tx, f)` reads — `edge.beside` around the end's filing rank, or, when that rank is empty, `bottomEdge.beside` around the workspace's last.
 
-`storage.RankPlacement` is an `int` with `RankBottom = iota` (0, the zero value and default) and `RankTop` (1) — `internal/storage/issues.go:22-27`.
+`storage.RankPlacement` is an `int` with `RankBottom = iota` (0, the zero value and default) and `RankTop` (1) — `internal/storage/issues.go:28-33`.
 
 `nextRankAtBottom` — `internal/store/store.go:2058-2068`:
 ```sql
@@ -2878,7 +2878,7 @@ non-`ErrNoRows` error → `fmt.Errorf("query last rank: %w", err)`; no row or em
 
 `nextRankAtTop` — `internal/store/store.go:2070-2081`: same query with `ORDER BY item_rank ASC`; error → `fmt.Errorf("query first rank: %w", err)`; no row → `rank.Initial()`; else `rank.Before(firstRank)`.
 
-Called inside `CreateIssue`'s mutation right after ID minting — `internal/store/store.go:526-529`. Rank assignment is global (one flat keyspace across all issues regardless of parent).
+Called inside `CreateIssue`'s mutation right after ID minting — `internal/store/store.go:545-548`. The keyspace stays one flat space of rank strings across all issues; what is scoped is the set of existing keys a new key is computed against — the filing frame's at the top edge, the whole workspace's at the bottom.
 
 ### 5.5 The frame concept
 
@@ -2959,7 +2959,7 @@ Pinned pair cases — `internal/store/ranking_frame_test.go:322-356`: top-level 
 
 `rankBetweenTx(ctx, tx, bounds)` — `internal/store/ranking.go:671-689`: reads the pair through `bounds()` and returns `rank.Midpoint(lower, upper)` unless it fails with `rank.ErrNoRoom` (`:672-679`). On `ErrNoRoom` it runs `smoothRanksTx(ctx, tx, upper)`, which respaces the smoothing window around `upper` with no length threshold; error → `fmt.Errorf("make room between %q and %q: %w", lower, upper, err)` (`:682-684`). It then reads the pair through `bounds()` again and returns the second `rank.Midpoint` result, error included; a second `ErrNoRoom` is not retried (`:685-688`). The `bounds` functions of `RankAbove` and `RankBelow` read the anchor's rank (`anchorRankTx`, `:649-659`) and the neighbor (`nearestRank`) on every call, so the second read sees the respaced ranks (`:711-721`, `:749-759`).
 
-`rankEdge.rankBeyondTx(ctx, tx, readEdge)` — `internal/store/ranking.go:83-89`: the key past a frame's edge. Its body is one `rankBetweenTx` call, whose `bounds` reads the edge's rank through `readEdge()` on every call, returns a `readEdge` error as is, and pairs the rank through the edge's `beside` (`:84-88`): `topEdge` gives `("", edgeRank)` and `bottomEdge` gives `(edgeRank, "")` (`:45-48`), the two values `edgeFor` returns (`:54-63`). An all-zero rank at the top edge therefore gets room made above it the same way a relative move's pair does; the bottom edge's open upper bound never lacks room. The edge is not read ahead of `rankBetweenTx`: an empty frame's edge reads as `""`, so both bounds are empty and `rank.Midpoint("", "")` returns `rank.Initial()`'s `"V"` (`internal/rank/rank.go:83-88`). Its callers are `rankToEdge`, reading the frame's edge holder through `frameEdgeHolderTx` and wrapping the error `fmt.Errorf("rank to %s: %w", edge.name, err)` (`:291-297`); `RankSet`, for the key of its last id (`:416-425`); and `nextRankForPlacement` (`internal/store/store.go:2035-2050`).
+`rankEdge.rankBeyondTx(ctx, tx, readEdge)` — `internal/store/ranking.go:83-89`: the key past a frame's edge. Its body is one `rankBetweenTx` call, whose `bounds` reads the edge's rank through `readEdge()` on every call, returns a `readEdge` error as is, and pairs the rank through the edge's `beside` (`:84-88`): `topEdge` gives `("", edgeRank)` and `bottomEdge` gives `(edgeRank, "")` (`:45-48`), the two values `edgeFor` returns (`:54-63`). An all-zero rank at the top edge therefore gets room made above it the same way a relative move's pair does; the bottom edge's open upper bound never lacks room. The edge is not read ahead of `rankBetweenTx`: an empty frame's edge reads as `""`, so both bounds are empty and `rank.Midpoint("", "")` returns `rank.Initial()`'s `"V"` (`internal/rank/rank.go:83-88`). Its callers are `rankToEdge`, reading the frame's edge holder through `frameEdgeHolderTx` and wrapping the error `fmt.Errorf("rank to %s: %w", edge.name, err)` (`:291-297`); `RankSet`, for the key of its last id (`:416-425`).
 
 Frame behavior pinned by tests — `internal/store/ranking_frame_test.go`:
 - Standalone above an epic child anchors to the epic; epic and all children keep their exact rank strings; standalone ends above the epic (`:56-80`).

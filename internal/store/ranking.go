@@ -32,20 +32,104 @@ const frameColumn = `COALESCE((SELECT r.dst_id FROM relations r
 
 // rankEdge is one end of a frame's keyspace as the query and the key algebra
 // see it: the ordering that brings that end to the front of a result, the pair
-// of bounds a key just past it sits between, and the word for it. The end a
-// caller asked for crosses as this value, so one statement and one assignment
-// serve both ends instead of two near-copies free to drift.
-// [LAW:dataflow-not-control-flow]
+// of bounds a key just past it sits between, the population a create files
+// against there, and the word for it. The end a caller asked for crosses as
+// this value, so one statement and one assignment serve both ends instead of
+// two near-copies free to drift. [LAW:dataflow-not-control-flow]
 type rankEdge struct {
 	name   string
 	order  string
 	beside func(edgeRank string) (lower, upper string)
+	// filingRank is the key a create's placement is computed against at this
+	// end. The two ends genuinely ask different populations — see
+	// nextRankForPlacement — so the population is carried by the edge the
+	// dispatch already returns rather than chosen by a second test on the
+	// placement at the one call site.
+	filingRank func(ctx context.Context, tx *sql.Tx, f storage.Frame, edge rankEdge) (string, error)
 }
 
 var (
-	topEdge    = rankEdge{name: "top", order: "ASC", beside: func(r string) (string, string) { return "", r }}
-	bottomEdge = rankEdge{name: "bottom", order: "DESC", beside: func(r string) (string, string) { return r, "" }}
+	topEdge = rankEdge{
+		name:       "top",
+		order:      "ASC",
+		beside:     func(r string) (string, string) { return "", r },
+		filingRank: frameEdgeRankTx,
+	}
+	bottomEdge = rankEdge{
+		name:       "bottom",
+		order:      "DESC",
+		beside:     func(r string) (string, string) { return r, "" },
+		filingRank: workspaceEdgeRankTx,
+	}
 )
+
+// filingBoundsTx is the pair a create's key is placed between: the keys beside
+// this end of the population the create files against.
+//
+// The empty population is the case this function exists for, and it is not the
+// same case as an empty workspace. A frame with nothing ranked in it has no key
+// for the named end to sit beside, and its two ends are one position anyway —
+// but the key written still has to be distinct from every key that exists, and
+// the midpoint of the whole keyspace is not distinct: it is rank.Initial, which
+// the workspace's first issue already holds. A first child filed at the top of
+// its epic therefore took a key another issue was already using, which
+// VerifyCandidate's rank law reads as a workspace with no valid order.
+//
+// So an empty population files past the workspace's last key — the one end
+// nothing can already hold, and the very key the default placement would have
+// given the same issue, which is the answer an empty frame deserves: no order
+// to lead means the two ends asked for the same thing. The bottom edge asked of
+// an empty WORKSPACE falls through the same path and reads "" again, so the
+// first issue in a workspace still takes rank.Initial.
+//
+// [LAW:one-source-of-truth] Both arms pair their key through the edge's own
+// beside, so the direction of each end is still stated once, in the edge.
+func (e rankEdge) filingBoundsTx(ctx context.Context, tx *sql.Tx, f storage.Frame) (lower, upper string, err error) {
+	edgeRank, err := e.filingRank(ctx, tx, f, e)
+	if err != nil {
+		return "", "", err
+	}
+	if edgeRank != "" {
+		lower, upper = e.beside(edgeRank)
+		return lower, upper, nil
+	}
+	lastRank, err := bottomEdge.filingRank(ctx, tx, f, bottomEdge)
+	if err != nil {
+		return "", "", err
+	}
+	lower, upper = bottomEdge.beside(lastRank)
+	return lower, upper, nil
+}
+
+// frameEdgeRankTx is the key held at one end of a frame, and it is the whole
+// of the top edge's filing population: a child filed at the top leads its
+// siblings and nothing else, so the key it takes must be a midpoint against a
+// sibling — an issue it is actually read against — rather than against
+// whichever issue happens to hold the workspace's first key.
+//
+// [LAW:single-enforcer] It reads through frameEdgeHolderTx, the same lookup
+// RankToTop seeds from, so filing at a frame's top and moving to it cannot
+// hold two notions of where that top is.
+func frameEdgeRankTx(ctx context.Context, tx *sql.Tx, f storage.Frame, edge rankEdge) (string, error) {
+	_, edgeRank, err := frameEdgeHolderTx(ctx, tx, f, edge)
+	return edgeRank, err
+}
+
+// workspaceEdgeRankTx is the key held at one end of every rank in the
+// workspace, ignoring frames. It is the bottom edge's filing population, and
+// deliberately so: filing at the bottom must land the new issue after
+// everything that already exists, which is what keeps an authored batch — an
+// import, a create loop — in the order its file states.
+func workspaceEdgeRankTx(ctx context.Context, tx *sql.Tx, _ storage.Frame, edge rankEdge) (string, error) {
+	query := fmt.Sprintf(`SELECT item_rank FROM issues
+		WHERE deleted_at IS NULL AND item_rank != ''
+		ORDER BY item_rank %s LIMIT 1`, edge.order)
+	edgeRank, err := nearestRank(ctx, tx, query)
+	if err != nil {
+		return "", fmt.Errorf("query %s rank: %w", edge.name, err)
+	}
+	return edgeRank, nil
+}
 
 // edgeFor is the single dispatch point on RankPlacement for rank keys: both
 // edge verbs and issue creation's placement resolve their end here, so there
@@ -62,18 +146,19 @@ func edgeFor(p storage.RankPlacement) (rankEdge, error) {
 	}
 }
 
-// rankBeyondTx is the key just past a frame's edge, whose key readEdge reads —
-// or the frame's first key when the frame holds nothing ranked yet. An empty
-// frame's edge reads as "", so both bounds are open and the key is the midpoint
-// of the whole keyspace, which rank's TestMidpointOfTheWholeKeyspaceIsInitial
-// pins to rank.Initial. The empty frame is a value, not a branch, and every
-// caller assigns unconditionally. [LAW:dataflow-not-control-flow]
+// rankBeyondTx is the key just past a frame's edge, whose key readEdge reads.
 //
-// The edge is read only inside rankBetweenTx, never ahead of it to test for an
-// empty frame. Every create places a key at an edge, so a read ahead of the
-// placement would be a second query on every create. A placement with room
-// costs one read, and one that has to make room costs one more, taken after the
-// respace has rewritten the edge.
+// Every caller is a rank verb moving an issue within the frame that already
+// holds it, so the frame here always has a member and its edge always reads a
+// key. Creation is the caller that can be handed a frame holding nothing yet,
+// and it does not come through here: it composes its bounds in filingBoundsTx
+// and calls rankBetweenTx directly, because an empty frame's open bounds yield
+// the midpoint of the whole keyspace — rank.Initial, a key the workspace's
+// first issue is already holding.
+//
+// The edge is read only inside rankBetweenTx, never ahead of it. A placement
+// with room costs one read, and one that has to make room costs one more, taken
+// after the respace has rewritten the edge.
 //
 // The edge is read through a function rather than passed as a key because the
 // key past it is placed by rankBetweenTx, which rewrites the edge's key when it
@@ -129,6 +214,39 @@ func frameOfTx(ctx context.Context, tx *sql.Tx, issueID string) (storage.Frame, 
 		return storage.TopLevel, fmt.Errorf("frame of %s: %w", issueID, err)
 	}
 	return storage.Frame(f), nil
+}
+
+// filingFrameTx names the frame a new issue is being created into, and
+// refuses a parent that is not there.
+//
+// The two answers are one read because they are one question: a create that
+// names a parent is asking to be filed in that parent's frame, and a parent
+// nothing can be filed under is the not-found the caller has to hear about.
+// [LAW:no-silent-failure]
+//
+// A deleted container frames nothing, so a child named under one is filed at
+// the top level — the same rule frameColumn renders for every neighbor lookup
+// and frameOfTx reads back once the edge exists. The new issue's own frame is
+// settled here rather than read back after the insert because its rank is
+// written by the same statement sequence: reading it afterwards would mean
+// placing the key before knowing which keyspace it belongs to.
+// [LAW:one-source-of-truth]
+func filingFrameTx(ctx context.Context, tx *sql.Tx, parentID string) (storage.Frame, error) {
+	if parentID == "" {
+		return storage.TopLevel, nil
+	}
+	var deletedAt sql.NullString
+	err := tx.QueryRowContext(ctx, `SELECT deleted_at FROM issues WHERE id = ?`, parentID).Scan(&deletedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return storage.TopLevel, storage.NotFoundError{Entity: "issue", ID: parentID}
+	}
+	if err != nil {
+		return storage.TopLevel, fmt.Errorf("lookup parent issue %q: %w", parentID, err)
+	}
+	if deletedAt.Valid {
+		return storage.TopLevel, nil
+	}
+	return storage.Frame(parentID), nil
 }
 
 // mustRankable is the one gate every rank verb passes a named issue through:

@@ -83,7 +83,7 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 	// reported at a fabricated rank. place reads only e.order, so ordering the
 	// two this way removes that state rather than unwinding it.
 	// [LAW:polishing-by-subtraction]
-	if err := e.place(id, in.Placement); err != nil {
+	if err := e.place(id, e.filingFrame(parentID), in.Placement); err != nil {
 		return model.Issue{}, err
 	}
 	e.issues[id] = rec
@@ -108,14 +108,17 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 // value, so a create that says nothing about placement appends — which is what
 // keeps an authored batch in the order its file states it.
 //
-// Filing is scoped to the whole order, not to the issue's frame the way the
-// rank verbs are: landing after everything that exists is also landing after
-// every frame-mate, so the default satisfies the frame-local reading for free,
-// and scoping it would drop a first child into the middle of the order
-// instead. The remaining unscoped edge is RankTop, tracked on its own
-// (links-rank-t2vl) because narrowing it changes what filing order
-// means.
-func (e *Engine) place(id string, placement storage.RankPlacement) error {
+// The two ends are taken among different populations, and the asymmetry is the
+// contract rather than an oversight. The bottom is the whole order's: landing
+// after everything that exists is also landing after every frame-mate, so the
+// default satisfies the frame-local reading for free, and scoping it would
+// drop a first child into the middle of the order instead. The top is the
+// frame's: leading the whole order is not leading my siblings, and a child
+// filed at slot zero led the backlog while claiming only to lead its epic
+// (links-rank-t2vl). Each edge carries its own population, so the choice is
+// made once, in orderEdgeFor, rather than tested again here.
+// [LAW:dataflow-not-control-flow]
+func (e *Engine) place(id string, f storage.Frame, placement storage.RankPlacement) error {
 	// The placement is dispatched before the population is even built, so an
 	// unrecognized one is refused the same way whether the workspace is empty or
 	// full. Answering the empty order first — the shortcut this had — skipped the
@@ -126,13 +129,24 @@ func (e *Engine) place(id string, placement storage.RankPlacement) error {
 	if err != nil {
 		return err
 	}
-	// The population is every position in the order — the same edge dispatch the
-	// rank verbs use, asked about the workspace instead of one frame.
-	population := make([]int, len(e.order))
-	for index := range e.order {
-		population[index] = index
+	// The population comes from the edge — the same edge dispatch the rank
+	// verbs use, asked about filing instead of moving.
+	positions := edge.filingPositions(e, f, id)
+	if len(positions) == 0 {
+		// A frame with nothing in it has no order to lead, so its two ends
+		// asked for the same thing, and the issue files where the default
+		// placement would have put it: after everything that exists. The SQL
+		// engine reaches the same slot from the other direction — an empty
+		// frame leaves it no key to sit beside, and the key past the
+		// workspace's last is the only one nothing already holds. One rule,
+		// stated in each engine's own terms. [LAW:one-type-per-behavior]
+		edge, err = orderEdgeFor(storage.RankBottom)
+		if err != nil {
+			return err
+		}
+		positions = edge.filingPositions(e, f, id)
 	}
-	e.insertAt(edge.positionIn(population), id)
+	e.insertAt(edge.positionIn(positions), id)
 	return nil
 }
 

@@ -524,7 +524,7 @@ else ready.
 | `--assignee` | string | `""` | "Assignee" (trimmed, `cli.go:352`) |
 | `--labels` | string | `""` | "Comma-separated labels" (split by `splitCSV`) |
 | `--lane` | string | `""` | "Lane key partitioning an epic's children into parallel rank-ordered sub-sequences; shared lane serializes, distinct lane parallelizes" |
-| `--top` | bool | `false` | "Promote the new issue to the top of the order (the default appends it to the bottom of its frame)" |
+| `--top` | bool | `false` | "Promote the new issue to the top of its frame (the default appends it to the bottom)" |
 | `--by` | string (hidden) | `""` | actor fallback (§1.11) — *note*: `runNew` registers no actor; `CreatedBy` is not set from the CLI here |
 
 - `--top` maps to `storage.RankTop`; unflagged uses the zero `RankPlacement`

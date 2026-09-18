@@ -19,11 +19,17 @@ import (
 // child's rank is only ever compared against its siblings' (composite rank is
 // keyed on the containing epic's rank first), so bottom-of-order is
 // bottom-of-frame with no frame-scoped machinery.
+//
+// The top has no such luck: sorting before everything is not sorting before my
+// siblings and nothing else, so RankTop is read within the frame the issue is
+// filed into. The asymmetry is the two edges answering the same question —
+// "which issues is this one ordered against?" — where only one of them gets
+// the right answer by accident.
 type RankPlacement int
 
 const (
 	RankBottom RankPlacement = iota // sorts after all existing items (default)
-	RankTop                         // sorts before all existing items
+	RankTop                         // sorts before every item in the frame it is filed into
 )
 
 type CreateIssueInput struct {
@@ -48,7 +54,8 @@ type CreateIssueInput struct {
 	Labels   []string
 	// Placement decides where the new issue lands in the rank order. Zero value
 	// (RankBottom) appends, so an authored batch keeps its order for free;
-	// callers promoting a ticket to the front of the agenda pass RankTop.
+	// callers filing a ticket ahead of the issues it will be ordered against —
+	// its parent's other children, or the rest of the top level — pass RankTop.
 	Placement RankPlacement
 	// Prefix is the workspace's cosmetic ID prefix (e.g., "links" → "links-foo-abc1").
 	// Sourced from workspace config at the call site. Not persisted as derived state.

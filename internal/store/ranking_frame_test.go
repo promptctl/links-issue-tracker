@@ -848,3 +848,129 @@ func TestRelativeMoveRefusesAnUnrankedAnchor(t *testing.T) {
 		t.Errorf("a refused move still moved %s: rank %q -> %q", moved, before.Rank, after.Rank)
 	}
 }
+
+// TestCreateAtTopDrawsItsKeyFromItsOwnFrame is the creation-side twin of
+// TestRankToEdgeDrawsItsKeyFromItsOwnFrame, and it asserts rank STRINGS for
+// the same reason: the rendered order cannot see this defect. A child filed at
+// the top of its epic leads its siblings whichever key it holds, so the
+// listing looks identical while the key was drawn from a keyspace the child is
+// never read against — and it is the keyspace, not the order, that decides
+// what the NEXT rank is computed against.
+func TestCreateAtTopDrawsItsKeyFromItsOwnFrame(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	fx := newFrameFixture(t, ctx, st)
+	all := append([]model.Issue{fx.epic, fx.standalone}, fx.children...)
+	before := currentRanks(t, ctx, st, all)
+
+	// The fixture shape this case rests on: the epic leads the top level, and
+	// C1 leads the epic's children. Stated rather than assumed, so a fixture
+	// that changes shape fails here instead of asserting something else.
+	if before[fx.epic.ID] >= before[fx.standalone.ID] {
+		t.Fatalf("epic rank %q is not the top-level leader (standalone %q); the fixture no longer sets up this case", before[fx.epic.ID], before[fx.standalone.ID])
+	}
+	if before[fx.children[0].ID] >= before[fx.children[1].ID] {
+		t.Fatalf("C1 rank %q does not lead C2 %q; the fixture no longer sets up this case", before[fx.children[0].ID], before[fx.children[1].ID])
+	}
+
+	lead, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "New lead", Topic: "frame", IssueType: "task", ParentID: fx.epic.ID, Placement: storage.RankTop})
+	if err != nil {
+		t.Fatalf("CreateIssue(child, --top) error = %v", err)
+	}
+	// The key is seeded from C1's — the key that leads the new child's own
+	// frame — and from nothing else.
+	if want := mustBefore(t, before[fx.children[0].ID]); lead.Rank != want {
+		t.Errorf("child filed --top has rank %q, want %q = Before(C1 %q), its frame's leading key", lead.Rank, want, before[fx.children[0].ID])
+	}
+	if contaminated := mustBefore(t, before[fx.epic.ID]); lead.Rank == contaminated {
+		t.Errorf("child filed --top has rank %q, computed against the workspace's first key (the epic, %q) rather than against its frame", lead.Rank, before[fx.epic.ID])
+	}
+	// Filing writes one key. An issue that was already there and was not named
+	// has no reason to move.
+	for id, rankBefore := range currentRanks(t, ctx, st, all) {
+		if rankBefore != before[id] {
+			t.Errorf("issue %s rank changed %q -> %q; filing a new issue moves nothing that already exists", id, before[id], rankBefore)
+		}
+	}
+
+	// The precondition that gives the rest of this case its teeth: the new
+	// child's key sorts below every top-level key, so an unscoped "first rank"
+	// query WOULD return it. Without this the assertions below pass vacuously.
+	if lead.Rank >= before[fx.epic.ID] {
+		t.Fatalf("child rank %q does not sort below the top-level leader %q; this case cannot tell a scoped query from an unscoped one", lead.Rank, before[fx.epic.ID])
+	}
+
+	// A top-level --top create now: its key must come from the top-level
+	// leader, never from the child that happens to hold a smaller string.
+	topLead, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "New top-level lead", Topic: "frame", IssueType: "task", Placement: storage.RankTop})
+	if err != nil {
+		t.Fatalf("CreateIssue(top-level, --top) error = %v", err)
+	}
+	if want := mustBefore(t, before[fx.epic.ID]); topLead.Rank != want {
+		t.Errorf("top-level issue filed --top has rank %q, want %q = Before(the top-level leader %q)", topLead.Rank, want, before[fx.epic.ID])
+	}
+	if contaminated := mustBefore(t, lead.Rank); topLead.Rank == contaminated {
+		t.Errorf("top-level issue filed --top has rank %q, computed against %q, a key in the epic's frame", topLead.Rank, lead.Rank)
+	}
+
+	// The bottom edge keeps asking the whole workspace, and that is the
+	// contract rather than the other half of this bug: filing at the bottom
+	// must land after everything that already exists, which is what keeps an
+	// authored batch in the order its file states. A child filed there is
+	// seeded from the workspace's last key — the standalone's — not from C3's.
+	trail, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "New trail", Topic: "frame", IssueType: "task", ParentID: fx.epic.ID, Placement: storage.RankBottom})
+	if err != nil {
+		t.Fatalf("CreateIssue(child, default placement) error = %v", err)
+	}
+	if want := rank.After(before[fx.standalone.ID]); trail.Rank != want {
+		t.Errorf("child filed at the bottom has rank %q, want %q = After(the workspace's last key %q)", trail.Rank, want, before[fx.standalone.ID])
+	}
+}
+
+// TestCreateAtTopOfAnEmptyFrameTakesADistinctKey covers the case scoping the
+// top edge to the frame creates: the frame's edge reads as absent, both bounds
+// come back open, and the midpoint of the whole keyspace is rank.Initial —
+// which the workspace's first issue is already holding. The rendered order
+// cannot see that either. Two issues sharing a key still list in some order,
+// decided by the id tiebreak, and only the keys say that nothing ranked them.
+func TestCreateAtTopOfAnEmptyFrameTakesADistinctKey(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	first, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "First", Topic: "frame", IssueType: "task"})
+	if err != nil {
+		t.Fatalf("CreateIssue(first) error = %v", err)
+	}
+	if first.Rank != rank.Initial() {
+		t.Fatalf("the first issue in a workspace has rank %q, want the initial rank %q; this case rests on it holding the key an empty-bounds midpoint yields", first.Rank, rank.Initial())
+	}
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Childless epic", Topic: "frame", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+
+	only, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Only child", Topic: "frame", IssueType: "task", ParentID: epic.ID, Placement: storage.RankTop})
+	if err != nil {
+		t.Fatalf("CreateIssue(first child, --top) error = %v", err)
+	}
+	if only.Rank == first.Rank {
+		t.Errorf("the first child filed --top took rank %q, the key %s already holds; a rank orders one issue", only.Rank, first.ID)
+	}
+	// There is no sibling to lead, so it files where the default placement
+	// would have filed it: past the workspace's last key, which is the epic's.
+	if want := rank.After(epic.Rank); only.Rank != want {
+		t.Errorf("the first child filed --top took rank %q, want %q = After(the workspace's last key %q)", only.Rank, want, epic.Rank)
+	}
+
+	// Once the frame holds a key, the top edge has an order to lead again and
+	// goes back to seeding from it.
+	second, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Second child", Topic: "frame", IssueType: "task", ParentID: epic.ID, Placement: storage.RankTop})
+	if err != nil {
+		t.Fatalf("CreateIssue(second child, --top) error = %v", err)
+	}
+	if want := mustBefore(t, only.Rank); second.Rank != want {
+		t.Errorf("the second child filed --top took rank %q, want %q = Before(its frame's leading key %q)", second.Rank, want, only.Rank)
+	}
+}
