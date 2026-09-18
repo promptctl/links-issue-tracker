@@ -72,3 +72,52 @@ func TestTheExitLineCountsWhatDiffers(t *testing.T) {
 		t.Errorf("verify() error = %q, want it to count what differs rather than state two totals", err)
 	}
 }
+
+// TestWriteReportsAReanchorAndStillWrites pins the branch between the other
+// two: a re-anchor is the ordinary edit, so it is reported and then written,
+// never refused. The distinction is the whole reason Stopped is a separate
+// kind, and nothing held it — a refusal widened to cover AnchorMoved would
+// have broken the prescribed workflow with both of the other tests still
+// green.
+//
+// It also pins the order. The report claims an action already taken, so it
+// must follow the write that takes it.
+func TestWriteReportsAReanchorAndStillWrites(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "manifest_gen.go")
+	claims := []docclaims.Claim{{Doc: "d.md", Text: "some text", Src: "now inside a longer literal saying some text"}}
+	reanchored := docclaims.Comparison{Drifted: []docclaims.Drift{{
+		Claim: docclaims.Claim{Doc: "d.md", Text: "some text", Src: "some text"},
+		Kind:  docclaims.AnchorMoved,
+		Now:   "now inside a longer literal saying some text",
+	}}}
+	if err := write(path, claims, reanchored); err != nil {
+		t.Fatalf("write() refused a re-anchor; the ordinary edit is now unprescribable: %v", err)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("write() reported a re-anchor but produced no manifest: %v", err)
+	}
+	if !strings.Contains(string(body), `Src: "now inside a longer literal saying some text"`) {
+		t.Error("write() wrote a manifest that did not carry the re-anchored source")
+	}
+}
+
+// TestAReanchorReportDoesNotDumpAWholeLiteral covers a report that buried its
+// own subject. A Go-literal handle is the entire literal the words were found
+// inside, which reaches kilobytes in this corpus, and the writer printed it
+// unedited while Explain truncated the same value for exactly that reason.
+func TestAReanchorReportDoesNotDumpAWholeLiteral(t *testing.T) {
+	huge := "a shipped literal that begins here " + strings.Repeat("x", 4000)
+	d := docclaims.Drift{
+		Claim: docclaims.Claim{Doc: "d.md", Text: "begins here", Src: "begins here"},
+		Kind:  docclaims.AnchorMoved,
+		Now:   huge,
+	}
+	brief := d.NowBrief()
+	if len(brief) > 200 {
+		t.Errorf("NowBrief() returned %d bytes; a report line carrying it buries the sentence it is about", len(brief))
+	}
+	if !strings.Contains(d.Explain(), brief) {
+		t.Error("Explain() and the writer's report no longer show the same shortened handle")
+	}
+}

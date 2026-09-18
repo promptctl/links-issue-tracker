@@ -973,13 +973,29 @@ func closesFence(open, trimmed string) bool {
 // that starts quoting a real message joins the protected set on the next sync,
 // and one that never quoted code is simply absent rather than allowlisted.
 func Matched(claims []Claim, corpus Corpus) []Claim {
+	// tightest is a function of the text and the corpus alone, and the chapters
+	// repeat themselves: a sixth of the spans quote a phrase another span
+	// already quoted (1,197 of 7,073, measured 2026-09-18), and each repeat
+	// re-scanned every shipped literal and asset to reach the same answer. The
+	// table lives and dies inside this call, so it cannot outlast the corpus it
+	// was computed against and there is no staleness to reason about.
+	// [LAW:dataflow-not-control-flow] one question, asked once.
+	type match struct {
+		src string
+		ok  bool
+	}
+	answered := make(map[string]match, len(claims))
 	var out []Claim
 	for _, c := range claims {
-		src, ok := tightest(c.Text, corpus)
-		if !ok {
+		m, asked := answered[c.Text]
+		if !asked {
+			m.src, m.ok = tightest(c.Text, corpus)
+			answered[c.Text] = m
+		}
+		if !m.ok {
 			continue
 		}
-		c.Src = src
+		c.Src = m.src
 		out = append(out, c)
 	}
 	return out
