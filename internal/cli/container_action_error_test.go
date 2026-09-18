@@ -417,3 +417,29 @@ func TestSatisfiedSentenceNamesTheTypedVerbToo(t *testing.T) {
 		t.Errorf("the satisfied sentence does not quote the verb the caller typed (%q): %s", model.ActionReopen.Verb(), err.Error())
 	}
 }
+
+// TestBulkUsageNamesTheTypedVerb pins the one site of this class that the
+// mechanical gate in internal/model/lifecycle cannot see. That gate scans fmt
+// calls; this site builds its string by concatenation, which is exactly why
+// every sweep aimed at message formatting missed it and a reviewer found it.
+//
+// No bulk row routes a Reopen today — `lit bulk` serves the retention verbs,
+// whose two names agree — so nothing reachable through the CLI can tell a right
+// answer here from a wrong one. The leaf builder takes the action as a
+// parameter, though, so the case is constructible, and constructing it is the
+// only way this site gets a check that can fail. Same reasoning as
+// TestSatisfiedSentenceNamesTheTypedVerbToo.
+func TestBulkUsageNamesTheTypedVerb(t *testing.T) {
+	leaf := bulkTransitionLeaf(model.Reopen{})()
+	help := leaf.fs.cmd.Flags().Lookup("help")
+	if help == nil {
+		t.Fatal("no help flag on the bulk leaf's flag set, so its usage string cannot be read")
+	}
+	if strings.Contains(help.Usage, string(model.ActionReopen)) {
+		t.Errorf("bulk usage names %q, the events-table encoding: %q", string(model.ActionReopen), help.Usage)
+	}
+	want := "help for bulk " + model.ActionReopen.Verb()
+	if help.Usage != want {
+		t.Errorf("bulk usage = %q, want %q", help.Usage, want)
+	}
+}

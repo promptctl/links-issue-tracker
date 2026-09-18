@@ -34,10 +34,21 @@ import (
 //     kept in a list beside them, because a list beside them is a second copy
 //     that falls behind silently.
 //
-// What it does not cover: a value of type ActionName reached through a spelling
-// no declaration in the tree introduces — assigned to a local with a fresh name,
-// say, or returned through an interface. TestActionNameSpellingsAreAccountedFor
-// is the tripwire for the first of those.
+// What it does not cover, stated in full because an incomplete account of a
+// gate's blind spots is the same defect as an overclaiming one:
+//
+//   - String building outside fmt. `lit bulk <verb>` builds its usage line by
+//     concatenation, and that is the site of this class a reviewer found after
+//     two of my own sweeps missed it. Dropping the fmt restriction was measured
+//     rather than assumed: the resulting rule flags 82 sites, nearly all
+//     unrelated fields that happen to be named Action, and a gate that cries
+//     wolf 82 times is a gate someone switches off. That site is pinned by
+//     TestBulkUsageNamesTheTypedVerb instead, which constructs the one action
+//     whose two names differ.
+//   - A value of type ActionName reached through a spelling no declaration in
+//     the tree introduces — assigned to a local with a fresh name, say, or
+//     returned through an interface. TestActionNameSpellingsAreAccountedFor is
+//     the tripwire for a new declaration; a fresh local name is not covered.
 var (
 	// A struct field or var declared as ActionName: captures the field's name.
 	actionNameField = regexp.MustCompile(`(?m)^\s*(\w+)\s+(?:model\.)?ActionName\s*$`)
@@ -146,8 +157,16 @@ func namesTypedActionName(sources map[string]string) []string {
 func namesTypedAction(sources map[string]string) []string {
 	seen := map[string]bool{}
 	for _, src := range sources {
-		for _, m := range actionValue.FindAllStringSubmatch(src, -1) {
-			seen[m[1]] = true
+		for _, line := range strings.Split(src, "\n") {
+			// Skip comments: `// ... no Action ...` matched the declaration
+			// pattern and produced bearer names like `no.Name()`, which match
+			// nothing and so fail silently rather than loudly.
+			if strings.HasPrefix(strings.TrimSpace(line), "//") {
+				continue
+			}
+			for _, m := range actionValue.FindAllStringSubmatch(line, -1) {
+				seen[m[1]] = true
+			}
 		}
 	}
 	out := []string{}
