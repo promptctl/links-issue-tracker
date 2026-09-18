@@ -125,7 +125,7 @@ Each checkout's identity is a token in the file `lit-stream` inside its private 
 
 ### Git-remote helpers
 
-`UpstreamRemote` (first segment of `@{upstream}`), `RemoteHasRefs` (`git ls-remote` non-empty), `RemoteHasDoltData` (`git ls-remote <r> refs/dolt/*` non-empty), `DefaultRemoteBranch` (`symbolic-ref` on the remote-HEAD ref, falling back to `ls-remote --symref`), `GitRemotes` (`git remote -v` fetch lines, deduped, sorted). A blank remote name normalizes to `origin` (`workspace.go:177-217, 401-470`).
+`UpstreamRemote` (first segment of `@{upstream}`), `RemoteHasRefs` (`git ls-remote` non-empty), `RemoteHasDoltData` (`git ls-remote <r> refs/dolt/*` non-empty), `DefaultRemoteBranch` (`symbolic-ref` on the remote-HEAD ref, falling back to `ls-remote --symref`), `GitRemotes` (`git remote -v` fetch lines, deduped, sorted). A blank remote name normalizes to `origin` (`workspace.go:177-217, 437-506`).
 
 ## Version identity
 
