@@ -155,7 +155,7 @@ to `/Users/bmf/code/links-issue-tracker`.
 
 ### 2.7 Exit codes (`internal/cli/exit.go`)
 
-Constants (`internal/cli/exit.go:10-18`):
+Constants (`internal/cli/exit.go:12-33`):
 
 | Name | Value |
 |---|---|
