@@ -183,15 +183,8 @@ func (e *Engine) addRelation(in storage.AddRelationInput) (model.Relation, error
 	if _, err := e.mustRecord(dstID); err != nil {
 		return model.Relation{}, err
 	}
-	// The blocks subgraph must stay acyclic: a rank order is a total order,
-	// and one honoring every blocks edge exists exactly when there is no
-	// cycle. Rejecting the cycle-closing edge at this write boundary is what
-	// makes the unsatisfiable state unrepresentable rather than something a
-	// later repair pass has to notice. [LAW:types-are-the-program]
-	if in.Type == model.RelBlocks {
-		if err := e.rejectBlocksCycle(srcID, dstID); err != nil {
-			return model.Relation{}, err
-		}
+	if err := e.rejectCycle(in.Type, srcID, dstID); err != nil {
+		return model.Relation{}, err
 	}
 	rel := model.Relation{SrcID: srcID, DstID: dstID, Type: in.Type, CreatedAt: e.clock.Now(), CreatedBy: authorOr(in.CreatedBy)}
 	// A single-valued type's src holds at most one such edge, so writing one
@@ -207,6 +200,62 @@ func (e *Engine) addRelation(in storage.AddRelationInput) (model.Relation, error
 	}
 	e.relations = append(e.relations, rel)
 	return rel, nil
+}
+
+// rejectCycle refuses an edge whose type may not close a loop. Two types carry
+// an acyclicity rule, over different graphs and for different reasons, and
+// related-to carries none — which it states by having no arm rather than by a
+// guard somewhere deciding it is exempt. The same two arms live in the Dolt
+// store's rejectCycleTx; this is one rule rendered twice, not two.
+// [LAW:one-source-of-truth] [LAW:dataflow-not-control-flow]
+func (e *Engine) rejectCycle(relType model.RelationType, srcID, dstID string) error {
+	switch relType {
+	case model.RelBlocks:
+		// A rank order is a total order, and one honoring every blocks edge
+		// exists exactly when there is no cycle, so a cycle is an unsatisfiable
+		// constraint set rather than an awkward shape. Rejecting the
+		// cycle-closing edge at this write boundary is what makes the state
+		// unrepresentable rather than something a later repair pass notices.
+		// [LAW:types-are-the-program]
+		return e.rejectBlocksCycle(srcID, dstID)
+	case model.RelParentChild:
+		return e.rejectParentCycle(srcID, dstID)
+	}
+	return nil
+}
+
+// rejectParentCycle refuses an edge that would close a loop in the hierarchy.
+//
+// A hierarchy is a tree: every issue reaches a root by walking up, and every
+// consumer that derives container state or resolves a top-level ancestor is
+// built on that walk terminating. A cycle has no root, so such a walk does not
+// return a wrong answer — it does not return. [LAW:types-are-the-program]
+//
+// The edge runs child -> parent, so the loop closes exactly when the parent is
+// already at or below the child.
+func (e *Engine) rejectParentCycle(childID, parentID string) error {
+	if childID == parentID {
+		return fmt.Errorf("parent-child: %s cannot be its own parent", childID)
+	}
+	parentOf := map[string]string{}
+	for _, rel := range e.relations {
+		if rel.Type == model.RelParentChild {
+			parentOf[rel.SrcID] = rel.DstID
+		}
+	}
+	// seen bounds the walk on data that already holds a cycle, so a store
+	// written before this rule existed reports it rather than hanging here.
+	seen := map[string]struct{}{parentID: {}}
+	for at := parentOf[parentID]; at != ""; at = parentOf[at] {
+		if at == childID {
+			return fmt.Errorf("parent-child: cannot make %s a child of %s — %s is already below %s in the hierarchy, so this edge would close a parent cycle, which has no root", childID, parentID, parentID, childID)
+		}
+		if _, visited := seen[at]; visited {
+			return fmt.Errorf("parent-child: cannot make %s a child of %s — the hierarchy above %s already holds a cycle; run 'lit doctor' to find it", childID, parentID, parentID)
+		}
+		seen[at] = struct{}{}
+	}
+	return nil
 }
 
 // rejectBlocksCycle refuses an edge that would close a cycle in the precedence

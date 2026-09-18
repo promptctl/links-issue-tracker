@@ -306,7 +306,14 @@ func doctorLeaf() appLeaf {
 		if len(report.DependencyCycle) > 0 {
 			dependencyCycle = strings.Join(report.DependencyCycle, "->")
 		}
-		if _, err := fmt.Fprintf(stdout, "integrity_check=%s foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d rank_inversions=%d dependency_cycle=%s\n", report.IntegrityCheck, report.ForeignKeyIssues, report.InvalidRelatedRows, report.OrphanHistoryRows, report.RankInversions, dependencyCycle); err != nil {
+		// A parent cycle reads on the same line as the dependency cycle because
+		// it answers the same shape of question about the other graph, and "none"
+		// states a clean check rather than leaving its absence to be read as one.
+		parentCycle := "none"
+		if len(report.ParentCycle) > 0 {
+			parentCycle = strings.Join(report.ParentCycle, "->")
+		}
+		if _, err := fmt.Fprintf(stdout, "integrity_check=%s foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d rank_inversions=%d dependency_cycle=%s parent_cycle=%s\n", report.IntegrityCheck, report.ForeignKeyIssues, report.InvalidRelatedRows, report.OrphanHistoryRows, report.RankInversions, dependencyCycle, parentCycle); err != nil {
 			return err
 		}
 		if err := printSyncFreshness(stdout, syncReport); err != nil {

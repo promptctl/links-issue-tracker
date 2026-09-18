@@ -303,41 +303,65 @@ func (s *Store) AddRelation(ctx context.Context, in storage.AddRelationInput) (m
 		rel.CreatedBy = "unknown"
 	}
 	if err := s.withMutation(ctx, "add relation", func(ctx context.Context, tx *sql.Tx) error {
-		// [LAW:no-ambient-temporal-coupling] Both endpoints are proven to exist on
-		// this tx, under the held commit lock, so the edge cannot be written
-		// against an endpoint a concurrent delete removed between check and write.
-		if err := requireIssueExistsTx(ctx, tx, in.SrcID); err != nil {
-			return err
-		}
-		if err := requireIssueExistsTx(ctx, tx, in.DstID); err != nil {
-			return err
-		}
-		// [LAW:types-are-the-program] The blocks subgraph must stay acyclic: a
-		// rank order is a total order, and one that honors every blocks edge
-		// exists iff there is no cycle. Rejecting a cycle-closing edge at this
-		// single write boundary makes the unsatisfiable state unrepresentable,
-		// so neither Doctor nor FixRankInversions has to compensate for it.
-		// [LAW:single-enforcer] AddRelation is the only interactive creator of
-		// blocks edges; bulk import is a trust boundary that Doctor re-checks.
-		if rel.Type == model.RelBlocks {
-			if err := rejectBlocksCycle(ctx, tx, rel.SrcID, rel.DstID); err != nil {
-				return err
-			}
-		}
-		// [LAW:single-enforcer] Single-parent cardinality is enforced here for
-		// every write path, not only in SetParent: a single-valued type clears any
-		// existing edge from this src before inserting, so 'lit dep add --type
-		// parent-child' can never leave a child with two parents.
-		// [LAW:dataflow-not-control-flow] The clear-or-not choice is driven by the
-		// type's cardinality value, not by which store method the caller invoked.
-		if rel.Type.SingleValuedFromSrc() {
-			return setSingleValuedEdgeTx(ctx, tx, rel)
-		}
-		return insertRelationTx(ctx, tx, rel)
+		return addRelationTx(ctx, tx, rel)
 	}); err != nil {
 		return model.Relation{}, err
 	}
 	return rel, nil
+}
+
+// addRelationTx is the one body every relation edge is written through,
+// whichever verb the caller typed. `lit dep add` and `lit parent set` are two
+// doors onto this one room, which is why an edge the graph may not hold cannot
+// be true of one door and not the other — the rule lives here rather than in
+// each method that reaches for it. [LAW:single-enforcer]
+//
+// It is also where the two engines meet: the in-memory engine funnels its own
+// SetParent through addRelation for the same reason, so the rules below are one
+// definition rendered twice rather than two that happen to agree.
+// [LAW:one-source-of-truth]
+//
+// [LAW:no-ambient-temporal-coupling] Both endpoints are proven to exist on this
+// tx, under the held commit lock, so the edge cannot be written against an
+// endpoint a concurrent delete removed between check and write.
+func addRelationTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
+	if err := requireIssueExistsTx(ctx, tx, rel.SrcID); err != nil {
+		return err
+	}
+	if err := requireIssueExistsTx(ctx, tx, rel.DstID); err != nil {
+		return err
+	}
+	if err := rejectCycleTx(ctx, tx, rel); err != nil {
+		return err
+	}
+	// [LAW:single-enforcer] Single-parent cardinality is enforced here for
+	// every write path, not only in SetParent: a single-valued type clears any
+	// existing edge from this src before inserting, so 'lit dep add --type
+	// parent-child' can never leave a child with two parents.
+	// [LAW:dataflow-not-control-flow] The clear-or-not choice is driven by the
+	// type's cardinality value, not by which store method the caller invoked.
+	if rel.Type.SingleValuedFromSrc() {
+		return setSingleValuedEdgeTx(ctx, tx, rel)
+	}
+	return insertRelationTx(ctx, tx, rel)
+}
+
+// rejectCycleTx refuses an edge whose type may not close a loop. Two types carry
+// an acyclicity rule, over different graphs and for different reasons, and
+// related-to carries none — which it states by having no arm rather than by a
+// guard somewhere deciding it is exempt.
+// [LAW:dataflow-not-control-flow] The one branch here is the domain's own enum.
+func rejectCycleTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
+	switch rel.Type {
+	case model.RelBlocks:
+		// A rank order is a total order, and one that honors every blocks edge
+		// exists iff there is no cycle, so a cycle is an unsatisfiable
+		// constraint set rather than an awkward shape.
+		return rejectBlocksCycle(ctx, tx, rel.SrcID, rel.DstID)
+	case model.RelParentChild:
+		return rejectParentCycle(ctx, tx, rel.SrcID, rel.DstID)
+	}
+	return nil
 }
 
 // insertRelationTx writes one relation row on the given transaction. It runs on
@@ -387,6 +411,116 @@ func rejectBlocksCycle(ctx context.Context, tx *sql.Tx, dependent, dependency st
 		return fmt.Errorf("blocks: cannot add %s depends-on %s — %s already depends on %s (directly or transitively), so this edge would close a dependency cycle, which has no valid rank order", dependent, dependency, dependency, dependent)
 	}
 	return nil
+}
+
+// rejectParentCycle errors if making child a child of parent would close a loop
+// in the hierarchy.
+//
+// A hierarchy is a tree: every issue reaches a root by walking up, and that walk
+// is what container state derivation, the ancestor walk gating a leaf on its
+// container's blocks edges, and rank's top-level-ancestor resolution are all
+// built on. A cycle has no root, so those walks do not return a wrong answer —
+// they do not terminate, and hydrating any issue in the loop overflows the
+// stack. That is incoherent state rather than an unusual hierarchy, so the edge
+// that would create it is refused here instead of guarded against by every
+// consumer that walks up. [LAW:types-are-the-program]
+//
+// The edge runs child -> parent, so the loop closes exactly when parent is
+// already at or below child: walking up from parent reaches child. Reading the
+// edges as a child -> parent map keeps that walk to one step per ancestor.
+func rejectParentCycle(ctx context.Context, tx *sql.Tx, childID, parentID string) error {
+	if childID == parentID {
+		return fmt.Errorf("parent-child: %s cannot be its own parent", childID)
+	}
+	parentOf, err := loadParentEdges(ctx, tx)
+	if err != nil {
+		return fmt.Errorf("parent cycle check: %w", err)
+	}
+	// seen bounds the walk on data that already holds a cycle, so a workspace
+	// written before this rule existed reports it rather than hanging here.
+	seen := map[string]struct{}{parentID: {}}
+	for at := parentOf[parentID]; at != ""; at = parentOf[at] {
+		if at == childID {
+			return fmt.Errorf("parent-child: cannot make %s a child of %s — %s is already below %s in the hierarchy, so this edge would close a parent cycle, which has no root", childID, parentID, parentID, childID)
+		}
+		if _, visited := seen[at]; visited {
+			return fmt.Errorf("parent-child: cannot make %s a child of %s — the hierarchy above %s already holds a cycle; run 'lit doctor' to find it", childID, parentID, parentID)
+		}
+		seen[at] = struct{}{}
+	}
+	return nil
+}
+
+// parentCycle returns the members of one loop in the hierarchy, in walk order,
+// or nothing when the parent graph is a forest.
+//
+// The write boundary refuses the edge that would close a loop, so a workspace
+// written under that rule cannot grow one — but data written before it, or
+// restored from an export, still can, and every walk up the parent chain
+// hangs on it. Doctor is where that pre-existing state is named, the same
+// division the blocks cycle already uses: refuse at the boundary, report what
+// the boundary was not there to refuse. [LAW:single-enforcer]
+//
+// Each issue has at most one parent, so a walk from any node follows a single
+// path and the first node it revisits is on the loop. Walking from every start
+// and stopping at nodes already proven acyclic keeps the whole scan linear.
+func parentCycle(parentOf map[string]string) []string {
+	// settled holds nodes already known to reach a root or a reported loop, so
+	// no node's ancestry is walked twice.
+	settled := make(map[string]struct{}, len(parentOf))
+	starts := make([]string, 0, len(parentOf))
+	for child := range parentOf {
+		starts = append(starts, child)
+	}
+	// The map's iteration order is random; a cycle report that names the same
+	// members in a different order on every run is a fact nobody can act on.
+	slices.Sort(starts)
+	for _, start := range starts {
+		seenAt := map[string]int{}
+		path := []string{}
+		for at := start; at != ""; at = parentOf[at] {
+			if _, done := settled[at]; done {
+				break
+			}
+			if first, looped := seenAt[at]; looped {
+				return path[first:]
+			}
+			seenAt[at] = len(path)
+			path = append(path, at)
+		}
+		for _, node := range path {
+			settled[node] = struct{}{}
+		}
+	}
+	return nil
+}
+
+// loadParentEdges returns the child -> parent map over issues that both exist
+// and are not deleted. A deleted container frames nothing, so its edge is not
+// part of the hierarchy a walk climbs.
+func loadParentEdges(ctx context.Context, q rowQueryer) (map[string]string, error) {
+	rows, err := q.QueryContext(ctx, `SELECT r.src_id, r.dst_id FROM relations r
+		JOIN issues src ON src.id = r.src_id
+		JOIN issues dst ON dst.id = r.dst_id
+		WHERE r.type = 'parent-child'
+		AND src.deleted_at IS NULL AND dst.deleted_at IS NULL
+		ORDER BY r.src_id, r.dst_id`)
+	if err != nil {
+		return nil, fmt.Errorf("query parent edges: %w", err)
+	}
+	defer rows.Close()
+	parentOf := make(map[string]string)
+	for rows.Next() {
+		var child, parent string
+		if err := rows.Scan(&child, &parent); err != nil {
+			return nil, fmt.Errorf("scan parent edge: %w", err)
+		}
+		parentOf[child] = parent
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("parent edge rows: %w", err)
+	}
+	return parentOf, nil
 }
 
 func (s *Store) RemoveRelation(ctx context.Context, srcID, dstID string, relType model.RelationType) error {
@@ -452,19 +586,12 @@ func (s *Store) SetParent(ctx context.Context, in storage.SetParentInput) (model
 		rel.CreatedBy = "unknown"
 	}
 	if err := s.withMutation(ctx, "set parent", func(ctx context.Context, tx *sql.Tx) error {
-		// [LAW:no-ambient-temporal-coupling] Both endpoints are proven to exist on
-		// this tx, under the held commit lock, so the parent edge cannot be written
-		// against an endpoint a concurrent delete removed between check and write.
-		if err := requireIssueExistsTx(ctx, tx, in.ChildID); err != nil {
-			return err
-		}
-		if err := requireIssueExistsTx(ctx, tx, in.ParentID); err != nil {
-			return err
-		}
-		// [LAW:single-enforcer] The single-parent clear-then-insert is owned by
-		// setSingleValuedEdgeTx; SetParent is one validated caller of it, not a
-		// second copy of the cardinality rule.
-		return setSingleValuedEdgeTx(ctx, tx, rel)
+		// [LAW:single-enforcer] SetParent is one validated caller of the shared
+		// relation write, not a second copy of the rules it carries: the
+		// endpoint proofs, the cycle refusal and the single-parent
+		// clear-then-insert all live in addRelationTx, so reparenting cannot
+		// obey a different hierarchy rule than 'lit dep add' does.
+		return addRelationTx(ctx, tx, rel)
 	}); err != nil {
 		return model.Relation{}, err
 	}

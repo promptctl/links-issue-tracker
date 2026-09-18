@@ -41,6 +41,12 @@ type HealthReport struct {
 	OrphanHistoryRows  int      `json:"orphan_history_rows"`
 	RankInversions     int      `json:"rank_inversions"`
 	DependencyCycle    []string `json:"dependency_cycle"`
-	Errors             []string `json:"errors"`
-	Warnings           []string `json:"warnings"`
+	// ParentCycle names the members of a loop in the hierarchy, which the write
+	// boundary now refuses but older data can still hold. It is reported rather
+	// than repaired because which edge to cut is a judgment about what the
+	// hierarchy meant, and every walk up the parent chain fails to terminate
+	// until someone makes it.
+	ParentCycle []string `json:"parent_cycle"`
+	Errors      []string `json:"errors"`
+	Warnings    []string `json:"warnings"`
 }

@@ -42,6 +42,7 @@ func (s *Store) Export(ctx context.Context) (model.Export, error) {
 func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 	report := storage.HealthReport{
 		DependencyCycle: []string{},
+		ParentCycle:     []string{},
 		Errors:          []string{},
 		Warnings:        []string{},
 	}
@@ -79,6 +80,32 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 	}
 	if report.OrphanHistoryRows > 0 {
 		report.Warnings = append(report.Warnings, fmt.Sprintf("orphan issue event rows: %d", report.OrphanHistoryRows))
+	}
+	// A parent cycle is checked before everything below it, because it is the
+	// one finding that makes the rest unobtainable rather than merely worse. A
+	// hierarchy with a loop has no root, so every walk up the parent chain runs
+	// forever — and the liveness classification the rank checks start from is
+	// such a walk, which overflows the stack rather than returning a wrong
+	// number. Reading the edges straight from the relations table is the only
+	// question that can still be answered on that data, so it is asked first
+	// and answered alone.
+	//
+	// The write boundary refuses the edge that closes a loop (rejectParentCycle),
+	// so this reports only what was already stored: data written before that
+	// rule, or restored from an export. Refuse at the boundary, report what the
+	// boundary was not there to refuse — the same division the blocks cycle
+	// already uses. [LAW:single-enforcer]
+	parentOf, err := loadParentEdges(ctx, s.db)
+	if err != nil {
+		return report, fmt.Errorf("parent cycle check: %w", err)
+	}
+	if cycle := parentCycle(parentOf); len(cycle) > 0 {
+		report.ParentCycle = cycle
+		// An error, not a warning: this is reported through the arm that makes
+		// `lit doctor` exit nonzero, so the zeros left on the unrun checks below
+		// can never be read as a clean bill of health. [LAW:no-silent-failure]
+		report.Errors = append(report.Errors, fmt.Sprintf("parent cycle: %s (a hierarchy has no root once it loops; every walk up this chain runs forever, so the rank and dependency checks below could not be run — break the loop with 'lit parent clear' on one member, then re-run)", strings.Join(cycle, " -> ")))
+		return report, nil
 	}
 	// Rank inversions and a blocks dependency cycle are two questions about one
 	// snapshot — the live rank order and the blocks edges — so it is read once.

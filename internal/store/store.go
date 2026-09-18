@@ -550,6 +550,14 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 		if parentID != "" {
 			// [LAW:one-source-of-truth] Build the edge as a value and route through
 			// insertRelationTx; the relations INSERT statement lives only there.
+			//
+			// This is the one parent edge that needs no cycle check, and the
+			// reason is structural rather than a judgment call: the id was
+			// minted a few lines above, so nothing in the workspace can be below
+			// it yet and no parent can be its own descendant. addRelationTx
+			// carries that check for the edges written against issues that
+			// already have a hierarchy under them.
+
 			parentEdge := model.Relation{
 				SrcID:     issue.ID,
 				DstID:     parentID,
