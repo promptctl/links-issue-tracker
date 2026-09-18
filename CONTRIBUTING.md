@@ -164,7 +164,24 @@ What counts as shipped is `cmd/` and `internal/` only, minus test files and
 this package's own generated manifest. It is a positive list rather than a
 blacklist of directories to skip, because the blacklist it replaced silently
 swallowed `artifacts/` — a gitignored vendored copy of an unrelated project
-whose literals outnumbered lit's own by three to one.
+whose literals outnumbered lit's own by three to one. Note that it is a path
+scope and not a tracking claim: nothing consults git, so a vendored tree dropped
+*inside* `internal/` would count.
+
+Embedded text assets count too, resolved from the `//go:embed` directives
+themselves rather than guessed from file extensions. They have to: this
+repository is moving user-facing text out of Go literals and into embedded
+files — `links-help-h0di` moved whole help pages into
+`internal/cli/helptext/` — so a gate reading only literals would go blind in
+exactly the direction the corpus is travelling. `lit quickstart doctor` is
+quoted by two chapters and exists only in
+`internal/templates/defaults/quickstart.md`.
+
+An entry keeps the source it was anchored to for as long as that source still
+ships and still carries the quotation. Re-anchoring on every run would let any
+newly added shorter literal retarget unrelated entries, failing the freshness
+test on a branch that changed no documented message — wording indistinguishable
+from real drift, which is what trains people to regenerate without reading.
 
 When you deliberately change a message the specification quotes, the gate
 fails on purpose. Correct the prose first, then run

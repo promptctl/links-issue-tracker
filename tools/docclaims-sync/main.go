@@ -50,26 +50,18 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	fsys := os.DirFS(root)
 
-	shipped, err := docclaims.ShippedLiterals(fsys)
+	// Derived against the committed manifest so an entry keeps the source it
+	// was anchored to while that source still carries the quotation. Without
+	// it, any shorter literal added anywhere retargets unrelated entries.
+	matched, err := docclaims.Derive(os.DirFS(root), docclaims.Manifest)
 	if err != nil {
 		return err
 	}
-	names, err := docclaims.SpecFiles(fsys)
-	if err != nil {
-		return err
-	}
-	claims, err := docclaims.DocClaims(fsys, names)
-	if err != nil {
-		return err
-	}
-
-	matched := docclaims.Dedupe(docclaims.Matched(claims, shipped))
 	if len(matched) == 0 {
-		// Writing an empty manifest would turn the gate off while leaving every
-		// sign of it in place, which is worse than failing. [LAW:no-silent-failure]
-		return fmt.Errorf("no documented literal matched shipped code; refusing to write an empty manifest to %s", manifestPath)
+		// An empty manifest turns the gate off while leaving every sign of it
+		// in place, which is worse than failing. [LAW:no-silent-failure]
+		return fmt.Errorf("no documented quotation matched shipped text; refusing to trust an empty derivation")
 	}
 
 	if *check {
@@ -79,7 +71,7 @@ func run() error {
 	if err := os.WriteFile(manifestPath, []byte(render(matched)), 0o644); err != nil {
 		return err
 	}
-	fmt.Printf("docclaims-sync: %d documented literals across %d files -> %s\n",
+	fmt.Printf("docclaims-sync: %d documented quotations across %d files -> %s\n",
 		len(matched), countDocs(matched), manifestPath)
 	return nil
 }
@@ -105,51 +97,30 @@ func render(claims []docclaims.Claim) string {
 	b.WriteString("// `go run ./tools/docclaims-sync`; never hand-edit.\n")
 	b.WriteString("var Manifest = []Claim{\n")
 	for _, c := range claims {
-		fmt.Fprintf(&b, "\t{Doc: %s, Text: %s, Lit: %s},\n",
-			strconv.Quote(c.Doc), strconv.Quote(c.Text), strconv.Quote(c.Lit))
+		fmt.Fprintf(&b, "\t{Doc: %s, Text: %s, Src: %s},\n",
+			strconv.Quote(c.Doc), strconv.Quote(c.Text), strconv.Quote(c.Src))
 	}
 	b.WriteString("}\n")
 	return b.String()
 }
 
 // verify compares the committed manifest against a fresh derivation and names
-// the first entries that differ, rather than only reporting that they do.
+// the entries that differ, in both directions, rather than only reporting that
+// they do.
 func verify(want []docclaims.Claim) error {
 	got := docclaims.Manifest
-	if len(got) == len(want) {
-		same := true
-		for i := range got {
-			if got[i] != want[i] {
-				same = false
-				break
-			}
-		}
-		if same {
-			fmt.Printf("docclaims-sync: manifest is current (%d literals)\n", len(got))
-			return nil
-		}
+	only := docclaims.Diff(want, got)
+	stale := docclaims.Diff(got, want)
+	if len(only) == 0 && len(stale) == 0 {
+		fmt.Printf("docclaims-sync: manifest is current (%d quotations)\n", len(got))
+		return nil
 	}
-	for _, c := range diff(want, got) {
+	for _, c := range only {
 		fmt.Fprintf(os.Stderr, "  only in a fresh derivation: %s %q\n", c.Doc, c.Text)
 	}
-	for _, c := range diff(got, want) {
+	for _, c := range stale {
 		fmt.Fprintf(os.Stderr, "  only in the committed manifest: %s %q\n", c.Doc, c.Text)
 	}
-	return fmt.Errorf("manifest is stale: committed %d literals, the tree yields %d; run `go run ./tools/docclaims-sync`",
+	return fmt.Errorf("manifest is stale: committed %d quotations, the tree yields %d; run `go run ./tools/docclaims-sync`",
 		len(got), len(want))
-}
-
-// diff returns the entries of a that are absent from b.
-func diff(a, b []docclaims.Claim) []docclaims.Claim {
-	in := make(map[docclaims.Claim]bool, len(b))
-	for _, c := range b {
-		in[c] = true
-	}
-	var out []docclaims.Claim
-	for _, c := range a {
-		if !in[c] {
-			out = append(out, c)
-		}
-	}
-	return out
 }
