@@ -396,7 +396,18 @@ func TestSplitArgsLosesNoToken(t *testing.T) {
 			fs.String("body", "", "body")
 			fs.String("prefix", "", "prefix")
 			fs.Bool("flag", false, "flag")
-			positionals, flags := splitArgs(shape, ceiling, fs)
+			positionals, flags, err := splitArgs(shape, ceiling, fs)
+			if err != nil {
+				// A refused shape is conserving by construction: it performs
+				// nothing and the caller is told why. What must never happen is
+				// a refusal that still hands back a partial split for someone
+				// to act on.
+				if len(positionals)+len(flags) != 0 {
+					t.Errorf("splitArgs(%q, ceiling=%d) refused with %v but still returned positionals=%q flags=%q",
+						shape, ceiling, err, positionals, flags)
+				}
+				continue
+			}
 			if got, want := len(positionals)+len(flags), len(shape); got != want {
 				t.Errorf("splitArgs(%q, ceiling=%d) kept %d tokens, was given %d\n  positionals=%q\n  flags=%q",
 					shape, ceiling, got, want, positionals, flags)
@@ -417,9 +428,12 @@ func TestSplitArgsAgreesWithPflagAboutValues(t *testing.T) {
 	body := fs.String("body", "", "body")
 
 	// A dash-leading token IS the value: pflag pairs them, so this must too.
-	positionals, flags := splitArgs([]string{"--body", "--", "id1"}, 1, fs)
-	if len(flags) < 2 || flags[1] != "--" {
-		t.Fatalf("splitArgs(--body -- id1) flags = %q, want the terminator paired as --body's value", flags)
+	positionals, flags, err := splitArgs([]string{"--body", "--other", "id1"}, 1, fs)
+	if err != nil {
+		t.Fatalf("splitArgs(--body --other id1) error = %v, want the pairing pflag itself performs", err)
+	}
+	if len(flags) < 2 || flags[1] != "--other" {
+		t.Fatalf("flags = %q, want --other paired as --body's value", flags)
 	}
 	if len(positionals) != 1 || positionals[0] != "id1" {
 		t.Fatalf("positionals = %q, want [id1]", positionals)
@@ -427,8 +441,52 @@ func TestSplitArgsAgreesWithPflagAboutValues(t *testing.T) {
 	if err := parseFlagSet(fs, flags, io.Discard); err != nil {
 		t.Fatalf("parseFlagSet(%q) error = %v, want the pairing pflag itself performs", flags, err)
 	}
+	if *body != "--other" {
+		t.Errorf("--body = %q, want the same value plain pflag assigns", *body)
+	}
+}
+
+// TestSplitArgsRefusesTheTerminatorAsAValue is the one place this split declines
+// to do what pflag would. pflag hands `--` to a waiting flag as its literal
+// value; mirroring that let `lit label add --by -- <id> <label>` APPLY the label
+// at exit 0 with the actor recorded as "--", on a command line the previous
+// binary refused. Routing is still pflag's — the refusal replaces a write, not a
+// different reading of which token is a value. [LAW:no-silent-failure]
+func TestSplitArgsRefusesTheTerminatorAsAValue(t *testing.T) {
+	t.Parallel()
+	for _, shape := range [][]string{
+		{"--body", "--", "id1", "hello"},
+		{"--body", "--"},
+	} {
+		fs := newCobraFlagSet("probe")
+		fs.String("body", "", "body")
+		positionals, flags, err := splitArgs(shape, 2, fs)
+		var refusal terminatorAsValue
+		if !errors.As(err, &refusal) {
+			t.Fatalf("splitArgs(%q) error = %v, want a terminatorAsValue refusal", shape, err)
+		}
+		if refusal.flag != "--body" {
+			t.Errorf("refusal names %q, want --body", refusal.flag)
+		}
+		if len(positionals)+len(flags) != 0 {
+			t.Errorf("splitArgs(%q) refused but returned positionals=%q flags=%q", shape, positionals, flags)
+		}
+	}
+
+	// The spelling that says "I really mean those two characters" still works,
+	// because a token carrying `=` never reaches the pairing at all. Without
+	// this half the refusal above could be a flat ban and the test would pass.
+	fs := newCobraFlagSet("probe")
+	body := fs.String("body", "", "body")
+	_, flags, err := splitArgs([]string{"--body=--", "id1"}, 1, fs)
+	if err != nil {
+		t.Fatalf("splitArgs(--body=-- id1) error = %v, want the explicit spelling accepted", err)
+	}
+	if err := parseFlagSet(fs, flags, io.Discard); err != nil {
+		t.Fatalf("parseFlagSet(%q) error = %v", flags, err)
+	}
 	if *body != "--" {
-		t.Errorf("--body = %q, want \"--\" — the same value plain pflag assigns", *body)
+		t.Errorf("--body = %q, want \"--\"", *body)
 	}
 }
 
@@ -441,11 +499,19 @@ func TestTerminatorThroughRealCommandPaths(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		args []string
+		// names is the token the refusal must quote back. It is per-case
+		// because the two shapes fail for different reasons, and a blanket
+		// "mentions some zzz-" check passed both while only one of them was
+		// really about a surplus positional. [LAW:behavior-not-structure]
+		names string
 	}{
-		{"even run of value flags before the terminator", []string{"init", "--prefix", "--prefix", "--", "zzz-stray"}},
-		{"odd run of value flags before the terminator", []string{"init", "--prefix", "--", "zzz-stray"}},
-		{"terminator then surplus", []string{"show", "--", "zzz-a", "zzz-b", "zzz-c"}},
-		{"terminator on a zero-positional leaf", []string{"workflows", "--", "zzz-stray"}},
+		{"even run of value flags before the terminator", []string{"init", "--prefix", "--prefix", "--", "zzz-stray"}, "zzz-stray"},
+		// An odd run leaves a value-taking flag facing the terminator, which is
+		// refused for THAT reason and names the flag: `--prefix` is what is
+		// wrong with this line, and `zzz-stray` is only downstream of it.
+		{"odd run of value flags before the terminator", []string{"init", "--prefix", "--", "zzz-stray"}, "--prefix"},
+		{"terminator then surplus", []string{"show", "--", "zzz-a", "zzz-b", "zzz-c"}, "zzz-b"},
+		{"terminator on a zero-positional leaf", []string{"workflows", "--", "zzz-stray"}, "zzz-stray"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -457,8 +523,8 @@ func TestTerminatorThroughRealCommandPaths(t *testing.T) {
 			if got := ExitCode(err); got != ExitUsage {
 				t.Fatalf("lit %s exit = %d (%v), want %d (usage)", strings.Join(tc.args, " "), got, err, ExitUsage)
 			}
-			if !strings.Contains(err.Error(), "zzz-stray") && !strings.Contains(err.Error(), "zzz-") {
-				t.Errorf("error = %q, want it to name the offending token", err)
+			if !strings.Contains(err.Error(), tc.names) {
+				t.Errorf("error = %q, want it to name %q", err, tc.names)
 			}
 		})
 	}

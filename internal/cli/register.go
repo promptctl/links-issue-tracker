@@ -305,7 +305,12 @@ type (
 // acquiring anything. [LAW:single-enforcer] one parse path for every leaf, at
 // the one altitude that precedes acquisition.
 func parseLeaf[R any](l leaf[R], args []string, stdout io.Writer) ([]string, error) {
-	positional, flagArgs := splitArgs(args, l.positionals, l.fs)
+	positional, flagArgs, err := splitArgs(args, l.positionals, l.fs)
+	if err != nil {
+		// A shape the split will not perform, refused in the same sentence an
+		// arity refusal uses: the act that works, then what was not understood.
+		return nil, UsageError{Message: fmt.Sprintf("%s; %s", usageSentence(l.fs, l.positionals, l.usage), err)}
+	}
 	if err := parseFlagSet(l.fs, flagArgs, stdout); err != nil {
 		return nil, err
 	}
@@ -339,13 +344,22 @@ func refuseSurplusPositionals(fs *cobraFlagSet, declared int, usage string) erro
 	if len(extra) == 0 {
 		return nil
 	}
-	if usage == "" {
-		usage = derivedUsage(fs, declared)
-	}
+	usage = usageSentence(fs, declared, usage)
 	// The offending tokens are named either way: the caller is told both what to
 	// type and which part of what they typed was not understood, which is the
 	// pair a bare usage line left them to work out. [LAW:no-silent-failure]
 	return UsageError{Message: fmt.Sprintf("%s; got unexpected argument(s) %q", usage, extra)}
+}
+
+// usageSentence is the one answer to "what does this leaf tell a caller to type":
+// its own sentence when it has one, the derived sentence otherwise. Both
+// refusals in this file need that answer, and they must not be able to give
+// different ones for the same leaf. [LAW:one-source-of-truth]
+func usageSentence(fs *cobraFlagSet, declared int, usage string) string {
+	if usage == "" {
+		return derivedUsage(fs, declared)
+	}
+	return usage
 }
 
 // derivedUsage is the sentence for a leaf that declares no usage of its own. It

@@ -276,7 +276,25 @@ func (fs *cobraFlagSet) optionalValueFlagNames() []string {
 	return names
 }
 
-func splitArgs(args []string, positionalCount int, fs *cobraFlagSet) ([]string, []string) {
+// terminatorAsValue reports a command line in which a flag that takes a value is
+// followed immediately by the POSIX terminator. pflag pairs them — `--` becomes
+// the flag's literal value — and this loop mirrors pflag's pairing everywhere
+// else, so which token is a value is not in question here. What is in question
+// is whether a caller ever means it. `--` is the word for "no more flags", and
+// taking it as a value let `lit label add --by -- <id> <label>` apply a label
+// attributed to "--" at exit 0, on a command line that was refused before this
+// ticket touched the split. The caller who genuinely wants those two characters
+// as a value has a spelling that says so, `--by=--`, and it is unaffected: a
+// token containing `=` never reaches this pairing at all.
+// [LAW:no-silent-failure] refuse the shape rather than perform a write on a
+// reading nobody asked for.
+type terminatorAsValue struct{ flag string }
+
+func (e terminatorAsValue) Error() string {
+	return fmt.Sprintf("%s takes a value, and %q ends the flags rather than supplying one; write %s=-- to pass it literally", e.flag, "--", e.flag)
+}
+
+func splitArgs(args []string, positionalCount int, fs *cobraFlagSet) ([]string, []string, error) {
 	// positionalCount is a CEILING, and an unbounded-arity leaf states it as
 	// allPositionals — so it is not a capacity. argv is the real bound: no more
 	// positionals can land here than there are tokens to put in them.
@@ -304,7 +322,7 @@ func splitArgs(args []string, positionalCount int, fs *cobraFlagSet) ([]string, 
 				// it — the same answer a surplus positional gets anywhere else.
 				flags = append(flags, rest)
 			}
-			return positionals, flags
+			return positionals, flags, nil
 		}
 		if strings.HasPrefix(arg, "-") {
 			flags = append(flags, arg)
@@ -327,6 +345,9 @@ func splitArgs(args []string, positionalCount int, fs *cobraFlagSet) ([]string, 
 			// [LAW:one-source-of-truth] pflag is the authority on its own
 			// pairing; this must not become a second one.
 			if index+1 < len(args) && fs.flagTakesValue(arg) {
+				if args[index+1] == "--" {
+					return nil, nil, terminatorAsValue{flag: arg}
+				}
 				flags = append(flags, args[index+1])
 				index++
 			}
@@ -338,5 +359,5 @@ func splitArgs(args []string, positionalCount int, fs *cobraFlagSet) ([]string, 
 		}
 		flags = append(flags, arg)
 	}
-	return positionals, flags
+	return positionals, flags, nil
 }
