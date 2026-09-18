@@ -47,18 +47,76 @@ func (h readyTestHarness) runNextOutcome() NextOutcome {
 func (h readyTestHarness) runNextRow() annotation.AnnotatedIssue {
 	h.t.Helper()
 	outcome := h.runNextOutcome()
-	switch served := outcome.(type) {
-	case ServedFromClaim:
-		return served.Row
-	case ResumedOwnWork:
-		return served.Row
-	case ServedFromEpicLane:
-		return served.Row
-	case ServedFromNewLane:
-		return served.Row
+	if row, ok := servedRow(outcome); ok {
+		return row
 	}
 	h.t.Fatalf("routeNext = %#v (%T), want an outcome carrying a served row", outcome, outcome)
 	return annotation.AnnotatedIssue{}
+}
+
+// servedRow is the single place the harness decides which outcomes carry a row.
+// It was inlined in runNextRow, where nothing could reach it but a full routing
+// run — so the totality the comment above asserts was never exercised, and this
+// switch silently fell a variant behind the renderer's when step 1b got its own
+// outcome (links-next-output-4hor). Lifted out, the claim is directly testable
+// by TestServedRowIsTotalOverTheSealedSum. [LAW:one-source-of-truth]
+func servedRow(outcome NextOutcome) (annotation.AnnotatedIssue, bool) {
+	switch served := outcome.(type) {
+	case ServedFromClaim:
+		return served.Row, true
+	case ResumedOwnWork:
+		return served.Row, true
+	case ServedFromEpicLane:
+		return served.Row, true
+	case ServedFromNewLane:
+		return served.Row, true
+	case ServedFromDependency:
+		return served.Row, true
+	}
+	return annotation.AnnotatedIssue{}, false
+}
+
+// Go type switches are not exhaustive, so nothing in the compiler holds
+// servedRow level with the sealed sum — the renderer's default panics, but this
+// helper just reports "routing declined to serve", which is the WRONG answer
+// rather than a loud one. Asserted over every variant the sum has, so a new
+// outcome that carries a row fails here by name instead of turning a served row
+// into a confusing failure far from its cause (links-next-output-4hor).
+func TestServedRowIsTotalOverTheSealedSum(t *testing.T) {
+	row := annotation.AnnotatedIssue{Issue: model.Issue{ID: "test-served-1"}}
+	cases := []struct {
+		name    string
+		outcome NextOutcome
+		served  bool
+	}{
+		{"the claimed lane", ServedFromClaim{Row: row}, true},
+		{"own work resumed", ResumedOwnWork{Row: row}, true},
+		{"the epic's next lane", ServedFromEpicLane{Row: row}, true},
+		{"the global pool", ServedFromNewLane{Row: row}, true},
+		{"the on-path dependency", ServedFromDependency{Row: row, Gates: "test-gated-1"}, true},
+		{"exhausted carries none", Exhausted{}, false},
+		{"no work carries none", NoWork{}, false},
+	}
+	// The sum is sealed at seven cases (isNextOutcome, next_route.go). Counting
+	// them here is what makes an added variant fail loudly at this table instead
+	// of passing unnoticed because nobody thought to cover it.
+	if len(cases) != 7 {
+		t.Fatalf("table covers %d outcomes, want all 7 NextOutcome variants — add the new one", len(cases))
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := servedRow(tc.outcome)
+			if ok != tc.served {
+				t.Fatalf("servedRow(%T) served = %v, want %v", tc.outcome, ok, tc.served)
+			}
+			if tc.served && got.ID != row.ID {
+				t.Fatalf("servedRow(%T) = %q, want the row it carries (%q)", tc.outcome, got.ID, row.ID)
+			}
+			if !tc.served && got.ID != "" {
+				t.Fatalf("servedRow(%T) = %q, want the zero row — a terminal outcome serves nothing", tc.outcome, got.ID)
+			}
+		})
+	}
 }
 
 // asCheckout re-attributes everything the harness writes from here on to
