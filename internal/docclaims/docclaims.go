@@ -84,9 +84,9 @@ type Claim struct {
 	// asset.
 	//
 	// Anchoring to it is what gives the gate teeth. Asking only whether the
-	// quoted words appear SOMEWHERE in the tree is far too weak: of the 1,102
-	// entries, 269 have text contained in two or more distinct corpus sources,
-	// and one sits in 29 of them (measured 2026-09-18). Delete the exact message
+	// quoted words appear SOMEWHERE in the tree is far too weak: hundreds of the
+	// entries have text contained in two or more distinct corpus sources, and
+	// one sits in 29 of them (measured 2026-09-18). Delete the exact message
 	// a chapter cites and a coincidental substring elsewhere keeps the gate
 	// green — the precise failure this package exists to end.
 	// [LAW:types-are-the-program] the claim carries its own evidence.
@@ -1179,7 +1179,7 @@ const (
 	// and nothing in this package can tell them apart: the literal was reworded
 	// around the quotation, or the documented message was deleted and an
 	// unrelated string happens to contain the same words. The second is not
-	// theoretical — 269 of the 1,102 entries have text sitting in two or more
+	// theoretical — hundreds of entries have text sitting in two or more
 	// distinct sources (measured 2026-09-18) — so the report names the source
 	// that carries the words now and leaves the judgment to a reader.
 	// [LAW:no-silent-failure] neither answer is guessed.
@@ -1223,12 +1223,22 @@ type Drift struct {
 // sees them contradict each other learns to disregard whichever one is louder.
 // [LAW:one-source-of-truth] the remedy is a fact about the failure, not about
 // who is printing it.
+// NowBrief is the source carrying the quotation today, shortened the way a
+// report must show it. A Go-literal handle is the whole literal the words were
+// found inside, which runs to kilobytes here, and printing one unedited buries
+// the sentence the report is about.
+//
+// [LAW:single-enforcer] every report of a re-anchor goes through this, so the
+// test's Explain and the writer's own line cannot disagree about how much of a
+// handle a reader is shown.
+func (d Drift) NowBrief() string { return ellipsis(d.Now, 120) }
+
 func (d Drift) Explain() string {
 	switch d.Kind {
 	case QuoteDropped:
 		return fmt.Sprintf("no longer quoted by %s: %q — the prose changed; run `go run ./tools/docclaims-sync`", d.Doc, d.Text)
 	case AnchorMoved:
-		return fmt.Sprintf("%s quotes %q, and the source it was recorded against no longer carries it; the words ship today in %q — if that is the same message reworded, run `go run ./tools/docclaims-sync`; if it is an unrelated string, the documented message is gone: fix the code or the chapter", d.Doc, d.Text, ellipsis(d.Now, 120))
+		return fmt.Sprintf("%s quotes %q, and the source it was recorded against no longer carries it; the words ship today in %q — if that is the same message reworded, run `go run ./tools/docclaims-sync`; if it is an unrelated string, the documented message is gone: fix the code or the chapter", d.Doc, d.Text, d.NowBrief())
 	default:
 		return fmt.Sprintf("%s quotes a message that no longer ships: %q — fix the code or the chapter. Do NOT regenerate: that drops the entry and leaves the sentence false", strings.Join(d.QuotedBy, ", "), d.Text)
 	}

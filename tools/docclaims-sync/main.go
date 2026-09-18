@@ -125,16 +125,20 @@ func write(manifestPath string, matched []docclaims.Claim, cmp docclaims.Compari
 	// for the tool that is running. That is not a second remedy competing with
 	// the first: the remedies stayed single-homed in Explain, and this reports
 	// an action already taken. [LAW:no-silent-failure]
+	//
+	// Which is why it is reported after the write and not before. Said first,
+	// the past tense is a guess: a failing WriteFile — a read-only checkout, a
+	// full disk — would print "re-anchored" about a manifest that was never
+	// touched, and the reader would go looking in a diff that does not exist.
+	if err := os.WriteFile(manifestPath, []byte(render(matched)), 0o644); err != nil {
+		return err
+	}
 	if moved := cmp.Reanchored(); len(moved) > 0 {
 		fmt.Fprintf(os.Stderr, "docclaims-sync: %d entry(ies) re-anchored — the quotation still ships, inside different words:\n", len(moved))
 		for _, d := range moved {
-			fmt.Fprintf(os.Stderr, "  %s %q is now carried by %q\n", d.Claim.Doc, d.Claim.Text, d.Now)
+			fmt.Fprintf(os.Stderr, "  %s %q is now carried by %q\n", d.Claim.Doc, d.Claim.Text, d.NowBrief())
 		}
 		fmt.Fprintln(os.Stderr, "  Read the manifest diff: each of these is this tool judging the new literal to be the same message. If one of them is a different string that happens to contain the words, the chapter quoting it is now describing a message the binary no longer has.")
-	}
-
-	if err := os.WriteFile(manifestPath, []byte(render(matched)), 0o644); err != nil {
-		return err
 	}
 	fmt.Printf("docclaims-sync: %d documented quotations across %d files -> %s\n",
 		len(matched), countDocs(matched), manifestPath)
@@ -184,11 +188,12 @@ func verify(cmp docclaims.Comparison) error {
 	// Each line carries its own instruction, from the same Explain the
 	// freshness test prints, because two reports of one failure that word the
 	// remedy differently are how a contributor learns to ignore both.
-	moved := 0
+	// [LAW:single-enforcer] Reanchored() is what decides a re-anchor, here as
+	// in the write path. Counting `Kind == AnchorMoved` inline again is a
+	// second copy of that rule, and the two would diverge silently the first
+	// time the classification changes.
+	moved := len(cmp.Reanchored())
 	for _, d := range cmp.Drifted {
-		if d.Kind == docclaims.AnchorMoved {
-			moved++
-		}
 		fmt.Fprintf(os.Stderr, "  %s\n", d.Explain())
 	}
 	// The exit line counts what actually differs. Reporting the two totals

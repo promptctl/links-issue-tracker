@@ -74,7 +74,7 @@ func TestADroppedMessageIsReported(t *testing.T) {
 
 // TestTheGateSeesThroughACoincidentalSubstring is the reason a claim records
 // the source it was found in. Matching against the union of all shipped text is
-// far too weak: 269 of this corpus's 1,102 entries have text sitting inside two
+// far too weak: hundreds of this corpus's entries have text sitting inside two
 // or more distinct sources (measured 2026-09-18). Here the documented message is deleted and an unrelated one still
 // contains its words.
 func TestTheGateSeesThroughACoincidentalSubstring(t *testing.T) {
@@ -641,7 +641,7 @@ func TestAMovedAnchorIsReportedOnce(t *testing.T) {
 // condition. modfile accepts a go.mod with no `module` line, so one carrying
 // any local replace left the source list non-empty and the guard silent —
 // after which every import of this repository's own packages fails to resolve,
-// the walk yields only the cmd/ entry directories, and all 1,102 entries report
+// the walk yields only the cmd/ entry directories, and every entry reports
 // as drifted prose. "The specification is false" is the one thing a broken walk
 // must never say.
 func TestAGoModWithoutAModulePathIsAnError(t *testing.T) {
