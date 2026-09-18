@@ -133,21 +133,51 @@ func (e *Engine) place(id string, f storage.Frame, placement storage.RankPlaceme
 	// verbs use, asked about filing instead of moving.
 	positions := edge.filingPositions(e, f, id)
 	if len(positions) == 0 {
-		// A frame with nothing in it has no order to lead, so its two ends
-		// asked for the same thing, and the issue files where the default
-		// placement would have put it: after everything that exists. The SQL
-		// engine reaches the same slot from the other direction — an empty
-		// frame leaves it no key to sit beside, and the key past the
-		// workspace's last is the only one nothing already holds. One rule,
-		// stated in each engine's own terms. [LAW:one-type-per-behavior]
-		edge, err = orderEdgeFor(storage.RankBottom)
+		// A frame holding nothing has no order to lead, so its two ends asked
+		// for the same thing and the placement cannot decide the slot. What
+		// can is the frame itself: a first child belongs beside the issue that
+		// contains it, so it lands immediately after it. Filing it at the end
+		// of the whole order instead — what this did — reads as "last" in
+		// every view that sorts a non-epic parent's child by its own position,
+		// which is the opposite of what --top asked for. The SQL engine says
+		// the same thing in keys: the container's own key is the one an empty
+		// frame offers to sit beside. [LAW:one-source-of-truth]
+		slot, err := e.slotInsideContainer(f)
 		if err != nil {
 			return err
 		}
-		positions = edge.filingPositions(e, f, id)
+		e.insertAt(slot, id)
+		return nil
 	}
 	e.insertAt(edge.positionIn(positions), id)
 	return nil
+}
+
+// slotInsideContainer is where the first member of a frame goes: immediately
+// after the issue that frames it.
+//
+// The top level has no such issue and needs none: slot zero is the head of the
+// order, which is where a first member belongs when nothing contains it. The
+// population it is asked about reads empty whenever no LIVE issue resolves to
+// the top level — not only in a fresh workspace, since e.order keeps a deleted
+// issue's slot forever and only frameMateIndexes filters it out — and zero is
+// the right answer in both.
+func (e *Engine) slotInsideContainer(f storage.Frame) (int, error) {
+	if f == storage.TopLevel {
+		return 0, nil
+	}
+	container := slices.Index(e.order, string(f))
+	// A frame names a live issue — filingFrame returns a container only when
+	// e.live says so — and every live issue holds a position. A frame missing
+	// from the order is those two facts having come apart, which is a
+	// resolution bug and is said out loud: appending at the tail instead would
+	// file the issue at the bottom of the backlog and call it a placement, the
+	// silent clamp insertAt refuses for the same reason.
+	// [LAW:no-silent-failure] [LAW:no-defensive-null-guards]
+	if container < 0 {
+		return 0, fmt.Errorf("frame %s holds no position in the order; an issue cannot be filed inside one that is not there", f)
+	}
+	return container + 1, nil
 }
 
 // mintID names a new issue. Top-level and child ids differ only in the

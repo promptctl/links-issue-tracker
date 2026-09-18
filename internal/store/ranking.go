@@ -103,10 +103,12 @@ var (
 // A key at the workspace's own end has nothing outside it, and the read says so
 // by coming back empty, which beside turns into the open bound — the same pair
 // the whole keyspace is measured by, now because it is true rather than because
-// it was assumed. excludeID leaves the moving issue out: the key it is about to
-// vacate is not a wall, and counting it would halve the gap on every repeat of a
-// move that has already arrived.
-func (e rankEdge) roomBesideTx(ctx context.Context, tx *sql.Tx, anchorRank, excludeID string) (lower, upper string, err error) {
+// it was assumed. moving lists the keys this write is about to vacate, and they
+// are left out: a key nobody will be holding is not a wall, and counting one
+// halves the gap on every repeat of a move that has already arrived. It is a
+// list because rank set moves a whole stack at once, and excluding only one of
+// them walled the rest in behind their own keys.
+func (e rankEdge) roomBesideTx(ctx context.Context, tx *sql.Tx, anchorRank string, moving ...string) (lower, upper string, err error) {
 	// An anchor holding no rank is not a key, and the comparison reads it
 	// differently at each end: `item_rank < ''` matches nothing, while
 	// `item_rank > ''` matches every rank there is. The same empty anchor would
@@ -120,9 +122,20 @@ func (e rankEdge) roomBesideTx(ctx context.Context, tx *sql.Tx, anchorRank, excl
 	if anchorRank == "" {
 		return "", "", fmt.Errorf("no room beside the %s of this frame: the key it was read from is empty", e.name)
 	}
+	args := make([]any, 0, len(moving)+1)
+	holes := make([]string, 0, len(moving))
+	for _, id := range moving {
+		holes = append(holes, "?")
+		args = append(args, id)
+	}
+	skip := ""
+	if len(holes) > 0 {
+		skip = fmt.Sprintf(`AND id NOT IN (%s) `, strings.Join(holes, ","))
+	}
+	args = append(args, anchorRank)
 	query := fmt.Sprintf(`SELECT item_rank FROM issues
-		WHERE deleted_at IS NULL AND item_rank != '' AND id != ? AND %s LIMIT 1`, e.outside)
-	outsideRank, err := nearestRank(ctx, tx, query, excludeID, anchorRank)
+		WHERE deleted_at IS NULL AND item_rank != '' %s AND %s LIMIT 1`, skip, e.outside)
+	outsideRank, err := nearestRank(ctx, tx, query, args...)
 	if err != nil {
 		return "", "", fmt.Errorf("query the key outside the %s: %w", e.name, err)
 	}
@@ -130,16 +143,62 @@ func (e rankEdge) roomBesideTx(ctx context.Context, tx *sql.Tx, anchorRank, excl
 	return lower, upper, nil
 }
 
-// pastTheWorkspaceTx is the pair for a placement with no key to sit beside: the
-// far side of the workspace's last key.
+// firstInFrameBoundsTx is the pair for a placement into a frame that holds
+// nothing ranked yet.
 //
-// It is the one end nothing can already hold, and it is the very key the default
-// placement would have given the same issue — the answer a population with no
-// members deserves, because there is no order there to lead or trail and both
-// ends are asking for the same position. Asked of an empty WORKSPACE the read
-// comes back empty too, and nothing lies outside a key that is not there, so the
-// first issue in a workspace still takes rank.Initial.
-func pastTheWorkspaceTx(ctx context.Context, tx *sql.Tx) (lower, upper string, err error) {
+// Such a frame has no order to lead or trail, so the end the caller asked for
+// cannot decide anything — but the frame itself can. A first child belongs
+// beside the issue that contains it, so it lands just past the container's own
+// key, which is also the one key an empty frame does offer to sit beside.
+//
+// Filing it past the workspace's LAST key instead is the answer this had, and
+// it reads as "last" rather than "first" wherever a view sorts by the issue's
+// own key. That is every view, for a child whose parent is not an epic:
+// sortByCompositeRank substitutes a parent's rank only for a container, so a
+// task's first child filed --top sorted to the very bottom of the backlog, the
+// opposite of what was asked. [LAW:one-source-of-truth] The memory engine says
+// the same thing positionally, inserting immediately after the container.
+//
+// The top level names no containing issue, so it takes the fallback below
+// rather than a container's key. It is NOT answered with open bounds: that
+// would be reading "this frame has nothing ranked" as "the workspace has
+// nothing ranked", and the two part company the moment a write excludes what
+// it is moving.
+//
+// moving carries through for the same reason it exists anywhere: the keys this
+// write is about to vacate are not walls. Dropping it here left rank set
+// bounded by its own previous result, so repeating the same stack — an
+// idempotent request — walked the key longer every round, V then VV then VF,
+// spending the container's gap on a command that changes nothing.
+func firstInFrameBoundsTx(ctx context.Context, tx *sql.Tx, f storage.Frame, moving ...string) (lower, upper string, err error) {
+	if f != storage.TopLevel {
+		containerRank, err := nearestRank(ctx, tx, `SELECT item_rank FROM issues
+			WHERE id = ? AND deleted_at IS NULL AND item_rank != ''`, string(f))
+		if err != nil {
+			return "", "", fmt.Errorf("query the rank of frame %q: %w", f, err)
+		}
+		if containerRank != "" {
+			return bottomEdge.roomBesideTx(ctx, tx, containerRank, moving...)
+		}
+	}
+	// No container names a key to sit beside: the top level has no containing
+	// issue, and a container carrying no rank of its own names none either. The
+	// position then falls back to the far side of the workspace's own last key.
+	//
+	// That read deliberately does NOT exclude moving, and the whole safety of
+	// this arm rests on it. Its emptiness is then a statement about the table
+	// rather than about this write: it comes back empty only when nothing at all
+	// is ranked, which is the one case where open bounds are true and
+	// rank.Midpoint's answer — rank.Initial, the first key in a workspace —
+	// belongs to nobody. Short-circuiting the top level to open bounds instead
+	// read as "nothing is ranked" whenever a write merely excluded everything it
+	// could see: rank set over every top-level issue leaves this read empty
+	// while children inside the epics still hold keys, and the stack was then
+	// handed rank.Initial on top of one of them. [LAW:no-silent-failure]
+	//
+	// lastRank IS that maximum, so the far-side read below can never return a
+	// row: moving is not passed to it because there is nothing it could
+	// exclude, and a mover holding that key is bounded past it either way.
 	lastRank, err := workspaceEdgeRankTx(ctx, tx, storage.TopLevel, bottomEdge)
 	if err != nil {
 		return "", "", err
@@ -147,28 +206,28 @@ func pastTheWorkspaceTx(ctx context.Context, tx *sql.Tx) (lower, upper string, e
 	if lastRank == "" {
 		return "", "", nil
 	}
-	return bottomEdge.roomBesideTx(ctx, tx, lastRank, "")
+	return bottomEdge.roomBesideTx(ctx, tx, lastRank)
 }
 
 // filingBoundsTx is the pair a create's key is placed between: the population
 // this end files against, and then the room beside it.
 //
-// A frame with nothing ranked in it offers no key to sit beside, and its two
-// ends are one position anyway — but the key written still has to be distinct
-// from every key that exists, and the midpoint of the whole keyspace is not: it
-// is rank.Initial, which the workspace's first issue already holds. So that
-// case goes to pastTheWorkspaceTx, the same answer rankBeyondTx gives a frame
-// whose edge reads empty, because the two mean the same thing: nothing here is
-// ranked yet. [LAW:one-source-of-truth]
+// A frame with nothing ranked in it offers no sibling to sit beside, and its
+// two ends are one position anyway — but the key written still has to be
+// distinct from every key that exists, and the midpoint of the whole keyspace
+// is not: it is rank.Initial, which the workspace's first issue already holds.
+// So that case goes to firstInFrameBoundsTx, the same answer rankBeyondTx gives
+// a frame whose edge reads empty, because the two mean the same thing: nothing
+// is ranked here yet. [LAW:one-source-of-truth]
 func (e rankEdge) filingBoundsTx(ctx context.Context, tx *sql.Tx, f storage.Frame) (lower, upper string, err error) {
 	anchorRank, err := e.filingRank(ctx, tx, f, e)
 	if err != nil {
 		return "", "", err
 	}
 	if anchorRank == "" {
-		return pastTheWorkspaceTx(ctx, tx)
+		return firstInFrameBoundsTx(ctx, tx, f)
 	}
-	return e.roomBesideTx(ctx, tx, anchorRank, "")
+	return e.roomBesideTx(ctx, tx, anchorRank)
 }
 
 // frameEdgeRankTx is the key held at one end of a frame, and it is the whole
@@ -231,21 +290,21 @@ func edgeFor(p storage.RankPlacement) (rankEdge, error) {
 // has to make room. [LAW:single-enforcer] Every placement against stored keys
 // goes through that one function, so an edge whose key leaves no room past it
 // is made room for exactly as a relative move's neighbors are.
-func (e rankEdge) rankBeyondTx(ctx context.Context, tx *sql.Tx, movedID string, readEdge func() (string, error)) (string, error) {
+func (e rankEdge) rankBeyondTx(ctx context.Context, tx *sql.Tx, f storage.Frame, moving []string, readEdge func() (string, error)) (string, error) {
 	return rankBetweenTx(ctx, tx, func() (string, string, error) {
 		edgeRank, err := readEdge()
 		if err != nil {
 			return "", "", err
 		}
-		// A frame whose edge reads empty holds nothing ranked but the issue
+		// A frame whose edge reads empty holds nothing ranked but the issues
 		// being moved, which is the same situation a create meets in an empty
 		// frame and takes the same answer. Reading the room beside the absent
 		// key instead is what sent an issue asked for its frame's bottom to the
 		// top of the workspace. [LAW:one-source-of-truth]
 		if edgeRank == "" {
-			return pastTheWorkspaceTx(ctx, tx)
+			return firstInFrameBoundsTx(ctx, tx, f, moving...)
 		}
-		return e.roomBesideTx(ctx, tx, edgeRank, movedID)
+		return e.roomBesideTx(ctx, tx, edgeRank, moving...)
 	})
 }
 
@@ -488,7 +547,7 @@ func (s *Store) rankToEdge(ctx context.Context, issueID string, placement storag
 		if !end.Moved {
 			return end, nil
 		}
-		newRank, err := edge.rankBeyondTx(ctx, tx, issueID, func() (string, error) {
+		newRank, err := edge.rankBeyondTx(ctx, tx, f, []string{issueID}, func() (string, error) {
 			_, edgeRank, err := frameEdgeHolderTx(ctx, tx, f, edge)
 			return edgeRank, err
 		})
@@ -613,7 +672,7 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 		// placement is; each earlier ID is anchored just above the
 		// previously-assigned rank, so the final order is
 		// ids[0] < ids[1] < ... < ids[N-1] < (existing top).
-		cursor, err := topEdge.rankBeyondTx(ctx, tx, "", func() (string, error) {
+		cursor, err := topEdge.rankBeyondTx(ctx, tx, f, ranked, func() (string, error) {
 			topRank, err := nearestRank(ctx, tx, query, args...)
 			if err != nil {
 				return "", fmt.Errorf("query top: %w", err)
@@ -908,6 +967,15 @@ func (s *Store) RankAbove(ctx context.Context, issueID, targetID string) (storag
 		// commands then put a moved issue on a key one of its own children was
 		// holding. [LAW:single-enforcer] The read is topEdge's, the same one
 		// filing at a frame's top measures with.
+		//
+		// A descendant's key can be the wall here, so ranking a container
+		// relative to an outsider can leave it past its own contents. That is
+		// the contract rather than an accident of this read: the memory engine
+		// inserts at the anchor's own index, carrying no notion of containment
+		// either, and the two engines are checked against each other. Excluding
+		// the moved issue's subtree was measured and made things worse — it put
+		// the store back at odds with the memory engine. Tracked as
+		// links-rank-omey.
 		newRank, err := rankBetweenTx(ctx, tx, func() (string, string, error) {
 			anchorRank, err := anchorRankTx(ctx, tx, move.AnchorID)
 			if err != nil {
