@@ -85,8 +85,10 @@ func snapshotsNewLeaf() wsLeaf {
 	// accepting it would mint an unlabeled snapshot the operator then cannot find
 	// by the name they thought they gave it. The refusal is parseLeaf's now, and
 	// the sentence it prints names --label because the flag set says this command
-	// takes a value for it — which is why this leaf needs no usage line of its own.
-	return wsLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+	// the sentence it prints names --label. It carries its own line anyway: the
+	// v1 specification quotes this exact message, and the docclaims gate holds
+	// the code to what the chapter says ships. [LAW:one-source-of-truth]
+	return wsLeaf{fs: fs, positionals: 0, usage: "usage: lit snapshots new [--label <text>]", work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
 		cfg, err := config.Load(pathspec.New(ws.RootDir))
 		if err != nil {
 			return err

@@ -914,7 +914,7 @@ Usage string, derived from the topic table: `usage: lit quickstart [work|new|upd
 - `--eject` (empty value) is normalized to `all` (`cli.go:1741-1744`).
 - `--refresh` together with `--eject` → `usage: --refresh and --eject are mutually exclusive` (`cli.go:1745-1747`).
 - `--force` without `--eject` → `usage: --force is only valid with --eject` (`cli.go:1748-1750`).
-- Exactly one positional (a topic) with ANY of `--refresh`/`--eject`/`--force` → `usage: lit quickstart <topic> takes no flags` (`cli.go:1754-1755`).
+- Exactly one positional (a topic) with `--refresh` or `--eject` → `quickstartUsage` followed by `a topic renders on its own`; when `--eject` was given it also names `, and --eject takes its value as --eject=LIST` (`cli.go:2025-2029`). `--force` alone never reaches this branch: the `--force` without `--eject` check above returns first.
 - An unknown topic → `usage: unknown quickstart topic "<t>" (must be one of: work, new, update, done, doctor)` (`cli.go:1756-1759`).
 
 ### 12.2 Modes

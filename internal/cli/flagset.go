@@ -284,40 +284,15 @@ func splitArgs(args []string, positionalCount int, fs *cobraFlagSet) ([]string, 
 	// get instead of trusting a number that is allowed to mean "no limit".
 	positionals := make([]string, 0, min(positionalCount, len(args)))
 	flags := make([]string, 0, len(args))
-	// A value-taking flag whose value was not consumed leaves the flag stream
-	// expecting one, and the terminator is structure rather than data — so it
-	// must never land in that position. pflag consumes whatever follows such a
-	// flag unconditionally, dash or not, so a terminator left in the stream is
-	// taken as the value: on master `lit new --title -- --topic topics` created
-	// an issue titled "--". Withholding it lets pflag raise "flag needs an
-	// argument", which names the flag. [LAW:no-silent-failure]
-	awaitingValue := false
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
 		if arg == "--" {
 			// POSIX end-of-flags: every token after this is a positional
 			// whatever it looks like, so `lit show -- -x` asks for the issue
-			// literally named "-x". The loop used to classify post-terminator
-			// tokens by their leading dash like any other, which reordered them
-			// ahead of the positionals — harmless while nothing checked the
-			// count, and, once parseLeaf did, a refusal of a command line the
-			// caller had written correctly. [LAW:no-silent-failure]
-			if awaitingValue {
-				// The flag before the terminator never got its value, so the
-				// line is malformed AT THAT FLAG and nothing after it can be
-				// classified meaningfully. Handing pflag the dangling flag by
-				// itself makes it say so and name it. Emitting anything more —
-				// the terminator, or the tokens past the ceiling that would sit
-				// behind it — only gives pflag something to swallow as the
-				// value instead. The first draft of this guard withheld only the
-				// terminator and still emitted the overflow, so
-				// `lit comment add --body -- <id> hello` wrote a comment bodied
-				// "hello" — a guard failing open into a write. That shape was
-				// never released; it is recorded because the narrow fix looked
-				// complete and the test pinned exactly the case it handled.
-				// [LAW:no-silent-failure]
-				return positionals, flags
-			}
+			// literally named "-x". This is reached only when no flag is
+			// waiting for a value, because a value-taking flag consumes the
+			// next token first — pflag's rule, mirrored below, not a second
+			// judgement made here.
 			flags = append(flags, arg)
 			for _, rest := range args[index+1:] {
 				if len(positionals) < positionalCount {
@@ -333,23 +308,28 @@ func splitArgs(args []string, positionalCount int, fs *cobraFlagSet) ([]string, 
 		}
 		if strings.HasPrefix(arg, "-") {
 			flags = append(flags, arg)
-			// The leading-dash test on the NEXT token stays, but not because
-			// pflag refuses a dash-leading value — it does not. pflag consumes
-			// the next token as a value-required flag's value unconditionally,
-			// so `lit upgrade --to --help` sets --to to the literal "--help"
-			// and fetches a release tagged `v--help`; only `ls`/`children`
-			// guard that shape themselves. The test stays because withholding
-			// such a token here leaves it where the caller put it, so the
-			// refusal stays about the flag actually mistyped. Only the boolean
-			// case changes, and in one direction — tokens that used to be
-			// swallowed are now left as positionals for the arity check to judge.
-			if index+1 < len(args) && !strings.HasPrefix(args[index+1], "-") && fs.flagTakesValue(arg) {
+			// A value-taking flag consumes the NEXT token, whatever it looks
+			// like. That is pflag's own rule — it takes the following argv
+			// element unconditionally when NoOptDefVal is empty — and this loop
+			// must model it EXACTLY rather than approximate it.
+			//
+			// It approximated it twice, and both times the approximation was
+			// the bug. Declining to pair when the next token began with a dash
+			// assumed pflag would then refuse the flag; pflag pairs anyway
+			// (`lit upgrade --to --help` fetches a release tagged `v--help`),
+			// so the two disagreed about which token was a value and every
+			// consequence of that disagreement was a misfiled token: a
+			// positional pulled into the flag stream and then refused
+			// (`lit start --reason --reason <id>`), or the terminator withheld
+			// and the tokens behind it dropped, which let
+			// `lit init --prefix --prefix -- stray` create a workspace and lose
+			// `stray` — the very silent drop this ticket exists to remove.
+			// [LAW:one-source-of-truth] pflag is the authority on its own
+			// pairing; this must not become a second one.
+			if index+1 < len(args) && fs.flagTakesValue(arg) {
 				flags = append(flags, args[index+1])
 				index++
-				awaitingValue = false
-				continue
 			}
-			awaitingValue = fs.flagTakesValue(arg)
 			continue
 		}
 		if len(positionals) < positionalCount {

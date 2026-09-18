@@ -364,56 +364,103 @@ func TestTerminatorMakesEverythingAfterItPositional(t *testing.T) {
 	}
 }
 
-// TestTerminatorIsNeverConsumedAsAFlagValue pins a line that RAN ON MASTER:
-// `lit new --title -- --topic topics` created an issue titled "--", because
-// pflag consumes whatever follows a value-required flag unconditionally and the
-// terminator was in the stream to be consumed. The terminator is structure, not
-// data, so it never occupies a value position.
-func TestTerminatorIsNeverConsumedAsAFlagValue(t *testing.T) {
+// TestSplitArgsLosesNoToken pins the invariant two rounds of terminator fixes
+// broke in opposite directions: every argv token must land in exactly one of the
+// two streams. Withholding the terminator dropped the tokens behind it as well,
+// so `lit init --prefix --prefix -- stray` created a workspace having silently
+// lost `stray` — the very defect this ticket exists to close, reintroduced by
+// its own guard. Conservation is cheap to state and impossible to satisfy
+// accidentally. [LAW:no-silent-failure]
+func TestSplitArgsLosesNoToken(t *testing.T) {
+	t.Parallel()
+	shapes := [][]string{
+		{"--body", "--", "id1", "hello"},
+		{"--body", "--"},
+		{"--prefix", "--prefix", "--", "stray"},
+		{"--body", "hi", "--", "id1"},
+		{"--", "-x"},
+		{"--", "--", "id1"},
+		{"id1", "--", "id2"},
+		{"--flag", "-x", "id1"},
+		{"--unknown", "--", "id1"},
+		{"-", "id1"},
+		{"---x", "id1"},
+		{"--body=hi", "--", "id1"},
+		{"--body"},
+		{"--"},
+		{},
+	}
+	for _, ceiling := range []int{0, 1, 2, allPositionals} {
+		for _, shape := range shapes {
+			fs := newCobraFlagSet("probe")
+			fs.String("body", "", "body")
+			fs.String("prefix", "", "prefix")
+			fs.Bool("flag", false, "flag")
+			positionals, flags := splitArgs(shape, ceiling, fs)
+			if got, want := len(positionals)+len(flags), len(shape); got != want {
+				t.Errorf("splitArgs(%q, ceiling=%d) kept %d tokens, was given %d\n  positionals=%q\n  flags=%q",
+					shape, ceiling, got, want, positionals, flags)
+			}
+		}
+	}
+}
+
+// TestSplitArgsAgreesWithPflagAboutValues pins the rule the two broken versions
+// each guessed at: a value-taking flag consumes the NEXT token, whatever it
+// looks like, because that is what pflag does with the same argv. When this
+// loop disagreed with pflag about which token was a value, every consequence was
+// a misfiled token — a legal positional refused, or a terminator swallowed.
+// [LAW:one-source-of-truth]
+func TestSplitArgsAgreesWithPflagAboutValues(t *testing.T) {
 	t.Parallel()
 	fs := newCobraFlagSet("probe")
-	by := fs.String("by", "", "actor")
+	body := fs.String("body", "", "body")
 
-	_, err := parseLeaf(leaf[struct{}]{fs: fs, positionals: 2}, []string{"--by", "--", "id1", "label1"}, io.Discard)
-	if err == nil {
-		t.Fatalf("parseLeaf(--by -- id1 label1) succeeded with --by = %q; a value-taking flag before the terminator has no value and must be refused", *by)
+	// A dash-leading token IS the value: pflag pairs them, so this must too.
+	positionals, flags := splitArgs([]string{"--body", "--", "id1"}, 1, fs)
+	if len(flags) < 2 || flags[1] != "--" {
+		t.Fatalf("splitArgs(--body -- id1) flags = %q, want the terminator paired as --body's value", flags)
 	}
-	if *by == "--" {
-		t.Errorf("--by = %q; the terminator was consumed as the flag's value", *by)
+	if len(positionals) != 1 || positionals[0] != "id1" {
+		t.Fatalf("positionals = %q, want [id1]", positionals)
 	}
-	if !strings.Contains(err.Error(), "by") {
-		t.Errorf("error = %q, want it to name the flag that is missing its argument", err)
+	if err := parseFlagSet(fs, flags, io.Discard); err != nil {
+		t.Fatalf("parseFlagSet(%q) error = %v, want the pairing pflag itself performs", flags, err)
 	}
+	if *body != "--" {
+		t.Errorf("--body = %q, want \"--\" — the same value plain pflag assigns", *body)
+	}
+}
 
-	// The same intent ONE TOKEN WIDER. The first version of this test stopped at
-	// the shape above, and the fix it pinned stopped there too: tokens past the
-	// declared ceiling were still emitted behind the dangling flag, where pflag
-	// took the first as its value. `lit comment add --body -- <id> hello` wrote
-	// a comment bodied "hello" — a guard failing open into a write.
-	fsOverflow := newCobraFlagSet("probe")
-	body := fsOverflow.String("body", "", "body")
-	_, err = parseLeaf(leaf[struct{}]{fs: fsOverflow, positionals: 1}, []string{"--body", "--", "id1", "hello"}, io.Discard)
-	if err == nil {
-		t.Fatalf("parseLeaf(--body -- id1 hello) succeeded with --body = %q; the token past the ceiling was fed to the dangling flag", *body)
-	}
-	if *body == "hello" {
-		t.Errorf("--body = %q; a post-terminator positional became the flag's value", *body)
-	}
-
-	// Control, so the fix cannot be "refuse every terminator after a flag": a
-	// value-taking flag that HAS its value still parses, and the terminator
-	// still protects what follows.
-	fs2 := newCobraFlagSet("probe")
-	by2 := fs2.String("by", "", "actor")
-	got, err := parseLeaf(leaf[struct{}]{fs: fs2, positionals: 2}, []string{"--by", "me", "--", "id1", "-x"}, io.Discard)
-	if err != nil {
-		t.Fatalf("parseLeaf(--by me -- id1 -x) error = %v, want it to parse", err)
-	}
-	if *by2 != "me" {
-		t.Errorf("--by = %q, want me", *by2)
-	}
-	if len(got) != 2 || got[0] != "id1" || got[1] != "-x" {
-		t.Errorf("positionals = %q, want [id1 -x]", got)
+// TestTerminatorThroughRealCommandPaths drives `--` through the dispatcher
+// rather than through splitArgs alone. Both terminator defects on this branch
+// lived in argv that no test in this file built: every other case here appends
+// bare strays, and `--` never appeared on a real command path.
+func TestTerminatorThroughRealCommandPaths(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"even run of value flags before the terminator", []string{"init", "--prefix", "--prefix", "--", "zzz-stray"}},
+		{"odd run of value flags before the terminator", []string{"init", "--prefix", "--", "zzz-stray"}},
+		{"terminator then surplus", []string{"show", "--", "zzz-a", "zzz-b", "zzz-c"}},
+		{"terminator on a zero-positional leaf", []string{"workflows", "--", "zzz-stray"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var out bytes.Buffer
+			err := Run(context.Background(), &out, &out, tc.args)
+			if err == nil {
+				t.Fatalf("lit %s exited 0; a surplus token behind the terminator was silently dropped", strings.Join(tc.args, " "))
+			}
+			if got := ExitCode(err); got != ExitUsage {
+				t.Fatalf("lit %s exit = %d (%v), want %d (usage)", strings.Join(tc.args, " "), got, err, ExitUsage)
+			}
+			if !strings.Contains(err.Error(), "zzz-stray") && !strings.Contains(err.Error(), "zzz-") {
+				t.Errorf("error = %q, want it to name the offending token", err)
+			}
+		})
 	}
 }
 

@@ -967,7 +967,7 @@ func annotateIssues(ctx context.Context, st storage.Store, requiredFields []stri
 func orphanedLeaf() appLeaf {
 	fs := newCobraFlagSet("orphaned")
 	assignee := fs.String("assignee", "", "Filter by assignee")
-	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	return appLeaf{fs: fs, positionals: 0, usage: "usage: lit orphaned [--assignee <user>]", work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		listFilter := storage.ListIssuesFilter{
 			Statuses:        []model.State{model.StateInProgress},
 			Assignees:       toSlice(strings.TrimSpace(*assignee)),
@@ -1977,7 +1977,10 @@ func runCompletion(stdout io.Writer, args []string) error {
 	if err := parseFlagSet(fs, args[1:], stdout); err != nil {
 		return err
 	}
-	if err := refuseSurplusPositionals(fs, 0, ""); err != nil {
+	// The family's own line, not a derived sentence: a caller who typed a stray
+	// token after `completion bash` needs the shells named, and the family is
+	// where that list already lives. [LAW:one-source-of-truth]
+	if err := refuseSurplusPositionals(fs, 0, completionFamily.usage); err != nil {
 		return err
 	}
 	_, err = io.WriteString(stdout, completionRenderer(shell)())

@@ -405,9 +405,11 @@ func positionalAllowance(count int) string {
 	switch {
 	case count == allPositionals:
 		// The sentinel is a ceiling, not a capacity, and rendering it as a
-		// number offered the caller 9223372036854775807 arguments. Reachable:
-		// a bare "-" goes to the flag stream, pflag keeps it as a leftover, and
-		// the refusal renders the declaration. [LAW:no-silent-failure]
+		// number once offered the caller 9223372036854775807 arguments. No leaf
+		// reaches this arm today — `rank set` was the only one declaring
+		// allPositionals and it now supplies its own sentence — but the arm
+		// stays because the sentinel is representable here and a leaf added
+		// later would otherwise print it. [LAW:no-silent-failure]
 		return "takes any number of positional arguments"
 	case count == 0:
 		return "takes no positional arguments"
