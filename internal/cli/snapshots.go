@@ -79,12 +79,14 @@ func withCommitLock(ctx context.Context, ws workspace.Info, fn func() error) (er
 func snapshotsNewLeaf() wsLeaf {
 	fs := newCobraFlagSet("snapshots new")
 	label := fs.String("label", "", "Optional human-readable label appended to the snapshot name")
+	// [LAW:no-silent-failure] A stray positional here is a misfired intent: the
+	// sibling `snapshots restore` takes its argument positionally, so
+	// `snapshots new nightly` is a natural typo for `--label nightly`, and
+	// accepting it would mint an unlabeled snapshot the operator then cannot find
+	// by the name they thought they gave it. The refusal is parseLeaf's now, and
+	// the sentence it prints names --label because the flag set says this command
+	// takes a value for it — which is why this leaf needs no usage line of its own.
 	return wsLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
-		// [LAW:no-silent-failure] A stray positional is a misfired intent (the
-		// sibling restore takes its argument positionally, so `snapshots new
-		// nightly` is a natural typo for `--label nightly`); accepting it would
-		// mint an unlabeled snapshot the operator then can't find by the name
-		// they thought they gave it.
 		cfg, err := config.Load(pathspec.New(ws.RootDir))
 		if err != nil {
 			return err

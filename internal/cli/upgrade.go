@@ -117,13 +117,13 @@ type upgradeLeafShape = leaf[upgradeScope]
 func withWorkspaceSchema(declare func() upgradeLeafShape) wsLeafFn {
 	return func() wsLeaf {
 		l := declare()
-		return wsLeaf{fs: l.fs, positionals: l.positionals, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+		return adaptLeaf[upgradeScope, workspace.Info](l, func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
 			current, err := version.Get()
 			if err != nil {
 				return fmt.Errorf("upgrade: read this binary's version info: %w", err)
 			}
 			return l.work(ctx, stdout, upgradeScope{schema: workspaceSchemaReader{ws: ws}, current: current}, positional)
-		}}
+		})
 	}
 }
 

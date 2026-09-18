@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -175,9 +176,17 @@ func parseFlagSet(fs *cobraFlagSet, args []string, stdout io.Writer) error {
 // arity. splitArgs used to re-derive it from "the next token has no leading
 // dash", which is a statement about the ARGUMENT and not about the FLAG, and it
 // was wrong in both directions: it fed a boolean the positional that followed it
-// (`lit children --include-archived <id>` lost the id), and it fed `--eject all`
-// a value that pflag accepts only as `--eject=all`, which surfaced as the
-// unrelated "quickstart <topic> takes no flags".
+// (`lit children --include-archived <id>` lost the id), and it fed an
+// optional-value flag a value pflag accepts only as `--flag=value`, so the token
+// arrived where nothing expected it.
+//
+// It does NOT by itself fix `lit quickstart --eject all`. pflag's rule for an
+// optional-value flag is the equals sign, so `all` is the topic no matter how
+// argv is split, and the command is genuinely refused either way. What was wrong
+// there was the SENTENCE — "quickstart <topic> takes no flags", said by a
+// command with three — and that is fixed in quickstartLeaf, which now names
+// `--eject=LIST`. Recorded because the first draft of this comment claimed the
+// split fixed it, and the two binaries printed the same line.
 // An unknown flag consumes nothing: pflag refuses it a moment later, and leaving
 // the following token where the caller put it keeps that refusal about the flag
 // actually mistyped. [LAW:no-silent-failure]
@@ -185,22 +194,59 @@ func (fs *cobraFlagSet) flagTakesValue(token string) bool {
 	if strings.Contains(token, "=") {
 		return false
 	}
-	name := strings.TrimLeft(token, "-")
-	if name == "" {
-		return false
-	}
 	flags := fs.cmd.Flags()
 	var flag *pflag.Flag
 	switch {
+	case strings.HasPrefix(token, "---"):
+		// Not a spelling pflag accepts. TrimLeft used to strip every dash, so
+		// `---limit` resolved to the real --limit and consumed the next token as
+		// its value; pflag then refused the token anyway, so nothing visible
+		// broke, but the function answered about a flag the caller did not
+		// write. [LAW:one-source-of-truth] answer about the token as written.
+		return false
 	case strings.HasPrefix(token, "--"):
-		flag = flags.Lookup(name)
-	case len(name) == 1:
-		flag = flags.ShorthandLookup(name)
+		flag = flags.Lookup(strings.TrimPrefix(token, "--"))
+	case len(token) == 2:
+		flag = flags.ShorthandLookup(strings.TrimPrefix(token, "-"))
+		// A cluster like `-abc` matches no arm and so consumes nothing. That is
+		// correct for this binary and checked rather than assumed: lit declares
+		// no value-taking shorthand at all (TestNoValueTakingShorthandExists),
+		// and cobra's own -h is boolean. The first `-v <value>` anyone adds would
+		// need this arm to understand clusters, which is why the test names the
+		// condition instead of leaving it to be rediscovered.
 	}
 	if flag == nil {
 		return false
 	}
+	return takesValue(flag)
+}
+
+// takesValue is the one predicate for "does this flag consume the next token".
+// pflag records it as NoOptDefVal: non-empty exactly for the flags that stand
+// alone (booleans, and optional-value flags that accept a value only as
+// --flag=value). Two questions need this same fact — how splitArgs divides argv,
+// and which flags an arity refusal should point a caller at — and they must
+// never be able to disagree about a given flag.
+// [LAW:one-source-of-truth] one reading of pflag's record, two callers.
+func takesValue(flag *pflag.Flag) bool {
 	return flag.NoOptDefVal == ""
+}
+
+// valueTakingFlagNames lists the flags this command accepts a VALUE for, sorted,
+// excluding the help flag and anything hidden. It is what a caller who typed a
+// value positionally was probably reaching for, and it is read off the flag set
+// rather than restated: a leaf cannot forget to update it, and it cannot name a
+// flag the command does not have. [LAW:one-source-of-truth]
+func (fs *cobraFlagSet) valueTakingFlagNames() []string {
+	var names []string
+	fs.cmd.Flags().VisitAll(func(flag *pflag.Flag) {
+		if flag.Hidden || flag.Name == "help" || !takesValue(flag) {
+			return
+		}
+		names = append(names, "--"+flag.Name)
+	})
+	sort.Strings(names)
+	return names
 }
 
 func splitArgs(args []string, positionalCount int, fs *cobraFlagSet) ([]string, []string) {
@@ -213,6 +259,27 @@ func splitArgs(args []string, positionalCount int, fs *cobraFlagSet) ([]string, 
 	flags := make([]string, 0, len(args))
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
+		if arg == "--" {
+			// POSIX end-of-flags: every token after this is a positional
+			// whatever it looks like, so `lit show -- -x` asks for the issue
+			// literally named "-x". The loop used to classify post-terminator
+			// tokens by their leading dash like any other, which reordered them
+			// ahead of the positionals — harmless while nothing checked the
+			// count, and, once parseLeaf did, a refusal of a command line the
+			// caller had written correctly. [LAW:no-silent-failure]
+			flags = append(flags, arg)
+			for _, rest := range args[index+1:] {
+				if len(positionals) < positionalCount {
+					positionals = append(positionals, rest)
+					continue
+				}
+				// Past the ceiling it stays in the stream behind the terminator,
+				// where pflag keeps it as a leftover and the arity refusal names
+				// it — the same answer a surplus positional gets anywhere else.
+				flags = append(flags, rest)
+			}
+			return positionals, flags
+		}
 		if strings.HasPrefix(arg, "-") {
 			flags = append(flags, arg)
 			// The leading-dash test on the NEXT token stays: a value-taking flag

@@ -54,13 +54,13 @@ func downgradeLeaf() appLeaf {
 func withSchemaMigrator(declare func() downgradeLeafShape) appLeafFn {
 	return func() appLeaf {
 		l := declare()
-		return appLeaf{fs: l.fs, positionals: l.positionals, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		return adaptLeaf[schemaDowngrader, *app.App](l, func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 			migrator, err := storage.SchemaMigration.Of(ap.Store)
 			if err != nil {
 				return err
 			}
 			return l.work(ctx, stdout, migrator, positional)
-		}}
+		})
 	}
 }
 

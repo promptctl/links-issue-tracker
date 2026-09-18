@@ -103,7 +103,7 @@ func backupRestoreLeaf() appLeaf {
 	path := fs.String("path", "", "Path to an export JSON (backup snapshot or sync file)")
 	latest := fs.Bool("latest", false, "Restore latest backup snapshot")
 	force := fs.Bool("force", false, "Force restore over unsynced state")
-	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	return appLeaf{fs: fs, positionals: 0, usage: restoreUsage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		restorePath, err := resolveRestorePath(ap, *path, *latest)
 		if err != nil {
 			return err

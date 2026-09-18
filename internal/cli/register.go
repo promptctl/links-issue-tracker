@@ -268,6 +268,25 @@ type leaf[R any] struct {
 	work  func(ctx context.Context, stdout io.Writer, res R, positional []string) error
 }
 
+// adaptLeaf carries a leaf's DECLARATION across to a leaf over a different
+// resource type, rewiring only the work. The three pipeline adapters
+// (withWorkspaceSchema, withSchemaMigrator, withSyncStore) each used to rebuild
+// the struct inline — `wsLeaf{fs: l.fs, positionals: l.positionals, work: ...}` —
+// and every one of them silently dropped `usage` the moment that field existed,
+// so `lit upgrade v0.9.0` answered with the generic allowance instead of the
+// `usage: lit upgrade [--to <version>]` its leaf declares two lines away.
+//
+// Three hand-written copies of "what a declaration consists of" is the same
+// shape as the thirty hand-written arity guards this ticket removed, and it
+// failed the same way: the copies nobody updated are the bug. This does not make
+// a dropped field a compile error — a field added to leaf and not added here
+// would still vanish — so TestAdaptersCarryTheWholeDeclaration pins it from the
+// outside. What it does buy is that there is now ONE place to update instead of
+// three to remember. [LAW:one-source-of-truth] [LAW:single-enforcer]
+func adaptLeaf[R, S any](from leaf[R], work func(ctx context.Context, stdout io.Writer, res S, positional []string) error) leaf[S] {
+	return leaf[S]{fs: from.fs, positionals: from.positionals, usage: from.usage, work: work}
+}
+
 // The two resources a leaf's work can need. A declaration function returns one
 // of these; the pipeline holds it only after declaring, and calls its work only
 // after acquiring. [LAW:types-are-the-program] the ordering the handlers used to
@@ -321,13 +340,53 @@ func refuseSurplusPositionals(fs *cobraFlagSet, declared int, usage string) erro
 		return nil
 	}
 	if usage == "" {
-		usage = fmt.Sprintf("usage: lit %s %s", fs.cmd.Use, positionalAllowance(declared))
+		usage = derivedUsage(fs, declared)
 	}
 	// The offending tokens are named either way: the caller is told both what to
 	// type and which part of what they typed was not understood, which is the
 	// pair a bare usage line left them to work out. [LAW:no-silent-failure]
 	return UsageError{Message: fmt.Sprintf("%s; got unexpected argument(s) %q", usage, extra)}
 }
+
+// derivedUsage is the sentence for a leaf that declares no usage of its own. It
+// is BUILT from the flag set rather than written down, because everything it
+// needs is already declared: the command path, the positional ceiling, and which
+// flags take a value.
+//
+// The alternative was to hand-write a sentence onto each of the thirty-seven
+// leaves that lacked one. That is thirty-seven fresh copies of facts the flag
+// set already holds — the same shape as the thirty hand-written arity guards
+// this ticket deleted, and it fails the same way: a flag added later leaves the
+// sentence behind, and nothing says so. A leaf with genuinely local guidance
+// still sets `usage` and wins outright; this only decides what a leaf that said
+// nothing gets to say. [LAW:one-source-of-truth] [LAW:polishing-by-subtraction]
+//
+// Naming the value-taking flags is the whole point: `lit import spec.json` is a
+// caller who thinks the path is positional, and `--path` is the act that works.
+// Past a handful the list stops being readable and starts being a worse `--help`,
+// so beyond that the sentence points at `--help` instead of reciting it —
+// `lit ls` has fifteen.
+func derivedUsage(fs *cobraFlagSet, declared int) string {
+	line := fmt.Sprintf("usage: lit %s %s", fs.cmd.Use, positionalAllowance(declared))
+	valued := fs.valueTakingFlagNames()
+	switch {
+	case len(valued) == 0:
+		// Nothing takes a value, so the allowance is the whole truth and adding
+		// to it would be padding. [LAW:no-silent-failure] say only what is true.
+		return line
+	case len(valued) <= maxNamedFlagsInUsage:
+		return line + "; values are passed as flags: " + strings.Join(valued, ", ")
+	default:
+		return line + fmt.Sprintf("; values are passed as flags — run `lit %s --help`", fs.cmd.Use)
+	}
+}
+
+// maxNamedFlagsInUsage is where naming the flags stops helping. Four covers the
+// leaves where a caller plausibly typed one value in the wrong place
+// (`--path`, `--to`, `--label`, `--mapping`, and the two-flag bulk commands);
+// past it are the list and create commands, whose flag tables are what `--help`
+// is for.
+const maxNamedFlagsInUsage = 4
 
 // positionalAllowance renders a leaf's declared arity as the phrase a usage
 // message needs. It reads the SAME number splitArgs enforces, so the sentence

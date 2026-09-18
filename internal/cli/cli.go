@@ -320,11 +320,16 @@ func followupLeaf() appLeaf {
 	assignee := fs.String("assignee", "", "Assignee")
 	labels := fs.String("labels", "", "Comma-separated labels")
 	top := fs.Bool("top", false, "Promote the follow-up to the top of its frame (the default appends it to the bottom)")
-	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	// One sentence for both of followup's usage failures — a missing --on/--title,
+	// and a value typed where no positional is taken. It was written inside the
+	// work, where the seam's arity check (which runs first) could not reach it.
+	// [LAW:one-source-of-truth]
+	usage := "usage: lit followup --on <id> --title <text> [--description <text>] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--top]"
+	return appLeaf{fs: fs, positionals: 0, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		parentID := strings.TrimSpace(*on)
 		titleValue := strings.TrimSpace(*title)
 		if parentID == "" || titleValue == "" {
-			return UsageError{Message: "usage: lit followup --on <id> --title <text> [--description <text>] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--top]"}
+			return UsageError{Message: usage}
 		}
 		parent, err := ap.Store.GetIssue(ctx, parentID)
 		if err != nil {
@@ -1208,15 +1213,21 @@ func rankDispatch(args []string) (appLeaf, []string) {
 	return rankLeaf(), args
 }
 
+// rankUsage is rank's own sentence, read by both its body and the arity refusal
+// at the seam. The choice structure (--top|--bottom|--above|--below) is local
+// knowledge no flag list conveys: the flags are mutually exclusive and one is
+// required, which "values are passed as flags" cannot say. [LAW:one-source-of-truth]
+const rankUsage = "usage: lit rank <id> --top|--bottom|--above <id>|--below <id>"
+
 func rankLeaf() appLeaf {
 	fs := newCobraFlagSet("rank")
 	_ = fs.Bool("top", false, "Move to highest rank")
 	_ = fs.Bool("bottom", false, "Move to lowest rank")
 	above := fs.String("above", "", "Rank above this issue ID")
 	below := fs.String("below", "", "Rank below this issue ID")
-	return appLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	return appLeaf{fs: fs, positionals: 1, usage: rankUsage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
-			return UsageError{Message: "usage: lit rank <id> --top|--bottom|--above <id>|--below <id>"}
+			return UsageError{Message: rankUsage}
 		}
 		visited := map[string]bool{}
 		fs.Visit(func(flag *pflag.Flag) { visited[flag.Name] = true })
@@ -1562,10 +1573,22 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 	// the id to a preceding boolean as its value. splitArgs asks the flag set
 	// now, so the declared channel carries it and parseLeaf refuses a second id
 	// rather than this leaf discovering it. [LAW:one-source-of-truth]
-	return appLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
-		usage := fmt.Sprintf("usage: lit %s <id> [--reason <text>]", spec.name)
+	// One sentence, read by both the seam and the body. Hoisted out of the work
+	// because the arity refusal in parseLeaf runs BEFORE any work does, so a
+	// usage line computed inside the closure is a line the enforcer can never
+	// see: `lit start a b` got the generic allowance while this exact sentence
+	// sat two lines below it. [LAW:one-source-of-truth]
+	usage := fmt.Sprintf("usage: lit %s <id> [--reason <text>]", spec.name)
+	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
-			return errors.New(usage)
+			// UsageError, not errors.New: a missing id is the caller mis-writing
+			// the command line, which exits 2 and says to re-read --help. As a
+			// bare error it exited 1 carrying "Retry the command. If it still
+			// fails, run `lit doctor`" — advice that cannot work, since retrying
+			// the same line fails the same way. That left one leaf answering its
+			// two arity failures with two exit codes and two remedies, only one
+			// of which was actionable. [LAW:types-are-the-program]
+			return UsageError{Message: usage}
 		}
 
 		issueID := positional[0]
@@ -1741,7 +1764,7 @@ func importTreeLeaf() appLeaf {
 	fs := newCobraFlagSet("import").Detail(helpText("import"))
 	path := fs.String("path", "", "Path to a JSON tree-spec file or a YAML bulk create/update file")
 	resolveActor := registerActor(fs)
-	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	return appLeaf{fs: fs, positionals: 0, usage: importUsage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if strings.TrimSpace(*path) == "" {
 			return UsageError{Message: importUsage}
 		}
@@ -1940,7 +1963,7 @@ func quickstartLeaf() wsLeaf {
 	// The optional topic, declared. It used to be 0-and-read-the-leftovers, which
 	// meant this leaf carried its own "more than one positional" refusal; that
 	// count is parseLeaf's now, for every leaf at once. [LAW:single-enforcer]
-	return wsLeaf{fs: fs, positionals: 1, work: func(_ context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+	return wsLeaf{fs: fs, positionals: 1, usage: quickstartUsage, work: func(_ context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
 		ejectChanged := fs.Changed("eject")
 		ejectValue := *eject
 		if ejectChanged && ejectValue == "" {
@@ -1956,7 +1979,18 @@ func quickstartLeaf() wsLeaf {
 		if len(positional) == 1 {
 			// [LAW:dataflow-not-control-flow] Topic dispatch is a value lookup; every topic shares one render path.
 			if *refresh || ejectChanged || *force {
-				return UsageError{Message: "usage: lit quickstart <topic> takes no flags"}
+				// This is where `lit quickstart --eject all` lands, and the old
+				// sentence — "quickstart <topic> takes no flags" — was false
+				// about a command with three of them, and named no act that
+				// works. `--eject` carries an optional value, so pflag takes one
+				// only as `--eject=all`; written `--eject all`, the `all` is not
+				// the flag's value at all, it is the topic, and a topic renders
+				// on its own. Both halves are stated because the two shapes that
+				// arrive here are indistinguishable by the time we see them:
+				// `--eject=all topic` and `--eject topic` leave identical state.
+				// [LAW:no-silent-failure] name the act that works, not the shape
+				// of the mistake.
+				return UsageError{Message: quickstartUsage + "; a topic renders on its own, and --eject takes its value as --eject=LIST"}
 			}
 			templateName, ok := quickstartTopicTemplate(positional[0])
 			if !ok {
