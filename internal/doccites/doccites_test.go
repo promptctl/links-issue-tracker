@@ -142,14 +142,27 @@ func TestAnAmbiguousPathTailIsNotGuessedAt(t *testing.T) {
 // declares. Indexing one shadows a top-level declaration of the same name
 // further down, and the gate then calls a correct citation drift and sends the
 // reader into an unrelated function to look for it.
+// The cited line is inside the real Widget and does not contain the word, so
+// only the declaration extent can carry this citation. A span that named the
+// symbol would hold through the use-site arm whether the local shadowed it or
+// not, and the mutation would survive.
 func TestALocalDeclarationDoesNotShadowTheFileScopeOne(t *testing.T) {
-	src := "package a\n\nfunc helper() {\n\tvar Widget int\n\t_ = Widget\n}\n\n// Widget is the real one.\nfunc Widget() {\n}\n"
+	src := "package a\n" + // 1
+		"\n" + // 2
+		"func helper() {\n" + // 3
+		"\tvar Widget int\n" + // 4
+		"\t_ = Widget\n" + // 5
+		"}\n" + // 6
+		"\n" + // 7
+		"func Widget() {\n" + // 8
+		"\tprintln(\"body\")\n" + // 9
+		"}\n" // 10
 	fsys := fstest.MapFS{
-		"doc-v1-total/x.md": &fstest.MapFile{Data: []byte("`Widget` is declared here (`internal/a/a.go:9`).\n")},
+		"doc-v1-total/x.md": &fstest.MapFile{Data: []byte("`Widget` does the work (`internal/a/a.go:9`).\n")},
 		"internal/a/a.go":   &fstest.MapFile{Data: []byte(src)},
 	}
 	if got := verdictOf(t, fsys); got != Holds {
-		t.Fatalf("a citation of the file-scope Widget should hold, got %s", got)
+		t.Fatalf("a citation inside the file-scope Widget should hold, got %s", got)
 	}
 }
 
