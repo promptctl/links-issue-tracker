@@ -265,12 +265,12 @@ written, of 9,813 citations:
 
 | | share | |
 |---|---|---|
-| resolve to the symbol their sentence names | 18.8% | 1,843 |
-| point somewhere else, or at a missing file or past its end | 35.1% | 3,443 |
+| resolve to the symbol their sentence names | 18.9% | 1,851 |
+| point somewhere else, or at a missing file or past its end | 35.0% | 3,435 |
 | name no symbol in the cited file, so nothing can judge them | 46.1% | 4,527 |
 
 Among the 3,069 whose sentence names a symbol the cited file declares — the
-ones a checker can judge either way — **39.9% are wrong**, and every CI check
+ones a checker can judge either way — **39.7% are wrong**, and every CI check
 was green over all of them. A further 1,954 name a file this tree cannot
 identify at all, almost always a bare basename no chapter ever qualifies:
 several packages hold a `sync.go`, so `` `sync.go:20` `` under prose that never
@@ -290,7 +290,7 @@ It is baselined rather than absolute, because a corpus already wrong in two of
 every five citations it can judge cannot be held to "every citation resolves":
 that fails on the first run and is switched off within a week. It is held to
 "every citation that resolved still resolves" — the bleeding, not the wound.
-Repairing the existing 3,443 is separate work, and deliberately not done by a
+Repairing the existing 3,435 is separate work, and deliberately not done by a
 sweep: a citation that
 was already wrong gets re-derived into a fresh wrong number, producing a large
 diff that reads like a repair while fixing nothing.
@@ -314,10 +314,13 @@ author who had the blind spot written down.
 
 An abbreviation is resolved against what the documents themselves say, never
 against what happens to be in the checkout. A basename the corpus qualifies
-somewhere is qualified everywhere; one it never qualifies stays unresolved,
-even where exactly one file of that name exists — picking that file would make
-the verdict depend on what is lying beside the tree, and an instrument that
-answers differently on two machines is not measuring the corpus.
+exactly one way is qualified everywhere. One it never qualifies stays
+unresolved, and so does one it qualifies two different ways — `sync.go` is
+written for three different files here, so nothing but the prose can say which
+a given sentence meant. Resolving either against a lone file of that name in
+the tree would make the verdict depend on what is lying beside the checkout,
+and an instrument that answers differently on two machines is not measuring the
+corpus.
 
 The gate does not judge whether a citation is *right*. That depends on the
 claim its sentence is making, which no rule over line numbers can see: a span

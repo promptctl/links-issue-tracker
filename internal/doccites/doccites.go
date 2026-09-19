@@ -11,11 +11,16 @@
 //
 // # The shapes, and why they do not survive parsing
 //
-// A citation is written three ways, and only the first carries a filename:
+// A citation is written four ways, and only the first carries a path:
 //
-//	named       `internal/model/priority.go:18-21`
-//	comma tail  `error_output.go:113,117`      one file, several line spans
-//	bare cont   `:47-54`                       inherits the file named earlier
+//	qualified    `internal/model/priority.go:18-21`
+//	abbreviated  `priority.go:35-41`            a basename, directory from context
+//	comma tail   `error_output.go:113,117`      one file, several line spans
+//	bare cont    `:47-54`                       inherits the file named earlier
+//
+// The abbreviated shape is the largest — 5,141 of 9,813, against 1,983
+// qualified — and it is the one every earlier census missed, having been
+// counted as qualified because it carries a filename.
 //
 // Bare continuations are 26% of the corpus and cluster in the dense prose,
 // where the most checkable citations live. Every instrument built here so far
@@ -119,16 +124,17 @@ const (
 	// answer to and the specification never says which — three packages here
 	// hold a sync.go, and "sync.go:20" names none of them.
 	Unresolved
-	// PastEOF: the span runs past the end of the file. Decidable without a
+	// OutOfRange: the span names lines the file does not have — past its end,
+	// or starting before line 1, or running backwards. Decidable without a
 	// symbol, so it is the one check that reaches the unbound citations too.
-	PastEOF
+	OutOfRange
 	// Unbound: no named symbol is declared in the cited file, so the citation
 	// asserts nothing this package can check — and nothing a reader can either.
 	Unbound
 )
 
 func (v Verdict) String() string {
-	return [...]string{"holds", "moved", "unresolved", "past-eof", "unbound"}[v]
+	return [...]string{"holds", "moved", "unresolved", "out-of-range", "unbound"}[v]
 }
 
 // Finding is a citation and what the tree says about it.
@@ -141,7 +147,7 @@ type Finding struct {
 	Symbol   string
 	Declared int
 	// Lines is the cited file's length, set exactly when the verdict is
-	// PastEOF. Its own field rather than a second meaning for Declared: one
+	// OutOfRange. Its own field rather than a second meaning for Declared: one
 	// int that is a declaration line under two verdicts and a file length
 	// under a third cannot be read without reading Verdict first, and a
 	// consumer that trusts the name prints a length where a line belongs.
@@ -159,8 +165,8 @@ func (f Finding) String() string {
 	case Unresolved:
 		return fmt.Sprintf("%s:%d: %s names %q, which does not identify one file in this tree",
 			f.Doc, f.DocLine, f.Text, f.Named)
-	case PastEOF:
-		return fmt.Sprintf("%s:%d: %s cites %s:%s, past the end of a %d-line file",
+	case OutOfRange:
+		return fmt.Sprintf("%s:%d: %s cites %s:%s, outside a %d-line file",
 			f.Doc, f.DocLine, f.Text, f.File, f.Span, f.Lines)
 	default:
 		return fmt.Sprintf("%s:%d: %s (%s)", f.Doc, f.DocLine, f.Text, f.Verdict)
@@ -445,7 +451,7 @@ func (g Glossary) Apply(cites []Citation) []Citation {
 // they are, and where each Go declaration sits.
 type Tree struct {
 	lines  map[string]int
-	decls  map[string]map[string]extent
+	decls  map[string]map[string][]extent
 	text   map[string][]string
 	suffix map[string][]string
 }
@@ -455,6 +461,36 @@ type Tree struct {
 type extent struct{ start, end int }
 
 func (e extent) overlaps(s Span) bool { return e.start <= s.End && s.Start <= e.end }
+
+// overlapsAny reports whether the span covers any declaration of the name.
+func overlapsAny(es []extent, s Span) bool {
+	for _, e := range es {
+		if e.overlaps(s) {
+			return true
+		}
+	}
+	return false
+}
+
+// nearest is the declaration a reader who followed this citation would most
+// want pointed out: the one closest to where they landed. With several
+// same-named declarations in a file, naming the first is what sent a reader
+// looking at line 220 off to line 308.
+func nearest(es []extent, s Span) int {
+	best, dist := 0, -1
+	for _, e := range es {
+		d := 0
+		if e.start > s.End {
+			d = e.start - s.End
+		} else if e.end < s.Start {
+			d = s.Start - e.end
+		}
+		if dist < 0 || d < dist {
+			best, dist = e.start, d
+		}
+	}
+	return best
+}
 
 // Index walks the whole repository once and records what Check needs from it.
 //
@@ -467,11 +503,11 @@ func (e extent) overlaps(s Span) bool { return e.start <= s.End && s.Start <= e.
 // regex for "func at the start of a line" also matches the word inside a string
 // or a comment, and a citation that binds on a false declaration is reported as
 // drift that nobody can find. Files that do not parse contribute their length
-// and no declarations: a citation into one is still checkable for PastEOF.
+// and no declarations: a citation into one is still checkable for OutOfRange.
 func Index(fsys fs.FS) (*Tree, error) {
 	t := &Tree{
 		lines:  map[string]int{},
-		decls:  map[string]map[string]extent{},
+		decls:  map[string]map[string][]extent{},
 		text:   map[string][]string{},
 		suffix: map[string][]string{},
 	}
@@ -514,7 +550,7 @@ func Index(fsys fs.FS) (*Tree, error) {
 
 // lineCount is how many lines a file has, which is not one more than its
 // newlines: a file ending in a newline has no line after it. The difference is
-// exactly one, and one is the whole of the PastEOF test — counting the empty
+// exactly one, and one is the whole of the range test — counting the empty
 // fragment after the final newline accepts a citation of line 4 in a 3-line
 // file, and misstates the length in the message that explains the refusal.
 func lineCount(body string) int {
@@ -538,23 +574,61 @@ func lineCount(body string) int {
 //
 // .gitignore is the repository's own answer and is checked in, so this reads it
 // rather than keeping a second list beside it. [LAW:one-source-of-truth] Only
-// its plain directory entries are honoured — a pattern with a glob in it is not
-// a directory to skip, and the corpus cites nothing inside one.
+// plain directory entries are honoured — a pattern with a glob in it is not a
+// directory to skip, and the corpus cites nothing inside one.
+//
+// Every .gitignore in the tree, not just the root one, and an entry naming a
+// directory without a trailing slash counts. A repository ignores a directory
+// from whichever file is nearest it — .remember/ is ignored by its own
+// .remember/.gitignore — and reading only the root's slash-terminated lines
+// walked and indexed it anyway. The exclusion is what keeps a verdict a
+// property of the corpus rather than of the checkout, so reading a subset of
+// it is the same defect as not reading it at all.
 func ignoredDirs(fsys fs.FS) map[string]bool {
 	out := map[string]bool{}
-	body, err := fs.ReadFile(fsys, ".gitignore")
-	if err != nil {
-		return out
-	}
-	for _, line := range strings.Split(string(body), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") || !strings.HasSuffix(line, "/") {
-			continue
+	_ = fs.WalkDir(fsys, ".", func(name string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
 		}
-		if dir := strings.Trim(line, "/"); !strings.ContainsAny(dir, "*?[!") {
-			out[dir] = true
+		if d.IsDir() {
+			if path.Base(name) == ".git" || out[name] {
+				return fs.SkipDir
+			}
+			return nil
 		}
-	}
+		if path.Base(name) != ".gitignore" {
+			return nil
+		}
+		body, err := fs.ReadFile(fsys, name)
+		if err != nil {
+			return nil
+		}
+		dir := path.Dir(name)
+		for _, line := range strings.Split(string(body), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "!") {
+				continue
+			}
+			entry := strings.Trim(line, "/")
+			// A directory whose own .gitignore excludes everything in it is not
+			// part of the repository, and `*` is how that is written. It is the
+			// form .remember/ uses, so honouring only named entries left the
+			// agent memory beside this checkout indexed as though it were lit.
+			if (entry == "*" || entry == "**") && dir != "." {
+				out[dir] = true
+				continue
+			}
+			if entry == "" || strings.ContainsAny(entry, "*?[") {
+				continue
+			}
+			if dir == "." {
+				out[entry] = true
+			} else {
+				out[path.Join(dir, entry)] = true
+			}
+		}
+		return nil
+	})
 	return out
 }
 
@@ -577,16 +651,18 @@ func ignoredDirs(fsys fs.FS) map[string]bool {
 // regex for "func at the start of a line" also matches the word inside a string
 // or a comment, and a citation binding on a false declaration is reported as
 // drift nobody can find. Files that do not parse contribute their length and no
-// declarations, so a citation into one is still checkable for PastEOF.
-func declarations(name string, body []byte) map[string]extent {
+// declarations, so a citation into one is still checkable for OutOfRange.
+func declarations(name string, body []byte) map[string][]extent {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, name, body, parser.ParseComments|parser.SkipObjectResolution)
 	if err != nil {
 		return nil
 	}
-	out := map[string]extent{}
-	// Keep the first extent seen for a name. A later redeclaration in another
-	// scope would otherwise move the answer to lines the prose never meant.
+	out := map[string][]extent{}
+	// Every extent for a name, not the first. A file declares one name several
+	// times whenever it declares methods — `Error` nine times in
+	// internal/cli/errors.go — and "the declaration of Error in errors.go" is
+	// then not a thing that exists to point at.
 	put := func(id *ast.Ident, n ast.Node, doc *ast.CommentGroup) {
 		if id == nil || id.Name == "_" {
 			return
@@ -601,9 +677,7 @@ func declarations(name string, body []byte) map[string]extent {
 		if doc != nil {
 			start = doc.Pos()
 		}
-		if _, seen := out[id.Name]; !seen {
-			out[id.Name] = extent{fset.Position(start).Line, fset.Position(n.End()).Line}
-		}
+		out[id.Name] = append(out[id.Name], extent{fset.Position(start).Line, fset.Position(n.End()).Line})
 	}
 	ast.Inspect(file, func(n ast.Node) bool {
 		switch d := n.(type) {
@@ -611,17 +685,33 @@ func declarations(name string, body []byte) map[string]extent {
 			put(d.Name, d, d.Doc)
 			// The signature is a declaration; the body is not. Descending into
 			// it indexes a function's local var and const names as though the
-			// file declared them, and because the first extent seen wins, a
-			// local shadows a top-level declaration of the same name further
-			// down — reporting a correct citation as drift and pointing the
-			// reader into an unrelated function to find it.
+			// file declared them, and a local of the same name as a top-level
+			// declaration further down then answers for it — reporting a
+			// correct citation as drift and pointing the reader into an
+			// unrelated function to find it.
 			return false
-		case *ast.TypeSpec:
-			put(d.Name, d, d.Doc)
-		case *ast.ValueSpec:
-			for _, id := range d.Names {
-				put(id, d, d.Doc)
+		case *ast.GenDecl:
+			// The specs are read from here rather than visited on their own,
+			// because that is where the doc comment is. go/parser attaches it
+			// to the GenDecl for `// Doc` above `type X struct{}`, leaving
+			// TypeSpec.Doc and ValueSpec.Doc nil, so reading the spec alone
+			// applied the "a citation of the doc comment is a citation of the
+			// declaration" rule to functions and silently to nothing else.
+			//
+			// Only for a lone spec. In a group the comment introduces the
+			// group, and stretching every member's extent up to it would let a
+			// citation anywhere in the header hold for all of them.
+			for _, spec := range d.Specs {
+				switch sp := spec.(type) {
+				case *ast.TypeSpec:
+					put(sp.Name, sp, specDoc(sp.Doc, d))
+				case *ast.ValueSpec:
+					for _, id := range sp.Names {
+						put(id, sp, specDoc(sp.Doc, d))
+					}
+				}
 			}
+			return true
 		case *ast.StructType:
 			for _, f := range d.Fields.List {
 				for _, id := range f.Names {
@@ -632,6 +722,19 @@ func declarations(name string, body []byte) map[string]extent {
 		return true
 	})
 	return out
+}
+
+// specDoc is the comment that belongs to one spec: its own where it has one,
+// otherwise the enclosing declaration's, and only when that declaration holds
+// this spec alone.
+func specDoc(own *ast.CommentGroup, d *ast.GenDecl) *ast.CommentGroup {
+	if own != nil {
+		return own
+	}
+	if len(d.Specs) == 1 {
+		return d.Doc
+	}
+	return nil
 }
 
 // resolve turns the path a sentence wrote into a path in the tree.
@@ -691,17 +794,22 @@ func (t *Tree) check(c Citation) Finding {
 		return Finding{Citation: c, Verdict: Unresolved}
 	}
 	f := Finding{Citation: c, File: file}
-	if n := t.lines[file]; c.Span.End > n {
-		f.Verdict, f.Lines = PastEOF, n
+	// Both ends, and their order. A citation can be written `file.go:0` or
+	// `x.go:500-1` as easily as past the end, and only End was tested: the
+	// span then reached the symbol search, which indexes lines[Start-1] and
+	// panicked the whole run on lines[-1]. A malformed span is a finding about
+	// one citation, never a crash that stops the other 9,812 being reported.
+	if n := t.lines[file]; c.Span.Start < 1 || c.Span.End > n || c.Span.End < c.Span.Start {
+		f.Verdict, f.Lines = OutOfRange, n
 		return f
 	}
 	decls := t.decls[file]
 	for _, name := range c.Nearby {
-		e, declared := decls[name]
+		extents, declared := decls[name]
 		if !declared {
 			continue
 		}
-		f.Symbol, f.Declared = name, e.start
+		f.Symbol, f.Declared = name, nearest(extents, c.Span)
 		f.Verdict = Moved
 		// Two conventions, both legitimate, and a citation satisfying either is
 		// about the symbol its sentence names. A chapter cites the declaration
@@ -715,7 +823,13 @@ func (t *Tree) check(c Citation) Finding {
 		// this corpus — an earlier endpoint checker flagged 33 citations of
 		// which nearly all were legitimate — and a gate crying wolf at that
 		// rate is read once and then ignored.
-		if e.overlaps(c.Span) || t.names(file, c.Span, name) {
+		// Any of them. A file can declare one name several times — 52 names in
+		// this tree do, and `Error` nine times in internal/cli/errors.go, once
+		// per error type — so "the declaration of Error in this file" is not a
+		// thing that exists. Keeping only the first made every citation of the
+		// other eight read as drift, pointing the reader at an unrelated type's
+		// method.
+		if overlapsAny(extents, c.Span) || t.names(file, c.Span, name) {
 			f.Verdict = Holds
 		}
 		return f

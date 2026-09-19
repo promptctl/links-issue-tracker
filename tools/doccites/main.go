@@ -58,6 +58,14 @@ func run(root fs.FS, out *os.File, list bool) error {
 		}
 	}
 
+	if tally.Total() == 0 {
+		// Every share below divides by this. Printing five NaN% rows and
+		// exiting 0 reports a measured corpus of nothing, which reads like a
+		// clean result rather than an instrument that found no subject.
+		fmt.Fprintln(out, "no citations found in the specification — nothing to measure")
+		return nil
+	}
+
 	fmt.Fprintf(out, "%d citations across the specification\n\n", tally.Total())
 	fmt.Fprintln(out, "written as:")
 	for sh := doccites.Qualified; sh <= doccites.Tailed; sh++ {
@@ -68,9 +76,13 @@ func run(root fs.FS, out *os.File, list bool) error {
 		fmt.Fprintf(out, "  %-13s %6d  %5.1f%%\n", v, tally[v], 100*float64(tally[v])/float64(tally.Total()))
 	}
 	fmt.Fprintf(out, "\n%d cite a symbol the file declares, and are therefore decidable;\n", tally.Bound())
-	fmt.Fprintf(out, "of those, %.1f%% hold and %.1f%% point at the wrong lines.\n",
-		100*float64(tally[doccites.Holds])/float64(tally.Bound()),
-		100*float64(tally[doccites.Moved])/float64(tally.Bound()))
+	if tally.Bound() == 0 {
+		fmt.Fprintln(out, "none of them bind a symbol, so none can be judged either way.")
+	} else {
+		fmt.Fprintf(out, "of those, %.1f%% hold and %.1f%% point at the wrong lines.\n",
+			100*float64(tally[doccites.Holds])/float64(tally.Bound()),
+			100*float64(tally[doccites.Moved])/float64(tally.Bound()))
+	}
 
 	perDoc := map[string]doccites.Tally{}
 	for _, f := range findings {
@@ -85,11 +97,11 @@ func run(root fs.FS, out *os.File, list bool) error {
 	}
 	sort.Slice(names, func(i, j int) bool { return perDoc[names[i]].Total() > perDoc[names[j]].Total() })
 
-	fmt.Fprintf(out, "\n%6s %6s %6s %6s %6s %6s  %s\n", "total", "holds", "moved", "unres", "eof", "unbound", "document")
+	fmt.Fprintf(out, "\n%6s %6s %6s %6s %6s %6s  %s\n", "total", "holds", "moved", "unres", "range", "unbound", "document")
 	for _, d := range names {
 		c := perDoc[d]
 		fmt.Fprintf(out, "%6d %6d %6d %6d %6d %6d  %s\n",
-			c.Total(), c[doccites.Holds], c[doccites.Moved], c[doccites.Unresolved], c[doccites.PastEOF], c[doccites.Unbound], d)
+			c.Total(), c[doccites.Holds], c[doccites.Moved], c[doccites.Unresolved], c[doccites.OutOfRange], c[doccites.Unbound], d)
 	}
 
 	if !list {

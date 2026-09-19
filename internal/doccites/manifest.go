@@ -95,8 +95,17 @@ func Lapsed(manifest []Held, findings []Finding) []Held {
 // had no case — would hand exactly that instruction to someone whose chapter
 // had just stopped being true. [LAW:no-silent-failure]
 func Explain(h Held, findings []Finding) string {
-	for _, f := range findings {
-		if f.Doc == h.Doc && f.Text == h.Text && f.Span == h.Span {
+	// Two passes, symbol first. A chapter can write one citation twice in two
+	// blocks and bind it to a different symbol each time, so Doc/Text/Span alone
+	// can match the sibling that never changed — and then explain the wrong one.
+	for _, pass := range []bool{true, false} {
+		for _, f := range findings {
+			if f.Doc != h.Doc || f.Text != h.Text || f.Span != h.Span {
+				continue
+			}
+			if pass && f.Symbol != h.Symbol {
+				continue
+			}
 			switch f.Verdict {
 			case Holds:
 				return fmt.Sprintf("%s:%d: %s now resolves to `%s`, where it recorded `%s` — one of the two is not what the sentence says",
@@ -104,8 +113,8 @@ func Explain(h Held, findings []Finding) string {
 			case Moved:
 				return fmt.Sprintf("%s:%d: %s no longer brackets `%s`, which is now at %s:%d — repoint the citation",
 					f.Doc, f.DocLine, f.Text, h.Symbol, f.File, f.Declared)
-			case PastEOF:
-				return fmt.Sprintf("%s:%d: %s now runs past the end of a %d-line %s — repoint the citation",
+			case OutOfRange:
+				return fmt.Sprintf("%s:%d: %s now names lines outside a %d-line %s — repoint the citation",
 					f.Doc, f.DocLine, f.Text, f.Lines, f.File)
 			case Unresolved:
 				return fmt.Sprintf("%s:%d: %s no longer identifies one file in this tree — repoint the citation",

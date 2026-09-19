@@ -15,7 +15,7 @@ const repoRoot = "../.."
 // TestCitationsStillResolve is the gate this package exists to be.
 //
 // The specification points at source by line number and nothing kept those
-// numbers true: measured when this gate was written, 39.9% of the citations
+// numbers true: measured when this gate was written, 39.7% of the citations
 // that can be checked at all pointed somewhere other than the thing their
 // sentence names, and all eleven CI checks were green over every one of them.
 //
@@ -62,8 +62,11 @@ func TestTheGateFiresWhenACitedDeclarationMoves(t *testing.T) {
 
 	after := fstest.MapFS{
 		"doc-v1-total/x.md": before["doc-v1-total/x.md"],
-		// Two lines of padding push Widget out of the cited 1-3.
-		"internal/a/a.go": &fstest.MapFile{Data: []byte("package a\n\n// padding\n// padding\ntype Widget struct{}\n")},
+		// Blank lines, not comments. Two comment lines directly above the type
+		// are its doc comment, which is part of the declaration for citation
+		// purposes, so the span would still legitimately hold and this control
+		// would report a gate failure that is not one.
+		"internal/a/a.go": &fstest.MapFile{Data: []byte("package a\n\n\n\ntype Widget struct{}\n")},
 	}
 	moved, err := Survey(after)
 	if err != nil {
@@ -168,13 +171,13 @@ func TestALocalDeclarationDoesNotShadowTheFileScopeOne(t *testing.T) {
 }
 
 // The line after a file's final newline is not a line. Counting it accepts a
-// citation one past the end, which is the whole of what PastEOF decides.
+// citation one past the end, which is the whole of what OutOfRange decides.
 func TestTheLineAfterTheFinalNewlineIsNotALine(t *testing.T) {
 	fsys := fstest.MapFS{
 		"doc-v1-total/x.md": &fstest.MapFile{Data: []byte("`Thing` is here (`internal/a/a.go:4`).\n")},
 		"internal/a/a.go":   &fstest.MapFile{Data: []byte("package a\n\ntype Thing struct{}\n")},
 	}
-	if got := verdictOf(t, fsys); got != PastEOF {
+	if got := verdictOf(t, fsys); got != OutOfRange {
 		t.Fatalf("line 4 of a 3-line file is past its end, got %s", got)
 	}
 }
@@ -314,7 +317,7 @@ func TestASpanPastTheEndOfTheFileIsReported(t *testing.T) {
 		"doc-v1-total/x.md": &fstest.MapFile{Data: []byte("see the tail (`internal/a/a.go:400-410`).\n")},
 		"internal/a/a.go":   &fstest.MapFile{Data: []byte("package a\n")},
 	})
-	if v != PastEOF {
+	if v != OutOfRange {
 		t.Errorf("a span past the end of the file should be reported, got %s", v)
 	}
 }
@@ -347,4 +350,103 @@ func verdictOf(t *testing.T, fsys fstest.MapFS) Verdict {
 		t.Fatalf("fixture should yield exactly one citation, got %d: %+v", len(findings), findings)
 	}
 	return findings[0].Verdict
+}
+
+// A malformed span is a finding about one citation, not a crash that stops the
+// other 9,812 being reported. `:0` reached the symbol search, which indexes
+// lines[Start-1] and panicked the whole run on lines[-1].
+func TestAMalformedSpanIsReportedRatherThanFatal(t *testing.T) {
+	for _, written := range []string{"internal/a/a.go:0", "internal/a/a.go:0-5", "internal/a/a.go:5-1"} {
+		fsys := fstest.MapFS{
+			"doc-v1-total/x.md": &fstest.MapFile{Data: []byte("`Thing` is here (`" + written + "`).\n")},
+			"internal/a/a.go":   &fstest.MapFile{Data: []byte("package a\n\ntype Thing struct{}\n")},
+		}
+		if got := verdictOf(t, fsys); got != OutOfRange {
+			t.Errorf("%s should be out-of-range, got %s", written, got)
+		}
+	}
+}
+
+// A file declares one name as many times as it has methods with that name, so
+// "the declaration of Error in errors.go" is not a thing that exists. Keeping
+// only the first made every citation of the others read as drift.
+//
+// The cited line is inside the second method and does not contain the word, so
+// only the declaration extent can carry it.
+func TestACitationOfTheSecondSameNamedMethodHolds(t *testing.T) {
+	src := "package a\n" + // 1
+		"\n" + // 2
+		"type A struct{}\n" + // 3
+		"\n" + // 4
+		"// Message for A.\n" + // 5
+		"func (a A) Error() string {\n" + // 6
+		"\treturn \"a\"\n" + // 7
+		"}\n" + // 8
+		"\n" + // 9
+		"type B struct{}\n" + // 10
+		"\n" + // 11
+		"// Message for B.\n" + // 12
+		"func (b B) Error() string {\n" + // 13
+		"\treturn \"b\"\n" + // 14
+		"}\n" // 15
+	fsys := fstest.MapFS{
+		"doc-v1-total/x.md": &fstest.MapFile{Data: []byte("`B.Error()` returns it (`internal/a/a.go:14`).\n")},
+		"internal/a/a.go":   &fstest.MapFile{Data: []byte(src)},
+	}
+	if got := verdictOf(t, fsys); got != Holds {
+		t.Fatalf("a citation of the second Error should hold, got %s", got)
+	}
+}
+
+// "The doc comment is part of the declaration" is stated for every kind of
+// declaration, and go/parser attaches a type's or a constant's comment to the
+// enclosing GenDecl, not to the spec. Reading the spec alone applied the rule
+// to functions and silently to nothing else.
+//
+// The comment does not contain the symbol, so only the extent rule can carry it.
+func TestACitedTypeDocCommentResolves(t *testing.T) {
+	src := "package a\n\n// The thing this package is about.\ntype Widget struct{}\n"
+	fsys := fstest.MapFS{
+		"doc-v1-total/x.md": &fstest.MapFile{Data: []byte("`Widget` is described here (`internal/a/a.go:3`).\n")},
+		"internal/a/a.go":   &fstest.MapFile{Data: []byte(src)},
+	}
+	if got := verdictOf(t, fsys); got != Holds {
+		t.Fatalf("a citation of a type's doc comment should hold, got %s", got)
+	}
+}
+
+// A directory whose own .gitignore excludes everything in it is not part of the
+// repository. Indexing one lets a file nobody tracks collide with a real path
+// tail and flip a citation to Unresolved — the gate then fails on one machine
+// and passes on another, which is the whole thing this package refuses to be.
+func TestAWhollyIgnoredDirectoryIsNotIndexed(t *testing.T) {
+	fsys := fstest.MapFS{
+		"doc-v1-total/x.md":  &fstest.MapFile{Data: []byte("`Thing` lives here (`a/dup.go:3`).\n")},
+		"internal/a/dup.go":  &fstest.MapFile{Data: []byte("package a\n\ntype Thing struct{}\n")},
+		"scratch/.gitignore": &fstest.MapFile{Data: []byte("*\n")},
+		"scratch/a/dup.go":   &fstest.MapFile{Data: []byte("package a\n\ntype Thing struct{}\n")},
+	}
+	if got := verdictOf(t, fsys); got != Holds {
+		t.Fatalf("an untracked copy must not make the tail ambiguous, got %s", got)
+	}
+}
+
+// Explain must describe the entry it was handed. One citation written twice in
+// two blocks binds two symbols and records two entries; matching on the text
+// alone can pick up the sibling that never changed and report it as the problem.
+func TestExplainDescribesTheEntryItWasGiven(t *testing.T) {
+	cite := Citation{Doc: "d.md", Text: "`a.go:3`", Span: Span{Start: 3, End: 3}}
+	steady := Finding{Citation: cite, Verdict: Holds, Symbol: "Alpha", File: "a.go"}
+	steady.DocLine = 10
+	drifted := Finding{Citation: cite, Verdict: Moved, Symbol: "Beta", Declared: 91, File: "a.go"}
+	drifted.DocLine = 20
+
+	h := Held{Doc: "d.md", Text: "`a.go:3`", Span: Span{Start: 3, End: 3}, Symbol: "Beta"}
+	got := Explain(h, []Finding{steady, drifted})
+	if !strings.Contains(got, "no longer brackets") || !strings.Contains(got, "Beta") {
+		t.Fatalf("the message should describe Beta's drift, got %q", got)
+	}
+	if strings.Contains(got, "Alpha") {
+		t.Fatalf("the message describes the untouched sibling: %q", got)
+	}
 }
