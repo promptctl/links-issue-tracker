@@ -806,3 +806,35 @@ func TestTheTwoPatternsAdmitTheSameFileTypes(t *testing.T) {
 		}
 	}
 }
+
+// A backticked filename is not a symbol the sentence offers. `store.json` and
+// `model.Attribution` are the same shape to the identifier pattern, which binds
+// on the last element — so a file mention contributed its extension as a
+// candidate, and a file declaring `json`, `sum` or `mod` could answer a
+// citation whose real subject had drifted, reporting it as holding.
+func TestABacktickedFilenameDoesNotOfferItsExtensionAsASymbol(t *testing.T) {
+	src := "package a\n" + // 1
+		"\n" + // 2
+		"var json = 1\n" // 3
+	doc := "The file `store.json` is read. `Missing` explains it (`internal/a/a.go:3`).\n"
+	fsys := fstest.MapFS{
+		"doc-v1-total/x.md": &fstest.MapFile{Data: []byte(doc)},
+		"internal/a/a.go":   &fstest.MapFile{Data: []byte(src)},
+	}
+	if got := verdictOf(t, fsys); got != Unbound {
+		t.Fatalf("the sentence names Missing, which the file does not declare, so nothing should bind: got %s", got)
+	}
+}
+
+// A directory that will not list leaves the rules under it missing, and nothing
+// else in this pass would say so.
+func TestADirectoryThatWillNotListIsReported(t *testing.T) {
+	base := fstest.MapFS{
+		".gitignore":     &fstest.MapFile{Data: []byte("vendor\n")},
+		"sub/a.go":       &fstest.MapFile{Data: []byte("package a\n")},
+		"sub/.gitignore": &fstest.MapFile{Data: []byte("build\n")},
+	}
+	if _, err := ignoredPaths(errorFS{FS: base, fail: "sub"}); err == nil {
+		t.Fatal("a directory that cannot be listed should be reported, not walked past")
+	}
+}

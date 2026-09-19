@@ -201,6 +201,7 @@ var spanRe = regexp.MustCompile(`(\d+)(?:-(\d+))?`)
 var (
 	tickRe  = regexp.MustCompile("`[^`\n]+`")
 	identRe = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)(?:\.([A-Za-z_][A-Za-z0-9_]*))*(?:\(.*\))?$`)
+	fileRe  = regexp.MustCompile("^/?[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\\.(?:" + citedExt + ")$")
 )
 
 // Parse reads every citation out of one document, resolving each one's file
@@ -387,6 +388,9 @@ func identsBefore(prefix string) []string {
 	var out []string
 	for _, loc := range tickRe.FindAllStringIndex(prefix, -1) {
 		tok := strings.TrimSpace(prefix[loc[0]+1 : loc[1]-1])
+		if fileRe.MatchString(tok) {
+			continue
+		}
 		m := identRe.FindStringSubmatch(tok)
 		if m == nil {
 			continue
@@ -680,7 +684,11 @@ func ignoredPaths(fsys fs.FS) (ignored, error) {
 	read(".gitignore")
 	walked := fs.WalkDir(fsys, ".", func(name string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil
+			// A directory that will not list is the same kind of answer as a
+			// file that will not read: the rules under it are missing and
+			// nothing else will say so. Index's walk and docclaims both
+			// propagate here, and this one silently did not.
+			return err
 		}
 		if d.IsDir() {
 			if name != "." && (path.Base(name) == ".git" || ig.skip(name)) {
