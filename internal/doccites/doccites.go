@@ -140,6 +140,13 @@ type Finding struct {
 	// two verdicts reached by binding a symbol.
 	Symbol   string
 	Declared int
+	// Lines is the cited file's length, set exactly when the verdict is
+	// PastEOF. Its own field rather than a second meaning for Declared: one
+	// int that is a declaration line under two verdicts and a file length
+	// under a third cannot be read without reading Verdict first, and a
+	// consumer that trusts the name prints a length where a line belongs.
+	// [LAW:one-type-per-behavior]
+	Lines int
 	// File is the resolved repository-relative path, empty only for Unresolved.
 	File string
 }
@@ -154,7 +161,7 @@ func (f Finding) String() string {
 			f.Doc, f.DocLine, f.Text, f.Named)
 	case PastEOF:
 		return fmt.Sprintf("%s:%d: %s cites %s:%s, past the end of a %d-line file",
-			f.Doc, f.DocLine, f.Text, f.File, f.Span, f.Declared)
+			f.Doc, f.DocLine, f.Text, f.File, f.Span, f.Lines)
 	default:
 		return fmt.Sprintf("%s:%d: %s (%s)", f.Doc, f.DocLine, f.Text, f.Verdict)
 	}
@@ -483,8 +490,13 @@ func Index(fsys fs.FS) (*Tree, error) {
 		if err != nil {
 			return err
 		}
-		t.lines[name] = strings.Count(string(body), "\n") + 1
-		for seg := strings.Split(name, "/"); len(seg) > 1; seg = seg[1:] {
+		t.lines[name] = lineCount(string(body))
+		// Multi-segment tails only. Registering the bare basename too would
+		// give resolve the "unique file of that name in the tree" fallback it
+		// says it does not have: `sync.go:20` would answer with whichever
+		// sync.go happens to lie in this checkout, which is the filesystem
+		// answering a question the prose never did.
+		for seg := strings.Split(name, "/"); len(seg) > 2; seg = seg[1:] {
 			tail := strings.Join(seg[1:], "/")
 			t.suffix[tail] = append(t.suffix[tail], name)
 		}
@@ -498,6 +510,22 @@ func Index(fsys fs.FS) (*Tree, error) {
 		return nil, err
 	}
 	return t, nil
+}
+
+// lineCount is how many lines a file has, which is not one more than its
+// newlines: a file ending in a newline has no line after it. The difference is
+// exactly one, and one is the whole of the PastEOF test — counting the empty
+// fragment after the final newline accepts a citation of line 4 in a 3-line
+// file, and misstates the length in the message that explains the refusal.
+func lineCount(body string) int {
+	if body == "" {
+		return 0
+	}
+	n := strings.Count(body, "\n")
+	if strings.HasSuffix(body, "\n") {
+		return n
+	}
+	return n + 1
 }
 
 // ignoredDirs reads the directories the repository declares are not part of it.
@@ -581,6 +609,13 @@ func declarations(name string, body []byte) map[string]extent {
 		switch d := n.(type) {
 		case *ast.FuncDecl:
 			put(d.Name, d, d.Doc)
+			// The signature is a declaration; the body is not. Descending into
+			// it indexes a function's local var and const names as though the
+			// file declared them, and because the first extent seen wins, a
+			// local shadows a top-level declaration of the same name further
+			// down — reporting a correct citation as drift and pointing the
+			// reader into an unrelated function to find it.
+			return false
 		case *ast.TypeSpec:
 			put(d.Name, d, d.Doc)
 		case *ast.ValueSpec:
@@ -657,7 +692,7 @@ func (t *Tree) check(c Citation) Finding {
 	}
 	f := Finding{Citation: c, File: file}
 	if n := t.lines[file]; c.Span.End > n {
-		f.Verdict, f.Declared = PastEOF, n
+		f.Verdict, f.Lines = PastEOF, n
 		return f
 	}
 	decls := t.decls[file]

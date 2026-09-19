@@ -107,18 +107,128 @@ func TestEveryCitationShapeIsRead(t *testing.T) {
 // `sync.go:20` under a chapter that never says which one names none of them,
 // and choosing one would report a confident verdict about a file the sentence
 // never mentioned.
+//
+// So: a basename the corpus never qualifies resolves to nothing even when exactly
+// one file in the tree bears that name — the case the "unique file of that
+// name" fallback would answer, and the only case that tests the rule. An
+// earlier fixture put two files named dup.go in the tree, so it passed on the
+// ambiguity guard instead and left the fallback live underneath it: 1,618
+// citations were resolving through the filesystem while this test reported the
+// package did not do that.
 func TestABareBasenameIsNotGuessedAt(t *testing.T) {
 	fsys := fstest.MapFS{
-		"doc-v1-total/x.md": &fstest.MapFile{Data: []byte("`Thing` lives here (`dup.go:1`).\n")},
-		"internal/a/dup.go": &fstest.MapFile{Data: []byte("package a\n\ntype Thing struct{}\n")},
-		"internal/b/dup.go": &fstest.MapFile{Data: []byte("package b\n\ntype Thing struct{}\n")},
+		"doc-v1-total/x.md":  &fstest.MapFile{Data: []byte("`Thing` lives here (`sole.go:3`).\n")},
+		"internal/a/sole.go": &fstest.MapFile{Data: []byte("package a\n\ntype Thing struct{}\n")},
+	}
+	if got := verdictOf(t, fsys); got != Unresolved {
+		t.Fatalf("an unqualified basename must not be resolved against the tree, got %s", got)
+	}
+}
+
+// Two files sharing a multi-segment tail leave it unresolved rather than
+// picking one, which is the guard the fixture above used to lean on.
+func TestAnAmbiguousPathTailIsNotGuessedAt(t *testing.T) {
+	fsys := fstest.MapFS{
+		"doc-v1-total/x.md":     &fstest.MapFile{Data: []byte("`Thing` lives here (`dup/dup.go:3`).\n")},
+		"internal/a/dup/dup.go": &fstest.MapFile{Data: []byte("package dup\n\ntype Thing struct{}\n")},
+		"internal/b/dup/dup.go": &fstest.MapFile{Data: []byte("package dup\n\ntype Thing struct{}\n")},
+	}
+	if got := verdictOf(t, fsys); got != Unresolved {
+		t.Fatalf("an ambiguous path tail must resolve to nothing, got %s", got)
+	}
+}
+
+// A local declaration inside a function body is not something the file
+// declares. Indexing one shadows a top-level declaration of the same name
+// further down, and the gate then calls a correct citation drift and sends the
+// reader into an unrelated function to look for it.
+func TestALocalDeclarationDoesNotShadowTheFileScopeOne(t *testing.T) {
+	src := "package a\n\nfunc helper() {\n\tvar Widget int\n\t_ = Widget\n}\n\n// Widget is the real one.\nfunc Widget() {\n}\n"
+	fsys := fstest.MapFS{
+		"doc-v1-total/x.md": &fstest.MapFile{Data: []byte("`Widget` is declared here (`internal/a/a.go:9`).\n")},
+		"internal/a/a.go":   &fstest.MapFile{Data: []byte(src)},
+	}
+	if got := verdictOf(t, fsys); got != Holds {
+		t.Fatalf("a citation of the file-scope Widget should hold, got %s", got)
+	}
+}
+
+// The line after a file's final newline is not a line. Counting it accepts a
+// citation one past the end, which is the whole of what PastEOF decides.
+func TestTheLineAfterTheFinalNewlineIsNotALine(t *testing.T) {
+	fsys := fstest.MapFS{
+		"doc-v1-total/x.md": &fstest.MapFile{Data: []byte("`Thing` is here (`internal/a/a.go:4`).\n")},
+		"internal/a/a.go":   &fstest.MapFile{Data: []byte("package a\n\ntype Thing struct{}\n")},
+	}
+	if got := verdictOf(t, fsys); got != PastEOF {
+		t.Fatalf("line 4 of a 3-line file is past its end, got %s", got)
+	}
+}
+
+// One span of a comma list holding does not answer for its siblings. Keyed on
+// the citation text alone the two spans are one manifest entry, and the gate
+// passes over a drifted half.
+func TestAHoldingSpanDoesNotCoverItsCommaSibling(t *testing.T) {
+	doc := "`Thing` is here (`internal/a/a.go:3,7`).\n"
+	before := "package a\n\ntype Thing struct{}\n\nfunc use() {\n\t_ = Thing{}\n\t_ = Thing{}\n}\n"
+	fsys := fstest.MapFS{
+		"doc-v1-total/x.md": &fstest.MapFile{Data: []byte(doc)},
+		"internal/a/a.go":   &fstest.MapFile{Data: []byte(before)},
 	}
 	findings, err := Survey(fsys)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(findings) != 1 || findings[0].Verdict != Unresolved {
-		t.Fatalf("an ambiguous basename should resolve to nothing, got %+v", findings)
+	manifest := Holding(findings)
+	if len(manifest) != 2 {
+		t.Fatalf("two spans should record two entries, got %d: %v", len(manifest), manifest)
+	}
+	// Line 7 stops naming Thing; line 3 still declares it.
+	after := "package a\n\ntype Thing struct{}\n\nfunc use() {\n\t_ = Thing{}\n\t_ = 0\n}\n"
+	fsys["internal/a/a.go"] = &fstest.MapFile{Data: []byte(after)}
+	moved, err := Survey(fsys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lapsed := Lapsed(manifest, moved)
+	if len(lapsed) != 1 {
+		t.Fatalf("the drifted span should lapse on its own, got %d: %v", len(lapsed), lapsed)
+	}
+	if lapsed[0].Span.Start != 7 {
+		t.Fatalf("the lapsed entry should be the :7 span, got %+v", lapsed[0])
+	}
+}
+
+// A renamed symbol leaves the sentence in place, so the entry lapses with the
+// citation still present. Explained as a missing symbol, never as a missing
+// sentence: the missing-sentence message tells the contributor to regenerate,
+// which would write the drift into the manifest as the new truth.
+func TestARenamedSymbolIsNotExplainedAsADeletedSentence(t *testing.T) {
+	doc := "`Thing` is here (`internal/a/a.go:3`).\n"
+	fsys := fstest.MapFS{
+		"doc-v1-total/x.md": &fstest.MapFile{Data: []byte(doc)},
+		"internal/a/a.go":   &fstest.MapFile{Data: []byte("package a\n\ntype Thing struct{}\n")},
+	}
+	findings, err := Survey(fsys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := Holding(findings)
+	fsys["internal/a/a.go"] = &fstest.MapFile{Data: []byte("package a\n\ntype Gadget struct{}\n")}
+	renamed, err := Survey(fsys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lapsed := Lapsed(manifest, renamed)
+	if len(lapsed) != 1 {
+		t.Fatalf("the renamed symbol should lapse one entry, got %d", len(lapsed))
+	}
+	msg := Explain(lapsed[0], renamed)
+	if strings.Contains(msg, "-sync") {
+		t.Fatalf("a renamed symbol must not be explained as a deleted sentence: %s", msg)
+	}
+	if !strings.Contains(msg, "Thing") {
+		t.Fatalf("the message should name the symbol that went missing: %s", msg)
 	}
 }
 
