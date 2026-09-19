@@ -268,8 +268,9 @@ written, of 9,813 citations:
 | point somewhere else, or at a missing file or past its end | 20.9% | 2,050 |
 | name no symbol in the cited file, so nothing can judge them | 53.9% | 5,293 |
 
-Among the 3,909 precise enough to judge either way, **36.8% are wrong**, and
-every CI check was green over all of them. Re-derive any of it with `go run
+Among the 3,909 whose sentence names a symbol the cited file declares — the
+ones a checker can judge either way — **36.8% are wrong**, and every CI check
+was green over all of them. Re-derive any of it with `go run
 ./tools/doccites`; `-list` prints each citation that does not resolve.
 
 ### The gate
@@ -300,10 +301,10 @@ use that defeats the gate.
 Four spellings occur, and the parser resolves all of them to a path before
 anything judges them — a qualified path, a bare basename inheriting its
 directory from the prose, a bare continuation (`` `:47-54` ``) inheriting the
-whole path, and further spans after a comma. Only 1,983 of the 9,813 carry a
-path of their own; a reader anchored on ``file.go:`` sees a fraction of the
-corpus and reports success over the rest, which four separate sweeps have now
-done, the last by an author who had the blind spot written down.
+whole path, and further spans after a comma. Just 20.6% carry a path of their own;
+a reader anchored on ``file.go:`` sees a fraction of the corpus and reports
+success over the rest, which four separate sweeps have now done, the last by an
+author who had the blind spot written down.
 
 The gate does not judge whether a citation is *right*. That depends on the
 claim its sentence is making, which no rule over line numbers can see: a span
