@@ -1,6 +1,9 @@
 package doccites
 
 import (
+	"go/parser"
+	"go/token"
+	"io/fs"
 	"os"
 	"strings"
 	"testing"
@@ -151,22 +154,31 @@ func TestAnAmbiguousPathTailIsNotGuessedAt(t *testing.T) {
 // symbol would hold through the use-site arm whether the local shadowed it or
 // not, and the mutation would survive.
 func TestALocalDeclarationDoesNotShadowTheFileScopeOne(t *testing.T) {
+	// The cited line sits inside the local's own extent and does not contain
+	// its name, and the file declares no Widget at all. Both halves are
+	// load-bearing: a line naming the symbol holds through the use-site arm
+	// whatever the index says, and once a name can carry several extents a
+	// spurious local no longer displaces a real declaration further down — it
+	// is added beside it, so the citation this test used to make held either
+	// way and the test had stopped pinning anything.
 	src := "package a\n" + // 1
 		"\n" + // 2
 		"func helper() {\n" + // 3
-		"\tvar Widget int\n" + // 4
-		"\t_ = Widget\n" + // 5
-		"}\n" + // 6
-		"\n" + // 7
-		"func Widget() {\n" + // 8
-		"\tprintln(\"body\")\n" + // 9
-		"}\n" // 10
+		"\tvar (\n" + // 4
+		"\t\tWidget = compute(\n" + // 5
+		"\t\t\t1,\n" + // 6
+		"\t\t)\n" + // 7
+		"\t)\n" + // 8
+		"\t_ = Widget\n" + // 9
+		"}\n" + // 10
+		"\n" + // 11
+		"func compute(n int) int { return n }\n" // 12
 	fsys := fstest.MapFS{
-		"doc-v1-total/x.md": &fstest.MapFile{Data: []byte("`Widget` does the work (`internal/a/a.go:9`).\n")},
+		"doc-v1-total/x.md": &fstest.MapFile{Data: []byte("`Widget` does the work (`internal/a/a.go:6`).\n")},
 		"internal/a/a.go":   &fstest.MapFile{Data: []byte(src)},
 	}
-	if got := verdictOf(t, fsys); got != Holds {
-		t.Fatalf("a citation inside the file-scope Widget should hold, got %s", got)
+	if got := verdictOf(t, fsys); got != Unbound {
+		t.Fatalf("the file declares no Widget, so nothing should bind: got %s", got)
 	}
 }
 
@@ -650,5 +662,147 @@ func TestExplainSaysWhenTheSameCitationIsWrittenTwice(t *testing.T) {
 	h.Symbol = "Beta"
 	if got := Explain(h, []Finding{first, second}); strings.Contains(got, "more than once") {
 		t.Fatalf("the recorded symbol identifies one of the two, so there is no ambiguity to report: %q", got)
+	}
+}
+
+// The same rule as the named function above, reached by the other route. A
+// closure assigned at package level hangs off a GenDecl, which the walk
+// descends, so a `var` inside its body was indexed as a declaration of the
+// file. A citation to an unrelated span then bound on that local and answered
+// for the real declaration further down.
+func TestALocalInsideAPackageLevelClosureIsNotADeclaration(t *testing.T) {
+	// The cited line is inside the local's own extent and does not contain its
+	// name. Citing a line that names the symbol holds through the use-site arm
+	// whatever the index says, and citing a line outside the local's extent is
+	// answered by the real declaration — either fixture passes with the bug in
+	// place, which is how the named-function case was first "covered".
+	src := "package a\n" + // 1
+		"\n" + // 2
+		"var Handler = func() {\n" + // 3
+		"\tvar (\n" + // 4
+		"\t\tWidget = compute(\n" + // 5
+		"\t\t\t1,\n" + // 6
+		"\t\t)\n" + // 7
+		"\t)\n" + // 8
+		"\t_ = Widget\n" + // 9
+		"}\n" + // 10
+		"\n" + // 11
+		"func compute(n int) int { return n }\n" // 12
+	fsys := fstest.MapFS{
+		"doc-v1-total/x.md": &fstest.MapFile{Data: []byte("`Widget` does the work (`internal/a/a.go:6`).\n")},
+		"internal/a/a.go":   &fstest.MapFile{Data: []byte(src)},
+	}
+	if got := verdictOf(t, fsys); got != Unbound {
+		t.Fatalf("the file declares no Widget, so nothing should bind: got %s", got)
+	}
+}
+
+// A path written from the repository root. `/LICENSE-REPORT.md` is how the
+// platform chapters quote one, and it reached none of resolve's branches: a
+// single segment leaves the suffix walk nothing to trim, and tails are
+// registered only from three segments up. Trimming the slash first makes it an
+// ordinary repository-relative lookup — not the basename search this refuses,
+// because the corpus wrote the whole path.
+func TestAPathWrittenFromTheRootResolves(t *testing.T) {
+	fsys := fstest.MapFS{
+		"doc-v1-total/x.md": &fstest.MapFile{Data: []byte("`Thing` is the unit (`/root.go:3`).\n")},
+		"root.go":           &fstest.MapFile{Data: []byte("package main\n\ntype Thing struct{}\n")},
+	}
+	if got := verdictOf(t, fsys); got != Holds {
+		t.Fatalf("a citation of a root-level file written from the root should hold, got %s", got)
+	}
+}
+
+// An absolute path with a machine's checkout baked into it. Eight inventories
+// were written that way, and the longest suffix that is a real file is what
+// recovers them on any other computer.
+func TestAnAbsolutePathResolvesByItsLongestRealSuffix(t *testing.T) {
+	fsys := fstest.MapFS{
+		"doc-v1-total/x.md": &fstest.MapFile{
+			Data: []byte("`Thing` is the unit (`/home/someone/checkout/internal/a/a.go:3`).\n")},
+		"internal/a/a.go": &fstest.MapFile{Data: []byte("package a\n\ntype Thing struct{}\n")},
+	}
+	if got := verdictOf(t, fsys); got != Holds {
+		t.Fatalf("an absolute path should resolve by its longest real suffix, got %s", got)
+	}
+}
+
+// The generated manifest is the baseline the gate trusts, so what generates it
+// has to produce Go that compiles and entries that say what the survey found.
+func TestTheGeneratedManifestIsValidGoCarryingWhatTheSurveyFound(t *testing.T) {
+	fsys := fstest.MapFS{
+		"doc-v1-total/x.md": &fstest.MapFile{Data: []byte("`Thing` is the unit (`internal/a/a.go:3`).\n")},
+		"internal/a/a.go":   &fstest.MapFile{Data: []byte("package a\n\ntype Thing struct{}\n")},
+	}
+	src, err := Regenerate(fsys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parser.ParseFile(token.NewFileSet(), "manifest_gen.go", src, 0); err != nil {
+		t.Fatalf("the generated manifest does not parse as Go: %v\n%s", err, src)
+	}
+	for _, want := range []string{`Doc: "doc-v1-total/x.md"`, "Text: \"`internal/a/a.go:3`\"", `File: "internal/a/a.go"`, `Symbol: "Thing"`} {
+		if !strings.Contains(src, want) {
+			t.Fatalf("the generated manifest is missing %s:\n%s", want, src)
+		}
+	}
+}
+
+// errorFS fails one named read and behaves like its wrapped filesystem
+// otherwise, which is how a .gitignore that exists but cannot be read is put in
+// front of the indexer.
+type errorFS struct {
+	fs.FS
+	fail string
+}
+
+func (e errorFS) Open(name string) (fs.File, error) {
+	if name == e.fail {
+		return nil, fs.ErrPermission
+	}
+	return e.FS.Open(name)
+}
+
+// A .gitignore that is there and unreadable is not the same answer as one that
+// is not there. Read as "no rules here" it indexes a directory the repository
+// excludes, changing what the gate measures with nothing said about it.
+//
+// Asked of ignoredPaths directly, because Index reads every file in the tree
+// and would fail on this one a second time by its own route — a test through
+// Index passes whether or not the reader distinguishes the two cases, which is
+// no test of the reader at all.
+func TestAnUnreadableIgnoreFileIsReportedRatherThanTreatedAsAbsent(t *testing.T) {
+	base := fstest.MapFS{
+		".gitignore": &fstest.MapFile{Data: []byte("vendor\n")},
+		"a.go":       &fstest.MapFile{Data: []byte("package a\n")},
+	}
+	if _, err := ignoredPaths(errorFS{FS: base, fail: ".gitignore"}); err == nil {
+		t.Fatal("an unreadable .gitignore should be reported, not read as an empty one")
+	}
+	if _, err := ignoredPaths(base); err != nil {
+		t.Fatalf("a readable .gitignore should not be an error: %v", err)
+	}
+	// A tree with no .gitignore at all is the ordinary case and not an error.
+	if _, err := ignoredPaths(fstest.MapFS{"a.go": &fstest.MapFile{Data: []byte("package a\n")}}); err != nil {
+		t.Fatalf("an absent .gitignore is an answer, not a failure: %v", err)
+	}
+}
+
+// The citation pattern and the path pattern have to admit the same file types.
+// A type one reads and the other does not parses as a citation and never as a
+// mention, so every abbreviation under it inherits nothing and resolves to
+// nothing — with both patterns individually correct and no test failing.
+func TestTheTwoPatternsAdmitTheSameFileTypes(t *testing.T) {
+	exts := strings.Split(citedExt, "|")
+	if len(exts) < 2 {
+		t.Fatalf("citedExt does not look like an alternation: %q", citedExt)
+	}
+	for _, ext := range exts {
+		if !citeRe.MatchString("`dir/f." + ext + ":3`") {
+			t.Errorf("citeRe does not read a citation of a .%s file", ext)
+		}
+		if !pathRe.MatchString("`dir/f." + ext + "`") {
+			t.Errorf("pathRe does not read a mention of a .%s file", ext)
+		}
 	}
 }

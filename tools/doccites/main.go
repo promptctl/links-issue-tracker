@@ -23,9 +23,14 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/doccites"
 )
 
+// manifestPath is where the gate reads its baseline from, and is named once:
+// the -sync help below is built from it, so moving the generated file cannot
+// leave the flag describing where it used to be. [LAW:one-source-of-truth]
+const manifestPath = "internal/doccites/manifest_gen.go"
+
 func main() {
 	list := flag.Bool("list", false, "print every citation judged wrong; one nothing can judge is not listed")
-	sync := flag.Bool("sync", false, "rewrite internal/doccites/manifest_gen.go from the corpus")
+	sync := flag.Bool("sync", false, "rewrite "+manifestPath+" from the corpus")
 	flag.Parse()
 
 	if *sync {
@@ -128,9 +133,6 @@ func run(root fs.FS, out io.Writer, list bool) error {
 	}
 	return nil
 }
-
-// manifestPath is where the gate reads its baseline from.
-const manifestPath = "internal/doccites/manifest_gen.go"
 
 // regenerate rewrites the manifest from the corpus as it stands.
 //

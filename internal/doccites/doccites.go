@@ -58,6 +58,7 @@
 package doccites
 
 import (
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -173,10 +174,20 @@ func (f Finding) String() string {
 	}
 }
 
+// citedExt is every extension the corpus points at, written once.
+//
+// citeRe reads the citations and pathRe reads the paths an abbreviation
+// inherits from, so a type in one list and not the other parses as a citation
+// and never as a mention — the abbreviation under it then resolves to nothing,
+// with both patterns individually correct. Two copies of this alternation is
+// the exact drift citeRe's own comment warns about, and it had already
+// happened. [LAW:one-source-of-truth]
+const citedExt = `go|sql|mod|sum|yml|yaml|json|md|txt|tmpl`
+
 // citeRe matches all three shapes at once: the file part is optional, and the
 // line part admits a comma list. Writing them as one pattern is deliberate —
 // two patterns is how one of them ends up maintained and the other forgotten.
-var citeRe = regexp.MustCompile("`([A-Za-z0-9_./-]*\\.(?:go|sql|mod|sum|yml|yaml|json|md|txt|tmpl))?:(\\d+(?:-\\d+)?(?:\\s*,\\s*\\d+(?:-\\d+)?)*)`")
+var citeRe = regexp.MustCompile("`([A-Za-z0-9_./-]*\\.(?:" + citedExt + "))?:(\\d+(?:-\\d+)?(?:\\s*,\\s*\\d+(?:-\\d+)?)*)`")
 
 var spanRe = regexp.MustCompile(`(\d+)(?:-(\d+))?`)
 
@@ -268,7 +279,7 @@ var itemRe = regexp.MustCompile(`^[ \t]*(?:[-*+]|\d+\.|\|)[ \t]`)
 // number follows it. Headings carry most of them — "## PART 1 — Sync entry
 // points (`internal/store/sync.go`)" — and a later `sync.go:25` under that
 // heading means that file, exactly as a reader takes it.
-var pathRe = regexp.MustCompile("`(/?[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\\.(?:go|sql|mod|sum|yml|yaml|json|md|txt|tmpl))(?::\\d|`)")
+var pathRe = regexp.MustCompile("`(/?[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\\.(?:" + citedExt + "))(?::\\d|`)")
 
 // mention is a path the document names, and where it names it.
 type mention struct {
@@ -511,8 +522,11 @@ func Index(fsys fs.FS) (*Tree, error) {
 		text:   map[string][]string{},
 		suffix: map[string][]string{},
 	}
-	skip := ignoredPaths(fsys)
-	err := fs.WalkDir(fsys, ".", func(name string, d fs.DirEntry, err error) error {
+	skip, err := ignoredPaths(fsys)
+	if err != nil {
+		return nil, err
+	}
+	err = fs.WalkDir(fsys, ".", func(name string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -623,11 +637,19 @@ func (ig ignored) skip(name string) bool {
 // walk descends into whatever the root ignores — here six sibling worktrees,
 // each a copy of this repository — to look for .gitignore files inside things
 // that are not part of the repository.
-func ignoredPaths(fsys fs.FS) ignored {
+func ignoredPaths(fsys fs.FS) (ignored, error) {
 	ig := ignored{anchored: map[string]bool{}, anywhere: map[string][]string{}}
+	var failed error
 	read := func(name string) {
 		body, err := fs.ReadFile(fsys, name)
 		if err != nil {
+			// Absent is an answer; unreadable is not. A permission error read
+			// as "no rules here" indexes a directory the repository excludes
+			// and changes what the gate measures, with nothing said about it.
+			// [LAW:no-silent-failure]
+			if !errors.Is(err, fs.ErrNotExist) && failed == nil {
+				failed = err
+			}
 			return
 		}
 		dir := path.Dir(name)
@@ -656,7 +678,7 @@ func ignoredPaths(fsys fs.FS) ignored {
 		}
 	}
 	read(".gitignore")
-	_ = fs.WalkDir(fsys, ".", func(name string, d fs.DirEntry, err error) error {
+	walked := fs.WalkDir(fsys, ".", func(name string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -671,7 +693,10 @@ func ignoredPaths(fsys fs.FS) ignored {
 		}
 		return nil
 	})
-	return ig
+	if failed == nil {
+		failed = walked
+	}
+	return ig, failed
 }
 
 // declarations maps every identifier a Go file declares to the lines it
@@ -731,6 +756,13 @@ func declarations(name string, body []byte) map[string][]extent {
 			// declaration further down then answers for it — reporting a
 			// correct citation as drift and pointing the reader into an
 			// unrelated function to find it.
+			return false
+		case *ast.FuncLit:
+			// Same rule as a function declaration, and reached by a different
+			// route: a closure assigned at package level hangs off a GenDecl,
+			// which descends, so without this a `var` inside it is indexed as
+			// though the file declared it. The named-function case was tested
+			// and this one was not, which is how the two came apart.
 			return false
 		case *ast.GenDecl:
 			// The specs are read from here rather than visited on their own,
@@ -811,17 +843,23 @@ func specDoc(own *ast.CommentGroup, d *ast.GenDecl) *ast.CommentGroup {
 // instrument that answers differently on two machines is not measuring the
 // corpus.
 func (t *Tree) resolve(named string) (string, bool) {
+	// The leading slash goes first, so a path written from the root is looked
+	// up like any other. `/LICENSE-REPORT.md` otherwise missed every branch
+	// below: one segment leaves the suffix loop with nothing to walk, and the
+	// tails are registered from three segments up. That is an exact
+	// repository-relative lookup, not the basename search this refuses.
+	named = strings.TrimPrefix(named, "/")
 	if _, ok := t.lines[named]; ok {
 		return named, true
 	}
-	parts := strings.Split(strings.TrimPrefix(named, "/"), "/")
+	parts := strings.Split(named, "/")
 	for i := 0; i+1 < len(parts); i++ {
 		if _, ok := t.lines[strings.Join(parts[i:], "/")]; ok {
 			return strings.Join(parts[i:], "/"), true
 		}
 	}
 	// Two files sharing a tail leave it unresolved rather than picking one.
-	if cands := t.suffix[strings.TrimPrefix(named, "/")]; len(cands) == 1 {
+	if cands := t.suffix[named]; len(cands) == 1 {
 		return cands[0], true
 	}
 	return "", false
