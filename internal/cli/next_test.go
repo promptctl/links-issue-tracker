@@ -560,7 +560,7 @@ func TestRenderNextOutcomeTerminalOutcomesKeepTheirType(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			occasion, err := renderNextOutcome(io.Discard, tc.outcome, nil, claimContext{})
+			occasion, err := renderNextOutcome(io.Discard, tc.outcome, nil, claimContext{}, "")
 			if err == nil {
 				t.Fatalf("renderNextOutcome(%T) error = nil, want the terminal answer", tc.outcome)
 			}
@@ -652,10 +652,11 @@ func TestRenderNextOutcomeNamesTheOtherSessionWorkingOurLane(t *testing.T) {
 
 	rows, _ := h.gather()
 	inFlightRow := rowByID(t, rows, inFlight.ID)
-	cc := claimContext{self: selfAttribution, actingAs: "claude_sess-mine"}
+	cc := claimContext{self: selfAttribution}
+	const reader = "claude_sess-mine"
 
 	var out bytes.Buffer
-	if _, err := renderNextOutcome(&out, ResumedOwnWork{Row: inFlightRow}, map[string]storage.IssueRelations{}, cc); err != nil {
+	if _, err := renderNextOutcome(&out, ResumedOwnWork{Row: inFlightRow}, map[string]storage.IssueRelations{}, cc, reader); err != nil {
 		t.Fatalf("renderNextOutcome() error = %v", err)
 	}
 	text := out.String()
@@ -683,10 +684,11 @@ func TestRenderNextOutcomeStillNamesTheHolderOfAQuietTicket(t *testing.T) {
 	h.backdateUpdatedAt(quiet.ID, 7*time.Hour)
 
 	rows, _ := h.gather()
-	cc := claimContext{self: selfAttribution, actingAs: "claude_sess-mine"}
+	cc := claimContext{self: selfAttribution}
+	const reader = "claude_sess-mine"
 
 	var out bytes.Buffer
-	if _, err := renderNextOutcome(&out, ResumedOwnWork{Row: rowByID(t, rows, quiet.ID)}, map[string]storage.IssueRelations{}, cc); err != nil {
+	if _, err := renderNextOutcome(&out, ResumedOwnWork{Row: rowByID(t, rows, quiet.ID)}, map[string]storage.IssueRelations{}, cc, reader); err != nil {
 		t.Fatalf("renderNextOutcome() error = %v", err)
 	}
 	text := out.String()
@@ -709,9 +711,11 @@ func TestRenderNextOutcomeNamesTheHolderToAnUnidentifiedReader(t *testing.T) {
 
 	rows, _ := h.gather()
 	cc := claimContext{self: selfAttribution}
+	// The whole point: this reader resolved no identity at all.
+	const reader = ""
 
 	var out bytes.Buffer
-	if _, err := renderNextOutcome(&out, ResumedOwnWork{Row: rowByID(t, rows, agents.ID)}, map[string]storage.IssueRelations{}, cc); err != nil {
+	if _, err := renderNextOutcome(&out, ResumedOwnWork{Row: rowByID(t, rows, agents.ID)}, map[string]storage.IssueRelations{}, cc, reader); err != nil {
 		t.Fatalf("renderNextOutcome() error = %v", err)
 	}
 	if text := out.String(); !strings.Contains(text, "claude_sess-agent") {
@@ -732,10 +736,11 @@ func TestRenderNextOutcomeSaysNothingAboutAnUnassignedTicketInFlight(t *testing.
 	h.transition(unassigned.ID, model.Start{Assignee: ""})
 
 	rows, _ := h.gather()
-	cc := claimContext{self: selfAttribution, actingAs: "claude_sess-mine"}
+	cc := claimContext{self: selfAttribution}
+	const reader = "claude_sess-mine"
 
 	var out bytes.Buffer
-	if _, err := renderNextOutcome(&out, ResumedOwnWork{Row: rowByID(t, rows, unassigned.ID)}, map[string]storage.IssueRelations{}, cc); err != nil {
+	if _, err := renderNextOutcome(&out, ResumedOwnWork{Row: rowByID(t, rows, unassigned.ID)}, map[string]storage.IssueRelations{}, cc, reader); err != nil {
 		t.Fatalf("renderNextOutcome() error = %v", err)
 	}
 	if text := out.String(); !strings.Contains(text, unassigned.ID+" is already in progress in a lane you hold — continue where you left off") {
@@ -756,11 +761,11 @@ func TestRenderNextOutcomeSpeaksOnlyInTheConditional(t *testing.T) {
 	h.transition(inFlight.ID, model.Start{Assignee: "other"})
 
 	rows, details := h.gather()
-	// actingAs matches the row's assignee so the ResumedOwnWork case below is
-	// genuinely this reader's own work. Left empty, the row is assigned to
-	// somebody and the reader is nobody, which is a mismatch and prints the
-	// other sentence — pinned in its own test rather than here.
-	cc := claimContext{self: selfAttribution, actingAs: "other"}
+	cc := claimContext{self: selfAttribution}
+	// The reader is the row's assignee, so the ResumedOwnWork case below is
+	// genuinely their own work. Any other reader makes it a mismatch and prints
+	// the other sentence — pinned in its own test rather than here.
+	const reader = "other"
 	freshRow := rowByID(t, rows, fresh.ID)
 	inFlightRow := rowByID(t, rows, inFlight.ID)
 	freshLane := laneOf(t, details, freshRow)
@@ -797,7 +802,7 @@ func TestRenderNextOutcomeSpeaksOnlyInTheConditional(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			if _, err := renderNextOutcome(&buf, tc.outcome, details, cc); err != nil {
+			if _, err := renderNextOutcome(&buf, tc.outcome, details, cc, reader); err != nil {
 				t.Fatalf("renderNextOutcome(%T) error = %v", tc.outcome, err)
 			}
 			out := buf.String()
@@ -873,12 +878,15 @@ func TestDependencyPickIsDistinguishableFromThePool(t *testing.T) {
 
 	rows, details := h.gather()
 	cc := claimContext{self: selfAttribution}
+	// This table is about startAdvice, whose sentences carry no identity;
+	// the reader is named only so the one ResumedOwnWork arm has an answer.
+	const reader = ""
 	row := rowByID(t, rows, fresh.ID)
 	lane := laneOf(t, details, row)
 
 	render := func(o NextOutcome) string {
 		var buf bytes.Buffer
-		if _, err := renderNextOutcome(&buf, o, details, cc); err != nil {
+		if _, err := renderNextOutcome(&buf, o, details, cc, reader); err != nil {
 			t.Fatalf("renderNextOutcome(%T) error = %v", o, err)
 		}
 		return buf.String()

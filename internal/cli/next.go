@@ -85,12 +85,7 @@ func nextLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		// The gatherer resolves the identity every command shares — the session
-		// env — and this refines it with the one input it cannot see. Same rule,
-		// one more source: with the env set the two agree exactly, so this is
-		// never a second answer to the question, only a fuller one.
-		cc.actingAs = actor()
-		occasion, err := renderNextOutcome(stdout, routeNext(rows, details, cc.standings, cc.self, focus.scopeFor(*all)), details, cc)
+		occasion, err := renderNextOutcome(stdout, routeNext(rows, details, cc.standings, cc.self, focus.scopeFor(*all)), details, cc, actor())
 		if err != nil {
 			return err
 		}
@@ -113,7 +108,7 @@ func nextLeaf() appLeaf {
 // in the perfect tense would be reporting a side effect this command does not
 // have, which is exactly how an agent came to believe it held a claim it did
 // not (links-next-output-5aee).
-func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]storage.IssueRelations, cc claimContext) (workflows.Occasion, error) {
+func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]storage.IssueRelations, cc claimContext, actingAs string) (workflows.Occasion, error) {
 	var row annotation.AnnotatedIssue
 	var announce string
 	switch o := outcome.(type) {
@@ -121,7 +116,7 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 		row = o.Row
 	case ResumedOwnWork:
 		row = o.Row
-		announce = resumeAdvice(o.Row, cc.actingAs) + "\n"
+		announce = resumeAdvice(o.Row, actingAs) + "\n"
 	case ServedFromEpicLane:
 		row = o.Row
 		announce = startAdvice(o.Row, o.Lane, expiredHolder(cc.standings.Of(o.Lane))) + " (a second lane of an epic you already hold a lane in)\n"

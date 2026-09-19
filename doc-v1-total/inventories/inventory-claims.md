@@ -417,7 +417,7 @@ That is the entire `internal/app` surface: `App` (3 fields), `AccessMode` + 2 co
 
 `checkoutStreamTokens` mirrors `app.streamTokens`: skips checkouts without a present stream (`internal/cli/claims_context.go:114-122`). `addressesByAttribution` indexes live checkouts by `model.NewAttribution(checkout.Stream.Value(), workspaceID)`, skipping tokenless checkouts (`internal/cli/claims_context.go:128-136`).
 
-Callers: `next` (`internal/cli/next.go:80`), `workable`/`backlog` runner (`internal/cli/workable.go:235`), `authorizeStart` (`internal/cli/claims_takeover.go:138`), `reportContestedLanes` (`internal/cli/claims_contest_report.go:33`).
+Callers: `next` (`internal/cli/next.go:87`), `workable`/`backlog` runner (`internal/cli/workable.go:235`), `authorizeStart` (`internal/cli/claims_takeover.go:138`), `reportContestedLanes` (`internal/cli/claims_contest_report.go:33`).
 
 ---
 
@@ -467,9 +467,9 @@ E2E, over two real clones and a real git remote (`internal/cli/claims_takeover_e
 
 ### 9.2 `lit next` — claim-aware routing (a read gate)
 
-Registered `app.AccessRead`; it performs no writes (`internal/cli/register.go:484-485`). Flags (`internal/cli/next.go:31-40`): `--assignee`, `--type`, `--status` (`open|in_progress`), `--labels`, and `--all`, help string `"Ignore the focus scope and route over the whole queue"`. No `--limit`, no `--columns`. `--continue` is retired: `--continue` and `--continue=<x>` are wrapped at the parse boundary as an `UnsupportedError` carrying ``--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag`` (`internal/cli/flagset.go:138-141`).
+Registered `app.AccessRead`; it performs no writes (`internal/cli/register.go:484-485`). Flags (`internal/cli/next.go:31-40`, plus the hidden `--by` identity fallback at `:60`): `--assignee`, `--type`, `--status` (`open|in_progress`), `--labels`, and `--all`, help string `"Ignore the focus scope and route over the whole queue"`. No `--limit`, no `--columns`. `--continue` is retired: `--continue` and `--continue=<x>` are wrapped at the parse boundary as an `UnsupportedError` carrying ``--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag`` (`internal/cli/flagset.go:138-141`).
 
-The leaf gathers rows, relation details and the focus scope, then the claim context, then routes: `routeNext(rows, details, cc.standings, cc.self, focus.scopeFor(*all))` (`internal/cli/next.go:71-89`). `focusScope.scopeFor(all)` returns the zero `focusScope` — the whole queue — when `--all` is set, so the flag picks a value and every stage after it stays unconditional (`internal/cli/ready_state.go:809-818`).
+The leaf gathers rows, relation details and the focus scope, then the claim context, then routes: `routeNext(rows, details, cc.standings, cc.self, focus.scopeFor(*all))` (`internal/cli/next.go:78-91`). `focusScope.scopeFor(all)` returns the zero `focusScope` — the whole queue — when `--all` is set, so the flag picks a value and every stage after it stays unconditional (`internal/cli/ready_state.go:809-818`).
 
 **`NextOutcome`** is a sealed sum (`internal/cli/next_route.go:26`, markers `:208-214`) — **seven** cases:
 - `ServedFromClaim{Row}` — a ready ticket in a lane this checkout already holds. Routing step 1; no new claim is established, so nothing is announced (`:28-30`).
@@ -480,7 +480,7 @@ The leaf gathers rows, relation details and the focus scope, then the claim cont
 - `Exhausted{Epics []string, Blocked []rowReach}` — the checkout's own claimed epic(s) have open work with none of it reachable. Routing step 3 (`:106-121`).
 - `NoWork{Unreachable []rowReach}` — the global pool handed back nothing (`:191-206`).
 
-`Exhausted` and `NoWork` are themselves `error` implementations and travel outward **as themselves** rather than being rendered into a generic error, which is what keeps the exit-code and reason sinks reading the routing verdict instead of a copy that could drift (`:112-117`, `internal/cli/next.go:136-148`).
+`Exhausted` and `NoWork` are themselves `error` implementations and travel outward **as themselves** rather than being rendered into a generic error, which is what keeps the exit-code and reason sinks reading the routing verdict instead of a copy that could drift (`:112-117`, `internal/cli/next.go:138-150`).
 
 **`capacityFor(row, standing, self) capacity`** — the admission rule; pure, total, no I/O (`internal/cli/next_route.go:259-280`). Four capacities: `routeAround` (not this checkout's to take right now), `serveWork`, `resumeWork`, `takeoverWork` (`:226-238`). It reads `readiness := ClassifyReadiness(row.Annotations)`, `relation := relationOf(standing, self)`, and `started := row.State() == model.StateInProgress`, with `takeable := (started && readiness.IsOrphaned()) || (!started && readiness.IsReady())`. Evaluated top-down:
 
@@ -541,24 +541,24 @@ The `%s` in both non-empty arms is `describeReach(o.Unreachable, "", poolNotes)`
 
 **Exit code and reason.** `ExitNoWork = 6` (`internal/cli/exit.go:30`). **Both** `Exhausted` and `NoWork` map to it (`internal/cli/exit.go:116-128`): distinct from `ExitGeneric` because a caller looping `lit next` has to tell "stop, there is nothing for you" from "lit is broken", and under one code its only way to do that was to parse the English; not `ExitOK`, because for `lit next` 0 means "a ticket is on stdout", and exiting 0 with no row would hand the caller a success-shaped void (`internal/cli/exit.go:18-29`). Reasons: `scope_exhausted` for `Exhausted`, `no_ready_work` for `NoWork` (`internal/cli/error_output.go:105-118`).
 
-**`startAdvice(row, lane, holder)`** (`internal/cli/next.go:260-273`) — the line every pick that would establish a claim prints above its row: what running `lit start` would lock, never what this command did. `lit next` claims nothing and starts nothing; the function was `claimAnnouncement` and the rename is the fix, an announcement reporting being the one thing a read-only command must not do (`internal/cli/next.go:107-111`, `:218-221`). `described, named := lane.Describe()`; exactly four sentences:
+**`startAdvice(row, lane, holder)`** (`internal/cli/next.go:262-275`) — the line every pick that would establish a claim prints above its row: what running `lit start` would lock, never what this command did. `lit next` claims nothing and starts nothing; the function was `claimAnnouncement` and the rename is the fix, an announcement reporting being the one thing a read-only command must not do (`internal/cli/next.go:109-113`, `:238-241`). `described, named := lane.Describe()`; exactly four sentences:
 - in progress, lane not named: ``%s is in progress and %s — run `lit start %s` to take it over`` (Row.ID, state, Row.ID).
 - in progress, lane named: ``%s is in progress and %s — run `lit start %s` to take over %s`` (Row.ID, state, Row.ID, described).
 - not in progress, lane not named: ``run `lit start %s` to claim it`` (Row.ID).
 - not in progress, lane named: ``run `lit start %s` to claim %s`` (Row.ID, described).
 
-`state` is `inFlightState(holder)` (`internal/cli/next.go:176-184`): `claims.Locked` → `claimed by a locked worktree whose claim has gone stale`; `claims.Present` → `stale, though its holder's worktree is still on disk`; otherwise `abandoned`. `holder` is `expiredHolder(cc.standings.Of(lane))` — the `Stale` standing's `Holder`, and `claims.Unprovable` for every other standing (`internal/cli/claims_render.go:89-94`). The two verbs spell their sentences out separately rather than sharing one with the object substituted, because English puts the pronoun in different places: "claim it", but "take it over" (`internal/cli/next.go:254-259`).
+`state` is `inFlightState(holder)` (`internal/cli/next.go:178-186`): `claims.Locked` → `claimed by a locked worktree whose claim has gone stale`; `claims.Present` → `stale, though its holder's worktree is still on disk`; otherwise `abandoned`. `holder` is `expiredHolder(cc.standings.Of(lane))` — the `Stale` standing's `Holder`, and `claims.Unprovable` for every other standing (`internal/cli/claims_render.go:89-94`). The two verbs spell their sentences out separately rather than sharing one with the object substituted, because English puts the pronoun in different places: "claim it", but "take it over" (`internal/cli/next.go:256-261`).
 
 **`LaneID.Describe() (string, bool)`** (`internal/model/model.go:255-263`) — three cases:
 - solo lane → `("", false)`. A solo lane is the ticket that names it, so any phrase for it only repeats what the surrounding sentence already said (`:248-251`).
 - empty key → `(fmt.Sprintf("the default lane of epic %s", l.epic), true)`.
 - otherwise → `(fmt.Sprintf("lane %s of epic %s", l.key, l.epic), true)`.
 
-**`renderNextOutcome(w, outcome, details, cc)`** (`internal/cli/next.go:112-162`):
+**`renderNextOutcome(w, outcome, details, cc)`** (`internal/cli/next.go:114-164`):
 - `ServedFromClaim` → no announcement at all.
 - `ResumedOwnWork` → `resumeAdvice(o.Row, cc.actingAs)` + `"\n"`. Two sentences, chosen by
   whether the row carries an assignee that is not the identity running the command
-  (`internal/cli/next.go:229-234`). Both halves must be non-empty and differ, so an
+  (`internal/cli/next.go:231-236`). Both halves must be non-empty and differ, so an
   unassigned ticket and a command with no session identity both take the lane's own
   sentence: `"%s is already in progress in a lane you hold — continue where you left off"`
   (Row.ID). Otherwise: ``%s is in progress and assigned to %s, not to you — check that they have stopped before you continue it, or take other work from `lit backlog` ``
@@ -575,7 +575,7 @@ The `%s` in both non-empty arms is `describeReach(o.Unreachable, "", poolNotes)`
 - `Exhausted`, `NoWork` → returned as themselves; nothing printed.
 - default → `panic(fmt.Sprintf("renderNextOutcome: unhandled NextOutcome %T", outcome))`.
 
-For the five served cases the announcement is written only when non-empty, then `lane := model.LaneOf(row.Issue, details[row.ID].Parent)` and `printNextSummary(w, row, cc, lane)` (`internal/cli/ready_state.go:965`); finally `nextPulledOccasion(row.Issue)` is returned and dispatched to workflows (`internal/cli/next.go:152-161`, `:75`).
+For the five served cases the announcement is written only when non-empty, then `lane := model.LaneOf(row.Issue, details[row.ID].Parent)` and `printNextSummary(w, row, cc, lane)` (`internal/cli/ready_state.go:965`); finally `nextPulledOccasion(row.Issue)` is returned and dispatched to workflows (`internal/cli/next.go:154-163`, `:95`).
 
 ### 9.3 `lit sync reconcile` — the contest report (a read gate on merge)
 
@@ -597,7 +597,7 @@ E2E: two clones partition-start the same lane; `lit sync reconcile` on bravo pri
 - `lit backlog` — `printBacklogContext` prints the claim line, indented, after the `in_progress:` line and before `unblocks:` (`internal/cli/backlog.go:92-96`). `backlogView` is the only `workableView` preset (`internal/cli/workable.go:87-95`), and its render function is `printBacklogOutput(w, columns, issues, details, cc)` (`internal/cli/backlog.go:32`).
 - `printInlineDeps` — the shared epic/depends-on/claim/unblocks block used by `lit next`'s summary, printing the claim line between `depends on` and `unblocks` (`internal/cli/ready_state.go:1022-1035`). `printNextSummary` calls it after the issue's column line (`internal/cli/ready_state.go:965-971`).
 
-No other command consults `claims.Standings`: the only readers of `cc.standings` / `cc.self` outside `internal/cli/claims_*.go` are `next.go:82` (routing) — everything else consumes `cc` only for rendering (`internal/cli/workable.go:54`, `internal/cli/backlog.go:32,72`, `internal/cli/ready_state.go:970,1029`).
+No other command consults `claims.Standings`: the only readers of `cc.standings` / `cc.self` outside `internal/cli/claims_*.go` are `next.go:89` (routing) — everything else consumes `cc` only for rendering (`internal/cli/workable.go:54`, `internal/cli/backlog.go:32,72`, `internal/cli/ready_state.go:970,1029`).
 
 ---
 

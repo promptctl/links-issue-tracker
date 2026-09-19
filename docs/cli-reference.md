@@ -207,7 +207,9 @@ no liveness probe — so the line asks for the check rather than answering it. A
 ticket assigned to you, or to nobody at all, prints the lane's own sentence
 instead: there is no name to contradict. The identity `next` compares against is
 the session environment, falling back to `--by` as every mutating command's does,
-never the `--assignee` filter.
+never the `--assignee` filter. With no session environment the two flags differ by
+command — `lit start` takes the identity as `--assignee`, `lit next` as `--by` —
+so a shell operator naming themselves needs both.
 
 Both endings that hand back no ticket — the exhaustion diagnostic and an empty
 result — exit 6 rather than 1, and their remediation names the deliberate act each
