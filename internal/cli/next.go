@@ -163,9 +163,8 @@ func inFlightState(holder claims.Presence) string {
 }
 
 // resumeAdvice is what `next` says when it hands back work already in flight in
-// a lane this checkout holds. Two sentences, and the one it picks turns on
-// whether the ticket names somebody else AND has been touched recently enough
-// for that to matter.
+// a lane this checkout holds. Two sentences, and the one it picks turns on a
+// single question: does the ticket name somebody who is not the one asking?
 //
 // "continue where you left off" is a claim about WHO, and the lane cannot
 // support it. A lane is keyed on the checkout, deliberately — many sessions in
@@ -177,38 +176,38 @@ func inFlightState(holder claims.Presence) string {
 // the first of them before this was a ticket, and each time only a hand check of
 // git worktrees and push times disproved it (links-routing-t6fa).
 //
-// The assignee alone cannot separate those two, and this is the trap: every
-// session mints a new identity, so yesterday's session and a peer working right
-// now BOTH read as "not you". Warning on the mismatch alone would fire on every
-// ordinary resume and put a question mark over the inheritance the design exists
-// to produce. The orphan annotation is the discriminator, and it is lit's own:
-// in flight with no update inside the threshold. A session actively working a
-// ticket keeps it moving, so a quiet row is a predecessor who stopped and a live
-// row is somebody who may not have. Past the clock lit has already answered the
-// question, and the answer is the sentence it has always printed.
+// The assignee cannot separate a live peer from a predecessor who stopped, and
+// NOTHING lit holds can: every session mints a new identity, so both read as
+// "not you", and claims carry staleness heuristics with no liveness probe by
+// design. An earlier fix tried the orphan clock as the discriminator and it
+// fails open on the case this ticket was filed for — `updated_at` moves on field
+// writes and transitions, not on the work, and a comment explicitly never
+// touches the row (store.go, AddComment), so a session committing and
+// commenting all day goes "orphaned" at six hours while still holding the
+// branch. Silence there is the original defect, restored on a timer.
 //
-// Both identity halves must be minted for a mismatch to mean anything, on the
-// rule relationOf already applies to attribution: a command with no session
-// identity cannot prove the row is somebody else's work, and a row with no
-// assignee names nobody to contradict.
+// So it does not adjudicate. The asymmetry decides the default: a warning that
+// was not needed costs one check, and silence that was needed cost a collision
+// three times. It names who the ticket says has it, asks for the check, and
+// leads with continuing rather than dropping the work — the predecessor
+// hand-down is the common case and must stay cheap, which is what keeps this a
+// line to read rather than a gate to clear.
+//
+// The one thing that silences it is an assignee that names nobody: empty is the
+// ordinary state of a ticket started by a checkout driving no agent session, and
+// there is no name to contradict. An unidentified READER is not such a case —
+// nobody's name is the empty string, so a ticket assigned to anyone at all is
+// assigned to somebody other than a shell that resolved no identity.
 //
 // What the sentence may say is bounded by what the mismatch proves, which is
 // only that the name on the ticket is not this command's. It is not proof of a
 // session — an assignee is free text, and `lit new --assignee bob` writes a
 // person there — nor of a checkout: a lane taken with `lit start --take` can
 // still hold a sibling ticket assigned in the checkout it came from. So the line
-// names the assignee, says it is not you, and stops. Claiming "a different
-// session in this checkout" on this evidence would be the same overreach one
-// paragraph up, rebuilt one field over.
-//
-// It does not say whether that holder is still running, because lit cannot
-// know: claims carry staleness heuristics and no liveness probe, by design. It
-// names them and hands the reader both exits, which is the most that is true.
+// names the assignee, says it is not you, and stops.
 func resumeAdvice(row annotation.AnnotatedIssue, actingAs string) string {
-	assignee := strings.TrimSpace(row.AssigneeValue())
-	named := assignee != "" && actingAs != "" && assignee != actingAs
-	if named && !ClassifyReadiness(row.Annotations).IsOrphaned() {
-		return fmt.Sprintf("%s is in progress and assigned to %s, not to you — continue it only if they are done with it, or pick other work from `lit backlog`", row.ID, assignee)
+	if assignee := strings.TrimSpace(row.AssigneeValue()); assignee != "" && assignee != actingAs {
+		return fmt.Sprintf("%s is in progress and assigned to %s, not to you — check that they have stopped before you continue it, or take other work from `lit backlog`", row.ID, assignee)
 	}
 	return fmt.Sprintf("%s is already in progress in a lane you hold — continue where you left off", row.ID)
 }

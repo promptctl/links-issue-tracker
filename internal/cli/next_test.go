@@ -635,7 +635,7 @@ func TestRenderNextOutcomeNamesTheOtherSessionWorkingOurLane(t *testing.T) {
 		t.Fatalf("renderNextOutcome() error = %v", err)
 	}
 	text := out.String()
-	want := inFlight.ID + " is in progress and assigned to claude_sess-peer, not to you — continue it only if they are done with it, or pick other work from `lit backlog`"
+	want := inFlight.ID + " is in progress and assigned to claude_sess-peer, not to you — check that they have stopped before you continue it, or take other work from `lit backlog`"
 	if !strings.Contains(text, want) {
 		t.Fatalf("render = %q, want it to contain %q", text, want)
 	}
@@ -644,37 +644,54 @@ func TestRenderNextOutcomeNamesTheOtherSessionWorkingOurLane(t *testing.T) {
 	}
 }
 
-// The case the warning must NOT fire on, and the one it is easiest to break:
-// an ordinary resume. Every session mints a new identity, so a ticket started by
-// yesterday's session in this checkout carries a name that is not this session's
-// — the same mismatch a live peer produces, and by far the more common of the
-// two. Warning here would put a question mark over the inheritance the claims
-// design exists to produce (design-docs/work-claims.md: a new session inherits
-// its checkout's claims with no re-briefing).
-//
-// The orphan clock separates them: a session actively working a ticket keeps it
-// moving, so a row that has gone quiet past the threshold is a predecessor who
-// stopped. Backdating is how the fixture reaches that state — the clock reads
-// the row's own updated_at and nothing else.
-func TestRenderNextOutcomeResumesQuietWorkLeftByAnEarlierSession(t *testing.T) {
+// Quiet is not proof the holder stopped, which is why no clock guards the
+// warning. An earlier fix suppressed it on the orphan annotation — in flight
+// with no update inside the threshold — on the premise that a session actively
+// working a ticket keeps it moving. lit does not enforce that premise: a comment
+// never touches the issue row, and neither does a commit or a push, so a session
+// that holds a branch all day and says so in comments crosses the threshold
+// while still working. Suppressing there restores the original defect on a
+// timer, so the sentence survives the clock.
+func TestRenderNextOutcomeStillNamesTheHolderOfAQuietTicket(t *testing.T) {
 	h := newReadyTestHarness(t)
-	inherited := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Yesterday's session started this", Topic: "next", IssueType: "task", Priority: 1})
-	h.transition(inherited.ID, model.Start{Assignee: "claude_sess-yesterday"})
-	h.backdateUpdatedAt(inherited.ID, 7*time.Hour)
+	quiet := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Held, and silent about it", Topic: "next", IssueType: "task", Priority: 1})
+	h.transition(quiet.ID, model.Start{Assignee: "claude_sess-peer"})
+	h.backdateUpdatedAt(quiet.ID, 7*time.Hour)
 
 	rows, _ := h.gather()
-	cc := claimContext{self: selfAttribution, actingAs: "claude_sess-today"}
+	cc := claimContext{self: selfAttribution, actingAs: "claude_sess-mine"}
 
 	var out bytes.Buffer
-	if _, err := renderNextOutcome(&out, ResumedOwnWork{Row: rowByID(t, rows, inherited.ID)}, map[string]storage.IssueRelations{}, cc); err != nil {
+	if _, err := renderNextOutcome(&out, ResumedOwnWork{Row: rowByID(t, rows, quiet.ID)}, map[string]storage.IssueRelations{}, cc); err != nil {
 		t.Fatalf("renderNextOutcome() error = %v", err)
 	}
 	text := out.String()
-	if !strings.Contains(text, inherited.ID+" is already in progress in a lane you hold — continue where you left off") {
-		t.Fatalf("render = %q, want the lane's own sentence — a quiet row is a predecessor who stopped, not a peer", text)
+	if !strings.Contains(text, "claude_sess-peer") {
+		t.Fatalf("render = %q, want the holder named even on a row that has gone quiet", text)
 	}
-	if strings.Contains(text, "claude_sess-yesterday") {
-		t.Fatalf("render = %q, want no warning about a session that has been gone past the orphan threshold", text)
+	if strings.Contains(text, "continue where you left off") {
+		t.Fatalf("render = %q, want no claim that this session was the one working it", text)
+	}
+}
+
+// A reader that resolved no identity is not the ticket's holder either. Nobody's
+// name is the empty string, so a ticket assigned to anyone at all is assigned to
+// somebody other than a plain shell — the case where a person runs `lit next` in
+// a checkout an agent session has work in flight in.
+func TestRenderNextOutcomeNamesTheHolderToAnUnidentifiedReader(t *testing.T) {
+	h := newReadyTestHarness(t)
+	agents := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "An agent started this", Topic: "next", IssueType: "task", Priority: 1})
+	h.transition(agents.ID, model.Start{Assignee: "claude_sess-agent"})
+
+	rows, _ := h.gather()
+	cc := claimContext{self: selfAttribution}
+
+	var out bytes.Buffer
+	if _, err := renderNextOutcome(&out, ResumedOwnWork{Row: rowByID(t, rows, agents.ID)}, map[string]storage.IssueRelations{}, cc); err != nil {
+		t.Fatalf("renderNextOutcome() error = %v", err)
+	}
+	if text := out.String(); !strings.Contains(text, "claude_sess-agent") {
+		t.Fatalf("render = %q, want the holder named to a reader who resolved no identity of their own", text)
 	}
 }
 
@@ -715,7 +732,11 @@ func TestRenderNextOutcomeSpeaksOnlyInTheConditional(t *testing.T) {
 	h.transition(inFlight.ID, model.Start{Assignee: "other"})
 
 	rows, details := h.gather()
-	cc := claimContext{self: selfAttribution}
+	// actingAs matches the row's assignee so the ResumedOwnWork case below is
+	// genuinely this reader's own work. Left empty, the row is assigned to
+	// somebody and the reader is nobody, which is a mismatch and prints the
+	// other sentence — pinned in its own test rather than here.
+	cc := claimContext{self: selfAttribution, actingAs: "other"}
 	freshRow := rowByID(t, rows, fresh.ID)
 	inFlightRow := rowByID(t, rows, inFlight.ID)
 	freshLane := laneOf(t, details, freshRow)
