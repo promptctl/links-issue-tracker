@@ -238,10 +238,100 @@ The check is one-directional and narrow on purpose. Every literal the manifest
 records must still ship; no chapter is ever required to quote any particular
 string, so prose that never quoted code needs no allowlist and adds no upkeep.
 Literals are all it reads: whether `file.go:12-33` still brackets the
-declaration its sentence names is a different question over a different corpus
-(ticket `links-docs-gwlf`), and whether a chapter's claim about a type's shape
+declaration its sentence names is a different question over a different corpus,
+answered by [`internal/doccites`](internal/doccites) below, and whether a
+chapter's claim about a type's shape
 or a command's exit code still holds is a third that no gate here answers yet.
 A green run means the quoted messages still exist, and nothing more.
+
+## Cited line numbers
+
+**A citation names the symbol it is about.** Write ``internal/model/model.go``
+(`UpdatedAt`), and keep the line span if it helps a reader jump. The symbol is
+the anchor; the numbers are a convenience that decays.
+
+The reason is that the numbers decay silently. Any edit above a cited line
+redraws the code and leaves the citation untouched, so a reader who follows a
+stale one lands in unrelated code and reads it as the thing the sentence
+described — worse than no citation, because it is followed with confidence.
+A symbol survives every edit that does not rename it, and a rename is a compile
+error somewhere. Naming one is also what makes a citation checkable: nearly
+half the existing corpus can be checked no further than that its lines exist,
+because nothing beside those citations names a symbol in the file they point
+at.
+
+This is not a forecast. Measured over `doc-v1-total/` when the gate below was
+written, of 9,813 citations:
+
+| | share | |
+|---|---|---|
+| resolve to the symbol their sentence names | 20.2% | 1,980 |
+| point somewhere else, or at a missing file or past its end | 34.3% | 3,363 |
+| name no symbol in the cited file, so nothing can judge them | 45.6% | 4,470 |
+
+Among the 3,126 that land inside a file this tree could identify and name a
+symbol that file declares — the ones a checker can judge either way — **36.7%
+are wrong**, and every CI check was green over all of them. A further 1,954
+name a file this tree cannot identify at all, almost always a bare basename no
+chapter ever qualifies: several packages hold a `sync.go`, so
+`` `sync.go:20` `` under prose that never says which names none of them.
+Re-derive any of it with `go run ./tools/doccites`; `-list` prints each
+citation judged wrong — the 3,363, not the 4,470 nothing can judge.
+
+### The gate
+
+[`internal/doccites`](internal/doccites) resolves each citation against the
+code and holds the corpus to what already worked. `manifest_gen.go` records
+every citation that resolved to the symbol its sentence names when it was
+generated, and a gate (`go test ./internal/doccites/`, which runs as part of
+`go test ./...`) fails naming each entry that stopped resolving and where the
+symbol went.
+
+It is baselined rather than absolute, because a corpus already wrong in more
+than a third of the citations it can judge cannot be held to "every citation
+resolves":
+that fails on the first run and is switched off within a week. It is held to
+"every citation that resolved still resolves" — the bleeding, not the wound.
+Repairing the existing 3,363 is separate work, and deliberately not done by a
+sweep: a citation that
+was already wrong gets re-derived into a fresh wrong number, producing a large
+diff that reads like a repair while fixing nothing.
+
+When you move cited code, repoint the citations your change broke and run `go
+run ./tools/doccites -sync`. The diff is the review signal, exactly as
+docclaims' is: an entry leaving the manifest is a sentence that stopped
+pointing at its subject, so regenerating without reading what left is the one
+use that defeats the gate.
+
+### What it reads, and what it does not
+
+Four spellings occur, and the parser resolves all of them to a path before
+anything judges them — a qualified path, a bare basename inheriting its
+directory from the prose, a bare continuation (`` `:47-54` ``) inheriting the
+whole path, and further spans after a comma. Just 1,983 of the 9,813 — 20.2% —
+carry a path of their own;
+a reader anchored on ``file.go:`` sees a fraction of the corpus and reports
+success over the rest, which four separate sweeps have now done, the last by an
+author who had the blind spot written down.
+
+An abbreviation is resolved against what the documents themselves say, never
+against what happens to be in the checkout. A basename the corpus qualifies
+exactly one way is qualified everywhere. One it never qualifies stays
+unresolved, and so does one it qualifies two different ways — `sync.go` is
+written for three different files here, so nothing but the prose can say which
+a given sentence meant. Resolving either against a lone file of that name in
+the tree would make the verdict depend on what is lying beside the checkout,
+and an instrument that answers differently on two machines is not measuring the
+corpus.
+
+The gate does not judge whether a citation is *right*. That depends on the
+claim its sentence is making, which no rule over line numbers can see: a span
+of pure comments looks structurally impossible and is correct when the prose
+cites a comment for stating a deliberation. It answers the decidable question —
+the cited lines either contain the symbol's declaration or use it, or they have
+nothing to do with it. Whether a quoted message still ships is
+[`internal/docclaims`](internal/docclaims); whether a chapter names identifiers
+that exist at all is `links-doc-v1-mujn`.
 
 ## Issue tracking — this repo uses `lit`
 
