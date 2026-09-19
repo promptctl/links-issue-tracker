@@ -45,9 +45,25 @@ func run(root fs.FS, out *os.File, list bool) error {
 	if err != nil {
 		return err
 	}
+	docs, err := doccites.SpecText(root)
+	if err != nil {
+		return err
+	}
 	tally := doccites.Count(findings)
 
+	census := map[doccites.Shape]int{}
+	for _, text := range docs {
+		for sh, n := range doccites.Census(text) {
+			census[sh] += n
+		}
+	}
+
 	fmt.Fprintf(out, "%d citations across the specification\n\n", tally.Total())
+	fmt.Fprintln(out, "written as:")
+	for sh := doccites.Qualified; sh <= doccites.Tailed; sh++ {
+		fmt.Fprintf(out, "  %-13s %6d\n", sh, census[sh])
+	}
+	fmt.Fprintln(out)
 	for v := doccites.Holds; v <= doccites.Unbound; v++ {
 		fmt.Fprintf(out, "  %-13s %6d  %5.1f%%\n", v, tally[v], 100*float64(tally[v])/float64(tally.Total()))
 	}
@@ -63,17 +79,17 @@ func run(root fs.FS, out *os.File, list bool) error {
 		}
 		perDoc[f.Doc][f.Verdict]++
 	}
-	var docs []string
+	var names []string
 	for d := range perDoc {
-		docs = append(docs, d)
+		names = append(names, d)
 	}
-	sort.Slice(docs, func(i, j int) bool { return perDoc[docs[i]].Total() > perDoc[docs[j]].Total() })
+	sort.Slice(names, func(i, j int) bool { return perDoc[names[i]].Total() > perDoc[names[j]].Total() })
 
-	fmt.Fprintf(out, "\n%6s %6s %6s %6s %6s %6s  %s\n", "total", "holds", "moved", "nofile", "eof", "unbound", "document")
-	for _, d := range docs {
+	fmt.Fprintf(out, "\n%6s %6s %6s %6s %6s %6s  %s\n", "total", "holds", "moved", "unres", "eof", "unbound", "document")
+	for _, d := range names {
 		c := perDoc[d]
 		fmt.Fprintf(out, "%6d %6d %6d %6d %6d %6d  %s\n",
-			c.Total(), c[doccites.Holds], c[doccites.Moved], c[doccites.NoSuchFile], c[doccites.PastEOF], c[doccites.Unbound], d)
+			c.Total(), c[doccites.Holds], c[doccites.Moved], c[doccites.Unresolved], c[doccites.PastEOF], c[doccites.Unbound], d)
 	}
 
 	if !list {

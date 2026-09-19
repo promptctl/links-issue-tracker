@@ -117,7 +117,7 @@ func TestABareBasenameIsNotGuessedAt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(findings) != 1 || findings[0].Verdict != NoSuchFile {
+	if len(findings) != 1 || findings[0].Verdict != Unresolved {
 		t.Fatalf("an ambiguous basename should resolve to nothing, got %+v", findings)
 	}
 }
@@ -142,9 +142,12 @@ func TestTheCorpusQualifiesWhatAChapterAbbreviates(t *testing.T) {
 // that states it, which is the doc comment above the declaration rather than
 // the declaration line.
 func TestACitedDocCommentResolves(t *testing.T) {
+	// The cited lines are the comment alone, and they do not contain the word
+	// "Midpoint" — otherwise the use-site check would carry this on its own and
+	// the doc comment's membership in the declaration would go untested.
 	v := verdictOf(t, fstest.MapFS{
 		"doc-v1-total/x.md": &fstest.MapFile{Data: []byte("`Midpoint` treats empty bounds as the whole keyspace (`internal/a/a.go:3-4`).\n")},
-		"internal/a/a.go":   &fstest.MapFile{Data: []byte("package a\n\n// Midpoint returns the point between a and b.\n// Empty bounds mean the whole keyspace.\nfunc Midpoint(a, b string) string { return \"\" }\n")},
+		"internal/a/a.go":   &fstest.MapFile{Data: []byte("package a\n\n// An empty a means \"before everything\" and an empty b \"after everything\";\n// both empty is the whole keyspace.\nfunc Midpoint(a, b string) string { return \"\" }\n")},
 	})
 	if v != Holds {
 		t.Errorf("a citation of the doc comment that carries the claim should resolve, got %s", v)

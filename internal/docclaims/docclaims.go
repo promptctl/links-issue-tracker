@@ -18,10 +18,10 @@
 //
 // Scope: text, not line numbers. Whether `file.go:12-33` still brackets the
 // declaration its sentence names is a different question over a different
-// corpus, owned by links-docs-gwlf. Whether a chapter's claim about a type's
-// shape or a command's exit code still holds is a third, and this package does
-// not answer it. CONTRIBUTING.md records what this gate covers and what it
-// deliberately does not.
+// corpus, answered by internal/doccites. Whether a chapter's claim about a
+// type's shape or a command's exit code still holds is a third, and this
+// package does not answer it. CONTRIBUTING.md records what this gate covers and
+// what it deliberately does not.
 //
 // One blind spot is worth naming rather than leaving to be rediscovered: a
 // message assembled by concatenation, "… some text " + v + " more text", is

@@ -37,13 +37,15 @@
 // about it, which no rule over line numbers can see. A span of pure comments
 // looks structurally impossible and is correct when the prose cites a comment
 // for stating a deliberation. So this package does not judge correctness. It
-// answers the one question that is decidable: the prose names a symbol beside
-// the citation, and either the cited span contains that symbol's declaration or
-// it does not.
+// answers the decidable question: the prose names a symbol beside the citation,
+// and the cited lines either cover that symbol's declaration — its doc comment
+// included — or use it by name, or have nothing to do with it.
 //
 // Where no symbol binds, the verdict is Unbound, and that is a fact about the
-// citation rather than a gap in the instrument — such a citation asserts
-// nothing a reader can check either.
+// citation rather than a gap in the instrument: 53.9% of this corpus is
+// Unbound, and such a citation asserts nothing a reader can check either. It is
+// the measurement most directly behind CONTRIBUTING.md asking new citations to
+// name their symbol.
 //
 // Scope: line numbers, not text. Whether a quoted message still ships is
 // internal/docclaims. Whether a chapter names identifiers that exist at all is
@@ -111,8 +113,11 @@ const (
 	// drift the ticket exists for — the citation still resolves to real lines,
 	// and they are the wrong lines.
 	Moved
-	// NoSuchFile: the citation names a path the tree does not have.
-	NoSuchFile
+	// Unresolved: the citation does not identify one file. Either the tree has
+	// no such path, or the chapter abbreviated to a basename that several files
+	// answer to and the specification never says which — three packages here
+	// hold a sync.go, and "sync.go:20" names none of them.
+	Unresolved
 	// PastEOF: the span runs past the end of the file. Decidable without a
 	// symbol, so it is the one check that reaches the unbound citations too.
 	PastEOF
@@ -122,7 +127,7 @@ const (
 )
 
 func (v Verdict) String() string {
-	return [...]string{"holds", "moved", "no-such-file", "past-eof", "unbound"}[v]
+	return [...]string{"holds", "moved", "unresolved", "past-eof", "unbound"}[v]
 }
 
 // Finding is a citation and what the tree says about it.
@@ -134,7 +139,7 @@ type Finding struct {
 	// two verdicts reached by binding a symbol.
 	Symbol   string
 	Declared int
-	// File is the resolved repository-relative path, empty only for NoSuchFile.
+	// File is the resolved repository-relative path, empty only for Unresolved.
 	File string
 }
 
@@ -143,8 +148,8 @@ func (f Finding) String() string {
 	case Moved:
 		return fmt.Sprintf("%s:%d: %s cites %s:%s for `%s`, which is declared at :%d",
 			f.Doc, f.DocLine, f.Text, f.File, f.Span, f.Symbol, f.Declared)
-	case NoSuchFile:
-		return fmt.Sprintf("%s:%d: %s names %q, which is not a file in the tree",
+	case Unresolved:
+		return fmt.Sprintf("%s:%d: %s names %q, which does not identify one file in this tree",
 			f.Doc, f.DocLine, f.Text, f.Named)
 	case PastEOF:
 		return fmt.Sprintf("%s:%d: %s cites %s:%s, past the end of a %d-line file",
@@ -646,7 +651,7 @@ func (t *Tree) Check(cites []Citation) []Finding {
 func (t *Tree) check(c Citation) Finding {
 	file, ok := t.resolve(c.Named)
 	if !ok {
-		return Finding{Citation: c, Verdict: NoSuchFile}
+		return Finding{Citation: c, Verdict: Unresolved}
 	}
 	f := Finding{Citation: c, File: file}
 	if n := t.lines[file]; c.Span.End > n {
@@ -753,6 +758,72 @@ func Survey(root fs.FS) ([]Finding, error) {
 	var out []Finding
 	for _, name := range names {
 		out = append(out, tree.Check(glossary.Apply(Parse(name, docs[name])))...)
+	}
+	return out, nil
+}
+
+// Shape is how a citation was spelled. It exists for the census alone and is
+// deliberately not carried on Citation: downstream code that can ask which
+// shape a citation had is downstream code that can handle one and skip another,
+// which is the blindness this package is built to make unwritable.
+type Shape int
+
+const (
+	// Qualified carries a path: `internal/model/priority.go:18-21`.
+	Qualified Shape = iota
+	// Abbreviated carries a bare basename: `priority.go:35-41`.
+	Abbreviated
+	// Continued carries no filename at all: `:47-54`.
+	Continued
+	// Tailed is a further span after a comma: the `117` of `x.go:113,117`.
+	Tailed
+)
+
+func (s Shape) String() string {
+	return [...]string{"qualified", "abbreviated", "continued", "comma-tailed"}[s]
+}
+
+// Census counts the citation spans in a document by how they were written.
+//
+// The corpus has been counted by hand at least five times and come out
+// different every time, because a finder anchored on "what follows `file.go:`"
+// reports only the qualified shape and its author reads the total as the
+// corpus. A census that misses a quarter of its own subject understates
+// coverage while the green stays green.
+func Census(text string) map[Shape]int {
+	out := map[Shape]int{}
+	for _, m := range citeRe.FindAllStringSubmatchIndex(text, -1) {
+		written := group(text, m, 1)
+		switch {
+		case written == "":
+			out[Continued]++
+		case strings.Contains(written, "/"):
+			out[Qualified]++
+		default:
+			out[Abbreviated]++
+		}
+		out[Tailed] += len(spanRe.FindAllString(text[m[4]:m[5]], -1)) - 1
+	}
+	return out
+}
+
+// SpecText reads the specification's documents.
+//
+// Exported because the census and the survey are two questions over one corpus,
+// and a caller that re-derived the file list would be keeping a second map of
+// which documents are the specification. [LAW:one-source-of-truth]
+func SpecText(root fs.FS) (map[string]string, error) {
+	names, err := docclaims.SpecFiles(root)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(names))
+	for _, name := range names {
+		body, err := fs.ReadFile(root, name)
+		if err != nil {
+			return nil, err
+		}
+		out[name] = string(body)
 	}
 	return out, nil
 }

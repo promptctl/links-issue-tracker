@@ -81,8 +81,8 @@ func Explain(h Held, findings []Finding) string {
 			case PastEOF:
 				return fmt.Sprintf("%s:%d: %s now runs past the end of a %d-line %s — repoint the citation",
 					f.Doc, f.DocLine, f.Text, f.Declared, f.File)
-			case NoSuchFile:
-				return fmt.Sprintf("%s:%d: %s no longer names a file this tree has — repoint the citation",
+			case Unresolved:
+				return fmt.Sprintf("%s:%d: %s no longer identifies one file in this tree — repoint the citation",
 					f.Doc, f.DocLine, f.Text)
 			}
 		}
