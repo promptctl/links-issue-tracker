@@ -255,9 +255,10 @@ redraws the code and leaves the citation untouched, so a reader who follows a
 stale one lands in unrelated code and reads it as the thing the sentence
 described — worse than no citation, because it is followed with confidence.
 A symbol survives every edit that does not rename it, and a rename is a compile
-error somewhere. Naming one is also what makes a citation checkable at all:
-over half the existing corpus cannot be verified by anything, because nothing
-beside those citations names a symbol in the file they point at.
+error somewhere. Naming one is also what makes a citation checkable:
+over half the existing corpus can be checked no further than that its lines
+exist, because nothing beside those citations names a symbol in the file they
+point at.
 
 This is not a forecast. Measured over `doc-v1-total/` when the gate below was
 written, of 9,813 citations:
