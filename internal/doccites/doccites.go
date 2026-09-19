@@ -83,10 +83,11 @@ func (s Span) String() string {
 // chapter sentence that points at it, and the identifiers that sentence offers
 // as its subject.
 //
-// Named is the path exactly as the prose wrote it — absolute, repository
-// relative, or a bare basename — and a bare continuation carries the path
-// inherited from earlier in its document. Resolving that to a file in the tree
-// needs the tree, so it happens in Check rather than here.
+// Named is the path the sentence meant, recovered from the document: an
+// abbreviation inherits from the paths named before it, so every Citation
+// carries a file whatever spelling it was written in. It is still the prose's
+// own path and may be absolute or partial, because turning it into a file that
+// exists needs the tree, which Check has and Parse does not.
 type Citation struct {
 	Doc     string
 	DocLine int
@@ -178,13 +179,13 @@ var (
 	identRe = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)(?:\.([A-Za-z_][A-Za-z0-9_]*))*(?:\(.*\))?$`)
 )
 
-// Parse reads every citation out of one document.
+// Parse reads every citation out of one document, resolving each one's file
+// against the paths the document itself names and collecting the identifiers
+// its sentence offers as the citation's subject.
 //
-// The document is split into blocks at blank lines because these chapters wrap:
-// a sentence routinely names its symbol on one line and carries the citation on
-// the next, and a reader that looks only at the citation's own line calls that
-// pair unverifiable. A block-scoped reader was worth 2 unverifiable citations
-// where a line-scoped one reported 279.
+// A comma list yields one Citation per span rather than one carrying several,
+// so a count of citations is a count of the line references a reader can
+// follow, and no consumer has to remember to walk a tail.
 func Parse(doc, text string) []Citation {
 	var out []Citation
 	lineOf := lineIndex(text)

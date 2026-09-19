@@ -168,6 +168,21 @@ func TestAUseSiteResolves(t *testing.T) {
 	}
 }
 
+// TestAQualifiedNameBindsOnItsLastElement covers the spelling these
+// inventories use constantly. The prose writes `model.Attribution` for what the
+// source declares as Attribution, and binding on the package qualifier instead
+// would resolve nothing — every such citation would fall to Unbound and be
+// counted as unjudgeable rather than checked.
+func TestAQualifiedNameBindsOnItsLastElement(t *testing.T) {
+	v := verdictOf(t, fstest.MapFS{
+		"doc-v1-total/x.md": &fstest.MapFile{Data: []byte("`model.Attribution` is opaque (`internal/a/a.go:3`).\n")},
+		"internal/a/a.go":   &fstest.MapFile{Data: []byte("package a\n\ntype Attribution struct{}\n")},
+	})
+	if v != Holds {
+		t.Errorf("a qualified name should bind on Attribution, got %s", v)
+	}
+}
+
 // TestASpanPastTheEndOfTheFileIsReported is the one check that reaches the
 // citations no symbol binds to, which is over half the corpus.
 func TestASpanPastTheEndOfTheFileIsReported(t *testing.T) {
