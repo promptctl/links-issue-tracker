@@ -251,6 +251,30 @@ func TestRunNextNamesThePeerSessionWorkingThisCheckoutsLane(t *testing.T) {
 	}
 }
 
+// The reader with no session of their own, who is nonetheless somebody. `lit
+// start abc --assignee bob` with no CLAUDE_CODE_SESSION_ID writes `bob` on the
+// row, and `--assignee`'s own help calls itself the fallback for exactly that
+// case. Reading the reader from the env alone would then resolve the two halves
+// of one comparison by two different rules, and tell bob that the ticket he
+// assigned himself belongs to somebody else — with nothing on this command able
+// to say otherwise, since `next --assignee` narrows the view and must not double
+// as an identity. The hidden `--by` every mutating command carries answers it
+// here too.
+func TestRunNextTreatsTheByFallbackAsTheReadersIdentity(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	h := newReadyTestHarness(t)
+	mine := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Assigned to me by flag", Topic: "next", IssueType: "task", Priority: 1})
+	h.applyAction(mine.ID, model.Start{Assignee: "bob"}, "")
+
+	text := h.runNextText("--by", "bob")
+	if !strings.Contains(text, mine.ID+" is already in progress in a lane you hold — continue where you left off") {
+		t.Fatalf("next --by bob = %q, want bob's own work reported as his", text)
+	}
+	if strings.Contains(text, "not to you") {
+		t.Fatalf("next --by bob = %q, want no warning about the reader's own assignee", text)
+	}
+}
+
 // A lane we hold whose next ticket is startable serves it with NO announcement:
 // no claim is established, because we already hold the lane, so `next` prints
 // exactly what it always printed. This is the routing case with the quietest

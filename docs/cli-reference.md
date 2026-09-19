@@ -203,9 +203,11 @@ left off", with a note to check the holder has stopped before continuing: a lane
 is held by the checkout, so every session running in one checkout shares its
 lanes. Nothing here decides whether that holder is still working — every session
 mints a new identity, so a predecessor and a live peer read alike, and lit carries
-no liveness probe — so the line asks for the check rather than answering it. Only
-an unassigned ticket prints the lane's own sentence: there is no name to
-contradict.
+no liveness probe — so the line asks for the check rather than answering it. A
+ticket assigned to you, or to nobody at all, prints the lane's own sentence
+instead: there is no name to contradict. The identity `next` compares against is
+the session environment, falling back to `--by` as every mutating command's does,
+never the `--assignee` filter.
 
 Both endings that hand back no ticket — the exhaustion diagnostic and an empty
 result — exit 6 rather than 1, and their remediation names the deliberate act each

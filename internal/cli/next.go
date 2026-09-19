@@ -38,6 +38,26 @@ func nextLeaf() appLeaf {
 	// route over the whole queue rather than the focused goal's path.
 	// [LAW:one-source-of-truth] one name for one idea across both surfaces.
 	all := fs.Bool("all", false, "Ignore the focus scope and route over the whole queue")
+	// `next` is read-only and still needs to know who is asking, because it is
+	// the one read command whose output names an identity — resumeAdvice says
+	// whether the ticket in flight is yours. So it takes the same hidden --by
+	// fallback every mutating command takes, and reads it the same way: the
+	// session env wins, --by answers when there is none. Without it the two
+	// halves of that comparison would be resolved by different rules — the
+	// assignee written through `lit start --assignee bob` with no session env,
+	// the reader resolved from the env alone — and lit would tell bob the
+	// ticket he assigned himself belongs to somebody else, with no flag on this
+	// command able to say otherwise. Not the command's own --assignee: that
+	// narrows the view, and a filter must not be able to rename the reader.
+	//
+	// It travels to the renderer as an argument rather than on claimContext.
+	// That context is gathered by four commands and read for its standings; a
+	// reader identity sitting there would be produced in one place for every
+	// caller and consumed in one, so the next read command to render it would
+	// resolve the reader by whatever the gatherer happened to do — env only,
+	// silently different from this rule. One producer, one consumer, named at
+	// the call. [LAW:one-source-of-truth]
+	actor := registerActor(fs)
 	return appLeaf{fs: fs, positionals: 0, usage: nextUsage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		statusState, err := parseWorkableStatus(*status)
 		if err != nil {
@@ -65,6 +85,11 @@ func nextLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
+		// The gatherer resolves the identity every command shares — the session
+		// env — and this refines it with the one input it cannot see. Same rule,
+		// one more source: with the env set the two agree exactly, so this is
+		// never a second answer to the question, only a fuller one.
+		cc.actingAs = actor()
 		occasion, err := renderNextOutcome(stdout, routeNext(rows, details, cc.standings, cc.self, focus.scopeFor(*all)), details, cc)
 		if err != nil {
 			return err

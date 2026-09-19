@@ -129,7 +129,7 @@ Proven over two real clones and a git remote: the second clone's plain `start` f
 
 ### `lit next` — claim-aware routing (a read gate)
 
-`next` routes over rows in composite-rank order to one of seven sealed outcomes (`internal/cli/next_route.go:26-214`). It is registered `app.AccessRead` (`internal/cli/register.go:485`) and writes nothing: it claims no lane and starts no ticket, so every line it prints either reports a state that already holds or is advice about a command the reader has yet to run (`internal/cli/next.go:79-93`).
+`next` routes over rows in composite-rank order to one of seven sealed outcomes (`internal/cli/next_route.go:26-214`). It is registered `app.AccessRead` (`internal/cli/register.go:485`) and writes nothing: it claims no lane and starts no ticket, so every line it prints either reports a state that already holds or is advice about a command the reader has yet to run (`internal/cli/next.go:97-111`).
 
 | Outcome | Carries | Meaning |
 |---|---|---|
@@ -153,7 +153,7 @@ Servability does not require `status == open`. Step 1 accepts `resumeWork`, so a
 
 Both diagnostics are written in `reachKind`, which says what one row is to this checkout right now: `reachTakeable`, `reachHeldFresh`, `reachNotReady`, `reachOutOfView`, and `reachOffFocusPath`, the last used only by the pool diagnostic. A bool here read "takeable or not", so a row outside the run's filtered view, or one not startable itself, rendered as the one reason the message named: claimed by another checkout. Exhaustion asks `reachKind` of the dependencies gating our scope; an empty global pool asks it of every row the walk went past. Each clause names at most twelve ids and says how many it left out (`maxNamedPerKind`, `next_route.go:611`); the per-kind wordings and both error formats are in inventory-claims.md §9.2.
 
-After routing, `next` prints the advice line above any pick that would establish a claim — naming what running `lit start` would lock rather than what `next` did, since reporting an act is the one thing a read-only command must not do — then the ticket summary with its claim line, and dispatches the pulled-ticket workflow occasion (`next.go:94-144`, `startAdvice` at `next.go:242`).
+After routing, `next` prints the advice line above any pick that would establish a claim — naming what running `lit start` would lock rather than what `next` did, since reporting an act is the one thing a read-only command must not do — then the ticket summary with its claim line, and dispatches the pulled-ticket workflow occasion (`next.go:112-162`, `startAdvice` at `next.go:260`).
 
 ### `lit sync reconcile` — the contest report
 
