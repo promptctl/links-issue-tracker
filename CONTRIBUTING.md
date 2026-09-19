@@ -275,7 +275,8 @@ was green over all of them. A further 1,954 name a file this tree cannot
 identify at all, almost always a bare basename no chapter ever qualifies:
 several packages hold a `sync.go`, so `` `sync.go:20` `` under prose that never
 says which names none of them. Re-derive any of it with `go run
-./tools/doccites`; `-list` prints each citation that does not resolve.
+./tools/doccites`; `-list` prints each citation judged wrong — the 3,363,
+not the 4,470 nothing can judge.
 
 ### The gate
 

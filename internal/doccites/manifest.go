@@ -94,6 +94,48 @@ func Lapsed(manifest []Held, findings []Finding) []Held {
 	return out
 }
 
+// answering picks the finding that speaks for a recorded entry.
+//
+// A citation's identity is its text at its span in its chapter. The file it
+// resolves to and the symbol it binds are recorded state, so a change in either
+// is the news the message has to carry — never a reason to look past the
+// finding carrying it. Requiring the file to match is what made the Unresolved
+// case unreachable: check gives an unresolved citation no file at all, and an
+// entry recorded as holding always has one, so every citation whose file
+// stopped resolving fell through to "no longer in the chapter" and told a
+// contributor to regenerate a sentence that was still there — the one
+// instruction this function exists to withhold. [LAW:no-silent-failure]
+//
+// Ranked rather than filtered, because one chapter can write the same citation
+// twice against two different symbols, and then the sibling that never changed
+// answers for the one that did. The middle return reports that the best rank
+// was reached more than once, which is the case nothing here can tell apart.
+func answering(h Held, findings []Finding) (Finding, bool, bool) {
+	var best Finding
+	rank, ties := 0, 0
+	for _, f := range findings {
+		if f.Doc != h.Doc || f.Text != h.Text || f.Span != h.Span {
+			continue
+		}
+		r := 1
+		switch {
+		case f.File == h.File && f.Symbol == h.Symbol:
+			r = 3
+		case f.File == h.File:
+			r = 2
+		}
+		switch {
+		case r > rank:
+			best, rank, ties = f, r, 1
+		case r == rank:
+			ties++
+		}
+	}
+	// Two findings agreeing on file and symbol say the same thing about the
+	// entry, so only a tie below that is an ambiguity worth reporting.
+	return best, ties > 1 && rank < 3, rank > 0
+}
+
 // Explain says what a contributor has to do about one lapsed entry, which is
 // not always the same thing.
 //
@@ -101,50 +143,59 @@ func Lapsed(manifest []Held, findings []Finding) []Held {
 // fall-through below is the one message that tells a contributor to regenerate,
 // and regenerating is the single action that erases drift instead of repairing
 // it. Reaching it by accident — because a cited symbol was renamed and Unbound
-// had no case — would hand exactly that instruction to someone whose chapter
-// had just stopped being true. [LAW:no-silent-failure]
+// had no case, or because the cited file stopped resolving and an unresolved
+// finding could not be matched at all — would hand exactly that instruction to
+// someone whose chapter had just stopped being true. [LAW:no-silent-failure]
 func Explain(h Held, findings []Finding) string {
-	// Two passes, symbol first. A chapter can write one citation twice in two
-	// blocks and bind it to a different symbol each time, so Doc/Text/Span alone
-	// can match the sibling that never changed — and then explain the wrong one.
-	for _, pass := range []bool{true, false} {
-		for _, f := range findings {
-			if f.Doc != h.Doc || f.Text != h.Text || f.File != h.File || f.Span != h.Span {
-				continue
-			}
-			if pass && f.Symbol != h.Symbol {
-				continue
-			}
-			switch f.Verdict {
-			case Holds:
-				return fmt.Sprintf("%s:%d: %s now resolves to `%s`, where it recorded `%s` — one of the two is not what the sentence says",
-					f.Doc, f.DocLine, f.Text, f.Symbol, h.Symbol)
-			case Moved:
-				// f.Declared is where f.Symbol is, which on the second pass is
-				// not the symbol this entry recorded. Pairing the two printed
-				// "`priorityEntry` is now at :21" naming a line where some
-				// other identifier lives — the fabricated instruction this
-				// function exists to avoid giving.
-				if f.Symbol != h.Symbol {
-					return fmt.Sprintf("%s:%d: %s no longer names `%s`; it now binds `%s`, declared at %s:%d — restore the symbol or repoint the citation",
-						f.Doc, f.DocLine, f.Text, h.Symbol, f.Symbol, f.File, f.Declared)
-				}
-				return fmt.Sprintf("%s:%d: %s no longer brackets `%s`, which is now at %s:%d — repoint the citation",
-					f.Doc, f.DocLine, f.Text, h.Symbol, f.File, f.Declared)
-			case OutOfRange:
-				return fmt.Sprintf("%s:%d: %s now names lines outside a %d-line %s — repoint the citation",
-					f.Doc, f.DocLine, f.Text, f.Lines, f.File)
-			case Unresolved:
-				return fmt.Sprintf("%s:%d: %s no longer identifies one file in this tree — repoint the citation",
-					f.Doc, f.DocLine, f.Text)
-			case Unbound:
-				return fmt.Sprintf("%s:%d: %s no longer names `%s`, which %s does not declare — restore the symbol or repoint the citation",
-					f.Doc, f.DocLine, f.Text, h.Symbol, f.File)
-			}
-		}
+	f, ambiguous, found := answering(h, findings)
+	if !found {
+		// The sentence itself is gone, which is an ordinary edit rather than drift.
+		return fmt.Sprintf("%s: %s is no longer in the chapter — regenerate with `go run ./tools/doccites -sync`", h.Doc, h.Text)
 	}
-	// The sentence itself is gone, which is an ordinary edit rather than drift.
-	return fmt.Sprintf("%s: %s is no longer in the chapter — regenerate with `go run ./tools/doccites -sync`", h.Doc, h.Text)
+	also := ""
+	if ambiguous {
+		also = " (the chapter writes this citation more than once; this is the first)"
+	}
+	// Which file the citation points at is asked before what it found there,
+	// because an unresolved citation points at none and every verdict below
+	// describes a file. A citation that carries no path of its own inherits one
+	// from the prose above it, so this fires for an edit to a sentence the
+	// citation is nowhere near as well as for a file that was renamed.
+	if f.File != h.File {
+		if f.File == "" {
+			return fmt.Sprintf("%s:%d: %s no longer identifies one file in this tree, where it recorded %s — repoint the citation%s",
+				f.Doc, f.DocLine, f.Text, h.File, also)
+		}
+		return fmt.Sprintf("%s:%d: %s now resolves to %s, where it recorded %s — repoint the citation, or restore the qualified mention it takes its path from%s",
+			f.Doc, f.DocLine, f.Text, f.File, h.File, also)
+	}
+	switch f.Verdict {
+	case Holds:
+		return fmt.Sprintf("%s:%d: %s now resolves to `%s`, where it recorded `%s` — one of the two is not what the sentence says%s",
+			f.Doc, f.DocLine, f.Text, f.Symbol, h.Symbol, also)
+	case Moved:
+		// f.Declared is where f.Symbol is, which on a rank below the exact one
+		// is not the symbol this entry recorded. Pairing the two printed
+		// "`priorityEntry` is now at :21" naming a line where some other
+		// identifier lives — the fabricated instruction this function exists to
+		// avoid giving.
+		if f.Symbol != h.Symbol {
+			return fmt.Sprintf("%s:%d: %s no longer names `%s`; it now binds `%s`, declared at %s:%d — restore the symbol or repoint the citation%s",
+				f.Doc, f.DocLine, f.Text, h.Symbol, f.Symbol, f.File, f.Declared, also)
+		}
+		return fmt.Sprintf("%s:%d: %s no longer brackets `%s`, which is now at %s:%d — repoint the citation%s",
+			f.Doc, f.DocLine, f.Text, h.Symbol, f.File, f.Declared, also)
+	case OutOfRange:
+		return fmt.Sprintf("%s:%d: %s now names lines outside a %d-line %s — repoint the citation%s",
+			f.Doc, f.DocLine, f.Text, f.Lines, f.File, also)
+	case Unbound:
+		return fmt.Sprintf("%s:%d: %s no longer names `%s`, which %s does not declare — restore the symbol or repoint the citation%s",
+			f.Doc, f.DocLine, f.Text, h.Symbol, f.File, also)
+	}
+	// A verdict with no case of its own still gets named rather than being
+	// answered with the one message that erases the entry.
+	return fmt.Sprintf("%s:%d: %s is now %s, where it recorded `%s` — repoint the citation%s",
+		f.Doc, f.DocLine, f.Text, f.Verdict, h.Symbol, also)
 }
 
 // Render writes the manifest as Go source.

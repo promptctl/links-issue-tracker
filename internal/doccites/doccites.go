@@ -604,6 +604,16 @@ func (ig ignored) skip(name string) bool {
 // literal entries are honoured — a pattern with a glob in it needs git's
 // matcher, and the corpus cites nothing inside one.
 //
+// A negation (`!name`) is skipped with them, and skipping it errs the safe way
+// round: the file it re-includes stays out of the index, so citations to it
+// read as Unresolved rather than being judged against code this reader never
+// saw. Honouring one would mean implementing git's "last matching pattern
+// wins" over the glob patterns deliberately not implemented above, and a
+// partial matcher is the version that answers confidently and wrongly. The
+// limitation is written here rather than left to be rediscovered, because a
+// `*` plus `!keep` directory is an ordinary idiom and this would quietly
+// under-count the corpus the day one appears. [LAW:no-silent-failure]
+//
 // Every .gitignore in the tree, not just the root one. A repository ignores a
 // directory from whichever file is nearest it, and a directory whose own
 // .gitignore is `*` ignores itself wholesale — the form .remember/ uses, which

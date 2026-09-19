@@ -569,3 +569,86 @@ func TestOneChapterCitingTwoFilesRecordsTwoEntries(t *testing.T) {
 		t.Fatalf("both entries resolved to %s, so the fixture does not test the file", held[0].File)
 	}
 }
+
+// A file rename with no edit to the chapter. The sentence and its citation are
+// exactly where they were, so "no longer in the chapter — regenerate" is false,
+// and following it deletes the record that the citation now points at nothing.
+//
+// The mutation this kills is the one the code shipped with: matching a lapsed
+// entry only against findings whose File equals the recorded one. An unresolved
+// citation has no file at all, so that test can never be satisfied and the
+// Unresolved message was unreachable for every corpus.
+func TestACitationWhoseFileStoppedResolvingIsNotExplainedAsADeletedSentence(t *testing.T) {
+	doc := "`Thing` is here (`internal/a/a.go:3`).\n"
+	fsys := fstest.MapFS{
+		"doc-v1-total/x.md": &fstest.MapFile{Data: []byte(doc)},
+		"internal/a/a.go":   &fstest.MapFile{Data: []byte("package a\n\ntype Thing struct{}\n")},
+	}
+	findings, err := Survey(fsys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := Holding(findings)
+	if len(manifest) != 1 {
+		t.Fatalf("the fixture should record one entry, got %d", len(manifest))
+	}
+	delete(fsys, "internal/a/a.go")
+	fsys["internal/b/b.go"] = &fstest.MapFile{Data: []byte("package b\n\ntype Thing struct{}\n")}
+	renamed, err := Survey(fsys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lapsed := Lapsed(manifest, renamed)
+	if len(lapsed) != 1 {
+		t.Fatalf("the renamed file should lapse one entry, got %d", len(lapsed))
+	}
+	msg := Explain(lapsed[0], renamed)
+	if strings.Contains(msg, "-sync") {
+		t.Fatalf("a citation still in the chapter must not be explained as a deleted sentence: %s", msg)
+	}
+	if !strings.Contains(msg, "internal/a/a.go") {
+		t.Fatalf("the message should name the file the entry recorded: %s", msg)
+	}
+}
+
+// A citation with no path of its own inherits one from the prose above it, so
+// an edit to a sentence the citation is nowhere near can move which file it
+// resolves to. The entry lapses — the file is part of the key — and what
+// happened is that the path changed, not that anything was deleted.
+func TestACitationThatNowResolvesToAnotherFileSaysSo(t *testing.T) {
+	cite := Citation{Doc: "d.md", Text: "`:3`", Span: Span{Start: 3, End: 3}}
+	moved := Finding{Citation: cite, Verdict: Holds, Symbol: "Thing", File: "internal/b/b.go"}
+	moved.DocLine = 12
+
+	h := Held{Doc: "d.md", Text: "`:3`", File: "internal/a/a.go", Span: Span{Start: 3, End: 3}, Symbol: "Thing"}
+	got := Explain(h, []Finding{moved})
+	if strings.Contains(got, "-sync") {
+		t.Fatalf("a citation that moved file is not a deleted sentence: %q", got)
+	}
+	if !strings.Contains(got, "internal/a/a.go") || !strings.Contains(got, "internal/b/b.go") {
+		t.Fatalf("the message should name both the recorded and the current file: %q", got)
+	}
+}
+
+// Two instances of one citation that a recorded symbol no longer tells apart.
+// Nothing here can say which of them the entry was, so the message says so
+// rather than describing the first as though it were the one that broke.
+func TestExplainSaysWhenTheSameCitationIsWrittenTwice(t *testing.T) {
+	cite := Citation{Doc: "d.md", Text: "`a.go:3`", Span: Span{Start: 3, End: 3}}
+	first := Finding{Citation: cite, Verdict: Moved, Symbol: "Alpha", Declared: 40, File: "a.go"}
+	first.DocLine = 10
+	second := Finding{Citation: cite, Verdict: Moved, Symbol: "Beta", Declared: 91, File: "a.go"}
+	second.DocLine = 20
+
+	h := Held{Doc: "d.md", Text: "`a.go:3`", File: "a.go", Span: Span{Start: 3, End: 3}, Symbol: "Gamma"}
+	got := Explain(h, []Finding{first, second})
+	if !strings.Contains(got, "more than once") {
+		t.Fatalf("two candidates and no way to tell them apart should be said out loud: %q", got)
+	}
+
+	// And the note stays off when the recorded symbol does tell them apart.
+	h.Symbol = "Beta"
+	if got := Explain(h, []Finding{first, second}); strings.Contains(got, "more than once") {
+		t.Fatalf("the recorded symbol identifies one of the two, so there is no ambiguity to report: %q", got)
+	}
+}

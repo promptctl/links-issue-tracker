@@ -8,13 +8,14 @@
 // beside it.
 //
 //	go run ./tools/doccites          # the corpus summary
-//	go run ./tools/doccites -list    # every citation that does not hold
+//	go run ./tools/doccites -list    # every citation judged wrong
 //	go run ./tools/doccites -sync    # rewrite the gate's manifest
 package main
 
 import (
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"sort"
@@ -23,7 +24,7 @@ import (
 )
 
 func main() {
-	list := flag.Bool("list", false, "print every citation that does not hold")
+	list := flag.Bool("list", false, "print every citation judged wrong; one nothing can judge is not listed")
 	sync := flag.Bool("sync", false, "rewrite internal/doccites/manifest_gen.go from the corpus")
 	flag.Parse()
 
@@ -40,7 +41,7 @@ func main() {
 	}
 }
 
-func run(root fs.FS, out *os.File, list bool) error {
+func run(root fs.FS, out io.Writer, list bool) error {
 	findings, err := doccites.Survey(root)
 	if err != nil {
 		return err
@@ -115,6 +116,10 @@ func run(root fs.FS, out *os.File, list bool) error {
 	if !list {
 		return nil
 	}
+	// Judged wrong, which is not the same as "not holding". An unbound citation
+	// is one nothing near it names a symbol for, so no rule decided anything
+	// about it; listing 4,470 undecided citations beside the 3,363 decided ones
+	// would bury the finding a reader came for under the corpus.
 	fmt.Fprintln(out)
 	for _, f := range findings {
 		if f.Verdict != doccites.Holds && f.Verdict != doccites.Unbound {
