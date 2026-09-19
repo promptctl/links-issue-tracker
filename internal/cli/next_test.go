@@ -634,7 +634,7 @@ func TestRenderNextOutcomeNamesTheOtherSessionWorkingOurLane(t *testing.T) {
 		t.Fatalf("renderNextOutcome() error = %v", err)
 	}
 	text := out.String()
-	want := inFlight.ID + " is in progress under claude_sess-peer, a different session in this checkout — continue it only if that session has stopped, or pick other work from `lit backlog`"
+	want := inFlight.ID + " is in progress under claude_sess-peer, not under you — continue it only if they have stopped working it, or pick other work from `lit backlog`"
 	if !strings.Contains(text, want) {
 		t.Fatalf("render = %q, want it to contain %q", text, want)
 	}

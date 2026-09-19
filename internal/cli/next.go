@@ -184,13 +184,22 @@ func inFlightState(holder claims.Presence) string {
 // names nobody to contradict. Either half empty, and the lane is all anyone
 // knows — which is the sentence lit has always printed.
 //
+// What the sentence may say is bounded by what a mismatch proves, which is only
+// that the name on the ticket is not this command's. It is not proof of a
+// session — an assignee is free text, and `lit new --assignee bob` writes a
+// person there — nor of a checkout: a lane taken with `lit start --take` can
+// still hold a sibling ticket assigned in the checkout it came from. So the
+// line names the assignee, says it is not you, and stops. Claiming "a different
+// session in this checkout" on this evidence would be the same overreach one
+// paragraph up, rebuilt one field over.
+//
 // It does not say whether the other session is still running, because lit
 // cannot know: claims carry staleness heuristics and no liveness probe, by
 // design. It names the holder and hands the reader both exits, which is the
 // most that is true.
 func resumeAdvice(row annotation.AnnotatedIssue, actingAs string) string {
 	if assignee := strings.TrimSpace(row.AssigneeValue()); assignee != "" && actingAs != "" && assignee != actingAs {
-		return fmt.Sprintf("%s is in progress under %s, a different session in this checkout — continue it only if that session has stopped, or pick other work from `lit backlog`", row.ID, assignee)
+		return fmt.Sprintf("%s is in progress under %s, not under you — continue it only if they have stopped working it, or pick other work from `lit backlog`", row.ID, assignee)
 	}
 	return fmt.Sprintf("%s is already in progress in a lane you hold — continue where you left off", row.ID)
 }
