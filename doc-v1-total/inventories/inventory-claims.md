@@ -541,13 +541,13 @@ The `%s` in both non-empty arms is `describeReach(o.Unreachable, "", poolNotes)`
 
 **Exit code and reason.** `ExitNoWork = 6` (`internal/cli/exit.go:30`). **Both** `Exhausted` and `NoWork` map to it (`internal/cli/exit.go:116-128`): distinct from `ExitGeneric` because a caller looping `lit next` has to tell "stop, there is nothing for you" from "lit is broken", and under one code its only way to do that was to parse the English; not `ExitOK`, because for `lit next` 0 means "a ticket is on stdout", and exiting 0 with no row would hand the caller a success-shaped void (`internal/cli/exit.go:18-29`). Reasons: `scope_exhausted` for `Exhausted`, `no_ready_work` for `NoWork` (`internal/cli/error_output.go:105-118`).
 
-**`startAdvice(row, lane, holder)`** (`internal/cli/next.go:234-247`) — the line every pick that would establish a claim prints above its row: what running `lit start` would lock, never what this command did. `lit next` claims nothing and starts nothing; the function was `claimAnnouncement` and the rename is the fix, an announcement reporting being the one thing a read-only command must not do (`internal/cli/next.go:89-93`, `:210-213`). `described, named := lane.Describe()`; exactly four sentences:
+**`startAdvice(row, lane, holder)`** (`internal/cli/next.go:243-256`) — the line every pick that would establish a claim prints above its row: what running `lit start` would lock, never what this command did. `lit next` claims nothing and starts nothing; the function was `claimAnnouncement` and the rename is the fix, an announcement reporting being the one thing a read-only command must not do (`internal/cli/next.go:89-93`, `:219-222`). `described, named := lane.Describe()`; exactly four sentences:
 - in progress, lane not named: ``%s is in progress and %s — run `lit start %s` to take it over`` (Row.ID, state, Row.ID).
 - in progress, lane named: ``%s is in progress and %s — run `lit start %s` to take over %s`` (Row.ID, state, Row.ID, described).
 - not in progress, lane not named: ``run `lit start %s` to claim it`` (Row.ID).
 - not in progress, lane named: ``run `lit start %s` to claim %s`` (Row.ID, described).
 
-`state` is `inFlightState(holder)` (`internal/cli/next.go:158-166`): `claims.Locked` → `claimed by a locked worktree whose claim has gone stale`; `claims.Present` → `stale, though its holder's worktree is still on disk`; otherwise `abandoned`. `holder` is `expiredHolder(cc.standings.Of(lane))` — the `Stale` standing's `Holder`, and `claims.Unprovable` for every other standing (`internal/cli/claims_render.go:89-94`). The two verbs spell their sentences out separately rather than sharing one with the object substituted, because English puts the pronoun in different places: "claim it", but "take it over" (`internal/cli/next.go:228-233`).
+`state` is `inFlightState(holder)` (`internal/cli/next.go:158-166`): `claims.Locked` → `claimed by a locked worktree whose claim has gone stale`; `claims.Present` → `stale, though its holder's worktree is still on disk`; otherwise `abandoned`. `holder` is `expiredHolder(cc.standings.Of(lane))` — the `Stale` standing's `Holder`, and `claims.Unprovable` for every other standing (`internal/cli/claims_render.go:89-94`). The two verbs spell their sentences out separately rather than sharing one with the object substituted, because English puts the pronoun in different places: "claim it", but "take it over" (`internal/cli/next.go:237-242`).
 
 **`LaneID.Describe() (string, bool)`** (`internal/model/model.go:255-263`) — three cases:
 - solo lane → `("", false)`. A solo lane is the ticket that names it, so any phrase for it only repeats what the surrounding sentence already said (`:248-251`).
@@ -557,15 +557,19 @@ The `%s` in both non-empty arms is `describeReach(o.Unreachable, "", poolNotes)`
 **`renderNextOutcome(w, outcome, details, cc)`** (`internal/cli/next.go:94-144`):
 - `ServedFromClaim` → no announcement at all.
 - `ResumedOwnWork` → `resumeAdvice(o.Row, cc.actingAs)` + `"\n"`. Two sentences, chosen by
-  whether the row carries an assignee that is not the identity running the command
-  (`internal/cli/next.go:203-208`). Both halves must be non-empty and differ, so an
+  whether the row carries an assignee that is not the identity running the command AND
+  has been updated inside the orphan threshold
+  (`internal/cli/next.go:210-217`). Both halves must be non-empty and differ, so an
   unassigned ticket and a command with no session identity both take the lane's own
   sentence: `"%s is already in progress in a lane you hold — continue where you left off"`
-  (Row.ID). Otherwise: ``%s is in progress under %s, not under you — continue it only if they have stopped working it, or pick other work from `lit backlog` ``
+  (Row.ID). Otherwise: ``%s is in progress and assigned to %s, not to you — continue it only if they are done with it, or pick other work from `lit backlog` ``
   (Row.ID, assignee). Lanes are keyed on the checkout, not the session, so two sessions
   in one checkout share every lane, and the assignee is the only fact that separates them.
-  The sentence claims no more than the mismatch proves: an assignee is free text and need
-  not name a session at all (links-routing-t6fa).
+  The orphan clock decides whether that fact still matters: every session mints a new
+  identity, so a predecessor's name and a live peer's both read as "not you", and a row
+  quiet past the threshold is a predecessor who stopped. The sentence claims no more than
+  the mismatch proves: an assignee is free text and need not name a session at all
+  (links-routing-t6fa).
 - `ServedFromEpicLane` → `startAdvice(o.Row, o.Lane, expiredHolder(cc.standings.Of(o.Lane)))` + `" (a second lane of an epic you already hold a lane in)\n"`.
 - `ServedFromNewLane` → `startAdvice(o.Row, o.Lane, expiredHolder(cc.standings.Of(o.Lane)))` + `"\n"`.
 - `ServedFromDependency` → the same `startAdvice(...)` + `" (gates %s, which is in a lane you hold)\n"` formatted on `Gates`.

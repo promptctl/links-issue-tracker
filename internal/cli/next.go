@@ -164,7 +164,8 @@ func inFlightState(holder claims.Presence) string {
 
 // resumeAdvice is what `next` says when it hands back work already in flight in
 // a lane this checkout holds. Two sentences, and the one it picks turns on
-// whether the ticket's assignee names the session reading this line.
+// whether the ticket names somebody else AND has been touched recently enough
+// for that to matter.
 //
 // "continue where you left off" is a claim about WHO, and the lane cannot
 // support it. A lane is keyed on the checkout, deliberately — many sessions in
@@ -174,32 +175,40 @@ func inFlightState(holder claims.Presence) string {
 // are also one claimant, and there the sentence told the second one it had been
 // working a ticket the first was mid-PR on. Three sessions read it that way,
 // the first of them before this was a ticket, and each time only a hand check of
-// git worktrees and push times disproved it (links-routing-t6fa). The assignee is the finer fact the
-// lane never carried; reading it changes what the pick is CALLED and not which
-// pick it is, which is why routing is untouched and this lives at the render.
+// git worktrees and push times disproved it (links-routing-t6fa).
 //
-// Both halves must be minted for a mismatch to mean anything, on the rule
-// relationOf already applies to attribution: a command with no session identity
-// cannot prove the row is somebody else's work, and a row with no assignee
-// names nobody to contradict. Either half empty, and the lane is all anyone
-// knows — which is the sentence lit has always printed.
+// The assignee alone cannot separate those two, and this is the trap: every
+// session mints a new identity, so yesterday's session and a peer working right
+// now BOTH read as "not you". Warning on the mismatch alone would fire on every
+// ordinary resume and put a question mark over the inheritance the design exists
+// to produce. The orphan annotation is the discriminator, and it is lit's own:
+// in flight with no update inside the threshold. A session actively working a
+// ticket keeps it moving, so a quiet row is a predecessor who stopped and a live
+// row is somebody who may not have. Past the clock lit has already answered the
+// question, and the answer is the sentence it has always printed.
 //
-// What the sentence may say is bounded by what a mismatch proves, which is only
-// that the name on the ticket is not this command's. It is not proof of a
+// Both identity halves must be minted for a mismatch to mean anything, on the
+// rule relationOf already applies to attribution: a command with no session
+// identity cannot prove the row is somebody else's work, and a row with no
+// assignee names nobody to contradict.
+//
+// What the sentence may say is bounded by what the mismatch proves, which is
+// only that the name on the ticket is not this command's. It is not proof of a
 // session — an assignee is free text, and `lit new --assignee bob` writes a
 // person there — nor of a checkout: a lane taken with `lit start --take` can
-// still hold a sibling ticket assigned in the checkout it came from. So the
-// line names the assignee, says it is not you, and stops. Claiming "a different
+// still hold a sibling ticket assigned in the checkout it came from. So the line
+// names the assignee, says it is not you, and stops. Claiming "a different
 // session in this checkout" on this evidence would be the same overreach one
 // paragraph up, rebuilt one field over.
 //
-// It does not say whether the other session is still running, because lit
-// cannot know: claims carry staleness heuristics and no liveness probe, by
-// design. It names the holder and hands the reader both exits, which is the
-// most that is true.
+// It does not say whether that holder is still running, because lit cannot
+// know: claims carry staleness heuristics and no liveness probe, by design. It
+// names them and hands the reader both exits, which is the most that is true.
 func resumeAdvice(row annotation.AnnotatedIssue, actingAs string) string {
-	if assignee := strings.TrimSpace(row.AssigneeValue()); assignee != "" && actingAs != "" && assignee != actingAs {
-		return fmt.Sprintf("%s is in progress under %s, not under you — continue it only if they have stopped working it, or pick other work from `lit backlog`", row.ID, assignee)
+	assignee := strings.TrimSpace(row.AssigneeValue())
+	named := assignee != "" && actingAs != "" && assignee != actingAs
+	if named && !ClassifyReadiness(row.Annotations).IsOrphaned() {
+		return fmt.Sprintf("%s is in progress and assigned to %s, not to you — continue it only if they are done with it, or pick other work from `lit backlog`", row.ID, assignee)
 	}
 	return fmt.Sprintf("%s is already in progress in a lane you hold — continue where you left off", row.ID)
 }

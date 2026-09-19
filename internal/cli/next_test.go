@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -634,12 +635,46 @@ func TestRenderNextOutcomeNamesTheOtherSessionWorkingOurLane(t *testing.T) {
 		t.Fatalf("renderNextOutcome() error = %v", err)
 	}
 	text := out.String()
-	want := inFlight.ID + " is in progress under claude_sess-peer, not under you — continue it only if they have stopped working it, or pick other work from `lit backlog`"
+	want := inFlight.ID + " is in progress and assigned to claude_sess-peer, not to you — continue it only if they are done with it, or pick other work from `lit backlog`"
 	if !strings.Contains(text, want) {
 		t.Fatalf("render = %q, want it to contain %q", text, want)
 	}
 	if strings.Contains(text, "a lane you hold") {
 		t.Fatalf("render = %q, want it NOT to tell a session the work is its own", text)
+	}
+}
+
+// The case the warning must NOT fire on, and the one it is easiest to break:
+// an ordinary resume. Every session mints a new identity, so a ticket started by
+// yesterday's session in this checkout carries a name that is not this session's
+// — the same mismatch a live peer produces, and by far the more common of the
+// two. Warning here would put a question mark over the inheritance the claims
+// design exists to produce (design-docs/work-claims.md: a new session inherits
+// its checkout's claims with no re-briefing).
+//
+// The orphan clock separates them: a session actively working a ticket keeps it
+// moving, so a row that has gone quiet past the threshold is a predecessor who
+// stopped. Backdating is how the fixture reaches that state — the clock reads
+// the row's own updated_at and nothing else.
+func TestRenderNextOutcomeResumesQuietWorkLeftByAnEarlierSession(t *testing.T) {
+	h := newReadyTestHarness(t)
+	inherited := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Yesterday's session started this", Topic: "next", IssueType: "task", Priority: 1})
+	h.transition(inherited.ID, model.Start{Assignee: "claude_sess-yesterday"})
+	h.backdateUpdatedAt(inherited.ID, 7*time.Hour)
+
+	rows, _ := h.gather()
+	cc := claimContext{self: selfAttribution, actingAs: "claude_sess-today"}
+
+	var out bytes.Buffer
+	if _, err := renderNextOutcome(&out, ResumedOwnWork{Row: rowByID(t, rows, inherited.ID)}, map[string]storage.IssueRelations{}, cc); err != nil {
+		t.Fatalf("renderNextOutcome() error = %v", err)
+	}
+	text := out.String()
+	if !strings.Contains(text, inherited.ID+" is already in progress in a lane you hold — continue where you left off") {
+		t.Fatalf("render = %q, want the lane's own sentence — a quiet row is a predecessor who stopped, not a peer", text)
+	}
+	if strings.Contains(text, "claude_sess-yesterday") {
+		t.Fatalf("render = %q, want no warning about a session that has been gone past the orphan threshold", text)
 	}
 }
 

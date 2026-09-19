@@ -197,12 +197,15 @@ on a qualifier naming the ticket it unblocks. The same line from the global
 pool carries neither.
 
 Work already in flight in one of your own lanes reports the state it is in rather
-than a command to run. When the ticket carries an assignee and it is not the
-identity running the command, that name is printed instead of "continue where you
-left off": a lane is held by the checkout, so every session running in one
-checkout shares its lanes, and lit cannot tell a session that stepped away from
-one still working. An unassigned ticket, or a command with no session identity,
-prints the lane's own sentence — there is no name to contradict.
+than a command to run. When the ticket carries an assignee that is not the
+identity running the command, and it has been updated inside the orphan
+threshold, that name is printed instead of "continue where you left off": a lane
+is held by the checkout, so every session running in one checkout shares its
+lanes. Past that threshold the row reads as an ordinary hand-down from an earlier
+session — every session mints a new identity, so a predecessor's name and a live
+peer's look the same, and the clock is what separates them. An unassigned ticket,
+or a command with no session identity, prints the lane's own sentence too: there
+is no name to contradict.
 
 Both endings that hand back no ticket — the exhaustion diagnostic and an empty
 result — exit 6 rather than 1, and their remediation names the deliberate act each

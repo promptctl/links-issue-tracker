@@ -1378,9 +1378,9 @@ Both map to `ExitNoWork` = **6** (`exit.go:31`, `exit.go:122-129`), with reasons
 **Rendering** — `renderNextOutcome(w, outcome, details, cc)` (`next.go:94-144`):
 - `ServedFromClaim` → no announcement at all (`next.go:98-99`).
 - `ResumedOwnWork` → `resumeAdvice(o.Row, cc.actingAs)` + `"\n"` (`next.go:100-102`,
-  `next.go:203-208`). The row's assignee decides which of two sentences: when it is
-  non-empty and differs from the identity running the command,
-  ``<RowID> is in progress under <assignee>, not under you — continue it only if they have stopped working it, or pick other work from `lit backlog` ``;
+  `next.go:210-217`). The row's assignee decides which of two sentences: when it is
+  non-empty, differs from the identity running the command, and the row is not orphaned,
+  ``<RowID> is in progress and assigned to <assignee>, not to you — continue it only if they are done with it, or pick other work from `lit backlog` ``;
   otherwise `"<RowID> is already in progress in a lane you hold — continue where you left off"`.
 - `ServedFromEpicLane` → `startAdvice(o.Row, o.Lane, expiredHolder(cc.standings.Of(o.Lane)))`
   + `" (a second lane of an epic you already hold a lane in)\n"` (`next.go:103-105`).
@@ -1390,7 +1390,7 @@ Both map to `ExitNoWork` = **6** (`exit.go:31`, `exit.go:122-129`), with reasons
   (`next.go:127-130`).
 - Any other outcome type → panic (`next.go:131-132`).
 
-`startAdvice(row, lane, holder)` (`next.go:234-247`) is exactly four sentences,
+`startAdvice(row, lane, holder)` (`next.go:243-256`) is exactly four sentences,
 selected by the row's state and by whether `lane.Describe()` reports a named lane:
 - in progress, lane not named: ``"<id> is in progress and <state> — run `lit start <id>` to take it over"``
 - in progress, lane named: ``"<id> is in progress and <state> — run `lit start <id>` to take over <described>"``

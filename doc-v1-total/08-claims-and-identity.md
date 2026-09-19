@@ -153,7 +153,7 @@ Servability does not require `status == open`. Step 1 accepts `resumeWork`, so a
 
 Both diagnostics are written in `reachKind`, which says what one row is to this checkout right now: `reachTakeable`, `reachHeldFresh`, `reachNotReady`, `reachOutOfView`, and `reachOffFocusPath`, the last used only by the pool diagnostic. A bool here read "takeable or not", so a row outside the run's filtered view, or one not startable itself, rendered as the one reason the message named: claimed by another checkout. Exhaustion asks `reachKind` of the dependencies gating our scope; an empty global pool asks it of every row the walk went past. Each clause names at most twelve ids and says how many it left out (`maxNamedPerKind`, `next_route.go:611`); the per-kind wordings and both error formats are in inventory-claims.md §9.2.
 
-After routing, `next` prints the advice line above any pick that would establish a claim — naming what running `lit start` would lock rather than what `next` did, since reporting an act is the one thing a read-only command must not do — then the ticket summary with its claim line, and dispatches the pulled-ticket workflow occasion (`next.go:94-144`, `startAdvice` at `next.go:234`).
+After routing, `next` prints the advice line above any pick that would establish a claim — naming what running `lit start` would lock rather than what `next` did, since reporting an act is the one thing a read-only command must not do — then the ticket summary with its claim line, and dispatches the pulled-ticket workflow occasion (`next.go:94-144`, `startAdvice` at `next.go:243`).
 
 ### `lit sync reconcile` — the contest report
 
