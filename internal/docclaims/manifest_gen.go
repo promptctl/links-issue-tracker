@@ -228,6 +228,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/10-platform.md", Text: "worktree <path>", Src: "git worktree list --porcelain -z opened with %q, which is not a `worktree <path>` field"},
 	{Doc: "doc-v1-total/inventories/inventory-claims.md", Text: "%s is in progress and %s — run `lit start %s` to take it over", Src: "%s is in progress and %s — run `lit start %s` to take it over"},
 	{Doc: "doc-v1-total/inventories/inventory-claims.md", Text: "%s is in progress and %s — run `lit start %s` to take over %s", Src: "%s is in progress and %s — run `lit start %s` to take over %s"},
+	{Doc: "doc-v1-total/inventories/inventory-claims.md", Text: "%s is in progress and assigned to %s, not to you — check that they have stopped before you continue it, or take other work from `lit backlog`", Src: "%s is in progress and assigned to %s, not to you — check that they have stopped before you continue it, or take other work from `lit backlog`"},
 	{Doc: "doc-v1-total/inventories/inventory-claims.md", Text: "--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag", Src: "--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag"},
 	{Doc: "doc-v1-total/inventories/inventory-claims.md", Text: "claimed by a locked worktree whose claim has gone stale", Src: "claimed by a locked worktree whose claim has gone stale"},
 	{Doc: "doc-v1-total/inventories/inventory-claims.md", Text: "claimed here", Src: "claimed here%s: %s (%s)"},

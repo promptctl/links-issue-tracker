@@ -196,6 +196,21 @@ qualifier saying so, and a pick that gates one of your blocked tickets closes
 on a qualifier naming the ticket it unblocks. The same line from the global
 pool carries neither.
 
+Work already in flight in one of your own lanes reports the state it is in rather
+than a command to run. When the ticket carries an assignee that is not the
+identity running the command, that name is printed instead of "continue where you
+left off", with a note to check the holder has stopped before continuing: a lane
+is held by the checkout, so every session running in one checkout shares its
+lanes. Nothing here decides whether that holder is still working — every session
+mints a new identity, so a predecessor and a live peer read alike, and lit carries
+no liveness probe — so the line asks for the check rather than answering it. A
+ticket assigned to you, or to nobody at all, prints the lane's own sentence
+instead: there is no name to contradict. The identity `next` compares against is
+the session environment, falling back to `--by` as every mutating command's does,
+never the `--assignee` filter. With no session environment the two flags differ by
+command — `lit start` takes the identity as `--assignee`, `lit next` as `--by` —
+so a shell operator naming themselves needs both.
+
 Both endings that hand back no ticket — the exhaustion diagnostic and an empty
 result — exit 6 rather than 1, and their remediation names the deliberate act each
 calls for. Neither tells you to retry: both answers are deterministic and repeat
