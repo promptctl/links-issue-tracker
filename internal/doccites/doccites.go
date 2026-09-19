@@ -42,7 +42,7 @@
 // included — or use it by name, or have nothing to do with it.
 //
 // Where no symbol binds, the verdict is Unbound, and that is a fact about the
-// citation rather than a gap in the instrument: 53.9% of this corpus is
+// citation rather than a gap in the instrument: 46.1% of this corpus is
 // Unbound, and such a citation asserts nothing a reader can check either. It is
 // the measurement most directly behind CONTRIBUTING.md asking new citations to
 // name their symbol.

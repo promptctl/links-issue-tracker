@@ -15,13 +15,13 @@ const repoRoot = "../.."
 // TestCitationsStillResolve is the gate this package exists to be.
 //
 // The specification points at source by line number and nothing kept those
-// numbers true: measured when this gate was written, 36.8% of the citations
+// numbers true: measured when this gate was written, 39.9% of the citations
 // that can be checked at all pointed somewhere other than the thing their
 // sentence names, and all eleven CI checks were green over every one of them.
 //
 // The gate is one-directional and baselined, because a corpus that is already
-// wrong more often than a third of the time cannot be held to "every citation
-// resolves" — that fails on the first run and is switched off. It is held to
+// wrong in two of every five citations it can judge cannot be held to "every
+// citation resolves" — that fails on the first run and is switched off. It is held to
 // "every citation that resolved still resolves", which is the bleeding rather
 // than the wound.
 //
@@ -142,6 +142,7 @@ func TestAnAmbiguousPathTailIsNotGuessedAt(t *testing.T) {
 // declares. Indexing one shadows a top-level declaration of the same name
 // further down, and the gate then calls a correct citation drift and sends the
 // reader into an unrelated function to look for it.
+//
 // The cited line is inside the real Widget and does not contain the word, so
 // only the declaration extent can carry this citation. A span that named the
 // symbol would hold through the use-site arm whether the local shadowed it or
