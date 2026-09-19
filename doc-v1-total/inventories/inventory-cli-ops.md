@@ -80,7 +80,7 @@ Retired-but-dispatchable ops-adjacent commands (`Hidden: true`, return `RetiredC
 3. On success and `accessMode == app.AccessWrite`: `printMutationSyncStalenessWarning(stdout, ws, time.Now())` (`cli.go:136`), after the engine close, before auto-sync.
 4. `maybeAutoSyncAfterCommand(ctx, accessMode, ws)` (`cli.go:145`).
 
-Read commands that additionally print the store-backed banner: `internal/cli/cli.go:916`, `internal/cli/next.go:75`, `internal/cli/workable.go:185` (i.e. `show`-family, `next`, and `backlog`/workable views).
+Read commands that additionally print the store-backed banner: `internal/cli/cli.go:916`, `internal/cli/next.go:72`, `internal/cli/workable.go:185` (i.e. `show`-family, `next`, and `backlog`/workable views).
 
 ### 0.7 Duration formatting
 

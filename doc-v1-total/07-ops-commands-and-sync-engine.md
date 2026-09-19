@@ -34,7 +34,7 @@ After a successful handler, `runWithApp` (`cli.go:101-147`) — in order, after 
 1. On write-mode commands: print the mutation staleness banner (§ staleness banners below).
 2. `maybeAutoSyncAfterCommand` — the entry to the whole background engine.
 
-A failed handler skips both. Three read surfaces additionally print the store-backed staleness banner: the `show` family, `next`, and the `backlog`/workable views (`cli.go:916`, `next.go:75`, `workable.go:185`).
+A failed handler skips both. Three read surfaces additionally print the store-backed staleness banner: the `show` family, `next`, and the `backlog`/workable views (`cli.go:916`, `next.go:72`, `workable.go:185`).
 
 Durations in every banner and age line render coarsely: ≥48h → "N days", ≥2h → "N hours", ≥2m → "N minutes", else "under a minute" (`output.go:451-462`).
 

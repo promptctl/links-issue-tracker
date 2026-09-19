@@ -275,7 +275,7 @@ and transitions via the table below.
 ### 1.13 Sync-staleness banners
 
 - Read commands print `printStalenessWarning(ctx, w, ws, store, now)` FIRST,
-  before their payload: `backlog` (`workable.go:185`), `next` (`next.go:75`),
+  before their payload: `backlog` (`workable.go:185`), `next` (`next.go:72`),
   `show` **only in full-detail mode** (`cli.go:915-919`) — deliberately suppressed
   under `--field` so the machine-parseable output isn't corrupted.
   Defined at `sync_staleness.go:191`.
@@ -1214,7 +1214,7 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
 ### 2.14 `lit next` — Print the next workable leaf
 
 - Registration `register.go:537-538`, `app.AccessRead`, handler `nextLeaf`
-  (`next.go:31-97`). Summary: "Print the next workable leaf to lit start".
+  (`next.go:31-93`). Summary: "Print the next workable leaf to lit start".
 - Flags (`next.go:32-40`, and the hidden `--by` at `:60`):
 
 | Flag | Type | Default | Effect |
@@ -1227,19 +1227,20 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
 | `--by` | string (hidden) | `""` | identity fallback (§1.11), read by `resumeAdvice` to say whether work in flight is the reader's (`next.go:60`) |
 
 - `--status` and `--type` go through the same `parseWorkableStatus` /
-  `parseWorkableType` refusals as `backlog` (`next.go:65-72`). **No** `--limit`,
+  `parseWorkableType` refusals as `backlog` (`next.go:62-69`). **No** `--limit`,
   **no** `--columns`.
 - Refusal: any positional → `UsageError{nextUsage}` → exit 2, where `nextUsage` =
   `"usage: lit next [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--all]"`
-  (`next.go:29`, `next.go:62-64`).
+  (`next.go:29`), declared as the leaf's `usage` rather than checked inline
+  (`next.go:61`).
 - Retired flag: `--continue` is intercepted at the shared parse boundary as
   `UnsupportedError` → exit 3, message
   ``"--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag"``
   (`flagset.go:138-141`).
-- Prints the sync-staleness warning first (`next.go:75`).
+- Prints the sync-staleness warning first (`next.go:72`).
 - Gathers the workable set — rows, relation details, **and the focus scope** —
-  via `gatherWorkableAnnotated` (`next.go:78-83`, `cli.go:655`), then the claim
-  context (`next.go:87`), and then routes (`next.go:91`), handing the render the
+  via `gatherWorkableAnnotated` (`next.go:75-80`, `cli.go:655`), then the claim
+  context (`next.go:84`), and then routes (`next.go:88`), handing the render the
   reader's own identity from `actor()` alongside it:
   `routeNext(rows, details, cc.standings, cc.self, focus.scopeFor(*all))`.
   `scopeFor(true)` returns the zero `focusScope`, which holds every row
@@ -1380,29 +1381,29 @@ otherwise appends `" and <n> more"` (`next_route.go:611`, `next_route.go:617-624
 Both map to `ExitNoWork` = **6** (`exit.go:31`, `exit.go:122-129`), with reasons
 `scope_exhausted` and `no_ready_work` respectively (`error_output.go:112-119`).
 
-**Rendering** — `renderNextOutcome(w, outcome, details, cc)` (`next.go:114-164`):
-- `ServedFromClaim` → no announcement at all (`next.go:118-119`).
-- `ResumedOwnWork` → `resumeAdvice(o.Row, cc.actingAs)` + `"\n"` (`next.go:120-122`,
-  `next.go:231-236`). The row's assignee decides which of two sentences: when it is
+**Rendering** — `renderNextOutcome(w, outcome, details, cc)` (`next.go:111-161`):
+- `ServedFromClaim` → no announcement at all (`next.go:115-116`).
+- `ResumedOwnWork` → `resumeAdvice(o.Row, cc.actingAs)` + `"\n"` (`next.go:117-119`,
+  `next.go:228-233`). The row's assignee decides which of two sentences: when it is
   non-empty and differs from the identity running the command,
   ``<RowID> is in progress and assigned to <assignee>, not to you — check that they have stopped before you continue it, or take other work from `lit backlog` ``;
   otherwise `"<RowID> is already in progress in a lane you hold — continue where you left off"`.
 - `ServedFromEpicLane` → `startAdvice(o.Row, o.Lane, expiredHolder(cc.standings.Of(o.Lane)))`
-  + `" (a second lane of an epic you already hold a lane in)\n"` (`next.go:123-125`).
-- `ServedFromNewLane` → the same `startAdvice(...)` + `"\n"` (`next.go:126-128`).
-- `ServedFromDependency` → the same `startAdvice(...)` + `" (gates %s, which is in a lane you hold)\n"` on `Gates` (`next.go:134-137`).
+  + `" (a second lane of an epic you already hold a lane in)\n"` (`next.go:120-122`).
+- `ServedFromNewLane` → the same `startAdvice(...)` + `"\n"` (`next.go:123-125`).
+- `ServedFromDependency` → the same `startAdvice(...)` + `" (gates %s, which is in a lane you hold)\n"` on `Gates` (`next.go:131-134`).
 - `Exhausted`, `NoWork` → returned as themselves; no ticket printed
-  (`next.go:147-150`).
-- Any other outcome type → panic (`next.go:151-152`).
+  (`next.go:144-147`).
+- Any other outcome type → panic (`next.go:148-149`).
 
-`startAdvice(row, lane, holder)` (`next.go:262-275`) is exactly four sentences,
+`startAdvice(row, lane, holder)` (`next.go:259-272`) is exactly four sentences,
 selected by the row's state and by whether `lane.Describe()` reports a named lane:
 - in progress, lane not named: ``"<id> is in progress and <state> — run `lit start <id>` to take it over"``
 - in progress, lane named: ``"<id> is in progress and <state> — run `lit start <id>` to take over <described>"``
 - not in progress, lane not named: ``"run `lit start <id>` to claim it"``
 - not in progress, lane named: ``"run `lit start <id>` to claim <described>"``
 
-`<state>` is `inFlightState(holder)` (`next.go:178-186`): `claims.Locked` →
+`<state>` is `inFlightState(holder)` (`next.go:175-183`): `claims.Locked` →
 `"claimed by a locked worktree whose claim has gone stale"`; `claims.Present` →
 `"stale, though its holder's worktree is still on disk"`; otherwise
 `"abandoned"`. `holder` is `expiredHolder(standing)` — the `Stale` standing's
@@ -1415,14 +1416,14 @@ selected by the row's state and by whether `lane.Describe()` reports a named lan
 - otherwise → `("lane <key> of epic <epic>", true)`
 
 On a served row, `renderNextOutcome` calls `printNextSummary(w, row, cc, lane)`
-with `lane = model.LaneOf(row.Issue, details[row.ID].Parent)` (`next.go:159-162`),
+with `lane = model.LaneOf(row.Issue, details[row.ID].Parent)` (`next.go:175-183`),
 which prints the **default columns** (`id state topic title`) joined by two
 spaces (`ready_state.go:965-971`, `columns.go:158-160`), then `printInlineDeps`
 (`ready_state.go:1022-1035`): `    epic: …`, `    depends on: …`, the claim line,
 and `    unblocks: …` — but `next` passes a **nil** unblocks map, so the unblocks
 line never appears (`ready_state.go:970`). It then returns
-`nextPulledOccasion(row.Issue)` (`next.go:163`, `workflow_events.go:39-45`),
-dispatched as `EventNextPulled` (`next.go:95`).
+`nextPulledOccasion(row.Issue)` (`next.go:160`, `workflow_events.go:39-45`),
+dispatched as `EventNextPulled` (`next.go:92`).
 
 `lit next` performs **no writes** — it is registered `app.AccessRead`
 (`register.go:499`). `startAdvice` names what a subsequent `lit start` would
@@ -1885,7 +1886,7 @@ plus at most one positional topic.
    `claims_takeover.go:110-119`).
 7. **Three functions panic on unreachable states** and would abort the process:
    `ClassifyReadiness` on an unclassified annotation kind (`readiness.go:144`),
-   `renderNextOutcome` on an unhandled outcome type (`next.go:152`),
+   `renderNextOutcome` on an unhandled outcome type (`next.go:149`),
    `transitionOccasion` on an unmapped status action (`workflow_events.go:110`),
    `emitBreadcrumb`/`quickstartBreadcrumb` on an unknown topic
    (`quickstart_topics.go:64`), `completionRenderer` on an unknown shell
