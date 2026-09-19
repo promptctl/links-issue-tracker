@@ -81,7 +81,7 @@ func run(root fs.FS, out io.Writer, list bool) error {
 	for v := doccites.Holds; v <= doccites.Unbound; v++ {
 		fmt.Fprintf(out, "  %-13s %6d  %5.1f%%\n", v, tally[v], 100*float64(tally[v])/float64(tally.Total()))
 	}
-	fmt.Fprintf(out, "\n%d cite a symbol the file declares, and are therefore decidable;\n", tally.Bound())
+	fmt.Fprintf(out, "\n%d land inside a file that resolved and cite a symbol it declares,\nand are therefore decidable;\n", tally.Bound())
 	if tally.Bound() == 0 {
 		fmt.Fprintln(out, "none of them bind a symbol, so none can be judged either way.")
 	} else {

@@ -269,14 +269,14 @@ written, of 9,813 citations:
 | point somewhere else, or at a missing file or past its end | 34.3% | 3,363 |
 | name no symbol in the cited file, so nothing can judge them | 45.6% | 4,470 |
 
-Among the 3,126 whose sentence names a symbol the cited file declares — the
-ones a checker can judge either way — **36.7% are wrong**, and every CI check
-was green over all of them. A further 1,954 name a file this tree cannot
-identify at all, almost always a bare basename no chapter ever qualifies:
-several packages hold a `sync.go`, so `` `sync.go:20` `` under prose that never
-says which names none of them. Re-derive any of it with `go run
-./tools/doccites`; `-list` prints each citation judged wrong — the 3,363,
-not the 4,470 nothing can judge.
+Among the 3,126 that land inside a file this tree could identify and name a
+symbol that file declares — the ones a checker can judge either way — **36.7%
+are wrong**, and every CI check was green over all of them. A further 1,954
+name a file this tree cannot identify at all, almost always a bare basename no
+chapter ever qualifies: several packages hold a `sync.go`, so
+`` `sync.go:20` `` under prose that never says which names none of them.
+Re-derive any of it with `go run ./tools/doccites`; `-list` prints each
+citation judged wrong — the 3,363, not the 4,470 nothing can judge.
 
 ### The gate
 

@@ -182,6 +182,39 @@ func TestALocalDeclarationDoesNotShadowTheFileScopeOne(t *testing.T) {
 	}
 }
 
+// A field of an anonymous struct is a declaration the file makes, and the walk
+// indexes it on purpose.
+//
+// The closure rule directly above stops at a FuncLit because a local inside one
+// is invisible from outside it, so a file-level citation naming that local
+// cannot be about it. A struct field has no such scope — `defaults.Timeout` is
+// reachable wherever the value is — and the line the field is written on is
+// where that identifier is declared, whether or not the type enclosing it was
+// given a name. Excluding every struct type that is not a TypeSpec's own was
+// measured against the corpus before this was settled: 310 such members exist
+// in this tree, and excluding them moved no verdict in the census, so the
+// decision rests on what a declaration is rather than on a count. This test is
+// what makes it a decision instead of an accident of which node stops the walk.
+func TestAFieldOfAnAnonymousStructIsStillADeclaration(t *testing.T) {
+	// The cited lines lie inside the field's extent and do not contain its name.
+	// Citing line 4 would hold through the use-site arm whatever the index says —
+	// the way the closure fixture next door was first written, and proved nothing.
+	src := "package a\n" + // 1
+		"\n" + // 2
+		"var defaults = struct {\n" + // 3
+		"	Timeout struct {\n" + // 4
+		"		Seconds int\n" + // 5
+		"	}\n" + // 6
+		"}{}\n" // 7
+	fsys := fstest.MapFS{
+		"doc-v1-total/x.md": &fstest.MapFile{Data: []byte("The wait is `Timeout` (`internal/a/a.go:5-6`).\n")},
+		"internal/a/a.go":   &fstest.MapFile{Data: []byte(src)},
+	}
+	if got := verdictOf(t, fsys); got != Holds {
+		t.Fatalf("the cited lines are inside the field's declaration: got %s", got)
+	}
+}
+
 // The line after a file's final newline is not a line. Counting it accepts a
 // citation one past the end, which is the whole of what OutOfRange decides.
 func TestTheLineAfterTheFinalNewlineIsNotALine(t *testing.T) {
@@ -273,6 +306,28 @@ func TestTheCorpusQualifiesWhatAChapterAbbreviates(t *testing.T) {
 	cites := g.Apply(Parse("b.md", "`Ranked` is computed there (`store.go:2`)"))
 	if len(cites) != 1 || cites[0].Named != "internal/store/store.go" {
 		t.Fatalf("the corpus qualifies store.go; this chapter's citation should inherit it: %+v", cites)
+	}
+}
+
+// The other half of that rule, and the half CONTRIBUTING names out loud: a
+// basename the corpus qualifies two different ways is left out rather than
+// guessed at. Guessing takes whichever path the map happens to yield, so every
+// chapter abbreviating it would get a verdict that depends on iteration order —
+// a measurement that changes between runs over a corpus that did not.
+//
+// Both halves are asserted, because a fixture whose mentions never reach
+// BuildGlossary at all would satisfy the first check while testing nothing.
+func TestABasenameTheCorpusQualifiesTwoWaysIsLeftOut(t *testing.T) {
+	g := BuildGlossary(map[string]string{
+		"a.md": "the mirror writes through `internal/sync/sync.go`",
+		"b.md": "the queue drains in `internal/store/sync.go`",
+		"c.md": "ranking lives in `internal/store/rank.go`",
+	})
+	if p, ok := g["sync.go"]; ok {
+		t.Fatalf("two chapters qualify sync.go differently; the glossary guessed %s", p)
+	}
+	if g["rank.go"] != "internal/store/rank.go" {
+		t.Fatalf("a basename qualified exactly one way should still resolve: got %q", g["rank.go"])
 	}
 }
 

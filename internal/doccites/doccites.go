@@ -994,9 +994,15 @@ func (t Tally) Total() int {
 	return n
 }
 
-// Bound is the citations that name a symbol the cited file declares — the only
-// ones whose truth is decidable, and so the honest denominator for a share that
-// holds.
+// Bound is the citations a checker can decide either way, and it takes three
+// conditions rather than the one it is tempting to state: the cited file
+// resolved, the span lies inside it, and the sentence names a symbol that file
+// declares. check settles an out-of-range span before it looks for a symbol at
+// all, so a citation reading `:400-410` of a 15-line file is counted wrong
+// without being counted here, however many declared symbols its sentence names.
+// Describing this as "names a symbol the file declares" names a wider set than
+// it counts, and every share taken against it is then a share of something
+// else. [LAW:one-source-of-truth]
 func (t Tally) Bound() int { return t[Holds] + t[Moved] }
 
 // Survey resolves every citation in the specification against the tree.
