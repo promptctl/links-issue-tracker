@@ -878,8 +878,9 @@ func TestDependencyPickIsDistinguishableFromThePool(t *testing.T) {
 
 	rows, details := h.gather()
 	cc := claimContext{self: selfAttribution}
-	// This table is about startAdvice, whose sentences carry no identity;
-	// the reader is named only so the one ResumedOwnWork arm has an answer.
+	// Every outcome here is announced by startAdvice, whose sentences carry no
+	// identity, so the reader is passed only because renderNextOutcome's
+	// signature requires one and is read by no branch under test.
 	const reader = ""
 	row := rowByID(t, rows, fresh.ID)
 	lane := laneOf(t, details, row)
