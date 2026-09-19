@@ -95,7 +95,15 @@ func run(root fs.FS, out *os.File, list bool) error {
 	for d := range perDoc {
 		names = append(names, d)
 	}
-	sort.Slice(names, func(i, j int) bool { return perDoc[names[i]].Total() > perDoc[names[j]].Total() })
+	// Name breaks the tie: sort.Slice is not stable and names comes from map
+	// iteration, so two documents with equal totals swapped places run to run
+	// in a report whose whole point is being reproducible.
+	sort.Slice(names, func(i, j int) bool {
+		if a, b := perDoc[names[i]].Total(), perDoc[names[j]].Total(); a != b {
+			return a > b
+		}
+		return names[i] < names[j]
+	})
 
 	fmt.Fprintf(out, "\n%6s %6s %6s %6s %6s %6s  %s\n", "total", "holds", "moved", "unres", "range", "unbound", "document")
 	for _, d := range names {

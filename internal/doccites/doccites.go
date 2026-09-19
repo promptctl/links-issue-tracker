@@ -47,7 +47,7 @@
 // included — or use it by name, or have nothing to do with it.
 //
 // Where no symbol binds, the verdict is Unbound, and that is a fact about the
-// citation rather than a gap in the instrument: 46.1% of this corpus is
+// citation rather than a gap in the instrument: 45.6% of this corpus is
 // Unbound, and such a citation asserts nothing a reader can check either. It is
 // the measurement most directly behind CONTRIBUTING.md asking new citations to
 // name their symbol.
@@ -511,15 +511,23 @@ func Index(fsys fs.FS) (*Tree, error) {
 		text:   map[string][]string{},
 		suffix: map[string][]string{},
 	}
-	skip := ignoredDirs(fsys)
+	skip := ignoredPaths(fsys)
 	err := fs.WalkDir(fsys, ".", func(name string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
-			if skip[name] || path.Base(name) == ".git" {
+			if name != "." && (skip.skip(name) || path.Base(name) == ".git") {
 				return fs.SkipDir
 			}
+			return nil
+		}
+		// Files too, not only the directories holding them. An ignored file is
+		// as much outside the repository as an ignored directory is, and
+		// reading them anyway meant slurping and line-counting the 13.8MB lit
+		// binary the root .gitignore exists to keep out of the tree, on every
+		// run of the gate.
+		if skip.skip(name) {
 			return nil
 		}
 		body, err := fs.ReadFile(fsys, name)
@@ -564,44 +572,53 @@ func lineCount(body string) int {
 	return n + 1
 }
 
-// ignoredDirs reads the directories the repository declares are not part of it.
+// ignored is the set of paths the repository declares are not part of it.
 //
-// Three of this tree's top-level directories hold code that is not lit's:
-// sibling agent worktrees under .claude, a gitignored vendored project with
-// more Go files than lit has itself, and a built site. Indexing them makes a
-// citation's verdict depend on what is lying beside the checkout, so the same
-// instrument measures one number locally and another in CI.
+// Matched the way git matches: a pattern with no slash in it applies at any
+// depth below the .gitignore that declares it, and one carrying a slash is
+// anchored to that directory. Anchoring everything to the root was wrong in
+// both directions — the root's `__pycache__/` left
+// tools/session-analysis/__pycache__ indexed, while a nested entry could only
+// ever have matched by accident.
+type ignored struct {
+	anchored map[string]bool
+	anywhere map[string][]string
+}
+
+func (ig ignored) skip(name string) bool {
+	if ig.anchored[name] {
+		return true
+	}
+	for _, dir := range ig.anywhere[path.Base(name)] {
+		if dir == "." || name == dir || strings.HasPrefix(name, dir+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// ignoredPaths reads what the repository says is not part of it.
 //
 // .gitignore is the repository's own answer and is checked in, so this reads it
 // rather than keeping a second list beside it. [LAW:one-source-of-truth] Only
-// plain directory entries are honoured — a pattern with a glob in it is not a
-// directory to skip, and the corpus cites nothing inside one.
+// literal entries are honoured — a pattern with a glob in it needs git's
+// matcher, and the corpus cites nothing inside one.
 //
-// Every .gitignore in the tree, not just the root one, and an entry naming a
-// directory without a trailing slash counts. A repository ignores a directory
-// from whichever file is nearest it — .remember/ is ignored by its own
-// .remember/.gitignore — and reading only the root's slash-terminated lines
-// walked and indexed it anyway. The exclusion is what keeps a verdict a
-// property of the corpus rather than of the checkout, so reading a subset of
-// it is the same defect as not reading it at all.
-func ignoredDirs(fsys fs.FS) map[string]bool {
-	out := map[string]bool{}
-	_ = fs.WalkDir(fsys, ".", func(name string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() {
-			if path.Base(name) == ".git" || out[name] {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if path.Base(name) != ".gitignore" {
-			return nil
-		}
+// Every .gitignore in the tree, not just the root one. A repository ignores a
+// directory from whichever file is nearest it, and a directory whose own
+// .gitignore is `*` ignores itself wholesale — the form .remember/ uses, which
+// left the agent memory beside this checkout indexed as though it were lit.
+//
+// The root's rules are read before the walk so they can prune it. Otherwise the
+// walk descends into whatever the root ignores — here six sibling worktrees,
+// each a copy of this repository — to look for .gitignore files inside things
+// that are not part of the repository.
+func ignoredPaths(fsys fs.FS) ignored {
+	ig := ignored{anchored: map[string]bool{}, anywhere: map[string][]string{}}
+	read := func(name string) {
 		body, err := fs.ReadFile(fsys, name)
 		if err != nil {
-			return nil
+			return
 		}
 		dir := path.Dir(name)
 		for _, line := range strings.Split(string(body), "\n") {
@@ -609,27 +626,42 @@ func ignoredDirs(fsys fs.FS) map[string]bool {
 			if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "!") {
 				continue
 			}
-			entry := strings.Trim(line, "/")
-			// A directory whose own .gitignore excludes everything in it is not
-			// part of the repository, and `*` is how that is written. It is the
-			// form .remember/ uses, so honouring only named entries left the
-			// agent memory beside this checkout indexed as though it were lit.
-			if (entry == "*" || entry == "**") && dir != "." {
-				out[dir] = true
+			if (line == "*" || line == "**") && dir != "." {
+				ig.anchored[dir] = true
 				continue
 			}
+			entry := strings.Trim(line, "/")
 			if entry == "" || strings.ContainsAny(entry, "*?[") {
 				continue
 			}
-			if dir == "." {
-				out[entry] = true
-			} else {
-				out[path.Join(dir, entry)] = true
+			if strings.HasPrefix(line, "/") || strings.Contains(entry, "/") {
+				if dir == "." {
+					ig.anchored[entry] = true
+				} else {
+					ig.anchored[path.Join(dir, entry)] = true
+				}
+				continue
 			}
+			ig.anywhere[entry] = append(ig.anywhere[entry], dir)
+		}
+	}
+	read(".gitignore")
+	_ = fs.WalkDir(fsys, ".", func(name string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if name != "." && (path.Base(name) == ".git" || ig.skip(name)) {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if name != ".gitignore" && path.Base(name) == ".gitignore" {
+			read(name)
 		}
 		return nil
 	})
-	return out
+	return ig
 }
 
 // declarations maps every identifier a Go file declares to the lines it
@@ -718,6 +750,17 @@ func declarations(name string, body []byte) map[string][]extent {
 					put(id, f, f.Doc)
 				}
 			}
+		case *ast.InterfaceType:
+			// An interface's methods are declared by the file as much as a
+			// struct's fields are, and chapter 02's storage-contract inventory
+			// is built almost entirely out of citing them. Without this they
+			// are Unbound — counted into the share the documents call
+			// unjudgeable, and left out of the manifest the gate protects.
+			for _, m := range d.Methods.List {
+				for _, id := range m.Names {
+					put(id, m, m.Doc)
+				}
+			}
 		}
 		return true
 	})
@@ -803,14 +846,27 @@ func (t *Tree) check(c Citation) Finding {
 		f.Verdict, f.Lines = OutOfRange, n
 		return f
 	}
+	// The best answer among the symbols the sentence offers, not the first one
+	// that happens to be declared here.
+	//
+	// Nearby is ambiguous by construction — a sentence naming two identifiers
+	// gives no syntactic sign which the citation is about — so returning on the
+	// first match makes the verdict depend on word order. Adding a second
+	// backticked name to a sentence, which is exactly what CONTRIBUTING now
+	// asks authors to do, then rebinds a holding citation and fails the gate
+	// claiming a declaration moved, with no code changed and both halves of the
+	// message false. A citation consistent with any symbol its sentence names
+	// is consistent with the sentence. [LAW:dataflow-not-control-flow]
 	decls := t.decls[file]
+	bound := false
 	for _, name := range c.Nearby {
 		extents, declared := decls[name]
 		if !declared {
 			continue
 		}
-		f.Symbol, f.Declared = name, nearest(extents, c.Span)
-		f.Verdict = Moved
+		cand := f
+		cand.Symbol, cand.Declared = name, nearest(extents, c.Span)
+		cand.Verdict = Moved
 		// Two conventions, both legitimate, and a citation satisfying either is
 		// about the symbol its sentence names. A chapter cites the declaration
 		// — the span overlaps its extent — or it cites a passage that uses the
@@ -823,15 +879,19 @@ func (t *Tree) check(c Citation) Finding {
 		// this corpus — an earlier endpoint checker flagged 33 citations of
 		// which nearly all were legitimate — and a gate crying wolf at that
 		// rate is read once and then ignored.
-		// Any of them. A file can declare one name several times — 52 names in
-		// this tree do, and `Error` nine times in internal/cli/errors.go, once
-		// per error type — so "the declaration of Error in this file" is not a
-		// thing that exists. Keeping only the first made every citation of the
-		// other eight read as drift, pointing the reader at an unrelated type's
-		// method.
+		//
+		// Any declaration of the name, because a file declares one name once
+		// per method carrying it — `Error` nine times in internal/cli/errors.go
+		// — so "the declaration of Error in this file" names nothing.
 		if overlapsAny(extents, c.Span) || t.names(file, c.Span, name) {
-			f.Verdict = Holds
+			cand.Verdict = Holds
+			return cand
 		}
+		if !bound {
+			f, bound = cand, true
+		}
+	}
+	if bound {
 		return f
 	}
 	f.Verdict = Unbound

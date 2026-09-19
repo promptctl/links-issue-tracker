@@ -265,12 +265,12 @@ written, of 9,813 citations:
 
 | | share | |
 |---|---|---|
-| resolve to the symbol their sentence names | 18.9% | 1,851 |
-| point somewhere else, or at a missing file or past its end | 35.0% | 3,435 |
-| name no symbol in the cited file, so nothing can judge them | 46.1% | 4,527 |
+| resolve to the symbol their sentence names | 20.2% | 1,980 |
+| point somewhere else, or at a missing file or past its end | 34.3% | 3,363 |
+| name no symbol in the cited file, so nothing can judge them | 45.6% | 4,470 |
 
-Among the 3,069 whose sentence names a symbol the cited file declares — the
-ones a checker can judge either way — **39.7% are wrong**, and every CI check
+Among the 3,126 whose sentence names a symbol the cited file declares — the
+ones a checker can judge either way — **36.7% are wrong**, and every CI check
 was green over all of them. A further 1,954 name a file this tree cannot
 identify at all, almost always a bare basename no chapter ever qualifies:
 several packages hold a `sync.go`, so `` `sync.go:20` `` under prose that never
@@ -286,11 +286,12 @@ generated, and a gate (`go test ./internal/doccites/`, which runs as part of
 `go test ./...`) fails naming each entry that stopped resolving and where the
 symbol went.
 
-It is baselined rather than absolute, because a corpus already wrong in two of
-every five citations it can judge cannot be held to "every citation resolves":
+It is baselined rather than absolute, because a corpus already wrong in more
+than a third of the citations it can judge cannot be held to "every citation
+resolves":
 that fails on the first run and is switched off within a week. It is held to
 "every citation that resolved still resolves" — the bleeding, not the wound.
-Repairing the existing 3,435 is separate work, and deliberately not done by a
+Repairing the existing 3,363 is separate work, and deliberately not done by a
 sweep: a citation that
 was already wrong gets re-derived into a fresh wrong number, producing a large
 diff that reads like a repair while fixing nothing.

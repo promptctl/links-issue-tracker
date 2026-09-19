@@ -15,13 +15,13 @@ const repoRoot = "../.."
 // TestCitationsStillResolve is the gate this package exists to be.
 //
 // The specification points at source by line number and nothing kept those
-// numbers true: measured when this gate was written, 39.7% of the citations
+// numbers true: measured when this gate was written, 36.7% of the citations
 // that can be checked at all pointed somewhere other than the thing their
 // sentence names, and all eleven CI checks were green over every one of them.
 //
 // The gate is one-directional and baselined, because a corpus that is already
-// wrong in two of every five citations it can judge cannot be held to "every
-// citation resolves" — that fails on the first run and is switched off. It is held to
+// wrong in more than a third of the citations it can judge cannot be held to
+// "every citation resolves" — that fails on the first run and is switched off. It is held to
 // "every citation that resolved still resolves", which is the bleeding rather
 // than the wound.
 //
@@ -441,12 +441,131 @@ func TestExplainDescribesTheEntryItWasGiven(t *testing.T) {
 	drifted := Finding{Citation: cite, Verdict: Moved, Symbol: "Beta", Declared: 91, File: "a.go"}
 	drifted.DocLine = 20
 
-	h := Held{Doc: "d.md", Text: "`a.go:3`", Span: Span{Start: 3, End: 3}, Symbol: "Beta"}
+	h := Held{Doc: "d.md", Text: "`a.go:3`", File: "a.go", Span: Span{Start: 3, End: 3}, Symbol: "Beta"}
 	got := Explain(h, []Finding{steady, drifted})
 	if !strings.Contains(got, "no longer brackets") || !strings.Contains(got, "Beta") {
 		t.Fatalf("the message should describe Beta's drift, got %q", got)
 	}
 	if strings.Contains(got, "Alpha") {
 		t.Fatalf("the message describes the untouched sibling: %q", got)
+	}
+}
+
+// Nearby is ambiguous by construction, so a citation consistent with any symbol
+// its sentence names is consistent with the sentence. Returning on the first
+// declared name made the verdict depend on word order: adding a second
+// backticked identifier to a sentence — what CONTRIBUTING asks authors to do —
+// rebound a holding citation and failed the gate with no code changed.
+func TestASecondNamedSymbolDoesNotUnbindAHoldingCitation(t *testing.T) {
+	src := "package a\n\ntype Thing struct{}\n\nfunc Helper() {\n}\n"
+	docs := []string{
+		"`Thing` is the unit (`internal/a/a.go:3`).\n",
+		"`Thing` is the unit, built by `Helper` (`internal/a/a.go:3`).\n",
+		"`Helper` builds the unit `Thing` (`internal/a/a.go:3`).\n",
+	}
+	for _, doc := range docs {
+		fsys := fstest.MapFS{
+			"doc-v1-total/x.md": &fstest.MapFile{Data: []byte(doc)},
+			"internal/a/a.go":   &fstest.MapFile{Data: []byte(src)},
+		}
+		if got := verdictOf(t, fsys); got != Holds {
+			t.Errorf("%q should hold, got %s", doc, got)
+		}
+	}
+}
+
+// An interface's methods are declarations of the file that declares the
+// interface. The cited line is the method, which does name it, so this pins
+// that the method is reachable at all rather than which arm carries it.
+func TestAnInterfaceMethodIsADeclaration(t *testing.T) {
+	src := "package a\n\ntype Store interface {\n\tApply(x int) error\n}\n"
+	fsys := fstest.MapFS{
+		"doc-v1-total/x.md": &fstest.MapFile{Data: []byte("`Apply` is on the interface (`internal/a/a.go:4`).\n")},
+		"internal/a/a.go":   &fstest.MapFile{Data: []byte(src)},
+	}
+	if got := verdictOf(t, fsys); got != Holds {
+		t.Fatalf("an interface method should bind, got %s", got)
+	}
+}
+
+// A slash-free .gitignore entry applies at any depth, the way git reads it.
+// Anchoring it to the root left this tree's tools/session-analysis/__pycache__
+// indexed while the root ignored `__pycache__/`.
+func TestASlashFreeIgnoreEntryAppliesAtAnyDepth(t *testing.T) {
+	fsys := fstest.MapFS{
+		".gitignore":               &fstest.MapFile{Data: []byte("junk/\n")},
+		"doc-v1-total/x.md":        &fstest.MapFile{Data: []byte("`Thing` lives here (`a/dup.go:3`).\n")},
+		"internal/a/dup.go":        &fstest.MapFile{Data: []byte("package a\n\ntype Thing struct{}\n")},
+		"tools/deep/junk/a/dup.go": &fstest.MapFile{Data: []byte("package a\n\ntype Thing struct{}\n")},
+	}
+	if got := verdictOf(t, fsys); got != Holds {
+		t.Fatalf("a nested ignored directory must not make the tail ambiguous, got %s", got)
+	}
+}
+
+// An ignored file is as much outside the repository as an ignored directory.
+// Reading them anyway line-counted the multi-megabyte binary the root
+// .gitignore exists to keep out, on every run.
+func TestAnIgnoredFileIsNotIndexed(t *testing.T) {
+	fsys := fstest.MapFS{
+		".gitignore":        &fstest.MapFile{Data: []byte("/lit\n")},
+		"doc-v1-total/x.md": &fstest.MapFile{Data: []byte("`Thing` is here (`internal/a/a.go:3`).\n")},
+		"internal/a/a.go":   &fstest.MapFile{Data: []byte("package a\n\ntype Thing struct{}\n")},
+		"lit":               &fstest.MapFile{Data: []byte("binary\n")},
+	}
+	tree, err := Index(fsys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, indexed := tree.lines["lit"]; indexed {
+		t.Fatal("an ignored file was read and line-counted")
+	}
+}
+
+// Explain must not pair the symbol an entry recorded with the line some other
+// symbol is declared on. On the fall-back pass those describe different things,
+// and the message named a line where the recorded symbol does not appear.
+func TestExplainDoesNotPairARecordedSymbolWithAnotherSymbolsLine(t *testing.T) {
+	cite := Citation{Doc: "d.md", Text: "`a.go:3`", Span: Span{Start: 3, End: 3}}
+	rebound := Finding{Citation: cite, Verdict: Moved, Symbol: "Priorities", Declared: 21, File: "a.go"}
+	rebound.DocLine = 7
+
+	h := Held{Doc: "d.md", Text: "`a.go:3`", File: "a.go", Span: Span{Start: 3, End: 3}, Symbol: "priorityEntry"}
+	got := Explain(h, []Finding{rebound})
+	if strings.Contains(got, "`priorityEntry`, which is now at") {
+		t.Fatalf("the message claims priorityEntry moved to another symbol's line: %q", got)
+	}
+	if !strings.Contains(got, "priorityEntry") || !strings.Contains(got, "Priorities") {
+		t.Fatalf("the message should name both the recorded and the bound symbol: %q", got)
+	}
+}
+
+// One chapter can cite the same span text against two different files, because
+// only the qualified shape carries a path — a bare `:3` means whichever file
+// the prose last named. Doc, Text, Span and Symbol are then all identical and
+// the file is the only discriminator; without it the two collapse to one entry
+// and a holding one answers for a drifted one.
+//
+// Two blocks of one document, not two documents: two documents already differ
+// in Doc, so that fixture pins nothing about the file.
+func TestOneChapterCitingTwoFilesRecordsTwoEntries(t *testing.T) {
+	doc := "In `internal/a/a.go`, `Thing` is the unit (`:3`).\n" +
+		"\n" +
+		"In `internal/b/b.go`, `Thing` is the unit (`:3`).\n"
+	fsys := fstest.MapFS{
+		"doc-v1-total/x.md": &fstest.MapFile{Data: []byte(doc)},
+		"internal/a/a.go":   &fstest.MapFile{Data: []byte("package a\n\ntype Thing struct{}\n")},
+		"internal/b/b.go":   &fstest.MapFile{Data: []byte("package b\n\ntype Thing struct{}\n")},
+	}
+	findings, err := Survey(fsys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held := Holding(findings)
+	if len(held) != 2 {
+		t.Fatalf("two citations against two files should record two entries, got %d: %v", len(held), held)
+	}
+	if held[0].File == held[1].File {
+		t.Fatalf("both entries resolved to %s, so the fixture does not test the file", held[0].File)
 	}
 }

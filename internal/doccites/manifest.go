@@ -15,21 +15,27 @@ import (
 // every time a chapter gained a paragraph — noise in the exact place this gate
 // is asking to be believed.
 //
-// The span is part of the key, because the sentence is not unique. A comma
-// list yields one citation per span sharing one text, so `commit_lock.go:92,
-// 357-365` is two entries; keyed on the text alone they are one, and a holding
-// span answers for a drifted sibling. Same for a citation a chapter repeats.
-// The span is a line range in the cited file, so unlike a doc line it does not
-// move when the chapter is edited.
+// The span and the file are part of the key, because the sentence is not
+// unique. A comma list yields one citation per span sharing one text, so
+// `commit_lock.go:92, 357-365` is two entries; keyed on the text alone they are
+// one, and a holding span answers for a drifted sibling. Same for a citation a
+// chapter repeats. The span is a line range in the cited file, so unlike a doc
+// line it does not move when the chapter is edited.
+//
+// The file is there because 7,830 of the 9,813 citations carry no path of their
+// own — every shape but the qualified one: two chapters can both cite
+// `:125-128` for a String they resolved to different files, and the file is the
+// only thing that tells those two entries apart.
 type Held struct {
 	Doc    string
 	Text   string
+	File   string
 	Span   Span
 	Symbol string
 }
 
 func (h Held) String() string {
-	return fmt.Sprintf("%s %s (%s) → %s", h.Doc, h.Text, h.Span, h.Symbol)
+	return fmt.Sprintf("%s %s (%s:%s) → %s", h.Doc, h.Text, h.File, h.Span, h.Symbol)
 }
 
 // Holding reduces a survey to the citations that resolved, deduplicated and
@@ -38,7 +44,7 @@ func Holding(findings []Finding) []Held {
 	seen := map[Held]bool{}
 	for _, f := range findings {
 		if f.Verdict == Holds {
-			seen[Held{Doc: f.Doc, Text: f.Text, Span: f.Span, Symbol: f.Symbol}] = true
+			seen[Held{Doc: f.Doc, Text: f.Text, File: f.File, Span: f.Span, Symbol: f.Symbol}] = true
 		}
 	}
 	out := make([]Held, 0, len(seen))
@@ -51,6 +57,9 @@ func Holding(findings []Finding) []Held {
 		}
 		if out[i].Text != out[j].Text {
 			return out[i].Text < out[j].Text
+		}
+		if out[i].File != out[j].File {
+			return out[i].File < out[j].File
 		}
 		if out[i].Span != out[j].Span {
 			if out[i].Span.Start != out[j].Span.Start {
@@ -100,7 +109,7 @@ func Explain(h Held, findings []Finding) string {
 	// can match the sibling that never changed — and then explain the wrong one.
 	for _, pass := range []bool{true, false} {
 		for _, f := range findings {
-			if f.Doc != h.Doc || f.Text != h.Text || f.Span != h.Span {
+			if f.Doc != h.Doc || f.Text != h.Text || f.File != h.File || f.Span != h.Span {
 				continue
 			}
 			if pass && f.Symbol != h.Symbol {
@@ -111,6 +120,15 @@ func Explain(h Held, findings []Finding) string {
 				return fmt.Sprintf("%s:%d: %s now resolves to `%s`, where it recorded `%s` — one of the two is not what the sentence says",
 					f.Doc, f.DocLine, f.Text, f.Symbol, h.Symbol)
 			case Moved:
+				// f.Declared is where f.Symbol is, which on the second pass is
+				// not the symbol this entry recorded. Pairing the two printed
+				// "`priorityEntry` is now at :21" naming a line where some
+				// other identifier lives — the fabricated instruction this
+				// function exists to avoid giving.
+				if f.Symbol != h.Symbol {
+					return fmt.Sprintf("%s:%d: %s no longer names `%s`; it now binds `%s`, declared at %s:%d — restore the symbol or repoint the citation",
+						f.Doc, f.DocLine, f.Text, h.Symbol, f.Symbol, f.File, f.Declared)
+				}
 				return fmt.Sprintf("%s:%d: %s no longer brackets `%s`, which is now at %s:%d — repoint the citation",
 					f.Doc, f.DocLine, f.Text, h.Symbol, f.File, f.Declared)
 			case OutOfRange:
@@ -140,8 +158,8 @@ func Render(held []Held) string {
 	b.WriteString("// at code that is no longer what it describes.\n")
 	b.WriteString("var Manifest = []Held{\n")
 	for _, h := range held {
-		fmt.Fprintf(&b, "\t{Doc: %q, Text: %q, Span: Span{Start: %d, End: %d}, Symbol: %q},\n",
-			h.Doc, h.Text, h.Span.Start, h.Span.End, h.Symbol)
+		fmt.Fprintf(&b, "\t{Doc: %q, Text: %q, File: %q, Span: Span{Start: %d, End: %d}, Symbol: %q},\n",
+			h.Doc, h.Text, h.File, h.Span.Start, h.Span.End, h.Symbol)
 	}
 	b.WriteString("}\n")
 	return b.String()
