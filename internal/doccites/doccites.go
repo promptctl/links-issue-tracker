@@ -324,7 +324,6 @@ func resolveWritten(written string, at int, seen []mention) string {
 		if written == "" || path.Base(m.path) == written {
 			last = m.path
 		}
-
 	}
 	if last == "" {
 		return written
@@ -602,12 +601,17 @@ func declarations(name string, body []byte) map[string]extent {
 
 // resolve turns the path a sentence wrote into a path in the tree.
 //
-// Two spellings reach here, because the abbreviated ones were resolved against
-// the prose before Check ever sees them. A repository-relative path is already
-// the answer. An absolute one is not portable — the inventories were written
-// with one machine's checkout baked in, so thousands of citations name a
-// directory that exists on exactly one computer — and the longest suffix that
-// is a real file recovers it anywhere.
+// A repository-relative path is already the answer. An absolute one is not
+// portable: eight inventories were written with one machine's checkout baked
+// in, and because the abbreviations under them inherit that prefix, 167
+// citations name a directory that exists on exactly one computer. The longest
+// suffix that is a real file recovers them anywhere. A partial path —
+// `storage/sync.go` — is the mirror case, missing leading components rather
+// than carrying extra ones, and is matched against the tail of each real path.
+//
+// A basename the specification never qualifies anywhere also reaches here and
+// resolves to nothing, which is the honest answer: the prose does not say which
+// file it means.
 //
 // There is deliberately no "unique file of that name in the tree" fallback. It
 // makes the verdict depend on what is lying beside the checkout rather than on
@@ -625,10 +629,7 @@ func (t *Tree) resolve(named string) (string, bool) {
 			return strings.Join(parts[i:], "/"), true
 		}
 	}
-	// A partial path — `storage/sync.go` for internal/storage/sync.go — is the
-	// mirror case: it is missing leading components rather than carrying extra
-	// ones, so it is matched against the tail of each real path. Two files
-	// sharing a tail leave it unresolved rather than picking one.
+	// Two files sharing a tail leave it unresolved rather than picking one.
 	if cands := t.suffix[strings.TrimPrefix(named, "/")]; len(cands) == 1 {
 		return cands[0], true
 	}
