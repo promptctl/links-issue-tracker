@@ -80,8 +80,20 @@ func TestIDBatchesDropsRepeatsAcrossBatchBoundaries(t *testing.T) {
 	if len(flat) != idBatchSize+2 {
 		t.Fatalf("batches carry %d ids, want the %d distinct ones", len(flat), idBatchSize+2)
 	}
-	if !slices.IsSorted(flat) {
-		t.Fatalf("batches are %v, want first-appearance order preserved", flat)
+	// Compared against the order the ids first appear in, not against sorted
+	// order. The fixture is generated ascending, so the two coincide here and a
+	// sortedness check would pass an idBatches that sorted its output -- which
+	// is the one plausible way the documented order could actually break.
+	seenOrder := make([]string, 0, len(flat))
+	already := map[string]bool{}
+	for _, id := range ids {
+		if !already[id] {
+			already[id] = true
+			seenOrder = append(seenOrder, id)
+		}
+	}
+	if !slices.Equal(flat, seenOrder) {
+		t.Fatalf("batches are %v, want %v — first-appearance order", flat, seenOrder)
 	}
 }
 

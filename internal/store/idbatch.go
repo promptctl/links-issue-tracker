@@ -13,13 +13,42 @@ package store
 // Splitting the same ids into fixed batches makes the total O(N*K) for a
 // constant K, which is linear in N, bought with one round trip per batch.
 //
-// On the value of K, only the upper end is measured. Sweeping the 590-row
-// gather, 256 and 512 are clearly worse than the rest (1.17s and 1.45s against
-// ~0.96s in the same run), which is the quadratic term still being felt. Every
-// value from 16 to 128 came out within the noise of the machine, and no
-// instrument here separated them — so 64 is a mid-range pick inside the flat
-// region rather than a tuned optimum, and anyone re-tuning it should get a
-// quiet machine first and expect to be choosing between roughly equal options.
+// The two terms pull opposite ways, so the total is N*fixed/K + c*N*K: a curve
+// with a real minimum, not a threshold past which things are fine.
+//
+// Measured on the 590-row gather — nine values of K, five rounds, the order
+// reshuffled every round so drift in machine load cannot alias onto K, and the
+// per-K minimum taken because contention only ever adds time. Fitting
+// B + A/K + C*K to those minima puts the optimum at K=13.6, with a worst
+// residual of 5.2ms across values spanning 121ms to 595ms:
+//
+//	K      8     16     20     24     32     64    128    256    512
+//	ms 130.8  121.5  122.6  125.1  130.9  162.8  228.7  353.1  594.7
+//
+// 16 is the measured best; 8 through 32 all sit within 8% of it, and outside
+// that the right arm climbs fast — +34% at 64, +88% at 128, +389% at 512.
+//
+// 16 rather than the fitted 13.6, for three reasons that agree. It is the
+// value actually measured lowest. A power of two folds (len(ids)+K-1)/K into
+// a shift, where 20 or 24 emits a division. And it sits just above the
+// optimum rather than below, which is the side to err on: every id-keyed read
+// that starts batching later adds to A, and K* = sqrt(A/C) moves up with it.
+//
+// 13.6 is in fact a floor on the true optimum rather than an estimate of it,
+// because the fixture holds one epic. lifecycleChildrenByEpicIDs batches epic
+// ids, so it saw N=1 — one batch at every K — and contributed nothing to
+// either term. Its query is the most expensive of the four per round trip, a
+// three-way join with a compound WHERE and a two-column ORDER BY, so a real
+// backlog with many epics adds to A more than to C and moves K* up again.
+// Being above 13.6 is what makes that harmless.
+//
+// Two caveats on the numbers themselves. They are one machine, which is why
+// the estimator is the minimum and why the spreads matter more than the
+// levels: individual samples ran up to 1.62x apart under load, while the fit
+// over the per-K minima holds to a 5.2ms worst residual across values
+// spanning 121ms to 595ms. And the sweep makes this a var to set K per round,
+// so it measures a division where the const folds to a shift. Both move the
+// level, not the location, and it is the location that chose 16.
 //
 // [LAW:one-source-of-truth] The id-keyed reads that batch share this number, so
 // two call sites cannot drift into different ideas of what "too many" means.
@@ -27,14 +56,20 @@ package store
 // relation endpoint queries, the label load under hydrateIssues, and the
 // lifecycle children query.
 //
-// Two id-keyed `IN` lists are deliberately left unbatched, and neither is a
-// loop away from it. ListIssues takes its id filter as one clause among several
-// in a query carrying its own ordering and limit, and the rank query's list
-// feeds an `ORDER BY ... LIMIT 1` whose answer is not the concatenation of its
-// batches' answers. Splitting either changes what the query means rather than
-// how many round trips it takes, so both want their own reasoning and are
-// recorded on links-perf-kw6z.2 instead of being swept in here.
-const idBatchSize = 64
+// Not every id-keyed `IN` list can follow, and the condition is narrower than
+// having one. Batching is sound only where the query's answer is the
+// concatenation of its batches' answers. A `NOT IN` exclusion inverts under
+// splitting -- each batch returns the very rows the others meant to exclude --
+// which rules out both of ranking.go's frame queries. An `IN` that is one
+// clause among several under an EXISTS, or under an `ORDER BY ... LIMIT`,
+// answers a question its batches cannot be recombined into, which rules out
+// ListIssues' id and parent filters and the rank lookup. requireIssues is the
+// one that would batch cleanly and does not; it is a validation lookup off
+// this path.
+//
+// Only the gather's path was audited, and nothing fails the build when a new
+// unbounded id list is added. Both are recorded on links-perf-kw6z.2.
+const idBatchSize = 16
 
 // idBatches splits ids into consecutive batches of at most idBatchSize,
 // preserving the order of their first appearance and dropping repeats.
