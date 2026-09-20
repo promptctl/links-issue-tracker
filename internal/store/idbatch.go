@@ -31,6 +31,16 @@ const idBatchSize = 64
 // An empty input yields no batches rather than one empty batch, so a caller's
 // loop body never runs on nothing and no caller needs its own emptiness guard
 // to avoid building `IN ()`. [LAW:no-defensive-null-guards]
+//
+// Splitting one statement into several gives up whatever consistency the single
+// statement had: a writer landing between batch k and k+1 leaves the result
+// carrying some subjects as they stood before the write and others as they
+// stood after, and nothing errors. That window is widened here rather than
+// opened. The reads this serves were already several statements — the relation
+// gather runs a src_id query, a dst_id query, and a separate issue lookup, with
+// no transaction over them — so no caller had a snapshot to lose. Restoring one
+// means a read transaction spanning all three, not the batch loop alone, which
+// is why it is not attempted here. Tracked as links-scale-6iiv.
 func idBatches(ids []string) [][]string {
 	if len(ids) == 0 {
 		return nil
