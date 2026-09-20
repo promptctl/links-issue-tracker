@@ -2339,12 +2339,56 @@ func (s *Store) hydrateIssues(ctx context.Context, rows []issueRow) ([]model.Iss
 
 func (s *Store) lifecycleChildrenByEpicIDs(ctx context.Context, epicIDs []string) (map[string][]model.Issue, error) {
 	out := make(map[string][]model.Issue, len(epicIDs))
-	if len(epicIDs) == 0 {
-		return out, nil
+
+	// [LAW:dataflow-not-control-flow] Hydrate every epic's children in a single
+	// pass rather than once per epic. A parallel parentID slice carries the epic
+	// each child row belongs to, so the per-recursion-level query count is fixed
+	// regardless of how many epics are open instead of scaling as one label query
+	// plus one child-relation query per epic. hydrateIssues preserves input order
+	// and the SELECT groups children by epic (dst_id) then item_rank, so
+	// re-bucketing the hydrated result by parentID reproduces the identical
+	// per-epic, rank-ordered grouping the per-epic loop produced.
+	//
+	// Batching the epic ids does not disturb that ordering: an epic falls in
+	// exactly one batch, so its children are still produced consecutively and in
+	// item_rank order by a single query, and the concatenation only interleaves
+	// whole epics, which the re-bucketing discards anyway.
+	//
+	// It does change the count, and the sentence above is about fan-out rather
+	// than about a constant. One query per batch is ceil(N/idBatchSize), which
+	// grows with the epic count where the single clause did not -- but it is the
+	// per-epic query fan-out this pass exists to prevent that stays gone, and
+	// the cap is what keeps the clause it replaces from costing more in planning
+	// than the extra round trips cost to make. See idbatch.go.
+	childRows := make([]issueRow, 0)
+	parentIDs := make([]string, 0)
+	for _, batch := range idBatches(epicIDs) {
+		batchRows, batchParents, err := s.scanLifecycleChildRows(ctx, batch)
+		if err != nil {
+			return nil, err
+		}
+		childRows = append(childRows, batchRows...)
+		parentIDs = append(parentIDs, batchParents...)
 	}
-	placeholders := make([]string, 0, len(epicIDs))
-	args := make([]any, 0, len(epicIDs))
-	for _, epicID := range epicIDs {
+	hydrated, err := s.hydrateIssues(ctx, childRows)
+	if err != nil {
+		return nil, err
+	}
+	for i, issue := range hydrated {
+		out[parentIDs[i]] = append(out[parentIDs[i]], issue)
+	}
+	return out, nil
+}
+
+// scanLifecycleChildRows runs one batch of the children query and reads its
+// rows, returning each child beside the epic it hangs from.
+//
+// Separate from the batching above so that closing the rows stays tied to the
+// one query that opened them, however many queries the epic set turns into.
+func (s *Store) scanLifecycleChildRows(ctx context.Context, batch []string) ([]issueRow, []string, error) {
+	placeholders := make([]string, 0, len(batch))
+	args := make([]any, 0, len(batch))
+	for _, epicID := range batch {
 		placeholders = append(placeholders, "?")
 		args = append(args, epicID)
 	}
@@ -2363,61 +2407,61 @@ func (s *Store) lifecycleChildrenByEpicIDs(ctx context.Context, epicIDs []string
 			AND (p.archived_at IS NOT NULL OR p.deleted_at IS NOT NULL OR (i.archived_at IS NULL AND i.deleted_at IS NULL))
 		ORDER BY r.dst_id ASC, i.item_rank ASC`, args...)
 	if err != nil {
-		return nil, fmt.Errorf("load lifecycle children: %w", err)
+		return nil, nil, fmt.Errorf("load lifecycle children: %w", err)
 	}
 	defer rows.Close()
-	// [LAW:dataflow-not-control-flow] Hydrate every epic's children in a single
-	// pass rather than once per epic. A parallel parentID slice carries the epic
-	// each child row belongs to, so the per-recursion-level query count is fixed
-	// regardless of how many epics are open instead of scaling as one label query
-	// plus one child-relation query per epic. hydrateIssues preserves input order
-	// and the SELECT groups children by epic (dst_id) then item_rank, so
-	// re-bucketing the hydrated result by parentID reproduces the identical
-	// per-epic, rank-ordered grouping the per-epic loop produced.
-	childRows := make([]issueRow, 0)
-	parentIDs := make([]string, 0)
+	childRows := make([]issueRow, 0, len(batch))
+	parentIDs := make([]string, 0, len(batch))
 	for rows.Next() {
 		parentID, child, err := scanIssueWithParent(rows)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		childRows = append(childRows, child)
 		parentIDs = append(parentIDs, parentID)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	hydrated, err := s.hydrateIssues(ctx, childRows)
-	if err != nil {
-		return nil, err
-	}
-	for i, issue := range hydrated {
-		out[parentIDs[i]] = append(out[parentIDs[i]], issue)
+	return childRows, parentIDs, nil
+}
+
+func (s *Store) loadLabelsByIssueIDs(ctx context.Context, issueIDs []string) (map[string][]string, error) {
+	out := map[string][]string{}
+	for _, batch := range idBatches(issueIDs) {
+		if err := s.scanLabelRows(ctx, batch, out); err != nil {
+			return nil, err
+		}
 	}
 	return out, nil
 }
 
-func (s *Store) loadLabelsByIssueIDs(ctx context.Context, issueIDs []string) (map[string][]string, error) {
-	placeholders := make([]string, 0, len(issueIDs))
-	args := make([]any, 0, len(issueIDs))
-	for _, issueID := range issueIDs {
+// scanLabelRows reads one batch's label rows into out.
+//
+// Accumulating into the caller's map rather than returning one per batch keeps
+// closing the rows tied to the single query that opened them, and an id falls
+// in exactly one batch, so each issue's labels are appended by one query and
+// keep the ORDER BY's ordering. [LAW:one-source-of-truth]
+func (s *Store) scanLabelRows(ctx context.Context, batch []string, out map[string][]string) error {
+	placeholders := make([]string, 0, len(batch))
+	args := make([]any, 0, len(batch))
+	for _, issueID := range batch {
 		placeholders = append(placeholders, "?")
 		args = append(args, issueID)
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT issue_id, label FROM labels WHERE issue_id IN (`+strings.Join(placeholders, ", ")+`) ORDER BY label ASC`, args...)
 	if err != nil {
-		return nil, fmt.Errorf("load labels by issue ids: %w", err)
+		return fmt.Errorf("load labels by issue ids: %w", err)
 	}
 	defer rows.Close()
-	out := map[string][]string{}
 	for rows.Next() {
 		var issueID, label string
 		if err := rows.Scan(&issueID, &label); err != nil {
-			return nil, err
+			return err
 		}
 		out[issueID] = append(out[issueID], label)
 	}
-	return out, rows.Err()
+	return rows.Err()
 }
 
 func nullableTime(value *time.Time) any {

@@ -21,12 +21,33 @@ package store
 // region rather than a tuned optimum, and anyone re-tuning it should get a
 // quiet machine first and expect to be choosing between roughly equal options.
 //
-// [LAW:one-source-of-truth] Every id-keyed batch read shares this number, so
+// [LAW:one-source-of-truth] The id-keyed reads that batch share this number, so
 // two call sites cannot drift into different ideas of what "too many" means.
+// Those are the four on the workable gather's path: the issue lookup, both
+// relation endpoint queries, the label load under hydrateIssues, and the
+// lifecycle children query.
+//
+// Two id-keyed `IN` lists are deliberately left unbatched, and neither is a
+// loop away from it. ListIssues takes its id filter as one clause among several
+// in a query carrying its own ordering and limit, and the rank query's list
+// feeds an `ORDER BY ... LIMIT 1` whose answer is not the concatenation of its
+// batches' answers. Splitting either changes what the query means rather than
+// how many round trips it takes, so both want their own reasoning and are
+// recorded on links-perf-kw6z.2 instead of being swept in here.
 const idBatchSize = 64
 
 // idBatches splits ids into consecutive batches of at most idBatchSize,
-// preserving order.
+// preserving the order of their first appearance and dropping repeats.
+//
+// The dedupe is what keeps batching behaviour-preserving, and it belongs here
+// rather than in each caller. `IN (a, ..., a)` answers once however many times
+// a is written, so the single clause this replaces was indifferent to repeats;
+// batches are not, and two copies of one id falling either side of a boundary
+// come back as two rows. Downstream that is not an error anywhere — labels
+// accumulate into a shared map and would list the same label twice, and a
+// container would compose a doubled child list and report one child of two
+// done. Deduping here means no caller can be written that has that bug.
+// [LAW:parse-dont-validate]
 //
 // An empty input yields no batches rather than one empty batch, so a caller's
 // loop body never runs on nothing and no caller needs its own emptiness guard
@@ -42,12 +63,13 @@ const idBatchSize = 64
 // means a read transaction spanning all three, not the batch loop alone, which
 // is why it is not attempted here. Tracked as links-scale-6iiv.
 func idBatches(ids []string) [][]string {
-	if len(ids) == 0 {
+	unique := dedupeStrings(ids)
+	if len(unique) == 0 {
 		return nil
 	}
-	batches := make([][]string, 0, (len(ids)+idBatchSize-1)/idBatchSize)
-	for start := 0; start < len(ids); start += idBatchSize {
-		batches = append(batches, ids[start:min(start+idBatchSize, len(ids))])
+	batches := make([][]string, 0, (len(unique)+idBatchSize-1)/idBatchSize)
+	for start := 0; start < len(unique); start += idBatchSize {
+		batches = append(batches, unique[start:min(start+idBatchSize, len(unique))])
 	}
 	return batches
 }

@@ -42,6 +42,49 @@ func TestIDBatchesPartitionTheInput(t *testing.T) {
 	}
 }
 
+// idBatches drops repeats, because the `IN` clause it replaces did.
+//
+// A repeated id is harmless in one clause and not in several: the two copies
+// land in different batches, each batch answers, and the caller sees the row
+// twice. The repeats here are placed to straddle a boundary, since a pair
+// inside one batch would be collapsed by the query itself and would pass
+// whether or not idBatches deduped anything.
+func TestIDBatchesDropsRepeatsAcrossBatchBoundaries(t *testing.T) {
+	t.Parallel()
+
+	ids := make([]string, 0, 2*idBatchSize)
+	for i := range idBatchSize + 2 {
+		ids = append(ids, fmt.Sprintf("id-%03d", i))
+	}
+	// Re-state the first and the last, far enough apart to fall in different
+	// batches than their originals.
+	ids = append(ids, "id-000", fmt.Sprintf("id-%03d", idBatchSize+1))
+
+	var flat []string
+	for _, batch := range idBatches(ids) {
+		if len(batch) > idBatchSize {
+			t.Fatalf("batch of %d, over the cap of %d", len(batch), idBatchSize)
+		}
+		flat = append(flat, batch...)
+	}
+
+	seen := map[string]int{}
+	for _, id := range flat {
+		seen[id]++
+	}
+	for id, n := range seen {
+		if n != 1 {
+			t.Fatalf("id %s appears %d times across the batches, want once — the caller would read its rows %d times", id, n, n)
+		}
+	}
+	if len(flat) != idBatchSize+2 {
+		t.Fatalf("batches carry %d ids, want the %d distinct ones", len(flat), idBatchSize+2)
+	}
+	if !slices.IsSorted(flat) {
+		t.Fatalf("batches are %v, want first-appearance order preserved", flat)
+	}
+}
+
 // An id set larger than one batch must come back whole.
 //
 // This is the failure the batching can hide: a read that queries only the first

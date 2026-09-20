@@ -13,10 +13,16 @@ import (
 )
 
 // The listing hot path hydrates every open epic's children. The contract under
-// test is that the number of SQL round-trips it issues is fixed per recursion
-// level and does NOT scale with the number of open epics: a tree of one epic
-// and a tree of many epics of the same shape and depth must cost the identical
-// number of queries. (links-query-efficiency-988d.1)
+// test is that the number of SQL round-trips it issues does NOT scale per epic:
+// a tree of one epic and a tree of many epics of the same shape and depth must
+// cost the identical number of queries. (links-query-efficiency-988d.1)
+//
+// "Identical" holds up to idBatchSize epics, which is what the counts below
+// compare. Past that the id lists batch, so the count rises by one per
+// idBatchSize epics rather than staying flat -- a bound the unbatched clause
+// did not need but paid for in quadratic index-range planning instead. What
+// this test protects is the absence of per-epic fan-out, and that is unchanged:
+// the growth is in the cap, not in the epic count.
 //
 // This is observed behaviorally — real prepared statements are counted at the
 // driver boundary — rather than by asserting the shape of the Go code, so the
