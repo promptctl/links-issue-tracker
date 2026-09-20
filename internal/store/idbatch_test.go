@@ -53,10 +53,7 @@ func TestIDBatchesPartitionTheInput(t *testing.T) {
 // The three wired subjects sit in the first, a middle, and the final partial
 // batch of the id slice as it is passed, so the assertion fails if any batch
 // after the first is skipped, and fails if the last short one is dropped. Both
-// endpoint queries are covered, and they need separate subjects to be covered
-// by: the wired subjects are only ever a src, and upstream only ever a dst, so
-// the forward bundles answer for the src_id query's batching and upstream's
-// reverse bundle answers for the dst_id query's.
+// endpoint queries are covered, on those same subjects.
 func TestGetRelationsByIDsSpansEveryBatch(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -74,29 +71,37 @@ func TestGetRelationsByIDsSpansEveryBatch(t *testing.T) {
 		}
 		subjects = append(subjects, issue.ID)
 	}
-	upstream, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Upstream", Topic: "batch", IssueType: "task"})
+	// The two endpoint queries need edges that only one of them can see. Every
+	// edge here runs between a queried subject and a peer that is never queried,
+	// so a subject's edge to sink is reachable only through the src_id query and
+	// its edge from source only through the dst_id query. Hanging both on the
+	// same wired subjects checks each query across the first, a middle and the
+	// trailing partial batch at once.
+	//
+	// Wiring both directions to one shared peer instead would cover neither: if
+	// that peer were itself queried, whichever query reached it would return the
+	// whole edge set and answer for the other, and the first truncation aimed at
+	// either would pass.
+	sink, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Sink", Topic: "batch", IssueType: "task"})
 	if err != nil {
-		t.Fatalf("CreateIssue(upstream) error = %v", err)
+		t.Fatalf("CreateIssue(sink) error = %v", err)
+	}
+	source, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Source", Topic: "batch", IssueType: "task"})
+	if err != nil {
+		t.Fatalf("CreateIssue(source) error = %v", err)
 	}
 
 	// One subject per batch the slice spans: the first, one inside the second,
 	// and the last, which is in the trailing partial batch.
 	wired := []int{0, idBatchSize + 1, subjectCount - 1}
 	for _, i := range wired {
-		mustRelate(t, ctx, st, subjects[i], upstream.ID, "blocks")
+		mustRelate(t, ctx, st, subjects[i], sink.ID, "blocks")
+		mustRelate(t, ctx, st, source.ID, subjects[i], "blocks")
 	}
 
-	// upstream is queried last, so it lands in the trailing partial batch, and
-	// every edge reaching it arrives as a dst_id row, because no subject is ever
-	// a dst. Querying it is what makes the dst_id batching load-bearing: a read
-	// that stops short of upstream's batch returns an empty reverse bundle
-	// rather than a wrong one, which is the same silent shortfall the src side
-	// is checked for below.
-	queried := append(slices.Clone(subjects), upstream.ID)
-
-	rels, err := st.GetRelationsByIDs(ctx, queried)
+	rels, err := st.GetRelationsByIDs(ctx, subjects)
 	if err != nil {
-		t.Fatalf("GetRelationsByIDs(%d ids) error = %v", len(queried), err)
+		t.Fatalf("GetRelationsByIDs(%d ids) error = %v", len(subjects), err)
 	}
 
 	for _, i := range wired {
@@ -105,22 +110,11 @@ func TestGetRelationsByIDsSpansEveryBatch(t *testing.T) {
 		if !ok {
 			t.Fatalf("subject %d of %d (%s) is missing from the result: its batch was never queried", i, subjectCount, id)
 		}
-		if len(got.DependsOn) != 1 || got.DependsOn[0].ID != upstream.ID {
-			t.Fatalf("subject %d of %d (%s) DependsOn = %v, want [%s]", i, subjectCount, id, ids(got.DependsOn), upstream.ID)
+		if len(got.DependsOn) != 1 || got.DependsOn[0].ID != sink.ID {
+			t.Fatalf("subject %d of %d (%s) DependsOn = %v, want [%s] — a src_id batch went unqueried", i, subjectCount, id, ids(got.DependsOn), sink.ID)
 		}
-	}
-
-	// The same question from the other side: upstream is blocked by every wired
-	// subject, and that bundle is assembled entirely by the dst_id query, so it
-	// is only whole if that query reached the trailing batch upstream sits in.
-	blocked := ids(rels[upstream.ID].Blocks)
-	want := make([]string, 0, len(wired))
-	for _, i := range wired {
-		want = append(want, subjects[i])
-	}
-	slices.Sort(blocked)
-	slices.Sort(want)
-	if !slices.Equal(blocked, want) {
-		t.Fatalf("upstream Blocks = %v, want %v — a dst_id batch went unqueried", blocked, want)
+		if len(got.Blocks) != 1 || got.Blocks[0].ID != source.ID {
+			t.Fatalf("subject %d of %d (%s) Blocks = %v, want [%s] — a dst_id batch went unqueried", i, subjectCount, id, ids(got.Blocks), source.ID)
+		}
 	}
 }
