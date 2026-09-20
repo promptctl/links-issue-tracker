@@ -17,12 +17,12 @@ import (
 // exercised by the same builder helpers. Keeping a separate type clarifies
 // which command is under test in each call site.
 type backlogTestHarness struct {
-	t   *testing.T
+	t   testing.TB
 	ctx context.Context
 	ap  *app.App
 }
 
-func newBacklogTestHarness(t *testing.T) backlogTestHarness {
+func newBacklogTestHarness(t testing.TB) backlogTestHarness {
 	t.Helper()
 	return backlogTestHarness{
 		t:   t,
@@ -486,5 +486,17 @@ func TestRankInversionCountIsIndependentOfTheStoreSideNarrowings(t *testing.T) {
 	}
 	if got := rankInversionWarning(h.runBacklogText("--type", "task")); got != whole {
 		t.Fatalf("rank inversion warning differs by narrowing:\n  unnarrowed:   %q\n  --type task:  %q\nthe count describes the repo `lit doctor --fix` repairs, not the rows on screen", whole, got)
+	}
+
+	// The same narrowing carried to its limit: a view with no rows at all. The
+	// repair is still outstanding, so the warning is still true — but a
+	// renderer that reads "nothing to list" as "nothing to say" returns before
+	// it, and the repo-wide finding disappears behind a flag about the view.
+	empty := h.runBacklogText("--type", "epic")
+	if ids := issueIDsFromText(empty); len(ids) != 0 {
+		t.Fatalf("`lit backlog --type epic` listed %v, want no rows — the case needs an empty view to say anything; got:\n%s", ids, empty)
+	}
+	if got := rankInversionWarning(empty); got != whole {
+		t.Fatalf("rank inversion warning differs when the narrowing empties the view:\n  unnarrowed:   %q\n  --type epic:  %q\nno row survived to carry the loss, so nothing on screen contradicts the silence", whole, got)
 	}
 }

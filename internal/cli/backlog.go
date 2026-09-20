@@ -118,6 +118,13 @@ func (n focusNotice) emptyLine() string {
 // from the PREREQUISITE's row, one screen under a preamble still promising
 // "what closing it would unblock" (links-listing-85sd). Nothing on screen is
 // missing, so nothing prompts the reader to doubt it.
+//
+// A view narrowed to nothing is that same trap with no survivor to carry the
+// loss: the rows are gone, the repo's rank inversions are not. So the empty
+// message is a path-end that still falls through to the tail. An early return
+// here would read like a harmless shortcut past a loop with nothing to do, and
+// would in fact be a filter deciding whether a repo-wide warning is shown.
+// [LAW:dataflow-not-control-flow]
 func printBacklogOutput(w io.Writer, columns []columnSpec, issues []annotation.AnnotatedIssue, facts queueFacts, details map[string]storage.IssueRelations, cells map[string]derivedColumns, cc claimContext, notice focusNotice) error {
 	if _, err := fmt.Fprintln(w, backlogPreamble); err != nil {
 		return err
@@ -136,7 +143,6 @@ func printBacklogOutput(w io.Writer, columns []columnSpec, issues []annotation.A
 		if _, err := fmt.Fprintln(w, notice.emptyLine()); err != nil {
 			return err
 		}
-		return nil
 	}
 
 	now := time.Now()

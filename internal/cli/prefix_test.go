@@ -13,7 +13,7 @@ import (
 
 // testIssuePrefix mints a PrefixSpec for fixtures through the same validating
 // boundary production uses; fixtures cannot hold an un-normalized prefix.
-func testIssuePrefix(t *testing.T, raw string) workspace.PrefixSpec {
+func testIssuePrefix(t testing.TB, raw string) workspace.PrefixSpec {
 	t.Helper()
 	spec, err := workspace.ConfiguredPrefix(raw)
 	if err != nil {

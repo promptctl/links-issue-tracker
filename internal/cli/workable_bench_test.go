@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
@@ -23,7 +22,12 @@ import (
 // be EQUAL, and a filtered run that is much cheaper means a fact is being
 // derived from a narrowed set again (links-listing-85sd).
 func benchGather(b *testing.B, rows int, rf workableFilter) {
-	h := backlogTestHarness{t: &testing.T{}, ctx: context.Background(), ap: newTestCLIApp(&testing.T{})}
+	// The benchmark's own b, not a hand-built harness: newTestCLIApp registers
+	// the store's Close and the temp workspaces' removal as cleanups on what it
+	// is given, and a testing.T that the framework never ran fires none of them
+	// — every invocation would leak a dolt directory and an open store, and a
+	// setup Fatalf would Goexit without failing the benchmark.
+	h := newBacklogTestHarness(b)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "env", IssueType: "epic"})
 	gate := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Gate", Topic: "env", IssueType: "task"})
 	h.addDependency(epic, gate)

@@ -19,7 +19,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-func newTestCLIApp(t *testing.T) *app.App {
+func newTestCLIApp(t testing.TB) *app.App {
 	t.Helper()
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("LIT_CONFIG_GLOBAL_PATH", "")

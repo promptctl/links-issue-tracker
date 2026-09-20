@@ -28,6 +28,7 @@ var Manifest = []Held{
 	{Doc: "doc-v1-total/02-storage-contract.md", Text: "`contract.go:86-90`", File: "internal/storage/contract.go", Span: Span{Start: 86, End: 90}, Symbol: "Apply"},
 	{Doc: "doc-v1-total/02-storage-contract.md", Text: "`contract.go:96-120`", File: "internal/storage/contract.go", Span: Span{Start: 96, End: 120}, Symbol: "DeleteComment"},
 	{Doc: "doc-v1-total/02-storage-contract.md", Text: "`internal/storage/contract.go:231-247`", File: "internal/storage/contract.go", Span: Span{Start: 231, End: 247}, Symbol: "Store"},
+	{Doc: "doc-v1-total/02-storage-contract.md", Text: "`internal/storage/selects.go:84-88`", File: "internal/storage/selects.go", Span: Span{Start: 84, End: 88}, Symbol: "Selects"},
 	{Doc: "doc-v1-total/03-store-schema.md", Text: "`commit_lock.go:122-177`", File: "internal/store/commit_lock.go", Span: Span{Start: 122, End: 177}, Symbol: "withMutation"},
 	{Doc: "doc-v1-total/03-store-schema.md", Text: "`commit_lock.go:185-204, 250-259`", File: "internal/store/commit_lock.go", Span: Span{Start: 250, End: 259}, Symbol: "retryTransientGCContention"},
 	{Doc: "doc-v1-total/03-store-schema.md", Text: "`rank_repair.go:215-231`", File: "internal/store/rank_repair.go", Span: Span{Start: 215, End: 231}, Symbol: "invertedEdges"},
