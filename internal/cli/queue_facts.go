@@ -75,8 +75,11 @@ type workableGather struct {
 // are carried through unchanged, which is the whole point of deriving them
 // first. [LAW:one-source-of-truth]
 func (g workableGather) keepRows(criteria storage.IssueCriteria) workableGather {
-	rows := make([]annotation.AnnotatedIssue, 0, len(g.rows))
-	details := make(map[string]storage.IssueRelations, len(g.rows))
+	// Sized for what is kept rather than for what was gathered: hinting the
+	// queue's length would leave a filter that keeps ten of 590 rows holding a
+	// 590-slot array, which is the queue this says it released.
+	var rows []annotation.AnnotatedIssue
+	details := map[string]storage.IssueRelations{}
 	for _, row := range g.rows {
 		if criteria.Selects(row.Issue) {
 			rows = append(rows, row)

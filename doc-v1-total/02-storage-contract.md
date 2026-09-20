@@ -46,7 +46,7 @@ Semantics fixed by the memory engine and conformance:
 
 - Retention is the one axis whose default is a filter: a listing that says nothing sees only live issues.
 - The status *filter* matches the **derived** state (an epic's computed state) (`internal/storage/selects.go:109-119`); search is case-insensitive substring across exactly four fields — title, description, prompt, topic (`internal/storage/selects.go:138-149`); multiple search terms are conjunctive, and the AND across terms is applied by `Selects`, not by the per-term match (`internal/storage/selects.go:91-95`).
-- `Limit: 0` means uncapped; a positive limit truncates the head of the ordered result (`memory/list.go:102-110`).
+- `Limit: 0` means uncapped; a positive limit truncates the head of the ordered result (`memory/list.go:101-101`).
 
 ### Sort fields
 

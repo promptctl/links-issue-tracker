@@ -185,13 +185,13 @@ Constants (`exit.go:12-33`):
 20. `errors.Is(err, store.ErrTransientGCContention)` → 1 (`exit.go:166-168`)
 21. anything else → 1 (`exit.go:159`)
 
-Error types defined in `cli.go`: `MergeConflictError` (`cli.go:1897-1903`),
-`CorruptionError` (`cli.go:1905-1909`), `UsageError` (`cli.go:1913-1917`),
-`UnknownCommandError` — message `unknown command "<x>"` (`cli.go:1920-1924`),
-`ValidationError` (`cli.go:1927-1931`), `UnsupportedError` with a single `Message`
+Error types defined in `cli.go`: `MergeConflictError` (`cli.go:1920-1926`),
+`CorruptionError` (`cli.go:1928-1932`), `UsageError` (`cli.go:1936-1940`),
+`UnknownCommandError` — message `unknown command "<x>"` (`cli.go:1943-1947`),
+`ValidationError` (`cli.go:1950-1954`), `UnsupportedError` with a single `Message`
 field (`errors.go:52-56`), `RetiredCommandError` — message
-`the "<cmd>" command has been retired; <replacement>` (`cli.go:1946-1953`),
-`OutsideWorkspaceError` (`cli.go:1959-1963`). `BulkFailureError` in
+`the "<cmd>" command has been retired; <replacement>` (`cli.go:1969-1976`),
+`OutsideWorkspaceError` (`cli.go:1982-1986`). `BulkFailureError` in
 `bulk.go:48-58`.
 
 ### 1.9 Error output convention
@@ -237,17 +237,17 @@ Stdout stays the result channel.
   `CLAUDE_CODE_SESSION_ID` is non-empty (after trim), the identity is
   `"claude_" + sessionID`, **overriding any explicit value**; otherwise the
   trimmed explicit value.
-- `registerActor(fs)` (`cli.go:1209-1213`) declares a **hidden** `--by` string
+- `registerActor(fs)` (`cli.go:1232-1236`) declares a **hidden** `--by` string
   flag (default `""`, empty usage string) and returns a resolver closure. The raw
   flag value is never exposed; `--by` does not appear in help output
-  (`cli.go:1210-1211`).
+  (`cli.go:1233-1234`).
 - Empty actor is normalized by the store to `"unknown"`
   (`internal/store/store.go:1102-1105`).
-- `displayAssignee("")` renders `"(unassigned)"` (`cli.go:1217-1222`).
+- `displayAssignee("")` renders `"(unassigned)"` (`cli.go:1240-1245`).
 
-Commands that register `--by`: `update` (`cli.go:946`), every transition via
-`runTransition` (`cli.go:1363`), `comment add` (`cli.go:1475`), `import`
-(`cli.go:1547`), `dep add` (`dependency.go:28`), `label add`
+Commands that register `--by`: `update` (`cli.go:969`), every transition via
+`runTransition` (`cli.go:1386`), `comment add` (`cli.go:1498`), `import`
+(`cli.go:1570`), `dep add` (`dependency.go:28`), `label add`
 (`issue_relations.go:31`), `parent set` (`issue_relations.go:77`), `bulk label`
 (`bulk.go:108`), `bulk close` (`bulk.go:141`), `bulk archive` (`bulk.go:172`).
 `next` registers it too (`next.go:60`) and is the only read command that does:
@@ -261,22 +261,22 @@ by the same rule every writer resolves the actor.
 quickstart topic (`quickstart_topics.go:63-65`).
 
 Breadcrumbs are emitted by: `new` → `"new"` (`cli.go:365`), `followup` → `"new"`
-(`cli.go:437`), `update` → `"update"` (`cli.go:1039`), `rank` → `"update"`
-(`cli.go:1120`), `rank set` → `"update"` (`cli.go:1155`), `dep add`/`dep rm` →
+(`cli.go:437`), `update` → `"update"` (`cli.go:1062`), `rank` → `"update"`
+(`cli.go:1143`), `rank set` → `"update"` (`cli.go:1178`), `dep add`/`dep rm` →
 `"update"` (`dependency.go:65`, `dependency.go:90`), `label add`/`label rm` →
 `"update"` (`issue_relations.go:48`, `issue_relations.go:70`), `parent set`/
 `parent clear` → `"update"` (`issue_relations.go:103`, `issue_relations.go:121`),
 and transitions via the table below.
 
-`transitionBreadcrumbTopics` (`cli.go:1230-1234`): `start` → `"work"`,
+`transitionBreadcrumbTopics` (`cli.go:1253-1257`): `start` → `"work"`,
 `done` → `"done"`, `close` → `"done"`. Absent for `open`, `archive`,
-`unarchive`, `delete`, `restore` → no breadcrumb (`cli.go:1451-1454`).
+`unarchive`, `delete`, `restore` → no breadcrumb (`cli.go:1474-1477`).
 
 ### 1.13 Sync-staleness banners
 
 - Read commands print `printStalenessWarning(ctx, w, ws, store, now)` FIRST,
-  before their payload: `backlog` (`workable.go:185`), `next` (`next.go:72`),
-  `show` **only in full-detail mode** (`cli.go:922-926`) — deliberately suppressed
+  before their payload: `backlog` (`workable.go:187`), `next` (`next.go:72`),
+  `show` **only in full-detail mode** (`cli.go:945-949`) — deliberately suppressed
   under `--field` so the machine-parseable output isn't corrupted.
   Defined at `sync_staleness.go:191`.
 - Write commands get `printMutationSyncStalenessWarning(stdout, ws, now)` after
@@ -301,22 +301,22 @@ Occasion builders (`workflow_events.go`):
   action name (`:103-115`).
 
 Retention actions (archive/unarchive/delete/restore) are not `StatusAction`s and
-fire no event (`cli.go:1415-1419`).
+fire no event (`cli.go:1438-1442`).
 
 ### 1.15 Prefix / ID resolution
 
 There is **no fuzzy or short-prefix ID resolution anywhere in `internal/cli`.**
-Issue IDs are passed verbatim to the store (e.g. `cli.go:881`, `cli.go:1379`,
-`cli.go:1029`). A wrong ID yields `storage.NotFoundError` → exit 4.
+Issue IDs are passed verbatim to the store (e.g. `cli.go:900`, `cli.go:1402`,
+`cli.go:1052`). A wrong ID yields `storage.NotFoundError` → exit 4.
 
 The word "prefix" in this codebase means the *cosmetic ID prefix* on new IDs
 (`lit prefix`, §2.24) — `ap.Workspace.IssuePrefix.Value()` is passed into
 `CreateIssue` (`cli.go:354`, `cli.go:426`) and `ImportTree`/`BulkApply`
-(`cli.go:1599`, `cli.go:1647`).
+(`cli.go:1622`, `cli.go:1670`).
 
 The only "does the literal look like a subcommand" disambiguation is in `rank`:
 `args[0] == "set"` routes to `rank set`, justified because real IDs always carry a
-prefix (`cli.go:1043-1049`).
+prefix (`cli.go:1066-1072`).
 
 ### 1.16 Output rendering primitives (`output.go`)
 
@@ -348,8 +348,8 @@ prefix (`cli.go:1043-1049`).
   ≥2m → `"%d minutes"`, else `"under a minute"` (`output.go:451-462`).
 - `indentLines(s, prefix)` prefixes every line, trailing newlines stripped
   (`output.go:550-556`).
-- `writeJSON(w, v)` uses `json.Encoder` with two-space indent (`cli.go:1807-1811`).
-  **`export` is the only command in this scope that emits JSON** (`cli.go:1531`).
+- `writeJSON(w, v)` uses `json.Encoder` with two-space indent (`cli.go:1830-1834`).
+  **`export` is the only command in this scope that emits JSON** (`cli.go:1554`).
   There is no `--json` / `--output` mode anywhere; `--output` is explicitly
   rejected (§1.1, §1.6).
 
@@ -375,21 +375,21 @@ prefix (`cli.go:1043-1049`).
 - Relation types: `blocks, parent-child, related-to`; error
   `"relation type must be blocks, parent-child, or related-to"`
   (`internal/model/relation_type.go:16-33`).
-- CLI parse-boundary wrappers: `parseIssueTypeFlag` (`cli.go:1946-1952`) and
-  `parsePriorityFlag` (`:1967-1973`) wrap failures in `ValidationError` → exit 3.
+- CLI parse-boundary wrappers: `parseIssueTypeFlag` (`cli.go:1969-1975`) and
+  `parsePriorityFlag` (`:1990-1996`) wrap failures in `ValidationError` → exit 3.
   `parsePriorityFlag` takes the raw **string**: the `ValidationError` is also what
   routes the refusal to the `validation_refused` remediation, which a bare pflag
   `ParseInt` error missed — it fell through to the default "Retry the command" on
   a refusal no retry can change (links-cli-bvko).
   `parseIssueTypeSlice` (read path `--type`) returns the bare model error
-  (`cli.go:1931-1940`); the read path `--status` returns the bare model error
+  (`cli.go:1954-1963`); the read path `--status` returns the bare model error
   from `model.ParseStates` (`internal/model/lifecycle/lifecycle.go`).
 - `issueTypeChoices()` renders `task|feature|bug|chore|epic` into flag help
-  (`cli.go:1990-1997`), and `priorityChoices()` renders `normal|urgent` the same
-  way (`:1978-1985`) — into both the `--priority` help string and the `followup`
+  (`cli.go:2013-2020`), and `priorityChoices()` renders `normal|urgent` the same
+  way (`:2001-2008`) — into both the `--priority` help string and the `followup`
   and `update` usage lines, so neither can drift from the parse gate.
 - `splitCSV` splits on `,`, trims each part, drops empties, returns nil for a
-  blank input (`cli.go:1882-1895`).
+  blank input (`cli.go:1905-1918`).
 
 ### 1.18 Readiness / workability — the exact predicate
 
@@ -401,9 +401,9 @@ The store's default ordering is `item_rank ASC` (`cli.go:719-720`).
 
 **Step 2 — leaves only**: `filterWorkableIssues` keeps issues whose
 `Capabilities().Status != nil` (i.e. leaves, not containers) and whose status is
-not `closed` (`cli.go:1158-1167`). Epics are therefore never workable rows.
+not `closed` (`cli.go:1181-1190`). Epics are therefore never workable rows.
 
-**Step 3 — annotators** applied via `annotation.Annotate` (`cli.go:763-777`):
+**Step 3 — annotators** applied via `annotation.Annotate` (`cli.go:786-793`):
 1. `newFieldAnnotator(requiredFields)` — from `config.Load(...).Ready.RequiredFields`
    (`cli.go:694-704`). Empty policy → no-op annotator (`ready_state.go:63-67`).
    A required field name not present in `model.IssueWireFields()` →
@@ -447,7 +447,7 @@ not `closed` (`cli.go:1158-1167`). Epics are therefore never workable rows.
    `isEarlierSameLaneSibling(sib, leaf) := sib.ID != leaf.ID && sib.Lane == leaf.Lane && sib.Rank < leaf.Rank`
    (`ready_state.go:456-458`). The sibling set is the epic's **unfiltered**
    `InPlay()` children (`pendingSiblingsByEpic`, `ready_state.go:486-496`), fetched
-   via `fetchHeldAncestry(ctx, memo, details)` (`cli.go:870`), so siblings
+   via `fetchHeldAncestry(ctx, memo, details)` (`cli.go:889`), so siblings
    hidden by `--assignee/--type/--labels` still gate.
 4. `newOrphanedAnnotator(orphanedThreshold)` — only for `in_progress` issues with
    `time.Since(UpdatedAt) >= 6h`; message
@@ -609,7 +609,7 @@ else ready.
   a failure becomes `fmt.Errorf("open store at %q read-only: %w", atDir, …)`,
   wrapping the open error marked with holder contention for that location
   (`cli.go:399-409`). The store is closed on return (`cli.go:410`). The work runs
-  with `noReadyPolicy`, which returns no required fields (`cli.go:417`, `:767`).
+  with `noReadyPolicy`, which returns no required fields (`cli.go:417`, `:790`).
 - With no `--at`, opens the cwd workspace store through `runWithApp` with
   `app.AccessRead`, and the work runs with `workspaceReadyPolicy(ap)`
   (`cli.go:419-421`, `:759-761`).
@@ -622,7 +622,7 @@ else ready.
 |---|---|---|---|
 | `--at` | string | `""` | Declared so the parse accepts it (`cli.go:461`); `listLeaf` returns its value pointer to `runList` (`cli.go:606`), which routes on it. The work closure does not read it |
 | `--status` | string array | `nil` | State set via `model.ParseStates` — comma-separated and/or repeated, every fragment parsed; error wrapped `parse --status: %w` (`cli.go:470`, `:507-510`) |
-| `--type` | string | `""` | Single issue type via `parseIssueTypeSlice` (blank → no narrowing); error wrapped `parse --type: %w` (`cli.go:511-514`, `:1993-2002`) |
+| `--type` | string | `""` | Single issue type via `parseIssueTypeSlice` (blank → no narrowing); error wrapped `parse --type: %w` (`cli.go:511-514`, `:2016-2025`) |
 | `--assignee` | string | `""` | Trimmed, single-element `Assignees`; blank → none (`cli.go:534`) |
 | `--search` | string | `""` | Trimmed and appended to `SearchTerms` **only if visited** (`cli.go:548-550`) |
 | `--ids` | string | `""` | CSV → `filter.IDs`, only if visited (`cli.go:551-553`) |
@@ -705,7 +705,7 @@ column is `sourceIssue` (`columns.go:92-124`).
 - `sourceReadiness`: calls the policy for required fields, runs `annotateIssues`,
   and `readinessColumnsFor` sets `parentID` from the relation graph and
   `blocked = !ClassifyReadiness(row.Annotations).IsReady()` (`cli.go:640-653`;
-  `workable.go:109-118`). A policy error fails the command. Over `--at`,
+  `workable.go:111-120`). A policy error fails the command. Over `--at`,
   `noReadyPolicy` supplies no required fields.
 - A missing cell renders as the zero `derivedColumns` (`output.go:457-465`):
   `parent` renders `-` for an empty id, and `blocked` renders `blocked` when set
@@ -731,17 +731,17 @@ lines|table") is built from the same map (`cli.go:488`, `output.go:97-104`).
 ### 2.4 `lit show` — Show issue details
 
 - Registration `register.go:317-318`, `app.AccessRead`. Handler `runShow`
-  (`cli.go:829-879`).
+  (`cli.go:845-898`).
 - Args: exactly one positional id; flag `--field` (string, `""`, help:
   "Comma-separated field names (e.g. description) to print with no surrounding
-  context; omit for the full detail view") (`cli.go:830-832`).
+  context; omit for the full detail view") (`cli.go:846-848`).
 - Refusals: `len(positional) != 1` →
   `UsageError{"usage: lit show <id> [--field <name>[,<name>...]]"}` → exit 2
-  (`cli.go:835-841`).
+  (`cli.go:851-857`).
 - Sync-staleness banner is printed first **only when `--field` is blank**
-  (`cli.go:848-852`).
-- Reads `GetIssueDetail(id)`; missing → exit 4 (`cli.go:853-856`).
-- Dispatches `EventShowTicket` in **both** modes (`cli.go:857-860`).
+  (`cli.go:864-868`).
+- Reads `GetIssueDetail(id)`; missing → exit 4 (`cli.go:869-870`).
+- Dispatches `EventShowTicket` in **both** modes (`cli.go:870-882`).
 
 **`--field` mode** (`printIssueFields`, `output.go:221-245`):
 - Accepted field names and their renderings (`issueFieldNames`, `output.go:183-198`):
@@ -757,7 +757,7 @@ lines|table") is built from the same map (`cli.go:488`, `output.go:97-104`).
   `output.go:203-210`).
 - Exactly one field → the bare value, no label (`output.go:235-238`).
 - Two or more → `name: value` lines, in the requested order (`output.go:239-244`).
-- No epic context, no parent block, no siblings (`cli.go:861-865`).
+- No epic context, no parent block, no siblings (`cli.go:883-884`).
 
 **Full-detail mode** (`printIssueDetail`, `output.go:78-176`), in exact order:
 1. `<id>\n<title>\n\n` then
@@ -794,7 +794,7 @@ lines|table") is built from the same map (`cli.go:488`, `output.go:97-104`).
    to the literal `\n` (`output.go:161-170`).
 9. **No** history block — history lives behind `lit history` (`output.go:171-175`).
 10. Then `writeEpicContext` appends the epic plan block (§2.5). The block is
-    **resolved before step 1 writes anything** (`cli.go:866-878`), so the body and
+    **resolved before step 1 writes anything** (`cli.go:885-897`), so the body and
     the block are all-or-nothing: a failure to build the block exits nonzero with
     neither printed, rather than after a partial body. The staleness banner and any
     fired show-ticket workflow body are written before that point either way.
@@ -871,11 +871,11 @@ Cross-epic dependencies:
 ### 2.6 `lit history` — State-transition history
 
 - Registration `register.go:319-320`, `app.AccessRead`. Handler `runHistory`
-  (`cli.go:905-919`).
+  (`cli.go:928-942`).
 - No flags beyond the implicit `--help`.
 - Refusal: `len(positional) != 1` →
-  `UsageError{"usage: lit history <id>"}` → exit 2 (`cli.go:911-913`).
-- Reads `GetIssueDetail(id)` (`cli.go:914-917`).
+  `UsageError{"usage: lit history <id>"}` → exit 2 (`cli.go:934-936`).
+- Reads `GetIssueDetail(id)` (`cli.go:937-940`).
 - Output (`printIssueHistory`, `output.go:279-284`):
 ```
 <id>
@@ -893,8 +893,8 @@ history:
 ### 2.7 `lit update` — Update issue fields
 
 - Registration `register.go:321-322`, `app.AccessWrite`. Handler `runUpdate`
-  (`cli.go:930-1040`).
-- Flags (`cli.go:932-946`): `--title`, `--description`, `--prompt`, `--type`
+  (`cli.go:953-1063`).
+- Flags (`cli.go:955-969`): `--title`, `--description`, `--prompt`, `--type`
   (default `""`), `--priority` (int, default 0), `--assignee`, `--labels`,
   `--lane`, `--status` (registered only to intercept it; help text
   "(removed) change status with the transition verbs: lit start|done|close|open"),
@@ -902,84 +902,84 @@ history:
 - Refusals:
   - `len(positional) != 1` → `UsageError` with the usage line
     `"usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--lane <key>] [--reason <text>]"`
-    (`cli.go:950-955`).
+    (`cli.go:973-978`).
   - `--status` present (detected via `fs.Visit`) → `UsageError{statusViaVerbsGuidance}`
     → exit 2. Verbatim text: "lit update no longer changes status — the transition
     verbs are the single enforcer of the transition guardrails. Use: `lit start
     <id>` (claim → in_progress), `lit done <id>` (finish → closed), `lit close <id>
     --resolution <duplicate|superseded|obsolete|wontfix>` (close with an outcome),
-    `lit open <id>` (reopen)" (`cli.go:928`, `cli.go:965-967`).
+    `lit open <id>` (reopen)" (`cli.go:951`, `cli.go:988-990`).
   - No field flag at all → `errors.New("lit update requires at least one field flag")`
-    → exit 1 (`cli.go:1026-1028`). Note `--reason` alone does not count: `Reason`
-    is set unconditionally but `Change.IsEmpty()` governs (`cli.go:975-980`,
-    `cli.go:1026`).
+    → exit 1 (`cli.go:1049-1051`). Note `--reason` alone does not count: `Reason`
+    is set unconditionally but `Change.IsEmpty()` governs (`cli.go:998-1003`,
+    `cli.go:1049`).
 - **Only visited flags are applied.** Each visited flag sets a pointer on
-  `storage.UpdateIssueInput` (`cli.go:982-1025`):
+  `storage.UpdateIssueInput` (`cli.go:1005-1048`):
   - `--title` / `--description` / `--prompt` set the raw value (no trimming at
-    the CLI) (`cli.go:982-992`).
+    the CLI) (`cli.go:1005-1015`).
   - `--type` parses via `parseIssueTypeFlag` → `ValidationError` on a bad value
-    (`cli.go:993-999`).
-  - `--priority` parses via `parsePriorityFlag` (`cli.go:1000-1006`).
+    (`cli.go:1016-1022`).
+  - `--priority` parses via `parsePriorityFlag` (`cli.go:1023-1029`).
   - `--assignee` is trimmed and honored **verbatim** — session-identity resolution
     is deliberately *not* applied here, so an empty value clears the assignee
-    (`cli.go:1007-1017`).
-  - `--labels` CSV replaces the whole label set (`cli.go:1018-1021`).
-  - `--lane` trimmed (`cli.go:1022-1025`).
+    (`cli.go:1030-1040`).
+  - `--labels` CSV replaces the whole label set (`cli.go:1041-1044`).
+  - `--lane` trimmed (`cli.go:1045-1048`).
 - The `Change.Actor` is `resolveActor()` — session identity else `--by` else `""`
-  (which the store normalizes to `unknown`) (`cli.go:976`).
-- Applies via `Store.Apply(ctx, id, change)` (`cli.go:1029`).
-- Dispatches `EventTicketUpdated` (`cli.go:1033-1035`), prints the summary line,
-  emits the `update` breadcrumb (`cli.go:1036-1039`).
+  (which the store normalizes to `unknown`) (`cli.go:999`).
+- Applies via `Store.Apply(ctx, id, change)` (`cli.go:1052`).
+- Dispatches `EventTicketUpdated` (`cli.go:1056-1058`), prints the summary line,
+  emits the `update` breadcrumb (`cli.go:1059-1062`).
 
 ### 2.8 `lit rank` — Reorder an issue's rank
 
 - Registration `register.go:323-324`, `app.AccessWrite`. Handler `runRank`
-  (`cli.go:1042-1121`).
-- If `args[0] == "set"`, routes to `runRankSet(args[1:])` (`cli.go:1047-1049`).
-- Flags (`cli.go:1052-1055`): `--top` (bool, "Move to highest rank"),
+  (`cli.go:1065-1144`).
+- If `args[0] == "set"`, routes to `runRankSet(args[1:])` (`cli.go:1070-1072`).
+- Flags (`cli.go:1075-1078`): `--top` (bool, "Move to highest rank"),
   `--bottom` (bool, "Move to lowest rank"), `--above` (string, "Rank above this
   issue ID"), `--below` (string, "Rank below this issue ID").
 - Refusals:
   - `len(positional) != 1` →
     `UsageError{"usage: lit rank <id> --top|--bottom|--above <id>|--below <id>"}`
-    → exit 2 (`cli.go:1059-1061`).
+    → exit 2 (`cli.go:1082-1084`).
   - Number of *visited* mode flags ≠ 1 →
     `ValidationError{"exactly one of --top, --bottom, --above, --below is required"}`
-    → exit 3 (`cli.go:1062-1079`). Note this counts presence, not truthiness, so
+    → exit 3 (`cli.go:1085-1102`). Note this counts presence, not truthiness, so
     `--top=false` still counts.
   - Surplus positionals refused by `refuseSurplusPositionals` (`register.go:342`),
     called from `parseLeaf` (`register.go:307`).
-- Store calls (`cli.go:1087-1096`): `RankToTop`, `RankToBottom`,
+- Store calls (`cli.go:1110-1119`): `RankToTop`, `RankToBottom`,
   `RankAbove(issueID, *above)`, `RankBelow(issueID, *below)`. The relative forms
   return a `storage.RankMove{MovedID, AnchorID}`.
-- **Frame substitution reporting** (`cli.go:1100-1112`):
+- **Frame substitution reporting** (`cli.go:1123-1135`):
   - If `move.MovedID != issueID`:
     `"<issueID> is inside <MovedID>; ranked the epic <MovedID> instead, leaving its internal order unchanged\n"`
   - If a named anchor was given and `move.AnchorID != namedAnchor`:
     `"<namedAnchor> is inside <AnchorID>; ranked relative to the epic <AnchorID> instead\n"`
   - (Asserted in `rank_frame_test.go:33-61`.)
 - Then re-reads `GetIssue(move.MovedID)`, prints its summary line, emits the
-  `update` breadcrumb (`cli.go:1113-1120`).
+  `update` breadcrumb (`cli.go:1136-1143`).
 
 ### 2.9 `lit rank set <id1> <id2> [...]`
 
-- Handler `runRankSet` (`cli.go:1128-1156`). Declares `positionals: allPositionals`
-  (`cli.go:1370`), the unbounded ceiling defined at `register.go:20`.
+- Handler `runRankSet` (`cli.go:1151-1179`). Declares `positionals: allPositionals`
+  (`cli.go:1393`), the unbounded ceiling defined at `register.go:20`.
 - Refusal: fewer than 2 positionals →
   `UsageError{"usage: lit rank set <id1> <id2> [<id3> ...]"}` → exit 2
-  (`cli.go:1134-1136`).
+  (`cli.go:1157-1159`).
 - Calls `Store.RankSet(ctx, positional)` — atomic; stacks the named issues at the
-  top in the given order (`cli.go:1137-1139`, doc at `cli.go:1123-1127`).
+  top in the given order (`cli.go:1160-1162`, doc at `cli.go:1146-1150`).
 - Output: for each resolution where `RankedID != NamedID`,
   `"<NamedID> is inside <RankedID>; ranked the epic <RankedID> instead, leaving its internal order unchanged\n"`
-  (`cli.go:1145-1151`); then
+  (`cli.go:1168-1174`); then
   `"ranked %d issues at top in order: <comma-joined RankedIDs>\n"`
-  (`cli.go:1152-1154`); then the `update` breadcrumb (`cli.go:1155`).
+  (`cli.go:1175-1177`); then the `update` breadcrumb (`cli.go:1178`).
 
 ### 2.10 Transition commands — `start`, `done`, `close`, `open`, `archive`, `unarchive`, `delete`, `restore`
 
 All eight route through one handler `runTransition(ctx, stdout, ap, args, spec)`
-(`cli.go:1360-1455`), registered via `r.transitionCmd(spec)` with
+(`cli.go:1383-1478`), registered via `r.transitionCmd(spec)` with
 `app.AccessWrite` (`register.go:246-250`).
 
 Registry rows and summaries:
@@ -992,33 +992,33 @@ Registry rows and summaries:
 - `delete` — "Delete issue(s)" (`register.go:340-341`)
 - `restore` — "Restore deleted issue(s)" (`register.go:342-343`)
 
-**Common flags on every transition** (`cli.go:1361-1363`):
+**Common flags on every transition** (`cli.go:1384-1386`):
 `--reason` (string, `""`, "Transition reason") and hidden `--by`.
 
-**Per-spec flags** (`cli.go:1273-1313`):
+**Per-spec flags** (`cli.go:1296-1336`):
 - `start` adds `--assignee` (string, `""`, help "Assignee fallback when
   CLAUDE_CODE_SESSION_ID is unset (env always wins when set)") and `--take` (bool,
   `false`, help "Confirm taking over a lane another checkout claims right now
   (required for non-interactive callers; an interactive terminal is prompted
-  instead)") (`cli.go:1281`, `cli.go:1287`). The action is
-  `model.Start{Assignee: resolveIdentity(*assignee)}` (`cli.go:1283`).
+  instead)") (`cli.go:1304`, `cli.go:1310`). The action is
+  `model.Start{Assignee: resolveIdentity(*assignee)}` (`cli.go:1306`).
 - `close` adds `--resolution` (string, `""`, "Close resolution (required):
   duplicate|superseded|obsolete|wontfix") and `--of` (string, `""`, "Canonical
   ticket a duplicate/superseded close redirects to (required for those, rejected
-  otherwise)") (`registerCloseOutcomeFlags`, `cli.go:1318-1322`).
+  otherwise)") (`registerCloseOutcomeFlags`, `cli.go:1341-1345`).
 - `done`, `open`, `archive`, `unarchive`, `delete`, `restore` register **no**
-  extra flags — `fixedAction` (`cli.go:1267-1271`). Passing e.g.
+  extra flags — `fixedAction` (`cli.go:1290-1294`). Passing e.g.
   `lit done --resolution x` is therefore an unknown-flag `UsageError` → exit 2.
 
-**Argument handling** (`cli.go:1369-1375`): after parsing, exactly one remaining
+**Argument handling** (`cli.go:1392-1398`): after parsing, exactly one remaining
 positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason <text>]")`
 — a **plain error**, so exit code 1, not 2.
 
-**Sequence** (`transitionLeaf`, `cli.go:1523-1626`):
-1. `GetIssue(issueID)` pre-read (`cli.go:1546-1549`) — missing → exit 4.
-2. `buildAction()` (`cli.go:1551-1554`).
-3. `authorize(ctx, stdout, ap, issueID, prior)` — §2.11 (`cli.go:1560-1562`).
-4. `transferNotice(ctx, ap, issueID, action)` (`cli.go:1570-1573`, implementation
+**Sequence** (`transitionLeaf`, `cli.go:1546-1649`):
+1. `GetIssue(issueID)` pre-read (`cli.go:1569-1572`) — missing → exit 4.
+2. `buildAction()` (`cli.go:1574-1577`).
+3. `authorize(ctx, stdout, ap, issueID, prior)` — §2.11 (`cli.go:1583-1585`).
+4. `transferNotice(ctx, ap, issueID, action)` (`cli.go:1593-1596`, implementation
    `claims_context.go:163-177`): for a `model.Start` whose prior claimant was
    held and actually changes hands, `"claim transferred: %s -> %s\n"` with
    both sides rendered by `describeClaimant` (`claims_render.go:186-194`),
@@ -1029,34 +1029,34 @@ positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason 
    pre-Apply state, but not written out until step 7 — a failed `Apply`
    must announce nothing.
 5. `actor := resolveActor()`; `Store.Apply(ctx, issueID, Change{Action, Actor, Reason})`
-   (`cli.go:1579-1583`).
+   (`cli.go:1602-1606`).
 6. If the action is a `StatusAction`, dispatch the transition occasion
-   (`cli.go:1593-1597`).
+   (`cli.go:1616-1620`).
 7. Write the transfer notice string, then `printIssueSummary`
-   (`cli.go:1602-1608`).
+   (`cli.go:1625-1631`).
 8. If the action is a `StatusAction` whose `Target() == model.StateClosed`
    (i.e. `done` and `close`), re-read `GetIssueDetail` and print the close
-   adjacency block (`cli.go:1616-1624`) — §2.12.
-9. Breadcrumb per `transitionBreadcrumbTopics` (`cli.go:1625-1627`).
+   adjacency block (`cli.go:1639-1647`) — §2.12.
+9. Breadcrumb per `transitionBreadcrumbTopics` (`cli.go:1648-1650`).
 
 **Close outcome validation** — `closeOutcomeFromFlags(resolution, target, usage)`
-(`cli.go:1332-1358`), shared with `bulk close` (`bulk.go:149`):
+(`cli.go:1355-1381`), shared with `bulk close` (`bulk.go:149`):
 - `model.ParseResolution` failure → `UsageError{"<usage>\n<parse error>"}` → exit 2
-  (`cli.go:1333-1336`). For `lit close`, the usage string is
+  (`cli.go:1356-1359`). For `lit close`, the usage string is
   `"usage: lit close <id> --resolution <duplicate|superseded|obsolete|wontfix> [--of <canonical-id>] [--reason <text>]"`
-  (`cli.go:1299`). A missing `--resolution` therefore fails through this path —
+  (`cli.go:1322`). A missing `--resolution` therefore fails through this path —
   `--resolution` is effectively required.
 - Redirecting resolutions (`duplicate`, `superseded`) with a blank `--of` →
   `UsageError{"closing as <res> redirects to a canonical ticket — name it with --of"}`
-  (`cli.go:1338-1341`).
+  (`cli.go:1361-1364`).
 - A non-blank `--of` on a terminal resolution (`obsolete`, `wontfix`) →
   `UsageError{"--of applies only to duplicate/superseded closes, not <res>"}`
-  (`cli.go:1342-1344`).
+  (`cli.go:1365-1367`).
 - Outcome construction: `duplicate` → `model.Duplicate{Of: target}`;
   `superseded` → `model.Superseded{By: target}`; `obsolete` → `model.Obsolete{}`;
-  `wontfix` → `model.Wontfix{}` (`cli.go:1345-1354`). An unreachable default
+  `wontfix` → `model.Wontfix{}` (`cli.go:1368-1377`). An unreachable default
   returns `fmt.Errorf("resolution %q has no close outcome", parsed)`
-  (`cli.go:1355-1357`).
+  (`cli.go:1378-1380`).
 
 **Store-level refusals reaching every transition:**
 - An archived or deleted issue rejects any status action:
@@ -1082,7 +1082,7 @@ positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason 
 ### 2.11 `lit start` takeover gate
 
 `startSpec.authorize` → `authorizeStart(ctx, stdout, ap, issueID, prior, *take)`
-(`cli.go:1390-1395`, implementation `claims_takeover.go:132-154`):
+(`cli.go:1413-1418`, implementation `claims_takeover.go:132-154`):
 1. `GetRelationsByIDs([issueID])` and `model.LaneOf(prior, parent)`
    (`claims_takeover.go:133-137`).
 2. `gatherClaimContext(ctx, stdout, ap)` (`claims_takeover.go:138-141`).
@@ -1145,11 +1145,11 @@ line for `done` and `close`, each group omitted when empty:
 - Registration `register.go:298-299`, `app.AccessRead`, handler
   `workableRun(backlogView)`. Summary: "List the full workable backlog in
   priority/rank order (blocked items inline)".
-- `backlogView` preset (`workable.go:90-97`): `hasFilters: true`,
+- `backlogView` preset (`workable.go:92-99`): `hasFilters: true`,
   `hasLimit: true`, `hasColumns: true`, order = `orderCanonical` (no-op,
-  `workable.go:82`), keep = `keepAll` (`workable.go:84`), render =
+  `workable.go:84`), keep = `keepAll` (`workable.go:86`), render =
   `printBacklogOutput`, occasion = `backlogOccasion()`.
-- Flags (`runWorkable`, `workable.go:111-117`):
+- Flags (`runWorkable`, `workable.go:113-119`):
 
 | Flag | Type | Default | Effect |
 |---|---|---|---|
@@ -1157,21 +1157,21 @@ line for `done` and `close`, each group omitted when empty:
 | `--type` | string | `""` | "Filter by issue type" |
 | `--status` | string | `""` | "Filter by status: open\|in_progress" |
 | `--labels` | string | `""` | "Comma-separated labels all of which must match" |
-| `--limit` | int | `0` | "Limit results" — applied **after** ordering (`workable.go:159`) |
+| `--limit` | int | `0` | "Limit results" — applied **after** ordering (`workable.go:161`) |
 | `--columns` | string | `""` | "Comma-separated output columns" |
 
-- Refusal: any positional argument → `UsageError{view.usage()}` (`workable.go:121-123`).
+- Refusal: any positional argument → `UsageError{view.usage()}` (`workable.go:123-125`).
   `usage()` builds `"usage: lit backlog [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--limit N] [--columns ...]"`
-  (`workable.go:67-80`).
+  (`workable.go:61-82`).
 - `--status closed` (or any unparseable state) →
   `UsageError{"invalid --status \"<x>\" (valid: open, in_progress)"}` → exit 2
-  (`parseWorkableStatus`, `workable.go:176-185`).
+  (`parseWorkableStatus`, `workable.go:178-187`).
 - Bad `--type` → `UsageError{"invalid --type \"<x>\": <err>"}` → exit 2
-  (`parseWorkableType`, `workable.go:191-200`).
-- Prints the sync-staleness warning first (`workable.go:185`).
+  (`parseWorkableType`, `workable.go:193-202`).
+- Prints the sync-staleness warning first (`workable.go:187`).
 - Runs the shared workable pipeline (§1.18) via `gatherWorkableAnnotated`
-  (`workable.go:148-156`), then `gatherClaimContext` (`workable.go:160-163`).
-- Dispatches `EventShowBacklog` after rendering (`workable.go:167`).
+  (`workable.go:150-158`), then `gatherClaimContext` (`workable.go:162-165`).
+- Dispatches `EventShowBacklog` after rendering (`workable.go:169`).
 
 **Output** (`printBacklogOutput`, `backlog.go:32-64`):
 1. The `backlogPreamble` verbatim (`backlog.go:19-26`):
@@ -1195,7 +1195,7 @@ Use 'lit next' to pick the top workable item to start.
    - `    blocked: <reasons joined by "; ">` — only non-dependency blockers,
      rendered as `missing <field>` for `MissingField` and `needs-design` for
      `NeedsDesign` (`backlog.go:79-83`, `nonDependencyBlockingReasons` at
-     `backlog.go:104-115`). `EarlierSiblingPending` appears in **neither** the
+     `backlog.go:104-113`). `EarlierSiblingPending` appears in **neither** the
      blocked line nor the depends-on line.
    - `    depends on: <ids joined by ", ">` (`backlog.go:84`, `output.go:41-47`)
    - `    in_progress: <age truncated to minute>[ (ORPHANED)]` for in-progress
@@ -1418,8 +1418,8 @@ selected by the row's state and by whether `lane.Describe()` reports a named lan
 On a served row, `renderNextOutcome` calls `printNextSummary(w, row, cc, lane)`
 with `lane = model.LaneOf(row.Issue, details[row.ID].Parent)` (`next.go:175-183`),
 which prints the **default columns** (`id state topic title`) joined by two
-spaces (`ready_state.go:965-971`, `columns.go:158-160`), then `printInlineDeps`
-(`ready_state.go:1007-1020`): `    epic: …`, `    depends on: …`, the claim line,
+spaces (`ready_state.go:965-970`, `columns.go:158-160`), then `printInlineDeps`
+(`ready_state.go:1000-1020`): `    epic: …`, `    depends on: …`, the claim line,
 and `    unblocks: …` — but `next` passes a **nil** unblocks map, so the unblocks
 line never appears (`ready_state.go:970`). It then returns
 `nextPulledOccasion(row.Issue)` (`next.go:160`, `workflow_events.go:39-45`),
@@ -1432,17 +1432,17 @@ claim; this command claims nothing.
 ### 2.15 `lit orphaned` — Stale in-progress issues
 
 - Registration `register.go:304-305`, `app.AccessRead`. Handler `runOrphaned`
-  (`cli.go:797-838`). Summary: "List in_progress issues with no recent updates".
-- Flags: `--assignee` (string, `""`, "Filter by assignee") (`cli.go:799`).
+  (`cli.go:813-854`). Summary: "List in_progress issues with no recent updates".
+- Flags: `--assignee` (string, `""`, "Filter by assignee") (`cli.go:815`).
 - Refusal: any positional → `UsageError{"usage: lit orphaned [--assignee <user>]"}`
-  → exit 2 (`cli.go:803-805`).
+  → exit 2 (`cli.go:819-821`).
 - Query: `Statuses = [in_progress]`, assignee filter, no archived, no deleted
-  (`cli.go:806-811`). Containers dropped via `filterWorkableIssues`
-  (`cli.go:820`).
-- Annotates with `newOrphanedAnnotator(orphanedThreshold)` only (`cli.go:821`) and
-  keeps rows where `ClassifyReadiness(...).IsOrphaned()` (`cli.go:825-830`).
-- Sorted oldest-`UpdatedAt` first (`cli.go:834-836`).
-- Output (`printOrphanedText`, `cli.go:840-855`):
+  (`cli.go:822-827`). Containers dropped via `filterWorkableIssues`
+  (`cli.go:836`).
+- Annotates with `newOrphanedAnnotator(orphanedThreshold)` only (`cli.go:837`) and
+  keeps rows where `ClassifyReadiness(...).IsOrphaned()` (`cli.go:841-846`).
+- Sorted oldest-`UpdatedAt` first (`cli.go:850-852`).
+- Output (`printOrphanedText`, `cli.go:856-870`):
   - Empty → `"No orphaned issues."`
   - Otherwise, per row: columns `id | state | topic | assignee | title` joined by
     `" | "`, then `" | Last Update: <age truncated to minute>"`.
@@ -1476,33 +1476,33 @@ claim; this command claims nothing.
 
 ### 2.17 `lit comment` — Add / remove comments
 
-Family `commentFamily`, usage `"usage: lit comment <add|rm> ..."` (`cli.go:1463-1469`).
+Family `commentFamily`, usage `"usage: lit comment <add|rm> ..."` (`cli.go:1486-1492`).
 Both subcommands are `app.AccessWrite`. Missing/unknown subcommand → the bare
 usage string as a plain error → exit 1 (`register.go:112-123`).
 
-**`lit comment add <id> --body <text>`** (`runCommentAdd`, `cli.go:1471-1495`):
+**`lit comment add <id> --body <text>`** (`runCommentAdd`, `cli.go:1494-1518`):
 - Flags: `--body` (string, `""`, "Comment body"), hidden `--by`.
 - Refusal: `len(positional) != 1` →
   `UsageError{"usage: lit comment add <id> --body <text>"}` → exit 2
-  (`cli.go:1479-1484`).
+  (`cli.go:1502-1507`).
 - Store refusal: a blank body (after trim) →
   `errors.New("comment body is required")` → exit 1
   (`internal/store/store.go:1156-1159`). A missing issue → exit 4
   (`store.go:1152-1155`).
 - The comment id is `"cmt-" + uuid` and `CreatedBy` empty is normalized to
   `"unknown"` (`store.go:1161-1165`).
-- Dispatches `EventCommentAdded` (`cli.go:1491-1493`).
-- Output: `printComment` → `"<issueID> <commentID>\n"` (`cli.go:1516-1519`).
+- Dispatches `EventCommentAdded` (`cli.go:1514-1516`).
+- Output: `printComment` → `"<issueID> <commentID>\n"` (`cli.go:1539-1542`).
   **No breadcrumb.**
 
-**`lit comment rm <comment-id>`** (`runCommentRm`, `cli.go:1494-1511`):
+**`lit comment rm <comment-id>`** (`runCommentRm`, `cli.go:1517-1534`):
 - No flags (not even `--by`).
 - Refusal: `len(positional) != 1` →
-  `UsageError{"usage: lit comment rm <comment-id>"}` → exit 2 (`cli.go:1503-1508`).
+  `UsageError{"usage: lit comment rm <comment-id>"}` → exit 2 (`cli.go:1526-1531`).
 - Store: blank id → `"comment id is required"`; unknown id →
   `storage.NotFoundError{Entity: "comment", ID: id}` → exit 4
   (`internal/store/store.go:1175-1194`).
-- Output: `"<issueID> <commentID>\n"` for the deleted comment (`cli.go:1513`).
+- Output: `"<issueID> <commentID>\n"` for the deleted comment (`cli.go:1536`).
 
 ### 2.18 `lit label` — Manage labels
 
@@ -1676,10 +1676,10 @@ mechanism `bulk import` duplicated" (`register.go:455`). Because the row is
 
 - Registration `register.go:372-373`, `app.AccessRead`. Summary: "Write the backlog
   out as a portable JSON tree (the data-export primitive; `import`'s inverse)".
-- Handler `runExport` (`cli.go:1521-1532`): no flags of its own; parses argv (so
+- Handler `runExport` (`cli.go:1544-1555`): no flags of its own; parses argv (so
   `--help` works and any flag is an unknown-flag `UsageError`); calls
   `Store.Export(ctx)`; writes the result as **two-space-indented JSON** to stdout
-  (`cli.go:1531`, `writeJSON` at `cli.go:1807-1811`).
+  (`cli.go:1554`, `writeJSON` at `cli.go:1830-1834`).
 - No positional check.
 
 ### 2.23 `lit import --path <file>`
@@ -1687,43 +1687,43 @@ mechanism `bulk import` duplicated" (`register.go:455`). Because the row is
 - Registration `register.go:374-375`, `app.AccessWrite`. Summary: "Bulk-create/update
   issues from a file (the one bulk-ingest home): a JSON tree spec, or a YAML file
   for create-or-update by id selector".
-- Handler `runImportTree` (`cli.go:1544-1577`).
+- Handler `runImportTree` (`cli.go:1567-1600`).
 - Flags: `--path` (string, `""`, "Path to a JSON tree-spec file or a YAML bulk
-  create/update file"), hidden `--by` (`cli.go:1546-1547`).
+  create/update file"), hidden `--by` (`cli.go:1569-1570`).
 - Refusals: blank `--path` (after trim) →
   `UsageError{importUsage}` → exit 2. `importUsage` verbatim:
   `"usage: lit import --path <tree-spec.json | bulk-file.yaml> (run `lit import --help` for both formats)"`
-  (`cli.go:1536`, `cli.go:1551-1556`).
+  (`cli.go:1559`, `cli.go:1574-1579`).
 - Reads the file; a read error → `fmt.Errorf("read import spec: %w", err)` → exit 1
-  (`cli.go:1557-1560`).
-- **Format is selected by the file extension** (lowercased) (`cli.go:1561`):
+  (`cli.go:1580-1583`).
+- **Format is selected by the file extension** (lowercased) (`cli.go:1584`):
   - `.yaml` / `.yml` → `runImportBulk`
   - anything else → `runImportTreeJSON`, but first: if `--by` was set →
     `UsageError{"usage: --by only applies to a YAML bulk-update file (--path *.yaml|*.yml); JSON tree-spec import always attributes creates to \"links\""}`
-    → exit 2 (`cli.go:1572-1574`).
+    → exit 2 (`cli.go:1595-1597`).
 
-**JSON tree path** (`runImportTreeJSON`, `cli.go:1594-1612`):
+**JSON tree path** (`runImportTreeJSON`, `cli.go:1617-1635`):
 - `storage.ParseImportTreeSpecs(data)` then
   `Store.ImportTree(ctx, workspacePrefix, specs)`.
-- Documented spec shape (`cli.go:1587-1593`): an array of records each with
+- Documented spec shape (`cli.go:1610-1616`): an array of records each with
   `local_id`, optional `parent` (a local_id), optional `depends_on` (array of
   local_ids), `title`, `type`, `topic`, `priority`.
 - Output: `"imported %d issues\n"` then, per mapping, `"  <local> -> <real>\n"`
-  (map iteration order is unspecified) (`cli.go:1603-1610`).
+  (map iteration order is unspecified) (`cli.go:1626-1633`).
 - Best-effort rollback on failure is the store's behavior; the doc comment tells
-  the caller to run `lit doctor` after a failed import (`cli.go:1579-1585`).
+  the caller to run `lit doctor` after a failed import (`cli.go:1602-1608`).
 
-**YAML bulk path** (`runImportBulk`, `cli.go:1633-1668`):
+**YAML bulk path** (`runImportBulk`, `cli.go:1656-1691`):
 - `storage.ParseBulkSpecs(data)`.
 - If `--by` was set but no document has an `id` (i.e. no update documents) →
   `UsageError{"usage: --by only applies when the file has at least one update document (a document with \`id\` set); this file has none"}`
-  → exit 2 (`cli.go:1644-1646`, `bulkSpecsHaveUpdate` at `cli.go:1672-1679`).
+  → exit 2 (`cli.go:1667-1669`, `bulkSpecsHaveUpdate` at `cli.go:1695-1702`).
 - Calls `Store.BulkApply(ctx, prefix, actor, specs)`.
-- Documented YAML shape (`cli.go:1618-1632`): one document per issue separated by
+- Documented YAML shape (`cli.go:1641-1655`): one document per issue separated by
   `---`; optional `local_id` for intra-file references; `id` present means
   **update** that issue instead of creating; `parent` may name a local_id or a
   real issue ID.
-- Output (`cli.go:1651-1667`):
+- Output (`cli.go:1674-1690`):
 ```
 created <n> issues
   <ref> -> <realID>
@@ -1765,10 +1765,10 @@ updated <n> issues
 ### 2.25 `lit workspace`
 
 - Registration `register.go:376-379`, workspace-mode. Summary: "Show workspace
-  metadata". Handler `runWorkspace` (`cli.go:1681-1704`).
+  metadata". Handler `runWorkspace` (`cli.go:1704-1727`).
 - No flags of its own; parses argv so `--help` works.
 - Output: one `key: value` line per field, in this exact order
-  (`cli.go:1689-1702`): `workspace_id`, `issue_prefix`, `git_common_dir`,
+  (`cli.go:1712-1725`): `workspace_id`, `issue_prefix`, `git_common_dir`,
   `storage_dir`, `database_path`, `dolt_repo_path`, `traces_dir`.
 
 ### 2.26 `lit completion <bash|zsh|fish>`
@@ -1777,8 +1777,8 @@ updated <n> issues
   completion script". Its own advertised subcommands come from
   `completionFamily.visibleSubcommands()`.
 - `completionFamily` — usage `"usage: lit completion <bash|zsh|fish>"`, rows
-  `bash`, `zsh`, `fish` (`cli.go:1713-1720`).
-- `runCompletion(stdout, args)` (`cli.go:1722-1732`): `len(args) != 1` →
+  `bash`, `zsh`, `fish` (`cli.go:1736-1743`).
+- `runCompletion(stdout, args)` (`cli.go:1745-1755`): `len(args) != 1` →
   `errors.New(completionFamily.usage)` → exit 1; an unknown shell → the same
   usage error via `resolve`; otherwise writes the generated script to stdout.
 - `completionRenderer(shell)` panics for any shell not in the switch
@@ -1829,17 +1829,17 @@ completion (`register.go:415-421`, `completion.go:20-29`).
 | `bulk import` | (bulk family) | "use `lit backup restore --path <export.json>` — it owns the same export-restore mechanism `bulk import` duplicated" | `bulk.go:28`, `register.go:455` |
 
 Full error message form: `the "<command>" command has been retired; <replacement>`
-(`cli.go:1954-1956`). Reason `retired_command`, remediation empty
+(`cli.go:1977-1979`). Reason `retired_command`, remediation empty
 (`error_output.go:54-57`, `:96-100`). Asserted in
 `retired_command_test.go:17-52`, `:54-96`, `:134-…`.
 
 Retired **flags** (intercepted by the shared parser, §1.6): `--output` anywhere
 (`cli.go:174-179`, `cli.go:286-289`) and `--continue` (`cli.go:290-294`), both
-`UnsupportedError`; `lit update --status` (`cli.go:965-967`), a `UsageError`.
+`UnsupportedError`; `lit update --status` (`cli.go:988-990`), a `UsageError`.
 
 ### 2.28 `lit quickstart` (in-scope only as it is the bare-`lit` default)
 
-`runQuickstart` (`cli.go:1734-1805`) — flags `--refresh` (bool),
+`runQuickstart` (`cli.go:1757-1828`) — flags `--refresh` (bool),
 `--eject` (string-optional; present-with-no-value = `"all"`), `--force` (bool),
 plus at most one positional topic.
 - More than one positional → refused by `refuseSurplusPositionals` (`register.go:342`),
@@ -1848,21 +1848,21 @@ plus at most one positional topic.
   `quickstartUsage = "usage: lit quickstart [<topics|…>] [--refresh] [--eject[=LIST]] [--force]"`
   built from the topic token list (`quickstart_topics.go:55`).
 - `--refresh` with `--eject` → `UsageError{"usage: --refresh and --eject are mutually exclusive"}`
-  (`cli.go:1751-1753`).
+  (`cli.go:1774-1776`).
 - `--force` without `--eject` → `UsageError{"usage: --force is only valid with --eject"}`
-  (`cli.go:1754-1756`).
+  (`cli.go:1777-1779`).
 - A topic positional combined with any flag →
-  `UsageError{"usage: lit quickstart <topic> takes no flags"}` (`cli.go:1756-1759`).
+  `UsageError{"usage: lit quickstart <topic> takes no flags"}` (`cli.go:1779-1782`).
 - An unknown topic →
   `UsageError{"usage: unknown quickstart topic \"<x>\" (must be one of: <tokens>)"}`
-  (`cli.go:1763-1766`).
+  (`cli.go:1786-1789`).
 
 ---
 
 ## PART 3 — CROSS-CUTTING OBSERVATIONS (behavioral, non-editorial)
 
 1. **JSON output exists on exactly one command in this scope**: `lit export`
-   (`cli.go:1531`). Every other command emits line-oriented text. `--output` is
+   (`cli.go:1554`). Every other command emits line-oriented text. `--output` is
    rejected globally and per-command (§1.1, §1.6).
 2. **Surplus positionals are refused for every command**: `refuseSurplusPositionals`
    (`register.go:342`), called once from `parseLeaf` (`register.go:307`) before any
@@ -1871,18 +1871,18 @@ plus at most one positional topic.
 3. **Family dispatch errors are plain errors (exit 1), not `UsageError` (exit 2)**
    (`register.go:112-123`), unlike the per-command usage refusals which are
    `UsageError` (exit 2). Likewise `runTransition`'s wrong-arity refusal
-   (`cli.go:1372`) and `runCompletion`'s (`cli.go:1724`) are exit 1.
+   (`cli.go:1395`) and `runCompletion`'s (`cli.go:1747`) are exit 1.
 4. **`--help` output goes to stdout, not stderr**, and exits 0
    (`cli.go:265-272`, `cli.go:278-283`, `cli.go:47-49`).
 5. **Assignee identity diverges by command on purpose**: `start` resolves through
-   `resolveIdentity` (env `CLAUDE_CODE_SESSION_ID` wins) (`cli.go:1283`);
+   `resolveIdentity` (env `CLAUDE_CODE_SESSION_ID` wins) (`cli.go:1306`);
    `update --assignee` writes the trimmed literal, empty meaning clear
-   (`cli.go:1004-1014`). `new`/`followup` also write the trimmed literal
+   (`cli.go:1027-1037`). `new`/`followup` also write the trimmed literal
    (`cli.go:352`, `cli.go:423`).
 6. **Claim state never blocks anything except `lit start` on a fresh foreign
    hold.** `backlog` renders claims as visibility only (`backlog.go:24-25`,
    `:92-96`); `next` routes by claim but never writes (`next_route.go:139-186`);
-   `start` is the only gate (`cli.go:1438-1453`, `classifyTakeover` at
+   `start` is the only gate (`cli.go:1461-1476`, `classifyTakeover` at
    `claims_takeover.go:110-119`).
 7. **Three functions panic on unreachable states** and would abort the process:
    `ClassifyReadiness` on an unclassified annotation kind (`readiness.go:144`),

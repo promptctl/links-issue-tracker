@@ -34,7 +34,7 @@ After a successful handler, `runWithApp` (`cli.go:101-147`) — in order, after 
 1. On write-mode commands: print the mutation staleness banner (§ staleness banners below).
 2. `maybeAutoSyncAfterCommand` — the entry to the whole background engine.
 
-A failed handler skips both. Three read surfaces additionally print the store-backed staleness banner: the `show` family, `next`, and the `backlog`/workable views (`cli.go:923`, `next.go:72`, `workable.go:185`).
+A failed handler skips both. Three read surfaces additionally print the store-backed staleness banner: the `show` family, `next`, and the `backlog`/workable views (`cli.go:946`, `next.go:72`, `workable.go:187`).
 
 Durations in every banner and age line render coarsely: ≥48h → "N days", ≥2h → "N hours", ≥2m → "N minutes", else "under a minute" (`output.go:451-462`).
 
@@ -267,7 +267,7 @@ One row: `install`. Prints `installed <hookPath>` whether or not anything change
 
 ## `lit quickstart`
 
-`lit quickstart [work|new|update|done|doctor] [--refresh] [--eject[=LIST]] [--force]` (`quickstart_topics.go:55`). Validation (all exit 2): at most one positional; `--refresh` and `--eject` are mutually exclusive; `--force` only with `--eject`; a topic takes no flags; unknown topics are rejected naming the five valid ones (`cli.go:1954-1977`).
+`lit quickstart [work|new|update|done|doctor] [--refresh] [--eject[=LIST]] [--force]` (`quickstart_topics.go:55`). Validation (all exit 2): at most one positional; `--refresh` and `--eject` are mutually exclusive; `--force` only with `--eject`; a topic takes no flags; unknown topics are rejected naming the five valid ones (`cli.go:1977-2000`).
 
 - **Topic mode** renders the topic's template (project > global > embedded), trimmed; topic output never carries the soil section (`quickstart_refresh.go:203-212`).
 - **Bare / `--refresh`** renders `quickstart.md`, appending a "soil" section when config `quickstart.soil_mode = true` (default false). `--refresh` additionally runs the same writers `init` uses — hooks and agent files — plus an **inspection-only** pass over the quickstart templates: per template, `absent` (no override), `unchanged` (override identical to embedded), or `skipped`/`customized` (override drifted; left untouched — refresh never overwrites overrides). The human summary groups items into `Refreshed:` / `Skipped:` / `Up to date:`, or `nothing to refresh` (`quickstart_refresh.go:29-165`).

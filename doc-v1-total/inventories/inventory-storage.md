@@ -336,7 +336,7 @@ They live beside the specs rather than in an engine because the schema is the co
 - `"asc"` → `Desc=false`; `"desc"` → `Desc=true`; anything else → `ValidationError{Message: fmt.Sprintf("unsupported sort direction %q", direction)}` (`internal/storage/sort.go:31-42`).
 - Empty and whitespace-only expressions yield `nil, nil` (`internal/storage/sort.go:10-11`, `:46-48`).
 - It is THE parser from sort expression to `[]SortSpec`; both the `--sort` flag and the `--query sort:` token route through it (`internal/storage/sort.go:12-17`).
-- Note: the field name is **not** validated against `SortFields` here — that rejection happens in the engine (`internal/storage/sort.go:44`; cf. `internal/storage/memory/list.go:255-258`).
+- Note: the field name is **not** validated against `SortFields` here — that rejection happens in the engine (`internal/storage/sort.go:44`; cf. `internal/storage/memory/list.go:150-153`).
 
 ---
 
@@ -607,7 +607,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 
 **`storage.IssueCriteria`** (`internal/storage/selects.go:23-26`) — a `ListIssuesFilter` reduced to the criteria readable from an issue alone, with the label canonicalization already taken, so `Selects` is total. It is exported because a caller narrowing rows it already holds applies the **same** rule storage defines rather than a second one of its own (the memory engine narrows with it directly; the SQL store expresses the same selection in its own query) — the workable pipeline reads the whole queue and `keepRows` narrows it at the point of use (`internal/cli/queue_facts.go:77-87`).
 
-**`Selects`** — every criterion ANDs; every slice ORs within itself; the zero value selects everything (`internal/storage/selects.go:51-98`):
+**`Selects`** — every criterion ANDs; every slice ORs within itself; the zero value selects everything **live**, archived and deleted issues being excluded unless the filter asks for them (`internal/storage/selects.go:51-98`):
 | Criterion | Semantics | Cite |
 |---|---|---|
 | Retention | `model.Archived` excluded unless `IncludeArchived`; `model.Deleted` excluded unless `IncludeDeleted`; anything else (Live) always passes | `:52-61` |
@@ -644,12 +644,12 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 
 **`status` ordering** — `strings.Compare(string(a.State()), string(b.State()))` (`:118`). It compares the **derived** state, the same reading `matchesStates` filters on, so an epic orders by the state its children compute rather than by a stored field it does not have. There is no separate stored-status comparator.
 
-**`issueOrdering`** (`internal/storage/memory/list.go:248-274`)
-- No specs → `[]SortSpec{{Field: "rank"}}` — the canonical ordering expressed as the spec list it stands for (`:249-251`).
-- Each spec's field is `strings.ToLower(strings.TrimSpace(...))` then looked up in `issueSortKeys`; a miss → `fmt.Errorf("unsupported sort field %q", spec.Field)` (`:253-258`).
-- `Desc` negates the ascending comparator (`:259-262`).
-- **`strings.Compare(a.ID, b.ID)` ascending is appended as the final key always** — so descending reverses only the named keys, never the tie-break (`:265`).
-- The composed comparator returns the first non-zero result, else 0 (`:266-273`).
+**`issueOrdering`** (`internal/storage/memory/list.go:143-169`)
+- No specs → `[]SortSpec{{Field: "rank"}}` — the canonical ordering expressed as the spec list it stands for (`:144-146`).
+- Each spec's field is `strings.ToLower(strings.TrimSpace(...))` then looked up in `issueSortKeys`; a miss → `fmt.Errorf("unsupported sort field %q", spec.Field)` (`:148-153`).
+- `Desc` negates the ascending comparator (`:154-157`).
+- **`strings.Compare(a.ID, b.ID)` ascending is appended as the final key always** — so descending reverses only the named keys, never the tie-break (`:160`).
+- The composed comparator returns the first non-zero result, else 0 (`:161-168`).
 
 ### 2.8 `Apply` (`internal/storage/memory/apply.go`)
 
@@ -1226,7 +1226,7 @@ Derived from what the suite never exercises (the `cases` table at `:81-118` is t
 - Concurrency/thread safety — the suite is sequential by construction, so the memory engine tests it separately (`internal/storage/memory/engine_test.go:14-22`).
 - The exact `Rank` string encoding (`:1357-1359`).
 - The exact minted-id shape (`:76-79`).
-- `ListIssuesFilter.Resolutions` filtering (declared at `internal/storage/issues.go:157`, implemented at `internal/storage/memory/list.go:74-76`, but no case in the table exercises it).
+- `ListIssuesFilter.Resolutions` filtering (declared at `internal/storage/issues.go:157`, implemented at `internal/storage/memory/list.go:64-64`, but no case in the table exercises it).
 - `ReplaceLabels`/`ListLabels` against a missing issue.
 - `Close()` behavior beyond the engine factory's own cleanup.
 - `AddRelation` cycle rejection for `blocks` (implemented at `internal/storage/memory/edges.go:230-263`, not exercised by any listed case).

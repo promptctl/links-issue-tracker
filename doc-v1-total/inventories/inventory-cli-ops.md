@@ -80,7 +80,7 @@ Retired-but-dispatchable ops-adjacent commands (`Hidden: true`, return `RetiredC
 3. On success and `accessMode == app.AccessWrite`: `printMutationSyncStalenessWarning(stdout, ws, time.Now())` (`cli.go:136`), after the engine close, before auto-sync.
 4. `maybeAutoSyncAfterCommand(ctx, accessMode, ws)` (`cli.go:145`).
 
-Read commands that additionally print the store-backed banner: `internal/cli/cli.go:923`, `internal/cli/next.go:72`, `internal/cli/workable.go:185` (i.e. `show`-family, `next`, and `backlog`/workable views).
+Read commands that additionally print the store-backed banner: `internal/cli/cli.go:946`, `internal/cli/next.go:72`, `internal/cli/workable.go:187` (i.e. `show`-family, `next`, and `backlog`/workable views).
 
 ### 0.7 Duration formatting
 
@@ -899,31 +899,31 @@ Family usage `usage: lit hooks install` (`hooks.go:32`); the only row is `instal
 
 ## 12. `lit quickstart`
 
-Handler `runQuickstart` — `cli.go:1735-1802`.
+Handler `runQuickstart` — `cli.go:1758-1825`.
 Usage string, derived from the topic table: `usage: lit quickstart [work|new|update|done|doctor] [--refresh] [--eject[=LIST]] [--force]` (`quickstart_topics.go:55`, tokens from `quickstart_topics.go:16-25`).
 
 | Flag | Default | Effect | Line |
 |---|---|---|---|
-| `--refresh` | `false` | "Refresh managed repo assets and report quickstart override status (never overwrites overrides)" | `cli.go:1737` |
-| `--eject[=LIST]` | absent `""` / present `"all"` | "Eject embedded default(s) to the global override path (comma-separated short names; empty = all)" | `cli.go:1738` |
-| `--force` | `false` | "With --eject, overwrite existing override files" | `cli.go:1739` |
+| `--refresh` | `false` | "Refresh managed repo assets and report quickstart override status (never overwrites overrides)" | `cli.go:1760` |
+| `--eject[=LIST]` | absent `""` / present `"all"` | "Eject embedded default(s) to the global override path (comma-separated short names; empty = all)" | `cli.go:1761` |
+| `--force` | `false` | "With --eject, overwrite existing override files" | `cli.go:1762` |
 
 ### 12.1 Validation (all `UsageError`, exit 2)
 
-- More than one positional → `quickstartUsage` (`cli.go:1744-1746`).
-- `--eject` (empty value) is normalized to `all` (`cli.go:1748-1751`).
-- `--refresh` together with `--eject` → `usage: --refresh and --eject are mutually exclusive` (`cli.go:1752-1754`).
-- `--force` without `--eject` → `usage: --force is only valid with --eject` (`cli.go:1755-1757`).
-- Exactly one positional (a topic) with `--refresh` or `--eject` → `quickstartUsage` followed by `a topic renders on its own`; when `--eject` was given it also names `, and --eject takes its value as --eject=LIST` (`cli.go:2032-2036`). `--force` alone never reaches this branch: the `--force` without `--eject` check above returns first.
-- An unknown topic → `usage: unknown quickstart topic "<t>" (must be one of: work, new, update, done, doctor)` (`cli.go:1763-1766`).
+- More than one positional → `quickstartUsage` (`cli.go:1767-1769`).
+- `--eject` (empty value) is normalized to `all` (`cli.go:1771-1774`).
+- `--refresh` together with `--eject` → `usage: --refresh and --eject are mutually exclusive` (`cli.go:1775-1777`).
+- `--force` without `--eject` → `usage: --force is only valid with --eject` (`cli.go:1778-1780`).
+- Exactly one positional (a topic) with `--refresh` or `--eject` → `quickstartUsage` followed by `a topic renders on its own`; when `--eject` was given it also names `, and --eject takes its value as --eject=LIST` (`cli.go:2055-2059`). `--force` alone never reaches this branch: the `--force` without `--eject` check above returns first.
+- An unknown topic → `usage: unknown quickstart topic "<t>" (must be one of: work, new, update, done, doctor)` (`cli.go:1786-1789`).
 
 ### 12.2 Modes
 
-**Topic mode** (`cli.go:1759-1774`): `renderQuickstartTopic(ws.RootDir, template)` → `templates.Load` (project > global > embedded) with `strings.TrimSpace` (`quickstart_refresh.go:206-212`); printed with a trailing newline. Topic output **never** carries the soil section (`quickstart_refresh.go:203-205`).
+**Topic mode** (`cli.go:1782-1797`): `renderQuickstartTopic(ws.RootDir, template)` → `templates.Load` (project > global > embedded) with `strings.TrimSpace` (`quickstart_refresh.go:206-212`); printed with a trailing newline. Topic output **never** carries the soil section (`quickstart_refresh.go:203-205`).
 
-**Eject mode** (`cli.go:1776-1781`) → `ejectTemplates(selection, force)` then `writeEjectReport`.
+**Eject mode** (`cli.go:1799-1804`) → `ejectTemplates(selection, force)` then `writeEjectReport`.
 
-**Bare / `--refresh` mode** (`cli.go:1783-1801`): renders `renderQuickstartGuidance(ws.RootDir)` = the `quickstart.md` template trimmed, plus `soilSection` appended when `quickstart.soil_mode = true` in config (`quickstart_refresh.go:187-201`; the section text is at `quickstart_refresh.go:183-185`; config default `false` at `internal/config/config.go:223`). With `--refresh`, the workspace is re-resolved via `workspace.Resolve(".")` and the refresh summary plus a blank line is prepended (`cli.go:1792-1798`).
+**Bare / `--refresh` mode** (`cli.go:1806-1824`): renders `renderQuickstartGuidance(ws.RootDir)` = the `quickstart.md` template trimmed, plus `soilSection` appended when `quickstart.soil_mode = true` in config (`quickstart_refresh.go:187-201`; the section text is at `quickstart_refresh.go:183-185`; config default `false` at `internal/config/config.go:223`). With `--refresh`, the workspace is re-resolved via `workspace.Resolve(".")` and the refresh summary plus a blank line is prepended (`cli.go:1815-1821`).
 
 ### 12.3 `--refresh` behavior (`quickstart_refresh.go`)
 
@@ -1064,5 +1064,5 @@ All eight are also the payload of `lit quickstart --eject`, written to `<config.
 | Backward-move upgrade target | `upgrade` | `*UpgradeTargetBehindError`, exit 1, nothing installed | `upgrade.go:223-230` |
 | Empty/invalid `--to` | `upgrade`, `downgrade` | `ValidationError`, exit 3 | `downgrade.go:139-155` |
 | Unknown `--fix` name | `doctor` | `unknown fix %q; available: integrity, rank`, exit 1 | `doctor.go:274-276` |
-| Unknown quickstart topic | `quickstart` | `UsageError`, exit 2 | `cli.go:1763-1766` |
+| Unknown quickstart topic | `quickstart` | `UsageError`, exit 2 | `cli.go:1786-1789` |
 | Unknown template alias | `quickstart --eject` | error listing valid aliases, exit 1 | `templates.go:68-70` |

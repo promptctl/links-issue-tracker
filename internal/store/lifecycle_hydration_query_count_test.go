@@ -17,12 +17,14 @@ import (
 // a tree of one epic and a tree of many epics of the same shape and depth must
 // cost the identical number of queries. (links-query-efficiency-988d.1)
 //
-// "Identical" holds up to idBatchSize epics, which is what the counts below
-// compare. Past that the id lists batch, so the count rises by one per
-// idBatchSize epics rather than staying flat -- a bound the unbatched clause
-// did not need but paid for in quadratic index-range planning instead. What
-// this test protects is the absence of per-epic fan-out, and that is unchanged:
-// the growth is in the cap, not in the epic count.
+// "Identical" holds while the id lists stay inside one batch, which for this
+// fixture means idBatchSize/2 epics, not idBatchSize: the binding read is the
+// label load, and it receives two ids per epic -- the epic and its child. The
+// counts below compare 1 against 5, well inside that. Past the bound the count
+// rises by one per batch rather than staying flat, which is a bound the
+// unbatched clause did not need but paid for in quadratic planning instead.
+// What this test protects is the absence of per-epic fan-out, and that is
+// unchanged: the growth is in the cap, not in the epic count.
 //
 // This is observed behaviorally — real prepared statements are counted at the
 // driver boundary — rather than by asserting the shape of the Go code, so the

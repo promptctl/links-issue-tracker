@@ -3341,7 +3341,7 @@ Attribution decode collapses a half pair to the zero value via `NewAttribution` 
 
 Three write surfaces consume `Store.Export`:
 
-**(a) `lit export` to stdout** — `internal/cli/cli.go:1521-1532`. No flags other than the shared set; `writeJSON(stdout, export)` (`cli.go:1531`), which is `json.NewEncoder(w)` with `SetIndent("", "  ")` then `Encode` (`cli.go:1807-1811`). So: **two-space indent, one trailing newline** (Encoder.Encode appends `\n`), single JSON object, HTML escaping on (encoder default). Comment at `cli.go:1530`: "Export is JSON-only — there is no text representation of a full database export."
+**(a) `lit export` to stdout** — `internal/cli/cli.go:1544-1555`. No flags other than the shared set; `writeJSON(stdout, export)` (`cli.go:1554`), which is `json.NewEncoder(w)` with `SetIndent("", "  ")` then `Encode` (`cli.go:1830-1834`). So: **two-space indent, one trailing newline** (Encoder.Encode appends `\n`), single JSON object, HTML escaping on (encoder default). Comment at `cli.go:1553`: "Export is JSON-only — there is no text representation of a full database export."
 
 **(b) Backup snapshots** — `internal/backup/backup.go`. `Create(storageDir, export)`:
 - directory `filepath.Join(storageDir, "backups")`, created with mode `0o755`.
@@ -3684,11 +3684,11 @@ Atomicity: best-effort only. Doc comment `import_tree.go:18-22` states partial s
 
 ### 4.6 CLI surface
 
-`lit import --path <file>` (`internal/cli/cli.go:1544-1575`). `importUsage = "usage: lit import --path <tree-spec.json | bulk-file.yaml> (run `lit import --help` for both formats)"` (`cli.go:1536`) — raised for an empty `--path` or any positional argument. The file is read with `os.ReadFile`, error `"read import spec: %w"`. Dispatch is on `strings.ToLower(filepath.Ext(path))`: `.yaml`/`.yml` → bulk; **anything else** (including `.json` and no extension) → tree JSON (`cli.go:1561-1575`).
+`lit import --path <file>` (`internal/cli/cli.go:1567-1598`). `importUsage = "usage: lit import --path <tree-spec.json | bulk-file.yaml> (run `lit import --help` for both formats)"` (`cli.go:1559`) — raised for an empty `--path` or any positional argument. The file is read with `os.ReadFile`, error `"read import spec: %w"`. Dispatch is on `strings.ToLower(filepath.Ext(path))`: `.yaml`/`.yml` → bulk; **anything else** (including `.json` and no extension) → tree JSON (`cli.go:1584-1598`).
 
-On the JSON branch, a set `--by` flag is an error: `"usage: --by only applies to a YAML bulk-update file (--path *.yaml|*.yml); JSON tree-spec import always attributes creates to \"links\""` (`cli.go:1571`).
+On the JSON branch, a set `--by` flag is an error: `"usage: --by only applies to a YAML bulk-update file (--path *.yaml|*.yml); JSON tree-spec import always attributes creates to \"links\""` (`cli.go:1594`).
 
-Output (`runImportTreeJSON`, `cli.go:1595-1612`): `"imported %d issues\n"` with `len(result.IDMap)`, then one line per map entry `"  %s -> %s\n"` — **iterated over a Go map, so the mapping lines are in nondeterministic order**.
+Output (`runImportTreeJSON`, `cli.go:1618-1635`): `"imported %d issues\n"` with `len(result.IDMap)`, then one line per map entry `"  %s -> %s\n"` — **iterated over a Go map, so the mapping lines are in nondeterministic order**.
 
 ---
 
@@ -3719,7 +3719,7 @@ Pointer fields carry the patch distinction: nil = "leave unchanged / unspecified
 
 `ParseBulkSpecs` (`internal/storage/specs.go:25-40`): `yaml.NewDecoder` with `dec.KnownFields(true)` — unknown keys are an error. It loops `dec.Decode(&spec)` until `io.EOF`, appending each document; any other error → `"bulk: parse spec: %w"`. **A file with zero documents parses to a nil slice**, which `validateBulkSpecs` then rejects.
 
-Example (from `cli.go:1617-1631`):
+Example (from `cli.go:1640-1654`):
 
 ```yaml
 local_id: epic-x
@@ -3821,15 +3821,15 @@ Note the create branch does **not** require `LocalID` (unlike ImportTree), and d
 
 **There is no batching.** Every document is applied through the ordinary per-issue `CreateIssue`/`Apply`/`AddRelation` calls one at a time (`import_bulk.go:50`, `:72`, `:112`) — each of which is its own `withMutation` transaction and its own Dolt commit. There are no literal batch-size constants anywhere in these files, and `BulkApply`/`ImportTree` open no transaction of their own.
 
-**No progress reporting** exists at the store layer; the CLI prints only after the whole call returns (`cli.go:1651-1667`).
+**No progress reporting** exists at the store layer; the CLI prints only after the whole call returns (`cli.go:1674-1690`).
 
 **Partial failure**: not transactional. On a mid-batch error, `rollbackCreatedIssues` best-effort soft-deletes only the issues **created in this call** — never updated ones, which have "no prior create to unwind" (`import_bulk.go:13-20`). Ids that fail to roll back are named in the error as `(rollback leaked %d: %s)`. Updates that already landed **stay applied**. The doc comment directs the operator to `lit doctor` after a failed batch (`import_bulk.go:18-19`).
 
 ### 5.6 CLI surface for bulk
 
-`runImportBulk` (`cli.go:1633-1669`): parse; if `--by` was set but no document has an `id` → `UsageError{Message: "usage: --by only applies when the file has at least one update document (a document with `id` set); this file has none"}` (`cli.go:1644`), determined by `bulkSpecsHaveUpdate` (`cli.go:1673-1680`). Then `ap.Store.BulkApply(ctx, ap.Workspace.IssuePrefix.Value(), actor, specs)`.
+`runImportBulk` (`cli.go:1656-1692`): parse; if `--by` was set but no document has an `id` → `UsageError{Message: "usage: --by only applies when the file has at least one update document (a document with `id` set); this file has none"}` (`cli.go:1667`), determined by `bulkSpecsHaveUpdate` (`cli.go:1696-1703`). Then `ap.Store.BulkApply(ctx, ap.Workspace.IssuePrefix.Value(), actor, specs)`.
 
-Output, in order (`cli.go:1651-1667`):
+Output, in order (`cli.go:1674-1690`):
 ```
 created %d issues\n         (len(result.Created))
   %s -> %s\n                (per Created entry — map iteration, nondeterministic order)
@@ -3887,7 +3887,7 @@ updated %d issues\n         (len(result.Updated))
 | backup dir mode | `0o755` | `internal/backup/backup.go:24` |
 | sync-base path | `<StorageDir>/last-sync-base.json` | `internal/cli/backup.go:119` |
 | syncfile temp pattern | `.links-sync-*.json` | `internal/syncfile/syncfile.go:24` |
-| JSON indent (export/stdout, syncfile, hashExport) | `"", "  "` (two spaces) | `cli.go:1809`, `syncfile.go:67`, `cli/backup.go:190` |
+| JSON indent (export/stdout, syncfile, hashExport) | `"", "  "` (two spaces) | `cli.go:1832`, `syncfile.go:67`, `cli/backup.go:190` |
 | default `--keep` for backup create / restore prune | `20` / `20` | `cli/backup.go:34`, `cli/backup.go:160` |
 
 ## 7. Cross-cutting error-message index for this slice
@@ -4152,7 +4152,7 @@ Signature: `Recover(ctx, canonicalDoltDir string, dump RawDump, mapper Mapper, m
 
 ### 3.2 Output format and destination
 
-The dump is a **JSON** document, not SQL and not TSV. The only producer path to a file/stdout is `lit lifeboat dump`, which writes the `RawDump` value to stdout via `writeJSON` (`internal/cli/lifeboat.go:170`), which uses `json.NewEncoder(w)` with `enc.SetIndent("", "  ")` — two-space indentation, one trailing newline from `Encode` (`internal/cli/cli.go:1807-1811`). There is **no header line, no footer line, and no SQL quoting/escaping layer** — escaping is entirely `encoding/json`'s. `runLifeboatDump` takes no flags and rejects extra args with `UsageError{Message: "usage: lit lifeboat dump"}` (`internal/cli/lifeboat.go:158-171`).
+The dump is a **JSON** document, not SQL and not TSV. The only producer path to a file/stdout is `lit lifeboat dump`, which writes the `RawDump` value to stdout via `writeJSON` (`internal/cli/lifeboat.go:170`), which uses `json.NewEncoder(w)` with `enc.SetIndent("", "  ")` — two-space indentation, one trailing newline from `Encode` (`internal/cli/cli.go:1830-1834`). There is **no header line, no footer line, and no SQL quoting/escaping layer** — escaping is entirely `encoding/json`'s. `runLifeboatDump` takes no flags and rejects extra args with `UsageError{Message: "usage: lit lifeboat dump"}` (`internal/cli/lifeboat.go:158-171`).
 
 ### 3.3 `DumpRaw` — exact step order and every error (`rawdump.go:60-117`)
 
