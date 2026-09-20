@@ -242,7 +242,7 @@ Stdout stays the result channel.
   flag value is never exposed; `--by` does not appear in help output
   (`cli.go:1203-1204`).
 - Empty actor is normalized by the store to `"unknown"`
-  (`internal/store/store.go:1087-1090`).
+  (`internal/store/store.go:1102-1105`).
 - `displayAssignee("")` renders `"(unassigned)"` (`cli.go:1210-1215`).
 
 Commands that register `--by`: `update` (`cli.go:939`), every transition via
@@ -1066,18 +1066,18 @@ positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason 
 - The redirect target must exist, must not be the closing issue itself, and must
   not be deleted: `"closing as <res> requires a canonical target issue to redirect
   to"`, `"cannot redirect <id> to itself"`, `"cannot redirect <id> to <target>:
-  the canonical issue is deleted"` (`internal/store/store.go:1547`, `:1552`,
-  `:1559`).
+  the canonical issue is deleted"` (`internal/store/store.go:1562`, `:1567`,
+  `:1574`).
 - `archive` on a deleted issue → `"cannot archive deleted issue"`;
   `unarchive` on a deleted issue → `"cannot unarchive deleted issue"`
   (`internal/model/lifecycle/retention.go:73`, `:82`).
 - **There is no from-state precondition on `done`.** `Store.Apply` performs no
-  status-precondition check (`internal/store/store.go:1073-1130`), and
+  status-precondition check (`internal/store/store.go:1088-1145`), and
   `applyStatusAction` is total over the leaf states
   (`internal/model/lifecycle/status_states.go:134-161`). The registry summary
   "requires in_progress" (`register.go:332`) is not enforced by any code path in
   this repo. A same-state transition is a no-op that records nothing
-  (`status_states.go:136-138`, `internal/store/store.go:1064-1071`).
+  (`status_states.go:136-138`, `internal/store/store.go:1079-1086`).
 
 ### 2.11 `lit start` takeover gate
 
@@ -1487,10 +1487,10 @@ usage string as a plain error → exit 1 (`register.go:112-123`).
   (`cli.go:1472-1477`).
 - Store refusal: a blank body (after trim) →
   `errors.New("comment body is required")` → exit 1
-  (`internal/store/store.go:1141-1144`). A missing issue → exit 4
-  (`store.go:1137-1140`).
+  (`internal/store/store.go:1156-1159`). A missing issue → exit 4
+  (`store.go:1152-1155`).
 - The comment id is `"cmt-" + uuid` and `CreatedBy` empty is normalized to
-  `"unknown"` (`store.go:1146-1150`).
+  `"unknown"` (`store.go:1161-1165`).
 - Dispatches `EventCommentAdded` (`cli.go:1484-1486`).
 - Output: `printComment` → `"<issueID> <commentID>\n"` (`cli.go:1509-1512`).
   **No breadcrumb.**
@@ -1501,7 +1501,7 @@ usage string as a plain error → exit 1 (`register.go:112-123`).
   `UsageError{"usage: lit comment rm <comment-id>"}` → exit 2 (`cli.go:1496-1501`).
 - Store: blank id → `"comment id is required"`; unknown id →
   `storage.NotFoundError{Entity: "comment", ID: id}` → exit 4
-  (`internal/store/store.go:1160-1179`).
+  (`internal/store/store.go:1175-1194`).
 - Output: `"<issueID> <commentID>\n"` for the deleted comment (`cli.go:1506`).
 
 ### 2.18 `lit label` — Manage labels
@@ -1892,6 +1892,6 @@ plus at most one positional topic.
    (`quickstart_topics.go:64`), `completionRenderer` on an unknown shell
    (`completion.go:54`), `nestUnder` on a missing nest point (`register.go:153`),
    and `store.planLifecycleAction` on an impostor action
-   (`internal/store/store.go:1236`).
+   (`internal/store/store.go:1251`).
 8. **The `done` "requires in_progress" claim in the registry summary
    (`register.go:332`) has no enforcing code path** — see §2.10.
