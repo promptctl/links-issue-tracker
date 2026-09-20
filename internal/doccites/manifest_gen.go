@@ -553,6 +553,8 @@ var Manifest = []Held{
 	{Doc: "doc-v1-total/inventories/inventory-cli-issue.md", Text: "`query.go:221-233`", File: "internal/query/query.go", Span: Span{Start: 221, End: 233}, Symbol: "splitComparator"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-issue.md", Text: "`query.go:31-71`", File: "internal/query/query.go", Span: Span{Start: 31, End: 71}, Symbol: "Merge"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-issue.md", Text: "`query.go:73-176`", File: "internal/query/query.go", Span: Span{Start: 73, End: 176}, Symbol: "applyTerm"},
+	{Doc: "doc-v1-total/inventories/inventory-cli-issue.md", Text: "`queue_facts.go:34`", File: "internal/cli/queue_facts.go", Span: Span{Start: 34, End: 34}, Symbol: "Unblocks"},
+	{Doc: "doc-v1-total/inventories/inventory-cli-issue.md", Text: "`queue_facts.go:45-56`", File: "internal/cli/queue_facts.go", Span: Span{Start: 45, End: 56}, Symbol: "deriveQueueFacts"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-issue.md", Text: "`ready_state.go:1000-1020`", File: "internal/cli/ready_state.go", Span: Span{Start: 1000, End: 1020}, Symbol: "printInlineDeps"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-issue.md", Text: "`ready_state.go:101-120`", File: "internal/cli/ready_state.go", Span: Span{Start: 101, End: 120}, Symbol: "fetchIssueRelations"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-issue.md", Text: "`ready_state.go:122-189`", File: "internal/cli/ready_state.go", Span: Span{Start: 122, End: 189}, Symbol: "inheritedDependencies"},

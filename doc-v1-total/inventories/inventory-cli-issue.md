@@ -1202,8 +1202,11 @@ Use 'lit next' to pick the top workable item to start.
      rows (`backlog.go:87-91`, `inProgressSuffix` at `ready_state.go:918-925`)
    - `    <claim line>` when the row's lane is Held or Stale (`backlog.go:92-96`)
    - `    unblocks: <ids of rows that depend on this one>` — derived from the
-     classified open-dependency facts of the listed rows only
-     (`backlog.go:97`, `buildUnblocksMap` at `ready_state.go:866-874`)
+     classified open-dependency facts of the whole workable queue, before any
+     narrowing, so the line survives a filter or a limit that cuts the
+     dependent row (`backlog.go:97`, `deriveQueueFacts` at
+     `queue_facts.go:45-56`, read back through `queueFacts.Unblocks` at
+     `queue_facts.go:34`)
 6. Finally, if any row carries a `RankInversion` annotation:
    `"\nWarning: %d rank inversion(s) — dependencies ranked below their dependents. Run `lit doctor --fix` to repair. <agent-instructions>This command is idempotent and safe to run without confirmation.</agent-instructions>\n"`
    (`printRankInversions`, `ready_state.go:929-939`).
