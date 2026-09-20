@@ -90,6 +90,7 @@ var Manifest = []Held{
 	{Doc: "doc-v1-total/04-store-operations.md", Text: "`rawdump.go:90`", File: "internal/store/rawdump.go", Span: Span{Start: 90, End: 90}, Symbol: "DumpRaw"},
 	{Doc: "doc-v1-total/04-store-operations.md", Text: "`recover.go:108-140`", File: "internal/store/recover.go", Span: Span{Start: 108, End: 140}, Symbol: "Recover"},
 	{Doc: "doc-v1-total/04-store-operations.md", Text: "`recover.go:27-40`", File: "internal/store/recover.go", Span: Span{Start: 27, End: 40}, Symbol: "DeterministicMapper"},
+	{Doc: "doc-v1-total/04-store-operations.md", Text: "`relations.go:606-621`", File: "internal/store/relations.go", Span: Span{Start: 606, End: 621}, Symbol: "RemoveRelation"},
 	{Doc: "doc-v1-total/04-store-operations.md", Text: "`sync_reconcile.go:564-597`", File: "internal/store/sync_reconcile.go", Span: Span{Start: 564, End: 597}, Symbol: "replayDeltaOnScratch"},
 	{Doc: "doc-v1-total/04-store-operations.md", Text: "`sync_reconcile.go:628-652`", File: "internal/store/sync_reconcile.go", Span: Span{Start: 628, End: 652}, Symbol: "landed"},
 	{Doc: "doc-v1-total/04-store-operations.md", Text: "`syncfile.go:20-39, 66-72`", File: "internal/syncfile/syncfile.go", Span: Span{Start: 20, End: 39}, Symbol: "WriteAtomic"},

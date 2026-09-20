@@ -127,7 +127,7 @@ Cell rules: columns come from the live result set; each `[]byte` cell converts t
 
 Five hard single-row deletes by full primary key, used by the reconcile delta and a few CRUD paths (`row_deletes.go:83-105`): issues, relations, comments, labels, issue_events. Cascade is owned by the schema (`ON DELETE CASCADE`), not by code: deleting an issue takes its relations, comments, labels, events, and event changes; deleting an event takes its change rows. **No CRUD path hard-deletes an issue row** — ordinary deletion is the retention stamp; `deleteIssueTx`/`deleteEventTx` have only the reconcile delta as caller, deliberately (`row_deletes.go:55-61`). Errors render `delete <subject>: ...` with per-entity subject strings.
 
-The rows-affected count exists for CRUD callers: `RemoveLabel` and `RemoveRelation` convert 0 rows into typed `NotFoundError`s; `DeleteComment` discards the count; the delta ignores it (`labels.go:51-57`; `relations.go:407-421`; `store.go:1189-1191`). Set-matching deletes (single-valued edge replacement, `ClearParent`, label replacement, the self-edge sweep, `writeExportTx`'s wholesale clear, `FixIntegrity`) are deliberately separate statements (`row_deletes.go:63-74`).
+The rows-affected count exists for CRUD callers: `RemoveLabel` and `RemoveRelation` convert 0 rows into typed `NotFoundError`s; `DeleteComment` discards the count; the delta ignores it (`labels.go:51-57`; `relations.go:606-621`; `store.go:1189-1191`). Set-matching deletes (single-valued edge replacement, `ClearParent`, label replacement, the self-edge sweep, `writeExportTx`'s wholesale clear, `FixIntegrity`) are deliberately separate statements (`row_deletes.go:63-74`).
 
 ## Checkpoints
 
