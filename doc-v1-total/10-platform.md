@@ -52,7 +52,7 @@ Every variable the shipped binary reads:
 | `LIT_CONFIG_GLOBAL_PATH` | Overrides the global config file path entirely (`config.go:270-273`) |
 | `LIT_CONFIG_PROJECT_PATH` | Overrides the project config file path (`config.go:275-278`) |
 | `LIT_DISABLE_AUTO_SYNC` | Truthy (`strconv.ParseBool`, parse error = false) → no command schedules a push mirror, runs an inline receive, or compacts, and the owner-notify hook never runs (`internal/cli/sync_cadence.go:19-33,79-81`; `owner_notify.go:149-151`) |
-| `CLAUDE_CODE_SESSION_ID` | Non-empty after trim → the acting identity is always `claude_<sessionID>`, overriding `--assignee`/`--by` (`cli.go:1172-1177`) |
+| `CLAUDE_CODE_SESSION_ID` | Non-empty after trim → the acting identity is always `claude_<sessionID>`, overriding `--assignee`/`--by` (`cli.go:1179-1184`) |
 | `LNKS_AUTOMATION_TRIGGER` | Non-empty → automation-trace recording is on; the value is the trace's `Trigger` (`internal/cli/automation_trace.go:53-73`) |
 | `LNKS_AUTOMATION_REASON` | Default `Reason` on the automation trace when the caller supplied none (`automation_trace.go:64-66`) |
 | `LNKS_AUTOMATION_TRACE_REF_FILE` | Non-empty → the recorded trace's path is appended (mode 0644) to that file (`automation_trace.go:78-81`) |
@@ -253,5 +253,5 @@ One build, `./cmd/lit`, CGO enabled, cross-compiled with per-target zig wrapper 
 
 - `.claude-plugin/marketplace.json` declares a local marketplace `links-marketplace` listing one plugin, `links`, sourced from `./claude-plugin`.
 - The **entire** shipped plugin is one file, `claude-plugin/.claude-plugin/plugin.json`: name `links`, version 0.1.0, and two hooks — `SessionStart` and `PreCompact`, each with an empty matcher, each running `lit quickstart --refresh`. No commands, agents, skills, or MCP servers.
-- The repo's own dogfooding wiring: `.claude/settings.json` runs `.claude/hooks/session-start.sh` on `SessionStart`; the script extracts `session_id` from the hook's stdin JSON and prints "Your Claude Code session id is: <id>. When using lit, your assignee identity is claude_<id>." — the same identity string `resolveIdentity` derives from `CLAUDE_CODE_SESSION_ID` (`cli.go:1173-1174`).
+- The repo's own dogfooding wiring: `.claude/settings.json` runs `.claude/hooks/session-start.sh` on `SessionStart`; the script extracts `session_id` from the hook's stdin JSON and prints "Your Claude Code session id is: <id>. When using lit, your assignee identity is claude_<id>." — the same identity string `resolveIdentity` derives from `CLAUDE_CODE_SESSION_ID` (`cli.go:1180-1181`).
 - `.claude/settings.local.json` carries local permissions (several `Bash(lit …)` allows, `gh pr`, two Read paths) and MCP server enablement.

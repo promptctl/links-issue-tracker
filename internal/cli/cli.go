@@ -760,10 +760,17 @@ type workableFilter struct {
 	Labels    []string
 }
 
-// criteria expresses this filter in the store's own selection vocabulary, so
-// the narrowing the pipeline applies to rows it already holds and the narrowing
-// `lit ls` asks the query for cannot come to mean different things.
+// criteria expresses this filter in the storage layer's own selection
+// vocabulary, so the pipeline narrows rows it already holds with the rule
+// storage defines rather than a second similar-looking one written here.
 // [LAW:one-source-of-truth]
+//
+// What that unifies is this pipeline with storage.IssueCriteria, and not the
+// two store implementations with each other. The memory engine narrows with
+// this rule directly; the SQL store expresses the same selection in its own
+// WHERE clauses and is not held to this type by anything. They agree today,
+// but by review rather than by construction, so the single source of truth
+// claimed here reaches the store boundary and stops.
 //
 // Canonicalizing the labels is the only part that can fail, and it fails here,
 // before a single row is read. [LAW:parse-dont-validate]

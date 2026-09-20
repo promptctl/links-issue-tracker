@@ -96,7 +96,7 @@ The single payload type is `Occasion` (`match.go:13-35`): `Event` (zero when non
 | `ticket_updated` | Event, IssueID, Labels; never a transition — `lit update` rejects `--status` (`workflow_events.go:57-59`) |
 | `work_started`/`work_finished`/`ticket_closed`/`ticket_reopened` | Event, IssueID, post-transition Labels, `Entered` = post state, `Exited` = pre state (`workflow_events.go:103-119`) |
 
-The status-action→event map is `start→work_started`, `done→work_finished`, `close→ticket_closed`, `reopen→ticket_reopened`; an unmapped status action panics (`workflow_events.go:83-88,105-111`). Retention actions (archive/unarchive/delete/restore) are not status actions and fire **no event at all** (`internal/cli/cli.go:1408`, `workflow_events.go:78-82`).
+The status-action→event map is `start→work_started`, `done→work_finished`, `close→ticket_closed`, `reopen→ticket_reopened`; an unmapped status action panics (`workflow_events.go:83-88,105-111`). Retention actions (archive/unarchive/delete/restore) are not status actions and fire **no event at all** (`internal/cli/cli.go:1415`, `workflow_events.go:78-82`).
 
 ### Dispatch call sites
 
@@ -105,10 +105,10 @@ Where each event actually fires, and where in the command's output the injected 
 | Site | Event | Position |
 |---|---|---|
 | `lit new` (`cli.go:359`), `lit followup` (`cli.go:431`) | `ticket_created` | after create succeeds, before the issue summary and breadcrumb |
-| `lit show` (`cli.go:879`) | `show_ticket` | after detail load, before either `--field` output or the full view — fires for both |
-| `lit update` (`cli.go:1026`) | `ticket_updated` | after apply, before summary |
-| transitions (`cli.go:1409`) | one of the four transition events | after apply and authorize, before the claim-transfer notice |
-| `lit comment` (`cli.go:1484`) | `comment_added` | after the comment is stored, before it is printed |
+| `lit show` (`cli.go:886`) | `show_ticket` | after detail load, before either `--field` output or the full view — fires for both |
+| `lit update` (`cli.go:1033`) | `ticket_updated` | after apply, before summary |
+| transitions (`cli.go:1416`) | one of the four transition events | after apply and authorize, before the claim-transfer notice |
+| `lit comment` (`cli.go:1491`) | `comment_added` | after the comment is stored, before it is printed |
 | `lit next` (`internal/cli/next.go:92`) | `next_pulled` | last, after the start advice and summary; only when a row was actually served — exhausted/no-work paths return before any occasion is built |
 | `lit backlog` (`internal/cli/workable.go:245`) | `show_backlog` | last, after the table render |
 

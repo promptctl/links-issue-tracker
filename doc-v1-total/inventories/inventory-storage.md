@@ -605,7 +605,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 | `ParentIDs` | `matchesParents(issue.ID, ParentIDs)`: empty = pass; else some `RelParentChild` relation has `SrcID == issue.ID` and `DstID` in the list; the parent's retention is not consulted | `:77-79`, `:90-99` |
 | `HasComments` | reject if `*HasComments != (len(commentsFor(issue.ID)) > 0)` | `:80-82` |
 
-**`storage.IssueCriteria`** (`internal/storage/selects.go:23-26`) — a `ListIssuesFilter` reduced to the criteria readable from an issue alone, with the label canonicalization already taken, so `Selects` is total. It is exported because a caller narrowing rows it already holds applies the **same** rule the store applies rather than a second one of its own — the workable pipeline reads the whole queue and `keepRows` narrows it at the point of use (`internal/cli/queue_facts.go:77-87`).
+**`storage.IssueCriteria`** (`internal/storage/selects.go:23-26`) — a `ListIssuesFilter` reduced to the criteria readable from an issue alone, with the label canonicalization already taken, so `Selects` is total. It is exported because a caller narrowing rows it already holds applies the **same** rule storage defines rather than a second one of its own (the memory engine narrows with it directly; the SQL store expresses the same selection in its own query) — the workable pipeline reads the whole queue and `keepRows` narrows it at the point of use (`internal/cli/queue_facts.go:77-87`).
 
 **`Selects`** — every criterion ANDs; every slice ORs within itself; the zero value selects everything (`internal/storage/selects.go:44-91`):
 | Criterion | Semantics | Cite |
