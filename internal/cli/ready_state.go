@@ -967,29 +967,7 @@ func printNextSummary(w io.Writer, row annotation.AnnotatedIssue, cc claimContex
 	if _, err := fmt.Fprintln(w, line); err != nil {
 		return err
 	}
-	return printInlineDeps(w, row, nil, cc, lane)
-}
-
-// buildUnblocksMap derives a reverse dependency index from the classified
-// open-dependency facts. For each dependency ID, it returns the IDs of open
-// issues that depend on it.
-// [LAW:dataflow-not-control-flow] The map is derived from existing annotation data;
-// no extra store queries needed.
-//
-// issues must be the whole gathered workable set, never the rows a view prints.
-// The reverse index is a fact about the backlog: a dependent the caller filtered
-// out still gets unblocked by closing its prerequisite, and handing this the
-// narrowed rows deletes that line from the prerequisite's own row instead of
-// from the dependent's. Both narrowings reached it — the focus scope and
-// --limit (links-listing-85sd).
-func buildUnblocksMap(issues []annotation.AnnotatedIssue) map[string][]string {
-	m := make(map[string][]string)
-	for _, issue := range issues {
-		for _, dep := range ClassifyReadiness(issue.Annotations).DependencyIDs() {
-			m[dep] = append(m[dep], issue.ID)
-		}
-	}
-	return m
+	return printInlineDeps(w, row, cc, lane)
 }
 
 // partitionWorkable splits the workable rows into the three buckets the
@@ -1015,23 +993,30 @@ func partitionWorkable(issues []annotation.AnnotatedIssue) (inProgress, ready []
 	return inProgress, ready, blocked
 }
 
-// printInlineDeps prints the shared epic/depends-on/unblocks context lines
+// printInlineDeps prints the shared epic/depends-on/claim context lines
 // indented under a workable item. `lit next` shows exactly this common core;
 // the backlog view (printBacklogContext) composes its extra lines around the
 // same emitters. [LAW:single-enforcer]
-func printInlineDeps(w io.Writer, entry annotation.AnnotatedIssue, unblocksMap map[string][]string, cc claimContext, lane model.LaneID) error {
+//
+// An "unblocks" line is not part of the core and never was: emitting one took a
+// reverse index, the only caller passed nil, and the line was unreachable while
+// the signature went on claiming otherwise.
+// [LAW:polishing-by-subtraction] the parameter is gone rather than wired up —
+// giving `lit next` a line it has never printed is a change to that command,
+// not a repair to this one.
+func printInlineDeps(w io.Writer, entry annotation.AnnotatedIssue, cc claimContext, lane model.LaneID) error {
 	if err := printEpicLine(w, contextIndent, entry.ParentEpic); err != nil {
 		return err
 	}
 	if err := printIDListLine(w, contextIndent, "depends on", ClassifyReadiness(entry.Annotations).DependencyLabels()); err != nil {
 		return err
 	}
-	if line, ok := formatClaimLine(cc, lane, time.Now()); ok {
-		if _, err := fmt.Fprintf(w, "%s%s\n", contextIndent, line); err != nil {
-			return err
-		}
+	line, ok := formatClaimLine(cc, lane, time.Now())
+	if !ok {
+		return nil
 	}
-	return printIDListLine(w, contextIndent, "unblocks", unblocksMap[entry.ID])
+	_, err := fmt.Fprintf(w, "%s%s\n", contextIndent, line)
+	return err
 }
 
 // inProgressSuffix renders the age of an in-flight row and what that age means.
@@ -1065,16 +1050,13 @@ func inProgressSuffix(entry annotation.AnnotatedIssue, holder claims.Presence) s
 // printRankInversions prints a count-only warning when dependencies are ranked
 // below the issues they block, with instructions to fix.
 //
-// issues must be the whole gathered workable set, for the same reason
-// buildUnblocksMap needs it: rank is stored globally, so an inversion is a
-// property of the backlog rather than of whichever slice of it is on screen,
-// and counting over the narrowed rows under-reports the repair `lit doctor
-// --fix` would make.
-func printRankInversions(w io.Writer, issues []annotation.AnnotatedIssue) error {
-	count := 0
-	for _, issue := range issues {
-		count += len(ClassifyReadiness(issue.Annotations).RankInversions())
-	}
+// count comes from queueFacts, which counted the whole workable queue. Rank is
+// stored globally, so an inversion is a property of the backlog rather than of
+// whichever slice of it is on screen, and a count taken over the rows a view
+// kept under-reports the repair `lit doctor --fix` actually makes. Taking an
+// int rather than rows is what makes that unstateable here: there is no set to
+// pass the wrong one of. [LAW:types-are-the-program]
+func printRankInversions(w io.Writer, count int) error {
 	if count == 0 {
 		return nil
 	}

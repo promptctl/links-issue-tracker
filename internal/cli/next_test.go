@@ -22,7 +22,7 @@ import (
 // hold lanes as this checkout. Use asCheckout to write as somebody else.
 func (h readyTestHarness) runNextOutcome() NextOutcome {
 	h.t.Helper()
-	annotated, details, focus, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
+	gathered, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
 	if err != nil {
 		h.t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}
@@ -33,7 +33,7 @@ func (h readyTestHarness) runNextOutcome() NextOutcome {
 	// The gathered scope, not focusScope{}: this helper stands in for `lit next`
 	// itself, and handing routing an empty scope here would quietly answer every
 	// focus test from the unfocused path — green, and about a command nobody runs.
-	return routeNext(annotated, details, cc.standings, cc.self, focus)
+	return routeNext(gathered.rows, gathered.details, cc.standings, cc.self, gathered.scope)
 }
 
 // runNextRow narrows an outcome to the row it served, for the ordering and

@@ -259,10 +259,11 @@ func TestRenderEpicContextEarlierLaneMateHoldsSiblingBack(t *testing.T) {
 	// The other half of the claim: routing, over the same store, serves the
 	// first child and not the second. The plan slice and the pick are pinned
 	// together here, so a future change that moves one has to move both.
-	rows, details, focus, err := gatherWorkableAnnotated(f.ctx, f.ap, workableFilter{})
+	gathered, err := gatherWorkableAnnotated(f.ctx, f.ap, workableFilter{})
 	if err != nil {
 		t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}
+	rows, details, focus := gathered.rows, gathered.details, gathered.scope
 	outcome := routeNext(rows, details, claims.Standings{}, selfAttribution, focus)
 	served, ok := outcome.(ServedFromNewLane)
 	if !ok {

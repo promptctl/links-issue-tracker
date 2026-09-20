@@ -85,11 +85,11 @@ func (h readyTestHarness) transition(id string, action model.Action) {
 
 func (h readyTestHarness) gather() ([]annotation.AnnotatedIssue, map[string]storage.IssueRelations) {
 	h.t.Helper()
-	rows, details, _, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
+	gathered, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
 	if err != nil {
 		h.t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}
-	return rows, details
+	return gathered.rows, gathered.details
 }
 
 // A checkout's own held lane wins over a higher-ranked, entirely unclaimed
@@ -462,10 +462,12 @@ func TestRouteNextKeepsOwnershipUnderADisplayFilter(t *testing.T) {
 	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
 	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicB.ID})
 
-	rows, details, _, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{IssueType: model.TypeBug})
+	gathered, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{IssueType: model.TypeBug})
 	if err != nil {
 		t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}
+	// The gather already applied --type; these are the rows `lit next` routes over.
+	rows, details := gathered.rows, gathered.details
 	standings := claims.Standings{model.LaneOf(a1, &epicA): heldBy(selfAttribution)}
 
 	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})

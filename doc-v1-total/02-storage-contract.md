@@ -45,8 +45,8 @@ Three error types (`internal/storage/errors.go`, `capabilities.go:219-229`):
 Semantics fixed by the memory engine and conformance:
 
 - Retention is the one axis whose default is a filter: a listing that says nothing sees only live issues.
-- The status *filter* matches the **derived** state (an epic's computed state); search is case-insensitive substring across exactly four fields — title, description, prompt, topic — and multiple search terms are conjunctive (`memory/list.go:118-161`).
-- `Limit: 0` means uncapped; a positive limit truncates the head of the ordered result (`memory/list.go:184-192`).
+- The status *filter* matches the **derived** state (an epic's computed state); search is case-insensitive substring across exactly four fields — title, description, prompt, topic — and multiple search terms are conjunctive (`internal/storage/selects.go:102-142`).
+- `Limit: 0` means uncapped; a positive limit truncates the head of the ordered result (`memory/list.go:102-110`).
 
 ### Sort fields
 

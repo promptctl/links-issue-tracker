@@ -110,13 +110,15 @@ func (n focusNotice) emptyLine() string {
 // suffix, unblocks). Empty data flows through the same path — the empty
 // message is one path-end, not a branch around the rendering loop.
 //
-// issues are the rows to print; gathered is the whole workable set they were
-// drawn from. The aggregates below read gathered, because a row's "unblocks"
-// line and the inversion count describe the backlog, not this view of it: with
-// them read off issues, a focused scope or a --limit that excluded the
-// dependent row deleted the surviving row's own unblocks line, and the preamble
-// went on promising "what closing it would unblock" one screen above the gap.
-func printBacklogOutput(w io.Writer, columns []columnSpec, issues, gathered []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, cells map[string]derivedColumns, cc claimContext, notice focusNotice) error {
+// issues are the rows to print; facts are what is true of the whole workable
+// queue they were drawn from. A row's "unblocks" line and the inversion count
+// come from facts, because both describe the queue rather than this view of it.
+// Read off issues, they shrink as the view does and the loss lands on the row
+// that survived: a narrowing that cut the DEPENDENT deleted the leverage line
+// from the PREREQUISITE's row, one screen under a preamble still promising
+// "what closing it would unblock" (links-listing-85sd). Nothing on screen is
+// missing, so nothing prompts the reader to doubt it.
+func printBacklogOutput(w io.Writer, columns []columnSpec, issues []annotation.AnnotatedIssue, facts queueFacts, details map[string]storage.IssueRelations, cells map[string]derivedColumns, cc claimContext, notice focusNotice) error {
 	if _, err := fmt.Fprintln(w, backlogPreamble); err != nil {
 		return err
 	}
@@ -137,7 +139,6 @@ func printBacklogOutput(w io.Writer, columns []columnSpec, issues, gathered []an
 		return nil
 	}
 
-	unblocksMap := buildUnblocksMap(gathered)
 	now := time.Now()
 	var above backlogRun
 	for i, entry := range issues {
@@ -147,12 +148,12 @@ func printBacklogOutput(w io.Writer, columns []columnSpec, issues, gathered []an
 		}
 		lane := model.LaneOf(entry.Issue, details[entry.ID].Parent)
 		group := above.advance(entry.ParentEpic, cc, lane, now)
-		if err := printBacklogContext(w, entry, unblocksMap, group); err != nil {
+		if err := printBacklogContext(w, entry, facts.Unblocks(entry.ID), group); err != nil {
 			return err
 		}
 		above = group.run
 	}
-	return printRankInversions(w, gathered)
+	return printRankInversions(w, facts.RankInversions())
 }
 
 // backlogRun is the group-scoped context the rows above already put on screen:
@@ -289,7 +290,7 @@ func openingRun[T any, S comparable](value T, subject, above S) T {
 // "blocked: ..." surfaces non-dependency blockers, "depends on: ..." names
 // open dependencies, "in_progress: ..." surfaces age/orphan status, and
 // "unblocks: ..." shows leverage.
-func printBacklogContext(w io.Writer, entry annotation.AnnotatedIssue, unblocksMap map[string][]string, group backlogRowContext) error {
+func printBacklogContext(w io.Writer, entry annotation.AnnotatedIssue, unblocks []string, group backlogRowContext) error {
 	readiness := ClassifyReadiness(entry.Annotations)
 	if err := printContextLine(w, contextIndent, group.epic); err != nil {
 		return err
@@ -312,7 +313,7 @@ func printBacklogContext(w io.Writer, entry annotation.AnnotatedIssue, unblocksM
 	if err := printContextLine(w, contextIndent, group.claim); err != nil {
 		return err
 	}
-	return printIDListLine(w, contextIndent, "unblocks", unblocksMap[entry.ID])
+	return printIDListLine(w, contextIndent, "unblocks", unblocks)
 }
 
 // nonDependencyBlockingReasons formats the classified blocking reasons that

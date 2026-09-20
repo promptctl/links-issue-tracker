@@ -334,10 +334,11 @@ func TestBacklogNamesTheSiblingGateAndNextAgreesWithIt(t *testing.T) {
 		t.Fatalf("backlog does not say why %s is held back: want %q; got:\n%s", second, want, text)
 	}
 
-	rows, details, _, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
+	gathered, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
 	if err != nil {
 		t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}
+	rows, details := gathered.rows, gathered.details
 	outcome := routeNext(rows, details, claims.Standings{}, selfAttribution, focusScope{})
 	served, ok := outcome.(ServedFromNewLane)
 	if !ok {
@@ -372,5 +373,118 @@ func TestBacklogPhrasesEveryBlockingKind(t *testing.T) {
 		if len(reasons) != 1 || reasons[0] == "" {
 			t.Errorf("kind %s rendered %v, want exactly one non-empty phrase — a blocking kind the backlog cannot phrase is a blocker the reader never sees", kind, reasons)
 		}
+	}
+}
+
+// start moves an issue to in_progress, for the --status case below.
+func (h backlogTestHarness) start(id string) {
+	h.t.Helper()
+	if _, err := h.ap.Store.Apply(h.ctx, id, storage.Change{Action: model.Start{Assignee: "agent"}, Actor: "agent"}); err != nil {
+		h.t.Fatalf("Apply(%s, start) error = %v", id, err)
+	}
+}
+
+// The narrowings that reach further out than any row list.
+//
+// --limit and the focus scope cut rows the renderer was already holding, so
+// handing the leverage derivation a wider list covered them (the two tests
+// above). --type, --status, --labels and --assignee were applied at the store
+// query, which is upstream of every list a renderer could be handed: the
+// "whole" population was already short by the time anything could widen it. A
+// narrowing that removes the DEPENDENT then deletes the leverage line from the
+// PREREQUISITE's surviving row, which is the reading no gap on screen warns
+// about (links-listing-85sd).
+//
+// Four cases, not one parameterized claim over a shared mechanism: each flag is
+// a separate assertion that its own narrowing does not reach the fact, and a
+// mechanism that stops covering one of them fails by name.
+func TestBacklogUnblocksLinesSurviveTheStoreSideNarrowings(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// build returns the prerequisite whose row must keep its leverage line,
+		// and the dependent the flags remove. The dependent is always created
+		// SECOND, so the prerequisite outranks it and stays on screen.
+		build func(h backlogTestHarness) (prerequisite, dependent string)
+		args  []string
+	}{
+		{
+			name: "--type",
+			build: func(h backlogTestHarness) (string, string) {
+				p := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Prerequisite", Topic: "nar", IssueType: "task"})
+				d := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Dependent", Topic: "nar", IssueType: "bug"})
+				return p, d
+			},
+			args: []string{"--type", "task"},
+		},
+		{
+			name: "--status",
+			build: func(h backlogTestHarness) (string, string) {
+				p := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Prerequisite", Topic: "nar", IssueType: "task"})
+				d := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Dependent", Topic: "nar", IssueType: "task"})
+				h.start(p)
+				return p, d
+			},
+			args: []string{"--status", "in_progress"},
+		},
+		{
+			name: "--labels",
+			build: func(h backlogTestHarness) (string, string) {
+				p := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Prerequisite", Topic: "nar", IssueType: "task", Labels: []string{"keep"}})
+				d := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Dependent", Topic: "nar", IssueType: "task"})
+				return p, d
+			},
+			args: []string{"--labels", "keep"},
+		},
+		{
+			name: "--assignee",
+			build: func(h backlogTestHarness) (string, string) {
+				p := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Prerequisite", Topic: "nar", IssueType: "task", Assignee: "alice"})
+				d := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Dependent", Topic: "nar", IssueType: "task"})
+				return p, d
+			},
+			args: []string{"--assignee", "alice"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newBacklogTestHarness(t)
+			prerequisite, dependent := tc.build(h)
+			h.addDependency(dependent, prerequisite)
+
+			// The premise: unnarrowed, the prerequisite's row carries the line.
+			// Without this the case below could pass by printing nothing at all.
+			if text := h.runBacklogText(); !unblocksLineNames(text, dependent) {
+				t.Fatalf("unnarrowed backlog names no unblocks line for %s on %s's row, so this case asserts nothing; got:\n%s", dependent, prerequisite, text)
+			}
+
+			text := h.runBacklogText(tc.args...)
+			if ids := issueIDsFromText(text); len(ids) != 1 || ids[0] != prerequisite {
+				t.Fatalf("`lit backlog %v` printed %v, want exactly [%s] — the case needs the dependent gone and the prerequisite kept", tc.args, ids, prerequisite)
+			}
+			if !unblocksLineNames(text, dependent) {
+				t.Fatalf("`lit backlog %v` names no unblocks line for %s on %s's surviving row — closing %s still unblocks %s, and the narrowing removed only the dependent's own row; got:\n%s", tc.args, dependent, prerequisite, prerequisite, dependent, text)
+			}
+		})
+	}
+}
+
+// The rank-inversion count advertises a repair `lit doctor --fix` makes to the
+// whole repo, so it must not move with a flag that only decides what is on
+// screen. It did: the criteria were applied at the query, so the inversion the
+// filtered-out row carried was never counted and the warning under-reported the
+// repair — or, as here, vanished entirely while the inversion stood.
+func TestRankInversionCountIsIndependentOfTheStoreSideNarrowings(t *testing.T) {
+	h := newBacklogTestHarness(t)
+	// The dependent outranks its prerequisite, which is the inversion. It is a
+	// bug so --type task removes its row while leaving the inversion in place.
+	dependent := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Dependent", Topic: "inv", IssueType: "bug"})
+	prerequisite := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Prerequisite", Topic: "inv", IssueType: "task"})
+	h.addDependency(dependent, prerequisite)
+
+	whole := rankInversionWarning(h.runBacklogText())
+	if whole == "" {
+		t.Fatalf("no rank inversion warning over the whole backlog, so this test asserts nothing; got:\n%s", h.runBacklogText())
+	}
+	if got := rankInversionWarning(h.runBacklogText("--type", "task")); got != whole {
+		t.Fatalf("rank inversion warning differs by narrowing:\n  unnarrowed:   %q\n  --type task:  %q\nthe count describes the repo `lit doctor --fix` repairs, not the rows on screen", whole, got)
 	}
 }

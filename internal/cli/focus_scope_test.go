@@ -36,11 +36,11 @@ func rowPosition(t *testing.T, text, issueID string) int {
 func (h readyTestHarness) runNextRowArgs(args ...string) annotation.AnnotatedIssue {
 	h.t.Helper()
 	text := h.runNextText(args...)
-	rows, _, _, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
+	gathered, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
 	if err != nil {
 		h.t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}
-	for _, row := range rows {
+	for _, row := range gathered.rows {
 		if strings.Contains(text, row.ID) {
 			return row
 		}

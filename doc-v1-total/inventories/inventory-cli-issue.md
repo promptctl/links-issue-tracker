@@ -233,7 +233,7 @@ Stdout stays the result channel.
 
 ### 1.11 Identity resolution (assignee / actor)
 
-- `resolveIdentity(explicit)` (`cli.go:1172-1177`): if env
+- `resolveIdentity(explicit)` (`cli.go:1195-1200`): if env
   `CLAUDE_CODE_SESSION_ID` is non-empty (after trim), the identity is
   `"claude_" + sessionID`, **overriding any explicit value**; otherwise the
   trimmed explicit value.
@@ -1419,7 +1419,7 @@ On a served row, `renderNextOutcome` calls `printNextSummary(w, row, cc, lane)`
 with `lane = model.LaneOf(row.Issue, details[row.ID].Parent)` (`next.go:175-183`),
 which prints the **default columns** (`id state topic title`) joined by two
 spaces (`ready_state.go:965-971`, `columns.go:158-160`), then `printInlineDeps`
-(`ready_state.go:1022-1035`): `    epic: …`, `    depends on: …`, the claim line,
+(`ready_state.go:1007-1020`): `    epic: …`, `    depends on: …`, the claim line,
 and `    unblocks: …` — but `next` passes a **nil** unblocks map, so the unblocks
 line never appears (`ready_state.go:970`). It then returns
 `nextPulledOccasion(row.Issue)` (`next.go:160`, `workflow_events.go:39-45`),
@@ -1844,7 +1844,7 @@ Retired **flags** (intercepted by the shared parser, §1.6): `--output` anywhere
 plus at most one positional topic.
 - More than one positional → refused by `refuseSurplusPositionals` (`register.go:342`),
   called from `parseLeaf` (`register.go:307`), before `quickstartLeaf`'s work
-  (`cli.go:1998`) runs, using `quickstartUsage`, where
+  (`cli.go:2021`) runs, using `quickstartUsage`, where
   `quickstartUsage = "usage: lit quickstart [<topics|…>] [--refresh] [--eject[=LIST]] [--force]"`
   built from the topic token list (`quickstart_topics.go:55`).
 - `--refresh` with `--eject` → `UsageError{"usage: --refresh and --eject are mutually exclusive"}`
