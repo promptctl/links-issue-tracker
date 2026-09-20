@@ -46,9 +46,9 @@ full for commit semantics because every `store.go` mutation routes through it.
 #### 1.1 `doltDatabaseName`
 
 `const doltDatabaseName = "links"` (`internal/store/store.go:28`). Used as:
-- the `Database` field of the embedded-driver config for every non-bootstrap pool (`store.go:382`, `store.go:427`, `store.go:2555`);
-- the `CREATE DATABASE IF NOT EXISTS links` argument (`store.go:2545`);
-- the on-disk directory probed for existence: `<doltRoot>/links/.dolt` (`store.go:2527`).
+- the `Database` field of the embedded-driver config for every non-bootstrap pool (`store.go:382`, `store.go:427`, `store.go:2599`);
+- the `CREATE DATABASE IF NOT EXISTS links` argument (`store.go:2589`);
+- the on-disk directory probed for existence: `<doltRoot>/links/.dolt` (`store.go:2571`).
 
 Tests derive the journal-lock path from it as `<doltRoot>/links/.dolt/noms/LOCK` (`internal/store/engine_open_contract_test.go:20-22`) and the chunk journal as `<doltRoot>/links/.dolt/noms/<chunks.JournalFileID>` (`internal/store/dolt_journal_hold_test.go:44-46`).
 
@@ -72,7 +72,7 @@ const (
 | Field | Type | Set where | Meaning per code |
 |---|---|---|---|
 | `db` | `*sql.DB` | `store.go:392`; replaced by `reconnect` at `store.go:432` | the one pooled embedded-Dolt connection |
-| `workspaceID` | `string` | `store.go:393` | the workspace id passed to `Open`/`OpenForRead`; also the Dolt commit author basis (`store.go:2749-2757`) |
+| `workspaceID` | `string` | `store.go:393` | the workspace id passed to `Open`/`OpenForRead`; also the Dolt commit author basis (`store.go:2793-2801`) |
 | `doltRootDir` | `string` | `store.go:394` (raw arg, not cleaned) | Dolt root dir |
 | `access` | `engineAccess` | `store.go:395` | reused verbatim by `reconnect` (`store.go:427`) |
 | `commitLockPath` | `string` | `store.go:396` = `commitLockPathForDolt(doltRootDir)` | flock path, `filepath.Join(filepath.Dir(filepath.Clean(doltRootDir)), ".links-commit-flock.lock")` (`commit_lock.go:394-403`) |
@@ -86,20 +86,20 @@ Both hooks are per-`Store` instance state, not package globals (`store.go:66-81`
 
 #### 1.4 `engineOpenRetryMaxElapsed`
 
-`var engineOpenRetryMaxElapsed = coResidentHolderWait` (`store.go:2689`), = 70s. A package **variable**, not a const, so tests can shrink it; `engine_open_contract_test.go:53-55` sets it to `700 * time.Millisecond` and restores it in cleanup. It is `MaxElapsedTime` of the write-open backoff (`store.go:2742`). `coResidentHolderWait` is a const derived from two measured facts (`store.go:2584-2682`): `mirrorCycleObservedTail` 20s × `mirrorHoldStallFactor` 2 = `mirrorHoldBudget` 40s; + `mirrorCancelLagObserved` 22s = `mirrorHoldCeiling` 62s; + `coResidentWaitHeadroom` 8s = 70s.
+`var engineOpenRetryMaxElapsed = coResidentHolderWait` (`store.go:2733`), = 70s. A package **variable**, not a const, so tests can shrink it; `engine_open_contract_test.go:53-55` sets it to `700 * time.Millisecond` and restores it in cleanup. It is `MaxElapsedTime` of the write-open backoff (`store.go:2786`). `coResidentHolderWait` is a const derived from two measured facts (`store.go:2628-2726`): `mirrorCycleObservedTail` 20s × `mirrorHoldStallFactor` 2 = `mirrorHoldBudget` 40s; + `mirrorCancelLagObserved` 22s = `mirrorHoldCeiling` 62s; + `coResidentWaitHeadroom` 8s = 70s.
 
 #### 1.5 `newEngineOpenBackOff`
 
-`store.go:2730-2736`. Fresh `backoff.NewExponentialBackOff()` per connector with:
-- `InitialInterval = 50 * time.Millisecond` (`store.go:2732`)
-- `MaxInterval = engineOpenRetryMaxInterval` = 1s (`store.go:2733`)
-- `MaxElapsedTime = engineOpenRetryMaxElapsed` (`store.go:2742`)
+`store.go:2774-2780`. Fresh `backoff.NewExponentialBackOff()` per connector with:
+- `InitialInterval = 50 * time.Millisecond` (`store.go:2776`)
+- `MaxInterval = engineOpenRetryMaxInterval` = 1s (`store.go:2777`)
+- `MaxElapsedTime = engineOpenRetryMaxElapsed` (`store.go:2786`)
 
-All other `ExponentialBackOff` fields keep library defaults. Only attached for `engineWrite` (`store.go:2761-2763`).
+All other `ExponentialBackOff` fields keep library defaults. Only attached for `engineWrite` (`store.go:2805-2807`).
 
 #### 1.6 `wrapEngineOpenContention`
 
-`store.go:2712-2717`. If `err != nil && errors.Is(err, nbs.ErrDatabaseLocked)`, returns exactly:
+`store.go:2756-2761`. If `err != nil && errors.Is(err, nbs.ErrDatabaseLocked)`, returns exactly:
 
 ```
 fmt.Errorf("another process is holding this workspace's Dolt store open (a background sync mirror, another lit command, or a snapshot copy in progress); retry after it completes: %w (%w)", ErrWorkspaceBusy, err)
@@ -107,26 +107,26 @@ fmt.Errorf("another process is holding this workspace's Dolt store open (a backg
 
 so the result satisfies both `errors.Is(err, ErrWorkspaceBusy)` and `errors.Is(err, nbs.ErrDatabaseLocked)`. Every other error passes through unchanged. `ErrWorkspaceBusy` is defined at `internal/store/workspace_lock.go:53` as `errors.New("workspace busy")`.
 
-Call sites: `store.go:388` (eager write ping), `store.go:437` (reconnect ping), `store.go:153` (`ensureMasterDefaultBranch` inside Open), `store.go:2553` (bootstrap CREATE DATABASE), `store.go:2561` (bootstrap branch normalization).
+Call sites: `store.go:388` (eager write ping), `store.go:437` (reconnect ping), `store.go:153` (`ensureMasterDefaultBranch` inside Open), `store.go:2597` (bootstrap CREATE DATABASE), `store.go:2605` (bootstrap branch normalization).
 
 Test evidence: a foreign holder of `<doltRoot>/links/.dolt/noms/LOCK` makes `Open` fail with `nbs.ErrDatabaseLocked` in the chain (`engine_open_contract_test.go:64-66`) and bounded (< 10s under a 700ms budget, `engine_open_contract_test.go:69-71`). `OpenSync` under the same holder carries **both** `ErrWorkspaceBusy` and `nbs.ErrDatabaseLocked` (`engine_open_contract_test.go:153-158`).
 
 #### 1.7 Other free helpers defined in store.go
 
-- `dirExists(path string) bool` — `os.Stat` + `IsDir` (`store.go:2786-2789`).
+- `dirExists(path string) bool` — `os.Stat` + `IsDir` (`store.go:2830-2833`).
 - `scanTime(value string) (time.Time, error)` = `time.Parse(time.RFC3339Nano, value)` (`store.go:2235-2237`). Single parse boundary for every timestamp column.
 - `scanNullableTime(sql.NullString) (*time.Time, error)` — invalid → `(nil, nil)` (`store.go:2241-2250`).
-- `nullableTime(*time.Time) any` — nil → `nil`, else `RFC3339Nano` string (`store.go:2409-2414`).
-- `nullableString(string) any` — `""` → SQL `NULL`, else the string (`store.go:2439-2444`).
-- `nullableResolution(*model.Resolution) any` — nil → `NULL` (`store.go:2429-2434`).
-- `nullableStringPtr(*string) any` — nil → `NULL` (`store.go:2510-2515`).
-- `formatNullableTime(*time.Time) string` — nil → `""` (`store.go:2448-2453`).
-- `formatNullableResolution(*model.Resolution) string` — nil → `""` (`store.go:2467-2472`).
-- `formatNullableString(*string) string` — nil → `""` (`store.go:2489-2494`).
-- `timesEqual(a, b *time.Time) bool` — both nil equal; one nil unequal; else `a.Equal(*b)` (`store.go:2457-2465`).
-- `resolutionsEqual(a, b *model.Resolution) bool` — same nil discipline, `*a == *b` (`store.go:2477-2485`).
-- `stringPointersEqual(a, b *string) bool` — same (`store.go:2498-2506`).
-- `retentionColumns(issue model.Issue) (archivedAt, deletedAt any)` — projects `model.RetentionTimestamps(issue.Retention())` through `nullableTime` (`store.go:2421-2424`). Sole feeder of the `archived_at`/`deleted_at` column pair.
+- `nullableTime(*time.Time) any` — nil → `nil`, else `RFC3339Nano` string (`store.go:2454-2458`).
+- `nullableString(string) any` — `""` → SQL `NULL`, else the string (`store.go:2483-2488`).
+- `nullableResolution(*model.Resolution) any` — nil → `NULL` (`store.go:2473-2478`).
+- `nullableStringPtr(*string) any` — nil → `NULL` (`store.go:2554-2559`).
+- `formatNullableTime(*time.Time) string` — nil → `""` (`store.go:2492-2497`).
+- `formatNullableResolution(*model.Resolution) string` — nil → `""` (`store.go:2511-2516`).
+- `formatNullableString(*string) string` — nil → `""` (`store.go:2533-2538`).
+- `timesEqual(a, b *time.Time) bool` — both nil equal; one nil unequal; else `a.Equal(*b)` (`store.go:2501-2509`).
+- `resolutionsEqual(a, b *model.Resolution) bool` — same nil discipline, `*a == *b` (`store.go:2521-2529`).
+- `stringPointersEqual(a, b *string) bool` — same (`store.go:2542-2550`).
+- `retentionColumns(issue model.Issue) (archivedAt, deletedAt any)` — projects `model.RetentionTimestamps(issue.Retention())` through `nullableTime` (`store.go:2465-2468`). Sole feeder of the `archived_at`/`deleted_at` column pair.
 - `statusForStorage(issue model.Issue) sql.NullString` — if `issue.Capabilities().Status != nil` returns `{String: string(status.Value), Valid: true}`, else the zero `NullString` (SQL NULL) (`store.go:2258-2263`). Containers therefore store NULL status.
 - `retentionWord(model.Retention) string` — `"live"` / `"archived"` / `"deleted"`; **panics** `fmt.Sprintf("illegal Retention value %T", r)` on anything else (`store.go:1635-1648`).
 - `sortIssuesByRank([]model.Issue)` — stable sort on `Rank`, tie-break `ID` ascending (`store.go:1791-1800`).
@@ -206,16 +206,16 @@ Behavioral evidence:
 
 #### 2.5 `ensureDoltDatabase(ctx, doltRootDir, workspaceID) (bool, error)`
 
-`store.go:2517-2564`:
-1. `root := filepath.Clean(doltRootDir)` (`store.go:2518`).
-2. If `dirExists(filepath.Join(root, "links", ".dolt"))` → returns `(false, nil)` immediately, doing nothing (`store.go:2527-2529`).
-3. `created := !dirExists(root)` (`store.go:2530`).
-4. `os.MkdirAll(root, 0o755)`; on failure `fmt.Errorf("create dolt root dir: %w", err)` (`store.go:2531-2533`).
-5. First bootstrap pool: `openDoltPool(root, workspaceID, "", engineWrite)` (empty database name), `defer db.Close()` inside a closure so it closes before the next open (`store.go:2539-2549`); runs `CREATE DATABASE IF NOT EXISTS links` (`store.go:2545`); failure → `fmt.Errorf("create dolt database: %w", err)` then `wrapEngineOpenContention` (`store.go:2546`, `store.go:2553`).
-6. Second pool: `openDoltPool(root, workspaceID, "links", engineWrite)`, `defer db.Close()`, then `ensureMasterDefaultBranch` wrapped in `wrapEngineOpenContention` (`store.go:2555-2562`).
+`store.go:2561-2608`:
+1. `root := filepath.Clean(doltRootDir)` (`store.go:2562`).
+2. If `dirExists(filepath.Join(root, "links", ".dolt"))` → returns `(false, nil)` immediately, doing nothing (`store.go:2571-2573`).
+3. `created := !dirExists(root)` (`store.go:2574`).
+4. `os.MkdirAll(root, 0o755)`; on failure `fmt.Errorf("create dolt root dir: %w", err)` (`store.go:2575-2577`).
+5. First bootstrap pool: `openDoltPool(root, workspaceID, "", engineWrite)` (empty database name), `defer db.Close()` inside a closure so it closes before the next open (`store.go:2583-2593`); runs `CREATE DATABASE IF NOT EXISTS links` (`store.go:2589`); failure → `fmt.Errorf("create dolt database: %w", err)` then `wrapEngineOpenContention` (`store.go:2590`, `store.go:2597`).
+6. Second pool: `openDoltPool(root, workspaceID, "links", engineWrite)`, `defer db.Close()`, then `ensureMasterDefaultBranch` wrapped in `wrapEngineOpenContention` (`store.go:2599-2606`).
 7. Returns `(created, nil)`.
 
-The two pools run strictly sequentially — the explicit close of the first is the ordering owner (`store.go:2534-2538`).
+The two pools run strictly sequentially — the explicit close of the first is the ordering owner (`store.go:2578-2582`).
 
 #### 2.6 `openStoreConnection(ctx, doltRootDir, workspaceID, access) (*Store, error)`
 
@@ -228,16 +228,16 @@ Read engines stay lazy deliberately (`store.go:372-380`).
 
 #### 2.7 `newDoltConnector` / `openDoltPool`
 
-`newDoltConnector(doltRootDir, workspaceID, database string, access engineAccess) (*embedded.Connector, error)` (`store.go:2748-2769`):
-- `author := strings.TrimSpace(workspaceID)`; if empty → `"links"` (`store.go:2749-2752`);
-- `author = strings.ReplaceAll(author, "@", "_")` (`store.go:2753`);
-- `embedded.Config{ Directory: filepath.Clean(doltRootDir), CommitName: author, CommitEmail: fmt.Sprintf("%s@links.local", author), Database: database, DisableSingletonCache: true }` (`store.go:2754-2760`);
-- `if access == engineWrite { cfg.BackOff = newEngineOpenBackOff() }` (`store.go:2761-2763`);
-- connector construction failure → `fmt.Errorf("open dolt: %w", err)` (`store.go:2766`).
+`newDoltConnector(doltRootDir, workspaceID, database string, access engineAccess) (*embedded.Connector, error)` (`store.go:2792-2813`):
+- `author := strings.TrimSpace(workspaceID)`; if empty → `"links"` (`store.go:2793-2796`);
+- `author = strings.ReplaceAll(author, "@", "_")` (`store.go:2797`);
+- `embedded.Config{ Directory: filepath.Clean(doltRootDir), CommitName: author, CommitEmail: fmt.Sprintf("%s@links.local", author), Database: database, DisableSingletonCache: true }` (`store.go:2798-2804`);
+- `if access == engineWrite { cfg.BackOff = newEngineOpenBackOff() }` (`store.go:2805-2807`);
+- connector construction failure → `fmt.Errorf("open dolt: %w", err)` (`store.go:2810`).
 
 **Dolt commit identity** therefore comes entirely from `workspaceID`: name = workspace id with `@`→`_`, email = `<name>@links.local`. `DisableSingletonCache: true` ties engine (and journal-lock) lifetime to the pool's lifetime.
 
-`openDoltPool` (`store.go:2773-2784`): `sql.OpenDB(connector)`, then `SetMaxOpenConns(1)`, `SetMaxIdleConns(1)`, `SetConnMaxLifetime(0)` — exactly one connection per Store.
+`openDoltPool` (`store.go:2817-2828`): `sql.OpenDB(connector)`, then `SetMaxOpenConns(1)`, `SetMaxIdleConns(1)`, `SetConnMaxLifetime(0)` — exactly one connection per Store.
 
 #### 2.8 `reconnect(ctx) error`
 
@@ -508,13 +508,13 @@ updated_at, closed_at, resolution, redirect_target, archived_at, deleted_at
 4. Per row, builds a `model.Issue` copying every `partialIssue` field, `SetRetention(row.Issue.Retention)`, `Labels` defaulted to `[]string{}` when the map has no entry, and calls `model.HydrateRow(base, row.Status, childrenByEpicID[id])` (`store.go:2288-2314`).
 5. Post-condition: `!issue.IsHydrated()` → `fmt.Errorf("hydrateIssues: produced unhydrated issue %s", issue.ID)` (`store.go:2318-2320`).
 
-`loadLabelsByIssueIDs` (`store.go:2386-2407`):
+`loadLabelsByIssueIDs` (`store.go:2422-2452`):
 ```sql
 SELECT issue_id, label FROM labels WHERE issue_id IN (?, ?, ...) ORDER BY label ASC
 ```
 failure → `fmt.Errorf("load labels by issue ids: %w", err)`.
 
-`lifecycleChildrenByEpicIDs(ctx, epicIDs)` (`store.go:2326-2384`) — empty input returns an empty map without querying; otherwise one query:
+`lifecycleChildrenByEpicIDs(ctx, epicIDs)` (`store.go:2326-2420`) — empty input returns an empty map without querying; otherwise one query:
 ```sql
 SELECT r.dst_id, <issueColumnsQualified>
 FROM relations r
@@ -524,7 +524,7 @@ WHERE r.dst_id IN (?, ...) AND r.type = 'parent-child'
     AND (p.archived_at IS NOT NULL OR p.deleted_at IS NOT NULL OR (i.archived_at IS NULL AND i.deleted_at IS NULL))
 ORDER BY r.dst_id ASC, i.item_rank ASC
 ```
-failure → `fmt.Errorf("load lifecycle children: %w", err)`. Visibility truth table (`store.go:2337-2343`): parent live + child live → include; parent live + child dead → exclude; parent dead (archived or deleted) + child either → include. Rows are scanned with `scanIssueWithParent`, hydrated in **one** recursive `hydrateIssues` call, and re-bucketed by the parallel `parentIDs` slice (`store.go:2363-2382`).
+failure → `fmt.Errorf("load lifecycle children: %w", err)`. Visibility truth table (`store.go:2337-2342`): parent live + child live → include; parent live + child dead → exclude; parent dead (archived or deleted) + child either → include. Rows are scanned with `scanIssueWithParent`, hydrated in **one** recursive `hydrateIssues` call, and re-bucketed by the parallel `parentIDs` slice (`store.go:2407-2418`).
 
 Evidence: listing query count for 1 epic equals that for 5 epics, measured by a counting `driver.Conn` that forces every query through `Prepare` (`lifecycle_hydration_query_count_test.go:25-41`, wrapper at `:104-147`). An active epic's `Progress()` excludes archived children (`Total == 0`); the same epic once archived includes them (`Total == 1, Open == 1`) (`store_test.go:2326-2355`).
 
@@ -913,20 +913,20 @@ Round-trip evidence: `store_test.go:1295-1306`.
 
 ### 10. Branch normalization
 
-`masterRenameSource(ctx, db *sql.DB) (string, error)` (`store.go:2539-2566`), lock-free:
+`masterRenameSource(ctx, db *sql.DB) (string, error)` (`store.go:2583-2610`), lock-free:
 - `SELECT active_branch()`; failure → `fmt.Errorf("query dolt active branch: %w", err)`;
 - `SELECT name FROM dolt_branches ORDER BY name`; failure → `fmt.Errorf("query dolt branches: %w", err)`; scan failure → `"scan dolt branch: %w"`; iteration failure → `"iterate dolt branches: %w"`;
 - counts branches and notes whether `"master"` exists;
 - returns `""` (nothing to rename) when `activeBranch == "master"` **or** master already exists **or** `branchCount != 1`;
 - otherwise returns the active branch name.
 
-`ensureMasterDefaultBranch(ctx, db)` (`store.go:2568-2582`): consults `masterRenameSource`; on error or empty answer returns immediately; otherwise runs
+`ensureMasterDefaultBranch(ctx, db)` (`store.go:2612-2626`): consults `masterRenameSource`; on error or empty answer returns immediately; otherwise runs
 ```sql
 CALL DOLT_BRANCH('-m', '<activeBranch with ' doubled>', 'master')
 ```
-built by `fmt.Sprintf` with `strings.ReplaceAll(activeBranch, "'", "''")` (`store.go:2574-2577`); failure → `fmt.Errorf("rename dolt default branch to master: %w", err)`.
+built by `fmt.Sprintf` with `strings.ReplaceAll(activeBranch, "'", "''")` (`store.go:2618-2621`); failure → `fmt.Errorf("rename dolt default branch to master: %w", err)`.
 
-Called on every write open (`store.go:152`) and by the bootstrap (`store.go:2560`).
+Called on every write open (`store.go:152`) and by the bootstrap (`store.go:2604`).
 
 ---
 
@@ -935,7 +935,7 @@ Called on every write open (`store.go:152`) and by the bootstrap (`store.go:2560
 | Symbol | Defined at | Called from store.go |
 |---|---|---|
 | `acquireWorkspaceShared` | `workspace_lock.go:81` | `store.go:107`, `:176`, `:280` |
-| `ErrWorkspaceBusy` | `workspace_lock.go:53` | `store.go:2714` |
+| `ErrWorkspaceBusy` | `workspace_lock.go:53` | `store.go:2758` |
 | `requireNoPendingAdopt` | `adopt.go:124` | `store.go:134`, `:202`, `:292` |
 | `withCommitLock` / `withMutation` / `commitWorkingSet` / `isManifestReadOnlyError` | `commit_lock.go:322` / `:122` / `:268` / `:483` | `store.go:151`, `:212`; `:457`, `:509`, `:1130`, `:1168`, `:1187`; `:224` |
 | `commitLockPathForDolt` | `commit_lock.go:394` | `store.go:396` |
@@ -2637,7 +2637,7 @@ Error-vs-not-found distinction: `execDelete` wraps a delete failure as `fmt.Erro
 ### 3.5 ListLabels and other read paths
 
 - `Store.ListLabels` — `internal/store/labels.go:78-93`: `SELECT label FROM labels WHERE issue_id = ? ORDER BY label ASC`; query error → `fmt.Errorf("list labels: %w", err)` (`:81`); scan errors returned bare; returns `nil` slice when there are no rows (the slice is never pre-allocated, `:84`).
-- `loadLabelsByIssueIDs` — `internal/store/store.go:2386-2407`: `SELECT issue_id, label FROM labels WHERE issue_id IN (?, ?, …) ORDER BY label ASC`; error → `fmt.Errorf("load labels by issue ids: %w", err)`.
+- `loadLabelsByIssueIDs` — `internal/store/store.go:2422-2452`: `SELECT issue_id, label FROM labels WHERE issue_id IN (?, ?, …) ORDER BY label ASC`; error → `fmt.Errorf("load labels by issue ids: %w", err)`.
 - `listAllLabels` — `internal/store/store.go:1802-1810`: `SELECT issue_id, label, created_at, created_by FROM labels ORDER BY issue_id ASC, label ASC`; error → `fmt.Errorf("list all labels: %w", err)`.
 - List filtering by label — `internal/store/store.go:639-648`: `filter.LabelsAll` is run through `canonicalizeLabels` and each label adds a conjunct `EXISTS (SELECT 1 FROM labels l WHERE l.issue_id = i.id AND l.label = ?)` (AND semantics, one clause per label).
 - Import/restore insert: `INSERT INTO labels(issue_id, label, created_at, created_by) VALUES (?, ?, ?, ?)` with error `fmt.Errorf("restore label %s:%s: %w", label.IssueID, label.Name, err)` — `internal/store/import_export.go:308-314`.
@@ -3241,7 +3241,7 @@ Fully worked leaf issue:
 }
 ```
 
-(In practice `archived_at` and `deleted_at` are mutually exclusive — `retentionColumns`/`RetentionTimestamps` cannot express both, `internal/store/store.go:2421-2425` — and `deleted_at` is omitted entirely rather than `null` when absent.)
+(In practice `archived_at` and `deleted_at` are mutually exclusive — `retentionColumns`/`RetentionTimestamps` cannot express both, `internal/store/store.go:2465-2469` — and `deleted_at` is omitted entirely rather than `null` when absent.)
 
 Minimal epic (no status axis, Live, no prompt/assignee):
 
@@ -3518,7 +3518,7 @@ Value-by-value (`import_export.go:242-248`):
 | `id` | `issue.ID` | verbatim |
 | `title` | `issue.Title` | verbatim |
 | `description` | `issue.Description` | verbatim |
-| `agent_prompt` | `nullableString(issue.Prompt)` | `""` → SQL NULL (`store.go:2439-2444`) |
+| `agent_prompt` | `nullableString(issue.Prompt)` | `""` → SQL NULL (`store.go:2483-2488`) |
 | `status` | `statusForStorage(issue)` | leaf → `sql.NullString{string(status.Value), Valid:true}`; container (no Status capability) → **NULL** (`store.go:2258-2263`) |
 | `priority` | `model.CanonicalPriority(int(issue.Priority))` | any int ≠ 1 coerces to 0; 1 stays 1 (`priority.go:61-64`). **Never rejects** — legacy out-of-range priorities are coerced so the CHECK constraint cannot fail a restore (`import_export.go:235-240`) |
 | `issue_type` | `issue.IssueType` | verbatim, no parse gate on this path |
@@ -3529,9 +3529,9 @@ Value-by-value (`import_export.go:242-248`):
 | `created_at` | `issue.CreatedAt.Format(time.RFC3339Nano)` | |
 | `updated_at` | `issue.UpdatedAt.Format(time.RFC3339Nano)` | |
 | `closed_at` | RFC3339Nano of `issue.ClosedAtValue()`, else nil | (`import_export.go:226-229`) |
-| `resolution` | `nullableResolution(issue.ResolutionValue())` | nil → NULL, else the string (`store.go:2429-2434`) |
-| `redirect_target` | `nullableStringPtr(issue.RedirectTargetValue())` | nil → NULL (`store.go:2510-2515`) |
-| `archived_at`, `deleted_at` | `retentionColumns(issue)` | projected from the sealed Retention; archived-and-deleted is unrepresentable (`store.go:2421-2425`) |
+| `resolution` | `nullableResolution(issue.ResolutionValue())` | nil → NULL, else the string (`store.go:2473-2478`) |
+| `redirect_target` | `nullableStringPtr(issue.RedirectTargetValue())` | nil → NULL (`store.go:2554-2559`) |
+| `archived_at`, `deleted_at` | `retentionColumns(issue)` | projected from the sealed Retention; archived-and-deleted is unrepresentable (`store.go:2465-2469`) |
 
 `insertIssueTx` error text: `"restore issue %s: %w"` (`import_export.go:253`).
 
@@ -4328,9 +4328,9 @@ All claims cite `file:line` in `/Users/bmf/code/links-issue-tracker`. Derived fr
 | Exclusive lock | `LockWorkspaceExclusive` → `acquireWorkspaceLock(ctx, doltRootDir, true, 1, 0)` — **1 attempt, 0 delay, no retry**; on `ErrWorkspaceBusy` wraps with `"another lit process is using this workspace; close other lit commands and retry: %w"` | `internal/store/workspace_lock.go:118-124` |
 | Shared lock | `acquireWorkspaceShared` → 100 attempts × 50ms (`workspaceSharedRetryAttempts = 100`, `workspaceSharedRetryDelay = 50 * time.Millisecond`, ~5s cap); busy message: `"a lit operation is rebuilding this workspace's Dolt directory (e.g. snapshots restore, an init backlog adopt, or lifeboat recover); retry after it completes: %w"` | `internal/store/workspace_lock.go:55-61`, `:81-89` |
 | Busy sentinel | `var ErrWorkspaceBusy = errors.New("workspace busy")` | `internal/store/workspace_lock.go:53` |
-| `dirExists` | `info, err := os.Stat(path); return err == nil && info.IsDir()` | `internal/store/store.go:2786-2789` |
-| Dolt pool shape | `sql.OpenDB(connector)` with `SetMaxOpenConns(1)`, `SetMaxIdleConns(1)`, `SetConnMaxLifetime(0)` | `internal/store/store.go:2773-2784` |
-| Connector config | `embedded.Config{Directory: filepath.Clean(doltRootDir), CommitName: author, CommitEmail: fmt.Sprintf("%s@links.local", author), Database: database, DisableSingletonCache: true}`; author = trimmed workspaceID, `""`→`"links"`, `@`→`_`; `engineWrite` also sets `cfg.BackOff = newEngineOpenBackOff()` | `internal/store/store.go:2748-2766` |
+| `dirExists` | `info, err := os.Stat(path); return err == nil && info.IsDir()` | `internal/store/store.go:2830-2833` |
+| Dolt pool shape | `sql.OpenDB(connector)` with `SetMaxOpenConns(1)`, `SetMaxIdleConns(1)`, `SetConnMaxLifetime(0)` | `internal/store/store.go:2817-2828` |
+| Connector config | `embedded.Config{Directory: filepath.Clean(doltRootDir), CommitName: author, CommitEmail: fmt.Sprintf("%s@links.local", author), Database: database, DisableSingletonCache: true}`; author = trimmed workspaceID, `""`→`"links"`, `@`→`_`; `engineWrite` also sets `cfg.BackOff = newEngineOpenBackOff()` | `internal/store/store.go:2792-2810` |
 | Procedure call builder | `CALL <PROC>()` when no args, else `CALL <PROC>(?,?,…)`; `callIntProcedure` scans **one int64 status column** | `internal/store/sync.go:823-830`, `:849-856` |
 | Snapshots dir | `filepath.Join(filepath.Dir(filepath.Clean(databaseDir)), "snapshots")` | `internal/store/migrate_snapshot.go:177-180` |
 | Stamped-snapshot shape | `<all-digits>-<label>-<all-digits>` | `internal/store/migrate_snapshot.go:67-81` |
@@ -4478,7 +4478,7 @@ Two best-effort calls, both return values discarded:
 _ = dbfactory.DeleteFromSingletonCache(filepath.ToSlash(filepath.Join(dbDir, ".dolt", "noms")), false)
 _ = dbfactory.DeleteFromSingletonCache(filepath.ToSlash(filepath.Join(dbDir, ".dolt", "stats", ".dolt", "noms")), false)
 ```
-Documented: lit's own opens bypass the cache (`DisableSingletonCache: true`, `store.go:2759`), so any entry found was left by a dolt-internal load path (e.g. during `DOLT_CLONE`); the entry is **dropped, not closed**, because closing the carcass a second time trips dolt's refcount assert on shared archive readers (`adopt.go:372-381`).
+Documented: lit's own opens bypass the cache (`DisableSingletonCache: true`, `store.go:2803`), so any entry found was left by a dolt-internal load path (e.g. during `DOLT_CLONE`); the entry is **dropped, not closed**, because closing the carcass a second time trips dolt's refcount assert on shared archive readers (`adopt.go:372-381`).
 
 ### 1.12 Idempotency / re-run behavior
 
