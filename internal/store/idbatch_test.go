@@ -52,7 +52,11 @@ func TestIDBatchesPartitionTheInput(t *testing.T) {
 //
 // The three wired subjects sit in the first, a middle, and the final partial
 // batch of the id slice as it is passed, so the assertion fails if any batch
-// after the first is skipped, and fails if the last short one is dropped.
+// after the first is skipped, and fails if the last short one is dropped. Both
+// endpoint queries are covered, and they need separate subjects to be covered
+// by: the wired subjects are only ever a src, and upstream only ever a dst, so
+// the forward bundles answer for the src_id query's batching and upstream's
+// reverse bundle answers for the dst_id query's.
 func TestGetRelationsByIDsSpansEveryBatch(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -82,9 +86,17 @@ func TestGetRelationsByIDsSpansEveryBatch(t *testing.T) {
 		mustRelate(t, ctx, st, subjects[i], upstream.ID, "blocks")
 	}
 
-	rels, err := st.GetRelationsByIDs(ctx, subjects)
+	// upstream is queried last, so it lands in the trailing partial batch, and
+	// every edge reaching it arrives as a dst_id row, because no subject is ever
+	// a dst. Querying it is what makes the dst_id batching load-bearing: a read
+	// that stops short of upstream's batch returns an empty reverse bundle
+	// rather than a wrong one, which is the same silent shortfall the src side
+	// is checked for below.
+	queried := append(slices.Clone(subjects), upstream.ID)
+
+	rels, err := st.GetRelationsByIDs(ctx, queried)
 	if err != nil {
-		t.Fatalf("GetRelationsByIDs(%d ids) error = %v", len(subjects), err)
+		t.Fatalf("GetRelationsByIDs(%d ids) error = %v", len(queried), err)
 	}
 
 	for _, i := range wired {
@@ -98,11 +110,17 @@ func TestGetRelationsByIDsSpansEveryBatch(t *testing.T) {
 		}
 	}
 
-	// The reverse edge answers the same question from the other side: upstream
-	// is blocked-by every wired subject, and that bundle is assembled from the
-	// dst_id query, whose id list is batched the same way.
-	blocks := rels[subjects[0]].Blocks
-	if len(blocks) != 0 {
-		t.Fatalf("subject 0 Blocks = %v, want none — it depends on upstream rather than blocking it", ids(blocks))
+	// The same question from the other side: upstream is blocked by every wired
+	// subject, and that bundle is assembled entirely by the dst_id query, so it
+	// is only whole if that query reached the trailing batch upstream sits in.
+	blocked := ids(rels[upstream.ID].Blocks)
+	want := make([]string, 0, len(wired))
+	for _, i := range wired {
+		want = append(want, subjects[i])
+	}
+	slices.Sort(blocked)
+	slices.Sort(want)
+	if !slices.Equal(blocked, want) {
+		t.Fatalf("upstream Blocks = %v, want %v — a dst_id batch went unqueried", blocked, want)
 	}
 }
