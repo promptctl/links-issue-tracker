@@ -215,7 +215,7 @@ Complete grep of `os.Getenv` / `os.LookupEnv` / `os.Environ` across non-vendored
 | `LIT_CONFIG_GLOBAL_PATH` | `internal/config/config.go:170`, read at `:271` | Overrides the global config file path entirely; otherwise `ConfigDir()/config.toml` (`internal/config/config.go:270-273`). |
 | `LIT_CONFIG_PROJECT_PATH` | `internal/config/config.go:171`, read at `:276` | Overrides the project config file path; otherwise `<workspaceRoot>/.lit/config.toml` (`internal/config/config.go:275-278`). |
 | `LIT_DISABLE_AUTO_SYNC` | const at `internal/cli/sync_cadence.go:34`; read at `internal/cli/sync_cadence.go:79` and `internal/cli/owner_notify.go:149` | When truthy, no command schedules a push mirror, runs an inline receive, **or** compacts (`internal/cli/sync_cadence.go:19-33`, `:79-81`), and the owner-notify hook never runs (`internal/cli/owner_notify.go:149-151`). Truthiness = `strconv.ParseBool` of the trimmed value; a parse error is false (`internal/cli/sync_cadence.go:307-313`). |
-| `CLAUDE_CODE_SESSION_ID` | `internal/cli/cli.go:1173` | When non-empty (after trim), the acting identity is always `claude_<sessionID>`, overriding `--assignee`/`--by`; otherwise the trimmed explicit value passes through (`internal/cli/cli.go:1172-1177`). |
+| `CLAUDE_CODE_SESSION_ID` | `internal/cli/cli.go:1203` | When non-empty (after trim), the acting identity is always `claude_<sessionID>`, overriding `--assignee`/`--by`; otherwise the trimmed explicit value passes through (`internal/cli/cli.go:1202-1207`). |
 | `LNKS_AUTOMATION_TRIGGER` | const `internal/cli/automation_trace.go:15`; read `:53` | Non-empty enables automation-trace recording for the command; the value becomes the trace's `Trigger` field (`internal/cli/automation_trace.go:59-73`). Empty ⇒ no trace is written (`:61-63`). |
 | `LNKS_AUTOMATION_REASON` | const `internal/cli/automation_trace.go:16`; read `:54` | Default `Reason` on the automation trace when the caller supplied none (`internal/cli/automation_trace.go:64-66`). |
 | `LNKS_AUTOMATION_TRACE_REF_FILE` | const `internal/cli/automation_trace.go:17`; read `:55` | When non-empty, the recorded trace's path is written (plus newline, mode 0644) to that file (`internal/cli/automation_trace.go:78-81`). |
@@ -1191,7 +1191,7 @@ stdin (`:5`), extracts `session_id` with `grep -o '"session_id":"[^"]*"' || true
 `head -1 | cut -d'"' -f4` (`:6-7`), and — only when non-empty — prints
 `Your Claude Code session id is: ${session_id}. When using lit, your assignee identity is claude_${session_id}.`
 (`:9-11`). That identity string is the same one `resolveIdentity` produces from
-`CLAUDE_CODE_SESSION_ID` (`internal/cli/cli.go:1173-1174`).
+`CLAUDE_CODE_SESSION_ID` (`internal/cli/cli.go:1203-1204`).
 
 ### 14.5 `.claude/settings.local.json`
 

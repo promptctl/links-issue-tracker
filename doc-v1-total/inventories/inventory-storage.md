@@ -336,7 +336,7 @@ They live beside the specs rather than in an engine because the schema is the co
 - `"asc"` → `Desc=false`; `"desc"` → `Desc=true`; anything else → `ValidationError{Message: fmt.Sprintf("unsupported sort direction %q", direction)}` (`internal/storage/sort.go:31-42`).
 - Empty and whitespace-only expressions yield `nil, nil` (`internal/storage/sort.go:10-11`, `:46-48`).
 - It is THE parser from sort expression to `[]SortSpec`; both the `--sort` flag and the `--query sort:` token route through it (`internal/storage/sort.go:12-17`).
-- Note: the field name is **not** validated against `SortFields` here — that rejection happens in the engine (`internal/storage/sort.go:44`; cf. `internal/storage/memory/list.go:255-258`).
+- Note: the field name is **not** validated against `SortFields` here — that rejection happens in the engine (`internal/storage/sort.go:44`; cf. `internal/storage/memory/list.go:150-153`).
 
 ---
 
@@ -591,40 +591,49 @@ Order of checks is stated as contract: the parent must be resolved before the co
 Pipeline is fixed and every stage always runs: **hydrate → select → order → cap** (`internal/storage/memory/list.go:14-19`).
 
 1. `issueOrdering(filter.SortBy)` — parsed first, so an unknown sort field errors before any work (`internal/storage/memory/list.go:26-29`).
-2. `canonicalLabels(filter.LabelsAll)` — the label criteria are normalized the same way stored labels are (`:30-33`).
+2. `storage.ParseIssueCriteria(filter)` — canonicalizes the label criteria the same way stored labels are normalized, and is the one step of selection that can fail; everything after it answers yes or no (`:30-33`).
 3. `e.mustRecord(id)` for each of `filter.ParentIDs`, in order — the first id with no record returns `NotFoundError`; a deleted record still exists (`:34-38`).
 4. Hydrates **all** issues in `e.order` sequence (`:39-47`).
-5. `e.selects(issue, filter, labelCriteria)` per issue (`:48-53`).
+5. `e.selects(issue, filter, criteria)` per issue (`:48-53`).
 6. `slices.SortStableFunc(selected, order)` — the ordering is total (every comparison ends in a distinct id), so the result does not depend on arrival order (`:54-57`).
 7. `capLimit(selected, filter.Limit)` (`:58`).
 
-**`selects`** — every criterion ANDs; every slice ORs within itself (`internal/storage/memory/list.go:57-109`):
+**`selects`** — the composition, and only the half no issue can answer alone (`internal/storage/memory/list.go:73-84`): `criteria.Selects(issue)` first (`:74-76`), then `ParentIDs` and `HasComments`, which are readings of the engine's own edge and comment tables.
+
 | Criterion | Semantics | Cite |
 |---|---|---|
-| Retention | `model.Archived` excluded unless `IncludeArchived`; `model.Deleted` excluded unless `IncludeDeleted`; anything else (Live) always passes | `:61-70` |
-| `Statuses` | `matchesStates`: empty = pass; otherwise matches if any `model.DefaultOpen(string(state)) == issue.State()` — compares the **DERIVED** state | `:71-73`, `:118-131` |
-| `Resolutions` | `matchesResolutions`: empty = pass; a nil `ResolutionValue()` matches **no** non-empty criteria set; otherwise `slices.Contains(wanted, *resolution)` | `:74-76`, `:133-145` |
-| `IssueTypes` | `matchesAny(string(issue.IssueType), ...)`: empty = pass; else exact string membership | `:77-79`, `:111-116` |
-| `ExcludeIssueTypes` | if non-empty AND the type is in the list → reject | `:80-82` |
-| `Assignees` | `matchesAny(issue.Assignee, trimmedNonEmpty(...))`: exact match after trimming criteria; blanks in the criteria slice are dropped so a whitespace-only filter constrains nothing | `:83-85`, `:171-182` |
-| `IDs` | `matchesAny(issue.ID, trimmedNonEmpty(...))`: exact match | `:86-88` |
-| `ParentIDs` | `matchesParents(issue.ID, ParentIDs)`: empty = pass; else some `RelParentChild` relation has `SrcID == issue.ID` and `DstID` in the list; the parent's retention is not consulted | `:93-95`, `:118-132` |
-| `UpdatedAfter` | reject if `issue.UpdatedAt.Before(*UpdatedAfter)` (i.e. inclusive of equality) | `:89-91` |
-| `UpdatedBefore` | reject if `issue.UpdatedAt.After(*UpdatedBefore)` (inclusive of equality) | `:92-94` |
-| `HasComments` | reject if `*HasComments != (len(commentsFor(issue.ID)) > 0)` | `:95-97` |
-| `LabelsAll` | **conjunctive**: every canonical label criterion must be in `issue.Labels` | `:98-102` |
-| `SearchTerms` | **conjunctive across terms**: every term must match | `:103-107` |
+| `ParentIDs` | `matchesParents(issue.ID, ParentIDs)`: empty = pass; else some `RelParentChild` relation has `SrcID == issue.ID` and `DstID` in the list; the parent's retention is not consulted | `:77-79`, `:90-99` |
+| `HasComments` | reject if `*HasComments != (len(commentsFor(issue.ID)) > 0)` | `:80-82` |
 
-**`matchesSearch`** (`internal/storage/memory/list.go:150-161`) — lowercases and trims the term; an empty needle matches everything; case-insensitive substring across exactly four fields: `Title`, `Description`, `Prompt`, `Topic`.
+**`storage.IssueCriteria`** (`internal/storage/selects.go:23-26`) — a `ListIssuesFilter` reduced to the criteria readable from an issue alone, with the label canonicalization already taken, so `Selects` is total. It is exported because a caller narrowing rows it already holds applies the **same** rule storage defines rather than a second one of its own (the memory engine narrows with it directly; the SQL store expresses the same selection in its own query) — the workable pipeline reads the whole queue and `keepRows` narrows it at the point of use (`internal/cli/queue_facts.go:77-87`).
 
-**`capLimit`** (`internal/storage/memory/list.go:187-192`) — `limit <= 0` or `len <= limit` → unchanged; else `issues[:limit]`. **A limit of zero is the absence of a limit, not a limit of zero**; truncation, never sampling (`:184-186`).
+**`Selects`** — every criterion ANDs; every slice ORs within itself; the zero value selects everything **live**, archived and deleted issues being excluded unless the filter asks for them (`internal/storage/selects.go:51-98`):
+| Criterion | Semantics | Cite |
+|---|---|---|
+| Retention | `model.Archived` excluded unless `IncludeArchived`; `model.Deleted` excluded unless `IncludeDeleted`; anything else (Live) always passes | `:52-61` |
+| `Statuses` | `matchesStates`: empty = pass; otherwise matches if any `model.DefaultOpen(string(state)) == issue.State()` — compares the **DERIVED** state | `:62-64`, `:109-122` |
+| `Resolutions` | `matchesResolutions`: empty = pass; a nil `ResolutionValue()` matches **no** non-empty criteria set; otherwise `slices.Contains(wanted, *resolution)` | `:65-67`, `:124-136` |
+| `IssueTypes` | `matchesAny(string(issue.IssueType), ...)`: empty = pass; else exact string membership | `:68-70`, `:102-107` |
+| `ExcludeIssueTypes` | if non-empty AND the type is in the list → reject | `:71-73` |
+| `Assignees` | `matchesAny(issue.Assignee, ...)`: exact match after the criteria are trimmed | `:74-76`, `:102-107` |
+| `IDs` | `matchesAny(issue.ID, ...)`: exact match | `:77-79` |
+| `UpdatedAfter` | reject if `issue.UpdatedAt.Before(*UpdatedAfter)` (i.e. inclusive of equality) | `:80-82` |
+| `UpdatedBefore` | reject if `issue.UpdatedAt.After(*UpdatedBefore)` (inclusive of equality) | `:83-85` |
+| `LabelsAll` | **conjunctive**: every canonical label criterion must be in `issue.Labels` | `:86-90` |
+| `SearchTerms` | **conjunctive across terms**: every term must match | `:91-95` |
 
-**`issueSortKeys`** (`internal/storage/memory/list.go:198-209`) — exactly ten entries, matching `storage.SortFields`:
+**`trimmedNonEmpty`** (`internal/storage/selects.go:162-170`) — drops the blanks a caller may have assembled a criteria slice from, so a filter of nothing but whitespace constrains nothing rather than selecting nothing.
+
+**`matchesSearch`** (`internal/storage/selects.go:138-149`) — lowercases and trims the term; an empty needle matches everything; case-insensitive substring across exactly four fields: `Title`, `Description`, `Prompt`, `Topic`.
+
+**`capLimit`** (`internal/storage/memory/list.go:105-110`) — `limit <= 0` or `len <= limit` → unchanged; else `issues[:limit]`. **A limit of zero is the absence of a limit, not a limit of zero**; truncation, never sampling (`:102-104`).
+
+**`issueSortKeys`** (`internal/storage/memory/list.go:115-126`) — exactly ten entries, matching `storage.SortFields`:
 | Key | Comparison |
 |---|---|
 | `id` | `strings.Compare(a.ID, b.ID)` |
 | `title` | `strings.Compare(a.Title, b.Title)` |
-| `status` | `compareStoredStatus` |
+| `status` | `strings.Compare(string(a.State()), string(b.State()))` — the **DERIVED** state, as the `Statuses` filter compares |
 | `priority` | `cmp.Compare(a.Priority, b.Priority)` |
 | `rank` | `strings.Compare(a.Rank, b.Rank)` |
 | `type` | `strings.Compare(string(a.IssueType), string(b.IssueType))` |
@@ -633,14 +642,14 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 | `created_at` | `a.CreatedAt.Compare(b.CreatedAt)` |
 | `updated_at` | `a.UpdatedAt.Compare(b.UpdatedAt)` |
 
-**`compareStoredStatus`** (`internal/storage/memory/list.go:219-226`) — `cmp.Or(cmp.Compare(aStored, bStored), strings.Compare(aValue, bValue))`, where `storedStatus(issue)` returns `(0, "")` when `issue.Capabilities().Status == nil` (a container) and `(1, string(status.Value))` otherwise (`:228-236`). SQL orders NULL ahead of every value ascending, so "has no stored status" is the low key. It deliberately does NOT compare `model.Issue.State()` (`:211-218`).
+**`status` ordering** — `strings.Compare(string(a.State()), string(b.State()))` (`:118`). It compares the **derived** state, the same reading `matchesStates` filters on, so an epic orders by the state its children compute rather than by a stored field it does not have. There is no separate stored-status comparator.
 
-**`issueOrdering`** (`internal/storage/memory/list.go:248-274`)
-- No specs → `[]SortSpec{{Field: "rank"}}` — the canonical ordering expressed as the spec list it stands for (`:249-251`).
-- Each spec's field is `strings.ToLower(strings.TrimSpace(...))` then looked up in `issueSortKeys`; a miss → `fmt.Errorf("unsupported sort field %q", spec.Field)` (`:253-258`).
-- `Desc` negates the ascending comparator (`:259-262`).
-- **`strings.Compare(a.ID, b.ID)` ascending is appended as the final key always** — so descending reverses only the named keys, never the tie-break (`:265`).
-- The composed comparator returns the first non-zero result, else 0 (`:266-273`).
+**`issueOrdering`** (`internal/storage/memory/list.go:143-169`)
+- No specs → `[]SortSpec{{Field: "rank"}}` — the canonical ordering expressed as the spec list it stands for (`:144-146`).
+- Each spec's field is `strings.ToLower(strings.TrimSpace(...))` then looked up in `issueSortKeys`; a miss → `fmt.Errorf("unsupported sort field %q", spec.Field)` (`:148-153`).
+- `Desc` negates the ascending comparator (`:154-157`).
+- **`strings.Compare(a.ID, b.ID)` ascending is appended as the final key always** — so descending reverses only the named keys, never the tie-break (`:160`).
+- The composed comparator returns the first non-zero result, else 0 (`:161-168`).
 
 ### 2.8 `Apply` (`internal/storage/memory/apply.go`)
 
@@ -1217,7 +1226,7 @@ Derived from what the suite never exercises (the `cases` table at `:81-118` is t
 - Concurrency/thread safety — the suite is sequential by construction, so the memory engine tests it separately (`internal/storage/memory/engine_test.go:14-22`).
 - The exact `Rank` string encoding (`:1357-1359`).
 - The exact minted-id shape (`:76-79`).
-- `ListIssuesFilter.Resolutions` filtering (declared at `internal/storage/issues.go:157`, implemented at `internal/storage/memory/list.go:74-76`, but no case in the table exercises it).
+- `ListIssuesFilter.Resolutions` filtering (declared at `internal/storage/issues.go:157`, implemented at `internal/storage/memory/list.go:64-64`, but no case in the table exercises it).
 - `ReplaceLabels`/`ListLabels` against a missing issue.
 - `Close()` behavior beyond the engine factory's own cleanup.
 - `AddRelation` cycle rejection for `blocks` (implemented at `internal/storage/memory/edges.go:230-263`, not exercised by any listed case).

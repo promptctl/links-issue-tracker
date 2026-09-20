@@ -58,13 +58,15 @@ type workableView struct {
 	// rather than each renderer, which is what keeps the next view added here
 	// from re-introducing a projection whose `parent` and `blocked` cells are
 	// permanently "-". [LAW:one-source-of-truth]
-	// rows are what the view prints; gathered is every workable row the pipeline
-	// produced, before the scope or --limit narrowed it. They are separate
-	// parameters because the per-row facts a renderer prints are not all facts
-	// about the printed rows: "what closing this unblocks" and the rank-inversion
-	// count are properties of the whole workable set, and computing them from the
-	// view makes them shrink as the view does, silently. [LAW:one-source-of-truth]
-	render func(w io.Writer, columns []columnSpec, rows, gathered []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, cells map[string]derivedColumns, cc claimContext, notice focusNotice) error
+	// rows are what the view prints; facts are what is true of the whole queue
+	// they were drawn from. They are separate because the per-row facts a
+	// renderer prints are not all facts about the printed rows: "what closing
+	// this unblocks" and the rank-inversion count are properties of the workable
+	// queue, and computing them from the view makes them shrink as the view does,
+	// silently. They are separate TYPES because when the queue arrived as a
+	// second []annotation.AnnotatedIssue, reading the wrong one compiled, ran and
+	// printed a shorter truth (links-listing-85sd). [LAW:types-are-the-program]
+	render func(w io.Writer, columns []columnSpec, rows []annotation.AnnotatedIssue, facts queueFacts, details map[string]storage.IssueRelations, cells map[string]derivedColumns, cc claimContext, notice focusNotice) error
 	// occasion builds the workflow event this view fires once render has
 	// already succeeded on the same rows — backlog's is a constant (a
 	// backlog-wide view names no single ticket), next's reads the one row
@@ -191,7 +193,7 @@ func workableLeaf(view workableView) appLeaf {
 			columns:   columns,
 			all:       *all,
 		}
-		annotated, details, focus, err := gatherWorkableAnnotated(ctx, ap, workableFilter{
+		gathered, err := gatherWorkableAnnotated(ctx, ap, workableFilter{
 			Assignee:  knobs.assignee,
 			IssueType: knobs.issueType,
 			Status:    knobs.status,
@@ -206,8 +208,8 @@ func workableLeaf(view workableView) appLeaf {
 		// unfocused scope — the same value an unlabeled workspace produces — so one
 		// partition serves every case and nothing downstream learns the flag exists.
 		// [LAW:dataflow-not-control-flow]
-		scoped, excluded := focus.scopeFor(knobs.all).partition(annotated)
-		view.order(scoped, details, knobs)
+		scoped, excluded := gathered.scope.scopeFor(knobs.all).partition(gathered.rows)
+		view.order(scoped, gathered.details, knobs)
 		kept := view.keep(scoped)
 		rows := applyLimit(kept, knobs.limit)
 		// Built AFTER the trim it reports, not beside the partition: --limit cuts
@@ -223,7 +225,7 @@ func workableLeaf(view workableView) appLeaf {
 		// The endpoints say which narrowing is being measured.
 		// [LAW:one-source-of-truth]
 		notice := focusNotice{
-			scope:   focus,
+			scope:   gathered.scope,
 			applied: !knobs.all,
 			hidden:  len(excluded),
 			trimmed: len(kept) - len(rows),
@@ -236,7 +238,7 @@ func workableLeaf(view workableView) appLeaf {
 		// Derived unconditionally from the rows and graph data already gathered
 		// above: no extra query, and no branch deciding whether the renderer gets
 		// its data. [LAW:dataflow-not-control-flow]
-		if err := view.render(stdout, knobs.columns, rows, annotated, details, readinessColumnsFor(rows, details), cc, notice); err != nil {
+		if err := view.render(stdout, knobs.columns, rows, gathered.facts, gathered.details, readinessColumnsFor(rows, gathered.details), cc, notice); err != nil {
 			return err
 		}
 		return workflows.Dispatch(stdout, os.Stderr, ap.Workspace, view.occasion(rows))

@@ -760,6 +760,29 @@ type workableFilter struct {
 	Labels    []string
 }
 
+// criteria expresses this filter in the storage layer's own selection
+// vocabulary, so the pipeline narrows rows it already holds with the rule
+// storage defines rather than a second similar-looking one written here.
+// [LAW:one-source-of-truth]
+//
+// What that unifies is this pipeline with storage.IssueCriteria, and not the
+// two store implementations with each other. The memory engine narrows with
+// this rule directly; the SQL store expresses the same selection in its own
+// WHERE clauses and is not held to this type by anything. They agree today,
+// but by review rather than by construction, so the single source of truth
+// claimed here reaches the store boundary and stops.
+//
+// Canonicalizing the labels is the only part that can fail, and it fails here,
+// before a single row is read. [LAW:parse-dont-validate]
+func (f workableFilter) criteria() (storage.IssueCriteria, error) {
+	return storage.ParseIssueCriteria(storage.ListIssuesFilter{
+		Statuses:   toSlice(f.Status),
+		IssueTypes: toSlice(f.IssueType),
+		Assignees:  toSlice(f.Assignee),
+		LabelsAll:  f.Labels,
+	})
+}
+
 // gatherWorkableAnnotated runs the shared workable pipeline: list workable
 // leaves, fetch details, annotate, sort into canonical priority/rank order,
 // enrich with parent epic refs. Returns the prepared rows and the details
@@ -779,10 +802,10 @@ type workableFilter struct {
 // [LAW:single-enforcer] `lit next` and `lit backlog` both
 // read from this single pipeline so their "what is workable, in what
 // order" model cannot drift.
-func gatherWorkableAnnotated(ctx context.Context, ap *app.App, rf workableFilter) ([]annotation.AnnotatedIssue, map[string]storage.IssueRelations, focusScope, error) {
+func gatherWorkableAnnotated(ctx context.Context, ap *app.App, rf workableFilter) (workableGather, error) {
 	requiredFields, err := readyRequiredFields(ap)
 	if err != nil {
-		return nil, nil, focusScope{}, err
+		return workableGather{}, err
 	}
 	// [LAW:locality-or-seam] The pipeline's real inputs are a store surface and
 	// the ready required-fields policy; the *app.App only supplied those two.
@@ -844,30 +867,33 @@ func noReadyPolicy() ([]string, error) { return nil, nil }
 // focus path would leave the counts reading as project totals while meaning
 // something else — a query silently swapped for a similar-looking one with
 // different semantics. [LAW:no-silent-failure]
-func classifyWorkable(ctx context.Context, st storage.Store, requiredFields []string, rf workableFilter) ([]annotation.AnnotatedIssue, map[string]storage.IssueRelations, focusScope, error) {
-	statuses := []model.State{model.StateOpen, model.StateInProgress}
-	if rf.Status != "" {
-		statuses = []model.State{rf.Status}
+func classifyWorkable(ctx context.Context, st storage.Store, requiredFields []string, rf workableFilter) (workableGather, error) {
+	criteria, err := rf.criteria()
+	if err != nil {
+		return workableGather{}, err
 	}
+	// The query asks for the workable population and nothing the caller wanted
+	// narrowed. A narrowed query is upstream of everything: it would put the
+	// queue facts below out of reach of every consumer at once, and no wider
+	// list handed to a renderer could reach back past it. The narrowing is
+	// applied — and the rest released — once those facts are derived.
+	//
 	// [LAW:one-source-of-truth] rank is the canonical ordering; no explicit SortBy
 	// needed — the store default is item_rank ASC.
 	listFilter := storage.ListIssuesFilter{
-		Statuses:        statuses,
-		IssueTypes:      toSlice(rf.IssueType),
-		Assignees:       toSlice(rf.Assignee),
-		LabelsAll:       rf.Labels,
+		Statuses:        []model.State{model.StateOpen, model.StateInProgress},
 		IncludeArchived: false,
 		IncludeDeleted:  false,
 		Limit:           0,
 	}
 	issues, err := st.ListIssues(ctx, listFilter)
 	if err != nil {
-		return nil, nil, focusScope{}, err
+		return workableGather{}, err
 	}
 	issues = filterWorkableIssues(issues)
 	annotated, details, scope, err := annotateIssues(ctx, st, requiredFields, issues)
 	if err != nil {
-		return nil, nil, focusScope{}, err
+		return workableGather{}, err
 	}
 	// Two sorts, and they are the whole ordering story: composite rank, then
 	// priority. A third used to run here — sortByFocusPath — hoisting every
@@ -878,7 +904,11 @@ func classifyWorkable(ctx context.Context, st storage.Store, requiredFields []st
 	sortByCompositeRank(annotated, details)
 	sortByPriority(annotated)
 	enrichWithParentEpic(annotated, details)
-	return annotated, details, scope, nil
+	// Derived over the queue, then the queue is let go: keepRows returns the
+	// caller's rows and their relations, and the facts outlive the set they came
+	// from as a map of ids and an int.
+	queue := workableGather{rows: annotated, details: details, facts: deriveQueueFacts(annotated), scope: scope}
+	return queue.keepRows(criteria), nil
 }
 
 // annotateIssues runs every registered annotator over the given issues and

@@ -19,13 +19,13 @@ Minting is write-once and race-safe: a temp file is written, synced, and hard-li
 
 ## Acting identity: assignee and actor strings
 
-Every command that records an actor or assignee resolves it through one rule (`internal/cli/cli.go:1172-1177`):
+Every command that records an actor or assignee resolves it through one rule (`internal/cli/cli.go:1202-1207`):
 
 1. If the `CLAUDE_CODE_SESSION_ID` environment variable is set (trimmed, non-empty), the identity is `"claude_" + sessionID` — **the env var always beats any flag**.
 2. Otherwise the explicit flag value (`--assignee` on `start`; the hidden `--by` for other verbs), trimmed.
-3. Otherwise `""`, which the store normalizes to the opaque `"unknown"` and displays as `(unassigned)` (`cli.go:1193-1215`).
+3. Otherwise `""`, which the store normalizes to the opaque `"unknown"` and displays as `(unassigned)` (`cli.go:1223-1245`).
 
-`os.Getenv("USER")` was deliberately removed as a privacy violation; raw `$USER` never lands in `CreatedBy`/`Actor` (`cli.go:1196-1200`, `internal/cli/attribution_test.go:33-88`). `start` is the only lifecycle action that rewrites the assignee (`internal/model/lifecycle/action.go:44-49`); relation, label, and bulk verbs all resolve their `created_by`/actor through the same rule. One consequence: when the env var is set, two different checkouts flatten to one assignee, and a same-state `start` is a store-level no-op, so the claim does not transfer (`internal/cli/claims_takeover_e2e_test.go:19-26`).
+`os.Getenv("USER")` was deliberately removed as a privacy violation; raw `$USER` never lands in `CreatedBy`/`Actor` (`cli.go:1226-1230`, `internal/cli/attribution_test.go:33-88`). `start` is the only lifecycle action that rewrites the assignee (`internal/model/lifecycle/action.go:44-49`); relation, label, and bulk verbs all resolve their `created_by`/actor through the same rule. One consequence: when the env var is set, two different checkouts flatten to one assignee, and a same-state `start` is a store-level no-op, so the claim does not transfer (`internal/cli/claims_takeover_e2e_test.go:19-26`).
 
 ## Attribution: the persisted primitive
 
@@ -108,7 +108,7 @@ Callers: `lit next`, the backlog/workable runner, `lit start`'s authorization, a
 
 ### `lit start` — the takeover gate (the only write gate)
 
-`start` is the only transition with an authorization hook; it runs after the action is built and before the store apply, and can abort the transition (`internal/cli/cli.go:1553-1555`). The issue's lane standing and the caller's own attribution classify the requirement (`internal/cli/claims_takeover.go:110-119`):
+`start` is the only transition with an authorization hook; it runs after the action is built and before the store apply, and can abort the transition (`internal/cli/cli.go:1583-1585`). The issue's lane standing and the caller's own attribution classify the requirement (`internal/cli/claims_takeover.go:110-119`):
 
 | Standing | Condition | Requirement |
 |---|---|---|
@@ -123,7 +123,7 @@ A checkout with no minted token never reads "held by self," even for a lane the 
 
 - **None**: proceed; the happy path costs one extra evidence gather and nothing else.
 - **Stale-informed**: proceeds unprompted, printing the claim line plus ` — check for unmerged branches or PRs on this lane before building on it`. Checking is left to the taking agent; lit stays ignorant of git branches and the forge (`printStaleProvenance`, `claims_takeover.go:177-184`). An expired claim reaches this arm only when its holder is not `claims.Locked`; a locked worktree takes fresh-confirm instead, per the row above.
-- **Fresh-confirm**: on a non-interactive stdout, refuses unless `--take` was passed (`… — this lane is claimed and active; pass --take to confirm the takeover`); with `--take`, prints `… — taking over (--take)` and proceeds. On an interactive terminal, prompts `take over this lane? [y/N]` reading stdin; any answer whose trimmed lowercase form starts with `y` proceeds, anything else fails with `takeover declined` (`claims_takeover.go:195-218`). The `--take` flag's help: "Confirm taking over a lane another checkout claims right now (required for non-interactive callers; an interactive terminal is prompted instead)" (`cli.go:1446`).
+- **Fresh-confirm**: on a non-interactive stdout, refuses unless `--take` was passed (`… — this lane is claimed and active; pass --take to confirm the takeover`); with `--take`, prints `… — taking over (--take)` and proceeds. On an interactive terminal, prompts `take over this lane? [y/N]` reading stdin; any answer whose trimmed lowercase form starts with `y` proceeds, anything else fails with `takeover declined` (`claims_takeover.go:195-218`). The `--take` flag's help: "Confirm taking over a lane another checkout claims right now (required for non-interactive callers; an interactive terminal is prompted instead)" (`cli.go:1476`).
 
 Proven over two real clones and a git remote: the second clone's plain `start` fails naming `--take` and `claimed`; with `--take` it succeeds printing "taking over"; a subsequent `start` on the now-transferred lane prompts nothing (`internal/cli/claims_takeover_e2e_test.go:18-80`).
 
@@ -197,6 +197,6 @@ The package emits no events and publishes no observer surface.
 
 - Both halves of an attribution are opaque by mandate; nothing user-, host-, or path-shaped travels there, because the database syncs to shared remotes. Resolving a token to a physical checkout happens only on the machine that owns it (`internal/model/model.go:639-642`).
 - The stream token is deliberately meaningless — no directory, hostname, or username material (`internal/workspace/stream.go:40-49`).
-- The `--by` fallback is `""` (normalized to `"unknown"`), the old `$USER` default having been removed as an invariant violation (`internal/cli/cli.go:1196-1200`).
+- The `--by` fallback is `""` (normalized to `"unknown"`), the old `$USER` default having been removed as an invariant violation (`internal/cli/cli.go:1226-1230`).
 - Checkout paths and branches stay on the local machine; the address map lives only for the process (`internal/workspace/checkouts.go:21-26`, `internal/cli/claims_context.go:30-32`).
 - A different clone on the same machine has a different workspace id, so this machine's enumeration never speaks to its claims (`internal/app/claims.go:21-24`).

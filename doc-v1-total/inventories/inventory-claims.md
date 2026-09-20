@@ -127,15 +127,15 @@ func resolveIdentity(explicit string) string {
 	return strings.TrimSpace(explicit)
 }
 ```
-`internal/cli/cli.go:1172-1177`.
+`internal/cli/cli.go:1202-1207`.
 
-Precedence, exactly: **`CLAUDE_CODE_SESSION_ID` (trimmed, non-empty) always wins** and yields `"claude_" + sessionID` regardless of any flag; otherwise the caller's explicit value, trimmed; otherwise `""` (`internal/cli/cli.go:1161-1170`).
+Precedence, exactly: **`CLAUDE_CODE_SESSION_ID` (trimmed, non-empty) always wins** and yields `"claude_" + sessionID` regardless of any flag; otherwise the caller's explicit value, trimmed; otherwise `""` (`internal/cli/cli.go:1191-1200`).
 
-- Assignee flag on `start`: `--assignee`, help string `"Assignee fallback when CLAUDE_CODE_SESSION_ID is unset (env always wins when set)"` (`internal/cli/cli.go:1274`). Action built as `model.Start{Assignee: resolveIdentity(*assignee)}` (`internal/cli/cli.go:1276`).
-- Actor flag: hidden `--by`, empty default, registered by `registerActor` which never exposes the raw pointer — every read passes through `resolveIdentity` (`internal/cli/cli.go:1201-1206`). `os.Getenv("USER")` was deliberately removed as a privacy violation; the fallback is `""`, normalized by the store to the opaque `"unknown"` (`internal/cli/cli.go:1193-1200`).
-- Applied in `runTransition`: `actor := resolveActor()` then `Store.Apply(ctx, issueID, storage.Change{Action: action, Actor: actor, Reason: *reason})` (`internal/cli/cli.go:1388-1392`).
+- Assignee flag on `start`: `--assignee`, help string `"Assignee fallback when CLAUDE_CODE_SESSION_ID is unset (env always wins when set)"` (`internal/cli/cli.go:1304`). Action built as `model.Start{Assignee: resolveIdentity(*assignee)}` (`internal/cli/cli.go:1306`).
+- Actor flag: hidden `--by`, empty default, registered by `registerActor` which never exposes the raw pointer — every read passes through `resolveIdentity` (`internal/cli/cli.go:1231-1236`). `os.Getenv("USER")` was deliberately removed as a privacy violation; the fallback is `""`, normalized by the store to the opaque `"unknown"` (`internal/cli/cli.go:1223-1230`).
+- Applied in `runTransition`: `actor := resolveActor()` then `Store.Apply(ctx, issueID, storage.Change{Action: action, Actor: actor, Reason: *reason})` (`internal/cli/cli.go:1418-1422`).
 - Every relation/label/bulk verb resolves through the same rule; tests pin `label add`, `parent set`, `dep add`, `bulk label add`, `bulk close` to `"claude_" + sessionID` and assert raw `$USER` never lands in `CreatedBy`/`Actor` (`internal/cli/attribution_test.go:33-88`, helpers `:90-141`).
-- `displayAssignee("")` renders `"(unassigned)"` (`internal/cli/cli.go:1210-1215`).
+- `displayAssignee("")` renders `"(unassigned)"` (`internal/cli/cli.go:1240-1245`).
 - `Start` is the only lifecycle action that rewrites the assignee: `type Start struct{ Assignee string }` (`internal/model/lifecycle/action.go:44-46`), `Target() State` = `InProgress` (`internal/model/lifecycle/action.go:49`). `Issue.Assignee` is orthogonal to the status machine (`internal/model/model.go:88-91`).
 
 Note the interaction pinned by test: because the env var overrides `--assignee`, an e2e test must clear `CLAUDE_CODE_SESSION_ID` or both checkouts flatten to one assignee and a same-state `start` becomes a documented no-op in `store.Apply`, so the claim never transfers (`internal/cli/claims_takeover_e2e_test.go:19-26`).
@@ -417,7 +417,7 @@ That is the entire `internal/app` surface: `App` (3 fields), `AccessMode` + 2 co
 
 `checkoutStreamTokens` mirrors `app.streamTokens`: skips checkouts without a present stream (`internal/cli/claims_context.go:114-122`). `addressesByAttribution` indexes live checkouts by `model.NewAttribution(checkout.Stream.Value(), workspaceID)`, skipping tokenless checkouts (`internal/cli/claims_context.go:128-136`).
 
-Callers: `next` (`internal/cli/next.go:84`), `workable`/`backlog` runner (`internal/cli/workable.go:235`), `authorizeStart` (`internal/cli/claims_takeover.go:138`), `reportContestedLanes` (`internal/cli/claims_contest_report.go:33`).
+Callers: `next` (`internal/cli/next.go:84`), `workable`/`backlog` runner (`internal/cli/workable.go:237`), `authorizeStart` (`internal/cli/claims_takeover.go:138`), `reportContestedLanes` (`internal/cli/claims_contest_report.go:33`).
 
 ---
 
@@ -425,7 +425,7 @@ Callers: `next` (`internal/cli/next.go:84`), `workable`/`backlog` runner (`inter
 
 ### 9.1 `lit start` — the takeover gate (the only write gate)
 
-`transitionSpec.authorize` is an optional hook that runs after the action is built and **before** `Store.Apply`, and may abort the transition by returning an error; only `start` supplies one, the other seven transitions use `noAuthorize` (`internal/cli/cli.go:1346-1353`, `noAuthorize` at `:1356-1360`). Wired at `internal/cli/cli.go:1383-1388`, bound at `:1462` and invoked at `:1491`. The flag: `--take`, help string `"Confirm taking over a lane another checkout claims right now (required for non-interactive callers; an interactive terminal is prompted instead)"` (`internal/cli/cli.go:1384`).
+`transitionSpec.authorize` is an optional hook that runs after the action is built and **before** `Store.Apply`, and may abort the transition by returning an error; only `start` supplies one, the other seven transitions use `noAuthorize` (`internal/cli/cli.go:1376-1383`, `noAuthorize` at `:1386-1390`). Wired at `internal/cli/cli.go:1413-1418`, bound at `:1492` and invoked at `:1521`. The flag: `--take`, help string `"Confirm taking over a lane another checkout claims right now (required for non-interactive callers; an interactive terminal is prompted instead)"` (`internal/cli/cli.go:1414`).
 
 **`classifyTakeover(standing, self) takeoverRequirement`** — pure, no I/O (`internal/cli/claims_takeover.go:110-119`). It does not read the standing itself: it switches on `relationOf(standing, self)`, the same relation routing admits on, so the gate and the router cannot disagree about whose lane it is.
 
@@ -594,10 +594,10 @@ E2E: two clones partition-start the same lane; `lit sync reconcile` on bravo pri
 
 ### 9.4 Surfaces that render but do not gate
 
-- `lit backlog` — `printBacklogContext` prints the claim line, indented, after the `in_progress:` line and before `unblocks:` (`internal/cli/backlog.go:92-96`). `backlogView` is the only `workableView` preset (`internal/cli/workable.go:87-95`), and its render function is `printBacklogOutput(w, columns, issues, details, cc)` (`internal/cli/backlog.go:32`).
-- `printInlineDeps` — the shared epic/depends-on/claim/unblocks block used by `lit next`'s summary, printing the claim line between `depends on` and `unblocks` (`internal/cli/ready_state.go:1022-1035`). `printNextSummary` calls it after the issue's column line (`internal/cli/ready_state.go:965-971`).
+- `lit backlog` — `printBacklogContext` prints the claim line, indented, after the `in_progress:` line and before `unblocks:` (`internal/cli/backlog.go:92-96`). `backlogView` is the only `workableView` preset (`internal/cli/workable.go:89-97`), and its render function is `printBacklogOutput(w, columns, issues, details, cc)` (`internal/cli/backlog.go:32`).
+- `printInlineDeps` — the shared epic/depends-on/claim/unblocks block used by `lit next`'s summary, printing the claim line between `depends on` and `unblocks` (`internal/cli/ready_state.go:1000-1020`). `printNextSummary` calls it after the issue's column line (`internal/cli/ready_state.go:965-970`).
 
-No other command consults `claims.Standings`: the only readers of `cc.standings` / `cc.self` outside `internal/cli/claims_*.go` are `next.go:88` (routing) — everything else consumes `cc` only for rendering (`internal/cli/workable.go:54`, `internal/cli/backlog.go:32,72`, `internal/cli/ready_state.go:970,1029`).
+No other command consults `claims.Standings`: the only readers of `cc.standings` / `cc.self` outside `internal/cli/claims_*.go` are `next.go:88` (routing) — everything else consumes `cc` only for rendering (`internal/cli/workable.go:54`, `internal/cli/backlog.go:32,72`, `internal/cli/ready_state.go:970,1014`).
 
 ---
 
@@ -659,7 +659,7 @@ No other command consults `claims.Standings`: the only readers of `cc.standings`
 
 - Both halves of `Attribution` are opaque by mandate; nothing user-, host-, or path-shaped may travel there, because the database syncs to shared remotes; resolving a token to a physical checkout happens only on the machine that owns it (`internal/model/model.go:639-642`).
 - `StreamID` is deliberately meaningless — no directory name, hostname, or username material (`internal/workspace/stream.go:40-49`).
-- `--by`'s old `os.Getenv("USER")` default was removed as a documented-invariant violation; the fallback is `""` → the opaque `"unknown"` (`internal/cli/cli.go:1196-1200`).
+- `--by`'s old `os.Getenv("USER")` default was removed as a documented-invariant violation; the fallback is `""` → the opaque `"unknown"` (`internal/cli/cli.go:1226-1230`).
 - `Checkout.Path` / `Checkout.Branch` stay on the local machine (`internal/workspace/checkouts.go:21-26`); `claimContext.addresses` never reaches the shared database and lives only for the process (`internal/cli/claims_context.go:30-32`).
 - A different clone of the same repository on the same machine carries a different workspace id, so this machine's enumeration never speaks to its claims (`internal/app/claims.go:21-24`).
 

@@ -18,7 +18,7 @@ The envelope carries `version: 2` (literal), `workspace_id`, `exported_at` (wall
 
 Three surfaces write the export to disk or stdout:
 
-- **`lit export`** — the JSON object to stdout with two-space indent and one trailing newline; export is JSON-only, with no text representation (`internal/cli/cli.go:1514-1525, 1800-1804`).
+- **`lit export`** — the JSON object to stdout with two-space indent and one trailing newline; export is JSON-only, with no text representation (`internal/cli/cli.go:1544-1555, 1830-1834`).
 - **Backup snapshots** (`internal/backup/backup.go`) — directory `<StorageDir>/backups` (mode `0o755`), filename `20060102-150405.000000000.json` (UTC), written via `syncfile.WriteAtomic`. `List` reads the directory (no manifest/index file exists), skipping non-`.json` entries; a missing directory lists as empty without error. `Prune(dir, keep)` errors on `keep <= 0`; `lit backup create` defaults `--keep` to 20 and the restore path hardcodes a prune to 20 (`internal/cli/backup.go:34, 160`). `lit backup create` prints `<name> <path>`; `lit backup list` prints `<name> <size> <path>`.
 - **Sync base** (`internal/syncfile/syncfile.go`) — `<StorageDir>/last-sync-base.json`, written atomically: `json.MarshalIndent` two-space **plus a trailing newline**, temp file `.links-sync-*.json` in the same directory, then `os.Rename`; the temp file is removed on any failure. `WriteAtomic` returns the content hash of the bytes written (`syncfile.go:20-39, 66-72`).
 
@@ -82,11 +82,11 @@ The CLI restore flow (`lit backup restore`, `internal/cli/backup.go:73-186`): us
 
 The input is one JSON array of spec objects, decoded with `DisallowUnknownFields` and a trailing-data check (`internal/storage/specs.go:50-61`). Each spec: `local_id` (required), `title` (required), `type` (required), `topic`, `priority`, `description`, `prompt`, `assignee`, `labels`, `parent`, `depends_on` (`internal/storage/bulk.go:53-65`). `parent` and every `depends_on` entry must reference a `local_id` **inside the file** — naming a pre-existing real issue id is rejected as a missing reference (`import_tree.go:134-154`). Forward references are legal (validation checks against the complete set). Rejections cover: empty input, missing/whitespace-padded local_id, missing title, invalid type/priority, duplicate local_id, whitespace-padded or unresolvable parent/depends_on, and self-dependency — each with a distinct `import: ...` message (`import_tree.go:104-156`).
 
-Execution (`import_tree.go:26-86`): validate everything up front (no writes); topologically sort over `parent` + `depends_on` edges (three-state DFS; a cycle errors `cycle detected involving %q`; unresolvable references are simply not edges); create in topo order via ordinary `CreateIssue` calls with `Placement` left at `RankBottom` so creates land in file order; then a second pass **in file order** wires each `depends_on` as a `blocks` relation with `SrcID` = dependent, `DstID` = dependency, `CreatedBy: "links"`. `Lane` is never settable on this path. The result is an `id_map` from local ids to real ids; the CLI prints `imported %d issues` then one `local -> real` line per entry **in nondeterministic map order** (`cli.go:1588-1605`).
+Execution (`import_tree.go:26-86`): validate everything up front (no writes); topologically sort over `parent` + `depends_on` edges (three-state DFS; a cycle errors `cycle detected involving %q`; unresolvable references are simply not edges); create in topo order via ordinary `CreateIssue` calls with `Placement` left at `RankBottom` so creates land in file order; then a second pass **in file order** wires each `depends_on` as a `blocks` relation with `SrcID` = dependent, `DstID` = dependency, `CreatedBy: "links"`. `Lane` is never settable on this path. The result is an `id_map` from local ids to real ids; the CLI prints `imported %d issues` then one `local -> real` line per entry **in nondeterministic map order** (`cli.go:1618-1635`).
 
 On any mid-batch failure, `rollbackCreatedIssues` best-effort **soft-deletes** (retention `delete`, actor `links`, reason `import rollback`) the issues created in this call; ids that fail to roll back are named in the error as `(rollback leaked %d: <ids>)`. Partial state may remain; the surviving surface is `lit doctor` (`import_tree.go:94-102, 18-22`).
 
-CLI dispatch: `lit import --path <file>` routes on lowercased extension — `.yaml`/`.yml` → bulk, **anything else** (including `.json` and no extension) → tree JSON. On the JSON branch a set `--by` flag is a usage error: tree import always attributes creates to `"links"` (`cli.go:1537-1568`).
+CLI dispatch: `lit import --path <file>` routes on lowercased extension — `.yaml`/`.yml` → bulk, **anything else** (including `.json` and no extension) → tree JSON. On the JSON branch a set `--by` flag is a usage error: tree import always attributes creates to `"links"` (`cli.go:1567-1598`).
 
 ## Bulk import (`lit import`, YAML)
 
@@ -98,7 +98,7 @@ Execution (`import_bulk.go:21-119`): topo-sort creates over `parent`/`depends_on
 
 Differences from tree import, condensed: JSON array vs multi-document YAML; create-only vs create+update; `local_id` required vs optional; internal-only references vs pass-through externals; `lane` unsettable vs settable; `reason` absent vs update-only; actor always `links` vs `--by` on updates; result `id_map` vs `{created map, updated list}`.
 
-**There is no batching**: every document is its own `withMutation` transaction and its own Dolt commit; no store-layer progress reporting exists — the CLI prints only after the whole call returns (`import_bulk.go:50, 72, 112`; `cli.go:1644-1660`). Partial failure is not transactional: rollback soft-deletes only this call's creates, never updates that already landed, which stay applied (`import_bulk.go:13-20`).
+**There is no batching**: every document is its own `withMutation` transaction and its own Dolt commit; no store-layer progress reporting exists — the CLI prints only after the whole call returns (`import_bulk.go:50, 72, 112`; `cli.go:1674-1690`). Partial failure is not transactional: rollback soft-deletes only this call's creates, never updates that already landed, which stay applied (`import_bulk.go:13-20`).
 
 CLI: `--by` with a file containing no update document is a usage error. Output: `created %d issues` + per-entry `ref -> real` lines (map order, nondeterministic), then `updated %d issues` + ids in apply order.
 
@@ -127,7 +127,7 @@ Cell rules: columns come from the live result set; each `[]byte` cell converts t
 
 Five hard single-row deletes by full primary key, used by the reconcile delta and a few CRUD paths (`row_deletes.go:83-105`): issues, relations, comments, labels, issue_events. Cascade is owned by the schema (`ON DELETE CASCADE`), not by code: deleting an issue takes its relations, comments, labels, events, and event changes; deleting an event takes its change rows. **No CRUD path hard-deletes an issue row** — ordinary deletion is the retention stamp; `deleteIssueTx`/`deleteEventTx` have only the reconcile delta as caller, deliberately (`row_deletes.go:55-61`). Errors render `delete <subject>: ...` with per-entity subject strings.
 
-The rows-affected count exists for CRUD callers: `RemoveLabel` and `RemoveRelation` convert 0 rows into typed `NotFoundError`s; `DeleteComment` discards the count; the delta ignores it (`labels.go:51-57`; `relations.go:392-406`; `store.go:1189-1191`). Set-matching deletes (single-valued edge replacement, `ClearParent`, label replacement, the self-edge sweep, `writeExportTx`'s wholesale clear, `FixIntegrity`) are deliberately separate statements (`row_deletes.go:63-74`).
+The rows-affected count exists for CRUD callers: `RemoveLabel` and `RemoveRelation` convert 0 rows into typed `NotFoundError`s; `DeleteComment` discards the count; the delta ignores it (`labels.go:51-57`; `relations.go:407-421`; `store.go:1189-1191`). Set-matching deletes (single-valued edge replacement, `ClearParent`, label replacement, the self-edge sweep, `writeExportTx`'s wholesale clear, `FixIntegrity`) are deliberately separate statements (`row_deletes.go:63-74`).
 
 ## Checkpoints
 

@@ -106,6 +106,42 @@ Run it when you touch `tools/licenses` or change a dependency; CI does not.
 The install story is the same one end users follow — see
 [README.md](README.md#install).
 
+## Performance envelope
+
+Size performance work to **5x the largest `lit` backlog on this device**, and
+find that number the cheap way — `lit stores --counts` lists every store this
+machine knows with its ready/in-flight/blocked totals. Never go looking for
+stores with a filesystem sweep. At the time of writing there was one store at
+118 workable rows, so the design target is ~590.
+
+The envelope exists to make "is this fast enough?" a measurement rather than an
+argument, and it cuts both ways: do not optimize for a million rows that will
+never exist, and do not conclude a quadratic pass is fine because 46 rows felt
+instant. `internal/cli/workable_bench_test.go` benchmarks the workable gather at
+both sizes; extend it rather than reasoning about cost in a PR description.
+
+One rule is absolute: **anything that adds milliseconds PER ROW is banned.**
+Fixed costs are fine and batched calls are fine — a reader that loads a level of
+the graph in one query costs the same at 10 rows and 600. A per-row store round
+trip does not, so a batch reader should expose no singular accessor at all,
+leaving the expensive shape unwritable rather than merely discouraged.
+
+## Fix or file — never trade one defect for another
+
+**A broken window is never an excuse to break another window just to get some
+fresh air.** An existing defect is not a budget you may spend on new damage; it
+is either in scope, and you fix it, or out of scope, and you file it.
+
+Two shapes this takes here, both seductive because they sound like focus:
+
+- *Two surfaces disagree, so I will make them agree on whichever answer is
+  cheaper to reach.* Unify on the **correct** answer and pay for it. Deleting the
+  richer of two answers closes the duplication and loses the facts.
+- *My change broke something next door, but the ticket was about this.* Breakage
+  your own change caused is in scope whatever the ticket says. That includes
+  cited line numbers: see [Cited line numbers](#cited-line-numbers) for how to
+  tell which citations you own.
+
 ## Forked dependencies
 
 `lit` does not build against upstream Dolt or go-mysql-server. Both resolve,

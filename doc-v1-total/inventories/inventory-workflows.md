@@ -328,7 +328,7 @@ Status-action → event mapping (`internal/cli/workflow_events.go:83-88`):
 `workflow_events: no event mapped for status action %q` (`internal/cli/workflow_events.go:105-111`).
 
 Retention actions (archive/unarchive/delete/restore) are **not** `StatusAction`s and therefore fire
-**no event at all** — the type assertion at `internal/cli/cli.go:1408` excludes them
+**no event at all** — the type assertion at `internal/cli/cli.go:1438` excludes them
 (`internal/cli/workflow_events.go:78-82`; pinned `internal/cli/workflow_events_test.go:163`).
 
 ### 3.3 Dispatch call sites — where each event is actually fired
@@ -337,16 +337,16 @@ Retention actions (archive/unarchive/delete/restore) are **not** `StatusAction`s
 |---|---|---|
 | `internal/cli/cli.go:359` (`runNew`) | `ticket_created` | **after** `CreateIssue` succeeds, **before** `printIssueSummary` and the `new` breadcrumb (`internal/cli/cli.go:362-365`) |
 | `internal/cli/cli.go:431` (`runFollowup`) | `ticket_created` | after create, before summary/breadcrumb (`internal/cli/cli.go:434-437`) |
-| `internal/cli/cli.go:879` (`runShow`) | `show_ticket` | after `GetIssueDetail`, **before** either the `--field` output or the full detail view — fires for both (`internal/cli/cli.go:878`, `:884-890`) |
-| `internal/cli/cli.go:1026` (`runUpdate`) | `ticket_updated` | after `Store.Apply`, before summary/breadcrumb |
-| `internal/cli/cli.go:1409` (`runTransition`) | one of the four transition events | after `Store.Apply` and after `authorize`; **before** the claim-transfer notice at `internal/cli/cli.go:1417-1420`. Guarded by `action.(model.StatusAction)` (`internal/cli/cli.go:1408`) |
-| `internal/cli/cli.go:1484` (`runCommentAdd`) | `comment_added` | after `AddComment`, before `printComment` |
+| `internal/cli/cli.go:905` (`runShow`) | `show_ticket` | after `GetIssueDetail`, **before** either the `--field` output or the full detail view — fires for both (`internal/cli/cli.go:904`, `:914-920`) |
+| `internal/cli/cli.go:1056` (`runUpdate`) | `ticket_updated` | after `Store.Apply`, before summary/breadcrumb |
+| `internal/cli/cli.go:1439` (`runTransition`) | one of the four transition events | after `Store.Apply` and after `authorize`; **before** the claim-transfer notice at `internal/cli/cli.go:1447-1450`. Guarded by `action.(model.StatusAction)` (`internal/cli/cli.go:1438`) |
+| `internal/cli/cli.go:1514` (`runCommentAdd`) | `comment_added` | after `AddComment`, before `printComment` |
 | `internal/cli/next.go:31-93` (`nextLeaf`) | `next_pulled` | **last** — after the start advice and `printNextSummary` (`internal/cli/next.go:151-160`). Only reached when a row was actually served; `Exhausted`/`NoWork` return an error before any occasion is built (`internal/cli/next.go:144-147`) |
-| `internal/cli/workable.go:146-247` (`workableLeaf`) | `show_backlog` | **last** — after the table render (`internal/cli/workable.go:242-244`) |
+| `internal/cli/workable.go:148-249` (`workableLeaf`) | `show_backlog` | **last** — after the table render (`internal/cli/workable.go:244-246`) |
 
 `backlogView` is the only `workableView` that sets an `occasion` function
-(`internal/cli/workable.go:90-97`); it is invoked unconditionally at
-`internal/cli/workable.go:167` as `view.occasion(rows)`.
+(`internal/cli/workable.go:92-99`); it is invoked unconditionally at
+`internal/cli/workable.go:169` as `view.occasion(rows)`.
 
 ---
 
@@ -422,7 +422,7 @@ This is the single shared "why" computation behind both the real firing trace an
 - Output order = `Set.Matching` order = ID-ascending
   (`internal/workflows/dispatch.go:19-21`; pinned `internal/workflows/dispatch_test.go:41`).
 - **A write failure to `w` aborts and returns the error**, which the calling command returns
-  directly (`internal/workflows/dispatch.go:64-66`; e.g. `internal/cli/cli.go:1409-1411`).
+  directly (`internal/workflows/dispatch.go:64-66`; e.g. `internal/cli/cli.go:1439-1441`).
 - **Load/parse warnings are never printed by Dispatch** — deliberately, so a workflow-authoring
   diagnostic doesn't appear on every invocation. They are only visible via `lit workflows`
   (`internal/workflows/dispatch.go:48-59`).
@@ -434,8 +434,8 @@ This is the single shared "why" computation behind both the real firing trace an
 - Dispatch is a blocking function call on the command's own goroutine; the command does not
   continue until it returns.
 - Its error return **propagates as the command's error** at every call site
-  (`internal/cli/cli.go:359-361`, `:431-433`, `:879-881`, `:1026-1028`, `:1409-1411`, `:1484-1486`;
-  `internal/cli/next.go:92`; `internal/cli/workable.go:167`). Since the only error it can return is
+  (`internal/cli/cli.go:359-361`, `:431-433`, `:905-907`, `:1056-1058`, `:1439-1441`, `:1514-1516`;
+  `internal/cli/next.go:92`; `internal/cli/workable.go:169`). Since the only error it can return is
   an `io.Writer` failure or a `fmt.Fprintln` error, in practice a workflow can never fail a command.
 - A malformed or broken workflow file **cannot break a lit invocation** — it degrades to a warning
   (`internal/workflows/load.go:41-44`; pinned `internal/workflows/dispatch_test.go:75`).

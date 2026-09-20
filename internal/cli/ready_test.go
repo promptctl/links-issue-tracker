@@ -19,7 +19,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-func newTestCLIApp(t *testing.T) *app.App {
+func newTestCLIApp(t testing.TB) *app.App {
 	t.Helper()
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("LIT_CONFIG_GLOBAL_PATH", "")
@@ -163,11 +163,11 @@ func (h readyTestHarness) addDependency(dependentID, dependencyID string) {
 // read real domain values rather than re-parsing text. [LAW:single-enforcer]
 func (h readyTestHarness) runWorkableAnnotated(rf workableFilter, limit int) []annotation.AnnotatedIssue {
 	h.t.Helper()
-	annotated, _, _, err := gatherWorkableAnnotated(h.ctx, h.ap, rf)
+	gathered, err := gatherWorkableAnnotated(h.ctx, h.ap, rf)
 	if err != nil {
 		h.t.Fatalf("gatherWorkableAnnotated(%+v) error = %v", rf, err)
 	}
-	return applyLimit(annotated, limit)
+	return applyLimit(gathered.rows, limit)
 }
 
 func (h readyTestHarness) runWorkableText(args ...string) string {

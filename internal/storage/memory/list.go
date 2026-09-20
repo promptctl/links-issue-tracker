@@ -27,7 +27,7 @@ func (e *Engine) listIssues(filter storage.ListIssuesFilter) ([]model.Issue, err
 	if err != nil {
 		return nil, err
 	}
-	labelCriteria, err := canonicalLabels(filter.LabelsAll)
+	criteria, err := storage.ParseIssueCriteria(filter)
 	if err != nil {
 		return nil, err
 	}
@@ -47,7 +47,7 @@ func (e *Engine) listIssues(filter storage.ListIssuesFilter) ([]model.Issue, err
 	}
 	selected := make([]model.Issue, 0, len(hydrated))
 	for _, issue := range hydrated {
-		if e.selects(issue, filter, labelCriteria) {
+		if e.selects(issue, filter, criteria) {
 			selected = append(selected, issue)
 		}
 	}
@@ -61,56 +61,24 @@ func (e *Engine) listIssues(filter storage.ListIssuesFilter) ([]model.Issue, err
 // selects is the whole selection rule: every criterion ANDs against the
 // others, and every slice ORs within itself, so adding a criterion can only
 // ever narrow a listing.
-func (e *Engine) selects(issue model.Issue, filter storage.ListIssuesFilter, labelCriteria []string) bool {
-	switch issue.Retention().(type) {
-	case model.Archived:
-		if !filter.IncludeArchived {
-			return false
-		}
-	case model.Deleted:
-		if !filter.IncludeDeleted {
-			return false
-		}
-	}
-	if !matchesStates(issue, filter.Statuses) {
-		return false
-	}
-	if !matchesResolutions(issue, filter.Resolutions) {
-		return false
-	}
-	if !matchesAny(string(issue.IssueType), issueTypeNames(filter.IssueTypes)) {
-		return false
-	}
-	if len(filter.ExcludeIssueTypes) > 0 && matchesAny(string(issue.IssueType), issueTypeNames(filter.ExcludeIssueTypes)) {
-		return false
-	}
-	if !matchesAny(issue.Assignee, trimmedNonEmpty(filter.Assignees)) {
-		return false
-	}
-	if !matchesAny(issue.ID, trimmedNonEmpty(filter.IDs)) {
+//
+// [LAW:one-source-of-truth] The criteria an issue answers for itself live in
+// storage.IssueCriteria, which is what a caller narrowing rows it already holds
+// applies. Re-deciding here what `--type bug` selects would put that answer in
+// two places, and the second one only has to be wrong once.
+//
+// What remains is the half no issue can answer alone: membership under a
+// parent, and whether anything has been said about it. Both are readings of the
+// engine's own edge and comment tables.
+func (e *Engine) selects(issue model.Issue, filter storage.ListIssuesFilter, criteria storage.IssueCriteria) bool {
+	if !criteria.Selects(issue) {
 		return false
 	}
 	if !e.matchesParents(issue.ID, filter.ParentIDs) {
 		return false
 	}
-	if filter.UpdatedAfter != nil && issue.UpdatedAt.Before(*filter.UpdatedAfter) {
-		return false
-	}
-	if filter.UpdatedBefore != nil && issue.UpdatedAt.After(*filter.UpdatedBefore) {
-		return false
-	}
 	if filter.HasComments != nil && *filter.HasComments != (len(e.commentsFor(issue.ID)) > 0) {
 		return false
-	}
-	for _, label := range labelCriteria {
-		if !slices.Contains(issue.Labels, label) {
-			return false
-		}
-	}
-	for _, term := range filter.SearchTerms {
-		if !matchesSearch(issue, term) {
-			return false
-		}
 	}
 	return true
 }
@@ -129,79 +97,6 @@ func (e *Engine) matchesParents(childID string, parentIDs []string) bool {
 		}
 	}
 	return false
-}
-
-// matchesAny reports whether value is in criteria, treating an empty criteria
-// list as "do not constrain on this axis" — the zero value of every filter
-// slice, and why a listing needs no mode flags to say it wants everything.
-func matchesAny(value string, criteria []string) bool {
-	return len(criteria) == 0 || slices.Contains(criteria, value)
-}
-
-// matchesStates compares against the DERIVED state, never a stored one: a
-// container's state is a reading of its children, so filtering on anything
-// else would answer about an epic with a value nothing derives.
-func matchesStates(issue model.Issue, wanted []model.State) bool {
-	if len(wanted) == 0 {
-		return true
-	}
-	for _, state := range wanted {
-		if model.DefaultOpen(string(state)) == issue.State() {
-			return true
-		}
-	}
-	return false
-}
-
-// matchesResolutions selects on the close outcome the lifecycle carries. An
-// issue with no resolution — open, in progress, or closed as plain done —
-// matches no non-empty criteria set.
-func matchesResolutions(issue model.Issue, wanted []model.Resolution) bool {
-	if len(wanted) == 0 {
-		return true
-	}
-	resolution := issue.ResolutionValue()
-	if resolution == nil {
-		return false
-	}
-	return slices.Contains(wanted, *resolution)
-}
-
-// matchesSearch is the free-text criterion: one case-insensitive substring
-// across the fields a searcher means by "the ticket said something about X",
-// topic included.
-func matchesSearch(issue model.Issue, term string) bool {
-	needle := strings.ToLower(strings.TrimSpace(term))
-	if needle == "" {
-		return true
-	}
-	for _, haystack := range []string{issue.Title, issue.Description, issue.Prompt, issue.Topic} {
-		if strings.Contains(strings.ToLower(haystack), needle) {
-			return true
-		}
-	}
-	return false
-}
-
-func issueTypeNames(types []model.IssueType) []string {
-	out := make([]string, 0, len(types))
-	for _, t := range types {
-		out = append(out, string(t))
-	}
-	return out
-}
-
-// trimmedNonEmpty drops the blanks a caller may have assembled a criteria
-// slice from, so a filter of nothing but whitespace constrains nothing rather
-// than selecting nothing.
-func trimmedNonEmpty(values []string) []string {
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			out = append(out, trimmed)
-		}
-	}
-	return out
 }
 
 // capLimit truncates the ordered result rather than sampling it, so a limited

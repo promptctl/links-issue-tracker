@@ -72,7 +72,7 @@ func nextLeaf() appLeaf {
 		if err := printStalenessWarning(ctx, stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
 			return err
 		}
-		rows, details, focus, err := gatherWorkableAnnotated(ctx, ap, workableFilter{
+		gathered, err := gatherWorkableAnnotated(ctx, ap, workableFilter{
 			Assignee:  strings.TrimSpace(*assignee),
 			IssueType: issueTypeValue,
 			Status:    statusState,
@@ -85,7 +85,7 @@ func nextLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		occasion, err := renderNextOutcome(stdout, routeNext(rows, details, cc.standings, cc.self, focus.scopeFor(*all)), details, cc, actor())
+		occasion, err := renderNextOutcome(stdout, routeNext(gathered.rows, gathered.details, cc.standings, cc.self, gathered.scope.scopeFor(*all)), gathered.details, cc, actor())
 		if err != nil {
 			return err
 		}
