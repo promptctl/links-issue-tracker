@@ -38,9 +38,16 @@ func ParseIssueCriteria(filter ListIssuesFilter) (IssueCriteria, error) {
 
 // Selects reports whether the issue satisfies every criterion the value
 // carries: each criterion ANDs against the others, each slice ORs within
-// itself. The zero value selects everything, so a caller asked to narrow on
-// nothing runs the same path as one that was.
+// itself. The zero value selects every live issue, so a caller asked to
+// narrow on nothing runs the same path as one that was.
 // [LAW:dataflow-not-control-flow]
+//
+// Live rather than everything, because retention is the one criterion whose
+// empty value is not "no opinion": an unset IncludeArchived excludes archived
+// issues rather than admitting them, so the zero value is already a filter.
+// Every construction path runs through ParseIssueCriteria with a real filter,
+// so nothing builds a raw zero value today -- but this comment is the contract
+// that would tell someone it was safe to.
 func (c IssueCriteria) Selects(issue model.Issue) bool {
 	switch issue.Retention().(type) {
 	case model.Archived:

@@ -607,24 +607,24 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 
 **`storage.IssueCriteria`** (`internal/storage/selects.go:23-26`) — a `ListIssuesFilter` reduced to the criteria readable from an issue alone, with the label canonicalization already taken, so `Selects` is total. It is exported because a caller narrowing rows it already holds applies the **same** rule storage defines rather than a second one of its own (the memory engine narrows with it directly; the SQL store expresses the same selection in its own query) — the workable pipeline reads the whole queue and `keepRows` narrows it at the point of use (`internal/cli/queue_facts.go:77-87`).
 
-**`Selects`** — every criterion ANDs; every slice ORs within itself; the zero value selects everything (`internal/storage/selects.go:44-91`):
+**`Selects`** — every criterion ANDs; every slice ORs within itself; the zero value selects everything (`internal/storage/selects.go:51-98`):
 | Criterion | Semantics | Cite |
 |---|---|---|
-| Retention | `model.Archived` excluded unless `IncludeArchived`; `model.Deleted` excluded unless `IncludeDeleted`; anything else (Live) always passes | `:45-54` |
-| `Statuses` | `matchesStates`: empty = pass; otherwise matches if any `model.DefaultOpen(string(state)) == issue.State()` — compares the **DERIVED** state | `:55-57`, `:102-115` |
-| `Resolutions` | `matchesResolutions`: empty = pass; a nil `ResolutionValue()` matches **no** non-empty criteria set; otherwise `slices.Contains(wanted, *resolution)` | `:58-60`, `:117-129` |
-| `IssueTypes` | `matchesAny(string(issue.IssueType), ...)`: empty = pass; else exact string membership | `:61-63`, `:95-100` |
-| `ExcludeIssueTypes` | if non-empty AND the type is in the list → reject | `:64-66` |
-| `Assignees` | `matchesAny(issue.Assignee, ...)`: exact match after the criteria are trimmed | `:67-69`, `:95-100` |
-| `IDs` | `matchesAny(issue.ID, ...)`: exact match | `:70-72` |
-| `UpdatedAfter` | reject if `issue.UpdatedAt.Before(*UpdatedAfter)` (i.e. inclusive of equality) | `:73-75` |
-| `UpdatedBefore` | reject if `issue.UpdatedAt.After(*UpdatedBefore)` (inclusive of equality) | `:76-78` |
-| `LabelsAll` | **conjunctive**: every canonical label criterion must be in `issue.Labels` | `:79-83` |
-| `SearchTerms` | **conjunctive across terms**: every term must match | `:84-88` |
+| Retention | `model.Archived` excluded unless `IncludeArchived`; `model.Deleted` excluded unless `IncludeDeleted`; anything else (Live) always passes | `:52-61` |
+| `Statuses` | `matchesStates`: empty = pass; otherwise matches if any `model.DefaultOpen(string(state)) == issue.State()` — compares the **DERIVED** state | `:62-64`, `:109-122` |
+| `Resolutions` | `matchesResolutions`: empty = pass; a nil `ResolutionValue()` matches **no** non-empty criteria set; otherwise `slices.Contains(wanted, *resolution)` | `:65-67`, `:124-136` |
+| `IssueTypes` | `matchesAny(string(issue.IssueType), ...)`: empty = pass; else exact string membership | `:68-70`, `:102-107` |
+| `ExcludeIssueTypes` | if non-empty AND the type is in the list → reject | `:71-73` |
+| `Assignees` | `matchesAny(issue.Assignee, ...)`: exact match after the criteria are trimmed | `:74-76`, `:102-107` |
+| `IDs` | `matchesAny(issue.ID, ...)`: exact match | `:77-79` |
+| `UpdatedAfter` | reject if `issue.UpdatedAt.Before(*UpdatedAfter)` (i.e. inclusive of equality) | `:80-82` |
+| `UpdatedBefore` | reject if `issue.UpdatedAt.After(*UpdatedBefore)` (inclusive of equality) | `:83-85` |
+| `LabelsAll` | **conjunctive**: every canonical label criterion must be in `issue.Labels` | `:86-90` |
+| `SearchTerms` | **conjunctive across terms**: every term must match | `:91-95` |
 
-**`trimmedNonEmpty`** (`internal/storage/selects.go:155-163`) — drops the blanks a caller may have assembled a criteria slice from, so a filter of nothing but whitespace constrains nothing rather than selecting nothing.
+**`trimmedNonEmpty`** (`internal/storage/selects.go:162-170`) — drops the blanks a caller may have assembled a criteria slice from, so a filter of nothing but whitespace constrains nothing rather than selecting nothing.
 
-**`matchesSearch`** (`internal/storage/selects.go:131-142`) — lowercases and trims the term; an empty needle matches everything; case-insensitive substring across exactly four fields: `Title`, `Description`, `Prompt`, `Topic`.
+**`matchesSearch`** (`internal/storage/selects.go:138-149`) — lowercases and trims the term; an empty needle matches everything; case-insensitive substring across exactly four fields: `Title`, `Description`, `Prompt`, `Topic`.
 
 **`capLimit`** (`internal/storage/memory/list.go:105-110`) — `limit <= 0` or `len <= limit` → unchanged; else `issues[:limit]`. **A limit of zero is the absence of a limit, not a limit of zero**; truncation, never sampling (`:102-104`).
 
