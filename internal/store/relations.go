@@ -195,16 +195,31 @@ func (s *Store) relationsByEndpoint(ctx context.Context, column string, ids []st
 	if _, ok := relationEndpointColumns[column]; !ok {
 		return nil, fmt.Errorf("list relations by endpoint: unknown column %q", column)
 	}
-	idClause := strings.Join(repeatPlaceholder(len(ids)), ",")
 	typeClause := strings.Join(repeatPlaceholder(len(structuralRelationTypes)), ",")
-	args := make([]any, 0, len(ids)+len(structuralRelationTypes))
-	for _, id := range ids {
-		args = append(args, id)
+	rels := []model.Relation{}
+	for _, batch := range idBatches(ids) {
+		idClause := strings.Join(repeatPlaceholder(len(batch)), ",")
+		args := make([]any, 0, len(batch)+len(structuralRelationTypes))
+		for _, id := range batch {
+			args = append(args, id)
+		}
+		for _, relType := range structuralRelationTypes {
+			args = append(args, string(relType))
+		}
+		query := fmt.Sprintf(`SELECT src_id, dst_id, type, created_at, created_by FROM relations WHERE %s IN (%s) AND type IN (%s)`, column, idClause, typeClause)
+		batched, err := s.scanRelationRows(ctx, query, args)
+		if err != nil {
+			return nil, err
+		}
+		rels = append(rels, batched...)
 	}
-	for _, relType := range structuralRelationTypes {
-		args = append(args, string(relType))
-	}
-	query := fmt.Sprintf(`SELECT src_id, dst_id, type, created_at, created_by FROM relations WHERE %s IN (%s) AND type IN (%s)`, column, idClause, typeClause)
+	return rels, nil
+}
+
+// scanRelationRows runs one endpoint query and reads its rows. It is separate
+// from the batching above so that the shape of a relation row is stated once,
+// however many queries the id set turns into.
+func (s *Store) scanRelationRows(ctx context.Context, query string, args []any) ([]model.Relation, error) {
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list relations for ids: %w", err)

@@ -948,23 +948,16 @@ func collectRelatedIssueIDs(focalID string, relations []model.Relation) []string
 // Missing ids (deleted/archived/never-existed) are simply absent from the
 // returned map; callers decide whether absence is an error or merely a hole
 // to skip. Empty input returns an empty map without querying.
-func (s *Store) getIssuesByIDs(ctx context.Context, ids []string) (map[string]model.Issue, error) {
-	if len(ids) == 0 {
-		return map[string]model.Issue{}, nil
-	}
-	placeholders := make([]string, len(ids))
-	args := make([]any, len(ids))
-	for i, id := range ids {
-		placeholders[i] = "?"
-		args[i] = id
-	}
-	query := fmt.Sprintf(`SELECT `+issueColumnsBare+` FROM issues WHERE id IN (%s)`, strings.Join(placeholders, ","))
+// scanIssueRows runs one id-batch query and reads its rows. It is separate from
+// the batching above so that closing the rows stays tied to the one query that
+// opened them, rather than to the whole batched read.
+func (s *Store) scanIssueRows(ctx context.Context, query string, args []any) ([]issueRow, error) {
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("batch load issues: %w", err)
 	}
 	defer rows.Close()
-	scanned := make([]issueRow, 0, len(ids))
+	scanned := []issueRow{}
 	for rows.Next() {
 		row, err := scanIssue(rows)
 		if err != nil {
@@ -974,6 +967,28 @@ func (s *Store) getIssuesByIDs(ctx context.Context, ids []string) (map[string]mo
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate batch-loaded issues: %w", err)
+	}
+	return scanned, nil
+}
+
+func (s *Store) getIssuesByIDs(ctx context.Context, ids []string) (map[string]model.Issue, error) {
+	if len(ids) == 0 {
+		return map[string]model.Issue{}, nil
+	}
+	scanned := make([]issueRow, 0, len(ids))
+	for _, batch := range idBatches(ids) {
+		placeholders := make([]string, len(batch))
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			placeholders[i] = "?"
+			args[i] = id
+		}
+		query := fmt.Sprintf(`SELECT `+issueColumnsBare+` FROM issues WHERE id IN (%s)`, strings.Join(placeholders, ","))
+		batched, err := s.scanIssueRows(ctx, query, args)
+		if err != nil {
+			return nil, err
+		}
+		scanned = append(scanned, batched...)
 	}
 	hydrated, err := s.hydrateIssues(ctx, scanned)
 	if err != nil {
