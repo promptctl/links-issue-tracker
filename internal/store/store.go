@@ -948,29 +948,6 @@ func collectRelatedIssueIDs(focalID string, relations []model.Relation) []string
 // Missing ids (deleted/archived/never-existed) are simply absent from the
 // returned map; callers decide whether absence is an error or merely a hole
 // to skip. Empty input returns an empty map without querying.
-// scanIssueRows runs one id-batch query and reads its rows. It is separate from
-// the batching above so that closing the rows stays tied to the one query that
-// opened them, rather than to the whole batched read.
-func (s *Store) scanIssueRows(ctx context.Context, query string, args []any) ([]issueRow, error) {
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("batch load issues: %w", err)
-	}
-	defer rows.Close()
-	scanned := []issueRow{}
-	for rows.Next() {
-		row, err := scanIssue(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan batch-loaded issue: %w", err)
-		}
-		scanned = append(scanned, row)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate batch-loaded issues: %w", err)
-	}
-	return scanned, nil
-}
-
 func (s *Store) getIssuesByIDs(ctx context.Context, ids []string) (map[string]model.Issue, error) {
 	if len(ids) == 0 {
 		return map[string]model.Issue{}, nil
@@ -999,6 +976,29 @@ func (s *Store) getIssuesByIDs(ctx context.Context, ids []string) (map[string]mo
 		out[issue.ID] = issue
 	}
 	return out, nil
+}
+
+// scanIssueRows runs one id-batch query and reads its rows. It is separate from
+// the batching above so that closing the rows stays tied to the one query that
+// opened them, rather than to the whole batched read.
+func (s *Store) scanIssueRows(ctx context.Context, query string, args []any) ([]issueRow, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("batch load issues: %w", err)
+	}
+	defer rows.Close()
+	scanned := []issueRow{}
+	for rows.Next() {
+		row, err := scanIssue(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan batch-loaded issue: %w", err)
+		}
+		scanned = append(scanned, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate batch-loaded issues: %w", err)
+	}
+	return scanned, nil
 }
 
 func (s *Store) GetIssue(ctx context.Context, id string) (model.Issue, error) {
