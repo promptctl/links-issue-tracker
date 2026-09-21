@@ -801,7 +801,18 @@ func (s *Store) selectedIssueIDs(ctx context.Context, filter storage.ListIssuesF
 			return nil, false, err
 		}
 		if restricted {
-			children = slices.DeleteFunc(children, func(id string) bool { return !slices.Contains(selected, id) })
+			// Intersected through a set rather than slices.Contains, which
+			// would be O(len(children) x len(selected)) — the same quadratic
+			// over two caller-supplied id lists that this change removes from
+			// the planner, just relocated into Go where no index hides it.
+			// The rule beside idBatchSize governs an id set wherever it is
+			// tested, not only where it is rendered into SQL.
+			// [LAW:one-type-per-behavior]
+			keep := make(map[string]bool, len(selected))
+			for _, id := range selected {
+				keep[id] = true
+			}
+			children = slices.DeleteFunc(children, func(id string) bool { return !keep[id] })
 		}
 		selected, restricted = children, true
 	}
