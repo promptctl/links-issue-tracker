@@ -138,11 +138,16 @@ func pad(seed string, n int) string {
 //
 // This is data bytes: a generated store has no git remote, so it carries none
 // of the mirror's cached remote clone. That is worth stating because it makes
-// the figure here much smaller than `du` on a live workspace, and the
-// difference is not overhead — measured on this repository on 2026-09-21, a
-// 279 MB store was 181 MB of .dolt/git-remote-cache against 83 MB of data. A
-// size ceiling read off a live `du` would be budgeting mostly for a rebuildable
-// cache.
+// the figure here much smaller than a live workspace's, and the difference is
+// not overhead — measured on this repository on 2026-09-21, a 291.5 MB store
+// was 192.0 MB of .dolt/git-remote-cache against 99.5 MB of data. A size
+// ceiling read off the whole directory would be budgeting mostly for a
+// rebuildable cache.
+//
+// Quote those three figures together or not at all. They are apparent bytes,
+// the unit this function returns; `du` reports allocated blocks and gives a
+// different total for the same store, so a cache share taken from one and a
+// total taken from the other do not describe one measurement.
 //
 // Apparent size, not blocks: the same store measured on two filesystems with
 // different block sizes must produce the same number, or figures stop being
