@@ -160,11 +160,12 @@ func issueTypeNames(types []model.IssueType) []string {
 // slice from, so a filter of nothing but whitespace constrains nothing rather
 // than selecting nothing.
 //
-// Exported because both engines have to agree about it: the memory engine
-// reads it here, and the SQL engine reads it to decide whether an id filter
-// narrows the scan at all. A second copy of this rule is a second answer to
-// "does a whitespace-only filter select everything or nothing".
-// [LAW:one-source-of-truth]
+// Exported because both engines have to agree about it, and because a filter
+// slice is assembled from CSV flags and query terms at several places that all
+// meet the same question: does a whitespace-only filter select everything or
+// nothing. A second copy of this rule is a second answer to that. The rule is
+// that there is no second site, whoever the readers are — naming them here is
+// what would go stale. [LAW:one-source-of-truth] [LAW:single-enforcer]
 func TrimmedNonEmpty(values []string) []string {
 	out := make([]string, 0, len(values))
 	for _, value := range values {

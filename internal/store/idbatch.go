@@ -97,21 +97,34 @@ const idBatchSize = 16
 
 // idBatch is an id list short enough to be safe as one `IN (...)` clause.
 //
-// It is a named type rather than a bare []string so the bound is a thing the
-// compiler re-checks on every build instead of a thing a reader has to notice.
-// idBatches is its only constructor, and inList is the only renderer of an
-// `IN` body in this package, so the two are locked together: a query that
-// interpolates inList's output has an id count capped at idBatchSize, and a
-// query that does not is visibly hand-rolling the shape this file exists to
-// prevent. [LAW:types-are-the-program] [LAW:single-enforcer]
+// What the type buys is PROVENANCE, and it is worth being exact about that,
+// because the overclaim is the interesting mistake. Go will convert any
+// []string to an idBatch for free and will not check its length, so the type
+// enforces no bound and the compiler proves nothing here. What it does is make
+// the only way to OBTAIN one — short of writing the conversion, which is
+// visible — a call to idBatches, so a reader at a query site can see that the
+// count is capped without following the slice back to its caller.
+//
+// The rendering is where the single enforcer actually is, and it is
+// repeatPlaceholder: every `?`-list in this package comes from that one
+// function, so `IN (` grepped against it is a complete audit. inList is its
+// id-shaped wrapper, pairing the placeholders with the args so the count of
+// each is one fact rather than two. A query built from inList carries at most
+// idBatchSize ids; a query built from repeatPlaceholder directly carries
+// whatever its clause's own bound allows, and each of those says which
+// vocabulary bounds it.
+//
+// inList is defined on a NON-EMPTY batch — idBatches never yields an empty one
+// — because `IN ()` is a syntax error rather than a filter matching nothing.
+// [LAW:types-are-the-program]
 type idBatch []string
 
 // inList renders the batch as the body of an `IN (...)` clause — the
 // placeholders alone, without the parentheses — and the args that fill it.
 //
 // Returning both together is what keeps them in step: the count of `?` and the
-// count of args are one fact, and the eight hand-rolled loops this replaces
-// each held it twice.
+// count of args are one fact, and the hand-rolled loops this replaces each held
+// it twice.
 func (b idBatch) inList() (string, []any) {
 	args := make([]any, len(b))
 	for i, id := range b {
@@ -146,6 +159,17 @@ func (b idBatch) inList() (string, []any) {
 // no transaction over them — so no caller had a snapshot to lose. Restoring one
 // means a read transaction spanning all three, not the batch loop alone, which
 // is why it is not attempted here. Tracked as links-scale-6iiv.
+//
+// ListIssues is the case worth stating separately, because it looks like a
+// counterexample and is not quite one. Its row scan WAS a single statement, and
+// under an id filter it is now one per batch, so which rows match is no longer
+// decided at one instant. But its RESULT was never a snapshot: hydrateIssues
+// runs the label load and the lifecycle-children query afterwards, outside any
+// transaction, so a write landing between the scan and the hydration already
+// produced a row carrying its own old identity and its new labels. The scan was
+// the last atomic thing in it, and what it bounded was membership, not content.
+// Same ticket, same fix — one read transaction over the whole call, not a
+// narrower batch loop.
 func idBatches(ids []string) []idBatch {
 	unique := dedupeStrings(ids)
 	if len(unique) == 0 {

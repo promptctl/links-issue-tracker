@@ -8,14 +8,14 @@ lit's shared backend stores every workspace in an embedded [Dolt](https://github
 
 A `Store` wraps exactly one pooled SQL connection (`SetMaxOpenConns(1)` in `openDoltPool`, `store.go:2824`) opened through a vendored embedded-Dolt driver. Two access modes (`store.go:37-42`):
 
-- **Write** (`Open`, and the sync-side `OpenSync`): the connector gets an exponential backoff (initial 50ms, max interval `engineOpenRetryMaxInterval` = 1s, max elapsed `engineOpenRetryMaxElapsed` = `coResidentHolderWait` = 70s, assigned in `newEngineOpenBackOff`, `store.go:2776-2778`) and pings eagerly so lock contention surfaces at open time.
+- **Write** (`Open`, and the sync-side `OpenSync`): the connector gets an exponential backoff (initial 50ms, max interval `engineOpenRetryMaxInterval` = 1s, max elapsed `engineOpenRetryMaxElapsed` = `coResidentHolderWait` = 70s, assigned in `newEngineOpenBackOff`, `store.go:2881-2883`) and pings eagerly so lock contention surfaces at open time.
 - **Read** (`OpenForRead`): no backoff, no ping — the engine opens lazily at the first SQL statement (`store.go:381-399`). A read open beside a foreign lock holder succeeds via Dolt's read-only fallback (journal wait ~100ms) and serves reads.
 
 If another process holds Dolt's journal lock (`<root>/links/.dolt/noms/LOCK`), the wrapped error satisfies both `ErrWorkspaceBusy` and `nbs.ErrDatabaseLocked` and reads "another process is holding this workspace's Dolt store open … retry after it completes" (`store.go:2756-2761`).
 
 ### Open sequence
 
-`Open(ctx, doltRootDir, workspaceID)` (`store.go:98-165`), in order: validate args (both non-blank; the root is `filepath.Clean`ed) → acquire the **shared workspace flock** → refuse if an adopt is pending → bootstrap the database if absent (`CREATE DATABASE IF NOT EXISTS links` through a first pool that closes before the second opens, `store.go:2561-2608`) → open the write connection → under the **commit lock**: normalize the default branch to `master` (renaming a sole non-master branch via `DOLT_BRANCH('-m', …)`, `store.go:2583-2626`) and run migrations. Failure at any point releases everything and returns the error.
+`Open(ctx, doltRootDir, workspaceID)` (`store.go:98-165`), in order: validate args (both non-blank; the root is `filepath.Clean`ed) → acquire the **shared workspace flock** → refuse if an adopt is pending → bootstrap the database if absent (`CREATE DATABASE IF NOT EXISTS links` through a first pool that closes before the second opens, `store.go:2666-2713`) → open the write connection → under the **commit lock**: normalize the default branch to `master` (renaming a sole non-master branch via `DOLT_BRANCH('-m', …)`, `store.go:2583-2626`) and run migrations. Failure at any point releases everything and returns the error.
 
 `OpenForRead` differs in that it stats the directory first — a missing directory yields "repository not initialized with lit — run 'lit init' first" — never bootstraps, and still runs migrations (a pending migration under a read-only holder fails with a "pending schema migrations" message, `store.go:212-231`). Re-opening a current-schema workspace adds **no** Dolt commit; migration is idempotent across opens.
 
@@ -124,11 +124,11 @@ Default placement is bottom (the `RankPlacement` zero value): rank = `After(max 
 
 ## Reads
 
-All issue reads share one 18-column projection (`store.go:2111-2137`) and one hydration path. `hydrateIssues` uses a **fixed query count per recursion level**, not per issue: one labels query for all ids, one children query for all container ids (`store.go:2265-2324`). The children query's visibility rule: a live parent sees only live children; an archived/deleted parent sees all its children — so an active epic's progress excludes archived children, but the same epic once archived counts them (`store.go:2337-2342`).
+All issue reads share one 18-column projection (`store.go:2111-2137`) and one hydration path. `hydrateIssues` uses a **fixed query count per recursion level**, not per issue: one labels query for all ids, one children query for all container ids (`store.go:2265-2324`). The children query's visibility rule: a live parent sees only live children; an archived/deleted parent sees all its children — so an active epic's progress excludes archived children, but the same epic once archived counts them (`store.go:2452-2457`).
 
 - `GetIssue`: single-row lookup; missing → `storage.NotFoundError`.
 - `getIssuesByIDs`: one `IN` query; missing ids are silently absent from the map.
-- `GetIssueDetail` (`store.go:774-847`): the issue + its relations (all incident, ordered by `created_at`), comments, events, then one batch hydrate of every relation counterparty plus the redirect target; buckets into Parent/Children/DependsOn/Blocks; siblings = the parent's other children in rank order (empty for parentless issues); `Related` carries only manual `related-to` edges; the redirect target hydrates independently of the graph and is absent if the target row vanished.
+- `GetIssueDetail` (`store.go:885-958`): the issue + its relations (all incident, ordered by `created_at`), comments, events, then one batch hydrate of every relation counterparty plus the redirect target; buckets into Parent/Children/DependsOn/Blocks; siblings = the parent's other children in rank order (empty for parentless issues); `Related` carries only manual `related-to` edges; the redirect target hydrates independently of the graph and is absent if the target row vanished.
 - `ListTopics`: distinct non-empty topics of non-deleted issues, ascending.
 
 ### ListIssues filtering
@@ -155,7 +155,7 @@ One LEFT JOIN query collapses `issue_events` × `issue_event_changes` into event
 
 ## Events
 
-`recordEvent` is the single insertion point (`store.go:1828-1866`): id `evt-<uuid>`, trimmed action/reason/actor (blank actor → `unknown`), `created_at` now-UTC, attribution read off the store. Empty action stores SQL NULL; empty from/to values in change rows store NULL. Which mutation emits what:
+`recordEvent` is the single insertion point (`store.go:1943-1981`): id `evt-<uuid>`, trimmed action/reason/actor (blank actor → `unknown`), `created_at` now-UTC, attribution read off the store. Empty action stores SQL NULL; empty from/to values in change rows store NULL. Which mutation emits what:
 
 | Mutation | `action` | change rows |
 |---|---|---|
@@ -168,7 +168,7 @@ One LEFT JOIN query collapses `issue_events` × `issue_event_changes` into event
 
 ## Comments
 
-`AddComment`: issue must exist; body trimmed and required; id `cmt-<uuid>`; creator defaults `unknown`; one insert, no event, and the issue row is untouched (the returned issue is the pre-comment read). `DeleteComment`: reads and deletes in the same transaction (no TOCTOU gap); missing → `NotFoundError`; returns the fully-populated deleted comment (`store.go:1154-1212`).
+`AddComment`: issue must exist; body trimmed and required; id `cmt-<uuid>`; creator defaults `unknown`; one insert, no event, and the issue row is untouched (the returned issue is the pre-comment read). `DeleteComment`: reads and deletes in the same transaction (no TOCTOU gap); missing → `NotFoundError`; returns the fully-populated deleted comment (`store.go:1260-1318`).
 
 ## Labels
 
@@ -182,7 +182,7 @@ The three types and their store canonicalizations are in `01-data-model.md`: `bl
 
 `SetParent`: blank ids and self-parenting rejected; both must exist; same single-valued replace; **no ancestry cycle check on write** — a parent cycle is only caught at read time by the ancestor-chain walk. `ClearParent` deletes the child's parent edge (zero rows → `NotFoundError`). `RemoveRelation` canonicalizes first (so related-to removal is order-insensitive) and needs no endpoint existence.
 
-Reads: `ListRelationsForIssue` returns all incident relations ordered by `created_at`, optionally type-filtered in Go. Batch loading (`GetRelationsByIDs`) covers only the **structural** types (blocks, parent-child; related-to excluded), runs one query per endpoint column (deliberately avoiding a large OR), dedupes on the primary key, orders by `(created_at, src, dst, type)`, hydrates all endpoints in one batch, and buckets per subject exactly as `GetIssueDetail` does; vanished subjects are omitted. Children are read through `ListIssues`: a non-empty `ParentIDs` adds `EXISTS (SELECT 1 FROM relations r WHERE r.type = 'parent-child' AND r.src_id = i.id AND r.dst_id IN (…))`, so only direct children match, under the listing's usual retention filters and ordering (`store.go:679-688`). Before that clause, `requireIssues` looks the parent ids up in `issues` and returns `NotFoundError` for the first one with no row; a soft-deleted parent still has a row and passes (`store.go:742-776`).
+Reads: `ListRelationsForIssue` returns all incident relations ordered by `created_at`, optionally type-filtered in Go. Batch loading (`GetRelationsByIDs`) covers only the **structural** types (blocks, parent-child; related-to excluded), runs one query per endpoint column (deliberately avoiding a large OR), dedupes on the primary key, orders by `(created_at, src, dst, type)`, hydrates all endpoints in one batch, and buckets per subject exactly as `GetIssueDetail` does; vanished subjects are omitted. Children are read through `ListIssues`, and not by a clause inside the issue scan: a non-empty `ParentIDs` is resolved against `relations` first — `SELECT src_id FROM relations WHERE dst_id IN (…) AND type = ?`, one batch of at most `idBatchSize` parent ids per query — and the resulting child ids become the listing's id filter, intersected with `filter.IDs` when the caller set both (`store.go:795-838`). So only direct children match, under the listing's usual retention filters and ordering, and the listing batches over one id set rather than the product of two. Before that, `requireIssues` looks the parent ids up in `issues`, one batch at a time, and returns `NotFoundError` for the first one with no row in the caller's own order; a soft-deleted parent still has a row and passes (`store.go:854-890`).
 
 ## Ranking
 

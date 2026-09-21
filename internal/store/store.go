@@ -616,30 +616,29 @@ func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter)
 	// [LAW:types-are-the-program] Filter types are already-parsed vocabulary;
 	// the defensive trim/skip that the raw-string filter needed is gone with it.
 	//
-	// That parse is also what bounds the next three clauses, and it is the
-	// reason they are written as one `IN` list where an id list may not be:
-	// model.IssueType is a closed vocabulary of five, so both the positive and
-	// the negative filter carry at most five placeholders however long the
-	// caller's argument was. See idBatchSize for the shape this would be if the
-	// vocabulary were open.
-	if len(filter.IssueTypes) > 0 {
-		var placeholders []string
-		for _, t := range filter.IssueTypes {
-			placeholders = append(placeholders, "?")
+	// That parse is also what lets the next two clauses stay a single `IN` list
+	// where an id list may not: model.IssueType is a closed vocabulary, so the
+	// DISTINCT types a caller can name are at most len(model.IssueTypes()) —
+	// five — however long the slice it passed. distinctTypes is what makes that
+	// a property of this clause rather than of the callers: `--type` parses to
+	// one value and internal/query dedupes, but storage.Store is an
+	// engine-facing interface and a direct caller passing a repeated list would
+	// otherwise get exactly the unbounded shape idBatchSize describes.
+	// [LAW:parse-dont-validate]
+	if types := distinctTypes(filter.IssueTypes); len(types) > 0 {
+		for _, t := range types {
 			args = append(args, t)
 		}
-		where = append(where, "i.issue_type IN ("+strings.Join(placeholders, ",")+")")
+		where = append(where, "i.issue_type IN ("+strings.Join(repeatPlaceholder(len(types)), ",")+")")
 	}
-	if len(filter.ExcludeIssueTypes) > 0 {
-		// [LAW:single-enforcer] Exclusion filter mirrors the IssueTypes positive
-		// filter above; keeping both at the store boundary means one definition
-		// of "which types qualify" regardless of caller.
-		var placeholders []string
-		for _, t := range filter.ExcludeIssueTypes {
-			placeholders = append(placeholders, "?")
+	// [LAW:single-enforcer] Exclusion filter mirrors the IssueTypes positive
+	// filter above, bound included; keeping both at the store boundary means
+	// one definition of "which types qualify" regardless of caller.
+	if types := distinctTypes(filter.ExcludeIssueTypes); len(types) > 0 {
+		for _, t := range types {
 			args = append(args, t)
 		}
-		where = append(where, "i.issue_type NOT IN ("+strings.Join(placeholders, ",")+")")
+		where = append(where, "i.issue_type NOT IN ("+strings.Join(repeatPlaceholder(len(types)), ",")+")")
 	}
 	// Assignee is the one filter here whose values are neither a closed
 	// vocabulary nor ids, and it stays a single clause on a narrower bound: the
@@ -648,19 +647,11 @@ func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter)
 	// that did derive it from the backlog would be handing the planner the
 	// quadratic shape idBatchSize describes, on a column the id batching cannot
 	// serve — so that caller batches here first, rather than being written.
-	if len(filter.Assignees) > 0 {
-		var placeholders []string
-		for _, a := range filter.Assignees {
-			trimmed := strings.TrimSpace(a)
-			if trimmed == "" {
-				continue
-			}
-			placeholders = append(placeholders, "?")
-			args = append(args, trimmed)
+	if assignees := storage.TrimmedNonEmpty(filter.Assignees); len(assignees) > 0 {
+		for _, assignee := range assignees {
+			args = append(args, assignee)
 		}
-		if len(placeholders) > 0 {
-			where = append(where, "i.assignee IN ("+strings.Join(placeholders, ",")+")")
-		}
+		where = append(where, "i.assignee IN ("+strings.Join(repeatPlaceholder(len(assignees)), ",")+")")
 	}
 	if filter.UpdatedAfter != nil {
 		where = append(where, "i.updated_at >= ?")
@@ -701,18 +692,14 @@ func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter)
 	if err != nil {
 		return nil, err
 	}
-	for _, term := range filter.SearchTerms {
-		trimmed := strings.ToLower(strings.TrimSpace(term))
-		if trimmed == "" {
-			continue
-		}
+	for _, term := range storage.TrimmedNonEmpty(filter.SearchTerms) {
 		// Four disjuncts, fixed by the four columns a search term reads, and
 		// they stay four however many terms the caller supplies — an extra term
 		// is an extra AND'd clause, never a longer OR. The planner's quadratic
 		// range merge needs a disjunct set that GROWS with caller input, which
 		// is the property this shape lacks; see idBatchSize.
 		where = append(where, "(LOWER(i.title) LIKE ? OR LOWER(i.description) LIKE ? OR LOWER(COALESCE(i.agent_prompt, '')) LIKE ? OR LOWER(i.topic) LIKE ?)")
-		like := "%" + trimmed + "%"
+		like := "%" + strings.ToLower(term) + "%"
 		args = append(args, like, like, like, like)
 	}
 	// One query when nothing narrows by id, one per batch when something does,
@@ -752,6 +739,19 @@ func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter)
 	// straight pipe.
 	slices.SortStableFunc(hydrated, ordering)
 	return capLimit(filterByResolution(filterByState(hydrated, allowedStates), filter.Resolutions), filter.Limit), nil
+}
+
+// distinctTypes drops repeats from an issue-type filter, which is what bounds
+// the `IN` list it becomes by the size of the vocabulary rather than by the
+// length of what the caller passed.
+func distinctTypes(types []model.IssueType) []model.IssueType {
+	out := make([]model.IssueType, 0, len(types))
+	for _, t := range types {
+		if !slices.Contains(out, t) {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // scanListRows runs one of ListIssues' queries and reads its rows. It is

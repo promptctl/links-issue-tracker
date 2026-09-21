@@ -41,7 +41,7 @@ Tests pin, among other shapes: a delta of an export against itself is empty; cha
 
 ## Full-replace import
 
-`ReplaceFromExport` → `replaceFromExport(ctx, export, commitStamp{Message: "replace from export"})` — the Dolt commit message for a restore is the literal `replace from export` (`import_export.go:187-189`). It runs under the commit lock, inside one SQL transaction, followed by one Dolt commit, with the transient-GC retry wrapping the whole unit — all-or-nothing at the SQL level (`import_export.go:198-202`; `commit_lock.go:156-177`).
+`ReplaceFromExport` → `replaceFromExport(ctx, export, commitStamp{Message: "replace from export"})` — the Dolt commit message for a restore is the literal `replace from export` (`import_export.go:192-194`). It runs under the commit lock, inside one SQL transaction, followed by one Dolt commit, with the transient-GC retry wrapping the whole unit — all-or-nothing at the SQL level (`import_export.go:198-202`; `commit_lock.go:156-177`).
 
 `writeExportTx` clears tables in the literal order `labels, comments, relations, issues` (issue_events and issue_event_changes are deliberately not named — they cascade from issues), then applies `diffExports(empty, export)` (`import_export.go:175-186`).
 
