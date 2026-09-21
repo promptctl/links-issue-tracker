@@ -26,34 +26,35 @@ type sample struct {
 
 // measure times every probe against one store and returns one sample per probe.
 //
-// ROUND-ROBIN, NOT PROBE-AT-A-TIME. Each round runs every probe once, and only
-// then repeats. Running all five `backlog` invocations back to back would put
-// every one of its samples inside the same few seconds, so a Go build or a peer
-// agent session starting up in that window contaminates that probe's whole
-// distribution — including its min, which is the figure reported. Spreading a
-// probe's repeats across rounds means a load spike lands once in each probe's
-// distribution rather than wholly inside one, and the min still has a clean
-// round to find. The first round is additionally the cold one (page cache,
-// dynamic linking), which min-of-rounds discards without needing a warm-up mode
-// to configure.
+// PHASES, THEN ROUNDS, THEN PROBES. Probes are grouped into phases by whether
+// they write, and a phase finishes all of its rounds before the next phase
+// starts. The grouping is what makes "reads before writes" true of the
+// execution rather than only of the output: sorting the probe list and then
+// replaying it once per round would order them inside a round and interleave
+// them across rounds, so the write would run five times and every round after
+// the first would read a store one row larger than the last. That was this
+// function's first shape, and the bug it produced was invisible from the table
+// -- worst on the empty control, whose whole job is isolating fixed cost, and
+// which would have been non-empty for four of its five rounds.
 //
-// WRITES LAST. Probes are ordered reads-before-writes so every read figure
-// describes the store at exactly the size the table claims, and the store's
-// bytes — sampled before any probe runs — describe the same store the read
-// timings do. A write probe interleaved with reads would grow the store
-// underneath them, making the last round's reads measure a size no column names.
+// ROUND-ROBIN WITHIN A PHASE. Each round runs every probe in the phase once,
+// and only then repeats. Running all five `backlog` invocations back to back
+// would put every one of its samples inside the same few seconds, so a Go build
+// or a peer agent session starting up in that window contaminates that probe's
+// whole distribution -- including its min, which is the figure reported.
+// Spreading a probe's repeats across rounds means a load spike lands once in
+// each probe's distribution rather than wholly inside one, and the min still
+// has a clean round to find. The first round is additionally the cold one (page
+// cache, dynamic linking), which min-of-rounds discards without needing a
+// warm-up mode to configure.
+//
+// What the phase split buys is that every read figure, and the store's byte
+// count sampled before any probe ran, describe a store of exactly the size its
+// column names. The write phase cannot have that property and does not claim
+// it: each of its repeats adds a row, so `new` is timed against N, N+1, ...
+// N+4 rows. That is inherent to timing a write more than once, and it is the
+// reason writes go last rather than first.
 func measure(bin litBinary, store generatedStore) ([]sample, error) {
-	ordered := slices.Clone(probes)
-	slices.SortStableFunc(ordered, func(a, b probe) int {
-		switch {
-		case a.mutates == b.mutates:
-			return 0
-		case a.mutates:
-			return 1
-		default:
-			return -1
-		}
-	})
 	// Opened once for every invocation: handed an *os.File, exec passes the
 	// descriptor straight to the child, so a chatty command's stdout costs the
 	// child one write to the null device. An io.Discard writer instead would
@@ -65,10 +66,53 @@ func measure(bin litBinary, store generatedStore) ([]sample, error) {
 	}
 	defer devnull.Close()
 
-	mins := make([]time.Duration, len(ordered))
-	maxs := make([]time.Duration, len(ordered))
+	var samples []sample
+	for _, phase := range phasesOf(probes) {
+		measured, err := measurePhase(bin, store, phase, devnull)
+		if err != nil {
+			return nil, err
+		}
+		samples = append(samples, measured...)
+	}
+	return samples, nil
+}
+
+// phasesOf groups probes into the order they may be run in: everything that
+// only reads, then everything that writes.
+//
+// It returns groups rather than a sorted list because the difference is the
+// whole fix. A sorted list still has to be replayed once per round by whoever
+// repeats it, and that replay is what interleaves a write between two reads.
+// A group is a unit the round loop lives inside, so the ordering cannot be
+// undone downstream. An empty group is omitted, so a probe set with no writes
+// produces one phase rather than a second, empty pass.
+// [LAW:dataflow-not-control-flow]
+func phasesOf(ps []probe) [][]probe {
+	var reads, writes []probe
+	for _, p := range ps {
+		if p.mutates {
+			writes = append(writes, p)
+			continue
+		}
+		reads = append(reads, p)
+	}
+	phases := make([][]probe, 0, 2)
+	for _, group := range [][]probe{reads, writes} {
+		if len(group) == 0 {
+			continue
+		}
+		phases = append(phases, group)
+	}
+	return phases
+}
+
+// measurePhase runs one phase to completion: every probe in it, repeats times,
+// round-robin, reporting the min and max of each.
+func measurePhase(bin litBinary, store generatedStore, phase []probe, devnull *os.File) ([]sample, error) {
+	mins := make([]time.Duration, len(phase))
+	maxs := make([]time.Duration, len(phase))
 	for round := range repeats {
-		for i, p := range ordered {
+		for i, p := range phase {
 			elapsed, err := runProbe(bin, store, p, devnull)
 			if err != nil {
 				return nil, fmt.Errorf("store %s (%d rows), probe %q, round %d: %w",
@@ -82,8 +126,8 @@ func measure(bin litBinary, store generatedStore) ([]sample, error) {
 			}
 		}
 	}
-	samples := make([]sample, len(ordered))
-	for i, p := range ordered {
+	samples := make([]sample, len(phase))
+	for i, p := range phase {
 		samples[i] = sample{probe: p, min: mins[i], max: maxs[i], runs: repeats}
 	}
 	return samples, nil

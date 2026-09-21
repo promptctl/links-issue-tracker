@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,7 +29,7 @@ type litBinary struct{ path string }
 // than on its source, and `lit version` is timed here as a control whose cost
 // must not include resolving a version string that a real release build bakes
 // in at compile time.
-func build(dir string) (litBinary, error) {
+func build(dir string, progress io.Writer) (litBinary, error) {
 	path := filepath.Join(dir, "lit")
 	cmd := exec.Command("go", "build", "-buildvcs=false", "-o", path, "./cmd/lit")
 	// Inherited, not cleared: the cgo ICU/zstd search paths this build needs
@@ -37,8 +38,13 @@ func build(dir string) (litBinary, error) {
 	// [LAW:single-enforcer] re-deriving them here would be a second copy to
 	// drift from that script.
 	cmd.Env = os.Environ()
-	cmd.Stderr = os.Stderr
-	cmd.Stdout = os.Stderr
+	// The compiler's output goes to the injected progress stream, not straight
+	// to os.Stderr: run's whole signature exists so neither stream is a global,
+	// and a caller that passes a buffer must not find build's diagnostics on
+	// the real stderr instead. Both streams go to progress because neither is
+	// the report. [LAW:effects-at-boundaries]
+	cmd.Stderr = progress
+	cmd.Stdout = progress
 	if err := cmd.Run(); err != nil {
 		return litBinary{}, fmt.Errorf("building ./cmd/lit: %w (if this is a cgo/ICU failure, run `just setup` once)", err)
 	}

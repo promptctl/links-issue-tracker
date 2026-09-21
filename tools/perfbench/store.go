@@ -48,17 +48,34 @@ type importRecord struct {
 // a store lit itself produced. [LAW:one-source-of-truth]
 func generate(bin litBinary, parent string, sz size) (generatedStore, error) {
 	root := filepath.Join(parent, sz.name)
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		return generatedStore{}, fmt.Errorf("creating workspace dir: %w", err)
+	// os.Mkdir, never MkdirAll: an existing directory must fail here rather
+	// than be reused. lit init is idempotent and lit import appends, so
+	// generating into a populated workspace silently produces a store of 2N
+	// rows wearing an N-row label — the tool's own answer-shaped void, in the
+	// one place nothing downstream could detect it. Two ordinary invocations
+	// reach it: `--keep <dir>` run twice to compare, which is the workflow
+	// CONTRIBUTING documents, and any repeated size, which parseSizes now
+	// rejects for the same reason. [LAW:no-silent-failure]
+	if err := os.Mkdir(root, 0o755); err != nil {
+		return generatedStore{}, fmt.Errorf("creating workspace dir: %w "+
+			"(a store is generated into a fresh directory; remove it or pass a different --keep)", err)
 	}
 	// lit resolves its store relative to a git checkout, so the workspace has
 	// to be one. The identity is passed per-command rather than written into a
 	// config file so generation cannot depend on — or disturb — whatever git
 	// identity the machine running this has.
+	// Every setting that could vary by machine is forced, because generation
+	// that works here and fails on a colleague's box is a benchmark nobody can
+	// reproduce. --template= keeps the machine's init templates (and their
+	// hooks) out of the new repository; commit.gpgsign=false stops a developer
+	// with global signing turned on from aborting the run on a key prompt;
+	// --no-verify keeps a global core.hooksPath from running hooks on a
+	// workspace that passed --skip-hooks to lit init for exactly that reason.
 	steps := [][]string{
-		{"git", "init", "-q", "."},
+		{"git", "init", "-q", "--template=", "."},
 		{"git", "-c", "user.email=perfbench@invalid", "-c", "user.name=perfbench",
-			"commit", "-q", "--allow-empty", "-m", "perfbench workspace"},
+			"-c", "commit.gpgsign=false",
+			"commit", "-q", "--no-verify", "--allow-empty", "-m", "perfbench workspace"},
 	}
 	for _, step := range steps {
 		if err := runQuiet(root, step[0], step[1:]...); err != nil {
@@ -104,10 +121,10 @@ func importBatches(rows int) [][]importRecord {
 	for i := range rows {
 		rec := importRecord{
 			LocalID:     fmt.Sprintf("r%d", i),
-			Title:       pad(fmt.Sprintf("generated row %d ", i), titleBytes),
+			Title:       fmt.Sprintf("generated row %d %s", i, filler(i, titleBytes))[:titleBytes],
 			Type:        "task",
 			Topic:       "bench",
-			Description: pad(fmt.Sprintf("generated description for row %d ", i), descriptionBytes),
+			Description: filler(i, descriptionBytes),
 		}
 		// The first row has no predecessor to depend on, which is why the
 		// blocked share is "roughly" a third rather than exactly one.
@@ -122,14 +139,56 @@ func importBatches(rows int) [][]importRecord {
 	return [][]importRecord{records}
 }
 
-// pad repeats seed until it is exactly n bytes. Repeating real words rather
-// than padding with one character keeps the row compressible the way prose is:
-// a run of identical bytes would compress to nothing in the store's chunker and
-// understate every byte figure this tool reports.
-func pad(seed string, n int) string {
+// proseWords is the vocabulary filler text is drawn from. Its content is
+// irrelevant; its job is to make generated rows compress like the rows a real
+// store holds.
+var proseWords = strings.Fields(
+	"the store opens a workspace and reads every row before printing which is why gather cost " +
+		"matters more than expected when a backlog grows past several hundred tickets in one repository " +
+		"measured against the envelope a reader loads one level of the graph per query so the planner " +
+		"never merges ranges pairwise and the commit lock stops serializing every writer on contention")
+
+// idTokenPercent is how often the filler emits a high-entropy token instead of
+// a word. Real ticket prose is dense with issue ids, commit shas, paths and
+// figures, and those are what carry its entropy.
+const idTokenPercent = 40
+
+// filler builds n bytes of text for row seed, deterministically.
+//
+// WHY NOT A REPEATED PHRASE. This function used to repeat one phrase until it
+// reached the length, on the theory that repeating words rather than a single
+// character kept the row compressible "the way prose is". Measured, that was
+// wrong by an order of magnitude: against this repository's own 588 ticket
+// descriptions, real prose truncated to 1310 bytes gzips 1.79x (median; the
+// spread is 1.53x to 2.56x), while the repeated phrase gzipped 20.15x. Since
+// the store compresses what it holds, a row 11x more compressible than a real
+// one understates every byte figure this tool reports — and those figures are
+// half its purpose, feeding a size ceiling directly. The mix above is
+// calibrated to that measurement rather than chosen: it lands at 1.83x.
+//
+// Deterministic, so two runs of the same size generate byte-identical rows and
+// a change in reported store bytes is a change in lit, never in the fixture.
+func filler(seed int, n int) string {
+	// A plain LCG, spelled out rather than taken from math/rand, so the bytes
+	// this produces are fixed by this source and cannot shift under a change to
+	// the standard library's generator — a benchmark fixture that changes with
+	// the toolchain would retroactively invalidate every figure recorded
+	// against it. [LAW:one-source-of-truth]
+	x := uint32(seed)*2654435761 + 12345
+	next := func() uint32 {
+		x = x*1664525 + 1013904223
+		return x
+	}
 	var b strings.Builder
 	for b.Len() < n {
-		b.WriteString(seed)
+		if b.Len() > 0 {
+			b.WriteByte(' ')
+		}
+		if next()%100 < idTokenPercent {
+			fmt.Fprintf(&b, "%08x", next())
+			continue
+		}
+		b.WriteString(proseWords[next()%uint32(len(proseWords))])
 	}
 	return b.String()[:n]
 }
