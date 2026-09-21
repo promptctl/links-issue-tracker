@@ -72,6 +72,20 @@ func run(args []string, out, progress io.Writer) error {
 		return fmt.Errorf("unexpected argument(s) %q: perfbench takes flags only "+
 			"(did you mean --sizes %s?)", strings.Join(fs.Args(), " "), fs.Arg(0))
 	}
+	// An explicitly-passed empty --sizes is a mistake, not a request for the
+	// default: the same class the stray-argument guard above rejects by name,
+	// and reachable through any wrapper interpolating an unset variable. Only
+	// the flag's ABSENCE selects the default envelope, which is why this asks
+	// what was set rather than what the value is.
+	sizesGiven := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "sizes" {
+			sizesGiven = true
+		}
+	})
+	if sizesGiven && strings.TrimSpace(*sizesFlag) == "" {
+		return fmt.Errorf("--sizes was given with no row counts; omit it for the default envelope")
+	}
 	sizes, err := parseSizes(*sizesFlag)
 	if err != nil {
 		return err

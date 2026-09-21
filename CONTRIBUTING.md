@@ -134,6 +134,12 @@ just perf --sizes 0,118          # pick the store sizes
 just perf --keep /tmp/litperf    # leave the generated stores behind to inspect
 ```
 
+`--keep` needs a directory that holds no stores yet, and says so if it does not.
+That is deliberate rather than fussy: `lit init` is idempotent and `lit import`
+appends, so generating a second time into the same directory would produce a
+store of twice the rows wearing the row count of the first — a wrong number
+with nothing on screen to mark it. Comparing two runs means two paths.
+
 Reach for `just perf` whenever a claim is about latency a user feels or about
 store size, and for `go test -bench` when it is about the cost of a pass. The
 end-to-end figures are the ones that caught what the microbenchmarks

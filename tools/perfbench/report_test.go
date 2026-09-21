@@ -43,6 +43,19 @@ func TestRunRefusesAStrayPositionalArgument(t *testing.T) {
 	}
 }
 
+// An explicitly-empty --sizes is a mistake, not a request for the default. Only
+// omitting the flag selects the default envelope.
+func TestRunRefusesAnExplicitlyEmptySizes(t *testing.T) {
+	var out, progress bytes.Buffer
+	err := run([]string{"--sizes", ""}, &out, &progress)
+	if err == nil {
+		t.Fatal("run(--sizes \"\") returned no error; the default table would be reported as the requested one")
+	}
+	if out.Len() != 0 {
+		t.Errorf("run wrote a report (%q) despite an empty --sizes", out.String())
+	}
+}
+
 // A bad flag value must fail before anything is built or generated, and must
 // not be mistaken for the help request above.
 func TestRunRejectsABadSizeBeforeDoingAnyWork(t *testing.T) {
@@ -59,14 +72,22 @@ func TestRunRejectsABadSizeBeforeDoingAnyWork(t *testing.T) {
 	}
 }
 
+// Each result gets its OWN sample slice with its own values. Sharing one slice
+// between results would make the fixture blind to any defect in how the report
+// indexes per result — every column would render identically whether the code
+// read the right result or not.
 func fixedResults() []result {
-	reads := []sample{
-		{probe: probe{name: "quickstart"}, min: 70 * time.Millisecond, max: 80 * time.Millisecond, runs: repeats},
-		{probe: probe{name: "backlog"}, min: 7970 * time.Millisecond, max: 8200 * time.Millisecond, runs: repeats},
+	samplesAt := func(quickMin, quickMax, backlogMin, backlogMax time.Duration) []sample {
+		return []sample{
+			{probe: probe{name: "quickstart"}, min: quickMin, max: quickMax, runs: repeats},
+			{probe: probe{name: "backlog"}, min: backlogMin, max: backlogMax, runs: repeats},
+		}
 	}
 	return []result{
-		{size: size{name: "empty", rows: 0}, bytes: 20_000, samples: reads},
-		{size: size{name: "today", rows: 118}, bytes: 4_100_000, samples: reads},
+		{size: size{name: "empty", rows: 0}, bytes: 20_000,
+			samples: samplesAt(70*time.Millisecond, 80*time.Millisecond, 7970*time.Millisecond, 8200*time.Millisecond)},
+		{size: size{name: "today", rows: 118}, bytes: 4_100_000,
+			samples: samplesAt(110*time.Millisecond, 120*time.Millisecond, 3330*time.Millisecond, 4440*time.Millisecond)},
 	}
 }
 
@@ -80,8 +101,10 @@ func TestRenderReportStatesEveryMeasuredFigure(t *testing.T) {
 		"darwin/arm64", "12 CPUs",
 		"empty (0 rows)", "today (118 rows)",
 		"quickstart", "backlog",
-		"0.07s", "0.08s", // quickstart's min and max
-		"7.97s", "8.20s", // backlog's
+		"0.07s", "0.08s", // the empty column's quickstart min and max
+		"7.97s", "8.20s", // the empty column's backlog
+		"0.11s", "0.12s", // the 118-row column's quickstart — distinct values, so a
+		"3.33s", "4.44s", // report reading the wrong result could not still pass
 		"store bytes", "20.00 KB", "4.10 MB",
 	} {
 		if !strings.Contains(got, want) {

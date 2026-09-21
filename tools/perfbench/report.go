@@ -52,6 +52,12 @@ func renderReport(results []result, cond conditions) string {
 	// Probe order is taken from the first result rather than from the package
 	// list so the rows print in the order they were measured — reads first,
 	// then the write — which is the order the timings are only valid in.
+	//
+	// Indexing every result by that one order is sound because every result's
+	// samples come from measure() over the same package-level probes, so the
+	// slices are the same length in the same order by construction. It is an
+	// invariant of how results are produced rather than one this function can
+	// restate; a length check here would be guarding a state nothing can build.
 	for i, name := range probeNames(results) {
 		fmt.Fprint(w, name)
 		for _, r := range results {
