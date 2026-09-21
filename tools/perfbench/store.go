@@ -55,9 +55,11 @@ func generate(bin litBinary, parent string, sz size) (generatedStore, error) {
 	// generating into a populated workspace silently produces a store of 2N
 	// rows wearing an N-row label — the tool's own answer-shaped void, in the
 	// one place nothing downstream could detect it. Two ordinary invocations
-	// reach it: `--keep <dir>` run twice to compare, which is the workflow
-	// CONTRIBUTING documents, and any repeated size, which parseSizes now
-	// rejects for the same reason. [LAW:no-silent-failure]
+	// reach it: `--keep <dir>` pointed a second time at a directory that still
+	// holds the first run's stores, and any repeated size, which parseSizes
+	// rejects for the same reason. CONTRIBUTING states the fresh-directory
+	// requirement where it documents the flag, so the two agree rather than
+	// each describing a different tool. [LAW:no-silent-failure]
 	if err := os.Mkdir(root, 0o755); err != nil {
 		return generatedStore{}, fmt.Errorf("creating workspace dir: %w "+
 			"(a store is generated into a fresh directory; remove it or pass a different --keep)", err)
