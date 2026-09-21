@@ -25,6 +25,24 @@ func TestRunTreatsHelpAsSuccess(t *testing.T) {
 	}
 }
 
+// A stray positional argument must fail rather than be ignored. flag stops at
+// the first non-flag word and hands the rest back, so `perfbench 0,118` (meant
+// as --sizes) would otherwise run the default table and report it as though it
+// were what was asked for.
+func TestRunRefusesAStrayPositionalArgument(t *testing.T) {
+	var out, progress bytes.Buffer
+	err := run([]string{"0,118"}, &out, &progress)
+	if err == nil {
+		t.Fatal("run(0,118) returned no error; the default table would be reported as the requested one")
+	}
+	if !strings.Contains(err.Error(), "--sizes") {
+		t.Errorf("error %q does not point at the flag the caller probably meant", err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("run wrote a report (%q) despite a stray argument", out.String())
+	}
+}
+
 // A bad flag value must fail before anything is built or generated, and must
 // not be mistaken for the help request above.
 func TestRunRejectsABadSizeBeforeDoingAnyWork(t *testing.T) {
@@ -62,8 +80,8 @@ func TestRenderReportStatesEveryMeasuredFigure(t *testing.T) {
 		"darwin/arm64", "12 CPUs",
 		"empty (0 rows)", "today (118 rows)",
 		"quickstart", "backlog",
-		"0.07s", "0.08s", // backlog's min and max
-		"7.97s", "8.20s",
+		"0.07s", "0.08s", // quickstart's min and max
+		"7.97s", "8.20s", // backlog's
 		"store bytes", "20.00 KB", "4.10 MB",
 	} {
 		if !strings.Contains(got, want) {

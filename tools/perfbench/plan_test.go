@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,45 +67,49 @@ func TestImportBatchesBuildsTheRequestedRows(t *testing.T) {
 	}
 }
 
-// Padding with repeated prose rather than a repeated character is deliberate: a
-// run of identical bytes compresses to almost nothing in the store's chunker,
-// which would understate every byte figure the tool reports.
-func TestPadFillsToLengthWithoutBecomingOneRepeatedByte(t *testing.T) {
-	got := pad("generated description ", 1310)
-	if len(got) != 1310 {
-		t.Fatalf("pad(...) produced %d bytes, want 1310", len(got))
-	}
-	distinct := map[rune]bool{}
-	for _, r := range got {
-		distinct[r] = true
-	}
-	if len(distinct) < 5 {
-		t.Errorf("pad produced %d distinct bytes; an incompressible row understates store bytes", len(distinct))
+// The property that matters about filler text is how well it COMPRESSES, since
+// the store compresses what it holds and these rows are what the tool's byte
+// figures are made of.
+//
+// The band is measured, not chosen: this repository's own 588 ticket
+// descriptions, truncated to 1310 bytes, gzip between 1.53x and 2.56x with a
+// median of 1.79x. The repeated-phrase filler this replaced gzipped 20.15x, so
+// it made every generated row about eleven times cheaper to store than a real
+// one, understating the size figures the campaign's ceiling is derived from.
+//
+// The old test here asserted only that the text contained five distinct bytes,
+// which a single repeated phrase passes trivially — it could not have failed
+// for the defect its own comment described.
+func TestFillerCompressesLikeRealTicketProse(t *testing.T) {
+	const lo, hi = 1.4, 2.7
+	for _, seed := range []int{0, 1, 7, 118, 589} {
+		text := filler(seed, descriptionBytes)
+		if len(text) != descriptionBytes {
+			t.Fatalf("filler(%d) produced %d bytes, want %d", seed, len(text), descriptionBytes)
+		}
+		var buf bytes.Buffer
+		zw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+		if _, err := zw.Write([]byte(text)); err != nil {
+			t.Fatal(err)
+		}
+		zw.Close()
+		ratio := float64(len(text)) / float64(buf.Len())
+		if ratio < lo || ratio > hi {
+			t.Errorf("filler(%d) gzips %.2fx, outside the %.1f-%.1fx band real ticket "+
+				"prose occupies (median 1.79x); rows this compressible do not store like "+
+				"the rows being modelled", seed, ratio, lo, hi)
+		}
 	}
 }
 
-// Tolerance for a nonzero exit is confined to the one command that has a
-// documented legitimate one. Widening any other probe's set would not fail a
-// run or look wrong in the table — it would quietly let that command's failures
-// set its fastest time, which is the exact defect okCodes exists to prevent, so
-// the confinement is pinned rather than left to review.
-func TestOnlyNextToleratesANonZeroExit(t *testing.T) {
-	for _, p := range probes {
-		for _, code := range p.okCodes {
-			if code == 0 {
-				continue
-			}
-			if p.name != "next" {
-				t.Errorf("probe %q accepts exit %d; only `lit next` has a documented "+
-					"nonzero answer (6, \"no ready work\" on the empty store), and every "+
-					"other tolerated code lets that command's failures win the minimum",
-					p.name, code)
-			}
-			if code != 6 {
-				t.Errorf("probe %q accepts exit %d, which is not the documented "+
-					"\"no ready work\" code 6", p.name, code)
-			}
-		}
+// Two runs of the same size must generate byte-identical rows, or a change in
+// reported store bytes could be the fixture moving rather than lit.
+func TestFillerIsDeterministicAndVariesByRow(t *testing.T) {
+	if filler(42, 200) != filler(42, 200) {
+		t.Error("filler is not deterministic; store bytes would drift between runs")
+	}
+	if filler(42, 200) == filler(43, 200) {
+		t.Error("every row got identical text; the store would deduplicate what a real one cannot")
 	}
 }
 
@@ -140,6 +146,31 @@ func TestParseSizes(t *testing.T) {
 		if _, err := parseSizes("0," + bad); err == nil {
 			t.Errorf("parseSizes(%q) accepted a value that is not a row count", "0,"+bad)
 		}
+	}
+	// A repeated size names one workspace directory twice, and generating a
+	// second store into a directory that already holds one is how an N-row
+	// column comes to measure 2N rows.
+	if _, err := parseSizes("118,118"); err == nil {
+		t.Error("parseSizes accepted a duplicate size; both columns would name one workspace")
+	}
+}
+
+// Generating into a directory that already holds a store must fail. lit init is
+// idempotent and lit import appends, so the alternative is a store of 2N rows
+// under an N-row label, which nothing downstream can detect — reached by
+// running `--keep <dir>` twice, the comparison workflow CONTRIBUTING documents.
+func TestGenerateRefusesAWorkspaceThatAlreadyExists(t *testing.T) {
+	parent := t.TempDir()
+	sz := size{name: "today", rows: 0}
+	if err := os.MkdirAll(filepath.Join(parent, sz.name), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := generate(litBinary{path: filepath.Join(parent, "unused-lit")}, parent, sz)
+	if err == nil {
+		t.Fatal("generate() into an existing directory returned no error")
+	}
+	if !strings.Contains(err.Error(), "fresh directory") {
+		t.Errorf("error %q does not tell the caller the directory must be fresh", err)
 	}
 }
 

@@ -62,6 +62,16 @@ func run(args []string, out, progress io.Writer) error {
 		}
 		return err
 	}
+	// flag stops at the first non-flag argument and hands the rest back; nobody
+	// downstream looks at them, so `just perf 0,118` (meaning --sizes) would
+	// run the default table and report it as though it were what was asked
+	// for, and `--keep "/tmp/lit perf"` would bind --keep=/tmp/lit and leave
+	// `perf` here while announcing a directory the caller never named.
+	// [LAW:no-silent-failure]
+	if fs.NArg() != 0 {
+		return fmt.Errorf("unexpected argument(s) %q: perfbench takes flags only "+
+			"(did you mean --sizes %s?)", strings.Join(fs.Args(), " "), fs.Arg(0))
+	}
 	sizes, err := parseSizes(*sizesFlag)
 	if err != nil {
 		return err
@@ -74,7 +84,7 @@ func run(args []string, out, progress io.Writer) error {
 	defer cleanup()
 
 	fmt.Fprintf(progress, "building ./cmd/lit ...\n")
-	bin, err := build(workDir)
+	bin, err := build(workDir, progress)
 	if err != nil {
 		return err
 	}
@@ -123,6 +133,17 @@ func parseSizes(raw string) ([]size, error) {
 		}
 		if rows < 0 {
 			return nil, fmt.Errorf("--sizes: %d is not a row count", rows)
+		}
+		// Duplicates are refused rather than deduplicated. Each size generates
+		// its own workspace named for it, so two entries of the same row count
+		// would name one directory twice — and generation into a directory
+		// that already holds a store is exactly what generate() now refuses.
+		// Failing here names the real mistake instead of surfacing it as a
+		// directory error three steps later.
+		for _, seen := range sizes {
+			if seen.rows == rows {
+				return nil, fmt.Errorf("--sizes: %d appears more than once", rows)
+			}
 		}
 		// A named size carries its name into the column header, and a size
 		// given on the command line has only its row count to be called by.
