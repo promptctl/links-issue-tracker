@@ -1072,7 +1072,7 @@ positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason 
   `unarchive` on a deleted issue → `"cannot unarchive deleted issue"`
   (`internal/model/lifecycle/retention.go:73`, `:82`).
 - **There is no from-state precondition on `done`.** `Store.Apply` performs no
-  status-precondition check (`internal/store/store.go:1088-1145`), and
+  status-precondition check (`internal/store/store.go:1100-1157`), and
   `applyStatusAction` is total over the leaf states
   (`internal/model/lifecycle/status_states.go:134-161`). The registry summary
   "requires in_progress" (`register.go:332`) is not enforced by any code path in
