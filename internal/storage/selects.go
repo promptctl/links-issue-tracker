@@ -71,10 +71,10 @@ func (c IssueCriteria) Selects(issue model.Issue) bool {
 	if len(c.filter.ExcludeIssueTypes) > 0 && matchesAny(string(issue.IssueType), issueTypeNames(c.filter.ExcludeIssueTypes)) {
 		return false
 	}
-	if !matchesAny(issue.Assignee, trimmedNonEmpty(c.filter.Assignees)) {
+	if !matchesAny(issue.Assignee, TrimmedNonEmpty(c.filter.Assignees)) {
 		return false
 	}
-	if !matchesAny(issue.ID, trimmedNonEmpty(c.filter.IDs)) {
+	if !matchesAny(issue.ID, TrimmedNonEmpty(c.filter.IDs)) {
 		return false
 	}
 	if c.filter.UpdatedAfter != nil && issue.UpdatedAt.Before(*c.filter.UpdatedAfter) {
@@ -156,10 +156,16 @@ func issueTypeNames(types []model.IssueType) []string {
 	return out
 }
 
-// trimmedNonEmpty drops the blanks a caller may have assembled a criteria
+// TrimmedNonEmpty drops the blanks a caller may have assembled a criteria
 // slice from, so a filter of nothing but whitespace constrains nothing rather
 // than selecting nothing.
-func trimmedNonEmpty(values []string) []string {
+//
+// Exported because both engines have to agree about it: the memory engine
+// reads it here, and the SQL engine reads it to decide whether an id filter
+// narrows the scan at all. A second copy of this rule is a second answer to
+// "does a whitespace-only filter select everything or nothing".
+// [LAW:one-source-of-truth]
+func TrimmedNonEmpty(values []string) []string {
 	out := make([]string, 0, len(values))
 	for _, value := range values {
 		if trimmed := strings.TrimSpace(value); trimmed != "" {

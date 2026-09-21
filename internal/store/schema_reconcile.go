@@ -94,6 +94,12 @@ func quotedIssueTypeList(types []model.IssueType) string {
 // literals reconcile has always installed, so existing workspaces see no
 // churn and the normalized-clause probes keep matching. [LAW:one-source-of-truth]
 var (
+	// Every `IN` list in this file is rendered from a closed vocabulary the
+	// model owns — the issue types, the container subset of them, the three
+	// statuses — so each is a fixed handful of literals baked into DDL at
+	// startup, with no caller-supplied length to grow. That is the bounded half
+	// of the rule idBatchSize states; the other half, batching, applies to the
+	// id-keyed reads, none of which live here.
 	issueTypeCheckClause    = fmt.Sprintf("issue_type IN (%s)", quotedIssueTypeList(model.IssueTypes()))
 	containerTypeMembership = fmt.Sprintf("issue_type IN (%s)", quotedIssueTypeList(model.ContainerTypes()))
 )

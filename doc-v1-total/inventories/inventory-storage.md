@@ -622,7 +622,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 | `LabelsAll` | **conjunctive**: every canonical label criterion must be in `issue.Labels` | `:86-90` |
 | `SearchTerms` | **conjunctive across terms**: every term must match | `:91-95` |
 
-**`trimmedNonEmpty`** (`internal/storage/selects.go:162-170`) — drops the blanks a caller may have assembled a criteria slice from, so a filter of nothing but whitespace constrains nothing rather than selecting nothing.
+**`TrimmedNonEmpty`** (`internal/storage/selects.go:162-170`) — drops the blanks a caller may have assembled a criteria slice from, so a filter of nothing but whitespace constrains nothing rather than selecting nothing.
 
 **`matchesSearch`** (`internal/storage/selects.go:138-149`) — lowercases and trims the term; an empty needle matches everything; case-insensitive substring across exactly four fields: `Title`, `Description`, `Prompt`, `Topic`.
 

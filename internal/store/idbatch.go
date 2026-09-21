@@ -1,5 +1,7 @@
 package store
 
+import "strings"
+
 // idBatchSize caps how many ids one `IN (...)` list may carry.
 //
 // The engine turns each element of an IN list into an index range and merges
@@ -52,24 +54,71 @@ package store
 //
 // [LAW:one-source-of-truth] The id-keyed reads that batch share this number, so
 // two call sites cannot drift into different ideas of what "too many" means.
-// Those are the four on the workable gather's path: the issue lookup, both
-// relation endpoint queries, the label load under hydrateIssues, and the
-// lifecycle children query.
+// Those are the reads on the workable gather's path — the issue lookup, both
+// relation endpoint queries, the label load under hydrateIssues and the
+// lifecycle children query — plus the three the sweep below added.
 //
-// Not every id-keyed `IN` list can follow, and the condition is narrower than
-// having one. Batching is sound only where the query's answer is the
-// concatenation of its batches' answers. A `NOT IN` exclusion inverts under
-// splitting -- each batch returns the very rows the others meant to exclude --
-// which rules out both of ranking.go's frame queries. An `IN` that is one
-// clause among several under an EXISTS, or under an `ORDER BY ... LIMIT`,
-// answers a question its batches cannot be recombined into, which rules out
-// ListIssues' id and parent filters and the rank lookup. requireIssues is the
-// one that would batch cleanly and does not; it is a validation lookup off
-// this path.
+// THE RULE, for whoever writes the next id-keyed read: an `IN (...)` list may
+// carry a number of elements bounded by a constant, and there are exactly two
+// ways to be bounded. Either the values come from a closed domain the caller
+// cannot enlarge — the five issue types, the two structural relation types —
+// in which case say which domain, beside the query, because the bound is not
+// visible in the clause. Or the list is caller-supplied and open, in which case
+// it goes through idBatches and the query runs once per batch.
 //
-// Only the gather's path was audited, and nothing fails the build when a new
-// unbounded id list is added. Both are recorded on links-perf-kw6z.2.
+// Batching is sound only where the query's answer is the concatenation of its
+// batches' answers, and two shapes fail that test:
+//
+//   - A `NOT IN` exclusion inverts under splitting: each batch returns the very
+//     rows the others meant to exclude. Both of ranking.go's frame queries were
+//     that shape. Neither batches, and neither needs to — the exclusion left
+//     SQL entirely (see nearestRankOutside), which is the better answer wherever
+//     it is available, because it adds no round trips at all.
+//   - An `ORDER BY ... LIMIT` decided in SQL answers a question about the whole
+//     set, which no batch holds. ListIssues is safe from this by construction
+//     and not by luck: it carries no SQL ORDER BY and no SQL LIMIT, because the
+//     comparator reads hydrated values the query never sees. Its sort and cap
+//     run in Go over the union of the batches.
+//
+// The two filters that made ListIssues look unbatchable were read wrong once
+// already, and the correction is worth stating: an `IN` under an EXISTS
+// subquery recombines fine, because existence over a union is the union of the
+// existences. ListIssues collapses its parent filter onto its id filter anyway
+// (childIDsOfParents), so it batches over one id set rather than the product of
+// two.
+//
+// Swept 2026-09-20 for links-perf-kw6z.2: every `IN (...)` in internal/store is
+// now one of the two bounded kinds, and each closed-domain one names its domain
+// where it is written. Nothing fails the build when a new unbounded id list is
+// added, and deliberately so — the ticket asks for the latency budget to catch
+// this class, not a pattern-matcher over SQL text that would be a second, drifting
+// copy of the rule above.
 const idBatchSize = 16
+
+// idBatch is an id list short enough to be safe as one `IN (...)` clause.
+//
+// It is a named type rather than a bare []string so the bound is a thing the
+// compiler re-checks on every build instead of a thing a reader has to notice.
+// idBatches is its only constructor, and inList is the only renderer of an
+// `IN` body in this package, so the two are locked together: a query that
+// interpolates inList's output has an id count capped at idBatchSize, and a
+// query that does not is visibly hand-rolling the shape this file exists to
+// prevent. [LAW:types-are-the-program] [LAW:single-enforcer]
+type idBatch []string
+
+// inList renders the batch as the body of an `IN (...)` clause — the
+// placeholders alone, without the parentheses — and the args that fill it.
+//
+// Returning both together is what keeps them in step: the count of `?` and the
+// count of args are one fact, and the eight hand-rolled loops this replaces
+// each held it twice.
+func (b idBatch) inList() (string, []any) {
+	args := make([]any, len(b))
+	for i, id := range b {
+		args[i] = id
+	}
+	return strings.Join(repeatPlaceholder(len(b)), ", "), args
+}
 
 // idBatches splits ids into consecutive batches of at most idBatchSize,
 // preserving the order of their first appearance and dropping repeats.
@@ -97,12 +146,12 @@ const idBatchSize = 16
 // no transaction over them — so no caller had a snapshot to lose. Restoring one
 // means a read transaction spanning all three, not the batch loop alone, which
 // is why it is not attempted here. Tracked as links-scale-6iiv.
-func idBatches(ids []string) [][]string {
+func idBatches(ids []string) []idBatch {
 	unique := dedupeStrings(ids)
 	if len(unique) == 0 {
 		return nil
 	}
-	batches := make([][]string, 0, (len(unique)+idBatchSize-1)/idBatchSize)
+	batches := make([]idBatch, 0, (len(unique)+idBatchSize-1)/idBatchSize)
 	for start := 0; start < len(unique); start += idBatchSize {
 		batches = append(batches, unique[start:min(start+idBatchSize, len(unique))])
 	}

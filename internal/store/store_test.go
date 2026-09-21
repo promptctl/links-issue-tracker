@@ -17,7 +17,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-func openIssueStore(t *testing.T, ctx context.Context) *Store {
+func openIssueStore(t testing.TB, ctx context.Context) *Store {
 	t.Helper()
 	st, err := Open(ctx, migratedDoltDir(t), "test-workspace-id")
 	if err != nil {

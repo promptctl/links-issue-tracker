@@ -42,7 +42,7 @@ var storeTemplates [2]struct {
 // migration itself keep building from nothing — that cost is their premise.
 // The SECOND store of a two-workspace test comes from unrelatedDoltDir,
 // never from a second migratedDoltDir call.
-func migratedDoltDir(t *testing.T) string {
+func migratedDoltDir(t testing.TB) string {
 	t.Helper()
 	return copyOfStoreTemplate(t, 0)
 }
@@ -57,7 +57,7 @@ func unrelatedDoltDir(t *testing.T) string {
 	return copyOfStoreTemplate(t, 1)
 }
 
-func copyOfStoreTemplate(t *testing.T, slot int) string {
+func copyOfStoreTemplate(t testing.TB, slot int) string {
 	t.Helper()
 	if err := ensureStoreTemplate(slot); err != nil {
 		t.Fatalf("build store template %d: %v", slot, err)

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"slices"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -122,20 +121,9 @@ func (e rankEdge) roomBesideTx(ctx context.Context, tx *sql.Tx, anchorRank strin
 	if anchorRank == "" {
 		return "", "", fmt.Errorf("no room beside the %s of this frame: the key it was read from is empty", e.name)
 	}
-	args := make([]any, 0, len(moving)+1)
-	holes := make([]string, 0, len(moving))
-	for _, id := range moving {
-		holes = append(holes, "?")
-		args = append(args, id)
-	}
-	skip := ""
-	if len(holes) > 0 {
-		skip = fmt.Sprintf(`AND id NOT IN (%s) `, strings.Join(holes, ","))
-	}
-	args = append(args, anchorRank)
-	query := fmt.Sprintf(`SELECT item_rank FROM issues
-		WHERE deleted_at IS NULL AND item_rank != '' %s AND %s LIMIT 1`, skip, e.outside)
-	outsideRank, err := nearestRank(ctx, tx, query, args...)
+	query := fmt.Sprintf(`SELECT id, item_rank FROM issues
+		WHERE deleted_at IS NULL AND item_rank != '' AND %s`, e.outside)
+	outsideRank, err := nearestRankOutside(ctx, tx, query, moving, anchorRank)
 	if err != nil {
 		return "", "", fmt.Errorf("query the key outside the %s: %w", e.name, err)
 	}
@@ -657,23 +645,16 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 		// IDs being reassigned (so we anchor against rows that aren't moving).
 		// Every representative is a frame-mate by construction, so that frame is
 		// the whole keyspace this stack is read in.
-		args := make([]any, 0, len(ranked)+1)
-		placeholders := make([]string, 0, len(ranked))
-		for _, id := range ranked {
-			args = append(args, id)
-			placeholders = append(placeholders, "?")
-		}
-		args = append(args, string(f))
-		query := fmt.Sprintf(`SELECT item_rank FROM issues
-			WHERE deleted_at IS NULL AND item_rank != '' AND id NOT IN (%s) AND %s = ?
-			ORDER BY item_rank ASC LIMIT 1`, strings.Join(placeholders, ","), frameColumn)
+		query := fmt.Sprintf(`SELECT id, item_rank FROM issues
+			WHERE deleted_at IS NULL AND item_rank != '' AND %s = ?
+			ORDER BY item_rank ASC`, frameColumn)
 		// Walk IDs in reverse, assigning each a rank just above the previous one.
 		// The last ID (idx N-1) is placed past the frame's top, as any top-edge
 		// placement is; each earlier ID is anchored just above the
 		// previously-assigned rank, so the final order is
 		// ids[0] < ids[1] < ... < ids[N-1] < (existing top).
 		cursor, err := topEdge.rankBeyondTx(ctx, tx, f, ranked, func() (string, error) {
-			topRank, err := nearestRank(ctx, tx, query, args...)
+			topRank, err := nearestRankOutside(ctx, tx, query, ranked, string(f))
 			if err != nil {
 				return "", fmt.Errorf("query top: %w", err)
 			}
@@ -1141,6 +1122,49 @@ func rankRows(ctx context.Context, q rowQueryer, query string, args ...any) ([]r
 		out = append(out, item)
 	}
 	return out, rows.Err()
+}
+
+// nearestRankOutside returns the first rank the query's order yields whose id
+// is not one the caller is about to vacate, or "" — the open end of the
+// keyspace — when there is no such row.
+//
+// The exclusion is applied here and not as `AND id NOT IN (...)` in the query,
+// and that is the point. The excluded set is the stack a rank-set move carries,
+// so it is as large as the caller says; written as a clause it would be the
+// quadratic planner shape idBatchSize describes, and it is the one instance of
+// that shape batching cannot fix, because a `NOT IN` split across batches
+// returns from each batch exactly the rows the others meant to exclude.
+//
+// The caller supplies the query WITHOUT a LIMIT, because how many rows must be
+// read is a function of how many may be skipped and the two belong in one
+// place. Reading len(exclude)+1 is what makes the Go-side filter complete
+// rather than a sample: at most len(exclude) of the rows the order yields can
+// be excluded, so if any qualifying row exists at all, one of these is it. A
+// caller that held the bound in its own format string would be holding half of
+// that fact, free to drift from the other half. [LAW:one-source-of-truth]
+//
+// So the query stays a bounded read even though the exclusion set is not, and
+// the row count it reads is decided by this function alone.
+func nearestRankOutside(ctx context.Context, q rowQueryer, query string, exclude []string, args ...any) (string, error) {
+	rows, err := q.QueryContext(ctx, fmt.Sprintf("%s LIMIT %d", query, len(exclude)+1), args...)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	skip := make(map[string]struct{}, len(exclude))
+	for _, id := range exclude {
+		skip[id] = struct{}{}
+	}
+	for rows.Next() {
+		var id, rank string
+		if err := rows.Scan(&id, &rank); err != nil {
+			return "", err
+		}
+		if _, vacating := skip[id]; !vacating {
+			return rank, nil
+		}
+	}
+	return "", rows.Err()
 }
 
 // nearestRank returns the single rank a LIMIT 1 query selects, or "" — the
