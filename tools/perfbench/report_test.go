@@ -1,10 +1,45 @@
 package main
 
 import (
+	"bytes"
+	"errors"
+	"flag"
 	"strings"
 	"testing"
 	"time"
 )
+
+// Asking for help is a request that was granted. Returning flag.ErrHelp would
+// have main print "flag: help requested" under the usage text and exit 1,
+// spending the failure code on a success — the same defect as the reverse.
+func TestRunTreatsHelpAsSuccess(t *testing.T) {
+	var out, progress bytes.Buffer
+	if err := run([]string{"-h"}, &out, &progress); err != nil {
+		t.Errorf("run(-h) = %v, want nil; asking for help is not a failure", err)
+	}
+	if !strings.Contains(progress.String(), "-sizes") {
+		t.Errorf("run(-h) did not write usage to the progress stream:\n%s", progress.String())
+	}
+	if out.Len() != 0 {
+		t.Errorf("run(-h) wrote %q to the report stream; usage is not a report", out.String())
+	}
+}
+
+// A bad flag value must fail before anything is built or generated, and must
+// not be mistaken for the help request above.
+func TestRunRejectsABadSizeBeforeDoingAnyWork(t *testing.T) {
+	var out, progress bytes.Buffer
+	err := run([]string{"--sizes", "12x"}, &out, &progress)
+	if err == nil {
+		t.Fatal("run(--sizes 12x) returned no error")
+	}
+	if errors.Is(err, flag.ErrHelp) {
+		t.Errorf("a bad size was reported as a help request: %v", err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("run wrote a report (%q) despite a bad size", out.String())
+	}
+}
 
 func fixedResults() []result {
 	reads := []sample{
