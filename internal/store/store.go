@@ -641,7 +641,8 @@ func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter)
 		where = append(where, "i.issue_type NOT IN ("+strings.Join(repeatPlaceholder(len(types)), ",")+")")
 	}
 	// Assignee is the one filter here whose values are neither a closed
-	// vocabulary nor ids, and it stays a single clause on a narrower bound: the
+	// vocabulary nor ids — the third kind idBatchSize's rule enumerates, bounded
+	// by provenance — and it stays a single clause on that narrower bound: the
 	// list is assembled from `--assignee` and from `assignee:` query terms, both
 	// of which a person types, and nothing derives it from the backlog. A caller
 	// that did derive it from the backlog would be handing the planner the

@@ -1135,9 +1135,18 @@ func rankRows(ctx context.Context, q rowQueryer, query string, args ...any) ([]r
 // that shape batching cannot fix, because a `NOT IN` split across batches
 // returns from each batch exactly the rows the others meant to exclude.
 //
-// The caller supplies the query WITHOUT a LIMIT, because how many rows must be
-// read is a function of how many may be skipped and the two belong in one
-// place. Reading len(exclude)+1 is what makes the Go-side filter complete
+// The caller supplies the query WITHOUT a LIMIT but WITH an ORDER BY, and the
+// ordering is a requirement rather than a convention: this function cannot check
+// for one, and without one the LIMIT below selects an arbitrary window instead of
+// the nearest rows. An unordered caller that happened to draw a window entirely
+// inside exclude would be told "" — which every caller here reads as the open end
+// of the keyspace, the one input that makes rank.Midpoint hand out a key another
+// issue already holds. Both call sites satisfy it today, and neither does so by
+// accident: rankEdge.outside carries the comparison and its ordering as one
+// string precisely so the two cannot drift apart. [LAW:no-silent-failure]
+//
+// The LIMIT is this function's to add, because how many rows must be read is a
+// function of how many may be skipped and the two belong in one place. Reading len(exclude)+1 is what makes the Go-side filter complete
 // rather than a sample: at most len(exclude) of the rows the order yields can
 // be excluded, so if any qualifying row exists at all, one of these is it. A
 // caller that held the bound in its own format string would be holding half of

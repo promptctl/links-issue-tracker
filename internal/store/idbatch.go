@@ -59,12 +59,37 @@ import "strings"
 // lifecycle children query — plus the three the sweep below added.
 //
 // THE RULE, for whoever writes the next id-keyed read: an `IN (...)` list may
-// carry a number of elements bounded by a constant, and there are exactly two
-// ways to be bounded. Either the values come from a closed domain the caller
-// cannot enlarge — the five issue types, the two structural relation types —
-// in which case say which domain, beside the query, because the bound is not
-// visible in the clause. Or the list is caller-supplied and open, in which case
-// it goes through idBatches and the query runs once per batch.
+// carry a number of elements bounded by something, and there are three ways to
+// be bounded, in descending order of how much you should want them.
+//
+//  1. A CLOSED DOMAIN the caller cannot enlarge — the five issue types, the two
+//     structural relation types. Say which domain beside the query, because the
+//     bound is not visible in the clause. This is the only kind a caller cannot
+//     break from outside the package.
+//  2. BATCHED. The list is caller-supplied and open, so it goes through
+//     idBatches and the query runs once per batch. The bound is idBatchSize and
+//     it holds whatever the caller passes, which is what makes this the kind to
+//     reach for when the values are ids.
+//  3. BOUNDED BY PROVENANCE. The list is caller-supplied, unbatched, and short
+//     only because of where its values come from. ListIssues' assignee clause is
+//     the single instance in this package: the values are assembled from
+//     `--assignee` and from `assignee:` query terms, both of which a person
+//     types, and nothing derives them from the backlog.
+//
+// The third kind is a real bound and an unenforced one, so it carries an
+// obligation the first two do not. The clause must say beside itself where its
+// values come from, because that provenance IS the bound and it is invisible in
+// the SQL. And a caller that begins deriving such a list from the backlog has
+// broken it silently — nothing errors, nothing is slow in a way that names this
+// clause, the planner is simply handed the quadratic shape again.
+//
+// It is the third kind rather than the second because ListIssues already
+// batches on the id axis, and a second batched axis is a product: |A|/K x |I|/K
+// round trips for an answer needing |I|/K. The parent filter had that same
+// problem and is resolved by collapsing onto one axis before any row is read
+// (childIDsOfParents); the assignee column has no such collapse available. So
+// when a caller-derived assignee list does appear, the move is to narrow it
+// before the store sees it, not to batch a second axis here.
 //
 // Batching is sound only where the query's answer is the concatenation of its
 // batches' answers, and two shapes fail that test:
@@ -88,8 +113,8 @@ import "strings"
 // two.
 //
 // Swept 2026-09-20 for links-perf-kw6z.2: every `IN (...)` in internal/store is
-// now one of the two bounded kinds, and each closed-domain one names its domain
-// where it is written. Nothing fails the build when a new unbounded id list is
+// now one of the three kinds above, and each one that is not batched names the
+// domain or the provenance that bounds it where it is written. Nothing fails the build when a new unbounded id list is
 // added, and deliberately so — the ticket asks for the latency budget to catch
 // this class, not a pattern-matcher over SQL text that would be a second, drifting
 // copy of the rule above.
