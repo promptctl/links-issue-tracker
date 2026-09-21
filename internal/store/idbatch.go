@@ -106,13 +106,26 @@ const idBatchSize = 16
 // count is capped without following the slice back to its caller.
 //
 // The rendering is where the single enforcer actually is, and it is
-// repeatPlaceholder: every `?`-list in this package comes from that one
-// function, so `IN (` grepped against it is a complete audit. inList is its
-// id-shaped wrapper, pairing the placeholders with the args so the count of
-// each is one fact rather than two. A query built from inList carries at most
-// idBatchSize ids; a query built from repeatPlaceholder directly carries
-// whatever its clause's own bound allows, and each of those says which
-// vocabulary bounds it.
+// repeatPlaceholder: every `IN (...)` placeholder list in this package comes
+// from that one function, so grepping `IN (` against it audits the whole of the
+// shape this file governs. inList is its id-shaped wrapper, pairing the
+// placeholders with the args so the count of each is one fact rather than two.
+// A query built from inList carries at most idBatchSize ids; a query built from
+// repeatPlaceholder directly carries whatever its clause's own bound allows, and
+// each of those says which vocabulary bounds it.
+//
+// Be exact about the scope of that claim, because the wider one is tempting and
+// false. It is NOT that every `?`-list in package store comes from
+// repeatPlaceholder: two do not. buildProcedureCall renders a `CALL proc(?,?)`
+// argument list and legacyInsertStatement an `INSERT ... VALUES (?,?)` list, each
+// counted by an arity a caller cannot enlarge — a procedure's parameters, a
+// table's columns — and neither is a set-membership test. A grep for `IN (` also
+// lands on the CHECK constraints in schema_reconcile.go, which carry quoted
+// literals and no placeholders at all; those spell a closed vocabulary into DDL,
+// and quotedIssueTypeList derives them from model.IssueTypes so the schema cannot
+// drift from the sealed type. Both exceptions are named here rather than left to
+// the reader's search, because a single-enforcer claim is worth only as much as
+// the reader's ability to falsify it.
 //
 // inList is defined on a NON-EMPTY batch — idBatches never yields an empty one
 // — because `IN ()` is a syntax error rather than a filter matching nothing.
