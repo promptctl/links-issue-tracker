@@ -82,6 +82,31 @@ func TestPadFillsToLengthWithoutBecomingOneRepeatedByte(t *testing.T) {
 	}
 }
 
+// Tolerance for a nonzero exit is confined to the one command that has a
+// documented legitimate one. Widening any other probe's set would not fail a
+// run or look wrong in the table — it would quietly let that command's failures
+// set its fastest time, which is the exact defect okCodes exists to prevent, so
+// the confinement is pinned rather than left to review.
+func TestOnlyNextToleratesANonZeroExit(t *testing.T) {
+	for _, p := range probes {
+		for _, code := range p.okCodes {
+			if code == 0 {
+				continue
+			}
+			if p.name != "next" {
+				t.Errorf("probe %q accepts exit %d; only `lit next` has a documented "+
+					"nonzero answer (6, \"no ready work\" on the empty store), and every "+
+					"other tolerated code lets that command's failures win the minimum",
+					p.name, code)
+			}
+			if code != 6 {
+				t.Errorf("probe %q accepts exit %d, which is not the documented "+
+					"\"no ready work\" code 6", p.name, code)
+			}
+		}
+	}
+}
+
 func TestEveryProbeDeclaresItsProvingExitCodes(t *testing.T) {
 	for _, p := range probes {
 		if len(p.okCodes) == 0 {
