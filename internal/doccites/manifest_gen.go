@@ -40,7 +40,7 @@ var Manifest = []Held{
 	{Doc: "doc-v1-total/03-store-schema.md", Text: "`store.go:1955-1993`", File: "internal/store/store.go", Span: Span{Start: 1955, End: 1993}, Symbol: "recordEvent"},
 	{Doc: "doc-v1-total/03-store-schema.md", Text: "`store.go:212-231`", File: "internal/store/store.go", Span: Span{Start: 212, End: 231}, Symbol: "OpenForRead"},
 	{Doc: "doc-v1-total/03-store-schema.md", Text: "`store.go:2277-2336`", File: "internal/store/store.go", Span: Span{Start: 2277, End: 2336}, Symbol: "hydrateIssues"},
-	{Doc: "doc-v1-total/03-store-schema.md", Text: "`store.go:2464-2469`", File: "internal/store/store.go", Span: Span{Start: 2464, End: 2469}, Symbol: "hydrateIssues"},
+	{Doc: "doc-v1-total/03-store-schema.md", Text: "`store.go:2515-2530`", File: "internal/store/store.go", Span: Span{Start: 2515, End: 2530}, Symbol: "scanLifecycleChildRows"},
 	{Doc: "doc-v1-total/03-store-schema.md", Text: "`store.go:260-262`", File: "internal/store/store.go", Span: Span{Start: 260, End: 262}, Symbol: "AttributeTo"},
 	{Doc: "doc-v1-total/03-store-schema.md", Text: "`store.go:2678-2725`", File: "internal/store/store.go", Span: Span{Start: 2678, End: 2725}, Symbol: "Open"},
 	{Doc: "doc-v1-total/03-store-schema.md", Text: "`store.go:276-296`", File: "internal/store/store.go", Span: Span{Start: 276, End: 296}, Symbol: "EnsureDatabase"},
