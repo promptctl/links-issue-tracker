@@ -615,38 +615,44 @@ func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter)
 	}
 	// [LAW:types-are-the-program] Filter types are already-parsed vocabulary;
 	// the defensive trim/skip that the raw-string filter needed is gone with it.
-	if len(filter.IssueTypes) > 0 {
-		var placeholders []string
-		for _, t := range filter.IssueTypes {
-			placeholders = append(placeholders, "?")
+	//
+	// That parse is also what lets the next two clauses stay a single `IN` list
+	// where an id list may not: model.IssueType is a closed vocabulary, so the
+	// DISTINCT types a caller can name are at most len(model.IssueTypes()) —
+	// five — however long the slice it passed. distinctTypes is what makes that
+	// a property of this clause rather than of the callers: `--type` parses to
+	// one value and internal/query dedupes, but storage.Store is an
+	// engine-facing interface and a direct caller passing a repeated list would
+	// otherwise get exactly the unbounded shape idBatchSize describes.
+	// [LAW:parse-dont-validate]
+	if types := distinctTypes(filter.IssueTypes); len(types) > 0 {
+		for _, t := range types {
 			args = append(args, t)
 		}
-		where = append(where, "i.issue_type IN ("+strings.Join(placeholders, ",")+")")
+		where = append(where, "i.issue_type IN ("+strings.Join(repeatPlaceholder(len(types)), ",")+")")
 	}
-	if len(filter.ExcludeIssueTypes) > 0 {
-		// [LAW:single-enforcer] Exclusion filter mirrors the IssueTypes positive
-		// filter above; keeping both at the store boundary means one definition
-		// of "which types qualify" regardless of caller.
-		var placeholders []string
-		for _, t := range filter.ExcludeIssueTypes {
-			placeholders = append(placeholders, "?")
+	// [LAW:single-enforcer] Exclusion filter mirrors the IssueTypes positive
+	// filter above, bound included; keeping both at the store boundary means
+	// one definition of "which types qualify" regardless of caller.
+	if types := distinctTypes(filter.ExcludeIssueTypes); len(types) > 0 {
+		for _, t := range types {
 			args = append(args, t)
 		}
-		where = append(where, "i.issue_type NOT IN ("+strings.Join(placeholders, ",")+")")
+		where = append(where, "i.issue_type NOT IN ("+strings.Join(repeatPlaceholder(len(types)), ",")+")")
 	}
-	if len(filter.Assignees) > 0 {
-		var placeholders []string
-		for _, a := range filter.Assignees {
-			trimmed := strings.TrimSpace(a)
-			if trimmed == "" {
-				continue
-			}
-			placeholders = append(placeholders, "?")
-			args = append(args, trimmed)
+	// Assignee is the one filter here whose values are neither a closed
+	// vocabulary nor ids — the third kind idBatchSize's rule enumerates, bounded
+	// by provenance — and it stays a single clause on that narrower bound: the
+	// list is assembled from `--assignee` and from `assignee:` query terms, both
+	// of which a person types, and nothing derives it from the backlog. A caller
+	// that did derive it from the backlog would be handing the planner the
+	// quadratic shape idBatchSize describes, on a column the id batching cannot
+	// serve — so that caller batches here first, rather than being written.
+	if assignees := storage.TrimmedNonEmpty(filter.Assignees); len(assignees) > 0 {
+		for _, assignee := range assignees {
+			args = append(args, assignee)
 		}
-		if len(placeholders) > 0 {
-			where = append(where, "i.assignee IN ("+strings.Join(placeholders, ",")+")")
-		}
+		where = append(where, "i.assignee IN ("+strings.Join(repeatPlaceholder(len(assignees)), ",")+")")
 	}
 	if filter.UpdatedAfter != nil {
 		where = append(where, "i.updated_at >= ?")
@@ -676,54 +682,54 @@ func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter)
 	if err := s.requireIssues(ctx, filter.ParentIDs); err != nil {
 		return nil, err
 	}
-	if len(filter.ParentIDs) > 0 {
-		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(filter.ParentIDs)), ",")
-		where = append(where, "EXISTS (SELECT 1 FROM relations r WHERE r.type = 'parent-child' AND r.src_id = i.id AND r.dst_id IN ("+placeholders+"))")
-		for _, id := range filter.ParentIDs {
-			args = append(args, id)
-		}
+	// The two caller-supplied id sets collapse onto ONE axis before any row is
+	// read, and that is a decomposition choice rather than an optimisation.
+	// "Which issues are children of these parents" is a question about the
+	// relations table; answering it there instead of as an EXISTS subquery
+	// inside the issue scan leaves this query with a single open-ended id set
+	// to batch over. Two would have to batch as a product — |P|/K × |I|/K round
+	// trips for an answer that needs |I|/K. [LAW:decomposition]
+	selected, restricted, err := s.selectedIssueIDs(ctx, filter)
+	if err != nil {
+		return nil, err
 	}
-	if len(filter.IDs) > 0 {
-		placeholders := make([]string, 0, len(filter.IDs))
-		for _, id := range filter.IDs {
-			trimmed := strings.TrimSpace(id)
-			if trimmed == "" {
-				continue
-			}
-			placeholders = append(placeholders, "?")
-			args = append(args, trimmed)
-		}
-		if len(placeholders) > 0 {
-			where = append(where, "i.id IN ("+strings.Join(placeholders, ", ")+")")
-		}
-	}
-	for _, term := range filter.SearchTerms {
-		trimmed := strings.ToLower(strings.TrimSpace(term))
-		if trimmed == "" {
-			continue
-		}
+	for _, term := range storage.TrimmedNonEmpty(filter.SearchTerms) {
+		// Four disjuncts, fixed by the four columns a search term reads, and
+		// they stay four however many terms the caller supplies — an extra term
+		// is an extra AND'd clause, never a longer OR. The planner's quadratic
+		// range merge needs a disjunct set that GROWS with caller input, which
+		// is the property this shape lacks; see idBatchSize.
 		where = append(where, "(LOWER(i.title) LIKE ? OR LOWER(i.description) LIKE ? OR LOWER(COALESCE(i.agent_prompt, '')) LIKE ? OR LOWER(i.topic) LIKE ?)")
-		like := "%" + trimmed + "%"
+		like := "%" + strings.ToLower(term) + "%"
 		args = append(args, like, like, like, like)
 	}
-	if len(where) > 0 {
-		query += " WHERE " + strings.Join(where, " AND ")
+	// One query when nothing narrows by id, one per batch when something does,
+	// and NO query at all when the id filters narrowed to the empty set — which
+	// falls out of idBatches returning no batches for no ids, rather than being
+	// guarded for here. An early return would have been a second statement of
+	// what restricted already says, and the cheaper one: zero round trips beats
+	// one. [LAW:dataflow-not-control-flow] [LAW:no-defensive-null-guards]
+	batches := []idBatch{nil}
+	if restricted {
+		batches = idBatches(selected)
 	}
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("list issues: %w (query=%s)", err, query)
-	}
-	defer rows.Close()
 	rowsOut := []issueRow{}
-	for rows.Next() {
-		issue, err := scanIssue(rows)
+	for _, batch := range batches {
+		batchWhere, batchArgs := where, args
+		if batch != nil {
+			inList, inArgs := batch.inList()
+			batchWhere = append(slices.Clip(where), "i.id IN ("+inList+")")
+			batchArgs = append(slices.Clip(args), inArgs...)
+		}
+		batchQuery := query
+		if len(batchWhere) > 0 {
+			batchQuery += " WHERE " + strings.Join(batchWhere, " AND ")
+		}
+		batched, err := s.scanListRows(ctx, batchQuery, batchArgs)
 		if err != nil {
 			return nil, err
 		}
-		rowsOut = append(rowsOut, issue)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+		rowsOut = append(rowsOut, batched...)
 	}
 	hydrated, err := s.hydrateIssues(ctx, rowsOut)
 	if err != nil {
@@ -736,6 +742,124 @@ func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter)
 	return capLimit(filterByResolution(filterByState(hydrated, allowedStates), filter.Resolutions), filter.Limit), nil
 }
 
+// distinctTypes drops repeats from an issue-type filter, which is what bounds
+// the `IN` list it becomes by the size of the vocabulary rather than by the
+// length of what the caller passed.
+func distinctTypes(types []model.IssueType) []model.IssueType {
+	out := make([]model.IssueType, 0, len(types))
+	for _, t := range types {
+		if !slices.Contains(out, t) {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// scanListRows runs one of ListIssues' queries and reads its rows. It is
+// separate from the batch loop above so that closing the rows stays tied to the
+// one query that opened them, however many queries the id set turns into.
+func (s *Store) scanListRows(ctx context.Context, query string, args []any) ([]issueRow, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list issues: %w (query=%s)", err, query)
+	}
+	defer rows.Close()
+	out := []issueRow{}
+	for rows.Next() {
+		issue, err := scanIssue(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, issue)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// selectedIssueIDs folds ListIssues' two id-shaped filters into the single set
+// of ids the scan may return, and says whether they narrow anything at all.
+//
+// restricted is not len(ids) > 0: a caller that asked for children of a
+// childless parent, or for the intersection of two disjoint id sets, narrowed
+// the result to nothing, and an empty set must mean "no rows" rather than "no
+// filter". A filter holding only blank ids is the opposite case — it narrows
+// nothing, exactly as the single clause it replaces did, because every entry
+// was dropped before the count was taken. [LAW:parse-dont-validate]
+//
+// The ids are sorted so that the batch partition and the row order are
+// functions of the id set alone, not of the order a caller happened to type or
+// the order the relations table happened to store. ListIssues' comparator runs
+// over the union afterwards and is stable, so this is what keeps the order of
+// equal-sorting rows the same from call to call.
+func (s *Store) selectedIssueIDs(ctx context.Context, filter storage.ListIssuesFilter) ([]string, bool, error) {
+	selected := storage.TrimmedNonEmpty(filter.IDs)
+	restricted := len(selected) > 0
+	if len(filter.ParentIDs) > 0 {
+		children, err := s.childIDsOfParents(ctx, filter.ParentIDs)
+		if err != nil {
+			return nil, false, err
+		}
+		if restricted {
+			// Intersected through a set rather than slices.Contains, which
+			// would be O(len(children) x len(selected)) — the same quadratic
+			// over two caller-supplied id lists that this change removes from
+			// the planner, just relocated into Go where no index hides it.
+			// The rule beside idBatchSize governs an id set wherever it is
+			// tested, not only where it is rendered into SQL.
+			// [LAW:one-type-per-behavior]
+			keep := make(map[string]bool, len(selected))
+			for _, id := range selected {
+				keep[id] = true
+			}
+			children = slices.DeleteFunc(children, func(id string) bool { return !keep[id] })
+		}
+		selected, restricted = children, true
+	}
+	slices.Sort(selected)
+	return slices.Compact(selected), restricted, nil
+}
+
+// childIDsOfParents returns the ids of the direct children of the named
+// parents.
+//
+// This is the parent filter's whole implementation, lifted out of the issue
+// scan. The membership test it carries is over dst_id, which is the leading
+// column of idx_relations_dst_type, so each batch is a short run of point
+// lookups rather than the correlated subquery the EXISTS form planned once per
+// outer row.
+func (s *Store) childIDsOfParents(ctx context.Context, parentIDs []string) ([]string, error) {
+	children := []string{}
+	for _, batch := range idBatches(parentIDs) {
+		inList, args := batch.inList()
+		rows, err := s.db.QueryContext(ctx, `SELECT src_id FROM relations WHERE dst_id IN (`+inList+`) AND type = ?`, append(args, string(model.RelParentChild))...)
+		if err != nil {
+			return nil, fmt.Errorf("list children of parents: %w", err)
+		}
+		batched, err := scanIDColumn(rows)
+		if err != nil {
+			return nil, err
+		}
+		children = append(children, batched...)
+	}
+	return children, nil
+}
+
+// scanIDColumn reads a single-column id result and closes it.
+func scanIDColumn(rows *sql.Rows) ([]string, error) {
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 // requireIssues answers NotFoundError for the first id naming no issue row, in
 // the order given. It reads existence only — a soft-deleted issue still exists —
 // so it agrees with GetIssue about what an id names.
@@ -743,27 +867,26 @@ func (s *Store) requireIssues(ctx context.Context, ids []string) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
-	args := make([]any, 0, len(ids))
-	for _, id := range ids {
-		args = append(args, id)
-	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM issues WHERE id IN (`+placeholders+`)`, args...)
-	if err != nil {
-		return fmt.Errorf("check issues exist: %w", err)
-	}
-	defer rows.Close()
+	// A membership test is the one shape batching is trivially sound for: the
+	// set of ids that exist is the union of the sets each batch finds, and the
+	// verdict below reads that union, not any one query's answer.
 	found := make(map[string]bool, len(ids))
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+	for _, batch := range idBatches(ids) {
+		inList, args := batch.inList()
+		rows, err := s.db.QueryContext(ctx, `SELECT id FROM issues WHERE id IN (`+inList+`)`, args...)
+		if err != nil {
+			return fmt.Errorf("check issues exist: %w", err)
+		}
+		present, err := scanIDColumn(rows)
+		if err != nil {
 			return err
 		}
-		found[id] = true
+		for _, id := range present {
+			found[id] = true
+		}
 	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
+	// Reported in the caller's order, over the caller's list, so a repeated id
+	// is still named once and the batching is invisible in the message.
 	for _, id := range ids {
 		if !found[id] {
 			return storage.NotFoundError{Entity: "issue", ID: id}
@@ -954,13 +1077,8 @@ func (s *Store) getIssuesByIDs(ctx context.Context, ids []string) (map[string]mo
 	}
 	scanned := make([]issueRow, 0, len(ids))
 	for _, batch := range idBatches(ids) {
-		placeholders := make([]string, len(batch))
-		args := make([]any, len(batch))
-		for i, id := range batch {
-			placeholders[i] = "?"
-			args[i] = id
-		}
-		query := fmt.Sprintf(`SELECT `+issueColumnsBare+` FROM issues WHERE id IN (%s)`, strings.Join(placeholders, ","))
+		inList, args := batch.inList()
+		query := `SELECT ` + issueColumnsBare + ` FROM issues WHERE id IN (` + inList + `)`
 		batched, err := s.scanIssueRows(ctx, query, args)
 		if err != nil {
 			return nil, err
@@ -1678,6 +1796,15 @@ func (s *Store) ListTopics(ctx context.Context) ([]string, error) {
 	return topics, rows.Err()
 }
 
+// listRelations returns every relation incident to one issue.
+//
+// The `OR` across two columns is the shape listRelationsForIDs exists to avoid,
+// and it is safe HERE for a reason that does not survive generalisation: both
+// sides are point predicates on one id, so the disjunct set is two and stays
+// two. The landmine is a disjunct set that GROWS with the caller's input — an
+// `IN` list on either side of the same `OR` is what turns the engine's overlap
+// elimination quadratic. Take this as precedent for a second endpoint column,
+// never for a second endpoint LIST. [LAW:carrying-cost]
 func (s *Store) listRelations(ctx context.Context, issueID string) ([]model.Relation, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT src_id, dst_id, type, created_at, created_by FROM relations WHERE src_id = ? OR dst_id = ? ORDER BY created_at ASC`, issueID, issueID)
 	if err != nil {
@@ -2385,13 +2512,8 @@ func (s *Store) lifecycleChildrenByEpicIDs(ctx context.Context, epicIDs []string
 //
 // Separate from the batching above so that closing the rows stays tied to the
 // one query that opened them, however many queries the epic set turns into.
-func (s *Store) scanLifecycleChildRows(ctx context.Context, batch []string) ([]issueRow, []string, error) {
-	placeholders := make([]string, 0, len(batch))
-	args := make([]any, 0, len(batch))
-	for _, epicID := range batch {
-		placeholders = append(placeholders, "?")
-		args = append(args, epicID)
-	}
+func (s *Store) scanLifecycleChildRows(ctx context.Context, batch idBatch) ([]issueRow, []string, error) {
+	inList, args := batch.inList()
 	// [LAW:one-source-of-truth] Active containers derive progress from active children; archived/deleted containers keep a full child snapshot so their lifecycle state does not collapse to empty/open.
 	// Children-of-epic visibility truth table:
 	//   parent live, child live -> include
@@ -2403,7 +2525,7 @@ func (s *Store) scanLifecycleChildRows(ctx context.Context, batch []string) ([]i
 		FROM relations r
 		JOIN issues i ON i.id = r.src_id
 		JOIN issues p ON p.id = r.dst_id
-		WHERE r.dst_id IN (`+strings.Join(placeholders, ", ")+`) AND r.type = 'parent-child'
+		WHERE r.dst_id IN (`+inList+`) AND r.type = 'parent-child'
 			AND (p.archived_at IS NOT NULL OR p.deleted_at IS NOT NULL OR (i.archived_at IS NULL AND i.deleted_at IS NULL))
 		ORDER BY r.dst_id ASC, i.item_rank ASC`, args...)
 	if err != nil {
@@ -2442,14 +2564,9 @@ func (s *Store) loadLabelsByIssueIDs(ctx context.Context, issueIDs []string) (ma
 // closing the rows tied to the single query that opened them, and an id falls
 // in exactly one batch, so each issue's labels are appended by one query and
 // keep the ORDER BY's ordering. [LAW:one-source-of-truth]
-func (s *Store) scanLabelRows(ctx context.Context, batch []string, out map[string][]string) error {
-	placeholders := make([]string, 0, len(batch))
-	args := make([]any, 0, len(batch))
-	for _, issueID := range batch {
-		placeholders = append(placeholders, "?")
-		args = append(args, issueID)
-	}
-	rows, err := s.db.QueryContext(ctx, `SELECT issue_id, label FROM labels WHERE issue_id IN (`+strings.Join(placeholders, ", ")+`) ORDER BY label ASC`, args...)
+func (s *Store) scanLabelRows(ctx context.Context, batch idBatch, out map[string][]string) error {
+	inList, args := batch.inList()
+	rows, err := s.db.QueryContext(ctx, `SELECT issue_id, label FROM labels WHERE issue_id IN (`+inList+`) ORDER BY label ASC`, args...)
 	if err != nil {
 		return fmt.Errorf("load labels by issue ids: %w", err)
 	}

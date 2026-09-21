@@ -195,14 +195,14 @@ func (s *Store) relationsByEndpoint(ctx context.Context, column string, ids []st
 	if _, ok := relationEndpointColumns[column]; !ok {
 		return nil, fmt.Errorf("list relations by endpoint: unknown column %q", column)
 	}
+	// Bounded by a closed domain, so it is one clause and not a batch loop:
+	// structuralRelationTypes is a package-level constant list of two, and no
+	// caller can lengthen it. See idBatchSize for why an id list — which a
+	// caller CAN lengthen — may not be written this way.
 	typeClause := strings.Join(repeatPlaceholder(len(structuralRelationTypes)), ",")
 	rels := []model.Relation{}
 	for _, batch := range idBatches(ids) {
-		idClause := strings.Join(repeatPlaceholder(len(batch)), ",")
-		args := make([]any, 0, len(batch)+len(structuralRelationTypes))
-		for _, id := range batch {
-			args = append(args, id)
-		}
+		idClause, args := batch.inList()
 		for _, relType := range structuralRelationTypes {
 			args = append(args, string(relType))
 		}
