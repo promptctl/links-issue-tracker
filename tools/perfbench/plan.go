@@ -72,13 +72,18 @@ var probes = []probe{
 	}, okCodes: []int{0}, mutates: true},
 }
 
-// size is one store to generate and measure at. rows is both the store's total
-// row count and its workable count: every generated row is open, so the queue
-// `backlog` and `next` walk is as long as the store itself. That is the
-// conservative case and it is why these numbers are not directly this
-// repository's — the live store holds 827 rows of which 118 are workable, so a
-// 590-row generated store is a harder gather than the real one, not an easier
-// one.
+// size is one store to generate and measure at. rows is the store's TOTAL row
+// count, and it is not the same as its workable count: every generated row is
+// open, but blockedEveryNth wires roughly a third of them behind a dependency,
+// so a 590-row store presents about 393 workable rows to `backlog` and `next`
+// and holds 590 for everything that walks the whole table.
+//
+// Both numbers matter and neither is this repository's directly. The live store
+// holds 827 rows of which 118 are workable, so a 590-row generated store is a
+// harder gather (393 workable against 118) over a smaller table (590 rows
+// against 827). It is not a scale model of this repository and is not meant to
+// be — it is a controlled point on the row axis, which is the axis the ceiling
+// and the latency budget are both argued in.
 type size struct {
 	name string
 	rows int

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -162,22 +163,47 @@ const idTokenPercent = 40
 // descriptions, real prose truncated to 1310 bytes gzips 1.79x (median; the
 // spread is 1.53x to 2.56x), while the repeated phrase gzipped 20.15x. Since
 // the store compresses what it holds, a row 11x more compressible than a real
-// one understates every byte figure this tool reports — and those figures are
-// half its purpose, feeding a size ceiling directly. The mix above is
-// calibrated to that measurement rather than chosen: it lands at 1.83x.
+// one is simply not the row being modelled. The mix above is calibrated to that
+// measurement rather than chosen: it lands at 1.83x.
+//
+// How much this moves the reported bytes is a separate question, and the answer
+// is: less than the measurement can resolve. 590 descriptions are 0.77 MB of a
+// ~23.5 MB store, so their compressibility bounds about 3% of the total, and
+// the 590-row figure varies between 23.1 and 23.8 MB across runs regardless.
+// This is therefore a FIDELITY fix — the fixture is now the thing it claims to
+// model — and not a correction to the numbers. Do not quote a before/after
+// across this change: the difference sits inside the run-to-run spread, and the
+// honest statement is the 3% bound, which is also why a size ceiling belongs on
+// structure rather than on what users type.
 //
 // Deterministic, so two runs of the same size generate byte-identical rows and
 // a change in reported store bytes is a change in lit, never in the fixture.
 func filler(seed int, n int) string {
-	// A plain LCG, spelled out rather than taken from math/rand, so the bytes
-	// this produces are fixed by this source and cannot shift under a change to
-	// the standard library's generator — a benchmark fixture that changes with
-	// the toolchain would retroactively invalidate every figure recorded
-	// against it. [LAW:one-source-of-truth]
+	// A counter run through splitmix32's finalizer, spelled out rather than
+	// taken from math/rand, so the bytes this produces are fixed by this source
+	// and cannot shift under a change to the standard library's generator — a
+	// benchmark fixture that changes with the toolchain would retroactively
+	// invalidate every figure recorded against it. [LAW:one-source-of-truth]
+	//
+	// It is a mixed counter and not the plain LCG it replaces, because an LCG's
+	// LOW bits are barely random and this function reads them twice per token.
+	// With an odd multiplier and an odd increment, bit 0 of x*1664525+1013904223
+	// strictly alternates; each token consumed exactly two draws, so the draw
+	// that picks a word always landed on the same parity — and since
+	// len(proseWords) is even, n%len inherits n's parity. Every row drew from
+	// half the vocabulary, the half decided by its seed. The finalizer below
+	// avalanches, so every bit of the output depends on every bit of the
+	// counter and a draw modulo anything sees the whole range.
 	x := uint32(seed)*2654435761 + 12345
 	next := func() uint32 {
-		x = x*1664525 + 1013904223
-		return x
+		x += 0x9e3779b9
+		z := x
+		z ^= z >> 16
+		z *= 0x21f0aaad
+		z ^= z >> 15
+		z *= 0x735a2d97
+		z ^= z >> 15
+		return z
 	}
 	var b strings.Builder
 	for b.Len() < n {
@@ -238,10 +264,23 @@ func storeBytes(dir string) (int64, error) {
 // Generation failures are the ones most likely to be misread — a store that
 // half-imported still produces a plausible-looking table — so nothing here is
 // allowed to continue past one. [LAW:no-silent-failure]
+//
+// It carries the same runBudget the probes do, and for a stronger reason.
+// runBudget exists because this epic's subject is a write path that can wait
+// fifteen minutes on a lock; generation is ENTIRELY write path, so an import
+// wedged behind a lock is at least as likely here as in any probe. Unbudgeted,
+// that hangs the tool with nothing on screen — the exact outcome the budget was
+// added to prevent.
 func runQuiet(dir string, name string, args ...string) error {
-	cmd := exec.Command(name, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), runBudget)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		return fmt.Errorf("%s %s (in %s) exceeded the %s budget and was killed:\n%s",
+			name, strings.Join(args, " "), dir, runBudget, out)
+	}
 	if err != nil {
 		return fmt.Errorf("%s %s (in %s): %w\n%s", name, strings.Join(args, " "), dir, err, out)
 	}

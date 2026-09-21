@@ -102,6 +102,41 @@ func TestFillerCompressesLikeRealTicketProse(t *testing.T) {
 	}
 }
 
+// Every word in the vocabulary must be reachable. This is pinned because it was
+// silently false: the filler drew from a plain LCG whose low bit strictly
+// alternates, two draws were consumed per token, and len(proseWords) is even —
+// so each row could only ever see half the vocabulary, the half its seed
+// selected. Nothing about the output looked wrong, and the compressibility band
+// above still passed.
+func TestFillerReachesTheWholeVocabulary(t *testing.T) {
+	seen := map[string]bool{}
+	for seed := range 200 {
+		for _, w := range strings.Fields(filler(seed, descriptionBytes)) {
+			seen[w] = true
+		}
+	}
+	missing := []string{}
+	for _, w := range proseWords {
+		if !seen[w] {
+			missing = append(missing, w)
+		}
+	}
+	if len(missing) > 0 {
+		t.Errorf("%d of %d vocabulary words are unreachable across 200 rows (%v); "+
+			"the filler is drawing from a smaller vocabulary than it declares",
+			len(missing), len(proseWords), missing)
+	}
+	// A single row must also see well past half, which is what the LCG capped.
+	oneRow := map[string]bool{}
+	for _, w := range strings.Fields(filler(0, descriptionBytes)) {
+		oneRow[w] = true
+	}
+	if len(oneRow) <= len(proseWords)/2 {
+		t.Errorf("one row drew only %d of %d words, at or below the half a parity-locked "+
+			"generator would reach", len(oneRow), len(proseWords))
+	}
+}
+
 // Two runs of the same size must generate byte-identical rows, or a change in
 // reported store bytes could be the fixture moving rather than lit.
 func TestFillerIsDeterministicAndVariesByRow(t *testing.T) {
