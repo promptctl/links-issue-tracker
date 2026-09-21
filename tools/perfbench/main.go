@@ -21,6 +21,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -50,6 +51,15 @@ func run(args []string, out, progress io.Writer) error {
 	sizesFlag := fs.String("sizes", "", "comma-separated store row counts to measure (default: the repository's envelope, 0,118,590)")
 	keep := fs.String("keep", "", "directory to build the stores in and leave behind (default: a temporary directory, removed on exit)")
 	if err := fs.Parse(args); err != nil {
+		// -h is a request that was granted, not a failure: Parse has already
+		// written the usage to progress, and returning ErrHelp here would have
+		// main print "flag: help requested" underneath it and exit 1.
+		// [LAW:no-silent-failure] read the other way — an exit status is a
+		// contract, and spending the failure code on success is the same defect
+		// as spending the success code on failure.
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	sizes, err := parseSizes(*sizesFlag)
