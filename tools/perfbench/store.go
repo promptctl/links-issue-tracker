@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -79,14 +80,14 @@ func generate(bin litBinary, parent string, sz size) (generatedStore, error) {
 			"commit", "-q", "--no-verify", "--allow-empty", "-m", "perfbench workspace"},
 	}
 	for _, step := range steps {
-		if err := runQuiet(root, step[0], step[1:]...); err != nil {
+		if err := runQuiet(root, runBudget, step[0], step[1:]...); err != nil {
 			return generatedStore{}, err
 		}
 	}
 	// --skip-hooks and --skip-agents keep generation hermetic: a git hook and an
 	// AGENTS.md rewrite are effects on the workspace that have nothing to do
 	// with its size, and the hook would then run on every write probe.
-	if err := runQuiet(root, bin.path, "init", "--prefix", "bench", "--skip-hooks", "--skip-agents"); err != nil {
+	if err := runQuiet(root, runBudget, bin.path, "init", "--prefix", "bench", "--skip-hooks", "--skip-agents"); err != nil {
 		return generatedStore{}, err
 	}
 	for i, batch := range importBatches(sz.rows) {
@@ -98,7 +99,7 @@ func generate(bin litBinary, parent string, sz size) (generatedStore, error) {
 		if err := os.WriteFile(specPath, blob, 0o644); err != nil {
 			return generatedStore{}, fmt.Errorf("writing import spec: %w", err)
 		}
-		if err := runQuiet(root, bin.path, "import", "--path", specPath); err != nil {
+		if err := runQuiet(root, runBudget, bin.path, "import", "--path", specPath); err != nil {
 			return generatedStore{}, err
 		}
 	}
@@ -271,15 +272,15 @@ func storeBytes(dir string) (int64, error) {
 // wedged behind a lock is at least as likely here as in any probe. Unbudgeted,
 // that hangs the tool with nothing on screen — the exact outcome the budget was
 // added to prevent.
-func runQuiet(dir string, name string, args ...string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), runBudget)
+func runQuiet(dir string, budget time.Duration, name string, args ...string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {
 		return fmt.Errorf("%s %s (in %s) exceeded the %s budget and was killed:\n%s",
-			name, strings.Join(args, " "), dir, runBudget, out)
+			name, strings.Join(args, " "), dir, budget, out)
 	}
 	if err != nil {
 		return fmt.Errorf("%s %s (in %s): %w\n%s", name, strings.Join(args, " "), dir, err, out)
