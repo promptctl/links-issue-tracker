@@ -120,6 +120,43 @@ never exist, and do not conclude a quadratic pass is fine because 46 rows felt
 instant. `internal/cli/workable_bench_test.go` benchmarks the workable gather at
 both sizes; extend it rather than reasoning about cost in a PR description.
 
+Two instruments measure that envelope, and they answer different questions.
+`go test -bench` measures a stage *in process*, with the store already open, so
+it isolates the cost of one pass over the rows. `just perf` measures what a user
+actually waits for: it builds the binary from your working tree, generates
+stores at 0 / 118 / 590 rows with `lit init` and `lit import`, and times every
+user-facing command as a fresh process against each one, reporting each store's
+bytes on disk alongside.
+
+```sh
+just perf                        # the whole table
+just perf --sizes 0,118          # pick the store sizes
+just perf --keep /tmp/litperf    # leave the generated stores behind to inspect
+```
+
+Reach for `just perf` whenever a claim is about latency a user feels or about
+store size, and for `go test -bench` when it is about the cost of a pass. The
+end-to-end figures are the ones that caught what the microbenchmarks
+structurally cannot see: process start plus store open is ~0.14s, which on a
+590-row store is most of what `lit backlog` spends.
+
+Read the table the way it is built. Each probe runs five times round-robin and
+the reported figure is the **minimum**, with the maximum in parentheses:
+benchmark noise on a developer machine is one-sided, so the mean measures the
+machine's load and the min measures the code — and this checkout is routinely
+shared by several agent sessions, one of which compiling Go during a round
+would otherwise land in the number. A max near the min means a quiet machine; a
+max several times the min means the run fought for CPU and only the min survived
+it. Two full runs minutes apart reproduced 24 of 27 latency cells to within
+0.01s, worst case 18%. Store bytes come from a single generated store and vary
+about 2–3% run to run, so a couple of percent is not a regression.
+
+The scale epic's headline figures live in that command and nowhere else,
+because the hand-measured version rotted in under a month: `lit backlog` was
+quoted at 7.97s on 2026-08-25 and measured 0.54s on 2026-09-21, while the store
+grew from 188 MB to 279 MB. Quote `just perf` output with its date, and
+regenerate rather than copying an old number forward.
+
 One rule is absolute: **anything that adds milliseconds PER ROW is banned.**
 Fixed costs are fine and batched calls are fine — a reader that loads a level of
 the graph in one query costs the same at 10 rows and 600. A per-row store round
