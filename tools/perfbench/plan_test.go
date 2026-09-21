@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The empty store is zero imports, not an empty one: `lit import` refuses a
@@ -126,14 +127,28 @@ func TestFillerReachesTheWholeVocabulary(t *testing.T) {
 			"the filler is drawing from a smaller vocabulary than it declares",
 			len(missing), len(proseWords), missing)
 	}
-	// A single row must also see well past half, which is what the LCG capped.
+	// A single row must also see well past half, which is what the parity lock
+	// capped — and this is the only assertion that can catch it, because across
+	// 200 seeds the two parities between them still cover the whole vocabulary.
+	//
+	// Count VOCABULARY words only. Counting every whitespace token instead
+	// silently defeats this: about 40% of them are random id tokens, nearly all
+	// distinct, so the total sailed past any threshold on those alone and the
+	// check could not fail. It was written that way first, and the parity
+	// mutation survived it.
+	vocab := map[string]bool{}
+	for _, w := range proseWords {
+		vocab[w] = true
+	}
 	oneRow := map[string]bool{}
 	for _, w := range strings.Fields(filler(0, descriptionBytes)) {
-		oneRow[w] = true
+		if vocab[w] {
+			oneRow[w] = true
+		}
 	}
 	if len(oneRow) <= len(proseWords)/2 {
-		t.Errorf("one row drew only %d of %d words, at or below the half a parity-locked "+
-			"generator would reach", len(oneRow), len(proseWords))
+		t.Errorf("one row drew only %d of %d vocabulary words, at or below the half a "+
+			"parity-locked generator reaches", len(oneRow), len(proseWords))
 	}
 }
 
@@ -170,6 +185,29 @@ func TestOnlyNextToleratesANonZeroExit(t *testing.T) {
 					"\"no ready work\" code 6", p.name, code)
 			}
 		}
+	}
+}
+
+// A generation step that hangs must be killed and reported as a hang naming the
+// command, not left to wedge the tool silently. Generation is entirely write
+// path, which is where this epic's subject — a lock a writer can wait fifteen
+// minutes on — actually bites.
+func TestRunQuietKillsACommandOverBudget(t *testing.T) {
+	err := runQuiet(t.TempDir(), 50*time.Millisecond, "sleep", "30")
+	if err == nil {
+		t.Fatal("runQuiet returned no error for a command that outlived its budget")
+	}
+	for _, want := range []string{"exceeded", "budget", "sleep"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q — a hang must name what hung", err, want)
+		}
+	}
+}
+
+// And a command that finishes inside its budget is not reported as a hang.
+func TestRunQuietAcceptsACommandInsideItsBudget(t *testing.T) {
+	if err := runQuiet(t.TempDir(), 30*time.Second, "true"); err != nil {
+		t.Errorf("runQuiet(true) error = %v, want nil", err)
 	}
 }
 
