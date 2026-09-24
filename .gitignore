@@ -5,13 +5,22 @@ tools/session-analysis/processed/
 __pycache__/
 .claude/*.lock
 
-# Building any of this module's three main packages drops its binary here.
-# All three are listed, not just the ones someone has been bitten by: an agent
-# running `go build ./tools/...` to check something is how a 13.8MB blob reached
-# a commit once already. [LAW:no-silent-failure]
-/lit
+# Building any of this module's nine main packages drops its binary here, named
+# after its directory. All nine are listed, not just the ones someone has been
+# bitten by: an agent running `go build ./tools/...` to check something is how a
+# 13.8MB blob reached a commit once already. [LAW:no-silent-failure] The list
+# said "three" while eight existed, so five of them were one careless build away
+# from the commit this rule exists to prevent; keep it complete when a main
+# package is added.
+/doccites
+/docclaims-sync
+/lawtokens-check
+/lawtokens-sync
 /licenses
+/lit
 /mkmanifest
+/perfbench
+/testbudget
 
 # tools/licenses output — regenerated at release build time
 # (links-supply-chain-w6m9.1, .2); never hand-edited or committed.
