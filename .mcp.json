@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "chrome-devtools-mcp": {
+      "type": "stdio",
+      "command": "pnpm",
+      "args": [
+        "dlx",
+        "-y",
+        "chrome-devtools-mcp@latest",
+        "--no-usage-statistics"
+      ],
+      "env": {}
+    }
+  }
+}
