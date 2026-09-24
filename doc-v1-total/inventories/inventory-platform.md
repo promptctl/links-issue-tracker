@@ -1201,6 +1201,12 @@ Local (untracked-style) permissions: allow list `Read(//Users/bmf/**)`,
 `enabledMcpjsonServers: ["chromedevtools/chrome-devtools-mcp"]`;
 `enableAllProjectMcpServers: true` (`.claude/settings.local.json:1-17`).
 
+### 14.6 `.mcp.json`
+
+One project MCP server, `chrome-devtools-mcp`, over stdio: `npx -y
+chrome-devtools-mcp@1.10.1 --isolated --no-usage-statistics` (`.mcp.json:1-14`).
+The version is pinned exactly; `--isolated` gives each server a temporary Chrome profile.
+
 ---
 
 ## 15. Docs site configuration (gated by CI)

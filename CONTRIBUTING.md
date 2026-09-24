@@ -27,6 +27,11 @@ You need:
   [dolthub/dolt](https://github.com/dolthub/dolt) (CI pins the exact version it
   installs in
   [`.github/actions/install-dolt/action.yml`](.github/actions/install-dolt/action.yml)).
+- **Node.js (`npx`)** — *only for agents using the browser.* The repo's
+  [`.mcp.json`](.mcp.json) registers `chrome-devtools-mcp` as a project MCP
+  server, launched with `npx`. It is pinned to an exact version, so upgrading it
+  is a reviewed diff, and it runs with `--isolated` so parallel agent sessions
+  each get a throwaway Chrome profile instead of fighting over one.
 
 > On macOS, building the embedded engine needs ICU and zstd headers, which
 > Homebrew installs keg-only. Run `just setup` once (it installs `icu4c@78` +
