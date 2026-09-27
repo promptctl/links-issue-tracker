@@ -204,7 +204,8 @@ func RecordPushedHead(ctx context.Context, doltRootDir string, remote string, br
 // coResidentHolderWait and no longer, and a holder that outlasts it is named.
 // [LAW:one-source-of-truth] the wait is the write open's wait, not a second
 // figure. The open records this process as LOCK's holder for the life of
-// the handle (recordEngineHolder), exactly as a write engine does; the
+// the handle (recordLockHolder, wrapping a no-op release since the hold
+// itself ends when the handle closes), exactly as a write engine does; the
 // returned release retires the record and must run before the handle closes.
 func openChunkStoreForRefWrite(ctx context.Context, root string) (*doltdb.DoltDB, func() error, error) {
 	nomsDir := filepath.Join(root, doltDatabaseName, dbfactory.DoltDataDir)
@@ -231,5 +232,5 @@ func openChunkStoreForRefWrite(ctx context.Context, root string) (*doltdb.DoltDB
 	}); err != nil {
 		return nil, nil, fmt.Errorf("open dolt chunk store at %s: %w", nomsDir, err)
 	}
-	return ddb, recordEngineHolder(root), nil
+	return ddb, recordLockHolder(workspaceStorageDir(root), DoltJournalLockPath(root), func() error { return nil }), nil
 }

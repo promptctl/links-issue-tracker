@@ -214,7 +214,7 @@ The two pools run strictly sequentially — the explicit close of the first is t
 
 `store.go`:
 - `openDoltPool(doltRootDir, workspaceID, doltDatabaseName, access)` (`store.go`);
-- `db.PingContext(ctx)` for both access values; on failure returns `errors.Join(wrapEngineOpenContention(err), db.Close())` (`store.go`);
+- `awaitEngineOpen(ctx, doltRootDir, db.PingContext)` for both access values; on failure returns `errors.Join(err, db.Close())` (`store.go`); a write engine then publishes its LOCK holder record via `recordLockHolder` with a no-op release (`store.go`);
 - builds the `Store` with the field assignments listed in §1.3 (`store.go`). `doltRootDir` is stored **unmodified**; only `commitLockPath` and `telemetryDir` clean it.
 
 A read engine's ping falls back to Dolt's read-only mode past a held journal lock rather than waiting; the fallback being permanent costs a reader nothing because a read open never applies DDL (`store.go`).

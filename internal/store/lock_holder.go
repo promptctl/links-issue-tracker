@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -429,12 +428,29 @@ func renderHolderCommand(command string) string {
 // through the engine connector and the chunk-store open, which take
 // backoff.BackOff. It polls every storeLockPollInterval and stops once the
 // holders in front of the contender have stood still for the wait: the clock
-// starts at Reset, and restarts whenever the set of holder records under the
-// lock changes, so a queue of short holders — sixteen `lit new` serializing
-// at tens of milliseconds each — is waited out however long it runs, while
-// a single holder standing for the whole wait ends the contender's attempt.
-// "Cannot get the store" is a holder that is not moving, not a store that is
-// busy.
+// starts at Reset, and restarts whenever a holder record the contender has
+// never seen appears under the lock, so a queue of short holders — sixteen
+// `lit new` serializing at tens of milliseconds each — is waited out however
+// long it runs, while a single holder standing for the whole wait ends the
+// contender's attempt. "Cannot get the store" is a holder that is not
+// moving, not a store that is busy.
+//
+// Only an ARRIVAL restarts the clock, never a departure. A name is minted by
+// an acquisition and nothing else, so a new name is proof of a new holder;
+// a name vanishing is not proof of anything the contender cares about — a
+// reader's sweep retires a dead record (readLockHolder), and its probe can
+// put an empty one back under the same name — and counting those as
+// progress would let a notice tick, or a peer's failure, hold a contender
+// past its wait. Names ever seen are kept for the life of the wait so the
+// same name cannot arrive twice.
+//
+// There is no ceiling above the wait. Under holders that keep arriving the
+// contender keeps waiting, reporting who it waits on every
+// lockWaitNoticeInterval, and leaves on its context: an exclusive contender
+// (a snapshot copy) can in principle wait out a write storm that never
+// pauses, and it lands when the storm does, where a ceiling would have
+// failed it with a holder that was never wedged. Fails-in-seconds is the
+// promise about a holder that stands still.
 //
 // [LAW:dataflow-not-control-flow] Every wait runs the same loop; what varies
 // is the lock's directory and its budget, both values. A holder with no
@@ -442,15 +458,13 @@ func renderHolderCommand(command string) string {
 // and no progress, so under it the rule is the plain elapsed budget it
 // reduces to when there is nothing to read.
 //
-// [LAW:no-ambient-temporal-coupling] The record names are the progress
-// signal because a name is created by an acquisition and retired by a
-// release or a sweep, so a change in the set IS a change in who holds — no
-// timestamp inside a record is trusted, and a stale unswept record is a
-// constant, which is exactly what a dead holder should read as.
+// [LAW:no-ambient-temporal-coupling] No timestamp inside a record is
+// trusted; the signal is the existence of a name, which only an acquisition
+// creates.
 type holdWait struct {
 	dir   string
 	wait  func() time.Duration
-	seen  []string
+	known map[string]struct{}
 	since time.Time
 }
 
@@ -463,15 +477,16 @@ func newHoldWait(storageDir, lockPath string, wait func() time.Duration) *holdWa
 
 // Reset starts the clock and takes the first reading of who is there.
 func (w *holdWait) Reset() {
-	w.seen, w.since = holderRecordNames(w.dir), time.Now()
+	w.known, w.since = map[string]struct{}{}, time.Now()
+	w.arrivals()
 }
 
 // NextBackOff is called after each failed attempt: it restarts the clock when
-// the holders have changed since the last reading, and stops the retry when
-// the same holders have stood for the whole wait.
+// a holder has arrived since the last reading, and stops the retry when the
+// holders in front have stood for the whole wait.
 func (w *holdWait) NextBackOff() time.Duration {
-	if names := holderRecordNames(w.dir); !slices.Equal(names, w.seen) {
-		w.seen, w.since = names, time.Now()
+	if w.arrivals() {
+		w.since = time.Now()
 	}
 	if time.Since(w.since) >= w.wait() {
 		return backoff.Stop
@@ -479,8 +494,21 @@ func (w *holdWait) NextBackOff() time.Duration {
 	return storeLockPollInterval
 }
 
-// holderRecordNames lists the record names under a lock's holder directory,
-// in ReadDir's sorted order so two readings compare as sets. Nothing is
+// arrivals reads the holder names once and reports whether any is new to this
+// wait, remembering every name it sees.
+func (w *holdWait) arrivals() bool {
+	arrived := false
+	for _, name := range holderRecordNames(w.dir) {
+		if _, seen := w.known[name]; !seen {
+			w.known[name] = struct{}{}
+			arrived = true
+		}
+	}
+	return arrived
+}
+
+// holderRecordNames lists the record names under a lock's holder directory.
+// Nothing is
 // opened or probed: liveness is describeLockHolders's business, at the moment
 // a contender reports; here the names' identity is all that is read. A
 // directory that does not exist yet has no holders; a directory that cannot

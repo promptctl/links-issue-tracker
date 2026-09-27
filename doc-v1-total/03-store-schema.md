@@ -42,7 +42,7 @@ Store-level commit messages used verbatim: `record sync state`, `create issue`, 
 | Lock | Path | Mode | Budget | Notes |
 |---|---|---|---|---|
 | Workspace lock | `.links-workspace.lock` beside the store | shared on open (exclusive users covered in ch. 04) | — | held for the store's lifetime |
-| Commit lock | `.links-commit-flock.lock` in the parent of the dolt root (`commit_lock.go`) | exclusive | 9000 attempts × 100ms ≈ 15 min (`commit_lock.go`) | re-entrant via a context key (`commit_lock.go`) |
+| Commit lock | `.links-commit-flock.lock` in the parent of the dolt root (`commit_lock.go`) | exclusive | `commitLockWaiterBudget()` = `coResidentHolderWait` + `rotationReserve()` = 5.6s of unchanged holders (`commit_lock.go`) | re-entrant via a context key (`commit_lock.go`) |
 
 Both are zero-byte kernel flocks with **no** stale/PID/mtime heuristics — process death is the only release. Contention on the commit lock wraps as "another lit process is writing to this workspace … retry after it completes". A panic inside a mutation still releases the lock; a release failure after a successful operation prints a warning to stderr and returns success (`commit_lock.go`). A cancelled context returns `context.Canceled` rather than burning the budget.
 

@@ -973,3 +973,43 @@ func TestWriteEngineRecordsItselfAsTheJournalHolder(t *testing.T) {
 		t.Fatalf("journal holders while a read engine is open = %+v, want none", holders)
 	}
 }
+
+// TestASweepDoesNotRestartTheWait pins that only an arrival is progress. A
+// dead record left by a SIGKILLed holder sits under the lock; the contender's
+// own notice tick sweeps it mid-wait, and that departure must not restart the
+// clock — a contender whose wait is prolonged by its own housekeeping fails
+// later than the contract says, and by an amount nobody can predict.
+func TestASweepDoesNotRestartTheWait(t *testing.T) {
+	captureLockNotices(t, 50*time.Millisecond, time.Hour)
+	ctx := context.Background()
+	lockPath := filepath.Join(t.TempDir(), "test.lock")
+	const wait = 300 * time.Millisecond
+
+	holder, err := acquireStoreLock(ctx, storageDirOf(lockPath), lockPath, true, 0)
+	if err != nil {
+		t.Fatalf("holder acquireStoreLock() error = %v", err)
+	}
+	defer func() {
+		if err := holder(); err != nil {
+			t.Errorf("release holder: %v", err)
+		}
+	}()
+	// A record nothing holds: what a holder killed mid-hold leaves behind.
+	dead := filepath.Join(lockHolderDir(storageDirOf(lockPath), lockPath), lockHolderRecordPrefix+"99999-1")
+	if err := os.WriteFile(dead, []byte(`{"pid":99999,"command":"lit dead","since":"2026-01-01T00:00:00Z"}`), 0o600); err != nil {
+		t.Fatalf("plant dead record: %v", err)
+	}
+
+	start := time.Now()
+	_, err = acquireStoreLock(ctx, storageDirOf(lockPath), lockPath, true, wait)
+	elapsed := time.Since(start)
+	if !errors.Is(err, ErrWorkspaceBusy) {
+		t.Fatalf("contended acquireStoreLock() error = %v, want ErrWorkspaceBusy", err)
+	}
+	if _, statErr := os.Stat(dead); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("the dead record was not swept during the wait (stat: %v); the test did not exercise a sweep", statErr)
+	}
+	if elapsed >= 2*wait {
+		t.Fatalf("contender gave up after %s against a %s wait; the sweep of a dead record restarted its clock", elapsed, wait)
+	}
+}

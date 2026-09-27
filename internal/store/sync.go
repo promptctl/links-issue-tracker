@@ -87,7 +87,7 @@ func OpenSync(ctx context.Context, doltRootDir string, workspaceID string) (_ *S
 	}
 	if err != nil {
 		err = wrapEngineOpenContention(err, doltRootDir)
-		if closeErr := s.db.Close(); closeErr != nil && !errors.Is(closeErr, context.Canceled) {
+		if closeErr := s.closeEngine(); closeErr != nil {
 			err = errors.Join(err, closeErr)
 		}
 		s.releaseWorkspaceLock = nil

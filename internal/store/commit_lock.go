@@ -34,34 +34,24 @@ import (
 var ErrTransientGCContention = errors.New("transient online-gc contention")
 
 // transientRetryMaxAttempts/transientRetryBaseDelay/transientRetryMaxDelay
-// bound the SLEEPING a retry does (~25s: five uncapped doublings then 25 more
-// attempts at the 1s cap) while waiting for a transient online-GC contention
-// to clear. Sleep, not wall clock: each attempt also rotates the connection,
-// which is a real engine open, so the loop's own elapsed time is bounded
-// separately against commitLockWaiterBudget in retryTransientGCContention —
-// reading ~25s as the whole hold is the misreading that let the two budgets
-// multiply (links-sync-dauk). Originally
-// sized to match the then-~30s co-resident holder wait (links-sync-pgct.11);
-// the two are no longer equal and deliberately so — links-sync-dauk derived
-// that holder wait from the mirror's measured hold ceiling, while this wait
-// answers a different question and keeps the value its own field evidence
-// argued for. Kept as a reference point, not a copy to keep in step: that
-// wait bounds how long two engines can contend at OPEN, but this one is what
-// absorbs the brief settle window right after one releases — under real
-// system load (a slower/contended CI runner, an earlier mirror's real
-// network push taking longer) that window is not always sub-second, and a
-// budget tuned only for a quick intra-process GC blip cut this retry off
-// before a legitimately-finishing prior holder released, escalating a
-// recoverable wait into a hard WorkspaceWriteBlockedError. A genuinely
-// wedged holder still surfaces as that same terminal error, just after the
-// longer budget elapses rather than hanging forever. The sleeping is in any
-// case cut short by the hold check in retryTransientGCContention, which
-// stops the loop before the commit lock's waiters give up on it.
+// shape the retry of a transient online-GC contention: the delay doubles
+// from 50ms to a 1s cap, and the count caps the attempts. Neither is the
+// bound that ends the loop in production: retryTransientGCContention stops
+// before its hold could outlast a commit-lock waiter (commitLockWaiterBudget,
+// which admits the holder wait plus one rotation), so at production figures
+// the loop makes one rotation — the one that replaces the connection the GC
+// invalidated, which is the recovery — and gives up after the next attempt.
+// That is deliberate under links-scale-om3r.zhq: the settle window this
+// retry used to absorb was a peer engine's GC on the live store, and no peer
+// runs GC there any more (the mirror pushes from a clone); a mutation that
+// keeps failing after its connection was replaced is blocked by a holder,
+// and the holder is named by the waiter that meets it, not waited out here.
+// A genuinely wedged holder still surfaces as WorkspaceWriteBlockedError.
 //
 // The attempt count is a package variable (the delays stay const) so tests
 // whose premise makes exhaustion CERTAIN — a foreign journal holder that
-// cannot release mid-test — can shrink the budget instead of sleeping through
-// the production one, the same convention coResidentHolderWait serves.
+// cannot release mid-test — can shrink it instead of sleeping through the
+// production one, the same convention coResidentHolderWait serves.
 var transientRetryMaxAttempts = 30
 
 const (

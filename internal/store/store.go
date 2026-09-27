@@ -51,8 +51,8 @@ type Store struct {
 	telemetryDir         string
 	releaseWorkspaceLock func() error
 	// releaseEngineRecord retires this process's holder record for Dolt's
-	// LOCK (recordEngineHolder); a no-op for a read engine, which records
-	// nothing. Never nil, so Close runs it unconditionally.
+	// LOCK (openStoreConnection); a no-op for a read engine, which records
+	// nothing. Never nil, so closeEngine runs it unconditionally.
 	// [LAW:dataflow-not-control-flow]
 	releaseEngineRecord func() error
 
@@ -168,7 +168,7 @@ func Open(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store
 		}
 		return s.migrate(ctx)
 	}); err != nil {
-		if closeErr := s.db.Close(); closeErr != nil && !errors.Is(closeErr, context.Canceled) {
+		if closeErr := s.closeEngine(); closeErr != nil {
 			err = errors.Join(err, closeErr)
 		}
 		s.releaseWorkspaceLock = nil
@@ -351,19 +351,26 @@ func (s *Store) ExecRawForTest(ctx context.Context, query string, args ...any) e
 	return err
 }
 
-func (s *Store) Close() error {
-	// The holder record retires BEFORE the engine releases LOCK, so no
-	// instant exists in which the next opener holds LOCK while this record
-	// still answers for it — the order recordLockHolder keeps for every
-	// lit-minted lock.
+// closeEngine retires this process's holder record for LOCK and then closes
+// the engine, in that order, so no instant exists in which the next opener
+// holds LOCK while this record still answers for it — the order
+// recordLockHolder keeps for every lit-minted lock. The driver's benign
+// shutdown cancellation is normalized on the close alone, before the join,
+// so a record that failed to retire is never hidden behind it.
+// [LAW:single-enforcer] one close contract for every path that ends an
+// engine: Close, and the open paths that fail after the engine came up.
+// [LAW:no-silent-failure]
+func (s *Store) closeEngine() error {
 	err := s.releaseEngineRecord()
-	if closeErr := s.db.Close(); closeErr != nil {
-		err = errors.Join(err, closeErr)
+	closeErr := s.db.Close()
+	if errors.Is(closeErr, context.Canceled) {
+		closeErr = nil
 	}
-	// [LAW:single-enforcer] Benign driver shutdown cancellation is normalized at the Store boundary so callers see one close contract.
-	if errors.Is(err, context.Canceled) {
-		err = nil
-	}
+	return errors.Join(err, closeErr)
+}
+
+func (s *Store) Close() error {
+	err := s.closeEngine()
 	// db.Close is what releases Dolt's own journal lock (the engine holds it
 	// for its whole lifetime), so it runs before the workspace release: the
 	// next opener anywhere (this process's next command, or a waiting
@@ -398,7 +405,7 @@ func (s *Store) Close() error {
 // trailing hands off to Open (see OpenForRead).
 //
 // A write engine that opened holds LOCK, so it records itself as its holder
-// (recordEngineHolder). A read engine does not: it cannot tell whether it
+// (recordLockHolder, retired by closeEngine before the engine lets go). A read engine does not: it cannot tell whether it
 // took LOCK or fell back past it, and a record naming a reader that holds
 // nothing would send an operator after the wrong pid. The one branch is the
 // open contract's own discriminator. [LAW:dataflow-not-control-flow]
@@ -412,7 +419,10 @@ func openStoreConnection(ctx context.Context, doltRootDir string, workspaceID st
 	}
 	releaseEngineRecord := func() error { return nil }
 	if access == engineWrite {
-		releaseEngineRecord = recordEngineHolder(doltRootDir)
+		// The engine took LOCK through Dolt's own loader, so the record is
+		// published here rather than by acquireStoreLock, and the release it
+		// wraps is a no-op: the hold itself ends when the engine closes.
+		releaseEngineRecord = recordLockHolder(workspaceStorageDir(doltRootDir), DoltJournalLockPath(doltRootDir), func() error { return nil })
 	}
 	return &Store{
 		db:                  db,
@@ -459,7 +469,7 @@ func openStoreConnection(ctx context.Context, doltRootDir string, workspaceID st
 // there, against commitLockWaiterBudget, and pinned by
 // TestRetryTransientGCContentionStopsBeforeOutlastingCommitLockWaiters.
 // Reading the per-call bound as the aggregate is what let the product of the
-// two budgets reach 33.8 minutes against a 15-minute waiter budget
+// two budgets reach 33.8 minutes against the then-15-minute waiter budget
 // (links-sync-dauk). With both in place, any holder this re-open waits on
 // either releases or outlives this mutation's bounded failure, and the commit
 // lock is released either way.
@@ -3075,28 +3085,6 @@ func newEngineOpenBackOff(doltRootDir string) backoff.BackOff {
 // so a connector built before a contention test shrank the variable still
 // waits the shrunken figure. [LAW:one-source-of-truth]
 func coResidentHolderWaitNow() time.Duration { return coResidentHolderWait }
-
-// recordEngineHolder publishes this process as a holder of Dolt's LOCK for
-// the life of a write-capable engine it has just opened, so a contender that
-// fails against it can say which command has the store rather than "a
-// process that left no record". The engine took LOCK through Dolt's own
-// loader, not through acquireStoreLock, which is why the record is published
-// here and not there; the returned release retires it and is called before
-// the engine closes, so no instant exists in which the next opener holds
-// LOCK while this record still answers for it. A recording failure is loud
-// but never fatal, the same demotion recordLockHolder makes and for the same
-// reason: refusing a working engine over a diagnostic would turn a working
-// workspace into a broken one. [LAW:no-silent-failure] loud, but not a false
-// failure.
-func recordEngineHolder(doltRootDir string) func() error {
-	lockPath := DoltJournalLockPath(doltRootDir)
-	release, err := publishLockHolder(workspaceStorageDir(doltRootDir), lockPath)
-	if err != nil {
-		fmt.Fprintf(lockWaitNoticeWriter, "lit: could not record this process as the holder of %s (the engine is open; only the diagnostic naming this holder is missing): %v\n", lockPath, err)
-		return func() error { return nil }
-	}
-	return release
-}
 
 // newDoltConnector assembles the embedded-driver connector every store
 // connection is built from. database selects the initial database ("" for the
