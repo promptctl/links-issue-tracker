@@ -247,12 +247,15 @@ func TestRunQuietRunsTheCommandUnderTheGivenEnvironment(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the check is a shell test")
 	}
-	env := append(hermeticEnv(os.Environ(), t.TempDir()), "PERFBENCH_MARK=yes")
+	// Both environments are built from scratch rather than from os.Environ(),
+	// so the control cannot be broken by a shell that happens to export the
+	// marker.
+	base := []string{"PATH=" + os.Getenv("PATH")}
 	check := step{30 * time.Second, []string{"sh", "-c", `[ "$PERFBENCH_MARK" = yes ]`}}
-	if err := runQuiet(t.TempDir(), env, check); err != nil {
+	if err := runQuiet(t.TempDir(), append(base, "PERFBENCH_MARK=yes"), check); err != nil {
 		t.Errorf("the command did not see the environment it was given: %v", err)
 	}
-	if err := runQuiet(t.TempDir(), hermeticEnv(os.Environ(), t.TempDir()), check); err == nil {
+	if err := runQuiet(t.TempDir(), base, check); err == nil {
 		t.Error("the command saw PERFBENCH_MARK from an environment that does not carry it")
 	}
 }
