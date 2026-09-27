@@ -7,11 +7,10 @@ package cli
 // text that teaches the command are reconciled at build time in the one repo
 // that owns both. [LAW:one-source-of-truth]
 //
-// The incident this guards against: `lit ready` was retired but the shipped
-// /next skill kept teaching it. Retired commands still dispatch (they print a
-// pointer and exit 3), so any predicate of the form "does this token resolve?"
-// passes the exact string that caused the incident. The predicate here is
-// "resolves to a spec the registry marks live", read from CommandSpec.Retired.
+// Retired commands still dispatch (they print a pointer and exit 3), so any
+// predicate of the form "does this token resolve?" passes a retired command.
+// The predicate here is "resolves to a spec the registry marks live", read
+// from CommandSpec.Retired.
 //
 // Scope is top-level command names. Retirement one level down (`lit bulk
 // import` — a family row marked only hidden, with a pointer runner) is not
@@ -124,9 +123,8 @@ func TestShippedTemplatesNameOnlyDispatchedCommands(t *testing.T) {
 
 // TestGateRefusesRetiredAndUnknownTokens proves the gate can fail, on the same
 // code path the gate runs, before anyone needs to mutate a shipped template:
-// the retired `lit ready` — the incident string, which still dispatches — and
-// an unknown command are both refused, while live commands and prose mentions
-// of lit pass.
+// the retired `lit ready`, which still dispatches, and an unknown command are
+// both refused, while live commands and prose mentions of lit pass.
 func TestGateRefusesRetiredAndUnknownTokens(t *testing.T) {
 	live := registryCommandNames()
 	cases := []struct {

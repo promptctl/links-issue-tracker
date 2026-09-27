@@ -29,9 +29,9 @@ type markerPair struct {
 //
 // [LAW:parse-dont-validate] markerPair.parse is the only way to mint one, so a
 // call site cannot hand upsertManagedSection unproven template text — which is
-// the shape this bug took: the same normalization landed for the /next skill
-// (#460) as a step callers had to remember, and the agents-section and
-// pre-push-hook templates never got it (links-templates-1bai).
+// the shape this bug took: normalization was a step callers had to remember,
+// and the agents-section and pre-push-hook templates never got it
+// (links-templates-1bai).
 type managedSection struct {
 	pair markerPair
 	text string
