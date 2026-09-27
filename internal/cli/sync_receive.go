@@ -13,15 +13,41 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-// receiveInline fetches the remote and fast-forwards the local store when behind,
-// INLINE in the command process. The caller (maybeAutoSyncAfterCommand) invokes
-// it only after the command's own engine has closed and only when receive is
-// enabled, so it is safe to open the one read-write engine embedded Dolt permits.
+// receiveTraceCommand and receiveTraceSideEffect label every trace the
+// automatic receive leaves, whatever it decided. [LAW:one-source-of-truth]
+const (
+	receiveTraceCommand    = "lit sync receive"
+	receiveTraceSideEffect = "receive Dolt data from the configured git remote"
+)
+
+// The receive decisions that are the cli's own rather than a storage receive
+// state: the question answered "unmoved" and no fetch ran, or the question
+// could not be answered and the fetch ran regardless. Every other decision is
+// the storage.SyncReceiveState the fetch reached, or "error".
+const (
+	receiveDecisionRemoteUnmoved     = "remote_unmoved"
+	receiveDecisionRemoteCheckFailed = "remote_check_failed"
+)
+
+// receiveInline brings the local store up to the remote when the remote has
+// moved, INLINE in the command process. The caller (maybeAutoSyncAfterCommand)
+// invokes it only after the command's own engine has closed and only when
+// receive is enabled, so it is safe to open the one read-write engine embedded
+// Dolt permits.
 //
-// It is best-effort and bounded: debounced so a command burst triggers at most
-// one fetch per interval, gated on a configured remote so a single-machine repo
-// does no work, and time-boxed so an offline/slow fetch cannot hang the command.
-// A failure is recorded as an automation trace, not printed to the command's
+// It asks before it fetches: one `git ls-remote` of the remote's refs/dolt/*
+// against the advertisement the last successful receive recorded
+// (sync_receive_ask.go). The same answer means the remote has not moved and
+// the receive ends with no store opened; any other answer — moved, never
+// recorded, or unanswerable — runs the fetch and fast-forward. The question is
+// asked of the remote the fetch would use, so an unmoved answer is about the
+// same store the fetch would have read. [LAW:dataflow-not-control-flow] the
+// answer is data; the fetch is the one operation it gates.
+//
+// It is best-effort and bounded: debounced so a command burst asks at most
+// once per interval, gated on a configured remote so a single-machine repo
+// does no work, and time-boxed so an offline/slow remote cannot hang the
+// command. A failure is recorded as a trace, not printed to the command's
 // stdout (already produced) and never fails the command. [LAW:no-silent-failure]
 func receiveInline(ctx context.Context, ws workspace.Info) {
 	if !shouldReceiveNow(ws, time.Now(), receiveDebounceInterval) {
@@ -33,21 +59,38 @@ func receiveInline(ctx context.Context, ws workspace.Info) {
 	if err := markReceiveAttempt(ws); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: automatic receive debounce marker not written: %v\n", err)
 	}
-	hasRemote, err := workspaceHasGitRemote(ctx, ws)
+	gitRemotes, err := workspace.GitRemotes(ctx, ws.RootDir)
 	if err != nil {
 		// Couldn't read remotes — unexpected; surface it loudly rather than treat
 		// it as "no remote". [LAW:no-silent-failure]
 		recordReceiveError(ws, fmt.Errorf("check git remotes: %w", err))
 		return
 	}
-	if !hasRemote {
+	if len(gitRemotes) == 0 {
 		return
 	}
 
-	// The deadline is the store's: the receive holds the store's LOCK for its
-	// whole run, so the store sizes every co-resident wait against it.
+	// One deadline spans the question and the fetch it may lead to, so a remote
+	// that hangs costs the command what it cost before the question existed,
+	// never twice that. The deadline is the store's: the fetch holds the store's
+	// LOCK for its whole run, so the store sizes every co-resident wait against
+	// it. [LAW:no-ambient-temporal-coupling]
 	timeoutCtx, cancel := context.WithTimeout(ctx, store.InlineReceiveDeadline)
 	defer cancel()
+
+	observed, askErr := askRemote(timeoutCtx, ws, gitRemotes)
+	if askErr != nil {
+		// "Could not tell" is not "nothing changed": say so, then fetch as the
+		// receive always has. [LAW:no-silent-failure]
+		if err := recordReceiveTrace(ws, receiveDecisionRemoteCheckFailed, "error", askErr.Error(),
+			map[string]string{"error": askErr.Error()}); err != nil {
+			fmt.Fprintf(os.Stderr, "lit: automatic receive trace not recorded: %v\n", err)
+		}
+	} else if observed.unmoved(readReceivedRefs(ws)) {
+		confirmRemoteUnmoved(ws, observed)
+		return
+	}
+
 	session, closeStore, err := openSyncSession(timeoutCtx, ws)
 	if err != nil {
 		recordReceiveError(ws, fmt.Errorf("open sync store: %w", err))
@@ -65,6 +108,13 @@ func receiveInline(ctx context.Context, ws workspace.Info) {
 	// rather than drop it. [LAW:no-silent-failure]
 	if outcome.traceErr != nil {
 		fmt.Fprintf(os.Stderr, "lit: automatic receive trace not recorded: %v\n", outcome.traceErr)
+	}
+	// What a fetch that returned without error established is recorded here,
+	// after the receive and its reconcile, by the one owner that also asked:
+	// the fetch-success marker moves, and the advertisement observed before
+	// the fetch becomes the record the next question is measured against.
+	if outcome.fetched() {
+		recordReceived(ws, observed)
 	}
 	surfaceInlineOutcome(ctx, ws, outcome, time.Now())
 }
@@ -100,13 +150,22 @@ func surfaceInlineOutcome(ctx context.Context, ws workspace.Info, outcome syncRe
 	}
 }
 
+// fetched reports whether the receive's DOLT_FETCH returned without error —
+// true for every post-fetch state (up to date, fast-forwarded, ahead, diverged,
+// never synced), false for a skipped target or a failed fetch. It is what the
+// fetch-success and received-refs markers are conditioned on.
+// [LAW:one-source-of-truth] one reading of "the fetch happened".
+func (o syncReceiveOutcome) fetched() bool {
+	return o.skip == syncTargetReady && o.receiveErr == nil
+}
+
 // settledCleanly reports whether the receive both contacted the remote and left
 // no unresolved divergence — the condition that ends a divergence episode. A
 // skipped receive (no remote, empty remote) and a failed one carry no such
 // information and leave the episode standing. [LAW:dataflow-not-control-flow]
 // the outcome's values decide; the caller runs unconditionally.
 func (o syncReceiveOutcome) settledCleanly() bool {
-	if o.skip != syncTargetReady || o.receiveErr != nil {
+	if !o.fetched() {
 		return false
 	}
 	if o.reconcile == nil {
@@ -219,14 +278,6 @@ func performSyncReceive(ctx context.Context, session syncSession, ws workspace.I
 	remoteName, syncBranch := target.remote, target.branch
 
 	result, receiveErr := session.syncer.SyncReceive(ctx, remoteName, syncBranch)
-	if receiveErr == nil {
-		// SyncReceive's first step is DOLT_FETCH; a nil error means that fetch
-		// succeeded regardless of the resulting freshness state (up to date,
-		// fast-forwarded, ahead, diverged, or never synced all reach here).
-		if err := markFetchSuccess(ws); err != nil {
-			fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
-		}
-	}
 	traceMetadata := map[string]string{
 		"remote":      remoteName,
 		"sync_branch": syncBranch,
@@ -236,38 +287,14 @@ func performSyncReceive(ctx context.Context, session syncSession, ws workspace.I
 	}
 	traceStatus := "ok"
 	traceReason := receiveReasonForState(result.State)
+	receiveDecision := string(result.State)
 	if receiveErr != nil {
 		traceStatus = "error"
 		traceReason = receiveErr.Error()
 		traceMetadata["error"] = receiveErr.Error()
-	}
-	// The receive has no reader for a trace ref (unlike the pre-push hook), so
-	// only the trace-write error is kept. [LAW:no-silent-failure]
-	_, traceRecordErr := maybeRecordAutomatedCommandTrace(
-		ws,
-		"lit sync receive",
-		"receive Dolt data from the configured git remote",
-		traceStatus,
-		traceReason,
-		traceMetadata,
-	)
-	// The durable, unconditional counterpart: an inline receive commonly runs
-	// with no LNKS_AUTOMATION_TRIGGER set (maybeAutoSyncAfterCommand does not
-	// set one), so without this call every ordinary interactive command's
-	// automatic receive would leave no trace at all — the exact gap that let
-	// the field incident this epic exists to prevent go unnoticed for ten days.
-	receiveDecision := string(result.State)
-	if receiveErr != nil {
 		receiveDecision = "error"
 	}
-	recordSyncTraceLogged(ws, syncTraceRecord{
-		Command:   "lit sync receive",
-		Decision:  receiveDecision,
-		Status:    traceStatus,
-		Reason:    traceReason,
-		BuildNote: resolveBuildStatusNote(time.Now()),
-		Metadata:  traceMetadata,
-	})
+	traceRecordErr := recordReceiveTrace(ws, receiveDecision, traceStatus, traceReason, traceMetadata)
 	outcome := syncReceiveOutcome{
 		remote:             remoteName,
 		branch:             syncBranch,
@@ -416,24 +443,37 @@ func receiveReasonForState(state storage.SyncReceiveState) string {
 	}
 }
 
-// recordReceiveError writes a could-not-attempt failure to the shared automation
-// trace so an automatic receive that fails is loud out-of-band rather than
-// silent. [LAW:no-silent-failure] A trace-write failure is not swallowed — it
-// goes to stderr.
+// recordReceiveTrace writes the two traces every automatic-receive decision
+// leaves: the LNKS_AUTOMATION_TRIGGER-gated automation trace, and the durable
+// sync trace an interactive command's receive would otherwise never leave —
+// maybeAutoSyncAfterCommand sets no trigger, and that gap is what let the
+// field incident this epic exists to prevent go unnoticed for ten days. The
+// automation trace's write error is returned for the caller to surface
+// alongside its outcome (the receive has no reader for a trace ref, unlike
+// the pre-push hook); the sync trace reports its own. [LAW:single-enforcer]
+// one writer, whatever the receive decided.
+func recordReceiveTrace(ws workspace.Info, decision, status, reason string, metadata map[string]string) error {
+	_, traceRecordErr := maybeRecordAutomatedCommandTrace(ws, receiveTraceCommand, receiveTraceSideEffect, status, reason, metadata)
+	recordSyncTraceLogged(ws, syncTraceRecord{
+		Command:   receiveTraceCommand,
+		Decision:  decision,
+		Status:    status,
+		Reason:    reason,
+		BuildNote: resolveBuildStatusNote(time.Now()),
+		Metadata:  metadata,
+	})
+	return traceRecordErr
+}
+
+// recordReceiveError writes a could-not-attempt failure to both traces so an
+// automatic receive that fails is loud out-of-band rather than silent.
+// [LAW:no-silent-failure] A trace-write failure is not swallowed — it goes to
+// stderr with the original cause beside it.
 func recordReceiveError(ws workspace.Info, cause error) {
-	if _, traceErr := maybeRecordAutomatedCommandTrace(
-		ws,
-		"lit sync receive",
-		"receive Dolt data from the configured git remote",
-		"error",
-		cause.Error(),
-		map[string]string{"error": cause.Error()},
-	); traceErr != nil {
+	if traceErr := recordReceiveTrace(ws, "error", "error", cause.Error(),
+		map[string]string{"error": cause.Error()}); traceErr != nil {
 		fmt.Fprintf(os.Stderr,
 			"lit: automatic receive could not record failure trace (%v); original error: %v\n",
 			traceErr, cause)
 	}
-	// recordSyncCommandTrace already sets Reason from cause; no metadata needed
-	// to carry the same string a second time.
-	recordSyncCommandTrace(ws, "lit sync receive", "error", cause, nil)
 }

@@ -152,7 +152,7 @@ Timing constants (`sync_bg.go`): the parent's post-spawn tail is 71s (receive `s
 
 ### Inline receive
 
-`receiveInline` (`sync_receive.go`): debounced to once per 5 minutes via `<StorageDir>/receive.last` (the attempt is marked **before** any work); silent when no remote; runs `SyncReceive` under a 15-second timeout. On a nil receive error the fetch-success marker is written whatever the state. When the receive lands `diverged`, an **inline reconcile** runs on the same engine (`sync_receive.go`). The outcome is surfaced with the command's own context: a non-converging outcome prints the sync-failure block to **stderr** and notifies the owner; a clean settle clears the divergence notify markers; the command's exit code is never affected (`sync_receive.go`).
+`receiveInline` (`sync_receive.go`): debounced to once per 5 minutes via `<StorageDir>/receive.last` (the attempt is marked **before** any work); silent when no remote. It asks before it fetches (`sync_receive_ask.go`): with the store still closed, one `git ls-remote <remote> refs/dolt/*` of the remote the fetch would use (the upstream remote, else the single remote) is compared byte-for-byte against `<StorageDir>/received-refs.last`, the advertisement (`<remote> <url>` line, then the listing) the last successful receive observed before its fetch. The same bytes mean the remote has not moved: the fetch-success marker is written, a trace with decision `remote_unmoved` is recorded, and no store is opened. A different answer, no record, or a record that will not read runs the fetch as before; a question that fails (remote unreachable) is traced under decision `remote_check_failed` and the fetch runs regardless — "could not tell" is never "unmoved". One 15-second deadline spans the question and the fetch. `SyncReceive` runs under it. On a nil receive error — after the receive and any reconcile — the fetch-success marker is written whatever the state and `received-refs.last` becomes the advertisement observed before that fetch (an empty marker when the question was never answered, which no advertisement matches). When the receive lands `diverged`, an **inline reconcile** runs on the same engine (`sync_receive.go`). The outcome is surfaced with the command's own context: a non-converging outcome prints the sync-failure block to **stderr** and notifies the owner; a clean settle clears the divergence notify markers; the command's exit code is never affected (`sync_receive.go`).
 
 ### Compaction backstop
 
@@ -167,7 +167,7 @@ Every push attempt — explicit or mirrored — completes through `completePushA
 Three signals (`sync_staleness.go`):
 
 - **Push-failure line** — when the last push-outcome record failed: `sync: automatic push[ to <r>/<b>] is FAILING — last attempt <age> ago: <reason> — changes stay on this machine until a push succeeds; run 'lit sync push'`. The reason is first-line-only, capped at 160 runes.
-- **Fetch-staleness line** — when the last successful fetch (marker `fetch-success.last`, written by `sync fetch`, `sync pull`, the reconcile pre-step, and inline receive) is ≥ 24 hours old: `sync: last successful fetch[ from <ref>] was <age> ago (at least 24 hours old) — run 'lit sync fetch'`.
+- **Fetch-staleness line** — when the last successful fetch (marker `fetch-success.last`, written by `sync fetch`, `sync pull`, the reconcile pre-step, the inline receive's fetch, and the inline receive's unmoved answer) is ≥ 24 hours old: `sync: last successful fetch[ from <ref>] was <age> ago (at least 24 hours old) — run 'lit sync fetch'`.
 - **Ahead line** — read commands with a resolved freshness in state ahead: `sync: <N> local change(s) not pushed to <r>/<b>, as of last fetch — run 'lit sync push'`. Deliberately not emitted for diverged (that has the heavier failure block) and not special-cased for never-synced.
 
 Read commands print the build-drift line first when it fires (see the build-status section below), then push-failure, then ahead/fetch lines. Write commands, at the `runWithApp` seam, read only the storage-dir markers and print the push-failure line plus a ref-less fetch line; banner write failures never change the exit code (`sync_staleness.go`).
@@ -195,7 +195,7 @@ A configurable shell hook for surfacing sync problems to a human (`owner_notify.
 
 ### Marker inventory
 
-Files the engine keeps under `<StorageDir>`: `receive.last`, `remote-absent.last`, `compact.last`, `fetch-success.last`, `mirror-pending`, `push-outcome.last`, `owner-notify.<kind>.last`, `mirror.log`, `mirror-clone/` (one `<unix-ns>/` per in-flight mirror cycle, holding the cycle's `dolt` clone and its lock files; empty or absent between cycles), `snapshots/`, `traces/{sync,automation}/`, `last-sync-base.json` (`sync_cadence.go` for the marker primitives).
+Files the engine keeps under `<StorageDir>`: `receive.last`, `received-refs.last`, `remote-absent.last`, `compact.last`, `fetch-success.last`, `mirror-pending`, `push-outcome.last`, `owner-notify.<kind>.last`, `mirror.log`, `mirror-clone/` (one `<unix-ns>/` per in-flight mirror cycle, holding the cycle's `dolt` clone and its lock files; empty or absent between cycles), `snapshots/`, `traces/{sync,automation}/`, `last-sync-base.json` (`sync_cadence.go` for the marker primitives).
 
 ### Acceptance evidence (`cmd/lit` tests)
 

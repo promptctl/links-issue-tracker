@@ -34,11 +34,13 @@ import (
 const DisableAutoSyncEnvVar = "LIT_DISABLE_AUTO_SYNC"
 
 // receiveDebounceInterval bounds how often an automatic receive runs: a command
-// burst (an agent running many commands) triggers at most one fetch per
+// burst (an agent running many commands) asks the remote at most once per
 // interval. The receive is inline, so this also bounds how often a command pays
-// the fetch latency — and that only holds while the interval comfortably
-// exceeds a command's own wall time. At 10s, slow read commands re-armed the
-// debounce on every invocation and every command paid the ~7s fetch; receive
+// for the question — one `git ls-remote` round trip, 1.2–1.3s over ssh to
+// GitHub (sync_receive_ask.go), and the fetch only when the answer says the
+// remote moved — and that only holds while the interval comfortably exceeds a
+// command's own wall time. At 10s, slow read commands re-armed the debounce on
+// every invocation and every command paid the then-~7s fetch; receive
 // freshness is a minutes-scale concern, so the interval is minutes.
 // [LAW:no-ambient-temporal-coupling] the bound must not depend on commands
 // staying fast.

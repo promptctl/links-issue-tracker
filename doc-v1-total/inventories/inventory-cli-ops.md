@@ -458,14 +458,17 @@ Flag parse output is `io.Discard` (`sync_bg.go`).
 `receiveInline` — `sync_receive.go`:
 1. Debounce on `<StorageDir>/receive.last` mtime (`sync_cadence.go`); not due → return.
 2. Mark the attempt BEFORE any work; failure → stderr `lit: automatic receive debounce marker not written: <err>` (`sync_receive.go`).
-3. `workspaceHasGitRemote` error → `recordReceiveError("check git remotes: %w")`; no remote → silent return (`sync_receive.go`).
-4. Open a sync session under a 15s timeout ctx; open failure → `recordReceiveError("open sync store: %w")` (`sync_receive.go`).
-5. `performSyncReceive`; a could-not-attempt error → `recordReceiveError`. `outcome.traceErr` → stderr `lit: automatic receive trace not recorded: <err>` (`sync_receive.go`).
-6. `surfaceInlineOutcome(ctx, ws, outcome, time.Now())` — passed the COMMAND ctx, not the 15s one (`sync_receive.go`, rationale).
+3. `workspace.GitRemotes` error → `recordReceiveError("check git remotes: %w")`; no remotes → silent return (`sync_receive.go`).
+4. One 15s timeout ctx spans the question and the fetch (`sync_receive.go`).
+5. `askRemote` (`sync_receive_ask.go`): `resolveSyncRemote("", UpstreamRemote, gitRemotes)`; `""` ⇒ the zero advertisement (falls through to the full path, which skips as `no_sync_remote`); else `workspace.RemoteDoltRefs` — error ⇒ `list refs/dolt/* on remote %q: %w`, traced with decision `remote_check_failed` / status `error` / metadata `{error}`, and the receive continues to step 6; success ⇒ `remoteAdvertisement{remote, url, refs}`.
+   - `unmoved(recorded)` (`sync_receive_ask.go`): the advertisement's record (`<remote> <url>\n<refs>\n`; nil for the zero value) is non-nil and byte-equal to `<StorageDir>/received-refs.last` (`readReceivedRefs`: missing ⇒ nil silently; other read error ⇒ stderr `lit: received-refs marker unreadable: <err>` and nil) ⇒ `confirmRemoteUnmoved`: `markFetchSuccess` (stderr on failure) and a trace with decision `remote_unmoved` / status `ok` / reason `automatic receive found the remote unmoved since the last receive; nothing fetched` / metadata `{remote}`; return with no store opened.
+6. Open a sync session under the same ctx; open failure → `recordReceiveError("open sync store: %w")` (`sync_receive.go`).
+7. `performSyncReceive`; a could-not-attempt error → `recordReceiveError`. `outcome.traceErr` → stderr `lit: automatic receive trace not recorded: <err>` (`sync_receive.go`).
+8. `outcome.fetched()` (`skip == syncTargetReady && receiveErr == nil`) → `recordReceived(ws, observed)` (`sync_receive_ask.go`): `markFetchSuccess` (stderr `lit: fetch-success marker not written: <err>`), then `writeMarkerAtomic` of the observed advertisement's record to `received-refs.last` (stderr `lit: received-refs marker not written: <err>`; the zero advertisement writes an empty marker).
+9. `surfaceInlineOutcome(ctx, ws, outcome, time.Now())` — passed the COMMAND ctx, not the 15s one (`sync_receive.go`, rationale).
 
 `performSyncReceive` — `sync_receive.go`: reconcile remotes → resolve remote (`""` ⇒ `{skipped, no_sync_remote}`) → `RemoteHasRefs` (error ⇒ `check remote refs %q: %w`; false ⇒ `{skipped, remote_empty, remote}`) → resolve branch → `syncer.SyncReceive(ctx, remote, branch)`.
-- `markFetchSuccess` on any nil receive error, whatever the resulting state (`sync_receive.go`).
-- Trace metadata `{remote, sync_branch, state, ahead, behind}` plus `error` on failure (`sync_receive.go`); automation trace command `lit sync receive`, side effect `receive Dolt data from the configured git remote`; then the unconditional durable trace with decision `= state` or `"error"` (`sync_receive.go`).
+- Trace metadata `{remote, sync_branch, state, ahead, behind}` plus `error` on failure (`sync_receive.go`); `recordReceiveTrace` (`sync_receive.go`) writes the automation trace — command `lit sync receive` (`receiveTraceCommand`), side effect `receive Dolt data from the configured git remote` (`receiveTraceSideEffect`) — and the unconditional durable trace with decision `= state` or `"error"`, returning the automation trace's write error. `recordReceiveError` routes through the same writer with decision/status `error` and metadata `{error}`.
 - Reason strings (`receiveReasonForState`, `sync_receive.go`): fast_forwarded → "automatic receive fast-forwarded the local store to the remote head"; up_to_date → "…already up to date with the remote"; ahead → "…found local ahead of the remote; nothing to receive"; diverged → "…found local diverged from the remote; left for foreground reconcile"; never_synced → "…found no remote-tracking data on this branch yet"; default → "automatic receive completed with state <s>".
 - When `receiveErr == nil` and state is `SyncReceiveDiverged`, an inline reconcile runs on the SAME engine (`sync_receive.go`).
 
@@ -504,7 +507,7 @@ Flag parse output is `io.Discard` (`sync_bg.go`).
 ### 3.9 Staleness banners (`sync_staleness.go`)
 
 - `unfetchedStalenessThreshold = 24 * time.Hour` (`sync_staleness.go`).
-- Fetch-success marker `<StorageDir>/fetch-success.last` (`sync_staleness.go`), written by every successful DOLT_FETCH call site (`markFetchSuccess`, `sync_staleness.go`): `lit sync fetch`, `lit sync pull`, `freshReconcileTarget`, and the inline receive.
+- Fetch-success marker `<StorageDir>/fetch-success.last` (`sync_staleness.go`), written by every successful DOLT_FETCH call site (`markFetchSuccess`, `sync_staleness.go`): `lit sync fetch`, `lit sync pull`, `freshReconcileTarget`, the inline receive's fetch — and by the inline receive's unmoved answer (`confirmRemoteUnmoved`, `sync_receive_ask.go`), which proves the same currency without a fetch.
 - `lastFetchSuccessAge` (`sync_staleness.go`): missing → `ok=false` silently; other stat error → stderr `lit: fetch-success marker unreadable: <err>` and `ok=false`.
 - `syncPushFailureLines` (`sync_staleness.go`) — only when a record is known AND `failed()`:
   `sync: automatic push[ to <r>/<b>] is FAILING — last attempt <age> ago: <reason> — changes stay on this machine until a push succeeds; run 'lit sync push'`.
@@ -631,7 +634,7 @@ The block has no trailing newline after `</agent-instructions>` (`sync_failure.g
 - `shouldRunNow(markerPath, now, interval)` (`sync_cadence.go`): a missing or unstattable marker means "allow".
 - `markRunAttempt` (`sync_cadence.go`): `MkdirAll(StorageDir, 0o755)` then `os.WriteFile(marker, nil, 0o644)`; errors wrapped `ensure storage dir for debounce marker` / `write debounce marker <base>`.
 - `writeMarkerAtomic` (`sync_cadence.go`): `MkdirAll`, `CreateTemp(StorageDir, base+"-*")`, write, close, rename. Used by the push-outcome and owner-notify markers.
-- Marker inventory under `<StorageDir>`: `receive.last`, `remote-absent.last`, `compact.last`, `fetch-success.last`, `mirror-pending`, `push-outcome.last`, `owner-notify.<kind>.last`, `mirror.log`, `snapshots/`, `traces/{sync,automation,…}/`, `last-sync-base.json`.
+- Marker inventory under `<StorageDir>`: `receive.last`, `received-refs.last` (`sync_receive_ask.go`), `remote-absent.last`, `compact.last`, `fetch-success.last`, `mirror-pending`, `push-outcome.last`, `owner-notify.<kind>.last`, `mirror.log`, `snapshots/`, `traces/{sync,automation,…}/`, `last-sync-base.json`.
 
 ### 3.16 Acceptance evidence in `cmd/lit`
 

@@ -478,7 +478,8 @@ All geometry git calls use `context.Background()` deliberately (`internal/worksp
 - `UpstreamRemote(ctx, cwd)`: `git rev-parse --abbrev-ref --symbolic-full-name @{upstream}`,
   first `/`-separated segment.
 - `RemoteHasRefs(ctx, cwd, remote)`: `git ls-remote <remote>` non-empty.
-- `RemoteHasDoltData(ctx, cwd, remote)`: `git ls-remote <remote> refs/dolt/*` non-empty
+- `RemoteDoltRefs(ctx, cwd, remote)`: the trimmed output of `git ls-remote <remote> refs/dolt/*` — one round trip, no transfer; empty when the remote carries no Dolt data.
+- `RemoteHasDoltData(ctx, cwd, remote)`: `RemoteDoltRefs` non-empty
 .
 - `DefaultRemoteBranch(ctx, cwd, remote)`: `git symbolic-ref --quiet --short refs/remotes/<r>/HEAD`
   first, else `git ls-remote --symref <r> HEAD` parsed for `ref: refs/heads/…\tHEAD`
