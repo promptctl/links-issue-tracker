@@ -805,7 +805,7 @@ func treeUnder(t *testing.T, root string) []string {
 }
 
 // TestWaitOutlastsHoldersThatKeepChanging pins holdWait's rule: the wait
-// counts from the last change in who holds the lock, not from the contender's
+// counts from the last holder to arrive at the lock, not from the contender's
 // arrival. Shared holders hand the lock along for far longer than the wait,
 // each acquiring before the last releases so the lock is never free, and the
 // exclusive contender must still get it when the churn ends — the queue of
