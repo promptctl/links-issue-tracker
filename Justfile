@@ -62,6 +62,17 @@ test *args:
     args="{{args}}"
     go test -timeout 30m ${args:-./...}
 
+# Measure what a lit command costs a user: generates lit stores at controlled row
+# counts, times every user-facing command against each one, and reports each
+# store's bytes on disk. This is the one home of the scale epic's figures — they
+# are regenerated, never pasted. `just perf --sizes 0,118` to pick sizes,
+# `--keep <dir>` to leave the generated stores behind for inspection.
+perf *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "{{justfile_directory()}}/scripts/cgo-env.sh"
+    go run ./tools/perfbench {{args}}
+
 # Lint (depguard lifecycle-boundary rule + style). Needs golangci-lint installed.
 lint:
     #!/usr/bin/env bash
