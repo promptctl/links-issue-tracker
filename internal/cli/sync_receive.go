@@ -109,13 +109,12 @@ func receiveInline(ctx context.Context, ws workspace.Info) {
 	if outcome.traceErr != nil {
 		fmt.Fprintf(os.Stderr, "lit: automatic receive trace not recorded: %v\n", outcome.traceErr)
 	}
-	// What a fetch that returned without error established is recorded here,
-	// after the receive and its reconcile, by the one owner that also asked:
-	// the fetch-success marker moves, and the advertisement observed before
-	// the fetch becomes the record the next question is measured against.
-	if outcome.fetched() {
-		recordReceived(ws, observed)
-	}
+	// What the receive established is recorded here, after the receive and its
+	// reconcile, by the one owner that also asked: a fetch that returned moves
+	// the fetch-success marker, and a receive that settled cleanly makes the
+	// advertisement observed before the fetch the record the next question is
+	// measured against (sync_receive_ask.go).
+	recordReceived(ws, outcome, observed)
 	surfaceInlineOutcome(ctx, ws, outcome, time.Now())
 }
 
@@ -153,7 +152,8 @@ func surfaceInlineOutcome(ctx context.Context, ws workspace.Info, outcome syncRe
 // fetched reports whether the receive's DOLT_FETCH returned without error —
 // true for every post-fetch state (up to date, fast-forwarded, ahead, diverged,
 // never synced), false for a skipped target or a failed fetch. It is what the
-// fetch-success and received-refs markers are conditioned on.
+// fetch-success marker is conditioned on, and the first condition of
+// settledCleanly, which the received-refs record is conditioned on.
 // [LAW:one-source-of-truth] one reading of "the fetch happened".
 func (o syncReceiveOutcome) fetched() bool {
 	return o.skip == syncTargetReady && o.receiveErr == nil

@@ -196,7 +196,7 @@ The lock inventory — every path is a sibling of the dolt directory unless note
 | Lock | File | Mode | Budget | Held by / meaning |
 |---|---|---|---|---|
 | workspace (shared) | `.links-workspace.lock` | shared | 100 × 50ms ≈ 5s | directory readers: store opens, raw dumps, snapshot walks |
-| workspace (exclusive) | same file | exclusive | 1 attempt, no wait | directory rotators: snapshots restore, adopt, promote — refuses immediately on contention |
+| workspace (exclusive) | same file | exclusive | 1 attempt, no wait | directory rotators: snapshots restore, adopt, promote — refuses immediately on contention; as the hold is taken it removes `<StorageDir>/received-refs.last` (`received_refs.go`), the automatic receive's record of what the directory holds from the remote, and a removal failure other than absence releases the hold and fails the rotation (`forget received-refs record before rotating the Dolt directory: %w`) |
 | commit | `.links-commit-flock.lock` | exclusive | 9000 × 100ms ≈ 15min | every mutation and Dolt commit; sized for `takeUserSnapshot` holding across a full snapshot copy |
 | sync-push | `.links-sync-push.lock` | exclusive | 1 attempt (non-blocking probe, `context.Background()`) | single-flight: not-acquired means another mirror is pushing and the caller coalesces |
 | mirror beacon | `.links-sync-mirror.lock` | shared to hold; probed shared-then-exclusive | hold: 20 × 50ms ≈ 1s | liveness beacon: probe verdicts `unheld` / `answered` (a shared holder exists) / `obstructed` (an exclusive foreign holder) |

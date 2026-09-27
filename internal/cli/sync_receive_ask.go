@@ -3,11 +3,10 @@ package cli
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 
+	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -19,24 +18,30 @@ import (
 // question with no transfer and no store open (1.2–1.3s over ssh to GitHub,
 // 0.5–0.6s over https, measured 2026-09-27), so the fetch and the reconcile
 // behind it run only when the advertisement differs from what the last
-// successful receive recorded.
+// settled receive recorded.
 //
 // The record says what was last RECEIVED, never what was last seen: it is
-// written only after a DOLT_FETCH returned without error, and it holds the
+// written only after a receive settled cleanly — the DOLT_FETCH returned
+// without error and any reconcile it led to converged — and it holds the
 // advertisement observed before that fetch, so it can lag the store but never
 // lead it. A record written any earlier would let one failed fetch convince
-// every later command the remote had not moved. A question that cannot be
-// answered — the remote unreachable, the record unreadable — is not "nothing
-// changed": it is traced and the full fetch runs, exactly as it did before the
-// question existed. [LAW:no-silent-failure]
+// every later command the remote had not moved; a record written over an
+// unconverged divergence would stop the receive re-fetching and re-surfacing
+// it every interval. The record lives beside the Dolt directory and is
+// forgotten by every rotation of it (store.LockWorkspaceExclusive), so a
+// restored snapshot never inherits a record that says more than it holds. A
+// question that cannot be answered — the remote unreachable, the record
+// unreadable — is not "nothing changed": it is traced and the full fetch
+// runs, exactly as it did before the question existed, and the previous
+// record stands. [LAW:no-silent-failure]
 
 // remoteAdvertisement is what one round trip to the sync remote learned: which
 // remote answered, at what URL, and the refs/dolt/* listing it advertised. The
 // name and URL travel with the listing so a re-pointed remote can never read as
 // unmoved on the strength of an old listing. The zero value is "nothing
-// learned": it records as an empty marker, which no advertisement matches, so
-// a receive that fetched without getting to ask leaves the next receive
-// fetching too. [LAW:types-are-the-program]
+// learned": it matches no record and records nothing, so a receive that
+// fetched without getting to ask leaves the record it found standing.
+// [LAW:types-are-the-program]
 type remoteAdvertisement struct {
 	remote string
 	url    string
@@ -52,7 +57,7 @@ func (a remoteAdvertisement) record() []byte {
 }
 
 // unmoved reports whether this advertisement is byte-for-byte what the last
-// successful receive recorded. Nothing learned never matches anything, and an
+// settled receive recorded. Nothing learned never matches anything, and an
 // absent or empty record matches nothing, so the only way to skip the fetch
 // is a real answer equal to a real record. [LAW:parse-dont-validate]
 func (a remoteAdvertisement) unmoved(recorded []byte) bool {
@@ -60,21 +65,13 @@ func (a remoteAdvertisement) unmoved(recorded []byte) bool {
 	return want != nil && bytes.Equal(want, recorded)
 }
 
-// receivedRefsMarkerPath is the single record of the remote advertisement the
-// last successful receive observed. [LAW:one-source-of-truth]
-func receivedRefsMarkerPath(ws workspace.Info) string {
-	return filepath.Join(ws.StorageDir, "received-refs.last")
-}
-
-// readReceivedRefs returns that record, nil when no receive has recorded one.
+// readReceivedRefs returns the record, nil when no receive has recorded one.
 // Any other read failure is reported and reads as nil: the remote is then
 // fetched, the safe side of "could not tell". [LAW:no-silent-failure]
 func readReceivedRefs(ws workspace.Info) []byte {
-	payload, err := os.ReadFile(receivedRefsMarkerPath(ws))
+	payload, err := store.ReadReceivedRefs(ws.DatabasePath)
 	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			fmt.Fprintf(os.Stderr, "lit: received-refs marker unreadable: %v\n", err)
-		}
+		fmt.Fprintf(os.Stderr, "lit: received-refs marker unreadable: %v\n", err)
 		return nil
 	}
 	return payload
@@ -107,18 +104,30 @@ func askRemote(ctx context.Context, ws workspace.Info, gitRemotes []workspace.Gi
 	}, nil
 }
 
-// recordReceived writes what a fetch that returned without error established:
-// a fetch succeeded now (fetch-success.last, which the 24-hour staleness banner
-// reads) and the advertisement observed before it is what this store now holds
-// (received-refs.last). The second marker has this one writer and this one
-// occasion, which is what keeps a failed fetch from ever reading as "unmoved".
-// [LAW:single-enforcer]
-func recordReceived(ws workspace.Info, observed remoteAdvertisement) {
-	if err := markFetchSuccess(ws); err != nil {
-		fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
+// recordReceived writes what the receive established, and only that. A fetch
+// that returned without error, whatever state it reached, means a fetch
+// succeeded now (fetch-success.last, which the 24-hour staleness banner
+// reads). A receive that settled cleanly — that fetch, and a reconcile that
+// converged if one ran — means the store now holds what the remote advertised
+// before the fetch, so that advertisement becomes the record the next
+// question is measured against; an unconverged divergence leaves the record
+// alone, so the next receive fetches and surfaces it again. Nothing learned
+// (the question failed) records nothing, so the previous record stands. The
+// record has this one writer, which is what keeps a failed fetch, an
+// unsettled one, or an unanswered question from ever reading as "unmoved".
+// [LAW:single-enforcer] [LAW:dataflow-not-control-flow] the outcome's values
+// decide; the caller runs this after every fetch path.
+func recordReceived(ws workspace.Info, outcome syncReceiveOutcome, observed remoteAdvertisement) {
+	if outcome.fetched() {
+		if err := markFetchSuccess(ws); err != nil {
+			fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
+		}
 	}
-	if err := writeMarkerAtomic(ws, receivedRefsMarkerPath(ws), observed.record()); err != nil {
-		fmt.Fprintf(os.Stderr, "lit: received-refs marker not written: %v\n", err)
+	payload := observed.record()
+	if outcome.settledCleanly() && payload != nil {
+		if err := store.WriteReceivedRefs(ws.DatabasePath, payload); err != nil {
+			fmt.Fprintf(os.Stderr, "lit: received-refs marker not written: %v\n", err)
+		}
 	}
 }
 
