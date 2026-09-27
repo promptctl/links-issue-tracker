@@ -12,7 +12,6 @@ __pycache__/
 # said "three" while eight existed, so five of them were one careless build away
 # from the commit this rule exists to prevent; keep it complete when a main
 # package is added.
-/doccites
 /docclaims-sync
 /lawtokens-check
 /lawtokens-sync
