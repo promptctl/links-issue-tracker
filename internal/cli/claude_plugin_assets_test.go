@@ -110,8 +110,7 @@ func TestClaudePluginShipsNoHooks(t *testing.T) {
 }
 
 // TestClaudePluginShipsNextSkill pins the /next skill's home: the plugin's
-// own skills/ directory, auto-discovered by the harness, never written into
-// a consuming repo. [LAW:verifiable-goals]
+// own skills/ directory, auto-discovered by the harness. [LAW:verifiable-goals]
 func TestClaudePluginShipsNextSkill(t *testing.T) {
 	t.Parallel()
 	root := mustRepoRoot(t)

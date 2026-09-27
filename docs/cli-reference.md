@@ -104,8 +104,8 @@ slugifies and truncates at 12 characters, so `--prefix payment_service` stores
 `payment-serv`.
 
 The `/next` skill for pulling the next ticket ships from the `lit` Claude Code plugin
-(`.claude-plugin/marketplace.json` at the repo root), not written into the target
-repo — see [Agent setup](agent-setup.md#4-install-the-next-skill-optional-recommended).
+(`.claude-plugin/marketplace.json` at the repo root) — see
+[Agent setup](agent-setup.md#4-install-the-next-skill-optional-recommended).
 
 On a fresh clone, `lit init` detects whether the configured git remote already
 carries `lit` ticket data and adopts it automatically, so the clone transparently
