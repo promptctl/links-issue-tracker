@@ -4,15 +4,17 @@ import "github.com/promptctl/links-issue-tracker/internal/model"
 
 // Presence is what this machine can prove about the checkout behind a holder.
 // It is the fourth leg's answer in full, and it is four-valued because the leg
-// asks two questions at once — can I check, and what did I find — and every
-// pairing of those is a real state a reader acts on differently.
+// asks two questions at once — can I check, and what did I find — and the
+// enumeration's honest answer has four shapes even where the predicate reads
+// only two of them: Gone voids the holder's evidence, and Locked carries a
+// claim past the freshness window. Present and Unprovable decide nothing on
+// their own; they are kept distinct so that PresenceOf never reports a
+// worktree it enumerated and found as one it could not check.
 //
 // It exists because the leg used to answer with a bool. Presence and absence
 // are not one bit: "I enumerated and it is gone", "I enumerated and it is
 // there", and "I cannot see that checkout at all" are three findings, and a set
-// membership test can only carry two. The missing value was the expensive one —
-// a present worktree read as an absent one — because the derivation had nowhere
-// to put "still there, just quiet" and so called it abandoned.
+// membership test can only carry two.
 // [LAW:types-are-the-program]
 type Presence int
 
@@ -27,10 +29,10 @@ const (
 	// git says its working tree no longer exists. This is the one finding
 	// strong enough to disprove evidence outright rather than merely age it.
 	Gone
-	// Present is a live working tree. It sustains nothing on its own — a tree
-	// can outlive the session that made it — but it is proof that the holder
-	// has not been cleaned up, which is the difference between "stale" and
-	// "abandoned" and is the whole reason this value is distinguishable.
+	// Present is a live working tree. It sustains nothing — a tree can outlive
+	// the session that made it, so its existence says only that nobody has
+	// cleaned it up, and a claim whose holder is merely present ages out like
+	// any other.
 	Present
 	// Locked is a live working tree its holder has run `git worktree lock` on:
 	// an explicit, deliberate do-not-disturb marker. It is the one local signal

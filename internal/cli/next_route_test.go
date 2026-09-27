@@ -41,9 +41,14 @@ func heldBy(who model.Attribution) claims.Standing {
 	return claims.Held{Tenure: claims.Tenure{By: who}}
 }
 
-func staleBy(who model.Attribution) claims.Standing {
-	return claims.Stale{Tenure: claims.Tenure{By: who}}
-}
+// expired is the standing of a lane whose claim has aged out: the same
+// Unclaimed every never-started lane derives, because an expired claim is not
+// a claim and the type has nowhere to record that one existed
+// (links-claims-y6yz). Tests that once built a Stale standing for a named
+// holder use this, and the holder they named is gone from the fixture on
+// purpose — routing cannot read it, so a test that still depended on it would
+// be asserting something the code cannot see.
+var expired claims.Standing = claims.Unclaimed{}
 
 func laneOf(t *testing.T, details map[string]storage.IssueRelations, row annotation.AnnotatedIssue) model.LaneID {
 	t.Helper()
@@ -126,8 +131,8 @@ func TestRouteNextServesOwnClaimOverHigherRankedUnclaimedLane(t *testing.T) {
 // global pool, even though it outranks the unclaimed lane behind it — the
 // second half of the acceptance scenario: "work another checkout is
 // actively driving is routed around, visible but not pullable." This is
-// links-claims-1b0p acceptance 4: the resume/takeover work admits STALE holds
-// and must leave a live one exactly where it was.
+// links-claims-1b0p acceptance 4: an expired hold is no hold at all, and a live
+// one must be left exactly where it was.
 func TestRouteNextRoutesAroundLaneHeldByAnother(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
@@ -200,9 +205,9 @@ func TestRouteNextContinuesEpicBeforeHigherRankedOtherEpic(t *testing.T) {
 // ... sessions closed a child of epic A then hopped to epic B, repeatedly."
 //
 // This diagnostic is reachable only while the claim is live. The table this
-// test once was had a second row for a stale own claim, on the reading that
-// staleness of your own lane was not a loss of ownership; a lapsed claim is
-// not a claim, so that row is TestRouteNextLapsedOwnLaneDoesNotOutrankTheBacklog
+// test once was had a second row for an aged-out own claim, on the reading
+// that the age of your own lane was not a loss of ownership; an expired claim
+// is not a claim, so that row is TestRouteNextExpiredOwnLaneDoesNotOutrankTheBacklog
 // now, and its verdict is the opposite one.
 func TestRouteNextExhaustionNeverFallsToAnotherEpic(t *testing.T) {
 	h := newReadyTestHarness(t)
@@ -234,14 +239,16 @@ func TestRouteNextExhaustionNeverFallsToAnotherEpic(t *testing.T) {
 }
 
 // The shape links-claims-em7h was reported against: this checkout finished one
-// ticket of epic A and walked away, its claim on the lane lapsed, and the
-// backlog ranks another epic's leaf first. A lapsed claim is not a claim, so
+// ticket of epic A and walked away, its claim on the lane expired, and the
+// backlog ranks another epic's leaf first. An expired claim is not a claim, so
 // the checkout holds nothing, and `next` routes by rank from the global pool —
 // the unclaimed leaf at the top, not the lane this checkout once held. Under
 // the reading this replaces, that lane outranked the entire backlog for as
 // long as the epic stayed open, and with one checkout in the repository
-// nothing could ever release it.
-func TestRouteNextLapsedOwnLaneDoesNotOutrankTheBacklog(t *testing.T) {
+// nothing could ever release it. The derivation now answers Unclaimed for the
+// expired lane (claims_test.go pins that), so what this holds is routing's
+// half: given that standing, the lane's history buys it nothing.
+func TestRouteNextExpiredOwnLaneDoesNotOutrankTheBacklog(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
 	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 1, ParentID: epicB.ID})
@@ -254,17 +261,17 @@ func TestRouteNextLapsedOwnLaneDoesNotOutrankTheBacklog(t *testing.T) {
 
 	rows, details := h.gather()
 	if rows[0].ID != b1.ID {
-		t.Fatalf("fixture rank order = %q first, want %q — this test's premise is that the lapsed lane ranks below the pool's top", rows[0].ID, b1.ID)
+		t.Fatalf("fixture rank order = %q first, want %q — this test's premise is that the expired lane ranks below the pool's top", rows[0].ID, b1.ID)
 	}
-	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, a2.ID)): staleBy(selfAttribution)}
+	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, a2.ID)): expired}
 
 	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
 	served, ok := outcome.(ServedFromNewLane)
 	if !ok {
-		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane — a lapsed claim of our own holds nothing", outcome, outcome)
+		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane — an expired claim of our own holds nothing", outcome, outcome)
 	}
 	if served.Row.ID != b1.ID {
-		t.Fatalf("served = %q, want %q (the backlog's top, never %q from the lane we let lapse)", served.Row.ID, b1.ID, a2.ID)
+		t.Fatalf("served = %q, want %q (the backlog's top, never %q from the lane we let expire)", served.Row.ID, b1.ID, a2.ID)
 	}
 }
 
@@ -389,14 +396,14 @@ func TestRouteNextResumesOwnInFlightTicket(t *testing.T) {
 	}
 }
 
-// An orphan of our own in a lane whose claim has lapsed is not handed back as
+// An orphan of our own in a lane whose claim has expired is not handed back as
 // ours to resume. The claim is gone, so the lane is nobody's, and the orphan is
 // what it would be in any other lane: abandoned work in flight, offered from
-// the global pool by rank as a takeover. This test asserted ResumedOwnWork
-// while a stale claim of our own still read as ours (links-claims-1b0p); the
-// ticket in flight is still served — it ranks first here — but as the takeover
-// it is, never as a resumption of a lane this checkout no longer holds.
-func TestRouteNextTakesOverOwnOrphanInLapsedLane(t *testing.T) {
+// the global pool by rank. This test asserted ResumedOwnWork while an aged-out
+// claim of our own still read as ours (links-claims-1b0p); the ticket in
+// flight is still served — it ranks first here — but from the pool, never as a
+// resumption of a lane this checkout no longer holds.
+func TestRouteNextServesOwnOrphanFromAnExpiredLane(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
@@ -407,15 +414,15 @@ func TestRouteNextTakesOverOwnOrphanInLapsedLane(t *testing.T) {
 
 	rows, details := h.gather()
 	orphan(t, rows, a1.ID)
-	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, a1.ID)): staleBy(selfAttribution)}
+	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, a1.ID)): expired}
 
 	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
 	if _, resumed := outcome.(ResumedOwnWork); resumed {
-		t.Fatalf("routeNext = %#v, want a takeover from the pool — a lapsed claim holds nothing to resume", outcome)
+		t.Fatalf("routeNext = %#v, want a pick from the pool — an expired claim holds nothing to resume", outcome)
 	}
 	served, ok := outcome.(ServedFromNewLane)
 	if !ok {
-		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane (%q taken over by rank; %q ranks below it)", outcome, outcome, a1.ID, b1.ID)
+		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane (%q served by rank; %q ranks below it)", outcome, outcome, a1.ID, b1.ID)
 	}
 	if served.Row.ID != a1.ID {
 		t.Fatalf("served = %q, want %q (the orphan ranks first, so rank serves it)", served.Row.ID, a1.ID)
@@ -423,11 +430,11 @@ func TestRouteNextTakesOverOwnOrphanInLapsedLane(t *testing.T) {
 }
 
 // links-claims-1b0p acceptance 3: the orphan is the only work in a lane
-// another checkout let go stale, and it is offered to a bare `lit next` here.
-// Two facts had to change together for this to be reachable — a stale foreign
-// lane is admitted (G3), and an in_progress row is servable at all (G2) — and
-// fixing either alone leaves the pick unreachable.
-func TestRouteNextTakesOverOrphanInForeignStaleLane(t *testing.T) {
+// another checkout let expire, and it is offered to a bare `lit next` here.
+// Two facts had to change together for this to be reachable — an expired
+// foreign claim is no hold (G3), and an in_progress row is servable at all
+// (G2) — and fixing either alone leaves the pick unreachable.
+func TestRouteNextServesOrphanInAnExpiredForeignLane(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
 	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
@@ -438,12 +445,12 @@ func TestRouteNextTakesOverOrphanInForeignStaleLane(t *testing.T) {
 
 	rows, details := h.gather()
 	orphan(t, rows, b1.ID)
-	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, b1.ID)): staleBy(otherAttribution)}
+	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, b1.ID)): expired}
 
 	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
 	served, ok := outcome.(ServedFromNewLane)
 	if !ok {
-		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane (takeover of the stale lane)", outcome, outcome)
+		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane (the abandoned row in the expired lane)", outcome, outcome)
 	}
 	if served.Row.ID != b1.ID {
 		t.Fatalf("served = %q, want %q (the orphan outranks unclaimed %q)", served.Row.ID, b1.ID, c1.ID)
@@ -451,11 +458,11 @@ func TestRouteNextTakesOverOrphanInForeignStaleLane(t *testing.T) {
 }
 
 // The other half of the same rule: an in_progress row in a lane another
-// checkout holds fresh is somebody's work in flight, and it is left alone
-// whether or not the orphan clock has reached it. This test once built the
-// lane stale and asserted the same verdict, on the reading that only the
-// orphan annotation could make an in-flight row takeable; a lapsed lane is
-// now that proof on its own (TestRouteNextTakesOverUnorphanedInFlightRowInLapsedLane),
+// checkout holds is somebody's work in flight, and it is left alone whether or
+// not the orphan clock has reached it. This test once built the lane with an
+// aged-out claim and asserted the same verdict, on the reading that only the
+// orphan annotation could make an in-flight row takeable; a lane nobody holds
+// is now that proof on its own (TestRouteNextServesUnorphanedInFlightRowInAnUnheldLane),
 // so the live hold is the case where "leave it" still holds.
 func TestRouteNextLeavesUnabandonedInFlightWorkAlone(t *testing.T) {
 	h := newReadyTestHarness(t)
@@ -679,12 +686,11 @@ func TestExhaustionNamesAnUnreadyBlockerWithoutNamingAHolder(t *testing.T) {
 	}
 }
 
-// Step 2's other admission. Every stale-foreign test for this step uses an
-// open row, which reaches takeoverWork through the lane's staleness and
-// announces as a plain start; this is the orphaned-in-flight disjunct, which
-// is the case ServedFromEpicLane's doc comment actually asserts and the only
-// one that announces as a takeover.
-func TestRouteNextTakesOverAnAbandonedSiblingLane(t *testing.T) {
+// Step 2's other admission. Every expired-foreign test for this step uses an
+// open row, which announces as a plain start; this is the in-flight disjunct,
+// which is the case ServedFromEpicLane's doc comment actually asserts and the
+// only one whose announcement says the row is somebody's abandoned work.
+func TestRouteNextServesAnAbandonedSiblingLane(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
@@ -697,29 +703,29 @@ func TestRouteNextTakesOverAnAbandonedSiblingLane(t *testing.T) {
 	orphan(t, rows, a2.ID)
 	standings := claims.Standings{
 		model.LaneOf(a1, &epicA):                    heldBy(selfAttribution),
-		laneOf(t, details, rowByID(t, rows, a2.ID)): staleBy(otherAttribution),
+		laneOf(t, details, rowByID(t, rows, a2.ID)): expired,
 	}
 
 	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
 	served, ok := outcome.(ServedFromEpicLane)
 	if !ok {
-		t.Fatalf("routeNext = %#v (%T), want ServedFromEpicLane — an abandoned sibling lane of our own epic is takeable", outcome, outcome)
+		t.Fatalf("routeNext = %#v (%T), want ServedFromEpicLane — an abandoned sibling lane of our own epic is servable", outcome, outcome)
 	}
 	if served.Row.ID != a2.ID || served.Lane.Epic() != epicA.ID {
 		t.Fatalf("served = %q in epic %q, want %q in %q", served.Row.ID, served.Lane.Epic(), a2.ID, epicA.ID)
 	}
-	advice := startAdvice(served.Row, served.Lane, expiredHolder(standings.Of(served.Lane)))
-	if !strings.Contains(advice, "take over") || !strings.Contains(advice, "in progress and abandoned") {
-		t.Fatalf("startAdvice = %q, want a takeover — this pick inherits %q's unfinished work rather than beginning it", advice, a2.ID)
+	advice := startAdvice(served.Row, served.Lane)
+	if !strings.Contains(advice, "in progress and nobody holds it") {
+		t.Fatalf("startAdvice = %q, want it to say the row is in flight and unheld — this pick inherits %q's unfinished work rather than beginning it", advice, a2.ID)
 	}
 }
 
-// Design step 6 in its plainest form: a stale claim no longer vetoes an
+// Design step 6 in its plainest form: an expired claim does not veto an
 // otherwise-ready ticket. Nothing here is started and nothing is orphaned, so
-// the pick rests on staleness alone — the `!started && readiness.IsReady()`
-// half of capacityFor's takeability that every other stale-foreign test in
-// this file reaches only through an orphaned in-progress row.
-func TestRouteNextServesOpenTicketInForeignStaleLane(t *testing.T) {
+// the pick rests on the lane being unheld alone — the `!started && IsReady()`
+// half of capacityFor that every other expired-foreign test in this file
+// reaches only through an in-progress row.
+func TestRouteNextServesOpenTicketInAnExpiredForeignLane(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
 	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
@@ -728,25 +734,25 @@ func TestRouteNextServesOpenTicketInForeignStaleLane(t *testing.T) {
 	c1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "C.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicC.ID})
 
 	rows, details := h.gather()
-	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, b1.ID)): staleBy(otherAttribution)}
+	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, b1.ID)): expired}
 
 	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
 	served, ok := outcome.(ServedFromNewLane)
 	if !ok {
-		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane (the stale lane is admitted, not skipped)", outcome, outcome)
+		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane (the expired lane is nobody's, so its ticket is served)", outcome, outcome)
 	}
 	if served.Row.ID != b1.ID {
-		t.Fatalf("served = %q, want %q — a stale claim must not push a ready ticket behind the lower-ranked unclaimed %q", served.Row.ID, b1.ID, c1.ID)
+		t.Fatalf("served = %q, want %q — an expired claim must not push a ready ticket behind the lower-ranked %q", served.Row.ID, b1.ID, c1.ID)
 	}
 	if served.Row.State() != model.StateOpen {
-		t.Fatalf("served row state = %v, want open — this pick must rest on staleness alone, never on an orphan", served.Row.State())
+		t.Fatalf("served row state = %v, want open — this pick must rest on the lane being unheld alone, never on an orphan", served.Row.State())
 	}
 }
 
-// The same admission at the epic-continuation step, which is itself new here:
-// step 2 previously required an unclaimed lane, so a stale sibling lane of the
-// checkout's own epic was skipped in favour of exhaustion.
-func TestRouteNextContinuesEpicIntoForeignStaleLane(t *testing.T) {
+// The same admission at the epic-continuation step: a sibling lane of the
+// checkout's own epic whose claim has expired is nobody's, so step 2 continues
+// into it rather than declaring the epic exhausted.
+func TestRouteNextContinuesEpicIntoAnExpiredForeignLane(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
@@ -760,29 +766,30 @@ func TestRouteNextContinuesEpicIntoForeignStaleLane(t *testing.T) {
 	rows, details := h.gather()
 	standings := claims.Standings{
 		model.LaneOf(a1, &epicA):                    heldBy(selfAttribution),
-		laneOf(t, details, rowByID(t, rows, a2.ID)): staleBy(otherAttribution),
+		laneOf(t, details, rowByID(t, rows, a2.ID)): expired,
 	}
 
 	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
 	served, ok := outcome.(ServedFromEpicLane)
 	if !ok {
-		t.Fatalf("routeNext = %#v (%T), want ServedFromEpicLane (a stale sibling lane of our own epic is admitted)", outcome, outcome)
+		t.Fatalf("routeNext = %#v (%T), want ServedFromEpicLane (an expired sibling lane of our own epic is nobody's)", outcome, outcome)
 	}
 	if served.Row.ID != a2.ID || served.Lane.Epic() != epicA.ID {
 		t.Fatalf("served = %q in epic %q, want %q in %q", served.Row.ID, served.Lane.Epic(), a2.ID, epicA.ID)
 	}
 	if served.Row.State() != model.StateOpen {
-		t.Fatalf("served row state = %v, want open — the pick must rest on staleness alone, never on an orphan", served.Row.State())
+		t.Fatalf("served row state = %v, want open — the pick must rest on the lane being unheld alone, never on an orphan", served.Row.State())
 	}
 }
 
 // startAdvice varies on two axes, and this pins every cell of the product.
 //
-// The verb is the takeover verdicts above made visible. An in-progress row
-// reaches a lane this checkout does not hold only once its holder's claim is
-// refuted — orphaned, or in a lapsed lane — so calling that a plain claim
-// promises greenfield on a ticket that may carry another checkout's unmerged
-// working tree.
+// The lead clause is routing's admission made visible. An in-progress row
+// reaches a lane this checkout does not hold only when nobody holds that lane,
+// so a bare "claim it" would promise greenfield on a ticket that may carry
+// another checkout's unmerged working tree; the clause says the row is in
+// flight and unheld, and nothing about who left it — an expired claim is not a
+// claim, and the wording carries no provenance (links-claims-y6yz).
 //
 // The object is the lane, and each of LaneID's three shapes once rendered
 // through String() into a sentence that misinformed the reader
@@ -791,11 +798,6 @@ func TestRouteNextContinuesEpicIntoForeignStaleLane(t *testing.T) {
 // about a command they had yet to run; an epic's default lane, whose key is
 // empty, trailed a bare "#" that reads as an unfilled template slot. Only the
 // named lane ever carried information, and it is the rarest of the three.
-//
-// Both unnamed cells read "it", and they read it in different places: "claim
-// it", but "take it over", because a particle verb splits around a pronoun.
-// That is why startAdvice spells its four sentences out instead of substituting
-// one object into two.
 //
 // Whatever else changes here, no cell may contain "#" or say the ticket's id
 // where a lane belongs — that is the whole of the ticket's second defect, and a
@@ -822,19 +824,16 @@ func TestStartAdviceNamesTheCommandAndTheLaneShape(t *testing.T) {
 			"run `lit start " + unnamed.ID + "` to claim the default lane of epic " + epicA.ID},
 		{"a solo lane is the ticket, so the lane goes unnamed", solo.ID,
 			"run `lit start " + solo.ID + "` to claim it"},
-		{"an in-flight row is taken over, not claimed fresh", inFlight.ID,
-			inFlight.ID + " is in progress and abandoned — run `lit start " + inFlight.ID + "` to take over lane a3 of epic " + epicA.ID},
-		{"a default lane is still words on the takeover verb", unnamedInFlight.ID,
-			unnamedInFlight.ID + " is in progress and abandoned — run `lit start " + unnamedInFlight.ID + "` to take over the default lane of epic " + epicA.ID},
-		{"a solo lane still goes unnamed on the takeover verb", soloInFlight.ID,
-			soloInFlight.ID + " is in progress and abandoned — run `lit start " + soloInFlight.ID + "` to take it over"},
+		{"an in-flight row says so before the same advice", inFlight.ID,
+			inFlight.ID + " is in progress and nobody holds it — run `lit start " + inFlight.ID + "` to claim lane a3 of epic " + epicA.ID},
+		{"a default lane is still words on an in-flight row", unnamedInFlight.ID,
+			unnamedInFlight.ID + " is in progress and nobody holds it — run `lit start " + unnamedInFlight.ID + "` to claim the default lane of epic " + epicA.ID},
+		{"a solo lane still goes unnamed on an in-flight row", soloInFlight.ID,
+			soloInFlight.ID + " is in progress and nobody holds it — run `lit start " + soloInFlight.ID + "` to claim it"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			row := rowByID(t, rows, tc.id)
-			// Unprovable: this table is about grammar, and the holder it holds
-			// fixed is the one the wording never changed for — a lapsed claim
-			// this machine can say nothing about still reads "abandoned".
-			got := startAdvice(row, laneOf(t, details, row), claims.Unprovable)
+			got := startAdvice(row, laneOf(t, details, row))
 			if got != tc.want {
 				t.Fatalf("startAdvice = %q, want %q", got, tc.want)
 			}
@@ -859,7 +858,7 @@ func TestStartAdviceNeverSpellsASoloTicketTwice(t *testing.T) {
 
 	rows, details := h.gather()
 	row := rowByID(t, rows, solo.ID)
-	got := startAdvice(row, laneOf(t, details, row), claims.Unprovable)
+	got := startAdvice(row, laneOf(t, details, row))
 
 	if n := strings.Count(got, solo.ID); n != 1 {
 		t.Fatalf("startAdvice = %q names %q %d times, want exactly 1 — a solo lane is its ticket, so naming the lane repeats the id and reads as a log line rather than as advice", got, solo.ID, n)
@@ -916,10 +915,10 @@ func TestRouteNextStep1RanksAcrossCapacitiesRatherThanBetweenThem(t *testing.T) 
 }
 
 // Step 1b applies the verdict itself rather than going through pick/accept, so
-// its admission of a takeover is a path of its own: a dependency gating our
-// lane, abandoned in flight by the checkout that holds its lane, is offered
-// here even though the global-pool step never sees it.
-func TestRouteNextTakesOverAnAbandonedOnPathDependency(t *testing.T) {
+// its admission of abandoned work is a path of its own: a dependency gating our
+// lane, in flight in a lane nobody holds, is offered here even though the
+// global-pool step never sees it.
+func TestRouteNextServesAnAbandonedOnPathDependency(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
@@ -935,39 +934,39 @@ func TestRouteNextTakesOverAnAbandonedOnPathDependency(t *testing.T) {
 	standings := claims.Standings{
 		model.LaneOf(a1, &epicA):                     heldBy(selfAttribution),
 		laneOf(t, details, rowByID(t, rows, a2.ID)):  heldBy(selfAttribution),
-		laneOf(t, details, rowByID(t, rows, dep.ID)): staleBy(otherAttribution),
+		laneOf(t, details, rowByID(t, rows, dep.ID)): expired,
 	}
 
 	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
 	served, ok := outcome.(ServedFromDependency)
 	if !ok {
-		t.Fatalf("routeNext = %#v (%T), want ServedFromDependency (the abandoned on-path dependency is takeable)", outcome, outcome)
+		t.Fatalf("routeNext = %#v (%T), want ServedFromDependency (the abandoned on-path dependency is servable)", outcome, outcome)
 	}
 	if served.Gates != a2.ID {
-		t.Fatalf("served.Gates = %q, want %q — the qualifier must survive the takeover path naming the row it unblocks, and a merely non-empty id would let the dependency name itself", served.Gates, a2.ID)
+		t.Fatalf("served.Gates = %q, want %q — the qualifier must survive the in-flight path naming the row it unblocks, and a merely non-empty id would let the dependency name itself", served.Gates, a2.ID)
 	}
 	if served.Row.ID != dep.ID {
 		t.Fatalf("served = %q, want %q (the dependency gating our own blocked lane)", served.Row.ID, dep.ID)
 	}
 	if served.Row.State() != model.StateInProgress {
-		t.Fatalf("served row state = %v, want in_progress — the point of this path is that step 1b admits a takeover", served.Row.State())
+		t.Fatalf("served row state = %v, want in_progress — the point of this path is that step 1b admits abandoned in-flight work", served.Row.State())
 	}
 }
 
 // The two clocks. Orphaning reads the row's last write by anyone; the lane's
 // freshness reads its holder's last event. A peer's field write on an
-// in-flight row keeps it un-orphaned while the holder's claim lapses
+// in-flight row keeps it un-orphaned while the holder's claim expires
 // underneath it, and with the lane nobody's to resume and the row not yet
-// orphaned, the ticket vanished from `next` — served to nobody, named by no
-// diagnostic. A lapsed lane is itself the proof the holder is gone, so the row
-// is a takeover on that clock alone, whoever the lapsed holder was.
-func TestRouteNextTakesOverUnorphanedInFlightRowInLapsedLane(t *testing.T) {
+// orphaned, the ticket once vanished from `next` — served to nobody, named by
+// no diagnostic. A lane nobody holds is itself the proof the row is abandoned,
+// so the row is served on that fact alone; the orphan clock no longer enters
+// routing at all (capacityFor). Whose claim expired is not a fact the
+// standing carries any more, so there is one case here where there were two.
+func TestRouteNextServesUnorphanedInFlightRowInAnUnheldLane(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		holder model.Attribution
+		name string
 	}{
-		{"lapsed lane of our own", selfAttribution},
-		{"lapsed lane of another checkout", otherAttribution},
+		{"an in-flight row in a lane nobody holds, whoever started it"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newReadyTestHarness(t)
@@ -983,28 +982,28 @@ func TestRouteNextTakesOverUnorphanedInFlightRowInLapsedLane(t *testing.T) {
 			if ClassifyReadiness(row.Annotations).IsOrphaned() {
 				t.Fatalf("fixture %q is orphaned; this test's premise is an in-flight row the orphan clock has NOT reached", a1.ID)
 			}
-			standings := claims.Standings{laneOf(t, details, row): staleBy(tc.holder)}
+			standings := claims.Standings{laneOf(t, details, row): expired}
 
 			outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
 			served, ok := outcome.(ServedFromNewLane)
 			if !ok {
-				t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane taking over %q — never %q with %q served to nobody", outcome, outcome, a1.ID, b1.ID, a1.ID)
+				t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane serving %q — never %q with %q served to nobody", outcome, outcome, a1.ID, b1.ID, a1.ID)
 			}
 			if served.Row.ID != a1.ID {
-				t.Fatalf("served = %q, want %q (in flight in a lapsed lane, and ranked first)", served.Row.ID, a1.ID)
+				t.Fatalf("served = %q, want %q (in flight in a lane nobody holds, and ranked first)", served.Row.ID, a1.ID)
 			}
 		})
 	}
 }
 
 // The shape links-claims-gxxw was reported against: this checkout's own lane
-// holds the top-ranked open row, and the claim on it has lapsed. The row is
+// holds the top-ranked open row, and the claim on it has expired. The row is
 // still the pick — it ranks first — but it is served from the global pool by
 // rank, as it would be for any checkout, not from step 1 as work this checkout
 // holds. The premise check on rank order is what separates this from
-// TestRouteNextLapsedOwnLaneDoesNotOutrankTheBacklog: same lapsed own lane,
+// TestRouteNextExpiredOwnLaneDoesNotOutrankTheBacklog: same expired own lane,
 // opposite rank, and the pick follows the rank both times.
-func TestRouteNextServesTopRankedRowInLapsedOwnLaneByRank(t *testing.T) {
+func TestRouteNextServesTopRankedRowInExpiredOwnLaneByRank(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 1, ParentID: epicA.ID})
@@ -1014,38 +1013,39 @@ func TestRouteNextServesTopRankedRowInLapsedOwnLaneByRank(t *testing.T) {
 
 	rows, details := h.gather()
 	if rows[0].ID != a1.ID {
-		t.Fatalf("fixture rank order = %q first, want %q — this test's premise is that the lapsed lane ranks top", rows[0].ID, a1.ID)
+		t.Fatalf("fixture rank order = %q first, want %q — this test's premise is that the expired lane ranks top", rows[0].ID, a1.ID)
 	}
-	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, a1.ID)): staleBy(selfAttribution)}
+	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, a1.ID)): expired}
 
 	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
 	served, ok := outcome.(ServedFromNewLane)
 	if !ok {
-		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane — a lapsed claim is served by rank, never as a lane we hold (%s ranks below)", outcome, outcome, b1.ID)
+		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane — an expired claim is served by rank, never as a lane we hold (%s ranks below)", outcome, outcome, b1.ID)
 	}
 	if served.Row.ID != a1.ID {
 		t.Fatalf("served = %q, want %q (it ranks first)", served.Row.ID, a1.ID)
 	}
 }
 
-// TestRouteNextDoesNotAdoptStalePublicHistory is the routing half of the ruling
+// TestRouteNextDoesNotAdoptExpiredPublicHistory is the routing half of the ruling
 // that a bucket identity is a holder but never a proof of identity, and it
 // pins the regression the public-checkout change introduced before it was
 // caught in review.
 //
 // The setup is the normal state of a freshly upgraded repository read by a
-// brand-new checkout: pre-attribution history derives as a STALE hold by the
-// public checkout, and the checkout asking is itself unminted, so both sides
-// of the comparison are the zero Attribution. On bare equality that reads as
-// "our own lane we stepped away from", and `next` would hand back an epic this
-// checkout never touched -- announcing it as work already in flight in a lane
-// it holds. Every such lane in the backlog matches, so the failure is not one
-// stray pick but the whole backlog being adopted at once.
+// brand-new checkout: pre-attribution history is far older than the window, so
+// its lanes derive Unclaimed, and the checkout asking is itself unminted. The
+// regression this pins predates that: while an aged-out claim was still a
+// standing carrying its holder, both sides of the identity comparison were the
+// zero Attribution, bare equality read that as "our own lane we stepped away
+// from", and `next` handed back an epic this checkout never touched. Every such
+// lane in the backlog matched, so the failure was the whole backlog adopted at
+// once. The standing no longer carries a holder to compare, so the test now
+// pins the shape from the other side: an unminted self and an unclaimed lane
+// meet in the pool, by rank.
 //
 // What must NOT come back is ResumedOwnWork; that is the load-bearing half.
-// The lane is a stale foreign one, so the orphan in it is offered as the
-// takeover it actually is, with the provenance a takeover carries.
-func TestRouteNextDoesNotAdoptStalePublicHistory(t *testing.T) {
+func TestRouteNextDoesNotAdoptExpiredPublicHistory(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
@@ -1053,7 +1053,7 @@ func TestRouteNextDoesNotAdoptStalePublicHistory(t *testing.T) {
 
 	rows, details := h.gather()
 	orphan(t, rows, a1.ID)
-	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, a1.ID)): staleBy(publicAttribution)}
+	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, a1.ID)): expired}
 
 	outcome := routeNext(rows, details, standings, publicAttribution, focusScope{})
 	if resumed, adopted := outcome.(ResumedOwnWork); adopted {
@@ -1061,7 +1061,7 @@ func TestRouteNextDoesNotAdoptStalePublicHistory(t *testing.T) {
 	}
 	served, ok := outcome.(ServedFromNewLane)
 	if !ok {
-		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane: a stale public lane is a takeover, carrying its provenance", outcome, outcome)
+		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane: the expired public lane is nobody's, and its orphan is served by rank", outcome, outcome)
 	}
 	if served.Row.ID != a1.ID {
 		t.Fatalf("served = %q, want %q", served.Row.ID, a1.ID)
@@ -1205,7 +1205,7 @@ func TestNoWorkNamesEachRowThePoolWalkWentPast(t *testing.T) {
 	if !strings.Contains(msg, "another checkout holds right now") {
 		t.Fatalf("NoWork.Error() = %q, want %q reported as another checkout's live work", msg, held.ID)
 	}
-	if !strings.Contains(msg, "blocked by a dependency") {
+	if !strings.Contains(msg, "not startable right now") {
 		t.Fatalf("NoWork.Error() = %q, want %q reported as gated rather than as somebody's live work", msg, gated.ID)
 	}
 }

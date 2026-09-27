@@ -1515,13 +1515,28 @@ type transitionSpec struct {
 	// other seven transitions nothing. [LAW:single-enforcer] one hook point
 	// for per-transition authorization, rather than a type switch on the
 	// built action scattered through runTransition.
-	authorize func(fs *cobraFlagSet) func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue) error
+	//
+	// Its string result is the line the transition owes AFTER Apply, decided
+	// on the pre-Apply state the hook just read, and the empty string when it
+	// owes none — the identity value for "nothing to say", so runTransition
+	// writes it unconditionally. [LAW:dataflow-not-control-flow] For `start`
+	// that line is the transfer notice, and it is decided here rather than
+	// beside Apply because only this read knows whether anybody held the lane:
+	// a start on a lane nobody holds hands nothing over, whatever the row's
+	// history says about who once started it, since an expired claim is not a
+	// claim (links-claims-y6yz), and reading the lane again for the notice
+	// would be a second gather of every event in the store.
+	// [LAW:one-source-of-truth]
+	authorize func(fs *cobraFlagSet) func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue, action model.Action) (notice string, err error)
 }
 
 // noAuthorize is the authorize hook of every transition that gates nothing
-// beyond the ordinary state-machine check store.Apply already performs.
-func noAuthorize(*cobraFlagSet) func(context.Context, io.Writer, *app.App, string, model.Issue) error {
-	return func(context.Context, io.Writer, *app.App, string, model.Issue) error { return nil }
+// beyond the ordinary state-machine check store.Apply already performs, and
+// owes no line after it.
+func noAuthorize(*cobraFlagSet) func(context.Context, io.Writer, *app.App, string, model.Issue, model.Action) (string, error) {
+	return func(context.Context, io.Writer, *app.App, string, model.Issue, model.Action) (string, error) {
+		return "", nil
+	}
 }
 
 // fixedAction is the registerFlags of every transition whose action carries no
@@ -1545,10 +1560,17 @@ var (
 				return model.Start{Assignee: resolveIdentity(*assignee)}, nil
 			}
 		},
-		authorize: func(fs *cobraFlagSet) func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue) error {
+		authorize: func(fs *cobraFlagSet) func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue, action model.Action) (string, error) {
 			take := fs.Bool("take", false, "Confirm taking over a lane another checkout claims right now (required for non-interactive callers; an interactive terminal is prompted instead)")
-			return func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue) error {
-				return authorizeStart(ctx, stdout, ap, issueID, prior, *take)
+			return func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue, action model.Action) (string, error) {
+				// registerFlags above builds every action this hook sees, so a
+				// different variant is a wiring error, not a caller's mistake.
+				// [LAW:no-silent-failure]
+				start, ok := action.(model.Start)
+				if !ok {
+					return "", fmt.Errorf("start: authorize hook received a %T action", action)
+				}
+				return authorizeStart(ctx, stdout, ap, issueID, prior, start, *take)
 			}
 		},
 	}
@@ -1652,9 +1674,9 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 
 		// The pre-transition read is the state `authorize` gates on and the
 		// before-half of the workflow occasion below. It is the ROW only: the
-		// claim-transfer notice needs the issue's history too, and reads it
-		// separately after authorization, because that is the read authorization
-		// can invalidate.
+		// claim-transfer notice needs the issue's history too, and `authorize`
+		// reads it after the gate, because that is the read the gate can
+		// invalidate.
 		prior, err := ap.Store.GetIssue(ctx, issueID)
 		if err != nil {
 			return err
@@ -1668,18 +1690,9 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 		// [LAW:single-enforcer] The one gate every transition's authorization
 		// passes through, ahead of Apply — a no-op for every transition but
 		// `start`. See transitionSpec.authorize and authorizeStart
-		// (claims_takeover.go).
-		if err := authorize(ctx, stdout, ap, issueID, prior); err != nil {
-			return err
-		}
-
-		// Composed AFTER authorize, not beside the row above: authorizing a start
-		// walks every lane and, on a fresh foreign hold, waits on the operator at a
-		// prompt with no timeout. A claimant read before that wait describes whoever
-		// held the lane when the question was asked, which is not who holds it when
-		// the answer arrives. [LAW:no-ambient-temporal-coupling] Decided here on
-		// pre-Apply state and rendered below, so a failed Apply announces nothing.
-		transfer, err := transferNotice(ctx, ap, issueID, action)
+		// (claims_takeover.go). The line it hands back is decided on pre-Apply
+		// state and rendered after Apply, so a failed Apply announces nothing.
+		notice, err := authorize(ctx, stdout, ap, issueID, prior, action)
 		if err != nil {
 			return err
 		}
@@ -1710,8 +1723,8 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 
 		// A hand-off is said out loud; every other transition has nothing to say and
 		// says it as the empty string, so this write always runs and only its value
-		// varies. transferNotice holds the rule. [LAW:dataflow-not-control-flow]
-		if _, err := io.WriteString(stdout, transfer); err != nil {
+		// varies. The authorize hook holds the rule. [LAW:dataflow-not-control-flow]
+		if _, err := io.WriteString(stdout, notice); err != nil {
 			return err
 		}
 

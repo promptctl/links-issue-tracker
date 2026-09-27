@@ -4,64 +4,41 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/claims"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
-// TestClassifyTakeover is the predicate's own contract: it holds the pure
-// function's input fixed to the five standings a lane can report and checks
-// the takeover requirement design-docs/work-claims.md's "Release and
-// abandonment" section names for each, independent of any CLI plumbing.
+// TestRelationOf is the gate's predicate stated as its own contract: every
+// standing claims.Derive can build, read against the two identities a caller
+// can have, and the relation each pair yields. The takeover gate and routing
+// both consume this value, so what it pins is what both of them do.
 // [LAW:behavior-not-structure]
-func TestClassifyTakeover(t *testing.T) {
+//
+// There is no row for an expired claim because there is no standing for one:
+// the derivation returns Unclaimed the moment the window closes, so this
+// function never learns a claim existed and cannot treat it as a grade of
+// hold. That absence is the ruling of links-claims-y6yz, and it is pinned
+// where a reader would go looking for the missing row.
+func TestRelationOf(t *testing.T) {
 	tests := []struct {
 		name     string
 		standing claims.Standing
-		want     takeoverRequirement
+		self     model.Attribution
+		want     laneRelation
 	}{
-		{"unclaimed needs no ceremony", claims.Unclaimed{}, takeoverNone},
-		{"held by self needs no ceremony", heldBy(selfAttribution), takeoverNone},
-		{"held by someone else demands a deliberate act", heldBy(otherAttribution), takeoverFreshConfirm},
-		// A lapsed claim is not a claim, so whose it was decides nothing here:
-		// the checkout that let it lapse is told the provenance like anyone
-		// else (links-claims-em7h).
-		{"stale, was self, proceeds informed", claims.Stale{Tenure: claims.Tenure{By: selfAttribution}}, takeoverStaleInformed},
-		{"stale, was someone else, proceeds informed", claims.Stale{Tenure: claims.Tenure{By: otherAttribution}}, takeoverStaleInformed},
-
-		// The three worktree states an expired foreign claim can be in. The
-		// clock has run out identically in all three; only what this machine
-		// can see of the holder differs, and that is what decides the gate.
-		{
-			"stale, holder's worktree gone from this machine, proceeds informed",
-			claims.Stale{Tenure: claims.Tenure{By: otherAttribution}, Holder: claims.Gone},
-			takeoverStaleInformed,
-		},
-		{
-			// Presence alone must NOT gate: a worktree routinely outlives the
-			// session that made it, so requiring --take here would make every
-			// uncleaned tree an unclaimable lane and defeat the age-out.
-			"stale, holder's worktree merely present, still proceeds informed",
-			claims.Stale{Tenure: claims.Tenure{By: otherAttribution}, Holder: claims.Present},
-			takeoverStaleInformed,
-		},
-		{
-			// The ticket's headline: `git worktree lock` is the holder's own
-			// do-not-disturb, so the lane is gated exactly as a fresh claim is.
-			"stale, holder's worktree locked, demands a deliberate act",
-			claims.Stale{Tenure: claims.Tenure{By: otherAttribution}, Holder: claims.Locked},
-			takeoverFreshConfirm,
-		},
-		{
-			// A lock is read as a live hold, and a live hold of our own is our
-			// lane: being made to pass --take to resume it would be the prompt
-			// the design promises never to show on the happy path.
-			"stale and locked, but ours, needs no ceremony",
-			claims.Stale{Tenure: claims.Tenure{By: selfAttribution}, Holder: claims.Locked},
-			takeoverNone,
-		},
+		{"unclaimed is nobody's", claims.Unclaimed{}, selfAttribution, laneUnclaimed},
+		{"a nil standing reads as unclaimed, never as a panic", nil, selfAttribution, laneUnclaimed},
+		{"held by self is ours", heldBy(selfAttribution), selfAttribution, laneOurs},
+		{"held by someone else is foreign", heldBy(otherAttribution), selfAttribution, laneHeldForeign},
+		// The public checkout is every unattributed writer at once, and a
+		// checkout with no minted token has recorded nothing, so a zero self
+		// equal to a zero holder proves nothing about whose lane it is.
+		{"held by the public checkout is foreign even to an unminted self", heldBy(publicAttribution), publicAttribution, laneHeldForeign},
+		{"held by the public checkout is foreign to a minted self", heldBy(publicAttribution), selfAttribution, laneHeldForeign},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := classifyTakeover(tc.standing, selfAttribution); got != tc.want {
-				t.Errorf("classifyTakeover(%#v, self) = %v, want %v", tc.standing, got, tc.want)
+			if got := relationOf(tc.standing, tc.self); got != tc.want {
+				t.Errorf("relationOf(%#v, %v) = %v, want %v", tc.standing, tc.self, got, tc.want)
 			}
 		})
 	}

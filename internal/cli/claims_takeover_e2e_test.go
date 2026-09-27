@@ -91,13 +91,19 @@ func TestStartRefusesAndThenTakesOverAFreshForeignClaim(t *testing.T) {
 	}
 }
 
-// TestStartOnAStaleForeignClaimProceedsInformed is the ticket's other half:
-// "a stale takeover proceeds unprompted but prints the provenance and the
-// unmerged-work instruction." The freshness window is configured down to
-// force alpha's claim stale by the time bravo looks, rather than waiting out
-// the real default — the same technique config_test.go uses to make
-// claims.freshness_window a controllable test input.
-func TestStartOnAStaleForeignClaimProceedsInformed(t *testing.T) {
+// TestStartOnAnExpiredForeignClaimIsSilent: alpha's claim has expired by the
+// time bravo looks, and bravo's start reads exactly as a start on a ticket
+// nobody ever touched — no refusal, no provenance line, no advisory to check
+// for unmerged work, no transfer notice. An expired claim is not a claim, so
+// there is nothing for the gate to inform anybody of (links-claims-y6yz). It
+// once printed the claim line tagged "(stale)" plus "check for unmerged
+// branches or PRs", which presented the expired claim as a grade of hold.
+//
+// The freshness window is configured down to force alpha's claim to expire by
+// the time bravo looks, rather than waiting out the real default — the same
+// technique config_test.go uses to make claims.freshness_window a controllable
+// test input.
+func TestStartOnAnExpiredForeignClaimIsSilent(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
@@ -129,11 +135,15 @@ func TestStartOnAStaleForeignClaimProceedsInformed(t *testing.T) {
 	waitPastFreshnessWindow(t)
 
 	out := runCLIInDir(t, bravo, "start", ticket, "--assignee", "bravo-agent")
-	if !strings.Contains(out, "check for unmerged branches or PRs") {
-		t.Fatalf("start %s over a stale claim = %q, want the unmerged-work advisory", ticket, out)
+	// "--take", "take over" and "taking over" rather than a bare "take": the
+	// fixture's topic is takeover-e2e, and the ticket id carries it.
+	for _, residue := range []string{"claimed", "stale", "check for unmerged", "--take", "take over", "taking over", "claim transferred"} {
+		if strings.Contains(out, residue) {
+			t.Fatalf("start %s over an expired claim = %q, want no %q: an expired claim is not a claim, and the start reads as one on an untouched ticket", ticket, out, residue)
+		}
 	}
-	if !strings.Contains(out, "stale") {
-		t.Fatalf("start %s over a stale claim = %q, want the provenance to say stale", ticket, out)
+	if !strings.Contains(out, ticket) {
+		t.Fatalf("start %s over an expired claim = %q, want the ordinary start summary naming the ticket", ticket, out)
 	}
 }
 
@@ -145,8 +155,8 @@ func waitPastFreshnessWindow(t *testing.T) {
 }
 
 // writeTinyFreshnessWindow points dir's workspace config at a
-// claims.freshness_window short enough that any evidence already on disk
-// reads as stale the moment waitPastFreshnessWindow returns.
+// claims.freshness_window short enough that any claim already on disk has
+// expired the moment waitPastFreshnessWindow returns.
 func writeTinyFreshnessWindow(t *testing.T, dir string) {
 	t.Helper()
 	litDir := filepath.Join(dir, ".lit")
@@ -159,7 +169,7 @@ func writeTinyFreshnessWindow(t *testing.T, dir string) {
 	}
 }
 
-// TestStartTakesOverAStaleLaneUnderOneSharedIdentity is links-claims-6ghp: the
+// TestStartTakesOverALiveLaneUnderOneSharedIdentity is links-claims-6ghp: the
 // takeover that carries no assignee change at all.
 //
 // Both checkouts name the SAME assignee, which is not a contrived case but the
@@ -170,7 +180,7 @@ func writeTinyFreshnessWindow(t *testing.T, dir string) {
 // compared assignees read it as a repeated self-start, exited 0, recorded
 // nothing, and left both checkouts believing they held the lane.
 // [LAW:no-silent-failure]
-func TestStartTakesOverAStaleLaneUnderOneSharedIdentity(t *testing.T) {
+func TestStartTakesOverALiveLaneUnderOneSharedIdentity(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
@@ -200,12 +210,11 @@ func TestStartTakesOverAStaleLaneUnderOneSharedIdentity(t *testing.T) {
 	runGit(t, bravo, "config", "user.name", "bravo")
 	runCLIInDir(t, bravo, "init", "--skip-hooks", "--skip-agents")
 
-	writeTinyFreshnessWindow(t, bravo)
-	waitPastFreshnessWindow(t)
-
-	out := runCLIInDir(t, bravo, "start", ticket, "--assignee", shared)
+	// Alpha's claim is live, so the takeover is the deliberate --take crossing;
+	// the notice it prints is the subject here.
+	out := runCLIInDir(t, bravo, "start", ticket, "--assignee", shared, "--take")
 	if !strings.Contains(out, "claim transferred") {
-		t.Fatalf("start %s over a stale lane of the same identity = %q, want the transfer announced", ticket, out)
+		t.Fatalf("start %s --take over a live lane of the same identity = %q, want the transfer announced", ticket, out)
 	}
 	// The assignee is identical on both sides, so the stream labels are the only
 	// thing in that line that can say anything moved.
@@ -214,19 +223,12 @@ func TestStartTakesOverAStaleLaneUnderOneSharedIdentity(t *testing.T) {
 	}
 
 	// The lane is now bravo's, and that is a fact about the RECORD rather than
-	// about the line just printed. Bravo's own claim has lapsed too under the
-	// 1ms window, and a lapsed claim is nobody's, so a second start proceeds
-	// informed like any takeover of a lapsed lane — but the provenance it
-	// prints is bravo's own checkout, addressable on this machine, which is
-	// only true if the first start wrote the establishing event. Alpha's
-	// checkout is not one bravo can address, so provenance still naming alpha
-	// would render as "claimed:" and mean the takeover was discarded.
+	// about the line just printed: a second start by bravo is the happy path —
+	// no gate, no notice — which is only true if the first start wrote the
+	// establishing event that moved the lane here.
 	out = runCLIInDir(t, bravo, "start", ticket, "--assignee", shared)
-	if !strings.Contains(out, "claimed here (stale)") {
-		t.Fatalf("start %s on bravo's own lapsed lane = %q, want the provenance to name this checkout: the lane moved here", ticket, out)
-	}
-	if strings.Contains(out, "claim transferred") {
-		t.Fatalf("start %s on bravo's own lane = %q, want no transfer notice: nothing moved", ticket, out)
+	if strings.Contains(out, "claim transferred") || strings.Contains(out, "--take") {
+		t.Fatalf("start %s on bravo's own lane = %q, want no ceremony and no transfer notice: nothing moved", ticket, out)
 	}
 }
 

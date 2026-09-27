@@ -42,8 +42,8 @@ type ResumedOwnWork struct{ Row annotation.AnnotatedIssue }
 // ServedFromEpicLane is a pick from a different lane of the same epic this
 // checkout already holds a lane in — the GRANULARITY RULING's new step 2,
 // epic-major before global. Starting it would establish a fresh claim on Lane,
-// which is why it carries the lane to name, and it admits a takeover exactly as
-// ServedFromNewLane does.
+// which is why it carries the lane to name, and it admits abandoned in-flight
+// work exactly as ServedFromNewLane does.
 //
 // The epic is Lane.Epic() and is not carried beside it: two fields for one fact
 // are two clocks. [LAW:one-source-of-truth]
@@ -63,10 +63,10 @@ type ServedFromEpicLane struct {
 // own outcome and this one has a single producer again
 // (links-next-output-4hor, ServedFromDependency).
 //
-// A takeover arrives here too. Work abandoned in flight says so — startAdvice
-// reads the row's state; a ready ticket in a stale lane reads exactly like a
-// fresh start, its provenance carried by the claim line printNextSummary prints
-// beneath the row.
+// Abandoned in-flight work arrives here too, and says so — startAdvice reads
+// the row's state. A ready ticket reads as a fresh start whatever its lane's
+// history: a lane whose claim expired is unclaimed, and nothing about the
+// expired claim is printed (links-claims-y6yz).
 //
 // Lane is the LaneID and not its String(): the rendering belongs to whoever
 // knows the reader, and stringifying here threw away the discriminator the
@@ -139,8 +139,7 @@ const (
 	// reachHeldFresh: another checkout holds its lane right now.
 	reachHeldFresh
 	// reachNotReady: gathered and not held elsewhere, but not startable —
-	// blocked by a further dependency, or in flight and not abandoned. One
-	// value for both, because the note says only what both share.
+	// blocked by a further dependency.
 	reachNotReady
 	// reachOutOfView: absent from the gathered rows, so this run knows
 	// nothing about it. --type/--labels/--assignee and leaf-only membership
@@ -171,7 +170,7 @@ type rowReach struct {
 // takeability so routing and the diagnostics read one authority.
 // [LAW:one-source-of-truth]
 //
-// Total by construction: relationOf covers four lane relations, and the
+// Total by construction: relationOf covers three lane relations, and the
 // fallthrough takes every routeAround reached for a reason other than a
 // foreign hold. A row that is both held fresh and not ready reports as
 // held — ownership decides whether this checkout may act at all, readiness
@@ -217,10 +216,17 @@ func (NoWork) isNextOutcome()               {}
 // what?" — the eligibility verdict the owner ruling on links-claims-1b0p
 // demands. It replaces three independent booleans (heldBySelf, isReadyRow,
 // isUnclaimed) consulted at three points of one walk, each re-deriving a piece
-// of this question and disagreeing about what a stale claim means. With the
-// answer in one place a fourth capacity costs one arm of one switch instead of
-// an edit to three predicates and the loop.
+// of this question and disagreeing about what an aged-out claim means. With
+// the answer in one place a further capacity costs one arm of one switch
+// instead of an edit to three predicates and the loop.
 // [LAW:types-are-the-program] [LAW:single-enforcer]
+//
+// There were four. The fourth, takeoverWork, marked a pick that displaced
+// something — a lapsed claim, or in-flight work in a lane nobody held — and
+// no consumer ever read it apart from serveWork: every step accepted both or
+// neither, and the announcement reads the row's state, not the verdict. With
+// lapsed claims gone from the type (links-claims-y6yz) it named nothing that
+// serveWork did not, so it is gone. [LAW:polishing-by-subtraction]
 type capacity int
 
 const (
@@ -231,57 +237,43 @@ const (
 	// resumeWork: work already underway in a lane this checkout holds. Handed
 	// back rather than started fresh.
 	resumeWork
-	// takeoverWork: something is being displaced — a lapsed claim, whoever
-	// held it, or in-flight work abandoned in a lane nobody holds. Announced,
-	// never silent.
-	takeoverWork
 )
 
-// capacityFor derives the verdict from the only four facts that bear on it:
-// the row's lifecycle state, its lane's relation to this checkout, whether
-// anything blocks it, and whether it is orphaned. Pure, total, and the one
-// consumer of IsOrphaned() in
-// routing — the fact was computed on every gather and discarded here before
-// (links-claims-1b0p, F1).
+// capacityFor derives the verdict from the only three facts that bear on it:
+// the row's lifecycle state, its lane's relation to this checkout, and whether
+// anything blocks it. Pure and total.
 //
-// Two rules cover the whole table. A lane we hold: work in flight is ours to
-// resume and startable work is ours to serve. Any other lane — a lane whose
-// claim has lapsed is one of these even when the lapsed holder was us: we may
-// take what is takeable, and it counts as a takeover exactly when something
-// is being displaced, whether that is a lapsed claim or an in-flight ticket
-// somebody walked away from.
+// Two rules cover the whole table. A lane another checkout holds right now is
+// routed around, whatever is in it. In any other lane — this checkout's own,
+// or nobody's — startable work is served, and work in flight is handed back
+// when the lane is ours and served when it is nobody's: an in-progress row in
+// a lane nobody holds is abandoned by definition, because whoever started it
+// no longer holds a claim there (links-claims-y6yz).
 //
-// Takeability is where the state asymmetry lives. An OPEN row is takeable when
-// nothing blocks it. An IN-PROGRESS row is somebody's work in flight and stays
-// untouchable — whosever lane it sits in — until the claim that somebody is
-// working it is refuted, and two facts refute it: the orphan annotation (the
-// row itself has gone quiet) and a lapsed lane (its holder has). Either alone
-// is the proof, because they run on different clocks — orphaning reads the
-// row's last write by anyone, the lane reads its holder's last event — and a
-// peer's field write on the row keeps it un-orphaned without saying a word
-// about whether the holder is still there. Requiring both let an in-flight
-// row in a lapsed lane vanish from `next` entirely: nobody's to resume, and
-// not yet takeable (links-claims-em7h).
+// The orphan annotation used to enter here as a second proof of abandonment,
+// on a second clock — the row's own last write by anyone. It was needed while
+// an expired claim was still a standing in its own right that some readings
+// treated as a hold; with the lane's standing the one authority on whether
+// anybody holds it, the row's quiet clock adds nothing routing can act on.
+// `lit backlog` and `lit orphaned` still read that clock, as a description of
+// the row rather than a verdict about the lane. [LAW:single-enforcer]
+//
+// Readiness is asked only of startable rows. An in-flight row is not gated by
+// its dependencies — it is already past the point where they applied — so a
+// blocked-but-started row of ours is still resumed and a blocked-but-started
+// row of nobody's is still served.
 func capacityFor(row annotation.AnnotatedIssue, standing claims.Standing, self model.Attribution) capacity {
-	readiness := ClassifyReadiness(row.Annotations)
 	relation := relationOf(standing, self)
 	started := row.State() == model.StateInProgress
-	if relation == laneOurs {
-		if started {
-			return resumeWork
-		}
-		if readiness.IsReady() {
-			return serveWork
-		}
-		return routeAround
-	}
-	abandoned := readiness.IsOrphaned() || relation == laneLapsed
-	takeable := (started && abandoned) || (!started && readiness.IsReady())
 	switch {
-	case !takeable, relation == laneHeldForeign:
+	case relation == laneHeldForeign:
 		return routeAround
-	case started, relation == laneLapsed:
-		return takeoverWork
+	case !started && ClassifyReadiness(row.Annotations).IsReady():
+		return serveWork
+	case !started:
+		return routeAround
+	case relation == laneOurs:
+		return resumeWork
 	}
 	return serveWork
 }
@@ -297,8 +289,8 @@ func capacityFor(row annotation.AnnotatedIssue, standing claims.Standing, self m
 // is a fact about the workspace; a display filter must not be able to change it.
 //
 // An unidentified self needs no guard here: relationOf owns what a
-// public-checkout self may match, so ownership and takeover cannot drift apart
-// on it. [LAW:single-enforcer]
+// public-checkout self may match, so ownership and the start gate cannot drift
+// apart on it. [LAW:single-enforcer]
 func ownScope(standings claims.Standings, self model.Attribution) (map[model.LaneID]bool, map[string]bool) {
 	lanes := map[model.LaneID]bool{}
 	epics := map[string]bool{}
@@ -357,8 +349,8 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 	// accept is a SET and never a preference order: composite rank is the only
 	// tiebreak routing gets to apply, and ranking capacities against each other
 	// would quietly reintroduce this ticket's headline symptom — the backlog's
-	// #1 row, an orphan, passed over for a lower-ranked leaf that happened to
-	// need no takeover. [LAW:one-source-of-truth] one ordering, and the gather
+	// #1 row, abandoned in flight, passed over for a lower-ranked leaf that
+	// was merely ready. [LAW:one-source-of-truth] one ordering, and the gather
 	// already established it.
 	// pickFrom takes the row set explicitly because the steps no longer share
 	// one: steps 1-3 walk every gathered row, step 4 walks the focus-scoped
@@ -398,7 +390,7 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 		ourEpic := func(lane model.LaneID) bool {
 			return lane.Epic() != "" && ownEpics[lane.Epic()]
 		}
-		if row, _, ok := pick(func(lane model.LaneID) bool { return ourEpic(lane) && !mine(lane) }, serveWork, takeoverWork); ok {
+		if row, _, ok := pick(func(lane model.LaneID) bool { return ourEpic(lane) && !mine(lane) }, serveWork); ok {
 			return ServedFromEpicLane{Row: row, Lane: laneOf(row)}
 		}
 		// Step 3 — loud, and never a hop.
@@ -420,7 +412,7 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 	// pool that quietly served an off-path row instead would be substituting a
 	// similar-looking query for the one asked. [LAW:no-silent-failure]
 	pool, offPath := scope.partition(rows)
-	if row, _, ok := pickFrom(pool, func(model.LaneID) bool { return true }, serveWork, takeoverWork); ok {
+	if row, _, ok := pickFrom(pool, func(model.LaneID) bool { return true }, serveWork); ok {
 		return ServedFromNewLane{Row: row, Lane: laneOf(row)}
 	}
 	return NoWork{Unreachable: append(passedOver(pool, reachFor), withheldByScope(offPath)...)}
@@ -592,7 +584,7 @@ type reachNotes [reachKindCount]string
 // reachTakeable and reachOutOfView are the exhaustion walk's alone: step 4 runs
 // only when this checkout holds no lane, so no pool row is laneOurs and
 // capacityFor cannot answer resumeWork, while the pick just declined every
-// serveWork and takeoverWork over that same set — leaving routeAround as the
+// serveWork over that same set — leaving routeAround as the
 // only verdict passedOver can see. It also classifies gathered rows only, where
 // gatingDependencies reaches deps the gather never returned.
 var (
@@ -604,7 +596,7 @@ var (
 	}
 	poolNotes = reachNotes{
 		reachHeldFresh:    "in progress or claimed in a lane another checkout holds right now",
-		reachNotReady:     "not startable — blocked by a dependency, or in flight and not abandoned",
+		reachNotReady:     "not startable right now — `lit show` it names what blocks it",
 		reachOffFocusPath: "off the focus path this run answered over — `lit next --all` to route over the whole queue",
 	}
 )

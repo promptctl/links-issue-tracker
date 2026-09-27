@@ -18,13 +18,13 @@ func TestContestedLanesFiltersAndSorts(t *testing.T) {
 	contestedZ := model.LaneOf(model.Issue{ID: "zzz"}, nil)
 	contestedA := model.LaneOf(model.Issue{ID: "aaa"}, nil)
 	uncontested := model.LaneOf(model.Issue{ID: "mmm"}, nil)
-	stale := model.LaneOf(model.Issue{ID: "sss"}, nil)
+	unclaimed := model.LaneOf(model.Issue{ID: "sss"}, nil)
 
 	standings := claims.Standings{
 		contestedZ:  claims.Held{Tenure: claims.Tenure{By: holder}, Contested: []model.Attribution{contestant}},
 		contestedA:  claims.Held{Tenure: claims.Tenure{By: holder}, Contested: []model.Attribution{contestant}},
 		uncontested: claims.Held{Tenure: claims.Tenure{By: holder}},
-		stale:       claims.Stale{Tenure: claims.Tenure{By: holder}},
+		unclaimed:   claims.Unclaimed{},
 	}
 
 	got := contestedLanes(standings)

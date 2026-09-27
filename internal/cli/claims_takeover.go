@@ -14,50 +14,30 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
-// takeoverRequirement classifies what `lit start` demands of the caller
-// before it may proceed, derived purely from the target lane's standing
-// against this checkout's own identity. The three cases are exactly the
-// gradations design-docs/work-claims.md's "Release and abandonment" section
-// draws: a lane nobody holds, or that this checkout itself holds, needs no
-// ceremony; a lane whose claim has lapsed proceeds but must be informed,
-// whoever the lapsed holder was; a lane someone else holds right now demands
-// a deliberate act before it may be overridden. [LAW:types-are-the-program]
-// the sealed set of three lives here once, so the boundary below dispatches
-// on a value instead of re-deriving "is this mine, is it fresh" inline.
-type takeoverRequirement int
-
-const (
-	takeoverNone takeoverRequirement = iota
-	takeoverStaleInformed
-	takeoverFreshConfirm
-)
-
 // laneRelation is what a lane's standing means TO THIS CHECKOUT — the single
 // reading of claims.Standing that every consumer in this package shares.
 //
-// It exists because Stale was modeled as a sibling of Held and Unclaimed
-// without carrying its own answer, so each consumer decided for itself which
-// of the two it behaved like, and they decided differently: `lit start` read a
-// stale lane as yours, `lit next` read it as nobody's, and the renderer sided
-// with start. Four readings of one type is the under-specification the gates
-// were compensating for (links-claims-1b0p, owner ruling 3). Resolving it once
-// here is what lets both the takeover gate and the routing verdict below stop
-// re-deriving it. [LAW:one-source-of-truth] [LAW:types-are-the-program]
+// It exists because a lane's standing was once read against an identity in
+// four places, and they disagreed: `lit start` read an aged-out claim as
+// yours, `lit next` read it as nobody's, and the renderer sided with start
+// (links-claims-1b0p, owner ruling 3). Resolving the reading once here is
+// what lets the takeover gate and the routing verdict consume a value instead
+// of re-deriving "is this mine, is it fresh" inline.
+// [LAW:one-source-of-truth] [LAW:types-are-the-program]
+//
+// There are three relations and not four. A lane whose claim has expired is
+// laneUnclaimed, indistinguishable here from one nobody ever started, because
+// claims.Standing has no variant for it: an expired claim is over, not a
+// grade of claim (links-claims-y6yz). The relation that used to sit between
+// these — a lapsed lane, offered as a takeover with the lapsed holder's
+// provenance — is gone with the variant that carried it.
 type laneRelation int
 
 const (
-	// laneUnclaimed: nobody holds it and nobody is recorded as having held it.
+	// laneUnclaimed: nobody holds it.
 	laneUnclaimed laneRelation = iota
 	// laneOurs: this checkout holds it right now.
 	laneOurs
-	// laneLapsed: somebody held it and their evidence has aged out — this
-	// checkout's included. A lapsed claim is not a claim; it is the record
-	// that one existed, kept so whoever takes the lane is told whose it was.
-	// It was laneStaleForeign, and a stale claim of this checkout's own read
-	// as laneOurs, which is what let a lane it had walked away from outrank
-	// the entire backlog for as long as the epic stayed open
-	// (links-claims-em7h).
-	laneLapsed
 	// laneHeldForeign: another checkout holds it right now. Routed around.
 	laneHeldForeign
 )
@@ -68,143 +48,77 @@ const (
 // writer at once, and a checkout with no token has recorded nothing, so a zero
 // self equal to a zero holder proves nothing about whose lane it is.
 // [LAW:single-enforcer]
-//
-// A lapsed claim reads the same whoever held it. The holder's identity decides
-// nothing once the evidence has aged out, because past the window there is no
-// claim left for an identity to be matched against — only the record of one,
-// which is what laneLapsed carries. The one exception is the lock below, and
-// it is an exception to the CLOCK, not to this rule: a locked hold is read as
-// a live one, and a live hold is matched against self like any other.
 func relationOf(standing claims.Standing, self model.Attribution) laneRelation {
-	held := func(by model.Attribution) laneRelation {
-		if self.Present() && by == self {
-			return laneOurs
-		}
-		return laneHeldForeign
-	}
-	switch s := standing.(type) {
-	case claims.Held:
-		return held(s.By)
-	case claims.Stale:
-		// A locked worktree outranks the expired clock. Every other liveness
-		// signal this machine has says a tree EXISTS, which a deleted session
-		// leaves behind just as readily; `git worktree lock` is the holder
-		// speaking — a deliberate do-not-disturb nobody sets by walking away.
-		// So the hold stands, and this lane is routed around and gated exactly
-		// as a fresh one is, which is the whole of links-claims-2wk2's fix: the
-		// lane it was reported on sat locked on an open PR while `lit next`
-		// offered it as abandoned work.
-		//
-		// Presence WITHOUT a lock deliberately does not reach here. A worktree
-		// outliving its session is ordinary, so letting mere presence sustain a
-		// claim would make every abandoned-but-uncleaned tree unclaimable
-		// forever — the age-out exists precisely for that case. Presence
-		// changes what the lane is CALLED, not who may take it.
-		if s.Holder == claims.Locked {
-			return held(s.By)
-		}
-		return laneLapsed
-	default:
+	held, ok := standing.(claims.Held)
+	if !ok {
 		return laneUnclaimed
 	}
-}
-
-// classifyTakeover is the pure predicate behind the takeover gate: no I/O, no
-// flags, no TTY reads — those all live in authorizeStart, the one caller.
-// [LAW:effects-at-boundaries]
-//
-// A lane that is ours or nobody's needs no ceremony, which is why both collapse
-// to takeoverNone here while staying distinct in laneRelation — routing needs
-// the difference, this gate does not. [LAW:decomposition]
-func classifyTakeover(standing claims.Standing, self model.Attribution) takeoverRequirement {
-	switch relationOf(standing, self) {
-	case laneHeldForeign:
-		return takeoverFreshConfirm
-	case laneLapsed:
-		return takeoverStaleInformed
-	default:
-		return takeoverNone
+	if self.Present() && held.By == self {
+		return laneOurs
 	}
+	return laneHeldForeign
 }
 
 // authorizeStart is the boundary `lit start` calls before it writes anything.
-// It derives the target lane's standing, classifies it, and — only for the
-// two cases where the lane is not this checkout's to take freely — enforces
-// or prints the friction the ticket requires. Held-by-us and unclaimed lanes
-// take the takeoverNone branch and this function is a no-op past the read:
-// the happy path pays one extra evidence gather and nothing else, exactly as
-// "no confirmation, no warning, no ceremony on the happy path" demands.
+// It derives the target lane's standing and, only when another checkout holds
+// the lane right now, enforces the deliberate act the design demands before a
+// live claim may be overridden. Every other lane — unclaimed, this checkout's
+// own, or one whose claim has expired, which is unclaimed — passes with no
+// ceremony: the happy path pays one extra evidence gather and nothing else,
+// exactly as "no confirmation, no warning, no ceremony on the happy path"
+// demands.
+//
+// Its result is the line the start owes after Apply (transitionSpec.authorize):
+// the transfer notice when the lane was held, ours or another's, and the
+// claimant changes hands; the empty string otherwise. A lane nobody holds has
+// no claim to transfer, so the notice is not even asked for there — the gate
+// is the one read that knows the lane's standing, and asking transferNotice
+// to re-derive it would gather every event a second time.
+// [LAW:one-source-of-truth]
 //
 // Enforcement lives here and only here per [LAW:single-enforcer]: `lit
 // start` is the one command that transfers a claim, so it is the one place
 // that gates the transfer.
-func authorizeStart(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue, take bool) error {
+func authorizeStart(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue, start model.Start, take bool) (notice string, err error) {
 	relations, err := ap.Store.GetRelationsByIDs(ctx, []string{issueID})
 	if err != nil {
-		return err
+		return "", err
 	}
 	lane := model.LaneOf(prior, relations[issueID].Parent)
 	cc, err := gatherClaimContext(ctx, stdout, ap)
 	if err != nil {
-		return err
+		return "", err
 	}
-	switch classifyTakeover(cc.standings.Of(lane), cc.self) {
-	case takeoverNone:
-		return nil
-	case takeoverStaleInformed:
-		return printStaleProvenance(stdout, cc, lane)
-	case takeoverFreshConfirm:
-		return confirmFreshTakeover(stdout, cc, lane, take)
-	default:
-		// Unreachable: classifyTakeover returns only the three values above.
-		// [LAW:no-silent-failure]
-		return fmt.Errorf("claims: %s has no recognized takeover requirement", issueID)
+	switch relationOf(cc.standings.Of(lane), cc.self) {
+	case laneHeldForeign:
+		if err := confirmFreshTakeover(stdout, cc, lane, take); err != nil {
+			return "", err
+		}
+	case laneUnclaimed:
+		return "", nil
 	}
-}
-
-// claimLineOrPanic renders the dossier formatClaimLine already builds for
-// every other claim-aware surface (`next`, `backlog`) — reused here rather
-// than re-derived, per the design comment on this ticket pointing at
-// claims_render.go's formatClaimLine/claimPrefix. It fails loudly rather
-// than silently proceeding without provenance: classifyTakeover only reaches
-// either caller when cc.standings.Of(lane) is Held or Stale, both of which
-// formatClaimLine always renders a line for, so an ok=false here means the
-// two functions have gone out of sync. [LAW:no-silent-failure]
-func claimLineOrPanic(cc claimContext, lane model.LaneID, caller string) (string, error) {
-	line, ok := formatClaimLine(cc, lane, time.Now())
-	if !ok {
-		return "", fmt.Errorf("claims: %s has a takeover requirement on %v but no claim line to show", caller, lane)
-	}
-	return line, nil
-}
-
-// printStaleProvenance is the "informed" half of the ticket: a stale foreign
-// hold proceeds unprompted, but prints the dossier plus the advisory
-// design-docs/work-claims.md's "Claimed with unmerged work in flight"
-// paragraph requires. Checking for unmerged branches or PRs is left to the
-// taking agent's judgment — lit stays ignorant of git and the forge.
-func printStaleProvenance(stdout io.Writer, cc claimContext, lane model.LaneID) error {
-	line, err := claimLineOrPanic(cc, lane, "stale takeover")
-	if err != nil {
-		return err
-	}
-	_, err = fmt.Fprintf(stdout, "%s — check for unmerged branches or PRs on this lane before building on it\n", line)
-	return err
+	return transferNotice(ctx, ap, issueID, start)
 }
 
 // confirmFreshTakeover is the deliberate act the design demands before a
-// fresh foreign hold may be overridden — never a lock, always an explicit
-// crossing. An interactive terminal is prompted directly; a non-interactive
-// caller (an agent, a script, a test capturing output into a buffer) must
-// already have passed --take, matching the ticket's acceptance line: "an
-// agent without a TTY can take over a fresh-claimed lane only by passing the
-// explicit flag." isTerminal(stdout) is the same interactivity signal
-// openOrPrintWorkflowFile already uses, so a captured-stdout test never
-// blocks on a stdin read it did not ask for.
+// foreign hold may be overridden — never a lock, always an explicit crossing.
+// An interactive terminal is prompted directly; a non-interactive caller (an
+// agent, a script, a test capturing output into a buffer) must already have
+// passed --take, matching the ticket's acceptance line: "an agent without a
+// TTY can take over a fresh-claimed lane only by passing the explicit flag."
+// isTerminal(stdout) is the same interactivity signal openOrPrintWorkflowFile
+// already uses, so a captured-stdout test never blocks on a stdin read it did
+// not ask for.
+//
+// The claim line is the dossier formatClaimLine already builds for every
+// other claim-aware surface (`next`, `backlog`), reused rather than re-derived.
+// It fails loudly rather than proceeding without naming the holder: the caller
+// reaches here only for a Held standing, which formatClaimLine always renders,
+// so ok=false means the two have gone out of sync. [LAW:no-silent-failure]
 func confirmFreshTakeover(stdout io.Writer, cc claimContext, lane model.LaneID, take bool) error {
-	line, err := claimLineOrPanic(cc, lane, "fresh takeover")
-	if err != nil {
-		return err
+	line, ok := formatClaimLine(cc, lane, time.Now())
+	if !ok {
+		return fmt.Errorf("claims: %v is held by another checkout but has no claim line to show", lane)
 	}
 	if !isTerminal(stdout) {
 		if !take {

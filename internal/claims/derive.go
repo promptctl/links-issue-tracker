@@ -98,17 +98,24 @@ func standingOf(members []model.Issue, events []model.IssueEvent, fresh Freshnes
 	// Leg 3 — the claim is fresh. Freshness is measured from the holder's last
 	// mutation of any kind in the lane, not from the establishing event, so
 	// ordinary working commentary carries a claim through a long stretch on a
-	// single ticket. Past the window the lane is available again, but it keeps
-	// its provenance: somebody was here, and whoever takes it over should know.
+	// single ticket. Past the window the claim is over and the lane is
+	// Unclaimed — the same value a lane nobody ever started derives, because
+	// an expired claim is not a claim and nothing downstream is owed the fact
+	// that one existed (links-claims-y6yz).
 	//
-	// The provenance includes what the machine can still SEE of that holder.
-	// Leg 4 already enumerated it and spent the answer on one question — is
-	// this evidence disproven — discarding the rest, so an expired clock was
-	// the only fact a reader downstream ever got. Carrying the full finding
-	// here costs nothing (the enumeration is the same one) and is what lets a
-	// stale lane distinguish a holder who left from one who is merely quiet.
-	if !fresh.Covers(tenure.LastActivity) {
-		return Stale{Tenure: tenure, Holder: local.PresenceOf(holder)}
+	// The one thing that carries a claim past the window is a lock on the
+	// holder's worktree. Every other liveness signal this machine has says a
+	// tree EXISTS, which a dead session leaves behind just as readily, but
+	// `git worktree lock` is the holder speaking — a deliberate do-not-disturb
+	// nobody sets by walking away — so leg 3 defers to leg 4's finding in that
+	// one case and in no other (links-claims-2wk2). Mere presence deliberately
+	// does not sustain a claim: a worktree outliving its session is ordinary,
+	// and the age-out exists precisely for that case.
+	// [LAW:single-enforcer] This is the one place a claim's liveness is
+	// decided; consumers read Held or Unclaimed and never a clock or a
+	// presence of their own.
+	if !fresh.Covers(tenure.LastActivity) && local.PresenceOf(holder) != Locked {
+		return Unclaimed{}
 	}
 	return Held{Tenure: tenure, Contested: contestants(holder, activity, establishers, fresh)}
 }

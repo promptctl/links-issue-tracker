@@ -188,13 +188,11 @@ func TestPredicateGrid(t *testing.T) {
 				event("e2", "T1", "", ago(48*time.Hour), streamA),
 			},
 			local: bothLive,
-			// Present, not the zero Presence: this machine enumerated streamA
-			// and found it. Only the clock lapsed. TestStalePresenceGrid below
-			// is where that distinction is the subject rather than a detail.
-			want: claims.Stale{
-				Tenure: claims.Tenure{By: streamA, Since: ago(72 * time.Hour), LastActivity: ago(48 * time.Hour)},
-				Holder: claims.Present,
-			},
+			// The same value as a lane nobody ever started: an expired claim is
+			// not a claim, and the standing has nowhere to record that one
+			// existed. TestExpiredClaimPresenceGrid below is where the holder's
+			// worktree state is the subject rather than a detail.
+			want: claims.Unclaimed{},
 		},
 		{
 			name:     "leg 4 dropped — this machine has proven the holder's checkout gone",
@@ -256,20 +254,22 @@ func TestVoidEvidenceFallsThroughToTheNextEstablisher(t *testing.T) {
 	assertStanding(t, standings.Of(laneIn(epicID, "")), held(streamB, ago(4*time.Hour), ago(4*time.Hour)))
 }
 
-// TestStalePresenceGrid runs one expired claim against every state its holder's
-// worktree can be in, because the clock is held identical across all four rows
-// and the worktree is the only thing that moves. That is the whole content of
-// links-claims-2wk2: the derivation had the enumeration in hand and spent it on
-// a single yes/no question, so an expired window was the only fact a reader
-// downstream ever received, and "the clock lapsed" reached them wearing the
-// words for "the holder left".
+// TestExpiredClaimPresenceGrid runs one expired claim against every state its
+// holder's worktree can be in, because the clock is held identical across all
+// four rows and the worktree is the only thing that moves. Three rows derive
+// Unclaimed and one derives Held, and the grid exists to pin which is which:
+// a lock is the one local finding that speaks for the holder rather than
+// merely about them, so it is the one that carries a claim past the window
+// (links-claims-2wk2). Everything else — a worktree merely on disk, a
+// worktree this machine cannot see at all — leaves the expired claim exactly
+// what it is, which is nothing (links-claims-y6yz).
 //
 // The gone row is the reason this is a grid and not a pair. A proven-absent
-// holder does not produce a Stale carrying Gone — its evidence is voided before
-// any holder is chosen, so the lane comes out Unclaimed — and pinning that here
-// is what keeps a later reader from "completing" the enum by routing Gone
-// through Stale and quietly reviving the claim this leg exists to bury.
-func TestStalePresenceGrid(t *testing.T) {
+// holder's evidence is voided before any holder is chosen, so its lane comes
+// out Unclaimed by a different leg — and pinning it beside the others is what
+// keeps a later reader from routing Gone through leg 3 and quietly reviving
+// the claim leg 4 exists to bury.
+func TestExpiredClaimPresenceGrid(t *testing.T) {
 	// One lane, one holder, one establishing act well outside the window. Every
 	// row below shares it.
 	expired := []model.IssueEvent{
@@ -289,19 +289,19 @@ func TestStalePresenceGrid(t *testing.T) {
 			want:  claims.Unclaimed{},
 		},
 		{
-			name:  "present — the worktree is on disk, so the claim lapsed but its holder was never shown to have left",
+			name:  "present — a worktree on disk outlives its session routinely, so it sustains nothing",
 			local: claims.NewLocalCheckouts(workspaceID, unlocked(streamA.Stream())),
-			want:  claims.Stale{Tenure: tenure, Holder: claims.Present},
+			want:  claims.Unclaimed{},
 		},
 		{
-			name:  "locked — the holder set an explicit do-not-disturb, the strongest local evidence there is",
+			name:  "locked — the holder set an explicit do-not-disturb, and the hold stands past the clock",
 			local: claims.NewLocalCheckouts(workspaceID, []claims.LiveCheckout{{Stream: streamA.Stream(), Locked: true}}),
-			want:  claims.Stale{Tenure: tenure, Holder: claims.Locked},
+			want:  claims.Held{Tenure: tenure},
 		},
 		{
 			name:  "unenumerable — a machine that checked nothing proves nothing, and freshness alone governs",
 			local: assumeLive,
-			want:  claims.Stale{Tenure: tenure, Holder: claims.Unprovable},
+			want:  claims.Unclaimed{},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -492,8 +492,9 @@ func TestParentlessTicketIsItsOwnLane(t *testing.T) {
 // TestColdStartDerivesThePublicCheckout is the design's graceful-upgrade
 // promise: a repository whose whole history predates attribution derives the
 // public checkout as holder rather than nothing. Recent history holds the lane;
-// real pre-attribution evidence is far older than the freshness window, so it
-// reads Stale — available for takeover, carrying its provenance.
+// real pre-attribution evidence is far older than the freshness window, so
+// those lanes are Unclaimed — available to everyone, with nothing said about
+// the history behind them.
 func TestColdStartDerivesThePublicCheckout(t *testing.T) {
 	issues, parents := epicOf(t, leaf(t, "T1", "", model.StateInProgress), leaf(t, "T2", "", model.StateOpen))
 	lane := laneIn(epicID, "")
@@ -508,9 +509,7 @@ func TestColdStartDerivesThePublicCheckout(t *testing.T) {
 		event("e1", "T1", model.ActionStart, ago(90*24*time.Hour), public),
 		event("e2", "T2", model.ActionDone, ago(89*24*time.Hour), public),
 	}, assumeLive)
-	assertStanding(t, aged.Of(lane), claims.Stale{
-		Tenure: claims.Tenure{By: public, Since: ago(89 * 24 * time.Hour), LastActivity: ago(89 * 24 * time.Hour)},
-	})
+	assertStanding(t, aged.Of(lane), claims.Unclaimed{})
 }
 
 // TestEvidenceRefusesAPartialRead: the completing event that decides a lane's
@@ -581,25 +580,17 @@ func TestUnknownLaneReadsAsUnclaimed(t *testing.T) {
 //
 // Spelled out means every field must be spelled: a variant that grows one and
 // does not grow a line here goes on passing, and passing is what it will look
-// like. Stale.Holder was added with the arm left alone, and a grid written
-// specifically to tell three holder states apart went green against a
-// derivation that reported the same state for all three — caught by mutating
-// the derivation, not by reading the assertion. [LAW:one-source-of-truth]
+// like. A field was once added to a variant with this arm left alone, and a
+// grid written specifically to tell three values of it apart went green
+// against a derivation that reported the same value for all three — caught by
+// mutating the derivation, not by reading the assertion.
+// [LAW:one-source-of-truth]
 func assertStanding(t *testing.T, got, want claims.Standing) {
 	t.Helper()
 	switch expected := want.(type) {
 	case claims.Unclaimed:
 		if _, ok := got.(claims.Unclaimed); !ok {
 			t.Fatalf("standing = %#v, want Unclaimed", got)
-		}
-	case claims.Stale:
-		actual, ok := got.(claims.Stale)
-		if !ok {
-			t.Fatalf("standing = %#v, want Stale%+v", got, expected.Tenure)
-		}
-		assertTenure(t, actual.Tenure, expected.Tenure)
-		if actual.Holder != expected.Holder {
-			t.Fatalf("stale holder presence = %v, want %v", actual.Holder, expected.Holder)
 		}
 	case claims.Held:
 		actual, ok := got.(claims.Held)

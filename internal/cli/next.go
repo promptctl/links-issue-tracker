@@ -10,7 +10,6 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/app"
-	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workflows"
@@ -119,10 +118,10 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 		announce = resumeAdvice(o.Row, actingAs) + "\n"
 	case ServedFromEpicLane:
 		row = o.Row
-		announce = startAdvice(o.Row, o.Lane, expiredHolder(cc.standings.Of(o.Lane))) + " (a second lane of an epic you already hold a lane in)\n"
+		announce = startAdvice(o.Row, o.Lane) + " (a second lane of an epic you already hold a lane in)\n"
 	case ServedFromNewLane:
 		row = o.Row
-		announce = startAdvice(o.Row, o.Lane, expiredHolder(cc.standings.Of(o.Lane))) + "\n"
+		announce = startAdvice(o.Row, o.Lane) + "\n"
 	// Step 1b says what it is for. This is the one pick whose reason the row
 	// cannot show on its own: a global-pool pick is self-explanatory from the
 	// row, and step 2's shared epic is visible in the id, but "this unblocks
@@ -130,7 +129,7 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 	// dropped at the seam that knew it (links-next-output-4hor).
 	case ServedFromDependency:
 		row = o.Row
-		announce = startAdvice(o.Row, o.Lane, expiredHolder(cc.standings.Of(o.Lane))) +
+		announce = startAdvice(o.Row, o.Lane) +
 			fmt.Sprintf(" (gates %s, which is in a lane you hold)\n", o.Gates)
 	// The two terminal outcomes travel outward AS THEMSELVES. Rendering them
 	// into an untyped error here discarded the very discriminator routing had
@@ -158,28 +157,6 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 		return workflows.Occasion{}, err
 	}
 	return nextPulledOccasion(row.Issue), nil
-}
-
-// inFlightState is the clause naming what happened to the work a takeover pick
-// would inherit — the one word of that sentence that turns on evidence rather
-// than on grammar, which is why it is a value the sentences interpolate instead
-// of a fifth and sixth sentence beside them. [LAW:dataflow-not-control-flow]
-//
-// "abandoned" is a claim about the holder, and the routing that reaches here
-// used to make it on the strength of a clock alone. Against a worktree this
-// machine can still see, it is not merely alarming but false, and it was
-// telling agents to take lanes whose owning session was running — the pick it
-// was reported on had its holder locked on an open PR (links-claims-2wk2). The
-// command is still offered in every case: what this changes is what the reader
-// is told they are taking, never whether they may.
-func inFlightState(holder claims.Presence) string {
-	switch holder {
-	case claims.Locked:
-		return "claimed by a locked worktree whose claim has gone stale"
-	case claims.Present:
-		return "stale, though its holder's worktree is still on disk"
-	}
-	return "abandoned"
 }
 
 // resumeAdvice is what `next` says when it hands back work already in flight in
@@ -237,36 +214,28 @@ func resumeAdvice(row annotation.AnnotatedIssue, actingAs string) string {
 // It was `claimAnnouncement`, and the rename is the fix — an announcement
 // reports, and reporting is the one thing a read-only command must not do.
 //
-// The verb turns on the row's own lifecycle state: routing admits an
-// in-progress row into a lane this checkout does not hold only once its
-// holder's claim is refuted — orphaned, or in a lapsed lane (capacityFor) — so
-// plain "claim" would promise greenfield on a ticket that may carry another
-// checkout's unmerged working tree.
+// The lead clause turns on the row's own lifecycle state: routing serves an
+// in-progress row from a lane this checkout does not hold only when nobody
+// holds that lane (capacityFor), so the row is somebody's abandoned work and
+// may carry their unmerged working tree. The clause says exactly that and no
+// more — "nobody holds it" is the whole of what the standing proves. It does
+// not say whose it was or how long ago they left: an expired claim is not a
+// claim, and the row's history is `lit show`'s to tell (links-claims-y6yz).
 //
 // The object turns on the lane's shape, which is why Describe answers in two
 // parts. A solo lane IS the ticket, so naming it spelled the same id twice
 // ("starting X claims X") — a tautology no reader could take as advice about a
 // command they had yet to run. The pronoun is the caller's answer to that,
 // available here and nowhere else because the ticket is named one clause
-// earlier.
-//
-// The two verbs spell their sentences out rather than sharing one with the
-// object substituted, because English puts the pronoun in different places:
-// "claim it", but "take it over" — a particle verb splits around a pronoun and
-// reads wrong with one trailing it. next_route_test.go pins all six cells of
-// verb and lane shape across these four sentences: a named lane and an epic's
-// default lane differ only in the words Describe hands back.
-func startAdvice(row annotation.AnnotatedIssue, lane model.LaneID, holder claims.Presence) string {
-	described, named := lane.Describe()
-	if row.State() == model.StateInProgress {
-		state := inFlightState(holder)
-		if !named {
-			return fmt.Sprintf("%s is in progress and %s — run `lit start %s` to take it over", row.ID, state, row.ID)
-		}
-		return fmt.Sprintf("%s is in progress and %s — run `lit start %s` to take over %s", row.ID, state, row.ID, described)
-	}
+// earlier. next_route_test.go pins all four cells of state and lane shape.
+func startAdvice(row annotation.AnnotatedIssue, lane model.LaneID) string {
+	object, named := lane.Describe()
 	if !named {
-		return fmt.Sprintf("run `lit start %s` to claim it", row.ID)
+		object = "it"
 	}
-	return fmt.Sprintf("run `lit start %s` to claim %s", row.ID, described)
+	advice := fmt.Sprintf("run `lit start %s` to claim %s", row.ID, object)
+	if row.State() == model.StateInProgress {
+		return fmt.Sprintf("%s is in progress and nobody holds it — %s", row.ID, advice)
+	}
+	return advice
 }
