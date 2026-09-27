@@ -97,7 +97,18 @@ var ErrMirrorHoldCut = errors.New("mirror hold cut at its budget")
 // head must be a commit this store already holds — it was cloned from here —
 // so a hash the store does not hold is refused, and that refusal surfaces as
 // the error. [LAW:no-silent-failure]
-func RecordPushedHead(ctx context.Context, doltRootDir string, remote string, branch string, head string) (record PushedHeadRecord, err error) {
+//
+// receivedRefs, when non-nil, is the received-refs record the push proved: the
+// advertisement it left the remote showing (internal/cli/sync_receive_ask.go
+// owns its bytes and the proof). It is written here, after the ref settled and
+// inside the same hold, for two reasons. The hold is what keeps a rotation of
+// the Dolt directory from landing between the push's bookkeeping and the
+// record, which would let the record describe a directory that was swapped
+// out. And the record says "this store holds what the remote advertises", so
+// the next receive skips its fetch: written over a ref that failed to move, it
+// would stop that fetch from ever repairing the ref. A nil record leaves the
+// one on disk standing. [LAW:one-source-of-truth]
+func RecordPushedHead(ctx context.Context, doltRootDir string, remote string, branch string, head string, receivedRefs []byte) (record PushedHeadRecord, err error) {
 	root, err := validateDoltRootDir(doltRootDir)
 	if err != nil {
 		return 0, err
@@ -182,16 +193,23 @@ func RecordPushedHead(ctx context.Context, doltRootDir string, remote string, br
 	canMove, ffErr := ddb.CanFastForward(holdCtx, trackingRef, pushedCommit)
 	switch {
 	case errors.Is(ffErr, doltdb.ErrUpToDate), errors.Is(ffErr, doltdb.ErrIsAhead):
-		return PushedHeadCarried, nil
+		record = PushedHeadCarried
 	case ffErr != nil:
 		return 0, fmt.Errorf("record pushed head %s on remotes/%s/%s: compare the ref with the pushed head: %w", trimmedHead, trimmedRemote, trimmedBranch, ffErr)
 	case !canMove:
 		return 0, fmt.Errorf("record pushed head %s on remotes/%s/%s: the ref has diverged from the pushed head (the remote was rewritten under the clone); the next fetch settles it", trimmedHead, trimmedRemote, trimmedBranch)
+	default:
+		if setErr := ddb.SetHead(holdCtx, trackingRef, hash.Parse(trimmedHead)); setErr != nil {
+			return 0, fmt.Errorf("record pushed head %s on remotes/%s/%s: %w", trimmedHead, trimmedRemote, trimmedBranch, setErr)
+		}
+		record = PushedHeadMoved
 	}
-	if setErr := ddb.SetHead(holdCtx, trackingRef, hash.Parse(trimmedHead)); setErr != nil {
-		return 0, fmt.Errorf("record pushed head %s on remotes/%s/%s: %w", trimmedHead, trimmedRemote, trimmedBranch, setErr)
+	if receivedRefs != nil {
+		if writeErr := WriteReceivedRefs(root, receivedRefs); writeErr != nil {
+			return record, fmt.Errorf("pushed head %s recorded (%s), but not what the push left the remote advertising, so the next automatic receive fetches: %w", trimmedHead, record, writeErr)
+		}
 	}
-	return PushedHeadMoved, nil
+	return record, nil
 }
 
 // openChunkStoreForRefWrite opens the workspace's Dolt database without a SQL

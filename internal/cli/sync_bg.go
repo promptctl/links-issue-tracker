@@ -427,6 +427,9 @@ type pushedHead struct {
 	remote string
 	branch string
 	head   string
+	// proven is what the push proved it left the remote advertising, recorded
+	// on the live store with the head; zero when it proved nothing.
+	proven remoteAdvertisement
 }
 
 // landed reports whether a push landed and its head is known.
@@ -514,7 +517,7 @@ func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnsw
 	if landed.landed() {
 		recordStart := time.Now()
 		var recordErr error
-		record, recordErr = store.RecordPushedHead(ctx, ws.DatabasePath, landed.remote, landed.branch, landed.head)
+		record, recordErr = store.RecordPushedHead(ctx, ws.DatabasePath, landed.remote, landed.branch, landed.head, landed.proven.record())
 		recordHeld = time.Since(recordStart)
 		if recordErr != nil {
 			// The push landed and its outcome stands; what failed is the
@@ -525,7 +528,7 @@ func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnsw
 			if errors.Is(recordErr, store.ErrMirrorHoldCut) {
 				recordErr = fmt.Errorf("%w: %w", holdBudgetCutExplanation("recording the pushed head"), recordErr)
 			}
-			recordMirrorTraceError(ws, fmt.Errorf("record the pushed head on the live store (freshness reads say \"not pushed\" until the next fetch): %w", recordErr))
+			recordMirrorTraceError(ws, fmt.Errorf("record the push on the live store (tracking ref %s; while it is unrecorded, freshness reads say \"not pushed\" until the next fetch): %w", record, recordErr))
 		}
 		fmt.Fprintf(log, "%s mirror hold released step=record elapsed=%s ref=%s\n", time.Now().UTC().Format(time.RFC3339), recordHeld.Round(time.Millisecond), record)
 	}
@@ -632,7 +635,7 @@ func mirrorOnce(ctx, completionCtx context.Context, session syncSession, ws work
 	// The head the push reports is the clone's HEAD — the push is
 	// HEAD:<branch> and the clone is frozen, so nothing moved it. The live
 	// store learns it through RecordPushedHead.
-	return pushedHead{remote: outcome.remote, branch: outcome.branch, head: outcome.head}, nil
+	return pushedHead{remote: outcome.remote, branch: outcome.branch, head: outcome.head, proven: outcome.proven}, nil
 }
 
 // waitForParentExit blocks until the spawning command has exited, returning

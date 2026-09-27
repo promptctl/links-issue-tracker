@@ -24,30 +24,7 @@ import (
 // [LAW:behavior-not-structure] every assertion reads a durable trace or a
 // marker on disk, never how the receive reached its decision.
 func TestAutomaticReceiveAsksBeforeFetching(t *testing.T) {
-	base := t.TempDir()
-	runGit(t, base, "init", "--bare", "remote.git")
-	remote := filepath.Join(base, "remote.git")
-
-	producer := filepath.Join(base, "alpha")
-	runGit(t, base, "clone", remote, "alpha")
-	runGit(t, producer, "config", "user.email", "a@a.co")
-	runGit(t, producer, "config", "user.name", "alpha")
-	if err := os.WriteFile(filepath.Join(producer, "readme.md"), []byte("hi\n"), 0o644); err != nil {
-		t.Fatalf("write readme error = %v", err)
-	}
-	runGit(t, producer, "add", "-A")
-	runGit(t, producer, "commit", "-m", "seed")
-	runGit(t, producer, "push", "origin", "HEAD")
-	runCLIInDir(t, producer, "init", "--skip-hooks", "--skip-agents")
-	runCLIInDir(t, producer, "new", "--title", "first-ticket", "--topic", "demo", "--type", "task")
-	runCLIInDir(t, producer, "sync", "push", "--set-upstream")
-
-	consumer := filepath.Join(base, "bravo")
-	runGit(t, base, "clone", remote, "bravo")
-	runGit(t, consumer, "config", "user.email", "b@b.co")
-	runGit(t, consumer, "config", "user.name", "bravo")
-	runCLIInDir(t, consumer, "init", "--skip-hooks", "--skip-agents")
-	ws := workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(consumer, ".git", "links"))}
+	remote, producer, consumer, ws := twoClonesOverOneDoltRemote(t)
 	t.Setenv(DisableAutoSyncEnvVar, "0")
 
 	// Nothing recorded yet: the first lapsed receive cannot know the remote is
@@ -156,6 +133,38 @@ func TestAutomaticReceiveAsksBeforeFetching(t *testing.T) {
 	if got := string(readReceivedRefs(ws)); got != wantRecord {
 		t.Fatalf("a failed receive rewrote the received-refs record: %q", got)
 	}
+}
+
+// twoClonesOverOneDoltRemote builds a bare git remote and two lit clones of
+// it: the producer, whose `first-ticket` is already pushed, and the consumer,
+// initialised but not yet received. It returns the consumer's workspace.
+func twoClonesOverOneDoltRemote(t *testing.T) (remote, producer, consumer string, ws workspace.Info) {
+	t.Helper()
+	base := t.TempDir()
+	runGit(t, base, "init", "--bare", "remote.git")
+	remote = filepath.Join(base, "remote.git")
+
+	producer = filepath.Join(base, "alpha")
+	runGit(t, base, "clone", remote, "alpha")
+	runGit(t, producer, "config", "user.email", "a@a.co")
+	runGit(t, producer, "config", "user.name", "alpha")
+	if err := os.WriteFile(filepath.Join(producer, "readme.md"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatalf("write readme error = %v", err)
+	}
+	runGit(t, producer, "add", "-A")
+	runGit(t, producer, "commit", "-m", "seed")
+	runGit(t, producer, "push", "origin", "HEAD")
+	runCLIInDir(t, producer, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, producer, "new", "--title", "first-ticket", "--topic", "demo", "--type", "task")
+	runCLIInDir(t, producer, "sync", "push", "--set-upstream")
+
+	consumer = filepath.Join(base, "bravo")
+	runGit(t, base, "clone", remote, "bravo")
+	runGit(t, consumer, "config", "user.email", "b@b.co")
+	runGit(t, consumer, "config", "user.name", "bravo")
+	runCLIInDir(t, consumer, "init", "--skip-hooks", "--skip-agents")
+	ws = workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(consumer, ".git", "links"))}
+	return remote, producer, consumer, ws
 }
 
 // receiveTraces returns the durable sync traces the automatic receive wrote,

@@ -77,6 +77,15 @@ type Syncer interface {
 	// of it), the result is Superseded rather than an error, because the goal
 	// state holds. A rejection the re-check does not explain is the error.
 	SyncPushFromClone(ctx context.Context, remote string, branch string, setUpstream bool, force bool) (SyncPushResult, error)
+
+	// SyncRemoteMirrorHolds reports whether this store's local mirror of the
+	// remote's data holds every one of commits — git commit ids as the remote
+	// advertises them. It contacts no network. After a push this store made
+	// that landed without being superseded, the mirror holds exactly what this
+	// store wrote or had already read, so an advertised commit the mirror holds
+	// is this store's own push and not a peer's later one: that is what lets
+	// the push record what it left the remote advertising without a fetch.
+	SyncRemoteMirrorHolds(ctx context.Context, remote string, commits []string) (bool, error)
 	SyncPull(ctx context.Context, remote string, branch string) (SyncPullResult, error)
 
 	// SyncReceive fetches and fast-forwards when — and only when — local is

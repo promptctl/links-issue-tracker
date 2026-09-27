@@ -396,6 +396,7 @@ func syncPushLeaf() syncLeaf {
 		// [LAW:no-silent-failure] The push error surfaces as the command's exit
 		// status only after its trace has been recorded inside performSyncPush —
 		// the skipped/ok outcome is never printed over a failed push.
+		recordPushedAdvertisement(ws, outcome.proven)
 		if outcome.pushErr != nil {
 			// A remote schema ahead of this binary surfaces as the one sync-failure
 			// contract (exit ExitConflict, naming `lit upgrade`) rather than the raw
@@ -426,8 +427,11 @@ type syncPushOutcome struct {
 	// push output. [LAW:one-source-of-truth]
 	maintenance string
 	head        string // the commit the push sent as HEAD; empty on a skip or a failure
-	traceErr    error
-	pushErr     error // the push failure; the trace is already recorded when set
+	// proven is the advertisement this push proved it left the remote showing
+	// (provePushedAdvertisement); zero when it proved none.
+	proven   remoteAdvertisement
+	traceErr error
+	pushErr  error // the push failure; the trace is already recorded when set
 }
 
 // syncPushStep is the push the orchestrator runs once it has resolved the
@@ -546,6 +550,16 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 		pushErr = fmt.Errorf("%w: %w", pushDeadlineCutExplanation(), pushErr)
 	}
 	traceMetadata := syncPushTraceMetadata(remoteName, syncBranch, result, pushErr)
+	// A push that landed on its own moved the remote to its own write, and the
+	// next receive would fetch to learn nothing unless the push records that.
+	// Proving it costs one ls-remote. A failed or superseded push proves
+	// nothing, and the trace says which way the proof went. [LAW:nothing-unseen]
+	var proven remoteAdvertisement
+	if pushErr == nil && result.Superseded == "" {
+		var proveErr error
+		proven, proveErr = provePushedAdvertisement(ctx, session.syncer, ws, remoteName)
+		traceMetadata["advertisement"] = advertisementProofTrace(proven, proveErr)
+	}
 	traceStatus := "ok"
 	traceReason := "managed automation requested sync push"
 	if pushErr != nil {
@@ -599,9 +613,23 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 		message:     result.Message,
 		maintenance: result.Maintenance,
 		head:        result.Head,
+		proven:      proven,
 		traceErr:    traceRecordErr,
 		pushErr:     pushErr,
 	}, nil
+}
+
+// advertisementProofTrace is how a push's trace reads the proof: proven, not
+// held by the mirror (a peer pushed after this push landed), or not asked
+// because the question failed.
+func advertisementProofTrace(proven remoteAdvertisement, err error) string {
+	switch {
+	case err != nil:
+		return "unproven: " + err.Error()
+	case proven == remoteAdvertisement{}:
+		return "unproven: the store's git mirror does not hold the remote's head"
+	}
+	return "proven"
 }
 
 func syncStatusLeaf() syncLeaf {

@@ -5,7 +5,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -34,6 +36,17 @@ import (
 // unreadable — is not "nothing changed": it is traced and the full fetch
 // runs, exactly as it did before the question existed, and the previous
 // record stands. [LAW:no-silent-failure]
+//
+// A push writes the record too, because a push moves the remote as surely as
+// a peer does: before it did, every push this checkout made (the mirror after
+// each write, `lit sync push`) made the next receive see a moved remote and
+// fetch, only to find the store already held everything (links-scale-om3r.1tg:
+// 10 of 12 receives fetched, one lapsed `lit backlog` took 7.4s). A push that
+// landed without being superseded asks the remote what it now advertises and
+// records it only when the store's own git mirror holds every advertised
+// commit (provePushedAdvertisement). The remote's head is then the push's own
+// write, never a peer's later push that the mirror has never seen, so the
+// record still never leads the store.
 
 // remoteAdvertisement is what one round trip to the sync remote learned: which
 // remote answered, at what URL, and the refs/dolt/* listing it advertised. The
@@ -93,6 +106,14 @@ func askRemote(ctx context.Context, ws workspace.Info, gitRemotes []workspace.Gi
 	if remoteName == "" {
 		return remoteAdvertisement{}, nil
 	}
+	return advertise(ctx, ws, remoteName, gitRemotes)
+}
+
+// advertise is the round trip itself, against a named remote: the listing
+// comes from `git ls-remote`, the URL from the git config it was read from.
+// [LAW:one-source-of-truth] the receive's question and the push's proof both
+// build their advertisement here, so the two can only ever agree byte for byte.
+func advertise(ctx context.Context, ws workspace.Info, remoteName string, gitRemotes []workspace.GitRemote) (remoteAdvertisement, error) {
 	refs, err := workspace.RemoteDoltRefs(ctx, ws.RootDir, remoteName)
 	if err != nil {
 		return remoteAdvertisement{}, fmt.Errorf("list refs/dolt/* on remote %q: %w", remoteName, err)
@@ -104,6 +125,66 @@ func askRemote(ctx context.Context, ws workspace.Info, gitRemotes []workspace.Gi
 	}, nil
 }
 
+// commits is the commit id of every ref in the listing, in listing order.
+// `git ls-remote` prints one "<id>\t<ref>" line per ref.
+func (a remoteAdvertisement) commits() []string {
+	var ids []string
+	for _, line := range strings.Split(a.refs, "\n") {
+		if id, _, ok := strings.Cut(line, "\t"); ok {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// provePushedAdvertisement asks the remote, right after a push from this
+// session's store landed without being superseded, what it now advertises,
+// and returns that advertisement only when the store's own git mirror holds
+// every commit in it. Otherwise it returns the zero advertisement, which
+// records nothing.
+//
+// Why holding the commit proves the advertisement is this push's: Dolt moves
+// refs/dolt/data only by compare-and-swap, each write a new commit on top of
+// the one it replaced, and a push that landed made the last of those writes
+// from this mirror. Until a peer writes again, that commit is the remote's
+// head, and it is in the mirror. A peer's later write is a commit this mirror
+// has never fetched: nothing fetches into it for the rest of the push's
+// session, since the mirror's clone is private to its cycle and a foreground
+// push holds the store. A superseded push is left out because it did fetch,
+// so its mirror can hold a peer's head that the store never took in.
+// [LAW:parse-dont-validate] the non-zero advertisement is the proof; nothing
+// downstream re-asks.
+func provePushedAdvertisement(ctx context.Context, syncer storage.Syncer, ws workspace.Info, remoteName string) (remoteAdvertisement, error) {
+	gitRemotes, err := workspace.GitRemotes(ctx, ws.RootDir)
+	if err != nil {
+		return remoteAdvertisement{}, fmt.Errorf("read git remotes: %w", err)
+	}
+	observed, err := advertise(ctx, ws, remoteName, gitRemotes)
+	if err != nil {
+		return remoteAdvertisement{}, err
+	}
+	held, err := syncer.SyncRemoteMirrorHolds(ctx, remoteName, observed.commits())
+	if err != nil || !held {
+		return remoteAdvertisement{}, err
+	}
+	return observed, nil
+}
+
+// recordPushedAdvertisement writes the record a foreground push proved, on
+// the store the push ran against: that session is still open, so its
+// workspace hold keeps a rotation from landing before the write. The mirror's
+// proof is written by store.RecordPushedHead instead, inside its own hold on
+// the live store. The zero advertisement leaves the record standing.
+func recordPushedAdvertisement(ws workspace.Info, proven remoteAdvertisement) {
+	payload := proven.record()
+	if payload == nil {
+		return
+	}
+	if err := store.WriteReceivedRefs(ws.DatabasePath, payload); err != nil {
+		fmt.Fprintf(os.Stderr, "lit: received-refs marker not written: %v\n", err)
+	}
+}
+
 // recordReceived writes what the receive established, and only that. A fetch
 // that returned without error, whatever state it reached, means a fetch
 // succeeded now (fetch-success.last, which the 24-hour staleness banner
@@ -112,9 +193,10 @@ func askRemote(ctx context.Context, ws workspace.Info, gitRemotes []workspace.Gi
 // before the fetch, so that advertisement becomes the record the next
 // question is measured against; an unconverged divergence leaves the record
 // alone, so the next receive fetches and surfaces it again. Nothing learned
-// (the question failed) records nothing, so the previous record stands. The
-// record has this one writer, which is what keeps a failed fetch, an
-// unsettled one, or an unanswered question from ever reading as "unmoved".
+// (the question failed) records nothing, so the previous record stands. This
+// is the receive's only write of the record. The only other writer is a push
+// whose advertisement was proven, so a failed fetch, an unsettled one, or an
+// unanswered question never reads as "unmoved".
 // [LAW:single-enforcer] [LAW:dataflow-not-control-flow] the outcome's values
 // decide; the caller runs this after every fetch path.
 func recordReceived(ws workspace.Info, outcome syncReceiveOutcome, observed remoteAdvertisement) {
