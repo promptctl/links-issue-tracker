@@ -508,12 +508,11 @@ func (w *holdWait) arrivals() bool {
 }
 
 // holderRecordNames lists the record names under a lock's holder directory.
-// Nothing is
-// opened or probed: liveness is describeLockHolders's business, at the moment
-// a contender reports; here the names' identity is all that is read. A
-// directory that does not exist yet has no holders; a directory that cannot
-// be read reads the same way, and the failure surfaces where the account is
-// rendered (readLockHolders), which every exhausted wait reaches.
+// Nothing is opened or probed: liveness is describeLockHolders's business, at
+// the moment a contender reports; here the names' identity is all that is
+// read. A directory that does not exist yet has no holders; a directory that
+// cannot be read reads the same way, and the failure surfaces where the
+// account is rendered (readLockHolders), which every exhausted wait reaches.
 func holderRecordNames(dir string) []string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {

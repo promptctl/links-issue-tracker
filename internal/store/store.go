@@ -458,11 +458,17 @@ func openStoreConnection(ctx context.Context, doltRootDir string, workspaceID st
 // This re-open is the ONE place Dolt's journal lock is acquired while the
 // commit lock is held — the inverted order this package's doc documents
 // as this site's tolerated deviation. It cannot wedge, and the reason is two
-// bounds and not one. Per call, the re-open waits at most
-// coResidentHolderWait before failing the mutation loudly — with
-// wrapEngineOpenContention's holder account, from the ping that makes the
-// open (and its contention) surface here rather than at whichever query runs
-// next. Across a mutation, this call is the rotate step of
+// bounds and not one. Per call, the re-open fails the mutation loudly once
+// the holders in front of it have stood still for coResidentHolderWait
+// (holdWait) — with wrapEngineOpenContention's holder account, from the ping
+// that makes the open (and its contention) surface here rather than at
+// whichever query runs next. Holders cannot keep arriving while this
+// mutation holds the commit lock: a write open, a snapshot copy and a
+// mirror's clone each take LOCK and then wait on the commit lock, so the
+// first to arrive stands still in front of this re-open until it fails; the
+// only LOCK taker that skips the commit lock, RecordPushedHead, runs once
+// per mirror cycle, and the next cycle begins with a clone. So the per-call
+// wait is at most a few multiples of coResidentHolderWait. Across a mutation, this call is the rotate step of
 // retryTransientGCContention's loop, which runs it up to
 // transientRetryMaxAttempts-1 times, so the per-call bound says nothing about
 // the hold a commit-lock waiter actually faces; that aggregate is bounded
