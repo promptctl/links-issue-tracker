@@ -135,10 +135,19 @@ var doltWorkspaceMachinery = map[string][]string{
 	// because the receive holds the store's LOCK for its run and so is a term
 	// of the co-resident wait; the cli reads it rather than keep the second
 	// copy it used to (receiveTimeout), which the wait could not see.
+	//
+	// ReadReceivedRefs and WriteReceivedRefs are the receive's record of what
+	// the remote advertised before the last settled fetch, the mirror of
+	// RecordPushedHead on the receive side. The receive reads it to answer
+	// "has the remote moved" BEFORE it opens the store — the whole point of
+	// the question is that no engine is open while it is asked — so there is
+	// no handle to ask through the contract, and the record is addressed by
+	// path beside the locks, whose exclusive hold forgets it. Receive
+	// machinery, deleted at S4 with the rest. [LAW:one-way-deps]
 	"mirror clone and push": {
 		"MirrorHoldBudget", "MirrorPushDeadline", "MirrorPushCancelLagObserved",
 		"RecordPushedHead", "PushedHeadRecord", "ErrMirrorHoldCut",
-		"InlineReceiveDeadline",
+		"InlineReceiveDeadline", "ReadReceivedRefs", "WriteReceivedRefs",
 	},
 	// Typed failures the CLI matches to choose an exit code and a message.
 	// [LAW:parse-dont-validate] — matched as types, never by message text.
