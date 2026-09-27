@@ -21,7 +21,6 @@ type sample struct {
 	probe probe
 	min   time.Duration
 	max   time.Duration
-	runs  int
 }
 
 // measure times every probe against one store and returns one sample per probe.
@@ -44,9 +43,19 @@ type sample struct {
 // whole distribution -- including its min, which is the figure reported.
 // Spreading a probe's repeats across rounds means a load spike lands once in
 // each probe's distribution rather than wholly inside one, and the min still
-// has a clean round to find. The first round is additionally the cold one (page
-// cache, dynamic linking), which min-of-rounds discards without needing a
-// warm-up mode to configure.
+// has a clean round to find.
+//
+// ONE WARM-UP PASS PER PHASE, NEVER RECORDED. The first invocation of a probe
+// is the cold one — page cache, dynamic linking — and on a store that has never
+// been written it is more than that: lit's first write runs its inline
+// compaction probe and remote check, which the imported stores paid during
+// `lit import` and the empty store pays in the write probe's first round.
+// Measured 2026-09-27, that made the empty column's `new` max 1.5x its min on a
+// quiet machine. min-of-rounds already discards the cold round; the warm-up
+// exists for the MAX, which the report tells the reader to take as a contention
+// signal and which would otherwise carry a structural cost on exactly one cell.
+// It is unconditional rather than a mode: every phase, every store.
+// [LAW:dataflow-not-control-flow]
 //
 // What the phase split buys is that every read figure, and the store's byte
 // count sampled before any probe ran, describe a store of exactly the size its
@@ -106,9 +115,15 @@ func phasesOf(ps []probe) [][]probe {
 	return phases
 }
 
-// measurePhase runs one phase to completion: every probe in it, repeats times,
-// round-robin, reporting the min and max of each.
+// measurePhase runs one phase to completion: every probe in it once unrecorded,
+// then repeats times round-robin, reporting the min and max of each.
 func measurePhase(bin litBinary, store generatedStore, phase []probe, devnull *os.File) ([]sample, error) {
+	for _, p := range phase {
+		if _, err := runProbe(bin, store, p, devnull); err != nil {
+			return nil, fmt.Errorf("store %s (%d rows), probe %q, warm-up: %w",
+				store.size.name, store.size.rows, p.name, err)
+		}
+	}
 	mins := make([]time.Duration, len(phase))
 	maxs := make([]time.Duration, len(phase))
 	for round := range repeats {
@@ -128,7 +143,7 @@ func measurePhase(bin litBinary, store generatedStore, phase []probe, devnull *o
 	}
 	samples := make([]sample, len(phase))
 	for i, p := range phase {
-		samples[i] = sample{probe: p, min: mins[i], max: maxs[i], runs: repeats}
+		samples[i] = sample{probe: p, min: mins[i], max: maxs[i]}
 	}
 	return samples, nil
 }
@@ -136,18 +151,19 @@ func measurePhase(bin litBinary, store generatedStore, phase []probe, devnull *o
 // runProbe times one invocation and returns its wall clock, or an error naming
 // what the command did instead of its job.
 //
-// The exit code is checked against the probe's declared set rather than against
-// zero, and an undeclared code is fatal rather than skipped. Both halves matter:
-// `lit next` exits 6 on an empty store because there is genuinely no ready work,
-// so treating nonzero as failure would make the empty control unmeasurable —
-// while treating any exit as success would let a refused invocation, which
-// returns an order of magnitude faster than a real answer, set the minimum this
-// tool reports. [LAW:no-silent-failure]
+// The exit code is checked against the probe's declared set for this store's
+// size rather than against zero, and an undeclared code is fatal rather than
+// skipped. Both halves matter: `lit next` exits 6 on an empty store because
+// there is genuinely no ready work, so treating nonzero as failure would make
+// the empty control unmeasurable — while treating any exit as success would let
+// a refused invocation, which returns an order of magnitude faster than a real
+// answer, set the minimum this tool reports. [LAW:no-silent-failure]
 func runProbe(bin litBinary, store generatedStore, p probe, devnull *os.File) (time.Duration, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), runBudget)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin.path, p.args...)
 	cmd.Dir = store.root
+	cmd.Env = store.env
 	cmd.Stdout = devnull
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -163,10 +179,10 @@ func runProbe(bin litBinary, store generatedStore, p probe, devnull *os.File) (t
 	if err != nil {
 		return 0, err
 	}
-	if !slices.Contains(p.okCodes, code) {
-		return 0, fmt.Errorf("`lit %s` exited %d, which is not among its expected codes %v — "+
+	if okCodes := p.okCodes(store.size.rows); !slices.Contains(okCodes, code) {
+		return 0, fmt.Errorf("`lit %s` exited %d, which is not among its expected codes %v at %d rows — "+
 			"the command did not do its work, so its %s is not a measurement of it:\n%s",
-			strings.Join(p.args, " "), code, p.okCodes, elapsed.Round(time.Millisecond),
+			strings.Join(p.args, " "), code, okCodes, store.size.rows, elapsed.Round(time.Millisecond),
 			strings.TrimSpace(stderr.String()))
 	}
 	return elapsed, nil

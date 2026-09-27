@@ -31,13 +31,33 @@ type probe struct {
 	// is invoked.
 	name    string
 	args    []string
-	okCodes []int
+	okCodes exitRule
 	// mutates marks a probe that writes to the store. It is a field rather
 	// than a separate write-probe list because the ordering it drives — every
 	// read probe measured before anything writes — is then a property of the
 	// data the runner sorts on, not a branch in the runner.
 	// [LAW:dataflow-not-control-flow]
 	mutates bool
+}
+
+// exitRule names the exit codes that prove a probe did its work against a
+// store of a given row count.
+//
+// It is a function of the store's size and not a fixed set because the proving
+// code genuinely moves with the size for one command: on the empty store `lit
+// next` can only answer "no ready work" (6), and on a populated one, where
+// every generated row is open, only a pick (0) proves it ran. A fixed {0, 6}
+// would accept 6 at 590 rows — a routing regression that passes over every row
+// exits in ~30ms and would set that command's fastest time — which is the
+// answer-shaped void okCodes exists to refuse. [LAW:dataflow-not-control-flow]
+// the accepted set is a value derived from the store, not a branch in the
+// runner.
+type exitRule func(rows int) []int
+
+// exits is the rule for every command whose proving codes do not depend on the
+// store's size.
+func exits(codes ...int) exitRule {
+	return func(int) []int { return codes }
 }
 
 // probes is the measured surface, in reading order: the two controls first,
@@ -57,19 +77,25 @@ type probe struct {
 // costume. Adding them means deciding what the empty control does first; that
 // decision belongs to whoever needs the column, not to a placeholder here.
 var probes = []probe{
-	{name: "version", args: []string{"version"}, okCodes: []int{0}},
-	{name: "quickstart", args: []string{"quickstart"}, okCodes: []int{0}},
-	{name: "ls", args: []string{"ls"}, okCodes: []int{0}},
-	{name: "backlog", args: []string{"backlog"}, okCodes: []int{0}},
+	{name: "version", args: []string{"version"}, okCodes: exits(0)},
+	{name: "quickstart", args: []string{"quickstart"}, okCodes: exits(0)},
+	{name: "ls", args: []string{"ls"}, okCodes: exits(0)},
+	{name: "backlog", args: []string{"backlog"}, okCodes: exits(0)},
 	// 6 is "no ready work" — the honest answer on the empty store, and the
-	// only size at which it can occur, since every generated row is open.
-	{name: "next", args: []string{"next"}, okCodes: []int{0, 6}},
-	{name: "stores --counts", args: []string{"stores", "--counts"}, okCodes: []int{0}},
-	{name: "doctor", args: []string{"doctor"}, okCodes: []int{0}},
-	{name: "workspace", args: []string{"workspace"}, okCodes: []int{0}},
+	// only size at which it can occur, since every generated row is open. The
+	// one branch here is the store's own discriminator, empty or populated.
+	{name: "next", args: []string{"next"}, okCodes: func(rows int) []int {
+		if rows == 0 {
+			return []int{6}
+		}
+		return []int{0}
+	}},
+	{name: "stores --counts", args: []string{"stores", "--counts"}, okCodes: exits(0)},
+	{name: "doctor", args: []string{"doctor"}, okCodes: exits(0)},
+	{name: "workspace", args: []string{"workspace"}, okCodes: exits(0)},
 	{name: "new (write)", args: []string{
 		"new", "--title", "perfbench write probe", "--type", "task", "--topic", "bench",
-	}, okCodes: []int{0}, mutates: true},
+	}, okCodes: exits(0), mutates: true},
 }
 
 // size is one store to generate and measure at. rows is the store's TOTAL row
@@ -143,3 +169,17 @@ const repeats = 5
 // on a lock, so "slow" here is a plausible outcome and an unbounded wait would
 // make this tool unable to report it. [LAW:no-silent-failure]
 const runBudget = 2 * time.Minute
+
+// importBudget bounds the one `lit import` that populates a store. It grows
+// with the row count because the work does: measured on 2026-09-27
+// (darwin/arm64, 12 CPUs), importing 590 rows in one batch took 22s, about
+// 37ms a row, so a fixed runBudget would report `--sizes 3000` — the natural
+// next probe once the ceiling estimate says ~1,200 rows — as a hang and kill
+// the import mid-transaction. The allowance is several times the measured
+// rate so a loaded machine still finishes inside it, on top of runBudget so
+// the empty store's zero rows keep the same hang detection every probe has.
+func importBudget(rows int) time.Duration {
+	return runBudget + time.Duration(rows)*importRowAllowance
+}
+
+const importRowAllowance = 250 * time.Millisecond

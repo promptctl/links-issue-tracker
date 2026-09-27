@@ -151,16 +151,25 @@ end-to-end figures are the ones that caught what the microbenchmarks
 structurally cannot see: process start plus store open is ~0.14s, which on a
 590-row store is most of what `lit backlog` spends.
 
-Read the table the way it is built. Each probe runs five times round-robin and
-the reported figure is the **minimum**, with the maximum in parentheses:
-benchmark noise on a developer machine is one-sided, so the mean measures the
-machine's load and the min measures the code — and this checkout is routinely
-shared by several agent sessions, one of which compiling Go during a round
-would otherwise land in the number. A max near the min means a quiet machine; a
-max several times the min means the run fought for CPU and only the min survived
-it. Two full runs minutes apart reproduced 24 of 27 latency cells to within
-0.01s, worst case 18%. Store bytes come from a single generated store and vary
-about 2–3% run to run, so a couple of percent is not a regression.
+Read the table the way it is built. Each probe runs once unrecorded as a
+warm-up, then five times round-robin, and the reported figure is the
+**minimum**, with the maximum in parentheses: benchmark noise on a developer
+machine is one-sided, so the mean measures the machine's load and the min
+measures the code — and this checkout is routinely shared by several agent
+sessions, one of which compiling Go during a round would otherwise land in the
+number. The warm-up is what makes the max readable: it absorbs the cold start
+(page cache, dynamic linking, and on the empty store the first write's inline
+maintenance), so a max near the min means a quiet machine and a max several
+times the min means the run fought for CPU and only the min survived it. Two
+full runs minutes apart reproduced 24 of 27 latency cells to within 0.01s,
+worst case 18%. Store bytes come from a single generated store and vary about
+2–3% run to run, so a couple of percent is not a regression.
+
+The measured `lit` runs under a scrubbed environment — your global lit config,
+ejected templates, `LIT_*` variables and `CLAUDE_CODE_SESSION_ID` are all out
+of scope — so two machines time the same code path and a difference in the
+table is a difference in the code. Larger `--sizes` are fine: the import
+budget grows with the row count (590 rows import in about 22s here).
 
 The scale epic's headline figures live in that command and nowhere else,
 because the hand-measured version rotted in under a month: `lit backlog` was

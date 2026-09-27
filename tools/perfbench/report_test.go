@@ -79,8 +79,8 @@ func TestRunRejectsABadSizeBeforeDoingAnyWork(t *testing.T) {
 func fixedResults() []result {
 	samplesAt := func(quickMin, quickMax, backlogMin, backlogMax time.Duration) []sample {
 		return []sample{
-			{probe: probe{name: "quickstart"}, min: quickMin, max: quickMax, runs: repeats},
-			{probe: probe{name: "backlog"}, min: backlogMin, max: backlogMax, runs: repeats},
+			{probe: probe{name: "quickstart"}, min: quickMin, max: quickMax},
+			{probe: probe{name: "backlog"}, min: backlogMin, max: backlogMax},
 		}
 	}
 	return []result{

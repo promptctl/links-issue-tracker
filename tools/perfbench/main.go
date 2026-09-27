@@ -103,10 +103,16 @@ func run(args []string, out, progress io.Writer) error {
 		return err
 	}
 
+	configHome := filepath.Join(workDir, "config-home")
+	if err := os.MkdirAll(configHome, 0o755); err != nil {
+		return fmt.Errorf("creating the hermetic config home: %w", err)
+	}
+	env := hermeticEnv(os.Environ(), configHome)
+
 	results := make([]result, 0, len(sizes))
 	for _, sz := range sizes {
 		fmt.Fprintf(progress, "generating %s store (%d rows) ...\n", sz.name, sz.rows)
-		store, err := generate(bin, workDir, sz)
+		store, err := generate(bin, workDir, sz, env)
 		if err != nil {
 			return err
 		}

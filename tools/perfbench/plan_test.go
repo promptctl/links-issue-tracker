@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,6 +38,12 @@ func TestImportBatchesBuildsTheRequestedRows(t *testing.T) {
 		}
 		if len(r.Title) != titleBytes {
 			t.Errorf("record %d title is %d bytes, want %d", i, len(r.Title), titleBytes)
+		}
+		// A title drawn from the description's own stream is its first 50-odd
+		// bytes verbatim, and a store compressing the two together would hold
+		// the row cheaper than a real one whose title is independent prose.
+		if tail := strings.TrimPrefix(r.Title, fmt.Sprintf("generated row %d ", i)); strings.HasPrefix(r.Description, tail) {
+			t.Errorf("record %d title %q is a prefix of its own description", i, r.Title)
 		}
 		if r.LocalID == "" || r.Topic == "" || r.Type == "" {
 			t.Errorf("record %d is missing a key `lit import` requires: %+v", i, r)
@@ -164,27 +171,41 @@ func TestFillerIsDeterministicAndVariesByRow(t *testing.T) {
 }
 
 // Tolerance for a nonzero exit is confined to the one command that has a
-// documented legitimate one. Widening any other probe's set would not fail a
-// run or look wrong in the table — it would quietly let that command's failures
-// set its fastest time, which is the exact defect okCodes exists to prevent, so
-// the confinement is pinned rather than left to review.
-func TestOnlyNextToleratesANonZeroExit(t *testing.T) {
+// documented legitimate one, and to the one store size it is legitimate at.
+// Widening any other probe's set — or accepting 6 from `next` on a populated
+// store, where every generated row is open — would not fail a run or look wrong
+// in the table; it would quietly let that command's failures set its fastest
+// time, which is the exact defect okCodes exists to prevent, so the confinement
+// is pinned rather than left to review. The expected sets are written out, not
+// read from the rule under test.
+func TestOnlyNextToleratesANonZeroExitAndOnlyOnTheEmptyStore(t *testing.T) {
 	for _, p := range probes {
-		for _, code := range p.okCodes {
-			if code == 0 {
-				continue
+		for _, rows := range []int{0, 1, 118, 590} {
+			got := fmt.Sprint(p.okCodes(rows))
+			want := "[0]"
+			if p.name == "next" && rows == 0 {
+				want = "[6]"
 			}
-			if p.name != "next" {
-				t.Errorf("probe %q accepts exit %d; only `lit next` has a documented "+
-					"nonzero answer (6, \"no ready work\" on the empty store), and every "+
-					"other tolerated code lets that command's failures win the minimum",
-					p.name, code)
-			}
-			if code != 6 {
-				t.Errorf("probe %q accepts exit %d, which is not the documented "+
-					"\"no ready work\" code 6", p.name, code)
+			if got != want {
+				t.Errorf("probe %q at %d rows accepts %s, want %s", p.name, rows, got, want)
 			}
 		}
+	}
+}
+
+// The import budget is a hang detector for a job whose length grows with the
+// row count: 590 rows imported in 22s on 2026-09-27, so a fixed two minutes
+// would report a few thousand rows — the natural probe past the ~1,200-row
+// ceiling estimate — as a hang and kill the import mid-transaction.
+func TestImportBudgetGrowsWithRowsFromTheProbeBudget(t *testing.T) {
+	if got := importBudget(0); got != runBudget {
+		t.Errorf("importBudget(0) = %s, want runBudget %s: the empty store has nothing to import", got, runBudget)
+	}
+	if got := importBudget(3000); got < 10*time.Minute {
+		t.Errorf("importBudget(3000) = %s; at 37ms a row measured, 3000 rows need ~2m and a loaded machine several times that", got)
+	}
+	if importBudget(590) <= importBudget(118) {
+		t.Error("importBudget does not grow with rows")
 	}
 }
 
@@ -193,7 +214,7 @@ func TestOnlyNextToleratesANonZeroExit(t *testing.T) {
 // path, which is where this epic's subject — a lock a writer can wait fifteen
 // minutes on — actually bites.
 func TestRunQuietKillsACommandOverBudget(t *testing.T) {
-	err := runQuiet(t.TempDir(), 50*time.Millisecond, "sleep", "30")
+	err := runQuiet(t.TempDir(), 50*time.Millisecond, os.Environ(), "sleep", "30")
 	if err == nil {
 		t.Fatal("runQuiet returned no error for a command that outlived its budget")
 	}
@@ -206,16 +227,18 @@ func TestRunQuietKillsACommandOverBudget(t *testing.T) {
 
 // And a command that finishes inside its budget is not reported as a hang.
 func TestRunQuietAcceptsACommandInsideItsBudget(t *testing.T) {
-	if err := runQuiet(t.TempDir(), 30*time.Second, "true"); err != nil {
+	if err := runQuiet(t.TempDir(), 30*time.Second, os.Environ(), "true"); err != nil {
 		t.Errorf("runQuiet(true) error = %v, want nil", err)
 	}
 }
 
 func TestEveryProbeDeclaresItsProvingExitCodes(t *testing.T) {
 	for _, p := range probes {
-		if len(p.okCodes) == 0 {
-			t.Errorf("probe %q declares no expected exit codes, so any failure would be "+
-				"recorded as its fastest run", p.name)
+		for _, rows := range []int{0, 590} {
+			if p.okCodes == nil || len(p.okCodes(rows)) == 0 {
+				t.Errorf("probe %q declares no expected exit codes at %d rows, so any failure would be "+
+					"recorded as its fastest run", p.name, rows)
+			}
 		}
 	}
 }
@@ -263,7 +286,7 @@ func TestGenerateRefusesAWorkspaceThatAlreadyExists(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(parent, sz.name), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	_, err := generate(litBinary{path: filepath.Join(parent, "unused-lit")}, parent, sz)
+	_, err := generate(litBinary{path: filepath.Join(parent, "unused-lit")}, parent, sz, os.Environ())
 	if err == nil {
 		t.Fatal("generate() into an existing directory returned no error")
 	}

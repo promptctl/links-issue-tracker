@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // litBinary is a path that has been proven to be a working lit binary built
@@ -30,14 +31,19 @@ type litBinary struct{ path string }
 // must not include resolving a version string that a real release build bakes
 // in at compile time.
 func build(dir string, progress io.Writer) (litBinary, error) {
+	root, err := moduleRoot()
+	if err != nil {
+		return litBinary{}, err
+	}
 	path := filepath.Join(dir, "lit")
 	cmd := exec.Command("go", "build", "-buildvcs=false", "-o", path, "./cmd/lit")
-	// Inherited, not cleared: the cgo ICU/zstd search paths this build needs
-	// live in `go env` or in the environment `just perf` sourced from
-	// scripts/cgo-env.sh, which is the repository's one home for them.
-	// [LAW:single-enforcer] re-deriving them here would be a second copy to
-	// drift from that script.
-	cmd.Env = os.Environ()
+	cmd.Dir = root
+	// The environment is inherited untouched, unlike the probes': the cgo
+	// ICU/zstd search paths this build needs live in `go env` or in what `just
+	// perf` sourced from scripts/cgo-env.sh, the repository's one home for
+	// them. [LAW:single-enforcer] re-deriving them here would be a second copy
+	// to drift from that script.
+	//
 	// The compiler's output goes to the injected progress stream, not straight
 	// to os.Stderr: run's whole signature exists so neither stream is a global,
 	// and a caller that passes a buffer must not find build's diagnostics on
@@ -55,4 +61,22 @@ func build(dir string, progress io.Writer) (litBinary, error) {
 		return litBinary{}, fmt.Errorf("built binary failed `lit version`: %w\n%s", err, out)
 	}
 	return litBinary{path: path}, nil
+}
+
+// moduleRoot is the directory holding this module's go.mod, so `./cmd/lit`
+// means the same package from any working directory. Resolved rather than
+// assumed to be the cwd: `go run ../tools/perfbench` from a subdirectory would
+// otherwise fail on a missing ./cmd/lit and blame the cgo toolchain for it.
+func moduleRoot() (string, error) {
+	out, err := exec.Command("go", "env", "GOMOD").Output()
+	if err != nil {
+		return "", fmt.Errorf("locating go.mod via `go env GOMOD`: %w", err)
+	}
+	goMod := strings.TrimSpace(string(out))
+	// Outside a module `go env GOMOD` prints os.DevNull or nothing, and there
+	// is no ./cmd/lit to build. [LAW:no-silent-failure]
+	if goMod == "" || goMod == os.DevNull {
+		return "", fmt.Errorf("not inside a Go module (go env GOMOD = %q); run perfbench from the lit repository", goMod)
+	}
+	return filepath.Dir(goMod), nil
 }

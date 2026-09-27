@@ -25,6 +25,10 @@ type generatedStore struct {
 	// this tool cannot drift from lit's own idea of where the store lives by
 	// hardcoding ".git/links/dolt". [LAW:one-source-of-truth]
 	databasePath string
+	// env is the environment every lit invocation against this store runs
+	// under — generation and probes alike, so the store is measured by the
+	// same lit that produced it. See hermeticEnv for what it excludes.
+	env []string
 }
 
 // importRecord is one issue in the JSON tree spec `lit import` consumes. The
@@ -48,7 +52,7 @@ type importRecord struct {
 // because nothing would compare the two. `lit init` plus `lit import` is the
 // bulk-ingest path lit already offers its users, so the store measured here is
 // a store lit itself produced. [LAW:one-source-of-truth]
-func generate(bin litBinary, parent string, sz size) (generatedStore, error) {
+func generate(bin litBinary, parent string, sz size, env []string) (generatedStore, error) {
 	root := filepath.Join(parent, sz.name)
 	// os.Mkdir, never MkdirAll: an existing directory must fail here rather
 	// than be reused. lit init is idempotent and lit import appends, so
@@ -82,14 +86,14 @@ func generate(bin litBinary, parent string, sz size) (generatedStore, error) {
 			"commit", "-q", "--no-verify", "--allow-empty", "-m", "perfbench workspace"},
 	}
 	for _, step := range steps {
-		if err := runQuiet(root, runBudget, step[0], step[1:]...); err != nil {
+		if err := runQuiet(root, runBudget, env, step[0], step[1:]...); err != nil {
 			return generatedStore{}, err
 		}
 	}
 	// --skip-hooks and --skip-agents keep generation hermetic: a git hook and an
 	// AGENTS.md rewrite are effects on the workspace that have nothing to do
 	// with its size, and the hook would then run on every write probe.
-	if err := runQuiet(root, runBudget, bin.path, "init", "--prefix", "bench", "--skip-hooks", "--skip-agents"); err != nil {
+	if err := runQuiet(root, runBudget, env, bin.path, "init", "--prefix", "bench", "--skip-hooks", "--skip-agents"); err != nil {
 		return generatedStore{}, err
 	}
 	for i, batch := range importBatches(sz.rows) {
@@ -101,7 +105,7 @@ func generate(bin litBinary, parent string, sz size) (generatedStore, error) {
 		if err := os.WriteFile(specPath, blob, 0o644); err != nil {
 			return generatedStore{}, fmt.Errorf("writing import spec: %w", err)
 		}
-		if err := runQuiet(root, runBudget, bin.path, "import", "--path", specPath); err != nil {
+		if err := runQuiet(root, importBudget(sz.rows), env, bin.path, "import", "--path", specPath); err != nil {
 			return generatedStore{}, err
 		}
 	}
@@ -109,7 +113,7 @@ func generate(bin litBinary, parent string, sz size) (generatedStore, error) {
 	if err != nil {
 		return generatedStore{}, fmt.Errorf("resolving generated workspace %s: %w", root, err)
 	}
-	return generatedStore{size: sz, root: root, databasePath: info.DatabasePath}, nil
+	return generatedStore{size: sz, root: root, databasePath: info.DatabasePath, env: env}, nil
 }
 
 // importBatches renders a row count as the import calls that produce it — one
@@ -123,9 +127,14 @@ func generate(bin litBinary, parent string, sz size) (generatedStore, error) {
 func importBatches(rows int) [][]importRecord {
 	records := make([]importRecord, 0, rows)
 	for i := range rows {
+		// The title draws from its own stream (^i, distinct from every
+		// description's seed i >= 0): on a shared seed the title would be the
+		// first 50-odd bytes of its description verbatim, and a store that
+		// compresses the two together would store the row cheaper than a real
+		// one whose title is independent prose.
 		rec := importRecord{
 			LocalID:     fmt.Sprintf("r%d", i),
-			Title:       fmt.Sprintf("generated row %d %s", i, filler(i, titleBytes))[:titleBytes],
+			Title:       fmt.Sprintf("generated row %d %s", i, filler(^i, titleBytes))[:titleBytes],
 			Type:        "task",
 			Topic:       "bench",
 			Description: filler(i, descriptionBytes),
@@ -274,11 +283,12 @@ func storeBytes(dir string) (int64, error) {
 // wedged behind a lock is at least as likely here as in any probe. Unbudgeted,
 // that hangs the tool with nothing on screen — the exact outcome the budget was
 // added to prevent.
-func runQuiet(dir string, budget time.Duration, name string, args ...string) error {
+func runQuiet(dir string, budget time.Duration, env []string, name string, args ...string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
+	cmd.Env = env
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {
 		return fmt.Errorf("%s %s (in %s) exceeded the %s budget and was killed:\n%s",
