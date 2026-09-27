@@ -173,7 +173,7 @@ func TestRecordPushedHeadRefusesAHeadTheStoreDoesNotHold(t *testing.T) {
 // retry — and lands once that engine closes, rather than failing at once or
 // writing under the holder.
 func TestRecordPushedHeadWaitsOutALiveWriteEngine(t *testing.T) {
-	// serial: no t.Parallel — engineOpenRetryMaxElapsed governs the wait and
+	// serial: no t.Parallel — coResidentHolderWait governs the wait and
 	// a sibling test rewrites it.
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)

@@ -41,13 +41,12 @@ var ErrTransientGCContention = errors.New("transient online-gc contention")
 // separately against commitLockWaiterBudget in retryTransientGCContention —
 // reading ~25s as the whole hold is the misreading that let the two budgets
 // multiply (links-sync-dauk). Originally
-// sized to match engineOpenRetryMaxElapsed's then-~30s budget for "how long
-// do we wait on a co-resident holder of this store" (links-sync-pgct.11);
+// sized to match the then-~30s co-resident holder wait (links-sync-pgct.11);
 // the two are no longer equal and deliberately so — links-sync-dauk derived
 // that holder wait from the mirror's measured hold ceiling, while this wait
 // answers a different question and keeps the value its own field evidence
 // argued for. Kept as a reference point, not a copy to keep in step: that
-// retry bounds how long two engines can contend at OPEN, but this one is what
+// wait bounds how long two engines can contend at OPEN, but this one is what
 // absorbs the brief settle window right after one releases — under real
 // system load (a slower/contended CI runner, an earlier mirror's real
 // network push taking longer) that window is not always sub-second, and a
@@ -55,40 +54,19 @@ var ErrTransientGCContention = errors.New("transient online-gc contention")
 // before a legitimately-finishing prior holder released, escalating a
 // recoverable wait into a hard WorkspaceWriteBlockedError. A genuinely
 // wedged holder still surfaces as that same terminal error, just after the
-// longer budget elapses rather than hanging forever.
+// longer budget elapses rather than hanging forever. The sleeping is in any
+// case cut short by the hold check in retryTransientGCContention, which
+// stops the loop before the commit lock's waiters give up on it.
 //
 // The attempt count is a package variable (the delays stay const) so tests
 // whose premise makes exhaustion CERTAIN — a foreign journal holder that
 // cannot release mid-test — can shrink the budget instead of sleeping through
-// the production one, the same convention engineOpenRetryMaxElapsed serves.
+// the production one, the same convention coResidentHolderWait serves.
 var transientRetryMaxAttempts = 30
 
 const (
 	transientRetryBaseDelay = 50 * time.Millisecond
 	transientRetryMaxDelay  = 1 * time.Second
-)
-
-var (
-	// commitLockRetryAttempts/commitLockRetryDelay bound the wait for a
-	// co-resident writer — a mutation in this or another process, or a
-	// snapshot copy quiescing writers via LockCommitPath — to release the
-	// commit lock. Under the flock discipline the budget's only job is
-	// surfacing a genuinely WEDGED (live but stuck) holder — a dead one's
-	// hold evaporates with its process — so it sizes to the longest
-	// legitimate hold, and this lock's holder profile is dominated by
-	// takeUserSnapshot holding it across an entire snapshot copy, measured
-	// past ten minutes on large stores without reflink (the very copies the
-	// O_EXCL era's 10-minute threshold evicted mid-run); the retention prune
-	// it also serializes is ordinarily far shorter. ~15min: a healthy
-	// long copy keeps concurrent writers waiting exactly as the old
-	// unbounded loop did, a wedged holder still surfaces with the sentinel
-	// instead of hanging forever, and context cancellation escapes the wait
-	// at any moment.
-	//
-	// Variables, not constants, by the convention above: a test whose premise
-	// is contention shrinks the budget rather than sleeping through it.
-	commitLockRetryAttempts = 9000
-	commitLockRetryDelay    = 100 * time.Millisecond
 )
 
 type retryOperation func(context.Context) error
@@ -193,7 +171,7 @@ func (s *Store) withStampedMutation(ctx context.Context, stamp commitStamp, fn f
 // rotationCloseReserve is what the retry loop sets aside for the one part of a
 // connection rotation nothing can bound: Store.reconnect closes the previous,
 // live engine before opening the next, and `*sql.DB.Close()` takes no context,
-// so engineOpenRetryMaxElapsed — which bounds only the new engine's ping —
+// so coResidentHolderWait — which bounds only the new engine's ping —
 // says nothing about it.
 //
 // Measured 2026-09-12 rather than guessed, off the same sample the mirror's
@@ -211,15 +189,37 @@ func (s *Store) withStampedMutation(ctx context.Context, stamp commitStamp, fn f
 // deliberately too small to change the loop's iteration count.
 var rotationCloseReserve = time.Second
 
-// commitLockWaiterBudget is how long a commit-lock waiter is sized to wait for
-// the holder to release: the one home for a figure that was previously spelled
-// as "~15 minutes" in three comments and two docs, none of which could notice
-// when it stopped being true. [LAW:one-source-of-truth] A function, not a
-// constant, because both halves are variables a contention test shrinks — the
-// derived budget has to shrink with them or a test would be measured against
-// production's number.
+// rotationReserve is the longest one connection rotation can hold the commit
+// lock: the new engine's open, waited out against a co-resident holder for
+// coResidentHolderWait, plus the old engine's unbounded close
+// (rotationCloseReserve). The retry loop reserves it before every rotation.
+func rotationReserve() time.Duration {
+	return coResidentHolderWait + rotationCloseReserve
+}
+
+// commitLockWaiterBudget is how long a commit-lock waiter lets the holder in
+// front of it stand still before giving up: the one home for a figure that
+// was once spelled as "~15 minutes" in three comments and two docs, none of
+// which could notice when it stopped being true. [LAW:one-source-of-truth]
+//
+// It is the ordinary holder's whole allowance and nothing more. The ordinary
+// holder is a mutation, and the longest one is a mutation that suffered a
+// GC-contention rotation: coResidentHolderWait for its own work and settle
+// sleeps (retryTransientGCContention stops sleeping there), plus one
+// rotation (rotationReserve). Strictly more than an engine open's wait, and
+// that order is load-bearing: a rotation re-opens LOCK under the held commit
+// lock, and a peer that took LOCK in the gap is by then waiting on this
+// lock — the package's tolerated inversion — so the holder's re-open must
+// give up first, releasing the commit lock to the peer, rather than both
+// failing at once. Every longer hold — a snapshot copy, a restore, a
+// retention prune — is not ordinary and fails a waiter naming it, the same
+// answer every store lock gives (holdWait).
+//
+// A function, not a constant, because both terms are variables a contention
+// test shrinks — the derived budget has to shrink with them or a test would
+// be measured against production's number.
 func commitLockWaiterBudget() time.Duration {
-	return time.Duration(commitLockRetryAttempts) * commitLockRetryDelay
+	return coResidentHolderWait + rotationReserve()
 }
 
 // retryTransientGCContention runs operation, and on a transient online-GC
@@ -233,16 +233,16 @@ func commitLockWaiterBudget() time.Duration {
 // budgets. The attempt count bounds how many times it retries; the hold check
 // below bounds the WALL CLOCK it may spend doing so, because every rotation is
 // an engine open that can wait out a co-resident holder for
-// engineOpenRetryMaxElapsed, and all of it accrues while this mutation holds
+// coResidentHolderWait, and all of it accrues while this mutation holds
 // the commit lock.
 //
 // Without that second condition the two budgets multiply: 29 rotations at
-// engineOpenRetryMaxElapsed is 33.8 minutes against a commitLockWaiterBudget of
+// the then-70s engine-open wait was 33.8 minutes against a commitLockWaiterBudget of
 // 15, so a holder retrying exactly as designed would blow past what every
 // waiter on that lock is sized to tolerate, and they would fail with the
 // workspace-busy sentinel naming a holder that was never wedged — the precise
 // wedge Store.reconnect's comment promises cannot happen. It did not happen
-// before links-sync-dauk only because engineOpenRetryMaxElapsed was 30s, where
+// before links-sync-dauk only because the engine-open wait was 30s, where
 // 29 rotations came to 14.5 minutes and fit by about half a minute. That fit
 // was the real constraint pinning the old 30s, and it was recorded nowhere;
 // deriving the open budget from the mirror's hold ceiling is what surfaced it.
@@ -267,18 +267,17 @@ func retryTransientGCContention(ctx context.Context, operation retryOperation, r
 		// cannot see is the prose bound this loop replaced, with a smaller
 		// error, so each one is named: the sleep (up to
 		// transientRetryMaxDelay), the new engine's open (bounded by
-		// engineOpenRetryMaxElapsed), and the PREVIOUS engine's close
+		// coResidentHolderWait), and the PREVIOUS engine's close
 		// (rotationCloseReserve). That last one is the term to be careful
 		// about — Store.reconnect closes the old engine before pinging the
 		// new one, `*sql.DB.Close()` takes no context, so no deadline
-		// anywhere can cut it and engineOpenRetryMaxElapsed does not cover
+		// anywhere can cut it and coResidentHolderWait does not cover
 		// it. Its cost is reserved rather than bounded, which makes the
 		// honest statement of the hold "the budget, plus at most one engine
 		// close" rather than the budget flat. Stopping here ends the same way
 		// exhausting the attempts does: the manifest never cleared, which is
 		// what exhaustedContentionError already says.
-		rotationReserve := engineOpenRetryMaxElapsed + rotationCloseReserve
-		if time.Since(start)+delayForAttempt(attempt)+rotationReserve >= commitLockWaiterBudget() {
+		if time.Since(start)+delayForAttempt(attempt)+rotationReserve() >= commitLockWaiterBudget() {
 			break
 		}
 		if waitErr := sleep(ctx, delayForAttempt(attempt)); waitErr != nil {
@@ -509,7 +508,7 @@ func commitLockPathForDolt(databasePath string) string {
 // guidance, so errors.Is(err, ErrWorkspaceBusy) discriminates commit
 // contention exactly as it does every other store lock's.
 func acquireCommitLockAtPath(ctx context.Context, storageDir, lockPath string) (func() error, error) {
-	release, err := acquireStoreLock(ctx, storageDir, lockPath, true, commitLockRetryAttempts, commitLockRetryDelay)
+	release, err := acquireStoreLock(ctx, storageDir, lockPath, true, commitLockWaiterBudget())
 	if err != nil {
 		return nil, wrapCommitLockContention(err)
 	}

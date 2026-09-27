@@ -3,7 +3,10 @@ package store
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,7 +35,7 @@ func journalLockPath(doltRoot string) string {
 // [LAW:no-ambient-temporal-coupling]
 func TestOpenFailsLoudWhenForeignEngineHoldsJournalLock(t *testing.T) {
 	// serial: no t.Parallel — rewrites the package-level
-	// engineOpenRetryMaxElapsed budget and asserts a wall-clock bound on the
+	// coResidentHolderWait budget and asserts a wall-clock bound on the
 	// failure.
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
@@ -50,9 +53,9 @@ func TestOpenFailsLoudWhenForeignEngineHoldsJournalLock(t *testing.T) {
 	}
 	defer func() { _ = releaseLock() }()
 
-	prevBudget := engineOpenRetryMaxElapsed
-	engineOpenRetryMaxElapsed = 700 * time.Millisecond
-	t.Cleanup(func() { engineOpenRetryMaxElapsed = prevBudget })
+	prevBudget := coResidentHolderWait
+	coResidentHolderWait = 700 * time.Millisecond
+	t.Cleanup(func() { coResidentHolderWait = prevBudget })
 
 	start := time.Now()
 	opened, err := Open(ctx, doltRoot, "test-workspace-id")
@@ -65,7 +68,7 @@ func TestOpenFailsLoudWhenForeignEngineHoldsJournalLock(t *testing.T) {
 		t.Fatalf("Open() error = %v; want the nbs.ErrDatabaseLocked contention classification to survive the chain", err)
 	}
 	// Bounded: the shrunken budget (plus dolt's own per-attempt lock waits)
-	// must not balloon toward the production engineOpenRetryMaxElapsed, whose
+	// must not balloon toward the production coResidentHolderWait, whose
 	// value this comment deliberately does not restate — it is derived, and a
 	// figure copied here is one more thing to remember into agreement.
 	if elapsed > 10*time.Second {
@@ -80,7 +83,7 @@ func TestOpenFailsLoudWhenForeignEngineHoldsJournalLock(t *testing.T) {
 // retry loop — not test timing — owns the reconciliation.
 func TestOpenRecoversOnceForeignJournalHolderReleases(t *testing.T) {
 	// serial: no t.Parallel — rewrites the package-level
-	// engineOpenRetryMaxElapsed budget, which would govern every concurrently
+	// coResidentHolderWait budget, which would govern every concurrently
 	// running Open.
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
@@ -125,7 +128,7 @@ func TestOpenRecoversOnceForeignJournalHolderReleases(t *testing.T) {
 // FAILURE and pages the owner over ordinary serialization.
 func TestOpenSyncContentionCarriesWorkspaceBusy(t *testing.T) {
 	// serial: no t.Parallel — rewrites the package-level
-	// engineOpenRetryMaxElapsed budget, which would govern every concurrently
+	// coResidentHolderWait budget, which would govern every concurrently
 	// running Open.
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
@@ -143,9 +146,9 @@ func TestOpenSyncContentionCarriesWorkspaceBusy(t *testing.T) {
 	}
 	defer func() { _ = releaseLock() }()
 
-	prevBudget := engineOpenRetryMaxElapsed
-	engineOpenRetryMaxElapsed = 700 * time.Millisecond
-	t.Cleanup(func() { engineOpenRetryMaxElapsed = prevBudget })
+	prevBudget := coResidentHolderWait
+	coResidentHolderWait = 700 * time.Millisecond
+	t.Cleanup(func() { coResidentHolderWait = prevBudget })
 
 	opened, err := OpenSync(ctx, doltRoot, "test-workspace-id")
 	if err == nil {
@@ -196,5 +199,61 @@ func TestOpenForReadToleratesForeignJournalHolder(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("LocalIssueCount() = %d, want 1", count)
+	}
+}
+
+// TestWriteOpenNamesTheJournalHolder is the ticket's contract in-process
+// (links-scale-om3r.zhq): with the store held the way `lit snapshots new`
+// holds it — Dolt's LOCK taken exclusively through LockDoltJournalExclusive,
+// which records the holder — a write open stops trying after
+// coResidentHolderWait and fails naming the holder's pid, command and age,
+// carrying ErrWorkspaceBusy so the CLI exits with the workspace-busy code.
+func TestWriteOpenNamesTheJournalHolder(t *testing.T) {
+	// serial: no t.Parallel — rewrites the package-level coResidentHolderWait.
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	s, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("initial Open() error = %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	releaseJournal, err := LockDoltJournalExclusive(ctx, doltRoot)
+	if err != nil {
+		t.Fatalf("LockDoltJournalExclusive() error = %v", err)
+	}
+	defer func() { _ = releaseJournal() }()
+
+	prevWait := coResidentHolderWait
+	coResidentHolderWait = 300 * time.Millisecond
+	t.Cleanup(func() { coResidentHolderWait = prevWait })
+
+	start := time.Now()
+	opened, err := Open(ctx, doltRoot, "test-workspace-id")
+	elapsed := time.Since(start)
+	if err == nil {
+		_ = opened.Close()
+		t.Fatalf("Open() succeeded against a held journal lock; want a bounded, holder-naming failure")
+	}
+	if !errors.Is(err, ErrWorkspaceBusy) {
+		t.Fatalf("Open() error = %v; want ErrWorkspaceBusy, the sentinel the CLI maps to the workspace-busy exit", err)
+	}
+	message := err.Error()
+	for _, want := range []string{
+		"pid " + strconv.Itoa(os.Getpid()),
+		filepath.Base(os.Args[0]),
+		"holding since",
+	} {
+		if !strings.Contains(message, want) {
+			t.Errorf("contention error %q does not name the holder's %q", message, want)
+		}
+	}
+	if elapsed < coResidentHolderWait {
+		t.Fatalf("Open() failed after %s, before the %s wait", elapsed, coResidentHolderWait)
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("Open() took %s to fail against a held journal lock; the contract is a refusal within seconds", elapsed)
 	}
 }

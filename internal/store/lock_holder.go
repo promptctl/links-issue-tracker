@@ -8,11 +8,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
 	"unicode"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/promptctl/primitives/filelock"
 )
 
@@ -49,6 +51,13 @@ import (
 // nothing else can reach, so it is uncontended by construction. This file
 // therefore takes no slot in the package's acquisition order, for the same
 // reason the sync-push lock needs none.
+//
+// One decision does read the registry: how long a contender keeps trying
+// (holdWait). It reads only WHICH records exist, never what they say, and it
+// decides only when the contender stops — the kernel still decides, alone,
+// whether the lock is held. A wrong or missing set of names costs a wait that
+// ends earlier or later than it should, never a lock taken or refused
+// wrongly, which keeps the registry descriptive in the sense that matters.
 
 // lockHolderDir is the directory of holder records for one lock, under the
 // workspace storage dir the caller names — the same rotation-surviving
@@ -415,22 +424,96 @@ func renderHolderCommand(command string) string {
 	return rendered
 }
 
+// holdWait is the one retry policy every contender for a store lock waits
+// with — the lit-minted locks through acquireStoreLock, and Dolt's LOCK
+// through the engine connector and the chunk-store open, which take
+// backoff.BackOff. It polls every storeLockPollInterval and stops once the
+// holders in front of the contender have stood still for the wait: the clock
+// starts at Reset, and restarts whenever the set of holder records under the
+// lock changes, so a queue of short holders — sixteen `lit new` serializing
+// at tens of milliseconds each — is waited out however long it runs, while
+// a single holder standing for the whole wait ends the contender's attempt.
+// "Cannot get the store" is a holder that is not moving, not a store that is
+// busy.
+//
+// [LAW:dataflow-not-control-flow] Every wait runs the same loop; what varies
+// is the lock's directory and its budget, both values. A holder with no
+// record (a foreign dolt, a read engine, an older lit) contributes no name
+// and no progress, so under it the rule is the plain elapsed budget it
+// reduces to when there is nothing to read.
+//
+// [LAW:no-ambient-temporal-coupling] The record names are the progress
+// signal because a name is created by an acquisition and retired by a
+// release or a sweep, so a change in the set IS a change in who holds — no
+// timestamp inside a record is trusted, and a stale unswept record is a
+// constant, which is exactly what a dead holder should read as.
+type holdWait struct {
+	dir   string
+	wait  func() time.Duration
+	seen  []string
+	since time.Time
+}
+
+// newHoldWait builds the policy for one lock. wait is read at Reset, not at
+// construction, so a policy built into a long-lived connector still waits the
+// figure a test has since shrunk. [LAW:one-source-of-truth]
+func newHoldWait(storageDir, lockPath string, wait func() time.Duration) *holdWait {
+	return &holdWait{dir: lockHolderDir(storageDir, lockPath), wait: wait}
+}
+
+// Reset starts the clock and takes the first reading of who is there.
+func (w *holdWait) Reset() {
+	w.seen, w.since = holderRecordNames(w.dir), time.Now()
+}
+
+// NextBackOff is called after each failed attempt: it restarts the clock when
+// the holders have changed since the last reading, and stops the retry when
+// the same holders have stood for the whole wait.
+func (w *holdWait) NextBackOff() time.Duration {
+	if names := holderRecordNames(w.dir); !slices.Equal(names, w.seen) {
+		w.seen, w.since = names, time.Now()
+	}
+	if time.Since(w.since) >= w.wait() {
+		return backoff.Stop
+	}
+	return storeLockPollInterval
+}
+
+// holderRecordNames lists the record names under a lock's holder directory,
+// in ReadDir's sorted order so two readings compare as sets. Nothing is
+// opened or probed: liveness is describeLockHolders's business, at the moment
+// a contender reports; here the names' identity is all that is read. A
+// directory that does not exist yet has no holders; a directory that cannot
+// be read reads the same way, and the failure surfaces where the account is
+// rendered (readLockHolders), which every exhausted wait reaches.
+func holderRecordNames(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), lockHolderRecordPrefix) {
+			names = append(names, entry.Name())
+		}
+	}
+	return names
+}
+
 var (
 	// lockWaitNoticeGrace is how long a wait stays quiet before it is worth
 	// reporting: long enough that the ordinary case — two lit commands
 	// overlapping for a few milliseconds — prints nothing, short enough to
-	// land inside the budget of every wait an operator could mistake for a
-	// hang, starting with the workspace shared lock's ~5s. The mirror
-	// beacon's ~1s is deliberately below it and never prints: a wait that
-	// short is over before anyone asks whether lit is wedged, and a grace
-	// under a second would report the overlaps this one exists to ignore.
-	// lockWaitNoticeInterval then repeats the notice, because one
-	// line at the two-second mark has scrolled away long before a 15-minute
-	// commit-lock budget elapses, and a wait that stops reporting itself is
+	// land inside coResidentHolderWait, the budget of every wait an operator
+	// could mistake for a hang, so a contender that is about to fail has
+	// already said who it is waiting on. A grace under a second would report
+	// the overlaps this one exists to ignore. lockWaitNoticeInterval then
+	// repeats the notice, because a wait behind a queue of holders can run
+	// as long as the queue does, and a wait that stops reporting itself is
 	// indistinguishable from the hang this notice exists to rule out.
 	//
 	// Package variables, not constants, by the convention
-	// engineOpenRetryMaxElapsed and transientRetryMaxAttempts already set:
+	// coResidentHolderWait and transientRetryMaxAttempts already set:
 	// tests whose premise is a wait must shrink the budget rather than sleep
 	// through the production one.
 	lockWaitNoticeGrace    = 2 * time.Second

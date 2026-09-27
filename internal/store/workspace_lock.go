@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/promptctl/primitives/filelock"
 )
 
@@ -52,14 +53,6 @@ import (
 // domain meaning.
 var ErrWorkspaceBusy = errors.New("workspace busy")
 
-const (
-	// ~5s wall-clock cap: 100 attempts with 99 inter-attempt sleeps of 50ms
-	// (the loop skips the sleep after the final attempt because there's
-	// nothing to wait for).
-	workspaceSharedRetryAttempts = 100
-	workspaceSharedRetryDelay    = 50 * time.Millisecond
-)
-
 // WorkspaceLockPath returns the workspace-exclusivity lock path for a Dolt
 // root directory. Sits at <dirname(databasePath)>/.links-workspace.lock — the
 // same sibling-of-dolt-dir position as the commit lock — so lit snapshots
@@ -85,12 +78,12 @@ func workspaceStorageDir(databasePath string) string {
 }
 
 // acquireWorkspaceShared takes a shared hold on the workspace lock for the
-// lifetime of a Store. Released when the returned func is called. Retries
-// briefly (~5s) when an exclusive holder is active so a casual concurrent
-// lit snapshots restore does not paper-cut every reader; surfaces a clear
-// "workspace busy" error after the budget elapses.
+// lifetime of a Store. Released when the returned func is called. Waits out
+// an exclusive holder for coResidentHolderWait so a casual concurrent
+// lit snapshots restore — a rename — does not paper-cut every reader, and
+// surfaces a "workspace busy" error naming the rotator that outlasts it.
 func acquireWorkspaceShared(ctx context.Context, doltRootDir string) (func() error, error) {
-	release, err := acquireWorkspaceLock(ctx, doltRootDir, false, workspaceSharedRetryAttempts, workspaceSharedRetryDelay)
+	release, err := acquireWorkspaceLock(ctx, doltRootDir, false, coResidentHolderWait)
 	if errors.Is(err, ErrWorkspaceBusy) {
 		// Wrap the sentinel so errors.Is(err, ErrWorkspaceBusy) detects
 		// contention while the operator sees which holders to suspect.
@@ -133,7 +126,7 @@ func LockWorkspaceShared(ctx context.Context, doltRootDir string) (func() error,
 // one act every rotator performs, so none of them can leave a record that
 // leads the directory it now sits beside. [LAW:single-enforcer]
 func LockWorkspaceExclusive(ctx context.Context, doltRootDir string) (func() error, error) {
-	release, err := acquireWorkspaceLock(ctx, doltRootDir, true, 1, 0)
+	release, err := acquireWorkspaceLock(ctx, doltRootDir, true, 0)
 	if errors.Is(err, ErrWorkspaceBusy) {
 		return nil, fmt.Errorf("another lit process is using this workspace; close other lit commands and retry: %w", err)
 	}
@@ -178,18 +171,6 @@ func MirrorBeaconLockPath(databasePath string) string {
 	return filepath.Join(workspaceStorageDir(databasePath), ".links-sync-mirror.lock")
 }
 
-const (
-	// mirrorBeaconRetryAttempts/mirrorBeaconRetryDelay bound the mirror's
-	// shared acquisition (~1s). The only exclusive holds ever taken on the
-	// beacon are claimants' single-attempt probes, held for the microseconds
-	// between acquire and release, so contention here is momentary by
-	// construction; the budget exists so a mirror starting inside one probe's
-	// window waits it out instead of dying to that collision. Same shape as
-	// the snapshot producer beacon's Take-side budget.
-	mirrorBeaconRetryAttempts = 20
-	mirrorBeaconRetryDelay    = 50 * time.Millisecond
-)
-
 // HoldMirrorBeacon marks the calling process as answering for the
 // mirror-pending marker: a shared hold on the beacon, kept until the holder's
 // work is done or it dies, so "is anyone still answering" is decided by the
@@ -202,8 +183,15 @@ const (
 // reads as dead. Shared because concurrent answerers are legal: racing
 // claimants may each spawn a mirror, and every one is a live owner the probe
 // must count.
+//
+// The only exclusive holds ever taken on the beacon are claimants'
+// single-attempt probes, held for the microseconds between acquire and
+// release, so contention here is momentary by construction; the wait exists
+// so a mirror starting inside one probe's window waits it out instead of
+// dying to that collision, and it is the package's one wait rather than a
+// figure of its own. [LAW:one-source-of-truth]
 func HoldMirrorBeacon(ctx context.Context, databasePath string) (func() error, error) {
-	release, err := acquireStoreLock(ctx, workspaceStorageDir(databasePath), MirrorBeaconLockPath(databasePath), false, mirrorBeaconRetryAttempts, mirrorBeaconRetryDelay)
+	release, err := acquireStoreLock(ctx, workspaceStorageDir(databasePath), MirrorBeaconLockPath(databasePath), false, coResidentHolderWait)
 	if errors.Is(err, ErrWorkspaceBusy) {
 		// Only a probe's instantaneous exclusive hold can legitimately contend,
 		// so outlasting the whole budget means something anomalous is squatting
@@ -323,12 +311,20 @@ func ProbeMirrorBeacon(databasePath string) (MirrorBeaconVerdict, error) {
 	return BeaconUnheld, nil
 }
 
-func acquireWorkspaceLock(ctx context.Context, doltRootDir string, exclusive bool, maxAttempts int, delay time.Duration) (func() error, error) {
-	return acquireStoreLock(ctx, workspaceStorageDir(doltRootDir), WorkspaceLockPath(doltRootDir), exclusive, maxAttempts, delay)
+func acquireWorkspaceLock(ctx context.Context, doltRootDir string, exclusive bool, wait time.Duration) (func() error, error) {
+	return acquireStoreLock(ctx, workspaceStorageDir(doltRootDir), WorkspaceLockPath(doltRootDir), exclusive, wait)
 }
 
-// acquireStoreLock runs the shared filelock acquisition and stamps its
-// contention outcome with the store's domain sentinel.
+// errLockHeld is the retry loop's own signal that an attempt found the lock
+// held: a value for holdWait to retry on, never returned to a caller, who
+// gets ErrWorkspaceBusy with the holder account instead.
+var errLockHeld = errors.New("lock held")
+
+// acquireStoreLock runs the filelock acquisition under the package's one
+// wait policy (holdWait) and stamps its contention outcome with the store's
+// domain sentinel. wait is how long the holders in front of the contender may
+// stand still before it gives up; 0 is a single attempt that refuses on
+// contention.
 //
 // [LAW:parse-dont-validate] filelock reports contention as a value (a healthy
 // lock being held is not a failure of the primitive); this is the one
@@ -338,21 +334,33 @@ func acquireWorkspaceLock(ctx context.Context, doltRootDir string, exclusive boo
 // It is also the one boundary where a lock says who holds it. Both halves of
 // that live here rather than at each wrapper: while the wait runs,
 // announceLockWait reports it instead of leaving the caller to guess whether
-// lit is wedged or merely slow; when the budget elapses, the holder account
+// lit is wedged or merely slow; when the wait elapses, the holder account
 // rides the sentinel out to every wrapper's message for free.
 // [LAW:single-enforcer]
-func acquireStoreLock(ctx context.Context, storageDir, lockPath string, exclusive bool, maxAttempts int, delay time.Duration) (func() error, error) {
+func acquireStoreLock(ctx context.Context, storageDir, lockPath string, exclusive bool, wait time.Duration) (func() error, error) {
 	// Deferred, not called after the acquire: the reporter is a goroutine
 	// whose only other exit is ctx.Done(), and callers pass
 	// context.Background(), so a panic in the acquire would strand it waking
 	// to do filesystem I/O for the life of the process.
 	defer announceLockWait(ctx, storageDir, lockPath)()
-	release, acquired, err := filelock.Acquire(ctx, lockPath, exclusive, maxAttempts, delay)
+	var release func() error
+	policy := newHoldWait(storageDir, lockPath, func() time.Duration { return wait })
+	err := backoff.Retry(func() error {
+		acquiredRelease, acquired, err := filelock.Acquire(ctx, lockPath, exclusive, 1, 0)
+		if err != nil {
+			return backoff.Permanent(err)
+		}
+		if !acquired {
+			return errLockHeld
+		}
+		release = acquiredRelease
+		return nil
+	}, backoff.WithContext(policy, ctx))
+	if errors.Is(err, errLockHeld) {
+		return nil, fmt.Errorf("%s: %w", describeLockHolders(storageDir, lockPath), ErrWorkspaceBusy)
+	}
 	if err != nil {
 		return nil, err
-	}
-	if !acquired {
-		return nil, fmt.Errorf("%s: %w", describeLockHolders(storageDir, lockPath), ErrWorkspaceBusy)
 	}
 	return recordLockHolder(storageDir, lockPath, release), nil
 }
@@ -375,7 +383,7 @@ func acquireStoreLock(ctx context.Context, storageDir, lockPath string, exclusiv
 // controls holds the workspace lock, which is what serializes against the
 // rotation itself. A non-lit dolt process opening the store directly holds
 // this lock with no workspace hold — the same foreign holder
-// engineOpenRetryMaxElapsed budgets for — and a rotation under that holder
+// coResidentHolderWait budgets for — and a rotation under that holder
 // is outside lit's exclusion, as every lit-vs-non-lit interaction is.
 //
 // [LAW:one-source-of-truth] lit's retired .links-engine.lock was a partial
@@ -388,22 +396,6 @@ func DoltJournalLockPath(databasePath string) string {
 	return filepath.Join(filepath.Clean(databasePath), doltDatabaseName, ".dolt", "noms", "LOCK")
 }
 
-const (
-	// doltJournalRetryDelay/doltJournalRetryAttempts bound the wait for a
-	// co-resident engine holder — a live write Store in this or another
-	// process, which holds the journal lock for its whole lifetime — to
-	// close before the caller's exclusive hold is taken. The delay is this
-	// wait's polling granularity; the attempt count is not a number of its
-	// own but coResidentHolderWait (store.go) divided by it, so this wait and
-	// engineOpenRetryMaxElapsed cannot drift apart the way two hand-kept
-	// figures for one fact always eventually do. [LAW:one-source-of-truth]
-	// Long enough to outlast a legal mirror hold, short enough that a
-	// genuinely wedged holder still surfaces as a clear, actionable error
-	// rather than hanging forever.
-	doltJournalRetryDelay    = 100 * time.Millisecond
-	doltJournalRetryAttempts = int(coResidentHolderWait / doltJournalRetryDelay)
-)
-
 // LockDoltJournalExclusive takes an exclusive hold on Dolt's own journal lock
 // for a caller that must exclude engine-lifecycle I/O without opening an
 // engine — i.e. the `lit snapshots new` copy. While held, no concurrent
@@ -411,8 +403,8 @@ const (
 // flush, by one of two arms: a read open demotes to Dolt's read-only
 // fallback after its 100ms attempt (read-only is purely this lock's
 // contention fallback — lit never requests it), while a write-capable open
-// refuses the fallback, retries engineOpenRetryMaxElapsed, and fails
-// with holder-naming guidance. Fallback or refusal, nothing writes, so a
+// refuses the fallback, waits coResidentHolderWait, and fails naming this
+// holder. Fallback or refusal, nothing writes, so a
 // file walk under this hold cannot capture a torn journal. Take it AFTER
 // the workspace lock and BEFORE the commit lock, per the acquisition order
 // in this package's doc (doc.go) — taking it inside the commit lock inverts the
@@ -451,16 +443,20 @@ func LockDoltJournalExclusive(ctx context.Context, databasePath string) (func() 
 	if _, err := os.Stat(filepath.Dir(lockPath)); err != nil {
 		return nil, fmt.Errorf("stat dolt journal dir: %w", err)
 	}
-	release, err := acquireStoreLock(ctx, workspaceStorageDir(databasePath), lockPath, true, doltJournalRetryAttempts, doltJournalRetryDelay)
+	// The same wait a write engine open gives the same holder: the engine
+	// connector waits with holdWait on this lock's own holder directory, so
+	// an engine and a copy contending for LOCK read one policy.
+	// [LAW:one-source-of-truth]
+	release, err := acquireStoreLock(ctx, workspaceStorageDir(databasePath), lockPath, true, coResidentHolderWait)
 	if errors.Is(err, ErrWorkspaceBusy) {
 		// [LAW:no-silent-failure] Wrap rather than replace so errors.Is(err,
 		// ErrWorkspaceBusy) still detects contention while the operator sees
 		// which holder to blame instead of a bare sentinel string.
-		return nil, fmt.Errorf("another process is holding this workspace's Dolt store open (a background sync mirror or another lit command still running); retry: %w", err)
+		return nil, fmt.Errorf("another process is holding this workspace's Dolt store open; retry after it completes: %w", err)
 	}
 	return release, err
 }
 
-// The path-parametrized acquisition loop these wrappers share lives at
-// filelock.Acquire; only the lock meanings (paths, modes, budgets, operator
-// guidance) remain here.
+// The single attempt these wrappers share lives at filelock.Acquire and the
+// wait between attempts at holdWait; only the lock meanings (paths, modes,
+// operator guidance) remain here.

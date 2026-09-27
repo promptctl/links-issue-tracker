@@ -64,7 +64,7 @@ var ErrMirrorHoldCut = errors.New("mirror hold cut at its budget")
 // fallback), the one ref is moved, and the store is closed — the whole hold
 // is a few file reads and one journal append. Order of acquisition is the
 // package's declared one: workspace shared, then Dolt's LOCK (taken by the
-// open, waited out for engineOpenRetryMaxElapsed like any write open), then
+// open, waited out for coResidentHolderWait like any write open), then
 // the commit lock for the write.
 //
 // The hold — everything from the open's success to the ref write — runs under
@@ -132,16 +132,15 @@ func RecordPushedHead(ctx context.Context, doltRootDir string, remote string, br
 	if err := requireNoPendingAdopt(root); err != nil {
 		return 0, err
 	}
-	ddb, err := openChunkStoreForRefWrite(ctx, root)
+	ddb, releaseRecord, err := openChunkStoreForRefWrite(ctx, root)
 	if err != nil {
 		return 0, err
 	}
 	defer func() {
-		// Close is what releases Dolt's LOCK and flushes the manifest; a
-		// failure there is the caller's to hear. [LAW:no-silent-failure]
-		if closeErr := ddb.Close(); closeErr != nil {
-			err = errors.Join(err, closeErr)
-		}
+		// The record retires first, then Close releases Dolt's LOCK and
+		// flushes the manifest; a failure in either is the caller's to hear.
+		// [LAW:no-silent-failure]
+		err = errors.Join(err, releaseRecord(), ddb.Close())
 	}()
 	// The hold starts here: the open above took LOCK. Registered after the
 	// Close defer so it runs first and the cut is stamped on the error the
@@ -200,11 +199,14 @@ func RecordPushedHead(ctx context.Context, doltRootDir string, remote string, br
 // journal on (the store is journaled; a non-journaling open refuses it),
 // dolt's in-process singleton cache off (so this handle's lifetime and its
 // LOCK hold are one fact), and fail-fast on LOCK contention, which this
-// package then retries under the same bounded backoff a write engine open
-// uses — so a mirror or command holding the store is waited out for exactly
-// engineOpenRetryMaxElapsed and no longer. [LAW:one-source-of-truth] the
-// wait is the write open's wait, not a second figure.
-func openChunkStoreForRefWrite(ctx context.Context, root string) (*doltdb.DoltDB, error) {
+// package then retries under the same wait a write engine open uses — so a
+// mirror or command holding the store is waited out for exactly
+// coResidentHolderWait and no longer, and a holder that outlasts it is named.
+// [LAW:one-source-of-truth] the wait is the write open's wait, not a second
+// figure. The open records this process as LOCK's holder for the life of
+// the handle (recordEngineHolder), exactly as a write engine does; the
+// returned release retires the record and must run before the handle closes.
+func openChunkStoreForRefWrite(ctx context.Context, root string) (*doltdb.DoltDB, func() error, error) {
 	nomsDir := filepath.Join(root, doltDatabaseName, dbfactory.DoltDataDir)
 	urlStr := "file://" + filepath.ToSlash(nomsDir)
 	var ddb *doltdb.DoltDB
@@ -224,8 +226,10 @@ func openChunkStoreForRefWrite(ctx context.Context, root string) (*doltdb.DoltDB
 		ddb = opened
 		return nil
 	}
-	if err := backoff.Retry(open, backoff.WithContext(newEngineOpenBackOff(), ctx)); err != nil {
-		return nil, wrapEngineOpenContention(fmt.Errorf("open dolt chunk store at %s: %w", nomsDir, err))
+	if err := awaitEngineOpen(ctx, root, func(ctx context.Context) error {
+		return backoff.Retry(open, backoff.WithContext(newEngineOpenBackOff(root), ctx))
+	}); err != nil {
+		return nil, nil, fmt.Errorf("open dolt chunk store at %s: %w", nomsDir, err)
 	}
-	return ddb, nil
+	return ddb, recordEngineHolder(root), nil
 }

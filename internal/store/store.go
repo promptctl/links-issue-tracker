@@ -50,6 +50,11 @@ type Store struct {
 	commitLockStorageDir string
 	telemetryDir         string
 	releaseWorkspaceLock func() error
+	// releaseEngineRecord retires this process's holder record for Dolt's
+	// LOCK (recordEngineHolder); a no-op for a read engine, which records
+	// nothing. Never nil, so Close runs it unconditionally.
+	// [LAW:dataflow-not-control-flow]
+	releaseEngineRecord func() error
 
 	// clock is where this store learns the instant it stamps a write with. It
 	// is a construction-time dependency rather than a read from inside the
@@ -159,7 +164,7 @@ func Open(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store
 	// unconditional; on an already-normalized store it reads and does nothing.
 	if err = s.withCommitLock(ctx, func(ctx context.Context) error {
 		if err := ensureMasterDefaultBranch(ctx, s.db); err != nil {
-			return wrapEngineOpenContention(err)
+			return wrapEngineOpenContention(err, doltRootDir)
 		}
 		return s.migrate(ctx)
 	}); err != nil {
@@ -278,7 +283,7 @@ func (s *Store) AttributeTo(streamToken string) {
 // CREATE could land between an adopt's discard and clone, or be destroyed by
 // it. The bootstrap's write-capable engines serialize against every other
 // engine on Dolt's own journal lock, which each open acquires with a bounded
-// retry (engineOpenRetryMaxElapsed). Open and OpenSync do NOT call this: they
+// wait (coResidentHolderWait). Open and OpenSync do NOT call this: they
 // already hold the workspace lock and call ensureDoltDatabase directly, so
 // the lock is never re-entered.
 // [LAW:single-enforcer] one lock discipline for every write-capable
@@ -347,7 +352,14 @@ func (s *Store) ExecRawForTest(ctx context.Context, query string, args ...any) e
 }
 
 func (s *Store) Close() error {
-	err := s.db.Close()
+	// The holder record retires BEFORE the engine releases LOCK, so no
+	// instant exists in which the next opener holds LOCK while this record
+	// still answers for it — the order recordLockHolder keeps for every
+	// lit-minted lock.
+	err := s.releaseEngineRecord()
+	if closeErr := s.db.Close(); closeErr != nil {
+		err = errors.Join(err, closeErr)
+	}
 	// [LAW:single-enforcer] Benign driver shutdown cancellation is normalized at the Store boundary so callers see one close contract.
 	if errors.Is(err, context.Canceled) {
 		err = nil
@@ -384,20 +396,31 @@ func (s *Store) Close() error {
 // and the fallback being permanent for the engine's lifetime costs a reader
 // nothing, because a read open never applies DDL — one that finds the schema
 // trailing hands off to Open (see OpenForRead).
+//
+// A write engine that opened holds LOCK, so it records itself as its holder
+// (recordEngineHolder). A read engine does not: it cannot tell whether it
+// took LOCK or fell back past it, and a record naming a reader that holds
+// nothing would send an operator after the wrong pid. The one branch is the
+// open contract's own discriminator. [LAW:dataflow-not-control-flow]
 func openStoreConnection(ctx context.Context, doltRootDir string, workspaceID string, access engineAccess) (*Store, error) {
 	db, err := openDoltPool(doltRootDir, workspaceID, doltDatabaseName, access)
 	if err != nil {
 		return nil, err
 	}
-	if err := db.PingContext(ctx); err != nil {
-		return nil, errors.Join(wrapEngineOpenContention(err), db.Close())
+	if err := awaitEngineOpen(ctx, doltRootDir, db.PingContext); err != nil {
+		return nil, errors.Join(err, db.Close())
+	}
+	releaseEngineRecord := func() error { return nil }
+	if access == engineWrite {
+		releaseEngineRecord = recordEngineHolder(doltRootDir)
 	}
 	return &Store{
-		db:          db,
-		workspaceID: workspaceID,
-		doltRootDir: doltRootDir,
-		access:      access,
-		clock:       storage.SystemClock,
+		db:                  db,
+		workspaceID:         workspaceID,
+		doltRootDir:         doltRootDir,
+		access:              access,
+		releaseEngineRecord: releaseEngineRecord,
+		clock:               storage.SystemClock,
 		// Both facts about the commit lock, drawn side by side from the one
 		// root, so neither is ever recovered by inverting the other.
 		// [LAW:one-source-of-truth]
@@ -426,8 +449,8 @@ func openStoreConnection(ctx context.Context, doltRootDir string, workspaceID st
 // commit lock is held — the inverted order this package's doc documents
 // as this site's tolerated deviation. It cannot wedge, and the reason is two
 // bounds and not one. Per call, the re-open waits at most
-// engineOpenRetryMaxElapsed before failing the mutation loudly — with
-// wrapEngineOpenContention's holder guidance, from the ping that makes the
+// coResidentHolderWait before failing the mutation loudly — with
+// wrapEngineOpenContention's holder account, from the ping that makes the
 // open (and its contention) surface here rather than at whichever query runs
 // next. Across a mutation, this call is the rotate step of
 // retryTransientGCContention's loop, which runs it up to
@@ -440,6 +463,10 @@ func openStoreConnection(ctx context.Context, doltRootDir string, workspaceID st
 // (links-sync-dauk). With both in place, any holder this re-open waits on
 // either releases or outlives this mutation's bounded failure, and the commit
 // lock is released either way.
+//
+// The holder record is not rotated with the engine: it names this process
+// and this command, both of which the rotation keeps, and the gap in which
+// LOCK is momentarily free is the one the commit lock already covers.
 func (s *Store) reconnect(ctx context.Context) error {
 	// [LAW:dataflow-not-control-flow] Reconnect runs unconditionally on every invocation; what varies is the Store's path/identity/access, not whether the rotation occurs.
 	next, err := openDoltPool(s.doltRootDir, s.workspaceID, doltDatabaseName, s.access)
@@ -451,8 +478,8 @@ func (s *Store) reconnect(ctx context.Context) error {
 	if err := prev.Close(); err != nil && !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("close prior dolt connection after reconnect: %w", err)
 	}
-	if err := next.PingContext(ctx); err != nil {
-		return fmt.Errorf("reopen dolt: %w", wrapEngineOpenContention(err))
+	if err := awaitEngineOpen(ctx, s.doltRootDir, next.PingContext); err != nil {
+		return fmt.Errorf("reopen dolt: %w", err)
 	}
 	return nil
 }
@@ -2727,7 +2754,7 @@ func ensureDoltDatabase(ctx context.Context, doltRootDir string, workspaceID str
 		// The bootstrap pools open their engines at first exec, so a foreign
 		// journal-lock holder surfaces here; the wrapper names the holder,
 		// every other failure passes through untouched.
-		return false, wrapEngineOpenContention(err)
+		return false, wrapEngineOpenContention(err, root)
 	}
 	db, err := openDoltPool(root, workspaceID, doltDatabaseName, engineWrite)
 	if err != nil {
@@ -2735,7 +2762,7 @@ func ensureDoltDatabase(ctx context.Context, doltRootDir string, workspaceID str
 	}
 	defer db.Close()
 	if err := ensureMasterDefaultBranch(ctx, db); err != nil {
-		return false, wrapEngineOpenContention(err)
+		return false, wrapEngineOpenContention(err, root)
 	}
 	return created, nil
 }
@@ -2866,65 +2893,56 @@ const (
 	// outlast.
 	mirrorHoldCeiling = mirrorHoldBudget + mirrorHoldCancelLag
 
+	// storeLockPollInterval is how often a contender re-tries a held lock,
+	// and so the granularity of every wait in this package: a holder that
+	// releases is noticed within this much. coResidentWaitHeadroom is a
+	// multiple of it for that reason — the headroom has to cover sleeping
+	// through the release, not a step of the hold. [LAW:one-source-of-truth]
+	// declared once, read by holdWait and by the sizing chain here.
+	storeLockPollInterval = 100 * time.Millisecond
+
 	// coResidentWaitHeadroom is scheduling slop above the ceiling, and the one
 	// number here that is a judgment rather than a measurement — so it is
-	// pinned to something real: eight times the waiter's own retry interval
-	// (engineOpenRetryMaxInterval), which is how much of the wait can be spent
-	// asleep between polls on a machine under load. It is deliberately not
-	// folded into the steps above; slop hidden inside a measured step is how a
-	// measured step stops being measurable.
-	coResidentWaitHeadroom = 8 * engineOpenRetryMaxInterval
+	// pinned to something real: eight polls, which is how much of the wait
+	// can be spent asleep between polls on a machine under load. It is
+	// deliberately not folded into the steps above; slop hidden inside a
+	// measured step is how a measured step stops being measurable.
+	coResidentWaitHeadroom = 8 * storeLockPollInterval
 
 	// InlineReceiveDeadline bounds the inline receive — the fetch a read
-	// command pays after its output when the receive debounce lapses — so an
-	// offline or slow remote cannot hang the command's exit. A cut abandons
-	// only the fetch (the next interval retries), never the command's result.
-	// It is declared here rather than beside the receive because the receive
-	// holds this store's LOCK for its whole run, which makes it a term of the
-	// wait below. [LAW:one-source-of-truth]
+	// command pays after its output when the receive debounce lapses and the
+	// remote has moved — so an offline or slow remote cannot hang the
+	// command's exit. A cut abandons only the fetch (the next interval
+	// retries), never the command's result. The receive holds this store's
+	// LOCK for the fetch, which is longer than any routine hold below: a
+	// writer arriving during one fails, naming the command that is
+	// receiving, rather than waiting out the network. [LAW:one-source-of-truth]
 	InlineReceiveDeadline = 15 * time.Second
-
-	// inlineReceiveCeiling is the longest the inline receive can hold the
-	// live store: its deadline plus the lag its cut takes to land. The lag is
-	// the push's measured one, MirrorPushCancelLagObserved — the receive's
-	// fetch and the push are the same transport, the embedded driver's git
-	// subprocess torn down the same way when its context ends — and the
-	// receive has not been measured on its own. [FRAMING:representation] a
-	// borrowed figure, named as borrowed.
-	inlineReceiveCeiling = InlineReceiveDeadline + MirrorPushCancelLagObserved
-
-	// foregroundPushObservedTail is the slowest a HEALTHY explicit `lit sync
-	// push` (the pre-push hook's push) has been measured to hold the live
-	// store. It runs under the live engine with no deadline of its own, and
-	// it is the operation mirrorPushObservedTail was measured on — twenty
-	// foreground runs are in that sample — so the figure is that one and not
-	// a second measurement. [LAW:one-source-of-truth]
-	foregroundPushObservedTail = mirrorPushObservedTail
-
-	// routineHolderCeiling is the longest ANY routine holder keeps the live
-	// store: the mirror's clone or record hold, a read command's inline
-	// receive, an explicit push. The chain once named the mirror alone, which
-	// was a map missing two territories — a write open waiting less than the
-	// receive's deadline failed against a peer's `lit show` doing exactly what
-	// it was designed to do. Each term leaves this max with its holder:
-	// links-scale-om3r.3s7 takes the receive off the live store's locks, and
-	// links-scale-om3r.zhq re-derives the wait once the mirror is the last
-	// routine holder and a caller that cannot get the store names the one
-	// that has it.
-	routineHolderCeiling = max(mirrorHoldCeiling, inlineReceiveCeiling, foregroundPushObservedTail)
-
-	// coResidentHolderWait is the ONE answer to "how long does a caller wait
-	// for a co-resident holder of this store to let go" — a live write Store
-	// in this or another process, a non-lit dolt process, or the snapshot
-	// copy's LockDoltJournalExclusive hold. It outlasts every routine holder
-	// because a wait shorter than a legal hold does not protect anyone, it
-	// manufactures "another process is holding this workspace's Dolt store
-	// open" out of a workspace behaving exactly as designed.
-	// engineOpenRetryMaxElapsed and doltJournalRetryAttempts are both this
-	// number; neither restates it. A long engine session that is not routine
-	// (an import, a reconcile) still outlasts this wait by design.
-	coResidentHolderWait = routineHolderCeiling + coResidentWaitHeadroom
 )
+
+// coResidentHolderWait is the ONE answer to "how long does a caller wait for
+// a co-resident holder of this store to let go" — a live write Store in this
+// or another process, a non-lit dolt process, or the snapshot copy's
+// LockDoltJournalExclusive hold. It is sized to the longest ROUTINE hold, the
+// mirror's clone or record step, because a wait shorter than a legal routine
+// hold does not protect anyone, it manufactures "another process is holding
+// this workspace's Dolt store open" out of a workspace behaving exactly as
+// designed — and a wait longer than that answers a stalled holder with
+// silence, which is what sends a user or agent into a retry that adds a
+// second waiter. Every other holder is not routine and is named: a snapshot
+// copy, a migration, an import, the explicit push and the inline receive
+// (both still hold the store across the network), all of them fail a
+// contender after this wait with the holder's pid, command and age in the
+// refusal.
+//
+// The wait counts from the last time the holders in front of the contender
+// changed, not from the contender's arrival (holdWait): sixteen `lit new` at
+// once serialize on this store at tens of milliseconds each and every one
+// lands, because each one's release is progress; a holder that stands still
+// for this long is the one that fails the contender. A package variable so
+// the contention tests shrink it rather than sleep through the production
+// one; nothing else assigns it.
+var coResidentHolderWait = mirrorHoldCeiling + coResidentWaitHeadroom
 
 // The push deadline chain. The mirror's push runs from a clone with no lock on
 // the live store held, so nothing waits on it — but the mirror process itself
@@ -2990,18 +3008,12 @@ const (
 	MirrorPushCancelLagObserved = 22 * time.Second
 )
 
-// engineOpenRetryMaxElapsed bounds how long a write-capable engine open keeps
-// retrying while another engine holds Dolt's journal lock (DoltJournalLockPath).
-// A package variable so tests can shrink the wait without sleeping through the
-// production one.
-var engineOpenRetryMaxElapsed = coResidentHolderWait
-
 // MirrorHoldBudget is the deadline each background-mirror hold on the live
 // store runs under: the clone step before the push, and the pushed-head record
 // after it. It is a deadline, not a bound on the hold: a cut lands up to
 // mirrorHoldCancelLag later, and mirrorHoldCeiling is the number that follows
 // from that. TestMirrorHoldBudgetExceedsObservedCloneCost and
-// TestCoResidentWaitOutlastsMirrorHoldCeiling pin both relations. A package
+// TestCoResidentWaitIsSizedToTheMirrorHold pin both relations. A package
 // variable so a regression test can shrink it without sleeping through the
 // production one.
 var MirrorHoldBudget = mirrorHoldBudget
@@ -3017,39 +3029,73 @@ var MirrorHoldBudget = mirrorHoldBudget
 var MirrorPushDeadline = mirrorPushDeadline
 
 // wrapEngineOpenContention attaches operator guidance to an engine open that
-// exhausted its retry budget against a held Dolt journal lock; every other
-// error passes through untouched. The wrap carries BOTH discriminators:
-// ErrWorkspaceBusy, the one contention sentinel every store lock stamps —
-// which is what keeps the mirror's push outcome recording a busy workspace
-// as workspace_busy rather than a failure that pages the owner (the retired
-// engine lock's wrapper carried it, so this is parity, not addition) — and
-// the underlying nbs.ErrDatabaseLocked classification.
+// exhausted its wait against a held Dolt journal lock, naming who holds it;
+// every other error passes through untouched. The wrap carries BOTH
+// discriminators: ErrWorkspaceBusy, the one contention sentinel every store
+// lock stamps — which is what keeps the mirror's push outcome recording a
+// busy workspace as workspace_busy rather than a failure that pages the
+// owner (the retired engine lock's wrapper carried it, so this is parity,
+// not addition) — and the underlying nbs.ErrDatabaseLocked classification.
 // [LAW:single-enforcer] The one place the raw "database is locked" outcome
-// becomes a holder-naming, actionable message.
-func wrapEngineOpenContention(err error) error {
+// becomes a holder-naming, actionable message. It takes the dolt root and
+// not a prepared account so the account is read at the moment of failure,
+// naming the holder that is there now rather than the one that was there
+// when the wait began.
+func wrapEngineOpenContention(err error, doltRootDir string) error {
 	if err != nil && errors.Is(err, nbs.ErrDatabaseLocked) {
-		return fmt.Errorf("another process is holding this workspace's Dolt store open (a background sync mirror, another lit command, or a snapshot copy in progress); retry after it completes: %w (%w)", ErrWorkspaceBusy, err)
+		return fmt.Errorf("another process is holding this workspace's Dolt store open, %s; retry after it completes: %w (%w)",
+			describeLockHolders(workspaceStorageDir(doltRootDir), DoltJournalLockPath(doltRootDir)), ErrWorkspaceBusy, err)
 	}
 	return err
 }
 
-// engineOpenRetryMaxInterval is the longest this retry sleeps between polls,
-// and so the granularity of every wait built on it: a holder that releases is
-// noticed within this much. coResidentWaitHeadroom is a multiple of it for
-// that reason — the headroom has to cover sleeping through the release, not a
-// step of the hold. [LAW:one-source-of-truth] declared once, read by the
-// backoff below and by the sizing chain above.
-const engineOpenRetryMaxInterval = time.Second
+// awaitEngineOpen runs the step that makes an engine open surface — the ping
+// that opens a pooled connector, or a chunk-store load — while reporting the
+// wait the way every store lock reports its own (announceLockWait), and
+// stamps a contention outcome with the holder's name. The retry itself is
+// the caller's, driven by newEngineOpenBackOff; this is the one seam every
+// engine open of Dolt's LOCK crosses, so the notice and the name cannot be
+// forgotten at one of them. [LAW:single-enforcer]
+func awaitEngineOpen(ctx context.Context, doltRootDir string, open func(context.Context) error) error {
+	defer announceLockWait(ctx, workspaceStorageDir(doltRootDir), DoltJournalLockPath(doltRootDir))()
+	return wrapEngineOpenContention(open(ctx), doltRootDir)
+}
 
 // newEngineOpenBackOff builds the per-connector retry policy for write-capable
-// engine opens. Fresh instance per connector — backoff state is per-open, and
-// the connector Resets it before each engine open.
-func newEngineOpenBackOff() backoff.BackOff {
-	bo := backoff.NewExponentialBackOff()
-	bo.InitialInterval = 50 * time.Millisecond
-	bo.MaxInterval = engineOpenRetryMaxInterval
-	bo.MaxElapsedTime = engineOpenRetryMaxElapsed
-	return bo
+// engine opens: the same holdWait every store lock waits with, keyed by
+// Dolt's LOCK, so an engine open and a LockDoltJournalExclusive contender give
+// the same holder the same wait and read the same progress. Fresh instance
+// per connector — backoff state is per-open, and the connector Resets it
+// before each engine open. [LAW:one-source-of-truth]
+func newEngineOpenBackOff(doltRootDir string) backoff.BackOff {
+	return newHoldWait(workspaceStorageDir(doltRootDir), DoltJournalLockPath(doltRootDir), coResidentHolderWaitNow)
+}
+
+// coResidentHolderWaitNow reads the wait at the moment a contender needs it,
+// so a connector built before a contention test shrank the variable still
+// waits the shrunken figure. [LAW:one-source-of-truth]
+func coResidentHolderWaitNow() time.Duration { return coResidentHolderWait }
+
+// recordEngineHolder publishes this process as a holder of Dolt's LOCK for
+// the life of a write-capable engine it has just opened, so a contender that
+// fails against it can say which command has the store rather than "a
+// process that left no record". The engine took LOCK through Dolt's own
+// loader, not through acquireStoreLock, which is why the record is published
+// here and not there; the returned release retires it and is called before
+// the engine closes, so no instant exists in which the next opener holds
+// LOCK while this record still answers for it. A recording failure is loud
+// but never fatal, the same demotion recordLockHolder makes and for the same
+// reason: refusing a working engine over a diagnostic would turn a working
+// workspace into a broken one. [LAW:no-silent-failure] loud, but not a false
+// failure.
+func recordEngineHolder(doltRootDir string) func() error {
+	lockPath := DoltJournalLockPath(doltRootDir)
+	release, err := publishLockHolder(workspaceStorageDir(doltRootDir), lockPath)
+	if err != nil {
+		fmt.Fprintf(lockWaitNoticeWriter, "lit: could not record this process as the holder of %s (the engine is open; only the diagnostic naming this holder is missing): %v\n", lockPath, err)
+		return func() error { return nil }
+	}
+	return release
 }
 
 // newDoltConnector assembles the embedded-driver connector every store
@@ -3076,7 +3122,7 @@ func newDoltConnector(doltRootDir, workspaceID, database string, access engineAc
 		DisableSingletonCache: true,
 	}
 	if access == engineWrite {
-		cfg.BackOff = newEngineOpenBackOff()
+		cfg.BackOff = newEngineOpenBackOff(doltRootDir)
 	}
 	connector, err := embedded.NewConnector(cfg)
 	if err != nil {

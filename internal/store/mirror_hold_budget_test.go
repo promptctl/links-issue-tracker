@@ -69,13 +69,18 @@ func TestMirrorPushDeadlineExceedsObservedPushCost(t *testing.T) {
 	}
 }
 
-// TestCoResidentWaitOutlastsMirrorHoldCeiling pins the relation the retired
+// TestCoResidentWaitIsSizedToTheMirrorHold pins the relation the retired
 // test got wrong. A foreground write open waits out a co-resident holder for
-// coResidentHolderWait, and the holder it was sized for is the mirror — so the
+// coResidentHolderWait, and the holder it is sized for is the mirror — so the
 // wait has to outlast the mirror's longest LEGAL hold. That hold is not the
 // budget: a cut does not land on its deadline, so a wait sized against the
 // budget alone is sized against a number the hold does not respect.
-func TestCoResidentWaitOutlastsMirrorHoldCeiling(t *testing.T) {
+//
+// The other half of the same relation is the ticket's contract
+// (links-scale-om3r.zhq): a command that cannot get the store fails within
+// five seconds. The wait, plus one poll and one of dolt's own 100ms attempts
+// (a refusal can land that long after the wait elapses), stays inside it.
+func TestCoResidentWaitIsSizedToTheMirrorHold(t *testing.T) {
 	t.Parallel()
 	if coResidentHolderWait <= mirrorHoldCeiling {
 		t.Fatalf("coResidentHolderWait (%s) does not outlast mirrorHoldCeiling (%s); a foreground open can starve against a legal mirror hold and fail as though the workspace were wedged",
@@ -85,34 +90,21 @@ func TestCoResidentWaitOutlastsMirrorHoldCeiling(t *testing.T) {
 		t.Fatalf("mirrorHoldCeiling (%s) does not exceed mirrorHoldBudget (%s); the ceiling exists because a cut does not land on its deadline, and a ceiling equal to the budget restates the budget instead of correcting it",
 			mirrorHoldCeiling, mirrorHoldBudget)
 	}
-	// The mirror is not the only routine holder while the inline receive and
-	// the explicit push still run on the live store's locks: a wait sized
-	// under either fails a write open against a peer's `lit show` or
-	// `git push` doing exactly what it was designed to do.
-	for _, holder := range []struct {
-		name    string
-		ceiling time.Duration
-	}{
-		{"inlineReceiveCeiling", inlineReceiveCeiling},
-		{"foregroundPushObservedTail", foregroundPushObservedTail},
-	} {
-		if coResidentHolderWait <= holder.ceiling {
-			t.Fatalf("coResidentHolderWait (%s) does not outlast %s (%s); a foreground open fails against a routine holder", coResidentHolderWait, holder.name, holder.ceiling)
-		}
+	if refusal := coResidentHolderWait + 2*storeLockPollInterval; refusal >= 5*time.Second {
+		t.Fatalf("a contender's refusal lands after %s; the contract is that a command that cannot get the store fails within five seconds", refusal)
 	}
 }
 
-// TestJournalRetryAttemptsReconstructCoResidentWait pins that the journal
-// lock's retry loop waits the co-resident wait and not some rounding of it.
-// The attempt count is a division, and a wait that is not a whole multiple of
-// doltJournalRetryDelay truncates — silently, and always downward, which is
-// the direction that starves. The two representations of this one wait
-// (engineOpenRetryMaxElapsed, and delay × attempts) agree only while the
-// division is exact. [LAW:one-source-of-truth]
-func TestJournalRetryAttemptsReconstructCoResidentWait(t *testing.T) {
+// TestCommitLockWaiterOutlastsARotation pins the order the package's tolerated
+// lock inversion depends on: a mutation's GC-contention rotation re-opens
+// LOCK under the held commit lock, and a peer that took LOCK in the gap waits
+// on that commit lock. The re-open gives up after coResidentHolderWait plus
+// the old engine's close; the peer's wait must be strictly longer, or both
+// fail at once where the holder alone was meant to.
+func TestCommitLockWaiterOutlastsARotation(t *testing.T) {
 	t.Parallel()
-	if got := time.Duration(doltJournalRetryAttempts) * doltJournalRetryDelay; got != coResidentHolderWait {
-		t.Fatalf("doltJournalRetryAttempts (%d) × doltJournalRetryDelay (%s) = %s, want coResidentHolderWait (%s); the division truncated and the journal wait is now shorter than the engine-open wait for the same holder",
-			doltJournalRetryAttempts, doltJournalRetryDelay, got, coResidentHolderWait)
+	if commitLockWaiterBudget() <= rotationReserve() {
+		t.Fatalf("commitLockWaiterBudget (%s) does not outlast rotationReserve (%s); a commit-lock waiter gives up before the holder's rotation does",
+			commitLockWaiterBudget(), rotationReserve())
 	}
 }
