@@ -8,7 +8,7 @@ lit's shared backend stores every workspace in an embedded [Dolt](https://github
 
 A `Store` wraps exactly one pooled SQL connection (`SetMaxOpenConns(1)` in `openDoltPool`, `store.go`) opened through a vendored embedded-Dolt driver. Two access modes (`store.go`):
 
-- **Write** (`Open`, and the sync-side `OpenSync`): the connector gets an exponential backoff (initial 50ms, max interval `engineOpenRetryMaxInterval` = 1s, max elapsed `engineOpenRetryMaxElapsed` = `coResidentHolderWait` = 45s, assigned in `newEngineOpenBackOff`, `store.go`) and pings eagerly so lock contention surfaces at open time.
+- **Write** (`Open`, and the sync-side `OpenSync`): the connector gets the store's one wait policy (`holdWait`, keyed by Dolt's `LOCK` holder directory: a poll every `storeLockPollInterval` = 100ms, giving up once no new holder has arrived in front of it for `coResidentHolderWait` = `mirrorHoldCeiling` + 8 polls = 2.3s, assigned in `newEngineOpenBackOff`, `store.go`) and pings eagerly so lock contention surfaces at open time, reported while it waits (`lit: still waiting for <LOCK> after <d>; held by …`) and named in the refusal (`another process is holding this workspace's Dolt store open, held by pid <pid> (<command>) holding since <RFC3339> (<age>); retry after it completes`). A write engine that opened publishes a holder record for `LOCK` for its life (`recordLockHolder`), retired by `closeEngine` before the engine releases the lock; a read engine records nothing.
 - **Read** (`OpenForRead`): no backoff; the engine is pinged at construction like a write engine's, and a read open beside a foreign lock holder succeeds via Dolt's read-only fallback (journal wait ~100ms) and serves reads (`store.go`).
 
 If another process holds Dolt's journal lock (`<root>/links/.dolt/noms/LOCK`), the wrapped error satisfies both `ErrWorkspaceBusy` and `nbs.ErrDatabaseLocked` and reads "another process is holding this workspace's Dolt store open … retry after it completes" (`store.go`).
@@ -42,7 +42,7 @@ Store-level commit messages used verbatim: `record sync state`, `create issue`, 
 | Lock | Path | Mode | Budget | Notes |
 |---|---|---|---|---|
 | Workspace lock | `.links-workspace.lock` beside the store | shared on open (exclusive users covered in ch. 04) | — | held for the store's lifetime |
-| Commit lock | `.links-commit-flock.lock` in the parent of the dolt root (`commit_lock.go`) | exclusive | 9000 attempts × 100ms ≈ 15 min (`commit_lock.go`) | re-entrant via a context key (`commit_lock.go`) |
+| Commit lock | `.links-commit-flock.lock` in the parent of the dolt root (`commit_lock.go`) | exclusive | `commitLockWaiterBudget()` = `coResidentHolderWait` + `rotationReserve()` = 5.6s of unchanged holders (`commit_lock.go`) | re-entrant via a context key (`commit_lock.go`) |
 
 Both are zero-byte kernel flocks with **no** stale/PID/mtime heuristics — process death is the only release. Contention on the commit lock wraps as "another lit process is writing to this workspace … retry after it completes". A panic inside a mutation still releases the lock; a release failure after a successful operation prints a warning to stderr and returns success (`commit_lock.go`). A cancelled context returns `context.Canceled` rather than burning the budget.
 

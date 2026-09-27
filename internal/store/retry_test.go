@@ -262,7 +262,7 @@ func TestRetryTransientGCContentionSurfacesRotateFailure(t *testing.T) {
 
 // TestRetryTransientGCContentionCancellationEscapesBlockedRotator pins why
 // connectionRotator carries ctx at all: reconnect's rotation opens a real
-// engine, whose PingContext can wait out engineOpenRetryMaxElapsed against a
+// engine, whose PingContext can wait out coResidentHolderWait against a
 // held journal lock, and a cancelled mutation must escape that wait rather
 // than serve it out. The rotator here blocks exactly the way that ping does —
 // until its ctx dies — so the test fails (hangs past its deadline, or returns
@@ -474,26 +474,25 @@ func TestRetryTransientGCContentionStopsBeforeOutlastingCommitLockWaiters(t *tes
 		closeCost time.Duration
 		delay     time.Duration
 	}{
-		{name: "sleep dominates the reservation", open: 100 * time.Millisecond, closeCost: 100 * time.Millisecond, delay: 450 * time.Millisecond},
-		{name: "engine close dominates the reservation", open: 100 * time.Millisecond, closeCost: 450 * time.Millisecond, delay: 100 * time.Millisecond},
+		{name: "engine open dominates the reservation", open: 400 * time.Millisecond, closeCost: 100 * time.Millisecond, delay: 100 * time.Millisecond},
+		{name: "engine close dominates the reservation", open: 200 * time.Millisecond, closeCost: 450 * time.Millisecond, delay: 50 * time.Millisecond},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			restoreOpen := engineOpenRetryMaxElapsed
-			engineOpenRetryMaxElapsed = tc.open
-			t.Cleanup(func() { engineOpenRetryMaxElapsed = restoreOpen })
+			restoreOpen := coResidentHolderWait
+			coResidentHolderWait = tc.open
+			t.Cleanup(func() { coResidentHolderWait = restoreOpen })
 			restoreClose := rotationCloseReserve
 			rotationCloseReserve = tc.closeCost
 			t.Cleanup(func() { rotationCloseReserve = restoreClose })
-			restoreAttempts := commitLockRetryAttempts
-			commitLockRetryAttempts = 30
-			t.Cleanup(func() { commitLockRetryAttempts = restoreAttempts })
 
-			// A 3s budget against a 650ms reservation leaves room for four
-			// rotations, so the loop stops on the hold and nowhere near its
-			// 30 attempts. It lands at ~2.6s, 400ms clear of the budget —
-			// margin enough to survive scheduler jitter across eight real
-			// sleeps on a loaded runner, which the first version of this pin
-			// (50ms of room across ten) was not.
+			// The waiter budget is the holder wait plus one rotation, so the
+			// loop has exactly the holder wait to spend on sleeping and
+			// rotating before the reservation for the next rotation no longer
+			// fits: one rotation lands in both rows (600ms of a 900ms budget,
+			// 700ms of 850ms), and the second is refused before it starts.
+			// The margin to the budget is the rotation's own delay plus the
+			// reservation's slack, 200ms and 150ms here — enough to survive
+			// scheduler jitter across the real sleeps on a loaded runner.
 			waiterBudget := commitLockWaiterBudget()
 
 			// Contended forever, shaped through wrapCommitWorkingSetError so
@@ -510,7 +509,7 @@ func TestRetryTransientGCContentionStopsBeforeOutlastingCommitLockWaiters(t *tes
 			// weights it could not fail.
 			rotate := func(context.Context) error {
 				rotations++
-				time.Sleep(engineOpenRetryMaxElapsed + rotationCloseReserve)
+				time.Sleep(coResidentHolderWait + rotationCloseReserve)
 				return nil
 			}
 			// A real delay, really slept, for the same reason.

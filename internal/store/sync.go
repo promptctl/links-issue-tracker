@@ -61,7 +61,7 @@ func OpenSync(ctx context.Context, doltRootDir string, workspaceID string) (_ *S
 	// the call site that must wait out an earlier foreground command's (or
 	// earlier mirror's) still-live engine instead of colliding with it
 	// (links-sync-pgct.11) — the wait happens inside the eager engine open,
-	// on Dolt's own journal lock, bounded by engineOpenRetryMaxElapsed.
+	// on Dolt's own journal lock, bounded by coResidentHolderWait.
 	s, err := openStoreConnection(ctx, doltRootDir, workspaceID, engineWrite)
 	if err != nil {
 		return nil, err
@@ -86,8 +86,8 @@ func OpenSync(ctx context.Context, doltRootDir string, workspaceID string) (_ *S
 		})
 	}
 	if err != nil {
-		err = wrapEngineOpenContention(err)
-		if closeErr := s.db.Close(); closeErr != nil && !errors.Is(closeErr, context.Canceled) {
+		err = wrapEngineOpenContention(err, doltRootDir)
+		if closeErr := s.closeEngine(); closeErr != nil {
 			err = errors.Join(err, closeErr)
 		}
 		s.releaseWorkspaceLock = nil

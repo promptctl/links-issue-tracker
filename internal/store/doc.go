@@ -60,7 +60,7 @@
 // opening an engine; and RecordPushedHead's chunk-store open
 // (pushed_head.go), which takes LOCK the way a write engine does — through
 // dolt's own loader, fail-fast on contention, retried for
-// engineOpenRetryMaxElapsed — to move one remote-tracking ref and close.
+// coResidentHolderWait — to move one remote-tracking ref and close.
 // That standing Store hold is the trap in the natural
 // reading of "hold Dolt's LOCK during a walk": taking LOCK (opening a write
 // engine, or locking the file directly) while holding the commit lock
@@ -68,7 +68,9 @@
 // or not at all. One deviation is tolerated, not copied: a GC-contention
 // retry rotates the store's connection mid-mutation, re-acquiring LOCK
 // under the held commit lock. It cannot wedge — each re-open's wait is
-// bounded (engineOpenRetryMaxElapsed) and the retry loop bounds how much of
+// bounded (every LOCK taker but the pushed-head record then waits on the
+// commit lock, so none can keep arriving in front of it past
+// coResidentHolderWait) and the retry loop bounds how much of
 // them one mutation may accumulate (against commitLockWaiterBudget), so the
 // inverted edge always breaks by the re-open failing the mutation loudly —
 // and BOTH bounds are the tolerance's whole justification, because the

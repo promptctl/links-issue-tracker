@@ -50,7 +50,7 @@ func chunkJournalPath(doltRoot string) string {
 // does when it must bring the schema forward while the copy's journal hold
 // is live: it hands off to the write open, whose engine refuses Dolt's
 // read-only fallback and waits out the holder for the bounded
-// engineOpenRetryMaxElapsed — never applying DDL through a read engine that
+// coResidentHolderWait — never applying DDL through a read engine that
 // resolved read-only under the hold. A holder that outlasts the budget
 // surfaces as the write open's contention refusal, and the same open
 // succeeds — applying the migration — once the holder releases. The budget
@@ -58,10 +58,10 @@ func chunkJournalPath(doltRoot string) string {
 // assertions are about the exhausted error's shape, not the budget's size.
 func TestOpenForReadPendingMigrationUnderJournalHolder(t *testing.T) {
 	// serial: no t.Parallel — rewrites the package-level
-	// engineOpenRetryMaxElapsed budget.
-	prevBudget := engineOpenRetryMaxElapsed
-	engineOpenRetryMaxElapsed = 700 * time.Millisecond
-	t.Cleanup(func() { engineOpenRetryMaxElapsed = prevBudget })
+	// coResidentHolderWait budget.
+	prevBudget := coResidentHolderWait
+	coResidentHolderWait = 700 * time.Millisecond
+	t.Cleanup(func() { coResidentHolderWait = prevBudget })
 
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")

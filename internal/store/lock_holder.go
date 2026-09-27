@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/promptctl/primitives/filelock"
 )
 
@@ -49,6 +50,13 @@ import (
 // nothing else can reach, so it is uncontended by construction. This file
 // therefore takes no slot in the package's acquisition order, for the same
 // reason the sync-push lock needs none.
+//
+// One decision does read the registry: how long a contender keeps trying
+// (holdWait). It reads only WHICH records exist, never what they say, and it
+// decides only when the contender stops — the kernel still decides, alone,
+// whether the lock is held. A wrong or missing set of names costs a wait that
+// ends earlier or later than it should, never a lock taken or refused
+// wrongly, which keeps the registry descriptive in the sense that matters.
 
 // lockHolderDir is the directory of holder records for one lock, under the
 // workspace storage dir the caller names — the same rotation-surviving
@@ -415,22 +423,124 @@ func renderHolderCommand(command string) string {
 	return rendered
 }
 
+// holdWait is the one retry policy every contender for a store lock waits
+// with — the lit-minted locks through acquireStoreLock, and Dolt's LOCK
+// through the engine connector and the chunk-store open, which take
+// backoff.BackOff. It polls every storeLockPollInterval and stops once the
+// holders in front of the contender have stood still for the wait: the clock
+// starts at Reset, and restarts whenever a holder record the contender has
+// never seen appears under the lock, so a queue of short holders — sixteen
+// `lit new` serializing at tens of milliseconds each — is waited out however
+// long it runs, while a single holder standing for the whole wait ends the
+// contender's attempt. "Cannot get the store" is a holder that is not
+// moving, not a store that is busy.
+//
+// Only an ARRIVAL restarts the clock, never a departure. A name is minted by
+// an acquisition and nothing else, so a new name is proof of a new holder;
+// a name vanishing is not proof of anything the contender cares about — a
+// reader's sweep retires a dead record (readLockHolder), and its probe can
+// put an empty one back under the same name — and counting those as
+// progress would let a notice tick, or a peer's failure, hold a contender
+// past its wait. Names ever seen are kept for the life of the wait so the
+// same name cannot arrive twice.
+//
+// There is no ceiling above the wait. Under holders that keep arriving the
+// contender keeps waiting, reporting who it waits on every
+// lockWaitNoticeInterval, and leaves on its context: an exclusive contender
+// (a snapshot copy) can in principle wait out a write storm that never
+// pauses, and it lands when the storm does, where a ceiling would have
+// failed it with a holder that was never wedged. Fails-in-seconds is the
+// promise about a holder that stands still.
+//
+// [LAW:dataflow-not-control-flow] Every wait runs the same loop; what varies
+// is the lock's directory and its budget, both values. A holder with no
+// record (a foreign dolt, a read engine, an older lit) contributes no name
+// and no progress, so under it the rule is the plain elapsed budget it
+// reduces to when there is nothing to read.
+//
+// [LAW:no-ambient-temporal-coupling] No timestamp inside a record is
+// trusted; the signal is the existence of a name, which only an acquisition
+// creates.
+type holdWait struct {
+	dir   string
+	wait  func() time.Duration
+	known map[string]struct{}
+	since time.Time
+}
+
+// newHoldWait builds the policy for one lock. wait is read at Reset, not at
+// construction, so a policy built into a long-lived connector still waits the
+// figure a test has since shrunk. [LAW:one-source-of-truth]
+func newHoldWait(storageDir, lockPath string, wait func() time.Duration) *holdWait {
+	return &holdWait{dir: lockHolderDir(storageDir, lockPath), wait: wait}
+}
+
+// Reset starts the clock and takes the first reading of who is there.
+func (w *holdWait) Reset() {
+	w.known, w.since = map[string]struct{}{}, time.Now()
+	w.arrivals()
+}
+
+// NextBackOff is called after each failed attempt: it restarts the clock when
+// a holder has arrived since the last reading, and stops the retry when the
+// holders in front have stood for the whole wait.
+func (w *holdWait) NextBackOff() time.Duration {
+	if w.arrivals() {
+		w.since = time.Now()
+	}
+	if time.Since(w.since) >= w.wait() {
+		return backoff.Stop
+	}
+	return storeLockPollInterval
+}
+
+// arrivals reads the holder names once and reports whether any is new to this
+// wait, remembering every name it sees.
+func (w *holdWait) arrivals() bool {
+	arrived := false
+	for _, name := range holderRecordNames(w.dir) {
+		if _, seen := w.known[name]; !seen {
+			w.known[name] = struct{}{}
+			arrived = true
+		}
+	}
+	return arrived
+}
+
+// holderRecordNames lists the record names under a lock's holder directory.
+// Nothing is opened or probed: liveness is describeLockHolders's business, at
+// the moment a contender reports; here the names' identity is all that is
+// read. A directory that does not exist yet has no holders; a directory that
+// cannot be read reads the same way, and the failure surfaces where the
+// account is rendered (readLockHolders), which every exhausted wait reaches.
+func holderRecordNames(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), lockHolderRecordPrefix) {
+			names = append(names, entry.Name())
+		}
+	}
+	return names
+}
+
 var (
 	// lockWaitNoticeGrace is how long a wait stays quiet before it is worth
 	// reporting: long enough that the ordinary case — two lit commands
 	// overlapping for a few milliseconds — prints nothing, short enough to
-	// land inside the budget of every wait an operator could mistake for a
-	// hang, starting with the workspace shared lock's ~5s. The mirror
-	// beacon's ~1s is deliberately below it and never prints: a wait that
-	// short is over before anyone asks whether lit is wedged, and a grace
-	// under a second would report the overlaps this one exists to ignore.
-	// lockWaitNoticeInterval then repeats the notice, because one
-	// line at the two-second mark has scrolled away long before a 15-minute
-	// commit-lock budget elapses, and a wait that stops reporting itself is
+	// land inside coResidentHolderWait, the budget of every wait an operator
+	// could mistake for a hang, so a contender that is about to fail has
+	// already said who it is waiting on. A grace under a second would report
+	// the overlaps this one exists to ignore. lockWaitNoticeInterval then
+	// repeats the notice, because a wait behind a queue of holders can run
+	// as long as the queue does, and a wait that stops reporting itself is
 	// indistinguishable from the hang this notice exists to rule out.
 	//
 	// Package variables, not constants, by the convention
-	// engineOpenRetryMaxElapsed and transientRetryMaxAttempts already set:
+	// coResidentHolderWait and transientRetryMaxAttempts already set:
 	// tests whose premise is a wait must shrink the budget rather than sleep
 	// through the production one.
 	lockWaitNoticeGrace    = 2 * time.Second

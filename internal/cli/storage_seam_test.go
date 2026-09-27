@@ -117,7 +117,7 @@ var doltWorkspaceMachinery = map[string][]string{
 	// deadlines are links of the store's sizing chains, pinned in-package by
 	// TestMirrorHoldBudgetExceedsObservedCloneCost,
 	// TestMirrorPushDeadlineExceedsObservedPushCost and
-	// TestCoResidentWaitOutlastsMirrorHoldCeiling, and the ref write opens the
+	// TestCoResidentWaitIsSizedToTheMirrorHold, and the ref write opens the
 	// chunk store with no engine at all — all mirror machinery, deleted at S4
 	// with the rest.
 	//
