@@ -126,12 +126,24 @@ func LockWorkspaceShared(ctx context.Context, doltRootDir string) (func() error,
 // without reconstructing the lock path. A caller that does not rotate the
 // directory itself has no business with this mode — readers take the shared
 // hold.
+//
+// Taking the hold forgets the received-refs record (received_refs.go): the
+// record describes the directory about to be rotated away, and a rotation
+// that cannot forget it does not start. The forgetting lives here, in the
+// one act every rotator performs, so none of them can leave a record that
+// leads the directory it now sits beside. [LAW:single-enforcer]
 func LockWorkspaceExclusive(ctx context.Context, doltRootDir string) (func() error, error) {
 	release, err := acquireWorkspaceLock(ctx, doltRootDir, true, 1, 0)
 	if errors.Is(err, ErrWorkspaceBusy) {
 		return nil, fmt.Errorf("another lit process is using this workspace; close other lit commands and retry: %w", err)
 	}
-	return release, err
+	if err != nil {
+		return nil, err
+	}
+	if err := forgetReceivedRefs(doltRootDir); err != nil {
+		return nil, errors.Join(err, release())
+	}
+	return release, nil
 }
 
 // SyncPushLockPath returns the single-flight lock path for the background

@@ -23,7 +23,9 @@ import (
 const unfetchedStalenessThreshold = 24 * time.Hour
 
 // fetchSuccessMarkerPath is the single file whose modification time is the
-// last time a fetch against the remote actually SUCCEEDED — distinct from
+// last time local knowledge of the remote was actually CONFIRMED current: a
+// fetch against it succeeded, or it advertised the same refs the last
+// successful receive already brought in (sync_receive_ask.go) — distinct from
 // receiveMarkerPath, which marks an attempt (so its debounce still applies
 // even to a remote that is failing every fetch). A workspace whose fetches
 // keep failing must still read as stale; conflating "attempted" with
@@ -32,11 +34,12 @@ func fetchSuccessMarkerPath(ws workspace.Info) string {
 	return filepath.Join(ws.StorageDir, "fetch-success.last")
 }
 
-// markFetchSuccess records "a fetch against the remote succeeded now". Callers
-// are every real DOLT_FETCH call site that returned no error: the explicit
-// `lit sync fetch`/`lit sync pull`, the reconcile command's pre-reconcile
-// fetch, and the inline auto-receive. [LAW:single-enforcer] one marker, every
-// successful-fetch call site writes it the same way.
+// markFetchSuccess records "local knowledge of the remote is current as of
+// now". Callers are every real DOLT_FETCH call site that returned no error —
+// the explicit `lit sync fetch`/`lit sync pull`, the reconcile command's
+// pre-reconcile fetch, the inline auto-receive — and the inline receive's
+// unmoved answer, which proves the same thing without the fetch.
+// [LAW:single-enforcer] one marker, every call site writes it the same way.
 func markFetchSuccess(ws workspace.Info) error {
 	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
 		return fmt.Errorf("ensure storage dir for fetch-success marker: %w", err)

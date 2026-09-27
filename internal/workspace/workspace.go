@@ -188,6 +188,23 @@ func RemoteHasRefs(ctx context.Context, cwd string, remote string) (bool, error)
 	return strings.TrimSpace(output) != "", nil
 }
 
+// RemoteDoltRefs is the remote's advertisement of lit's Dolt ticket data: every
+// ref under refs/dolt/* — the namespace lit pushes its store into — with the
+// object it points at, as `git ls-remote <remote> refs/dolt/*` prints it and
+// trimmed. It is one round trip and no transfer, so it is the cheapest true
+// answer to "has the remote moved": the same bytes back means the same store
+// is on the remote. Empty when the remote carries no Dolt data at all.
+// [LAW:one-source-of-truth] the one ls-remote of that namespace; the
+// has-data question below is derived from it, never asked again.
+func RemoteDoltRefs(ctx context.Context, cwd string, remote string) (string, error) {
+	remoteName := normalizeRemoteName(remote)
+	output, err := gitOutput(ctx, cwd, "ls-remote", remoteName, "refs/dolt/*")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(output), nil
+}
+
 // RemoteHasDoltData reports whether the remote advertises lit's Dolt ticket data
 // — the refs/dolt/* namespace lit pushes its store into. This is the
 // authoritative "the remote carries a backlog" signal: RemoteHasRefs is true for
@@ -196,12 +213,11 @@ func RemoteHasRefs(ctx context.Context, cwd string, remote string) (bool, error)
 // adopt step keys its loud-vs-silent decision on this so an empty store that
 // hides a real remote backlog is unrepresentable. [LAW:one-source-of-truth]
 func RemoteHasDoltData(ctx context.Context, cwd string, remote string) (bool, error) {
-	remoteName := normalizeRemoteName(remote)
-	output, err := gitOutput(ctx, cwd, "ls-remote", remoteName, "refs/dolt/*")
+	refs, err := RemoteDoltRefs(ctx, cwd, remote)
 	if err != nil {
 		return false, err
 	}
-	return strings.TrimSpace(output) != "", nil
+	return refs != "", nil
 }
 
 func DefaultRemoteBranch(ctx context.Context, cwd string, remote string) string {

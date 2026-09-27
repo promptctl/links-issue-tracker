@@ -521,6 +521,19 @@ func TestRemoteHasDoltDataTrueWhenDoltRefPresent(t *testing.T) {
 	if !hasData {
 		t.Fatalf("RemoteHasDoltData() = false when refs/dolt/data is present, want true")
 	}
+
+	// The advertisement the has-data answer derives from is the listing itself:
+	// the object the remote's refs/dolt/data points at, in ls-remote's shape.
+	// This is what the inline receive compares across runs, so its content —
+	// not just its emptiness — is the contract.
+	refs, err := RemoteDoltRefs(context.Background(), repo, "origin")
+	if err != nil {
+		t.Fatalf("RemoteDoltRefs() error = %v, want nil", err)
+	}
+	want := runOutput(t, repo, "git", "rev-parse", "HEAD") + "\trefs/dolt/data"
+	if refs != want {
+		t.Fatalf("RemoteDoltRefs() = %q, want %q", refs, want)
+	}
 }
 
 func TestUpstreamRemoteFromRef(t *testing.T) {
