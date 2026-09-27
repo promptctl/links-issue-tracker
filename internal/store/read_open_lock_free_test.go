@@ -43,7 +43,10 @@ func TestOpenForReadDoesNotWaitOnCommitLock(t *testing.T) {
 		}
 	}()
 
-	readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	// 30s is far below the 15-minute commit-lock waiter budget an open that
+	// took the lock would sit in, and far above what a loaded box adds to an
+	// open that does not, so a deadline here separates the two.
+	readCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	reader, err := OpenForRead(readCtx, doltRoot, "test-workspace-id")
 	if err != nil {
@@ -59,18 +62,10 @@ func TestOpenForReadDoesNotWaitOnCommitLock(t *testing.T) {
 	}
 }
 
-// TestOpenForReadBringsTrailingSchemaForwardThroughOpen pins the other half
-// of the contract: a read open never applies a migration itself, and a
-// workspace one migration behind this binary is still brought forward by a
-// read command — through the write open, the one migration boundary — so
-// the first `lit backlog` after a binary upgrade serves current rows as it
-// always has. A trailing schema is never served silently, and never served
-// stale.
-func TestOpenForReadBringsTrailingSchemaForwardThroughOpen(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
-
+// openOneVersionBehind creates a workspace at registry max and steps it one
+// migration back, the state a read open hands to Open, then closes it.
+func openOneVersionBehind(t *testing.T, ctx context.Context, doltRoot string) {
+	t.Helper()
 	st, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -92,6 +87,21 @@ func TestOpenForReadBringsTrailingSchemaForwardThroughOpen(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
+}
+
+// TestOpenForReadBringsTrailingSchemaForwardThroughOpen pins the other half
+// of the contract: a read open never applies a migration itself, and a
+// workspace one migration behind this binary is still brought forward by a
+// read command — through the write open, the one migration boundary — so
+// the first `lit backlog` after a binary upgrade serves current rows as it
+// always has. A trailing schema is never served silently, and never served
+// stale.
+func TestOpenForReadBringsTrailingSchemaForwardThroughOpen(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	openOneVersionBehind(t, ctx, doltRoot)
 
 	reader, err := OpenForRead(ctx, doltRoot, "test-workspace-id")
 	if err != nil {

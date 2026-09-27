@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,28 +66,7 @@ func TestOpenForReadPendingMigrationUnderJournalHolder(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	st, err := Open(ctx, doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
-	versions, err := registryVersionsDescending()
-	if err != nil {
-		t.Fatalf("enumerate migration versions: %v", err)
-	}
-	if len(versions) < 2 {
-		t.Fatalf("registry has %d migrations; this test needs a next-lower version to land on", len(versions))
-	}
-	provider, err := newGooseProvider(st.db)
-	if err != nil {
-		t.Fatalf("newGooseProvider() error = %v", err)
-	}
-	// One migration behind: the exact state a read open hands to Open.
-	if _, err := provider.DownTo(ctx, versions[1]); err != nil {
-		t.Fatalf("DownTo(%d) error = %v", versions[1], err)
-	}
-	if err := st.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
-	}
+	openOneVersionBehind(t, ctx, doltRoot)
 
 	release, err := LockDoltJournalExclusive(ctx, doltRoot)
 	if err != nil {
@@ -101,6 +81,10 @@ func TestOpenForReadPendingMigrationUnderJournalHolder(t *testing.T) {
 	if !errors.Is(err, ErrWorkspaceBusy) {
 		_ = release()
 		t.Fatalf("OpenForRead() error = %v; want the write open's ErrWorkspaceBusy contention refusal", err)
+	}
+	if !strings.Contains(err.Error(), "handed off to the write open") {
+		_ = release()
+		t.Fatalf("OpenForRead() error = %v; want it to say why a read needed the write open", err)
 	}
 	if err := release(); err != nil {
 		t.Fatalf("release journal lock: %v", err)

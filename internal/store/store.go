@@ -215,16 +215,14 @@ func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (_
 	// network — for nothing it needed, since the read engine reads beside a
 	// live writer by design. [LAW:no-ambient-temporal-coupling] a reader's
 	// only wait is on its own engine; it has no wait edge to any lit lock.
+	// From here the Store owns the hold: Close releases it, and the deferred
+	// release above stands down.
+	success = true
 	assessment, err := s.assessMigration(ctx)
 	if err != nil {
-		if closeErr := s.db.Close(); closeErr != nil && !errors.Is(closeErr, context.Canceled) {
-			err = errors.Join(err, closeErr)
-		}
-		s.releaseWorkspaceLock = nil
-		return nil, err
+		return nil, errors.Join(err, s.Close())
 	}
 	if !assessment.needsWrite() {
-		success = true
 		return s, nil
 	}
 	// The schema trails this binary. A read never applies a migration — its
@@ -233,11 +231,17 @@ func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (_
 	// boundary, and the read is served from the store that did it. The read
 	// engine closes first: a process never holds two engines on the path.
 	// [LAW:single-enforcer] one migrate, reached from both opens.
-	success = true
+	// [LAW:no-silent-failure] a write open that fails here names why a read
+	// command needed one, or its contention refusal reads as a read waiting
+	// on a store it should never wait for.
 	if err := s.Close(); err != nil {
 		return nil, err
 	}
-	return Open(ctx, doltRootDir, workspaceID)
+	writer, err := Open(ctx, doltRootDir, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("this read open found %s and handed off to the write open to bring it forward: %w", assessment, err)
+	}
+	return writer, nil
 }
 
 // AttributeTo names the checkout whose work this store is about to record, so

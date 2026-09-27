@@ -305,11 +305,27 @@ type migrationAssessment struct {
 // whose applied versions have drifted from their registered content. A read
 // open that observes false may serve without the commit lock; one that
 // observes true hands off to the write open. [LAW:one-source-of-truth] the
-// facts that decide whether the write open mutates are the facts that decide
-// whether the read open hands off, so a reader cannot serve a workspace the
-// writer would have changed.
+// schema position and content that decide whether migrate writes are the
+// facts that decide whether the read open hands off, so a reader cannot
+// serve a schema migrate would have changed. (The write open's other
+// normalization, the default-branch rename, is not a schema fact and is not
+// assessed here.)
 func (a migrationAssessment) needsWrite() bool {
 	return a.drift != nil || a.state.willMutate()
+}
+
+// String names what the assessment found, for the read open's handoff error.
+func (a migrationAssessment) String() string {
+	switch {
+	case a.drift != nil:
+		return fmt.Sprintf("applied schema v%d missing registered content (%s)", a.drift.Version, strings.Join(a.drift.Missing, ", "))
+	case a.state.phase == phaseManaged:
+		return fmt.Sprintf("schema v%d behind this binary's v%d", a.state.appliedVersion, a.state.registryMaxVers)
+	case a.state.phase == phaseAdopt:
+		return "a pre-goose schema awaiting adoption"
+	default:
+		return "an empty schema awaiting its baseline"
+	}
 }
 
 // assessMigration classifies the workspace and verifies it with reads only:
@@ -343,17 +359,24 @@ func (s *Store) assessMigration(ctx context.Context) (migrationAssessment, error
 	// destroy true "these migrations ran" information and leave the live schema
 	// ahead of a reset log, the landmine a later registry catch-up detonates.
 	if state.appliedVersion > state.registryMaxVers {
-		return migrationAssessment{state: state}, s.refuseIfBaselineMissing(ctx, state)
+		if err := s.refuseIfBaselineMissing(ctx, state); err != nil {
+			return migrationAssessment{}, err
+		}
+		return migrationAssessment{state: state}, nil
 	}
 	if state.phase != phaseManaged {
 		return migrationAssessment{state: state}, nil
 	}
 	err = s.verifyAppliedVersionsMatchRegistry(ctx, state.appliedVersion)
 	var mismatch *VersionContentMismatchError
-	if errors.As(err, &mismatch) {
+	switch {
+	case err == nil:
+		return migrationAssessment{state: state}, nil
+	case errors.As(err, &mismatch):
 		return migrationAssessment{state: state, drift: mismatch}, nil
+	default:
+		return migrationAssessment{}, err
 	}
-	return migrationAssessment{state: state}, err
 }
 
 // runMigration replaces the legacy scattered reconcile. It classifies the

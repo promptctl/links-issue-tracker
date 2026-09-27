@@ -183,9 +183,9 @@ Behavioral evidence:
 4. `requireNoPendingAdopt` (`store.go`).
 5. `openStoreConnection(..., engineRead)` (`store.go`) — pinged eagerly like a write engine.
 6. `s.releaseWorkspaceLock = release` (`store.go`).
-7. `s.assessMigration(ctx)` (`migration_runner.go`) with **no** commit lock: classify, the schema-ahead baseline check, and applied-version content verification, all reads. On error: `s.db.Close()` (dropping `context.Canceled`), `s.releaseWorkspaceLock = nil`, return the error (`store.go`). It does **not** call `EnsureDatabase`.
+7. `s.assessMigration(ctx)` (`migration_runner.go`) with **no** commit lock: classify, the schema-ahead baseline check, and applied-version content verification, all reads. On error: `s.Close()` (which releases the workspace hold) joined beside it (`store.go`).
 8. `assessment.needsWrite()` false (managed, at registry max, no content drift) → return the read store.
-9. Otherwise the read store is closed (`s.Close()`, releasing the workspace hold) and the call returns `Open(ctx, doltRootDir, workspaceID)` — the write open migrates under the commit lock and serves the read (`store.go`). A read open never applies DDL itself.
+9. Otherwise the read store is closed (`s.Close()`, releasing the workspace hold) and the call returns `Open(ctx, doltRootDir, workspaceID)` — the write open migrates under the commit lock (and normalizes the default branch, as every write open does) and serves the read; its failure is wrapped as `this read open found <assessment> and handed off to the write open to bring it forward: %w` (`store.go`). A read open never applies DDL itself.
 
 Behavioral evidence:
 - On a missing directory, `OpenForRead` errors and creates nothing — `<doltRoot>/links` still does not exist (`store_test.go`).
@@ -219,10 +219,10 @@ The two pools run strictly sequentially — the explicit close of the first is t
 
 `store.go`:
 - `openDoltPool(doltRootDir, workspaceID, doltDatabaseName, access)` (`store.go`);
-- if `access == engineWrite`: `db.PingContext(ctx)`; on failure returns `errors.Join(wrapEngineOpenContention(err), db.Close())` (`store.go`);
+- `db.PingContext(ctx)` for both access values; on failure returns `errors.Join(wrapEngineOpenContention(err), db.Close())` (`store.go`);
 - builds the `Store` with the field assignments listed in §1.3 (`store.go`). `doltRootDir` is stored **unmodified**; only `commitLockPath` and `telemetryDir` clean it.
 
-Read engines stay lazy deliberately (`store.go`).
+A read engine's ping falls back to Dolt's read-only mode past a held journal lock rather than waiting; the fallback being permanent costs a reader nothing because a read open never applies DDL (`store.go`).
 
 #### 2.7 `newDoltConnector` / `openDoltPool`
 
@@ -5168,7 +5168,7 @@ Classification predicates:
   3. `acquireStoreLock(ctx, lockPath, true /*exclusive*/, 700, 100ms)`.
   4. On `ErrWorkspaceBusy`, wraps (preserving the sentinel):
      `another process is holding this workspace's Dolt store open (a background sync mirror or another lit command still running); retry: %w` (`workspace_lock.go`).
-- Engine-open interaction stated at `workspace_lock.go` and `internal/store/doc.go`: a **read** engine opens lazily at first SQL, attempts the journal lock for **100ms**, and falls back to Dolt's read-only mode; a **write** engine opens eagerly inside `openStoreConnection`, **refuses** the read-only fallback, and retries boundedly (`engineOpenRetryMaxElapsed`, 45s). A live write Store holds the journal lock for its entire lifetime.
+- Engine-open interaction stated at `workspace_lock.go` and `internal/store/doc.go`: a **read** engine opens eagerly inside `openStoreConnection`, attempts the journal lock for **100ms**, and falls back to Dolt's read-only mode; a **write** engine opens eagerly inside `openStoreConnection`, **refuses** the read-only fallback, and retries boundedly (`engineOpenRetryMaxElapsed`, 45s). A live write Store holds the journal lock for its entire lifetime.
 - `workspace_lock.go` records the one lifecycle write this hold does not stop: `journal.idx` is opened `O_RDWR` and truncated on every engine bootstrap with no can-write gate, so a snapshot copy can capture a torn index; Dolt's `corruptIndexRecovery` truncates it to zero and rebuilds from the journal on next open.
 
 ---
