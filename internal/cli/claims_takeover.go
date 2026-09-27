@@ -18,10 +18,10 @@ import (
 // before it may proceed, derived purely from the target lane's standing
 // against this checkout's own identity. The three cases are exactly the
 // gradations design-docs/work-claims.md's "Release and abandonment" section
-// draws: a lane nobody else holds (or that this checkout itself holds, fresh
-// or stale) needs no ceremony; a lane whose holder has gone stale proceeds
-// but must be informed; a lane someone else holds right now demands a
-// deliberate act before it may be overridden. [LAW:types-are-the-program]
+// draws: a lane nobody holds, or that this checkout itself holds, needs no
+// ceremony; a lane whose claim has lapsed proceeds but must be informed,
+// whoever the lapsed holder was; a lane someone else holds right now demands
+// a deliberate act before it may be overridden. [LAW:types-are-the-program]
 // the sealed set of three lives here once, so the boundary below dispatches
 // on a value instead of re-deriving "is this mine, is it fresh" inline.
 type takeoverRequirement int
@@ -48,13 +48,16 @@ type laneRelation int
 const (
 	// laneUnclaimed: nobody holds it and nobody is recorded as having held it.
 	laneUnclaimed laneRelation = iota
-	// laneOurs: this checkout holds it — fresh or stale. Staleness of your OWN
-	// lane is not a loss of ownership; it is evidence you stepped away from
-	// work that is still yours to pick back up.
+	// laneOurs: this checkout holds it right now.
 	laneOurs
-	// laneStaleForeign: another checkout held it and its evidence has aged out.
-	// Available, but never silently — whoever takes it is told whose it was.
-	laneStaleForeign
+	// laneLapsed: somebody held it and their evidence has aged out — this
+	// checkout's included. A lapsed claim is not a claim; it is the record
+	// that one existed, kept so whoever takes the lane is told whose it was.
+	// It was laneStaleForeign, and a stale claim of this checkout's own read
+	// as laneOurs, which is what let a lane it had walked away from outrank
+	// the entire backlog for as long as the epic stayed open
+	// (links-claims-em7h).
+	laneLapsed
 	// laneHeldForeign: another checkout holds it right now. Routed around.
 	laneHeldForeign
 )
@@ -65,18 +68,24 @@ const (
 // writer at once, and a checkout with no token has recorded nothing, so a zero
 // self equal to a zero holder proves nothing about whose lane it is.
 // [LAW:single-enforcer]
+//
+// A lapsed claim reads the same whoever held it. The holder's identity decides
+// nothing once the evidence has aged out, because past the window there is no
+// claim left for an identity to be matched against — only the record of one,
+// which is what laneLapsed carries. The one exception is the lock below, and
+// it is an exception to the CLOCK, not to this rule: a locked hold is read as
+// a live one, and a live hold is matched against self like any other.
 func relationOf(standing claims.Standing, self model.Attribution) laneRelation {
-	ours := func(by model.Attribution) bool { return self.Present() && by == self }
-	switch s := standing.(type) {
-	case claims.Held:
-		if ours(s.By) {
+	held := func(by model.Attribution) laneRelation {
+		if self.Present() && by == self {
 			return laneOurs
 		}
 		return laneHeldForeign
+	}
+	switch s := standing.(type) {
+	case claims.Held:
+		return held(s.By)
 	case claims.Stale:
-		if ours(s.By) {
-			return laneOurs
-		}
 		// A locked worktree outranks the expired clock. Every other liveness
 		// signal this machine has says a tree EXISTS, which a deleted session
 		// leaves behind just as readily; `git worktree lock` is the holder
@@ -92,9 +101,9 @@ func relationOf(standing claims.Standing, self model.Attribution) laneRelation {
 		// forever — the age-out exists precisely for that case. Presence
 		// changes what the lane is CALLED, not who may take it.
 		if s.Holder == claims.Locked {
-			return laneHeldForeign
+			return held(s.By)
 		}
-		return laneStaleForeign
+		return laneLapsed
 	default:
 		return laneUnclaimed
 	}
@@ -111,7 +120,7 @@ func classifyTakeover(standing claims.Standing, self model.Attribution) takeover
 	switch relationOf(standing, self) {
 	case laneHeldForeign:
 		return takeoverFreshConfirm
-	case laneStaleForeign:
+	case laneLapsed:
 		return takeoverStaleInformed
 	default:
 		return takeoverNone
@@ -120,11 +129,11 @@ func classifyTakeover(standing claims.Standing, self model.Attribution) takeover
 
 // authorizeStart is the boundary `lit start` calls before it writes anything.
 // It derives the target lane's standing, classifies it, and — only for the
-// two foreign-hold cases — enforces or prints the friction the ticket
-// requires. Own lanes and unclaimed lanes take the takeoverNone branch and
-// this function is a no-op past the read: the happy path pays one extra
-// evidence gather and nothing else, exactly as "no confirmation, no warning,
-// no ceremony on the happy path" demands.
+// two cases where the lane is not this checkout's to take freely — enforces
+// or prints the friction the ticket requires. Held-by-us and unclaimed lanes
+// take the takeoverNone branch and this function is a no-op past the read:
+// the happy path pays one extra evidence gather and nothing else, exactly as
+// "no confirmation, no warning, no ceremony on the happy path" demands.
 //
 // Enforcement lives here and only here per [LAW:single-enforcer]: `lit
 // start` is the one command that transfers a claim, so it is the one place

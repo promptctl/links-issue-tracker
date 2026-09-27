@@ -20,8 +20,11 @@ func TestClassifyTakeover(t *testing.T) {
 		{"unclaimed needs no ceremony", claims.Unclaimed{}, takeoverNone},
 		{"held by self needs no ceremony", heldBy(selfAttribution), takeoverNone},
 		{"held by someone else demands a deliberate act", heldBy(otherAttribution), takeoverFreshConfirm},
-		{"stale, still self, needs no ceremony", claims.Stale{Tenure: claims.Tenure{By: selfAttribution}}, takeoverNone},
-		{"stale, held by someone else, proceeds informed", claims.Stale{Tenure: claims.Tenure{By: otherAttribution}}, takeoverStaleInformed},
+		// A lapsed claim is not a claim, so whose it was decides nothing here:
+		// the checkout that let it lapse is told the provenance like anyone
+		// else (links-claims-em7h).
+		{"stale, was self, proceeds informed", claims.Stale{Tenure: claims.Tenure{By: selfAttribution}}, takeoverStaleInformed},
+		{"stale, was someone else, proceeds informed", claims.Stale{Tenure: claims.Tenure{By: otherAttribution}}, takeoverStaleInformed},
 
 		// The three worktree states an expired foreign claim can be in. The
 		// clock has run out identically in all three; only what this machine
@@ -47,10 +50,9 @@ func TestClassifyTakeover(t *testing.T) {
 			takeoverFreshConfirm,
 		},
 		{
-			// A lock on our OWN lane is still our lane. Staleness there is
-			// evidence we stepped away from work that remains ours, and being
-			// made to pass --take to resume it would be the prompt the design
-			// promises never to show on the happy path.
+			// A lock is read as a live hold, and a live hold of our own is our
+			// lane: being made to pass --take to resume it would be the prompt
+			// the design promises never to show on the happy path.
 			"stale and locked, but ours, needs no ceremony",
 			claims.Stale{Tenure: claims.Tenure{By: selfAttribution}, Holder: claims.Locked},
 			takeoverNone,

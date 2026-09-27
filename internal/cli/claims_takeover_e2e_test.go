@@ -214,14 +214,16 @@ func TestStartTakesOverAStaleLaneUnderOneSharedIdentity(t *testing.T) {
 	}
 
 	// The lane is now bravo's, and that is a fact about the RECORD rather than
-	// about the line just printed: a second start finds no foreign hold to warn
-	// about, which is only true if the first one wrote the establishing event.
-	// Bravo's own claim is stale too under the 1ms window — a stale lane of your
-	// own is still yours — so a surviving advisory here means the takeover was
-	// discarded.
+	// about the line just printed. Bravo's own claim has lapsed too under the
+	// 1ms window, and a lapsed claim is nobody's, so a second start proceeds
+	// informed like any takeover of a lapsed lane — but the provenance it
+	// prints is bravo's own checkout, addressable on this machine, which is
+	// only true if the first start wrote the establishing event. Alpha's
+	// checkout is not one bravo can address, so provenance still naming alpha
+	// would render as "claimed:" and mean the takeover was discarded.
 	out = runCLIInDir(t, bravo, "start", ticket, "--assignee", shared)
-	if strings.Contains(out, "check for unmerged branches or PRs") {
-		t.Fatalf("start %s on bravo's own lane = %q, want no takeover ceremony: the lane never moved", ticket, out)
+	if !strings.Contains(out, "claimed here (stale)") {
+		t.Fatalf("start %s on bravo's own lapsed lane = %q, want the provenance to name this checkout: the lane moved here", ticket, out)
 	}
 	if strings.Contains(out, "claim transferred") {
 		t.Fatalf("start %s on bravo's own lane = %q, want no transfer notice: nothing moved", ticket, out)

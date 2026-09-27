@@ -58,8 +58,8 @@ func relationName(r laneRelation) string {
 		return "laneUnclaimed"
 	case laneOurs:
 		return "laneOurs"
-	case laneStaleForeign:
-		return "laneStaleForeign"
+	case laneLapsed:
+		return "laneLapsed"
 	case laneHeldForeign:
 		return "laneHeldForeign"
 	}

@@ -1279,14 +1279,14 @@ itself holds), and `started = row.State() == model.StateInProgress`:
    `serveWork`; else `routeAround`.
 2. Otherwise `takeable := (started && readiness.IsOrphaned()) || (!started && readiness.IsReady())`,
    then: `!takeable` **or** `relation == laneHeldForeign` → `routeAround`;
-   `started` **or** `relation == laneStaleForeign` → `takeoverWork`; else
+   `started` **or** `relation == laneLapsed` → `takeoverWork`; else
    `serveWork`.
 
-So a `laneStaleForeign` lane yields `takeoverWork`, and steps 2 and 4 accept it.
+So a `laneLapsed` lane — a lapsed claim, whoever held it — yields `takeoverWork`, and steps 2 and 4 accept it.
 Only `laneHeldForeign` is routed around — which includes a `claims.Stale`
 standing whose `Holder` is `claims.Locked`, since `relationOf` reads a locked
-worktree as a fresh foreign hold (`claims_takeover.go:48-60`,
-`claims_takeover.go:94-96`). Servability is not gated on `model.StateOpen`.
+worktree as a live hold, matched against the caller like a fresh one
+(`claims_takeover.go:48-63`, `claims_takeover.go:103-105`). Servability is not gated on `model.StateOpen`.
 
 **Routing precedence** — `routeNext(rows, details, standings, self, scope focusScope)`
 (`next_route.go:337`). `rows` are already in composite-rank order (§1.18).

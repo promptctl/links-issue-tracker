@@ -228,12 +228,12 @@ const (
 	routeAround capacity = iota
 	// serveWork: startable work this checkout may claim or already holds.
 	serveWork
-	// resumeWork: work already underway that belongs to this checkout. Handed
-	// back rather than started fresh — staleness of your own lane is evidence
-	// you stepped away, never evidence the work stopped being yours.
+	// resumeWork: work already underway in a lane this checkout holds. Handed
+	// back rather than started fresh.
 	resumeWork
-	// takeoverWork: something is being displaced — a stale foreign claim, or
-	// in-flight work abandoned in a lane nobody holds. Announced, never silent.
+	// takeoverWork: something is being displaced — a lapsed claim, whoever
+	// held it, or in-flight work abandoned in a lane nobody holds. Announced,
+	// never silent.
 	takeoverWork
 )
 
@@ -244,12 +244,12 @@ const (
 // routing — the fact was computed on every gather and discarded here before
 // (links-claims-1b0p, F1).
 //
-// Two rules cover the whole table. Our own lane: work in flight is ours to
-// resume — staleness there is evidence we stepped away, never that the work
-// stopped being ours — and startable work is ours to serve. Any other lane: we
-// may take what is takeable, and it counts as a takeover exactly when
-// something is being displaced, whether that is a stale holder or an in-flight
-// ticket somebody walked away from.
+// Two rules cover the whole table. A lane we hold: work in flight is ours to
+// resume and startable work is ours to serve. Any other lane — a lane whose
+// claim has lapsed is one of these even when the lapsed holder was us: we may
+// take what is takeable, and it counts as a takeover exactly when something
+// is being displaced, whether that is a lapsed claim or an in-flight ticket
+// somebody walked away from.
 //
 // Takeability is where the state asymmetry lives. An OPEN row is takeable when
 // nothing blocks it. An IN-PROGRESS row is somebody's work in flight and stays
@@ -273,7 +273,7 @@ func capacityFor(row annotation.AnnotatedIssue, standing claims.Standing, self m
 	switch {
 	case !takeable, relation == laneHeldForeign:
 		return routeAround
-	case started, relation == laneStaleForeign:
+	case started, relation == laneLapsed:
 		return takeoverWork
 	}
 	return serveWork

@@ -433,12 +433,12 @@ Callers: `next` (`internal/cli/next.go:84`), `workable`/`backlog` runner (`inter
 |---|---|---|---|
 | `Held` | `self.Present() && s.By == self` | `laneOurs` | `takeoverNone` |
 | `Held` | otherwise | `laneHeldForeign` | `takeoverFreshConfirm` |
-| `Stale` | `self.Present() && s.By == self` | `laneOurs` | `takeoverNone` |
-| `Stale` | `s.Holder == claims.Locked` | `laneHeldForeign` | `takeoverFreshConfirm` |
-| `Stale` | otherwise | `laneStaleForeign` | `takeoverStaleInformed` |
+| `Stale` | `s.Holder == claims.Locked` and `self.Present() && s.By == self` | `laneOurs` | `takeoverNone` |
+| `Stale` | `s.Holder == claims.Locked`, otherwise | `laneHeldForeign` | `takeoverFreshConfirm` |
+| `Stale` | otherwise | `laneLapsed` | `takeoverStaleInformed` |
 | `Unclaimed` (default arm) | — | `laneUnclaimed` | `takeoverNone` |
 
-`ours(by) = self.Present() && by == self` (`internal/cli/claims_takeover.go:69`) — the `self.Present()` half is load-bearing, not a redundant guard: a checkout with no minted token has a zero `self`, and a zero `self` compared against a zero holder (the public checkout) would otherwise prove ownership of a lane this checkout never touched. So a lane the public checkout holds is always `laneHeldForeign`/`laneStaleForeign` to every checkout, including one that has itself never minted a token.
+`held(by)` answers `laneOurs` when `self.Present() && by == self` and `laneHeldForeign` otherwise (`internal/cli/claims_takeover.go:80`) — the `self.Present()` half is load-bearing, not a redundant guard: a checkout with no minted token has a zero `self`, and a zero `self` compared against a zero holder (the public checkout) would otherwise prove ownership of a lane this checkout never touched. So a lane the public checkout holds is always `laneHeldForeign` to every checkout, including one that has itself never minted a token; a lapsed one is `laneLapsed` to every checkout regardless, since a lapsed claim is matched against no identity at all.
 
 The `claims.Locked` row is the one a reader is likeliest to miss: an expired claim whose holder's worktree is locked is gated as a fresh hold, not waved through with a warning (`:94`).
 
@@ -447,17 +447,17 @@ Sealed int enum: `takeoverNone`, `takeoverStaleInformed`, `takeoverFreshConfirm`
 **`authorizeStart(ctx, stdout, ap, issueID, prior, take)`** (`internal/cli/claims_takeover.go:132-154`):
 1. `ap.Store.GetRelationsByIDs(ctx, []string{issueID})` → `lane := model.LaneOf(prior, relations[issueID].Parent)` (`:133-137`).
 2. `gatherClaimContext` (`:138-141`).
-3. Dispatch on `classifyTakeover(cc.standings.Of(lane), cc.self)` (`:142`):
-   - `takeoverNone` → `return nil`; the happy path pays one extra evidence gather and nothing else (`:143-144`, rationale `:124-127`).
-   - `takeoverStaleInformed` → `printStaleProvenance` (`:145-146`).
-   - `takeoverFreshConfirm` → `confirmFreshTakeover` (`:147-148`).
+3. Dispatch on `classifyTakeover(cc.standings.Of(lane), cc.self)` (`:151`):
+   - `takeoverNone` → `return nil`; the happy path pays one extra evidence gather and nothing else (`:152-153`, rationale `:133-135`).
+   - `takeoverStaleInformed` → `printStaleProvenance` (`:154-155`).
+   - `takeoverFreshConfirm` → `confirmFreshTakeover` (`:156-157`).
    - default (unreachable) → `fmt.Errorf("claims: %s has no recognized takeover requirement", issueID)` (`:149-152`).
 
 **`claimLineOrPanic`** reuses `formatClaimLine(cc, lane, time.Now())`; `ok == false` → error `claims: %s has a takeover requirement on %v but no claim line to show` (`internal/cli/claims_takeover.go:164-170`).
 
-**`printStaleProvenance`** — proceeds unprompted and prints `"%s — check for unmerged branches or PRs on this lane before building on it\n"` (`internal/cli/claims_takeover.go:177-184`). Checking for unmerged branches or PRs is left to the taking agent; lit stays ignorant of git and the forge (`:172-176`).
+**`printStaleProvenance`** — proceeds unprompted and prints `"%s — check for unmerged branches or PRs on this lane before building on it\n"` (`internal/cli/claims_takeover.go:186-193`). Checking for unmerged branches or PRs is left to the taking agent; lit stays ignorant of git and the forge (`:181-185`).
 
-**`confirmFreshTakeover(stdout, cc, lane, take)`** (`internal/cli/claims_takeover.go:195-218`):
+**`confirmFreshTakeover(stdout, cc, lane, take)`** (`internal/cli/claims_takeover.go:204-227`):
 - **Non-interactive** (`!isTerminal(stdout)`, the same signal `openOrPrintWorkflowFile` uses — `internal/cli/workflows_edit.go:160`):
   - `take == false` → **refusal**: `fmt.Errorf("%s — this lane is claimed and active; pass --take to confirm the takeover", line)` (`:201-203`).
   - `take == true` → prints `"%s — taking over (--take)\n"` and proceeds (`:204-205`).
@@ -490,10 +490,10 @@ The leaf gathers rows, relation details and the focus scope, then the claim cont
 | 2 | `relation == laneOurs` and `readiness.IsReady()` | `serveWork` |
 | 3 | `relation == laneOurs`, otherwise | `routeAround` |
 | 4 | `!takeable`, or `relation == laneHeldForeign` | `routeAround` |
-| 5 | `started`, or `relation == laneStaleForeign` | `takeoverWork` |
+| 5 | `started`, or `relation == laneLapsed` | `takeoverWork` |
 | 6 | otherwise | `serveWork` |
 
-`laneStaleForeign` yields `takeoverWork`, and routing steps 2 and 4 both accept the set `{serveWork, takeoverWork}` — so a stale foreign lane is a reachable bare `lit next` target. `laneHeldForeign` — a lane another checkout holds fresh — is the one relation routed around on ownership alone. The `laneRelation` constants are at `internal/cli/claims_takeover.go:46-60`; `relationOf` at `:68-101`, where a `claims.Stale` standing whose `Holder == claims.Locked` reports `laneHeldForeign` rather than `laneStaleForeign` (`:80-97`).
+`laneLapsed` yields `takeoverWork`, and routing steps 2 and 4 both accept the set `{serveWork, takeoverWork}` — so a lapsed lane is a reachable bare `lit next` target whoever held it, this checkout included. `laneHeldForeign` — a lane another checkout holds fresh — is the one relation routed around on ownership alone. The `laneRelation` constants are at `internal/cli/claims_takeover.go:48-63`; `relationOf` at `:78-109`, where a `claims.Stale` standing whose `Holder == claims.Locked` is read as a live hold rather than `laneLapsed` (`:89-106`).
 
 **`ownScope(standings, self) (map[model.LaneID]bool, map[string]bool)`** (`internal/cli/next_route.go:295-308`): every lane whose `relationOf(standing, self)` is `laneOurs`, plus each such lane's non-empty `Epic()`. It reads the **standings**, not the gathered rows — the rows are already narrowed by `--type/--labels/--assignee`, and deriving ownership from them let a display filter empty the set and drop the whole self-aware branch (`:285-294`).
 
