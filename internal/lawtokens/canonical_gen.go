@@ -27,4 +27,6 @@ var canonicalKeys = []string{
 	"LAW:verifiable-goals",
 	"LAW:behavior-not-structure",
 	"LAW:no-silent-failure",
+	"LAW:nothing-unseen",
+	"LAW:escape-local-minima",
 }
