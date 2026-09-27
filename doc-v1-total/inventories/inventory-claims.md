@@ -8,9 +8,9 @@ All paths relative to `/Users/bmf/code/links-issue-tracker`. Every claim below c
 
 ### 1.1 Nothing is stored
 
-A claim is a *read-time derivation* over records the database already holds. `internal/claims/evidence.go:1-15` states the package "derives, at read time, which checkout is working which lane. Nothing here is stored." The package imports only `cmp`, `fmt`, `slices`, `time`, `strings`, and `internal/model` (`internal/claims/evidence.go:17-23`, `internal/claims/derive.go:3-9`); it reads no clock, no store, no filesystem — the clock reading arrives as data (`internal/claims/derive.go:20-23`).
+A claim is a *read-time derivation* over records the database already holds. `internal/claims/evidence.go` states the package "derives, at read time, which checkout is working which lane. Nothing here is stored." The package imports only `cmp`, `fmt`, `slices`, `time`, `strings`, and `internal/model` (`internal/claims/evidence.go`, `internal/claims/derive.go`); it reads no clock, no store, no filesystem — the clock reading arrives as data (`internal/claims/derive.go`).
 
-There is no claims table, no claim row, no claim file. The only persisted footprint is `model.Attribution` stamped on each `model.IssueEvent` (`internal/model/model.go:627-631`, `internal/model/model.go:737-748`).
+There is no claims table, no claim row, no claim file. The only persisted footprint is `model.Attribution` stamped on each `model.IssueEvent` (`internal/model/model.go`).
 
 ### 1.2 The persisted primitive: `model.Attribution`
 
@@ -20,23 +20,23 @@ type Attribution struct {
 	workspace string
 }
 ```
-`internal/model/model.go:646-649`.
+`internal/model/model.go`.
 
-- Both halves unexported; `NewAttribution` is the only constructor (`internal/model/model.go:671-676`).
-- `NewAttribution(stream, workspace)` returns the zero value if **either** half is empty — "complete pair or nothing" (`internal/model/model.go:672-674`). The collapse is silent by design (`internal/model/model.go:657-662`).
-- Accessors: `Stream()`, `Workspace()` (`internal/model/model.go:681-682`); `IsZero()` = `a == Attribution{}` (`internal/model/model.go:687`); `Present()` = `!IsZero()` (`internal/model/model.go:697`).
-- Wire form is a separate struct `attributionWire{Stream string \`json:"stream,omitempty"\`; Workspace string \`json:"workspace,omitempty"\`}` (`internal/model/model.go:701-705`), marshalled at `internal/model/model.go:707-709`.
-- `UnmarshalJSON` routes through `NewAttribution`, so `{"stream":"x"}` with no workspace decodes to the absent pair (`internal/model/model.go:721-727`).
-- Absence is a permanent legal state: attribution is never backfilled onto events that predate the feature (`internal/model/model.go:689-695`, `internal/model/model.go:737-738`).
-- Field on the event: `Attribution Attribution \`json:"attribution,omitzero"\`` (`internal/model/model.go:746`) — `omitzero` consults `IsZero`, so an unattributed event writes no attribution object at all (`internal/model/model.go:684-686`).
+- Both halves unexported; `NewAttribution` is the only constructor (`internal/model/model.go`).
+- `NewAttribution(stream, workspace)` returns the zero value if **either** half is empty — "complete pair or nothing" (`internal/model/model.go`). The collapse is silent by design (`internal/model/model.go`).
+- Accessors: `Stream()`, `Workspace()` (`internal/model/model.go`); `IsZero()` = `a == Attribution{}` (`internal/model/model.go`); `Present()` = `!IsZero()` (`internal/model/model.go`).
+- Wire form is a separate struct `attributionWire{Stream string \`json:"stream,omitempty"\`; Workspace string \`json:"workspace,omitempty"\`}` (`internal/model/model.go`), marshalled at `internal/model/model.go`.
+- `UnmarshalJSON` routes through `NewAttribution`, so `{"stream":"x"}` with no workspace decodes to the absent pair (`internal/model/model.go`).
+- Absence is a permanent legal state: attribution is never backfilled onto events that predate the feature (`internal/model/model.go`).
+- Field on the event: `Attribution Attribution \`json:"attribution,omitzero"\`` (`internal/model/model.go`) — `omitzero` consults `IsZero`, so an unattributed event writes no attribution object at all (`internal/model/model.go`).
 
 ### 1.3 The derived value: `Standing`
 
-Sealed sum with three variants, discriminated by unexported marker `isStanding()` (`internal/claims/standing.go:17`, `internal/claims/standing.go:62-64`):
+Sealed sum with three variants, discriminated by unexported marker `isStanding()` (`internal/claims/standing.go`):
 
-- `Unclaimed struct{}` — no holder, no provenance (`internal/claims/standing.go:24`).
-- `Held struct { Tenure; Contested []model.Attribution }` (`internal/claims/standing.go:47-50`).
-- `Stale struct { Tenure }` (`internal/claims/standing.go:58-60`).
+- `Unclaimed struct{}` — no holder, no provenance (`internal/claims/standing.go`).
+- `Held struct { Tenure; Contested []model.Attribution }` (`internal/claims/standing.go`).
+- `Stale struct { Tenure }` (`internal/claims/standing.go`).
 
 `Tenure`:
 ```go
@@ -46,24 +46,24 @@ type Tenure struct {
 	LastActivity time.Time
 }
 ```
-`internal/claims/standing.go:34-38`. `Since` = timestamp of the establishing event that put the holder there; `LastActivity` = the holder's most recent mutation of any kind in the lane, and freshness is measured against `LastActivity`, not `Since` (`internal/claims/standing.go:28-33`).
+`internal/claims/standing.go`. `Since` = timestamp of the establishing event that put the holder there; `LastActivity` = the holder's most recent mutation of any kind in the lane, and freshness is measured against `LastActivity`, not `Since` (`internal/claims/standing.go`).
 
-`Standings map[model.LaneID]Standing` with total read `Of(lane)`: a missing key returns `Unclaimed{}` rather than a nil interface (`internal/claims/standing.go:71-78`).
+`Standings map[model.LaneID]Standing` with total read `Of(lane)`: a missing key returns `Unclaimed{}` rather than a nil interface (`internal/claims/standing.go`).
 
 ### 1.4 The unit a claim is held over: `model.LaneID`
 
 ```go
 type LaneID struct { epic string; key string; solo bool }
 ```
-`internal/model/model.go:188-192`. Fields unexported; `LaneOf` is the only constructor (`internal/model/model.go:184-187`).
+`internal/model/model.go`. Fields unexported; `LaneOf` is the only constructor (`internal/model/model.go`).
 
-`LaneOf(issue, parent)` (`internal/model/model.go:212-217`):
+`LaneOf(issue, parent)` (`internal/model/model.go`):
 - `parent == nil` **or** `!parent.IsContainer()` → `LaneID{key: issue.ID, solo: true}` (a "lane of one").
-- otherwise → `LaneID{epic: parent.ID, key: issue.Lane}`. An epic that declares no lanes is exactly one lane keyed by `""` (`internal/model/model.go:206-209`).
+- otherwise → `LaneID{epic: parent.ID, key: issue.Lane}`. An epic that declares no lanes is exactly one lane keyed by `""` (`internal/model/model.go`).
 
-`Epic()` / `Key()` accessors at `internal/model/model.go:221-222`. `String()`: solo → bare key; otherwise `epic + "#" + key`, so an epic's unnamed default lane renders `"E#"` (`internal/model/model.go:228-233`).
+`Epic()` / `Key()` accessors at `internal/model/model.go`. `String()`: solo → bare key; otherwise `epic + "#" + key`, so an epic's unnamed default lane renders `"E#"` (`internal/model/model.go`).
 
-Test coverage of the three shapes: epic-major lanes `TestLaneGranularity` (`internal/claims/claims_test.go:321-332`), cross-epic `TestCrossEpicDependencyClaimsOnlyItsOwnLane` (`internal/claims/claims_test.go:337-356`), solo `TestParentlessTicketIsItsOwnLane` (`internal/claims/claims_test.go:359-368`).
+Test coverage of the three shapes: epic-major lanes `TestLaneGranularity` (`internal/claims/claims_test.go`), cross-epic `TestCrossEpicDependencyClaimsOnlyItsOwnLane` (`internal/claims/claims_test.go`), solo `TestParentlessTicketIsItsOwnLane` (`internal/claims/claims_test.go`).
 
 ---
 
@@ -78,26 +78,26 @@ There are **two distinct identity systems**, and they do not share a value:
 
 ### 2.1 Checkout identity — `StreamID`
 
-- `type StreamID struct{ value string }`, unexported field so no arbitrary string can become one (`internal/workspace/stream.go:54`). `Value()` (`:60`), `Present()` = `value != ""` (`:66`).
-- Zero value means "this checkout has never minted a token" and is a legitimate state, not an error (`internal/workspace/stream.go:51-53`).
-- Storage file name: `lit-stream` (`internal/workspace/stream.go:22`), stored in the checkout's **private** git dir (`--git-dir`), never the common dir — so every worktree of a repo shares one backlog but carries a distinct token, and `git worktree remove` deletes the token with the directory (`internal/workspace/stream.go:13-21`).
-- Entropy: 8 bytes from `crypto/rand` (`internal/workspace/stream.go:28`, `internal/workspace/stream.go:232-238`), unpadded base32 (`internal/workspace/stream.go:38`), lowercased → alphabet `[a-z2-7]`, length `(8*8+4)/5 = 13` characters (`internal/workspace/stream.go:30-33`).
-- File content is the token plus a trailing newline (`internal/workspace/stream.go:175-178`); file mode set explicitly to `0644` (`internal/workspace/stream.go:182-187`).
+- `type StreamID struct{ value string }`, unexported field so no arbitrary string can become one (`internal/workspace/stream.go`). `Value()`, `Present()` = `value != ""`.
+- Zero value means "this checkout has never minted a token" and is a legitimate state, not an error (`internal/workspace/stream.go`).
+- Storage file name: `lit-stream` (`internal/workspace/stream.go`), stored in the checkout's **private** git dir (`--git-dir`), never the common dir — so every worktree of a repo shares one backlog but carries a distinct token, and `git worktree remove` deletes the token with the directory (`internal/workspace/stream.go`).
+- Entropy: 8 bytes from `crypto/rand` (`internal/workspace/stream.go`), unpadded base32 (`internal/workspace/stream.go`), lowercased → alphabet `[a-z2-7]`, length `(8*8+4)/5 = 13` characters (`internal/workspace/stream.go`).
+- File content is the token plus a trailing newline (`internal/workspace/stream.go`); file mode set explicitly to `0644` (`internal/workspace/stream.go`).
 
-**`ReadStream(privateGitDir)`** (`internal/workspace/stream.go:79-89`):
+**`ReadStream(privateGitDir)`** (`internal/workspace/stream.go`):
 - Missing file → zero `StreamID`, nil error.
 - Any other read error → wrapped error `read stream id %q: %w`.
 - Present file → `parseStreamToken`.
 
-**`parseStreamToken`** (`internal/workspace/stream.go:260-275`): trims whitespace; rejects anything not exactly 13 chars ("expected %d characters, found %d") and any character outside `a-z`/`2-7` ("character %q is outside the token alphabet"). Error text always appends the remedy: `delete the file to mint a fresh identity for this checkout (work already recorded under the old identity keeps it, and any lane this checkout held is released)` (`internal/workspace/stream.go:280-282`). Never self-heals (`internal/workspace/stream.go:255-259`).
+**`parseStreamToken`** (`internal/workspace/stream.go`): trims whitespace; rejects anything not exactly 13 chars ("expected %d characters, found %d") and any character outside `a-z`/`2-7` ("character %q is outside the token alphabet"). Error text always appends the remedy: `delete the file to mint a fresh identity for this checkout (work already recorded under the old identity keeps it, and any lane this checkout held is released)` (`internal/workspace/stream.go`). Never self-heals (`internal/workspace/stream.go`).
 
-**`EnsureStream(privateGitDir)`** (`internal/workspace/stream.go:106-130`): read-first fast path; if absent, `publishStreamToken`, then re-read; if still absent after publishing → error `stream id %q vanished immediately after it was written` (`:126-127`). The FILE, never the freshly-minted candidate, decides identity (`internal/workspace/stream.go:102-105`).
+**`EnsureStream(privateGitDir)`** (`internal/workspace/stream.go`): read-first fast path; if absent, `publishStreamToken`, then re-read; if still absent after publishing → error `stream id %q vanished immediately after it was written`. The FILE, never the freshly-minted candidate, decides identity (`internal/workspace/stream.go`).
 
-**`publishStreamToken`** (`internal/workspace/stream.go:150-227`): mints token → `os.CreateTemp` in the same directory → write + `Chmod(0644)` + `Sync` + `Close` → `os.Link(temp, final)`. `os.ErrExist` from the link is a **success** (a racing caller already published) (`internal/workspace/stream.go:203-205`). Any other link failure produces an error naming the hard-link requirement explicitly (`internal/workspace/stream.go:224`). Temp file removed via `defer` on all paths (`internal/workspace/stream.go:173`). The directory entry is deliberately not fsynced (`internal/workspace/stream.go:188-192`).
+**`publishStreamToken`** (`internal/workspace/stream.go`): mints token → `os.CreateTemp` in the same directory → write + `Chmod(0644)` + `Sync` + `Close` → `os.Link(temp, final)`. `os.ErrExist` from the link is a **success** (a racing caller already published) (`internal/workspace/stream.go`). Any other link failure produces an error naming the hard-link requirement explicitly (`internal/workspace/stream.go`). Temp file removed via `defer` on all paths (`internal/workspace/stream.go`). The directory entry is deliberately not fsynced (`internal/workspace/stream.go`).
 
 ### 2.2 Which commands mint
 
-`app.AccessMode` is `"read"` or `"write"` (`internal/app/app.go:30-35`). The mapping table:
+`app.AccessMode` is `"read"` or `"write"` (`internal/app/app.go`). The mapping table:
 
 ```go
 var accessContracts = map[AccessMode]accessContract{
@@ -105,17 +105,17 @@ var accessContracts = map[AccessMode]accessContract{
 	AccessWrite: {mode: engine.ReadWrite, resolveStream: workspace.EnsureStream},
 }
 ```
-`internal/app/app.go:57-60`. Store access mode and identity minting are paired in one value so they cannot disagree (`internal/app/app.go:39-48`).
+`internal/app/app.go`. Store access mode and identity minting are paired in one value so they cannot disagree (`internal/app/app.go`).
 
-Behavioral consequences pinned by test: a write-mode open mints; a read-mode open in a never-mutated checkout mints nothing, and a *second* read still finds nothing (`internal/app/app_test.go:144-166`); a read-mode open after a write sees exactly the minted token (`internal/app/app_test.go:171-182`); two worktrees never share an identity (`internal/app/app_test.go:163-165`).
+Behavioral consequences pinned by test: a write-mode open mints; a read-mode open in a never-mutated checkout mints nothing, and a *second* read still finds nothing (`internal/app/app_test.go`); a read-mode open after a write sees exactly the minted token (`internal/app/app_test.go`); two worktrees never share an identity (`internal/app/app_test.go`).
 
 ### 2.3 The pair reaching the database
 
-`app.Open` calls `st.AttributeTo(stream.Value())` unconditionally for both modes (`internal/app/app.go:105`). `Store.AttributeTo` pairs the raw token with the store's own workspace id: `s.attribution = model.NewAttribution(streamToken, s.workspaceID)` (`internal/store/store.go:260-262`). An empty token leaves the store unattributed rather than half-attributed (`internal/store/store.go:248-251`). Stamping happens at `recordEvent`, the single insertion point for issue history (`internal/store/store.go:242-247`). `app.Open` is the only caller of `AttributeTo`; `OpenSync`, `RebuildCandidate`, adopt, upgrade, and `OpenLocationForRead` do not stamp — they read, or replay dumps through `insertEventTx`, which preserves the producer's attribution (`internal/store/store.go:252-259`). The interface is `storage.Attributor` (`internal/storage/contract.go:216-218`).
+`app.Open` calls `st.AttributeTo(stream.Value())` unconditionally for both modes (`internal/app/app.go`). `Store.AttributeTo` pairs the raw token with the store's own workspace id: `s.attribution = model.NewAttribution(streamToken, s.workspaceID)` (`internal/store/store.go`). An empty token leaves the store unattributed rather than half-attributed (`internal/store/store.go`). Stamping happens at `recordEvent`, the single insertion point for issue history (`internal/store/store.go`). `app.Open` is the only caller of `AttributeTo`; `OpenSync`, `RebuildCandidate`, adopt, upgrade, and `OpenLocationForRead` do not stamp — they read, or replay dumps through `insertEventTx`, which preserves the producer's attribution (`internal/store/store.go`). The interface is `storage.Attributor` (`internal/storage/contract.go`).
 
-Workspace id source: `Info.WorkspaceID` (`internal/workspace/workspace.go:72`), read from config (`internal/workspace/workspace.go:211`), generated as a UUID at init (`internal/workspace/workspace.go:614`).
+Workspace id source: `Info.WorkspaceID` (`internal/workspace/workspace.go`), read from config (`internal/workspace/workspace.go`), generated as a UUID at init (`internal/workspace/workspace.go`).
 
-Cross-clone proof: attribution survives a real git-remote round trip and a second clone sees the producer's exact pair, never re-stamped (`internal/cli/claims_attribution_test.go:65-129`).
+Cross-clone proof: attribution survives a real git-remote round trip and a second clone sees the producer's exact pair, never re-stamped (`internal/cli/claims_attribution_test.go`).
 
 ### 2.4 Acting identity — `resolveIdentity` (assignee and event actor)
 
@@ -127,18 +127,18 @@ func resolveIdentity(explicit string) string {
 	return strings.TrimSpace(explicit)
 }
 ```
-`internal/cli/cli.go:1202-1207`.
+`internal/cli/cli.go`.
 
-Precedence, exactly: **`CLAUDE_CODE_SESSION_ID` (trimmed, non-empty) always wins** and yields `"claude_" + sessionID` regardless of any flag; otherwise the caller's explicit value, trimmed; otherwise `""` (`internal/cli/cli.go:1191-1200`).
+Precedence, exactly: **`CLAUDE_CODE_SESSION_ID` (trimmed, non-empty) always wins** and yields `"claude_" + sessionID` regardless of any flag; otherwise the caller's explicit value, trimmed; otherwise `""` (`internal/cli/cli.go`).
 
-- Assignee flag on `start`: `--assignee`, help string `"Assignee fallback when CLAUDE_CODE_SESSION_ID is unset (env always wins when set)"` (`internal/cli/cli.go:1304`). Action built as `model.Start{Assignee: resolveIdentity(*assignee)}` (`internal/cli/cli.go:1306`).
-- Actor flag: hidden `--by`, empty default, registered by `registerActor` which never exposes the raw pointer — every read passes through `resolveIdentity` (`internal/cli/cli.go:1231-1236`). `os.Getenv("USER")` was deliberately removed as a privacy violation; the fallback is `""`, normalized by the store to the opaque `"unknown"` (`internal/cli/cli.go:1223-1230`).
-- Applied in `runTransition`: `actor := resolveActor()` then `Store.Apply(ctx, issueID, storage.Change{Action: action, Actor: actor, Reason: *reason})` (`internal/cli/cli.go:1418-1422`).
-- Every relation/label/bulk verb resolves through the same rule; tests pin `label add`, `parent set`, `dep add`, `bulk label add`, `bulk close` to `"claude_" + sessionID` and assert raw `$USER` never lands in `CreatedBy`/`Actor` (`internal/cli/attribution_test.go:33-88`, helpers `:90-141`).
-- `displayAssignee("")` renders `"(unassigned)"` (`internal/cli/cli.go:1240-1245`).
-- `Start` is the only lifecycle action that rewrites the assignee: `type Start struct{ Assignee string }` (`internal/model/lifecycle/action.go:44-46`), `Target() State` = `InProgress` (`internal/model/lifecycle/action.go:49`). `Issue.Assignee` is orthogonal to the status machine (`internal/model/model.go:88-91`).
+- Assignee flag on `start`: `--assignee`, help string `"Assignee fallback when CLAUDE_CODE_SESSION_ID is unset (env always wins when set)"` (`internal/cli/cli.go`). Action built as `model.Start{Assignee: resolveIdentity(*assignee)}` (`internal/cli/cli.go`).
+- Actor flag: hidden `--by`, empty default, registered by `registerActor` which never exposes the raw pointer — every read passes through `resolveIdentity` (`internal/cli/cli.go`). `os.Getenv("USER")` was deliberately removed as a privacy violation; the fallback is `""`, normalized by the store to the opaque `"unknown"` (`internal/cli/cli.go`).
+- Applied in `runTransition`: `actor := resolveActor()` then `Store.Apply(ctx, issueID, storage.Change{Action: action, Actor: actor, Reason: *reason})` (`internal/cli/cli.go`).
+- Every relation/label/bulk verb resolves through the same rule; tests pin `label add`, `parent set`, `dep add`, `bulk label add`, `bulk close` to `"claude_" + sessionID` and assert raw `$USER` never lands in `CreatedBy`/`Actor` (`internal/cli/attribution_test.go`, helpers).
+- `displayAssignee("")` renders `"(unassigned)"` (`internal/cli/cli.go`).
+- `Start` is the only lifecycle action that rewrites the assignee: `type Start struct{ Assignee string }` (`internal/model/lifecycle/action.go`), `Target() State` = `InProgress` (`internal/model/lifecycle/action.go`). `Issue.Assignee` is orthogonal to the status machine (`internal/model/model.go`).
 
-Note the interaction pinned by test: because the env var overrides `--assignee`, an e2e test must clear `CLAUDE_CODE_SESSION_ID` or both checkouts flatten to one assignee and a same-state `start` becomes a documented no-op in `store.Apply`, so the claim never transfers (`internal/cli/claims_takeover_e2e_test.go:19-26`).
+Note the interaction pinned by test: because the env var overrides `--assignee`, an e2e test must clear `CLAUDE_CODE_SESSION_ID` or both checkouts flatten to one assignee and a same-state `start` becomes a documented no-op in `store.Apply`, so the claim never transfers (`internal/cli/claims_takeover_e2e_test.go`).
 
 ---
 
@@ -152,25 +152,25 @@ type Evidence struct {
 	events  map[model.LaneID][]model.IssueEvent
 }
 ```
-`internal/claims/evidence.go:28-31`.
+`internal/claims/evidence.go`.
 
-**`NewEvidence(issues, parents, events)`** (`internal/claims/evidence.go:52-81`):
-1. For each issue: `lane := model.LaneOf(issue, parents[issue.ID])`; record `lanes[issue.ID] = lane`; append to `members[lane]` (`:58-62`). An issue absent from `parents`, or mapped to nil, is parentless (`:35-37`).
-2. For each event: look up `lanes[event.IssueID]`. If unknown → **error**, verbatim: `claims: event %s belongs to issue %s, which was not among the %d issues supplied: claim derivation needs every issue the events touch, closed ones included` (`internal/claims/evidence.go:66`). Rationale: a `done` on a now-closed ticket can be the sole establishing act (`:39-46`). Pinned by `TestEvidenceRefusesAPartialRead` (`internal/claims/claims_test.go:389-396`).
-3. Sort each lane's events by `cmp.Or(a.CreatedAt.Compare(b.CreatedAt), cmp.Compare(a.ID, b.ID))` — timestamp first, id as the tiebreak; total and stable (`internal/claims/evidence.go:75-79`). Order-independence of the input pinned by `TestDeriveIsOrderIndependent` (`internal/claims/claims_test.go:401-415`).
+**`NewEvidence(issues, parents, events)`** (`internal/claims/evidence.go`):
+1. For each issue: `lane := model.LaneOf(issue, parents[issue.ID])`; record `lanes[issue.ID] = lane`; append to `members[lane]`. An issue absent from `parents`, or mapped to nil, is parentless.
+2. For each event: look up `lanes[event.IssueID]`. If unknown → **error**, verbatim: `claims: event %s belongs to issue %s, which was not among the %d issues supplied: claim derivation needs every issue the events touch, closed ones included` (`internal/claims/evidence.go`). Rationale: a `done` on a now-closed ticket can be the sole establishing act. Pinned by `TestEvidenceRefusesAPartialRead` (`internal/claims/claims_test.go`).
+3. Sort each lane's events by `cmp.Or(a.CreatedAt.Compare(b.CreatedAt), cmp.Compare(a.ID, b.ID))` — timestamp first, id as the tiebreak; total and stable (`internal/claims/evidence.go`). Order-independence of the input pinned by `TestDeriveIsOrderIndependent` (`internal/claims/claims_test.go`).
 
-`Lanes()` returns every lane in the members map, unordered (`internal/claims/evidence.go:84-90`).
+`Lanes()` returns every lane in the members map, unordered (`internal/claims/evidence.go`).
 
 ### 3.2 `LaneProgress`
 
 ```go
 type LaneProgress struct { Done, Total int; Active *model.Issue }
 ```
-`internal/claims/evidence.go:99-102`.
+`internal/claims/evidence.go`.
 
-`Evidence.LaneProgress(lane)` (`internal/claims/evidence.go:107-120`): iterate `members[lane]`; `Total++` for every member; `Done++` when `issue.State() == model.StateClosed`; `Active` set to a copy of the member whose state is `model.StateInProgress` (last such member wins, since it is assigned unconditionally in the loop). A lane the evidence never saw returns the zero value (`Total 0`), matching `Standings.Of`'s totality convention (`internal/claims/evidence.go:104-106`).
+`Evidence.LaneProgress(lane)` (`internal/claims/evidence.go`): iterate `members[lane]`; `Total++` for every member; `Done++` when `issue.State() == model.StateClosed`; `Active` set to a copy of the member whose state is `model.StateInProgress` (last such member wins, since it is assigned unconditionally in the loop). A lane the evidence never saw returns the zero value (`Total 0`), matching `Standings.Of`'s totality convention (`internal/claims/evidence.go`).
 
-Pinned: closed+in-progress+open lane → `{Done:1, Total:3, Active:T2}` (`internal/claims/evidence_progress_test.go:14-33`); no in-progress member → `Active == nil` (`:39-57`); unseen lane → zero (`:62-71`).
+Pinned: closed+in-progress+open lane → `{Done:1, Total:3, Active:T2}` (`internal/claims/evidence_progress_test.go`); no in-progress member → `Active == nil`; unseen lane → zero.
 
 ### 3.3 What counts as an establishing act
 
@@ -186,13 +186,13 @@ var establishing = map[model.ActionName]bool{
 	model.ActionRestore:   false,
 }
 ```
-`internal/claims/establish.go:37-47`.
+`internal/claims/establish.go`.
 
-- **Exactly two verbs establish**: `start` and `done` (`internal/claims/establish.go:38-39`). `start` is the act of taking work; `done` is the neutral success close, so a checkout that just completed a ticket mid-lane still holds the lane (`internal/claims/establish.go:11-16`).
-- `close` (which carries an Outcome: duplicate/superseded/obsolete/wontfix), `reopen`, and the four retention verbs never establish (`internal/claims/establish.go:17-23`).
-- `establishes(event)` looks up `establishing[model.ActionName(event.Action)]`; an empty `Action` (plain field update) and an unrecognized verb both read false through the same lookup (`internal/claims/establish.go:54-56`). Pinned by `TestAbsentVerbDoesNotEstablish` (`internal/claims/establish_internal_test.go:42-49`).
-- A map rather than a switch so `TestEstablishingCoversEveryAction` can assert every verb in `model.Actions()` is classified and that the map names no retired verb (`internal/claims/establish_internal_test.go:14-23`). `TestOnlyStartAndDoneEstablish` pins the exact classification (`:28-38`).
-- Actions vocabulary: `ActionStart = "start"` etc. (`internal/model/lifecycle/lifecycle.go:47`), sealed list at `internal/model/lifecycle/lifecycle.go:182`.
+- **Exactly two verbs establish**: `start` and `done` (`internal/claims/establish.go`). `start` is the act of taking work; `done` is the neutral success close, so a checkout that just completed a ticket mid-lane still holds the lane (`internal/claims/establish.go`).
+- `close` (which carries an Outcome: duplicate/superseded/obsolete/wontfix), `reopen`, and the four retention verbs never establish (`internal/claims/establish.go`).
+- `establishes(event)` looks up `establishing[model.ActionName(event.Action)]`; an empty `Action` (plain field update) and an unrecognized verb both read false through the same lookup (`internal/claims/establish.go`). Pinned by `TestAbsentVerbDoesNotEstablish` (`internal/claims/establish_internal_test.go`).
+- A map rather than a switch so `TestEstablishingCoversEveryAction` can assert every verb in `model.Actions()` is classified and that the map names no retired verb (`internal/claims/establish_internal_test.go`). `TestOnlyStartAndDoneEstablish` pins the exact classification.
+- Actions vocabulary: `ActionStart = "start"` etc. (`internal/model/lifecycle/lifecycle.go`), sealed list at `internal/model/lifecycle/lifecycle.go`.
 
 ---
 
@@ -202,20 +202,20 @@ var establishing = map[model.ActionName]bool{
 type Freshness struct { Now time.Time; Window time.Duration }
 func (f Freshness) Covers(t time.Time) bool { return !t.Before(f.Now.Add(-f.Window)) }
 ```
-`internal/claims/derive.go:20-32`.
+`internal/claims/derive.go`.
 
-- Both the clock reading and the window travel as data; the derivation reads no clock (`internal/claims/derive.go:11-16`).
-- **Boundary rule: evidence exactly on the boundary is covered** — `!t.Before(Now-Window)`, i.e. `t >= Now-Window` (`internal/claims/derive.go:25-31`).
-- `Covers` is the single place a timestamp is compared against the window (`internal/claims/derive.go:27-29`).
+- Both the clock reading and the window travel as data; the derivation reads no clock (`internal/claims/derive.go`).
+- **Boundary rule: evidence exactly on the boundary is covered** — `!t.Before(Now-Window)`, i.e. `t >= Now-Window` (`internal/claims/derive.go`).
+- `Covers` is the single place a timestamp is compared against the window (`internal/claims/derive.go`).
 
-**Configuration**: `claims.freshness_window`, default `"6h"` (`internal/config/config.go:228`). Field `ClaimsConfig.FreshnessWindow time.Duration` with `mapstructure:"-"` — deliberately NOT struct-tag decoded (`internal/config/config.go:56-74`). Parsed once by `parseFreshnessWindow` (`internal/config/config.go:262-266`):
-- `time.ParseDuration(raw)` failure → `config: claims.freshness_window must be a duration with a unit, like "72h" or "90m" (got %q): %w` (`internal/config/config.go:92`).
-- `window <= 0` → `config: claims.freshness_window must be positive, got %s` (`internal/config/config.go:95`).
-- The reason for string parsing: viper weak-decoding a bare `72` would land as 72 **nanoseconds**, positive and passing validation, expiring every claim instantly (`internal/config/config.go:67-72`, `internal/config/config.go:79-88`).
+**Configuration**: `claims.freshness_window`, default `"6h"` (`internal/config/config.go`). Field `ClaimsConfig.FreshnessWindow time.Duration` with `mapstructure:"-"` — deliberately NOT struct-tag decoded (`internal/config/config.go`). Parsed once by `parseFreshnessWindow` (`internal/config/config.go`):
+- `time.ParseDuration(raw)` failure → `config: claims.freshness_window must be a duration with a unit, like "72h" or "90m" (got %q): %w` (`internal/config/config.go`).
+- `window <= 0` → `config: claims.freshness_window must be positive, got %s` (`internal/config/config.go`).
+- The reason for string parsing: viper weak-decoding a bare `72` would land as 72 **nanoseconds**, positive and passing validation, expiring every claim instantly (`internal/config/config.go`).
 
-**Where `Now` comes from at runtime**: `claims.Freshness{Now: time.Now(), Window: cfg.Claims.FreshnessWindow}` in `gatherClaimContext` (`internal/cli/claims_context.go:101`).
+**Where `Now` comes from at runtime**: `claims.Freshness{Now: time.Now(), Window: cfg.Claims.FreshnessWindow}` in `gatherClaimContext` (`internal/cli/claims_context.go`).
 
-E2E manipulation of the window: a test writes `.lit/config.toml` containing `[claims]\nfreshness_window = "1ms"\n` and sleeps 50 ms (`internal/cli/claims_takeover_e2e_test.go:130-148`).
+E2E manipulation of the window: a test writes `.lit/config.toml` containing `[claims]\nfreshness_window = "1ms"\n` and sleeps 50 ms (`internal/cli/claims_takeover_e2e_test.go`).
 
 ---
 
@@ -226,59 +226,59 @@ E2E manipulation of the window: a test writes `.lit/config.toml` containing `[cl
 ```go
 type LocalCheckouts struct { workspace string; live map[string]struct{} }
 ```
-`internal/claims/local.go:27-30`. Constructed by `NewLocalCheckouts(workspaceID, liveStreams)` (`internal/claims/local.go:35-41`).
+`internal/claims/local.go`. Constructed by `NewLocalCheckouts(workspaceID, liveStreams)` (`internal/claims/local.go`).
 
-**Zero value = "this machine has enumerated nothing and therefore proves nothing"**; it voids nothing, which is the "where uncheckable, assume live and let freshness govern" default (`internal/claims/local.go:19-22`). Callers that cannot enumerate must pass the zero value, never a guess (`internal/claims/local.go:32-34`).
+**Zero value = "this machine has enumerated nothing and therefore proves nothing"**; it voids nothing, which is the "where uncheckable, assume live and let freshness govern" default (`internal/claims/local.go`). Callers that cannot enumerate must pass the zero value, never a guess (`internal/claims/local.go`).
 
-**`Void(at model.Attribution) bool`** (`internal/claims/local.go:58-64`):
+**`Void(at model.Attribution) bool`** (`internal/claims/local.go`):
 ```go
 if !at.Present() || at.Workspace() != l.workspace { return false }
 _, alive := l.live[at.Stream()]
 return !alive
 ```
-So an event is void iff: attribution present **and** its workspace equals this machine's workspace **and** its stream token is not in the live set. An unattributed event can never be void, which also keeps the zero `LocalCheckouts` inert (its empty workspace would otherwise match an absent pair's empty workspace) (`internal/claims/local.go:55-57`).
+So an event is void iff: attribution present **and** its workspace equals this machine's workspace **and** its stream token is not in the live set. An unattributed event can never be void, which also keeps the zero `LocalCheckouts` inert (its empty workspace would otherwise match an absent pair's empty workspace) (`internal/claims/local.go`).
 
-Asymmetry, stated at `internal/claims/local.go:11-17`: worktree deletion is a local fact; a claim from a deleted checkout dies here at once, everywhere else waits out the freshness window; a different clone on the same machine carries a different workspace id and is never pruned.
+Asymmetry, stated at `internal/claims/local.go`: worktree deletion is a local fact; a claim from a deleted checkout dies here at once, everywhere else waits out the freshness window; a different clone on the same machine carries a different workspace id and is never pruned.
 
-Pinned by `TestLocalCheckoutsScopesTokensToThisWorkspace`: a token of *this* workspace belonging to no live checkout is void; the same token under another workspace id is not; the current checkout's own pair is not (`internal/app/claims_test.go:195-215`).
+Pinned by `TestLocalCheckoutsScopesTokensToThisWorkspace`: a token of *this* workspace belonging to no live checkout is void; the same token under another workspace id is not; the current checkout's own pair is not (`internal/app/claims_test.go`).
 
 ### 5.2 Enumeration — `workspace.LiveCheckouts`
 
 ```go
 type Checkout struct { Stream StreamID; Path string; Branch string }
 ```
-`internal/workspace/checkouts.go:27-31`. `Branch` empty for detached HEAD (`internal/workspace/checkouts.go:26`). Nothing is stored; the value is re-derived per enumeration (`internal/workspace/checkouts.go:11-15`).
+`internal/workspace/checkouts.go`. `Branch` empty for detached HEAD (`internal/workspace/checkouts.go`). Nothing is stored; the value is re-derived per enumeration (`internal/workspace/checkouts.go`).
 
-`LiveCheckouts(cwd)` (`internal/workspace/checkouts.go:61-112`):
-1. Runs `git worktree list --porcelain -z` with `context.Background()` (`:65`). On failure the error names the git ≥ 2.36 requirement on **every** failure and is deliberately not routed through `classifyGitError` (`:67-81`).
-2. `parseWorktreeList` (`:83`), then `slices.DeleteFunc(records, worktreeRecord.uninhabited)` (`:92`).
-3. For each remaining record: `resolvePrivateGitDir(record.path)` then `ReadStream(privateGitDir)`; any failure aborts the **whole** enumeration rather than dropping the checkout, because dropping it would silently assert the checkout is deleted (`:101-108`, rationale `:56-60`).
+`LiveCheckouts(cwd)` (`internal/workspace/checkouts.go`):
+1. Runs `git worktree list --porcelain -z` with `context.Background()`. On failure the error names the git ≥ 2.36 requirement on **every** failure and is deliberately not routed through `classifyGitError`.
+2. `parseWorktreeList`, then `slices.DeleteFunc(records, worktreeRecord.uninhabited)`.
+3. For each remaining record: `resolvePrivateGitDir(record.path)` then `ReadStream(privateGitDir)`; any failure aborts the **whole** enumeration rather than dropping the checkout, because dropping it would silently assert the checkout is deleted (rationale).
 
-`worktreeRecord{path, branch, prunable, bare}` (`internal/workspace/checkouts.go:117-122`); `uninhabited() = prunable || bare` (`:132`). A worktree deleted with `rm -rf` leaves its private git dir behind, so filesystem listing would report it alive — git reports it `prunable`; a *locked* worktree is not prunable even with a missing directory (removable media), and this inherits git's judgment (`internal/workspace/checkouts.go:41-50`).
+`worktreeRecord{path, branch, prunable, bare}` (`internal/workspace/checkouts.go`); `uninhabited() = prunable || bare`. A worktree deleted with `rm -rf` leaves its private git dir behind, so filesystem listing would report it alive — git reports it `prunable`; a *locked* worktree is not prunable even with a missing directory (removable media), and this inherits git's judgment (`internal/workspace/checkouts.go`).
 
-`parseWorktreeList` (`internal/workspace/checkouts.go:191-229`): splits on `\x00`; `strings.Cut(field, " ")` on the FIRST space only; `worktree <path>` opens a record; empty field skipped; an attribute field before any `worktree` field → error `git worktree list --porcelain -z opened with %q, which is not a 'worktree <path>' field` (`:207`). Recognized attributes: `branch` (with `refs/heads/` prefix trimmed), `prunable`, `bare`, `locked`; unknown keys ignored (`:211-218`, documented `:156-167`). `locked` is read but deliberately does not vote on liveness — git already withholds `prunable` from a locked record — and it leaves as `Checkout.Locked` (`:116`), reaching the `claims.Locked` presence via `internal/app/claims.go:65` and `internal/claims/local.go:107-108`. It is the signal `relationOf` reads. Zero records → error `git worktree list --porcelain -z named no worktrees at all`, because git always lists the current worktree and reporting zero would void every claim (`:222-227`).
+`parseWorktreeList` (`internal/workspace/checkouts.go`): splits on `\x00`; `strings.Cut(field, " ")` on the FIRST space only; `worktree <path>` opens a record; empty field skipped; an attribute field before any `worktree` field → error `git worktree list --porcelain -z opened with %q, which is not a 'worktree <path>' field`. Recognized attributes: `branch` (with `refs/heads/` prefix trimmed), `prunable`, `bare`, `locked`; unknown keys ignored (documented). `locked` is read but deliberately does not vote on liveness — git already withholds `prunable` from a locked record — and it leaves as `Checkout.Locked`, reaching the `claims.Locked` presence via `internal/app/claims.go` and `internal/claims/local.go`. It is the signal `relationOf` reads. Zero records → error `git worktree list --porcelain -z named no worktrees at all`, because git always lists the current worktree and reporting zero would void every claim.
 
 ### 5.3 `app.App.LocalCheckouts` (the boundary)
 
-`internal/app/claims.go:31-37`:
+`internal/app/claims.go`:
 ```go
 checkouts, err := workspace.LiveCheckouts(a.Workspace.RootDir)
 if err != nil { return claims.LocalCheckouts{}, err }
 return claims.NewLocalCheckouts(a.Workspace.WorkspaceID, streamTokens(checkouts)), nil
 ```
-On error it returns the zero value **and** the error — it reports what it proved or that it proved nothing (`internal/app/claims.go:26-30`).
+On error it returns the zero value **and** the error — it reports what it proved or that it proved nothing (`internal/app/claims.go`).
 
-`streamTokens(checkouts)` drops any checkout whose `Stream` is not `Present()` (`internal/app/claims.go:53-62`); a never-mutated checkout carries no token, holds no claim, and voids nothing (`internal/app/claims.go:41-45`). Pinned by `TestStreamTokensCountsOnlyMintedIdentities` (`internal/app/claims_test.go:180-188`).
+`streamTokens(checkouts)` drops any checkout whose `Stream` is not `Present()` (`internal/app/claims.go`); a never-mutated checkout carries no token, holds no claim, and voids nothing (`internal/app/claims.go`). Pinned by `TestStreamTokensCountsOnlyMintedIdentities` (`internal/app/claims_test.go`).
 
 ---
 
 ## 6. Derivation — the four-legged predicate
 
-`Derive(evidence, fresh, local) Standings` iterates every lane in `evidence.members` and calls `standingOf(members, events[lane], fresh, local)` (`internal/claims/derive.go:37-43`). It writes nothing (`:34-36`).
+`Derive(evidence, fresh, local) Standings` iterates every lane in `evidence.members` and calls `standingOf(members, events[lane], fresh, local)` (`internal/claims/derive.go`). It writes nothing.
 
-`standingOf` (`internal/claims/derive.go:58-114`) runs the legs in dependency order **1, 4, 2, 3** (`internal/claims/derive.go:49-54`):
+`standingOf` (`internal/claims/derive.go`) runs the legs in dependency order **1, 4, 2, 3** (`internal/claims/derive.go`):
 
-**Leg 1 — the lane is unfinished.** `if !slices.ContainsFunc(members, model.Issue.InPlay) { return Unclaimed{} }` (`internal/claims/derive.go:62-64`). `Issue.InPlay()` = `!lifecycle.Frozen(i.Retention()) && i.State() != model.StateClosed` (`internal/model/model.go:165-167`) — so archived and deleted issues are out of play as well as closed ones. Pinned by `TestPredicateGrid`'s "leg 1 dropped" cases: an all-closed lane and a lane whose sole open ticket is archived both read `Unclaimed` (`internal/claims/claims_test.go:124-217`).
+**Leg 1 — the lane is unfinished.** `if !slices.ContainsFunc(members, model.Issue.InPlay) { return Unclaimed{} }` (`internal/claims/derive.go`). `Issue.InPlay()` = `!lifecycle.Frozen(i.Retention()) && i.State() != model.StateClosed` (`internal/model/model.go`) — so archived and deleted issues are out of play as well as closed ones. Pinned by `TestPredicateGrid`'s "leg 1 dropped" cases: an all-closed lane and a lane whose sole open ticket is archived both read `Unclaimed` (`internal/claims/claims_test.go`).
 
 **Leg 4 — the holder is live as far as this machine can tell.** Applied as a *filter* over events, before leg 2:
 ```go
@@ -286,9 +286,9 @@ admissible := slices.DeleteFunc(slices.Clone(events), func(event model.IssueEven
 	return local.Void(event.Attribution)
 })
 ```
-`internal/claims/derive.go:79-81`. The `slices.Clone` is load-bearing: `DeleteFunc` compacts in place, so without it one derivation would strip events out of the shared `Evidence` and a second derivation over the same reading would silently differ (`internal/claims/derive.go:73-78`). Pinned by `TestDeriveDoesNotConsumeItsEvidence`: one `Evidence`, derived twice — once with a pruning `LocalCheckouts` (→ Unclaimed) and once with the zero value (→ Held) (`internal/claims/claims_test.go:547-568`).
+`internal/claims/derive.go`. The `slices.Clone` is load-bearing: `DeleteFunc` compacts in place, so without it one derivation would strip events out of the shared `Evidence` and a second derivation over the same reading would silently differ (`internal/claims/derive.go`). Pinned by `TestDeriveDoesNotConsumeItsEvidence`: one `Evidence`, derived twice — once with a pruning `LocalCheckouts` (→ Unclaimed) and once with the zero value (→ Held) (`internal/claims/claims_test.go`).
 
-Ordering rationale: leg 4 must run before leg 2 asks which establishing event is *latest*, or a lane would read unclaimed where it should revert to whoever else has standing (`internal/claims/derive.go:49-54`). Pinned by `TestVoidEvidenceFallsThroughToTheNextEstablisher`: A's newer `start` is void, so the lane reverts to B's older one (`internal/claims/claims_test.go:246-257`).
+Ordering rationale: leg 4 must run before leg 2 asks which establishing event is *latest*, or a lane would read unclaimed where it should revert to whoever else has standing (`internal/claims/derive.go`). Pinned by `TestVoidEvidenceFallsThroughToTheNextEstablisher`: A's newer `start` is void, so the lane reverts to B's older one (`internal/claims/claims_test.go`).
 
 **Leg 2 — the holder produced the latest establishing event.**
 ```go
@@ -296,37 +296,37 @@ establisher, found := LatestEstablisher(admissible)
 if !found { return Unclaimed{} }
 holder := establisher.Attribution
 ```
-`internal/claims/derive.go:90-94`. `LatestEstablisher` is exported and lives in `internal/claims/establish.go:67-76`, not `derive.go` — it scans the whole slice for the newest event by `byRecency` for which `establishes` is true, **regardless of attribution**.
+`internal/claims/derive.go`. `LatestEstablisher` is exported and lives in `internal/claims/establish.go`, not `derive.go` — it scans the whole slice for the newest event by `byRecency` for which `establishes` is true, **regardless of attribution**.
 
-**The derivation stops at the latest establisher, attributed or not; it never scans back to an older ancestor** (`internal/claims/derive.go:83-89`). An establishing event with no attribution belongs to the public checkout — `model.Attribution`'s zero value — and holds the lane exactly like any other holder: an older attributed event is positively known to be superseded, so scanning past the newest establisher would hand the lane to a checkout that has demonstrably moved on. Pinned by `TestUnattributedLatestStopsRatherThanScanning` (`internal/claims/claims_test.go:219-244`): A starts then completes T1, then the public checkout starts T2 later — the lane reads `Held{By: public}` with A contesting, **not** `Held{By: A}`. Contrast with a *void* event, which is disproven rather than merely superseded and therefore falls through at leg 4, before leg 2 ever runs (`internal/claims/local.go:136-146`).
+**The derivation stops at the latest establisher, attributed or not; it never scans back to an older ancestor** (`internal/claims/derive.go`). An establishing event with no attribution belongs to the public checkout — `model.Attribution`'s zero value — and holds the lane exactly like any other holder: an older attributed event is positively known to be superseded, so scanning past the newest establisher would hand the lane to a checkout that has demonstrably moved on. Pinned by `TestUnattributedLatestStopsRatherThanScanning` (`internal/claims/claims_test.go`): A starts then completes T1, then the public checkout starts T2 later — the lane reads `Held{By: public}` with A contesting, **not** `Held{By: A}`. Contrast with a *void* event, which is disproven rather than merely superseded and therefore falls through at leg 4, before leg 2 ever runs (`internal/claims/local.go`).
 
-`trails(admissible)` folds the events into two maps (`internal/claims/derive.go:120-130`): `activity[attribution] = event.CreatedAt` (last write wins → each checkout's latest act, because events are oldest-first) and `establishers[attribution] = struct{}{}` for establishing events only.
+`trails(admissible)` folds the events into two maps (`internal/claims/derive.go`): `activity[attribution] = event.CreatedAt` (last write wins → each checkout's latest act, because events are oldest-first) and `establishers[attribution] = struct{}{}` for establishing events only.
 
-`tenure := Tenure{By: holder, Since: establisher.CreatedAt, LastActivity: activity[holder]}` (`internal/claims/derive.go:96`).
+`tenure := Tenure{By: holder, Since: establisher.CreatedAt, LastActivity: activity[holder]}` (`internal/claims/derive.go`).
 
 **Leg 3 — the claim is fresh.**
 ```go
 if !fresh.Covers(tenure.LastActivity) { return Stale{Tenure: tenure, Holder: local.PresenceOf(holder)} }
 return Held{Tenure: tenure, Contested: contestants(holder, activity, establishers, fresh)}
 ```
-`internal/claims/derive.go:110-113`. Freshness is measured from the holder's **last mutation of any kind in the lane**, not from the establishing event, so ordinary commentary carries a claim through a long stretch (`internal/claims/derive.go:98-109`). Pinned by `TestAnyMutationRefreshes`: `start` 80 h ago plus a bare field edit 30 min ago → Held with `Since = -80h`, `LastActivity = -30m` under a 24 h window (`internal/claims/claims_test.go:345-356`).
+`internal/claims/derive.go`. Freshness is measured from the holder's **last mutation of any kind in the lane**, not from the establishing event, so ordinary commentary carries a claim through a long stretch (`internal/claims/derive.go`). Pinned by `TestAnyMutationRefreshes`: `start` 80 h ago plus a bare field edit 30 min ago → Held with `Since = -80h`, `LastActivity = -30m` under a 24 h window (`internal/claims/claims_test.go`).
 
-Stale example: `start` at −72 h plus a field edit at −48 h under a 24 h window → `Stale{By: streamA, Since: -72h, LastActivity: -48h, Holder: claims.Present}` (`TestPredicateGrid`'s "leg 3 dropped" case, `internal/claims/claims_test.go:124-217`).
+Stale example: `start` at −72 h plus a field edit at −48 h under a 24 h window → `Stale{By: streamA, Since: -72h, LastActivity: -48h, Holder: claims.Present}` (`TestPredicateGrid`'s "leg 3 dropped" case, `internal/claims/claims_test.go`).
 
-**Contest.** `contestants(holder, activity, establishers, fresh)` (`internal/claims/derive.go:149-164`):
-- Candidate set = the keys of `establishers` (so **only checkouts with an establishing act** contest; a drive-by comment or grooming edit never does — pinned by `TestDriveByEditsNeitherEstablishNorContest`, `internal/claims/claims_test.go:369-384`).
-- Skip candidate if `candidate == holder`, or `!fresh.Covers(activity[candidate])` (`:152-154`) — a rival whose own evidence aged out is no longer contesting. **Unattributed candidates are not skipped**: the public checkout contests on the same terms as any identified checkout, pinned by `TestPublicCheckoutContestsAnIdentifiedHolder` (`internal/claims/claims_test.go:402-426`).
-- Sort: most-recently-active first (`activity[b].Compare(activity[a])`), tie-broken by `strings.Compare(a.Stream(), b.Stream())` (`:157-162`).
-- Returns `[]model.Attribution{}` (non-nil empty) when nobody contests (`:150`).
-- Contest is an annotation, not a state: routing is unaffected and the holder remains the holder (`internal/claims/standing.go:41-46`).
+**Contest.** `contestants(holder, activity, establishers, fresh)` (`internal/claims/derive.go`):
+- Candidate set = the keys of `establishers` (so **only checkouts with an establishing act** contest; a drive-by comment or grooming edit never does — pinned by `TestDriveByEditsNeitherEstablishNorContest`, `internal/claims/claims_test.go`).
+- Skip candidate if `candidate == holder`, or `!fresh.Covers(activity[candidate])` — a rival whose own evidence aged out is no longer contesting. **Unattributed candidates are not skipped**: the public checkout contests on the same terms as any identified checkout, pinned by `TestPublicCheckoutContestsAnIdentifiedHolder` (`internal/claims/claims_test.go`).
+- Sort: most-recently-active first (`activity[b].Compare(activity[a])`), tie-broken by `strings.Compare(a.Stream(), b.Stream())`.
+- Returns `[]model.Attribution{}` (non-nil empty) when nobody contests.
+- Contest is an annotation, not a state: routing is unaffected and the holder remains the holder (`internal/claims/standing.go`).
 
-Pinned: A starts at −3 h, B starts at −1 h → `Held{By: B, Contested: [A]}` (`TestContestedAnnotatesWithoutMovingRouting`, `internal/claims/claims_test.go:386-400`); A's start at −200 h with B at −1 h → Held by B, no contest (`TestContestLapsesWithTheRivalsEvidence`, `internal/claims/claims_test.go:428-438`).
+Pinned: A starts at −3 h, B starts at −1 h → `Held{By: B, Contested: [A]}` (`TestContestedAnnotatesWithoutMovingRouting`, `internal/claims/claims_test.go`); A's start at −200 h with B at −1 h → Held by B, no contest (`TestContestLapsesWithTheRivalsEvidence`, `internal/claims/claims_test.go`).
 
-**Cold start.** A repository whose whole history predates attribution derives every lane `Held` by the public checkout, subject to freshness — **not** `Unclaimed`. Real pre-attribution history is almost always older than the freshness window, so in practice this reads `Stale{public}` — available for takeover, carrying its provenance — rather than `Held{public}`, but both are a real claim, never nothing. Pinned by `TestColdStartDerivesThePublicCheckout` (`internal/claims/claims_test.go:492-514`): recent all-public-checkout history reads `Held{public}`; the same shape 89-90 days old under a 24 h window reads `Stale{public}`.
+**Cold start.** A repository whose whole history predates attribution derives every lane `Held` by the public checkout, subject to freshness — **not** `Unclaimed`. Real pre-attribution history is almost always older than the freshness window, so in practice this reads `Stale{public}` — available for takeover, carrying its provenance — rather than `Held{public}`, but both are a real claim, never nothing. Pinned by `TestColdStartDerivesThePublicCheckout` (`internal/claims/claims_test.go`): recent all-public-checkout history reads `Held{public}`; the same shape 89-90 days old under a 24 h window reads `Stale{public}`.
 
-**Foreign workspaces never pruned**: an event from `ws-elsewhere` remains Held even when this machine enumerates zero live streams for `ws-local` (`TestForeignWorkspaceIsNeverPruned`, `internal/claims/claims_test.go:333-343`).
+**Foreign workspaces never pruned**: an event from `ws-elsewhere` remains Held even when this machine enumerates zero live streams for `ws-local` (`TestForeignWorkspaceIsNeverPruned`, `internal/claims/claims_test.go`).
 
-**Grid summary** (all under a 24 h window; `TestPredicateGrid`, `internal/claims/claims_test.go:124-217`):
+**Grid summary** (all under a 24 h window; `TestPredicateGrid`, `internal/claims/claims_test.go`):
 
 | dropped leg | fixture | result |
 |---|---|---|
@@ -354,46 +354,46 @@ type App struct {
 	Stream    workspace.StreamID
 }
 ```
-`internal/app/app.go:13-24`. `Stream` documented as: always present under `AccessWrite` (minted on the checkout's first mutating command); present under `AccessRead` only if an earlier mutating command minted it, and its absence is the honest report that this checkout has produced no work evidence and therefore holds no claim (`internal/app/app.go:16-23`).
+`internal/app/app.go`. `Stream` documented as: always present under `AccessWrite` (minted on the checkout's first mutating command); present under `AccessRead` only if an earlier mutating command minted it, and its absence is the honest report that this checkout has produced no work evidence and therefore holds no claim (`internal/app/app.go`).
 
 ### 7.2 `AccessMode` / `accessContract` / `accessContracts`
 
-Covered in §2.2. Type declarations at `internal/app/app.go:30-35`, `:45-48`, `:57-60`.
+Covered in §2.2. Type declarations at `internal/app/app.go`.
 
 ### 7.3 `Open(ctx, cwd, mode) (*App, error)`
 
-`internal/app/app.go:68-107`. Ordered orchestration:
-1. `contract, known := accessContracts[mode]`; unknown (including the zero value `""`) → `fmt.Errorf("invalid access mode %q", string(mode))` (`:69-74`). The map lookup is both the validity check and the dispatch (`:65-67`).
-2. `workspace.Resolve(cwd)` → error returned as-is (`:75-78`).
-3. `engine.Open(ctx, contract.mode, ws.DatabasePath, ws.WorkspaceID)` → error returned as-is (`:79-82`).
-4. `contract.resolveStream(ws.PrivateGitDir)` — resolved **after** the store opens, so a command that cannot reach its store mints nothing (`:83-86`).
-5. On identity failure: `return nil, errors.Join(err, st.Close())` — the store must be closed because `Store.Close` also releases the workspace lock; joined so a stranded lock is visible too (`:87-96`).
-6. `st.AttributeTo(stream.Value())` — called unconditionally for both modes; only the value varies (`:97-105`).
-7. `return &App{Workspace: ws, Store: st, Stream: stream}, nil` (`:106`).
+`internal/app/app.go`. Ordered orchestration:
+1. `contract, known := accessContracts[mode]`; unknown (including the zero value `""`) → `fmt.Errorf("invalid access mode %q", string(mode))`. The map lookup is both the validity check and the dispatch.
+2. `workspace.Resolve(cwd)` → error returned as-is.
+3. `engine.Open(ctx, contract.mode, ws.DatabasePath, ws.WorkspaceID)` → error returned as-is.
+4. `contract.resolveStream(ws.PrivateGitDir)` — resolved **after** the store opens, so a command that cannot reach its store mints nothing.
+5. On identity failure: `return nil, errors.Join(err, st.Close())` — the store must be closed because `Store.Close` also releases the workspace lock; joined so a stranded lock is visible too.
+6. `st.AttributeTo(stream.Value())` — called unconditionally for both modes; only the value varies.
+7. `return &App{Workspace: ws, Store: st, Stream: stream}, nil`.
 
 Validation/behavior pinned by test:
-- `AccessWrite` bootstraps a missing database; `AccessRead` fails with an error containing `"not initialized"` (`internal/app/app_test.go:25-58`).
-- Read mode accepts the database write mode bootstrapped (`internal/app/app_test.go:62-78`).
-- `""` and `"admin"` both fail with `"invalid access mode"` (`internal/app/app_test.go:83-95`).
-- A damaged token file makes `Open` fail with a `"malformed"` diagnosis and the store must be released — proven by a repaired second open succeeding (`internal/app/app_test.go:193-230`).
+- `AccessWrite` bootstraps a missing database; `AccessRead` fails with an error containing `"not initialized"` (`internal/app/app_test.go`).
+- Read mode accepts the database write mode bootstrapped (`internal/app/app_test.go`).
+- `""` and `"admin"` both fail with `"invalid access mode"` (`internal/app/app_test.go`).
+- A damaged token file makes `Open` fail with a `"malformed"` diagnosis and the store must be released — proven by a repaired second open succeeding (`internal/app/app_test.go`).
 
 No events are emitted by `app`; the package publishes no event/observer surface.
 
 ### 7.4 `OpenLocationForRead(ctx, loc) (storage.Store, error)`
 
-`internal/app/app.go:125-131`. Opens a store at an already-derived `workspace.Location`, bypassing cwd git resolution entirely — the cross-project open primitive used by aggregation over many stores (`:109-114`). Reads the foreign store's `workspace_id` from its own `config.json` via `workspace.ReadConfig(loc.ConfigPath)` — a pure read that never writes the foreign store (`:122-124`, `:126-129`), then `engine.Open(ctx, engine.ReadOnly, loc.DatabasePath, cfg.WorkspaceID)` (`:130`). Always `ReadOnly`, so a foreign store gets the shared lock and never a second read-write engine the embedded Dolt driver would reject as "database is read only" (`:115-121`). **It mints no identity and calls no `AttributeTo`.**
+`internal/app/app.go`. Opens a store at an already-derived `workspace.Location`, bypassing cwd git resolution entirely — the cross-project open primitive used by aggregation over many stores. Reads the foreign store's `workspace_id` from its own `config.json` via `workspace.ReadConfig(loc.ConfigPath)` — a pure read that never writes the foreign store, then `engine.Open(ctx, engine.ReadOnly, loc.DatabasePath, cfg.WorkspaceID)`. Always `ReadOnly`, so a foreign store gets the shared lock and never a second read-write engine the embedded Dolt driver would reject as "database is read only". **It mints no identity and calls no `AttributeTo`.**
 
 ### 7.5 `(*App).Close() error`
 
-`internal/app/app.go:133`: `return a.Store.Close()`.
+`internal/app/app.go`: `return a.Store.Close()`.
 
 ### 7.6 `(*App).LocalCheckouts() (claims.LocalCheckouts, error)`
 
-`internal/app/claims.go:31-37`. Covered in §5.3. Placement rationale (effects at the boundary, `internal/claims` importing only `internal/model`) at `internal/app/claims.go:10-19`; workspace-id scoping as both a correctness and a privacy property at `:21-24`.
+`internal/app/claims.go`. Covered in §5.3. Placement rationale (effects at the boundary, `internal/claims` importing only `internal/model`) at `internal/app/claims.go`; workspace-id scoping as both a correctness and a privacy property.
 
 ### 7.7 `streamTokens(checkouts []workspace.Checkout) []string` (unexported)
 
-`internal/app/claims.go:53-62`. Covered in §5.3.
+`internal/app/claims.go`. Covered in §5.3.
 
 That is the entire `internal/app` surface: `App` (3 fields), `AccessMode` + 2 constants, `accessContract`, `accessContracts`, `Open`, `OpenLocationForRead`, `Close`, `LocalCheckouts`, `streamTokens`.
 
@@ -401,23 +401,23 @@ That is the entire `internal/app` surface: `App` (3 fields), `AccessMode` + 2 co
 
 ## 8. Gathering the claim context in the CLI
 
-`type claimContext struct { standings claims.Standings; evidence claims.Evidence; self model.Attribution; addresses map[model.Attribution]workspace.Checkout }` (`internal/cli/claims_context.go:33-38`). `addresses` never reaches the shared database and lives only for the process's lifetime (`internal/cli/claims_context.go:22-32`).
+`type claimContext struct { standings claims.Standings; evidence claims.Evidence; self model.Attribution; addresses map[model.Attribution]workspace.Checkout }` (`internal/cli/claims_context.go`). `addresses` never reaches the shared database and lives only for the process's lifetime (`internal/cli/claims_context.go`).
 
-`gatherClaimContext(ctx, stdout, ap)` (`internal/cli/claims_context.go:43-108`), in order:
-1. `config.Load(pathspec.New(ap.Workspace.RootDir))` (`:44-47`).
-2. `ap.Store.ListIssues(ctx, storage.ListIssuesFilter{IncludeArchived: true, IncludeDeleted: true})` — **both flags set**, because a lane's establishing event can sit on a deleted or archived issue; with the zero-value filter, a repository with even one deleted issue that ever carried an event made `NewEvidence` fail outright on every `next` and `backlog` (`:48-60`).
-3. `ap.Store.GetRelationsByIDs(ctx, ids)` → `parents[issue.ID] = relations[issue.ID].Parent` (`:61-72`).
-4. `ap.Store.ListAllEvents(ctx)` (`:73-76`).
-5. `claims.NewEvidence(allIssues, parents, events)` (`:77-80`).
+`gatherClaimContext(ctx, stdout, ap)` (`internal/cli/claims_context.go`), in order:
+1. `config.Load(pathspec.New(ap.Workspace.RootDir))`.
+2. `ap.Store.ListIssues(ctx, storage.ListIssuesFilter{IncludeArchived: true, IncludeDeleted: true})` — **both flags set**, because a lane's establishing event can sit on a deleted or archived issue; with the zero-value filter, a repository with even one deleted issue that ever carried an event made `NewEvidence` fail outright on every `next` and `backlog`.
+3. `ap.Store.GetRelationsByIDs(ctx, ids)` → `parents[issue.ID] = relations[issue.ID].Parent`.
+4. `ap.Store.ListAllEvents(ctx)`.
+5. `claims.NewEvidence(allIssues, parents, events)`.
 6. `workspace.LiveCheckouts(ap.Workspace.RootDir)`:
-   - **On error**: prints to stdout, verbatim, `warning: could not enumerate local checkouts (%v) — claim liveness check and local addresses skipped, freshness alone governs\n`, and leaves `local` as the zero `claims.LocalCheckouts` and `addresses` nil. A failure to print the warning aborts the whole gather (`:89-95`).
-   - **On success**: `local = claims.NewLocalCheckouts(ap.Workspace.WorkspaceID, checkoutStreamTokens(checkouts))` and `addresses = addressesByAttribution(ap.Workspace.WorkspaceID, checkouts)` (`:96-99`).
-7. `fresh := claims.Freshness{Now: time.Now(), Window: cfg.Claims.FreshnessWindow}`; `standings := claims.Derive(evidence, fresh, local)` (`:101-102`).
-8. `self := model.NewAttribution(ap.Stream.Value(), ap.Workspace.WorkspaceID)` — a never-minted stream collapses to the zero Attribution, which is exactly "no live claims", with no branch needed (`:103-106`).
+   - **On error**: prints to stdout, verbatim, `warning: could not enumerate local checkouts (%v) — claim liveness check and local addresses skipped, freshness alone governs\n`, and leaves `local` as the zero `claims.LocalCheckouts` and `addresses` nil. A failure to print the warning aborts the whole gather.
+   - **On success**: `local = claims.NewLocalCheckouts(ap.Workspace.WorkspaceID, checkoutStreamTokens(checkouts))` and `addresses = addressesByAttribution(ap.Workspace.WorkspaceID, checkouts)`.
+7. `fresh := claims.Freshness{Now: time.Now(), Window: cfg.Claims.FreshnessWindow}`; `standings := claims.Derive(evidence, fresh, local)`.
+8. `self := model.NewAttribution(ap.Stream.Value(), ap.Workspace.WorkspaceID)` — a never-minted stream collapses to the zero Attribution, which is exactly "no live claims", with no branch needed.
 
-`checkoutStreamTokens` mirrors `app.streamTokens`: skips checkouts without a present stream (`internal/cli/claims_context.go:114-122`). `addressesByAttribution` indexes live checkouts by `model.NewAttribution(checkout.Stream.Value(), workspaceID)`, skipping tokenless checkouts (`internal/cli/claims_context.go:128-136`).
+`checkoutStreamTokens` mirrors `app.streamTokens`: skips checkouts without a present stream (`internal/cli/claims_context.go`). `addressesByAttribution` indexes live checkouts by `model.NewAttribution(checkout.Stream.Value(), workspaceID)`, skipping tokenless checkouts (`internal/cli/claims_context.go`).
 
-Callers: `next` (`internal/cli/next.go:84`), `workable`/`backlog` runner (`internal/cli/workable.go:237`), `authorizeStart` (`internal/cli/claims_takeover.go:147`), `reportContestedLanes` (`internal/cli/claims_contest_report.go:33`).
+Callers: `next` (`internal/cli/next.go`), `workable`/`backlog` runner (`internal/cli/workable.go`), `authorizeStart` (`internal/cli/claims_takeover.go`), `reportContestedLanes` (`internal/cli/claims_contest_report.go`).
 
 ---
 
@@ -425,9 +425,9 @@ Callers: `next` (`internal/cli/next.go:84`), `workable`/`backlog` runner (`inter
 
 ### 9.1 `lit start` — the takeover gate (the only write gate)
 
-`transitionSpec.authorize` is an optional hook that runs after the action is built and **before** `Store.Apply`, and may abort the transition by returning an error; only `start` supplies one, the other seven transitions use `noAuthorize` (`internal/cli/cli.go:1376-1383`, `noAuthorize` at `:1386-1390`). Wired at `internal/cli/cli.go:1413-1418`, bound at `:1492` and invoked at `:1521`. The flag: `--take`, help string `"Confirm taking over a lane another checkout claims right now (required for non-interactive callers; an interactive terminal is prompted instead)"` (`internal/cli/cli.go:1414`).
+`transitionSpec.authorize` is an optional hook that runs after the action is built and **before** `Store.Apply`, and may abort the transition by returning an error; only `start` supplies one, the other seven transitions use `noAuthorize` (`internal/cli/cli.go`). Wired at `internal/cli/cli.go`. The flag: `--take`, help string `"Confirm taking over a lane another checkout claims right now (required for non-interactive callers; an interactive terminal is prompted instead)"` (`internal/cli/cli.go`).
 
-**`classifyTakeover(standing, self) takeoverRequirement`** — pure, no I/O (`internal/cli/claims_takeover.go:119-128`). It does not read the standing itself: it switches on `relationOf(standing, self)`, the same relation routing admits on, so the gate and the router cannot disagree about whose lane it is.
+**`classifyTakeover(standing, self) takeoverRequirement`** — pure, no I/O (`internal/cli/claims_takeover.go`). It does not read the standing itself: it switches on `relationOf(standing, self)`, the same relation routing admits on, so the gate and the router cannot disagree about whose lane it is.
 
 | standing | condition | relation | requirement |
 |---|---|---|---|
@@ -438,51 +438,51 @@ Callers: `next` (`internal/cli/next.go:84`), `workable`/`backlog` runner (`inter
 | `Stale` | otherwise | `laneLapsed` | `takeoverStaleInformed` |
 | `Unclaimed` (default arm) | — | `laneUnclaimed` | `takeoverNone` |
 
-`held(by)` answers `laneOurs` when `self.Present() && by == self` and `laneHeldForeign` otherwise (`internal/cli/claims_takeover.go:80`) — the `self.Present()` half is load-bearing, not a redundant guard: a checkout with no minted token has a zero `self`, and a zero `self` compared against a zero holder (the public checkout) would otherwise prove ownership of a lane this checkout never touched. So a lane the public checkout holds is always `laneHeldForeign` to every checkout, including one that has itself never minted a token; a lapsed one is `laneLapsed` to every checkout regardless, since a lapsed claim is matched against no identity at all.
+`held(by)` answers `laneOurs` when `self.Present() && by == self` and `laneHeldForeign` otherwise (`internal/cli/claims_takeover.go`) — the `self.Present()` half is load-bearing, not a redundant guard: a checkout with no minted token has a zero `self`, and a zero `self` compared against a zero holder (the public checkout) would otherwise prove ownership of a lane this checkout never touched. So a lane the public checkout holds is always `laneHeldForeign` to every checkout, including one that has itself never minted a token; a lapsed one is `laneLapsed` to every checkout regardless, since a lapsed claim is matched against no identity at all.
 
-The `claims.Locked` row is the one a reader is likeliest to miss: an expired claim whose holder's worktree is locked is gated as a fresh hold, not waved through with a warning (`:103`).
+The `claims.Locked` row is the one a reader is likeliest to miss: an expired claim whose holder's worktree is locked is gated as a fresh hold, not waved through with a warning.
 
-Sealed int enum: `takeoverNone`, `takeoverStaleInformed`, `takeoverFreshConfirm` (`internal/cli/claims_takeover.go:27-33`). Pinned by `TestClassifyTakeover` (`internal/cli/claims_takeover_test.go:14-58`) across nine cases: the five base standings (`:20-24`), the three `Holder` sub-cases of a stale foreign claim — gone, present, and `claims.Locked` (`:42-48`) — and a stale locked lane that is ours (`:49-57`).
+Sealed int enum: `takeoverNone`, `takeoverStaleInformed`, `takeoverFreshConfirm` (`internal/cli/claims_takeover.go`). Pinned by `TestClassifyTakeover` (`internal/cli/claims_takeover_test.go`) across nine cases: the five base standings, the three `Holder` sub-cases of a stale foreign claim — gone, present, and `claims.Locked` — and a stale locked lane that is ours.
 
-**`authorizeStart(ctx, stdout, ap, issueID, prior, take)`** (`internal/cli/claims_takeover.go:141-163`):
-1. `ap.Store.GetRelationsByIDs(ctx, []string{issueID})` → `lane := model.LaneOf(prior, relations[issueID].Parent)` (`:142-146`).
-2. `gatherClaimContext` (`:147-150`).
-3. Dispatch on `classifyTakeover(cc.standings.Of(lane), cc.self)` (`:151`):
-   - `takeoverNone` → `return nil`; the happy path pays one extra evidence gather and nothing else (`:152-153`, rationale `:133-135`).
-   - `takeoverStaleInformed` → `printStaleProvenance` (`:154-155`).
-   - `takeoverFreshConfirm` → `confirmFreshTakeover` (`:156-157`).
-   - default (unreachable) → `fmt.Errorf("claims: %s has no recognized takeover requirement", issueID)` (`:158-161`).
+**`authorizeStart(ctx, stdout, ap, issueID, prior, take)`** (`internal/cli/claims_takeover.go`):
+1. `ap.Store.GetRelationsByIDs(ctx, []string{issueID})` → `lane := model.LaneOf(prior, relations[issueID].Parent)`.
+2. `gatherClaimContext`.
+3. Dispatch on `classifyTakeover(cc.standings.Of(lane), cc.self)`:
+   - `takeoverNone` → `return nil`; the happy path pays one extra evidence gather and nothing else (rationale).
+   - `takeoverStaleInformed` → `printStaleProvenance`.
+   - `takeoverFreshConfirm` → `confirmFreshTakeover`.
+   - default (unreachable) → `fmt.Errorf("claims: %s has no recognized takeover requirement", issueID)`.
 
-**`claimLineOrPanic`** reuses `formatClaimLine(cc, lane, time.Now())`; `ok == false` → error `claims: %s has a takeover requirement on %v but no claim line to show` (`internal/cli/claims_takeover.go:173-179`).
+**`claimLineOrPanic`** reuses `formatClaimLine(cc, lane, time.Now())`; `ok == false` → error `claims: %s has a takeover requirement on %v but no claim line to show` (`internal/cli/claims_takeover.go`).
 
-**`printStaleProvenance`** — proceeds unprompted and prints `"%s — check for unmerged branches or PRs on this lane before building on it\n"` (`internal/cli/claims_takeover.go:186-193`). Checking for unmerged branches or PRs is left to the taking agent; lit stays ignorant of git and the forge (`:181-185`).
+**`printStaleProvenance`** — proceeds unprompted and prints `"%s — check for unmerged branches or PRs on this lane before building on it\n"` (`internal/cli/claims_takeover.go`). Checking for unmerged branches or PRs is left to the taking agent; lit stays ignorant of git and the forge.
 
-**`confirmFreshTakeover(stdout, cc, lane, take)`** (`internal/cli/claims_takeover.go:204-227`):
-- **Non-interactive** (`!isTerminal(stdout)`, the same signal `openOrPrintWorkflowFile` uses — `internal/cli/workflows_edit.go:160`):
-  - `take == false` → **refusal**: `fmt.Errorf("%s — this lane is claimed and active; pass --take to confirm the takeover", line)` (`:210-212`).
-  - `take == true` → prints `"%s — taking over (--take)\n"` and proceeds (`:213-214`).
-- **Interactive**: prints `"%s\ntake over this lane? [y/N] "`, reads a line from `os.Stdin` via `bufio.NewReader(os.Stdin).ReadString('\n')` (`:216-219`). A read error other than `io.EOF` → `fmt.Errorf("read takeover confirmation: %w", err)` (`:220-222`). The answer is accepted iff `strings.HasPrefix(strings.ToLower(strings.TrimSpace(answer)), "y")`; otherwise → `fmt.Errorf("takeover declined")` (`:223-225`).
+**`confirmFreshTakeover(stdout, cc, lane, take)`** (`internal/cli/claims_takeover.go`):
+- **Non-interactive** (`!isTerminal(stdout)`, the same signal `openOrPrintWorkflowFile` uses — `internal/cli/workflows_edit.go`):
+  - `take == false` → **refusal**: `fmt.Errorf("%s — this lane is claimed and active; pass --take to confirm the takeover", line)`.
+  - `take == true` → prints `"%s — taking over (--take)\n"` and proceeds.
+- **Interactive**: prints `"%s\ntake over this lane? [y/N] "`, reads a line from `os.Stdin` via `bufio.NewReader(os.Stdin).ReadString('\n')`. A read error other than `io.EOF` → `fmt.Errorf("read takeover confirmation: %w", err)`. The answer is accepted iff `strings.HasPrefix(strings.ToLower(strings.TrimSpace(answer)), "y")`; otherwise → `fmt.Errorf("takeover declined")`.
 
-E2E, over two real clones and a real git remote (`internal/cli/claims_takeover_e2e_test.go:18-80`): alpha starts and pushes; bravo's `start` without `--take` fails with an error containing both `--take` and `claimed`; the same command with `--take` prints `"taking over"`; and starting the now-bravo-held lane again produces neither `"claimed"` nor `"--take"` in the output. Stale path (`:88-126`): with `freshness_window = "1ms"` and a 50 ms sleep, bravo's plain `start` succeeds and prints both `"check for unmerged branches or PRs"` and `"stale"`.
+E2E, over two real clones and a real git remote (`internal/cli/claims_takeover_e2e_test.go`): alpha starts and pushes; bravo's `start` without `--take` fails with an error containing both `--take` and `claimed`; the same command with `--take` prints `"taking over"`; and starting the now-bravo-held lane again produces neither `"claimed"` nor `"--take"` in the output. Stale path: with `freshness_window = "1ms"` and a 50 ms sleep, bravo's plain `start` succeeds and prints both `"check for unmerged branches or PRs"` and `"stale"`.
 
 ### 9.2 `lit next` — claim-aware routing (a read gate)
 
-Registered `app.AccessRead`; it performs no writes (`internal/cli/register.go:484-485`). Flags (`internal/cli/next.go:31-40`, plus the hidden `--by` identity fallback at `:60`): `--assignee`, `--type`, `--status` (`open|in_progress`), `--labels`, and `--all`, help string `"Ignore the focus scope and route over the whole queue"`. No `--limit`, no `--columns`. `--continue` is retired: `--continue` and `--continue=<x>` are wrapped at the parse boundary as an `UnsupportedError` carrying ``--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag`` (`internal/cli/flagset.go:138-141`).
+Registered `app.AccessRead`; it performs no writes (`internal/cli/register.go`). Flags (`internal/cli/next.go`, plus the hidden `--by` identity fallback): `--assignee`, `--type`, `--status` (`open|in_progress`), `--labels`, and `--all`, help string `"Ignore the focus scope and route over the whole queue"`. No `--limit`, no `--columns`. `--continue` is retired: `--continue` and `--continue=<x>` are wrapped at the parse boundary as an `UnsupportedError` carrying ``--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag`` (`internal/cli/flagset.go`).
 
-The leaf gathers rows, relation details and the focus scope, then the claim context, then routes: `routeNext(rows, details, cc.standings, cc.self, focus.scopeFor(*all))` (`internal/cli/next.go:75-88`). `focusScope.scopeFor(all)` returns the zero `focusScope` — the whole queue — when `--all` is set, so the flag picks a value and every stage after it stays unconditional (`internal/cli/ready_state.go:809-818`).
+The leaf gathers rows, relation details and the focus scope, then the claim context, then routes: `routeNext(rows, details, cc.standings, cc.self, focus.scopeFor(*all))` (`internal/cli/next.go`). `focusScope.scopeFor(all)` returns the zero `focusScope` — the whole queue — when `--all` is set, so the flag picks a value and every stage after it stays unconditional (`internal/cli/ready_state.go`).
 
-**`NextOutcome`** is a sealed sum (`internal/cli/next_route.go:26`, markers `:208-214`) — **seven** cases:
-- `ServedFromClaim{Row}` — a ready ticket in a lane this checkout already holds. Routing step 1; no new claim is established, so nothing is announced (`:28-30`).
-- `ResumedOwnWork{Row}` — a ticket already in flight in a lane this checkout holds, handed back to its holder. Routing step 1 for work that is started rather than startable; nothing is claimed and nothing is begun, so it reports a state rather than an act (`:32-40`).
-- `ServedFromEpicLane{Row, Lane model.LaneID}` — a pick from a different lane of the same epic this checkout already holds a lane in. Routing step 2. Two fields exactly: the epic is `Lane.Epic()`, and carrying it beside the lane would be two clocks for one fact (`:42-53`).
-- `ServedFromNewLane{Row, Lane model.LaneID}` — a ready ticket in a lane this checkout does **not** hold. **One** step produces it: the global pool (step 4). Step 1b once shared it and now has its own `ServedFromDependency`, because sharing this type left the renderer unable to tell the two picks apart (`links-next-output-4hor`). `Lane` is the `model.LaneID`, not its `String()`: stringifying here would throw away the discriminator the renderer needs to tell a lane worth naming from one that would only repeat the ticket (`:55-75`).
-- `ServedFromDependency{Row, Lane model.LaneID, Gates string}` — a ready ticket outside the lanes this checkout holds that gates one of this checkout's own blocked rows. **One** step produces it: routing step 1b. Starting it would establish a claim on a lane this checkout does not hold, as with `ServedFromNewLane`, which is why `Lane` is carried. `Gates` is the id of the blocked row the pick unblocks — open, in a lane this checkout holds — and is always set by construction: a dependency is only yielded because some in-scope row depends on it (`:80-104`).
-- `Exhausted{Epics []string, Blocked []rowReach}` — the checkout's own claimed epic(s) have open work with none of it reachable. Routing step 3 (`:106-121`).
-- `NoWork{Unreachable []rowReach}` — the global pool handed back nothing (`:191-206`).
+**`NextOutcome`** is a sealed sum (`internal/cli/next_route.go`, markers) — **seven** cases:
+- `ServedFromClaim{Row}` — a ready ticket in a lane this checkout already holds. Routing step 1; no new claim is established, so nothing is announced.
+- `ResumedOwnWork{Row}` — a ticket already in flight in a lane this checkout holds, handed back to its holder. Routing step 1 for work that is started rather than startable; nothing is claimed and nothing is begun, so it reports a state rather than an act.
+- `ServedFromEpicLane{Row, Lane model.LaneID}` — a pick from a different lane of the same epic this checkout already holds a lane in. Routing step 2. Two fields exactly: the epic is `Lane.Epic()`, and carrying it beside the lane would be two clocks for one fact.
+- `ServedFromNewLane{Row, Lane model.LaneID}` — a ready ticket in a lane this checkout does **not** hold. **One** step produces it: the global pool (step 4). Step 1b once shared it and now has its own `ServedFromDependency`, because sharing this type left the renderer unable to tell the two picks apart (`links-next-output-4hor`). `Lane` is the `model.LaneID`, not its `String()`: stringifying here would throw away the discriminator the renderer needs to tell a lane worth naming from one that would only repeat the ticket.
+- `ServedFromDependency{Row, Lane model.LaneID, Gates string}` — a ready ticket outside the lanes this checkout holds that gates one of this checkout's own blocked rows. **One** step produces it: routing step 1b. Starting it would establish a claim on a lane this checkout does not hold, as with `ServedFromNewLane`, which is why `Lane` is carried. `Gates` is the id of the blocked row the pick unblocks — open, in a lane this checkout holds — and is always set by construction: a dependency is only yielded because some in-scope row depends on it.
+- `Exhausted{Epics []string, Blocked []rowReach}` — the checkout's own claimed epic(s) have open work with none of it reachable. Routing step 3.
+- `NoWork{Unreachable []rowReach}` — the global pool handed back nothing.
 
-`Exhausted` and `NoWork` are themselves `error` implementations and travel outward **as themselves** rather than being rendered into a generic error, which is what keeps the exit-code and reason sinks reading the routing verdict instead of a copy that could drift (`:112-117`, `internal/cli/next.go:135-146`).
+`Exhausted` and `NoWork` are themselves `error` implementations and travel outward **as themselves** rather than being rendered into a generic error, which is what keeps the exit-code and reason sinks reading the routing verdict instead of a copy that could drift (`internal/cli/next.go`).
 
-**`capacityFor(row, standing, self) capacity`** — the admission rule; pure, total, no I/O (`internal/cli/next_route.go:265-287`). Four capacities: `routeAround` (not this checkout's to take right now), `serveWork`, `resumeWork`, `takeoverWork` (`:226-238`). It reads `readiness := ClassifyReadiness(row.Annotations)`, `relation := relationOf(standing, self)`, and `started := row.State() == model.StateInProgress`, with `abandoned := readiness.IsOrphaned() || relation == laneLapsed` and `takeable := (started && abandoned) || (!started && readiness.IsReady())` — an in-flight row is takeable when either clock says its holder is gone, since orphaning reads the row's last write by anyone and the lane reads its holder's last event. Evaluated top-down:
+**`capacityFor(row, standing, self) capacity`** — the admission rule; pure, total, no I/O (`internal/cli/next_route.go`). Four capacities: `routeAround` (not this checkout's to take right now), `serveWork`, `resumeWork`, `takeoverWork`. It reads `readiness := ClassifyReadiness(row.Annotations)`, `relation := relationOf(standing, self)`, and `started := row.State() == model.StateInProgress`, with `abandoned := readiness.IsOrphaned() || relation == laneLapsed` and `takeable := (started && abandoned) || (!started && readiness.IsReady())` — an in-flight row is takeable when either clock says its holder is gone, since orphaning reads the row's last write by anyone and the lane reads its holder's last event. Evaluated top-down:
 
 | # | condition | capacity |
 |---|---|---|
@@ -493,72 +493,72 @@ The leaf gathers rows, relation details and the focus scope, then the claim cont
 | 5 | `started`, or `relation == laneLapsed` | `takeoverWork` |
 | 6 | otherwise | `serveWork` |
 
-`laneLapsed` yields `takeoverWork`, and routing steps 2 and 4 both accept the set `{serveWork, takeoverWork}` — so a lapsed lane is a reachable bare `lit next` target whoever held it, this checkout included. `laneHeldForeign` — a lane another checkout holds fresh — is the one relation routed around on ownership alone. The `laneRelation` constants are at `internal/cli/claims_takeover.go:48-63`; `relationOf` at `:78-109`, where a `claims.Stale` standing whose `Holder == claims.Locked` is read as a live hold rather than `laneLapsed` (`:89-106`).
+`laneLapsed` yields `takeoverWork`, and routing steps 2 and 4 both accept the set `{serveWork, takeoverWork}` — so a lapsed lane is a reachable bare `lit next` target whoever held it, this checkout included. `laneHeldForeign` — a lane another checkout holds fresh — is the one relation routed around on ownership alone. The `laneRelation` constants are at `internal/cli/claims_takeover.go`; `relationOf`, where a `claims.Stale` standing whose `Holder == claims.Locked` is read as a live hold rather than `laneLapsed`.
 
-**`ownScope(standings, self) (map[model.LaneID]bool, map[string]bool)`** (`internal/cli/next_route.go:302-315`): every lane whose `relationOf(standing, self)` is `laneOurs`, plus each such lane's non-empty `Epic()`. It reads the **standings**, not the gathered rows — the rows are already narrowed by `--type/--labels/--assignee`, and deriving ownership from them let a display filter empty the set and drop the whole self-aware branch (`:292-301`).
+**`ownScope(standings, self) (map[model.LaneID]bool, map[string]bool)`** (`internal/cli/next_route.go`): every lane whose `relationOf(standing, self)` is `laneOurs`, plus each such lane's non-empty `Epic()`. It reads the **standings**, not the gathered rows — the rows are already narrowed by `--type/--labels/--assignee`, and deriving ownership from them let a display filter empty the set and drop the whole self-aware branch.
 
-**`routeNext(rows, details, standings, self, scope focusScope) NextOutcome`** — five parameters (`internal/cli/next_route.go:344-427`). Closures: `laneOf`, `verdict` (= `capacityFor`), `reachFor` (= `reachOf`), and `pickFrom(from, inScope, accept ...capacity)`, which keeps the first row of `from`, in the gather's composite-rank order, that sits in an admitted lane and carries one of the accepted verdicts (`:345-377`). `accept` is a **set**, never a preference order: composite rank is the only tiebreak routing applies, and ranking capacities against each other would pass over the backlog's #1 row, an orphan, for a lower-ranked leaf that needed no takeover (`:357-362`).
+**`routeNext(rows, details, standings, self, scope focusScope) NextOutcome`** — five parameters (`internal/cli/next_route.go`). Closures: `laneOf`, `verdict` (= `capacityFor`), `reachFor` (= `reachOf`), and `pickFrom(from, inScope, accept ...capacity)`, which keeps the first row of `from`, in the gather's composite-rank order, that sits in an admitted lane and carries one of the accepted verdicts. `accept` is a **set**, never a preference order: composite rank is the only tiebreak routing applies, and ranking capacities against each other would pass over the backlog's #1 row, an orphan, for a lower-ranked leaf that needed no takeover.
 
-Precedence, with `ownLanes, ownEpics := ownScope(standings, self)` and `mine := func(lane) bool { return ownLanes[lane] }` (`:379-380`). If `len(ownLanes) > 0`:
-1. **Step 1** — our own lanes, accepting `{serveWork, resumeWork}`, whichever the backlog ranks first. `resumeWork` → `ResumedOwnWork{Row}`; `serveWork` → `ServedFromClaim{Row}` (`:382-389`).
-2. **Step 1b** — `onPathDependency(rows, laneOf, mine, reachFor)`, a dependency outside our lanes that gates one of them → `ServedFromDependency{Row: dep, Lane: laneOf(dep), Gates: gates}`. It establishes a claim on a lane we do not hold, so it is announced as one, and `Gates` carries the blocked row it unblocks so the line can say what the pick is for (`:390-396`).
-3. **Step 2** — the rest of our epic, in lanes we do not already hold: predicate `lane.Epic() != "" && ownEpics[lane.Epic()] && !mine(lane)`, accepting `{serveWork, takeoverWork}` → `ServedFromEpicLane{Row, Lane}` (`:397-403`).
-4. **Step 3** — `Exhausted{Epics: slices.Sorted(maps.Keys(ownEpics)), Blocked: blockedRows(gatingDependencies(rows, laneOf, mine-or-ourEpic, reachFor))}` (`:405-410`). Loud, and never a hop: **exhaustion does not fall through to the global pool.**
+Precedence, with `ownLanes, ownEpics := ownScope(standings, self)` and `mine := func(lane) bool { return ownLanes[lane] }`. If `len(ownLanes) > 0`:
+1. **Step 1** — our own lanes, accepting `{serveWork, resumeWork}`, whichever the backlog ranks first. `resumeWork` → `ResumedOwnWork{Row}`; `serveWork` → `ServedFromClaim{Row}`.
+2. **Step 1b** — `onPathDependency(rows, laneOf, mine, reachFor)`, a dependency outside our lanes that gates one of them → `ServedFromDependency{Row: dep, Lane: laneOf(dep), Gates: gates}`. It establishes a claim on a lane we do not hold, so it is announced as one, and `Gates` carries the blocked row it unblocks so the line can say what the pick is for.
+3. **Step 2** — the rest of our epic, in lanes we do not already hold: predicate `lane.Epic() != "" && ownEpics[lane.Epic()] && !mine(lane)`, accepting `{serveWork, takeoverWork}` → `ServedFromEpicLane{Row, Lane}`.
+4. **Step 3** — `Exhausted{Epics: slices.Sorted(maps.Keys(ownEpics)), Blocked: blockedRows(gatingDependencies(rows, laneOf, mine-or-ourEpic, reachFor))}`. Loud, and never a hop: **exhaustion does not fall through to the global pool.**
 
-**Step 4** is reached only by a checkout holding no lanes, which starts there directly: `pool, offPath := scope.partition(rows)`, then `pickFrom(pool, <every lane>, serveWork, takeoverWork)` → `ServedFromNewLane{Row, Lane}`, else `NoWork{Unreachable: append(passedOver(pool, reachFor), withheldByScope(offPath)...)}` (`:413-426`). The scope-withheld rows travel into the diagnostic rather than vanishing, because "nothing is startable" and "nothing on your focus path is startable" are different answers (`:417-421`). `withheldByScope` stamps them `reachOffFocusPath` at the one place that applied the scope (`:429-440`); `passedOver` classifies every row the pool walk went through, all `routeAround` by construction (`:442-461`).
+**Step 4** is reached only by a checkout holding no lanes, which starts there directly: `pool, offPath := scope.partition(rows)`, then `pickFrom(pool, <every lane>, serveWork, takeoverWork)` → `ServedFromNewLane{Row, Lane}`, else `NoWork{Unreachable: append(passedOver(pool, reachFor), withheldByScope(offPath)...)}`. The scope-withheld rows travel into the diagnostic rather than vanishing, because "nothing is startable" and "nothing on your focus path is startable" are different answers. `withheldByScope` stamps them `reachOffFocusPath` at the one place that applied the scope; `passedOver` classifies every row the pool walk went through, all `routeAround` by construction.
 
-Steps 1-3 walk every gathered row; step 4 walks the focus-scoped pool. The row set is passed to `pickFrom` explicitly at each call so that difference stays visible (`:363-366`). The focus scope narrows step 4 and nothing else (`:331-338`).
+Steps 1-3 walk every gathered row; step 4 walks the focus-scoped pool. The row set is passed to `pickFrom` explicitly at each call so that difference stays visible. The focus scope narrows step 4 and nothing else.
 
-**`reachKind`** (`internal/cli/next_route.go:135-160`) is what one row is to this checkout right now — four classifications plus the pool walk's own, and a bound: `reachTakeable`, `reachHeldFresh`, `reachNotReady`, `reachOutOfView`, `reachOffFocusPath`, `reachKindCount`. A bool here read "takeable or not", so a row outside the run's filtered view, or one not startable itself, rendered as the one reason the message named: claimed by another checkout (`:123-134`). `rowReach{ID string; Row annotation.AnnotatedIssue; Kind reachKind}` (`:162-168`).
+**`reachKind`** (`internal/cli/next_route.go`) is what one row is to this checkout right now — four classifications plus the pool walk's own, and a bound: `reachTakeable`, `reachHeldFresh`, `reachNotReady`, `reachOutOfView`, `reachOffFocusPath`, `reachKindCount`. A bool here read "takeable or not", so a row outside the run's filtered view, or one not startable itself, rendered as the one reason the message named: claimed by another checkout. `rowReach{ID string; Row annotation.AnnotatedIssue; Kind reachKind}`.
 
-**`reachOf(row, gathered, standing, self)`** (`:179-189`): `!gathered` → `reachOutOfView`; `capacityFor(...) != routeAround` → `reachTakeable`; `relationOf(...) == laneHeldForeign` → `reachHeldFresh`; otherwise `reachNotReady`. Exhaustion asks it of the dependencies gating our scope; an empty global pool asks it of every row the walk went past (`:130-131`).
+**`reachOf(row, gathered, standing, self)`**: `!gathered` → `reachOutOfView`; `capacityFor(...) != routeAround` → `reachTakeable`; `relationOf(...) == laneHeldForeign` → `reachHeldFresh`; otherwise `reachNotReady`. Exhaustion asks it of the dependencies gating our scope; an empty global pool asks it of every row the walk went past.
 
-**`gatingDependencies`** (`:499-532`): the distinct open dependency ids, in rank order, gating the open rows whose lane `inScope` admits, each already carrying its `reachKind` and the id of the in-scope row it gates — the yielded `gatedDep` embeds `rowReach` and adds `Gates`. **`onPathDependency`** (`:547-554`) returns the first of those whose `Kind == reachTakeable`, together with that gated row's id. A same-lane gate never reaches here: it shares the blocked row's lane, so step 1 already served or resumed it (`:537-538`).
+**`gatingDependencies`**: the distinct open dependency ids, in rank order, gating the open rows whose lane `inScope` admits, each already carrying its `reachKind` and the id of the in-scope row it gates — the yielded `gatedDep` embeds `rowReach` and adds `Gates`. **`onPathDependency`** returns the first of those whose `Kind == reachTakeable`, together with that gated row's id. A same-lane gate never reaches here: it shares the blocked row's lane, so step 1 already served or resumed it.
 
-**`describeReach(rows, lead, notes)`** (`:639-653`) renders `"<lead><ids> (<note>)"` for each kind that has rows, joined by `"; "`, in `reachKind`'s declaration order. `nameIDs` names at most `maxNamedPerKind = 12` ids and states how many it left out (`:618-631`). `reachNotes` is `[reachKindCount]string`, indexed by the kind itself (`:585`).
+**`describeReach(rows, lead, notes)`** renders `"<lead><ids> (<note>)"` for each kind that has rows, joined by `"; "`, in `reachKind`'s declaration order. `nameIDs` names at most `maxNamedPerKind = 12` ids and states how many it left out. `reachNotes` is `[reachKindCount]string`, indexed by the kind itself.
 
-`exhaustedNotes` (`:599-604`), exact strings:
+`exhaustedNotes`, exact strings:
 - `reachTakeable`: ``on your path and yours to take — `lit start` it``
 - `reachHeldFresh`: `on your path but claimed by another checkout right now`
 - `reachNotReady`: ``on your path but not startable right now — `lit show` it``
 - `reachOutOfView`: ``on your path but outside this view — `lit show` it``
 
-`poolNotes` (`:605-609`), exact strings:
+`poolNotes`, exact strings:
 - `reachHeldFresh`: `in progress or claimed in a lane another checkout holds right now`
 - `reachNotReady`: `not startable — blocked by a dependency, or in flight and not abandoned`
 - `reachOffFocusPath`: ``off the focus path this run answered over — `lit next --all` to route over the whole queue``
 
-**`Exhausted.Error()`** (`:558-567`). `scope` is `fmt.Sprintf("epic(s) %s", strings.Join(o.Epics, ", "))` when epics are named, else `"your claimed lane(s)"`. The command is in **backticks** in both arms:
+**`Exhausted.Error()`**. `scope` is `fmt.Sprintf("epic(s) %s", strings.Join(o.Epics, ", "))` when epics are named, else `"your claimed lane(s)"`. The command is in **backticks** in both arms:
 - `len(o.Blocked) == 0`: ``no ready work in %s — nothing else is queued behind what's already in progress; picking up other work is a deliberate re-focus, not a bare `next` ``
 - otherwise: ``no ready work in %s — %s; picking up other work is a deliberate re-focus, not a bare `next` ``, the middle being `describeReach(o.Blocked, "blocked on ", exhaustedNotes)`.
 
-**`NoWork.Error()`** (`:665-681`):
+**`NoWork.Error()`**:
 - `len(o.Unreachable) == 0` → `no ready work`.
-- `o.withheld()` — any row of kind `reachOffFocusPath` (`:686-693`) → `no ready work on the focus path — the backlog is not empty, and each row below says why this run did not serve it: %s`.
+- `o.withheld()` — any row of kind `reachOffFocusPath` → `no ready work on the focus path — the backlog is not empty, and each row below says why this run did not serve it: %s`.
 - otherwise → `no ready work — the backlog is not empty, but nothing in it is startable here: %s`.
 
 The `%s` in both non-empty arms is `describeReach(o.Unreachable, "", poolNotes)`.
 
-**Exit code and reason.** `ExitNoWork = 6` (`internal/cli/exit.go:30`). **Both** `Exhausted` and `NoWork` map to it (`internal/cli/exit.go:116-128`): distinct from `ExitGeneric` because a caller looping `lit next` has to tell "stop, there is nothing for you" from "lit is broken", and under one code its only way to do that was to parse the English; not `ExitOK`, because for `lit next` 0 means "a ticket is on stdout", and exiting 0 with no row would hand the caller a success-shaped void (`internal/cli/exit.go:18-29`). Reasons: `scope_exhausted` for `Exhausted`, `no_ready_work` for `NoWork` (`internal/cli/error_output.go:105-118`).
+**Exit code and reason.** `ExitNoWork = 6` (`internal/cli/exit.go`). **Both** `Exhausted` and `NoWork` map to it (`internal/cli/exit.go`): distinct from `ExitGeneric` because a caller looping `lit next` has to tell "stop, there is nothing for you" from "lit is broken", and under one code its only way to do that was to parse the English; not `ExitOK`, because for `lit next` 0 means "a ticket is on stdout", and exiting 0 with no row would hand the caller a success-shaped void (`internal/cli/exit.go`). Reasons: `scope_exhausted` for `Exhausted`, `no_ready_work` for `NoWork` (`internal/cli/error_output.go`).
 
-**`startAdvice(row, lane, holder)`** (`internal/cli/next.go:259-272`) — the line every pick that would establish a claim prints above its row: what running `lit start` would lock, never what this command did. `lit next` claims nothing and starts nothing; the function was `claimAnnouncement` and the rename is the fix, an announcement reporting being the one thing a read-only command must not do (`internal/cli/next.go:106-110`, `:235-238`). `described, named := lane.Describe()`; exactly four sentences:
+**`startAdvice(row, lane, holder)`** (`internal/cli/next.go`) — the line every pick that would establish a claim prints above its row: what running `lit start` would lock, never what this command did. `lit next` claims nothing and starts nothing; the function was `claimAnnouncement` and the rename is the fix, an announcement reporting being the one thing a read-only command must not do (`internal/cli/next.go`). `described, named := lane.Describe()`; exactly four sentences:
 - in progress, lane not named: ``%s is in progress and %s — run `lit start %s` to take it over`` (Row.ID, state, Row.ID).
 - in progress, lane named: ``%s is in progress and %s — run `lit start %s` to take over %s`` (Row.ID, state, Row.ID, described).
 - not in progress, lane not named: ``run `lit start %s` to claim it`` (Row.ID).
 - not in progress, lane named: ``run `lit start %s` to claim %s`` (Row.ID, described).
 
-`state` is `inFlightState(holder)` (`internal/cli/next.go:175-183`): `claims.Locked` → `claimed by a locked worktree whose claim has gone stale`; `claims.Present` → `stale, though its holder's worktree is still on disk`; otherwise `abandoned`. `holder` is `expiredHolder(cc.standings.Of(lane))` — the `Stale` standing's `Holder`, and `claims.Unprovable` for every other standing (`internal/cli/claims_render.go:89-94`). The two verbs spell their sentences out separately rather than sharing one with the object substituted, because English puts the pronoun in different places: "claim it", but "take it over" (`internal/cli/next.go:253-258`).
+`state` is `inFlightState(holder)` (`internal/cli/next.go`): `claims.Locked` → `claimed by a locked worktree whose claim has gone stale`; `claims.Present` → `stale, though its holder's worktree is still on disk`; otherwise `abandoned`. `holder` is `expiredHolder(cc.standings.Of(lane))` — the `Stale` standing's `Holder`, and `claims.Unprovable` for every other standing (`internal/cli/claims_render.go`). The two verbs spell their sentences out separately rather than sharing one with the object substituted, because English puts the pronoun in different places: "claim it", but "take it over" (`internal/cli/next.go`).
 
-**`LaneID.Describe() (string, bool)`** (`internal/model/model.go:255-263`) — three cases:
-- solo lane → `("", false)`. A solo lane is the ticket that names it, so any phrase for it only repeats what the surrounding sentence already said (`:248-251`).
+**`LaneID.Describe() (string, bool)`** (`internal/model/model.go`) — three cases:
+- solo lane → `("", false)`. A solo lane is the ticket that names it, so any phrase for it only repeats what the surrounding sentence already said.
 - empty key → `(fmt.Sprintf("the default lane of epic %s", l.epic), true)`.
 - otherwise → `(fmt.Sprintf("lane %s of epic %s", l.key, l.epic), true)`.
 
-**`renderNextOutcome(w, outcome, details, cc)`** (`internal/cli/next.go:111-161`):
+**`renderNextOutcome(w, outcome, details, cc)`** (`internal/cli/next.go`):
 - `ServedFromClaim` → no announcement at all.
 - `ResumedOwnWork` → `resumeAdvice(o.Row, cc.actingAs)` + `"\n"`. Two sentences, chosen by
   whether the row carries an assignee that is not the identity running the command
-  (`internal/cli/next.go:228-233`). Both halves must be non-empty and differ, so an
+  (`internal/cli/next.go`). Both halves must be non-empty and differ, so an
   unassigned ticket and a command with no session identity both take the lane's own
   sentence: `"%s is already in progress in a lane you hold — continue where you left off"`
   (Row.ID). Otherwise: ``%s is in progress and assigned to %s, not to you — check that they have stopped before you continue it, or take other work from `lit backlog` ``
@@ -575,29 +575,29 @@ The `%s` in both non-empty arms is `describeReach(o.Unreachable, "", poolNotes)`
 - `Exhausted`, `NoWork` → returned as themselves; nothing printed.
 - default → `panic(fmt.Sprintf("renderNextOutcome: unhandled NextOutcome %T", outcome))`.
 
-For the five served cases the announcement is written only when non-empty, then `lane := model.LaneOf(row.Issue, details[row.ID].Parent)` and `printNextSummary(w, row, cc, lane)` (`internal/cli/ready_state.go:965`); finally `nextPulledOccasion(row.Issue)` is returned and dispatched to workflows (`internal/cli/next.go:151-160`, `:92`).
+For the five served cases the announcement is written only when non-empty, then `lane := model.LaneOf(row.Issue, details[row.ID].Parent)` and `printNextSummary(w, row, cc, lane)` (`internal/cli/ready_state.go`); finally `nextPulledOccasion(row.Issue)` is returned and dispatched to workflows (`internal/cli/next.go`).
 
 ### 9.3 `lit sync reconcile` — the contest report (a read gate on merge)
 
-`reportContestedLanes(ctx, stdout, ws, syncStore)` (`internal/cli/claims_contest_report.go:32-58`):
-- Builds a temporary `&app.App{Workspace: ws, Store: syncStore}` — note: **no `Stream`**, so `cc.self` is the zero Attribution for this call (`:33`, cf. `internal/cli/claims_context.go:106`).
-- `lanes := contestedLanes(cc.standings)`; if empty, returns nil silently (`:37-40`).
-- Header, verbatim: `contested: evidence from more than one checkout just met for these lanes —` (`:41`).
-- Per lane: `"  %s: %s\n"` with `lane` (via `LaneID.String()`) and `formatClaimLine(cc, lane, now)` where `now = time.Now()` taken once for the whole report (`:44-56`).
-- `ok == false` from `formatClaimLine` → error `contested lane %s reported no claim line — standings and rendering disagree` (`:46-52`).
+`reportContestedLanes(ctx, stdout, ws, syncStore)` (`internal/cli/claims_contest_report.go`):
+- Builds a temporary `&app.App{Workspace: ws, Store: syncStore}` — note: **no `Stream`**, so `cc.self` is the zero Attribution for this call (cf. `internal/cli/claims_context.go`).
+- `lanes := contestedLanes(cc.standings)`; if empty, returns nil silently.
+- Header, verbatim: `contested: evidence from more than one checkout just met for these lanes —`.
+- Per lane: `"  %s: %s\n"` with `lane` (via `LaneID.String()`) and `formatClaimLine(cc, lane, now)` where `now = time.Now()` taken once for the whole report.
+- `ok == false` from `formatClaimLine` → error `contested lane %s reported no claim line — standings and rendering disagree`.
 
-`contestedLanes(standings)` (`internal/cli/claims_contest_report.go:63-74`): every lane whose standing is `claims.Held` with `len(held.Contested) > 0`; returns a non-nil empty slice otherwise; sorted by `strings.Compare(a.String(), b.String())`. Pinned by `TestContestedLanesFiltersAndSorts` (Unclaimed, Stale, and uncontested Held all drop out; survivors sorted) (`internal/cli/claims_contest_report_test.go:14-37`) and `TestContestedLanesEmptyForNoContest` (`:43-51`).
+`contestedLanes(standings)` (`internal/cli/claims_contest_report.go`): every lane whose standing is `claims.Held` with `len(held.Contested) > 0`; returns a non-nil empty slice otherwise; sorted by `strings.Compare(a.String(), b.String())`. Pinned by `TestContestedLanesFiltersAndSorts` (Unclaimed, Stale, and uncontested Held all drop out; survivors sorted) (`internal/cli/claims_contest_report_test.go`) and `TestContestedLanesEmptyForNoContest`.
 
-**Call sites**: only two — after `storage.SyncReconcileLinearized` (`internal/cli/sync_reconcile_cmd.go:519`) and after `storage.SyncReconcileCombined` (`internal/cli/sync_reconcile_cmd.go:543`), the two states where histories actually merged (`internal/cli/sync_reconcile_cmd.go:441`). Not called for prose-pending, unrelated-histories, or not-diverged outcomes.
+**Call sites**: only two — after `storage.SyncReconcileLinearized` (`internal/cli/sync_reconcile_cmd.go`) and after `storage.SyncReconcileCombined` (`internal/cli/sync_reconcile_cmd.go`), the two states where histories actually merged (`internal/cli/sync_reconcile_cmd.go`). Not called for prose-pending, unrelated-histories, or not-diverged outcomes.
 
-E2E: two clones partition-start the same lane; `lit sync reconcile` on bravo prints output containing `"contested"` and the ticket id (`internal/cli/claims_contest_report_e2e_test.go:16-61`). Negative half: an ordinary reconcile with no shared lane never mentions `"contested"` (`:67-104`).
+E2E: two clones partition-start the same lane; `lit sync reconcile` on bravo prints output containing `"contested"` and the ticket id (`internal/cli/claims_contest_report_e2e_test.go`). Negative half: an ordinary reconcile with no shared lane never mentions `"contested"`.
 
 ### 9.4 Surfaces that render but do not gate
 
-- `lit backlog` — `printBacklogContext` prints the claim line, indented, after the `in_progress:` line and before `unblocks:` (`internal/cli/backlog.go:92-96`). `backlogView` is the only `workableView` preset (`internal/cli/workable.go:89-97`), and its render function is `printBacklogOutput(w, columns, issues, details, cc)` (`internal/cli/backlog.go:32`).
-- `printInlineDeps` — the shared epic/depends-on/claim/unblocks block used by `lit next`'s summary, printing the claim line between `depends on` and `unblocks` (`internal/cli/ready_state.go:1000-1020`). `printNextSummary` calls it after the issue's column line (`internal/cli/ready_state.go:965-970`).
+- `lit backlog` — `printBacklogContext` prints the claim line, indented, after the `in_progress:` line and before `unblocks:` (`internal/cli/backlog.go`). `backlogView` is the only `workableView` preset (`internal/cli/workable.go`), and its render function is `printBacklogOutput(w, columns, issues, details, cc)` (`internal/cli/backlog.go`).
+- `printInlineDeps` — the shared epic/depends-on/claim/unblocks block used by `lit next`'s summary, printing the claim line between `depends on` and `unblocks` (`internal/cli/ready_state.go`). `printNextSummary` calls it after the issue's column line (`internal/cli/ready_state.go`).
 
-No other command consults `claims.Standings`: the only readers of `cc.standings` / `cc.self` outside `internal/cli/claims_*.go` are `next.go:88` (routing) — everything else consumes `cc` only for rendering (`internal/cli/workable.go:54`, `internal/cli/backlog.go:32,72`, `internal/cli/ready_state.go:970,1014`).
+No other command consults `claims.Standings`: the only readers of `cc.standings` / `cc.self` outside `internal/cli/claims_*.go` are `next.go` (routing) — everything else consumes `cc` only for rendering (`internal/cli/workable.go`, `internal/cli/backlog.go`, `internal/cli/ready_state.go`).
 
 ---
 
@@ -605,40 +605,40 @@ No other command consults `claims.Standings`: the only readers of `cc.standings`
 
 ### 10.1 `formatClaimLine(cc, lane, now) (string, bool)`
 
-`internal/cli/claims_render.go:23-44`. Returns `("", false)` for anything that is not `Held` or `Stale` — an Unclaimed lane renders **no line at all**, not an empty or placeholder one (`:36-37`, rationale `:12-15`; pinned `internal/cli/claims_render_test.go:63-69`).
+`internal/cli/claims_render.go`. Returns `("", false)` for anything that is not `Held` or `Stale` — an Unclaimed lane renders **no line at all**, not an empty or placeholder one (rationale; pinned `internal/cli/claims_render_test.go`).
 
-- `Held` → `line = claimPrefix(tenure.By, holdFresh, cc)`; if `len(standing.Contested) > 0`, append `fmt.Sprintf(" · contested by %s", strings.Join(nameCheckouts(standing.Contested), ", "))` (`:27-32`).
-- `Stale` → `line = claimPrefix(tenure.By, holdKindOf(standing.Holder), cc)` — `holdKindOf` (`:71-76`) is `holdLocked` when the expired holder's worktree is locked, else `holdStale` (`:33-35`).
-- Then `parts := []string{line, humanizeCoarseDuration(now.Sub(tenure.LastActivity)) + " ago"}`; if `formatLaneProgress(cc.evidence.LaneProgress(lane))` is non-empty, append it; join with `" · "` (`:39-43`).
+- `Held` → `line = claimPrefix(tenure.By, holdFresh, cc)`; if `len(standing.Contested) > 0`, append `fmt.Sprintf(" · contested by %s", strings.Join(nameCheckouts(standing.Contested), ", "))`.
+- `Stale` → `line = claimPrefix(tenure.By, holdKindOf(standing.Holder), cc)` — `holdKindOf` is `holdLocked` when the expired holder's worktree is locked, else `holdStale`.
+- Then `parts := []string{line, humanizeCoarseDuration(now.Sub(tenure.LastActivity)) + " ago"}`; if `formatLaneProgress(cc.evidence.LaneProgress(lane))` is non-empty, append it; join with `" · "`.
 
-**Two tiers**: the dossier (holder badge, freshness, lane progress) comes entirely from `cc.evidence` and `cc.standings` — the shared, synced data — so it renders identically on any clone; the address renders only when `cc.addresses` resolves the holder to a live worktree **this machine** enumerated (`internal/cli/claims_render.go:16-22`).
+**Two tiers**: the dossier (holder badge, freshness, lane progress) comes entirely from `cc.evidence` and `cc.standings` — the shared, synced data — so it renders identically on any clone; the address renders only when `cc.addresses` resolves the holder to a live worktree **this machine** enumerated (`internal/cli/claims_render.go`).
 
 ### 10.2 `claimPrefix(by, kind, cc)`
 
-`kind` is a `holdKind` (`holdFresh`, `holdStale`, `holdLocked` — `internal/cli/claims_render.go:56-64`), not a bool — a bool could say fresh-or-not and nothing else, so a locked worktree had to borrow the word for a holder who left (links-claims-2wk2).
+`kind` is a `holdKind` (`holdFresh`, `holdStale`, `holdLocked` — `internal/cli/claims_render.go`), not a bool — a bool could say fresh-or-not and nothing else, so a locked worktree had to borrow the word for a holder who left (links-claims-2wk2).
 
-`claimPrefix` (`internal/cli/claims_render.go:102-111`):
+`claimPrefix` (`internal/cli/claims_render.go`):
 - If `cc.addresses[by]` resolves: `branch := checkout.Branch`; if empty, `branch = "detached HEAD"`; returns `fmt.Sprintf("claimed here%s: %s (%s)", claimTag(kind), checkout.Path, branch)`.
 - Otherwise: returns `fmt.Sprintf("claimed: %s (%s)", nameCheckout(by), holdState(by, kind))`.
-- `claimTag(kind)` (`:115-123`): `" (locked)"`, `" (stale)"`, or `""`.
-- `holdState(by, kind)` (`:141-151`): `"locked"`, `"stale"`, `"elsewhere"` (an identified `by`), or `"unaddressed"` — the public checkout, since `by` is the zero Attribution and neither of the first two conditions nor `by.Present()` holds.
-- A **stale** claim from a still-live local worktree still resolves to that worktree's address; `kind` controls only the label, never whether the address shows (pinned `internal/cli/claims_render_test.go:144-163`, expecting `claimed here (stale): ../links-wt-pgct (detached HEAD)`).
-- **The public checkout never renders `claimed here`, whoever is asking.** `by` is the zero Attribution and a live worktree's holder in `cc.addresses` is always an identified checkout, so the first branch above can never match it — an earlier version compared `by` against `cc.self` instead and misread that coincidence as proof of ownership, rendering `"claimed here: this checkout"` for a foreign lane on `lit sync`'s contested-lane report (whose `cc.self` is always the zero Attribution). Pinned by `TestFormatClaimLinePublicCheckoutIsNeverHere` (`internal/cli/claims_render_test.go:245-288`): `"claimed: the public checkout (unaddressed)"` for `Held`, `"claimed: the public checkout (stale)"` for `Stale`, in every row regardless of `cc.self`.
+- `claimTag(kind)`: `" (locked)"`, `" (stale)"`, or `""`.
+- `holdState(by, kind)`: `"locked"`, `"stale"`, `"elsewhere"` (an identified `by`), or `"unaddressed"` — the public checkout, since `by` is the zero Attribution and neither of the first two conditions nor `by.Present()` holds.
+- A **stale** claim from a still-live local worktree still resolves to that worktree's address; `kind` controls only the label, never whether the address shows (pinned `internal/cli/claims_render_test.go`, expecting `claimed here (stale): ../links-wt-pgct (detached HEAD)`).
+- **The public checkout never renders `claimed here`, whoever is asking.** `by` is the zero Attribution and a live worktree's holder in `cc.addresses` is always an identified checkout, so the first branch above can never match it — an earlier version compared `by` against `cc.self` instead and misread that coincidence as proof of ownership, rendering `"claimed here: this checkout"` for a foreign lane on `lit sync`'s contested-lane report (whose `cc.self` is always the zero Attribution). Pinned by `TestFormatClaimLinePublicCheckoutIsNeverHere` (`internal/cli/claims_render_test.go`): `"claimed: the public checkout (unaddressed)"` for `Held`, `"claimed: the public checkout (stale)"` for `Stale`, in every row regardless of `cc.self`.
 
 ### 10.3 `formatLaneProgress(progress)`
 
-`internal/cli/claims_render.go:158-166`:
+`internal/cli/claims_render.go`:
 - `Total == 0` → `""`.
 - `Active != nil` → `fmt.Sprintf("%s in progress, %d/%d done", progress.Active.ID, progress.Done, progress.Total)`.
 - else → `fmt.Sprintf("%d/%d done", progress.Done, progress.Total)`.
 
 ### 10.4 `nameCheckout` / `nameCheckouts`
 
-`internal/cli/claims_render.go:215-225`: an identified checkout is named `"stream " + <token, truncated to 8 chars>` (`labelLen = 8`) — a display nicety, not a privacy measure, since the full token is already opaque. The zero Attribution — the public checkout — is named the literal `"the public checkout"` instead of being routed through the token label: reading its empty stream through that path produced `"stream "` with nothing after it, an answer-shaped void. `nameCheckouts` (`:227-233`) maps a slice through `nameCheckout`, used for the contest suffix.
+`internal/cli/claims_render.go`: an identified checkout is named `"stream " + <token, truncated to 8 chars>` (`labelLen = 8`) — a display nicety, not a privacy measure, since the full token is already opaque. The zero Attribution — the public checkout — is named the literal `"the public checkout"` instead of being routed through the token label: reading its empty stream through that path produced `"stream "` with nothing after it, an answer-shaped void. `nameCheckouts` maps a slice through `nameCheckout`, used for the contest suffix.
 
 ### 10.5 `humanizeCoarseDuration`
 
-`internal/cli/output.go:451-462`, buckets:
+`internal/cli/output.go`, buckets:
 - `>= 48h` → `"%d days"` (`int(d/(24*time.Hour))`)
 - `>= 2h` → `"%d hours"` (`int(d/time.Hour)`)
 - `>= 2m` → `"%d minutes"` (`int(d/time.Minute)`)
@@ -646,32 +646,32 @@ No other command consults `claims.Standings`: the only readers of `cc.standings`
 
 ### 10.6 Rendering behavior pinned by test
 
-- Unclaimed renders no line at all (`internal/cli/claims_render_test.go:63-69`).
-- Dossier without any local address: line says `"elsewhere"`, carries `"1/2 done"`, names `"active-ticket in progress"`, and reads `"2 hours ago"` (`internal/cli/claims_render_test.go:76-99`).
-- With an address entry: `"claimed here: ../links-wt-pgct (links-claims-1ihf.11)"`; the same standing rendered without addresses must not carry the path and must say `"elsewhere"` (`internal/cli/claims_render_test.go:105-139`).
-- A stale claim from a still-live local worktree: `"claimed here (stale): ../links-wt-pgct (detached HEAD)"` (`internal/cli/claims_render_test.go:144-163`).
-- The public checkout, `Held` or `Stale`, whatever `cc.self` is asking: `"claimed: the public checkout (unaddressed)"` or `"claimed: the public checkout (stale)"`, never `"claimed here"` (`internal/cli/claims_render_test.go:245-288`).
-- Contested Held: line contains `"contested by " + nameCheckout(contestant)` (`internal/cli/claims_render_test.go:293-308`).
+- Unclaimed renders no line at all (`internal/cli/claims_render_test.go`).
+- Dossier without any local address: line says `"elsewhere"`, carries `"1/2 done"`, names `"active-ticket in progress"`, and reads `"2 hours ago"` (`internal/cli/claims_render_test.go`).
+- With an address entry: `"claimed here: ../links-wt-pgct (links-claims-1ihf.11)"`; the same standing rendered without addresses must not carry the path and must say `"elsewhere"` (`internal/cli/claims_render_test.go`).
+- A stale claim from a still-live local worktree: `"claimed here (stale): ../links-wt-pgct (detached HEAD)"` (`internal/cli/claims_render_test.go`).
+- The public checkout, `Held` or `Stale`, whatever `cc.self` is asking: `"claimed: the public checkout (unaddressed)"` or `"claimed: the public checkout (stale)"`, never `"claimed here"` (`internal/cli/claims_render_test.go`).
+- Contested Held: line contains `"contested by " + nameCheckout(contestant)` (`internal/cli/claims_render_test.go`).
 
 ---
 
 ## 11. Privacy invariants stated in code
 
-- Both halves of `Attribution` are opaque by mandate; nothing user-, host-, or path-shaped may travel there, because the database syncs to shared remotes; resolving a token to a physical checkout happens only on the machine that owns it (`internal/model/model.go:639-642`).
-- `StreamID` is deliberately meaningless — no directory name, hostname, or username material (`internal/workspace/stream.go:40-49`).
-- `--by`'s old `os.Getenv("USER")` default was removed as a documented-invariant violation; the fallback is `""` → the opaque `"unknown"` (`internal/cli/cli.go:1226-1230`).
-- `Checkout.Path` / `Checkout.Branch` stay on the local machine (`internal/workspace/checkouts.go:21-26`); `claimContext.addresses` never reaches the shared database and lives only for the process (`internal/cli/claims_context.go:30-32`).
-- A different clone of the same repository on the same machine carries a different workspace id, so this machine's enumeration never speaks to its claims (`internal/app/claims.go:21-24`).
+- Both halves of `Attribution` are opaque by mandate; nothing user-, host-, or path-shaped may travel there, because the database syncs to shared remotes; resolving a token to a physical checkout happens only on the machine that owns it (`internal/model/model.go`).
+- `StreamID` is deliberately meaningless — no directory name, hostname, or username material (`internal/workspace/stream.go`).
+- `--by`'s old `os.Getenv("USER")` default was removed as a documented-invariant violation; the fallback is `""` → the opaque `"unknown"` (`internal/cli/cli.go`).
+- `Checkout.Path` / `Checkout.Branch` stay on the local machine (`internal/workspace/checkouts.go`); `claimContext.addresses` never reaches the shared database and lives only for the process (`internal/cli/claims_context.go`).
+- A different clone of the same repository on the same machine carries a different workspace id, so this machine's enumeration never speaks to its claims (`internal/app/claims.go`).
 
 ---
 
 ## 12. End-to-end acceptance already proven in tests
 
-`TestDeletedCheckoutReleasesItsClaimHereAndAgesOutElsewhere` (`internal/app/claims_test.go:101-173`), driven against real git worktrees and the real store:
-1. A linked worktree opens `AccessWrite` (minting its token), creates an issue, and applies `model.Start{Assignee: "worker"}`; `lane = model.LaneOf(issue, nil)` (`:108-125`).
-2. The primary reads: `Derive(evidence, {Now: time.Now(), Window: 24h}, local).Of(lane)` is `Held` with `held.By.Stream() == workerToken` (`:129-144`).
-3. `git worktree remove --force` (`:146`).
-4. The primary's **very next** derivation over a freshly re-read evidence set reports `Unclaimed` — no waiting, no window lapse, no cleanup step (`:148-160`).
-5. A second clone (`workspaceID + "-a-different-clone"`, unrelated live tokens) derives the **same** evidence and still reports `Held` by the worker — it must age the claim out like any remote (`:164-172`).
+`TestDeletedCheckoutReleasesItsClaimHereAndAgesOutElsewhere` (`internal/app/claims_test.go`), driven against real git worktrees and the real store:
+1. A linked worktree opens `AccessWrite` (minting its token), creates an issue, and applies `model.Start{Assignee: "worker"}`; `lane = model.LaneOf(issue, nil)`.
+2. The primary reads: `Derive(evidence, {Now: time.Now(), Window: 24h}, local).Of(lane)` is `Held` with `held.By.Stream() == workerToken`.
+3. `git worktree remove --force`.
+4. The primary's **very next** derivation over a freshly re-read evidence set reports `Unclaimed` — no waiting, no window lapse, no cleanup step.
+5. A second clone (`workspaceID + "-a-different-clone"`, unrelated live tokens) derives the **same** evidence and still reports `Held` by the worker — it must age the claim out like any remote.
 
-`fresh()` in that suite is `claims.Freshness{Now: time.Now(), Window: 24 * time.Hour}` (`internal/app/claims_test.go:87-89`); the read path used is `ListIssues{IncludeArchived:true, IncludeDeleted:true}` + `GetRelationsByIDs` + `ListAllEvents` + `NewEvidence` (`internal/app/claims_test.go:57-85`).
+`fresh()` in that suite is `claims.Freshness{Now: time.Now(), Window: 24 * time.Hour}` (`internal/app/claims_test.go`); the read path used is `ListIssues{IncludeArchived:true, IncludeDeleted:true}` + `GetRelationsByIDs` + `ListAllEvents` + `NewEvidence` (`internal/app/claims_test.go`).

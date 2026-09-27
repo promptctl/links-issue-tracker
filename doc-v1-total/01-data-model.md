@@ -6,7 +6,7 @@ This document covers the records and the value vocabularies they use. Where a ru
 
 ## The Issue record
 
-An issue carries these persisted fields (`internal/model/model.go:80-111`):
+An issue carries these persisted fields (`internal/model/model.go`):
 
 | Field | Type | Notes |
 |---|---|---|
@@ -17,7 +17,7 @@ An issue carries these persisted fields (`internal/model/model.go:80-111`):
 | `priority` | int | `0` = normal, `1` = urgent; the only two values |
 | `issue_type` | string | `task`, `feature`, `bug`, `chore`, or `epic` |
 | `topic` | string | slug embedded in the ID; see [Identifiers](#identifiers) |
-| `assignee` | string | owner identity; orthogonal to status and preserved across every transition (`model.go:88-91`) |
+| `assignee` | string | owner identity; orthogonal to status and preserved across every transition (`model.go`) |
 | `rank` | string | fractional-index ordering key; `""` means unranked; see [Ranking](#ranking) |
 | `lane` | string | partitions an epic's children into parallel sequences; see [Lanes](#lanes) |
 | `labels` | []string | normalized lowercase; see [Labels](#labels) |
@@ -25,54 +25,54 @@ An issue carries these persisted fields (`internal/model/model.go:80-111`):
 | status fields | | `status`, `closed_at`, `resolution`, `redirect_target` — present on the wire only for non-epics; see [Status lifecycle](#the-status-lifecycle) |
 | retention fields | | `archived_at`, `deleted_at` — the wire encoding of the retention axis; see [Retention](#the-retention-axis) |
 
-There is no stored `progress` field; an epic's progress counts are computed (`model.go:571-577`).
+There is no stored `progress` field; an epic's progress counts are computed (`model.go`).
 
 ### Issue types
 
-Five types (`internal/model/issue_type.go:17-23`): `task`, `feature`, `bug`, `chore`, `epic`. Exactly one, `epic`, is a **container** (`issue_type.go:56-58`). Container-ness is decided by the type alone, never by whether the issue has children (`model.go:376-378`). Type parsing lowercases and trims; anything outside the five values is rejected (`issue_type.go:42-50`).
+Five types (`internal/model/issue_type.go`): `task`, `feature`, `bug`, `chore`, `epic`. Exactly one, `epic`, is a **container** (`issue_type.go`). Container-ness is decided by the type alone, never by whether the issue has children (`model.go`). Type parsing lowercases and trims; anything outside the five values is rejected (`issue_type.go`).
 
 Containers differ from leaves in three ways:
 
-1. **Derived state.** An epic's state is computed from its children: all children closed (and at least one child) → `closed`; any child in progress or closed → `in_progress`; otherwise → `open`. An epic with no children is `open` (`internal/model/lifecycle/all_of.go:17-27`). Progress is the field-wise sum of every non-container descendant's counts (`all_of.go:29-39`).
-2. **No direct transitions.** Applying any status action to an epic returns a typed `ContainerActionError` whose message varies with child progress — no children, all done, or N unfinished (`model.go:272-295, 310-324`).
-3. **No status on the wire.** A serialized epic carries no `status`, `closed_at`, `resolution`, or `redirect_target` keys (`model.go:516-526`), and JSON alone cannot reconstruct an epic's lifecycle — a decoded epic is marked pending until the store re-derives its state from children (`model.go:573-576`).
+1. **Derived state.** An epic's state is computed from its children: all children closed (and at least one child) → `closed`; any child in progress or closed → `in_progress`; otherwise → `open`. An epic with no children is `open` (`internal/model/lifecycle/all_of.go`). Progress is the field-wise sum of every non-container descendant's counts (`all_of.go`).
+2. **No direct transitions.** Applying any status action to an epic returns a typed `ContainerActionError` whose message varies with child progress — no children, all done, or N unfinished (`model.go`).
+3. **No status on the wire.** A serialized epic carries no `status`, `closed_at`, `resolution`, or `redirect_target` keys (`model.go`), and JSON alone cannot reconstruct an epic's lifecycle — a decoded epic is marked pending until the store re-derives its state from children (`model.go`).
 
 ### Priorities
 
-Two values (`internal/model/priority.go:18-21`): `0` (normal) and `1` (urgent). Both spellings — the number and the display word — come from one table, `priorityVocabulary` (`priority.go:35-41`), which every direction reads: `priorityEntry` resolves an int onto it (`:47-54`), `String` renders through it (`:125-128`), `ParsePriorityName` inverts it (`:112-120`), and `Priorities` lists it (`:69-75`). `CanonicalPriority` maps every other integer — negative or ≥2 — to normal (`priority.go:61-64`). Two strict gates share the domain and the refusal `errInvalidPriority` (`:87`): `ParsePriority(int)` for the import/bulk payloads (`:95-101`) and `ParsePriorityName(string)` for the `--priority` flag (`:112-120`), the latter accepting the word or the decimal and lowercasing/trimming first.
+Two values (`internal/model/priority.go`): `0` (normal) and `1` (urgent). Both spellings — the number and the display word — come from one table, `priorityVocabulary` (`priority.go`), which every direction reads: `priorityEntry` resolves an int onto it, `String` renders through it, `ParsePriorityName` inverts it, and `Priorities` lists it. `CanonicalPriority` maps every other integer — negative or ≥2 — to normal (`priority.go`). Two strict gates share the domain and the refusal `errInvalidPriority`: `ParsePriority(int)` for the import/bulk payloads and `ParsePriorityName(string)` for the `--priority` flag, the latter accepting the word or the decimal and lowercasing/trimming first.
 
 ## The status lifecycle
 
-A leaf issue's status is one of three states (`internal/model/lifecycle/lifecycle.go:20-24`):
+A leaf issue's status is one of three states (`internal/model/lifecycle/lifecycle.go`):
 
 - `open`
 - `in_progress`
 - `closed`
 
-State parsing lowercases, trims, and accepts `in-progress` as an alias for `in_progress` (`lifecycle.go:143-154`). Lenient boundaries (import, hydration, storage) default unparseable states to `open`; strict boundaries (CLI flags, query language) reject them (`lifecycle.go:156-166`).
+State parsing lowercases, trims, and accepts `in-progress` as an alias for `in_progress` (`lifecycle.go`). Lenient boundaries (import, hydration, storage) default unparseable states to `open`; strict boundaries (CLI flags, query language) reject them (`lifecycle.go`).
 
 ### Transition actions
 
-Eight named actions, split across two independent axes (`lifecycle.go:46-58`):
+Eight named actions, split across two independent axes (`lifecycle.go`):
 
 | Action | Axis | Effect |
 |---|---|---|
-| `start` | status | → `in_progress`; the only action that carries and rewrites the assignee (`action.go:44-49`) |
+| `start` | status | → `in_progress`; the only action that carries and rewrites the assignee (`action.go`) |
 | `done` | status | → `closed` with **no** resolution (the neutral success close) |
 | `close` | status | → `closed` with a mandatory outcome (resolution) |
-| `reopen` | status | → `open`; clears `closed_at`, resolution, and redirect target (`status_states.go:159-160`) |
+| `reopen` | status | → `open`; clears `closed_at`, resolution, and redirect target (`status_states.go`) |
 | `archive` | retention | live → archived |
 | `unarchive` | retention | archived → live |
 | `delete` | retention | live or archived → deleted |
 | `restore` | retention | deleted → live |
 
-Status transitions are **target-state**, not edge-guarded: an action names the destination state, and applying it from any state succeeds. There is no enforced precondition (e.g. `done` does not require `in_progress` — see the discrepancy note in `06-issue-commands.md`). Applying an action whose target equals the current state returns the issue unchanged — in particular, re-closing a closed issue preserves its existing resolution and `closed_at` rather than rewriting them (`status_states.go:148-152`). Transitioning into `closed` stamps `closed_at = now (UTC)` (`status_states.go:154-156`).
+Status transitions are **target-state**, not edge-guarded: an action names the destination state, and applying it from any state succeeds. There is no enforced precondition (e.g. `done` does not require `in_progress` — see the discrepancy note in `06-issue-commands.md`). Applying an action whose target equals the current state returns the issue unchanged — in particular, re-closing a closed issue preserves its existing resolution and `closed_at` rather than rewriting them (`status_states.go`). Transitioning into `closed` stamps `closed_at = now (UTC)` (`status_states.go`).
 
-The type system separates the two axes: retention actions are not status actions, so applying `archive` to the status machine is unrepresentable rather than checked (`action.go:23-42`).
+The type system separates the two axes: retention actions are not status actions, so applying `archive` to the status machine is unrepresentable rather than checked (`action.go`).
 
 ### Resolutions and redirects
 
-`close` requires an **outcome**; `done` records none. Four resolutions (`internal/model/lifecycle/resolution.go:22-27`):
+`close` requires an **outcome**; `done` records none. Four resolutions (`internal/model/lifecycle/resolution.go`):
 
 | Resolution | Kind | Payload |
 |---|---|---|
@@ -81,18 +81,18 @@ The type system separates the two axes: retention actions are not status actions
 | `obsolete` | terminal | none |
 | `wontfix` | terminal | none |
 
-A **redirect target** — the ticket the work went to instead — can exist only on a closed issue whose resolution is `duplicate` or `superseded`; the constructor drops a target supplied beside a terminal or absent resolution (`status_states.go:121-133`). Targets are normalized: trimmed, with blank collapsing to absent (`status_states.go:211-220`). At the type level a closed issue *may* lack `closed_at`, resolution, or (for redirecting closes) the target — legacy rows and field-wise merges can produce those — but every new `close` via the CLI requires an outcome, and new redirecting closes require a target (`status_states.go:78-94`).
+A **redirect target** — the ticket the work went to instead — can exist only on a closed issue whose resolution is `duplicate` or `superseded`; the constructor drops a target supplied beside a terminal or absent resolution (`status_states.go`). Targets are normalized: trimmed, with blank collapsing to absent (`status_states.go`). At the type level a closed issue *may* lack `closed_at`, resolution, or (for redirecting closes) the target — legacy rows and field-wise merges can produce those — but every new `close` via the CLI requires an outcome, and new redirecting closes require a target (`status_states.go`).
 
-Resolution parsing trims but does **not** lowercase (`resolution.go:47-54`), unlike state and type parsing.
+Resolution parsing trims but does **not** lowercase (`resolution.go`), unlike state and type parsing.
 
 ## The retention axis
 
-Retention is a second lifecycle axis, orthogonal to status: `live`, `archived`, or `deleted` (`internal/model/lifecycle/retention.go:19-35`). Archived-and-deleted simultaneously is unrepresentable. On the wire and in storage the axis is encoded as two nullable timestamps, `archived_at` and `deleted_at`; decoding gives deletion precedence, so a legacy row with both set reads as deleted (`retention.go:120-129`).
+Retention is a second lifecycle axis, orthogonal to status: `live`, `archived`, or `deleted` (`internal/model/lifecycle/retention.go`). Archived-and-deleted simultaneously is unrepresentable. On the wire and in storage the axis is encoded as two nullable timestamps, `archived_at` and `deleted_at`; decoding gives deletion precedence, so a legacy row with both set reads as deleted (`retention.go`).
 
 - **Archived**: hidden from default listings but still occupies rank space; reversible via `unarchive`.
 - **Deleted**: hidden from default listings and excluded from rank space; reversible via `restore`.
 
-The complete transition table (`retention.go:64-111`):
+The complete transition table (`retention.go`):
 
 | current \ action | archive | unarchive | delete | restore |
 |---|---|---|---|---|
@@ -100,52 +100,52 @@ The complete transition table (`retention.go:64-111`):
 | archived | error | → live | → deleted | error |
 | deleted | error | error | error | → live |
 
-Deleting an archived issue drops the archive stamp, so a later `restore` always lands on `live`, never back on `archived` (`retention.go:87-91`).
+Deleting an archived issue drops the archive stamp, so a later `restore` always lands on `live`, never back on `archived` (`retention.go`).
 
-An issue that is archived or deleted is **frozen**. The single program-wide definition of "still unfinished work" is `InPlay`: not frozen and not closed (`model.go:165-167`). Readiness gating and claim derivation both read this one predicate.
+An issue that is archived or deleted is **frozen**. The single program-wide definition of "still unfinished work" is `InPlay`: not frozen and not closed (`model.go`). Readiness gating and claim derivation both read this one predicate.
 
 ## Lanes
 
-A **lane** partitions an epic's children into parallel, rank-ordered sub-sequences: children in the same lane are sequenced by rank (an earlier open sibling blocks a later one — see readiness in `06-issue-commands.md`); children in different lanes proceed in parallel (`model.go:93-97`). The empty string is the default lane, so an epic that declares no lanes is one fully-sequential lane, not a special case.
+A **lane** partitions an epic's children into parallel, rank-ordered sub-sequences: children in the same lane are sequenced by rank (an earlier open sibling blocks a later one — see readiness in `06-issue-commands.md`); children in different lanes proceed in parallel (`model.go`). The empty string is the default lane, so an epic that declares no lanes is one fully-sequential lane, not a special case.
 
-Lane identity is `(epic, lane-string)` — the same lane spelling under two different epics is two different lanes. An issue with no parent, or whose parent is not a container, is a "lane of one" keyed by its own ID (`model.go:212-217`). Lanes render as `epic#lane` (the default lane as `epic#`), a solo lane as the bare issue ID (`model.go:228-233`). The lane is the unit a checkout can claim (see `08-claims-and-identity.md`).
+Lane identity is `(epic, lane-string)` — the same lane spelling under two different epics is two different lanes. An issue with no parent, or whose parent is not a container, is a "lane of one" keyed by its own ID (`model.go`). Lanes render as `epic#lane` (the default lane as `epic#`), a solo lane as the bare issue ID (`model.go`). The lane is the unit a checkout can claim (see `08-claims-and-identity.md`).
 
 ## Relations
 
-A relation is a typed directed edge between two issues: `src_id`, `dst_id`, `type`, `created_at`, `created_by` (`model.go:594-600`). Three types (`internal/model/relation_type.go:16-20`):
+A relation is a typed directed edge between two issues: `src_id`, `dst_id`, `type`, `created_at`, `created_by` (`model.go`). Three types (`internal/model/relation_type.go`):
 
 | Type | Directionality | Multiplicity |
 |---|---|---|
 | `blocks` | directed | many-to-many |
-| `parent-child` | directed | a child has at most one parent (`relation_type.go:54-56`) |
+| `parent-child` | directed | a child has at most one parent (`relation_type.go`) |
 | `related-to` | undirected | many-to-many |
 
 Two storage canonicalizations matter for anything reading rows directly:
 
-- `blocks` is stored **dependent → dependency** — the reverse of the human reading "X blocks Y". The swap is an involution, so the same conversion maps store order back to display order (`relation_type.go:35-45`).
-- `related-to`, being undirected, is stored with its endpoints sorted ascending (`relation_type.go:62-67`).
+- `blocks` is stored **dependent → dependency** — the reverse of the human reading "X blocks Y". The swap is an involution, so the same conversion maps store order back to display order (`relation_type.go`).
+- `related-to`, being undirected, is stored with its endpoints sorted ascending (`relation_type.go`).
 
-Relation-type parsing trims but does not lowercase (`relation_type.go:26-33`).
+Relation-type parsing trims but does not lowercase (`relation_type.go`).
 
 ## Comments
 
-`id`, `issue_id`, `body`, `created_at`, `created_by` (`model.go:602-608`). Flat — no threading, no edits recorded as separate records.
+`id`, `issue_id`, `body`, `created_at`, `created_by` (`model.go`). Flat — no threading, no edits recorded as separate records.
 
 ## Labels
 
-A label row is `(issue_id, name, created_at, created_by)` (`model.go:610-615`). Names are normalized to lowercase and trimmed; an empty result is rejected, and commas are forbidden because comma is the list separator on input surfaces (`internal/model/label.go:14-23`). There is no label registry — labels exist only as attachments to issues — and no label-rename operation exists anywhere in the store.
+A label row is `(issue_id, name, created_at, created_by)` (`model.go`). Names are normalized to lowercase and trimmed; an empty result is rejected, and commas are forbidden because comma is the list separator on input surfaces (`internal/model/label.go`). There is no label registry — labels exist only as attachments to issues — and no label-rename operation exists anywhere in the store.
 
 One label has behavioral meaning: `needs-design` makes an issue not-ready (see readiness in `06-issue-commands.md`).
 
 ## Events (history)
 
-Every mutation to an issue produces one **IssueEvent**: `id`, `issue_id`, `action` (the named transition verb for status/retention transitions, empty for plain field updates), `reason`, `actor`, `created_at`, `attribution`, and a list of field changes (`model.go:733-748`). Each **FieldChange** is `(field, from, to)` with both values stringified, so every field type lands in one schema shape (`model.go:617-625`). Per-field actions do not exist; one event covers all fields that moved together.
+Every mutation to an issue produces one **IssueEvent**: `id`, `issue_id`, `action` (the named transition verb for status/retention transitions, empty for plain field updates), `reason`, `actor`, `created_at`, `attribution`, and a list of field changes (`model.go`). Each **FieldChange** is `(field, from, to)` with both values stringified, so every field type lands in one schema shape (`model.go`). Per-field actions do not exist; one event covers all fields that moved together.
 
 ### Attribution
 
-Attribution answers "which checkout produced this event": an opaque pair of a per-checkout **stream token** and the per-store **workspace id** (`model.go:646-649`). It is the entire shared-data footprint of the claims feature — claims are derived from these stamps at read time and stored nowhere (see `08-claims-and-identity.md`).
+Attribution answers "which checkout produced this event": an opaque pair of a per-checkout **stream token** and the per-store **workspace id** (`model.go`). It is the entire shared-data footprint of the claims feature — claims are derived from these stamps at read time and stored nowhere (see `08-claims-and-identity.md`).
 
-Rules enforced at every boundary (`model.go:671-728`):
+Rules enforced at every boundary (`model.go`):
 
 - The pair is **complete or absent** — a stream without a workspace (or vice versa) collapses to unattributed, including when decoding JSON some other program wrote.
 - Both halves are opaque by mandate: nothing user-, host-, or path-shaped is ever carried, because the database syncs to shared remotes.
@@ -153,36 +153,36 @@ Rules enforced at every boundary (`model.go:671-728`):
 
 ## Identifiers
 
-Issue IDs have the shape `<prefix>-<topic>-<hash>` (`internal/issueid/generate.go:42-47`):
+Issue IDs have the shape `<prefix>-<topic>-<hash>` (`internal/issueid/generate.go`):
 
-- **prefix** — the workspace's configured slug, 3–12 chars after normalization; over-long input is truncated to 12 then re-trimmed of dashes (`slug.go:31-45`).
-- **topic** — a per-issue slug, 3–30 chars after normalization; over-long input is rejected, not truncated (`slug.go:47-59`).
+- **prefix** — the workspace's configured slug, 3–12 chars after normalization; over-long input is truncated to 12 then re-trimmed of dashes (`slug.go`).
+- **topic** — a per-issue slug, 3–30 chars after normalization; over-long input is rejected, not truncated (`slug.go`).
 - **hash** — lowercase base-36, adaptive length 3–8 chars.
 
-Slug normalization lowercases, passes `a-z0-9` through, collapses every other rune (including Unicode) into a single dash, and trims edge dashes (`slug.go:15-29`).
+Slug normalization lowercases, passes `a-z0-9` through, collapses every other rune (including Unicode) into a single dash, and trims edge dashes (`slug.go`).
 
-The hash is deterministic content addressing: SHA-256 over `topic|title|description|creator|createdAt.UnixNano()|nonce` (the prefix is *not* hashed), truncated and base-36-encoded to exactly the chosen length (`generate.go:42-47`). Hash length adapts to workspace size: the smallest length 3–8 whose birthday-bound collision probability stays ≤ 0.25 for the current issue count, clamping at 8 (`generate.go:22-36`). On collision, up to 10 nonces are tried (`generate.go:12-18`). Bytes map to characters with left-zero-padding and tail clamping (`generate.go:49-86`).
+The hash is deterministic content addressing: SHA-256 over `topic|title|description|creator|createdAt.UnixNano()|nonce` (the prefix is *not* hashed), truncated and base-36-encoded to exactly the chosen length (`generate.go`). Hash length adapts to workspace size: the smallest length 3–8 whose birthday-bound collision probability stays ≤ 0.25 for the current issue count, clamping at 8 (`generate.go`). On collision, up to 10 nonces are tried (`generate.go`). Bytes map to characters with left-zero-padding and tail clamping (`generate.go`).
 
 Children created under a parent may instead get sequential `parent.N` IDs (see the storage layer, `02-storage-contract.md`).
 
 ## Ranking
 
-Global ordering uses **lexicographic fractional indexing**: a rank is a string over the 62-character alphabet `0-9A-Za-z`, whose byte-wise string comparison *is* rank order (`internal/rank/rank.go:17-36`). Empty string means unranked and is never a stored rank value (`rank.go:53-63`).
+Global ordering uses **lexicographic fractional indexing**: a rank is a string over the 62-character alphabet `0-9A-Za-z`, whose byte-wise string comparison *is* rank order (`internal/rank/rank.go`). Empty string means unranked and is never a stored rank value (`rank.go`).
 
-- The first rank issued is `"V"` — the alphabet's midpoint (`rank.go:39-41`).
-- `Midpoint(a, b)` returns a string strictly between two ranks; either bound may be empty, meaning before-everything / after-everything, and both empty is the whole keyspace, whose midpoint is `"V"`, the initial rank (`rank.go:83-84`, `rank.go:85-143`). Between adjacent characters the result grows one character longer. It refuses, with `ErrNoRoom`, a pair whose ranks are equal once trailing zeros are removed (`"10"` and `"100"`, or an empty lower bound and an all-zero upper one): nothing sorts between such a pair except further zero-extensions of the lower bound (`rank.go:72-78`, `rank.go:98-100`).
-- `SpacedRanks(n)` pre-allocates n evenly-spaced, fixed-width ranks with a minimum gap of 16 code points between neighbors, sized to leave room for later midpoint insertion (`rank.go:153-231`).
-- Rank strings reaching **8 characters** trigger local smoothing over a window of **32** items (`rank.go:145-151`); the smoothing operation itself lives in the store (`03-store-schema.md`).
+- The first rank issued is `"V"` — the alphabet's midpoint (`rank.go`).
+- `Midpoint(a, b)` returns a string strictly between two ranks; either bound may be empty, meaning before-everything / after-everything, and both empty is the whole keyspace, whose midpoint is `"V"`, the initial rank (`rank.go`). Between adjacent characters the result grows one character longer. It refuses, with `ErrNoRoom`, a pair whose ranks are equal once trailing zeros are removed (`"10"` and `"100"`, or an empty lower bound and an all-zero upper one): nothing sorts between such a pair except further zero-extensions of the lower bound (`rank.go`).
+- `SpacedRanks(n)` pre-allocates n evenly-spaced, fixed-width ranks with a minimum gap of 16 code points between neighbors, sized to leave room for later midpoint insertion (`rank.go`).
+- Rank strings reaching **8 characters** trigger local smoothing over a window of **32** items (`rank.go`); the smoothing operation itself lives in the store (`03-store-schema.md`).
 
 ## Export format
 
-`Export` is the interchange shape for sync files, backups, and `lit export`: `version`, `workspace_id`, `exported_at`, plus arrays of issues, relations, comments, labels, and events (`model.go:770-779`). Current version is 2. Version 1 files carried a `history` array instead of `events`; the decoder converts each v1 history row into an event with a single `status` field-change and a deterministic content-derived ID (`evt-v1-` + 16 hex chars of SHA-256), so merging two v1 exports cannot mint duplicate IDs for different events (`model.go:781-851`). v2+ files' `history` arrays are ignored.
+`Export` is the interchange shape for sync files, backups, and `lit export`: `version`, `workspace_id`, `exported_at`, plus arrays of issues, relations, comments, labels, and events (`model.go`). Current version is 2. Version 1 files carried a `history` array instead of `events`; the decoder converts each v1 history row into an event with a single `status` field-change and a deterministic content-derived ID (`evt-v1-` + 16 hex chars of SHA-256), so merging two v1 exports cannot mint duplicate IDs for different events (`model.go`). v2+ files' `history` arrays are ignored.
 
 ## Serialization boundary rules
 
-Behaviors any reimplementation must preserve at the JSON boundary (`model.go:503-592`):
+Behaviors any reimplementation must preserve at the JSON boundary (`model.go`):
 
 - A leaf issue on the wire always carries `status`; a leaf without one fails to decode. An epic never carries status keys, and a decoded epic cannot be used for state reads until the store re-derives its lifecycle from children.
 - `archived_at`/`deleted_at` are projections of the retention axis (deletion wins on decode if both are present).
 - Unattributed events omit the `attribution` key entirely rather than writing an empty object.
-- In-memory, unhydrated lifecycle reads are programmer errors and panic; the JSON boundary and the action-dispatch path convert the same condition to errors instead (`model.go:142-149, 503-511`).
+- In-memory, unhydrated lifecycle reads are programmer errors and panic; the JSON boundary and the action-dispatch path convert the same condition to errors instead (`model.go`).
