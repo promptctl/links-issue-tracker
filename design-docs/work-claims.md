@@ -625,7 +625,8 @@ sidecar maps.
   in links-claims-1b0p was fixed: while every consumer read a stale claim of a
   checkout's own differently, the long window was armor against that
   inconsistency rather than a considered reading of when a claim goes cold.
-  With the defect gone, staleness means "no longer a claim: available to
+  With the defect gone, and the own-lane reading corrected in
+  links-claims-em7h, staleness means "no longer a claim: available to
   everyone with notice, the checkout that let it lapse included", and 6 hours
   of lane-wide silence — measured
   from the holder's last event anywhere in the lane, so finishing a ticket

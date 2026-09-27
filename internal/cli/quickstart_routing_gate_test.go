@@ -113,7 +113,7 @@ var laneRoutingTable = []laneRoutingCase{
 		name:     "a hold has lapsed — another checkout's, or our own",
 		standing: staleBy(otherAttribution),
 		want:     takeoverWork,
-		teaches:  "epic continuation admits stale lanes, \"stale claims included\"; \"only a stale claim makes it a bare `lit next` target — taking it transfers the lane to this checkout\"; and a fresh session routes back to its own lane only \"while the claim is live — six hours of lane-wide silence lapses it, and a lapsed claim is only the record that one existed: `lit next` then routes by rank, and the lane's work is offered like anyone else's, as a takeover with provenance\"",
+		teaches:  "epic continuation admits stale lanes, \"stale claims included\"; \"only a stale claim makes it a bare `lit next` target — taking it transfers the lane to this checkout\"; and a fresh session routes back to its own lane only \"while the claim is live — six hours without an event of its own anywhere in the lane lapses it, and a lapsed claim is only the record that one existed: `lit next` then routes by rank, and the lane's work is offered like anyone else's, as a takeover with provenance\"",
 	},
 }
 
