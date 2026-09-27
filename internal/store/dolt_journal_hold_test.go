@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dolthub/dolt/go/store/chunks"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -45,61 +46,27 @@ func chunkJournalPath(doltRoot string) string {
 	return filepath.Join(doltRoot, doltDatabaseName, ".dolt", "noms", chunks.JournalFileID)
 }
 
-// TestOpenForReadPendingMigrationUnderJournalHolder pins the classified
-// failure of the one interleaving the copy's journal hold cannot make safe
-// for readers: a read open that must MIGRATE while the hold is live resolves
-// its lazy engine into Dolt's permanent read-only fallback, and the pending
-// migration's DDL then fails. The failure must surface as the
-// retry-after-holder guidance (not the raw read-only line), and the same
-// open must succeed — applying the migration — once the holder releases.
-//
-// PROFILE FINDING (links-testperf-xxsx.4), for the next migration-test
-// author: at the production budget this test spent 29.2 of its 29.7s inside
-// the failing OpenForRead, and NOT where the epic's notes guessed. The
-// engine-open backoff (engineOpenRetryMaxElapsed) never engages — read opens
-// configure no BackOff, and Dolt's own journal-lock wait is 100ms before the
-// read-only fallback. Migration mechanics are also innocent: Open 0.4s,
-// DownTo 19ms, and the healing open applies the migration in 64ms. The whole
-// wait is retryTransientGCContention grinding its ~26s of sleeps against a
-// DOLT_COMMIT whose manifest-read-only failure classifies as transient GC
-// contention but cannot heal while the holder lives. That wait is correct in
-// production — a short-lived holder overlapping an open is absorbed, not
-// escalated — so the test shrinks transientRetryMaxAttempts rather than the
-// behavior: exhaustion is this premise's CERTAIN outcome, and the assertions
-// are about the exhausted error's shape, not the budget's size.
+// TestOpenForReadPendingMigrationUnderJournalHolder pins what a read open
+// does when it must bring the schema forward while the copy's journal hold
+// is live: it hands off to the write open, whose engine refuses Dolt's
+// read-only fallback and waits out the holder for the bounded
+// engineOpenRetryMaxElapsed — never applying DDL through a read engine that
+// resolved read-only under the hold. A holder that outlasts the budget
+// surfaces as the write open's contention refusal, and the same open
+// succeeds — applying the migration — once the holder releases. The budget
+// is shrunk because exhaustion is this premise's certain outcome; the
+// assertions are about the exhausted error's shape, not the budget's size.
 func TestOpenForReadPendingMigrationUnderJournalHolder(t *testing.T) {
 	// serial: no t.Parallel — rewrites the package-level
-	// transientRetryMaxAttempts budget.
-	prevAttempts := transientRetryMaxAttempts
-	transientRetryMaxAttempts = 2
-	t.Cleanup(func() { transientRetryMaxAttempts = prevAttempts })
+	// engineOpenRetryMaxElapsed budget.
+	prevBudget := engineOpenRetryMaxElapsed
+	engineOpenRetryMaxElapsed = 700 * time.Millisecond
+	t.Cleanup(func() { engineOpenRetryMaxElapsed = prevBudget })
 
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	st, err := Open(ctx, doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
-	versions, err := registryVersionsDescending()
-	if err != nil {
-		t.Fatalf("enumerate migration versions: %v", err)
-	}
-	if len(versions) < 2 {
-		t.Fatalf("registry has %d migrations; this test needs a next-lower version to land on", len(versions))
-	}
-	provider, err := newGooseProvider(st.db)
-	if err != nil {
-		t.Fatalf("newGooseProvider() error = %v", err)
-	}
-	// One migration behind: the exact state OpenForRead's auto-migrate exists
-	// to bring forward.
-	if _, err := provider.DownTo(ctx, versions[1]); err != nil {
-		t.Fatalf("DownTo(%d) error = %v", versions[1], err)
-	}
-	if err := st.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
-	}
+	openOneVersionBehind(t, ctx, doltRoot)
 
 	release, err := LockDoltJournalExclusive(ctx, doltRoot)
 	if err != nil {
@@ -109,11 +76,15 @@ func TestOpenForReadPendingMigrationUnderJournalHolder(t *testing.T) {
 	if err == nil {
 		_ = reader.Close()
 		_ = release()
-		t.Fatalf("OpenForRead() with a pending migration succeeded under the journal hold; the read-only engine cannot have applied DDL")
+		t.Fatalf("OpenForRead() with a pending migration succeeded under the journal hold; a read-only engine cannot have applied DDL")
 	}
-	if !strings.Contains(err.Error(), "pending schema migrations") {
+	if !errors.Is(err, ErrWorkspaceBusy) {
 		_ = release()
-		t.Fatalf("OpenForRead() error = %v; want the retry-after-holder migration guidance", err)
+		t.Fatalf("OpenForRead() error = %v; want the write open's ErrWorkspaceBusy contention refusal", err)
+	}
+	if !strings.Contains(err.Error(), "handed off to the write open") {
+		_ = release()
+		t.Fatalf("OpenForRead() error = %v; want it to say why a read needed the write open", err)
 	}
 	if err := release(); err != nil {
 		t.Fatalf("release journal lock: %v", err)

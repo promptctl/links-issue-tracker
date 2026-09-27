@@ -63,7 +63,7 @@ const (
 ```
 (`store.go`). Two values only. Semantics:
 - `engineWrite`: connector is given a `BackOff` (`store.go`), and `openStoreConnection` pings eagerly (`store.go`).
-- `engineRead`: no `BackOff`, no eager ping — the engine opens lazily at the first SQL statement (`store.go`, doc at `store.go`).
+- `engineRead`: no `BackOff`; `openStoreConnection` pings eagerly for both values (`store.go`), and a read engine's ping takes Dolt's read-only fallback past a held journal lock rather than waiting (doc at `store.go`).
 
 #### 1.3 `Store` struct — every field
 
@@ -181,21 +181,19 @@ Behavioral evidence:
    - `os.ErrNotExist` → the package sentinel `ErrWorkspaceNotInitialized` (`workspace_initialized.go`), whose text is unchanged: `repository not initialized with lit — run 'lit init' first`;
    - any other stat error → `stat database dir: %w`.
 4. `requireNoPendingAdopt` (`store.go`).
-5. `openStoreConnection(..., engineRead)` (`store.go`) — **lazy** engine, no ping.
+5. `openStoreConnection(..., engineRead)` (`store.go`) — pinged eagerly like a write engine.
 6. `s.releaseWorkspaceLock = release` (`store.go`).
-7. `s.withCommitLock(ctx, s.migrate)` (`store.go`). It does **not** call `EnsureDatabase` (comment `store.go`).
-8. On migrate failure: if `isManifestReadOnlyError(err)` (`commit_lock.go`), the error is re-wrapped as
-
-```
-fmt.Errorf("this read open needed to apply pending schema migrations, but another process (a snapshot copy or a live writer) is holding the store read-only; retry after it completes: %w", err)
-```
-(`store.go`). Then `s.db.Close()` (dropping `context.Canceled`), `s.releaseWorkspaceLock = nil`, return the error (`store.go`).
+7. `s.assessMigration(ctx)` (`migration_runner.go`) with **no** commit lock: classify, the schema-ahead baseline check, and applied-version content verification, all reads. On error: `s.Close()` (which releases the workspace hold) joined beside it (`store.go`).
+8. `assessment.needsWrite()` false (managed, at registry max, no content drift) → return the read store.
+9. Otherwise the read store is closed (`s.Close()`, releasing the workspace hold) and the call returns `Open(ctx, doltRootDir, workspaceID)` — the write open migrates under the commit lock (and normalizes the default branch, as every write open does) and serves the read; its failure is wrapped as `this read open found <assessment> and handed off to the write open to bring it forward: %w` (`store.go`). A read open never applies DDL itself.
 
 Behavioral evidence:
 - On a missing directory, `OpenForRead` errors and creates nothing — `<doltRoot>/links` still does not exist (`store_test.go`).
 - A read open beside a foreign journal-lock holder succeeds and serves reads (count = 1) via Dolt's read-only fallback (`engine_open_contract_test.go`; `dolt_journal_hold_test.go`).
 - A read open does not wait on a live write engine — it completes inside a 1-second context (`engine_serialization_test.go`).
-- A read open with a **pending migration** under a held journal lock fails with a message containing `"pending schema migrations"`, and the same open succeeds once the holder releases (`dolt_journal_hold_test.go`). The profile note at `dolt_journal_hold_test.go` records that read opens configure no BackOff and Dolt's own journal wait is 100 ms before the read-only fallback.
+- A read open under a held commit lock serves reads (count = 1) inside a 30-second context (`read_open_lock_free_test.go`).
+- A read open on a workspace one migration behind brings it to registry max through `Open` (`read_open_lock_free_test.go`); one whose applied-version content drifted (`lane`/`resolution` dropped) is repaired the same way (`read_open_lock_free_test.go`).
+- A read open with a **pending migration** under a held journal lock fails with `ErrWorkspaceBusy` (the write open's contention refusal, budget shrunk to 700 ms in the test), and the same open succeeds — applying the migration — once the holder releases (`dolt_journal_hold_test.go`).
 - A read open on a current schema creates no Dolt commit (`store_test.go`).
 - Under a held `LockDoltJournalExclusive`, a read open performs **no** journal crash-recovery I/O — the dirtied journal stays byte-identical; with the lock free the same open truncates it (`dolt_journal_hold_test.go`).
 - On an unreconcilable schema (`issues` with only an `id` column) `OpenForRead` fails with an error naming the missing `status` column (`store_test.go`).
@@ -221,10 +219,10 @@ The two pools run strictly sequentially — the explicit close of the first is t
 
 `store.go`:
 - `openDoltPool(doltRootDir, workspaceID, doltDatabaseName, access)` (`store.go`);
-- if `access == engineWrite`: `db.PingContext(ctx)`; on failure returns `errors.Join(wrapEngineOpenContention(err), db.Close())` (`store.go`);
+- `db.PingContext(ctx)` for both access values; on failure returns `errors.Join(wrapEngineOpenContention(err), db.Close())` (`store.go`);
 - builds the `Store` with the field assignments listed in §1.3 (`store.go`). `doltRootDir` is stored **unmodified**; only `commitLockPath` and `telemetryDir` clean it.
 
-Read engines stay lazy deliberately (`store.go`).
+A read engine's ping falls back to Dolt's read-only mode past a held journal lock rather than waiting; the fallback being permanent costs a reader nothing because a read open never applies DDL (`store.go`).
 
 #### 2.7 `newDoltConnector` / `openDoltPool`
 
@@ -5170,7 +5168,7 @@ Classification predicates:
   3. `acquireStoreLock(ctx, lockPath, true /*exclusive*/, 700, 100ms)`.
   4. On `ErrWorkspaceBusy`, wraps (preserving the sentinel):
      `another process is holding this workspace's Dolt store open (a background sync mirror or another lit command still running); retry: %w` (`workspace_lock.go`).
-- Engine-open interaction stated at `workspace_lock.go` and `internal/store/doc.go`: a **read** engine opens lazily at first SQL, attempts the journal lock for **100ms**, and falls back to Dolt's read-only mode; a **write** engine opens eagerly inside `openStoreConnection`, **refuses** the read-only fallback, and retries boundedly (`engineOpenRetryMaxElapsed`, 45s). A live write Store holds the journal lock for its entire lifetime.
+- Engine-open interaction stated at `workspace_lock.go` and `internal/store/doc.go`: a **read** engine opens eagerly inside `openStoreConnection`, attempts the journal lock for **100ms**, and falls back to Dolt's read-only mode; a **write** engine opens eagerly inside `openStoreConnection`, **refuses** the read-only fallback, and retries boundedly (`engineOpenRetryMaxElapsed`, 45s). A live write Store holds the journal lock for its entire lifetime.
 - `workspace_lock.go` records the one lifecycle write this hold does not stop: `journal.idx` is opened `O_RDWR` and truncated on every engine bootstrap with no can-write gate, so a snapshot copy can capture a torn index; Dolt's `corruptIndexRecovery` truncates it to zero and rebuilds from the journal on next open.
 
 ---

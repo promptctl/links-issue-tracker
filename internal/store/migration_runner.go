@@ -285,20 +285,69 @@ func (s *Store) migrate(ctx context.Context) error {
 	return nil
 }
 
-// runMigration replaces the legacy scattered reconcile. It classifies the
-// workspace once, snapshots before the first write, adopts a pre-goose
-// workspace if needed, then applies pending migrations one Dolt commit each.
+// migrationAssessment is what a workspace's live schema is relative to this
+// binary's registry, derived from reads alone: the classified phase and
+// version position, and the content drift (registry-declared columns the
+// live schema is missing for versions the goose log already claims) that a
+// write open repairs. It is the one fact both open paths act on — the write
+// open goes on to mutate under the commit lock, the read open decides whether
+// it may serve without one — so neither can classify the workspace by a rule
+// the other lacks. [LAW:one-source-of-truth]
+type migrationAssessment struct {
+	state migrationState
+	// drift is nil when every applied version's registered content is
+	// present on the live schema.
+	drift *VersionContentMismatchError
+}
+
+// needsWrite reports whether a migrate of this workspace would mutate it: a
+// fresh or pre-goose workspace, a managed one trailing the registry, or one
+// whose applied versions have drifted from their registered content. A read
+// open that observes false may serve without the commit lock; one that
+// observes true hands off to the write open. [LAW:one-source-of-truth] the
+// schema position and content that decide whether migrate writes are the
+// facts that decide whether the read open hands off, so a reader cannot
+// serve a schema migrate would have changed. (The write open's other
+// normalization, the default-branch rename, is not a schema fact and is not
+// assessed here.)
+func (a migrationAssessment) needsWrite() bool {
+	return a.drift != nil || a.state.willMutate()
+}
+
+// String names what the assessment found, for the read open's handoff error.
+func (a migrationAssessment) String() string {
+	switch {
+	case a.drift != nil:
+		return fmt.Sprintf("applied schema v%d missing registered content (%s)", a.drift.Version, strings.Join(a.drift.Missing, ", "))
+	case a.state.phase == phaseManaged:
+		return fmt.Sprintf("schema v%d behind this binary's v%d", a.state.appliedVersion, a.state.registryMaxVers)
+	case a.state.phase == phaseAdopt:
+		return "a pre-goose schema awaiting adoption"
+	default:
+		return "an empty schema awaiting its baseline"
+	}
+}
+
+// assessMigration classifies the workspace and verifies it with reads only:
+// no snapshot, no commit, no lock beyond the engine's own. It refuses a
+// workspace whose schema is ahead of this binary and missing the baseline
+// shape, and surfaces any error other than content drift, which it carries as
+// data for the caller to act on.
 //
-// [LAW:single-enforcer] One runner owns migration ordering and the snapshot/
-// commit boundary; goose is its only changeset registry and no other code
-// applies schema.
-// [LAW:dataflow-not-control-flow] The same classify -> snapshot -> adopt ->
-// apply sequence runs every Open; variability lives in the phase and the set
-// of pending versions, not in whether stages execute.
-func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
+// [LAW:no-silent-failure] The content verification runs for every
+// phaseManaged workspace, independent of willMutate — a version-content
+// mismatch on an already-applied version is invisible to goose bookkeeping
+// whether or not later migrations are pending, so a workspace with nothing
+// pending must still be checked (that is exactly the "reported as fully
+// migrated" failure this guards against). [LAW:single-enforcer] This is the
+// only call site for verifyAppliedVersionsMatchRegistry. Only phaseManaged
+// carries goose-recorded applied versions to check content for; phaseFresh
+// has none yet and phaseAdopt's pre-goose shape is verified by
+// verifyIssuesReconcilable/reconcileToBaseline instead.
+func (s *Store) assessMigration(ctx context.Context) (migrationAssessment, error) {
 	state, err := s.classifyMigrationState(ctx)
 	if err != nil {
-		return err
+		return migrationAssessment{}, err
 	}
 	// [LAW:types-are-the-program] A goose log recording a version above this
 	// binary's registry is not a recovery event. goose tolerates unknown-ahead
@@ -310,25 +359,47 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 	// destroy true "these migrations ran" information and leave the live schema
 	// ahead of a reset log, the landmine a later registry catch-up detonates.
 	if state.appliedVersion > state.registryMaxVers {
-		return s.refuseIfBaselineMissing(ctx, state)
+		if err := s.refuseIfBaselineMissing(ctx, state); err != nil {
+			return migrationAssessment{}, err
+		}
+		return migrationAssessment{state: state}, nil
 	}
-	// [LAW:no-silent-failure] Runs for every phaseManaged Open, independent of
-	// willMutate — a version-content mismatch on an already-applied version is
-	// invisible to goose bookkeeping whether or not later migrations are
-	// pending, so a workspace with nothing pending must still be checked (that
-	// is exactly the "reported as fully migrated" failure this guards
-	// against). [LAW:single-enforcer] This is the only call site for
-	// verifyAppliedVersionsMatchRegistry. Only phaseManaged carries
-	// goose-recorded applied versions to check content for; phaseFresh has
-	// none yet and phaseAdopt's pre-goose shape is verified by
-	// verifyIssuesReconcilable/reconcileToBaseline instead — the same
-	// discriminated-phase branching those two already use.
-	//
-	// A detected mismatch is no longer a terminal refusal: it is the signal to
-	// self-heal. Unlike ensureQuarantineTable's detect-then-recreate precedent
-	// (which only ever touches lit's own bookkeeping table, bounded to
-	// empty-or-refuse), this repair runs ALTER TABLE against user-owned tables
-	// (e.g. issues) automatically and unprompted — the same risk class
+	if state.phase != phaseManaged {
+		return migrationAssessment{state: state}, nil
+	}
+	err = s.verifyAppliedVersionsMatchRegistry(ctx, state.appliedVersion)
+	var mismatch *VersionContentMismatchError
+	switch {
+	case err == nil:
+		return migrationAssessment{state: state}, nil
+	case errors.As(err, &mismatch):
+		return migrationAssessment{state: state, drift: mismatch}, nil
+	default:
+		return migrationAssessment{}, err
+	}
+}
+
+// runMigration replaces the legacy scattered reconcile. It classifies the
+// workspace once, snapshots before the first write, adopts a pre-goose
+// workspace if needed, then applies pending migrations one Dolt commit each.
+//
+// [LAW:single-enforcer] One runner owns migration ordering and the snapshot/
+// commit boundary; goose is its only changeset registry and no other code
+// applies schema.
+// [LAW:dataflow-not-control-flow] The same assess -> repair -> snapshot ->
+// adopt -> apply sequence runs every Open; variability lives in the phase and
+// the set of pending versions, not in whether stages execute.
+func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
+	assessment, err := s.assessMigration(ctx)
+	if err != nil {
+		return err
+	}
+	state := assessment.state
+	// A detected content mismatch is not a terminal refusal: it is the signal
+	// to self-heal. Unlike ensureQuarantineTable's detect-then-recreate
+	// precedent (which only ever touches lit's own bookkeeping table, bounded
+	// to empty-or-refuse), this repair runs ALTER TABLE against user-owned
+	// tables (e.g. issues) automatically and unprompted — the same risk class
 	// applyPendingMigrations exists to protect against — so
 	// repairVersionContentDriftWithRollback gives it that same
 	// checkpoint-and-reset discipline rather than the bookkeeping-table
@@ -336,15 +407,9 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 	// by running lit — no operator SQL, ever. [LAW:no-silent-failure] A failure
 	// repairing (as opposed to detecting) still aborts Open loudly; only a
 	// clean repair is swallowed into a routine commit.
-	if state.phase == phaseManaged {
-		if err := s.verifyAppliedVersionsMatchRegistry(ctx, state.appliedVersion); err != nil {
-			var mismatch *VersionContentMismatchError
-			if !errors.As(err, &mismatch) {
-				return err
-			}
-			if err := s.repairVersionContentDriftWithRollback(ctx, state.appliedVersion, mismatch); err != nil {
-				return err
-			}
+	if assessment.drift != nil {
+		if err := s.repairVersionContentDriftWithRollback(ctx, state.appliedVersion, assessment.drift); err != nil {
+			return err
 		}
 	}
 	if !state.willMutate() {

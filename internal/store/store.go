@@ -209,31 +209,39 @@ func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (_
 		return nil, err
 	}
 	s.releaseWorkspaceLock = release
-	// Auto-migrate stale schemas so read paths don't fail on missing columns/tables.
-	// Unlike Open, this does NOT call EnsureDatabase — the DB must already exist.
-	if err = s.withCommitLock(ctx, s.migrate); err != nil {
-		// One interleaving reaches here with the raw read-only line: this open
-		// won the commit-lock race against a journal-lock holder (a snapshot
-		// copy takes LOCK, then commit), the lazy read engine resolved under
-		// that held LOCK into Dolt's permanent read-only fallback, and a
-		// pending migration's DDL then failed. No recovery inside this hold
-		// can succeed — a re-resolved engine meets the same held LOCK, and
-		// waiting the holder out here would hold commit against the declared
-		// LOCK-before-commit order — so the correct action is the caller's:
-		// release everything (below) and retry the open after the holder
-		// finishes. Classify with that guidance. [LAW:no-silent-failure] the
-		// failure stays loud; only its actionability changes.
-		if isManifestReadOnlyError(err) {
-			err = fmt.Errorf("this read open needed to apply pending schema migrations, but another process (a snapshot copy or a live writer) is holding the store read-only; retry after it completes: %w", err)
-		}
-		if closeErr := s.db.Close(); closeErr != nil && !errors.Is(closeErr, context.Canceled) {
-			err = errors.Join(err, closeErr)
-		}
-		s.releaseWorkspaceLock = nil
+	// The schema check is answered with reads and no commit lock: a read
+	// command that queued behind that lock waited out whichever writer held
+	// it — a 70ms mutation, or a receive holding the store across the
+	// network — for nothing it needed, since the read engine reads beside a
+	// live writer by design. [LAW:no-ambient-temporal-coupling] a reader's
+	// only wait is on its own engine; it has no wait edge to any lit lock.
+	// From here the Store owns the hold: Close releases it, and the deferred
+	// release above stands down.
+	success = true
+	assessment, err := s.assessMigration(ctx)
+	if err != nil {
+		return nil, errors.Join(err, s.Close())
+	}
+	if !assessment.needsWrite() {
+		return s, nil
+	}
+	// The schema trails this binary. A read never applies a migration — its
+	// engine may be Dolt's read-only fallback, which cannot run DDL — so the
+	// workspace is brought forward by the write open, the one migration
+	// boundary, and the read is served from the store that did it. The read
+	// engine closes first: a process never holds two engines on the path.
+	// [LAW:single-enforcer] one migrate, reached from both opens.
+	// [LAW:no-silent-failure] a write open that fails here names why a read
+	// command needed one, or its contention refusal reads as a read waiting
+	// on a store it should never wait for.
+	if err := s.Close(); err != nil {
 		return nil, err
 	}
-	success = true
-	return s, nil
+	writer, err := Open(ctx, doltRootDir, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("this read open found %s and handed off to the write open to bring it forward: %w", assessment, err)
+	}
+	return writer, nil
 }
 
 // AttributeTo names the checkout whose work this store is about to record, so
@@ -361,34 +369,28 @@ func (s *Store) Close() error {
 	return err
 }
 
-// openStoreConnection builds a Store whose WRITE engine is open, not lazy:
-// the ping forces the embedded engine — and with it the acquisition of Dolt's
-// own journal lock — to happen here, at store construction, before any commit
-// lock the store's user takes. Left lazy, a write store's first SQL was
-// migrate, inside withCommitLock, which acquired the journal lock in the
-// inverted commit→LOCK order the discipline in this package's doc (doc.go)
-// forbids. [LAW:no-ambient-temporal-coupling] a write engine's (and journal
-// lock's) lifetime is the Store's lifetime by construction, not by whichever
-// query happens to run first.
+// openStoreConnection builds a Store whose engine is open, not lazy: the
+// ping forces the embedded engine — and with it the acquisition of Dolt's
+// own journal lock, or a read engine's fallback past it — to happen here, at
+// store construction, before any commit lock the store's user takes. Left
+// lazy, a write store's first SQL was migrate, inside withCommitLock, which
+// acquired the journal lock in the inverted commit→LOCK order the discipline
+// in this package's doc (doc.go) forbids. [LAW:no-ambient-temporal-coupling]
+// an engine's (and journal lock's) lifetime is the Store's lifetime by
+// construction, not by whichever query happens to run first.
 //
-// Read engines stay lazy, and that is the engineAccess enum's one branch
-// doing its job, not an optimization: a read open never waits on the journal
-// lock (a 100ms attempt, then Dolt's read-only fallback), so it contributes
-// no wait edge to the ordering — and the fallback, once taken, is permanent
-// for the engine's lifetime. An eager read ping under a transient holder (a
-// snapshot copy's walk) would mint that permanent read-only engine BEFORE
-// the commit-lock wait, and OpenForRead's auto-migrate would then fail
-// against it; opened lazily, the first SQL runs after the wait, the holder
-// is gone, and the engine comes up write-capable.
+// A read engine's ping cannot wait on the journal lock (a 100ms attempt, then
+// Dolt's read-only fallback), so it contributes no wait edge to the ordering;
+// and the fallback being permanent for the engine's lifetime costs a reader
+// nothing, because a read open never applies DDL — one that finds the schema
+// trailing hands off to Open (see OpenForRead).
 func openStoreConnection(ctx context.Context, doltRootDir string, workspaceID string, access engineAccess) (*Store, error) {
 	db, err := openDoltPool(doltRootDir, workspaceID, doltDatabaseName, access)
 	if err != nil {
 		return nil, err
 	}
-	if access == engineWrite {
-		if err := db.PingContext(ctx); err != nil {
-			return nil, errors.Join(wrapEngineOpenContention(err), db.Close())
-		}
+	if err := db.PingContext(ctx); err != nil {
+		return nil, errors.Join(wrapEngineOpenContention(err), db.Close())
 	}
 	return &Store{
 		db:          db,

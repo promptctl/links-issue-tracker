@@ -48,12 +48,12 @@
 // engine opens eagerly inside openStoreConnection — before any commit lock
 // — and refuses Dolt's read-only fallback, retrying its open boundedly, so
 // a live write Store stands at "holds LOCK, takes commit per mutation" for
-// its whole lifetime. A read engine opens lazily at first SQL and never
-// waits on LOCK (a 100ms attempt, then the read-only fallback), so it
-// contributes no wait edge wherever it opens — and the laziness is
-// deliberate: a reader that opened eagerly under a transient holder would
-// be permanently read-only, while a lazy one opens after any commit-lock
-// wait, holder gone, write-capable for auto-migration. lit acquires it
+// its whole lifetime. A read engine opens eagerly too and never waits on
+// LOCK (a 100ms attempt, then the read-only fallback), so it contributes no
+// wait edge anywhere — and a read Store takes no commit lock at all: its
+// schema check is answered with reads, and a workspace whose schema trails
+// the binary is handed to Open, so a reader never applies DDL and the
+// permanent read-only fallback costs it nothing. lit acquires it
 // without an engine in exactly two ways: LockDoltJournalExclusive, taken by
 // a file-by-file copy of the Dolt directory (the snapshot copy and the
 // on-change mirror's clone) that must exclude engine-lifecycle I/O without
