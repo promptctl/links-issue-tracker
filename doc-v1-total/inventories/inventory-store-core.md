@@ -5244,6 +5244,13 @@ A store that has never pushed trips nothing: no directories → nothing to delet
 
 `dirSize(root)` (`remotecache.go`) walks with `filepath.WalkDir` and sums `info.Size()` of non-directory entries.
 
+`(*Store).SyncRemoteMirrorHolds(ctx, remote, commits)` (`remotecache.go`) — no network:
+1. Empty `commits` → `(false, nil)`.
+2. `s.SyncListRemotes(ctx)`; a name not configured → `remote %q is not configured on this store`.
+3. `remoteCacheKey(url)`: parse error → the error; not git-backed → `(false, nil)`.
+4. `<remoteCacheBase>/<key>/repo.git` absent → `(false, nil)`; other stat failure → `stat git mirror of remote %q: %w`.
+5. `gitDirHoldsCommits`: one `git --git-dir <dir> cat-file --batch-check` over the commits, one per stdin line; git failing → `ask git mirror %s for %d commit(s): %w`; an answer count that differs from the input → `ask git mirror %s: %d answer(s) for %d commit(s): %q`; true only when every answer starts `<commit> commit `.
+
 #### 7.5 Outcome and reporting
 
 ```go
