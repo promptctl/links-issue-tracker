@@ -253,9 +253,15 @@ const (
 //
 // Takeability is where the state asymmetry lives. An OPEN row is takeable when
 // nothing blocks it. An IN-PROGRESS row is somebody's work in flight and stays
-// untouchable — whosever lane it sits in — until it is orphaned, the orphan
-// annotation being the proof that the claim asserting somebody is working it
-// is self-refuting.
+// untouchable — whosever lane it sits in — until the claim that somebody is
+// working it is refuted, and two facts refute it: the orphan annotation (the
+// row itself has gone quiet) and a lapsed lane (its holder has). Either alone
+// is the proof, because they run on different clocks — orphaning reads the
+// row's last write by anyone, the lane reads its holder's last event — and a
+// peer's field write on the row keeps it un-orphaned without saying a word
+// about whether the holder is still there. Requiring both let an in-flight
+// row in a lapsed lane vanish from `next` entirely: nobody's to resume, and
+// not yet takeable (links-claims-em7h).
 func capacityFor(row annotation.AnnotatedIssue, standing claims.Standing, self model.Attribution) capacity {
 	readiness := ClassifyReadiness(row.Annotations)
 	relation := relationOf(standing, self)
@@ -269,7 +275,8 @@ func capacityFor(row annotation.AnnotatedIssue, standing claims.Standing, self m
 		}
 		return routeAround
 	}
-	takeable := (started && readiness.IsOrphaned()) || (!started && readiness.IsReady())
+	abandoned := readiness.IsOrphaned() || relation == laneLapsed
+	takeable := (started && abandoned) || (!started && readiness.IsReady())
 	switch {
 	case !takeable, relation == laneHeldForeign:
 		return routeAround

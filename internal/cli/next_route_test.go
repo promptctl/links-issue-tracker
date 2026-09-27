@@ -450,11 +450,13 @@ func TestRouteNextTakesOverOrphanInForeignStaleLane(t *testing.T) {
 	}
 }
 
-// The other half of the same rule, and the reason admitting stale lanes is not
-// a general loosening: an in_progress row in a stale foreign lane that nobody
-// has abandoned is still somebody's work in flight. Only the orphan annotation
-// — the proof that the claim asserting somebody is working it is self-refuting
-// — makes it takeable.
+// The other half of the same rule: an in_progress row in a lane another
+// checkout holds fresh is somebody's work in flight, and it is left alone
+// whether or not the orphan clock has reached it. This test once built the
+// lane stale and asserted the same verdict, on the reading that only the
+// orphan annotation could make an in-flight row takeable; a lapsed lane is
+// now that proof on its own (TestRouteNextTakesOverUnorphanedInFlightRowInLapsedLane),
+// so the live hold is the case where "leave it" still holds.
 func TestRouteNextLeavesUnabandonedInFlightWorkAlone(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
@@ -465,7 +467,7 @@ func TestRouteNextLeavesUnabandonedInFlightWorkAlone(t *testing.T) {
 	c1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "C.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicC.ID})
 
 	rows, details := h.gather()
-	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, b1.ID)): staleBy(otherAttribution)}
+	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, b1.ID)): heldBy(otherAttribution)}
 
 	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
 	served, ok := outcome.(ServedFromNewLane)
@@ -473,7 +475,7 @@ func TestRouteNextLeavesUnabandonedInFlightWorkAlone(t *testing.T) {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane", outcome, outcome)
 	}
 	if served.Row.ID != c1.ID {
-		t.Fatalf("served = %q, want %q (B.1 is in flight and not orphaned — leave it)", served.Row.ID, c1.ID)
+		t.Fatalf("served = %q, want %q (B.1 is in flight in a lane held fresh — leave it)", served.Row.ID, c1.ID)
 	}
 }
 
@@ -948,6 +950,49 @@ func TestRouteNextTakesOverAnAbandonedOnPathDependency(t *testing.T) {
 	}
 	if served.Row.State() != model.StateInProgress {
 		t.Fatalf("served row state = %v, want in_progress — the point of this path is that step 1b admits a takeover", served.Row.State())
+	}
+}
+
+// The two clocks. Orphaning reads the row's last write by anyone; the lane's
+// freshness reads its holder's last event. A peer's field write on an
+// in-flight row keeps it un-orphaned while the holder's claim lapses
+// underneath it, and with the lane nobody's to resume and the row not yet
+// orphaned, the ticket vanished from `next` — served to nobody, named by no
+// diagnostic. A lapsed lane is itself the proof the holder is gone, so the row
+// is a takeover on that clock alone, whoever the lapsed holder was.
+func TestRouteNextTakesOverUnorphanedInFlightRowInLapsedLane(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		holder model.Attribution
+	}{
+		{"lapsed lane of our own", selfAttribution},
+		{"lapsed lane of another checkout", otherAttribution},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newReadyTestHarness(t)
+			epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+			a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 1, ParentID: epicA.ID})
+			h.transition(a1.ID, model.Start{Assignee: "tester"})
+
+			epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
+			b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 1, ParentID: epicB.ID})
+
+			rows, details := h.gather()
+			row := rowByID(t, rows, a1.ID)
+			if ClassifyReadiness(row.Annotations).IsOrphaned() {
+				t.Fatalf("fixture %q is orphaned; this test's premise is an in-flight row the orphan clock has NOT reached", a1.ID)
+			}
+			standings := claims.Standings{laneOf(t, details, row): staleBy(tc.holder)}
+
+			outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
+			served, ok := outcome.(ServedFromNewLane)
+			if !ok {
+				t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane taking over %q — never %q with %q served to nobody", outcome, outcome, a1.ID, b1.ID, a1.ID)
+			}
+			if served.Row.ID != a1.ID {
+				t.Fatalf("served = %q, want %q (in flight in a lapsed lane, and ranked first)", served.Row.ID, a1.ID)
+			}
+		})
 	}
 }
 

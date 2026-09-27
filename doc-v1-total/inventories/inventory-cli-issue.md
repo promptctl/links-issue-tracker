@@ -1082,28 +1082,28 @@ positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason 
 ### 2.11 `lit start` takeover gate
 
 `startSpec.authorize` → `authorizeStart(ctx, stdout, ap, issueID, prior, *take)`
-(`cli.go:1413-1418`, implementation `claims_takeover.go:132-154`):
+(`cli.go:1413-1418`, implementation `claims_takeover.go:141-163`):
 1. `GetRelationsByIDs([issueID])` and `model.LaneOf(prior, parent)`
-   (`claims_takeover.go:133-137`).
-2. `gatherClaimContext(ctx, stdout, ap)` (`claims_takeover.go:138-141`).
-3. `classifyTakeover(standing, self)` (`claims_takeover.go:110-119`), switching on `relationOf` rather than on the standing directly:
+   (`claims_takeover.go:142-146`).
+2. `gatherClaimContext(ctx, stdout, ap)` (`claims_takeover.go:147-150`).
+3. `classifyTakeover(standing, self)` (`claims_takeover.go:119-128`), switching on `relationOf` rather than on the standing directly:
    - `Held` by self, `Stale` by self, or `Unclaimed` → `takeoverNone` (no-op).
-   - `Stale` by another → `takeoverStaleInformed`, **except** when `s.Holder == claims.Locked`, which `relationOf` reports as `laneHeldForeign` (`:94`) and which therefore takes the `takeoverFreshConfirm` path below.
+   - `Stale` by another → `takeoverStaleInformed`, **except** when `s.Holder == claims.Locked`, which `relationOf` reports as `laneHeldForeign` (`:103`) and which therefore takes the `takeoverFreshConfirm` path below.
    - `Held` by another → `takeoverFreshConfirm`.
 4. **Stale, foreign**: prints
    `"<claim line> — check for unmerged branches or PRs on this lane before building on it\n"`
-   and proceeds (`printStaleProvenance`, `claims_takeover.go:177-184`).
-5. **Fresh, foreign** (`confirmFreshTakeover`, `claims_takeover.go:195-218`):
+   and proceeds (`printStaleProvenance`, `claims_takeover.go:186-193`).
+5. **Fresh, foreign** (`confirmFreshTakeover`, `claims_takeover.go:204-227`):
    - Non-interactive stdout (`!isTerminal(stdout)`) and no `--take` →
      `fmt.Errorf("<claim line> — this lane is claimed and active; pass --take to confirm the takeover")`
-     → exit 1 (`claims_takeover.go:200-202`).
+     → exit 1 (`claims_takeover.go:209-211`).
    - Non-interactive with `--take` → prints `"<claim line> — taking over (--take)\n"`
-     and proceeds (`claims_takeover.go:204-205`).
+     and proceeds (`claims_takeover.go:213-214`).
    - Interactive → prints `"<claim line>\ntake over this lane? [y/N] "`, reads a
      line from stdin; a read error other than EOF →
      `"read takeover confirmation: %w"`; an answer not starting with `y`
      (case-insensitive, trimmed) → `fmt.Errorf("takeover declined")` → exit 1
-     (`claims_takeover.go:207-216`).
+     (`claims_takeover.go:216-225`).
 
 Claim line format — `formatClaimLine(cc, lane, now)` (`claims_render.go:23-44`):
 returns `false` (no line) for an `Unclaimed` lane. Otherwise
@@ -1263,21 +1263,21 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
 | `NoWork` | `Unreachable []rowReach` | the global pool produced nothing — step 4 (`next_route.go:206`) |
 
 `Exhausted` and `NoWork` implement `error` and travel outward as themselves
-rather than being rendered into a generic error (`next_route.go:551`,
-`next_route.go:658`).
+rather than being rendered into a generic error (`next_route.go:558`,
+`next_route.go:665`).
 
 **Admission** — `capacityFor(row, standing, self) capacity`
-(`next_route.go:259-280`) is the single eligibility verdict. The four capacities
+(`next_route.go:265-287`) is the single eligibility verdict. The four capacities
 are `routeAround`, `serveWork`, `resumeWork`, `takeoverWork`
 (`next_route.go:226-238`). With `readiness = ClassifyReadiness(row.Annotations)`,
-`relation = relationOf(standing, self)` (`claims_takeover.go:68-101` —
+`relation = relationOf(standing, self)` (`claims_takeover.go:78-109` —
 `laneOurs` requires `self.Present() && standing.By == self`, so a checkout with
 no minted token never reads a lane as its own, even one the public checkout
 itself holds), and `started = row.State() == model.StateInProgress`:
 
 1. `relation == laneOurs`: `started` → `resumeWork`; else `readiness.IsReady()` →
    `serveWork`; else `routeAround`.
-2. Otherwise `takeable := (started && readiness.IsOrphaned()) || (!started && readiness.IsReady())`,
+2. Otherwise `abandoned := readiness.IsOrphaned() || relation == laneLapsed` and `takeable := (started && abandoned) || (!started && readiness.IsReady())`,
    then: `!takeable` **or** `relation == laneHeldForeign` → `routeAround`;
    `started` **or** `relation == laneLapsed` → `takeoverWork`; else
    `serveWork`.
@@ -1289,38 +1289,38 @@ worktree as a live hold, matched against the caller like a fresh one
 (`claims_takeover.go:48-63`, `claims_takeover.go:103-105`). Servability is not gated on `model.StateOpen`.
 
 **Routing precedence** — `routeNext(rows, details, standings, self, scope focusScope)`
-(`next_route.go:337`). `rows` are already in composite-rank order (§1.18).
+(`next_route.go:344`). `rows` are already in composite-rank order (§1.18).
 `laneOf(row) = model.LaneOf(row.Issue, details[row.ID].Parent)`
-(`next_route.go:338-340`);
+(`next_route.go:345-347`);
 `verdict(row) = capacityFor(row, standings.Of(laneOf(row)), self)`
-(`next_route.go:341-343`);
+(`next_route.go:348-350`);
 `reachFor(row, gathered) = reachOf(row, gathered, standings.Of(laneOf(row)), self)`
-(`next_route.go:344-346`).
+(`next_route.go:351-353`).
 `pickFrom(from, inScope, accept ...capacity)` keeps the first row of `from`, in
 rank order, whose lane `inScope` admits and whose verdict is in `accept`
-(`next_route.go:360-367`); `pick` is `pickFrom` over all `rows`
-(`next_route.go:368-370`). `accept` is a **set**, never a preference order —
-composite rank is the only tiebreak routing applies (`next_route.go:350-355`).
+(`next_route.go:367-374`); `pick` is `pickFrom` over all `rows`
+(`next_route.go:375-377`). `accept` is a **set**, never a preference order —
+composite rank is the only tiebreak routing applies (`next_route.go:357-362`).
 `ownScope(standings, self)` yields `ownLanes` and `ownEpics`, read from the
-**standings** and not from the gathered rows (`next_route.go:295-308`);
-`mine(lane) = ownLanes[lane]` (`next_route.go:373`).
+**standings** and not from the gathered rows (`next_route.go:302-315`);
+`mine(lane) = ownLanes[lane]` (`next_route.go:380`).
 
 If `len(ownLanes) > 0` (`next_route.go:374`):
 
 1. **Own lanes**, accepting `{serveWork, resumeWork}`, whichever the backlog ranks
-   first (`next_route.go:377-382`). `resumeWork` → **`ResumedOwnWork{Row}`**;
+   first (`next_route.go:384-389`). `resumeWork` → **`ResumedOwnWork{Row}`**;
    `serveWork` → **`ServedFromClaim{Row}`**.
    - 1b. Else `onPathDependency(rows, laneOf, mine, reachFor)` — the first
      dependency gating one of our own lanes whose `reachKind` is `reachTakeable`
-     (`next_route.go:540-547`), drawn from `gatingDependencies`, which collects
+     (`next_route.go:547-554`), drawn from `gatingDependencies`, which collects
      the distinct open dependency IDs of the in-scope **open** rows in rank order
-     and stamps each with `reachFor` (`next_route.go:492-525`) →
-     **`ServedFromDependency{Row: dep, Lane: laneOf(dep), Gates: gates}`** (`next_route.go:387-389`), the `Gates` being the blocked row the dependency gates.
+     and stamps each with `reachFor` (`next_route.go:499-532`) →
+     **`ServedFromDependency{Row: dep, Lane: laneOf(dep), Gates: gates}`** (`next_route.go:394-396`), the `Gates` being the blocked row the dependency gates.
 2. Else **the rest of our epic, in lanes we do not already hold** — predicate
    `lane.Epic() != "" && ownEpics[lane.Epic()] && !mine(lane)`, accepting
    `{serveWork, takeoverWork}` → **`ServedFromEpicLane{Row, Lane: laneOf(row)}`**
-   (`next_route.go:390-396`).
-3. Else → **`Exhausted{Epics, Blocked}`** (`next_route.go:398-403`), where `Epics`
+   (`next_route.go:397-403`).
+3. Else → **`Exhausted{Epics, Blocked}`** (`next_route.go:405-410`), where `Epics`
    is `slices.Sorted(maps.Keys(ownEpics))` and `Blocked` is `blockedRows` over
    `gatingDependencies` for the lanes admitted by
    `func(lane) bool { return mine(lane) || ourEpic(lane) }`; `blockedRows` drops
@@ -1331,17 +1331,17 @@ Step 4 is reached only by a checkout holding no lanes, which starts there
 directly:
 
 4. **The global pool, focus-scoped.** `pool, offPath := scope.partition(rows)`
-   (`next_route.go:415`, `ready_state.go:825-834`), then
+   (`next_route.go:422`, `ready_state.go:825-834`), then
    `pickFrom(pool, func(model.LaneID) bool { return true }, serveWork, takeoverWork)` →
-   **`ServedFromNewLane{Row, Lane: laneOf(row)}`** (`next_route.go:416-418`).
+   **`ServedFromNewLane{Row, Lane: laneOf(row)}`** (`next_route.go:423-425`).
    Else → **`NoWork{Unreachable: append(passedOver(pool, reachFor), withheldByScope(offPath)...)}`**
-   (`next_route.go:419`), where `passedOver` stamps every walked pool row with
-   `reachFor(row, true)` (`next_route.go:448-454`) and `withheldByScope` stamps
-   every scope-excluded row `reachOffFocusPath` (`next_route.go:427-433`).
+   (`next_route.go:426`), where `passedOver` stamps every walked pool row with
+   `reachFor(row, true)` (`next_route.go:455-461`) and `withheldByScope` stamps
+   every scope-excluded row `reachOffFocusPath` (`next_route.go:434-440`).
 
 Steps 1-3 walk every gathered row; step 4 walks the focus-scoped pool. The row
 set is passed to `pickFrom` explicitly at each step so that difference stays
-visible (`next_route.go:356-359`).
+visible (`next_route.go:363-366`).
 
 **`reachKind`** (`next_route.go:135-160`) — what one row is to this checkout right
 now: `reachTakeable`, `reachHeldFresh`, `reachNotReady`, `reachOutOfView`, plus
@@ -1353,31 +1353,31 @@ now: `reachTakeable`, `reachHeldFresh`, `reachNotReady`, `reachOutOfView`, plus
 (`next_route.go:179-189`). `rowReach{ID string, Row annotation.AnnotatedIssue, Kind reachKind}`
 (`next_route.go:164-168`) is what both terminal outcomes carry.
 
-`exhaustedNotes` (`next_route.go:592-597`):
+`exhaustedNotes` (`next_route.go:599-604`):
 - `reachTakeable`: ``"on your path and yours to take — `lit start` it"``
 - `reachHeldFresh`: `"on your path but claimed by another checkout right now"`
 - `reachNotReady`: ``"on your path but not startable right now — `lit show` it"``
 - `reachOutOfView`: ``"on your path but outside this view — `lit show` it"``
 
-`poolNotes` (`next_route.go:598-602`):
+`poolNotes` (`next_route.go:605-609`):
 - `reachHeldFresh`: `"in progress or claimed in a lane another checkout holds right now"`
 - `reachNotReady`: `"not startable — blocked by a dependency, or in flight and not abandoned"`
 - `reachOffFocusPath`: ``"off the focus path this run answered over — `lit next --all` to route over the whole queue"``
 
 `describeReach(rows, lead, notes)` renders `"<lead><ids> (<note>)"` for each kind
 that has rows, joined by `"; "`, in `reachKind` declaration order
-(`next_route.go:632-646`). `nameIDs` names at most `maxNamedPerKind = 12` ids and
-otherwise appends `" and <n> more"` (`next_route.go:611`, `next_route.go:617-624`).
+(`next_route.go:639-653`). `nameIDs` names at most `maxNamedPerKind = 12` ids and
+otherwise appends `" and <n> more"` (`next_route.go:618`, `next_route.go:624-631`).
 
-**Terminal messages.** `Exhausted.Error()` (`next_route.go:551-560`): `scope` is
+**Terminal messages.** `Exhausted.Error()` (`next_route.go:558-567`): `scope` is
 `"epic(s) <Epics joined by ", ">"` when `Epics` is non-empty, else
 `"your claimed lane(s)"`.
 - `Blocked` empty: ``"no ready work in <scope> — nothing else is queued behind what's already in progress; picking up other work is a deliberate re-focus, not a bare `next`"``
 - Otherwise: ``"no ready work in <scope> — <describeReach(Blocked, "blocked on ", exhaustedNotes)>; picking up other work is a deliberate re-focus, not a bare `next`"``
 
-`NoWork.Error()` (`next_route.go:658-674`):
+`NoWork.Error()` (`next_route.go:665-681`):
 - `Unreachable` empty: `"no ready work"`
-- Any row `reachOffFocusPath` (`NoWork.withheld()`, `next_route.go:679-686`):
+- Any row `reachOffFocusPath` (`NoWork.withheld()`, `next_route.go:686-693`):
   `"no ready work on the focus path — the backlog is not empty, and each row below says why this run did not serve it: <describeReach(Unreachable, "", poolNotes)>"`
 - Otherwise: `"no ready work — the backlog is not empty, but nothing in it is startable here: <describeReach(Unreachable, "", poolNotes)>"`
 
@@ -1886,7 +1886,7 @@ plus at most one positional topic.
    hold.** `backlog` renders claims as visibility only (`backlog.go:24-25`,
    `:92-96`); `next` routes by claim but never writes (`next_route.go:139-186`);
    `start` is the only gate (`cli.go:1461-1476`, `classifyTakeover` at
-   `claims_takeover.go:110-119`).
+   `claims_takeover.go:119-128`).
 7. **Three functions panic on unreachable states** and would abort the process:
    `ClassifyReadiness` on an unclassified annotation kind (`readiness.go:144`),
    `renderNextOutcome` on an unhandled outcome type (`next.go:149`),
