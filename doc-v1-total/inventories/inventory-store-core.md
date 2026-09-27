@@ -191,7 +191,7 @@ Behavioral evidence:
 - On a missing directory, `OpenForRead` errors and creates nothing — `<doltRoot>/links` still does not exist (`store_test.go`).
 - A read open beside a foreign journal-lock holder succeeds and serves reads (count = 1) via Dolt's read-only fallback (`engine_open_contract_test.go`; `dolt_journal_hold_test.go`).
 - A read open does not wait on a live write engine — it completes inside a 1-second context (`engine_serialization_test.go`).
-- A read open under a held commit lock serves reads (count = 1) inside a 5-second context (`read_open_lock_free_test.go`).
+- A read open under a held commit lock serves reads (count = 1) inside a 30-second context (`read_open_lock_free_test.go`).
 - A read open on a workspace one migration behind brings it to registry max through `Open` (`read_open_lock_free_test.go`); one whose applied-version content drifted (`lane`/`resolution` dropped) is repaired the same way (`read_open_lock_free_test.go`).
 - A read open with a **pending migration** under a held journal lock fails with `ErrWorkspaceBusy` (the write open's contention refusal, budget shrunk to 700 ms in the test), and the same open succeeds — applying the migration — once the holder releases (`dolt_journal_hold_test.go`).
 - A read open on a current schema creates no Dolt commit (`store_test.go`).
