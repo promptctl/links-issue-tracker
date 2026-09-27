@@ -712,6 +712,15 @@ func (s *Store) pushWithinLock(ctx context.Context, remote string, branch string
 	if trimmedBranch != "" {
 		args = append(args, fmt.Sprintf("HEAD:%s", trimmedBranch))
 	}
+	// HEAD is read BEFORE the push: the caller holds the commit lock, so HEAD
+	// cannot move between this read and the push, and a read that fails
+	// fails an attempt that has sent nothing. Read afterwards, a failure
+	// (the push landing just inside its deadline, the read just outside)
+	// would report a landed push as failed. [LAW:no-ambient-temporal-coupling]
+	head, err := s.headCommitWithinLock(ctx)
+	if err != nil {
+		return storage.SyncPushResult{}, err
+	}
 	query := buildProcedureCall("DOLT_PUSH", len(args))
 	var result storage.SyncPushResult
 	var message sql.NullString
@@ -726,10 +735,6 @@ func (s *Store) pushWithinLock(ctx context.Context, remote string, branch string
 		return storage.SyncPushResult{}, fmt.Errorf("push remote %q: %w", trimmedRemote, pushErr)
 	}
 	result.Message = nullStringValue(message)
-	head, err := s.headCommitWithinLock(ctx)
-	if err != nil {
-		return storage.SyncPushResult{}, err
-	}
 	result.Head = head
 	return result, nil
 }

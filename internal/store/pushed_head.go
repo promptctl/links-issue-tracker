@@ -173,18 +173,21 @@ func RecordPushedHead(ctx context.Context, doltRootDir string, remote string, br
 	if !ok {
 		return 0, fmt.Errorf("record pushed head %s: this store holds it only as a ghost commit", trimmedHead)
 	}
-	// CanFastForward answers three ways for an existing ref: (true, nil) when
+	// CanFastForward answers four ways for an existing ref: (true, nil) when
 	// the ref is a strict ancestor of head, ErrUpToDate when it IS head,
-	// ErrIsAhead when head is a strict ancestor of the ref; anything else is
-	// divergence. An absent ref answers (true, nil) — the first push.
+	// ErrIsAhead when head is a strict ancestor of the ref, and (false, nil)
+	// when the two share an ancestor that is neither — divergence. Any other
+	// error is the comparison itself failing (a cut hold, an I/O fault, no
+	// common ancestor) and says nothing about where the ref stands. An absent
+	// ref answers (true, nil) — the first push.
 	canMove, ffErr := ddb.CanFastForward(holdCtx, trackingRef, pushedCommit)
 	switch {
 	case errors.Is(ffErr, doltdb.ErrUpToDate), errors.Is(ffErr, doltdb.ErrIsAhead):
 		return PushedHeadCarried, nil
 	case ffErr != nil:
-		return 0, fmt.Errorf("record pushed head %s on remotes/%s/%s: the ref has diverged from the pushed head (the remote was rewritten under the clone); the next fetch settles it: %w", trimmedHead, trimmedRemote, trimmedBranch, ffErr)
+		return 0, fmt.Errorf("record pushed head %s on remotes/%s/%s: compare the ref with the pushed head: %w", trimmedHead, trimmedRemote, trimmedBranch, ffErr)
 	case !canMove:
-		return 0, fmt.Errorf("record pushed head %s on remotes/%s/%s: the ref cannot fast-forward to the pushed head", trimmedHead, trimmedRemote, trimmedBranch)
+		return 0, fmt.Errorf("record pushed head %s on remotes/%s/%s: the ref has diverged from the pushed head (the remote was rewritten under the clone); the next fetch settles it", trimmedHead, trimmedRemote, trimmedBranch)
 	}
 	if setErr := ddb.SetHead(holdCtx, trackingRef, hash.Parse(trimmedHead)); setErr != nil {
 		return 0, fmt.Errorf("record pushed head %s on remotes/%s/%s: %w", trimmedHead, trimmedRemote, trimmedBranch, setErr)

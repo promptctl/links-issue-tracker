@@ -131,9 +131,9 @@ Then, **after** the push and **outside** the commit lock (`sync.go`):
 1. `requireSyncArg("remote", remote)`; branch is only `strings.TrimSpace`d and **may be empty** (`sync.go`).
 2. If branch is non-empty, `s.guardRemoteSchemaAhead(ctx, remote, branch)` runs first (`sync.go`). An empty branch skips the guard entirely.
 3. Args built in order: `"--set-upstream"` if `setUpstream`, `"--force"` if `force`, then the remote, then `fmt.Sprintf("HEAD:%s", branch)` if branch non-empty (`sync.go`).
-4. `CALL DOLT_PUSH(...)` scanned into `(result.Status int64, message sql.NullString)` (`sync.go`). Error `"push remote %q: %w"`.
-5. `result.Message = nullStringValue(message)` — NULL→`""`, otherwise trimmed (`sync.go`).
-6. `result.Head` = `headCommitWithinLock` (`SELECT commit_hash FROM dolt_log() LIMIT 1`, trimmed; error `"read head commit: %w"`) (`sync.go`).
+4. `head` = `headCommitWithinLock` (`SELECT commit_hash FROM dolt_log() LIMIT 1`, trimmed; error `"read head commit: %w"`), read before the push so a failed read fails an attempt that has sent nothing (`sync.go`).
+5. `CALL DOLT_PUSH(...)` scanned into `(result.Status int64, message sql.NullString)` (`sync.go`). Error `"push remote %q: %w"`.
+6. `result.Message = nullStringValue(message)` — NULL→`""`, otherwise trimmed; `result.Head = head` (`sync.go`).
 
 `SyncPushFromClone(ctx, remote, branch, setUpstream, force)` (`sync.go`) — requires both remote and branch (`requireSyncArg`), then inside one `runSyncMutation`: `pushWithinLock`; on success returns its result. On a push error it runs `DOLT_FETCH <remote>` under `runRemoteIO` and `SyncFreshness(remote, branch)`; a failed fetch or freshness read returns the push error with the failed check joined (`"%w (and whether a concurrent push superseded it could not be checked …)"`). `!fresh.Synced || fresh.Ahead > 0` returns the push error unchanged. Otherwise the result is `SyncPushResult{Head: <HEAD>, Superseded: <push error text>}` and no error. Test: `TestSyncPushFromCloneReportsARaceItLostAsSuperseded` (`sync_push_from_clone_test.go`).
 
