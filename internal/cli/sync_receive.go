@@ -9,14 +9,9 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
-
-// receiveTimeout bounds the inline receive's network fetch so an offline or slow
-// remote cannot hang the command's exit. The receive runs after the command has
-// already produced its output, so a timeout here only abandons the fetch (the
-// next interval retries); it never affects the command's result.
-const receiveTimeout = 15 * time.Second
 
 // receiveInline fetches the remote and fast-forwards the local store when behind,
 // INLINE in the command process. The caller (maybeAutoSyncAfterCommand) invokes
@@ -49,7 +44,9 @@ func receiveInline(ctx context.Context, ws workspace.Info) {
 		return
 	}
 
-	timeoutCtx, cancel := context.WithTimeout(ctx, receiveTimeout)
+	// The deadline is the store's: the receive holds the store's LOCK for its
+	// whole run, so the store sizes every co-resident wait against it.
+	timeoutCtx, cancel := context.WithTimeout(ctx, store.InlineReceiveDeadline)
 	defer cancel()
 	session, closeStore, err := openSyncSession(timeoutCtx, ws)
 	if err != nil {

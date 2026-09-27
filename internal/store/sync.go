@@ -712,6 +712,15 @@ func (s *Store) pushWithinLock(ctx context.Context, remote string, branch string
 	if trimmedBranch != "" {
 		args = append(args, fmt.Sprintf("HEAD:%s", trimmedBranch))
 	}
+	// HEAD is read BEFORE the push: the caller holds the commit lock, so HEAD
+	// cannot move between this read and the push, and a read that fails
+	// fails an attempt that has sent nothing. Read afterwards, a failure
+	// (the push landing just inside its deadline, the read just outside)
+	// would report a landed push as failed. [LAW:no-ambient-temporal-coupling]
+	head, err := s.headCommitWithinLock(ctx)
+	if err != nil {
+		return storage.SyncPushResult{}, err
+	}
 	query := buildProcedureCall("DOLT_PUSH", len(args))
 	var result storage.SyncPushResult
 	var message sql.NullString
@@ -726,6 +735,69 @@ func (s *Store) pushWithinLock(ctx context.Context, remote string, branch string
 		return storage.SyncPushResult{}, fmt.Errorf("push remote %q: %w", trimmedRemote, pushErr)
 	}
 	result.Message = nullStringValue(message)
+	result.Head = head
+	return result, nil
+}
+
+// headCommitWithinLock reads HEAD's hash under the commit lock the caller
+// holds, so the value is the HEAD the caller's push or check ran against.
+func (s *Store) headCommitWithinLock(ctx context.Context) (string, error) {
+	var head string
+	if err := s.db.QueryRowContext(ctx, `SELECT commit_hash FROM dolt_log() LIMIT 1`).Scan(&head); err != nil {
+		return "", fmt.Errorf("read head commit: %w", err)
+	}
+	return strings.TrimSpace(head), nil
+}
+
+// SyncPushFromClone pushes from a store that is a frozen clone of a live one,
+// and re-checks a rejection against the remote before reporting it. See the
+// storage.Syncer contract. The re-check is a fetch and a freshness read on
+// this store — the clone, whose tracking ref nothing else reads — under the
+// same commit-lock acquisition as the push, so no third party's write lands
+// between the rejection and the verdict. A fetch that fails leaves the
+// rejection standing, with the failed check joined to it: neither is dropped.
+// [LAW:no-silent-failure] [LAW:verifiable-goals] the goal is "the remote
+// carries HEAD", and a rejected push is judged by the goal, not by itself.
+func (s *Store) SyncPushFromClone(ctx context.Context, remote string, branch string, setUpstream bool, force bool) (storage.SyncPushResult, error) {
+	trimmedRemote, err := requireSyncArg("remote", remote)
+	if err != nil {
+		return storage.SyncPushResult{}, err
+	}
+	trimmedBranch, err := requireSyncArg("branch", branch)
+	if err != nil {
+		return storage.SyncPushResult{}, err
+	}
+	var result storage.SyncPushResult
+	err = s.runSyncMutation(ctx, func(ctx context.Context) error {
+		pushed, pushErr := s.pushWithinLock(ctx, trimmedRemote, trimmedBranch, setUpstream, force)
+		if pushErr == nil {
+			result = pushed
+			return nil
+		}
+		fetchErr := runRemoteIO(ctx, func(ctx context.Context) error {
+			_, err := callIntProcedure(ctx, s.db, "DOLT_FETCH", trimmedRemote)
+			return err
+		})
+		if fetchErr != nil {
+			return fmt.Errorf("%w (and whether a concurrent push superseded it could not be checked — fetch remote %q: %w)", pushErr, trimmedRemote, fetchErr)
+		}
+		fresh, freshErr := s.SyncFreshness(ctx, trimmedRemote, trimmedBranch)
+		if freshErr != nil {
+			return fmt.Errorf("%w (and whether a concurrent push superseded it could not be checked: %w)", pushErr, freshErr)
+		}
+		if !fresh.Synced || fresh.Ahead > 0 {
+			return pushErr
+		}
+		head, headErr := s.headCommitWithinLock(ctx)
+		if headErr != nil {
+			return fmt.Errorf("%w (superseded by a concurrent push, but the head could not be read: %w)", pushErr, headErr)
+		}
+		result = storage.SyncPushResult{Head: head, Superseded: pushErr.Error()}
+		return nil
+	})
+	if err != nil {
+		return storage.SyncPushResult{}, err
+	}
 	return result, nil
 }
 

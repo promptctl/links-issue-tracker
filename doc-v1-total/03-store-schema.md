@@ -8,7 +8,7 @@ lit's shared backend stores every workspace in an embedded [Dolt](https://github
 
 A `Store` wraps exactly one pooled SQL connection (`SetMaxOpenConns(1)` in `openDoltPool`, `store.go`) opened through a vendored embedded-Dolt driver. Two access modes (`store.go`):
 
-- **Write** (`Open`, and the sync-side `OpenSync`): the connector gets an exponential backoff (initial 50ms, max interval `engineOpenRetryMaxInterval` = 1s, max elapsed `engineOpenRetryMaxElapsed` = `coResidentHolderWait` = 70s, assigned in `newEngineOpenBackOff`, `store.go`) and pings eagerly so lock contention surfaces at open time.
+- **Write** (`Open`, and the sync-side `OpenSync`): the connector gets an exponential backoff (initial 50ms, max interval `engineOpenRetryMaxInterval` = 1s, max elapsed `engineOpenRetryMaxElapsed` = `coResidentHolderWait` = 45s, assigned in `newEngineOpenBackOff`, `store.go`) and pings eagerly so lock contention surfaces at open time.
 - **Read** (`OpenForRead`): no backoff, no ping — the engine opens lazily at the first SQL statement (`store.go`). A read open beside a foreign lock holder succeeds via Dolt's read-only fallback (journal wait ~100ms) and serves reads.
 
 If another process holds Dolt's journal lock (`<root>/links/.dolt/noms/LOCK`), the wrapped error satisfies both `ErrWorkspaceBusy` and `nbs.ErrDatabaseLocked` and reads "another process is holding this workspace's Dolt store open … retry after it completes" (`store.go`).

@@ -50,7 +50,16 @@ type syncSession struct {
 // resolved. [LAW:single-enforcer] The returned close is the caller's to defer;
 // it releases the workspace lock, so a caller that drops it strands the lock.
 func openSyncSession(ctx context.Context, ws workspace.Info) (syncSession, func() error, error) {
-	st, err := engine.Open(ctx, engine.Sync, ws.DatabasePath, ws.WorkspaceID)
+	return openSyncSessionAt(ctx, ws.DatabasePath, ws.WorkspaceID)
+}
+
+// openSyncSessionAt opens the sync engine on an explicit dolt root rather
+// than the workspace's own: the on-change mirror pushes from a clone of the
+// workspace's store, which is the same database at another path, under the
+// same workspace identity. [LAW:one-type-per-behavior] one opener, the path
+// is data.
+func openSyncSessionAt(ctx context.Context, databasePath, workspaceID string) (syncSession, func() error, error) {
+	st, err := engine.Open(ctx, engine.Sync, databasePath, workspaceID)
 	if err != nil {
 		return syncSession{}, nil, err
 	}
@@ -358,6 +367,18 @@ func syncPushLeaf() syncLeaf {
 	verbose := fs.Bool("verbose", false, "Include detailed remote output")
 	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope syncScope, positional []string) error {
 		ws, session := scope.ws, scope.session
+		// This push answers for every mutation committed before this engine
+		// session opened: clear the mirror-pending marker so their commands (and
+		// later ones observing it) stop counting on a further mirror
+		// (links-sync-pgct.12). Sound only because session IS the live path's
+		// one read-write engine — every command that could have observed the
+		// marker committed and closed before this session opened, so its commit
+		// is inside this push's HEAD. Cleared at entry, not on success: if the
+		// attempt then skips or fails, that ending is loudly recorded, and the
+		// next mutation re-claims and re-spawns rather than a stale "covered"
+		// promise papering over a push that never landed.
+		// [LAW:no-ambient-temporal-coupling]
+		clearMirrorPending(ws)
 		// [LAW:decomposition] The explicit `lit sync push` (and the pre-push hook it
 		// backs) compacts atomically with the push; the on-change mirror pushes
 		// without compaction. The choice is the push step passed as a value, so
@@ -404,6 +425,7 @@ type syncPushOutcome struct {
 	// push, rendered as its own line so message stays the engine's verbatim
 	// push output. [LAW:one-source-of-truth]
 	maintenance string
+	head        string // the commit the push sent as HEAD; empty on a skip or a failure
 	traceErr    error
 	pushErr     error // the push failure; the trace is already recorded when set
 }
@@ -440,6 +462,16 @@ func syncPushTraceMetadata(remoteName, syncBranch string, result storage.SyncPus
 	if maintenance := strings.TrimSpace(result.Maintenance); maintenance != "" {
 		metadata["maintenance"] = maintenance
 	}
+	if head := strings.TrimSpace(result.Head); head != "" {
+		metadata["head"] = head
+	}
+	// A superseded push is a landed goal with a rejected attempt inside it;
+	// the rejection is kept in the record, under its own key, so the trail
+	// shows the race and not a push that quietly succeeded.
+	// [LAW:no-silent-failure]
+	if superseded := strings.TrimSpace(result.Superseded); superseded != "" {
+		metadata["superseded"] = superseded
+	}
 	if pushErr != nil {
 		metadata["error"] = pushErr.Error()
 	}
@@ -453,26 +485,25 @@ func syncPushTraceMetadata(remoteName, syncBranch string, result storage.SyncPus
 // with its trace already recorded, leaving the caller to decide whether that
 // fails it (the command) or is best-effort (the cadence owner).
 //
-// Precondition: the caller holds the path's one read-write engine (session
-// is that engine). The mirror-pending clear below is only sound inside an
-// engine session — that is what puts every commit whose command could have
-// observed the marker strictly before this session's HEAD read.
+// Precondition: the caller has already taken custody of every commit in
+// session's HEAD — it cleared the mirror-pending marker at a point strictly
+// ordered before any commit that session cannot see. Two callers, two ways of
+// meeting it: the foreground `lit sync push` holds the live path's one
+// read-write engine and clears inside that session (every command that could
+// have observed the marker committed before the session opened, so it is
+// inside the HEAD read); the mirror clears while holding the live store's
+// journal and commit locks around the clone it pushes from (no commit can
+// land between the clone and the clear). Clearing HERE, after either caller
+// has released those holds, would erase a claim whose commit this session
+// cannot see — links-sync-pgct.12's stranded tail — which is why the clear is
+// the caller's and not this function's. [LAW:no-ambient-temporal-coupling]
 // performSyncPush runs under two lifetimes, and the signature names both: ctx
-// bounds the push work (the mirror caps it with its hold budget), while
+// bounds the push work (the mirror caps it with its push deadline), while
 // completionCtx bounds the completion effects — the outcome marker and the
 // owner-notify hook — which must not inherit an operation budget that has, by
 // definition, already expired whenever a cut push needs them most.
-// [LAW:no-ambient-temporal-coupling] A foreground caller passes the same
-// context twice: its one lifetime is both.
+// A foreground caller passes the same context twice: its one lifetime is both.
 func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws workspace.Info, remote string, setUpstream, force bool, push syncPushStep) (outcome syncPushOutcome, retErr error) {
-	// This attempt now answers for every mutation committed before this engine
-	// session opened: clear the mirror-pending marker so their commands (and
-	// later ones observing it) stop counting on a further mirror
-	// (links-sync-pgct.12). Cleared at entry, not on success — if the attempt
-	// then skips or fails, that ending is loudly recorded just below, and the
-	// next mutation re-claims and re-spawns rather than a stale "covered"
-	// promise papering over a push that never landed. [LAW:no-ambient-temporal-coupling]
-	clearMirrorPending(ws)
 	// Every completion — could-not-attempt, skip, pushed, push-failed — leaves
 	// the push-outcome marker behind, so "are pushes working?" is answerable by
 	// any later command without an engine. One deferred write over the named
@@ -507,12 +538,12 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 	// [LAW:dataflow-not-control-flow] Sync push runs one deterministic embedded mutation path from resolved remote+branch state.
 	result, pushErr := push(ctx, remoteName, syncBranch, setUpstream, force)
 	// A push killed by the operation lifetime while the completion lifetime
-	// lives is a hold-budget cut, and this attempt's record is the event's one
-	// trace owner — so the explanation folds in here, never as a second record
-	// upstream. Foreground callers pass one lifetime twice, so the predicate
-	// can never hold for them. [LAW:single-enforcer]
+	// lives is a push-deadline cut, and this attempt's record is the event's
+	// one trace owner — so the explanation folds in here, never as a second
+	// record upstream. Foreground callers pass one lifetime twice, so the
+	// predicate can never hold for them. [LAW:single-enforcer]
 	if pushErr != nil && ctx.Err() != nil && completionCtx.Err() == nil {
-		pushErr = fmt.Errorf("%w: %w", holdBudgetCutExplanation(), pushErr)
+		pushErr = fmt.Errorf("%w: %w", pushDeadlineCutExplanation(), pushErr)
 	}
 	traceMetadata := syncPushTraceMetadata(remoteName, syncBranch, result, pushErr)
 	traceStatus := "ok"
@@ -567,6 +598,7 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 		branch:      syncBranch,
 		message:     result.Message,
 		maintenance: result.Maintenance,
+		head:        result.Head,
 		traceErr:    traceRecordErr,
 		pushErr:     pushErr,
 	}, nil

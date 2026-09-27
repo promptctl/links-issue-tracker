@@ -20,7 +20,7 @@ Repo: `/Users/bmf/code/links-issue-tracker`. Derived entirely from Go/SQL source
 8. Branch normalization: `masterRenameSource(ctx, s.db)` is read lock-free; only when it returns a non-empty source is `ensureMasterDefaultBranch` run inside `s.withCommitLock` (`sync.go`). A read-only OpenSync therefore takes no commit lock.
 9. On error in step 8: `wrapEngineOpenContention(err)`, then `s.db.Close()` whose error is joined unless it is `context.Canceled`; `s.releaseWorkspaceLock` is set to nil (`sync.go`).
 
-`engineOpenRetryMaxElapsed` is `coResidentHolderWait` = 70s, a package var (`/Users/bmf/code/links-issue-tracker/internal/store/store.go`), assigned to `bo.MaxElapsedTime` at `store.go`. `coResidentHolderWait` is itself derived (`store.go`): `mirrorCycleObservedTail` 20s × `mirrorHoldStallFactor` 2 = `mirrorHoldBudget` 40s; + `mirrorCancelLagObserved` 22s = `mirrorHoldCeiling` 62s; + `coResidentWaitHeadroom` 8s = 70s.
+`engineOpenRetryMaxElapsed` is `coResidentHolderWait` = 45s, a package var (`/Users/bmf/code/links-issue-tracker/internal/store/store.go`), assigned to `bo.MaxElapsedTime` at `store.go`. `coResidentHolderWait` is a const derived from the longest routine hold on the live store (`store.go`): `routineHolderCeiling` = max(`mirrorHoldCeiling` 1.5s (= `mirrorHoldBudget` 1s + `mirrorHoldCancelLag` 500ms), `inlineReceiveCeiling` 37s (= `InlineReceiveDeadline` 15s + `MirrorPushCancelLagObserved` 22s), `foregroundPushObservedTail` 20s (= `mirrorPushObservedTail`)) = 37s; + `coResidentWaitHeadroom` 8s = 45s. Each term leaves the max with its holder as the epic removes it (the receive under links-scale-om3r.3s7). The push the mirror runs from its clone has a separate chain (`store.go`): `mirrorPushObservedTail` 20s × `mirrorPushStallFactor` 2 = `mirrorPushDeadline` 40s (exported as `var MirrorPushDeadline`), with `MirrorPushCancelLagObserved` 22s the lag a cut push takes to unwind; no store wait is derived from it.
 
 ### 1.2 Embedded-dependency version floor
 
@@ -131,8 +131,11 @@ Then, **after** the push and **outside** the commit lock (`sync.go`):
 1. `requireSyncArg("remote", remote)`; branch is only `strings.TrimSpace`d and **may be empty** (`sync.go`).
 2. If branch is non-empty, `s.guardRemoteSchemaAhead(ctx, remote, branch)` runs first (`sync.go`). An empty branch skips the guard entirely.
 3. Args built in order: `"--set-upstream"` if `setUpstream`, `"--force"` if `force`, then the remote, then `fmt.Sprintf("HEAD:%s", branch)` if branch non-empty (`sync.go`).
-4. `CALL DOLT_PUSH(...)` scanned into `(result.Status int64, message sql.NullString)` (`sync.go`). Error `"push remote %q: %w"`.
-5. `result.Message = nullStringValue(message)` — NULL→`""`, otherwise trimmed (`sync.go`).
+4. `head` = `headCommitWithinLock` (`SELECT commit_hash FROM dolt_log() LIMIT 1`, trimmed; error `"read head commit: %w"`), read before the push so a failed read fails an attempt that has sent nothing (`sync.go`).
+5. `CALL DOLT_PUSH(...)` scanned into `(result.Status int64, message sql.NullString)` (`sync.go`). Error `"push remote %q: %w"`.
+6. `result.Message = nullStringValue(message)` — NULL→`""`, otherwise trimmed; `result.Head = head` (`sync.go`).
+
+`SyncPushFromClone(ctx, remote, branch, setUpstream, force)` (`sync.go`) — requires both remote and branch (`requireSyncArg`), then inside one `runSyncMutation`: `pushWithinLock`; on success returns its result. On a push error it runs `DOLT_FETCH <remote>` under `runRemoteIO` and `SyncFreshness(remote, branch)`; a failed fetch or freshness read returns the push error with the failed check joined (`"%w (and whether a concurrent push superseded it could not be checked …)"`). `!fresh.Synced || fresh.Ahead > 0` returns the push error unchanged. Otherwise the result is `SyncPushResult{Head: <HEAD>, Superseded: <push error text>}` and no error. Test: `TestSyncPushFromCloneReportsARaceItLostAsSuperseded` (`sync_push_from_clone_test.go`).
 
 Tests: `TestSyncPushDelivers` (`sync_test.go`), `TestSyncCompactAndPushDelivers` (`sync_test.go`), `TestSyncCompactAndPushDeepensOnAFragmentedOldGeneration` (`sync_test.go`).
 

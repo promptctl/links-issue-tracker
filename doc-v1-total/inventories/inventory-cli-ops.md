@@ -421,7 +421,7 @@ Config defaults (`internal/config/config.go`): `sync.cadence = "on-change"`, `sy
   - `cmd.Env = mirrorEnv()`; then `cmd.Start()`; the parent's log fd is closed after start (`sync_bg.go`).
 - `mirrorEnv()` — `sync_bg.go`: copies the parent env with `LNKS_AUTOMATION_TRIGGER=`, `LNKS_AUTOMATION_REASON=`, `LNKS_AUTOMATION_TRACE_REF_FILE=` prefixes stripped, then appends `LNKS_AUTOMATION_TRIGGER=on-change` and `LNKS_AUTOMATION_REASON=on-change cadence mirrored after a mutating command`. The mirror carries no trace-ref file.
 - Timing constants (`sync_bg.go`):
-  - `parentPostSpawnTail = receiveTimeout(15s) + ownerNotifyHookTimeout(10s) + ownerNotifyPipeWaitDelay(1s) + compactTimeout(45s)` = 71s.
+  - `parentPostSpawnTail = store.InlineReceiveDeadline(15s) + ownerNotifyHookTimeout(10s) + ownerNotifyPipeWaitDelay(1s) + compactTimeout(45s)` = 71s.
   - `mirrorParentWaitMargin = 30 * time.Second`.
   - `mirrorParentWaitTimeout = parentPostSpawnTail + mirrorParentWaitMargin` (101s).
   - `mirrorParentPollDelay = 20 * time.Millisecond`.
@@ -446,14 +446,14 @@ Flag parse output is `io.Discard` (`sync_bg.go`).
    - `mirrorCycle` false (failure already completed through the push-outcome seam) → return nil, no hot-spin (`sync_bg.go`).
    - `recheckMirrorPending(ws, cycleStart)`: error → `recordMirrorTraceError` and stop; `again == false` → stop; `true` → another full cycle on a fresh engine.
 5. `mirrorCycle` (`sync_bg.go`): opens a sync session; open failure → `completeMirrorWithoutAttempt("open sync store: %w")` and returns false; else runs `mirrorOnce` and returns true.
-6. `mirrorOnce` (`sync_bg.go`): `performSyncPush(ctx, session, ws, "", false, false, session.syncer.SyncPush)` — no `--remote`, no `-u`, no `--force`, no compaction. A could-not-attempt error → `recordMirrorTraceError`. A non-nil `outcome.traceErr` → stderr `lit: on-change mirror trace not recorded: <err>`. A remote-schema-ahead push error prints `failure.blockString()` to stderr (`sync_bg.go`); any other push error is left in the trace (retried by the next push).
+6. `mirrorOnce` (`sync_bg.go`): `performSyncPush(ctx, session, ws, "", false, false, session.syncer.SyncPushFromClone)` — no `--remote`, no `-u`, no `--force`, no compaction. A could-not-attempt error → `recordMirrorTraceError`. A non-nil `outcome.traceErr` → stderr `lit: on-change mirror trace not recorded: <err>`. A remote-schema-ahead push error prints `failure.blockString()` to stderr (`sync_bg.go`); any other push error is left in the trace (retried by the next push).
 7. `teardownMirror` (`sync_bg.go`): `stopAnswering()` FIRST, then `clearMirrorPending`, then `recordMirrorTraceError(cause)`; deliberately writes NO push-outcome record.
 8. `completeMirrorWithoutAttempt` (`sync_bg.go`): `stopAnswering()`, `clearMirrorPending`, `completePushAttempt(ctx, ws, syncPushOutcome{}, cause)`, `recordMirrorTraceError(cause)`; always returns nil (the mirror never exits nonzero).
 9. `recordMirrorTraceError` (`sync_bg.go`): automation trace `lit sync push` / side effect `mirror Dolt data to the configured git remote` / status `error` / metadata `{error}`; a trace-write failure prints `lit: on-change mirror could not record failure trace (<traceErr>); original error: <cause>`; plus the durable sync trace `lit sync push`/`error`.
 
 ### 3.6 Inline receive (`sync_receive.go`)
 
-`receiveTimeout = 15 * time.Second` (`sync_receive.go`). `receiveDebounceInterval = 5 * time.Minute` (`sync_cadence.go`).
+`store.InlineReceiveDeadline = 15 * time.Second` (`store.go`; the receive holds the store's LOCK for its run, so the store sizes its co-resident wait against it). `receiveDebounceInterval = 5 * time.Minute` (`sync_cadence.go`).
 
 `receiveInline` — `sync_receive.go`:
 1. Debounce on `<StorageDir>/receive.last` mtime (`sync_cadence.go`); not due → return.
