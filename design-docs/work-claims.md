@@ -126,10 +126,10 @@ Derived annotations accompany the predicate:
   establishing event holds the claim), both sides are notified the next time
   they look, and sync reconciliation surfaces it for judgment.
 - **Stale** — the holder's evidence has aged past T while L remains
-  unfinished. To any *other* checkout the lane is available again, offered as
-  a takeover with provenance rather than served silently; to the holder itself
-  staleness is evidence it stepped away, not a loss of ownership. Routing step
-  6 draws the distinction.
+  unfinished. A stale claim is not a claim. It is the record that one existed,
+  and the lane is available again to every checkout, the one that let it lapse
+  included, offered as a takeover with provenance rather than served silently.
+  Routing step 6.
 
 A claim dissolves by the predicate ceasing to hold: the lane finishes, the
 evidence ages out, or the holder's checkout is locally known to be gone.
@@ -343,9 +343,15 @@ step, so each step below says only which lanes it looks in:
    the orphan annotation is the proof that nobody is. Letting that claim veto
    the ticket means trusting the claim over the proof that the claim is dead
    (owner ruling, links-claims-1b0p, 2026-09-03). A stale claim on the
-   checkout's *own* lane is not a loss of ownership at all: staleness there
-   is evidence the checkout stepped away, so the lane's work is handed back
-   to it to resume, never routed away from it. Taking over stays visible
+   checkout's *own* lane is no different: the claim has lapsed, the checkout
+   holds nothing, and the lane is reached by rank from the pool like any
+   other. It was once read the other way — staleness of your own lane as
+   evidence you stepped away from work still yours, handed back to resume —
+   and under that reading a checkout that finished one ticket of an epic and
+   walked away was routed back to that epic ahead of the entire backlog for
+   as long as the epic stayed open; with one checkout in the repository,
+   forever, since nothing it could do released a claim that no longer existed
+   (owner ruling, links-claims-em7h, 2026-09-26). Taking over stays visible
    rather than silent: the announcement rule above says when the pick names
    itself a takeover, and a displaced holder's claim line prints under the row
    committed to — "claimed: stream 7f3a (stale) · 3 days ago · 0/8 done" — so
@@ -616,11 +622,13 @@ sidecar maps.
 - **Freshness window T**: default 6 hours, per-repository configurable.
   Repositories where humans idle over weekends may prefer ~72h; agent-heavy
   repositories may tighten it further. It was 24 hours until the routing defect
-  in links-claims-1b0p was fixed: while a stale claim made a checkout disown its
-  own lane and silently hop epics, the long window was armor against that
-  failure rather than a considered reading of when a claim goes cold. With the
-  defect gone, staleness means "still routed back to you first, and now
-  available to others with notice", and 6 hours of lane-wide silence — measured
+  in links-claims-1b0p was fixed: while every consumer read a stale claim of a
+  checkout's own differently, the long window was armor against that
+  inconsistency rather than a considered reading of when a claim goes cold.
+  With the defect gone, and the own-lane reading corrected in
+  links-claims-em7h, staleness means "no longer a claim: available to
+  everyone with notice, the checkout that let it lapse included", and 6 hours
+  of lane-wide silence — measured
   from the holder's last event anywhere in the lane, so finishing a ticket
   restarts the clock — is the weaker claim of activity it was always meant to
   be. T equals the orphaned-ticket threshold in value only: separate policies

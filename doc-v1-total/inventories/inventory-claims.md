@@ -417,7 +417,7 @@ That is the entire `internal/app` surface: `App` (3 fields), `AccessMode` + 2 co
 
 `checkoutStreamTokens` mirrors `app.streamTokens`: skips checkouts without a present stream (`internal/cli/claims_context.go:114-122`). `addressesByAttribution` indexes live checkouts by `model.NewAttribution(checkout.Stream.Value(), workspaceID)`, skipping tokenless checkouts (`internal/cli/claims_context.go:128-136`).
 
-Callers: `next` (`internal/cli/next.go:84`), `workable`/`backlog` runner (`internal/cli/workable.go:237`), `authorizeStart` (`internal/cli/claims_takeover.go:138`), `reportContestedLanes` (`internal/cli/claims_contest_report.go:33`).
+Callers: `next` (`internal/cli/next.go:84`), `workable`/`backlog` runner (`internal/cli/workable.go:237`), `authorizeStart` (`internal/cli/claims_takeover.go:147`), `reportContestedLanes` (`internal/cli/claims_contest_report.go:33`).
 
 ---
 
@@ -427,41 +427,41 @@ Callers: `next` (`internal/cli/next.go:84`), `workable`/`backlog` runner (`inter
 
 `transitionSpec.authorize` is an optional hook that runs after the action is built and **before** `Store.Apply`, and may abort the transition by returning an error; only `start` supplies one, the other seven transitions use `noAuthorize` (`internal/cli/cli.go:1376-1383`, `noAuthorize` at `:1386-1390`). Wired at `internal/cli/cli.go:1413-1418`, bound at `:1492` and invoked at `:1521`. The flag: `--take`, help string `"Confirm taking over a lane another checkout claims right now (required for non-interactive callers; an interactive terminal is prompted instead)"` (`internal/cli/cli.go:1414`).
 
-**`classifyTakeover(standing, self) takeoverRequirement`** — pure, no I/O (`internal/cli/claims_takeover.go:110-119`). It does not read the standing itself: it switches on `relationOf(standing, self)`, the same relation routing admits on, so the gate and the router cannot disagree about whose lane it is.
+**`classifyTakeover(standing, self) takeoverRequirement`** — pure, no I/O (`internal/cli/claims_takeover.go:119-128`). It does not read the standing itself: it switches on `relationOf(standing, self)`, the same relation routing admits on, so the gate and the router cannot disagree about whose lane it is.
 
 | standing | condition | relation | requirement |
 |---|---|---|---|
 | `Held` | `self.Present() && s.By == self` | `laneOurs` | `takeoverNone` |
 | `Held` | otherwise | `laneHeldForeign` | `takeoverFreshConfirm` |
-| `Stale` | `self.Present() && s.By == self` | `laneOurs` | `takeoverNone` |
-| `Stale` | `s.Holder == claims.Locked` | `laneHeldForeign` | `takeoverFreshConfirm` |
-| `Stale` | otherwise | `laneStaleForeign` | `takeoverStaleInformed` |
+| `Stale` | `s.Holder == claims.Locked` and `self.Present() && s.By == self` | `laneOurs` | `takeoverNone` |
+| `Stale` | `s.Holder == claims.Locked`, otherwise | `laneHeldForeign` | `takeoverFreshConfirm` |
+| `Stale` | otherwise | `laneLapsed` | `takeoverStaleInformed` |
 | `Unclaimed` (default arm) | — | `laneUnclaimed` | `takeoverNone` |
 
-`ours(by) = self.Present() && by == self` (`internal/cli/claims_takeover.go:69`) — the `self.Present()` half is load-bearing, not a redundant guard: a checkout with no minted token has a zero `self`, and a zero `self` compared against a zero holder (the public checkout) would otherwise prove ownership of a lane this checkout never touched. So a lane the public checkout holds is always `laneHeldForeign`/`laneStaleForeign` to every checkout, including one that has itself never minted a token.
+`held(by)` answers `laneOurs` when `self.Present() && by == self` and `laneHeldForeign` otherwise (`internal/cli/claims_takeover.go:80`) — the `self.Present()` half is load-bearing, not a redundant guard: a checkout with no minted token has a zero `self`, and a zero `self` compared against a zero holder (the public checkout) would otherwise prove ownership of a lane this checkout never touched. So a lane the public checkout holds is always `laneHeldForeign` to every checkout, including one that has itself never minted a token; a lapsed one is `laneLapsed` to every checkout regardless, since a lapsed claim is matched against no identity at all.
 
-The `claims.Locked` row is the one a reader is likeliest to miss: an expired claim whose holder's worktree is locked is gated as a fresh hold, not waved through with a warning (`:94`).
+The `claims.Locked` row is the one a reader is likeliest to miss: an expired claim whose holder's worktree is locked is gated as a fresh hold, not waved through with a warning (`:103`).
 
 Sealed int enum: `takeoverNone`, `takeoverStaleInformed`, `takeoverFreshConfirm` (`internal/cli/claims_takeover.go:27-33`). Pinned by `TestClassifyTakeover` (`internal/cli/claims_takeover_test.go:14-58`) across nine cases: the five base standings (`:20-24`), the three `Holder` sub-cases of a stale foreign claim — gone, present, and `claims.Locked` (`:42-48`) — and a stale locked lane that is ours (`:49-57`).
 
-**`authorizeStart(ctx, stdout, ap, issueID, prior, take)`** (`internal/cli/claims_takeover.go:132-154`):
-1. `ap.Store.GetRelationsByIDs(ctx, []string{issueID})` → `lane := model.LaneOf(prior, relations[issueID].Parent)` (`:133-137`).
-2. `gatherClaimContext` (`:138-141`).
-3. Dispatch on `classifyTakeover(cc.standings.Of(lane), cc.self)` (`:142`):
-   - `takeoverNone` → `return nil`; the happy path pays one extra evidence gather and nothing else (`:143-144`, rationale `:124-127`).
-   - `takeoverStaleInformed` → `printStaleProvenance` (`:145-146`).
-   - `takeoverFreshConfirm` → `confirmFreshTakeover` (`:147-148`).
-   - default (unreachable) → `fmt.Errorf("claims: %s has no recognized takeover requirement", issueID)` (`:149-152`).
+**`authorizeStart(ctx, stdout, ap, issueID, prior, take)`** (`internal/cli/claims_takeover.go:141-163`):
+1. `ap.Store.GetRelationsByIDs(ctx, []string{issueID})` → `lane := model.LaneOf(prior, relations[issueID].Parent)` (`:142-146`).
+2. `gatherClaimContext` (`:147-150`).
+3. Dispatch on `classifyTakeover(cc.standings.Of(lane), cc.self)` (`:151`):
+   - `takeoverNone` → `return nil`; the happy path pays one extra evidence gather and nothing else (`:152-153`, rationale `:133-135`).
+   - `takeoverStaleInformed` → `printStaleProvenance` (`:154-155`).
+   - `takeoverFreshConfirm` → `confirmFreshTakeover` (`:156-157`).
+   - default (unreachable) → `fmt.Errorf("claims: %s has no recognized takeover requirement", issueID)` (`:158-161`).
 
-**`claimLineOrPanic`** reuses `formatClaimLine(cc, lane, time.Now())`; `ok == false` → error `claims: %s has a takeover requirement on %v but no claim line to show` (`internal/cli/claims_takeover.go:164-170`).
+**`claimLineOrPanic`** reuses `formatClaimLine(cc, lane, time.Now())`; `ok == false` → error `claims: %s has a takeover requirement on %v but no claim line to show` (`internal/cli/claims_takeover.go:173-179`).
 
-**`printStaleProvenance`** — proceeds unprompted and prints `"%s — check for unmerged branches or PRs on this lane before building on it\n"` (`internal/cli/claims_takeover.go:177-184`). Checking for unmerged branches or PRs is left to the taking agent; lit stays ignorant of git and the forge (`:172-176`).
+**`printStaleProvenance`** — proceeds unprompted and prints `"%s — check for unmerged branches or PRs on this lane before building on it\n"` (`internal/cli/claims_takeover.go:186-193`). Checking for unmerged branches or PRs is left to the taking agent; lit stays ignorant of git and the forge (`:181-185`).
 
-**`confirmFreshTakeover(stdout, cc, lane, take)`** (`internal/cli/claims_takeover.go:195-218`):
+**`confirmFreshTakeover(stdout, cc, lane, take)`** (`internal/cli/claims_takeover.go:204-227`):
 - **Non-interactive** (`!isTerminal(stdout)`, the same signal `openOrPrintWorkflowFile` uses — `internal/cli/workflows_edit.go:160`):
-  - `take == false` → **refusal**: `fmt.Errorf("%s — this lane is claimed and active; pass --take to confirm the takeover", line)` (`:201-203`).
-  - `take == true` → prints `"%s — taking over (--take)\n"` and proceeds (`:204-205`).
-- **Interactive**: prints `"%s\ntake over this lane? [y/N] "`, reads a line from `os.Stdin` via `bufio.NewReader(os.Stdin).ReadString('\n')` (`:207-210`). A read error other than `io.EOF` → `fmt.Errorf("read takeover confirmation: %w", err)` (`:211-213`). The answer is accepted iff `strings.HasPrefix(strings.ToLower(strings.TrimSpace(answer)), "y")`; otherwise → `fmt.Errorf("takeover declined")` (`:214-216`).
+  - `take == false` → **refusal**: `fmt.Errorf("%s — this lane is claimed and active; pass --take to confirm the takeover", line)` (`:210-212`).
+  - `take == true` → prints `"%s — taking over (--take)\n"` and proceeds (`:213-214`).
+- **Interactive**: prints `"%s\ntake over this lane? [y/N] "`, reads a line from `os.Stdin` via `bufio.NewReader(os.Stdin).ReadString('\n')` (`:216-219`). A read error other than `io.EOF` → `fmt.Errorf("read takeover confirmation: %w", err)` (`:220-222`). The answer is accepted iff `strings.HasPrefix(strings.ToLower(strings.TrimSpace(answer)), "y")`; otherwise → `fmt.Errorf("takeover declined")` (`:223-225`).
 
 E2E, over two real clones and a real git remote (`internal/cli/claims_takeover_e2e_test.go:18-80`): alpha starts and pushes; bravo's `start` without `--take` fails with an error containing both `--take` and `claimed`; the same command with `--take` prints `"taking over"`; and starting the now-bravo-held lane again produces neither `"claimed"` nor `"--take"` in the output. Stale path (`:88-126`): with `freshness_window = "1ms"` and a 50 ms sleep, bravo's plain `start` succeeds and prints both `"check for unmerged branches or PRs"` and `"stale"`.
 
@@ -482,7 +482,7 @@ The leaf gathers rows, relation details and the focus scope, then the claim cont
 
 `Exhausted` and `NoWork` are themselves `error` implementations and travel outward **as themselves** rather than being rendered into a generic error, which is what keeps the exit-code and reason sinks reading the routing verdict instead of a copy that could drift (`:112-117`, `internal/cli/next.go:135-146`).
 
-**`capacityFor(row, standing, self) capacity`** — the admission rule; pure, total, no I/O (`internal/cli/next_route.go:259-280`). Four capacities: `routeAround` (not this checkout's to take right now), `serveWork`, `resumeWork`, `takeoverWork` (`:226-238`). It reads `readiness := ClassifyReadiness(row.Annotations)`, `relation := relationOf(standing, self)`, and `started := row.State() == model.StateInProgress`, with `takeable := (started && readiness.IsOrphaned()) || (!started && readiness.IsReady())`. Evaluated top-down:
+**`capacityFor(row, standing, self) capacity`** — the admission rule; pure, total, no I/O (`internal/cli/next_route.go:265-287`). Four capacities: `routeAround` (not this checkout's to take right now), `serveWork`, `resumeWork`, `takeoverWork` (`:226-238`). It reads `readiness := ClassifyReadiness(row.Annotations)`, `relation := relationOf(standing, self)`, and `started := row.State() == model.StateInProgress`, with `abandoned := readiness.IsOrphaned() || relation == laneLapsed` and `takeable := (started && abandoned) || (!started && readiness.IsReady())` — an in-flight row is takeable when either clock says its holder is gone, since orphaning reads the row's last write by anyone and the lane reads its holder's last event. Evaluated top-down:
 
 | # | condition | capacity |
 |---|---|---|
@@ -490,51 +490,51 @@ The leaf gathers rows, relation details and the focus scope, then the claim cont
 | 2 | `relation == laneOurs` and `readiness.IsReady()` | `serveWork` |
 | 3 | `relation == laneOurs`, otherwise | `routeAround` |
 | 4 | `!takeable`, or `relation == laneHeldForeign` | `routeAround` |
-| 5 | `started`, or `relation == laneStaleForeign` | `takeoverWork` |
+| 5 | `started`, or `relation == laneLapsed` | `takeoverWork` |
 | 6 | otherwise | `serveWork` |
 
-`laneStaleForeign` yields `takeoverWork`, and routing steps 2 and 4 both accept the set `{serveWork, takeoverWork}` — so a stale foreign lane is a reachable bare `lit next` target. `laneHeldForeign` — a lane another checkout holds fresh — is the one relation routed around on ownership alone. The `laneRelation` constants are at `internal/cli/claims_takeover.go:46-60`; `relationOf` at `:68-101`, where a `claims.Stale` standing whose `Holder == claims.Locked` reports `laneHeldForeign` rather than `laneStaleForeign` (`:80-97`).
+`laneLapsed` yields `takeoverWork`, and routing steps 2 and 4 both accept the set `{serveWork, takeoverWork}` — so a lapsed lane is a reachable bare `lit next` target whoever held it, this checkout included. `laneHeldForeign` — a lane another checkout holds fresh — is the one relation routed around on ownership alone. The `laneRelation` constants are at `internal/cli/claims_takeover.go:48-63`; `relationOf` at `:78-109`, where a `claims.Stale` standing whose `Holder == claims.Locked` is read as a live hold rather than `laneLapsed` (`:89-106`).
 
-**`ownScope(standings, self) (map[model.LaneID]bool, map[string]bool)`** (`internal/cli/next_route.go:295-308`): every lane whose `relationOf(standing, self)` is `laneOurs`, plus each such lane's non-empty `Epic()`. It reads the **standings**, not the gathered rows — the rows are already narrowed by `--type/--labels/--assignee`, and deriving ownership from them let a display filter empty the set and drop the whole self-aware branch (`:285-294`).
+**`ownScope(standings, self) (map[model.LaneID]bool, map[string]bool)`** (`internal/cli/next_route.go:302-315`): every lane whose `relationOf(standing, self)` is `laneOurs`, plus each such lane's non-empty `Epic()`. It reads the **standings**, not the gathered rows — the rows are already narrowed by `--type/--labels/--assignee`, and deriving ownership from them let a display filter empty the set and drop the whole self-aware branch (`:292-301`).
 
-**`routeNext(rows, details, standings, self, scope focusScope) NextOutcome`** — five parameters (`internal/cli/next_route.go:337-420`). Closures: `laneOf`, `verdict` (= `capacityFor`), `reachFor` (= `reachOf`), and `pickFrom(from, inScope, accept ...capacity)`, which keeps the first row of `from`, in the gather's composite-rank order, that sits in an admitted lane and carries one of the accepted verdicts (`:338-370`). `accept` is a **set**, never a preference order: composite rank is the only tiebreak routing applies, and ranking capacities against each other would pass over the backlog's #1 row, an orphan, for a lower-ranked leaf that needed no takeover (`:350-355`).
+**`routeNext(rows, details, standings, self, scope focusScope) NextOutcome`** — five parameters (`internal/cli/next_route.go:344-427`). Closures: `laneOf`, `verdict` (= `capacityFor`), `reachFor` (= `reachOf`), and `pickFrom(from, inScope, accept ...capacity)`, which keeps the first row of `from`, in the gather's composite-rank order, that sits in an admitted lane and carries one of the accepted verdicts (`:345-377`). `accept` is a **set**, never a preference order: composite rank is the only tiebreak routing applies, and ranking capacities against each other would pass over the backlog's #1 row, an orphan, for a lower-ranked leaf that needed no takeover (`:357-362`).
 
-Precedence, with `ownLanes, ownEpics := ownScope(standings, self)` and `mine := func(lane) bool { return ownLanes[lane] }` (`:372-373`). If `len(ownLanes) > 0`:
-1. **Step 1** — our own lanes, accepting `{serveWork, resumeWork}`, whichever the backlog ranks first. `resumeWork` → `ResumedOwnWork{Row}`; `serveWork` → `ServedFromClaim{Row}` (`:375-382`).
-2. **Step 1b** — `onPathDependency(rows, laneOf, mine, reachFor)`, a dependency outside our lanes that gates one of them → `ServedFromDependency{Row: dep, Lane: laneOf(dep), Gates: gates}`. It establishes a claim on a lane we do not hold, so it is announced as one, and `Gates` carries the blocked row it unblocks so the line can say what the pick is for (`:383-389`).
-3. **Step 2** — the rest of our epic, in lanes we do not already hold: predicate `lane.Epic() != "" && ownEpics[lane.Epic()] && !mine(lane)`, accepting `{serveWork, takeoverWork}` → `ServedFromEpicLane{Row, Lane}` (`:390-396`).
-4. **Step 3** — `Exhausted{Epics: slices.Sorted(maps.Keys(ownEpics)), Blocked: blockedRows(gatingDependencies(rows, laneOf, mine-or-ourEpic, reachFor))}` (`:398-403`). Loud, and never a hop: **exhaustion does not fall through to the global pool.**
+Precedence, with `ownLanes, ownEpics := ownScope(standings, self)` and `mine := func(lane) bool { return ownLanes[lane] }` (`:379-380`). If `len(ownLanes) > 0`:
+1. **Step 1** — our own lanes, accepting `{serveWork, resumeWork}`, whichever the backlog ranks first. `resumeWork` → `ResumedOwnWork{Row}`; `serveWork` → `ServedFromClaim{Row}` (`:382-389`).
+2. **Step 1b** — `onPathDependency(rows, laneOf, mine, reachFor)`, a dependency outside our lanes that gates one of them → `ServedFromDependency{Row: dep, Lane: laneOf(dep), Gates: gates}`. It establishes a claim on a lane we do not hold, so it is announced as one, and `Gates` carries the blocked row it unblocks so the line can say what the pick is for (`:390-396`).
+3. **Step 2** — the rest of our epic, in lanes we do not already hold: predicate `lane.Epic() != "" && ownEpics[lane.Epic()] && !mine(lane)`, accepting `{serveWork, takeoverWork}` → `ServedFromEpicLane{Row, Lane}` (`:397-403`).
+4. **Step 3** — `Exhausted{Epics: slices.Sorted(maps.Keys(ownEpics)), Blocked: blockedRows(gatingDependencies(rows, laneOf, mine-or-ourEpic, reachFor))}` (`:405-410`). Loud, and never a hop: **exhaustion does not fall through to the global pool.**
 
-**Step 4** is reached only by a checkout holding no lanes, which starts there directly: `pool, offPath := scope.partition(rows)`, then `pickFrom(pool, <every lane>, serveWork, takeoverWork)` → `ServedFromNewLane{Row, Lane}`, else `NoWork{Unreachable: append(passedOver(pool, reachFor), withheldByScope(offPath)...)}` (`:406-419`). The scope-withheld rows travel into the diagnostic rather than vanishing, because "nothing is startable" and "nothing on your focus path is startable" are different answers (`:410-414`). `withheldByScope` stamps them `reachOffFocusPath` at the one place that applied the scope (`:422-433`); `passedOver` classifies every row the pool walk went through, all `routeAround` by construction (`:435-454`).
+**Step 4** is reached only by a checkout holding no lanes, which starts there directly: `pool, offPath := scope.partition(rows)`, then `pickFrom(pool, <every lane>, serveWork, takeoverWork)` → `ServedFromNewLane{Row, Lane}`, else `NoWork{Unreachable: append(passedOver(pool, reachFor), withheldByScope(offPath)...)}` (`:413-426`). The scope-withheld rows travel into the diagnostic rather than vanishing, because "nothing is startable" and "nothing on your focus path is startable" are different answers (`:417-421`). `withheldByScope` stamps them `reachOffFocusPath` at the one place that applied the scope (`:429-440`); `passedOver` classifies every row the pool walk went through, all `routeAround` by construction (`:442-461`).
 
-Steps 1-3 walk every gathered row; step 4 walks the focus-scoped pool. The row set is passed to `pickFrom` explicitly at each call so that difference stays visible (`:356-359`). The focus scope narrows step 4 and nothing else (`:324-331`).
+Steps 1-3 walk every gathered row; step 4 walks the focus-scoped pool. The row set is passed to `pickFrom` explicitly at each call so that difference stays visible (`:363-366`). The focus scope narrows step 4 and nothing else (`:331-338`).
 
 **`reachKind`** (`internal/cli/next_route.go:135-160`) is what one row is to this checkout right now — four classifications plus the pool walk's own, and a bound: `reachTakeable`, `reachHeldFresh`, `reachNotReady`, `reachOutOfView`, `reachOffFocusPath`, `reachKindCount`. A bool here read "takeable or not", so a row outside the run's filtered view, or one not startable itself, rendered as the one reason the message named: claimed by another checkout (`:123-134`). `rowReach{ID string; Row annotation.AnnotatedIssue; Kind reachKind}` (`:162-168`).
 
 **`reachOf(row, gathered, standing, self)`** (`:179-189`): `!gathered` → `reachOutOfView`; `capacityFor(...) != routeAround` → `reachTakeable`; `relationOf(...) == laneHeldForeign` → `reachHeldFresh`; otherwise `reachNotReady`. Exhaustion asks it of the dependencies gating our scope; an empty global pool asks it of every row the walk went past (`:130-131`).
 
-**`gatingDependencies`** (`:492-525`): the distinct open dependency ids, in rank order, gating the open rows whose lane `inScope` admits, each already carrying its `reachKind` and the id of the in-scope row it gates — the yielded `gatedDep` embeds `rowReach` and adds `Gates`. **`onPathDependency`** (`:540-547`) returns the first of those whose `Kind == reachTakeable`, together with that gated row's id. A same-lane gate never reaches here: it shares the blocked row's lane, so step 1 already served or resumed it (`:530-531`).
+**`gatingDependencies`** (`:499-532`): the distinct open dependency ids, in rank order, gating the open rows whose lane `inScope` admits, each already carrying its `reachKind` and the id of the in-scope row it gates — the yielded `gatedDep` embeds `rowReach` and adds `Gates`. **`onPathDependency`** (`:547-554`) returns the first of those whose `Kind == reachTakeable`, together with that gated row's id. A same-lane gate never reaches here: it shares the blocked row's lane, so step 1 already served or resumed it (`:537-538`).
 
-**`describeReach(rows, lead, notes)`** (`:632-646`) renders `"<lead><ids> (<note>)"` for each kind that has rows, joined by `"; "`, in `reachKind`'s declaration order. `nameIDs` names at most `maxNamedPerKind = 12` ids and states how many it left out (`:611-624`). `reachNotes` is `[reachKindCount]string`, indexed by the kind itself (`:578`).
+**`describeReach(rows, lead, notes)`** (`:639-653`) renders `"<lead><ids> (<note>)"` for each kind that has rows, joined by `"; "`, in `reachKind`'s declaration order. `nameIDs` names at most `maxNamedPerKind = 12` ids and states how many it left out (`:618-631`). `reachNotes` is `[reachKindCount]string`, indexed by the kind itself (`:585`).
 
-`exhaustedNotes` (`:592-597`), exact strings:
+`exhaustedNotes` (`:599-604`), exact strings:
 - `reachTakeable`: ``on your path and yours to take — `lit start` it``
 - `reachHeldFresh`: `on your path but claimed by another checkout right now`
 - `reachNotReady`: ``on your path but not startable right now — `lit show` it``
 - `reachOutOfView`: ``on your path but outside this view — `lit show` it``
 
-`poolNotes` (`:598-602`), exact strings:
+`poolNotes` (`:605-609`), exact strings:
 - `reachHeldFresh`: `in progress or claimed in a lane another checkout holds right now`
 - `reachNotReady`: `not startable — blocked by a dependency, or in flight and not abandoned`
 - `reachOffFocusPath`: ``off the focus path this run answered over — `lit next --all` to route over the whole queue``
 
-**`Exhausted.Error()`** (`:551-560`). `scope` is `fmt.Sprintf("epic(s) %s", strings.Join(o.Epics, ", "))` when epics are named, else `"your claimed lane(s)"`. The command is in **backticks** in both arms:
+**`Exhausted.Error()`** (`:558-567`). `scope` is `fmt.Sprintf("epic(s) %s", strings.Join(o.Epics, ", "))` when epics are named, else `"your claimed lane(s)"`. The command is in **backticks** in both arms:
 - `len(o.Blocked) == 0`: ``no ready work in %s — nothing else is queued behind what's already in progress; picking up other work is a deliberate re-focus, not a bare `next` ``
 - otherwise: ``no ready work in %s — %s; picking up other work is a deliberate re-focus, not a bare `next` ``, the middle being `describeReach(o.Blocked, "blocked on ", exhaustedNotes)`.
 
-**`NoWork.Error()`** (`:658-674`):
+**`NoWork.Error()`** (`:665-681`):
 - `len(o.Unreachable) == 0` → `no ready work`.
-- `o.withheld()` — any row of kind `reachOffFocusPath` (`:679-686`) → `no ready work on the focus path — the backlog is not empty, and each row below says why this run did not serve it: %s`.
+- `o.withheld()` — any row of kind `reachOffFocusPath` (`:686-693`) → `no ready work on the focus path — the backlog is not empty, and each row below says why this run did not serve it: %s`.
 - otherwise → `no ready work — the backlog is not empty, but nothing in it is startable here: %s`.
 
 The `%s` in both non-empty arms is `describeReach(o.Unreachable, "", poolNotes)`.

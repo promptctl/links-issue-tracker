@@ -55,25 +55,23 @@ type Held struct {
 }
 
 // Stale is a lane whose holder's evidence has aged past the freshness window
-// while the lane remains unfinished. It is NOT Unclaimed carrying provenance:
-// the holder is still recorded, and who that holder is decides what the lane
-// means to whoever is reading it. To the checkout that holds it, staleness is
-// evidence it stepped away from work that is still its own, to be handed back
-// and resumed. To anyone else it is an offer — "available for takeover, last
-// touched by 7f3a three days ago", which is a different offer from "nobody has
-// ever worked this", and the agent taking it over needs to know which one it is
-// reading. Selection therefore no longer routes around a lane for staleness
-// alone; what a stale lane offers past that is the row's business, not this
-// variant's.
+// while the lane remains unfinished. It is not a claim. It is the record that
+// a claim existed — a line on the manifest, not a passenger — and it is kept
+// because the record is an offer with provenance: "available, last touched by
+// 7f3a three days ago" is a different offer from "nobody has ever worked
+// this", and the agent taking the lane needs to know which one it is reading.
+// Who the lapsed holder was changes what the offer SAYS and never who may
+// take it: the checkout that let the lane lapse reads it exactly as any other
+// checkout does, and gets it back by rank, not by residue.
 //
-// That last sentence used to read "the lane is unclaimed again — nothing routes
-// around it", which was the opposite of what selection did and erased the
-// holder this variant exists to carry. Four consumers each decided for
-// themselves whether Stale behaved like Held or like Unclaimed, and decided
-// differently; the routing gates links-claims-1b0p deleted were the
-// compensation for it. Read this variant against an identity and the ambiguity
-// is gone — which is why exactly one place in the CLI does that reading, and
-// everything else consumes its verdict.
+// This variant once read "to the checkout that holds it, staleness is evidence
+// it stepped away from work that is still its own, to be handed back and
+// resumed". Under that reading a checkout that finished one ticket of an epic
+// and walked away was routed back to that epic ahead of the entire backlog
+// for as long as the epic stayed open — with one checkout in the repository,
+// forever, since nothing it could do released a claim that no longer existed
+// (links-claims-em7h). Exactly one place in the CLI reads this variant against
+// an identity, and everything else consumes its verdict.
 //
 // Holder is what this machine can still see of the checkout named by Tenure.By,
 // and it is on this variant because expiry is exactly where it starts to

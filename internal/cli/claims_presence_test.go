@@ -112,9 +112,9 @@ func TestRelationOfLetsOnlyALockSustainAnExpiredClaim(t *testing.T) {
 		holder claims.Presence
 		want   laneRelation
 	}{
-		{"unprovable: the clock is all we have, so the lane is available", claims.Unprovable, laneStaleForeign},
-		{"gone: available, and this is the path the void filter already owns", claims.Gone, laneStaleForeign},
-		{"present: available — a tree outliving its session is ordinary", claims.Present, laneStaleForeign},
+		{"unprovable: the clock is all we have, so the lane is available", claims.Unprovable, laneLapsed},
+		{"gone: available, and this is the path the void filter already owns", claims.Gone, laneLapsed},
+		{"present: available — a tree outliving its session is ordinary", claims.Present, laneLapsed},
 		{"locked: the holder said do-not-disturb, so the hold stands", claims.Locked, laneHeldForeign},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
