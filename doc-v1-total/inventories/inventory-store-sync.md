@@ -20,7 +20,7 @@ Repo: `/Users/bmf/code/links-issue-tracker`. Derived entirely from Go/SQL source
 8. Branch normalization: `masterRenameSource(ctx, s.db)` is read lock-free; only when it returns a non-empty source is `ensureMasterDefaultBranch` run inside `s.withCommitLock` (`sync.go`). A read-only OpenSync therefore takes no commit lock.
 9. On error in step 8: `wrapEngineOpenContention(err)`, then `s.db.Close()` whose error is joined unless it is `context.Canceled`; `s.releaseWorkspaceLock` is set to nil (`sync.go`).
 
-`engineOpenRetryMaxElapsed` is `coResidentHolderWait` = 70s, a package var (`/Users/bmf/code/links-issue-tracker/internal/store/store.go`), assigned to `bo.MaxElapsedTime` at `store.go`. `coResidentHolderWait` is itself derived (`store.go`): `mirrorCycleObservedTail` 20s × `mirrorHoldStallFactor` 2 = `mirrorHoldBudget` 40s; + `mirrorCancelLagObserved` 22s = `mirrorHoldCeiling` 62s; + `coResidentWaitHeadroom` 8s = 70s.
+`engineOpenRetryMaxElapsed` is `coResidentHolderWait` = 9.5s, a package var (`/Users/bmf/code/links-issue-tracker/internal/store/store.go`), assigned to `bo.MaxElapsedTime` at `store.go`. `coResidentHolderWait` is itself derived (`store.go`): `mirrorCloneObservedTail` 500ms × `mirrorHoldStallFactor` 2 = `mirrorHoldBudget` 1s; + `mirrorHoldCancelLag` (= `mirrorCloneObservedTail`) 500ms = `mirrorHoldCeiling` 1.5s; + `coResidentWaitHeadroom` 8s = 9.5s. The push the mirror runs from its clone has a separate chain (`store.go`): `mirrorPushObservedTail` 20s × `mirrorPushStallFactor` 2 = `mirrorPushDeadline` 40s (exported as `var MirrorPushDeadline`), with `MirrorPushCancelLagObserved` 22s the lag a cut push takes to unwind; no store wait is derived from it.
 
 ### 1.2 Embedded-dependency version floor
 

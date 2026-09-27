@@ -54,9 +54,14 @@
 // deliberate: a reader that opened eagerly under a transient holder would
 // be permanently read-only, while a lazy one opens after any commit-lock
 // wait, holder gone, write-capable for auto-migration. lit acquires it
-// directly in exactly one place — the snapshot copy's
-// LockDoltJournalExclusive, which must exclude engine-lifecycle I/O without
-// opening an engine. That standing Store hold is the trap in the natural
+// without an engine in exactly two ways: LockDoltJournalExclusive, taken by
+// a file-by-file copy of the Dolt directory (the snapshot copy and the
+// on-change mirror's clone) that must exclude engine-lifecycle I/O without
+// opening an engine; and RecordPushedHead's chunk-store open
+// (pushed_head.go), which takes LOCK the way a write engine does — through
+// dolt's own loader, fail-fast on contention, retried for
+// engineOpenRetryMaxElapsed — to move one remote-tracking ref and close.
+// That standing Store hold is the trap in the natural
 // reading of "hold Dolt's LOCK during a walk": taking LOCK (opening a write
 // engine, or locking the file directly) while holding the commit lock
 // inverts the order against every live write Store. Take it before commit
@@ -80,7 +85,9 @@
 // name, recreates the two-representations disagreement.
 //
 // The sync-push lock sits outside the slots: its holder goes on to take
-// everything in them (the mirror cycle opens a full write Store), but every
+// everything in them (the mirror cycle holds workspace, LOCK and commit for
+// its clone, then opens a full write Store on the clone's own path, then
+// takes LOCK and commit again to record the pushed head), but every
 // acquisition of it is a non-blocking probe (maxAttempts 1), so no process
 // ever waits ON it — and a lock with no inbound wait-edge cannot complete a
 // cycle.

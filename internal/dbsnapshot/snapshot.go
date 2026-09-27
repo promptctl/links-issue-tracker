@@ -170,6 +170,29 @@ func Take(ctx context.Context, databaseDir, snapshotsDir, label string) (Snapsho
 	return Snapshot{Path: reserved.finalPath, Name: reserved.name, Created: reserved.created}, nil
 }
 
+// CloneTree copies databaseDir to dst the way Take does — the platform's
+// copy-on-write clone when the filesystem offers one, a recursive copy
+// otherwise — but as a bare copy rather than a snapshot: dst is the caller's
+// path, nothing is reserved, listed, or collected, and the caller owns the
+// tree's whole lifetime. It exists for a copy that is consumed and discarded
+// within one operation (the on-change mirror clones the store, pushes from the
+// clone, and removes it), which the snapshot family's retention, naming and
+// residue machinery would only misdescribe. [LAW:decomposition]
+//
+// dst must not exist. The lock preconditions on a live workspace path are
+// Take's, and they are the caller's to hold: the workspace shared lock, Dolt's
+// journal lock, and the commit lock, for the whole call.
+func CloneTree(ctx context.Context, databaseDir, dst string) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if err := cloneTree(ctx, databaseDir, dst); err != nil {
+		_ = os.RemoveAll(dst)
+		return err
+	}
+	return nil
+}
+
 // reservedPaths bundles the four paths a successful reservation produces. The
 // .reserve sentinel is the atomic claim on a slot; tmpPath is where cloneTree
 // writes; finalPath is where Rename installs the snapshot on success.

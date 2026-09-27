@@ -2790,89 +2790,79 @@ func ensureMasterDefaultBranch(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-// The co-resident-holder sizing chain. Two measured facts at the root — what a
-// mirror cycle costs, and how late its cut actually lands — and every wait in
-// the store derived from them by arithmetic. [LAW:one-source-of-truth] The
-// waits used to be three hand-set round numbers (a 20s hold budget, a 30s
-// engine-open retry, 300 journal-lock attempts at 100ms) that each had to be
-// remembered into agreement; links-sync-dauk is what happens when one of them
-// is set below the cost of the work it bounds and nothing in the code can
-// notice. Change the measurements; the waits follow.
+// The co-resident-holder sizing chain. One measured fact at the root — what
+// the mirror's hold on the live store costs — and every wait in the store
+// derived from it by arithmetic. [LAW:one-source-of-truth] The waits used to
+// be three hand-set round numbers (a 20s hold budget, a 30s engine-open retry,
+// 300 journal-lock attempts at 100ms) that each had to be remembered into
+// agreement; links-sync-dauk is what happens when one of them is set below the
+// cost of the work it bounds and nothing in the code can notice. Change the
+// measurement; the waits follow.
+//
+// What the mirror holds changed under links-scale-om3r.s2h, and the chain
+// changed with it. The mirror used to open the live store's one write engine
+// and push to the remote under it, so the hold WAS the network round trip
+// (measured 2026-09-12: p50 13.2s, slowest healthy cycle 20.0s, 627 cycles in
+// .git/links/mirror.log by 2026-09-27 at p50 13.2s, max 47s). Now the mirror
+// holds the live store only to clone it — workspace shared, Dolt's LOCK,
+// commit lock, one copy-on-write clone of the dolt directory, release — and
+// pushes from the clone with no lock on the live store held. The push's own
+// deadline is the separate chain below (mirrorPushDeadline).
 const (
-	// mirrorCycleObservedTail is the slowest a HEALTHY mirror cycle — open,
-	// push, close — has been measured to run on a real workspace. Measured
-	// 2026-09-12 against this repo's own store, from two samples, because the
-	// one the mirror keeps for itself is censored by the very budget sized
-	// from it:
+	// mirrorCloneObservedTail is the slowest a HEALTHY hold — take the three
+	// locks, clone the dolt directory, clear the pending marker, release —
+	// has been measured to run. Measured 2026-09-27 against this repository's
+	// own store (283 MB on disk: 94 MB noms, 183 MB git-remote-cache), load
+	// average 7–13, as the clone step alone, which is the whole hold but for
+	// three flock calls and one unlink:
 	//
-	//   - .git/links/mirror.log, 279 cycles: min 10.6s; p50 13.2s over all of
-	//     them, 12.7s over the 235 that were not cut; slowest uncut cycle
-	//     20.0s. 44 of the 279 (15.8%) were cut at the then-20s budget, so
-	//     every cycle that would have run longer is recorded as a cut and the
-	//     log cannot show the tail. A floor, never a ceiling.
-	//   - 20 foreground `lit sync push` runs of the same store: min 9.8s,
-	//     p50 12.2s, max 17.0s. Uncensored — the foreground push shares
-	//     performSyncPush with the mirror and is deliberately unbounded — so
-	//     this is the sample the budget can honestly be sized against.
+	//   - APFS clonefile of the whole directory (dbsnapshot.CloneTree's
+	//     Darwin path), 6 samples: 0.109s–0.240s.
+	//   - byte-for-byte copy of the same directory (the walk-and-copy path a
+	//     filesystem without copy-on-write falls back to), 2 samples:
+	//     0.390s, 0.461s.
 	//
-	// Compared like with like — completed work against completed work, the
-	// mirror's uncut p50 of 12.7s against the foreground's 12.2s — the two
-	// agree to about half a second, which answers the question links-sync-dauk
-	// raised off a single 6.8s foreground sample: the background path does not
-	// cost twice the foreground one. The all-cycles p50 is the wrong half of
-	// that comparison, and specifically so: the 44 cuts contribute the latency
-	// of being cancelled, not the duration of work that finished, which is the
-	// same censoring this whole comment is about. Both paths ARE the push. The
-	// engine open and close bracketing it measure ~0.3s together (`lit sync
-	// status`, same session open, no push), so the cycle's cost is the network
-	// round trip and nothing else.
-	//
-	// [FRAMING:representation] This is a map of an operation whose territory —
-	// a push against a remote holding a repository that grows — moves. Now
-	// that the budget sits above the tail instead of inside it, mirror.log's
-	// elapsed= values are uncensored and are the place to re-measure from.
-	mirrorCycleObservedTail = 20 * time.Second
+	// The hold has two healthy regimes — a copy-on-write clone whose cost is
+	// metadata, and a byte copy whose cost is proportional to the store — and
+	// a stall detector sits above the SLOWER of them, so the figure is the
+	// byte copy's tail rounded up to the next 100ms, not the clone's.
+	// [FRAMING:representation] a map of an operation whose territory grows
+	// with the store; mirror.log's `hold=` values are the place to re-measure
+	// from, and a byte-copy regime on a slow disk is the reading that would
+	// move it.
+	mirrorCloneObservedTail = 500 * time.Millisecond
 
-	// mirrorHoldStallFactor is what separates "slow" from "stalled". The hold
-	// budget exists for links-sync-pgct.11.1 — a `kex_exchange_identification`
-	// SSH hang that pinned the journal lock for as long as the remote cared to
-	// stall — and a transport that has stopped answering is not a cycle
-	// running a bit long, it is a cycle that will never end. So the budget is
-	// sized to fire at twice the slowest healthy cycle ever recorded, where
-	// the only thing on the far side is a stall. A budget set AT the cost of
-	// the work is not a safety valve; it is a scheduled failure, which is
-	// exactly the 15.8% deferral rate links-sync-dauk measured.
+	// mirrorHoldStallFactor is what separates "slow" from "stalled". A hold
+	// still running at twice the slowest healthy hold ever recorded is not a
+	// hold running a bit long; it is a copy that has stopped making progress,
+	// and the budget fires there. A budget set AT the cost of the work is not
+	// a safety valve; it is a scheduled failure, which is exactly the 15.8%
+	// deferral rate links-sync-dauk measured against the old push hold.
 	mirrorHoldStallFactor = 2
 
-	// mirrorHoldBudget is the deadline the mirror cycle runs under. The
-	// exported MirrorHoldBudget below is the variable the cli reads and the
-	// deadline regression test shrinks; this const is what it starts at, so
-	// the waits derived from it further down stay const arithmetic.
-	mirrorHoldBudget = mirrorCycleObservedTail * mirrorHoldStallFactor
+	// mirrorHoldBudget is the deadline each mirror hold on the live store runs
+	// under — the clone step, and the pushed-head record after the push. The
+	// exported MirrorHoldBudget below is the variable the cli reads and tests
+	// shrink; this const is what it starts at, so the waits derived from it
+	// further down stay const arithmetic.
+	mirrorHoldBudget = mirrorCloneObservedTail * mirrorHoldStallFactor
 
-	// MirrorCancelLagObserved is how much longer a cut cycle keeps holding the
-	// engine after its deadline has already fired: cancellation reaches the
-	// transport, but the push does not unwind instantly. Measured 2026-09-12
-	// over the 44 cut cycles in mirror.log as elapsed-minus-budget: p50 1.3s,
-	// but 21.4s at the tail.
-	//
-	// Exported because the cli's hold-budget regression tests assert where the
-	// hold ends, and had been restating that bound as a bare 30s — a second,
-	// unattributed copy of this figure, which a re-measurement here would have
-	// left behind (links-testperf-6vfg). [LAW:one-source-of-truth]
-	//
-	// That tail is the whole reason this constant exists rather than a round
-	// figure for "the mirror's engine close plus the waiter's retry
-	// granularity", which is what the retired 5s headroom claimed to cover and
-	// undercounted fourfold. The budget is when the cut BEGINS. The hold ends
-	// at mirrorHoldCeiling, and a waiter sized against the budget alone is
-	// sized against a number the hold does not respect.
-	MirrorCancelLagObserved = 22 * time.Second
+	// mirrorHoldCancelLag is how much longer a cut hold can keep the store
+	// after its deadline has fired. The clone step's one uncancelable unit is
+	// a single clonefile syscall (the walk-and-copy path checks the context
+	// between 32 MiB chunks), and a syscall that ran long is bounded by the
+	// clone tail above; the record step's is one journal append. So a cut
+	// lands within one observed tail of its deadline — a bound derived from
+	// the measurement, not a second measurement, which is why it is not
+	// exported as an "observed" figure. The old push hold's cancellation lag
+	// was measured separately and lives on MirrorPushCancelLagObserved below.
+	mirrorHoldCancelLag = mirrorCloneObservedTail
 
-	// mirrorHoldCeiling is the longest a mirror can hold the store's engine
-	// and journal lock: its deadline plus the lag its cut takes to land. This
-	// — not the budget — is the number every co-resident waiter must outlast.
-	mirrorHoldCeiling = mirrorHoldBudget + MirrorCancelLagObserved
+	// mirrorHoldCeiling is the longest a mirror can hold the live store's
+	// LOCK and commit lock: its deadline plus the lag its cut takes to land.
+	// This — not the budget — is the number every co-resident waiter must
+	// outlast.
+	mirrorHoldCeiling = mirrorHoldBudget + mirrorHoldCancelLag
 
 	// coResidentWaitHeadroom is scheduling slop above the ceiling, and the one
 	// number here that is a judgment rather than a measurement — so it is
@@ -2892,8 +2882,75 @@ const (
 	// protect anyone, it manufactures "another process is holding this
 	// workspace's Dolt store open" out of a workspace behaving exactly as
 	// designed. engineOpenRetryMaxElapsed and doltJournalRetryAttempts are
-	// both this number; neither restates it.
+	// both this number; neither restates it. Another lit command's engine
+	// session is the other routine holder, and a long one (an import, a
+	// reconcile) still outlasts this wait by design — links-scale-om3r.zhq is
+	// where a caller that cannot get the store learns to name that holder.
 	coResidentHolderWait = mirrorHoldCeiling + coResidentWaitHeadroom
+)
+
+// The push deadline chain. The mirror's push runs from a clone with no lock on
+// the live store held, so nothing waits on it — but the mirror process itself
+// holds the single-flight sync-push lock for its whole run, and every mirror
+// spawned meanwhile loses that race and exits. A push hung on a stalled
+// transport would therefore stop pushes for as long as the remote cared to
+// stall (links-sync-pgct.11.1's `kex_exchange_identification` hang), so the
+// push still runs under a deadline. It is the OLD hold budget's arithmetic,
+// unchanged: the figures were measured on this exact operation and it is the
+// same operation, only no longer a hold.
+const (
+	// mirrorPushObservedTail is the slowest a HEALTHY push — open the clone's
+	// engine, push, close — has been measured to run on a real workspace.
+	// Measured 2026-09-12 against this repo's own store, from two samples,
+	// because the one the mirror keeps for itself is censored by the very
+	// deadline sized from it:
+	//
+	//   - .git/links/mirror.log, 279 cycles: min 10.6s; p50 13.2s over all of
+	//     them, 12.7s over the 235 that were not cut; slowest uncut cycle
+	//     20.0s. 44 of the 279 (15.8%) were cut at the then-20s budget, so
+	//     every cycle that would have run longer is recorded as a cut and the
+	//     log cannot show the tail. A floor, never a ceiling.
+	//   - 20 foreground `lit sync push` runs of the same store: min 9.8s,
+	//     p50 12.2s, max 17.0s. Uncensored — the foreground push shares
+	//     performSyncPush with the mirror and is deliberately unbounded — so
+	//     this is the sample the deadline can honestly be sized against.
+	//
+	// Compared like with like — completed work against completed work, the
+	// mirror's uncut p50 of 12.7s against the foreground's 12.2s — the two
+	// agree to about half a second: the background path does not cost twice
+	// the foreground one. Both paths ARE the push. The engine open and close
+	// bracketing it measure ~0.3s together, so the cost is the network round
+	// trip and nothing else. [FRAMING:representation] a map of an operation
+	// whose territory — a push against a remote holding a repository that
+	// grows — moves; mirror.log's `push=` values are the place to re-measure
+	// from.
+	mirrorPushObservedTail = 20 * time.Second
+
+	// mirrorPushStallFactor: a transport that has stopped answering is not a
+	// push running a bit long, it is a push that will never end, so the
+	// deadline fires at twice the slowest healthy push ever recorded, where
+	// the only thing on the far side is a stall.
+	mirrorPushStallFactor = 2
+
+	// mirrorPushDeadline is the deadline the mirror's push runs under. The
+	// exported MirrorPushDeadline below is the variable the cli reads and the
+	// deadline regression test shrinks; this const is what it starts at.
+	mirrorPushDeadline = mirrorPushObservedTail * mirrorPushStallFactor
+
+	// MirrorPushCancelLagObserved is how much longer a cut push keeps its
+	// engine (the clone's, now) after its deadline has already fired:
+	// cancellation reaches the transport, but the push does not unwind
+	// instantly. Measured 2026-09-12 over the 44 cut cycles in mirror.log as
+	// elapsed-minus-budget: p50 1.3s, but 21.4s at the tail.
+	//
+	// Exported because the cli's push-deadline regression tests assert where
+	// a cut push ENDS, and had been restating that bound as a bare 30s — a
+	// second, unattributed copy of this figure, which a re-measurement here
+	// would have left behind (links-testperf-6vfg). [LAW:one-source-of-truth]
+	// No store wait is sized against it any more: the push holds nothing on
+	// the live store, so its lag is the mirror process's own lifetime and
+	// nobody else's.
+	MirrorPushCancelLagObserved = 22 * time.Second
 )
 
 // engineOpenRetryMaxElapsed bounds how long a write-capable engine open keeps
@@ -2902,16 +2959,25 @@ const (
 // production one.
 var engineOpenRetryMaxElapsed = coResidentHolderWait
 
-// MirrorHoldBudget is the deadline one background-mirror engine session — open,
-// push, close — runs under. The mirror's push traverses the network with no
-// inherent bound, so the bound is imposed by the actor that owns the hold
-// (links-sync-pgct.11.1). It is a deadline, not a bound on the hold:
-// cancellation lands MirrorCancelLagObserved later, and mirrorHoldCeiling is
-// the number that follows from that. TestMirrorHoldBudgetExceedsObservedCycleCost
-// and TestCoResidentWaitOutlastsMirrorHoldCeiling pin both relations. A package
-// variable so the deadline regression test can shrink it without sleeping
-// through the production one.
+// MirrorHoldBudget is the deadline each background-mirror hold on the live
+// store runs under: the clone step before the push, and the pushed-head record
+// after it. It is a deadline, not a bound on the hold: a cut lands up to
+// mirrorHoldCancelLag later, and mirrorHoldCeiling is the number that follows
+// from that. TestMirrorHoldBudgetExceedsObservedCloneCost and
+// TestCoResidentWaitOutlastsMirrorHoldCeiling pin both relations. A package
+// variable so a regression test can shrink it without sleeping through the
+// production one.
 var MirrorHoldBudget = mirrorHoldBudget
+
+// MirrorPushDeadline is the deadline the background mirror's push — the
+// clone's engine session: open, push, close — runs under. The push traverses
+// the network with no inherent bound, so the bound is imposed by the actor
+// that owns it (links-sync-pgct.11.1). It holds nothing on the live store; it
+// exists so a stalled transport cannot wedge the single-flight mirror forever.
+// TestMirrorPushDeadlineExceedsObservedPushCost pins its relation to the
+// measured push. A package variable so the deadline regression test can
+// shrink it without sleeping through the production one.
+var MirrorPushDeadline = mirrorPushDeadline
 
 // wrapEngineOpenContention attaches operator guidance to an engine open that
 // exhausted its retry budget against a held Dolt journal lock; every other

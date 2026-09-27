@@ -128,6 +128,25 @@ func snapshotsNewLeaf() wsLeaf {
 // takeUserSnapshot brackets the Dolt-directory copy in exactly the holds the
 // copy needs and releases them at return, so the caller's housekeeping never
 // extends the exclusion window past the last directory read.
+func takeUserSnapshot(ctx context.Context, ws workspace.Info, label string) (snap dbsnapshot.Snapshot, err error) {
+	err = withDoltDirectoryHeld(ctx, ws, func() error {
+		s, err := dbsnapshot.Take(ctx, ws.DatabasePath, snapshotsDirFor(ws), label)
+		if err != nil {
+			return err
+		}
+		snap = s
+		return nil
+	})
+	// snap is populated exactly when Take succeeded, so a failure that landed
+	// after the take (the lock releases) travels beside the record of the
+	// durable snapshot it did not undo, never in place of it.
+	// [LAW:no-silent-failure]
+	return snap, err
+}
+
+// withDoltDirectoryHeld runs fn with the Dolt directory held the way a
+// file-by-file copy of it needs — the snapshot copy, and the on-change mirror's
+// clone — and releases every hold at return.
 //
 // [LAW:single-enforcer] The copy reads the Dolt directory file by file — the
 // same kind of actor as an open Store — so it takes the same shared workspace
@@ -140,18 +159,19 @@ func snapshotsNewLeaf() wsLeaf {
 // backlog` opens write-capable, links-sync-pgct.15's tear; under the hold a
 // concurrent read open demotes to Dolt's write-nothing read-only fallback
 // and a write open fails fast after its bounded retry), and writer
-// serialization.
-func takeUserSnapshot(ctx context.Context, ws workspace.Info, label string) (snap dbsnapshot.Snapshot, err error) {
+// serialization. One home for that sequence, so the second copier cannot
+// take two of the three and call it held.
+func withDoltDirectoryHeld(ctx context.Context, ws workspace.Info, fn func() error) (err error) {
 	// These direct acquisitions are open boundaries like any Store open, so
 	// holder contention is stamped for Run's dispatch trace exactly as
 	// runWithApp stamps app.Open.
 	releaseWorkspace, err := store.LockWorkspaceShared(ctx, ws.DatabasePath)
 	if err != nil {
-		return dbsnapshot.Snapshot{}, markEngineOpenContention(err, ws)
+		return markEngineOpenContention(err, ws)
 	}
 	// [LAW:no-silent-failure] Same release contract as runSnapshotsRestore: a
 	// failed release can leave the workspace stuck busy for later commands,
-	// so it surfaces via the named return alongside any snapshot error.
+	// so it surfaces via the named return alongside any error from fn.
 	defer func() {
 		if relErr := releaseWorkspace(); relErr != nil {
 			err = errors.Join(err, relErr)
@@ -160,15 +180,14 @@ func takeUserSnapshot(ctx context.Context, ws workspace.Info, label string) (sna
 	// Same post-lock ordering as every store open: only a marker checked
 	// under the held workspace lock is binding (a live adopt holds the lock
 	// exclusively, so reaching this line proves any marker present belongs
-	// to a dead adopt). Without this check the copy would snapshot condemned
-	// residue as a "restorable" recovery point — and the retention prune
-	// would then evict a good snapshot to keep the garbage one.
+	// to a dead adopt). Without this check the copy would take condemned
+	// residue as a good store.
 	if err := store.PendingAdopt(ws.DatabasePath); err != nil {
-		return dbsnapshot.Snapshot{}, err
+		return err
 	}
 	releaseJournal, err := store.LockDoltJournalExclusive(ctx, ws.DatabasePath)
 	if err != nil {
-		return dbsnapshot.Snapshot{}, markEngineOpenContention(err, ws)
+		return markEngineOpenContention(err, ws)
 	}
 	// LIFO under the workspace release above; a failed release surfaces the
 	// same way. (The hold dies with the process regardless — kernel flock —
@@ -178,19 +197,7 @@ func takeUserSnapshot(ctx context.Context, ws workspace.Info, label string) (sna
 			err = errors.Join(err, relErr)
 		}
 	}()
-	err = withCommitLock(ctx, ws, func() error {
-		s, err := dbsnapshot.Take(ctx, ws.DatabasePath, snapshotsDirFor(ws), label)
-		if err != nil {
-			return err
-		}
-		snap = s
-		return nil
-	})
-	// snap is populated exactly when Take succeeded, so a failure that landed
-	// after the take (the commit-lock release here, the journal or workspace
-	// releases in the defers above) travels beside the record of the durable
-	// snapshot it did not undo, never in place of it. [LAW:no-silent-failure]
-	return snap, err
+	return withCommitLock(ctx, ws, fn)
 }
 
 func snapshotsListLeaf() wsLeaf {
