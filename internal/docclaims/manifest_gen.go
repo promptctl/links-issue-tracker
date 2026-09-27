@@ -1032,6 +1032,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "SELECT DOLT_VERSION()", Src: "SELECT DOLT_VERSION()"},
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "SELECT active_branch()", Src: "SELECT active_branch()"},
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "SELECT column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ?", Src: "SELECT column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ?"},
+	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "SELECT commit_hash FROM dolt_log() LIMIT 1", Src: "SELECT commit_hash FROM dolt_log() LIMIT 1"},
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "SELECT commit_hash FROM dolt_log(?) LIMIT 1", Src: "SELECT commit_hash FROM dolt_log(?) LIMIT 1"},
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "SELECT commit_hash, committer, email, date, message FROM dolt_log(?)", Src: "SELECT commit_hash, committer, email, date, message FROM dolt_log(?)"},
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "SELECT commit_hash, message FROM dolt_log() LIMIT 1", Src: "SELECT commit_hash, message FROM dolt_log() LIMIT 1"},

@@ -85,6 +85,21 @@ func TestCoResidentWaitOutlastsMirrorHoldCeiling(t *testing.T) {
 		t.Fatalf("mirrorHoldCeiling (%s) does not exceed mirrorHoldBudget (%s); the ceiling exists because a cut does not land on its deadline, and a ceiling equal to the budget restates the budget instead of correcting it",
 			mirrorHoldCeiling, mirrorHoldBudget)
 	}
+	// The mirror is not the only routine holder while the inline receive and
+	// the explicit push still run on the live store's locks: a wait sized
+	// under either fails a write open against a peer's `lit show` or
+	// `git push` doing exactly what it was designed to do.
+	for _, holder := range []struct {
+		name    string
+		ceiling time.Duration
+	}{
+		{"inlineReceiveCeiling", inlineReceiveCeiling},
+		{"foregroundPushObservedTail", foregroundPushObservedTail},
+	} {
+		if coResidentHolderWait <= holder.ceiling {
+			t.Fatalf("coResidentHolderWait (%s) does not outlast %s (%s); a foreground open fails against a routine holder", coResidentHolderWait, holder.name, holder.ceiling)
+		}
+	}
 }
 
 // TestJournalRetryAttemptsReconstructCoResidentWait pins that the journal

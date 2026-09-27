@@ -425,6 +425,7 @@ type syncPushOutcome struct {
 	// push, rendered as its own line so message stays the engine's verbatim
 	// push output. [LAW:one-source-of-truth]
 	maintenance string
+	head        string // the commit the push sent as HEAD; empty on a skip or a failure
 	traceErr    error
 	pushErr     error // the push failure; the trace is already recorded when set
 }
@@ -460,6 +461,16 @@ func syncPushTraceMetadata(remoteName, syncBranch string, result storage.SyncPus
 	// [LAW:no-silent-failure]
 	if maintenance := strings.TrimSpace(result.Maintenance); maintenance != "" {
 		metadata["maintenance"] = maintenance
+	}
+	if head := strings.TrimSpace(result.Head); head != "" {
+		metadata["head"] = head
+	}
+	// A superseded push is a landed goal with a rejected attempt inside it;
+	// the rejection is kept in the record, under its own key, so the trail
+	// shows the race and not a push that quietly succeeded.
+	// [LAW:no-silent-failure]
+	if superseded := strings.TrimSpace(result.Superseded); superseded != "" {
+		metadata["superseded"] = superseded
 	}
 	if pushErr != nil {
 		metadata["error"] = pushErr.Error()
@@ -587,6 +598,7 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 		branch:      syncBranch,
 		message:     result.Message,
 		maintenance: result.Maintenance,
+		head:        result.Head,
 		traceErr:    traceRecordErr,
 		pushErr:     pushErr,
 	}, nil

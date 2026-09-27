@@ -68,6 +68,15 @@ type Syncer interface {
 
 	SyncFetch(ctx context.Context, remote string, prune bool) error
 	SyncPush(ctx context.Context, remote string, branch string, setUpstream bool, force bool) (SyncPushResult, error)
+
+	// SyncPushFromClone is SyncPush for a store that is a frozen clone of a
+	// live one — the on-change mirror's push. Nothing serializes it against
+	// the live store's own network traffic, so a push the remote rejects is
+	// re-checked before it is reported: when the remote already carries this
+	// store's HEAD (a concurrent push from the live store landed a descendant
+	// of it), the result is Superseded rather than an error, because the goal
+	// state holds. A rejection the re-check does not explain is the error.
+	SyncPushFromClone(ctx context.Context, remote string, branch string, setUpstream bool, force bool) (SyncPushResult, error)
 	SyncPull(ctx context.Context, remote string, branch string) (SyncPullResult, error)
 
 	// SyncReceive fetches and fast-forwards when — and only when — local is

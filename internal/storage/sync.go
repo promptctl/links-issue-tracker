@@ -327,6 +327,20 @@ type SyncPushResult struct {
 	Status  int64  `json:"status"`
 	Message string `json:"message"`
 
+	// Head is the commit the push sent as HEAD — the pushing store's HEAD,
+	// read under the same lock the push ran under, so it is exactly what the
+	// remote now carries. The on-change mirror records it on the live store
+	// its clone was taken from. [LAW:one-source-of-truth] the push reports
+	// what it sent; nobody re-derives it from a second read afterwards.
+	Head string `json:"head"`
+
+	// Superseded is set, in the engine's own words, when this push was
+	// rejected and the re-check found the remote already carrying Head — a
+	// concurrent push from the live store landed a descendant of it. Empty
+	// for a push that landed itself. Its own field so Message stays the
+	// engine's verbatim push output. [LAW:one-source-of-truth]
+	Superseded string `json:"superseded,omitempty"`
+
 	// Maintenance is what the engine did to reclaim local storage while
 	// servicing this push, in the engine's own words, and empty when it found
 	// nothing worth reporting — so an ordinary push carries no maintenance line

@@ -2790,14 +2790,14 @@ func ensureMasterDefaultBranch(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-// The co-resident-holder sizing chain. One measured fact at the root — what
-// the mirror's hold on the live store costs — and every wait in the store
-// derived from it by arithmetic. [LAW:one-source-of-truth] The waits used to
-// be three hand-set round numbers (a 20s hold budget, a 30s engine-open retry,
-// 300 journal-lock attempts at 100ms) that each had to be remembered into
-// agreement; links-sync-dauk is what happens when one of them is set below the
-// cost of the work it bounds and nothing in the code can notice. Change the
-// measurement; the waits follow.
+// The co-resident-holder sizing chain. Measured facts at the root — what each
+// routine holder of the live store costs to wait out — and every wait in the
+// store derived from them by arithmetic. [LAW:one-source-of-truth] The waits
+// used to be three hand-set round numbers (a 20s hold budget, a 30s
+// engine-open retry, 300 journal-lock attempts at 100ms) that each had to be
+// remembered into agreement; links-sync-dauk is what happens when one of them
+// is set below the cost of the work it bounds and nothing in the code can
+// notice. Change a measurement; the waits follow.
 //
 // What the mirror holds changed under links-scale-om3r.s2h, and the chain
 // changed with it. The mirror used to open the live store's one write engine
@@ -2873,20 +2873,55 @@ const (
 	// measured step stops being measurable.
 	coResidentWaitHeadroom = 8 * engineOpenRetryMaxInterval
 
+	// InlineReceiveDeadline bounds the inline receive — the fetch a read
+	// command pays after its output when the receive debounce lapses — so an
+	// offline or slow remote cannot hang the command's exit. A cut abandons
+	// only the fetch (the next interval retries), never the command's result.
+	// It is declared here rather than beside the receive because the receive
+	// holds this store's LOCK for its whole run, which makes it a term of the
+	// wait below. [LAW:one-source-of-truth]
+	InlineReceiveDeadline = 15 * time.Second
+
+	// inlineReceiveCeiling is the longest the inline receive can hold the
+	// live store: its deadline plus the lag its cut takes to land. The lag is
+	// the push's measured one, MirrorPushCancelLagObserved — the receive's
+	// fetch and the push are the same transport, the embedded driver's git
+	// subprocess torn down the same way when its context ends — and the
+	// receive has not been measured on its own. [FRAMING:representation] a
+	// borrowed figure, named as borrowed.
+	inlineReceiveCeiling = InlineReceiveDeadline + MirrorPushCancelLagObserved
+
+	// foregroundPushObservedTail is the slowest a HEALTHY explicit `lit sync
+	// push` (the pre-push hook's push) has been measured to hold the live
+	// store. It runs under the live engine with no deadline of its own, and
+	// it is the operation mirrorPushObservedTail was measured on — twenty
+	// foreground runs are in that sample — so the figure is that one and not
+	// a second measurement. [LAW:one-source-of-truth]
+	foregroundPushObservedTail = mirrorPushObservedTail
+
+	// routineHolderCeiling is the longest ANY routine holder keeps the live
+	// store: the mirror's clone or record hold, a read command's inline
+	// receive, an explicit push. The chain once named the mirror alone, which
+	// was a map missing two territories — a write open waiting less than the
+	// receive's deadline failed against a peer's `lit show` doing exactly what
+	// it was designed to do. Each term leaves this max with its holder:
+	// links-scale-om3r.3s7 takes the receive off the live store's locks, and
+	// links-scale-om3r.zhq re-derives the wait once the mirror is the last
+	// routine holder and a caller that cannot get the store names the one
+	// that has it.
+	routineHolderCeiling = max(mirrorHoldCeiling, inlineReceiveCeiling, foregroundPushObservedTail)
+
 	// coResidentHolderWait is the ONE answer to "how long does a caller wait
 	// for a co-resident holder of this store to let go" — a live write Store
 	// in this or another process, a non-lit dolt process, or the snapshot
-	// copy's LockDoltJournalExclusive hold. It is derived from the mirror's
-	// hold ceiling because the mirror IS the co-resident holder every one of
-	// these waits was sized for: a wait shorter than a legal hold does not
-	// protect anyone, it manufactures "another process is holding this
-	// workspace's Dolt store open" out of a workspace behaving exactly as
-	// designed. engineOpenRetryMaxElapsed and doltJournalRetryAttempts are
-	// both this number; neither restates it. Another lit command's engine
-	// session is the other routine holder, and a long one (an import, a
-	// reconcile) still outlasts this wait by design — links-scale-om3r.zhq is
-	// where a caller that cannot get the store learns to name that holder.
-	coResidentHolderWait = mirrorHoldCeiling + coResidentWaitHeadroom
+	// copy's LockDoltJournalExclusive hold. It outlasts every routine holder
+	// because a wait shorter than a legal hold does not protect anyone, it
+	// manufactures "another process is holding this workspace's Dolt store
+	// open" out of a workspace behaving exactly as designed.
+	// engineOpenRetryMaxElapsed and doltJournalRetryAttempts are both this
+	// number; neither restates it. A long engine session that is not routine
+	// (an import, a reconcile) still outlasts this wait by design.
+	coResidentHolderWait = routineHolderCeiling + coResidentWaitHeadroom
 )
 
 // The push deadline chain. The mirror's push runs from a clone with no lock on

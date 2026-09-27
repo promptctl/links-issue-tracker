@@ -558,7 +558,8 @@ func TestDeadlineCutFramingSurvivesTheBanner(t *testing.T) {
 		blame   string
 	}{
 		{"push deadline", &store.MirrorPushDeadline, pushDeadlineCutExplanation, "before blaming the remote"},
-		{"hold budget", &store.MirrorHoldBudget, holdBudgetCutExplanation, "before blaming the disk"},
+		{"hold budget, clone step", &store.MirrorHoldBudget, func() error { return holdBudgetCutExplanation("cloning the store") }, "before blaming the disk"},
+		{"hold budget, record step", &store.MirrorHoldBudget, func() error { return holdBudgetCutExplanation("recording the pushed head") }, "before blaming the disk"},
 	}
 	for _, tc := range cases {
 		for _, value := range []time.Duration{*tc.knob, 100 * time.Minute} {

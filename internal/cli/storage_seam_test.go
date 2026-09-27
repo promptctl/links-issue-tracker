@@ -127,9 +127,18 @@ var doltWorkspaceMachinery = map[string][]string{
 	// second, unattributed copy of a measured figure, which a re-measurement
 	// in store would have left behind (links-testperf-6vfg).
 	// [LAW:one-source-of-truth]
+	//
+	// PushedHeadRecord and ErrMirrorHoldCut are RecordPushedHead's two answers
+	// the mirror's trail has to tell apart — which way the ref write went, and
+	// that a failure was the hold budget's cut — and travel with it.
+	// InlineReceiveDeadline is the receive's own deadline, declared in store
+	// because the receive holds the store's LOCK for its run and so is a term
+	// of the co-resident wait; the cli reads it rather than keep the second
+	// copy it used to (receiveTimeout), which the wait could not see.
 	"mirror clone and push": {
 		"MirrorHoldBudget", "MirrorPushDeadline", "MirrorPushCancelLagObserved",
-		"RecordPushedHead",
+		"RecordPushedHead", "PushedHeadRecord", "ErrMirrorHoldCut",
+		"InlineReceiveDeadline",
 	},
 	// Typed failures the CLI matches to choose an exit code and a message.
 	// [LAW:parse-dont-validate] — matched as types, never by message text.

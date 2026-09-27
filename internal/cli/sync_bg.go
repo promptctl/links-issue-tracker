@@ -69,7 +69,7 @@ const (
 	// the wait below — abandoning a mirror that owed a push, for work the parent
 	// was designed to do. Adding a step to the tail now means adding it here.
 	// [LAW:one-source-of-truth]
-	parentPostSpawnTail = receiveTimeout + // the inline receive
+	parentPostSpawnTail = store.InlineReceiveDeadline + // the inline receive
 		ownerNotifyHookTimeout + ownerNotifyPipeWaitDelay + // a divergence's owner-notify hook and its pipe
 		compactTimeout // the compaction backstop
 
@@ -370,7 +370,7 @@ type mirrorClone struct {
 // copy, it is a stalled one, and the cut is reported as such through the
 // could-not-attempt seam — the hold explanation names the step so the reader
 // does not go looking for a network fault.
-func takeMirrorClone(ctx context.Context, ws workspace.Info) (mirrorClone, error) {
+func takeMirrorClone(ctx context.Context, log io.Writer, ws workspace.Info) (mirrorClone, error) {
 	base := mirrorCloneBase(ws)
 	if err := os.RemoveAll(base); err != nil {
 		return mirrorClone{}, fmt.Errorf("collect a dead mirror's clone under %s: %w", base, err)
@@ -398,17 +398,21 @@ func takeMirrorClone(ctx context.Context, ws workspace.Info) (mirrorClone, error
 	}
 	if err != nil {
 		if holdCut {
-			err = fmt.Errorf("%w: %w", holdBudgetCutExplanation(), err)
+			err = fmt.Errorf("%w: %w", holdBudgetCutExplanation("cloning the store"), err)
 		}
-		clone.remove(io.Discard)
-		return mirrorClone{}, err
+		clone.remove(log)
+		// The hold's cost travels with the failure: a cut hold logged as
+		// hold=0s is the one reading holdBudgetCutExplanation tells the
+		// operator to consult, erased. [LAW:no-silent-failure]
+		return mirrorClone{held: clone.held}, err
 	}
 	return clone, nil
 }
 
 // remove discards the cycle's clone. Loud on the log, never fatal: the push
-// this clone served has already completed and been recorded, and a tree left
-// behind is collected by the next cycle's sweep. [LAW:no-silent-failure]
+// this clone served has already completed and been recorded (or the clone
+// never served one), and a tree left behind is collected by the next cycle's
+// sweep. [LAW:no-silent-failure]
 func (c mirrorClone) remove(log io.Writer) {
 	if err := os.RemoveAll(c.dir); err != nil {
 		fmt.Fprintf(log, "%s mirror clone not removed (%v); the next cycle's sweep collects it\n", time.Now().UTC().Format(time.RFC3339), err)
@@ -459,7 +463,7 @@ func (p pushedHead) landed() bool { return p.head != "" }
 func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnswering func()) (attempted bool) {
 	start := time.Now()
 	fmt.Fprintf(log, "%s mirror cycle start (hold budget %s, push deadline %s)\n", start.UTC().Format(time.RFC3339), store.MirrorHoldBudget, store.MirrorPushDeadline)
-	clone, err := takeMirrorClone(ctx, ws)
+	clone, err := takeMirrorClone(ctx, log, ws)
 	if err != nil {
 		_ = completeMirrorWithoutAttempt(ctx, ws, err, stopAnswering)
 		fmt.Fprintf(log, "%s mirror cycle end attempted=false push_deadline_cut=false hold=%s elapsed=%s\n",
@@ -506,35 +510,42 @@ func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnsw
 	}
 
 	var recordHeld time.Duration
+	var record store.PushedHeadRecord
 	if landed.landed() {
 		recordStart := time.Now()
-		recordErr := store.RecordPushedHead(ctx, ws.DatabasePath, landed.remote, landed.branch, landed.head)
+		var recordErr error
+		record, recordErr = store.RecordPushedHead(ctx, ws.DatabasePath, landed.remote, landed.branch, landed.head)
 		recordHeld = time.Since(recordStart)
 		if recordErr != nil {
 			// The push landed and its outcome stands; what failed is the
 			// live store's bookkeeping of it, which the next fetch repairs.
-			// Loud in the trail, never a re-coloring of the push.
-			// [LAW:no-silent-failure]
+			// Loud in the trail, never a re-coloring of the push. A cut is
+			// named as the budget's doing, through the one wording the clone
+			// step uses. [LAW:no-silent-failure] [LAW:one-source-of-truth]
+			if errors.Is(recordErr, store.ErrMirrorHoldCut) {
+				recordErr = fmt.Errorf("%w: %w", holdBudgetCutExplanation("recording the pushed head"), recordErr)
+			}
 			recordMirrorTraceError(ws, fmt.Errorf("record the pushed head on the live store (freshness reads say \"not pushed\" until the next fetch): %w", recordErr))
 		}
-		fmt.Fprintf(log, "%s mirror hold released step=record elapsed=%s\n", time.Now().UTC().Format(time.RFC3339), recordHeld.Round(time.Millisecond))
+		fmt.Fprintf(log, "%s mirror hold released step=record elapsed=%s ref=%s\n", time.Now().UTC().Format(time.RFC3339), recordHeld.Round(time.Millisecond), record)
 	}
-	fmt.Fprintf(log, "%s mirror cycle end attempted=%t push_deadline_cut=%t hold=%s record=%s push=%s elapsed=%s\n",
+	fmt.Fprintf(log, "%s mirror cycle end attempted=%t push_deadline_cut=%t hold=%s record=%s ref=%s push=%s elapsed=%s\n",
 		time.Now().UTC().Format(time.RFC3339), attempted, deadlineCut,
-		clone.held.Round(time.Millisecond), recordHeld.Round(time.Millisecond), pushElapsed.Round(time.Millisecond), time.Since(start).Round(time.Millisecond))
+		clone.held.Round(time.Millisecond), recordHeld.Round(time.Millisecond), record, pushElapsed.Round(time.Millisecond), time.Since(start).Round(time.Millisecond))
 	return attempted
 }
 
 // holdBudgetCutExplanation is the one wording of "the holder cut itself
-// loose": the fact that explains a clone error killed by the hold budget. It
-// refuses to name a cause beyond what the deadline established — the clone
-// ran past twice the slowest healthy one ever measured — and names the
-// evidence that separates a stalled disk from an undersized budget.
-// [LAW:one-source-of-truth] [FRAMING:representation]
-func holdBudgetCutExplanation() error {
+// loose": the fact that explains a hold killed by the hold budget, for either
+// hold the mirror takes on the live store — step names which ("cloning the
+// store", "recording the pushed head"). It refuses to name a cause beyond
+// what the deadline established — the hold ran past twice the slowest healthy
+// one ever measured — and names the evidence that separates a stalled disk
+// from an undersized budget. [LAW:one-source-of-truth] [FRAMING:representation]
+func holdBudgetCutExplanation(step string) error {
 	return fmt.Errorf(
-		"mirror hold exceeded its %s budget cloning the store — a deadline, not a diagnosis: check %s's hold= values before blaming the disk. Holds clustered just under the budget mean the budget is sized under this store's real clone cost; one hold far past it means the copy stopped making progress. The live store is released as the cut unwinds, and the next mutation's mirror retries",
-		store.MirrorHoldBudget, mirrorLogName)
+		"mirror hold exceeded its %s budget %s — a deadline, not a diagnosis: check %s before blaming the disk. Its hold= and record= values say which: holds clustered just under the budget mean the budget is sized under this store's real cost; one hold far past it means the work stopped making progress. The live store is released as the cut unwinds, and the next mutation's mirror retries",
+		store.MirrorHoldBudget, step, mirrorLogName)
 }
 
 // pushDeadlineCutExplanation is the one wording of "the push cut itself
@@ -584,9 +595,14 @@ func pushDeadlineCutExplanation() error {
 // caller's post-release re-check answers it with another whole cycle. The
 // unsynced window shrinks toward zero without ever blocking a mutation.
 func mirrorOnce(ctx, completionCtx context.Context, session syncSession, ws workspace.Info) (pushedHead, error) {
-	// The mirror pushes without compaction — plain SyncPush, never the
-	// compact-and-push variant the explicit command uses.
-	outcome, err := performSyncPush(ctx, completionCtx, session, ws, "", false, false, session.syncer.SyncPush)
+	// The mirror pushes without compaction, from a clone: SyncPushFromClone,
+	// never the compact-and-push variant the explicit command uses. The clone
+	// variant is what makes a race with that explicit command safe — nothing
+	// serializes the two, so the explicit push can land a later commit while
+	// this one is in flight, and the rejection that follows is judged by
+	// whether the remote carries the clone's head, not reported as a failure
+	// over a remote that is fully up to date.
+	outcome, err := performSyncPush(ctx, completionCtx, session, ws, "", false, false, session.syncer.SyncPushFromClone)
 	if err != nil {
 		// Could-not-attempt (reconcile/remote resolution): performSyncPush's
 		// own deferred completion already recorded the outcome. The cycle's
@@ -613,17 +629,10 @@ func mirrorOnce(ctx, completionCtx context.Context, session syncSession, ws work
 	if outcome.skip != syncTargetReady || outcome.pushErr != nil {
 		return pushedHead{}, nil
 	}
-	// The head the push sent is the clone's HEAD — the push is HEAD:<branch>
-	// and the clone is frozen, so nothing moved it. Read from the clone
-	// because the clone is where the push's own tracking-ref update landed;
-	// the live store learns it through RecordPushedHead. A head that cannot
-	// be read leaves the landed push recorded as landed and the live store's
-	// freshness to the next fetch — loud, never a re-coloring of the push.
-	status, statusErr := session.syncer.SyncStatus(ctx)
-	if statusErr != nil {
-		return pushedHead{}, fmt.Errorf("read the pushed head from the clone (freshness reads say \"not pushed\" until the next fetch): %w", statusErr)
-	}
-	return pushedHead{remote: outcome.remote, branch: outcome.branch, head: strings.TrimSpace(status.HeadCommit)}, nil
+	// The head the push reports is the clone's HEAD — the push is
+	// HEAD:<branch> and the clone is frozen, so nothing moved it. The live
+	// store learns it through RecordPushedHead.
+	return pushedHead{remote: outcome.remote, branch: outcome.branch, head: outcome.head}, nil
 }
 
 // waitForParentExit blocks until the spawning command has exited, returning
