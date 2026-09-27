@@ -1087,8 +1087,8 @@ positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason 
    (`claims_takeover.go:142-146`).
 2. `gatherClaimContext(ctx, stdout, ap)` (`claims_takeover.go:147-150`).
 3. `classifyTakeover(standing, self)` (`claims_takeover.go:119-128`), switching on `relationOf` rather than on the standing directly:
-   - `Held` by self, `Stale` by self, or `Unclaimed` → `takeoverNone` (no-op).
-   - `Stale` by another → `takeoverStaleInformed`, **except** when `s.Holder == claims.Locked`, which `relationOf` reports as `laneHeldForeign` (`:103`) and which therefore takes the `takeoverFreshConfirm` path below.
+   - `Held` by self, `Stale` with `Holder == claims.Locked` by self, or `Unclaimed` → `takeoverNone` (no-op).
+   - `Stale`, whoever held it — this checkout included → `takeoverStaleInformed`, **except** when `s.Holder == claims.Locked`, which `relationOf` reads as a live hold (`:103`): `laneHeldForeign` for another checkout's lock, which therefore takes the `takeoverFreshConfirm` path below.
    - `Held` by another → `takeoverFreshConfirm`.
 4. **Stale, foreign**: prints
    `"<claim line> — check for unmerged branches or PRs on this lane before building on it\n"`

@@ -238,8 +238,8 @@ func resumeAdvice(row annotation.AnnotatedIssue, actingAs string) string {
 // reports, and reporting is the one thing a read-only command must not do.
 //
 // The verb turns on the row's own lifecycle state: routing admits an
-// in-progress row into a lane this checkout does not hold only once the orphan
-// annotation has proven its holder's claim self-refuting (capacityFor), so
+// in-progress row into a lane this checkout does not hold only once its
+// holder's claim is refuted — orphaned, or in a lapsed lane (capacityFor) — so
 // plain "claim" would promise greenfield on a ticket that may carry another
 // checkout's unmerged working tree.
 //

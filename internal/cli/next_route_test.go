@@ -779,9 +779,10 @@ func TestRouteNextContinuesEpicIntoForeignStaleLane(t *testing.T) {
 // startAdvice varies on two axes, and this pins every cell of the product.
 //
 // The verb is the takeover verdicts above made visible. An in-progress row
-// reaches a lane this checkout does not hold only once the orphan annotation has
-// refuted its holder's claim, so calling that a plain claim promises greenfield
-// on a ticket that may carry another checkout's unmerged working tree.
+// reaches a lane this checkout does not hold only once its holder's claim is
+// refuted — orphaned, or in a lapsed lane — so calling that a plain claim
+// promises greenfield on a ticket that may carry another checkout's unmerged
+// working tree.
 //
 // The object is the lane, and each of LaneID's three shapes once rendered
 // through String() into a sentence that misinformed the reader
