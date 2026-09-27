@@ -32,11 +32,12 @@ type Attribution struct {
 
 ### 1.3 The derived value: `Standing`
 
-Sealed sum with three variants, discriminated by unexported marker `isStanding()` (`internal/claims/standing.go`):
+Sealed sum with two variants, discriminated by unexported marker `isStanding()` (`internal/claims/standing.go`):
 
-- `Unclaimed struct{}` — no holder, no provenance (`internal/claims/standing.go`).
+- `Unclaimed struct{}` — no holder: never started, finished, or the claim's evidence has aged out (`internal/claims/standing.go`).
 - `Held struct { Tenure; Contested []model.Attribution }` (`internal/claims/standing.go`).
-- `Stale struct { Tenure }` (`internal/claims/standing.go`).
+
+There is no variant for an expired claim. `Stale struct { Tenure; Holder Presence }` existed until links-claims-y6yz and was removed: an expired claim is not a claim, and the type has nowhere to record that one existed.
 
 `Tenure`:
 ```go
@@ -306,12 +307,12 @@ holder := establisher.Attribution
 
 **Leg 3 — the claim is fresh.**
 ```go
-if !fresh.Covers(tenure.LastActivity) { return Stale{Tenure: tenure, Holder: local.PresenceOf(holder)} }
+if !fresh.Covers(tenure.LastActivity) && local.PresenceOf(holder) != Locked { return Unclaimed{} }
 return Held{Tenure: tenure, Contested: contestants(holder, activity, establishers, fresh)}
 ```
-`internal/claims/derive.go`. Freshness is measured from the holder's **last mutation of any kind in the lane**, not from the establishing event, so ordinary commentary carries a claim through a long stretch (`internal/claims/derive.go`). Pinned by `TestAnyMutationRefreshes`: `start` 80 h ago plus a bare field edit 30 min ago → Held with `Since = -80h`, `LastActivity = -30m` under a 24 h window (`internal/claims/claims_test.go`).
+`internal/claims/derive.go`. Freshness is measured from the holder's **last mutation of any kind in the lane**, not from the establishing event, so ordinary commentary carries a claim through a long stretch (`internal/claims/derive.go`). Pinned by `TestAnyMutationRefreshes`: `start` 80 h ago plus a bare field edit 30 min ago → Held with `Since = -80h`, `LastActivity = -30m` under a 24 h window. A `Locked` holder is the one leg-4 finding that carries a claim past the window; `Present` and `Unprovable` do not.
 
-Stale example: `start` at −72 h plus a field edit at −48 h under a 24 h window → `Stale{By: streamA, Since: -72h, LastActivity: -48h, Holder: claims.Present}` (`TestPredicateGrid`'s "leg 3 dropped" case, `internal/claims/claims_test.go`).
+Expired example: `start` at −72 h plus a field edit at −48 h under a 24 h window → `Unclaimed{}` (`TestPredicateGrid`'s "leg 3 dropped" case). The same fixture with streamA's worktree locked → `Held{By: streamA, Since: -72h, LastActivity: -48h}`; with it merely present, gone, or unenumerable → `Unclaimed{}` (`TestExpiredClaimPresenceGrid`).
 
 **Contest.** `contestants(holder, activity, establishers, fresh)` (`internal/claims/derive.go`):
 - Candidate set = the keys of `establishers` (so **only checkouts with an establishing act** contest; a drive-by comment or grooming edit never does — pinned by `TestDriveByEditsNeitherEstablishNorContest`, `internal/claims/claims_test.go`).
@@ -322,7 +323,7 @@ Stale example: `start` at −72 h plus a field edit at −48 h under a 24 h wind
 
 Pinned: A starts at −3 h, B starts at −1 h → `Held{By: B, Contested: [A]}` (`TestContestedAnnotatesWithoutMovingRouting`, `internal/claims/claims_test.go`); A's start at −200 h with B at −1 h → Held by B, no contest (`TestContestLapsesWithTheRivalsEvidence`, `internal/claims/claims_test.go`).
 
-**Cold start.** A repository whose whole history predates attribution derives every lane `Held` by the public checkout, subject to freshness — **not** `Unclaimed`. Real pre-attribution history is almost always older than the freshness window, so in practice this reads `Stale{public}` — available for takeover, carrying its provenance — rather than `Held{public}`, but both are a real claim, never nothing. Pinned by `TestColdStartDerivesThePublicCheckout` (`internal/claims/claims_test.go`): recent all-public-checkout history reads `Held{public}`; the same shape 89-90 days old under a 24 h window reads `Stale{public}`.
+**Cold start.** A repository whose whole history predates attribution derives every lane `Held` by the public checkout, subject to freshness. Real pre-attribution history is almost always older than the freshness window, so in practice those claims have expired and the lanes read `Unclaimed`. Pinned by `TestColdStartDerivesThePublicCheckout`: recent all-public-checkout history reads `Held{public}`; the same shape 89-90 days old under a 24 h window reads `Unclaimed`.
 
 **Foreign workspaces never pruned**: an event from `ws-elsewhere` remains Held even when this machine enumerates zero live streams for `ws-local` (`TestForeignWorkspaceIsNeverPruned`, `internal/claims/claims_test.go`).
 
@@ -334,10 +335,10 @@ Pinned: A starts at −3 h, B starts at −1 h → `Held{By: B, Contested: [A]}`
 | 1 (closed) | both tickets closed | `Unclaimed` |
 | 1 (archived) | sole open ticket archived | `Unclaimed` |
 | 2 (no establishing verb) | `reopen`, `archive`, `close`, bare edit | `Unclaimed` |
-| 3 (stale) | start −72 h, edit −48 h | `Stale{A, Holder: claims.Present}` |
+| 3 (expired) | start −72 h, edit −48 h | `Unclaimed` |
 | 4 (checkout gone) | start by A, live set = {B} | `Unclaimed` |
 
-An unattributed latest establisher is no longer a fifth "dropped leg" row in this grid: it drops no leg at all. `TestUnattributedLatestStopsRatherThanScanning` above derives `Held{public}` with the earlier establisher contesting, and `TestColdStartDerivesThePublicCheckout` shows the all-unattributed case reads `Held`/`Stale` by the public checkout — never `Unclaimed`.
+An unattributed latest establisher is no longer a fifth "dropped leg" row in this grid: it drops no leg at all. `TestUnattributedLatestStopsRatherThanScanning` above derives `Held{public}` with the earlier establisher contesting, and `TestColdStartDerivesThePublicCheckout` shows the all-unattributed case reads `Held` by the public checkout while fresh — the public checkout is a real holder, never a way of spelling "nobody".
 
 ---
 
@@ -427,43 +428,33 @@ Callers: `next` (`internal/cli/next.go`), `workable`/`backlog` runner (`internal
 
 `transitionSpec.authorize` is an optional hook that runs after the action is built and **before** `Store.Apply`, and may abort the transition by returning an error; only `start` supplies one, the other seven transitions use `noAuthorize` (`internal/cli/cli.go`). Wired at `internal/cli/cli.go`. The flag: `--take`, help string `"Confirm taking over a lane another checkout claims right now (required for non-interactive callers; an interactive terminal is prompted instead)"` (`internal/cli/cli.go`).
 
-**`classifyTakeover(standing, self) takeoverRequirement`** — pure, no I/O (`internal/cli/claims_takeover.go`). It does not read the standing itself: it switches on `relationOf(standing, self)`, the same relation routing admits on, so the gate and the router cannot disagree about whose lane it is.
+**`relationOf(standing, self) laneRelation`** — pure, no I/O (`internal/cli/claims_takeover.go`). It is the one place a `Standing` is read against an identity, and both the gate and routing consume its value, so they cannot disagree about whose lane it is.
 
-| standing | condition | relation | requirement |
-|---|---|---|---|
-| `Held` | `self.Present() && s.By == self` | `laneOurs` | `takeoverNone` |
-| `Held` | otherwise | `laneHeldForeign` | `takeoverFreshConfirm` |
-| `Stale` | `s.Holder == claims.Locked` and `self.Present() && s.By == self` | `laneOurs` | `takeoverNone` |
-| `Stale` | `s.Holder == claims.Locked`, otherwise | `laneHeldForeign` | `takeoverFreshConfirm` |
-| `Stale` | otherwise | `laneLapsed` | `takeoverStaleInformed` |
-| `Unclaimed` (default arm) | — | `laneUnclaimed` | `takeoverNone` |
+| standing | condition | relation |
+|---|---|---|
+| `Held` | `self.Present() && held.By == self` | `laneOurs` |
+| `Held` | otherwise | `laneHeldForeign` |
+| anything else (`Unclaimed`, nil) | — | `laneUnclaimed` |
 
-`held(by)` answers `laneOurs` when `self.Present() && by == self` and `laneHeldForeign` otherwise (`internal/cli/claims_takeover.go`) — the `self.Present()` half is load-bearing, not a redundant guard: a checkout with no minted token has a zero `self`, and a zero `self` compared against a zero holder (the public checkout) would otherwise prove ownership of a lane this checkout never touched. So a lane the public checkout holds is always `laneHeldForeign` to every checkout, including one that has itself never minted a token; a lapsed one is `laneLapsed` to every checkout regardless, since a lapsed claim is matched against no identity at all.
+The `self.Present()` half is load-bearing, not a redundant guard: a checkout with no minted token has a zero `self`, and a zero `self` compared against a zero holder (the public checkout) would otherwise prove ownership of a lane this checkout never touched. So a lane the public checkout holds is always `laneHeldForeign` to every checkout, including one that has itself never minted a token.
 
-The `claims.Locked` row is the one a reader is likeliest to miss: an expired claim whose holder's worktree is locked is gated as a fresh hold, not waved through with a warning.
+There is no row for an expired claim. The derivation returns `Unclaimed` the moment the window closes, so `relationOf` never learns a claim existed; the relation that used to sit here — `laneLapsed`, a lapsed claim offered as a takeover with the lapsed holder's provenance — is gone with the `Stale` variant (links-claims-y6yz). The `laneRelation` constants are at `internal/cli/claims_takeover.go`. Pinned by `TestRelationOf` (`internal/cli/claims_takeover_test.go`).
 
-Sealed int enum: `takeoverNone`, `takeoverStaleInformed`, `takeoverFreshConfirm` (`internal/cli/claims_takeover.go`). Pinned by `TestClassifyTakeover` (`internal/cli/claims_takeover_test.go`) across nine cases: the five base standings, the three `Holder` sub-cases of a stale foreign claim — gone, present, and `claims.Locked` — and a stale locked lane that is ours.
-
-**`authorizeStart(ctx, stdout, ap, issueID, prior, take)`** (`internal/cli/claims_takeover.go`):
+**`authorizeStart(ctx, stdout, ap, issueID, prior, take) (laneHeld bool, err error)`** (`internal/cli/claims_takeover.go`):
 1. `ap.Store.GetRelationsByIDs(ctx, []string{issueID})` → `lane := model.LaneOf(prior, relations[issueID].Parent)`.
 2. `gatherClaimContext`.
-3. Dispatch on `classifyTakeover(cc.standings.Of(lane), cc.self)`:
-   - `takeoverNone` → `return nil`; the happy path pays one extra evidence gather and nothing else (rationale).
-   - `takeoverStaleInformed` → `printStaleProvenance`.
-   - `takeoverFreshConfirm` → `confirmFreshTakeover`.
-   - default (unreachable) → `fmt.Errorf("claims: %s has no recognized takeover requirement", issueID)`.
+3. `relation := relationOf(cc.standings.Of(lane), cc.self)`; when it is `laneHeldForeign`, `confirmFreshTakeover` runs and its error aborts the start.
+4. Returns `relation != laneUnclaimed` — whether anybody held the lane — so the transfer notice can read that fact off the gather already performed (`transitionSpec.authorize`, `internal/cli/cli.go`; consumed at `cli.go`). An unclaimed lane, this checkout's own lane, and a lane whose claim has expired all pass with no output.
 
-**`claimLineOrPanic`** reuses `formatClaimLine(cc, lane, time.Now())`; `ok == false` → error `claims: %s has a takeover requirement on %v but no claim line to show` (`internal/cli/claims_takeover.go`).
-
-**`printStaleProvenance`** — proceeds unprompted and prints `"%s — check for unmerged branches or PRs on this lane before building on it\n"` (`internal/cli/claims_takeover.go`). Checking for unmerged branches or PRs is left to the taking agent; lit stays ignorant of git and the forge.
-
-**`confirmFreshTakeover(stdout, cc, lane, take)`** (`internal/cli/claims_takeover.go`):
-- **Non-interactive** (`!isTerminal(stdout)`, the same signal `openOrPrintWorkflowFile` uses — `internal/cli/workflows_edit.go`):
+**`confirmFreshTakeover(stdout, cc, lane, take)`** (`internal/cli/claims_takeover.go`). It renders the claim line with `formatClaimLine(cc, lane, time.Now())`; `ok == false` → error `claims: %v is held by another checkout but has no claim line to show`, since the caller reaches here only for a `Held` standing.
+- **Non-interactive** (`!isTerminal(stdout)`, the same signal `openOrPrintWorkflowFile` uses):
   - `take == false` → **refusal**: `fmt.Errorf("%s — this lane is claimed and active; pass --take to confirm the takeover", line)`.
   - `take == true` → prints `"%s — taking over (--take)\n"` and proceeds.
 - **Interactive**: prints `"%s\ntake over this lane? [y/N] "`, reads a line from `os.Stdin` via `bufio.NewReader(os.Stdin).ReadString('\n')`. A read error other than `io.EOF` → `fmt.Errorf("read takeover confirmation: %w", err)`. The answer is accepted iff `strings.HasPrefix(strings.ToLower(strings.TrimSpace(answer)), "y")`; otherwise → `fmt.Errorf("takeover declined")`.
 
-E2E, over two real clones and a real git remote (`internal/cli/claims_takeover_e2e_test.go`): alpha starts and pushes; bravo's `start` without `--take` fails with an error containing both `--take` and `claimed`; the same command with `--take` prints `"taking over"`; and starting the now-bravo-held lane again produces neither `"claimed"` nor `"--take"` in the output. Stale path: with `freshness_window = "1ms"` and a 50 ms sleep, bravo's plain `start` succeeds and prints both `"check for unmerged branches or PRs"` and `"stale"`.
+**`transferNotice(ctx, ap, issueID, action, laneHeld)`** (`internal/cli/claims_context.go`) returns `"claim transferred: %s -> %s\n"` only for a `Start` on a lane somebody held (`laneHeld`), whose recorded claimant (`claims.ClaimantOf`) was established and differs from the claimant the start installs; otherwise the empty string. A start on a lane nobody holds announces no transfer whatever the row's history records: an expired claim transfers nothing. Pinned by `TestTransferNoticeNamesAPredecessorThatMintedNoToken` and `TestTransferNoticeIsSilentWhenNobodyHoldsTheLane` (`internal/cli/claims_render_test.go`).
+
+E2E, over two real clones and a real git remote (`internal/cli/claims_takeover_e2e_test.go`): alpha starts and pushes; bravo's `start` without `--take` fails with an error containing both `--take` and `claimed`; the same command with `--take` prints `"taking over"` and the transfer line naming both assignees and both streams; and starting the now-bravo-held lane again produces neither `"claimed"` nor `"--take"` in the output. Expired path (`TestStartOnAnExpiredForeignClaimIsSilent`): with `freshness_window = "1ms"` and a 50 ms sleep, bravo's plain `start` succeeds and prints none of `claimed`, `stale`, `check for unmerged`, `take`, or `claim transferred`.
 
 ### 9.2 `lit next` — claim-aware routing (a read gate)
 
@@ -482,30 +473,29 @@ The leaf gathers rows, relation details and the focus scope, then the claim cont
 
 `Exhausted` and `NoWork` are themselves `error` implementations and travel outward **as themselves** rather than being rendered into a generic error, which is what keeps the exit-code and reason sinks reading the routing verdict instead of a copy that could drift (`internal/cli/next.go`).
 
-**`capacityFor(row, standing, self) capacity`** — the admission rule; pure, total, no I/O (`internal/cli/next_route.go`). Four capacities: `routeAround` (not this checkout's to take right now), `serveWork`, `resumeWork`, `takeoverWork`. It reads `readiness := ClassifyReadiness(row.Annotations)`, `relation := relationOf(standing, self)`, and `started := row.State() == model.StateInProgress`, with `abandoned := readiness.IsOrphaned() || relation == laneLapsed` and `takeable := (started && abandoned) || (!started && readiness.IsReady())` — an in-flight row is takeable when either clock says its holder is gone, since orphaning reads the row's last write by anyone and the lane reads its holder's last event. Evaluated top-down:
+**`capacityFor(row, standing, self) capacity`** — the admission rule; pure, total, no I/O (`internal/cli/next_route.go`). Three capacities: `routeAround` (not this checkout's to take right now), `serveWork`, `resumeWork` (`internal/cli/next_route.go`). It reads `relation := relationOf(standing, self)` and `started := row.State() == model.StateInProgress`, and asks `ClassifyReadiness(row.Annotations).IsReady()` only of a row not yet started. Evaluated top-down:
 
 | # | condition | capacity |
 |---|---|---|
-| 1 | `relation == laneOurs` and `started` | `resumeWork` |
-| 2 | `relation == laneOurs` and `readiness.IsReady()` | `serveWork` |
-| 3 | `relation == laneOurs`, otherwise | `routeAround` |
-| 4 | `!takeable`, or `relation == laneHeldForeign` | `routeAround` |
-| 5 | `started`, or `relation == laneLapsed` | `takeoverWork` |
-| 6 | otherwise | `serveWork` |
+| 1 | `relation == laneHeldForeign` | `routeAround` |
+| 2 | `!started` and ready | `serveWork` |
+| 3 | `!started`, otherwise | `routeAround` |
+| 4 | `started` and `relation == laneOurs` | `resumeWork` |
+| 5 | `started`, otherwise (`laneUnclaimed`) | `serveWork` |
 
-`laneLapsed` yields `takeoverWork`, and routing steps 2 and 4 both accept the set `{serveWork, takeoverWork}` — so a lapsed lane is a reachable bare `lit next` target whoever held it, this checkout included. `laneHeldForeign` — a lane another checkout holds fresh — is the one relation routed around on ownership alone. The `laneRelation` constants are at `internal/cli/claims_takeover.go`; `relationOf`, where a `claims.Stale` standing whose `Holder == claims.Locked` is read as a live hold rather than `laneLapsed`.
+Row 5 is where abandonment lives: an in-flight row in a lane nobody holds is abandoned by definition, because whoever started it no longer holds a claim there, and it is served on that fact alone. The orphan annotation — the row's own quiet clock — does not enter routing; `lit backlog` and `lit orphaned` still read it as a description of the row. A fourth capacity, `takeoverWork`, once marked a pick displacing a lapsed claim or abandoned in-flight work; routing steps 2 and 4 accepted it alongside `serveWork` and nothing else distinguished them, so it was removed with the `Stale` standing (links-claims-y6yz). `laneHeldForeign` — a lane another checkout holds — is the one relation routed around on ownership alone; a locked worktree past the clock derives `Held`, so it is one of these.
 
 **`ownScope(standings, self) (map[model.LaneID]bool, map[string]bool)`** (`internal/cli/next_route.go`): every lane whose `relationOf(standing, self)` is `laneOurs`, plus each such lane's non-empty `Epic()`. It reads the **standings**, not the gathered rows — the rows are already narrowed by `--type/--labels/--assignee`, and deriving ownership from them let a display filter empty the set and drop the whole self-aware branch.
 
-**`routeNext(rows, details, standings, self, scope focusScope) NextOutcome`** — five parameters (`internal/cli/next_route.go`). Closures: `laneOf`, `verdict` (= `capacityFor`), `reachFor` (= `reachOf`), and `pickFrom(from, inScope, accept ...capacity)`, which keeps the first row of `from`, in the gather's composite-rank order, that sits in an admitted lane and carries one of the accepted verdicts. `accept` is a **set**, never a preference order: composite rank is the only tiebreak routing applies, and ranking capacities against each other would pass over the backlog's #1 row, an orphan, for a lower-ranked leaf that needed no takeover.
+**`routeNext(rows, details, standings, self, scope focusScope) NextOutcome`** — five parameters (`internal/cli/next_route.go`). Closures: `laneOf`, `verdict` (= `capacityFor`), `reachFor` (= `reachOf`), and `pickFrom(from, inScope, accept ...capacity)`, which keeps the first row of `from`, in the gather's composite-rank order, that sits in an admitted lane and carries one of the accepted verdicts. `accept` is a **set**, never a preference order: composite rank is the only tiebreak routing applies, and ranking capacities against each other would pass over the backlog's #1 row, abandoned in flight, for a lower-ranked leaf that was merely ready.
 
 Precedence, with `ownLanes, ownEpics := ownScope(standings, self)` and `mine := func(lane) bool { return ownLanes[lane] }`. If `len(ownLanes) > 0`:
 1. **Step 1** — our own lanes, accepting `{serveWork, resumeWork}`, whichever the backlog ranks first. `resumeWork` → `ResumedOwnWork{Row}`; `serveWork` → `ServedFromClaim{Row}`.
-2. **Step 1b** — `onPathDependency(rows, laneOf, mine, reachFor)`, a dependency outside our lanes that gates one of them → `ServedFromDependency{Row: dep, Lane: laneOf(dep), Gates: gates}`. It establishes a claim on a lane we do not hold, so it is announced as one, and `Gates` carries the blocked row it unblocks so the line can say what the pick is for.
-3. **Step 2** — the rest of our epic, in lanes we do not already hold: predicate `lane.Epic() != "" && ownEpics[lane.Epic()] && !mine(lane)`, accepting `{serveWork, takeoverWork}` → `ServedFromEpicLane{Row, Lane}`.
+2. **Step 1b** — `onPathDependency(rows, laneOf, mine, reachFor)`, a dependency outside our lanes that gates one of them → `ServedFromDependency{Row: dep, Lane: laneOf(dep), Gates: gates}`. It establishes a claim on a lane we do not hold, so it is announced as one, and `Gates` carries the blocked row it unblocks so the line can say what the pick is for .
+3. **Step 2** — the rest of our epic, in lanes we do not already hold: predicate `lane.Epic() != "" && ownEpics[lane.Epic()] && !mine(lane)`, accepting `serveWork` → `ServedFromEpicLane{Row, Lane}`.
 4. **Step 3** — `Exhausted{Epics: slices.Sorted(maps.Keys(ownEpics)), Blocked: blockedRows(gatingDependencies(rows, laneOf, mine-or-ourEpic, reachFor))}`. Loud, and never a hop: **exhaustion does not fall through to the global pool.**
 
-**Step 4** is reached only by a checkout holding no lanes, which starts there directly: `pool, offPath := scope.partition(rows)`, then `pickFrom(pool, <every lane>, serveWork, takeoverWork)` → `ServedFromNewLane{Row, Lane}`, else `NoWork{Unreachable: append(passedOver(pool, reachFor), withheldByScope(offPath)...)}`. The scope-withheld rows travel into the diagnostic rather than vanishing, because "nothing is startable" and "nothing on your focus path is startable" are different answers. `withheldByScope` stamps them `reachOffFocusPath` at the one place that applied the scope; `passedOver` classifies every row the pool walk went through, all `routeAround` by construction.
+**Step 4** is reached only by a checkout holding no lanes, which starts there directly: `pool, offPath := scope.partition(rows)`, then `pickFrom(pool, <every lane>, serveWork)` → `ServedFromNewLane{Row, Lane}`, else `NoWork{Unreachable: append(passedOver(pool, reachFor), withheldByScope(offPath)...)}`. The scope-withheld rows travel into the diagnostic rather than vanishing, because "nothing is startable" and "nothing on your focus path is startable" are different answers . `withheldByScope` stamps them `reachOffFocusPath` at the one place that applied the scope ; `passedOver` classifies every row the pool walk went through, all `routeAround` by construction .
 
 Steps 1-3 walk every gathered row; step 4 walks the focus-scoped pool. The row set is passed to `pickFrom` explicitly at each call so that difference stays visible. The focus scope narrows step 4 and nothing else.
 
@@ -525,7 +515,7 @@ Steps 1-3 walk every gathered row; step 4 walks the focus-scoped pool. The row s
 
 `poolNotes`, exact strings:
 - `reachHeldFresh`: `in progress or claimed in a lane another checkout holds right now`
-- `reachNotReady`: `not startable — blocked by a dependency, or in flight and not abandoned`
+- `reachNotReady`: `not startable — blocked by a dependency`
 - `reachOffFocusPath`: ``off the focus path this run answered over — `lit next --all` to route over the whole queue``
 
 **`Exhausted.Error()`**. `scope` is `fmt.Sprintf("epic(s) %s", strings.Join(o.Epics, ", "))` when epics are named, else `"your claimed lane(s)"`. The command is in **backticks** in both arms:
@@ -541,20 +531,14 @@ The `%s` in both non-empty arms is `describeReach(o.Unreachable, "", poolNotes)`
 
 **Exit code and reason.** `ExitNoWork = 6` (`internal/cli/exit.go`). **Both** `Exhausted` and `NoWork` map to it (`internal/cli/exit.go`): distinct from `ExitGeneric` because a caller looping `lit next` has to tell "stop, there is nothing for you" from "lit is broken", and under one code its only way to do that was to parse the English; not `ExitOK`, because for `lit next` 0 means "a ticket is on stdout", and exiting 0 with no row would hand the caller a success-shaped void (`internal/cli/exit.go`). Reasons: `scope_exhausted` for `Exhausted`, `no_ready_work` for `NoWork` (`internal/cli/error_output.go`).
 
-**`startAdvice(row, lane, holder)`** (`internal/cli/next.go`) — the line every pick that would establish a claim prints above its row: what running `lit start` would lock, never what this command did. `lit next` claims nothing and starts nothing; the function was `claimAnnouncement` and the rename is the fix, an announcement reporting being the one thing a read-only command must not do (`internal/cli/next.go`). `described, named := lane.Describe()`; exactly four sentences:
-- in progress, lane not named: ``%s is in progress and %s — run `lit start %s` to take it over`` (Row.ID, state, Row.ID).
-- in progress, lane named: ``%s is in progress and %s — run `lit start %s` to take over %s`` (Row.ID, state, Row.ID, described).
-- not in progress, lane not named: ``run `lit start %s` to claim it`` (Row.ID).
-- not in progress, lane named: ``run `lit start %s` to claim %s`` (Row.ID, described).
-
-`state` is `inFlightState(holder)` (`internal/cli/next.go`): `claims.Locked` → `claimed by a locked worktree whose claim has gone stale`; `claims.Present` → `stale, though its holder's worktree is still on disk`; otherwise `abandoned`. `holder` is `expiredHolder(cc.standings.Of(lane))` — the `Stale` standing's `Holder`, and `claims.Unprovable` for every other standing (`internal/cli/claims_render.go`). The two verbs spell their sentences out separately rather than sharing one with the object substituted, because English puts the pronoun in different places: "claim it", but "take it over" (`internal/cli/next.go`).
+**`startAdvice(row, lane)`** (`internal/cli/next.go`) — the line every pick that would establish a claim prints above its row: what running `lit start` would lock, never what this command did. `lit next` claims nothing and starts nothing; the function was `claimAnnouncement` and the rename is the fix, an announcement reporting being the one thing a read-only command must not do. `object, named := lane.Describe()`, with `object = "it"` when the lane is not named; the advice is ``run `lit start %s` to claim %s`` (Row.ID, object), and an in-progress row prefixes it with ``%s is in progress and nobody holds it — `` (Row.ID). Routing serves an in-progress row from a lane this checkout does not hold only when nobody holds that lane, so the prefix states exactly what the standing proves and nothing about who left the row or when — an expired claim is not a claim, and the row's history is `lit show`'s to tell (links-claims-y6yz). The former `inFlightState(holder)` clause — "abandoned" / "stale, though its holder's worktree is still on disk" / "claimed by a locked worktree whose claim has gone stale" — and the `expiredHolder` accessor that fed it are gone with the `Stale` standing.
 
 **`LaneID.Describe() (string, bool)`** (`internal/model/model.go`) — three cases:
 - solo lane → `("", false)`. A solo lane is the ticket that names it, so any phrase for it only repeats what the surrounding sentence already said.
 - empty key → `(fmt.Sprintf("the default lane of epic %s", l.epic), true)`.
 - otherwise → `(fmt.Sprintf("lane %s of epic %s", l.key, l.epic), true)`.
 
-**`renderNextOutcome(w, outcome, details, cc)`** (`internal/cli/next.go`):
+**`renderNextOutcome(w, outcome, details, cc, actingAs)`** (`internal/cli/next.go`):
 - `ServedFromClaim` → no announcement at all.
 - `ResumedOwnWork` → `resumeAdvice(o.Row, cc.actingAs)` + `"\n"`. Two sentences, chosen by
   whether the row carries an assignee that is not the identity running the command
@@ -569,8 +553,8 @@ The `%s` in both non-empty arms is `describeReach(o.Unreachable, "", poolNotes)`
   liveness probe — so the line asks for the check instead of adjudicating. The sentence
   claims no more than the mismatch proves: an assignee is free text and need not name a
   session at all (links-routing-t6fa).
-- `ServedFromEpicLane` → `startAdvice(o.Row, o.Lane, expiredHolder(cc.standings.Of(o.Lane)))` + `" (a second lane of an epic you already hold a lane in)\n"`.
-- `ServedFromNewLane` → `startAdvice(o.Row, o.Lane, expiredHolder(cc.standings.Of(o.Lane)))` + `"\n"`.
+- `ServedFromEpicLane` → `startAdvice(o.Row, o.Lane)` + `" (a second lane of an epic you already hold a lane in)\n"`.
+- `ServedFromNewLane` → `startAdvice(o.Row, o.Lane)` + `"\n"`.
 - `ServedFromDependency` → the same `startAdvice(...)` + `" (gates %s, which is in a lane you hold)\n"` formatted on `Gates`.
 - `Exhausted`, `NoWork` → returned as themselves; nothing printed.
 - default → `panic(fmt.Sprintf("renderNextOutcome: unhandled NextOutcome %T", outcome))`.
@@ -605,25 +589,21 @@ No other command consults `claims.Standings`: the only readers of `cc.standings`
 
 ### 10.1 `formatClaimLine(cc, lane, now) (string, bool)`
 
-`internal/cli/claims_render.go`. Returns `("", false)` for anything that is not `Held` or `Stale` — an Unclaimed lane renders **no line at all**, not an empty or placeholder one (rationale; pinned `internal/cli/claims_render_test.go`).
+`internal/cli/claims_render.go`. Returns `("", false)` for anything that is not `Held` — an Unclaimed lane renders **no line at all**, not an empty or placeholder one; and a lane whose claim has expired is Unclaimed, so nothing is printed about it even when its holder's worktree is still on this machine and resolvable through `cc.addresses` (pinned `TestFormatClaimLineUnclaimedLaneRendersNothing`, `TestFormatClaimLineExpiredClaimRendersNothingEvenWithAnAddress`, `internal/cli/claims_render_test.go`).
 
-- `Held` → `line = claimPrefix(tenure.By, holdFresh, cc)`; if `len(standing.Contested) > 0`, append `fmt.Sprintf(" · contested by %s", strings.Join(nameCheckouts(standing.Contested), ", "))`.
-- `Stale` → `line = claimPrefix(tenure.By, holdKindOf(standing.Holder), cc)` — `holdKindOf` is `holdLocked` when the expired holder's worktree is locked, else `holdStale`.
-- Then `parts := []string{line, humanizeCoarseDuration(now.Sub(tenure.LastActivity)) + " ago"}`; if `formatLaneProgress(cc.evidence.LaneProgress(lane))` is non-empty, append it; join with `" · "`.
+- `Held` → `line = claimPrefix(held.By, cc)`; if `len(held.Contested) > 0`, append `fmt.Sprintf(" · contested by %s", strings.Join(nameCheckouts(held.Contested), ", "))`.
+- Then `parts := []string{line, humanizeCoarseDuration(now.Sub(held.LastActivity)) + " ago"}`; if `formatLaneProgress(cc.evidence.LaneProgress(lane))` is non-empty, append it; join with `" · "`.
 
 **Two tiers**: the dossier (holder badge, freshness, lane progress) comes entirely from `cc.evidence` and `cc.standings` — the shared, synced data — so it renders identically on any clone; the address renders only when `cc.addresses` resolves the holder to a live worktree **this machine** enumerated (`internal/cli/claims_render.go`).
 
-### 10.2 `claimPrefix(by, kind, cc)`
-
-`kind` is a `holdKind` (`holdFresh`, `holdStale`, `holdLocked` — `internal/cli/claims_render.go`), not a bool — a bool could say fresh-or-not and nothing else, so a locked worktree had to borrow the word for a holder who left (links-claims-2wk2).
+### 10.2 `claimPrefix(by, cc)`
 
 `claimPrefix` (`internal/cli/claims_render.go`):
-- If `cc.addresses[by]` resolves: `branch := checkout.Branch`; if empty, `branch = "detached HEAD"`; returns `fmt.Sprintf("claimed here%s: %s (%s)", claimTag(kind), checkout.Path, branch)`.
-- Otherwise: returns `fmt.Sprintf("claimed: %s (%s)", nameCheckout(by), holdState(by, kind))`.
-- `claimTag(kind)`: `" (locked)"`, `" (stale)"`, or `""`.
-- `holdState(by, kind)`: `"locked"`, `"stale"`, `"elsewhere"` (an identified `by`), or `"unaddressed"` — the public checkout, since `by` is the zero Attribution and neither of the first two conditions nor `by.Present()` holds.
-- A **stale** claim from a still-live local worktree still resolves to that worktree's address; `kind` controls only the label, never whether the address shows (pinned `internal/cli/claims_render_test.go`, expecting `claimed here (stale): ../links-wt-pgct (detached HEAD)`).
-- **The public checkout never renders `claimed here`, whoever is asking.** `by` is the zero Attribution and a live worktree's holder in `cc.addresses` is always an identified checkout, so the first branch above can never match it — an earlier version compared `by` against `cc.self` instead and misread that coincidence as proof of ownership, rendering `"claimed here: this checkout"` for a foreign lane on `lit sync`'s contested-lane report (whose `cc.self` is always the zero Attribution). Pinned by `TestFormatClaimLinePublicCheckoutIsNeverHere` (`internal/cli/claims_render_test.go`): `"claimed: the public checkout (unaddressed)"` for `Held`, `"claimed: the public checkout (stale)"` for `Stale`, in every row regardless of `cc.self`.
+- If `cc.addresses[by]` resolves: `branch := checkout.Branch`; if empty, `branch = "detached HEAD"`; returns `fmt.Sprintf("claimed here: %s (%s)", checkout.Path, branch)`.
+- Otherwise: returns `fmt.Sprintf("claimed: %s (%s)", nameCheckout(by), holdState(by))`.
+- `holdState(by)`: `"elsewhere"` (an identified `by`) or `"unaddressed"` — the public checkout, since `by` is the zero Attribution and `by.Present()` is false.
+- There is no `(stale)` or `(locked)` tag and no `holdKind`: a locked worktree past the clock is an ordinary `Held` lane, and an expired claim renders nothing. The three-valued `holdKind` (`holdFresh`, `holdStale`, `holdLocked`), `claimTag`, and `holdKindOf` that produced those tags were removed with the `Stale` standing (links-claims-y6yz).
+- **The public checkout never renders `claimed here`, whoever is asking.** `by` is the zero Attribution and a live worktree's holder in `cc.addresses` is always an identified checkout, so the first branch above can never match it — an earlier version compared `by` against `cc.self` instead and misread that coincidence as proof of ownership, rendering `"claimed here: this checkout"` for a foreign lane on `lit sync`'s contested-lane report (whose `cc.self` is always the zero Attribution). Pinned by `TestFormatClaimLinePublicCheckoutIsNeverHere` (`internal/cli/claims_render_test.go`): `"claimed: the public checkout (unaddressed)"` in every row regardless of `cc.self`.
 
 ### 10.3 `formatLaneProgress(progress)`
 
@@ -646,12 +626,12 @@ No other command consults `claims.Standings`: the only readers of `cc.standings`
 
 ### 10.6 Rendering behavior pinned by test
 
-- Unclaimed renders no line at all (`internal/cli/claims_render_test.go`).
-- Dossier without any local address: line says `"elsewhere"`, carries `"1/2 done"`, names `"active-ticket in progress"`, and reads `"2 hours ago"` (`internal/cli/claims_render_test.go`).
-- With an address entry: `"claimed here: ../links-wt-pgct (links-claims-1ihf.11)"`; the same standing rendered without addresses must not carry the path and must say `"elsewhere"` (`internal/cli/claims_render_test.go`).
-- A stale claim from a still-live local worktree: `"claimed here (stale): ../links-wt-pgct (detached HEAD)"` (`internal/cli/claims_render_test.go`).
-- The public checkout, `Held` or `Stale`, whatever `cc.self` is asking: `"claimed: the public checkout (unaddressed)"` or `"claimed: the public checkout (stale)"`, never `"claimed here"` (`internal/cli/claims_render_test.go`).
-- Contested Held: line contains `"contested by " + nameCheckout(contestant)` (`internal/cli/claims_render_test.go`).
+- Unclaimed renders no line at all (`TestFormatClaimLineUnclaimedLaneRendersNothing`).
+- Dossier without any local address: line says `"elsewhere"`, carries `"1/2 done"`, names `"active-ticket in progress"`, and reads `"2 hours ago"` (`TestFormatClaimLineDossierNeedsNoLocalAddress`).
+- With an address entry: `"claimed here: ../links-wt-pgct (links-claims-1ihf.11)"`; the same standing rendered without addresses must not carry the path and must say `"elsewhere"` (`TestFormatClaimLineAddressOnlyOnClaimantsOwnMachine`).
+- An expired claim whose holder's worktree is still resolvable renders nothing at all (`TestFormatClaimLineExpiredClaimRendersNothingEvenWithAnAddress`).
+- The public checkout, whatever `cc.self` is asking: `"claimed: the public checkout (unaddressed)"`, never `"claimed here"` (`TestFormatClaimLinePublicCheckoutIsNeverHere`).
+- Contested Held: line contains `"contested by " + nameCheckout(contestant)` (`TestFormatClaimLineContestedAppendsContestants`).
 
 ---
 

@@ -1515,13 +1515,23 @@ type transitionSpec struct {
 	// other seven transitions nothing. [LAW:single-enforcer] one hook point
 	// for per-transition authorization, rather than a type switch on the
 	// built action scattered through runTransition.
-	authorize func(fs *cobraFlagSet) func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue) error
+	//
+	// It also reports whether anybody held the issue's lane at the moment it
+	// looked, because the transfer notice below needs exactly that fact and
+	// this is the one read that has it: a start on a lane nobody holds hands
+	// nothing over, whatever the row's history says about who once started
+	// it, since an expired claim is not a claim (links-claims-y6yz). Reading
+	// it again for the notice would be a second gather of every event in the
+	// store. [LAW:one-source-of-truth]
+	authorize func(fs *cobraFlagSet) func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue) (laneHeld bool, err error)
 }
 
 // noAuthorize is the authorize hook of every transition that gates nothing
-// beyond the ordinary state-machine check store.Apply already performs.
-func noAuthorize(*cobraFlagSet) func(context.Context, io.Writer, *app.App, string, model.Issue) error {
-	return func(context.Context, io.Writer, *app.App, string, model.Issue) error { return nil }
+// beyond the ordinary state-machine check store.Apply already performs. It
+// reports no hold because it read none, and no transition but `start` reads
+// the answer.
+func noAuthorize(*cobraFlagSet) func(context.Context, io.Writer, *app.App, string, model.Issue) (bool, error) {
+	return func(context.Context, io.Writer, *app.App, string, model.Issue) (bool, error) { return false, nil }
 }
 
 // fixedAction is the registerFlags of every transition whose action carries no
@@ -1545,9 +1555,9 @@ var (
 				return model.Start{Assignee: resolveIdentity(*assignee)}, nil
 			}
 		},
-		authorize: func(fs *cobraFlagSet) func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue) error {
+		authorize: func(fs *cobraFlagSet) func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue) (bool, error) {
 			take := fs.Bool("take", false, "Confirm taking over a lane another checkout claims right now (required for non-interactive callers; an interactive terminal is prompted instead)")
-			return func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue) error {
+			return func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue) (bool, error) {
 				return authorizeStart(ctx, stdout, ap, issueID, prior, *take)
 			}
 		},
@@ -1669,7 +1679,8 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 		// passes through, ahead of Apply — a no-op for every transition but
 		// `start`. See transitionSpec.authorize and authorizeStart
 		// (claims_takeover.go).
-		if err := authorize(ctx, stdout, ap, issueID, prior); err != nil {
+		laneHeld, err := authorize(ctx, stdout, ap, issueID, prior)
+		if err != nil {
 			return err
 		}
 
@@ -1679,7 +1690,7 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 		// held the lane when the question was asked, which is not who holds it when
 		// the answer arrives. [LAW:no-ambient-temporal-coupling] Decided here on
 		// pre-Apply state and rendered below, so a failed Apply announces nothing.
-		transfer, err := transferNotice(ctx, ap, issueID, action)
+		transfer, err := transferNotice(ctx, ap, issueID, action, laneHeld)
 		if err != nil {
 			return err
 		}

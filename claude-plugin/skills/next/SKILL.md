@@ -62,11 +62,11 @@ A fresh session sitting on the trunk has no head branch to match, so the branch 
 
 These are candidates, not assignments, and there may be several — every checkout on this machine shares the one `gh` account, so each of them can have left a PR behind here.  Classify the whole list before you act on any of it; an agent that starts merging partway down a list rarely comes back for the tail, and the one it walks past is the one the next session picks up instead of its own work.
 
-For each PR the query returned, take the ticket id from its branch name and check who holds that lane: `lit backlog` prints the holder and how stale the claim is.  A lane another checkout holds fresh is theirs — leave it, say so, and move on.
+For each PR the query returned, take the ticket id from its branch name and check who holds that lane: `lit backlog` prints a claim line under any lane somebody holds right now, and nothing under a lane nobody holds.  A lane another checkout holds is theirs — leave it, say so, and move on.
 
 A branch whose name carries no ticket id at all — someone's typo fix, a hand-cut experiment — is not lit-tracked work, so there is no lane to look up and nothing here for you to adopt.  Leave it where it is.
 
-Every lane nobody holds, or whose claim has gone stale, is yours to wrap up, and wrapping up means the same thing it meant above: check that branch out, treat its ticket as the one you now hold, take it through `/memento:address-pr-reviews` to a merged close-out, then the working steps under "Working the ticket".  Work them one at a time, and do not pull new work until the last one is closed out.
+Every lane nobody holds is yours to wrap up — an expired claim is no claim, so a lane whose holder went quiet six hours ago prints no claim line and is one of these — and wrapping up means the same thing it meant above: check that branch out, treat its ticket as the one you now hold, take it through `/memento:address-pr-reviews` to a merged close-out, then the working steps under "Working the ticket".  Work them one at a time, and do not pull new work until the last one is closed out.
 
 **If nothing is in flight,** proceed to "Pull new work" below.  Open PRs stay relevant after that — an older one may touch the files your new ticket touches — which is why the overlap check is a step in "Working the ticket".
 
@@ -76,13 +76,13 @@ Run `lit next` first, always.  It is the routing decision itself, not a suggesti
 
 #### Orphaned tickets
 
-`lit orphaned` lists in_progress tickets that have gone stale: claimed work somebody abandoned.  It is a repo-wide diagnostic view, not a queue you pull from, and you do not need it to find your *own* abandoned work — `lit next` hands that back to you already.
+`lit orphaned` lists in_progress tickets that have gone quiet: work somebody started and walked away from.  It is a repo-wide diagnostic view, not a queue you pull from, and you do not need it to find your *own* abandoned work — `lit next` hands that back to you already.
 
 So reach for it only when `lit next` has nothing left to give, and read which of its three empty-handed answers you got — they are not interchangeable:
 
-- **Bare `no ready work`** — nothing is queued at all.  An orphan is now the right pull: it is the most advanced work in the repo and somebody has to finish it.  `lit start <id>` takes it.  A stale claim transfers without prompting but prints who held it and how far they got, so check that lane for unmerged branches or PRs before building on it.  The orphan you take is your ticket — skip ahead to "Working the ticket".
+- **Bare `no ready work`** — nothing is queued at all.  An orphan is now the right pull: it is the most advanced work in the repo and somebody has to finish it.  `lit start <id>` takes it, with no prompt and no ceremony: nobody holds the lane, so there is no claim to transfer.  Check that lane for unmerged branches or PRs before building on it — lit knows nothing about git or the forge, and the ticket's history (`lit show`) is where its previous holder's trail is.  The orphan you take is your ticket — skip ahead to "Working the ticket".
 
-- **`no ready work — the backlog is not empty, but nothing in it is startable here`**, naming ids.  Work exists; none of it is yours to take.  `lit orphaned` will not rescue this, and not by luck: the rows in that message are the ones held fresh by another checkout, or in flight and *not* abandoned, which is the exact complement of the stale claims `lit orphaned` lists.  Report what `lit next` named and stop.  Taking a lane another checkout holds fresh is `lit start --take`, a deliberate takeover the user directs — never your way around an empty-handed `next`.
+- **`no ready work — the backlog is not empty, but nothing in it is startable here`**, naming ids.  Work exists; none of it is yours to take.  `lit orphaned` will not rescue this, and not by luck: the rows in that message are the ones in a lane another checkout holds right now, or blocked by a dependency, which is the exact complement of the abandoned work `lit orphaned` lists.  Report what `lit next` named and stop.  Taking a lane another checkout holds fresh is `lit start --take`, a deliberate takeover the user directs — never your way around an empty-handed `next`.
 
 - **`no ready work in ...`** — the scoped answer.  Read the words straight after `no ready work`: the two above break off into a dash, and this one names a scope first — `epic(s) <ids>`, or `your claimed lane(s)` when the lane you hold has no epic over it.  Past the scope its tail is either what blocks the work or `nothing else is queued behind what's already in progress`, and both mean the same thing to you.  Every orphan on that list is outside the scope `lit next` just named, and taking one is the epic-hop the order forbids — see "What the pick means" below, which is written for this exact moment.  Report the blocker and stop.  If a cross-epic orphan looks urgent, say so and let the user direct it; do not adopt it on your own initiative.
 

@@ -781,24 +781,25 @@ func TestRenderNextOutcomeSpeaksOnlyInTheConditional(t *testing.T) {
 			inFlight.ID + " is already in progress in a lane you hold — continue where you left off"},
 		{"the epic's next lane names what a start would lock", ServedFromEpicLane{Row: freshRow, Lane: freshLane},
 			"run `lit start " + fresh.ID + "` to claim lane a1 of epic " + epicA.ID + " (a second lane of an epic you already hold a lane in)"},
-		{"abandoned work is taken over, not claimed fresh", ServedFromNewLane{Row: inFlightRow, Lane: inFlightLane},
-			inFlight.ID + " is in progress and abandoned — run `lit start " + inFlight.ID + "` to take over lane a2 of epic " + epicA.ID},
-		// Step 2 admits takeoverWork, so the epic's next lane can carry an
-		// abandoned row: the one place the verb-dependent sentence and the
+		{"abandoned work says it is in flight and unheld before the same claim advice", ServedFromNewLane{Row: inFlightRow, Lane: inFlightLane},
+			inFlight.ID + " is in progress and nobody holds it — run `lit start " + inFlight.ID + "` to claim lane a2 of epic " + epicA.ID},
+		// Step 2 serves abandoned in-flight rows too, so the epic's next lane
+		// can carry one: the one place the state-dependent sentence and the
 		// fixed suffix are concatenated. Pinned whole, because a product left
 		// partly covered is where this ticket's tautology survived.
-		{"the epic's next lane takes over abandoned work, qualifier and all", ServedFromEpicLane{Row: inFlightRow, Lane: inFlightLane},
-			inFlight.ID + " is in progress and abandoned — run `lit start " + inFlight.ID + "` to take over lane a2 of epic " + epicA.ID + " (a second lane of an epic you already hold a lane in)"},
-		// Step 1b, both verbs. Its qualifier concatenates onto the
-		// verb-dependent sentence exactly as step 2's does, so the product needs
-		// both cells: a fresh claim and a takeover. This is the pick an agent is
-		// least likely to predict, and it printed the global pool's line verbatim
-		// until links-next-output-4hor — so what these two cells pin is not only
-		// the new clause but that the two picks stopped rendering alike.
+		{"the epic's next lane serves abandoned work, qualifier and all", ServedFromEpicLane{Row: inFlightRow, Lane: inFlightLane},
+			inFlight.ID + " is in progress and nobody holds it — run `lit start " + inFlight.ID + "` to claim lane a2 of epic " + epicA.ID + " (a second lane of an epic you already hold a lane in)"},
+		// Step 1b, both states. Its qualifier concatenates onto the
+		// state-dependent sentence exactly as step 2's does, so the product
+		// needs both cells: a ready row and an abandoned one. This is the pick
+		// an agent is least likely to predict, and it printed the global pool's
+		// line verbatim until links-next-output-4hor — so what these two cells
+		// pin is not only the new clause but that the two picks stopped
+		// rendering alike.
 		{"the on-path dependency names the row it unblocks", ServedFromDependency{Row: freshRow, Lane: freshLane, Gates: inFlight.ID},
 			"run `lit start " + fresh.ID + "` to claim lane a1 of epic " + epicA.ID + " (gates " + inFlight.ID + ", which is in a lane you hold)"},
-		{"an abandoned dependency is taken over and still names what it unblocks", ServedFromDependency{Row: inFlightRow, Lane: inFlightLane, Gates: fresh.ID},
-			inFlight.ID + " is in progress and abandoned — run `lit start " + inFlight.ID + "` to take over lane a2 of epic " + epicA.ID + " (gates " + fresh.ID + ", which is in a lane you hold)"},
+		{"an abandoned dependency is served and still names what it unblocks", ServedFromDependency{Row: inFlightRow, Lane: inFlightLane, Gates: fresh.ID},
+			inFlight.ID + " is in progress and nobody holds it — run `lit start " + inFlight.ID + "` to claim lane a2 of epic " + epicA.ID + " (gates " + fresh.ID + ", which is in a lane you hold)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer

@@ -46,8 +46,6 @@ func capacityName(c capacity) string {
 		return "serveWork"
 	case resumeWork:
 		return "resumeWork"
-	case takeoverWork:
-		return "takeoverWork"
 	}
 	return fmt.Sprintf("capacity(%d) — unnamed here; add it to capacityName", int(c))
 }
@@ -58,8 +56,6 @@ func relationName(r laneRelation) string {
 		return "laneUnclaimed"
 	case laneOurs:
 		return "laneOurs"
-	case laneLapsed:
-		return "laneLapsed"
 	case laneHeldForeign:
 		return "laneHeldForeign"
 	}
@@ -80,16 +76,17 @@ type laneRoutingCase struct {
 	teaches  string
 }
 
-// laneRoutingTable covers every relation relationOf can produce. The two
-// foreign rows are the pair links-claims-xwqu is about: they differ ONLY in
-// whether the holder's evidence has aged out, and that single fact flips the
-// row between "routed around" and "offered, as a takeover".
+// laneRoutingTable covers every relation relationOf can produce. There is no
+// row for a lane whose claim has expired, and that is the point links-claims-xwqu
+// and links-claims-y6yz between them settled: an expired claim derives
+// Unclaimed, so "nobody holds it" IS that row, and a table that still carried a
+// separate one would be documenting a grade of hold the code cannot represent.
 var laneRoutingTable = []laneRoutingCase{
 	{
-		name:     "nobody holds it",
+		name:     "nobody holds it — never started, finished, or its claim expired",
 		standing: nil,
 		want:     serveWork,
-		teaches:  "starting global work with no live claim yet claims that lane for this checkout",
+		teaches:  "starting global work with no live claim yet claims that lane for this checkout; and \"six hours without an event of its own anywhere in the lane expires it, and an expired claim is not a claim: `lit next` routes by rank, the lane is offered like any other, and nothing about the expired claim is shown\"",
 	},
 	{
 		name:     "we hold it",
@@ -102,18 +99,6 @@ var laneRoutingTable = []laneRoutingCase{
 		standing: heldBy(otherAttribution),
 		want:     routeAround,
 		teaches:  "the epic continues into \"any lane of the same epic no other checkout holds fresh\", and \"a fresh claim is reached only by `lit start --take`\"",
-	},
-	{
-		// One row for the relation, whoever the lapsed holder was: relationOf
-		// answers laneLapsed for our own lapsed claim too, and
-		// TestLaneRoutingTableCoversEveryRelation feeds it both identities.
-		// The own-lapsed verdict is what links-claims-em7h changed, and
-		// TestRouteNextLapsedOwnLaneDoesNotOutrankTheBacklog pins it end to
-		// end.
-		name:     "a hold has lapsed — another checkout's, or our own",
-		standing: staleBy(otherAttribution),
-		want:     takeoverWork,
-		teaches:  "epic continuation admits stale lanes, \"stale claims included\"; \"only a stale claim makes it a bare `lit next` target — taking it transfers the lane to this checkout\"; and a fresh session routes back to its own lane only \"while the claim is live — six hours without an event of its own anywhere in the lane lapses it, and a lapsed claim is only the record that one existed: `lit next` then routes by rank, and the lane's work is offered like anyone else's, as a takeover with provenance\"",
 	},
 }
 
@@ -168,9 +153,8 @@ func TestLaneRoutingTableCoversEveryRelation(t *testing.T) {
 	// Every standing claims.Derive can build, against both identities: the
 	// full input space relationOf is total over.
 	for _, standing := range []claims.Standing{
-		nil,
+		nil, claims.Unclaimed{},
 		heldBy(selfAttribution), heldBy(otherAttribution),
-		staleBy(selfAttribution), staleBy(otherAttribution),
 	} {
 		if relation := relationOf(standing, selfAttribution); !covered[relation] {
 			t.Errorf("standing %T yields lane relation %s, which no row in laneRoutingTable covers; add it, and say what quickstart-work.md teaches about it", standing, relationName(relation))

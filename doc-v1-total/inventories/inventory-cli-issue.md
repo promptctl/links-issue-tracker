@@ -1083,42 +1083,49 @@ positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason 
 
 `startSpec.authorize` → `authorizeStart(ctx, stdout, ap, issueID, prior, *take)`
 (`cli.go`, implementation `claims_takeover.go`):
-1. `GetRelationsByIDs([issueID])` and `model.LaneOf(prior, parent)`
-   (`claims_takeover.go`).
-2. `gatherClaimContext(ctx, stdout, ap)` (`claims_takeover.go`).
-3. `classifyTakeover(standing, self)` (`claims_takeover.go`), switching on `relationOf` rather than on the standing directly:
-   - `Held` by self, `Stale` with `Holder == claims.Locked` by self, or `Unclaimed` → `takeoverNone` (no-op).
-   - `Stale`, whoever held it — this checkout included → `takeoverStaleInformed`, **except** when `s.Holder == claims.Locked`, which `relationOf` reads as a live hold: `laneHeldForeign` for another checkout's lock, which therefore takes the `takeoverFreshConfirm` path below.
-   - `Held` by another → `takeoverFreshConfirm`.
-4. **Stale, foreign**: prints
-   `"<claim line> — check for unmerged branches or PRs on this lane before building on it\n"`
-   and proceeds (`printStaleProvenance`, `claims_takeover.go`).
-5. **Fresh, foreign** (`confirmFreshTakeover`, `claims_takeover.go`):
-   - Non-interactive stdout (`!isTerminal(stdout)`) and no `--take` →
-     `fmt.Errorf("<claim line> — this lane is claimed and active; pass --take to confirm the takeover")`
-     → exit 1 (`claims_takeover.go`).
-   - Non-interactive with `--take` → prints `"<claim line> — taking over (--take)\n"`
-     and proceeds (`claims_takeover.go`).
-   - Interactive → prints `"<claim line>\ntake over this lane? [y/N] "`, reads a
-     line from stdin; a read error other than EOF →
-     `"read takeover confirmation: %w"`; an answer not starting with `y`
-     (case-insensitive, trimmed) → `fmt.Errorf("takeover declined")` → exit 1
-     (`claims_takeover.go`).
+1. `GetRelationsByIDs([issueID])` and `model.LaneOf(prior, parent)`.
+2. `gatherClaimContext(ctx, stdout, ap)`.
+3. `relationOf(standing, self)` (`claims_takeover.go`), the one reading of a
+   standing against an identity, shared with routing:
+   - `Held` by self, or anything that is not `Held` (`Unclaimed`, which is also what
+     a lane whose claim has expired derives) → no ceremony: the start proceeds and
+     prints nothing about the lane.
+   - `Held` by another → `confirmFreshTakeover` (`claims_takeover.go`):
+     - Non-interactive stdout (`!isTerminal(stdout)`) and no `--take` →
+       `fmt.Errorf("<claim line> — this lane is claimed and active; pass --take to confirm the takeover")`
+       → exit 1.
+     - Non-interactive with `--take` → prints `"<claim line> — taking over (--take)\n"`
+       and proceeds.
+     - Interactive → prints `"<claim line>\ntake over this lane? [y/N] "`, reads a
+       line from stdin; a read error other than EOF →
+       `"read takeover confirmation: %w"`; an answer not starting with `y`
+       (case-insensitive, trimmed) → `fmt.Errorf("takeover declined")` → exit 1.
+4. Returns whether anybody held the lane (`relation != laneUnclaimed`); `runTransition`
+   hands that to `transferNotice` (`cli.go`), so `claim transferred:
+   <old> -> <new>` prints only when a claim existed to transfer. A start on a lane
+   whose claim has expired announces no transfer, whatever the row's history records
+   (`claims_context.go`).
+
+There is no "stale-informed" path. Until links-claims-y6yz an expired claim derived
+its own standing, and `start` on such a lane printed the lapsed holder's claim line
+tagged `(stale)` plus `check for unmerged branches or PRs on this lane before building
+on it`; an expired claim is not a claim, so both the standing and the printout are gone.
 
 Claim line format — `formatClaimLine(cc, lane, now)` (`claims_render.go`):
-returns `false` (no line) for an `Unclaimed` lane. Otherwise
+returns `false` (no line) for anything but a `Held` lane — an `Unclaimed` lane,
+including one whose claim has expired, prints nothing. Otherwise
 `"<prefix>[ · contested by <s1>, <s2>] · <age> ago[ · <lane progress>]"` where:
 - prefix, when the holder resolves to a live local worktree:
-  `"claimed here[ (stale|locked)]: <path> (<branch or 'detached HEAD'>)"`
+  `"claimed here: <path> (<branch or 'detached HEAD'>)"`
   (`claimPrefix`, `claims_render.go`)
 - otherwise: `"claimed: <name> (<state>)"` — `<name>` is `nameCheckout(by)`
   (`claims_render.go`): the stream's first 8 chars, or the literal
   `the public checkout` when `by` is the zero Attribution (an unattributed
-  establishing event); `<state>` is `holdState(by, kind)`
-  (`claims_render.go`): `elsewhere` for an identified holder, `stale`,
-  `locked`, or `unaddressed` for the public checkout, which has no address to
-  be "elsewhere" from
-- age via `humanizeCoarseDuration(now - tenure.LastActivity)` (`claims_render.go`)
+  establishing event); `<state>` is `holdState(by)`
+  (`claims_render.go`): `elsewhere` for an identified holder, or
+  `unaddressed` for the public checkout, which has no address to be
+  "elsewhere" from
+- age via `humanizeCoarseDuration(now - held.LastActivity)` (`claims_render.go`)
 - lane progress: `"<activeID> in progress, <done>/<total> done"` or
   `"<done>/<total> done"`; empty for a zero LaneProgress
   (`claims_render.go`).
@@ -1199,8 +1206,10 @@ Use 'lit next' to pick the top workable item to start.
      blocked line nor the depends-on line.
    - `    depends on: <ids joined by ", ">` (`backlog.go`, `output.go`)
    - `    in_progress: <age truncated to minute>[ (ORPHANED)]` for in-progress
-     rows (`backlog.go`, `inProgressSuffix` at `ready_state.go`)
-   - `    <claim line>` when the row's lane is Held or Stale (`backlog.go`)
+     rows (`backlog.go`, `inProgressSuffix` at `ready_state.go`);
+     the `(ORPHANED)` suffix is withdrawn when somebody holds the row's lane
+     (`backlog.go`), since the claim line beneath names them
+   - `    <claim line>` when the row's lane is Held (`backlog.go`)
    - `    unblocks: <ids of rows that depend on this one>` — derived from the
      classified open-dependency facts of the whole workable queue, before any
      narrowing, so the line survives a filter or a limit that cuts the
@@ -1267,26 +1276,26 @@ rather than being rendered into a generic error (`next_route.go`,
 `next_route.go`).
 
 **Admission** — `capacityFor(row, standing, self) capacity`
-(`next_route.go`) is the single eligibility verdict. The four capacities
-are `routeAround`, `serveWork`, `resumeWork`, `takeoverWork`
-(`next_route.go`). With `readiness = ClassifyReadiness(row.Annotations)`,
+(`next_route.go`) is the single eligibility verdict. The three capacities
+are `routeAround`, `serveWork`, `resumeWork` (`next_route.go`). With
 `relation = relationOf(standing, self)` (`claims_takeover.go` —
-`laneOurs` requires `self.Present() && standing.By == self`, so a checkout with
+`laneOurs` requires `self.Present() && held.By == self`, so a checkout with
 no minted token never reads a lane as its own, even one the public checkout
-itself holds), and `started = row.State() == model.StateInProgress`:
+itself holds) and `started = row.State() == model.StateInProgress`:
 
-1. `relation == laneOurs`: `started` → `resumeWork`; else `readiness.IsReady()` →
-   `serveWork`; else `routeAround`.
-2. Otherwise `abandoned := readiness.IsOrphaned() || relation == laneLapsed` and `takeable := (started && abandoned) || (!started && readiness.IsReady())`,
-   then: `!takeable` **or** `relation == laneHeldForeign` → `routeAround`;
-   `started` **or** `relation == laneLapsed` → `takeoverWork`; else
-   `serveWork`.
+1. `relation == laneHeldForeign` → `routeAround`.
+2. `!started` → `ClassifyReadiness(row.Annotations).IsReady()` ? `serveWork`: `routeAround`.
+3. `started` and `relation == laneOurs` → `resumeWork`.
+4. `started`, otherwise (`laneUnclaimed`) → `serveWork`.
 
-So a `laneLapsed` lane — a lapsed claim, whoever held it — yields `takeoverWork`, and steps 2 and 4 accept it.
-Only `laneHeldForeign` is routed around — which includes a `claims.Stale`
-standing whose `Holder` is `claims.Locked`, since `relationOf` reads a locked
-worktree as a live hold, matched against the caller like a fresh one
-(`claims_takeover.go`). Servability is not gated on `model.StateOpen`.
+An in-flight row in a lane nobody holds is abandoned by definition — whoever
+started it no longer holds a claim there — and is served on that fact alone; the
+orphan annotation does not enter routing. A lane whose claim has expired is
+`Unclaimed` and so `laneUnclaimed`, whoever held it, this checkout included.
+Only `laneHeldForeign` is routed around; a locked worktree past the clock
+derives `Held` and is one of these. The former fourth capacity `takeoverWork`
+and the former relation `laneLapsed` are gone with the `Stale` standing
+(links-claims-y6yz). Servability is not gated on `model.StateOpen`.
 
 **Routing precedence** — `routeNext(rows, details, standings, self, scope focusScope)`
 (`next_route.go`). `rows` are already in composite-rank order (§1.18).
@@ -1318,8 +1327,7 @@ If `len(ownLanes) > 0` (`next_route.go`):
      **`ServedFromDependency{Row: dep, Lane: laneOf(dep), Gates: gates}`** (`next_route.go`), the `Gates` being the blocked row the dependency gates.
 2. Else **the rest of our epic, in lanes we do not already hold** — predicate
    `lane.Epic() != "" && ownEpics[lane.Epic()] && !mine(lane)`, accepting
-   `{serveWork, takeoverWork}` → **`ServedFromEpicLane{Row, Lane: laneOf(row)}`**
-   (`next_route.go`).
+   `serveWork` → **`ServedFromEpicLane{Row, Lane: laneOf(row)}`**.
 3. Else → **`Exhausted{Epics, Blocked}`** (`next_route.go`), where `Epics`
    is `slices.Sorted(maps.Keys(ownEpics))` and `Blocked` is `blockedRows` over
    `gatingDependencies` for the lanes admitted by
@@ -1332,8 +1340,8 @@ directly:
 
 4. **The global pool, focus-scoped.** `pool, offPath := scope.partition(rows)`
    (`next_route.go`, `ready_state.go`), then
-   `pickFrom(pool, func(model.LaneID) bool { return true }, serveWork, takeoverWork)` →
-   **`ServedFromNewLane{Row, Lane: laneOf(row)}`** (`next_route.go`).
+   `pickFrom(pool, func(model.LaneID) bool { return true }, serveWork)` →
+   **`ServedFromNewLane{Row, Lane: laneOf(row)}`**.
    Else → **`NoWork{Unreachable: append(passedOver(pool, reachFor), withheldByScope(offPath)...)}`**
    (`next_route.go`), where `passedOver` stamps every walked pool row with
    `reachFor(row, true)` (`next_route.go`) and `withheldByScope` stamps
@@ -1391,27 +1399,23 @@ Both map to `ExitNoWork` = **6** (`exit.go`), with reasons
   non-empty and differs from the identity running the command,
   ``<RowID> is in progress and assigned to <assignee>, not to you — check that they have stopped before you continue it, or take other work from `lit backlog` ``;
   otherwise `"<RowID> is already in progress in a lane you hold — continue where you left off"`.
-- `ServedFromEpicLane` → `startAdvice(o.Row, o.Lane, expiredHolder(cc.standings.Of(o.Lane)))`
-  + `" (a second lane of an epic you already hold a lane in)\n"` (`next.go`).
-- `ServedFromNewLane` → the same `startAdvice(...)` + `"\n"` (`next.go`).
-- `ServedFromDependency` → the same `startAdvice(...)` + `" (gates %s, which is in a lane you hold)\n"` on `Gates` (`next.go`).
-- `Exhausted`, `NoWork` → returned as themselves; no ticket printed
-  (`next.go`).
-- Any other outcome type → panic (`next.go`).
+- `ServedFromEpicLane` → `startAdvice(o.Row, o.Lane)`
+  + `" (a second lane of an epic you already hold a lane in)\n"`.
+- `ServedFromNewLane` → the same `startAdvice(...)` + `"\n"`.
+- `ServedFromDependency` → the same `startAdvice(...)` + `" (gates %s, which is in a lane you hold)\n"` on `Gates`.
+- `Exhausted`, `NoWork` → returned as themselves; no ticket printed.
+- Any other outcome type → panic.
 
-`startAdvice(row, lane, holder)` (`next.go`) is exactly four sentences,
-selected by the row's state and by whether `lane.Describe()` reports a named lane:
-- in progress, lane not named: ``"<id> is in progress and <state> — run `lit start <id>` to take it over"``
-- in progress, lane named: ``"<id> is in progress and <state> — run `lit start <id>` to take over <described>"``
-- not in progress, lane not named: ``"run `lit start <id>` to claim it"``
-- not in progress, lane named: ``"run `lit start <id>` to claim <described>"``
+`startAdvice(row, lane)` (`next.go`) is one sentence with an optional
+lead clause. `object, named := lane.Describe()`, `object = "it"` when not named:
+- ``"run `lit start <id>` to claim <object>"``
+- in progress: ``"<id> is in progress and nobody holds it — run `lit start <id>` to claim <object>"``
 
-`<state>` is `inFlightState(holder)` (`next.go`): `claims.Locked` →
-`"claimed by a locked worktree whose claim has gone stale"`; `claims.Present` →
-`"stale, though its holder's worktree is still on disk"`; otherwise
-`"abandoned"`. `holder` is `expiredHolder(standing)` — the `Stale` standing's
-`Holder`, and `claims.Unprovable` for every other standing
-(`claims_render.go`).
+The lead clause says only what the standing proves — routing serves an
+in-progress row from a lane this checkout does not hold only when nobody holds
+that lane — and nothing about who left the row or when. The former
+`inFlightState(holder)` clause and `expiredHolder` accessor are gone with the
+`Stale` standing (links-claims-y6yz).
 
 `LaneID.Describe() (string, bool)` (`model.go`):
 - solo lane → `("", false)`
@@ -1432,7 +1436,7 @@ dispatched as `EventNextPulled` (`next.go`).
 (`register.go`). `startAdvice` names what a subsequent `lit start` would
 claim; this command claims nothing.
 
-### 2.15 `lit orphaned` — Stale in-progress issues
+### 2.15 `lit orphaned` — quiet in-progress issues
 
 - Registration `register.go`, `app.AccessRead`. Handler `runOrphaned`
   (`cli.go`). Summary: "List in_progress issues with no recent updates".
@@ -1883,9 +1887,8 @@ plus at most one positional topic.
    (`cli.go`). `new`/`followup` also write the trimmed literal
    (`cli.go`).
 6. **Claim state never blocks anything except `lit start` on a fresh foreign
-   hold.** `backlog` renders claims as visibility only (`backlog.go`,
-); `next` routes by claim but never writes (`next_route.go`);
-   `start` is the only gate (`cli.go`, `classifyTakeover` at
+   hold.** `backlog` renders claims as visibility only (`backlog.go`); `next` routes by claim but never writes (`next_route.go`);
+   `start` is the only gate (`cli.go`, `relationOf` at
    `claims_takeover.go`).
 7. **Three functions panic on unreachable states** and would abort the process:
    `ClassifyReadiness` on an unclassified annotation kind (`readiness.go`),

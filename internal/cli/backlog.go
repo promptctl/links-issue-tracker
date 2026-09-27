@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
-	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
@@ -199,13 +198,13 @@ type backlogRowContext struct {
 	epic  string
 	claim string
 	run   backlogRun
-	// holder is what this machine can see of the checkout behind an expired
-	// claim on this row's lane. It is resolved here, beside the claim line and
-	// off the same lane, because the two describe one hold: an "in_progress:
-	// ... (ORPHANED)" line above a claim line naming a live worktree is the
-	// self-contradiction links-claims-2wk2 reported, and deriving both from one
-	// lookup is what makes it unspellable. [LAW:one-source-of-truth]
-	holder claims.Presence
+	// laneHeld is whether anybody holds this row's lane right now. It is
+	// resolved here, beside the claim line and off the same lane, because the
+	// two describe one hold: an "in_progress: ... (ORPHANED)" line above a
+	// claim line naming a live worktree is the self-contradiction
+	// links-claims-2wk2 reported, and deriving both from one lookup is what
+	// makes it unspellable. [LAW:one-source-of-truth]
+	laneHeld bool
 }
 
 // advance resolves what a row under epic, in lane, states for itself given the
@@ -217,10 +216,10 @@ func (above backlogRun) advance(epic *annotation.ParentEpicRef, cc claimContext,
 	claim, _ := formatClaimLine(cc, lane, now)
 	here := backlogRun{epicID: epicID(epic), lane: lane, claim: claim}
 	return backlogRowContext{
-		epic:   openingRun(backlogEpicLine(epic), here.epicID, above.epicID),
-		claim:  openingRun(claimStatement(here.claim, above.claim), here.lane, above.lane),
-		run:    here,
-		holder: expiredHolder(cc.standings.Of(lane)),
+		epic:     openingRun(backlogEpicLine(epic), here.epicID, above.epicID),
+		claim:    openingRun(claimStatement(here.claim, above.claim), here.lane, above.lane),
+		run:      here,
+		laneHeld: relationOf(cc.standings.Of(lane), cc.self) != laneUnclaimed,
 	}
 }
 
@@ -312,7 +311,7 @@ func printBacklogContext(w io.Writer, entry annotation.AnnotatedIssue, unblocks 
 		return err
 	}
 	if entry.State() == model.StateInProgress {
-		if _, err := fmt.Fprintf(w, "%sin_progress: %s\n", contextIndent, inProgressSuffix(entry, group.holder)); err != nil {
+		if _, err := fmt.Fprintf(w, "%sin_progress: %s\n", contextIndent, inProgressSuffix(entry, group.laneHeld)); err != nil {
 			return err
 		}
 	}

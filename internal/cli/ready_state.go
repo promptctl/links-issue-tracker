@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
-	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
@@ -1019,32 +1018,24 @@ func printInlineDeps(w io.Writer, entry annotation.AnnotatedIssue, cc claimConte
 	return err
 }
 
-// inProgressSuffix renders the age of an in-flight row and what that age means.
+// inProgressSuffix renders the age of an in-flight row and, when that age has
+// crossed the orphan threshold in a lane nobody holds, says so.
 //
 // The orphan annotation is a clock and only a clock: in_progress, no update in
 // the threshold. It is enough to say a ticket has gone quiet and was never
-// enough to say its holder left, so where this machine has ENUMERATED that
-// holder's worktree and found it, the louder word is withdrawn — "(ORPHANED)"
-// reads as permission, and it was reading that way over a worktree sitting
-// locked on an open PR (links-claims-2wk2). What replaces it still says the
-// claim lapsed; the claim line printed directly beneath names the holder and
-// its path, which is the part a reader was previously told not to bother with.
-//
-// A holder this machine cannot see keeps the original word. Nothing was
-// learned about it, so nothing about the old reading was wrong.
-func inProgressSuffix(entry annotation.AnnotatedIssue, holder claims.Presence) string {
-	age := time.Since(entry.UpdatedAt).Truncate(time.Minute)
-	suffix := fmt.Sprintf("%s", age)
-	if !ClassifyReadiness(entry.Annotations).IsOrphaned() {
-		return suffix
+// enough to say its holder left. A lane somebody holds is not orphaned
+// whatever the row's own clock reads — the holder is active elsewhere in the
+// lane, or has locked their worktree, and the claim line printed directly
+// beneath names them. "(ORPHANED)" above that line was the self-contradiction
+// links-claims-2wk2 reported, over a worktree sitting locked on an open PR.
+// Where nobody holds the lane, the word stands: nothing was learned about the
+// holder, so nothing about the old reading was wrong.
+func inProgressSuffix(entry annotation.AnnotatedIssue, laneHeld bool) string {
+	age := time.Since(entry.UpdatedAt).Truncate(time.Minute).String()
+	if laneHeld || !ClassifyReadiness(entry.Annotations).IsOrphaned() {
+		return age
 	}
-	switch holder {
-	case claims.Locked:
-		return suffix + " (stale, worktree locked)"
-	case claims.Present:
-		return suffix + " (stale, worktree present)"
-	}
-	return suffix + " (ORPHANED)"
+	return age + " (ORPHANED)"
 }
 
 // printRankInversions prints a count-only warning when dependencies are ranked

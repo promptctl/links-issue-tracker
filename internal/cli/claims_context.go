@@ -138,6 +138,15 @@ func readClaimant(ctx context.Context, ap *app.App, issueID string) (claims.Clai
 // "nothing to say", so the caller writes the result unconditionally instead of
 // guarding the write. [LAW:dataflow-not-control-flow]
 //
+// laneHeld is whether anybody held the ticket's lane when the start was
+// authorized. Nobody holding it means there was no claim to hand over — the
+// lane was never started, is finished, or its claim expired — and the notice
+// stays silent whatever the row's own history records about who last started
+// it: an expired claim is not a claim, so nothing transfers from one
+// (links-claims-y6yz). The record's establisher still matters to the store,
+// which compares claimants to decide whether a same-state start owes a write;
+// this governs only what is announced.
+//
 // Asking is what costs: the claimant is two round trips, and `start` is the one
 // verb whose result anything reads. The other three status verbs cannot take a
 // ticket, and the four retention verbs (archive/unarchive/delete/restore) are
@@ -160,9 +169,9 @@ func readClaimant(ctx context.Context, ap *app.App, issueID string) (claims.Clai
 // whether that holder changed. Comparing assignees alone was silent for the two
 // takeovers that matter most: between two human checkouts (both assignees
 // empty) and between two worktrees of one agent session (both identical).
-func transferNotice(ctx context.Context, ap *app.App, issueID string, action model.Action) (string, error) {
+func transferNotice(ctx context.Context, ap *app.App, issueID string, action model.Action, laneHeld bool) (string, error) {
 	start, takes := action.(model.Start)
-	if !takes {
+	if !takes || !laneHeld {
 		return "", nil
 	}
 	prior, err := readClaimant(ctx, ap, issueID)

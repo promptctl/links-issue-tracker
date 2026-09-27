@@ -138,27 +138,25 @@ func TestFormatClaimLineAddressOnlyOnClaimantsOwnMachine(t *testing.T) {
 	}
 }
 
-// TestFormatClaimLineStaleHolderStillResolvesALiveAddress: a claim can go
-// stale while its worktree is still very much alive, and "go look at what it
-// was doing" is exactly as true then as for a fresh claim.
-func TestFormatClaimLineStaleHolderStillResolvesALiveAddress(t *testing.T) {
+// TestFormatClaimLineExpiredClaimRendersNothingEvenWithAnAddress: the holder's
+// worktree is still on this machine and resolvable, but the claim on the lane
+// has expired, so the lane is Unclaimed and nothing is printed — not the
+// address, not the age, not a badge. "Go look at what it was doing" was once
+// printed here as "claimed here (stale): <path>", and an expired claim is not
+// a claim to print (links-claims-y6yz). The address map is populated on
+// purpose: a renderer that consulted it before the standing would still find
+// something to say.
+func TestFormatClaimLineExpiredClaimRendersNothingEvenWithAnAddress(t *testing.T) {
 	evidence, lane := laneWithProgress(t, 0, 1, "")
-	standings := claims.Standings{lane: claims.Stale{Tenure: claims.Tenure{
-		By: hereHolder, Since: renderNow.Add(-72 * time.Hour), LastActivity: renderNow.Add(-49 * time.Hour),
-	}}}
 	cc := claimContext{
-		standings: standings,
+		standings: claims.Standings{lane: claims.Unclaimed{}},
 		evidence:  evidence,
 		addresses: map[model.Attribution]workspace.Checkout{
 			hereHolder: {Path: "../links-wt-pgct", Branch: ""},
 		},
 	}
-	line, ok := formatClaimLine(cc, lane, renderNow)
-	if !ok {
-		t.Fatalf("formatClaimLine on a Stale lane returned ok=false")
-	}
-	if !strings.Contains(line, "claimed here (stale): ../links-wt-pgct (detached HEAD)") {
-		t.Fatalf("line = %q, want a stale-tagged local address with detached HEAD rendered", line)
+	if line, ok := formatClaimLine(cc, lane, renderNow); ok || line != "" {
+		t.Fatalf("formatClaimLine on an unclaimed lane with a resolvable address = (%q, %v), want nothing: there is no claim to describe", line, ok)
 	}
 }
 
@@ -216,13 +214,34 @@ func TestTransferNoticeNamesAPredecessorThatMintedNoToken(t *testing.T) {
 	h.asCheckout("")
 	h.transition(issue.ID, model.Start{})
 
-	notice, err := transferNotice(h.ctx, h.ap, issue.ID, model.Start{Assignee: "bravo-agent"})
+	notice, err := transferNotice(h.ctx, h.ap, issue.ID, model.Start{Assignee: "bravo-agent"}, true)
 	if err != nil {
 		t.Fatalf("transferNotice error = %v", err)
 	}
 	want := fmt.Sprintf("claim transferred: the public checkout -> bravo-agent (%s)\n", nameCheckout(ownAttribution(h.ap)))
 	if notice != want {
 		t.Fatalf("transferNotice = %q, want %q", notice, want)
+	}
+}
+
+// TestTransferNoticeIsSilentWhenNobodyHoldsTheLane is the same record read
+// under the other answer to "does anybody hold this lane". The row's history
+// still names a predecessor who started it, and the notice still says nothing:
+// a claim that has expired is not a claim, so there is nothing to hand over,
+// and "claim transferred" would announce a transfer from a claim that does not
+// exist (links-claims-y6yz).
+func TestTransferNoticeIsSilentWhenNobodyHoldsTheLane(t *testing.T) {
+	h := newReadyTestHarness(t)
+	issue := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "expired hold", Topic: "claims", IssueType: "task"})
+	h.asCheckout("")
+	h.transition(issue.ID, model.Start{})
+
+	notice, err := transferNotice(h.ctx, h.ap, issue.ID, model.Start{Assignee: "bravo-agent"}, false)
+	if err != nil {
+		t.Fatalf("transferNotice error = %v", err)
+	}
+	if notice != "" {
+		t.Fatalf("transferNotice with nobody holding the lane = %q, want nothing: an expired claim transfers nothing", notice)
 	}
 }
 
@@ -261,12 +280,6 @@ func TestFormatClaimLinePublicCheckoutIsNeverHere(t *testing.T) {
 			self:     publicHolder,
 			standing: claims.Held{Tenure: claims.Tenure{By: publicHolder, LastActivity: renderNow.Add(-2 * time.Hour)}},
 			want:     "claimed: the public checkout (unaddressed)",
-		},
-		{
-			name:     "stale, asked by a checkout that minted no token of its own",
-			self:     publicHolder,
-			standing: claims.Stale{Tenure: claims.Tenure{By: publicHolder, LastActivity: renderNow.Add(-49 * time.Hour)}},
-			want:     "claimed: the public checkout (stale)",
 		},
 	} {
 		t.Run(row.name, func(t *testing.T) {

@@ -21,12 +21,12 @@ never stored, never synchronized as their own state, and never cleaned up —
 there are no claim objects, no claim commands, and no claim lifecycle. The
 entire state footprint is: work events carry an opaque attribution, and each
 checkout keeps one identity token in its private git directory. Who holds
-what, what has gone stale, what is contested, and where `next` should route are
-all computed at read time from facts the system already synchronizes.
+what, what is contested, and where `next` should route are all computed at
+read time from facts the system already synchronizes.
 
 Claiming is implicit — starting a ticket in a lane claims the lane. Release is
-implicit — finishing the lane, going stale, or deleting the checkout releases
-it. Focus and unfocus are not modes: a checkout with live claims is focused on
+implicit — finishing the lane, the claim expiring, or deleting the checkout
+releases it, and a released claim is gone: nothing records that it existed. Focus and unfocus are not modes: a checkout with live claims is focused on
 them; a checkout without claims sees the global backlog. The global case is the
 natural zero state, not a second layer.
 
@@ -125,15 +125,23 @@ Derived annotations accompany the predicate:
   annotation, not a state: routing stays deterministic (the latest
   establishing event holds the claim), both sides are notified the next time
   they look, and sync reconciliation surfaces it for judgment.
-- **Stale** — the holder's evidence has aged past T while L remains
-  unfinished. A stale claim is not a claim. It is the record that one existed,
-  and the lane is available again to every checkout, the one that let it lapse
-  included, offered as a takeover with provenance rather than served silently.
-  Routing step 6.
+There is no annotation for a claim whose evidence has aged past T. An
+expired claim is not a claim, and it is not the record of one either: the
+lane derives **unclaimed**, exactly as a lane nobody ever started does, and no
+surface says anything about the claim that used to be there. The design once
+carried a third standing here, *Stale*, described as "the record that a claim
+existed", and every consumer gave it a meaning — a "(stale)" badge on the
+claim line, a provenance printout on `lit start`, a takeover verdict in
+routing. That was a grade of claim wearing a disclaimer, and it produced the
+report links-claims-y6yz: a lane whose claim had lapsed six hours earlier
+still printed as claimed on every `lit next`, and nothing the user could do
+touched it, because there was nothing there to touch (owner ruling,
+2026-09-26). Routing step 6.
 
 A claim dissolves by the predicate ceasing to hold: the lane finishes, the
 evidence ages out, or the holder's checkout is locally known to be gone.
-Nothing is stored, so nothing is released, transferred, or cleaned up.
+Nothing is stored, so nothing is released, transferred, or cleaned up — and
+nothing is remembered.
 
 ### Identity and attribution
 
@@ -177,29 +185,29 @@ is deliberate and honest: deletion is a local fact, and only its owner can
 observe it instantly. A different clone on the same machine has a different
 workspace id and is never pruned by this one.
 
-The enumeration answers with more than a yes or no, and the difference decides
-what an expired claim is CALLED. The finding is one of four: *gone* (this
-machine enumerated and the worktree is absent — the void above), *present*,
-*locked* (`git worktree lock`), or *unprovable* (another clone, or the public
-checkout, which names no worktree to look for). Only *gone* voids. What the
-other three change is the language: past T, a holder whose worktree this
-machine can still see is never described as abandoned or orphaned, because it
-has not been shown to have left — only to have gone quiet. Presence and absence
-were one bit until links-claims-2wk2, so "the clock expired" and "the holder
-walked away" reached readers in the same words, and an agent took that as
-permission.
+The enumeration answers with more than a yes or no. The finding is one of
+four: *gone* (this machine enumerated and the worktree is absent — the void
+above), *present*, *locked* (`git worktree lock`), or *unprovable* (another
+clone, or the public checkout, which names no worktree to look for). Two of
+the four decide anything. *Gone* voids. *Locked* is the one finding that
+outranks the clock: it carries the claim past T, so the lane is **held** —
+routed around and gated exactly as a fresh one is, with no separate word for
+it. Every other signal here says a worktree EXISTS, which a dead session leaves
+behind just as readily; a lock is the holder speaking, and nobody sets it by
+walking away. Mere presence deliberately does not sustain a claim — a worktree
+outliving its session is ordinary, and letting that hold a lane would strand
+every uncleaned tree's work with the age-out that exists to release it never
+firing. A lock never outranks proven absence in the other direction either:
+git withholds `prunable` from a locked record, so a stream missing from the
+listing is gone whatever it once claimed about itself, and reading it the
+other way would make a lock an unkillable claim.
 
-*Locked* is the one finding that outranks the clock: it carries the claim past
-T, and the lane is routed around and gated exactly as a fresh one is. Every
-other signal here says a worktree EXISTS, which a dead session leaves behind
-just as readily; a lock is the holder speaking, and nobody sets it by walking
-away. Mere presence deliberately does not sustain a claim — a worktree outliving
-its session is ordinary, and letting that hold a lane would strand every
-uncleaned tree's work with the age-out that exists to release it never firing.
-A lock never outranks proven absence in the other direction either: git
-withholds `prunable` from a locked record, so a stream missing from the listing
-is gone whatever it once claimed about itself, and reading it the other way
-would make a lock an unkillable claim.
+*Present* and *unprovable* change nothing: past T, with no lock, the claim has
+expired and the lane is unclaimed whatever this machine can see of the
+worktree. The enumeration once decided what an expired claim was called —
+"stale, worktree present" against "orphaned" — which presupposed that an
+expired claim was something to describe (links-claims-2wk2). It is not, so
+the finding is read for the two decisions above and nothing else.
 
 ### Granularity: why the lane
 
@@ -256,15 +264,16 @@ step, so each step below says only which lanes it looks in:
 - **What a step may take** — the tickets that are ready, the tickets
   abandoned in flight (step 6), and, in a lane of the checkout's own, the work
   already in flight there, which is resumed rather than started. A lane
-  another checkout holds fresh offers none of the three (step 5).
+  another checkout holds offers none of the three (step 5).
 - **What a pick says** — `next` reports a pick; `start` takes it. So a pick
   whose start *would* establish a claim names the lane that start would lock,
   in the conditional and naming the command: "run `lit start B.1` to claim lane
-  one of epic B". It says "take over" only where the ticket was abandoned in
-  flight — "B.1 is in progress and abandoned — run `lit start B.1` to take over
-  lane one of epic B" — and a ready ticket reads as a fresh start whatever its
-  lane's history, the claim line printed beneath the row carrying the provenance
-  of a lane whose holder has gone stale.
+  one of epic B". Where the ticket was abandoned in flight the line says so
+  first — "B.1 is in progress and nobody holds it — run `lit start B.1` to
+  claim lane one of epic B" — and says nothing about who left it: a lane
+  nobody holds has no claim to describe, and the ticket's own history is
+  `lit show`'s to tell. A ready ticket reads as a fresh start whatever its
+  lane's history.
 
   A pick that continues the checkout's own epic (step 2) closes on a qualifier
   naming why it was reached — "… to claim lane one of epic B (a second lane of
@@ -325,39 +334,35 @@ step, so each step below says only which lanes it looks in:
    1–3 never read it, so a lane this checkout already holds is served whether
    or not it sits on the path: focus decides where a fresh session goes, not
    whether work in flight is still yours.
-5. **Lanes another checkout holds fresh are routed around, not hidden.**
+5. **Lanes another checkout holds are routed around, not hidden.**
    `next` skips them silently; listings show everything with claim
-   annotations. Visibility is not pullability. A lane whose holder has gone
-   stale is not one of these — see step 6.
-6. **A stale claim is provenance, not a hold.** Wherever a step looks outside
-   the checkout's own lanes, a lane whose claim has aged past T is admitted,
-   and a lane another checkout holds fresh is not. That distinction is the
-   entire content of the rule. What makes an in-flight ticket takeable is that
-   its holder is gone — a claim that has gone stale, or a lane that never
-   carried one.
-   The older exclusion — a stale lane withheld from bare `next` exactly as a
-   fresh foreign hold is — is retired because it was never coherent, not
-   because a tradeoff shifted. A claim is evidence of ownership; staleness is
-   evidence that the evidence expired; and an orphaned ticket's claim refutes
-   itself, since the claim's entire content is "someone is working this" and
-   the orphan annotation is the proof that nobody is. Letting that claim veto
-   the ticket means trusting the claim over the proof that the claim is dead
-   (owner ruling, links-claims-1b0p, 2026-09-03). A stale claim on the
-   checkout's *own* lane is no different: the claim has lapsed, the checkout
-   holds nothing, and the lane is reached by rank from the pool like any
-   other. It was once read the other way — staleness of your own lane as
-   evidence you stepped away from work still yours, handed back to resume —
-   and under that reading a checkout that finished one ticket of an epic and
-   walked away was routed back to that epic ahead of the entire backlog for
-   as long as the epic stayed open; with one checkout in the repository,
-   forever, since nothing it could do released a claim that no longer existed
-   (owner ruling, links-claims-em7h, 2026-09-26). Taking over stays visible
-   rather than silent: the announcement rule above says when the pick names
-   itself a takeover, and a displaced holder's claim line prints under the row
-   committed to — "claimed: stream 7f3a (stale) · 3 days ago · 0/8 done" — so
-   commitment and provenance arrive together. Overriding a claim that is
-   still fresh requires the deliberate act of `lit start` on that ticket,
-   with explicit confirmation. A claim is a well-founded default, never a lock.
+   annotations. Visibility is not pullability. A lane whose claim has expired
+   is not one of these — see step 6.
+6. **An expired claim is no claim.** Wherever a step looks outside the
+   checkout's own lanes, a lane whose claim has aged past T is admitted on the
+   same terms as a lane that never carried one, and a lane another checkout
+   holds is not. That distinction is the entire content of the rule. What
+   makes an in-flight ticket takeable is that nobody holds its lane.
+   The older exclusion — an aged-out lane withheld from bare `next` exactly
+   as a live foreign hold is — is retired because it was never coherent, not
+   because a tradeoff shifted. A claim is evidence of ownership, and expiry is
+   the evidence running out; letting an expired claim veto a ticket means
+   trusting the claim over the proof that the claim is dead (owner ruling,
+   links-claims-1b0p, 2026-09-03). An expired claim on the checkout's *own*
+   lane is no different: the checkout holds nothing, and the lane is reached
+   by rank from the pool like any other. It was once read the other way — the
+   age of your own lane as evidence you stepped away from work still yours,
+   handed back to resume — and under that reading a checkout that finished one
+   ticket of an epic and walked away was routed back to that epic ahead of the
+   entire backlog for as long as the epic stayed open; with one checkout in
+   the repository, forever, since nothing it could do released a claim that no
+   longer existed (owner ruling, links-claims-em7h, 2026-09-26). The step
+   between those two rulings — an expired claim admitted, but still printed,
+   still called a takeover, still gating `lit start` with a provenance line —
+   is retired with links-claims-y6yz: an expired claim is over, not
+   demoted, and nothing about it is shown. Overriding a claim that is live
+   requires the deliberate act of `lit start` on that ticket, with explicit
+   confirmation. A claim is a well-founded default, never a lock.
 7. **Contested lanes** keep deterministic routing (latest establishing event
    holds), while the other party's selection stands down and says why:
    "claim on A#1 moved to 7f3a at 14:02 — coordinate or stand down."
@@ -385,18 +390,22 @@ wants it for its own reasons. One honest residual: a checkout whose latest
 act was *completing* a ticket, then walking away mid-epic, has nothing to put
 back; that claim waits out T or dies with the worktree.)
 
-Abandonment needs no bookkeeping of its own because **the gradations of an
-abandoned claim are the evidence itself**, already shared:
+Abandonment needs no bookkeeping of its own because **everything worth
+knowing about an abandoned lane is in the shared work records**, and none of
+it is in the claim:
 
-- *Claimed, nothing completed, gone stale* — the weakest claim; surfaced as
-  freely takeover-eligible, with provenance.
-- *Claimed with unmerged work in flight* — deliberately outside the tracker's
-  knowledge: branches and pull requests belong to git and the forge. The
-  takeover flow instructs the **taking agent** to check for unmerged work
-  before proceeding. Judgment stays with the caller closest to the context.
-- *Claimed, half the lane completed, then abandoned* — completed tickets are
-  completed in the shared database; the claim carried no work-state of its
-  own, so takeover inherits a half-done lane with nothing to transfer and
+- *Nothing completed, claim expired* — the lane is unclaimed, and `next`
+  offers its tickets like any other; a ticket left in progress is offered as
+  abandoned work in flight, and the ticket's own history names whoever
+  started it.
+- *Unmerged work in flight* — deliberately outside the tracker's knowledge:
+  branches and pull requests belong to git and the forge. The agent picking
+  up an abandoned in-progress ticket checks for unmerged work before
+  proceeding; the quickstart says so. Judgment stays with the caller closest
+  to the context.
+- *Half the lane completed, then abandoned* — completed tickets are completed
+  in the shared database; the claim carried no work-state of its own, so
+  picking the lane up inherits a half-done lane with nothing to transfer and
   nothing lost.
 
 ## Finding a claimant
@@ -439,19 +448,16 @@ metadata.
 Cold start is graceful by construction, but by freshness rather than by
 absence. Historical events carry no attribution, so a freshly upgraded
 repository derives claims held by the **public checkout**. Nearly all of that
-history is older than the freshness window and reads as stale: available for
-takeover, carrying its provenance. A pre-attribution `start` still inside the
-window reads as a fresh hold and is routed around until it ages out, like any
-fresh hold.
+history is older than the freshness window, so those claims have expired and
+their lanes are unclaimed. A pre-attribution `start` still inside the window
+reads as a live hold and is routed around until it ages out, like any live
+hold.
 
-No checkout reads a public-checkout lane as its own, fresh or stale. A checkout
-that has minted no token computes the *same* zero attribution as that history —
-`next` opens read-only, and the read path never mints — so equality between the
-two proves only that both are unaddressable. Read as identity, it would adopt
-the entire pre-attribution backlog on its first `next`.
-
-Cold start does not behave identically to a pre-claims repository: those lanes
-now carry provenance, and taking one is announced as the takeover it is.
+No checkout reads a public-checkout lane as its own. A checkout that has
+minted no token computes the *same* zero attribution as that history — `next`
+opens read-only, and the read path never mints — so equality between the two
+proves only that both are unaddressable. Read as identity, it would adopt
+every live public-checkout lane on its first `next`.
 
 ## The privacy invariant
 
@@ -625,13 +631,12 @@ sidecar maps.
   in links-claims-1b0p was fixed: while every consumer read a stale claim of a
   checkout's own differently, the long window was armor against that
   inconsistency rather than a considered reading of when a claim goes cold.
-  With the defect gone, and the own-lane reading corrected in
-  links-claims-em7h, staleness means "no longer a claim: available to
-  everyone with notice, the checkout that let it lapse included", and 6 hours
-  of lane-wide silence — measured
-  from the holder's last event anywhere in the lane, so finishing a ticket
-  restarts the clock — is the weaker claim of activity it was always meant to
-  be. T equals the orphaned-ticket threshold in value only: separate policies
+  With the defect gone, the own-lane reading corrected in links-claims-em7h,
+  and the expired standing removed in links-claims-y6yz, expiry means "no
+  longer a claim, and nothing to say about it", and 6 hours of lane-wide
+  silence — measured from the holder's last event anywhere in the lane, so
+  finishing a ticket restarts the clock — is the weaker claim of activity it
+  was always meant to be. T equals the orphaned-ticket threshold in value only: separate policies
   over separate subjects (an abandoned claim vs. an abandoned ticket), derived
   separately, deliberately not backed by a shared constant.
 - **Takeover confirmation shape** for fresh-claim override (interactive
