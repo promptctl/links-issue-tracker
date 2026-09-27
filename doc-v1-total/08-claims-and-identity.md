@@ -110,7 +110,7 @@ Callers: `lit next`, the backlog/workable runner, `lit start`'s authorization, a
 
 ### `lit start` — the takeover gate (the only write gate)
 
-`start` is the only transition with an authorization hook; it runs after the action is built and before the store apply, can abort the transition, and reports whether anybody held the issue's lane so the transfer notice can read that fact without a second gather (`internal/cli/cli.go`, `cli.go`). The issue's lane standing and the caller's own attribution decide the requirement through `relationOf` (`internal/cli/claims_takeover.go`), the one place a standing is read against an identity:
+`start` is the only transition with an authorization hook; it runs after the action is built and before the store apply, can abort the transition, and returns the line the start owes after the apply — the transfer notice, or nothing — decided on the lane standing it just read, so the notice needs no second gather (`internal/cli/cli.go`). The issue's lane standing and the caller's own attribution decide the requirement through `relationOf` (`internal/cli/claims_takeover.go`), the one place a standing is read against an identity:
 
 | Standing | Condition | Relation | Requirement |
 |---|---|---|---|
@@ -123,7 +123,7 @@ A checkout with no minted token never reads "held by self," even for a lane the 
 - **None**: proceed; the happy path costs one extra evidence gather and nothing else (`authorizeStart`, `claims_takeover.go`).
 - **Fresh-confirm**: on a non-interactive stdout, refuses unless `--take` was passed (`… — this lane is claimed and active; pass --take to confirm the takeover`); with `--take`, prints `… — taking over (--take)` and proceeds. On an interactive terminal, prompts `take over this lane? [y/N]` reading stdin; any answer whose trimmed lowercase form starts with `y` proceeds, anything else fails with `takeover declined` (`confirmFreshTakeover`, `claims_takeover.go`). The `--take` flag's help: "Confirm taking over a lane another checkout claims right now (required for non-interactive callers; an interactive terminal is prompted instead)" (`cli.go`).
 
-The transfer notice — `claim transferred: <old> -> <new>` — prints after the apply only when the lane was held when `start` looked, ours or another's, and the ticket's recorded claimant changed (`transferNotice`, `internal/cli/claims_context.go`). A start on a lane nobody holds announces no transfer, whatever the row's history records about who once started it: an expired claim transfers nothing.
+The transfer notice — `claim transferred: <old> -> <new>` — prints after the apply only when the lane was held when `start` looked, ours or another's, and the ticket's recorded claimant changed: `authorizeStart` asks `transferNotice` for it only from a held lane (`internal/cli/claims_takeover.go`, `internal/cli/claims_context.go`). A start on a lane nobody holds announces no transfer, whatever the row's history records about who once started it: an expired claim transfers nothing.
 
 Proven over two real clones and a git remote: the second clone's plain `start` fails naming `--take` and `claimed`; with `--take` it succeeds printing "taking over"; a subsequent `start` on the now-transferred lane prompts nothing (`internal/cli/claims_takeover_e2e_test.go`). With the freshness window forced to 1 ms so the first clone's claim has expired, the second clone's plain `start` succeeds and prints none of `claimed`, `stale`, `check for unmerged`, `take`, or `claim transferred` (`TestStartOnAnExpiredForeignClaimIsSilent`).
 

@@ -138,26 +138,29 @@ func readClaimant(ctx context.Context, ap *app.App, issueID string) (claims.Clai
 // "nothing to say", so the caller writes the result unconditionally instead of
 // guarding the write. [LAW:dataflow-not-control-flow]
 //
-// laneHeld is whether anybody held the ticket's lane when the start was
-// authorized. Nobody holding it means there was no claim to hand over — the
-// lane was never started, is finished, or its claim expired — and the notice
-// stays silent whatever the row's own history records about who last started
-// it: an expired claim is not a claim, so nothing transfers from one
-// (links-claims-y6yz). The record's establisher still matters to the store,
-// which compares claimants to decide whether a same-state start owes a write;
-// this governs only what is announced.
+// It is asked only by authorizeStart, and only once that gate has found the
+// ticket's lane held — by this checkout or another. A lane nobody holds has no
+// claim to hand over: it was never started, is finished, or its claim expired,
+// and the notice would be wrong whatever the row's own history records about
+// who last started it, because an expired claim is not a claim
+// (links-claims-y6yz). The gate is the one read that knows the lane's
+// standing, so the question is asked there rather than answered twice. The
+// record's establisher still matters to the store, which compares claimants to
+// decide whether a same-state start owes a write; this governs only what is
+// announced.
 //
 // Asking is what costs: the claimant is two round trips, and `start` is the one
 // verb whose result anything reads. The other three status verbs cannot take a
 // ticket, and the four retention verbs (archive/unarchive/delete/restore) are
 // not status transitions at all — they move an issue on the orthogonal axis. So
-// which actions owe the read is a fact about the sealed sum, and this is where
-// it is stated: once, beside the read, rather than as another type assertion in
-// runTransition's body. [LAW:effects-at-boundaries]
+// which actions owe the read is a fact about the sealed sum, and the start
+// spec's authorize hook is where it is stated: once, beside the read, rather
+// than as another type assertion in runTransition's body.
+// [LAW:effects-at-boundaries]
 //
-// The decision is composed here, before Apply, because every input to it is a
-// fact about the state Apply is about to change — the prior claimant and the
-// action taking it. The caller renders the result afterwards, so a failed Apply
+// The decision is composed before Apply, because every input to it is a fact
+// about the state Apply is about to change — the prior claimant and the action
+// taking it. runTransition renders the result afterwards, so a failed Apply
 // still announces nothing.
 //
 // [LAW:no-silent-failure] Both conditions on the notice are load-bearing and
@@ -169,11 +172,7 @@ func readClaimant(ctx context.Context, ap *app.App, issueID string) (claims.Clai
 // whether that holder changed. Comparing assignees alone was silent for the two
 // takeovers that matter most: between two human checkouts (both assignees
 // empty) and between two worktrees of one agent session (both identical).
-func transferNotice(ctx context.Context, ap *app.App, issueID string, action model.Action, laneHeld bool) (string, error) {
-	start, takes := action.(model.Start)
-	if !takes || !laneHeld {
-		return "", nil
-	}
+func transferNotice(ctx context.Context, ap *app.App, issueID string, start model.Start) (string, error) {
 	prior, err := readClaimant(ctx, ap, issueID)
 	if err != nil {
 		return "", err

@@ -1100,11 +1100,12 @@ positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason 
        line from stdin; a read error other than EOF →
        `"read takeover confirmation: %w"`; an answer not starting with `y`
        (case-insensitive, trimmed) → `fmt.Errorf("takeover declined")` → exit 1.
-4. Returns whether anybody held the lane (`relation != laneUnclaimed`); `runTransition`
-   hands that to `transferNotice` (`cli.go`), so `claim transferred:
-   <old> -> <new>` prints only when a claim existed to transfer. A start on a lane
-   whose claim has expired announces no transfer, whatever the row's history records
-   (`claims_context.go`).
+4. Returns the line the start owes after Apply: from a held lane, ours or another's,
+   `transferNotice(ctx, ap, issueID, start)` (`claims_context.go`), which is
+   `claim transferred: <old> -> <new>` when the recorded claimant changes hands and
+   empty otherwise; from an unclaimed lane, `""` without asking. `runTransition` writes
+   the hook's string after Apply (`cli.go`), so a start on a lane whose claim has
+   expired announces no transfer, whatever the row's history records.
 
 There is no "stale-informed" path. Until links-claims-y6yz an expired claim derived
 its own standing, and `start` on such a lane printed the lapsed holder's claim line

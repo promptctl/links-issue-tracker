@@ -440,11 +440,11 @@ The `self.Present()` half is load-bearing, not a redundant guard: a checkout wit
 
 There is no row for an expired claim. The derivation returns `Unclaimed` the moment the window closes, so `relationOf` never learns a claim existed; the relation that used to sit here — `laneLapsed`, a lapsed claim offered as a takeover with the lapsed holder's provenance — is gone with the `Stale` variant (links-claims-y6yz). The `laneRelation` constants are at `internal/cli/claims_takeover.go`. Pinned by `TestRelationOf` (`internal/cli/claims_takeover_test.go`).
 
-**`authorizeStart(ctx, stdout, ap, issueID, prior, take) (laneHeld bool, err error)`** (`internal/cli/claims_takeover.go`):
+**`authorizeStart(ctx, stdout, ap, issueID, prior, start, take) (notice string, err error)`** (`internal/cli/claims_takeover.go`):
 1. `ap.Store.GetRelationsByIDs(ctx, []string{issueID})` → `lane := model.LaneOf(prior, relations[issueID].Parent)`.
 2. `gatherClaimContext`.
-3. `relation := relationOf(cc.standings.Of(lane), cc.self)`; when it is `laneHeldForeign`, `confirmFreshTakeover` runs and its error aborts the start.
-4. Returns `relation != laneUnclaimed` — whether anybody held the lane — so the transfer notice can read that fact off the gather already performed (`transitionSpec.authorize`, `internal/cli/cli.go`; consumed at `cli.go`). An unclaimed lane, this checkout's own lane, and a lane whose claim has expired all pass with no output.
+3. Switch on `relationOf(cc.standings.Of(lane), cc.self)`: `laneHeldForeign` → `confirmFreshTakeover` runs and its error aborts the start; `laneUnclaimed` → returns `""` at once, no notice asked for.
+4. Otherwise (the lane was held, ours or another's) returns `transferNotice(ctx, ap, issueID, start)`. The string is the line `runTransition` writes after Apply (`transitionSpec.authorize`, `internal/cli/cli.go`); every other transition's hook (`noAuthorize`) returns `""`. An unclaimed lane, this checkout's own lane, and a lane whose claim has expired all pass with no output.
 
 **`confirmFreshTakeover(stdout, cc, lane, take)`** (`internal/cli/claims_takeover.go`). It renders the claim line with `formatClaimLine(cc, lane, time.Now())`; `ok == false` → error `claims: %v is held by another checkout but has no claim line to show`, since the caller reaches here only for a `Held` standing.
 - **Non-interactive** (`!isTerminal(stdout)`, the same signal `openOrPrintWorkflowFile` uses):
@@ -452,7 +452,7 @@ There is no row for an expired claim. The derivation returns `Unclaimed` the mom
   - `take == true` → prints `"%s — taking over (--take)\n"` and proceeds.
 - **Interactive**: prints `"%s\ntake over this lane? [y/N] "`, reads a line from `os.Stdin` via `bufio.NewReader(os.Stdin).ReadString('\n')`. A read error other than `io.EOF` → `fmt.Errorf("read takeover confirmation: %w", err)`. The answer is accepted iff `strings.HasPrefix(strings.ToLower(strings.TrimSpace(answer)), "y")`; otherwise → `fmt.Errorf("takeover declined")`.
 
-**`transferNotice(ctx, ap, issueID, action, laneHeld)`** (`internal/cli/claims_context.go`) returns `"claim transferred: %s -> %s\n"` only for a `Start` on a lane somebody held (`laneHeld`), whose recorded claimant (`claims.ClaimantOf`) was established and differs from the claimant the start installs; otherwise the empty string. A start on a lane nobody holds announces no transfer whatever the row's history records: an expired claim transfers nothing. Pinned by `TestTransferNoticeNamesAPredecessorThatMintedNoToken` and `TestTransferNoticeIsSilentWhenNobodyHoldsTheLane` (`internal/cli/claims_render_test.go`).
+**`transferNotice(ctx, ap, issueID, start)`** (`internal/cli/claims_context.go`) returns `"claim transferred: %s -> %s\n"` when the ticket's recorded claimant (`claims.ClaimantOf`) was established and differs from the claimant the start installs; otherwise the empty string. Its one caller is `authorizeStart`, which asks only from a held lane, so a start on a lane nobody holds announces no transfer whatever the row's history records: an expired claim transfers nothing. Pinned by `TestTransferNoticeNamesAPredecessorThatMintedNoToken` (`internal/cli/claims_render_test.go`) and, for the expired lane, `TestStartOnAnExpiredForeignClaimIsSilent`.
 
 E2E, over two real clones and a real git remote (`internal/cli/claims_takeover_e2e_test.go`): alpha starts and pushes; bravo's `start` without `--take` fails with an error containing both `--take` and `claimed`; the same command with `--take` prints `"taking over"` and the transfer line naming both assignees and both streams; and starting the now-bravo-held lane again produces neither `"claimed"` nor `"--take"` in the output. Expired path (`TestStartOnAnExpiredForeignClaimIsSilent`): with `freshness_window = "1ms"` and a 50 ms sleep, bravo's plain `start` succeeds and prints none of `claimed`, `stale`, `check for unmerged`, `take`, or `claim transferred`.
 
@@ -515,7 +515,7 @@ Steps 1-3 walk every gathered row; step 4 walks the focus-scoped pool. The row s
 
 `poolNotes`, exact strings:
 - `reachHeldFresh`: `in progress or claimed in a lane another checkout holds right now`
-- `reachNotReady`: `not startable — blocked by a dependency`
+- `reachNotReady`: ``not startable right now — `lit show` it names what blocks it``
 - `reachOffFocusPath`: ``off the focus path this run answered over — `lit next --all` to route over the whole queue``
 
 **`Exhausted.Error()`**. `scope` is `fmt.Sprintf("epic(s) %s", strings.Join(o.Epics, ", "))` when epics are named, else `"your claimed lane(s)"`. The command is in **backticks** in both arms:

@@ -76,7 +76,7 @@ Run `lit next` first, always.  It is the routing decision itself, not a suggesti
 
 #### Orphaned tickets
 
-`lit orphaned` lists in_progress tickets that have gone quiet: work somebody started and walked away from.  It is a repo-wide diagnostic view, not a queue you pull from, and you do not need it to find your *own* abandoned work — `lit next` hands that back to you already.
+`lit orphaned` lists in_progress tickets that have gone quiet: work somebody started and walked away from.  It is a repo-wide diagnostic view, not a queue you pull from, and you do not need it to find your *own* work in flight: while your claim on its lane is live, `lit next` hands that work back to you; once the claim has expired the work is nobody's, and `lit next` offers it by rank like everything else, so the "Uncommitted changes" and "Open PRs" checks above are what find it.
 
 So reach for it only when `lit next` has nothing left to give, and read which of its three empty-handed answers you got — they are not interchangeable:
 

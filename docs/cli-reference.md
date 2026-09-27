@@ -183,9 +183,10 @@ silent in the lane for the freshness window has expired, and an expired claim is
 not a claim: the lane is unclaimed, nothing about the old claim is printed, and
 `lit start` on it needs no ceremony. Only a lane another checkout holds right now
 is passed over, and reaching one takes a deliberate `lit start` on it, which asks
-to confirm the takeover or requires `--take` when there is no terminal to ask. A checkout whose epic has open work it
-cannot reach gets a diagnostic naming what blocks it, never a silent hop out of the
-epic; a checkout holding no claims of its own starts straight at the global pool.
+to confirm the takeover or requires `--take` when there is no terminal to ask. A
+checkout whose epic has open work it cannot reach gets a diagnostic naming what
+blocks it, never a silent hop out of the epic; a checkout holding no claims of
+its own starts straight at the global pool.
 See design-docs/work-claims.md for the full precedence.
 
 `next` is read-only. It claims nothing and starts nothing — `lit start` does both

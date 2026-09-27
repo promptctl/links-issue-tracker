@@ -1205,7 +1205,7 @@ func TestNoWorkNamesEachRowThePoolWalkWentPast(t *testing.T) {
 	if !strings.Contains(msg, "another checkout holds right now") {
 		t.Fatalf("NoWork.Error() = %q, want %q reported as another checkout's live work", msg, held.ID)
 	}
-	if !strings.Contains(msg, "blocked by a dependency") {
+	if !strings.Contains(msg, "not startable right now") {
 		t.Fatalf("NoWork.Error() = %q, want %q reported as gated rather than as somebody's live work", msg, gated.ID)
 	}
 }

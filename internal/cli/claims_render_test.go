@@ -214,34 +214,13 @@ func TestTransferNoticeNamesAPredecessorThatMintedNoToken(t *testing.T) {
 	h.asCheckout("")
 	h.transition(issue.ID, model.Start{})
 
-	notice, err := transferNotice(h.ctx, h.ap, issue.ID, model.Start{Assignee: "bravo-agent"}, true)
+	notice, err := transferNotice(h.ctx, h.ap, issue.ID, model.Start{Assignee: "bravo-agent"})
 	if err != nil {
 		t.Fatalf("transferNotice error = %v", err)
 	}
 	want := fmt.Sprintf("claim transferred: the public checkout -> bravo-agent (%s)\n", nameCheckout(ownAttribution(h.ap)))
 	if notice != want {
 		t.Fatalf("transferNotice = %q, want %q", notice, want)
-	}
-}
-
-// TestTransferNoticeIsSilentWhenNobodyHoldsTheLane is the same record read
-// under the other answer to "does anybody hold this lane". The row's history
-// still names a predecessor who started it, and the notice still says nothing:
-// a claim that has expired is not a claim, so there is nothing to hand over,
-// and "claim transferred" would announce a transfer from a claim that does not
-// exist (links-claims-y6yz).
-func TestTransferNoticeIsSilentWhenNobodyHoldsTheLane(t *testing.T) {
-	h := newReadyTestHarness(t)
-	issue := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "expired hold", Topic: "claims", IssueType: "task"})
-	h.asCheckout("")
-	h.transition(issue.ID, model.Start{})
-
-	notice, err := transferNotice(h.ctx, h.ap, issue.ID, model.Start{Assignee: "bravo-agent"}, false)
-	if err != nil {
-		t.Fatalf("transferNotice error = %v", err)
-	}
-	if notice != "" {
-		t.Fatalf("transferNotice with nobody holding the lane = %q, want nothing: an expired claim transfers nothing", notice)
 	}
 }
 

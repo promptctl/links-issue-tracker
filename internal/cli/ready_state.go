@@ -43,10 +43,13 @@ func newNeedsDesignAnnotator() annotation.Annotator {
 	}
 }
 
-// orphanedThreshold is the staleness window after which an in_progress
-// issue is flagged as orphaned. Both `lit backlog`'s in-progress rows
-// and `lit orphaned` read from this single value so the two surfaces
-// cannot drift.
+// orphanedThreshold is the quiet window after which an in_progress issue
+// is flagged as orphaned. Both `lit backlog`'s in-progress rows and `lit
+// orphaned` read from this single value, so the two surfaces agree on when a
+// row has gone quiet. They differ in one deliberate respect: the backlog
+// prints a claim line beneath each row and withdraws the word where that
+// line names a live holder (inProgressSuffix), while `lit orphaned` reads
+// the row's clock alone and describes the row, not its lane.
 // [LAW:one-source-of-truth] Single threshold for orphan detection.
 const orphanedThreshold = 6 * time.Hour
 

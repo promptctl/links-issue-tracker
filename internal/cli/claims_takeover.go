@@ -68,30 +68,36 @@ func relationOf(standing claims.Standing, self model.Attribution) laneRelation {
 // exactly as "no confirmation, no warning, no ceremony on the happy path"
 // demands.
 //
-// It reports whether anybody held the lane, ours or another's, so the
-// transfer notice can say "claim transferred" only where a claim existed to
-// transfer (transitionSpec.authorize).
+// Its result is the line the start owes after Apply (transitionSpec.authorize):
+// the transfer notice when the lane was held, ours or another's, and the
+// claimant changes hands; the empty string otherwise. A lane nobody holds has
+// no claim to transfer, so the notice is not even asked for there — the gate
+// is the one read that knows the lane's standing, and asking transferNotice
+// to re-derive it would gather every event a second time.
+// [LAW:one-source-of-truth]
 //
 // Enforcement lives here and only here per [LAW:single-enforcer]: `lit
 // start` is the one command that transfers a claim, so it is the one place
 // that gates the transfer.
-func authorizeStart(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue, take bool) (laneHeld bool, err error) {
+func authorizeStart(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue, start model.Start, take bool) (notice string, err error) {
 	relations, err := ap.Store.GetRelationsByIDs(ctx, []string{issueID})
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	lane := model.LaneOf(prior, relations[issueID].Parent)
 	cc, err := gatherClaimContext(ctx, stdout, ap)
 	if err != nil {
-		return false, err
+		return "", err
 	}
-	relation := relationOf(cc.standings.Of(lane), cc.self)
-	if relation == laneHeldForeign {
+	switch relationOf(cc.standings.Of(lane), cc.self) {
+	case laneHeldForeign:
 		if err := confirmFreshTakeover(stdout, cc, lane, take); err != nil {
-			return false, err
+			return "", err
 		}
+	case laneUnclaimed:
+		return "", nil
 	}
-	return relation != laneUnclaimed, nil
+	return transferNotice(ctx, ap, issueID, start)
 }
 
 // confirmFreshTakeover is the deliberate act the design demands before a
