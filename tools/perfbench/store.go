@@ -68,34 +68,7 @@ func generate(bin litBinary, parent string, sz size, env []string) (generatedSto
 		return generatedStore{}, fmt.Errorf("creating workspace dir: %w "+
 			"(a store is generated into a fresh directory; remove it or pass a different --keep)", err)
 	}
-	// lit resolves its store relative to a git checkout, so the workspace has
-	// to be one. The identity is passed per-command rather than written into a
-	// config file so generation cannot depend on — or disturb — whatever git
-	// identity the machine running this has.
-	// Every setting that could vary by machine is forced, because generation
-	// that works here and fails on a colleague's box is a benchmark nobody can
-	// reproduce. --template= keeps the machine's init templates (and their
-	// hooks) out of the new repository; commit.gpgsign=false stops a developer
-	// with global signing turned on from aborting the run on a key prompt;
-	// --no-verify keeps a global core.hooksPath from running hooks on a
-	// workspace that passed --skip-hooks to lit init for exactly that reason.
-	steps := [][]string{
-		{"git", "init", "-q", "--template=", "."},
-		{"git", "-c", "user.email=perfbench@invalid", "-c", "user.name=perfbench",
-			"-c", "commit.gpgsign=false",
-			"commit", "-q", "--no-verify", "--allow-empty", "-m", "perfbench workspace"},
-	}
-	for _, step := range steps {
-		if err := runQuiet(root, runBudget, env, step[0], step[1:]...); err != nil {
-			return generatedStore{}, err
-		}
-	}
-	// --skip-hooks and --skip-agents keep generation hermetic: a git hook and an
-	// AGENTS.md rewrite are effects on the workspace that have nothing to do
-	// with its size, and the hook would then run on every write probe.
-	if err := runQuiet(root, runBudget, env, bin.path, "init", "--prefix", "bench", "--skip-hooks", "--skip-agents"); err != nil {
-		return generatedStore{}, err
-	}
+	specs := make([]string, 0, 1)
 	for i, batch := range importBatches(sz.rows) {
 		specPath := filepath.Join(parent, fmt.Sprintf("%s-spec-%d.json", sz.name, i))
 		blob, err := json.Marshal(batch)
@@ -105,7 +78,10 @@ func generate(bin litBinary, parent string, sz size, env []string) (generatedSto
 		if err := os.WriteFile(specPath, blob, 0o644); err != nil {
 			return generatedStore{}, fmt.Errorf("writing import spec: %w", err)
 		}
-		if err := runQuiet(root, importBudget(sz.rows), env, bin.path, "import", "--path", specPath); err != nil {
+		specs = append(specs, specPath)
+	}
+	for _, st := range generationSteps(bin, sz, specs) {
+		if err := runQuiet(root, env, st); err != nil {
 			return generatedStore{}, err
 		}
 	}
@@ -114,6 +90,50 @@ func generate(bin litBinary, parent string, sz size, env []string) (generatedSto
 		return generatedStore{}, fmt.Errorf("resolving generated workspace %s: %w", root, err)
 	}
 	return generatedStore{size: sz, root: root, databasePath: info.DatabasePath, env: env}, nil
+}
+
+// step is one command generation runs, with the budget that bounds it.
+type step struct {
+	budget time.Duration
+	argv   []string
+}
+
+// generationSteps is the plan that turns an empty directory into a workspace
+// of sz.rows rows: the commands, in order, each with its budget. It is a pure
+// function of its inputs so the plan can be checked without running it —
+// which is how the one step whose budget scales with the row count is pinned.
+// [LAW:effects-at-boundaries]
+//
+// lit resolves its store relative to a git checkout, so the workspace has to
+// be one. The identity is passed per-command rather than written into a
+// config file so generation cannot depend on — or disturb — whatever git
+// identity the machine running this has. Every setting that could vary by
+// machine is forced, because generation that works here and fails on a
+// colleague's box is a benchmark nobody can reproduce. --template= keeps the
+// machine's init templates (and their hooks) out of the new repository;
+// commit.gpgsign=false stops a developer with global signing turned on from
+// aborting the run on a key prompt; --no-verify keeps a global core.hooksPath
+// from running hooks on a workspace that passed --skip-hooks to lit init for
+// exactly that reason. --skip-hooks and --skip-agents keep generation
+// hermetic: a git hook and an AGENTS.md rewrite are effects on the workspace
+// that have nothing to do with its size, and the hook would then run on every
+// write probe.
+//
+// The import carries importBudget rather than runBudget because its length
+// grows with the rows it loads; every other step is the same size at every
+// size.
+func generationSteps(bin litBinary, sz size, specs []string) []step {
+	steps := []step{
+		{runBudget, []string{"git", "init", "-q", "--template=", "."}},
+		{runBudget, []string{"git", "-c", "user.email=perfbench@invalid", "-c", "user.name=perfbench",
+			"-c", "commit.gpgsign=false",
+			"commit", "-q", "--no-verify", "--allow-empty", "-m", "perfbench workspace"}},
+		{runBudget, []string{bin.path, "init", "--prefix", "bench", "--skip-hooks", "--skip-agents"}},
+	}
+	for _, spec := range specs {
+		steps = append(steps, step{importBudget(sz.rows), []string{bin.path, "import", "--path", spec}})
+	}
+	return steps
 }
 
 // importBatches renders a row count as the import calls that produce it — one
@@ -271,8 +291,10 @@ func storeBytes(dir string) (int64, error) {
 	return total, nil
 }
 
-// runQuiet runs a setup command, discarding its stdout and surfacing everything
-// about a failure: the command, its exit status, and its combined output.
+// runQuiet runs one generation step, discarding its stdout and surfacing
+// everything about a failure: the command, its exit status, and its combined
+// output. It takes the step whole so the budget arrives with the argv it was
+// planned for, rather than as a second argument a caller could pair wrongly.
 // Generation failures are the ones most likely to be misread — a store that
 // half-imported still produces a plausible-looking table — so nothing here is
 // allowed to continue past one. [LAW:no-silent-failure]
@@ -283,19 +305,19 @@ func storeBytes(dir string) (int64, error) {
 // wedged behind a lock is at least as likely here as in any probe. Unbudgeted,
 // that hangs the tool with nothing on screen — the exact outcome the budget was
 // added to prevent.
-func runQuiet(dir string, budget time.Duration, env []string, name string, args ...string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), budget)
+func runQuiet(dir string, env []string, st step) error {
+	ctx, cancel := context.WithTimeout(context.Background(), st.budget)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := exec.CommandContext(ctx, st.argv[0], st.argv[1:]...)
 	cmd.Dir = dir
 	cmd.Env = env
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {
-		return fmt.Errorf("%s %s (in %s) exceeded the %s budget and was killed:\n%s",
-			name, strings.Join(args, " "), dir, budget, out)
+		return fmt.Errorf("%s (in %s) exceeded the %s budget and was killed:\n%s",
+			strings.Join(st.argv, " "), dir, st.budget, out)
 	}
 	if err != nil {
-		return fmt.Errorf("%s %s (in %s): %w\n%s", name, strings.Join(args, " "), dir, err, out)
+		return fmt.Errorf("%s (in %s): %w\n%s", strings.Join(st.argv, " "), dir, err, out)
 	}
 	return nil
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -209,12 +210,59 @@ func TestImportBudgetGrowsWithRowsFromTheProbeBudget(t *testing.T) {
 	}
 }
 
+// The import is the one generation step whose length grows with the row
+// count, so it is the one step that must carry the row-scaled budget; every
+// other step is the same job at every size and keeps the probe budget. Checked
+// on the plan rather than by running it, because a budget is only observable
+// by outliving it.
+func TestGenerationStepsGiveTheImportTheRowScaledBudget(t *testing.T) {
+	bin := litBinary{path: "/bench/lit"}
+	steps := generationSteps(bin, size{name: "5x-target", rows: 590}, []string{"/bench/5x-target-spec-0.json"})
+	imports := 0
+	for _, st := range steps {
+		isImport := st.argv[0] == bin.path && st.argv[1] == "import"
+		if isImport {
+			imports++
+			if st.budget != importBudget(590) {
+				t.Errorf("import step budget = %s, want importBudget(590) = %s", st.budget, importBudget(590))
+			}
+			continue
+		}
+		if st.budget != runBudget {
+			t.Errorf("step %v budget = %s, want runBudget %s", st.argv, st.budget, runBudget)
+		}
+	}
+	if imports != 1 {
+		t.Errorf("plan has %d import steps for one spec, want 1", imports)
+	}
+	if got := len(generationSteps(bin, size{name: "empty", rows: 0}, nil)); got != 3 {
+		t.Errorf("the empty store's plan has %d steps, want 3 (git init, commit, lit init) and no import", got)
+	}
+}
+
+// Generation runs its commands under the environment it is handed, not the
+// harness's — the same guarantee the probes have, for the same reason: the
+// store must be produced by the lit that is then measured.
+func TestRunQuietRunsTheCommandUnderTheGivenEnvironment(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the check is a shell test")
+	}
+	env := append(hermeticEnv(os.Environ(), t.TempDir()), "PERFBENCH_MARK=yes")
+	check := step{30 * time.Second, []string{"sh", "-c", `[ "$PERFBENCH_MARK" = yes ]`}}
+	if err := runQuiet(t.TempDir(), env, check); err != nil {
+		t.Errorf("the command did not see the environment it was given: %v", err)
+	}
+	if err := runQuiet(t.TempDir(), hermeticEnv(os.Environ(), t.TempDir()), check); err == nil {
+		t.Error("the command saw PERFBENCH_MARK from an environment that does not carry it")
+	}
+}
+
 // A generation step that hangs must be killed and reported as a hang naming the
 // command, not left to wedge the tool silently. Generation is entirely write
 // path, which is where this epic's subject — a lock a writer can wait fifteen
 // minutes on — actually bites.
 func TestRunQuietKillsACommandOverBudget(t *testing.T) {
-	err := runQuiet(t.TempDir(), 50*time.Millisecond, os.Environ(), "sleep", "30")
+	err := runQuiet(t.TempDir(), os.Environ(), step{50 * time.Millisecond, []string{"sleep", "30"}})
 	if err == nil {
 		t.Fatal("runQuiet returned no error for a command that outlived its budget")
 	}
@@ -227,7 +275,7 @@ func TestRunQuietKillsACommandOverBudget(t *testing.T) {
 
 // And a command that finishes inside its budget is not reported as a hang.
 func TestRunQuietAcceptsACommandInsideItsBudget(t *testing.T) {
-	if err := runQuiet(t.TempDir(), 30*time.Second, os.Environ(), "true"); err != nil {
+	if err := runQuiet(t.TempDir(), os.Environ(), step{30 * time.Second, []string{"true"}}); err != nil {
 		t.Errorf("runQuiet(true) error = %v, want nil", err)
 	}
 }
