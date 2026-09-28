@@ -240,7 +240,7 @@ A read engine's ping falls back to Dolt's read-only mode past a held journal loc
 3. `prev.Close()`; a `context.Canceled` is tolerated, anything else → `fmt.Errorf("close prior dolt connection after reconnect: %w", err)` (`store.go`).
 4. `awaitEngineOpen(ctx, s.doltRootDir, next.PingContext)`; failure → `fmt.Errorf("reopen dolt: %w", err)` (`store.go`).
 
-Doc: must be called under the commit lock; it is the one site where the journal lock is taken while the commit lock is held, bounded by `coResidentHolderWait` (2.3s) against the commit-lock waiter budget of `coResidentHolderWait` + `rotationReserve()` (`store.go`). `reconnect` is the `connectionRotator` passed into every retry loop (`commit_lock.go`).
+Doc: must be called under the commit lock; it is the one site where the journal lock is taken while the commit lock is held, bounded by `coResidentHolderWait` (2.3s) against the commit-lock waiter budget of `coResidentHolderWait` + `rotationReserve()` (`store.go`). `reconnect` is the `connectionRotator` passed to every call of the transient-GC retry (`commit_lock.go`).
 
 #### 2.9 `Close() error`
 
@@ -318,7 +318,7 @@ Test evidence for one-commit-per-mutation: a combined transition+field `Apply` a
 
 `withCommitLock(ctx, operation retryOperation) (err error)` (`commit_lock.go`): acquire → `defer func(){ err = SettleCommitLockRelease(err, release()) }()` (fires on panic too) → `operation(lockedCtx)`.
 
-`acquireCommitLock` (`commit_lock.go`): if `ctx.Value(commitLockContextKey{})` is `true`, returns the same ctx and a no-op release (re-entrant short-circuit); otherwise `acquireCommitLockAtPath(ctx, s.commitLockPath)` and returns `context.WithValue(ctx, commitLockContextKey{}, true)`.
+`acquireCommitLock` (`commit_lock.go`): if `commitLockHeldSince(ctx)` finds the marker, returns the same ctx and a no-op release (re-entrant short-circuit); otherwise `acquireCommitLockAtPath(ctx, s.commitLockPath)` and returns `context.WithValue(ctx, commitLockContextKey{}, time.Now())`, the marker's value being when the hold began.
 
 `acquireCommitLockAtPath` (`commit_lock.go`): `acquireStoreLock(ctx, storageDir, lockPath, true /*exclusive*/, commitLockWaiterBudget())`, errors passed through `wrapCommitLockContention`.
 
@@ -340,7 +340,7 @@ Test evidence:
 - Two `withCommitLock` calls serialize; the second cannot enter within a 25 ms window while the first holds (`retry_test.go`).
 - A panic inside a `withMutation` fn releases the lock, and a subsequent `CreateIssue` succeeds (`crash_safety_test.go`).
 - A panic inside `withCommitLock`'s operation releases the lock (`crash_safety_test.go`).
-- Nested `withCommitLock` short-circuits and the inner ctx still carries `commitLockContextKey{} == true` (`crash_safety_test.go`).
+- Nested `withCommitLock` short-circuits and the inner ctx still carries the commit-lock marker (`crash_safety_test.go`).
 - A cancelled ctx against a live holder returns `context.Canceled` rather than burning the budget (`crash_safety_test.go`).
 - Ten concurrent `CreateIssue` goroutines all succeed with unique ids, all readable, and the lock is free afterwards (`concurrent_test.go`).
 - Mixed concurrent creates/comments/priority-updates/transitions all persist and the lock is free (`concurrent_test.go`).
@@ -349,9 +349,10 @@ Test evidence:
 
 - `ErrTransientGCContention = errors.New("transient online-gc contention")` (`commit_lock.go`).
 `retryTransientGCContention(ctx, operation, rotate)` (`commit_lock.go`), straight-line, no sleep:
+- a ctx without the commit lock's marker is refused before the operation runs;
 - `classifyTransientGCError(operation(ctx))`; not `ErrTransientGCContention` (nil included) → returned as is;
-- if `time.Since(start) + rotationReserve() >= commitLockWaiterBudget()` → `exhaustedContentionError(err)`, no rotation;
-- print `lit: this write's store connection failed (<error>); reopening it and retrying once` to stderr;
+- if `time.Since(heldSince) + rotationReserve() + firstRun >= commitLockWaiterBudget()` → `exhaustedContentionError(err)`, no rotation (`heldSince` is when the commit lock was taken, from `commitLockHeldSince(ctx)`; `firstRun` projects the second run's cost);
+- print `lit: the store connection failed (<error>); reopening it and retrying once` to stderr;
 - `rotate(ctx)` — its error is returned immediately;
 - final: `exhaustedContentionError(classifyTransientGCError(operation(ctx)))`.
 
@@ -374,7 +375,8 @@ Test evidence:
 - Exhausted GC-reset does **not** promote (`retry_test.go`).
 - A non-transient error is not retried — exactly 1 call (`retry_test.go`).
 - One rotation before the retry, none after the succeeding call (1 rotation for 2 calls) (`retry_test.go`).
-- A rotation that would carry the hold past `commitLockWaiterBudget()` is refused, with either half of the reserve weighted; one that fits runs (`retry_test.go`).
+- A rotation that would carry the hold past `commitLockWaiterBudget()` is refused, with the open, the close, the projected second run and the hold spent before the call each weighted by a row; one that fits runs (`retry_test.go`).
+- A ctx without the commit lock's marker is refused before the operation runs (`retry_test.go`).
 - The rotation is announced on stderr, naming the failure (`retry_test.go`).
 - A failing rotator aborts the loop with its error and no re-attempt (`retry_test.go`).
 - A rotator blocked on ctx returns `context.Canceled` on cancellation (`retry_test.go`).
@@ -5013,7 +5015,7 @@ if err != nil { return nil, wrapCommitLockContention(err) }
 
 #### 4.3 Re-entrancy
 
-`commit_lock.go` — `type commitLockContextKey struct{}`. `acquireCommitLock` (`commit_lock.go`) checks `ctx.Value(commitLockContextKey{}).(bool)`; if already true it returns the ctx unchanged with a no-op release (`commit_lock.go`), so a nested `commitWorkingSet` inside a held mutation never queues behind its own hold. On a fresh acquire it returns `context.WithValue(ctx, commitLockContextKey{}, true)` (`commit_lock.go`).
+`commit_lock.go` — `type commitLockContextKey struct{}`. `acquireCommitLock` (`commit_lock.go`) checks `commitLockHeldSince(ctx)`; if the marker is present it returns the ctx unchanged with a no-op release (`commit_lock.go`), so a nested `commitWorkingSet` inside a held mutation never queues behind its own hold. On a fresh acquire it returns `context.WithValue(ctx, commitLockContextKey{}, time.Now())`, the time the hold began (`commit_lock.go`).
 
 #### 4.4 Release settlement
 
@@ -5094,8 +5096,8 @@ Argument order is therefore always: `-Am <message> [--allow-empty] [--date <RFC3
 
 `retryTransientGCContention` (`commit_lock.go`) runs the operation at most twice, with one connection rotation between and no sleep:
 - `classifyTransientGCError(operation(ctx))`; anything but `ErrTransientGCContention` (`nil` included) is returned as is (`commit_lock.go`).
-- If `time.Since(start) + rotationReserve() >= commitLockWaiterBudget()`, no rotation: `exhaustedContentionError(err)` (`commit_lock.go`).
-- Prints `lit: this write's store connection failed (<error>); reopening it and retrying once` to stderr (`commit_lock.go`).
+- If `time.Since(heldSince) + rotationReserve() + firstRun >= commitLockWaiterBudget()`, no rotation: `exhaustedContentionError(err)`. `heldSince` is when the commit lock was taken (`commitLockHeldSince`, the lock's context marker; a ctx without it is refused before the operation runs), and `firstRun` projects the second run at the first run's cost (`commit_lock.go`).
+- Prints `lit: the store connection failed (<error>); reopening it and retrying once` to stderr (`commit_lock.go`).
 - `rotate(ctx)` — the connection rotator (`s.reconnect`); a rotate error returns immediately (`commit_lock.go`).
 - Returns `exhaustedContentionError(classifyTransientGCError(operation(ctx)))`.
 

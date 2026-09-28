@@ -28,6 +28,12 @@ func (f *fakeRetryOperation) run(_ context.Context) error {
 // noRotate is the rotate hook for retry tests that don't exercise reconnection.
 func noRotate(context.Context) error { return nil }
 
+// heldCommitLock marks ctx the way acquireCommitLock does, as a hold that began
+// `ago` before now, so the retry can be called without a real lock file.
+func heldCommitLock(ctx context.Context, ago time.Duration) context.Context {
+	return context.WithValue(ctx, commitLockContextKey{}, time.Now().Add(-ago))
+}
+
 func TestRetryTransientGCContentionRetriesTransientError(t *testing.T) {
 	t.Parallel()
 	op := &fakeRetryOperation{
@@ -38,7 +44,7 @@ func TestRetryTransientGCContentionRetriesTransientError(t *testing.T) {
 	}
 
 	err := retryTransientGCContention(
-		context.Background(),
+		heldCommitLock(context.Background(), 0),
 		op.run,
 		noRotate,
 	)
@@ -59,7 +65,7 @@ func TestRetryTransientGCContentionReturnsLastErrorAfterExhaustion(t *testing.T)
 	}}
 
 	err := retryTransientGCContention(
-		context.Background(),
+		heldCommitLock(context.Background(), 0),
 		op.run,
 		noRotate,
 	)
@@ -93,7 +99,7 @@ func TestRetryTransientGCContentionPromotesExhaustedManifestReadOnly(t *testing.
 	op := &fakeRetryOperation{results: []error{readOnly(), readOnly()}}
 
 	err := retryTransientGCContention(
-		context.Background(),
+		heldCommitLock(context.Background(), 0),
 		op.run,
 		noRotate,
 	)
@@ -124,7 +130,7 @@ func TestRetryTransientGCContentionKeepsExhaustedGCResetTransient(t *testing.T) 
 	op := &fakeRetryOperation{results: []error{gcReset, gcReset}}
 
 	err := retryTransientGCContention(
-		context.Background(),
+		heldCommitLock(context.Background(), 0),
 		op.run,
 		noRotate,
 	)
@@ -147,7 +153,7 @@ func TestRetryTransientGCContentionDoesNotRetryNonTransientError(t *testing.T) {
 	}
 
 	err := retryTransientGCContention(
-		context.Background(),
+		heldCommitLock(context.Background(), 0),
 		op.run,
 		noRotate,
 	)
@@ -173,7 +179,7 @@ func TestRetryTransientGCContentionRotatesConnectionOnceBeforeTheRetry(t *testin
 	rotations := 0
 
 	err := retryTransientGCContention(
-		context.Background(),
+		heldCommitLock(context.Background(), 0),
 		op.run,
 		func(context.Context) error { rotations++; return nil },
 	)
@@ -202,7 +208,7 @@ func TestRetryTransientGCContentionSurfacesRotateFailure(t *testing.T) {
 	rotateErr := errors.New("reopen dolt failed")
 
 	err := retryTransientGCContention(
-		context.Background(),
+		heldCommitLock(context.Background(), 0),
 		op.run,
 		func(context.Context) error { return rotateErr },
 	)
@@ -229,7 +235,7 @@ func TestRetryTransientGCContentionCancellationEscapesBlockedRotator(t *testing.
 			nil,
 		},
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(heldCommitLock(context.Background(), 0))
 	go func() {
 		time.Sleep(50 * time.Millisecond)
 		cancel()
@@ -387,14 +393,12 @@ func TestWithCommitLockSerializesConcurrentOperations(t *testing.T) {
 // while holding the commit lock "cannot wedge" because its wait stays strictly
 // inside every commit-lock waiter's budget.
 //
-// The rotation runs after the mutation's own work, all of it under the commit
-// lock, so the retry has to refuse the rotation once that work has left too
-// little of the budget for it. The reservation covers both halves of the
-// rotation, the new engine's open and the previous engine's close, so the
-// refusing rows each weight one of them: a reservation that dropped either
-// term lets the rotation through in both rows and the hold runs past the
-// budget. The last row is the other side of the same check: work that left
-// room still gets its rotation.
+// Everything the check reserves is weighted by some row, and each refusing row
+// is sized so that dropping the term it weights lets the rotation through and
+// carries the hold past the budget: the new engine's open, the old engine's
+// close, the second run (projected at the first run's cost), and the hold the
+// caller had already spent before the retry was called. The last row is the
+// other side of the same check: a hold with room left gets its rotation.
 // [LAW:dataflow-not-control-flow] one body, the weighting is data.
 //
 // Not parallel: it mutates package budget variables.
@@ -403,12 +407,20 @@ func TestRetryTransientGCContentionStopsBeforeOutlastingCommitLockWaiters(t *tes
 		name          string
 		open          time.Duration
 		closeCost     time.Duration
+		heldBefore    time.Duration
 		work          time.Duration
 		wantRotations int
 	}{
-		{name: "engine open dominates the refused rotation", open: 300 * time.Millisecond, closeCost: 100 * time.Millisecond, work: 380 * time.Millisecond, wantRotations: 0},
-		{name: "engine close dominates the refused rotation", open: 100 * time.Millisecond, closeCost: 450 * time.Millisecond, work: 150 * time.Millisecond, wantRotations: 0},
-		{name: "work that left room gets its rotation", open: 300 * time.Millisecond, closeCost: 100 * time.Millisecond, work: 0, wantRotations: 1},
+		// 160+160+400 >= 700; without the close 620, without the open 420,
+		// without the second run 560: each lets a 720ms hold through.
+		{name: "engine open and second run weighted", open: 300 * time.Millisecond, closeCost: 100 * time.Millisecond, work: 160 * time.Millisecond, wantRotations: 0},
+		// 70+70+550 >= 650; without the close 240, without the open 590.
+		{name: "engine close weighted", open: 100 * time.Millisecond, closeCost: 450 * time.Millisecond, work: 70 * time.Millisecond, wantRotations: 0},
+		// 350+0+400 >= 700; counted from the call instead, 400 lets a 750ms
+		// hold through.
+		{name: "hold spent before the retry weighted", open: 300 * time.Millisecond, closeCost: 100 * time.Millisecond, heldBefore: 350 * time.Millisecond, wantRotations: 0},
+		// 50+50+400 < 700: the rotation lands and the hold ends near 500ms.
+		{name: "a hold with room left gets its rotation", open: 300 * time.Millisecond, closeCost: 100 * time.Millisecond, work: 50 * time.Millisecond, wantRotations: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			restoreOpen := coResidentHolderWait
@@ -417,16 +429,12 @@ func TestRetryTransientGCContentionStopsBeforeOutlastingCommitLockWaiters(t *tes
 			restoreClose := rotationCloseReserve
 			rotationCloseReserve = tc.closeCost
 			t.Cleanup(func() { rotationCloseReserve = restoreClose })
-
-			// The waiter budget is the holder wait plus one rotation. In the
-			// refusing rows the work outlasts the holder wait, so a rotation
-			// would carry the hold past the budget (1160ms of 700ms, 850ms of
-			// 650ms); in the last row the rotation lands at 400ms of 700ms.
 			waiterBudget := commitLockWaiterBudget()
 
 			// Contended forever, shaped through wrapCommitWorkingSetError so
 			// this is a map of the production error rather than a bare-string
-			// approximation.
+			// approximation. Every run costs the same, as a re-run of one
+			// operation does.
 			op := func(context.Context) error {
 				time.Sleep(tc.work)
 				return wrapCommitWorkingSetError(errors.New("Error 1105: cannot update manifest: database is read only"))
@@ -442,9 +450,10 @@ func TestRetryTransientGCContentionStopsBeforeOutlastingCommitLockWaiters(t *tes
 				return nil
 			}
 
-			start := time.Now()
-			err := retryTransientGCContention(context.Background(), op, rotate)
-			elapsed := time.Since(start)
+			ctx := heldCommitLock(context.Background(), tc.heldBefore)
+			heldSince, _ := commitLockHeldSince(ctx)
+			err := retryTransientGCContention(ctx, op, rotate)
+			hold := time.Since(heldSince)
 
 			var blocked WorkspaceWriteBlockedError
 			if !errors.As(err, &blocked) {
@@ -453,10 +462,27 @@ func TestRetryTransientGCContentionStopsBeforeOutlastingCommitLockWaiters(t *tes
 			if rotations != tc.wantRotations {
 				t.Fatalf("rotations = %d, want %d", rotations, tc.wantRotations)
 			}
-			if elapsed >= waiterBudget {
-				t.Fatalf("the retry held for %s against a commitLockWaiterBudget of %s; a commit-lock waiter arriving behind this holder fails with the workspace-busy sentinel naming a holder that was never wedged", elapsed, waiterBudget)
+			if hold >= waiterBudget {
+				t.Fatalf("the commit lock was held for %s against a commitLockWaiterBudget of %s; a commit-lock waiter arriving behind this holder fails with the workspace-busy sentinel naming a holder that was never wedged", hold, waiterBudget)
 			}
 		})
+	}
+}
+
+// TestRetryTransientGCContentionRefusesAContextWithoutTheCommitLock pins the
+// precondition the rotation depends on: the retry swaps the store's
+// connection, which only the commit lock's holder may do, and it budgets from
+// when that lock was taken, so a context without the lock's marker is refused
+// before the operation runs.
+func TestRetryTransientGCContentionRefusesAContextWithoutTheCommitLock(t *testing.T) {
+	t.Parallel()
+	op := &fakeRetryOperation{results: []error{nil}}
+	err := retryTransientGCContention(context.Background(), op.run, noRotate)
+	if err == nil || !strings.Contains(err.Error(), "without the commit lock held") {
+		t.Fatalf("retryTransientGCContention() error = %v, want the missing-lock refusal", err)
+	}
+	if op.calls != 0 {
+		t.Fatalf("op.calls = %d, want 0", op.calls)
 	}
 }
 
@@ -475,7 +501,7 @@ func TestRetryTransientGCContentionAnnouncesTheRotation(t *testing.T) {
 		transientGCContentionError{err: errors.New("gc reset seen by this connection")},
 		nil,
 	}}
-	if err := retryTransientGCContention(context.Background(), op.run, noRotate); err != nil {
+	if err := retryTransientGCContention(heldCommitLock(context.Background(), 0), op.run, noRotate); err != nil {
 		t.Fatalf("retryTransientGCContention() error = %v", err)
 	}
 	if got := notices.String(); !strings.Contains(got, "gc reset seen by this connection") || !strings.Contains(got, "retrying once") {

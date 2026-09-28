@@ -179,7 +179,7 @@ Report type at `/Users/bmf/code/links-issue-tracker/internal/storage/sync.go`.
 
 - The commit lock is an **flock** via `acquireStoreLock` (`commit_lock.go`). Death of the holder releases it; there is no staleness/eviction heuristic.
 - Path: `commitLockPathForDolt` (`commit_lock.go`) = `filepath.Join(filepath.Dir(filepath.Clean(databasePath)), ".links-commit-flock.lock")`. The historical name `.links-commit.lock` is deliberately not used because O_EXCL-era binaries unlink it, splitting the lock across inodes (`commit_lock.go`). Exported as `CommitLockPath` (`commit_lock.go`).
-- Re-entrancy: `acquireCommitLock` (`commit_lock.go`) checks `ctx.Value(commitLockContextKey{})`; if already true it returns a no-op release. Otherwise it acquires and returns a ctx with the marker set.
+- Re-entrancy: `acquireCommitLock` (`commit_lock.go`) checks `commitLockHeldSince(ctx)`; if the marker is present it returns a no-op release. Otherwise it acquires and returns a ctx whose marker is the time the hold began.
 - Budget: `commitLockWaiterBudget()` = `coResidentHolderWait` + `rotationReserve()` (`commit_lock.go`) — 5.6s of unchanged holders, sized for a mutation that suffered one GC-contention rotation and strictly above `rotationReserve()` (`commit_lock.go`).
 - `wrapCommitLockContention` (`commit_lock.go`): only when `errors.Is(err, ErrWorkspaceBusy)` does it prepend `"another lit process is writing to this workspace (a concurrent mutation or snapshot still running); retry after it completes: %w"`. Every other error, cancellation included, passes through untouched.
 - `LockCommitPath(ctx, lockPath)` (`commit_lock.go`) — the same primitive for callers with no open Store.

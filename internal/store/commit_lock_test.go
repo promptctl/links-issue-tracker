@@ -49,7 +49,7 @@ func TestAcquireCommitLockNeverEvictsLiveHolderByAge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("acquireCommitLock() after holder release error = %v", err)
 	}
-	if lockedCtx.Value(commitLockContextKey{}) != true {
+	if _, held := commitLockHeldSince(lockedCtx); !held {
 		t.Fatal("acquireCommitLock() did not set commit lock context value")
 	}
 	if err := release(); err != nil {
