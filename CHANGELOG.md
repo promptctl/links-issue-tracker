@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-09-27
+
 ### Changed
 
 - No lit command waits on the remote for the automatic receive any more. Once every 5 minutes, the first command to finish used to run the receive inline before it returned: in 0.15.0 a full `DOLT_FETCH`, measured at 4.9s on a lapsed `lit backlog`. The command now starts a detached `lit sync __receive-bg` worker and returns; the worker waits for the command to exit and for any running on-change mirror to finish, so its fetch never meets the push of the command that started it, then runs the receive. Measured 2026-09-27 on a copy of this repository's store, 10 rounds each: a `lit backlog` with the receive due took 0.45–0.75s with the remote unmoved (each worker ran 1.2–1.5s) and 0.47–0.90s when the worker fetched (each worker ran 6.1–7.3s, its landing holding the store 44–69ms), against 0.45–0.74s with no receive due. The worker writes a start and an end line with its pid, and the end line says how long it waited for a mirror, to `.git/links/receive.log`. A sync-failure block the receive reaches (a held text conflict, unrelated histories, an id collision, a remote schema ahead of the binary) now reaches a terminal through the next command to finish on the checkout, which prints it to stderr once, under a line saying how long ago the receive reached it; a later receive that settles cleanly, or a `lit sync pull` or `lit sync reconcile` that converges the divergence, retires an unprinted block. (links-scale-om3r.6cv)
