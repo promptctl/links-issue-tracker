@@ -868,8 +868,10 @@ Justfile or any workflow in `.github/workflows/`.
      `./.github/actions/install-dolt` → `go build ./cmd/lit` →
      `go test -short -json ./... | go run ./tools/testbudget` under `shell: bash` (pipefail is
      load-bearing). No `-timeout` override by policy.
-  2. **`race`**: same setup; `go test -short -race ./cmd/... ./internal/...` —
-     scope excludes `tools/` deliberately; no testbudget pipe.
+  2. **`race`**: same setup; `go test -short -race -timeout 30m ./cmd/... ./internal/...` —
+     scope excludes `tools/` deliberately; no testbudget pipe. The `-timeout 30m`
+     is sized above internal/cli's testbudget ceiling as the detector inflates
+     it, so slowness fails build-and-test's budget check, not this lane's timeout.
   3. **`verify`**: `go mod tidy` then `git diff --exit-code go.mod go.sum`, failing
      with `::error::go.mod/go.sum are not tidy…`; `grep -q -- "-buildvcs=false" scripts/install.sh`
 ; `bash scripts/install.sh`.

@@ -14,13 +14,13 @@ concurrency:
   cancel-in-progress: true
 
 # Every job here gates merge and must stay fast — <5 min total is the target,
-# and two jobs are over it: build-and-test at 4m52s, which the testperf epic
-# (links-testperf-xxsx) is driving down, and race at 7m40s (both measured
-# 2026-08-26), which sets the gate's critical path. The race lane's overage is
-# instrumentation, not slow tests — the detector multiplies whatever the tests
-# already cost — so it has no fix of its own: its floor comes down when the same
-# epic brings internal/cli's down, and it is the one job here whose number is
-# not an invitation to go optimize this file. CI runs on
+# and two jobs are over it: build-and-test at 4m52s (measured 2026-08-26), and
+# race at ~11m (measured 2026-09-28), which sets the gate's critical path. The
+# race lane's overage is instrumentation, not slow tests — the detector
+# multiplies whatever the tests already cost — so it has no fix of its own: its
+# floor comes down only when internal/cli's un-instrumented time does, and it
+# is the one job here whose number is not an invitation to go optimize this
+# file. CI runs on
 # Linux only by deliberate choice — no macOS runners, no build matrix. The
 # embedded Dolt engine builds with cgo (ICU/zstd); covering a second OS would
 # slow the gate and add platform-provisioning machinery for little signal, so
@@ -89,8 +89,21 @@ jobs:
       # -short for the same reason the gate uses it: the scale tests exercise
       # generated volume through the same code paths the ordinary tests already
       # cover, so under instrumentation they buy hours and no new race coverage.
+      #
+      # -timeout 30m keeps slowness out of this lane's failures: slowness is
+      # tools/testbudget's alarm in build-and-test ([LAW:single-enforcer]), so
+      # this is not the -timeout the Test step forbids. go test's 10m default
+      # was a second slowness alarm that fired first — runs 36312282343 and
+      # 36320546964 died at 600s in internal/cli with the running test 1-2s
+      # old, on runners slow enough to take internal/store 1.4x its median.
+      # The ceiling is sized from the binding budget, internal/cli's 340s:
+      # x2.6 under the detector (median of 79 paired runs to 2026-09-28) x1.6
+      # on a slow runner (store's 1.45x, scaled by cli's wider spread: 1.33x
+      # cli against 1.22x store in run 36321159557) ≈ 24m. Any lower value can
+      # fire before testbudget does. The cost is paid only by a real hang,
+      # which now takes ~30m instead of ~10m to be named.
       - name: Test with race detector
-        run: go test -short -race ./cmd/... ./internal/...
+        run: go test -short -race -timeout 30m ./cmd/... ./internal/...
 
   # Repo/release hygiene gates — fast, platform-independent, ubuntu-only. These
   # check correctness properties of the repo, not the build, so they live apart
