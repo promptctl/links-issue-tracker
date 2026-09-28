@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -9,17 +8,20 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 // TestReceiveFetchLeavesTheLiveStoreFree pins that the automatic receive's
 // fetch runs on a clone, so a write that lands on the live store while the
 // fetch is on the network goes straight through rather than waiting out
-// coResidentHolderWait and failing with the receiving command named.
+// coResidentHolderWait and failing with the receive worker named.
 //
 // The network round trip is made long and observable with a git shim on the
-// receiving command's PATH: Dolt's blobstore fetch is the one git call that
-// passes `--refmap=`, and the shim marks its start and sleeps before running
-// the real git. The write runs with the ordinary PATH while that sleep is in
+// PATH of the command whose receive is due, which the receive worker it
+// spawns inherits: Dolt's blobstore fetch is the one git call that passes
+// `--refmap=`, and the shim marks its start and sleeps before running the
+// real git. The write runs with the ordinary PATH while that sleep is in
 // progress. The consumer then has a local commit the remote lacks while the
 // remote has one it lacks, so the receive also exercises the settle's
 // divergence arm: after it, the consumer holds both tickets.
@@ -87,29 +89,24 @@ func TestReceiveFetchLeavesTheLiveStoreFree(t *testing.T) {
 
 	receiving := isolatedEnv(xdgConfigHome, "0")
 	receiving["PATH"] = shimDir + string(os.PathListSeparator) + os.Getenv("PATH")
-	receiver := exec.Command(self, "backlog")
-	receiver.Dir = consumer
-	receiver.Env = litEnv(receiving)
-	var receiverOut bytes.Buffer
-	receiver.Stdout, receiver.Stderr = &receiverOut, &receiverOut
-	if err := receiver.Start(); err != nil {
-		t.Fatalf("start the receiving command: %v", err)
+	mustLit(consumer, receiving, "backlog")
+	ws, err := workspace.Resolve(consumer)
+	if err != nil {
+		t.Fatalf("resolve consumer workspace: %v", err)
 	}
-	receiverDone := make(chan error, 1)
-	go func() { receiverDone <- receiver.Wait() }()
+	pid := receiveWorkerPID(t, ws)
+	endLine := fmt.Sprintf("receive end pid=%d ", pid)
 
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		if _, err := os.Stat(started); err == nil {
 			break
 		}
-		select {
-		case err := <-receiverDone:
-			t.Fatalf("the receiving command exited (%v) before its fetch started:\n%s", err, receiverOut.String())
-		default:
+		if strings.Contains(receiveLog(t, ws), endLine) {
+			t.Fatalf("the receive worker ended before its fetch started:\n%s", receiveLog(t, ws))
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the receive's fetch never started:\n%s", receiverOut.String())
+			t.Fatalf("the receive's fetch never started:\n%s", receiveLog(t, ws))
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -123,19 +120,14 @@ func TestReceiveFetchLeavesTheLiveStoreFree(t *testing.T) {
 	if _, err := os.Stat(started); err != nil {
 		t.Fatalf("stat fetch marker: %v", err)
 	}
-	select {
-	case err := <-receiverDone:
-		t.Fatalf("the receiving command finished (%v) before the write did, so the write did not overlap the fetch; the stall is too short to prove anything", err)
-	default:
+	if strings.Contains(receiveLog(t, ws), endLine) {
+		t.Fatalf("the receive worker finished before the write did, so the write did not overlap the fetch; the stall is too short to prove anything:\n%s", receiveLog(t, ws))
 	}
 
-	select {
-	case err := <-receiverDone:
-		if err != nil {
-			t.Fatalf("the receiving command failed: %v\n%s", err, receiverOut.String())
+	for deadline := time.Now().Add(fetchStall + 60*time.Second); !strings.Contains(receiveLog(t, ws), endLine); time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the receive worker did not finish:\n%s", receiveLog(t, ws))
 		}
-	case <-time.After(fetchStall + 60*time.Second):
-		t.Fatalf("the receiving command did not finish:\n%s", receiverOut.String())
 	}
 	// A reconcile that committed may have spawned a mirror; it must not race
 	// the TempDir sweep.
@@ -143,7 +135,7 @@ func TestReceiveFetchLeavesTheLiveStoreFree(t *testing.T) {
 	backlog := mustLit(consumer, quiet, "backlog")
 	for _, title := range []string{"first-ticket", "peer-ticket", "local-ticket"} {
 		if !strings.Contains(backlog, title) {
-			t.Fatalf("consumer backlog after the receive lacks %q:\n%s\nreceiving command output:\n%s", title, backlog, receiverOut.String())
+			t.Fatalf("consumer backlog after the receive lacks %q:\n%s\nreceive log:\n%s", title, backlog, receiveLog(t, ws))
 		}
 	}
 	if entries, err := os.ReadDir(filepath.Join(consumer, ".git", "links", "receive-clone")); err == nil && len(entries) != 0 {
