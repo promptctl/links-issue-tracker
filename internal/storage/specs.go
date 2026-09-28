@@ -22,7 +22,8 @@ import (
 // ParseBulkSpecs is the deserialization trust boundary for bulk-input files:
 // raw YAML bytes in, one spec per document out. It rejects any field the
 // spec schema does not name, so a typo'd key fails loudly here instead of
-// silently doing nothing. [LAW:single-enforcer] [LAW:no-silent-failure]
+// silently doing nothing. Like the tree-spec parser below, every failure is a
+// ValidationError: the file is what is wrong. [LAW:single-enforcer] [LAW:no-silent-failure]
 func ParseBulkSpecs(data []byte) ([]BulkIssueSpec, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
@@ -33,7 +34,7 @@ func ParseBulkSpecs(data []byte) ([]BulkIssueSpec, error) {
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			return nil, fmt.Errorf("bulk: parse spec: %w", err)
+			return nil, fmt.Errorf("bulk: parse spec: %w", ValidationError{Message: err.Error()})
 		}
 		specs = append(specs, spec)
 	}
@@ -71,7 +72,7 @@ func ParseImportTreeSpecs(data []byte) ([]ImportTreeSpec, error) {
 func treeSpecRefusal(err error) ValidationError {
 	var typeErr *json.UnmarshalTypeError
 	if errors.As(err, &typeErr) && typeErr.Type == reflect.TypeFor[[]ImportTreeSpec]() {
-		return ValidationError{Message: fmt.Sprintf("the file is a JSON %s, but a tree spec is a JSON array of records (see `lit import --help`). A lit export, as written by `lit export`, `lit backup create` or sync, is a JSON object `lit import` cannot read: load it with `lit backup restore --path <file>`", typeErr.Value)}
+		return ValidationError{Message: fmt.Sprintf("the file is a JSON %s, but a tree spec is a JSON array of records (see `lit import --help`). A lit export, as written by `lit export`, `lit backup create` or sync, is a JSON object `lit import` cannot read. `lit backup restore --path <file>` loads one, and it replaces this workspace's issues with the export's rather than adding to them", typeErr.Value)}
 	}
 	return ValidationError{Message: err.Error()}
 }

@@ -64,8 +64,10 @@ func TestRunImportOfAnExportNamesBackupRestore(t *testing.T) {
 		t.Fatalf("exit code = %d, want %d (a deterministic refusal)", code, ExitValidation)
 	}
 	rendered := stderr.String()
-	if !strings.Contains(rendered, "lit backup restore --path") {
-		t.Fatalf("rendered error = %q, want it to name `lit backup restore --path`", rendered)
+	for _, want := range []string{"lit backup restore --path", "replaces this workspace's issues"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered error = %q, want it to contain %q", rendered, want)
+		}
 	}
 	for _, misdirection := range []string{"ImportTreeSpec", "Retry the command", "lit doctor"} {
 		if strings.Contains(rendered, misdirection) {

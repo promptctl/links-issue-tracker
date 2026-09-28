@@ -14,8 +14,10 @@ import (
 func TestParseBulkSpecsRejectsUnknownField(t *testing.T) {
 	t.Parallel()
 	doc := []byte("title: X\ntopic: bulk\ntype: task\nchildren: [a, b]\n")
-	if _, err := ParseBulkSpecs(doc); err == nil || !strings.Contains(err.Error(), "children") {
-		t.Fatalf("ParseBulkSpecs(unknown field) error = %v, want error naming \"children\"", err)
+	_, err := ParseBulkSpecs(doc)
+	var refusal ValidationError
+	if !errors.As(err, &refusal) || !strings.Contains(err.Error(), "children") {
+		t.Fatalf("ParseBulkSpecs(unknown field) error = %v, want a ValidationError naming \"children\"", err)
 	}
 }
 

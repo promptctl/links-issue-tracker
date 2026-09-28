@@ -3711,7 +3711,7 @@ Reason      string    `yaml:"reason,omitempty"`
 
 Pointer fields carry the patch distinction: nil = "leave unchanged / unspecified", set = "write this value" (`bulk.go`).
 
-`ParseBulkSpecs` (`internal/storage/specs.go`): `yaml.NewDecoder` with `dec.KnownFields(true)` — unknown keys are an error. It loops `dec.Decode(&spec)` until `io.EOF`, appending each document; any other error → `"bulk: parse spec: %w"`. **A file with zero documents parses to a nil slice**, which `validateBulkSpecs` then rejects.
+`ParseBulkSpecs` (`internal/storage/specs.go`): `yaml.NewDecoder` with `dec.KnownFields(true)` — unknown keys are an error. It loops `dec.Decode(&spec)` until `io.EOF`, appending each document; any other error → `"bulk: parse spec: %w"` around a `ValidationError` carrying the decoder's message, so it exits 3 with the `validation_refused` remediation. **A file with zero documents parses to a nil slice**, which `validateBulkSpecs` then rejects.
 
 Example (from `cli.go`):
 

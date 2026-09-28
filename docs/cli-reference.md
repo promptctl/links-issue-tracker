@@ -716,8 +716,9 @@ lit export
 ```
 
 Writes a complete versioned JSON **data export** of the workspace to stdout (always
-JSON; no flags). This is the export `lit backup restore` reads; `lit import`
-reads a different, create-only format and refuses an export. ("snapshot" is reserved for the filesystem-level
+JSON; no flags). This is the export `lit backup restore` reads, replacing the
+workspace's contents with it. An export is neither of the two formats `lit import`
+reads, so `lit import` refuses one. ("snapshot" is reserved for the filesystem-level
 `lit snapshots` mechanism below, a different thing.)
 
 ### `lit backup`
