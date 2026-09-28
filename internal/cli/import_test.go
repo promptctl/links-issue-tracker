@@ -38,6 +38,44 @@ func TestRunImportTreeJSONPathUnchanged(t *testing.T) {
 	}
 }
 
+// An export and a tree spec are two formats, and only `lit backup restore`
+// reads an export. The file here is what `lit export` really writes, so the
+// test tracks the export's shape rather than a hand-made imitation of it.
+func TestRunImportOfAnExportNamesBackupRestore(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	if _, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
+		Prefix: "test", Title: "Exported", Topic: "import", IssueType: "task",
+	}); err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	var export bytes.Buffer
+	if err := runLeaf(exportLeaf(), ctx, &export, ap, nil); err != nil {
+		t.Fatalf("export error = %v", err)
+	}
+	path := writeImportFile(t, "export.json", export.String())
+
+	err := runImportTree(ctx, &bytes.Buffer{}, ap, []string{"--path", path})
+	if err == nil {
+		t.Fatal("runImportTree(export) error = nil, want a refusal")
+	}
+	var stderr bytes.Buffer
+	if code := WriteCommandError(&stderr, err); code != ExitValidation {
+		t.Fatalf("exit code = %d, want %d (a deterministic refusal)", code, ExitValidation)
+	}
+	rendered := stderr.String()
+	for _, want := range []string{"lit backup restore --path", "replaces this workspace's issues"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered error = %q, want it to contain %q", rendered, want)
+		}
+	}
+	for _, misdirection := range []string{"ImportTreeSpec", "Retry the command", "lit doctor"} {
+		if strings.Contains(rendered, misdirection) {
+			t.Fatalf("rendered error = %q, must not contain %q", rendered, misdirection)
+		}
+	}
+}
+
 func TestRunImportYAMLCreatesEpicAndChild(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)

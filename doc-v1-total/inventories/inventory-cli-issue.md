@@ -1682,8 +1682,9 @@ mechanism `bulk import` duplicated" (`register.go`). Because the row is
 
 ### 2.22 `lit export`
 
-- Registration `register.go`, `app.AccessRead`. Summary: "Write the backlog
-  out as a portable JSON tree (the data-export primitive; `import`'s inverse)".
+- Registration `register.go`, `app.AccessRead`. Summary: "Write the whole
+  workspace out as one versioned JSON export (the data-export primitive;
+  `backup restore` reads it back)".
 - Handler `runExport` (`cli.go`): no flags of its own; parses argv (so
   `--help` works and any flag is an unknown-flag `UsageError`); calls
   `Store.Export(ctx)`; writes the result as **two-space-indented JSON** to stdout

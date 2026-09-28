@@ -727,7 +727,7 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		// mechanisms; the summaries below name the mechanism so a reader can tell the
 		// JSON data-export family (export → backup) from the Dolt filesystem/database
 		// snapshots (snapshots). The mechanisms are deliberately NOT merged.
-		{Name: "export", Summary: "Write the backlog out as a portable JSON tree (the data-export primitive; `import`'s inverse)", GroupID: "data",
+		{Name: "export", Summary: "Write the whole workspace out as one versioned JSON export (the data-export primitive; `backup restore` reads it back)", GroupID: "data",
 			Run: r.appCmd(app.AccessRead, exportLeaf)},
 		{Name: "import", Summary: "Bulk-create/update issues from a file (the one bulk-ingest home): a JSON tree spec, or a YAML file for create-or-update by id selector", GroupID: "data",
 			Run: r.appCmd(app.AccessWrite, importTreeLeaf)},
