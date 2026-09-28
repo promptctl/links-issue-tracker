@@ -2914,10 +2914,12 @@ const (
 	// command pays after its output when the receive debounce lapses and the
 	// remote has moved — so an offline or slow remote cannot hang the
 	// command's exit. A cut abandons only the fetch (the next interval
-	// retries), never the command's result. The receive holds this store's
-	// LOCK for the fetch, which is longer than any routine hold below: a
-	// writer arriving during one fails, naming the command that is
-	// receiving, rather than waiting out the network. [LAW:one-source-of-truth]
+	// retries), never the command's result. The fetch runs on a clone of
+	// this store, so this deadline bounds the command's wait, not a hold: the live store is held for the clone's copy (under
+	// MirrorHoldBudget) and for the landing of the fetch, whose cost is
+	// proportional to how far the remote moved and which only this deadline
+	// bounds (LandFetchedHead says why).
+	// [LAW:one-source-of-truth]
 	InlineReceiveDeadline = 15 * time.Second
 )
 
@@ -2931,10 +2933,12 @@ const (
 // designed — and a wait longer than that answers a stalled holder with
 // silence, which is what sends a user or agent into a retry that adds a
 // second waiter. Every other holder is not routine and is named: a snapshot
-// copy, a migration, an import, the explicit push and the inline receive
-// (both still hold the store across the network), all of them fail a
-// contender after this wait with the holder's pid, command and age in the
-// refusal.
+// copy, a migration, an import, the explicit push (which still holds the
+// store across the network), all of them fail a contender after this wait
+// with the holder's pid, command and age in the refusal. The automatic
+// receive fetches on a clone, so its holds on this store — the copy, the
+// landing, the settle — are routine ones, except a landing of a fetch that
+// brought much more than the usual few commits, which is named like the rest.
 //
 // The wait counts from the last time the holders in front of the contender
 // changed, not from the contender's arrival (holdWait): sixteen `lit new` at

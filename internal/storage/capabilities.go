@@ -93,6 +93,11 @@ type Syncer interface {
 	// the foreground reconcile, never healed here. [LAW:no-silent-failure]
 	SyncReceive(ctx context.Context, remote string, branch string) (SyncReceiveResult, error)
 
+	// SyncSettleReceived is SyncReceive's second half alone: it reads the
+	// tracking ref as it stands — a fetch that ran on a clone and was landed
+	// here — and fast-forwards on the same terms. It contacts no network.
+	SyncSettleReceived(ctx context.Context, remote string, branch string) (SyncReceiveResult, error)
+
 	// SyncCompact reclaims local storage at the requested depth, with no
 	// remote involved — the entrypoint a workspace that never pushes needs.
 	SyncCompact(ctx context.Context, mode GCMode) (CompactionOutcome, error)

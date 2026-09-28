@@ -80,7 +80,7 @@ var doltWorkspaceMachinery = map[string][]string{
 	"workspace and commit locks": {
 		"CommitLockPath", "LockCommitPath", "SettleCommitLockRelease",
 		"LockWorkspaceExclusive", "LockWorkspaceShared", "LockDoltJournalExclusive",
-		"TryAcquireSyncPushLock",
+		"TryAcquireSyncPushLock", "TryAcquireReceiveLock",
 	},
 	// The detached mirror's cross-process handshake. Named in design.md §migration
 	// as mirror-flock machinery, deleted at S4.
@@ -129,11 +129,19 @@ var doltWorkspaceMachinery = map[string][]string{
 	// way the ref write went, that a failure was the hold budget's cut, and
 	// that only the received-refs write failed — and travel with it.
 	// InlineReceiveDeadline is the receive's own deadline, declared in store
-	// because the receive holds the store's LOCK for its run and so is a term
-	// of the co-resident wait; the cli reads it rather than keep a second copy,
-	// which the wait could not see.
+	// beside the holds it bounds; the cli reads it rather than keep a second
+	// copy.
 	//
-	// ReadReceivedRefs and WriteReceivedRefs are the receive's record of what
+	// LandFetchedHead is RecordPushedHead's counterpart for the receive, which
+	// fetches on a clone the same way the mirror pushes from one: it carries
+	// the clone's fetch back onto the live store by opening the chunk store
+	// with no engine, so there is no handle to ask through the contract.
+	// LandedFetch is its answer, which the receive's trace carries, and
+	// ErrRemoteCacheNotLanded the one failure the receive tells apart — the
+	// fetch landed and only the git mirror's copy did not.
+	//
+	// ReadReceivedRefs and WriteReceivedRefs (at ReceivedRefsPath, which the
+	// SIGTERM wedge test removes so its receive fetches) are the receive's record of what
 	// the remote advertised before the last settled fetch, the mirror of
 	// RecordPushedHead on the receive side. The receive reads it to answer
 	// "has the remote moved" BEFORE it opens the store — the whole point of
@@ -144,7 +152,8 @@ var doltWorkspaceMachinery = map[string][]string{
 	"mirror clone and push": {
 		"MirrorHoldBudget", "MirrorPushDeadline", "MirrorPushCancelLagObserved",
 		"RecordPushedHead", "PushedHeadRecord", "ErrMirrorHoldCut", "ErrReceivedRefsNotRecorded",
-		"InlineReceiveDeadline", "ReadReceivedRefs", "WriteReceivedRefs",
+		"InlineReceiveDeadline", "ReadReceivedRefs", "WriteReceivedRefs", "ReceivedRefsPath",
+		"LandFetchedHead", "LandedFetch", "ErrRemoteCacheNotLanded",
 	},
 	// Typed failures the CLI matches to choose an exit code and a message.
 	// [LAW:parse-dont-validate] — matched as types, never by message text.

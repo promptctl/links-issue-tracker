@@ -5139,6 +5139,11 @@ Classification predicates:
 - `TryAcquireSyncPushLock(databasePath)` (`workspace_lock.go`): `filelock.Acquire(context.Background(), path, true /*exclusive*/, 1, 0)` — a **non-blocking, single-attempt** exclusive probe returning `(release, acquired bool, err)`. `acquired == false` means another mirror holds it and the caller coalesces by doing nothing (`workspace_lock.go`). Note it uses `context.Background()`, not a caller ctx.
 - Pinned by `workspace_lock_test.go` (`TestTryAcquireSyncPushLockIsSingleFlight`) and `workspace_lock_test.go` (path is a sibling of dolt).
 
+#### 6.1a Receive single-flight lock
+
+- Path (`workspace_lock.go`): `<dirname(databasePath)>/.links-sync-receive.lock` (`receiveLockPath`).
+- `TryAcquireReceiveLock(databasePath)` (`workspace_lock.go`): `filelock.Acquire(context.Background(), path, true /*exclusive*/, 1, 0)` — non-blocking, single attempt; `acquired == false` means another automatic receive is running and the caller does nothing.
+
 #### 6.2 Mirror liveness beacon
 
 - Path (`workspace_lock.go`): `<dirname(databasePath)>/.links-sync-mirror.lock`.

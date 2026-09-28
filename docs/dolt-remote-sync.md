@@ -189,6 +189,14 @@ command; failures are recorded as automation traces, never failing the command.
 Set `LIT_DISABLE_AUTO_SYNC=1` to disable all automatic sync (mirror and receive)
 for a process — useful for CI and sandboxes.
 
+The fetch does not hold the store while it waits on the network. The receive
+copies the store (a copy-on-write clone where the filesystem offers one),
+fetches into the copy, and then carries what it fetched back to the store in
+one short hold. So another command's write that lands while a receive is
+fetching goes straight through instead of waiting on the fetch. Only one
+automatic receive runs at a time; a command whose receive is due while another
+one is running leaves the fetch to it.
+
 A clone that has made its *own* unpushed commits while the remote also moved is
 *diverged*, not merely behind — a fast-forward cannot absorb it. The receive does
 not fast-forward that case; instead it runs a **field-aware reconcile** inline, on

@@ -71,9 +71,10 @@ func receiveInline(ctx context.Context, ws workspace.Info) {
 	}
 
 	// One deadline spans the question and the fetch it may lead to, so a remote
-	// that hangs costs the command one deadline, never twice that. The
-	// deadline is the store's: the fetch holds the store's LOCK for its whole
-	// run, so the store sizes every co-resident wait against it.
+	// that hangs costs the command one deadline, never twice that. The fetch
+	// runs on a clone, so the deadline bounds the command's wait and nothing
+	// else waits on it; the live store is held only for the clone's copy, the
+	// landing and the settle.
 	// [LAW:no-ambient-temporal-coupling]
 	timeoutCtx, cancel := context.WithTimeout(ctx, store.InlineReceiveDeadline)
 	defer cancel()
@@ -89,33 +90,75 @@ func receiveInline(ctx context.Context, ws workspace.Info) {
 	} else if observed.unmoved(readReceivedRefs(ws)) {
 		confirmRemoteUnmoved(ws, observed)
 		return
-	}
-
-	session, closeStore, err := openSyncSession(timeoutCtx, ws)
-	if err != nil {
-		recordReceiveError(ws, fmt.Errorf("open sync store: %w", err))
+	} else if observed.nothingToReceive() {
 		return
 	}
-	defer closeStore()
 
-	outcome, err := performSyncReceive(timeoutCtx, session, ws)
+	release, acquired, err := store.TryAcquireReceiveLock(ws.DatabasePath)
 	if err != nil {
-		// Could-not-attempt (reconcile/remote resolution): record and stop.
+		recordReceiveError(ws, fmt.Errorf("take the receive lock: %w", err))
+		return
+	}
+	if !acquired {
+		// Another command's receive is running; it fetches what this one
+		// would have.
+		return
+	}
+	defer func() {
+		if err := release(); err != nil {
+			fmt.Fprintf(os.Stderr, "lit: automatic receive lock not released: %v\n", err)
+		}
+	}()
+	outcome, err := receiveAndRecord(timeoutCtx, ws, observed)
+	if err != nil {
+		// Could-not-attempt (the clone, the target, the live open): record and stop.
 		recordReceiveError(ws, err)
 		return
 	}
+	surfaceInlineOutcome(ctx, ws, outcome, time.Now())
+}
+
+// receiveAndRecord is the receive proper, run under the receive lock: clone
+// the live store, fetch into the clone, land the fetch on the live store, and
+// settle there (fast-forward, or reconcile a divergence), then record what that
+// established. The live store is held only for the clone's copy, the landing,
+// and the settle — none of them on the network. The error
+// is a could-not-attempt failure; a receive that ran and failed is in the
+// outcome, its trace already written.
+func receiveAndRecord(ctx context.Context, ws workspace.Info, observed remoteAdvertisement) (syncReceiveOutcome, error) {
+	clone, err := takeReceiveClone(ctx, ws)
+	if err != nil {
+		return syncReceiveOutcome{}, err
+	}
+	defer removeReceiveClone(clone)
+	fetch, err := fetchIntoClone(ctx, ws, clone)
+	if err != nil {
+		return syncReceiveOutcome{}, err
+	}
+	outcome, closeLive, err := performSyncReceive(ctx, ws, clone, fetch)
+	if err != nil {
+		return syncReceiveOutcome{}, err
+	}
+	// The live store stays open through the record below, so its workspace
+	// hold keeps a rotation of the Dolt directory from landing between the
+	// settle and the record that describes it.
+	defer func() {
+		if err := closeLive(); err != nil {
+			fmt.Fprintf(os.Stderr, "lit: automatic receive store not closed cleanly: %v\n", err)
+		}
+	}()
 	// performSyncReceive records its own trace; surface a trace-write failure
 	// rather than drop it. [LAW:no-silent-failure]
 	if outcome.traceErr != nil {
 		fmt.Fprintf(os.Stderr, "lit: automatic receive trace not recorded: %v\n", outcome.traceErr)
 	}
 	// What the receive established is recorded here, after the receive and its
-	// reconcile, by the one owner that also asked: a fetch that returned moves
+	// reconcile, by the one owner that also asked: a fetch that landed moves
 	// the fetch-success marker, and a receive that settled cleanly makes the
 	// advertisement observed before the fetch the record the next question is
 	// measured against (sync_receive_ask.go).
 	recordReceived(ws, outcome, observed)
-	surfaceInlineOutcome(ctx, ws, outcome, time.Now())
+	return outcome, nil
 }
 
 // surfaceInlineOutcome renders a non-converging inline reconcile — a held free-text
@@ -260,30 +303,57 @@ type reconcileOutcome struct {
 	err        error                       // the reconcile failure; its trace is already recorded when set
 }
 
-// performSyncReceive resolves the sync target through the shared prologue (the
-// same selection push, pull, and reconcile use, so the four never disagree),
-// then fetches and fast-forwards when the local branch is strictly behind,
-// recording an automation trace for the attempt. The returned error is a
-// "could not attempt" failure (reconcile or remote resolution); a receive that
-// ran and failed is carried in outcome.receiveErr with its trace already
-// recorded, leaving local data untouched. [LAW:single-enforcer]
-func performSyncReceive(ctx context.Context, session syncSession, ws workspace.Info) (syncReceiveOutcome, error) {
-	target, err := resolveSyncTarget(ctx, session, ws, "")
-	if err != nil {
-		return syncReceiveOutcome{}, err
-	}
+// performSyncReceive takes the fetch that ran on the clone to the live store:
+// land it (store.LandFetchedHead), then open the live store and settle —
+// fast-forward when the local branch is strictly behind — recording an
+// automation trace for the attempt. The returned error is a "could not
+// attempt" failure (the live open); a receive that ran and failed — the fetch,
+// the landing, or the settle — is carried in outcome.receiveErr with its trace
+// already recorded, leaving local data untouched. The sync target is the one
+// the fetch resolved on the clone through the shared prologue, so push, pull,
+// receive and reconcile never disagree about it. [LAW:single-enforcer]
+//
+// closeLive closes the live store when the settle opened it and is a no-op
+// otherwise; it is the caller's to run once it has recorded the outcome.
+func performSyncReceive(ctx context.Context, ws workspace.Info, clone liveClone, fetch receiveFetch) (outcome syncReceiveOutcome, closeLive func() error, err error) {
+	closeLive = func() error { return nil }
+	target := fetch.target
 	if target.skip != syncTargetReady {
-		return syncReceiveOutcome{skip: target.skip, remote: target.remote}, nil
+		return syncReceiveOutcome{skip: target.skip, remote: target.remote}, closeLive, nil
 	}
 	remoteName, syncBranch := target.remote, target.branch
 
-	result, receiveErr := session.syncer.SyncReceive(ctx, remoteName, syncBranch)
+	var result storage.SyncReceiveResult
+	receiveErr := fetch.fetchErr
+	var landed store.LandedFetch
+	if receiveErr == nil {
+		landed, receiveErr = landFetch(ctx, ws, clone, target)
+	}
+	var session syncSession
+	if receiveErr == nil {
+		session, closeLive, err = openSyncSession(ctx, ws)
+		if err != nil {
+			return syncReceiveOutcome{}, func() error { return nil }, fmt.Errorf("open sync store: %w", err)
+		}
+		// The clone's copy of the remotes was reconciled from git when the
+		// target was resolved there; the live store's is reconciled here, so
+		// a re-pointed git remote reaches it without an explicit sync command.
+		// Local only: git's remote config and the store's remote table.
+		if _, err := syncDoltRemotesFromGit(ctx, session, ws); err != nil {
+			receiveErr = fmt.Errorf("reconcile the live store's remotes from git: %w", err)
+		}
+	}
+	if receiveErr == nil {
+		result, receiveErr = session.syncer.SyncSettleReceived(ctx, remoteName, syncBranch)
+	}
 	traceMetadata := map[string]string{
 		"remote":      remoteName,
 		"sync_branch": syncBranch,
 		"state":       string(result.State),
 		"ahead":       strconv.FormatInt(result.Ahead, 10),
 		"behind":      strconv.FormatInt(result.Behind, 10),
+		"landed":      landed.Record.String(),
+		"land_held":   landed.Held.Round(time.Millisecond).String(),
 	}
 	traceStatus := "ok"
 	traceReason := receiveReasonForState(result.State)
@@ -295,7 +365,7 @@ func performSyncReceive(ctx context.Context, session syncSession, ws workspace.I
 		receiveDecision = "error"
 	}
 	traceRecordErr := recordReceiveTrace(ws, receiveDecision, traceStatus, traceReason, traceMetadata)
-	outcome := syncReceiveOutcome{
+	outcome = syncReceiveOutcome{
 		remote:             remoteName,
 		branch:             syncBranch,
 		state:              result.State,
@@ -311,7 +381,7 @@ func performSyncReceive(ctx context.Context, session syncSession, ws workspace.I
 	if receiveErr == nil && result.State == storage.SyncReceiveDiverged {
 		outcome.reconcile = performInlineReconcile(ctx, session, ws, remoteName, syncBranch)
 	}
-	return outcome, nil
+	return outcome, closeLive, nil
 }
 
 // reconcileOnce resolves the reconcile capability and runs it.
