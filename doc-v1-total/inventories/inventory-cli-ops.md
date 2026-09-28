@@ -15,7 +15,7 @@ data — described as assets, not as documentation of behavior).
 - `cmd/lit/main.go` wraps `context.Background()` in `interrupt.Guard(ctx, interrupt.DefaultGrace)` — a SIGINT/SIGTERM cancels the command context and escalates to a hard exit if in-flight work ignores the cancel.
 - `cmd/lit/main.go` runs `cli.Run(ctx, os.Stdout, os.Stderr, os.Args[1:])`; on error exits with `cli.WriteCommandError(os.Stderr, err)`.
 - `internal/cli/cli.go` `Run`: normalizes global args (`parseGlobalArgs`), builds the cobra root, `SilenceErrors`/`SilenceUsage` true; `pflag.ErrHelp` and `errHelpHandled` are swallowed to a nil error (exit 0).
-- `internal/cli/cli.go` root command `lit`: `Long: "Agent-native issue tracker"`. Bare `lit` with no args prints `renderQuickstartGuidance(ws.RootDir)` (identical to `lit quickstart`) — `cli.go`. Outside a git repo (`workspace.ErrNotGitRepo`) it prints cobra help instead (`cli.go`). A non-empty first arg that is not a registered command returns `UnknownCommandError` (`cli.go`).
+- `internal/cli/cli.go` root command `lit`: `Long: "Agent-native issue tracker"`. Bare `lit` with no args prints `renderQuickstartGuidance(ws.RootDir)` (identical to `lit quickstart`) — `cli.go`. Outside a git repo (`OutsideWorkspaceError`) it prints cobra help instead (`cli.go`). A non-empty first arg that is not a registered command returns `UnknownCommandError`, with or without a help flag beside it (`cli.go`).
 - `internal/cli/cli.go` root flag errors are wrapped as `UsageError` (exit 2).
 - `internal/cli/register.go` every registered command sets `DisableFlagParsing: true` and `Args: cobra.ArbitraryArgs`; each command parses its own flags.
 

@@ -6,7 +6,7 @@ This chapter covers everything in `lit` that manages the workspace rather than i
 
 ### Entrypoint and dispatch
 
-`main` wraps the context in an interrupt guard — SIGINT/SIGTERM cancels the command context and escalates to a hard exit if in-flight work ignores the cancel — then runs the CLI and exits with the code derived from the returned error (`cmd/lit/main.go`). Bare `lit` inside a git repo prints the quickstart guidance (identical to `lit quickstart`); outside a git repo it prints help instead; a first argument that is not a registered command returns `UnknownCommandError` (`internal/cli/cli.go`). Every registered command disables cobra flag parsing and parses its own flags (`register.go`).
+`main` wraps the context in an interrupt guard — SIGINT/SIGTERM cancels the command context and escalates to a hard exit if in-flight work ignores the cancel — then runs the CLI and exits with the code derived from the returned error (`cmd/lit/main.go`). Bare `lit` inside a git repo prints the quickstart guidance (identical to `lit quickstart`); outside a git repo it prints help instead; a first argument that is not a registered command returns `UnknownCommandError` (`internal/cli/cli.go`). Every registered command disables cobra flag parsing and parses its own flags (`register.go`), and so does the root (`internal/cli/cli.go`).
 
 Flag handling common to every command (`flagset.go`, `cli.go`):
 

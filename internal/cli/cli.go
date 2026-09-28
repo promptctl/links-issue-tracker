@@ -32,12 +32,7 @@ func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 		return err
 	}
 	root := newRootCommand(ctx, stdout, stderr)
-	// The help rewrite reads the registered command set, so it runs once the
-	// root exists rather than inside parseGlobalArgs, which precedes it.
-	normalizedArgs, err = rewriteHelpCommand(root, normalizedArgs)
-	if err != nil {
-		return err
-	}
+	normalizedArgs = rewriteHelpCommand(normalizedArgs)
 	root.SetArgs(normalizedArgs)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
@@ -71,16 +66,36 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 		Use:  "lit",
 		Long: "Agent-native issue tracker",
 		Args: cobra.ArbitraryArgs,
+		// The root parses its own argv, like every registered command. Cobra's
+		// parse answers a help flag before RunE runs, which would print the
+		// root help at exit 0 for `lit nosuchcmd --help` — a mistyped command
+		// reported as a success.
+		DisableFlagParsing: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) > 0 {
-				return UnknownCommandError{Command: args[0]}
+			if err := cmd.Flags().Parse(args); err != nil {
+				return UsageError{Message: err.Error()}
+			}
+			// [LAW:single-enforcer] the one place a name that is no command is
+			// refused. It outranks a help flag on either side of it, because
+			// there is no command to describe, and it answers exactly as the
+			// same name without the flag does.
+			if cmd.Flags().NArg() > 0 {
+				return UnknownCommandError{Command: cmd.Flags().Arg(0)}
+			}
+			helpRequested, err := cmd.Flags().GetBool("help")
+			if err != nil {
+				return err
+			}
+			if helpRequested {
+				return cmd.Help()
 			}
 			// [LAW:one-source-of-truth] Default command reuses renderQuickstartGuidance
 			// so the output is always identical to `lit quickstart`.
 			ws, wsErr := resolveWorkspaceFromWD(workspace.PrefixRequest{})
 			// [LAW:dataflow-not-control-flow] Only the "outside git repo" case routes to help;
 			// other failures (getcwd, template load) surface so they remain diagnosable.
-			if errors.Is(wsErr, workspace.ErrNotGitRepo) {
+			var outside OutsideWorkspaceError
+			if errors.As(wsErr, &outside) {
 				return cmd.Help()
 			}
 			if wsErr != nil {
@@ -95,9 +110,15 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 		},
 	}
 	root.CompletionOptions.DisableDefaultCmd = true
-	// [CLI] Exit codes are a contract: a global-position unknown flag (e.g. the
-	// removed `--json`) is a usage error, the same ExitUsage the per-command
-	// parser returns, not a generic failure. [LAW:single-enforcer]
+	// The help flag is declared here rather than left to cobra's execute, so
+	// RunE's parse always finds it on the flag set that the root help renders.
+	root.InitDefaultHelpFlag()
+	// Flags belong to the root only up to the first positional: `lit <command>
+	// [args]`, where everything from the command name on is that command's.
+	root.Flags().SetInterspersed(false)
+	// [CLI] Exit codes are a contract: an unknown flag on a command cobra still
+	// parses (its own `help`) is a usage error, the same ExitUsage lit's parsers
+	// return, not a generic failure. [LAW:single-enforcer]
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
 		return UsageError{Message: err.Error()}
 	})
@@ -195,29 +216,14 @@ func resolveWorkspaceFromWD(requested workspace.PrefixRequest) (workspace.Info, 
 // help — the one page cobra does render correctly, because the root is where
 // the group listing lives. A flag-shaped topic is cobra's business too.
 //
-// A topic naming no registered command is refused here rather than rewritten.
-// `lit nosuchcmd --help` is answered by cobra's root help at exit 0
-// (links-cli-yn14), so rewriting an unknown topic into that form would answer
-// "what is this command" with the full command list and call it success — an
-// answer-shaped non-answer. [LAW:no-silent-failure] the refusal is lit's own
-// typed error, which carries the exit code and the remediation cobra's bare
-// "Unknown help topic" never did.
-func rewriteHelpCommand(root *cobra.Command, args []string) ([]string, error) {
+// A topic naming no command is rewritten like any other: `lit nosuchcmd --help`
+// reaches the root, which refuses the name with lit's typed error — the exit
+// code and remediation cobra's bare "Unknown help topic" never carried.
+func rewriteHelpCommand(args []string) []string {
 	if len(args) < 2 || args[0] != "help" || strings.HasPrefix(args[1], "-") {
-		return args, nil
+		return args
 	}
-	// Cobra adds its own `help` command lazily, inside ExecuteC, which has not
-	// run yet — so without this the registered set is missing the one command
-	// whose name the caller is most likely to type twice, and `lit help help`
-	// would refuse itself while advising the caller to run `lit help <command>`.
-	// InitDefaultHelpCmd is idempotent; ExecuteC calling it again is a no-op.
-	root.InitDefaultHelpCmd()
-	for _, registered := range root.Commands() {
-		if registered.Name() == args[1] {
-			return append(slices.Clone(args[1:]), "--help"), nil
-		}
-	}
-	return nil, UnknownCommandError{Command: args[1]}
+	return append(slices.Clone(args[1:]), "--help")
 }
 
 func parseGlobalArgs(args []string) ([]string, error) {

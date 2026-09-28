@@ -33,18 +33,26 @@ into* one of those, the call and its observable effect are recorded here.
 
 ### 1.2 Root command
 
-- `Use: "lit"`, `Long: "Agent-native issue tracker"`, `Args: cobra.ArbitraryArgs`
-  (`cli.go`).
-- Bare `lit <unknown-token>` → `UnknownCommandError{Command: args[0]}`
-  (`cli.go`).
+- `Use: "lit"`, `Long: "Agent-native issue tracker"`, `Args: cobra.ArbitraryArgs`,
+  `DisableFlagParsing: true` (`cli.go`). The root's RunE parses its own argv
+  against its flag set (only `-h/--help`, declared up front by
+  `InitDefaultHelpFlag`) with interspersing off, so flags count as the root's
+  only up to the first positional (`cli.go`).
+- A positional reaching the root → `UnknownCommandError{Command: <first positional>}`
+  (`cli.go`), whether or not a help flag stands before or after it:
+  `lit bogus --help`, `lit -h bogus` and `lit bogus --nosuchflag` all refuse
+  `bogus`, exit 3.
+- A help flag with no positional prints cobra's root `Help()` (`cli.go`).
 - Bare `lit` with no args: resolves the workspace from cwd (`cli.go`). If the
-  error is `workspace.ErrNotGitRepo` it prints cobra's `Help()` (`cli.go`);
+  error is `OutsideWorkspaceError` it prints cobra's `Help()` (`cli.go`);
   any other error is returned (`cli.go`); otherwise it renders and prints
   the quickstart guidance — byte-identical to `lit quickstart` (`cli.go`).
 - Cobra's default `completion` command is disabled (`cli.go`); cobra's built-in
   `help` command remains.
 - Root flag errors are wrapped as `UsageError` so an unknown global flag exits
-  `ExitUsage` (`cli.go`).
+  `ExitUsage`: the root's own parse does this in RunE, and `SetFlagErrorFunc`
+  does it for cobra's `help` command, the one command cobra still parses
+  (`cli.go`).
 
 ### 1.3 Command registry
 
