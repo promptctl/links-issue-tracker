@@ -41,7 +41,19 @@ func parse(input string) (storage.ListIssuesFilter, error) {
 	return filter, nil
 }
 
+// Merge joins the flag-built filter (base) with the query-built one
+// (incoming). Its refusals — a term contradicting a flag, a time window that
+// ends before it starts — reject the request itself, so like Parse it returns
+// each as a storage.ValidationError, typed here once. [LAW:single-enforcer]
 func Merge(base storage.ListIssuesFilter, incoming storage.ListIssuesFilter) (storage.ListIssuesFilter, error) {
+	filter, err := merge(base, incoming)
+	if err != nil {
+		return storage.ListIssuesFilter{}, storage.ValidationError{Message: err.Error()}
+	}
+	return filter, nil
+}
+
+func merge(base storage.ListIssuesFilter, incoming storage.ListIssuesFilter) (storage.ListIssuesFilter, error) {
 	filter := base
 	// [LAW:parse-dont-validate] Both sides are already []model.State — a type
 	// only model.ParseStates can mint — so statuses merge like every other

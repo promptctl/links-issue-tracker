@@ -173,6 +173,10 @@ func TestListSetFilterRefusalsAreValidationErrors(t *testing.T) {
 		{[]string{"--query", "id:"}, "id:"},
 		{[]string{"--query", "parent:"}, "parent:"},
 		{[]string{"--query", "label:"}, "label:"},
+		// Refused while joining a term to the flags rather than while parsing
+		// the term: the join is part of the same request.
+		{[]string{"--has-comments=false", "--query", "has:comments"}, "has-comments"},
+		{[]string{"--query", "updated>=2026-03-01T00:00:00Z updated<=2026-01-01T00:00:00Z"}, "updated"},
 	} {
 		err := runListWithStore(h.ctx, &strings.Builder{}, h.ap.Store, noReadyPolicy, tc.args)
 		if got := ExitCode(err); got != ExitValidation {
