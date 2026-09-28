@@ -2942,8 +2942,9 @@ const (
 // once serialize on this store at tens of milliseconds each and every one
 // lands, because each one's release is progress; a holder that stands still
 // for this long is the one that fails the contender. A package variable so
-// the contention tests shrink it rather than sleep through the production
-// one; nothing else assigns it.
+// tests can set it: contention tests shrink it rather than sleep through the
+// production one, and a test whose subject is not the budget lifts it out of
+// play. Nothing else assigns it.
 var coResidentHolderWait = mirrorHoldCeiling + coResidentWaitHeadroom
 
 // The push deadline chain. The mirror's push runs from a clone with no lock on
