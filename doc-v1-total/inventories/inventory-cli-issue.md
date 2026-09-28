@@ -1597,7 +1597,7 @@ Family `depFamily`, usage `"usage: lit dep <add|rm|ls> ..."` (`dependency.go`).
      → exit 2 (`dependency.go`).
   2. Bad `--type` → the bare `model.ParseRelationType` error → exit 1
      (`dependency.go`).
-  3. Self-loop `from == to` → `fmt.Errorf("dep add: self-loop rejected (%s -> %s)")`
+  3. Self-loop `from == to` → `model.ValidationError{Message: fmt.Sprintf("dep add: self-loop rejected (%s -> %s)")}`
      → exit 1 (`dependency.go`). Transitive cycles are **not** detected
      (`dependency.go`).
   4. For `blocks` only: `rejectSameEpicBlocks` — if both endpoints resolve to the

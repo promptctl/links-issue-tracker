@@ -651,7 +651,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 
 **`storage.IssueOrdering`** (`internal/storage/ordering.go`), called with the memory engine's `issueSortKeys` (`internal/storage/memory/list.go`)
 - No specs → `[]SortSpec{{Field: "rank"}}` — the canonical ordering expressed as the spec list it stands for.
-- Each spec's field is `strings.ToLower(strings.TrimSpace(...))` then looked up in `issueSortKeys`; a miss → `fmt.Errorf("unsupported sort field %q", spec.Field)`.
+- Each spec's field is `strings.ToLower(strings.TrimSpace(...))` then looked up in `issueSortKeys`; a miss → `model.ValidationError{Message: fmt.Sprintf("unsupported sort field %q", spec.Field)}`.
 - `Desc` negates the ascending comparator.
 - **`strings.Compare(a.ID, b.ID)` ascending is appended as the final key always** — so descending reverses only the named keys, never the tie-break.
 - The composed comparator returns the first non-zero result, else 0.
@@ -767,7 +767,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 ### 2.11 Relations (`internal/storage/memory/edges.go`)
 
 **`addRelation`**
-1. `RelRelatedTo` with `SrcID == DstID` → `errors.New("related-to cannot target itself")`.
+1. `RelRelatedTo` with `SrcID == DstID` → `model.ValidationError{Message: "related-to cannot target itself"}`.
 2. `in.Type.CanonicalEndpoints(in.SrcID, in.DstID)` normalizes endpoint order.
 3. `mustRecord(srcID)` then `mustRecord(dstID)` → `NotFoundError`.
 4. For `RelBlocks`, `rejectBlocksCycle(srcID, dstID)`.
@@ -777,9 +777,9 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 8. Appends and returns.
 
 **`rejectBlocksCycle(dependent, dependency)`**
-- Self-edge → `fmt.Errorf("blocks: %s cannot block itself", dependent)`.
+- Self-edge → `model.ValidationError{Message: fmt.Sprintf("blocks: %s cannot block itself", dependent)}`.
 - Builds `precedes` = dependency → dependents from all `RelBlocks` edges.
-- DFS from `dependent`; if `dependency` is reachable → long error: `"blocks: cannot add %s depends-on %s — %s already depends on %s (directly or transitively), so this edge would close a dependency cycle, which has no valid rank order"`.
+- DFS from `dependent`; if `dependency` is reachable → `model.ValidationError` with the long message: `"blocks: cannot add %s depends-on %s — %s already depends on %s (directly or transitively), so this edge would close a dependency cycle, which has no valid rank order"`.
 - Rationale: a rank order is a total order and one honoring every blocks edge exists exactly when there is no cycle.
 
 **`RemoveRelation`**
@@ -796,8 +796,8 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 - `nil` input yields an empty (non-nil) map.
 
 **`SetParent`**
-- Blank child or parent (after trim) → `errors.New("child and parent ids are required")`.
-- `ChildID == ParentID` → `errors.New("child and parent cannot be the same issue")`.
+- Blank child or parent (after trim) → `model.ValidationError{Message: "child and parent ids are required"}`.
+- `ChildID == ParentID` → `model.ValidationError{Message: "child and parent cannot be the same issue"}`.
 - Delegates to `addRelation` with `Type: model.RelParentChild` — one validated caller of the single-valued write, so reparenting replaces in one act.
 
 **`ClearParent`**
