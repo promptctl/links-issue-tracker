@@ -944,8 +944,17 @@ func forkUnrelatedClone(t *testing.T, ctx context.Context, root, remoteURL strin
 // rotation could strand the session off the scratch branch), and its second
 // is the first provenance step (a replayDeltaOnScratch commit — pinning the
 // per-step single-attempt contract, not just the lift's).
+//
+// Not parallel: it holds the commit-lock waiter budget out of reach. The
+// subject here is what the rotation does, not whether it fits the budget, and
+// on a loaded machine the replay's first run alone can outlast the production
+// budget, which refuses the rotation and fails this test for a reason it does
+// not pin. TestRetryTransientGCContentionStopsBeforeOutlastingCommitLockWaiters
+// pins the budget.
 func TestSyncReconcileCombineRecoversFromTransientFailureMidReplay(t *testing.T) {
-	t.Parallel()
+	restoreWait := coResidentHolderWait
+	coResidentHolderWait = 10 * time.Minute
+	t.Cleanup(func() { coResidentHolderWait = restoreWait })
 	for _, tc := range []struct {
 		name   string
 		failAt int
