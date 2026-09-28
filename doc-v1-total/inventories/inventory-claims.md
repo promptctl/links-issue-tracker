@@ -227,7 +227,7 @@ E2E manipulation of the window: a test writes `.lit/config.toml` containing `[cl
 ```go
 type LocalCheckouts struct { workspace string; live map[string]struct{} }
 ```
-`internal/claims/local.go`. Constructed by `NewLocalCheckouts(workspaceID, liveStreams)` (`internal/claims/local.go`).
+`internal/claims/local.go`. Constructed by `NewLocalCheckouts(workspaceID, live)` (`internal/claims/local.go`).
 
 **Zero value = "this machine has enumerated nothing and therefore proves nothing"**; it voids nothing, which is the "where uncheckable, assume live and let freshness govern" default (`internal/claims/local.go`). Callers that cannot enumerate must pass the zero value, never a guess (`internal/claims/local.go`).
 

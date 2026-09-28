@@ -343,20 +343,25 @@ specification cites files, never lines, so the name is the only anchor the
 reader has. A name that exists nowhere reads as a rename to chase, and when the
 function never existed there is nothing to find.
 [`internal/docnames`](internal/docnames) checks every Go-shaped code span in
-`doc-v1-total/` against the identifier tokens of the source this repository
-carries, tests and tools included; `go test ./internal/docnames/` runs it as
-part of `go test ./...`. A name surviving only in a comment or a string does
-not count as present.
+`doc-v1-total/` against the identifiers in the code of the source this
+repository carries, tests and tools included; `go test ./internal/docnames/`
+runs it as part of `go test ./...`. A name surviving only in a comment or a
+string does not count as present, and a name qualified by one of this tree's
+packages (`storage.IssueOrdering`) must be declared in that package, as a
+top-level name or a method.
 
-A span is judged when its shape says Go: dot-joined identifiers with a
-mixed-case segment, optionally followed by a call's arguments, which are not
-judged. Lowercase and all-caps words are left alone, because in these chapters
-they are columns, statuses, commands, SQL and environment variables. A failure
-names the chapter line; the fix is to name what the code does now, not the
-nearest-looking identifier.
+A span is judged when its callee is dot-joined identifiers with a mixed-case
+segment; the mixed-case identifiers among a call's arguments are judged too,
+so `wsCmd(runUpgrade)` fails when `runUpgrade` is gone. `*T`, `[]T` and
+`(*T).M` are read as the names they are built on. Lowercase and all-caps words
+are left alone, because in these chapters they are columns, statuses,
+commands, SQL and environment variables. A failure names the chapter line; the
+fix is to name what the code does now, not the nearest-looking identifier, and
+an argument written as a placeholder gets the code's own name for it.
 
 Some names are rightly not in the tree: standard-library and third-party
-symbols, agent-harness names, units, format patterns, file names. List those by
+symbols, agent-harness names, units, format patterns, file names, and code
+quoted verbatim where a variable shares a package's name. List those by
 name in
 [`doc-v1-total/names-outside-the-tree.txt`](doc-v1-total/names-outside-the-tree.txt),
 one per line with the reason. The gate also reports an entry no chapter writes

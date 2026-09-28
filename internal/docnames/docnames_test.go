@@ -1,6 +1,8 @@
 package docnames
 
 import (
+	"fmt"
+	"maps"
 	"os"
 	"slices"
 	"testing"
@@ -21,9 +23,9 @@ func TestEveryNamedIdentifierExists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckTree: %v", err)
 	}
-	for _, n := range r.Missing {
-		t.Errorf("%s:%d: `%s` (in `%s`) is not an identifier in any Go file — name what the code does now, or, if it is legitimately outside this tree, add it to %s with the reason",
-			n.Doc, n.Line, n.Name, n.Text, ExclusionsFile)
+	for _, ref := range r.Missing {
+		t.Errorf("%s:%d: `%s` (in `%s`) is not in any Go file — name what the code does now, or, if it is legitimately outside this tree, add it to %s with the reason",
+			ref.Doc, ref.Line, ref.Name, ref.Span, ExclusionsFile)
 	}
 	for _, s := range r.Stale {
 		why := "no chapter writes it any more"
@@ -40,7 +42,8 @@ func TestEveryNamedIdentifierExists(t *testing.T) {
 func fixture(doc, exclusions string) fstest.MapFS {
 	return fstest.MapFS{
 		"go.mod":                     {Data: []byte("module example.com/m\n\ngo 1.22\n")},
-		"a/a.go":                     {Data: []byte("package a\n\n// commentOnly was deleted.\nfunc realFunc() string { return \"stringOnly\" }\n")},
+		"a/a.go":                     {Data: []byte("package a\n\n// commentOnly was deleted.\nfunc realFunc() string { return \"stringOnly\" }\n\ntype Thing struct{}\n\nfunc (Thing) Method() {}\n")},
+		"b/b.go":                     {Data: []byte("package b\n\nfunc MovedHere() {}\n")},
 		"a/testdata/t.go":            {Data: []byte("package t\nfunc testdataOnly() {}\n")},
 		"other/go.mod":               {Data: []byte("module example.com/other\n")},
 		"other/o.go":                 {Data: []byte("package other\nfunc otherModuleOnly() {}\n")},
@@ -49,10 +52,10 @@ func fixture(doc, exclusions string) fstest.MapFS {
 	}
 }
 
-func missingTexts(r Report) []string {
+func missingNames(r Report) []string {
 	var out []string
-	for _, n := range r.Missing {
-		out = append(out, n.Text)
+	for _, ref := range r.Missing {
+		out = append(out, ref.Name)
 	}
 	return out
 }
@@ -62,15 +65,17 @@ func missingTexts(r Report) []string {
 // Every place a name can look present without being an identifier in this
 // tree is paired with a real one, so a check that merely greps would fail here.
 func TestAGhostNameIsReported(t *testing.T) {
-	doc := "Calls `realFunc`, `a.realFunc()` and `realFunc(ghostArg)`.\n" +
+	doc := "Calls `realFunc`, `a.realFunc()`, `realFunc(x, \"ghostQuoted\")`, `(*Thing).Method`, `*Thing` and `[]Thing`.\n" +
 		"Also `commentOnly`, `stringOnly`, `testdataOnly`, `otherModuleOnly`, `ghostFunc`, `realFunc.ghostField` and `ghostCall(x, y)`.\n" +
+		"Then `realFunc(ghostArg)`, `a.MovedHere`, `a.Method` and `(*Thing).GhostMethod`.\n" +
 		"Excused: `json.Encoder` and `json.Encoder(w)`.\n"
 	r, err := CheckTree(fixture(doc, "json.Encoder  standard library\n"))
 	if err != nil {
 		t.Fatalf("CheckTree: %v", err)
 	}
-	want := []string{"commentOnly", "stringOnly", "testdataOnly", "otherModuleOnly", "ghostFunc", "realFunc.ghostField", "ghostCall(x, y)"}
-	if got := missingTexts(r); !slices.Equal(got, want) {
+	want := []string{"commentOnly", "stringOnly", "testdataOnly", "otherModuleOnly", "ghostFunc", "realFunc.ghostField", "ghostCall",
+		"ghostArg", "a.MovedHere", "Thing.GhostMethod"}
+	if got := missingNames(r); !slices.Equal(got, want) {
 		t.Errorf("Missing = %q, want %q", got, want)
 	}
 	if len(r.Stale) != 0 {
@@ -105,11 +110,11 @@ func TestStaleExclusionsAreReported(t *testing.T) {
 		got[s.Name] = s.Declared
 	}
 	want := map[string]bool{"unwritten.Name": false, "realFunc": true}
-	if len(got) != len(want) || got["unwritten.Name"] != false || got["realFunc"] != true {
+	if !maps.Equal(got, want) {
 		t.Errorf("Stale = %v, want %v", got, want)
 	}
 	if len(r.Missing) != 0 {
-		t.Errorf("Missing = %q, want none", missingTexts(r))
+		t.Errorf("Missing = %q, want none", missingNames(r))
 	}
 }
 
@@ -118,42 +123,50 @@ func TestStaleExclusionsAreReported(t *testing.T) {
 // must leave alone or the gate drowns in it.
 func TestNameShape(t *testing.T) {
 	for _, tc := range []struct {
-		span string
-		name string // "": not judged
+		span  string
+		names []string // nil: not judged
 	}{
-		{"runSyncPush", "runSyncPush"},
-		{"IDMap", "IDMap"},
-		{"Issue", "Issue"},
-		{"app.streamTokens", "app.streamTokens"},
-		{"store.Open()", "store.Open"},
-		{"issueOrdering(filter.SortBy)", "issueOrdering"},
-		{"a.CreatedAt.Compare(b.CreatedAt)", "a.CreatedAt.Compare"},
-		{"run()", ""},
-		{"dolt_log('HEAD')", ""},
-		{"VARCHAR(64)", ""},
-		{"open", ""},
-		{"GOCACHE", ""},
-		{"issue_type", ""},
-		{"mkdocs.yml", ""},
-		{"lit next", ""},
-		{"--take", ""},
-		{"cli.go", ""},
-		{"[]SortSpec", ""},
-		{"Issue{ID: x}", ""},
+		{"runSyncPush", []string{"runSyncPush"}},
+		{"IDMap", []string{"IDMap"}},
+		{"app.streamTokens", []string{"app.streamTokens"}},
+		{"store.Open()", []string{"store.Open"}},
+		{"issueOrdering(filter.SortBy)", []string{"issueOrdering", "filter.SortBy"}},
+		{"wsCmd(runUpgrade)", []string{"wsCmd", "runUpgrade"}},
+		{"appCmd(app.AccessWrite, ghostLeaf, \"quotedName\")", []string{"appCmd", "app.AccessWrite", "ghostLeaf"}},
+		{"(*App).LocalCheckouts", []string{"App.LocalCheckouts"}},
+		{"*Store", []string{"Store"}},
+		{"[]SortSpec", []string{"SortSpec"}},
+		{"run()", nil},
+		{"dolt_log('HEAD')", nil},
+		{"VARCHAR(64)", nil},
+		{"DOLT_CHECKOUT('-B', name, localHead)", nil},
+		{"Read(//Users/me/**)", []string{"Read"}},
+		{"open", nil},
+		{"GOCACHE", nil},
+		{"issue_type", nil},
+		{"mkdocs.yml", nil},
+		{"lit next", nil},
+		{"--take", nil},
+		{"cli.go", nil},
+		{"Issue{ID: x}", nil},
 	} {
-		n, ok := parseName("d.md", docclaims.Span{Text: tc.span, Line: 1})
-		if ok != (tc.name != "") || n.Name != tc.name {
-			t.Errorf("parseName(%q) = %q, %v; want %q", tc.span, n.Name, ok, tc.name)
+		var got []string
+		for _, ref := range refsIn("d.md", docclaims.Span{Text: tc.span, Line: 1}) {
+			got = append(got, ref.Name)
+		}
+		if !slices.Equal(got, tc.names) {
+			t.Errorf("refsIn(%q) = %q, want %q", tc.span, got, tc.names)
 		}
 	}
 }
 
-// TestExclusionLinesAreRefusedWithoutAReason pins the three ways an entry is
+// TestExclusionLinesAreRefusedWithoutAReason pins the ways an entry is
 // malformed: no reason, which leaves the next reader nothing to judge it by; a
-// duplicate, which a deletion would only half-remove; and a span that is not a
-// bare name, which could never match one.
+// duplicate, which a deletion would only half-remove; and anything that is not
+// a name the check judges, which could never match one and would read as stale
+// for a false reason.
 func TestExclusionLinesAreRefusedWithoutAReason(t *testing.T) {
-	for _, src := range []string{"json.Encoder\n", "json.Encoder  stdlib\njson.Encoder  again\n", "Bash(lit *)  a span, not a name\n"} {
+	for _, src := range []string{"json.Encoder\n", "json.Encoder  stdlib\njson.Encoder  again\n", "Bash(lit *)  a span, not a name\n", "dolt_log  never judged\n"} {
 		if _, err := ParseExclusions(src); err == nil {
 			t.Errorf("ParseExclusions(%q) accepted it", src)
 		}
@@ -161,18 +174,20 @@ func TestExclusionLinesAreRefusedWithoutAReason(t *testing.T) {
 }
 
 // TestSpanLinesPointAtTheSpan: the gate's report sends a reader to a line, so
-// the line must be the span's own, including past a fence and a double span.
+// the line must be the span's own, including past a fence and a double span,
+// and the report must read top to bottom even though double-backtick spans are
+// read first.
 func TestSpanLinesPointAtTheSpan(t *testing.T) {
-	doc := "intro\n```\n`fencedName`\n```\n``a `b` c`` then `firstName`\n\n`secondName`\n"
-	names, err := Names(fstest.MapFS{"d.md": {Data: []byte(doc)}}, []string{"d.md"})
+	doc := "intro `firstName`\n```\n`fencedName`\n```\n``a `b` c`` then `secondName`\n\n``thirdName``\n"
+	refs, err := Refs(fstest.MapFS{"d.md": {Data: []byte(doc)}}, []string{"d.md"})
 	if err != nil {
-		t.Fatalf("Names: %v", err)
+		t.Fatalf("Refs: %v", err)
 	}
-	var got []int
-	for _, n := range names {
-		got = append(got, n.Line)
+	var got []string
+	for _, ref := range refs {
+		got = append(got, fmt.Sprintf("%s:%d", ref.Name, ref.Line))
 	}
-	if want := []int{5, 7}; !slices.Equal(got, want) {
-		t.Errorf("lines = %v, want %v (names %+v)", got, want, names)
+	if want := []string{"firstName:1", "secondName:5", "thirdName:7"}; !slices.Equal(got, want) {
+		t.Errorf("refs = %q, want %q", got, want)
 	}
 }

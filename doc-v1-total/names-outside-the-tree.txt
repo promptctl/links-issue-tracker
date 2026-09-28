@@ -10,6 +10,7 @@
 os.LookupEnv          os package; the environment-variable survey names what it searched for
 json.Encoder          encoding/json; writeJSON builds one with json.NewEncoder
 LimitedReader         io.LimitedReader, unwrapped by *os.File.ReadFrom
+os.File.ReadFrom      os package
 QueryRow              database/sql
 syscall.Flock         syscall; called inside github.com/promptctl/primitives/filelock
 
@@ -57,3 +58,8 @@ PiB                   byte unit printed by humanBytes
 EiB                   byte unit printed by humanBytes
 vX.Y.Z                release tag pattern
 YYYYMMDDThhmmss.nnnnnnnnnZ  reading of the timestamp layout 20060102T150405.000000000Z
+
+# Names that collide with a package of this tree but mean something else.
+engine.NewSqlEngine   Dolt's sqle engine package, not internal/engine
+store.CreateVersionTable  a goose database.Store variable named store in migration_runner.go, not the store package
+store.Insert          a goose database.Store variable named store in migration_runner.go, not the store package

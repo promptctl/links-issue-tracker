@@ -698,7 +698,7 @@ else ready.
   RFC3339, then RFC3339Nano; failure → `updated timestamp must be RFC3339`. `>=` and
   `>` both set updated-after; `<=` and `<` both set updated-before; `:` with a
   valid timestamp → `updated supports only >=, >, <=, <`.
-- `query.Merge(flagFilter, queryFilter)` (`query.go`): statuses, types,
+- `query.Merge(filter, parsed.Filter)` (`query.go`): statuses, types,
   assignees, parent ids and sort keys dedupe-merge, flag values first
   (`mergeSlice`, `query.go`); resolutions, search terms, ids and labels
   plain append; `IncludeArchived`/`IncludeDeleted` OR; `Limit` overwritten when the
@@ -1731,7 +1731,7 @@ outside a git repository (`register.go`; asserted in `retired_command_test.go`).
 
 **JSON tree path** (`runImportTreeJSON`, `cli.go`):
 - `storage.ParseImportTreeSpecs(data)` then
-  `Store.ImportTree(ctx, workspacePrefix, specs)`.
+  `Store.ImportTree(ctx, prefix, specs)`.
 - Documented spec shape (`cli.go`): an array of records each with
   `local_id`, optional `parent` (a local_id), optional `depends_on` (array of
   local_ids), `title`, `type`, `topic`, `priority`.

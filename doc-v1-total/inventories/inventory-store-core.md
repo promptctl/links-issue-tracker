@@ -2906,19 +2906,13 @@ Pinned pair cases — `internal/store/ranking_frame_test.go`: top-level pair unc
 
 ### 5.6 The five rank verbs
 
-**RankToTop(issueID)** — `internal/store/ranking.go`:
-- `GetIssue` precheck.
-- In `withMutation(ctx, "rank to top", …)`:
-  ```sql
-  SELECT item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' AND id != ? ORDER BY item_rank ASC LIMIT 1
-  ```
-  non-`ErrNoRows` error → `fmt.Errorf("rank-to-top: query first: %w", err)`.
-- No/blank first rank → `rank.Initial()`; else `rank.Before(firstRank)`.
-- `UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?` with `time.Now().UTC().Format(time.RFC3339Nano)`; error → `fmt.Errorf("rank-to-top: update: %w", err)`.
-- Then `smoothRanksIfNeededTx(ctx, tx, newRank)`.
-- No frame resolution: the top is the global top.
-
-**RankToBottom(issueID)** — `internal/store/ranking.go`: identical shape with `ORDER BY item_rank DESC`, errors `"rank-to-bottom: query last: %w"` and `"rank-to-bottom: update: %w"`, and `rank.After(lastRank)`.
+**RankToTop(issueID)** / **RankToBottom(issueID)** — `internal/store/ranking.go`: both are `rankToEdge(ctx, issueID, storage.RankTop|RankBottom)`:
+- `mustRankable` precheck, then `edgeFor(placement)` (`topEdge` / `bottomEdge`).
+- In `mutationValue(ctx, s, "rank to "+edge.name, …)`, so the frame and its edge are read under the same commit lock as the write:
+  - `frameOfTx` resolves the issue's own frame; the end is that frame's, not the workspace's.
+  - `frameEdgeHolderTx(ctx, tx, f, edge)` names the issue holding the frame's edge. If that is this issue, returns `storage.RankEnd{Frame: f, Moved: false}` with no write.
+  - Otherwise the new rank is `edge.rankBeyondTx(ctx, tx, f, []string{issueID}, …)`, which measures room beside the edge holder's rank; error → `fmt.Errorf("rank to %s: %w", edge.name, err)`.
+  - `writeRankTx(ctx, tx, issueID, newRank, now)` with `now` from the store's clock in RFC3339Nano, then `smoothRanksIfNeededTx(ctx, tx, newRank)`.
 
 **RankAbove(issueID, targetID)** — `internal/store/ranking.go`:
 - `resolveRankPair` first (all its errors propagate).

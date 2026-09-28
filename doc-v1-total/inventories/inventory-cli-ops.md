@@ -48,7 +48,7 @@ data — described as assets, not as documentation of behavior).
 
 | Command | Group | Wrapper | Access | Line |
 |---|---|---|---|---|
-| `init` | bootstrap | `wsCmd(runInit)`; description from `helptext/init.txt` | workspace | `register.go` |
+| `init` | bootstrap | `wsCmdAcquiring(initLeaf)`; description from `helptext/init.txt` | workspace | `register.go` |
 | `quickstart` | guidance | `wsCmd(quickstartLeaf)` | workspace | `register.go` |
 | `completion` | guidance | `runCompletion` | none | `register.go` |
 | `version` | guidance | `runVersion` | none | `register.go` |
@@ -59,8 +59,8 @@ data — described as assets, not as documentation of behavior).
 | `backup` | data | `familyCmd(backupFamily)` | per-row | `register.go` |
 | `snapshots` | data | `wsFamilyCmd(snapshotsFamily)` | workspace | `register.go` |
 | `lifeboat` | maintenance | `wsFamilyCmd(lifeboatFamily)` | workspace | `register.go` |
-| `downgrade` | maintenance | `appCmd(app.AccessWrite, runDowngrade)` | write | `register.go` |
-| `upgrade` | maintenance | `wsCmd(runUpgrade)` | workspace only (never opens the app store) | `register.go` |
+| `downgrade` | maintenance | `appCmd(app.AccessWrite, downgradeLeaf)` | write | `register.go` |
+| `upgrade` | maintenance | `wsCmd(upgradeLeaf)` | workspace only (never opens the app store) | `register.go` |
 
 Command groups: `bootstrap`/"Human Bootstrap", `operations`/"Agent Operations", `structure`, `data`/"Sync & Data", `maintenance`/"Setup & Maintenance", `retention`, `guidance` (`register.go`).
 
@@ -92,7 +92,7 @@ Read commands that additionally print the store-backed banner: `internal/cli/cli
 
 ## 1. `lit init`
 
-Handler `runInit` — `internal/cli/init.go`.
+Handler `initLeaf` — `internal/cli/init.go`.
 
 ### 1.1 Flags
 

@@ -511,7 +511,7 @@ Registered as a workspace-only command (no store access) at `internal/cli/regist
 - Summary: *"See the work lifecycle and the guidance active at each point (`workflows show <id>`
   resolved, `edit <id-or-point>` to customize, `dry-run` to explain a hypothetical)"*
 - GroupID `guidance`; declared subcommands for completion: `show`, `edit`, `dry-run`.
-- Run via `r.wsCmd(runWorkflows)` (`internal/cli/register.go`), i.e. it resolves a workspace from
+- Run via `r.wsCmdPipeline(withWDAcquire(workflowsDispatch))` (`internal/cli/register.go`), i.e. it resolves a workspace from
   the working directory but never opens the store (`internal/cli/register.go`,
   `internal/cli/cli.go`).
 
