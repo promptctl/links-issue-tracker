@@ -227,25 +227,22 @@ func rewriteHelpCommand(args []string) []string {
 
 func parseGlobalArgs(args []string) ([]string, error) {
 	// [LAW:single-enforcer] Legacy --output rejection lives in one global parser path.
-	index := 0
-	for index < len(args) {
-		arg := args[index]
-		switch arg {
-		case "--":
-			index++
-			goto done
-		case "--output":
+	// The root's own flags run up to the first token that is not flag-shaped.
+	for index, arg := range args {
+		switch {
+		case arg == "--output" || strings.HasPrefix(arg, "--output="):
 			return nil, unsupportedOutputFlagError()
-		default:
-			if strings.HasPrefix(arg, "--output=") {
-				return nil, unsupportedOutputFlagError()
-			}
-			goto done
+		case arg == "--":
+			// Consumed: every root flag is a boolean, so a `--` here guards no
+			// flag value, and cobra's routing stops at one — left in place it
+			// would strand the command name after it at the root, refused as
+			// unknown (`lit --help -- ls`).
+			return slices.Concat(args[:index], args[index+1:]), nil
+		case !strings.HasPrefix(arg, "-"):
+			return args, nil
 		}
 	}
-
-done:
-	return args[index:], nil
+	return args, nil
 }
 
 func unsupportedOutputFlagError() error {

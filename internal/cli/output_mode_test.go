@@ -26,6 +26,16 @@ func TestParseGlobalArgs(t *testing.T) {
 			args:     []string{"--", "ready"},
 			wantArgs: []string{"ready"},
 		},
+		{
+			name:     "-- after a root flag is consumed too",
+			args:     []string{"--help", "--", "ls"},
+			wantArgs: []string{"--help", "ls"},
+		},
+		{
+			name:     "-- after the command name is the command's",
+			args:     []string{"ls", "--", "--help"},
+			wantArgs: []string{"ls", "--", "--help"},
+		},
 	}
 
 	for _, tc := range tests {
@@ -46,9 +56,9 @@ func TestParseGlobalArgs(t *testing.T) {
 // parser still refuses outright. [LAW:no-silent-failure]
 func TestParseGlobalArgsRejectsOutputFlag(t *testing.T) {
 	t.Parallel()
-	for _, arg := range []string{"--output", "--output=json"} {
-		if _, err := parseGlobalArgs([]string{arg}); err == nil {
-			t.Fatalf("parseGlobalArgs(%q) succeeded; want UnsupportedError", arg)
+	for _, args := range [][]string{{"--output"}, {"--output=json"}, {"--help", "--output=json"}} {
+		if _, err := parseGlobalArgs(args); err == nil {
+			t.Fatalf("parseGlobalArgs(%q) succeeded; want UnsupportedError", args)
 		}
 	}
 }

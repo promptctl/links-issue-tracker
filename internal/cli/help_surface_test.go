@@ -423,8 +423,6 @@ func TestUnknownCommandRefusesAHelpFlagOnEitherSide(t *testing.T) {
 		{"-h", "nosuchcommand"},
 		{"--help=true", "nosuchcommand"},
 		{"nosuchcommand", "extra", "--help"},
-		// A leading `--` never reaches the root (parseGlobalArgs consumes it);
-		// one after a root flag ends the root's own parse.
 		{"--help", "--", "nosuchcommand"},
 		// Everything from the command name on is that command's, so a flag
 		// after an unknown name is never read as the root's.
@@ -479,13 +477,13 @@ func TestBareLitOutsideARepositoryPrintsTheRootHelp(t *testing.T) {
 func TestHelpFlagBeforeACommandAnswersForThatCommand(t *testing.T) {
 	chdir(t, t.TempDir())
 
-	for _, helpFlag := range []string{"--help", "-h"} {
+	for _, args := range [][]string{{"--help", "ls"}, {"-h", "ls"}, {"--help", "--", "ls"}} {
 		var stdout, stderr bytes.Buffer
-		if runErr := Run(context.Background(), &stdout, &stderr, []string{helpFlag, "ls"}); runErr != nil {
-			t.Fatalf("Run([%s ls]) error = %v, want the help for ls", helpFlag, runErr)
+		if runErr := Run(context.Background(), &stdout, &stderr, args); runErr != nil {
+			t.Fatalf("Run(%q) error = %v, want the help for ls", args, runErr)
 		}
 		if got := stdout.String(); !strings.HasPrefix(got, "Usage of ls:") {
-			t.Errorf("Run([%s ls]) stdout = %q, want the help for ls", helpFlag, got)
+			t.Errorf("Run(%q) stdout = %q, want the help for ls", args, got)
 		}
 	}
 }
