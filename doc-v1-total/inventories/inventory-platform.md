@@ -1165,22 +1165,20 @@ bundled SDK omits it (`build/zig-macos-stubs/tzfile.h`).
 
 ### 14.1 `.claude-plugin/marketplace.json`
 
-A local marketplace named `links-marketplace`, description
-"Local marketplace for links plugin development", owner `links`, listing one plugin: `links`,
-source `./claude-plugin`, description "Issue tracking workflow integration for links",
-version `0.1.0` (`.claude-plugin/marketplace.json`).
+A marketplace named `lit`, description
+"Plugin marketplace for lit, the agent-native issue tracker that lives in your git repo.", owner `lit`,
+listing one plugin: `lit`, source `./claude-plugin`, description "The /next skill for repos tracked with lit",
+version `0.5.0` (`.claude-plugin/marketplace.json`).
 
 ### 14.2 `claude-plugin/.claude-plugin/plugin.json`
 
-The **entire** plugin is one manifest — `find claude-plugin -type f` yields only this file. It
-declares name `links`, description "Issue tracker integration for links repositories.",
-version `0.1.0`, and two hooks, each with an empty matcher and a single command hook running
-`lit quickstart --refresh`:
+`find claude-plugin -type f` yields two files: this manifest and one skill,
+`claude-plugin/skills/next/SKILL.md`. The manifest declares name `lit`, description
+"The /next skill for repos tracked with lit, the agent-native issue tracker.", version `0.5.0`,
+and no hooks. The skill is named `next`, description "Pull the next ticket"
+(`claude-plugin/skills/next/SKILL.md`).
 
-- `SessionStart` (`claude-plugin/.claude-plugin/plugin.json`)
-- `PreCompact` (`claude-plugin/.claude-plugin/plugin.json`)
-
-There are no commands, agents, skills, or MCP servers in the shipped plugin.
+There are no commands, agents, hooks, or MCP servers in the shipped plugin.
 
 ### 14.3 `.claude/settings.json` (this repo's dogfooding wiring)
 
@@ -1239,10 +1237,8 @@ so a missing page or an out-of-tree link fails the merge gate
   "Dependencies & Structure", `data` "Sync & Data", `maintenance` "Setup & Maintenance",
   `retention` "Issue Retention", `guidance` "Guidance & Tooling".
 - A command's long-form description is not a registry field. `CommandSpec` carries no
-  `Long`, and the two standard blurbs that once filled it (`humanBootstrapHelp`,
-  `agentCommandHelp`) are deleted: a command's help page is rendered by its own leaf,
-  from text embedded under `internal/cli/helptext/` and declared with
-  `newCobraFlagSet(...).Detail(helpText(...))`. `init`'s blurb now lives in
-  `internal/cli/helptext/init.txt`.
+  `Long`: a command's help page is rendered by its own leaf, from text embedded under
+  `internal/cli/helptext/` and declared with `newCobraFlagSet(...).Detail(helpText(...))`.
+  `init`'s blurb lives in `internal/cli/helptext/init.txt`.
 - The registry is applied by `applyRegistry(root, commandGroups, commandSpecs(ctx, stdout, stderr))`
   (`internal/cli/cli.go`).

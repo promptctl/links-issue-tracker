@@ -144,7 +144,7 @@ Timing constants (`sync_bg.go`): the parent's post-spawn tail is 45s (the compac
 
 ### The detached worker
 
-`runBackgroundMirror` (`sync_bg.go`):
+`backgroundMirrorLeaf` (`sync_bg.go`):
 
 1. Holds the mirror beacon from entry until process death; a hold failure completes through the push-outcome seam.
 2. Waits for the parent PID to exit (getppid polling); timeout → records "spawning command (pid N) still running after 75s; skipping mirror to avoid racing its engine".

@@ -336,6 +336,38 @@ that no gate here answers, and whether a chapter's claim about a type's shape
 or a command's exit code still holds is a third that no gate here answers.
 A green run means the quoted messages still exist, and nothing more.
 
+## Documented names
+
+A chapter that names a Go function sends a reader to find it, and the
+specification cites files, never lines, so the name is the only anchor the
+reader has. A name that exists nowhere reads as a rename to chase, and when the
+function never existed there is nothing to find.
+[`internal/docnames`](internal/docnames) checks every Go-shaped code span in
+`doc-v1-total/` against the identifier tokens of the source this repository
+carries, tests and tools included; `go test ./internal/docnames/` runs it as
+part of `go test ./...`. A name surviving only in a comment or a string does
+not count as present.
+
+A span is judged when its shape says Go: dot-joined identifiers with a
+mixed-case segment, optionally followed by a call's arguments, which are not
+judged. Lowercase and all-caps words are left alone, because in these chapters
+they are columns, statuses, commands, SQL and environment variables. A failure
+names the chapter line; the fix is to name what the code does now, not the
+nearest-looking identifier.
+
+Some names are rightly not in the tree: standard-library and third-party
+symbols, agent-harness names, units, format patterns, file names. List those by
+name in
+[`doc-v1-total/names-outside-the-tree.txt`](doc-v1-total/names-outside-the-tree.txt),
+one per line with the reason. The gate also reports an entry no chapter writes
+any more, or one the tree now has, so the list cannot outlive what it excuses.
+
+A green run means every named identifier exists somewhere, tests included. It
+does not mean the name is the production code a sentence describes: the
+`run*` adapters in `internal/cli/leaf_adapters_test.go` keep old handler names
+alive for tests, and a chapter naming one passes. Nor does it mean the sentence
+describes the identifier correctly.
+
 ## Issue tracking — this repo uses `lit`
 
 Work is tracked with `lit`, not GitHub Issues. After cloning and building, run:

@@ -440,19 +440,11 @@ Defaults, restated as a table for every column the create path touches:
 | `archived_at`/`deleted_at` | `retentionColumns` of a Live issue → both `NULL` |
 | `resolution`/`redirect_target` | not written |
 
-Evidence: id shape `^test-renderer-[0-9a-z]{3,8}$` (`store_test.go`); prefix `"Renderer Platform Team"` normalizes/clamps to `renderer-pla-` (`store_test.go`); child ids `parent.ID+".1"`, `".2"` (`store_test.go`); id collisions advance a nonce so a second identical input yields a different id (`store_test.go`); labels come back canonicalized and sorted (`{"Renderer","gpu"}` → `["gpu","renderer"]`, `store_test.go`); prompt round-trips and is searchable (`store_test.go`); the schema CHECK rejects a non-NULL status on an epic and a NULL status on a leaf (`store_test.go`).
+Evidence: id shape `^test-renderer-[0-9a-z]{3,8}$` (`store_test.go`); prefix `"Renderer Platform Team"` normalizes/clamps to `renderer-pla-` (`store_test.go`); child ids hang exactly one segment under `parent.ID+"."` and two siblings differ (`store_test.go`); id collisions advance a nonce so a second identical input yields a different id (`store_test.go`); labels come back canonicalized and sorted (`{"Renderer","gpu"}` → `["gpu","renderer"]`, `store_test.go`); prompt round-trips and is searchable (`store_test.go`); the schema CHECK rejects a non-NULL status on an epic and a NULL status on a leaf (`store_test.go`).
 
 #### 4.2 Rank placement
 
 `nextRankForPlacement(ctx, tx, p storage.RankPlacement, f storage.Frame) (string, error)` (`store.go`): `edgeFor(p)` resolves the end — `storage.RankTop` → `topEdge`; `storage.RankBottom` → `bottomEdge`; anything else → `fmt.Errorf("unknown rank placement: %d", p)` (`internal/store/ranking.go`) — then `rankBetweenTx` returns a key between the bounds `edge.filingBoundsTx(ctx, tx, f)` reads (`internal/store/ranking.go`). `filingBoundsTx` reads that end's filing rank — frame `f`'s leading rank for the top (`frameEdgeRankTx`), the whole workspace's last rank for the bottom (`workspaceEdgeRankTx`) — and hands it to `e.roomBesideTx(ctx, tx, anchorRank)`, which pairs it with the nearest rank the **whole workspace** holds on its far side; a create names no moving ids, so the variadic `moving` is empty; the statement carries no membership clause either way, because the exclusion is applied in Go by `nearestRankOutside` and an empty exclusion makes its read `LIMIT 1` over the ordered rows. A create at the top therefore takes the midpoint between the frame's leading rank and the nearest rank below it anywhere in the workspace; with no rank below it that read comes back `""` and the lower bound is open. An **empty** filing rank — a frame with nothing ranked in it — never reaches that read: `roomBesideTx` refuses an empty anchor outright with `fmt.Errorf("no room beside the %s of this frame: the key it was read from is empty", e.name)`, and `filingBoundsTx` routes the case to `firstInFrameBoundsTx(ctx, tx, f)` instead. For a frame other than `storage.TopLevel` that reads the rank of the issue `f` names — `SELECT item_rank FROM issues WHERE id = ? AND deleted_at IS NULL AND item_rank != ''`, error → `fmt.Errorf("query the rank of frame %q: %w", f, err)` — and a non-empty result returns `bottomEdge.roomBesideTx(ctx, tx, containerRank, moving...)`, so the frame's first issue lands just past its container's own key; a create reaches that call through the `filingBoundsTx` arm above, which names no moving ids, so `moving` is empty on this path. Everything else — the top level, which names no containing issue, and a container carrying no rank of its own — falls through to one shared arm at the end: `workspaceEdgeRankTx(ctx, tx, storage.TopLevel, bottomEdge)`, then `("", "")` when that read is empty, otherwise `bottomEdge.roomBesideTx(ctx, tx, lastRank)`. That workspace read does not exclude `moving`, so its emptiness reports the table rather than this write: it comes back empty only when nothing at all is ranked, the one case where open bounds hold and `rank.Initial()` ("V") is a key no issue holds.
-
-`nextRankAtBottom` (`store.go`):
-```sql
-SELECT item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' ORDER BY item_rank DESC LIMIT 1
-```
-Non-`ErrNoRows` error → `fmt.Errorf("query last rank: %w", err)`. Invalid/empty result → `rank.Initial()`; else `rank.After(lastRank)`.
-
-`nextRankAtTop` (`store.go`): same query with `ORDER BY item_rank ASC`; error text `"query first rank: %w"`; empty → `rank.Initial()`; else `rank.Before(firstRank)`.
 
 The **zero value** of `storage.RankPlacement` behaves as bottom/append: consecutive default creates keep authoring order, and an explicit `RankTop` create sorts ahead of them (`store_test.go`).
 
@@ -542,7 +534,7 @@ Errors: `"batch load issues: %w"`, `"scan batch-loaded issue: %w"`, `"iterate ba
 1. `GetIssue(ctx, id)` (`store.go`).
 2. `listRelations(ctx, id)` (`store.go`).
 3. `listComments(ctx, id)` (`store.go`).
-4. `listEvents(ctx, id)` (`store.go`).
+4. `ListEvents(ctx, id)` (`store.go`).
 5. `collectRelatedIssueIDs(id, relations)` (`store.go`; defined `store.go`) — distinct counterparties of both `SrcID` and `DstID`, excluding `""` and the focal id, in first-seen order.
 6. If `issue.RedirectTargetValue()` is non-nil and not already in the list, it is appended (`store.go`).
 7. `getIssuesByIDs(ctx, relatedIDs)` — one batch hydrate (`store.go`).
@@ -580,18 +572,17 @@ Clauses are joined with `" AND "` (`store.go`).
 
 **Status and resolution are NOT filtered in SQL.** `parseStatusFilter(filter.Statuses)` (`store.go`, defined `store.go`) only maps each raw value through `model.DefaultOpen(string(raw))` and never errors; the actual filtering happens post-hydration.
 
-Ordering: `buildIssueOrderClause(filter.SortBy)` (`store.go`, defined `store.go`):
-- no specs → `"i.item_rank ASC, i.id ASC"`;
-- allowed sort fields (case-insensitive, trimmed) and their columns: `id→i.id`, `title→i.title`, `status→i.status`, `priority→i.priority`, `rank→i.item_rank`, `type→i.issue_type`, `topic→i.topic`, `assignee→i.assignee`, `created_at→i.created_at`, `updated_at→i.updated_at`;
-- unknown field → `fmt.Errorf("unsupported sort field %q", spec.Field)`;
-- direction `DESC` when `spec.Desc`, else `ASC`;
-- `"i.id ASC"` is always appended as the final tiebreaker.
+Ordering is not SQL. `storage.IssueOrdering(filter.SortBy, issueSortKeys)` (`internal/storage/ordering.go`, called from `store.go`) is parsed before the query, so an unsupported sort field (`fmt.Errorf("unsupported sort field %q", spec.Field)`) costs no query; it yields a comparator over hydrated issues:
+- no specs → `rank`;
+- sort keys (`issueSortKeys`, `store.go`): `id`, `title`, `status` (compares the derived `State()`), `priority`, `rank`, `type`, `topic`, `assignee`, `created_at`, `updated_at`;
+- `Desc` negates a key's comparator;
+- ascending `id` is always the final tiebreaker.
 
 Execution and post-processing:
-- query failure → `fmt.Errorf("list issues: %w (query=%s)", err, query)` — the full SQL is included (`store.go`);
+- each id batch's query runs through `scanListRows`; failure → `fmt.Errorf("list issues: %w (query=%s)", err, query)` — the full SQL is included (`store.go`);
 - rows scanned via `scanIssue`, `rows.Err()` checked (`store.go`);
 - `hydrateIssues` (`store.go`);
-- return `capLimit(filterByResolution(filterByState(hydrated, allowedStates), filter.Resolutions), filter.Limit)` (`store.go`).
+- `slices.SortStableFunc(hydrated, ordering)`, then return `capLimit(filterByResolution(filterByState(hydrated, allowedStates), filter.Resolutions), filter.Limit)` (`store.go`).
 
 `filterByState` (`store.go`): empty allow-list passes everything; otherwise keeps issues whose **derived** `issue.State()` is in the set.
 `filterByResolution` (`store.go`): empty allow-list passes everything; otherwise drops every issue whose `ResolutionValue()` is nil and keeps only matching resolutions.
@@ -633,7 +624,7 @@ error → `"list all labels: %w"`.
 
 #### 5.10 Event reads
 
-`listEvents(ctx, issueID)` (`store.go`): `queryEvents(ctx, "e.issue_id = ?", issueID)`; error → `fmt.Errorf("list issue events: %w", err)`.
+`ListEvents(ctx, issueID)` (`store.go`): `queryEvents(ctx, "e.issue_id = ?", issueID)`; error → `fmt.Errorf("list issue events: %w", err)`.
 
 `ListAllEvents(ctx)` (`store.go`): `queryEvents(ctx, "")`; error → `fmt.Errorf("list all issue events: %w", err)`. Doc explains no recency cutoff is applied because claim derivation needs arbitrarily old establishing events (`store.go`).
 
@@ -1469,25 +1460,31 @@ Then `guard.ensure` (error → `"translate issue_history: %w"`),
 `BeginTx` (error → `"translate issue_history: begin tx: %w"`), with
 a deferred `tx.Rollback()`.
 
-Inside the tx it SELECTs `h.id, h.issue_id, h.action, h.reason, h.created_by,
-h.created_at, h.from_status, h.to_status` under the same
-EXISTS/NOT-EXISTS filter, buffers all rows into a slice
-, and if the buffer is empty returns `(false, nil)`.
+Inside the tx it SELECTs the `legacyIssueHistoryColumns` — the columns
+`issueHistoryMapping` references (`internal/store/shapemap_known.go`), sorted:
+`action`, `created_at`, `created_by`, `from_status`, `id`, `issue_id`,
+`reason`, `to_status` — under the same EXISTS/NOT-EXISTS filter, buffers all
+rows into a slice, and if the buffer is empty returns `(false, nil)`.
 
-Prepared statements:
-- `INSERT INTO issue_events (id, issue_id, action, reason, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)`
-- `INSERT INTO issue_event_changes (event_id, field, from_value, to_value) VALUES (?, 'status', ?, ?)`
+Prepared statements, one per emitter of `issueHistoryMapping` in its declared
+order, rendered by `legacyInsertStatement` with the emitter's fields sorted:
+- `INSERT INTO issue_events (action, actor, created_at, id, issue_id, reason) VALUES (?, ?, ?, ?, ?, ?)`
+- `INSERT INTO issue_event_changes (event_id, field, from_value, to_value) VALUES (?, ?, ?, ?)`, with `field` bound to the constant `"status"`
 
-Per row: insert the event with canonicalized `action`, `reason`,
-`actor`; then normalize both statuses and, if `isLegacyStatusTransition`, insert
-one `issue_event_changes` row with `field = 'status'`.
+Per row: each field is computed through `legacySQLValue` — `action`, `reason`,
+and `actor` (read from `created_by`) canonicalized, `id`, `issue_id` and
+`created_at` copied verbatim, both statuses normalized by
+`canonicalLegacyStatus`. The event row is always inserted; the
+`issue_event_changes` row is inserted only when
+`emits(WhenChanged{FieldA: "from", FieldB: "to"}, rec)` holds over the
+normalized statuses (`internal/store/shapemap.go`).
 
 Canonicalization functions:
 - `canonicalEventAction` — NULL → `nil`; TrimSpace; empty → `nil`; else trimmed (`internal/store/schema_reconcile.go`).
 - `canonicalEventReason` — NULL → `""`; else TrimSpace.
 - `canonicalEventActor` — NULL → `"unknown"`; TrimSpace; empty → `"unknown"`; else trimmed.
 - `canonicalLegacyStatus` — NULL stays NULL; `open`/`in_progress`/`closed` pass through; `in-progress`→`in_progress`; `todo`→`open`; `done`→`closed`; anything else → `open`.
-- `isLegacyStatusTransition` — both NULL → false; both valid and equal → false; otherwise true.
+- `cellsDiffer`, the status-transition predicate `emits` evaluates for `WhenChanged` (`internal/store/shapemap.go`) — both NULL → false; exactly one NULL → true; otherwise true when the two strings differ.
 - `nullableSQLString` — invalid → `nil`, valid → the string.
 
 Commit error → `"translate issue_history: commit tx: %w"`;
@@ -1745,7 +1742,7 @@ goose_db_version` and commits. `assertReachedBaseline` asserts
 - **`TestReconcileBackfillsTopicDefault`**: a row inserted with `topic=''` reads back `topic == "misc"`.
 - **`TestReconcileResetsLegacyPriorities`**: with the legacy `CHECK (priority >= 0 AND priority <= 4)` installed and a `priority=3` row, after reconcile the row's priority is `0`.
 - **`TestReconcileDropsLegacyIssueHistory`**: a partial-shape `issue_history (id VARCHAR(191) PRIMARY KEY, issue_id VARCHAR(191) NOT NULL)` is dropped; `tableExists("issue_history")` is false afterwards; the seeded issue survives.
-- **`TestIsLegacyStatusTransition`**: five cases — null→null false; open→open false; null→open true; open→null true; open→closed true.
+- **`TestStatusTransitionPredicate`**: `emits(WhenChanged{FieldA: "from", FieldB: "to"}, ...)` over five cases — null→null false; open→open false; null→open true; open→null true; open→closed true.
 - **`TestCanonicalEventCanonicalization`**: action NULL→nil, `"   "`→nil, `"  start  "`→`"start"`; reason NULL→`""`, `"  began work  "`→`"began work"`; actor NULL→`"unknown"`, `"   "`→`"unknown"`, `"  alice  "`→`"alice"`.
 - **`TestCanonicalLegacyStatus`**: null→null; `open`/`in_progress`/`closed` pass through; `in-progress`→`in_progress`; `todo`→`open`; `done`→`closed`; `weird`→`open`.
 - **`TestReconcileTranslatesLegacyIssueHistoryToEvents`**: eight canonical-shape `issue_history` rows produce exactly eight `issue_events` rows with the mapped `action`/`reason`/`actor`/`issue_id`; `created_by`→`actor`; empty-string and NULL actions both land as SQL NULL; whitespace is trimmed. Exactly three `issue_event_changes` rows are produced — `hist-start {status, open, in_progress}`, `hist-close {status, in_progress, closed}`, `hist-legacy-transition {status, open, closed}` (raw `todo`→`done` normalized) — and the five non-transition rows produce none.
@@ -2495,13 +2492,13 @@ Scope: `internal/store/issue_ids.go`, `internal/store/labels.go`, `internal/stor
 
 ### 2.2 ID grammar
 
-Top-level ID is built by `fmt.Sprintf("%s-%s-%s", prefix, topic, shortHash)` — `internal/issueid/generate.go`. So: `<prefix>-<topic>-<hash>` where prefix and topic are normalized slugs and hash is `length` base-36 lowercase characters (`Base36Alphabet`, `internal/issueid/generate.go`, used).
+Every ID is its namespace followed by the hash: `GenerateHashID` returns `string(ns) + encodeBase36(...)` — `internal/issueid/generate.go`. A top-level ID's namespace is `TopLevelNamespace(prefix, topic)`, which renders `prefix + "-" + topic + "-"`. So: `<prefix>-<topic>-<hash>` where prefix and topic are normalized slugs and hash is `length` base-36 lowercase characters (`Base36Alphabet`, `internal/issueid/generate.go`).
 
-Child ID is `fmt.Sprintf("%s.%d", parentID, maxChildNumber+1)` — `internal/store/issue_ids.go`. Children are therefore dotted decimal suffixes appended to the full parent ID, and grandchildren nest (`parent.1.2`) because the child of a child re-applies the same rule at `internal/store/issue_ids.go`.
+A child ID's namespace is `ChildNamespace(parentID)`, which renders `parentID + "."` — `internal/issueid/generate.go`. So: `<parentID>.<hash>`, a base-36 hash appended to the full parent ID after a dot, and grandchildren nest (`<parentID>.<hash>.<hash>`) because a child's own ID is the namespace of its children. `idSpace` picks the namespace — `internal/store/issue_ids.go`.
 
 "Top-level" is defined in SQL as an id with no dot: `SELECT COUNT(*) FROM issues WHERE id NOT LIKE ?` with argument `"%.%"` — `internal/store/issue_ids.go`.
 
-The test locking the shape: `GenerateHashID("proj","storage"...)` must start with `"proj-storage-"` and the remainder must have exactly `length` characters, checked for lengths `MinHashLength`, `5`, `MaxHashLength` — `internal/issueid/generate_test.go`.
+The test locking the shape: `TestGenerateHashID` requires an ID minted under `TopLevelNamespace("proj", "storage")` to start with `"proj-storage-"` and one minted under `ChildNamespace("proj-storage-a7k9")` to start with `"proj-storage-a7k9."`, and the remainder to have exactly `length` characters, checked for lengths `MinHashLength`, `5`, `MaxHashLength` (`assertNamespacedShape`) — `internal/issueid/generate_test.go`.
 
 ### 2.3 Slug normalization (prefix and topic)
 
@@ -2526,19 +2523,19 @@ Callers at creation: topic normalized before the transaction (`internal/store/st
 
 ### 2.4 Hash minting
 
-`GenerateHashID(prefix, topic, title, description, creator, createdAt, length, nonce)` — `internal/issueid/generate.go`:
-- Content string: `fmt.Sprintf("%s|%s|%s|%s|%d|%d", topic, title, description, creator, createdAt.UnixNano(), nonce)`. Note the prefix is NOT part of the hashed content — only of the rendered ID.
+`GenerateHashID(ns Namespace, c Content, length int, nonce int)` — `internal/issueid/generate.go`:
+- Content string: `fmt.Sprintf("%s|%s|%s|%s|%d|%d", c.Topic, c.Title, c.Description, c.Creator, c.CreatedAt.UnixNano(), nonce)`. Note the namespace (and so the prefix or parent ID) is NOT part of the hashed content — only of the rendered ID.
 - `sha256.Sum256` of that content.
-- Takes the first `hashBytesForLength(length)` bytes and base-36 encodes to exactly `length` chars.
+- Takes the first `hashBytesForLength(length)` bytes, base-36 encodes them to exactly `length` chars, and appends that to `string(ns)`.
 
-`hashBytesForLength` — `internal/issueid/generate.go`: `3→2`, `4→3`, `5→4`, `6→4`, `7→5`, `8→5`, default `→3`. Test pins these plus `99→3` — `internal/issueid/generate_test.go`.
+`hashBytesForLength` — `internal/issueid/generate.go`: the byte length of `36^length - 1` (the fewest bytes addressing every `length`-character base-36 value), capped at `sha256.Size` (32): `3→2`, `4→3`, `5→4`, `6→4`, `7→5`, `8→6`. `TestHashBytesForLength` pins that minimality for every length in `[MinHashLength, MaxHashLength]`, plus `MaxHashLength→6` and `99→32` — `internal/issueid/generate_test.go`.
 
 `encodeBase36(data, length)` — `internal/issueid/generate.go`:
 - Big-int division by 36, digits from `Base36Alphabet`, most-significant first.
 - Left-pads with `"0"` when shorter than `length`; tests: all-zero bytes → `"000000"` at length 6, `[]byte{1}` → `"000001"` — `internal/issueid/generate_test.go`.
 - Truncates by taking the **tail** when longer: `value = value[len(value)-length:]`; test asserts the clamped value equals the tail of the full encoding — `internal/issueid/generate_test.go`.
 
-Determinism: same inputs + same nonce → same ID; different nonce → different ID — `internal/issueid/generate_test.go`.
+Determinism: same inputs + same nonce → same ID; different nonce → different ID; a change to any one `Content` field → different ID — `internal/issueid/generate_test.go`.
 
 ### 2.5 Adaptive length
 
@@ -2546,27 +2543,23 @@ Determinism: same inputs + same nonce → same ID; different nonce → different
 
 `CollisionProbability(numIssues, idLength)` — `internal/issueid/generate.go`: `1 - exp(-(n*n) / (2 * 36^idLength))` (birthday bound).
 
-`getAdaptiveIssueIDLength` — `internal/store/issue_ids.go`: counts top-level issues, returns `issueid.ComputeAdaptiveLength(count)`; on count error returns `(6, err)`.
+`idSpace` — `internal/store/issue_ids.go`: returns the namespace a new issue mints into and that namespace's population. `strings.TrimSpace(parentID) == ""` → `issueid.TopLevelNamespace(prefix, topic)` with `countTopLevelIssues`; otherwise `issueid.ChildNamespace(parentID)` with `countChildren`. A count error is returned as-is; no default length stands in for it.
 
-`countTopLevelIssues` — `internal/store/issue_ids.go`: `SELECT COUNT(*) FROM issues WHERE id NOT LIKE ?` with `"%.%"`. Counts across all prefixes and includes soft-deleted/archived rows (no `deleted_at` filter).
+`countTopLevelIssues` — `internal/store/issue_ids.go`: `SELECT COUNT(*) FROM issues WHERE id NOT LIKE ?` with `"%.%"`. Counts across all prefixes and includes soft-deleted/archived rows (no `deleted_at` filter). Error → `fmt.Errorf("count top-level issues: %w", err)`.
+
+`countChildren` — `internal/store/issue_ids.go`: `SELECT COUNT(*) FROM relations WHERE dst_id = ? AND type = 'parent-child'` — the parent's direct children, read from the relations table; error → `fmt.Errorf("count children of %s: %w", parentID, err)`.
+
+`TestComputeAdaptiveLength` pins `ComputeAdaptiveLength(163) == MinHashLength` and `ComputeAdaptiveLength(164) > MinHashLength`, so a child mints at `MinHashLength` until its parent holds more than 163 direct children — `internal/issueid/generate_test.go`.
 
 ### 2.6 Minting algorithm and collision handling
 
-`newIssueID` — `internal/store/issue_ids.go`: if `strings.TrimSpace(parentID) != ""` → child path, else top-level path.
+`newIssueID` — `internal/store/issue_ids.go`: builds an `issueid.Content` from topic, title, description, creator and creation instant; resolves the namespace and population through `idSpace`; returns `issueid.Mint(namespace, content, population, taken)`, where `taken` runs `SELECT COUNT(*) FROM issues WHERE id = ?` and reports the candidate occupied when the count is above zero. Top-level and child IDs take this one path.
 
-`newTopLevelIssueID` — `internal/store/issue_ids.go`:
-1. `baseLength, err := getAdaptiveIssueIDLength(...)`; on error `baseLength = 6`.
-2. Clamp: `if baseLength > issueid.MaxHashLength { baseLength = issueid.MaxHashLength }`.
-3. For `length` from `baseLength` to `MaxHashLength` (8) inclusive, for `nonce` from `0` to `NonceAttempts-1` (0..9): generate candidate and run `SELECT COUNT(*) FROM issues WHERE id = ?`. Query error → `fmt.Errorf("check issue id collision: %w", err)`.
-4. First candidate with `count == 0` is returned. The existence check is over ALL issues including soft-deleted ones.
-5. Exhaustion error: `fmt.Errorf("generate unique issue id: exhausted lengths %d-%d", baseLength, issueid.MaxHashLength)`.
-
-`newChildIssueID` — `internal/store/issue_ids.go`:
-1. `SELECT id FROM issues WHERE id LIKE ?` with `parentID + ".%"`; error → `fmt.Errorf("query child ids: %w", err)`.
-2. For each row, `suffix := strings.TrimPrefix(candidate, parentID+".")`; skip if suffix is empty or contains a `.` (i.e., only direct children count).
-3. `strconv.Atoi(suffix)`; non-numeric suffixes are skipped silently.
-4. Track `maxChildNumber`; scan error → `fmt.Errorf("scan child id: %w", err)`; iteration error → `fmt.Errorf("iterate child ids: %w", err)`.
-5. Return `fmt.Sprintf("%s.%d", parentID, maxChildNumber+1)` — first child is `.1` since `maxChildNumber` starts at 0. Deleted children still occupy their number because the LIKE query has no `deleted_at` filter, so numbers are never reused while the row exists.
+`Mint` — `internal/issueid/generate.go`:
+1. `baseLength := min(ComputeAdaptiveLength(population), MaxHashLength)`.
+2. For `length` from `baseLength` to `MaxHashLength` (8) inclusive, for `nonce` from `0` to `NonceAttempts-1` (0..9): `GenerateHashID(ns, c, length, nonce)`, then `taken(candidate)`. Probe error → `fmt.Errorf("check issue id collision: %w", err)`.
+3. The first unoccupied candidate is returned. The existence check is over ALL issues including soft-deleted ones, so a soft-deleted issue's ID stays occupied while its row exists; a hard-deleted ID is free again, reachable only by a hash coincidence.
+4. Exhaustion error: `fmt.Errorf("generate unique issue id: exhausted lengths %d-%d", baseLength, MaxHashLength)`.
 
 ### 2.7 Parsing / validation of an existing ID
 
@@ -2802,7 +2795,7 @@ via `fmt.Sprintf` with placeholder lists from `repeatPlaceholder` (`internal/sto
 
 Children are read through `Store.ListIssues` with `filter.ParentIDs` set (§5.7); there is no separate children query.
 - `requireIssues(ctx, filter.ParentIDs)` runs before the parents are resolved — `internal/store/store.go`, defined. Empty ids → no batches and so no query at all. Otherwise one `SELECT id FROM issues WHERE id IN (?,…)` per batch of at most `idBatchSize` ids; query error → `fmt.Errorf("check issues exist: %w", err)`. The batches' answers are unioned into one found-set, which is the only thing the verdict reads — a membership test is the shape batching is trivially sound for. Walking the caller's own ids in the order given, the first one absent from that set → `storage.NotFoundError{Entity: "issue", ID: id}`, so a repeated id is still named once and the batching is invisible in the message. The query reads existence only, so a soft-deleted or archived parent passes.
-- Parent clause: there is none. `selectedIssueIDs` (`internal/store/store.go`) resolves the parents through `childIDsOfParents`, which runs `SELECT src_id FROM relations WHERE dst_id IN (?,…) AND type = ?` one batch of at most `idBatchSize` parent ids at a time, and folds the result into the id filter — intersecting it with `filter.IDs` when both are set. Only direct children match, and several parent ids union together. The child rows go through the listing's other clauses, so `archived_at IS NULL` and `deleted_at IS NULL` apply unless `IncludeArchived`/`IncludeDeleted` is set, and ordering is `buildIssueOrderClause` (rank ascending, then id, when no `SortBy`).
+- Parent clause: there is none. `selectedIssueIDs` (`internal/store/store.go`) resolves the parents through `childIDsOfParents`, which runs `SELECT src_id FROM relations WHERE dst_id IN (?,…) AND type = ?` one batch of at most `idBatchSize` parent ids at a time, and folds the result into the id filter — intersecting it with `filter.IDs` when both are set. Only direct children match, and several parent ids union together. The child rows go through the listing's other clauses, so `archived_at IS NULL` and `deleted_at IS NULL` apply unless `IncludeArchived`/`IncludeDeleted` is set, and ordering is the `storage.IssueOrdering` comparator over `issueSortKeys`, applied in Go after hydration (rank ascending, then id, when no `SortBy`).
 - `TestStoreListByParentDefaultsToRankOrder` — two children wired by `SetParent` list in rank order — `internal/store/store_test.go`.
 - `TestListByParentReturnsEpicChildrenWithDerivedLifecycle` — a sub-epic listed under its root carries container progress derived from its closed leaf (closed 1, total 1) — `internal/store/store_test.go`.
 
@@ -2861,14 +2854,6 @@ Children are read through `Store.ListIssues` with `filter.ParentIDs` set (§5.7)
 `nextRankForPlacement(ctx, tx, p, f)` — `internal/store/store.go`: `edgeFor(p)` → `topEdge` for `storage.RankTop`, `bottomEdge` for `storage.RankBottom`, `fmt.Errorf("unknown rank placement: %d", p)` otherwise; then `rankBetweenTx` between the bounds `edge.filingBoundsTx(ctx, tx, f)` reads — the end's filing rank paired with the nearest rank the whole workspace holds on its far side, or, when that filing rank is empty, the pair `firstInFrameBoundsTx` reads just past the rank of the issue the frame names, or past the workspace's last rank when the frame names no ranked issue — `("", "")` only when nothing in the workspace is ranked (`internal/store/ranking.go`).
 
 `storage.RankPlacement` is an `int` with `RankBottom = iota` (0, the zero value and default) and `RankTop` (1) — `internal/storage/issues.go`.
-
-`nextRankAtBottom` — `internal/store/store.go`:
-```sql
-SELECT item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' ORDER BY item_rank DESC LIMIT 1
-```
-non-`ErrNoRows` error → `fmt.Errorf("query last rank: %w", err)`; no row or empty → `rank.Initial()` ("V"); otherwise `rank.After(lastRank)`.
-
-`nextRankAtTop` — `internal/store/store.go`: same query with `ORDER BY item_rank ASC`; error → `fmt.Errorf("query first rank: %w", err)`; no row → `rank.Initial()`; else `rank.Before(firstRank)`.
 
 Called inside `CreateIssue`'s mutation right after ID minting — `internal/store/store.go`. The keyspace stays one flat space of rank strings across all issues; what is scoped to a frame is the existing key a new key lands beside — the filing frame's leading key at the top edge, the whole workspace's last key at the bottom. The key bounding that one on its far side is read from the whole workspace at both ends.
 
@@ -3011,9 +2996,9 @@ Tests: absolute top ordering — `internal/store/store_test.go`; duplicates reje
 
 An all-zero rank at the bottom end takes the same path with no special case: its `rank.Significant` is `""`, so `runFloor` is `""`; `item_rank < ''` matches nothing and leaves `lowerBound` the open end, which is correct, while `item_rank >= '' AND item_rank < window[0].rank` is exactly the all-zero ranks below the window, everything sorting below an all-zero rank being itself all-zero.
 
-`rankRowsTx(ctx, tx, query, args…)` — `internal/store/ranking.go`: runs a rank query and returns every row it matches, in the order the query asks for. Every caller bounds its own query — by range or by `LIMIT` — so the rows read stay proportional to the window rather than to the backlog.
+`rankRows(ctx, q, query, args…)` — `internal/store/ranking.go`, over a `rowQueryer` (`*sql.DB` or `*sql.Tx`): runs a rank query and returns every row it matches, in the order the query asks for. Every caller bounds its own query — by range or by `LIMIT` — so the rows read stay proportional to the window rather than to the backlog.
 
-`nearestRankTx(ctx, tx, query, args…)` — `internal/store/ranking.go`: returns the single rank a `LIMIT 1` query selects, mapping `sql.ErrNoRows` to `""`, the open end of the keyspace.
+`nearestRank(ctx, q, query, args…)` — `internal/store/ranking.go`, over a `rowQueryer`: returns the single rank a `LIMIT 1` query selects, mapping `sql.ErrNoRows` to `""`, the open end of the keyspace.
 
 [LAW:one-source-of-truth] `rank.Significant` is the one definition of room here, the same one `anchorRun` compares anchors by: ranks sharing a significant part leave nothing between them, so a bound sharing the window's would leave the window nowhere to go.
 
@@ -3122,11 +3107,11 @@ Slice: `internal/store/import_export.go`, `import_bulk.go`, `import_tree.go`, `e
 
 It performs five reads and assembles one value (`import_export.go`):
 
-1. `s.ListIssues(ctx, storage.ListIssuesFilter{Limit: 0, IncludeArchived: true, IncludeDeleted: true})` (`import_export.go`). Limit 0 disables the cap (`capLimit` returns the slice unchanged when `limit <= 0`, `internal/store/store.go`). `IncludeArchived`/`IncludeDeleted` true means neither `i.archived_at IS NULL` nor `i.deleted_at IS NULL` is added to the WHERE clause (`store.go`), so **archived and soft-deleted issues are exported**. No other filter is set, so the SQL has no WHERE clause at all. Ordering: with no `SortBy` specs, `buildIssueOrderClause` returns `"i.item_rank ASC, i.id ASC"` (`store.go`), so **issues are ordered by rank ascending, ties broken by id ascending**.
+1. `s.ListIssues(ctx, storage.ListIssuesFilter{Limit: 0, IncludeArchived: true, IncludeDeleted: true})` (`import_export.go`). Limit 0 disables the cap (`capLimit` returns the slice unchanged when `limit <= 0`, `internal/store/store.go`). `IncludeArchived`/`IncludeDeleted` true means neither `i.archived_at IS NULL` nor `i.deleted_at IS NULL` is added to the WHERE clause (`store.go`), so **archived and soft-deleted issues are exported**. No other filter is set, so the SQL has no WHERE clause at all. Ordering: the SQL carries no ORDER BY; `ListIssues` sorts the hydrated issues with `slices.SortStableFunc` and the comparator `storage.IssueOrdering(filter.SortBy, issueSortKeys)` returns, which with no `SortBy` specs compares the `rank` key and then the id (`store.go`; `internal/storage/ordering.go`), so **issues are ordered by rank ascending, ties broken by id ascending**.
 2. `s.listAllRelations(ctx)` (`import_export.go`) — `SELECT src_id, dst_id, type, created_at, created_by FROM relations ORDER BY created_at ASC` (`store.go`). Ordered by created_at ascending only (no tiebreak).
 3. `s.listAllComments(ctx)` (`import_export.go`) — `SELECT id, issue_id, body, created_at, created_by FROM comments ORDER BY created_at ASC` (`store.go`).
 4. `s.listAllLabels(ctx)` (`import_export.go`) — `SELECT issue_id, label, created_at, created_by FROM labels ORDER BY issue_id ASC, label ASC` (`store.go`).
-5. `s.ListAllEvents(ctx)` (`import_export.go`) — `queryEvents(ctx, "")`, i.e. `SELECT e.id, e.issue_id, e.action, e.reason, e.actor, e.created_at, e.stream_id, e.workspace_id, c.field, c.from_value, c.to_value FROM issue_events e LEFT JOIN issue_event_changes c ON c.event_id = e.id ORDER BY e.created_at ASC, e.id ASC, c.field ASC` (`store.go`). The per-change rows are collapsed back into `IssueEvent.Changes`, so **an event's changes are ordered by field name ascending** and events by (created_at, id).
+5. `s.ListAllEvents(ctx)` (`import_export.go`) — `queryEvents(ctx, "")`, i.e. `SELECT e.id, e.issue_id, e.action, e.reason, e.actor, e.created_at, e.stream_id, e.workspace_id, c.field, c.from_value, c.to_value FROM issue_events e LEFT JOIN issue_event_changes c ON c.event_id = e.id ORDER BY e.id ASC, c.field ASC` (`store.go`). The per-change rows are collapsed back into `IssueEvent.Changes`, so **an event's changes are ordered by field name ascending**; the collapsed events are then sorted by `storage.EventOrdering` — the `created_at` instant, then id (`internal/storage/ordering.go`).
 
 Any read error is returned with a zero `model.Export{}` (`import_export.go`).
 
@@ -3341,7 +3326,7 @@ Three write surfaces consume `Store.Export`:
 - written via `syncfile.WriteAtomic`.
 - returns `Snapshot{Path, Name, Created (mtime UTC), Size}` with tags `json:"path"`, `"name"`, `"created"`, `"size"`.
 - `List` reads that dir, skips directories and any entry not ending in `.json`; a missing dir returns `[]Snapshot{}` and no error.
-- `Prune(storageDir, keep)` errors on `keep <= 0` (test `internal/backup/backup_test.go`); `runBackupCreate` defaults `--keep` to `20` (`internal/cli/backup.go`), and `restoreFromExportPath` hardcodes `backup.Prune(dir, 20)` (`cli/backup.go`).
+- `Prune(storageDir, keep)` errors on `keep <= 0` (test `internal/backup/backup_test.go`); `backupCreateLeaf` defaults `--keep` to `20` (`internal/cli/backup.go`), and `restoreFromExportPath` hardcodes `backup.Prune(dir, 20)` (`cli/backup.go`).
 
 **(c) Sync file / last-sync base** — `internal/syncfile/syncfile.go`. `WriteAtomic(path, export)`:
 - `marshalExport` = `json.MarshalIndent(export, "", "  ")` **plus a trailing `'\n'`** (`syncfile.go`).
@@ -4145,7 +4130,7 @@ Signature: `Recover(ctx, canonicalDoltDir string, dump RawDump, mapper Mapper, m
 
 ### 3.2 Output format and destination
 
-The dump is a **JSON** document, not SQL and not TSV. The only producer path to a file/stdout is `lit lifeboat dump`, which writes the `RawDump` value to stdout via `writeJSON` (`internal/cli/lifeboat.go`), which uses `json.NewEncoder(w)` with `enc.SetIndent("", "  ")` — two-space indentation, one trailing newline from `Encode` (`internal/cli/cli.go`). There is **no header line, no footer line, and no SQL quoting/escaping layer** — escaping is entirely `encoding/json`'s. `runLifeboatDump` takes no flags and rejects extra args with `UsageError{Message: "usage: lit lifeboat dump"}` (`internal/cli/lifeboat.go`).
+The dump is a **JSON** document, not SQL and not TSV. The only producer path to a file/stdout is `lit lifeboat dump`, which writes the `RawDump` value to stdout via `writeJSON` (`internal/cli/lifeboat.go`), which uses `json.NewEncoder(w)` with `enc.SetIndent("", "  ")` — two-space indentation, one trailing newline from `Encode` (`internal/cli/cli.go`). There is **no header line, no footer line, and no SQL quoting/escaping layer** — escaping is entirely `encoding/json`'s. `lifeboatDumpLeaf` declares no flags of its own and zero positionals, with the usage line `usage: lit lifeboat dump` (`internal/cli/lifeboat.go`); a surplus argument is refused before the workspace is acquired with a `UsageError` rendered from `%s; got unexpected argument(s) %q` over that usage line (`refuseSurplusPositionals`, `internal/cli/register.go`).
 
 ### 3.3 `DumpRaw` — exact step order and every error (`rawdump.go`)
 
