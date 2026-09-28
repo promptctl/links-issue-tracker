@@ -48,8 +48,7 @@ func TestCommandErrorReason(t *testing.T) {
 		// remediation.
 		{"cli validation refusal", ValidationError{Message: "Do not set 'blocks' relationships between two issues in the same epic."}, "validation_refused"},
 		{"storage validation refusal", storage.ValidationError{Message: "priority out of range"}, "validation_refused"},
-		// Both takeover-gate arms, and one wrapped: as bare errors they fell to
-		// the default retry advice (links-cli-errors-iz41).
+		// Both takeover-gate arms, and one wrapped.
 		{"takeover without --take", takeoverUnconfirmedError{Message: "claimed here: … — this lane is claimed and active; pass --take to confirm the takeover"}, "takeover_unconfirmed"},
 		{"takeover declined", takeoverUnconfirmedError{Message: "takeover declined"}, "takeover_unconfirmed"},
 		{"takeover declined wrapped", fmt.Errorf("start: %w", takeoverUnconfirmedError{Message: "takeover declined"}), "takeover_unconfirmed"},

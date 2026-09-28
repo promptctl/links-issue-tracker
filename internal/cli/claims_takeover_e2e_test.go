@@ -63,11 +63,8 @@ func TestStartRefusesAndThenTakesOverAFreshForeignClaim(t *testing.T) {
 	if !strings.Contains(err.Error(), "claimed") {
 		t.Fatalf("refusal error = %v, want provenance naming the current holder", err)
 	}
-	// What the caller is told to do next is the rendered remediation, and it
-	// once contradicted the message: exit 1 under "Retry the command … run `lit
-	// doctor`", a retry refused identically and a diagnosis of a healthy
-	// workspace (links-cli-errors-iz41). The gate is a refusal, and the act that
-	// clears it is the flag.
+	// What the caller is told to do next is the rendered remediation. The gate
+	// is a refusal, and the act that clears it is the flag.
 	var stderr strings.Builder
 	if code := WriteCommandError(&stderr, err); code != ExitValidation {
 		t.Fatalf("refusal exit = %d, want %d (a refusal, not a fault):\n%s", code, ExitValidation, stderr.String())
