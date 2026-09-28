@@ -3599,8 +3599,9 @@ DependsOn   []string `json:"depends_on,omitempty"`
 ```
 
 The file is **one JSON array of these objects** (`ParseImportTreeSpecs`, `storage/specs.go`):
-- `json.NewDecoder` with `DisallowUnknownFields()` — any key not listed above is an error, wrapped as `"import: parse spec: %w"`.
-- After decoding, `dec.More()` → `errors.New("import: unexpected trailing data after spec array")`.
+- `json.NewDecoder` with `DisallowUnknownFields()` — any key not listed above is an error, wrapped as `"import: parse spec: %w"` around a `ValidationError` carrying the decoder's message. A top-level value that is not an array is instead reported by its JSON kind, with a pointer to `lit backup restore` for an export (`treeSpecRefusal`).
+- After decoding, `dec.More()` → `ValidationError{Message: "import: unexpected trailing data after spec array"}`.
+- Every parse refusal is a `storage.ValidationError`, so it exits 3 with the `validation_refused` remediation.
 
 Hand-writable example (pinned verbatim by `import_tree_test.go`):
 

@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -39,6 +40,30 @@ func TestParseImportTreeSpecsRejectsUnknownField(t *testing.T) {
 	_, err := ParseImportTreeSpecs(nested)
 	if err == nil || !strings.Contains(err.Error(), "children") {
 		t.Fatalf("ParseImportTreeSpecs(nested) error = %v, want error naming \"children\"", err)
+	}
+}
+
+// A file whose top-level value is not an array is refused by naming what it
+// is and where an export goes; a wrong-kind record inside a real array is a
+// different mistake and must not be told it handed in an export.
+func TestParseImportTreeSpecsNamesTheTopLevelShape(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		doc         string
+		wantRestore bool
+	}{
+		{doc: `{"version":2,"issues":[]}`, wantRestore: true},
+		{doc: `"a string"`, wantRestore: true},
+		{doc: `["a string"]`, wantRestore: false},
+	} {
+		_, err := ParseImportTreeSpecs([]byte(tc.doc))
+		var refusal ValidationError
+		if !errors.As(err, &refusal) {
+			t.Fatalf("ParseImportTreeSpecs(%s) error = %v, want a ValidationError", tc.doc, err)
+		}
+		if got := strings.Contains(err.Error(), "lit backup restore"); got != tc.wantRestore {
+			t.Fatalf("ParseImportTreeSpecs(%s) error = %q, names backup restore = %v, want %v", tc.doc, err, got, tc.wantRestore)
+		}
 	}
 }
 
