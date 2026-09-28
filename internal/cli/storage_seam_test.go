@@ -136,7 +136,8 @@ var doltWorkspaceMachinery = map[string][]string{
 	// fetches on a clone the same way the mirror pushes from one: it carries
 	// the clone's fetch back onto the live store by opening the chunk store
 	// with no engine, so there is no handle to ask through the contract.
-	// ErrRemoteCacheNotLanded is its one answer the receive tells apart — the
+	// LandedFetch is its answer, which the receive's trace carries, and
+	// ErrRemoteCacheNotLanded the one failure the receive tells apart — the
 	// fetch landed and only the git mirror's copy did not.
 	//
 	// ReadReceivedRefs and WriteReceivedRefs are the receive's record of what
@@ -151,7 +152,7 @@ var doltWorkspaceMachinery = map[string][]string{
 		"MirrorHoldBudget", "MirrorPushDeadline", "MirrorPushCancelLagObserved",
 		"RecordPushedHead", "PushedHeadRecord", "ErrMirrorHoldCut", "ErrReceivedRefsNotRecorded",
 		"InlineReceiveDeadline", "ReadReceivedRefs", "WriteReceivedRefs",
-		"LandFetchedHead", "ErrRemoteCacheNotLanded",
+		"LandFetchedHead", "LandedFetch", "ErrRemoteCacheNotLanded",
 	},
 	// Typed failures the CLI matches to choose an exit code and a message.
 	// [LAW:parse-dont-validate] — matched as types, never by message text.
