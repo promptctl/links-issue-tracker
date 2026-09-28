@@ -35,8 +35,8 @@ into* one of those, the call and its observable effect are recorded here.
 
 - `Use: "lit"`, `Long: "Agent-native issue tracker"`, `Args: cobra.ArbitraryArgs`,
   `DisableFlagParsing: true` (`cli.go`). The root's RunE parses its own argv
-  against its flag set (only `-h/--help`, declared up front by
-  `InitDefaultHelpFlag`) with interspersing off, so flags count as the root's
+  against its flag set (only `-h/--help`, which the root declares itself so it
+  exists before cobra routes) with interspersing off, so flags count as the root's
   only up to the first positional (`cli.go`).
 - A positional reaching the root → `UnknownCommandError{Command: <first positional>}`
   (`cli.go`), whether or not a help flag stands before or after it:

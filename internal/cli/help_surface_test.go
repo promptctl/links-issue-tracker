@@ -376,10 +376,10 @@ func TestHelpRefusesATopicThatNamesNoCommand(t *testing.T) {
 	}
 }
 
-// `lit help help` asks about cobra's own built-in command. Cobra registers it
-// lazily inside ExecuteC, so anything that inspects the registered set before
-// then does not see it, and would refuse `lit help help` as unknown while its
-// own remediation tells the caller to run `lit help <command>`. The
+// `lit help help` asks about cobra's own built-in command, which cobra
+// registers lazily inside ExecuteC: the topic is rewritten like any other and
+// must reach that command rather than the root's unknown-command refusal,
+// whose remediation tells the caller to run `lit help <command>`. The
 // advertised-path tests cannot catch that: `help` is not a registry row, so
 // nothing else in this package ever types it.
 func TestHelpAnswersForCobrasOwnHelpCommand(t *testing.T) {
@@ -423,7 +423,9 @@ func TestUnknownCommandRefusesAHelpFlagOnEitherSide(t *testing.T) {
 		{"-h", "nosuchcommand"},
 		{"--help=true", "nosuchcommand"},
 		{"nosuchcommand", "extra", "--help"},
-		{"--", "nosuchcommand"},
+		// A leading `--` never reaches the root (parseGlobalArgs consumes it);
+		// one after a root flag ends the root's own parse.
+		{"--help", "--", "nosuchcommand"},
 		// Everything from the command name on is that command's, so a flag
 		// after an unknown name is never read as the root's.
 		{"nosuchcommand", "--nosuchflag"},

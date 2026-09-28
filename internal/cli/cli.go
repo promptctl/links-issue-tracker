@@ -62,6 +62,7 @@ func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 }
 
 func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *cobra.Command {
+	var helpRequested *bool
 	root := &cobra.Command{
 		Use:  "lit",
 		Long: "Agent-native issue tracker",
@@ -73,7 +74,7 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 		DisableFlagParsing: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := cmd.Flags().Parse(args); err != nil {
-				return UsageError{Message: err.Error()}
+				return cmd.FlagErrorFunc()(cmd, err)
 			}
 			// [LAW:single-enforcer] the one place a name that is no command is
 			// refused. It outranks a help flag on either side of it, because
@@ -82,11 +83,7 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 			if cmd.Flags().NArg() > 0 {
 				return UnknownCommandError{Command: cmd.Flags().Arg(0)}
 			}
-			helpRequested, err := cmd.Flags().GetBool("help")
-			if err != nil {
-				return err
-			}
-			if helpRequested {
+			if *helpRequested {
 				return cmd.Help()
 			}
 			// [LAW:one-source-of-truth] Default command reuses renderQuickstartGuidance
@@ -110,15 +107,17 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 		},
 	}
 	root.CompletionOptions.DisableDefaultCmd = true
-	// The help flag is declared here rather than left to cobra's execute, so
-	// RunE's parse always finds it on the flag set that the root help renders.
-	root.InitDefaultHelpFlag()
+	// The root declares its help flag itself, so the flag exists before cobra
+	// routes: cobra's Find strips flags to reach the command name, and it strips
+	// `--help` as the boolean it is only once the flag is declared. Cobra's own
+	// declaration runs later, inside execute, and adds nothing when one exists.
+	helpRequested = root.Flags().BoolP("help", "h", false, "help for lit")
 	// Flags belong to the root only up to the first positional: `lit <command>
 	// [args]`, where everything from the command name on is that command's.
 	root.Flags().SetInterspersed(false)
-	// [CLI] Exit codes are a contract: an unknown flag on a command cobra still
-	// parses (its own `help`) is a usage error, the same ExitUsage lit's parsers
-	// return, not a generic failure. [LAW:single-enforcer]
+	// [CLI] Exit codes are a contract: an unknown flag, whether in the root's
+	// own parse or on cobra's `help` command, is a usage error, the same
+	// ExitUsage lit's parsers return, not a generic failure. [LAW:single-enforcer]
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
 		return UsageError{Message: err.Error()}
 	})
