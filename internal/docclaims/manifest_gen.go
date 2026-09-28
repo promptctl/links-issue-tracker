@@ -350,7 +350,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "close mirror-pending marker: %w", Src: "close mirror-pending marker: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "compaction backstop", Src: "compaction backstop"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "create hooks dir: %w", Src: "create hooks dir: %w"},
-	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "default branch of remote %q is not known on this machine: refs/remotes/%s/HEAD is unset and no sync here has asked the remote yet; 'lit sync pull' asks it", Src: "default branch of remote %q is not known on this machine: refs/remotes/%s/HEAD is unset and no sync here has asked the remote yet; 'lit sync pull' asks it"},
+	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "default branch of remote %q is not known on this machine: git names none in refs/remotes/%s/HEAD and no sync here has learned it from the remote; the next sync that reaches the remote learns it", Src: "default branch of remote %q is not known on this machine: git names none in refs/remotes/%s/HEAD and no sync here has learned it from the remote; the next sync that reaches the remote learns it"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "discard candidate scratch after promotion: %w", Src: "discard candidate scratch after promotion: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "discover stores: %w", Src: "discover stores: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "downgrade: resolve current binary: %w", Src: "downgrade: resolve current binary: %w"},

@@ -88,33 +88,78 @@ func TestKnownSyncBranchReportsWhatTheSyncVerbResolved(t *testing.T) {
 // waiting on it. links-scale-om3r.06l
 func TestKnownSyncBranchNeverAsksTheRemote(t *testing.T) {
 	t.Setenv(debugSyncBranchEnvVar, "")
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	runGit(t, repo, "remote", "add", "origin", silentRemoteURL(t))
+	ws := branchTestWorkspace(t, repo)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := knownSyncBranch(ctx, ws, "origin")
+	if err == nil || !strings.Contains(err.Error(), "not known on this machine") || strings.Contains(err.Error(), "%!") {
+		t.Fatalf("knownSyncBranch() error = %v, want the not-known error", err)
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("knownSyncBranch() ran until the deadline: it waited on the remote")
+	}
+}
+
+// A cancel that lands while the ask is on the wire is the cause the error names,
+// not the "signal: killed" the interrupted git exits with. [LAW:no-silent-failure]
+func TestResolveSyncBranchSurfacesCancellationMidAsk(t *testing.T) {
+	t.Setenv(debugSyncBranchEnvVar, "")
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	runGit(t, repo, "remote", "add", "origin", silentRemoteURL(t))
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	_, err := resolveSyncBranch(ctx, branchTestWorkspace(t, repo), "origin")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want context.DeadlineExceeded in the chain", err)
+	}
+}
+
+// silentRemoteURL is a git:// remote that accepts every connection and never
+// answers, so an ask of it runs until its ctx ends.
+func silentRemoteURL(t *testing.T) string {
+	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
 	t.Cleanup(func() { _ = listener.Close() })
 	go func() {
+		var held []net.Conn // held open, never answered, until the listener closes
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
+				for _, c := range held {
+					_ = c.Close()
+				}
 				return
 			}
-			t.Cleanup(func() { _ = conn.Close() })
+			held = append(held, conn)
 		}
 	}()
-	repo := t.TempDir()
-	runGit(t, repo, "init")
-	runGit(t, repo, "remote", "add", "origin", "git://"+listener.Addr().String()+"/x.git")
-	ws := branchTestWorkspace(t, repo)
+	return "git://" + listener.Addr().String() + "/x.git"
+}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_, err = knownSyncBranch(ctx, ws, "origin")
-	if err == nil || !strings.Contains(err.Error(), "not known on this machine") {
-		t.Fatalf("knownSyncBranch() error = %v, want the not-known error", err)
+// An unreadable record cannot hide a branch git already knows: it is consulted
+// only after the local chain.
+func TestKnownSyncBranchPrefersGitsRefOverAnUnreadableRecord(t *testing.T) {
+	t.Setenv(debugSyncBranchEnvVar, "")
+	ws := pushedRepoWithoutRemoteHead(t)
+	runGit(t, ws.RootDir, "remote", "set-head", "origin", "trunk")
+	if err := os.Mkdir(advertisedSyncBranchPath(ws, "origin"), 0o755); err != nil {
+		t.Fatalf("make the record unreadable: %v", err)
 	}
-	if ctx.Err() != nil {
-		t.Fatalf("knownSyncBranch() ran until the deadline: it waited on the remote")
+	got, err := knownSyncBranch(context.Background(), ws, "origin")
+	if err != nil || got != "trunk" {
+		t.Fatalf("knownSyncBranch() = %q, %v; want trunk", got, err)
+	}
+	runGit(t, ws.RootDir, "remote", "set-head", "origin", "--delete")
+	if _, err := knownSyncBranch(context.Background(), ws, "origin"); err == nil || !strings.Contains(err.Error(), "unreadable") {
+		t.Fatalf("knownSyncBranch() error = %v, want the unreadable record named", err)
 	}
 }
 

@@ -426,9 +426,27 @@ func gitOutput(ctx context.Context, cwd string, args ...string) (string, error) 
 	cmd.Dir = cwd
 	out, err := cmd.Output()
 	if err != nil {
-		return "", err
+		return "", gitFailure(ctx, err)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// gitFailure names why a git call failed. A git that ctx killed exits with
+// "signal: killed", so the ctx error is put in the chain as the cause; a git
+// that failed on its own said why on stderr, which Output captured and the bare
+// exit status drops. The *exec.ExitError stays in the chain for
+// classifyGitError. [LAW:no-silent-failure]
+func gitFailure(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return fmt.Errorf("%w (%w)", ctxErr, err)
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		if stderr := strings.TrimSpace(string(exitErr.Stderr)); stderr != "" {
+			return fmt.Errorf("%w: %s", err, stderr)
+		}
+	}
+	return err
 }
 
 // gitFatalExitCode is git's universal exit code for a fatal condition — the code

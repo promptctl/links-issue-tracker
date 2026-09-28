@@ -73,11 +73,11 @@ func lastFetchSuccessAge(ws workspace.Info, now time.Time) (age time.Duration, o
 	return now.Sub(info.ModTime()), true
 }
 
-// syncStalenessLines renders zero or more prominent warning lines from an
-// already-resolved sync freshness report and last-fetch age — silent drift
-// (unpushed local changes, a remote nobody has checked in days) surfaced on the
-// ordinary commands an agent actually runs instead of only on `lit doctor`,
-// which nobody runs unasked. Pure over its inputs so the two conditions are
+// syncStalenessLines renders zero or more prominent warning lines from a sync
+// freshness report and last-fetch age — silent drift (unpushed local changes,
+// a remote nobody has checked in days) surfaced on the ordinary commands an
+// agent actually runs instead of only on `lit doctor`, which nobody runs
+// unasked. Pure over its inputs so the two conditions are
 // unit-testable without a live store, mirroring printSyncFreshness's split from
 // its own resolve step.
 // [LAW:dataflow-not-control-flow]
@@ -93,20 +93,21 @@ func lastFetchSuccessAge(ws workspace.Info, now time.Time) (age time.Duration, o
 // never-fetched-in-threshold remote still warns) rather than a speculative
 // third case.
 func syncStalenessLines(report doctorSyncReport, fetchAge time.Duration, fetchAgeKnown bool) []string {
-	if report.Kind != doctorSyncResolved {
-		return nil
-	}
 	var lines []string
-	f := report.Freshness
-	ref := f.Remote + "/" + f.Branch
-	if f.State() == storage.SyncAhead {
-		lines = append(lines, fmt.Sprintf(
-			"sync: %d local change(s) not pushed to %s, as of last fetch — run 'lit sync push'",
-			f.Ahead, ref,
-		))
+	ref := ""
+	if report.Kind == doctorSyncResolved {
+		f := report.Freshness
+		ref = f.Remote + "/" + f.Branch
+		if f.State() == storage.SyncAhead {
+			lines = append(lines, fmt.Sprintf(
+				"sync: %d local change(s) not pushed to %s, as of last fetch — run 'lit sync push'",
+				f.Ahead, ref,
+			))
+		}
 	}
-	lines = append(lines, fetchStalenessLines(ref, fetchAge, fetchAgeKnown)...)
-	return lines
+	// The fetch age is a marker stat, not a freshness read, so an unresolved
+	// report still warns about it, without the ref, as the mutation banner does.
+	return append(lines, fetchStalenessLines(ref, fetchAge, fetchAgeKnown)...)
 }
 
 // fetchStalenessLines renders the stale-fetch warning. ref names the remote

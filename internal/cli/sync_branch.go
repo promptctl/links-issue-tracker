@@ -61,22 +61,24 @@ func resolveSyncBranch(ctx context.Context, ws workspace.Info, remote string) (s
 
 // knownSyncBranch is the sync branch for a command that must not wait on the
 // network: resolveSyncBranch's local chain, then what the remote last told a
-// sync verb on this machine. An unknown branch is an error naming how to teach
-// it, never a guess.
+// sync verb on this machine. An unknown branch is an error, never a guess; an
+// unreadable record is that error's cause, and matters only when nothing
+// ahead of the record answered.
 func knownSyncBranch(ctx context.Context, ws workspace.Info, remote string) (string, error) {
 	remote = strings.TrimSpace(remote)
-	recorded, err := os.ReadFile(advertisedSyncBranchPath(ws, remote))
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return "", fmt.Errorf("read sync branch record for remote %q: %w", remote, err)
-	}
+	recorded, readErr := os.ReadFile(advertisedSyncBranchPath(ws, remote))
 	branch := precedence.First(localSyncBranch(ctx, ws.RootDir, remote), strings.TrimSpace(string(recorded)))
-	if branch == "" {
-		return "", fmt.Errorf(
-			"default branch of remote %q is not known on this machine: refs/remotes/%s/HEAD is unset and no sync here has asked the remote yet; 'lit sync pull' asks it",
-			remote, remote,
-		)
+	if branch != "" {
+		return branch, nil
 	}
-	return branch, nil
+	notKnown := fmt.Errorf(
+		"default branch of remote %q is not known on this machine: git names none in refs/remotes/%s/HEAD and no sync here has learned it from the remote; the next sync that reaches the remote learns it",
+		remote, remote,
+	)
+	if readErr != nil && !errors.Is(readErr, fs.ErrNotExist) {
+		return "", fmt.Errorf("%w; the record of what the remote last said is unreadable: %w", notKnown, readErr)
+	}
+	return "", notKnown
 }
 
 // advertisedSyncBranchPath is where resolveSyncBranch records the branch a

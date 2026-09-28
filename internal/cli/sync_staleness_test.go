@@ -43,6 +43,14 @@ func TestSyncStalenessLines(t *testing.T) {
 			wantLines: 0,
 		},
 		{
+			name:          "unresolved still warns about a stale fetch, without the ref",
+			report:        doctorSyncReport{Kind: doctorSyncUnresolved, Detail: "boom"},
+			fetchAge:      staleAge,
+			fetchAgeKnown: true,
+			wantLines:     1,
+			wantSubstrs:   []string{"sync: last successful fetch was", "lit sync fetch"},
+		},
+		{
 			name: "up to date and freshly fetched emits nothing",
 			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true,
