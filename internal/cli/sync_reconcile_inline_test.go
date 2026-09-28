@@ -10,8 +10,8 @@ import (
 // TestAutomaticReconcileLinearizesDivergedClone is the end-to-end proof that a
 // diverged clone reconciles itself: the consumer holds a local unpushed edit
 // while another machine pushes a different edit to the same ticket, then the
-// consumer runs an ordinary command and the inline receive — finding a
-// divergence a fast-forward cannot absorb — runs the field-aware reconcile, so
+// consumer's automatic receive — finding a divergence a fast-forward cannot
+// absorb — runs the field-aware reconcile, so
 // the consumer transparently ends up with BOTH edits and linear history that
 // fast-forward pushes. No manual `lit sync pull`, no merge commit.
 func TestAutomaticReconcileLinearizesDivergedClone(t *testing.T) {
@@ -50,10 +50,9 @@ func TestAutomaticReconcileLinearizesDivergedClone(t *testing.T) {
 	runCLIInDir(t, producer, "sync", "push")
 	runCLIInDir(t, consumer, "update", ticketID, "--priority", "1")
 
-	// Run an ordinary command with automatic sync enabled: the inline receive
-	// fires, sees the divergence, and reconciles it into linear history.
-	t.Setenv(DisableAutoSyncEnvVar, "0")
-	runCLIInDir(t, consumer, "backlog")
+	// The automatic receive sees the divergence and reconciles it into linear
+	// history.
+	receiveNow(t, consumer)
 
 	// The consumer now carries BOTH edits.
 	show := runCLIInDir(t, consumer, "show", ticketID)
@@ -71,8 +70,7 @@ func TestAutomaticReconcileLinearizesDivergedClone(t *testing.T) {
 	}
 
 	// Producer fast-forwards to the reconciled head and sees both edits.
-	t.Setenv(DisableAutoSyncEnvVar, "0")
-	runCLIInDir(t, producer, "backlog")
+	receiveNow(t, producer)
 	producerShow := runCLIInDir(t, producer, "show", ticketID)
 	if !strings.Contains(producerShow, "alpha") || !strings.Contains(strings.ToLower(producerShow), "urgent") {
 		t.Fatalf("producer missing converged edits after fast-forward receive:\n%s", producerShow)

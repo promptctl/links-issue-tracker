@@ -129,6 +129,9 @@ var syncFamily = commandFamily[wsSubcommand]{
 		// above, so it never shows in help; it manages its own store lifecycle
 		// (wait-for-parent, then open) and so is registered without withSyncStore.
 		{name: backgroundMirrorSubcommand, payload: wsSubcommand{declare: backgroundMirrorLeaf}, hidden: true},
+		// Hidden: the detached automatic-receive entrypoint, registered the
+		// same way and for the same reason.
+		{name: backgroundReceiveSubcommand, payload: wsSubcommand{declare: backgroundReceiveLeaf}, hidden: true},
 	},
 }
 
@@ -254,7 +257,7 @@ func syncPullLeaf() syncLeaf {
 		recordSyncCommandTrace(ws, "lit sync pull", string(result.State), nil, pullTraceMetadata)
 		// A pull that completed without a held state converged (or found nothing to
 		// converge): the divergence episode, if one was notified, is over.
-		clearOwnerNotify(ws, ownerNotifyDivergenceKinds...)
+		endDivergenceEpisode(ws)
 		return printSyncPullOutcome(stdout, syncPullOutcome{remote: remoteName, branch: resolvedBranch, state: result.State}, *verbose)
 	}}
 }

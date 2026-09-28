@@ -90,7 +90,7 @@ type LandedFetch struct {
 // remote moved — tens of milliseconds for the usual few commits, more after a
 // long absence — and a budget sized for a ref write would cut a large landing
 // on every attempt, so it would never converge. A landing that outlasts
-// coResidentHolderWait fails a contender naming the receiving command, which
+// coResidentHolderWait fails a contender naming the receive worker, which
 // is the ordinary account of a long hold.
 //
 // The mirror's objects land last: a failure there is returned wrapping
@@ -153,7 +153,7 @@ func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir, remote, bra
 	if err := requireNoPendingAdopt(root); err != nil {
 		return LandedFetch{}, err
 	}
-	err = holdForRefWrite(ctx, root, InlineReceiveDeadline, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
+	err = holdForRefWrite(ctx, root, ReceiveDeadline, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
 		start := time.Now()
 		defer func() { landed.Held = time.Since(start) }()
 		tempDir := filepath.Join(root, doltDatabaseName, dbfactory.DoltDir, "temptf")

@@ -26,19 +26,12 @@ func TestAPushRecordsTheAdvertisementItLeft(t *testing.T) {
 	}
 	// Receives run only where a step asks for one; a write here must not
 	// start a detached mirror of its own.
-	backlogWithReceive := func() {
-		t.Helper()
-		t.Setenv(DisableAutoSyncEnvVar, "0")
-		defer t.Setenv(DisableAutoSyncEnvVar, "1")
-		runCLIInDir(t, consumer, "backlog")
-	}
 	receive := func() syncTraceRecord {
 		t.Helper()
-		lapseReceiveDebounce(t, ws)
-		backlogWithReceive()
+		receiveNow(t, consumer)
 		return lastReceiveTrace(t, ws)
 	}
-	backlogWithReceive()
+	receiveNow(t, consumer)
 
 	// (a) The explicit push: it proves and records what it left, and the next
 	// receive is answered without a fetch.

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,23 +25,24 @@ import (
 // appears in help; it exists only as the detached worker's entrypoint.
 const backgroundMirrorSubcommand = "__mirror-bg"
 
-// mirrorLogName is the detached worker's durable output sink. A detached
+// mirrorLogName is the detached mirror's durable output sink. A detached
 // process owns no terminal, so its stdout/stderr must land somewhere inspectable
 // rather than /dev/null — otherwise a trace-write failure or a panic vanishes.
 const mirrorLogName = "mirror.log"
 
-// mirrorLogMaxBytes caps mirror.log's growth: every cycle logs a start/end
-// line. Rotation keeps one previous generation so the recent window survives
-// each cut; the log is diagnostics, not state, so older lines are free to go.
-const mirrorLogMaxBytes = 256 * 1024
+// workerLogMaxBytes caps a detached worker's log: every cycle logs a
+// start/end line. Rotation keeps one previous generation so the recent window
+// survives each cut; the log is diagnostics, not state, so older lines are
+// free to go.
+const workerLogMaxBytes = 256 * 1024
 
-// rotateMirrorLog moves an over-cap mirror.log aside (one kept generation)
+// rotateWorkerLog moves an over-cap worker log aside (one kept generation)
 // before the next worker appends. A rotation problem is reported, never fatal:
 // the worst outcome of skipping it is a log that keeps growing, which must not
-// cost a mirror. [LAW:no-silent-failure]
-func rotateMirrorLog(path string) error {
+// cost the worker its run. [LAW:no-silent-failure]
+func rotateWorkerLog(path string) error {
 	st, err := os.Stat(path)
-	if err != nil || st.Size() <= mirrorLogMaxBytes {
+	if err != nil || st.Size() <= workerLogMaxBytes {
 		// Absent is the common first-spawn case and needs no rotation; any
 		// other stat failure will resurface loudly from OpenFile just after.
 		return nil
@@ -55,32 +57,32 @@ func rotateMirrorLog(path string) error {
 
 const (
 	// parentPostSpawnTail is how long a HEALTHY parent can legitimately live
-	// after spawning the mirror: every bounded step maybeAutoSyncAfterCommand
-	// has scheduled for after the spawn, summed from those steps' own caps.
+	// after spawning a detached worker: every bounded step
+	// maybeAutoSyncAfterCommand has scheduled for after the spawn, summed from
+	// those steps' own caps. The receive is not one of them: it is a detached
+	// worker itself, and spawning it returns at once.
 	//
 	// It is a sum rather than a number because prose does not fail to compile
-	// when a fourth step joins the tail. A step left unsummed here lets a pass
+	// when a step joins the tail. A step left unsummed here lets a pass
 	// slower than the leftover margin make a perfectly healthy parent outlive
 	// the wait below — abandoning a mirror that owes a push, for work the
 	// parent was designed to do. Adding a step to the tail means adding it
 	// here.
 	// [LAW:one-source-of-truth]
-	parentPostSpawnTail = store.InlineReceiveDeadline + // the inline receive
-		ownerNotifyHookTimeout + ownerNotifyPipeWaitDelay + // a divergence's owner-notify hook and its pipe
-		compactTimeout // the compaction backstop
+	parentPostSpawnTail = compactTimeout // the compaction backstop
 
-	// mirrorParentWaitMargin is the headroom above the parent's designed tail:
+	// workerParentWaitMargin is the headroom above the parent's designed tail:
 	// scheduling slop on a loaded machine, not another step. A bound inside the
 	// tail would manufacture parent-wait failures out of the parent's own work,
 	// so the margin exists to keep the two clearly separated.
-	mirrorParentWaitMargin = 30 * time.Second
+	workerParentWaitMargin = 30 * time.Second
 
-	// mirrorParentWaitTimeout bounds the wait for the spawning command to
+	// workerParentWaitTimeout bounds the wait for the spawning command to
 	// release its engine. The wait ends the instant the parent exits; the cap
 	// only guards a parent that never exits (e.g. a long-lived REPL), in which
-	// case the mirror gives up rather than hang forever.
-	mirrorParentWaitTimeout = parentPostSpawnTail + mirrorParentWaitMargin
-	mirrorParentPollDelay   = 20 * time.Millisecond
+	// case the worker gives up rather than hang forever.
+	workerParentWaitTimeout = parentPostSpawnTail + workerParentWaitMargin
+	workerParentPollDelay   = 20 * time.Millisecond
 )
 
 // spawnBackgroundMirror starts the detached mirror and returns immediately,
@@ -91,29 +93,40 @@ const (
 // and fails records a trace through the one shared writer the pre-push hook
 // already uses. [LAW:one-source-of-truth]
 func spawnBackgroundMirror(ws workspace.Info, parentPID int) error {
+	return spawnDetachedWorker(ws, backgroundMirrorSubcommand, mirrorLogName, mirrorEnv(), parentPID)
+}
+
+// spawnDetachedWorker starts one of the hidden `lit sync` worker subcommands
+// as a detached process of its own, told which process spawned it so it can
+// wait for that process's engine to be released, and returns without waiting.
+// [LAW:one-type-per-behavior] the mirror and the receive are two instances
+// of one detached worker; what differs is the subcommand, the log and the
+// environment, all values.
+func spawnDetachedWorker(ws workspace.Info, subcommand, logName string, env []string, parentPID int) error {
 	self, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("resolve lit binary: %w", err)
 	}
-	cmd := exec.Command(self, "sync", backgroundMirrorSubcommand, "--parent-pid", strconv.Itoa(parentPID))
+	cmd := exec.Command(self, "sync", subcommand, "--parent-pid", strconv.Itoa(parentPID))
 	cmd.Dir = ws.RootDir
 	cmd.Stdin = nil
 	// Route the detached worker's output to a durable log. [LAW:no-silent-failure]
 	// If the log cannot be opened, surface that on the command's terminal-attached
-	// stderr and still spawn with discarded streams — the mirror matters more than
-	// its log, and the inability to log is itself loud here rather than swallowed.
-	logPath := filepath.Join(ws.StorageDir, mirrorLogName)
-	if rotateErr := rotateMirrorLog(logPath); rotateErr != nil {
-		fmt.Fprintf(os.Stderr, "lit: mirror log rotation failed (%v); the log keeps growing past its cap\n", rotateErr)
+	// stderr and still spawn with discarded streams — the worker's run matters
+	// more than its log, and the inability to log is itself loud here rather
+	// than swallowed.
+	logPath := filepath.Join(ws.StorageDir, logName)
+	if rotateErr := rotateWorkerLog(logPath); rotateErr != nil {
+		fmt.Fprintf(os.Stderr, "lit: %s rotation failed (%v); the log keeps growing past its cap\n", logName, rotateErr)
 	}
 	logFile, logErr := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if logErr != nil {
-		fmt.Fprintf(os.Stderr, "lit: on-change mirror log unavailable (%v); worker output will be discarded\n", logErr)
+		fmt.Fprintf(os.Stderr, "lit: %s unavailable (%v); background worker output will be discarded\n", logName, logErr)
 	} else {
 		cmd.Stdout, cmd.Stderr = logFile, logFile
 	}
 	cmd.SysProcAttr = detachSysProcAttr()
-	cmd.Env = mirrorEnv()
+	cmd.Env = env
 	startErr := cmd.Start()
 	if logFile != nil {
 		// The child inherited its own dup of the fd at exec; the parent's copy is
@@ -125,36 +138,32 @@ func spawnBackgroundMirror(ws workspace.Info, parentPID int) error {
 
 // mirrorEnv builds the detached mirror's environment: the parent's environment
 // with every automation-trace variable stripped, then the mirror's own trigger
-// and reason set. [LAW:one-source-of-truth] The parent's
-// LNKS_AUTOMATION_TRACE_REF_FILE points at a file the parent's caller reads to
-// learn which trace the command recorded; the detached mirror must not inherit
-// it and overwrite that file with its own trace path after the command has
-// returned. The mirror has no reader for a trace-ref file, so it carries none —
-// it records traces by trigger alone.
+// and reason set. The mirror has no reader for a trace-ref file, so it carries
+// none — it records traces by trigger alone.
 func mirrorEnv() []string {
-	stripped := []string{
-		automationTriggerEnvVar + "=",
-		automationReasonEnvVar + "=",
-		automationTraceRefFileEnvVar + "=",
-	}
-	parent := os.Environ()
-	env := make([]string, 0, len(parent)+2)
-	for _, kv := range parent {
-		keep := true
-		for _, prefix := range stripped {
-			if strings.HasPrefix(kv, prefix) {
-				keep = false
-				break
-			}
-		}
-		if keep {
-			env = append(env, kv)
-		}
-	}
-	return append(env,
+	return workerEnv(
+		[]string{automationTriggerEnvVar, automationReasonEnvVar, automationTraceRefFileEnvVar},
 		automationTriggerEnvVar+"=on-change",
 		automationReasonEnvVar+"=on-change cadence mirrored after a mutating command",
 	)
+}
+
+// workerEnv is the parent's environment with the named variables removed and
+// set appended. Every detached worker strips LNKS_AUTOMATION_TRACE_REF_FILE:
+// it points at a file the parent's caller reads to learn which trace the
+// command recorded, and a worker that inherited it would overwrite that file
+// with its own trace path after the command has returned.
+// [LAW:one-source-of-truth]
+func workerEnv(strip []string, set ...string) []string {
+	parent := os.Environ()
+	env := make([]string, 0, len(parent)+len(set))
+	for _, kv := range parent {
+		name, _, _ := strings.Cut(kv, "=")
+		if !slices.Contains(strip, name) {
+			env = append(env, kv)
+		}
+	}
+	return append(env, set...)
 }
 
 // backgroundMirrorLeaf is the detached worker. It runs as its own process after
@@ -214,13 +223,13 @@ func backgroundMirrorLeaf() wsLeaf {
 		// precondition is unmet — abort rather than race a live engine. A wait cut
 		// short by teardown is not that failure: it ends as a teardown, below.
 		// [LAW:no-ambient-temporal-coupling]
-		if !waitForParentExit(ctx, *parentPID, os.Getppid, mirrorParentWaitTimeout, mirrorParentPollDelay) {
+		if !waitForParentExit(ctx, *parentPID, os.Getppid, workerParentWaitTimeout, workerParentPollDelay) {
 			if ctx.Err() != nil {
 				return teardownMirror(ws, ctx.Err(), stopAnswering)
 			}
 			return completeMirrorWithoutAttempt(ctx, ws, fmt.Errorf(
 				"spawning command (pid %d) still running after %s; skipping mirror to avoid racing its engine",
-				*parentPID, mirrorParentWaitTimeout), stopAnswering)
+				*parentPID, workerParentWaitTimeout), stopAnswering)
 		}
 
 		for {

@@ -71,9 +71,9 @@ func TestMirrorParentWaitExceedsThePostSpawnTail(t *testing.T) {
 		t.Fatalf("parentPostSpawnTail (%s) omits compactTimeout (%s); a step that runs after the spawn must be summed into the tail",
 			parentPostSpawnTail, compactTimeout)
 	}
-	if mirrorParentWaitTimeout <= parentPostSpawnTail {
-		t.Fatalf("mirrorParentWaitTimeout (%s) is inside the parent's designed tail (%s); a healthy parent would be abandoned mid-tail",
-			mirrorParentWaitTimeout, parentPostSpawnTail)
+	if workerParentWaitTimeout <= parentPostSpawnTail {
+		t.Fatalf("workerParentWaitTimeout (%s) is inside the parent's designed tail (%s); a healthy parent would be abandoned mid-tail",
+			workerParentWaitTimeout, parentPostSpawnTail)
 	}
 }
 

@@ -349,19 +349,19 @@ func reportTakeOutcome(stdout io.Writer, ws workspace.Info, command string, remo
 	ref := remote + "/" + branch
 	switch result.State {
 	case storage.SyncReconcileTookRemote:
-		clearOwnerNotify(ws, ownerNotifyDivergenceKinds...)
+		endDivergenceEpisode(ws)
 		_, err := fmt.Fprintf(stdout,
 			"took remote: the local backlog now equals %s and sync is clean (no push needed).\nDISCARDED the local-only issue(s), by design: %s\n",
 			ref, describeIDSet(discardedIDs(result.Unrelated, storage.TakeRemote)))
 		return err
 	case storage.SyncReconcileTookLocal:
-		clearOwnerNotify(ws, ownerNotifyDivergenceKinds...)
+		endDivergenceEpisode(ws)
 		_, err := fmt.Fprintf(stdout,
 			"took local: your backlog now sits on top of %s — %s replayed with original messages and timestamps; run `lit sync push` (or let auto-sync) to fast-forward the remote onto it.\nDISCARDED the remote-only issue(s), by design: %s\n",
 			ref, describeReplayed(result.Replayed), describeIDSet(discardedIDs(result.Unrelated, storage.TakeLocal)))
 		return err
 	case storage.SyncReconcileNotDiverged:
-		clearOwnerNotify(ws, ownerNotifyDivergenceKinds...)
+		endDivergenceEpisode(ws)
 		_, err := fmt.Fprintln(stdout, "nothing to reconcile: the clone is not diverged from the remote")
 		return err
 	default:
@@ -400,7 +400,7 @@ func discardedIDs(inv *storage.UnrelatedInventory, choice storage.UnrelatedResol
 // reportReconcileResult renders a reconcile outcome. A prose-pending result prints
 // the guidance and returns a MergeConflictError so the command exits ExitConflict;
 // an unrelated-histories result returns the one sync-failure contract (also exit
-// ExitConflict), so `lit sync reconcile`, `lit sync pull`, and the inline receive
+// ExitConflict), so `lit sync reconcile`, `lit sync pull`, and the automatic receive
 // all surface no-common-ancestor identically; every other state is a one-line
 // success — Linearized and Combined follow it with reportContestedLanes, since
 // those are the two states where histories actually just merged.
@@ -418,7 +418,7 @@ func reportReconcileResult(ctx context.Context, stdout io.Writer, ws workspace.I
 	switch result.State {
 	case storage.SyncReconcileIDCollision:
 		// Routed through the same one sync-failure contract as every other held
-		// state, so `lit sync reconcile`, `lit sync pull` and the inline receive
+		// state, so `lit sync reconcile`, `lit sync pull` and the automatic receive
 		// surface a collision identically. Like the unrelated block it carries no
 		// Age: its severity is fixed by the class, not aged — two tickets under one
 		// id are exactly as blocking on minute one as on day five.
@@ -480,7 +480,7 @@ func reportReconcileResult(ctx context.Context, stdout io.Writer, ws workspace.I
 		}
 		// A held prose state on the explicit reconcile can be the FIRST detection
 		// (auto-sync disabled), so it notifies like every other surface, de-duplicated
-		// against the inline receive's earlier detection when there was one.
+		// against the automatic receive's earlier detection when there was one.
 		if ev, ok := ownerNotifyEventForFailure(SyncFailure{
 			Class:  syncFailureProseHeld,
 			Remote: remote,
@@ -495,7 +495,7 @@ func reportReconcileResult(ctx context.Context, stdout io.Writer, ws workspace.I
 		return MergeConflictError{Message: fmt.Sprintf("reconcile holds %d free-text field(s) for inline merge; run `%s` with your merged text", len(result.Pending), proseResolveCommand)}
 	case storage.SyncReconcileLinearized:
 		recordReconcileDecisionTrace(ws, command, result.State, metadata)
-		clearOwnerNotify(ws, ownerNotifyDivergenceKinds...)
+		endDivergenceEpisode(ws)
 		if _, err := fmt.Fprintf(stdout, "reconciled: the divergence merged into linear history — %s replayed with original messages and timestamps; the next push fast-forwards\n", describeReplayed(result.Replayed)); err != nil {
 			return err
 		}
@@ -505,7 +505,7 @@ func reportReconcileResult(ctx context.Context, stdout io.Writer, ws workspace.I
 		return reportContestedLanes(ctx, stdout, ws, session.engine)
 	case storage.SyncReconcileCombined:
 		recordReconcileDecisionTrace(ws, command, result.State, metadata)
-		clearOwnerNotify(ws, ownerNotifyDivergenceKinds...)
+		endDivergenceEpisode(ws)
 		// Report what the union KEPT from each side, so "nothing dropped" is evidenced, not
 		// asserted: the both-sides partition names the kept-local, kept-remote, and
 		// field-merged shared ids. A defensively-absent inventory reads as empty sides, which
@@ -529,7 +529,7 @@ func reportReconcileResult(ctx context.Context, stdout io.Writer, ws workspace.I
 		return reportContestedLanes(ctx, stdout, ws, session.engine)
 	case storage.SyncReconcileNotDiverged:
 		recordReconcileDecisionTrace(ws, command, result.State, metadata)
-		clearOwnerNotify(ws, ownerNotifyDivergenceKinds...)
+		endDivergenceEpisode(ws)
 		_, err := fmt.Fprintln(stdout, "nothing to reconcile: the clone is not diverged from the remote")
 		return err
 	default:

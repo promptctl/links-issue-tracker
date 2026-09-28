@@ -2,8 +2,12 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -29,11 +33,195 @@ const (
 	receiveDecisionRemoteCheckFailed = "remote_check_failed"
 )
 
-// receiveInline brings the local store up to the remote when the remote has
-// moved, INLINE in the command process. The caller (maybeAutoSyncAfterCommand)
-// invokes it only after the command's own engine has closed and only when
-// receive is enabled, so it is safe to open the one read-write engine embedded
-// Dolt permits.
+// backgroundReceiveSubcommand is the hidden `lit sync` subcommand
+// scheduleReceive spawns: the automatic receive's detached worker. Like the
+// mirror's, it never appears in help.
+const backgroundReceiveSubcommand = "__receive-bg"
+
+// ReceiveLogName is the receive worker's durable output sink: one start and
+// one end line per receive, each naming the worker's pid — the pid a write
+// refused while the receive holds the store names as the holder. Exported so
+// the cmd/lit acceptance tests find the worker through the one canonical name.
+// [LAW:one-source-of-truth]
+const ReceiveLogName = "receive.log"
+
+// receiveBlockPendingName holds the sync-failure block the last automatic
+// receive reached and no command has printed yet. The receive runs detached,
+// with no terminal of its own, so the block waits here for the next command
+// on this checkout to print it (deliverPendingReceiveBlock). One slot: a later
+// receive replaces an unprinted block with its own, current one.
+const receiveBlockPendingName = "receive-block.pending"
+
+func receiveBlockPendingPath(ws workspace.Info) string {
+	return filepath.Join(ws.StorageDir, receiveBlockPendingName)
+}
+
+// scheduleReceive starts the automatic receive when one is due, and returns
+// without waiting for it: the command's cost is a marker stat, a marker write,
+// a local `git remote` read and a process spawn, never a round trip to the
+// remote. The remote check, the fetch it may lead to and the reconcile behind
+// that all run in the detached worker (backgroundReceiveLeaf) once this
+// process has exited. [LAW:effects-at-boundaries] the network is the
+// worker's, never the command's.
+//
+// Debounced so a command burst spawns at most one receive per interval, and
+// the debounce marker is written before the spawn so a burst never spawns
+// twice. [LAW:single-enforcer] The debounce marker has one writer — this owner.
+// A workspace with no git remote has nothing to receive from, so it spawns
+// nothing, the same precondition the mirror's spawn checks.
+func scheduleReceive(ctx context.Context, ws workspace.Info) {
+	if !shouldReceiveNow(ws, time.Now(), receiveDebounceInterval) {
+		return
+	}
+	if err := markReceiveAttempt(ws); err != nil {
+		fmt.Fprintf(os.Stderr, "lit: automatic receive debounce marker not written: %v\n", err)
+	}
+	hasRemote, err := workspaceHasGitRemote(ctx, ws)
+	if err != nil {
+		// Couldn't read remotes — unexpected; surface it loudly rather than treat
+		// it as "no remote". [LAW:no-silent-failure]
+		recordReceiveError(ws, fmt.Errorf("check git remotes: %w", err))
+		return
+	}
+	if !hasRemote {
+		return
+	}
+	if err := spawnDetachedWorker(ws, backgroundReceiveSubcommand, ReceiveLogName, receiveEnv(), os.Getpid()); err != nil {
+		cause := fmt.Errorf("start the background receive: %w", err)
+		fmt.Fprintf(os.Stderr, "lit: automatic receive not started: %v\n", err)
+		recordReceiveError(ws, cause)
+	}
+}
+
+// receiveEnv is the receive worker's environment: the parent's, keeping the
+// automation trigger the command ran under — the receive's traces are that
+// occasion's — and dropping only the trace-ref file (workerEnv).
+func receiveEnv() []string {
+	return workerEnv([]string{automationTraceRefFileEnvVar})
+}
+
+// backgroundReceiveLeaf is the receive's detached worker. It waits, in order,
+// for two things before it receives:
+//
+//   - the spawning command to exit, so the one read-write engine embedded Dolt
+//     permits on this path is never the command's and the worker's at once;
+//   - every owed or live mirror to finish (awaitNoLiveMirror). A write command
+//     spawns its mirror and its receive together, and the mirror records the
+//     advertisement its push left on the remote. Asked after that record, the
+//     question finds the remote unmoved; asked mid-push, it finds it moved and
+//     clones the store to fetch what this checkout just pushed.
+//
+// It writes its start and end to receive.log, the end line carrying how long
+// it waited for a mirror. [LAW:no-ambient-temporal-coupling] the parent's exit,
+// the mirror-pending claim and the beacon are the ordering witnesses, not a
+// sleep.
+func backgroundReceiveLeaf() wsLeaf {
+	fs := newCobraFlagSet("sync " + backgroundReceiveSubcommand)
+	parentPID := fs.Int("parent-pid", 0, "PID of the spawning command; the receive waits for it to exit")
+	return wsLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, _ []string) error {
+		start := time.Now()
+		pid := os.Getpid()
+		fmt.Fprintf(stdout, "%s receive start pid=%d deadline=%s\n", start.UTC().Format(time.RFC3339), pid, store.ReceiveDeadline)
+		mirrorWait := receiveWhenQuiet(ctx, ws, *parentPID)
+		// The decision is in the receive's sync trace; this line is the worker's
+		// own lifetime, which the trace does not carry.
+		fmt.Fprintf(stdout, "%s receive end pid=%d mirror_wait=%s elapsed=%s\n", time.Now().UTC().Format(time.RFC3339), pid,
+			mirrorWait.Round(time.Millisecond), time.Since(start).Round(time.Millisecond))
+		return nil
+	}}
+}
+
+// receiveWhenQuiet runs one receive once the spawning command has exited and
+// no mirror is live, and returns how long it waited on the mirror. A wait that
+// cannot finish says why in the receive's trace: a worker torn down by its own
+// context records that, and a parent that outlived the wait records that — two
+// causes, never one joined sentence. [LAW:no-silent-failure]
+func receiveWhenQuiet(ctx context.Context, ws workspace.Info, parentPID int) time.Duration {
+	if !waitForParentExit(ctx, parentPID, os.Getppid, workerParentWaitTimeout, workerParentPollDelay) {
+		if ctx.Err() != nil {
+			recordReceiveError(ws, fmt.Errorf("receive torn down while waiting for the spawning command to exit: %w", ctx.Err()))
+			return 0
+		}
+		recordReceiveError(ws, fmt.Errorf(
+			"spawning command (pid %d) still running after %s; skipping the receive to avoid racing its engine",
+			parentPID, workerParentWaitTimeout))
+		return 0
+	}
+	waited, err := awaitNoLiveMirror(ctx, ws, receiveMirrorWait())
+	if err != nil {
+		if ctx.Err() != nil {
+			recordReceiveError(ws, fmt.Errorf("receive torn down while waiting for the mirror: %w", ctx.Err()))
+			return waited
+		}
+		// A mirror that will not finish, or a beacon that cannot be read, costs
+		// the ordering, not the receive: say so and receive anyway.
+		fmt.Fprintf(os.Stderr, "lit: receiving without waiting for the mirror: %v\n", err)
+	}
+	receiveOnce(ctx, ws)
+	return waited
+}
+
+// receiveMirrorWait bounds the receive's wait for live mirrors: two whole
+// mirror pushes, which covers the cycle the spawning command started and one
+// more it may re-check into. Past it the mirrors are a burst, not the
+// command's own push, and the receive goes ahead. The wait costs no command
+// anything; it only delays the worker. A function because the push deadline it
+// derives from is the store's variable. [LAW:one-source-of-truth]
+func receiveMirrorWait() time.Duration { return 2 * store.MirrorPushDeadline }
+
+// mirrorQuietPoll is how often the receive re-reads the mirror liveness
+// beacon while it waits. Each read briefly takes the beacon exclusively, and a
+// mirror claimant probing at that instant reads it as obstructed and spawns a
+// redundant mirror, so the poll is kept coarse; the wait is background time.
+const mirrorQuietPoll = 100 * time.Millisecond
+
+// awaitNoLiveMirror waits until no mirror is owed or live and returns how long
+// that took. Two witnesses cover a mirror's whole life between them, with no
+// gap: the mirror-pending claim a mutating command leaves (MirrorOwed) stands
+// from before that command exits until the mirror clears it inside its clone
+// hold, and the liveness beacon is held from the mirror's entry to its exit.
+// The beacon alone is not enough: a just-spawned mirror may not hold it yet
+// when the spawning command has already gone. It fails when bound elapses
+// with a mirror still owed or live, when either witness cannot be read, or
+// when ctx ends; a claim no mirror will ever clear therefore costs the bound,
+// not the receive. A beacon held exclusively by something that is not a
+// mirror (BeaconObstructed) answers for no mirror, so it does not hold the
+// receive.
+func awaitNoLiveMirror(ctx context.Context, ws workspace.Info, bound time.Duration) (time.Duration, error) {
+	start := time.Now()
+	for {
+		// The beacon is probed only once nothing is owed: while a claim stands
+		// the answer cannot end the wait, and each probe's brief hold is one
+		// more chance to mislead a claimant probing at the same instant.
+		live, err := MirrorOwed(ws)
+		if err != nil {
+			return time.Since(start), err
+		}
+		if !live {
+			verdict, err := store.ProbeMirrorBeacon(ws.DatabasePath)
+			if err != nil {
+				return time.Since(start), fmt.Errorf("read the mirror liveness beacon: %w", err)
+			}
+			live = verdict == store.BeaconAnswered
+		}
+		if !live {
+			return time.Since(start), nil
+		}
+		if waited := time.Since(start); waited >= bound {
+			return waited, fmt.Errorf("a mirror is still owed or live after %s", bound)
+		}
+		select {
+		case <-ctx.Done():
+			return time.Since(start), ctx.Err()
+		case <-time.After(mirrorQuietPoll):
+		}
+	}
+}
+
+// receiveOnce brings the local store up to the remote when the remote has
+// moved. It runs in the receive worker, after the spawning command's engine
+// is gone, so it is safe to open the one read-write engine embedded Dolt
+// permits.
 //
 // It asks before it fetches: one `git ls-remote` of the remote's refs/dolt/*
 // against the advertisement the last successful receive recorded
@@ -44,21 +232,12 @@ const (
 // same store the fetch would have read. [LAW:dataflow-not-control-flow] the
 // answer is data; the fetch is the one operation it gates.
 //
-// It is best-effort and bounded: debounced so a command burst asks at most
-// once per interval, gated on a configured remote so a single-machine repo
-// does no work, and time-boxed so an offline/slow remote cannot hang the
-// command. A failure is recorded as a trace, not printed to the command's
-// stdout (already produced) and never fails the command. [LAW:no-silent-failure]
-func receiveInline(ctx context.Context, ws workspace.Info) {
-	if !shouldReceiveNow(ws, time.Now(), receiveDebounceInterval) {
-		return
-	}
-	// Debounce before the remote check and fetch so a command burst pays at most
-	// one of each per interval, even when there is no remote. [LAW:single-enforcer]
-	// The debounce marker has one writer — this owner.
-	if err := markReceiveAttempt(ws); err != nil {
-		fmt.Fprintf(os.Stderr, "lit: automatic receive debounce marker not written: %v\n", err)
-	}
+// It is best-effort and bounded: gated on a configured remote so a
+// single-machine repo does no network work, and time-boxed so an offline or
+// slow remote cannot keep the worker past store.ReceiveDeadline. A failure is
+// recorded as a trace and never reaches a command's exit code.
+// [LAW:no-silent-failure]
+func receiveOnce(ctx context.Context, ws workspace.Info) {
 	gitRemotes, err := workspace.GitRemotes(ctx, ws.RootDir)
 	if err != nil {
 		// Couldn't read remotes — unexpected; surface it loudly rather than treat
@@ -71,12 +250,11 @@ func receiveInline(ctx context.Context, ws workspace.Info) {
 	}
 
 	// One deadline spans the question and the fetch it may lead to, so a remote
-	// that hangs costs the command one deadline, never twice that. The fetch
-	// runs on a clone, so the deadline bounds the command's wait and nothing
-	// else waits on it; the live store is held only for the clone's copy, the
-	// landing and the settle.
-	// [LAW:no-ambient-temporal-coupling]
-	timeoutCtx, cancel := context.WithTimeout(ctx, store.InlineReceiveDeadline)
+	// that hangs costs the receive one deadline, never twice that. The fetch
+	// runs on a clone, so the deadline bounds the worker and nothing else
+	// waits on it; the live store is held only for the clone's copy, the
+	// landing and the settle. [LAW:no-ambient-temporal-coupling]
+	timeoutCtx, cancel := context.WithTimeout(ctx, store.ReceiveDeadline)
 	defer cancel()
 
 	observed, askErr := askRemote(timeoutCtx, ws, gitRemotes)
@@ -100,7 +278,7 @@ func receiveInline(ctx context.Context, ws workspace.Info) {
 		return
 	}
 	if !acquired {
-		// Another command's receive is running; it fetches what this one
+		// Another receive worker is running; it fetches what this one
 		// would have.
 		return
 	}
@@ -115,7 +293,9 @@ func receiveInline(ctx context.Context, ws workspace.Info) {
 		recordReceiveError(ws, err)
 		return
 	}
-	surfaceInlineOutcome(ctx, ws, outcome, time.Now())
+	// The store is closed by now: surfacing can run the owner-notify hook,
+	// and nothing waiting on the store should wait on that too.
+	surfaceReceiveOutcome(ctx, ws, outcome, time.Now())
 }
 
 // receiveAndRecord is the receive proper, run under the receive lock: clone
@@ -161,34 +341,93 @@ func receiveAndRecord(ctx context.Context, ws workspace.Info, observed remoteAdv
 	return outcome, nil
 }
 
-// surfaceInlineOutcome renders a non-converging inline reconcile — a held free-text
-// conflict or a hard backend failure — to stderr through the one sync-failure
-// contract, and does nothing when the receive/reconcile settled cleanly. It keeps
-// receiveInline a pure orchestrator: the decision of WHETHER to surface lives in
-// the outcome's data (inlineSyncFailure), and the surfacing itself lives here,
-// behind a named boundary. The command's stdout is already produced and its local
-// reads still serve, so this neither corrupts output nor fails the command — but it
-// cannot read as an ignorable line. [LAW:decomposition] [LAW:no-silent-failure]
-// [LAW:single-enforcer] one contract, whether the failure flows out as a returned
-// error or is printed here.
+// surfaceReceiveOutcome leaves a non-converging reconcile — a held free-text
+// conflict or a hard backend failure — as the pending block the next command
+// prints, through the one sync-failure contract, and retires any pending block
+// once a receive settles cleanly: a block an earlier receive left is no longer
+// true then. It keeps receiveOnce a pure orchestrator: the decision of WHETHER
+// to surface lives in the outcome's data (inlineSyncFailure), and the surfacing
+// itself lives here, behind a named boundary. [LAW:decomposition]
+// [LAW:no-silent-failure] [LAW:single-enforcer] one contract, whether the
+// failure flows out as a returned error or waits here for a command to print.
 //
-// The inline receive runs after nearly every command, which makes this seam the
+// The receive runs every interval on every checkout, which makes this seam the
 // owner channel's workhorse (links-sync-pgct.4): a surfaced divergence notifies
 // the owner out-of-band (de-duplicated per episode), and a receive that settled
 // cleanly against the remote ends the divergence episode. The hook is passed the
-// command's ctx, not the receive's 15s timeoutCtx: the receive fetch already
+// worker's ctx, not the receive's timeoutCtx: the receive fetch already
 // completed, and its remaining budget must not shorten the notifier's own.
 // [LAW:no-ambient-temporal-coupling]
-func surfaceInlineOutcome(ctx context.Context, ws workspace.Info, outcome syncReceiveOutcome, now time.Time) {
+func surfaceReceiveOutcome(ctx context.Context, ws workspace.Info, outcome syncReceiveOutcome, now time.Time) {
 	if failure, ok := outcome.inlineSyncFailure(now); ok {
-		fmt.Fprintln(os.Stderr, failure.blockString())
+		block := failure.blockString()
+		// The worker's own log keeps every block it reached; the pending file
+		// is the copy a command prints.
+		fmt.Fprintln(os.Stderr, block)
+		if err := writeMarkerAtomic(ws, receiveBlockPendingPath(ws), []byte(block+"\n")); err != nil {
+			fmt.Fprintf(os.Stderr, "lit: sync-failure block not left for the next command: %v\n", err)
+		}
 		if ev, evOK := ownerNotifyEventForFailure(failure); evOK {
 			maybeNotifyOwner(ctx, ws, ev)
 		}
 		return
 	}
 	if outcome.settledCleanly() {
-		clearOwnerNotify(ws, ownerNotifyDivergenceKinds...)
+		endDivergenceEpisode(ws)
+	}
+}
+
+// receiveBlockProvenance is the line printed above a delivered block: when the
+// receive reached it. The block was rendered then, and any age or severity in
+// it is as of then; a command that runs hours later must not present it as
+// current. [FRAMING:representation] The file's modification time is the
+// receive's write, the one clock the block carries.
+func receiveBlockProvenance(path string, now time.Time) string {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Sprintf("lit: the automatic receive left this sync-failure block (when is unknown: %v)\n", err)
+	}
+	return fmt.Sprintf("lit: the automatic receive reached this sync-failure block %s ago (%s); anything it dates is as of then\n",
+		humanizeCoarseDuration(now.Sub(info.ModTime())), info.ModTime().UTC().Format(time.RFC3339))
+}
+
+// endDivergenceEpisode is what every surface does when a divergence has
+// converged — this receive, `lit sync pull`, `lit sync reconcile` and its
+// take and combine: the owner-notify markers for divergence reset, so the next
+// divergence is a new episode, and a sync-failure block still waiting for a
+// command is retired, since the divergence it describes is gone.
+// [LAW:single-enforcer] one ending, whichever surface converged.
+func endDivergenceEpisode(ws workspace.Info) {
+	clearOwnerNotify(ws, ownerNotifyDivergenceKinds...)
+	if err := os.Remove(receiveBlockPendingPath(ws)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		fmt.Fprintf(os.Stderr, "lit: stale sync-failure block not retired: %v\n", err)
+	}
+}
+
+// deliverPendingReceiveBlock prints, to w, the sync-failure block the last
+// automatic receive left, and removes it, so each block a receive reaches is
+// printed by exactly one command — the next one to finish on this checkout,
+// as the receive once printed it on the command that ran it. The block
+// is claimed by renaming it aside first: a receive that leaves a newer block
+// between this read and the removal keeps it for the command after.
+// [LAW:no-silent-failure] a block that cannot be claimed or read says so.
+func deliverPendingReceiveBlock(w io.Writer, ws workspace.Info) {
+	pending := receiveBlockPendingPath(ws)
+	claimed := fmt.Sprintf("%s.%d", pending, os.Getpid())
+	if err := os.Rename(pending, claimed); err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			fmt.Fprintf(os.Stderr, "lit: pending sync-failure block not claimed: %v\n", err)
+		}
+		return
+	}
+	block, err := os.ReadFile(claimed)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "lit: pending sync-failure block unreadable: %v\n", err)
+	} else if _, err := w.Write(append([]byte(receiveBlockProvenance(claimed, time.Now())), block...)); err != nil {
+		fmt.Fprintf(os.Stderr, "lit: pending sync-failure block not printed: %v\n", err)
+	}
+	if err := os.Remove(claimed); err != nil {
+		fmt.Fprintf(os.Stderr, "lit: printed sync-failure block not removed: %v\n", err)
 	}
 }
 
@@ -442,7 +681,7 @@ func performInlineReconcile(ctx context.Context, session syncSession, ws workspa
 		fmt.Fprintf(os.Stderr, "lit: automatic reconcile trace not recorded: %v\n", traceErr)
 	}
 	// The durable, unconditional counterpart — same reasoning as performSyncReceive's:
-	// this reconcile is reached from an inline receive that commonly runs with no
+	// this reconcile is reached from the automatic receive, which commonly runs with no
 	// automation trigger set, so without this call it would otherwise leave no
 	// durable record of the exact decision (linearized / prose-pending / unrelated).
 	reconcileDecision := string(result.State)
@@ -457,9 +696,9 @@ func performInlineReconcile(ctx context.Context, session syncSession, ws workspa
 		BuildNote: resolveBuildStatusNote(time.Now()),
 		Metadata:  traceMetadata,
 	})
-	// The trace above records the attempt out-of-band; the caller (receiveInline)
-	// surfaces a non-converging reconcile — hard failure OR held free-text — to
-	// stderr through the one sync-failure contract, so both classes read as the
+	// The trace above records the attempt out-of-band; the caller (receiveOnce)
+	// surfaces a non-converging reconcile — hard failure OR held free-text —
+	// through the one sync-failure contract, so both classes read as the
 	// unmissable block rather than a raw "will retry" line. This function stays the
 	// run-and-record step; the surfacing decision lives with the caller that holds
 	// the divergence's counts and age. [LAW:decomposition]

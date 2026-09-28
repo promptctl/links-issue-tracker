@@ -66,7 +66,7 @@ func TestNextRoutesEachCheckoutToItsOwnClaimedWork(t *testing.T) {
 	// alpha pulls bravo's claim before asking `next` again, so the fixture
 	// proves alpha's own-lane precedence even with bravo's claim visible —
 	// not merely "alpha never learned about B.1."
-	t.Setenv(DisableAutoSyncEnvVar, "0")
+	receiveNow(t, alpha)
 	alphaNext := runCLIInDir(t, alpha, "next")
 	if !strings.Contains(alphaNext, a2) {
 		t.Fatalf("alpha's `next` = %q, want %q (its own claimed epic, ranked lowest but held)", alphaNext, a2)

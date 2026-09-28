@@ -34,13 +34,9 @@ import (
 const DisableAutoSyncEnvVar = "LIT_DISABLE_AUTO_SYNC"
 
 // receiveDebounceInterval bounds how often an automatic receive runs: a command
-// burst (an agent running many commands) asks the remote at most once per
-// interval. The receive is inline, so this also bounds how often a command pays
-// for the question — one `git ls-remote` round trip, 1.2–1.3s over ssh to
-// GitHub (sync_receive_ask.go), and the fetch only when the answer says the
-// remote moved — and that only holds while the interval comfortably exceeds a
-// command's own wall time. Receive freshness is a minutes-scale concern, so the
-// interval is minutes.
+// burst (an agent running many commands) spawns at most one receive worker, and
+// so asks the remote at most once, per interval. Receive freshness is a
+// minutes-scale concern, so the interval is minutes.
 // [LAW:no-ambient-temporal-coupling] the bound must not depend on commands
 // staying fast.
 const receiveDebounceInterval = 5 * time.Minute
@@ -70,21 +66,23 @@ func shouldSyncAfterMutation(accessMode app.AccessMode, cadence config.SyncCaden
 // (any command, when enabled). [LAW:single-enforcer] Command handlers stay
 // unaware of either policy.
 //
-// The push mirror is a detached worker that opens its own engine only after this
-// process exits; the receive is inline and runs now, on its own engine, with no
-// other engine open in this process — embedded Dolt permits exactly one
-// read-write engine per path, so the receive must never overlap the command's.
-// [LAW:no-ambient-temporal-coupling]
+// Both are detached workers that open their own engines only after this
+// process exits — embedded Dolt permits exactly one read-write engine per
+// path, so neither may overlap the command's — and neither makes this command
+// wait on the network. [LAW:no-ambient-temporal-coupling]
+//
+// It first prints the sync-failure block an earlier receive left for this
+// checkout, if one is waiting: the receive has no terminal, and this is the
+// seam every command passes through. [LAW:single-enforcer]
 func maybeAutoSyncAfterCommand(ctx context.Context, accessMode app.AccessMode, ws workspace.Info) {
 	if isTruthyEnv(os.Getenv(DisableAutoSyncEnvVar)) {
 		return
 	}
+	deliverPendingReceiveBlock(os.Stderr, ws)
 	syncOnPolicy(ctx, accessMode, ws)
 	// Compaction is gated on having WRITTEN, not on sync policy: only a
 	// mutation grows the store, and a workspace with no remote and no cadence
-	// is exactly the one with nothing else to collect it. It runs last so it
-	// collects whatever the receive above just brought in, and so its own
-	// stall is never charged against the receive's timeout.
+	// is exactly the one with nothing else to collect it.
 	//
 	// That independence is why the policy half is its own unit. Inline, an
 	// unreadable config would return early and take compaction with it —
@@ -116,7 +114,7 @@ func syncOnPolicy(ctx context.Context, accessMode app.AccessMode, ws workspace.I
 		ensureMirrorCoverage(ctx, ws)
 	}
 	if cfg.Sync.Receive {
-		receiveInline(ctx, ws)
+		scheduleReceive(ctx, ws)
 	}
 }
 
@@ -182,7 +180,7 @@ func ensureMirrorCoverage(ctx context.Context, ws workspace.Info) {
 			releaseAnswer()
 		}
 	}
-	// Cheap precondition, mirroring receiveInline's own check: a remote-less
+	// Cheap precondition, mirroring receiveOnce's own check: a remote-less
 	// workspace has nothing to push to, so skip the subprocess spawn entirely
 	// rather than pay fork/exec cost only to have the mirror discover "no
 	// remote" for itself. On-change is the shipped default, not an opt-in a

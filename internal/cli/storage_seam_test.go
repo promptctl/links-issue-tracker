@@ -128,7 +128,7 @@ var doltWorkspaceMachinery = map[string][]string{
 	// RecordPushedHead's answers the mirror's trail has to tell apart — which
 	// way the ref write went, that a failure was the hold budget's cut, and
 	// that only the received-refs write failed — and travel with it.
-	// InlineReceiveDeadline is the receive's own deadline, declared in store
+	// ReceiveDeadline is the receive's own deadline, declared in store
 	// beside the holds it bounds; the cli reads it rather than keep a second
 	// copy.
 	//
@@ -152,7 +152,7 @@ var doltWorkspaceMachinery = map[string][]string{
 	"mirror clone and push": {
 		"MirrorHoldBudget", "MirrorPushDeadline", "MirrorPushCancelLagObserved",
 		"RecordPushedHead", "PushedHeadRecord", "ErrMirrorHoldCut", "ErrReceivedRefsNotRecorded",
-		"InlineReceiveDeadline", "ReadReceivedRefs", "WriteReceivedRefs", "ReceivedRefsPath",
+		"ReceiveDeadline", "ReadReceivedRefs", "WriteReceivedRefs", "ReceivedRefsPath",
 		"LandFetchedHead", "LandedFetch", "ErrRemoteCacheNotLanded",
 	},
 	// Typed failures the CLI matches to choose an exit code and a message.

@@ -75,9 +75,9 @@ to `/Users/bmf/code/links-issue-tracker`.
 
 - `TestMain` re-execs the test binary as the real `lit` binary when `LIT_TEST_REEXEC=1`
   (`cmd/lit/main_signal_test.go`).
-- A SIGTERM delivered while the post-write auto-sync (inline receive) is wedged on the commit
-  lock must terminate the process in under 8 s and exit **0** — the write's own success code
-  (`cmd/lit/main_signal_test.go`).
+- A SIGTERM delivered to the receive worker while it is wedged on the commit lock must end it
+  in under 8 s on the clean path, its `receive end` line written; the `lit backlog` that
+  spawned it has already returned (`cmd/lit/main_signal_test.go`).
 - A SIGTERM delivered while a git subprocess is wedged against a black-hole remote is pinned by
   `TestSIGTERMDuringWedgedGitSubprocessExitsCleanly` (`cmd/lit/main_signal_test.go`),
   using a listener-with-no-accept remote (`cmd/lit/main_signal_test.go`).
@@ -215,7 +215,7 @@ Complete grep of `os.Getenv` / `os.LookupEnv` / `os.Environ` across non-vendored
 | `XDG_CONFIG_HOME` | `internal/config/config.go` | When non-empty, `ConfigDir()` = `$XDG_CONFIG_HOME/links-issue-tracker`; otherwise `$HOME/.config/links-issue-tracker` (`internal/config/config.go`). |
 | `LIT_CONFIG_GLOBAL_PATH` | `internal/config/config.go`, read at | Overrides the global config file path entirely; otherwise `ConfigDir()/config.toml` (`internal/config/config.go`). |
 | `LIT_CONFIG_PROJECT_PATH` | `internal/config/config.go`, read at | Overrides the project config file path; otherwise `<workspaceRoot>/.lit/config.toml` (`internal/config/config.go`). |
-| `LIT_DISABLE_AUTO_SYNC` | const at `internal/cli/sync_cadence.go`; read at `internal/cli/sync_cadence.go` and `internal/cli/owner_notify.go` | When truthy, no command schedules a push mirror, runs an inline receive, **or** compacts (`internal/cli/sync_cadence.go`), and the owner-notify hook never runs (`internal/cli/owner_notify.go`). Truthiness = `strconv.ParseBool` of the trimmed value; a parse error is false (`internal/cli/sync_cadence.go`). |
+| `LIT_DISABLE_AUTO_SYNC` | const at `internal/cli/sync_cadence.go`; read at `internal/cli/sync_cadence.go` and `internal/cli/owner_notify.go` | When truthy, no command schedules a push mirror or a receive, prints a pending receive block, **or** compacts (`internal/cli/sync_cadence.go`), and the owner-notify hook never runs (`internal/cli/owner_notify.go`). Truthiness = `strconv.ParseBool` of the trimmed value; a parse error is false (`internal/cli/sync_cadence.go`). |
 | `CLAUDE_CODE_SESSION_ID` | `internal/cli/cli.go` | When non-empty (after trim), the acting identity is always `claude_<sessionID>`, overriding `--assignee`/`--by`; otherwise the trimmed explicit value passes through (`internal/cli/cli.go`). |
 | `LNKS_AUTOMATION_TRIGGER` | const `internal/cli/automation_trace.go`; read | Non-empty enables automation-trace recording for the command; the value becomes the trace's `Trigger` field (`internal/cli/automation_trace.go`). Empty ⇒ no trace is written. |
 | `LNKS_AUTOMATION_REASON` | const `internal/cli/automation_trace.go`; read | Default `Reason` on the automation trace when the caller supplied none (`internal/cli/automation_trace.go`). |
@@ -314,7 +314,7 @@ Defaults are set in `Load` (`internal/config/config.go`).
 - `maybeAutoSyncAfterCommand` (`internal/cli/sync_cadence.go`): returns immediately when
   `LIT_DISABLE_AUTO_SYNC` is truthy; loads config (unreadable ⇒
   `lit: automatic sync skipped, config unreadable: %v` on stderr and return); runs
-  `ensureMirrorCoverage` when the cadence says so; runs `receiveInline` when `sync.receive`;
+  `ensureMirrorCoverage` when the cadence says so; runs `scheduleReceive` when `sync.receive`;
   runs `compactInline` when the access mode was write.
 - Timing constants: `receiveDebounceInterval = 5 * time.Minute`
   (`internal/cli/sync_cadence.go`); `remoteAbsentRecheckInterval = 10 * time.Second`
