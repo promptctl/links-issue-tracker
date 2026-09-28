@@ -87,9 +87,10 @@ func TestSIGTERMDuringWedgedSyncExitsCleanly(t *testing.T) {
 	}
 
 	// The created-issue line is printed after the write has committed and released
-	// the lock, but before ap.Close and the receive. Seizing the lock here — well
-	// inside the ~hundreds-of-ms it takes the receive to reach SyncAddRemote —
-	// wedges the receive, not the (already durable) write.
+	// the lock, but before ap.Close and the receive. Seizing the lock here —
+	// before the receive's ask and debounce reach its clone of the store, which
+	// takes the commit lock — wedges the receive, not the (already durable)
+	// write.
 	wroteLine := make(chan struct{})
 	go func() {
 		scanner := bufio.NewScanner(stdout)
@@ -203,6 +204,18 @@ func setupWedgeWorkspace(t *testing.T, self string) (workspace.Info, string) {
 	ws, err := workspace.Resolve(root)
 	if err != nil {
 		t.Fatalf("resolve workspace: %v", err)
+	}
+	// The remote must carry lit data, or the receive's ask finds nothing to
+	// fetch and ends before it touches the store — there would be nothing to
+	// wedge. The push records the advertisement it left, which would make the
+	// ask answer "unmoved"; removing that record makes the receive fetch.
+	runGit(t, root, "push", "-u", "origin", "HEAD")
+	if out, err := runLit(t, root, self, onPushEnv(cadenceConfig, "1"),
+		"sync", "push", "--set-upstream"); err != nil {
+		t.Fatalf("seed lit sync push: %v\noutput:\n%s", err, out)
+	}
+	if err := os.Remove(store.ReceivedRefsPath(ws.DatabasePath)); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("remove the push's received-refs record: %v", err)
 	}
 	return ws, cadenceConfig
 }
