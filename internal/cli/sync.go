@@ -554,11 +554,15 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 	// next receive would fetch to learn nothing unless the push records that.
 	// Proving it costs one ls-remote. A failed or superseded push proves
 	// nothing, and the trace says which way the proof went. [LAW:nothing-unseen]
+	// The proof runs under its own deadline off the completion lifetime: the
+	// push has done its work, so the push's deadline is not the proof's.
 	var proven remoteAdvertisement
 	if pushErr == nil && result.Superseded == "" {
-		var proveErr error
-		proven, proveErr = provePushedAdvertisement(ctx, session.syncer, ws, remoteName)
-		traceMetadata["advertisement"] = advertisementProofTrace(proven, proveErr)
+		proofCtx, cancelProof := context.WithTimeout(completionCtx, pushProofDeadline)
+		var unproven string
+		proven, unproven = provePushedAdvertisement(proofCtx, session.syncer, ws, remoteName, target.gitRemotes)
+		cancelProof()
+		traceMetadata["advertisement"] = advertisementProofTrace(unproven)
 	}
 	traceStatus := "ok"
 	traceReason := "managed automation requested sync push"
@@ -619,17 +623,13 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 	}, nil
 }
 
-// advertisementProofTrace is how a push's trace reads the proof: proven, not
-// held by the mirror (a peer pushed after this push landed), or not asked
-// because the question failed.
-func advertisementProofTrace(proven remoteAdvertisement, err error) string {
-	switch {
-	case err != nil:
-		return "unproven: " + err.Error()
-	case proven == remoteAdvertisement{}:
-		return "unproven: the store's git mirror does not hold the remote's head"
+// advertisementProofTrace is how a push's trace reads the proof: proven, or
+// unproven with the reason provePushedAdvertisement gave.
+func advertisementProofTrace(unproven string) string {
+	if unproven == "" {
+		return "proven"
 	}
-	return "proven"
+	return "unproven: " + unproven
 }
 
 func syncStatusLeaf() syncLeaf {
@@ -751,6 +751,9 @@ type syncTarget struct {
 	remote string
 	branch string
 	skip   syncTargetSkip
+	// gitRemotes is the git remote list the target was resolved from, so a
+	// step after the push reads the same list rather than a second one.
+	gitRemotes []workspace.GitRemote
 }
 
 // traceMetadata renders the resolved remote as trace metadata — nil before one
@@ -800,7 +803,7 @@ func resolveSyncTarget(ctx context.Context, session syncSession, ws workspace.In
 	if err != nil {
 		return syncTarget{remote: remoteName}, err
 	}
-	return syncTarget{remote: remoteName, branch: branch}, nil
+	return syncTarget{remote: remoteName, branch: branch, gitRemotes: syncState.gitRemotes}, nil
 }
 
 // syncPullOutcome is the result of one pull attempt, independent of CLI

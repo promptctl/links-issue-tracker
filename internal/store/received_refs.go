@@ -9,7 +9,8 @@ import (
 
 // The received-refs record is the last advertisement of the sync remote this
 // store is known to hold: what a settled automatic receive observed before it
-// fetched, or what a landed push proved it left the remote showing. It is kept at <StorageDir>/received-refs.last so the receive can answer "has the
+// fetched, or what a landed push proved it left the remote showing. It is
+// kept at <StorageDir>/received-refs.last so the receive can answer "has the
 // remote moved" with the store closed (internal/cli/sync_receive_ask.go owns
 // the question and the record's bytes). It is knowledge ABOUT the Dolt
 // directory that sits beside it, so it must live and die with that directory:

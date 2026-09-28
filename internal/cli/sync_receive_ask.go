@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
@@ -137,11 +138,16 @@ func (a remoteAdvertisement) commits() []string {
 	return ids
 }
 
+// pushProofDeadline bounds a push's proof: one `git ls-remote` (1.2-1.7s
+// measured over ssh, 2026-09-27) and one local `git cat-file`. The push has
+// already landed, so a proof cut short costs only the next receive one fetch.
+const pushProofDeadline = 10 * time.Second
+
 // provePushedAdvertisement asks the remote, right after a push from this
 // session's store landed without being superseded, what it now advertises,
 // and returns that advertisement only when the store's own git mirror holds
 // every commit in it. Otherwise it returns the zero advertisement, which
-// records nothing.
+// records nothing, and why, which the push's trace carries.
 //
 // Why holding the commit proves the advertisement is this push's: Dolt moves
 // refs/dolt/data only by compare-and-swap, each write a new commit on top of
@@ -152,22 +158,33 @@ func (a remoteAdvertisement) commits() []string {
 // session, since the mirror's clone is private to its cycle and a foreground
 // push holds the store. A superseded push is left out because it did fetch,
 // so its mirror can hold a peer's head that the store never took in.
-// [LAW:parse-dont-validate] the non-zero advertisement is the proof; nothing
-// downstream re-asks.
-func provePushedAdvertisement(ctx context.Context, syncer storage.Syncer, ws workspace.Info, remoteName string) (remoteAdvertisement, error) {
-	gitRemotes, err := workspace.GitRemotes(ctx, ws.RootDir)
+//
+// Only the remote the automatic receive asks is worth proving: the record
+// holds one remote's advertisement, and a push to another remote would
+// replace a record the receive can use with one it never matches.
+// [LAW:one-source-of-truth] resolveSyncRemote picks that remote, as it does
+// for the receive. [LAW:parse-dont-validate] the non-zero advertisement is the
+// proof; nothing downstream re-asks.
+func provePushedAdvertisement(ctx context.Context, syncer storage.Syncer, ws workspace.Info, remoteName string, gitRemotes []workspace.GitRemote) (proven remoteAdvertisement, unproven string) {
+	receiveRemote, err := resolveSyncRemote("", workspace.UpstreamRemote(ctx, ws.RootDir), gitRemotes)
 	if err != nil {
-		return remoteAdvertisement{}, fmt.Errorf("read git remotes: %w", err)
+		return remoteAdvertisement{}, "resolve the remote the automatic receive asks: " + err.Error()
+	}
+	if receiveRemote != remoteName {
+		return remoteAdvertisement{}, fmt.Sprintf("pushed remote %q is not the remote the automatic receive asks (%q)", remoteName, receiveRemote)
 	}
 	observed, err := advertise(ctx, ws, remoteName, gitRemotes)
 	if err != nil {
-		return remoteAdvertisement{}, err
+		return remoteAdvertisement{}, err.Error()
 	}
 	held, err := syncer.SyncRemoteMirrorHolds(ctx, remoteName, observed.commits())
-	if err != nil || !held {
-		return remoteAdvertisement{}, err
+	if err != nil {
+		return remoteAdvertisement{}, err.Error()
 	}
-	return observed, nil
+	if !held {
+		return remoteAdvertisement{}, "the store's git mirror does not hold every commit the remote advertises"
+	}
+	return observed, ""
 }
 
 // recordPushedAdvertisement writes the record a foreground push proved, on

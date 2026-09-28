@@ -49,6 +49,11 @@ func (r PushedHeadRecord) String() string {
 // explanation is the mirror's. [LAW:one-source-of-truth]
 var ErrMirrorHoldCut = errors.New("mirror hold cut at its budget")
 
+// ErrReceivedRefsNotRecorded marks a RecordPushedHead whose ref write landed
+// and whose received-refs write did not: the push's bookkeeping stands, and
+// what is lost is only the next automatic receive's skip.
+var ErrReceivedRefsNotRecorded = errors.New("received-refs record not written, so the next automatic receive fetches")
+
 // RecordPushedHead records, on the store at doltRootDir, what a push run from
 // a clone of it established at the peer: the remote-tracking ref
 // `remotes/<remote>/<branch>` is set to head — the commit the clone pushed as
@@ -100,14 +105,17 @@ var ErrMirrorHoldCut = errors.New("mirror hold cut at its budget")
 //
 // receivedRefs, when non-nil, is the received-refs record the push proved: the
 // advertisement it left the remote showing (internal/cli/sync_receive_ask.go
-// owns its bytes and the proof). It is written here, after the ref settled and
-// inside the same hold, for two reasons. The hold is what keeps a rotation of
-// the Dolt directory from landing between the push's bookkeeping and the
-// record, which would let the record describe a directory that was swapped
-// out. And the record says "this store holds what the remote advertises", so
-// the next receive skips its fetch: written over a ref that failed to move, it
-// would stop that fetch from ever repairing the ref. A nil record leaves the
-// one on disk standing. [LAW:one-source-of-truth]
+// owns its bytes and the proof). It is written here, inside the workspace
+// hold and after the ref write has closed cleanly, for two reasons. The hold
+// is what keeps a rotation of the Dolt directory from landing between the
+// push's bookkeeping and the record, which would let the record describe a
+// directory that was swapped out. And the record says "this store holds what
+// the remote advertises", so the next receive skips its fetch: written over a
+// ref that failed to move or failed to flush, it would stop that fetch from
+// ever repairing the ref. It is written only when the ref ends at head; a ref
+// already past head was carried there by something that recorded a newer
+// advertisement. A nil record leaves the one on disk standing.
+// [LAW:one-source-of-truth]
 func RecordPushedHead(ctx context.Context, doltRootDir string, remote string, branch string, head string, receivedRefs []byte) (record PushedHeadRecord, err error) {
 	root, err := validateDoltRootDir(doltRootDir)
 	if err != nil {
@@ -143,9 +151,31 @@ func RecordPushedHead(ctx context.Context, doltRootDir string, remote string, br
 	if err := requireNoPendingAdopt(root); err != nil {
 		return 0, err
 	}
-	ddb, releaseRecord, err := openChunkStoreForRefWrite(ctx, root)
+	record, atHead, err := settlePushedHead(ctx, root, trimmedRemote, trimmedBranch, trimmedHead)
 	if err != nil {
 		return 0, err
+	}
+	// The record is written only once the ref write has closed cleanly, and
+	// only when the ref ends at the pushed head: a ref already past it was
+	// carried there by a later push or fetch, which recorded something newer
+	// than this push's advertisement. [LAW:dataflow-not-control-flow] exception:
+	// a nil record, or a ref past head, leaves the record on disk standing.
+	if receivedRefs != nil && atHead {
+		if writeErr := WriteReceivedRefs(root, receivedRefs); writeErr != nil {
+			return record, fmt.Errorf("%w: pushed head %s recorded (%s): %w", ErrReceivedRefsNotRecorded, trimmedHead, record, writeErr)
+		}
+	}
+	return record, nil
+}
+
+// settlePushedHead is RecordPushedHead's ref write: the chunk-store open, the
+// hold, the commit lock, and the one ref comparison and move, all released
+// before it returns. atHead reports whether the ref now names head, moved
+// there or already there, as against left on a descendant of it.
+func settlePushedHead(ctx context.Context, root, trimmedRemote, trimmedBranch, trimmedHead string) (record PushedHeadRecord, atHead bool, err error) {
+	ddb, releaseRecord, err := openChunkStoreForRefWrite(ctx, root)
+	if err != nil {
+		return 0, false, err
 	}
 	defer func() {
 		// The record retires first, then Close releases Dolt's LOCK and
@@ -169,7 +199,7 @@ func RecordPushedHead(ctx context.Context, doltRootDir string, remote string, br
 	// ref write land inside that gap.
 	releaseCommit, err := acquireCommitLockAtPath(holdCtx, workspaceStorageDir(root), commitLockPathForDolt(root))
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	defer func() {
 		err = SettleCommitLockRelease(err, releaseCommit())
@@ -177,11 +207,11 @@ func RecordPushedHead(ctx context.Context, doltRootDir string, remote string, br
 	trackingRef := ref.NewRemoteRef(trimmedRemote, trimmedBranch)
 	pushed, err := ddb.ReadCommit(holdCtx, hash.Parse(trimmedHead))
 	if err != nil {
-		return 0, fmt.Errorf("record pushed head %s: this store does not hold it as a commit: %w", trimmedHead, err)
+		return 0, false, fmt.Errorf("record pushed head %s: this store does not hold it as a commit: %w", trimmedHead, err)
 	}
 	pushedCommit, ok := pushed.ToCommit()
 	if !ok {
-		return 0, fmt.Errorf("record pushed head %s: this store holds it only as a ghost commit", trimmedHead)
+		return 0, false, fmt.Errorf("record pushed head %s: this store holds it only as a ghost commit", trimmedHead)
 	}
 	// CanFastForward answers four ways for an existing ref: (true, nil) when
 	// the ref is a strict ancestor of head, ErrUpToDate when it IS head,
@@ -192,24 +222,19 @@ func RecordPushedHead(ctx context.Context, doltRootDir string, remote string, br
 	// ref answers (true, nil) — the first push.
 	canMove, ffErr := ddb.CanFastForward(holdCtx, trackingRef, pushedCommit)
 	switch {
-	case errors.Is(ffErr, doltdb.ErrUpToDate), errors.Is(ffErr, doltdb.ErrIsAhead):
-		record = PushedHeadCarried
+	case errors.Is(ffErr, doltdb.ErrUpToDate):
+		return PushedHeadCarried, true, nil
+	case errors.Is(ffErr, doltdb.ErrIsAhead):
+		return PushedHeadCarried, false, nil
 	case ffErr != nil:
-		return 0, fmt.Errorf("record pushed head %s on remotes/%s/%s: compare the ref with the pushed head: %w", trimmedHead, trimmedRemote, trimmedBranch, ffErr)
+		return 0, false, fmt.Errorf("record pushed head %s on remotes/%s/%s: compare the ref with the pushed head: %w", trimmedHead, trimmedRemote, trimmedBranch, ffErr)
 	case !canMove:
-		return 0, fmt.Errorf("record pushed head %s on remotes/%s/%s: the ref has diverged from the pushed head (the remote was rewritten under the clone); the next fetch settles it", trimmedHead, trimmedRemote, trimmedBranch)
-	default:
-		if setErr := ddb.SetHead(holdCtx, trackingRef, hash.Parse(trimmedHead)); setErr != nil {
-			return 0, fmt.Errorf("record pushed head %s on remotes/%s/%s: %w", trimmedHead, trimmedRemote, trimmedBranch, setErr)
-		}
-		record = PushedHeadMoved
+		return 0, false, fmt.Errorf("record pushed head %s on remotes/%s/%s: the ref has diverged from the pushed head (the remote was rewritten under the clone); the next fetch settles it", trimmedHead, trimmedRemote, trimmedBranch)
 	}
-	if receivedRefs != nil {
-		if writeErr := WriteReceivedRefs(root, receivedRefs); writeErr != nil {
-			return record, fmt.Errorf("pushed head %s recorded (%s), but not what the push left the remote advertising, so the next automatic receive fetches: %w", trimmedHead, record, writeErr)
-		}
+	if setErr := ddb.SetHead(holdCtx, trackingRef, hash.Parse(trimmedHead)); setErr != nil {
+		return 0, false, fmt.Errorf("record pushed head %s on remotes/%s/%s: %w", trimmedHead, trimmedRemote, trimmedBranch, setErr)
 	}
-	return record, nil
+	return PushedHeadMoved, true, nil
 }
 
 // openChunkStoreForRefWrite opens the workspace's Dolt database without a SQL

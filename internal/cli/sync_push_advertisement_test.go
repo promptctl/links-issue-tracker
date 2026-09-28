@@ -79,15 +79,22 @@ func TestAPushRecordsTheAdvertisementItLeft(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open consumer sync session: %v", err)
 	}
-	proven, err := provePushedAdvertisement(context.Background(), session.syncer, resolved, "origin")
+	gitRemotes, err := workspace.GitRemotes(context.Background(), resolved.RootDir)
+	if err != nil {
+		t.Fatalf("read consumer git remotes: %v", err)
+	}
+	proven, unproven := provePushedAdvertisement(context.Background(), session.syncer, resolved, "origin", gitRemotes)
+	// A push to a remote the receive never asks proves nothing either: its
+	// record would replace one the receive can match with one it cannot.
+	_, otherRemote := provePushedAdvertisement(context.Background(), session.syncer, resolved, "backup", gitRemotes)
 	if closeErr := closeStore(); closeErr != nil {
 		t.Fatalf("close consumer sync session: %v", closeErr)
 	}
-	if err != nil {
-		t.Fatalf("provePushedAdvertisement() after a peer's push error = %v", err)
+	if proven != (remoteAdvertisement{}) || !strings.Contains(unproven, "does not hold") {
+		t.Fatalf("provePushedAdvertisement() after a peer's push = %q, %q; want nothing proven because the mirror lacks the peer's head", proven.refs, unproven)
 	}
-	if proven != (remoteAdvertisement{}) {
-		t.Fatalf("provePushedAdvertisement() proved the peer's head %q as this checkout's own", proven.refs)
+	if !strings.Contains(otherRemote, "not the remote the automatic receive asks") {
+		t.Fatalf("provePushedAdvertisement() for a remote the receive does not ask: unproven = %q", otherRemote)
 	}
 
 	// (d) So the peer's push still reaches this checkout on the next receive.

@@ -503,7 +503,9 @@ func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnsw
 	// so the out-of-band record here exists only for a could-not-attempt
 	// failure, which nothing else recorded — the deadline cause joins it
 	// instead of writing its own. [LAW:single-enforcer]
-	deadlineCut := attempted && pushCtx.Err() != nil && ctx.Err() == nil
+	// A push that landed was not cut, whatever the clock read after it: the
+	// proof that follows a landed push runs past the push deadline by design.
+	deadlineCut := attempted && !landed.landed() && pushCtx.Err() != nil && ctx.Err() == nil
 	if onceErr != nil {
 		var cause error
 		if deadlineCut {
@@ -528,7 +530,15 @@ func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnsw
 			if errors.Is(recordErr, store.ErrMirrorHoldCut) {
 				recordErr = fmt.Errorf("%w: %w", holdBudgetCutExplanation("recording the pushed head"), recordErr)
 			}
-			recordMirrorTraceError(ws, fmt.Errorf("record the push on the live store (tracking ref %s; while it is unrecorded, freshness reads say \"not pushed\" until the next fetch): %w", record, recordErr))
+			// Which write failed decides the consequence: the tracking ref's
+			// (freshness reads are wrong until the next fetch) or only the
+			// received-refs record's (the next receive fetches), which says so
+			// in its own error.
+			if errors.Is(recordErr, store.ErrReceivedRefsNotRecorded) {
+				recordMirrorTraceError(ws, fmt.Errorf("record the push on the live store: %w", recordErr))
+			} else {
+				recordMirrorTraceError(ws, fmt.Errorf("record the pushed head on the live store (freshness reads say \"not pushed\" until the next fetch): %w", recordErr))
+			}
 		}
 		fmt.Fprintf(log, "%s mirror hold released step=record elapsed=%s ref=%s\n", time.Now().UTC().Format(time.RFC3339), recordHeld.Round(time.Millisecond), record)
 	}

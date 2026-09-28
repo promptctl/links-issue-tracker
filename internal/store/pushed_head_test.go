@@ -293,7 +293,13 @@ func TestRecordPushedHeadNeverMovesTheTrackingRefBackwards(t *testing.T) {
 	}
 
 	// The clone's record arrives late, for c2 — an ancestor of where the ref is.
-	record, err := RecordPushedHead(ctx, doltRoot, "origin", "master", c2, nil)
+	// Its proven advertisement is older than whatever carried the ref past
+	// it, so the record on disk stands.
+	newer := []byte("newer\n")
+	if err := WriteReceivedRefs(doltRoot, newer); err != nil {
+		t.Fatalf("WriteReceivedRefs() error = %v", err)
+	}
+	record, err := RecordPushedHead(ctx, doltRoot, "origin", "master", c2, []byte("late-c2\n"))
 	if err != nil {
 		t.Fatalf("RecordPushedHead(c2) error = %v", err)
 	}
@@ -303,13 +309,21 @@ func TestRecordPushedHeadNeverMovesTheTrackingRefBackwards(t *testing.T) {
 	if got := trackingRef("after late record of c2"); got != c3 {
 		t.Fatalf("the late record moved the tracking ref backwards to %s; want it left at c3 %s", got, c3)
 	}
-	// And for exactly where the ref is: nothing to do, still not an error.
-	record, err = RecordPushedHead(ctx, doltRoot, "origin", "master", c3, nil)
+	if got, err := ReadReceivedRefs(doltRoot); err != nil || string(got) != string(newer) {
+		t.Fatalf("received-refs record after a carried-past record = %q, %v; want the newer %q standing", got, err, newer)
+	}
+	// And for exactly where the ref is: nothing to do to the ref, still not an
+	// error, and the ref ends at the pushed head, so the proof is recorded.
+	atC3 := []byte("at-c3\n")
+	record, err = RecordPushedHead(ctx, doltRoot, "origin", "master", c3, atC3)
 	if err != nil {
 		t.Fatalf("RecordPushedHead(c3) error = %v", err)
 	}
 	if record != PushedHeadCarried {
 		t.Fatalf("RecordPushedHead(c3) = %s, want carried: the ref already names c3", record)
+	}
+	if got, err := ReadReceivedRefs(doltRoot); err != nil || string(got) != string(atC3) {
+		t.Fatalf("received-refs record after a record at the ref = %q, %v; want %q", got, err, atC3)
 	}
 	// The forward move still works from this state: a later head moves it.
 	c4 := commit("c4")
