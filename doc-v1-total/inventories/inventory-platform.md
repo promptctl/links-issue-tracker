@@ -1013,7 +1013,10 @@ setup-go@v5 (`cache: true`) → `go mod download` → `go run ./tools/licenses -
     `.url` starting `https://github.com/` and containing `/<tag>/`, and every `.sha256` matching
     `^[0-9a-f]{64}$`; and the sorted platform list equals the literal
     `["darwin/amd64","darwin/arm64","linux/amd64","linux/arm64","windows/amd64"]`, restated
-    independently of `.goreleaser.yml` on purpose.
+    independently of `.goreleaser.yml` on purpose; and the key sets equal the literal
+    `{"top":["artifacts","commit","date","is_dev","schema_support","version"],"schema_support":["max","min"],"artifact":[["platform","sha256","url"]]}`
+    (every artifact must carry the same keys), restated independently of `internal/release`
+    on purpose.
 14. **`Assert release archive carries the license bundle + report`**: asserts
     exactly one `dist/lit_*_linux_amd64.tar.gz`, extracts `THIRD_PARTY_LICENSES`,
     `LICENSE-REPORT.md`, `FORKS.md`, and greps for the dolt module row, an `Apache License`

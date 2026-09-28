@@ -395,6 +395,23 @@ jobs:
             exit 1
           fi
 
+          # The key set of every object in the manifest, restated here rather
+          # than derived from internal/release for the same reason as the
+          # platform list: a check derived from the producer passes whatever
+          # the producer writes. This is the only place an unexpected field is
+          # refused — the client decoder tolerates unknown fields on purpose,
+          # because the binary reading a manifest is always older than the one
+          # that wrote it. A new wire field lands here in the same PR.
+          # [LAW:verifiable-goals]
+          EXPECTED_KEYS='{"top":["artifacts","commit","date","is_dev","schema_support","version"],"schema_support":["max","min"],"artifact":[["platform","sha256","url"]]}'
+          GOT_KEYS=$(jq -c '{top: keys, schema_support: (.schema_support | keys), artifact: ([.artifacts[] | keys] | unique)}' "$MANIFEST")
+          if [ "$GOT_KEYS" != "$EXPECTED_KEYS" ]; then
+            echo "manifest key set mismatch" >&2
+            echo "  expected: $EXPECTED_KEYS" >&2
+            echo "  got:      $GOT_KEYS" >&2
+            exit 1
+          fi
+
           echo "release-manifest.json shape OK; platforms: $GOT"
 
       # links-supply-chain-w6m9.1's acceptance criterion, checked against a
