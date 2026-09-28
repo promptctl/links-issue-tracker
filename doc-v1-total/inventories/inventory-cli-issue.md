@@ -623,13 +623,13 @@ else ready.
 | Flag | Type | Default | Effect |
 |---|---|---|---|
 | `--at` | string | `""` | Declared so the parse accepts it (`cli.go`); `listLeaf` returns its value pointer to `runList` (`cli.go`), which routes on it. The work closure does not read it |
-| `--status` | string array | `nil` | State set via `model.ParseStates` — comma-separated and/or repeated, every fragment parsed; error wrapped `parse --status: %w` (`cli.go`) |
-| `--type` | string | `""` | Single issue type via `parseIssueTypeSlice` (blank → no narrowing); error wrapped `parse --type: %w` (`cli.go`) |
+| `--status` | string array | `nil` | State set via `model.ParseStates` — comma-separated and/or repeated, every fragment parsed; refusal → `ValidationError{"parse --status: " + err}` → exit 3 (`cli.go`) |
+| `--type` | string array | `nil` | Type set via `model.ParseIssueTypes` — comma-separated and/or repeated, every fragment parsed, so a blank or unknown member is refused and named; refusal → `ValidationError{"parse --type: " + err}` → exit 3 (`cli.go`) |
 | `--assignee` | string | `""` | Trimmed, single-element `Assignees`; blank → none (`cli.go`) |
 | `--search` | string | `""` | Trimmed and appended to `SearchTerms` **only if visited** (`cli.go`) |
-| `--ids` | string | `""` | CSV → `filter.IDs`, only if visited (`cli.go`) |
-| `--parent` | string array | `nil` | Issue ids, comma-separated and/or repeated; each occurrence is split with `splitCSV` and the ids of all occurrences are collected, then the surface's positionals are appended → `filter.ParentIDs` (direct children, ORed). An occurrence that names no id (`--parent=`, `--parent ", "`) → `UsageError{"--parent needs an issue id, e.g. --parent <epic-id>"}` → exit 2, checked per occurrence before the positionals are appended, so `lit children <id> --parent=` is refused too. An id naming no issue → `NotFoundError` from the store → exit 4 (`cli.go`; `store.go`) |
-| `--labels` | string | `""` | CSV → `LabelsAll` (ALL must match), only if visited (`cli.go`) |
+| `--ids` | string array | `nil` | Issue ids, comma-separated and/or repeated, read by `storage.ParseNames` exactly as `--parent` is → `filter.IDs`; a blank slot (`--ids=`, `--ids a,`) → `storage.ValidationError{"--ids needs an issue id in every slot, e.g. --ids <issue-id>"}` → exit 3 (`cli.go`; `internal/storage/selects.go`) |
+| `--parent` | string array | `nil` | Issue ids, comma-separated and/or repeated; `storage.ParseNames` splits each occurrence on commas and collects the ids of all occurrences, then the surface's positionals are appended → `filter.ParentIDs` (direct children, ORed). A blank slot (`--parent=`, `--parent ", "`, `--parent a,`) → `storage.ValidationError{"--parent needs an issue id in every slot, e.g. --parent <epic-id>"}` → exit 3, checked before the positionals are appended, so `lit children <id> --parent=` is refused too. An id naming no issue → `NotFoundError` from the store → exit 4 (`cli.go`; `store.go`) |
+| `--labels` | string array | `nil` | Labels, comma-separated and/or repeated, read by `storage.ParseNames` → `LabelsAll` (ALL must match, so each added label narrows); a blank slot → `storage.ValidationError{"--labels needs a label in every slot, e.g. --labels <label>"}` → exit 3 (`cli.go`) |
 | `--has-comments` | bool | `false` | Only if visited; sets the pointer to the flag's value — so `--has-comments=false` filters to issues *without* comments (`cli.go`) |
 | `--include-archived` | bool | `false` | `filter.IncludeArchived` (`cli.go`) |
 | `--include-deleted` | bool | `false` | `filter.IncludeDeleted` (`cli.go`) |
@@ -662,13 +662,16 @@ else ready.
 - `Parse` trims the input and tokenizes it (`query.go`). The tokenizer
   splits on space, tab and newline and honors single and double quotes, which it
   strips; an unterminated quote → `"unterminated quote in query"`
-  (`query.go`).
+  (`query.go`). `Parse` returns every refusal as a `storage.ValidationError`
+  carrying the underlying message, so each exits 3 (`query.go`).
 - Terms (`applyTerm`, `query.go`): `status:<state>[,<state>...]` (via
   `model.ParseStates`), `resolution:<res>` (via `model.ParseResolution`),
-  `type:<type>` (via `model.ParseIssueType`), `assignee:<v>`, `id:<v>`,
-  `parent:<v>` (bare `parent:` →
-  `storage.ValidationError{"parent: needs an issue id, e.g. parent:<epic-id>"}`,
-  `query.go`), `label:<v>`, `has:comments` (any other `has:` →
+  `type:<type>[,<type>...]` (via `model.ParseIssueTypes`), `assignee:<v>`,
+  `id:<v>[,<v>...]`, `parent:<v>[,<v>...]`, `label:<v>[,<v>...]` (the last
+  three via `storage.ParseNames`, the reader the matching flag uses; a blank
+  slot, such as bare `parent:` →
+  `storage.ValidationError{"parent: needs an issue id in every slot, e.g. parent:<epic-id>"}`,
+  `query.go`), `has:comments` (any other `has:` →
   `unsupported has: filter %q`), `sort:<spec>` (via `storage.ParseSortSpecs`),
   `limit:<int>` (non-numeric → `limit must be an integer, got %q`; negative →
   `limit must be non-negative, got %q`), bare `archived`, bare `deleted`, and any

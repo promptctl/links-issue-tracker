@@ -239,8 +239,8 @@ needs someone to finish or release it.
 ### `lit ls`
 
 ```text
-lit ls [--at <store-dir>] [--ids <csv>] [--parent <csv>]... [--search <text>] [--query <q>] [--status <csv of open|in_progress|closed>]
-       [--type <t>] [--labels <csv>] [--assignee <a>] [--has-comments]
+lit ls [--at <store-dir>] [--ids <csv>]... [--parent <csv>]... [--search <text>] [--query <q>] [--status <csv of open|in_progress|closed>]...
+       [--type <csv of task|feature|bug|chore|epic>]... [--labels <csv>]... [--assignee <a>] [--has-comments]
        [--updated-after <rfc3339>] [--updated-before <rfc3339>]
        [--include-archived] [--include-deleted]
        [--sort rank:asc,updated_at:desc] [--limit <n>] [--columns <csv>]
@@ -260,13 +260,22 @@ text; `--query` is a compact query language combining filters and text (e.g.
 discrete filter and list-shaping flags: every flag above has an equivalent token, so
 `--query` alone can express any filter. The token spellings are `status:` (e.g.
 `status:closed,in_progress`, comma-separate multiple states),
-`resolution:`, `type:`, `assignee:`, `id:`, `parent:`, `label:`, `has:comments`,
+`resolution:`, `type:`, `assignee:`, `id:`, `parent:`, `label:` (the last four
+comma-separate multiple values, like their flags), `has:comments`,
 `updated>=`/`updated<=`, `sort:` (e.g. `sort:rank:asc`, comma-separate multiple keys),
 `limit:` (e.g. `limit:5`), and the bare keywords `archived` and `deleted` (the
 `--include-archived` / `--include-deleted` equivalents). Any bare word that is not a
 recognized token is a search term. Archived and deleted issues are hidden unless
 explicitly included. Output-shaping flags (`--columns`, `--format`) have no token —
 they are not filter concerns.
+
+`--status`, `--type`, `--ids`, `--parent` and `--labels` are sets: each takes a comma
+list, may be repeated, and a repeat adds to the set rather than replacing it.
+`--status` and `--type` members are checked against their vocabulary, so one bad
+member fails the whole listing and is named. An empty `--ids`, `--parent` or
+`--labels`, a blank slot in one (`--ids a,`), or a bare `id:`, `parent:` or `label:`,
+is refused rather than ignored. Every one of these refusals exits 3.
+`--labels` requires every label named, so each one added narrows the listing.
 
 `--parent <csv>` (token `parent:<id>`; comma-separated and/or repeated) keeps only the
 direct children of the named issues, read from the parent-child edge, so a grandchild is not listed. An id that

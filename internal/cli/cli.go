@@ -514,15 +514,15 @@ func listLeaf(surface listSurface) (leaf[listScope], *string) {
 	// raw occurrences to model.ParseStates keeps that rule in one place, shared
 	// with the query term. [LAW:single-enforcer]
 	status := fs.StringArray("status", "Filter by status, comma-separated or repeated: open|in_progress|closed")
-	issueType := fs.String("type", "", "Filter by issue type")
+	// Every set-valued filter below is a StringArray for the reason --status is
+	// one: a second occurrence widens the set rather than replacing the first.
+	// [LAW:no-silent-failure]
+	issueType := fs.StringArray("type", "Filter by issue type, comma-separated or repeated: "+issueTypeChoices())
 	assignee := fs.String("assignee", "", "Filter by assignee")
 	search := fs.String("search", "", "Search title and description text")
-	ids := fs.String("ids", "", "Comma-separated issue IDs")
-	// StringArray for the reason --status is one: the parent ids are a set, so a
-	// second --parent widens it rather than replacing the first.
-	// [LAW:no-silent-failure]
+	ids := fs.StringArray("ids", "Issue IDs, comma-separated or repeated")
 	parent := fs.StringArray("parent", "Only direct children of these issue IDs, comma-separated or repeated (lit children <id> is lit ls --parent <id>)")
-	labels := fs.String("labels", "", "Comma-separated labels all of which must match")
+	labels := fs.StringArray("labels", "Labels all of which must match, comma-separated or repeated")
 	hasComments := fs.Bool("has-comments", false, "Only include issues with comments")
 	includeArchived := fs.Bool("include-archived", false, "Include archived issues")
 	includeDeleted := fs.Bool("include-deleted", false, "Include deleted issues")
@@ -557,25 +557,29 @@ func listLeaf(surface listSurface) (leaf[listScope], *string) {
 		}
 		visited := map[string]bool{}
 		fs.Visit(func(f *pflag.Flag) { visited[f.Name] = true })
+		// A bad member of a set filter is a validation refusal: it repeats on
+		// every retry, so it must not draw retry advice. [LAW:no-silent-failure]
 		statuses, err := model.ParseStates(*status...)
 		if err != nil {
-			return fmt.Errorf("parse --status: %w", err)
+			return ValidationError{Message: "parse --status: " + err.Error()}
 		}
-		issueTypes, err := parseIssueTypeSlice(*issueType)
+		issueTypes, err := model.ParseIssueTypes(*issueType...)
 		if err != nil {
-			return fmt.Errorf("parse --type: %w", err)
+			return ValidationError{Message: "parse --type: " + err.Error()}
 		}
-		// Each --parent occurrence must name an id on its own, before the surface's
-		// positional joins the set: `--parent ""` names no parent whichever command
-		// carries it, and dropping it would silently widen or ignore part of the
-		// request. [LAW:no-silent-failure]
-		var parentIDs []string
-		for _, occurrence := range *parent {
-			ids := splitCSV(occurrence)
-			if len(ids) == 0 {
-				return UsageError{Message: "--parent needs an issue id, e.g. --parent <epic-id>"}
-			}
-			parentIDs = append(parentIDs, ids...)
+		issueIDs, err := storage.ParseNames("--ids needs an issue id in every slot, e.g. --ids <issue-id>", *ids...)
+		if err != nil {
+			return err
+		}
+		// Parent ids are read before the surface's positional joins the set:
+		// `--parent ""` names no parent whichever command carries it.
+		parentIDs, err := storage.ParseNames("--parent needs an issue id in every slot, e.g. --parent <epic-id>", *parent...)
+		if err != nil {
+			return err
+		}
+		labelNames, err := storage.ParseNames("--labels needs a label in every slot, e.g. --labels <label>", *labels...)
+		if err != nil {
+			return err
 		}
 		// A surface's positionals are parent ids too, so `children <id>` and
 		// `ls --parent <id>` build the same filter. [LAW:one-source-of-truth]
@@ -583,7 +587,9 @@ func listLeaf(surface listSurface) (leaf[listScope], *string) {
 		filter := storage.ListIssuesFilter{
 			Statuses:        statuses,
 			IssueTypes:      issueTypes,
+			IDs:             issueIDs,
 			ParentIDs:       parentIDs,
+			LabelsAll:       labelNames,
 			Assignees:       toSlice(strings.TrimSpace(*assignee)),
 			IncludeArchived: *includeArchived,
 			IncludeDeleted:  *includeDeleted,
@@ -600,12 +606,6 @@ func listLeaf(surface listSurface) (leaf[listScope], *string) {
 		}
 		if visited["search"] {
 			filter.SearchTerms = append(filter.SearchTerms, strings.TrimSpace(*search))
-		}
-		if visited["ids"] {
-			filter.IDs = splitCSV(*ids)
-		}
-		if visited["labels"] {
-			filter.LabelsAll = splitCSV(*labels)
 		}
 		if visited["has-comments"] {
 			value := *hasComments
@@ -2091,21 +2091,6 @@ func writeJSON(w io.Writer, v any) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
-}
-
-// parseIssueTypeSlice is the strict trust boundary for the read-path --type
-// filter: blank means "no narrowing", anything else must parse. A typo'd type
-// fails loudly instead of flowing into the query and reporting "nothing
-// matches". [LAW:no-silent-failure]
-func parseIssueTypeSlice(s string) ([]model.IssueType, error) {
-	if strings.TrimSpace(s) == "" {
-		return nil, nil
-	}
-	t, err := model.ParseIssueType(s)
-	if err != nil {
-		return nil, err
-	}
-	return []model.IssueType{t}, nil
 }
 
 // parseIssueTypeFlag is the strict trust boundary for the write-path --type

@@ -2,6 +2,8 @@ package model
 
 import (
 	"encoding/json"
+	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -312,6 +314,62 @@ func TestParseIssueType(t *testing.T) {
 		if got, err := ParseIssueType(invalid); err == nil {
 			t.Fatalf("ParseIssueType(%q) = %q, nil; want error naming the valid set", invalid, got)
 		}
+	}
+}
+
+// ParseIssueTypes is the one place a type set is spelled out, shared by the
+// `--type` flag and the `type:` query term; a comma-joined argument and
+// repeated arguments must land on the same slice.
+func TestParseIssueTypesAcceptsBothSpellingsOfASet(t *testing.T) {
+	tests := []struct {
+		name   string
+		inputs []string
+		want   []IssueType
+	}{
+		{"absent", nil, nil},
+		{"one value", []string{"bug"}, []IssueType{TypeBug}},
+		{"comma-joined", []string{"bug,task"}, []IssueType{TypeBug, TypeTask}},
+		{"repeated", []string{"bug", "task"}, []IssueType{TypeBug, TypeTask}},
+		{"repeated and comma-joined together", []string{"bug,task", "epic"}, []IssueType{TypeBug, TypeTask, TypeEpic}},
+		{"normalizing per fragment", []string{" BUG , Task "}, []IssueType{TypeBug, TypeTask}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseIssueTypes(tt.inputs...)
+			if err != nil {
+				t.Fatalf("ParseIssueTypes(%q) error = %v", tt.inputs, err)
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Fatalf("ParseIssueTypes(%q) = %#v, want %#v", tt.inputs, got, tt.want)
+			}
+		})
+	}
+}
+
+// A good member must not launder a bad one, in either order or across
+// repeated arguments, and a blank member is a dropped value rather than "no
+// type filter". The refusal names the member that failed. [LAW:no-silent-failure]
+func TestParseIssueTypesRejectsAnyBadFragment(t *testing.T) {
+	for _, inputs := range [][]string{
+		{"bogus"},
+		{"bug,bogus"},
+		{"bogus,bug"},
+		{"bug", "bogus"},
+		{""},
+		{"bug,"},
+		{","},
+		{"bug,,task"},
+	} {
+		_, err := ParseIssueTypes(inputs...)
+		if err == nil {
+			t.Fatalf("ParseIssueTypes(%q) expected error, got none", inputs)
+		}
+		if !errors.Is(err, errInvalidIssueType) {
+			t.Fatalf("ParseIssueTypes(%q) error = %v; want it to wrap the vocabulary refusal", inputs, err)
+		}
+	}
+	if _, err := ParseIssueTypes("bug,bogus"); err == nil || !strings.Contains(err.Error(), `"bogus"`) {
+		t.Fatalf("ParseIssueTypes(bug,bogus) error = %v; want it to name the bad member", err)
 	}
 }
 

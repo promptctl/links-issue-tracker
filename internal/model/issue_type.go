@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 )
 
@@ -47,6 +48,32 @@ func ParseIssueType(s string) (IssueType, error) {
 		}
 	}
 	return "", errInvalidIssueType
+}
+
+// ParseIssueTypes turns however a caller spelled a set of issue types into the
+// set the storage filter ORs together: a comma list (`--type bug,task`,
+// `type:bug,task`), a repeated flag, or both at once. No inputs is the empty
+// set, the shape an absent flag already has.
+//
+// [LAW:single-enforcer] The `--type` flag and the query grammar's `type:` term
+// are two spellings of one question, so the comma rule for a type set lives
+// here and nowhere else, exactly as model.ParseStates owns it for statuses.
+// [LAW:no-silent-failure] Every fragment goes through ParseIssueType and none
+// is skipped, so a blank member (`--type ""`, `type:bug,`) is as loud as a
+// typo. The failing member is named: in a set, "issue type must be ..." alone
+// does not say which of the members was wrong.
+func ParseIssueTypes(inputs ...string) ([]IssueType, error) {
+	var out []IssueType
+	for _, input := range inputs {
+		for _, field := range strings.Split(input, ",") {
+			t, err := ParseIssueType(field)
+			if err != nil {
+				return nil, fmt.Errorf("invalid issue type %q: %w", field, err)
+			}
+			out = append(out, t)
+		}
+	}
+	return out, nil
 }
 
 // IsContainer reports whether the type uses container-style lifecycle: state

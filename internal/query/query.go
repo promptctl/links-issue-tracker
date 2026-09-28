@@ -14,21 +14,46 @@ type ParseResult struct {
 	Filter storage.ListIssuesFilter
 }
 
+// Parse reads a query expression into a filter. Every refusal it returns is a
+// storage.ValidationError: each one rejects the query text itself, so it
+// repeats on every retry and must not be answered with retry advice. Typing
+// it here, once, covers every term rather than only the ones that remembered
+// to. [LAW:single-enforcer]
 func Parse(input string) (ParseResult, error) {
-	terms, err := tokenize(strings.TrimSpace(input))
+	filter, err := parse(input)
 	if err != nil {
-		return ParseResult{}, err
-	}
-	filter := storage.ListIssuesFilter{}
-	for _, term := range terms {
-		if err := applyTerm(&filter, term); err != nil {
-			return ParseResult{}, err
-		}
+		return ParseResult{}, storage.ValidationError{Message: err.Error()}
 	}
 	return ParseResult{Filter: filter}, nil
 }
 
+func parse(input string) (storage.ListIssuesFilter, error) {
+	terms, err := tokenize(strings.TrimSpace(input))
+	if err != nil {
+		return storage.ListIssuesFilter{}, err
+	}
+	filter := storage.ListIssuesFilter{}
+	for _, term := range terms {
+		if err := applyTerm(&filter, term); err != nil {
+			return storage.ListIssuesFilter{}, err
+		}
+	}
+	return filter, nil
+}
+
+// Merge joins the flag-built filter (base) with the query-built one
+// (incoming). Its refusals — a term contradicting a flag, a time window that
+// ends before it starts — reject the request itself, so like Parse it returns
+// each as a storage.ValidationError, typed here once. [LAW:single-enforcer]
 func Merge(base storage.ListIssuesFilter, incoming storage.ListIssuesFilter) (storage.ListIssuesFilter, error) {
+	filter, err := merge(base, incoming)
+	if err != nil {
+		return storage.ListIssuesFilter{}, storage.ValidationError{Message: err.Error()}
+	}
+	return filter, nil
+}
+
+func merge(base storage.ListIssuesFilter, incoming storage.ListIssuesFilter) (storage.ListIssuesFilter, error) {
 	filter := base
 	// [LAW:parse-dont-validate] Both sides are already []model.State — a type
 	// only model.ParseStates can mint — so statuses merge like every other
@@ -94,34 +119,42 @@ func applyTerm(filter *storage.ListIssuesFilter, term string) error {
 		filter.Resolutions = append(filter.Resolutions, parsed)
 		return nil
 	case strings.HasPrefix(term, "type:"):
-		// [LAW:single-enforcer] The sealed issue-type set is gated by the one
-		// ParseIssueType boundary, mirroring the status: and resolution: terms;
-		// a typo'd type is an error, never an empty result. [LAW:no-silent-failure]
-		parsed, err := model.ParseIssueType(strings.TrimPrefix(term, "type:"))
+		// [LAW:single-enforcer] The type: term and the --type flag both route
+		// through the one model.ParseIssueTypes, as status: and --status share
+		// ParseStates; a typo'd member is an error, never an empty result.
+		// [LAW:no-silent-failure]
+		parsed, err := model.ParseIssueTypes(strings.TrimPrefix(term, "type:"))
 		if err != nil {
 			return err
 		}
-		filter.IssueTypes = append(filter.IssueTypes, parsed)
+		filter.IssueTypes = append(filter.IssueTypes, parsed...)
 		return nil
 	case strings.HasPrefix(term, "assignee:"):
 		filter.Assignees = append(filter.Assignees, strings.TrimSpace(strings.TrimPrefix(term, "assignee:")))
 		return nil
 	case strings.HasPrefix(term, "id:"):
-		filter.IDs = append(filter.IDs, strings.TrimSpace(strings.TrimPrefix(term, "id:")))
+		// [LAW:single-enforcer] id:, parent: and label: read their comma lists
+		// through the one storage.ParseNames their flags use, so a term and its
+		// flag build the same filter at every arity.
+		ids, err := storage.ParseNames("id: needs an issue id in every slot, e.g. id:<issue-id>", strings.TrimPrefix(term, "id:"))
+		if err != nil {
+			return err
+		}
+		filter.IDs = append(filter.IDs, ids...)
 		return nil
 	case strings.HasPrefix(term, "parent:"):
-		id := strings.TrimSpace(strings.TrimPrefix(term, "parent:"))
-		if id == "" {
-			// [LAW:no-silent-failure] A bare `parent:` names no parent; dropping it
-			// would silently widen the listing to every issue. Typed as a
-			// validation refusal: it repeats on every retry, so it must not be
-			// answered with retry advice.
-			return storage.ValidationError{Message: "parent: needs an issue id, e.g. parent:<epic-id>"}
+		ids, err := storage.ParseNames("parent: needs an issue id in every slot, e.g. parent:<epic-id>", strings.TrimPrefix(term, "parent:"))
+		if err != nil {
+			return err
 		}
-		filter.ParentIDs = append(filter.ParentIDs, id)
+		filter.ParentIDs = append(filter.ParentIDs, ids...)
 		return nil
 	case strings.HasPrefix(term, "label:"):
-		filter.LabelsAll = append(filter.LabelsAll, strings.TrimSpace(strings.TrimPrefix(term, "label:")))
+		labels, err := storage.ParseNames("label: needs a label in every slot, e.g. label:<label>", strings.TrimPrefix(term, "label:"))
+		if err != nil {
+			return err
+		}
+		filter.LabelsAll = append(filter.LabelsAll, labels...)
 		return nil
 	case strings.HasPrefix(term, "has:"):
 		switch strings.TrimSpace(strings.TrimPrefix(term, "has:")) {

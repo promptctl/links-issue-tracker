@@ -365,6 +365,12 @@ Complete value set (`issue_type.go`): `TypeTask="task"`,
   `"issue type must be task, feature, bug, chore, or epic"`
   (`issue_type.go`). Pinned by `TestParseIssueType`,
   `model_test.go`.
+- `ParseIssueTypes(inputs ...string) ([]IssueType, error)` — `issue_type.go`:
+  splits every input on `,` and runs each fragment through `ParseIssueType`,
+  skipping none, so a blank fragment is an error; the error names the failing
+  fragment (`invalid issue type %q: %w`, wrapping `errInvalidIssueType`). No
+  inputs → nil. The one type-set parser, shared by `lit ls --type` and the
+  `type:` query term.
 - `(IssueType).IsContainer() bool` — `issue_type.go`: true **only** for
   `TypeEpic`.
 - `ContainerTypes() []IssueType` — `issue_type.go`: the subset of
@@ -1284,10 +1290,11 @@ A listing that says nothing about retention sees only live issues
 |---|---|---|
 | `status:<v>[,<v>...]` | `model.ParseStates` (comma-split, each fragment lowercased with the `in-progress` alias); appended to `Statuses`; parse error propagates | |
 | `resolution:<v>` | `model.ParseResolution` (trim only); appended to `Resolutions` | |
-| `type:<v>` | `model.ParseIssueType`; appended to `IssueTypes`; a typo is an error, never an empty result | |
+| `type:<v>[,<v>...]` | `model.ParseIssueTypes`; appended to `IssueTypes`; a typo or blank member is an error, never an empty result | |
 | `assignee:<v>` | value trimmed, appended to `Assignees` (no validation, empty allowed) | |
-| `id:<v>` | value trimmed, appended to `IDs` | |
-| `label:<v>` | value trimmed, appended to `LabelsAll` (AND semantics) | |
+| `id:<v>[,<v>...]` | `storage.ParseNames`: comma-split, fragments trimmed; appended to `IDs`; any blank slot → `storage.ValidationError` | |
+| `parent:<v>[,<v>...]` | `storage.ParseNames`, as `id:`; appended to `ParentIDs` | |
+| `label:<v>[,<v>...]` | `storage.ParseNames`, as `id:`; appended to `LabelsAll` (AND semantics) | |
 | `has:comments` | sets `HasComments` to `true` via `mergeBoolPointer("has-comments", …)` | |
 | `has:<other>` | error `unsupported has: filter %q` (quoting the **whole** term) | |
 | `sort:<expr>` | `storage.ParseSortSpecs`; specs appended to `SortBy` | |

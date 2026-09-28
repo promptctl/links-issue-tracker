@@ -175,3 +175,28 @@ func TrimmedNonEmpty(values []string) []string {
 	}
 	return out
 }
+
+// ParseNames reads a set of free-text names — issue ids, labels — however the
+// caller spelled it: each input is a comma list, and the inputs union, so a
+// repeated --ids and an id: term both widen one set. Every fragment must name
+// something: a blank one (`--ids ""`, `--ids a,`, `label:`) is refused with
+// the caller's refusal rather than dropped, because a dropped name narrows or
+// unfilters the listing while it keeps the shape of a real answer.
+//
+// [LAW:single-enforcer] The comma rule for a name set lives here, shared by
+// the --ids, --parent and --labels flags and the id:, parent: and label:
+// terms; the caller owns only the wording of its refusal.
+// [LAW:no-silent-failure]
+func ParseNames(refusal string, inputs ...string) ([]string, error) {
+	var out []string
+	for _, input := range inputs {
+		for _, field := range strings.Split(input, ",") {
+			name := strings.TrimSpace(field)
+			if name == "" {
+				return nil, ValidationError{Message: refusal}
+			}
+			out = append(out, name)
+		}
+	}
+	return out, nil
+}

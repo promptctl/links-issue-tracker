@@ -37,11 +37,15 @@ func TestQueryTokenSupersetOfDiscreteFlags(t *testing.T) {
 		// one grammar grows a comma rule the other does not.
 		{"status set", "--status closed,in_progress", "status:closed,in_progress", storage.ListIssuesFilter{Statuses: []model.State{model.StateClosed, model.StateInProgress}}},
 		{"type", "--type task", "type:task", storage.ListIssuesFilter{IssueTypes: []model.IssueType{model.TypeTask}}},
+		{"type set", "--type bug,task", "type:bug,task", storage.ListIssuesFilter{IssueTypes: []model.IssueType{model.TypeBug, model.TypeTask}}},
 		{"assignee", "--assignee bmf", "assignee:bmf", storage.ListIssuesFilter{Assignees: []string{"bmf"}}},
 		{"search", "--search login", "login", storage.ListIssuesFilter{SearchTerms: []string{"login"}}},
 		{"ids", "--ids issue-123", "id:issue-123", storage.ListIssuesFilter{IDs: []string{"issue-123"}}},
+		{"ids set", "--ids issue-123,issue-456", "id:issue-123,issue-456", storage.ListIssuesFilter{IDs: []string{"issue-123", "issue-456"}}},
 		{"parent", "--parent epic-1", "parent:epic-1", storage.ListIssuesFilter{ParentIDs: []string{"epic-1"}}},
+		{"parent set", "--parent epic-1,epic-2", "parent:epic-1,epic-2", storage.ListIssuesFilter{ParentIDs: []string{"epic-1", "epic-2"}}},
 		{"labels", "--labels renderer", "label:renderer", storage.ListIssuesFilter{LabelsAll: []string{"renderer"}}},
+		{"labels set", "--labels renderer,gpu", "label:renderer,gpu", storage.ListIssuesFilter{LabelsAll: []string{"renderer", "gpu"}}},
 		{"has-comments", "--has-comments", "has:comments", storage.ListIssuesFilter{HasComments: boolPtr(true)}},
 		{"updated-after", "--updated-after 2026-03-07T10:00:00Z", "updated>=2026-03-07T10:00:00Z", storage.ListIssuesFilter{UpdatedAfter: &updatedUTC}},
 		{"updated-before", "--updated-before 2026-03-07T10:00:00Z", "updated<=2026-03-07T10:00:00Z", storage.ListIssuesFilter{UpdatedBefore: &updatedUTC}},
@@ -92,14 +96,18 @@ func TestQueryMultiTokenAppliesAllFourNewTokens(t *testing.T) {
 	}
 }
 
-// TestQueryParentRejectsEmptyID pins that a bare parent: is a loud error: the
-// term names no parent, and dropping it would widen the listing to every issue.
-// [LAW:no-silent-failure]
-func TestQueryParentRejectsEmptyID(t *testing.T) {
-	_, err := Parse(`parent:`)
-	var refusal storage.ValidationError
-	if !errors.As(err, &refusal) {
-		t.Fatalf("Parse(parent:) error = %#v, want a storage.ValidationError", err)
+// TestQueryRefusalsAreValidationErrors pins that every refusal of the query
+// text is a storage.ValidationError, so none draws retry advice. The name
+// terms are the ones a regression would quietly turn into "no filter": an
+// id:, parent: or label: naming nothing, or with a blank slot, must be loud
+// rather than widen or narrow the listing. [LAW:no-silent-failure]
+func TestQueryRefusalsAreValidationErrors(t *testing.T) {
+	for _, term := range []string{`parent:`, `id:`, `label:`, `id:,`, `id:a,`, `label:" , "`, `type:bogus`, `type:bug,`, `status:todo`, `limit:lots`, `"unterminated`} {
+		_, err := Parse(term)
+		var refusal storage.ValidationError
+		if !errors.As(err, &refusal) {
+			t.Fatalf("Parse(%s) error = %#v, want a storage.ValidationError", term, err)
+		}
 	}
 }
 
