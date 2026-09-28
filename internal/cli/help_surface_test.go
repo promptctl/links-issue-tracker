@@ -345,10 +345,9 @@ func TestHelpTextPanicsOnAMissingFile(t *testing.T) {
 	_ = helpText("no-such-command")
 }
 
-// `lit help <unknown>` must refuse, not answer. Rewriting the topic into
-// `lit <unknown> --help` would hand it to cobra's root help, which prints the
-// whole command list and exits 0 — the question "what is this command"
-// answered with an answer-shaped non-answer.
+// `lit help <unknown>` must refuse, not answer. Printing the whole command list
+// at exit 0 would answer the question "what is this command" with an
+// answer-shaped non-answer.
 func TestHelpRefusesATopicThatNamesNoCommand(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")
@@ -377,10 +376,10 @@ func TestHelpRefusesATopicThatNamesNoCommand(t *testing.T) {
 	}
 }
 
-// `lit help help` asks about cobra's own built-in command. Cobra registers it
-// lazily inside ExecuteC, so a registered-command scan that runs earlier does
-// not see it, and would refuse `lit help help` as unknown while its own
-// remediation tells the caller to run `lit help <command>`. The
+// `lit help help` asks about cobra's own built-in command, which cobra
+// registers lazily inside ExecuteC: the topic is rewritten like any other and
+// must reach that command rather than the root's unknown-command refusal,
+// whose remediation tells the caller to run `lit help <command>`. The
 // advertised-path tests cannot catch that: `help` is not a registry row, so
 // nothing else in this package ever types it.
 func TestHelpAnswersForCobrasOwnHelpCommand(t *testing.T) {
@@ -405,5 +404,86 @@ func TestHelpAnswersForCobrasOwnHelpCommand(t *testing.T) {
 	}
 	if got := stderr.String(); got != "" {
 		t.Errorf("Run([help help]) stderr = %q, want empty — a help answer is not an error", got)
+	}
+}
+
+// A help flag beside a name that is no command asks about a command that does
+// not exist, so it gets the refusal that name gets without the flag — never
+// the root help at exit 0, which tells a script probing `lit <name> --help`
+// that every typo is a command. The refusal comes before any workspace is
+// resolved, so it holds outside a repository too.
+func TestUnknownCommandRefusesAHelpFlagOnEitherSide(t *testing.T) {
+	chdir(t, t.TempDir())
+
+	for _, args := range [][]string{
+		{"nosuchcommand"},
+		{"nosuchcommand", "--help"},
+		{"nosuchcommand", "-h"},
+		{"--help", "nosuchcommand"},
+		{"-h", "nosuchcommand"},
+		{"--help=true", "nosuchcommand"},
+		{"nosuchcommand", "extra", "--help"},
+		{"--help", "--", "nosuchcommand"},
+		// Everything from the command name on is that command's, so a flag
+		// after an unknown name is never read as the root's.
+		{"nosuchcommand", "--nosuchflag"},
+	} {
+		var stdout, stderr bytes.Buffer
+		runErr := Run(context.Background(), &stdout, &stderr, args)
+		if want := (UnknownCommandError{Command: "nosuchcommand"}); runErr != want {
+			t.Errorf("Run(%q) error = %#v, want %#v", args, runErr, want)
+		}
+		if got := stdout.String(); got != "" {
+			t.Errorf("Run(%q) stdout = %q, want nothing — a refusal is not a help page", args, got)
+		}
+	}
+}
+
+// A flag the root does not declare, written before any command name, is the
+// root's to refuse, and it refuses it as a usage error (exit 2), like every
+// command's parser does.
+func TestRootRefusesAnUnknownFlagAsAUsageError(t *testing.T) {
+	chdir(t, t.TempDir())
+
+	for _, args := range [][]string{{"--nosuchflag"}, {"--nosuchflag", "nosuchcommand"}, {"-x"}} {
+		var stdout, stderr bytes.Buffer
+		runErr := Run(context.Background(), &stdout, &stderr, args)
+		if _, ok := runErr.(UsageError); !ok {
+			t.Errorf("Run(%q) error = %#v, want UsageError", args, runErr)
+		}
+	}
+}
+
+// Bare `lit` outside a git repository has no workspace to print quickstart
+// guidance for, so it prints the root help instead of failing.
+func TestBareLitOutsideARepositoryPrintsTheRootHelp(t *testing.T) {
+	chdir(t, t.TempDir())
+
+	var stdout, stderr bytes.Buffer
+	if runErr := Run(context.Background(), &stdout, &stderr, nil); runErr != nil {
+		t.Fatalf("Run() outside a repo error = %v, want the root help", runErr)
+	}
+	if got := stdout.String(); !strings.Contains(got, "Agent-native issue tracker") || !strings.Contains(got, "lit [command]") {
+		t.Errorf("Run() outside a repo stdout = %q, want the root help", got)
+	}
+	if got := stderr.String(); got != "" {
+		t.Errorf("Run() outside a repo stderr = %q, want empty", got)
+	}
+}
+
+// A help flag ahead of a real command asks about that command. Cobra routes on
+// the first token its flag stripping leaves, and it can only strip `--help` as
+// the boolean it is when the root declares the flag before routing.
+func TestHelpFlagBeforeACommandAnswersForThatCommand(t *testing.T) {
+	chdir(t, t.TempDir())
+
+	for _, args := range [][]string{{"--help", "ls"}, {"-h", "ls"}, {"--help", "--", "ls"}} {
+		var stdout, stderr bytes.Buffer
+		if runErr := Run(context.Background(), &stdout, &stderr, args); runErr != nil {
+			t.Fatalf("Run(%q) error = %v, want the help for ls", args, runErr)
+		}
+		if got := stdout.String(); !strings.HasPrefix(got, "Usage of ls:") {
+			t.Errorf("Run(%q) stdout = %q, want the help for ls", args, got)
+		}
 	}
 }

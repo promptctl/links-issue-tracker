@@ -22,10 +22,11 @@ into* one of those, the call and its observable effect are recorded here.
 - `pflag.ErrHelp` and the internal `errHelpHandled` sentinel are swallowed and
   converted to a nil return, i.e. exit 0 (`cli.go`; sentinel defined at
   `cli.go`).
-- `parseGlobalArgs` (`cli.go`) scans leading args: a literal `--` is
-  consumed and scanning stops (`cli.go`); a leading `--output` or
-  `--output=<x>` returns `unsupportedOutputFlagError()` (`cli.go`); any
-  other token stops the scan. Effect: the removed `--output` flag is rejected in
+- `parseGlobalArgs` (`cli.go`) scans the flag-shaped args before the first
+  positional: a literal `--` among them is consumed and scanning stops
+  (`cli.go`); a `--output` or `--output=<x>` among them returns
+  `unsupportedOutputFlagError()` (`cli.go`); the first token that is not
+  flag-shaped stops the scan. Effect: the removed `--output` flag is rejected in
   *global* position before any command runs.
 - `unsupportedOutputFlagError()` returns
   `UnsupportedError{Message: "--output is no longer supported; omit it for text output"}`
@@ -33,18 +34,26 @@ into* one of those, the call and its observable effect are recorded here.
 
 ### 1.2 Root command
 
-- `Use: "lit"`, `Long: "Agent-native issue tracker"`, `Args: cobra.ArbitraryArgs`
-  (`cli.go`).
-- Bare `lit <unknown-token>` → `UnknownCommandError{Command: args[0]}`
-  (`cli.go`).
+- `Use: "lit"`, `Long: "Agent-native issue tracker"`, `Args: cobra.ArbitraryArgs`,
+  `DisableFlagParsing: true` (`cli.go`). The root's RunE parses its own argv
+  against its flag set (only `-h/--help`, which the root declares itself so it
+  exists before cobra routes) with interspersing off, so flags count as the root's
+  only up to the first positional (`cli.go`).
+- A positional reaching the root → `UnknownCommandError{Command: <first positional>}`
+  (`cli.go`), whether or not a help flag stands before or after it:
+  `lit bogus --help`, `lit -h bogus` and `lit bogus --nosuchflag` all refuse
+  `bogus`, exit 3.
+- A help flag with no positional prints cobra's root `Help()` (`cli.go`).
 - Bare `lit` with no args: resolves the workspace from cwd (`cli.go`). If the
-  error is `workspace.ErrNotGitRepo` it prints cobra's `Help()` (`cli.go`);
+  error is `OutsideWorkspaceError` it prints cobra's `Help()` (`cli.go`);
   any other error is returned (`cli.go`); otherwise it renders and prints
   the quickstart guidance — byte-identical to `lit quickstart` (`cli.go`).
 - Cobra's default `completion` command is disabled (`cli.go`); cobra's built-in
   `help` command remains.
 - Root flag errors are wrapped as `UsageError` so an unknown global flag exits
-  `ExitUsage` (`cli.go`).
+  `ExitUsage`: the root's own parse does this in RunE, and `SetFlagErrorFunc`
+  does it for cobra's `help` command, the one command cobra still parses
+  (`cli.go`).
 
 ### 1.3 Command registry
 
