@@ -22,10 +22,11 @@ into* one of those, the call and its observable effect are recorded here.
 - `pflag.ErrHelp` and the internal `errHelpHandled` sentinel are swallowed and
   converted to a nil return, i.e. exit 0 (`cli.go`; sentinel defined at
   `cli.go`).
-- `parseGlobalArgs` (`cli.go`) scans leading args: a literal `--` is
-  consumed and scanning stops (`cli.go`); a leading `--output` or
-  `--output=<x>` returns `unsupportedOutputFlagError()` (`cli.go`); any
-  other token stops the scan. Effect: the removed `--output` flag is rejected in
+- `parseGlobalArgs` (`cli.go`) scans the flag-shaped args before the first
+  positional: a literal `--` among them is consumed and scanning stops
+  (`cli.go`); a `--output` or `--output=<x>` among them returns
+  `unsupportedOutputFlagError()` (`cli.go`); the first token that is not
+  flag-shaped stops the scan. Effect: the removed `--output` flag is rejected in
   *global* position before any command runs.
 - `unsupportedOutputFlagError()` returns
   `UnsupportedError{Message: "--output is no longer supported; omit it for text output"}`

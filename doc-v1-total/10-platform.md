@@ -14,7 +14,7 @@ Module `github.com/promptctl/links-issue-tracker`, Go `1.25.7` (`go.mod`); CI de
 
 Argument handling before any command runs (`internal/cli/cli.go`):
 
-- `parseGlobalArgs` scans leading arguments; `--` stops scanning; a leading `--output`/`--output=…` is a typed `UnsupportedError` ("--output is no longer supported; omit it for text output") (`cli.go`).
+- `parseGlobalArgs` scans the flag-shaped arguments before the first positional; a `--` among them is removed and ends the scan; a `--output`/`--output=…` among them is a typed `UnsupportedError` ("--output is no longer supported; omit it for text output") (`cli.go`).
 - The root command is `lit` ("Agent-native issue tracker"). With no args it resolves the workspace from cwd: outside a git repo it prints cobra help; inside one it prints the quickstart guidance for the workspace root (`cli.go`). An unrecognized positional is `UnknownCommandError` (`cli.go`).
 - Cobra's default `completion` command is disabled; `SilenceErrors`/`SilenceUsage` are both set; help requests are swallowed and reported as success (`cli.go`).
 - There are no persistent global flags. Per-command flag parsing maps two removed flags to typed errors — `--output` (as above) and `--continue` ("--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag") — and any other unknown flag to `UsageError` (exit 2) (`flagset.go`). `--help` prints `Usage of <cmd>:` plus flag defaults to stdout (`cli.go`).

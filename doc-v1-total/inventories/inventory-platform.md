@@ -85,14 +85,15 @@ to `/Users/bmf/code/links-issue-tracker`.
 ### 2.4 Argument parsing and the root command (`internal/cli/cli.go`)
 
 - `Run` first calls `parseGlobalArgs(args)` (`internal/cli/cli.go`). That function scans
-  leading arguments and:
-  - `--` stops scanning and everything after is passed through (`internal/cli/cli.go`);
-  - a bare `--output` or any `--output=…` in the leading position returns
+  the flag-shaped arguments before the first positional and:
+  - a `--` among them is removed and the scan ends, the rest passed through
+    (`internal/cli/cli.go`);
+  - a bare `--output` or any `--output=…` among them returns
     `UnsupportedError{Message: "--output is no longer supported; omit it for text output"}`
     (`internal/cli/cli.go`);
-  - any other first token stops scanning (`internal/cli/cli.go`).
+  - the first token that is not flag-shaped ends the scan (`internal/cli/cli.go`).
 - The root cobra command: `Use: "lit"`, `Long: "Agent-native issue tracker"`,
-  `Args: cobra.ArbitraryArgs` (`internal/cli/cli.go`).
+  `Args: cobra.ArbitraryArgs`, `DisableFlagParsing: true` (`internal/cli/cli.go`).
 - Root with **no args**: resolves the workspace from cwd; if the error is
   `workspace.ErrNotGitRepo` it prints cobra help; otherwise it renders and prints the
   quickstart guidance for `ws.RootDir` (`internal/cli/cli.go`).
