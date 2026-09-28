@@ -14,7 +14,7 @@ Repo: `/Users/bmf/code/links-issue-tracker`. Derived entirely from Go/SQL source
 2. `requireEmbeddedSyncSupport()` (`sync.go`) — version floor check, see §1.2.
 3. `acquireWorkspaceShared(ctx, doltRootDir)` (`sync.go`) — workspace shared lock acquired **before** database bootstrap. On any later failure the release is invoked and its error joined onto the returned error (`sync.go`).
 4. `requireNoPendingAdopt(doltRootDir)` (`sync.go`) — refuses if an adopt marker is present while the workspace lock is held.
-5. `ensureDoltDatabase(ctx, doltRootDir, workspaceID)` (`sync.go`) — same initializer `Store.Open` uses.
+5. `ensureDoltDatabase(ctx, doltRootDir, workspaceID)` (`sync.go`) — same initializer `store.Open` uses.
 6. `openStoreConnection(ctx, doltRootDir, workspaceID, engineWrite)` (`sync.go`) — eager write engine open; waits on Dolt's journal lock bounded by `coResidentHolderWait`, and records itself as the lock's holder for the engine's life.
 7. `s.releaseWorkspaceLock = release` (`sync.go`).
 8. Branch normalization: `masterRenameSource(ctx, s.db)` is read lock-free; only when it returns a non-empty source is `ensureMasterDefaultBranch` run inside `s.withCommitLock` (`sync.go`). A read-only OpenSync therefore takes no commit lock.

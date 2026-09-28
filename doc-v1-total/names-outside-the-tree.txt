@@ -3,8 +3,9 @@
 # such name that no Go file has, and reports an entry here that no chapter
 # writes any more or that the tree now has.
 #
-# One entry per line: the span exactly as the chapter writes it, whitespace,
-# then why it is outside the tree. See CONTRIBUTING.md, "Documented names".
+# One entry per line: the dotted name as the chapter writes it, without any
+# call's arguments (`json.Encoder`, not `json.Encoder(w)`), whitespace, then
+# why it is outside the tree. See CONTRIBUTING.md, "Documented names".
 
 # Standard library.
 os.LookupEnv          os package; the environment-variable survey names what it searched for
@@ -63,3 +64,4 @@ YYYYMMDDThhmmss.nnnnnnnnnZ  reading of the timestamp layout 20060102T150405.0000
 engine.NewSqlEngine   Dolt's sqle engine package, not internal/engine
 store.CreateVersionTable  a goose database.Store variable named store in migration_runner.go, not the store package
 store.Insert          a goose database.Store variable named store in migration_runner.go, not the store package
+Source.Path           the Source field of goose.MigrationResult, not this tree's Source type

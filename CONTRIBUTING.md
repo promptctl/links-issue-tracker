@@ -348,7 +348,9 @@ repository carries, tests and tools included; `go test ./internal/docnames/`
 runs it as part of `go test ./...`. A name surviving only in a comment or a
 string does not count as present, and a name qualified by one of this tree's
 packages (`storage.IssueOrdering`) must be declared in that package, as a
-top-level name or a method.
+top-level name or a method. A member written on an exported type this tree
+declares (`Store.Close`) must be that type's field or method, its own or
+promoted by embedding.
 
 A span is judged when its callee is dot-joined identifiers with a mixed-case
 segment; the mixed-case identifiers among a call's arguments are judged too,

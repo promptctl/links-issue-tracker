@@ -41,8 +41,10 @@ func TestEveryNamedIdentifierExists(t *testing.T) {
 // and a testdata file — each a place a name can look present without being so.
 func fixture(doc, exclusions string) fstest.MapFS {
 	return fstest.MapFS{
-		"go.mod":                     {Data: []byte("module example.com/m\n\ngo 1.22\n")},
-		"a/a.go":                     {Data: []byte("package a\n\n// commentOnly was deleted.\nfunc realFunc() string { return \"stringOnly\" }\n\ntype Thing struct{}\n\nfunc (Thing) Method() {}\n")},
+		"go.mod": {Data: []byte("module example.com/m\n\ngo 1.22\n")},
+		"a/a.go": {Data: []byte("package a\n\n// commentOnly was deleted.\nfunc realFunc() string { return \"stringOnly\" }\n\n" +
+			"type Thing struct{ Field int }\n\nfunc (Thing) Method() {}\n\ntype Other struct{}\n\nfunc (*Other) OtherMethod() {}\n\n" +
+			"type Outer struct{ Thing }\n\ntype Wrapped struct{ fmt.Stringer }\n\nvar result = Wrapped{}.String\n\ntype result struct{}\n")},
 		"b/b.go":                     {Data: []byte("package b\n\nfunc MovedHere() {}\n")},
 		"a/testdata/t.go":            {Data: []byte("package t\nfunc testdataOnly() {}\n")},
 		"other/go.mod":               {Data: []byte("module example.com/other\n")},
@@ -68,13 +70,14 @@ func TestAGhostNameIsReported(t *testing.T) {
 	doc := "Calls `realFunc`, `a.realFunc()`, `realFunc(x, \"ghostQuoted\")`, `(*Thing).Method`, `*Thing` and `[]Thing`.\n" +
 		"Also `commentOnly`, `stringOnly`, `testdataOnly`, `otherModuleOnly`, `ghostFunc`, `realFunc.ghostField` and `ghostCall(x, y)`.\n" +
 		"Then `realFunc(ghostArg)`, `a.MovedHere`, `a.Method` and `(*Thing).GhostMethod`.\n" +
+		"Members: `Thing.Field`, `a.Thing.Method`, `Outer.Method`, `Wrapped.String`, `result.OtherMethod`, `Thing.OtherMethod`.\n" +
 		"Excused: `json.Encoder` and `json.Encoder(w)`.\n"
 	r, err := CheckTree(fixture(doc, "json.Encoder  standard library\n"))
 	if err != nil {
 		t.Fatalf("CheckTree: %v", err)
 	}
 	want := []string{"commentOnly", "stringOnly", "testdataOnly", "otherModuleOnly", "ghostFunc", "realFunc.ghostField", "ghostCall",
-		"ghostArg", "a.MovedHere", "Thing.GhostMethod"}
+		"ghostArg", "a.MovedHere", "Thing.GhostMethod", "Thing.OtherMethod"}
 	if got := missingNames(r); !slices.Equal(got, want) {
 		t.Errorf("Missing = %q, want %q", got, want)
 	}

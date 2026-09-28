@@ -137,19 +137,70 @@ type Tree struct {
 	// names a variable after its package: `store.Downgrade` is a call on a
 	// *store.Store as often as a package function.
 	pkgs map[string]map[string]bool
+	// types maps a type name to its members: its fields, its methods, the
+	// methods of an interface, and the types it embeds, whose members it
+	// promotes. Keyed by bare name across every package, so two types sharing
+	// a name share one member set.
+	types map[string]*members
+}
+
+type members struct {
+	names map[string]bool
+	// embeds are the embedded types named in this tree; opaque is set when an
+	// embedded type is from outside it, whose members the check cannot see.
+	embeds []string
+	opaque bool
+}
+
+func (t Tree) typeNamed(name string) *members {
+	m := t.types[name]
+	if m == nil {
+		m = &members{names: map[string]bool{}}
+		t.types[name] = m
+	}
+	return m
+}
+
+// hasMember reports whether a type has a field or method of that name, its
+// own or promoted from an embedded type.
+func (t Tree) hasMember(typ, name string, seen map[string]bool) bool {
+	m := t.types[typ]
+	if m == nil || seen[typ] {
+		return false
+	}
+	seen[typ] = true
+	if m.opaque || m.names[name] {
+		return true
+	}
+	return slices.ContainsFunc(m.embeds, func(e string) bool { return t.hasMember(e, name, seen) })
 }
 
 // Has reports whether a dotted name exists. Every segment must be an
-// identifier in the tree, and a name qualified by a package this tree holds
-// must be declared in that package: `storage.IssueOrdering` is not satisfied
-// by an `IssueOrdering` that moved to another package.
+// identifier in the tree; a name qualified by a package this tree holds must
+// be declared in that package, so `storage.IssueOrdering` is not satisfied by
+// an `IssueOrdering` that moved to another package; and a member written on a
+// type this tree declares must be that type's, so `Store.Close` is not
+// satisfied by some other type's `Close`.
 func (t Tree) Has(dotted string) bool {
 	segs := strings.Split(dotted, ".")
 	if slices.ContainsFunc(segs, func(s string) bool { return !t.idents[s] }) {
 		return false
 	}
-	decls, isPkg := t.pkgs[segs[0]]
-	return !isPkg || len(segs) == 1 || decls[segs[1]]
+	typ := 0
+	if decls, isPkg := t.pkgs[segs[0]]; isPkg && len(segs) > 1 {
+		if !decls[segs[1]] {
+			return false
+		}
+		typ = 1
+	}
+	// Only an exported type name is read as a type. A lowercase one is as
+	// often a variable — the corpus quotes `result.Head` from code where
+	// `result` is a local — and a variable's members are its type's, which
+	// the name alone does not say.
+	if _, isType := t.types[segs[typ]]; !isType || !token.IsExported(segs[typ]) || typ+1 >= len(segs) {
+		return true
+	}
+	return t.hasMember(segs[typ], segs[typ+1], map[string]bool{})
 }
 
 // ReadTree parses every Go file of the source this repository carries. A
@@ -161,7 +212,7 @@ func ReadTree(fsys fs.FS) (Tree, error) {
 	if err != nil {
 		return Tree{}, err
 	}
-	t := Tree{idents: map[string]bool{}, pkgs: map[string]map[string]bool{}}
+	t := Tree{idents: map[string]bool{}, pkgs: map[string]map[string]bool{}, types: map[string]*members{}}
 	for _, root := range roots {
 		err := fs.WalkDir(fsys, root, func(name string, d fs.DirEntry, err error) error {
 			if err != nil {
@@ -231,11 +282,17 @@ func (t Tree) add(fsys fs.FS, name string) error {
 		switch d := d.(type) {
 		case *ast.FuncDecl:
 			decls[d.Name.Name] = true
+			if d.Recv != nil && len(d.Recv.List) == 1 {
+				if recv, ok := typeName(d.Recv.List[0].Type); ok {
+					t.typeNamed(recv).names[d.Name.Name] = true
+				}
+			}
 		case *ast.GenDecl:
 			for _, spec := range d.Specs {
 				switch spec := spec.(type) {
 				case *ast.TypeSpec:
 					decls[spec.Name.Name] = true
+					t.addMembers(t.typeNamed(spec.Name.Name), spec.Type)
 				case *ast.ValueSpec:
 					for _, n := range spec.Names {
 						decls[n.Name] = true
@@ -245,6 +302,57 @@ func (t Tree) add(fsys fs.FS, name string) error {
 		}
 	}
 	return nil
+}
+
+// addMembers records a type's fields, interface methods and embedded types. A
+// type defined as another type (`type A B`) has no members of its own here and
+// promotes nothing, which is Go's rule for methods; its fields are read through
+// the struct it names only when that struct is written inline.
+func (t Tree) addMembers(m *members, expr ast.Expr) {
+	var fields *ast.FieldList
+	switch e := expr.(type) {
+	case *ast.StructType:
+		fields = e.Fields
+	case *ast.InterfaceType:
+		fields = e.Methods
+	default:
+		return
+	}
+	for _, f := range fields.List {
+		for _, n := range f.Names {
+			m.names[n.Name] = true
+		}
+		if len(f.Names) > 0 {
+			continue
+		}
+		// An embedded field: its type name is also the field's name, and its
+		// members are promoted.
+		if name, ok := typeName(f.Type); ok {
+			m.names[name] = true
+			m.embeds = append(m.embeds, name)
+		} else {
+			m.opaque = true
+		}
+		if _, external := f.Type.(*ast.SelectorExpr); external {
+			m.opaque = true
+		}
+	}
+}
+
+// typeName is the bare name of a named type expression — `T`, `*T`, `T[K]` —
+// and false for anything else.
+func typeName(expr ast.Expr) (string, bool) {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		return e.Name, true
+	case *ast.StarExpr:
+		return typeName(e.X)
+	case *ast.IndexExpr:
+		return typeName(e.X)
+	case *ast.IndexListExpr:
+		return typeName(e.X)
+	}
+	return "", false
 }
 
 // Exclusion is one line of ExclusionsFile: a dotted name as chapters write it,
