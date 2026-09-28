@@ -9,7 +9,9 @@ import (
 	"io/fs"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -463,4 +465,65 @@ func collectAbandonedMirror(base, key string) (reclaimed int64, collected bool, 
 		return 0, false, fmt.Errorf("remove abandoned mirror %s: %w", key, err)
 	}
 	return size, true, nil
+}
+
+// SyncRemoteMirrorHolds reports whether this store's git mirror of remote —
+// the bare repo dbfactory keeps at `<remoteCacheBase>/<key>/repo.git` — holds
+// every one of commits as a git commit object. See the storage.Syncer
+// contract for what the answer proves. It contacts no network: the mirror is
+// a local directory, asked with one `git cat-file --batch-check`.
+//
+// "Cannot prove it" and "could not ask" are kept apart. A remote whose URL has
+// no mirror (not git-backed), a mirror not yet on disk, an empty commit list,
+// or a commit the mirror lacks are all false with no error — each is a true
+// "this mirror does not hold them". A remote this store does not know, a URL
+// that will not parse, or a git that fails to answer is the error.
+// [LAW:no-silent-failure] [LAW:one-source-of-truth] the path comes from the
+// same key derivation the prune uses, pinned by TestRemoteCacheKeyMatchesDoltLayout.
+func (s *Store) SyncRemoteMirrorHolds(ctx context.Context, remote string, commits []string) (bool, error) {
+	if len(commits) == 0 {
+		return false, nil
+	}
+	remotes, err := s.SyncListRemotes(ctx)
+	if err != nil {
+		return false, err
+	}
+	index := slices.IndexFunc(remotes, func(r storage.SyncRemote) bool { return r.Name == remote })
+	if index < 0 {
+		return false, fmt.Errorf("remote %q is not configured on this store", remote)
+	}
+	key, gitBacked, err := remoteCacheKey(remotes[index].URL)
+	if err != nil || !gitBacked {
+		return false, err
+	}
+	gitDir := filepath.Join(s.remoteCacheBase(), key, "repo.git")
+	if _, err := os.Stat(gitDir); errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	} else if err != nil {
+		return false, fmt.Errorf("stat git mirror of remote %q: %w", remote, err)
+	}
+	return gitDirHoldsCommits(ctx, gitDir, commits)
+}
+
+// gitDirHoldsCommits asks one git repository whether every one of commits is
+// a commit object in it. `cat-file --batch-check` answers each input line with
+// "<oid> <type> <size>" or "<input> missing", so absence is an answer and only
+// git failing to run is an error.
+func gitDirHoldsCommits(ctx context.Context, gitDir string, commits []string) (bool, error) {
+	cmd := exec.CommandContext(ctx, "git", "--git-dir", gitDir, "cat-file", "--batch-check")
+	cmd.Stdin = strings.NewReader(strings.Join(commits, "\n") + "\n")
+	out, err := cmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("ask git mirror %s for %d commit(s): %w", gitDir, len(commits), err)
+	}
+	answers := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	if len(answers) != len(commits) {
+		return false, fmt.Errorf("ask git mirror %s: %d answer(s) for %d commit(s): %q", gitDir, len(answers), len(commits), out)
+	}
+	for i, answer := range answers {
+		if !strings.HasPrefix(answer, commits[i]+" commit ") {
+			return false, nil
+		}
+	}
+	return true, nil
 }

@@ -128,9 +128,10 @@ var doltWorkspaceMachinery = map[string][]string{
 	// in store would have left behind (links-testperf-6vfg).
 	// [LAW:one-source-of-truth]
 	//
-	// PushedHeadRecord and ErrMirrorHoldCut are RecordPushedHead's two answers
-	// the mirror's trail has to tell apart — which way the ref write went, and
-	// that a failure was the hold budget's cut — and travel with it.
+	// PushedHeadRecord, ErrMirrorHoldCut and ErrReceivedRefsNotRecorded are
+	// RecordPushedHead's answers the mirror's trail has to tell apart — which
+	// way the ref write went, that a failure was the hold budget's cut, and
+	// that only the received-refs write failed — and travel with it.
 	// InlineReceiveDeadline is the receive's own deadline, declared in store
 	// because the receive holds the store's LOCK for its run and so is a term
 	// of the co-resident wait; the cli reads it rather than keep the second
@@ -146,7 +147,7 @@ var doltWorkspaceMachinery = map[string][]string{
 	// machinery, deleted at S4 with the rest. [LAW:one-way-deps]
 	"mirror clone and push": {
 		"MirrorHoldBudget", "MirrorPushDeadline", "MirrorPushCancelLagObserved",
-		"RecordPushedHead", "PushedHeadRecord", "ErrMirrorHoldCut",
+		"RecordPushedHead", "PushedHeadRecord", "ErrMirrorHoldCut", "ErrReceivedRefsNotRecorded",
 		"InlineReceiveDeadline", "ReadReceivedRefs", "WriteReceivedRefs",
 	},
 	// Typed failures the CLI matches to choose an exit code and a message.

@@ -379,6 +379,7 @@ They live beside the specs rather than in an engine because the schema is the co
 - `SyncFetch(ctx, remote string, prune bool) error`
 - `SyncPush(ctx, remote, branch string, setUpstream, force bool) (SyncPushResult, error)`
 - `SyncPushFromClone(ctx, remote, branch string, setUpstream, force bool) (SyncPushResult, error)` — `SyncPush` for a store that is a frozen clone of a live one (the on-change mirror's push): a push the remote rejects is re-checked, and a remote already carrying the store's HEAD yields a `Superseded` result rather than an error.
+- `SyncRemoteMirrorHolds(ctx, remote string, commits []string) (bool, error)`: whether this store's local mirror of the remote's data holds every one of the given git commit ids; no network. After a push from this store that landed without being superseded, a held advertised commit is this store's own push, never a peer's later one.
 - `SyncPull(ctx, remote, branch string) (SyncPullResult, error)`
 - `SyncReceive(ctx, remote, branch string) (SyncReceiveResult, error)` — fetches and fast-forwards when and only when local is strictly behind; never merges; a divergence it meets is reported, never healed here
 - `SyncCompact(ctx, mode GCMode) (CompactionOutcome, error)` — reclaims local storage at the requested depth with no remote involved

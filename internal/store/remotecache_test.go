@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -386,5 +387,114 @@ func TestRemoteCacheKeyIsStillAbandonedFollowsTheRemotesNotASnapshot(t *testing.
 	if abandoned, err := sync.remoteCacheKeyIsStillAbandoned(ctx, mirrorKey); err != nil || !abandoned {
 		t.Fatalf("after removing origin: remoteCacheKeyIsStillAbandoned(%s) = (%v, %v), want (true, nil) — "+
 			"the answer must follow the remotes, not a snapshot", mirrorKey, abandoned, err)
+	}
+}
+
+// TestSyncRemoteMirrorHoldsItsOwnPushNotAPeersLaterOne pins the one fact the
+// push's received-refs proof rests on: after a store's push lands, the
+// remote's head is a commit that store's git mirror holds, and a head written
+// afterwards by another store (here a clone of it pushing past it, the
+// mirror's own topology) is one it does not, until it fetches. Two-sided on
+// purpose: the peer's mirror holds the same head this one lacks, so the
+// answer depends on whose mirror is asked, not on the commit.
+func TestSyncRemoteMirrorHoldsItsOwnPushNotAPeersLaterOne(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	base := t.TempDir()
+	remote := seedBareGitRemote(t, base)
+	doltRoot := migratedDoltDir(t)
+	remoteHead := func() string {
+		t.Helper()
+		out, err := exec.Command("git", "--git-dir", remote, "rev-parse", "refs/dolt/data").Output()
+		if err != nil {
+			t.Fatalf("rev-parse refs/dolt/data: %v", err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	commit := func(root, title string) {
+		t.Helper()
+		st, err := Open(ctx, root, "ws")
+		if err != nil {
+			t.Fatalf("Open(%q) error = %v", title, err)
+		}
+		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task", Priority: 0}); err != nil {
+			t.Fatalf("CreateIssue(%q) error = %v", title, err)
+		}
+		if err := st.Close(); err != nil {
+			t.Fatalf("Close(%q) error = %v", title, err)
+		}
+	}
+	holds := func(label, root string, commits []string) bool {
+		t.Helper()
+		st, err := OpenSync(ctx, root, "ws")
+		if err != nil {
+			t.Fatalf("%s: OpenSync() error = %v", label, err)
+		}
+		defer st.Close()
+		held, err := st.SyncRemoteMirrorHolds(ctx, "origin", commits)
+		if err != nil {
+			t.Fatalf("%s: SyncRemoteMirrorHolds() error = %v", label, err)
+		}
+		return held
+	}
+
+	commit(doltRoot, "c1")
+	st, err := OpenSync(ctx, doltRoot, "ws")
+	if err != nil {
+		t.Fatalf("OpenSync() error = %v", err)
+	}
+	if err := st.SyncAddRemote(ctx, "origin", GitBackedRemoteURL(remote)); err != nil {
+		t.Fatalf("SyncAddRemote() error = %v", err)
+	}
+	if held, err := st.SyncRemoteMirrorHolds(ctx, "origin", []string{strings.Repeat("a", 40)}); err != nil || held {
+		t.Fatalf("before any push: SyncRemoteMirrorHolds() = %t, %v; want false with no mirror on disk", held, err)
+	}
+	if _, err := st.SyncCompactAndPush(ctx, "origin", "master", true, false); err != nil {
+		t.Fatalf("SyncCompactAndPush() error = %v", err)
+	}
+	if _, err := st.SyncRemoteMirrorHolds(ctx, "upstream", []string{remoteHead()}); err == nil {
+		t.Fatal("SyncRemoteMirrorHolds() answered for a remote this store does not have")
+	}
+	if held, err := st.SyncRemoteMirrorHolds(ctx, "origin", nil); err != nil || held {
+		t.Fatalf("no commits: SyncRemoteMirrorHolds() = %t, %v; want false, nothing proven", held, err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	ownHead := remoteHead()
+	if !holds("own push", doltRoot, []string{ownHead}) {
+		t.Fatalf("the pushing store's mirror does not hold the head its own push left (%s)", ownHead)
+	}
+
+	peerRoot := filepath.Join(base, "peer", "dolt")
+	if err := os.MkdirAll(filepath.Dir(peerRoot), 0o755); err != nil {
+		t.Fatalf("mkdir peer: %v", err)
+	}
+	if err := dbsnapshot.CloneTree(ctx, doltRoot, peerRoot); err != nil {
+		t.Fatalf("CloneTree() error = %v", err)
+	}
+	commit(peerRoot, "c2")
+	peer, err := OpenSync(ctx, peerRoot, "ws")
+	if err != nil {
+		t.Fatalf("OpenSync(peer) error = %v", err)
+	}
+	if _, err := peer.SyncPush(ctx, "origin", "master", false, false); err != nil {
+		t.Fatalf("SyncPush(peer) error = %v", err)
+	}
+	if err := peer.Close(); err != nil {
+		t.Fatalf("Close(peer) error = %v", err)
+	}
+	peerHead := remoteHead()
+	if peerHead == ownHead {
+		t.Fatalf("the peer's push left the remote where it was (%s); nothing distinguishes the two mirrors", peerHead)
+	}
+	if !holds("peer", peerRoot, []string{peerHead}) {
+		t.Fatalf("the peer's mirror does not hold the head its own push left (%s)", peerHead)
+	}
+	if holds("after the peer pushed", doltRoot, []string{peerHead}) {
+		t.Fatalf("this store's mirror claims the peer's later head %s it never fetched", peerHead)
+	}
+	if holds("mixed", doltRoot, []string{ownHead, peerHead}) {
+		t.Fatal("one held commit answered for a list with an unheld one in it")
 	}
 }
