@@ -63,6 +63,27 @@ func TestStartRefusesAndThenTakesOverAFreshForeignClaim(t *testing.T) {
 	if !strings.Contains(err.Error(), "claimed") {
 		t.Fatalf("refusal error = %v, want provenance naming the current holder", err)
 	}
+	// What the caller is told to do next is the rendered remediation, and it
+	// once contradicted the message: exit 1 under "Retry the command … run `lit
+	// doctor`", a retry refused identically and a diagnosis of a healthy
+	// workspace (links-cli-errors-iz41). The gate is a refusal, and the act that
+	// clears it is the flag.
+	var stderr strings.Builder
+	if code := WriteCommandError(&stderr, err); code != ExitValidation {
+		t.Fatalf("refusal exit = %d, want %d (a refusal, not a fault):\n%s", code, ExitValidation, stderr.String())
+	}
+	_, remediation, found := strings.Cut(stderr.String(), "remediation: ")
+	if !found {
+		t.Fatalf("refusal rendered no remediation line:\n%s", stderr.String())
+	}
+	if !strings.Contains(remediation, "--take") {
+		t.Fatalf("remediation = %q, want it to name --take", remediation)
+	}
+	for _, fault := range []string{"Retry the command", "lit doctor"} {
+		if strings.Contains(remediation, fault) {
+			t.Fatalf("remediation = %q, want no fault advice (%q)", remediation, fault)
+		}
+	}
 
 	// Same command, --take: proceeds, and the takeover is visible in the
 	// output rather than silent.

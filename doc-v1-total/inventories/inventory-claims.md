@@ -448,9 +448,10 @@ There is no row for an expired claim. The derivation returns `Unclaimed` the mom
 
 **`confirmFreshTakeover(stdout, cc, lane, take)`** (`internal/cli/claims_takeover.go`). It renders the claim line with `formatClaimLine(cc, lane, time.Now())`; `ok == false` → error `claims: %v is held by another checkout but has no claim line to show`, since the caller reaches here only for a `Held` standing.
 - **Non-interactive** (`!isTerminal(stdout)`, the same signal `openOrPrintWorkflowFile` uses):
-  - `take == false` → **refusal**: `fmt.Errorf("%s — this lane is claimed and active; pass --take to confirm the takeover", line)`.
+  - `take == false` → **refusal**: `takeoverUnconfirmedError{Message: fmt.Sprintf("%s — this lane is claimed and active; pass --take to confirm the takeover", line)}`.
   - `take == true` → prints `"%s — taking over (--take)\n"` and proceeds.
-- **Interactive**: prints `"%s\ntake over this lane? [y/N] "`, reads a line from `os.Stdin` via `bufio.NewReader(os.Stdin).ReadString('\n')`. A read error other than `io.EOF` → `fmt.Errorf("read takeover confirmation: %w", err)`. The answer is accepted iff `strings.HasPrefix(strings.ToLower(strings.TrimSpace(answer)), "y")`; otherwise → `fmt.Errorf("takeover declined")`.
+- **Interactive**: prints `"%s\ntake over this lane? [y/N] "`, reads a line from `os.Stdin` via `bufio.NewReader(os.Stdin).ReadString('\n')`. A read error other than `io.EOF` → `fmt.Errorf("read takeover confirmation: %w", err)`. The answer is accepted iff `strings.HasPrefix(strings.ToLower(strings.TrimSpace(answer)), "y")`; otherwise → `takeoverUnconfirmedError{Message: "takeover declined"}`.
+- Both refusals are `takeoverUnconfirmedError`, which exits 3 with reason `takeover_unconfirmed`, whose remediation names `--take` (`exit.go`, `error_output.go`).
 
 **`transferNotice(ctx, ap, issueID, start)`** (`internal/cli/claims_context.go`) returns `"claim transferred: %s -> %s\n"` when the ticket's recorded claimant (`claims.ClaimantOf`) was established and differs from the claimant the start installs; otherwise the empty string. Its one caller is `authorizeStart`, which asks only from a held lane, so a start on a lane nobody holds announces no transfer whatever the row's history records: an expired claim transfers nothing. Pinned by `TestTransferNoticeNamesAPredecessorThatMintedNoToken` (`internal/cli/claims_render_test.go`) and, for the expired lane, `TestStartOnAnExpiredForeignClaimIsSilent`.
 

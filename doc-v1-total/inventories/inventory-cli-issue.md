@@ -176,14 +176,15 @@ Constants (`exit.go`):
 11. `storage.ValidationError` → 3 (`exit.go`)
 12. `model.ContainerActionError` → 6 when `Satisfied()`, else 3 (`exit.go`)
 13. `UnsupportedError` → 3 (`exit.go`)
-14. `Exhausted` → 6 (`exit.go`)
-15. `NoWork` → 6 (`exit.go`)
-16. `OutsideWorkspaceError` → 3 (`exit.go`)
-17. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → 3 (`exit.go`)
-18. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → 3 (`exit.go`)
-19. `BulkFailureError` → 1 (`exit.go`)
-20. `errors.Is(err, store.ErrTransientGCContention)` → 1 (`exit.go`)
-21. anything else → 1 (`exit.go`)
+14. `takeoverUnconfirmedError` → 3 (`exit.go`)
+15. `Exhausted` → 6 (`exit.go`)
+16. `NoWork` → 6 (`exit.go`)
+17. `OutsideWorkspaceError` → 3 (`exit.go`)
+18. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → 3 (`exit.go`)
+19. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → 3 (`exit.go`)
+20. `BulkFailureError` → 1 (`exit.go`)
+21. `errors.Is(err, store.ErrTransientGCContention)` → 1 (`exit.go`)
+22. anything else → 1 (`exit.go`)
 
 Error types defined in `cli.go`: `MergeConflictError` (`cli.go`),
 `CorruptionError` (`cli.go`), `UsageError` (`cli.go`),
@@ -205,7 +206,7 @@ field (`errors.go`), `RetiredCommandError` — message
 `entity_not_found`, `merge_conflict`, `sync_divergence`, `owner_approval_required`,
 `corruption_detected`, `unknown_command`, `retired_command`, `usage_error`,
 `unsupported_flag` (every `UnsupportedError`, `error_output.go`),
-`outside_git_workspace`, `bulk_partial_failure`, `workspace_write_blocked`,
+`takeover_unconfirmed` (`takeoverUnconfirmedError`), `outside_git_workspace`, `bulk_partial_failure`, `workspace_write_blocked`,
 `transient_gc_contention`, `workspace_not_initialized`, default `command_failed`.
 
 `commandErrorRemediation(reason)` (`error_output.go`), verbatim strings:
@@ -220,6 +221,7 @@ field (`errors.go`), `RetiredCommandError` — message
 - `corruption_detected`: "Run `lit doctor --fix integrity` and retry. \<agent-instructions>This command is idempotent and safe to run without confirmation.\</agent-instructions>"
 - `transient_gc_contention`: "Retry once. If the error persists, run `lit doctor --fix`. \<agent-instructions>…\</agent-instructions>"
 - `workspace_write_blocked`: "Wait a moment and retry — a normal command releases the store in well under a second. If it persists, a lit process is stuck: find it with `ps aux | grep '[l]it'` and terminate it, then retry; if none is running the hold is stale, so run `lit doctor --fix`. \<agent-instructions>…\</agent-instructions>"
+- `takeover_unconfirmed`: "Another checkout holds this lane right now, and `lit start` takes it over only when the takeover is confirmed: rerun with `--take`, or answer `y` at the terminal prompt. Taking a live lane is a deliberate act, not a way past this answer — to leave the lane with its holder, run `lit next` for work nobody else holds."
 - `outside_git_workspace`: "Run the command inside a git repository/worktree with links initialized."
 - `workspace_not_initialized`: "Do not retry unchanged — this repository has no lit workspace, and retrying this command cannot create one. Run `lit init` here to create it, or change to a directory that already has one."
 - `bulk_partial_failure`: "Some items failed; see the per-item errors above. Re-run the command for only the failed IDs after addressing each error."
@@ -1092,14 +1094,15 @@ positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason 
      prints nothing about the lane.
    - `Held` by another → `confirmFreshTakeover` (`claims_takeover.go`):
      - Non-interactive stdout (`!isTerminal(stdout)`) and no `--take` →
-       `fmt.Errorf("<claim line> — this lane is claimed and active; pass --take to confirm the takeover")`
-       → exit 1.
+       `takeoverUnconfirmedError` "<claim line> — this lane is claimed and active; pass --take to confirm the takeover"
+       → exit 3, reason `takeover_unconfirmed`.
      - Non-interactive with `--take` → prints `"<claim line> — taking over (--take)\n"`
        and proceeds.
      - Interactive → prints `"<claim line>\ntake over this lane? [y/N] "`, reads a
        line from stdin; a read error other than EOF →
        `"read takeover confirmation: %w"`; an answer not starting with `y`
-       (case-insensitive, trimmed) → `fmt.Errorf("takeover declined")` → exit 1.
+       (case-insensitive, trimmed) → `takeoverUnconfirmedError` "takeover declined" → exit 3,
+       reason `takeover_unconfirmed`.
 4. Returns the line the start owes after Apply: from a held lane, ours or another's,
    `transferNotice(ctx, ap, issueID, start)` (`claims_context.go`), which is
    `claim transferred: <old> -> <new>` when the recorded claimant changes hands and

@@ -122,7 +122,7 @@ func confirmFreshTakeover(stdout io.Writer, cc claimContext, lane model.LaneID, 
 	}
 	if !isTerminal(stdout) {
 		if !take {
-			return fmt.Errorf("%s — this lane is claimed and active; pass --take to confirm the takeover", line)
+			return takeoverUnconfirmedError{Message: fmt.Sprintf("%s — this lane is claimed and active; pass --take to confirm the takeover", line)}
 		}
 		_, err := fmt.Fprintf(stdout, "%s — taking over (--take)\n", line)
 		return err
@@ -135,7 +135,20 @@ func confirmFreshTakeover(stdout io.Writer, cc claimContext, lane model.LaneID, 
 		return fmt.Errorf("read takeover confirmation: %w", err)
 	}
 	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(answer)), "y") {
-		return fmt.Errorf("takeover declined")
+		return takeoverUnconfirmedError{Message: "takeover declined"}
 	}
 	return nil
 }
+
+// takeoverUnconfirmedError is the gate's answer when a live foreign hold was
+// not crossed: no --take off a terminal, or a "no" at the prompt. Both are the
+// gate working, not a fault, so the type carries that to the sinks — as a bare
+// error it reached the default remediation and told the caller to retry the
+// identical command and then run `lit doctor` on a healthy workspace
+// (links-cli-errors-iz41). One type for both arms: what each says differs, the
+// act that clears them does not. [LAW:one-type-per-behavior]
+type takeoverUnconfirmedError struct {
+	Message string
+}
+
+func (e takeoverUnconfirmedError) Error() string { return e.Message }
