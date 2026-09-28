@@ -95,7 +95,11 @@ func lastFetchSuccessAge(ws workspace.Info, now time.Time) (age time.Duration, o
 func syncStalenessLines(report doctorSyncReport, fetchAge time.Duration, fetchAgeKnown bool) []string {
 	var lines []string
 	ref := ""
-	if report.Kind == doctorSyncResolved {
+	switch report.Kind {
+	case doctorSyncNoRemote:
+		// Nothing to fetch from, so a stale-fetch warning could never clear.
+		return nil
+	case doctorSyncResolved:
 		f := report.Freshness
 		ref = f.Remote + "/" + f.Branch
 		if f.State() == storage.SyncAhead {
@@ -106,7 +110,7 @@ func syncStalenessLines(report doctorSyncReport, fetchAge time.Duration, fetchAg
 		}
 	}
 	// The fetch age is a marker stat, not a freshness read, so an unresolved
-	// report still warns about it, without the ref, as the mutation banner does.
+	// report still warns about it, without the ref.
 	return append(lines, fetchStalenessLines(ref, fetchAge, fetchAgeKnown)...)
 }
 
@@ -185,8 +189,8 @@ func oneLineReason(reason string) string {
 // banners to keep in the same position and the same voice, with the next read
 // command free to wire up one and forget the other. [LAW:single-enforcer]
 //
-// Best-effort throughout: an unresolved or no-remote workspace prints nothing
-// rather than aborting the caller, because this banner is supplementary, not
+// Best-effort throughout: an unresolved or no-remote workspace prints no
+// freshness line rather than aborting the caller, because this banner is supplementary, not
 // itself a diagnostic. [LAW:no-silent-failure] [LAW:effects-at-boundaries]
 func printStalenessWarning(ctx context.Context, w io.Writer, ws workspace.Info, st storage.Store, now time.Time) error {
 	report := resolveDoctorSyncFreshness(ctx, ws, st)

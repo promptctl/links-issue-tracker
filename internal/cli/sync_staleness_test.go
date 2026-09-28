@@ -33,9 +33,11 @@ func TestSyncStalenessLines(t *testing.T) {
 		dontWant      []string
 	}{
 		{
-			name:      "no remote emits nothing",
-			report:    doctorSyncReport{Kind: doctorSyncNoRemote},
-			wantLines: 0,
+			name:          "no remote emits nothing, even with a stale fetch",
+			report:        doctorSyncReport{Kind: doctorSyncNoRemote},
+			fetchAge:      staleAge,
+			fetchAgeKnown: true,
+			wantLines:     0,
 		},
 		{
 			name:      "unresolved emits nothing",
