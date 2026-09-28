@@ -469,15 +469,13 @@ func openStoreConnection(ctx context.Context, doltRootDir string, workspaceID st
 // only LOCK taker that skips the commit lock, RecordPushedHead, runs once
 // per mirror cycle, and the next cycle begins with a clone. So the per-call
 // wait is at most a few multiples of coResidentHolderWait. Across a mutation,
-// this call is the rotate step of retryTransientGCContention's loop, which
-// runs it up to transientRetryMaxAttempts-1 times, so the per-call bound says
-// nothing about the hold a commit-lock waiter actually faces; that aggregate
-// is bounded there, against commitLockWaiterBudget, and pinned by
-// TestRetryTransientGCContentionStopsBeforeOutlastingCommitLockWaiters.
-// Reading the per-call bound as the aggregate would let the product of the
-// two budgets outrun the waiter budget. With both in place, any holder this
-// re-open waits on either releases or outlives this mutation's bounded
-// failure, and the commit lock is released either way.
+// this call is retryTransientGCContention's one rotation, which that function
+// refuses unless the whole hold still fits commitLockWaiterBudget, pinned by
+// TestRetryTransientGCContentionStopsBeforeOutlastingCommitLockWaiters. The
+// per-call bound alone says nothing about the hold a commit-lock waiter
+// faces, because the mutation's own work runs before it. With both in place,
+// any holder this re-open waits on either releases or outlives this
+// mutation's bounded failure, and the commit lock is released either way.
 //
 // The holder record is not rotated with the engine: it names this process
 // and this command, both of which the rotation keeps, and the gap in which

@@ -540,7 +540,7 @@ var (
 	// indistinguishable from the hang this notice exists to rule out.
 	//
 	// Package variables, not constants, by the convention
-	// coResidentHolderWait and transientRetryMaxAttempts already set:
+	// coResidentHolderWait already sets:
 	// tests whose premise is a wait must shrink the budget rather than sleep
 	// through the production one.
 	lockWaitNoticeGrace    = 2 * time.Second

@@ -348,16 +348,12 @@ Test evidence:
 #### 3.4 Retry classification and budgets
 
 - `ErrTransientGCContention = errors.New("transient online-gc contention")` (`commit_lock.go`).
-- `transientRetryMaxAttempts = 30` — a **variable** so tests can shrink it (`commit_lock.go`; shrunk to 2 at `dolt_journal_hold_test.go`).
-- `transientRetryBaseDelay = 50 * time.Millisecond`, `transientRetryMaxDelay = 1 * time.Second` (`commit_lock.go`).
-- `transientRetryDelay(attempt)` = `base << (attempt-1)`, clamped to `maxDelay`; attempts < 1 treated as 1 (`commit_lock.go`). Bounded between base and max for attempts 1..10 (`retry_test.go`).
-
-`retryTransientGCContention(ctx, operation, rotate, delayForAttempt, sleep)` (`commit_lock.go`): loop `attempt := 1; attempt <= transientRetryMaxAttempts`:
-- `classifyTransientGCError(operation(ctx))`; nil → return nil;
-- if not `ErrTransientGCContention` **or** last attempt → break;
-- `sleep(ctx, delayForAttempt(attempt))` — its error is returned immediately;
+`retryTransientGCContention(ctx, operation, rotate)` (`commit_lock.go`), straight-line, no sleep:
+- `classifyTransientGCError(operation(ctx))`; not `ErrTransientGCContention` (nil included) → returned as is;
+- if `time.Since(start) + rotationReserve() >= commitLockWaiterBudget()` → `exhaustedContentionError(err)`, no rotation;
+- print `lit: this write's store connection failed (<error>); reopening it and retrying once` to stderr;
 - `rotate(ctx)` — its error is returned immediately;
-- final: `exhaustedContentionError(lastErr)`.
+- final: `exhaustedContentionError(classifyTransientGCError(operation(ctx)))`.
 
 Retryable/not:
 - `isManifestReadOnlyError`: lowercased message contains both `"cannot update manifest"` and `"read only"` (`commit_lock.go`).
@@ -373,12 +369,13 @@ with `Unwrap() → Cause` (`commit_lock.go`).
 
 Test evidence:
 - One transient then success = 2 calls (`retry_test.go`).
-- Full exhaustion returns the last error, still `ErrTransientGCContention`, with exactly `transientRetryMaxAttempts` calls (`retry_test.go`).
+- Two transient failures return the second, still `ErrTransientGCContention`, after exactly 2 calls (`retry_test.go`).
 - Exhausted manifest-read-only promotes to `WorkspaceWriteBlockedError` naming "another lit process" while keeping the transient cause chain (`retry_test.go`).
 - Exhausted GC-reset does **not** promote (`retry_test.go`).
 - A non-transient error is not retried — exactly 1 call (`retry_test.go`).
-- Context deadline during backoff surfaces `context.DeadlineExceeded` after 1 call (`retry_test.go`).
-- Rotation happens once per backoff, never after the succeeding call (2 rotations for 3 calls) (`retry_test.go`).
+- One rotation before the retry, none after the succeeding call (1 rotation for 2 calls) (`retry_test.go`).
+- A rotation that would carry the hold past `commitLockWaiterBudget()` is refused, with either half of the reserve weighted; one that fits runs (`retry_test.go`).
+- The rotation is announced on stderr, naming the failure (`retry_test.go`).
 - A failing rotator aborts the loop with its error and no re-attempt (`retry_test.go`).
 - A rotator blocked on ctx returns `context.Canceled` on cancellation (`retry_test.go`).
 - Cluster-role "please reconnect" is **not** misclassified as GC contention (`retry_test.go`).
@@ -5095,22 +5092,14 @@ Argument order is therefore always: `-Am <message> [--allow-empty] [--date <RFC3
 
 `commit_lock.go` — `var ErrTransientGCContention = errors.New("transient online-gc contention")`.
 
-Budget (`commit_lock.go`):
-```go
-var transientRetryMaxAttempts = 30      // package var so tests can shrink it
-const transientRetryBaseDelay = 50 * time.Millisecond
-const transientRetryMaxDelay  = 1 * time.Second
-```
-`transientRetryDelay(attempt)` (`commit_lock.go`) = `transientRetryBaseDelay << (attempt-1)`, capped at `transientRetryMaxDelay`. Total ≈ 25s: five uncapped doublings (50, 100, 200, 400, 800ms) then 25 more attempts at the 1s cap (`commit_lock.go`).
-
-`retryTransientGCContention` (`commit_lock.go`) loop, attempts 1..`transientRetryMaxAttempts`:
-- `classifyTransientGCError(operation(ctx))`; `nil` → return `nil` (`commit_lock.go`).
-- If the error is not `ErrTransientGCContention`, or this was the final attempt → break (`commit_lock.go`).
-- `sleep(ctx, delayForAttempt(attempt))` — a wait error returns immediately (`commit_lock.go`).
+`retryTransientGCContention` (`commit_lock.go`) runs the operation at most twice, with one connection rotation between and no sleep:
+- `classifyTransientGCError(operation(ctx))`; anything but `ErrTransientGCContention` (`nil` included) is returned as is (`commit_lock.go`).
+- If `time.Since(start) + rotationReserve() >= commitLockWaiterBudget()`, no rotation: `exhaustedContentionError(err)` (`commit_lock.go`).
+- Prints `lit: this write's store connection failed (<error>); reopening it and retrying once` to stderr (`commit_lock.go`).
 - `rotate(ctx)` — the connection rotator (`s.reconnect`); a rotate error returns immediately (`commit_lock.go`).
-- On exit: `exhaustedContentionError(lastErr)`.
+- Returns `exhaustedContentionError(classifyTransientGCError(operation(ctx)))`.
 
-`waitWithContext` (`commit_lock.go`) delegates to `filelock.SleepWithContext`.
+`waitWithContext` (`remote_io.go`), the sleep the remote-I/O retry passes around, delegates to `filelock.SleepWithContext`.
 
 Classification predicates:
 - `isManifestReadOnlyError` (`commit_lock.go`): lower-cased error text contains **both** `"cannot update manifest"` **and** `"read only"`.

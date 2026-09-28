@@ -66,12 +66,12 @@
 // under the held commit lock. It cannot wedge — each re-open's wait is
 // bounded (every LOCK taker but the pushed-head record then waits on the
 // commit lock, so none can keep arriving in front of it past
-// coResidentHolderWait) and the retry loop bounds how much of
-// them one mutation may accumulate (against commitLockWaiterBudget), so the
+// coResidentHolderWait) and the retry makes that re-open at most once, only
+// while the mutation's whole hold still fits commitLockWaiterBudget, so the
 // inverted edge always breaks by the re-open failing the mutation loudly —
 // and BOTH bounds are the tolerance's whole justification, because the
-// per-open one alone leaves the aggregate free to outlast every waiter on
-// the lock; see Store.reconnect and retryTransientGCContention. (The one write
+// per-open one alone leaves the hold free to outlast every waiter on the
+// lock; see Store.reconnect and retryTransientGCContention. (The one write
 // engine outside the Store lifecycle, the adopt clone's, runs under the
 // exclusive workspace hold and never takes the commit lock.)
 //

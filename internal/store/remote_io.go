@@ -5,15 +5,17 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/promptctl/primitives/filelock"
 )
 
 // [LAW:single-enforcer] All remote-transport failure classification and retry
 // live here. This is deliberately NOT part of the online-GC contention retry in
-// commit_lock.go: that loop answers "is this GC contention" on a ~25s budget of
-// millisecond-scale attempts with a connection rotation between them, while a
-// dropped network connection wants a few second-scale attempts and no rotation
-// (the connection is not poisoned). Two unrelated recovery policies must not
-// share one budget, so they share no code path beyond the retry function types.
+// commit_lock.go: that retry answers "is this GC contention" with one
+// immediate connection rotation and no waiting, while a dropped network
+// connection wants a few second-scale attempts and no rotation (the connection
+// is not poisoned). Two unrelated recovery policies must not share one budget,
+// so they share no code path beyond the operation type.
 //
 // Classification matches the transport tool's own stderr (OpenSSH / git),
 // never Dolt's rendered English: Dolt's gitauth layer wraps every "fatal:
@@ -47,7 +49,7 @@ import (
 //
 // A package variable (the delays stay const) so tests whose premise makes
 // exhaustion CERTAIN can shrink the budget instead of sleeping through the
-// production one — the same convention transientRetryMaxAttempts serves.
+// production one — the same convention coResidentHolderWait serves.
 var remoteIORetryMaxAttempts = 4
 
 const (
@@ -123,6 +125,16 @@ func remoteTransportSymptom(err error) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+type retryDelayFunc func(attempt int) time.Duration
+type retrySleepFunc func(context.Context, time.Duration) error
+
+// waitWithContext delegates to filelock.SleepWithContext — one home for the
+// context-aware inter-attempt sleep — under the local name the retry
+// machinery passes around as a function value. [LAW:one-source-of-truth]
+func waitWithContext(ctx context.Context, duration time.Duration) error {
+	return filelock.SleepWithContext(ctx, duration)
 }
 
 // retryTransientRemoteIO runs operation, and on a transient remote-transport

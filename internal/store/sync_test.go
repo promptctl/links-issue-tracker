@@ -1009,7 +1009,7 @@ func TestReconnectRotatorRecoversPoisonedOperation(t *testing.T) {
 				return gcReset
 			}
 			return nil
-		}, st.reconnect, func(int) time.Duration { return 0 }, func(context.Context, time.Duration) error { return nil })
+		}, st.reconnect)
 	})
 	if err != nil {
 		t.Fatalf("retry with real reconnect rotator error = %v", err)

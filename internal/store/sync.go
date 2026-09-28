@@ -1005,7 +1005,7 @@ func parseUnixSeconds(raw sql.NullString) (sql.NullInt64, error) {
 
 func (s *Store) runSyncMutation(ctx context.Context, operation retryOperation) error {
 	return s.withCommitLock(ctx, func(ctx context.Context) error {
-		return retryTransientGCContention(ctx, operation, s.reconnect, transientRetryDelay, waitWithContext)
+		return retryTransientGCContention(ctx, operation, s.reconnect)
 	})
 }
 
