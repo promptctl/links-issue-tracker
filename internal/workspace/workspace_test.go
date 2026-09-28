@@ -333,7 +333,9 @@ func TestDefaultRemoteBranchFromLSRemote(t *testing.T) {
 	}
 }
 
-func TestDefaultRemoteBranchUsesRemoteHeadAdvertisement(t *testing.T) {
+// A remote added and pushed to, never cloned, is the ticket's shape: git has no
+// refs/remotes/origin/HEAD, so only asking the remote names its default branch.
+func TestRemoteHeadIsUnsetLocallyAndAdvertisedByTheRemote(t *testing.T) {
 	repo := t.TempDir()
 	remote := filepath.Join(t.TempDir(), "remote.git")
 	run(t, repo, "git", "init")
@@ -348,9 +350,15 @@ func TestDefaultRemoteBranchUsesRemoteHeadAdvertisement(t *testing.T) {
 	run(t, repo, "git", "push", "-u", "origin", "master")
 	run(t, repo, "git", "--git-dir", remote, "symbolic-ref", "HEAD", "refs/heads/master")
 
-	got := DefaultRemoteBranch(context.Background(), repo, "origin")
+	if got := LocalRemoteHead(context.Background(), repo, "origin"); got != "" {
+		t.Fatalf("LocalRemoteHead() = %q, want empty: git push does not set refs/remotes/origin/HEAD", got)
+	}
+	got, err := AdvertisedRemoteHead(context.Background(), repo, "origin")
+	if err != nil {
+		t.Fatalf("AdvertisedRemoteHead() error = %v", err)
+	}
 	if got != "master" {
-		t.Fatalf("DefaultRemoteBranch() = %q, want master", got)
+		t.Fatalf("AdvertisedRemoteHead() = %q, want master", got)
 	}
 }
 

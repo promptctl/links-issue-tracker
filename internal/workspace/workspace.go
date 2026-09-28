@@ -218,16 +218,28 @@ func RemoteHasDoltData(ctx context.Context, cwd string, remote string) (bool, er
 	return refs != "", nil
 }
 
-func DefaultRemoteBranch(ctx context.Context, cwd string, remote string) string {
+// LocalRemoteHead is the remote's default branch as this repository already
+// records it: refs/remotes/<remote>/HEAD, which `git clone` sets and a plain
+// `git remote add` does not. It never touches the network, so any command may
+// ask it; "" when the ref is unset.
+func LocalRemoteHead(ctx context.Context, cwd string, remote string) string {
 	remoteName := normalizeRemoteName(remote)
 	symbolicRefOutput, _ := gitOutput(ctx, cwd, "symbolic-ref", "--quiet", "--short", "refs/remotes/"+remoteName+"/HEAD")
-	symbolicBranch := strings.TrimSpace(defaultRemoteBranchFromSymbolicRef(remoteName, symbolicRefOutput))
-	if symbolicBranch != "" {
-		return symbolicBranch
+	return strings.TrimSpace(defaultRemoteBranchFromSymbolicRef(remoteName, symbolicRefOutput))
+}
+
+// AdvertisedRemoteHead asks the remote which branch its HEAD names: one
+// `git ls-remote --symref` round trip, unbounded but by ctx, so only a command
+// that already talks to the remote asks it. "" with a nil error means the
+// remote answered and advertises no HEAD branch; a failed ask is the error.
+// [LAW:no-silent-failure]
+func AdvertisedRemoteHead(ctx context.Context, cwd string, remote string) (string, error) {
+	remoteName := normalizeRemoteName(remote)
+	lsRemoteOutput, err := gitOutput(ctx, cwd, "ls-remote", "--symref", remoteName, "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("git ls-remote --symref %s HEAD: %w", remoteName, err)
 	}
-	lsRemoteOutput, _ := gitOutput(ctx, cwd, "ls-remote", "--symref", remoteName, "HEAD")
-	// [LAW:one-source-of-truth] Branch resolution follows one deterministic candidate chain: local remote HEAD, then remote HEAD advertisement.
-	return strings.TrimSpace(defaultRemoteBranchFromLSRemote(lsRemoteOutput))
+	return strings.TrimSpace(defaultRemoteBranchFromLSRemote(lsRemoteOutput)), nil
 }
 
 // Resolve finds the workspace containing cwd, creating its config on first
@@ -414,9 +426,27 @@ func gitOutput(ctx context.Context, cwd string, args ...string) (string, error) 
 	cmd.Dir = cwd
 	out, err := cmd.Output()
 	if err != nil {
-		return "", err
+		return "", gitFailure(ctx, err)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// gitFailure names why a git call failed. A git that ctx killed exits with
+// "signal: killed", so the ctx error is put in the chain as the cause; a git
+// that failed on its own said why on stderr, which Output captured and the bare
+// exit status drops. The *exec.ExitError stays in the chain for
+// classifyGitError. [LAW:no-silent-failure]
+func gitFailure(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return fmt.Errorf("%w (%w)", ctxErr, err)
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		if stderr := strings.TrimSpace(string(exitErr.Stderr)); stderr != "" {
+			return fmt.Errorf("%w: %s", err, stderr)
+		}
+	}
+	return err
 }
 
 // gitFatalExitCode is git's universal exit code for a fatal condition — the code

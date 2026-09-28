@@ -127,7 +127,9 @@ func resolveDoctorSyncFreshness(ctx context.Context, ws workspace.Info, st stora
 	if remoteName == "" {
 		return doctorSyncReport{Kind: doctorSyncNoRemote}
 	}
-	branch, err := resolveSyncBranch(ctx, ws.RootDir, remoteName)
+	// knownSyncBranch, not resolveSyncBranch: this report is read by doctor and
+	// by every read command's banner, and neither waits on the network.
+	branch, err := knownSyncBranch(ctx, ws, remoteName)
 	if err != nil {
 		return doctorSyncReport{Kind: doctorSyncUnresolved, Detail: err.Error()}
 	}
@@ -390,9 +392,9 @@ func doctorLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		// [LAW:effects-at-boundaries] Freshness resolution shells out to git
-		// (including a possible `ls-remote` against the remote), so it runs here, at
-		// the boundary, before the pure text rendering below.
+		// [LAW:effects-at-boundaries] Freshness resolution shells out to git and
+		// reads the store, so it runs here, at the boundary, before the pure text
+		// rendering below.
 		syncReport := resolveDoctorSyncFreshness(ctx, ap.Workspace, ap.Store)
 		if err := printWorkspaceIdentity(stdout, ap.Workspace); err != nil {
 			return err

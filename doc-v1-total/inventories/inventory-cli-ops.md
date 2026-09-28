@@ -363,9 +363,12 @@ Trace reasons for the explicit commands (`reconcileCommandReasonForState`, `sync
 - Explicit remote that is not among the configured git remotes → error `requested remote %q not found in configured git remotes` (`sync.go`).
 - Otherwise precedence: validated upstream remote (from `workspace.UpstreamRemote`), then the single configured remote when exactly one exists; else `""` (`sync.go`).
 
-`resolveSyncBranch` — `sync.go`:
-- Env override `LINKS_DEBUG_DOLT_SYNC_BRANCH` (`sync.go`) takes precedence over `workspace.DefaultRemoteBranch`.
-- Empty result: if `ctx.Err() != nil` → `resolve sync branch for remote %q: <ctx err>`; else `resolve sync branch for remote %q: default branch unavailable; configure LINKS_DEBUG_DOLT_SYNC_BRANCH to override` (`sync.go`).
+`resolveSyncBranch` — `sync_branch.go` (push, pull, receive, reconcile, init):
+- Precedence: env override `LINKS_DEBUG_DOLT_SYNC_BRANCH` (`sync.go`), then `workspace.LocalRemoteHead`, then `workspace.AdvertisedRemoteHead` — asked only when the two before it are empty.
+- A failed ask → `resolve sync branch for remote %q: <ls-remote err>` (a cancelled ctx is `context.Canceled` in the chain); an answer naming no branch → `resolve sync branch for remote %q: default branch unavailable; configure LINKS_DEBUG_DOLT_SYNC_BRANCH to override`.
+- An advertised branch is recorded in `<StorageDir>/sync-branch.<path-escaped remote>`; a failed record write is reported to stderr and the branch is still returned.
+
+`knownSyncBranch` — `sync_branch.go` (doctor's freshness and the read banner): the same override and `LocalRemoteHead`, then the recorded advertised branch; never asks the remote. None known → `default branch of remote %q is not known on this machine: git names none in refs/remotes/%s/HEAD and no sync here has learned it from the remote; the next sync that reaches the remote learns it`, with the record's read error appended when the record exists but will not read; a record that will not read is ignored when the override or the ref answers.
 
 `syncDoltRemotesFromGit` — `sync.go`: for every git remote, adds a Dolt remote (`store.GitBackedRemoteURL(url)`) when missing, or removes+re-adds when the URL differs; removes any Dolt remote with no matching git remote; re-lists at the end.
 
@@ -528,8 +531,8 @@ Flag parse output is `io.Discard` (`sync_bg.go`).
 - `oneLineReason` (`sync_staleness.go`): first line only, trimmed, capped at 160 runes with a `…` suffix; empty → `(no reason recorded)`.
 - `fetchStalenessLines` (`sync_staleness.go`) — only when the age is known and `>= 24h`:
   `sync: last successful fetch[ from <ref>] was <age> ago (at least <threshold> old) — run 'lit sync fetch'` — the parenthetical from `stalenessThresholdClause`, "at least" because the gate is `>=`.
-- `syncStalenessLines` (`sync_staleness.go`) — only for a RESOLVED doctor sync report; when `State() == storage.SyncAhead`:
-  `sync: <N> local change(s) not pushed to <r>/<b>, as of last fetch — run 'lit sync push'`; then the fetch-staleness line. Deliberately does NOT fire on `SyncDiverged` (that has the heavier failure block) nor special-case `SyncNeverSynced` (`sync_staleness.go`).
+- `syncStalenessLines` (`sync_staleness.go`) — for a RESOLVED doctor sync report, when `State() == storage.SyncAhead`:
+  `sync: <N> local change(s) not pushed to <r>/<b>, as of last fetch — run 'lit sync push'`; then the fetch-staleness line for every report but no-remote, with the ref only when the report resolved. Deliberately does NOT fire on `SyncDiverged` (that has the heavier failure block) nor special-case `SyncNeverSynced` (`sync_staleness.go`).
 - `printStalenessWarning` (read commands) — `sync_staleness.go`: the build-drift line FIRST (at most one, only for a stale source build), then the push-failure line, then the ahead/fetch lines. Write errors are returned to the caller.
 - `printMutationSyncStalenessWarning` (every write command, at the `runWithApp` seam) — `sync_staleness.go`: reads ONLY the storage-dir markers (push outcome, fetch success), emits the push-failure line then a ref-less fetch-staleness line. Write failures print `lit: staleness banner not written: <err>` to stderr and never change the exit code.
 
