@@ -32,8 +32,9 @@ import "github.com/promptctl/links-issue-tracker/internal/version"
 // never appears: the question is meaningless for a release, and every lit
 // already installed would fail to decode a manifest carrying it. Adding a
 // field to Info is therefore a wire-format change — see the note on
-// FromSource for what it costs and HTTPResolver.Resolve for what absorbs
-// it going forward.
+// FromSource for what it costs, HTTPResolver.Resolve for what absorbs
+// it going forward, and TestManifestWireKeys for the release check that
+// must change with it.
 type Manifest struct {
 	version.Info
 	Artifacts []Artifact `json:"artifacts"`

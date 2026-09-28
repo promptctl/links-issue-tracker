@@ -2,6 +2,9 @@ package release
 
 import (
 	"encoding/json"
+	"maps"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -100,4 +103,52 @@ func TestArtifactPlatformShape(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestManifestWireKeys pins the key set of every object a manifest puts on
+// the wire, signed so the optional field is on it too. The client decoder
+// tolerates unknown fields, so nothing else refuses a new one before merge —
+// and a field added to version.Info lands here unasked, because Manifest
+// embeds it. release-validate's "Assert manifest shape" step restates the
+// unsigned keys against the bytes it ships, but it runs only after merge; a
+// change that fails this test updates that step's EXPECTED in the same PR.
+func TestManifestWireKeys(t *testing.T) {
+	m := fixtureManifest()
+	m.Signature = &Signature{Algorithm: "minisign", Value: "sig"}
+	encoded, err := json.Marshal(&m)
+	if err != nil {
+		t.Fatalf("Marshal error = %v", err)
+	}
+	var wire struct {
+		SchemaSupport json.RawMessage   `json:"schema_support"`
+		Artifacts     []json.RawMessage `json:"artifacts"`
+		Signature     json.RawMessage   `json:"signature"`
+	}
+	if err := json.Unmarshal(encoded, &wire); err != nil {
+		t.Fatalf("Unmarshal error = %v", err)
+	}
+	got := map[string][]string{
+		"top":            wireKeys(t, encoded),
+		"schema_support": wireKeys(t, wire.SchemaSupport),
+		"signature":      wireKeys(t, wire.Signature),
+		"artifact":       wireKeys(t, wire.Artifacts[0]),
+	}
+	want := map[string][]string{
+		"top":            {"artifacts", "commit", "date", "is_dev", "schema_support", "signature", "version"},
+		"schema_support": {"max", "min"},
+		"signature":      {"algorithm", "value"},
+		"artifact":       {"platform", "sha256", "url"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("manifest wire keys changed; update release-validate.yml's EXPECTED in the same PR\n got: %v\nwant: %v", got, want)
+	}
+}
+
+func wireKeys(t *testing.T, raw json.RawMessage) []string {
+	t.Helper()
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		t.Fatalf("decode %s: %v", raw, err)
+	}
+	return slices.Sorted(maps.Keys(obj))
 }

@@ -361,7 +361,15 @@ jobs:
           # parses as `(.x | type) == "string" and (length > 0)` — the
           # `length > 0` would be computed against the WHOLE manifest, not
           # against .x. Be explicit.)
-          jq -e '(.version | type) == "string" and (.version | length) > 0' "$MANIFEST" >/dev/null
+          # The identity fields come from dist/metadata.json through `jq -r`,
+          # which prints a missing field as the string "null": check what they
+          # hold, not just that they are strings.
+          jq -e '
+            (.version | type) == "string" and (.version | length) > 0 and
+            (.commit | test("^[0-9a-f]{7}$")) and
+            (.date | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}")) and
+            .is_dev == false
+          ' "$MANIFEST" >/dev/null
           jq -e '
             (.schema_support.min | type) == "number" and (.schema_support.min) >= 1 and
             (.schema_support.max | type) == "number"
@@ -380,39 +388,33 @@ jobs:
             ((.artifacts) | all(.sha256 | test("^[0-9a-f]{64}$")))
           ' "$MANIFEST" >/dev/null
 
-          # This list is the release contract, restated independently of
-          # .goreleaser.yml ON PURPOSE: deriving it from the config that
-          # drives the build would make this check pass on a silent build
-          # skip — the exact failure it exists to catch. When the goreleaser
-          # goos/goarch matrix changes, update this array in the same PR.
+          # The release contract, restated here ON PURPOSE rather than derived
+          # from what produces the manifest: a check derived from the producer
+          # passes whatever the producer writes.
+          # - platforms: independent of .goreleaser.yml, so a silent build skip
+          #   fails here. When the goos/goarch matrix changes, update it in the
+          #   same PR.
+          # - keys: the key set of every object, independent of
+          #   internal/release. The client decoder tolerates unknown fields on
+          #   purpose — the binary reading a manifest is always older than the
+          #   one that wrote it — so this is where a stray or dropped field is
+          #   refused. `signature` is absent because this pipeline does not
+          #   sign; the change that adds signing adds it here.
+          #   TestManifestWireKeys pins the type's keys on every PR.
           # [LAW:verifiable-goals]
-          EXPECTED='["darwin/amd64","darwin/arm64","linux/amd64","linux/arm64","windows/amd64"]'
-          GOT=$(jq -c '[.artifacts[].platform] | sort' "$MANIFEST")
+          EXPECTED='{"platforms":["darwin/amd64","darwin/arm64","linux/amd64","linux/arm64","windows/amd64"],"keys":{"top":["artifacts","commit","date","is_dev","schema_support","version"],"schema_support":["max","min"],"artifact":[["platform","sha256","url"]]}}'
+          GOT=$(jq -c '{
+            platforms: ([.artifacts[].platform] | sort),
+            keys: {top: keys, schema_support: (.schema_support | keys), artifact: ([.artifacts[] | keys] | unique)}
+          }' "$MANIFEST")
           if [ "$GOT" != "$EXPECTED" ]; then
-            echo "manifest platforms mismatch" >&2
+            echo "manifest does not match the release contract" >&2
             echo "  expected: $EXPECTED" >&2
             echo "  got:      $GOT" >&2
             exit 1
           fi
 
-          # The key set of every object in the manifest, restated here rather
-          # than derived from internal/release for the same reason as the
-          # platform list: a check derived from the producer passes whatever
-          # the producer writes. This is the only place an unexpected field is
-          # refused — the client decoder tolerates unknown fields on purpose,
-          # because the binary reading a manifest is always older than the one
-          # that wrote it. A new wire field lands here in the same PR.
-          # [LAW:verifiable-goals]
-          EXPECTED_KEYS='{"top":["artifacts","commit","date","is_dev","schema_support","version"],"schema_support":["max","min"],"artifact":[["platform","sha256","url"]]}'
-          GOT_KEYS=$(jq -c '{top: keys, schema_support: (.schema_support | keys), artifact: ([.artifacts[] | keys] | unique)}' "$MANIFEST")
-          if [ "$GOT_KEYS" != "$EXPECTED_KEYS" ]; then
-            echo "manifest key set mismatch" >&2
-            echo "  expected: $EXPECTED_KEYS" >&2
-            echo "  got:      $GOT_KEYS" >&2
-            exit 1
-          fi
-
-          echo "release-manifest.json shape OK; platforms: $GOT"
+          echo "release-manifest.json shape OK: $GOT"
 
       # links-supply-chain-w6m9.1's acceptance criterion, checked against a
       # REAL archive rather than the repo-root files the generator step wrote
