@@ -870,8 +870,8 @@ Justfile or any workflow in `.github/workflows/`.
      load-bearing). No `-timeout` override by policy.
   2. **`race`**: same setup; `go test -short -race -timeout 30m ./cmd/... ./internal/...` —
      scope excludes `tools/` deliberately; no testbudget pipe. The `-timeout 30m`
-     sits above internal/cli's race-inflated testbudget ceiling (~21m), so the
-     lane fails on a race or a hang, never on slowness.
+     is sized above internal/cli's testbudget ceiling as the detector inflates
+     it, so slowness fails build-and-test's budget check, not this lane's timeout.
   3. **`verify`**: `go mod tidy` then `git diff --exit-code go.mod go.sum`, failing
      with `::error::go.mod/go.sum are not tidy…`; `grep -q -- "-buildvcs=false" scripts/install.sh`
 ; `bash scripts/install.sh`.

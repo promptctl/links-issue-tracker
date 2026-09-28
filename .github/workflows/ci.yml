@@ -90,17 +90,18 @@ jobs:
       # generated volume through the same code paths the ordinary tests already
       # cover, so under instrumentation they buy hours and no new race coverage.
       #
-      # -timeout 30m makes this lane fail on a race or a hang, never on
-      # slowness, which is tools/testbudget's alarm in build-and-test
-      # ([LAW:single-enforcer]) — so this is not the -timeout the Test step
-      # forbids. go test's 10m default was a second slowness alarm, and one
-      # that fired first: measured over 79 runs to 2026-09-28, internal/cli
-      # takes 446s median here, 2.6x its un-instrumented time in the same
-      # run, and a slow runner (1.45x, seen on internal/store in the same
-      # jobs) pushed it past 10m twice with the running test 1-2s old — no
-      # hang, just the whole binary slow. At its 340s testbudget ceiling,
-      # internal/cli would take 340s x 2.6 x 1.45 ≈ 21m here, so any ceiling
-      # below that fires before testbudget does.
+      # -timeout 30m keeps slowness out of this lane's failures: slowness is
+      # tools/testbudget's alarm in build-and-test ([LAW:single-enforcer]), so
+      # this is not the -timeout the Test step forbids. go test's 10m default
+      # was a second slowness alarm that fired first — runs 36312282343 and
+      # 36320546964 died at 600s in internal/cli with the running test 1-2s
+      # old, on runners slow enough to take internal/store 1.4x its median.
+      # The ceiling is sized from the binding budget, internal/cli's 340s:
+      # x2.6 under the detector (median of 79 paired runs to 2026-09-28) x1.6
+      # on a slow runner (store's 1.45x, scaled by cli's wider spread: 1.33x
+      # cli against 1.22x store in run 36321159557) ≈ 24m. Any lower value can
+      # fire before testbudget does. The cost is paid only by a real hang,
+      # which now takes ~30m instead of ~10m to be named.
       - name: Test with race detector
         run: go test -short -race -timeout 30m ./cmd/... ./internal/...
 

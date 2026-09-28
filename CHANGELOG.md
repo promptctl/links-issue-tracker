@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- CI's `race` job no longer fails on a slow runner. It ran under `go test`'s default 10-minute per-package timeout, and `internal/cli` takes 446s median under the race detector (79 runs to 2026-09-28), so a runner 1.45x slower than usual pushed it past the limit and the job died with `panic: test timed out after 10m0s` while no test was hung. The job now passes `-timeout 30m`. That is above what `internal/cli` would cost under the detector at its `tools/testbudget` ceiling on a slow runner (340s x 2.6 x 1.45 ≈ 21m), so slowness is caught only by the budget check in `build-and-test`, and the race job fails only on a data race or a hung test. (links-build-ci-viko)
+- CI's `race` job no longer fails on a slow runner. It ran under `go test`'s default 10-minute per-package timeout, and `internal/cli` takes 446s median under the race detector (79 runs to 2026-09-28), so a slow runner pushed it past the limit and the job died with `panic: test timed out after 10m0s` while no test was hung. The job now passes `-timeout 30m`, sized above what `internal/cli` would cost under the detector at its `tools/testbudget` ceiling on a slow runner, so slowness is caught by the budget check in `build-and-test` rather than by the race job's timeout. A test that genuinely hangs now takes about 30 minutes to be reported instead of 10. (links-build-ci-viko)
 
 ## [0.16.0] - 2026-09-27
 
