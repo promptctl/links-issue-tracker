@@ -290,9 +290,8 @@ func createRequiresTitle(t *testing.T, ctx context.Context, st storage.Store, cl
 	// Whitespace is not a title: the trim happens before the requirement, so a
 	// blank-looking title cannot slip in as a non-empty string.
 	for _, title := range []string{"", "   "} {
-		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: title, Topic: "core"}); err == nil {
-			t.Errorf("CreateIssue(title=%q) succeeded; want an error", title)
-		}
+		_, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: title, Topic: "core"})
+		assertRefused(t, err, fmt.Sprintf("CreateIssue(title=%q)", title))
 	}
 }
 
@@ -312,10 +311,9 @@ func createNormalizesTopic(t *testing.T, ctx context.Context, st storage.Store, 
 	}
 	assertStrings(t, "topics after a normalized create", topics, []string{"renderer-cleanup"})
 
-	for _, topic := range []string{"", "   ", "ab", "-!-"} {
-		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "unnamed", Topic: topic, Prefix: prefix}); err == nil {
-			t.Errorf("CreateIssue(topic=%q) succeeded; want an error", topic)
-		}
+	for _, topic := range []string{"", "   ", "ab", "-!-", strings.Repeat("a", 31)} {
+		_, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "unnamed", Topic: topic, Prefix: prefix})
+		assertRefused(t, err, fmt.Sprintf("CreateIssue(topic=%q)", topic))
 	}
 }
 
@@ -2385,6 +2383,17 @@ func assertStrings(t *testing.T, what string, got, want []string) {
 	t.Helper()
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("%s = %v, want %v", what, got, want)
+	}
+}
+
+// assertRefused pins a rejected value to the contract's refusal type: the CLI
+// reads it as "change the input", where any other error reads as a fault worth
+// retrying.
+func assertRefused(t *testing.T, err error, what string) {
+	t.Helper()
+	var refused model.ValidationError
+	if !errors.As(err, &refused) {
+		t.Errorf("%s error = %v, want model.ValidationError", what, err)
 	}
 }
 

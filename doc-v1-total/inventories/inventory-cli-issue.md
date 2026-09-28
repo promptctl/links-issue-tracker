@@ -182,28 +182,28 @@ Constants (`exit.go`):
 7. `UsageError` → 2 (`exit.go`)
 8. `UnknownCommandError` → 3 (`exit.go`)
 9. `RetiredCommandError` → 3 (`exit.go`)
-10. `ValidationError` → 3 (`exit.go`)
-11. `storage.ValidationError` → 3 (`exit.go`)
-12. `model.ContainerActionError` → 6 when `Satisfied()`, else 3 (`exit.go`)
-13. `UnsupportedError` → 3 (`exit.go`)
-14. `takeoverUnconfirmedError` → 3 (`exit.go`)
-15. `Exhausted` → 6 (`exit.go`)
-16. `NoWork` → 6 (`exit.go`)
-17. `OutsideWorkspaceError` → 3 (`exit.go`)
-18. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → 3 (`exit.go`)
-19. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → 3 (`exit.go`)
-20. `BulkFailureError` → 1 (`exit.go`)
-21. `errors.Is(err, store.ErrTransientGCContention)` → 1 (`exit.go`)
-22. anything else → 1 (`exit.go`)
+10. `model.ValidationError` → 3 (`exit.go`)
+11. `model.ContainerActionError` → 6 when `Satisfied()`, else 3 (`exit.go`)
+12. `UnsupportedError` → 3 (`exit.go`)
+13. `takeoverUnconfirmedError` → 3 (`exit.go`)
+14. `Exhausted` → 6 (`exit.go`)
+15. `NoWork` → 6 (`exit.go`)
+16. `OutsideWorkspaceError` → 3 (`exit.go`)
+17. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → 3 (`exit.go`)
+18. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → 3 (`exit.go`)
+19. `BulkFailureError` → 1 (`exit.go`)
+20. `errors.Is(err, store.ErrTransientGCContention)` → 1 (`exit.go`)
+21. anything else → 1 (`exit.go`)
 
 Error types defined in `cli.go`: `MergeConflictError` (`cli.go`),
 `CorruptionError` (`cli.go`), `UsageError` (`cli.go`),
 `UnknownCommandError` — message `unknown command "<x>"` (`cli.go`),
-`ValidationError` (`cli.go`), `UnsupportedError` with a single `Message`
+`UnsupportedError` with a single `Message`
 field (`errors.go`), `RetiredCommandError` — message
 `the "<cmd>" command has been retired; <replacement>` (`cli.go`),
 `OutsideWorkspaceError` (`cli.go`). `BulkFailureError` in
-`bulk.go`.
+`bulk.go`. Value refusals use `model.ValidationError`, defined beside the
+rules in `internal/model/validation.go`.
 
 ### 1.9 Error output convention
 
@@ -391,16 +391,16 @@ prefix (`cli.go`).
 - Relation types: `blocks, parent-child, related-to`; error
   `"relation type must be blocks, parent-child, or related-to"`
   (`internal/model/relation_type.go`).
-- CLI parse-boundary wrappers: `parseIssueTypeFlag` (`cli.go`) and
-  `parsePriorityFlag` wrap failures in `ValidationError` → exit 3.
-  `parsePriorityFlag` takes the raw **string**: the `ValidationError` is also what
-  routes the refusal to the `validation_refused` remediation, which a bare pflag
-  `ParseInt` error missed — it fell through to the default "Retry the command" on
-  a refusal no retry can change (links-cli-bvko).
+- The write-path `--type` and `--priority` flags call `model.ParseIssueType` and
+  `model.ParsePriorityName` directly; both refuse with `model.ValidationError` →
+  exit 3 and the `validation_refused` remediation. `--priority` is a string flag
+  so the word form reaches `ParsePriorityName` — a pflag `ParseInt` refused it with
+  a bare error that fell through to the default "Retry the command"
+  (links-cli-bvko).
   The read path (`lit ls`) parses `--type` with `model.ParseIssueTypes`
   (`internal/model/issue_type.go`) and `--status` with `model.ParseStates`
   (`internal/model/lifecycle/lifecycle.go`), and wraps either failure in
-  `ValidationError` → exit 3 (`listLeaf`, `cli.go`).
+  `model.ValidationError` → exit 3 (`listLeaf`, `cli.go`).
 - `issueTypeChoices()` renders `task|feature|bug|chore|epic` into flag help
   (`cli.go`), and `priorityChoices()` renders `normal|urgent` the same
   way — into both the `--priority` help string and the `followup`
@@ -562,7 +562,8 @@ else ready.
   (`register.go`), called from `parseLeaf` (`register.go`).
 - Validation order: `--type` then `--priority`, both `ValidationError` → exit 3
   (`cli.go`).
-- Store refusals (surfaced through `CreateIssue`, `internal/store/store.go`):
+- Store refusals (surfaced through `CreateIssue`, `internal/store/store.go`),
+  each a `model.ValidationError` → exit 3:
   blank title → `"title is required"` (`store.go`); blank/short/long topic
   → `"topic is required"` / `"topic must be at least N characters after
   normalization"` / `"topic must be at most N characters after normalization"`
@@ -642,9 +643,9 @@ else ready.
 | `--type` | string array | `nil` | Type set via `model.ParseIssueTypes` — comma-separated and/or repeated, every fragment parsed, so a blank or unknown member is refused and named; refusal → `ValidationError{"parse --type: " + err}` → exit 3 (`cli.go`) |
 | `--assignee` | string | `""` | Trimmed, single-element `Assignees`; blank → none (`cli.go`) |
 | `--search` | string | `""` | Trimmed and appended to `SearchTerms` **only if visited** (`cli.go`) |
-| `--ids` | string array | `nil` | Issue ids, comma-separated and/or repeated, read by `storage.ParseNames` exactly as `--parent` is → `filter.IDs`; a blank slot (`--ids=`, `--ids a,`) → `storage.ValidationError{"--ids needs an issue id in every slot, e.g. --ids <issue-id>"}` → exit 3 (`cli.go`; `internal/storage/selects.go`) |
-| `--parent` | string array | `nil` | Issue ids, comma-separated and/or repeated; `storage.ParseNames` splits each occurrence on commas and collects the ids of all occurrences, then the surface's positionals are appended → `filter.ParentIDs` (direct children, ORed). A blank slot (`--parent=`, `--parent ", "`, `--parent a,`) → `storage.ValidationError{"--parent needs an issue id in every slot, e.g. --parent <epic-id>"}` → exit 3, checked before the positionals are appended, so `lit children <id> --parent=` is refused too. An id naming no issue → `NotFoundError` from the store → exit 4 (`cli.go`; `store.go`) |
-| `--labels` | string array | `nil` | Labels, comma-separated and/or repeated, read by `storage.ParseNames` → `LabelsAll` (ALL must match, so each added label narrows); a blank slot → `storage.ValidationError{"--labels needs a label in every slot, e.g. --labels <label>"}` → exit 3 (`cli.go`) |
+| `--ids` | string array | `nil` | Issue ids, comma-separated and/or repeated, read by `storage.ParseNames` exactly as `--parent` is → `filter.IDs`; a blank slot (`--ids=`, `--ids a,`) → `model.ValidationError{"--ids needs an issue id in every slot, e.g. --ids <issue-id>"}` → exit 3 (`cli.go`; `internal/storage/selects.go`) |
+| `--parent` | string array | `nil` | Issue ids, comma-separated and/or repeated; `storage.ParseNames` splits each occurrence on commas and collects the ids of all occurrences, then the surface's positionals are appended → `filter.ParentIDs` (direct children, ORed). A blank slot (`--parent=`, `--parent ", "`, `--parent a,`) → `model.ValidationError{"--parent needs an issue id in every slot, e.g. --parent <epic-id>"}` → exit 3, checked before the positionals are appended, so `lit children <id> --parent=` is refused too. An id naming no issue → `NotFoundError` from the store → exit 4 (`cli.go`; `store.go`) |
+| `--labels` | string array | `nil` | Labels, comma-separated and/or repeated, read by `storage.ParseNames` → `LabelsAll` (ALL must match, so each added label narrows); a blank slot → `model.ValidationError{"--labels needs a label in every slot, e.g. --labels <label>"}` → exit 3 (`cli.go`) |
 | `--has-comments` | bool | `false` | Only if visited; sets the pointer to the flag's value — so `--has-comments=false` filters to issues *without* comments (`cli.go`) |
 | `--include-archived` | bool | `false` | `filter.IncludeArchived` (`cli.go`) |
 | `--include-deleted` | bool | `false` | `filter.IncludeDeleted` (`cli.go`) |
@@ -662,7 +663,7 @@ else ready.
 - `--sort` help: "Sort fields, e.g. rank:asc,updated_at:desc" (`cli.go`).
   `ParseSortSpecs` splits on `,`, skips blank fragments, then reads
   `field[:asc|desc]` (a bare field is ascending); an unrecognized direction →
-  `storage.ValidationError{"unsupported sort direction %q"}` → exit 3
+  `model.ValidationError{"unsupported sort direction %q"}` → exit 3
   (`internal/storage/sort.go`).
 - `--columns` help: "Comma-separated output columns: " followed by the sorted
   registry names (`cli.go`, `columns.go`). An empty selection (or one
@@ -677,7 +678,7 @@ else ready.
 - `Parse` trims the input and tokenizes it (`query.go`). The tokenizer
   splits on space, tab and newline and honors single and double quotes, which it
   strips; an unterminated quote → `"unterminated quote in query"`
-  (`query.go`). `Parse` returns every refusal as a `storage.ValidationError`
+  (`query.go`). `Parse` returns every refusal as a `model.ValidationError`
   carrying the underlying message, so each exits 3 (`query.go`).
 - Terms (`applyTerm`, `query.go`): `status:<state>[,<state>...]` (via
   `model.ParseStates`), `resolution:<res>` (via `model.ParseResolution`),
@@ -685,7 +686,7 @@ else ready.
   `id:<v>[,<v>...]`, `parent:<v>[,<v>...]`, `label:<v>[,<v>...]` (the last
   three via `storage.ParseNames`, the reader the matching flag uses; a blank
   slot, such as bare `parent:` →
-  `storage.ValidationError{"parent: needs an issue id in every slot, e.g. parent:<epic-id>"}`,
+  `model.ValidationError{"parent: needs an issue id in every slot, e.g. parent:<epic-id>"}`,
   `query.go`), `has:comments` (any other `has:` →
   `unsupported has: filter %q`), `sort:<spec>` (via `storage.ParseSortSpecs`),
   `limit:<int>` (non-numeric → `limit must be an integer, got %q`; negative →
@@ -929,17 +930,17 @@ history:
     <id>` (claim → in_progress), `lit done <id>` (finish → closed), `lit close <id>
     --resolution <duplicate|superseded|obsolete|wontfix>` (close with an outcome),
     `lit open <id>` (reopen)" (`cli.go`).
-  - No field flag at all → `errors.New("lit update requires at least one field flag")`
-    → exit 1 (`cli.go`). Note `--reason` alone does not count: `Reason`
+  - No field flag at all → `UsageError{"lit update requires at least one field flag; " + usage}`
+    → exit 2 (`cli.go`). Note `--reason` alone does not count: `Reason`
     is set unconditionally but `Change.IsEmpty()` governs (`cli.go`,
     `cli.go`).
 - **Only visited flags are applied.** Each visited flag sets a pointer on
   `storage.UpdateIssueInput` (`cli.go`):
   - `--title` / `--description` / `--prompt` set the raw value (no trimming at
     the CLI) (`cli.go`).
-  - `--type` parses via `parseIssueTypeFlag` → `ValidationError` on a bad value
-    (`cli.go`).
-  - `--priority` parses via `parsePriorityFlag` (`cli.go`).
+  - `--type` parses via `model.ParseIssueType` → `model.ValidationError` on a bad
+    value (`cli.go`).
+  - `--priority` parses via `model.ParsePriorityName` (`cli.go`).
   - `--assignee` is trimmed and honored **verbatim** — session-identity resolution
     is deliberately *not* applied here, so an empty value clears the assignee
     (`cli.go`).

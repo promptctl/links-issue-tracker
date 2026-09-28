@@ -276,11 +276,11 @@ func newLeaf() appLeaf {
 	lane := fs.String("lane", "", "Lane key partitioning an epic's children into parallel rank-ordered sub-sequences; shared lane serializes, distinct lane parallelizes")
 	top := fs.Bool("top", false, "Promote the new issue to the top of its frame (the default appends it to the bottom)")
 	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
-		issueTypeValue, err := parseIssueTypeFlag(*issueType)
+		issueTypeValue, err := model.ParseIssueType(*issueType)
 		if err != nil {
 			return err
 		}
-		priorityValue, err := parsePriorityFlag(*priority)
+		priorityValue, err := model.ParsePriorityName(*priority)
 		if err != nil {
 			return err
 		}
@@ -344,11 +344,11 @@ func followupLeaf() appLeaf {
 		if resolvedDescription == "" {
 			resolvedDescription = fmt.Sprintf("Follow-up surfaced at the close of %s: %s", parent.ID, parent.Title)
 		}
-		issueTypeValue, err := parseIssueTypeFlag(*issueType)
+		issueTypeValue, err := model.ParseIssueType(*issueType)
 		if err != nil {
 			return err
 		}
-		priorityValue, err := parsePriorityFlag(*priority)
+		priorityValue, err := model.ParsePriorityName(*priority)
 		if err != nil {
 			return err
 		}
@@ -563,11 +563,11 @@ func listLeaf(surface listSurface) (leaf[listScope], *string) {
 		// every retry, so it must not draw retry advice. [LAW:no-silent-failure]
 		statuses, err := model.ParseStates(*status...)
 		if err != nil {
-			return ValidationError{Message: "parse --status: " + err.Error()}
+			return model.ValidationError{Message: "parse --status: " + err.Error()}
 		}
 		issueTypes, err := model.ParseIssueTypes(*issueType...)
 		if err != nil {
-			return ValidationError{Message: "parse --type: " + err.Error()}
+			return model.ValidationError{Message: "parse --type: " + err.Error()}
 		}
 		issueIDs, err := storage.ParseNames("--ids needs an issue id in every slot, e.g. --ids <issue-id>", *ids...)
 		if err != nil {
@@ -1174,14 +1174,14 @@ func updateLeaf() appLeaf {
 			in.Fields.Prompt = &value
 		}
 		if visited["type"] {
-			value, err := parseIssueTypeFlag(*issueType)
+			value, err := model.ParseIssueType(*issueType)
 			if err != nil {
 				return err
 			}
 			in.Fields.IssueType = &value
 		}
 		if visited["priority"] {
-			value, err := parsePriorityFlag(*priority)
+			value, err := model.ParsePriorityName(*priority)
 			if err != nil {
 				return err
 			}
@@ -1207,7 +1207,7 @@ func updateLeaf() appLeaf {
 			in.Fields.Lane = &value
 		}
 		if in.IsEmpty() {
-			return errors.New("lit update requires at least one field flag")
+			return UsageError{Message: "lit update requires at least one field flag; " + usage}
 		}
 		issue, err := ap.Store.Apply(ctx, positional[0], in)
 		if err != nil {
@@ -1283,7 +1283,7 @@ func rankLeaf() appLeaf {
 			modeCount++
 		}
 		if modeCount != 1 {
-			return ValidationError{Message: "exactly one of --top, --bottom, --above, --below is required"}
+			return model.ValidationError{Message: "exactly one of --top, --bottom, --above, --below is required"}
 		}
 		issueID := positional[0]
 		// Relative ops resolve cross-frame requests to the comparable pair (a
@@ -2093,35 +2093,6 @@ func writeJSON(w io.Writer, v any) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
-}
-
-// parseIssueTypeFlag is the strict trust boundary for the write-path --type
-// flags (new/followup/update). The ValidationError wrapper keeps the exit-code
-// contract these commands have always had: a bad type is ExitValidation.
-func parseIssueTypeFlag(raw string) (model.IssueType, error) {
-	t, err := model.ParseIssueType(raw)
-	if err != nil {
-		return "", ValidationError{Message: err.Error()}
-	}
-	return t, nil
-}
-
-// parsePriorityFlag is the strict trust boundary for the write-path --priority
-// flags (new/followup/update). The ValidationError wrapper keeps the exit-code
-// contract these commands have always had: a bad priority is ExitValidation.
-//
-// It takes the raw string rather than an int because the flag is declared with
-// fs.String: an fs.Int would let pflag's own strconv.ParseInt refuse "urgent"
-// before this gate ever ran, rejecting the word every read surface prints.
-// Routing the value through model.ParsePriorityName puts the whole domain
-// behind one gate that answers in ValidationError.
-// [LAW:single-enforcer] [LAW:no-silent-failure]
-func parsePriorityFlag(raw string) (model.Priority, error) {
-	p, err := model.ParsePriorityName(raw)
-	if err != nil {
-		return 0, ValidationError{Message: err.Error()}
-	}
-	return p, nil
 }
 
 // priorityChoices renders the sealed priority vocabulary for flag help, derived

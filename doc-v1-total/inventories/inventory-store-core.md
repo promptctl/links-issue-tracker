@@ -390,7 +390,7 @@ Test evidence:
 #### 4.1 `CreateIssue(ctx, in storage.CreateIssueInput) (model.Issue, error)`
 
 `store.go`. Pre-transaction (pure/validation) phase:
-1. `strings.TrimSpace(in.Title) == ""` → `errors.New("title is required")` (`store.go`).
+1. `strings.TrimSpace(in.Title) == ""` → `model.ValidationError{Message: "title is required"}` (`store.go`).
 2. `issueType := in.IssueType`; if `""` → `model.TypeTask` (`store.go`).
 3. `now := time.Now().UTC()` (`store.go`).
 4. `canonicalizeLabels(in.Labels)` (`store.go`; `internal/store/labels.go`) — error propagated.
@@ -765,10 +765,10 @@ Evidence: a hard-deleted endpoint makes both `AddRelation` and `SetParent` fail 
 `fieldWrite` (`store.go`): `issue model.Issue; replaceLabels bool; actor, reason string; changes []model.FieldChange`.
 
 `planFieldUpdate(baseline model.Issue, in storage.UpdateIssueInput, actor string) (fieldWrite, error)` (`store.go`) — pure, no clock, no IO:
-- `Title != nil` → `strings.TrimSpace(*in.Title)`; empty result → `errors.New("title cannot be empty")` (`store.go`);
+- `Title != nil` → `strings.TrimSpace(*in.Title)`; empty result → `model.ValidationError{Message: "title cannot be empty"}` (`store.go`);
 - `Description != nil` → trimmed (`store.go`);
 - `Prompt != nil` → trimmed (`store.go`);
-- `IssueType != nil` → if `issue.IssueType.IsContainer() != in.IssueType.IsContainer()` → `fmt.Errorf("cannot change issue_type between container (%v) and leaf types: lifecycle capability would change", model.ContainerTypes())` (`store.go`);
+- `IssueType != nil` → if `issue.IssueType.IsContainer() != in.IssueType.IsContainer()` → `model.ValidationError{Message: fmt.Sprintf("cannot change issue_type between container (%v) and leaf types: lifecycle capability would change", model.ContainerTypes())}` (`store.go`);
 - `Priority != nil` → assigned as-is (`store.go`);
 - `Assignee != nil` → trimmed (`store.go`);
 - `Lane != nil` → trimmed (`store.go`);
@@ -2573,8 +2573,8 @@ There is no ID parser or validator in this slice: lookups bind the id verbatim (
 
 `model.NormalizeLabel` — `internal/model/label.go`:
 - `strings.ToLower(strings.TrimSpace(label))`.
-- Empty after trim → `errors.New("label is required")`.
-- Contains a comma → `errors.New("label cannot contain commas")`.
+- Empty after trim → `model.ValidationError{Message: "label is required"}`.
+- Contains a comma → `model.ValidationError{Message: "label cannot contain commas"}`.
 - No other characters are rejected; no length cap in code (the column is `VARCHAR(191)`, `migrations/00001_baseline.sql`).
 
 `store.normalizeLabel` is a pass-through wrapper — `internal/store/labels.go`.
@@ -2651,7 +2651,7 @@ Error-vs-not-found distinction: `execDelete` wraps a delete failure as `fmt.Erro
 - `RelParentChild RelationType = "parent-child"`
 - `RelRelatedTo RelationType = "related-to"`
 
-`ParseRelationType(s)` — `internal/model/relation_type.go`: `strings.TrimSpace(s)` then matches the three constants; anything else → `errors.New("relation type must be blocks, parent-child, or related-to")`. This is the only string→type gate; the store does no re-validation (`internal/store/relations.go` comment).
+`ParseRelationType(s)` — `internal/model/relation_type.go`: `strings.TrimSpace(s)` then matches the three constants; anything else → `model.ValidationError{Message: "relation type must be blocks, parent-child, or related-to"}`. This is the only string→type gate; the store does no re-validation (`internal/store/relations.go` comment).
 
 ### 4.2 Direction and canonicalization rules
 
@@ -3579,7 +3579,7 @@ DependsOn   []string `json:"depends_on,omitempty"`
 The file is **one JSON array of these objects** (`ParseImportTreeSpecs`, `storage/specs.go`):
 - `json.NewDecoder` with `DisallowUnknownFields()` — any key not listed above is an error, wrapped as `"import: parse spec: %w"` around a `ValidationError` carrying the decoder's message. A top-level value that is not an array is instead reported by its JSON kind, with a pointer to `lit backup restore` for an export (`treeSpecRefusal`).
 - After decoding, `dec.More()` → `ValidationError{Message: "import: unexpected trailing data after spec array"}`.
-- Every parse refusal is a `storage.ValidationError`, so it exits 3 with the `validation_refused` remediation.
+- Every parse refusal is a `model.ValidationError`, so it exits 3 with the `validation_refused` remediation.
 
 Hand-writable example (pinned verbatim by `import_tree_test.go`):
 

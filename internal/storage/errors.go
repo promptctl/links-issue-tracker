@@ -18,11 +18,3 @@ type NotFoundError struct {
 func (e NotFoundError) Error() string {
 	return fmt.Sprintf("%s %q not found", e.Entity, e.ID)
 }
-
-// ValidationError is returned when a domain constraint (field value, type, range) is violated.
-// [LAW:types-are-the-program] The type carries the classification so callers dispatch on type, not message text.
-type ValidationError struct {
-	Message string
-}
-
-func (e ValidationError) Error() string { return e.Message }

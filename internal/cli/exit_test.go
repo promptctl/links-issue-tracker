@@ -24,11 +24,11 @@ func TestExitCodeMappings(t *testing.T) {
 		{name: "merge conflict typed", err: MergeConflictError{Message: "sync conflict"}, want: ExitConflict},
 		{name: "corruption typed", err: CorruptionError{Message: "integrity_check failed"}, want: ExitCorruption},
 		{name: "usage message", err: UsageError{Message: "usage: lit foo"}, want: ExitUsage},
-		{name: "validation required", err: ValidationError{Message: "--title is required"}, want: ExitValidation},
+		{name: "validation required", err: model.ValidationError{Message: "--title is required"}, want: ExitValidation},
 		{name: "validation unknown command", err: UnknownCommandError{Command: "abc"}, want: ExitValidation},
 		{name: "usage unknown flag", err: UsageError{Message: "unknown flag: --json"}, want: ExitUsage},
 		{name: "string conflict", err: MergeConflictError{Message: "sync import conflict"}, want: ExitConflict},
-		{name: "store validation", err: storage.ValidationError{Message: "issue type must be task, feature, bug, chore, or epic"}, want: ExitValidation},
+		{name: "store validation", err: model.ValidationError{Message: "issue type must be task, feature, bug, chore, or epic"}, want: ExitValidation},
 		{name: "unsupported flag", err: UnsupportedError{Message: "--output is no longer supported; omit it for text output"}, want: ExitValidation},
 		{name: "takeover declined wrapped", err: fmt.Errorf("start: %w", takeoverUnconfirmedError{Message: "takeover declined"}), want: ExitValidation},
 		// "Am I somewhere lit can work?" has two negative answers, and both exit
@@ -55,7 +55,7 @@ func TestExitCodeMappings(t *testing.T) {
 		},
 		// The genuine fault on the same path keeps the unclassified-fault code.
 		{name: "genuine stat fault", err: errors.New("stat database dir: permission denied"), want: ExitGeneric},
-		{name: "generic", err: ValidationError{Message: "boom"}, want: ExitValidation},
+		{name: "generic", err: model.ValidationError{Message: "boom"}, want: ExitValidation},
 		// Both of `lit next`'s terminal answers exit ExitNoWork: the command ran
 		// correctly and simply has no ticket to hand back. Sharing one code is
 		// deliberate — the caller's question is binary, and which emptiness it

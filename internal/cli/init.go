@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -61,7 +62,7 @@ func initLeaf() (wsLeaf, wsAcquire) {
 		}
 		requested, err := workspace.RequestPrefix(*prefix)
 		if err != nil {
-			return workspace.Info{}, ValidationError{Message: fmt.Sprintf("invalid --prefix %q: %v", *prefix, err)}
+			return workspace.Info{}, model.ValidationError{Message: fmt.Sprintf("invalid --prefix %q: %v", *prefix, err)}
 		}
 		return resolveWorkspaceFromWD(requested)
 	}

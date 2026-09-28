@@ -2,7 +2,6 @@ package memory
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -28,7 +27,7 @@ func (e *Engine) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (
 func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 	title := strings.TrimSpace(in.Title)
 	if title == "" {
-		return model.Issue{}, errors.New("title is required")
+		return model.Issue{}, model.ValidationError{Message: "title is required"}
 	}
 	labels, err := canonicalLabels(in.Labels)
 	if err != nil {

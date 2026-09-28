@@ -8,6 +8,7 @@ import (
 	"io"
 	"reflect"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"gopkg.in/yaml.v3"
 )
 
@@ -23,7 +24,7 @@ import (
 // raw YAML bytes in, one spec per document out. It rejects any field the
 // spec schema does not name, so a typo'd key fails loudly here instead of
 // silently doing nothing. Like the tree-spec parser below, every failure is a
-// ValidationError: the file is what is wrong. [LAW:single-enforcer] [LAW:no-silent-failure]
+// model.ValidationError: the file is what is wrong. [LAW:single-enforcer] [LAW:no-silent-failure]
 func ParseBulkSpecs(data []byte) ([]BulkIssueSpec, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
@@ -34,7 +35,7 @@ func ParseBulkSpecs(data []byte) ([]BulkIssueSpec, error) {
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			return nil, fmt.Errorf("bulk: parse spec: %w", ValidationError{Message: err.Error()})
+			return nil, fmt.Errorf("bulk: parse spec: %w", model.ValidationError{Message: err.Error()})
 		}
 		specs = append(specs, spec)
 	}
@@ -48,7 +49,7 @@ func ParseBulkSpecs(data []byte) ([]BulkIssueSpec, error) {
 //
 // [LAW:no-silent-failure] DisallowUnknownFields + trailing-data check make
 // the parse total: every byte stream that is not exactly one array of
-// known-field specs is an explicit error. Each is a ValidationError because
+// known-field specs is an explicit error. Each is a model.ValidationError because
 // the file, not the moment, is what is wrong: rereading it unchanged can
 // never parse.
 func ParseImportTreeSpecs(data []byte) ([]ImportTreeSpec, error) {
@@ -59,7 +60,7 @@ func ParseImportTreeSpecs(data []byte) ([]ImportTreeSpec, error) {
 		return nil, fmt.Errorf("import: parse spec: %w", treeSpecRefusal(err))
 	}
 	if dec.More() {
-		return nil, ValidationError{Message: "import: unexpected trailing data after spec array"}
+		return nil, model.ValidationError{Message: "import: unexpected trailing data after spec array"}
 	}
 	return specs, nil
 }
@@ -69,10 +70,10 @@ func ParseImportTreeSpecs(data []byte) ([]ImportTreeSpec, error) {
 // tells the reader nothing about their file. The pointer to backup restore is
 // there because the one JSON object a lit user is likely to hold is an
 // export, and the export and the tree spec are two separate formats.
-func treeSpecRefusal(err error) ValidationError {
+func treeSpecRefusal(err error) model.ValidationError {
 	var typeErr *json.UnmarshalTypeError
 	if errors.As(err, &typeErr) && typeErr.Type == reflect.TypeFor[[]ImportTreeSpec]() {
-		return ValidationError{Message: fmt.Sprintf("the file is a JSON %s, but a tree spec is a JSON array of records (see `lit import --help`). A lit export, as written by `lit export`, `lit backup create` or sync, is a JSON object `lit import` cannot read. `lit backup restore --path <file>` loads one, and it replaces this workspace's issues with the export's rather than adding to them", typeErr.Value)}
+		return model.ValidationError{Message: fmt.Sprintf("the file is a JSON %s, but a tree spec is a JSON array of records (see `lit import --help`). A lit export, as written by `lit export`, `lit backup create` or sync, is a JSON object `lit import` cannot read. `lit backup restore --path <file>` loads one, and it replaces this workspace's issues with the export's rather than adding to them", typeErr.Value)}
 	}
-	return ValidationError{Message: err.Error()}
+	return model.ValidationError{Message: err.Error()}
 }

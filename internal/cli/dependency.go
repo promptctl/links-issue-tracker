@@ -152,7 +152,7 @@ func rejectSameEpicBlocks(ctx context.Context, ap *app.App, fromID, toID string)
 		return err
 	}
 	if fromEpic != "" && fromEpic == toEpic {
-		return ValidationError{Message: sameEpicBlocksRejectionMessage}
+		return model.ValidationError{Message: sameEpicBlocksRejectionMessage}
 	}
 	return nil
 }

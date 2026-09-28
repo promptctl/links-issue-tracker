@@ -3,6 +3,8 @@ package storage
 import (
 	"fmt"
 	"strings"
+
+	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 // ParseSortSpecs turns a comma-separated sort expression (e.g.
@@ -36,7 +38,7 @@ func ParseSortSpecs(input string) ([]SortSpec, error) {
 				// [LAW:no-silent-failure] An unrecognized direction is a typo, not
 				// an implicit default — reject it so a bad sort never silently
 				// reorders results.
-				return nil, ValidationError{Message: fmt.Sprintf("unsupported sort direction %q", direction)}
+				return nil, model.ValidationError{Message: fmt.Sprintf("unsupported sort direction %q", direction)}
 			}
 		}
 		out = append(out, SortSpec{Field: field, Desc: desc})

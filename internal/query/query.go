@@ -15,14 +15,14 @@ type ParseResult struct {
 }
 
 // Parse reads a query expression into a filter. Every refusal it returns is a
-// storage.ValidationError: each one rejects the query text itself, so it
+// model.ValidationError: each one rejects the query text itself, so it
 // repeats on every retry and must not be answered with retry advice. Typing
 // it here, once, covers every term rather than only the ones that remembered
 // to. [LAW:single-enforcer]
 func Parse(input string) (ParseResult, error) {
 	filter, err := parse(input)
 	if err != nil {
-		return ParseResult{}, storage.ValidationError{Message: err.Error()}
+		return ParseResult{}, model.ValidationError{Message: err.Error()}
 	}
 	return ParseResult{Filter: filter}, nil
 }
@@ -44,11 +44,11 @@ func parse(input string) (storage.ListIssuesFilter, error) {
 // Merge joins the flag-built filter (base) with the query-built one
 // (incoming). Its refusals — a term contradicting a flag, a time window that
 // ends before it starts — reject the request itself, so like Parse it returns
-// each as a storage.ValidationError, typed here once. [LAW:single-enforcer]
+// each as a model.ValidationError, typed here once. [LAW:single-enforcer]
 func Merge(base storage.ListIssuesFilter, incoming storage.ListIssuesFilter) (storage.ListIssuesFilter, error) {
 	filter, err := merge(base, incoming)
 	if err != nil {
-		return storage.ListIssuesFilter{}, storage.ValidationError{Message: err.Error()}
+		return storage.ListIssuesFilter{}, model.ValidationError{Message: err.Error()}
 	}
 	return filter, nil
 }

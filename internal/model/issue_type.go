@@ -1,7 +1,6 @@
 package model
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 )
@@ -33,7 +32,7 @@ func IssueTypes() []IssueType {
 	return []IssueType{TypeTask, TypeFeature, TypeBug, TypeChore, TypeEpic}
 }
 
-var errInvalidIssueType = errors.New("issue type must be " + oxfordOr(IssueTypes()))
+var errInvalidIssueType = ValidationError{Message: "issue type must be " + oxfordOr(IssueTypes())}
 
 // ParseIssueType maps an untrusted issue-type string (CLI flag, query token,
 // import payload) into the sealed set, canonicalizing case and surrounding

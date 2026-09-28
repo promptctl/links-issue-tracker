@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 // The authored-file parsers' own tests: bytes in, specs or a named refusal out,
@@ -15,9 +17,9 @@ func TestParseBulkSpecsRejectsUnknownField(t *testing.T) {
 	t.Parallel()
 	doc := []byte("title: X\ntopic: bulk\ntype: task\nchildren: [a, b]\n")
 	_, err := ParseBulkSpecs(doc)
-	var refusal ValidationError
+	var refusal model.ValidationError
 	if !errors.As(err, &refusal) || !strings.Contains(err.Error(), "children") {
-		t.Fatalf("ParseBulkSpecs(unknown field) error = %v, want a ValidationError naming \"children\"", err)
+		t.Fatalf("ParseBulkSpecs(unknown field) error = %v, want a model.ValidationError naming \"children\"", err)
 	}
 }
 
@@ -59,9 +61,9 @@ func TestParseImportTreeSpecsNamesTheTopLevelShape(t *testing.T) {
 		{doc: `["a string"]`, wantRestore: false},
 	} {
 		_, err := ParseImportTreeSpecs([]byte(tc.doc))
-		var refusal ValidationError
+		var refusal model.ValidationError
 		if !errors.As(err, &refusal) {
-			t.Fatalf("ParseImportTreeSpecs(%s) error = %v, want a ValidationError", tc.doc, err)
+			t.Fatalf("ParseImportTreeSpecs(%s) error = %v, want a model.ValidationError", tc.doc, err)
 		}
 		if got := strings.Contains(err.Error(), "lit backup restore"); got != tc.wantRestore {
 			t.Fatalf("ParseImportTreeSpecs(%s) error = %q, names backup restore = %v, want %v", tc.doc, err, got, tc.wantRestore)

@@ -97,16 +97,16 @@ func TestQueryMultiTokenAppliesAllFourNewTokens(t *testing.T) {
 }
 
 // TestQueryRefusalsAreValidationErrors pins that every refusal of the query
-// text is a storage.ValidationError, so none draws retry advice. The name
+// text is a model.ValidationError, so none draws retry advice. The name
 // terms are the ones a regression would quietly turn into "no filter": an
 // id:, parent: or label: naming nothing, or with a blank slot, must be loud
 // rather than widen or narrow the listing. [LAW:no-silent-failure]
 func TestQueryRefusalsAreValidationErrors(t *testing.T) {
 	for _, term := range []string{`parent:`, `id:`, `label:`, `id:,`, `id:a,`, `label:" , "`, `type:bogus`, `type:bug,`, `status:todo`, `limit:lots`, `"unterminated`} {
 		_, err := Parse(term)
-		var refusal storage.ValidationError
+		var refusal model.ValidationError
 		if !errors.As(err, &refusal) {
-			t.Fatalf("Parse(%s) error = %#v, want a storage.ValidationError", term, err)
+			t.Fatalf("Parse(%s) error = %#v, want a model.ValidationError", term, err)
 		}
 	}
 }

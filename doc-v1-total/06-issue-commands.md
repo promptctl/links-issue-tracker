@@ -28,7 +28,7 @@ This table is the corpus's single source for the code-to-error-type mapping; `07
 | 0 | `ExitOK` | nil error, including a handled `--help` |
 | 1 | `ExitGeneric` | `BulkFailureError`, transient GC contention, everything else |
 | 2 | `ExitUsage` | `UsageError` |
-| 3 | `ExitValidation` | `UnknownCommandError`, `RetiredCommandError`, `ValidationError` (CLI and storage), `UnsupportedError`, `templateShapeError`, `OutsideWorkspaceError`, `store.ErrWorkspaceNotInitialized`, `model.ContainerActionError` when not satisfied, `takeoverUnconfirmedError` |
+| 3 | `ExitValidation` | `UnknownCommandError`, `RetiredCommandError`, `model.ValidationError`, `UnsupportedError`, `templateShapeError`, `OutsideWorkspaceError`, `store.ErrWorkspaceNotInitialized`, `model.ContainerActionError` when not satisfied, `takeoverUnconfirmedError` |
 | 4 | `ExitNotFound` | `storage.NotFoundError` |
 | 5 | `ExitConflict` | `MergeConflictError`, `SyncFailureError`, owner-approval refusal |
 | 6 | `ExitNoWork` | `Exhausted`, `NoWork`, `model.ContainerActionError` when `Satisfied()` |
@@ -73,7 +73,7 @@ Rollups partition rows as: `in_progress` first (even if also blocked), else bloc
 
 ## Creating issues
 
-**`lit new`** (write; `cli.go`). Flags: `--title`, `--description`, `--prompt` (reusable agent prompt), `--type` (default `task`), `--topic` (required immutable slug), `--parent` (child IDs become `parentID.<n>`), `--priority` (`normal`|`urgent`, or the equivalent `0`|`1`; default `normal`), `--assignee` (trimmed literal), `--labels` (CSV), `--lane` (partitions an epic's children into parallel rank-ordered sub-sequences), `--top` (rank at top; default appends to the bottom of its frame). Type/priority validation → exit 3. Store refusals: blank title ("title is required"), missing/short/long topic, nonexistent parent (exit 4). Labels are canonicalized, de-duplicated, sorted. Output: the summary line + breadcrumb. Note `newLeaf` registers no `--by`; creation attribution is not CLI-settable here.
+**`lit new`** (write; `cli.go`). Flags: `--title`, `--description`, `--prompt` (reusable agent prompt), `--type` (default `task`), `--topic` (required immutable slug), `--parent` (child IDs become `parentID.<n>`), `--priority` (`normal`|`urgent`, or the equivalent `0`|`1`; default `normal`), `--assignee` (trimmed literal), `--labels` (CSV), `--lane` (partitions an epic's children into parallel rank-ordered sub-sequences), `--top` (rank at top; default appends to the bottom of its frame). Type/priority validation → exit 3. Store refusals: blank title ("title is required") and missing/short/long topic → exit 3; nonexistent parent → exit 4. Labels are canonicalized, de-duplicated, sorted. Output: the summary line + breadcrumb. Note `newLeaf` registers no `--by`; creation attribution is not CLI-settable here.
 
 **`lit followup`** (write; `cli.go`). Files a follow-up parented to a just-closed ticket. Flags: `--on` (required parent ID), `--title` (required), `--description`, `--prompt`, `--type`, `--topic`, `--priority`, `--assignee`, `--labels`, `--top` — no `--parent`, no `--lane`. Blank `--on` or `--title` → usage error, exit 2; missing parent → exit 4. Defaults inherited from the parent: blank topic takes the parent's; blank description becomes "Follow-up surfaced at the close of `<id>`: `<title>`".
 
@@ -111,7 +111,7 @@ Admission is one predicate, `capacityFor` (`next_route.go`), which classifies a 
 
 ## Mutating fields and rank
 
-**`lit update <id>`** (`cli.go`). Flags: `--title`, `--description`, `--prompt`, `--type`, `--priority`, `--assignee`, `--labels` (replaces the whole set), `--lane`, `--reason`, hidden `--by`. Only flags actually present are applied. `--status` is intercepted with guidance to use the transition verbs (exit 2). No field flag at all → "lit update requires at least one field flag", exit 1 (`--reason` alone does not count). One field-change event records all moved fields together.
+**`lit update <id>`** (`cli.go`). Flags: `--title`, `--description`, `--prompt`, `--type`, `--priority`, `--assignee`, `--labels` (replaces the whole set), `--lane`, `--reason`, hidden `--by`. Only flags actually present are applied. `--status` is intercepted with guidance to use the transition verbs (exit 2). No field flag at all → "lit update requires at least one field flag" with the usage line, exit 2 (`--reason` alone does not count). A blank `--title` or a `--type` crossing the container/leaf line → exit 3. One field-change event records all moved fields together.
 
 **`lit rank <id> --top|--bottom|--above <id>|--below <id>`** (`cli.go`). Exactly one mode flag required — counted by presence, so `--top=false` still counts (exit 3 otherwise). **Frame substitution**: ranking a child of an epic moves the whole epic; the command reports "`<id>` is inside `<epic>`; ranked the epic `<epic>` instead, leaving its internal order unchanged", and similarly when the anchor resolves to its epic (`cli.go`).
 

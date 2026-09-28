@@ -1,7 +1,6 @@
 package model
 
 import (
-	"errors"
 	"strings"
 )
 
@@ -28,7 +27,7 @@ func ParseRelationType(s string) (RelationType, error) {
 	case RelBlocks, RelParentChild, RelRelatedTo:
 		return rt, nil
 	default:
-		return "", errors.New("relation type must be blocks, parent-child, or related-to")
+		return "", ValidationError{Message: "relation type must be blocks, parent-child, or related-to"}
 	}
 }
 

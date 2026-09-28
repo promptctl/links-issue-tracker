@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -66,7 +65,7 @@ var issueFields = []issueField{
 		func(issue *model.Issue, v string) error {
 			issue.Title = strings.TrimSpace(v)
 			if issue.Title == "" {
-				return errors.New("title cannot be empty")
+				return model.ValidationError{Message: "title cannot be empty"}
 			}
 			return nil
 		},
@@ -89,7 +88,7 @@ var issueFields = []issueField{
 			// status. Refuse it here rather than inventing a default
 			// downstream.
 			if issue.IssueType.IsContainer() != v.IsContainer() {
-				return fmt.Errorf("cannot change issue_type between container (%v) and leaf types: lifecycle capability would change", model.ContainerTypes())
+				return model.ValidationError{Message: fmt.Sprintf("cannot change issue_type between container (%v) and leaf types: lifecycle capability would change", model.ContainerTypes())}
 			}
 			issue.IssueType = v
 			return nil
