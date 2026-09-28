@@ -140,7 +140,8 @@ var doltWorkspaceMachinery = map[string][]string{
 	// ErrRemoteCacheNotLanded the one failure the receive tells apart — the
 	// fetch landed and only the git mirror's copy did not.
 	//
-	// ReadReceivedRefs and WriteReceivedRefs are the receive's record of what
+	// ReadReceivedRefs and WriteReceivedRefs (at ReceivedRefsPath, which the
+	// SIGTERM wedge test removes so its receive fetches) are the receive's record of what
 	// the remote advertised before the last settled fetch, the mirror of
 	// RecordPushedHead on the receive side. The receive reads it to answer
 	// "has the remote moved" BEFORE it opens the store — the whole point of
@@ -151,7 +152,7 @@ var doltWorkspaceMachinery = map[string][]string{
 	"mirror clone and push": {
 		"MirrorHoldBudget", "MirrorPushDeadline", "MirrorPushCancelLagObserved",
 		"RecordPushedHead", "PushedHeadRecord", "ErrMirrorHoldCut", "ErrReceivedRefsNotRecorded",
-		"InlineReceiveDeadline", "ReadReceivedRefs", "WriteReceivedRefs",
+		"InlineReceiveDeadline", "ReadReceivedRefs", "WriteReceivedRefs", "ReceivedRefsPath",
 		"LandFetchedHead", "LandedFetch", "ErrRemoteCacheNotLanded",
 	},
 	// Typed failures the CLI matches to choose an exit code and a message.
