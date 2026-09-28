@@ -134,9 +134,9 @@ Precedence, exactly: **`CLAUDE_CODE_SESSION_ID` (trimmed, non-empty) always wins
 
 - Assignee flag on `start`: `--assignee`, help string `"Assignee fallback when CLAUDE_CODE_SESSION_ID is unset (env always wins when set)"` (`internal/cli/cli.go`). Action built as `model.Start{Assignee: resolveIdentity(*assignee)}` (`internal/cli/cli.go`).
 - Actor flag: hidden `--by`, empty default, registered by `registerActor` which never exposes the raw pointer — every read passes through `resolveIdentity` (`internal/cli/cli.go`). `os.Getenv("USER")` was deliberately removed as a privacy violation; the fallback is `""`, normalized by the store to the opaque `"unknown"` (`internal/cli/cli.go`).
-- Applied in `runTransition`: `actor := resolveActor()` then `Store.Apply(ctx, issueID, storage.Change{Action: action, Actor: actor, Reason: *reason})` (`internal/cli/cli.go`).
+- Applied in `transitionLeaf`: `actor := resolveActor()` then `Store.Apply(ctx, issueID, storage.Change{Action: action, Actor: actor, Reason: *reason})` (`internal/cli/cli.go`).
 - Every relation/label/bulk verb resolves through the same rule; tests pin `label add`, `parent set`, `dep add`, `bulk label add`, `bulk close` to `"claude_" + sessionID` and assert raw `$USER` never lands in `CreatedBy`/`Actor` (`internal/cli/attribution_test.go`, helpers).
-- `displayAssignee("")` renders `"(unassigned)"` (`internal/cli/cli.go`).
+- A claimant with no assignee is named by its checkout: `describeClaimant` returns `nameCheckout(c.Checkout)` when `c.Assignee == ""` (`internal/cli/claims_render.go`).
 - `Start` is the only lifecycle action that rewrites the assignee: `type Start struct{ Assignee string }` (`internal/model/lifecycle/action.go`), `Target() State` = `InProgress` (`internal/model/lifecycle/action.go`). `Issue.Assignee` is orthogonal to the status machine (`internal/model/model.go`).
 
 Note the interaction pinned by test: because the env var overrides `--assignee`, an e2e test must clear `CLAUDE_CODE_SESSION_ID` or both checkouts flatten to one assignee and a same-state `start` becomes a documented no-op in `store.Apply`, so the claim never transfers (`internal/cli/claims_takeover_e2e_test.go`).
@@ -227,7 +227,7 @@ E2E manipulation of the window: a test writes `.lit/config.toml` containing `[cl
 ```go
 type LocalCheckouts struct { workspace string; live map[string]struct{} }
 ```
-`internal/claims/local.go`. Constructed by `NewLocalCheckouts(workspaceID, liveStreams)` (`internal/claims/local.go`).
+`internal/claims/local.go`. Constructed by `NewLocalCheckouts(workspaceID, live)` (`internal/claims/local.go`).
 
 **Zero value = "this machine has enumerated nothing and therefore proves nothing"**; it voids nothing, which is the "where uncheckable, assume live and let freshness govern" default (`internal/claims/local.go`). Callers that cannot enumerate must pass the zero value, never a guess (`internal/claims/local.go`).
 
@@ -265,11 +265,11 @@ type Checkout struct { Stream StreamID; Path string; Branch string }
 ```go
 checkouts, err := workspace.LiveCheckouts(a.Workspace.RootDir)
 if err != nil { return claims.LocalCheckouts{}, err }
-return claims.NewLocalCheckouts(a.Workspace.WorkspaceID, streamTokens(checkouts)), nil
+return claims.NewLocalCheckouts(a.Workspace.WorkspaceID, LiveCheckoutsOf(checkouts)), nil
 ```
 On error it returns the zero value **and** the error — it reports what it proved or that it proved nothing (`internal/app/claims.go`).
 
-`streamTokens(checkouts)` drops any checkout whose `Stream` is not `Present()` (`internal/app/claims.go`); a never-mutated checkout carries no token, holds no claim, and voids nothing (`internal/app/claims.go`). Pinned by `TestStreamTokensCountsOnlyMintedIdentities` (`internal/app/claims_test.go`).
+`LiveCheckoutsOf(checkouts)` drops any checkout whose `Stream` is not `Present()` and projects each remaining one onto `claims.LiveCheckout{Stream: checkout.Stream.Value(), Locked: checkout.Locked}` (`internal/app/claims.go`); a never-mutated checkout carries no token, holds no claim, and voids nothing (`internal/app/claims.go`). Pinned by `TestLiveCheckoutsOfCountsOnlyMintedIdentities` (`internal/app/claims_test.go`).
 
 ---
 
@@ -392,11 +392,11 @@ No events are emitted by `app`; the package publishes no event/observer surface.
 
 `internal/app/claims.go`. Covered in §5.3. Placement rationale (effects at the boundary, `internal/claims` importing only `internal/model`) at `internal/app/claims.go`; workspace-id scoping as both a correctness and a privacy property.
 
-### 7.7 `streamTokens(checkouts []workspace.Checkout) []string` (unexported)
+### 7.7 `LiveCheckoutsOf(checkouts []workspace.Checkout) []claims.LiveCheckout`
 
-`internal/app/claims.go`. Covered in §5.3.
+`internal/app/claims.go`. Covered in §5.3. Exported because the CLI enumerates checkouts itself (it needs the addresses off the same listing) and projects them through this function rather than a copy of it (`internal/cli/claims_context.go`).
 
-That is the entire `internal/app` surface: `App` (3 fields), `AccessMode` + 2 constants, `accessContract`, `accessContracts`, `Open`, `OpenLocationForRead`, `Close`, `LocalCheckouts`, `streamTokens`.
+That is the entire `internal/app` surface: `App` (3 fields), `AccessMode` + 2 constants, `accessContract`, `accessContracts`, `Open`, `New`, `OpenLocationForRead`, `Close`, `LocalCheckouts`, `LiveCheckoutsOf`.
 
 ---
 
@@ -412,11 +412,11 @@ That is the entire `internal/app` surface: `App` (3 fields), `AccessMode` + 2 co
 5. `claims.NewEvidence(allIssues, parents, events)`.
 6. `workspace.LiveCheckouts(ap.Workspace.RootDir)`:
    - **On error**: prints to stdout, verbatim, `warning: could not enumerate local checkouts (%v) — claim liveness check and local addresses skipped, freshness alone governs\n`, and leaves `local` as the zero `claims.LocalCheckouts` and `addresses` nil. A failure to print the warning aborts the whole gather.
-   - **On success**: `local = claims.NewLocalCheckouts(ap.Workspace.WorkspaceID, checkoutStreamTokens(checkouts))` and `addresses = addressesByAttribution(ap.Workspace.WorkspaceID, checkouts)`.
+   - **On success**: `local = claims.NewLocalCheckouts(ap.Workspace.WorkspaceID, app.LiveCheckoutsOf(checkouts))` and `addresses = addressesByAttribution(ap.Workspace.WorkspaceID, checkouts)`.
 7. `fresh := claims.Freshness{Now: time.Now(), Window: cfg.Claims.FreshnessWindow}`; `standings := claims.Derive(evidence, fresh, local)`.
 8. `self := model.NewAttribution(ap.Stream.Value(), ap.Workspace.WorkspaceID)` — a never-minted stream collapses to the zero Attribution, which is exactly "no live claims", with no branch needed.
 
-`checkoutStreamTokens` mirrors `app.streamTokens`: skips checkouts without a present stream (`internal/cli/claims_context.go`). `addressesByAttribution` indexes live checkouts by `model.NewAttribution(checkout.Stream.Value(), workspaceID)`, skipping tokenless checkouts (`internal/cli/claims_context.go`).
+The token projection is `app.LiveCheckoutsOf`, the same function `(*App).LocalCheckouts` uses (`internal/cli/claims_context.go`). `addressesByAttribution` indexes live checkouts by `model.NewAttribution(checkout.Stream.Value(), workspaceID)`, skipping tokenless checkouts (`internal/cli/claims_context.go`).
 
 Callers: `next` (`internal/cli/next.go`), `workable`/`backlog` runner (`internal/cli/workable.go`), `authorizeStart` (`internal/cli/claims_takeover.go`), `reportContestedLanes` (`internal/cli/claims_contest_report.go`).
 
@@ -438,13 +438,13 @@ Callers: `next` (`internal/cli/next.go`), `workable`/`backlog` runner (`internal
 
 The `self.Present()` half is load-bearing, not a redundant guard: a checkout with no minted token has a zero `self`, and a zero `self` compared against a zero holder (the public checkout) would otherwise prove ownership of a lane this checkout never touched. So a lane the public checkout holds is always `laneHeldForeign` to every checkout, including one that has itself never minted a token.
 
-There is no row for an expired claim. The derivation returns `Unclaimed` the moment the window closes, so `relationOf` never learns a claim existed; the relation that used to sit here — `laneLapsed`, a lapsed claim offered as a takeover with the lapsed holder's provenance — is gone with the `Stale` variant (links-claims-y6yz). The `laneRelation` constants are at `internal/cli/claims_takeover.go`. Pinned by `TestRelationOf` (`internal/cli/claims_takeover_test.go`).
+There is no row for an expired claim. The derivation returns `Unclaimed` the moment the window closes (unless the holder's worktree is locked), so `relationOf` never learns a claim existed. The `laneRelation` constants are at `internal/cli/claims_takeover.go`. Pinned by `TestRelationOf` (`internal/cli/claims_takeover_test.go`).
 
 **`authorizeStart(ctx, stdout, ap, issueID, prior, start, take) (notice string, err error)`** (`internal/cli/claims_takeover.go`):
 1. `ap.Store.GetRelationsByIDs(ctx, []string{issueID})` → `lane := model.LaneOf(prior, relations[issueID].Parent)`.
 2. `gatherClaimContext`.
 3. Switch on `relationOf(cc.standings.Of(lane), cc.self)`: `laneHeldForeign` → `confirmFreshTakeover` runs and its error aborts the start; `laneUnclaimed` → returns `""` at once, no notice asked for.
-4. Otherwise (the lane was held, ours or another's) returns `transferNotice(ctx, ap, issueID, start)`. The string is the line `runTransition` writes after Apply (`transitionSpec.authorize`, `internal/cli/cli.go`); every other transition's hook (`noAuthorize`) returns `""`. An unclaimed lane, this checkout's own lane, and a lane whose claim has expired all pass with no output.
+4. Otherwise (the lane was held, ours or another's) returns `transferNotice(ctx, ap, issueID, start)`. The string is the line `transitionLeaf` writes after Apply (`transitionSpec.authorize`, `internal/cli/cli.go`); every other transition's hook (`noAuthorize`) returns `""`. An unclaimed lane, this checkout's own lane, and a lane whose claim has expired all pass with no output.
 
 **`confirmFreshTakeover(stdout, cc, lane, take)`** (`internal/cli/claims_takeover.go`). It renders the claim line with `formatClaimLine(cc, lane, time.Now())`; `ok == false` → error `claims: %v is held by another checkout but has no claim line to show`, since the caller reaches here only for a `Held` standing.
 - `take == true`, at a terminal or not → prints `"%s — taking over (--take)\n"` and proceeds. It is read before the terminal is.
@@ -483,7 +483,7 @@ The leaf gathers rows, relation details and the focus scope, then the claim cont
 | 4 | `started` and `relation == laneOurs` | `resumeWork` |
 | 5 | `started`, otherwise (`laneUnclaimed`) | `serveWork` |
 
-Row 5 is where abandonment lives: an in-flight row in a lane nobody holds is abandoned by definition, because whoever started it no longer holds a claim there, and it is served on that fact alone. The orphan annotation — the row's own quiet clock — does not enter routing; `lit backlog` and `lit orphaned` still read it as a description of the row. A fourth capacity, `takeoverWork`, once marked a pick displacing a lapsed claim or abandoned in-flight work; routing steps 2 and 4 accepted it alongside `serveWork` and nothing else distinguished them, so it was removed with the `Stale` standing (links-claims-y6yz). `laneHeldForeign` — a lane another checkout holds — is the one relation routed around on ownership alone; a locked worktree past the clock derives `Held`, so it is one of these.
+Row 5 is where abandonment lives: an in-flight row in a lane nobody holds is abandoned by definition, because whoever started it no longer holds a claim there, and it is served on that fact alone. The orphan annotation — the row's own quiet clock — does not enter routing; `lit backlog` and `lit orphaned` still read it as a description of the row. `laneHeldForeign` — a lane another checkout holds — is the one relation routed around on ownership alone; a locked worktree past the clock derives `Held`, so it is one of these.
 
 **`ownScope(standings, self) (map[model.LaneID]bool, map[string]bool)`** (`internal/cli/next_route.go`): every lane whose `relationOf(standing, self)` is `laneOurs`, plus each such lane's non-empty `Epic()`. It reads the **standings**, not the gathered rows — the rows are already narrowed by `--type/--labels/--assignee`, and deriving ownership from them let a display filter empty the set and drop the whole self-aware branch.
 
@@ -531,7 +531,7 @@ The `%s` in both non-empty arms is `describeReach(o.Unreachable, "", poolNotes)`
 
 **Exit code and reason.** `ExitNoWork = 6` (`internal/cli/exit.go`). **Both** `Exhausted` and `NoWork` map to it (`internal/cli/exit.go`): distinct from `ExitGeneric` because a caller looping `lit next` has to tell "stop, there is nothing for you" from "lit is broken", and under one code its only way to do that was to parse the English; not `ExitOK`, because for `lit next` 0 means "a ticket is on stdout", and exiting 0 with no row would hand the caller a success-shaped void (`internal/cli/exit.go`). Reasons: `scope_exhausted` for `Exhausted`, `no_ready_work` for `NoWork` (`internal/cli/error_output.go`).
 
-**`startAdvice(row, lane)`** (`internal/cli/next.go`) — the line every pick that would establish a claim prints above its row: what running `lit start` would lock, never what this command did. `lit next` claims nothing and starts nothing; the function was `claimAnnouncement` and the rename is the fix, an announcement reporting being the one thing a read-only command must not do. `object, named := lane.Describe()`, with `object = "it"` when the lane is not named; the advice is ``run `lit start %s` to claim %s`` (Row.ID, object), and an in-progress row prefixes it with ``%s is in progress and nobody holds it — `` (Row.ID). Routing serves an in-progress row from a lane this checkout does not hold only when nobody holds that lane, so the prefix states exactly what the standing proves and nothing about who left the row or when — an expired claim is not a claim, and the row's history is `lit show`'s to tell (links-claims-y6yz). The former `inFlightState(holder)` clause — "abandoned" / "stale, though its holder's worktree is still on disk" / "claimed by a locked worktree whose claim has gone stale" — and the `expiredHolder` accessor that fed it are gone with the `Stale` standing.
+**`startAdvice(row, lane)`** (`internal/cli/next.go`) — the line every pick that would establish a claim prints above its row: what running `lit start` would lock, never what this command did. `lit next` claims nothing and starts nothing. `object, named := lane.Describe()`, with `object = "it"` when the lane is not named; the advice is ``run `lit start %s` to claim %s`` (Row.ID, object), and an in-progress row prefixes it with ``%s is in progress and nobody holds it — `` (Row.ID). Routing serves an in-progress row from a lane this checkout does not hold only when nobody holds that lane, so the prefix states exactly what the standing proves and nothing about who left the row or when — an expired claim is not a claim, and the row's history is `lit show`'s to tell.
 
 **`LaneID.Describe() (string, bool)`** (`internal/model/model.go`) — three cases:
 - solo lane → `("", false)`. A solo lane is the ticket that names it, so any phrase for it only repeats what the surrounding sentence already said.
@@ -602,7 +602,7 @@ No other command consults `claims.Standings`: the only readers of `cc.standings`
 - If `cc.addresses[by]` resolves: `branch := checkout.Branch`; if empty, `branch = "detached HEAD"`; returns `fmt.Sprintf("claimed here: %s (%s)", checkout.Path, branch)`.
 - Otherwise: returns `fmt.Sprintf("claimed: %s (%s)", nameCheckout(by), holdState(by))`.
 - `holdState(by)`: `"elsewhere"` (an identified `by`) or `"unaddressed"` — the public checkout, since `by` is the zero Attribution and `by.Present()` is false.
-- There is no `(stale)` or `(locked)` tag and no `holdKind`: a locked worktree past the clock is an ordinary `Held` lane, and an expired claim renders nothing. The three-valued `holdKind` (`holdFresh`, `holdStale`, `holdLocked`), `claimTag`, and `holdKindOf` that produced those tags were removed with the `Stale` standing (links-claims-y6yz).
+- The prefix carries no freshness tag: a locked worktree past the clock derives an ordinary `Held` lane and renders like any other, and an expired claim derives `Unclaimed` and renders nothing.
 - **The public checkout never renders `claimed here`, whoever is asking.** `by` is the zero Attribution and a live worktree's holder in `cc.addresses` is always an identified checkout, so the first branch above can never match it — an earlier version compared `by` against `cc.self` instead and misread that coincidence as proof of ownership, rendering `"claimed here: this checkout"` for a foreign lane on `lit sync`'s contested-lane report (whose `cc.self` is always the zero Attribution). Pinned by `TestFormatClaimLinePublicCheckoutIsNeverHere` (`internal/cli/claims_render_test.go`): `"claimed: the public checkout (unaddressed)"` in every row regardless of `cc.self`.
 
 ### 10.3 `formatLaneProgress(progress)`

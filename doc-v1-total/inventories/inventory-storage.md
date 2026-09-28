@@ -557,13 +557,15 @@ Order of checks is stated as contract: the parent must be resolved before the co
 **`place(id, f, placement)`** (`internal/storage/memory/issues.go`) — `RankTop` takes the first slot among the frame `f`'s members; `RankBottom` (the zero value) appends to the whole order; any other value → `fmt.Errorf("unknown rank placement: %d", p)` from `orderEdgeFor`. A population with no members takes neither end: `place` takes the slot from `e.slotInsideContainer(f)`, propagates its error, and otherwise inserts there, so the first member of a frame lands immediately after the issue that frames it — `slices.Index(e.order, string(f))` plus one. `storage.TopLevel` names no such issue and gives slot `0`; a frame absent from the order is refused with `fmt.Errorf("frame %s holds no position in the order; an issue cannot be filed inside one that is not there", f)`.
 
 **`mintID`** (`internal/storage/memory/issues.go`)
-- With a parent: `nextChildID(parentID)`.
-- Without: `baseLength = min(issueid.ComputeAdaptiveLength(topLevelCount()), issueid.MaxHashLength)`; then for `length` from `baseLength` to `issueid.MaxHashLength`, for `nonce` in `[0, issueid.NonceAttempts)`, generates `issueid.GenerateHashID(prefix, topic, title, description, createdBy, createdAt, length, nonce)` and returns the first candidate not already in `issues`.
+- Builds an `issueid.Content` from topic, title, description, creator and `createdAt`, resolves the namespace and its population through `idSpace`, and returns `issueid.Mint(namespace, content, population, taken)`, where `taken` reports whether the candidate is already a key of `e.issues`.
+- `issueid.Mint` (`internal/issueid/generate.go`): `baseLength = min(ComputeAdaptiveLength(population), MaxHashLength)`; then for `length` from `baseLength` to `MaxHashLength`, for `nonce` in `[0, NonceAttempts)`, generates `GenerateHashID(namespace, content, length, nonce)` and returns the first candidate not taken.
 - Exhaustion → `fmt.Errorf("generate unique issue id: exhausted lengths %d-%d", baseLength, issueid.MaxHashLength)`.
+
+**`idSpace(prefix, topic, parentID)`** (`internal/storage/memory/issues.go`) — no parent → `issueid.TopLevelNamespace(prefix, topic)` with `topLevelCount()`; a parent → `issueid.ChildNamespace(parentID)` with `childCount(parentID)`. A child id is therefore `<parentID>.<hash>`, not a numbered suffix.
 
 **`topLevelCount()`** counts ids not containing `"."` (`internal/storage/memory/issues.go`).
 
-**`nextChildID(parentID)`** (`internal/storage/memory/issues.go`) — finds the highest integer suffix among **direct** children (a suffix containing another `.` is skipped, so grandchildren do not count), returns `fmt.Sprintf("%s.%d", parentID, highest+1)`.
+**`childCount(parentID)`** counts the `RelParentChild` relations whose `DstID` is the parent (`internal/storage/memory/issues.go`).
 
 ### 2.6 Reads
 
@@ -593,7 +595,7 @@ Order of checks is stated as contract: the parent must be resolved before the co
 
 Pipeline is fixed and every stage always runs: **hydrate → select → order → cap** (`internal/storage/memory/list.go`).
 
-1. `issueOrdering(filter.SortBy)` — parsed first, so an unknown sort field errors before any work (`internal/storage/memory/list.go`).
+1. `storage.IssueOrdering(filter.SortBy, issueSortKeys)` — parsed first, so an unknown sort field errors before any work (`internal/storage/memory/list.go`).
 2. `storage.ParseIssueCriteria(filter)` — canonicalizes the label criteria the same way stored labels are normalized, and is the one step of selection that can fail; everything after it answers yes or no.
 3. `e.mustRecord(id)` for each of `filter.ParentIDs`, in order — the first id with no record returns `NotFoundError`; a deleted record still exists.
 4. Hydrates **all** issues in `e.order` sequence.
@@ -647,7 +649,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 
 **`status` ordering** — `strings.Compare(string(a.State()), string(b.State()))`. It compares the **derived** state, the same reading `matchesStates` filters on, so an epic orders by the state its children compute rather than by a stored field it does not have. There is no separate stored-status comparator.
 
-**`issueOrdering`** (`internal/storage/memory/list.go`)
+**`storage.IssueOrdering`** (`internal/storage/ordering.go`), called with the memory engine's `issueSortKeys` (`internal/storage/memory/list.go`)
 - No specs → `[]SortSpec{{Field: "rank"}}` — the canonical ordering expressed as the spec list it stands for.
 - Each spec's field is `strings.ToLower(strings.TrimSpace(...))` then looked up in `issueSortKeys`; a miss → `fmt.Errorf("unsupported sort field %q", spec.Field)`.
 - `Desc` negates the ascending comparator.
@@ -690,20 +692,20 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 - Target's retention is `model.Deleted` → `fmt.Errorf("cannot redirect %s to %s: the canonical issue is deleted"...)`.
 - **Archived stays legal**, because "duplicate of something already done" is the most common real redirect.
 
-**`planFields`** (`internal/storage/memory/apply.go`) — a pure function of (baseline, patch, actor, now); no clock beyond the stamp handed in, no store, no writes.
+**`planFields`** (`internal/storage/memory/apply.go`) — a pure function of (baseline, patch, actor, now); no clock beyond the stamp handed in, no store, no writes. It applies the patch through `storage.ApplyIssueFields` (`internal/storage/fields.go`), which carries the per-field rules below.
 - `Title` set → `strings.TrimSpace`; if the result is empty → `errors.New("title cannot be empty")`.
 - `Description`, `Prompt`, `Assignee`, `Lane` set → `strings.TrimSpace`.
 - `IssueType` set → **refused if it would cross the container/leaf line**: `fmt.Errorf("cannot change issue_type between container (%v) and leaf types: lifecycle capability would change", model.ContainerTypes())`.
 - `Priority` set → assigned as-is.
-- `Labels` set → `canonicalLabels(*in.Labels)`.
+- `Labels` set → `model.CanonicalizeLabels(*in.Labels)`.
 - `patch.statesLabels = (in.Labels != nil)` — **not** the same question as "did the labels change": a patch restating the existing set rewrites the label rows (authorship and timestamps included), while a patch never mentioning labels leaves them as an earlier writer left them.
-- If `fieldChanges(baseline, issue)` is empty → returns the patch with **no event and no `UpdatedAt` bump**.
+- If `storage.ApplyIssueFields(baseline, in)` returns no change rows → returns the patch with **no event and no `UpdatedAt` bump**.
 - Otherwise sets `patch.issue.UpdatedAt = now` and emits one event with `reason: in.Reason`, `actor`, and the changes. **The field-change event has an empty `action` string**.
 
-**`fieldChanges`** (`internal/storage/memory/apply.go`) — one row per field that actually moved, in this fixed order: `title`, `description`, `issue_type`, `priority`, `assignee`, `lane`, `labels`.
+**`storage.ApplyIssueFields`** (`internal/storage/fields.go`) — one row per field that actually moved, in the fixed order of `issueFields`: `title`, `description`, `prompt`, `issue_type`, `priority`, `assignee`, `lane`, `labels`.
 - `priority` is recorded as `strconv.Itoa(int(...))` — the numeric wire encoding, not the display name.
 - `labels` is recorded as `strings.Join(labels, ",")`.
-- Note: `prompt` and `topic` are NOT in `fieldChanges`, so a prompt-only edit produces a patch with no event.
+- `topic` is not a field of `UpdateIssueInput`, so no patch writes or records it.
 
 **`statusChanges`** (`internal/storage/memory/apply.go`) — rows, in order, for: `status` (when `StatusValue()` moved), `closed_at` (RFC3339Nano, `""` when absent), `resolution` (`""` when absent), `redirect_target` (`""` when absent), `assignee`.
 
@@ -828,7 +830,7 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 **`rankRelative(issueID, targetID, at)`**
 - `resolveRankPair`; `detach(move.MovedID)`; `anchor := slices.Index(e.order, move.AnchorID)`; `insertAt(anchor + int(at), move.MovedID)`; returns the move.
 
-**`RankToTop` / `RankToBottom`** — `rankToEnd(issueID, storage.RankTop|RankBottom)`: `mustRecord` (so a missing id is `NotFoundError`), `detach`, `place`. **They need no anchor and no frame: every issue is comparable with the ends**.
+**`RankToTop` / `RankToBottom`** — `rankToEdge(issueID, storage.RankTop|RankBottom)` (`internal/storage/memory/rank.go`): `mustRankable` (a missing id is `NotFoundError`; a deleted one → `fmt.Errorf("cannot rank deleted issue %s; restore it first", id)`), then `orderEdgeFor(placement)`. The ends are the issue's own frame's: the result carries `Frame: e.frameOf(issueID)`, and an issue with no frame-mates returns with `Moved` false. An issue already past the edge among its frame-mates returns with `Moved` false; otherwise it is `detach`ed and inserted at `edge.positionIn` of its frame-mates' positions.
 
 **`RankSet(ids)`**
 - `len(ids) < 2` → `errors.New("rank set: need at least 2 IDs to establish order")`.
@@ -1197,7 +1199,7 @@ Stated in `internal/storage/memory/doc.go`:
 - The contract trades atomicity for an account: creates are undone and what could not be undone is named in the error.
 
 **`import_tree_maps_local_ids`**
-- A three-spec tree returns an `IDMap` with an entry per spec.
+- A three-spec tree returns `Created` (`[]storage.IDMapping`) with an entry per spec, in creation order: `root`, `leaf`, `other`.
 - `parent: "root"` wires `leaf` as a child of `root`.
 - `depends_on: ["leaf"]` on `other` produces exactly one `RelBlocks` edge with `Src == other`, `Dst == leaf` — the dependent is the edge's src.
 

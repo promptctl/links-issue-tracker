@@ -335,12 +335,12 @@ Retention actions (archive/unarchive/delete/restore) are **not** `StatusAction`s
 
 | Site | Event | Position in output |
 |---|---|---|
-| `internal/cli/cli.go` (`runNew`) | `ticket_created` | **after** `CreateIssue` succeeds, **before** `printIssueSummary` and the `new` breadcrumb (`internal/cli/cli.go`) |
-| `internal/cli/cli.go` (`runFollowup`) | `ticket_created` | after create, before summary/breadcrumb (`internal/cli/cli.go`) |
-| `internal/cli/cli.go` (`runShow`) | `show_ticket` | after `GetIssueDetail`, **before** either the `--field` output or the full detail view — fires for both (`internal/cli/cli.go`) |
-| `internal/cli/cli.go` (`runUpdate`) | `ticket_updated` | after `Store.Apply`, before summary/breadcrumb |
-| `internal/cli/cli.go` (`runTransition`) | one of the four transition events | after `Store.Apply` and after `authorize`; **before** the claim-transfer notice at `internal/cli/cli.go`. Guarded by `action.(model.StatusAction)` (`internal/cli/cli.go`) |
-| `internal/cli/cli.go` (`runCommentAdd`) | `comment_added` | after `AddComment`, before `printComment` |
+| `internal/cli/cli.go` (`newLeaf`) | `ticket_created` | **after** `CreateIssue` succeeds, **before** `printIssueSummary` and the `new` breadcrumb (`internal/cli/cli.go`) |
+| `internal/cli/cli.go` (`followupLeaf`) | `ticket_created` | after create, before summary/breadcrumb (`internal/cli/cli.go`) |
+| `internal/cli/cli.go` (`showLeaf`) | `show_ticket` | after `GetIssueDetail`, **before** either the `--field` output or the full detail view — fires for both (`internal/cli/cli.go`) |
+| `internal/cli/cli.go` (`updateLeaf`) | `ticket_updated` | after `Store.Apply`, before summary/breadcrumb |
+| `internal/cli/cli.go` (`transitionLeaf`) | one of the four transition events | after `Store.Apply` and after `authorize`; **before** the claim-transfer notice at `internal/cli/cli.go`. Guarded by `action.(model.StatusAction)` (`internal/cli/cli.go`) |
+| `internal/cli/cli.go` (`commentAddLeaf`) | `comment_added` | after `AddComment`, before `printComment` |
 | `internal/cli/next.go` (`nextLeaf`) | `next_pulled` | **last** — after the start advice and `printNextSummary` (`internal/cli/next.go`). Only reached when a row was actually served; `Exhausted`/`NoWork` return an error before any occasion is built (`internal/cli/next.go`) |
 | `internal/cli/workable.go` (`workableLeaf`) | `show_backlog` | **last** — after the table render (`internal/cli/workable.go`) |
 
@@ -511,7 +511,7 @@ Registered as a workspace-only command (no store access) at `internal/cli/regist
 - Summary: *"See the work lifecycle and the guidance active at each point (`workflows show <id>`
   resolved, `edit <id-or-point>` to customize, `dry-run` to explain a hypothetical)"*
 - GroupID `guidance`; declared subcommands for completion: `show`, `edit`, `dry-run`.
-- Run via `r.wsCmd(runWorkflows)` (`internal/cli/register.go`), i.e. it resolves a workspace from
+- Run via `r.wsCmdPipeline(withWDAcquire(workflowsDispatch))` (`internal/cli/register.go`), i.e. it resolves a workspace from
   the working directory but never opens the store (`internal/cli/register.go`,
   `internal/cli/cli.go`).
 
@@ -598,7 +598,7 @@ events: <comma-space joined, or ->
 
 ### 7.3 `lit workflows dry-run`
 
-`runWorkflowsDryRun` (`internal/cli/workflows_dryrun.go`). Flags
+`workflowsDryRunLeaf` (`internal/cli/workflows_dryrun.go`). Flags
 (`internal/cli/workflows_dryrun.go`):
 
 | Flag | Type | Help text |

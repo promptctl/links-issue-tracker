@@ -48,19 +48,19 @@ data — described as assets, not as documentation of behavior).
 
 | Command | Group | Wrapper | Access | Line |
 |---|---|---|---|---|
-| `init` | bootstrap | `wsCmd(runInit)`; description from `helptext/init.txt` | workspace | `register.go` |
-| `quickstart` | guidance | `wsCmd(runQuickstart)` | workspace | `register.go` |
+| `init` | bootstrap | `wsCmdAcquiring(initLeaf)`; description from `helptext/init.txt` | workspace | `register.go` |
+| `quickstart` | guidance | `wsCmd(quickstartLeaf)` | workspace | `register.go` |
 | `completion` | guidance | `runCompletion` | none | `register.go` |
 | `version` | guidance | `runVersion` | none | `register.go` |
 | `hooks` | maintenance | `wsFamilyCmd(hooksFamily)` | workspace | `register.go` |
 | `sync` | data | `wsFamilyCmd(syncFamily)` | workspace | `register.go` |
 | `stores` | maintenance | raw `runStores` | none (discovery) | `register.go` |
-| `doctor` | maintenance | `appCmdDynamic(resolveDoctorAccessMode, runDoctor)` | read or write | `register.go` |
+| `doctor` | maintenance | `appCmdDynamic(resolveDoctorAccessMode, doctorLeaf)` | read or write | `register.go` |
 | `backup` | data | `familyCmd(backupFamily)` | per-row | `register.go` |
 | `snapshots` | data | `wsFamilyCmd(snapshotsFamily)` | workspace | `register.go` |
 | `lifeboat` | maintenance | `wsFamilyCmd(lifeboatFamily)` | workspace | `register.go` |
-| `downgrade` | maintenance | `appCmd(app.AccessWrite, runDowngrade)` | write | `register.go` |
-| `upgrade` | maintenance | `wsCmd(runUpgrade)` | workspace only (never opens the app store) | `register.go` |
+| `downgrade` | maintenance | `appCmd(app.AccessWrite, downgradeLeaf)` | write | `register.go` |
+| `upgrade` | maintenance | `wsCmd(upgradeLeaf)` | workspace only (never opens the app store) | `register.go` |
 
 Command groups: `bootstrap`/"Human Bootstrap", `operations`/"Agent Operations", `structure`, `data`/"Sync & Data", `maintenance`/"Setup & Maintenance", `retention`, `guidance` (`register.go`).
 
@@ -92,7 +92,7 @@ Read commands that additionally print the store-backed banner: `internal/cli/cli
 
 ## 1. `lit init`
 
-Handler `runInit` — `internal/cli/init.go`.
+Handler `initLeaf` — `internal/cli/init.go`.
 
 ### 1.1 Flags
 
@@ -185,20 +185,20 @@ Every visible row is wrapped in `withSyncStore` (`sync.go`) which opens one sync
 
 ### 2.2 `lit sync status`
 
-`runSyncStatus` — `sync.go`. No flags. Reads remote state (`readSyncRemoteState`) and `syncer.SyncStatus(ctx)`.
+`syncStatusLeaf` — `sync.go`. No flags. Reads remote state (`readSyncRemoteState`) and `syncer.SyncStatus(ctx)`.
 Output, one line:
 `version=<doltVersion> branch=<branch> head=<headCommit[ headMessage]> git=<n> dolt=<n> added=<n> updated=<n> removed=<n>` (`sync.go`). `head` is `HeadCommit` alone when `HeadMessage` is blank (`sync.go`).
 
 ### 2.3 `lit sync remote ls`
 
 Family usage `usage: lit sync remote ls` (`sync.go`); only row is `ls` (`sync.go`).
-`runSyncRemoteLs` — `sync.go`. No flags. Output:
+`syncRemoteLsLeaf` — `sync.go`. No flags. Output:
 `git=<n> dolt=<n> added=<n> updated=<n> removed=<n>` (`sync.go`).
 `added/updated/removed` come from `buildRemoteSyncChanges` (`sync.go`) — sorted name lists comparing git remotes (translated via `store.GitBackedRemoteURL`) to Dolt remotes.
 
 ### 2.4 `lit sync fetch`
 
-`runSyncFetch` — `sync.go`.
+`syncFetchLeaf` — `sync.go`.
 
 | Flag | Default | Effect | Line |
 |---|---|---|---|
@@ -211,7 +211,7 @@ Output: `fetched` (non-verbose) or `fetched <remote>` (verbose) (`sync.go`).
 
 ### 2.5 `lit sync pull`
 
-`runSyncPull` — `sync.go`.
+`syncPullLeaf` — `sync.go`.
 
 | Flag | Default | Effect | Line |
 |---|---|---|---|
@@ -220,35 +220,29 @@ Output: `fetched` (non-verbose) or `fetched <remote>` (verbose) (`sync.go`).
 
 Sequence and refusals:
 1. Progress: `sync pull: starting: reconciling remotes and resolving the sync source` (`sync.go`).
-2. Remote reconcile failure → trace `lit sync pull`/`error`, return error (`sync.go`).
-3. `resolveSyncRemote` error → trace, return (`sync.go`).
-4. No eligible remote → trace decision `no_sync_remote`; payload `{status: skipped, reason: no_sync_remote, raw: "no upstream remote and no single configured remote; skipping sync pull"}` (`sync.go`); exit 0.
-5. `RemoteHasRefs` error → error `check remote refs %q: %w`, traced (`sync.go`).
-6. No refs → trace `remote_empty`; payload prints `firstPushSkipMessage` (`sync.go`).
-7. `resolveSyncBranch` error → traced, returned (`sync.go`).
-8. Progress `sync pull: pulling lit data from <remote>/<branch> (transfer and apply may take a moment)` (`sync.go`).
-9. `syncer.SyncPull(ctx, remote, branch)`. Error → trace `error`, return `asSyncFailure(err)` (remote-schema-ahead becomes the contract block, exit 5) (`sync.go`).
-10. On success `markFetchSuccess(ws)` (stderr on failure) (`sync.go`).
-11. Held outcomes (`syncFailureFromPull`, `sync.go`): `storage.SyncPullProsePending` → class `prose_held`; `storage.SyncPullUnrelated` → class `unrelated_histories`. Both are RETURNED as `SyncFailureError` (exit 5), recorded via `recordSyncHeldTrace`, and notify the owner if the class maps to a notify kind (`sync.go`).
-12. Otherwise trace with decision `= result.State`, `endDivergenceEpisode(ws)`, print the payload (`sync.go`).
+2. `resolveSyncTarget` (`sync.go`, §2.9): reconcile remotes → `resolveSyncRemote` → `RemoteHasRefs` (error → `check remote refs %q: %w`) → `resolveSyncBranch`. Any error → trace `lit sync pull`/`error` with metadata `{remote}` once a remote was selected, return the error (`sync.go`).
+3. No eligible remote → trace decision `no_sync_remote`, printed by the outcome printer below; exit 0 (`sync.go`).
+4. No refs → trace `remote_empty`, printed by the outcome printer below (`firstPushSkipMessage`); exit 0 (`sync.go`).
+5. Progress `sync pull: pulling lit data from <remote>/<branch> (transfer and apply may take a moment)` (`sync.go`).
+6. `syncer.SyncPull(ctx, remote, branch)`. Error → trace `error`, return `asSyncFailure(err)` (remote-schema-ahead becomes the contract block, exit 5) (`sync.go`).
+7. On success `markFetchSuccess(ws)` (stderr on failure) (`sync.go`).
+8. Held outcomes (`syncFailureFromPull`, `sync.go`): `storage.SyncPullProsePending` → class `prose_held`; `storage.SyncPullUnrelated` → class `unrelated_histories`; `storage.SyncPullIDCollision` → class `id_collision`. All three are RETURNED as `SyncFailureError` (exit 5), recorded via `recordSyncHeldTrace`, and notify the owner if the class maps to a notify kind (`sync.go`).
+9. Otherwise trace with decision `= result.State`, `endDivergenceEpisode(ws)`, print the outcome (`sync.go`).
 
 `firstPushSkipMessage` (`sync.go`): `"Skipping lit sync: remote has no refs yet. This is normal ONLY for the very first push to a brand-new empty repo. If you have pushed to this remote before, this message means something is wrong — check the remote URL, credentials, or run \`git ls-remote <remote>\`."`
 
-Payload builder (`buildSyncPullPayload`, `sync.go`):
-- `SyncPullNeverSynced` → `{status: skipped, reason: remote_branch_missing, remote, branch, next_command: "lit sync push --remote <r> --set-upstream", retry_command: "lit sync pull --remote <r>"}`.
-- `SyncPullUpToDate|FastForwarded|Linearized|Ahead` → `{status: ok, state, remote, branch}`.
-- Anything else → `{status: unknown, state, remote, branch}`.
+Outcome (`syncPullOutcome`, `sync.go`): `{skip, remote, branch, state}` — `skip` is the `syncTargetSkip` from `resolveSyncTarget`, `state` the `storage.SyncPullState`.
 
-Printer (`printSyncPullPayload`, `sync.go`):
-- `skipped`+`no_sync_remote`: nothing when not verbose; `skipped sync pull: no eligible git remote` when verbose.
-- `skipped`+`remote_empty`: always prints `firstPushSkipMessage`.
-- `skipped` (branch missing): non-verbose `sync pull skipped; run \`<next>\`, then retry \`<retry>\``; verbose `skipped pull <r>/<b>: remote branch missing; run \`<next>\`, then retry \`<retry>\``.
-- `unknown`: always prints `sync pull produced an unrecognized state "<state>" on <r>/<b>; this is a bug — please report it`.
-- default: non-verbose `pulled`; verbose `pulled <r>/<b> (<state>)` or `pulled <r> (<state>)` when the branch is empty.
+Printer (`printSyncPullOutcome`, `sync.go`):
+- skip `no_sync_remote`: nothing when not verbose; `skipped sync pull: no eligible git remote` when verbose.
+- skip `remote_empty`: always prints `firstPushSkipMessage`.
+- `SyncPullNeverSynced`, with next command `lit sync push --remote <r> --set-upstream` and retry command `lit sync pull --remote <r>`: non-verbose `sync pull skipped; run \`<next>\`, then retry \`<retry>\``; verbose `skipped pull <r>/<b>: remote branch missing; run \`<next>\`, then retry \`<retry>\``.
+- `SyncPullUpToDate`, `SyncPullFastForwarded`, `SyncPullLinearized`, `SyncPullAhead`: non-verbose `pulled`; verbose `pulled <r>/<b> (<state>)`.
+- Any other state: always prints `sync pull produced an unrecognized state "<state>" on <r>/<b>; this is a bug — please report it`.
 
 ### 2.6 `lit sync push`
 
-`runSyncPush` — `sync.go`.
+`syncPushLeaf` — `sync.go`.
 
 | Flag | Default | Effect | Line |
 |---|---|---|---|
@@ -257,42 +251,38 @@ Printer (`printSyncPullPayload`, `sync.go`):
 | `--force` | `false` | Pass `--force` to dolt push | `sync.go` |
 | `--verbose` | `false` | Include detailed remote output | `sync.go` |
 
+`syncPushLeaf` calls `clearMirrorPending(ws)` at **entry**, before `performSyncPush` runs, not on success (`sync.go`).
 The explicit push uses `session.syncer.SyncCompactAndPush` — compaction is atomic with the push (`sync.go`); the on-change mirror uses plain `SyncPush` (`sync_bg.go`).
 A could-not-attempt error is traced as `lit sync push`/`error` and returned (`sync.go`). A push error is passed through `asSyncFailure` (`sync.go`) — a remote-schema-ahead becomes the contract block, exit 5.
 
-`performSyncPush` (`sync.go`), the shared orchestration for `lit sync push` and the mirror:
-1. `clearMirrorPending(ws)` at **entry**, not on success (`sync.go`).
-2. Deferred completion: on panic, records `sync push panicked: %v` through `completePushAttempt` and re-panics; otherwise records `completePushAttempt(ctx, ws, outcome, retErr)` on every return path (`sync.go`).
-3. Reconcile remotes; error → return (`sync.go`).
-4. `resolveSyncRemote`; error → return (`sync.go`).
-5. Empty remote → trace `no_sync_remote`, outcome `{status: skipped, reason: no_sync_remote, message: "no upstream remote and no single configured remote; skipping sync push"}` (`sync.go`).
-6. `RemoteHasRefs` error → `check remote refs %q: %w` (`sync.go`).
-7. No refs → trace `remote_empty`, outcome `{status: skipped, reason: remote_empty, remote, message: firstPushSkipMessage}` (`sync.go`).
-8. `resolveSyncBranch`; error → return (`sync.go`).
-9. Run the supplied push step (`sync.go`).
+`performSyncPush` (`sync.go`), the shared orchestration for `lit sync push` and the mirror; clearing the mirror-pending marker is the caller's, never this function's:
+1. Deferred completion: on panic, records `sync push panicked: %v` through `completePushAttempt` and re-panics; otherwise records `completePushAttempt(completionCtx, ws, outcome, retErr)` on every return path (`sync.go`).
+2. `resolveSyncTarget` (`sync.go`, §2.9): reconcile remotes → `resolveSyncRemote` → `RemoteHasRefs` (error → `check remote refs %q: %w`) → `resolveSyncBranch`; any error → return (`sync.go`).
+3. No eligible remote or no refs → trace `lit sync push` with decision `no_sync_remote` or `remote_empty` (metadata `{remote}` once a remote was selected); outcome `{skip, remote}` (`sync.go`).
+4. Run the supplied push step (`sync.go`). A push error while `ctx` has expired and `completionCtx` has not is wrapped with `pushDeadlineCutExplanation()` (`sync_bg.go`).
    - Push error nil and `result.Superseded` empty ⇒ `provePushedAdvertisement(proofCtx, session.syncer, ws, remote, target.gitRemotes)` (`sync_receive_ask.go`) under `pushProofDeadline` (10s) off `completionCtx`: the receive's remote (`resolveSyncRemote("", UpstreamRemote, gitRemotes)`) must be the pushed remote, else unproven `pushed remote %q is not the remote the automatic receive asks (%q)`; then `advertise` (the same `RemoteDoltRefs` round trip `askRemote` makes) and `syncer.SyncRemoteMirrorHolds(ctx, remote, advertisement.commits())`, not held ⇒ unproven `the store's git mirror does not hold every commit the remote advertises`, any error ⇒ unproven with the error's text. Metadata key `advertisement` = `proven` or `unproven: <reason>`; the advertisement travels on the outcome as `proven` (zero when unproven). `lit sync push` then calls `recordPushedAdvertisement` (`store.WriteReceivedRefs`; stderr `lit: received-refs marker not written: <err>`; the zero advertisement writes nothing).
-10. Metadata via `syncPushTraceMetadata` (`sync.go`): `{remote, sync_branch}` plus `message` (trimmed `result.Message`), `maintenance` (trimmed `result.Maintenance`), `error` (pushErr) when non-empty.
-11. Automation trace (only when `LNKS_AUTOMATION_TRIGGER` is set) with command `formatCommand(["sync","push","--remote",r("--set-upstream")("--force")])`, side effect `"mirror Dolt data to the configured git remote"`, status `ok|error`, reason `"managed automation requested sync push"` or the push error (`sync.go`).
-12. Durable sync trace, unconditional: decision `pushed` or `error`, reason empty or the push error (`sync.go`).
+5. Metadata via `syncPushTraceMetadata` (`sync.go`): `{remote, sync_branch}` plus `message` (trimmed `result.Message`), `maintenance` (trimmed `result.Maintenance`), `head` (trimmed `result.Head`), `superseded` (trimmed `result.Superseded`), `error` (pushErr) when non-empty.
+6. Automation trace (only when `LNKS_AUTOMATION_TRIGGER` is set) with command `formatCommand(["sync","push","--remote",r("--set-upstream")("--force")])`, side effect `"mirror Dolt data to the configured git remote"`, status `ok|error`, reason `"managed automation requested sync push"` or the push error (`sync.go`).
+7. Durable sync trace, unconditional: decision `pushed` or `error`, reason empty or the push error (`sync.go`).
 
-Push payload (`syncPushOutcome.payload`, `sync.go`): always `{status, remote, branch, raw}`; if skipped adds `reason` and returns; else adds `push_status` (int64), optional `maintenance`, optional `trace_ref` (path), optional `trace_error`.
+Push outcome (`syncPushOutcome`, `sync.go`): `{skip, remote, branch, message, maintenance, head, proven, traceErr, pushErr}` — `skip` is the `syncTargetSkip` from `resolveSyncTarget`; `message` is the engine's verbatim push output.
 
-Printer (`printSyncPushPayload`, `sync.go`):
+Printer (`printSyncPushOutcome`, `sync.go`):
 - Any non-empty `maintenance` is printed FIRST, in both verbose and non-verbose modes (`sync.go`).
-- `skipped`+`remote_empty` → always `firstPushSkipMessage`.
-- Non-verbose skipped → nothing.
+- skip `no_sync_remote`: nothing when not verbose; `no upstream remote and no single configured remote; skipping sync push` when verbose.
+- skip `remote_empty` → always `firstPushSkipMessage`.
 - Non-verbose otherwise → `pushed`.
-- Verbose: the trimmed `raw` engine output if non-empty; else `skipped sync push: no eligible git remote` for skipped; else `pushed <r>/<b>` or `pushed <r>`.
+- Verbose otherwise: the trimmed `message` engine output if non-empty; else `pushed <r>/<b>`.
 
 ### 2.7 `lit sync compact`
 
-`runSyncCompact` — `sync.go`.
+`syncCompactLeaf` — `sync.go`.
 
 | Flag | Default | Effect | Line |
 |---|---|---|---|
 | `--full` | `false` | "Rewrite the old generation too — reclaims what earlier passes archived, at a cost proportional to the whole store" → selects `storage.GCFull` instead of `storage.GCNewGen` | `sync.go` |
 
-Requires no remote by design (`sync.go`). On error: trace `lit sync compact`/`error`, return the error (`sync.go`). On success: `recordCompactionSuccess(ws, "lit sync compact", outcome)` recorded BEFORE printing (`sync.go`), then `compacted (<depth>): <detail>` to stdout; a stdout write failure is the command's failure (`sync.go`).
+Requires no remote by design (`sync.go`). On error: `recordCompactFailure(ws, syncCompactTraceCommand, outcome, err)` (`sync_compact.go`) traces `lit sync compact`/`error`, then the error is returned (`sync.go`). On success: `recordCompactionSuccess(ws, "lit sync compact", outcome)` recorded BEFORE printing (`sync.go`), then `compacted (<depth>): <detail>` to stdout; a stdout write failure is the command's failure (`sync.go`).
 
 ### 2.8 `lit sync reconcile` family
 
@@ -306,10 +296,10 @@ Surplus positionals are refused by the shared `refuseSurplusPositionals` (`regis
 `ok=false` at every command prints `nothing to reconcile: no remote with shared ticket history yet` and traces decision `nothing_to_reconcile` (e.g. `sync_reconcile_cmd.go`).
 
 #### 2.8.1 bare `lit sync reconcile`
-`runSyncReconcileShow` — `sync_reconcile_cmd.go`. No flags. Trace command constant `"lit sync reconcile"` (`sync_reconcile_cmd.go`). `reconciler.SyncReconcile(ctx, remote, branch)`; error → traced, `asSyncFailure(err)`. Otherwise `reportReconcileResult(..., resolved=false)`.
+`syncReconcileShowLeaf` — `sync_reconcile_cmd.go`. No flags. Trace command constant `"lit sync reconcile"` (`sync_reconcile_cmd.go`). `reconciler.SyncReconcile(ctx, remote, branch)`; error → traced, `asSyncFailure(err)`. Otherwise `reportReconcileResult(..., resolved=false)`.
 
 #### 2.8.2 `lit sync reconcile resolve`
-`runSyncReconcileResolve` — `sync_reconcile_cmd.go`.
+`syncReconcileResolveLeaf` — `sync_reconcile_cmd.go`.
 
 | Flag | Default | Effect | Line |
 |---|---|---|---|
@@ -318,11 +308,11 @@ Surplus positionals are refused by the shared `refuseSurplusPositionals` (`regis
 Zero `--resolve` values → `UsageError{"sync reconcile resolve needs at least one --resolve FINGERPRINT=TEXT"}` (`sync_reconcile_cmd.go`). Parsed by `parseProseResolutions` (`prose_pending.go`): each value is cut at its first `=`, and the prefix must parse through `merge.ParseFingerprint` (exactly 12 lowercase hex characters, `resolve_prose.go`); a value with no `=` or a prefix that does not parse → `UsageError{"invalid --resolve <raw, Go-quoted>: expected FINGERPRINT=TEXT (copy the fingerprint from \`lit sync reconcile\`)"}` (exit 2). TEXT is everything after the first `=` and may contain `=` and newlines. Each value becomes `merge.ProseResolution{Fingerprint, Text}`. Trace command is `proseResolveCommand` (`prose_pending.go`). Calls `SyncReconcileResolved`; then `reportReconcileResult(..., resolved=true)`, which prefixes the pending render with `the divergence changed since you read it; your resolutions were not applied. Re-merge the CURRENT conflicts below:` (`sync_reconcile_cmd.go`).
 
 #### 2.8.3 `lit sync reconcile abort`
-`runSyncReconcileAbort` — `sync_reconcile_cmd.go`. No flags. Traces `lit sync reconcile abort`/`aborted`. Prints and exits 0:
+`syncReconcileAbortLeaf` — `sync_reconcile_cmd.go`. No flags. Traces `lit sync reconcile abort`/`aborted`. Prints and exits 0:
 `reconcile deferred: the clone remains diverged and usable; a later command re-surfaces the divergence, or run \`lit sync reconcile\` when ready` (`sync_reconcile_cmd.go`).
 
 #### 2.8.4 `lit sync reconcile take <local|remote>`
-`runSyncReconcileTake` — `sync_reconcile_cmd.go`.
+`syncReconcileTakeLeaf` — `sync_reconcile_cmd.go`.
 
 | Flag | Default | Effect | Line |
 |---|---|---|---|
@@ -334,16 +324,16 @@ Zero `--resolve` values → `UsageError{"sync reconcile resolve needs at least o
 - `SyncResolveUnrelated(ctx, remote, branch, choice, trimmed token)`. A `store.OwnerApprovalRequiredError` → trace decision `owner_approval_required` with status `ok`, notifies the owner with an `unrelated_histories` event, returns `ownerApprovalRefusalError` → exit 5 (`sync_reconcile_cmd.go`). Any other error → traced, `asSyncFailure`.
 
 Outcome rendering (`reportTakeOutcome`, `sync_reconcile_cmd.go`). Durable trace metadata `{remote, sync_branch, replayed}`; reason from `takeReasonForState` (`sync_reconcile_cmd.go`); an unmapped state becomes decision/status `error` with reason `unexpected result state %q`.
-- `TookRemote`: clears divergence notify kinds; prints
+- `SyncReconcileTookRemote`: `endDivergenceEpisode(ws)`; prints
   `took remote: the local backlog now equals <r>/<b> and sync is clean (no push needed).` newline `DISCARDED the local-only issue(s), by design: <idset>`.
-- `TookLocal`: clears; prints `took local: your backlog now sits on top of <r>/<b> — <N local commit(s)> replayed with original messages and timestamps; run \`lit sync push\` (or let auto-sync) to fast-forward the remote onto it.` newline `DISCARDED the remote-only issue(s), by design: <idset>`.
-- `NotDiverged`: clears; prints `nothing to reconcile: the clone is not diverged from the remote`.
+- `SyncReconcileTookLocal`: `endDivergenceEpisode(ws)`; prints `took local: your backlog now sits on top of <r>/<b> — <N local commit(s)> replayed with original messages and timestamps; run \`lit sync push\` (or let auto-sync) to fast-forward the remote onto it.` newline `DISCARDED the remote-only issue(s), by design: <idset>`.
+- `SyncReconcileNotDiverged`: `endDivergenceEpisode(ws)`; prints `nothing to reconcile: the clone is not diverged from the remote`.
 - Any other state → `fmt.Errorf("sync reconcile take: unexpected result state %q — this is a bug; please report it")`, exit 1.
 
 `describeIDSet` renders `(0)` for an empty set, else `(N): «id», «id»…`, each id through `quoteRemote(id).inline()` (`sync_failure.go`). `describeReplayed` renders `1 local commit` or `N local commits` (`sync_reconcile_cmd.go`). `discardedIDs` maps `TakeRemote→OnlyLocal`, `TakeLocal→OnlyRemote` (`sync_reconcile_cmd.go`).
 
 #### 2.8.5 `lit sync reconcile combine`
-`runSyncReconcileCombine` — `sync_reconcile_cmd.go`. No flags. Trace command `"lit sync reconcile combine"` (`sync_reconcile_cmd.go`). Calls `SyncReconcileCombine`, then `reportReconcileResult(..., resolved=false)`.
+`syncReconcileCombineLeaf` — `sync_reconcile_cmd.go`. No flags. Trace command `"lit sync reconcile combine"` (`sync_reconcile_cmd.go`). Calls `SyncReconcileCombine`, then `reportReconcileResult(..., resolved=false)`.
 
 #### 2.8.6 Shared reconcile reporter
 `reportReconcileResult` — `sync_reconcile_cmd.go`. Metadata always `{remote, sync_branch, replayed}`.
@@ -434,7 +424,7 @@ Config defaults (`internal/config/config.go`): `sync.cadence = "on-change"`, `sy
 
 ### 3.5 The detached worker
 
-`runBackgroundMirror` — `sync_bg.go`.
+`backgroundMirrorLeaf` — `sync_bg.go`.
 
 | Flag | Default | Effect | Line |
 |---|---|---|---|
@@ -493,29 +483,29 @@ Flag parse output is `io.Discard` (`sync_bg.go`).
 `endDivergenceEpisode` — `sync_receive.go`: `clearOwnerNotify(ws, ownerNotifyDivergenceKinds...)`, then removes the pending block (failure other than not-exist → stderr `lit: stale sync-failure block not retired: <err>`). Called by the receive, `lit sync pull` (`sync.go`), and every converging `lit sync reconcile` outcome (`sync_reconcile_cmd.go`).
 `deliverPendingReceiveBlock` — `sync_receive.go`: renames the pending block to `receive-block.pending.<pid>` (not-exist → return silently; other failure → stderr `lit: pending sync-failure block not claimed: <err>`), writes `receiveBlockProvenance` — `lit: the automatic receive reached this sync-failure block <age> ago (<RFC3339 mtime>); anything it dates is as of then`, or `lit: the automatic receive left this sync-failure block (when is unknown: <err>)` when the file cannot be stat'd — followed by its bytes to the given writer, and removes the claimed file; read, write and remove failures each print their own stderr line. No command's exit code is affected.
 `inlineSyncFailure` — `sync_receive.go`: no reconcile → not a failure; reconcile error that is a remote-schema-ahead → that class; other reconcile error → `diverged_unresolved` with `Cause`; `SyncReconcileProsePending` → `prose_held` with `Fields`; `SyncReconcileUnrelated` → `unrelated_histories` with `Inventory`.
-`settledCleanly` — `sync_receive.go`: `status == "ok"`, no receive error, and either no reconcile or a reconcile with no error whose state is `Linearized` or `NotDiverged`.
+`settledCleanly` — `sync_receive.go`: `fetched()`, and either no reconcile or a reconcile with no error whose state is `SyncReconcileLinearized` or `SyncReconcileNotDiverged`.
 
 ### 3.7 Compaction backstop (`sync_compact.go`)
 
 - `compactProbeInterval = 15 * time.Minute` (`sync_compact.go`); `compactTimeout = 45 * time.Second` (`sync_compact.go`).
 - Marker `<StorageDir>/compact.last` (`sync_compact.go`).
-- `compactInline` — `sync_compact.go`: not due → return. Marks the attempt BEFORE running (so a store failing every pass is asked once per interval); a marker failure prints `lit: compaction probe interval not recorded: <err>` and proceeds anyway (`sync_compact.go`). Opens a sync session under a 45s timeout; open failure → `recordCompactError("open store for compaction: %w")`. `syncer.CompactIfDue(ctx)` — the engine decides whether a pass is owed; error → `recordCompactError`; `!outcome.Ran` → silent return (no trace); else `recordCompactionSuccess(ws, "compaction backstop", outcome)`.
+- `compactInline` — `sync_compact.go`: not due → return. Marks the attempt BEFORE running (so a store failing every pass is asked once per interval); a marker failure prints `lit: compaction probe interval not recorded: <err>` and proceeds anyway (`sync_compact.go`). Opens a sync session under a 45s timeout; open failure → `recordBackstopFailure(ws, "open store for compaction: %w")`. Then `compactThroughSession` (`sync_compact.go`): `syncer.CompactIfDue(ctx)` — the engine decides whether a pass is owed; error → `recordCompactFailure(ws, compactTraceCommand, outcome, err)`; `!outcome.Ran` → silent return (no trace); else `recordCompactionSuccess(ws, compactTraceCommand, outcome)`.
 - `compactTraceCommand = "compaction backstop"` — deliberately not a runnable command line (`sync_compact.go`).
 - `recordCompactionSuccess` (`sync_compact.go`) records decision `"compacted"` with metadata from `compactionTraceMetadata` = `{depth: outcome.Depth.String(), detail: outcome.Detail}` (`sync_compact.go`); an empty `detail` is dropped by `compactTraceMetadata` (`automation_trace.go`).
-- `recordCompactError` (`sync_compact.go`) traces `compaction backstop`/`error`.
+- `recordCompactFailure` (`sync_compact.go`) traces `<command>`/`error` with metadata from `compactionFailureMetadata`: none when `outcome.Depth` is not `Valid()`, else `{depth}`, plus `detail` when `outcome.Ran`. `recordBackstopFailure` (`sync_compact.go`) calls it with `compaction backstop` and the zero outcome.
 - Note (`sync_compact.go`): the on-change mirror is never the host for compaction because `ensureMirrorCoverage` short-circuits on a remote-less workspace.
 
 ### 3.8 Push-outcome marker (`sync_push_outcome.go`)
 
-- Decisions: `pushed`, `error`, `canceled`, `workspace_busy` (`sync_push_outcome.go`), plus the skip reasons `no_sync_remote` / `remote_empty` carried through from `syncPushOutcome.reason`.
-- Record JSON: `{decision, reason?, remote?, branch?}` (`sync_push_outcome.go`); marker `<StorageDir>/push-outcome.last` (`sync_push_outcome.go`); mtime = attempt completion time.
+- Decisions: `pushed`, `error`, `canceled`, `workspace_busy` (`sync_push_outcome.go`), plus the skip reasons `no_sync_remote` / `remote_empty` carried through from `syncPushOutcome.skip`.
+- Record JSON: `{decision, reason?, remote?, branch?, observed_by?}` (`sync_push_outcome.go`); marker `<StorageDir>/push-outcome.last` (`sync_push_outcome.go`); mtime = attempt completion time.
 - `failed()` is `Decision == "error"` only (`sync_push_outcome.go`).
-- `pushOutcomeOf(outcome, err)` — `sync_push_outcome.go`, in order:
+- `pushOutcomeOf(outcome, err, observedBy)` — `sync_push_outcome.go`: stamps `observed_by` on the record `classifyPushOutcome` derives, in order:
   1. `context.Canceled` in `err` or `outcome.pushErr` → `canceled` with the first non-nil error's text, plus remote/branch.
   2. `store.ErrWorkspaceBusy` in `err` → `workspace_busy` with err text (no remote/branch).
   3. any other `err` → `error` with err text.
   4. `outcome.pushErr != nil` → `error` with its text plus remote/branch.
-  5. `outcome.status == "skipped"` → decision = `outcome.reason`, remote only.
+  5. `outcome.skip != syncTargetReady` → decision = `string(outcome.skip)`, remote only.
   6. default → `pushed` with remote/branch.
 - `completePushAttempt` — `sync_push_outcome.go`: derives the record, writes it, and feeds `observePushOutcomeForOwner`.
 - `recordPushOutcome` — `sync_push_outcome.go`: atomic temp-and-rename write of the JSON plus a newline; failure → stderr `lit: push-outcome marker not written: <err>`, never returned.
@@ -664,7 +654,7 @@ The block has no trailing newline after `</agent-instructions>` (`sync_failure.g
 
 ## 4. `lit doctor`
 
-Handler `runDoctor` — `doctor.go`. Access mode is resolved from the args BEFORE the app opens: `--fix` with any value ⇒ `app.AccessWrite`, otherwise `app.AccessRead`; a flag-parse failure defaults to write (`doctor.go`).
+Handler `doctorLeaf` — `doctor.go`. Access mode is resolved from the args BEFORE the app opens: `--fix` with any value ⇒ `app.AccessWrite`, otherwise `app.AccessRead`; a flag-parse failure defaults to write (`doctor.go`).
 
 | Flag | Default | `NoOptDefVal` | Effect | Line |
 |---|---|---|---|---|
@@ -712,25 +702,28 @@ The repair capability is asked once, up front: `storage.Repair.Of(ap.Store)`; a 
 
 ## 5. `lit upgrade`
 
-Handler `runUpgrade` — `upgrade.go`; production deps `workspaceSchemaReader`, `release.HTTPResolver{}`, `release.HTTPInstaller{}`, `currentBinaryPath`. It is a WORKSPACE-mode command and never opens the app store (`upgrade.go`, registered at `register.go`).
+Handler `upgradeLeaf` — `upgrade.go`; production deps `workspaceSchemaReader`, `version.Get`, `release.HTTPResolver{}`, `release.HTTPInstaller{}`, `currentBinaryPath`. It is a WORKSPACE-mode command and never opens the app store (`upgrade.go`, registered at `register.go`).
 
 | Flag | Default | Effect | Line |
 |---|---|---|---|
-| `--to` | `""` | "Target binary version (v-prefixed git tag, e.g. v0.9.0)" | `upgrade.go` |
+| `--to` | `""` | "Target binary version (v-prefixed git tag, e.g. v0.9.0); omit to upgrade to the latest release" | `upgrade.go` |
 
-Refusals and sequence (`runUpgradeWith`, `upgrade.go`):
-1. Any positional → `UsageError{"usage: lit upgrade --to <version>"}`, exit 2 (`upgrade.go`).
-2. `normalizeReleaseTag(*to, "upgrade")` (shared with downgrade, `downgrade.go`): empty/whitespace → `ValidationError{"upgrade: --to requires a non-empty version"}` (exit 3); a missing `v` prefix is added; a tag containing `/`, `\`, `..`, or any whitespace → `ValidationError{"upgrade: --to %q is not a valid release tag"}` (exit 3).
+`withWorkspaceSchema` (`upgrade.go`) reads this binary's `version.Get()` before the work runs; error → `upgrade: read this binary's version info: %w`.
+
+Refusals and sequence (`upgradeLeafWith`, `upgrade.go`):
+1. Any positional → refused by the shared `refuseSurplusPositionals` (`register.go`) under the leaf's usage `usage: lit upgrade [--to <version>]`, exit 2.
+2. The tag: when `--to` was given (`fs.Changed("to")`), `normalizeReleaseTag(*to, "upgrade")` (shared with downgrade, `downgrade.go`): empty/whitespace → `ValidationError{"upgrade: --to requires a non-empty version"}` (exit 3); a missing `v` prefix is added; a tag containing `/`, `\`, `..`, or any whitespace → `ValidationError{"upgrade: --to %q is not a valid release tag"}` (exit 3). When `--to` is omitted, `resolver.LatestTag(ctx)` supplies the latest published release. Either error is returned as-is.
 3. `resolver.Resolve(ctx, tag, release.CurrentPlatform())`; error returned as-is (`upgrade.go`).
 4. `schema.ReadWorkspaceSchema(ctx)`; error → `upgrade: read workspace schema version: %w` (`upgrade.go`). The reader opens the store `engine.ReadOnly` (`upgrade.go`); a `*store.UnsupportedSchemaVersionError` is tolerated — its `WorkspaceVersion` becomes `AppliedVersion` with `Openable=false` (`upgrade.go`). Any other open error propagates. On a clean open the store's close error is surfaced only when no read error already occurred (`upgrade.go`).
 5. **Backward-move refusal, before any install**: `target.Manifest.Schema.Max < ws.AppliedVersion` → `*UpgradeTargetBehindError` (`upgrade.go`), whose message depends on `WorkspaceOpenable` (`upgrade.go`):
    - openable → `cannot upgrade to <tag>: its schema support ends at v<target> but this workspace is already at v<current> — that is a backward move; use \`lit downgrade --to <tag>\` instead (it reverses the schema before installing the older binary)`
    - not openable → `cannot upgrade to <tag>: it supports only through schema v<target> but this workspace is at v<current>, which this binary cannot open — pick an upgrade target whose schema support reaches v<current> or newer (this binary is too old to reverse the schema here, so an older target is not an option)`
    Exit 1 (plain error type).
-6. `currentBinaryPath()` (`os.Executable` + `filepath.EvalSymlinks`, `downgrade.go`); error → `upgrade: resolve current binary: %w`.
-7. `installer.Install(ctx, target, binPath)`; error → `upgrade: installing <tag> failed: <err>\n\nrecover by installing <tag> manually (download from <artifactURL>), then re-running lit` (`upgrade.go`).
-8. Success stdout:
-   `upgraded to <tag> (schema support through v<N>) installed at <binPath>` newline `the next lit run migrates this workspace forward if it trails; re-run \`lit version\` to confirm.` (`upgrade.go`).
+6. **Already current**: when `--to` was omitted, this binary is not a dev build (`IsDev`), the tag is valid semver, and `v<version>` compares at or above the tag → stdout `already current: keeping v<version> (latest published release is <tag>); nothing to install.`, exit 0, nothing installed (`upgrade.go`). A given `--to` always installs.
+7. `currentBinaryPath()` (`os.Executable` + `filepath.EvalSymlinks`, `downgrade.go`); error → `upgrade: resolve current binary: %w`.
+8. `installer.Install(ctx, target, binPath)`; error → `upgrade: installing <tag> failed: <err>\n\nrecover by installing <tag> manually (download from <artifactURL>), then re-running lit` (`upgrade.go`).
+9. Success stdout:
+   `upgraded <from> → <tag> (schema support through v<N>) installed at <binPath>` newline `the next lit run migrates this workspace forward if it trails; re-run \`lit version\` to confirm.` (`upgrade.go`). `<from>` is `fromLabel`: `v<version>`, or `dev build` for a dev build (`upgrade.go`).
 
 Upgrade never touches the schema — forward migrations live in the target binary and run on its next `Open()` (`upgrade.go`).
 
@@ -738,14 +731,14 @@ Upgrade never touches the schema — forward migrations live in the target binar
 
 ## 6. `lit downgrade`
 
-Handler `runDowngrade` — `downgrade.go`. App-mode, `app.AccessWrite` (`register.go`). Requires the `storage.SchemaMigration` capability up front; a decline aborts (`downgrade.go`).
+Handler `downgradeLeaf` — `downgrade.go`. App-mode, `app.AccessWrite` (`register.go`). `withSchemaMigrator` requires the `storage.SchemaMigration` capability up front; a decline aborts (`downgrade.go`).
 
 | Flag | Default | Effect | Line |
 |---|---|---|---|
 | `--to` | `""` | "Target binary version (v-prefixed git tag, e.g. v0.4.1)" | `downgrade.go` |
 
-Sequence (`runDowngradeWith`, `downgrade.go`):
-1. Any positional → `UsageError{"usage: lit downgrade --to <version>"}` (`downgrade.go`).
+Sequence (`downgradeLeafWith`, `downgrade.go`):
+1. Any positional → refused by the shared `refuseSurplusPositionals` (`register.go`) under the leaf's usage `usage: lit downgrade --to <version>`, exit 2 (`downgrade.go`).
 2. `normalizeReleaseTag(*to, "downgrade")` — same rules as §5 step 2 (`downgrade.go`).
 3. `resolver.Resolve(ctx, tag, release.CurrentPlatform())` (`downgrade.go`).
 4. `store.Downgrade(ctx, target.Manifest.Schema.Max)` — **schema is reversed before the binary is installed**; pre-snapshot refusals propagate verbatim, post-snapshot failures arrive as `*DowngradeRollbackError` whose message carries the restore instruction (`downgrade.go`).
@@ -763,7 +756,7 @@ Family usage `usage: lit backup <create|list|restore> ...` (`backup.go`). Access
 
 ### 7.1 `lit backup create`
 
-`runBackupCreate` — `backup.go`.
+`backupCreateLeaf` — `backup.go`.
 
 | Flag | Default | Effect | Line |
 |---|---|---|---|
@@ -773,11 +766,11 @@ Family usage `usage: lit backup <create|list|restore> ...` (`backup.go`). Access
 
 ### 7.2 `lit backup list`
 
-`runBackupList` — `backup.go`. No flags. One line per snapshot: `<name> <size> <path>` (`backup.go`).
+`backupListLeaf` — `backup.go`. No flags. One line per snapshot: `<name> <size> <path>` (`backup.go`).
 
 ### 7.3 `lit backup restore`
 
-`runBackupRestore` — `backup.go`. Canonical usage constant (`backup.go`): `usage: lit backup restore (--latest | --path <export.json>) [--force]`.
+`backupRestoreLeaf` — `backup.go`. Canonical usage constant (`backup.go`): `usage: lit backup restore (--latest | --path <export.json>) [--force]`.
 
 | Flag | Default | Effect | Line |
 |---|---|---|---|
@@ -811,7 +804,7 @@ Snapshot directory `<StorageDir>/snapshots` (`snapshots.go`).
 
 ### 8.1 `lit snapshots new`
 
-`runSnapshotsNew` — `snapshots.go`.
+`snapshotsNewLeaf` — `snapshots.go`.
 
 | Flag | Default | Effect | Line |
 |---|---|---|---|
@@ -819,22 +812,22 @@ Snapshot directory `<StorageDir>/snapshots` (`snapshots.go`).
 
 - Any positional → `UsageError{"usage: lit snapshots new [--label <text>]"}` (exit 2); rationale: `snapshots new nightly` is a natural typo for `--label nightly` (`snapshots.go`).
 - `config.Load(pathspec.New(ws.RootDir))` for the retention budget (`snapshots.go`); default `snapshot.retention_budget = 5` (`internal/config/config.go`), validated `> 0` at load (`config.go`).
-- `takeUserSnapshot` (`snapshots.go`) takes three holds in order — workspace shared (`store.LockWorkspaceShared`), Dolt journal exclusive (`store.LockDoltJournalExclusive`), commit lock (`withCommitLock`) — releasing LIFO; every release failure is joined into the returned error (`snapshots.go`).
+- `takeUserSnapshot` (`snapshots.go`) runs `dbsnapshot.Take` inside `withDoltDirectoryHeld` (`snapshots.go`), which takes three holds in order — workspace shared (`store.LockWorkspaceShared`), Dolt journal exclusive (`store.LockDoltJournalExclusive`), commit lock (`withCommitLock`) — releasing LIFO; every release failure is joined into the returned error (`snapshots.go`).
 - Between the workspace hold and the journal hold it checks `store.PendingAdopt(ws.DatabasePath)`; a pending-adopt marker refuses the snapshot (`snapshots.go`).
-- **The record prints the moment it exists** — before the prune and even beside a later failure: `<name> <path>` to stdout; a print error is joined to `err` (`snapshots.go`).
+- **The record prints the moment it exists** — before the prune and even beside a later failure: `<name> <path>` to stdout whenever the take produced a snapshot; a print error is joined to `err` (`snapshots.go`).
 - Retention prune runs AFTER the workspace hold is released, under the commit lock only, and only over user snapshots: `dbsnapshot.PruneMatching(snapshotsDir, cfg.Snapshot.RetentionBudget, isUserSnapshotName)` (`snapshots.go`). `isUserSnapshotName` excludes migration, downgrade, and reconcile snapshot names (`snapshots.go`).
 
 ### 8.2 `lit snapshots list`
 
-`runSnapshotsList` — `snapshots.go`. No flags. One line per snapshot: `<name> <created RFC3339 "2006-01-02T15:04:05Z"> <path>` (`snapshots.go`).
+`snapshotsListLeaf` — `snapshots.go`. No flags. One line per snapshot: `<name> <created RFC3339 "2006-01-02T15:04:05Z"> <path>` (`snapshots.go`).
 
 ### 8.3 `lit snapshots restore <name>`
 
-`runSnapshotsRestore` — `snapshots.go`. Declares `positionals: 1` (`snapshots.go`); `parseLeaf` splits the positional off before flag parsing.
+`snapshotsRestoreLeaf` — `snapshots.go`. Declares `positionals: 1` (`snapshots.go`); `parseLeaf` splits the positional off before flag parsing.
 - Not exactly one positional, or leftover args → `UsageError{"usage: lit snapshots restore <name>"}` (`snapshots.go`); an all-whitespace name gets the same error (`snapshots.go`).
 - Holds `store.LockWorkspaceExclusive` for the whole restore; a release failure is joined into the return via `errors.Join` (`snapshots.go`).
 - `dbsnapshot.Restore(DatabasePath, snapshotsDir, name)` runs under `withCommitLock` (`snapshots.go`).
-- If the restore failed but a directory was rotated aside, the error is wrapped: `the pre-restore database directory was moved aside to <rotated> and holds the workspace's data: <err>` (`snapshots.go`).
+- If the restore failed but a directory was rotated aside, the error is wrapped: `the pre-restore database directory was moved aside to <rotated> before this failure and holds the workspace's data: <err>` (`snapshots.go`).
 - On success prints `restored <name>` or, when a rotation happened, `restored <name> rotated_to=<path>`; a print error is joined (`snapshots.go`).
 
 `withCommitLock` (`snapshots.go`): `store.LockCommitPath(ctx, store.CommitLockPath(DatabasePath))`; release settled by `store.SettleCommitLockRelease` (joined beside a failure, demoted to stderr after a durable success).
@@ -847,11 +840,11 @@ Family usage `usage: lit lifeboat <dump|recover> ...` (`lifeboat.go`). Workspace
 
 ### 9.1 `lit lifeboat dump`
 
-`runLifeboatDump` — `lifeboat.go`. No flags. Any positional → `UsageError{"usage: lit lifeboat dump"}` (`lifeboat.go`). `store.DumpRaw(ctx, DatabasePath, WorkspaceID)` then `writeJSON(stdout, dump)` — **JSON only**, no text rendering (`lifeboat.go`).
+`lifeboatDumpLeaf` — `lifeboat.go`. No flags. Any positional → `UsageError{"usage: lit lifeboat dump"}` (`lifeboat.go`). `store.DumpRaw(ctx, DatabasePath, WorkspaceID)` then `writeJSON(stdout, dump)` — **JSON only**, no text rendering (`lifeboat.go`).
 
 ### 9.2 `lit lifeboat recover`
 
-`runLifeboatRecover` — `lifeboat.go`.
+`lifeboatRecoverLeaf` — `lifeboat.go`.
 
 | Flag | Default | Effect | Line |
 |---|---|---|---|
@@ -901,7 +894,7 @@ Positional args are the roots; with none, the cwd is used (`os.Getwd`, error `ge
 
 Family usage `usage: lit hooks install` (`hooks.go`); the only row is `install` (`hooks.go`).
 
-`runHooksInstall` — `hooks.go`. No flags. Any positional → `UsageError{"usage: lit hooks install"}` (`hooks.go`). Prints `installed <hookPath>` (`hooks.go`) regardless of whether anything changed.
+`hooksInstallLeaf` — `hooks.go`. No flags. Any positional → `UsageError{"usage: lit hooks install"}` (`hooks.go`). Prints `installed <hookPath>` (`hooks.go`) regardless of whether anything changed.
 
 `installHooks(ws)` — `hooks.go`, shared by `lit init`, `lit hooks install`, and `lit quickstart --refresh`:
 1. `MkdirAll(<GitCommonDir>/hooks, 0o755)`; failure → `create hooks dir: %w` (`hooks.go`).
@@ -919,7 +912,7 @@ Family usage `usage: lit hooks install` (`hooks.go`); the only row is `install` 
 
 ## 12. `lit quickstart`
 
-Handler `runQuickstart` — `cli.go`.
+Handler `quickstartLeaf` — `cli.go`.
 Usage string, derived from the topic table: `usage: lit quickstart [work|new|update|done|doctor] [--refresh] [--eject[=LIST]] [--force]` (`quickstart_topics.go`, tokens from `quickstart_topics.go`).
 
 | Flag | Default | Effect | Line |

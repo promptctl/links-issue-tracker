@@ -14,7 +14,7 @@ Repo: `/Users/bmf/code/links-issue-tracker`. Derived entirely from Go/SQL source
 2. `requireEmbeddedSyncSupport()` (`sync.go`) — version floor check, see §1.2.
 3. `acquireWorkspaceShared(ctx, doltRootDir)` (`sync.go`) — workspace shared lock acquired **before** database bootstrap. On any later failure the release is invoked and its error joined onto the returned error (`sync.go`).
 4. `requireNoPendingAdopt(doltRootDir)` (`sync.go`) — refuses if an adopt marker is present while the workspace lock is held.
-5. `ensureDoltDatabase(ctx, doltRootDir, workspaceID)` (`sync.go`) — same initializer `Store.Open` uses.
+5. `ensureDoltDatabase(ctx, doltRootDir, workspaceID)` (`sync.go`) — same initializer `store.Open` uses.
 6. `openStoreConnection(ctx, doltRootDir, workspaceID, engineWrite)` (`sync.go`) — eager write engine open; waits on Dolt's journal lock bounded by `coResidentHolderWait`, and records itself as the lock's holder for the engine's life.
 7. `s.releaseWorkspaceLock = release` (`sync.go`).
 8. Branch normalization: `masterRenameSource(ctx, s.db)` is read lock-free; only when it returns a non-empty source is `ensureMasterDefaultBranch` run inside `s.withCommitLock` (`sync.go`). A read-only OpenSync therefore takes no commit lock.
@@ -356,7 +356,7 @@ Fields (`sync_schema_guard.go`): `Remote`, `Branch`, `RemoteVersion int64`, `Bin
 - Push with an empty branch: **not** guarded (`sync.go`).
 - Every reconcile that replays (three-way, combine, take-local): guarded inside `replayUnderGuard` before any write (`sync_reconcile.go`). Tests `TestSyncReconcileRefusesWhenRemoteSchemaAhead` (`sync_schema_guard_test.go`), `TestSyncResolveUnrelatedTakeLocalRefusesSchemaAheadRemote` (`sync_unrelated_test.go`).
 - **take-remote is exempt** — it authors no replay commit and adopting an ahead head is a safe recovery (`sync_unrelated_take.go`).
-- Other tests: `TestRemoteHeadSchemaReadsVersionAndProducer` (`sync_schema_guard_test.go`), `TestGuardRemoteSchemaAheadDetects` (`sync_schema_guard_test.go`), `TestGuardRemoteSchemaNotAheadAtOrBelowMax` (`sync_schema_guard_test.go`).
+- Other tests: `TestRemoteHeadSchemaReadsVersion` (`sync_schema_guard_test.go`), `TestGuardRemoteSchemaAheadDetects` (`sync_schema_guard_test.go`), `TestGuardRemoteSchemaNotAheadAtOrBelowMax` (`sync_schema_guard_test.go`).
 
 ---
 
@@ -1047,7 +1047,7 @@ The four-way presence/change branch (merge.go):
 
 **`SortCollisions`** (collision.go): copies the slice and sorts it by `IssueID`; the input is not mutated.
 
-Collision tests (`collision_test.go`), fixture `plantCollision` = a shared `epic.1` plus an `epic.16` created at a different instant on local (`wsA`) and remote (`wsB`), with different titles and descriptions:
+Collision tests (`collision_test.go`), fixture `plantCollision` = a shared `epic.1` plus an `epic.16` created at a different instant on local (workspace id `"wsA"`) and remote (workspace id `"wsB"`), with different titles and descriptions:
 - — `ThreeWay` reports one collision on `epic.16` carrying both rows whole; `Settled()` and `Provisional()` both return `ok=false`; the provisional export's `epic.16` is the local row with its own title and description.
 - — identical title and description on both sides, different `CreatedAt`, empty base → zero pending, one collision, `Settled()` `ok=false`.
 - — one `CreatedAt` on both sides and no base → `Classify` reports no collision, and `ThreeWay` returns no collisions with `Settled()` `ok=true`.
@@ -1279,7 +1279,7 @@ Base: `/Users/bmf/code/links-issue-tracker/internal/store/migrations/`.
 - `-- +goose Down` begins the down section (`00001_baseline.sql`, `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`).
 - `-- +goose StatementBegin` / `-- +goose StatementEnd` wrap each individual statement (e.g. `00001_baseline.sql`, `00005_add_event_attribution.sql`). **Every executable statement in every file, in both sections, is inside exactly one such pair** — there are no bare statements (`00001_baseline.sql`, `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`).
 
-**Naming/numbering.** `<NNNNN>_<name>.sql`, 5-digit zero-padded, `00001_baseline.sql` … `00005_add_event_attribution.sql`; the accept-shape is enforced by `bounds.go`. `embed.go` states subsequent migrations append with strictly ascending versions and that only SQL migrations are wired — both the embed and `registryMaxVersion` scan `*.sql`.
+**Naming/numbering.** `<NNNNN>_<name>.sql`, 5-digit zero-padded, `00001_baseline.sql` … `00005_add_event_attribution.sql`; the accept-shape is enforced by `bounds.go`. `embed.go` states subsequent migrations append with strictly ascending versions and that only SQL migrations are wired — the embed (`//go:embed *.sql`) and `MaxVersion` (`bounds.go`) both read only `*.sql` entries.
 
 **Idempotency, per statement.**
 - **Up sections: no idempotency guards anywhere.** Every `CREATE TABLE` is bare, no `IF NOT EXISTS` (`00001_baseline.sql`). Every `CREATE INDEX` is bare (`00001_baseline.sql`). Every `ALTER TABLE ... ADD COLUMN` is bare (`00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`). Every `ADD CONSTRAINT` is bare (`00003_add_resolution.sql`, `00004_add_redirect_target.sql`).

@@ -28,6 +28,7 @@
 package docclaims
 
 import (
+	"cmp"
 	"fmt"
 	"go/ast"
 	"go/build/constraint"
@@ -306,6 +307,21 @@ func localSources(fsys fs.FS) (sources, error) {
 	}
 	// Longest prefix first, so `dir` can return on its first match.
 	sort.Slice(out, func(i, j int) bool { return len(out[i].prefix) > len(out[j].prefix) })
+	return out, nil
+}
+
+// SourceDirs lists the directories holding source this repository carries: the
+// root module, as ".", and every module replaced onto a path inside the tree.
+func SourceDirs(fsys fs.FS) ([]string, error) {
+	srcs, err := localSources(fsys)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(srcs))
+	for _, s := range srcs {
+		out = append(out, cmp.Or(s.dir, "."))
+	}
+	sort.Strings(out)
 	return out, nil
 }
 
@@ -910,28 +926,61 @@ func DocClaims(fsys fs.FS, names []string) ([]Claim, error) {
 	return claims, nil
 }
 
-// spansIn pulls the candidate spans out of one document, double-backtick spans
-// first so their contents cannot be re-cut by the single-backtick pattern.
+// spansIn pulls the candidate claims out of one document: the code spans long
+// enough and multi-word enough to be a quoted message.
 func spansIn(src string) ([]string, error) {
-	stripped, err := stripFences(src)
+	spans, err := CodeSpans(src)
 	if err != nil {
 		return nil, err
 	}
 	var out []string
-	keep := func(text string) {
-		text = strings.TrimSpace(text)
-		if len(text) >= minClaimLen && strings.Contains(text, " ") {
-			out = append(out, text)
+	for _, s := range spans {
+		if len(s.Text) >= minClaimLen && strings.Contains(s.Text, " ") {
+			out = append(out, s.Text)
 		}
 	}
-	rest := docSpanDouble.ReplaceAllStringFunc(stripped, func(m string) string {
-		keep(strings.TrimSuffix(strings.TrimPrefix(m, "``"), "``"))
-		// Replaced by blanks of equal length so the remaining scan sees no
-		// backticks here and no span straddles the hole left behind.
-		return strings.Repeat(" ", len(m))
-	})
-	for _, m := range docSpanSingle.FindAllStringSubmatch(rest, -1) {
-		keep(m[1])
+	return out, nil
+}
+
+// Span is one inline code span of a document, trimmed, with the 1-based line
+// it opens on so a report can send a reader to it.
+type Span struct {
+	Text string
+	Line int
+}
+
+// CodeSpans reads every inline code span of one markdown document outside its
+// fenced blocks, double-backtick spans first so their contents cannot be re-cut
+// by the single-backtick pattern. It is the one reader of the specification's
+// code spans, so every gate over them agrees on what a span is.
+// [LAW:single-enforcer]
+func CodeSpans(src string) ([]Span, error) {
+	stripped, err := stripFences(src)
+	if err != nil {
+		return nil, err
+	}
+	// Line starts are indexed once: the inventories run to 446KB and thousands
+	// of spans, and counting newlines per span is quadratic in that.
+	starts := []int{0}
+	for i := 0; i < len(stripped); i++ {
+		if stripped[i] == '\n' {
+			starts = append(starts, i+1)
+		}
+	}
+	lineAt := func(offset int) int { return sort.SearchInts(starts, offset+1) }
+	var out []Span
+	// Double spans are blanked to equal length, so offsets into rest are
+	// offsets into stripped, and stripFences keeps every line, so those are
+	// offsets into the document.
+	rest := []byte(stripped)
+	for _, m := range docSpanDouble.FindAllStringSubmatchIndex(stripped, -1) {
+		out = append(out, Span{Text: strings.TrimSpace(stripped[m[2]:m[3]]), Line: lineAt(m[0])})
+		for i := m[0]; i < m[1]; i++ {
+			rest[i] = ' '
+		}
+	}
+	for _, m := range docSpanSingle.FindAllSubmatchIndex(rest, -1) {
+		out = append(out, Span{Text: strings.TrimSpace(string(rest[m[2]:m[3]])), Line: lineAt(m[0])})
 	}
 	return out, nil
 }
