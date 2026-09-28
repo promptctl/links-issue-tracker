@@ -367,7 +367,7 @@ jobs:
           jq -e '
             (.version | type) == "string" and (.version | length) > 0 and
             (.commit | test("^[0-9a-f]{7}$")) and
-            (.date | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}")) and
+            (.date | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$")) and
             .is_dev == false
           ' "$MANIFEST" >/dev/null
           jq -e '

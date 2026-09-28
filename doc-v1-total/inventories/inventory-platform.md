@@ -1008,7 +1008,7 @@ setup-go@v5 (`cache: true`) → `go mod download` → `go run ./tools/licenses -
     `.version`, `.tag`, `.commit` (first 7 chars), `.date` from `dist/metadata.json` and runs
     `go run ./tools/mkmanifest -version … -tag … -commit … -date … -dist ./dist -base-url https://github.com/<repo>/releases/download -out ./dist/release-manifest.json`.
 13. **`Assert manifest shape`**: jq assertions that `.version` is a non-empty
-    string, `.commit` is 7 hex characters, `.date` starts with an RFC 3339 date-time, and
+    string, `.commit` is 7 hex characters, `.date` is an RFC 3339 date-time, and
     `.is_dev` is false; `.schema_support.min` is a number ≥ 1 and `.schema_support.max` is a number;
     `.artifacts` is non-empty with every `.platform` matching `^[a-z0-9]+/[a-z0-9]+$`, every
     `.url` starting `https://github.com/` and containing `/<tag>/`, and every `.sha256` matching
