@@ -55,12 +55,12 @@ func TestHelperKillMidCommit(t *testing.T) {
 	t.Fatal("helper process was not killed inside the commitWorkingSetOnce hook")
 }
 
-// TestMidMutationProcessKillRecovers is the acceptance pin: a real SIGKILL
-// delivered while a mutation is staged-but-not-yet-versioned must not wedge
-// the store. The existing panic-injection tests in crash_safety_test.go prove
-// the deferred release fires for an in-process panic; this proves the same
-// recovery holds for a process that a real crash removes with NO deferred
-// cleanup at all.
+// TestMidMutationProcessKillRecovers pins withMutation's crash recovery: a
+// real SIGKILL delivered while a mutation is staged-but-not-yet-versioned must
+// not wedge the store. The existing panic-injection tests in
+// crash_safety_test.go prove the deferred release fires for an in-process
+// panic; this proves the same recovery holds for a process that a real crash
+// removes with NO deferred cleanup at all.
 func TestMidMutationProcessKillRecovers(t *testing.T) {
 	t.Parallel()
 	self, err := os.Executable()
@@ -145,12 +145,14 @@ func TestHelperKillMidMigrationStep(t *testing.T) {
 	t.Fatal("helper process was not killed inside the migration-step hook")
 }
 
-// TestMidMigrationStepProcessKillRecovers is the acceptance pin: a real
-// SIGKILL delivered after one migration step's DDL lands in the working set
-// but before its commitWorkingSet call must still let the NEXT Open reach a
-// consistent, usable schema — not a QuarantineBlockError, not a half-migrated
-// table shape. The existing checkpoint/quarantine tests
-// (migration_quarantine_test.go) only ever inject a returned Go error.
+// TestMidMigrationStepProcessKillRecovers pins the goose-migration runner's
+// crash recovery: a real SIGKILL delivered after one migration step's DDL
+// lands in the working set but before its commitWorkingSet call must still
+// let the NEXT Open reach a consistent, usable schema — not a
+// QuarantineBlockError, not a half-migrated table shape. The existing
+// checkpoint/quarantine tests (migration_quarantine_test.go) only ever inject
+// a returned Go error; this proves the same recovery holds when the process
+// itself disappears mid-step with no error to catch.
 func TestMidMigrationStepProcessKillRecovers(t *testing.T) {
 	t.Parallel()
 	self, err := os.Executable()

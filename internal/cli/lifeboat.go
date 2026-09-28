@@ -154,7 +154,11 @@ func formatDrops(drops []store.UnexplainedDrop) string {
 func lifeboatDumpLeaf() wsLeaf {
 	fs := newCobraFlagSet("lifeboat dump")
 	// The v1 specification quotes this exact message in three chapters, so it is
-	// the leaf's own line rather than a derived one. [LAW:one-source-of-truth]
+	// the leaf's own line rather than a derived one. Deleting it would not just
+	// narrow a refusal: the docclaims sync would rebind those quotations to an
+	// unrelated error that merely contains the words "lit lifeboat dump",
+	// leaving the chapters describing a message the binary no longer has, with
+	// the gate green. [LAW:one-source-of-truth]
 	return wsLeaf{fs: fs, positionals: 0, usage: "usage: lit lifeboat dump", work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
 		dump, err := store.DumpRaw(ctx, ws.DatabasePath, ws.WorkspaceID)
 		if err != nil {

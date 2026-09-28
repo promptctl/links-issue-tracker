@@ -101,7 +101,9 @@ func ExitCode(err error) int {
 	// changed nothing — the same shape as the router's "nothing to hand back",
 	// so it shares that code rather than inventing a second one for it. A
 	// refusal is a domain-constraint rejection like any other. Neither is
-	// ExitGeneric. [LAW:no-mode-explosion]
+	// ExitGeneric, which would make the release-closing `lit done <epic>` report
+	// its workflow's final step as a failure while the state it asked for is
+	// exactly the state that holds. [LAW:no-mode-explosion]
 	var containerAction model.ContainerActionError
 	if errors.As(err, &containerAction) {
 		if containerAction.Satisfied() {
@@ -150,9 +152,9 @@ func ExitCode(err error) int {
 	if errors.Is(err, store.ErrWorkspaceNotInitialized) {
 		return ExitValidation
 	}
-	// ExitGeneric also means "lit is broken":
-	// a prefix lit cannot settle on is a self-fixable precondition, and under
-	// one code a script could only tell the two apart by parsing the English.
+	// Not ExitGeneric, which also means "lit is broken": a prefix lit cannot
+	// settle on is a self-fixable precondition, and under one code a script
+	// could only tell the two apart by parsing the English.
 	// [LAW:one-source-of-truth] one code for the whole family, including the
 	// typed StoredPrefixError, which unwraps to this sentinel. The act each
 	// refusal asks for differs, and that difference is carried by the reason,

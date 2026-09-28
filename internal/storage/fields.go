@@ -12,13 +12,17 @@ import (
 // The editable fields of the issue record, as one table.
 //
 // "Which fields may a patch write" and "which fields does history record" are
-// the same question. A hand-maintained list is a map of the editable set that
+// the same question. Answered separately — an apply block and a diff block
+// inside each engine — it has four answers and nothing holds any of them to the
+// others; a field written but never recorded changes the row and leaves no
+// history at all. A hand-maintained list is a map of the editable set that
 // only stays true while somebody remembers to redraw it.
 //
 // One row carries a field's whole story: where a patch states it, how it
 // lands on the issue, and how its value encodes into a change row. Apply and
 // diff walk the same rows, so a field cannot be written without being
-// recorded. [LAW:one-source-of-truth] [LAW:dataflow-not-control-flow]
+// recorded — the omission is unrepresentable rather than guarded against.
+// [LAW:one-source-of-truth] [LAW:dataflow-not-control-flow]
 type issueField struct {
 	// name is the field's history vocabulary, which is the domain's own — the
 	// name the CLI accepts and prints, never a storage column's spelling.
@@ -32,7 +36,9 @@ type issueField struct {
 // how the issue's value encodes for history.
 //
 // A nil pointer means "leave this alone", and this is the one place that
-// sentence is written. [LAW:single-enforcer]
+// sentence is written. Restating it per field in each engine would be eight
+// chances per engine to write a mutation with no matching diff.
+// [LAW:single-enforcer]
 func patchField[T any](
 	name string,
 	stated func(UpdateIssueInput) *T,

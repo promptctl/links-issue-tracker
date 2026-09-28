@@ -112,9 +112,10 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 // after everything that exists is also landing after every frame-mate, so the
 // default satisfies the frame-local reading for free, and scoping it would
 // drop a first child into the middle of the order instead. The top is the
-// frame's: leading the whole order is not leading my siblings. Each edge
-// carries its own population, so the choice is made once, in orderEdgeFor,
-// rather than tested again here.
+// frame's: leading the whole order is not leading my siblings, and a child
+// filed at slot zero would lead the backlog while claiming only to lead its
+// epic. Each edge carries its own population, so the choice is made once, in
+// orderEdgeFor, rather than tested again here.
 // [LAW:dataflow-not-control-flow]
 func (e *Engine) place(id string, f storage.Frame, placement storage.RankPlacement) error {
 	// The placement is dispatched before the population is even built, so an

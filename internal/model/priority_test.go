@@ -129,7 +129,8 @@ func TestParsePriorityNameAgreesWithParsePriorityOnTheDecimalDomain(t *testing.T
 	}
 }
 
-// Strictness, pinned fragment by fragment. [LAW:no-silent-failure]
+// Strictness, pinned fragment by fragment. Every one of these would silently
+// become normal under a lenient gate. [LAW:no-silent-failure]
 func TestParsePriorityNameRejectsEverythingOutsideTheVocabulary(t *testing.T) {
 	rejected := []string{
 		"7",             // out of domain
@@ -169,10 +170,10 @@ func TestParsePriorityNameCanonicalizesCaseAndSpace(t *testing.T) {
 	}
 }
 
-// A parse refusal must name the accepted values,
-// because "retry" is not an act that can resolve a deterministic refusal. Both
-// spellings of every legal priority have to appear, or the message sends a
-// caller looking for a token it declined to mention.
+// A parse refusal must name the accepted values, because "retry" is not an act
+// that can resolve a deterministic refusal. Both spellings of every legal
+// priority have to appear, or the message sends a caller looking for a token it
+// declined to mention.
 func TestPriorityRefusalNamesEveryAcceptedToken(t *testing.T) {
 	_, err := ParsePriorityName("high")
 	if err == nil {

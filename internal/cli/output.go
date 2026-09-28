@@ -355,7 +355,8 @@ func printIssueHistory(w io.Writer, detail model.IssueDetail) error {
 // rule. A nil issue yields the empty slice, which printIssueGroup omits.
 // [LAW:one-type-per-behavior] The redirect and the parent differ only in the
 // label printIssueGroup is given; both are one optional issue rendered as a
-// group, so one adapter serves them.
+// group, so one adapter serves them. A hand-rolled parent line would print no
+// standing at all — a closed epic parent reading exactly like an open one.
 func optionalGroup(issue *model.Issue) []model.Issue {
 	if issue == nil {
 		return nil
@@ -387,14 +388,17 @@ func printIssueGroup(w io.Writer, label string, issues []model.Issue) error {
 //
 // State() alone is shape-agnostic — leaves return their owned status, containers
 // return state derived from children — but it is only half the truth: a deleted
-// ticket's status is still "open". A frozen issue's status describes work
-// nobody may do, which is why the retention name replaces it rather than
-// joining it.
+// ticket's status is still "open", so rendering State() alone would print dead
+// blockers as "[open]" and send readers hunting for an id that appears in no
+// listing. A frozen issue's status describes work nobody may do, which is why
+// the retention name replaces it rather than joining it.
 //
 // The close reason joins the status because "closed" alone is a directional
 // lie: dropping it can only make a body of work look MORE finished than it is,
-// never less. A `lit done` close records no reason and renders the bare word —
-// the absence is the data, not a fifth member of the sealed set.
+// never less, so a wontfix declination would read as completed work and an
+// agent would act on the wrong picture. A `lit done` close records no reason
+// and renders the bare word — the absence is the data, not a fifth member of
+// the sealed set.
 // [LAW:one-source-of-truth] Every surface that names a referenced issue's state
 // reads this, so the epic plan's markers and the relationship groups cannot
 // disagree about one ticket; Frozen and RetentionName stay the sole owners of
@@ -430,8 +434,7 @@ func resolutionSuffix(resolution *model.Resolution) string {
 // parentID comes from the canonical graph (storage.IssueRelations) so the list
 // view never reinterprets edge semantics, and blocked comes from
 // ClassifyReadiness so it cannot carry a shorter list than the annotation
-// registry. Nothing else may write either field.
-// [LAW:one-source-of-truth]
+// registry. Nothing else may write either field. [LAW:one-source-of-truth]
 //
 // The zero value is the honest answer for an issue whose derived data was not
 // loaded (no parent, not blocked), which is exactly what a nil map yields on

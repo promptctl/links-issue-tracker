@@ -170,7 +170,10 @@ func TestLeafHelpAnswersWithoutAcquiringResources(t *testing.T) {
 			}
 			// One help answer names one command. Cobra derives the -h line from the
 			// first word of the flagset's name while the header uses the whole of
-			// it. The two lines are one fact and must agree.
+			// it, so a multi-word leaf can contradict itself: `rank set --help`
+			// printing "Usage of rank set:" above "help for rank" points the
+			// reader at its family as though that were the command they asked
+			// about. The two lines are one fact and must agree.
 			// [LAW:one-source-of-truth]
 			named, ok := leafHelpSubject(stdout.String())
 			if !ok {
@@ -191,8 +194,8 @@ func TestLeafHelpAnswersWithoutAcquiringResources(t *testing.T) {
 // Asking a command group for help is answered as help: the group's usage on
 // stdout, nothing on stderr, and success — Run returning nil is what main maps
 // to exit 0 (links-cli-zc3r). [LAW:behavior-not-structure] only the observable
-// answer is asserted;
-// where the recognition lives is the implementation's business.
+// answer is asserted; where the recognition lives is the implementation's
+// business.
 func TestCommandGroupHelpExitsZeroWithUsageOnStdout(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")

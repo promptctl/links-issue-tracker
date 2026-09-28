@@ -280,3 +280,14 @@ func (c *Connector) openEngineWithRetry(ctx context.Context) (*engine.SqlEngine,
 	}
 	return se, nil
 }
+
+// [LAW:effects-at-boundaries] Modified by lit (README.lit-patch.md, Patch 1):
+// this copy emits no usage telemetry. Opening an engine carries no hidden
+// network effect — no emitUsageEvent goroutine dialing eventsapi.dolthub.com
+// over gRPC, no env-gated opt-out, no once-per-24h rate-limit file, and no
+// import that exists only to serve them. lit's storage engine has no
+// legitimate reason to phone home to a third party, and an opt-out gated by an
+// env var read once at package init is too late for an embedding process to
+// set reliably, so the emission path is deleted outright rather than defaulted
+// off. See internal/vendor/dolthub-driver/README.lit-patch.md for provenance
+// and how to refresh this vendor copy.

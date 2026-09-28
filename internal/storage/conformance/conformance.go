@@ -28,8 +28,12 @@
 //
 // Dolt's behavior is the tiebreak — not because it is the only implementation,
 // but because the S0 migration state's whole gate is that nothing observable
-// changes. Where a behavior was ambiguous these cases record what Dolt does
-// rather than what would be tidier.
+// changes. Where a behavior is ambiguous these cases record what Dolt does
+// rather than what would be tidier; where the second engine answers BETTER, it
+// is moved to match rather than the contract moved to meet it, because an
+// engine that is right where the other is arbitrary still reads as divergence
+// to the differential oracle. Correcting one of those faults moves observable
+// output, which makes it a ticket rather than a cleanup.
 package conformance
 
 import (
@@ -130,9 +134,11 @@ const prefix = "conf"
 // three milliseconds before it.
 //
 // An engine that round-trips a stamp through text and then compares the text
-// orders this pair backwards. An engine holding a real instant passes without
+// orders this pair backwards. That is not hypothetical: the Dolt engine keeps
+// created_at in a varchar. An engine holding a real instant passes without
 // noticing there was anything to get wrong. Left to a live nanosecond clock the
-// collision arises about once in ten million pairs.
+// collision arises about once in ten million pairs, which is why no case can
+// state it without the contract's clock seam.
 //
 // They are fixed values rather than offsets from the real clock because a case
 // that pins time is asserting about an exact stamp, and deriving one from
@@ -414,7 +420,9 @@ func applyToContainer(t *testing.T, ctx context.Context, st storage.Store, clk *
 // applyToArchivedNamesTheTypedVerb pins which of an action's two names reaches
 // the reader when a retention state refuses it. Name() is the persisted event
 // encoding -- what the events table stores -- and Verb() is the word a caller
-// types; they differ for exactly one action.
+// types; they differ for exactly one action, so a refusal that named the
+// encoding would answer `lit open` on an archived issue with "cannot reopen
+// archived or deleted issue", naming a command lit does not have.
 //
 // It lives in the conformance suite because the refusal exists in two copies,
 // one per engine, and a test beside either one would let the other drift. Here
@@ -539,6 +547,10 @@ func historyRecordsMutations(t *testing.T, ctx context.Context, st storage.Store
 // everyEditableFieldRecordsHistory holds the field axis to its own promise:
 // every field a patch can write, history reports. Not "the fields somebody
 // remembered" — every one of them.
+//
+// So this walks the whole editable set rather than any one field. A per-field
+// case passes for the fields that work and is never written for the one that
+// does not.
 func everyEditableFieldRecordsHistory(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	newType := model.TypeBug
 	priority := model.PriorityUrgent
@@ -1018,7 +1030,9 @@ func listOrdersTimestampsByInstant(t *testing.T, ctx context.Context, st storage
 // order is the reverse of their instant order, so an engine comparing the
 // spelling fails here as well as in the listing. Inside a group every event
 // shares one stamp, so only the id tie-break is left — which is the whole
-// reason the rule names a second key.
+// reason the rule names a second key, and it is unreachable unless the case
+// decides what time it is: on a live nanosecond clock the tie this settles
+// simply never occurs, and an engine returning raw recording order passes.
 func eventsAreTotallyOrdered(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	// The create is inside the first group, not before it: an unpinned create
 	// would stamp the real instant, which is later than either pinned one, and
@@ -1456,7 +1470,13 @@ func rankSetStaysInsideItsFrame(t *testing.T, ctx context.Context, st storage.St
 // verb is refused, and that the refusal costs the order nothing.
 //
 // Rank is a position among issues that are actually listed, so a deleted issue
-// has none.
+// has none. A verb that let one through would write a key onto a row no view
+// shows, and RankSet, which rewrites its frame's slots in place, has the worst
+// answer of all: its slot list counts only live members while its replacement
+// list would count every representative, so a deleted one makes the second
+// longer than the first and the rewrite commits the prefix that fits, dropping
+// whichever live sibling owns the slots that run out. That issue then belongs
+// to no position at all.
 //
 // The survivor assertion is the point of this case and outlives the particular
 // answer: whatever a rank verb decides to do about a deleted issue, an issue
@@ -1465,8 +1485,9 @@ func rankVerbsRefuseADeletedIssue(t *testing.T, ctx context.Context, st storage.
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	gone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "gone", Topic: "core", ParentID: epic.ID})
 	sibling := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "sibling", Topic: "core", ParentID: epic.ID})
-	// bystander is named by nothing below. Its survival is what separates a
-	// refused write from a half-applied one.
+	// bystander is named by nothing below. It is the issue a truncated rewrite
+	// would drop, so its survival is what separates a refused write from a
+	// half-applied one.
 	bystander := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "bystander", Topic: "core", ParentID: epic.ID})
 
 	if _, err := st.Apply(ctx, gone.ID, storage.Change{Action: model.Delete{}, Actor: "tester"}); err != nil {
@@ -1490,7 +1511,9 @@ func rankVerbsRefuseADeletedIssue(t *testing.T, ctx context.Context, st storage.
 	}
 	// The message is asserted whole, not merely as "some error", and compared
 	// against one expectation for both engines — which is the only thing that
-	// makes the parity claim testable. [LAW:one-source-of-truth]
+	// makes the parity claim testable. Containment would not do it: a substring
+	// check passes straight through one engine wrapping this refusal in a prefix
+	// its counterpart does not. [LAW:one-source-of-truth]
 	wantRefusal := fmt.Sprintf("cannot rank deleted issue %s; restore it first", gone.ID)
 	for _, r := range refusals {
 		err := r.call()

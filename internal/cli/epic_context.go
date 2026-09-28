@@ -31,6 +31,13 @@ type childStatus interface {
 // when one was recorded — or somebody is working it. The payload is the word
 // issueStanding composed, never a literal spelled here, so this marker cannot
 // name a variant that composer did not produce.
+//
+// [LAW:one-source-of-truth] The standing words are issueStanding's to own; the
+// epic plan spells none of them, so it cannot fall behind the one that does. A
+// literal "[closed]" here would hide a wontfix declination behind the same
+// marker finished work gets.
+// [LAW:one-type-per-behavior] One variant carries every standing, since nothing
+// differs between them but the word — all render one word in brackets.
 type statusStanding struct{ standing string }
 
 func (s statusStanding) marker() string { return "[" + s.standing + "]" }
@@ -131,8 +138,12 @@ const statusMarkerWidth = len("[in_progress]")
 // of retention, status, and the close's reason; this file spells none of them.
 //
 // [LAW:single-enforcer] readiness is the gate's verdict, read here, never
-// recomputed here. IsReady is false exactly when BlockingReasons is non-empty,
-// by that type's construction, so the head index below is total.
+// recomputed here. A display deriving its own blocker list from `blocks` edges
+// alone would draw [ready] a child held back by any of the registry's other
+// blocking kinds — a missing required field, needs-design, an earlier
+// same-lane sibling — while `lit next` refuses to serve it. IsReady is false
+// exactly when BlockingReasons is non-empty, by that type's construction, so
+// the head index below is total.
 func classifyChildStatus(child model.Issue, readiness IssueReadiness) childStatus {
 	if model.Frozen(child.Retention()) || child.State() != model.StateOpen {
 		return statusStanding{standing: issueStanding(child)}

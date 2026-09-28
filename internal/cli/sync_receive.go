@@ -70,10 +70,11 @@ func receiveInline(ctx context.Context, ws workspace.Info) {
 		return
 	}
 
-	// One deadline spans the question and the fetch it may lead to. The
-	// deadline is the store's: the fetch holds the store's
-	// LOCK for its whole run, so the store sizes every co-resident wait against
-	// it. [LAW:no-ambient-temporal-coupling]
+	// One deadline spans the question and the fetch it may lead to, so a remote
+	// that hangs costs the command one deadline, never twice that. The
+	// deadline is the store's: the fetch holds the store's LOCK for its whole
+	// run, so the store sizes every co-resident wait against it.
+	// [LAW:no-ambient-temporal-coupling]
 	timeoutCtx, cancel := context.WithTimeout(ctx, store.InlineReceiveDeadline)
 	defer cancel()
 
@@ -444,11 +445,11 @@ func receiveReasonForState(state storage.SyncReceiveState) string {
 // recordReceiveTrace writes the two traces every automatic-receive decision
 // leaves: the LNKS_AUTOMATION_TRIGGER-gated automation trace, and the durable
 // sync trace an interactive command's receive would otherwise never leave —
-// maybeAutoSyncAfterCommand sets no trigger. The
-// automation trace's write error is returned for the caller to surface
-// alongside its outcome (the receive has no reader for a trace ref, unlike
-// the pre-push hook); the sync trace reports its own. [LAW:single-enforcer]
-// one writer, whatever the receive decided.
+// maybeAutoSyncAfterCommand sets no trigger. The automation trace's write
+// error is returned for the caller to surface alongside its outcome (the
+// receive has no reader for a trace ref, unlike the pre-push hook); the sync
+// trace reports its own. [LAW:single-enforcer] one writer, whatever the
+// receive decided.
 func recordReceiveTrace(ws workspace.Info, decision, status, reason string, metadata map[string]string) error {
 	_, traceRecordErr := maybeRecordAutomatedCommandTrace(ws, receiveTraceCommand, receiveTraceSideEffect, status, reason, metadata)
 	recordSyncTraceLogged(ws, syncTraceRecord{

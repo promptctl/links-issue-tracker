@@ -265,11 +265,10 @@ func TestMirrorOwedIgnoresLiveness(t *testing.T) {
 	}
 }
 
-// TestCompleteMirrorWithoutAttempt pins this ticket's seam contract
-// (links-sync-pgct.12): a
-// mirror failure BEFORE the push attempt lands in the same push-outcome
-// marker and the same owner notification as an attempt that ran — one
-// completion record, two consumers, no second representation of push health.
+// TestCompleteMirrorWithoutAttempt pins the seam contract: a mirror failure
+// BEFORE the push attempt lands in the same push-outcome marker and the same
+// owner notification as an attempt that ran — one completion record, two
+// consumers, no second representation of push health.
 func TestCompleteMirrorWithoutAttempt(t *testing.T) {
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
@@ -394,7 +393,8 @@ func TestCompleteMirrorWithoutAttemptStopsAnsweringFirst(t *testing.T) {
 // TestClaimMirrorPendingClockStepIrrelevant pins that the verdict survives
 // any clock reading: a marker stamped in the future (a crash orphan seen
 // across a backward RTC/NTP correction) is residue like any other when no
-// mirror holds the beacon.
+// mirror holds the beacon, because the kernel's answer does not consult the
+// clock.
 func TestClaimMirrorPendingClockStepIrrelevant(t *testing.T) {
 	t.Parallel()
 	ws := mirrorPendingTestWorkspace(t)

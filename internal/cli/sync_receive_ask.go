@@ -13,12 +13,12 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-// The inline receive asks before it fetches. One `git ls-remote <remote>
-// refs/dolt/*` answers the question with no transfer and no store open
-// (1.2–1.3s over ssh to GitHub,
-// 0.5–0.6s over https, measured 2026-09-27), so the fetch and the reconcile
-// behind it run only when the advertisement differs from what the last
-// settled receive recorded.
+// The inline receive asks before it fetches, rather than paying a full
+// DOLT_FETCH to learn the remote has not moved. One `git ls-remote <remote>
+// refs/dolt/*` answers the same question with no transfer and no store open
+// (1.2–1.3s over ssh to GitHub, 0.5–0.6s over https, measured 2026-09-27), so
+// the fetch and the reconcile behind it run only when the advertisement
+// differs from what the last settled receive recorded.
 //
 // The record says what was last RECEIVED, never what was last seen: it is
 // written only after a receive settled cleanly — the DOLT_FETCH returned
@@ -35,10 +35,12 @@ import (
 // runs, and the previous record stands. [LAW:no-silent-failure]
 //
 // A push writes the record too, because a push moves the remote as surely as
-// a peer does. A push that
-// landed without being superseded asks the remote what it now advertises and
-// records it only when the store's own git mirror holds every advertised
-// commit (provePushedAdvertisement). The remote's head is then the push's own
+// a peer does: otherwise every push this checkout makes (the mirror after each
+// write, `lit sync push`) would make the next receive see a moved remote and
+// fetch, only to find the store already holds everything. A push that landed
+// without being superseded asks the remote what it now advertises and records
+// it only when the store's own git mirror holds every advertised commit
+// (provePushedAdvertisement). The remote's head is then the push's own
 // write, never a peer's later push that the mirror has never seen, so the
 // record still never leads the store.
 

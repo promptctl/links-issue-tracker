@@ -94,6 +94,9 @@ func TestWriteBundleSourceLine(t *testing.T) {
 	}
 }
 
+// TestBundleSourceSuffixesClaimOnlyWhatTheyCanBack pins two rules of this
+// wording.
+//
 // The subject must not be a deictic. "this coordinate" printed immediately to
 // the RIGHT of the substitute reads as saying the fork's source was replaced by
 // itself — the reverse of the SBOM note's direction, in the file that legally
@@ -128,7 +131,10 @@ func TestBundleSourceSuffixesClaimOnlyWhatTheyCanBack(t *testing.T) {
 }
 
 // TestBundleSourceLineRefusesAnUnknownKind is the third renderer's
-// exhaustiveness arm. String() and componentPedigree each have their own.
+// exhaustiveness arm. String() and componentPedigree each have their own;
+// without this one, `default: return ""` written here would survive the whole
+// suite while THIRD_PARTY_LICENSES — the file that legally accompanies the
+// binary — silently drops the disclosure.
 func TestBundleSourceLineRefusesAnUnknownKind(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {

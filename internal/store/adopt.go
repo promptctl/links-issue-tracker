@@ -110,7 +110,8 @@ func clearAdoptPendingMarker(cleanRoot string) error {
 // residue from ever being opened as a store. A failed-and-returned clone
 // cleans up after itself, but the failure shapes that CANNOT return — init's
 // deadline abandoning the clone goroutine mid-write, a crash, SIGKILL — leave
-// whatever undefined partial state the clone had reached.
+// whatever undefined partial state the clone had reached, and "the database
+// directory exists" is a map that reads that residue as a valid store.
 // [LAW:parse-dont-validate] presence of the marker is the (negative) stamp:
 // directory existence alone is never trusted as store validity.
 //

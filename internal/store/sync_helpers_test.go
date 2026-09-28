@@ -8,8 +8,8 @@ import (
 // TestParseUnixSeconds pins how the driver's UNIX_TIMESTAMP rendering is decoded:
 // NULL and empty map to absent, a fractional decimal truncates to whole seconds,
 // and unparseable output is a loud error — never a silent zero that would date a
-// divergence to 1970. The fractional-decimal case is the real driver format.
-// [LAW:no-silent-failure]
+// divergence to 1970. The fractional-decimal case is the real driver format,
+// and the reason the value is scanned as a NullString. [LAW:no-silent-failure]
 func TestParseUnixSeconds(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

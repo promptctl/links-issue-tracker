@@ -162,10 +162,10 @@ func TestOpenSyncContentionCarriesWorkspaceBusy(t *testing.T) {
 	}
 }
 
-// TestOpenForReadToleratesForeignJournalHolder pins the read-open contract: a
-// read open beside a live foreign writer keeps
-// dolt's read-only fallback and serves reads — reading a store someone else is
-// writing is exactly what a read open is for.
+// TestOpenForReadToleratesForeignJournalHolder pins the read-open contract the
+// write-open contention handling must NOT disturb: a read open beside a live
+// foreign writer keeps dolt's read-only fallback and serves reads — reading a
+// store someone else is writing is exactly what a read open is for.
 func TestOpenForReadToleratesForeignJournalHolder(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

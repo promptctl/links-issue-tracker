@@ -195,7 +195,7 @@ type fieldPatch struct {
 // [storage.ApplyIssueFields] rather than this engine's own reading of it — an
 // engine free to decide that for itself is an engine free to disagree, and the
 // differential oracle would read the disagreement as divergence instead of as
-// the duplicated logic it was. [LAW:one-source-of-truth]
+// the duplicated logic it is. [LAW:one-source-of-truth]
 func planFields(baseline model.Issue, in storage.UpdateIssueInput, actor string, now time.Time) (fieldPatch, error) {
 	issue, changes, err := storage.ApplyIssueFields(baseline, in)
 	if err != nil {

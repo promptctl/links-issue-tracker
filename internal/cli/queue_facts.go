@@ -59,7 +59,9 @@ func deriveQueueFacts(queue []annotation.AnnotatedIssue) queueFacts {
 // focus scope for a view to narrow by.
 //
 // [LAW:types-are-the-program] the rows and the queue facts have different types
-// and cannot be crossed at a call site.
+// and cannot be crossed at a call site. As two []annotation.AnnotatedIssue
+// parameters, reading the wrong one would compile, run, and print a shorter
+// truth.
 type workableGather struct {
 	rows    []annotation.AnnotatedIssue
 	details map[string]storage.IssueRelations

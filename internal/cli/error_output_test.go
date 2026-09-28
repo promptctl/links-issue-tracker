@@ -106,8 +106,11 @@ func TestCommandErrorReason(t *testing.T) {
 			"workspace_not_initialized",
 		},
 		// A stat that failed for any reason but ENOENT is an unclassified fault,
-		// and the retry-then-doctor default is the right advice for it.
+		// and the retry-then-doctor default is the right advice for it. The
+		// workspace_not_initialized arm must not widen to it.
 		{"genuine stat fault stays unclassified", errors.New("stat database dir: permission denied"), "command_failed"},
+		// A genuine fault reaching the same surface keeps its own reason: the
+		// arms above dispatch on their concrete types, so they shadow nothing.
 		{"genuine fault still classifies", CorruptionError{Message: "integrity_check failed"}, "corruption_detected"},
 		// A container action carries its own split: the request the children
 		// already satisfy needs nothing done, while the one they do not is a
@@ -213,10 +216,10 @@ func TestWriteCommandErrorValidationRefusalNeverSaysRetry(t *testing.T) {
 }
 
 // TestWriteCommandErrorUninitializedWorkspace pins the surface an agent
-// actually reads. The condition is terminal — `lit init` has
-// never run here — so the remediation must agree with the message body instead
-// of contradicting it: no retry advice, and no referral to `lit doctor`, which
-// reads the very workspace that is missing.
+// actually reads. The condition is terminal — `lit init` has never run here —
+// so the remediation must agree with the message body instead of contradicting
+// it: no retry advice, and no referral to `lit doctor`, which reads the very
+// workspace that is missing.
 //
 // The absence assertions alone would be vacuous (they hold of any answer that
 // merely avoids the default), so the reason and exit code are pinned as data in
@@ -241,17 +244,20 @@ func TestWriteCommandErrorUninitializedWorkspace(t *testing.T) {
 	if !strings.Contains(out, "Do not retry unchanged") || !strings.Contains(out, "lit init") {
 		t.Fatalf("remediation must say the condition is terminal and name `lit init`: %q", out)
 	}
-	// The terminal claim is about this command, not about all of them — the
-	// write paths bootstrap one. A remediation is acted on, not read for
-	// flavour. [LAW:no-silent-failure]
+	// The terminal claim is about this command, not about all of them: saying
+	// every store-touching command repeats this answer until a workspace exists
+	// is false, because the write paths bootstrap one. A remediation is acted
+	// on, not read for flavour, so an overstatement here is as much a defect as
+	// retry advice. [LAW:no-silent-failure]
 	if strings.Contains(out, "every store-touching command") {
 		t.Fatalf("remediation must not claim every command repeats this answer; the write paths bootstrap: %q", out)
 	}
 }
 
 // TestWriteCommandErrorRemoteUnreachable: a transport failure that survived
-// the retry budget surfaces as the remote being unreachable — naming the transport symptom — with remediation aimed at
-// the network, never at credentials or `lit doctor`.
+// the retry budget surfaces as the remote being unreachable — naming the
+// transport symptom — with remediation aimed at the network, never at
+// credentials or `lit doctor`.
 func TestWriteCommandErrorRemoteUnreachable(t *testing.T) {
 	t.Parallel()
 	var stderr bytes.Buffer

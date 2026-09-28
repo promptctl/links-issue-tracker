@@ -82,7 +82,9 @@ func openSqlEngine(ctx context.Context, cfg config.ReadWriteConfig, fs filesys.F
 	// it creates — NewSqlEngine's own threading of seCfg.DBLoadParams into envs
 	// happens only after MultiEnvForDirectory has already loaded the databases,
 	// which is too late for params that shape the storage open itself
-	// (singleton-cache bypass, journal-lock fail-fast).
+	// (singleton-cache bypass, journal-lock fail-fast). Passing nil here would
+	// leave those opens on default semantics no matter what the connector
+	// requests.
 	var carrier *env.DoltEnv
 	if len(seCfg.DBLoadParams) > 0 {
 		carrier = &env.DoltEnv{Version: version, DBLoadParams: maps.Clone(seCfg.DBLoadParams)}

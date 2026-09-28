@@ -81,11 +81,11 @@ import "strings"
 //
 // It is the third kind rather than the second because ListIssues already
 // batches on the id axis, and a second batched axis is a product: |A|/K x |I|/K
-// round trips for an answer needing |I|/K. The parent filter has that same
-// problem and is resolved by collapsing onto one axis before any row is read
-// (childIDsOfParents); the assignee column has no such collapse available. So
-// when a caller-derived assignee list does appear, the move is to narrow it
-// before the store sees it, not to batch a second axis here.
+// round trips for an answer needing |I|/K. The parent filter would have that
+// same problem and is resolved by collapsing onto one axis before any row is
+// read (childIDsOfParents); the assignee column has no such collapse
+// available. So when a caller-derived assignee list does appear, the move is to
+// narrow it before the store sees it, not to batch a second axis here.
 //
 // Batching is sound only where the query's answer is the concatenation of its
 // batches' answers, and two shapes fail that test:
@@ -168,12 +168,12 @@ func (b idBatch) inList() (string, []any) {
 //
 // The dedupe is what keeps batching behaviour-preserving, and it belongs here
 // rather than in each caller. `IN (a, ..., a)` answers once however many times
-// a is written, so a single clause is indifferent to repeats;
-// batches are not, and two copies of one id falling either side of a boundary
-// come back as two rows. Downstream that is not an error anywhere — labels
-// accumulate into a shared map and would list the same label twice, and a
-// container would compose a doubled child list and report one child of two
-// done. Deduping here means no caller can be written that has that bug.
+// a is written, so a single clause is indifferent to repeats; batches are not,
+// and two copies of one id falling either side of a boundary come back as two
+// rows. Downstream that is not an error anywhere — labels accumulate into a
+// shared map and would list the same label twice, and a container would
+// compose a doubled child list and report one child of two done. Deduping here
+// means no caller can be written that has that bug.
 // [LAW:parse-dont-validate]
 //
 // An empty input yields no batches rather than one empty batch, so a caller's

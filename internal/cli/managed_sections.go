@@ -28,7 +28,8 @@ type markerPair struct {
 // block, carrying the pair it was proven against.
 //
 // [LAW:parse-dont-validate] markerPair.parse is the only way to mint one, so a
-// call site cannot hand upsertManagedSection unproven template text.
+// call site cannot hand upsertManagedSection unproven template text:
+// normalization is not a step callers have to remember.
 type managedSection struct {
 	pair markerPair
 	text string

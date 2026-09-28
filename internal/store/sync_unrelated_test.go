@@ -716,7 +716,8 @@ func assertIDSet(t *testing.T, label string, got, want []string) {
 // attributable commits on the new spine — original message and timestamp (to the
 // second, Dolt's --date granularity) preserved, in their original order, each
 // mid-chain state a whole union backlog — settled by the combine's marker
-// commit; the contents equal the union and the push fast-forwards.
+// commit; the contents equal the union and the push fast-forwards. A squash
+// would keep the data but lose its provenance.
 func TestSyncReconcileCombinePreservesFoldedProvenance(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

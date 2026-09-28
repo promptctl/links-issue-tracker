@@ -56,7 +56,9 @@ func (h readyTestHarness) runNextRow() annotation.AnnotatedIssue {
 }
 
 // servedRow is the single place the harness decides which outcomes carry a row.
-// The claim is directly testable by TestServedRowIsTotalOverTheSealedSum.
+// Inside runNextRow nothing could reach it but a full routing run; out here,
+// the totality the comment above asserts is directly testable by
+// TestServedRowIsTotalOverTheSealedSum.
 // [LAW:one-source-of-truth]
 func servedRow(outcome NextOutcome) (annotation.AnnotatedIssue, bool) {
 	switch served := outcome.(type) {
@@ -208,7 +210,9 @@ func TestRunNextResumesOwnWorkInFlight(t *testing.T) {
 }
 
 // Two agent sessions in ONE checkout. Session sess-peer starts a ticket;
-// session sess-mine runs `lit next`.
+// session sess-mine runs `lit next` and must not be told "already in progress
+// in a lane you hold — continue where you left off", which would be false about
+// the only thing an agent acts on — whose work it is.
 //
 // What is NOT asserted is as deliberate as what is. The row still comes back:
 // the lane really does belong to this checkout, lanes are keyed on the checkout
@@ -420,7 +424,9 @@ func TestRunNextStatusInProgressResumesOurOwnWorkInFlight(t *testing.T) {
 }
 
 // When the only in_progress rows are held fresh by other checkouts, every one
-// verdicts routeAround and the walk ends at NoWork.
+// verdicts routeAround and the walk ends at NoWork. That must not print a bare
+// "no ready work" — byte-identical to an empty backlog, telling an agent asking
+// what it was on that its work is gone.
 func TestRunNextStatusInProgressNamesForeignHeldWorkRatherThanReadingEmpty(t *testing.T) {
 	h := newReadyTestHarness(t)
 	theirs := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Theirs, in flight", Topic: "next", IssueType: "task", Priority: 1})
@@ -475,9 +481,18 @@ func TestRunNextErrorsWhenNoReadyWork(t *testing.T) {
 	}
 }
 
+// TestRenderNextOutcomeTerminalOutcomesKeepTheirType pins that
+// renderNextOutcome renders the router's two terminal outcomes as TYPED errors,
+// keeping the discriminator routeNext established to keep the exhaustion case
+// distinguishable. Both sinks dispatch by type, so an untyped error falls
+// through to "command_failed", whose remediation tells the agent to retry an
+// answer that is deterministic and then to run `lit doctor` against a perfectly
+// healthy workspace — two dead ends, attached to a message saying the situation
+// calls for a deliberate act.
+//
 // The test drives the real seam rather than the error types in isolation:
-// asserting commandErrorReason(Exhausted{}) alone would still pass if this
-// function went back to wrapping the outcome in errors.New.
+// asserting commandErrorReason(Exhausted{}) alone would still pass if
+// renderNextOutcome wrapped the outcome in errors.New.
 func TestRenderNextOutcomeTerminalOutcomesKeepTheirType(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -613,8 +628,9 @@ func TestRunNextCarriesParentEpic(t *testing.T) {
 // one line whose wording depends on a value the table holds empty — the
 // claimContext's acting identity.
 //
-// The two assertions are not one. A sentence could easily acquire the name
-// while keeping the claim.
+// The two assertions are not one: it must name the holder, and it must not say
+// "a lane you hold" — a sentence could easily acquire the name while keeping
+// the claim.
 func TestRenderNextOutcomeNamesTheOtherSessionWorkingOurLane(t *testing.T) {
 	h := newReadyTestHarness(t)
 	inFlight := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Theirs, in flight", Topic: "next", IssueType: "task", Priority: 1})
@@ -751,13 +767,15 @@ func TestRenderNextOutcomeSpeaksOnlyInTheConditional(t *testing.T) {
 			inFlight.ID + " is in progress and nobody holds it — run `lit start " + inFlight.ID + "` to claim lane a2 of epic " + epicA.ID},
 		// Step 2 serves abandoned in-flight rows too, so the epic's next lane
 		// can carry one: the one place the state-dependent sentence and the
-		// fixed suffix are concatenated.
+		// fixed suffix are concatenated. Pinned whole, because a product left
+		// partly covered is where a tautology survives.
 		{"the epic's next lane serves abandoned work, qualifier and all", ServedFromEpicLane{Row: inFlightRow, Lane: inFlightLane},
 			inFlight.ID + " is in progress and nobody holds it — run `lit start " + inFlight.ID + "` to claim lane a2 of epic " + epicA.ID + " (a second lane of an epic you already hold a lane in)"},
 		// Step 1b, both states. Its qualifier concatenates onto the
 		// state-dependent sentence exactly as step 2's does, so the product
 		// needs both cells: a ready row and an abandoned one. This is the pick
-		// an agent is least likely to predict.
+		// an agent is least likely to predict, and these two cells pin that it
+		// never renders the global pool's line verbatim.
 		{"the on-path dependency names the row it unblocks", ServedFromDependency{Row: freshRow, Lane: freshLane, Gates: inFlight.ID},
 			"run `lit start " + fresh.ID + "` to claim lane a1 of epic " + epicA.ID + " (gates " + inFlight.ID + ", which is in a lane you hold)"},
 		{"an abandoned dependency is served and still names what it unblocks", ServedFromDependency{Row: inFlightRow, Lane: inFlightLane, Gates: fresh.ID},
@@ -787,7 +805,7 @@ func TestRenderNextOutcomeSpeaksOnlyInTheConditional(t *testing.T) {
 // store holds after the command has run.
 //
 // Asserted through runNext rather than renderNextOutcome so the whole command
-// path is under it, and over the pick that had the most to lie about: an
+// path is under it, and over the pick that has the most to lie about: an
 // unclaimed solo ticket.
 // The wording assertions elsewhere in this file all become vacuous if the
 // command ever does start claiming, and this is what would still fail.

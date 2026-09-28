@@ -48,7 +48,10 @@ const (
 // It exists because "did the pass run" is observable only inside
 // compactWithinLock, and a bare error cannot carry it. The domain has three
 // outcomes — the pass never ran; the pass ran and the work after it failed; the
-// pass ran clean — while an error has two.
+// pass ran clean — while an error has two. A caller left to reconstruct the
+// missing third would have to assume, and an assumption is worse than a branch
+// here, because a branch leaves something to read and an assumption leaves
+// nothing.
 // [LAW:types-are-the-program] the discriminator is a value handed out by the one
 // function that can observe it, not a guess each caller makes from its own
 // position in the control flow. [LAW:dataflow-not-control-flow]

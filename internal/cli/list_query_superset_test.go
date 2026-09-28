@@ -8,8 +8,8 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-// TestListQuerySupersetMatchesDiscreteFlags is the acceptance at the CLI
-// surface: the discrete flag form and the --query token form of the four list
+// TestListQuerySupersetMatchesDiscreteFlags pins parity at the CLI surface:
+// the discrete flag form and the --query token form of the four list
 // options (sort/limit/archived/deleted) must render byte-identical output.
 // Struct-level parity lives in the query package; this test proves the two
 // grammars reach ListIssues with the same intent end to end, and that the flags

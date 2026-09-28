@@ -12,11 +12,12 @@ import (
 
 func boolPtr(b bool) *bool { return &b }
 
-// TestQueryTokenSupersetOfDiscreteFlags is the acceptance: for every
-// filtering or list-shaping dimension `lit ls` exposes as a discrete flag, the
-// --query token form must produce the identical storage.ListIssuesFilter the flag
+// TestQueryTokenSupersetOfDiscreteFlags is the acceptance: for every filtering
+// or list-shaping dimension `lit ls` exposes as a discrete flag, the --query
+// token form must produce the identical storage.ListIssuesFilter the flag
 // produces. Each want filter below is exactly what runList assembles from the
-// named flag; the token column is the superset claim.
+// named flag; the token column is the superset claim. Every dimension sits in
+// the one table so a future token drop is caught here, not in the field.
 func TestQueryTokenSupersetOfDiscreteFlags(t *testing.T) {
 	updatedTS, err := time.Parse(time.RFC3339, "2026-03-07T10:00:00Z")
 	if err != nil {

@@ -428,14 +428,13 @@ func TestTokensShareNoCommonSubstring(t *testing.T) {
 	}
 }
 
-// TestPublishNeverReplacesAnExistingIdentity is the regression guard. The
-// atomic install must use a primitive that REFUSES an existing destination:
-// os.Rename would publish just as atomically and silently overwrite the
-// incumbent, handing a checkout a second identity while its first is already
-// attached to work. Calling publish
-// directly (rather than through EnsureStream, whose read-first fast path would
-// return before publishing) is what puts the write-once primitive itself under
-// test.
+// TestPublishNeverReplacesAnExistingIdentity pins that publish's atomic install
+// uses a primitive that REFUSES an existing destination: os.Rename would
+// publish just as atomically and silently overwrite the incumbent, handing a
+// checkout a second identity while its first is already attached to work.
+// Calling publish directly (rather than through EnsureStream, whose read-first
+// fast path would return before publishing) is what puts the write-once
+// primitive itself under test.
 func TestPublishNeverReplacesAnExistingIdentity(t *testing.T) {
 	dir := t.TempDir()
 	if err := publishStreamToken(dir); err != nil {

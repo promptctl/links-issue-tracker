@@ -902,7 +902,9 @@ func (s *Store) refuseIfBaselineMissing(ctx context.Context, state migrationStat
 //     workspace, reconcile-then-adopt."
 //
 // [LAW:types-are-the-program] Three phases, each with a forward path. No
-// refusal branch.
+// refusal branch. A "partial schema, restore or recreate" failure mode —
+// which would destroy real user data with old canonical shapes — does not
+// exist by construction here.
 //
 // [LAW:dataflow-not-control-flow] The classify function reads facts about
 // the workspace; the runner reacts to them. No flags, no modes, no

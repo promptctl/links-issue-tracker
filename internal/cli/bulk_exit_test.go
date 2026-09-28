@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-// These tests pin the contract through
-// behavior: any item failing yields a non-OK exit code, the failed ID's error
-// never reaches stdout, and successful items still persist and report.
+// These tests pin the contract through behavior: any item failing yields a
+// non-OK exit code, the failed ID's error never reaches stdout, and successful
+// items still persist and report.
 // [LAW:behavior-not-structure] [LAW:no-silent-failure]
 
 // TestBulkTransitionPartialFailureExitsNonZero pins that a mixed valid/bogus run

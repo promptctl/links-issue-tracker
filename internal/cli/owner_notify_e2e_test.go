@@ -39,7 +39,7 @@ func maskGlobalConfig(t *testing.T) {
 	t.Setenv("LIT_CONFIG_GLOBAL_PATH", filepath.Join(t.TempDir(), "global-config.toml"))
 }
 
-// forkedBacklogs builds the field incident's shape: producer and consumer
+// forkedBacklogs builds the forked-backlog shape: producer and consumer
 // initialize their own lit stores against one shared remote, the producer
 // publishes after the consumer already bootstrapped its own root, and the two
 // histories share no common ancestor. Returns both repo roots and both issue
@@ -164,8 +164,8 @@ func TestTakeRefusesWithoutOwnerApprovalEndToEnd(t *testing.T) {
 	}
 	// The take reports its provenance replay with the exact count: the
 	// consumer's one create-issue data commit landed individually, not as one
-	// squash. The count makes the assertion falsifiable —
-	// a squash regression reports 0 and cannot satisfy it.
+	// squash. The count makes the assertion falsifiable — a squash regression
+	// reports 0 and cannot satisfy it.
 	if !strings.Contains(approved, "1 local commit replayed with original messages and timestamps") {
 		t.Fatalf("approved take did not report the one-commit provenance replay:\n%s", approved)
 	}

@@ -80,7 +80,10 @@ func main() {
 	// (this slice), not whichever key Go's runtime picked first.
 	//
 	// Each entry holds a pointer to the flag-bound string so we can trim
-	// in place at the boundary. Trimming in place gives downstream code one
+	// in place at the boundary. Checking TrimSpace for emptiness while
+	// downstream code used the untrimmed value would let padded values like
+	// `-version "0.1.0 "` pass validation and silently produce URLs/filenames
+	// with embedded whitespace. Trimming in place gives downstream code one
 	// canonical form to consume.
 	// [LAW:one-source-of-truth] every flag value flows downstream in one
 	// normalized form, not two.
@@ -153,8 +156,9 @@ func main() {
 	// failing Close (delayed write error, fsync failure on a network FS),
 	// leaving a truncated manifest while the tool exits 0. The manifest is
 	// the contract downstream consumers read; a silently truncated file is
-	// a worst-case failure mode. [LAW:no-defensive-null-guards] cousin:
-	// the success path must surface it explicitly.
+	// a worst-case failure mode. [LAW:no-defensive-null-guards] cousin: a
+	// deferred Close is a guard that *hides* an error class — the success
+	// path must surface it explicitly.
 	if err := out.Close(); err != nil {
 		die("close %s: %v", *outPath, err)
 	}

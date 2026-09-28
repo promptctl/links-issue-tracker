@@ -51,12 +51,12 @@ func TestParseModuleListAcceptReject(t *testing.T) {
 	})
 
 	t.Run("rejects a line with the wrong field count", func(t *testing.T) {
-		// The arity is a contract between moduleFields (the one producer layout,
-		// modules.go) and this parser. A template edited toward four — or to
-		// six — must fail here rather than shift every column by one: a module
-		// Dir read out of the replacement column names a directory that does
-		// not exist, and the failure would surface as "no license file found"
-		// somewhere else entirely.
+		// The arity is a contract between moduleFields (the one producer
+		// layout, modules.go) and this parser. A template edited to four
+		// fields — or to six — must fail here rather than shift every column by
+		// one: a module Dir read out of the replacement column names a
+		// directory that does not exist, and the failure would surface as "no
+		// license file found" somewhere else entirely.
 		// [LAW:no-silent-failure]
 		for _, line := range []string{
 			"github.com/example/mod\tv1.0.0\t/mod/dir\n",
@@ -284,8 +284,11 @@ func TestReplacementStringRefusesAnUnknownKind(t *testing.T) {
 //
 // `replace x => x v1.2.3` is the ordinary way to force a version, and it
 // reaches this parser looking exactly like a fork except that the replacement
-// path equals the module being replaced. lit's go.mod has no such replace
-// today, which is precisely why the rule needs a test rather than a reader.
+// path equals the module being replaced. Filed as a fork, it would produce a
+// pedigree.descendants entry naming the same module — a claim that x is a fork
+// of x, in a structured field, about a go.mod idiom anyone might add tomorrow.
+// lit's go.mod has no such replace today, which is precisely why the rule needs
+// a test rather than a reader.
 func TestParseReplacementSeparatesAForkFromAVersionPin(t *testing.T) {
 	const modulePath = "github.com/spf13/viper"
 

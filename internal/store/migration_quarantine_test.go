@@ -135,7 +135,8 @@ func TestCheckPendingQuarantineAllowsAlreadyApplied(t *testing.T) {
 
 // TestQuarantineTableSurvivesCheckpointReset is the critical invariant test:
 // after a Dolt checkpoint reset, the migration_quarantine table still exists.
-// This verifies the bootstrap-before-checkpoint ordering.
+// This verifies the bootstrap-before-checkpoint ordering, which keeps the
+// quarantine table from being erased by the very reset it is meant to survive.
 func TestQuarantineTableSurvivesCheckpointReset(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

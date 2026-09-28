@@ -37,10 +37,11 @@ func initLeaf() (wsLeaf, wsAcquire) {
 	skipAgents := fs.Bool("skip-agents", false, "Skip AGENTS.md integration update")
 	prefix := fs.String("prefix", "", "Issue ID prefix for a new workspace (default: derived from the repository name)")
 
-	// A flag the caller never typed is the zero request. A flag they DID type is minted through the same
-	// boundary `lit prefix set` uses, so `--prefix ""` is refused here instead of
-	// being demoted to "no flag" and then failing further in with a message
-	// telling them to pass the flag they just passed. [LAW:no-silent-failure]
+	// A flag the caller never typed is the zero request, which runs the default
+	// derivation. A flag they DID type is minted through the same boundary
+	// `lit prefix set` uses, so `--prefix ""` is refused here instead of being
+	// demoted to "no flag" and then failing further in with a message telling
+	// them to pass the flag they just passed. [LAW:no-silent-failure]
 	acquire := func() (workspace.Info, error) {
 		// Arity is settled before anything is created -- upstream, in
 		// parseLeaf, which every leaf's pipeline runs before it acquires.
@@ -52,7 +53,9 @@ func initLeaf() (wsLeaf, wsAcquire) {
 		// corrected re-run. The effect must not precede the check that refuses
 		// it. [LAW:effects-at-boundaries] [LAW:parse-dont-validate]
 		//
-		// The usage sentence it prints is `initUsage`, set on the leaf below.
+		// init carries no arity check of its own: the guarantee it needs is the
+		// one every leaf gets. The usage sentence it prints is `initUsage`, set
+		// on the leaf below. [LAW:single-enforcer]
 		if !fs.Changed("prefix") {
 			return resolveWorkspaceFromWD(workspace.PrefixRequest{})
 		}
@@ -91,9 +94,10 @@ func initLeaf() (wsLeaf, wsAcquire) {
 			// state" rather than "confirm the remote" — because initSyncFailed also
 			// covers a local store read failing (store.LocalHasTickets erroring),
 			// which has nothing to do with the remote; syncOutcome.Error carries
-			// the specific cause either way. buildNote rides along too, so a failure
-			// names it without a second `lit version` round trip.
-			// [LAW:effects-at-boundaries]
+			// the specific cause either way. buildNote rides along too: a stale
+			// local binary silently missing a landed fix is a suspected cause of
+			// exactly this failure, so a failure names it without a second
+			// `lit version` round trip. [LAW:effects-at-boundaries]
 			return fmt.Errorf(
 				"could not confirm the workspace state, so init is refusing to create a fresh store: %s (%s)",
 				syncOutcome.Error, resolveBuildStatusNote(time.Now()),

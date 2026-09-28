@@ -42,18 +42,25 @@ type columnSpec struct {
 // below it.
 //
 // The ordering is the whole point. Two levels cannot express "this column
-// needs strictly more than that one". [LAW:types-are-the-program] the ladder is
-// the strongest true theorem about this domain — three levels, strictly ordered
-// — and it moves the guarantee off the loader and onto the declaration: given
-// what each column declares, columnSourceFor makes "served less than the
-// projection's maximum rung" unrepresentable rather than merely absent today.
+// needs strictly more than that one", so `blocked` — which needs the annotation
+// registry's verdict — could only declare the relation graph and be served it,
+// and the same column name would print different values on `lit ls` and `lit
+// backlog`. A bool has no way to say a column is under-served, so nothing would
+// fail; the cell would just quietly mean less. [LAW:types-are-the-program] the
+// ladder is the strongest true theorem about this domain — three levels,
+// strictly ordered — and it moves the guarantee off the loader and onto the
+// declaration: given what each column declares, columnSourceFor makes "served
+// less than the projection's maximum rung" unrepresentable rather than merely
+// absent today.
 //
 // Be precise about what that does NOT cover: the type cannot check that a
 // column declares the RIGHT rung. Writing `source: sourceRelations` on `blocked`
-// compiles cleanly, so the compiler is not the thing standing between the repo
-// and a regression here — TestColumnSourceLadder is, alongside both
-// blocked-column agreement tests. Verified by mutation: that
-// one-word downgrade builds with no error and fails four tests.
+// compiles cleanly and makes `lit ls --columns blocked` answer "a still-open
+// dependency edge" while `lit backlog` answers the registry's kinds, so the
+// compiler is not the thing standing between the repo and a regression here —
+// TestColumnSourceLadder is, alongside both blocked-column agreement tests.
+// Verified by mutation: that one-word downgrade builds with no error and fails
+// four tests.
 // [LAW:no-mode-explosion] a new level is a new constant here, not a new flag
 // threaded through every loader.
 type columnSource int
@@ -171,7 +178,10 @@ func columnsFlagUsage() string {
 // The output type is the proof: a []columnSpec can only be assembled here, out
 // of registry entries, so no stage downstream can be holding a column name that
 // nothing knows how to render — and none of them re-checks, because inland
-// there is nothing left to check. [LAW:parse-dont-validate] [LAW:no-silent-failure]
+// there is nothing left to check. Mapping a failure onto the success-shaped
+// default projection would return a well-formed table under exit 0 for
+// `--columns bogus` — a value with the exact shape of a real answer meaning "I
+// could not do my job". [LAW:parse-dont-validate] [LAW:no-silent-failure]
 func parseColumnSelection(expr string) ([]columnSpec, error) {
 	names := splitCSV(strings.ToLower(expr))
 	if len(names) == 0 {

@@ -31,7 +31,8 @@ import (
 //     target, never a reverse.
 //
 // [LAW:types-are-the-program] The message is a discriminated rendering of the
-// domain fact (openable), not a guess. It is the mirror of
+// domain fact (openable), not a guess — unconditionally naming downgrade would
+// be a misleading remediation for the not-openable case. It is the mirror of
 // store.DowngradeTargetAheadError: each direction refuses the other's job, so
 // version traversal has exactly two entry points and neither impersonates the
 // other [LAW:one-type-per-behavior].

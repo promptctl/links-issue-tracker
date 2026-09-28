@@ -174,7 +174,13 @@ func (w worktreeRecord) uninhabited() bool { return w.prunable || w.bare }
 //
 // [LAW:no-silent-failure] `-z` is what makes any of the above true, and it is
 // not a nicety. A newline is a legal byte in a POSIX path, and the newline-
-// terminated format emits paths raw.
+// terminated format emits paths raw, so a worktree at a path ending in the
+// literal bytes "\nprunable" produces a record whose second LINE is the word
+// `prunable` — parsed as an attribute of the live record it has just opened,
+// which then silently vanishes from the enumeration and takes its checkout's
+// claims with it. `\nbare` does the same; `\nbranch <ref>` corrupts the
+// address. That is the precise failure this leg exists to prevent, reached
+// without any error at all.
 //
 // The remedy is not a check. The newline-terminated format is ambiguous BY
 // CONSTRUCTION for these paths — that is why git grew `-z` — so a parser reading

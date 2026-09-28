@@ -216,9 +216,10 @@ func TestPruneRemoteCacheCollectsAbandonedMirrors(t *testing.T) {
 
 // TestPruneRemoteCacheIsNotBlockedByOneStuckMirror pins the head-of-line
 // property. plan.abandoned is sorted, so an entry that can never be removed is
-// reached first on every push for the life of the workspace. The failure still
-// has to be reported — the point is that it stops being a gate on everyone
-// else's collection.
+// reached first on every push for the life of the workspace; returning on it
+// would mean nothing sorting after it is ever attempted again, however
+// removable. The failure still has to be reported — the point is that it stops
+// being a gate on everyone else's collection.
 func TestPruneRemoteCacheIsNotBlockedByOneStuckMirror(t *testing.T) {
 	t.Parallel()
 	if os.Geteuid() == 0 {

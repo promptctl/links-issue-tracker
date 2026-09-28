@@ -317,9 +317,9 @@ func TestBuildSBOMDeterministic(t *testing.T) {
 // TestSBOMEndToEndCoversDolt is a fast, offline-free-of-cyclonedx-cli test:
 // generate the SBOM from the REAL linked module set and confirm it lists
 // github.com/dolthub/dolt at the pinned version resolved from the build, with
-// a matching purl. The release workflow
-// additionally runs `cyclonedx validate` against the shipped file; this proves
-// the content contract without that external tool.
+// a matching purl. The release workflow additionally runs `cyclonedx validate`
+// against the shipped file; this proves the content contract without that
+// external tool.
 func TestSBOMEndToEndCoversDolt(t *testing.T) {
 	t.Parallel()
 	entries := realEntries(t)
@@ -481,8 +481,8 @@ func TestSBOMPedigreeRecordsBothReplacementShapes(t *testing.T) {
 		if !strings.Contains(c.Pedigree.Notes, "No descendant component is recorded") {
 			t.Errorf("pedigree notes do not explain the absent component: %q", c.Pedigree.Notes)
 		}
-		// A replace target may be ../sibling or absolute, so the SBOM may not say the
-		// copy sits inside this repository either.
+		// A replace target may be ../sibling or absolute, so the SBOM, like the
+		// bundle, may not say the copy sits inside this repository.
 		for _, claim := range []string{"inside lit's own repository", "repository-relative"} {
 			if strings.Contains(c.Pedigree.Notes, claim) {
 				t.Errorf("pedigree notes claim %q, which a ../sibling or absolute replace target would falsify: %q", claim, c.Pedigree.Notes)
@@ -545,9 +545,9 @@ func TestSBOMPedigreeRecordsBothReplacementShapes(t *testing.T) {
 }
 
 // TestSBOMDisclosesEveryReplacementInTheRealBuild is the guard, run against
-// what lit actually links rather than a fixture: a `replace`
-// added to go.mod tomorrow cannot ship as if it were upstream, because the
-// component it produces will have no pedigree and this fails.
+// what lit actually links rather than a fixture: a `replace` added to go.mod
+// tomorrow cannot ship as if it were upstream, because the component it
+// produces will have no pedigree and this fails.
 //
 // It is driven from the inventory rather than from a list of the three
 // substitutions that exist today. A hardcoded list is a second place to

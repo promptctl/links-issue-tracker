@@ -14,9 +14,10 @@ import (
 // the visibility contract: with on-change cadence (the shipped default) and a
 // remote that has become unreachable, a session that runs ONLY mutating
 // commands sees a loud push-failure signal within a bounded time window — it
-// does not have to happen to run backlog/next/show. The delivery test covers
-// the happy half (a mutation's data reaches the remote); this is the failure
-// half (a mutation's data NOT reaching the remote reaches the operator).
+// does not have to happen to run backlog/next/show.
+// TestEagerPushOnDefaultCadenceReachesRemoteWithoutExplicitPush covers the
+// happy half (a mutation's data reaches the remote); this is the failure half
+// (a mutation's data NOT reaching the remote reaches the operator).
 //
 // The complementary no-cry-wolf property is pinned first: while the remote is
 // healthy, a mutating command must NOT warn, even though every mutating

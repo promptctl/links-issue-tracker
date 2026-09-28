@@ -924,11 +924,15 @@ func TestSyncCompactAndPushDeepensOnAFragmentedOldGeneration(t *testing.T) {
 
 // A pass that completed inside a call whose push then failed is still a pass
 // that rewrote the store — the push failing afterwards does not un-rewrite it.
+// Reporting maintenance only on the success path would lose a deep collection
+// whenever the push it precedes fails, leaving an operator with "push failed"
+// and no account of the long full-store rewrite that just happened, which is
+// also the only thing explaining why the failed attempt took so long.
 // [LAW:no-silent-failure]
 //
 // The push is failed by naming a remote that was never added, so the failure
 // lands in pushWithinLock — after compactWithinLock has already run inside the
-// same closure.
+// same closure, which is the ordering that makes that loss possible.
 func TestSyncCompactAndPushNamesADeepPassInsideAFailedPush(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -972,14 +976,15 @@ func TestSyncCompactAndPushNamesADeepPassInsideAFailedPush(t *testing.T) {
 	}
 }
 
-// TestReconnectRotatorRecoversPoisonedOperation proves end to end against a
-// REAL store: when an operation fails with Dolt's online-GC connection-reset
-// error, the retry boundary rotates the live connection via the
-// real s.reconnect and the subsequent attempt succeeds on the fresh handle. The
-// CLI race that produces this error is timing-dependent and cannot be summoned
-// on demand, so this injects the exact Dolt error string at the seam and asserts
-// the recovery machinery — reconnect + retry — actually makes a real store usable
-// again. A post-recovery write confirms the rotated handle is fully functional.
+// TestReconnectRotatorRecoversPoisonedOperation proves, end to end against a
+// REAL store, that when an operation fails with Dolt's online-GC
+// connection-reset error, the retry boundary rotates the live connection via
+// the real s.reconnect and the subsequent attempt succeeds on the fresh handle.
+// The CLI race that produces this error is timing-dependent and cannot be
+// summoned on demand, so this injects the exact Dolt error string at the seam
+// and asserts the recovery machinery — reconnect + retry — actually makes a
+// real store usable again. A post-recovery write confirms the rotated handle is
+// fully functional.
 func TestReconnectRotatorRecoversPoisonedOperation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

@@ -445,8 +445,10 @@ type syncPushStep func(ctx context.Context, remote, branch string, setUpstream, 
 // maintenance rode along, and what went wrong.
 //
 // It is a function rather than a block inside performSyncPush because that is
-// what makes the question "does the trace carry this?" answerable.
-// [LAW:decomposition]
+// what makes the question "does the trace carry this?" answerable. Inline, the
+// only way to ask would be to stand up a workspace, a ref-carrying remote and a
+// live engine session and drive a real push. [LAW:decomposition] a job with no
+// name has no test.
 func syncPushTraceMetadata(remoteName, syncBranch string, result storage.SyncPushResult, pushErr error) map[string]string {
 	metadata := map[string]string{
 		"remote":      remoteName,

@@ -213,7 +213,8 @@ func (s *Store) reconcileToBaseline(ctx context.Context, guard *snapshotGuard) (
 		// (status-only, from/to columns that lied for archive/delete) is
 		// translated row-by-row into issue_events (+ issue_event_changes
 		// for status transitions) by translateIssueHistoryToEvents below,
-		// then the table itself is dropped.
+		// then the table itself is dropped. [LAW:no-silent-failure] —
+		// the legacy→v1 bridge does not destroy audit history.
 		{target: "issue_events", stmt: `CREATE TABLE issue_events (
 			id VARCHAR(191) PRIMARY KEY,
 			issue_id VARCHAR(191) NOT NULL,
@@ -245,8 +246,9 @@ func (s *Store) reconcileToBaseline(ctx context.Context, guard *snapshotGuard) (
 	// BOTH schema translation AND bookkeeping cleanup. A workspace that
 	// reaches this function was classified phaseAdopt — by definition
 	// NOT phaseManaged — so any rows present in goose_db_version are
-	// fabricated. Drop the table; adoptPreGooseWorkspace recreates it
-	// and stamps the baseline cleanly.
+	// fabricated: inserted without the migrations actually running. Drop
+	// the table; adoptPreGooseWorkspace recreates it and stamps the
+	// baseline cleanly.
 	//
 	// [LAW:types-are-the-program] The pre-condition for adoption is
 	// "no goose log, or a goose log we know is empty"; this gate
@@ -998,7 +1000,8 @@ func (s *Store) ensureUnifiedStatusSchema(ctx context.Context, guard *snapshotGu
 		{
 			// [LAW:single-enforcer] The UPDATE predicate matches the
 			// probe exactly so the UPDATE touches only inconsistent
-			// rows.
+			// rows; an UPDATE filtered only on `status <> 'closed'`
+			// would be a full-table write on every run.
 			probe:   `SELECT 1 FROM issues WHERE status <> 'closed' AND closed_at IS NOT NULL LIMIT 1`,
 			stmt:    `UPDATE issues SET closed_at = NULL WHERE status <> 'closed' AND closed_at IS NOT NULL`,
 			context: "normalize non-closed closed_at",

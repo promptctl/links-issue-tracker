@@ -6,9 +6,9 @@ package store
 // scanning they build on. Nothing here touches a Store, the database, or the
 // embedded registry; migration_runner.go composes these over registry content.
 //
-// [LAW:decomposition] The phase-classification/quarantine orchestration
-// engine and this self-contained parsing toolkit are separately readable and
-// testable.
+// [LAW:decomposition] This file is kept apart from migration_runner.go so the
+// phase-classification/quarantine orchestration engine and this
+// self-contained parsing toolkit are separately readable and testable.
 
 import (
 	"fmt"

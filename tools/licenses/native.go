@@ -341,7 +341,10 @@ func nativeEntries(classifier *lc.License) ([]Entry, error) {
 // This is what makes "permissive only" mean something for the half of the
 // inventory that never passes through Classify. The copyleft veto and the
 // hard failure on the Unknown sentinel both sit downstream of a classifier
-// verdict. [LAW:no-silent-failure]
+// verdict, so without this a native license would be an exact string with
+// nothing behind it: a maintainer bumping a version could write any identifier
+// at all, add it to allowed_licenses, and -check would print green with nothing
+// in the tree to say otherwise. [LAW:no-silent-failure]
 //
 // The check is a reconciliation, not a comparison, because a comparison is
 // false here. These are notice DOCUMENTS, not single-license files: measured,

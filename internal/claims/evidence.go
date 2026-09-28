@@ -15,7 +15,10 @@
 //
 // The write side reads from here too, and that is deliberate rather than a
 // layering slip: Claimant is what a storage engine compares to decide whether a
-// transition moved ownership.
+// transition moved ownership. With two definitions of ownership — the row's
+// assignee on the write side, the establishing event's checkout here — a
+// takeover between two checkouts sharing one assignee would fall into the gap
+// between them and record nothing. One home for "who holds this" closes it.
 // [LAW:one-source-of-truth]
 package claims
 

@@ -181,11 +181,10 @@ func TestIDStabilityFindingsDetectsLostAndExtraIDs(t *testing.T) {
 }
 
 // TestSourceValuesForAggregatesAcrossTables guards the conserved-value set:
-// when more than one table maps a column onto the
-// same target (legal — Validate's duplicate-target check is per-table, and count
-// conservation sums across tables), the reference set is the UNION of every
-// contributing column, so id stability does not flag a second table's ids as
-// spuriously extra.
+// when more than one table maps a column onto the same target (legal —
+// Validate's duplicate-target check is per-table, and count conservation sums
+// across tables), the reference set is the UNION of every contributing column,
+// so id stability does not flag a second table's ids as spuriously extra.
 func TestSourceValuesForAggregatesAcrossTables(t *testing.T) {
 	t.Parallel()
 	dump := RawDump{Tables: []RawTable{

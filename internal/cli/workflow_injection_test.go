@@ -28,7 +28,7 @@ func writeProjectWorkflow(t *testing.T, ap *app.App, rel, content string) {
 }
 
 // TestRunTransitionInjectsProjectWorkflowFromArbitraryNestedPath is the
-// ticket's end-to-end done-claim: a project workflow file, authored under a
+// end-to-end done-claim: a project workflow file, authored under a
 // nested path with no meaning of its own, fires through the real command path
 // (not just workflows.Dispatch called directly) and its body reaches stdout.
 func TestRunTransitionInjectsProjectWorkflowFromArbitraryNestedPath(t *testing.T) {
@@ -53,8 +53,8 @@ func TestRunTransitionInjectsProjectWorkflowFromArbitraryNestedPath(t *testing.T
 	}
 }
 
-// TestRunTransitionProjectLayerOverridesEmbeddedDoneByID is the ticket's other
-// explicit done-claim: a project-layer definition with id "done" replaces the
+// TestRunTransitionProjectLayerOverridesEmbeddedDoneByID is the other explicit
+// done-claim: a project-layer definition with id "done" replaces the
 // embedded default of the same id, end to end through `lit done`.
 func TestRunTransitionProjectLayerOverridesEmbeddedDoneByID(t *testing.T) {
 	ctx := context.Background()

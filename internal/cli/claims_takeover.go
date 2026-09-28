@@ -17,8 +17,10 @@ import (
 // laneRelation is what a lane's standing means TO THIS CHECKOUT — the single
 // reading of claims.Standing that every consumer in this package shares.
 //
-// Resolving the reading once here is what lets the takeover gate and the routing verdict consume a value instead
-// of re-deriving "is this mine, is it fresh" inline.
+// Read against an identity in several places, a lane's standing can disagree
+// with itself. Resolving the reading once here is what lets the takeover gate
+// and the routing verdict consume a value instead of re-deriving "is this
+// mine, is it fresh" inline.
 // [LAW:one-source-of-truth] [LAW:types-are-the-program]
 //
 // There are three relations and not four. A lane whose claim has expired is

@@ -47,10 +47,10 @@ func ChildNamespace(parentID string) Namespace {
 // from being handed straight to the next create: reaching it again takes a
 // hash coincidence rather than a certainty.
 //
-// The guarantee is the one top-level ids run on, no weaker and no
-// stronger, and it is probabilistic: the hash is truncated, so Mint re-rolls
-// against the local store and a birthday chance remains against ids no local
-// probe can see. Creator is hashed for the same reason, but the Dolt store
+// The guarantee is the one top-level ids run on, no weaker and no stronger,
+// and it is probabilistic: the hash is truncated, so Mint re-rolls against the
+// local store and a birthday chance remains against ids no local probe can
+// see. Creator is hashed for the same reason, but the Dolt store
 // stamps every create with one literal creator, so the instant carries it alone.
 type Content struct {
 	Topic       string

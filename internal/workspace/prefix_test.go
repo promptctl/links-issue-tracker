@@ -37,7 +37,10 @@ func TestResolveRefusesEveryNameItCannotDeriveAPrefixFrom(t *testing.T) {
 			if err == nil {
 				t.Fatalf("Resolve() in a repository named %q succeeded, want a refusal", name)
 			}
-			// The type is what the CLI dispatches on.
+			// The type is what the CLI dispatches on. Untyped, this would reach
+			// the unclassified default and tell the caller to retry a
+			// deterministic refusal and then run `lit doctor` on a workspace
+			// that does not exist.
 			if !errors.Is(err, ErrIssuePrefixRefused) {
 				t.Fatalf("Resolve() error = %v, want it to wrap ErrIssuePrefixRefused", err)
 			}

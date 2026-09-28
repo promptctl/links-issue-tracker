@@ -138,9 +138,14 @@ func TestBacklogAcceptsValidColumns(t *testing.T) {
 	}
 }
 
-// "-" is the same value that honestly means "no parent" and "not blocked".
-// Asserting the real ids and the `blocked` label is what makes reverting the
-// derivation in runWorkable fail here instead of printing dashes.
+// TestBacklogRendersRelationColumns pins that `parent` and `blocked`, which
+// `columnsFlagUsage()` advertises and parseColumnSelection accepts on `lit
+// backlog`, render real values rather than "-" through a nil relations map.
+//
+// "-" is the same value that honestly means "no parent" and "not blocked", so
+// that failure is indistinguishable from a true answer rather than visible as
+// one. Asserting the real ids and the `blocked` label is what makes reverting
+// the derivation in runWorkable fail here instead of printing dashes.
 func TestBacklogRendersRelationColumns(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Epic", Topic: "cols", IssueType: "epic", Priority: 1})
@@ -190,7 +195,11 @@ func TestBacklogRendersRelationColumns(t *testing.T) {
 }
 
 // TestBacklogBlockedColumnAgreesWithTheContextLine covers the blocker that has
-// no dependency edge at all.
+// no dependency edge at all: a leaf whose only blocker is the sibling gate must
+// not render "-" under `blocked` on the line directly above its own "blocked:
+// earlier sibling X still open" context line. A column that asks DependsOn
+// while the line asks the readiness classifier would make one row say both
+// things at once.
 //
 // The assertion is deliberately the pair, not the cell: it reads the column and
 // the context line out of the same output and requires them to agree, so any

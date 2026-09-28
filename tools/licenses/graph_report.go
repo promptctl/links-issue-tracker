@@ -59,11 +59,12 @@ const (
 //
 // What three rows is chosen against is the elision itself: a module whose run
 // exceeds the cap has its remainder replaced by a count, so anything after the
-// third row of that module is no longer readable in place. Measured on this
-// branch, THREE runs already exceed it — the classifier corpus twice (nested,
-// +137; unclassified, +28) and gonum once (unclassified, +1). gonum's three
-// printed rows are THIRD_PARTY_LICENSES entries and the elided fourth is not,
-// since nothing in that directory sorts after W3C-TestSuite-LICENSE.
+// third row of that module is no longer readable in place. Measured against
+// this repository's graph, THREE runs already exceed it — the classifier corpus
+// twice (nested, +137; unclassified, +28) and gonum once (unclassified, +1).
+// gonum's three printed rows are THIRD_PARTY_LICENSES entries and the elided
+// fourth is not, since nothing in that directory sorts after
+// W3C-TestSuite-LICENSE.
 //
 // One run sits exactly ON the cap and is worth naming rather than rounding
 // off: github.com/apache/thrift contributes three unclassified rows
@@ -213,7 +214,7 @@ func rootGrantLicense(hits []LicenseHit) string {
 // the day it landed, for reasons that are mostly noise, and a gate that cries
 // wolf gets switched off within a month.
 //
-// Graph mode never gates. The number behind the answer is above, at
+// Graph mode never gates. The number behind that decision is above, at
 // rowsPerModule — 140 of the 148 nested rows are one dependency's reference
 // corpus. What stands in for a gate is a written verdict per row, in
 // LICENSE-NOTES.md, which FORKS.md points at and which this report's sections

@@ -6,6 +6,10 @@ package cli
 // flag interception, unknown-flag classification), and splitArgs separates
 // positionals from flag tokens ahead of that parse. Nothing here knows any
 // command's business logic; handlers compose these.
+//
+// [LAW:decomposition] The flag-parsing framework lives apart from cli.go so it,
+// the business command handlers, and the typed error taxonomy do not grow in
+// one file.
 
 import (
 	"errors"
@@ -40,9 +44,10 @@ func newCobraFlagSet(use string) *cobraFlagSet {
 	}
 	cmd.InitDefaultHelpFlag()
 	// Cobra writes that flag's text from cmd.Name(), which is the FIRST word of
-	// Use. A leaf's name here is its whole invocation path, which is what the
-	// caller typed and what the surrounding "Usage of rank set:" line already
-	// says.
+	// Use — so every multi-word leaf would describe itself by its family: `rank
+	// set` advertising "help for rank", `dep add` "help for dep". A leaf's name
+	// here is its whole invocation path, which is what the caller typed and what
+	// the surrounding "Usage of rank set:" line already says.
 	cmd.Flags().Lookup("help").Usage = "help for " + use
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
@@ -140,7 +145,9 @@ func parseFlagSet(fs *cobraFlagSet, args []string, stdout io.Writer) error {
 		// Past ErrHelp, pflag's Parse fails only with its four typed errors — an
 		// unknown flag, a missing value, an invalid value, bad syntax — and every
 		// one is the caller mis-writing the command line. So all of them are one
-		// UsageError, the same answer the root FlagErrorFunc gives.
+		// UsageError, the same answer the root FlagErrorFunc gives. Classifying
+		// by message prefix instead would leave `-x`, `--limit abc` and `---x` as
+		// bare errors that exit 1 with "Retry the command".
 		// [LAW:types-are-the-program] [LAW:single-enforcer]
 		//
 		// The retired flag is matched on the name pflag parsed, so `--continue`
@@ -166,7 +173,12 @@ func parseFlagSet(fs *cobraFlagSet, args []string, stdout io.Writer) error {
 // exactly for the flags that do not — so this ASKS the flag set instead of
 // inferring it from the shape of the following token.
 // [LAW:one-source-of-truth] the flag set is the authority on its own flags'
-// arity.
+// arity. "The next token has no leading dash" is a statement about the
+// ARGUMENT and not about the FLAG, and inferring arity from it is wrong in both
+// directions: it would feed a boolean the positional that follows it (`lit
+// prefix set --apply <prefix>` would lose the prefix and refuse itself as
+// malformed), and feed an optional-value flag a value pflag accepts only as
+// `--flag=value`, so the token would arrive where nothing expects it.
 //
 // An unknown flag consumes nothing: pflag refuses it a moment later, and leaving
 // the following token where the caller put it keeps that refusal about the flag
@@ -179,8 +191,9 @@ func (fs *cobraFlagSet) flagTakesValue(token string) bool {
 	var flag *pflag.Flag
 	switch {
 	case strings.HasPrefix(token, "---"):
-		// Not a spelling pflag accepts. [LAW:one-source-of-truth] answer about
-		// the token as written.
+		// Not a spelling pflag accepts. Stripping every dash would resolve
+		// `---limit` to the real --limit and answer about a flag the caller did
+		// not write. [LAW:one-source-of-truth] answer about the token as written.
 		return false
 	case strings.HasPrefix(token, "--"):
 		flag = flags.Lookup(strings.TrimPrefix(token, "--"))
@@ -250,10 +263,11 @@ func (fs *cobraFlagSet) optionalValueFlagNames() []string {
 // followed immediately by the POSIX terminator. pflag pairs them — `--` becomes
 // the flag's literal value — and this loop mirrors pflag's pairing everywhere
 // else, so which token is a value is not in question here. What is in question
-// is whether a caller ever means it. `--` is the word for "no more flags". The
-// caller who genuinely wants those two characters as a value has a spelling
-// that says so, `--by=--`, and it is unaffected: a token containing `=` never
-// reaches this pairing at all.
+// is whether a caller ever means it. `--` is the word for "no more flags", and
+// taking it as a value would let `lit label add --by -- <id> <label>` apply a
+// label attributed to "--" at exit 0. The caller who genuinely wants those two
+// characters as a value has a spelling that says so, `--by=--`, and it is
+// unaffected: a token containing `=` never reaches this pairing at all.
 // [LAW:no-silent-failure] refuse the shape rather than perform a write on a
 // reading nobody asked for.
 type terminatorAsValue struct{ flag string }
@@ -298,6 +312,16 @@ func splitArgs(args []string, positionalCount int, fs *cobraFlagSet) ([]string, 
 			// like. That is pflag's own rule — it takes the following argv
 			// element unconditionally when NoOptDefVal is empty — and this loop
 			// must model it EXACTLY rather than approximate it.
+			//
+			// Declining to pair when the next token begins with a dash would
+			// assume pflag then refuses the flag; pflag pairs anyway (`lit
+			// upgrade --to --help` fetches a release tagged `v--help`), so the
+			// two would disagree about which token is a value, and every
+			// consequence of that disagreement is a misfiled token: a positional
+			// pulled into the flag stream and then refused (`lit start --reason
+			// --reason <id>`), or the terminator withheld and the tokens behind
+			// it dropped, which would let `lit init --prefix --prefix -- stray`
+			// create a workspace and lose `stray`.
 			// [LAW:one-source-of-truth] pflag is the authority on its own
 			// pairing; this must not become a second one.
 			if index+1 < len(args) && fs.flagTakesValue(arg) {

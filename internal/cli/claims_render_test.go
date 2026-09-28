@@ -163,8 +163,10 @@ func TestFormatClaimLineExpiredClaimRendersNothingEvenWithAnAddress(t *testing.T
 // driven through the notice it appears in by
 // TestTransferNoticeNamesAPredecessorThatMintedNoToken.
 //
-// The empty-assignee rows are the ruling: the record carries an establishing
-// event, so somebody demonstrably took this ticket.
+// The empty-assignee rows are the ruling: "(unassigned)" would describe the
+// empty field while saying nothing about the holder being announced — and the
+// record carries an establishing event, so somebody demonstrably took this
+// ticket.
 func TestDescribeClaimantNamesAnUnaddressableHolder(t *testing.T) {
 	for _, row := range []struct {
 		name     string
@@ -227,7 +229,8 @@ func TestTransferNoticeNamesAPredecessorThatMintedNoToken(t *testing.T) {
 // A zero Attribution is both a legitimate holder and the zero value of
 // claimContext.self, and the two coincide on exactly the reports that build a
 // context carrying no Stream at all -- `lit sync`'s contested-lane report among
-// them.
+// them. Reading that coincidence as proof of ownership would announce a foreign
+// lane as "claimed here: this checkout".
 //
 // So cc.self varies down the rows and the expected badge does not: rendering
 // reads the holder and the addresses this machine actually resolved, never who

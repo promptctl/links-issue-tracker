@@ -16,7 +16,11 @@ import (
 )
 
 // backlog is the one consumer of gatherWorkableAnnotated's shared query
-// through the workableView preset shape below.
+// through the workableView preset shape below. `next` has a genuinely different
+// shape — a multi-step precedence over claim standings producing a
+// discriminated outcome, not a single-row keep() over an ordered list — so it
+// lives in its own file (next.go) rather than stretching this preset to fit a
+// shape it wasn't designed for. [LAW:carrying-cost]
 
 // workableKnobs carries the parsed values of every knob a workable view can
 // expose. A view that does not expose a knob leaves it at the zero value,
@@ -55,7 +59,9 @@ type workableView struct {
 	// renderer prints are not all facts about the printed rows: "what closing
 	// this unblocks" and the rank-inversion count are properties of the workable
 	// queue, and computing them from the view makes them shrink as the view does,
-	// silently.
+	// silently. They are separate TYPES because with the queue as a second
+	// []annotation.AnnotatedIssue, reading the wrong one would compile, run and
+	// print a shorter truth. [LAW:types-are-the-program]
 	render func(w io.Writer, columns []columnSpec, rows []annotation.AnnotatedIssue, facts queueFacts, details map[string]storage.IssueRelations, cells map[string]derivedColumns, cc claimContext, notice focusNotice) error
 	// occasion builds the workflow event this view fires once render has
 	// already succeeded on the same rows — backlog's is a constant (a
@@ -87,10 +93,14 @@ func (v workableView) usage() string {
 // readinessColumnsFor builds the derived cells for annotated rows. `parent`
 // comes from the graph; `blocked` comes from ClassifyReadiness.
 // [LAW:one-source-of-truth] the annotation registry decides what blocks, and
-// rendering may not carry a shorter list.
+// rendering may not carry a shorter list; deriving this cell from DependsOn
+// edges alone would carry exactly that shorter list, and it would disagree on
+// screen for any row gated by an earlier sibling, a missing field, or
+// needs-design.
 //
 // This is the ONLY producer of a blocked cell. `lit ls` runs the annotation
-// pipeline when `blocked` is projected and lands here too.
+// pipeline when `blocked` is projected and lands here too, which is why there
+// is one function rather than a shorter sibling.
 func readinessColumnsFor(rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations) map[string]derivedColumns {
 	out := make(map[string]derivedColumns, len(rows))
 	for _, row := range rows {
@@ -196,7 +206,8 @@ func workableLeaf(view workableView) appLeaf {
 		rows := applyLimit(kept, knobs.limit)
 		// Built AFTER the trim it reports, not beside the partition: --limit cuts
 		// rows the scope kept, so a notice constructed two lines up could only ever
-		// describe half the gap between what was gathered and what is printed.
+		// describe half the gap between what was gathered and what is printed —
+		// and would print "Nothing is hidden" over the other half.
 		//
 		// trimmed spans keep → limit, not scope → limit, because the sentence it
 		// feeds names --limit as the cause. keepAll is identity today, so the two

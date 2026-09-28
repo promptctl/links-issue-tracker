@@ -89,11 +89,12 @@ func commandErrorReason(err error) string {
 	}
 	// An action on an epic is refused because an epic's state is its children's
 	// to set. Both halves are terminal — no retry of the same command can move
-	// either — so neither may reach the default's "Retry the command". They are
-	// separate reasons because the act each calls for is different: one asks
-	// for a state that already holds and wants nothing done at all, the other
-	// asks for something only the children can do, and a single reason could
-	// only name one of them.
+	// either — so neither may reach the default's "Retry the command", which
+	// would tell the agent closing a finished epic to loop on a condition that
+	// cannot change. They are separate reasons because the act each calls for
+	// is different: one asks for a state that already holds and wants nothing
+	// done at all, the other asks for something only the children can do, and
+	// a single reason could only name one of them.
 	// [LAW:one-type-per-behavior]
 	var containerAction model.ContainerActionError
 	if errors.As(err, &containerAction) {
@@ -136,9 +137,11 @@ func commandErrorReason(err error) string {
 	// The other negative answer to "am I somewhere lit can work?": a git
 	// repository that `lit init` has never run in. Terminal in the same way —
 	// no rerun of the same command can make the workspace exist — so it must
-	// not reach the default's retry advice. It carries its own reason rather than
-	// sharing outside_git_workspace's because the act differs: initialize
-	// here, versus go somewhere already initialized. [LAW:one-type-per-behavior]
+	// not reach the default's retry advice, which points the agent at a loop
+	// and at `lit doctor`, a command that reads the very workspace that is
+	// missing. It carries its own reason rather than sharing
+	// outside_git_workspace's because the act differs: initialize here, versus
+	// go somewhere already initialized. [LAW:one-type-per-behavior]
 	if errors.Is(err, store.ErrWorkspaceNotInitialized) {
 		return "workspace_not_initialized"
 	}
@@ -261,8 +264,9 @@ func commandErrorRemediation(reason string) string {
 		//
 		// The lead obeys that rule too, which is why it claims determinism and
 		// not startability: withheldByScope stamps every scope-excluded row
-		// off-path without ever running capacityFor on it.
-		// [LAW:one-source-of-truth]
+		// off-path without ever running capacityFor on it, so "nothing here is
+		// startable" is a verdict this line has no reading to support — and
+		// NoWork.Error() already declines to make it. [LAW:one-source-of-truth]
 		//
 		// The last clause names `lit backlog --all` rather than `lit backlog`
 		// because "the whole queue" has to be true on every path that reaches
@@ -275,9 +279,10 @@ func commandErrorRemediation(reason string) string {
 		return "Do not retry unchanged — routing is deterministic and repeats this answer until something in the backlog moves. That is the backlog's state, not a fault. If `--type`, `--labels`, `--assignee`, or `--status` narrowed this run, drop the filter and ask again. If a `focus` label narrowed it, `lit next --all` routes over the whole queue for one run and `lit label rm <id> focus` lifts the scope. Otherwise `lit backlog --all` shows the whole queue and who holds what, and `lit new` adds work if it is genuinely empty."
 	case "state_already_holds":
 		// No act to name, because there is none: the caller asked for a state
-		// the workspace is already in. It must still say "do not retry". How the
-		// state was reached is the message's to say, not this line's, so nothing
-		// here restates it. [LAW:one-source-of-truth]
+		// the workspace is already in. It must still say "do not retry":
+		// without it, an unattended agent loops on a state nothing it runs can
+		// change. How the state was reached is the message's to say, not this
+		// line's, so nothing here restates it. [LAW:one-source-of-truth]
 		return "No action is needed — the command asked for a state the workspace is already in, and the message above says how that state was reached. Do not retry: running it again cannot change the answer, and `lit doctor` has nothing to diagnose because nothing is broken."
 	case "takeover_unconfirmed":
 		// Action-only, like its neighbours: the message names the holder. Both
@@ -292,18 +297,21 @@ func commandErrorRemediation(reason string) string {
 		// condition and the command that resolves it, so what this line adds is
 		// that the condition is terminal and what the two ways out of it are.
 		//
-		// `lit doctor` is not named even to dismiss it. An agent that skims
-		// reads the command, not the negation around it, so the honest way to
-		// stop sending it is to leave the string out.
+		// `lit doctor` is not named even to dismiss it. The default remediation
+		// this reason displaces sends agents there, at a workspace that does
+		// not exist for doctor to read; an agent that skims reads the command,
+		// not the negation around it, so the honest way to stop sending it is
+		// to leave the string out.
 		//
 		// No agent-instructions envelope, deliberately. The envelopes elsewhere
 		// mean "mechanical, run it without asking"; `lit init` writes a
 		// workspace and an agents section into someone's repository, which is
 		// the repo owner's decision, not a step an agent takes on its own to
 		// get itself unblocked.
-		// The claim is about *this* command, not about every command.
-		// Remediation is the surface an agent acts on, so a convenient
-		// overstatement here is a defect.
+		// The claim is about *this* command, not about every command. Not every
+		// store-touching command repeats this answer until a workspace exists:
+		// the write paths bootstrap one. Remediation is the surface an agent
+		// acts on, so a convenient overstatement here is a defect.
 		// [LAW:no-silent-failure]
 		return "Do not retry unchanged — this repository has no lit workspace, and retrying this command cannot create one. Run `lit init` here to create it, or change to a directory that already has one."
 	case "bulk_partial_failure":

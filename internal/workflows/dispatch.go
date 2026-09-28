@@ -74,9 +74,9 @@ func Dispatch(w io.Writer, errOut io.Writer, ws workspace.Info, o Occasion) erro
 }
 
 // Interpolate replaces the <id> placeholder in an injected body with the
-// occasion's issue id. It is the one substitution workflow bodies get today.
-// Exported so `lit workflows dry-run` can preview the
-// same interpolated body Dispatch would actually inject.
+// occasion's issue id. It is the one substitution workflow bodies get.
+// Exported so `lit workflows dry-run` can preview the same interpolated body
+// Dispatch would actually inject.
 func Interpolate(body, issueID string) string {
 	return strings.ReplaceAll(body, "<id>", issueID)
 }

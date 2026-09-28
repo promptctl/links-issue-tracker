@@ -195,7 +195,9 @@ func writeTinyFreshnessWindow(t *testing.T, dir string) {
 // ordinary one — a checkout driving no agent session resolves no assignee
 // whatsoever, so every checkout one person runs looks identical on that axis,
 // and two worktrees of one agent session share a session id. Ownership is keyed
-// on the checkout, not the assignee, so this IS a transfer.
+// on the checkout, not the assignee, so this IS a transfer; a write side
+// comparing assignees would read it as a repeated self-start, exit 0, record
+// nothing, and leave both checkouts believing they held the lane.
 // [LAW:no-silent-failure]
 func TestStartTakesOverALiveLaneUnderOneSharedIdentity(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
@@ -255,8 +257,11 @@ func TestStartTakesOverALiveLaneUnderOneSharedIdentity(t *testing.T) {
 // as Unclaimed and authorizeStart asks for no ceremony. The first start must
 // agree and stay silent.
 //
-// Every other test here creates its ticket without --assignee, so the prior
-// claimant is the exact zero value and the branch never fires.
+// Comparing the whole Claimant against its zero value would read "assignee
+// set at creation" as "previously held", and print
+// `claim transferred: alice -> alice` for a ticket's first-ever start. Every
+// other test here creates its ticket without --assignee, so the prior claimant
+// is the exact zero value and the branch never fires.
 func TestStartOnAPresetAssigneeAnnouncesNoTransfer(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
 	base := t.TempDir()

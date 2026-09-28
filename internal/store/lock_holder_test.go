@@ -112,9 +112,10 @@ func TestContentionErrorNamesTheLiveHolder(t *testing.T) {
 	}
 }
 
-// TestWaitAnnouncesItselfRepeatedly pins the other half: a wait that outlasts
-// the grace reports itself, names its holder, and KEEPS reporting — one line
-// that scrolled away fifteen minutes ago is silence.
+// TestWaitAnnouncesItselfRepeatedly pins the other half: silence is what makes
+// a wedged lock indistinguishable from slow work, so a wait that outlasts the
+// grace reports itself, names its holder, and KEEPS reporting — one line that
+// scrolled away fifteen minutes ago is the same silence.
 func TestWaitAnnouncesItselfRepeatedly(t *testing.T) {
 	notices := captureLockNotices(t, 10*time.Millisecond, 10*time.Millisecond)
 	ctx := context.Background()
@@ -155,9 +156,11 @@ func TestWaitAnnouncesItselfRepeatedly(t *testing.T) {
 // that assert a wait DOES report shrink it to milliseconds, and the asymmetry
 // is the point. The reporter fires on wall-clock elapsed, so a grace set near
 // an uncontended acquisition's own duration hands the verdict to the
-// scheduler: this test's premise is that the acquisition never waits. An hour
-// is a grace an uncontended acquisition cannot reach on any machine, so the
-// only thing that can print here is the defect being pinned.
+// scheduler: this test's premise is that the acquisition never waits, and a
+// 10ms grace would make ordinary delay -- a parallel package, a loaded
+// runner -- into a printed line and a red test. An hour is a grace an
+// uncontended acquisition cannot reach on any machine, so the only thing that
+// can print here is the defect being pinned.
 //
 // The reporter's stop is a contract of announceLockWait rather than of
 // acquisition, and TestStoppedNoticeReporterStaysStopped pins it directly and

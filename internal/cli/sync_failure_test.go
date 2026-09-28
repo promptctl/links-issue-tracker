@@ -46,6 +46,8 @@ func assertContractElements(t *testing.T, block string, wantCommands ...string) 
 	if !strings.HasPrefix(block, "<agent-instructions>") {
 		t.Errorf("block is not wrapped as agent-instructions:\n%s", block)
 	}
+	// The ignorable "will retry" shrug must never be the failure surface.
+	// [LAW:no-silent-failure]
 	if strings.Contains(block, "will retry") {
 		t.Errorf("block reintroduced the ignorable 'will retry' framing:\n%s", block)
 	}

@@ -284,7 +284,8 @@ func TestPartitionGraphRoutesEachFinding(t *testing.T) {
 // different: permissive is permissive at any depth. [LAW:no-silent-failure]
 //
 // The excepted license here is LGPL-3.0 rather than the classifier's Unknown
-// sentinel — see TestSentinelLicensesHaveNoPathThroughAnyFilter.
+// sentinel, because an exception for the sentinel is not a shape a policy can
+// express — see TestSentinelLicensesHaveNoPathThroughAnyFilter.
 func TestModuleExceptionsReachOnlyTheRootGrant(t *testing.T) {
 	policy := &Policy{
 		AllowedLicenses:  []string{"MIT"},
@@ -307,8 +308,8 @@ func TestModuleExceptionsReachOnlyTheRootGrant(t *testing.T) {
 }
 
 // TestSentinelLicensesHaveNoPathThroughAnyFilter pins the hard rule at the
-// graph audit's ruling site: a license this tool could not
-// read is not permitted by ANY policy, however that policy was written.
+// graph audit's ruling site: a license this tool could not read is not
+// permitted by ANY policy, however that policy was written.
 //
 // The policy built here is the most permissive one that can be expressed — it
 // allowlists a sentinel outright AND grants the module a root-grant exception
@@ -319,7 +320,10 @@ func TestModuleExceptionsReachOnlyTheRootGrant(t *testing.T) {
 // it hold here rather than depending on the file having been read through the
 // parse.
 //
-// The single filter below IS the adversarial state. [LAW:single-enforcer]
+// A second filter built by hand, to cover "a LicenseFilter nobody parsed a
+// file to get", would be identical to policy.Filter() — Filter drops no keys —
+// so it could never disagree with the first and would only ever repeat it. The
+// single filter below IS the adversarial state. [LAW:single-enforcer]
 func TestSentinelLicensesHaveNoPathThroughAnyFilter(t *testing.T) {
 	for _, sentinel := range []string{unclassifiedLicense, oversizeLicense} {
 		policy := &Policy{
@@ -352,7 +356,9 @@ func TestSentinelLicensesHaveNoPathThroughAnyFilter(t *testing.T) {
 // TestPartitionGraphFilesBothSentinelsAsUnclassified pins the routing:
 // partitionGraph reads licenseSentinels rather than re-listing the two
 // constants, and BOTH of them must land in the unclassified section rather
-// than under module grants.
+// than under module grants. With oversizeLicense missing from the map,
+// "Skipped (oversize)" would be reported as a module's own license GRANT — a
+// row that reads as a legal finding about a file the tool declined to open.
 func TestPartitionGraphFilesBothSentinelsAsUnclassified(t *testing.T) {
 	filter := (&Policy{AllowedLicenses: []string{"MIT"}}).Filter()
 	for _, sentinel := range []string{unclassifiedLicense, oversizeLicense} {

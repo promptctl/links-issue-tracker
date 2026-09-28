@@ -40,7 +40,8 @@ func TestExitCodeMappings(t *testing.T) {
 		{name: "workspace not initialized", err: store.ErrWorkspaceNotInitialized, want: ExitValidation},
 		{name: "workspace not initialized wrapped", err: fmt.Errorf("open store: %w", store.ErrWorkspaceNotInitialized), want: ExitValidation},
 		// A prefix lit cannot settle on is a self-fixable precondition, not
-		// "lit is broken".
+		// "lit is broken" — one code for both would leave a script to tell
+		// them apart by parsing the English.
 		{name: "issue prefix refused", err: workspace.ErrIssuePrefixRefused, want: ExitValidation},
 		{name: "issue prefix refused wrapped", err: fmt.Errorf("resolve workspace: %w", workspace.ErrIssuePrefixRefused), want: ExitValidation},
 		// The typed member keeps the family's code: it carries a different

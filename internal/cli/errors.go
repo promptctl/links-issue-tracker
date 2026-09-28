@@ -6,6 +6,10 @@ package cli
 // (reason/remediation), which dispatch on these types via errors.As; no sink
 // inspects message text. Feature-specific errors (e.g. SyncFailureError) live
 // with their features.
+//
+// [LAW:decomposition] The taxonomy has its own file so the flag-parsing
+// framework, the business command handlers, and the typed error taxonomy do
+// not grow in one file.
 
 import "fmt"
 

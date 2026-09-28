@@ -16,8 +16,7 @@ import (
 // before Y. There is no fractional key to run out of precision, no midpoint to
 // compute, and no inversion to repair — the outcomes the contract names are
 // the whole implementation. That is the point of a second engine: the intent
-// vocabulary was the contract, and fractional indexing was one way to serve
-// it.
+// vocabulary is the contract, and fractional indexing is one way to serve it.
 
 func (e *Engine) RankAbove(ctx context.Context, issueID, targetID string) (storage.RankMove, error) {
 	e.mu.Lock()
@@ -125,7 +124,11 @@ type orderEdge struct {
 //
 // A population with no members has exactly one position, and it is zero.
 // Absorbing that here is what lets place assign unconditionally, the way
-// rankBeyondTx absorbs the empty frame for the SQL engine.
+// rankBeyondTx absorbs the empty frame for the SQL engine. The alternative —
+// answering it in the caller, before the dispatch — would mean the first issue
+// created in a workspace never reaches the dispatch at all, so it accepts any
+// placement whatsoever while the second issue with the same placement is
+// correctly refused.
 // [LAW:dataflow-not-control-flow]
 func (e orderEdge) positionIn(mateIndexes []int) int {
 	if len(mateIndexes) == 0 {
@@ -197,7 +200,11 @@ func (e *Engine) filingFrame(parentID string) storage.Frame {
 // it must exist, and it must not be in the trash.
 //
 // Rank is a position in an order that only lists live issues, so a deleted one
-// has no position to hold and nothing to hold it against.
+// has no position to hold and nothing to hold it against. Letting it through
+// would mean one of two silent wrongs depending on the verb — a key written
+// onto a row no view shows, or, since RankSet rewrites its frame's slots in
+// place, a live sibling dropped out of the order to make room for it. Refusing
+// here is what makes both unrepresentable rather than handled.
 // [LAW:single-enforcer] [LAW:parse-dont-validate]
 func (e *Engine) mustRankable(id string) error {
 	if _, err := e.mustRecord(id); err != nil {
@@ -305,7 +312,8 @@ func (e *Engine) RankSet(ctx context.Context, ids []string) (storage.RankSetResu
 	}
 	// The stack lands at the head of the representatives' own frame. Every
 	// representative is a frame-mate by construction, so that frame is the only
-	// keyspace this order is ever read in.
+	// keyspace this order is ever read in; prepending to e.order would shove an
+	// epic's children ahead of every top-level issue and every other epic's.
 	// [LAW:one-source-of-truth] the two engines are one behavior.
 	//
 	// The frame's slots are rewritten in place rather than detached and

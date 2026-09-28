@@ -231,7 +231,10 @@ func TestRouteNextExhaustionNeverFallsToAnotherEpic(t *testing.T) {
 // rank from the global pool — the unclaimed leaf at the top, not the lane this
 // checkout once held. The derivation answers Unclaimed for the expired lane
 // (claims_test.go pins that), so what this holds is routing's half: given that
-// standing, the lane's history buys it nothing.
+// standing, the lane's history buys it nothing. If the expired lane still
+// counted as held, it would outrank the entire backlog for as long as the epic
+// stayed open, and with one checkout in the repository nothing could ever
+// release it.
 func TestRouteNextExpiredOwnLaneDoesNotOutrankTheBacklog(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
@@ -265,7 +268,8 @@ func TestRouteNextExpiredOwnLaneDoesNotOutrankTheBacklog(t *testing.T) {
 // and not ServedFromClaim: the dependency is by definition OUTSIDE the claimed
 // lane, so starting it claims a second lane, and ServedFromClaim's contract is
 // that nothing is claimed and nothing is said. It is not ServedFromNewLane
-// either: that type is the global pool's.
+// either: that type is the global pool's, and sharing it would leave this pick
+// rendering the pool's line verbatim.
 func TestRouteNextOffersOnPathDependencyAsANewLane(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
@@ -410,6 +414,9 @@ func TestRouteNextServesOwnOrphanFromAnExpiredLane(t *testing.T) {
 
 // links-claims-1b0p acceptance 3: the orphan is the only work in a lane
 // another checkout let expire, and it is offered to a bare `lit next` here.
+// Two facts make this reachable together — an expired foreign claim is no
+// hold, and an in_progress row is servable at all — and either alone leaves
+// the pick unreachable.
 func TestRouteNextServesOrphanInAnExpiredForeignLane(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
@@ -435,7 +442,10 @@ func TestRouteNextServesOrphanInAnExpiredForeignLane(t *testing.T) {
 
 // The other half of the same rule: an in_progress row in a lane another
 // checkout holds is somebody's work in flight, and it is left alone whether or
-// not the orphan clock has reached it.
+// not the orphan clock has reached it. A lane nobody holds is proof on its own
+// that an in-flight row is takeable
+// (TestRouteNextServesUnorphanedInFlightRowInAnUnheldLane), so the live hold is
+// the case where "leave it" holds.
 func TestRouteNextLeavesUnabandonedInFlightWorkAlone(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
@@ -462,7 +472,8 @@ func TestRouteNextLeavesUnabandonedInFlightWorkAlone(t *testing.T) {
 // to change it. The checkout holds a FRESH claim on a lane whose only ticket is
 // a task, and asks for bugs. Its own lane's rows vanish from the gathered set —
 // and it must still get its epic's Exhausted diagnostic rather than another
-// epic's leaf.
+// epic's leaf, which is what deriving ownership from the filtered rows would
+// produce.
 func TestRouteNextKeepsOwnershipUnderADisplayFilter(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
@@ -489,9 +500,11 @@ func TestRouteNextKeepsOwnershipUnderADisplayFilter(t *testing.T) {
 	}
 }
 
-// A gating dependency sitting in a lane another checkout holds fresh is routed
-// around like any other fresh foreign hold, and exhaustion still names it
-// rather than going quiet about why there is nothing to do.
+// A gating dependency sitting in a lane another checkout holds fresh is one
+// `lit start` refuses, so offering it would have `next` recommend what `start`
+// blocks. It is routed around like any other fresh foreign hold, and
+// exhaustion still names it rather than going quiet about why there is nothing
+// to do.
 // [LAW:no-silent-failure]
 func TestRouteNextRoutesAroundOnPathDependencyHeldFresh(t *testing.T) {
 	h := newReadyTestHarness(t)
@@ -760,7 +773,12 @@ func TestRouteNextContinuesEpicIntoAnExpiredForeignLane(t *testing.T) {
 // flight and unheld, and nothing about who left it — an expired claim is not a
 // claim, and the wording carries no provenance.
 //
-// The object is the lane.
+// The object is the lane, and rendering LaneID's three shapes through String()
+// would misinform the reader: a solo lane spells the ticket's own id, so the
+// line reads "starting X claims X" and no reader can take a tautology as advice
+// about a command they have yet to run; an epic's default lane, whose key is
+// empty, trails a bare "#" that reads as an unfilled template slot. Only the
+// named lane carries information, and it is the rarest of the three.
 //
 // Whatever else changes here, no cell may contain "#" or say the ticket's id
 // where a lane belongs, and a table is the only way to see all three shapes
@@ -828,8 +846,9 @@ func TestStartAdviceNeverSpellsASoloTicketTwice(t *testing.T) {
 	}
 }
 
-// Step 1 competes two capacities in one pick. Run in both rank orders: a
-// preference for either capacity fails one arm.
+// Step 1 competes two capacities in one pick, and the comment above `pick`
+// says why ranking them against each other is wrong. Run in both rank orders:
+// a preference for either capacity fails one arm.
 func TestRouteNextStep1RanksAcrossCapacitiesRatherThanBetweenThem(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -914,11 +933,13 @@ func TestRouteNextServesAnAbandonedOnPathDependency(t *testing.T) {
 }
 
 // The two clocks. Orphaning reads the row's last write by anyone; the lane's
-// freshness reads its holder's last event. A peer's field write on an
-// in-flight row keeps it un-orphaned while the holder's claim expires
-// underneath it. A lane nobody holds is itself the proof the row is abandoned,
-// so the row is served on that fact alone; the orphan clock does not enter
-// routing at all (capacityFor).
+// freshness reads its holder's last event. A peer's field write on an in-flight
+// row keeps it un-orphaned while the holder's claim expires underneath it. Were
+// routing to wait on the orphan clock, the lane would be nobody's to resume and
+// the row not yet orphaned, and the ticket would vanish from `next` — served to
+// nobody, named by no diagnostic. A lane nobody holds is itself the proof the
+// row is abandoned, so the row is served on that fact alone; the orphan clock
+// does not enter routing at all (capacityFor).
 func TestRouteNextServesUnorphanedInFlightRowInAnUnheldLane(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -1047,7 +1068,10 @@ func TestRouteNextRoutesAroundAFreshPublicHold(t *testing.T) {
 // Words and speakability are asserted as one biconditional because the two ways
 // they can disagree are both defects and only one of them is obvious. A
 // speakable kind with no words renders ids under an empty parenthetical. Words
-// for a kind the walk cannot stamp are a promise about a different walk.
+// for a kind the walk cannot stamp are a promise about a different walk:
+// exhaustedNotes carrying reachOffFocusPath would tell a reader that an epic's
+// own gating blocker wants `lit next --all`, when steps 1-3 never scope and so
+// never need it.
 //
 // The union is asserted separately: a sixth kind cannot enter the enum until
 // some walk claims it.
@@ -1094,9 +1118,13 @@ func TestEveryReachKindHasWordsInBothDiagnostics(t *testing.T) {
 	}
 }
 
-// Both surviving kinds are put in one pool on purpose. A single-kind fixture
-// passes against a renderer that prints one note for everything it went past:
-// the message has to say that one row is somebody's live work and the other is
+// "No ready work" alone would answer two opposite questions in identical
+// words: an empty backlog, and a backlog full of work this checkout may not
+// have.
+//
+// Two kinds are put in one pool on purpose. A single-kind fixture passes
+// against a renderer that prints one note for everything it went past: the
+// message has to say that one row is somebody's live work and the other is
 // merely gated, because those call for different acts.
 func TestNoWorkNamesEachRowThePoolWalkWentPast(t *testing.T) {
 	h := newReadyTestHarness(t)
@@ -1147,10 +1175,10 @@ func TestNoWorkNamesEachRowThePoolWalkWentPast(t *testing.T) {
 	}
 }
 
-// The other half of the same type, and criterion 2 of the ticket: an empty
-// backlog. The clause is driven entirely by the rows the walk went past, so no
-// rows means no clause — pinned byte-for-byte, because "no ready work" is still
-// the whole truth when there is nothing to say why about.
+// The other half of the same type: an empty backlog. The clause is driven
+// entirely by the rows the walk went past, so no rows means no clause — pinned
+// byte-for-byte, because "no ready work" is still the whole truth when there is
+// nothing to say why about.
 func TestNoWorkOnAGenuinelyEmptyBacklogIsUnchanged(t *testing.T) {
 	h := newReadyTestHarness(t)
 

@@ -16,7 +16,9 @@ import (
 // renderer arranges to say it. [LAW:behavior-not-structure]
 
 // A sequential lane is a chain, and a chain's blocking fact is one edge per
-// link.
+// link. Naming every pending predecessor would make the text grow
+// quadratically down the epic: the tenth child restating the nine facts its
+// nine predecessors had each already stated.
 func TestBacklogNamesOnlyTheNearestPendingLaneMate(t *testing.T) {
 	h := newBacklogTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "seq", IssueType: "epic", Priority: 1})
@@ -160,7 +162,8 @@ func TestBacklogReopensARunAfterAnInterruption(t *testing.T) {
 	}
 }
 
-// A blank would mean "continues the epic above", and sortByCompositeRank
+// Suppressing a repeat changes what absence means: a row without an epic line
+// could have no epic, or could continue the epic above, and sortByCompositeRank
 // interleaves standalone leaves with epic children by rank, so a standalone
 // ticket sitting under an epic's last child is routine. A run opening under no
 // epic therefore says so.
@@ -252,12 +255,12 @@ func TestBacklogTellsApartLanesThatSpellTheSame(t *testing.T) {
 	}
 }
 
-// The claim line had the epic line's ambiguity too: a blank meant both "this
-// lane is unclaimed" and "this row continues the claimed lane above". An agent
-// routes on who holds a lane, so the blank has to be corrected — but only when
-// a claim is actually standing, since nearly every lane is unclaimed and every
-// standalone row is a lane of one, and marking them all would put a line back
-// under almost every row.
+// The claim line has the epic line's ambiguity too: a blank would mean both
+// "this lane is unclaimed" and "this row continues the claimed lane above". An
+// agent routes on who holds a lane, so the blank has to be corrected — but only
+// when a claim is actually standing, since nearly every lane is unclaimed and
+// every standalone row is a lane of one, and marking them all would put a line
+// back under almost every row.
 func TestBacklogSaysUnclaimedOnlyWhenAClaimIsStanding(t *testing.T) {
 	epic := model.Issue{ID: "E", IssueType: model.TypeEpic, Title: "Two lanes"}
 	held := openLeaf(t, "held", "In the claimed lane", "one")

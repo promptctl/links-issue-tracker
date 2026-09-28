@@ -82,10 +82,10 @@ var ErrReceivedRefsNotRecorded = errors.New("received-refs record not written, s
 // held for the clone step rather than the network round trip. Left alone,
 // every freshness read on the live store — the staleness banner's "N local
 // change(s) not pushed", `lit doctor`'s ahead count — would report pushed
-// commits as unpushed until the next fetch,
-// on every read command, for up to the receive interval. The tracking ref stays
-// the one source of "where the remote is"; this is the push's own bookkeeping
-// moved to the store that owns the ref. [LAW:one-source-of-truth]
+// commits as unpushed until the next fetch, on every read command, for up to
+// the receive interval. The tracking ref stays the one source of "where the
+// remote is"; this is the push's own bookkeeping moved to the store that owns
+// the ref. [LAW:one-source-of-truth]
 //
 // The ref only ever moves forward. Nothing serializes the clone's push against
 // the live store's own network traffic — an explicit `lit sync push` or a

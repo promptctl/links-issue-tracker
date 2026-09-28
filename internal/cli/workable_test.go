@@ -31,8 +31,9 @@ func (h readyTestHarness) runViewErr(view workableView, args ...string) error {
 	return runWorkable(h.ctx, &stdout, h.ap, args, view)
 }
 
-// Closed is rejected because a workable row is never closed — the result
-// would be empty by construction.
+// An unrecognized status is rejected rather than coerced to open, which would
+// answer a different question than asked; closed is rejected too because a
+// workable row is never closed — the result would be empty by construction.
 func TestWorkableStatusRejectsInvalidValues(t *testing.T) {
 	h := newReadyTestHarness(t)
 	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Open leaf", Topic: "status", IssueType: "task", Priority: 1})

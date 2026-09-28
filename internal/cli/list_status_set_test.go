@@ -34,7 +34,10 @@ func statusSetFixture(t *testing.T) (h readyTestHarness, openID, inProgressID, c
 // OR together; this pins that every spelling the CLI offers can actually reach
 // that set, and that they all reach the SAME one.
 //
-// The repeated-flag row is the one that fails loudest on a regression.
+// The repeated-flag row is the one that fails loudest on a regression: were
+// `--status` a plain string flag, a second occurrence would overwrite the
+// first, so `--status closed --status in_progress` would answer with closed
+// work only and say nothing about the half it dropped. [LAW:no-silent-failure]
 func TestListStatusSetSpansBucketsInOneListing(t *testing.T) {
 	h, openID, inProgressID, closedID := statusSetFixture(t)
 
@@ -67,8 +70,9 @@ func TestListStatusSetSpansBucketsInOneListing(t *testing.T) {
 }
 
 // TestListStatusSetRejectsABadMemberLoudly pins that a typo anywhere in the
-// set, and an empty value in either grammar, must fail before a single row prints — a partial or defaulted listing here
-// looks exactly like a real answer to the question the caller asked.
+// set, and an empty value in either grammar, must fail before a single row
+// prints — a partial or defaulted listing here looks exactly like a real answer
+// to the question the caller asked.
 // [LAW:no-silent-failure]
 func TestListStatusSetRejectsABadMemberLoudly(t *testing.T) {
 	h, _, _, _ := statusSetFixture(t)

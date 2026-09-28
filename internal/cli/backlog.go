@@ -44,7 +44,8 @@ Use 'lit next' to pick the top workable item to start.`
 // [FRAMING:representation] The notice is a map of the row set, so it carries
 // every narrowing that stands between the gathered rows and the printed ones —
 // the focus scope AND the --limit trim that runs after it. A notice derived
-// from the scope alone could not see the second.
+// from the scope alone could not see the second, and would print "Nothing is
+// hidden" over a truncated list.
 type focusNotice struct {
 	scope   focusScope
 	applied bool // false when --all asked for the whole queue anyway
@@ -62,10 +63,11 @@ func (n focusNotice) line() string {
 }
 
 // scopeClause states what the focus scope did — the unfocused workspace stating
-// the completeness, or a scope in force naming the goals, the count it withheld, and the flag that lifts it: a groove
-// with the way out written on it, never a wall. It claims completeness only
-// when --limit left the list whole, since "nothing is hidden" is a claim about
-// the printed rows and not about the scope alone.
+// the completeness, or a scope in force naming the goals, the count it
+// withheld, and the flag that lifts it: a groove with the way out written on
+// it, never a wall. It claims completeness only when --limit left the list
+// whole, since "nothing is hidden" is a claim about the printed rows and not
+// about the scope alone.
 func (n focusNotice) scopeClause() string {
 	switch {
 	case !n.scope.active() && n.trimmed == 0:
@@ -108,8 +110,10 @@ func (n focusNotice) emptyLine() string {
 // queue they were drawn from. A row's "unblocks" line and the inversion count
 // come from facts, because both describe the queue rather than this view of it.
 // Read off issues, they shrink as the view does and the loss lands on the row
-// that survived. Nothing on screen is missing, so nothing prompts the reader to
-// doubt it.
+// that survived: a narrowing that cuts the DEPENDENT deletes the leverage line
+// from the PREREQUISITE's row, one screen under a preamble still promising
+// "what closing it would unblock". Nothing on screen is missing, so nothing
+// prompts the reader to doubt it.
 //
 // A view narrowed to nothing is that same trap with no survivor to carry the
 // loss: the rows are gone, the repo's rank inversions are not. So the empty
@@ -240,10 +244,11 @@ func claimStatement(claim, standing string) string {
 
 // backlogEpicLine is what a row that OPENS an epic run states. A run under no
 // epic says so out loud. Leave the no-epic run silent and that one blank means
-// both "continues the epic above" and "has none" — an absence shaped exactly like an answer — and a
-// standalone ticket that happens to sort under an epic's last child reads as
-// part of it. sortByCompositeRank interleaves them by rank, so that adjacency
-// is routine, and in a real backlog most rows have no epic at all.
+// both "continues the epic above" and "has none" — an absence shaped exactly
+// like an answer — and a standalone ticket that happens to sort under an
+// epic's last child reads as part of it. sortByCompositeRank interleaves them
+// by rank, so that adjacency is routine, and in a real backlog most rows have
+// no epic at all.
 // [FRAMING:representation]
 //
 // The zero-value run's empty epicID IS the no-epic subject, so a list that
@@ -262,8 +267,9 @@ func backlogEpicLine(epic *annotation.ParentEpicRef) string {
 // epic line and a repeated claim line is one behavior over two data types, so
 // it is one function. [LAW:one-type-per-behavior]
 //
-// A subject need only be comparable, never a string. LaneID.String — which
-// exists "for logs and test failures" — is lossy: it
+// A subject need only be comparable, never a string. Requiring a string would
+// force callers to hand over a rendering of the value instead of the value,
+// and LaneID.String — which exists "for logs and test failures" — is lossy: it
 // joins epic and lane with "#", so epic "AB" lane "C#D" reads the same as epic
 // "AB#C" lane "D", and a solo lane renders as a bare issue id that an
 // epic-scoped lane can also spell. Two distinct lanes comparing equal would

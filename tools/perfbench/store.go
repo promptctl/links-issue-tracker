@@ -195,9 +195,13 @@ const idTokenPercent = 40
 // is simply not the row being modelled. The mix above is calibrated to that
 // measurement rather than chosen: it lands at 1.83x.
 //
-// 590 descriptions are 0.77 MB of a ~23.5 MB store, so their compressibility
-// bounds about 3% of the total, and the 590-row figure varies between 23.1 and
-// 23.8 MB across runs regardless.
+// How much this moves the reported bytes is less than the measurement can
+// resolve. 590 descriptions are 0.77 MB of a ~23.5 MB store, so their
+// compressibility bounds about 3% of the total, and the 590-row figure varies
+// between 23.1 and 23.8 MB across runs regardless. The filler is a FIDELITY
+// measure — the fixture is the thing it claims to model — not a lever on the
+// numbers, and that 3% bound is also why a size ceiling belongs on structure
+// rather than on what users type.
 //
 // Deterministic, so two runs of the same size generate byte-identical rows and
 // a change in reported store bytes is a change in lit, never in the fixture.
@@ -209,9 +213,14 @@ func filler(seed int, n int) string {
 	// invalidate every figure recorded against it. [LAW:one-source-of-truth]
 	//
 	// It is a mixed counter and not a plain LCG, because an LCG's LOW bits are
-	// barely random and this function reads them twice per token. The finalizer
-	// below avalanches, so every bit of the output depends on every bit of the
-	// counter and a draw modulo anything sees the whole range.
+	// barely random and this function reads them twice per token. With an odd
+	// multiplier and an odd increment, bit 0 of x*1664525+1013904223 strictly
+	// alternates; with two draws per token, the draw that picks a word would
+	// always land on the same parity — and with an even len(proseWords), n%len
+	// inherits n's parity, so every row would draw from half the vocabulary,
+	// the half decided by its seed. The finalizer below avalanches, so every bit
+	// of the output depends on every bit of the counter and a draw modulo
+	// anything sees the whole range.
 	x := uint32(seed)*2654435761 + 12345
 	next := func() uint32 {
 		x += 0x9e3779b9

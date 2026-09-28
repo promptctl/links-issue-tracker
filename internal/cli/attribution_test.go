@@ -11,8 +11,10 @@ import (
 )
 
 // These tests pin every relation/label/bulk mutating verb to the resolved
-// acting identity, observing the recorded actor through the store rather than
-// the implementation. [LAW:behavior-not-structure]
+// acting identity — the session rule the lifecycle verbs use, not the raw --by
+// flag (default $USER) — so under CLAUDE_CODE_SESSION_ID provenance does not
+// split by which verb ran. They observe the recorded actor through the store
+// rather than the implementation. [LAW:behavior-not-structure]
 const attributionSessionID = "attribution-sess"
 
 func attributionWantActor() string { return "claude_" + attributionSessionID }

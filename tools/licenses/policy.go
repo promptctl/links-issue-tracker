@@ -130,11 +130,16 @@ func parsePolicy(data []byte) (*Policy, error) {
 		// below, which is also where a sentinel hiding as an arm base gets
 		// caught. [LAW:no-silent-failure]
 		//
-		// The expression rules are about this FILE, not about the allowlist,
-		// so they hold on an exception's license too. What does NOT apply here
-		// is the AND-arm vetting rule: an exception is not a permission granted
-		// to a license, it is one module's grant a human read, so requiring
-		// its arms to be allowlisted would contradict its whole purpose.
+		// The expression rules are about this FILE, not about the allowlist, so
+		// they hold on an exception's license too. Without this the OR ban
+		// would have a door beside it: an exception reading "BSD-3-Clause OR
+		// GPL-2.0-only" — zstd's own un-elected upstream grant, and exactly the
+		// un-made election the ban exists to refuse — would parse clean and
+		// become a live key in Filter's exception table, while the identical
+		// string in allowed_licenses is rejected. What does NOT apply here is
+		// the AND-arm vetting rule: an exception is not a permission granted to
+		// a license, it is one module's grant a human read, so requiring its
+		// arms to be allowlisted would contradict its whole purpose.
 		if _, err := parseLicenseExpression("policy.json module_exception license", e.License); err != nil {
 			return nil, err
 		}
@@ -210,8 +215,10 @@ func checkAllowedLicenses(allowed []string) error {
 			}
 		}
 		// Every arm must be present as its own FULL TEXT. Not "full text or
-		// bare base". An exception can NARROW — Commons-Clause removes the
-		// right to sell — so `Apache-2.0` does not stand in for
+		// bare base": accepting the base for a WITH-arm rests on "the base is
+		// the wider grant and therefore never unsafe", and that premise is
+		// false. An exception can NARROW — Commons-Clause removes the right to
+		// sell — so `Apache-2.0` does not stand in for
 		// `Apache-2.0 WITH <something that takes rights away>`. The copyleft
 		// veto catches the exceptions the classifier types, and types most of
 		// them as nothing; the rule cannot lean on it.
@@ -246,14 +253,13 @@ func checkAllowedLicenses(allowed []string) error {
 // and only the negative form is usable.
 //
 // And its coverage has holes that spelling normalization does not close.
-// Measured against the pinned corpus — 149 license names, counted as the
-// `.txt` files in its licenses/ directory that are not `.header.txt` — twelve
-// type as nothing at all — Beerware, CPAL-1.0, EUPL-1.0, EUPL-1.1,
-// GUST-Font-License, LGPLLR, LPPL-1.3c, OFL-1.1, OpenVision, SISSL, SISSL-1.2
-// and eGenix. Classify emits those exact strings, several are plainly
-// reciprocal, and this veto would not stop one of them being allowlisted.
-// Count them by walking that licenses/ directory rather than trusting this
-// list.
+// Measured against the pinned corpus — 149 license names, counted as the `.txt`
+// files in its licenses/ directory that are not `.header.txt` — twelve type as
+// nothing at all — Beerware, CPAL-1.0, EUPL-1.0, EUPL-1.1, GUST-Font-License,
+// LGPLLR, LPPL-1.3c, OFL-1.1, OpenVision, SISSL, SISSL-1.2 and eGenix. Classify
+// emits those exact strings, several are plainly reciprocal, and this veto
+// would not stop one of them being allowlisted. Count them by walking that
+// licenses/ directory rather than trusting this list.
 //
 // The modern source-available licenses — BUSL-1.1, SSPL-1.0, Elastic-2.0 —
 // are absent from the 2021 corpus entirely, and that cuts both ways. For a Go
@@ -318,12 +324,12 @@ func spdxDeprecatedSpelling(id string) string {
 // Upper-cased as well as written, because LicenseType is an exact lookup and
 // every copyleft family this exists to catch is spelled in capitals — GPL,
 // LGPL, AGPL, MPL, EPL, CDDL, OSL. So "gpl-3.0" upper-cases onto the corpus
-// spelling and is caught. Upper-casing a
-// permissive identifier ("Apache-2.0" -> "APACHE-2.0") simply misses, which
-// costs nothing: this lookup only ever needs to catch.
+// spelling and is caught. Upper-casing a permissive identifier ("Apache-2.0" ->
+// "APACHE-2.0") simply misses, which costs nothing: this lookup only ever needs
+// to catch.
 //
-// It is its own function because two rules ask this question and only one
-// of them is about allowed_licenses: verifyNotice (native.go) asks it of an
+// It is its own function because two rules ask this question and only one of
+// them is about allowed_licenses: verifyNotice (native.go) asks it of an
 // identifier the classifier found inside a native library's notice text, where
 // the answer decides whether that material may be called bundled. One
 // definition, so "the classifier calls this copyleft" cannot come to mean two
@@ -355,7 +361,9 @@ func copyleftVia(identifier, spelling string) string {
 }
 
 // refuseCopyleftAllowlistEntry turns "every entry is permissive" from a claim
-// the note makes into a rule the parse enforces, as far as it reaches.
+// the note makes into a rule the parse enforces, as far as it reaches. Without
+// it, the only thing standing between allowed_licenses and a GPL entry would be
+// a reader.
 func refuseCopyleftAllowlistEntry(entry, identifier string) error {
 	kind, spelling := copyleftType(identifier)
 	if kind == "" {
@@ -527,11 +535,14 @@ func parseLicenseExpression(where, name string) ([]licenseArm, error) {
 // could ever print, using golang.org/x/mod/module.CheckPath — the same
 // validator the go command itself applies.
 //
-// A rune filter cannot see STRUCTURE at all: "example.com//m",
-// "example.com/m/", "nodot/m", "example.com/../m", "example.com/.hidden" and
-// "example.com/CON/x" are all fine rune by rune and all rejected by the real
-// validator. An exception keyed on a path nothing can equal excuses nothing
-// while reading as though it does, which is the whole point of checking.
+// A rune filter is the wrong tool twice over. Reusing isSPDXRune, whose
+// alphabet permits a SPACE because a space separates the arms of an expression,
+// would admit exactly the dead keys this exists to refuse. And a rune filter
+// cannot see STRUCTURE at all: "example.com//m", "example.com/m/", "nodot/m",
+// "example.com/../m", "example.com/.hidden" and "example.com/CON/x" are all
+// fine rune by rune and all rejected by the real validator. An exception keyed
+// on a path nothing can equal excuses nothing while reading as though it does,
+// which is the whole point of checking.
 // [LAW:one-source-of-truth] the go command owns what a module path is; this
 // file does not get its own opinion.
 func checkModulePath(path string) error {
@@ -716,11 +727,10 @@ type LicenseFilter struct {
 // [LAW:one-source-of-truth] this is the package's ONE enumeration of "the tool
 // has no verdict here" — isLicenseText (graph.go) and partitionGraph's
 // unclassified case (graph_report.go) both read it rather than re-listing the
-// two constants. A third sentinel added
-// to this map is therefore barred from the policy, judged by isLicenseText
-// under the rule for a file nobody could read rather than the rule for a
-// recognised grant, and filed under the report's unclassified section — all
-// without a second edit to remember.
+// two constants. A third sentinel added to this map is therefore barred from
+// the policy, judged by isLicenseText under the rule for a file nobody could
+// read rather than the rule for a recognised grant, and filed under the
+// report's unclassified section — all without a second edit to remember.
 //
 // Note which way that middle one runs: membership here makes a hit LESS
 // automatically kept, not more. isLicenseText keeps anything the classifier
@@ -733,7 +743,9 @@ var licenseSentinels = map[string]bool{unclassifiedLicense: true, oversizeLicens
 // markers, compared case-insensitively over ASCII.
 //
 // [LAW:one-source-of-truth] ONE definition, used by the parse and by both
-// rulings.
+// rulings. If the parse folded case while Allows and Permits did an exact map
+// lookup, a LicenseFilter holding "unknown" would be permitted — one rule with
+// two definitions on either side of the boundary the ban is promised across.
 //
 // ASCII-only, not strings.EqualFold: full Unicode folding would make a
 // homoglyph of a sentinel match and then be reported with the sentinel's
@@ -757,12 +769,11 @@ func isLicenseSentinel(name string) bool {
 // raw values and why that is not a second accept/reject path.
 //
 // It copies the policy's entries verbatim, sentinels included. Dropping them
-// here would have let a Policy value and the LicenseFilter built from it
-// disagree about what the file says, silently — the same
-// committed-text-versus-gate's-view split that the unknown-key,
-// trailing-content, and duplicate-key guards in parsePolicy all exist to
-// refuse. The ban belongs where the ruling
-// happens; see Allows and Permits.
+// here would let a Policy value and the LicenseFilter built from it disagree
+// about what the file says, silently — the same committed-text-versus-gate's-
+// view split that the unknown-key, trailing-content, and duplicate-key guards
+// in parsePolicy all exist to refuse. The ban belongs where the ruling happens;
+// see Allows and Permits.
 func (p *Policy) Filter() LicenseFilter {
 	allowed := make(map[string]bool, len(p.AllowedLicenses))
 	for _, name := range p.AllowedLicenses {

@@ -42,8 +42,8 @@ func runInit(t *testing.T, args ...string) error {
 	return Run(context.Background(), &out, &out, append([]string{"init", "--skip-hooks", "--skip-agents"}, args...))
 }
 
-// The whole defect in one test: a repository lit cannot name is unrunnable, and
-// the advice printed under the failure has to name an act that works.
+// The whole contract in one test: a repository lit cannot name is unrunnable,
+// and the advice printed under the failure has to name an act that works.
 func TestInitInAnUnnameableRepositoryRefusesWithUsableAdvice(t *testing.T) {
 	gitRepoNamed(t, "ab")
 
@@ -332,11 +332,12 @@ func TestInitReportsThePrefixItActuallyStored(t *testing.T) {
 // the bad argument, outlives a command that reported failure, and clearing it
 // needs `lit prefix set` rather than a corrected re-run.
 //
-// The derived case is here because it proves the fix is about ORDERING rather
-// than about the flag.
+// The derived case is here because it carries no `--prefix`, so it shows the
+// guarantee is about ORDERING rather than about the flag.
 //
-// Asserting the exit code alone would pass against the bug. The assertion that
-// earns its keep is the ABSENCE of config.json. [LAW:effects-at-boundaries]
+// Asserting the exit code alone would pass even when the refusal is correct but
+// arrives after the write. The assertion that earns its keep is the ABSENCE of
+// config.json. [LAW:effects-at-boundaries]
 func TestAFailedInitLeavesNoWorkspaceBehind(t *testing.T) {
 	for _, testCase := range []struct {
 		name string

@@ -29,8 +29,10 @@ func requireInheritedDependency(t *testing.T, rows []annotation.AnnotatedIssue, 
 
 // A blocks edge onto an epic holds back every child of that epic, in every
 // lane. The children sit in two lanes on purpose: the same-lane sibling gate
-// already serializes one lane behind its first child. The gate is ranked
-// below both children, so rank cannot be what holds them.
+// already serializes one lane behind its first child, so blocking only that
+// first child would hold a one-lane epic and let a second lane straight
+// through. The gate is ranked below both children, so rank cannot be what holds
+// them.
 func TestBlockedEpicGatesEveryLaneOfItsChildren(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Title: "Epic", Topic: "epic-block", IssueType: "epic"})

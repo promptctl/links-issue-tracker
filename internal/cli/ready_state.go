@@ -144,8 +144,12 @@ func newBlockerAnnotator(details map[string]storage.IssueRelations, ancestry hel
 		// ordering. The annotation kind keeps its registered name
 		// (open_dependency); the predicate below decides what it means.
 		// [LAW:one-source-of-truth] InPlay is the one definition of
-		// "unfinished", and it reads both axes. Read and write must agree on
-		// retention.
+		// "unfinished", and it reads both axes. State() != StateClosed consults
+		// the status sum alone, so a soft-deleted dependency would keep
+		// emitting OpenDependency while every transition that could discharge
+		// it (close/open/start all refuse a frozen issue) is unreachable: a
+		// dependent blocked forever by a blocker no listing shows. Read and
+		// write must agree on retention.
 		var blockingDeps []model.Issue
 		for _, dep := range detail.DependsOn {
 			if dep.InPlay() {
@@ -451,7 +455,10 @@ func newSiblingGateAnnotator(details map[string]storage.IssueRelations, siblings
 // earlier unfinished lane-mate" is proved by one, and the rest of the prefix is
 // the lane's own rank order.
 // [LAW:one-source-of-truth] The lane order is the authority on the prefix; the
-// annotation carries the edge, never a second copy of the order.
+// annotation carries the edge, never a second copy of the order. Carrying all
+// of them would make a sequential lane's blocking text grow quadratically down
+// the epic — the tenth child restating the nine facts its nine predecessors
+// had each already stated.
 //
 // The lane order is not always in front of the reader: the pending set is
 // deliberately unfiltered (pendingSiblingsByEpic), so under a filtered or
@@ -744,10 +751,14 @@ func newFocusPathAnnotator(pathGoals map[string]string) annotation.Annotator {
 // closure of every focus-labeled goal, or the whole queue when nothing is
 // labeled.
 //
-// A scope changes MEMBERSHIP and leaves ordering alone: there is no second
-// answer to "what order is this in" left to keep in agreement, and `--top`
-// reaches the top of whatever view it is aimed at. [LAW:one-source-of-truth] rank is the one
-// ordering authority.
+// Hoisting path rows above every other row BEFORE rank is consulted would be a
+// second ordering authority competing with the stored rank: with dozens of
+// rows wired to one focused goal, the hoisted set simply is the top of the
+// view, and a `lit rank <id> --top` the store honored lands far down it with
+// no surface saying why. A scope changes MEMBERSHIP and leaves ordering alone:
+// there is no second answer to "what order is this in" left to keep in
+// agreement, and `--top` reaches the top of whatever view it is aimed at.
+// [LAW:one-source-of-truth] rank is the one ordering authority.
 //
 // goals is read from the walk's own output and never from the gathered rows,
 // because "focus is on" and "some path row survived" are different facts. A goal
@@ -982,6 +993,10 @@ func partitionWorkable(issues []annotation.AnnotatedIssue) (inProgress, ready []
 // indented under a workable item. `lit next` shows exactly this common core;
 // the backlog view (printBacklogContext) composes its extra lines around the
 // same emitters. [LAW:single-enforcer]
+//
+// An "unblocks" line is not part of the core: giving `lit next` a line it does
+// not print would be a change to that command, not a repair to this one.
+// [LAW:polishing-by-subtraction]
 func printInlineDeps(w io.Writer, entry annotation.AnnotatedIssue, cc claimContext, lane model.LaneID) error {
 	if err := printEpicLine(w, contextIndent, entry.ParentEpic); err != nil {
 		return err
@@ -1005,8 +1020,9 @@ func printInlineDeps(w io.Writer, entry annotation.AnnotatedIssue, cc claimConte
 // enough to say its holder left. A lane somebody holds is not orphaned
 // whatever the row's own clock reads — the holder is active elsewhere in the
 // lane, or has locked their worktree, and the claim line printed directly
-// beneath names them. Where nobody holds the lane, the word stands: nothing was
-// learned about the holder.
+// beneath names them; "(ORPHANED)" above that line would contradict it. Where
+// nobody holds the lane, the word stands: nothing was learned about the
+// holder.
 func inProgressSuffix(entry annotation.AnnotatedIssue, laneHeld bool) string {
 	age := time.Since(entry.UpdatedAt).Truncate(time.Minute).String()
 	if laneHeld || !ClassifyReadiness(entry.Annotations).IsOrphaned() {

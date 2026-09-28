@@ -86,8 +86,11 @@ func maybeAutoSyncAfterCommand(ctx context.Context, accessMode app.AccessMode, w
 	// collects whatever the receive above just brought in, and so its own
 	// stall is never charged against the receive's timeout.
 	//
-	// That independence is why the policy half is its own unit.
-	// [LAW:decomposition]
+	// That independence is why the policy half is its own unit. Inline, an
+	// unreadable config would return early and take compaction with it —
+	// leaving the workspace whose config is broken, which is squarely the
+	// "nothing else collects this store" case, as the one workspace that
+	// silently loses its backstop. [LAW:decomposition]
 	if accessMode == app.AccessWrite {
 		compactInline(ctx, ws)
 	}
@@ -182,7 +185,8 @@ func ensureMirrorCoverage(ctx context.Context, ws workspace.Info) {
 	// Cheap precondition, mirroring receiveInline's own check: a remote-less
 	// workspace has nothing to push to, so skip the subprocess spawn entirely
 	// rather than pay fork/exec cost only to have the mirror discover "no
-	// remote" for itself. [LAW:carrying-cost]
+	// remote" for itself. On-change is the shipped default, not an opt-in a
+	// user chose knowing the cost. [LAW:carrying-cost]
 	hasRemote, err := workspaceHasGitRemote(ctx, ws)
 	if err != nil {
 		releaseClaim()
@@ -220,7 +224,9 @@ func ensureMirrorCoverage(ctx context.Context, ws workspace.Info) {
 // (or cannot tell)" → allow. now and interval are parameters so the decision is
 // testable without sleeping. [LAW:one-type-per-behavior] The one debounce
 // primitive, parametrized by marker path and interval; automatic receive and
-// the remote-absent recheck are its instances.
+// the remote-absent recheck are its instances. The on-change mirror spawn is
+// not: it rides the mirror-pending claim, because a rate bound cannot carry a
+// coverage guarantee.
 func shouldRunNow(markerPath string, now time.Time, interval time.Duration) bool {
 	info, err := os.Stat(markerPath)
 	if err != nil {

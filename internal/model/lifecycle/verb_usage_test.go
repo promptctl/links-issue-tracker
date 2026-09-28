@@ -19,11 +19,15 @@ import (
 // eight actions, so a wrong site reads correctly almost always and is found by a
 // reader holding a command that does not exist.
 //
-// This file asks go/parser where the calls and their arguments actually are.
+// Treating Go source as text fails open: a scan of one physical line cannot see
+// a call wrapped across lines, and balancing parentheses over raw bytes lets a
+// `)` inside a format string close the call early, so every argument after it
+// goes unexamined — `fmt.Sprintf("cannot :) %s", e.Action)` passes. So this
+// file asks go/parser where the calls and their arguments actually are.
 // [LAW:parse-dont-validate]
 //
-// THE RULE. An expression that produces an ActionName may reach a formatting
-// call only as:
+// THE RULE, which has no exceptions. An expression that produces an ActionName
+// may reach a formatting call only as:
 //
 //   - `x.Verb()`, the word the caller typed; or
 //   - `string(x)`, written out to say the persisted encoding is meant here.
@@ -124,21 +128,25 @@ func typeName(e ast.Expr) string {
 }
 
 // bearerNames collects the names an ActionName is reached through, kept in
-// three sets because they are matched differently.
+// three sets because they are matched differently, and a scanner that fires on
+// unrelated code is a scanner that gets deleted.
 //
 //   - fields: struct fields typed ActionName, matched only as `x.<name>`.
 //   - locals: parameters, results, receivers and vars typed ActionName, matched
 //     as a bare identifier WITHIN THE FUNCTION THAT DECLARES THEM. This is what
-//     makes a parameter visible.
-//     The scoping is not fastidiousness: a bare identifier's type is unknowable
-//     without go/types, and `n` is a parameter name throughout this repository.
+//     makes a parameter visible. The scoping is not fastidiousness: a bare
+//     identifier's type is unknowable without go/types, and `n` is a parameter
+//     name throughout this repository, so matching it package-wide would flag
+//     `humanBytes(n int64)`.
 //   - consts: package-level constants typed ActionName, matched anywhere, since
 //     a constant's name is unique in its package.
 //   - values: names declared as an Action, whose `.Name()` produces one.
 //
-// Receivers are collected like any other declaration. In the walk below, a
-// selector that is NOT itself a bearer is not descended into, so its receiver
-// is never examined on its own.
+// Receivers are collected like any other declaration. What keeps the bare
+// receiver `n` from matching `n.name` in unrelated code lives in the walk
+// below: a selector that is NOT itself a bearer is not descended into, so its
+// receiver is never examined on its own. Excluding receiver names instead would
+// blind the gate to any parameter sharing the name.
 func bearerNames(files map[string]*ast.File) (fields, locals, values []string) {
 	fs, ls, vs := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	add := func(into map[string]bool, names []*ast.Ident, typ ast.Expr) {
@@ -212,8 +220,8 @@ func producesActionName(e ast.Expr, fields, locals, values map[string]bool) bool
 		}
 		// The receiver is whatever denotes the Action, and it is a field as
 		// often as it is a bare name: an action stashed at a plan site and read
-		// back at the write site is one, and requiring a bare identifier here
-		// would let exactly that shape past.
+		// back at the write site is such a shape, and requiring a bare
+		// identifier here would let exactly that shape past.
 		// [LAW:dataflow-not-control-flow] the question is where the value came
 		// from, not how the call happens to be spelled.
 		switch recv := sel.X.(type) {
@@ -257,7 +265,8 @@ func argIsAllowed(e ast.Expr, fields, locals, values map[string]bool) (allowed, 
 			return false
 		}
 		// A selector that is not itself a bearer is somebody else's field, and
-		// its receiver is not under discussion.
+		// its receiver is not under discussion: descending into `n.name` to find
+		// a bare `n` would flag `n.license`.
 		if _, isSel := ex.(*ast.SelectorExpr); isSel {
 			return false
 		}

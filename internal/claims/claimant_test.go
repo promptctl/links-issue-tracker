@@ -189,7 +189,10 @@ func TestAfterPreservesOwnershipForEveryStatusVerbButStart(t *testing.T) {
 }
 
 // TestAfterStartInstallsTheTakingCheckout: the checkout After writes is the one
-// performing the action, not the one already on the record.
+// performing the action, not the one already on the record. Without that
+// substitution the taker's identity never reaches the comparison, so a
+// takeover between two checkouts sharing one assignee compares equal and
+// records nothing.
 func TestAfterStartInstallsTheTakingCheckout(t *testing.T) {
 	heldByA := claims.Claimant{Established: true, Assignee: "ada", Checkout: streamA}
 

@@ -21,9 +21,10 @@ import (
 // fixture means idBatchSize/2 epics, not idBatchSize: the binding read is the
 // label load, and it receives two ids per epic -- the epic and its child. The
 // counts below compare 1 against 5, well inside that. Past the bound the count
-// rises by one per batch rather than staying flat. What this test protects is
-// the absence of per-epic fan-out: the growth is in the cap, not in the epic
-// count.
+// rises by one per batch rather than staying flat, a bound an unbatched clause
+// would not need but would pay for in quadratic planning instead. What this
+// test protects is the absence of per-epic fan-out: the growth is in the cap,
+// not in the epic count.
 //
 // This is observed behaviorally — real prepared statements are counted at the
 // driver boundary — rather than by asserting the shape of the Go code, so the

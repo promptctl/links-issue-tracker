@@ -68,7 +68,9 @@ const (
 // syncFailureMustNotIgnore is the constant directive every block opens with. The
 // severity below varies with the divergence's values; the standing fact that a
 // sync failure is not ambient noise does not. It states the consequence of
-// treating it as routine rather than commanding the agent not to.
+// treating it as routine rather than commanding the agent not to: a softer
+// "will retry" line reads as ambient noise, so the block has to read as urgent
+// on its own terms, not issue orders.
 const syncFailureMustNotIgnore = "This is a blocking condition, not ambient noise or a routine quirk — retrying past it or routing around it will not resolve it. Resolve it now, or explicitly surface it to the user as blocking, before continuing ticket work."
 
 // SyncFailure is the domain state of one non-transient sync failure, independent
@@ -121,11 +123,11 @@ type SyncFailure struct {
 	// BuildNote is the dev-vs-release build status line, resolved once at the
 	// boundary that constructs this failure (asSyncFailure, syncFailureFromPull,
 	// doctorSyncReport.divergenceFailure) via resolveBuildStatusNote, never
-	// computed inside blockString. This answers "is the binary that made this
-	// decision current" inline, without a second `lit version` call.
-	// [LAW:effects-at-boundaries] Empty means the constructing
-	// boundary did not set it (e.g. a test literal); blockString omits the
-	// line rather than fabricating one.
+	// computed inside blockString. A sync failure is exactly the moment to ask
+	// "is the binary that made this decision current" — this answers it
+	// inline, without a second `lit version` call. [LAW:effects-at-boundaries]
+	// Empty means the constructing boundary did not set it (e.g. a test
+	// literal); blockString omits the line rather than fabricating one.
 	BuildNote string
 }
 
@@ -289,8 +291,9 @@ func (f SyncFailure) whatLine() string {
 
 // resolutionSteps is the ordered command list for the class, each with a short
 // gloss of what it does. The remedy lives in the tool's output, not in an agent's
-// memory. [LAW:one-source-of-truth] the tool that detects the state names the fix
-// for that state.
+// memory: repair knowledge kept only in a session note drifts.
+// [LAW:one-source-of-truth] the tool that detects the state names the fix for
+// that state.
 func (f SyncFailure) resolutionSteps() []string {
 	switch f.Class {
 	case syncFailureProseHeld:

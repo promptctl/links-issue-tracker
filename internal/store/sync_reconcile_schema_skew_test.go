@@ -80,11 +80,11 @@ func TestLiftWorkingSetToRegistryRecoversDowngradedSchema(t *testing.T) {
 	}
 }
 
-// TestSyncReconcileHealsSchemaSkew replays the shape end-to-end: an
-// old-schema remote (base and theirs both predate the resolution migration) vs a
-// migrated local, with a genuine divergence. The reconcile must lift both older
-// anchors, merge the two sides' edits, and land linear history — with zero
-// manual steps and the lifted rows carrying the new column's default.
+// TestSyncReconcileHealsSchemaSkew replays the shape end-to-end: an old-schema
+// remote (base and theirs both predate the resolution migration) vs a migrated
+// local, with a genuine divergence. The reconcile must lift both older anchors,
+// merge the two sides' edits, and land linear history — with zero manual steps
+// and the lifted rows carrying the new column's default.
 func TestSyncReconcileHealsSchemaSkew(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -333,8 +333,8 @@ func TestSyncPullStateTransitions(t *testing.T) {
 // TestIsReconcileSnapshotNameDisjoint proves the reconcile snapshot classifier
 // is disjoint from the migration and downgrade classifiers — each producer owns
 // its own retention budget, so a prune for one kind must never collect another's
-// snapshots. Mirrors TestIsDowngradeSnapshotNameSymmetry, extended to the third
-// classifier.
+// snapshots. Mirrors TestIsDowngradeSnapshotNameSymmetry, extended to the
+// third classifier.
 func TestIsReconcileSnapshotNameDisjoint(t *testing.T) {
 	t.Parallel()
 	const ns = "1700000000000000000"
@@ -362,8 +362,9 @@ func TestIsReconcileSnapshotNameDisjoint(t *testing.T) {
 
 // assertWorkingSetClean fails if the store's Dolt working set has any staged or
 // unstaged change or any held merge conflict. A clean working set after every
-// reconcile outcome is the ticket's stated property: the export/replay
-// reconcile must never leave residue.
+// reconcile outcome is the property: the export/replay reconcile must never
+// leave residue, such as the auto-merged tables a native merge leaves behind
+// for hand-staging.
 func assertWorkingSetClean(t *testing.T, ctx context.Context, st *Store) {
 	t.Helper()
 	var statusRows int

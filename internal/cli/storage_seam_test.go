@@ -55,7 +55,10 @@ var engineHandles = []string{"Store", "Open", "OpenForRead", "OpenSync"}
 // workspace, which internal/cli/lifeboat.go holds between the two calls. A
 // Candidate owns a live engine. What keeps that inside the seam is that the
 // field holding it is unexported, so no caller above internal/store can reach
-// the engine through one. [LAW:types-are-the-program]
+// the engine through one. The guard below could not catch that crossing either
+// way — it matches store.X selectors, and a method call on a Candidate value is
+// not one — so the hole is closed in the type, where it belongs.
+// [LAW:types-are-the-program]
 //
 // It is enumerated rather than wrapped because
 // design-docs/event-store/design.md §migration schedules exactly this machinery
@@ -117,7 +120,9 @@ var doltWorkspaceMachinery = map[string][]string{
 	//
 	// The cli reaches for the lag because the push-deadline regression tests
 	// assert where a cut push ENDS, which is the deadline plus that lag and
-	// not the deadline alone. [LAW:one-source-of-truth]
+	// not the deadline alone. Restating it as a bare 30s would be a second,
+	// unattributed copy of a measured figure, which a re-measurement in store
+	// would leave behind. [LAW:one-source-of-truth]
 	//
 	// PushedHeadRecord, ErrMirrorHoldCut and ErrReceivedRefsNotRecorded are
 	// RecordPushedHead's answers the mirror's trail has to tell apart — which
@@ -125,7 +130,8 @@ var doltWorkspaceMachinery = map[string][]string{
 	// that only the received-refs write failed — and travel with it.
 	// InlineReceiveDeadline is the receive's own deadline, declared in store
 	// because the receive holds the store's LOCK for its run and so is a term
-	// of the co-resident wait; the cli reads it.
+	// of the co-resident wait; the cli reads it rather than keep a second copy,
+	// which the wait could not see.
 	//
 	// ReadReceivedRefs and WriteReceivedRefs are the receive's record of what
 	// the remote advertised before the last settled fetch, the mirror of
@@ -328,7 +334,8 @@ func engineImportName(file *ast.File) (string, bool) {
 }
 
 // TestSeamViolationsFireOnePerRule is the proof the guard's arms are load
-// bearing.
+// bearing: without it, deleting either the additions loop or the ratchet loop
+// would leave the suite green and the seam unenforced.
 //
 // Each case mutates exactly one thing away from a clean baseline and asserts
 // WHICH rule objects — a case that only counted violations would pass with the

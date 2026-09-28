@@ -30,6 +30,9 @@ var ErrNotGitRepo = errors.New("links requires a git repository/worktree")
 // StoredPrefixError below is how a caller tells them apart without reading the
 // English.
 //
+// Without a type these would reach the unclassified default, which tells the
+// caller to retry a deterministic refusal and then to run `lit doctor` against
+// the very workspace `lit init` has just declined to create.
 // [LAW:no-silent-failure] [LAW:types-are-the-program] classification is carried
 // by the error, never re-derived from its text.
 var ErrIssuePrefixRefused = errors.New("issue prefix refused")
@@ -291,7 +294,9 @@ func ResolveWithPrefix(cwd string, requested PrefixRequest) (Info, error) {
 func deriveLocation(cwd string) (Location, error) {
 	// [LAW:one-source-of-truth] Git owns repository geometry. --git-common-dir is
 	// emitted relative to the invocation cwd (e.g. "../.git" from a subdirectory),
-	// so a relative result must be anchored to the cwd. Anchoring to the cwd is
+	// so a relative result must be anchored to the cwd. Anchoring it to the
+	// toplevel instead would climb out of the repo and resolve a
+	// subdirectory/worktree invocation to the wrong store. Anchoring to the cwd is
 	// correct on every Git version (no dependency on the newer
 	// --path-format=absolute flag, which would break older Git with a misleading
 	// "not a git repo" error).
@@ -327,8 +332,10 @@ func deriveLocation(cwd string) (Location, error) {
 // anchorGitPath makes a path git printed absolute. Every `rev-parse` query that
 // answers with a path answers RELATIVE TO THE INVOCATION CWD (e.g. "../.git" from
 // a subdirectory, ".git/worktrees/feature" from a linked worktree), so the cwd
-// git was run in is the only correct anchor. Anchoring by hand rather than
-// asking git for absolute paths keeps this working on every git version: the
+// git was run in is the only correct anchor — anchoring to the repository
+// toplevel instead climbs out of the repo and resolves a subdirectory
+// invocation to the wrong store. Anchoring by hand rather than asking git for
+// absolute paths keeps this working on every git version: the
 // --path-format=absolute flag that would do it is recent, and older git rejects
 // it with a misleading "not a git repository".
 //

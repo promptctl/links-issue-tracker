@@ -8,9 +8,12 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-// `blocked` is one column name printed by two commands. The registry is the
-// single authority on what blocks and rendering may not carry a shorter list, so
-// the column has one producer.
+// `blocked` is one column name printed by two commands. If `lit backlog` asked
+// the annotation registry and `lit ls` asked the dependency edges, a ticket
+// held up by nothing but an earlier sibling would print `blocked` on one and
+// `-` on the other, and neither would say so. The registry is the single
+// authority on what blocks and rendering may not carry a shorter list, so the
+// column has one producer.
 //
 // This file is the pin for that. It is deliberately an AGREEMENT test rather
 // than a pair of expectations: it reads the same cell off both surfaces and
@@ -57,9 +60,10 @@ func blockedCellFromBacklog(h readyTestHarness, id string) (cell, out string) {
 //
 // One fixture rather than four, because the kinds have to coexist to prove
 // anything. Three of the four (the sibling gate, the missing field, needs-design)
-// leave no dependency edge at all — a per-kind fixture would let a regression
-// that restored the dependency-only predicate keep passing three tests out of
-// four while the whole column went back to meaning less than its name.
+// leave no dependency edge at all, so a dependency-only predicate cannot see
+// them — a per-kind fixture would let a regression that restored that predicate
+// keep passing three tests out of four while the whole column went back to
+// meaning less than its name.
 //
 // Each row is blocked by exactly ONE kind. A row blocked by two would still
 // print `blocked` after a regression removed one of them, so the assertion
@@ -142,7 +146,10 @@ func TestBlockedColumnAgreesAcrossSurfaces(t *testing.T) {
 	}
 }
 
-// The row here carries NO dependency edge.
+// TestBlockedColumnOnListIsTheRegistrysVerdictNotTheEdges states the same rule
+// as the narrowest regression it prevents, on `lit ls`. The row here carries NO
+// dependency edge, so a dependency-only predicate —
+// `len(liveIssues(rel.DependsOn)) > 0` — could only ever answer "-" for it.
 //
 // It exists beside the agreement test because agreement is satisfiable from
 // either side: if a future change made `lit backlog` answer the dependency-only

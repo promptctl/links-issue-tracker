@@ -177,7 +177,10 @@ func TestExportDeltaLeavesAnUnchangedBacklogAlone(t *testing.T) {
 
 // TestExportDeltaLeavesTheIssueRowAloneWhenOnlyALabelMoves pins the first half
 // of that view: Export denormalizes an issue's labels onto model.Issue, so
-// adding a label moves the issue value while no issues COLUMN moves.
+// adding a label moves the issue value while no issues COLUMN moves. Diffing
+// the value would rewrite the issue — and every child table being ON DELETE
+// CASCADE, that rewrite would drag its comments and its surviving labels
+// through a needless delete-and-reinsert.
 func TestExportDeltaLeavesTheIssueRowAloneWhenOnlyALabelMoves(t *testing.T) {
 	t.Parallel()
 	before := hydratedIssue(t, model.Issue{ID: "a", IssueType: model.TypeTask, Title: "t", Labels: []string{"keep"}}, model.StateOpen)
@@ -219,7 +222,9 @@ func TestExportDeltaLeavesTheIssueRowAloneWhenOnlyALabelMoves(t *testing.T) {
 // TestExportDeltaLeavesAnEpicsRowAloneWhenAChildCloses pins the second half. A
 // container's state is composed from its children (model.HydrateAllOf), so
 // closing one child moves the EPIC's value too — while the epic's row holds a
-// NULL status and no closed_at and does not move at all.
+// NULL status and no closed_at and does not move at all. Diffing values would
+// rewrite the epic on every child transition, which on a real backlog is
+// exactly the shape of change a folded commit makes.
 func TestExportDeltaLeavesAnEpicsRowAloneWhenAChildCloses(t *testing.T) {
 	t.Parallel()
 	openChild := hydratedIssue(t, model.Issue{ID: "child", IssueType: model.TypeTask, Title: "c"}, model.StateOpen)

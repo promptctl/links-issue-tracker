@@ -81,7 +81,9 @@ type ClaimsConfig struct {
 // bare `72` fails as "missing unit in duration" instead of arriving as a plausible
 // number that no later check can tell apart from a deliberate one.
 //
-// [LAW:parse-dont-validate] One crossing, and past it the value is a duration
+// [LAW:parse-dont-validate] Validating that the number is positive never
+// establishes that it is a duration at all, which is exactly the question that
+// matters: 72ns is positive. One crossing, and past it the value is a duration
 // because parsing is what produced it. [LAW:no-silent-failure] Both failure
 // arms — unparseable, and parseable but non-positive — are loud.
 func parseFreshnessWindow(raw string) (time.Duration, error) {
@@ -107,10 +109,10 @@ type SyncConfig struct {
 	Receive bool `mapstructure:"receive"`
 	// OwnerNotifyCmd is the owner's out-of-band channel for degraded sync state:
 	// a shell command lit runs when it detects a real divergence or a failing
-	// push — e.g. a curl to an ntfy topic — with the
-	// event's facts in LIT_NOTIFY_* environment variables. Empty (the default)
-	// means no channel is configured and nothing runs. One string, not a mode:
-	// what to send and where is the command's business, never lit's.
+	// push — e.g. a curl to an ntfy topic — with the event's facts in
+	// LIT_NOTIFY_* environment variables. Empty (the default) means no channel
+	// is configured and nothing runs. One string, not a mode: what to send and
+	// where is the command's business, never lit's.
 	// [LAW:no-mode-explosion]
 	OwnerNotifyCmd string `mapstructure:"owner_notify_cmd"`
 }

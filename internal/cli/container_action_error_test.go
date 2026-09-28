@@ -78,7 +78,8 @@ func renderCommandError(t *testing.T, err error) string {
 // `lit done` on an epic whose children are all closed asked for a state the
 // workspace is already in. The condition is terminal — an epic's state derives
 // from its children, so retrying cannot change it and `lit doctor` has nothing
-// to diagnose.
+// to diagnose — and the default's "Retry the command" would be an instruction
+// to loop aimed squarely at an unattended agent.
 func TestDoneOnAClosedEpicIsTerminalAndSaysNoActionIsNeeded(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epic := h.epicFixture(2, 2)
@@ -90,8 +91,7 @@ func TestDoneOnAClosedEpicIsTerminalAndSaysNoActionIsNeeded(t *testing.T) {
 	// The reason, the exit code and the absent retry advice are this cell's row
 	// in TestEveryContainerRejectionCellHasItsOwnReasonAndExit, which owns them
 	// for all sixteen cells. What is left here is the wording only this cell has:
-	// the epic's own state and the action that asked for it, the two facts the
-	// ticket names as done.
+	// the epic's own state and the action that asked for it.
 	rendered := renderCommandError(t, err)
 	for _, want := range []string{"already closed", "`done`", "nothing to do"} {
 		if !strings.Contains(rendered, want) {
@@ -164,7 +164,8 @@ var renderedPhrases = map[string]struct{ want, forbidden []string }{
 // three near-misses are the defect's shape: a part-done epic already derives
 // in_progress, so `start` matches its own target with every child still to do,
 // and a childless or not-yet-started epic derives open, so `open` matches there
-// too.
+// too. None of the three may answer "nothing to do" at ExitNoWork — the code
+// that exists so a caller can stop WITHOUT reading the message.
 func TestEveryContainerRejectionCellHasItsOwnReasonAndExit(t *testing.T) {
 	cells := []struct {
 		shape            string
@@ -298,7 +299,8 @@ func TestContainerActionErrorSatisfiedRequiresNoWorkLeft(t *testing.T) {
 // A refusal exists to tell an agent what it just asked for, and an agent reads
 // a backticked word as a command, so that word has to be the one it typed.
 // `lit open` dispatches model.Reopen, whose Name is the persisted event
-// encoding "reopen".
+// encoding "reopen"; a message printing that encoding would answer `lit open`
+// by naming a command lit does not have.
 //
 // Every status spec is driven rather than `open` alone, because a table listing
 // only the known-broken verb passes again the first time a second command's
@@ -325,10 +327,10 @@ func TestContainerRefusalNamesTheVerbTheAgentTyped(t *testing.T) {
 }
 
 // TestOpenRefusalNeverNamesThePersistedEncoding is the negative half. The
-// positive assertion above passes for
-// three of the four verbs whatever the code does, because their two names
-// coincide; only `open` can tell a right answer from a wrong one, and only by
-// looking for the word that must NOT be there.
+// positive assertion above passes for three of the four verbs whatever the
+// code does, because their two names coincide; only `open` can tell a right
+// answer from a wrong one, and only by looking for the word that must NOT be
+// there.
 func TestOpenRefusalNeverNamesThePersistedEncoding(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epic := h.epicFixture(2, 0)

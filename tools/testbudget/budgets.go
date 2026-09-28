@@ -18,17 +18,22 @@ import "time"
 // from PR #422's run and the dev-machine full-suite measurement, both
 // 2026-08-26, both quoted per package below as CI/dev.
 //
-// RAISING A BUDGET IS NOT A FIX. A budget moves only when the package's honest
-// floor moves: a new test whose cost IS the behavior it pins (cite it here), or
-// a suite-wide condition change (re-baseline every number from the first green
-// run under the new conditions). The race detector is a runtime regime, not a
-// flag — on the inner loop it took tools/licenses from 29s to 149s and
-// internal/cli from 117s to 242s. Re-baselining to those figures would have
-// been the alarm switched off, blind to a 3x regression in anything below the
-// new floor. It runs in its own `race` job instead, so every number here still
-// measures one territory: un-instrumented wall clock. A condition that inflates
-// the whole table is a reason to ask whether the condition belongs in this lane
-// at all. If you hit a budget while adding a test, make the test cheaper.
+// RAISING A BUDGET IS NOT A FIX. Time comes back from cheaper fixtures, real
+// parallelism, and moving benchmark-shaped work to the nightly lane — never by
+// asserting less, and never by absorbing slowness into a bigger number. A
+// budget moves only when the package's honest floor moves: a new test whose
+// cost IS the behavior it pins (cite it here), or a suite-wide condition change
+// (re-baseline every number from the first green run under the new
+// conditions). The race detector is the suite-wide case that is declined: -race
+// is a runtime regime, not a flag — on the inner loop it takes tools/licenses
+// from 29s to 149s and internal/cli from 117s to 242s. Re-baselining to those
+// figures would switch the alarm off, blind to a 3x regression in anything
+// below the new floor. It runs in its own `race` job instead, so every number
+// here still measures one territory: un-instrumented wall clock. A condition
+// that inflates the whole table is a reason to ask whether the condition
+// belongs in this lane at all. If you hit a budget while adding a test, the
+// per-package notes below say where each package's time goes; make the test
+// cheaper.
 var budgets = map[string]time.Duration{
 	// 58.5s/95s (141s dev isolated, 2026-08-25). Honest floor; remaining
 	// poles are two ~5s contention tests. Approaching this budget means

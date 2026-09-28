@@ -12,10 +12,10 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-// TestAcquireCommitLockNeverEvictsLiveHolderByAge: the file's age carries no
-// meaning at all — a backdated lock file with a live holder must block a second
-// acquirer until that holder releases, and nothing may remove the hold out from
-// under it.
+// TestAcquireCommitLockNeverEvictsLiveHolderByAge: the lock is held by flock,
+// so the file's age carries no meaning at all — a backdated lock file with a
+// live holder must block a second acquirer until that holder releases, and
+// nothing may remove the hold out from under it.
 func TestAcquireCommitLockNeverEvictsLiveHolderByAge(t *testing.T) {
 	t.Parallel()
 	lockPath := filepath.Join(t.TempDir(), ".links-commit.lock")

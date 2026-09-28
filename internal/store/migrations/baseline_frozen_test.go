@@ -16,7 +16,9 @@ import (
 // cc-nerf-buster) already exist on disk; every retcon of baseline.sql between
 // now and v0.1.0 would brick them.
 //
-// [LAW:single-enforcer] One enforcer, not two.
+// [LAW:single-enforcer] One enforcer, not two: this test, not reviewer
+// attention or documentation discipline, is the only thing standing between
+// a retcon of baseline.sql and bricked workspaces.
 // [LAW:one-source-of-truth] The hash IS the schema-v1 identity. Two copies
 // (one here, one in some workflow yaml) would drift; one copy in Go, run
 // from the same code path in CI and `go test ./...`, cannot.
@@ -27,8 +29,8 @@ import (
 const baselineFrozenHash = "e86c1aa36ebe70ddbaa2b18f18ee310c33dfce1f07fb3c2811a1d76385ad1fbb"
 
 // TestBaselineFileIsFrozen asserts the bytes of 00001_baseline.sql match the
-// pinned hash. If this fails, read the failure message before reaching for
-// the constant.
+// pinned hash. If this fails, you are about to ship a retcon of the frozen
+// baseline — read the failure message before reaching for the constant.
 func TestBaselineFileIsFrozen(t *testing.T) {
 	data, err := FS.ReadFile("00001_baseline.sql")
 	if err != nil {

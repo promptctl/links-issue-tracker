@@ -59,8 +59,11 @@ const (
 	// has scheduled for after the spawn, summed from those steps' own caps.
 	//
 	// It is a sum rather than a number because prose does not fail to compile
-	// when a fourth step joins the tail. Adding a step to the tail means adding
-	// it here.
+	// when a fourth step joins the tail. A step left unsummed here lets a pass
+	// slower than the leftover margin make a perfectly healthy parent outlive
+	// the wait below — abandoning a mirror that owes a push, for work the
+	// parent was designed to do. Adding a step to the tail means adding it
+	// here.
 	// [LAW:one-source-of-truth]
 	parentPostSpawnTail = store.InlineReceiveDeadline + // the inline receive
 		ownerNotifyHookTimeout + ownerNotifyPipeWaitDelay + // a divergence's owner-notify hook and its pipe
@@ -449,8 +452,8 @@ func (p pushedHead) landed() bool { return p.head != "" }
 // log receives one line at cycle start, one per hold on the live store as it
 // is released (`hold released step=clone|record elapsed=`), and one at cycle
 // end carrying every phase's cost — the detached worker's stdout is
-// mirror.log, and those lines are the durable record that the ticket's
-// contract ("every hold under one second") is checked against in the field.
+// mirror.log, and those lines are the durable record that the contract
+// "every hold under one second" is checked against in the field.
 // Only a cycle that holds the single-flight lock writes: a mirror that loses
 // the race stays silent, as the quiescence property requires.
 func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnswering func()) (attempted bool) {
@@ -559,10 +562,13 @@ func holdBudgetCutExplanation(step string) error {
 // wherever the cut landed. [LAW:one-source-of-truth]
 //
 // It refuses to name a cause, and that refusal is the point. A deadline knows
-// only that the work ran long. The text names what the deadline actually
-// established, names both causes that land here, and points at the
-// evidence that separates them. [FRAMING:representation] a message that
-// asserts more than its signal carries is a map of a territory nobody visited.
+// only that the work ran long. Naming a cause such as "a hung or slow remote
+// transport" would be a diagnosis nothing had observed, and it reads as
+// environmental and transient — something to retry past rather than a defect to
+// file. The text names what the deadline actually established, names both
+// causes that land here, and points at the evidence that separates them.
+// [FRAMING:representation] a message that asserts more than its signal carries
+// is a map of a territory nobody visited.
 //
 // Order matters as much as content: the FAILING banner prints this through
 // oneLineReason, which keeps the first line and caps it at 160 runes, so the

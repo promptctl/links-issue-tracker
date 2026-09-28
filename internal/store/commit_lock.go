@@ -246,18 +246,20 @@ func retryTransientGCContention(ctx context.Context, operation retryOperation, r
 		}
 		// Checked before the sleep, and reserving room for EVERY term that
 		// runs between here and the next check — the inter-attempt sleep, and
-		// both halves of the rotation. Each one is named: the sleep (up to
-		// transientRetryMaxDelay), the new engine's open (bounded by
-		// coResidentHolderWait), and the PREVIOUS engine's close
-		// (rotationCloseReserve). That last one is the term to be careful
-		// about — Store.reconnect closes the old engine before pinging the
-		// new one, `*sql.DB.Close()` takes no context, so no deadline
-		// anywhere can cut it and coResidentHolderWait does not cover
-		// it. Its cost is reserved rather than bounded, which makes the
-		// honest statement of the hold "the budget, plus at most one engine
-		// close" rather than the budget flat. Stopping here ends the same way
-		// exhausting the attempts does: the manifest never cleared, which is
-		// what exhaustedContentionError already says.
+		// both halves of the rotation. A reservation that omits a term it
+		// cannot see is still a bound in prose only, with a smaller error,
+		// so each one is named: the sleep (up to transientRetryMaxDelay),
+		// the new engine's open (bounded by coResidentHolderWait), and the
+		// PREVIOUS engine's close (rotationCloseReserve). That last one is
+		// the term to be careful about — Store.reconnect closes the old
+		// engine before pinging the new one, `*sql.DB.Close()` takes no
+		// context, so no deadline anywhere can cut it and
+		// coResidentHolderWait does not cover it. Its cost is reserved
+		// rather than bounded, which makes the honest statement of the hold
+		// "the budget, plus at most one engine close" rather than the budget
+		// flat. Stopping here ends the same way exhausting the attempts
+		// does: the manifest never cleared, which is what
+		// exhaustedContentionError already says.
 		if time.Since(start)+delayForAttempt(attempt)+rotationReserve() >= commitLockWaiterBudget() {
 			break
 		}

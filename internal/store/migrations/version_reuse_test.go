@@ -194,7 +194,8 @@ but one to the next free version(s).`,
 }
 
 // TestReleasedMigrationsAreContentPinned refuses any change that reuses a released
-// version number under different content.
+// version number under different content: already-stamped workspaces keep the
+// old content under that number, so goose skips the new content forever.
 //
 // [LAW:single-enforcer] the one static gate on version-number reuse for v2+; v1 is
 // enforced by baseline_frozen_test.go.

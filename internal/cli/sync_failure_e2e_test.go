@@ -169,10 +169,10 @@ func TestExplicitPullSurfacesContractOnProseHeld(t *testing.T) {
 // TestNoRawReconcileShrugInSource is the grep-level property from the acceptance:
 // the exact ignorable line — a raw backend error framed as "will retry" — must
 // never return to the source. The inline reconcile failure routes through the
-// sync-failure contract (blockString); a future raw
-// reprint of this literal is the specific regression this guards. It is a
-// structural guard on purpose: no behavioral test can assert the ABSENCE of a
-// future bad print. [LAW:no-silent-failure]
+// sync-failure contract (blockString); a future raw reprint of this literal is
+// the specific regression this guards. It is a structural guard on purpose: no
+// behavioral test can assert the ABSENCE of a future bad print.
+// [LAW:no-silent-failure]
 func TestNoRawReconcileShrugInSource(t *testing.T) {
 	t.Parallel()
 	const shrug = "automatic reconcile of the diverged clone failed"

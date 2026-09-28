@@ -104,7 +104,8 @@ type Issue struct {
 	// retention is the sealed retention axis (Live | Archived | Deleted). The
 	// wire and storage encodings keep the legacy archived_at/deleted_at pair,
 	// projected through lifecycle.RetentionTimestamps/RetentionFromTimestamps at
-	// the serialization boundaries.
+	// the serialization boundaries. [LAW:types-are-the-program] One value, so
+	// the archived+deleted combination is unrepresentable.
 	retention lifecycle.Retention
 
 	lifecycle        lifecycle.Lifecycle
@@ -240,7 +241,9 @@ func (l LaneID) String() string {
 // It exists because String's "#" is punctuation doing a word's job. That earns
 // its place where String is read — "A#" must not be mistaken for epic "A" in a
 // test failure — and loses it in prose, where the words "epic" and "lane" draw
-// the same distinction themselves.
+// the same distinction themselves and the default lane's empty key would render
+// as a trailing bare "#", which reads as an unfilled template slot to anyone
+// who does not already know the grammar.
 //
 // A solo lane describes as nothing: it holds exactly the ticket that names it,
 // so any phrase for it only repeats what the surrounding sentence has already
@@ -300,8 +303,10 @@ func (i Issue) mustLifecycle() lifecycle.Lifecycle {
 // Target is the state the action asked for and State is the one the children
 // already establish. Both are carried because whether the call asked for
 // anything at all is exactly their comparison — a fact the raise site holds.
-// [LAW:parse-dont-validate] the discriminator is kept in the type rather than
-// re-derived downstream from progress counts.
+// Without it, one sentence would serve two opposite situations: `done` on a
+// closed epic, whose request is already met, and `start` on that same epic,
+// which is refused. [LAW:parse-dont-validate] the discriminator is kept in the
+// type rather than re-derived downstream from progress counts.
 type ContainerActionError struct {
 	ID       string
 	Action   ActionName
@@ -326,10 +331,12 @@ func (e ContainerActionError) Unfinished() int {
 // match one while work remains. AllOf.State returns InProgress only when
 // Closed < Total, so `start` on a part-done epic would match its own target
 // with every child still to do; and it returns Open for a childless epic as a
-// fallback carrying no information, so `open` would match there too. Closed is
-// the only derived state that means nothing remains, and the two counts say so
-// directly rather than by naming it, so this stays true if the state set ever
-// grows.
+// fallback carrying no information, so `open` would match there too. Both
+// would then report "nothing to do" at the exit code that exists to let a
+// caller stop without reading the message — an answer-shaped void aimed at
+// exactly the agent with the most work left. Closed is the only derived state
+// that means nothing remains, and the two counts say so directly rather than by
+// naming it, so this stays true if the state set ever grows.
 func (e ContainerActionError) Satisfied() bool {
 	return e.Target == e.State && e.Progress.Total > 0 && e.Unfinished() == 0
 }
@@ -338,12 +345,15 @@ func (e ContainerActionError) Satisfied() bool {
 // carries — the requested action, the two states, the counts — not with which
 // callsite produced it. There are two sentences because there are two
 // situations, and the refusal names the state it is refusing from rather than a
-// child count.
+// child count: a count would tell `start` on a finished epic "0 of its 1
+// children are not done", which is true, unreadable, and never mentions that
+// the epic being closed is the actual obstacle.
 //
 // The backticked word is the action's INVOCATION verb, never its persisted
 // event encoding: an agent reads what is inside the backticks as the command
 // it just ran and may run again. Those two names diverge for exactly one
-// action today.
+// action today, and printing the persisted one would answer `lit open` with
+// "cannot `reopen`" -- naming a command that does not exist.
 // [LAW:one-source-of-truth] lifecycle owns the pairing; this reads it.
 func (e ContainerActionError) Error() string {
 	if e.Satisfied() {

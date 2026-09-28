@@ -141,8 +141,9 @@ func runWithApp(ctx context.Context, stdout io.Writer, accessMode app.AccessMode
 	}
 	// The staleness banner for mutating commands lives HERE, at the one seam
 	// every mutating command flows through — not per-handler like the read
-	// commands' banner. A command that only mutates hears about failing pushes.
-	// [LAW:locality-or-seam]
+	// commands' banner, because per-handler wiring would make every mutating
+	// command remember the call, and one that forgot would miss it. A command
+	// that only mutates hears about failing pushes. [LAW:locality-or-seam]
 	// It runs after the engine close on purpose: it reads only storage-dir
 	// markers, needing no engine, and precedes the auto-sync below so the banner
 	// reports the last COMPLETED attempt rather than racing the one about to spawn.
@@ -185,7 +186,10 @@ func resolveWorkspaceFromWD(requested workspace.PrefixRequest) (workspace.Info, 
 // a command's help has exactly one renderer no matter which spelling the caller
 // reached for. Cobra's own help command renders a subcommand from its Long and
 // its cobra-level flag set, and every command here sets DisableFlagParsing and
-// declares its flags on its own leaf. [LAW:one-source-of-truth]
+// declares its flags on its own leaf — so that path would print a description
+// with a flag table claiming `lit import` accepts only `--help`, while `lit
+// import --help` prints the real flags and no description. Two maps of one
+// territory, each missing the half the other has. [LAW:one-source-of-truth]
 //
 // Bare `lit help` still names no command, so it keeps reaching cobra's root
 // help — the one page cobra does render correctly, because the root is where
@@ -204,7 +208,8 @@ func rewriteHelpCommand(root *cobra.Command, args []string) ([]string, error) {
 	}
 	// Cobra adds its own `help` command lazily, inside ExecuteC, which has not
 	// run yet — so without this the registered set is missing the one command
-	// whose name the caller is most likely to type twice.
+	// whose name the caller is most likely to type twice, and `lit help help`
+	// would refuse itself while advising the caller to run `lit help <command>`.
 	// InitDefaultHelpCmd is idempotent; ExecuteC calling it again is a no-op.
 	root.InitDefaultHelpCmd()
 	for _, registered := range root.Commands() {
@@ -315,7 +320,9 @@ func followupLeaf() appLeaf {
 	labels := fs.String("labels", "", "Comma-separated labels")
 	top := fs.Bool("top", false, "Promote the follow-up to the top of its frame (the default appends it to the bottom)")
 	// One sentence for both of followup's usage failures — a missing --on/--title,
-	// and a value typed where no positional is taken. [LAW:one-source-of-truth]
+	// and a value typed where no positional is taken. It is declared outside the
+	// work because the seam's arity check runs first and cannot reach a sentence
+	// written inside it. [LAW:one-source-of-truth]
 	usage := "usage: lit followup --on <id> --title <text> [--description <text>] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--top]"
 	return appLeaf{fs: fs, positionals: 0, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		parentID := strings.TrimSpace(*on)
@@ -405,18 +412,18 @@ var (
 
 // runList is the entrypoint for every listing surface. It declares and parses the
 // flag surface, then chooses which store to query and runs the shared query
-// (listLeaf's work) against it. With no --at it opens the current workspace's store read-only; with --at
-// <dir> it opens a foreign store by its storage directory (one of the paths `lit
-// stores` prints), WITHOUT depending on the current directory being a lit
-// workspace.
+// (listLeaf's work) against it. With no --at it opens the current workspace's
+// store read-only; with --at <dir> it opens a foreign store by its storage
+// directory (one of the paths `lit stores` prints), WITHOUT depending on the
+// current directory being a lit workspace.
 //
 // The store choice is routed here rather than through the standard appCmd wrapper
 // because appCmd opens the cwd workspace before the handler runs, which would make
 // `ls --at <foreign>` fail outside a workspace even though it never needed the cwd
 // store. The parse precedes BOTH openings, so `ls --help` and a malformed flag are
-// answered with no store at all, and the routing reads --at from
-// that parse rather than rescanning argv — pflag is the one reader of the flag
-// grammar, so the `--` terminator and every other flag's arity are its rules alone.
+// answered with no store at all, and the routing reads --at from that parse
+// rather than rescanning argv — pflag is the one reader of the flag grammar, so
+// the `--` terminator and every other flag's arity are its rules alone.
 // [LAW:one-source-of-truth]
 func runList(ctx context.Context, stdout io.Writer, surface listSurface, args []string) error {
 	l, atDir := listLeaf(surface)
@@ -707,7 +714,8 @@ func listDerivedColumns(ctx context.Context, st storage.Store, policy readyPolic
 
 // parentColumnsFor projects a relation graph down to the cells that graph alone
 // can answer. It cannot set blocked, and that is the point: a `blocked` derived
-// from dependency edges alone is the shorter list.
+// from dependency edges alone is the shorter list, so no function in the
+// package is able to produce one.
 func parentColumnsFor(relations map[string]storage.IssueRelations) map[string]derivedColumns {
 	out := make(map[string]derivedColumns, len(relations))
 	for id, rel := range relations {
@@ -816,8 +824,12 @@ func readyRequiredFields(ap *app.App) ([]string, error) {
 //
 // Deferring is not a micro-optimization over one file read. config.Load
 // validates the whole config — snapshot.retention_budget, sync.cadence,
-// claims.freshness_window — and fails on any of them. [LAW:no-silent-failure]
-// the policy still fails loudly, at the one projection that depends on it.
+// claims.freshness_window — and fails on any of them, so reading it eagerly
+// would make `lit ls` fail on config defects in settings it does not render.
+// That would take out the plain listing exactly when a repo's config is broken,
+// which is when a reader most needs to see their tickets.
+// [LAW:no-silent-failure] the policy still fails loudly, at the one projection
+// that depends on it.
 type readyPolicy func() ([]string, error)
 
 // workspaceReadyPolicy reads the repo's policy when asked.
@@ -1092,8 +1104,10 @@ func historyLeaf() appLeaf {
 // is moved only by the transition verbs, which are [LAW:single-enforcer] the one
 // surface carrying the transition guardrails — `close` requires a resolution,
 // `start` does the claim transfer and identity resolution, each records its own
-// guidance. `update` sets fields. The break is deliberate and documented: the
-// capability is fully reachable, just under the verbs. [LAW:no-silent-failure]
+// guidance. `update` sets fields; letting it also set status would make it a
+// second, divergent face of the same mutation. The break is deliberate and
+// documented: the capability is fully reachable, just under the verbs.
+// [LAW:no-silent-failure]
 const statusViaVerbsGuidance = "lit update no longer changes status — the transition verbs are the single enforcer of the transition guardrails. Use: `lit start <id>` (claim → in_progress), `lit done <id>` (finish → closed), `lit close <id> --resolution <duplicate|superseded|obsolete|wontfix>` (close with an outcome), `lit open <id>` (reopen)"
 
 func updateLeaf() appLeaf {
@@ -1430,7 +1444,8 @@ func resolveIdentity(explicit string) string {
 // CreatedBy/actor field — every value a callsite can obtain has already passed
 // through resolveIdentity. [LAW:single-enforcer] one boundary resolves the
 // actor for every mutating command; [LAW:types-are-the-program] the
-// raw-$USER-to-CreatedBy path is unrepresentable.
+// raw-$USER-to-CreatedBy path is unrepresentable, so a new mutating command
+// cannot split provenance by forgetting to resolve.
 type actorResolver func() string
 
 // registerActor declares the hidden --by fallback flag on fs and returns the
@@ -1491,9 +1506,8 @@ type transitionSpec struct {
 	// beside Apply because only this read knows whether anybody held the lane:
 	// a start on a lane nobody holds hands nothing over, whatever the row's
 	// history says about who once started it, since an expired claim is not a
-	// claim, and reading the lane again for the notice
-	// would be a second gather of every event in the store.
-	// [LAW:one-source-of-truth]
+	// claim, and reading the lane again for the notice would be a second gather
+	// of every event in the store. [LAW:one-source-of-truth]
 	authorize func(fs *cobraFlagSet) func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue, action model.Action) (notice string, err error)
 }
 
@@ -1625,7 +1639,10 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
 			// UsageError, not errors.New: a missing id is the caller mis-writing
-			// the command line, which exits 2 and says to re-read --help.
+			// the command line, which exits 2 and says to re-read --help. A bare
+			// error would exit 1 carrying "Retry the command. If it still
+			// fails, run `lit doctor`" — advice that cannot work, since
+			// retrying the same line fails the same way.
 			// [LAW:types-are-the-program]
 			return UsageError{Message: usage}
 		}
@@ -1970,8 +1987,8 @@ func runCompletion(stdout io.Writer, args []string) error {
 	}
 	// The shell name is the whole surface — a completion script takes no flags —
 	// but the surface still has to be PARSED, because that parse is what answers
-	// `lit completion bash --help`. [LAW:single-enforcer] every advertised leaf answers help through the one
-	// parse, this one included.
+	// `lit completion bash --help`. [LAW:single-enforcer] every advertised leaf
+	// answers help through the one parse, this one included.
 	fs := newCobraFlagSet("completion " + shell)
 	if err := parseFlagSet(fs, args[1:], stdout); err != nil {
 		return err
@@ -2107,9 +2124,11 @@ func parseIssueTypeFlag(raw string) (model.IssueType, error) {
 // contract these commands have always had: a bad priority is ExitValidation.
 //
 // It takes the raw string rather than an int because the flag is declared with
-// fs.String. Routing the value through
-// model.ParsePriorityName puts the whole domain behind one gate that answers in
-// ValidationError. [LAW:single-enforcer] [LAW:no-silent-failure]
+// fs.String: an fs.Int would let pflag's own strconv.ParseInt refuse "urgent"
+// before this gate ever ran, rejecting the word every read surface prints.
+// Routing the value through model.ParsePriorityName puts the whole domain
+// behind one gate that answers in ValidationError.
+// [LAW:single-enforcer] [LAW:no-silent-failure]
 func parsePriorityFlag(raw string) (model.Priority, error) {
 	p, err := model.ParsePriorityName(raw)
 	if err != nil {

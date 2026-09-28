@@ -13,9 +13,11 @@ import (
 // can meet a repository `lit init` has never run in, and pins that each reports
 // it as the same typed condition with the same sentence.
 //
-// That is the contract the CLI's reason and exit-code sinks read. The entry
-// points are driven for real rather than asserted about, so changing any one of
-// them to a fmt.Errorf carrying the identical text fails here.
+// That is the contract the CLI's reason and exit-code sinks read: a bare
+// fmt.Errorf is a condition they cannot recognize, so it falls through to the
+// unclassified-fault default. The entry points are driven for real rather than
+// asserted about, so changing any one of them to a fmt.Errorf carrying the
+// identical text fails here.
 // [LAW:behavior-not-structure]
 func TestUninitializedWorkspaceIsOneCondition(t *testing.T) {
 	t.Parallel()

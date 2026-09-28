@@ -93,6 +93,8 @@ func TestClassifyReadinessPerKind(t *testing.T) {
 // through ClassifyReadiness routed by its declared role, never falling through
 // to a silent "ready". A kind whose role is RoleBlocking must make the issue
 // not-ready; only RoleNone/Orphaned/RankInversion kinds classify as ready.
+// It guards against a new kind that should block but isn't classified reading
+// as pullable.
 func TestClassifyReadinessCoversEveryRegisteredKind(t *testing.T) {
 	t.Parallel()
 	for _, kind := range annotation.Kinds() {

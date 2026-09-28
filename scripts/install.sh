@@ -261,11 +261,12 @@ case "$mode" in
         # how the user reads tags on the Releases page) and `0.1.0` (what
         # they get from `git describe --abbrev=0 --tags` minus the prefix)
         # and produces the canonical v-prefixed form the rest of the script
-        # speaks. The URL path segment is the *tag*, v-prefixed; the archive
-        # filename uses the *version*, v-stripped — see archive_version
-        # below. [LAW:types-are-the-program]
-        # the boundary normalizer makes the v-stripped input shape map to
-        # the same canonical value as the v-prefixed input shape.
+        # speaks. Skipping this produces 404 download URLs when a user
+        # passes `--from-release 0.1.0`: the URL path segment is the *tag*,
+        # v-prefixed; the archive filename uses the *version*, v-stripped —
+        # see archive_version below. [LAW:types-are-the-program] the
+        # boundary normalizer makes the v-stripped input shape map to the
+        # same canonical value as the v-prefixed input shape.
         release_tag="v${release_tag#v}"
 
         # Validate the normalized tag against the actual producer shape.
@@ -458,7 +459,8 @@ case "$mode" in
         ;;
 esac
 
-# Stale `lnks` symlink/binary from previous installs is removed.
+# Stale `lnks` symlink/binary from previous installs is removed; `lit` is the
+# only entrypoint.
 rm -f "$TARGET_DIR/lnks" "$TARGET_DIR/lnks.exe"
 
 # Detect any *other* `lit` on PATH that we did NOT just overwrite — those are

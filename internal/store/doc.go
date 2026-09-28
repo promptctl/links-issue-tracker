@@ -16,20 +16,21 @@
 // others across a window of time — is an flock through filelock.Acquire, and
 // "is the owner still alive" is answered only by exclusive acquisition,
 // never by an mtime, a PID probe, or a wall-clock threshold. The kernel's
-// answer is right on every death mode. Each lock declares its retry budget
-// at its own call site, and contention travels as Acquire's acquired=false
-// value, given its domain meaning at each caller's own boundary — a store sentinel, a collector's deliberate
-// silent skip, a mirror's coalesce. Name allocation is not owner exclusion —
-// the trace file's O_EXCL retry claims a unique name and holds nothing, and
-// the snapshot slot's os.Mkdir reservation, though held across the copy
-// window, has its owner's liveness proven by the beacon it sits under — so
-// neither carries a liveness question of its own and both stay off this
-// primitive. Owned state is not owner exclusion either: the mirror-pending
-// marker's existence carries "a mirror is owed" and stays a plain file,
-// while the separate liveness question ("is that mirror still coming") rides
-// the mirror beacon's flock — one file per fact, because removing a marker
-// an old binary also deletes from under a live flock would split the lock
-// across two inodes.
+// answer is right on every death mode; every heuristic can evict a live
+// holder. Each lock declares its retry budget at its own call site, and
+// contention travels as Acquire's acquired=false value, given its domain
+// meaning at each caller's own boundary — a store sentinel, a collector's
+// deliberate silent skip, a mirror's coalesce. Name allocation is not owner
+// exclusion — the trace file's O_EXCL retry claims a unique name and holds
+// nothing, and the snapshot slot's os.Mkdir reservation, though held across
+// the copy window, has its owner's liveness proven by the beacon it sits
+// under — so neither carries a liveness question of its own and both stay
+// off this primitive. Owned state is not owner exclusion either: the
+// mirror-pending marker's existence carries "a mirror is owed" and stays a
+// plain file, while the separate liveness question ("is that mirror still
+// coming") rides the mirror beacon's flock — one file per fact, because
+// removing a marker an old binary also deletes from under a live flock would
+// split the lock across two inodes.
 //
 // ONE ACQUISITION ORDER, outermost to innermost:
 //
@@ -74,9 +75,10 @@
 // engine outside the Store lifecycle, the adopt clone's, runs under the
 // exclusive workspace hold and never takes the commit lock.)
 //
-// Every engine open contends on LOCK itself with a bounded retry — minting
-// a lock beside LOCK, under any name, creates a two-representations
-// disagreement.
+// The "one write-capable engine per path" fact has one lock: every engine
+// open contends on LOCK itself with a bounded retry. A lock minted beside
+// LOCK, under any name, is a partial shadow of it and creates the
+// two-representations disagreement.
 //
 // The sync-push lock sits outside the slots: its holder goes on to take
 // everything in them (the mirror cycle holds workspace, LOCK and commit for

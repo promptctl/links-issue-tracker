@@ -20,6 +20,8 @@ func writeImportFile(t *testing.T, name, content string) string {
 	return path
 }
 
+// The JSON tree-spec path must keep working with `import` dispatching on file
+// extension.
 func TestRunImportTreeJSONPathUnchanged(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)

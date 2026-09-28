@@ -83,6 +83,9 @@ func (f epicFixture) render(focused string) string {
 }
 
 // A child that has left the flow is labeled with the axis that took it out.
+// Rendering a deleted child as "[ready]" would invite an agent to start a
+// ticket that lit start refuses, and name it as a live blocker of its siblings
+// — the plan would then disagree with the readiness gate about the same edge.
 func TestRenderEpicContextLabelsFrozenChildrenByRetention(t *testing.T) {
 	f := newEpicFixture(t, "Retention epic", "children on both axes")
 	deleted := f.addChild("Dropped one")
@@ -107,7 +110,9 @@ func TestRenderEpicContextLabelsFrozenChildrenByRetention(t *testing.T) {
 }
 
 // The blocked marker and the readiness gate read one predicate, so a blocker
-// that has left the flow stops blocking on both surfaces at once.
+// that has left the flow stops blocking on both surfaces at once. Otherwise the
+// dependent would render "[blocked-by <deleted id>]" naming a ticket absent
+// from every listing, with no command able to clear the edge.
 func TestRenderEpicContextFrozenBlockerStopsBlocking(t *testing.T) {
 	f := newEpicFixture(t, "Blocker epic", "one dead blocker")
 	blocker := f.addChild("The blocker")
@@ -236,7 +241,8 @@ func TestRenderEpicContextShowsLaneGrouping(t *testing.T) {
 
 // Two children in one lane, the first still open. The lane gate holds the
 // second back — `lit next` refuses to serve it and `lit backlog` prints the
-// reason.
+// reason — so the plan slice must say so too, or calling it [ready] would make
+// it the one surface of the three answering differently.
 func TestRenderEpicContextEarlierLaneMateHoldsSiblingBack(t *testing.T) {
 	f := newEpicFixture(t, "Sequential epic", "one lane, two children")
 	first := f.addChild("First")
@@ -488,9 +494,11 @@ func TestRenderEpicContextCrossEpicClosedSideFiltered(t *testing.T) {
 }
 
 // A frozen endpoint drops a cross-epic edge exactly as a closed one does. This
-// is the seam the closed-side test above cannot reach.
-// Deleted sits on the internal side and archived on the external side, which
-// puts both predicates under one assertion.
+// is the seam the closed-side test above cannot reach: `collect`'s member test
+// and `inPlayExcluding`'s counterpart filter both ask InPlay, and a closed
+// endpoint also fails a plain "not closed" test — so only a frozen endpoint can
+// catch a regression to that. Deleted sits on the internal side and archived on
+// the external side, which puts both predicates under one assertion.
 func TestRenderEpicContextCrossEpicFrozenSideFiltered(t *testing.T) {
 	f := newEpicFixture(t, "Frozen sides", "deps")
 	openChild := f.addChild("Open inside")
@@ -576,9 +584,11 @@ func idx(haystack, needle string) int {
 }
 
 // The epic plan is the other surface that names a referenced ticket's standing,
-// and the one an agent reads to judge whether an epic is finished. The five
-// closed shapes are asserted in one epic, each carrying what its close
-// recorded.
+// and the one an agent reads to judge whether an epic is finished. A bare
+// "[closed]" for every close would make a sibling declined wontfix — work
+// nobody did — read exactly like a sibling somebody finished, with no cue to
+// run a second command. The five closed shapes are asserted in one epic, each
+// carrying what its close recorded.
 //
 // [LAW:behavior-not-structure] Every arm goes through the store's real close
 // actions rather than a hand-built display status, so the test would catch the

@@ -32,7 +32,8 @@ func Merge(base storage.ListIssuesFilter, incoming storage.ListIssuesFilter) (st
 	filter := base
 	// [LAW:parse-dont-validate] Both sides are already []model.State — a type
 	// only model.ParseStates can mint — so statuses merge like every other
-	// filter slice.
+	// filter slice. Re-parsing here would ask a question the element type has
+	// already answered at the flag and grammar boundaries.
 	filter.Statuses = mergeSlice(filter.Statuses, incoming.Statuses)
 	// Resolution filtering is OR within the set, so duplicates are absorbed by the
 	// allow-map in the store; a plain append needs no dedup.

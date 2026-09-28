@@ -16,7 +16,7 @@ import (
 // the newest version cyclonedx-cli (the validator the release workflow runs
 // against the shipped file) accepts; cyclonedx-go defaults a fresh BOM to 1.7,
 // so buildSBOM must convert down at encode time or a 1.7 document would fail
-// `cyclonedx validate`.
+// the release workflow's `cyclonedx validate`.
 // [LAW:one-source-of-truth] the emitted spec version lives here only; the
 // encoder call and any validator pin both read this single value.
 const sbomSpecVersion = cdx.SpecVersion1_6
@@ -171,9 +171,9 @@ const pedigreeNoteVersion = "lit's go.mod requires this coordinate at the versio
 // one learns the opposite of the truth — that nothing was substituted.
 // It also claims no containment. modfile.IsDirectoryPath accepts `../sibling`
 // and absolute paths as readily as `./internal/...`, so "carried inside lit's
-// own repository" is false for a sibling checkout or /opt/src. Two
-// renderers stating one fact is exactly how one of them comes to state it
-// wrongly. [LAW:one-source-of-truth]
+// own repository" is false for a sibling checkout or /opt/src. Two renderers
+// stating one fact is exactly how one of them comes to state it wrongly.
+// [LAW:one-source-of-truth]
 const pedigreeNoteDirectory = "lit's go.mod requires this coordinate, but a replace directive substitutes its source with %s, " +
 	"a patched local directory. The code compiled into lit came from there, not from the version " +
 	"and purl above. No descendant component is recorded because no published coordinate identifies the patched source, " +
@@ -245,7 +245,8 @@ func componentPedigree(r Replacement) *cdx.Pedigree {
 // differ: Entry.LicenseName is written in exactly two places — Classify, which
 // returns a corpus name or unclassifiedLicense, and native.go's four curated
 // literals. oversizeLicense is produced only by the graph scanner, into
-// LicenseHit, and never becomes an Entry.
+// LicenseHit, and never becomes an Entry. Widening this condition to the set
+// would read as tidier and add a branch nothing can reach.
 func componentLicenses(name, acknowledgement string) *cdx.Licenses {
 	if name == "" || name == unclassifiedLicense {
 		return nil

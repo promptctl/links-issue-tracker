@@ -12,6 +12,9 @@ import (
 )
 
 // The compaction backstop is what collects a store that nothing else collects.
+// Compaction otherwise rides on the push path, so a workspace with no remote —
+// or one that simply goes a long time between explicit pushes — would have
+// nothing reclaiming its storage at all.
 //
 // It runs where the inline receive runs and for the same reason: the depth of a
 // compaction pass is irrelevant to its safety, but its TIMING is not. DOLT_GC
@@ -136,6 +139,9 @@ func compactThroughSession(ctx context.Context, ws workspace.Info, session syncS
 // genuinely differs between them: which command ran. [LAW:composability] the
 // variability crosses one boundary as a value.
 //
+// If each path passed its own decision string, the same event would be recorded
+// as "ok" by the backstop and "compacted" by the command, and an operator
+// filtering the trail for successful compactions would see only half of them.
 // Command already says which path ran — compactTraceCommand is deliberately
 // distinct from the command line for exactly that purpose — so a second axis
 // saying it again could only disagree. [LAW:one-source-of-truth]
@@ -152,7 +158,10 @@ func recordCompactionSuccess(ws workspace.Info, command string, outcome storage.
 // and the explicit `lit sync compact` — so the durable trail carries one shape
 // whichever entry point ran.
 //
-// A single renderer cannot disagree with itself. [LAW:one-source-of-truth]
+// If the two paths spelled the keys themselves, a reader asking "what did the
+// last compaction reclaim" would have to know which entry point ran before it
+// could know which key to read. A single renderer cannot disagree with itself.
+// [LAW:one-source-of-truth]
 //
 // The depth is spelled "depth" because that is the contract's own name for it
 // (CompactionOutcome.Depth). Detail rides along on both paths because a

@@ -82,7 +82,9 @@ func TestImportBatchesBuildsTheRequestedRows(t *testing.T) {
 //
 // The band is measured, not chosen: this repository's own 588 ticket
 // descriptions, truncated to 1310 bytes, gzip between 1.53x and 2.56x with a
-// median of 1.79x.
+// median of 1.79x. A repeated-phrase filler gzips 20.15x, which would make
+// every generated row about eleven times cheaper to store than a real one and
+// understate the size figures the campaign's ceiling is derived from.
 func TestFillerCompressesLikeRealTicketProse(t *testing.T) {
 	const lo, hi = 1.4, 2.7
 	for _, seed := range []int{0, 1, 7, 118, 589} {
@@ -105,7 +107,11 @@ func TestFillerCompressesLikeRealTicketProse(t *testing.T) {
 	}
 }
 
-// Every word in the vocabulary must be reachable.
+// Every word in the vocabulary must be reachable. A filler that misses part of
+// it produces nothing that looks wrong, and the compressibility band above
+// still passes: a plain LCG whose low bit strictly alternates, drawn twice per
+// token against an even-length vocabulary, locks each row to half the
+// vocabulary — the half its seed selects.
 func TestFillerReachesTheWholeVocabulary(t *testing.T) {
 	seen := map[string]bool{}
 	for seed := range 200 {

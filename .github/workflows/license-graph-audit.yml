@@ -58,7 +58,8 @@ jobs:
       # included — measured 100s and 129s in the two most recent weekly runs
       # (2026-08-24, 2026-08-17), so go test's default 10m alarm already
       # carries better than 4x headroom. If this ever trips 10m, that is real
-      # news about the graph or the network.
+      # news about the graph or the network, not a reason to widen the alarm
+      # instead of questioning the cost.
       - name: Whole-graph acceptance tests
         env:
           LIT_LICENSE_GRAPH_AUDIT: "1"

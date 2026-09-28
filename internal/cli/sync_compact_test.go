@@ -194,9 +194,14 @@ func TestRunSyncCompactCarriesTheDepthAndReportsThePass(t *testing.T) {
 }
 
 // Both compaction paths record through one renderer, so the durable trail
-// carries a single shape whichever entry point ran. [LAW:one-source-of-truth]
+// carries a single shape whichever entry point ran; paths spelling their own
+// keys would drift, and a reader would have to know which path ran before it
+// knew which key to read. Pinning the vocabulary here is what keeps a third
+// call site from inventing another spelling. [LAW:one-source-of-truth]
 // Both entry points describe a completed pass the same way, and only Command
-// says which one ran. Asserting both paths in one loop is the point.
+// says which one ran — otherwise an operator filtering the trail for successful
+// compactions would see only one path's half. Asserting both paths in one loop
+// is the point: a test that only ever drives one lets the two diverge unseen.
 // [LAW:one-source-of-truth]
 func TestBothCompactionPathsRecordOneDecision(t *testing.T) {
 	t.Parallel()
@@ -256,7 +261,9 @@ func TestRunSyncCompactSurfacesAndTracesAFailedPass(t *testing.T) {
 
 	// The engine reports the depth it attempted even when the pass failed, which
 	// is what a real Store does: compactWithinLock sets it before anything can
-	// go wrong.
+	// go wrong. The command does not spell the depth itself, so this is the only
+	// place it can come from — and that is the point, since a second spelling
+	// would let this vocabulary drift.
 	syncer := &compactSyncer{outcome: storage.CompactionOutcome{Depth: storage.GCNewGen}, err: failure}
 
 	err := runSyncCompact(context.Background(), &out, ws, syncSession{syncer: syncer}, nil)
@@ -281,7 +288,9 @@ func TestRunSyncCompactSurfacesAndTracesAFailedPass(t *testing.T) {
 }
 
 // compactThroughSession is what the backstop records with, and these are the
-// three things the durable trail can say about an automatic pass.
+// three things the durable trail can say about an automatic pass. None is
+// reachable from the cadence e2e tests: they drive a fresh workspace whose
+// footprint is under every threshold, so CompactIfDue always declines there.
 // [LAW:behavior-not-structure]
 func TestCompactThroughSessionRecordsEachOutcome(t *testing.T) {
 	t.Parallel()
@@ -385,9 +394,9 @@ func TestCompactThroughSessionRecordsEachOutcome(t *testing.T) {
 	})
 
 	// The engine's pass completed and the work after it failed, so the store
-	// really was rewritten. Recording a bare
-	// error here would lose a durable — possibly minutes-long, possibly
-	// old-generation-rewriting — side effect behind an unrelated failure.
+	// really was rewritten. Recording a bare error here would lose a durable —
+	// possibly minutes-long, possibly old-generation-rewriting — side effect
+	// behind an unrelated failure.
 	t.Run("a pass that ran and then failed is recorded as the rewrite it was", func(t *testing.T) {
 		t.Parallel()
 		ws := compactWorkspace(t)

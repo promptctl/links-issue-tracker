@@ -594,7 +594,8 @@ func TestParseName(t *testing.T) {
 		{"0", false},
 		// The numeric head round-trips through FormatInt: ParseInt's sign and
 		// leading-zero tolerance would otherwise admit shapes no lit producer
-		// ever mints.
+		// ever mints — "+<ns>.tmp" would classify as collectible and be
+		// destroyed.
 		{"+1700000000000000000", false},
 		{"01700000000000000000", false},
 		// The label part must be a shape sanitizeLabel can emit: a dotted or
@@ -605,7 +606,7 @@ func TestParseName(t *testing.T) {
 		{"1700000000000000000--edges-", false},
 		// Producer artifacts are rejected by parseName itself so every
 		// consumer (List, Restore's validateSnapshotName) refuses them from
-		// one predicate. The labeled ".tmp" form is the regression case: its
+		// one predicate. The labeled ".tmp" form is the sharpest case: its
 		// digit head parses.
 		{"1700000000000000000.tmp", false},
 		{"1700000000000000000-label.tmp", false},

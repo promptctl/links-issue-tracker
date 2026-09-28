@@ -27,8 +27,9 @@ type bannerReadCommand struct {
 
 // bannerReadCommands enumerates every read command wired to
 // printStalenessWarning — the three call sites in next.go, workable.go and
-// cli.go's showLeaf. A fourth wiring adds one row here and every test below
-// covers it at once.
+// cli.go's showLeaf. It has one home because a banner claim checked at two of
+// its three sites can be false at the third. A fourth wiring adds one row here
+// and every test below covers it at once.
 func bannerReadCommands(ticketID string) []bannerReadCommand {
 	return []bannerReadCommand{
 		{"next", []string{"next"}},
@@ -61,17 +62,17 @@ func TestReadCommandsAnnounceAStaleBuild(t *testing.T) {
 }
 
 // One banner is shared by three read commands, so its claim must be true of
-// all three: `lit show <id>` performs no routing — the caller
-// names the ticket — and a line asserting "the routing behind this answer"
-// there points a reader at a concern that does not exist on that command.
+// all three: `lit show <id>` performs no routing — the caller names the ticket
+// — and a line asserting "the routing behind this answer" there points a reader
+// at a concern that does not exist on that command.
 //
-// Two arms, and they are not the same check. The word ban is a named tripwire,
-// and nothing more: it is a loose match, and a line saying "the ticket
-// selection behind this answer" would walk straight past it. The sameness check
-// is the general contract — one shared banner may make only a claim it can make
-// everywhere, so the three sites must render one identical line, and
-// specializing the text per command reddens this and makes the specializer
-// prove the new claim at every site it reaches.
+// Two arms, and they are not the same check. The word ban is a named tripwire
+// for the routing clause, and nothing more: it is a loose match, and a line
+// saying "the ticket selection behind this answer" would walk straight past it.
+// The sameness check is the general contract — one shared banner may make only
+// a claim it can make everywhere, so the three sites must render one identical
+// line, and specializing the text per command reddens this and makes the
+// specializer prove the new claim at every site it reaches.
 func TestStaleBuildWarningClaimsNothingCommandSpecific(t *testing.T) {
 	stampBuild(t, version.OriginSource, time.Now().Add(-10*24*time.Hour).UTC().Format(time.RFC3339))
 	dir, ticketID := unpushedCloneWithOneLocalChange(t)
@@ -150,7 +151,8 @@ func TestReadCommandsStaySilentOnAFreshOrReleasedBuild(t *testing.T) {
 // Build drift is the deepest of the three things this banner reports: a binary
 // that predates master can be why the sync lines below it read as they do, so a
 // reader who takes it in first interprets the rest correctly. Position is not
-// cosmetic here.
+// cosmetic here — a reader who sees the sync lines and finds them unremarkable
+// may never learn about the binary.
 func TestStaleBuildWarningLeadsTheBanner(t *testing.T) {
 	stampBuild(t, version.OriginSource, time.Now().Add(-10*24*time.Hour).UTC().Format(time.RFC3339))
 	dir, ticketID := unpushedCloneWithOneLocalChange(t)

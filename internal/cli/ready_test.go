@@ -246,6 +246,13 @@ func TestRunReadyAnnotatesBlockedIssues(t *testing.T) {
 // Issue.InPlay(): a dependency blocks while it is still work anyone might do,
 // and stops blocking the moment it leaves the flow — by any of the three exits.
 //
+// The archived and deleted arms are the ones a status-only predicate gets
+// wrong: a soft-deleted dependency would keep the edge alive while lit
+// close/open/start all refuse the frozen row, so the dependent would be blocked
+// forever by a ticket that appears in no listing and that no command can
+// discharge. A predicate of State() != StateClosed fails exactly those two arms
+// and passes the others.
+//
 // [LAW:behavior-not-structure] The assertion is the contract an agent depends on
 // — "is this ticket ready" through ClassifyReadiness — not the annotator's
 // internals, so any implementation honoring one definition of unfinished passes.

@@ -15,9 +15,13 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workflows"
 )
 
-// The pick is a multi-step precedence over data (claim standings, this
-// checkout's identity) the backlog view never reads, producing a discriminated
-// NextOutcome. [LAW:decomposition] [LAW:carrying-cost]
+// `lit next` is not a workableView preset over the shared backlog pipeline (see
+// workable.go). The pick is not "the first ready row of an ordered list", it is
+// a multi-step precedence over data (claim standings, this checkout's
+// identity) the backlog view never reads, producing a discriminated
+// NextOutcome a single-row keep()/render() signature has no way to carry.
+// Stretching the shared preset to fit would tangle the two.
+// [LAW:decomposition] [LAW:carrying-cost]
 const nextUsage = "usage: lit next [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--all]"
 
 func nextLeaf() appLeaf {
@@ -91,8 +95,8 @@ func nextLeaf() appLeaf {
 // Dependency) is named above the row, so the commitment is visible before it
 // is made (design-docs/work-claims.md, Routing step 4); a lane already held
 // names nothing to commit — nothing at all for ServedFromClaim, and the state
-// it is already in for ResumedOwnWork, since being handed back a ticket already in flight is the
-// one pick that looks like a fresh start but is not one.
+// it is already in for ResumedOwnWork, since being handed back a ticket already
+// in flight is the one pick that looks like a fresh start but is not one.
 //
 // Every line here is in the conditional or reports a state that already holds.
 // `lit next` claims nothing and starts nothing — `lit start` does — so a line
@@ -121,9 +125,13 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 		row = o.Row
 		announce = startAdvice(o.Row, o.Lane) +
 			fmt.Sprintf(" (gates %s, which is in a lane you hold)\n", o.Gates)
-	// The two terminal outcomes travel outward AS THEMSELVES.
-	// [LAW:types-are-the-program] classification is carried by the type, never
-	// re-derived from the message.
+	// The two terminal outcomes travel outward AS THEMSELVES. Rendering them
+	// into an untyped error here would discard the very discriminator routing
+	// has just established, so both sinks — ExitCode and commandErrorReason —
+	// would fall through to "command_failed", whose remediation tells the agent
+	// to retry a deterministic answer and then run `lit doctor` on a healthy
+	// workspace. [LAW:types-are-the-program] classification is carried by the
+	// type, never re-derived from the message.
 	case Exhausted:
 		return workflows.Occasion{}, o
 	case NoWork:
@@ -151,18 +159,24 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 // support it. A lane is keyed on the checkout, deliberately — many sessions in
 // one checkout are one claimant, which is what lets a fresh session inherit its
 // predecessor's work with no re-briefing (design-docs/work-claims.md). But two
-// sessions running in one checkout at once are also one claimant.
+// sessions running in one checkout at once are also one claimant, and there
+// the sentence would tell the second one it has been working a ticket the first
+// is mid-PR on.
 //
 // The assignee cannot separate a live peer from a predecessor who stopped, and
 // NOTHING lit holds can: every session mints a new identity, so both read as
 // "not you", and claims carry staleness heuristics with no liveness probe by
-// design.
+// design. The orphan clock fails open as a discriminator: `updated_at` moves on
+// field writes and transitions, not on the work, and a comment never touches
+// the row (store.go, AddComment), so a session committing and commenting all
+// day goes "orphaned" at six hours while still holding the branch.
 //
 // So it does not adjudicate. The asymmetry decides the default: a warning that
-// was not needed costs one check. It names who the ticket says has it, asks for the check, and
-// leads with continuing rather than dropping the work — the predecessor
-// hand-down is the common case and must stay cheap, which is what keeps this a
-// line to read rather than a gate to clear.
+// was not needed costs one check, and silence that was needed costs a
+// collision. It names who the ticket says has it, asks for the check, and leads
+// with continuing rather than dropping the work — the predecessor hand-down is
+// the common case and must stay cheap, which is what keeps this a line to read
+// rather than a gate to clear.
 //
 // The one thing that silences it is an assignee that names nobody: empty is the
 // ordinary state of a ticket started by a checkout driving no agent session, and
@@ -195,7 +209,9 @@ func resumeAdvice(row annotation.AnnotatedIssue, actingAs string) string {
 // claim, and the row's history is `lit show`'s to tell.
 //
 // The object turns on the lane's shape, which is why Describe answers in two
-// parts. A solo lane IS the ticket. The pronoun is the caller's answer to that,
+// parts. A solo lane IS the ticket, so naming it would spell the same id twice
+// ("starting X claims X") — a tautology no reader could take as advice about a
+// command they have yet to run. The pronoun is the caller's answer to that,
 // available here and nowhere else because the ticket is named one clause
 // earlier. next_route_test.go pins all four cells of state and lane shape.
 func startAdvice(row annotation.AnnotatedIssue, lane model.LaneID) string {

@@ -65,8 +65,9 @@ func TestRankCrossFrameReportsResolution(t *testing.T) {
 //
 // rank set anchors at the top of the representatives' own frame, so ordering
 // three children of an epic leads that epic's children and moves nothing in the
-// queue at large. Agents read this output as ground truth, so a summary that
-// overstates the scope of the move is a wrong answer, not a cosmetic one.
+// queue at large. A summary saying "ranked 3 issues at top" would read as the
+// head of the backlog. Agents read this output as ground truth, so a summary
+// that overstates the scope of the move is a wrong answer, not a cosmetic one.
 // [LAW:no-silent-failure]
 func TestRankSetNamesTheFrameItStackedIn(t *testing.T) {
 	ctx := context.Background()

@@ -70,12 +70,12 @@ func OpenSync(ctx context.Context, doltRootDir string, workspaceID string) (_ *S
 	// Same per-open branch normalization Store.Open runs: the bootstrap only
 	// normalizes at creation, so a pre-made database (an adopt's clone) gets
 	// renamed to master here on the mirror's own engine. The decision is a
-	// lock-free read and the commit lock
-	// is taken only when a rename is actually due — read-only OpenSync
-	// consumers (lit sync status, every mirror cycle) must not queue behind
-	// a snapshot copy's minutes-long commit-lock hold for a no-op. The one
-	// branch is the domain's own discriminator: masterRenameSource's typed
-	// absence. [LAW:dataflow-not-control-flow]
+	// lock-free read and the commit lock is taken only when a rename is
+	// actually due — read-only OpenSync consumers (lit sync status, every
+	// mirror cycle) must not queue behind a snapshot copy's minutes-long
+	// commit-lock hold for a no-op. The one branch is the domain's own
+	// discriminator: masterRenameSource's typed absence.
+	// [LAW:dataflow-not-control-flow]
 	// [LAW:single-enforcer] The rename itself still runs only inside
 	// ensureMasterDefaultBranch under the commit lock, which re-derives the
 	// decision — the pre-check is an optimization, never the enforcer.
@@ -569,8 +569,10 @@ func (s *Store) CompactIfDue(ctx context.Context) (storage.CompactionOutcome, er
 // does not become conditional on a measurement succeeding — so the footprint
 // can only ever deepen the pass, never cancel it.
 //
-// A measurement that fails therefore returns a usable depth AND its error, and
-// the caller reports the problem instead of the store silently choosing for it.
+// A measurement that fails therefore returns a usable depth AND its error: the
+// fallback is this path's contract, the new generation alone, which makes it a
+// safe floor rather than an invented one, and the caller reports the problem
+// instead of the store silently choosing for it.
 // [LAW:no-silent-failure]
 func (s *Store) chooseCompactionDepth() (GCMode, error) {
 	footprint, err := s.measureFootprint()
@@ -637,8 +639,10 @@ func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch st
 		//
 		// Whether a pass ran is the attempt's to answer, not this call site's.
 		// The error arriving here may come from the compaction itself or from
-		// the push after it, and this code cannot tell them apart.
-		// compactionReport holds that filter. [LAW:one-source-of-truth]
+		// the push after it, and this code cannot tell them apart — assuming the
+		// latter would announce a full pass in the same breath as the error
+		// saying the full pass had failed. compactionReport holds that filter.
+		// [LAW:one-source-of-truth]
 		//
 		// This is deliberately not the prune's arrangement below, which is
 		// gated on the push succeeding for a real reason: the prune needs the
@@ -685,12 +689,13 @@ func (s *Store) pushWithinLock(ctx context.Context, remote string, branch string
 		return storage.SyncPushResult{}, err
 	}
 	trimmedBranch := strings.TrimSpace(branch)
-	// [LAW:single-enforcer] Refuse before authoring a commit onto a remote whose
-	// head is at a schema this binary cannot produce — otherwise a plain push is
-	// rejected with a raw non-fast-forward string and a --force push would
-	// REGRESS the shared remote to this binary's older schema. The guard needs the resolved tracking ref, so it
-	// runs once the branch is known; an empty branch (push HEAD with no explicit
-	// branch) has no tracking ref to compare against and is left to Dolt.
+	// [LAW:single-enforcer] Refuse before authoring a commit onto a remote
+	// whose head is at a schema this binary cannot produce — otherwise a plain
+	// push is rejected with a raw non-fast-forward string and a --force push
+	// would REGRESS the shared remote to this binary's older schema. The guard
+	// needs the resolved tracking ref, so it runs once the branch is known; an
+	// empty branch (push HEAD with no explicit branch) has no tracking ref to
+	// compare against and is left to Dolt.
 	if trimmedBranch != "" {
 		if err := s.guardRemoteSchemaAhead(ctx, trimmedRemote, trimmedBranch); err != nil {
 			return storage.SyncPushResult{}, err

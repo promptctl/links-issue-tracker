@@ -39,10 +39,12 @@ func createChildLocally(t *testing.T, ctx context.Context, root, workspace, pare
 // label, comment and event that names it. It plants the premise these tests
 // need: two stores holding one id for two unrelated jobs.
 //
-// Colliding pairs reach reconcile from the field: an import or a restore writes
-// whatever ids its file names. Reconcile refuses two rows under one id however
-// they came to share it, so these tests state the shared id outright rather
-// than leaning on a minter. [LAW:behavior-not-structure]
+// The minter does not produce that pair by itself: child ids are
+// content-hashed, so two disconnected stores mint different ids for different
+// work. Colliding pairs reach reconcile from the field: an import or a restore
+// writes whatever ids its file names. Reconcile refuses two rows under one id
+// however they came to share it, so these tests state the shared id outright
+// rather than leaning on a minter. [LAW:behavior-not-structure]
 func retagIssueLocally(t *testing.T, ctx context.Context, root, workspace, oldID, newID string) {
 	t.Helper()
 	st, err := Open(ctx, root, workspace)
@@ -104,8 +106,8 @@ func pushRootOrFatal(t *testing.T, ctx context.Context, root string) {
 	}
 }
 
-// TestSyncReconcileRefusesIDCollisionAndCommitsNothing is the ticket's defect
-// driven end to end through two real stores, the real id minter, and the real
+// TestSyncReconcileRefusesIDCollisionAndCommitsNothing drives an id collision
+// end to end through two real stores, the real id minter, and the real
 // reconcile — not a hand-built export. Both clones hold one epic; each files its
 // own next child while disconnected.
 //
@@ -131,9 +133,9 @@ func TestSyncReconcileRefusesIDCollisionAndCommitsNothing(t *testing.T) {
 		"hash ids grow a character past 4k issues")
 
 	// The premise, stated outright: the two stores hold one id for two unrelated
-	// jobs. B's row is retagged onto A's id; a store carrying pre-hash
-	// children, or one restored from an import, arrives at reconcile in exactly
-	// this state.
+	// jobs. B's row is retagged onto A's id because the minter does not produce
+	// the pair; a store carrying pre-hash children, or one restored from an
+	// import, arrives at reconcile in exactly this state.
 	retagIssueLocally(t, ctx, rootB, "wsB", theirsID, oursID)
 	theirsID = oursID
 
@@ -180,9 +182,9 @@ func TestSyncReconcileRefusesIDCollisionAndCommitsNothing(t *testing.T) {
 	}
 }
 
-// TestTwoDisconnectedStoresMintDistinctChildIDs is this ticket's defect driven
-// end to end through two real stores and the real minter — the prevention half
-// of what TestSyncReconcileRefusesIDCollisionAndCommitsNothing detects.
+// TestTwoDisconnectedStoresMintDistinctChildIDs drives child-id minting end to
+// end through two real stores and the real minter — the prevention half of what
+// TestSyncReconcileRefusesIDCollisionAndCommitsNothing detects.
 //
 // Both clones hold the same epic and neither can see the other's work. The ids
 // must differ, and reconcile must carry both tickets through rather than

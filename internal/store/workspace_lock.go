@@ -69,9 +69,9 @@ func WorkspaceLockPath(databasePath string) string {
 // place when `lit snapshots restore` rotates that directory out from under
 // concurrent acquirers.
 //
-// [LAW:one-source-of-truth] Every *LockPath helper in this package reads it
-// from one place, so the position the ONE HOME rule names has exactly one
-// definition.
+// [LAW:one-source-of-truth] Every *LockPath helper in this package reads this
+// derivation from one place, so the position the ONE HOME rule names has
+// exactly one definition.
 func workspaceStorageDir(databasePath string) string {
 	return filepath.Dir(filepath.Clean(databasePath))
 }
@@ -100,7 +100,9 @@ func acquireWorkspaceShared(ctx context.Context, doltRootDir string) (func() err
 // a transient rotation is waited out rather than paper-cutting the caller.
 //
 // [LAW:single-enforcer] Reader-vs-rotator exclusion has exactly one boundary
-// — this lock, in shared mode.
+// — this lock, in shared mode. The commit lock is a writer-vs-writer gate on a
+// different file, which an adopt's exclusive hold never contends with, so a
+// snapshot copy under only the commit lock can tear.
 func LockWorkspaceShared(ctx context.Context, doltRootDir string) (func() error, error) {
 	return acquireWorkspaceShared(ctx, doltRootDir)
 }
@@ -381,9 +383,11 @@ func acquireStoreLock(ctx context.Context, storageDir, lockPath string, exclusiv
 // coResidentHolderWait budgets for — and a rotation under that holder
 // is outside lit's exclusion, as every lit-vs-non-lit interaction is.
 //
-// [LAW:one-source-of-truth] Code that needs the fact ("one write-capable
-// engine on this path") contends on Dolt's own lock; it does not mint a
-// shadow.
+// [LAW:one-source-of-truth] A lit-minted lock for the fact "one write-capable
+// engine on this path", taken by write opens but not by OpenForRead, would be
+// a partial second representation of it — the disagreement that lets a read
+// command's engine run journal recovery underneath a snapshot walk. Code that
+// needs the fact contends on Dolt's own lock; it does not mint a shadow.
 func DoltJournalLockPath(databasePath string) string {
 	return filepath.Join(filepath.Clean(databasePath), doltDatabaseName, ".dolt", "noms", "LOCK")
 }
@@ -428,9 +432,10 @@ func LockDoltJournalExclusive(ctx context.Context, databasePath string) (func() 
 	//
 	// Both get the fault error rather than a confident "run `lit init`", because
 	// that sentence is the one that loops: init refuses a root it cannot read
-	// and says retry. For the interrupted half that is an accepted downgrade — re-running
-	// init would in fact fix it — and the trade is deliberate: a diagnosis that
-	// terminates beats an instruction that spins. [LAW:one-type-per-behavior]
+	// and says retry. For the interrupted half that is an accepted downgrade —
+	// re-running init would in fact fix it — and the trade is deliberate: a
+	// diagnosis that terminates beats an instruction that spins.
+	// [LAW:one-type-per-behavior]
 	if _, err := os.Stat(filepath.Dir(lockPath)); err != nil {
 		return nil, fmt.Errorf("stat dolt journal dir: %w", err)
 	}

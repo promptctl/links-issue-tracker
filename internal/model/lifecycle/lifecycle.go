@@ -63,13 +63,13 @@ const (
 // command is `lit open`. Action.Name is documented as the persisted event
 // verb, so a message interpolating it where the reader expects a command
 // quotes the wrong name -- and it reads correctly for seven of the eight
-// actions.
+// actions, which is exactly why the eighth goes unnoticed.
 // [LAW:one-source-of-truth] Both names for an action are declared here, on one
 // line each, so neither can be changed with the other out of view.
 //
 // Every action is listed, including the seven whose two names agree. A default
 // arm would be shorter and would hand any future action its persisted encoding
-// silently.
+// silently, quoting the wrong name for the next verb whose names diverge.
 // [LAW:no-silent-failure]
 var actionVerbs = map[ActionName]string{
 	ActionStart:     "start",
@@ -168,8 +168,8 @@ func ParseState(value string) (State, error) {
 // stage downstream already ORs whatever it is handed.
 // [LAW:no-silent-failure] Every fragment goes through the sealed ParseState
 // gate and nothing is skipped, so `status:`, `--status ,` and `--status open,`
-// stay loud errors rather than degrading into "no status filter"
-// and handing back the default listing wearing the shape of an answer.
+// stay loud errors rather than degrading into "no status filter" and handing
+// back the default listing wearing the shape of an answer.
 func ParseStates(inputs ...string) ([]State, error) {
 	var out []State
 	for _, input := range inputs {

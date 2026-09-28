@@ -48,7 +48,9 @@ func gatherClaimContext(ctx context.Context, stdout io.Writer, ap *app.App) (cla
 	// included, because a checkout's hold on a lane can rest entirely on a
 	// `done` against a ticket no longer open — and a deleted or archived
 	// issue is exactly such a ticket, still named by its own historical
-	// events. The zero-value filter excludes both.
+	// events. The zero-value filter excludes both, so with it a repository
+	// holding even one deleted issue that ever carried an event would make
+	// NewEvidence fail outright on every `next` and `backlog` invocation.
 	allIssues, err := ap.Store.ListIssues(ctx, storage.ListIssuesFilter{IncludeArchived: true, IncludeDeleted: true})
 	if err != nil {
 		return claimContext{}, err
@@ -159,8 +161,12 @@ func readClaimant(ctx context.Context, ap *app.App, issueID string) (claims.Clai
 // [LAW:no-silent-failure] Both conditions on the notice are load-bearing and
 // neither implies the other: Held is whether anything ever established a hold —
 // a fact NEITHER identity half carries, since both go empty on real holders, so
-// a ticket carrying `lit new --assignee X` that nobody has started is silent —
-// and the claimant comparison is whether that holder changed.
+// a ticket carrying `lit new --assignee X` that nobody has started is silent
+// (reading it off the checkout instead is the wrong definition; claimant.go
+// says why) — and the claimant comparison is whether that holder changed.
+// Comparing assignees alone would be silent for the two takeovers that matter
+// most: between two human checkouts (both assignees empty) and between two
+// worktrees of one agent session (both identical).
 func transferNotice(ctx context.Context, ap *app.App, issueID string, start model.Start) (string, error) {
 	prior, err := readClaimant(ctx, ap, issueID)
 	if err != nil {

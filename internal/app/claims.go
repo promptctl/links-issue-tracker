@@ -41,7 +41,8 @@ func (a *App) LocalCheckouts() (claims.LocalCheckouts, error) {
 // whether the holder has locked the tree.
 //
 // It is exported because the CLI enumerates for itself — it needs the addresses
-// off the same listing. [LAW:one-source-of-truth]
+// off the same listing — and a second, mirrored copy of this projection would
+// drift from it. [LAW:one-source-of-truth]
 //
 // Checkouts that have never mutated carry no token and contribute none. They are
 // live, and they hold no claim either — a checkout produces its first token and

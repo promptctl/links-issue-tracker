@@ -12,7 +12,11 @@ import (
 )
 
 // These tests are the accept/reject table for `--columns`, written out case by
-// case.
+// case. The failure they guard is a silent one: were an unknown name dropped
+// and the remaining columns printed under exit 0, a typo would read back as a
+// successful answer to a different question. Nothing but an explicit
+// reject-set catches that, because every wrong answer it would produce is
+// well-formed.
 
 // listColumnsOutput runs `lit ls --columns expr` against a store holding one
 // issue and returns stdout and the error, so each case can assert on both. A
@@ -67,8 +71,10 @@ func TestColumnsRejectsUnknownName(t *testing.T) {
 			// Matched against the QUOTED offender, not the bare word. The
 			// message always carries the full valid-columns list, so a bare
 			// substring check is satisfied by an unrelated part of it — "stat"
-			// is inside the "state" this very message advertises. Requiring
-			// the quotes puts the match on the one span only the offender fills.
+			// is inside the "state" this very message advertises, so that row
+			// would pass no matter what the code echoed as the offender.
+			// Requiring the quotes puts the match on the one span only the
+			// offender fills.
 			if quoted := fmt.Sprintf("%q", tc.unknown); !strings.Contains(err.Error(), quoted) {
 				t.Errorf("--columns %q error %q does not name the offending column as %s", tc.expr, err, quoted)
 			}
@@ -107,6 +113,9 @@ func TestColumnsAcceptsEveryDeclaredName(t *testing.T) {
 	}
 }
 
+// TestColumnsAcceptsCaseAndSpacing pins the parser's case and spacing
+// normalization, so the strict boundary does not also reject input it
+// normalizes.
 func TestColumnsAcceptsCaseAndSpacing(t *testing.T) {
 	for _, expr := range []string{"ID,TITLE", " id , title ", "Id,Title"} {
 		if _, err := listColumnsOutput(t, expr); err != nil {

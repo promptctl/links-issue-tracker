@@ -27,10 +27,10 @@ import (
 // waitForParentExit only knows about its OWN spawning command's PID — it has
 // no awareness that a DIFFERENT, still-running mirror (or the next
 // command's own engine) might already hold the path's one read-write engine.
-// This test drives the same shape — several
-// `lit new` calls fired in immediate succession — end to end through the real
-// CLI binary rather than the store package directly (see
-// TestConcurrentOpenWaitsForLiveWriteEngine and
+// Without the store's write-open serialization this is a genuine collision.
+// This test drives the same shape — several `lit new` calls fired in immediate
+// succession — end to end through the real CLI binary rather than the store
+// package directly (see TestConcurrentOpenWaitsForLiveWriteEngine and
 // TestOpenSyncWaitsForLiveForegroundEngine in
 // internal/store/engine_serialization_test.go for the deterministic,
 // non-timing-dependent proof of the underlying mechanism this test
@@ -134,14 +134,13 @@ func TestBurstOfMutationsNeverHitsEngineReadOnlyCollision(t *testing.T) {
 	}
 
 	// No sweep push. The oracle poll below alone proving delivery IS the
-	// acceptance: the burst's FINAL mutation either
-	// observed a fresh mirror-pending claim (a spawned, not-yet-cleared
-	// mirror whose engine open — and so HEAD read — still lies ahead of the
-	// mutation's closed session) or claimed the marker and spawned its own
-	// mirror. A sweep would mask a regression in exactly the guarantee this test
-	// pins. [LAW:no-ambient-temporal-coupling] the invariant is owned state
-	// (the mirror-pending marker), not a time window, so the poll may bet on
-	// it.
+	// acceptance: the burst's FINAL mutation either observed a fresh
+	// mirror-pending claim (a spawned, not-yet-cleared mirror whose engine
+	// open — and so HEAD read — still lies ahead of the mutation's closed
+	// session) or claimed the marker and spawned its own mirror. A sweep would
+	// mask a regression in exactly the guarantee this test pins.
+	// [LAW:no-ambient-temporal-coupling] the invariant is owned state (the
+	// mirror-pending marker), not a time window, so the poll may bet on it.
 	//
 	// The poll proves delivery only; TempDir safety against a mirror that
 	// outlives the satisfied commit count (a post-release re-check cycle) is

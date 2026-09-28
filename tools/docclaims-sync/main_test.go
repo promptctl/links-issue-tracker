@@ -19,7 +19,10 @@ func stopped() docclaims.Comparison {
 }
 
 // TestWriteRefusesToEraseAStoppedMessage covers the one action that can defeat
-// this gate.
+// this gate. Every other report compares the manifest against the tree; a write
+// path that did not would let a contributor regenerating for a legitimate
+// reason take an unrelated stopped message with them and leave every check
+// green.
 func TestWriteRefusesToEraseAStoppedMessage(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "manifest_gen.go")
 	err := write(path, []docclaims.Claim{{Doc: "d.md", Text: "some text", Src: "some text"}}, stopped())
@@ -51,8 +54,11 @@ func TestWriteRecordsACleanDerivation(t *testing.T) {
 	}
 }
 
-// TestTheExitLineCountsWhatDiffers: one chapter dropping a quotation while
-// another adds one leaves both totals equal.
+// TestTheExitLineCountsWhatDiffers covers a summary that must not contradict
+// the lines above it. One chapter dropping a quotation while another adds one
+// leaves both totals equal, so a line stating the two totals — "committed 1102
+// quotations, the tree yields 1102" — offers no evidence of a difference; the
+// exit line counts what differs instead.
 func TestTheExitLineCountsWhatDiffers(t *testing.T) {
 	err := verify(docclaims.Comparison{
 		Drifted: []docclaims.Drift{{
@@ -72,8 +78,8 @@ func TestTheExitLineCountsWhatDiffers(t *testing.T) {
 // TestWriteReportsAReanchorAndStillWrites pins the branch between the other
 // two: a re-anchor is the ordinary edit, so it is reported and then written,
 // never refused. The distinction is the whole reason Stopped is a separate
-// kind — a refusal widened to cover AnchorMoved would have broken the
-// prescribed workflow with both of the other tests still green.
+// kind — a refusal widened to cover AnchorMoved would break the prescribed
+// workflow with both of the other tests still green.
 //
 // It also pins the order. The report claims an action already taken, so it
 // must follow the write that takes it.
@@ -97,9 +103,11 @@ func TestWriteReportsAReanchorAndStillWrites(t *testing.T) {
 	}
 }
 
-// TestAReanchorReportDoesNotDumpAWholeLiteral: a Go-literal handle is the
-// entire literal the words were found inside, which reaches kilobytes in this
-// corpus.
+// TestAReanchorReportDoesNotDumpAWholeLiteral covers a report that must not
+// bury its own subject. A Go-literal handle is the entire literal the words
+// were found inside, which reaches kilobytes in this corpus, so the writer
+// prints it shortened, exactly as Explain truncates the same value for that
+// reason.
 func TestAReanchorReportDoesNotDumpAWholeLiteral(t *testing.T) {
 	huge := "a shipped literal that begins here " + strings.Repeat("x", 4000)
 	d := docclaims.Drift{
@@ -117,9 +125,10 @@ func TestAReanchorReportDoesNotDumpAWholeLiteral(t *testing.T) {
 }
 
 // TestVerifyGivesEachCaseItsOwnRemedy covers the branch that decides what a
-// -check failure tells a contributor to do. The two instructions are
-// opposites. One says the words still ship and
-// a reader should confirm the rewording; the other says nothing ships them and
+// -check failure tells a contributor to do. A swapped case order or an
+// inverted condition would hand a contributor the wrong instruction, and the
+// two instructions are opposites. One says the words still ship and a reader
+// should confirm the rewording; the other says nothing ships them and
 // regenerating destroys the record that the specification went false.
 //
 // Stopped is tested first here for the same reason write() tests it first: it
@@ -180,7 +189,10 @@ func TestVerifyPrefersTheDestructiveRemedyWhenBothApply(t *testing.T) {
 
 // TestARemedyLineSaysHowMuchOfTheReportItCovers pins the scope of the two
 // remedy lines. Each covers a subset of what was printed above it, and neither
-// number is a total.
+// number is a total — a comparison holding one re-anchor beside one quotation
+// the prose dropped prints two lines, and a bare "1" under an instruction to
+// confirm each of them was a rewording sends the reader to regenerate over an
+// entry nobody asked them to look at.
 func TestARemedyLineSaysHowMuchOfTheReportItCovers(t *testing.T) {
 	mixed := docclaims.Comparison{Drifted: []docclaims.Drift{
 		{Claim: docclaims.Claim{Doc: "a.md", Text: "reworded message", Src: "reworded message"}, Kind: docclaims.AnchorMoved, Now: "a longer literal saying reworded message"},

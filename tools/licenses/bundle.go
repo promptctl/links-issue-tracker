@@ -100,7 +100,9 @@ const (
 func noteLine(note string) string { return headerLine("Note", note) }
 
 // headerLine is the one renderer of a labelled, optional line in a bundle
-// section's header, terminated so it slots between the lines around it.
+// section's header, terminated so it slots between the lines around it. Both
+// callers share it rather than each keeping a copy of "empty means emit
+// nothing, otherwise label, colon, space, value, newline".
 // [LAW:one-source-of-truth]
 //
 // [LAW:dataflow-not-control-flow] absence is a value this returns, so

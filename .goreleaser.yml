@@ -2,10 +2,9 @@
 #
 # CONFIG VERSION: goreleaser v2 syntax. `version: 2` below is required —
 # running without it fails with "only version: 2 configuration files are
-# supported". The release build runs goreleaser inside
-# build/Dockerfile.release, which installs goreleaser v2.16.0 + zig 0.14.0 as
-# the single cross-toolchain (a pinned macOS SDK supplies the Apple frameworks
-# zig omits, link-only).
+# supported". The release build runs goreleaser inside build/Dockerfile.release,
+# which installs goreleaser v2.16.0 + zig 0.14.0 as the single cross-toolchain
+# (a pinned macOS SDK supplies the Apple frameworks zig omits, link-only).
 #
 # CGO is required by gozstd in Dolt; that Dockerfile image owns the per-target C
 # toolchains (zig cc for every target: darwin, windows, and linux via musl),
@@ -190,8 +189,11 @@ archives:
       # The fork ledger, because the two files above POINT at it: three of
       # their rows disclose that a component was built from a coordinate other
       # than the one naming it, and each says "see FORKS.md" for what the
-      # substitution changes and why. [FRAMING:representation] the map
-      # names the territory, so the territory ships.
+      # substitution changes and why. Without it a recipient working from the
+      # archive has no way to follow that pointer — the compliance artifacts
+      # would cite a document the release does not carry.
+      # [FRAMING:representation] the map names the territory, so the territory
+      # ships.
       - FORKS.md
 
 checksum:

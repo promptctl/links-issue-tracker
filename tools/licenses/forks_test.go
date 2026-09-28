@@ -11,7 +11,8 @@ import (
 )
 
 // forkOwnerPrefix is the only account allowed to own a module lit substitutes
-// for an upstream one.
+// for an upstream one. A fork under a personal GitHub account is a single point
+// of failure for master's build.
 const forkOwnerPrefix = "github.com/promptctl/"
 
 // forkLedgerPath is FORKS.md, the written fork contract. go.mod points at it
@@ -92,8 +93,8 @@ func moduleReplaces(t *testing.T, f *modfile.File) []*modfile.Replace {
 	// coverage, the vendored mirror — and every one of those properties is
 	// vacuously true of an empty slice. A fork misfiled as ReplacedByVersion
 	// would empty this set and turn three green tests into three tests of
-	// nothing. Fail here instead, once, where the
-	// reason is legible. [LAW:verifiable-goals]
+	// nothing. Fail here instead, once, where the reason is legible.
+	// [LAW:verifiable-goals]
 	if len(out) == 0 {
 		t.Fatalf("go.mod declares %d replace directive(s) but parseReplacement classified none of them as a fork; "+
 			"the fork-contract tests below would all pass without examining anything. If lit genuinely stopped "+
@@ -138,7 +139,10 @@ func TestForkReplacementsAreOrgOwned(t *testing.T) {
 // properties are gone, silently, with the build still green.
 //
 // The property is "no require names a replace target," which is true by
-// construction.
+// construction. Asking whether a require is under forkOwnerPrefix would be a
+// stronger theorem that is not true: a sibling org-owned library that forks
+// nothing is a legitimate dependency, and that test would fail on it with
+// advice that makes no sense.
 // [FRAMING:representation] the map keeps naming the territory it was drawn from.
 func TestForkedCoordinatesStayUpstream(t *testing.T) {
 	f := parseRootGoMod(t)
@@ -294,7 +298,8 @@ func TestForkLedgerNamesEverySubstitution(t *testing.T) {
 // TestVendoredDriverMirrorsForkReplaces synchronizes the third home of the fork
 // pins. The vendored driver's go.mod mirrors the root's fork replaces so that,
 // resolved standalone, it builds against the forks and cannot re-record a
-// coordinate the forks removed.
+// coordinate the forks removed (one can arrive back as an indirect require
+// through the upstream go-mysql-server go.mod).
 //
 // [LAW:one-source-of-truth] the root go.mod stays the authority; the mirror is
 // a derived copy, and this test is what makes a derived copy legal — the same

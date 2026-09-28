@@ -394,7 +394,10 @@ func (s *Store) pruneRemoteCache(ctx context.Context) remoteCachePruneOutcome {
 		outcome.Reclaimed += reclaimed
 	}
 	// Every entry is attempted and a failure records itself rather than ending
-	// the walk.
+	// the walk. Returning on the first error would make one permanently
+	// unremovable directory a head-of-line blocker: plan.abandoned is sorted, so
+	// that same entry is reached first on every push forever and nothing
+	// sorting after it is ever attempted again, however removable it is.
 	// [LAW:dataflow-not-control-flow] which entries get visited does not
 	// depend on what the earlier ones did.
 	outcome.Problem = strings.Join(problems, "; ")

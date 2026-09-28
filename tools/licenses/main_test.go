@@ -16,7 +16,8 @@ const litPkg = "github.com/promptctl/links-issue-tracker/cmd/lit"
 
 // realInventory memoizes the one buildEntries(litPkg) run the whole test
 // binary shares — a `go list -deps` plus ~150 license classifications, ~2s of
-// deterministic work.
+// deterministic work that each test needing it would otherwise redo on
+// identical input.
 // [LAW:one-source-of-truth] every consumer reads the same single-enforcer
 // pipeline's output.
 var realInventory struct {
@@ -48,9 +49,9 @@ func realEntries(t *testing.T) []Entry {
 // TestEndToEndAgainstLitCoversDolt: build the real inventory for the real
 // release package, and confirm the bundle carries the full license text of a
 // known linked dependency (github.com/dolthub/dolt) and the report classifies
-// it correctly. It goes through buildEntries — the same
-// pipeline run() uses — so it asserts against production's inventory, not a
-// copy. [LAW:single-enforcer]
+// it correctly. It goes through buildEntries — the same pipeline run() uses —
+// so it asserts against production's inventory, not a copy.
+// [LAW:single-enforcer]
 func TestEndToEndAgainstLitCoversDolt(t *testing.T) {
 	t.Parallel()
 	entries := realEntries(t)

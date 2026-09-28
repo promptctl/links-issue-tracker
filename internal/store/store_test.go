@@ -391,7 +391,9 @@ func TestFixRankInversionsConvergesWhenPassCreatesNewInversion(t *testing.T) {
 }
 
 // dst.status is NULL for epic dependencies (state lives in the AllOf
-// lifecycle, not the column).
+// lifecycle, not the column), so a `dst.status != 'closed'` filter evaluates
+// NULL as not-true and silently excludes every blocks-edge pointing at an open
+// epic — Doctor would report 0 inversions and --fix would be a no-op.
 func TestFixRankInversionsDetectsEpicDependency(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -891,9 +893,12 @@ func TestNewIssueIDCollisionsAdvanceNonce(t *testing.T) {
 	}
 }
 
-// Parentage is what a child id must carry, asserted here; that it carries no
-// computable position is asserted against two real stores by
-// TestTwoDisconnectedStoresMintDistinctChildIDs. [LAW:behavior-not-structure]
+// A child id numbered by a count over local rows would stand in for every row
+// that exists anywhere, so two disconnected stores holding the same siblings
+// would compute the same next id. Parentage is what a child id must carry,
+// asserted here; that it carries no computable position is asserted against
+// two real stores by TestTwoDisconnectedStoresMintDistinctChildIDs.
+// [LAW:behavior-not-structure]
 func TestCreateIssueChildIDsKeepParentageAndAreDistinct(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -951,9 +956,11 @@ func TestCreateIssueChildIDsKeepParentageAndAreDistinct(t *testing.T) {
 	}
 }
 
-// A content hash does not hand the freed id to the next create; landing there
-// again takes a hash coincidence, which is what this asserts does not happen
-// for an ordinary pair.
+// A count over LIVE rows would free the highest slot when that child is hard
+// deleted, so a brand new, unrelated ticket would land on the deleted one's id
+// and inherit its ancestry as evidence. A content hash does not hand the freed
+// id to the next create; landing there again takes a hash coincidence, which
+// is what this asserts does not happen for an ordinary pair.
 func TestCreateIssueDoesNotReuseADeletedChildID(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -2056,13 +2063,13 @@ func TestCreateEpicPersistsNullStatusColumn(t *testing.T) {
 	}
 }
 
-// Container ↔ non-container IssueType changes
-// would orphan the lifecycle expression: an epic carries an AllOf lifecycle
-// that derives state from children, and a leaf carries a status primitive
-// carrying status/closed_at. Crossing that boundary via UpdateIssue would
-// either drop the leaf's status or leave AllOf attached to a row whose schema
-// requires owned status. Refused at the trust boundary instead of patched up
-// downstream with an invented default.
+// Container ↔ non-container IssueType changes would orphan the lifecycle
+// expression: an epic carries an AllOf lifecycle that derives state from
+// children, and a leaf carries a status primitive carrying status/closed_at.
+// Crossing that boundary via UpdateIssue would either drop the leaf's status
+// or leave AllOf attached to a row whose schema requires owned status.
+// Refused at the trust boundary instead of patched up downstream with an
+// invented default.
 func TestUpdateIssueRefusesContainerLeafTypeChange(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -2089,12 +2096,12 @@ func TestUpdateIssueRefusesContainerLeafTypeChange(t *testing.T) {
 	}
 }
 
-// ensureStatusConstraint compares Dolt's
-// reported CHECK clause against canonicalStatusCheckClause. If Dolt's
-// normalization ever drifts from ours, the comparison would silently fail and
-// every Open() would drop+re-add the constraint, producing a fresh schema
-// commit each time. This test pins migration idempotence at the observable
-// boundary — the Dolt commit log — so any future drift is loud.
+// ensureStatusConstraint compares Dolt's reported CHECK clause against
+// canonicalStatusCheckClause. If Dolt's normalization ever drifts from ours,
+// the comparison would silently fail and every Open() would drop+re-add the
+// constraint, producing a fresh schema commit each time. This test pins
+// migration idempotence at the observable boundary — the Dolt commit log — so
+// any future drift is loud.
 func TestMigrationIsIdempotentOnSecondOpen(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -2634,7 +2641,10 @@ func TestCloseRedirectToDeletedCanonicalRejected(t *testing.T) {
 // tx, so a delete of the canonical that lands AFTER the close is planned but
 // BEFORE it commits is still observed, and the close is rejected with nothing
 // persisted. applyPreMutationHookForTest injects the delete in exactly that
-// window. [LAW:no-ambient-temporal-coupling] [LAW:no-silent-failure]
+// window. Validated in the pre-lock plan phase instead, this close would see a
+// live canonical, succeed, and persist a redirect to a deleted canonical, the
+// exact state the validation exists to reject.
+// [LAW:no-ambient-temporal-coupling] [LAW:no-silent-failure]
 func TestCloseRedirectRaceWithDeleteRejected(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -2849,7 +2859,9 @@ func TestRankSetRejectsTooFewIDs(t *testing.T) {
 	}
 }
 
-// The store-level orientation for blocks is:
+// TestRemovePerChildBlockAfterRankReorder asserts that per-child block edges
+// added when an epic-level block already exists can still be removed after a
+// rank reorder. The store-level orientation for blocks is:
 // src=dependent (blocked), dst=dependency (blocker).
 func TestRemovePerChildBlockAfterRankReorder(t *testing.T) {
 	t.Parallel()

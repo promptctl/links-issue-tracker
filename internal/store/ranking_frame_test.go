@@ -114,7 +114,8 @@ type noRoomFixture struct{ upper, lower, moved string }
 // to anyway: between a relative move's neighbors, or past a frame's edge. The
 // pairs are ones spacing can write — a rank beside itself extended by zeros —
 // and an all-zero rank leading its frame, which leaves no room above it for
-// every placement that passes the top edge.
+// every placement that passes the top edge. A key that does not make room would
+// land the issue below both neighbors while the command reports success.
 func TestPlacementMakesRoomBetweenKeysThatPadToTheSameValue(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -800,7 +801,9 @@ func TestMutationValueYieldsTheZeroValueWhenTheMutationFails(t *testing.T) {
 // writeRankTx re-reads the row it is about to write, which closes the race for
 // every id that reaches the write. A named id does not always reach it. Naming
 // a child of an epic beside a top-level issue resolves the child to its epic,
-// and from there the epic is what every later check sees.
+// and from there the epic is what every later check sees — so a delete of the
+// child landing after the pre-lock gate would go unnoticed, and the set would
+// rank the epic on behalf of an issue that no longer exists.
 //
 // White-box for the same reason as the write-side case above: the public verb
 // refuses this id at the gate and so can never reach resolution with it.
@@ -844,7 +847,9 @@ func TestFrameResolutionRefusesADeletedNamedIssue(t *testing.T) {
 	}
 }
 
-// An unranked anchor has no place in the order to stand beside.
+// An unranked anchor has no place in the order to stand beside. Its "" read as
+// an open end would land a move above it at the keyspace's midpoint and a move
+// below it above every ranked issue, each reported as a success.
 func TestRelativeMoveRefusesAnUnrankedAnchor(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -878,8 +883,8 @@ func TestRelativeMoveRefusesAnUnrankedAnchor(t *testing.T) {
 
 // TestCreateAtTopDrawsItsKeyFromItsOwnFrame is the creation-side twin of
 // TestRankToEdgeDrawsItsKeyFromItsOwnFrame, and it asserts rank STRINGS for
-// the same reason: the rendered order cannot see this defect. A child filed at
-// the top of its epic leads its siblings whichever key it holds, so the
+// the same reason: the rendered order cannot see a misdrawn key. A child filed
+// at the top of its epic leads its siblings whichever key it holds, so the
 // listing looks identical while the key was drawn from a keyspace the child is
 // never read against — and it is the keyspace, not the order, that decides
 // what the NEXT rank is computed against.
@@ -1037,7 +1042,10 @@ func TestCreateAtTopOfAnEmptyFrameTakesADistinctKey(t *testing.T) {
 
 // TestRelativeMoveDrawsItsRoomFromTheWholeWorkspace is the four-command case.
 // The frame picks the anchor — rank pair resolution substitutes the epic for
-// the child named.
+// the child named — but the room beside that anchor is read from the whole
+// workspace. Read with the frame's scope, the bound beside an anchor with
+// nothing past it in the top level comes back open, and the midpoint of an open
+// span is a key something outside the frame is already holding.
 //
 // The assertion is on the rank strings. The rendered order cannot see this:
 // two issues sharing a key still list in some order, decided by the id
@@ -1097,7 +1105,9 @@ func TestRelativeMoveDrawsItsRoomFromTheWholeWorkspace(t *testing.T) {
 // reads, so a frame holding only that issue reports no edge at all, while the
 // verb still counts the move as real. The comparison then reads that empty key
 // differently at each end — nothing sorts below "" but every rank sorts above
-// it.
+// it — so asking for the room beside it would send an issue to its frame's
+// BOTTOM with a key above every issue in the workspace, an inversion no
+// duplicate check would catch.
 //
 // A blank rank is not reachable through the API (ensureIssueRanks backfills at
 // open), so it is written here directly: the point of the case is that the

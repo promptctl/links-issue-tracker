@@ -59,11 +59,11 @@ func captureStdout(t *testing.T, fn func() error) []byte {
 }
 
 // TestDoltTransferKeepsStdoutClean is the regression guard: the embedded Dolt
-// engine's chunk-download progress
-// (the "N of M chunks complete" redraw, with cursor-control escapes) must never
-// reach stdout, lit's parseable result channel. It exercises the two transfer
-// primitives that emit it — DOLT_CLONE (init adopt) and DOLT_FETCH (sync pull) —
-// and asserts stdout stays byte-empty across both.
+// engine's chunk-download progress (the "N of M chunks complete" redraw, with
+// cursor-control escapes) must never reach stdout, lit's parseable result
+// channel. It exercises the two transfer primitives that emit it — DOLT_CLONE
+// (init adopt) and DOLT_FETCH (sync pull) — and asserts stdout stays byte-empty
+// across both.
 //
 // [LAW:behavior-not-structure] asserts the contract (nothing on stdout), not the
 // mechanism (how dolt's output channel is routed), so a different suppression that

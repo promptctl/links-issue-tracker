@@ -33,11 +33,13 @@ const manifestPath = "internal/docclaims/manifest_gen.go"
 // it, without writing: the form to reach for in a script, or before committing
 // a regeneration.
 //
-// It is not what guards CI. TestDocumentedClaimsStillShip asks the same question on
-// every run and is the single enforcer of it; a nightly job running this flag
-// would be a second answer to one question, which is the shape of drift this
-// package exists to remove. What it adds is a check you can run deliberately.
-// [LAW:single-enforcer]
+// It is not what guards CI. TestDocumentedClaimsStillShip asks the same
+// question on every run and is the single enforcer of it; a nightly job running
+// this flag would be a second answer to one question, which is the shape of
+// drift this package exists to remove. What it adds is a check you can run
+// deliberately — the omission it covers is real, since a manifest generated
+// over a dirty working tree carrying a gitignored vendored project breaks every
+// clean checkout once committed. [LAW:single-enforcer]
 var check = flag.Bool("check", false, "verify the committed manifest matches a regeneration; write nothing")
 
 func main() {
@@ -80,25 +82,26 @@ func run() error {
 // that a documented message stopped shipping.
 //
 // The write is the one action that can turn this gate green over prose that is
-// now false. It refuses, which is also the order CONTRIBUTING prescribes —
-// correct the chapter first, then regenerate.
+// now false: a contributor sent here by a legitimate failure, who also has an
+// unrelated message that has genuinely stopped shipping, would take both away
+// in silence and leave every check green. It refuses instead, which is also the
+// order CONTRIBUTING prescribes — correct the chapter first, then regenerate.
 // [LAW:no-silent-failure]
 //
 // The refusal has no override, and that is the design rather than an omission.
 // A documented false-positive class reaches it: `SHOW CREATE TABLE` is anchored
 // to a SQL COMMENT in 00001_baseline.sql, so reflowing that comment fails the
 // gate naming three chapters the edit has nothing to do with. The noise is
-// real; the deadlock is not.
-// Master is green or the freshness test is red, so an entry reaching this
-// refusal was stopped by something in the contributor's own working tree, and
-// both remedies it names are in their hands — restore the message, or correct
-// the three sentences, which by then genuinely are describing text no binary
-// carries. A flag that writes past it restores the exact hazard the refusal
-// closes, a legitimate regeneration carrying an unrelated stopped message away
-// with every check green, at the cost of typing one more word. The right answer
-// to the noise is to anchor a quotation to its span rather than to a whole
-// asset, which is links-doc-v1-tepa, not a hole in the one path that can turn
-// this gate green over prose that is false.
+// real; the deadlock is not. Master is green or the freshness test is red, so
+// an entry reaching this refusal was stopped by something in the contributor's
+// own working tree, and both remedies it names are in their hands — restore the
+// message, or correct the three sentences, which by then genuinely are
+// describing text no binary carries. A flag that writes past it restores the
+// exact hazard the refusal closes, a legitimate regeneration carrying an
+// unrelated stopped message away with every check green, at the cost of typing
+// one more word. The right answer to the noise is to anchor a quotation to its
+// span rather than to a whole asset, which is links-doc-v1-tepa, not a hole in
+// the one path that can turn this gate green over prose that is false.
 func write(manifestPath string, matched []docclaims.Claim, cmp docclaims.Comparison) error {
 	if stopped := cmp.Stopped(); len(stopped) > 0 {
 		for _, d := range stopped {
@@ -111,12 +114,14 @@ func write(manifestPath string, matched []docclaims.Claim, cmp docclaims.Compari
 	// the chapter still makes — so it is reported rather than refused. Reported
 	// it must be: writing moves the entry's Src, no entry leaves the manifest,
 	// and "an entry leaving the manifest is the review signal" is what
-	// CONTRIBUTING tells a reviewer to watch.
+	// CONTRIBUTING tells a reviewer to watch. Unreported, the prescribed
+	// command would settle in silence the one case the package's own report
+	// calls "only a reader can settle", and both checks would go green over it.
 	//
 	// The sentence is the writer's own rather than Drift.Explain(), which asks
 	// a reader to confirm a rewording and then run this tool — the wrong tense
 	// for the tool that is running. That is not a second remedy competing with
-	// the first: the remedies stayed single-homed in Explain, and this reports
+	// the first: the remedies stay single-homed in Explain, and this reports
 	// an action already taken. [LAW:no-silent-failure]
 	//
 	// Which is why it is reported after the write and not before. Said first,
@@ -191,7 +196,9 @@ func verify(cmp docclaims.Comparison) error {
 	}
 	// Each of the first two lines is a remedy for a subset, not a census, and
 	// each says how large that subset is out of what was reported. The
-	// alternative reads as a total.
+	// alternative reads as a total: with one entry re-anchored beside one the
+	// prose stopped quoting, a bare "1" under two printed lines would tell a
+	// contributor to confirm both were rewordings, and one of them is not.
 	switch stopped := len(cmp.Stopped()); {
 	case stopped > 0:
 		return fmt.Errorf("%d of %d reported entry(ies) quote a message that no longer ships: fix the code or the chapter. Regenerating would drop them and leave the specification false",
@@ -200,10 +207,11 @@ func verify(cmp docclaims.Comparison) error {
 		return fmt.Errorf("%d of %d reported entry(ies) are no longer carried by the source they were recorded against: confirm each of those is the same message reworded before regenerating",
 			moved, len(cmp.Drifted))
 	}
-	// The exit line counts what actually differs. One chapter dropping a
-	// quotation while another adds one is an ordinary prose edit, and
-	// "committed 1102, the tree yields 1102" is not something a reader can act
-	// on.
+	// The exit line counts what actually differs. Reporting the two totals
+	// instead would state them as evidence of a difference even when they are
+	// equal — one chapter dropping a quotation while another adds one is an
+	// ordinary prose edit, and "committed 1102, the tree yields 1102" is not
+	// something a reader can act on.
 	return fmt.Errorf("manifest is stale: %d recorded quotation(s) the tree no longer yields, %d the tree yields that it does not record; run `go run ./tools/docclaims-sync`",
 		len(cmp.Drifted), len(cmp.Added))
 }

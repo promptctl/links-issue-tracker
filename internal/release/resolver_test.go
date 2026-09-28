@@ -93,6 +93,10 @@ func TestHTTPResolverRejectsUnprefixedTag(t *testing.T) {
 // direction this format actually has. `lit upgrade` runs the INSTALLED binary
 // to discover a newer release, so the consumer is always older than the
 // producer and a field added after this binary shipped must decode, not fail.
+// DisallowUnknownFields asserts the opposite and would break the upgrade path
+// for every binary in the field at the first additive release — with no
+// in-band way out, since the remedy for a broken `lit upgrade` is
+// `lit upgrade`.
 //
 // The payload carries a field no version of this struct has ever had, and the
 // assertions read the fields that decide behavior, so the test fails both if

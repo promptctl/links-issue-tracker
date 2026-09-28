@@ -19,7 +19,8 @@ import (
 // stated in the leaf's own declaration, not left for the body to re-derive.
 const allPositionals = math.MaxInt
 
-// CommandSpec is the data form of a CLI subcommand. Representing each
+// CommandSpec is the data form of a CLI subcommand. Hand registration would
+// encode the variability in an imperative call sequence; representing each
 // subcommand as a row in a table lets newRootCommand run the same loop every
 // time. [LAW:dataflow-not-control-flow]
 type CommandSpec struct {
@@ -121,7 +122,10 @@ type subcommandRow[P any] struct {
 
 // commandFamily is the single source of truth for a subcommand family: which
 // first arguments are legal and what each one means.
-// [LAW:one-source-of-truth]
+// [LAW:one-source-of-truth] Per-family path validators, args[0] string tests
+// selecting read vs write, and per-family dispatch switches would each be a
+// drifting copy of this table, repeating the usage string and the legal-name
+// set independently.
 type commandFamily[P any] struct {
 	usage       string
 	subcommands []subcommandRow[P]
@@ -154,7 +158,10 @@ func (f commandFamily[P]) resolve(args []string) (P, error) {
 			return s.payload, nil
 		}
 	}
-	// [LAW:types-are-the-program] a typed usage refusal, not errors.New.
+	// [LAW:types-are-the-program] a typed usage refusal, not errors.New: the
+	// untyped form would fall through every errors.As sink to the generic
+	// "command_failed" reason, whose retry-then-doctor remediation can never
+	// succeed for a bad path.
 	return zero, UsageError{Message: f.usage}
 }
 
@@ -239,6 +246,9 @@ func retiredSubcommand(family, name, replacement string) subcommandRow[appSubcom
 // this value opens nothing, which is precisely what lets the pipeline below
 // render help, or reject a bad flag, with no workspace, store, or app.
 //
+// [LAW:decomposition] Fused inside one handler body, the only way to reach the
+// flag surface would be to run the handler, and the only way to run the
+// handler would be through an acquisition help never needs.
 // [LAW:one-type-per-behavior] app-mode and workspace-mode leaves differ only in
 // which resource their work takes, so they are one type over R, not two.
 type leaf[R any] struct {
@@ -250,20 +260,26 @@ type leaf[R any] struct {
 	// knowledge and lives here. `lit dep add a b` is a caller who believes the
 	// ids are positional, and "takes no positional arguments" answers the wrong
 	// question — "use --from <id> --to <id>" names the act. A remediation that
-	// names no working act is the defect the whole cli-errors cluster exists to
-	// remove, so the generic phrasing is the fallback, never the goal.
+	// names no working act is a defect, so the generic phrasing is the
+	// fallback, never the goal.
 	// [LAW:decomposition] the rule is shared, the guidance is the leaf's.
 	usage string
 	work  func(ctx context.Context, stdout io.Writer, res R, positional []string) error
 }
 
 // adaptLeaf carries a leaf's DECLARATION across to a leaf over a different
-// resource type, rewiring only the work.
+// resource type, rewiring only the work. Were the pipeline adapters
+// (withWorkspaceSchema, withSchemaMigrator, withSyncStore) each to rebuild the
+// struct inline, there would be three hand-written copies of "what a
+// declaration consists of", and the copies nobody updates are the bug: one
+// that drops `usage` makes `lit upgrade v0.9.0` answer with the generic
+// allowance instead of the `usage: lit upgrade [--to <version>]` its leaf
+// declares.
 //
 // This does not make a dropped field a compile error — a field added to leaf
 // and not added here would still vanish — so
-// TestAdaptLeafCarriesTheWholeDeclaration pins it from the outside. What it does
-// buy is that there is ONE place to update. [LAW:one-source-of-truth]
+// TestAdaptLeafCarriesTheWholeDeclaration pins it from the outside. What it
+// does buy is that there is ONE place to update. [LAW:one-source-of-truth]
 // [LAW:single-enforcer]
 func adaptLeaf[R, S any](from leaf[R], work func(ctx context.Context, stdout io.Writer, res S, positional []string) error) leaf[S] {
 	return leaf[S]{fs: from.fs, positionals: from.positionals, usage: from.usage, work: work}
@@ -271,7 +287,8 @@ func adaptLeaf[R, S any](from leaf[R], work func(ctx context.Context, stdout io.
 
 // The two resources a leaf's work can need. A declaration function returns one
 // of these; the pipeline holds it only after declaring, and calls its work only
-// after acquiring.
+// after acquiring. [LAW:types-are-the-program] that ordering is the only order
+// these types can be used in, not a convention each handler carries.
 type (
 	appLeaf   = leaf[*app.App]
 	wsLeaf    = leaf[workspace.Info]
@@ -297,8 +314,10 @@ func parseLeaf[R any](l leaf[R], args []string, stdout io.Writer) ([]string, err
 	}
 	// Anything pflag has left over is a token the leaf's declared arity did not
 	// admit: splitArgs fills positionals up to the ceiling and passes the rest
-	// through, so a leftover here is precisely "one positional too many". One
-	// rule, one place.
+	// through, so a leftover here is precisely "one positional too many". Left
+	// to each leaf, the rule would be written once per leaf, and a leaf that
+	// forgot it would exit 0 having silently ignored part of the command line.
+	// One rule, one place.
 	// [LAW:single-enforcer] [LAW:no-silent-failure] [LAW:one-source-of-truth]
 	//
 	// It refuses BEFORE acquisition, so a mistyped command line never creates or
@@ -341,12 +360,12 @@ func usageSentence(fs *cobraFlagSet, declared int, usage string) string {
 // needs is already declared: the command path, the positional ceiling, and which
 // flags take a value.
 //
-// The alternative was to hand-write a sentence onto each of the thirty-seven
-// leaves that lacked one. That is thirty-seven fresh copies of facts the flag
-// set already holds: a flag added later leaves the sentence behind, and nothing
-// says so. A leaf with genuinely local guidance
-// still sets `usage` and wins outright; this only decides what a leaf that said
-// nothing gets to say. [LAW:one-source-of-truth] [LAW:polishing-by-subtraction]
+// The alternative is to hand-write a sentence onto every leaf that lacks one:
+// fresh copies of facts the flag set already holds, so a flag added later
+// leaves the sentence behind, and nothing says so. A leaf with genuinely local
+// guidance still sets `usage` and wins outright; this only decides what a leaf
+// that said nothing gets to say. [LAW:one-source-of-truth]
+// [LAW:polishing-by-subtraction]
 //
 // Naming the value-taking flags is the whole point: `lit import spec.json` is a
 // caller who thinks the path is positional, and `--path` is the act that works.
@@ -556,7 +575,8 @@ func acquireFromWD() (workspace.Info, error) {
 }
 
 // withWDAcquire lifts a dispatch that only chooses a leaf into the pipeline's
-// shape. [LAW:locality-or-seam]
+// shape, so a dispatch with nothing to say about acquisition does not have to
+// carry one because init's leaf does. [LAW:locality-or-seam]
 func withWDAcquire(dispatch func(args []string) (wsLeaf, []string, error)) func(args []string) (wsLeaf, wsAcquire, []string, error) {
 	return func(args []string) (wsLeaf, wsAcquire, []string, error) {
 		l, rest, err := dispatch(args)

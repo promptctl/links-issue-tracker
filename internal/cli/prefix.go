@@ -20,9 +20,12 @@ type prefixSetResult struct {
 }
 
 // prefixFamily is the `lit prefix` surface: one legal first argument, `set`.
-// [LAW:one-type-per-behavior] one subcommand is still a subcommand family.
-// prefixSetUsage is the one spelling of prefix set's shape.
-// [LAW:one-source-of-truth]
+// It gets from resolve what every other family gets — legal-name lookup, the
+// shared usage string, and a help request answered as help rather than as a
+// usage error. [LAW:one-type-per-behavior] one subcommand is still a
+// subcommand family.
+// prefixSetUsage is the one spelling of prefix set's shape: the family's usage,
+// the leaf's usage and the arity refusal all read it. [LAW:one-source-of-truth]
 const prefixSetUsage = "usage: lit prefix set <new-prefix> [--apply]"
 
 var prefixFamily = commandFamily[wsSubcommand]{
@@ -46,7 +49,9 @@ func prefixSetLeaf() wsLeaf {
 		if err != nil {
 			// Typed for the same reason the init path is: a prefix the rules refuse
 			// is refused identically on every rerun, so it must not reach the
-			// default's retry-then-doctor advice. [LAW:no-silent-failure]
+			// default's retry-then-doctor advice. Untyped, the two sibling
+			// commands would classify this one condition two different ways.
+			// [LAW:no-silent-failure]
 			return ValidationError{Message: fmt.Sprintf("invalid prefix %q: %v", requested, err)}
 		}
 		normalized := spec.Value()

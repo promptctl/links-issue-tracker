@@ -89,8 +89,10 @@ func TestShowOmitsHistoryTrailWhileHistoryViewRendersIt(t *testing.T) {
 
 // TestPrintIssueGroupNamesRetentionRatherThanStatus pins the relationship
 // groups to issueStanding: the two lifecycle axes are orthogonal, and a
-// soft-deleted ticket's status is still "open". Retention dominates because a
-// frozen issue's status describes work nobody may do.
+// soft-deleted ticket's status is still "open", so printing State() alone
+// would render a dead blocker as "[open]" and send the reader hunting for an id
+// that appears in no listing. Retention dominates because a frozen issue's
+// status describes work nobody may do.
 // [LAW:behavior-not-structure] The contract asserted is the rendered line a
 // reader acts on, not which accessor produced the word.
 func TestPrintIssueGroupNamesRetentionRatherThanStatus(t *testing.T) {
@@ -133,7 +135,11 @@ func TestPrintIssueGroupNamesRetentionRatherThanStatus(t *testing.T) {
 
 // TestPrintIssueGroupNamesTheCloseReason pins the resolution into every
 // relation group. A closed ticket's resolution is stored, sealed, and rendered
-// in the `lit show` header.
+// in the `lit show` header; a bare "[closed]" in the relation groups would make
+// a wontfix declination read identically to finished work in exactly the views
+// used to judge "is this area finished?". The loss is directional: it can only
+// make a body of work look MORE finished than it is, which is the error that
+// never prompts anyone to go check.
 //
 // [LAW:behavior-not-structure] The contract is the line a reader acts on, so
 // the arms differ only in what was recorded at close. One renderer produces

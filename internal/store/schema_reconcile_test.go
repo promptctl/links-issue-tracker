@@ -13,9 +13,9 @@ import (
 
 // Pre-goose reconcile data-survival tests.
 //
-// These tests pin the contract of reconcileToBaseline: every
-// workspace at any historical canonical shape forward-migrates to v1
-// with every row of user data intact.
+// These tests pin the contract of reconcileToBaseline: every workspace
+// at any historical canonical shape forward-migrates to v1 with every
+// row of user data intact.
 //
 // Each test simulates a specific pre-goose shape by mutating a freshly-
 // bootstrapped workspace (drop a column, rename a column, drop a table,
@@ -646,6 +646,9 @@ func nullableStrPtr(p *string) any {
 // contract: every row in a canonical-shape issue_history table is
 // preserved as an issue_events row (+ one issue_event_changes row per
 // non-trivial status transition) before the legacy table is dropped.
+//
+// [LAW:no-silent-failure] Dropping the legacy table without translating
+// it would be a silent fallback.
 func TestReconcileTranslatesLegacyIssueHistoryToEvents(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -665,8 +668,8 @@ func TestReconcileTranslatesLegacyIssueHistoryToEvents(t *testing.T) {
 	//   - hist-start:         status transition, named action
 	//   - hist-comment-null:  NULL action (the explicit-NULL no-action shape)
 	//   - hist-comment-empty: explicit empty-string action (the other no-action
-	//     shape; MUST normalize to NULL
-	//     post-translation to match recordEvent's convention)
+	//     shape; MUST normalize to NULL post-translation to match
+	//     recordEvent's convention)
 	//   - hist-close:         status transition, named action, different actor
 	//   - hist-same-status:   from_status == to_status — must NOT emit a
 	//     change row (WhenChanged's value→same-value branch)
@@ -887,12 +890,12 @@ func TestReconcileTranslateSkipsOrphanedHistoryRows(t *testing.T) {
 }
 
 // TestReconcileTranslateRunsAfterActorRename pins the ordering
-// constraint: workspaces whose
-// issue_events table still carries the pre-rename `assignee` column
-// must NOT cause the translation INSERT to fail with unknown-column-
-// `actor`. The reconcile must run the assignee→actor rename BEFORE
-// the translation, so the translation's INSERT INTO issue_events(...,
-// actor, ...) targets a column that exists on every legacy shape.
+// constraint: workspaces whose issue_events table still carries the
+// pre-rename `assignee` column must NOT cause the translation INSERT to
+// fail with unknown-column-`actor`. The reconcile must run the
+// assignee→actor rename BEFORE the translation, so the translation's
+// INSERT INTO issue_events(..., actor, ...) targets a column that
+// exists on every legacy shape.
 //
 // [LAW:dataflow-not-control-flow] The translate step sees the
 // canonical column layout because it follows the rename in the
@@ -971,8 +974,7 @@ func TestReconcileTranslateRunsAfterActorRename(t *testing.T) {
 // already carries an id matching an issue_history row leaves the
 // existing row untouched AND does not invent a status-change row
 // attached to it. The two-row fixture forces the translate function
-// past its early-exit (pending > 0), so the per-row INSERTs actually
-// fire.
+// past its early-exit (pending > 0), so the per-row INSERTs actually fire.
 //
 // [LAW:types-are-the-program] The uniqueness of issue_events.id is
 // the type-level encoding of "have we translated this row already";
@@ -1085,7 +1087,9 @@ func TestReconcileTranslateIsIdempotentWithExistingEvents(t *testing.T) {
 // workspaces that an older buggy binary partially-upgraded: the legacy
 // issue_history table is still present AND goose_db_version carries
 // fabricated rows (rows inserted at one tstamp without the migrations
-// actually running).
+// actually running). Trusting the log would trap such workspaces in
+// phaseManaged with an ahead-of-registry refusal, because the lying log
+// claims a v1+ shape the workspace never had.
 //
 // Fix shape: disk-truth classification. issue_history's presence routes
 // the workspace through the legacy bridge regardless of goose
@@ -1515,12 +1519,12 @@ func TestReconcileErrorMessageIsActionable(t *testing.T) {
 }
 
 // The issue-type and priority CHECK clauses are derived from the sealed model
-// vocabularies. This pins the derivations to
-// the exact literals reconcile has always installed: a byte-level change would
-// make every existing workspace's normalized-clause probes miss, dropping and
-// re-adding constraints on each Open. [LAW:one-source-of-truth] The literals
-// below are the test's independent copy of the at-rest schema, not a second
-// authority in production code.
+// vocabularies. This pins the derivations to the exact literals reconcile has
+// always installed: a byte-level change would make every existing workspace's
+// normalized-clause probes miss, dropping and re-adding constraints on each
+// Open. [LAW:one-source-of-truth] The literals below are the test's
+// independent copy of the at-rest schema, not a second authority in
+// production code.
 func TestDerivedTypeCheckClausesMatchHistoricalLiterals(t *testing.T) {
 	t.Parallel()
 	if want := `issue_type IN ('task','feature','bug','chore','epic')`; issueTypeCheckClause != want {

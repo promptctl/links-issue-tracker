@@ -12,11 +12,14 @@ import (
 
 // The value a read surface prints has to be a value the flag that set it
 // accepts. `lit show` and the issue rows print model.Priority.String(), so that
-// word is what these drive the flag with.
+// word is what these drive the flag with — which is also what fails the moment
+// --priority is declared as an fs.Int, since pflag's strconv.ParseInt refuses
+// "urgent" before lit's own gate runs.
 //
 // It quantifies over model.Priorities() and drives all three write commands
-// rather than naming "urgent" once. [LAW:behavior-not-structure] asserts the
-// stored priority, not the parse call.
+// rather than naming "urgent" once, because the fault is not about one word or
+// one command: new, followup and update each declare the flag.
+// [LAW:behavior-not-structure] asserts the stored priority, not the parse call.
 func TestPriorityFlagAcceptsEveryWordTheReadSurfacesPrint(t *testing.T) {
 	ctx := context.Background()
 

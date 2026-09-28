@@ -39,8 +39,9 @@ import (
 // one-lock atomicity SyncCompactAndPush documents (the push reflects exactly
 // the compacted state). The larger hold this budget sleeps inside is bounded
 // per actor: the background mirror runs its whole session under
-// MirrorHoldBudget, which cuts retries and attempt alike, while an explicit foreground `lit sync push` stays unbounded — the
-// operator invoked it, watches it, and can interrupt it.
+// MirrorHoldBudget, which cuts retries and attempt alike, while an explicit
+// foreground `lit sync push` stays unbounded — the operator invoked it,
+// watches it, and can interrupt it.
 // [LAW:no-ambient-temporal-coupling] the hold's owner and bound are stated
 // here, at the budget that creates them.
 //

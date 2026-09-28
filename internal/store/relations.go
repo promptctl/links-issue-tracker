@@ -164,7 +164,8 @@ var structuralRelationTypes = []model.RelationType{model.RelBlocks, model.RelPar
 // collation-aware compares across the blown-up range set — seconds of pure
 // analysis once the id list reaches backlog size. Two single-column
 // conjunctive queries keep every range a point and the analysis linear.
-// [LAW:carrying-cost] the merge code below is the whole price.
+// [LAW:carrying-cost] the merge code below is the whole price; the OR's price
+// would grow with every ticket filed.
 func (s *Store) listRelationsForIDs(ctx context.Context, ids []string) ([]model.Relation, error) {
 	if len(ids) == 0 {
 		return nil, nil
@@ -680,7 +681,9 @@ func (s *Store) SetParent(ctx context.Context, in storage.SetParentInput) (model
 //
 // It reads nothing before the DELETE. That is what makes it usable on the one
 // workspace that needs it most: a hierarchy holding a loop, which `lit doctor`
-// names and tells the operator to break here.
+// names and tells the operator to break here. Hydrating the child first —
+// GetIssue climbs the parent chain — would overflow the stack on exactly that
+// state, so the repair would crash on the fault it is the repair for.
 // Existence is still proven, on the tx and without hydrating, because the two
 // absences are different diagnoses: "no such issue" and "that issue has no
 // parent" send the operator to different places, and collapsing them into the

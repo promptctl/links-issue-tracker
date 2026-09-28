@@ -4,11 +4,20 @@ package cli
 // pinned as one table, because internal/templates/defaults/quickstart-work.md
 // teaches that verdict to every agent `lit init` ever runs for.
 //
+// The dispatch gate in template_dispatch_gate_test.go cannot catch text
+// versioned apart from the behavior it describes at this level: the vocabulary
+// stays valid, so a "does this command still dispatch?" predicate passes it.
+// The lie would be in the semantics.
+//
 // SCOPE, stated honestly. This gate pins the behavior; it does not parse the
-// prose, and no test here can. What this table buys instead: any change to the
-// routing verdicts turns it red, and the failure message names the file and
-// the claim that must move in the same commit. Non-silent is the goal —
-// mechanically-derived prose is not on offer.
+// prose, and no test here can. The correct text must say "never a bare `lit
+// next` target" of a FRESH foreign hold, so banning that phrase would reject
+// correct text; and a wrong sentence can name staleness too, so requiring the
+// word would pass wrong text. A keyword gate over this paragraph fails in both
+// directions, which is why there isn't one. What this table buys instead: any
+// change to the routing verdicts turns it red, and the failure message names
+// the file and the claim that must move in the same commit. Non-silent is the
+// goal — mechanically-derived prose is not on offer.
 // [LAW:behavior-not-structure] [LAW:no-silent-failure]
 
 import (

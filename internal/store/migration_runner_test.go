@@ -202,17 +202,19 @@ func stampGooseVersionAhead(t *testing.T, ctx context.Context, doltRoot string) 
 }
 
 // TestOpenToleratesAheadOfRegistryWhenBaselineIntact pins the contract: a
-// workspace whose goose_db_version is ahead of this binary's registry but
-// whose live application tables are intact MUST open and operate, NOT
-// refuse. goose treats unknown-ahead rows as nothing-to-apply, so
-// no bookkeeping reconciliation is needed — the ahead row is left intact, and
+// workspace whose goose_db_version is ahead of this binary's registry but whose
+// live application tables are intact MUST open and operate, NOT refuse. goose
+// treats unknown-ahead rows as nothing-to-apply, so no bookkeeping
+// reconciliation is needed — the ahead row is left intact, and
 // re-opening is stable. (In the field an ahead row records migrations a newer
 // binary really applied; the fixture synthesizes that row directly via
 // stampGooseVersionAhead — the contract under test is "tolerate it and leave it
 // alone", not whether the recorded migrations were executed here.)
 //
 // [LAW:behavior-not-structure] The contract is "Open succeeds and the workspace
-// is operable", not "the log was surgically trimmed to registryMax".
+// is operable", not "the log was surgically trimmed to registryMax". A trim is
+// an implementation detail, and a harmful one: it destroys true migration
+// history and leaves the live schema ahead of a reset log.
 func TestOpenToleratesAheadOfRegistryWhenBaselineIntact(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -243,6 +245,7 @@ func TestOpenToleratesAheadOfRegistryWhenBaselineIntact(t *testing.T) {
 // the live schema, not by the goose log's internal consistency: a log carrying
 // ONLY an ahead row (its baseline row missing) still opens and operates, because
 // the binary reads the schema — which is intact — rather than trusting the log.
+// The read-only design makes this corruption shape a non-event.
 //
 // [LAW:behavior-not-structure] Asserts the workspace opens and is queryable,
 // not any particular post-recovery row count in goose_db_version.
@@ -358,8 +361,8 @@ func TestUnsupportedSchemaVersionMessageShape(t *testing.T) {
 	}
 	assertForbiddenAbsent(t, bare)
 
-	// MissingBaseline: gap names surface inside the
-	// parenthetical alongside the upgrade phrase.
+	// MissingBaseline: gap names surface inside the parenthetical alongside
+	// the upgrade phrase.
 	withGaps := (&UnsupportedSchemaVersionError{
 		WorkspaceVersion: 7,
 		MaxSupported:     3,
@@ -519,9 +522,9 @@ func TestOpenAllowsWorkspaceExactlyAtMax(t *testing.T) {
 }
 
 // TestOpenRepairsVersionSlotReuseContentMismatch pins the go-template-js
-// failure shape from the epic: goose_db_version reports the workspace FULLY
-// migrated (applied == registry max, nothing
-// pending — the "reported as fully migrated" case verifyAppliedVersionsMatchRegistry
+// failure shape: goose_db_version reports the workspace FULLY migrated
+// (applied == registry max, nothing pending — the "reported as fully
+// migrated" case verifyAppliedVersionsMatchRegistry
 // exists to catch), but the issues table is missing the lane and resolution
 // columns the CURRENT registry's version 2 and 3 migrations add, as if those
 // version numbers were reused for different historical content after a
@@ -531,7 +534,7 @@ func TestOpenAllowsWorkspaceExactlyAtMax(t *testing.T) {
 // applied (that would collide with v4's redirect_target, which this setup
 // leaves intact). Open must self-heal both gaps in one call — not just the
 // earliest one verifyAppliedVersionsMatchRegistry reports — and must not
-// surface an error.
+// surface an error: detecting the drift is not where lit stops, applying it is.
 func TestOpenRepairsVersionSlotReuseContentMismatch(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

@@ -25,7 +25,8 @@ import (
 // the cautious reading: no Version is Info.IsDev, no Origin is Info.FromSource.
 //
 // [LAW:single-enforcer] Which producer stamps which field is checked against the
-// producers themselves, in stamp_sites_test.go, not recited here.
+// producers themselves, in stamp_sites_test.go, not recited here — a recital
+// here goes stale the first time a field is added.
 // TestEveryProducerStampsOrigin owns Origin; TestOnlyTheJustfileOmitsVersion
 // owns the deliberate omission that keeps a plain `just build` on IsDev==true.
 // See BuildAge for why Commit/Date alone are worth stamping.
@@ -58,8 +59,11 @@ const OriginRelease = "release"
 const OriginSource = "source"
 
 // StaleBuildThreshold is the build age past which `lit version` flags a
-// locally built binary as worth rebuilding. [LAW:one-source-of-truth] the
-// one constant every staleness check compares against.
+// locally built binary as worth rebuilding. Build-age reporting exists
+// because a stale local binary silently misses landed fixes, and without it
+// nothing in `lit version` tells anyone the binary predates them.
+// [LAW:one-source-of-truth] the one constant every staleness check compares
+// against.
 const StaleBuildThreshold = 7 * 24 * time.Hour
 
 // Info is the typed snapshot of this binary's identity and capabilities. It is
@@ -92,13 +96,13 @@ type Info struct {
 	// false carrying no information. Keeping it off the wire is not tidiness
 	// but compatibility — `lit upgrade` is run BY the old binary to discover a
 	// new release, so every manifest consumer is older than its producer, and
-	// every binary already installed decodes manifests with
-	// DisallowUnknownFields. Emitting `from_source` would have made the next
-	// release's manifest undecodable to every lit in the field, breaking the
-	// upgrade path at exactly the release that shipped it — and the in-band
-	// remedy for a broken upgrade is the upgrade. [LAW:types-are-the-program]
-	// the tag is what makes that unrepresentable, rather than a rule
-	// mkmanifest must remember.
+	// binaries already in the field decode manifests with
+	// DisallowUnknownFields (release.HTTPResolver.Resolve does not). Emitting
+	// `from_source` would make the next release's manifest undecodable to every
+	// such lit, breaking the upgrade path at exactly the release that shipped
+	// it — and the in-band remedy for a broken upgrade is the upgrade.
+	// [LAW:types-are-the-program] the tag is what makes that unrepresentable,
+	// rather than a rule mkmanifest must remember.
 	FromSource bool          `json:"-"`
 	Schema     SchemaSupport `json:"schema_support"`
 }

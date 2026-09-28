@@ -58,8 +58,9 @@ func foreignStore(t *testing.T, wsID, prefix string) (storeDir, issueID string) 
 	return storeDir, issueID
 }
 
-// TestLsAtListsForeignStoreIssues is the ticket criterion: pointed at a store
-// location that is not the cwd's repo, `ls --at <dir>` lists that store's issues.
+// TestLsAtListsForeignStoreIssues pins the headline behavior: pointed at a
+// store location that is not the cwd's repo, `ls --at <dir>` lists that
+// store's issues.
 func TestLsAtListsForeignStoreIssues(t *testing.T) {
 	storeDir, issueID := foreignStore(t, "ws-foreign", "proj")
 
@@ -108,7 +109,9 @@ func TestLsAtLeavesStoreWritable(t *testing.T) {
 // TestLsAtContentionTraceFilesUnderTargetStore pins where a starved
 // `ls --at` files its contention trace: under the --at TARGET store — beside
 // the traces of whatever holds it — never resolved from the cwd, which for
-// --at is explicitly allowed to be no workspace at all.
+// --at is explicitly allowed to be no workspace at all. A cwd-based resolution
+// would silently drop this exact record (no cwd workspace) or misfile it into
+// an unrelated one.
 //
 // Not parallel: it chdirs.
 func TestLsAtContentionTraceFilesUnderTargetStore(t *testing.T) {

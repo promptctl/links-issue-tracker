@@ -336,8 +336,8 @@ func TestGCModeValidAcceptsOnlyTheContractsDepths(t *testing.T) {
 // The zero GCMode is what a depth-less outcome carries, so it must not be a
 // depth. This pins the numbering itself rather than Valid's opinion of it: a
 // reader that asks "was a depth chosen" by testing Valid gets the wrong answer
-// the moment the constants start at zero, and every failure trace then
-// reports `newgen` for passes that never chose one. [LAW:types-are-the-program]
+// the moment the constants start at zero, and every failure trace then reports
+// `newgen` for passes that never chose one. [LAW:types-are-the-program]
 func TestTheZeroGCModeIsNotADepth(t *testing.T) {
 	t.Parallel()
 

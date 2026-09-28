@@ -75,9 +75,9 @@ func TestParseAddColumnTargetsToleratesSemicolonInStringLiteral(t *testing.T) {
 }
 
 // TestParseAddColumnTargetsRejectsUnrecognizedForm pins the loud-failure
-// side: an "ADD COLUMN" occurrence in a shape
-// alterAddColumnRe cannot parse (here, IF NOT EXISTS) must fail loudly by
-// name, not silently register zero targets for the migration.
+// side: an "ADD COLUMN" occurrence in a shape alterAddColumnRe cannot parse
+// (here, IF NOT EXISTS) must fail loudly by name, not silently register zero
+// targets for the migration.
 func TestParseAddColumnTargetsRejectsUnrecognizedForm(t *testing.T) {
 	t.Parallel()
 	up := "ALTER TABLE issues ADD COLUMN IF NOT EXISTS lane text NOT NULL DEFAULT '';"

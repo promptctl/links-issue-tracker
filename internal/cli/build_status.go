@@ -31,7 +31,10 @@ const buildRefreshRemedy = "run `just build` (or `just install`) to refresh"
 // re-derives provenance or re-parses Date.
 //
 // Keyed on FromSource, not IsDev. IsDev asks whether a Version was stamped, and
-// `just install` stamps one from `git describe`.
+// `just install` stamps one from `git describe` — so keying on IsDev would
+// render every binary this repo installs onto a PATH as "build: release
+// 0.14.0-21-g…" with its age unmentioned, while it is exactly the locally-built
+// binary whose age is the whole point of the note.
 func buildStatusNote(info version.Info, now time.Time) string {
 	if !info.FromSource {
 		return fmt.Sprintf("build: release %s", info.Version)
@@ -88,7 +91,8 @@ func buildStalenessLines(info version.Info, now time.Time) []string {
 	}
 	// One banner serves three call sites — `lit next`, `lit backlog` and the
 	// full-detail `lit show` — so every claim it makes has to hold at all
-	// three. It names the binary and the answer, never the work behind the
+	// three. `lit show <id>` routes nothing — the caller names the ticket — so
+	// the line names the binary and the answer, never the work behind the
 	// answer.
 	// [LAW:one-source-of-truth] one claim, one meaning, at every site it reaches.
 	return []string{fmt.Sprintf(

@@ -341,10 +341,13 @@ func TestNativeZigVersionMatchesDockerfile(t *testing.T) {
 }
 
 // TestNativeDescriptionsSayWhatTheComponentIs pins the split between the two
-// claims a native component carries.
+// claims a native component carries. The curated licensing note does not ride
+// in component.description, which CycloneDX defines as what the component IS:
+// there it would be a true statement in a field that does not mean what the
+// statement says, and one merge and dedup tooling treats as identity metadata.
 //
-// Two assertions in the loop catch a `Description: e.Note`, and they
-// catch different things. The equality check fails because the description is
+// Two assertions in the loop catch a `Description: e.Note`, and they catch
+// different things. The equality check fails because the description is
 // no longer the curated one; the separation check below it fails because the
 // description IS the note. Only the second still fires if someone "fixes" the
 // first by copying the note into the description field as well, which is why
@@ -400,13 +403,14 @@ func TestGoModulesCarryNoDescriptionOrNote(t *testing.T) {
 	}
 }
 
-// The curated inventory is generated once per release and rendered into artifacts that are
-// not platform-specific — LICENSE-REPORT.md ships inside EVERY archive
-// goreleaser builds, under a preamble asserting the components listed are
-// compiled into this binary, and the SBOM is a single standalone asset
-// covering every platform. A description scoped to one of them
-// ("linked into lit's fully-static Linux builds") is a false sentence in the
-// copies a darwin or windows recipient opens.
+// TestNativeDescriptionsMakeNoPlatformClaim pins that no native description
+// names a platform. The curated inventory is generated once per release and
+// rendered into artifacts that are not platform-specific — LICENSE-REPORT.md
+// ships inside EVERY archive goreleaser builds, under a preamble asserting the
+// components listed are compiled into this binary, and the SBOM is a single
+// standalone asset covering every platform. A description scoped to one of
+// them ("linked into lit's fully-static Linux builds") is a false sentence in
+// the copies a darwin or windows recipient opens.
 //
 // The check is deliberately a keyword scan, because the mistake it catches is a
 // keyword: a maintainer adds a platform name to a description that ships
@@ -461,8 +465,8 @@ func withEvidence(n nativeLib, edit func([]armEvidence) []armEvidence) nativeLib
 // proves only that the check is not empty. A row asserting merely "some error"
 // would stay green if half these rules were deleted.
 //
-// The first row is the scenario: zstd relicenses,
-// a maintainer writes the new identifier into native.go and adds it to
+// The first row is the scenario this rule exists for: zstd relicenses, a
+// maintainer writes the new identifier into native.go and adds it to
 // allowed_licenses, and every rule in policy.go passes it because the
 // classifier's taxonomy has no opinion about a 2021-corpus-absent license.
 // What stops it is not a bigger taxonomy — it is that the notice bytes still
@@ -639,9 +643,9 @@ func TestVerifyNoticeFailureCarriesTheRemedy(t *testing.T) {
 // TestBuildEntriesRefusesALyingNativeRecord is the wiring proof. The rule is
 // only worth having if the GATE runs it: verifyNotice passing in a unit test
 // while `go run ./tools/licenses -check` never calls it would leave the four
-// literals unchecked. It swaps the package record for a
-// lying one and drives the real inventory build, which is the single function
-// both -check and artifact generation go through.
+// literals unchecked. It swaps the package record for a lying one and drives
+// the real inventory build, which is the single function both -check and
+// artifact generation go through.
 func TestBuildEntriesRefusesALyingNativeRecord(t *testing.T) {
 	// Deliberately NOT t.Parallel: this test swaps the package-level nativeLibs
 	// for its duration, and the parallel tests over the native and shared

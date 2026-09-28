@@ -7,8 +7,11 @@ import "time"
 // It exists because a timestamp an engine reaches for is a hidden input: no
 // signature admits it, no caller can choose it, and nothing outside the engine
 // can construct a pair of instants the real clock would never hand out in that
-// combination. [LAW:effects-at-boundaries] the clock is supplied at the edge
-// where the engine is built, not read from inside the write path.
+// combination. Without this type, a defect that depends on the instant could
+// not be stated where it belongs, because the conformance suite reaches an
+// engine only through this package. [LAW:effects-at-boundaries] the clock is
+// supplied at the edge where the engine is built, not read from inside the
+// write path.
 //
 // # Why this is core and not a capability
 //

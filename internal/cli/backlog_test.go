@@ -99,7 +99,11 @@ func rankInversionWarning(text string) string {
 }
 
 // A row's "unblocks" line and the rank-inversion count are facts about the whole
-// workable set, not about whichever slice of it is on screen.
+// workable set, not about whichever slice of it is on screen. Read off the
+// printed rows, either narrowing would delete them silently — and the one
+// deleted would belong to the row that SURVIVED: exclude the dependent and its
+// prerequisite keeps its place in the list with its leverage line quietly
+// shortened, under a preamble still promising "what closing it would unblock".
 //
 // Two narrowings reach it: the focus scope (a dependent off the focused path),
 // and --limit; one population fixes both, which is why they are pinned together
@@ -341,12 +345,11 @@ func TestBacklogNamesTheSiblingGateAndNextAgreesWithIt(t *testing.T) {
 }
 
 // The gate, driven off the annotation registry rather than a list maintained
-// beside it: every kind the registry
-// classifies as blocking must reach the reader. Dependencies, direct and
-// inherited, are the one deliberate silence here — printBacklogContext gives
-// them their own "depends on:" line — so each one must reach that line instead,
-// rather than being left to a length check that would pass for a kind nobody
-// phrased.
+// beside it: every kind the registry classifies as blocking must reach the
+// reader. Dependencies, direct and inherited, are the one deliberate silence
+// here — printBacklogContext gives them their own "depends on:" line — so each
+// one must reach that line instead, rather than being left to a length check
+// that would pass for a kind nobody phrased.
 // [LAW:one-source-of-truth] [LAW:verifiable-goals]
 func TestBacklogPhrasesEveryBlockingKind(t *testing.T) {
 	for _, kind := range annotation.Kinds() {
@@ -375,7 +378,10 @@ func (h backlogTestHarness) start(id string) {
 	}
 }
 
-// The narrowings that reach further out than any row list.
+// The narrowings that reach further out than any row list. A narrowing that
+// removes the DEPENDENT must not delete the leverage line from the
+// PREREQUISITE's surviving row, which is the reading no gap on screen warns
+// about.
 //
 // Four cases, not one parameterized claim over a shared mechanism: each flag is
 // a separate assertion that its own narrowing does not reach the fact, and a

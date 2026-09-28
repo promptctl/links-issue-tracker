@@ -119,7 +119,8 @@ func TestRebuildCandidateRejectLeavesZeroResidue(t *testing.T) {
 
 	// Discarding a SUCCESSFUL candidate must also leave zero residue under the
 	// parent — including the workspace lock and migration snapshots Open writes as
-	// siblings of the dolt directory.
+	// siblings of the dolt directory. A flat dolt-dir layout would let those
+	// siblings escape the candidate's own RemoveAll.
 	if err := cand.Discard(); err != nil {
 		t.Fatalf("Discard: %v", err)
 	}

@@ -37,7 +37,8 @@ func transitionActionCount(events []model.IssueEvent) int {
 
 // TestApplyIssueTypeFlagMatrix asserts a documented outcome for every
 // model.IssueTypes × meaningful-flag-combination cell of the unified update
-// path.
+// path, so no cell is an implicit gap: without an (epic, field-only) cell, a
+// phantom status transition on a container would go unnoticed.
 //
 // [LAW:single-enforcer] The cells drive Store.Apply — the one execution path
 // for `lit update` — rather than reimplementing the transition decision, so
@@ -177,9 +178,10 @@ func TestApplyIssueTypeFlagMatrix(t *testing.T) {
 				}
 
 				// A field-only cell records zero transition events on every
-				// type — most importantly on a container. A same-state target with an unchanged assignee is the leaf's
-				// documented no-op and likewise records nothing; only a
-				// transition that mutates the row earns an event.
+				// type — most importantly on a container. A same-state target
+				// with an unchanged assignee is the leaf's documented no-op and
+				// likewise records nothing; only a transition that mutates the
+				// row earns an event.
 				wantTransitions := 0
 				if carriesTransition && target != created.State() {
 					wantTransitions = 1

@@ -83,7 +83,8 @@ func reconcileScratchName() string {
 // moves whichever branch it runs on. A replay that reads and writes on ONE
 // branch therefore cannot interleave: every read must finish before the first
 // write, because the first write's branch would be reset out from under the
-// spine.
+// spine. That would force projecting every folded commit up front and carrying
+// all of them in memory across the read/write boundary, O(chain × backlog).
 //
 // Two branches dissolve the conflict, and what separates them is not WHETHER
 // each is reset but when and how often. History is read on `read`, which is
@@ -92,9 +93,10 @@ func reconcileScratchName() string {
 // `spine`, which is reset exactly once, by commitReplayAndAdvance, to adopt the
 // remote head as the replay's starting point; that happens before any
 // provenance commit lands, so there is no accumulated history for it to
-// destroy, and afterwards the spine only ever advances by commit. Dolt keeps a working set
-// per branch, so an uncommitted read on one is invisible to the other, and the
-// replay can stream one step at a time.
+// destroy, and afterwards the spine only ever advances by commit. Dolt keeps a
+// working set per branch, so an uncommitted read on one is invisible to the
+// other, and the replay can stream one step at a time. [LAW:decomposition] two
+// roles that would saw across each other on one branch have one part each.
 type reconcileScratch struct {
 	spine string
 	read  string
@@ -380,10 +382,10 @@ func (s *Store) reconcile(ctx context.Context, remote string, branch string, set
 // replayUnderGuard runs a mutating reconcile body — the shared-history three-way OR the
 // no-base combine — inside the one safety envelope both need: refuse a schema-ahead remote
 // BEFORE any write (adopting an ahead head would author replay commits below its schema and
-// drop every field the newer schema added), sweep any scratch
-// branch a killed run abandoned (the commit lock guarantees every one is an orphan), derive
-// this run's unique scratch name, and carry ONE snapshot guard across GC-contention retries
-// so exactly one recovery point of the pre-reconcile head is taken however many attempts run.
+// drop every field the newer schema added), sweep any scratch branch a killed run abandoned
+// (the commit lock guarantees every one is an orphan), derive this run's unique scratch name,
+// and carry ONE snapshot guard across GC-contention retries so exactly one recovery point of
+// the pre-reconcile head is taken however many attempts run.
 // [LAW:single-enforcer] the mutation envelope is written once; the body is the only variable.
 // [LAW:no-ambient-temporal-coupling] the schema-ahead read reuses the captured remoteHead, so
 // no concurrent fetch can shift the decision between guard and replay.
@@ -520,11 +522,12 @@ type replayStep struct {
 // deterministic tiebreak value mid-chain; the settled truth still lands in the
 // terminal marker).
 //
-// Producing steps one at a time rather than returning a slice, the replay holds
-// ONE projected export at a time instead of the chain's worth, so peak memory
-// tracks the backlog and not the product of backlog and chain length. That is
-// only expressible because the read lands on the scratch pair's read branch
-// (see reconcileScratch), leaving the spine the writer is building untouched.
+// Because steps are produced one at a time rather than returned as a slice, the
+// replay holds ONE projected export at a time instead of the chain's worth, so
+// peak memory tracks the backlog and not the product of backlog and chain
+// length. That is only expressible because the read lands on the scratch pair's
+// read branch (see reconcileScratch), leaving the spine the writer is building
+// untouched.
 //
 // [LAW:effects-at-boundaries] the read is the only effect; the projection is
 // merge.ThreeWay, unchanged and pure. [LAW:one-source-of-truth] the merge policy

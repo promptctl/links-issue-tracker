@@ -55,8 +55,8 @@ func TestMain(m *testing.M) {
 // the created-issue line, then (after ap.Close) the inline receive re-acquires
 // the lock at SyncAddRemote. Taking the flock from this test process the
 // instant that line appears lands the block in the receive — the write already
-// succeeded and is durable — so a clean cancel exits 0, the
-// "commit present, only the sync wedged" shape, reproduced without a slow remote.
+// succeeded and is durable — so a clean cancel exits 0, the "commit present,
+// only the sync wedged" shape, reproduced without a slow remote.
 // (The kernel excludes the child on the held flock no matter who the holder is,
 // so no foreign holder process is needed — and no eviction heuristic exists for
 // the seize to have to outrun.)
@@ -216,8 +216,11 @@ func setupWedgeWorkspace(t *testing.T, self string) (workspace.Info, string) {
 //
 // The SIGTERM wedge tests are specifically about the INLINE RECEIVE; the
 // on-change cadence's background push mirror is an orthogonal automatic
-// behavior. Both wedge tests pin cadence explicitly instead of depending on
-// whatever value happens to be the shipped default. [LAW:locality-or-seam]
+// behavior that adds a second async actor racing these tests' wedge and
+// verification steps on the store's single read-write engine — a flake these
+// tests are not designed to account for. Both wedge tests pin cadence
+// explicitly instead of depending on whatever value happens to be the shipped
+// default. [LAW:locality-or-seam]
 func pinOnPushCadence(t *testing.T, dir string) string {
 	t.Helper()
 	path := filepath.Join(dir, "wedge-test-config.toml")
@@ -285,8 +288,9 @@ func runGit(t *testing.T, dir string, args ...string) {
 // success code (0), not sit out the interrupt grace timer and hard-exit 143.
 //
 // This is the sibling of TestSIGTERMDuringWedgedSyncExitsCleanly, which wedges the
-// store's commit lock. Here the wedge is the git call. The clean path kills the
-// subprocess on cancellation and lets main() exit with the write's 0.
+// store's commit lock (a wait that honors ctx). Here the wedge is the git call.
+// The clean path kills the subprocess on cancellation and lets main() exit with
+// the write's 0.
 //
 // The remote is a black-hole TCP listener: it accepts git's connection and never
 // answers the ref advertisement, so `git ls-remote origin` blocks in git itself —
@@ -359,8 +363,8 @@ func TestSIGTERMDuringWedgedGitSubprocessExitsCleanly(t *testing.T) {
 	// Deliberately UNDER interrupt.DefaultGrace (5s): a clean ctx-cancel exit is
 	// milliseconds, while git ignoring the cancel only ends at the grace-timer
 	// hard-exit (143) at ~5s. A deadline below grace fails that path on BOTH
-	// counts (too slow AND non-zero), leaving no way for a
-	// grace-timer exit to masquerade as success.
+	// counts (too slow AND non-zero), leaving no way for a grace-timer exit to
+	// masquerade as success.
 	const sigtermDeadline = 4 * time.Second
 	select {
 	case err := <-waitCh:

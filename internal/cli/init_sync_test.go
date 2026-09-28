@@ -184,8 +184,8 @@ func TestInitAdoptsExistingRemoteBacklog(t *testing.T) {
 	}
 }
 
-// TestInitHardStopsWhenRemoteHasDataButAdoptCannotComplete: when
-// the remote advertises lit ticket data (refs/dolt/*) but the clone-based adopt
+// TestInitHardStopsWhenRemoteHasDataButAdoptCannotComplete pins that when the
+// remote advertises lit ticket data (refs/dolt/*) but the clone-based adopt
 // cannot complete, init must NOT leave a silent (or even a loudly-warned-but-
 // created) empty store — an adopt failure is a genuinely uncertain result, so
 // init exits non-zero and creates no store at all, surfacing the real
@@ -283,10 +283,9 @@ func TestInitHardStopsWhenRemoteHasDataButAdoptCannotComplete(t *testing.T) {
 // normal command must refuse that residue loudly — most critically `lit new`,
 // whose EnsureDatabase would otherwise create a fresh store over it (a fresh
 // workspace silently shadowing the remote backlog). A plain `lit init` retry
-// must heal: discard the
-// residue, adopt the remote backlog, clear the marker. And when the remote
-// signal is gone too, init fails loudly naming the leftover rather than
-// blessing it as a fresh store.
+// must heal: discard the residue, adopt the remote backlog, clear the marker.
+// And when the remote signal is gone too, init fails loudly naming the leftover
+// rather than blessing it as a fresh store.
 func TestInitHealsAbandonedAdoptResidueOtherCommandsRefuse(t *testing.T) {
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
@@ -393,12 +392,12 @@ func TestInitHealsAbandonedAdoptResidueOtherCommandsRefuse(t *testing.T) {
 }
 
 // TestInitHardStopsAndCreatesNoStoreWhenRemoteDetectionFails pins the case
-// where resolving or probing the remote itself fails (a `git ls-remote`-shaped error — bad
-// credentials, unreachable host, or here, a URL that cannot be resolved at
-// all), never even reaching the "does it carry lit data" question. That is a
-// genuinely uncertain result, not a confirmed-empty one, so init must exit
-// non-zero, create no store, and surface the real git failure — never guess
-// "empty" and proceed.
+// where resolving or probing the remote itself fails (a `git ls-remote`-shaped
+// error — bad credentials, unreachable host, or here, a URL that cannot be
+// resolved at all), never even reaching the "does it carry lit data" question.
+// That is a genuinely uncertain result, not a confirmed-empty one, so init must
+// exit non-zero, create no store, and surface the real git failure — never
+// guess "empty" and proceed.
 func TestInitHardStopsAndCreatesNoStoreWhenRemoteDetectionFails(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")
@@ -431,7 +430,8 @@ func TestInitHardStopsAndCreatesNoStoreWhenRemoteDetectionFails(t *testing.T) {
 		t.Fatalf("DatabasePath stat = %v, want no store to have been created after a detection failure", statErr)
 	}
 
-	// The decision is recorded even though init itself aborts on it.
+	// Every init/sync decision is durably traced, failures included: this one
+	// is recorded even though init itself aborts on it.
 	records := readSyncTraceRecords(t, ws)
 	if len(records) != 1 {
 		t.Fatalf("sync trace records for the failed init = %d, want exactly 1: %+v", len(records), records)
@@ -441,10 +441,11 @@ func TestInitHardStopsAndCreatesNoStoreWhenRemoteDetectionFails(t *testing.T) {
 	}
 }
 
-// TestInitAdoptHardStopsOnTimeout: dolt's fetch ignores context cancellation, so the adopt must be hard-stopped on a
-// deadline. The blocking body is stubbed with one that only returns when
-// abandoned (mirroring dolt), proving the wrapper returns a loud failure on the
-// deadline rather than blocking on it.
+// TestInitAdoptHardStopsOnTimeout: dolt's git-backed transport ignores context
+// cancellation, so the adopt must be hard-stopped on a deadline. The blocking
+// body is stubbed with one that only returns when abandoned (mirroring dolt),
+// proving the wrapper returns a loud failure on the deadline rather than
+// blocking on it.
 func TestInitAdoptHardStopsOnTimeout(t *testing.T) {
 	// serial: no t.Parallel — rewrites the package-level
 	// adoptRemoteTicketsBlockingFn and adoptRemoteTimeout; parallel init

@@ -15,11 +15,14 @@ import (
 // tree rather than a fixture.
 const repoRoot = "../.."
 
-// TestDocumentedClaimsStillShip is the gate this package exists to be.
+// TestDocumentedClaimsStillShip is the gate this package exists to be: it
+// compares the specification's quoted messages against the text that ships.
 //
 // A failure here is not a broken test: it is a chapter describing a message the
 // product no longer has, or a manifest that no longer matches the tree. Each
-// line carries the remedy for its own case — and there is exactly one report.
+// line carries the remedy for its own case — and there is exactly one report,
+// because two reports can tell a contributor opposite things about a single
+// entry in a single run.
 func TestDocumentedClaimsStillShip(t *testing.T) {
 	if len(Manifest) == 0 {
 		t.Fatal("manifest is empty — the gate would pass over anything; regenerate with `go run ./tools/docclaims-sync`")
@@ -180,17 +183,17 @@ func TestShippedTextReadsProductCodeAndItsEmbeddedAssets(t *testing.T) {
 			t.Errorf("%q ships and was not collected", want)
 		}
 	}
-	// Both assets, not just the first.
+	// Both assets, not just the first: returning after the first glob match
+	// would silently index one file per embed directive.
 	for _, want := range []string{"internal/cli/helptext/a.txt", "internal/cli/helptext/b.txt"} {
 		if _, ok := corpus[want]; !ok {
 			t.Errorf("embedded asset %s was not collected", want)
 		}
 	}
 	// "unlinked" and "vendored example": neither is reachable from a binary.
-	// Admitting them is not merely noise — Matched anchors a quotation
-	// to the shortest source holding it, so a stray copy in unlinked code
-	// becomes the evidence for a chapter's claim and survives deleting the real
-	// message.
+	// Admitting them is not merely noise — Matched anchors a quotation to the
+	// shortest source holding it, so a stray copy in unlinked code becomes the
+	// evidence for a chapter's claim and survives deleting the real message.
 	for _, absent := range []string{
 		"test only message", "testdata only message", "tool only message",
 		"vendored only message", "unlinked message here", "vendored example message",
@@ -439,7 +442,15 @@ func TestClosingFenceMustMatchItsOpener(t *testing.T) {
 	}
 }
 
-// A committed entry leaves a fresh derivation three ways.
+// TestTheThreeCasesAreToldApart pins that the report names the right remedy
+// for each way a committed entry leaves a fresh derivation. There are three.
+// Asking one question — does the recorded source still carry the words — puts
+// a literal reworded around a quotation in the same bucket as a deleted
+// message, under the loudest instruction in the design: "Do NOT regenerate".
+// Asking only the corpus puts the *prescribed workflow* there too: delete a
+// message and the sentence quoting it together, as CONTRIBUTING asks, and the
+// report would tell the contributor not to regenerate a sentence they had just
+// removed.
 //
 // Both facts are needed. Whether the chapter still quotes the words comes from
 // the documents; whether anything still ships them comes from the corpus. The
@@ -527,7 +538,11 @@ func TestTheThreeCasesAreToldApart(t *testing.T) {
 			if joined := strings.Join(got[0].QuotedBy, ", "); joined != tc.wantQuotedBy {
 				t.Errorf("named %q as still quoting it, want %q — it reports: %s", joined, tc.wantQuotedBy, got[0].Explain())
 			}
-			// The rendered sentence, not only the field behind it.
+			// The rendered sentence, not only the field behind it. Pinning the
+			// field alone lets a mutation that prints Claim.Doc in the warning
+			// survive: the entry is recorded against the chapter that STOPPED
+			// quoting the message, so that sentence would send a contributor to
+			// the one file with nothing wrong in it.
 			if tc.want == Stopped && !strings.Contains(got[0].Explain(), tc.wantQuotedBy) {
 				t.Errorf("Explain() does not name %q as still quoting it: %s", tc.wantQuotedBy, got[0].Explain())
 			}
@@ -603,10 +618,11 @@ func TestACommentedReplaceIsNotADirective(t *testing.T) {
 	}
 }
 
-// A `main` no build compiles is not a binary, and counting one as an entry
-// point is worse than missing it: the walk starts from a package whose files
-// are all skipped, the corpus comes back empty, and the "no main package" error
-// — whose whole purpose is to say the walk is broken rather than the
+// TestAnIgnoredMainIsNotAnEntryPoint covers the guard a build-ignored main
+// would disarm. A `main` no build compiles is not a binary, and counting one as
+// an entry point is worse than missing it: the walk starts from a package whose
+// files are all skipped, the corpus comes back empty, and the "no main package"
+// error — whose whole purpose is to say the walk is broken rather than the
 // specification false — never fires.
 func TestAnIgnoredMainIsNotAnEntryPoint(t *testing.T) {
 	fsys := fstest.MapFS{
@@ -643,8 +659,12 @@ func TestAMovedAnchorIsReportedOnce(t *testing.T) {
 	}
 }
 
-// modfile accepts a go.mod with no `module` line. "The specification is
-// false" is the one thing a broken walk must never say.
+// TestAGoModWithoutAModulePathIsAnError covers the module-path guard. modfile
+// accepts a go.mod with no `module` line, so one carrying any local replace
+// leaves the source list non-empty — after which every import of this
+// repository's own packages fails to resolve, the walk yields only the cmd/
+// entry directories, and every entry reports as drifted prose. "The
+// specification is false" is the one thing a broken walk must never say.
 func TestAGoModWithoutAModulePathIsAnError(t *testing.T) {
 	fsys := fstest.MapFS{"go.mod": {Data: []byte("go 1.25\n\nreplace example.test/y => ./live\n")}}
 	if _, err := localSources(fsys); err == nil {
@@ -652,6 +672,13 @@ func TestAGoModWithoutAModulePathIsAnError(t *testing.T) {
 	}
 }
 
+// TestTheFirstCollisionStopsTheWalk covers the refusal. ast.Inspect has no
+// abort, and returning false from a string literal only declines to descend
+// into children a leaf does not have — so a walk that does not stop itself
+// keeps writing into a corpus it has already decided to reject, and overwrites
+// the recorded error with each later collision until the one reported is the
+// last rather than the first.
+//
 // collectFile is called directly rather than through ShippedText because the
 // question is about one file's walk, and routing it through the package BFS
 // would pin the answer to a traversal order that has nothing to do with it.

@@ -540,6 +540,8 @@ func parseName(name string) (time.Time, bool) {
 // parsePositiveDigits parses s as a positive int64 minted by
 // strconv.FormatInt — the round-trip check rejects what ParseInt would
 // tolerate but no lit producer ever writes: a sign prefix, leading zeros.
+// Admitting a sign would classify "+123.tmp" as lit-minted residue and
+// destroy it.
 func parsePositiveDigits(s string) (int64, bool) {
 	ns, err := strconv.ParseInt(s, 10, 64)
 	if err != nil || ns <= 0 || strconv.FormatInt(ns, 10) != s {
@@ -573,7 +575,10 @@ func isMintableLabel(label string) bool {
 // snapshot name also fits a 255-byte NAME_MAX: the worst case is the
 // condemnation rename, <ns>-<label>.reserve.<ns>.condemned — 19+1 (head) +
 // 8 (".reserve") + 20 (".<ns>") + 10 (".condemned") = 58 bytes of frame, so
-// 128 label bytes leaves a wide margin.
+// 128 label bytes leaves a wide margin. Without the cap, a killed Take with
+// a near-NAME_MAX label would leave residue whose condemnation rename can
+// never succeed (ENAMETOOLONG), stranding the corpse for every later
+// collection.
 const maxLabelBytes = 128
 
 // sanitizeLabel is a lossy normalizer, not a validator: it maps illegal

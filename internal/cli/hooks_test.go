@@ -160,6 +160,10 @@ func runGit(t *testing.T, dir string, args ...string) {
 	}
 }
 
+// The pre-push-hook template carries the same hazard as the agents section: a
+// marker-less override would replace the managed region with unmarked script on
+// its first install and re-append the whole section on every install after,
+// growing an executable hook without bound.
 func TestHooksInstallMarkerlessOverrideConverges(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")

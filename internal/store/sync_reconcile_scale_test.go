@@ -14,7 +14,9 @@ import (
 )
 
 // The scale the replay has to survive. These numbers are the ticket's floor for
-// what two year-old stores meeting for the first time could look like.
+// what two year-old stores meeting for the first time could look like, and they
+// are what a shape that projects every folded commit up front and holds all of
+// them at once cannot do in bounded memory: its peak grows as chain × backlog.
 const (
 	scaleBacklogIssues = 1000
 	scaleFoldedCommits = 500
@@ -49,7 +51,9 @@ func scaleEditTarget(i int) string { return scaleIssueID(i % scaleEditedIssues) 
 //
 // It is measured as RETAINED heap — a forced GC before every sample — rather
 // than allocated heap, because garbage is exactly what the two designs do NOT
-// differ in.
+// differ in. The materializing shape's cost is one projected export per folded
+// commit, HELD until the spine is built; that is live, uncollectable memory,
+// and it is invisible in a measure that garbage dominates.
 //
 // The number: the streamed replay measures ~83 MiB of growth at this scale,
 // and holds a fixed handful of exports whatever the chain's length. The
@@ -68,10 +72,14 @@ const scaleHeapGrowthBudget = 160 << 20 // 160 MiB
 // at each folded commit is still one full export per commit, so time remains
 // proportional to chain × backlog.
 //
-// It is a blowup ceiling and deliberately NOT a regression detector: the
-// minimality tests already own that rule, and they assert how LITTLE each step
-// writes, which is the thing a wall-clock number can only ever proxy for. What
-// this bound catches is a genuine blowup — an unbounded fold, a step that
+// It is a blowup ceiling and deliberately NOT a regression detector. The
+// arithmetic says it cannot be both: the materialized-exports-and-wholesale-
+// rewrite shape projects to about 5.3 minutes at this scale, comfortably
+// inside this budget. So passing here is no evidence that each step writes
+// minimally, and the bound is not tightened toward that number to make it so:
+// the minimality tests already own that rule, and they assert how LITTLE each
+// step writes, which is the thing a wall-clock number can only ever proxy for.
+// What this bound catches is a genuine blowup — an unbounded fold, a step that
 // wedged. One rule, one enforcer. [LAW:single-enforcer]
 const scaleWallClockBudget = 10 * time.Minute
 
@@ -207,11 +215,11 @@ func assertCombinedBacklogContents(t *testing.T, ctx context.Context, st *Store,
 func scaleIssueID(i int) string { return fmt.Sprintf("bench-%05d", i) }
 
 // seedUnrelatedBacklogPair builds two workspaces that initialised
-// INDEPENDENTLY against one remote, so their histories share no commit. A
-// holds the backlog and has pushed it; B holds the same backlog
-// (same ids, so the union is one backlog and the merge does real per-issue
-// field resolution) plus a long chain of local single-field edits that have
-// never been pushed. B's whole chain is therefore the folded side.
+// INDEPENDENTLY against one remote, so their histories share no commit. A holds
+// the backlog and has pushed it; B holds the same backlog (same ids, so the
+// union is one backlog and the merge does real per-issue field resolution)
+// plus a long chain of local single-field edits that have never been pushed.
+// B's whole chain is therefore the folded side.
 //
 // The backlog is planted in ONE commit through replaceFromExport rather than
 // created issue by issue: the chain length under test is the EDIT chain, and
@@ -296,7 +304,9 @@ func plantScaleBacklog(t *testing.T, ctx context.Context, st *Store, issues int)
 }
 
 // heapWatch samples live heap while an operation runs, because the peak that
-// matters happens DURING the replay and is gone by the time it returns.
+// matters happens DURING the replay and is gone by the time it returns — a
+// materializing shape releases its steps the moment the spine is built, so a
+// measurement taken afterwards would report both designs as equal.
 type heapWatch struct {
 	done     chan struct{}
 	wg       sync.WaitGroup

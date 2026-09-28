@@ -715,8 +715,8 @@ func TestOnlyReopenDivergesFromItsPersistedName(t *testing.T) {
 
 // TestVerbRefusesAnActionOutsideTheSealedSet: a silent fallback to the
 // persisted encoding is indistinguishable from correct output for every action
-// whose two names agree. A panic is found by
-// the test above; a fallback is found by a reader holding an unrunnable command.
+// whose two names agree. A panic is found by the test above; a fallback is
+// found by a reader holding an unrunnable command.
 func TestVerbRefusesAnActionOutsideTheSealedSet(t *testing.T) {
 	defer func() {
 		if recover() == nil {

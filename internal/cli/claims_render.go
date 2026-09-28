@@ -58,8 +58,10 @@ func claimPrefix(by model.Attribution, cc claimContext) string {
 // "elsewhere" asserts the hold is not this checkout's, and only an addressable
 // holder supports that. The public checkout is a bucket every unattributed
 // write shares, so comparing it against this checkout's own identity
-// establishes that both are unaddressable and nothing more.
-// [LAW:parse-dont-validate]
+// establishes that both are unaddressable and nothing more. Reading it as proof
+// the lane is ours would render "claimed here: this checkout" where the
+// identity being compared is the zero Attribution rather than any real
+// checkout's. [LAW:parse-dont-validate]
 func holdState(by model.Attribution) string {
 	if by.Present() {
 		return "elsewhere"
@@ -96,8 +98,10 @@ func formatLaneProgress(progress claims.LaneProgress) string {
 // names somebody. It is a bucket rather than an address, so beside a real name
 // it discriminates nothing, and "alice (the public checkout) -> bob (the public
 // checkout)" spends both halves on the half that did not move. Where there is
-// no assignee it is the whole answer: the record here holds an establishing
-// event, so somebody demonstrably took this ticket.
+// no assignee it is the whole answer, and a better one than "(unassigned)": the
+// record here holds an establishing event, so somebody demonstrably took this
+// ticket, and "(unassigned)" describes the empty assignee field while saying
+// nothing about the holder being announced.
 func describeClaimant(c claims.Claimant) string {
 	switch {
 	case c.Assignee == "":
@@ -121,7 +125,9 @@ func describeClaimant(c claims.Claimant) string {
 // by listing every contestant.
 //
 // The public checkout (model.Attribution.Present) is named rather than
-// rendered from its token, because it has none. Being
+// rendered from its token, because it has none: reading its empty stream
+// through the label path would produce "stream " with nothing after it, an
+// answer-shaped void that says a checkout was named while naming none. Being
 // unaddressable is a fact worth printing, not a gap to paper over — "the public
 // checkout" tells a reader both that somebody worked here and that there is
 // nobody to go ask. [LAW:parse-dont-validate]

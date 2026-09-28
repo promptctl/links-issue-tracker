@@ -40,13 +40,15 @@ func (l *lockedBuffer) String() string {
 // TestMirrorPushHoldsNothingOnTheLiveStore is the contract in test form: the
 // background mirror's push runs from a clone, so while the push is mid-flight —
 // wedged, here, in a git shim that never returns — a foreground mutation on the
-// live store opens, commits and returns.
+// live store opens, commits and returns. A mirror pushing under the live
+// store's one read-write engine (and its journal lock) would make the same
+// `lit new` wait out the whole hold.
 //
-// The same run pins the deadline: the wedged push is
-// cut at store.MirrorPushDeadline, the cycle log says so, and the attempt's
-// own trace record names the deadline — the single-flight mirror must not sit
-// on a stalled transport forever, or every mirror spawned meanwhile loses the
-// race and pushes stop silently.
+// The same run pins the deadline: the wedged push is cut at
+// store.MirrorPushDeadline, the cycle log says so, and the attempt's own trace
+// record names the deadline — the single-flight mirror must not sit on a
+// stalled transport forever, or every mirror spawned meanwhile loses the race
+// and pushes stop silently.
 //
 // The test reproduces the exact field topology with no network: a git shim on
 // PATH wedges `git push` (the engine-side subprocess DOLT_PUSH spawns) in an
@@ -124,11 +126,12 @@ func TestMirrorPushHoldsNothingOnTheLiveStore(t *testing.T) {
 }
 
 // TestMirrorPushDeadlineCutsHungResolveJoinsOneTrace pins the could-not-attempt
-// arm of the deadline cut: the clone's session opens, but the pre-push remote resolution (git ls-remote)
-// hangs and the push deadline kills it, so performSyncPush records no trace of
-// its own and mirrorCycle's out-of-band record is the event's one owner — the
-// deadline explanation joined onto the resolve failure. Exactly one record must
-// carry the deadline text, and it must be the join, not a push record.
+// arm of the deadline cut: the clone's session opens, but the pre-push remote
+// resolution (git ls-remote) hangs and the push deadline kills it, so
+// performSyncPush records no trace of its own and mirrorCycle's out-of-band
+// record is the event's one owner — the deadline explanation joined onto the
+// resolve failure. Exactly one record must carry the deadline text, and it
+// must be the join, not a push record.
 //
 // Not parallel: it mutates PATH (t.Setenv) and store.MirrorPushDeadline.
 func TestMirrorPushDeadlineCutsHungResolveJoinsOneTrace(t *testing.T) {
@@ -183,8 +186,8 @@ func TestMirrorPushDeadlineCutsHungResolveJoinsOneTrace(t *testing.T) {
 // TestMirrorCycleSweepsADeadMirrorsClone pins the residue contract: a clone a
 // crashed mirror left behind is collected by the next cycle before it takes
 // its own, and nothing of either survives the cycle — the next mirror trips on
-// nothing. It also pins the healthy cycle's log shape, which is the record the
-// ticket's field check reads: each hold on the live store reports its own
+// nothing. It also pins the healthy cycle's log shape, which is the record a
+// field check reads: each hold on the live store reports its own
 // elapsed time, and the cycle end carries the phases apart.
 func TestMirrorCycleSweepsADeadMirrorsClone(t *testing.T) {
 	_, root, _, runInProcess, _ := setupMirrorDeadlineRepo(t)
@@ -396,11 +399,17 @@ func shrinkMirrorPushDeadline(t *testing.T, healthyCycle time.Duration) time.Dur
 }
 
 // wedgeDeadlineMargin is how far above a measured healthy cycle the shrunk
-// deadline sits.
+// deadline sits, and why these tests name no duration at all.
 //
 // A deadline is a stall detector: its whole claim is that work still running
 // at the deadline has stopped making progress, and that claim is false the
-// moment the deadline lands inside the cost of healthy work.
+// moment the deadline lands inside the cost of healthy work. A flat shrink
+// makes the same mistake one level down: it is a wall-clock bet against setup
+// this test does not own. Under heavy load a cycle can spend longer than any
+// named figure between opening its engine and spawning git push, so the budget
+// fires before the wedge can engage and the run reports the invariant broken
+// when it has only failed to reach it. Raising the number moves that threshold
+// without removing the bet.
 //
 // So the base is measured rather than named, and this is the margin over it.
 // One whole healthy cycle is already a strict over-estimate of what has to fit
@@ -421,9 +430,9 @@ const wedgeDeadlineMargin = 2
 // timing the wedge). Running before the shrink needs no saying: the shrink
 // takes this function's result. A sample that was itself cut is censored — the
 // deadline standing in for the work — so a cut sample is a failure here rather
-// than a smaller number. So is a sample whose push failed
-// fast: the mirror is best-effort and exits clean either way, and a rejected
-// push is cheaper than a landed one. Whether the push landed is read from the
+// than a smaller number. So is a sample whose push failed fast: the mirror is
+// best-effort and exits clean either way, and a rejected push is cheaper than
+// a landed one. Whether the push landed is read from the
 // push-outcome marker, the one record of that fact, and the marker must be
 // this sample's rather than the bootstrap push's. [LAW:no-silent-failure]
 // [LAW:one-source-of-truth]
@@ -503,7 +512,8 @@ func wedgeEngagedAt(t *testing.T, wedgeMarker, wedged string, out *lockedBuffer)
 
 // assertPushEndedWithinItsCeiling pins where a cut push ends, measured from
 // the wedge and not from the cycle's start: everything before the wedge engaged
-// is work whose cost this test does not own.
+// is work whose cost this test does not own, and folding it into the bound
+// would be a wall-clock bet.
 //
 // The bound is the deadline plus the lag cancellation takes to unwind — the
 // store's own MirrorPushCancelLagObserved. [LAW:one-source-of-truth]
@@ -520,7 +530,9 @@ func assertPushEndedWithinItsCeiling(t *testing.T, wedgedAt, cycleEnded time.Tim
 // explanations make about their own word order: the FAILING banner renders
 // them through oneLineReason, which keeps the first line and caps it at 160
 // runes, so the part that stops a reader blaming the network (or the disk) has
-// to survive that cut.
+// to survive that cut. A reword, or a deadline whose Duration formats longer
+// than "40s", would otherwise truncate the framing away silently and leave the
+// banner saying only that a budget was exceeded.
 //
 // The duration cases are the enumeration this needs: the production values,
 // and a value in minutes, which Go renders as "1h40m0s" — more than twice the

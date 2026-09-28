@@ -22,7 +22,8 @@ func TestBuildStatusNoteReleaseBuild(t *testing.T) {
 
 // TestBuildStatusNoteInstalledSourceBuildIsNotARelease: `just install` stamps
 // Version from `git describe`, so the binary this repo puts on a PATH has
-// IsDev == false while being built from a working tree. FromSource is what
+// IsDev == false while being built from a working tree, and a note keyed on
+// IsDev would call it a release, age unmentioned. FromSource is what
 // separates the two, and this is the exact shape the field binary has: a
 // stamped Version AND source provenance.
 func TestBuildStatusNoteInstalledSourceBuildIsNotARelease(t *testing.T) {
@@ -232,7 +233,8 @@ func TestBuildStalenessLineNamesAgeAndRemedy(t *testing.T) {
 // return, which is the vacuous test this one exists to not be.
 //
 // The remedy travels with its surface. The build pair share one — one predicate
-// means one population — while the fetch surface prescribes its own.
+// means one population, and `just install` alone does not refresh the ./lit a
+// developer runs out of the repo — while the fetch surface prescribes its own.
 func TestEveryStalenessSurfaceAgreesAtItsBoundary(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
