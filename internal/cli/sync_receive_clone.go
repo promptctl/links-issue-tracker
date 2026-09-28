@@ -33,9 +33,9 @@ type receiveFetch struct {
 
 // takeReceiveClone clones the live store for the receive's fetch. The caller
 // holds the receive lock, which is what makes cloneLiveStore's sweep of a
-// dead receive's clone safe. The live store is held for the copy alone
-// (links-scale-t4vj): the fetch that used to run under its LOCK — seconds on
-// the network — runs from the clone with none of the live store's locks held.
+// dead receive's clone safe. The live store is held for the copy alone: the
+// fetch — seconds on the network — runs from the clone with none of the live
+// store's locks held.
 func takeReceiveClone(ctx context.Context, ws workspace.Info) (liveClone, error) {
 	clone, cut, err := cloneLiveStore(ctx, ws, receiveCloneBase(ws), func() {})
 	if err != nil {

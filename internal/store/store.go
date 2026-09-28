@@ -2915,8 +2915,7 @@ const (
 	// remote has moved — so an offline or slow remote cannot hang the
 	// command's exit. A cut abandons only the fetch (the next interval
 	// retries), never the command's result. The fetch runs on a clone of
-	// this store (links-scale-t4vj), so this deadline bounds the command's
-	// wait, not a hold: the live store is held for the clone's copy (under
+	// this store, so this deadline bounds the command's wait, not a hold: the live store is held for the clone's copy (under
 	// MirrorHoldBudget) and for the landing of the fetch, whose cost is
 	// proportional to how far the remote moved and which only this deadline
 	// bounds (LandFetchedHead says why).

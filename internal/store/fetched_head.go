@@ -68,9 +68,8 @@ type LandedFetch struct {
 // copied into the live store's mirror. It contacts no network and opens no SQL
 // engine; the copies are local.
 //
-// Why it exists: the automatic receive fetches from a clone
-// (links-scale-t4vj), so the live store is held for this copy rather than for
-// the network round trip. Dolt's own fetch writes the chunks, the ref and the
+// Why it exists: the automatic receive fetches from a clone, so the live store
+// is held for this copy rather than for the network round trip. Dolt's own fetch writes the chunks, the ref and the
 // mirror's objects into the store it runs on; this is those three writes moved
 // to the store that owns them. [LAW:one-source-of-truth] the tracking ref
 // stays the one source of "where the remote is".

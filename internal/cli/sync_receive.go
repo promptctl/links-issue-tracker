@@ -120,7 +120,7 @@ func receiveInline(ctx context.Context, ws workspace.Info) {
 // the live store, fetch into the clone, land the fetch on the live store, and
 // settle there (fast-forward, or reconcile a divergence), then record what that
 // established. The live store is held only for the clone's copy, the landing,
-// and the settle — none of them on the network (links-scale-t4vj). The error
+// and the settle — none of them on the network. The error
 // is a could-not-attempt failure; a receive that ran and failed is in the
 // outcome, its trace already written.
 func receiveAndRecord(ctx context.Context, ws workspace.Info, observed remoteAdvertisement) (syncReceiveOutcome, error) {

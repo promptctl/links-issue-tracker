@@ -11,12 +11,10 @@ import (
 	"time"
 )
 
-// TestReceiveFetchLeavesTheLiveStoreFree pins links-scale-t4vj: the automatic
-// receive's fetch runs on a clone, so a write that lands on the live store
-// while the fetch is on the network goes straight through. Before, the fetch
-// held the live store's LOCK for its whole round trip, and a write arriving
-// during it waited out coResidentHolderWait and failed naming the receiving
-// command.
+// TestReceiveFetchLeavesTheLiveStoreFree pins that the automatic receive's
+// fetch runs on a clone, so a write that lands on the live store while the
+// fetch is on the network goes straight through rather than waiting out
+// coResidentHolderWait and failing with the receiving command named.
 //
 // The network round trip is made long and observable with a git shim on the
 // receiving command's PATH: Dolt's blobstore fetch is the one git call that
