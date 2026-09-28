@@ -462,6 +462,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-model.md", Text: "epic %s is already %s, so `%s` has nothing to do: an epic's state derives from its children (%d of %d done)", Src: "epic %s is already %s, so `%s` has nothing to do: an epic's state derives from its children (%d of %d done)"},
 	{Doc: "doc-v1-total/inventories/inventory-model.md", Text: "illegal Retention value %T", Src: "illegal Retention value %T"},
 	{Doc: "doc-v1-total/inventories/inventory-model.md", Text: "illegal RetentionAction value %T", Src: "illegal RetentionAction value %T"},
+	{Doc: "doc-v1-total/inventories/inventory-model.md", Text: "invalid issue type %q: %w", Src: "invalid issue type %q: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-model.md", Text: "invalid status %q (valid: open, in_progress, closed)", Src: "invalid status %q (valid: open, in_progress, closed)"},
 	{Doc: "doc-v1-total/inventories/inventory-model.md", Text: "issue %q has no lifecycle (constructed without HydrateStatus/HydrateAllOf)", Src: "issue %q has no lifecycle (constructed without HydrateStatus/HydrateAllOf)"},
 	{Doc: "doc-v1-total/inventories/inventory-model.md", Text: "issue %q: illegal Retention value %T", Src: "issue %q: illegal Retention value %T"},

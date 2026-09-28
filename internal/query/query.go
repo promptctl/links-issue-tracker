@@ -70,6 +70,21 @@ func Merge(base storage.ListIssuesFilter, incoming storage.ListIssuesFilter) (st
 	return filter, validateFilter(filter)
 }
 
+// nameSet reads the free-text names an id:, parent: or label: term carries:
+// a comma list, as the matching --ids, --parent and --labels flags take, so a
+// term and its flag build the same filter at every arity.
+// [LAW:no-silent-failure] A term naming nothing (`parent:`, `id: , `) is
+// refused rather than dropped: dropping it would silently widen the listing to
+// every issue. Typed as a validation refusal because it repeats on every
+// retry, so it must not be answered with retry advice.
+func nameSet(term, key, noun, example string) ([]string, error) {
+	names := storage.TrimmedNonEmpty(strings.Split(strings.TrimPrefix(term, key), ","))
+	if len(names) == 0 {
+		return nil, storage.ValidationError{Message: fmt.Sprintf("%s needs %s, e.g. %s%s", key, noun, key, example)}
+	}
+	return names, nil
+}
+
 func applyTerm(filter *storage.ListIssuesFilter, term string) error {
 	switch {
 	case strings.HasPrefix(term, "status:"):
@@ -94,34 +109,39 @@ func applyTerm(filter *storage.ListIssuesFilter, term string) error {
 		filter.Resolutions = append(filter.Resolutions, parsed)
 		return nil
 	case strings.HasPrefix(term, "type:"):
-		// [LAW:single-enforcer] The sealed issue-type set is gated by the one
-		// ParseIssueType boundary, mirroring the status: and resolution: terms;
-		// a typo'd type is an error, never an empty result. [LAW:no-silent-failure]
-		parsed, err := model.ParseIssueType(strings.TrimPrefix(term, "type:"))
+		// [LAW:single-enforcer] The type: term and the --type flag both route
+		// through the one model.ParseIssueTypes, as status: and --status share
+		// ParseStates; a typo'd member is an error, never an empty result.
+		// [LAW:no-silent-failure]
+		parsed, err := model.ParseIssueTypes(strings.TrimPrefix(term, "type:"))
 		if err != nil {
 			return err
 		}
-		filter.IssueTypes = append(filter.IssueTypes, parsed)
+		filter.IssueTypes = append(filter.IssueTypes, parsed...)
 		return nil
 	case strings.HasPrefix(term, "assignee:"):
 		filter.Assignees = append(filter.Assignees, strings.TrimSpace(strings.TrimPrefix(term, "assignee:")))
 		return nil
 	case strings.HasPrefix(term, "id:"):
-		filter.IDs = append(filter.IDs, strings.TrimSpace(strings.TrimPrefix(term, "id:")))
+		ids, err := nameSet(term, "id:", "an issue id", "<issue-id>")
+		if err != nil {
+			return err
+		}
+		filter.IDs = append(filter.IDs, ids...)
 		return nil
 	case strings.HasPrefix(term, "parent:"):
-		id := strings.TrimSpace(strings.TrimPrefix(term, "parent:"))
-		if id == "" {
-			// [LAW:no-silent-failure] A bare `parent:` names no parent; dropping it
-			// would silently widen the listing to every issue. Typed as a
-			// validation refusal: it repeats on every retry, so it must not be
-			// answered with retry advice.
-			return storage.ValidationError{Message: "parent: needs an issue id, e.g. parent:<epic-id>"}
+		ids, err := nameSet(term, "parent:", "an issue id", "<epic-id>")
+		if err != nil {
+			return err
 		}
-		filter.ParentIDs = append(filter.ParentIDs, id)
+		filter.ParentIDs = append(filter.ParentIDs, ids...)
 		return nil
 	case strings.HasPrefix(term, "label:"):
-		filter.LabelsAll = append(filter.LabelsAll, strings.TrimSpace(strings.TrimPrefix(term, "label:")))
+		labels, err := nameSet(term, "label:", "a label", "<label>")
+		if err != nil {
+			return err
+		}
+		filter.LabelsAll = append(filter.LabelsAll, labels...)
 		return nil
 	case strings.HasPrefix(term, "has:"):
 		switch strings.TrimSpace(strings.TrimPrefix(term, "has:")) {

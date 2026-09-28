@@ -624,12 +624,12 @@ else ready.
 |---|---|---|---|
 | `--at` | string | `""` | Declared so the parse accepts it (`cli.go`); `listLeaf` returns its value pointer to `runList` (`cli.go`), which routes on it. The work closure does not read it |
 | `--status` | string array | `nil` | State set via `model.ParseStates` — comma-separated and/or repeated, every fragment parsed; error wrapped `parse --status: %w` (`cli.go`) |
-| `--type` | string | `""` | Single issue type via `parseIssueTypeSlice` (blank → no narrowing); error wrapped `parse --type: %w` (`cli.go`) |
+| `--type` | string array | `nil` | Type set via `model.ParseIssueTypes` — comma-separated and/or repeated, every fragment parsed, so a blank or unknown member is refused and named; error wrapped `parse --type: %w` (`cli.go`) |
 | `--assignee` | string | `""` | Trimmed, single-element `Assignees`; blank → none (`cli.go`) |
 | `--search` | string | `""` | Trimmed and appended to `SearchTerms` **only if visited** (`cli.go`) |
-| `--ids` | string | `""` | CSV → `filter.IDs`, only if visited (`cli.go`) |
-| `--parent` | string array | `nil` | Issue ids, comma-separated and/or repeated; each occurrence is split with `splitCSV` and the ids of all occurrences are collected, then the surface's positionals are appended → `filter.ParentIDs` (direct children, ORed). An occurrence that names no id (`--parent=`, `--parent ", "`) → `UsageError{"--parent needs an issue id, e.g. --parent <epic-id>"}` → exit 2, checked per occurrence before the positionals are appended, so `lit children <id> --parent=` is refused too. An id naming no issue → `NotFoundError` from the store → exit 4 (`cli.go`; `store.go`) |
-| `--labels` | string | `""` | CSV → `LabelsAll` (ALL must match), only if visited (`cli.go`) |
+| `--ids` | string array | `nil` | Issue ids, comma-separated and/or repeated, read by `nameFlagSet` exactly as `--parent` is → `filter.IDs`; an occurrence naming no id → `UsageError{"--ids needs an issue id, e.g. --ids <issue-id>"}` → exit 2 (`cli.go`) |
+| `--parent` | string array | `nil` | Issue ids, comma-separated and/or repeated; `nameFlagSet` splits each occurrence with `splitCSV` and collects the ids of all occurrences, then the surface's positionals are appended → `filter.ParentIDs` (direct children, ORed). An occurrence that names no id (`--parent=`, `--parent ", "`) → `UsageError{"--parent needs an issue id, e.g. --parent <epic-id>"}` → exit 2, checked per occurrence before the positionals are appended, so `lit children <id> --parent=` is refused too. An id naming no issue → `NotFoundError` from the store → exit 4 (`cli.go`; `store.go`) |
+| `--labels` | string array | `nil` | Labels, comma-separated and/or repeated, read by `nameFlagSet` → `LabelsAll` (ALL must match, so each added label narrows); an occurrence naming no label → `UsageError{"--labels needs a label, e.g. --labels <label>"}` → exit 2 (`cli.go`) |
 | `--has-comments` | bool | `false` | Only if visited; sets the pointer to the flag's value — so `--has-comments=false` filters to issues *without* comments (`cli.go`) |
 | `--include-archived` | bool | `false` | `filter.IncludeArchived` (`cli.go`) |
 | `--include-deleted` | bool | `false` | `filter.IncludeDeleted` (`cli.go`) |
@@ -665,10 +665,12 @@ else ready.
   (`query.go`).
 - Terms (`applyTerm`, `query.go`): `status:<state>[,<state>...]` (via
   `model.ParseStates`), `resolution:<res>` (via `model.ParseResolution`),
-  `type:<type>` (via `model.ParseIssueType`), `assignee:<v>`, `id:<v>`,
-  `parent:<v>` (bare `parent:` →
+  `type:<type>[,<type>...]` (via `model.ParseIssueTypes`), `assignee:<v>`,
+  `id:<v>[,<v>...]`, `parent:<v>[,<v>...]`, `label:<v>[,<v>...]` (the last
+  three via `nameSet`, which splits on commas like the matching flag; a term
+  naming nothing, such as bare `parent:` →
   `storage.ValidationError{"parent: needs an issue id, e.g. parent:<epic-id>"}`,
-  `query.go`), `label:<v>`, `has:comments` (any other `has:` →
+  `query.go`), `has:comments` (any other `has:` →
   `unsupported has: filter %q`), `sort:<spec>` (via `storage.ParseSortSpecs`),
   `limit:<int>` (non-numeric → `limit must be an integer, got %q`; negative →
   `limit must be non-negative, got %q`), bare `archived`, bare `deleted`, and any
