@@ -59,8 +59,7 @@ const (
 // which a divergence stops reading as "reconcile in progress" and becomes an
 // incident an agent must resolve now. Either signal alone trips it: a slow drip
 // of a few commits over days is as much an incident as a burst of many in an
-// hour. The 2026-07-08 incident was BOTH (≈5 days, 41+5 commits), and age is the
-// signal a commit-count threshold alone would miss.
+// hour. Age is the signal a commit-count threshold alone would miss.
 const (
 	persistentDivergenceAge     = 24 * time.Hour
 	persistentDivergenceCommits = 10
@@ -69,10 +68,9 @@ const (
 // syncFailureMustNotIgnore is the constant directive every block opens with. The
 // severity below varies with the divergence's values; the standing fact that a
 // sync failure is not ambient noise does not. It states the consequence of
-// treating it as routine rather than commanding the agent not to, because in the
-// 2026-07-08 incident an agent read a softer "will retry" line for two days and
-// classified it as ambient noise — the fix is a block that reads as urgent on its
-// own terms, not one that issues orders.
+// treating it as routine rather than commanding the agent not to: a softer
+// "will retry" line reads as ambient noise, so the block has to read as urgent
+// on its own terms, not issue orders.
 const syncFailureMustNotIgnore = "This is a blocking condition, not ambient noise or a routine quirk — retrying past it or routing around it will not resolve it. Resolve it now, or explicitly surface it to the user as blocking, before continuing ticket work."
 
 // SyncFailure is the domain state of one non-transient sync failure, independent
@@ -99,7 +97,7 @@ type SyncFailure struct {
 	// syncFailureDivergedUnresolved that arose from a reconcile hard-failure. It
 	// renders as a trailing cause line, never as the headline. [LAW:no-silent-failure]
 	// the backend detail is preserved; it is just demoted below the directive so
-	// it can no longer read as the whole (ignorable) message. Its text can carry
+	// it cannot read as the whole (ignorable) message. Its text can carry
 	// what a remote server sent, so it renders fenced, through quoteRemote.
 	Cause error
 	// RemoteSchemaVersion and LocalSupportedMax are populated only for
@@ -125,12 +123,11 @@ type SyncFailure struct {
 	// BuildNote is the dev-vs-release build status line, resolved once at the
 	// boundary that constructs this failure (asSyncFailure, syncFailureFromPull,
 	// doctorSyncReport.divergenceFailure) via resolveBuildStatusNote, never
-	// computed inside blockString. A sync failure is exactly the moment the
-	// field incident showed nobody was asking "is the binary that made this
-	// decision current" — this answers it inline, without a second `lit
-	// version` call. [LAW:effects-at-boundaries] Empty means the constructing
-	// boundary did not set it (e.g. a test literal); blockString omits the
-	// line rather than fabricating one.
+	// computed inside blockString. A sync failure is exactly the moment to ask
+	// "is the binary that made this decision current" — this answers it
+	// inline, without a second `lit version` call. [LAW:effects-at-boundaries]
+	// Empty means the constructing boundary did not set it (e.g. a test
+	// literal); blockString omits the line rather than fabricating one.
 	BuildNote string
 }
 
@@ -294,9 +291,9 @@ func (f SyncFailure) whatLine() string {
 
 // resolutionSteps is the ordered command list for the class, each with a short
 // gloss of what it does. The remedy lives in the tool's output, not in an agent's
-// memory: in the incident the repair knowledge existed only in a session note,
-// which drifts. [LAW:one-source-of-truth] the tool that detects the state names
-// the fix for that state.
+// memory: repair knowledge kept only in a session note drifts.
+// [LAW:one-source-of-truth] the tool that detects the state names the fix for
+// that state.
 func (f SyncFailure) resolutionSteps() []string {
 	switch f.Class {
 	case syncFailureProseHeld:
@@ -315,7 +312,7 @@ func (f SyncFailure) resolutionSteps() []string {
 			fmt.Sprintf("lit upgrade               # install a lit that supports schema v%d, then retry", f.RemoteSchemaVersion),
 		}
 	case syncFailureUnrelatedHistories:
-		// All three resolutions now exist: the two wholesale takes (destructive of the
+		// All three resolutions exist: the two wholesale takes (destructive of the
 		// OTHER side's unique issues — a deliberate choice, never run blindly; the WHAT
 		// EACH SIDE HOLDS section shows exactly what each loses) and combine, the union
 		// that KEEPS every issue (shared ids field-merged, an on-both prose conflict held

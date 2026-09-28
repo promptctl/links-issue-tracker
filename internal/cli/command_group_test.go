@@ -137,10 +137,7 @@ func leafHelpSubject(help string) (string, bool) {
 // A LEAF command's help must be answered before the dispatch pipeline acquires
 // the workspace, store, or app that leaf's work needs (links-cli-1lxr). Asking
 // for help is a question about the binary, so it cannot be made to wait on — or
-// fail because of — whatever else holds the workspace: the reported defect was
-// `lit export --help` printing a store-contention notice and stalling on a lock
-// a background mirror held, and `lit workflows --help` failing outright outside
-// a git repository.
+// fail because of — whatever else holds the workspace.
 //
 // Running outside any git repository is the machine-checkable proxy: no
 // workspace resolves and no store opens there, so success is only possible if
@@ -173,9 +170,9 @@ func TestLeafHelpAnswersWithoutAcquiringResources(t *testing.T) {
 			}
 			// One help answer names one command. Cobra derives the -h line from the
 			// first word of the flagset's name while the header uses the whole of
-			// it, so a multi-word leaf contradicted itself: `rank set --help`
-			// printed "Usage of rank set:" above "help for rank", pointing the
-			// reader at its family as though that were the command they had asked
+			// it, so a multi-word leaf can contradict itself: `rank set --help`
+			// printing "Usage of rank set:" above "help for rank" points the
+			// reader at its family as though that were the command they asked
 			// about. The two lines are one fact and must agree.
 			// [LAW:one-source-of-truth]
 			named, ok := leafHelpSubject(stdout.String())
@@ -196,11 +193,9 @@ func TestLeafHelpAnswersWithoutAcquiringResources(t *testing.T) {
 
 // Asking a command group for help is answered as help: the group's usage on
 // stdout, nothing on stderr, and success — Run returning nil is what main maps
-// to exit 0 (links-cli-zc3r). The shape this pins out was an error-framed usage
-// line with a retry-then-doctor remediation and exit 1, an answer-shaped wrong
-// answer: the retry could never succeed, and doctor got run against a healthy
-// store. [LAW:behavior-not-structure] only the observable answer is asserted;
-// where the recognition lives is the implementation's business.
+// to exit 0 (links-cli-zc3r). [LAW:behavior-not-structure] only the observable
+// answer is asserted; where the recognition lives is the implementation's
+// business.
 func TestCommandGroupHelpExitsZeroWithUsageOnStdout(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")
@@ -279,8 +274,7 @@ func TestNestedGroupHelpAnswersWithoutAcquiringResources(t *testing.T) {
 // The state-transition surface splits across two help groups so the high-traffic
 // status lifecycle stands out: the core verbs stay in Agent Operations, the rare
 // retention verbs move to their own Issue Retention group rendered below it. This
-// pins that split — the acceptance criterion for regrouping the transition verbs —
-// against the rendered `lit --help`.
+// pins that split against the rendered `lit --help`.
 func TestTransitionVerbGrouping(t *testing.T) {
 	t.Parallel()
 	groupOf, headerLine := renderedGrouping(t)

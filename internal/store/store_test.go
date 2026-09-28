@@ -390,11 +390,10 @@ func TestFixRankInversionsConvergesWhenPassCreatesNewInversion(t *testing.T) {
 	}
 }
 
-// Regression: dst.status is NULL for epic dependencies (state lives in the
-// AllOf lifecycle, not the column). The previous `dst.status != 'closed'`
-// filter evaluated NULL as not-true and silently excluded every blocks-edge
-// pointing at an open epic — Doctor reported 0 inversions and --fix was a
-// no-op even when ready.go's annotator flagged the same edge.
+// dst.status is NULL for epic dependencies (state lives in the AllOf
+// lifecycle, not the column), so a `dst.status != 'closed'` filter evaluates
+// NULL as not-true and silently excludes every blocks-edge pointing at an open
+// epic — Doctor would report 0 inversions and --fix would be a no-op.
 func TestFixRankInversionsDetectsEpicDependency(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -544,7 +543,7 @@ func TestAddRelationEnforcesSingleParentCardinality(t *testing.T) {
 	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: child.ID, DstID: epicA.ID, Type: "parent-child", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation(child parent-child epicA) error = %v", err)
 	}
-	// The previously-buggy path: a second parent-child edge through AddRelation.
+	// A second parent-child edge through AddRelation.
 	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: child.ID, DstID: epicB.ID, Type: "parent-child", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation(child parent-child epicB) error = %v", err)
 	}
@@ -894,13 +893,12 @@ func TestNewIssueIDCollisionsAdvanceNonce(t *testing.T) {
 	}
 }
 
-// TestCreateIssueChildIDsKeepParentageAndAreDistinct replaces an older test
-// that asserted children were numbered .1, .2, .3. That numbering WAS the
-// defect: a count over local rows standing in for every row that exists
-// anywhere, so two disconnected stores holding the same siblings both computed
-// the same next id. Parentage is what a child id must carry, asserted here;
-// that it carries no computable position is asserted against two real stores
-// by TestTwoDisconnectedStoresMintDistinctChildIDs. [LAW:behavior-not-structure]
+// A child id numbered by a count over local rows would stand in for every row
+// that exists anywhere, so two disconnected stores holding the same siblings
+// would compute the same next id. Parentage is what a child id must carry,
+// asserted here; that it carries no computable position is asserted against
+// two real stores by TestTwoDisconnectedStoresMintDistinctChildIDs.
+// [LAW:behavior-not-structure]
 func TestCreateIssueChildIDsKeepParentageAndAreDistinct(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -958,12 +956,11 @@ func TestCreateIssueChildIDsKeepParentageAndAreDistinct(t *testing.T) {
 	}
 }
 
-// TestCreateIssueDoesNotReuseADeletedChildID covers the second half of the
-// defect: a count over LIVE rows frees the highest slot when that child is hard
-// deleted, so a brand new, unrelated ticket lands on the deleted one's id and
-// inherits its ancestry as evidence. A content hash does not hand the freed id
-// to the next create the way the counter did; landing there again takes a hash
-// coincidence, which is what this asserts does not happen for an ordinary pair.
+// A count over LIVE rows would free the highest slot when that child is hard
+// deleted, so a brand new, unrelated ticket would land on the deleted one's id
+// and inherit its ancestry as evidence. A content hash does not hand the freed
+// id to the next create; landing there again takes a hash coincidence, which
+// is what this asserts does not happen for an ordinary pair.
 func TestCreateIssueDoesNotReuseADeletedChildID(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -2036,10 +2033,9 @@ func TestEpicAsDependencyDerivedState(t *testing.T) {
 	}
 }
 
-// (links-agent-epic-model-uew.7) After the schema cleanup, container rows
-// persist NULL in the status column instead of the invented "open". The
-// dead-data write is gone; any future code that reads i.status on an epic
-// will get NULL and fail loudly instead of silently lying.
+// Container rows persist NULL in the status column; any future code that
+// reads i.status on an epic will get NULL and fail loudly instead of silently
+// lying.
 func TestCreateEpicPersistsNullStatusColumn(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -2067,13 +2063,13 @@ func TestCreateEpicPersistsNullStatusColumn(t *testing.T) {
 	}
 }
 
-// (links-agent-epic-model-uew.7) Container ↔ non-container IssueType changes
-// would orphan the lifecycle expression: an epic carries an AllOf lifecycle
-// that derives state from children, and a leaf carries a status primitive
-// carrying status/closed_at. Crossing that boundary via UpdateIssue would
-// either drop the leaf's status or leave AllOf attached to a row whose schema
-// requires owned status. Refused at the trust boundary instead of patched up
-// downstream with an invented default.
+// Container ↔ non-container IssueType changes would orphan the lifecycle
+// expression: an epic carries an AllOf lifecycle that derives state from
+// children, and a leaf carries a status primitive carrying status/closed_at.
+// Crossing that boundary via UpdateIssue would either drop the leaf's status
+// or leave AllOf attached to a row whose schema requires owned status.
+// Refused at the trust boundary instead of patched up downstream with an
+// invented default.
 func TestUpdateIssueRefusesContainerLeafTypeChange(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -2100,12 +2096,12 @@ func TestUpdateIssueRefusesContainerLeafTypeChange(t *testing.T) {
 	}
 }
 
-// (links-agent-epic-model-uew.7) ensureStatusConstraint compares Dolt's
-// reported CHECK clause against canonicalStatusCheckClause. If Dolt's
-// normalization ever drifts from ours, the comparison would silently fail and
-// every Open() would drop+re-add the constraint, producing a fresh schema
-// commit each time. This test pins migration idempotence at the observable
-// boundary — the Dolt commit log — so any future drift is loud.
+// ensureStatusConstraint compares Dolt's reported CHECK clause against
+// canonicalStatusCheckClause. If Dolt's normalization ever drifts from ours,
+// the comparison would silently fail and every Open() would drop+re-add the
+// constraint, producing a fresh schema commit each time. This test pins
+// migration idempotence at the observable boundary — the Dolt commit log — so
+// any future drift is loud.
 func TestMigrationIsIdempotentOnSecondOpen(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -2137,10 +2133,9 @@ func TestMigrationIsIdempotentOnSecondOpen(t *testing.T) {
 	}
 }
 
-// (links-agent-epic-model-uew.7) The CHECK constraint encodes the invariant
-// at the schema level: any attempt to write a non-NULL status on an epic row
-// is rejected at INSERT time, mechanically — no future code path can quietly
-// re-introduce the dead-data lie.
+// The CHECK constraint encodes the invariant at the schema level: any attempt
+// to write a non-NULL status on an epic row is rejected at INSERT time,
+// mechanically.
 func TestSchemaRejectsEpicWithNonNullStatus(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -2284,8 +2279,7 @@ func TestRetentionUsesOptimisticConcurrency(t *testing.T) {
 // persisted event encoding and invocation verb are the same word, so it passes
 // whichever of the two the message interpolates and cannot see the difference.
 // `lit open` dispatches model.Reopen, persisted as "reopen", so this conflict is
-// the only one that can tell a right answer from a wrong one -- and it read
-// "reopen conflict: ..." until the message was changed to render the verb.
+// the only one that can tell a right answer from a wrong one.
 func TestConflictNamesTheVerbTheCallerTyped(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -2643,14 +2637,14 @@ func TestCloseRedirectToDeletedCanonicalRejected(t *testing.T) {
 }
 
 // TestCloseRedirectRaceWithDeleteRejected is the concurrency regression for the
-// family-wide TOCTOU: the redirect canonical is now validated inside the
-// mutation tx, so a delete of the canonical that lands AFTER the close is
-// planned but BEFORE it commits is still observed, and the close is rejected
-// with nothing persisted. applyPreMutationHookForTest injects the delete in
-// exactly that window. Before the fix — when validateRedirectTarget ran in the
-// pre-lock plan phase — this close saw a live canonical, succeeded, and
-// persisted a redirect to a deleted canonical, the exact state the validation
-// exists to reject. [LAW:no-ambient-temporal-coupling] [LAW:no-silent-failure]
+// family-wide TOCTOU: the redirect canonical is validated inside the mutation
+// tx, so a delete of the canonical that lands AFTER the close is planned but
+// BEFORE it commits is still observed, and the close is rejected with nothing
+// persisted. applyPreMutationHookForTest injects the delete in exactly that
+// window. Validated in the pre-lock plan phase instead, this close would see a
+// live canonical, succeed, and persist a redirect to a deleted canonical, the
+// exact state the validation exists to reject.
+// [LAW:no-ambient-temporal-coupling] [LAW:no-silent-failure]
 func TestCloseRedirectRaceWithDeleteRejected(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -2865,9 +2859,9 @@ func TestRankSetRejectsTooFewIDs(t *testing.T) {
 	}
 }
 
-// TestRemovePerChildBlockAfterRankReorder reproduces the bug where per-child
-// block edges added when an epic-level block already exists cannot be removed
-// after a rank reorder. The store-level orientation for blocks is:
+// TestRemovePerChildBlockAfterRankReorder asserts that per-child block edges
+// added when an epic-level block already exists can still be removed after a
+// rank reorder. The store-level orientation for blocks is:
 // src=dependent (blocked), dst=dependency (blocker).
 func TestRemovePerChildBlockAfterRankReorder(t *testing.T) {
 	t.Parallel()
@@ -2916,7 +2910,7 @@ func TestRemovePerChildBlockAfterRankReorder(t *testing.T) {
 		t.Fatalf("RankAbove(A, B) error = %v", err)
 	}
 
-	// Remove per-child blocks — this is where the bug manifests.
+	// Remove per-child blocks.
 	for _, childID := range []string{childB1.ID, childB2.ID, childB3.ID} {
 		if err := st.RemoveRelation(ctx, childID, epicA.ID, "blocks"); err != nil {
 			t.Errorf("RemoveRelation(per-child block %s) error = %v", childID, err)
@@ -3004,9 +2998,7 @@ func TestStoreGetIssueDetailSiblings(t *testing.T) {
 
 // Deleting an archived issue moves it to Deleted outright — the archive stamp
 // is dropped, not stacked — and restoring it lands on Live, not the prior
-// Archived. This is the edge the sealed Retention sum deliberately changed:
-// the old two-flag encoding kept both stamps and restore silently resurrected
-// the archive.
+// Archived.
 func TestDeleteArchivedIssueDropsArchiveStamp(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

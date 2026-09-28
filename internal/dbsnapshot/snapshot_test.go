@@ -193,7 +193,7 @@ func TestRestore_RejectsUnsafeNames(t *testing.T) {
 		"sub/dir",
 		"/etc/passwd",
 		"1700000000-../etc",             // parseName head digits, but contains separator
-		"snap-1700000000-abc",           // legacy naming scheme from prior PR
+		"snap-1700000000-abc",           // legacy naming scheme
 		"1700000000000000000.tmp",       // crash-leftover form
 		"1700000000000000000-label.tmp", // labeled crash-leftover: digit head parses, suffix must still refuse
 		"trailing/",
@@ -594,7 +594,8 @@ func TestParseName(t *testing.T) {
 		{"0", false},
 		// The numeric head round-trips through FormatInt: ParseInt's sign and
 		// leading-zero tolerance would otherwise admit shapes no lit producer
-		// ever mints — "+<ns>.tmp" was classified collectible and destroyed.
+		// ever mints — "+<ns>.tmp" would classify as collectible and be
+		// destroyed.
 		{"+1700000000000000000", false},
 		{"01700000000000000000", false},
 		// The label part must be a shape sanitizeLabel can emit: a dotted or
@@ -605,9 +606,8 @@ func TestParseName(t *testing.T) {
 		{"1700000000000000000--edges-", false},
 		// Producer artifacts are rejected by parseName itself so every
 		// consumer (List, Restore's validateSnapshotName) refuses them from
-		// one predicate. The labeled ".tmp" form is the regression case: its
-		// digit head parses, and before the predicate move Restore would
-		// accept it and install a torn partial copy.
+		// one predicate. The labeled ".tmp" form is the sharpest case: its
+		// digit head parses.
 		{"1700000000000000000.tmp", false},
 		{"1700000000000000000-label.tmp", false},
 		{"1700000000000000000.reserve", false},

@@ -83,11 +83,8 @@ func parentSetLeaf() appLeaf {
 		// [LAW:one-source-of-truth] `parent set` and `dep add --type parent-child`
 		// write the SAME parent-child edge through the SAME store owner
 		// (setSingleValuedEdgeTx); `parent` is the ergonomic face of that one path,
-		// not a divergent second writer. The only thing that used to diverge was the
-		// *presented* line: this command printed "--parent-child-->" while `dep`
-		// prints the identical edge via depRelationForCLI/depRelationLine as
-		// "--child-of-->". Rendering through the same canonical projection here means
-		// one edge reads one way whichever command created it.
+		// not a divergent second writer. Rendering through the same canonical
+		// projection here means one edge reads one way whichever command created it.
 		if _, err := fmt.Fprintln(stdout, depRelationLine(depRelationForCLI(rel))); err != nil {
 			return err
 		}

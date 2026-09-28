@@ -78,11 +78,11 @@ func TestPriorityString(t *testing.T) {
 	}
 }
 
-// links-cli-bvko, stated as the property it is: every word a read surface
-// prints is a word the write flag accepts, and it parses back to the priority
-// it was printed from. Quantifying over Priorities() rather than naming the two
-// words is what makes this survive a third priority — and what kills any change
-// that gives String and ParsePriorityName separate spellings of the domain.
+// Every word a read surface prints is a word the write flag accepts, and it
+// parses back to the priority it was printed from. Quantifying over
+// Priorities() rather than naming the two words is what makes this survive a
+// third priority — and what kills any change that gives String and
+// ParsePriorityName separate spellings of the domain.
 func TestPriorityWordRoundTripsThroughTheWriteGate(t *testing.T) {
 	for _, want := range Priorities() {
 		word := want.String()
@@ -129,13 +129,11 @@ func TestParsePriorityNameAgreesWithParsePriorityOnTheDecimalDomain(t *testing.T
 	}
 }
 
-// Strictness, pinned fragment by fragment. Every one of these silently became
-// normal under a lenient gate, which is exactly how `--priority 7` reached the
-// store: the flag's ParseInt was the only thing between an arbitrary int and a
-// two-value domain. [LAW:no-silent-failure]
+// Strictness, pinned fragment by fragment. Every one of these would silently
+// become normal under a lenient gate. [LAW:no-silent-failure]
 func TestParsePriorityNameRejectsEverythingOutsideTheVocabulary(t *testing.T) {
 	rejected := []string{
-		"7",             // out of domain, the ticket's own example
+		"7",             // out of domain
 		"2",             // legacy 5-level: salvage coerces it, a live write must not
 		"-1",            // below domain
 		"00",            // not a canonical spelling, though ParseInt would take it
@@ -172,10 +170,10 @@ func TestParsePriorityNameCanonicalizesCaseAndSpace(t *testing.T) {
 	}
 }
 
-// The ticket's second half: a parse refusal must name the accepted values,
-// because "retry" is not an act that can resolve a deterministic refusal. Both
-// spellings of every legal priority have to appear, or the message sends a
-// caller looking for a token it declined to mention.
+// A parse refusal must name the accepted values, because "retry" is not an act
+// that can resolve a deterministic refusal. Both spellings of every legal
+// priority have to appear, or the message sends a caller looking for a token it
+// declined to mention.
 func TestPriorityRefusalNamesEveryAcceptedToken(t *testing.T) {
 	_, err := ParsePriorityName("high")
 	if err == nil {

@@ -1,8 +1,8 @@
 # shellcheck shell=sh
 # Where a Go module's source actually lives — the single home of that mapping.
-# Sourced by cleanroom-sandbox.sh and cleanroom-reach-probe.sh, which previously each
-# re-derived it and each got it wrong: the sandbox denied paths the probe never looked
-# at, and the probe reported "blocked" for modules it had simply failed to locate.
+# Sourced by cleanroom-sandbox.sh and cleanroom-reach-probe.sh, so the sandbox never
+# denies paths the probe does not look at, and the probe never reports "blocked" for a
+# module it failed to locate.
 #
 # Two rules the go command applies that hand-written paths routinely miss:
 #

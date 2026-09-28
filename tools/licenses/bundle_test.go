@@ -51,11 +51,11 @@ func TestWriteBundleDeterministic(t *testing.T) {
 	}
 }
 
-// TestWriteBundleSourceLine covers the third shipped artifact's half of
-// links-licensing-c0ce.15. THIRD_PARTY_LICENSES is the file that legally
-// accompanies the binary, and it is flat text with no index — so a recipient
-// who wants to know whether a section's coordinate is really where the source
-// came from has nothing to consult but the section itself.
+// TestWriteBundleSourceLine covers the third shipped artifact.
+// THIRD_PARTY_LICENSES is the file that legally accompanies the binary, and it
+// is flat text with no index — so a recipient who wants to know whether a
+// section's coordinate is really where the source came from has nothing to
+// consult but the section itself.
 //
 // The unreplaced case is asserted as an ABSENCE of the whole line, not merely
 // as a different value. A "Source: -" placeholder would be the report's
@@ -94,8 +94,8 @@ func TestWriteBundleSourceLine(t *testing.T) {
 	}
 }
 
-// TestBundleSourceSuffixesClaimOnlyWhatTheyCanBack pins the two corrections
-// review round 2 forced on this wording.
+// TestBundleSourceSuffixesClaimOnlyWhatTheyCanBack pins two rules of this
+// wording.
 //
 // The subject must not be a deictic. "this coordinate" printed immediately to
 // the RIGHT of the substitute reads as saying the fork's source was replaced by
@@ -131,10 +131,10 @@ func TestBundleSourceSuffixesClaimOnlyWhatTheyCanBack(t *testing.T) {
 }
 
 // TestBundleSourceLineRefusesAnUnknownKind is the third renderer's
-// exhaustiveness arm. String() and componentPedigree each have their own; this
-// one was the copy nothing exercised, so `default: return ""` written here
-// would have survived the whole suite while THIRD_PARTY_LICENSES — the file
-// that legally accompanies the binary — silently dropped the disclosure.
+// exhaustiveness arm. String() and componentPedigree each have their own;
+// without this one, `default: return ""` written here would survive the whole
+// suite while THIRD_PARTY_LICENSES — the file that legally accompanies the
+// binary — silently drops the disclosure.
 func TestBundleSourceLineRefusesAnUnknownKind(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {

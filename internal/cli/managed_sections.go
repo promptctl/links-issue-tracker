@@ -28,10 +28,8 @@ type markerPair struct {
 // block, carrying the pair it was proven against.
 //
 // [LAW:parse-dont-validate] markerPair.parse is the only way to mint one, so a
-// call site cannot hand upsertManagedSection unproven template text — which is
-// the shape this bug took: normalization was a step callers had to remember,
-// and the agents-section and pre-push-hook templates never got it
-// (links-templates-1bai).
+// call site cannot hand upsertManagedSection unproven template text:
+// normalization is not a step callers have to remember.
 type managedSection struct {
 	pair markerPair
 	text string

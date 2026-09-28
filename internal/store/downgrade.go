@@ -168,9 +168,8 @@ func (e *DowngradeIncompleteError) Error() string {
 // recovery command.
 //
 // [LAW:single-enforcer] This is the sole reverse-migration boundary; migrate()
-// remains untouched and owns only forward convergence. They share primitives
-// (newGooseProvider, the snapshotGuard type, withCommitLock) but never share
-// control flow.
+// owns only forward convergence. They share primitives (newGooseProvider, the
+// snapshotGuard type, withCommitLock) but never share control flow.
 // [LAW:dataflow-not-control-flow] The same sequence — classify → refuse-or-
 // snapshot → loop-Down-and-commit → prune — runs every invocation. Variability
 // lives in targetSchemaVersion and the recorded version, not in which stages

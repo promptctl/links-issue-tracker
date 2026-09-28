@@ -82,9 +82,9 @@ jobs:
   # — measured on linux/amd64, github.com/dolthub/go-icu-regex drops out and the
   # count lands on 153, which is exactly darwin's count, so a cgo-off run looks
   # entirely right while gating a set neither platform links. (gozstd stays
-  # either way; an earlier version of this comment named it too and was wrong.)
-  # The gate must see the same set the release actually links. It needs no ICU/zstd C
-  # toolchain: `go list` resolves imports without compiling them.
+  # either way.) The gate must see the same set the release actually links. It
+  # needs no ICU/zstd C toolchain: `go list` resolves imports without compiling
+  # them.
   # [LAW:single-enforcer] one predicate (CheckPolicy over policy.json), reused by
   # the PR test and this gate.
   license-gate:
@@ -368,10 +368,9 @@ jobs:
           ' "$MANIFEST" >/dev/null
           # URL shape: `<base>/<tag>/<filename>` where tag comes from
           # dist/metadata.json. We assert the tag segment is literally
-          # present in every URL — that's what would have caught the bug
-          # where mkmanifest had been using the v-stripped version as the
-          # URL segment (producing /releases/download/0.1.0/... 404s
-          # instead of the correct /releases/download/v0.1.0/...).
+          # present in every URL: a v-stripped version as the segment
+          # (/releases/download/0.1.0/...) 404s, where the correct URL is
+          # /releases/download/v0.1.0/....
           TAG=$(jq -r .tag dist/metadata.json)
           jq -e --arg tag "$TAG" '
             (.artifacts | length) > 0 and
@@ -422,18 +421,17 @@ jobs:
           fi
           tar -xzf "${archives[0]}" -C "$workdir" THIRD_PARTY_LICENSES LICENSE-REPORT.md FORKS.md
           grep -q 'github.com/dolthub/dolt/go' "$workdir/THIRD_PARTY_LICENSES"
-          # Anchored to dolt's own section on purpose. A bare `Apache License`
-          # match over the whole bundle stopped being evidence about dolt the
-          # moment compiler-rt began shipping the full Apache 2.0 text: dolt's
-          # notice could vanish entirely and the unanchored grep would still
-          # pass on compiler-rt's copy. The point of this line is that the
-          # license TEXT rides along, not just the row.
+          # Anchored to dolt's own section on purpose. compiler-rt ships the
+          # full Apache 2.0 text too, so a bare `Apache License` match over the
+          # whole bundle is no evidence about dolt: dolt's notice could vanish
+          # entirely and the unanchored grep would still pass on compiler-rt's
+          # copy. The point of this line is that the license TEXT rides along,
+          # not just the row.
           #
           # The window counts the bundle section's HEADER lines, and that header
-          # grows: links-licensing-c0ce.15 added a `Source:` line to replaced
-          # modules, of which dolt is one, leaving the previous -A 8 passing with
-          # two lines to spare. This job does not run on pull requests, so a
-          # window that goes one line short fails at tag-cut and nowhere earlier.
+          # grows: replaced modules, of which dolt is one, carry a `Source:`
+          # line. This job does not run on pull requests, so a window that goes
+          # one line short fails at tag-cut and nowhere earlier.
           # 12 keeps slack for another header line without reaching anywhere near
           # the next section — the Apache text between them is ~200 lines, so the
           # anchoring this check exists for is untouched.
@@ -459,9 +457,9 @@ jobs:
           # of its components were built from somewhere other than the
           # coordinate naming them. Without these lines the gate is satisfied by
           # an archive that names dolt correctly and says nothing about the
-          # fork — which is the exact defect that ticket removed, and the greps
-          # above cannot see it: `| github.com/dolthub/dolt/go | .* |
-          # Apache-2.0 |` matches whether or not a Source column exists.
+          # fork — and the greps above cannot see it, because
+          # `| github.com/dolthub/dolt/go | .* | Apache-2.0 |` matches whether
+          # or not a Source column exists.
           # [LAW:verifiable-goals]
           grep -q '| Module | Version | License | Source |' "$workdir/LICENSE-REPORT.md"
           # All THREE substitutions go.mod declares, not just the first: the two
@@ -581,8 +579,8 @@ jobs:
           # links-licensing-c0ce.15: dolt being LISTED is not the claim this
           # SBOM makes about dolt. It is built from the promptctl fork, and the
           # pedigree is the only place the document says so — a regression that
-          # dropped it leaves every assertion above green while the SBOM once
-          # again describes a component the binary does not contain.
+          # dropped it leaves every assertion above green while the SBOM
+          # describes a component the binary does not contain.
           # [LAW:verifiable-goals]
           jq -e '
             ([.components[] | select(.name == "github.com/dolthub/dolt/go")][0].pedigree) as $p
@@ -597,7 +595,7 @@ jobs:
       # no NEEDED, and they must EXECUTE on both a glibc host (this runner) and
       # a stock Alpine/musl container, on both arches (arm64 under qemu). This
       # is the release-level twin of release-smoke.yml's per-PR check, extended
-      # to arm64 — the arch the original glibc-only bug shipped broken.
+      # to arm64.
       # [LAW:verifiable-goals] [LAW:no-silent-failure]
       - name: Assert linux binaries are static and run on glibc + musl (amd64 + arm64)
         run: |

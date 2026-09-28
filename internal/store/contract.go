@@ -17,13 +17,10 @@ import "github.com/promptctl/links-issue-tracker/internal/storage"
 // than declaring them in the contract is what leaves room for an engine that
 // has fewer. [storage.Offered] reads this set back at runtime.
 //
-// The alias block that stood here is gone, and its absence is the point.
-// links-store-seam-q35v.1 and .2 relocated lit's whole storage vocabulary into
-// internal/storage but kept it re-exported under its old `store.X` spelling, so
-// that carving the seam rewired no caller. This engine's own files now spell
-// those types `storage.X` like everyone else, which leaves the package
-// exporting no vocabulary a caller could reach for by habit — the engine is
-// reached through the contract or not at all. [LAW:one-source-of-truth]
+// This engine's own files spell the storage types `storage.X` like everyone
+// else, which leaves the package exporting no vocabulary a caller could reach
+// for by habit — the engine is reached through the contract or not at all.
+// [LAW:one-source-of-truth]
 //
 // What remains exported here beyond the [Store] methods is Dolt-era workspace
 // machinery addressed by filesystem path rather than by engine handle: the

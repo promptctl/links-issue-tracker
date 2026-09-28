@@ -98,11 +98,10 @@ func TestVersionRejectsPositionalArgs(t *testing.T) {
 	}
 }
 
-// TestVersionReportsBuildAgeWhenDateStamped pins the ticket-level fix: a
-// binary with a stamped Date (what `just build` now produces via
-// scripts/version-ldflags.sh, even without a stamped Version) reports how
-// long ago it was built instead of leaving the reader to guess from a bare
-// timestamp.
+// TestVersionReportsBuildAgeWhenDateStamped pins that a binary with a stamped
+// Date (what `just build` produces via scripts/version-ldflags.sh, even
+// without a stamped Version) reports how long ago it was built instead of
+// leaving the reader to guess from a bare timestamp.
 func TestVersionReportsBuildAgeWhenDateStamped(t *testing.T) {
 	// serial: no t.Parallel — rewrites the process-global version.Version/Commit/Date;
 	// parallel readers of it would race.
@@ -125,7 +124,7 @@ func TestVersionReportsBuildAgeWhenDateStamped(t *testing.T) {
 	}
 }
 
-// TestVersionFlagsStaleBuild pins the staleness half of the ticket: a Date
+// TestVersionFlagsStaleBuild pins the staleness half: a Date
 // older than version.StaleBuildThreshold surfaces a rebuild warning, so an
 // agent reading `lit version` learns its binary is worth rebuilding without
 // having to compute the age itself.
@@ -152,10 +151,9 @@ func TestVersionFlagsStaleBuild(t *testing.T) {
 }
 
 // TestVersionOmitsBuildAgeWithoutDate pins the no-fabrication guard at the CLI
-// surface: an unstamped Date (the pre-ticket `just build`, or any build whose
-// linker never set it) prints no "built X ago" line and no staleness warning
-// — the existing "built unknown" phrasing (TestVersionHumanLabelsDevBuild)
-// stays the whole story.
+// surface: an unstamped Date (any build whose linker never set it) prints no
+// "built X ago" line and no staleness warning — the existing "built unknown"
+// phrasing (TestVersionHumanLabelsDevBuild) stays the whole story.
 func TestVersionOmitsBuildAgeWithoutDate(t *testing.T) {
 	// serial: no t.Parallel — rewrites the process-global version.Version/Commit/Date;
 	// parallel readers of it would race.

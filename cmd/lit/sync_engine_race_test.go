@@ -12,14 +12,14 @@ import (
 	"time"
 )
 
-// TestBurstOfMutationsNeverHitsEngineReadOnlyCollision is the acceptance pin
-// for links-sync-pgct.11: on a connected workspace with on-change cadence (the
-// shipped default), a burst of several mutating lit commands run back-to-back
-// must never surface Dolt's raw "database is read only" (or the online-GC
-// reconnect variant) error, and every command must exit 0. Since
-// links-sync-pgct.12 it is also the acceptance pin for the burst tail: every
-// commit — including the final mutation's — reaches the remote with NO
-// explicit sweep push, proved by the independent oracle poll at the end.
+// TestBurstOfMutationsNeverHitsEngineReadOnlyCollision is the acceptance pin:
+// on a connected workspace with on-change cadence (the shipped default), a
+// burst of several mutating lit commands run back-to-back must never surface
+// Dolt's raw "database is read only" (or the online-GC reconnect variant)
+// error, and every command must exit 0. It is also the acceptance pin for the
+// burst tail: every commit — including the final mutation's — reaches the
+// remote with NO explicit sweep push, proved by the independent oracle poll
+// at the end.
 //
 // The race this reproduces: each mutating command's on-change mirror is a
 // detached subprocess that keeps running (spawning its own read-write
@@ -27,13 +27,10 @@ import (
 // waitForParentExit only knows about its OWN spawning command's PID — it has
 // no awareness that a DIFFERENT, still-running mirror (or the next
 // command's own engine) might already hold the path's one read-write engine.
-// Before links-sync-pgct.11's write-open serialization, this was a genuine,
-// field-measured collision (see the embedded-dolt-one-readwrite-engine-per-path
-// project memory: 6 of 15 rapid foreground commands failed this way against a
-// concurrent background writer). This test drives the same shape — several
-// `lit new` calls fired in immediate succession — end to end through the real
-// CLI binary rather than the store package directly (see
-// TestConcurrentOpenWaitsForLiveWriteEngine and
+// Without the store's write-open serialization this is a genuine collision.
+// This test drives the same shape — several `lit new` calls fired in immediate
+// succession — end to end through the real CLI binary rather than the store
+// package directly (see TestConcurrentOpenWaitsForLiveWriteEngine and
 // TestOpenSyncWaitsForLiveForegroundEngine in
 // internal/store/engine_serialization_test.go for the deterministic,
 // non-timing-dependent proof of the underlying mechanism this test
@@ -42,10 +39,9 @@ import (
 // Timing note: because each mirror is a real subprocess (fork/exec, its own
 // engine open, a real git push), a burst run back-to-back on a local machine
 // reliably produces genuine overlap between an earlier command's mirror and a
-// later command's own engine open — the same overlap the project memory's "15
-// rapid commands" reproduction observed. This test does not force the overlap
+// later command's own engine open. This test does not force the overlap
 // deterministically (unlike the store-package tests above); it is corroborating
-// end-to-end evidence, not the sole proof of the fix.
+// end-to-end evidence, not the sole proof.
 func TestBurstOfMutationsNeverHitsEngineReadOnlyCollision(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
@@ -138,16 +134,13 @@ func TestBurstOfMutationsNeverHitsEngineReadOnlyCollision(t *testing.T) {
 	}
 
 	// No sweep push. The oracle poll below alone proving delivery IS the
-	// acceptance for links-sync-pgct.12: the burst's FINAL mutation either
-	// observed a fresh mirror-pending claim (a spawned, not-yet-cleared
-	// mirror whose engine open — and so HEAD read — still lies ahead of the
-	// mutation's closed session) or claimed the marker and spawned its own
-	// mirror. Under the old 1s spawn debounce that tail was a timing bet, and
-	// this test needed an explicit `lit sync push` sweep to be deterministic;
-	// a sweep now would mask a regression in exactly the guarantee this test
-	// pins. [LAW:no-ambient-temporal-coupling] the invariant is owned state
-	// (the mirror-pending marker), not a time window, so the poll may bet on
-	// it.
+	// acceptance: the burst's FINAL mutation either observed a fresh
+	// mirror-pending claim (a spawned, not-yet-cleared mirror whose engine
+	// open — and so HEAD read — still lies ahead of the mutation's closed
+	// session) or claimed the marker and spawned its own mirror. A sweep would
+	// mask a regression in exactly the guarantee this test pins.
+	// [LAW:no-ambient-temporal-coupling] the invariant is owned state (the
+	// mirror-pending marker), not a time window, so the poll may bet on it.
 	//
 	// The poll proves delivery only; TempDir safety against a mirror that
 	// outlives the satisfied commit count (a post-release re-check cycle) is

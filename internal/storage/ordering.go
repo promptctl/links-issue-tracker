@@ -62,12 +62,11 @@ func IssueOrdering(specs []SortSpec, bindings SortBindings) (func(a, b model.Iss
 //
 // It lives here for the same reason [IssueOrdering] does — the rule is the
 // contract's own, so an engine implementing it privately is one rule keeping
-// two homes. These two had already drifted, and silently: the memory engine
-// compared instants, while the Dolt engine ordered its varchar created_at in
-// SQL, which sorts a timestamp by its SPELLING. RFC3339Nano trims trailing
-// zeros, so the earlier of two instants can render as the shorter string and
-// sort after the later one — the engines then answer the same question
-// differently, which the campaign's differential oracle reads as divergence
+// two homes, and two homes drift silently: an engine that orders a varchar
+// created_at in SQL sorts a timestamp by its SPELLING. RFC3339Nano trims
+// trailing zeros, so the earlier of two instants can render as the shorter
+// string and sort after the later one — the engines then answer the same
+// question differently, which the differential oracle reads as divergence
 // rather than as the defect it is. [LAW:one-source-of-truth]
 //
 // Comparing instants is what the rule means; the encoding an engine happens to

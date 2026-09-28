@@ -25,11 +25,8 @@ const unclassifiedLicense = "Unknown"
 // [LAW:one-source-of-truth] licenseFilePattern (any of these, with an
 // optional suffix) and bareLicenseNamePattern (exactly one of these, no
 // suffix) both derive from this single alternation, specifically so they
-// cannot drift apart the way they did twice already: round 2 added LICENCE to
-// licenseFilePattern without updating the bare-name preference check, and
-// round 3 caught that COPYING/UNLICENSE had the same gap. A third name added
-// here in the future is automatically bare-preferred too — there is no
-// second list left to forget to update.
+// cannot drift apart. A third name added here in the future is automatically
+// bare-preferred too — there is no second list left to forget to update.
 const licenseRootNames = `LICEN[SC]E|COPYING|UNLICENSE`
 
 // licenseFilePattern matches the file names Go modules conventionally use for

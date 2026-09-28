@@ -32,7 +32,7 @@ func TestWriteInitSyncLine(t *testing.T) {
 			want:    "  Pulled existing backlog from origin/master (" + testBuildNote + ")\n",
 		},
 		{
-			// A failed adopt no longer reaches this renderer: runInit hard-stops and
+			// A failed adopt does not reach this renderer: runInit hard-stops and
 			// returns the real underlying error before report.Sync is ever built (see
 			// TestInitHardStopsAndCreatesNoStoreWhenRemoteDetectionFails). This case
 			// pins that writeInitSyncLine renders nothing for the state regardless,
@@ -184,9 +184,8 @@ func TestInitAdoptsExistingRemoteBacklog(t *testing.T) {
 	}
 }
 
-// TestInitHardStopsWhenRemoteHasDataButAdoptCannotComplete is the regression
-// guard for the silent-empty data-loss bug, updated for links-sync-pgct.1: when
-// the remote advertises lit ticket data (refs/dolt/*) but the clone-based adopt
+// TestInitHardStopsWhenRemoteHasDataButAdoptCannotComplete pins that when the
+// remote advertises lit ticket data (refs/dolt/*) but the clone-based adopt
 // cannot complete, init must NOT leave a silent (or even a loudly-warned-but-
 // created) empty store — an adopt failure is a genuinely uncertain result, so
 // init exits non-zero and creates no store at all, surfacing the real
@@ -221,8 +220,7 @@ func TestInitHardStopsWhenRemoteHasDataButAdoptCannotComplete(t *testing.T) {
 	runGit(t, consumer, "config", "user.name", "bravo")
 
 	// Force the adopt to resolve a branch the remote's Dolt data is not on, so
-	// the clone-based adopt fails even though refs/dolt/* is confirmed present —
-	// the precise condition that used to fall through to silent empty.
+	// the clone-based adopt fails even though refs/dolt/* is confirmed present.
 	t.Setenv("LINKS_DEBUG_DOLT_SYNC_BRANCH", "branch-the-remote-does-not-have")
 	initOut, initErr := runCLIInDirAllowError(t, consumer, "init", "--skip-hooks", "--skip-agents")
 
@@ -283,12 +281,11 @@ func TestInitHardStopsWhenRemoteHasDataButAdoptCannotComplete(t *testing.T) {
 // the process exits; SIGKILL; power loss) leaves the durable adopt-pending
 // marker plus an undefined partial store, fabricated here directly. Every
 // normal command must refuse that residue loudly — most critically `lit new`,
-// whose EnsureDatabase would otherwise create a fresh store over it and
-// re-create the epic's field incident (a fresh workspace silently shadowing
-// the remote backlog). A plain `lit init` retry must heal: discard the
-// residue, adopt the remote backlog, clear the marker. And when the remote
-// signal is gone too, init fails loudly naming the leftover rather than
-// blessing it as a fresh store.
+// whose EnsureDatabase would otherwise create a fresh store over it (a fresh
+// workspace silently shadowing the remote backlog). A plain `lit init` retry
+// must heal: discard the residue, adopt the remote backlog, clear the marker.
+// And when the remote signal is gone too, init fails loudly naming the leftover
+// rather than blessing it as a fresh store.
 func TestInitHealsAbandonedAdoptResidueOtherCommandsRefuse(t *testing.T) {
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
@@ -394,14 +391,13 @@ func TestInitHealsAbandonedAdoptResidueOtherCommandsRefuse(t *testing.T) {
 	}
 }
 
-// TestInitHardStopsAndCreatesNoStoreWhenRemoteDetectionFails is the direct
-// regression guard for links-sync-pgct.1's headline scenario: resolving or
-// probing the remote itself fails (a `git ls-remote`-shaped error — bad
-// credentials, unreachable host, or here, a URL that cannot be resolved at
-// all), never even reaching the "does it carry lit data" question. That is a
-// genuinely uncertain result, not a confirmed-empty one, so init must exit
-// non-zero, create no store, and surface the real git failure — never guess
-// "empty" and proceed.
+// TestInitHardStopsAndCreatesNoStoreWhenRemoteDetectionFails pins the case
+// where resolving or probing the remote itself fails (a `git ls-remote`-shaped
+// error — bad credentials, unreachable host, or here, a URL that cannot be
+// resolved at all), never even reaching the "does it carry lit data" question.
+// That is a genuinely uncertain result, not a confirmed-empty one, so init must
+// exit non-zero, create no store, and surface the real git failure — never
+// guess "empty" and proceed.
 func TestInitHardStopsAndCreatesNoStoreWhenRemoteDetectionFails(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")
@@ -434,9 +430,8 @@ func TestInitHardStopsAndCreatesNoStoreWhenRemoteDetectionFails(t *testing.T) {
 		t.Fatalf("DatabasePath stat = %v, want no store to have been created after a detection failure", statErr)
 	}
 
-	// links-sync-pgct.5 made every init/sync decision durably traced
-	// unconditionally, including failures; this hard-stop must not regress that
-	// — the decision is recorded even though init itself now aborts on it.
+	// Every init/sync decision is durably traced, failures included: this one
+	// is recorded even though init itself aborts on it.
 	records := readSyncTraceRecords(t, ws)
 	if len(records) != 1 {
 		t.Fatalf("sync trace records for the failed init = %d, want exactly 1: %+v", len(records), records)
@@ -446,11 +441,11 @@ func TestInitHardStopsAndCreatesNoStoreWhenRemoteDetectionFails(t *testing.T) {
 	}
 }
 
-// TestInitAdoptHardStopsOnTimeout is the regression guard for the lockup: dolt's
-// fetch ignores context cancellation, so the adopt must be hard-stopped on a
-// deadline. The blocking body is stubbed with one that only returns when
-// abandoned (mirroring dolt), proving the wrapper returns a loud failure on the
-// deadline rather than blocking on it.
+// TestInitAdoptHardStopsOnTimeout: dolt's git-backed transport ignores context
+// cancellation, so the adopt must be hard-stopped on a deadline. The blocking
+// body is stubbed with one that only returns when abandoned (mirroring dolt),
+// proving the wrapper returns a loud failure on the deadline rather than
+// blocking on it.
 func TestInitAdoptHardStopsOnTimeout(t *testing.T) {
 	// serial: no t.Parallel — rewrites the package-level
 	// adoptRemoteTicketsBlockingFn and adoptRemoteTimeout; parallel init

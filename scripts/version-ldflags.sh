@@ -12,8 +12,7 @@
 # so a from-source build stamps identically on a restricted or air-gapped
 # machine. [LAW:one-source-of-truth] the Justfile's `build` recipe and
 # scripts/install.sh's source mode both source this and nowhere else computes
-# these three strings, so they cannot drift apart the way install.sh's
-# now-removed inline copy could have.
+# these three strings, so they cannot drift apart.
 #
 # Deliberately does NOT set Version. internal/version.Version == "" is the
 # IsDev discriminator (internal/version/version.go) that

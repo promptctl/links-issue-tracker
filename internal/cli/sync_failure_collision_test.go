@@ -43,10 +43,10 @@ func collisionFailure(t *testing.T) SyncFailure {
 	}
 }
 
-// TestSyncFailureBlockIDCollisionNamesBothTickets is the ticket's operator-visible
-// report. The merge was refused, so this block is the only place the other side's
-// ticket appears anywhere on this machine — if it does not carry both tickets
-// whole, the report loses the same work the fusion used to lose.
+// TestSyncFailureBlockIDCollisionNamesBothTickets pins the operator-visible
+// report. The merge was refused, so this block is the only place the other
+// side's ticket appears anywhere on this machine — if it does not carry both
+// tickets whole, the report loses the other side's work.
 func TestSyncFailureBlockIDCollisionNamesBothTickets(t *testing.T) {
 	t.Parallel()
 	block := collisionFailure(t).blockString()
@@ -262,10 +262,10 @@ func TestCollisionBlockRendersOrdinaryTicketReadably(t *testing.T) {
 	}
 }
 
-// TestReportReconcileResultCollisionCarriesBothTickets proves `lit sync reconcile`
-// — the first surface this refusal wired — forwards the store's collision rows
-// into the rendered contract, so the other side's ticket reaches the operator
-// there exactly as it does on pull and on the inline receive.
+// TestReportReconcileResultCollisionCarriesBothTickets proves
+// `lit sync reconcile` forwards the store's collision rows into the rendered
+// contract, so the other side's ticket reaches the operator there exactly as
+// it does on pull and on the inline receive.
 func TestReportReconcileResultCollisionCarriesBothTickets(t *testing.T) {
 	t.Parallel()
 	var sink strings.Builder

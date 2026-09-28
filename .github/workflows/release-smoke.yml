@@ -17,7 +17,7 @@ name: Release smoke
 # The `smoke` Dockerfile stage carries the toolchain plus only the linux/amd64
 # ICU prefix. Rather than rebuild that stage's ICU cross-toolchain from source on
 # every PR — the ~1hr cold cliff, because a sibling PR cannot read another PR's
-# GHA buildx cache, so the first run of each new PR missed and rebuilt from
+# GHA buildx cache, so the first run of each new PR would miss and rebuild from
 # scratch — this workflow PULLS the prebuilt image master publishes for the exact
 # `build/` tree (see release-validate.yml). The pull tag is the git tree hash of
 # `build/` [LAW:one-source-of-truth]: it changes iff a toolchain input changes, so
@@ -161,9 +161,7 @@ jobs:
 
       # Prove the artifact is the universal static binary we claim to ship, not
       # just that it compiled — and prove it by EXECUTION, on both libcs:
-      #   - no PT_INTERP program header and no NEEDED entries (fully static;
-      #     this is what would have caught the original glibc-dynamic binary
-      #     that built green but could not start on Alpine),
+      #   - no PT_INTERP program header and no NEEDED entries (fully static),
       #   - runs on this glibc (ubuntu) runner,
       #   - runs on a stock Alpine (musl) container.
       # [LAW:verifiable-goals] [LAW:no-silent-failure]

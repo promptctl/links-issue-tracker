@@ -10,17 +10,12 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-// The surface links-claims-2wk2 was reported on, held to one rule: a word that
-// asserts a row is abandoned may only be printed where nobody holds its lane.
-// The row's own clock is identical in every case below — these tests move the
-// lane's standing and nothing else.
+// One rule: a word that asserts a row is abandoned may only be printed where
+// nobody holds its lane. The row's own clock is identical in every case below —
+// these tests move the lane's standing and nothing else.
 //
-// The report was a lane whose worktree sat locked, on an open PR, with its
-// session running, while `lit backlog` printed ORPHANED beside its row. The
-// backlog read a six-hour clock on the row and never asked whether the lane
-// was held. Since links-claims-y6yz the lock is folded into the derivation —
-// a locked holder is simply Held — so the rule here is stated against the
-// standing rather than against a presence the CLI no longer sees.
+// The lock is folded into the derivation — a locked holder is simply Held — so
+// the rule here is stated against the standing.
 
 // TestInProgressSuffixWithdrawsORPHANEDInAHeldLane covers `lit backlog`'s row
 // suffix. ORPHANED is the loudest thing the backlog says about a row and the

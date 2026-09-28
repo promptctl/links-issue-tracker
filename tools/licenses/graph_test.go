@@ -14,14 +14,14 @@ const graphAuditEnv = "LIT_LICENSE_GRAPH_AUDIT"
 // requireWholeGraph skips a test unless the whole-graph audit is explicitly
 // requested, naming the command that runs it.
 //
-// These are this ticket's acceptance checks and they are also, by a wide
-// margin, the most expensive thing in this repository's test suite: resolving
-// the graph means `go mod download all`, which fetches every module the build
-// does not need — 3.4 GB and several minutes against a cold cache — and then
-// walking 588 module trees. CI's build-and-test job budgets under five minutes
-// TOTAL for the whole gate, and setup-go saves GOMODCACHE into a 10 GB
-// repo-wide cache keyed on go.sum, so leaving these ungated would blow the time
-// budget on every pull request and evict every other cache entry as a bonus.
+// These are, by a wide margin, the most expensive thing in this repository's
+// test suite: resolving the graph means `go mod download all`, which fetches
+// every module the build does not need — 3.4 GB and several minutes against a
+// cold cache — and then walking 588 module trees. CI's build-and-test job
+// budgets under five minutes TOTAL for the whole gate, and setup-go saves
+// GOMODCACHE into a 10 GB repo-wide cache keyed on go.sum, so leaving these
+// ungated would blow the time budget on every pull request and evict every
+// other cache entry as a bonus.
 //
 // The logic these cover is not going unwatched. Everything that can be decided
 // without the real graph — the accept/reject tables for what gets scanned and
@@ -278,16 +278,13 @@ func TestPartitionGraphRoutesEachFinding(t *testing.T) {
 // excuses the file a human actually read and nothing else.
 //
 // A policy exception names one license string a human verified against one
-// file — the module's ROOT grant (as policy.json once did for fslock's
-// LGPL-with-static-linking-exception, before links-licensing-c0ce.4 removed
-// that dependency). If the exception also covered a copyleft file buried in
-// the same module's testdata, the report would drop it on the strength of a
-// human having read a different file. An allowlisted license is different:
-// permissive is permissive at any depth. [LAW:no-silent-failure]
+// file — the module's ROOT grant. If the exception also covered a copyleft
+// file buried in the same module's testdata, the report would drop it on the
+// strength of a human having read a different file. An allowlisted license is
+// different: permissive is permissive at any depth. [LAW:no-silent-failure]
 //
 // The excepted license here is LGPL-3.0 rather than the classifier's Unknown
-// sentinel, which is what this test used while kch42/buzhash's unclassifiable
-// WTFPL variant rode an exception. That is no longer a shape a policy can
+// sentinel, because an exception for the sentinel is not a shape a policy can
 // express — see TestSentinelLicensesHaveNoPathThroughAnyFilter.
 func TestModuleExceptionsReachOnlyTheRootGrant(t *testing.T) {
 	policy := &Policy{
@@ -310,9 +307,9 @@ func TestModuleExceptionsReachOnlyTheRootGrant(t *testing.T) {
 	}
 }
 
-// TestSentinelLicensesHaveNoPathThroughAnyFilter pins links-licensing-c0ce.9's
-// hard rule at the graph audit's ruling site: a license this tool could not
-// read is not permitted by ANY policy, however that policy was written.
+// TestSentinelLicensesHaveNoPathThroughAnyFilter pins the hard rule at the
+// graph audit's ruling site: a license this tool could not read is not
+// permitted by ANY policy, however that policy was written.
 //
 // The policy built here is the most permissive one that can be expressed — it
 // allowlists a sentinel outright AND grants the module a root-grant exception
@@ -323,12 +320,10 @@ func TestModuleExceptionsReachOnlyTheRootGrant(t *testing.T) {
 // it hold here rather than depending on the file having been read through the
 // parse.
 //
-// An earlier draft of this test also built a filter by hand to cover "a
-// LicenseFilter nobody parsed a file to get". Round 2 of review pointed out
-// that once Filter stopped dropping keys, the hand-built value was identical
-// to policy.Filter() and the two halves could never disagree — a second
-// assertion that could only ever repeat the first. The single filter below IS
-// the adversarial state. [LAW:single-enforcer]
+// A second filter built by hand, to cover "a LicenseFilter nobody parsed a
+// file to get", would be identical to policy.Filter() — Filter drops no keys —
+// so it could never disagree with the first and would only ever repeat it. The
+// single filter below IS the adversarial state. [LAW:single-enforcer]
 func TestSentinelLicensesHaveNoPathThroughAnyFilter(t *testing.T) {
 	for _, sentinel := range []string{unclassifiedLicense, oversizeLicense} {
 		policy := &Policy{
@@ -338,10 +333,6 @@ func TestSentinelLicensesHaveNoPathThroughAnyFilter(t *testing.T) {
 			},
 		}
 		// The rulings must agree with the parse about WHAT THE SENTINEL IS.
-		// They disagreed for a commit — refuseSentinel folded ASCII case while
-		// Allows did an exact map lookup — so a filter holding "unknown"
-		// permitted it, under a doc paragraph promising the ban holds for
-		// every LicenseFilter.
 		folded := LicenseFilter{allowed: map[string]bool{strings.ToLower(sentinel): true}}
 		if folded.Allows(strings.ToLower(sentinel)) {
 			t.Errorf("%q: a case variant of the sentinel is permitted by Allows, though the parse calls that spelling the sentinel", sentinel)
@@ -362,15 +353,12 @@ func TestSentinelLicensesHaveNoPathThroughAnyFilter(t *testing.T) {
 	}
 }
 
-// TestPartitionGraphFilesBothSentinelsAsUnclassified pins the routing half of
-// links-licensing-c0ce.9's one-source-of-truth refactor: partitionGraph reads
-// licenseSentinels rather than re-listing the two constants, and BOTH of them
-// must land in the unclassified section rather than under module grants.
-//
-// The oversize half was pinned by nothing until round 4 of review — delete it
-// from the map and every test stayed green while "Skipped (oversize)" started
-// being reported as a module's own license GRANT, which is a row that reads as
-// a legal finding about a file the tool declined to open.
+// TestPartitionGraphFilesBothSentinelsAsUnclassified pins the routing:
+// partitionGraph reads licenseSentinels rather than re-listing the two
+// constants, and BOTH of them must land in the unclassified section rather
+// than under module grants. With oversizeLicense missing from the map,
+// "Skipped (oversize)" would be reported as a module's own license GRANT — a
+// row that reads as a legal finding about a file the tool declined to open.
 func TestPartitionGraphFilesBothSentinelsAsUnclassified(t *testing.T) {
 	filter := (&Policy{AllowedLicenses: []string{"MIT"}}).Filter()
 	for _, sentinel := range []string{unclassifiedLicense, oversizeLicense} {
@@ -472,10 +460,9 @@ func TestRootGrantLicenseNamesAmbiguity(t *testing.T) {
 	}
 }
 
-// TestGraphAuditCoversWholeBuildList IS this ticket's acceptance criterion
-// (links-licensing-c0ce.1) expressed as a test, run against the real graph
-// rather than a fixture: every module `go list -m all` resolves is classified,
-// none is skipped for want of a local copy, and the known findings are present.
+// TestGraphAuditCoversWholeBuildList runs against the real graph rather than a
+// fixture: every module `go list -m all` resolves is classified, none is
+// skipped for want of a local copy, and the known findings are present.
 //
 // The freetype assertion is the one that would have failed against a top-level
 // scan: that module's root LICENSE is a pointer document the classifier cannot
@@ -534,12 +521,12 @@ func TestGraphAuditCoversWholeBuildList(t *testing.T) {
 // build cache, so an audit that rewrote it would invalidate a multi-gigabyte
 // cache on every run.
 //
-// The regression this guards against is specific and was hit while building
-// this: restoring go.sum between the download and `go list` looks equivalent
-// and is not, because `go list` verifies a module against go.sum before
-// reporting its directory — so a too-eager restore leaves freshly fetched
-// modules present on disk with an empty .Dir, and the audit goes blind exactly
-// where it was supposed to be looking. [LAW:no-silent-failure]
+// The regression this guards against is specific: restoring go.sum between
+// the download and `go list` looks equivalent and is not, because `go list`
+// verifies a module against go.sum before reporting its directory — so a
+// too-eager restore leaves freshly fetched modules present on disk with an
+// empty .Dir, and the audit goes blind exactly where it was supposed to be
+// looking. [LAW:no-silent-failure]
 func TestGraphAuditLeavesGoSumUntouched(t *testing.T) {
 	requireWholeGraph(t)
 
@@ -633,8 +620,7 @@ func TestGraphReportRendersEverySection(t *testing.T) {
 // describes. partitionGraph routes ALL substituted shapes into sectionReplaced,
 // including a version pin (`replace x => x v1.2.3`) whose replacement path is
 // identical to the module's own — so a heading promising "A DIFFERENT
-// COORDINATE", which this one said until links-licensing-c0ce.15 widened what
-// lands beneath it, is false for every row of that kind.
+// COORDINATE" is false for every row of that kind.
 //
 // A section title is not decoration: it is the sentence a reader applies to
 // every row under it, and the graph audit exists to be read by someone deciding

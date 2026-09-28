@@ -41,9 +41,9 @@ var hooksFamily = commandFamily[wsSubcommand]{
 func hooksInstallLeaf() wsLeaf {
 	fs := newCobraFlagSet("hooks install")
 	// Read from the family rather than spelled twice: this is the message the v1
-	// specification names for the leaf, and it survived the gate only because the
-	// family's literal is identical — a coincidence, not a guarantee.
-	// [LAW:one-source-of-truth]
+	// specification names for the leaf, and a second spelling would pass the gate
+	// only while the family's literal stays identical — a coincidence, not a
+	// guarantee. [LAW:one-source-of-truth]
 	return wsLeaf{fs: fs, positionals: 0, usage: hooksUsage, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
 
 		result, err := installHooks(ws)

@@ -42,7 +42,7 @@ func TestIDBatchesPartitionTheInput(t *testing.T) {
 	}
 }
 
-// idBatches drops repeats, because the `IN` clause it replaces did.
+// idBatches drops repeats.
 //
 // A repeated id is harmless in one clause and not in several: the two copies
 // land in different batches, each batch answers, and the caller sees the row

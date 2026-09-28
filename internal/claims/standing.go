@@ -15,15 +15,11 @@ import (
 // would have to know which combinations were real.
 // [LAW:types-are-the-program]
 //
-// There is no third variant for a claim whose evidence has aged out. There
-// was one — Stale, carrying the lapsed holder's tenure and what this machine
-// could see of their worktree — and every consumer gave it a meaning: a
-// "(stale)" badge on the claim line, a provenance printout on `lit start`, a
-// takeover verdict in routing, and a design that called taking such a lane "a
-// takeover with provenance". An expired claim is not a weaker claim or the
-// record of one; it is over, and the lane is exactly as unclaimed as one
-// nobody ever touched (owner ruling, links-claims-y6yz, 2026-09-26). The type
-// says so by having nowhere to put a lapsed holder.
+// There is no third variant for a claim whose evidence has aged out. An
+// expired claim is not a weaker claim or the record of one; it is over, and
+// the lane is exactly as unclaimed as one nobody ever touched (owner ruling,
+// links-claims-y6yz, 2026-09-26). The type says so by having nowhere to put a
+// lapsed holder.
 type Standing interface{ isStanding() }
 
 // Unclaimed is a lane no checkout holds: finished, never started, or held by a

@@ -121,9 +121,8 @@ func TestClaimMirrorPendingStateMachine(t *testing.T) {
 	if claim != pendingCovered {
 		t.Fatal("a marker with a live beacon holder must cover — that answerer's chain is still ahead")
 	}
-	// Backdate far past any plausible healthy window: under the retired
-	// age-out this read as abandoned residue; under the beacon the live hold
-	// alone decides, so it still covers.
+	// Backdate far past any plausible healthy window: under the beacon the
+	// live hold alone decides, so it still covers.
 	longAgo := now.Add(-24 * time.Hour)
 	if err := os.Chtimes(mirrorPendingMarkerPath(ws), longAgo, longAgo); err != nil {
 		t.Fatalf("backdate marker: %v", err)
@@ -266,11 +265,10 @@ func TestMirrorOwedIgnoresLiveness(t *testing.T) {
 	}
 }
 
-// TestCompleteMirrorWithoutAttempt pins this ticket's seam contract
-// (links-sync-pgct.12, closing the gap links-sync-pgct.10 documented): a
-// mirror failure BEFORE the push attempt lands in the same push-outcome
-// marker and the same owner notification as an attempt that ran — one
-// completion record, two consumers, no second representation of push health.
+// TestCompleteMirrorWithoutAttempt pins the seam contract: a mirror failure
+// BEFORE the push attempt lands in the same push-outcome marker and the same
+// owner notification as an attempt that ran — one completion record, two
+// consumers, no second representation of push health.
 func TestCompleteMirrorWithoutAttempt(t *testing.T) {
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
@@ -395,9 +393,8 @@ func TestCompleteMirrorWithoutAttemptStopsAnsweringFirst(t *testing.T) {
 // TestClaimMirrorPendingClockStepIrrelevant pins that the verdict survives
 // any clock reading: a marker stamped in the future (a crash orphan seen
 // across a backward RTC/NTP correction) is residue like any other when no
-// mirror holds the beacon — the retired age-out needed a dedicated
-// negative-age branch for this; the kernel's answer never consulted the
-// clock in the first place.
+// mirror holds the beacon, because the kernel's answer does not consult the
+// clock.
 func TestClaimMirrorPendingClockStepIrrelevant(t *testing.T) {
 	t.Parallel()
 	ws := mirrorPendingTestWorkspace(t)

@@ -4,16 +4,16 @@
 //
 // # Why the contract is its own package
 //
-// lit's de facto storage contract used to be the exported method set of the
-// concrete Dolt-backed type in internal/store. That had two costs. A second
-// engine could not exist — nothing to implement, since callers were compiled
-// against a struct — and nothing distinguished storage from Dolt's biography:
-// reconcile, checkpoints, and schema migration sat in the same method set as
-// GetIssue, so an engine with no schema and no merge would have inherited them
-// as if they were storage. This package is the line between the two. What is
-// here, every engine owes; what is not here, an engine may still offer, but it
-// offers it as a named capability — see [Capability] and the interfaces beside
-// it, and [Offered] for how an engine is asked.
+// A contract that is the exported method set of the concrete Dolt-backed type
+// in internal/store has two costs. A second engine cannot exist — nothing to
+// implement, since callers are compiled against a struct — and nothing
+// distinguishes storage from Dolt's biography: reconcile, checkpoints, and
+// schema migration sit in the same method set as GetIssue, so an engine with no
+// schema and no merge would inherit them as if they were storage. This package
+// is the line between the two. What is here, every engine owes; what is not
+// here, an engine may still offer, but it offers it as a named capability — see
+// [Capability] and the interfaces beside it, and [Offered] for how an engine is
+// asked.
 //
 // # The vocabulary rule
 //

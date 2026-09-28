@@ -5,10 +5,9 @@
 // It exists because the scale epic (links-scale-dy46) stated its case with four
 // numbers measured by hand in one session — `lit backlog` at 7.97s, `lit next`
 // at 2.83s, `lit quickstart` at 0.07s, a 188 MB store — and a hand-measured
-// number has no way to stay true. Within a month all four had moved: backlog had
-// fallen to 0.54s as the query work landed, while the store had grown to 279 MB.
-// An epic whose every remaining ticket is judged against its opening figures
-// cannot afford them to decay silently, so the measurement is a command.
+// number has no way to stay true. An epic whose every remaining ticket is
+// judged against its opening figures cannot afford them to decay silently, so
+// the measurement is a command.
 // [LAW:one-source-of-truth] the numbers have one home, and it is executable.
 //
 //	just perf                      # the whole table
@@ -157,7 +156,7 @@ func parseSizes(raw string) ([]size, error) {
 		// Duplicates are refused rather than deduplicated. Each size generates
 		// its own workspace named for it, so two entries of the same row count
 		// would name one directory twice — and generation into a directory
-		// that already holds a store is exactly what generate() now refuses.
+		// that already holds a store is exactly what generate() refuses.
 		// Failing here names the real mistake instead of surfacing it as a
 		// directory error three steps later.
 		for _, seen := range sizes {

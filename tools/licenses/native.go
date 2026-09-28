@@ -197,9 +197,8 @@ type nativeLib struct {
 // are notice-only permissive ones imposing the same kind of obligation the
 // stated license already does. Every license database resolves musl to MIT and
 // ICU 75.1 to Unicode-3.0; emitting a compound here would make lit's SBOM
-// disagree with what any scanner independently resolves for the coordinate,
-// which is the contradiction this epic refused when it rejected a `replace`
-// shim. What those components need is disclosure, not a different expression —
+// disagree with what any scanner independently resolves for the coordinate.
+// What those components need is disclosure, not a different expression —
 // so they carry notes, and the notes ship in all three artifacts.
 var nativeLibs = []nativeLib{
 	{name: "icu", version: "75.1", license: "Unicode-3.0", text: icuLicenseText,
@@ -342,10 +341,10 @@ func nativeEntries(classifier *lc.License) ([]Entry, error) {
 // This is what makes "permissive only" mean something for the half of the
 // inventory that never passes through Classify. The copyleft veto and the
 // hard failure on the Unknown sentinel both sit downstream of a classifier
-// verdict, so before this a native license was an exact string with nothing
-// behind it: a maintainer bumping a version could write any identifier at all,
-// add it to allowed_licenses, and -check would print green with nothing in the
-// tree to say otherwise. [LAW:no-silent-failure]
+// verdict, so without this a native license would be an exact string with
+// nothing behind it: a maintainer bumping a version could write any identifier
+// at all, add it to allowed_licenses, and -check would print green with nothing
+// in the tree to say otherwise. [LAW:no-silent-failure]
 //
 // The check is a reconciliation, not a comparison, because a comparison is
 // false here. These are notice DOCUMENTS, not single-license files: measured,

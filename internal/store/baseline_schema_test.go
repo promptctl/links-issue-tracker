@@ -54,9 +54,7 @@ func TestBaselineSchemaParsesEmbeddedMigration(t *testing.T) {
 // TestOpenForwardMigratesPreConvergedColumnShape pins the contract that a
 // workspace carrying every baseline table but with a pre-converged column
 // shape (here, issues missing the topic column the baseline requires) is
-// FORWARD-MIGRATED to v1 — not refused. This is the recovery from the
-// commit-254f86b deletion that stranded such workspaces in "partial schema,
-// restore or recreate" (destroy your data) refusals.
+// FORWARD-MIGRATED to v1 — not refused.
 //
 // [LAW:no-silent-failure] Old workspaces at any prior canonical shape
 // reach v1 by forward migration, not by being told to recreate themselves.

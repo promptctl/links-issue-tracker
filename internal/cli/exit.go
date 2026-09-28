@@ -101,9 +101,9 @@ func ExitCode(err error) int {
 	// changed nothing — the same shape as the router's "nothing to hand back",
 	// so it shares that code rather than inventing a second one for it. A
 	// refusal is a domain-constraint rejection like any other. Neither is
-	// ExitGeneric, which is what made the release-closing `lit done <epic>`
-	// report its workflow's final step as a failure while the state it asked
-	// for was exactly the state that held. [LAW:no-mode-explosion]
+	// ExitGeneric, which would make the release-closing `lit done <epic>` report
+	// its workflow's final step as a failure while the state it asked for is
+	// exactly the state that holds. [LAW:no-mode-explosion]
 	var containerAction model.ContainerActionError
 	if errors.As(err, &containerAction) {
 		if containerAction.Satisfied() {
@@ -136,15 +136,15 @@ func ExitCode(err error) int {
 	// "Am I somewhere lit can work?" has two negative answers — no git
 	// repository here, and no lit workspace in this one — and they share a code
 	// because the caller's question is identical for both: the environment is
-	// not ready, and no retry changes that. Neither is ExitGeneric any more,
-	// because ExitGeneric also means "lit is broken", and under one code a
-	// script could only tell a self-fixable precondition from a fault by
-	// parsing the English — the thing every sink in this package exists to stop
-	// callers doing (links-cli-errors-yfbg). The act each calls for differs —
-	// change directory, or run `lit init` here — and that difference is carried
-	// by the reason rather than by a code of its own. The reason string is not
-	// itself printed: what the caller reads is the remediation it selects, and
-	// the two remediations name the two different acts. [LAW:no-mode-explosion]
+	// not ready, and no retry changes that. Neither is ExitGeneric, because
+	// ExitGeneric also means "lit is broken", and under one code a script could
+	// only tell a self-fixable precondition from a fault by parsing the English
+	// — the thing every sink in this package exists to stop callers doing. The
+	// act each calls for differs — change directory, or run `lit init` here —
+	// and that difference is carried by the reason rather than by a code of its
+	// own. The reason string is not itself printed: what the caller reads is the
+	// remediation it selects, and the two remediations name the two different
+	// acts. [LAW:no-mode-explosion]
 	var outsideWorkspace OutsideWorkspaceError
 	if errors.As(err, &outsideWorkspace) {
 		return ExitValidation
@@ -152,9 +152,9 @@ func ExitCode(err error) int {
 	if errors.Is(err, store.ErrWorkspaceNotInitialized) {
 		return ExitValidation
 	}
-	// Moves this condition off ExitGeneric, which also means "lit is broken":
-	// a prefix lit cannot settle on is a self-fixable precondition, and under
-	// one code a script could only tell the two apart by parsing the English.
+	// Not ExitGeneric, which also means "lit is broken": a prefix lit cannot
+	// settle on is a self-fixable precondition, and under one code a script
+	// could only tell the two apart by parsing the English.
 	// [LAW:one-source-of-truth] one code for the whole family, including the
 	// typed StoredPrefixError, which unwraps to this sentinel. The act each
 	// refusal asks for differs, and that difference is carried by the reason,

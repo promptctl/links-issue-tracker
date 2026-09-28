@@ -12,7 +12,7 @@ import (
 )
 
 // The embedded-default source path is pinned by TestInitHumanOutputShowsAgentsSource,
-// which asserts the "(via embedded)" text the init surface now emits.
+// which asserts the "(via embedded)" text the init surface emits.
 
 func TestInitReportsAgentsSourceFromGlobalOverride(t *testing.T) {
 	xdg := t.TempDir()
@@ -88,10 +88,10 @@ func TestEnsureLinksAgentFilesMigratesLegacyMarkers(t *testing.T) {
 	}
 }
 
-// Regression: when only the markers are legacy and the managed body already
-// matches the current template byte-for-byte, the migration must still persist
-// and be reported as changed. The earlier change signal compared against the
-// post-migration content, so a marker-only diff was silently dropped.
+// When only the markers are legacy and the managed body already matches the
+// current template byte-for-byte, the migration must still persist and be
+// reported as changed: a change signal compared against the post-migration
+// content would silently drop a marker-only diff.
 func TestEnsureLinksAgentFilesMigratesMarkerOnlyDifference(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	repo := t.TempDir()
@@ -168,10 +168,10 @@ func TestInitHumanOutputShowsAgentsSource(t *testing.T) {
 }
 
 // An agents-section override authored as plain guidance text — no markers, the
-// convention every other managed template follows — used to replace the managed
-// region with unmarked text on its first run and re-append the whole section on
-// every run after, growing AGENTS.md and CLAUDE.md without bound
-// (links-templates-1bai).
+// convention every other managed template follows — must converge: it may not
+// replace the managed region with unmarked text on its first run and then
+// re-append the whole section on every run after, growing AGENTS.md and
+// CLAUDE.md without bound.
 func TestEnsureLinksAgentFilesMarkerlessOverrideConverges(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	repo := t.TempDir()

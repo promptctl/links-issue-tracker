@@ -194,7 +194,7 @@ func TestNamespacesAreDisjoint(t *testing.T) {
 // of answers: the byte count is the fewest whose value space addresses every id
 // the length can render. The expectation is formulated independently of the
 // implementation — a doubling loop rather than the same bits-to-bytes rounding
-// — because a table restating the arithmetic is exactly what drifted from it.
+// — because a table restating the arithmetic drifts along with it.
 // [LAW:behavior-not-structure]
 func TestHashBytesForLength(t *testing.T) {
 	byteSpace := func(bytes int) *big.Int { return new(big.Int).Lsh(big.NewInt(1), uint(8*bytes)) }
@@ -211,9 +211,9 @@ func TestHashBytesForLength(t *testing.T) {
 	}
 
 	t.Run("MaxHashLength gets the six bytes its space needs", func(t *testing.T) {
-		// The entry the old table got wrong, called out by name because this is
-		// the length Mint escalates to when a namespace is crowded: five bytes
-		// address 2^40 values against 36^8, under half of them.
+		// Called out by name because this is the length Mint escalates to
+		// when a namespace is crowded: five bytes address 2^40 values against
+		// 36^8, under half of them.
 		if got := hashBytesForLength(MaxHashLength); got != 6 {
 			t.Errorf("hashBytesForLength(MaxHashLength) = %d, want 6", got)
 		}

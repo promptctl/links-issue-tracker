@@ -46,7 +46,7 @@ func TestRunShowChildRendersEpicBlockWithFocus(t *testing.T) {
 	// the focused child is genuinely held back by the sibling ranked ahead of
 	// it. Asserted through runShow rather than the builder: this is the whole
 	// path — show → epic block → the readiness gate `lit next` routes on —
-	// answering with one verdict. (links-epic-context-oezb)
+	// answering with one verdict.
 	want := "  ▶ [blocked: earlier sibling " + sibling + " still open] " + focus + "  Focused child   (you are here)"
 	if !strings.Contains(out, want) {
 		t.Errorf("focused child should be marked you-are-here, want %q in:\n%s", want, out)

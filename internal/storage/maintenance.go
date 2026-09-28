@@ -2,8 +2,7 @@ package storage
 
 import "time"
 
-// This file is the vocabulary the checkpoint and repair capabilities speak,
-// relocated from the Dolt engine for the same reason the sync vocabulary was:
+// This file is the vocabulary the checkpoint and repair capabilities speak:
 // an interface every engine can implement cannot name a type only one engine
 // can spell. [LAW:one-source-of-truth]
 
@@ -53,7 +52,7 @@ type HealthReport struct {
 	RankInversions     int      `json:"rank_inversions"`
 	DependencyCycle    []string `json:"dependency_cycle"`
 	// ParentCycle names the members of a loop in the hierarchy, which the write
-	// boundary now refuses but older data can still hold. It is reported rather
+	// boundary refuses but older data can still hold. It is reported rather
 	// than repaired because which edge to cut is a judgment about what the
 	// hierarchy meant, and every walk up the parent chain fails to terminate
 	// until someone makes it.

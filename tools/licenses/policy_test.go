@@ -7,12 +7,11 @@ import (
 
 // TestLoadPolicyEmbedded confirms the committed policy.json parses and carries
 // the shape the gate depends on: a non-empty allowlist and an EMPTY exception
-// list — links-licensing-c0ce.4 deleted the last one (fslock) when the fork
-// stopped importing it, and the licensing epic's destination is that none ever
-// returns. A reappearing exception is a policy regression, not a formality:
-// it is a row an auditor stops on. If one is ever genuinely unavoidable, it
-// must carry module, license, and a human-verified reason, and this test must
-// be loosened deliberately in the same change.
+// list — the licensing epic's destination is that none ever returns. A
+// reappearing exception is a policy regression, not a formality: it is a row
+// an auditor stops on. If one is ever genuinely unavoidable, it must carry
+// module, license, and a human-verified reason, and this test must be
+// loosened deliberately in the same change.
 func TestLoadPolicyEmbedded(t *testing.T) {
 	p, err := LoadPolicy()
 	if err != nil {
@@ -77,17 +76,15 @@ func TestParsePolicyRejectsDuplicateKeys(t *testing.T) {
 	}
 }
 
-// TestParsePolicyRejectsCaseVariantKeys pins the hole round 2 of review found
-// in the two guards above, which between them looked airtight and were not.
+// TestParsePolicyRejectsCaseVariantKeys pins the hole in the two guards above.
 //
 // encoding/json resolves an object key to a struct field case-INSENSITIVELY as
 // a fallback, so "ALLOWED_LICENSES" is not an unknown field and
-// DisallowUnknownFields never fires on it; rejectDuplicateKeys compared raw key
-// text, so it saw two different strings and no duplicate. A committed
-// policy.json could therefore show a reader `"module_exceptions": []` while the
-// gate ran against a `"MODULE_EXCEPTIONS"` holding a live exception — the exact
-// committed-text-versus-gate's-view split those guards exist to refuse,
-// arriving through the one spelling neither of them checked.
+// DisallowUnknownFields never fires on it; a duplicate check comparing raw key
+// text sees two different strings and no duplicate. A committed policy.json
+// could then show a reader `"module_exceptions": []` while the gate runs
+// against a `"MODULE_EXCEPTIONS"` holding a live exception — the exact
+// committed-text-versus-gate's-view split those guards exist to refuse.
 func TestParsePolicyRejectsCaseVariantKeys(t *testing.T) {
 	for _, tc := range []struct{ why, doc string }{
 		{
@@ -135,16 +132,15 @@ func TestParsePolicyRejectsMalformedAllowlistEntry(t *testing.T) {
 // nothing can equal excuses nothing while reading as though it does.
 func TestParsePolicyRejectsMalformedModulePath(t *testing.T) {
 	const want = "not a valid module path"
-	// The first four are character defects, and the space and the @ are the two
-	// that mattered: the guard originally reused isSPDXRune, whose alphabet
-	// PERMITS a space because a space separates the arms of an expression, and
-	// additionally whitelisted @ — so it admitted exactly the dead keys its own
-	// comment claimed to refuse. A module_exception names a path, never a
-	// path@version.
+	// The first four are character defects, and the space and the @ are the
+	// two that matter: isSPDXRune's alphabet PERMITS a space, because a space
+	// separates the arms of an expression, so a guard reusing it would admit
+	// exactly the dead keys it exists to refuse. A module_exception names a
+	// path, never a path@version.
 	//
-	// The rest are STRUCTURAL, and are the reason the rune filter was replaced
-	// by module.CheckPath outright: every one of them is fine character by
-	// character and none is a path `go list` can print.
+	// The rest are STRUCTURAL, and are the reason the guard is
+	// module.CheckPath rather than a rune filter: every one of them is fine
+	// character by character and none is a path `go list` can print.
 	for _, path := range []string{
 		"example.com/m\u200bx", "example.com/（m）", "example.com/m x", "example.com/m@v1.0.0",
 		"example.com//m", "example.com/m/", "nodot/m", "example.com/../m", "example.com/.hidden",
@@ -255,12 +251,12 @@ func TestCheckPolicyAcceptReject(t *testing.T) {
 
 	t.Run("Unknown with an exception is STILL a violation", func(t *testing.T) {
 		// The policy above grants example.com/unclassifiable a complete,
-		// reasoned exception for the sentinel and it buys nothing:
-		// links-licensing-c0ce.9 made an unreadable license a hard failure
-		// with no route around it, because an exception records a human
-		// having read a grant and there was no grant to read. The exception
-		// is left in the fixture deliberately — a test that simply omitted it
-		// would pass just as well against a filter that still honoured one.
+		// reasoned exception for the sentinel and it buys nothing: an
+		// unreadable license is a hard failure with no route around it,
+		// because an exception records a human having read a grant and there
+		// was no grant to read. The exception is left in the fixture
+		// deliberately — a test that simply omitted it would pass just as well
+		// against a filter that still honoured one.
 		v := CheckPolicy([]Entry{entry("example.com/unclassifiable", unclassifiedLicense)}, policy)
 		if len(v) != 1 {
 			t.Errorf("an excepted Unknown must still violate — the sentinel has no exception path, got %+v", v)
@@ -268,10 +264,10 @@ func TestCheckPolicyAcceptReject(t *testing.T) {
 	})
 }
 
-// TestDependencyLicensesArePermitted IS the license-policy gate (this ticket's
-// acceptance #1): it runs the real classifier over the real linked module set
-// and asserts zero policy violations. It runs on every PR and master push via
-// ci.yml's `go test ./...`, so a dependency bump that pulls in a non-allowlisted
+// TestDependencyLicensesArePermitted IS the license-policy gate: it runs the
+// real classifier over the real linked module set and asserts zero policy
+// violations. It runs on every PR and master push via ci.yml's
+// `go test ./...`, so a dependency bump that pulls in a non-allowlisted
 // license fails the build here. [LAW:verifiable-goals]
 func TestDependencyLicensesArePermitted(t *testing.T) {
 	t.Parallel()
@@ -287,10 +283,9 @@ func TestDependencyLicensesArePermitted(t *testing.T) {
 		}
 		// Says the same thing runCheck's failure says, because this is the
 		// message a developer actually meets: `go test ./...` runs on every
-		// PR and release-validate's -check does not. The old wording pointed
-		// at module_exceptions, which policy.json now spends a paragraph
-		// asking nobody to reopen — and for the Unknown case it pointed at a
-		// route the parse refuses outright, so obeying it produced a second,
+		// PR and release-validate's -check does not. Pointing at
+		// module_exceptions would, for the Unknown case, point at a route the
+		// parse refuses outright, so obeying it would produce a second,
 		// unrelated-looking failure. For a copyleft license an exception WOULD
 		// parse; it is simply the wrong answer, and this message says which
 		// answer is right rather than leaving the choice open.
@@ -302,31 +297,17 @@ func TestDependencyLicensesArePermitted(t *testing.T) {
 // REAL inventory and confirms the gate flags exactly it — proof that the gate
 // rejects, without adding a real copyleft dependency to go.mod.
 //
-// The table is the licensing epic's destination stated as failures, and every
-// row is a license that was genuinely reachable here: GPL-3.0 arrived through a
-// dolt test file (links-licensing-c0ce.7), LGPL-3.0 was fslock's and rode a
-// documented exception (.4), MPL-2.0 sat in allowed_licenses to cover golang-lru
-// and go-sql-driver/mysql (.5, .2), and the Unknown sentinel was kch42/buzhash's
-// unclassifiable WTFPL variant, also on an exception (.6). Exactly ONE of the
-// four passed this gate in the state links-licensing-c0ce.9 changed — MPL-2.0,
-// on the allowlist. LGPL-3.0 and the unclassifiable one had each passed
-// EARLIER in the epic, on exceptions .4 and .6 deleted along with the
-// dependencies behind them. .9 closed what was left: the allowlist entry is
-// gone and the sentinel has no exception path.
+// The table is the licensing epic's destination stated as failures.
 //
 // Be exact about what a row here can detect, rather than claiming the table
-// catches every reopening — and note that the answer changed under this test's
-// feet. When these rows were written, MPL-2.0 was the sharp one: put it back in
-// allowed_licenses and this row goes green with nothing else changing. The
-// copyleft veto added in the SAME commit made that edit a load failure too, so
-// all four rows are now a second line of defence: each needs a policy.json edit
-// that parsePolicy independently refuses, and the refusal surfaces as a failure
-// to load rather than as a violation here.
+// catches every reopening. All four rows are a second line of defence: each
+// needs a policy.json edit that parsePolicy independently refuses, and the
+// refusal surfaces as a failure to load rather than as a violation here.
 //
 // That does not make the table pointless — it is the only thing asserting the
 // gate REJECTS rather than merely that the policy is well-formed, and it runs
-// against the real inventory — but "a row that stops failing means a route was
-// re-opened" was true when written and is not now. [LAW:verifiable-goals]
+// against the real inventory — but a row that stops failing does not by itself
+// mean a route was re-opened. [LAW:verifiable-goals]
 func TestGateRejectsADeniedLicense(t *testing.T) {
 	t.Parallel()
 	entries := realEntries(t)
@@ -394,13 +375,11 @@ func TestParsePolicyRefusesASentinelLicense(t *testing.T) {
 }
 
 // TestParsePolicyExpressionRulesReachExceptions pins that the expression rules
-// are about this FILE and not about the allowlist alone. They had a door beside
-// them until links-licensing-c0ce.9's review: parsePolicy checked allowlist
-// entries and walked straight past module_exceptions, so "BSD-3-Clause OR
-// GPL-2.0-only" — zstd's own un-elected upstream grant, the exact un-made
-// election the OR ban exists to refuse — parsed clean and became a live key in
-// Filter's exception table, while the identical string one field away was
-// rejected.
+// are about this FILE and not about the allowlist alone. Otherwise
+// "BSD-3-Clause OR GPL-2.0-only" — zstd's own un-elected upstream grant, the
+// exact un-made election the OR ban exists to refuse — would parse clean as an
+// exception and become a live key in Filter's exception table, while the
+// identical string one field away is rejected.
 //
 // The AND-arm vetting rule deliberately does NOT reach here, and the last case
 // pins that too: an exception is not a permission granted to a license, it is
@@ -434,8 +413,8 @@ func TestParsePolicyExpressionRulesReachExceptions(t *testing.T) {
 // by exact string and nothing downstream parses an entry, so an expression
 // otherwise allowlists a whole combination while the gate vets none of its
 // arms — the reason "MIT AND Apache-2.0 WITH LLVM-exception" is safe is that a
-// human checked MIT and Apache-2.0 separately, and before this parse existed
-// nothing at all distinguished that entry from "MIT OR GPL-2.0-only".
+// human checked MIT and Apache-2.0 separately, and without this parse nothing
+// at all distinguishes that entry from "MIT OR GPL-2.0-only".
 func TestParsePolicyExpressionRules(t *testing.T) {
 	policy := func(entries ...string) []byte {
 		quoted := make([]string, len(entries))
@@ -449,11 +428,9 @@ func TestParsePolicyExpressionRules(t *testing.T) {
 	// almost nothing: the OR ban and the parenthesis rule are both refusable
 	// by the arm-shape and character rules standing behind them, and a row
 	// that only checks for a non-nil error stays green when the rule it names
-	// is deleted. Round 1 of review found exactly that for the parenthesis
-	// rule; round 2 found it for the OR ban, this change's headline. So every
-	// row names the phrase its own rule produces, and a mutation that removes
-	// the rule changes the diagnostic and fails the row even when something
-	// else still refuses the input. [LAW:verifiable-goals]
+	// is deleted. So every row names the phrase its own rule produces, and a
+	// mutation that removes the rule changes the diagnostic and fails the row
+	// even when something else still refuses the input. [LAW:verifiable-goals]
 	t.Run("refused with the right diagnostic", func(t *testing.T) {
 		for _, tc := range []struct {
 			why     string
@@ -535,14 +512,12 @@ func TestParsePolicyExpressionRules(t *testing.T) {
 			{"an arm the parser cannot decompose is one the gate cannot rule on", []string{"MIT", "Apache-2.0", "MIT AND Apache-2.0 LLVM-exception"}},
 			{"a dangling operator is not an expression", []string{"MIT", "MIT AND"}},
 
-			// Each row below fails ONLY if its own rule is present. The paren
-			// rule had no such row until this review: "(MIT AND Apache-2.0)"
-			// decomposes to the arms "(MIT" and "Apache-2.0)", neither of them
-			// allowlisted, so it was refused by the AND-arm rule with or
-			// without the parenthesis guard — deleting the guard left the
-			// whole package green while a parenthesized entry could reach the
-			// committed compliance file. A single-arm "(MIT)" is refusable by
-			// nothing else. [LAW:verifiable-goals]
+			// Each row below fails ONLY if its own rule is present. A
+			// parenthesized compound such as "(MIT AND Apache-2.0)" decomposes
+			// to the arms "(MIT" and "Apache-2.0)", neither of them
+			// allowlisted, so the AND-arm rule refuses it with or without the
+			// parenthesis guard; a single-arm "(MIT)" is refusable by nothing
+			// else. [LAW:verifiable-goals]
 			{"a lowercase operator is not an identifier token", []string{"MIT", "MIT or GPL-2.0-only"}},
 			// This row is the only one that isolates the operator-case rule.
 			// Every other lowercase spelling is caught downstream anyway — a

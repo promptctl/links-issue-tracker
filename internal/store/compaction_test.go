@@ -231,8 +231,7 @@ func TestCompactionReportSpeaksOnlyWhenItHasSomethingToSay(t *testing.T) {
 // A pass that never ran must produce no report at ALL — not even the deep-pass
 // line, and not even when the measurement also failed. This is the arm that
 // stops the error path from announcing "ran full pass, rewriting the old
-// generation" beside the error saying the full pass failed, which is precisely
-// what it used to do when the caller decided this instead of the reporter.
+// generation" beside the error saying the full pass failed.
 // [LAW:one-source-of-truth]
 func TestCompactionReportSaysNothingAboutAPassThatNeverRan(t *testing.T) {
 	t.Parallel()

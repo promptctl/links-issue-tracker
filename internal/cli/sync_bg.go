@@ -29,12 +29,9 @@ const backgroundMirrorSubcommand = "__mirror-bg"
 // rather than /dev/null — otherwise a trace-write failure or a panic vanishes.
 const mirrorLogName = "mirror.log"
 
-// mirrorLogMaxBytes caps mirror.log's growth now that every cycle logs a
-// start/end line (previously only failures wrote, which is why the field's log
-// sat at 0 bytes while mirrors had been pushing for weeks — the attribution
-// gap links-sync-pgct.11.1 closes). Rotation keeps one previous generation so
-// the recent window survives each cut; the log is diagnostics, not state, so
-// older lines are free to go.
+// mirrorLogMaxBytes caps mirror.log's growth: every cycle logs a start/end
+// line. Rotation keeps one previous generation so the recent window survives
+// each cut; the log is diagnostics, not state, so older lines are free to go.
 const mirrorLogMaxBytes = 256 * 1024
 
 // rotateMirrorLog moves an over-cap mirror.log aside (one kept generation)
@@ -61,13 +58,12 @@ const (
 	// after spawning the mirror: every bounded step maybeAutoSyncAfterCommand
 	// has scheduled for after the spawn, summed from those steps' own caps.
 	//
-	// It is a sum rather than a number because this was previously a hand-kept
-	// figure in prose ("15s + 10s + 1s, so ~26s"), and prose does not fail to
-	// compile when a fourth step joins the tail. It did: the compaction
-	// backstop was added after the spawn and, left unsummed here, a pass slower
-	// than the leftover margin would have let a perfectly healthy parent outlive
-	// the wait below — abandoning a mirror that owed a push, for work the parent
-	// was designed to do. Adding a step to the tail now means adding it here.
+	// It is a sum rather than a number because prose does not fail to compile
+	// when a fourth step joins the tail. A step left unsummed here lets a pass
+	// slower than the leftover margin make a perfectly healthy parent outlive
+	// the wait below — abandoning a mirror that owes a push, for work the
+	// parent was designed to do. Adding a step to the tail means adding it
+	// here.
 	// [LAW:one-source-of-truth]
 	parentPostSpawnTail = store.InlineReceiveDeadline + // the inline receive
 		ownerNotifyHookTimeout + ownerNotifyPipeWaitDelay + // a divergence's owner-notify hook and its pipe
@@ -166,16 +162,15 @@ func mirrorEnv() []string {
 // invariant first (wait-for-parent), then runs single-flight push cycles until
 // no mirror-pending claim remains. [LAW:no-ambient-temporal-coupling]
 //
-// The cycle loop is what makes losing the single-flight race safe to treat as
-// a silent exit (links-sync-pgct.12): the loser's spawner claimed the
-// mirror-pending marker, and the current lock holder is obligated to re-check
-// that marker AFTER releasing — a claim it cannot have covered (stamped while
-// its engine was open, or after) triggers another full cycle on a fresh
-// engine, whose open then postdates the claimant's commit. Custody of the
-// marker passes from holder to holder at the lock, never resting on timing.
-// Losing therefore never strands a claim, and the loser still exits without
-// opening a store, writing a trace, or creating a file — the quiescence
-// property test cleanups rely on.
+// The cycle loop is what makes losing the single-flight race safe to treat as a
+// silent exit: the loser's spawner claimed the mirror-pending marker, and the
+// current lock holder is obligated to re-check that marker AFTER releasing — a
+// claim it cannot have covered (stamped while its engine was open, or after)
+// triggers another full cycle on a fresh engine, whose open then postdates the
+// claimant's commit. Custody of the marker passes from holder to holder at the
+// lock, never resting on timing. Losing therefore never strands a claim, and
+// the loser still exits without opening a store, writing a trace, or creating a
+// file — the quiescence property test cleanups rely on.
 func backgroundMirrorLeaf() wsLeaf {
 	fs := newCobraFlagSet("sync " + backgroundMirrorSubcommand)
 	parentPID := fs.Int("parent-pid", 0, "PID of the spawning command; the mirror waits for it to exit")
@@ -340,10 +335,8 @@ type mirrorClone struct {
 // the holds a file-by-file copy of the Dolt directory needs (withDoltDirectoryHeld:
 // workspace shared, Dolt's journal lock, commit lock), clears the
 // mirror-pending marker inside that same hold, and releases everything before
-// returning. The live store is held for the clone and nothing else — that is
-// the whole change links-scale-om3r.s2h makes: the network round trip that
-// used to run under these locks now runs from the clone with none of them
-// held.
+// returning. The live store is held for the clone and nothing else — the
+// network round trip runs from the clone with none of them held.
 //
 // The clear is inside the hold on purpose. Every commit lands through a write
 // engine, and a write engine holds Dolt's journal lock for its lifetime, so
@@ -353,7 +346,7 @@ type mirrorClone struct {
 // for the caller's post-release re-check, which runs another cycle for it.
 // Clearing after the release would open a window in which a commit lands,
 // claims, and has its claim erased by a clone that does not hold it — the
-// stranded tail links-sync-pgct.12 exists to prevent.
+// stranded tail.
 // [LAW:no-ambient-temporal-coupling]
 //
 // Residue first: the caller holds the single-flight sync-push lock, so any
@@ -444,23 +437,23 @@ func (p pushedHead) landed() bool { return p.head != "" }
 //
 // The push — performSyncPush clears nothing here (the take already did, see
 // takeMirrorClone) and completes the attempt's outcome record on every path —
-// runs under store.MirrorPushDeadline. Nothing on the live store waits on it
-// any more, but the mirror process holds the single-flight lock for its whole
-// run and every mirror spawned meanwhile loses that race and exits, so a
-// transport that stalls would stop pushes for as long as it cared to
-// (links-sync-pgct.11.1). The deadline must wrap the ctx the clone's session
-// is OPENED with, not just the push's: the embedded driver builds the
-// connection's execution context at Connect, and only a deadline present
-// there reaches the engine's git subprocesses; a per-query deadline is
-// inert. Completion effects (the outcome marker, the owner-notify hook) run
-// under the parent ctx: a cut push needs them most at exactly the moment its
-// own deadline has expired. [LAW:no-ambient-temporal-coupling]
+// runs under store.MirrorPushDeadline. Nothing on the live store waits on it,
+// but the mirror process holds the single-flight lock for its whole run and
+// every mirror spawned meanwhile loses that race and exits, so a transport
+// that stalls would stop pushes for as long as it cared to. The deadline must
+// wrap the ctx the clone's session is OPENED with, not just the push's: the
+// embedded driver builds the connection's execution context at Connect, and
+// only a deadline present there reaches the engine's git subprocesses; a
+// per-query deadline is inert. Completion effects (the outcome marker, the
+// owner-notify hook) run under the parent ctx: a cut push needs them most at
+// exactly the moment its own deadline has expired.
+// [LAW:no-ambient-temporal-coupling]
 //
 // log receives one line at cycle start, one per hold on the live store as it
 // is released (`hold released step=clone|record elapsed=`), and one at cycle
 // end carrying every phase's cost — the detached worker's stdout is
-// mirror.log, and those lines are the durable record that the ticket's
-// contract ("every hold under one second") is checked against in the field.
+// mirror.log, and those lines are the durable record that the contract
+// "every hold under one second" is checked against in the field.
 // Only a cycle that holds the single-flight lock writes: a mirror that loses
 // the race stays silent, as the quiescence property requires.
 func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnswering func()) (attempted bool) {
@@ -569,16 +562,13 @@ func holdBudgetCutExplanation(step string) error {
 // wherever the cut landed. [LAW:one-source-of-truth]
 //
 // It refuses to name a cause, and that refusal is the point. A deadline knows
-// only that the work ran long; the previous wording turned that into "a hung
-// or slow remote transport", a diagnosis nothing had observed, and it read as
-// environmental and transient — something to retry past rather than a defect
-// to file. links-sync-dauk is the bill: with the budget sized under the
-// operation's own cost, 15.8% of cycles were cut, the condition was hit three
-// times in one session, and each time the message sent the reader hunting a
-// network fault that was not there. So the text names what the deadline
-// actually established, names both causes that land here, and points at the
-// evidence that separates them. [FRAMING:representation] a message that
-// asserts more than its signal carries is a map of a territory nobody visited.
+// only that the work ran long. Naming a cause such as "a hung or slow remote
+// transport" would be a diagnosis nothing had observed, and it reads as
+// environmental and transient — something to retry past rather than a defect to
+// file. The text names what the deadline actually established, names both
+// causes that land here, and points at the evidence that separates them.
+// [FRAMING:representation] a message that asserts more than its signal carries
+// is a map of a territory nobody visited.
 //
 // Order matters as much as content: the FAILING banner prints this through
 // oneLineReason, which keeps the first line and caps it at 160 runes, so the
@@ -586,8 +576,7 @@ func holdBudgetCutExplanation(step string) error {
 // and with enough margin that a reworded lead or a deadline that formats
 // longer (a value in minutes renders as "1h40m0s", not "40s") cannot push it
 // over. TestDeadlineCutFramingSurvivesTheBanner pins that, because a margin
-// nobody measures is how an invariant asserted in a comment stops being one:
-// the first wording of this message left five runes of it.
+// nobody measures is how an invariant asserted in a comment stops being one.
 func pushDeadlineCutExplanation() error {
 	return fmt.Errorf(
 		"mirror push exceeded its %s deadline — a deadline, not a diagnosis: check %s's push= values before blaming the remote. Pushes clustered just under the deadline mean it is sized under this workspace's real push cost; one push far past it means the transport stopped answering. Nothing on the live store waits on the push, and the next mutation's mirror retries it",
@@ -632,7 +621,7 @@ func mirrorOnce(ctx, completionCtx context.Context, session syncSession, ws work
 	// A remote schema ahead of this binary is NOT the "next push retries" case: it
 	// will never succeed until the binary is upgraded, so surface the one
 	// sync-failure contract to stderr instead of letting it read as a transient
-	// hiccup — the exact "will retry" shrug the sync-skew epic kills.
+	// hiccup.
 	// [LAW:single-enforcer] one adapter, one contract. Other pushErr (e.g. offline)
 	// is already captured in the trace; the mutation is durable locally and the next
 	// push retries, so the mirror stops cleanly either way.
@@ -680,15 +669,14 @@ func waitForParentExit(ctx context.Context, parentPID int, getppid func() int, t
 
 // completeMirrorWithoutAttempt is the completion path for a mirror that died
 // BEFORE reaching a push attempt (parent-wait timeout, sync-push-lock error,
-// engine-open failure). These endings were the deliberate gap links-sync-pgct.10
-// left and this ticket closes: they now flow through the same
-// completePushAttempt seam as an attempt that ran, so the push-outcome marker
-// and the owner notification hear "the push layer could not even start" from
-// the one record they already share — never a second representation of push
-// health. [LAW:one-source-of-truth] The trace half stays: it is the ordered
-// audit log, not the "where do things stand" marker. Always returns nil: the
-// mutation is already durable, so the mirror is best-effort and never reports
-// a non-zero exit.
+// engine-open failure). These endings flow through the same completePushAttempt
+// seam as an attempt that ran, so the push-outcome marker and the owner
+// notification hear "the push layer could not even start" from the one record
+// they already share — never a second representation of push health.
+// [LAW:one-source-of-truth] The trace half stays: it is the ordered audit log,
+// not the "where do things stand" marker. Always returns nil: the mutation is
+// already durable, so the mirror is best-effort and never reports a non-zero
+// exit.
 //
 // The dying mirror also stops answering on the beacon and releases the
 // mirror-pending claim it was spawned to answer — both FIRST, before the

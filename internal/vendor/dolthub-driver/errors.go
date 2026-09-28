@@ -22,11 +22,11 @@ import (
 // *MySQLError. This improves compatibility with clients that program against
 // embedded and sql-server Dolt.
 //
-// [LAW:one-source-of-truth] Modified by lit: upstream constructed
-// github.com/go-sql-driver/mysql's MySQLError here, which made an MPL-2.0
-// coordinate a permanent row in lit's SBOM to carry two fields across a package
-// boundary between two modules lit already owns. The error contract now belongs
-// to this driver — see mysql_error.go and README.lit-patch.md, Patch 4.
+// [LAW:one-source-of-truth] Modified by lit: this copy does not construct
+// github.com/go-sql-driver/mysql's MySQLError, because that would make an
+// MPL-2.0 coordinate a permanent row in lit's SBOM to carry two fields across a
+// package boundary between two modules lit already owns. The error contract
+// belongs to this driver — see mysql_error.go and README.lit-patch.md, Patch 4.
 func translateError(err error) error {
 	if err == nil {
 		return nil

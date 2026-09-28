@@ -11,9 +11,8 @@ import (
 )
 
 // forkOwnerPrefix is the only account allowed to own a module lit substitutes
-// for an upstream one. Before links-licensing-c0ce.3 the dolt replace pointed at
-// a personal GitHub account, which promptctl-deps-4aes had already flagged as a
-// single point of failure for master's build.
+// for an upstream one. A fork under a personal GitHub account is a single point
+// of failure for master's build.
 const forkOwnerPrefix = "github.com/promptctl/"
 
 // forkLedgerPath is FORKS.md, the written fork contract. go.mod points at it
@@ -22,10 +21,8 @@ const forkOwnerPrefix = "github.com/promptctl/"
 // depends on.
 //
 // [LAW:one-source-of-truth] go.mod is the authority and the ledger is a derived
-// copy. What makes that legal rather than the drift this whole ticket reacted to
-// is the pair of tests below: they synchronize the copy explicitly, in both
-// directions, on every `go test ./...`. The stale go.mod comment this replaced
-// went wrong precisely because nothing did that.
+// copy. What makes that legal is the pair of tests below: they synchronize the
+// copy explicitly, in both directions, on every `go test ./...`.
 const forkLedgerPath = "../../FORKS.md"
 
 var (
@@ -78,7 +75,7 @@ func readForkLedger(t *testing.T) string {
 // directory target and a version-less module target one line earlier, so
 // parseReplacement is unlikely to be the first to complain. It is checked
 // rather than discarded because a value quietly dropped on the floor is how the
-// two spellings would drift apart again.
+// two spellings would drift apart.
 func moduleReplaces(t *testing.T, f *modfile.File) []*modfile.Replace {
 	t.Helper()
 	var out []*modfile.Replace
@@ -94,11 +91,10 @@ func moduleReplaces(t *testing.T, f *modfile.File) []*modfile.Replace {
 	}
 	// Every caller states a property over this slice — org ownership, ledger
 	// coverage, the vendored mirror — and every one of those properties is
-	// vacuously true of an empty slice. Since the classification moved from
-	// `New.Version != ""` to parseReplacement's path comparison, a fork
-	// misfiled as ReplacedByVersion would empty this set and turn three green
-	// tests into three tests of nothing. Fail here instead, once, where the
-	// reason is legible. [LAW:verifiable-goals]
+	// vacuously true of an empty slice. A fork misfiled as ReplacedByVersion
+	// would empty this set and turn three green tests into three tests of
+	// nothing. Fail here instead, once, where the reason is legible.
+	// [LAW:verifiable-goals]
 	if len(out) == 0 {
 		t.Fatalf("go.mod declares %d replace directive(s) but parseReplacement classified none of them as a fork; "+
 			"the fork-contract tests below would all pass without examining anything. If lit genuinely stopped "+
@@ -143,10 +139,10 @@ func TestForkReplacementsAreOrgOwned(t *testing.T) {
 // properties are gone, silently, with the build still green.
 //
 // The property is "no require names a replace target," which is true by
-// construction. An earlier version of this test asked whether a require was
-// under forkOwnerPrefix — a stronger theorem that is not true: a sibling
-// org-owned library that forks nothing is a legitimate dependency, and that
-// version would have failed it with advice that made no sense.
+// construction. Asking whether a require is under forkOwnerPrefix would be a
+// stronger theorem that is not true: a sibling org-owned library that forks
+// nothing is a legitimate dependency, and that test would fail on it with
+// advice that makes no sense.
 // [FRAMING:representation] the map keeps naming the territory it was drawn from.
 func TestForkedCoordinatesStayUpstream(t *testing.T) {
 	f := parseRootGoMod(t)
@@ -257,12 +253,6 @@ func collapseWhitespace(s string) string {
 // TestForkLedgerQuotesTheGraphSectionTitle binds the one sentence in FORKS.md
 // that quotes the graph audit's own heading to the constant that prints it.
 //
-// The ledger read "MODULES WHOSE SOURCE COMES FROM A DIFFERENT COORDINATE" for
-// exactly as long as sectionReplaced did. Renaming the constant — a version pin
-// substitutes the SAME coordinate, so the old title was false for a shape the
-// section now holds — left the ledger quoting a heading no run of the tool
-// emits, and nothing failed.
-//
 // [FRAMING:representation] a quotation is a copy, and a copy a human must
 // remember to redraw is one that has already begun to lie. This gives that copy
 // the same standing the two pin tests above give the ledger's tables.
@@ -308,8 +298,8 @@ func TestForkLedgerNamesEverySubstitution(t *testing.T) {
 // TestVendoredDriverMirrorsForkReplaces synchronizes the third home of the fork
 // pins. The vendored driver's go.mod mirrors the root's fork replaces so that,
 // resolved standalone, it builds against the forks and cannot re-record a
-// coordinate the forks removed (golang-lru arrived back that way once, as an
-// indirect require through the upstream go-mysql-server go.mod).
+// coordinate the forks removed (one can arrive back as an indirect require
+// through the upstream go-mysql-server go.mod).
 //
 // [LAW:one-source-of-truth] the root go.mod stays the authority; the mirror is
 // a derived copy, and this test is what makes a derived copy legal — the same
@@ -339,10 +329,9 @@ func TestVendoredDriverMirrorsForkReplaces(t *testing.T) {
 		t.Fatalf("read %s: %v", sumPath, err)
 	}
 
-	// The driver's own replaces, predating the fork mirrors and owned by it
-	// alone. Everything else must be a mirror of a current root fork — a
-	// replace for a coordinate the root no longer forks is a leftover wherever
-	// it points, org account or personal.
+	// The driver's own replaces, owned by it alone. Everything else must be a
+	// mirror of a current root fork — a replace for a coordinate the root no
+	// longer forks is a leftover wherever it points, org account or personal.
 	driverLocalReplaces := map[string]bool{
 		"github.com/google/flatbuffers": true,
 	}

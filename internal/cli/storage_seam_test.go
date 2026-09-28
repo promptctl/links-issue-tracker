@@ -13,11 +13,9 @@ import (
 	"testing"
 )
 
-// This file is the seam's enforcement. links-store-seam-q35v.4 flipped app and
-// CLI onto lit's storage contract; what makes that flip durable is not the diff
-// but the three rules in seamViolations, which fail the build the moment it
-// starts to heal over — and the mutation tests below, which are what say those
-// rules still work. [LAW:verifiable-goals]
+// This file is the seam's enforcement: the three rules in seamViolations, which
+// fail the build the moment it starts to heal over — and the mutation tests
+// below, which are what say those rules still work. [LAW:verifiable-goals]
 //
 // The line they draw is the ENGINE HANDLE. No package above internal/store may
 // name the concrete engine type or construct one: engines arrive as
@@ -57,11 +55,10 @@ var engineHandles = []string{"Store", "Open", "OpenForRead", "OpenSync"}
 // workspace, which internal/cli/lifeboat.go holds between the two calls. A
 // Candidate owns a live engine. What keeps that inside the seam is that the
 // field holding it is unexported, so no caller above internal/store can reach
-// the engine through one; the earlier claim that every entry took a path was
-// simply wrong about these three. The guard below could not have caught it
-// either way — it matches store.X selectors, and cand.Store() was a method
-// call on a value. That hole is closed in the type, where it belongs, not
-// here. [LAW:types-are-the-program]
+// the engine through one. The guard below could not catch that crossing either
+// way — it matches store.X selectors, and a method call on a Candidate value is
+// not one — so the hole is closed in the type, where it belongs.
+// [LAW:types-are-the-program]
 //
 // It is enumerated rather than wrapped because
 // design-docs/event-store/design.md §migration schedules exactly this machinery
@@ -123,10 +120,9 @@ var doltWorkspaceMachinery = map[string][]string{
 	//
 	// The cli reaches for the lag because the push-deadline regression tests
 	// assert where a cut push ENDS, which is the deadline plus that lag and
-	// not the deadline alone. They had been restating it as a bare 30s — a
-	// second, unattributed copy of a measured figure, which a re-measurement
-	// in store would have left behind (links-testperf-6vfg).
-	// [LAW:one-source-of-truth]
+	// not the deadline alone. Restating it as a bare 30s would be a second,
+	// unattributed copy of a measured figure, which a re-measurement in store
+	// would leave behind. [LAW:one-source-of-truth]
 	//
 	// PushedHeadRecord, ErrMirrorHoldCut and ErrReceivedRefsNotRecorded are
 	// RecordPushedHead's answers the mirror's trail has to tell apart — which
@@ -134,8 +130,8 @@ var doltWorkspaceMachinery = map[string][]string{
 	// that only the received-refs write failed — and travel with it.
 	// InlineReceiveDeadline is the receive's own deadline, declared in store
 	// because the receive holds the store's LOCK for its run and so is a term
-	// of the co-resident wait; the cli reads it rather than keep the second
-	// copy it used to (receiveTimeout), which the wait could not see.
+	// of the co-resident wait; the cli reads it rather than keep a second copy,
+	// which the wait could not see.
 	//
 	// ReadReceivedRefs and WriteReceivedRefs are the receive's record of what
 	// the remote advertised before the last settled fetch, the mirror of
@@ -157,7 +153,7 @@ var doltWorkspaceMachinery = map[string][]string{
 	// it reports a repository with no workspace in it at all, so there is no
 	// engine to ask through the contract and never was. The CLI matches it to
 	// answer "your environment is not ready" at a precondition exit code
-	// instead of the unclassified-fault one (links-cli-errors-yfbg).
+	// instead of the unclassified-fault one.
 	"typed engine failures": {
 		"ErrWorkspaceBusy", "ErrTransientGCContention", "WorkspaceWriteBlockedError",
 		"RemoteUnreachableError", "ErrWorkspaceNotInitialized",
@@ -170,14 +166,12 @@ var doltWorkspaceMachinery = map[string][]string{
 // everything lit's commands are built from, relative to this file's directory.
 var seamPackages = []string{".", "../app", "../../cmd/lit"}
 
-// TestCLIAndAppReachStorageOnlyThroughTheContract is the ticket's lasting
-// artifact: it makes the seam unrepresentable to cross rather than merely
-// discouraged.
+// TestCLIAndAppReachStorageOnlyThroughTheContract makes the seam
+// unrepresentable to cross rather than merely discouraged.
 //
 // It reads source rather than trusting a convention, and it covers test files
 // too — a fixture that opens a concrete engine is exactly how the boundary
-// erodes first, and the in-memory engine from links-store-seam-q35v.3 means a
-// test needing storage behavior no longer needs the Dolt one.
+// erodes first.
 func TestCLIAndAppReachStorageOnlyThroughTheContract(t *testing.T) {
 	t.Parallel()
 
@@ -340,9 +334,8 @@ func engineImportName(file *ast.File) (string, bool) {
 }
 
 // TestSeamViolationsFireOnePerRule is the proof the guard's arms are load
-// bearing. links-store-seam-q35v.4 recorded that five mutations pinned them;
-// none had been written, so until now deleting either the additions loop or the
-// ratchet loop left the suite green and the seam unenforced.
+// bearing: without it, deleting either the additions loop or the ratchet loop
+// would leave the suite green and the seam unenforced.
 //
 // Each case mutates exactly one thing away from a clean baseline and asserts
 // WHICH rule objects — a case that only counted violations would pass with the

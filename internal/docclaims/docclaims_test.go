@@ -15,17 +15,14 @@ import (
 // tree rather than a fixture.
 const repoRoot = "../.."
 
-// TestDocumentedClaimsStillShip is the gate this package exists to be.
-//
-// Three merged tickets falsified documented claims while every CI check stayed
-// green, because nothing compared the specification's quoted messages against
-// the text that ships. This is that comparison.
+// TestDocumentedClaimsStillShip is the gate this package exists to be: it
+// compares the specification's quoted messages against the text that ships.
 //
 // A failure here is not a broken test: it is a chapter describing a message the
 // product no longer has, or a manifest that no longer matches the tree. Each
 // line carries the remedy for its own case — and there is exactly one report,
-// because when there were two they twice came to tell a contributor opposite
-// things about a single entry in a single run.
+// because two reports can tell a contributor opposite things about a single
+// entry in a single run.
 func TestDocumentedClaimsStillShip(t *testing.T) {
 	if len(Manifest) == 0 {
 		t.Fatal("manifest is empty — the gate would pass over anything; regenerate with `go run ./tools/docclaims-sync`")
@@ -150,8 +147,7 @@ func TestShippedTextReadsProductCodeAndItsEmbeddedAssets(t *testing.T) {
 		"internal/cli/testdata/x.go":  {Data: []byte("package cli\nvar D = \"testdata only message\"\n")},
 		"tools/thing/main.go":         {Data: []byte("package main\nvar E = \"tool only message\"\n")},
 		"artifacts/beads/b.go":        {Data: []byte("package beads\nvar F = \"vendored only message\"\n")},
-		// A package inside internal/ that nothing links: the shape that twice
-		// leaked a foreign tree into the corpus.
+		// A package inside internal/ that nothing links.
 		"internal/unlinked/u.go": {Data: []byte("package unlinked\nvar G = \"unlinked message here\"\n")},
 		// A locally replaced module IS source this repo ships — but only the
 		// part of it something imports.
@@ -187,19 +183,17 @@ func TestShippedTextReadsProductCodeAndItsEmbeddedAssets(t *testing.T) {
 			t.Errorf("%q ships and was not collected", want)
 		}
 	}
-	// Both assets, not just the first: an earlier version returned after the
-	// first glob match and silently indexed one file per embed directive.
+	// Both assets, not just the first: returning after the first glob match
+	// would silently index one file per embed directive.
 	for _, want := range []string{"internal/cli/helptext/a.txt", "internal/cli/helptext/b.txt"} {
 		if _, ok := corpus[want]; !ok {
 			t.Errorf("embedded asset %s was not collected", want)
 		}
 	}
-	// "unlinked" and "vendored example" are the regression: both sit under a
-	// root the old scope named wholesale, and neither is reachable from a
-	// binary. Admitting them is not merely noise — Matched anchors a quotation
-	// to the shortest source holding it, so a stray copy in unlinked code
-	// becomes the evidence for a chapter's claim and survives deleting the real
-	// message.
+	// "unlinked" and "vendored example": neither is reachable from a binary.
+	// Admitting them is not merely noise — Matched anchors a quotation to the
+	// shortest source holding it, so a stray copy in unlinked code becomes the
+	// evidence for a chapter's claim and survives deleting the real message.
 	for _, absent := range []string{
 		"test only message", "testdata only message", "tool only message",
 		"vendored only message", "unlinked message here", "vendored example message",
@@ -214,8 +208,7 @@ func TestShippedTextReadsProductCodeAndItsEmbeddedAssets(t *testing.T) {
 // TestOnlyAnUnsatisfiableConstraintExcludesAFile pins the predicate itself,
 // because the corpus test can only show the cases its fixture happens to carry.
 // Evaluating a constraint under one assignment — every tag but `ignore` true —
-// passes the two `ignore` spellings and inverts every negation, which is the
-// whole of what four review rounds walked past.
+// passes the two `ignore` spellings and inverts every negation.
 func TestOnlyAnUnsatisfiableConstraintExcludesAFile(t *testing.T) {
 	for _, tc := range []struct {
 		line    string
@@ -449,17 +442,15 @@ func TestClosingFenceMustMatchItsOpener(t *testing.T) {
 	}
 }
 
-// TestTheThreeCasesAreToldApart is the regression for a report that named the
-// wrong remedy on the ordinary edit.
-//
-// A committed entry leaves a fresh derivation three ways, and the classifier
-// has twice been too narrow. First it asked one question — does the recorded
-// source still carry the words — which puts a literal reworded around a
-// quotation in the same bucket as a deleted message, under the loudest
-// instruction in the design: "Do NOT regenerate". Then, asking only the corpus,
-// it put the *prescribed workflow* there too: delete a message and the sentence
-// quoting it together, as CONTRIBUTING asks, and the report told the
-// contributor not to regenerate a sentence they had just removed.
+// TestTheThreeCasesAreToldApart pins that the report names the right remedy
+// for each way a committed entry leaves a fresh derivation. There are three.
+// Asking one question — does the recorded source still carry the words — puts
+// a literal reworded around a quotation in the same bucket as a deleted
+// message, under the loudest instruction in the design: "Do NOT regenerate".
+// Asking only the corpus puts the *prescribed workflow* there too: delete a
+// message and the sentence quoting it together, as CONTRIBUTING asks, and the
+// report would tell the contributor not to regenerate a sentence they had just
+// removed.
 //
 // Both facts are needed. Whether the chapter still quotes the words comes from
 // the documents; whether anything still ships them comes from the corpus. The
@@ -548,10 +539,10 @@ func TestTheThreeCasesAreToldApart(t *testing.T) {
 				t.Errorf("named %q as still quoting it, want %q — it reports: %s", joined, tc.wantQuotedBy, got[0].Explain())
 			}
 			// The rendered sentence, not only the field behind it. Pinning the
-			// field alone let a mutation that printed Claim.Doc in the warning
+			// field alone lets a mutation that prints Claim.Doc in the warning
 			// survive: the entry is recorded against the chapter that STOPPED
-			// quoting the message, so that sentence sends a contributor to the
-			// one file with nothing wrong in it.
+			// quoting the message, so that sentence would send a contributor to
+			// the one file with nothing wrong in it.
 			if tc.want == Stopped && !strings.Contains(got[0].Explain(), tc.wantQuotedBy) {
 				t.Errorf("Explain() does not name %q as still quoting it: %s", tc.wantQuotedBy, got[0].Explain())
 			}
@@ -567,17 +558,12 @@ func TestTheThreeCasesAreToldApart(t *testing.T) {
 	}
 }
 
-// TestTheGateIsNotItsOwnEvidence is the one failure this package has already
-// had, pinned so it cannot return quietly.
-//
 // manifest_gen.go holds every documented quotation as a Go string literal, so
 // if this package were ever inside the corpus it collects, each entry would be
 // satisfied by its own recorded copy: `tightest` would anchor every claim to
 // the literal that *is* its text, deleting the real shipped message would change
 // nothing, and TestDocumentedClaimsStillShip would stay green over a gate that
 // checks nothing.
-// That is not hypothetical — an earlier blacklist admitted this package and the
-// gate passed over a deliberately mutated message.
 //
 // Today the exclusion is emergent: nothing under cmd/ imports internal/docclaims,
 // so reachability leaves it out. Emergent is not enforced. One import added for
@@ -589,11 +575,8 @@ func TestTheGateIsNotItsOwnEvidence(t *testing.T) {
 		t.Fatalf("shippedPackages: %v", err)
 	}
 	// Both registries of verbatim document text, not just this one.
-	// internal/docsclaims stores quotations from design-docs as Go literals and
-	// has already produced a false anchor here — `git remote -v` was held up by
-	// its copy of a sentence from docs/architecture.md while the real message
-	// could have been deleted freely. It is unimported today for the same
-	// incidental reason this package is.
+	// internal/docsclaims stores quotations from design-docs as Go literals.
+	// It is unimported today for the same incidental reason this package is.
 	for _, dir := range []string{"internal/docclaims", "internal/docsclaims"} {
 		if slices.Contains(dirs, dir) {
 			t.Fatalf("%s is now linked into a binary under cmd/, so its verbatim copies of documented text are inside the corpus this gate checks against: entries anchor to the copy rather than to the shipped message, and deleting the real message changes nothing. Move that text out of the walked import graph before linking the package in.", dir)
@@ -601,10 +584,10 @@ func TestTheGateIsNotItsOwnEvidence(t *testing.T) {
 	}
 }
 
-// TestAnEmbedPatternKeepsItsEscapes covers an operand the compiler accepts and
-// this parser used to split into fragments. Cutting at the first inner quote
-// yields patterns matching no file, and an unmatched pattern is a hard error —
-// so the gate would fail the build over legal source.
+// TestAnEmbedPatternKeepsItsEscapes covers an operand the compiler accepts.
+// Cutting at the first inner quote yields patterns matching no file, and an
+// unmatched pattern is a hard error — so the gate would fail the build over
+// legal source.
 func TestAnEmbedPatternKeepsItsEscapes(t *testing.T) {
 	got := embedPatterns(`"say \"hi\".txt" plain.txt`)
 	want := []string{`say "hi".txt`, "plain.txt"}
@@ -635,12 +618,12 @@ func TestACommentedReplaceIsNotADirective(t *testing.T) {
 	}
 }
 
-// TestAnIgnoredMainIsNotAnEntryPoint covers the guard that the gap disarmed. A
-// `main` no build compiles is not a binary, and counting one as an entry point
-// is worse than missing it: the walk starts from a package whose files are all
-// skipped, the corpus comes back empty, and the "no main package" error — whose
-// whole purpose is to say the walk is broken rather than the specification
-// false — never fires.
+// TestAnIgnoredMainIsNotAnEntryPoint covers the guard a build-ignored main
+// would disarm. A `main` no build compiles is not a binary, and counting one as
+// an entry point is worse than missing it: the walk starts from a package whose
+// files are all skipped, the corpus comes back empty, and the "no main package"
+// error — whose whole purpose is to say the walk is broken rather than the
+// specification false — never fires.
 func TestAnIgnoredMainIsNotAnEntryPoint(t *testing.T) {
 	fsys := fstest.MapFS{
 		"go.mod":          {Data: []byte("module example.test/lit\n")},
@@ -676,13 +659,12 @@ func TestAMovedAnchorIsReportedOnce(t *testing.T) {
 	}
 }
 
-// TestAGoModWithoutAModulePathIsAnError covers a guard that tested the wrong
-// condition. modfile accepts a go.mod with no `module` line, so one carrying
-// any local replace left the source list non-empty and the guard silent —
-// after which every import of this repository's own packages fails to resolve,
-// the walk yields only the cmd/ entry directories, and every entry reports
-// as drifted prose. "The specification is false" is the one thing a broken walk
-// must never say.
+// TestAGoModWithoutAModulePathIsAnError covers the module-path guard. modfile
+// accepts a go.mod with no `module` line, so one carrying any local replace
+// leaves the source list non-empty — after which every import of this
+// repository's own packages fails to resolve, the walk yields only the cmd/
+// entry directories, and every entry reports as drifted prose. "The
+// specification is false" is the one thing a broken walk must never say.
 func TestAGoModWithoutAModulePathIsAnError(t *testing.T) {
 	fsys := fstest.MapFS{"go.mod": {Data: []byte("go 1.25\n\nreplace example.test/y => ./live\n")}}
 	if _, err := localSources(fsys); err == nil {
@@ -690,12 +672,12 @@ func TestAGoModWithoutAModulePathIsAnError(t *testing.T) {
 	}
 }
 
-// TestTheFirstCollisionStopsTheWalk covers a refusal that did not refuse.
-// ast.Inspect has no abort and the callback returned false from a string
-// literal, which only declines to descend into children a leaf does not have —
-// so the walk continued, kept writing into a corpus it had already decided to
-// reject, and overwrote the recorded error with each later collision until the
-// one reported was the last rather than the first.
+// TestTheFirstCollisionStopsTheWalk covers the refusal. ast.Inspect has no
+// abort, and returning false from a string literal only declines to descend
+// into children a leaf does not have — so a walk that does not stop itself
+// keeps writing into a corpus it has already decided to reject, and overwrites
+// the recorded error with each later collision until the one reported is the
+// last rather than the first.
 //
 // collectFile is called directly rather than through ShippedText because the
 // question is about one file's walk, and routing it through the package BFS

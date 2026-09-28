@@ -1,9 +1,6 @@
 // testbudget enforces the per-package wall-clock budgets in budgets.go against
 // a `go test -json` stream on stdin. It exists so the suite's runtime is an
-// observable that fails the build out loud instead of a number nobody watches:
-// the testperf epic (links-testperf-xxsx) paid down seventeen minutes of
-// accumulated test time that arrived one unwatched second at a time, and whose
-// only signal was a per-package timeout panic indicting an innocent diff.
+// observable that fails the build out loud instead of a number nobody watches.
 // [LAW:no-silent-failure] the budget IS the alarm — a package over budget fails
 // CI naming the package and the overage, never a warning.
 //

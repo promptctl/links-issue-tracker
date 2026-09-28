@@ -26,12 +26,6 @@
 // those three assert what is IN the binary and must not name a module that
 // isn't.
 //
-// Reading pointer: a one-time hand-authored analysis of the full graph lives
-// in LICENSE-ANALYSIS.md / docs/license-inventory.tsv in the repo history.
-// This tool supersedes it in both scopes now — the linked set by generation,
-// the full graph by -graph — so neither number is a thing a human measured
-// once and wrote down.
-//
 // A second mode, -check, is the CI license-policy gate: it builds the same
 // inventory and fails (non-zero exit) if any linked module's classified license
 // is outside the committed policy (policy.json) — the allowlist of permissive
@@ -134,11 +128,11 @@ func main() {
 
 // mode is the single operation this invocation performs. The command line
 // offers the modes as independent booleans for backward compatibility — CI and
-// release-validate.yml have passed `-check` since the gate was built — but two
-// booleans can both be set, and a program that silently honoured one and
-// ignored the other would do something the operator did not ask for. Collapsing
-// them into one value at the boundary makes that state unrepresentable
-// everywhere downstream. [LAW:types-are-the-program]
+// release-validate.yml pass `-check` — but two booleans can both be set, and a
+// program that silently honoured one and ignored the other would do something
+// the operator did not ask for. Collapsing them into one value at the boundary
+// makes that state unrepresentable everywhere downstream.
+// [LAW:types-are-the-program]
 type mode int
 
 const (

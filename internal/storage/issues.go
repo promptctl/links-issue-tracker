@@ -86,11 +86,10 @@ func (u UpdateIssueInput) IsEmpty() bool {
 // Change is THE issue-record mutation input: an optional lifecycle action
 // paired with a field patch and the transition's provenance. nil Action means
 // no transition; empty Fields means no field mutations. The action variant
-// carries exactly its payload (Start the assignee, Close the outcome), so the
-// loose per-action parameters this seam used to thread are unrepresentable.
-// Which axis the action drives — status machine or retention — is the sum's
-// own structure (the StatusAction/RetentionAction partition), never a
-// caller-side mode.
+// carries exactly its payload (Start the assignee, Close the outcome), so loose
+// per-action parameters are unrepresentable. Which axis the action drives —
+// status machine or retention — is the sum's own structure (the
+// StatusAction/RetentionAction partition), never a caller-side mode.
 // [LAW:types-are-the-program]
 //
 // Actor is THE actor for the whole change — one call, one author, recorded on

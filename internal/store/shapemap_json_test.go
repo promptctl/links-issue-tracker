@@ -67,10 +67,10 @@ func aheadColumnMapping() ShapeMapping {
 	}}
 }
 
-// novelAheadDump models the genuine icqp incident shape: a workspace whose schema
-// is AHEAD of the binary's vocabulary because an unmerged migration renamed a
-// domain column. `issues.summary` is the renamed `title`. DeterministicMap must
-// decline it; the operator's mapping recovers it.
+// novelAheadDump models a workspace whose schema is AHEAD of the binary's
+// vocabulary because an unmerged migration renamed a domain column.
+// `issues.summary` is the renamed `title`. DeterministicMap must decline it;
+// the operator's mapping recovers it.
 func novelAheadDump() RawDump {
 	const created = "2026-01-01T00:00:00Z"
 	const closed = "2026-01-02T00:00:00Z"
@@ -140,10 +140,10 @@ func TestShapeMappingJSONStableOrder(t *testing.T) {
 }
 
 // TestShapeMappingJSONStableOrderMultiEmitter locks the canonical wire form for
-// the case the field-name-only sort key missed: a table carrying two emitters into
-// the SAME collection that share field names but differ in source/condition. The
-// encoding must be byte-identical regardless of the emitters' in-memory order, so
-// the same mapping never has two encodings.
+// a table carrying two emitters into the SAME collection that share field names
+// but differ in source/condition. The encoding must be byte-identical
+// regardless of the emitters' in-memory order, so the same mapping never has
+// two encodings.
 func TestShapeMappingJSONStableOrderMultiEmitter(t *testing.T) {
 	t.Parallel()
 	emA := Emitter{Collection: collEventChanges, When: Always{}, Fields: map[string]FieldSource{
@@ -279,8 +279,7 @@ func TestShapeMappingJSONRejectsTrailingData(t *testing.T) {
 // TestDecodedMappingRecoversNovelAheadShape is the end-to-end proof the operator
 // path turns on: a mapping authored as JSON, decoded through the wire form,
 // recovers a workspace the deterministic mapper DECLINES — Doctor-clean, every
-// issue conserved, the title values intact through the rename. This is the icqp
-// deadend's recovery, exercised through the exact artifact the CLI consumes.
+// issue conserved, the title values intact through the rename.
 func TestDecodedMappingRecoversNovelAheadShape(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

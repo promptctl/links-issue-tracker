@@ -14,10 +14,10 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-// The cadence decision is the load-bearing logic the policy ticket adds: only
-// a write command under the on-change policy mirrors. Every other combination
-// — read-mode commands, the opt-in on-push policy — stays silent. The truth
-// table pins all four cells so neither axis can drift into a spurious push.
+// The cadence decision is the load-bearing logic: only a write command under
+// the on-change policy mirrors. Every other combination — read-mode commands,
+// the opt-in on-push policy — stays silent. The truth table pins all four cells
+// so neither axis can drift into a spurious push.
 func TestShouldSyncAfterMutation(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

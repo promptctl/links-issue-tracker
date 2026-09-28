@@ -10,12 +10,10 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-// adoptRemoteTimeout caps the whole adopt. Adopt now CLONES (bulk whole-archive
+// adoptRemoteTimeout caps the whole adopt. Adopt CLONES (bulk whole-archive
 // copy), which is fast — but the cap stays as defense-in-depth: dolt's git-backed
 // transport does not honor context cancellation mid-operation, so a bounded,
 // loud failure always beats any possibility of an unbounded hang on a setup step.
-// (The prior fetch-based adopt routinely spent 20+ minutes re-inflating archive
-// blobs for chunk-by-chunk reads; clone reads each blob once.)
 // [LAW:no-ambient-temporal-coupling] init owns the time budget explicitly here;
 // it does not depend on the remote, the network, or dolt finishing "eventually".
 //
@@ -134,10 +132,11 @@ func adoptRemoteTicketsBlocking(ctx context.Context, ws workspace.Info) initSync
 	progressf("init", "remote %s/%s carries lit data (refs/dolt/*); downloading the backlog now", plan.remote, plan.branch)
 	// The remote advertises lit data (refs/dolt/*) and the local store is empty,
 	// so adopt it by CLONING — the bulk whole-archive transfer the git-backed
-	// medium supports — rather than the chunk-by-chunk fetch pipeline that turned
-	// a real backlog adopt into a 20-minute lockup. The probe connection is
-	// closed; AdoptRemoteByClone takes the exclusive workspace hold and swaps the
-	// Dolt directory in place. [LAW:decomposition] adopt is a clone, not a fetch.
+	// medium supports — rather than the chunk-by-chunk fetch pipeline, which
+	// re-inflates archive blobs for chunk-by-chunk reads where a clone reads
+	// each blob once. The probe connection is closed; AdoptRemoteByClone takes
+	// the exclusive workspace hold and swaps the Dolt directory in place.
+	// [LAW:decomposition] adopt is a clone, not a fetch.
 	if err := store.AdoptRemoteByClone(ctx, ws.DatabasePath, ws.WorkspaceID, plan.remote, plan.url, plan.branch); err != nil {
 		// The remote DID carry data (we checked before cloning), so an empty
 		// store here is a hazard, not a benign result: surface it loudly and name
@@ -238,9 +237,8 @@ func planRemoteAdopt(ctx context.Context, ws workspace.Info) (*adoptClonePlan, i
 	// signal; RemoteHasRefs (any git ref) cannot tell a code-only repo from one
 	// carrying a backlog. A code-only remote (refs but no lit data) is a genuine
 	// empty result, reported silently; a remote that DOES carry data is adopted
-	// by clone. The old silent-empty-despite-data bug is now unrepresentable:
-	// hasData==true always leads to a clone, never to a silent empty store.
-	// [LAW:no-silent-failure] [LAW:types-are-the-program]
+	// by clone. hasData==true always leads to a clone, never to a silent empty
+	// store. [LAW:no-silent-failure] [LAW:types-are-the-program]
 	hasData, dataErr := workspace.RemoteHasDoltData(ctx, ws.RootDir, remote)
 	if dataErr != nil {
 		return nil, initSyncOutcome{State: initSyncFailed, Remote: remote, Branch: branch, Error: dataErr.Error()}
@@ -298,15 +296,13 @@ func gitBackedURLForRemote(gitRemotes []workspace.GitRemote, remote string) stri
 // writeInitSyncLine renders the one human-facing line the adopt step
 // contributes. Adopted is the only state a user must see here; every other
 // outcome, failed included, means the headline already conveys the whole
-// story. A failed adopt no longer reaches this renderer at all — runInit
-// hard-stops and returns the real underlying error before report.Sync is
-// ever built — so writeInitSyncLine now only has one non-silent case to
-// render, and the failure has exactly one channel: the returned command
-// error. [LAW:single-enforcer] buildNote (the dev-vs-release build status,
-// resolved once by the caller) names build staleness at exactly the moment
-// init commits to "adopted" — a stale local binary silently missing a landed
-// fix was the suspected root cause of the field incident this epic exists to
-// prevent.
+// story. A failed adopt does not reach this renderer at all — runInit
+// hard-stops and returns the real underlying error before report.Sync is ever
+// built — so writeInitSyncLine only has one non-silent case to render, and the
+// failure has exactly one channel: the returned command error.
+// [LAW:single-enforcer] buildNote (the dev-vs-release build status, resolved
+// once by the caller) names build staleness at exactly the moment init commits
+// to "adopted", because a stale local binary can silently miss a landed fix.
 func writeInitSyncLine(w io.Writer, outcome initSyncOutcome, buildNote string) error {
 	if outcome.State != initSyncAdopted {
 		return nil
@@ -319,10 +315,9 @@ func writeInitSyncLine(w io.Writer, outcome initSyncOutcome, buildNote string) e
 // init's remote-adopt decision. It is the only place this outcome is
 // persisted: writeInitSyncLine and remoteSituationLine only render it into the
 // human-facing report/progress output, which nothing reads back after the
-// process exits — the exact gap that let the field incident this epic exists
-// to prevent go unnoticed for ten days. Every state reaches here, not only
-// the two writeInitSyncLine prints, so a benign "started fresh" decision is
-// as durably recorded as an adopt or a failure. [LAW:no-silent-failure]
+// process exits. Every state reaches here, not only the two writeInitSyncLine
+// prints, so a benign "started fresh" decision is as durably recorded as an
+// adopt or a failure. [LAW:no-silent-failure]
 // Called before EnsureDatabase/installHooks/ensureLinksAgentFiles, any of
 // which can still fail and abort `lit init` as a whole — so this record
 // captures only the adopt decision, not a claim that init overall succeeded.

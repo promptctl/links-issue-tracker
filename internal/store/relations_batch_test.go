@@ -121,11 +121,10 @@ func ids(issues []model.Issue) []string {
 	return out
 }
 
-// mergeRelations reunifies the two per-endpoint-column queries into what the
-// old single query returned: each relation once, created_at ascending. The
-// dedupe leg is load-bearing on every real backlog — an edge between two
-// subjects arrives from both queries — and a duplicate here becomes a
-// duplicated child in every bucketed view downstream.
+// mergeRelations reunifies the two per-endpoint-column queries: each relation
+// once, created_at ascending. The dedupe leg is load-bearing on every real
+// backlog — an edge between two subjects arrives from both queries — and a
+// duplicate here becomes a duplicated child in every bucketed view downstream.
 func TestMergeRelationsDedupesAndOrders(t *testing.T) {
 	t.Parallel()
 	at := func(sec int) time.Time { return time.Date(2026, 8, 25, 0, 0, sec, 0, time.UTC) }

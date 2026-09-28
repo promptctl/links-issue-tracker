@@ -20,7 +20,7 @@ import (
 // mints Dolt's tree. Without the refusal, the shared acquisition path's
 // MkdirAll+O_CREATE would fabricate <db>/links/.dolt/noms/LOCK, the snapshot
 // copy's database-dir stat would then pass, and a bogus empty "snapshot"
-// would be minted where the command previously failed clean.
+// would be minted.
 func TestLockDoltJournalExclusiveRefusesUninitializedWorkspace(t *testing.T) {
 	t.Parallel()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
@@ -99,14 +99,14 @@ func TestOpenForReadPendingMigrationUnderJournalHolder(t *testing.T) {
 	}
 }
 
-// TestJournalLockHoldExcludesJournalRecovery pins the contract that closes
-// links-sync-pgct.15: while LockDoltJournalExclusive is held (as the `lit
-// snapshots new` copy holds it for its whole walk), NO concurrent open runs
-// journal crash-recovery I/O — not even a "read" command, because lit never
-// requests a read-only dolt open; read-only is purely the journal lock's
-// contention fallback, and a plain `lit backlog` on an idle store otherwise
-// opens write-capable and truncates a dirty journal (measured 2026-08-20:
-// 98473 -> 98457 bytes, rewritten by a read command).
+// TestJournalLockHoldExcludesJournalRecovery pins the contract: while
+// LockDoltJournalExclusive is held (as the `lit snapshots new` copy holds it
+// for its whole walk), NO concurrent open runs journal crash-recovery I/O — not
+// even a "read" command, because lit never requests a read-only dolt open;
+// read-only is purely the journal lock's contention fallback, and a plain `lit
+// backlog` on an idle store otherwise opens write-capable and truncates a dirty
+// journal (measured 2026-08-20: 98473 -> 98457 bytes, rewritten by a read
+// command).
 //
 // Two arms, and the second is the first's detector: the same dirty journal
 // that stays byte-identical under the hold must actually be truncated by the

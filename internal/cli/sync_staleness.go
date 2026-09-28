@@ -74,26 +74,22 @@ func lastFetchSuccessAge(ws workspace.Info, now time.Time) (age time.Duration, o
 }
 
 // syncStalenessLines renders zero or more prominent warning lines from an
-// already-resolved sync freshness report and last-fetch age — the same silent
-// drift (unpushed local changes, a remote nobody has checked in days) that let
-// the field incident this epic exists to prevent go unnoticed for a week, now
-// surfaced on the ordinary commands an agent actually runs instead of only on
-// `lit doctor`, which nobody runs unasked. Pure over its inputs so the two
-// conditions are unit-testable without a live store, mirroring
-// printSyncFreshness's split from its own resolve step.
+// already-resolved sync freshness report and last-fetch age — silent drift
+// (unpushed local changes, a remote nobody has checked in days) surfaced on the
+// ordinary commands an agent actually runs instead of only on `lit doctor`,
+// which nobody runs unasked. Pure over its inputs so the two conditions are
+// unit-testable without a live store, mirroring printSyncFreshness's split from
+// its own resolve step.
 // [LAW:dataflow-not-control-flow]
 //
-// Scope, deliberately: this checks State() == SyncAhead, not "Ahead > 0" —
-// a persistent SyncDiverged already gets the heavier `<agent-instructions>`
-// SyncFailureError block from the reconcile machinery (owned by
-// links-sync-pgct.4), and printing a second, lighter banner for the same root
-// fact here would compete with that surface rather than add information. It
-// also does not special-case SyncNeverSynced-with-unpushed-local-data — that
-// requires knowing whether the local store holds anything worth protecting,
-// which no cheap signal here answers; the closely related silent-fresh-store
-// bug that could produce that state was fixed in links-sync-pgct.1, and this
-// ticket's own contract covers only "ahead" and "fetch is stale", so a
-// NeverSynced workspace is left to the second condition below (a
+// Scope, deliberately: this checks State() == SyncAhead, not "Ahead > 0" — a
+// persistent SyncDiverged already gets the heavier `<agent-instructions>`
+// SyncFailureError block from the reconcile machinery, and printing a second,
+// lighter banner for the same root fact here would compete with that surface
+// rather than add information. It also does not special-case
+// SyncNeverSynced-with-unpushed-local-data — that requires knowing whether the
+// local store holds anything worth protecting, which no cheap signal here
+// answers; a NeverSynced workspace is left to the second condition below (a
 // never-fetched-in-threshold remote still warns) rather than a speculative
 // third case.
 func syncStalenessLines(report doctorSyncReport, fetchAge time.Duration, fetchAgeKnown bool) []string {
@@ -134,7 +130,7 @@ func fetchStalenessLines(ref string, fetchAge time.Duration, fetchAgeKnown bool)
 }
 
 // syncPushFailureLines renders the loud signal for a workspace whose last push
-// attempt did not land — the condition links-sync-pgct.10 exists to surface.
+// attempt did not land.
 // The ahead-count banner above cannot serve a mutating command: its own commit
 // is pushed only by a mirror that runs after the process exits, so a mutating
 // command is ALWAYS ahead at the moment it would print, and a banner that fires
@@ -178,9 +174,9 @@ func oneLineReason(reason string) string {
 
 // printStalenessWarning resolves build age, sync freshness and last-fetch age
 // (the effects), then prints the resulting lines, one each. A single call adds
-// the whole drift banner to a read command — deliberately the same
-// per-call-site wiring that ticket precedent used rather than a new central
-// hook: each read command that wants this banner adds the call itself.
+// the whole drift banner to a read command — deliberately per-call-site wiring
+// rather than a new central hook: each read command that wants this banner adds
+// the call itself.
 //
 // One banner, not one per kind of drift. Build drift and sync drift are the
 // same fact from the reader's side — "something about this answer is older than
@@ -194,11 +190,11 @@ func oneLineReason(reason string) string {
 func printStalenessWarning(ctx context.Context, w io.Writer, ws workspace.Info, st storage.Store, now time.Time) error {
 	report := resolveDoctorSyncFreshness(ctx, ws, st)
 	fetchAge, fetchAgeKnown := lastFetchSuccessAge(ws, now)
-	// Build drift leads the whole banner (links-build-status-1svs). It is the
-	// deepest of the three: a binary that predates master can be the reason the
-	// sync lines below read the way they do, so a reader who takes it in first
-	// interprets everything after it correctly. It is also the rarest, which is
-	// what makes the top slot affordable.
+	// Build drift leads the whole banner. It is the deepest of the three: a
+	// binary that predates master can be the reason the sync lines below read
+	// the way they do, so a reader who takes it in first interprets everything
+	// after it correctly. It is also the rarest, which is what makes the top
+	// slot affordable.
 	lines := resolveBuildStalenessLines(now)
 	// The push-failure line leads the sync pair: it names the CAUSE (pushes are
 	// failing), which the ahead-count line below only shows the accumulating
@@ -215,13 +211,12 @@ func printStalenessWarning(ctx context.Context, w io.Writer, ws workspace.Info, 
 }
 
 // printMutationSyncStalenessWarning is the staleness banner for mutating
-// commands — the surface links-sync-pgct.10 adds. It runs at the one dispatch
-// seam every mutating command already flows through, after the command's
-// engine has closed, so it reads only the storage-dir markers (push outcome,
-// fetch success): the store-backed ahead count is both unavailable there and,
-// per syncPushFailureLines' rationale, the wrong predicate for a mutating
-// session anyway. A session that only chains mutations against a failing
-// remote now hears about it on its very next command instead of never.
+// commands. It runs at the one dispatch seam every mutating command already
+// flows through, after the command's engine has closed, so it reads only the
+// storage-dir markers (push outcome, fetch success): the store-backed ahead
+// count is both unavailable there and, per syncPushFailureLines' rationale, the
+// wrong predicate for a mutating session anyway. A session that only chains
+// mutations against a failing remote hears about it on its very next command.
 //
 // Write failures are reported to stderr, never returned: the mutation this
 // banner trails is already durable, and an exit code that flips nonzero over

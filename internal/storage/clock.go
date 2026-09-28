@@ -7,13 +7,11 @@ import "time"
 // It exists because a timestamp an engine reaches for is a hidden input: no
 // signature admits it, no caller can choose it, and nothing outside the engine
 // can construct a pair of instants the real clock would never hand out in that
-// combination. Two engine defects escaped through that gap — an export-ordering
-// assertion that passed five runs out of five against a bug reintroduced on
-// purpose, and a listing that ordered created_at by its RFC3339Nano spelling
-// rather than by the instant it denotes — and neither could be stated where
-// they belonged, because the conformance suite reaches an engine only through
-// this package. [LAW:effects-at-boundaries] the clock is supplied at the edge
-// where the engine is built, not read from inside the write path.
+// combination. Without this type, a defect that depends on the instant could
+// not be stated where it belongs, because the conformance suite reaches an
+// engine only through this package. [LAW:effects-at-boundaries] the clock is
+// supplied at the edge where the engine is built, not read from inside the
+// write path.
 //
 // # Why this is core and not a capability
 //
@@ -33,8 +31,7 @@ type Clock func() time.Time
 // every timestamp in the contract carries.
 //
 // Engines call this rather than the function itself, so the normalization has
-// one home instead of one per stamp — there were eighteen of them across the
-// two engines before this existed. [LAW:single-enforcer]
+// one home instead of one per stamp. [LAW:single-enforcer]
 func (c Clock) Now() time.Time { return c().UTC() }
 
 // SystemClock is the real clock, and the one every engine a person opens is

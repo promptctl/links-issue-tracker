@@ -58,7 +58,7 @@ func TestReadConfigReturnsIdentityWithoutWriting(t *testing.T) {
 // TestReadConfigMissingFilePreservesNotExist confirms a missing config surfaces
 // an error that still satisfies errors.Is(os.ErrNotExist) — the property
 // loadOrCreateConfig relies on to tell "no config yet, create one" from a real
-// failure after it was refactored to read through ReadConfig.
+// failure.
 func TestReadConfigMissingFilePreservesNotExist(t *testing.T) {
 	_, err := ReadConfig(filepath.Join(t.TempDir(), "absent", "config.json"))
 	if err == nil {

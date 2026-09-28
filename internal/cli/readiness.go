@@ -31,7 +31,7 @@ type BlockingReason struct {
 // plan's blocked marker.
 // [LAW:one-source-of-truth] A second surface phrasing kinds for itself is a
 // second list to keep current, and the shorter of the two lists is always the
-// one nobody notices — the epic plan carried exactly that gap.
+// one nobody notices.
 // [LAW:no-silent-failure] The default panics rather than rendering a blocking
 // kind as empty text: a fifth kind must fail loudly here instead of arriving on
 // screen as a blank reason or, worse, no reason at all.
@@ -127,7 +127,7 @@ func (r IssueReadiness) DependencyLabels() []string {
 // nothing as an explicit case, not a caller-side skip.
 // [LAW:no-silent-failure] The default panics: every registry kind has a valid
 // role, so the only way here is a zero/corrupt kind — surfaced loudly rather
-// than defaulting to ready (the exact silent path this seam used to have).
+// than defaulting to ready.
 func ClassifyReadiness(anns []annotation.Annotation) IssueReadiness {
 	var r IssueReadiness
 	for _, a := range anns {

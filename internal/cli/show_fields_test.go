@@ -117,7 +117,7 @@ func TestRunShowUnknownFieldReturnsUsageError(t *testing.T) {
 }
 
 // Omitting --field entirely leaves the default full-detail view (header,
-// epic context, siblings, ...) unchanged — the new capability is additive.
+// epic context, siblings, ...) unchanged.
 func TestRunShowWithoutFieldFlagIsUnchanged(t *testing.T) {
 	f := newEpicFixture(t, "Plan epic", "epic body")
 	focus := f.addChild("Focused child")

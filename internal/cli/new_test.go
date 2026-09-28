@@ -12,12 +12,11 @@ import (
 )
 
 // firstIssueID returns the issue ID leading the first row of a mutation
-// command's text summary (printIssueSummary prints "<id> [..] <title>"). With
-// --json removed, text is the sole surface, so a test that needs the
-// created/updated issue extracts its ID here and re-reads the row from the
-// store to assert fields the summary line doesn't carry. Child IDs carry a
-// dotted hash suffix, so this reads the first field verbatim rather than
-// validating against the flat-ID token shape.
+// command's text summary (printIssueSummary prints "<id> [..] <title>"). Text
+// is the sole surface, so a test that needs the created/updated issue extracts
+// its ID here and re-reads the row from the store to assert fields the summary
+// line doesn't carry. Child IDs carry a dotted hash suffix, so this reads the
+// first field verbatim rather than validating against the flat-ID token shape.
 func firstIssueID(t *testing.T, out string) string {
 	t.Helper()
 	for _, line := range strings.Split(out, "\n") {

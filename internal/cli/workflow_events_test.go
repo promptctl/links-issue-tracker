@@ -83,9 +83,8 @@ func TestCommentAddedOccasion(t *testing.T) {
 	}
 }
 
-// TestTransitionOccasionAllFourStatusActions is the done-claim's explicit
-// requirement: every one of the four status transitions dispatches the right
-// event with the right from/to state pair.
+// TestTransitionOccasionAllFourStatusActions: every one of the four status
+// transitions dispatches the right event with the right from/to state pair.
 func TestTransitionOccasionAllFourStatusActions(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

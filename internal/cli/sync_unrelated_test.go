@@ -13,7 +13,7 @@ import (
 
 // TestSyncFailureBlockUnrelatedHistories pins the contract the unrelated-histories
 // class renders: the four standing elements plus a domain WHAT that names the
-// no-common-ancestor reality, resolution steps that name ALL THREE now-built
+// no-common-ancestor reality, resolution steps that name ALL THREE
 // resolutions (both wholesale takes AND the union `combine`), and a BLOCKED
 // escalation — because unrelated histories, like a schema-ahead remote, never merge
 // on a retry; only a deliberate choice resolves them.
@@ -43,9 +43,9 @@ func TestSyncFailureBlockUnrelatedHistories(t *testing.T) {
 	if strings.Contains(block, "still within the window where a divergence is routine") {
 		t.Errorf("unrelated-histories used the routine/aged escalation, which invites an impossible retry:\n%s", block)
 	}
-	// All three resolutions exist now (take local/remote and combine) and each must be
+	// All three resolutions exist (take local/remote and combine) and each must be
 	// named so the agent can act; combine is the keep-everything option and must be
-	// present, no longer deferred as "not yet automated". [LAW:no-silent-failure]
+	// present. [LAW:no-silent-failure]
 	for _, want := range []string{"lit sync reconcile take", "lit sync reconcile combine"} {
 		if !strings.Contains(block, want) {
 			t.Errorf("block does not name the now-built resolution %q:\n%s", want, block)

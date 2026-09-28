@@ -12,10 +12,11 @@ import (
 )
 
 // These tests are the accept/reject table for `--columns`, written out case by
-// case. The bug they close is a silent one: an unknown name used to be dropped
-// and the remaining columns printed under exit 0, so a typo read back as a
-// successful answer to a different question. Nothing but an explicit reject-set
-// catches that, because every wrong answer it produced was well-formed.
+// case. The failure they guard is a silent one: were an unknown name dropped
+// and the remaining columns printed under exit 0, a typo would read back as a
+// successful answer to a different question. Nothing but an explicit
+// reject-set catches that, because every wrong answer it would produce is
+// well-formed.
 
 // listColumnsOutput runs `lit ls --columns expr` against a store holding one
 // issue and returns stdout and the error, so each case can assert on both. A
@@ -36,8 +37,7 @@ func listColumnsOutput(t *testing.T, expr string) (string, error) {
 // TestColumnsRejectsUnknownName is the reject half of the table. The four
 // vocabulary rows carry the most weight: status, description, prompt and lane
 // are all real `lit show --field` names, so they are exactly what someone types
-// after learning the field vocabulary — and `status` is the one from the bug
-// report, where the column is spelled `state`.
+// after learning the field vocabulary.
 func TestColumnsRejectsUnknownName(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -71,15 +71,16 @@ func TestColumnsRejectsUnknownName(t *testing.T) {
 			// Matched against the QUOTED offender, not the bare word. The
 			// message always carries the full valid-columns list, so a bare
 			// substring check is satisfied by an unrelated part of it — "stat"
-			// is inside the "state" this very message advertises, and that row
-			// passed no matter what the code echoed as the offender. Requiring
-			// the quotes puts the match on the one span only the offender fills.
+			// is inside the "state" this very message advertises, so that row
+			// would pass no matter what the code echoed as the offender.
+			// Requiring the quotes puts the match on the one span only the
+			// offender fills.
 			if quoted := fmt.Sprintf("%q", tc.unknown); !strings.Contains(err.Error(), quoted) {
 				t.Errorf("--columns %q error %q does not name the offending column as %s", tc.expr, err, quoted)
 			}
 			// The rejection has to hand back the whole accepted vocabulary;
 			// a bare "unknown column" leaves the caller guessing the spelling
-			// they got wrong, which is how `state` stayed undiscovered.
+			// they got wrong.
 			for _, valid := range sortedColumnNames() {
 				if !strings.Contains(err.Error(), valid) {
 					t.Errorf("--columns %q error %q omits valid column %q", tc.expr, err, valid)
@@ -97,8 +98,7 @@ func TestColumnsRejectsUnknownName(t *testing.T) {
 // TestColumnsAcceptsEveryDeclaredName is the accept half: every name the
 // rejection message advertises has to actually work, or the error is lying
 // about the vocabulary. This is what keeps the accept-set and the renderer from
-// drifting apart again — the drift that left `rank` printable as a field and
-// unprintable as a column.
+// drifting apart.
 func TestColumnsAcceptsEveryDeclaredName(t *testing.T) {
 	for _, name := range sortedColumnNames() {
 		t.Run(name, func(t *testing.T) {
@@ -113,8 +113,9 @@ func TestColumnsAcceptsEveryDeclaredName(t *testing.T) {
 	}
 }
 
-// TestColumnsAcceptsCaseAndSpacing pins the normalization the old parser did, so
-// tightening the boundary did not also start rejecting input that always worked.
+// TestColumnsAcceptsCaseAndSpacing pins the parser's case and spacing
+// normalization, so the strict boundary does not also reject input it
+// normalizes.
 func TestColumnsAcceptsCaseAndSpacing(t *testing.T) {
 	for _, expr := range []string{"ID,TITLE", " id , title ", "Id,Title"} {
 		if _, err := listColumnsOutput(t, expr); err != nil {

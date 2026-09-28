@@ -127,7 +127,7 @@ func TestMidpointErrors(t *testing.T) {
 //
 // Midpoint must refuse exactly the pairs sharing a significant part, with
 // ErrNoRoom, and on every other pair return a valid rank strictly between the
-// bounds. Midpoint("10", "100") once returned "100V", which sorts above both.
+// bounds.
 func TestMidpointStaysStrictlyBetweenItsBounds(t *testing.T) {
 	t.Parallel()
 	strs := []string{""}

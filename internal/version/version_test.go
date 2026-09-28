@@ -112,9 +112,9 @@ func TestBuildAgeComputesFromStampedDate(t *testing.T) {
 
 // TestBuildAgeRejectsUnstampedOrUnparseableDate pins the "never fabricate an
 // age" guard: an empty Date (an unstamped build — e.g. plain `go build` with
-// no ldflags before this ticket) and a malformed Date both report ok=false,
-// so callers never render a bogus "built X ago" for a binary that never
-// recorded a trustworthy timestamp.
+// no ldflags) and a malformed Date both report ok=false, so callers never
+// render a bogus "built X ago" for a binary that never recorded a trustworthy
+// timestamp.
 func TestBuildAgeRejectsUnstampedOrUnparseableDate(t *testing.T) {
 	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
 	for name, date := range map[string]string{
@@ -143,13 +143,12 @@ func TestBuildAgeRejectsFutureDate(t *testing.T) {
 	}
 }
 
-// TestFromSourceReadsStampedOriginNotVersion is the regression pin for
-// links-build-status-1svs. `scripts/install.sh` source mode stamps Version from
-// `git describe`, so the binary this repo installs onto a PATH has IsDev ==
-// false while being built from a working tree. Provenance must come from the
-// stamped Origin, never from the presence of a Version — that inference is what
-// made a `just install` binary present itself as a release and stop reporting
-// its own age.
+// TestFromSourceReadsStampedOriginNotVersion is the regression pin:
+// `scripts/install.sh` source mode stamps Version from `git describe`, so the
+// binary this repo installs onto a PATH has IsDev == false while being built
+// from a working tree. Provenance must come from the stamped Origin, never from
+// the presence of a Version — that inference would make a `just install` binary
+// present itself as a release and stop reporting its own age.
 func TestFromSourceReadsStampedOriginNotVersion(t *testing.T) {
 	origV, origO := Version, Origin
 	t.Cleanup(func() { Version, Origin = origV, origO })

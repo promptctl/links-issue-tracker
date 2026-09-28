@@ -38,10 +38,10 @@ func TestPlatformFromFilenameAcceptReject(t *testing.T) {
 		// Reject: wrong version (someone built two tags into one dist somehow).
 		{"lit_0.2.0_darwin_arm64.tar.gz", "0.1.0", "", false},
 		// Reject: version segment HAS a leading v but caller passed v-less.
-		// This is the producer-mismatch shape that prompted the explicit
-		// note above; if a future workflow drift starts producing v-prefixed
-		// archives, this rejection ensures we notice instead of silently
-		// double-counting platforms.
+		// This is the producer-mismatch shape the explicit note above guards;
+		// if a future workflow drift starts producing v-prefixed archives,
+		// this rejection ensures we notice instead of silently double-counting
+		// platforms.
 		{"lit_v0.1.0_darwin_arm64.tar.gz", "0.1.0", "", false},
 		// Reject: non-archive entries goreleaser might emit (source tarball,
 		// SHA file, the manifest itself).

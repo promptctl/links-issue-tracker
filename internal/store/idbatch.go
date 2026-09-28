@@ -9,8 +9,7 @@ import "strings"
 // O(N^2) range comparisons. Measured over the workable gather, 5x the ids cost
 // 17x the time, with the profile sitting in compareRangeCuts and
 // MySQLRangeColumnExpr.Overlaps rather than in any row scan — the cost is in
-// planning the read, not performing it, which is why it hid behind queries that
-// look like single batched lookups and are.
+// planning the read, not performing it.
 //
 // Splitting the same ids into fixed batches makes the total O(N*K) for a
 // constant K, which is linear in N, bought with one round trip per batch.
@@ -54,9 +53,6 @@ import "strings"
 //
 // [LAW:one-source-of-truth] The id-keyed reads that batch share this number, so
 // two call sites cannot drift into different ideas of what "too many" means.
-// Those are the reads on the workable gather's path — the issue lookup, both
-// relation endpoint queries, the label load under hydrateIssues and the
-// lifecycle children query — plus the three the sweep below added.
 //
 // THE RULE, for whoever writes the next id-keyed read: an `IN (...)` list may
 // carry a number of elements bounded by something, and there are three ways to
@@ -85,39 +81,36 @@ import "strings"
 //
 // It is the third kind rather than the second because ListIssues already
 // batches on the id axis, and a second batched axis is a product: |A|/K x |I|/K
-// round trips for an answer needing |I|/K. The parent filter had that same
-// problem and is resolved by collapsing onto one axis before any row is read
-// (childIDsOfParents); the assignee column has no such collapse available. So
-// when a caller-derived assignee list does appear, the move is to narrow it
-// before the store sees it, not to batch a second axis here.
+// round trips for an answer needing |I|/K. The parent filter would have that
+// same problem and is resolved by collapsing onto one axis before any row is
+// read (childIDsOfParents); the assignee column has no such collapse
+// available. So when a caller-derived assignee list does appear, the move is to
+// narrow it before the store sees it, not to batch a second axis here.
 //
 // Batching is sound only where the query's answer is the concatenation of its
 // batches' answers, and two shapes fail that test:
 //
 //   - A `NOT IN` exclusion inverts under splitting: each batch returns the very
-//     rows the others meant to exclude. Both of ranking.go's frame queries were
-//     that shape. Neither batches, and neither needs to — the exclusion left
-//     SQL entirely (see nearestRankOutside), which is the better answer wherever
-//     it is available, because it adds no round trips at all.
+//     rows the others meant to exclude. ranking.go's frame queries keep the
+//     exclusion out of SQL entirely (see nearestRankOutside), which is the
+//     better answer wherever it is available, because it adds no round trips at
+//     all.
 //   - An `ORDER BY ... LIMIT` decided in SQL answers a question about the whole
 //     set, which no batch holds. ListIssues is safe from this by construction
 //     and not by luck: it carries no SQL ORDER BY and no SQL LIMIT, because the
 //     comparator reads hydrated values the query never sees. Its sort and cap
 //     run in Go over the union of the batches.
 //
-// The two filters that made ListIssues look unbatchable were read wrong once
-// already, and the correction is worth stating: an `IN` under an EXISTS
-// subquery recombines fine, because existence over a union is the union of the
-// existences. ListIssues collapses its parent filter onto its id filter anyway
-// (childIDsOfParents), so it batches over one id set rather than the product of
-// two.
+// An `IN` under an EXISTS subquery recombines fine, because existence over a
+// union is the union of the existences. ListIssues collapses its parent filter
+// onto its id filter anyway (childIDsOfParents), so it batches over one id set
+// rather than the product of two.
 //
-// Swept 2026-09-20 for links-perf-kw6z.2: every `IN (...)` in internal/store is
-// now one of the three kinds above, and each one that is not batched names the
-// domain or the provenance that bounds it where it is written. Nothing fails the build when a new unbounded id list is
-// added, and deliberately so — the ticket asks for the latency budget to catch
-// this class, not a pattern-matcher over SQL text that would be a second, drifting
-// copy of the rule above.
+// Every `IN (...)` in internal/store is one of the three kinds above, and each
+// one that is not batched names the domain or the provenance that bounds it
+// where it is written. Nothing fails the build when a new unbounded id list is
+// added, and deliberately so: a pattern-matcher over SQL text would be a
+// second, drifting copy of the rule above.
 const idBatchSize = 16
 
 // idBatch is an id list short enough to be safe as one `IN (...)` clause.
@@ -161,8 +154,7 @@ type idBatch []string
 // placeholders alone, without the parentheses — and the args that fill it.
 //
 // Returning both together is what keeps them in step: the count of `?` and the
-// count of args are one fact, and the hand-rolled loops this replaces each held
-// it twice.
+// count of args are one fact.
 func (b idBatch) inList() (string, []any) {
 	args := make([]any, len(b))
 	for i, id := range b {
@@ -176,12 +168,12 @@ func (b idBatch) inList() (string, []any) {
 //
 // The dedupe is what keeps batching behaviour-preserving, and it belongs here
 // rather than in each caller. `IN (a, ..., a)` answers once however many times
-// a is written, so the single clause this replaces was indifferent to repeats;
-// batches are not, and two copies of one id falling either side of a boundary
-// come back as two rows. Downstream that is not an error anywhere — labels
-// accumulate into a shared map and would list the same label twice, and a
-// container would compose a doubled child list and report one child of two
-// done. Deduping here means no caller can be written that has that bug.
+// a is written, so a single clause is indifferent to repeats; batches are not,
+// and two copies of one id falling either side of a boundary come back as two
+// rows. Downstream that is not an error anywhere — labels accumulate into a
+// shared map and would list the same label twice, and a container would
+// compose a doubled child list and report one child of two done. Deduping here
+// means no caller can be written that has that bug.
 // [LAW:parse-dont-validate]
 //
 // An empty input yields no batches rather than one empty batch, so a caller's
@@ -191,23 +183,20 @@ func (b idBatch) inList() (string, []any) {
 // Splitting one statement into several gives up whatever consistency the single
 // statement had: a writer landing between batch k and k+1 leaves the result
 // carrying some subjects as they stood before the write and others as they
-// stood after, and nothing errors. That window is widened here rather than
-// opened. The reads this serves were already several statements — the relation
-// gather runs a src_id query, a dst_id query, and a separate issue lookup, with
-// no transaction over them — so no caller had a snapshot to lose. Restoring one
-// means a read transaction spanning all three, not the batch loop alone, which
-// is why it is not attempted here. Tracked as links-scale-6iiv.
+// stood after, and nothing errors. The reads this serves are several
+// statements — the relation gather runs a src_id query, a dst_id query, and a
+// separate issue lookup, with no transaction over them — so no caller has a
+// snapshot to lose. Providing one means a read transaction spanning all three,
+// not the batch loop alone, which is why it is not attempted here. Tracked as
+// links-scale-6iiv.
 //
-// ListIssues is the case worth stating separately, because it looks like a
-// counterexample and is not quite one. Its row scan WAS a single statement, and
-// under an id filter it is now one per batch, so which rows match is no longer
-// decided at one instant. But its RESULT was never a snapshot: hydrateIssues
-// runs the label load and the lifecycle-children query afterwards, outside any
-// transaction, so a write landing between the scan and the hydration already
-// produced a row carrying its own old identity and its new labels. The scan was
-// the last atomic thing in it, and what it bounded was membership, not content.
-// Same ticket, same fix — one read transaction over the whole call, not a
-// narrower batch loop.
+// ListIssues is the case worth stating separately. Under an id filter its row
+// scan is one statement per batch, so which rows match is not decided at one
+// instant. But its RESULT is not a snapshot either: hydrateIssues runs the
+// label load and the lifecycle-children query afterwards, outside any
+// transaction, so a write landing between the scan and the hydration produces
+// a row carrying its own old identity and its new labels. Same ticket, same
+// fix — one read transaction over the whole call, not a narrower batch loop.
 func idBatches(ids []string) []idBatch {
 	unique := dedupeStrings(ids)
 	if len(unique) == 0 {

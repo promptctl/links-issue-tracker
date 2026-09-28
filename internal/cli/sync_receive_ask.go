@@ -13,15 +13,12 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-// The inline receive asks before it fetches. Every 5 minutes the first command
-// to run used to pay a full DOLT_FETCH — 4.9s measured on `lit backlog` on
-// 2026-09-26, against 0.4s for the commands around it — to learn the remote
-// had not moved: 41 of 41 receive traces on 2026-08-25 found the store already
-// up to date. One `git ls-remote <remote> refs/dolt/*` answers the same
-// question with no transfer and no store open (1.2–1.3s over ssh to GitHub,
-// 0.5–0.6s over https, measured 2026-09-27), so the fetch and the reconcile
-// behind it run only when the advertisement differs from what the last
-// settled receive recorded.
+// The inline receive asks before it fetches, rather than paying a full
+// DOLT_FETCH to learn the remote has not moved. One `git ls-remote <remote>
+// refs/dolt/*` answers the same question with no transfer and no store open
+// (1.2–1.3s over ssh to GitHub, 0.5–0.6s over https, measured 2026-09-27), so
+// the fetch and the reconcile behind it run only when the advertisement
+// differs from what the last settled receive recorded.
 //
 // The record says what was last RECEIVED, never what was last seen: it is
 // written only after a receive settled cleanly — the DOLT_FETCH returned
@@ -35,17 +32,15 @@ import (
 // restored snapshot never inherits a record that says more than it holds. A
 // question that cannot be answered — the remote unreachable, the record
 // unreadable — is not "nothing changed": it is traced and the full fetch
-// runs, exactly as it did before the question existed, and the previous
-// record stands. [LAW:no-silent-failure]
+// runs, and the previous record stands. [LAW:no-silent-failure]
 //
 // A push writes the record too, because a push moves the remote as surely as
-// a peer does: before it did, every push this checkout made (the mirror after
-// each write, `lit sync push`) made the next receive see a moved remote and
-// fetch, only to find the store already held everything (links-scale-om3r.1tg:
-// 10 of 12 receives fetched, one lapsed `lit backlog` took 7.4s). A push that
-// landed without being superseded asks the remote what it now advertises and
-// records it only when the store's own git mirror holds every advertised
-// commit (provePushedAdvertisement). The remote's head is then the push's own
+// a peer does: otherwise every push this checkout makes (the mirror after each
+// write, `lit sync push`) would make the next receive see a moved remote and
+// fetch, only to find the store already holds everything. A push that landed
+// without being superseded asks the remote what it now advertises and records
+// it only when the store's own git mirror holds every advertised commit
+// (provePushedAdvertisement). The remote's head is then the push's own
 // write, never a peer's later push that the mirror has never seen, so the
 // record still never leads the store.
 

@@ -39,8 +39,7 @@ func helpText(name string) string {
 // helpPage composes the one help layout every command renders: the long-form
 // description, then the synopsis line that introduces the command's surface —
 // a leaf's "Usage of <cmd>:" above its flag table, or a family's usage line.
-// A command with no description renders the synopsis alone, exactly as it did
-// before there was anywhere to put one.
+// A command with no description renders the synopsis alone.
 //
 // [LAW:single-enforcer] The two help-answering paths — parseFlagSet's leaf
 // render and Run's HelpRequestedError render — compose their page here, so

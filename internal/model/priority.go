@@ -27,11 +27,8 @@ const (
 // ParsePriorityName inverts it, Priorities lists it — so the word a read
 // surface prints is by construction a word the write flag accepts.
 //
-// Those two directions used to be written out separately: the --priority flag
-// took an int while every read surface printed a word, so the value an agent
-// read off `lit show` could not be pasted into the flag that set it
-// (links-cli-bvko). Extending the domain is an edit to this table and nowhere
-// else. [LAW:one-source-of-truth]
+// Extending the domain is an edit to this table and nowhere else.
+// [LAW:one-source-of-truth]
 var priorityVocabulary = []struct {
 	value Priority
 	name  string

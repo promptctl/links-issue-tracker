@@ -71,17 +71,17 @@ func receiveInline(ctx context.Context, ws workspace.Info) {
 	}
 
 	// One deadline spans the question and the fetch it may lead to, so a remote
-	// that hangs costs the command what it cost before the question existed,
-	// never twice that. The deadline is the store's: the fetch holds the store's
-	// LOCK for its whole run, so the store sizes every co-resident wait against
-	// it. [LAW:no-ambient-temporal-coupling]
+	// that hangs costs the command one deadline, never twice that. The
+	// deadline is the store's: the fetch holds the store's LOCK for its whole
+	// run, so the store sizes every co-resident wait against it.
+	// [LAW:no-ambient-temporal-coupling]
 	timeoutCtx, cancel := context.WithTimeout(ctx, store.InlineReceiveDeadline)
 	defer cancel()
 
 	observed, askErr := askRemote(timeoutCtx, ws, gitRemotes)
 	if askErr != nil {
-		// "Could not tell" is not "nothing changed": say so, then fetch as the
-		// receive always has. [LAW:no-silent-failure]
+		// "Could not tell" is not "nothing changed": say so, then fetch.
+		// [LAW:no-silent-failure]
 		if err := recordReceiveTrace(ws, receiveDecisionRemoteCheckFailed, "error", askErr.Error(),
 			map[string]string{"error": askErr.Error()}); err != nil {
 			fmt.Fprintf(os.Stderr, "lit: automatic receive trace not recorded: %v\n", err)
@@ -125,9 +125,9 @@ func receiveInline(ctx context.Context, ws workspace.Info) {
 // the outcome's data (inlineSyncFailure), and the surfacing itself lives here,
 // behind a named boundary. The command's stdout is already produced and its local
 // reads still serve, so this neither corrupts output nor fails the command — but it
-// can no longer read as an ignorable line the way the raw "will retry" error once
-// did. [LAW:decomposition] [LAW:no-silent-failure] [LAW:single-enforcer] one
-// contract, whether the failure flows out as a returned error or is printed here.
+// cannot read as an ignorable line. [LAW:decomposition] [LAW:no-silent-failure]
+// [LAW:single-enforcer] one contract, whether the failure flows out as a returned
+// error or is printed here.
 //
 // The inline receive runs after nearly every command, which makes this seam the
 // owner channel's workhorse (links-sync-pgct.4): a surfaced divergence notifies
@@ -374,8 +374,7 @@ func performInlineReconcile(ctx context.Context, session syncSession, ws workspa
 	// The durable, unconditional counterpart — same reasoning as performSyncReceive's:
 	// this reconcile is reached from an inline receive that commonly runs with no
 	// automation trigger set, so without this call it would otherwise leave no
-	// durable record of the exact decision (linearized / prose-pending / unrelated)
-	// that the field incident's silent divergence turned on.
+	// durable record of the exact decision (linearized / prose-pending / unrelated).
 	reconcileDecision := string(result.State)
 	if reconcileErr != nil {
 		reconcileDecision = "error"
@@ -446,12 +445,11 @@ func receiveReasonForState(state storage.SyncReceiveState) string {
 // recordReceiveTrace writes the two traces every automatic-receive decision
 // leaves: the LNKS_AUTOMATION_TRIGGER-gated automation trace, and the durable
 // sync trace an interactive command's receive would otherwise never leave —
-// maybeAutoSyncAfterCommand sets no trigger, and that gap is what let the
-// field incident this epic exists to prevent go unnoticed for ten days. The
-// automation trace's write error is returned for the caller to surface
-// alongside its outcome (the receive has no reader for a trace ref, unlike
-// the pre-push hook); the sync trace reports its own. [LAW:single-enforcer]
-// one writer, whatever the receive decided.
+// maybeAutoSyncAfterCommand sets no trigger. The automation trace's write
+// error is returned for the caller to surface alongside its outcome (the
+// receive has no reader for a trace ref, unlike the pre-push hook); the sync
+// trace reports its own. [LAW:single-enforcer] one writer, whatever the
+// receive decided.
 func recordReceiveTrace(ws workspace.Info, decision, status, reason string, metadata map[string]string) error {
 	_, traceRecordErr := maybeRecordAutomatedCommandTrace(ws, receiveTraceCommand, receiveTraceSideEffect, status, reason, metadata)
 	recordSyncTraceLogged(ws, syncTraceRecord{

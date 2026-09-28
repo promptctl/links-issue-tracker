@@ -76,8 +76,7 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 		status:      model.StatusView{Value: model.StateOpen},
 		retention:   model.Live{},
 	}
-	// Placement runs before the record is committed to e.issues. place became
-	// fallible when it started dispatching through orderEdgeFor, and a failure
+	// Placement runs before the record is committed to e.issues. A failure
 	// after the map write would strand the record in e.issues while absent from
 	// e.order — findable by GetIssue, hydrated through a missing pos key, and so
 	// reported at a fabricated rank. place reads only e.order, so ordering the
@@ -114,17 +113,14 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 // default satisfies the frame-local reading for free, and scoping it would
 // drop a first child into the middle of the order instead. The top is the
 // frame's: leading the whole order is not leading my siblings, and a child
-// filed at slot zero led the backlog while claiming only to lead its epic
-// (links-rank-t2vl). Each edge carries its own population, so the choice is
-// made once, in orderEdgeFor, rather than tested again here.
+// filed at slot zero would lead the backlog while claiming only to lead its
+// epic. Each edge carries its own population, so the choice is made once, in
+// orderEdgeFor, rather than tested again here.
 // [LAW:dataflow-not-control-flow]
 func (e *Engine) place(id string, f storage.Frame, placement storage.RankPlacement) error {
 	// The placement is dispatched before the population is even built, so an
 	// unrecognized one is refused the same way whether the workspace is empty or
-	// full. Answering the empty order first — the shortcut this had — skipped the
-	// dispatch entirely, so the very first issue in a workspace was created with
-	// any placement at all while the second was correctly refused.
-	// [LAW:dataflow-not-control-flow]
+	// full. [LAW:dataflow-not-control-flow]
 	edge, err := orderEdgeFor(placement)
 	if err != nil {
 		return err
@@ -137,11 +133,11 @@ func (e *Engine) place(id string, f storage.Frame, placement storage.RankPlaceme
 		// for the same thing and the placement cannot decide the slot. What
 		// can is the frame itself: a first child belongs beside the issue that
 		// contains it, so it lands immediately after it. Filing it at the end
-		// of the whole order instead — what this did — reads as "last" in
-		// every view that sorts a non-epic parent's child by its own position,
-		// which is the opposite of what --top asked for. The SQL engine says
-		// the same thing in keys: the container's own key is the one an empty
-		// frame offers to sit beside. [LAW:one-source-of-truth]
+		// of the whole order instead reads as "last" in every view that sorts
+		// a non-epic parent's child by its own position, which is the opposite
+		// of what --top asked for. The SQL engine says the same thing in keys:
+		// the container's own key is the one an empty frame offers to sit
+		// beside. [LAW:one-source-of-truth]
 		slot, err := e.slotInsideContainer(f)
 		if err != nil {
 			return err

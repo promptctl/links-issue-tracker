@@ -56,11 +56,11 @@ type wireComponent struct {
 		// grant it resolves for the coordinate on its own.
 		Acknowledgement string `json:"acknowledgement"`
 	} `json:"licenses"`
-	// The curated licensing note's home, as of the split that took it out of
-	// description. Decoded as the flat name/value list CycloneDX defines rather
-	// than as a map, because a map would silently collapse a duplicate name —
-	// and TestSBOMPropertyNamesAreUnique below asserts there is exactly one, an
-	// assertion a map decode would make unwritable.
+	// The curated licensing note's home. Decoded as the flat name/value list
+	// CycloneDX defines rather than as a map, because a map would silently
+	// collapse a duplicate name — and TestSBOMPropertyNamesAreUnique below
+	// asserts there is exactly one, an assertion a map decode would make
+	// unwritable.
 	Properties []struct {
 		Name  string `json:"name"`
 		Value string `json:"value"`
@@ -98,7 +98,7 @@ func (c wireComponent) property(name string) (string, bool) {
 // `+` must be percent-encoded in the purl, and an unclassified license that
 // must NOT become a fabricated license entry.
 // PackageURL is set exactly as buildEntries would set it (goModulePURL), since
-// buildSBOM now reads the precomputed field rather than recomputing it.
+// buildSBOM reads the precomputed field rather than recomputing it.
 var synthEntries = []Entry{
 	{Module: Module{Path: "github.com/dolthub/dolt/go", Version: "v0.40.5"}, LicenseName: "Apache-2.0", PackageURL: goModulePURL("github.com/dolthub/dolt/go", "v0.40.5")},
 	{Module: Module{Path: "github.com/aliyun/aliyun-oss-go-sdk", Version: "v3.0.2+incompatible"}, LicenseName: "MIT", PackageURL: goModulePURL("github.com/aliyun/aliyun-oss-go-sdk", "v3.0.2+incompatible")},
@@ -314,12 +314,12 @@ func TestBuildSBOMDeterministic(t *testing.T) {
 	}
 }
 
-// TestSBOMEndToEndCoversDolt is this ticket's acceptance criterion as a fast,
-// offline-free-of-cyclonedx-cli test: generate the SBOM from the REAL linked
-// module set and confirm it lists github.com/dolthub/dolt at the pinned
-// version resolved from the build, with a matching purl. The release workflow
-// additionally runs `cyclonedx validate` against the shipped file; this proves
-// the content contract without that external tool.
+// TestSBOMEndToEndCoversDolt is a fast, offline-free-of-cyclonedx-cli test:
+// generate the SBOM from the REAL linked module set and confirm it lists
+// github.com/dolthub/dolt at the pinned version resolved from the build, with
+// a matching purl. The release workflow additionally runs `cyclonedx validate`
+// against the shipped file; this proves the content contract without that
+// external tool.
 func TestSBOMEndToEndCoversDolt(t *testing.T) {
 	t.Parallel()
 	entries := realEntries(t)
@@ -419,10 +419,9 @@ func componentsByName(bom wireBOM) map[string]wireComponent {
 	return byName
 }
 
-// TestSBOMPedigreeRecordsBothReplacementShapes is links-licensing-c0ce.15's
-// acceptance criterion at the unit level: a component whose source came from a
-// `replace` directive discloses where it came from, in the CycloneDX field
-// defined for it.
+// TestSBOMPedigreeRecordsBothReplacementShapes: a component whose source came
+// from a `replace` directive discloses where it came from, in the CycloneDX
+// field defined for it.
 //
 // The two shapes render DIFFERENTLY on purpose, and the difference is the point
 // rather than an inconsistency to tidy away. A module replacement has a
@@ -482,9 +481,8 @@ func TestSBOMPedigreeRecordsBothReplacementShapes(t *testing.T) {
 		if !strings.Contains(c.Pedigree.Notes, "No descendant component is recorded") {
 			t.Errorf("pedigree notes do not explain the absent component: %q", c.Pedigree.Notes)
 		}
-		// The same containment claim bundle.go was corrected to drop. A replace
-		// target may be ../sibling or absolute, so the SBOM may not say the
-		// copy sits inside this repository either.
+		// A replace target may be ../sibling or absolute, so the SBOM, like the
+		// bundle, may not say the copy sits inside this repository.
 		for _, claim := range []string{"inside lit's own repository", "repository-relative"} {
 			if strings.Contains(c.Pedigree.Notes, claim) {
 				t.Errorf("pedigree notes claim %q, which a ../sibling or absolute replace target would falsify: %q", claim, c.Pedigree.Notes)
@@ -546,10 +544,10 @@ func TestSBOMPedigreeRecordsBothReplacementShapes(t *testing.T) {
 	})
 }
 
-// TestSBOMDisclosesEveryReplacementInTheRealBuild is the guard the ticket asks
-// for, run against what lit actually links rather than a fixture: a `replace`
-// added to go.mod tomorrow cannot ship as if it were upstream, because the
-// component it produces will have no pedigree and this fails.
+// TestSBOMDisclosesEveryReplacementInTheRealBuild is the guard, run against
+// what lit actually links rather than a fixture: a `replace` added to go.mod
+// tomorrow cannot ship as if it were upstream, because the component it
+// produces will have no pedigree and this fails.
 //
 // It is driven from the inventory rather than from a list of the three
 // substitutions that exist today. A hardcoded list is a second place to
@@ -607,8 +605,7 @@ func TestSBOMDisclosesEveryReplacementInTheRealBuild(t *testing.T) {
 
 	// lit's go.mod carries three `replace` directives today. A zero here would
 	// mean the test walked an inventory that no longer reports substitutions at
-	// all — a passing test that proves nothing, which is the failure mode this
-	// whole ticket is about. [LAW:no-silent-failure]
+	// all — a passing test that proves nothing. [LAW:no-silent-failure]
 	if replaced == 0 {
 		t.Fatal("no replaced modules found in the linked set; the disclosure went unverified")
 	}
@@ -617,7 +614,7 @@ func TestSBOMDisclosesEveryReplacementInTheRealBuild(t *testing.T) {
 // TestSBOMPedigreeRefusesAnUnknownKind is componentPedigree's half of the
 // exhaustiveness guarantee. String()'s arm is tested next door; this one
 // matters independently because a pedigree silently omitted is a component that
-// ships as if it were upstream — the exact defect this ticket removed.
+// ships as if it were upstream.
 func TestSBOMPedigreeRefusesAnUnknownKind(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {

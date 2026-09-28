@@ -26,12 +26,12 @@ import (
 //     file, a workflows directory, a Go module — present in this checkout for
 //     the same reason it is present in theirs.
 //
-// The second group is the correction to this gate's first premise. "Tracked
-// here" was read as "only here", which is true of `docs/` and `internal/` and
-// false of `.gitignore`: the day help text legitimately says "add `.lit/` to
-// your `.gitignore`", the gate would have refused it while asserting the
-// reader has no such path — a false refusal prescribing a fix that does not
-// apply. [FRAMING:representation] the map has to match the territory in both
+// The second group exists because "tracked here" is not "only here": that is
+// true of `docs/` and `internal/` and false of `.gitignore`, and help text that
+// legitimately says "add `.lit/` to your `.gitignore`" would otherwise be
+// refused while asserting the reader has no such path — a false refusal
+// prescribing a fix that does not apply.
+// [FRAMING:representation] the map has to match the territory in both
 // directions, and the forbidden property is lit-specific, never merely tracked.
 var aConsumerRepoPlausiblyHasThis = map[string]bool{
 	"AGENTS.md":  true, // written by lit init
@@ -94,8 +94,8 @@ func repoOnlyNames(t *testing.T, root string) []string {
 //
 // The gate covers the whole help surface at once — every advertised command's
 // rendered help, the embedded long-form descriptions, and the guidance
-// templates `lit quickstart` prints — because the bug it pins out appeared in
-// all three at the same time and is one mistake, not three.
+// templates `lit quickstart` prints — because the mistake it pins out can
+// appear in all three at once and is one mistake, not three.
 func TestHelpNeverNamesAPathOnlyLitsOwnRepoHas(t *testing.T) {
 	root := mustRepoRoot(t)
 	forbidden := repoOnlyNames(t, root)
@@ -241,9 +241,9 @@ func userFacingStringLiterals(t *testing.T, root string) map[string]string {
 					}
 					// Keyed by line AND column: a message and its separator commonly
 					// share a line — `fmt.Sprintf("... %s", strings.Join(x, ", "))` —
-					// and a line-only key kept whichever came last, which is the
-					// `", "`. That silently dropped 18% of the shipped literals,
-					// the usage errors this scan exists for among them.
+					// and a line-only key would keep whichever came last, which
+					// is the `", "`, silently dropping the usage errors this
+					// scan exists for.
 					// [LAW:one-source-of-truth] one key per literal, not per line.
 					pos := fset.Position(lit.Pos())
 					literals[fmt.Sprintf("%s:%d:%d", filepath.ToSlash(rel), pos.Line, pos.Column)] = value
@@ -292,10 +292,7 @@ func renderedHelpPages(t *testing.T) map[string]string {
 }
 
 // `lit help <cmd>` and `lit <cmd> --help` are two spellings of one question, so
-// they must not be two answers. They were: cobra rendered the first from a Long
-// description and its own empty flag set — telling a reader that `lit import`
-// accepts only `--help` — while the second rendered the leaf's real flags and no
-// description. [LAW:one-source-of-truth]
+// they must not be two answers. [LAW:one-source-of-truth]
 func TestHelpCommandAndHelpFlagRenderTheSamePage(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")
@@ -350,8 +347,8 @@ func TestHelpTextPanicsOnAMissingFile(t *testing.T) {
 
 // `lit help <unknown>` must refuse, not answer. Rewriting the topic into
 // `lit <unknown> --help` would hand it to cobra's root help, which prints the
-// whole command list and exits 0 (links-cli-yn14) — the question "what is this
-// command" answered with an answer-shaped non-answer.
+// whole command list and exits 0 — the question "what is this command"
+// answered with an answer-shaped non-answer.
 func TestHelpRefusesATopicThatNamesNoCommand(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")
@@ -382,10 +379,10 @@ func TestHelpRefusesATopicThatNamesNoCommand(t *testing.T) {
 
 // `lit help help` asks about cobra's own built-in command. Cobra registers it
 // lazily inside ExecuteC, so a registered-command scan that runs earlier does
-// not see it — and the first version of this rewrite refused `lit help help`
-// as unknown while its own remediation told the caller to run
-// `lit help <command>`. The advertised-path tests cannot catch that: `help` is
-// not a registry row, so nothing else in this package ever types it.
+// not see it, and would refuse `lit help help` as unknown while its own
+// remediation tells the caller to run `lit help <command>`. The
+// advertised-path tests cannot catch that: `help` is not a registry row, so
+// nothing else in this package ever types it.
 func TestHelpAnswersForCobrasOwnHelpCommand(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")

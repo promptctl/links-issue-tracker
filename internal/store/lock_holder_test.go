@@ -73,10 +73,10 @@ func blockHolderDir(t *testing.T, lockPath string) {
 	}
 }
 
-// TestContentionErrorNamesTheLiveHolder is this file's headline contract, and
-// the one the reported bug turned on: a command that cannot take a lock must
-// say WHO is holding it — pid, command, and how long — rather than leaving the
-// operator to guess between a wedged holder, a slow query, and a hung fetch.
+// TestContentionErrorNamesTheLiveHolder is this file's headline contract: a
+// command that cannot take a lock must say WHO is holding it — pid, command,
+// and how long — rather than leaving the operator to guess between a wedged
+// holder, a slow query, and a hung fetch.
 //
 // The holder is a second hold taken in this process: two open file
 // descriptions contend through flock exactly as two processes do, so the
@@ -112,10 +112,10 @@ func TestContentionErrorNamesTheLiveHolder(t *testing.T) {
 	}
 }
 
-// TestWaitAnnouncesItselfRepeatedly pins the other half of the report: silence
-// is what made a wedged lock indistinguishable from slow work, so a wait that
-// outlasts the grace reports itself, names its holder, and KEEPS reporting —
-// one line that scrolled away fifteen minutes ago is the same silence.
+// TestWaitAnnouncesItselfRepeatedly pins the other half: silence is what makes
+// a wedged lock indistinguishable from slow work, so a wait that outlasts the
+// grace reports itself, names its holder, and KEEPS reporting — one line that
+// scrolled away fifteen minutes ago is the same silence.
 func TestWaitAnnouncesItselfRepeatedly(t *testing.T) {
 	notices := captureLockNotices(t, 10*time.Millisecond, 10*time.Millisecond)
 	ctx := context.Background()
@@ -157,15 +157,14 @@ func TestWaitAnnouncesItselfRepeatedly(t *testing.T) {
 // is the point. The reporter fires on wall-clock elapsed, so a grace set near
 // an uncontended acquisition's own duration hands the verdict to the
 // scheduler: this test's premise is that the acquisition never waits, and a
-// 10ms grace made ordinary delay -- a parallel package, a loaded runner -- into
-// a printed line and a red test. It failed exactly that way against a full
-// `go test ./...`, reporting a wait on a lock held by the acquirer's own pid.
-// An hour is a grace an uncontended acquisition cannot reach on any machine,
-// so the only thing that can print here is the defect being pinned.
+// 10ms grace would make ordinary delay -- a parallel package, a loaded
+// runner -- into a printed line and a red test. An hour is a grace an
+// uncontended acquisition cannot reach on any machine, so the only thing that
+// can print here is the defect being pinned.
 //
-// The reporter's stop is not asserted here any more; it is a contract of
-// announceLockWait rather than of acquisition, and
-// TestStoppedNoticeReporterStaysStopped pins it directly and without a race.
+// The reporter's stop is a contract of announceLockWait rather than of
+// acquisition, and TestStoppedNoticeReporterStaysStopped pins it directly and
+// without a race.
 func TestPromptAcquisitionAnnouncesNothing(t *testing.T) {
 	notices := captureLockNotices(t, time.Hour, time.Hour)
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
@@ -329,9 +328,9 @@ func TestUnrecordedHolderIsReportedAsSuch(t *testing.T) {
 }
 
 // TestSharedHoldersAreAllNamed pins that the account is complete, not a
-// sample. The reported wedge was a shared holder, and an exclusive acquirer
-// blocked behind N readers needs all N — an account naming one of three sends
-// its reader to kill one process and wait out two it never heard about.
+// sample. An exclusive acquirer blocked behind N readers needs all N — an
+// account naming one of three sends its reader to kill one process and wait
+// out two it never heard about.
 func TestSharedHoldersAreAllNamed(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -726,12 +725,11 @@ func TestCommitContentionNamesTheHolder(t *testing.T) {
 	}
 }
 
-// TestBeaconContentionNamesTheSquatter pins the one wrapper that built its own
+// TestBeaconContentionNamesTheSquatter pins the one wrapper that builds its own
 // message rather than carrying the account out. A foreign process holding the
-// beacon past every probe window is the case where naming it matters most, and
-// it was the only path where the answer was dropped. The sentinel stays
-// un-propagated — that classification is deliberate — so the account has to
-// travel as text, and both halves are pinned here together.
+// beacon past every probe window is the case where naming it matters most. The
+// sentinel stays un-propagated — that classification is deliberate — so the
+// account has to travel as text, and both halves are pinned here together.
 func TestBeaconContentionNamesTheSquatter(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

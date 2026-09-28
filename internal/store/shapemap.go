@@ -59,8 +59,7 @@ type Emitter struct {
 	Collection collection
 	// Fields maps each domain field of the collection to where its value comes
 	// from. A map keyed by field name makes "two sources fill the same field"
-	// structurally unrepresentable — the duplicate-target fault the column-keyed
-	// model had to reject is gone by construction.
+	// structurally unrepresentable.
 	Fields map[string]FieldSource
 	When   EmitCondition
 }

@@ -79,17 +79,16 @@ var (
 // anchorRank at this edge: the anchor itself, and the nearest key the WHOLE
 // workspace holds on the anchor's far side.
 //
-// The split is the whole point, and it is the one this file kept collapsing.
-// WHICH key you land beside is a question about a FRAME — a child sent to the
-// top leads its siblings and nobody else, and every caller has already resolved
-// that anchor before it gets here. HOW MUCH ROOM there is beside it is a
-// question about the KEYSPACE, and the keyspace is one order shared by every
-// frame. Scoping this read to the frame too answered the second question with
-// the first one's scope: it called a span empty when a top-level issue or
-// another epic's child was sitting in it, and rank.Midpoint, asked for the
-// middle of a range that is not empty, returns a key another issue is already
-// holding. Bounding the key by its real neighbor is what makes a duplicate
-// unrepresentable rather than checked for afterwards.
+// The split is the whole point. WHICH key you land beside is a question about
+// a FRAME — a child sent to the top leads its siblings and nobody else, and
+// every caller has already resolved that anchor before it gets here. HOW MUCH
+// ROOM there is beside it is a question about the KEYSPACE, and the keyspace is
+// one order shared by every frame. Scoping this read to the frame too would
+// answer the second question with the first one's scope: it would call a span
+// empty when a top-level issue or another epic's child is sitting in it, and
+// rank.Midpoint, asked for the middle of a range that is not empty, returns a
+// key another issue is already holding. Bounding the key by its real neighbor
+// is what makes a duplicate unrepresentable rather than checked for afterwards.
 // [LAW:types-are-the-program]
 //
 // It is also what makes the two engines one behavior rather than two that agree
@@ -101,22 +100,21 @@ var (
 //
 // A key at the workspace's own end has nothing outside it, and the read says so
 // by coming back empty, which beside turns into the open bound — the same pair
-// the whole keyspace is measured by, now because it is true rather than because
-// it was assumed. moving lists the keys this write is about to vacate, and they
-// are left out: a key nobody will be holding is not a wall, and counting one
-// halves the gap on every repeat of a move that has already arrived. It is a
-// list because rank set moves a whole stack at once, and excluding only one of
-// them walled the rest in behind their own keys.
+// the whole keyspace is measured by. moving lists the keys this write is about
+// to vacate, and they are left out: a key nobody will be holding is not a wall,
+// and counting one halves the gap on every repeat of a move that has already
+// arrived. It is a list because rank set moves a whole stack at once, and
+// excluding only one of them would wall the rest in behind their own keys.
 func (e rankEdge) roomBesideTx(ctx context.Context, tx *sql.Tx, anchorRank string, moving ...string) (lower, upper string, err error) {
 	// An anchor holding no rank is not a key, and the comparison reads it
 	// differently at each end: `item_rank < ''` matches nothing, while
 	// `item_rank > ''` matches every rank there is. The same empty anchor would
 	// therefore mean "nothing lies beside me" at the top and "the whole
-	// workspace lies beside me" at the bottom — which is how an issue sent to
-	// its frame's BOTTOM came to be handed a key above every issue in the
-	// workspace. There is no room to read beside a key that is not there, and
-	// what an absent one means is the caller's to answer, so it is refused here
-	// rather than averaged into a position.
+	// workspace lies beside me" at the bottom, and an issue sent to its frame's
+	// BOTTOM would be handed a key above every issue in the workspace. There is
+	// no room to read beside a key that is not there, and what an absent one
+	// means is the caller's to answer, so it is refused here rather than
+	// averaged into a position.
 	// [LAW:parse-dont-validate] [LAW:no-silent-failure]
 	if anchorRank == "" {
 		return "", "", fmt.Errorf("no room beside the %s of this frame: the key it was read from is empty", e.name)
@@ -139,13 +137,13 @@ func (e rankEdge) roomBesideTx(ctx context.Context, tx *sql.Tx, anchorRank strin
 // beside the issue that contains it, so it lands just past the container's own
 // key, which is also the one key an empty frame does offer to sit beside.
 //
-// Filing it past the workspace's LAST key instead is the answer this had, and
-// it reads as "last" rather than "first" wherever a view sorts by the issue's
-// own key. That is every view, for a child whose parent is not an epic:
-// sortByCompositeRank substitutes a parent's rank only for a container, so a
-// task's first child filed --top sorted to the very bottom of the backlog, the
-// opposite of what was asked. [LAW:one-source-of-truth] The memory engine says
-// the same thing positionally, inserting immediately after the container.
+// Filing it past the workspace's LAST key instead would read as "last" rather
+// than "first" wherever a view sorts by the issue's own key. That is every
+// view, for a child whose parent is not an epic: sortByCompositeRank
+// substitutes a parent's rank only for a container, so a task's first child
+// filed --top would sort to the very bottom of the backlog, the opposite of
+// what was asked. [LAW:one-source-of-truth] The memory engine says the same
+// thing positionally, inserting immediately after the container.
 //
 // The top level names no containing issue, so it takes the fallback below
 // rather than a container's key. It is NOT answered with open bounds: that
@@ -154,10 +152,10 @@ func (e rankEdge) roomBesideTx(ctx context.Context, tx *sql.Tx, anchorRank strin
 // it is moving.
 //
 // moving carries through for the same reason it exists anywhere: the keys this
-// write is about to vacate are not walls. Dropping it here left rank set
+// write is about to vacate are not walls. Dropping it here would leave rank set
 // bounded by its own previous result, so repeating the same stack — an
-// idempotent request — walked the key longer every round, V then VV then VF,
-// spending the container's gap on a command that changes nothing.
+// idempotent request — would walk the key longer every round, V then VV then
+// VF, spending the container's gap on a command that changes nothing.
 func firstInFrameBoundsTx(ctx context.Context, tx *sql.Tx, f storage.Frame, moving ...string) (lower, upper string, err error) {
 	if f != storage.TopLevel {
 		containerRank, err := nearestRank(ctx, tx, `SELECT item_rank FROM issues
@@ -179,10 +177,11 @@ func firstInFrameBoundsTx(ctx context.Context, tx *sql.Tx, f storage.Frame, movi
 	// is ranked, which is the one case where open bounds are true and
 	// rank.Midpoint's answer — rank.Initial, the first key in a workspace —
 	// belongs to nobody. Short-circuiting the top level to open bounds instead
-	// read as "nothing is ranked" whenever a write merely excluded everything it
-	// could see: rank set over every top-level issue leaves this read empty
-	// while children inside the epics still hold keys, and the stack was then
-	// handed rank.Initial on top of one of them. [LAW:no-silent-failure]
+	// would read as "nothing is ranked" whenever a write merely excludes
+	// everything it can see: rank set over every top-level issue leaves this
+	// read empty while children inside the epics still hold keys, and the stack
+	// would then be handed rank.Initial on top of one of them.
+	// [LAW:no-silent-failure]
 	//
 	// lastRank IS that maximum, so the far-side read below can never return a
 	// row: moving is not passed to it because there is nothing it could
@@ -287,7 +286,7 @@ func (e rankEdge) rankBeyondTx(ctx context.Context, tx *sql.Tx, f storage.Frame,
 		// A frame whose edge reads empty holds nothing ranked but the issues
 		// being moved, which is the same situation a create meets in an empty
 		// frame and takes the same answer. Reading the room beside the absent
-		// key instead is what sent an issue asked for its frame's bottom to the
+		// key instead would send an issue asked for its frame's bottom to the
 		// top of the workspace. [LAW:one-source-of-truth]
 		if edgeRank == "" {
 			return firstInFrameBoundsTx(ctx, tx, f, moving...)
@@ -379,9 +378,9 @@ func filingFrameTx(ctx context.Context, tx *sql.Tx, parentID string) (storage.Fr
 //
 // GetIssue alone will not do it: that read carries no deleted_at filter by
 // design, so it hands back trashed issues quite happily. Every ranking query
-// here does filter them, which left the verbs disagreeing about what a deleted
-// issue even is — one wrote a key onto a row no view shows, another failed deep
-// inside its transaction on a missing row.
+// here does filter them, so without this gate the verbs would disagree about
+// what a deleted issue even is — one writing a key onto a row no view shows,
+// another failing deep inside its transaction on a missing row.
 func (s *Store) mustRankable(ctx context.Context, id string) (model.Issue, error) {
 	issue, err := s.GetIssue(ctx, id)
 	if err != nil {
@@ -396,17 +395,9 @@ func (s *Store) mustRankable(ctx context.Context, id string) (model.Issue, error
 // mutationValue runs a mutation that computes a result, and yields the zero
 // value whenever that mutation fails.
 //
-// The rank verbs used to declare the result in the enclosing scope, assign to it
-// partway through the closure, and return it beside whatever error came back.
-// A step failing after that assignment then returned a populated result
-// alongside a non-nil error: a RankEnd naming the frame of a move that never
-// happened. Every caller checks the error first, so nothing was observably
-// wrong — which is the reason it survived, not a reason it was safe.
-//
 // Taking the result as the closure's own return value is what removes the state
 // rather than guarding against it: there is no partially-assigned result to
-// return early, and no verb can forget a guard that no longer exists.
-// [LAW:types-are-the-program]
+// return early, and no guard for a verb to forget. [LAW:types-are-the-program]
 func mutationValue[T any](ctx context.Context, s *Store, message string, fn func(context.Context, *sql.Tx) (T, error)) (T, error) {
 	var out T
 	if err := s.withMutation(ctx, message, func(ctx context.Context, tx *sql.Tx) error {
@@ -447,14 +438,10 @@ func requireLiveTx(ctx context.Context, q rowQueryer, id string) error {
 // is only as fresh as the instant it was read; a delete landing between that
 // gate and this statement would otherwise leave a rank on a row no listing
 // shows — the state the gate exists to prevent, reached through timing instead
-// of through a plain bug. The anchor of a relative move was already re-read
-// under the lock because its key was needed, while the issue being moved was
-// not, for no better reason than that nothing happened to need a read from it.
-// Asymmetry that arrives by accident is exactly what drifts.
+// of through a plain bug.
 //
 // [LAW:single-enforcer] Every rank verb writes its key through here, so "a rank
-// never lands on a deleted issue" has one enforcement site instead of four
-// near-copies of an UPDATE, none of which carried it.
+// never lands on a deleted issue" has one enforcement site.
 //
 // now is supplied rather than read here because a set writes one timestamp
 // across every row it touches; deriving it per write would stamp one logical
@@ -488,15 +475,14 @@ func (s *Store) RankToBottom(ctx context.Context, issueID string) (storage.RankE
 // The end is a frame's end, never the workspace's. A child ranked to the top
 // leads its siblings, and seeding its key from the globally-first rank would
 // draw that key from a keyspace shared with issues it is never compared
-// against — which is how one epic's edits came to displace the top level's
-// keys, and how the next top-level promotion came to be computed against a
-// child. Scoping the lookup keeps the written key comparable only to the keys
-// it is actually read against. [LAW:types-are-the-program]
+// against — one epic's edits would displace the top level's keys, and the next
+// top-level promotion would be computed against a child. Scoping the lookup
+// keeps the written key comparable only to the keys it is actually read
+// against. [LAW:types-are-the-program]
 //
 // Which key is a frame's question; how much room sits beside it is not, and
 // roomBesideTx is where the two are kept apart — see it for why an open bound
-// beside a frame-local key is how this verb came to mint a rank another issue
-// was already holding.
+// beside a frame-local key would mint a rank another issue is already holding.
 //
 // [LAW:single-enforcer] Both edge verbs take their key from frameEdgeHolderTx,
 // so there is no second notion of the rank at a frame's edge, and they measure
@@ -517,8 +503,7 @@ func (s *Store) rankToEdge(ctx context.Context, issueID string, placement storag
 	// would leave a window in which a concurrent reparent moves the issue: the
 	// edge lookup would then be scoped to a container the issue has already
 	// left, and the key written would be drawn from a keyspace it is never read
-	// against — this bug, reached through timing instead of through arithmetic.
-	// [LAW:no-ambient-temporal-coupling]
+	// against. [LAW:no-ambient-temporal-coupling]
 	return mutationValue(ctx, s, "rank to "+edge.name, func(ctx context.Context, tx *sql.Tx) (storage.RankEnd, error) {
 		f, err := frameOfTx(ctx, tx, issueID)
 		if err != nil {
@@ -693,15 +678,14 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 // rather than looping. [LAW:no-silent-failure]
 //
 // The walk refuses a deleted starting id for the same reason it refuses a
-// deleted parent, and refusing only the latter was what let a deleted issue be
-// ranked. Frame resolution substitutes a representative for an id it cannot
-// compare directly — a child of an epic named beside a top-level issue resolves
-// to the epic — and from there on it is the representative that every later
-// check sees. writeRankTx re-reads the row it writes, but that row is the
-// representative; the named id, live when the pre-lock gate read it and deleted
-// a moment later, was re-read by nothing. Seeding the chain unconditionally is
-// where that id stopped being examined, so it is where the examination belongs.
-// [LAW:single-enforcer]
+// deleted parent. Frame resolution substitutes a representative for an id it
+// cannot compare directly — a child of an epic named beside a top-level issue
+// resolves to the epic — and from there on it is the representative that every
+// later check sees. writeRankTx re-reads the row it writes, but that row is the
+// representative; the named id, live when the pre-lock gate read it and
+// deleted a moment later, would be re-read by nothing. The chain's seed is
+// where that id would otherwise stop being examined, so it is where the
+// examination belongs. [LAW:single-enforcer]
 func ancestorChain(ctx context.Context, q rowQueryer, id string) ([]string, error) {
 	if err := requireLiveTx(ctx, q, id); err != nil {
 		return nil, err
@@ -838,10 +822,7 @@ func resolveComparableFrame(issueChain, targetChain []string) (movedID, anchorID
 // be deleted between here and the write. So this gate decides the message, and
 // never the invariant — writeRankTx re-establishes liveness under the lock and
 // owns "a rank never lands on a deleted issue", exactly as rankPairTx owns the
-// frame for the same reason. An earlier version of this comment claimed a stale
-// answer here cost only a worse error message; that was true of the anchor,
-// which is re-read for its key, and false of the issue being moved, which
-// nothing re-read at all. [LAW:parse-dont-validate]
+// frame for the same reason. [LAW:parse-dont-validate]
 func (s *Store) checkRankPair(ctx context.Context, issueID, targetID string) error {
 	if issueID == targetID {
 		return errors.New("cannot rank an issue relative to itself")
@@ -943,20 +924,19 @@ func (s *Store) RankAbove(ctx context.Context, issueID, targetID string) (storag
 		// which is the frame's whole say in this: it picks the key the move
 		// lands beside. The room beside that key is measured across the
 		// workspace, because the keyspace is one order every frame shares.
-		// Scoping this read to the frame as well is what used to leave the
-		// bound open whenever the frame held nothing further out — four
-		// commands then put a moved issue on a key one of its own children was
-		// holding. [LAW:single-enforcer] The read is topEdge's, the same one
-		// filing at a frame's top measures with.
+		// Scoping this read to the frame as well would leave the bound open
+		// whenever the frame holds nothing further out, and put a moved issue
+		// on a key one of its own children is holding. [LAW:single-enforcer]
+		// The read is topEdge's, the same one filing at a frame's top measures
+		// with.
 		//
 		// A descendant's key can be the wall here, so ranking a container
 		// relative to an outsider can leave it past its own contents. That is
 		// the contract rather than an accident of this read: the memory engine
 		// inserts at the anchor's own index, carrying no notion of containment
-		// either, and the two engines are checked against each other. Excluding
-		// the moved issue's subtree was measured and made things worse — it put
-		// the store back at odds with the memory engine. Tracked as
-		// links-rank-omey.
+		// either, and the two engines are checked against each other.
+		// Excluding the moved issue's subtree would put the store at odds with
+		// the memory engine. Tracked as links-rank-omey.
 		newRank, err := rankBetweenTx(ctx, tx, func() (string, string, error) {
 			anchorRank, err := anchorRankTx(ctx, tx, move.AnchorID)
 			if err != nil {
@@ -1195,8 +1175,8 @@ func nearestRank(ctx context.Context, q rowQueryer, query string, args ...any) (
 // that do not.
 // [LAW:single-enforcer] A read reachable from both stances is written once,
 // against this interface, so Doctor's lock-free pass and the mutating rank paths
-// cannot read the store two different ways. Naming the readers here is what went
-// stale twice; the rule is that there is no second site, whoever the readers are.
+// cannot read the store two different ways. The rule is that there is no second
+// site, whoever the readers are.
 type rowQueryer interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
@@ -1212,10 +1192,10 @@ type rowQueryer interface {
 // migrations/00001_baseline.sql encodes it: epics have status IS NULL, leaves
 // carry a known value — and derive their state from their children via AllOf.
 // So a SQL-side `status != 'closed'` test evaluates to NULL rather than TRUE
-// for every epic and silently drops every blocks-edge pointing at one, which is
-// exactly the bug that once had Doctor reporting zero inversions while ready.go
-// flagged the same edge. Hydrating through the canonical path instead gets the
-// AllOf rollup, never a raw column peek that would lie about an epic.
+// for every epic and silently drops every blocks-edge pointing at one, so
+// Doctor would report zero inversions where ready flags the same edge.
+// Hydrating through the canonical path instead gets the AllOf rollup, never a
+// raw column peek that would lie about an epic.
 // [LAW:one-source-of-truth] State classification rides the lifecycle here,
 // the same predicate ready uses for its rank_inversion annotations.
 func (s *Store) liveIssueIDs(ctx context.Context) (map[string]struct{}, error) {

@@ -41,14 +41,13 @@ func TestLiftWorkingSetToRegistryRecoversDowngradedSchema(t *testing.T) {
 		t.Fatalf("CreateIssue: %v", err)
 	}
 
-	// Drop below the resolution migration (00003) — the exact column at the
-	// centre of the incident. baselineVersion+1 = v2, which predates resolution.
+	// Drop below the resolution migration (00003). baselineVersion+1 = v2, which
+	// predates resolution.
 	if err := st.Downgrade(ctx, baselineVersion+1); err != nil {
 		t.Fatalf("Downgrade to v%d: %v", baselineVersion+1, err)
 	}
 
-	// Pre-lift: the binary's Export cannot read the old-schema working set. This
-	// IS the incident's raw backend failure; it must fire before the fix helps.
+	// Pre-lift: the binary's Export cannot read the old-schema working set.
 	if _, err := st.Export(ctx); err == nil {
 		t.Fatalf("Export on downgraded (v%d) working set unexpectedly succeeded; the skew was not reproduced", baselineVersion+1)
 	} else if !strings.Contains(err.Error(), "resolution") {
@@ -81,13 +80,11 @@ func TestLiftWorkingSetToRegistryRecoversDowngradedSchema(t *testing.T) {
 	}
 }
 
-// TestSyncReconcileHealsSchemaSkew replays the incident shape end-to-end: an
-// old-schema remote (base and theirs both predate the resolution migration) vs a
-// migrated local, with a genuine divergence. The reconcile must lift both older
-// anchors, merge the two sides' edits, and land linear history — with zero
-// manual steps and the lifted rows carrying the new column's default. This is
-// the epic acceptance: the state that used to fail on every retry forever now
-// self-heals.
+// TestSyncReconcileHealsSchemaSkew replays the shape end-to-end: an old-schema
+// remote (base and theirs both predate the resolution migration) vs a migrated
+// local, with a genuine divergence. The reconcile must lift both older anchors,
+// merge the two sides' edits, and land linear history — with zero manual steps
+// and the lifted rows carrying the new column's default.
 func TestSyncReconcileHealsSchemaSkew(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -125,8 +122,7 @@ func TestSyncReconcileHealsSchemaSkew(t *testing.T) {
 		t.Fatalf("pre-reconcile state = %v (ahead %d / behind %d), want diverged", fresh.State(), fresh.Ahead, fresh.Behind)
 	}
 
-	// The reconcile that used to fail forever with `table "i" does not have
-	// column "resolution"` now heals the divergence with no manual steps.
+	// The reconcile heals the divergence with no manual steps.
 	res, err := syncB.SyncReconcile(ctx, "origin", "master")
 	if err != nil {
 		t.Fatalf("SyncReconcile across schema skew: %v", err)
@@ -243,7 +239,7 @@ func TestSyncPullHealsSchemaSkewDivergence(t *testing.T) {
 	}
 
 	// Property: after the pull the working set is clean — no unstaged tables, no
-	// held conflicts (the failure mode the incident's manual repair had to catch).
+	// held conflicts.
 	assertWorkingSetClean(t, ctx, syncB)
 }
 
@@ -337,8 +333,8 @@ func TestSyncPullStateTransitions(t *testing.T) {
 // TestIsReconcileSnapshotNameDisjoint proves the reconcile snapshot classifier
 // is disjoint from the migration and downgrade classifiers — each producer owns
 // its own retention budget, so a prune for one kind must never collect another's
-// snapshots. Mirrors TestIsDowngradeSnapshotNameSymmetry, extended to the third
-// classifier this PR adds.
+// snapshots. Mirrors TestIsDowngradeSnapshotNameSymmetry, extended to the
+// third classifier.
 func TestIsReconcileSnapshotNameDisjoint(t *testing.T) {
 	t.Parallel()
 	const ns = "1700000000000000000"
@@ -366,9 +362,9 @@ func TestIsReconcileSnapshotNameDisjoint(t *testing.T) {
 
 // assertWorkingSetClean fails if the store's Dolt working set has any staged or
 // unstaged change or any held merge conflict. A clean working set after every
-// reconcile outcome is the ticket's stated property: the incident's manual
-// repair had to hand-stage auto-merged tables the native merge left behind, and
-// the export/replay reconcile must never leave such residue.
+// reconcile outcome is the property: the export/replay reconcile must never
+// leave residue, such as the auto-merged tables a native merge leaves behind
+// for hand-staging.
 func assertWorkingSetClean(t *testing.T, ctx context.Context, st *Store) {
 	t.Helper()
 	var statusRows int

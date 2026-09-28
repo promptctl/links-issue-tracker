@@ -308,11 +308,11 @@ func doctorFieldValue(report storage.HealthReport, field, value string) string {
 //
 // The order is the whole point. A repair that climbs the hierarchy starts from
 // the live-issue classification, and that walk does not return when the
-// hierarchy holds a loop — so repairing first meant `lit doctor --fix`
-// overflowed the stack before it could name the loop, and the operator whose
-// habit is `--fix` got no diagnosis at all. Diagnosis has to survive the state
-// it diagnoses. Store.Doctor answers the same ordering question one level down,
-// for the same reason.
+// hierarchy holds a loop — so repairing first would make `lit doctor --fix`
+// overflow the stack before it could name the loop, and the operator whose
+// habit is `--fix` would get no diagnosis at all. Diagnosis has to survive the
+// state it diagnoses. Store.Doctor answers the same ordering question one level
+// down, for the same reason.
 //
 // A loop withholds only the repairs that would crash on it. Repairs that never
 // read the hierarchy still run, because refusing them would strand faults the

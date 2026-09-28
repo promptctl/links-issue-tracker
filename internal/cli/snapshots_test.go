@@ -175,14 +175,14 @@ func TestSnapshotsNew_AcquiresCommitLock(t *testing.T) {
 }
 
 func TestSnapshotsNew_AcquiresDoltJournalLock(t *testing.T) {
-	// Pin the contract that closes links-sync-pgct.15 at the command level:
-	// the `snapshots new` copy serializes against engine-lifecycle I/O by
-	// holding Dolt's own journal lock. We hold that lock externally (an
+	// Pin the contract at the command level: the `snapshots new` copy
+	// serializes against engine-lifecycle I/O by holding Dolt's own journal
+	// lock. We hold that lock externally (an
 	// independent fd is indistinguishable from another process's live
 	// engine), race the command against a delayed release, and require the
 	// command to have waited — a copy that didn't contend would finish in
 	// milliseconds and could interleave with a concurrent open's journal
-	// crash-recovery, the measured tear.
+	// crash-recovery.
 	repo, ws := initBootstrapTestRepo(t)
 	chdir(t, repo)
 
@@ -214,10 +214,10 @@ func TestSnapshotsNew_AcquiresDoltJournalLock(t *testing.T) {
 
 func TestSnapshotsRestore_LockSurvivesRotation(t *testing.T) {
 	// Pins the contract that the commit lock lives outside the rotated dolt
-	// directory. Pre-fix: lock path was <databaseDir>/.links-commit.lock,
-	// rotated away with the database dir during Restore, leaving the canonical
-	// path empty for another process to grab while the in-flight restore's
-	// release would later delete that other process's lock file.
+	// directory. A lock inside it would be rotated away with the database dir
+	// during Restore, leaving the canonical path empty for another process to
+	// grab while the in-flight restore's release later deletes that other
+	// process's lock file.
 	repo, ws := initBootstrapTestRepo(t)
 	chdir(t, repo)
 
@@ -334,11 +334,9 @@ func countUserSnapshots(t *testing.T, ws workspace.Info) int {
 // contract end-to-end: while an open Store holds the shared workspace lock
 // (the shape an `lit ls` reader would take), `lit snapshots restore` must
 // refuse with a clear workspace-busy error instead of rotating the Dolt
-// directory out from under the reader.
-//
-// This is the headline acceptance criterion for links-schema-rebuild-r5v9.7
-// — the failure mode pre-fix was a query error mid-read or, depending on
-// platform/timing, inconsistent results from mmap'd inodes.
+// directory out from under the reader, which surfaces as a query error
+// mid-read or, depending on platform/timing, inconsistent results from mmap'd
+// inodes.
 func TestSnapshotsRestore_RefusesWhileWorkspaceBusy(t *testing.T) {
 	repo, ws := initBootstrapTestRepo(t)
 	chdir(t, repo)
@@ -384,10 +382,9 @@ func TestSnapshotsRestore_RefusesWhileWorkspaceBusy(t *testing.T) {
 // lock — the shape AdoptRemoteByClone's displace+clone window, snapshots
 // restore's rotation, and candidate promotion all take — `lit snapshots new`
 // must refuse with a workspace-busy error instead of walking a directory that
-// is being rewritten under it. Pre-fix, the copy ran under only the commit
-// lock (a different file the rotators never touch), so a snapshot taken
-// mid-adopt was a torn copy of whatever files DOLT_CLONE had written so far
-// (links-sync-pgct.14).
+// is being rewritten under it. A copy under only the commit lock (a different
+// file the rotators never touch) would take a torn copy of whatever files
+// DOLT_CLONE has written so far.
 //
 // Duration: the refusal lands only after the shared acquisition's ~5s retry
 // budget elapses — the same grace every Store open extends to a transient
@@ -420,9 +417,8 @@ func TestSnapshotsNew_RefusesWhileWorkspaceExclusive(t *testing.T) {
 	}
 
 	// The starved command leaves the durable dispatch trace a stamped open
-	// boundary earns — the attribution record links-sync-pgct.11.1 exists for.
-	// This path acquires the store directly (no runWithApp), so it pins that
-	// direct acquisitions stamp too.
+	// boundary earns. This path acquires the store directly (no runWithApp),
+	// so it pins that direct acquisitions stamp too.
 	traced := false
 	if entries, readErr := os.ReadDir(syncTraceDir(ws)); readErr == nil {
 		for _, entry := range entries {
@@ -560,12 +556,12 @@ func captureRun(t *testing.T, args ...string) *bytes.Buffer {
 	return &stderr
 }
 
-// TestSnapshotsNew_CollectsInterruptOrphanedResidue pins links-snapshots-3dtv's
-// acceptance shape end-to-end: .tmp/.reserve residue stranded by an
-// interrupted snapshot copy (fabricated here exactly as a post-grace hard
-// exit leaves it) is invisible to `lit snapshots list` yet reclaimed by the
-// very next `lit snapshots new`, whose retention tail runs the residue
-// collection under the producer beacon's liveness proof.
+// TestSnapshotsNew_CollectsInterruptOrphanedResidue pins end-to-end that
+// .tmp/.reserve residue stranded by an interrupted snapshot copy (fabricated
+// here exactly as a post-grace hard exit leaves it) is invisible to
+// `lit snapshots list` yet reclaimed by the very next `lit snapshots new`,
+// whose retention tail runs the residue collection under the producer
+// beacon's liveness proof.
 func TestSnapshotsNew_CollectsInterruptOrphanedResidue(t *testing.T) {
 	repo, ws := initBootstrapTestRepo(t)
 	chdir(t, repo)
@@ -583,8 +579,8 @@ func TestSnapshotsNew_CollectsInterruptOrphanedResidue(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The residue is invisible to the listing (the pre-fix trap: nothing an
-	// operator can see or prune).
+	// The residue is invisible to the listing (nothing an operator can see or
+	// prune).
 	var listOut bytes.Buffer
 	if err := Run(context.Background(), &listOut, &listOut, []string{"snapshots", "list"}); err != nil {
 		t.Fatalf("snapshots list: %v", err)

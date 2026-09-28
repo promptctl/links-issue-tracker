@@ -105,10 +105,8 @@ func dropAllColumns(table RawTable) TableMapping {
 // emitters as SQL INSERTs during the pre-goose forward migration.
 //
 // [LAW:one-source-of-truth] The column/field correspondence and the conditional
-// change-row shape live here and nowhere else; the two paths were previously
-// independent hand-maintained mirrors coupled only by a comment. The value
-// semantics were already shared (the transforms delegate to the reconcile's
-// canonical* functions); this closes the structural half.
+// change-row shape live here and nowhere else. The value semantics are shared
+// (the transforms delegate to the reconcile's canonical* functions).
 //
 // Emitter ORDER is load-bearing for the SQL renderer: the parent record
 // (issue_events) must land before its conditional child (issue_event_changes)

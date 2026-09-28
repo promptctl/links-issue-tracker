@@ -123,9 +123,9 @@ jobs:
           go-version-file: go.mod
 
       # Enforce module-file tidiness BEFORE a release tag can be cut. The
-      # release pipeline (.goreleaser.yml) no longer runs `go mod tidy` as a
-      # before-hook because that would mutate go.mod/go.sum at release time,
-      # divorcing the published artifacts from the tagged commit.
+      # release pipeline (.goreleaser.yml) does not run `go mod tidy` as a
+      # before-hook, because that would mutate go.mod/go.sum at release time
+      # and divorce the published artifacts from the tagged commit.
       # [LAW:single-enforcer] this is the one place tidiness is checked.
       - name: go mod tidy check
         run: |
@@ -160,10 +160,9 @@ jobs:
         with:
           version: v2.8.0
 
-  # Gate docs the same way .8 verified them locally: a missing page or a link
-  # outside docs_dir fails the build under --strict, so nav regressions can't
-  # land silently. Versions pinned for a deterministic gate (mkdocs-material 2.0
-  # is a breaking release).
+  # Gate docs: a missing page or a link outside docs_dir fails the build under
+  # --strict, so nav regressions can't land silently. Versions pinned for a
+  # deterministic gate (mkdocs-material 2.0 is a breaking release).
   docs:
     runs-on: ubuntu-latest
     steps:

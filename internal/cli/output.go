@@ -106,8 +106,7 @@ func sortedListFormatNames() []string {
 // parseListFormat is the one checkpoint for `--format`, run before the query so
 // a bad value costs no store read. It returns the renderer itself, so nothing
 // downstream holds a format name that could still be wrong. A bad value is a
-// ValidationError naming the valid formats: the same command can never succeed,
-// and the old UnsupportedError reached the "Retry the command" remediation.
+// ValidationError naming the valid formats: the same command can never succeed.
 // [LAW:parse-dont-validate] [LAW:no-silent-failure]
 func parseListFormat(expr string) (issueListRenderer, error) {
 	name := strings.ToLower(strings.TrimSpace(expr))
@@ -178,7 +177,7 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 	// [LAW:dataflow-not-control-flow] Parent block precedes the leaf description
 	// so an agent reading top-to-bottom encounters containing context before
 	// the specific leaf details. When the parent has a description, it inlines
-	// indented under the parent line. (links-agent-epic-model-uew.3)
+	// indented under the parent line.
 	if err := printIssueGroup(w, "parent", optionalGroup(detail.Parent)); err != nil {
 		return err
 	}
@@ -356,9 +355,8 @@ func printIssueHistory(w io.Writer, detail model.IssueDetail) error {
 // rule. A nil issue yields the empty slice, which printIssueGroup omits.
 // [LAW:one-type-per-behavior] The redirect and the parent differ only in the
 // label printIssueGroup is given; both are one optional issue rendered as a
-// group, so one adapter serves them. The parent had its own hand-rolled line
-// instead, which is how it came to print no standing at all — a closed epic
-// parent read exactly like an open one (promptctl-output-p60y).
+// group, so one adapter serves them. A hand-rolled parent line would print no
+// standing at all — a closed epic parent reading exactly like an open one.
 func optionalGroup(issue *model.Issue) []model.Issue {
 	if issue == nil {
 		return nil
@@ -390,17 +388,17 @@ func printIssueGroup(w io.Writer, label string, issues []model.Issue) error {
 //
 // State() alone is shape-agnostic — leaves return their owned status, containers
 // return state derived from children — but it is only half the truth: a deleted
-// ticket's status is still "open", so rendering State() printed dead blockers as
-// "[open]" and sent readers hunting for an id that appears in no listing. A
-// frozen issue's status describes work nobody may do, which is why the retention
-// name replaces it rather than joining it.
+// ticket's status is still "open", so rendering State() alone would print dead
+// blockers as "[open]" and send readers hunting for an id that appears in no
+// listing. A frozen issue's status describes work nobody may do, which is why
+// the retention name replaces it rather than joining it.
 //
 // The close reason joins the status because "closed" alone is a directional
 // lie: dropping it can only make a body of work look MORE finished than it is,
-// never less, so a wontfix declination read as completed work and an agent
-// acted on the wrong picture (promptctl-output-p60y). A `lit done` close
-// records no reason and renders the bare word — the absence is the data, not a
-// fifth member of the sealed set.
+// never less, so a wontfix declination would read as completed work and an
+// agent would act on the wrong picture. A `lit done` close records no reason
+// and renders the bare word — the absence is the data, not a fifth member of
+// the sealed set.
 // [LAW:one-source-of-truth] Every surface that names a referenced issue's state
 // reads this, so the epic plan's markers and the relationship groups cannot
 // disagree about one ticket; Frozen and RetentionName stay the sole owners of
@@ -436,10 +434,7 @@ func resolutionSuffix(resolution *model.Resolution) string {
 // parentID comes from the canonical graph (storage.IssueRelations) so the list
 // view never reinterprets edge semantics, and blocked comes from
 // ClassifyReadiness so it cannot carry a shorter list than the annotation
-// registry. Nothing else may write either field.
-// [LAW:one-source-of-truth] It was named relationColumns while both cells were
-// derived from relations, and that name is what made a dependency-edge `blocked`
-// look like it belonged here.
+// registry. Nothing else may write either field. [LAW:one-source-of-truth]
 //
 // The zero value is the honest answer for an issue whose derived data was not
 // loaded (no parent, not blocked), which is exactly what a nil map yields on
@@ -528,9 +523,8 @@ func humanizeCoarseDuration(d time.Duration) string {
 // carries: how old a thing must be before that surface speaks up. "at least",
 // never "over" — every staleness gate stays silent on `age < threshold`, so a
 // value sitting exactly on the threshold warns, and "(over 7 days)" is false at
-// that reachable age. Three of the four surfaces shipped that contradiction,
-// each re-deriving a sentence the fourth had already gotten right, so the
-// qualifier is bound to the threshold here instead of retyped per site.
+// that reachable age. The qualifier is bound to the threshold here instead of
+// retyped per site.
 // [LAW:single-enforcer] the one place the wording and the comparison are
 // paired; TestEveryStalenessSurfaceAgreesAtItsBoundary holds every surface to
 // calling it, at the one age where the wording can lie.
@@ -598,12 +592,9 @@ func printCloseAdjacency(w io.Writer, detail model.IssueDetail) error {
 
 func formatIssueState(issue model.Issue) string {
 	// State() is shape-agnostic: leaves return their owned status, containers
-	// return the state derived from children. StatusValue() with an empty-string
-	// fallback was a pellet — duplicate dispatch across the same discriminator.
+	// return the state derived from children.
 	parts := []string{string(issue.State())}
-	// [LAW:types-are-the-program] Retention is a sum, so at most one tag applies;
-	// the old field pair could stack "+archived+deleted", a state the domain
-	// never had.
+	// [LAW:types-are-the-program] Retention is a sum, so at most one tag applies.
 	// [LAW:one-source-of-truth] Frozen owns the predicate and RetentionName the
 	// word; this surface picks only the composition — it appends where
 	// issueStanding replaces, because a ticket's own line carries both axes

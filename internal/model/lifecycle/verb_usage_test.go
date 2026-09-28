@@ -19,20 +19,15 @@ import (
 // eight actions, so a wrong site reads correctly almost always and is found by a
 // reader holding a command that does not exist.
 //
-// Writing links-cli-errors-nvmd I swept for this by hand three times and missed
-// a site each time. So the rule gets a gate — and the gate gets a parser.
+// Treating Go source as text fails open: a scan of one physical line cannot see
+// a call wrapped across lines, and balancing parentheses over raw bytes lets a
+// `)` inside a format string close the call early, so every argument after it
+// goes unexamined — `fmt.Sprintf("cannot :) %s", e.Action)` passes. So this
+// file asks go/parser where the calls and their arguments actually are.
+// [LAW:parse-dont-validate]
 //
-// Two earlier versions of this file scanned text, and both failed open in ways
-// that took a reviewer to find: one read a single physical line, so a call
-// wrapped across lines was invisible; the next matched balanced parentheses over
-// raw bytes, so a `)` inside a format string closed the call early and every
-// argument after it went unexamined. `fmt.Sprintf("cannot :) %s", e.Action)`
-// passed that version. Both holes have the same cause — Go source was being
-// treated as text — so this version asks go/parser where the calls and their
-// arguments actually are. [LAW:parse-dont-validate]
-//
-// THE RULE, which now has no exceptions. An expression that produces an
-// ActionName may reach a formatting call only as:
+// THE RULE, which has no exceptions. An expression that produces an ActionName
+// may reach a formatting call only as:
 //
 //   - `x.Verb()`, the word the caller typed; or
 //   - `string(x)`, written out to say the persisted encoding is meant here.
@@ -44,17 +39,15 @@ import (
 // blind spots is the same defect as a gate that overclaims:
 //
 //   - String building outside fmt. `lit bulk <verb>` builds its usage line by
-//     concatenation, and that is the site of this class a reviewer found after
-//     two of my own sweeps missed it. Widening the rule to all expressions was
-//     measured, not assumed: it flags 82 sites, nearly all unrelated fields
-//     named Action, and a gate that cries wolf 82 times gets switched off. That
-//     site is pinned behaviorally by TestBulkUsageNamesTheTypedVerb instead.
+//     concatenation. Widening the rule to all expressions was measured, not
+//     assumed: it flags 82 sites, nearly all unrelated fields named Action, and
+//     a gate that cries wolf 82 times gets switched off. That site is pinned
+//     behaviorally by TestBulkUsageNamesTheTypedVerb instead.
 //   - An ActionName reached through a name no declaration introduces: assigned
 //     to a local by `:=`, or returned through an interface. Declared locals,
 //     parameters, struct fields and package vars are all covered, and a
 //     function literal's own parameters count as declared: it is a declaration
-//     site like any other, and a review found this gate reading it as if it
-//     were not.
+//     site like any other.
 
 // formatters are the fmt functions whose output a caller can read.
 var formatters = map[string]bool{
@@ -89,9 +82,9 @@ func repoRootForVerbTest(t *testing.T) string {
 // --others is not thoroughness for its own sake. A bare ls-files scans only
 // what is already committed, so a brand-new file holding a brand-new site is
 // invisible until it is staged -- and the window in which the author is writing
-// that site is the whole reason this gate exists, three hand sweeps having
-// missed one. CI sees only committed files either way, so this changes nothing
-// about what can merge; it changes when the author hears about it.
+// that site is the whole reason this gate exists. CI sees only committed files
+// either way, so this changes nothing about what can merge; it changes when the
+// author hears about it.
 // --exclude-standard keeps ignored files out.
 func parsedTree(t *testing.T) (*token.FileSet, map[string]*ast.File) {
 	t.Helper()
@@ -135,30 +128,25 @@ func typeName(e ast.Expr) string {
 }
 
 // bearerNames collects the names an ActionName is reached through, kept in
-// three sets because they are matched differently and conflating them broke the
-// gate outright: a first version put every declaration in one set, which swept
-// in the RECEIVER of `func (n ActionName) Verb()`, so the bare name `n` became
-// a bearer and every `n.anything` in the repository matched. The gate flagged
-// `n.name`, `n.license`, `n.scope` — a scanner that fires on unrelated code is
-// a scanner that gets deleted.
+// three sets because they are matched differently, and a scanner that fires on
+// unrelated code is a scanner that gets deleted.
 //
 //   - fields: struct fields typed ActionName, matched only as `x.<name>`.
 //   - locals: parameters, results, receivers and vars typed ActionName, matched
 //     as a bare identifier WITHIN THE FUNCTION THAT DECLARES THEM. This is what
-//     makes a parameter visible, which the regex version could not see at all.
-//     The scoping is not fastidiousness: a bare identifier's type is unknowable
-//     without go/types, and `n` is a parameter name throughout this repository,
-//     so matching it package-wide flagged `humanBytes(n int64)`.
+//     makes a parameter visible. The scoping is not fastidiousness: a bare
+//     identifier's type is unknowable without go/types, and `n` is a parameter
+//     name throughout this repository, so matching it package-wide would flag
+//     `humanBytes(n int64)`.
 //   - consts: package-level constants typed ActionName, matched anywhere, since
 //     a constant's name is unique in its package.
 //   - values: names declared as an Action, whose `.Name()` produces one.
 //
-// Receivers are collected like any other declaration. The problem they caused —
-// `n.name` in unrelated code matching because the bare `n` was a bearer — is
-// fixed where it belongs, in the walk below: a selector that is NOT itself a
-// bearer is not descended into, so its receiver is never examined on its own.
-// Excluding receiver names instead was aimed at the right problem from the
-// wrong end, and blinded the gate to any parameter sharing the name.
+// Receivers are collected like any other declaration. What keeps the bare
+// receiver `n` from matching `n.name` in unrelated code lives in the walk
+// below: a selector that is NOT itself a bearer is not descended into, so its
+// receiver is never examined on its own. Excluding receiver names instead would
+// blind the gate to any parameter sharing the name.
 func bearerNames(files map[string]*ast.File) (fields, locals, values []string) {
 	fs, ls, vs := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	add := func(into map[string]bool, names []*ast.Ident, typ ast.Expr) {
@@ -232,8 +220,8 @@ func producesActionName(e ast.Expr, fields, locals, values map[string]bool) bool
 		}
 		// The receiver is whatever denotes the Action, and it is a field as
 		// often as it is a bare name: an action stashed at a plan site and read
-		// back at the write site is the shape that beat two hand sweeps, and
-		// requiring a bare identifier here would let exactly that shape past.
+		// back at the write site is such a shape, and requiring a bare
+		// identifier here would let exactly that shape past.
 		// [LAW:dataflow-not-control-flow] the question is where the value came
 		// from, not how the call happens to be spelled.
 		switch recv := sel.X.(type) {
@@ -278,7 +266,7 @@ func argIsAllowed(e ast.Expr, fields, locals, values map[string]bool) (allowed, 
 		}
 		// A selector that is not itself a bearer is somebody else's field, and
 		// its receiver is not under discussion: descending into `n.name` to find
-		// a bare `n` is how this gate once flagged `n.license`.
+		// a bare `n` would flag `n.license`.
 		if _, isSel := ex.(*ast.SelectorExpr); isSel {
 			return false
 		}
@@ -434,8 +422,7 @@ func TestActionNameSpellingsAreAccountedFor(t *testing.T) {
 	fields, _, values := bearerNames(files)
 	// The scoped locals are recomputed the way the GATE computes them, not the
 	// way a sibling helper happens to. A tripwire that guards a different
-	// derivation from the one the gate reads guards nothing, which is the
-	// mistake this whole ticket is about, one level up.
+	// derivation from the one the gate reads guards nothing.
 	scoped := map[string]bool{}
 	for _, f := range files {
 		for _, sc := range scopedLocals(f) {

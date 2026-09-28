@@ -22,9 +22,9 @@ import (
 //
 // This exercises OpenForRead specifically, not Open: read-write opens do NOT
 // share this coexistence contract — two concurrent Open (or OpenSync) calls
-// on the same path serialize on Dolt's own journal lock instead
-// (links-sync-pgct.11), since embedded Dolt permits only one write-capable
-// engine per path. See TestConcurrentOpenWaitsForLiveWriteEngine and
+// on the same path serialize on Dolt's own journal lock instead, since
+// embedded Dolt permits only one write-capable engine per path. See
+// TestConcurrentOpenWaitsForLiveWriteEngine and
 // TestOpenSyncWaitsForLiveForegroundEngine in engine_serialization_test.go
 // for that companion (deliberately opposite) contract.
 func TestWorkspaceLockSharedHoldersCoexist(t *testing.T) {
@@ -252,8 +252,7 @@ func TestOpenForReadAcquiresLockBeforeStat(t *testing.T) {
 
 	// Rename the database directory away — mimics the transient
 	// "directory absent" state between dbsnapshot.Restore's rotate-away
-	// and install-snapshot calls. Without the fix, OpenForRead's stat
-	// would observe ENOENT and return "repository not initialized".
+	// and install-snapshot calls.
 	rotated := doltRoot + ".pre-restore-test"
 	if err := os.Rename(doltRoot, rotated); err != nil {
 		t.Fatalf("rotate dolt dir: %v", err)

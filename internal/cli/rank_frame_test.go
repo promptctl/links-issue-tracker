@@ -40,7 +40,7 @@ func TestRankCrossFrameReportsResolution(t *testing.T) {
 	}
 	// [LAW:behavior-not-structure] The contract is that the issue-summary line
 	// describes the epic that moved, not that it sits at any fixed position
-	// (the success output now ends with a quickstart breadcrumb).
+	// (the success output ends with a quickstart breadcrumb).
 	summaryFound := false
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		if strings.HasPrefix(line, epic.ID+" [") {
@@ -61,16 +61,13 @@ func TestRankCrossFrameReportsResolution(t *testing.T) {
 	}
 }
 
-// TestRankSetNamesTheFrameItStackedIn covers the summary line of lit rank set,
-// which had no CLI-level test at all.
+// TestRankSetNamesTheFrameItStackedIn covers the summary line of lit rank set.
 //
 // rank set anchors at the top of the representatives' own frame, so ordering
 // three children of an epic leads that epic's children and moves nothing in the
-// queue at large. The summary said "ranked 3 issues at top", which reads as the
-// head of the backlog — the same ambiguity the edge verbs were given frameLabel
-// to remove, left standing on the one verb whose whole subject is the frame.
-// Agents read this output as ground truth, so a summary that overstates the
-// scope of the move is a wrong answer, not a cosmetic one.
+// queue at large. A summary saying "ranked 3 issues at top" would read as the
+// head of the backlog. Agents read this output as ground truth, so a summary
+// that overstates the scope of the move is a wrong answer, not a cosmetic one.
 // [LAW:no-silent-failure]
 func TestRankSetNamesTheFrameItStackedIn(t *testing.T) {
 	ctx := context.Background()
@@ -103,8 +100,7 @@ func TestRankSetNamesTheFrameItStackedIn(t *testing.T) {
 		t.Errorf("rank set output = %q, want it to name the epic %s the stack landed in", out, epic.ID)
 	}
 
-	// Top level: the summary must name the backlog rather than an epic, or the
-	// frame-naming would be worse than the bare wording it replaced.
+	// Top level: the summary must name the backlog rather than an epic.
 	stdout.Reset()
 	if err := runRankSet(ctx, &stdout, ap, []string{outsider.ID, epic.ID}); err != nil {
 		t.Fatalf("rank set top-level error = %v", err)

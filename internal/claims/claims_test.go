@@ -399,8 +399,7 @@ func TestContestedAnnotatesWithoutMovingRouting(t *testing.T) {
 	})
 }
 
-// TestPublicCheckoutContestsAnIdentifiedHolder is the mirror of the case above,
-// and the one the public checkout could not reach before it was a holder at all.
+// TestPublicCheckoutContestsAnIdentifiedHolder is the mirror of the case above.
 // An unattributed establisher that is still fresh is disputing possession on the
 // same terms as any identified rival, so it belongs in Contested rather than
 // being filtered out for having no address.
@@ -580,10 +579,7 @@ func TestUnknownLaneReadsAsUnclaimed(t *testing.T) {
 //
 // Spelled out means every field must be spelled: a variant that grows one and
 // does not grow a line here goes on passing, and passing is what it will look
-// like. A field was once added to a variant with this arm left alone, and a
-// grid written specifically to tell three values of it apart went green
-// against a derivation that reported the same value for all three — caught by
-// mutating the derivation, not by reading the assertion.
+// like.
 // [LAW:one-source-of-truth]
 func assertStanding(t *testing.T, got, want claims.Standing) {
 	t.Helper()

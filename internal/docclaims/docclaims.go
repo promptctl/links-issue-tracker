@@ -3,18 +3,15 @@
 //
 // doc-v1-total describes what lit does, and where it quotes a user-facing
 // message it is holding a second copy of a string whose original lives in the
-// product. Two copies of one fact drift, and here they drifted silently: three
-// merged tickets (links-claims-1b0p, links-cli-cpou, links-cli-q7hg) each
-// falsified a documented claim, and all eleven CI checks stayed green over
-// every one of them, because nothing in the repository compared the two.
-// [LAW:one-source-of-truth] the shipped text is the fact; the chapter is a map
-// of it, and this package is what re-checks the map.
+// product. Two copies of one fact drift, and silently while nothing in the
+// repository compares the two. [LAW:one-source-of-truth] the shipped text is
+// the fact; the chapter is a map of it, and this package is what re-checks the
+// map.
 //
 // The check is deliberately one-directional. Every quotation the manifest
 // records must still ship; a chapter is never required to quote any particular
-// string. Drift is a documented quote that stops existing, which is exactly the
-// failure the three tickets above produced, and it cannot be confused with
-// prose that merely never quoted code.
+// string. Drift is a documented quote that stops existing, and it cannot be
+// confused with prose that merely never quoted code.
 //
 // Scope: text, not line numbers. Whether `file.go:12-33` still brackets the
 // declaration its sentence names is a different question over a different
@@ -145,8 +142,8 @@ func (c Corpus) add(handle, body string) error {
 // output would see none of them and report green. [LAW:no-silent-failure]
 //
 // Embedded assets are included because this repository is actively moving user
-// text out of Go literals and into them: links-help-h0di moved whole help pages
-// into internal/cli/helptext. A gate that read only literals would go blind in
+// text out of Go literals and into them: whole help pages live in
+// internal/cli/helptext. A gate that read only literals would go blind in
 // exactly the direction the corpus is travelling.
 //
 // Test files do not ship, and neither does tools/, so a message living only in
@@ -171,12 +168,8 @@ func ShippedText(fsys fs.FS) (Corpus, error) {
 // shippedPackages lists this module's package directories that a binary under
 // cmd/ actually links, by walking the import graph out from each main package.
 //
-// What this replaced was a hand-kept list of root directories, and it drifted
-// twice inside one ticket: first admitting artifacts/, a gitignored checkout of
-// an unrelated project, then internal/vendor/dolthub-driver, a separate module
-// whose example program nothing imports. Neither was merely noise in the
-// corpus. Matched anchors a quotation to the SHORTEST source containing it, so
-// a coincidental copy of the words in an unlinked tree becomes the recorded
+// Matched anchors a quotation to the SHORTEST source containing it, so a
+// coincidental copy of the words in an unlinked tree becomes the recorded
 // evidence for a chapter's claim about lit's own message — and deleting that
 // message then leaves the gate green, which is the precise failure this package
 // exists to end.
@@ -278,9 +271,9 @@ func localSources(fsys fs.FS) (sources, error) {
 		return nil, fmt.Errorf("reading go.mod: %w", err)
 	}
 	// go.mod is parsed by the parser the go command uses, not by reading its
-	// syntax a second time here. The hand-rolled version treated any line
-	// holding an arrow as a directive, which reads a commented-out `replace`
-	// as a live one. [LAW:one-source-of-truth]
+	// syntax a second time here. A hand-rolled reader that treats any line
+	// holding an arrow as a directive reads a commented-out `replace` as a
+	// live one. [LAW:one-source-of-truth]
 	mod, err := modfile.Parse("go.mod", data, nil)
 	if err != nil {
 		return nil, fmt.Errorf("parsing go.mod: %w", err)
@@ -661,10 +654,10 @@ func collectFile(fsys fs.FS, name string, src []byte, into Corpus) error {
 	var collision error
 	ast.Inspect(file, func(n ast.Node) bool {
 		// ast.Inspect has no abort, and returning false from a string literal
-		// declines to descend into children a leaf does not have — so the walk
-		// below carried on past its own refusal, kept adding to a corpus it had
-		// just decided to reject, and reported the last collision rather than
-		// the first. This is what actually stops it.
+		// declines to descend into children a leaf does not have — so without
+		// this check the walk carries on past its own refusal, keeps adding to
+		// a corpus it has just decided to reject, and reports the last
+		// collision rather than the first. This is what actually stops it.
 		// [LAW:dataflow-not-control-flow] one value decides, and it decides once.
 		if collision != nil {
 			return false
@@ -792,7 +785,7 @@ func embedPatterns(operands string) []string {
 // directive: the doc comment of a var declaration, and of each spec inside a
 // var block. Scanning every comment in the file instead would treat prose that
 // quotes a directive as one, and pull in assets the compiler never embeds —
-// which, now that an unmatched pattern is an error, would fail the gate over a
+// which, because an unmatched pattern is an error, would fail the gate over a
 // sentence in a comment. [LAW:parse-dont-validate]
 func embedDocs(file *ast.File) []*ast.CommentGroup {
 	var out []*ast.CommentGroup
@@ -946,7 +939,7 @@ func spansIn(src string) ([]string, error) {
 // stripFences removes fenced code blocks before any span is read. What sits in
 // a fence is a transcript — a shell command, a schema, an example session — not
 // a chapter asserting what message the binary prints, and reading inside them
-// put `go test -short ./...` and `set -euo pipefail` into the manifest as
+// would put `go test -short ./...` and `set -euo pipefail` into the manifest as
 // though they were claims about lit.
 //
 // An unclosed fence is an error rather than a silent truncation. Blanking the
@@ -1034,10 +1027,11 @@ func closesFence(open, trimmed string) bool {
 func Matched(claims []Claim, corpus Corpus) []Claim {
 	// tightest is a function of the text and the corpus alone, and the chapters
 	// repeat themselves: a sixth of the spans quote a phrase another span
-	// already quoted (1,197 of 7,073, measured 2026-09-18), and each repeat
-	// re-scanned every shipped literal and asset to reach the same answer. The
-	// table lives and dies inside this call, so it cannot outlast the corpus it
-	// was computed against and there is no staleness to reason about.
+	// already quoted (1,197 of 7,073, measured 2026-09-18), and without the
+	// table each repeat would re-scan every shipped literal and asset to reach
+	// the same answer. The table lives and dies inside this call, so it cannot
+	// outlast the corpus it was computed against and there is no staleness to
+	// reason about.
 	// [LAW:dataflow-not-control-flow] one question, asked once.
 	type match struct {
 		src string
@@ -1110,14 +1104,14 @@ func Stable(fresh, prior []Claim, corpus Corpus) []Claim {
 //   - does any shipped source still carry them? — asked of the corpus, because
 //     whether a message ships is a question about the product.
 //
-// Reading only the corpus is what made the prescribed workflow fire the one
+// Reading only the corpus would make the prescribed workflow fire the one
 // warning that must never be wrong. Deleting a message and the sentence that
 // quoted it — together, which is what CONTRIBUTING asks for — leaves no trace
-// of either in the corpus, and the report told the contributor "Do NOT
-// regenerate: that drops the entry and leaves the sentence false" about a
-// sentence they had just removed. Regenerating was the only way to green and it
-// was correct. A warning that is wrong on the ordinary path is a warning people
-// learn to step over, and this is the one they must not.
+// of either in the corpus, and a corpus-only report tells the contributor "Do
+// NOT regenerate: that drops the entry and leaves the sentence false" about a
+// sentence they have just removed, when regenerating is the only way to green
+// and is correct. A warning that is wrong on the ordinary path is a warning
+// people learn to step over, and this is the one they must not.
 //
 // The source that carries the words now is whichever a derivation would pick —
 // `tightest`, the same choice Matched makes — so a report and a derivation
@@ -1127,8 +1121,7 @@ func Stable(fresh, prior []Claim, corpus Corpus) []Claim {
 // to reassemble. Which fact the report must name follows from the kind — the
 // source carrying the words for AnchorMoved, the chapters still asserting them
 // for Stopped — and assembling that pairing at the callsite is the shape that
-// has produced a wrong report here every previous time.
-// [LAW:types-are-the-program]
+// produces a wrong report. [LAW:types-are-the-program]
 func classify(c Claim, quoted quotations, corpus Corpus) Drift {
 	now, ships := tightest(c.Text, corpus)
 	// The destructive case is tested first and against every chapter, because
@@ -1137,7 +1130,7 @@ func classify(c Claim, quoted quotations, corpus Corpus) Drift {
 	// sentence moved between chapters — a renumbering, a section lifted into
 	// another file — in the same change that deletes the message it quotes
 	// leaves the recorded (doc, text) key absent, and asking only about this
-	// chapter answered QuoteDropped: regenerate, entry gone, the chapter it
+	// chapter would answer QuoteDropped: regenerate, entry gone, the chapter it
 	// moved to still asserting a message the binary no longer has, every check
 	// green. [LAW:no-silent-failure]
 	if quoting := quoted.anywhere(c.Text); len(quoting) > 0 && !ships {
@@ -1381,11 +1374,7 @@ func (c Comparison) ofKind(k DriftKind) []Drift {
 // Compare is the whole manifest-versus-tree comparison every report prints.
 //
 // It is a method on Derivation rather than a function over loose slices because
-// each of its inputs was, at some point, assembled at a callsite out of what
-// that caller happened to have — and each time the report came out wrong in a
-// different way: one quotation printed as two findings with opposite remedies,
-// then the prescribed workflow firing the destructive-remedy warning. A
-// comparison needs the derivation, the quotations the chapters make, and the
+// a comparison needs the derivation, the quotations the chapters make, and the
 // shipped text; travelling together, a caller cannot hold two thirds of one.
 // [LAW:types-are-the-program]
 func (d Derivation) Compare(manifest []Claim) Comparison {
@@ -1413,9 +1402,9 @@ func (d Derivation) Compare(manifest []Claim) Comparison {
 // diff.
 //
 // It lives here rather than in the sync tool because the tool and the freshness
-// test must derive the manifest identically; when only the tool deduped, the
-// two disagreed by 216 entries and the test demanded a regeneration the tool
-// had already performed. [LAW:single-enforcer]
+// test must derive the manifest identically; if only the tool deduped, the two
+// would disagree and the test would demand a regeneration the tool had already
+// performed. [LAW:single-enforcer]
 func Dedupe(claims []Claim) []Claim {
 	sort.Slice(claims, func(i, j int) bool {
 		if claims[i].Doc != claims[j].Doc {
@@ -1466,18 +1455,17 @@ func Derive(fsys fs.FS, prior []Claim) (Derivation, error) {
 //
 // The fields are unexported so that Derive is the only way to obtain one
 // outside this package, which is what makes the sentence above enforced rather
-// than merely asserted. An unexported marker field would not have done it: Go
-// permits a keyed composite literal from another package to omit unexported
-// fields, so `docclaims.Derivation{Fresh: x, Corpus: y}` stayed legal and
-// classify then read the missing quotations as "no chapter quotes this" — every
+// than merely asserted. An unexported marker field would not do it: Go permits
+// a keyed composite literal from another package to omit unexported fields, so
+// `docclaims.Derivation{Fresh: x, Corpus: y}` would stay legal and classify
+// would read the missing quotations as "no chapter quotes this" — every
 // departed entry reported as QuoteDropped, the benign remedy, and the
-// destructive-case warning unable to fire at all. A gate that fails open on its
-// one dangerous case is the failure this type was introduced to end.
+// destructive-case warning unable to fire at all.
 // The zero value stays constructible, as it does for every Go struct, and it
 // needs no guard: with no fresh manifest to diff against, Compare reports the
 // whole committed manifest as drifted rather than a handful of entries with the
-// wrong remedy. That fails closed and at full volume. It was the partial literal
-// that was dangerous, because a real Fresh and a real Corpus make the report
+// wrong remedy. That fails closed and at full volume. It is the partial literal
+// that is dangerous, because a real Fresh and a real Corpus make the report
 // look ordinary while the missing quotations quietly pick the mild remedy.
 // [LAW:parse-dont-validate] the only Derivation that exists is one Derive built.
 type Derivation struct {

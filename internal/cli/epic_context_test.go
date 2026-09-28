@@ -83,10 +83,9 @@ func (f epicFixture) render(focused string) string {
 }
 
 // A child that has left the flow is labeled with the axis that took it out.
-// Rendering a deleted child as "[ready]" invited an agent to start a ticket that
-// lit start refuses, and named it as a live blocker of its siblings — the plan
-// then disagreed with the readiness gate about the same edge
-// (links-readiness-9no1).
+// Rendering a deleted child as "[ready]" would invite an agent to start a
+// ticket that lit start refuses, and name it as a live blocker of its siblings
+// — the plan would then disagree with the readiness gate about the same edge.
 func TestRenderEpicContextLabelsFrozenChildrenByRetention(t *testing.T) {
 	f := newEpicFixture(t, "Retention epic", "children on both axes")
 	deleted := f.addChild("Dropped one")
@@ -111,8 +110,8 @@ func TestRenderEpicContextLabelsFrozenChildrenByRetention(t *testing.T) {
 }
 
 // The blocked marker and the readiness gate read one predicate, so a blocker
-// that has left the flow stops blocking on both surfaces at once. Before the
-// fix the dependent rendered "[blocked-by <deleted id>]" naming a ticket absent
+// that has left the flow stops blocking on both surfaces at once. Otherwise the
+// dependent would render "[blocked-by <deleted id>]" naming a ticket absent
 // from every listing, with no command able to clear the edge.
 func TestRenderEpicContextFrozenBlockerStopsBlocking(t *testing.T) {
 	f := newEpicFixture(t, "Blocker epic", "one dead blocker")
@@ -228,7 +227,7 @@ func TestRenderEpicContextShowsLaneGrouping(t *testing.T) {
 	out := f.render("")
 
 	// A child with a lane shows its lane tag; the default (empty) lane child
-	// renders exactly as before — no tag, so lane-free epics are unchanged.
+	// renders no tag.
 	if !strings.Contains(out, build+"  Build it  [lane: build]") {
 		t.Errorf("missing lane tag for build child in:\n%s", out)
 	}
@@ -240,10 +239,10 @@ func TestRenderEpicContextShowsLaneGrouping(t *testing.T) {
 	}
 }
 
-// The repro for links-epic-context-oezb: two children in one lane, the first
-// still open. The lane gate holds the second back — `lit next` refuses to serve
-// it and `lit backlog` prints the reason — so the plan slice calling it [ready]
-// was the one surface of the three answering differently.
+// Two children in one lane, the first still open. The lane gate holds the
+// second back — `lit next` refuses to serve it and `lit backlog` prints the
+// reason — so the plan slice must say so too, or calling it [ready] would make
+// it the one surface of the three answering differently.
 func TestRenderEpicContextEarlierLaneMateHoldsSiblingBack(t *testing.T) {
 	f := newEpicFixture(t, "Sequential epic", "one lane, two children")
 	first := f.addChild("First")
@@ -276,8 +275,7 @@ func TestRenderEpicContextEarlierLaneMateHoldsSiblingBack(t *testing.T) {
 
 // Acceptance 2: the ready-policy gate. A child with an empty description under
 // a repo that requires one is unservable, and the marker says which field —
-// this kind has no id to name, which is why the marker stopped being
-// "[blocked-by <id>]"-shaped.
+// this kind has no id to name.
 func TestRenderEpicContextMissingRequiredFieldIsNotReady(t *testing.T) {
 	f := newEpicFixture(t, "Policy epic", "required fields")
 	f.requiredFields = []string{"description"}
@@ -294,10 +292,9 @@ func TestRenderEpicContextMissingRequiredFieldIsNotReady(t *testing.T) {
 // An epic nested under an epic is a child like any other. It matters because
 // the workable pipeline excludes containers by construction (a container owns
 // no status of its own), so routing the plan slice through that pipeline's
-// annotators put a container in front of them for the first time: the field
-// annotator marshals it, the orphan annotator reads its derived state, the lane
-// gate asks for its lane. This pins that the whole set tolerates one, rather
-// than the plan slice failing on an epic shape it used to render.
+// annotators put a container in front of them: the field annotator marshals
+// it, the orphan annotator reads its derived state, the lane gate asks for its
+// lane. This pins that the whole set tolerates one.
 func TestRenderEpicContextNestedEpicChildIsClassified(t *testing.T) {
 	f := newEpicFixture(t, "Outer epic", "an epic under an epic")
 	f.requiredFields = []string{"description"}
@@ -321,16 +318,14 @@ func TestRenderEpicContextNestedEpicChildIsClassified(t *testing.T) {
 	}
 }
 
-// Acceptance 3, and the gate that keeps this bug from returning in a fifth
-// kind's clothing: EVERY kind the registry classifies as blocking must move a
+// Acceptance 3: EVERY kind the registry classifies as blocking must move a
 // child off [ready] and reach the reader as words. Driven off the registry
 // rather than a list maintained beside it — the counterpart of
 // TestBacklogPhrasesEveryBlockingKind, which pins the same property for the
 // backlog's "blocked:" line.
 //
 // This asserts the classifier is total over the verdict; that the verdict
-// reaching it is the FULL one is what the two tests above cover, each through
-// a kind the old edge-walking derivation could not see.
+// reaching it is the FULL one is what the two tests above cover.
 // [LAW:one-source-of-truth] [LAW:verifiable-goals]
 func TestEpicContextMarkerReflectsEveryBlockingKind(t *testing.T) {
 	t.Parallel()
@@ -500,11 +495,10 @@ func TestRenderEpicContextCrossEpicClosedSideFiltered(t *testing.T) {
 
 // A frozen endpoint drops a cross-epic edge exactly as a closed one does. This
 // is the seam the closed-side test above cannot reach: `collect`'s member test
-// and `inPlayExcluding`'s counterpart filter both moved from "not closed" to
-// InPlay in links-readiness-9no1, and closed is the arm that already passed
-// before that change — so only a frozen endpoint can catch a regression.
-// Deleted sits on the internal side and archived on the external side, which
-// puts both predicates under one assertion.
+// and `inPlayExcluding`'s counterpart filter both ask InPlay, and a closed
+// endpoint also fails a plain "not closed" test — so only a frozen endpoint can
+// catch a regression to that. Deleted sits on the internal side and archived on
+// the external side, which puts both predicates under one assertion.
 func TestRenderEpicContextCrossEpicFrozenSideFiltered(t *testing.T) {
 	f := newEpicFixture(t, "Frozen sides", "deps")
 	openChild := f.addChild("Open inside")
@@ -590,11 +584,11 @@ func idx(haystack, needle string) int {
 }
 
 // The epic plan is the other surface that names a referenced ticket's standing,
-// and the one an agent reads to judge whether an epic is finished. It rendered
-// a bare "[closed]" for every close, so a sibling declined wontfix — work
-// nobody did — read exactly like a sibling somebody finished, and the reader
-// had no cue to run a second command (promptctl-output-p60y). The five closed
-// shapes are asserted in one epic, each carrying what its close recorded.
+// and the one an agent reads to judge whether an epic is finished. A bare
+// "[closed]" for every close would make a sibling declined wontfix — work
+// nobody did — read exactly like a sibling somebody finished, with no cue to
+// run a second command. The five closed shapes are asserted in one epic, each
+// carrying what its close recorded.
 //
 // [LAW:behavior-not-structure] Every arm goes through the store's real close
 // actions rather than a hand-built display status, so the test would catch the

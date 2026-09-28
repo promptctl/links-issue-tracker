@@ -15,15 +15,12 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workflows"
 )
 
-// `lit next` used to be one more workableView preset over the shared
-// backlog/next pipeline (see workable.go): order, keep the first ready row,
-// render. Claim routing broke that shape — the pick is no longer "the first
-// ready row of an ordered list," it is a multi-step precedence over data
-// (claim standings, this checkout's identity) the backlog view never reads,
-// producing a discriminated NextOutcome the old single-row keep()/render()
-// signature has no way to carry. Forking next out of workableView is the
-// honest move once the shapes diverge (backlog stays exactly what it was);
-// stretching the shared preset to fit would have re-tangled the two.
+// `lit next` is not a workableView preset over the shared backlog pipeline (see
+// workable.go). The pick is not "the first ready row of an ordered list", it is
+// a multi-step precedence over data (claim standings, this checkout's
+// identity) the backlog view never reads, producing a discriminated
+// NextOutcome a single-row keep()/render() signature has no way to carry.
+// Stretching the shared preset to fit would tangle the two.
 // [LAW:decomposition] [LAW:carrying-cost]
 const nextUsage = "usage: lit next [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--all]"
 
@@ -67,7 +64,7 @@ func nextLeaf() appLeaf {
 			return err
 		}
 		// [LAW:single-enforcer] Same staleness warning, same position, as every
-		// other ordinary read command (links-sync-pgct.2).
+		// other ordinary read command.
 		if err := printStalenessWarning(ctx, stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
 			return err
 		}
@@ -97,16 +94,14 @@ func nextLeaf() appLeaf {
 // was never picked. A claim this pick WOULD establish (EpicLane, NewLane,
 // Dependency) is named above the row, so the commitment is visible before it
 // is made (design-docs/work-claims.md, Routing step 4); a lane already held
-// names nothing to commit — nothing at all for ServedFromClaim, which prints
-// exactly as `next` always has, and the state it is already in for
-// ResumedOwnWork, since being handed back a ticket already in flight is the
-// one pick that looks like a fresh start but is not one.
+// names nothing to commit — nothing at all for ServedFromClaim, and the state
+// it is already in for ResumedOwnWork, since being handed back a ticket already
+// in flight is the one pick that looks like a fresh start but is not one.
 //
 // Every line here is in the conditional or reports a state that already holds.
 // `lit next` claims nothing and starts nothing — `lit start` does — so a line
 // in the perfect tense would be reporting a side effect this command does not
-// have, which is exactly how an agent came to believe it held a claim it did
-// not (links-next-output-5aee).
+// have.
 func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]storage.IssueRelations, cc claimContext, actingAs string) (workflows.Occasion, error) {
 	var row annotation.AnnotatedIssue
 	var announce string
@@ -125,21 +120,18 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 	// Step 1b says what it is for. This is the one pick whose reason the row
 	// cannot show on its own: a global-pool pick is self-explanatory from the
 	// row, and step 2's shared epic is visible in the id, but "this unblocks
-	// work you are already holding" is a fact about the WALK, and it was being
-	// dropped at the seam that knew it (links-next-output-4hor).
+	// work you are already holding" is a fact about the WALK.
 	case ServedFromDependency:
 		row = o.Row
 		announce = startAdvice(o.Row, o.Lane) +
 			fmt.Sprintf(" (gates %s, which is in a lane you hold)\n", o.Gates)
 	// The two terminal outcomes travel outward AS THEMSELVES. Rendering them
-	// into an untyped error here discarded the very discriminator routing had
-	// just established, so both sinks — ExitCode and commandErrorReason — fell
-	// through to "command_failed", whose remediation told the agent to retry a
-	// deterministic answer and then run `lit doctor` on a healthy workspace
-	// (links-cli-cpou). That is the second instance of the class register.go's
-	// resolve fixed for command paths; see the citation there.
-	// [LAW:types-are-the-program] classification is carried by the type, never
-	// re-derived from the message.
+	// into an untyped error here would discard the very discriminator routing
+	// has just established, so both sinks — ExitCode and commandErrorReason —
+	// would fall through to "command_failed", whose remediation tells the agent
+	// to retry a deterministic answer and then run `lit doctor` on a healthy
+	// workspace. [LAW:types-are-the-program] classification is carried by the
+	// type, never re-derived from the message.
 	case Exhausted:
 		return workflows.Occasion{}, o
 	case NoWork:
@@ -166,29 +158,25 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 // "continue where you left off" is a claim about WHO, and the lane cannot
 // support it. A lane is keyed on the checkout, deliberately — many sessions in
 // one checkout are one claimant, which is what lets a fresh session inherit its
-// predecessor's work with no re-briefing (design-docs/work-claims.md), and
-// nothing here revises that. But two sessions running in one checkout at once
-// are also one claimant, and there the sentence told the second one it had been
-// working a ticket the first was mid-PR on. Three sessions read it that way,
-// the first of them before this was a ticket, and each time only a hand check of
-// git worktrees and push times disproved it (links-routing-t6fa).
+// predecessor's work with no re-briefing (design-docs/work-claims.md). But two
+// sessions running in one checkout at once are also one claimant, and there
+// the sentence would tell the second one it has been working a ticket the first
+// is mid-PR on.
 //
 // The assignee cannot separate a live peer from a predecessor who stopped, and
 // NOTHING lit holds can: every session mints a new identity, so both read as
 // "not you", and claims carry staleness heuristics with no liveness probe by
-// design. An earlier fix tried the orphan clock as the discriminator and it
-// fails open on the case this ticket was filed for — `updated_at` moves on field
-// writes and transitions, not on the work, and a comment explicitly never
-// touches the row (store.go, AddComment), so a session committing and
-// commenting all day goes "orphaned" at six hours while still holding the
-// branch. Silence there is the original defect, restored on a timer.
+// design. The orphan clock fails open as a discriminator: `updated_at` moves on
+// field writes and transitions, not on the work, and a comment never touches
+// the row (store.go, AddComment), so a session committing and commenting all
+// day goes "orphaned" at six hours while still holding the branch.
 //
 // So it does not adjudicate. The asymmetry decides the default: a warning that
-// was not needed costs one check, and silence that was needed cost a collision
-// three times. It names who the ticket says has it, asks for the check, and
-// leads with continuing rather than dropping the work — the predecessor
-// hand-down is the common case and must stay cheap, which is what keeps this a
-// line to read rather than a gate to clear.
+// was not needed costs one check, and silence that was needed costs a
+// collision. It names who the ticket says has it, asks for the check, and leads
+// with continuing rather than dropping the work — the predecessor hand-down is
+// the common case and must stay cheap, which is what keeps this a line to read
+// rather than a gate to clear.
 //
 // The one thing that silences it is an assignee that names nobody: empty is the
 // ordinary state of a ticket started by a checkout driving no agent session, and
@@ -211,8 +199,6 @@ func resumeAdvice(row annotation.AnnotatedIssue, actingAs string) string {
 
 // startAdvice is the line every pick that would establish a claim prints above
 // its row: what running `lit start` would lock, never what this command did.
-// It was `claimAnnouncement`, and the rename is the fix — an announcement
-// reports, and reporting is the one thing a read-only command must not do.
 //
 // The lead clause turns on the row's own lifecycle state: routing serves an
 // in-progress row from a lane this checkout does not hold only when nobody
@@ -220,12 +206,12 @@ func resumeAdvice(row annotation.AnnotatedIssue, actingAs string) string {
 // may carry their unmerged working tree. The clause says exactly that and no
 // more — "nobody holds it" is the whole of what the standing proves. It does
 // not say whose it was or how long ago they left: an expired claim is not a
-// claim, and the row's history is `lit show`'s to tell (links-claims-y6yz).
+// claim, and the row's history is `lit show`'s to tell.
 //
 // The object turns on the lane's shape, which is why Describe answers in two
-// parts. A solo lane IS the ticket, so naming it spelled the same id twice
+// parts. A solo lane IS the ticket, so naming it would spell the same id twice
 // ("starting X claims X") — a tautology no reader could take as advice about a
-// command they had yet to run. The pronoun is the caller's answer to that,
+// command they have yet to run. The pronoun is the caller's answer to that,
 // available here and nowhere else because the ticket is named one clause
 // earlier. next_route_test.go pins all four cells of state and lane shape.
 func startAdvice(row annotation.AnnotatedIssue, lane model.LaneID) string {

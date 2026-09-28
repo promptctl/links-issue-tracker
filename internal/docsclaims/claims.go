@@ -4,9 +4,9 @@
 // README.md and docs/architecture.md say, truthfully today, that issues live
 // in an embedded Dolt database. design-docs/event-store/design.md §migration
 // plans the states (S0..S4) that end with that machinery deleted, and its
-// per-state table is where a state's advance is recorded. Nothing else
-// connected the two: a released README could describe storage the binary no
-// longer has, and only a manual sweep would notice.
+// per-state table is where a state's advance is recorded. This package
+// connects the two: without it, a released README could describe storage the
+// binary no longer has, and only a manual sweep would notice.
 //
 // [LAW:one-source-of-truth] Campaign state is read from the §migration table
 // itself — this package holds no copy of which states are built. What it does

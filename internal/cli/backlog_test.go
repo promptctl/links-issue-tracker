@@ -59,7 +59,7 @@ func (h backlogTestHarness) addDependency(dependentID, dependencyID string) {
 
 // runBacklogIDs renders the backlog and extracts the issue ID leading each row,
 // in render order — the structured probe over the command's logic (which items,
-// in what order) now read from the one canonical text surface.
+// in what order) read from the one canonical text surface.
 func (h backlogTestHarness) runBacklogIDs(args ...string) []string {
 	h.t.Helper()
 	return issueIDsFromText(h.runBacklogText(args...))
@@ -99,15 +99,15 @@ func rankInversionWarning(text string) string {
 }
 
 // A row's "unblocks" line and the rank-inversion count are facts about the whole
-// workable set, not about whichever slice of it is on screen. Both were read off
-// the printed rows, so either narrowing deleted them silently — and the one that
-// gets deleted belongs to the row that SURVIVED: exclude the dependent and its
+// workable set, not about whichever slice of it is on screen. Read off the
+// printed rows, either narrowing would delete them silently — and the one
+// deleted would belong to the row that SURVIVED: exclude the dependent and its
 // prerequisite keeps its place in the list with its leverage line quietly
 // shortened, under a preamble still promising "what closing it would unblock".
 //
-// Two narrowings reach it. The focus scope is this change's own (a dependent off
-// the focused path), and --limit is links-listing-85sd, which predates it; one
-// population fixes both, which is why they are pinned together here.
+// Two narrowings reach it: the focus scope (a dependent off the focused path),
+// and --limit; one population fixes both, which is why they are pinned together
+// here.
 func TestBacklogUnblocksLinesSurviveTheFocusScope(t *testing.T) {
 	h := newBacklogTestHarness(t)
 	// Creation order is rank order here, and it is load-bearing: offPath is
@@ -196,9 +196,9 @@ func TestBacklogTextShowsPreamble(t *testing.T) {
 	if !strings.Contains(text, "backlog in priority/rank order") {
 		t.Fatalf("missing preamble; got:\n%s", text)
 	}
-	// The completeness claim moved out of the preamble and into the notice, so
-	// that it can say the other thing when the view is scoped instead of
-	// asserting "full" over a narrowed list (links-listing-ju7i).
+	// The completeness claim is in the notice, so that it can say the other
+	// thing when the view is scoped instead of asserting "full" over a narrowed
+	// list.
 	if !strings.Contains(text, "Nothing is hidden: every workable item is listed.") {
 		t.Fatalf("missing scope notice; got:\n%s", text)
 	}
@@ -256,8 +256,7 @@ func TestBacklogIncludesInProgressInline(t *testing.T) {
 // issueIDsFromText extracts the issue ID leading each row of a list command's
 // text output, in render order. Issue IDs are the first <prefix>-<token>
 // identifier on a row; rows without one (preamble, separators, context lines)
-// contribute nothing. This is the text-surface equivalent of reading the
-// ordered ID list the old --json probe produced.
+// contribute nothing.
 func issueIDsFromText(text string) []string {
 	var ids []string
 	for _, line := range strings.Split(text, "\n") {
@@ -316,11 +315,7 @@ func isIssueIDToken(s string) bool {
 }
 
 // The sibling gate is a blocking annotation like any other, and the backlog
-// owes it a line. It had none: nonDependencyBlockingReasons had no phrasing
-// for EarlierSiblingPending, so a row held back by an earlier same-lane
-// sibling rendered with nothing under it — top of the queue, no visible reason
-// — while routing skipped it as unready. That gap is the whole of
-// links-claims-gxxw: the backlog is the surface that tells an agent what `lit
+// owes it a line. The backlog is the surface that tells an agent what `lit
 // next` will serve, so this pins both halves at once, the rendered reason and
 // the pick it explains.
 func TestBacklogNamesTheSiblingGateAndNextAgreesWithIt(t *testing.T) {
@@ -349,13 +344,12 @@ func TestBacklogNamesTheSiblingGateAndNextAgreesWithIt(t *testing.T) {
 	}
 }
 
-// The gate that keeps the omission from coming back, driven off the annotation
-// registry rather than a list maintained beside it: every kind the registry
-// classifies as blocking must reach the reader. Dependencies, direct and
-// inherited, are the one deliberate silence here — printBacklogContext gives
-// them their own "depends on:" line — so each one must reach that line instead,
-// rather than being left to a length check that would pass for a kind nobody
-// phrased.
+// The gate, driven off the annotation registry rather than a list maintained
+// beside it: every kind the registry classifies as blocking must reach the
+// reader. Dependencies, direct and inherited, are the one deliberate silence
+// here — printBacklogContext gives them their own "depends on:" line — so each
+// one must reach that line instead, rather than being left to a length check
+// that would pass for a kind nobody phrased.
 // [LAW:one-source-of-truth] [LAW:verifiable-goals]
 func TestBacklogPhrasesEveryBlockingKind(t *testing.T) {
 	for _, kind := range annotation.Kinds() {
@@ -384,16 +378,10 @@ func (h backlogTestHarness) start(id string) {
 	}
 }
 
-// The narrowings that reach further out than any row list.
-//
-// --limit and the focus scope cut rows the renderer was already holding, so
-// handing the leverage derivation a wider list covered them (the two tests
-// above). --type, --status, --labels and --assignee were applied at the store
-// query, which is upstream of every list a renderer could be handed: the
-// "whole" population was already short by the time anything could widen it. A
-// narrowing that removes the DEPENDENT then deletes the leverage line from the
+// The narrowings that reach further out than any row list. A narrowing that
+// removes the DEPENDENT must not delete the leverage line from the
 // PREREQUISITE's surviving row, which is the reading no gap on screen warns
-// about (links-listing-85sd).
+// about.
 //
 // Four cases, not one parameterized claim over a shared mechanism: each flag is
 // a separate assertion that its own narrowing does not reach the fact, and a
@@ -469,9 +457,7 @@ func TestBacklogUnblocksLinesSurviveTheStoreSideNarrowings(t *testing.T) {
 
 // The rank-inversion count advertises a repair `lit doctor --fix` makes to the
 // whole repo, so it must not move with a flag that only decides what is on
-// screen. It did: the criteria were applied at the query, so the inversion the
-// filtered-out row carried was never counted and the warning under-reported the
-// repair — or, as here, vanished entirely while the inversion stood.
+// screen.
 func TestRankInversionCountIsIndependentOfTheStoreSideNarrowings(t *testing.T) {
 	h := newBacklogTestHarness(t)
 	// The dependent outranks its prerequisite, which is the inversion. It is a

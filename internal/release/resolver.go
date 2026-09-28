@@ -189,18 +189,18 @@ func (r *HTTPResolver) Resolve(ctx context.Context, tag, platform string) (*Targ
 	// fields I know". `lit upgrade` is run by the INSTALLED binary to discover
 	// a newer release, so a manifest's consumer is by construction older than
 	// its producer, and a field the producer added after this binary shipped
-	// is the normal case rather than an attack. This decoder used to set
-	// DisallowUnknownFields, which made that case a hard failure and turned
-	// every additive field into an unrecoverable break of the upgrade path —
-	// unrecoverable because the in-band remedy for a broken `lit upgrade` is
-	// `lit upgrade`. Nothing on either side of the wire rejects an unknown
-	// field now, and that is the intent rather than a gap left behind:
-	// release-validate.yml's "Assert manifest shape" step asserts presence and
-	// format of the fields this decoder needs — `.version` a non-empty string,
-	// `.schema_support.min`/`.max` numbers, every artifact's platform, url and
-	// sha256 matching their patterns with the tag segment present in the url —
-	// and that the artifact platform set is exactly the release contract. It
-	// never inspects the manifest's key set, and no check anywhere else does.
+	// is the normal case rather than an attack. DisallowUnknownFields would
+	// make that case a hard failure and turn every additive field into an
+	// unrecoverable break of the upgrade path — unrecoverable because the
+	// in-band remedy for a broken `lit upgrade` is `lit upgrade`. Nothing on
+	// either side of the wire rejects an unknown field, and that is the intent
+	// rather than a gap left behind: release-validate.yml's "Assert manifest
+	// shape" step asserts presence and format of the fields this decoder
+	// needs — `.version` a non-empty string, `.schema_support.min`/`.max`
+	// numbers, every artifact's platform, url and sha256 matching their
+	// patterns with the tag segment present in the url — and that the artifact
+	// platform set is exactly the release contract. It never inspects the
+	// manifest's key set, and no check anywhere else does.
 	//
 	// Shape is not what protects the consumer in any case: SelectArtifact
 	// takes only the artifact whose Platform equals

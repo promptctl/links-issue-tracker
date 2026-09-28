@@ -93,9 +93,8 @@ func openOneVersionBehind(t *testing.T, ctx context.Context, doltRoot string) {
 // of the contract: a read open never applies a migration itself, and a
 // workspace one migration behind this binary is still brought forward by a
 // read command — through the write open, the one migration boundary — so
-// the first `lit backlog` after a binary upgrade serves current rows as it
-// always has. A trailing schema is never served silently, and never served
-// stale.
+// the first `lit backlog` after a binary upgrade serves current rows. A
+// trailing schema is never served silently, and never served stale.
 func TestOpenForReadBringsTrailingSchemaForwardThroughOpen(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

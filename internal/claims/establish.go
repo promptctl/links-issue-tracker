@@ -27,7 +27,7 @@ import "github.com/promptctl/links-issue-tracker/internal/model"
 // a lane to a checkout that is not working it, and every other stream is then
 // routed away from real work by evidence that never meant what it was read to
 // mean. A verb wrongly treated as non-establishing only leaves the lane
-// unclaimed — which is exactly how the tool behaved before claims existed.
+// unclaimed.
 //
 // A map rather than a switch so establishingCoversEveryAction can assert this
 // decision was made for every verb in model's sealed set; a ninth action added

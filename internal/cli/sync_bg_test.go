@@ -84,7 +84,7 @@ func TestWaitForParentExitReturnsWhenReparented(t *testing.T) {
 	}
 }
 
-// TestWaitForParentExitReportsTimeout pins the other half of the race fix: when
+// TestWaitForParentExitReportsTimeout pins the other half: when
 // the parent outlives the wait (getppid never changes), the result is false so
 // the caller aborts instead of opening the store.
 func TestWaitForParentExitReportsTimeout(t *testing.T) {

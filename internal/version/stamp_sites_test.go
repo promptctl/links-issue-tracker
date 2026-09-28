@@ -54,14 +54,11 @@ func exportedNames(script string) map[string]bool {
 // field a writer may withhold, and the asymmetry is
 // TestOnlyTheJustfileOmitsVersion's to own.
 //
-// It exists because the alternative — remembering — already failed once.
-// FromSource was inferred from whether a Version was stamped, which made
-// scripts/install.sh's `git describe` Version silently reclassify every
-// locally-installed binary as a release; the surfaces that key on provenance
-// went quiet on the only binary anyone runs, and every test still passed. A
-// producer that forgets Origin recreates exactly that: a binary that presents
-// itself as a release because nothing said otherwise. That failure is invisible
-// from inside Go, so it is checked here, against the producers themselves.
+// A producer that forgets Origin makes a binary that presents itself as a
+// release because nothing said otherwise: the surfaces that key on provenance go
+// quiet on the only binary anyone runs, and every test still passes. That
+// failure is invisible from inside Go, so it is checked here, against the
+// producers themselves.
 func TestEveryProducerStampsOrigin(t *testing.T) {
 	t.Parallel()
 
@@ -98,14 +95,13 @@ func TestEveryProducerStampsOrigin(t *testing.T) {
 }
 
 // TestOnlyTheJustfileOmitsVersion pins the omission the IsDev discriminator is
-// built on, and it is the half the doc comment above the var block used to
-// assert in prose and nothing checked. `just build` deliberately does not stamp
-// Version; that is what leaves internal/version.Version empty, and so IsDev
-// true, which internal/store/migration_runner.go's producer-binary-version
-// guard relies on to keep an ordinary local build from overwriting a real
-// release's downgrade stamp. The other two producers must stamp it —
-// scripts/install.sh from `git describe`, goreleaser from the tag — each
-// opting its own binary out of that guard on purpose.
+// built on. `just build` deliberately does not stamp Version; that is what
+// leaves internal/version.Version empty, and so IsDev true, which
+// internal/store/migration_runner.go's producer-binary-version guard relies on
+// to keep an ordinary local build from overwriting a real release's downgrade
+// stamp. The other two producers must stamp it — scripts/install.sh from
+// `git describe`, goreleaser from the tag — each opting its own binary out of
+// that guard on purpose.
 //
 // Both halves are asserted because only one of them is the interesting failure
 // today and either is fatal. An edit adding -X .../version.Version=… to the

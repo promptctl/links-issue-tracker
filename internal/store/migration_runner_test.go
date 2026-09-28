@@ -151,9 +151,7 @@ func TestAdoptionDeletesLegacySchemaVersionKey(t *testing.T) {
 // unconditionally — so the recovery test bodies that use it read as
 // straight-line SQL with no teardown ladder. [LAW:dataflow-not-control-flow]
 // cleanup is one defer that always fires, not an `if err != nil { _ = Close() }`
-// site at every call. Other tests in this file (TestFreshOpenStampsBaselineVersion,
-// TestPreGooseAdoption*) predate this helper and still call Open directly; they
-// can migrate opportunistically. The deferred Close() asserts its own error so
+// site at every call. The deferred Close() asserts its own error so
 // driver/shutdown failures don't get swallowed silently.
 func withStore(t *testing.T, ctx context.Context, doltRoot string, body func(*Store)) {
 	t.Helper()
@@ -203,20 +201,20 @@ func stampGooseVersionAhead(t *testing.T, ctx context.Context, doltRoot string) 
 	return ahead
 }
 
-// TestOpenToleratesAheadOfRegistryWhenBaselineIntact pins the contract for the
-// May 23 incident shape: a workspace whose goose_db_version is ahead of this
-// binary's registry but whose live application tables are intact MUST open and
-// operate, NOT refuse. goose treats unknown-ahead rows as nothing-to-apply, so
-// no bookkeeping reconciliation is needed — the ahead row is left intact, and
+// TestOpenToleratesAheadOfRegistryWhenBaselineIntact pins the contract: a
+// workspace whose goose_db_version is ahead of this binary's registry but whose
+// live application tables are intact MUST open and operate, NOT refuse. goose
+// treats unknown-ahead rows as nothing-to-apply, so no bookkeeping
+// reconciliation is needed — the ahead row is left intact, and
 // re-opening is stable. (In the field an ahead row records migrations a newer
 // binary really applied; the fixture synthesizes that row directly via
 // stampGooseVersionAhead — the contract under test is "tolerate it and leave it
 // alone", not whether the recorded migrations were executed here.)
 //
 // [LAW:behavior-not-structure] The contract is "Open succeeds and the workspace
-// is operable", not "the log was surgically trimmed to registryMax". The old
-// trim was an implementation detail (and an actively harmful one — it destroyed
-// true migration history and left the live schema ahead of a reset log).
+// is operable", not "the log was surgically trimmed to registryMax". A trim is
+// an implementation detail, and a harmful one: it destroys true migration
+// history and leaves the live schema ahead of a reset log.
 func TestOpenToleratesAheadOfRegistryWhenBaselineIntact(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -247,8 +245,7 @@ func TestOpenToleratesAheadOfRegistryWhenBaselineIntact(t *testing.T) {
 // the live schema, not by the goose log's internal consistency: a log carrying
 // ONLY an ahead row (its baseline row missing) still opens and operates, because
 // the binary reads the schema — which is intact — rather than trusting the log.
-// This is the corruption shape the old code restamped around; the read-only
-// design makes it a non-event.
+// The read-only design makes this corruption shape a non-event.
 //
 // [LAW:behavior-not-structure] Asserts the workspace opens and is queryable,
 // not any particular post-recovery row count in goose_db_version.
@@ -287,7 +284,7 @@ func assertIssuesQueryable(t *testing.T, ctx context.Context, st *Store) {
 // when goose is ahead AND the live baseline shape is genuinely missing
 // (e.g. a baseline column was dropped), Open MUST refuse with the
 // MissingBaseline field populated so the operator can see what the binary
-// cannot operate against. This is the only path that still surfaces
+// cannot operate against. This is the only path that surfaces
 // UnsupportedSchemaVersionError.
 func TestOpenRefusesAheadOfRegistryWhenBaselineCorrupt(t *testing.T) {
 	t.Parallel()
@@ -364,8 +361,8 @@ func TestUnsupportedSchemaVersionMessageShape(t *testing.T) {
 	}
 	assertForbiddenAbsent(t, bare)
 
-	// MissingBaseline preserved from sxsk.5: gap names surface inside the
-	// parenthetical alongside the upgrade phrase.
+	// MissingBaseline: gap names surface inside the parenthetical alongside
+	// the upgrade phrase.
 	withGaps := (&UnsupportedSchemaVersionError{
 		WorkspaceVersion: 7,
 		MaxSupported:     3,
@@ -525,10 +522,9 @@ func TestOpenAllowsWorkspaceExactlyAtMax(t *testing.T) {
 }
 
 // TestOpenRepairsVersionSlotReuseContentMismatch pins the go-template-js
-// failure shape from the epic, upgraded from mere detection (links-migrate-drift-hh1t.2)
-// to transparent repair (links-migrate-drift-hh1t.3): goose_db_version
-// reports the workspace FULLY migrated (applied == registry max, nothing
-// pending — the "reported as fully migrated" case verifyAppliedVersionsMatchRegistry
+// failure shape: goose_db_version reports the workspace FULLY migrated
+// (applied == registry max, nothing pending — the "reported as fully
+// migrated" case verifyAppliedVersionsMatchRegistry
 // exists to catch), but the issues table is missing the lane and resolution
 // columns the CURRENT registry's version 2 and 3 migrations add, as if those
 // version numbers were reused for different historical content after a
@@ -538,8 +534,7 @@ func TestOpenAllowsWorkspaceExactlyAtMax(t *testing.T) {
 // applied (that would collide with v4's redirect_target, which this setup
 // leaves intact). Open must self-heal both gaps in one call — not just the
 // earliest one verifyAppliedVersionsMatchRegistry reports — and must not
-// surface an error: detecting the drift is no longer where lit stops,
-// applying it is.
+// surface an error: detecting the drift is not where lit stops, applying it is.
 func TestOpenRepairsVersionSlotReuseContentMismatch(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -663,8 +658,7 @@ func TestOpenToleratesHealthyManagedWorkspace(t *testing.T) {
 	withStore(t, ctx, doltRoot, func(st *Store) {
 		assertIssuesQueryable(t, ctx, st)
 	})
-	// Re-open: fully migrated, nothing pending — exactly the shape the
-	// ticket's "reported as fully migrated" bug would have mis-served.
+	// Re-open: fully migrated, nothing pending.
 	withStore(t, ctx, doltRoot, func(st *Store) {
 		assertIssuesQueryable(t, ctx, st)
 	})

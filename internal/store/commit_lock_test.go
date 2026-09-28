@@ -12,12 +12,9 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-// TestAcquireCommitLockNeverEvictsLiveHolderByAge is the regression test for
-// the O_EXCL-era eviction bug (links-locking-il18.2): a live owner whose lock
-// file looked eleven minutes old was evicted by the mtime threshold, letting a
-// second process's mutation walk past it and exit 0. With the lock rebuilt on
-// flock, the file's age carries no meaning at all — a backdated lock file with
-// a live holder must block a second acquirer until that holder releases, and
+// TestAcquireCommitLockNeverEvictsLiveHolderByAge: the lock is held by flock,
+// so the file's age carries no meaning at all — a backdated lock file with a
+// live holder must block a second acquirer until that holder releases, and
 // nothing may remove the hold out from under it.
 func TestAcquireCommitLockNeverEvictsLiveHolderByAge(t *testing.T) {
 	t.Parallel()
@@ -29,8 +26,6 @@ func TestAcquireCommitLockNeverEvictsLiveHolderByAge(t *testing.T) {
 		t.Fatalf("holder acquisition error = %v", err)
 	}
 
-	// The measured bug's exact trigger: the lock file looks well past the old
-	// ten-minute staleness threshold while its owner is alive.
 	backdated := time.Now().Add(-11 * time.Minute)
 	if err := os.Chtimes(lockPath, backdated, backdated); err != nil {
 		t.Fatalf("Chtimes(lock) error = %v", err)

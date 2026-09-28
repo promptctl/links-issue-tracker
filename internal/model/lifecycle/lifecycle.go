@@ -63,13 +63,13 @@ const (
 // command is `lit open`. Action.Name is documented as the persisted event
 // verb, so a message interpolating it where the reader expects a command
 // quotes the wrong name -- and it reads correctly for seven of the eight
-// actions, which is exactly why the eighth went unnoticed.
+// actions, which is exactly why the eighth goes unnoticed.
 // [LAW:one-source-of-truth] Both names for an action are declared here, on one
 // line each, so neither can be changed with the other out of view.
 //
 // Every action is listed, including the seven whose two names agree. A default
 // arm would be shorter and would hand any future action its persisted encoding
-// silently, reintroducing this defect for the next verb whose names diverge.
+// silently, quoting the wrong name for the next verb whose names diverge.
 // [LAW:no-silent-failure]
 var actionVerbs = map[ActionName]string{
 	ActionStart:     "start",
@@ -87,11 +87,11 @@ var actionVerbs = map[ActionName]string{
 // the same action, and the right one for the event log.
 //
 // An action missing from actionVerbs panics rather than falling back to its
-// persisted encoding. The fallback IS the defect this removes, and a silent
-// one is indistinguishable from correct output for every action whose two
-// names agree, so it would be found by a reader holding an unrunnable command
-// rather than by a test. Actions() anchors the coverage test that keeps the
-// panic unreachable. [LAW:no-silent-failure]
+// persisted encoding. A silent fallback is indistinguishable from correct
+// output for every action whose two names agree, so it would be found by a
+// reader holding an unrunnable command rather than by a test. Actions()
+// anchors the coverage test that keeps the panic unreachable.
+// [LAW:no-silent-failure]
 func (n ActionName) Verb() string {
 	verb, ok := actionVerbs[n]
 	if !ok {
@@ -162,16 +162,14 @@ func ParseState(value string) (State, error) {
 // [LAW:single-enforcer] Comma-splitting a status set lives here and nowhere
 // else. The `--status` flag and the query grammar's `status:` term are two
 // spellings of one question, and the day they own separate splitters is the day
-// they disagree about what a set looks like — which is the defect this
-// replaced, where the flag silently kept the last value and the query rejected
-// the comma outright.
+// they disagree about what a set looks like.
 // [LAW:dataflow-not-control-flow] Widening is a longer slice, never a second
 // code path: one state and three states leave here as the same type, and every
 // stage downstream already ORs whatever it is handed.
 // [LAW:no-silent-failure] Every fragment goes through the sealed ParseState
 // gate and nothing is skipped, so `status:`, `--status ,` and `--status open,`
-// stay the loud errors they were rather than degrading into "no status filter"
-// and handing back the default listing wearing the shape of an answer.
+// stay loud errors rather than degrading into "no status filter" and handing
+// back the default listing wearing the shape of an answer.
 func ParseStates(inputs ...string) ([]State, error) {
 	var out []State
 	for _, input := range inputs {

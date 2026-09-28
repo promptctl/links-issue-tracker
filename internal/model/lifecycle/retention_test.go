@@ -19,8 +19,7 @@ func TestRetentionFromTimestamps(t *testing.T) {
 	if got, ok := RetentionFromTimestamps(nil, &deleted).(Deleted); !ok || !got.At.Equal(deleted) {
 		t.Fatalf("decode(nil, deleted) = %#v, want Deleted{%v}", RetentionFromTimestamps(nil, &deleted), deleted)
 	}
-	// A legacy row carrying both stamps decodes as Deleted: deletion dominates,
-	// and the stale archive stamp is residue of the pre-sum encoding.
+	// A legacy row carrying both stamps decodes as Deleted: deletion dominates.
 	if got, ok := RetentionFromTimestamps(&archived, &deleted).(Deleted); !ok || !got.At.Equal(deleted) {
 		t.Fatalf("decode(both) = %#v, want Deleted{%v}", RetentionFromTimestamps(&archived, &deleted), deleted)
 	}

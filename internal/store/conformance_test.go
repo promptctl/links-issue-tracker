@@ -11,12 +11,10 @@ import (
 
 // TestDoltEngineConformance holds this engine to lit's storage contract.
 //
-// While Dolt is lit's only engine the suite is a regression net: it is written
-// from what this engine does, so a failure here means this engine's observable
-// behavior moved. Its real job starts with the second engine
-// (links-store-seam-q35v.3), where the same statements run against an
-// implementation that shares no code with this one — that is the moment the
-// suite stops describing Dolt and starts defining storage.
+// The suite is written from what this engine does, so a failure here means
+// this engine's observable behavior moved. The memory engine runs the same
+// statements against an implementation that shares no code with this one,
+// which is what makes the suite define storage rather than describe Dolt.
 // [LAW:behavior-not-structure]
 func TestDoltEngineConformance(t *testing.T) {
 	t.Parallel()

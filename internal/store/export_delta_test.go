@@ -167,21 +167,20 @@ func TestExportDeltaLeavesAnUnchangedBacklogAlone(t *testing.T) {
 	}
 }
 
-// The next two tests are the ones that can SEE the regression finding 1 named.
 // The equivalence test above pins correctness only — a delta that rewrites the
 // whole backlog every step is perfectly correct and perfectly useless — and the
 // scale fixture is a flat backlog edited lane-wise, so neither a label nor a
 // container ever moves in it. Minimality needs its own subject: not "did the
-// tables end up right" but "how little did we write to get there". Both compare
-// the persisted ROW where a whole-model.Issue diff compared a hydrated VIEW,
-// which is the distinction issueRowValues exists to draw.
+// tables end up right" but "how little did we write to get there". The next
+// two tests compare the persisted ROW, not a hydrated VIEW, which is the
+// distinction issueRowValues exists to draw.
 
 // TestExportDeltaLeavesTheIssueRowAloneWhenOnlyALabelMoves pins the first half
 // of that view: Export denormalizes an issue's labels onto model.Issue, so
-// adding a label moves the issue value while no issues COLUMN moves. Diffing the
-// value rewrote the issue — and every child table being ON DELETE CASCADE, that
-// rewrite dragged its comments and its surviving labels through a needless
-// delete-and-reinsert.
+// adding a label moves the issue value while no issues COLUMN moves. Diffing
+// the value would rewrite the issue — and every child table being ON DELETE
+// CASCADE, that rewrite would drag its comments and its surviving labels
+// through a needless delete-and-reinsert.
 func TestExportDeltaLeavesTheIssueRowAloneWhenOnlyALabelMoves(t *testing.T) {
 	t.Parallel()
 	before := hydratedIssue(t, model.Issue{ID: "a", IssueType: model.TypeTask, Title: "t", Labels: []string{"keep"}}, model.StateOpen)
@@ -223,9 +222,9 @@ func TestExportDeltaLeavesTheIssueRowAloneWhenOnlyALabelMoves(t *testing.T) {
 // TestExportDeltaLeavesAnEpicsRowAloneWhenAChildCloses pins the second half. A
 // container's state is composed from its children (model.HydrateAllOf), so
 // closing one child moves the EPIC's value too — while the epic's row holds a
-// NULL status and no closed_at and does not move at all. Diffing values rewrote
-// the epic on every child transition, which on a real backlog is exactly the
-// shape of change a folded commit makes.
+// NULL status and no closed_at and does not move at all. Diffing values would
+// rewrite the epic on every child transition, which on a real backlog is
+// exactly the shape of change a folded commit makes.
 func TestExportDeltaLeavesAnEpicsRowAloneWhenAChildCloses(t *testing.T) {
 	t.Parallel()
 	openChild := hydratedIssue(t, model.Issue{ID: "child", IssueType: model.TypeTask, Title: "c"}, model.StateOpen)

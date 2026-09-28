@@ -114,9 +114,8 @@ type noRoomFixture struct{ upper, lower, moved string }
 // to anyway: between a relative move's neighbors, or past a frame's edge. The
 // pairs are ones spacing can write — a rank beside itself extended by zeros —
 // and an all-zero rank leading its frame, which leaves no room above it for
-// every placement that passes the top edge. rank.Midpoint once returned "100V"
-// for the first pair, and the move wrote it: the issue landed below both
-// neighbors and the command reported success.
+// every placement that passes the top edge. A key that does not make room would
+// land the issue below both neighbors while the command reports success.
 func TestPlacementMakesRoomBetweenKeysThatPadToTheSameValue(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -465,8 +464,7 @@ func TestRankSetWithOwnContainerRejected(t *testing.T) {
 // rendered order. The order can be right while the keyspace is already
 // contaminated — a child holding a key below every top-level row still lists
 // among its siblings correctly — and it is the keyspace, not the order, that
-// decides what the NEXT rank is computed against. An order-only case would
-// have passed throughout the defect this test exists for.
+// decides what the NEXT rank is computed against.
 func TestRankToEdgeDrawsItsKeyFromItsOwnFrame(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -695,8 +693,7 @@ func TestResolveComparableFrame(t *testing.T) {
 //
 // White-box on purpose. Every public rank verb refuses this issue at the gate and
 // so can never reach writeRankTx with a deleted row, which is what made this
-// second line of defence untestable from outside the package — and what let it
-// be missing from every write site unnoticed.
+// second line of defence untestable from outside the package.
 func TestWriteRankRefusesAnIssueDeletedUnderTheLock(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -743,16 +740,10 @@ func TestWriteRankRefusesAnIssueDeletedUnderTheLock(t *testing.T) {
 // that lets every rank verb return its result and its error together without
 // the two disagreeing.
 //
-// The verbs used to declare the result outside the closure and assign to it
-// partway through, so a step failing afterwards returned a populated value
-// beside a non-nil error — a RankEnd naming the frame of a move that never
-// happened. Callers check the error first, so nothing observed it; that is why
-// it survived three review rounds, not why it was safe.
-//
 // Asserting it here rather than through a verb is deliberate: forcing a verb to
 // fail midway needs an injection seam that exists for no other reason, and the
-// guarantee belongs to this helper, which is what every verb now returns
-// through. [LAW:behavior-not-structure]
+// guarantee belongs to this helper, which is what every verb returns through.
+// [LAW:behavior-not-structure]
 func TestMutationValueYieldsTheZeroValueWhenTheMutationFails(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -811,10 +802,8 @@ func TestMutationValueYieldsTheZeroValueWhenTheMutationFails(t *testing.T) {
 // every id that reaches the write. A named id does not always reach it. Naming
 // a child of an epic beside a top-level issue resolves the child to its epic,
 // and from there the epic is what every later check sees — so a delete of the
-// child landing after the pre-lock gate went unnoticed, and the set proceeded to
-// rank the epic on behalf of an issue that no longer existed. The refusal the
-// CHANGELOG promises for "every form of the command" was not the refusal the
-// substitution path gave.
+// child landing after the pre-lock gate would go unnoticed, and the set would
+// rank the epic on behalf of an issue that no longer exists.
 //
 // White-box for the same reason as the write-side case above: the public verb
 // refuses this id at the gate and so can never reach resolution with it.
@@ -858,10 +847,9 @@ func TestFrameResolutionRefusesADeletedNamedIssue(t *testing.T) {
 	}
 }
 
-// An unranked anchor has no place in the order to stand beside. Its "" once
-// reached rank.Midpoint as an open end, so a move above it landed at the
-// keyspace's midpoint and a move below it above every ranked issue, each
-// reported as a success.
+// An unranked anchor has no place in the order to stand beside. Its "" read as
+// an open end would land a move above it at the keyspace's midpoint and a move
+// below it above every ranked issue, each reported as a success.
 func TestRelativeMoveRefusesAnUnrankedAnchor(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -895,8 +883,8 @@ func TestRelativeMoveRefusesAnUnrankedAnchor(t *testing.T) {
 
 // TestCreateAtTopDrawsItsKeyFromItsOwnFrame is the creation-side twin of
 // TestRankToEdgeDrawsItsKeyFromItsOwnFrame, and it asserts rank STRINGS for
-// the same reason: the rendered order cannot see this defect. A child filed at
-// the top of its epic leads its siblings whichever key it holds, so the
+// the same reason: the rendered order cannot see a misdrawn key. A child filed
+// at the top of its epic leads its siblings whichever key it holds, so the
 // listing looks identical while the key was drawn from a keyspace the child is
 // never read against — and it is the keyspace, not the order, that decides
 // what the NEXT rank is computed against.
@@ -947,8 +935,7 @@ func TestCreateAtTopDrawsItsKeyFromItsOwnFrame(t *testing.T) {
 		t.Fatalf("a frame-scoped placement and an unscoped one both yield %q here; this case cannot tell them apart", lead.Rank)
 	}
 	// And the key lands where a frame's top belongs: inside its own epic's
-	// span, above the epic and below the sibling it now leads, rather than
-	// burrowing under every top-level issue the way an unscoped placement did.
+	// span, above the epic and below the sibling it now leads.
 	if !(lead.Rank > before[fx.epic.ID] && lead.Rank < before[fx.children[0].ID]) {
 		t.Errorf("child filed --top has rank %q, want it between its epic %q and C1 %q", lead.Rank, before[fx.epic.ID], before[fx.children[0].ID])
 	}
@@ -967,10 +954,10 @@ func TestCreateAtTopDrawsItsKeyFromItsOwnFrame(t *testing.T) {
 	}
 
 	// The bottom edge keeps asking the whole workspace, and that is the
-	// contract rather than the other half of this bug: filing at the bottom
-	// must land after everything that already exists, which is what keeps an
-	// authored batch in the order its file states. A child filed there is
-	// seeded from the workspace's last key — the standalone's — not from C3's.
+	// contract: filing at the bottom must land after everything that already
+	// exists, which is what keeps an authored batch in the order its file
+	// states. A child filed there is seeded from the workspace's last key — the
+	// standalone's — not from C3's.
 	trail, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "New trail", Topic: "frame", IssueType: "task", ParentID: fx.epic.ID, Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(child, default placement) error = %v", err)
@@ -1055,10 +1042,10 @@ func TestCreateAtTopOfAnEmptyFrameTakesADistinctKey(t *testing.T) {
 
 // TestRelativeMoveDrawsItsRoomFromTheWholeWorkspace is the four-command case.
 // The frame picks the anchor — rank pair resolution substitutes the epic for
-// the child named — and the room beside that anchor used to be read with the
-// frame's scope too. Nothing in the top level sat past the anchor, so the bound
-// came back open, and the midpoint of an open span is a key something outside
-// the frame was already holding.
+// the child named — but the room beside that anchor is read from the whole
+// workspace. Read with the frame's scope, the bound beside an anchor with
+// nothing past it in the top level comes back open, and the midpoint of an open
+// span is a key something outside the frame is already holding.
 //
 // The assertion is on the rank strings. The rendered order cannot see this:
 // two issues sharing a key still list in some order, decided by the id
@@ -1118,9 +1105,9 @@ func TestRelativeMoveDrawsItsRoomFromTheWholeWorkspace(t *testing.T) {
 // reads, so a frame holding only that issue reports no edge at all, while the
 // verb still counts the move as real. The comparison then reads that empty key
 // differently at each end — nothing sorts below "" but every rank sorts above
-// it — so asking for the room beside it sent an issue to its frame's BOTTOM and
-// handed it a key above every issue in the workspace, an inversion no duplicate
-// check would catch.
+// it — so asking for the room beside it would send an issue to its frame's
+// BOTTOM with a key above every issue in the workspace, an inversion no
+// duplicate check would catch.
 //
 // A blank rank is not reachable through the API (ensureIssueRanks backfills at
 // open), so it is written here directly: the point of the case is that the
@@ -1165,9 +1152,8 @@ func TestRankToEdgeOfAFrameWithNoRankedMemberFilesBesideItsContainer(t *testing.
 		t.Fatal("RankToBottom left the child with no rank at all")
 	}
 	// It lands beside the issue that frames it, which is the only key an empty
-	// frame offers. Reading the room beside the absent key instead put it above
-	// the whole workspace; filing it past the workspace's last key would put it
-	// after the trailing issue, which is what --bottom of a frame does not mean.
+	// frame offers. Filing it past the workspace's last key would put it after
+	// the trailing issue, which is what --bottom of a frame does not mean.
 	if want := mustBottomOf(t, map[string]string{standalone.ID: standalone.Rank, epic.ID: epic.Rank, trailing.ID: trailing.Rank}, epic.Rank); after.Rank != want {
 		t.Errorf("the child took rank %q, want %q = the room just past its epic %q", after.Rank, want, epic.Rank)
 	}

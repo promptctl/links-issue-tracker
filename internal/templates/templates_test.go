@@ -29,7 +29,7 @@ func TestLoadReturnsEmbeddedDefaultWhenNoOverride(t *testing.T) {
 // An absent workspace root means the project layer contributes nothing —
 // resolution falls through to global/embedded instead of erroring or
 // inventing a relative ".lit" path. Whitespace-only input is absence too.
-// [LAW:behavior-not-structure] Pins the behavior absorbed into PathSpec.
+// [LAW:behavior-not-structure] Pins the behavior PathSpec owns.
 func TestLoadAbsentWorkspaceRootFallsThrough(t *testing.T) {
 	xdgRoot := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", xdgRoot)

@@ -56,11 +56,10 @@ func (h readyTestHarness) runNextRow() annotation.AnnotatedIssue {
 }
 
 // servedRow is the single place the harness decides which outcomes carry a row.
-// It was inlined in runNextRow, where nothing could reach it but a full routing
-// run — so the totality the comment above asserts was never exercised, and this
-// switch silently fell a variant behind the renderer's when step 1b got its own
-// outcome (links-next-output-4hor). Lifted out, the claim is directly testable
-// by TestServedRowIsTotalOverTheSealedSum. [LAW:one-source-of-truth]
+// Inside runNextRow nothing could reach it but a full routing run; out here,
+// the totality the comment above asserts is directly testable by
+// TestServedRowIsTotalOverTheSealedSum.
+// [LAW:one-source-of-truth]
 func servedRow(outcome NextOutcome) (annotation.AnnotatedIssue, bool) {
 	switch served := outcome.(type) {
 	case ServedFromClaim:
@@ -82,7 +81,7 @@ func servedRow(outcome NextOutcome) (annotation.AnnotatedIssue, bool) {
 // helper just reports "routing declined to serve", which is the WRONG answer
 // rather than a loud one. Asserted over every variant the sum has, so a new
 // outcome that carries a row fails here by name instead of turning a served row
-// into a confusing failure far from its cause (links-next-output-4hor).
+// into a confusing failure far from its cause.
 func TestServedRowIsTotalOverTheSealedSum(t *testing.T) {
 	row := annotation.AnnotatedIssue{Issue: model.Issue{ID: "test-served-1"}}
 	cases := []struct {
@@ -162,9 +161,8 @@ func TestRunNextReturnsTopReadyLeaf(t *testing.T) {
 
 // An in-progress leaf in a lane ANOTHER checkout holds is not a workable start;
 // `lit next` routes around it and returns the next open one. The claim is what
-// makes it untouchable — its holder is working it right now — so this is the
-// half of the old "in-progress leaves are skipped" rule that survives, and it
-// is stated against a foreign holder rather than against the state alone.
+// makes it untouchable — its holder is working it right now — so this is
+// stated against a foreign holder rather than against the state alone.
 func TestRunNextRoutesAroundAnInProgressLeafHeldElsewhere(t *testing.T) {
 	h := newReadyTestHarness(t)
 	inProgress := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Already started", Topic: "next", IssueType: "task", Priority: 1})
@@ -178,12 +176,9 @@ func TestRunNextRoutesAroundAnInProgressLeafHeldElsewhere(t *testing.T) {
 	}
 }
 
-// The other half is the one the harness could not reach before, and it is the
-// opposite answer on the same shape: work in flight in a lane THIS checkout
-// holds is handed back to be resumed, not skipped in favour of a lower-ranked
-// open leaf. Skipping it is what once hid the very ticket a checkout was
-// working from that checkout (links-claims-1b0p, N8) — the agent asked what to
-// do next and was told to start something else.
+// The other half is the opposite answer on the same shape: work in flight in a
+// lane THIS checkout holds is handed back to be resumed, not skipped in favour
+// of a lower-ranked open leaf.
 func TestRunNextResumesOwnWorkInFlight(t *testing.T) {
 	// The session that started it is the session asking, spelled out rather
 	// than inherited: this test's subject is the sentence that says the work is
@@ -214,20 +209,16 @@ func TestRunNextResumesOwnWorkInFlight(t *testing.T) {
 	}
 }
 
-// The defect itself, end to end: two agent sessions in ONE checkout. Session
-// sess-peer starts a ticket; session sess-mine runs `lit next` and is told
-// "already in progress in a lane you hold — continue where you left off",
-// which is false about the only thing an agent acts on — whose work it is.
-// Three sessions believed it, and each time disproving it took a hand check of
-// git worktrees and push times, because nothing lit printed disagreed
-// (links-routing-t6fa).
+// Two agent sessions in ONE checkout. Session sess-peer starts a ticket;
+// session sess-mine runs `lit next` and must not be told "already in progress
+// in a lane you hold — continue where you left off", which would be false about
+// the only thing an agent acts on — whose work it is.
 //
 // What is NOT asserted is as deliberate as what is. The row still comes back:
 // the lane really does belong to this checkout, lanes are keyed on the checkout
 // on purpose (design-docs/work-claims.md rejects session-bound claims by name),
 // and routing past it would strand the fresh session that inherits a dead
-// predecessor's work — the case this same sentence serves correctly. Only the
-// wording was ever wrong, so only the wording changes.
+// predecessor's work.
 func TestRunNextNamesThePeerSessionWorkingThisCheckoutsLane(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-peer")
 	h := newReadyTestHarness(t)
@@ -236,7 +227,7 @@ func TestRunNextNamesThePeerSessionWorkingThisCheckoutsLane(t *testing.T) {
 
 	// Same checkout, same stream token, different session — asCheckout is
 	// deliberately not used, because switching streams would make this the
-	// already-solved foreign-lane case instead of this ticket's.
+	// foreign-lane case.
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-mine")
 	text := h.runNextText()
 
@@ -276,9 +267,9 @@ func TestRunNextTreatsTheByFallbackAsTheReadersIdentity(t *testing.T) {
 }
 
 // A lane we hold whose next ticket is startable serves it with NO announcement:
-// no claim is established, because we already hold the lane, so `next` prints
-// exactly what it always printed. This is the routing case with the quietest
-// output and therefore the one most easily broken without anyone noticing.
+// no claim is established, because we already hold the lane. This is the
+// routing case with the quietest output and therefore the one most easily
+// broken without anyone noticing.
 //
 // The hold rests on a `done`, not a `start` — completing a ticket mid-lane
 // keeps the lane you are halfway through — so this also pins that the lane
@@ -409,16 +400,14 @@ func TestRunNextRejectsLimitAndColumns(t *testing.T) {
 	}
 }
 
-// `lit next --status in_progress` is a documented flag combination that had no
-// test at all, which is how it stayed unable to return anything for as long as
-// routing gated servability on model.StateOpen (links-cli-q7hg). It is the
+// `lit next --status in_progress` is a documented flag combination. It is the
 // question an agent asks after a crash or a context reset — "what was I already
 // on?" — so these two tests pin both answers it can get, and the wording that
 // separates them.
 //
-// Driven through runNext rather than routeNext: what was untested is the FLAG,
-// and only the real command proves --status reaches the gather that makes the
-// in_progress row available to route at all.
+// Driven through runNext rather than routeNext: only the real command proves
+// --status reaches the gather that makes the in_progress row available to route
+// at all.
 func TestRunNextStatusInProgressResumesOurOwnWorkInFlight(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-mine")
 	h := newReadyTestHarness(t)
@@ -434,10 +423,10 @@ func TestRunNextStatusInProgressResumesOurOwnWorkInFlight(t *testing.T) {
 	}
 }
 
-// The half that survived links-claims-1b0p: when the only in_progress rows are
-// held fresh by other checkouts, every one verdicts routeAround and the walk
-// ends at NoWork. That used to print "no ready work" — byte-identical to an
-// empty backlog, telling an agent asking what it was on that its work is gone.
+// When the only in_progress rows are held fresh by other checkouts, every one
+// verdicts routeAround and the walk ends at NoWork. That must not print a bare
+// "no ready work" — byte-identical to an empty backlog, telling an agent asking
+// what it was on that its work is gone.
 func TestRunNextStatusInProgressNamesForeignHeldWorkRatherThanReadingEmpty(t *testing.T) {
 	h := newReadyTestHarness(t)
 	theirs := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Theirs, in flight", Topic: "next", IssueType: "task", Priority: 1})
@@ -458,7 +447,7 @@ func TestRunNextStatusInProgressNamesForeignHeldWorkRatherThanReadingEmpty(t *te
 		t.Fatalf("next --status in_progress = %q, want it to say why %q is not servable", err.Error(), theirs.ID)
 	}
 	// Still an answer and not a fault: naming the row must not have moved this
-	// off the exit code a looping caller reads (links-cli-cpou).
+	// off the exit code a looping caller reads.
 	var stderr bytes.Buffer
 	if code := WriteCommandError(&stderr, err); code != ExitNoWork {
 		t.Fatalf("exit code = %d, want %d (ExitNoWork) — work held elsewhere is the backlog's state, not a fault", code, ExitNoWork)
@@ -470,17 +459,16 @@ func TestRunNextStatusInProgressNamesForeignHeldWorkRatherThanReadingEmpty(t *te
 //
 // The exit code separates the two nonzero meanings a looping caller has to tell
 // apart — "stop, there is nothing for you" versus "lit is broken" — so that
-// telling them apart never requires parsing the English (links-cli-cpou).
+// telling them apart never requires parsing the English.
 func TestRunNextErrorsWhenNoReadyWork(t *testing.T) {
 	h := newReadyTestHarness(t)
 	err := h.runNextErr()
 	if err == nil {
 		t.Fatal("runNext() error = nil, want non-nil for empty ready set")
 	}
-	// Exactly, not merely contains: NoWork now appends a clause naming the rows
-	// the pool walk went past, and an empty backlog has none, so the sentence
-	// stays the one `next` has always printed (links-cli-q7hg, criterion 2). A
-	// contains-check would pass on a message that had grown a clause here.
+	// Exactly, not merely contains: NoWork appends a clause naming the rows
+	// the pool walk went past, and an empty backlog has none. A contains-check
+	// would pass on a message that had grown a clause here.
 	if err.Error() != "no ready work" {
 		t.Fatalf("runNext() error = %q, want exactly %q — an empty backlog gained no clause", err.Error(), "no ready work")
 	}
@@ -493,19 +481,18 @@ func TestRunNextErrorsWhenNoReadyWork(t *testing.T) {
 	}
 }
 
-// TestRenderNextOutcomeTerminalOutcomesKeepTheirType pins links-cli-cpou at the
-// seam that caused it. renderNextOutcome used to render the router's two
-// terminal outcomes into UNTYPED errors, throwing away the discriminator
-// routeNext had just established for the express purpose of keeping the
-// exhaustion case distinguishable. Both sinks dispatch by type, so both fell
+// TestRenderNextOutcomeTerminalOutcomesKeepTheirType pins that
+// renderNextOutcome renders the router's two terminal outcomes as TYPED errors,
+// keeping the discriminator routeNext established to keep the exhaustion case
+// distinguishable. Both sinks dispatch by type, so an untyped error falls
 // through to "command_failed", whose remediation tells the agent to retry an
 // answer that is deterministic and then to run `lit doctor` against a perfectly
 // healthy workspace — two dead ends, attached to a message saying the situation
 // calls for a deliberate act.
 //
 // The test drives the real seam rather than the error types in isolation:
-// asserting commandErrorReason(Exhausted{}) alone would still pass if this
-// function went back to wrapping the outcome in errors.New.
+// asserting commandErrorReason(Exhausted{}) alone would still pass if
+// renderNextOutcome wrapped the outcome in errors.New.
 func TestRenderNextOutcomeTerminalOutcomesKeepTheirType(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -551,8 +538,7 @@ func TestRenderNextOutcomeTerminalOutcomesKeepTheirType(t *testing.T) {
 			// capacity and may pass no verdict on it — in any wording, which
 			// is why the pin is the bare word and not one sentence's phrasing.
 			// NoWork.Error() already declines the same verdict; a remediation
-			// that makes it contradicts the message it prints under
-			// (links-cli-cpou).
+			// that makes it contradicts the message it prints under.
 			wantAbsent: []string{"startable"},
 		},
 	}
@@ -602,8 +588,8 @@ func TestRenderNextOutcomeTerminalOutcomesKeepTheirType(t *testing.T) {
 	}
 }
 
-// `--continue` is retired: it predates claim routing, which now subsumes the
-// epic-affinity bias unconditionally (routeNext's ServedFromEpicLane step).
+// `--continue` is retired: claim routing subsumes the epic-affinity bias
+// unconditionally (routeNext's ServedFromEpicLane step).
 // Passing the flag surfaces a pointer to that replacement instead of an
 // unhelpful "unknown flag" error.
 func TestRunNextContinueFlagIsRetired(t *testing.T) {
@@ -642,9 +628,9 @@ func TestRunNextCarriesParentEpic(t *testing.T) {
 // one line whose wording depends on a value the table holds empty — the
 // claimContext's acting identity.
 //
-// The two assertions are not one. That it names the holder is the fix; that it
-// has stopped saying "a lane you hold" is the defect, and a sentence could
-// easily acquire the name while keeping the claim (links-routing-t6fa).
+// The two assertions are not one: it must name the holder, and it must not say
+// "a lane you hold" — a sentence could easily acquire the name while keeping
+// the claim.
 func TestRenderNextOutcomeNamesTheOtherSessionWorkingOurLane(t *testing.T) {
 	h := newReadyTestHarness(t)
 	inFlight := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Theirs, in flight", Topic: "next", IssueType: "task", Priority: 1})
@@ -670,13 +656,9 @@ func TestRenderNextOutcomeNamesTheOtherSessionWorkingOurLane(t *testing.T) {
 }
 
 // Quiet is not proof the holder stopped, which is why no clock guards the
-// warning. An earlier fix suppressed it on the orphan annotation — in flight
-// with no update inside the threshold — on the premise that a session actively
-// working a ticket keeps it moving. lit does not enforce that premise: a comment
-// never touches the issue row, and neither does a commit or a push, so a session
-// that holds a branch all day and says so in comments crosses the threshold
-// while still working. Suppressing there restores the original defect on a
-// timer, so the sentence survives the clock.
+// warning. A comment never touches the issue row, and neither does a commit or
+// a push, so a session that holds a branch all day and says so in comments
+// crosses the orphan threshold while still working.
 func TestRenderNextOutcomeStillNamesTheHolderOfAQuietTicket(t *testing.T) {
 	h := newReadyTestHarness(t)
 	quiet := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Held, and silent about it", Topic: "next", IssueType: "task", Priority: 1})
@@ -786,16 +768,14 @@ func TestRenderNextOutcomeSpeaksOnlyInTheConditional(t *testing.T) {
 		// Step 2 serves abandoned in-flight rows too, so the epic's next lane
 		// can carry one: the one place the state-dependent sentence and the
 		// fixed suffix are concatenated. Pinned whole, because a product left
-		// partly covered is where this ticket's tautology survived.
+		// partly covered is where a tautology survives.
 		{"the epic's next lane serves abandoned work, qualifier and all", ServedFromEpicLane{Row: inFlightRow, Lane: inFlightLane},
 			inFlight.ID + " is in progress and nobody holds it — run `lit start " + inFlight.ID + "` to claim lane a2 of epic " + epicA.ID + " (a second lane of an epic you already hold a lane in)"},
 		// Step 1b, both states. Its qualifier concatenates onto the
 		// state-dependent sentence exactly as step 2's does, so the product
 		// needs both cells: a ready row and an abandoned one. This is the pick
-		// an agent is least likely to predict, and it printed the global pool's
-		// line verbatim until links-next-output-4hor — so what these two cells
-		// pin is not only the new clause but that the two picks stopped
-		// rendering alike.
+		// an agent is least likely to predict, and these two cells pin that it
+		// never renders the global pool's line verbatim.
 		{"the on-path dependency names the row it unblocks", ServedFromDependency{Row: freshRow, Lane: freshLane, Gates: inFlight.ID},
 			"run `lit start " + fresh.ID + "` to claim lane a1 of epic " + epicA.ID + " (gates " + inFlight.ID + ", which is in a lane you hold)"},
 		{"an abandoned dependency is served and still names what it unblocks", ServedFromDependency{Row: inFlightRow, Lane: inFlightLane, Gates: fresh.ID},
@@ -825,8 +805,8 @@ func TestRenderNextOutcomeSpeaksOnlyInTheConditional(t *testing.T) {
 // store holds after the command has run.
 //
 // Asserted through runNext rather than renderNextOutcome so the whole command
-// path is under it, and over the pick that had the most to lie about: an
-// unclaimed solo ticket, the case whose line once read "starting X claims X".
+// path is under it, and over the pick that has the most to lie about: an
+// unclaimed solo ticket.
 // The wording assertions elsewhere in this file all become vacuous if the
 // command ever does start claiming, and this is what would still fail.
 func TestRunNextClaimsNothingAndStartsNothing(t *testing.T) {
@@ -853,7 +833,7 @@ func TestRunNextClaimsNothingAndStartsNothing(t *testing.T) {
 	// The output must not claim otherwise either: a reader who believes the
 	// perfect tense skips `lit start` and works unclaimed, which is the harm the
 	// state assertions above prove has not happened but the line could still
-	// report (links-next-output-5aee).
+	// report.
 	for _, lie := range []string{"starting " + target.ID, "claims " + target.ID, "taking over " + target.ID, "resuming " + target.ID} {
 		if strings.Contains(text, lie) {
 			t.Fatalf("next output = %q contains %q — it reports a side effect this command does not have", text, lie)
@@ -865,9 +845,8 @@ func TestRunNextClaimsNothingAndStartsNothing(t *testing.T) {
 }
 
 // The two picks that both establish a claim in a lane we do not hold must remain
-// tellable apart BY THE OUTPUT ALONE — that is the acceptance criterion
-// links-next-output-4hor was filed on, and it is not implied by either line
-// being correct in isolation. Asserted on ONE row deliberately: holding the row,
+// tellable apart BY THE OUTPUT ALONE — it is not implied by either line being
+// correct in isolation. Asserted on ONE row deliberately: holding the row,
 // the lane and the standings fixed leaves the routing step as the only variable,
 // so a future edit that made the qualifier unconditional (or dropped it) could
 // not pass this by changing the fixture.

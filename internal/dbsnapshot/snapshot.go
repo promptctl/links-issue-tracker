@@ -17,14 +17,12 @@
 // The shared hold keeps a directory rotator (snapshots restore, adopt,
 // promotion/heal) from rewriting the tree mid-copy; the journal hold keeps a
 // concurrent open's engine-lifecycle I/O — journal crash-recovery after an
-// unclean kill, close-time flush — from rewriting the journal under the walk
-// (links-sync-pgct.15); the commit lock keeps writers from committing under
-// it. Open Dolt connections are otherwise fine to keep during Take. For
-// clean recovery the migration system should snapshot before the commit it's
-// protecting. (This package cannot import store, so the requirement is a
-// documented precondition, not an acquired one; PR #379's review caught the
-// previous "Take is safe with open connections" wording inviting the next
-// caller to skip the locks.)
+// unclean kill, close-time flush — from rewriting the journal under the walk;
+// the commit lock keeps writers from committing under it. Open Dolt
+// connections are otherwise fine to keep during Take. For clean recovery the
+// migration system should snapshot before the commit it's protecting. (This
+// package cannot import store, so the requirement is a documented
+// precondition, not an acquired one.)
 //
 // Distinct from those store-owned preconditions, the package acquires its own
 // producer beacon (an flock inside snapshotsDir, see producerBeaconName): Take
@@ -520,9 +518,7 @@ func isCollectorCondemnedName(name string) bool {
 // parseName is the one predicate for "is this a snapshot name". Rejecting
 // producer artifacts here (not just in List's loop) means every consumer —
 // List, validateSnapshotName, and through it Restore — refuses them from one
-// source; previously Restore would accept a labeled ".tmp" leftover ("<ns>-
-// <label>.tmp" parses as <ns>) and install a torn partial copy as the
-// database. [LAW:one-source-of-truth]
+// source. [LAW:one-source-of-truth]
 func parseName(name string) (time.Time, bool) {
 	if IsProducerArtifactName(name) {
 		return time.Time{}, false
@@ -544,8 +540,8 @@ func parseName(name string) (time.Time, bool) {
 // parsePositiveDigits parses s as a positive int64 minted by
 // strconv.FormatInt — the round-trip check rejects what ParseInt would
 // tolerate but no lit producer ever writes: a sign prefix, leading zeros.
-// The sign hole was live: "+123.tmp" classified as lit-minted residue and
-// was destroyed.
+// Admitting a sign would classify "+123.tmp" as lit-minted residue and
+// destroy it.
 func parsePositiveDigits(s string) (int64, bool) {
 	ns, err := strconv.ParseInt(s, 10, 64)
 	if err != nil || ns <= 0 || strconv.FormatInt(ns, 10) != s {
@@ -580,8 +576,9 @@ func isMintableLabel(label string) bool {
 // condemnation rename, <ns>-<label>.reserve.<ns>.condemned — 19+1 (head) +
 // 8 (".reserve") + 20 (".<ns>") + 10 (".condemned") = 58 bytes of frame, so
 // 128 label bytes leaves a wide margin. Without the cap, a killed Take with
-// a near-NAME_MAX label left residue whose condemnation rename could never
-// succeed (ENAMETOOLONG), stranding the corpse for every later collection.
+// a near-NAME_MAX label would leave residue whose condemnation rename can
+// never succeed (ENAMETOOLONG), stranding the corpse for every later
+// collection.
 const maxLabelBytes = 128
 
 // sanitizeLabel is a lossy normalizer, not a validator: it maps illegal

@@ -135,8 +135,8 @@ func TestCheckPendingQuarantineAllowsAlreadyApplied(t *testing.T) {
 
 // TestQuarantineTableSurvivesCheckpointReset is the critical invariant test:
 // after a Dolt checkpoint reset, the migration_quarantine table still exists.
-// This verifies the bootstrap-before-checkpoint ordering that prevents the
-// PR #119 bug (quarantine table erased by the very reset it was meant to survive).
+// This verifies the bootstrap-before-checkpoint ordering, which keeps the
+// quarantine table from being erased by the very reset it is meant to survive.
 func TestQuarantineTableSurvivesCheckpointReset(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -574,11 +574,10 @@ func withStaleShapeQuarantineTable(t *testing.T, ctx context.Context, doltRoot s
 	}
 }
 
-// TestQuarantineTableSelfHealsStaleShapeWhenEmpty pins the ticket's checkable
-// criterion: a migration_quarantine table left in an older lit build's shape
+// TestQuarantineTableSelfHealsStaleShapeWhenEmpty pins that a
+// migration_quarantine table left in an older lit build's shape
 // (version_id/reason/quarantined_at) with zero rows is corrected in place by
-// an ordinary lit Open, with no manual SQL — instead of ensureQuarantineTable's
-// CREATE TABLE IF NOT EXISTS silently trusting the wrong shape forever.
+// an ordinary lit Open, with no manual SQL.
 func TestQuarantineTableSelfHealsStaleShapeWhenEmpty(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

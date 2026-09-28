@@ -23,10 +23,10 @@ import (
 // contract, rather than buffering the whole scan in memory to flush at once.
 func runStores(ctx context.Context, stdout io.Writer, args []string) error {
 	fs := newCobraFlagSet("stores")
-	// --counts folds the former `lit overview` in: same discovery walk over the
-	// same roots, but each store is opened read-only and summarized by its
-	// ready/in-flight/blocked counts rather than merely named. It is a summary
-	// projection of the discovered set — a flag on stores, not a separate verb.
+	// --counts: same discovery walk over the same roots, but each store is
+	// opened read-only and summarized by its ready/in-flight/blocked counts
+	// rather than merely named. It is a summary projection of the discovered
+	// set — a flag on stores, not a separate verb.
 	counts := fs.Bool("counts", false, "Report each discovered store's ready / in-flight / blocked counts (cross-project rollup) instead of listing storage paths")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err

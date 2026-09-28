@@ -14,13 +14,6 @@ import (
 
 // Pre-goose schema reconcile.
 //
-// This file is the resurrected forward-migration mechanism deleted in
-// commit 254f86b. The deletion stranded every workspace at any pre-v1
-// canonical shape — the verified-adoption gate that replaced it could
-// detect "shape != current baseline" but not bring an earlier shape
-// forward, so older workspaces hit "partial schema, restore or recreate"
-// (i.e. destroy your data).
-//
 // The reconcile is a HISTORICAL ARTIFACT. The operations encoded here
 // represent the schema evolution that happened BEFORE goose existed.
 // No new operations should be added here — every future schema change
@@ -221,7 +214,7 @@ func (s *Store) reconcileToBaseline(ctx context.Context, guard *snapshotGuard) (
 		// translated row-by-row into issue_events (+ issue_event_changes
 		// for status transitions) by translateIssueHistoryToEvents below,
 		// then the table itself is dropped. [LAW:no-silent-failure] —
-		// the legacy→v1 bridge no longer destroys audit history.
+		// the legacy→v1 bridge does not destroy audit history.
 		{target: "issue_events", stmt: `CREATE TABLE issue_events (
 			id VARCHAR(191) PRIMARY KEY,
 			issue_id VARCHAR(191) NOT NULL,
@@ -253,10 +246,8 @@ func (s *Store) reconcileToBaseline(ctx context.Context, guard *snapshotGuard) (
 	// BOTH schema translation AND bookkeeping cleanup. A workspace that
 	// reaches this function was classified phaseAdopt — by definition
 	// NOT phaseManaged — so any rows present in goose_db_version are
-	// fabricated: an older buggy binary inserted them without the
-	// migrations actually running (field signature: every row carries
-	// the same tstamp, evidence of a single INSERT loop). Drop the
-	// table; adoptPreGooseWorkspace recreates it and stamps the
+	// fabricated: inserted without the migrations actually running. Drop
+	// the table; adoptPreGooseWorkspace recreates it and stamps the
 	// baseline cleanly.
 	//
 	// [LAW:types-are-the-program] The pre-condition for adoption is
@@ -292,11 +283,10 @@ func (s *Store) reconcileToBaseline(ctx context.Context, guard *snapshotGuard) (
 	}
 	changed = changed || actorColumnChanged
 	// [LAW:no-silent-failure] Before issue_history goes away, lift every
-	// row that maps cleanly onto the canonical event log forward — the
-	// previous drop-without-translate path silently discarded audit data
-	// on every legacy→v1 bridge. MUST run AFTER the assignee→actor rename
-	// above; the translation writes to issue_events.actor, which exists
-	// only after the rename has landed on workspaces that pre-date it.
+	// row that maps cleanly onto the canonical event log forward. MUST
+	// run AFTER the assignee→actor rename above; the translation writes
+	// to issue_events.actor, which exists only after the rename has
+	// landed on workspaces that pre-date it.
 	translatedHistoryChanged, err := s.translateIssueHistoryToEvents(ctx, guard)
 	if err != nil {
 		return changed, err
@@ -518,8 +508,7 @@ func (s *Store) verifyIssuesReconcilable(ctx context.Context) error {
 // change rows) or none of them — a half-translated state would make
 // the drop step lose any rows that had not yet copied.
 //
-// [LAW:no-silent-failure] The previous drop-only bridge silently
-// destroyed audit history. Translation makes the bridge lossless for
+// [LAW:no-silent-failure] Translation makes the bridge lossless for
 // every row whose shape the canonical mapping accepts.
 // [LAW:dataflow-not-control-flow] The per-row loop runs the same
 // sequence (INSERT event, conditionally INSERT change) for every row
@@ -709,10 +698,9 @@ func legacyInsertStatement(coll collection, fields []string) string {
 }
 
 // legacySQLTable and legacySQLColumn spell the fan-out's domain names in v1
-// SQL — the same write-direction knowledge the hand-written INSERT statements
-// this renderer replaced carried, now in one table-shaped place. Only
-// model.FieldChange's from/to differ from their columns (from_value/to_value);
-// every other fan-out field is stored under its own name.
+// SQL. Only model.FieldChange's from/to differ from their columns
+// (from_value/to_value); every other fan-out field is stored under its own
+// name.
 func legacySQLTable(coll collection) string {
 	switch coll {
 	case collEvents:
@@ -1012,9 +1000,8 @@ func (s *Store) ensureUnifiedStatusSchema(ctx context.Context, guard *snapshotGu
 		{
 			// [LAW:single-enforcer] The UPDATE predicate matches the
 			// probe exactly so the UPDATE touches only inconsistent
-			// rows. The old shape (UPDATE filtered only on
-			// `status <> 'closed'`) was a full-table write on every
-			// run.
+			// rows; an UPDATE filtered only on `status <> 'closed'`
+			// would be a full-table write on every run.
 			probe:   `SELECT 1 FROM issues WHERE status <> 'closed' AND closed_at IS NOT NULL LIMIT 1`,
 			stmt:    `UPDATE issues SET closed_at = NULL WHERE status <> 'closed' AND closed_at IS NOT NULL`,
 			context: "normalize non-closed closed_at",
@@ -1062,9 +1049,8 @@ func (s *Store) ensureIssueTopics(ctx context.Context, guard *snapshotGuard) (bo
 }
 
 func (s *Store) ensureIssueRanks(ctx context.Context, guard *snapshotGuard) (bool, error) {
-	// Assign ranks to any issues that don't have one yet, preserving the
-	// previous default ordering (status, priority, updated_at, id) as
-	// the initial rank sequence.
+	// Assign ranks to any issues that don't have one yet, with
+	// (status, priority, updated_at, id) as the initial rank sequence.
 	rows, err := s.db.QueryContext(ctx, "SELECT id FROM issues WHERE item_rank = '' ORDER BY status ASC, priority ASC, updated_at DESC, id ASC")
 	if err != nil {
 		return false, fmt.Errorf("ensureIssueRanks: query unranked: %w", err)

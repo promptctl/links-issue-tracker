@@ -82,12 +82,12 @@ func (e OwnerApprovalRequiredError) Error() string {
 // one-RW-engine-per-path): runs INLINE/foreground on the caller's own engine, never a
 // background worker.
 //
-// ownerApproval is the owner-confirmation step (links-sync-pgct.4): the take runs
-// only when it matches this exact fork+side's takeApprovalToken. Anything else —
-// absent, stale, or issued for the other side — returns OwnerApprovalRequiredError
-// carrying the current token and inventory, with nothing mutated. The check runs
-// under the same commit lock as the mutation, so there is no gap between the state
-// the owner approved and the state destroyed. [LAW:no-ambient-temporal-coupling]
+// ownerApproval is the owner-confirmation step: the take runs only when it matches
+// this exact fork+side's takeApprovalToken. Anything else — absent, stale, or issued
+// for the other side — returns OwnerApprovalRequiredError carrying the current token
+// and inventory, with nothing mutated. The check runs under the same commit lock as
+// the mutation, so there is no gap between the state the owner approved and the state
+// destroyed. [LAW:no-ambient-temporal-coupling]
 // [LAW:single-enforcer] the gate lives on the destructive operation itself, not on
 // any of its surfaces.
 func (s *Store) SyncResolveUnrelated(ctx context.Context, remote string, branch string, choice storage.UnrelatedResolution, ownerApproval string) (storage.SyncReconcileResult, error) {
@@ -182,7 +182,7 @@ func (s *Store) applyUnrelatedTake(ctx context.Context, result *storage.SyncReco
 		// take-local authors replay commits ON the remote head (commitReplayAndAdvance),
 		// so it shares the three-way path's full safe-replay envelope — schema-ahead refusal
 		// included: a replay below an ahead remote's schema would drop the newer fields and
-		// regress the shared remote on push (the 2026-07-08 incident shape).
+		// regress the shared remote on push.
 		// [LAW:single-enforcer] the same replayUnderGuard that wraps the three-way reconcile.
 		return s.replayUnderGuard(ctx, remote, branch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch) error {
 			return s.takeLocalOntoRemoteHead(ctx, result, guard, plan.dataBranch, scratch, plan.localHead, plan.remoteHead)

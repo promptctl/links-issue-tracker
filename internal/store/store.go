@@ -79,8 +79,8 @@ type Store struct {
 	// applyPreMutationHookForTest, if non-nil, fires inside Apply after the
 	// change is fully planned and before withMutation acquires the commit lock.
 	// Production callers leave it nil; the concurrency regression test sets it to
-	// commit a foreign-row delete in exactly the window a pre-lock validation
-	// read used to trust, proving the relocated in-tx validation observes it.
+	// commit a foreign-row delete in exactly that window, proving the in-tx
+	// validation observes it.
 	// [LAW:no-shared-mutable-globals] The seam is per-Store instance state with
 	// an explicit owner, not an ambient package global — so tests holding their
 	// own Store can never race on it (and t.Parallel() stays safe).
@@ -158,7 +158,7 @@ func Open(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store
 	s.releaseWorkspaceLock = release
 	// [LAW:single-enforcer] Store-level commit lock is the single writer gate for all startup and runtime mutations.
 	// Branch normalization runs on this open's own engine every time — the
-	// bootstrap only runs it at creation now — so a database that arrived
+	// bootstrap only runs it at creation — so a database that arrived
 	// pre-made on another branch (an adopt's clone) is still renamed to
 	// master on its first write open. [LAW:dataflow-not-control-flow] it is
 	// unconditional; on an already-normalized store it reads and does nothing.
@@ -392,9 +392,9 @@ func (s *Store) Close() error {
 // ping forces the embedded engine — and with it the acquisition of Dolt's
 // own journal lock, or a read engine's fallback past it — to happen here, at
 // store construction, before any commit lock the store's user takes. Left
-// lazy, a write store's first SQL was migrate, inside withCommitLock, which
-// acquired the journal lock in the inverted commit→LOCK order the discipline
-// in this package's doc (doc.go) forbids. [LAW:no-ambient-temporal-coupling]
+// lazy, a write store's first SQL would run inside withCommitLock and acquire
+// the journal lock in the inverted commit→LOCK order the discipline in this
+// package's doc (doc.go) forbids. [LAW:no-ambient-temporal-coupling]
 // an engine's (and journal lock's) lifetime is the Store's lifetime by
 // construction, not by whichever query happens to run first.
 //
@@ -468,17 +468,16 @@ func openStoreConnection(ctx context.Context, doltRootDir string, workspaceID st
 // first to arrive stands still in front of this re-open until it fails; the
 // only LOCK taker that skips the commit lock, RecordPushedHead, runs once
 // per mirror cycle, and the next cycle begins with a clone. So the per-call
-// wait is at most a few multiples of coResidentHolderWait. Across a mutation, this call is the rotate step of
-// retryTransientGCContention's loop, which runs it up to
-// transientRetryMaxAttempts-1 times, so the per-call bound says nothing about
-// the hold a commit-lock waiter actually faces; that aggregate is bounded
-// there, against commitLockWaiterBudget, and pinned by
+// wait is at most a few multiples of coResidentHolderWait. Across a mutation,
+// this call is the rotate step of retryTransientGCContention's loop, which
+// runs it up to transientRetryMaxAttempts-1 times, so the per-call bound says
+// nothing about the hold a commit-lock waiter actually faces; that aggregate
+// is bounded there, against commitLockWaiterBudget, and pinned by
 // TestRetryTransientGCContentionStopsBeforeOutlastingCommitLockWaiters.
-// Reading the per-call bound as the aggregate is what let the product of the
-// two budgets reach 33.8 minutes against the then-15-minute waiter budget
-// (links-sync-dauk). With both in place, any holder this re-open waits on
-// either releases or outlives this mutation's bounded failure, and the commit
-// lock is released either way.
+// Reading the per-call bound as the aggregate would let the product of the
+// two budgets outrun the waiter budget. With both in place, any holder this
+// re-open waits on either releases or outlives this mutation's bounded
+// failure, and the commit lock is released either way.
 //
 // The holder record is not rotated with the engine: it names this process
 // and this command, both of which the rotation keeps, and the gap in which
@@ -658,8 +657,8 @@ func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter)
 	if err != nil {
 		return nil, err
 	}
-	// [LAW:types-are-the-program] Filter types are already-parsed vocabulary;
-	// the defensive trim/skip that the raw-string filter needed is gone with it.
+	// [LAW:types-are-the-program] Filter types are already-parsed vocabulary,
+	// so they need no defensive trim/skip.
 	//
 	// That parse is also what lets the next two clauses stay a single `IN` list
 	// where an id list may not: model.IssueType is a closed vocabulary, so the
@@ -830,8 +829,8 @@ func (s *Store) scanListRows(ctx context.Context, query string, args []any) ([]i
 // childless parent, or for the intersection of two disjoint id sets, narrowed
 // the result to nothing, and an empty set must mean "no rows" rather than "no
 // filter". A filter holding only blank ids is the opposite case — it narrows
-// nothing, exactly as the single clause it replaces did, because every entry
-// was dropped before the count was taken. [LAW:parse-dont-validate]
+// nothing, because every entry was dropped before the count was taken.
+// [LAW:parse-dont-validate]
 //
 // The ids are sorted so that the batch partition and the row order are
 // functions of the id set alone, not of the order a caller happened to type or
@@ -849,8 +848,8 @@ func (s *Store) selectedIssueIDs(ctx context.Context, filter storage.ListIssuesF
 		if restricted {
 			// Intersected through a set rather than slices.Contains, which
 			// would be O(len(children) x len(selected)) — the same quadratic
-			// over two caller-supplied id lists that this change removes from
-			// the planner, just relocated into Go where no index hides it.
+			// over two caller-supplied id lists that idBatchSize keeps out of
+			// the planner, in Go where no index hides it.
 			// The rule beside idBatchSize governs an id set wherever it is
 			// tested, not only where it is rendered into SQL.
 			// [LAW:one-type-per-behavior]
@@ -869,11 +868,10 @@ func (s *Store) selectedIssueIDs(ctx context.Context, filter storage.ListIssuesF
 // childIDsOfParents returns the ids of the direct children of the named
 // parents.
 //
-// This is the parent filter's whole implementation, lifted out of the issue
-// scan. The membership test it carries is over dst_id, which is the leading
-// column of idx_relations_dst_type, so each batch is a short run of point
-// lookups rather than the correlated subquery the EXISTS form planned once per
-// outer row.
+// This is the parent filter's whole implementation. The membership test it
+// carries is over dst_id, which is the leading column of
+// idx_relations_dst_type, so each batch is a short run of point lookups rather
+// than the correlated subquery an EXISTS form would plan once per outer row.
 func (s *Store) childIDsOfParents(ctx context.Context, parentIDs []string) ([]string, error) {
 	children := []string{}
 	for _, batch := range idBatches(parentIDs) {
@@ -1267,7 +1265,7 @@ func (s *Store) Apply(ctx context.Context, id string, c storage.Change) (model.I
 	// exactly one atomicity owner: this method plans both writes (pure: reads,
 	// validation, in-memory mutation) and then performs them inside a SINGLE
 	// withMutation, so they share one SQL transaction and one Dolt commit. A
-	// validation error or crash between the two writes can no longer leave a
+	// validation error or crash between the two writes cannot leave a
 	// status-moved-but-fields-unwritten row — the torn state is unrepresentable.
 	// [LAW:one-source-of-truth] One change has one author: the actor is
 	// normalized once here and recorded on every event the change produces.
@@ -1497,8 +1495,8 @@ func (s *Store) planStatusTransition(ctx context.Context, issue model.Issue, act
 	// substrate survives because a reclaim — same state, new assignee OR a new
 	// checkout taking the lane — moves the claimant and falls through, which is
 	// what keeps "who took this over" answerable. Comparing only the assignee
-	// dropped every takeover between two checkouts of one identity on the floor,
-	// silently and with exit 0. [LAW:no-silent-failure]
+	// would drop every takeover between two checkouts of one identity on the
+	// floor, silently and with exit 0. [LAW:no-silent-failure]
 	if toStatus == fromStatus && post == prior {
 		return transitionWrite{noop: true, post: issue}, nil
 	}
@@ -1533,8 +1531,8 @@ func (s *Store) planStatusTransition(ctx context.Context, issue model.Issue, act
 		redirectTargetArg = *postRedirect
 	}
 	// [LAW:one-source-of-truth] Change rows mirror the columns that actually
-	// moved. A same-state reclaim records only the assignee row — the legacy
-	// from==to status row was a schema lie.
+	// moved. A same-state reclaim records only the assignee row — a from==to
+	// status row would be a schema lie.
 	var changes []model.FieldChange
 	if fromStatus != toStatus {
 		changes = append(changes, model.FieldChange{Field: "status", From: fromStatus, To: toStatus})
@@ -1580,8 +1578,9 @@ func (s *Store) planStatusTransition(ctx context.Context, issue model.Issue, act
 // the redirect target, then performs the guarded status UPDATE and the change
 // event. The redirect validation lives here rather than in planStatusTransition
 // so the FOREIGN row it reads (the redirect canonical) is read on the same tx,
-// under the same held commit lock, as the write it guards — closing the window a
-// pre-lock plan-phase read left open. [LAW:no-ambient-temporal-coupling]
+// under the same held commit lock, as the write it guards — a pre-lock
+// plan-phase read would leave a window open between the two.
+// [LAW:no-ambient-temporal-coupling]
 // Everything else it does is a write, so it still composes into any transaction
 // a caller already holds — which is how Apply folds a transition and a field
 // write into one commit. [LAW:single-enforcer]
@@ -1770,7 +1769,7 @@ func validateRedirectTarget(ctx context.Context, tx *sql.Tx, closingID string, r
 }
 
 func currentStatusTx(ctx context.Context, tx *sql.Tx, issueID string) (string, error) {
-	// status column is nullable since #79 (containers store NULL); the scan target
+	// status column is nullable (containers store NULL); the scan target
 	// must match the column shape, not the subset of rows this caller expects.
 	var status sql.NullString
 	if err := tx.QueryRowContext(ctx, `SELECT status FROM issues WHERE id = ?`, issueID).Scan(&status); err != nil {
@@ -1808,11 +1807,9 @@ func currentRetentionTx(ctx context.Context, tx *sql.Tx, issueID string) (model.
 // NotFoundError when absent. It is the in-tx endpoint existence check relation
 // writes use so the endpoint proven present is the endpoint the edge is written
 // against — the read and the insert share one tx under the held commit lock,
-// closing the window a pre-lock GetIssue left open.
-// [LAW:no-ambient-temporal-coupling] Existence is read where the write happens,
-// not earlier. It accepts retained (archived/deleted) rows exactly as the prior
-// GetIssue did — no deleted_at filter — so relation policy is unchanged; only
-// the read moves under the lock.
+// leaving no window between them. [LAW:no-ambient-temporal-coupling]
+// Existence is read where the write happens, not earlier. It accepts retained
+// (archived/deleted) rows — no deleted_at filter.
 func requireIssueExistsTx(ctx context.Context, tx *sql.Tx, issueID string) error {
 	var one int
 	if err := tx.QueryRowContext(ctx, `SELECT 1 FROM issues WHERE id = ?`, issueID).Scan(&one); err != nil {
@@ -1947,7 +1944,7 @@ func (s *Store) ensureMetaDefault(ctx context.Context, guard *snapshotGuard, key
 // order out of the query and into this package: a container's state is a
 // reading of its children that no column holds. The status FILTER already lives
 // past that boundary (see filterByState); leaving the sort on the query side of
-// it is what let one listing mean two different things by "status".
+// it would let one listing mean two different things by "status".
 // [LAW:one-source-of-truth]
 var issueSortKeys = storage.SortBindings{
 	"id":         func(a, b model.Issue) int { return strings.Compare(a.ID, b.ID) },
@@ -2215,12 +2212,11 @@ func (s *Store) queryEvents(ctx context.Context, whereClause string, args ...any
 	// puts ".12Z" — three milliseconds EARLIER — after ".123456789Z", because
 	// the trimmed encoding runs out at a character where "Z" outranks a digit.
 	// A SQL sort on that column therefore disagrees with any engine holding a
-	// real instant, on a collision no test could construct until the contract
-	// grew a clock seam (links-store-seam-utz7).
+	// real instant.
 	//
 	// [LAW:one-source-of-truth] The comparison is the contract's, not this
 	// engine's: storage.EventOrdering is what the memory engine sorts by too,
-	// so the rule cannot be edited into disagreement again. The sort is stable,
+	// so the rule cannot be edited into disagreement. The sort is stable,
 	// so the id grouping above survives it untouched.
 	slices.SortStableFunc(out, storage.EventOrdering)
 	return out, nil
@@ -2265,12 +2261,11 @@ type partialIssue struct {
 // file it into the middle of the order instead.
 //
 // RankTop asks the frame. Before everything is not before-my-siblings-only, so
-// asking the workspace there drew the key from a keyspace shared with issues
-// the new one is never compared against: a child filed at the top took a
-// midpoint against whichever issue held the workspace's first key, and the
-// next top-level `--top` create then computed its own key against that child's
-// (links-rank-t2vl). It is the same bleed links-rank-o7qn closed for the rank
-// verbs.
+// asking the workspace there would draw the key from a keyspace shared with
+// issues the new one is never compared against: a child filed at the top
+// would take a midpoint against whichever issue holds the workspace's first
+// key, and the next top-level `--top` create would compute its own key
+// against that child's.
 //
 // [LAW:one-source-of-truth] The direction, the population, and the answer for
 // a population holding nothing yet all come from the edge — edgeFor resolves
@@ -2500,7 +2495,7 @@ func (s *Store) hydrateIssues(ctx context.Context, rows []issueRow) ([]model.Iss
 		}
 		// [LAW:single-enforcer] Hydrator post-condition: every returned Issue is
 		// fully hydrated. Consumers receive a typed value and never need to
-		// re-check IsHydrated() defensively. (subsumes va-001-hydration-b3z)
+		// re-check IsHydrated() defensively.
 		if !issue.IsHydrated() {
 			return nil, fmt.Errorf("hydrateIssues: produced unhydrated issue %s", issue.ID)
 		}
@@ -2518,8 +2513,8 @@ func (s *Store) lifecycleChildrenByEpicIDs(ctx context.Context, epicIDs []string
 	// regardless of how many epics are open instead of scaling as one label query
 	// plus one child-relation query per epic. hydrateIssues preserves input order
 	// and the SELECT groups children by epic (dst_id) then item_rank, so
-	// re-bucketing the hydrated result by parentID reproduces the identical
-	// per-epic, rank-ordered grouping the per-epic loop produced.
+	// re-bucketing the hydrated result by parentID reproduces the per-epic,
+	// rank-ordered grouping.
 	//
 	// Batching the epic ids does not disturb that ordering: an epic falls in
 	// exactly one batch, so its children are still produced consecutively and in
@@ -2528,10 +2523,9 @@ func (s *Store) lifecycleChildrenByEpicIDs(ctx context.Context, epicIDs []string
 	//
 	// It does change the count, and the sentence above is about fan-out rather
 	// than about a constant. One query per batch is ceil(N/idBatchSize), which
-	// grows with the epic count where the single clause did not -- but it is the
-	// per-epic query fan-out this pass exists to prevent that stays gone, and
-	// the cap is what keeps the clause it replaces from costing more in planning
-	// than the extra round trips cost to make. See idbatch.go.
+	// grows with the epic count -- but the per-epic query fan-out stays
+	// absent, and the cap is what keeps the clause from costing more in
+	// planning than the extra round trips cost to make. See idbatch.go.
 	childRows := make([]issueRow, 0)
 	parentIDs := make([]string, 0)
 	for _, batch := range idBatches(epicIDs) {
@@ -2837,22 +2831,15 @@ func ensureMasterDefaultBranch(ctx context.Context, db *sql.DB) error {
 
 // The co-resident-holder sizing chain. Measured facts at the root — what each
 // routine holder of the live store costs to wait out — and every wait in the
-// store derived from them by arithmetic. [LAW:one-source-of-truth] The waits
-// used to be three hand-set round numbers (a 20s hold budget, a 30s
-// engine-open retry, 300 journal-lock attempts at 100ms) that each had to be
-// remembered into agreement; links-sync-dauk is what happens when one of them
-// is set below the cost of the work it bounds and nothing in the code can
-// notice. Change a measurement; the waits follow.
+// store derived from them by arithmetic. [LAW:one-source-of-truth] Hand-set
+// waits would each have to be remembered into agreement, and one set below the
+// cost of the work it bounds is nothing the code could notice. Change a
+// measurement; the waits follow.
 //
-// What the mirror holds changed under links-scale-om3r.s2h, and the chain
-// changed with it. The mirror used to open the live store's one write engine
-// and push to the remote under it, so the hold WAS the network round trip
-// (measured 2026-09-12: p50 13.2s, slowest healthy cycle 20.0s, 627 cycles in
-// .git/links/mirror.log by 2026-09-27 at p50 13.2s, max 47s). Now the mirror
-// holds the live store only to clone it — workspace shared, Dolt's LOCK,
-// commit lock, one copy-on-write clone of the dolt directory, release — and
-// pushes from the clone with no lock on the live store held. The push's own
-// deadline is the separate chain below (mirrorPushDeadline).
+// The mirror holds the live store only to clone it — workspace shared,
+// Dolt's LOCK, commit lock, one copy-on-write clone of the dolt directory,
+// release — and pushes from the clone with no lock on the live store held.
+// The push's own deadline is the separate chain below (mirrorPushDeadline).
 const (
 	// mirrorCloneObservedTail is the slowest a HEALTHY hold — take the three
 	// locks, clone the dolt directory, clear the pending marker, release —
@@ -2881,8 +2868,7 @@ const (
 	// still running at twice the slowest healthy hold ever recorded is not a
 	// hold running a bit long; it is a copy that has stopped making progress,
 	// and the budget fires there. A budget set AT the cost of the work is not
-	// a safety valve; it is a scheduled failure, which is exactly the 15.8%
-	// deferral rate links-sync-dauk measured against the old push hold.
+	// a safety valve; it is a scheduled failure.
 	mirrorHoldStallFactor = 2
 
 	// mirrorHoldBudget is the deadline each mirror hold on the live store runs
@@ -2899,8 +2885,7 @@ const (
 	// clone tail above; the record step's is one journal append. So a cut
 	// lands within one observed tail of its deadline — a bound derived from
 	// the measurement, not a second measurement, which is why it is not
-	// exported as an "observed" figure. The old push hold's cancellation lag
-	// was measured separately and lives on MirrorPushCancelLagObserved below.
+	// exported as an "observed" figure.
 	mirrorHoldCancelLag = mirrorCloneObservedTail
 
 	// mirrorHoldCeiling is the longest a mirror can hold the live store's
@@ -2965,10 +2950,7 @@ var coResidentHolderWait = mirrorHoldCeiling + coResidentWaitHeadroom
 // holds the single-flight sync-push lock for its whole run, and every mirror
 // spawned meanwhile loses that race and exits. A push hung on a stalled
 // transport would therefore stop pushes for as long as the remote cared to
-// stall (links-sync-pgct.11.1's `kex_exchange_identification` hang), so the
-// push still runs under a deadline. It is the OLD hold budget's arithmetic,
-// unchanged: the figures were measured on this exact operation and it is the
-// same operation, only no longer a hold.
+// stall, so the push runs under a deadline.
 const (
 	// mirrorPushObservedTail is the slowest a HEALTHY push — open the clone's
 	// engine, push, close — has been measured to run on a real workspace.
@@ -2978,9 +2960,9 @@ const (
 	//
 	//   - .git/links/mirror.log, 279 cycles: min 10.6s; p50 13.2s over all of
 	//     them, 12.7s over the 235 that were not cut; slowest uncut cycle
-	//     20.0s. 44 of the 279 (15.8%) were cut at the then-20s budget, so
-	//     every cycle that would have run longer is recorded as a cut and the
-	//     log cannot show the tail. A floor, never a ceiling.
+	//     20.0s. 44 of the 279 (15.8%) were cut, so every cycle that would
+	//     have run longer is recorded as a cut and the log cannot show the
+	//     tail. A floor, never a ceiling.
 	//   - 20 foreground `lit sync push` runs of the same store: min 9.8s,
 	//     p50 12.2s, max 17.0s. Uncensored — the foreground push shares
 	//     performSyncPush with the mirror and is deliberately unbounded — so
@@ -3009,18 +2991,17 @@ const (
 	mirrorPushDeadline = mirrorPushObservedTail * mirrorPushStallFactor
 
 	// MirrorPushCancelLagObserved is how much longer a cut push keeps its
-	// engine (the clone's, now) after its deadline has already fired:
+	// engine (the clone's) after its deadline has already fired:
 	// cancellation reaches the transport, but the push does not unwind
 	// instantly. Measured 2026-09-12 over the 44 cut cycles in mirror.log as
 	// elapsed-minus-budget: p50 1.3s, but 21.4s at the tail.
 	//
 	// Exported because the cli's push-deadline regression tests assert where
-	// a cut push ENDS, and had been restating that bound as a bare 30s — a
-	// second, unattributed copy of this figure, which a re-measurement here
-	// would have left behind (links-testperf-6vfg). [LAW:one-source-of-truth]
-	// No store wait is sized against it any more: the push holds nothing on
-	// the live store, so its lag is the mirror process's own lifetime and
-	// nobody else's.
+	// a cut push ENDS, and restating that bound there would be a second,
+	// unattributed copy of this figure that a re-measurement here leaves
+	// behind. [LAW:one-source-of-truth] No store wait is sized against it: the
+	// push holds nothing on the live store, so its lag is the mirror process's
+	// own lifetime and nobody else's.
 	MirrorPushCancelLagObserved = 22 * time.Second
 )
 
@@ -3037,8 +3018,8 @@ var MirrorHoldBudget = mirrorHoldBudget
 // MirrorPushDeadline is the deadline the background mirror's push — the
 // clone's engine session: open, push, close — runs under. The push traverses
 // the network with no inherent bound, so the bound is imposed by the actor
-// that owns it (links-sync-pgct.11.1). It holds nothing on the live store; it
-// exists so a stalled transport cannot wedge the single-flight mirror forever.
+// that owns it. It holds nothing on the live store; it exists so a stalled
+// transport cannot wedge the single-flight mirror forever.
 // TestMirrorPushDeadlineExceedsObservedPushCost pins its relation to the
 // measured push. A package variable so the deadline regression test can
 // shrink it without sleeping through the production one.
@@ -3050,8 +3031,7 @@ var MirrorPushDeadline = mirrorPushDeadline
 // discriminators: ErrWorkspaceBusy, the one contention sentinel every store
 // lock stamps — which is what keeps the mirror's push outcome recording a
 // busy workspace as workspace_busy rather than a failure that pages the
-// owner (the retired engine lock's wrapper carried it, so this is parity,
-// not addition) — and the underlying nbs.ErrDatabaseLocked classification.
+// owner — and the underlying nbs.ErrDatabaseLocked classification.
 // [LAW:single-enforcer] The one place the raw "database is locked" outcome
 // becomes a holder-naming, actionable message. It takes the dolt root and
 // not a prepared account so the account is read at the moment of failure,

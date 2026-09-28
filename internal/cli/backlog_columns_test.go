@@ -10,9 +10,9 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-// `lit backlog` gained the --columns rejection at the same moment `lit ls` did,
-// because both run through parseColumnSelection in runWorkable — but the two
-// surfaces fail differently, and only this one can fail by PRINTING FIRST.
+// `lit backlog` and `lit ls` both run through parseColumnSelection in
+// runWorkable — but the two surfaces fail differently, and only this one can
+// fail by PRINTING FIRST.
 // runWorkable emits the sync-staleness warning before it renders, so the
 // rejection is correct only while the parse sits above that warning. Nothing
 // but an assertion holds those two lines in that order.
@@ -138,15 +138,12 @@ func TestBacklogAcceptsValidColumns(t *testing.T) {
 	}
 }
 
-// TestBacklogRendersRelationColumns is the regression pin for the bug that
-// `--columns` validation on this surface created: `columnsFlagUsage()` began
-// advertising `parent` and `blocked` on `lit backlog`, and parseColumnSelection
-// began accepting them, while printBacklogOutput still rendered through a nil
-// relations map — so both cells were "-" on every row, including rows the
-// context line directly below described as blocked.
+// TestBacklogRendersRelationColumns pins that `parent` and `blocked`, which
+// `columnsFlagUsage()` advertises and parseColumnSelection accepts on `lit
+// backlog`, render real values rather than "-" through a nil relations map.
 //
 // "-" is the same value that honestly means "no parent" and "not blocked", so
-// the failure was indistinguishable from a true answer rather than visible as
+// that failure is indistinguishable from a true answer rather than visible as
 // one. Asserting the real ids and the `blocked` label is what makes reverting
 // the derivation in runWorkable fail here instead of printing dashes.
 func TestBacklogRendersRelationColumns(t *testing.T) {
@@ -198,10 +195,10 @@ func TestBacklogRendersRelationColumns(t *testing.T) {
 }
 
 // TestBacklogBlockedColumnAgreesWithTheContextLine covers the blocker that has
-// no dependency edge at all. A leaf whose only blocker is the sibling gate used
-// to render "-" under `blocked` on the line directly above its own
-// "blocked: earlier sibling X still open" context line — the column asked
-// DependsOn while the line asked the readiness classifier, so one row said both
+// no dependency edge at all: a leaf whose only blocker is the sibling gate must
+// not render "-" under `blocked` on the line directly above its own "blocked:
+// earlier sibling X still open" context line. A column that asks DependsOn
+// while the line asks the readiness classifier would make one row say both
 // things at once.
 //
 // The assertion is deliberately the pair, not the cell: it reads the column and

@@ -38,8 +38,7 @@ esac
 # realpath_compat — resolve a symlink chain to its canonical absolute path.
 #
 # [LAW:single-enforcer] One resolver used by both the target-dir lookup and
-# the stale-binary detector — they previously each carried their own
-# readlink-or-python3 chain with subtly different error handling.
+# the stale-binary detector.
 #
 # Tool cascade, in order of preference:
 #   1. `realpath`     — modern coreutils (Linux) and BSD utils (macOS 10.11+)
@@ -48,8 +47,7 @@ esac
 #
 # Release-download mode is explicitly Go-free, and this script must not require
 # python3 either; the pure-shell branch is the genuine last-resort that needs
-# no external tools at all. (Previous versions invoked `python3` as a fallback
-# and would error out on minimal environments that lacked it.)
+# no external tools at all.
 realpath_compat() {
     local path="$1"
     if command -v realpath >/dev/null 2>&1; then
@@ -263,12 +261,12 @@ case "$mode" in
         # how the user reads tags on the Releases page) and `0.1.0` (what
         # they get from `git describe --abbrev=0 --tags` minus the prefix)
         # and produces the canonical v-prefixed form the rest of the script
-        # speaks. Skipping this is what caused 404 download URLs when a
-        # user passed `--from-release 0.1.0` (the URL path segment is the
-        # *tag*, v-prefixed; the archive filename uses the *version*, v-
-        # stripped — see archive_version below). [LAW:types-are-the-program]
-        # the boundary normalizer makes the v-stripped input shape map to
-        # the same canonical value as the v-prefixed input shape.
+        # speaks. Skipping this produces 404 download URLs when a user
+        # passes `--from-release 0.1.0`: the URL path segment is the *tag*,
+        # v-prefixed; the archive filename uses the *version*, v-stripped —
+        # see archive_version below. [LAW:types-are-the-program] the
+        # boundary normalizer makes the v-stripped input shape map to the
+        # same canonical value as the v-prefixed input shape.
         release_tag="v${release_tag#v}"
 
         # Validate the normalized tag against the actual producer shape.
@@ -462,7 +460,7 @@ case "$mode" in
 esac
 
 # Stale `lnks` symlink/binary from previous installs is removed; `lit` is the
-# only entrypoint going forward.
+# only entrypoint.
 rm -f "$TARGET_DIR/lnks" "$TARGET_DIR/lnks.exe"
 
 # Detect any *other* `lit` on PATH that we did NOT just overwrite — those are

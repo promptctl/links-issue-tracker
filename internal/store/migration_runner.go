@@ -206,10 +206,10 @@ func (e *VersionContentMismatchError) Error() string {
 // between a goose-managed workspace and a pre-goose / fresh one.
 const gooseVersionTable = "goose_db_version"
 
-// baselineVersion re-exports migrations.Baseline at the same name the runner
-// already used everywhere. The const lives in the migrations package because
-// it is a property of the embedded registry; this alias keeps the existing
-// store-internal call sites readable without re-typing the import path.
+// baselineVersion re-exports migrations.Baseline. The const lives in the
+// migrations package because it is a property of the embedded registry; this
+// alias keeps the existing store-internal call sites readable without
+// re-typing the import path.
 //
 // [LAW:one-source-of-truth] One numeric definition (migrations.Baseline); this
 // is a typed reference, not a duplicate value.
@@ -379,9 +379,9 @@ func (s *Store) assessMigration(ctx context.Context) (migrationAssessment, error
 	}
 }
 
-// runMigration replaces the legacy scattered reconcile. It classifies the
-// workspace once, snapshots before the first write, adopts a pre-goose
-// workspace if needed, then applies pending migrations one Dolt commit each.
+// runMigration classifies the workspace once, snapshots before the first
+// write, adopts a pre-goose workspace if needed, then applies pending
+// migrations one Dolt commit each.
 //
 // [LAW:single-enforcer] One runner owns migration ordering and the snapshot/
 // commit boundary; goose is its only changeset registry and no other code
@@ -470,10 +470,8 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 		// and reconcile no-ops; a workspace at an earlier shape (e.g.
 		// missing issue_events or agent_prompt) gets its gaps filled.
 		//
-		// This is the recovery from commit 254f86b, which deleted the
-		// reconcile and left pre-v1 workspaces bricked. The reconcile
-		// is a HISTORICAL ARTIFACT — no new operations get added here.
-		// Goose owns v1 → vN going forward.
+		// The reconcile is a HISTORICAL ARTIFACT — no new operations
+		// get added here. Goose owns v1 → vN going forward.
 		if _, err := s.reconcileToBaseline(ctx, guard); err != nil {
 			return fmt.Errorf("reconcile pre-goose workspace: %w", err)
 		}
@@ -484,8 +482,7 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 		// has a malformed non-issues table (e.g. relations exists but
 		// is missing the type column) would have reconcile skip the
 		// CREATE and the malformed table would persist. Stamping v1
-		// on that workspace would be a lie, recreating the PR #119
-		// failure shape that adoption was supposed to prevent.
+		// on that workspace would be a lie.
 		// verifyBaselineShape compares against the baseline file and
 		// names every remaining gap; if any gaps survive, refuse with
 		// a structural error before the stamp lands.
@@ -719,8 +716,8 @@ const quarantineTableStmt = `CREATE TABLE migration_quarantine (
 
 // canonicalQuarantineColumns is the migration_quarantine column set this
 // binary understands. A table whose columns don't match exactly (e.g. an
-// older lit build's version_id/reason/quarantined_at layout, from before the
-// table was restructured) is a stale shape ensureQuarantineTable self-heals.
+// older lit build's version_id/reason/quarantined_at layout) is a stale shape
+// ensureQuarantineTable self-heals.
 var canonicalQuarantineColumns = []string{"version", "name", "error_text", "created_at"}
 
 // ensureQuarantineTable creates migration_quarantine if it does not already
@@ -897,17 +894,17 @@ func (s *Store) refuseIfBaselineMissing(ctx context.Context, state migrationStat
 //   - phaseFresh:   no goose table AND no canonical tables; brand new.
 //   - phaseAdopt:   no goose table BUT at least one canonical table present.
 //     The workspace is pre-goose at SOME historical canonical
-//     shape (current or earlier). reconcileToBaseline (a
-//     resurrected, idempotent, probe-driven forward migrator)
+//     shape (current or earlier). reconcileToBaseline (an
+//     idempotent, probe-driven forward migrator)
 //     brings any earlier shape forward to v1 before adoption
 //     stamps. There is no "partial-and-illegal" refusal —
 //     any presence of canonical tables means "pre-goose
 //     workspace, reconcile-then-adopt."
 //
 // [LAW:types-are-the-program] Three phases, each with a forward path. No
-// refusal branch. The "partial schema, restore or recreate" failure mode
-// the prior implementation had — which destroyed real user data with old
-// canonical shapes — does not exist by construction here.
+// refusal branch. A "partial schema, restore or recreate" failure mode —
+// which would destroy real user data with old canonical shapes — does not
+// exist by construction here.
 //
 // [LAW:dataflow-not-control-flow] The classify function reads facts about
 // the workspace; the runner reacts to them. No flags, no modes, no
@@ -1128,9 +1125,8 @@ func (s *Store) repairVersionContentDrift(ctx context.Context, appliedVersion in
 
 // migrationDriftRepairCommitMessage is the Dolt commit message for a
 // version-content drift repair. It names every table.column repaired so the
-// Dolt log still carries the audit trail an operator would previously have
-// seen only in a refused VersionContentMismatchError — even though the
-// repair now happens transparently and no error reaches them.
+// Dolt log carries the audit trail even though the repair happens
+// transparently and no error reaches the operator.
 func migrationDriftRepairCommitMessage(repaired []string) string {
 	return fmt.Sprintf("migrate: repair version-content drift (%s)", strings.Join(repaired, ", "))
 }
@@ -1242,7 +1238,7 @@ func (s *Store) recordedMigrationVersion(ctx context.Context) (int64, error) {
 // mean "actually at baseline": a pre-goose workspace can carry every table yet
 // still be pre-converged (e.g. issue_events.assignee never renamed to actor, or
 // issues missing topic), and stamping such a workspace at v1 would permanently
-// mark an incompatible schema as baseline — the PR #119 failure shape.
+// mark an incompatible schema as baseline.
 //
 // [LAW:one-source-of-truth] The expected shape is parsed from the same baseline
 // file goose applies; there is no hand-maintained table/column list to drift.

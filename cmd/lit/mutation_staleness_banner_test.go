@@ -11,14 +11,13 @@ import (
 )
 
 // TestPushFailureBannerReachesMutationOnlySession is the acceptance pin for
-// links-sync-pgct.10's visibility contract: with on-change cadence (the
-// shipped default) and a remote that has become unreachable, a session that
-// runs ONLY mutating commands sees a loud push-failure signal within a
-// bounded time window — it does not have to happen to run backlog/next/show,
-// the three read commands the staleness banner was originally wired into.
-// links-sync-pgct.3's delivery test covers the happy half (a mutation's data
-// reaches the remote); this is the failure half (a mutation's data NOT
-// reaching the remote reaches the operator).
+// the visibility contract: with on-change cadence (the shipped default) and a
+// remote that has become unreachable, a session that runs ONLY mutating
+// commands sees a loud push-failure signal within a bounded time window — it
+// does not have to happen to run backlog/next/show.
+// TestEagerPushOnDefaultCadenceReachesRemoteWithoutExplicitPush covers the
+// happy half (a mutation's data reaches the remote); this is the failure half
+// (a mutation's data NOT reaching the remote reaches the operator).
 //
 // The complementary no-cry-wolf property is pinned first: while the remote is
 // healthy, a mutating command must NOT warn, even though every mutating
@@ -93,9 +92,9 @@ func TestPushFailureBannerReachesMutationOnlySession(t *testing.T) {
 		t.Fatalf("healthy mutation warned about push failure:\n%s", healthyOut)
 	}
 
-	// The remote becomes unreachable — the field shape this epic's incident
-	// took (a remote that stops answering while mutations keep landing
-	// locally). Nothing else in this test touches a read command from here on.
+	// The remote becomes unreachable (a remote that stops answering while
+	// mutations keep landing locally). Nothing else in this test touches a
+	// read command from here on.
 	runGit(t, root, "remote", "set-url", "origin", filepath.Join(base, "gone", "nowhere.git"))
 
 	const pollTimeout = 20 * time.Second

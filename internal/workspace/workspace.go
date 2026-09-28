@@ -30,9 +30,9 @@ var ErrNotGitRepo = errors.New("links requires a git repository/worktree")
 // StoredPrefixError below is how a caller tells them apart without reading the
 // English.
 //
-// Without a type these reached the unclassified default, which told the caller
-// to retry a deterministic refusal and then to run `lit doctor` against the
-// very workspace `lit init` had just declined to create (links-init-hn19).
+// Without a type these would reach the unclassified default, which tells the
+// caller to retry a deterministic refusal and then to run `lit doctor` against
+// the very workspace `lit init` has just declined to create.
 // [LAW:no-silent-failure] [LAW:types-are-the-program] classification is carried
 // by the error, never re-derived from its text.
 var ErrIssuePrefixRefused = errors.New("issue prefix refused")
@@ -47,10 +47,9 @@ var ErrIssuePrefixRefused = errors.New("issue prefix refused")
 // from the classification: the shared one ends "adjust the command to satisfy
 // it", which is false here, and an agent that acts on the remediation line
 // rather than on the message body is the loop this whole mapping exists to
-// prevent (links-cli-errors-1u9g, links-sync-r779). templateShapeError already
-// carries exactly this distinction for a malformed managed template
-// (links-templates-1bai). [LAW:one-type-per-behavior] the act each refusal calls
-// for is different, so a single reason could only name one of them.
+// prevent. templateShapeError already carries exactly this distinction for a
+// malformed managed template. [LAW:one-type-per-behavior] the act each refusal
+// calls for is different, so a single reason could only name one of them.
 //
 // Unwrap returns the family sentinel, so the exit-code mapping and every
 // existing errors.Is check still see one prefix refusal.
@@ -81,7 +80,6 @@ type Info struct {
 	// re-listing StorageDir/DatabasePath/… as Info's own fields and copying each
 	// across in Resolve — keeps those paths in exactly one place, so a new
 	// Location field cannot silently fail to appear on Info. [LAW:one-source-of-truth]
-	// Field access (ws.StorageDir, ws.DatabasePath) is unchanged via promotion.
 	Location
 	RootDir     string
 	WorkspaceID string
@@ -296,10 +294,10 @@ func ResolveWithPrefix(cwd string, requested PrefixRequest) (Info, error) {
 func deriveLocation(cwd string) (Location, error) {
 	// [LAW:one-source-of-truth] Git owns repository geometry. --git-common-dir is
 	// emitted relative to the invocation cwd (e.g. "../.git" from a subdirectory),
-	// so a relative result must be anchored to the cwd. The original defect
-	// anchored it to the toplevel instead, which climbed out of the repo and
-	// resolved a subdirectory/worktree invocation to the wrong store. Anchoring
-	// to the cwd is correct on every Git version (no dependency on the newer
+	// so a relative result must be anchored to the cwd. Anchoring it to the
+	// toplevel instead would climb out of the repo and resolve a
+	// subdirectory/worktree invocation to the wrong store. Anchoring to the cwd is
+	// correct on every Git version (no dependency on the newer
 	// --path-format=absolute flag, which would break older Git with a misleading
 	// "not a git repo" error).
 	// [LAW:dataflow-not-control-flow] Local geometry query; never blocks on a
@@ -335,9 +333,9 @@ func deriveLocation(cwd string) (Location, error) {
 // answers with a path answers RELATIVE TO THE INVOCATION CWD (e.g. "../.git" from
 // a subdirectory, ".git/worktrees/feature" from a linked worktree), so the cwd
 // git was run in is the only correct anchor — anchoring to the repository
-// toplevel instead was a real defect that climbed out of the repo and resolved a
-// subdirectory invocation to the wrong store. Anchoring by hand rather than
-// asking git for absolute paths keeps this working on every git version: the
+// toplevel instead climbs out of the repo and resolves a subdirectory
+// invocation to the wrong store. Anchoring by hand rather than asking git for
+// absolute paths keeps this working on every git version: the
 // --path-format=absolute flag that would do it is recent, and older git rejects
 // it with a misleading "not a git repository".
 //
@@ -407,8 +405,8 @@ func LocationFromStorageDir(storageDir string) Location {
 // a network-wedged call (ls-remote/fetch to an unreachable remote) abandons on
 // cancellation instead of outliving it. Cancellation is a value crossing this one
 // seam, not a second code path — a caller whose git call cannot hang on the network
-// (local rev-parse geometry) passes context.Background(), which never cancels and so
-// reproduces the pre-ctx behavior exactly. [LAW:dataflow-not-control-flow]
+// (local rev-parse geometry) passes context.Background(), which never cancels.
+// [LAW:dataflow-not-control-flow]
 // [LAW:no-ambient-temporal-coupling] the subprocess lifecycle is owned by ctx, not
 // left to outlive a cancelled command until a grace-timer hard-exit reaps it.
 func gitOutput(ctx context.Context, cwd string, args ...string) (string, error) {
@@ -557,8 +555,7 @@ func resolveIssuePrefix(rootDir string, configPath string, configured string, re
 		// `lit init --prefix`. It is typed rather than wrapped in a string so the
 		// CLI can route it to a remediation naming that act; sharing its siblings'
 		// reason would print "adjust the command to satisfy it" over a refusal no
-		// command touches. Untyped, it wore the retry-then-doctor default while
-		// sitting three lines from the two refusals this change typed.
+		// command touches.
 		// [LAW:no-silent-failure] [LAW:one-type-per-behavior]
 		return PrefixSpec{}, StoredPrefixError{ConfigPath: configPath, Stored: configured, Err: err}
 	}

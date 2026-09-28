@@ -12,13 +12,12 @@ import (
 
 func boolPtr(b bool) *bool { return &b }
 
-// TestQueryTokenSupersetOfDiscreteFlags is the kkew.2 acceptance: for every
-// filtering or list-shaping dimension `lit ls` exposes as a discrete flag, the
-// --query token form must produce the identical storage.ListIssuesFilter the flag
+// TestQueryTokenSupersetOfDiscreteFlags is the acceptance: for every filtering
+// or list-shaping dimension `lit ls` exposes as a discrete flag, the --query
+// token form must produce the identical storage.ListIssuesFilter the flag
 // produces. Each want filter below is exactly what runList assembles from the
-// named flag; the token column is the superset claim. The four new dimensions —
-// archived, deleted, sort, limit — sit alongside the ones that already had
-// parity so a future token drop is caught here, not in the field.
+// named flag; the token column is the superset claim. Every dimension sits in
+// the one table so a future token drop is caught here, not in the field.
 func TestQueryTokenSupersetOfDiscreteFlags(t *testing.T) {
 	updatedTS, err := time.Parse(time.RFC3339, "2026-03-07T10:00:00Z")
 	if err != nil {
@@ -71,8 +70,8 @@ func TestQueryTokenSupersetOfDiscreteFlags(t *testing.T) {
 	}
 }
 
-// TestQueryMultiTokenAppliesAllFourNewTokens exercises the acceptance's concrete
-// command: one query string carrying sort, limit, archived, and deleted together.
+// TestQueryMultiTokenAppliesAllFourNewTokens exercises one query string
+// carrying sort, limit, archived, and deleted together.
 func TestQueryMultiTokenAppliesAllFourNewTokens(t *testing.T) {
 	parsed, err := Parse(`sort:rank:asc limit:5 archived deleted`)
 	if err != nil {
@@ -229,7 +228,7 @@ func TestParseRejectsInvalidStatus(t *testing.T) {
 }
 
 // The type: term parses through the sealed gate: a typo'd type is an error at
-// the grammar seam, never an empty result, and an empty value is no longer a
+// the grammar seam, never an empty result, and an empty value is not a
 // silent no-op. [LAW:no-silent-failure]
 func TestParseRejectsInvalidType(t *testing.T) {
 	if _, err := Parse(`type:bogus`); err == nil {

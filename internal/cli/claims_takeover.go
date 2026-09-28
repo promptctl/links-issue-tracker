@@ -17,20 +17,16 @@ import (
 // laneRelation is what a lane's standing means TO THIS CHECKOUT — the single
 // reading of claims.Standing that every consumer in this package shares.
 //
-// It exists because a lane's standing was once read against an identity in
-// four places, and they disagreed: `lit start` read an aged-out claim as
-// yours, `lit next` read it as nobody's, and the renderer sided with start
-// (links-claims-1b0p, owner ruling 3). Resolving the reading once here is
-// what lets the takeover gate and the routing verdict consume a value instead
-// of re-deriving "is this mine, is it fresh" inline.
+// Read against an identity in several places, a lane's standing can disagree
+// with itself. Resolving the reading once here is what lets the takeover gate
+// and the routing verdict consume a value instead of re-deriving "is this
+// mine, is it fresh" inline.
 // [LAW:one-source-of-truth] [LAW:types-are-the-program]
 //
 // There are three relations and not four. A lane whose claim has expired is
 // laneUnclaimed, indistinguishable here from one nobody ever started, because
 // claims.Standing has no variant for it: an expired claim is over, not a
-// grade of claim (links-claims-y6yz). The relation that used to sit between
-// these — a lapsed lane, offered as a takeover with the lapsed holder's
-// provenance — is gone with the variant that carried it.
+// grade of claim.
 type laneRelation int
 
 const (
@@ -107,8 +103,7 @@ func authorizeStart(ctx context.Context, stdout io.Writer, ap *app.App, issueID 
 // capturing output into a buffer) is refused, matching the ticket's acceptance
 // line: "an agent without a TTY can take over a fresh-claimed lane only by
 // passing the explicit flag." --take is read before the terminal is, so the flag
-// the refusal names works at a terminal too; it used to be ignored there, and a
-// terminal whose stdin was not a person declined on every rerun.
+// the refusal names works at a terminal too.
 // isTerminal(stdout) is the same interactivity signal openOrPrintWorkflowFile
 // already uses, so a captured-stdout test never blocks on a stdin read it did
 // not ask for.
@@ -145,11 +140,10 @@ func confirmFreshTakeover(stdout io.Writer, cc claimContext, lane model.LaneID, 
 
 // takeoverUnconfirmedError is the gate's answer when a live foreign hold was
 // not crossed: no --take off a terminal, or a "no" at the prompt. Both are the
-// gate working, not a fault, so the type carries that to the sinks — as a bare
-// error it reached the default remediation and told the caller to retry the
-// identical command and then run `lit doctor` on a healthy workspace
-// (links-cli-errors-iz41). One type for both arms: what each says differs, the
-// act that clears them — --take — does not. [LAW:one-type-per-behavior]
+// gate working, not a fault, so the type carries that to the sinks, which name
+// --take instead of the default advice to retry and run `lit doctor`. One type
+// for both arms: what each says differs, the act that clears them — --take —
+// does not. [LAW:one-type-per-behavior]
 type takeoverUnconfirmedError struct {
 	Message string
 }

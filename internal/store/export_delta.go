@@ -55,9 +55,9 @@ func (d tableDelta[K, R]) empty() bool {
 // tables the model type is the row and the projection is the identity
 // (wholeRow); for issues it is issueRowValues, because model.Issue is a
 // hydrated view that also carries labels from another table and, for a
-// container, a lifecycle derived from its children. Comparing those made every
-// label edit and every child status change look like a row change and dragged
-// the issue's whole cascade through a needless rewrite.
+// container, a lifecycle derived from its children. Comparing those would make
+// every label edit and every child status change look like a row change and
+// drag the issue's whole cascade through a needless rewrite.
 //
 // reflect.DeepEqual then makes the comparison TOTAL over whatever the
 // projection yields, so a column added to the projection is compared without

@@ -9,13 +9,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// TestReleaseGateBlocksPublish pins this ticket's core wiring
-// (links-supply-chain-w6m9.5): the release workflow's publish job must depend on
-// the license-gate job, and that gate must run the policy check. Without this
-// dependency edge a non-free build could be published; a future refactor that
-// dropped `license-gate` from `publish.needs` — silently un-gating releases —
-// fails here. Parsed structurally (not string-matched) so reformatting the YAML
-// doesn't break it, and only the actual invariant does. [LAW:verifiable-goals]
+// TestReleaseGateBlocksPublish pins the core wiring: the release workflow's
+// publish job must depend on the license-gate job, and that gate must run the
+// policy check. Without this dependency edge a non-free build could be
+// published; a future refactor that dropped `license-gate` from
+// `publish.needs` — silently un-gating releases — fails here. Parsed
+// structurally (not string-matched) so reformatting the YAML doesn't break it,
+// and only the actual invariant does. [LAW:verifiable-goals]
 func TestReleaseGateBlocksPublish(t *testing.T) {
 	data, err := os.ReadFile("../../.github/workflows/release-validate.yml")
 	if err != nil {
@@ -82,9 +82,7 @@ func nodeContains(n yaml.Node, want string) bool {
 //
 // The bundle's Source lines and the report's Source-column legend tell a
 // recipient to "see FORKS.md" for what a substitution changes and why. That
-// sentence is only true if FORKS.md is in the archive they received — and until
-// links-licensing-c0ce.15 added it to .goreleaser.yml's archives.files, it was
-// not, so the compliance artifacts cited a document the release did not carry.
+// sentence is only true if FORKS.md is in the archive they received.
 //
 // The cited names are EXTRACTED from rendered artifacts rather than listed here.
 // A hardcoded list would be a third copy of the same fact, free to drift from

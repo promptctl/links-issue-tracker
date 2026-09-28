@@ -21,14 +21,14 @@ import (
 // where a refactor turns a typed refusal into a nil dereference and nothing
 // says so.
 //
-// What makes the engines below honest rather than the stub this ticket spent
-// two rounds refusing: they are not Dolt with a capability hidden. They are the
-// two partial shapes the CONTRACT already names. capabilities.go says the event
-// store "offers sync and not reconcile: its arrival needs no merge ... so it
-// has no diverged state, no base to merge through, and no side to take", and
-// Importer says "an engine may be readable-out without being replaceable-in".
-// A test engine standing for a shape the contract documents is an input value,
-// not a fake of a particular engine. [LAW:behavior-not-structure]
+// What makes the engines below honest: they are not Dolt with a capability
+// hidden. They are the two partial shapes the CONTRACT already names.
+// capabilities.go says the event store "offers sync and not reconcile: its
+// arrival needs no merge ... so it has no diverged state, no base to merge
+// through, and no side to take", and Importer says "an engine may be
+// readable-out without being replaceable-in". A test engine standing for a
+// shape the contract documents is an input value, not a fake of a particular
+// engine. [LAW:behavior-not-structure]
 //
 // The construction is internal/storage/capabilities_test.go's, unchanged: an
 // embedded nil interface promotes the whole method set, so a shape is declared

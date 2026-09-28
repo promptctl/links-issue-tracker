@@ -12,8 +12,7 @@ import (
 // inits before the producer has pushed, so it never adopts the producer's history)
 // share a remote and diverge with no common ancestor. `lit sync reconcile` must
 // detect that, exit ExitConflict with an unrelated-histories / no-common-ancestor
-// message, and write nothing — never the pre-fix obscure backend error surfaced from
-// the base-assuming merge path.
+// message, and write nothing.
 func TestExplicitReconcileSurfacesUnrelatedHistories(t *testing.T) {
 	// Drive sync explicitly; the inline auto-sync must not reconcile out from under
 	// the assertions.
@@ -59,7 +58,7 @@ func TestExplicitReconcileSurfacesUnrelatedHistories(t *testing.T) {
 	if code := ExitCode(err); code != ExitConflict {
 		t.Fatalf("unrelated reconcile exit code = %d, want %d (ExitConflict)\noutput:\n%s\nerr:\n%v", code, ExitConflict, out, err)
 	}
-	// The message is a clear domain diagnosis, not the pre-fix obscure backend error.
+	// The message is a clear domain diagnosis.
 	msg := err.Error()
 	if !strings.Contains(msg, "no common history") && !strings.Contains(msg, "no shared ancestor") {
 		t.Fatalf("reconcile error does not name unrelated histories:\n%s", msg)

@@ -12,16 +12,13 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-// The backlog used to restate group-scoped facts once per row, so a ten-child
-// epic in one sequential lane rendered the same three sentences ten times and
-// buried the lines that were actually per-row. links-listing-x943. These tests
-// pin what the reader is owed — each fact said once — not how the renderer
-// arranges to say it. [LAW:behavior-not-structure]
+// These tests pin what the reader is owed — each fact said once — not how the
+// renderer arranges to say it. [LAW:behavior-not-structure]
 
 // A sequential lane is a chain, and a chain's blocking fact is one edge per
-// link. Naming every pending predecessor made the text grow quadratically down
-// the epic: the tenth child restating the nine facts its nine predecessors had
-// each already stated.
+// link. Naming every pending predecessor would make the text grow
+// quadratically down the epic: the tenth child restating the nine facts its
+// nine predecessors had each already stated.
 func TestBacklogNamesOnlyTheNearestPendingLaneMate(t *testing.T) {
 	h := newBacklogTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "seq", IssueType: "epic", Priority: 1})
@@ -74,8 +71,7 @@ func TestBacklogNamesAnEpicOncePerRun(t *testing.T) {
 }
 
 // The claim line answers "who holds this lane and how is it going". That is one
-// fact about the lane, and every member of the lane used to carry a verbatim
-// copy of it.
+// fact about the lane.
 func TestBacklogDescribesALaneClaimOncePerRun(t *testing.T) {
 	h := newBacklogTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Claimed Epic", Topic: "claim", IssueType: "epic", Priority: 1})
@@ -166,12 +162,11 @@ func TestBacklogReopensARunAfterAnInterruption(t *testing.T) {
 	}
 }
 
-// Suppressing a repeat costs the reader what absence used to mean. Before the
-// runs existed, a row without an epic line had no epic; now that blank would
-// also mean "continues the epic above", and sortByCompositeRank interleaves
-// standalone leaves with epic children by rank, so a standalone ticket sitting
-// under an epic's last child is routine. A run opening under no epic therefore
-// says so.
+// Suppressing a repeat changes what absence means: a row without an epic line
+// could have no epic, or could continue the epic above, and sortByCompositeRank
+// interleaves standalone leaves with epic children by rank, so a standalone
+// ticket sitting under an epic's last child is routine. A run opening under no
+// epic therefore says so.
 func TestBacklogSaysWhenARunOpensUnderNoEpic(t *testing.T) {
 	h := newBacklogTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "solo", IssueType: "epic", Priority: 1})
@@ -260,12 +255,12 @@ func TestBacklogTellsApartLanesThatSpellTheSame(t *testing.T) {
 	}
 }
 
-// The claim line had the epic line's ambiguity too: a blank meant both "this
-// lane is unclaimed" and "this row continues the claimed lane above". An agent
-// routes on who holds a lane, so the blank has to be corrected — but only when
-// a claim is actually standing, since nearly every lane is unclaimed and every
-// standalone row is a lane of one, and marking them all would put a line back
-// under almost every row.
+// The claim line has the epic line's ambiguity too: a blank would mean both
+// "this lane is unclaimed" and "this row continues the claimed lane above". An
+// agent routes on who holds a lane, so the blank has to be corrected — but only
+// when a claim is actually standing, since nearly every lane is unclaimed and
+// every standalone row is a lane of one, and marking them all would put a line
+// back under almost every row.
 func TestBacklogSaysUnclaimedOnlyWhenAClaimIsStanding(t *testing.T) {
 	epic := model.Issue{ID: "E", IssueType: model.TypeEpic, Title: "Two lanes"}
 	held := openLeaf(t, "held", "In the claimed lane", "one")

@@ -188,25 +188,20 @@ const idTokenPercent = 40
 
 // filler builds n bytes of text for row seed, deterministically.
 //
-// WHY NOT A REPEATED PHRASE. This function used to repeat one phrase until it
-// reached the length, on the theory that repeating words rather than a single
-// character kept the row compressible "the way prose is". Measured, that was
-// wrong by an order of magnitude: against this repository's own 588 ticket
+// WHY NOT A REPEATED PHRASE. Against this repository's own 588 ticket
 // descriptions, real prose truncated to 1310 bytes gzips 1.79x (median; the
-// spread is 1.53x to 2.56x), while the repeated phrase gzipped 20.15x. Since
-// the store compresses what it holds, a row 11x more compressible than a real
-// one is simply not the row being modelled. The mix above is calibrated to that
+// spread is 1.53x to 2.56x), while a repeated phrase gzips 20.15x. Since the
+// store compresses what it holds, a row 11x more compressible than a real one
+// is simply not the row being modelled. The mix above is calibrated to that
 // measurement rather than chosen: it lands at 1.83x.
 //
-// How much this moves the reported bytes is a separate question, and the answer
-// is: less than the measurement can resolve. 590 descriptions are 0.77 MB of a
-// ~23.5 MB store, so their compressibility bounds about 3% of the total, and
-// the 590-row figure varies between 23.1 and 23.8 MB across runs regardless.
-// This is therefore a FIDELITY fix — the fixture is now the thing it claims to
-// model — and not a correction to the numbers. Do not quote a before/after
-// across this change: the difference sits inside the run-to-run spread, and the
-// honest statement is the 3% bound, which is also why a size ceiling belongs on
-// structure rather than on what users type.
+// How much this moves the reported bytes is less than the measurement can
+// resolve. 590 descriptions are 0.77 MB of a ~23.5 MB store, so their
+// compressibility bounds about 3% of the total, and the 590-row figure varies
+// between 23.1 and 23.8 MB across runs regardless. The filler is a FIDELITY
+// measure — the fixture is the thing it claims to model — not a lever on the
+// numbers, and that 3% bound is also why a size ceiling belongs on structure
+// rather than on what users type.
 //
 // Deterministic, so two runs of the same size generate byte-identical rows and
 // a change in reported store bytes is a change in lit, never in the fixture.
@@ -217,15 +212,15 @@ func filler(seed int, n int) string {
 	// benchmark fixture that changes with the toolchain would retroactively
 	// invalidate every figure recorded against it. [LAW:one-source-of-truth]
 	//
-	// It is a mixed counter and not the plain LCG it replaces, because an LCG's
-	// LOW bits are barely random and this function reads them twice per token.
-	// With an odd multiplier and an odd increment, bit 0 of x*1664525+1013904223
-	// strictly alternates; each token consumed exactly two draws, so the draw
-	// that picks a word always landed on the same parity — and since
-	// len(proseWords) is even, n%len inherits n's parity. Every row drew from
-	// half the vocabulary, the half decided by its seed. The finalizer below
-	// avalanches, so every bit of the output depends on every bit of the
-	// counter and a draw modulo anything sees the whole range.
+	// It is a mixed counter and not a plain LCG, because an LCG's LOW bits are
+	// barely random and this function reads them twice per token. With an odd
+	// multiplier and an odd increment, bit 0 of x*1664525+1013904223 strictly
+	// alternates; with two draws per token, the draw that picks a word would
+	// always land on the same parity — and with an even len(proseWords), n%len
+	// inherits n's parity, so every row would draw from half the vocabulary,
+	// the half decided by its seed. The finalizer below avalanches, so every bit
+	// of the output depends on every bit of the counter and a draw modulo
+	// anything sees the whole range.
 	x := uint32(seed)*2654435761 + 12345
 	next := func() uint32 {
 		x += 0x9e3779b9
@@ -303,8 +298,7 @@ func storeBytes(dir string) (int64, error) {
 // runBudget exists because this epic's subject is a write path that can wait
 // fifteen minutes on a lock; generation is ENTIRELY write path, so an import
 // wedged behind a lock is at least as likely here as in any probe. Unbudgeted,
-// that hangs the tool with nothing on screen — the exact outcome the budget was
-// added to prevent.
+// that hangs the tool with nothing on screen.
 func runQuiet(dir string, env []string, st step) error {
 	ctx, cancel := context.WithTimeout(context.Background(), st.budget)
 	defer cancel()

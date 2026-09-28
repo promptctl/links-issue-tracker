@@ -83,11 +83,11 @@ func TestRetryTransientGCContentionReturnsLastErrorAfterExhaustion(t *testing.T)
 	}
 }
 
-// TestRetryTransientGCContentionPromotesExhaustedManifestReadOnly pins defect #3
-// of links-sync-s3r6: a manifest-read-only that survives the entire retry budget
-// is a foreign writer holding the store, so it surfaces as the terminal
-// WorkspaceWriteBlockedError — not the raw transient — while still preserving the
-// backend cause for diagnosis. [FRAMING:representation]
+// TestRetryTransientGCContentionPromotesExhaustedManifestReadOnly pins that a
+// manifest-read-only that survives the entire retry budget is a foreign writer
+// holding the store, so it surfaces as the terminal WorkspaceWriteBlockedError
+// — not the raw transient — while still preserving the backend cause for
+// diagnosis. [FRAMING:representation]
 func TestRetryTransientGCContentionPromotesExhaustedManifestReadOnly(t *testing.T) {
 	t.Parallel()
 	// Shape the input the way production does — through wrapCommitWorkingSetError,
@@ -200,7 +200,7 @@ func TestRetryTransientGCContentionHonorsContextTimeoutDuringBackoff(t *testing.
 	}
 }
 
-// TestRetryTransientGCContentionRotatesConnectionBetweenAttempts pins the fix:
+// TestRetryTransientGCContentionRotatesConnectionBetweenAttempts pins that
 // the GC reset poisons the connection, so the retry must rotate it before each
 // re-attempt. One rotation per backoff, never after the final (succeeding) call.
 func TestRetryTransientGCContentionRotatesConnectionBetweenAttempts(t *testing.T) {
@@ -329,9 +329,9 @@ func TestWrapCommitWorkingSetErrorMarksManifestReadOnly(t *testing.T) {
 	}
 }
 
-// TestWrapCommitWorkingSetErrorMarksGCReset covers the previously-unhandled
-// variant: a commit that hits Dolt's online-GC connection invalidation must be
-// classified transient so it is retried (with a reconnect), not surfaced raw.
+// TestWrapCommitWorkingSetErrorMarksGCReset covers the variant: a commit that
+// hits Dolt's online-GC connection invalidation must be classified transient so
+// it is retried (with a reconnect), not surfaced raw.
 func TestWrapCommitWorkingSetErrorMarksGCReset(t *testing.T) {
 	t.Parallel()
 	err := wrapCommitWorkingSetError(errors.New("this connection was established when this server performed an online garbage collection. this connection can no longer be used. please reconnect."))
@@ -448,13 +448,9 @@ func TestWithCommitLockSerializesConcurrentOperations(t *testing.T) {
 // while holding the commit lock "cannot wedge" because its wait stays strictly
 // inside every commit-lock waiter's budget.
 //
-// That was asserted in prose and enforced by nothing. The retry loop rotates
-// the connection up to transientRetryMaxAttempts-1 times, and every second of
-// it accrues while the commit lock is held, so the real hold is the product of
-// two budgets that never referenced each other. It fit only by coincidence
-// (29 x 30s = 14.5min against 15min) until links-sync-dauk derived the open
-// budget from the mirror's measured hold ceiling and the product became
-// 33.8min.
+// The retry loop rotates the connection up to transientRetryMaxAttempts-1
+// times, and every second of it accrues while the commit lock is held, so the
+// real hold is the product of two budgets that never referenced each other.
 //
 // The loop's reservation has to cover every term that runs between one check
 // and the next, and there are three: the inter-attempt sleep, the new engine's
@@ -462,8 +458,7 @@ func TestWithCommitLockSerializesConcurrentOperations(t *testing.T) {
 // behavioural pin can SEE depends on whether the omitted term is big enough to
 // cost an iteration — so each row makes one term dominant and would lose an
 // iteration's worth of budget if the reservation dropped it. One row would
-// pass while a term it never weighted went unreserved, which is exactly how
-// the first version of this pin missed the sleep.
+// pass while a term it never weighted went unreserved.
 // [LAW:dataflow-not-control-flow] one body, the weighting is data.
 //
 // Not parallel: it mutates package budget variables.

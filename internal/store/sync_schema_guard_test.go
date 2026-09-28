@@ -16,8 +16,8 @@ import (
 // advancing the shared remote. It stamps a synthetic future goose_db_version row
 // and pushes; the first push is to an empty remote, so the schema guard is a no-op
 // and the bump lands. Returns the seeded issue id and the future version. This
-// binary cannot itself produce that version — which is exactly the state
-// links-sync-7p7q.4 must refuse to write over.
+// binary cannot itself produce that version — which is exactly the state the
+// schema guard must refuse to write over.
 func seedFutureSchemaRemote(t *testing.T, ctx context.Context, root, remoteURL string) (string, int64) {
 	t.Helper()
 	registryMax, err := migrations.MaxVersion()

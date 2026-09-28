@@ -10,9 +10,7 @@ import (
 // lives beside the contract rather than inside an engine because a capability
 // interface can only name types every engine can name.
 //
-// [LAW:one-source-of-truth] These types were the Dolt store's; they are now the
-// contract's, and the engine re-exports the old spellings by alias so no caller
-// moved. There is one declaration of each, not two.
+// [LAW:one-source-of-truth] There is one declaration of each, not two.
 
 // SyncState identifies the store's on-disk content at a point in time: where it
 // lives, and a digest of what it held. It is the staleness signal a caller
@@ -234,10 +232,10 @@ type SyncPullResult struct {
 // The depths are numbered from one so that the zero GCMode is not one of them.
 // An outcome that never chose a depth — a due-check that failed before it could
 // — would otherwise carry GCNewGen by default and report the cheap depth as a
-// fact nobody decided; numbering from zero made "no depth" and "the shallow
-// depth" the same value, which is a difference no reader could recover. Valid
-// already rejects the zero, so this needs no separate sentinel member and no
-// engine gains a third depth to implement.
+// fact nobody decided; numbering from zero would make "no depth" and "the
+// shallow depth" the same value, which is a difference no reader could
+// recover. Valid already rejects the zero, so this needs no separate sentinel
+// member and no engine gains a third depth to implement.
 // [LAW:types-are-the-program] the illegal state stops being representable,
 // rather than every reader guarding against it.
 type GCMode int
@@ -397,8 +395,8 @@ const (
 	// write and commits nothing: the three-way path assumes a base, and driving an
 	// absent one into it fails obscurely (an empty/no-row merge-base, not a clear
 	// diagnosis). The divergence is real but unmergeable by the base-assuming engine;
-	// it is surfaced for the wholesale/union resolution the rest of this epic builds,
-	// never crashed through an empty merge-base. [LAW:no-silent-failure]
+	// it is surfaced for the wholesale/union resolution (SyncResolveUnrelated), never
+	// crashed through an empty merge-base. [LAW:no-silent-failure]
 	SyncReconcileUnrelated SyncReconcileState = "unrelated_histories"
 	// SyncReconcileTookLocal: the operator resolved an unrelated-history divergence by
 	// taking the LOCAL side wholesale. The local backlog was replayed forward onto the

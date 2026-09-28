@@ -130,8 +130,6 @@ func TestRunUpgradeWithTargetBehindOpenableNamesDowngrade(t *testing.T) {
 // A target below the workspace, when this binary CANNOT open the workspace (the
 // version was recovered from a schema-ahead refusal), must NOT name lit downgrade
 // — downgrade would hit the same refusal on open. The remedy is a newer target.
-// This is the misleading-remediation trap the PR set out to kill, at the seam
-// between the two features.
 func TestRunUpgradeWithTargetBehindNotOpenableNamesNewerTarget(t *testing.T) {
 	t.Parallel()
 	res := &stubResolver{target: newFakeTarget()}        // Schema.Max == 3
@@ -467,8 +465,8 @@ func TestRunUpgradeBareEndToEndOverHTTP(t *testing.T) {
 }
 
 // An explicitly empty --to (a broken shell expansion: --to "$VERSION" with
-// $VERSION unset) is a validation failure, exactly as before this feature —
-// never a silent upgrade to latest. Only a truly omitted flag means latest.
+// $VERSION unset) is a validation failure — never a silent upgrade to latest.
+// Only a truly omitted flag means latest.
 func TestRunUpgradeExplicitEmptyToIsRejected(t *testing.T) {
 	t.Parallel()
 	for _, args := range [][]string{{"--to", ""}, {"--to", "   "}} {

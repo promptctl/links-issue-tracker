@@ -259,11 +259,11 @@ func TestWorkflowsEditScaffoldsFreshLabelPointAsFallback(t *testing.T) {
 	}
 }
 
-// TestWorkflowsEditScaffoldsFreshStateWithCommaAsOneStateActivation is the
-// YAML-escaping regression: unlike labels (model.NormalizeLabel rejects a
-// comma outright), state names have no such restriction, so a state
-// containing a comma is the domain-valid case where an unquoted flow
-// sequence would silently split one activation into two.
+// TestWorkflowsEditScaffoldsFreshStateWithCommaAsOneStateActivation pins YAML
+// escaping: unlike labels (model.NormalizeLabel rejects a comma outright), state
+// names have no such restriction, so a state containing a comma is the
+// domain-valid case where an unquoted flow sequence would silently split one
+// activation into two.
 func TestWorkflowsEditScaffoldsFreshStateWithCommaAsOneStateActivation(t *testing.T) {
 	root := chdirTempRepo(t)
 
@@ -317,12 +317,11 @@ func TestWorkflowsEditOverridesEmbeddedDefaultVerbatim(t *testing.T) {
 	}
 }
 
-// TestWriteWorkflowScaffoldEnforcesNoClobberEvenPastTheFastPathCheck pins the
-// TOCTOU fix directly: writeWorkflowScaffold's O_EXCL open is the actual
-// enforcer, not just refuseExistingFile's earlier stat — calling it twice for
-// the same path (as a concurrent `edit` racing past the first call's stat
-// check would) must fail on the second call, never silently overwrite the
-// first call's content.
+// TestWriteWorkflowScaffoldEnforcesNoClobberEvenPastTheFastPathCheck pins
+// directly that writeWorkflowScaffold's O_EXCL open is the actual enforcer, not
+// just refuseExistingFile's earlier stat — calling it twice for the same path
+// (as a concurrent `edit` racing past the first call's stat check would) must
+// fail on the second call, never silently overwrite the first call's content.
 func TestWriteWorkflowScaffoldEnforcesNoClobberEvenPastTheFastPathCheck(t *testing.T) {
 	root := chdirTempRepo(t)
 	path := filepath.Join(root, ".lit", "workflows", "race.md")

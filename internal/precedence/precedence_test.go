@@ -3,7 +3,7 @@ package precedence
 import "testing"
 
 func TestFirstResolvesOrderedCandidates(t *testing.T) {
-	// [LAW:behavior-not-structure] Pins the contract every absorbed callsite
+	// [LAW:behavior-not-structure] Pins the contract every callsite
 	// (template guidance, sync branch, sync remote) relies on.
 	cases := []struct {
 		name       string

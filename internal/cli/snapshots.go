@@ -83,7 +83,7 @@ func snapshotsNewLeaf() wsLeaf {
 	// sibling `snapshots restore` takes its argument positionally, so
 	// `snapshots new nightly` is a natural typo for `--label nightly`, and
 	// accepting it would mint an unlabeled snapshot the operator then cannot find
-	// by the name they thought they gave it. The refusal is parseLeaf's now, and
+	// by the name they thought they gave it. The refusal is parseLeaf's, and
 	// the sentence it prints names --label. It carries its own line anyway: the
 	// v1 specification quotes this exact message, and the docclaims gate holds
 	// the code to what the chapter says ships. [LAW:one-source-of-truth]
@@ -112,7 +112,7 @@ func snapshotsNewLeaf() wsLeaf {
 		// directory, so a multi-gigabyte RemoveAll must not keep rotators
 		// refusing workspace-busy (their exclusive acquisition is one-attempt).
 		// The commit lock still serializes it against concurrent snapshot
-		// producers, exactly as before the copy grew its workspace hold.
+		// producers.
 		//
 		// [LAW:single-enforcer] User-snapshot retention bounds *user* snapshots
 		// only; migration snapshots share the directory but are pruned
@@ -153,10 +153,9 @@ func takeUserSnapshot(ctx context.Context, ws workspace.Info, label string) (sna
 // hold every Store open takes, then Dolt's own journal lock, then the commit
 // lock: the workspace→LOCK→commit order package store's doc declares. The
 // three holds own, in turn: rotator exclusion (an adopt/restore's exclusive
-// hold never met the commit lock — links-sync-pgct.14's torn-snapshot race),
-// engine-lifecycle exclusion (a concurrent open's journal crash-recovery
-// after an unclean kill ran truncate/fsync under the walk — even `lit
-// backlog` opens write-capable, links-sync-pgct.15's tear; under the hold a
+// hold never meets the commit lock), engine-lifecycle exclusion (a concurrent
+// open's journal crash-recovery after an unclean kill runs truncate/fsync
+// under the walk — even `lit backlog` opens write-capable; under the hold a
 // concurrent read open demotes to Dolt's write-nothing read-only fallback
 // and a write open fails fast after its bounded retry), and writer
 // serialization. One home for that sequence, so the second copier cannot

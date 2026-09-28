@@ -51,8 +51,7 @@ func TestClaimantOf(t *testing.T) {
 			// because it routes lanes and cannot address a holder it has no
 			// token for; announcing a hand-off only needs a predecessor to have
 			// existed. Reading the holder off the checkout half alone makes a
-			// genuine ada->bob transfer read as nobody, which is the mistake
-			// the first attempt at this fix shipped.
+			// genuine ada->bob transfer read as nobody.
 			name:   "an establishing event predating attribution still establishes",
 			issue:  ticket("ada"),
 			events: []model.IssueEvent{event("e1", "T", model.ActionStart, ago(time.Hour), model.Attribution{})},
@@ -190,10 +189,10 @@ func TestAfterPreservesOwnershipForEveryStatusVerbButStart(t *testing.T) {
 }
 
 // TestAfterStartInstallsTheTakingCheckout: the checkout After writes is the one
-// performing the action, not the one already on the record. That substitution is
-// the fix this package exists for — before it, the taker's identity never
-// reached the comparison at all, so a takeover between two checkouts sharing one
-// assignee compared equal and recorded nothing.
+// performing the action, not the one already on the record. Without that
+// substitution the taker's identity never reaches the comparison, so a
+// takeover between two checkouts sharing one assignee compares equal and
+// records nothing.
 func TestAfterStartInstallsTheTakingCheckout(t *testing.T) {
 	heldByA := claims.Claimant{Established: true, Assignee: "ada", Checkout: streamA}
 
@@ -225,11 +224,10 @@ func TestAfterStartEstablishesAnUnheldClaimant(t *testing.T) {
 }
 
 // TestClaimantEqualityDistinguishesEveryField pins the comparison both storage
-// engines' no-op decision and the CLI's transfer notice are now made of — they
-// ask "is the claimant this action installs the one already standing" and
-// nothing else, so a field the comparison cannot see is a transfer that records
-// nothing and exits 0. The checkout row is this PR's bug: two checkouts under
-// one assignee, differing only on the half the old write side never read.
+// engines' no-op decision and the CLI's transfer notice are made of — they ask
+// "is the claimant this action installs the one already standing" and nothing
+// else, so a field the comparison cannot see is a transfer that records
+// nothing and exits 0.
 func TestClaimantEqualityDistinguishesEveryField(t *testing.T) {
 	base := claims.Claimant{Established: true, Assignee: "ada", Checkout: streamA}
 

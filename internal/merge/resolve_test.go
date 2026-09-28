@@ -158,8 +158,8 @@ func TestResolveIssueAssigneeTiebreakSymmetry(t *testing.T) {
 	// field with no semantic winner, settled by the symmetric workspace-id
 	// tiebreak. Swapping ours/theirs (and their workspace ids) must yield the
 	// same winner, or the two machines would converge to different assignees.
-	// Assignee is an issue-level field now, set via the mutator rather than the
-	// status view — the lifecycle no longer carries it.
+	// Assignee is an issue-level field, set via the mutator rather than the
+	// status view.
 	mk := func(assignee string) func(*model.Issue) {
 		return func(i *model.Issue) { i.Assignee = assignee }
 	}

@@ -104,8 +104,8 @@ type Issue struct {
 	// retention is the sealed retention axis (Live | Archived | Deleted). The
 	// wire and storage encodings keep the legacy archived_at/deleted_at pair,
 	// projected through lifecycle.RetentionTimestamps/RetentionFromTimestamps at
-	// the serialization boundaries. [LAW:types-are-the-program] One value where
-	// two nullable timestamps once left the archived+deleted combo representable.
+	// the serialization boundaries. [LAW:types-are-the-program] One value, so
+	// the archived+deleted combination is unrepresentable.
 	retention lifecycle.Retention
 
 	lifecycle        lifecycle.Lifecycle
@@ -241,9 +241,9 @@ func (l LaneID) String() string {
 // It exists because String's "#" is punctuation doing a word's job. That earns
 // its place where String is read — "A#" must not be mistaken for epic "A" in a
 // test failure — and loses it in prose, where the words "epic" and "lane" draw
-// the same distinction themselves and the default lane's empty key rendered as a
-// trailing bare "#", which reads as an unfilled template slot to anyone who does
-// not already know the grammar (links-next-output-5aee).
+// the same distinction themselves and the default lane's empty key would render
+// as a trailing bare "#", which reads as an unfilled template slot to anyone
+// who does not already know the grammar.
 //
 // A solo lane describes as nothing: it holds exactly the ticket that names it,
 // so any phrase for it only repeats what the surrounding sentence has already
@@ -302,11 +302,11 @@ func (i Issue) mustLifecycle() lifecycle.Lifecycle {
 //
 // Target is the state the action asked for and State is the one the children
 // already establish. Both are carried because whether the call asked for
-// anything at all is exactly their comparison — a fact the raise site holds and
-// used to throw away, leaving one sentence to serve two opposite situations:
-// `done` on a closed epic, whose request is already met, and `start` on that
-// same epic, which is refused. [LAW:parse-dont-validate] the discriminator is
-// kept in the type rather than re-derived downstream from progress counts.
+// anything at all is exactly their comparison — a fact the raise site holds.
+// Without it, one sentence would serve two opposite situations: `done` on a
+// closed epic, whose request is already met, and `start` on that same epic,
+// which is refused. [LAW:parse-dont-validate] the discriminator is kept in the
+// type rather than re-derived downstream from progress counts.
 type ContainerActionError struct {
 	ID       string
 	Action   ActionName
@@ -331,12 +331,12 @@ func (e ContainerActionError) Unfinished() int {
 // match one while work remains. AllOf.State returns InProgress only when
 // Closed < Total, so `start` on a part-done epic would match its own target
 // with every child still to do; and it returns Open for a childless epic as a
-// fallback carrying no information, so `open` would match there too. Both then
-// reported "nothing to do" at the exit code that exists to let a caller stop
-// without reading the message — an answer-shaped void aimed at exactly the
-// agent with the most work left. Closed is the only derived state that means
-// nothing remains, and the two counts say so directly rather than by naming it,
-// so this stays true if the state set ever grows.
+// fallback carrying no information, so `open` would match there too. Both
+// would then report "nothing to do" at the exit code that exists to let a
+// caller stop without reading the message — an answer-shaped void aimed at
+// exactly the agent with the most work left. Closed is the only derived state
+// that means nothing remains, and the two counts say so directly rather than by
+// naming it, so this stays true if the state set ever grows.
 func (e ContainerActionError) Satisfied() bool {
 	return e.Target == e.State && e.Progress.Total > 0 && e.Unfinished() == 0
 }
@@ -345,15 +345,15 @@ func (e ContainerActionError) Satisfied() bool {
 // carries — the requested action, the two states, the counts — not with which
 // callsite produced it. There are two sentences because there are two
 // situations, and the refusal names the state it is refusing from rather than a
-// child count: `start` on a finished epic was once told "0 of its 1 children
-// are not done", which is true, unreadable, and never mentions that the epic
-// being closed is the actual obstacle.
+// child count: a count would tell `start` on a finished epic "0 of its 1
+// children are not done", which is true, unreadable, and never mentions that
+// the epic being closed is the actual obstacle.
 //
 // The backticked word is the action's INVOCATION verb, never its persisted
 // event encoding: an agent reads what is inside the backticks as the command
 // it just ran and may run again. Those two names diverge for exactly one
-// action today, and this sentence used to print the persisted one, answering
-// `lit open` with "cannot `reopen`" -- naming a command that does not exist.
+// action today, and printing the persisted one would answer `lit open` with
+// "cannot `reopen`" -- naming a command that does not exist.
 // [LAW:one-source-of-truth] lifecycle owns the pairing; this reads it.
 func (e ContainerActionError) Error() string {
 	if e.Satisfied() {
@@ -408,8 +408,8 @@ func (i Issue) Apply(action lifecycle.StatusAction) (Issue, error) {
 		// built, action is a sealed StatusAction, and the value is never decoded
 		// from storage, so there is no path to an unset Action. The panic is
 		// deliberately not softened to a fallback here: a fallback is the silent
-		// wrong answer this whole change removed, and it would trade a loud
-		// programmer error for a quiet one. [LAW:no-silent-failure]
+		// wrong answer, and it would trade a loud programmer error for a quiet
+		// one. [LAW:no-silent-failure]
 		return Issue{}, ContainerActionError{
 			ID:       i.ID,
 			Action:   action.Name(),
@@ -794,8 +794,7 @@ func (a Attribution) IsZero() bool { return a == Attribution{} }
 func (a Attribution) Present() bool { return !a.IsZero() }
 
 // attributionWire is the serialized shape, kept as a separate type so that
-// sealing the domain type costs nothing at the boundary: the JSON stays exactly
-// what it was before the fields were unexported.
+// sealing the domain type costs nothing at the boundary.
 type attributionWire struct {
 	Stream    string `json:"stream,omitempty"`
 	Workspace string `json:"workspace,omitempty"`

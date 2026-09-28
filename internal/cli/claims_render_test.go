@@ -58,8 +58,7 @@ func laneWithProgress(t *testing.T, done, total int, activeID string) (claims.Ev
 }
 
 // TestFormatClaimLineUnclaimedLaneRendersNothing is the zero state: a lane
-// nobody holds carries no claim line, exactly as an Unclaimed lane routes
-// exactly as it always did pre-claims.
+// nobody holds carries no claim line.
 func TestFormatClaimLineUnclaimedLaneRendersNothing(t *testing.T) {
 	evidence, lane := laneWithProgress(t, 0, 1, "")
 	cc := claimContext{standings: claims.Standings{}, evidence: evidence}
@@ -141,11 +140,9 @@ func TestFormatClaimLineAddressOnlyOnClaimantsOwnMachine(t *testing.T) {
 // TestFormatClaimLineExpiredClaimRendersNothingEvenWithAnAddress: the holder's
 // worktree is still on this machine and resolvable, but the claim on the lane
 // has expired, so the lane is Unclaimed and nothing is printed — not the
-// address, not the age, not a badge. "Go look at what it was doing" was once
-// printed here as "claimed here (stale): <path>", and an expired claim is not
-// a claim to print (links-claims-y6yz). The address map is populated on
-// purpose: a renderer that consulted it before the standing would still find
-// something to say.
+// address, not the age, not a badge. An expired claim is not a claim to print.
+// The address map is populated on purpose: a renderer that consulted it before
+// the standing would still find something to say.
 func TestFormatClaimLineExpiredClaimRendersNothingEvenWithAnAddress(t *testing.T) {
 	evidence, lane := laneWithProgress(t, 0, 1, "")
 	cc := claimContext{
@@ -166,10 +163,10 @@ func TestFormatClaimLineExpiredClaimRendersNothingEvenWithAnAddress(t *testing.T
 // driven through the notice it appears in by
 // TestTransferNoticeNamesAPredecessorThatMintedNoToken.
 //
-// The empty-assignee rows are the ruling: the old text read "(unassigned)",
-// which described the empty field while saying nothing about the holder being
-// announced -- and the record carries an establishing event, so somebody
-// demonstrably took this ticket.
+// The empty-assignee rows are the ruling: "(unassigned)" would describe the
+// empty field while saying nothing about the holder being announced — and the
+// record carries an establishing event, so somebody demonstrably took this
+// ticket.
 func TestDescribeClaimantNamesAnUnaddressableHolder(t *testing.T) {
 	for _, row := range []struct {
 		name     string
@@ -225,16 +222,15 @@ func TestTransferNoticeNamesAPredecessorThatMintedNoToken(t *testing.T) {
 }
 
 // TestFormatClaimLinePublicCheckoutIsNeverHere pins the rendering half of the
-// public-checkout ruling, and the regression that deleting claimPrefix's self
-// arm was meant to close.
+// public-checkout ruling.
 //
 // Every other standing literal in this file names a holder with a real stream
 // token, so none of them could reach the branch an unattributed holder takes.
 // A zero Attribution is both a legitimate holder and the zero value of
 // claimContext.self, and the two coincide on exactly the reports that build a
 // context carrying no Stream at all -- `lit sync`'s contested-lane report among
-// them. The old arm read that coincidence as proof of ownership and announced
-// a foreign lane as "claimed here: this checkout".
+// them. Reading that coincidence as proof of ownership would announce a foreign
+// lane as "claimed here: this checkout".
 //
 // So cc.self varies down the rows and the expected badge does not: rendering
 // reads the holder and the addresses this machine actually resolved, never who

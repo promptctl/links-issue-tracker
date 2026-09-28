@@ -59,23 +59,23 @@ func OpenSync(ctx context.Context, doltRootDir string, workspaceID string) (_ *S
 	}
 	// OpenSync is the on-change mirror's own engine open, so this is exactly
 	// the call site that must wait out an earlier foreground command's (or
-	// earlier mirror's) still-live engine instead of colliding with it
-	// (links-sync-pgct.11) — the wait happens inside the eager engine open,
-	// on Dolt's own journal lock, bounded by coResidentHolderWait.
+	// earlier mirror's) still-live engine instead of colliding with it — the
+	// wait happens inside the eager engine open, on Dolt's own journal lock,
+	// bounded by coResidentHolderWait.
 	s, err := openStoreConnection(ctx, doltRootDir, workspaceID, engineWrite)
 	if err != nil {
 		return nil, err
 	}
 	s.releaseWorkspaceLock = release
 	// Same per-open branch normalization Store.Open runs: the bootstrap only
-	// normalizes at creation now, so a pre-made database (an adopt's clone)
-	// gets renamed to master here on the mirror's own engine rather than by
-	// a bootstrap pool. The decision is a lock-free read and the commit lock
-	// is taken only when a rename is actually due — read-only OpenSync
-	// consumers (lit sync status, every mirror cycle) must not queue behind
-	// a snapshot copy's minutes-long commit-lock hold for a no-op. The one
-	// branch is the domain's own discriminator: masterRenameSource's typed
-	// absence. [LAW:dataflow-not-control-flow]
+	// normalizes at creation, so a pre-made database (an adopt's clone) gets
+	// renamed to master here on the mirror's own engine. The decision is a
+	// lock-free read and the commit lock is taken only when a rename is
+	// actually due — read-only OpenSync consumers (lit sync status, every
+	// mirror cycle) must not queue behind a snapshot copy's minutes-long
+	// commit-lock hold for a no-op. The one branch is the domain's own
+	// discriminator: masterRenameSource's typed absence.
+	// [LAW:dataflow-not-control-flow]
 	// [LAW:single-enforcer] The rename itself still runs only inside
 	// ensureMasterDefaultBranch under the commit lock, which re-derives the
 	// decision — the pre-check is an optimization, never the enforcer.
@@ -565,14 +565,14 @@ func (s *Store) CompactIfDue(ctx context.Context) (storage.CompactionOutcome, er
 }
 
 // chooseCompactionDepth picks the depth for the push path. The push always
-// compacts at least the new generation — that is this path's long-standing
-// contract and it does not become conditional on a measurement succeeding — so
-// the footprint can only ever deepen the pass, never cancel it.
+// compacts at least the new generation — that is this path's contract and it
+// does not become conditional on a measurement succeeding — so the footprint
+// can only ever deepen the pass, never cancel it.
 //
 // A measurement that fails therefore returns a usable depth AND its error: the
-// fallback is the exact behavior this path had before the footprint existed,
-// which makes it a safe floor rather than an invented one, and the caller
-// reports the problem instead of the store silently choosing for it.
+// fallback is this path's contract, the new generation alone, which makes it a
+// safe floor rather than an invented one, and the caller reports the problem
+// instead of the store silently choosing for it.
 // [LAW:no-silent-failure]
 func (s *Store) chooseCompactionDepth() (GCMode, error) {
 	footprint, err := s.measureFootprint()
@@ -639,10 +639,10 @@ func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch st
 		//
 		// Whether a pass ran is the attempt's to answer, not this call site's.
 		// The error arriving here may come from the compaction itself or from
-		// the push after it, and this code cannot tell them apart — it used to
-		// assume the latter, and so announced a full pass in the same breath as
-		// the error saying the full pass had failed. compactionReport holds that
-		// filter now. [LAW:one-source-of-truth]
+		// the push after it, and this code cannot tell them apart — assuming the
+		// latter would announce a full pass in the same breath as the error
+		// saying the full pass had failed. compactionReport holds that filter.
+		// [LAW:one-source-of-truth]
 		//
 		// This is deliberately not the prune's arrangement below, which is
 		// gated on the push succeeding for a real reason: the prune needs the
@@ -689,13 +689,13 @@ func (s *Store) pushWithinLock(ctx context.Context, remote string, branch string
 		return storage.SyncPushResult{}, err
 	}
 	trimmedBranch := strings.TrimSpace(branch)
-	// [LAW:single-enforcer] Refuse before authoring a commit onto a remote whose
-	// head is at a schema this binary cannot produce — otherwise a plain push is
-	// rejected with a raw non-fast-forward string (the exact ignorable line the
-	// sync-skew epic kills) and a --force push would REGRESS the shared remote to
-	// this binary's older schema. The guard needs the resolved tracking ref, so it
-	// runs once the branch is known; an empty branch (push HEAD with no explicit
-	// branch) has no tracking ref to compare against and is left to Dolt.
+	// [LAW:single-enforcer] Refuse before authoring a commit onto a remote
+	// whose head is at a schema this binary cannot produce — otherwise a plain
+	// push is rejected with a raw non-fast-forward string and a --force push
+	// would REGRESS the shared remote to this binary's older schema. The guard
+	// needs the resolved tracking ref, so it runs once the branch is known; an
+	// empty branch (push HEAD with no explicit branch) has no tracking ref to
+	// compare against and is left to Dolt.
 	if trimmedBranch != "" {
 		if err := s.guardRemoteSchemaAhead(ctx, trimmedRemote, trimmedBranch); err != nil {
 			return storage.SyncPushResult{}, err
@@ -727,7 +727,7 @@ func (s *Store) pushWithinLock(ctx context.Context, remote string, branch string
 	// One dropped SSH connection must not fail the whole push: the transport
 	// retry absorbs it, and only a failure that survives the budget reaches the
 	// caller — as RemoteUnreachableError naming the transport symptom, never as
-	// the backend's misrendered authentication failure (links-sync-r779).
+	// the backend's misrendered authentication failure.
 	pushErr := runRemoteIO(ctx, func(ctx context.Context) error {
 		return s.db.QueryRowContext(ctx, query, stringArgsToAny(args)...).Scan(&result.Status, &message)
 	})

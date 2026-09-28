@@ -101,9 +101,9 @@ func noteLine(note string) string { return headerLine("Note", note) }
 
 // headerLine is the one renderer of a labelled, optional line in a bundle
 // section's header, terminated so it slots between the lines around it. Both
-// callers had their own copy of "empty means emit nothing, otherwise label,
-// colon, space, value, newline" until the second one arrived and made the
-// duplication visible. [LAW:one-source-of-truth]
+// callers share it rather than each keeping a copy of "empty means emit
+// nothing, otherwise label, colon, space, value, newline".
+// [LAW:one-source-of-truth]
 //
 // [LAW:dataflow-not-control-flow] absence is a value this returns, so
 // WriteBundle formats every section with ONE unconditional Fprintf rather than

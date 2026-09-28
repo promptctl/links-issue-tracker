@@ -141,8 +141,7 @@ func NewStatus(state State, closedAt *time.Time, resolution *Resolution, redirec
 // a close's payload travels through the machine instead of being re-attached
 // after it; every other target carries none of them, so a close time,
 // resolution, or redirect target can never linger on a non-closed state.
-// It cannot fail: Target is total over StatusAction, so the old
-// "unsupported lifecycle action" arm is unrepresentable.
+// It cannot fail: Target is total over StatusAction.
 // [LAW:one-source-of-truth] The action→target mapping is the variant's Target;
 // this function maintains no parallel table.
 func applyStatusAction(current Lifecycle, action StatusAction) Lifecycle {

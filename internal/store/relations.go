@@ -165,7 +165,7 @@ var structuralRelationTypes = []model.RelationType{model.RelBlocks, model.RelPar
 // analysis once the id list reaches backlog size. Two single-column
 // conjunctive queries keep every range a point and the analysis linear.
 // [LAW:carrying-cost] the merge code below is the whole price; the OR's price
-// grew with every ticket filed.
+// would grow with every ticket filed.
 func (s *Store) listRelationsForIDs(ctx context.Context, ids []string) ([]model.Relation, error) {
 	if len(ids) == 0 {
 		return nil, nil
@@ -242,11 +242,10 @@ func (s *Store) scanRelationRows(ctx context.Context, query string, args []any) 
 	return rels, rows.Err()
 }
 
-// mergeRelations combines the two endpoint result sets into the order the
-// single query produced: created_at ascending, deduplicated by primary key. A
-// row whose src and dst are both subjects arrives from both queries and must
-// count once. Ties on created_at break by primary key, so the merged order is
-// deterministic where the SQL ordering never was.
+// mergeRelations combines the two endpoint result sets into one order:
+// created_at ascending, deduplicated by primary key. A row whose src and dst
+// are both subjects arrives from both queries and must count once. Ties on
+// created_at break by primary key, so the merged order is deterministic.
 func mergeRelations(bySrc, byDst []model.Relation) []model.Relation {
 	seen := make(map[relationKey]struct{}, len(bySrc)+len(byDst))
 	merged := make([]model.Relation, 0, len(bySrc)+len(byDst))
@@ -683,13 +682,13 @@ func (s *Store) SetParent(ctx context.Context, in storage.SetParentInput) (model
 // It reads nothing before the DELETE. That is what makes it usable on the one
 // workspace that needs it most: a hierarchy holding a loop, which `lit doctor`
 // names and tells the operator to break here. Hydrating the child first —
-// GetIssue climbs the parent chain — overflowed the stack on exactly that
-// state, so the repair crashed on the fault it was the repair for.
+// GetIssue climbs the parent chain — would overflow the stack on exactly that
+// state, so the repair would crash on the fault it is the repair for.
 // Existence is still proven, on the tx and without hydrating, because the two
 // absences are different diagnoses: "no such issue" and "that issue has no
 // parent" send the operator to different places, and collapsing them into the
-// DELETE's rows-affected would report a typo'd id as a missing edge. It is the
-// hydration that had to go, not the proof. [LAW:no-silent-failure]
+// DELETE's rows-affected would report a typo'd id as a missing edge.
+// [LAW:no-silent-failure]
 func (s *Store) ClearParent(ctx context.Context, childID string) error {
 	return s.withMutation(ctx, "clear parent", func(ctx context.Context, tx *sql.Tx) error {
 		if err := requireIssueExistsTx(ctx, tx, childID); err != nil {

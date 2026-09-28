@@ -98,10 +98,9 @@ func GraphModules() ([]Module, error) {
 	mods, err := parseModuleList(listed)
 	if err != nil {
 		// This wrap names the SCOPE and leaves the cause to the wrapped error.
-		// It used to assert one — "an empty module directory means `go mod
-		// download all` did not fetch it" — which was right when that was the
-		// only way to reach here, and became misdirection the moment
-		// parseReplacement added failure modes of its own. A guess plus a
+		// Asserting one — "an empty module directory means `go mod download
+		// all` did not fetch it" — would be misdirection, because
+		// parseReplacement has failure modes of its own. A guess plus a
 		// disclaimer is worse than neither: an operator hitting a malformed
 		// replacement would read a sentence about the module cache and go
 		// looking in the wrong place. [LAW:no-silent-failure] a loud error must
@@ -293,8 +292,7 @@ func scanLicenseTexts(root string) ([]string, error) {
 // name says its contents are license texts. Two routes in, because the two
 // conventions in the wild are genuinely different — a module either names the
 // file (LICENSE, COPYING.LESSER, Sun-LICENSE) or names the folder
-// (licenses/gpl.txt) — and covering only one of them was the gap that hid the
-// graph's only GPL.
+// (licenses/gpl.txt) — and covering only one of them would hide a GPL.
 //
 // Nothing is excluded here on the strength of its extension or its path. A
 // .go file whose name happens to contain "license" reaches the classifier,

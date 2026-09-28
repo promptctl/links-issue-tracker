@@ -33,13 +33,13 @@ func TestPlanRemoteCachePruneCollectsOnlyUnmatchedDirs(t *testing.T) {
 	}
 }
 
-// TestPlanRemoteCachePruneDeclinesWhenDerivationMissesTheLiveMirror is the whole
-// reason this code is shaped the way it is. It reproduces the real near-miss:
-// the live remote's URL carries a home-relative `/./`, a derivation that drops
-// it yields missedKey, and missedKey names no directory on disk. Under a plain
-// set subtraction the live mirror would be "unmatched" and deleted, the next
-// push would silently re-clone it, and the prune would churn the entire cache on
-// every push while reporting success. The plan must refuse instead.
+// TestPlanRemoteCachePruneDeclinesWhenDerivationMissesTheLiveMirror is the
+// whole reason this code is shaped the way it is. The live remote's URL carries
+// a home-relative `/./`, a derivation that drops it yields missedKey, and
+// missedKey names no directory on disk. Under a plain set subtraction the live
+// mirror would be "unmatched" and deleted, the next push would silently
+// re-clone it, and the prune would churn the entire cache on every push while
+// reporting success. The plan must refuse instead.
 func TestPlanRemoteCachePruneDeclinesWhenDerivationMissesTheLiveMirror(t *testing.T) {
 	t.Parallel()
 	plan, err := planRemoteCachePrune(
