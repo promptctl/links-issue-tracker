@@ -441,6 +441,21 @@ func TestUnknownCommandRefusesAHelpFlagOnEitherSide(t *testing.T) {
 	}
 }
 
+// A flag the root does not declare, written before any command name, is the
+// root's to refuse, and it refuses it as a usage error (exit 2), like every
+// command's parser does.
+func TestRootRefusesAnUnknownFlagAsAUsageError(t *testing.T) {
+	chdir(t, t.TempDir())
+
+	for _, args := range [][]string{{"--nosuchflag"}, {"--nosuchflag", "nosuchcommand"}, {"-x"}} {
+		var stdout, stderr bytes.Buffer
+		runErr := Run(context.Background(), &stdout, &stderr, args)
+		if _, ok := runErr.(UsageError); !ok {
+			t.Errorf("Run(%q) error = %#v, want UsageError", args, runErr)
+		}
+	}
+}
+
 // Bare `lit` outside a git repository has no workspace to print quickstart
 // guidance for, so it prints the root help instead of failing.
 func TestBareLitOutsideARepositoryPrintsTheRootHelp(t *testing.T) {
