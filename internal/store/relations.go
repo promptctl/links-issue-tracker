@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -308,7 +307,7 @@ func (s *Store) AddRelation(ctx context.Context, in storage.AddRelationInput) (m
 	// [LAW:types-are-the-program] in.Type is sealed at the trust boundary by
 	// ParseRelationType; no string re-validation here.
 	if in.Type == model.RelRelatedTo && in.SrcID == in.DstID {
-		return model.Relation{}, errors.New("related-to cannot target itself")
+		return model.Relation{}, model.ValidationError{Message: "related-to cannot target itself"}
 	}
 	srcID, dstID := in.Type.CanonicalEndpoints(in.SrcID, in.DstID)
 	now := s.clock.Now()
@@ -415,14 +414,14 @@ func setSingleValuedEdgeTx(ctx context.Context, tx *sql.Tx, rel model.Relation) 
 // snapshot of existing edges.
 func rejectBlocksCycle(ctx context.Context, tx *sql.Tx, dependent, dependency string) error {
 	if dependent == dependency {
-		return fmt.Errorf("blocks: %s cannot block itself", dependent)
+		return model.ValidationError{Message: fmt.Sprintf("blocks: %s cannot block itself", dependent)}
 	}
 	edges, err := loadBlocksEdges(ctx, tx)
 	if err != nil {
 		return fmt.Errorf("blocks cycle check: %w", err)
 	}
 	if blocksPrecedes(blocksPrecedenceAdj(edges), dependent, dependency) {
-		return fmt.Errorf("blocks: cannot add %s depends-on %s — %s already depends on %s (directly or transitively), so this edge would close a dependency cycle, which has no valid rank order", dependent, dependency, dependency, dependent)
+		return model.ValidationError{Message: fmt.Sprintf("blocks: cannot add %s depends-on %s — %s already depends on %s (directly or transitively), so this edge would close a dependency cycle, which has no valid rank order", dependent, dependency, dependency, dependent)}
 	}
 	return nil
 }
@@ -444,7 +443,7 @@ func rejectBlocksCycle(ctx context.Context, tx *sql.Tx, dependent, dependency st
 // edges as a child -> parent map keeps that walk to one step per ancestor.
 func rejectParentCycle(ctx context.Context, tx *sql.Tx, childID, parentID string) error {
 	if childID == parentID {
-		return fmt.Errorf("parent-child: %s cannot be its own parent", childID)
+		return model.ValidationError{Message: fmt.Sprintf("parent-child: %s cannot be its own parent", childID)}
 	}
 	parentOf, err := loadParentEdges(ctx, tx)
 	if err != nil {
@@ -467,7 +466,7 @@ func rejectParentCycle(ctx context.Context, tx *sql.Tx, childID, parentID string
 		above[at] = parents
 		for _, parent := range parents {
 			if parent == childID {
-				return fmt.Errorf("parent-child: cannot make %s a child of %s — %s is already below %s in the hierarchy, so this edge would close a parent cycle, which has no root", childID, parentID, parentID, childID)
+				return model.ValidationError{Message: fmt.Sprintf("parent-child: cannot make %s a child of %s — %s is already below %s in the hierarchy, so this edge would close a parent cycle, which has no root", childID, parentID, parentID, childID)}
 			}
 			if _, visited := seen[parent]; visited {
 				continue
@@ -649,10 +648,10 @@ func (s *Store) ListRelationsForIssue(ctx context.Context, issueID string, types
 
 func (s *Store) SetParent(ctx context.Context, in storage.SetParentInput) (model.Relation, error) {
 	if strings.TrimSpace(in.ChildID) == "" || strings.TrimSpace(in.ParentID) == "" {
-		return model.Relation{}, errors.New("child and parent ids are required")
+		return model.Relation{}, model.ValidationError{Message: "child and parent ids are required"}
 	}
 	if in.ChildID == in.ParentID {
-		return model.Relation{}, errors.New("child and parent cannot be the same issue")
+		return model.Relation{}, model.ValidationError{Message: "child and parent cannot be the same issue"}
 	}
 	rel := model.Relation{
 		SrcID:     in.ChildID,

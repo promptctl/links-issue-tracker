@@ -37,7 +37,7 @@ func IssueOrdering(specs []SortSpec, bindings SortBindings) (func(a, b model.Iss
 		field := strings.ToLower(strings.TrimSpace(spec.Field))
 		compare, ok := bindings[field]
 		if !ok {
-			return nil, fmt.Errorf("unsupported sort field %q", spec.Field)
+			return nil, model.ValidationError{Message: fmt.Sprintf("unsupported sort field %q", spec.Field)}
 		}
 		if spec.Desc {
 			ascending := compare
