@@ -90,6 +90,8 @@ func receiveInline(ctx context.Context, ws workspace.Info) {
 	} else if observed.unmoved(readReceivedRefs(ws)) {
 		confirmRemoteUnmoved(ws, observed)
 		return
+	} else if observed.nothingToReceive() {
+		return
 	}
 
 	release, acquired, err := store.TryAcquireReceiveLock(ws.DatabasePath)

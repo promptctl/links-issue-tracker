@@ -57,6 +57,14 @@ type remoteAdvertisement struct {
 	refs   string
 }
 
+// nothingToReceive reports an answered question that leaves a fetch nothing
+// to bring: no remote the selection rule can pick, or a remote advertising no
+// refs/dolt/*. Neither case ever writes a received-refs record, so without
+// this the receive would clone the whole store every interval only to skip.
+func (a remoteAdvertisement) nothingToReceive() bool {
+	return a.remote == "" || strings.TrimSpace(a.refs) == ""
+}
+
 // record is the marker payload for this advertisement; nil for the zero value.
 func (a remoteAdvertisement) record() []byte {
 	if a == (remoteAdvertisement{}) {

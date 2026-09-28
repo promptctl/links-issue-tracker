@@ -267,3 +267,23 @@ func remoteDoltHead(t *testing.T, bareRemote string) string {
 	}
 	return strings.TrimSpace(string(out))
 }
+
+// TestNothingToReceiveIsOnlyAnEmptyAnswer pins the pre-clone stop: the zero
+// advertisement and an empty listing end the receive, and a listing with a
+// ref does not.
+func TestNothingToReceiveIsOnlyAnEmptyAnswer(t *testing.T) {
+	cases := []struct {
+		name string
+		ad   remoteAdvertisement
+		want bool
+	}{
+		{"no remote picked", remoteAdvertisement{}, true},
+		{"remote with no lit data", remoteAdvertisement{remote: "origin", url: "u", refs: ""}, true},
+		{"remote with lit data", remoteAdvertisement{remote: "origin", url: "u", refs: "abc\trefs/dolt/data"}, false},
+	}
+	for _, c := range cases {
+		if got := c.ad.nothingToReceive(); got != c.want {
+			t.Errorf("%s: nothingToReceive() = %t, want %t", c.name, got, c.want)
+		}
+	}
+}
