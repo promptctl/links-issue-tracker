@@ -424,32 +424,69 @@ func (s *Store) SyncReceive(ctx context.Context, remote string, branch string) (
 		if fetchErr != nil {
 			return fmt.Errorf("fetch remote %q: %w", trimmedRemote, fetchErr)
 		}
-		fresh, err := s.SyncFreshness(ctx, trimmedRemote, trimmedBranch)
-		if err != nil {
-			return err
-		}
-		result.Ahead, result.Behind = fresh.Ahead, fresh.Behind
-		result.OldestDivergedUnix = fresh.OldestDivergedUnix
-		switch fresh.State() {
-		case storage.SyncBehind:
-			trackingRef := fmt.Sprintf("remotes/%s/%s", trimmedRemote, trimmedBranch)
-			if err := execProcedureDiscard(ctx, s.db, "DOLT_MERGE", "--ff-only", trackingRef); err != nil {
-				return fmt.Errorf("fast-forward to %q: %w", trackingRef, err)
-			}
-			result.State = storage.SyncReceiveFastForwarded
-		case storage.SyncDiverged:
-			result.State = storage.SyncReceiveDiverged
-		case storage.SyncAhead:
-			result.State = storage.SyncReceiveAhead
-		case storage.SyncNeverSynced:
-			result.State = storage.SyncReceiveNeverSynced
-		default:
-			result.State = storage.SyncReceiveUpToDate
-		}
-		return nil
+		var err error
+		result, err = s.settleReceivedWithinLock(ctx, trimmedRemote, trimmedBranch)
+		return err
 	})
 	if err != nil {
 		return storage.SyncReceiveResult{}, err
+	}
+	return result, nil
+}
+
+// SyncSettleReceived is SyncReceive without the fetch: it reads the tracking
+// ref as it already stands — a fetch landed on this store from a clone
+// (LandFetchedHead) — and fast-forwards when the local branch is strictly
+// behind it. It contacts no network.
+func (s *Store) SyncSettleReceived(ctx context.Context, remote string, branch string) (storage.SyncReceiveResult, error) {
+	trimmedRemote, err := requireSyncArg("remote", remote)
+	if err != nil {
+		return storage.SyncReceiveResult{}, err
+	}
+	trimmedBranch, err := requireSyncArg("branch", branch)
+	if err != nil {
+		return storage.SyncReceiveResult{}, err
+	}
+	var result storage.SyncReceiveResult
+	err = s.runSyncMutation(ctx, func(ctx context.Context) error {
+		var err error
+		result, err = s.settleReceivedWithinLock(ctx, trimmedRemote, trimmedBranch)
+		return err
+	})
+	if err != nil {
+		return storage.SyncReceiveResult{}, err
+	}
+	return result, nil
+}
+
+// settleReceivedWithinLock is the half of a receive that follows the fetch:
+// the post-fetch freshness selects the outcome, and the one state that touches
+// local data (behind) fast-forwards. SyncReceive and SyncSettleReceived both
+// run it, so a receive whose fetch ran here and one whose fetch ran on a clone
+// settle identically. [LAW:single-enforcer] The caller holds the commit lock.
+func (s *Store) settleReceivedWithinLock(ctx context.Context, remote, branch string) (storage.SyncReceiveResult, error) {
+	var result storage.SyncReceiveResult
+	fresh, err := s.SyncFreshness(ctx, remote, branch)
+	if err != nil {
+		return result, err
+	}
+	result.Ahead, result.Behind = fresh.Ahead, fresh.Behind
+	result.OldestDivergedUnix = fresh.OldestDivergedUnix
+	switch fresh.State() {
+	case storage.SyncBehind:
+		trackingRef := fmt.Sprintf("remotes/%s/%s", remote, branch)
+		if err := execProcedureDiscard(ctx, s.db, "DOLT_MERGE", "--ff-only", trackingRef); err != nil {
+			return result, fmt.Errorf("fast-forward to %q: %w", trackingRef, err)
+		}
+		result.State = storage.SyncReceiveFastForwarded
+	case storage.SyncDiverged:
+		result.State = storage.SyncReceiveDiverged
+	case storage.SyncAhead:
+		result.State = storage.SyncReceiveAhead
+	case storage.SyncNeverSynced:
+		result.State = storage.SyncReceiveNeverSynced
+	default:
+		result.State = storage.SyncReceiveUpToDate
 	}
 	return result, nil
 }

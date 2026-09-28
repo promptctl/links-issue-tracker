@@ -168,14 +168,68 @@ func RecordPushedHead(ctx context.Context, doltRootDir string, remote string, br
 	return record, nil
 }
 
-// settlePushedHead is RecordPushedHead's ref write: the chunk-store open, the
-// hold, the commit lock, and the one ref comparison and move, all released
-// before it returns. atHead reports whether the ref now names head, moved
-// there or already there, as against left on a descendant of it.
+// settlePushedHead is RecordPushedHead's ref write: the one ref comparison and
+// move, run inside holdForRefWrite. atHead reports whether the ref now names
+// head, moved there or already there, as against left on a descendant of it.
 func settlePushedHead(ctx context.Context, root, trimmedRemote, trimmedBranch, trimmedHead string) (record PushedHeadRecord, atHead bool, err error) {
-	ddb, releaseRecord, err := openChunkStoreForRefWrite(ctx, root)
+	err = holdForRefWrite(ctx, root, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
+		trackingRef := ref.NewRemoteRef(trimmedRemote, trimmedBranch)
+		pushed, err := ddb.ReadCommit(holdCtx, hash.Parse(trimmedHead))
+		if err != nil {
+			return fmt.Errorf("record pushed head %s: this store does not hold it as a commit: %w", trimmedHead, err)
+		}
+		pushedCommit, ok := pushed.ToCommit()
+		if !ok {
+			return fmt.Errorf("record pushed head %s: this store holds it only as a ghost commit", trimmedHead)
+		}
+		// CanFastForward answers four ways for an existing ref: (true, nil) when
+		// the ref is a strict ancestor of head, ErrUpToDate when it IS head,
+		// ErrIsAhead when head is a strict ancestor of the ref, and (false, nil)
+		// when the two share an ancestor that is neither — divergence. Any other
+		// error is the comparison itself failing (a cut hold, an I/O fault, no
+		// common ancestor) and says nothing about where the ref stands. An absent
+		// ref answers (true, nil) — the first push.
+		canMove, ffErr := ddb.CanFastForward(holdCtx, trackingRef, pushedCommit)
+		switch {
+		case errors.Is(ffErr, doltdb.ErrUpToDate):
+			record, atHead = PushedHeadCarried, true
+			return nil
+		case errors.Is(ffErr, doltdb.ErrIsAhead):
+			record, atHead = PushedHeadCarried, false
+			return nil
+		case ffErr != nil:
+			return fmt.Errorf("record pushed head %s on remotes/%s/%s: compare the ref with the pushed head: %w", trimmedHead, trimmedRemote, trimmedBranch, ffErr)
+		case !canMove:
+			return fmt.Errorf("record pushed head %s on remotes/%s/%s: the ref has diverged from the pushed head (the remote was rewritten under the clone); the next fetch settles it", trimmedHead, trimmedRemote, trimmedBranch)
+		}
+		if setErr := ddb.SetHead(holdCtx, trackingRef, hash.Parse(trimmedHead)); setErr != nil {
+			return fmt.Errorf("record pushed head %s on remotes/%s/%s: %w", trimmedHead, trimmedRemote, trimmedBranch, setErr)
+		}
+		record, atHead = PushedHeadMoved, true
+		return nil
+	})
 	if err != nil {
 		return 0, false, err
+	}
+	return record, atHead, nil
+}
+
+// holdForRefWrite is the one hold a clone's bookkeeping takes on the live
+// store: the chunk-store open (Dolt's LOCK, waited out like any write open),
+// the commit lock, and write, all released before it returns. Both the mirror's
+// pushed-head record and the receive's landing of a fetch run through it, so the
+// two cannot drift on the lock order or on what their hold is bounded by.
+// [LAW:single-enforcer]
+//
+// The hold — everything from the open's success to the end of write — runs
+// under MirrorHoldBudget: the lock waits before it are waiting, not holding,
+// and a write still running at the budget is a stalled one. A cut is returned
+// wrapping ErrMirrorHoldCut. The caller holds the workspace shared lock around
+// it, so a rotation of the Dolt directory cannot land inside the hold.
+func holdForRefWrite(ctx context.Context, root string, write func(holdCtx context.Context, ddb *doltdb.DoltDB) error) (err error) {
+	ddb, releaseRecord, err := openChunkStoreForRefWrite(ctx, root)
+	if err != nil {
+		return err
 	}
 	defer func() {
 		// The record retires first, then Close releases Dolt's LOCK and
@@ -196,45 +250,15 @@ func settlePushedHead(ctx context.Context, root, trimmedRemote, trimmedBranch, t
 	// Commit lock AFTER the open took LOCK — the package's order. It excludes
 	// a writer mid-mutation whose GC-contention reconnect has momentarily
 	// dropped LOCK (doc.go's tolerated inversion); LOCK alone would let this
-	// ref write land inside that gap.
+	// write land inside that gap.
 	releaseCommit, err := acquireCommitLockAtPath(holdCtx, workspaceStorageDir(root), commitLockPathForDolt(root))
 	if err != nil {
-		return 0, false, err
+		return err
 	}
 	defer func() {
 		err = SettleCommitLockRelease(err, releaseCommit())
 	}()
-	trackingRef := ref.NewRemoteRef(trimmedRemote, trimmedBranch)
-	pushed, err := ddb.ReadCommit(holdCtx, hash.Parse(trimmedHead))
-	if err != nil {
-		return 0, false, fmt.Errorf("record pushed head %s: this store does not hold it as a commit: %w", trimmedHead, err)
-	}
-	pushedCommit, ok := pushed.ToCommit()
-	if !ok {
-		return 0, false, fmt.Errorf("record pushed head %s: this store holds it only as a ghost commit", trimmedHead)
-	}
-	// CanFastForward answers four ways for an existing ref: (true, nil) when
-	// the ref is a strict ancestor of head, ErrUpToDate when it IS head,
-	// ErrIsAhead when head is a strict ancestor of the ref, and (false, nil)
-	// when the two share an ancestor that is neither — divergence. Any other
-	// error is the comparison itself failing (a cut hold, an I/O fault, no
-	// common ancestor) and says nothing about where the ref stands. An absent
-	// ref answers (true, nil) — the first push.
-	canMove, ffErr := ddb.CanFastForward(holdCtx, trackingRef, pushedCommit)
-	switch {
-	case errors.Is(ffErr, doltdb.ErrUpToDate):
-		return PushedHeadCarried, true, nil
-	case errors.Is(ffErr, doltdb.ErrIsAhead):
-		return PushedHeadCarried, false, nil
-	case ffErr != nil:
-		return 0, false, fmt.Errorf("record pushed head %s on remotes/%s/%s: compare the ref with the pushed head: %w", trimmedHead, trimmedRemote, trimmedBranch, ffErr)
-	case !canMove:
-		return 0, false, fmt.Errorf("record pushed head %s on remotes/%s/%s: the ref has diverged from the pushed head (the remote was rewritten under the clone); the next fetch settles it", trimmedHead, trimmedRemote, trimmedBranch)
-	}
-	if setErr := ddb.SetHead(holdCtx, trackingRef, hash.Parse(trimmedHead)); setErr != nil {
-		return 0, false, fmt.Errorf("record pushed head %s on remotes/%s/%s: %w", trimmedHead, trimmedRemote, trimmedBranch, setErr)
-	}
-	return PushedHeadMoved, true, nil
+	return write(holdCtx, ddb)
 }
 
 // openChunkStoreForRefWrite opens the workspace's Dolt database without a SQL

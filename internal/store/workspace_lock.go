@@ -160,6 +160,22 @@ func TryAcquireSyncPushLock(databasePath string) (func() error, bool, error) {
 	return filelock.Acquire(context.Background(), SyncPushLockPath(databasePath), true, 1, 0)
 }
 
+// receiveLockPath is the automatic receive's single-flight lock, a sibling of
+// the Dolt directory beside the mirror's, for the same rotation-surviving
+// reason. [LAW:one-source-of-truth]
+func receiveLockPath(databasePath string) string {
+	return filepath.Join(workspaceStorageDir(databasePath), ".links-sync-receive.lock")
+}
+
+// TryAcquireReceiveLock takes a non-blocking exclusive hold guaranteeing only
+// one automatic receive runs at a time. false means another receive holds it,
+// and the caller does nothing: that receive fetches what this one would have.
+// The hold is also what makes the receive's sweep of a dead receive's clone
+// safe, as the sync-push lock is for the mirror's.
+func TryAcquireReceiveLock(databasePath string) (func() error, bool, error) {
+	return filelock.Acquire(context.Background(), receiveLockPath(databasePath), true, 1, 0)
+}
+
 // MirrorBeaconLockPath returns the mirror liveness beacon path, a sibling of
 // the Dolt directory at <dirname(databasePath)>/.links-sync-mirror.lock — the
 // same rotation-surviving position as the sync-push lock it accompanies.

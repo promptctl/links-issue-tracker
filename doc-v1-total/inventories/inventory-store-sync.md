@@ -80,7 +80,7 @@ Constants at `storage/sync.go`. Test `TestSyncFreshnessStateClassification` (`sy
 
 `SyncReceive(ctx, remote, branch)` at `sync.go`. Runs inside `runSyncMutation` (commit lock + GC retry):
 1. `CALL DOLT_FETCH(?)` with the remote (`sync.go`). Error `"fetch remote %q: %w"`.
-2. One `SyncFreshness` read (`sync.go`). `Ahead`, `Behind`, `OldestDivergedUnix` are copied onto the result (`sync.go`).
+2. `settleReceivedWithinLock` (`sync.go`), which `SyncSettleReceived` also runs alone inside its own `runSyncMutation`, with no fetch: one `SyncFreshness` read (`sync.go`). `Ahead`, `Behind`, `OldestDivergedUnix` are copied onto the result (`sync.go`).
 3. Switch on `fresh.State()` (`sync.go`):
    - `SyncBehind` → `execProcedureDiscard(DOLT_MERGE, "--ff-only", "remotes/<remote>/<branch>")`; error `"fast-forward to %q: %w"`; state `SyncReceiveFastForwarded`.
    - `SyncDiverged` → state `SyncReceiveDiverged`, **no merge performed**.
@@ -89,6 +89,15 @@ Constants at `storage/sync.go`. Test `TestSyncFreshnessStateClassification` (`sy
    - default → `SyncReceiveUpToDate`.
 
 Fast-forward is the only local-data-touching outcome. State constants and their string values at `/Users/bmf/code/links-issue-tracker/internal/storage/sync.go`: `"up_to_date"`, `"fast_forwarded"`, `"ahead"`, `"diverged"`, `"never_synced"`. Test: `TestSyncReceiveFastForwardsWhenBehindAndDefersDivergence` (`sync_test.go`).
+
+### 1.6a `LandFetchedHead` — a clone's fetch carried to the live store
+
+`LandFetchedHead(ctx, doltRootDir, cloneRootDir, remote, branch) (FetchedHeadRecord, error)` at `fetched_head.go`; no network, no SQL engine. Opens the clone's chunk store (`openCloneChunkStore`: journal on, singleton cache off, no lock wait; error `"open the clone's chunk store at %s: %w"`) and reads its `refs/remotes/<remote>/<branch>` (`resolveTrackingHead`); absent → `FetchedHeadAbsent` with nothing written. Otherwise, under the workspace shared lock, `requireInitializedWorkspace` and `requireNoPendingAdopt`, runs inside `holdForRefWrite` (`pushed_head.go`; the hold `RecordPushedHead` also takes: chunk-store open with LOCK waited out for `coResidentHolderWait`, `MirrorHoldBudget` from the open, commit lock, a cut wrapping `ErrMirrorHoldCut`):
+1. `PullChunks` from the clone into the live store for the fetched head, temp files under `<db>/links/.dolt/temptf` (error `"copy the fetched chunks of %s into the live store: %w"`).
+2. `landTrackingRef`: `CanFastForward(ref, fetched)` — `ErrUpToDate` or `ErrIsAhead` → `FetchedHeadCarried`, ref untouched; any other error → `"land fetched head %s on %s: compare the ref with the fetched head: %w"`; otherwise (absent ref, strict ancestor, or divergence — a rewritten remote) `SetHead` → `FetchedHeadMoved`.
+3. `landRemoteCache(<db>/links/.dolt/git-remote-cache of live, of clone)`: per cache key in the clone, a key the live store lacks is moved over whole (`os.Rename`); a key it has gets the clone's `refs/dolt/` refs the live mirror does not hold, through one `git --git-dir <live repo.git> fetch --no-tags --quiet <clone repo.git> <ref>:<ref>…`. A failure here is returned after the hold as `ErrRemoteCacheNotLanded` wrapping it, with the record.
+
+Records stringify as `moved` / `carried` / `absent`.
 
 ### 1.7 `SyncPull` — receive, then reconcile only on divergence
 
