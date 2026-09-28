@@ -592,13 +592,18 @@ func printCloseAdjacency(w io.Writer, detail model.IssueDetail) error {
 
 func formatIssueState(issue model.Issue) string {
 	// State() is shape-agnostic: leaves return their owned status, containers
-	// return the state derived from children.
-	parts := []string{string(issue.State())}
+	// return the state derived from children. The close reason refines the
+	// status word exactly as it does in issueStanding ("closed:wontfix"), for
+	// the same directional reason: a bare "closed" reads a declination as
+	// finished work. [LAW:one-source-of-truth] resolutionSuffix owns that
+	// notation for both composers.
+	parts := []string{string(issue.State()) + resolutionSuffix(issue.ResolutionValue())}
 	// [LAW:types-are-the-program] Retention is a sum, so at most one tag applies.
 	// [LAW:one-source-of-truth] Frozen owns the predicate and RetentionName the
 	// word; this surface picks only the composition — it appends where
 	// issueStanding replaces, because a ticket's own line carries both axes
-	// ("open+deleted") while a line naming another ticket carries one standing.
+	// ("closed:wontfix+archived") while a line naming another ticket carries
+	// one standing.
 	if model.Frozen(issue.Retention()) {
 		parts = append(parts, model.RetentionName(issue.Retention()))
 	}
