@@ -115,6 +115,12 @@ func ExitCode(err error) int {
 	if errors.As(err, &unsupported) {
 		return ExitValidation
 	}
+	// An unconfirmed takeover is the claim gate refusing, deterministically for
+	// the command as issued, which is what ExitValidation means.
+	var takeover takeoverUnconfirmedError
+	if errors.As(err, &takeover) {
+		return ExitValidation
+	}
 	// Both of the router's terminal answers share one code: the caller's
 	// question here is binary — was a ticket handed back? — and which of the two
 	// emptinesses it was is carried by the reason string and the message.

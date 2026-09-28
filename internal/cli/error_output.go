@@ -124,6 +124,13 @@ func commandErrorReason(err error) string {
 	if errors.As(err, &unsupported) {
 		return "unsupported_flag"
 	}
+	// A lane another checkout holds right now, not taken over. Not
+	// validation_refused: that line says "adjust the command", and the one
+	// adjustment that clears this is a flag the remediation has to name.
+	var takeover takeoverUnconfirmedError
+	if errors.As(err, &takeover) {
+		return "takeover_unconfirmed"
+	}
 	var outsideWorkspace OutsideWorkspaceError
 	if errors.As(err, &outsideWorkspace) {
 		return "outside_git_workspace"
@@ -285,6 +292,12 @@ func commandErrorRemediation(reason string) string {
 		// state was reached is the message's to say, not this line's, so nothing
 		// here restates it. [LAW:one-source-of-truth]
 		return "No action is needed — the command asked for a state the workspace is already in, and the message above says how that state was reached. Do not retry: running it again cannot change the answer, and `lit doctor` has nothing to diagnose because nothing is broken."
+	case "takeover_unconfirmed":
+		// Action-only, like its neighbours: the message names the holder. Both
+		// ways out are named and neither is urged, and the envelope says whose
+		// call the takeover is — an agent acts on this line, and --take
+		// overrides another checkout's live work.
+		return "Rerun with `--take` to take the lane over, or run `lit next` for work nobody else holds. " + agentInstructionsOpen + "Taking over a lane another checkout holds right now overrides that checkout's work: pass `--take` only when the user directs the takeover." + agentInstructionsClose
 	case "outside_git_workspace":
 		return "Run the command inside a git repository/worktree with links initialized."
 	case "workspace_not_initialized":

@@ -102,10 +102,13 @@ func authorizeStart(ctx context.Context, stdout io.Writer, ap *app.App, issueID 
 
 // confirmFreshTakeover is the deliberate act the design demands before a
 // foreign hold may be overridden — never a lock, always an explicit crossing.
-// An interactive terminal is prompted directly; a non-interactive caller (an
-// agent, a script, a test capturing output into a buffer) must already have
-// passed --take, matching the ticket's acceptance line: "an agent without a
-// TTY can take over a fresh-claimed lane only by passing the explicit flag."
+// --take is that crossing wherever it is passed. Without it, an interactive
+// terminal is prompted and a non-interactive caller (an agent, a script, a test
+// capturing output into a buffer) is refused, matching the ticket's acceptance
+// line: "an agent without a TTY can take over a fresh-claimed lane only by
+// passing the explicit flag." --take is read before the terminal is, so the flag
+// the refusal names works at a terminal too; it used to be ignored there, and a
+// terminal whose stdin was not a person declined on every rerun.
 // isTerminal(stdout) is the same interactivity signal openOrPrintWorkflowFile
 // already uses, so a captured-stdout test never blocks on a stdin read it did
 // not ask for.
@@ -120,12 +123,12 @@ func confirmFreshTakeover(stdout io.Writer, cc claimContext, lane model.LaneID, 
 	if !ok {
 		return fmt.Errorf("claims: %v is held by another checkout but has no claim line to show", lane)
 	}
-	if !isTerminal(stdout) {
-		if !take {
-			return fmt.Errorf("%s — this lane is claimed and active; pass --take to confirm the takeover", line)
-		}
+	if take {
 		_, err := fmt.Fprintf(stdout, "%s — taking over (--take)\n", line)
 		return err
+	}
+	if !isTerminal(stdout) {
+		return takeoverUnconfirmedError{Message: fmt.Sprintf("%s — this lane is claimed and active; pass --take to confirm the takeover", line)}
 	}
 	if _, err := fmt.Fprintf(stdout, "%s\ntake over this lane? [y/N] ", line); err != nil {
 		return err
@@ -135,7 +138,20 @@ func confirmFreshTakeover(stdout io.Writer, cc claimContext, lane model.LaneID, 
 		return fmt.Errorf("read takeover confirmation: %w", err)
 	}
 	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(answer)), "y") {
-		return fmt.Errorf("takeover declined")
+		return takeoverUnconfirmedError{Message: "takeover declined"}
 	}
 	return nil
 }
+
+// takeoverUnconfirmedError is the gate's answer when a live foreign hold was
+// not crossed: no --take off a terminal, or a "no" at the prompt. Both are the
+// gate working, not a fault, so the type carries that to the sinks — as a bare
+// error it reached the default remediation and told the caller to retry the
+// identical command and then run `lit doctor` on a healthy workspace
+// (links-cli-errors-iz41). One type for both arms: what each says differs, the
+// act that clears them — --take — does not. [LAW:one-type-per-behavior]
+type takeoverUnconfirmedError struct {
+	Message string
+}
+
+func (e takeoverUnconfirmedError) Error() string { return e.Message }
