@@ -293,11 +293,11 @@ func commandErrorRemediation(reason string) string {
 		// here restates it. [LAW:one-source-of-truth]
 		return "No action is needed — the command asked for a state the workspace is already in, and the message above says how that state was reached. Do not retry: running it again cannot change the answer, and `lit doctor` has nothing to diagnose because nothing is broken."
 	case "takeover_unconfirmed":
-		// Both ways out are named and neither is urged: taking a live lane
-		// overrides another checkout's work, which is why the gate exists. It
-		// does not claim a rerun repeats this answer — at a terminal the same
-		// line prompts again, and a `y` there is the confirmation.
-		return "Another checkout holds this lane right now, and `lit start` takes it over only when the takeover is confirmed: rerun with `--take`, or answer `y` at the terminal prompt. Taking a live lane is a deliberate act, not a way past this answer — to leave the lane with its holder, run `lit next` for work nobody else holds."
+		// Action-only, like its neighbours: the message names the holder. Both
+		// ways out are named and neither is urged, and the envelope says whose
+		// call the takeover is — an agent acts on this line, and --take
+		// overrides another checkout's live work.
+		return "Rerun with `--take` to take the lane over, or run `lit next` for work nobody else holds. " + agentInstructionsOpen + "Taking over a lane another checkout holds right now overrides that checkout's work: pass `--take` only when the user directs the takeover." + agentInstructionsClose
 	case "outside_git_workspace":
 		return "Run the command inside a git repository/worktree with links initialized."
 	case "workspace_not_initialized":

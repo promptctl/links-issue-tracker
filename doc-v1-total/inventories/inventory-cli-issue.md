@@ -221,7 +221,7 @@ field (`errors.go`), `RetiredCommandError` — message
 - `corruption_detected`: "Run `lit doctor --fix integrity` and retry. \<agent-instructions>This command is idempotent and safe to run without confirmation.\</agent-instructions>"
 - `transient_gc_contention`: "Retry once. If the error persists, run `lit doctor --fix`. \<agent-instructions>…\</agent-instructions>"
 - `workspace_write_blocked`: "Wait a moment and retry — a normal command releases the store in well under a second. If it persists, a lit process is stuck: find it with `ps aux | grep '[l]it'` and terminate it, then retry; if none is running the hold is stale, so run `lit doctor --fix`. \<agent-instructions>…\</agent-instructions>"
-- `takeover_unconfirmed`: "Another checkout holds this lane right now, and `lit start` takes it over only when the takeover is confirmed: rerun with `--take`, or answer `y` at the terminal prompt. Taking a live lane is a deliberate act, not a way past this answer — to leave the lane with its holder, run `lit next` for work nobody else holds."
+- `takeover_unconfirmed`: "Rerun with `--take` to take the lane over, or run `lit next` for work nobody else holds. \<agent-instructions>Taking over a lane another checkout holds right now overrides that checkout's work: pass `--take` only when the user directs the takeover.\</agent-instructions>"
 - `outside_git_workspace`: "Run the command inside a git repository/worktree with links initialized."
 - `workspace_not_initialized`: "Do not retry unchanged — this repository has no lit workspace, and retrying this command cannot create one. Run `lit init` here to create it, or change to a directory that already has one."
 - `bulk_partial_failure`: "Some items failed; see the per-item errors above. Re-run the command for only the failed IDs after addressing each error."
@@ -1001,8 +1001,8 @@ Registry rows and summaries:
 - `start` adds `--assignee` (string, `""`, help "Assignee fallback when
   CLAUDE_CODE_SESSION_ID is unset (env always wins when set)") and `--take` (bool,
   `false`, help "Confirm taking over a lane another checkout claims right now
-  (required for non-interactive callers; an interactive terminal is prompted
-  instead)") (`cli.go`). The action is
+  (required for non-interactive callers; without it an interactive terminal is
+  prompted instead)") (`cli.go`). The action is
   `model.Start{Assignee: resolveIdentity(*assignee)}` (`cli.go`).
 - `close` adds `--resolution` (string, `""`, "Close resolution (required):
   duplicate|superseded|obsolete|wontfix") and `--of` (string, `""`, "Canonical
@@ -1093,12 +1093,12 @@ positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason 
      a lane whose claim has expired derives) → no ceremony: the start proceeds and
      prints nothing about the lane.
    - `Held` by another → `confirmFreshTakeover` (`claims_takeover.go`):
+     - `--take`, at a terminal or not → prints `"<claim line> — taking over (--take)\n"`
+       and proceeds.
      - Non-interactive stdout (`!isTerminal(stdout)`) and no `--take` →
        `takeoverUnconfirmedError` "<claim line> — this lane is claimed and active; pass --take to confirm the takeover"
        → exit 3, reason `takeover_unconfirmed`.
-     - Non-interactive with `--take` → prints `"<claim line> — taking over (--take)\n"`
-       and proceeds.
-     - Interactive → prints `"<claim line>\ntake over this lane? [y/N] "`, reads a
+     - Interactive and no `--take` → prints `"<claim line>\ntake over this lane? [y/N] "`, reads a
        line from stdin; a read error other than EOF →
        `"read takeover confirmation: %w"`; an answer not starting with `y`
        (case-insensitive, trimmed) → `takeoverUnconfirmedError` "takeover declined" → exit 3,

@@ -1561,7 +1561,7 @@ var (
 			}
 		},
 		authorize: func(fs *cobraFlagSet) func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue, action model.Action) (string, error) {
-			take := fs.Bool("take", false, "Confirm taking over a lane another checkout claims right now (required for non-interactive callers; an interactive terminal is prompted instead)")
+			take := fs.Bool("take", false, "Confirm taking over a lane another checkout claims right now (required for non-interactive callers; without it an interactive terminal is prompted instead)")
 			return func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue, action model.Action) (string, error) {
 				// registerFlags above builds every action this hook sees, so a
 				// different variant is a wiring error, not a caller's mistake.
