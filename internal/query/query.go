@@ -14,18 +14,31 @@ type ParseResult struct {
 	Filter storage.ListIssuesFilter
 }
 
+// Parse reads a query expression into a filter. Every refusal it returns is a
+// storage.ValidationError: each one rejects the query text itself, so it
+// repeats on every retry and must not be answered with retry advice. Typing
+// it here, once, covers every term rather than only the ones that remembered
+// to. [LAW:single-enforcer]
 func Parse(input string) (ParseResult, error) {
+	filter, err := parse(input)
+	if err != nil {
+		return ParseResult{}, storage.ValidationError{Message: err.Error()}
+	}
+	return ParseResult{Filter: filter}, nil
+}
+
+func parse(input string) (storage.ListIssuesFilter, error) {
 	terms, err := tokenize(strings.TrimSpace(input))
 	if err != nil {
-		return ParseResult{}, err
+		return storage.ListIssuesFilter{}, err
 	}
 	filter := storage.ListIssuesFilter{}
 	for _, term := range terms {
 		if err := applyTerm(&filter, term); err != nil {
-			return ParseResult{}, err
+			return storage.ListIssuesFilter{}, err
 		}
 	}
-	return ParseResult{Filter: filter}, nil
+	return filter, nil
 }
 
 func Merge(base storage.ListIssuesFilter, incoming storage.ListIssuesFilter) (storage.ListIssuesFilter, error) {
@@ -70,21 +83,6 @@ func Merge(base storage.ListIssuesFilter, incoming storage.ListIssuesFilter) (st
 	return filter, validateFilter(filter)
 }
 
-// nameSet reads the free-text names an id:, parent: or label: term carries:
-// a comma list, as the matching --ids, --parent and --labels flags take, so a
-// term and its flag build the same filter at every arity.
-// [LAW:no-silent-failure] A term naming nothing (`parent:`, `id: , `) is
-// refused rather than dropped: dropping it would silently widen the listing to
-// every issue. Typed as a validation refusal because it repeats on every
-// retry, so it must not be answered with retry advice.
-func nameSet(term, key, noun, example string) ([]string, error) {
-	names := storage.TrimmedNonEmpty(strings.Split(strings.TrimPrefix(term, key), ","))
-	if len(names) == 0 {
-		return nil, storage.ValidationError{Message: fmt.Sprintf("%s needs %s, e.g. %s%s", key, noun, key, example)}
-	}
-	return names, nil
-}
-
 func applyTerm(filter *storage.ListIssuesFilter, term string) error {
 	switch {
 	case strings.HasPrefix(term, "status:"):
@@ -123,21 +121,24 @@ func applyTerm(filter *storage.ListIssuesFilter, term string) error {
 		filter.Assignees = append(filter.Assignees, strings.TrimSpace(strings.TrimPrefix(term, "assignee:")))
 		return nil
 	case strings.HasPrefix(term, "id:"):
-		ids, err := nameSet(term, "id:", "an issue id", "<issue-id>")
+		// [LAW:single-enforcer] id:, parent: and label: read their comma lists
+		// through the one storage.ParseNames their flags use, so a term and its
+		// flag build the same filter at every arity.
+		ids, err := storage.ParseNames("id: needs an issue id in every slot, e.g. id:<issue-id>", strings.TrimPrefix(term, "id:"))
 		if err != nil {
 			return err
 		}
 		filter.IDs = append(filter.IDs, ids...)
 		return nil
 	case strings.HasPrefix(term, "parent:"):
-		ids, err := nameSet(term, "parent:", "an issue id", "<epic-id>")
+		ids, err := storage.ParseNames("parent: needs an issue id in every slot, e.g. parent:<epic-id>", strings.TrimPrefix(term, "parent:"))
 		if err != nil {
 			return err
 		}
 		filter.ParentIDs = append(filter.ParentIDs, ids...)
 		return nil
 	case strings.HasPrefix(term, "label:"):
-		labels, err := nameSet(term, "label:", "a label", "<label>")
+		labels, err := storage.ParseNames("label: needs a label in every slot, e.g. label:<label>", strings.TrimPrefix(term, "label:"))
 		if err != nil {
 			return err
 		}

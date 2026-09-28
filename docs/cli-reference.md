@@ -273,7 +273,8 @@ they are not filter concerns.
 list, may be repeated, and a repeat adds to the set rather than replacing it.
 `--status` and `--type` members are checked against their vocabulary, so one bad
 member fails the whole listing and is named. An empty `--ids`, `--parent` or
-`--labels`, or a bare `id:`, `parent:` or `label:`, is refused rather than ignored.
+`--labels`, a blank slot in one (`--ids a,`), or a bare `id:`, `parent:` or `label:`,
+is refused rather than ignored. Every one of these refusals exits 3.
 `--labels` requires every label named, so each one added narrows the listing.
 
 `--parent <csv>` (token `parent:<id>`; comma-separated and/or repeated) keeps only the

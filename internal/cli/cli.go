@@ -557,25 +557,27 @@ func listLeaf(surface listSurface) (leaf[listScope], *string) {
 		}
 		visited := map[string]bool{}
 		fs.Visit(func(f *pflag.Flag) { visited[f.Name] = true })
+		// A bad member of a set filter is a validation refusal: it repeats on
+		// every retry, so it must not draw retry advice. [LAW:no-silent-failure]
 		statuses, err := model.ParseStates(*status...)
 		if err != nil {
-			return fmt.Errorf("parse --status: %w", err)
+			return ValidationError{Message: "parse --status: " + err.Error()}
 		}
 		issueTypes, err := model.ParseIssueTypes(*issueType...)
 		if err != nil {
-			return fmt.Errorf("parse --type: %w", err)
+			return ValidationError{Message: "parse --type: " + err.Error()}
 		}
-		issueIDs, err := nameFlagSet("--ids", "an issue id", "<issue-id>", *ids)
+		issueIDs, err := storage.ParseNames("--ids needs an issue id in every slot, e.g. --ids <issue-id>", *ids...)
 		if err != nil {
 			return err
 		}
 		// Parent ids are read before the surface's positional joins the set:
 		// `--parent ""` names no parent whichever command carries it.
-		parentIDs, err := nameFlagSet("--parent", "an issue id", "<epic-id>", *parent)
+		parentIDs, err := storage.ParseNames("--parent needs an issue id in every slot, e.g. --parent <epic-id>", *parent...)
 		if err != nil {
 			return err
 		}
-		labelNames, err := nameFlagSet("--labels", "a label", "<label>", *labels)
+		labelNames, err := storage.ParseNames("--labels needs a label in every slot, e.g. --labels <label>", *labels...)
 		if err != nil {
 			return err
 		}
@@ -2089,25 +2091,6 @@ func writeJSON(w io.Writer, v any) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
-}
-
-// nameFlagSet reads a free-text set flag (--ids, --parent, --labels) from its
-// raw occurrences: each is a comma list, and the occurrences union. An
-// occurrence naming nothing is refused on its own, so an empty one is never
-// masked by the names beside it, and alone it cannot silently drop the filter
-// and hand back every issue. [LAW:no-silent-failure]
-// The id:, parent: and label: query terms apply the same rule
-// (query.nameSet); the two differ only in the spelling their refusal names.
-func nameFlagSet(flag, noun, example string, occurrences []string) ([]string, error) {
-	var out []string
-	for _, occurrence := range occurrences {
-		names := splitCSV(occurrence)
-		if len(names) == 0 {
-			return nil, UsageError{Message: fmt.Sprintf("%s needs %s, e.g. %s %s", flag, noun, flag, example)}
-		}
-		out = append(out, names...)
-	}
-	return out, nil
 }
 
 // parseIssueTypeFlag is the strict trust boundary for the write-path --type

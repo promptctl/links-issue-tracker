@@ -1292,9 +1292,9 @@ A listing that says nothing about retention sees only live issues
 | `resolution:<v>` | `model.ParseResolution` (trim only); appended to `Resolutions` | |
 | `type:<v>[,<v>...]` | `model.ParseIssueTypes`; appended to `IssueTypes`; a typo or blank member is an error, never an empty result | |
 | `assignee:<v>` | value trimmed, appended to `Assignees` (no validation, empty allowed) | |
-| `id:<v>[,<v>...]` | `nameSet`: comma-split, fragments trimmed, blanks dropped; appended to `IDs`; nothing left → `storage.ValidationError` | |
-| `parent:<v>[,<v>...]` | `nameSet`, as `id:`; appended to `ParentIDs` | |
-| `label:<v>[,<v>...]` | `nameSet`, as `id:`; appended to `LabelsAll` (AND semantics) | |
+| `id:<v>[,<v>...]` | `storage.ParseNames`: comma-split, fragments trimmed; appended to `IDs`; any blank slot → `storage.ValidationError` | |
+| `parent:<v>[,<v>...]` | `storage.ParseNames`, as `id:`; appended to `ParentIDs` | |
+| `label:<v>[,<v>...]` | `storage.ParseNames`, as `id:`; appended to `LabelsAll` (AND semantics) | |
 | `has:comments` | sets `HasComments` to `true` via `mergeBoolPointer("has-comments", …)` | |
 | `has:<other>` | error `unsupported has: filter %q` (quoting the **whole** term) | |
 | `sort:<expr>` | `storage.ParseSortSpecs`; specs appended to `SortBy` | |

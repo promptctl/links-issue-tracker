@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"errors"
 	"strings"
 	"testing"
 
@@ -116,11 +115,8 @@ func TestListSetFlagsWidenAcrossEverySpelling(t *testing.T) {
 // unfiltered listing here has the exact shape of a real answer.
 // [LAW:no-silent-failure]
 //
-// The two families differ on blank fragments by design. A type is a sealed
-// vocabulary, so every fragment goes through the type parser and a blank one
-// is a bad member, as for --status. Ids and labels are free text with no
-// element parser; there the rule is --parent's, where an occurrence must name
-// something and a blank fragment beside a name selects nothing either way.
+// A blank member is a bad member in every set, free-text or sealed: `--ids
+// "a,$MISSING"` must not quietly list only a.
 func TestListSetFlagsRejectABadMemberLoudly(t *testing.T) {
 	h, bugA, _, _ := setFlagFixture(t)
 
@@ -135,9 +131,12 @@ func TestListSetFlagsRejectABadMemberLoudly(t *testing.T) {
 		{"--ids", ""},
 		{"--ids", " , "},
 		{"--ids", bugA, "--ids", ""},
+		{"--ids", bugA + ","},
 		{"--query", "id:"},
+		{"--query", "id:" + bugA + ","},
 		{"--labels", ""},
 		{"--labels", "a", "--labels", ""},
+		{"--labels", "a,"},
 		{"--query", "label:"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
@@ -153,15 +152,34 @@ func TestListSetFlagsRejectABadMemberLoudly(t *testing.T) {
 	}
 }
 
-// An empty --ids or --labels occurrence is a malformed command line, refused
-// as a UsageError naming the flag, exactly as an empty --parent is.
-func TestListEmptyNameFlagIsAUsageErrorNamingTheFlag(t *testing.T) {
+// Every set-filter refusal, in either spelling, is a validation refusal
+// (exit 3) naming the spelling that failed. Each repeats on every retry, so
+// none may exit as a generic failure and draw retry-and-doctor advice, and a
+// flag and its term must not fail differently for one malformed request.
+func TestListSetFilterRefusalsAreValidationErrors(t *testing.T) {
 	h, _, _, _ := setFlagFixture(t)
-	for _, flag := range []string{"--ids", "--labels", "--parent"} {
-		err := runListWithStore(h.ctx, &strings.Builder{}, h.ap.Store, noReadyPolicy, []string{flag + "="})
-		var usage UsageError
-		if !errors.As(err, &usage) || !strings.Contains(err.Error(), flag+" needs") {
-			t.Fatalf("lit ls %s= error = %#v, want a UsageError naming %s", flag, err, flag)
+	for _, tc := range []struct {
+		args  []string
+		names string
+	}{
+		{[]string{"--status", "todo"}, "--status"},
+		{[]string{"--type", "bogus"}, "--type"},
+		{[]string{"--type="}, "--type"},
+		{[]string{"--ids="}, "--ids"},
+		{[]string{"--parent="}, "--parent"},
+		{[]string{"--labels="}, "--labels"},
+		{[]string{"--query", "status:todo"}, "todo"},
+		{[]string{"--query", "type:bogus"}, "bogus"},
+		{[]string{"--query", "id:"}, "id:"},
+		{[]string{"--query", "parent:"}, "parent:"},
+		{[]string{"--query", "label:"}, "label:"},
+	} {
+		err := runListWithStore(h.ctx, &strings.Builder{}, h.ap.Store, noReadyPolicy, tc.args)
+		if got := ExitCode(err); got != ExitValidation {
+			t.Fatalf("lit ls %v exit = %d (error %#v), want %d", tc.args, got, err, ExitValidation)
+		}
+		if !strings.Contains(err.Error(), tc.names) {
+			t.Fatalf("lit ls %v error = %q, want it to name %q", tc.args, err, tc.names)
 		}
 	}
 }

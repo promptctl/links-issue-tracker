@@ -304,8 +304,6 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-cli-issue.md", Text: "lit workspace", Src: "Initialized lit workspace\n"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-issue.md", Text: "open, in_progress, closed", Src: "invalid status %q (valid: open, in_progress, closed)"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-issue.md", Text: "parent clear", Src: "parent clear"},
-	{Doc: "doc-v1-total/inventories/inventory-cli-issue.md", Text: "parse --status: %w", Src: "parse --status: %w"},
-	{Doc: "doc-v1-total/inventories/inventory-cli-issue.md", Text: "parse --type: %w", Src: "parse --type: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-issue.md", Text: "parse --updated-after: %w", Src: "parse --updated-after: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-issue.md", Text: "parse --updated-before: %w", Src: "parse --updated-before: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-issue.md", Text: "parse updated term %q", Src: "parse updated term %q: %w"},

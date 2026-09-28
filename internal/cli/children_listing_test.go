@@ -133,8 +133,8 @@ func TestChildrenFindsTheParentAmongFlags(t *testing.T) {
 	}
 }
 
-// An explicitly empty --parent names no parent; it is refused rather than
-// dropped, because dropping it would widen the listing to every issue — or, next
+// An explicitly empty --parent, or a blank slot in its list, names no parent;
+// it is refused rather than dropped, because dropping it would widen the listing to every issue — or, next
 // to a real id or under `children`, silently ignore part of the request. The
 // refusal is the same on both surfaces. [LAW:no-silent-failure]
 func TestListingRefusesAnEmptyParent(t *testing.T) {
@@ -146,14 +146,14 @@ func TestListingRefusesAnEmptyParent(t *testing.T) {
 		{lsSurface, []string{"--parent="}},
 		{lsSurface, []string{"--parent", " , "}},
 		{lsSurface, []string{"--parent", f.epicID, "--parent="}},
+		{lsSurface, []string{"--parent", f.epicID + ","}},
 		{childrenSurface, []string{f.epicID, "--parent="}},
 	}
 	for _, tc := range cases {
 		var out bytes.Buffer
 		err := runListLeaf(f.ctx, &out, tc.surface, listScope{store: f.ap.Store, policy: noReadyPolicy}, tc.args)
-		var usage UsageError
-		if !errors.As(err, &usage) || !strings.Contains(err.Error(), "--parent needs an issue id") {
-			t.Fatalf("%s %v error = %#v, want UsageError naming the empty --parent", tc.surface.name, tc.args, err)
+		if err == nil || ExitCode(err) != ExitValidation || !strings.Contains(err.Error(), "--parent needs an issue id") {
+			t.Fatalf("%s %v error = %#v, want a validation refusal naming the empty --parent", tc.surface.name, tc.args, err)
 		}
 		if out.Len() != 0 {
 			t.Fatalf("%s %v emitted %q; want no output on the error path", tc.surface.name, tc.args, out.String())

@@ -96,11 +96,13 @@ func TestQueryMultiTokenAppliesAllFourNewTokens(t *testing.T) {
 	}
 }
 
-// TestQueryNameTermsRejectAnEmptySet pins that an id:, parent: or label: term
-// naming nothing is a loud error: dropping it would widen the listing to every
-// issue. [LAW:no-silent-failure]
-func TestQueryNameTermsRejectAnEmptySet(t *testing.T) {
-	for _, term := range []string{`parent:`, `id:`, `label:`, `id:,`, `label:" , "`} {
+// TestQueryRefusalsAreValidationErrors pins that every refusal of the query
+// text is a storage.ValidationError, so none draws retry advice. The name
+// terms are the ones a regression would quietly turn into "no filter": an
+// id:, parent: or label: naming nothing, or with a blank slot, must be loud
+// rather than widen or narrow the listing. [LAW:no-silent-failure]
+func TestQueryRefusalsAreValidationErrors(t *testing.T) {
+	for _, term := range []string{`parent:`, `id:`, `label:`, `id:,`, `id:a,`, `label:" , "`, `type:bogus`, `type:bug,`, `status:todo`, `limit:lots`, `"unterminated`} {
 		_, err := Parse(term)
 		var refusal storage.ValidationError
 		if !errors.As(err, &refusal) {
