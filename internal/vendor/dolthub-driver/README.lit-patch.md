@@ -31,7 +31,8 @@ product reason to report usage to a third party, so this patch removes the
 emission path entirely — the goroutine, the env-var opt-out, the
 once-per-24h rate-limit file, and every import that existed solely to serve
 them — rather than defaulting it off. See `connector.go` for the exact diff
-and `driver.go` for the removed call site.
+(search for `[LAW:effects-at-boundaries]`) and `driver.go` for the removed
+call site.
 
 ### Patch 2 — surface first-row query errors (`statement.go`, `rows.go`)
 
