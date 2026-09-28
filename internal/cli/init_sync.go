@@ -229,7 +229,7 @@ func planRemoteAdopt(ctx context.Context, ws workspace.Info) (*adoptClonePlan, i
 	if !hasRefs {
 		return freshOutcome(initSyncOutcome{State: initSyncRemoteEmpty, Remote: remote})
 	}
-	branch, err := resolveSyncBranch(ctx, ws.RootDir, remote)
+	branch, err := resolveSyncBranch(ctx, ws, remote)
 	if err != nil {
 		return nil, initSyncOutcome{State: initSyncFailed, Remote: remote, Error: err.Error()}
 	}

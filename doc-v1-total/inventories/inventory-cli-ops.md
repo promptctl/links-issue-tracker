@@ -363,9 +363,12 @@ Trace reasons for the explicit commands (`reconcileCommandReasonForState`, `sync
 - Explicit remote that is not among the configured git remotes → error `requested remote %q not found in configured git remotes` (`sync.go`).
 - Otherwise precedence: validated upstream remote (from `workspace.UpstreamRemote`), then the single configured remote when exactly one exists; else `""` (`sync.go`).
 
-`resolveSyncBranch` — `sync.go`:
-- Env override `LINKS_DEBUG_DOLT_SYNC_BRANCH` (`sync.go`) takes precedence over `workspace.DefaultRemoteBranch`.
-- Empty result: if `ctx.Err() != nil` → `resolve sync branch for remote %q: <ctx err>`; else `resolve sync branch for remote %q: default branch unavailable; configure LINKS_DEBUG_DOLT_SYNC_BRANCH to override` (`sync.go`).
+`resolveSyncBranch` — `sync_branch.go` (push, pull, receive, reconcile, init):
+- Precedence: env override `LINKS_DEBUG_DOLT_SYNC_BRANCH` (`sync.go`), then `workspace.LocalRemoteHead`, then `workspace.AdvertisedRemoteHead` — asked only when the two before it are empty.
+- A failed ask → `resolve sync branch for remote %q: <ls-remote err>` (a cancelled ctx is `context.Canceled` in the chain); an answer naming no branch → `resolve sync branch for remote %q: default branch unavailable; configure LINKS_DEBUG_DOLT_SYNC_BRANCH to override`.
+- An advertised branch is recorded in `<StorageDir>/sync-branch.<path-escaped remote>`; a failed record write is reported to stderr and the branch is still returned.
+
+`knownSyncBranch` — `sync_branch.go` (doctor's freshness and the read banner): the same override and `LocalRemoteHead`, then the recorded advertised branch; never asks the remote. None known → `default branch of remote %q is not known on this machine: refs/remotes/%s/HEAD is unset and no sync here has asked the remote yet; 'lit sync pull' asks it`.
 
 `syncDoltRemotesFromGit` — `sync.go`: for every git remote, adds a Dolt remote (`store.GitBackedRemoteURL(url)`) when missing, or removes+re-adds when the URL differs; removes any Dolt remote with no matching git remote; re-lists at the end.
 

@@ -218,16 +218,28 @@ func RemoteHasDoltData(ctx context.Context, cwd string, remote string) (bool, er
 	return refs != "", nil
 }
 
-func DefaultRemoteBranch(ctx context.Context, cwd string, remote string) string {
+// LocalRemoteHead is the remote's default branch as this repository already
+// records it: refs/remotes/<remote>/HEAD, which `git clone` sets and a plain
+// `git remote add` does not. It never touches the network, so any command may
+// ask it; "" when the ref is unset.
+func LocalRemoteHead(ctx context.Context, cwd string, remote string) string {
 	remoteName := normalizeRemoteName(remote)
 	symbolicRefOutput, _ := gitOutput(ctx, cwd, "symbolic-ref", "--quiet", "--short", "refs/remotes/"+remoteName+"/HEAD")
-	symbolicBranch := strings.TrimSpace(defaultRemoteBranchFromSymbolicRef(remoteName, symbolicRefOutput))
-	if symbolicBranch != "" {
-		return symbolicBranch
+	return strings.TrimSpace(defaultRemoteBranchFromSymbolicRef(remoteName, symbolicRefOutput))
+}
+
+// AdvertisedRemoteHead asks the remote which branch its HEAD names: one
+// `git ls-remote --symref` round trip, unbounded but by ctx, so only a command
+// that already talks to the remote asks it. "" with a nil error means the
+// remote answered and advertises no HEAD branch; a failed ask is the error.
+// [LAW:no-silent-failure]
+func AdvertisedRemoteHead(ctx context.Context, cwd string, remote string) (string, error) {
+	remoteName := normalizeRemoteName(remote)
+	lsRemoteOutput, err := gitOutput(ctx, cwd, "ls-remote", "--symref", remoteName, "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("git ls-remote --symref %s HEAD: %w", remoteName, err)
 	}
-	lsRemoteOutput, _ := gitOutput(ctx, cwd, "ls-remote", "--symref", remoteName, "HEAD")
-	// [LAW:one-source-of-truth] Branch resolution follows one deterministic candidate chain: local remote HEAD, then remote HEAD advertisement.
-	return strings.TrimSpace(defaultRemoteBranchFromLSRemote(lsRemoteOutput))
+	return strings.TrimSpace(defaultRemoteBranchFromLSRemote(lsRemoteOutput)), nil
 }
 
 // Resolve finds the workspace containing cwd, creating its config on first

@@ -701,35 +701,6 @@ func syncRemoteExists(name string, gitRemotes []workspace.GitRemote) bool {
 	return false
 }
 
-func resolveSyncBranch(ctx context.Context, rootDir string, remote string) (string, error) {
-	debugOverride := strings.TrimSpace(os.Getenv(debugSyncBranchEnvVar))
-	defaultBranch := strings.TrimSpace(workspace.DefaultRemoteBranch(ctx, rootDir, remote))
-	// [LAW:single-enforcer] Sync branch selection is centralized so pull/push/hooks consume one canonical branch decision.
-	resolvedBranch := precedence.First(debugOverride, defaultBranch)
-	if resolvedBranch == "" {
-		// [LAW:no-silent-failure] DefaultRemoteBranch swallows its git errors — an
-		// empty branch is a legitimate "remote advertises no default" result, not an
-		// error — so a cancelled ctx that kills its network ls-remote is
-		// indistinguishable here from a genuine absence. This is the single point
-		// that turns an empty branch into a diagnostic, so it is where the two are
-		// told apart: surface the cancellation as its true cause rather than the
-		// misleading "default branch unavailable". This holds for every caller and
-		// does not lean on the receive/pull/push RemoteHasRefs check to have caught
-		// the cancellation first — closing the window where a cancel arriving
-		// between that check and DefaultRemoteBranch's fallback ls-remote would
-		// otherwise lie about the reason.
-		if err := ctx.Err(); err != nil {
-			return "", fmt.Errorf("resolve sync branch for remote %q: %w", strings.TrimSpace(remote), err)
-		}
-		return "", fmt.Errorf(
-			"resolve sync branch for remote %q: default branch unavailable; configure %s to override",
-			strings.TrimSpace(remote),
-			debugSyncBranchEnvVar,
-		)
-	}
-	return resolvedBranch, nil
-}
-
 // syncTargetSkip names the two "nothing to sync against" outcomes of
 // resolveSyncTarget. Its non-empty values are the canonical reason strings the
 // verbs trace and print, so a skip's identity and its spelling cannot drift
@@ -776,8 +747,7 @@ func (t syncTarget) traceMetadata() map[string]string {
 //
 // A failed refs check is not "remote empty": it surfaces as an error naming
 // the real ls-remote cause (a cancelled ctx yields context.Canceled here)
-// rather than falling through to the misleading "default branch unavailable"
-// that DefaultRemoteBranch's swallowed error would produce.
+// rather than being read as a remote with nothing on it.
 // [LAW:no-silent-failure] That ls-remote is also the wedge point a SIGTERM
 // must be able to abandon: ctx flows to the subprocess so a network-hung fetch
 // cancels here rather than outliving the interrupt until the grace-timer
@@ -801,7 +771,7 @@ func resolveSyncTarget(ctx context.Context, session syncSession, ws workspace.In
 	if !hasRefs {
 		return syncTarget{remote: remoteName, skip: syncTargetRemoteEmpty}, nil
 	}
-	branch, err := resolveSyncBranch(ctx, ws.RootDir, remoteName)
+	branch, err := resolveSyncBranch(ctx, ws, remoteName)
 	if err != nil {
 		return syncTarget{remote: remoteName}, err
 	}
