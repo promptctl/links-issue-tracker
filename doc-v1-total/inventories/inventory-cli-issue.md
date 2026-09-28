@@ -338,14 +338,18 @@ prefix (`cli.go`).
   `update`, `rank`, and every transition:
   `"%s [%s/%s/%s/%s] %s%s\n"` = `id [state/type/topic/priority] title[labels]`
   (`output.go`). Labels render as `" [a,b]"` or empty (`output.go`).
-- `formatIssueState(issue)` = `issue.State()`, plus `"+archived"` or `"+deleted"`
-  when retention says so — never both (`output.go`).
-- `resolveColumns(nil)` default column set = `id, state, topic, title`
-  (`output.go`). Valid column names: `id, state, type, topic, priority,
-  title, assignee, labels, updated_at, created_at, parent, blocked`
-  (`output.go`). Unknown names are silently dropped; if nothing valid
-  remains, the default set is used (`output.go`).
-- `formatIssueColumns` per-column rendering (`output.go`): `priority` uses
+- `formatIssueState(issue)` = `issue.State()`, then `":" + resolution` when
+  the close recorded one (`resolutionSuffix`, shared with `issueStanding`),
+  then `"+archived"` or `"+deleted"` when retention says so — never both
+  (`output.go`). The list `state` column renders this cell (`columns.go`).
+- `defaultColumns()` default column set = `id, state, topic, title`
+  (`columns.go`). Valid column names: `id, state, type, topic, priority,
+  title, rank, assignee, labels, updated_at, created_at, parent, blocked`
+  (`columns.go`). An unknown name is a `UsageError` naming it and the valid
+  set; an empty selection gives the default set (`columns.go`).
+- `formatIssueColumns` renders each selected column through its registry entry
+  (`output.go`); the per-column renderers live in `columnRegistry`
+  (`columns.go`): `priority` uses
   `Priority.String()` (normal/urgent); `assignee` and `labels` render `-` when
   empty; `updated_at`/`created_at` render RFC3339; `parent` renders the parent id
   or `-`; `blocked` renders the literal token `blocked` or `-`

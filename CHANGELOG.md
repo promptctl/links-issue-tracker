@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `lit ls` shows why a closed ticket was closed. Its `state` cell reads `closed:duplicate`, `closed:superseded`, `closed:obsolete` or `closed:wontfix` for a `lit close`, and stays `closed` for a close that recorded no reason (a `lit done`), so `lit ls --status closed` no longer shows a recorded declination as finished work. A frozen ticket keeps its retention suffix after the reason (`closed:wontfix+archived`). The one-line summary a transition prints (`id [state/type/topic/priority] title`) uses the same cell. `lit show`'s relation groups and the epic plan already printed the reason this way. (links-listing-un1s)
+
 ## [0.16.0] - 2026-09-27
 
 ### Changed

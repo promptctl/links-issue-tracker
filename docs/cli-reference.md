@@ -326,6 +326,15 @@ any row is fetched or printed. Watch for near-misses: the status column is spell
 `prompt` are multi-line, so they are read with `--field` rather than projected into
 a table.
 
+The `state` cell names why a closed ticket closed: `closed:duplicate`,
+`closed:superseded`, `closed:obsolete` or `closed:wontfix` for a `lit close`, and a
+bare `closed` when the close recorded no reason: a `lit done`, or a close made
+through the retired `lit update --status closed`. `lit ls --status closed` therefore
+separates every recorded declination from finished work without a `lit show` per
+row. The two
+marks mean different things: `:` refines the closed state, and `+` adds the second
+axis, so `closed:wontfix+archived` is a declined ticket that was later archived.
+
 ### `lit show`
 
 ```text
