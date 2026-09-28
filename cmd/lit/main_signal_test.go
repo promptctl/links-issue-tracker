@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/cli"
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/trace"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -91,24 +93,23 @@ func TestSIGTERMDuringWedgedSyncExitsCleanly(t *testing.T) {
 
 	// The worker has to reach the seized lock and block there: still running
 	// after a settle window, well past the milliseconds it needs to ask the
-	// remote, and holding the receive lock, which it takes only once the ask
-	// says there is something to fetch, right before its clone of the store
-	// takes the commit lock. A worker already gone, or still short of the
-	// clone, never engaged the wedge, and its clean end below would prove
-	// nothing.
+	// remote. A worker already gone never engaged the wedge, and its clean end
+	// below would prove nothing.
 	time.Sleep(2 * time.Second)
 	if !processAlive(pid) {
 		t.Fatalf("receive worker %d ended before the wedge engaged:\n%s", pid, receiveLog(t, ws))
 	}
-	releaseProbe, acquired, err := store.TryAcquireReceiveLock(ws.DatabasePath)
-	if err != nil {
-		t.Fatalf("probe the receive lock: %v", err)
-	}
-	if acquired {
-		_ = releaseProbe()
-		t.Fatalf("receive worker %d is running but never took the receive lock, so it is not at the clone the seized lock wedges:\n%s", pid, receiveLog(t, ws))
-	}
 	sigtermReceiveWorker(t, ws, pid, 8*time.Second) // comfortably under the receive's 15s deadline
+
+	// The receive's one recorded failure is the cancellation reaching its clone
+	// of the store. A worker that was never at the clone, or one that ignored
+	// the cancel and ended when the commit lock's own wait gave up — also on
+	// the clean path, end line and all — records something else.
+	reasons := receiveTraceReasons(t, ws)
+	if len(reasons) != 1 || !strings.Contains(reasons[0], "clone") ||
+		!strings.HasSuffix(reasons[0], context.Canceled.Error()) {
+		t.Fatalf("want one receive trace, the clone take cancelled; got %q", reasons)
+	}
 
 	// The store was released and lit stranded no hold of its own: with the
 	// seizing flock released, an ordinary write proceeds normally.
@@ -191,6 +192,34 @@ func sigtermReceiveWorker(t *testing.T, ws workspace.Info, pid int, deadline tim
 // finished worker stops answering rather than lingering as a zombie.
 func processAlive(pid int) bool {
 	return syscall.Kill(pid, 0) == nil
+}
+
+// receiveTraceReasons returns the reason of every sync trace the automatic
+// receive recorded in ws, in the order they were written.
+func receiveTraceReasons(t *testing.T, ws workspace.Info) []string {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(trace.Dir(ws.StorageDir, "sync"), "*.json"))
+	if err != nil {
+		t.Fatalf("list sync traces: %v", err)
+	}
+	var reasons []string
+	for _, path := range paths {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read sync trace: %v", err)
+		}
+		var record struct {
+			Command string `json:"command"`
+			Reason  string `json:"reason"`
+		}
+		if err := json.Unmarshal(body, &record); err != nil {
+			t.Fatalf("parse sync trace %s: %v", path, err)
+		}
+		if record.Command == "lit sync receive" {
+			reasons = append(reasons, record.Reason)
+		}
+	}
+	return reasons
 }
 
 func receiveLog(t *testing.T, ws workspace.Info) string {
