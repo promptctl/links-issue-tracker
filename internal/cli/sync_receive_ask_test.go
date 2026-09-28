@@ -15,8 +15,9 @@ import (
 )
 
 // TestAutomaticReceiveAsksBeforeFetching is the end-to-end proof of the three
-// DONE-WHEN arms of links-scale-om3r.3s7, driven through the real CLI for two
-// clones over a real git remote. (a) With the remote unmoved and the debounce
+// DONE-WHEN arms of links-scale-om3r.3s7, for two clones over a real git
+// remote driven through the real CLI, each receive being the worker's body
+// run in this process (receiveNow). (a) With the remote unmoved and the debounce
 // lapsed, the receive confirms the remote unmoved and fetches nothing. (b)
 // After the other clone pushes a ticket, a command here still receives it.
 // (c) With the remote unreachable, the question fails loud and the command
@@ -25,15 +26,14 @@ import (
 // marker on disk, never how the receive reached its decision.
 func TestAutomaticReceiveAsksBeforeFetching(t *testing.T) {
 	remote, producer, consumer, ws := twoClonesOverOneDoltRemote(t)
-	t.Setenv(DisableAutoSyncEnvVar, "0")
 
-	// Nothing recorded yet: the first lapsed receive cannot know the remote is
+	// Nothing recorded yet: the first receive cannot know the remote is
 	// unmoved, so it fetches, and the record it leaves is the remote's
 	// advertisement — which remote, at what URL, pointing where.
-	runCLIInDir(t, consumer, "backlog")
+	receiveNow(t, consumer)
 	first := lastReceiveTrace(t, ws)
 	if first.Decision != string(storage.SyncReceiveUpToDate) {
-		t.Fatalf("first lapsed receive decision = %q, want %q", first.Decision, storage.SyncReceiveUpToDate)
+		t.Fatalf("first receive decision = %q, want %q", first.Decision, storage.SyncReceiveUpToDate)
 	}
 	wantRecord := "origin " + remote + "\n" + remoteDoltHead(t, remote) + "\trefs/dolt/data\n"
 	if got := string(readReceivedRefs(ws)); got != wantRecord {
@@ -52,8 +52,7 @@ func TestAutomaticReceiveAsksBeforeFetching(t *testing.T) {
 	if err := os.Chtimes(fetchSuccessMarkerPath(ws), fetchedBefore, fetchedBefore); err != nil {
 		t.Fatalf("age fetch-success marker error = %v", err)
 	}
-	lapseReceiveDebounce(t, ws)
-	runCLIInDir(t, consumer, "backlog")
+	receiveNow(t, consumer)
 	unmoved := lastReceiveTrace(t, ws)
 	if unmoved.Decision != receiveDecisionRemoteUnmoved || unmoved.Status != "ok" {
 		t.Fatalf("unmoved receive decision/status = %q/%q, want %q/ok", unmoved.Decision, unmoved.Status, receiveDecisionRemoteUnmoved)
@@ -66,11 +65,10 @@ func TestAutomaticReceiveAsksBeforeFetching(t *testing.T) {
 	}
 
 	// (b) Moved: the other clone pushes, the advertisement changes, and the next
-	// lapsed receive fetches and fast-forwards; its record is the new head.
+	// receive fetches and fast-forwards; its record is the new head.
 	runCLIInDir(t, producer, "new", "--title", "second-ticket", "--topic", "demo", "--type", "task")
 	runCLIInDir(t, producer, "sync", "push")
-	lapseReceiveDebounce(t, ws)
-	runCLIInDir(t, consumer, "backlog")
+	receiveNow(t, consumer)
 	moved := lastReceiveTrace(t, ws)
 	if moved.Decision != string(storage.SyncReceiveFastForwarded) {
 		t.Fatalf("receive after the remote moved decision = %q, want %q", moved.Decision, storage.SyncReceiveFastForwarded)
@@ -87,7 +85,7 @@ func TestAutomaticReceiveAsksBeforeFetching(t *testing.T) {
 	// remote stays where it is. The record described the directory that was
 	// rotated away, so it must not survive the rotation — with it standing, the
 	// unmoved remote would never be fetched again and second-ticket would stay
-	// lost. The rotation forgets it, and the next lapsed receive fetches.
+	// lost. The rotation forgets it, and the next receive fetches.
 	runCLIInDir(t, consumer, "snapshots", "restore", snapshotName)
 	if backlog := runCLIInDir(t, consumer, "backlog"); strings.Contains(backlog, "second-ticket") {
 		t.Fatalf("restore did not take the consumer back to first-only:\n%s", backlog)
@@ -95,8 +93,7 @@ func TestAutomaticReceiveAsksBeforeFetching(t *testing.T) {
 	if got := readReceivedRefs(ws); got != nil {
 		t.Fatalf("received-refs record survived a snapshot restore: %q", got)
 	}
-	lapseReceiveDebounce(t, ws)
-	runCLIInDir(t, consumer, "backlog")
+	receiveNow(t, consumer)
 	restored := lastReceiveTrace(t, ws)
 	if restored.Decision != string(storage.SyncReceiveFastForwarded) {
 		t.Fatalf("receive after a restore decision = %q, want %q", restored.Decision, storage.SyncReceiveFastForwarded)
@@ -110,13 +107,13 @@ func TestAutomaticReceiveAsksBeforeFetching(t *testing.T) {
 
 	// (c) Unreachable: the question cannot be answered, which is not "unmoved".
 	// The failure is traced under its own decision, the fetch runs and fails,
-	// and the command itself still serves local data.
+	// and a command still serves local data.
 	if err := os.Rename(remote, remote+".away"); err != nil {
 		t.Fatalf("rename remote away error = %v", err)
 	}
 	t.Cleanup(func() { _ = os.Rename(remote+".away", remote) })
 	tracesBefore := len(receiveTraces(t, ws))
-	lapseReceiveDebounce(t, ws)
+	receiveNow(t, consumer)
 	if backlog := runCLIInDir(t, consumer, "backlog"); !strings.Contains(backlog, "second-ticket") {
 		t.Fatalf("consumer backlog lost local data while the remote was unreachable:\n%s", backlog)
 	}
@@ -187,16 +184,6 @@ func lastReceiveTrace(t *testing.T, ws workspace.Info) syncTraceRecord {
 		t.Fatalf("no automatic receive trace recorded")
 	}
 	return traces[len(traces)-1]
-}
-
-// lapseReceiveDebounce ages the receive debounce marker past its interval so
-// the next command's receive is due, without waiting for the interval.
-func lapseReceiveDebounce(t *testing.T, ws workspace.Info) {
-	t.Helper()
-	lapsed := time.Now().Add(-2 * receiveDebounceInterval)
-	if err := os.Chtimes(receiveMarkerPath(ws), lapsed, lapsed); err != nil {
-		t.Fatalf("age receive marker error = %v", err)
-	}
 }
 
 func markerModTime(t *testing.T, markerPath string) time.Time {

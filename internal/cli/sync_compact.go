@@ -16,12 +16,12 @@ import (
 // or one that simply goes a long time between explicit pushes — would have
 // nothing reclaiming its storage at all.
 //
-// It runs where the inline receive runs and for the same reason: the depth of a
-// compaction pass is irrelevant to its safety, but its TIMING is not. DOLT_GC
-// transitions the store read-only mid-run and collides with a live engine, so
-// the pass must not overlap one. maybeAutoSyncAfterCommand calls this only
-// after the command's own engine has closed, which is the same window the
-// inline receive already opens its engine in. [LAW:no-ambient-temporal-coupling]
+// The depth of a compaction pass is irrelevant to its safety, but its TIMING
+// is not. DOLT_GC transitions the store read-only mid-run and collides with a
+// live engine, so the pass must not overlap one. maybeAutoSyncAfterCommand
+// calls this only after the command's own engine has closed, and the detached
+// mirror and receive it spawns open theirs only once this process has exited.
+// [LAW:no-ambient-temporal-coupling]
 //
 // Note that the on-change mirror is NOT a candidate host for this work, despite
 // already holding the commit lock: ensureMirrorCoverage short-circuits on a
@@ -31,7 +31,7 @@ import (
 const (
 	// compactProbeInterval bounds how often this asks the engine whether a pass
 	// is owed. Asking costs an engine open, so it is debounced exactly the way
-	// the inline receive debounces its fetch, and for the same reason.
+	// the automatic receive is, and for the same reason.
 	//
 	// This is when to LOOK, never whether to collect — the engine's own
 	// footprint decides that, so a quiet workspace pays one cheap question and

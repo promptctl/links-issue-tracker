@@ -17,7 +17,7 @@ import (
 // writeOwnerNotifyProjectConfig points the repo's project config at a
 // file-appending hook and pins auto-sync fully off via CONFIG (cadence on-push,
 // receive off), so a test can re-enable LIT_DISABLE_AUTO_SYNC=0 — which the
-// notify path requires — without the mirror or the inline receive reconciling
+// notify path requires — without the mirror or the automatic receive reconciling
 // state out from under its assertions.
 func writeOwnerNotifyProjectConfig(t *testing.T, repo, sink string) {
 	t.Helper()

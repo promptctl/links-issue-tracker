@@ -8,9 +8,9 @@ import "strings"
 //
 // WHAT IS REMOVED, AND WHY EACH ONE. lit layers a global config file under
 // every command (internal/config: $XDG_CONFIG_HOME/links-issue-tracker, or
-// LIT_CONFIG_GLOBAL_PATH), and that file can turn the inline receive off, so a
+// LIT_CONFIG_GLOBAL_PATH), and that file can turn the automatic receive off, so a
 // developer with sync.receive=false would time every read probe without the
-// debounce and remote check every other machine pays — two machines reporting
+// debounce and worker spawn every other machine pays — two machines reporting
 // different numbers for a code-path difference, with nothing in the table to
 // say so. The same directory holds ejected templates, which is what
 // `quickstart`, a control, renders. LIT_DISABLE_AUTO_SYNC skips the post-command

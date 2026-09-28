@@ -130,7 +130,7 @@ func runWithApp(ctx context.Context, stdout io.Writer, accessMode app.AccessMode
 	}
 	// Capture the workspace before running: auto-sync needs it after the engine
 	// is closed, and the close happens in the inner function below (including on
-	// panic, as a deferred close) so it always precedes the inline receive.
+	// panic, as a deferred close) so it always precedes the automatic sync below.
 	ws := ap.Workspace
 	runErr := func() error {
 		defer ap.Close()
@@ -152,10 +152,10 @@ func runWithApp(ctx context.Context, stdout io.Writer, accessMode app.AccessMode
 	}
 	// [LAW:single-enforcer] One owner consults the auto-sync policy after a
 	// successful command, AND after that command's engine is closed: the on-change
-	// push mirror is a detached worker that opens its own engine only once this
-	// process exits, and the receive runs inline on its own engine — so at no
-	// point are two read-write engines open on the path, which embedded Dolt
-	// forbids. Command handlers stay unaware of any of this.
+	// push mirror and the receive are detached workers that open their own engines
+	// only once this process exits — so at no point are this command's engine and
+	// a worker's open on the path together, which embedded Dolt forbids. Command
+	// handlers stay unaware of any of this.
 	// [LAW:no-ambient-temporal-coupling]
 	maybeAutoSyncAfterCommand(ctx, accessMode, ws)
 	return nil

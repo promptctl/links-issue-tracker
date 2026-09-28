@@ -123,8 +123,8 @@ func TestCollisionLinesRenderEmptyDescriptionExplicitly(t *testing.T) {
 }
 
 // TestInlineReceiveSurfacesIDCollision covers the path a collision is actually
-// hit on: the inline auto-reconcile that runs after nearly every command. Both
-// halves of surfaceInlineOutcome are asserted — the block it prints and the owner
+// hit on: the automatic receive's reconcile, every interval. Both halves of
+// surfaceReceiveOutcome are asserted — the block it prints and the owner
 // event it notifies on — because a collision that produced neither would be the
 // "committed autonomously with no signal at all" failure the refusal exists to
 // end. [LAW:no-silent-failure]
@@ -265,7 +265,7 @@ func TestCollisionBlockRendersOrdinaryTicketReadably(t *testing.T) {
 // TestReportReconcileResultCollisionCarriesBothTickets proves
 // `lit sync reconcile` forwards the store's collision rows into the rendered
 // contract, so the other side's ticket reaches the operator there exactly as
-// it does on pull and on the inline receive.
+// it does on pull and on the automatic receive.
 func TestReportReconcileResultCollisionCarriesBothTickets(t *testing.T) {
 	t.Parallel()
 	var sink strings.Builder

@@ -3,16 +3,16 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
-	"io"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -46,20 +46,16 @@ func TestMain(m *testing.M) {
 }
 
 // TestSIGTERMDuringWedgedSyncExitsCleanly is the acceptance pin: a SIGTERM
-// delivered while the POST-WRITE auto-sync is wedged must cancel that phase,
-// release the store, and exit promptly with the write's own success code (0) —
-// never sit until only SIGKILL ends it.
+// delivered while the automatic receive is wedged on the store's commit lock
+// must cancel it and end the receive worker promptly and cleanly — never leave
+// a process only SIGKILL ends.
 //
-// The wedge targets the sync phase specifically, not the command's own work. A
-// `lit new` write acquires and RELEASES the commit lock to commit, then prints
-// the created-issue line, then (after ap.Close) the inline receive re-acquires
-// the lock at SyncAddRemote. Taking the flock from this test process the
-// instant that line appears lands the block in the receive — the write already
-// succeeded and is durable — so a clean cancel exits 0, the "commit present,
-// only the sync wedged" shape, reproduced without a slow remote.
-// (The kernel excludes the child on the held flock no matter who the holder is,
-// so no foreign holder process is needed — and no eviction heuristic exists for
-// the seize to have to outrun.)
+// The command itself does not wait for the receive at all: it spawns the
+// detached worker and returns, so the wedge is planted before the command runs
+// and it still returns. A read takes no commit lock, so the held lock wedges
+// only the worker, where its clone of the store takes the commit lock. (The
+// kernel excludes the worker on the held flock no matter who the holder is, so
+// no foreign holder process is needed.)
 func TestSIGTERMDuringWedgedSyncExitsCleanly(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
@@ -71,52 +67,18 @@ func TestSIGTERMDuringWedgedSyncExitsCleanly(t *testing.T) {
 	}
 
 	ws, cadenceConfig := setupWedgeWorkspace(t, self)
-
-	cmd := exec.Command(self, "new", "--title", "wedge-me", "--topic", "demo")
-	cmd.Dir = ws.RootDir
-	cmd.Env = litEnv(onPushEnv(cadenceConfig, "0"))
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		t.Fatalf("stdout pipe: %v", err)
-	}
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start wedged command: %v", err)
+	// One write first, so the store is past its baseline and the read below
+	// needs no write open of its own — only the worker is left to wedge.
+	if out, err := runLit(t, ws.RootDir, self, onPushEnv(cadenceConfig, "1"),
+		"new", "--title", "before-wedge", "--topic", "demo"); err != nil {
+		t.Fatalf("lit new before the wedge: %v\noutput:\n%s", err, out)
 	}
 
-	// The created-issue line is printed after the write has committed and released
-	// the lock, but before ap.Close and the receive. Seizing the lock here —
-	// before the receive's ask and debounce reach its clone of the store, which
-	// takes the commit lock — wedges the receive, not the (already durable)
-	// write.
-	wroteLine := make(chan struct{})
-	go func() {
-		scanner := bufio.NewScanner(stdout)
-		if scanner.Scan() {
-			close(wroteLine)
-		}
-		_, _ = io.Copy(io.Discard, stdout) // drain so the child never blocks on a full pipe
-	}()
-
-	select {
-	case <-wroteLine:
-	case <-time.After(15 * time.Second):
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		t.Fatalf("lit new never printed its created-issue line:\n%s", stderr.String())
-	}
-	// The seize expects a free lock (the write released it before printing the
-	// line), so a short deadline is ample — and bounds the wait if the child's
-	// receive wins the race to re-acquire, instead of queueing the commit
-	// lock's full ~15-minute budget behind the very hold this test means to
-	// plant first.
 	seizeCtx, cancelSeize := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelSeize()
 	releaseSeize, err := store.LockCommitPath(seizeCtx, ws.DatabasePath)
 	if err != nil {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		t.Fatalf("seize commit lock (child's receive won the race to re-acquire?): %v", err)
+		t.Fatalf("seize commit lock: %v", err)
 	}
 	seizeHeld := true
 	defer func() {
@@ -125,39 +87,28 @@ func TestSIGTERMDuringWedgedSyncExitsCleanly(t *testing.T) {
 		}
 	}()
 
-	waitCh := make(chan error, 1)
-	go func() { waitCh <- cmd.Wait() }()
+	pid := commandReturnsAheadOfItsReceive(t, ws, self, cadenceConfig)
 
-	// The receive must actually reach the seized lock and block: the process has to
-	// still be running after a settle window. If it already exited, the wedge never
-	// engaged (the receive passed SyncAddRemote before the seize) and the exit-0
-	// below would be a false pass, not proof of SIGTERM-responsiveness.
-	select {
-	case err := <-waitCh:
-		t.Fatalf("command exited before the wedge engaged (err=%v); the receive did not block on the seized lock:\nstderr:\n%s", err, stderr.String())
-	case <-time.After(1 * time.Second):
+	// The worker has to reach the seized lock and block there: still running
+	// after a settle window, well past the milliseconds it needs to ask the
+	// remote, and holding the receive lock, which it takes only once the ask
+	// says there is something to fetch, right before its clone of the store
+	// takes the commit lock. A worker already gone, or still short of the
+	// clone, never engaged the wedge, and its clean end below would prove
+	// nothing.
+	time.Sleep(2 * time.Second)
+	if !processAlive(pid) {
+		t.Fatalf("receive worker %d ended before the wedge engaged:\n%s", pid, receiveLog(t, ws))
 	}
-
-	sentAt := time.Now()
-	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
-		t.Fatalf("send SIGTERM: %v", err)
+	releaseProbe, acquired, err := store.TryAcquireReceiveLock(ws.DatabasePath)
+	if err != nil {
+		t.Fatalf("probe the receive lock: %v", err)
 	}
-
-	const sigtermDeadline = 8 * time.Second // comfortably under the 15s inline-receive budget
-	select {
-	case err := <-waitCh:
-		if elapsed := time.Since(sentAt); elapsed > sigtermDeadline {
-			t.Fatalf("process took %v to exit after SIGTERM (want < %v)", elapsed, sigtermDeadline)
-		}
-		// The write succeeded before the wedge; the sync is best-effort, so a
-		// cancelled sync must not turn the successful write into a failure exit.
-		if err != nil {
-			t.Fatalf("SIGTERM-ed sync wedge exited non-zero (want the write's success code 0): %v\nstderr:\n%s", err, stderr.String())
-		}
-	case <-time.After(sigtermDeadline):
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		t.Fatalf("process did not exit within %v of SIGTERM — the sync phase is not SIGTERM-responsive:\nstderr:\n%s", sigtermDeadline, stderr.String())
+	if acquired {
+		_ = releaseProbe()
+		t.Fatalf("receive worker %d is running but never took the receive lock, so it is not at the clone the seized lock wedges:\n%s", pid, receiveLog(t, ws))
 	}
+	sigtermReceiveWorker(t, ws, pid, 8*time.Second) // comfortably under the receive's 15s deadline
 
 	// The store was released and lit stranded no hold of its own: with the
 	// seizing flock released, an ordinary write proceeds normally.
@@ -168,15 +119,94 @@ func TestSIGTERMDuringWedgedSyncExitsCleanly(t *testing.T) {
 	verifyOut, err := runLit(t, ws.RootDir, self, onPushEnv(cadenceConfig, "1"),
 		"new", "--title", "after-wedge", "--topic", "demo")
 	if err != nil {
-		t.Fatalf("workspace not usable after the SIGTERM-ed sync: %v\noutput:\n%s", err, verifyOut)
+		t.Fatalf("workspace not usable after the SIGTERM-ed receive: %v\noutput:\n%s", err, verifyOut)
 	}
 }
 
-// setupWedgeWorkspace builds a git repo with a configured (never-pushed) remote
-// and an initialized lit store, and returns its resolved workspace info plus
-// the cadence-pin config path for the caller's own child invocations. The
-// remote's mere presence is what drives the first inline receive to call
-// SyncAddRemote — the commit-lock mutation the test wedges.
+// commandReturnsAheadOfItsReceive runs `lit backlog` with automatic sync on and
+// the receive due, which is what makes it spawn the receive worker, and
+// returns that worker's pid once it has shown it is running. The command must
+// have exited by then while the worker has not ended: whatever the receive is
+// wedged on, the command did not wait for it.
+func commandReturnsAheadOfItsReceive(t *testing.T, ws workspace.Info, self, cadenceConfig string) int {
+	t.Helper()
+	out, err := runLit(t, ws.RootDir, self, onPushEnv(cadenceConfig, "0"), "backlog")
+	if err != nil {
+		t.Fatalf("lit backlog: %v\noutput:\n%s", err, out)
+	}
+	pid := receiveWorkerPID(t, ws)
+	if strings.Contains(receiveLog(t, ws), fmt.Sprintf("receive end pid=%d ", pid)) {
+		t.Fatalf("the receive had already ended when the command returned, so this wedge did not hold it:\n%s", receiveLog(t, ws))
+	}
+	return pid
+}
+
+// receiveWorkerPID waits for the receive worker's start line and returns the
+// pid it names. The worker writes it the moment it starts, which can be just
+// after the command that spawned it has exited.
+func receiveWorkerPID(t *testing.T, ws workspace.Info) int {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		for _, line := range strings.Split(receiveLog(t, ws), "\n") {
+			if _, rest, ok := strings.Cut(line, " receive start pid="); ok {
+				pid, err := strconv.Atoi(strings.Fields(rest)[0])
+				if err != nil {
+					t.Fatalf("unparseable receive start line %q: %v", line, err)
+				}
+				return pid
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no receive worker started within 15s:\n%s", receiveLog(t, ws))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// sigtermReceiveWorker sends SIGTERM to the receive worker and requires it to
+// be gone within deadline, having written its end line: the end line is
+// written only on the clean path, after the receive returned, so a worker
+// the interrupt grace timer had to hard-exit leaves none.
+func sigtermReceiveWorker(t *testing.T, ws workspace.Info, pid int, deadline time.Duration) {
+	t.Helper()
+	sentAt := time.Now()
+	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+		t.Fatalf("send SIGTERM to receive worker %d: %v", pid, err)
+	}
+	for processAlive(pid) {
+		if time.Since(sentAt) > deadline {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+			t.Fatalf("receive worker %d did not exit within %v of SIGTERM — the receive is not cancellation-responsive:\n%s", pid, deadline, receiveLog(t, ws))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !strings.Contains(receiveLog(t, ws), fmt.Sprintf("receive end pid=%d ", pid)) {
+		t.Fatalf("receive worker %d exited without its end line — it did not end on the clean path:\n%s", pid, receiveLog(t, ws))
+	}
+}
+
+// processAlive reports whether pid names a live process. The detached worker
+// is reparented when its command exits, and its new parent reaps it, so a
+// finished worker stops answering rather than lingering as a zombie.
+func processAlive(pid int) bool {
+	return syscall.Kill(pid, 0) == nil
+}
+
+func receiveLog(t *testing.T, ws workspace.Info) string {
+	t.Helper()
+	body, err := os.ReadFile(filepath.Join(ws.StorageDir, cli.ReceiveLogName))
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("read receive log: %v", err)
+	}
+	return string(body)
+}
+
+// setupWedgeWorkspace builds a git repo with a remote carrying lit data and an
+// initialized lit store, and returns its resolved workspace info plus the
+// cadence-pin config path for the caller's own child invocations. The data on
+// the remote, with no record of having received it, is what drives the first
+// automatic receive to clone the store — the commit-lock hold the test wedges.
 func setupWedgeWorkspace(t *testing.T, self string) (workspace.Info, string) {
 	t.Helper()
 	base := t.TempDir()
@@ -227,7 +257,7 @@ func setupWedgeWorkspace(t *testing.T, self string) (workspace.Info, string) {
 // child lit processes, and keeping the shared process environment untouched is
 // what lets the wedge tests run in parallel with the rest of the package.
 //
-// The SIGTERM wedge tests are specifically about the INLINE RECEIVE; the
+// The SIGTERM wedge tests are specifically about the AUTOMATIC RECEIVE; the
 // on-change cadence's background push mirror is an orthogonal automatic
 // behavior that adds a second async actor racing these tests' wedge and
 // verification steps on the store's single read-write engine — a flake these
@@ -294,22 +324,19 @@ func runGit(t *testing.T, dir string, args ...string) {
 	}
 }
 
-// TestSIGTERMDuringWedgedGitSubprocessExitsCleanly is the acceptance pin: a
-// SIGTERM delivered while the post-write auto-sync is wedged in a git
-// SUBPROCESS — an ls-remote to an unreachable remote during the receive's
-// first-push check — must cancel that subprocess and exit with the write's own
-// success code (0), not sit out the interrupt grace timer and hard-exit 143.
-//
-// This is the sibling of TestSIGTERMDuringWedgedSyncExitsCleanly, which wedges the
-// store's commit lock (a wait that honors ctx). Here the wedge is the git call.
-// The clean path kills the subprocess on cancellation and lets main() exit with
-// the write's 0.
+// TestSIGTERMDuringWedgedGitSubprocessExitsCleanly is the acceptance pin: with
+// the remote hung — a `git ls-remote` that never gets its ref advertisement —
+// `lit backlog` with the receive due still returns, because the question runs
+// in the detached receive worker, never in the command. And a SIGTERM
+// delivered to that worker while it is wedged in the git SUBPROCESS must
+// cancel the subprocess and end the worker cleanly, not sit out the interrupt
+// grace timer.
 //
 // The remote is a black-hole TCP listener: it accepts git's connection and never
 // answers the ref advertisement, so `git ls-remote origin` blocks in git itself —
-// no transport subprocess, so cancelling the command kills git and unblocks its
-// stdout read at once (an ext-transport hang would leave a grandchild holding the
-// pipe and defeat the test).
+// no transport subprocess, so cancelling kills git and unblocks its stdout read
+// at once (an ext-transport hang would leave a grandchild holding the pipe and
+// defeat the test). Its accept count is how the test knows the wedge engaged.
 func TestSIGTERMDuringWedgedGitSubprocessExitsCleanly(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
@@ -320,79 +347,27 @@ func TestSIGTERMDuringWedgedGitSubprocessExitsCleanly(t *testing.T) {
 		t.Fatalf("os.Executable() = %v", err)
 	}
 
-	remoteURL := blackHoleGitRemote(t)
+	remoteURL, connected := blackHoleGitRemote(t)
 	ws, cadenceConfig := setupGitWedgeWorkspace(t, self, remoteURL)
 
-	cmd := exec.Command(self, "new", "--title", "wedge-me", "--topic", "demo")
-	cmd.Dir = ws.RootDir
-	cmd.Env = litEnv(onPushEnv(cadenceConfig, "0"))
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		t.Fatalf("stdout pipe: %v", err)
-	}
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start wedged command: %v", err)
-	}
+	pid := commandReturnsAheadOfItsReceive(t, ws, self, cadenceConfig)
 
-	// The created-issue line prints after the write commits and before the inline
-	// receive runs, so its arrival means the durable write is done and the receive —
-	// which will block on the black-hole ls-remote — is about to start.
-	wroteLine := make(chan struct{})
-	go func() {
-		scanner := bufio.NewScanner(stdout)
-		if scanner.Scan() {
-			close(wroteLine)
-		}
-		_, _ = io.Copy(io.Discard, stdout) // drain so the child never blocks on a full pipe
-	}()
-
+	// The worker must actually reach the black-hole ls-remote and block there.
 	select {
-	case <-wroteLine:
+	case <-connected:
 	case <-time.After(15 * time.Second):
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		t.Fatalf("lit new never printed its created-issue line:\n%s", stderr.String())
+		t.Fatalf("the receive worker never reached the remote:\n%s", receiveLog(t, ws))
 	}
-
-	waitCh := make(chan error, 1)
-	go func() { waitCh <- cmd.Wait() }()
-
-	// The receive must actually reach the black-hole ls-remote and block: the process
-	// has to still be running after a settle window. If it already exited, the wedge
-	// never engaged and the exit-0 below would be a false pass.
-	select {
-	case err := <-waitCh:
-		t.Fatalf("command exited before the git wedge engaged (err=%v); the receive did not block on the hung ls-remote:\nstderr:\n%s", err, stderr.String())
-	case <-time.After(1 * time.Second):
-	}
-
-	sentAt := time.Now()
-	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
-		t.Fatalf("send SIGTERM: %v", err)
+	time.Sleep(200 * time.Millisecond) // git has sent its request and is waiting on the reply
+	if !processAlive(pid) {
+		t.Fatalf("receive worker %d ended before the git wedge could be signalled:\n%s", pid, receiveLog(t, ws))
 	}
 
 	// Deliberately UNDER interrupt.DefaultGrace (5s): a clean ctx-cancel exit is
 	// milliseconds, while git ignoring the cancel only ends at the grace-timer
-	// hard-exit (143) at ~5s. A deadline below grace fails that path on BOTH
-	// counts (too slow AND non-zero), leaving no way for a grace-timer exit to
-	// masquerade as success.
-	const sigtermDeadline = 4 * time.Second
-	select {
-	case err := <-waitCh:
-		if elapsed := time.Since(sentAt); elapsed > sigtermDeadline {
-			t.Fatalf("process took %v to exit after SIGTERM (want < %v) — the git subprocess did not honor cancellation", elapsed, sigtermDeadline)
-		}
-		// The write succeeded before the wedge; the sync is best-effort, so a
-		// cancelled sync must not turn the successful write into a failure exit.
-		if err != nil {
-			t.Fatalf("SIGTERM-ed git wedge exited non-zero (want the write's success code 0; 143 means the grace timer hard-exited a still-running git): %v\nstderr:\n%s", err, stderr.String())
-		}
-	case <-time.After(sigtermDeadline):
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		t.Fatalf("process did not exit within %v of SIGTERM — the sync-phase git subprocess is not cancellation-responsive:\nstderr:\n%s", sigtermDeadline, stderr.String())
-	}
+	// hard-exit at ~5s, which also skips the end line. A deadline below grace
+	// fails that path on both counts.
+	sigtermReceiveWorker(t, ws, pid, 4*time.Second)
 
 	// The store was released and lit stranded no lock of its own: with the black-hole
 	// remote removed, an ordinary write proceeds normally.
@@ -404,35 +379,110 @@ func TestSIGTERMDuringWedgedGitSubprocessExitsCleanly(t *testing.T) {
 	}
 }
 
+// TestAPeerPushReachesTheStoreThroughTheReceiveWorker is the end-to-end proof
+// that the detached receive still receives (links-scale-om3r.6cv): a peer
+// pushes a ticket, one command here with the receive due spawns the worker and
+// returns, and once that worker ends the store holds the peer's ticket, with
+// no `lit sync pull`.
+func TestAPeerPushReachesTheStoreThroughTheReceiveWorker(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	t.Parallel()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable() = %v", err)
+	}
+	base := t.TempDir()
+	cadenceConfig := pinOnPushCadence(t, base)
+	quiet := onPushEnv(cadenceConfig, "1")
+	lit := func(dir string, env map[string]string, args ...string) string {
+		t.Helper()
+		out, err := runLit(t, dir, self, env, args...)
+		if err != nil {
+			t.Fatalf("lit %s in %s: %v\noutput:\n%s", strings.Join(args, " "), dir, err, out)
+		}
+		return out
+	}
+
+	runGit(t, base, "init", "--bare", "remote.git")
+	producer := filepath.Join(base, "alpha")
+	runGit(t, base, "clone", filepath.Join(base, "remote.git"), "alpha")
+	runGit(t, producer, "config", "user.email", "a@a.co")
+	runGit(t, producer, "config", "user.name", "alpha")
+	if err := os.WriteFile(filepath.Join(producer, "readme.md"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatalf("write readme: %v", err)
+	}
+	runGit(t, producer, "add", "-A")
+	runGit(t, producer, "commit", "-m", "seed")
+	runGit(t, producer, "push", "origin", "HEAD")
+	lit(producer, quiet, "init", "--skip-hooks", "--skip-agents")
+	lit(producer, quiet, "new", "--title", "first-ticket", "--topic", "demo", "--type", "task")
+	lit(producer, quiet, "sync", "push", "--set-upstream")
+
+	consumer := filepath.Join(base, "bravo")
+	runGit(t, base, "clone", filepath.Join(base, "remote.git"), "bravo")
+	runGit(t, consumer, "config", "user.email", "b@b.co")
+	runGit(t, consumer, "config", "user.name", "bravo")
+	lit(consumer, quiet, "init", "--skip-hooks", "--skip-agents")
+	ws, err := workspace.Resolve(consumer)
+	if err != nil {
+		t.Fatalf("resolve consumer workspace: %v", err)
+	}
+
+	lit(producer, quiet, "new", "--title", "second-ticket", "--topic", "demo", "--type", "task")
+	lit(producer, quiet, "sync", "push")
+	if strings.Contains(lit(consumer, quiet, "backlog"), "second-ticket") {
+		t.Fatalf("consumer saw second-ticket before any receive — the test cannot prove the receive")
+	}
+
+	lit(consumer, onPushEnv(cadenceConfig, "0"), "backlog")
+	pid := receiveWorkerPID(t, ws)
+	deadline := time.Now().Add(60 * time.Second)
+	for !strings.Contains(receiveLog(t, ws), fmt.Sprintf("receive end pid=%d ", pid)) {
+		if time.Now().After(deadline) {
+			t.Fatalf("receive worker %d did not end within 60s:\n%s", pid, receiveLog(t, ws))
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if backlog := lit(consumer, quiet, "backlog"); !strings.Contains(backlog, "second-ticket") {
+		t.Fatalf("consumer backlog missing the peer's second-ticket after the receive worker ended:\n%s\nreceive log:\n%s", backlog, receiveLog(t, ws))
+	}
+}
+
 // blackHoleGitRemote starts a TCP listener that accepts connections and never
 // responds, and returns a git:// URL pointing at it. `git ls-remote` against this
 // URL completes its TCP connect, sends its request, then blocks forever waiting for
 // the ref advertisement — a deterministic, offline network hang with no transport
-// subprocess of its own. The listener is closed on test cleanup.
-func blackHoleGitRemote(t *testing.T) string {
+// subprocess of its own. connected closes on the first connection it accepts. The
+// listener is closed on test cleanup.
+func blackHoleGitRemote(t *testing.T) (url string, connected <-chan struct{}) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen for black-hole remote: %v", err)
 	}
 	t.Cleanup(func() { _ = ln.Close() })
+	accepted := make(chan struct{})
 	go func() {
+		var once sync.Once
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
 				return // listener closed on cleanup
 			}
+			once.Do(func() { close(accepted) })
 			// Hold the connection open and never write the git ref advertisement.
 			t.Cleanup(func() { _ = conn.Close() })
 		}
 	}()
 	port := ln.Addr().(*net.TCPAddr).Port
-	return "git://127.0.0.1:" + strconv.Itoa(port) + "/wedge.git"
+	return "git://127.0.0.1:" + strconv.Itoa(port) + "/wedge.git", accepted
 }
 
 // setupGitWedgeWorkspace builds a git repo with an initialized lit store, then
 // points origin at a black-hole remote AFTER init so init's own remote probes never
-// touch it — only the post-`lit new` auto-sync does. Returns the resolved workspace.
+// touch it — only the automatic receive does. Returns the resolved workspace.
 func setupGitWedgeWorkspace(t *testing.T, self, remoteURL string) (workspace.Info, string) {
 	t.Helper()
 	base := t.TempDir()
@@ -455,9 +505,12 @@ func setupGitWedgeWorkspace(t *testing.T, self, remoteURL string) (workspace.Inf
 		t.Fatalf("lit init: %v\noutput:\n%s", err, out)
 	}
 
-	// Add the black-hole remote only now — the first `lit new` auto-sync is the one
-	// that reaches the wedged ls-remote.
+	// Add the black-hole remote only now — the first automatic receive is the one
+	// that reaches the wedged ls-remote. Record its default branch locally, as a
+	// clone does, so the command's read resolves its sync branch without asking
+	// the remote (links-scale-om3r.06l is that ask).
 	runGit(t, root, "remote", "add", "origin", remoteURL)
+	runGit(t, root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/master")
 
 	ws, err := workspace.Resolve(root)
 	if err != nil {

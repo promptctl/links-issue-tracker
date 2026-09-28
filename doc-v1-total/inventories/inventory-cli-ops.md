@@ -230,7 +230,7 @@ Sequence and refusals:
 9. `syncer.SyncPull(ctx, remote, branch)`. Error → trace `error`, return `asSyncFailure(err)` (remote-schema-ahead becomes the contract block, exit 5) (`sync.go`).
 10. On success `markFetchSuccess(ws)` (stderr on failure) (`sync.go`).
 11. Held outcomes (`syncFailureFromPull`, `sync.go`): `storage.SyncPullProsePending` → class `prose_held`; `storage.SyncPullUnrelated` → class `unrelated_histories`. Both are RETURNED as `SyncFailureError` (exit 5), recorded via `recordSyncHeldTrace`, and notify the owner if the class maps to a notify kind (`sync.go`).
-12. Otherwise trace with decision `= result.State`, `clearOwnerNotify(ws, ownerNotifyDivergenceKinds...)`, print the payload (`sync.go`).
+12. Otherwise trace with decision `= result.State`, `endDivergenceEpisode(ws)`, print the payload (`sync.go`).
 
 `firstPushSkipMessage` (`sync.go`): `"Skipping lit sync: remote has no refs yet. This is normal ONLY for the very first push to a brand-new empty repo. If you have pushed to this remote before, this message means something is wrong — check the remote URL, credentials, or run \`git ls-remote <remote>\`."`
 
@@ -379,8 +379,10 @@ Trace reasons for the explicit commands (`reconcileCommandReasonForState`, `sync
 1. `LIT_DISABLE_AUTO_SYNC` truthy → return, nothing scheduled (`sync_cadence.go`). Truthiness accepts `1/0/t/f/true/false` case-insensitive; anything unparseable (including empty) is false (`sync_cadence.go`).
 2. `config.Load` failure → stderr `lit: automatic sync skipped, config unreadable: <err>` and return (`sync_cadence.go`).
 3. `shouldSyncAfterMutation(accessMode, cfg.Sync.Cadence)` — true only when `accessMode == app.AccessWrite` AND cadence == `on-change` (`sync_cadence.go`) → `ensureMirrorCoverage`.
-4. `cfg.Sync.Receive` → `receiveInline` (`sync_cadence.go`).
-5. `accessMode == app.AccessWrite` → `compactInline`, last, so it collects what the receive brought in (`sync_cadence.go`).
+4. `cfg.Sync.Receive` → `scheduleReceive` (`sync_cadence.go`).
+5. `accessMode == app.AccessWrite` → `compactInline` (`sync_cadence.go`).
+
+Before step 2, `deliverPendingReceiveBlock(os.Stderr, ws)` prints and removes `<StorageDir>/receive-block.pending` (`sync_cadence.go`, `sync_receive.go`).
 
 Config defaults (`internal/config/config.go`): `sync.cadence = "on-change"`, `sync.receive = true`, `sync.owner_notify_cmd = ""`. Legal cadences are `on-push` and `on-change` (`config.go`); an unknown value fails config load with `config: sync.cadence must be one of …, got %q` (`config.go`).
 
@@ -422,10 +424,10 @@ Config defaults (`internal/config/config.go`): `sync.cadence = "on-change"`, `sy
   - `cmd.Env = mirrorEnv()`; then `cmd.Start()`; the parent's log fd is closed after start (`sync_bg.go`).
 - `mirrorEnv()` — `sync_bg.go`: copies the parent env with `LNKS_AUTOMATION_TRIGGER=`, `LNKS_AUTOMATION_REASON=`, `LNKS_AUTOMATION_TRACE_REF_FILE=` prefixes stripped, then appends `LNKS_AUTOMATION_TRIGGER=on-change` and `LNKS_AUTOMATION_REASON=on-change cadence mirrored after a mutating command`. The mirror carries no trace-ref file.
 - Timing constants (`sync_bg.go`):
-  - `parentPostSpawnTail = store.InlineReceiveDeadline(15s) + ownerNotifyHookTimeout(10s) + ownerNotifyPipeWaitDelay(1s) + compactTimeout(45s)` = 71s.
-  - `mirrorParentWaitMargin = 30 * time.Second`.
-  - `mirrorParentWaitTimeout = parentPostSpawnTail + mirrorParentWaitMargin` (101s).
-  - `mirrorParentPollDelay = 20 * time.Millisecond`.
+  - `parentPostSpawnTail = compactTimeout(45s)`.
+  - `workerParentWaitMargin = 30 * time.Second`.
+  - `workerParentWaitTimeout = parentPostSpawnTail + workerParentWaitMargin` (75s).
+  - `workerParentPollDelay = 20 * time.Millisecond`.
 
 ### 3.5 The detached worker
 
@@ -438,7 +440,7 @@ Config defaults (`internal/config/config.go`): `sync.cadence = "on-change"`, `sy
 Flag parse output is `io.Discard` (`sync_bg.go`).
 1. `store.HoldMirrorBeacon(ctx, DatabasePath)` — shared hold from entry until process death. Failure with `ctx.Err()` set → `teardownMirror`; otherwise `completeMirrorWithoutAttempt(..., "hold mirror liveness beacon: %w")` (`sync_bg.go`).
 2. `stopAnswering` is a `sync.Once` release; a release failure prints `lit: mirror beacon not released (<err>); concurrent claims may read this dying mirror as live until process exit` (`sync_bg.go`).
-3. `waitForParentExit(ctx, parentPID, os.Getppid, 101s, 20ms)` (`sync_bg.go`). Semantics (`sync_bg.go`): `parentPID <= 0` → true immediately; loops while `getppid() == parentPID`; returns false on `ctx.Err()` or deadline. Timeout (ctx not done) → `completeMirrorWithoutAttempt` with `spawning command (pid %d) still running after %s; skipping mirror to avoid racing its engine` (`sync_bg.go`).
+3. `waitForParentExit(ctx, parentPID, os.Getppid, 75s, 20ms)` (`sync_bg.go`). Semantics (`sync_bg.go`): `parentPID <= 0` → true immediately; loops while `getppid() == parentPID`; returns false on `ctx.Err()` or deadline. Timeout (ctx not done) → `completeMirrorWithoutAttempt` with `spawning command (pid %d) still running after %s; skipping mirror to avoid racing its engine` (`sync_bg.go`).
 4. Cycle loop (`sync_bg.go`):
    - `ctx.Err()` non-nil at loop top → `teardownMirror`.
    - `store.TryAcquireSyncPushLock(DatabasePath)`; error → `completeMirrorWithoutAttempt("acquire sync-push lock: %w")`.
@@ -452,22 +454,30 @@ Flag parse output is `io.Discard` (`sync_bg.go`).
 8. `completeMirrorWithoutAttempt` (`sync_bg.go`): `stopAnswering()`, `clearMirrorPending`, `completePushAttempt(ctx, ws, syncPushOutcome{}, cause)`, `recordMirrorTraceError(cause)`; always returns nil (the mirror never exits nonzero).
 9. `recordMirrorTraceError` (`sync_bg.go`): automation trace `lit sync push` / side effect `mirror Dolt data to the configured git remote` / status `error` / metadata `{error}`; a trace-write failure prints `lit: on-change mirror could not record failure trace (<traceErr>); original error: <cause>`; plus the durable sync trace `lit sync push`/`error`.
 
-### 3.6 Inline receive (`sync_receive.go`)
+### 3.6 Automatic receive (`sync_receive.go`)
 
-`store.InlineReceiveDeadline = 15 * time.Second` (`store.go`; the receive holds the store's LOCK for its run, so the store sizes its co-resident wait against it). `receiveDebounceInterval = 5 * time.Minute` (`sync_cadence.go`).
+`store.ReceiveDeadline = 15 * time.Second` (`store.go`; it bounds the worker's question and fetch, and the landing's hold on the live store). `receiveDebounceInterval = 5 * time.Minute` (`sync_cadence.go`).
 
-`receiveInline` — `sync_receive.go`:
+`scheduleReceive` — `sync_receive.go`, in the command:
 1. Debounce on `<StorageDir>/receive.last` mtime (`sync_cadence.go`); not due → return.
 2. Mark the attempt BEFORE any work; failure → stderr `lit: automatic receive debounce marker not written: <err>` (`sync_receive.go`).
-3. `workspace.GitRemotes` error → `recordReceiveError("check git remotes: %w")`; no remotes → silent return (`sync_receive.go`).
-4. One 15s timeout ctx spans the question and the fetch (`sync_receive.go`).
-5. `askRemote` (`sync_receive_ask.go`): `resolveSyncRemote("", UpstreamRemote, gitRemotes)`; `""` ⇒ the zero advertisement (falls through to the full path, which skips as `no_sync_remote`); else `workspace.RemoteDoltRefs` — error ⇒ `list refs/dolt/* on remote %q: %w`, traced with decision `remote_check_failed` / status `error` / metadata `{error}`, and the receive continues to step 6; success ⇒ `remoteAdvertisement{remote, url, refs}`.
+3. `workspaceHasGitRemote` error → `recordReceiveError("check git remotes: %w")`; no remote → silent return.
+4. `spawnDetachedWorker(ws, "__receive-bg", "receive.log", receiveEnv(), os.Getpid())`; failure → stderr `lit: automatic receive not started: <err>` and `recordReceiveError("start the background receive: %w")`. `receiveEnv()` is the parent env with `LNKS_AUTOMATION_TRACE_REF_FILE` stripped.
+
+`backgroundReceiveLeaf` — `sync_receive.go`, the worker (`--parent-pid`, default `0`): writes `<RFC3339> receive start pid=<pid> deadline=15s`; runs `receiveWhenQuiet`; then writes `<RFC3339> receive end pid=<pid> mirror_wait=<d> elapsed=<d>`. Always returns nil.
+
+`receiveWhenQuiet` — `sync_receive.go`: `waitForParentExit(ctx, parentPID, os.Getppid, 75s, 20ms)` — false with `ctx.Err()` set → `recordReceiveError("receive torn down while waiting for the spawning command to exit: %w")`; false otherwise → `recordReceiveError("spawning command (pid %d) still running after %s; skipping the receive to avoid racing its engine")`. Then `awaitNoLiveMirror(ctx, ws, 2 × store.MirrorPushDeadline)`: polls `MirrorOwed` and `store.ProbeMirrorBeacon` every `mirrorQuietPoll` (100ms) until the marker is absent and the verdict is not `BeaconAnswered`; errors on an unreadable marker (`read mirror-pending marker: %w`), an unreadable beacon (`read the mirror liveness beacon: %w`), on the bound (`a mirror is still owed or live after %s`), or on `ctx` ending. A `ctx`-ended wait → `recordReceiveError("receive torn down while waiting for the mirror: %w")` and no receive; any other wait error → stderr `lit: receiving without waiting for the mirror: <err>` and the receive runs. Then `receiveOnce`.
+
+`receiveOnce` — `sync_receive.go`:
+1. `workspace.GitRemotes` error → `recordReceiveError("check git remotes: %w")`; no remotes → silent return (`sync_receive.go`).
+2. One 15s timeout ctx spans the question and the fetch (`sync_receive.go`).
+3. `askRemote` (`sync_receive_ask.go`): `resolveSyncRemote("", UpstreamRemote, gitRemotes)`; `""` ⇒ the zero advertisement, which `nothingToReceive` ends silently; else `workspace.RemoteDoltRefs` — error ⇒ `list refs/dolt/* on remote %q: %w`, traced with decision `remote_check_failed` / status `error` / metadata `{error}`, and the receive continues to step 4; success ⇒ `remoteAdvertisement{remote, url, refs}`.
    - `unmoved(recorded)` (`sync_receive_ask.go`): the advertisement's record (`<remote> <url>\n<refs>\n`; nil for the zero value) is non-nil and byte-equal to `<StorageDir>/received-refs.last` (`readReceivedRefs` over `store.ReadReceivedRefs`: missing ⇒ nil silently; other read error ⇒ stderr `lit: received-refs marker unreadable: <err>` and nil) ⇒ `confirmRemoteUnmoved`: `markFetchSuccess` (stderr on failure) and a trace with decision `remote_unmoved` / status `ok` / reason `automatic receive found the remote unmoved since the last receive; nothing fetched` / metadata `{remote}`; return with no store opened.
    - `nothingToReceive()` (`sync_receive_ask.go`): an answered question with no remote picked or an empty listing ends the receive silently, before any clone.
-6. `store.TryAcquireReceiveLock` (`.links-sync-receive.lock`, one non-blocking attempt): an error → `recordReceiveError("take the receive lock: %w")`; not acquired (another receive is running) → silent return (`sync_receive.go`). A release failure → stderr `lit: automatic receive lock not released: <err>`.
-7. `receiveAndRecord` under the same ctx (`sync_receive.go`): `takeReceiveClone` (`sync_receive_clone.go`) — `cloneLiveStore` (`sync_bg.go`) removes `<StorageDir>/receive-clone/` wholesale, then clones the live store under `withDoltDirectoryHeld` into `<StorageDir>/receive-clone/<unix-ns>/dolt` under `store.MirrorHoldBudget`; failure → `take the receive's clone (live store held %s): %w`, a budget cut prefixed with `receiveCloneCutExplanation()`. The clone is removed on return (stderr `lit: automatic receive clone not removed (<err>); the next receive collects it`). `fetchIntoClone` opens a sync session on the clone (`open sync store on the receive's clone: %w`), resolves the sync target there (`resolveSyncTarget`) and, when ready, runs `SyncFetch(remote, prune=false)` on the clone; a failed fetch is carried, not returned. Then `performSyncReceive`; a could-not-attempt error from any of these → `recordReceiveError`. `outcome.traceErr` → stderr `lit: automatic receive trace not recorded: <err>` (`sync_receive.go`). The live session `performSyncReceive` opened stays open through step 8 and is closed after it (stderr `lit: automatic receive store not closed cleanly: <err>`).
-8. `recordReceived(ws, outcome, observed)` (`sync_receive_ask.go`), unconditionally: `outcome.fetched()` (`skip == syncTargetReady && receiveErr == nil`) ⇒ `markFetchSuccess` (stderr `lit: fetch-success marker not written: <err>`); `outcome.settledCleanly()` (fetched, and no reconcile or one that ended `linearized`/`not_diverged` without error) with a non-nil record (the question was answered) ⇒ `store.WriteReceivedRefs` of the observed advertisement's record to `received-refs.last` (stderr `lit: received-refs marker not written: <err>`). An unsettled outcome or the zero advertisement leaves the existing record standing.
-9. `surfaceInlineOutcome(ctx, ws, outcome, time.Now())` — passed the COMMAND ctx, not the 15s one (`sync_receive.go`, rationale).
+4. `store.TryAcquireReceiveLock` (`.links-sync-receive.lock`, one non-blocking attempt): an error → `recordReceiveError("take the receive lock: %w")`; not acquired (another receive is running) → silent return (`sync_receive.go`). A release failure → stderr `lit: automatic receive lock not released: <err>`.
+5. `receiveAndRecord` under the same ctx (`sync_receive.go`): `takeReceiveClone` (`sync_receive_clone.go`) — `cloneLiveStore` (`sync_bg.go`) removes `<StorageDir>/receive-clone/` wholesale, then clones the live store under `withDoltDirectoryHeld` into `<StorageDir>/receive-clone/<unix-ns>/dolt` under `store.MirrorHoldBudget`; failure → `take the receive's clone (live store held %s): %w`, a budget cut prefixed with `receiveCloneCutExplanation()`. The clone is removed on return (stderr `lit: automatic receive clone not removed (<err>); the next receive collects it`). `fetchIntoClone` opens a sync session on the clone (`open sync store on the receive's clone: %w`), resolves the sync target there (`resolveSyncTarget`) and, when ready, runs `SyncFetch(remote, prune=false)` on the clone; a failed fetch is carried, not returned. Then `performSyncReceive`; a could-not-attempt error from any of these → `recordReceiveError`. `outcome.traceErr` → stderr `lit: automatic receive trace not recorded: <err>` (`sync_receive.go`). The live session `performSyncReceive` opened stays open through step 6 and is closed after it (stderr `lit: automatic receive store not closed cleanly: <err>`).
+6. `recordReceived(ws, outcome, observed)` (`sync_receive_ask.go`), unconditionally: `outcome.fetched()` (`skip == syncTargetReady && receiveErr == nil`) ⇒ `markFetchSuccess` (stderr `lit: fetch-success marker not written: <err>`); `outcome.settledCleanly()` (fetched, and no reconcile or one that ended `linearized`/`not_diverged` without error) with a non-nil record (the question was answered) ⇒ `store.WriteReceivedRefs` of the observed advertisement's record to `received-refs.last` (stderr `lit: received-refs marker not written: <err>`). An unsettled outcome or the zero advertisement leaves the existing record standing.
+7. `surfaceReceiveOutcome(ctx, ws, outcome, time.Now())` — passed the worker's ctx, not the 15s one (`sync_receive.go`, rationale).
 
 `performSyncReceive` — `sync_receive.go`: takes the target `fetchIntoClone` resolved on the clone (reconcile remotes → resolve remote (`""` ⇒ `{skipped, no_sync_remote}`) → `RemoteHasRefs` (error ⇒ `check remote refs %q: %w`; false ⇒ `{skipped, remote_empty, remote}`) → resolve branch). A failed clone fetch (`SyncFetch`'s own `fetch remote %q: %w`) is the receive error; otherwise `landFetch` (`sync_receive_clone.go`) runs `store.LandFetchedHead(ws.DatabasePath, clone, remote, branch)` — an `ErrRemoteCacheNotLanded` result is printed to stderr (`lit: automatic receive: <err>`) and is not a failure, any other error is the receive error; on success the live sync session is opened (failure ⇒ could-not-attempt `open sync store: %w`), `syncDoltRemotesFromGit` reconciles its remotes (failure ⇒ receive error `reconcile the live store's remotes from git: %w`), and `syncer.SyncSettleReceived(ctx, remote, branch)` runs.
 - Trace metadata `{remote, sync_branch, state, ahead, behind, landed, land_held}` (`landed` is the landing's record, `unlanded` when none ran) plus `error` on failure (`sync_receive.go`); `recordReceiveTrace` (`sync_receive.go`) writes the automation trace — command `lit sync receive` (`receiveTraceCommand`), side effect `receive Dolt data from the configured git remote` (`receiveTraceSideEffect`) — and the unconditional durable trace with decision `= state` or `"error"`, returning the automation trace's write error. `recordReceiveError` routes through the same writer with decision/status `error` and metadata `{error}`.
@@ -476,7 +486,9 @@ Flag parse output is `io.Discard` (`sync_bg.go`).
 
 `performInlineReconcile` — `sync_receive.go`: `storage.Reconcile.Of(session.engine)` then `SyncReconcile` (`reconcileOnce`, `sync_receive.go`); a capability decline surfaces as an ordinary reconcile error. Trace metadata `{remote, sync_branch, state, replayed}` plus `error` or `pending`. Automation trace command `lit sync reconcile`, side effect `reconcile a diverged clone into linear history with the field-aware merge engine`; trace-write failure → stderr `lit: automatic reconcile trace not recorded: <err>`. Plus the unconditional durable trace. Reasons from `reconcileReasonForState` (`sync_receive.go`): linearized → "automatic reconcile merged the divergence into linear history"; prose_pending → "automatic reconcile resolved every field but free-text diverged on both sides; held for the agent surface"; unrelated → "automatic reconcile found unrelated histories (no common ancestor); held for wholesale/union resolution"; not_diverged → "automatic reconcile found the branch no longer diverged; nothing to do".
 
-`surfaceInlineOutcome` — `sync_receive.go`: a non-converging outcome prints `failure.blockString()` to **stderr** and notifies the owner; a cleanly settled outcome clears the divergence notify kinds. The command's exit code is unaffected.
+`surfaceReceiveOutcome` — `sync_receive.go`: a non-converging outcome prints `failure.blockString()` to the worker's **stderr**, writes it (plus a newline) to `<StorageDir>/receive-block.pending` via `writeMarkerAtomic` (failure → stderr `lit: sync-failure block not left for the next command: <err>`), and notifies the owner; a cleanly settled outcome calls `endDivergenceEpisode`.
+`endDivergenceEpisode` — `sync_receive.go`: `clearOwnerNotify(ws, ownerNotifyDivergenceKinds...)`, then removes the pending block (failure other than not-exist → stderr `lit: stale sync-failure block not retired: <err>`). Called by the receive, `lit sync pull` (`sync.go`), and every converging `lit sync reconcile` outcome (`sync_reconcile_cmd.go`).
+`deliverPendingReceiveBlock` — `sync_receive.go`: renames the pending block to `receive-block.pending.<pid>` (not-exist → return silently; other failure → stderr `lit: pending sync-failure block not claimed: <err>`), writes `receiveBlockProvenance` — `lit: the automatic receive reached this sync-failure block <age> ago (<RFC3339 mtime>); anything it dates is as of then`, or `lit: the automatic receive left this sync-failure block (when is unknown: <err>)` when the file cannot be stat'd — followed by its bytes to the given writer, and removes the claimed file; read, write and remove failures each print their own stderr line. No command's exit code is affected.
 `inlineSyncFailure` — `sync_receive.go`: no reconcile → not a failure; reconcile error that is a remote-schema-ahead → that class; other reconcile error → `diverged_unresolved` with `Cause`; `SyncReconcileProsePending` → `prose_held` with `Fields`; `SyncReconcileUnrelated` → `unrelated_histories` with `Inventory`.
 `settledCleanly` — `sync_receive.go`: `status == "ok"`, no receive error, and either no reconcile or a reconcile with no error whose state is `Linearized` or `NotDiverged`.
 
@@ -509,7 +521,7 @@ Flag parse output is `io.Discard` (`sync_bg.go`).
 ### 3.9 Staleness banners (`sync_staleness.go`)
 
 - `unfetchedStalenessThreshold = 24 * time.Hour` (`sync_staleness.go`).
-- Fetch-success marker `<StorageDir>/fetch-success.last` (`sync_staleness.go`), written by every successful DOLT_FETCH call site (`markFetchSuccess`, `sync_staleness.go`): `lit sync fetch`, `lit sync pull`, `freshReconcileTarget`, the inline receive's fetch — and by the inline receive's unmoved answer (`confirmRemoteUnmoved`, `sync_receive_ask.go`), which proves the same currency without a fetch.
+- Fetch-success marker `<StorageDir>/fetch-success.last` (`sync_staleness.go`), written by every successful DOLT_FETCH call site (`markFetchSuccess`, `sync_staleness.go`): `lit sync fetch`, `lit sync pull`, `freshReconcileTarget`, the automatic receive's fetch — and by the automatic receive's unmoved answer (`confirmRemoteUnmoved`, `sync_receive_ask.go`), which proves the same currency without a fetch.
 - `lastFetchSuccessAge` (`sync_staleness.go`): missing → `ok=false` silently; other stat error → stderr `lit: fetch-success marker unreadable: <err>` and `ok=false`.
 - `syncPushFailureLines` (`sync_staleness.go`) — only when a record is known AND `failed()`:
   `sync: automatic push[ to <r>/<b>] is FAILING — last attempt <age> ago: <reason> — changes stay on this machine until a push succeeds; run 'lit sync push'`.
@@ -1054,7 +1066,7 @@ All eight are also the payload of `lit quickstart --eject`, written to `<config.
 | `--output` before the command name; `--continue` | any command | `UnsupportedError`, exit 3 | `cli.go`, `flagset.go` |
 | Stray positional | `init`, `version`, `hooks install`, `snapshots new`, `lifeboat dump`, `lifeboat recover`, `upgrade`, `downgrade`, `sync reconcile`/`resolve`/`abort`/`combine` | `UsageError`, exit 2 | `init.go`, `version.go`, `hooks.go`, `snapshots.go`, `lifeboat.go`, `upgrade.go`, `downgrade.go`, `sync_reconcile_cmd.go` |
 | Adopt could not confirm workspace state | `init` | refuse to create a store, exit 1 | `init.go` |
-| Remote-schema-ahead | `sync push/pull/reconcile*`, inline receive, mirror | `SyncFailureError` block, exit 5 (mirror: stderr only) | `sync.go`, `sync_reconcile_cmd.go`, `sync_receive.go`, `sync_bg.go` |
+| Remote-schema-ahead | `sync push/pull/reconcile*`, automatic receive, mirror | `SyncFailureError` block, exit 5 (mirror: stderr only; automatic receive: printed by the next command) | `sync.go`, `sync_reconcile_cmd.go`, `sync_receive.go`, `sync_bg.go` |
 | Held prose conflict | `sync pull` | `SyncFailureError`, exit 5 | `sync.go` |
 | Held prose conflict | `sync reconcile`/`resolve`/`combine` | guidance printed + `MergeConflictError`, exit 5 | `sync_reconcile_cmd.go` |
 | Unrelated histories | `sync pull`, `sync reconcile*` | `SyncFailureError`, exit 5 | `sync.go`, `sync_reconcile_cmd.go` |

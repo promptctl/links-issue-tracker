@@ -14,7 +14,7 @@ import (
 
 // Three CLI paths need two capabilities at once, and each one refuses an engine
 // that offers only the first: `lit sync reconcile` (sync at the family
-// boundary, reconcile per subcommand), the inline receive, and `restore` (sync
+// boundary, reconcile per subcommand), the automatic receive, and `restore` (sync
 // and import, both resolved before anything is read, written, or backed up).
 // Dolt offers all seven capabilities, so none of the three decline arms runs in
 // any other test — they are correct by construction, which is exactly the state
@@ -123,7 +123,7 @@ func TestReconcilerForRefusesAnEngineThatDeclinesReconcile(t *testing.T) {
 	}
 }
 
-// The inline receive reaches reconcile only after it has fast-forwarded
+// The automatic receive reaches reconcile only after it has fast-forwarded
 // everything it could and found a real divergence, so an engine that declines
 // reconcile has nothing left to try. The danger is not that it fails — it is
 // that the failure gets rounded into a settled outcome and the divergence is

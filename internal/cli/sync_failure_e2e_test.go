@@ -11,12 +11,13 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 // captureStderr swaps os.Stderr for a pipe across fn and returns what was written.
-// The inline auto-sync writes its surface to os.Stderr directly (its stdout is
-// already produced), so an end-to-end assertion on that surface must capture the
-// process stderr rather than the command's writer.
+// The automatic sync writes its surface to os.Stderr directly (the command's
+// stdout is already produced), so an end-to-end assertion on that surface must
+// capture the process stderr rather than the command's writer.
 //
 // A reader goroutine drains the pipe concurrently with fn. fn runs a full CLI
 // command, and reading the pipe only *after* fn returns would deadlock the moment
@@ -123,15 +124,26 @@ func proseDivergedClones(t *testing.T) (consumer, ticketID string) {
 }
 
 // TestInlineReconcileSurfacesContractOnProseHeld: a clone diverges on a
-// free-text field the engine cannot settle, and on the VERY FIRST ordinary
-// command afterward the inline auto-reconcile surfaces the full sync-failure
-// contract to stderr — directive, what, how, escalation.
+// free-text field the engine cannot settle, the automatic receive's reconcile
+// holds it, and the VERY FIRST ordinary command afterward prints the full
+// sync-failure contract to stderr — directive, what, how, escalation. The
+// receive runs detached, so the block reaches a terminal through the command
+// after it, and through exactly one.
 // [LAW:no-silent-failure]
 func TestInlineReconcileSurfacesContractOnProseHeld(t *testing.T) {
 	consumer, ticketID := proseDivergedClones(t)
+	ws, err := workspace.Resolve(consumer)
+	if err != nil {
+		t.Fatalf("resolve consumer workspace: %v", err)
+	}
 
-	// Auto-sync ON: the first ordinary command triggers the inline receive, which
-	// reconciles, finds the held free-text conflict, and surfaces the contract.
+	// The receive reconciles, finds the held free-text conflict, and leaves
+	// the contract for the next command. Auto-sync is then ON for the
+	// commands, with the receive debounce fresh so they spawn no worker.
+	receiveNow(t, consumer)
+	if err := markReceiveAttempt(ws); err != nil {
+		t.Fatalf("mark receive attempt: %v", err)
+	}
 	t.Setenv(DisableAutoSyncEnvVar, "0")
 	surface := captureStderr(t, func() {
 		runCLIInDir(t, consumer, "backlog")
@@ -139,7 +151,13 @@ func TestInlineReconcileSurfacesContractOnProseHeld(t *testing.T) {
 
 	assertSyncFailureBlock(t, surface, "lit sync reconcile")
 	if !strings.Contains(surface, ticketID) || !strings.Contains(surface, "description") {
-		t.Fatalf("inline contract did not name the held ticket/field:\n%s", surface)
+		t.Fatalf("receive contract did not name the held ticket/field:\n%s", surface)
+	}
+	if !strings.Contains(surface, "the automatic receive reached this sync-failure block") {
+		t.Fatalf("the delivered block does not say when the receive reached it:\n%s", surface)
+	}
+	if again := captureStderr(t, func() { runCLIInDir(t, consumer, "backlog") }); strings.Contains(again, ticketID) {
+		t.Fatalf("the second command printed the block again; one receive's block reaches one command:\n%s", again)
 	}
 }
 

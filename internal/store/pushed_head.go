@@ -90,7 +90,7 @@ var ErrReceivedRefsNotRecorded = errors.New("received-refs record not written, s
 //
 // The ref only ever moves forward. Nothing serializes the clone's push against
 // the live store's own network traffic — an explicit `lit sync push` or a
-// read command's inline receive runs while the clone's push is in flight — so
+// automatic receive runs while the clone's push is in flight — so
 // by the time this runs the ref may already name a descendant of head: the
 // explicit push landed a later commit, or a fetch brought a peer's. Setting
 // it back to head would have every freshness read report that later commit

@@ -2908,17 +2908,16 @@ const (
 	// measured step is how a measured step stops being measurable.
 	coResidentWaitHeadroom = 8 * storeLockPollInterval
 
-	// InlineReceiveDeadline bounds the inline receive — the fetch a read
-	// command pays after its output when the receive debounce lapses and the
-	// remote has moved — so an offline or slow remote cannot hang the
-	// command's exit. A cut abandons only the fetch (the next interval
-	// retries), never the command's result. The fetch runs on a clone of
-	// this store, so this deadline bounds the command's wait, not a hold: the live store is held for the clone's copy (under
-	// MirrorHoldBudget) and for the landing of the fetch, whose cost is
-	// proportional to how far the remote moved and which only this deadline
-	// bounds (LandFetchedHead says why).
-	// [LAW:one-source-of-truth]
-	InlineReceiveDeadline = 15 * time.Second
+	// ReceiveDeadline bounds the automatic receive — the remote check and
+	// the fetch its detached worker runs when the receive debounce lapses —
+	// so an offline or slow remote cannot keep the worker running
+	// indefinitely. A cut abandons only the fetch (the next interval
+	// retries). The fetch runs on a clone of this store, so this deadline
+	// bounds the worker, not a hold: the live store is held for the clone's
+	// copy (under MirrorHoldBudget) and for the landing of the fetch, whose
+	// cost is proportional to how far the remote moved and which only this
+	// deadline bounds (LandFetchedHead says why). [LAW:one-source-of-truth]
+	ReceiveDeadline = 15 * time.Second
 )
 
 // coResidentHolderWait is the ONE answer to "how long does a caller wait for

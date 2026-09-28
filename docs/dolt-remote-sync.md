@@ -89,13 +89,13 @@ Successful and failed automatic runs both write trace files under the workspace 
 ## Durable sync/init decision trace
 
 Every decision `lit init`'s remote-adopt step or a `lit sync fetch/pull/push/reconcile`
-reaches — including the on-change mirror and the inline receive/reconcile below —
+reaches — including the on-change mirror and the automatic receive/reconcile below —
 is recorded unconditionally as a JSON record under a `sync/` subdirectory
 alongside the workspace's `automation/` trace directory (the one `lit workspace`
 reports as `traces_dir`) — both live under one shared `traces/` parent, e.g.
 `traces/automation/` and `traces/sync/` as siblings. It is recorded whether the
 command ran directly or under automation (a git hook, the on-change mirror, the
-inline receive). This is separate from, and in addition to, the automation
+automatic receive). This is separate from, and in addition to, the automation
 trace `lit workspace`'s `traces_dir` names above: that one is written only when
 `LNKS_AUTOMATION_TRIGGER` is set, so a directly-run interactive command left no
 record there at all. A sync-trace record's `trigger` field is empty for an
@@ -103,7 +103,7 @@ interactive occasion and names the trigger for an automated one, so the two trac
 kinds can never disagree about what fired a given occasion. It gives every
 sync/init decision a durable history to inspect after the fact, whether or not
 it happened under automation — before this, an interactive session's decisions
-(including its inline auto-receive/reconcile, which usually runs with no
+(including its automatic receive/reconcile, which usually runs with no
 trigger set) left no record anywhere once the process exited.
 
 ## Push cadence
@@ -175,17 +175,25 @@ default and toggled independently of push cadence:
 receive = true   # default
 ```
 
-The receive runs **inline** — in the command's own process, after the command's
-work is done and its engine is closed — not in a background worker. Embedded Dolt
-permits only one read-write engine on a path at a time, so a worker fetching
-concurrently with the next foreground command would make that command fail
-"database is read only"; running the receive sequentially after close keeps a
-single engine open at any moment. It is the lossless half of arrival: it only
-fast-forwards a branch with no local commits to lose, so it never creates a merge
-commit and never touches divergent local work. It is best-effort and bounded —
-debounced so a command burst triggers at most one fetch per interval, gated on a
-configured remote, and time-boxed so an offline or slow remote cannot hang the
-command; failures are recorded as automation traces, never failing the command.
+The receive runs in a **detached worker**, a `lit sync __receive-bg` process the
+command starts as it finishes, so no command waits on the remote: the remote
+check, the fetch it may lead to and the reconcile behind that all run after the
+command has returned. Embedded Dolt permits only one read-write engine on a path
+at a time, so the worker waits for the command that started it to exit before it
+opens the store, and then for any running on-change mirror to finish, so its
+remote check sees what that command's push left on the remote. The worker writes
+a start and an end line per receive, with its pid, to `receive.log` beside
+`mirror.log`. It is the lossless half of arrival: it only fast-forwards a branch
+with no local commits to lose, so it never creates a merge commit and never
+touches divergent local work. It is best-effort and bounded — debounced so a
+command burst starts at most one receive per interval, skipped when no remote is
+configured, and time-boxed so an offline or slow remote cannot keep it running
+for more than 15 seconds; failures are recorded as traces and never fail a
+command. A receive that ends in a divergence it cannot settle leaves its
+sync-failure block for the next command to finish on the checkout, which prints
+it to stderr once, under a line saying how long ago the receive reached it. A
+later receive that settles, or a `lit sync pull` or `lit sync reconcile` that
+converges the divergence, retires a block no command has printed yet.
 Set `LIT_DISABLE_AUTO_SYNC=1` to disable all automatic sync (mirror and receive)
 for a process — useful for CI and sandboxes.
 
@@ -194,13 +202,13 @@ copies the store (a copy-on-write clone where the filesystem offers one),
 fetches into the copy, and then carries what it fetched back to the store in
 one short hold. So another command's write that lands while a receive is
 fetching goes straight through instead of waiting on the fetch. Only one
-automatic receive runs at a time; a command whose receive is due while another
+automatic receive runs at a time; a receive worker that starts while another
 one is running leaves the fetch to it.
 
 A clone that has made its *own* unpushed commits while the remote also moved is
 *diverged*, not merely behind — a fast-forward cannot absorb it. The receive does
-not fast-forward that case; instead it runs a **field-aware reconcile** inline, on
-the same engine, right after the fast-forward check. The reconcile reads the
+not fast-forward that case; instead it runs a **field-aware reconcile** in the
+same worker, on the same engine, right after the fast-forward check. The reconcile reads the
 three-way state (base = merge-base, ours = local head, theirs = remote head) and
 resolves it field by field with deterministic, no-clock rules: a field only one
 side moved is taken from that side; a field both sides moved to different values

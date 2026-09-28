@@ -524,7 +524,7 @@ func TestRemoteHasDoltDataTrueWhenDoltRefPresent(t *testing.T) {
 
 	// The advertisement the has-data answer derives from is the listing itself:
 	// the object the remote's refs/dolt/data points at, in ls-remote's shape.
-	// This is what the inline receive compares across runs, so its content —
+	// This is what the automatic receive compares across runs, so its content —
 	// not just its emptiness — is the contract.
 	refs, err := RemoteDoltRefs(context.Background(), repo, "origin")
 	if err != nil {

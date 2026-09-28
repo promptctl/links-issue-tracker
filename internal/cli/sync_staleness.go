@@ -37,7 +37,7 @@ func fetchSuccessMarkerPath(ws workspace.Info) string {
 // markFetchSuccess records "local knowledge of the remote is current as of
 // now". Callers are every real DOLT_FETCH call site that returned no error —
 // the explicit `lit sync fetch`/`lit sync pull`, the reconcile command's
-// pre-reconcile fetch, the inline auto-receive — and the inline receive's
+// pre-reconcile fetch, the automatic receive — and the automatic receive's
 // unmoved answer, which proves the same thing without the fetch.
 // [LAW:single-enforcer] one marker, every call site writes it the same way.
 func markFetchSuccess(ws workspace.Info) error {

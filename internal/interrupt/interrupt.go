@@ -24,9 +24,9 @@ import (
 )
 
 // DefaultGrace bounds how long the clean cancellation path may run before the
-// process is hard-exited. It is chosen shorter than the inline receive's own
-// fetch budget (so a SIGTERM exits faster than merely letting that timeout
-// lapse) and shorter than a typical supervisor's SIGKILL deadline (Docker's 10s,
+// process is hard-exited. It is chosen shorter than the receive worker's own
+// fetch budget (so a SIGTERM ends that worker faster than merely letting its
+// timeout lapse) and shorter than a typical supervisor's SIGKILL deadline (Docker's 10s,
 // Kubernetes' 30s), so lit exits on its own terms before it is force-killed. On
 // the common path — work that honors ctx — the process exits in milliseconds and
 // this bound is never reached.

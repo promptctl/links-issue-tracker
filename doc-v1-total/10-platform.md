@@ -51,7 +51,7 @@ Every variable the shipped binary reads:
 | `XDG_CONFIG_HOME` | Global config dir = `$XDG_CONFIG_HOME/links-issue-tracker`, else `$HOME/.config/links-issue-tracker` (`internal/config/config.go`) |
 | `LIT_CONFIG_GLOBAL_PATH` | Overrides the global config file path entirely (`config.go`) |
 | `LIT_CONFIG_PROJECT_PATH` | Overrides the project config file path (`config.go`) |
-| `LIT_DISABLE_AUTO_SYNC` | Truthy (`strconv.ParseBool`, parse error = false) → no command schedules a push mirror, runs an inline receive, or compacts, and the owner-notify hook never runs (`internal/cli/sync_cadence.go`; `owner_notify.go`) |
+| `LIT_DISABLE_AUTO_SYNC` | Truthy (`strconv.ParseBool`, parse error = false) → no command schedules a push mirror or a receive, prints a pending receive block, or compacts, and the owner-notify hook never runs (`internal/cli/sync_cadence.go`; `owner_notify.go`) |
 | `CLAUDE_CODE_SESSION_ID` | Non-empty after trim → the acting identity is always `claude_<sessionID>`, overriding `--assignee`/`--by` (`cli.go`) |
 | `LNKS_AUTOMATION_TRIGGER` | Non-empty → automation-trace recording is on; the value is the trace's `Trigger` (`internal/cli/automation_trace.go`) |
 | `LNKS_AUTOMATION_REASON` | Default `Reason` on the automation trace when the caller supplied none (`automation_trace.go`) |
@@ -93,7 +93,7 @@ Defaults set in `Load` (`config.go`):
 | `sync.owner_notify_cmd` | string | `""` | empty = no owner-notification channel |
 | `claims.freshness_window` | duration string | `"6h"` | read as a string and parsed by `time.ParseDuration`; a bare number or non-positive duration fails `Load` (`config.go`) |
 
-Cadence semantics (`config.go`): `on-push` mirrors only when the managed pre-push git hook runs; `on-change` (default) mirrors after every mutating command. `shouldSyncAfterMutation` is true only for write access + `on-change` (`sync_cadence.go`). `maybeAutoSyncAfterCommand` returns immediately under `LIT_DISABLE_AUTO_SYNC`; on an unreadable config it prints `lit: automatic sync skipped, config unreadable: %v` and returns; otherwise it runs mirror coverage per cadence, inline receive per `sync.receive`, and inline compaction for write commands (`sync_cadence.go`). Timing constants: receive debounce 5 minutes, remote-absent recheck 10 seconds (`sync_cadence.go`).
+Cadence semantics (`config.go`): `on-push` mirrors only when the managed pre-push git hook runs; `on-change` (default) mirrors after every mutating command. `shouldSyncAfterMutation` is true only for write access + `on-change` (`sync_cadence.go`). `maybeAutoSyncAfterCommand` returns immediately under `LIT_DISABLE_AUTO_SYNC`; on an unreadable config it prints `lit: automatic sync skipped, config unreadable: %v` and returns; otherwise it prints any pending receive block, runs mirror coverage per cadence, schedules the receive worker per `sync.receive`, and runs inline compaction for write commands (`sync_cadence.go`). Timing constants: receive debounce 5 minutes, remote-absent recheck 10 seconds (`sync_cadence.go`).
 
 ### Per-workspace store config
 
