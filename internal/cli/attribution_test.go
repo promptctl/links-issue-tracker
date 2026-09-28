@@ -10,12 +10,9 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-// The relation/label/bulk mutating verbs once wrote the raw --by flag (default
-// $USER) into CreatedBy, while lifecycle verbs resolved it through the session
-// rule — so under CLAUDE_CODE_SESSION_ID provenance split by which verb ran.
-// These tests pin every such verb to the resolved acting identity, observing
-// the recorded actor through the store rather than the implementation, so a
-// regression that reintroduces the raw-$USER path fails here. [LAW:behavior-not-structure]
+// These tests pin every relation/label/bulk mutating verb to the resolved
+// acting identity, observing the recorded actor through the store rather than
+// the implementation. [LAW:behavior-not-structure]
 const attributionSessionID = "attribution-sess"
 
 func attributionWantActor() string { return "claude_" + attributionSessionID }

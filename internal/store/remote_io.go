@@ -30,7 +30,7 @@ import (
 // observed failure mode — a dropped SSH connection that succeeds on a plain
 // retry seconds later — and kept small deliberately: if the resets are the
 // remote throttling this workspace's push cadence, a long retry storm makes
-// that worse, not better (links-sync-r779, "Not verified").
+// that worse, not better.
 //
 // The whole budget can sleep under the cross-process commit lock (every call
 // site runs inside runSyncMutation), extending a failing push's hold by at
@@ -39,8 +39,7 @@ import (
 // one-lock atomicity SyncCompactAndPush documents (the push reflects exactly
 // the compacted state). The larger hold this budget sleeps inside is bounded
 // per actor: the background mirror runs its whole session under
-// MirrorHoldBudget (links-sync-pgct.11.1), which cuts retries and attempt
-// alike, while an explicit foreground `lit sync push` stays unbounded — the
+// MirrorHoldBudget, which cuts retries and attempt alike, while an explicit foreground `lit sync push` stays unbounded — the
 // operator invoked it, watches it, and can interrupt it.
 // [LAW:no-ambient-temporal-coupling] the hold's owner and bound are stated
 // here, at the budget that creates them.

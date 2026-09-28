@@ -317,8 +317,8 @@ func TestWorkflowsEditOverridesEmbeddedDefaultVerbatim(t *testing.T) {
 	}
 }
 
-// TestWriteWorkflowScaffoldEnforcesNoClobberEvenPastTheFastPathCheck pins the
-// TOCTOU fix directly: writeWorkflowScaffold's O_EXCL open is the actual
+// TestWriteWorkflowScaffoldEnforcesNoClobberEvenPastTheFastPathCheck pins
+// directly that writeWorkflowScaffold's O_EXCL open is the actual
 // enforcer, not just refuseExistingFile's earlier stat — calling it twice for
 // the same path (as a concurrent `edit` racing past the first call's stat
 // check would) must fail on the second call, never silently overwrite the

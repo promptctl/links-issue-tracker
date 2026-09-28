@@ -16,12 +16,11 @@ import (
 // registry max. Writing here (a push, or the reconcile's replay commit) would
 // author a commit BELOW the remote head's schema: this binary knows only its own
 // older columns, so it would regress the shared remote to a schema it understands
-// and drop every field the newer schema added. That is the exact 2026-07-08
-// incident. The lossless fix is a binary whose schema support reaches the remote's
-// version, so the error states that requirement and routes to `lit upgrade`. It
-// does not name the binary that authored the remote head: a build identity can be
-// unresolvable, and when the message is replayed later it can be older than the
-// binary the reader is already running.
+// and drop every field the newer schema added. The lossless fix is a binary whose
+// schema support reaches the remote's version, so the error states that requirement
+// and routes to `lit upgrade`. It does not name the binary that authored the remote
+// head: a build identity can be unresolvable, and when the message is replayed
+// later it can be older than the binary the reader is already running.
 //
 // [LAW:types-are-the-program] The refusal is version arithmetic on data —
 // (RemoteVersion, BinarySupportedMax) — never inferred from a query happening to

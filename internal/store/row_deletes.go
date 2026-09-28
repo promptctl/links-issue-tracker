@@ -14,8 +14,6 @@ import (
 // the ordinary CRUD commands (RemoveRelation, RemoveLabel, DeleteComment) and
 // the reconcile replay's delta — and a primitive shared by two layers belongs
 // under both rather than inside whichever one happened to need it first.
-// Holding them in export_delta.go made the CRUD commands reach UP into the
-// diff layer for a statement that has nothing to do with diffing.
 // [LAW:one-way-deps] everything here depends on the schema and nothing above it,
 // so all four callers depend downhill.
 //

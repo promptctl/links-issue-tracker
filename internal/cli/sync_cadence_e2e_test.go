@@ -104,9 +104,7 @@ func TestDisabledAutoSyncSuppressesTheCompactionBackstop(t *testing.T) {
 }
 
 // An unreadable config stops sync and stops nothing else. Compaction reads no
-// configuration, so letting a broken file gate it withheld the backstop from
-// precisely the workspace that most needs one — a store nothing else collects,
-// now with a config nobody can read. This drives the cadence owner directly
+// configuration. This drives the cadence owner directly
 // rather than through the CLI, because what has to be proved is that the
 // compaction gate is REACHED after config fails, and the probe marker is
 // written before the store is opened: its presence is that proof, on a

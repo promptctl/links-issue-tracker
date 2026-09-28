@@ -69,9 +69,9 @@ func TestPrintSyncPullOutcomeNeverSyncedDirectsUpstreamSetup(t *testing.T) {
 	}
 }
 
-// A held free-text conflict no longer renders as a benign stdout payload — it
-// routes through the one sync-failure contract as a returned error, so `lit sync
-// pull` exits ExitConflict like `lit sync reconcile` does for the identical state.
+// A held free-text conflict routes through the one sync-failure contract as a
+// returned error, so `lit sync pull` exits ExitConflict like `lit sync reconcile`
+// does for the identical state.
 // syncFailureFromPull is the pure mapping the command uses; this pins that a
 // prose-pending pull yields the proseHeld contract and every non-held state does not.
 func TestSyncFailureFromPullHoldsProseConflict(t *testing.T) {
@@ -423,12 +423,11 @@ func TestResolveSyncBranchSurfacesCancellationNotMisleadingUnavailable(t *testin
 }
 
 // TestPrintSyncPushOutcomeSurfacesMaintenanceInBothModes is the check the
-// remote-cache prune needs and did not originally have. The prune's whole safety
-// story rests on a refusal message reaching the operator when its key derivation
-// disagrees with the disk; plumbing that message into the payload and never
-// rendering it is the same silence, one layer further down. Both modes are
-// asserted because a warning visible only behind --verbose is still silent where
-// it counts.
+// remote-cache prune needs. The prune's whole safety story rests on a refusal
+// message reaching the operator when its key derivation disagrees with the disk;
+// plumbing that message into the payload and never rendering it is the same
+// silence, one layer further down. Both modes are asserted because a warning
+// visible only behind --verbose is still silent where it counts.
 //
 // The assertion is on position, not presence. Emitting the line above the
 // cascade is what keeps a later arm from forgetting it, and the CHANGELOG
@@ -491,11 +490,9 @@ func TestPrintSyncPushOutcomeAddsNoLineWhenMaintenanceIsEmpty(t *testing.T) {
 }
 
 // TestSyncPushTraceMetadataCarriesTheMaintenanceReport is the check the durable
-// trace needed and did not have. `lit sync push` backs the pre-push hook, where
-// stdout is routinely swallowed, so the trace is the channel a prune refusal
-// actually survives on — and until this job had a name, asserting anything about
-// it meant standing up a workspace, a ref-carrying remote and a live engine
-// session, which is why the line shipped unasserted.
+// trace needs. `lit sync push` backs the pre-push hook, where stdout is
+// routinely swallowed, so the trace is the channel a prune refusal actually
+// survives on.
 func TestSyncPushTraceMetadataCarriesTheMaintenanceReport(t *testing.T) {
 	t.Parallel()
 	const refusal = "remote-cache prune: declining to prune: 3 cache directories match no configured remote"

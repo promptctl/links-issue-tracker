@@ -156,10 +156,8 @@ func TestDispatchRecordsFiringTraceOnlyWhenSomethingFires(t *testing.T) {
 
 // TestDispatchWithEmptyStorageDirNeverWritesRelativeToCWD is a regression
 // guard: a caller-supplied workspace.Info with no (or a relative) StorageDir
-// — every partially-populated test fixture across the codebase that never
-// had reason to set it before firing traces existed — must never cause
-// Dispatch to write a trace file relative to the process's working
-// directory. A real workspace.Resolve()'d Info always has an absolute
+// must never cause Dispatch to write a trace file relative to the process's
+// working directory. A real workspace.Resolve()'d Info always has an absolute
 // StorageDir (rooted at git-common-dir), so this path is unreachable in
 // production; it guards a boundary Dispatch does not control.
 func TestDispatchWithEmptyStorageDirNeverWritesRelativeToCWD(t *testing.T) {

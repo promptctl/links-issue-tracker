@@ -129,8 +129,7 @@ func TestLiveCheckoutsCarriesTheAddress(t *testing.T) {
 // TestLiveCheckoutsReportsTheLock runs the lock all the way through real git,
 // because the parser table above proves only that this code reads a string it
 // wrote itself. The claim predicate lets a lock, and nothing else, carry a hold
-// past the freshness window (links-claims-2wk2), so a `locked` field that were
-// quietly never set would restore the whole bug with every unit test green.
+// past the freshness window.
 //
 // The unlocked neighbor is the control: the lock has to distinguish, not just
 // appear.
@@ -317,15 +316,12 @@ func TestBareRepositoryContributesNoCheckout(t *testing.T) {
 }
 
 // TestWorktreePathWhoseTailLooksLikeAnAttributeStaysLive runs the real thing
-// against real git, because this bug was live in a version of this file whose
-// unit tests were entirely green: nothing constructed the path.
+// against real git.
 //
 // A newline is a legal byte in a POSIX filename. Under the newline-terminated
 // porcelain format, a worktree at a path ending in "\nprunable" emitted the word
-// `prunable` as its own line, which the parser read as an attribute of the live
-// record it had just opened — so the checkout was dropped from the enumeration
-// and its claims were voided with no error anywhere. The name is hostile on
-// purpose; nobody has to do this deliberately for it to be wrong.
+// `prunable` as its own line. The name is hostile on purpose; nobody has to do
+// this deliberately for it to be wrong.
 func TestWorktreePathWhoseTailLooksLikeAnAttributeStaysLive(t *testing.T) {
 	primary := litRepoWithCommit(t)
 	awkward := filepath.Join(t.TempDir(), "wt\nprunable")
@@ -414,7 +410,7 @@ func TestParseWorktreeListReadsEveryDocumentedShape(t *testing.T) {
 		},
 		{
 			// Two facts, and the record carries both separately. `locked` is
-			// read now — the claim predicate treats it as the holder's
+			// read — the claim predicate treats it as the holder's
 			// do-not-disturb — but it still says nothing about prunability,
 			// which is git's call and stays git's call.
 			name:   "locked is recorded and is still not prunable",
@@ -442,11 +438,6 @@ func TestParseWorktreeListReadsEveryDocumentedShape(t *testing.T) {
 			want:   []worktreeRecord{{path: "/some where/my worktree"}},
 		},
 		{
-			// The bug this format exists to make unrepresentable: under the
-			// newline-terminated output this path's tail arrived as its own line,
-			// the word `prunable` was read as an attribute of the live record it
-			// had just opened, and that record was dropped from the enumeration
-			// with no error — voiding a live checkout's claims silently.
 			name:   "a path whose tail collides with an attribute key",
 			output: "worktree /w/evil\nprunable\x00HEAD abc\x00branch refs/heads/evil\x00\x00",
 			want:   []worktreeRecord{{path: "/w/evil\nprunable", branch: "evil"}},

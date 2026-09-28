@@ -22,8 +22,8 @@ import (
 //
 // Filtering frozen rows out of the readiness rung instead would put a second
 // predicate in front of the registry and make `blocked` mean "startable AND in
-// play" here while it means the registry's verdict everywhere else — the
-// shorter list this ticket deleted, one layer up. [LAW:one-source-of-truth]
+// play" here while it means the registry's verdict everywhere else.
+// [LAW:one-source-of-truth]
 func TestBlockedColumnOnFrozenRows(t *testing.T) {
 	for _, freeze := range []struct {
 		name string

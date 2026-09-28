@@ -11,7 +11,7 @@ import (
 // runAppFamily drives an app-mode family the way familyCmd does, minus the
 // app open: the table picks the row, the row's leaf declares and parses, and
 // its work runs on the resource the test supplies. Tests dispatch through the
-// production table so they exercise the absorbed routing behavior, not a
+// production table so they exercise the routing behavior, not a
 // private path. [LAW:behavior-not-structure]
 func runAppFamily(f commandFamily[appSubcommand], ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	sub, err := f.resolve(args)

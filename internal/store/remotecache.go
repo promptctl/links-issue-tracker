@@ -27,10 +27,8 @@ import (
 // any re-spelling that survives that stripping — a GitHub org rename, an
 // scp-vs-ssh rewrite — sends the next open to a fresh key, which clones a whole
 // new mirror and abandons the previous one forever.
-// Measured on this repository when this file landed: 142 MB of cache, of which
-// 97 MB was live and 45 MB was three abandoned mirrors of two long-gone remote
-// spellings. Nothing upstream collects them; Dolt ships no prune, evict, or
-// cleanup for this directory.
+// Nothing upstream collects them; Dolt ships no prune, evict, or cleanup for
+// this directory.
 //
 // [LAW:effects-at-boundaries] Which directories are abandoned is a pure function
 // of two key sets (planRemoteCachePrune); only pruneRemoteCache touches disk.
@@ -396,12 +394,9 @@ func (s *Store) pruneRemoteCache(ctx context.Context) remoteCachePruneOutcome {
 		outcome.Reclaimed += reclaimed
 	}
 	// Every entry is attempted and a failure records itself rather than ending
-	// the walk. Returning on the first error made one permanently unremovable
-	// directory a head-of-line blocker: plan.abandoned is sorted, so that same
-	// entry is reached first on every push forever and nothing sorting after it
-	// is ever attempted again, however removable it is.
-	// [LAW:dataflow-not-control-flow] which entries get visited no longer
-	// depends on what the earlier ones did.
+	// the walk.
+	// [LAW:dataflow-not-control-flow] which entries get visited does not
+	// depend on what the earlier ones did.
 	outcome.Problem = strings.Join(problems, "; ")
 	return outcome
 }

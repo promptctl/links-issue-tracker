@@ -164,7 +164,7 @@ func TestTakeRefusesWithoutOwnerApprovalEndToEnd(t *testing.T) {
 	}
 	// The take reports its provenance replay with the exact count: the
 	// consumer's one create-issue data commit landed individually, not as one
-	// squash (links-sync-pgct.6). The count makes the assertion falsifiable —
+	// squash. The count makes the assertion falsifiable —
 	// a squash regression reports 0 and cannot satisfy it.
 	if !strings.Contains(approved, "1 local commit replayed with original messages and timestamps") {
 		t.Fatalf("approved take did not report the one-commit provenance replay:\n%s", approved)
@@ -176,8 +176,7 @@ func TestTakeRefusesWithoutOwnerApprovalEndToEnd(t *testing.T) {
 // TestPushFailureNotifiesOwner is the push half of the notification acceptance:
 // a push that stops landing notifies the owner once per episode, a landed push
 // ends the episode, and the next failure is a new episode that fires
-// immediately — the field incident's "stopped pushing on Aug 2, nobody heard
-// for a week" can no longer happen silently.
+// immediately.
 func TestPushFailureNotifiesOwner(t *testing.T) {
 	t.Setenv(DisableAutoSyncEnvVar, "1")
 	maskGlobalConfig(t)

@@ -28,9 +28,7 @@ func NormalizeLabel(label string) (string, error) {
 // label-set facts, so two authorings of one set canonicalize to one list and
 // compare equal.
 // [LAW:one-source-of-truth] The set-level form belongs beside the name-level
-// one. Both engines derived this locally from NormalizeLabel and their copies
-// were the same algorithm typed twice — which is a divergence waiting on
-// whichever copy someone edits first.
+// one.
 func CanonicalizeLabels(labels []string) ([]string, error) {
 	out := make([]string, 0, len(labels))
 	seen := map[string]struct{}{}

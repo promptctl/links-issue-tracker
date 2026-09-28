@@ -3,9 +3,9 @@
 // (link-time-injected version/commit/build-date/origin) plus its capability
 // bounds (the schema-version range it can produce, derived from the embedded
 // migration registry). Downstream code — the `lit version` command, the
-// release manifest (internal/release), the `lit downgrade` resolver
-// (downgrade epic .4), and the refusal-message upgrade (.5) — all read this
-// Info; nothing reconstructs it from parsed strings or duplicates its fields.
+// release manifest (internal/release), the `lit downgrade` resolver, and the
+// refusal-message upgrade — all read this Info; nothing reconstructs it from
+// parsed strings or duplicates its fields.
 //
 // [LAW:one-source-of-truth] One typed Info per binary; the schema fields are
 // derived from internal/store/migrations at call time, not stored as separate
@@ -25,8 +25,7 @@ import (
 // the cautious reading: no Version is Info.IsDev, no Origin is Info.FromSource.
 //
 // [LAW:single-enforcer] Which producer stamps which field is checked against the
-// producers themselves, in stamp_sites_test.go, not recited here — reciting it
-// here is what went stale the first time a field was added.
+// producers themselves, in stamp_sites_test.go, not recited here.
 // TestEveryProducerStampsOrigin owns Origin; TestOnlyTheJustfileOmitsVersion
 // owns the deliberate omission that keeps a plain `just build` on IsDev==true.
 // See BuildAge for why Commit/Date alone are worth stamping.
@@ -59,12 +58,8 @@ const OriginRelease = "release"
 const OriginSource = "source"
 
 // StaleBuildThreshold is the build age past which `lit version` flags a
-// locally built binary as worth rebuilding. This package's build-age
-// reporting exists because a stale local binary silently missing a landed
-// fix is the suspected root cause of the field incident that motivated the
-// links-sync-pgct epic — nothing in `lit version` could tell anyone the
-// binary predated the fix. [LAW:one-source-of-truth] the one constant every
-// staleness check compares against.
+// locally built binary as worth rebuilding. [LAW:one-source-of-truth] the
+// one constant every staleness check compares against.
 const StaleBuildThreshold = 7 * 24 * time.Hour
 
 // Info is the typed snapshot of this binary's identity and capabilities. It is
@@ -98,13 +93,12 @@ type Info struct {
 	// but compatibility — `lit upgrade` is run BY the old binary to discover a
 	// new release, so every manifest consumer is older than its producer, and
 	// every binary already installed decodes manifests with
-	// DisallowUnknownFields (see release.HTTPResolver.Resolve, which no longer
-	// does). Emitting `from_source` would have made the next release's
-	// manifest undecodable to every lit in the field, breaking the upgrade
-	// path at exactly the release that shipped it — and the in-band remedy for
-	// a broken upgrade is the upgrade. [LAW:types-are-the-program] the tag is
-	// what makes that unrepresentable, rather than a rule mkmanifest must
-	// remember.
+	// DisallowUnknownFields. Emitting `from_source` would have made the next
+	// release's manifest undecodable to every lit in the field, breaking the
+	// upgrade path at exactly the release that shipped it — and the in-band
+	// remedy for a broken upgrade is the upgrade. [LAW:types-are-the-program]
+	// the tag is what makes that unrepresentable, rather than a rule
+	// mkmanifest must remember.
 	FromSource bool          `json:"-"`
 	Schema     SchemaSupport `json:"schema_support"`
 }
@@ -168,10 +162,8 @@ func (i Info) BuildAge(now time.Time) (age time.Duration, ok bool) {
 //
 // This is the one predicate every staleness surface reads — `lit version`'s
 // warning line, the build-status note on doctor/sync/init, and the next/backlog
-// banner — so the three cannot reach different verdicts about one binary. They
-// did: `lit version` warned on age alone while the build-status note required
-// IsDev, which is how a `just install` binary could be told "run just build" by
-// one command and called a release by the next. [LAW:single-enforcer]
+// banner — so the three cannot reach different verdicts about one binary.
+// [LAW:single-enforcer]
 //
 // MUST REPORT STALE: a source build dated at or past StaleBuildThreshold (the
 // comparison is >=, so the boundary itself is stale); an Origin-unstamped build

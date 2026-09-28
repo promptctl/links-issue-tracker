@@ -14,9 +14,7 @@ import (
 //
 // It is a distinct type rather than a string because of what the alternative
 // invites. The obvious way to time lit is to invoke whatever `lit` is on PATH,
-// and on this machine that binary was nine days behind master when this tool
-// was written — with the staleness warning missing from the stale binary
-// itself, so the numbers would have described code nobody was looking at while
+// so the numbers would have described code nobody was looking at while
 // appearing to describe the working tree. Making "the binary under measurement"
 // a type that only build() can produce means no part of this tool can time
 // anything else. [LAW:parse-dont-validate] [LAW:one-source-of-truth]

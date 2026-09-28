@@ -189,10 +189,10 @@ func TestLoadSyncCadenceFromTOML(t *testing.T) {
 	}
 }
 
-// TestLoadSyncCadenceOnPushFromTOML pins the opt-out path now that on-change is
-// the default (TestLoadDefaults): a user who deliberately wants manual push
-// control must still be able to select on-push from file, and Load must not
-// silently keep the default when a file explicitly asks for the other value.
+// TestLoadSyncCadenceOnPushFromTOML pins the opt-out path: a user who
+// deliberately wants manual push control must still be able to select on-push
+// from file, and Load must not silently keep the default when a file
+// explicitly asks for the other value.
 func TestLoadSyncCadenceOnPushFromTOML(t *testing.T) {
 	dir := t.TempDir()
 	configDir := filepath.Join(dir, "links-issue-tracker")

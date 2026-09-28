@@ -154,7 +154,7 @@ func (h readyTestHarness) addDependency(dependentID, dependencyID string) {
 	}
 }
 
-// runWorkableAnnotated reproduces what the surviving workable views compute: the
+// runWorkableAnnotated reproduces what the workable views compute: the
 // shared gather, which is focus-neutral — it returns the scope beside the rows
 // for a view to narrow by, and orders nothing by it — plus the limit, returning
 // the rows in backlog order — canonical rank/priority, with
@@ -245,13 +245,6 @@ func TestRunReadyAnnotatesBlockedIssues(t *testing.T) {
 // TestRunReadyBlocksOnlyOnDependenciesStillInPlay pins the readiness gate to
 // Issue.InPlay(): a dependency blocks while it is still work anyone might do,
 // and stops blocking the moment it leaves the flow — by any of the three exits.
-//
-// The archived and deleted arms are the regression (links-readiness-9no1). The
-// blocker predicate used to read the status axis alone, so a soft-deleted
-// dependency kept the edge alive while lit close/open/start all refused the
-// frozen row: the dependent was blocked forever by a ticket that appears in no
-// listing and that no command could discharge. Reverting the predicate to
-// State() != StateClosed fails exactly those two arms and passes the others.
 //
 // [LAW:behavior-not-structure] The assertion is the contract an agent depends on
 // — "is this ticket ready" through ClassifyReadiness — not the annotator's
@@ -617,7 +610,7 @@ func TestRunReadyTextOutputShowsNumberedItems(t *testing.T) {
 	}
 }
 
-// [LAW:dataflow-not-control-flow] (links-agent-epic-model-uew.1)
+// [LAW:dataflow-not-control-flow]
 // Epics are never workable entries in `ready`: the data boundary excludes
 // them, so downstream annotation / sort / render code never sees them.
 func TestRunReadyExcludesEpics(t *testing.T) {
@@ -663,7 +656,7 @@ func TestRunReadyExcludesEpics(t *testing.T) {
 	}
 }
 
-// [LAW:dataflow-not-control-flow] (links-agent-epic-model-uew.2)
+// [LAW:dataflow-not-control-flow]
 // Each ready row carries its parent epic inline when the parent is type=epic,
 // so an agent scanning ready knows which epic they'd be joining before they
 // claim a leaf. Rows without an epic parent get no ParentEpic field.
@@ -742,7 +735,7 @@ func TestRunReadyCarriesParentEpic(t *testing.T) {
 	}
 }
 
-// [LAW:dataflow-not-control-flow] (links-agent-epic-model-uew.4)
+// [LAW:dataflow-not-control-flow]
 // Leaves sort by (effective_epic_rank, own_rank), so all leaves under epic A
 // appear before any leaves under epic B when A ranks higher than B — even
 // when the leaves were created in interleaved order and their own ranks
@@ -854,7 +847,7 @@ func TestFocusPathSurfacesEarliestPrerequisiteAndAdvances(t *testing.T) {
 	// Focusing the goal narrows the pool to its prerequisite chain, so the next
 	// thing to start is the earliest ready member of that chain. The unrelated
 	// urgent item is out of scope rather than outranked — it would otherwise win
-	// on priority. `lit next` is the surviving "what should I start" surface.
+	// on priority. `lit next` is the "what should I start" surface.
 	if pick := h.runNextRow(); pick.ID != c1.ID {
 		t.Fatalf("next = %q, want earliest ready prerequisite %q", pick.ID, c1.ID)
 	}

@@ -98,8 +98,8 @@ func TestVersionRejectsPositionalArgs(t *testing.T) {
 	}
 }
 
-// TestVersionReportsBuildAgeWhenDateStamped pins the ticket-level fix: a
-// binary with a stamped Date (what `just build` now produces via
+// TestVersionReportsBuildAgeWhenDateStamped pins that a binary with a stamped
+// Date (what `just build` produces via
 // scripts/version-ldflags.sh, even without a stamped Version) reports how
 // long ago it was built instead of leaving the reader to guess from a bare
 // timestamp.
@@ -152,8 +152,7 @@ func TestVersionFlagsStaleBuild(t *testing.T) {
 }
 
 // TestVersionOmitsBuildAgeWithoutDate pins the no-fabrication guard at the CLI
-// surface: an unstamped Date (the pre-ticket `just build`, or any build whose
-// linker never set it) prints no "built X ago" line and no staleness warning
+// surface: an unstamped Date (any build whose linker never set it) prints no "built X ago" line and no staleness warning
 // — the existing "built unknown" phrasing (TestVersionHumanLabelsDevBuild)
 // stays the whole story.
 func TestVersionOmitsBuildAgeWithoutDate(t *testing.T) {

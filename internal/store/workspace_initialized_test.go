@@ -13,12 +13,9 @@ import (
 // can meet a repository `lit init` has never run in, and pins that each reports
 // it as the same typed condition with the same sentence.
 //
-// That is the contract the CLI's reason and exit-code sinks read: before
-// links-cli-errors-yfbg each site raised a bare fmt.Errorf, so the sinks could
-// not recognize the condition and fell through to the unclassified-fault
-// default, which told the agent to retry a state no retry can change. The
-// entry points are driven for real rather than asserted about, so reverting any
-// one of them to a fmt.Errorf carrying the identical text fails here.
+// That is the contract the CLI's reason and exit-code sinks read. The entry
+// points are driven for real rather than asserted about, so changing any one of
+// them to a fmt.Errorf carrying the identical text fails here.
 // [LAW:behavior-not-structure]
 func TestUninitializedWorkspaceIsOneCondition(t *testing.T) {
 	t.Parallel()
@@ -70,12 +67,12 @@ func TestUninitializedWorkspaceIsOneCondition(t *testing.T) {
 	}
 }
 
-// TestRequireInitializedWorkspaceSeparatesGenuineStatFaults pins acceptance 4 of
-// links-cli-errors-yfbg from below: only ENOENT means "never initialized". A
-// stat that fails any other way is a fault the operator has to see, it names
-// the directory that failed, and it must not be laundered into the tidy
-// "run lit init" answer — which would send someone to initialize a workspace
-// over a permissions or path fault that init cannot fix. [LAW:no-silent-failure]
+// TestRequireInitializedWorkspaceSeparatesGenuineStatFaults pins from below
+// that only ENOENT means "never initialized". A stat that fails any other way
+// is a fault the operator has to see, it names the directory that failed, and
+// it must not be laundered into the tidy "run lit init" answer — which would
+// send someone to initialize a workspace over a permissions or path fault that
+// init cannot fix. [LAW:no-silent-failure]
 func TestRequireInitializedWorkspaceSeparatesGenuineStatFaults(t *testing.T) {
 	t.Parallel()
 
@@ -102,9 +99,8 @@ func TestRequireInitializedWorkspaceSeparatesGenuineStatFaults(t *testing.T) {
 // is supposed to be protecting. What it must not do is answer that refusal with
 // the uninitialized sentence: a missing noms directory *under an existing root*
 // is a damaged or half-deleted workspace, and `lit init` refuses a root it
-// cannot read. Reporting it as uninitialized sent the caller between two
-// commands that each told it to run the other — the loop this ticket exists to
-// remove, rebuilt one level down.
+// cannot read. Reporting it as uninitialized would send the caller between two
+// commands that each tell it to run the other.
 //
 // The root here is real and the noms directory is not, so a helper that
 // classifies on anything below the root fails this test. [LAW:one-type-per-behavior]

@@ -14,10 +14,9 @@ import (
 // `lit children <id>` is `lit ls --parent <id>`: for every flag combination the
 // two surfaces print the same bytes. The cases are the ones an agent that learned
 // ls reaches for first — the output shapers and the status set — plus the
-// default, which is where two listings with two vocabularies used to disagree
-// (links-children-flags-31xu). The fixture closes one child and nests a
-// grandchild, so a surface that ignored --status, or listed descendants instead
-// of direct children, prints a different row set than ls does.
+// default. The fixture closes one child and nests a grandchild, so a surface
+// that ignored --status, or listed descendants instead of direct children,
+// prints a different row set than ls does.
 // [LAW:behavior-not-structure] the assertion is the rendered output, not which
 // leaf ran.
 func TestChildrenIsLsWithAParent(t *testing.T) {

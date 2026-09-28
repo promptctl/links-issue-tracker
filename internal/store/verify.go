@@ -127,7 +127,7 @@ func VerifyCandidate(ctx context.Context, dump RawDump, mapping ShapeMapping, st
 	// A parent cycle is the one health finding that stops the remaining gates
 	// rather than joining them. They all read through Export, which hydrates
 	// every container, and hydration is a walk up the parent chain that does not
-	// return on a loop — so continuing here overflowed the stack on exactly the
+	// return on a loop — so continuing here would overflow the stack on exactly the
 	// untrusted candidate this gate exists to reject. The report is returned with
 	// the finding that can be made, which is the honest answer: the rest was not
 	// checked, and saying so beats crashing. [LAW:no-silent-failure]

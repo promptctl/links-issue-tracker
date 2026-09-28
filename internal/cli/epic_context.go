@@ -31,15 +31,6 @@ type childStatus interface {
 // when one was recorded — or somebody is working it. The payload is the word
 // issueStanding composed, never a literal spelled here, so this marker cannot
 // name a variant that composer did not produce.
-//
-// [LAW:one-source-of-truth] Three separate variants used to mint "[closed]",
-// "[in_progress]", and the retention word independently, and the words they
-// spelled were issueStanding's to own. The closed literal is what hid a
-// wontfix declination behind the same marker finished work gets
-// (promptctl-output-p60y); the fix is that the epic plan no longer spells any
-// standing word, so it cannot fall behind the one that does.
-// [LAW:one-type-per-behavior] Nothing differed between those three but the
-// name — all rendered one word in brackets.
 type statusStanding struct{ standing string }
 
 func (s statusStanding) marker() string { return "[" + s.standing + "]" }
@@ -51,14 +42,12 @@ func (statusReady) marker() string { return "[ready]" }
 // statusBlocked is a child the readiness gate holds back, carrying every reason
 // it holds it back FOR. The payload is head-plus-tail rather than a slice so a
 // blocked child with no reason cannot be constructed: the marker's claim is
-// "not startable, and here is why", and a why-less blocked marker would be the
-// [ready] bug in the other direction.
+// "not startable, and here is why".
 //
-// The marker used to read "[blocked-by <id>]", a shape that only fits a reason
-// whose detail IS an id. Two of the registry's four blocking kinds have no id
-// to name — a missing field, a needs-design label — so the id-shaped marker is
-// gone: one phrasing (BlockingReason.Phrase) covers every kind, and the
-// renderer never asks which kind it holds. [LAW:dataflow-not-control-flow]
+// Two of the registry's four blocking kinds have no id to name — a missing
+// field, a needs-design label — so one phrasing (BlockingReason.Phrase) covers
+// every kind, and the renderer never asks which kind it holds.
+// [LAW:dataflow-not-control-flow]
 type statusBlocked struct {
 	reason BlockingReason   // the witness — a blocked child always has at least one
 	more   []BlockingReason // any further reasons, in annotation order
@@ -70,9 +59,8 @@ func (s statusBlocked) marker() string {
 		phrases = append(phrases, reason.Phrase())
 	}
 	// Every reason, not the first: naming one of three invites closing it and
-	// finding the child still unservable — the smaller version of the same lie
-	// this marker was filed for (links-epic-context-oezb). The backlog names
-	// them all too, so the two surfaces read alike.
+	// finding the child still unservable. The backlog names them all too, so
+	// the two surfaces read alike.
 	return "[blocked: " + strings.Join(phrases, "; ") + "]"
 }
 
@@ -143,12 +131,8 @@ const statusMarkerWidth = len("[in_progress]")
 // of retention, status, and the close's reason; this file spells none of them.
 //
 // [LAW:single-enforcer] readiness is the gate's verdict, read here, never
-// recomputed here. This display used to derive its own blocker list from
-// `blocks` edges alone, so a child held back by any of the registry's three
-// other blocking kinds — a missing required field, needs-design, an earlier
-// same-lane sibling — was drawn [ready] while `lit next` refused to serve it
-// (links-epic-context-oezb). IsReady is false exactly when BlockingReasons is
-// non-empty, by that type's construction, so the head index below is total.
+// recomputed here. IsReady is false exactly when BlockingReasons is non-empty,
+// by that type's construction, so the head index below is total.
 func classifyChildStatus(child model.Issue, readiness IssueReadiness) childStatus {
 	if model.Frozen(child.Retention()) || child.State() != model.StateOpen {
 		return statusStanding{standing: issueStanding(child)}
@@ -177,7 +161,7 @@ func buildEpicContext(ctx context.Context, st storage.Store, requiredFields []st
 	// GetRelationsByIDs omits subjects that don't exist; the epic is the subject
 	// and must resolve, so its absence is a NotFound, not a zero-value render.
 	// [LAW:no-defensive-null-guards] This fails loudly at the store boundary
-	// (matching the prior GetIssueDetail path) rather than skipping silently.
+	// rather than skipping silently.
 	epic, ok := epicRels[epicID]
 	if !ok {
 		return EpicContext{}, storage.NotFoundError{Entity: "issue", ID: epicID}
@@ -342,7 +326,7 @@ func (x *crossEpicEdges) collect(member storage.IssueRelations, internal map[str
 // same-epic counterparts so only boundary-crossing ones remain.
 // [LAW:one-source-of-truth] InPlay, not State() != StateClosed: an archived or
 // deleted counterpart has left the flow exactly as a closed one has, and the
-// name says which question is asked so the old spelling cannot creep back.
+// name says which question is asked.
 func inPlayExcluding(others []model.Issue, excluded map[string]struct{}) []model.Issue {
 	var out []model.Issue
 	for _, other := range others {
@@ -452,8 +436,7 @@ func renderChildLine(child epicChild, focused bool) string {
 
 // laneTag renders a child's lane as an inline tag so the epic plan shows which
 // sub-sequence each child belongs to (shared lane = serialized; distinct lane =
-// parallel). The empty lane — the fully-sequential default — renders as nothing,
-// so a lane-free epic looks exactly as it did before lanes existed.
+// parallel). The empty lane — the fully-sequential default — renders as nothing.
 // [LAW:dataflow-not-control-flow] The tag is a pure function of the lane value;
 // the empty case is data rendering to empty, not a branch the caller manages.
 func laneTag(lane string) string {

@@ -20,7 +20,7 @@ import (
 // lapsed, the receive confirms the remote unmoved and fetches nothing. (b)
 // After the other clone pushes a ticket, a command here still receives it.
 // (c) With the remote unreachable, the question fails loud and the command
-// proceeds on local data exactly as it did before the question existed.
+// proceeds on local data.
 // [LAW:behavior-not-structure] every assertion reads a durable trace or a
 // marker on disk, never how the receive reached its decision.
 func TestAutomaticReceiveAsksBeforeFetching(t *testing.T) {
@@ -109,8 +109,8 @@ func TestAutomaticReceiveAsksBeforeFetching(t *testing.T) {
 	}
 
 	// (c) Unreachable: the question cannot be answered, which is not "unmoved".
-	// The failure is traced under its own decision, the fetch runs and fails
-	// as it always did, and the command itself still serves local data.
+	// The failure is traced under its own decision, the fetch runs and fails,
+	// and the command itself still serves local data.
 	if err := os.Rename(remote, remote+".away"); err != nil {
 		t.Fatalf("rename remote away error = %v", err)
 	}

@@ -11,10 +11,9 @@ import "github.com/promptctl/links-issue-tracker/internal/model"
 // their own; they are kept distinct so that PresenceOf never reports a
 // worktree it enumerated and found as one it could not check.
 //
-// It exists because the leg used to answer with a bool. Presence and absence
-// are not one bit: "I enumerated and it is gone", "I enumerated and it is
-// there", and "I cannot see that checkout at all" are three findings, and a set
-// membership test can only carry two.
+// Presence and absence are not one bit: "I enumerated and it is gone", "I
+// enumerated and it is there", and "I cannot see that checkout at all" are
+// three findings, and a set membership test can only carry two.
 // [LAW:types-are-the-program]
 type Presence int
 
@@ -118,8 +117,8 @@ func NewLocalCheckouts(workspaceID string, live []LiveCheckout) LocalCheckouts {
 // enumeration, and the only place the three findings are told apart. Every
 // consumer — the derivation's void filter, the renderer's label, the takeover
 // gate — reads its verdict rather than re-deriving one from the raw set, which
-// is what kept "the clock expired" and "the holder is gone" from ever again
-// being spelled the same way. [LAW:single-enforcer] [LAW:parse-dont-validate]
+// is what keeps "the clock expired" and "the holder is gone" from being
+// spelled the same way. [LAW:single-enforcer] [LAW:parse-dont-validate]
 //
 // The workspace gate runs first and answers Unprovable for everything it
 // rejects, which is what keeps the zero LocalCheckouts inert: otherwise its

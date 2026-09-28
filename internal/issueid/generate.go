@@ -44,10 +44,10 @@ func ChildNamespace(parentID string) Namespace {
 // derived from content plus the instant of creation is not a claim about what
 // exists elsewhere, so two stores holding identical rows do not converge on one
 // id the way a count over local rows does. It also stops a hard-deleted id
-// from being handed straight to the next create the way the counter did:
-// reaching it again takes a hash coincidence rather than a certainty.
+// from being handed straight to the next create: reaching it again takes a
+// hash coincidence rather than a certainty.
 //
-// The guarantee is the one top-level ids have always run on, no weaker and no
+// The guarantee is the one top-level ids run on, no weaker and no
 // stronger, and it is probabilistic: the hash is truncated, so Mint re-rolls
 // against the local store and a birthday chance remains against ids no local
 // probe can see. Creator is hashed for the same reason, but the Dolt store
@@ -141,11 +141,7 @@ func GenerateHashID(ns Namespace, c Content, length int, nonce int) string {
 
 // hashBytesForLength is how many digest bytes an id of the given length may
 // carry: enough to address every value it can render, and no more. Derived
-// rather than tabulated, because a table is a second copy of this arithmetic
-// and the table had already drifted from it — it handed MaxHashLength five
-// bytes, 2^40 values, against 36^8 renderable ids, so the length Mint escalates
-// to when a space is crowded delivered under 40% of the room CollisionProbability
-// credited it with, and an out-of-range length silently fell to three bytes.
+// rather than tabulated, because a table is a second copy of this arithmetic.
 // [LAW:one-source-of-truth] sha256.Size caps the result because a digest holds
 // 32 bytes and no length can spend more, not as a guard against the caller.
 func hashBytesForLength(length int) int {

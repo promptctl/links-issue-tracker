@@ -4,13 +4,9 @@
 // # Why a second engine exists
 //
 // An interface with one implementation is an assertion; with two it is a
-// proven boundary. While the Dolt-backed engine was the only thing satisfying
-// [storage.Store], "the contract" and "what Dolt happens to do" were the same
-// sentence, and nothing could tell which of its behaviors lit needs from which
-// ones a versioned SQL database merely has. This package is the second
-// reading. It runs the same suite — [internal/storage/conformance] — so every
-// statement that suite makes is now a statement two unrelated implementations
-// both satisfy.
+// proven boundary. This package is the second reading. It runs the same suite
+// — [internal/storage/conformance] — so every statement that suite makes is a
+// statement two unrelated implementations both satisfy.
 //
 // # Independent by construction
 //
@@ -38,11 +34,8 @@
 //
 // Where the suite under-pins a behavior, Dolt's current behavior is the
 // tiebreak rather than what would be tidier: S0's whole gate is that nothing
-// observable changes (design-docs/event-store/design.md §migration). One place
-// where this engine once answered better than Dolt — because Dolt's answer is
-// an artifact of storing what this engine derives — was settled against it on
-// links-store-seam-q35v.5, and this engine now commits the same fault
-// deliberately:
+// observable changes (design-docs/event-store/design.md §migration). This
+// engine commits the same fault deliberately:
 //
 //   - History comes back ordered by (created_at, id) rather than by the order
 //     it was recorded. Event ids are random, so on a coarse clock both engines

@@ -64,10 +64,9 @@ func TestAttributionDecodeCollapsesAHalfPair(t *testing.T) {
 	}
 }
 
-// TestAttributionSurvivesARoundTrip pins that sealing the fields did not change
-// the wire shape: the halves keep their names, so exports written before this
-// change still decode and exports written after are still readable by anything
-// that knows the documented format.
+// TestAttributionSurvivesARoundTrip pins the wire shape: the halves keep their
+// names, so exports are still readable by anything that knows the documented
+// format.
 func TestAttributionSurvivesARoundTrip(t *testing.T) {
 	want := NewAttribution("strm123", "ws-1")
 	encoded, err := json.Marshal(want)

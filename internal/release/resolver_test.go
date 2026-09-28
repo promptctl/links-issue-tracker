@@ -93,10 +93,6 @@ func TestHTTPResolverRejectsUnprefixedTag(t *testing.T) {
 // direction this format actually has. `lit upgrade` runs the INSTALLED binary
 // to discover a newer release, so the consumer is always older than the
 // producer and a field added after this binary shipped must decode, not fail.
-// The resolver used to set DisallowUnknownFields, which asserted the opposite
-// and would have broken the upgrade path for every binary in the field at the
-// first additive release — with no in-band way out, since the remedy for a
-// broken `lit upgrade` is `lit upgrade`.
 //
 // The payload carries a field no version of this struct has ever had, and the
 // assertions read the fields that decide behavior, so the test fails both if
@@ -138,10 +134,8 @@ func TestManifestNeverSerializesFromSource(t *testing.T) {
 
 func TestHTTPResolverRejectsTrailingData(t *testing.T) {
 	m := fixtureManifest()
-	// Two adjacent top-level JSON documents — the prior `dec.More()` check
-	// returned false for this case (More() only sees nested elements), so a
-	// second `Decode` is what catches it. This test fails if the resolver
-	// regresses to the More()-based check.
+	// Two adjacent top-level JSON documents — More() only sees nested
+	// elements, so a second `Decode` is what catches it.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(&m)
 		_, _ = w.Write([]byte(`{"second":"doc"}`))

@@ -41,11 +41,10 @@ var ErrTransientGCContention = errors.New("transient online-gc contention")
 // which admits the holder wait plus one rotation), so at production figures
 // the loop makes one rotation — the one that replaces the connection the GC
 // invalidated, which is the recovery — and gives up after the next attempt.
-// That is deliberate under links-scale-om3r.zhq: the settle window this
-// retry used to absorb was a peer engine's GC on the live store, and no peer
-// runs GC there any more (the mirror pushes from a clone); a mutation that
-// keeps failing after its connection was replaced is blocked by a holder,
-// and the holder is named by the waiter that meets it, not waited out here.
+// That is deliberate: no peer runs GC on the live store (the mirror pushes
+// from a clone); a mutation that keeps failing after its connection was
+// replaced is blocked by a holder, and the holder is named by the waiter that
+// meets it, not waited out here.
 // A genuinely wedged holder still surfaces as WorkspaceWriteBlockedError.
 //
 // The attempt count is a package variable (the delays stay const) so tests
@@ -117,11 +116,11 @@ func (s *Store) withMutation(ctx context.Context, message string, fn func(ctx co
 // composes them rather than duplicating any of them.
 //
 // The whole BeginTx→fn→tx.Commit→commitWorkingSetOnce sequence is inside
-// retryTransientGCContention, not just the final DOLT_COMMIT step
-// (links-sync-pgct.11): tx.Commit() — the plain SQL transaction commit that
-// lands fn's writes into Dolt's working set, distinct from the later DOLT_COMMIT
-// that versions them — touches the same manifest and is just as exposed to
-// transient online-GC contention.
+// retryTransientGCContention, not just the final DOLT_COMMIT step: tx.Commit()
+// — the plain SQL transaction commit that lands fn's writes into Dolt's
+// working set, distinct from the later DOLT_COMMIT that versions them —
+// touches the same manifest and is just as exposed to transient online-GC
+// contention.
 //
 // The unit is two phases with an owned resume point, not one blind re-run:
 // staging (BeginTx→fn→tx.Commit) and versioning (DOLT_COMMIT). While staging
@@ -188,9 +187,8 @@ func rotationReserve() time.Duration {
 }
 
 // commitLockWaiterBudget is how long a commit-lock waiter lets the holder in
-// front of it stand still before giving up: the one home for a figure that
-// was once spelled as "~15 minutes" in three comments and two docs, none of
-// which could notice when it stopped being true. [LAW:one-source-of-truth]
+// front of it stand still before giving up: the one home for that figure.
+// [LAW:one-source-of-truth]
 //
 // It is the ordinary holder's whole allowance and nothing more. The ordinary
 // holder is a mutation, and the longest one is a mutation that suffered a
@@ -226,16 +224,11 @@ func commitLockWaiterBudget() time.Duration {
 // coResidentHolderWait, and all of it accrues while this mutation holds
 // the commit lock.
 //
-// Without that second condition the two budgets multiply: 29 rotations at
-// the then-70s engine-open wait was 33.8 minutes against a commitLockWaiterBudget of
-// 15, so a holder retrying exactly as designed would blow past what every
-// waiter on that lock is sized to tolerate, and they would fail with the
-// workspace-busy sentinel naming a holder that was never wedged — the precise
-// wedge Store.reconnect's comment promises cannot happen. It did not happen
-// before links-sync-dauk only because the engine-open wait was 30s, where
-// 29 rotations came to 14.5 minutes and fit by about half a minute. That fit
-// was the real constraint pinning the old 30s, and it was recorded nowhere;
-// deriving the open budget from the mirror's hold ceiling is what surfaced it.
+// Without that second condition the two budgets multiply, so a holder
+// retrying exactly as designed would blow past what every waiter on that lock
+// is sized to tolerate, and they would fail with the workspace-busy sentinel
+// naming a holder that was never wedged — the precise wedge Store.reconnect's
+// comment promises cannot happen.
 // [LAW:no-ambient-temporal-coupling] the hold's own owner bounds it, rather
 // than the bound emerging from an arithmetic coincidence between two constants
 // that never referenced each other.
@@ -253,9 +246,7 @@ func retryTransientGCContention(ctx context.Context, operation retryOperation, r
 		}
 		// Checked before the sleep, and reserving room for EVERY term that
 		// runs between here and the next check — the inter-attempt sleep, and
-		// both halves of the rotation. A reservation that omits a term it
-		// cannot see is the prose bound this loop replaced, with a smaller
-		// error, so each one is named: the sleep (up to
+		// both halves of the rotation. Each one is named: the sleep (up to
 		// transientRetryMaxDelay), the new engine's open (bounded by
 		// coResidentHolderWait), and the PREVIOUS engine's close
 		// (rotationCloseReserve). That last one is the term to be careful
@@ -336,8 +327,8 @@ func transientRetryDelay(attempt int) time.Duration {
 }
 
 // waitWithContext delegates to filelock.SleepWithContext — one home for the
-// context-aware inter-attempt sleep — under the historical local name the
-// retry machinery passes around as a function value. [LAW:one-source-of-truth]
+// context-aware inter-attempt sleep — under the local name the retry
+// machinery passes around as a function value. [LAW:one-source-of-truth]
 func waitWithContext(ctx context.Context, duration time.Duration) error {
 	return filelock.SleepWithContext(ctx, duration)
 }
@@ -509,8 +500,7 @@ func acquireCommitLockAtPath(ctx context.Context, storageDir, lockPath string) (
 // contention outcome, preserving the errors.Is(err, ErrWorkspaceBusy)
 // discriminator; every other error — cancellation included — passes through
 // untouched. Its own unit because the guidance text must never dress a
-// non-contention failure (the exact misreport the O_EXCL-era loop's dropped
-// ctx guard allowed). [LAW:no-silent-failure]
+// non-contention failure. [LAW:no-silent-failure]
 func wrapCommitLockContention(err error) error {
 	if errors.Is(err, ErrWorkspaceBusy) {
 		return fmt.Errorf("another lit process is writing to this workspace (a concurrent mutation or snapshot still running); retry after it completes: %w", err)

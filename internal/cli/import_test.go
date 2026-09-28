@@ -20,8 +20,6 @@ func writeImportFile(t *testing.T, name, content string) string {
 	return path
 }
 
-// The JSON tree-spec path must keep working unchanged now that `import`
-// dispatches on file extension instead of being JSON-only.
 func TestRunImportTreeJSONPathUnchanged(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
@@ -125,7 +123,7 @@ func mappingRefs(t *testing.T, output string) []string {
 // Both determinism tests print a five-issue mapping and require the exact
 // same ref sequence on every run: the engine's creation order (dependencies
 // before dependents — t1 before t2 even though the file lists t2 first),
-// not the file order and never Go's randomized map order (links-import-g329).
+// not the file order and never Go's randomized map order.
 // With five entries a map-ordered print would match by luck ~1/120 runs, so
 // a regression fails loudly rather than flaking.
 func TestRunImportTreeJSONMappingOrderIsDeterministic(t *testing.T) {
@@ -259,7 +257,7 @@ priority: 1
 }
 
 // An id that selects no existing ticket is an error surfaced to the caller,
-// not a silent create — the ticket's explicit requirement.
+// not a silent create.
 func TestRunImportYAMLUnknownIDIsError(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
@@ -292,8 +290,7 @@ func TestRunImportRequiresPath(t *testing.T) {
 
 // --by has no consumer on the JSON tree-spec dispatch branch (it always
 // attributes creates to "links"); a set-but-unused --by there must be
-// rejected, not silently discarded, so a caller relying on it gets the same
-// loud failure this command gave before --by existed on `import` at all.
+// rejected, not silently discarded.
 func TestRunImportRejectsByFlagOnJSONPath(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)

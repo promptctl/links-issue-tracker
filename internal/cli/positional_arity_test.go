@@ -49,9 +49,7 @@ type invocablePath struct {
 	bareForm bool
 	// children are the subcommand names the registry lists under this path,
 	// carried for a bare form so the family assertion can require the refusal to
-	// name one of them. Asserting on the command's OWN name instead passed for
-	// `sync reconcile` only because its usage line happens to contain the word
-	// "reconcile" — a coincidence, not a property. [LAW:behavior-not-structure]
+	// name one of them. [LAW:behavior-not-structure]
 	children []string
 }
 
@@ -59,12 +57,7 @@ type invocablePath struct {
 //
 // A family contributes the full path of each nested subcommand AND its own bare
 // form, because the bare form is invocable too and is where some real leaves
-// live. Emitting only the children is what let this test pass while blind:
-// `rank` is registered with a single `set` subcommand, so the walk produced
-// `rank set` and nothing else — and `rank set` is exempt as unbounded, so
-// rankLeaf, which declares 1 positional, was exercised by NOTHING. The test that
-// exists to prove every leaf refuses a surplus positional did not touch it, and
-// changing its declaration to allPositionals would have kept the suite green.
+// live.
 // [LAW:one-source-of-truth] the registry is the only enumeration; a walk that
 // skips a dispatchable path is a second, shorter map of the command surface.
 func leafPaths(t *testing.T) []invocablePath {
@@ -102,11 +95,8 @@ func leafPaths(t *testing.T) []invocablePath {
 }
 
 // Every leaf refuses a positional it did not declare, rather than silently
-// ignoring it. This is the property links-cli-errors-rl4s was filed for: the
-// count check used to be hand-written inside each leaf's work, about thirty
-// times, so the leaves that omitted it (`lit new ... stray`, `lit export stray`)
-// exited 0 having dropped part of the command line. parseLeaf now enforces it
-// once for every leaf. [LAW:single-enforcer] [LAW:no-silent-failure]
+// ignoring it. parseLeaf enforces it once for every leaf. [LAW:single-enforcer]
+// [LAW:no-silent-failure]
 //
 // The refusal precedes acquisition, so this runs with no workspace at all: a
 // command that reached a store before noticing the stray token would fail here
@@ -139,9 +129,7 @@ func TestEveryLeafRefusesAnUndeclaredPositional(t *testing.T) {
 			msg := err.Error()
 			if namesToken {
 				// A stray token after a leaf is a surplus POSITIONAL, so the
-				// refusal must hand it back — telling a caller the shape of the
-				// command and leaving them to spot the difference is the defect
-				// this ticket exists to remove.
+				// refusal must hand it back.
 				if !strings.Contains(msg, "zzz-stray") {
 					t.Errorf("lit %s error = %q, want it to name the offending token(s)", name, msg)
 				}
@@ -151,9 +139,7 @@ func TestEveryLeafRefusesAnUndeclaredPositional(t *testing.T) {
 			// useful answer names the subcommands that do exist rather than
 			// echoing what was typed. Require one of the registry's OWN child
 			// names: asserting the command's own name instead is satisfied by
-			// any usage line built from `fs.cmd.Use`, which is how a leaf
-			// misclassified as a family passed this branch while asserting
-			// nothing about its guidance.
+			// any usage line built from `fs.cmd.Use`.
 			named := false
 			for _, child := range cp.children {
 				if strings.Contains(msg, child) {
@@ -222,12 +208,8 @@ func TestParseLeafRefusesSurplusPositionals(t *testing.T) {
 	}
 }
 
-// A boolean flag no longer swallows the positional that follows it. splitArgs
-// used to infer a flag's arity from whether the NEXT token had a leading dash,
-// which is a fact about the argument rather than about the flag; it now asks the
-// flag set, which is the only thing that knows. The regression this guards is
-// user-visible: `lit prefix set --apply demo` refused itself as malformed
-// because `demo` had been eaten as --apply's value.
+// A boolean flag does not swallow the positional that follows it: splitArgs
+// asks the flag set, which is the only thing that knows.
 func TestBooleanFlagDoesNotSwallowFollowingPositional(t *testing.T) {
 	t.Parallel()
 	fs := newCobraFlagSet("probe")
@@ -243,7 +225,7 @@ func TestBooleanFlagDoesNotSwallowFollowingPositional(t *testing.T) {
 	if !*apply {
 		t.Error("--apply did not register as set")
 	}
-	// The other direction is unchanged: a flag that really does take a value
+	// The other direction: a flag that really does take a value
 	// still consumes the token after it.
 	fs2 := newCobraFlagSet("probe")
 	value := fs2.String("value", "", "value")
@@ -260,10 +242,7 @@ func TestBooleanFlagDoesNotSwallowFollowingPositional(t *testing.T) {
 }
 
 // adaptLeaf must carry a leaf's WHOLE declaration across to a leaf over another
-// resource type. The three pipeline adapters used to rebuild the struct inline,
-// naming fs and positionals, and every one of them silently dropped `usage` the
-// day that field appeared: `lit upgrade v0.9.0` answered with the generic
-// allowance while `usage: lit upgrade [--to <version>]` sat in its declaration.
+// resource type.
 //
 // The field-count tripwire is the half that survives the next change. Checking
 // the three fields by name only proves today's fields are copied; a field added
@@ -292,8 +271,8 @@ func TestAdaptLeafCarriesTheWholeDeclaration(t *testing.T) {
 	}
 }
 
-// The end of that story from outside: the adapted commands print the sentence
-// their leaf declares, not the generic allowance.
+// The adapted commands print the sentence their leaf declares, not the generic
+// allowance.
 func TestAdaptedCommandsKeepTheirUsageSentence(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
@@ -310,7 +289,7 @@ func TestAdaptedCommandsKeepTheirUsageSentence(t *testing.T) {
 // flagTakesValue answer `false` for a cluster like `-abc` without decomposing
 // it. The condition is checked rather than assumed: the day someone adds
 // `-l <label>`, `lit x -l value` would drop `value` into the positionals and the
-// new arity refusal would reject a correct command line. This fails then, at the
+// arity refusal would reject a correct command line. This fails then, at the
 // flag declaration, instead of at a user's terminal.
 // [LAW:no-silent-failure] the assumption is a test, not a comment.
 // TestNoValueTakingShorthandExists guards flagTakesValue's cluster assumption:
@@ -318,12 +297,8 @@ func TestAdaptedCommandsKeepTheirUsageSentence(t *testing.T) {
 // ("-abc") as consuming nothing, which is only safe while there is no shorthand
 // to cluster.
 //
-// The first version of this test built a FRESH cobraFlagSet per path and walked
-// that, so it saw only cobra's auto-added help flag — which its own filter then
-// skipped. It inspected zero real flags across all 83 paths and passed in 0.00s
-// no matter what any leaf declared. It reads the shipped flag set now, through
-// the same --help block the caller is shown, and refuses to pass having looked
-// at nothing. [LAW:verifiable-goals]
+// It reads the shipped flag set, through the same --help block the caller is
+// shown, and refuses to pass having looked at nothing. [LAW:verifiable-goals]
 func TestNoValueTakingShorthandExists(t *testing.T) {
 	t.Parallel()
 	// Cobra renders a shorthand as "  -f, --field string".
@@ -384,13 +359,9 @@ func TestTerminatorMakesEverythingAfterItPositional(t *testing.T) {
 	}
 }
 
-// TestSplitArgsLosesNoToken pins the invariant two rounds of terminator fixes
-// broke in opposite directions: every argv token must land in exactly one of the
-// two streams. Withholding the terminator dropped the tokens behind it as well,
-// so `lit init --prefix --prefix -- stray` created a workspace having silently
-// lost `stray` — the very defect this ticket exists to close, reintroduced by
-// its own guard. Conservation is cheap to state and impossible to satisfy
-// accidentally. [LAW:no-silent-failure]
+// TestSplitArgsLosesNoToken pins the invariant: every argv token must land in
+// exactly one of the two streams. Conservation is cheap to state and impossible
+// to satisfy accidentally. [LAW:no-silent-failure]
 func TestSplitArgsLosesNoToken(t *testing.T) {
 	t.Parallel()
 	shapes := [][]string{
@@ -436,12 +407,9 @@ func TestSplitArgsLosesNoToken(t *testing.T) {
 	}
 }
 
-// TestSplitArgsAgreesWithPflagAboutValues pins the rule the two broken versions
-// each guessed at: a value-taking flag consumes the NEXT token, whatever it
-// looks like, because that is what pflag does with the same argv. When this
-// loop disagreed with pflag about which token was a value, every consequence was
-// a misfiled token — a legal positional refused, or a terminator swallowed.
-// [LAW:one-source-of-truth]
+// TestSplitArgsAgreesWithPflagAboutValues pins the rule: a value-taking flag
+// consumes the NEXT token, whatever it looks like, because that is what pflag
+// does with the same argv. [LAW:one-source-of-truth]
 func TestSplitArgsAgreesWithPflagAboutValues(t *testing.T) {
 	t.Parallel()
 	fs := newCobraFlagSet("probe")
@@ -468,9 +436,7 @@ func TestSplitArgsAgreesWithPflagAboutValues(t *testing.T) {
 
 // TestSplitArgsRefusesTheTerminatorAsAValue is the one place this split declines
 // to do what pflag would. pflag hands `--` to a waiting flag as its literal
-// value; mirroring that let `lit label add --by -- <id> <label>` APPLY the label
-// at exit 0 with the actor recorded as "--", on a command line the previous
-// binary refused. Routing is still pflag's — the refusal replaces a write, not a
+// value. Routing is still pflag's — the refusal replaces a write, not a
 // different reading of which token is a value. [LAW:no-silent-failure]
 func TestSplitArgsRefusesTheTerminatorAsAValue(t *testing.T) {
 	t.Parallel()
@@ -511,18 +477,15 @@ func TestSplitArgsRefusesTheTerminatorAsAValue(t *testing.T) {
 }
 
 // TestTerminatorThroughRealCommandPaths drives `--` through the dispatcher
-// rather than through splitArgs alone. Both terminator defects on this branch
-// lived in argv that no test in this file built: every other case here appends
-// bare strays, and `--` never appeared on a real command path.
+// rather than through splitArgs alone.
 func TestTerminatorThroughRealCommandPaths(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		args []string
 		// names is the token the refusal must quote back. It is per-case
-		// because the two shapes fail for different reasons, and a blanket
-		// "mentions some zzz-" check passed both while only one of them was
-		// really about a surplus positional. [LAW:behavior-not-structure]
+		// because the two shapes fail for different reasons.
+		// [LAW:behavior-not-structure]
 		names string
 	}{
 		{"even run of value flags before the terminator", []string{"init", "--prefix", "--prefix", "--", "zzz-stray"}, "zzz-stray"},

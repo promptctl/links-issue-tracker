@@ -81,11 +81,9 @@ type ClaimsConfig struct {
 // bare `72` fails as "missing unit in duration" instead of arriving as a plausible
 // number that no later check can tell apart from a deliberate one.
 //
-// [LAW:parse-dont-validate] The old check validated that the number was positive
-// and never established that it was a duration at all, which is exactly the
-// question that mattered: 72ns is positive. One crossing, and past it the value
-// is a duration because parsing is what produced it. [LAW:no-silent-failure] Both
-// failure arms — unparseable, and parseable but non-positive — are loud.
+// [LAW:parse-dont-validate] One crossing, and past it the value is a duration
+// because parsing is what produced it. [LAW:no-silent-failure] Both failure
+// arms — unparseable, and parseable but non-positive — are loud.
 func parseFreshnessWindow(raw string) (time.Duration, error) {
 	window, err := time.ParseDuration(raw)
 	if err != nil {
@@ -107,9 +105,9 @@ type SyncConfig struct {
 	// goal; the off switch is the documented exception. [LAW:no-mode-explosion]
 	// One boolean, one default, not a second cadence enum.
 	Receive bool `mapstructure:"receive"`
-	// OwnerNotifyCmd is the owner's out-of-band channel for degraded sync state
-	// (links-sync-pgct.4): a shell command lit runs when it detects a real
-	// divergence or a failing push — e.g. a curl to an ntfy topic — with the
+	// OwnerNotifyCmd is the owner's out-of-band channel for degraded sync state:
+	// a shell command lit runs when it detects a real divergence or a failing
+	// push — e.g. a curl to an ntfy topic — with the
 	// event's facts in LIT_NOTIFY_* environment variables. Empty (the default)
 	// means no channel is configured and nothing runs. One string, not a mode:
 	// what to send and where is the command's business, never lit's.
@@ -126,17 +124,16 @@ type SyncCadence string
 const (
 	// SyncCadenceOnPush mirrors only when the managed pre-push git hook runs
 	// (one push per `git push`). Opt-in: a mutation on this cadence is only
-	// durable on the remote once the user remembers to `git push` — exactly the
-	// manual act whose absence stranded 25 changes in the links-sync-pgct field
-	// incident. Kept for users who deliberately want to batch their network
-	// traffic, never as the default a workspace falls into silently.
+	// durable on the remote once the user remembers to `git push`. Kept for
+	// users who deliberately want to batch their network traffic, never as the
+	// default a workspace falls into silently.
 	SyncCadenceOnPush SyncCadence = "on-push"
 	// SyncCadenceOnChange mirrors after every mutating lit command, shrinking
 	// the window where local ticket state is invisible to other clones to
 	// roughly zero. The default: a connected workspace's changes reach the
 	// remote without a separate push step, so "durable locally" and "durable on
 	// the remote" stop being two facts a human has to keep in sync by hand.
-	// [LAW:one-source-of-truth] (links-sync-pgct.3)
+	// [LAW:one-source-of-truth]
 	SyncCadenceOnChange SyncCadence = "on-change"
 )
 

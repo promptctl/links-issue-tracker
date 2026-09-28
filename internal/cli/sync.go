@@ -329,8 +329,7 @@ func syncCompactLeaf() syncLeaf {
 			// depth it attempted, and it also reports a pass that ran and then hit a
 			// failure — which this call site cannot see and would record as a bare
 			// error. Handing the recorder the local mode would leave two places
-			// spelling one fact, and that is the drift this file has already had
-			// twice. [LAW:one-source-of-truth]
+			// spelling one fact. [LAW:one-source-of-truth]
 			recordCompactFailure(ws, syncCompactTraceCommand, outcome, err)
 			return err
 		}
@@ -416,8 +415,8 @@ func syncPushLeaf() syncLeaf {
 type syncPushOutcome struct {
 	// skip is the typed no-op discriminator: syncTargetReady means the push ran
 	// (or failed running — see pushErr); a non-empty skip names why it did not.
-	// [LAW:types-are-the-program] "skipped" and its reason were one fact spelled
-	// as two fields; the skip carries both. [LAW:one-source-of-truth]
+	// [LAW:types-are-the-program] "skipped" and its reason are one fact; the
+	// skip carries both. [LAW:one-source-of-truth]
 	skip    syncTargetSkip
 	remote  string
 	branch  string
@@ -446,10 +445,8 @@ type syncPushStep func(ctx context.Context, remote, branch string, setUpstream, 
 // maintenance rode along, and what went wrong.
 //
 // It is a function rather than a block inside performSyncPush because that is
-// what makes the question "does the trace carry this?" answerable. Inline, the
-// only way to ask was to stand up a workspace, a ref-carrying remote and a live
-// engine session and drive a real push — which is why the maintenance key
-// arrived untested. [LAW:decomposition] the job had no name, so it had no test.
+// what makes the question "does the trace carry this?" answerable.
+// [LAW:decomposition]
 func syncPushTraceMetadata(remoteName, syncBranch string, result storage.SyncPushResult, pushErr error) map[string]string {
 	metadata := map[string]string{
 		"remote":      remoteName,
@@ -499,8 +496,8 @@ func syncPushTraceMetadata(remoteName, syncBranch string, result storage.SyncPus
 // journal and commit locks around the clone it pushes from (no commit can
 // land between the clone and the clear). Clearing HERE, after either caller
 // has released those holds, would erase a claim whose commit this session
-// cannot see — links-sync-pgct.12's stranded tail — which is why the clear is
-// the caller's and not this function's. [LAW:no-ambient-temporal-coupling]
+// cannot see, which is why the clear is the caller's and not this function's.
+// [LAW:no-ambient-temporal-coupling]
 // performSyncPush runs under two lifetimes, and the signature names both: ctx
 // bounds the push work (the mirror caps it with its push deadline), while
 // completionCtx bounds the completion effects — the outcome marker and the

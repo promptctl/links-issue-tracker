@@ -4,24 +4,11 @@ package cli
 // pinned as one table, because internal/templates/defaults/quickstart-work.md
 // teaches that verdict to every agent `lit init` ever runs for.
 //
-// The incident this guards against (links-claims-xwqu): links-claims-1b0p
-// retired the rule "a lane claimed elsewhere is never a bare `lit next`
-// target" for the stale half, and the shipped quickstart kept teaching it for
-// months. That is the same shape as the `lit ready` incident the dispatch gate
-// in template_dispatch_gate_test.go was built for — text versioned apart from
-// the behavior it describes — but one level deeper: the vocabulary stayed
-// valid, so a "does this command still dispatch?" predicate passes it. The lie
-// was in the semantics.
-//
 // SCOPE, stated honestly. This gate pins the behavior; it does not parse the
-// prose, and no test here can. The correct text must say "never a bare `lit
-// next` target" of a FRESH foreign hold, so banning that phrase would reject
-// the fix; and the retired sentence names staleness too, so requiring the word
-// passes the very text that caused the incident. A keyword gate over this
-// paragraph fails in both directions, which is why there isn't one. What this
-// table buys instead: any change to the routing verdicts turns it red, and the
-// failure message names the file and the claim that must move in the same
-// commit. Non-silent is the goal — mechanically-derived prose is not on offer.
+// prose, and no test here can. What this table buys instead: any change to the
+// routing verdicts turns it red, and the failure message names the file and
+// the claim that must move in the same commit. Non-silent is the goal —
+// mechanically-derived prose is not on offer.
 // [LAW:behavior-not-structure] [LAW:no-silent-failure]
 
 import (
@@ -77,10 +64,9 @@ type laneRoutingCase struct {
 }
 
 // laneRoutingTable covers every relation relationOf can produce. There is no
-// row for a lane whose claim has expired, and that is the point links-claims-xwqu
-// and links-claims-y6yz between them settled: an expired claim derives
-// Unclaimed, so "nobody holds it" IS that row, and a table that still carried a
-// separate one would be documenting a grade of hold the code cannot represent.
+// row for a lane whose claim has expired: an expired claim derives Unclaimed,
+// so "nobody holds it" IS that row, and a table that carried a separate one
+// would be documenting a grade of hold the code cannot represent.
 var laneRoutingTable = []laneRoutingCase{
 	{
 		name:     "nobody holds it — never started, finished, or its claim expired",

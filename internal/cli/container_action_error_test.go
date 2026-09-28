@@ -78,9 +78,7 @@ func renderCommandError(t *testing.T, err error) string {
 // `lit done` on an epic whose children are all closed asked for a state the
 // workspace is already in. The condition is terminal — an epic's state derives
 // from its children, so retrying cannot change it and `lit doctor` has nothing
-// to diagnose — and it used to exit 1 carrying the default's "Retry the
-// command", which is an instruction to loop aimed squarely at an unattended
-// agent (links-cli-errors-1u9g).
+// to diagnose.
 func TestDoneOnAClosedEpicIsTerminalAndSaysNoActionIsNeeded(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epic := h.epicFixture(2, 2)
@@ -103,12 +101,9 @@ func TestDoneOnAClosedEpicIsTerminalAndSaysNoActionIsNeeded(t *testing.T) {
 }
 
 // The other half of the same epic: `start` asks for a state the children do NOT
-// establish, so it is a refusal rather than a satisfied request. Both used to
-// print one byte-identical sentence that never mentioned which action was
-// asked for — one message serving two opposite facts, the same collapse
-// links-cli-q7hg removed from `lit next`'s empty answers. Nothing here asserts
-// the prose beyond that: what is pinned is that the two answers are TELLABLE
-// APART, in all three of message, reason, and exit code.
+// establish, so it is a refusal rather than a satisfied request. What is pinned
+// is that the two answers are TELLABLE APART, in all three of message, reason,
+// and exit code.
 func TestStartAndDoneOnOneClosedEpicDoNotShareOneAnswer(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epic := h.epicFixture(2, 2)
@@ -127,8 +122,7 @@ func TestStartAndDoneOnOneClosedEpicDoNotShareOneAnswer(t *testing.T) {
 	if ExitCode(doneErr) == ExitCode(startErr) {
 		t.Errorf("done and start share exit code %d", ExitCode(doneErr))
 	}
-	// The refusal names the action it refused, which the old count-only wording
-	// ("0 of its 1 children are not done") never did.
+	// The refusal names the action it refused.
 	if !strings.Contains(startErr.Error(), "`start`") {
 		t.Errorf("start refusal does not name the action it refused: %s", startErr.Error())
 	}
@@ -162,20 +156,15 @@ var renderedPhrases = map[string]struct{ want, forbidden []string }{
 //
 // The wants are written out, and not derived from Satisfied(), because
 // Satisfied() is the thing under test: a table that computed its wants would
-// agree with a wrong predicate exactly as readily as a right one. The sweep
-// this replaces did the weaker version of that — it asserted only "not retry
-// advice" and "not ExitGeneric", both of which hold of EITHER branch — so it
-// exercised the broken cell on every run and could not see which branch had
-// answered. [LAW:verifiable-goals] a check that passes under the defect is not
-// a check.
+// agree with a wrong predicate exactly as readily as a right one.
+// [LAW:verifiable-goals] a check that passes under the defect is not a check.
 //
 // Exactly two of the sixteen cells are satisfied requests, and they are the two
 // actions targeting Closed on the one shape that has nothing left to do. The
 // three near-misses are the defect's shape: a part-done epic already derives
 // in_progress, so `start` matches its own target with every child still to do,
 // and a childless or not-yet-started epic derives open, so `open` matches there
-// too. All three once answered "nothing to do" at ExitNoWork — the code that
-// exists so a caller can stop WITHOUT reading the message (links-cli-errors-1u9g).
+// too.
 func TestEveryContainerRejectionCellHasItsOwnReasonAndExit(t *testing.T) {
 	cells := []struct {
 		shape            string
@@ -306,12 +295,10 @@ func TestContainerActionErrorSatisfiedRequiresNoWorkLeft(t *testing.T) {
 	}
 }
 
-// TestContainerRefusalNamesTheVerbTheAgentTyped is the whole of
-// links-cli-errors-nvmd. A refusal exists to tell an agent what it just asked
-// for, and an agent reads a backticked word as a command, so that word has to
-// be the one it typed. `lit open` dispatches model.Reopen, whose Name is the
-// persisted event encoding "reopen"; the message printed that encoding, and so
-// answered `lit open` by naming a command lit does not have.
+// A refusal exists to tell an agent what it just asked for, and an agent reads
+// a backticked word as a command, so that word has to be the one it typed.
+// `lit open` dispatches model.Reopen, whose Name is the persisted event
+// encoding "reopen".
 //
 // Every status spec is driven rather than `open` alone, because a table listing
 // only the known-broken verb passes again the first time a second command's
@@ -337,8 +324,8 @@ func TestContainerRefusalNamesTheVerbTheAgentTyped(t *testing.T) {
 	}
 }
 
-// TestOpenRefusalNeverNamesThePersistedEncoding is the negative half, and it is
-// the half that fails today's defect. The positive assertion above passes for
+// TestOpenRefusalNeverNamesThePersistedEncoding is the negative half. The
+// positive assertion above passes for
 // three of the four verbs whatever the code does, because their two names
 // coincide; only `open` can tell a right answer from a wrong one, and only by
 // looking for the word that must NOT be there.
@@ -358,14 +345,8 @@ func TestOpenRefusalNeverNamesThePersistedEncoding(t *testing.T) {
 // TestEveryVerbAMessageCanPrintIsACommandThatExists states the claim the
 // refusals actually rest on, and reads it from the command registry itself.
 //
-// An earlier version of this test compared the verb map against
-// `transitionSpec.name`. That was the wrong subject: `transitionSpec.name` only
-// feeds usage strings, and the word a caller types was a separate literal in
-// `commandSpecs`, with nothing binding the two -- so the test would have stayed
-// green while every refusal quoted a verb no command answered to, which is the
-// exact defect it exists to prevent. The registry row now takes its name from
-// the spec, so there is one spelling of each word, and this reads the registry
-// rather than either copy. [LAW:one-source-of-truth]
+// The registry row takes its name from the spec, so there is one spelling of
+// each word, and this reads the registry. [LAW:one-source-of-truth]
 func TestEveryVerbAMessageCanPrintIsACommandThatExists(t *testing.T) {
 	registered := map[string]bool{}
 	for _, spec := range commandSpecs(context.Background(), io.Discard, io.Discard) {
@@ -396,9 +377,7 @@ func TestEveryVerbAMessageCanPrintIsACommandThatExists(t *testing.T) {
 // target, and a container whose children are all done derives Closed, never
 // Open, so `lit open` cannot arrive here. That unreachability is exactly why the
 // sentence is pinned as a value rather than driven through a command — nothing
-// in the reachable set would notice the persisted encoding coming back, so this
-// branch would silently keep the defect the other branch just had, waiting for
-// the next action whose two names diverge.
+// in the reachable set would notice the persisted encoding coming back.
 func TestSatisfiedSentenceNamesTheTypedVerbToo(t *testing.T) {
 	err := model.ContainerActionError{
 		ID: "test-epics-1", Action: model.ActionReopen,
@@ -420,8 +399,7 @@ func TestSatisfiedSentenceNamesTheTypedVerbToo(t *testing.T) {
 
 // TestBulkUsageNamesTheTypedVerb pins the one site of this class that the
 // mechanical gate in internal/model/lifecycle cannot see. That gate scans fmt
-// calls; this site builds its string by concatenation, which is exactly why
-// every sweep aimed at message formatting missed it and a reviewer found it.
+// calls; this site builds its string by concatenation.
 //
 // No bulk row routes a Reopen today — `lit bulk` serves the retention verbs,
 // whose two names agree — so nothing reachable through the CLI can tell a right

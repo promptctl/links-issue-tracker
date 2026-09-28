@@ -36,10 +36,8 @@ const manifestPath = "internal/docclaims/manifest_gen.go"
 // It is not what guards CI. TestDocumentedClaimsStillShip asks the same question on
 // every run and is the single enforcer of it; a nightly job running this flag
 // would be a second answer to one question, which is the shape of drift this
-// package exists to remove. What it adds is a check you can run deliberately —
-// the omission it covers is real, since a manifest generated over a dirty
-// working tree carrying a gitignored vendored project was committed once and
-// broke every clean checkout. [LAW:single-enforcer]
+// package exists to remove. What it adds is a check you can run deliberately.
+// [LAW:single-enforcer]
 var check = flag.Bool("check", false, "verify the committed manifest matches a regeneration; write nothing")
 
 func main() {
@@ -82,19 +80,16 @@ func run() error {
 // that a documented message stopped shipping.
 //
 // The write is the one action that can turn this gate green over prose that is
-// now false, and it was the only report in the package making no comparison at
-// all: a contributor sent here by a legitimate failure, who also had an
-// unrelated message that had genuinely stopped shipping, took both away in
-// silence and left every check green. It refuses instead, which is also the
-// order CONTRIBUTING prescribes — correct the chapter first, then regenerate.
+// now false. It refuses, which is also the order CONTRIBUTING prescribes —
+// correct the chapter first, then regenerate.
 // [LAW:no-silent-failure]
 //
 // The refusal has no override, and that is the design rather than an omission.
-// A review asked for one on the grounds that a documented false-positive class
-// reaches it: `SHOW CREATE TABLE` is anchored to a SQL COMMENT in
-// 00001_baseline.sql, so reflowing that comment fails the gate naming three
-// chapters the edit has nothing to do with. The noise is real; the deadlock is
-// not. Master is green or the freshness test is red, so an entry reaching this
+// A documented false-positive class reaches it: `SHOW CREATE TABLE` is anchored
+// to a SQL COMMENT in 00001_baseline.sql, so reflowing that comment fails the
+// gate naming three chapters the edit has nothing to do with. The noise is
+// real; the deadlock is not.
+// Master is green or the freshness test is red, so an entry reaching this
 // refusal was stopped by something in the contributor's own working tree, and
 // both remedies it names are in their hands — restore the message, or correct
 // the three sentences, which by then genuinely are describing text no binary
@@ -116,9 +111,7 @@ func write(manifestPath string, matched []docclaims.Claim, cmp docclaims.Compari
 	// the chapter still makes — so it is reported rather than refused. Reported
 	// it must be: writing moves the entry's Src, no entry leaves the manifest,
 	// and "an entry leaving the manifest is the review signal" is what
-	// CONTRIBUTING tells a reviewer to watch. Before this, the prescribed
-	// command settled in silence the one case the package's own report calls
-	// "only a reader can settle", and both checks went green over it.
+	// CONTRIBUTING tells a reviewer to watch.
 	//
 	// The sentence is the writer's own rather than Drift.Explain(), which asks
 	// a reader to confirm a rewording and then run this tool — the wrong tense
@@ -198,9 +191,7 @@ func verify(cmp docclaims.Comparison) error {
 	}
 	// Each of the first two lines is a remedy for a subset, not a census, and
 	// each says how large that subset is out of what was reported. The
-	// alternative reads as a total: with one entry re-anchored beside one the
-	// prose stopped quoting, a bare "1" under two printed lines told a
-	// contributor to confirm both were rewordings, and one of them was not.
+	// alternative reads as a total.
 	switch stopped := len(cmp.Stopped()); {
 	case stopped > 0:
 		return fmt.Errorf("%d of %d reported entry(ies) quote a message that no longer ships: fix the code or the chapter. Regenerating would drop them and leave the specification false",
@@ -209,11 +200,10 @@ func verify(cmp docclaims.Comparison) error {
 		return fmt.Errorf("%d of %d reported entry(ies) are no longer carried by the source they were recorded against: confirm each of those is the same message reworded before regenerating",
 			moved, len(cmp.Drifted))
 	}
-	// The exit line counts what actually differs. Reporting the two totals
-	// instead stated them as evidence of a difference even when they were
-	// equal — one chapter dropping a quotation while another adds one is an
-	// ordinary prose edit, and "committed 1102, the tree yields 1102" is not
-	// something a reader can act on.
+	// The exit line counts what actually differs. One chapter dropping a
+	// quotation while another adds one is an ordinary prose edit, and
+	// "committed 1102, the tree yields 1102" is not something a reader can act
+	// on.
 	return fmt.Errorf("manifest is stale: %d recorded quotation(s) the tree no longer yields, %d the tree yields that it does not record; run `go run ./tools/docclaims-sync`",
 		len(cmp.Drifted), len(cmp.Added))
 }

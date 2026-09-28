@@ -57,10 +57,8 @@ jobs:
       # No -timeout override: the whole job — cold-cache `go mod download all`
       # included — measured 100s and 129s in the two most recent weekly runs
       # (2026-08-24, 2026-08-17), so go test's default 10m alarm already
-      # carries better than 4x headroom. The 30m override this step used to carry
-      # was the alarm widened instead of the cost questioned
-      # (links-testperf-xxsx.6); if this ever trips 10m, that is real news
-      # about the graph or the network, not a reason to put 30m back.
+      # carries better than 4x headroom. If this ever trips 10m, that is real
+      # news about the graph or the network.
       - name: Whole-graph acceptance tests
         env:
           LIT_LICENSE_GRAPH_AUDIT: "1"

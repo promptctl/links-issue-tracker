@@ -13,10 +13,9 @@ import (
 func ptr[T any](v T) *T { return &v }
 
 // transitionActionCount counts lifecycle-transition events (as opposed to plain
-// field-change events) among the supplied events. The container-update bug
-// (links-update-container-ov6) was a phantom transition firing on a field-only
-// update; this count is how the matrix makes "no transition happened" an
-// explicit, machine-checkable assertion instead of an implicit gap.
+// field-change events) among the supplied events. This count is how the matrix
+// makes "no transition happened" an explicit, machine-checkable assertion
+// instead of an implicit gap.
 func transitionActionCount(events []model.IssueEvent) int {
 	// [LAW:one-source-of-truth] The transition-action vocabulary lives in the
 	// model; sourcing it from the exported constants keeps this counter from
@@ -38,9 +37,7 @@ func transitionActionCount(events []model.IssueEvent) int {
 
 // TestApplyIssueTypeFlagMatrix asserts a documented outcome for every
 // model.IssueTypes × meaningful-flag-combination cell of the unified update
-// path. The matrix exists to close the implicit gap that let
-// links-update-container-ov6 ship: no test covered (epic, field-only), so a
-// phantom status transition on containers went unnoticed.
+// path.
 //
 // [LAW:single-enforcer] The cells drive Store.Apply — the one execution path
 // for `lit update` — rather than reimplementing the transition decision, so
@@ -179,10 +176,8 @@ func TestApplyIssueTypeFlagMatrix(t *testing.T) {
 					t.Fatalf("Apply(%s, %s) state = %q, want %q", issueType, combo.name, updated.State(), target)
 				}
 
-				// The ov6 guard, made explicit: a field-only cell records zero
-				// transition events on every type — most importantly on a
-				// container, where the phantom transition once fired. A
-				// same-state target with an unchanged assignee is the leaf's
+				// A field-only cell records zero transition events on every
+				// type — most importantly on a container. A same-state target with an unchanged assignee is the leaf's
 				// documented no-op and likewise records nothing; only a
 				// transition that mutates the row earns an event.
 				wantTransitions := 0

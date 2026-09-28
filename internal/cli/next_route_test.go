@@ -13,10 +13,9 @@ import (
 
 // These tests exercise routeNext directly against hand-built claims.Standings
 // rather than through claims.Derive: the predicate that turns evidence into a
-// Standing is links-claims-1ihf.3/.4's contract, already proven by
-// internal/claims's own tests. What links-claims-1ihf.5 adds is the
-// selection precedence GIVEN a Standing per lane, so these tests hold the
-// standings fixed and vary only the routing question.
+// Standing is already proven by internal/claims's own tests. What routeNext
+// adds is the selection precedence GIVEN a Standing per lane, so these tests
+// hold the standings fixed and vary only the routing question.
 // [LAW:decomposition] one seam, one test surface.
 //
 // The orphan fact is held the same way, for the same reason: `orphan` below
@@ -43,11 +42,7 @@ func heldBy(who model.Attribution) claims.Standing {
 
 // expired is the standing of a lane whose claim has aged out: the same
 // Unclaimed every never-started lane derives, because an expired claim is not
-// a claim and the type has nowhere to record that one existed
-// (links-claims-y6yz). Tests that once built a Stale standing for a named
-// holder use this, and the holder they named is gone from the fixture on
-// purpose — routing cannot read it, so a test that still depended on it would
-// be asserting something the code cannot see.
+// a claim and the type has nowhere to record that one existed.
 var expired claims.Standing = claims.Unclaimed{}
 
 func laneOf(t *testing.T, details map[string]storage.IssueRelations, row annotation.AnnotatedIssue) model.LaneID {
@@ -98,9 +93,9 @@ func (h readyTestHarness) gather() ([]annotation.AnnotatedIssue, map[string]stor
 }
 
 // A checkout's own held lane wins over a higher-ranked, entirely unclaimed
-// epic — routing step 1 outranks plain backlog order. This is the ticket's
-// namesake bug: without claims, `next` would return B.1 (top composite
-// rank); with the checkout's own claim on epic A, it must not.
+// epic — routing step 1 outranks plain backlog order. Without claims, `next`
+// would return B.1 (top composite rank); with the checkout's own claim on
+// epic A, it must not.
 func TestRouteNextServesOwnClaimOverHigherRankedUnclaimedLane(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
@@ -162,11 +157,9 @@ func TestRouteNextRoutesAroundLaneHeldByAnother(t *testing.T) {
 // any other epic, however it ranks — "ALL LANES IN AN EPIC SHOULD BE SURFACED
 // BEFORE ANY LANE FROM THE NEXT EPIC."
 //
-// "No work left" is now literal: A.1 is DONE, so its lane holds nothing to
-// serve or resume. It used to be merely in_progress, which reached step 2 only
-// because an in_progress row was servable to nobody — the gate this ticket
-// removes. A lane with work still in flight is handed that work back
-// (TestRouteNextResumesOwnInFlightTicket), so epic continuation now has to be
+// "No work left" is literal: A.1 is DONE, so its lane holds nothing to serve
+// or resume. A lane with work still in flight is handed that work back
+// (TestRouteNextResumesOwnInFlightTicket), so epic continuation has to be
 // asked with the lane genuinely finished.
 func TestRouteNextContinuesEpicBeforeHigherRankedOtherEpic(t *testing.T) {
 	h := newReadyTestHarness(t)
@@ -200,15 +193,9 @@ func TestRouteNextContinuesEpicBeforeHigherRankedOtherEpic(t *testing.T) {
 
 // A checkout's own epic having no reachable work — its held lane holds
 // nothing, and the epic has no other lane to offer — is a loud diagnostic,
-// never a silent hop to a leaf outside the epic. The GRANULARITY RULING is
-// explicit that this is the emergency the ticket exists to close: "root cause
-// ... sessions closed a child of epic A then hopped to epic B, repeatedly."
+// never a silent hop to a leaf outside the epic.
 //
-// This diagnostic is reachable only while the claim is live. The table this
-// test once was had a second row for an aged-out own claim, on the reading
-// that the age of your own lane was not a loss of ownership; an expired claim
-// is not a claim, so that row is TestRouteNextExpiredOwnLaneDoesNotOutrankTheBacklog
-// now, and its verdict is the opposite one.
+// This diagnostic is reachable only while the claim is live.
 func TestRouteNextExhaustionNeverFallsToAnotherEpic(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
@@ -238,16 +225,13 @@ func TestRouteNextExhaustionNeverFallsToAnotherEpic(t *testing.T) {
 	}
 }
 
-// The shape links-claims-em7h was reported against: this checkout finished one
-// ticket of epic A and walked away, its claim on the lane expired, and the
-// backlog ranks another epic's leaf first. An expired claim is not a claim, so
-// the checkout holds nothing, and `next` routes by rank from the global pool —
-// the unclaimed leaf at the top, not the lane this checkout once held. Under
-// the reading this replaces, that lane outranked the entire backlog for as
-// long as the epic stayed open, and with one checkout in the repository
-// nothing could ever release it. The derivation now answers Unclaimed for the
-// expired lane (claims_test.go pins that), so what this holds is routing's
-// half: given that standing, the lane's history buys it nothing.
+// This checkout finished one ticket of epic A and walked away, its claim on the
+// lane expired, and the backlog ranks another epic's leaf first. An expired
+// claim is not a claim, so the checkout holds nothing, and `next` routes by
+// rank from the global pool — the unclaimed leaf at the top, not the lane this
+// checkout once held. The derivation answers Unclaimed for the expired lane
+// (claims_test.go pins that), so what this holds is routing's half: given that
+// standing, the lane's history buys it nothing.
 func TestRouteNextExpiredOwnLaneDoesNotOutrankTheBacklog(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
@@ -280,9 +264,8 @@ func TestRouteNextExpiredOwnLaneDoesNotOutrankTheBacklog(t *testing.T) {
 // announced as the claim it establishes. It comes back as ServedFromDependency
 // and not ServedFromClaim: the dependency is by definition OUTSIDE the claimed
 // lane, so starting it claims a second lane, and ServedFromClaim's contract is
-// that nothing is claimed and nothing is said (links-claims-1b0p, N3). It is not
-// ServedFromNewLane either: that type is the global pool's, and sharing it left
-// this pick rendering the pool's line verbatim (links-next-output-4hor).
+// that nothing is claimed and nothing is said. It is not ServedFromNewLane
+// either: that type is the global pool's.
 func TestRouteNextOffersOnPathDependencyAsANewLane(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
@@ -308,8 +291,7 @@ func TestRouteNextOffersOnPathDependencyAsANewLane(t *testing.T) {
 		t.Fatalf("served = %q, want %q (the on-path external dependency)", served.Row.ID, dep.ID)
 	}
 	// The pick is FOR the blocked row, and naming it is the whole point of the
-	// outcome: a step-1b pick that cannot say what it unblocks is the bug
-	// (links-next-output-4hor).
+	// outcome: a step-1b pick that cannot say what it unblocks is the bug.
 	if served.Gates != a2.ID {
 		t.Fatalf("served.Gates = %q, want %q — the pick must name the blocked row it unblocks, not merely be correct about which dependency to serve", served.Gates, a2.ID)
 	}
@@ -323,7 +305,7 @@ func TestRouteNextOffersOnPathDependencyAsANewLane(t *testing.T) {
 // accident of the walk: the queue-first gated row. The expectation here is read
 // OUT OF the gathered queue rather than written in as an id, so the test pins
 // the rule and cannot be satisfied by a fixture that happens to order the two
-// rows the way the assertion guessed (links-next-output-4hor).
+// rows the way the assertion guessed.
 func TestOnPathDependencyNamesTheQueueFirstRowItGates(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
@@ -371,9 +353,7 @@ func TestOnPathDependencyNamesTheQueueFirstRowItGates(t *testing.T) {
 // get the Exhausted diagnostic, and it must not hop.
 //
 // This is the promise `lit quickstart work` makes in writing — "a fresh
-// session here routes back to it automatically" — and it failed for every
-// parentless ticket and for the last ticket of any epic, because servability
-// required model.StateOpen.
+// session here routes back to it automatically".
 func TestRouteNextResumesOwnInFlightTicket(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
@@ -399,10 +379,9 @@ func TestRouteNextResumesOwnInFlightTicket(t *testing.T) {
 // An orphan of our own in a lane whose claim has expired is not handed back as
 // ours to resume. The claim is gone, so the lane is nobody's, and the orphan is
 // what it would be in any other lane: abandoned work in flight, offered from
-// the global pool by rank. This test asserted ResumedOwnWork while an aged-out
-// claim of our own still read as ours (links-claims-1b0p); the ticket in
-// flight is still served — it ranks first here — but from the pool, never as a
-// resumption of a lane this checkout no longer holds.
+// the global pool by rank. The ticket in flight is still served — it ranks
+// first here — but from the pool, never as a resumption of a lane this checkout
+// no longer holds.
 func TestRouteNextServesOwnOrphanFromAnExpiredLane(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
@@ -431,9 +410,6 @@ func TestRouteNextServesOwnOrphanFromAnExpiredLane(t *testing.T) {
 
 // links-claims-1b0p acceptance 3: the orphan is the only work in a lane
 // another checkout let expire, and it is offered to a bare `lit next` here.
-// Two facts had to change together for this to be reachable — an expired
-// foreign claim is no hold (G3), and an in_progress row is servable at all
-// (G2) — and fixing either alone leaves the pick unreachable.
 func TestRouteNextServesOrphanInAnExpiredForeignLane(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
@@ -459,11 +435,7 @@ func TestRouteNextServesOrphanInAnExpiredForeignLane(t *testing.T) {
 
 // The other half of the same rule: an in_progress row in a lane another
 // checkout holds is somebody's work in flight, and it is left alone whether or
-// not the orphan clock has reached it. This test once built the lane with an
-// aged-out claim and asserted the same verdict, on the reading that only the
-// orphan annotation could make an in-flight row takeable; a lane nobody holds
-// is now that proof on its own (TestRouteNextServesUnorphanedInFlightRowInAnUnheldLane),
-// so the live hold is the case where "leave it" still holds.
+// not the orphan clock has reached it.
 func TestRouteNextLeavesUnabandonedInFlightWorkAlone(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
@@ -486,12 +458,11 @@ func TestRouteNextLeavesUnabandonedInFlightWorkAlone(t *testing.T) {
 	}
 }
 
-// links-claims-1b0p, N1: ownership is a fact about the workspace, so a display
-// filter must not be able to change it. The checkout holds a FRESH claim on a
-// lane whose only ticket is a task, and asks for bugs. Its own lane's rows
-// vanish from the gathered set — and it must still get its epic's Exhausted
-// diagnostic rather than another epic's leaf, which is what deriving ownership
-// from the filtered rows produced.
+// Ownership is a fact about the workspace, so a display filter must not be able
+// to change it. The checkout holds a FRESH claim on a lane whose only ticket is
+// a task, and asks for bugs. Its own lane's rows vanish from the gathered set —
+// and it must still get its epic's Exhausted diagnostic rather than another
+// epic's leaf.
 func TestRouteNextKeepsOwnershipUnderADisplayFilter(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
@@ -518,12 +489,10 @@ func TestRouteNextKeepsOwnershipUnderADisplayFilter(t *testing.T) {
 	}
 }
 
-// The N2 regression: before this ticket, onPathDependency saw no standings at
-// all and offered a gating dependency sitting in a lane another checkout holds
-// fresh — which `lit start` then refused, so `next` recommended what `start`
-// blocked. The dependency is now routed around like any other fresh foreign
-// hold, and exhaustion still names it rather than going quiet about why there
-// is nothing to do. [LAW:no-silent-failure]
+// A gating dependency sitting in a lane another checkout holds fresh is routed
+// around like any other fresh foreign hold, and exhaustion still names it
+// rather than going quiet about why there is nothing to do.
+// [LAW:no-silent-failure]
 func TestRouteNextRoutesAroundOnPathDependencyHeldFresh(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
@@ -789,19 +758,13 @@ func TestRouteNextContinuesEpicIntoAnExpiredForeignLane(t *testing.T) {
 // so a bare "claim it" would promise greenfield on a ticket that may carry
 // another checkout's unmerged working tree; the clause says the row is in
 // flight and unheld, and nothing about who left it — an expired claim is not a
-// claim, and the wording carries no provenance (links-claims-y6yz).
+// claim, and the wording carries no provenance.
 //
-// The object is the lane, and each of LaneID's three shapes once rendered
-// through String() into a sentence that misinformed the reader
-// (links-next-output-5aee): a solo lane spelled the ticket's own id, so the line
-// read "starting X claims X" and no reader could take a tautology as advice
-// about a command they had yet to run; an epic's default lane, whose key is
-// empty, trailed a bare "#" that reads as an unfilled template slot. Only the
-// named lane ever carried information, and it is the rarest of the three.
+// The object is the lane.
 //
 // Whatever else changes here, no cell may contain "#" or say the ticket's id
-// where a lane belongs — that is the whole of the ticket's second defect, and a
-// table is the only way to see all three shapes fail at once.
+// where a lane belongs, and a table is the only way to see all three shapes
+// fail at once.
 func TestStartAdviceNamesTheCommandAndTheLaneShape(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
@@ -865,11 +828,8 @@ func TestStartAdviceNeverSpellsASoloTicketTwice(t *testing.T) {
 	}
 }
 
-// Step 1 competes two capacities in one pick, and the comment above `pick`
-// warns that ranking them against each other "would quietly reintroduce this
-// ticket's headline symptom" — a warning earned, because an earlier draft
-// looped over `accept` in preference order and did exactly that. Run in both
-// rank orders: a preference for either capacity fails one arm.
+// Step 1 competes two capacities in one pick. Run in both rank orders: a
+// preference for either capacity fails one arm.
 func TestRouteNextStep1RanksAcrossCapacitiesRatherThanBetweenThem(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -956,12 +916,9 @@ func TestRouteNextServesAnAbandonedOnPathDependency(t *testing.T) {
 // The two clocks. Orphaning reads the row's last write by anyone; the lane's
 // freshness reads its holder's last event. A peer's field write on an
 // in-flight row keeps it un-orphaned while the holder's claim expires
-// underneath it, and with the lane nobody's to resume and the row not yet
-// orphaned, the ticket once vanished from `next` — served to nobody, named by
-// no diagnostic. A lane nobody holds is itself the proof the row is abandoned,
-// so the row is served on that fact alone; the orphan clock no longer enters
-// routing at all (capacityFor). Whose claim expired is not a fact the
-// standing carries any more, so there is one case here where there were two.
+// underneath it. A lane nobody holds is itself the proof the row is abandoned,
+// so the row is served on that fact alone; the orphan clock does not enter
+// routing at all (capacityFor).
 func TestRouteNextServesUnorphanedInFlightRowInAnUnheldLane(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -996,13 +953,12 @@ func TestRouteNextServesUnorphanedInFlightRowInAnUnheldLane(t *testing.T) {
 	}
 }
 
-// The shape links-claims-gxxw was reported against: this checkout's own lane
-// holds the top-ranked open row, and the claim on it has expired. The row is
-// still the pick — it ranks first — but it is served from the global pool by
-// rank, as it would be for any checkout, not from step 1 as work this checkout
-// holds. The premise check on rank order is what separates this from
-// TestRouteNextExpiredOwnLaneDoesNotOutrankTheBacklog: same expired own lane,
-// opposite rank, and the pick follows the rank both times.
+// This checkout's own lane holds the top-ranked open row, and the claim on it
+// has expired. The row is still the pick — it ranks first — but it is served
+// from the global pool by rank, as it would be for any checkout, not from step
+// 1 as work this checkout holds. The premise check on rank order is what
+// separates this from TestRouteNextExpiredOwnLaneDoesNotOutrankTheBacklog: same
+// expired own lane, opposite rank, and the pick follows the rank both times.
 func TestRouteNextServesTopRankedRowInExpiredOwnLaneByRank(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
@@ -1028,21 +984,12 @@ func TestRouteNextServesTopRankedRowInExpiredOwnLaneByRank(t *testing.T) {
 }
 
 // TestRouteNextDoesNotAdoptExpiredPublicHistory is the routing half of the ruling
-// that a bucket identity is a holder but never a proof of identity, and it
-// pins the regression the public-checkout change introduced before it was
-// caught in review.
+// that a bucket identity is a holder but never a proof of identity.
 //
 // The setup is the normal state of a freshly upgraded repository read by a
 // brand-new checkout: pre-attribution history is far older than the window, so
-// its lanes derive Unclaimed, and the checkout asking is itself unminted. The
-// regression this pins predates that: while an aged-out claim was still a
-// standing carrying its holder, both sides of the identity comparison were the
-// zero Attribution, bare equality read that as "our own lane we stepped away
-// from", and `next` handed back an epic this checkout never touched. Every such
-// lane in the backlog matched, so the failure was the whole backlog adopted at
-// once. The standing no longer carries a holder to compare, so the test now
-// pins the shape from the other side: an unminted self and an unclaimed lane
-// meet in the pool, by rank.
+// its lanes derive Unclaimed, and the checkout asking is itself unminted. An
+// unminted self and an unclaimed lane meet in the pool, by rank.
 //
 // What must NOT come back is ResumedOwnWork; that is the load-bearing half.
 func TestRouteNextDoesNotAdoptExpiredPublicHistory(t *testing.T) {
@@ -1100,14 +1047,10 @@ func TestRouteNextRoutesAroundAFreshPublicHold(t *testing.T) {
 // Words and speakability are asserted as one biconditional because the two ways
 // they can disagree are both defects and only one of them is obvious. A
 // speakable kind with no words renders ids under an empty parenthetical. Words
-// for a kind the walk cannot stamp are a promise about a different walk:
-// exhaustedNotes carried reachOffFocusPath until this test was rewritten,
-// telling a reader that an epic's own gating blocker wanted `lit next --all`
-// when steps 1-3 never scope and so never needed it (links-listing-ju7i).
+// for a kind the walk cannot stamp are a promise about a different walk.
 //
-// The union is asserted separately, which is what the old reachKindCount sweep
-// was really protecting: a sixth kind still cannot enter the enum until some
-// walk claims it.
+// The union is asserted separately: a sixth kind cannot enter the enum until
+// some walk claims it.
 func TestEveryReachKindHasWordsInBothDiagnostics(t *testing.T) {
 	t.Parallel()
 	// reachOf's switch is total and returns these four and nothing else, so they
@@ -1151,16 +1094,10 @@ func TestEveryReachKindHasWordsInBothDiagnostics(t *testing.T) {
 	}
 }
 
-// NoWork was an empty struct, so "no ready work" answered two opposite
-// questions in identical words: an empty backlog, and a backlog full of work
-// this checkout may not have. The walk knew every row and every verdict at the
-// moment it threw them away (links-cli-q7hg).
-//
 // Both surviving kinds are put in one pool on purpose. A single-kind fixture
-// passes against a renderer that prints one note for everything it went past,
-// which is the bool this type replaced: the message has to say that one row is
-// somebody's live work and the other is merely gated, because those call for
-// different acts.
+// passes against a renderer that prints one note for everything it went past:
+// the message has to say that one row is somebody's live work and the other is
+// merely gated, because those call for different acts.
 func TestNoWorkNamesEachRowThePoolWalkWentPast(t *testing.T) {
 	h := newReadyTestHarness(t)
 	held := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Theirs, in flight", Topic: "next", IssueType: "task", Priority: 1})
@@ -1211,10 +1148,9 @@ func TestNoWorkNamesEachRowThePoolWalkWentPast(t *testing.T) {
 }
 
 // The other half of the same type, and criterion 2 of the ticket: an empty
-// backlog answers exactly as it always has. The new clause is driven entirely by
-// the rows the walk went past, so no rows means no clause — pinned byte-for-byte,
-// because "no ready work" is still the whole truth when there is nothing to say
-// why about.
+// backlog. The clause is driven entirely by the rows the walk went past, so no
+// rows means no clause — pinned byte-for-byte, because "no ready work" is still
+// the whole truth when there is nothing to say why about.
 func TestNoWorkOnAGenuinelyEmptyBacklogIsUnchanged(t *testing.T) {
 	h := newReadyTestHarness(t)
 

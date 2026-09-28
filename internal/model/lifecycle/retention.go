@@ -10,11 +10,8 @@ import (
 // the activity axis (State): whether an issue is still in the flow, soft-hidden,
 // or soft-removed. Exactly one variant holds at a time.
 //
-// [LAW:types-are-the-program] The prior encoding — two nullable timestamps —
-// expressed four states where the domain has three, and the fourth
-// (archived AND deleted) was the illegal state a scatter of imperative guards
-// existed to forbid. As a sum, that state is unrepresentable and the guards'
-// reason to exist is gone. The two-timestamp pair survives only as a private
+// [LAW:types-are-the-program] As a sum, archived AND deleted is
+// unrepresentable. The two-timestamp pair survives only as a private
 // wire/storage encoding behind the encoder/decoder below.
 type Retention interface{ isRetention() }
 
@@ -107,8 +104,7 @@ func Retain(cur Retention, action RetentionAction, at time.Time) (Retention, err
 		case Live, Archived:
 			// Deleted carries no prior-archived bit — deleting an archived
 			// issue drops the archive stamp by construction, so restore always
-			// lands on Live. Decided in the lifecycle recut: the remembered
-			// stamp was the only reachable both-set state of the old encoding.
+			// lands on Live.
 			return Deleted{At: at}, nil
 		case Deleted:
 			return nil, errors.New("issue is already deleted")
@@ -135,7 +131,7 @@ func Retain(cur Retention, action RetentionAction, at time.Time) (Retention, err
 // archived_at/deleted_at DB columns and JSON wire keys) into the sum. A legacy
 // row carrying both timestamps decodes as Deleted — deletion dominates, because
 // deleted rows are the ones excluded from rank space; the stale archive stamp
-// on such a row is residue of the pre-sum encoding and is dropped.
+// on such a row is dropped.
 // [LAW:single-enforcer] The one place the pair becomes a Retention; every read
 // boundary (row scan, shape map, JSON) folds through here.
 func RetentionFromTimestamps(archivedAt, deletedAt *time.Time) Retention {

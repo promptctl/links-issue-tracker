@@ -19,9 +19,8 @@ import (
 // stores created INDEPENDENTLY (disjoint bootstrap roots) that share a remote and
 // diverge have no common ancestor, so DOLT_MERGE_BASE yields nothing. Reconcile
 // must DETECT that as a first-class unrelated-histories state and commit nothing —
-// never crash on the absent merge-base (the pre-fix behavior was an obscure
-// "sql: no rows in result set" surfaced from the base-assuming path). The
-// shared-ancestor divergence still reconciling is proved by
+// never crash on the absent merge-base. The shared-ancestor divergence still
+// reconciling is proved by
 // TestSyncReconcileLinearizesDivergenceAndFastForwardPushes.
 func TestSyncReconcileDetectsUnrelatedHistories(t *testing.T) {
 	t.Parallel()
@@ -717,9 +716,7 @@ func assertIDSet(t *testing.T, label string, got, want []string) {
 // attributable commits on the new spine — original message and timestamp (to the
 // second, Dolt's --date granularity) preserved, in their original order, each
 // mid-chain state a whole union backlog — settled by the combine's marker
-// commit; the contents equal the union and the push fast-forwards. The squash
-// this replaces is the 2026-08-08 field-incident cost: the data survived but its
-// provenance did not.
+// commit; the contents equal the union and the push fast-forwards.
 func TestSyncReconcileCombinePreservesFoldedProvenance(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

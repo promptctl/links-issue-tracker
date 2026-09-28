@@ -43,10 +43,7 @@ func runInit(t *testing.T, args ...string) error {
 }
 
 // The whole defect in one test: a repository lit cannot name is unrunnable, and
-// the advice printed under the failure has to name an act that works. Before
-// this, the only act that worked was renaming the repository, and what lit
-// actually said was "retry, then run `lit doctor`" — a deterministic refusal
-// and a workspace init had just declined to create.
+// the advice printed under the failure has to name an act that works.
 func TestInitInAnUnnameableRepositoryRefusesWithUsableAdvice(t *testing.T) {
 	gitRepoNamed(t, "ab")
 
@@ -240,7 +237,7 @@ func TestAStoredIllegalPrefixIsRefusedAndNamesTheFile(t *testing.T) {
 	if strings.Contains(rendered, "Retry the command") || strings.Contains(rendered, "lit doctor") {
 		t.Fatalf("rendered error still carries the unclassified-fault advice:\n%s", rendered)
 	}
-	// The assertion above is not enough, and its absence is what let this ship:
+	// The assertion above is not enough:
 	// validation_refused clears "Retry the command" while still ending "adjust
 	// the command to satisfy it", which is the same false instruction in other
 	// words. No command adjusts this one.
@@ -258,7 +255,7 @@ func TestAStoredIllegalPrefixIsRefusedAndNamesTheFile(t *testing.T) {
 // name. `lit prefix set` is the obvious thing a caller would reach for, and it
 // dies in the same place, because every workspace command resolves the
 // workspace before its own work runs. A remediation naming it would be an act
-// that does not work — the exact defect links-cli-errors-yfbg killed.
+// that does not work.
 // [LAW:no-silent-failure] the advice has to be true, not merely present.
 func TestNoCommandClearsAStoredIllegalPrefix(t *testing.T) {
 	repo := gitRepoNamed(t, "myrepo")
@@ -335,12 +332,11 @@ func TestInitReportsThePrefixItActuallyStored(t *testing.T) {
 // the bad argument, outlives a command that reported failure, and clearing it
 // needs `lit prefix set` rather than a corrected re-run.
 //
-// The derived case is here because it is the half that predates `--prefix`, and
-// it proves the fix is about ORDERING rather than about the flag.
+// The derived case is here because it proves the fix is about ORDERING rather
+// than about the flag.
 //
-// Asserting the exit code alone would pass against the bug — the refusal was
-// always correct, it just arrived after the write. The assertion that earns its
-// keep is the ABSENCE of config.json. [LAW:effects-at-boundaries]
+// Asserting the exit code alone would pass against the bug. The assertion that
+// earns its keep is the ABSENCE of config.json. [LAW:effects-at-boundaries]
 func TestAFailedInitLeavesNoWorkspaceBehind(t *testing.T) {
 	for _, testCase := range []struct {
 		name string

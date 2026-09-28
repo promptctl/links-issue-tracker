@@ -9,16 +9,14 @@ import (
 // Claimant is who the record names as holding one ticket: the assignee written
 // on the issue row, and the checkout whose establishing event put it there.
 //
-// The pair is one value because neither half identifies a holder alone, and
-// keeping them apart is what let the write side and this package mean different
-// things by "owner". The assignee is the human or agent identity — routinely
-// EMPTY, because a checkout with no agent session resolves no identity at all,
-// and identical across every checkout one session drives. The checkout is the
-// per-worktree stream token, and it is what lane ownership is actually keyed on:
-// standingOf reads the latest establishing event's Attribution and never looks
-// at an assignee. So two checkouts of one identity taking a lane from each other
-// are a real transfer that the assignee cannot see, and a write side comparing
-// only assignees read that transfer as a repeated self-start and discarded it.
+// The pair is one value because neither half identifies a holder alone. The
+// assignee is the human or agent identity — routinely EMPTY, because a checkout
+// with no agent session resolves no identity at all, and identical across every
+// checkout one session drives. The checkout is the per-worktree stream token,
+// and it is what lane ownership is actually keyed on: standingOf reads the
+// latest establishing event's Attribution and never looks at an assignee. So
+// two checkouts of one identity taking a lane from each other are a real
+// transfer that the assignee cannot see.
 // [LAW:one-source-of-truth]
 type Claimant struct {
 	// Established reports that somebody took this ticket — that the history

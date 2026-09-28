@@ -47,8 +47,8 @@ func TestRetiredCommandsPointToReplacements(t *testing.T) {
 	}
 }
 
-// The single-purpose commands folded into flags this pass are retired the same
-// way ready/queue were: a RetiredCommandError whose message names the surviving
+// The single-purpose commands folded into flags are retired the same way
+// ready/queue were: a RetiredCommandError whose message names the surviving
 // flag, so a stale invocation is redirected rather than silently broken. Each
 // carries its own pointer, so the expected substrings differ per command.
 func TestFoldedCommandsPointToTheirFlags(t *testing.T) {
@@ -151,8 +151,7 @@ func TestRetiredCommandsAreHiddenButRegistered(t *testing.T) {
 
 // `lit --help` presents the curated workable surface and no retired command: the
 // surviving views are listed and no "(retired)" summary leaks through, because a
-// Hidden command is absent from the rendered help. This is the ticket's surface
-// acceptance criterion.
+// Hidden command is absent from the rendered help.
 func TestRootHelpShowsCuratedWorkableSurface(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer

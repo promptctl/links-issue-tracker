@@ -82,13 +82,7 @@ func TestImportBatchesBuildsTheRequestedRows(t *testing.T) {
 //
 // The band is measured, not chosen: this repository's own 588 ticket
 // descriptions, truncated to 1310 bytes, gzip between 1.53x and 2.56x with a
-// median of 1.79x. The repeated-phrase filler this replaced gzipped 20.15x, so
-// it made every generated row about eleven times cheaper to store than a real
-// one, understating the size figures the campaign's ceiling is derived from.
-//
-// The old test here asserted only that the text contained five distinct bytes,
-// which a single repeated phrase passes trivially — it could not have failed
-// for the defect its own comment described.
+// median of 1.79x.
 func TestFillerCompressesLikeRealTicketProse(t *testing.T) {
 	const lo, hi = 1.4, 2.7
 	for _, seed := range []int{0, 1, 7, 118, 589} {
@@ -111,12 +105,7 @@ func TestFillerCompressesLikeRealTicketProse(t *testing.T) {
 	}
 }
 
-// Every word in the vocabulary must be reachable. This is pinned because it was
-// silently false: the filler drew from a plain LCG whose low bit strictly
-// alternates, two draws were consumed per token, and len(proseWords) is even —
-// so each row could only ever see half the vocabulary, the half its seed
-// selected. Nothing about the output looked wrong, and the compressibility band
-// above still passed.
+// Every word in the vocabulary must be reachable.
 func TestFillerReachesTheWholeVocabulary(t *testing.T) {
 	seen := map[string]bool{}
 	for seed := range 200 {
@@ -135,15 +124,14 @@ func TestFillerReachesTheWholeVocabulary(t *testing.T) {
 			"the filler is drawing from a smaller vocabulary than it declares",
 			len(missing), len(proseWords), missing)
 	}
-	// A single row must also see well past half, which is what the parity lock
-	// capped — and this is the only assertion that can catch it, because across
+	// A single row must also see well past half, which is what a parity lock
+	// caps — and this is the only assertion that can catch it, because across
 	// 200 seeds the two parities between them still cover the whole vocabulary.
 	//
 	// Count VOCABULARY words only. Counting every whitespace token instead
 	// silently defeats this: about 40% of them are random id tokens, nearly all
-	// distinct, so the total sailed past any threshold on those alone and the
-	// check could not fail. It was written that way first, and the parity
-	// mutation survived it.
+	// distinct, so the total sails past any threshold on those alone and the
+	// check cannot fail.
 	vocab := map[string]bool{}
 	for _, w := range proseWords {
 		vocab[w] = true

@@ -174,13 +174,7 @@ func (w worktreeRecord) uninhabited() bool { return w.prunable || w.bare }
 //
 // [LAW:no-silent-failure] `-z` is what makes any of the above true, and it is
 // not a nicety. A newline is a legal byte in a POSIX path, and the newline-
-// terminated format emits paths raw, so a worktree at a path ending in the
-// literal bytes "\nprunable" produced a record whose second LINE was the word
-// `prunable` — parsed as an attribute of the live record it had just opened,
-// which then silently vanished from the enumeration and took its checkout's
-// claims with it. `\nbare` did the same; `\nbranch <ref>` corrupted the address.
-// That is the precise failure this leg exists to prevent, reached without any
-// error at all, and it was live here until a reviewer constructed it.
+// terminated format emits paths raw.
 //
 // The remedy is not a check. The newline-terminated format is ambiguous BY
 // CONSTRUCTION for these paths — that is why git grew `-z` — so a parser reading
@@ -191,10 +185,10 @@ func (w worktreeRecord) uninhabited() bool { return w.prunable || w.bare }
 func parseWorktreeList(output string) ([]worktreeRecord, error) {
 	var records []worktreeRecord
 	for _, field := range strings.Split(output, "\x00") {
-		// Cut on the FIRST space only: a worktree path may contain spaces — and,
-		// now that the field is NUL-terminated, newlines — while every documented
-		// key is a bare word, so the first space is always the boundary and the
-		// rest of the field is the value byte for byte.
+		// Cut on the FIRST space only: a worktree path may contain spaces — and
+		// newlines — while every documented key is a bare word, so the first
+		// space is always the boundary and the rest of the field is the value
+		// byte for byte.
 		key, value, _ := strings.Cut(field, " ")
 		if key == "worktree" {
 			records = append(records, worktreeRecord{path: value})

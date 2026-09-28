@@ -67,8 +67,8 @@ func TestRunQuickstartDefaultsToText(t *testing.T) {
 	}
 }
 
-// TestRejectsJSONFlag pins the removal: --json is no longer a flag, so it is an
-// unknown flag at any position and the command fails with ExitUsage rather than
+// TestRejectsJSONFlag pins that --json is not a flag, so it is an unknown flag
+// at any position and the command fails with ExitUsage rather than
 // emitting JSON. [LAW:no-silent-failure]
 //
 // The cases use workspace-free commands on purpose. The two rejection paths are
@@ -101,10 +101,10 @@ func TestRejectsJSONFlag(t *testing.T) {
 
 // TestParseFlagSetClassifiesFlagErrors is the table for the command-local flag
 // boundary. Every mis-written flag must reach a sink typed, because an untyped
-// one falls to the "Retry the command" remediation: `-x`, `--limit=abc` and
-// `---limit` did, exiting 1. The retired `--continue` is matched as a whole flag
-// name, so `--continuex` is not misreported as retired, and `-continue` is a
-// shorthand group pflag reads as `-c`, so it is an ordinary unknown flag.
+// one falls to the "Retry the command" remediation. The retired `--continue`
+// is matched as a whole flag name, so `--continuex` is not misreported as
+// retired, and `-continue` is a shorthand group pflag reads as `-c`, so it is
+// an ordinary unknown flag.
 func TestParseFlagSetClassifiesFlagErrors(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

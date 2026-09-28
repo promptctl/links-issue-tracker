@@ -19,8 +19,7 @@ func TestWriteReport(t *testing.T) {
 	out := buf.String()
 
 	// Rows are pinned to their full width, trailing `|` included. An
-	// unterminated prefix stays green when a column is added or removed, which
-	// is how the Source column's own rendering once went unverified.
+	// unterminated prefix stays green when a column is added or removed.
 	for _, want := range []string{
 		"| github.com/a/a | v1.0.0 | MIT | - |",
 		"| github.com/b/b | v2.0.0 | Apache-2.0 | - |",
@@ -51,8 +50,7 @@ func TestWriteReportEmptyVersionRendersPlaceholder(t *testing.T) {
 	}
 }
 
-// TestWriteReportSourceColumnNamesTheReplacement is links-licensing-c0ce.15's
-// acceptance criterion for the human-readable half: LICENSE-REPORT.md must say,
+// TestWriteReportSourceColumnNamesTheReplacement: LICENSE-REPORT.md must say,
 // on the row itself, that a component's source came from a coordinate other
 // than the one the Module column names.
 //

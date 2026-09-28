@@ -57,16 +57,8 @@ func TestCompletionTopLevelDerivedFromRegistry(t *testing.T) {
 	}
 }
 
-// TestCompletionIncludesPreviouslyDriftedCommands pins the specific regression
-// this ticket fixes: these were absent from the hand-written bash literal before
-// completion became a registry projection. (`queue` was among them but is now a
-// retired, hidden command deliberately excluded from completion — see
-// TestCompletionExcludesRetiredCommands.)
 func TestCompletionIncludesPreviouslyDriftedCommands(t *testing.T) {
 	t.Parallel()
-	// `assign` was among the originally-drifted commands but is now retired (folded
-	// into `update --assignee`) and deliberately excluded from completion — see
-	// TestCompletionExcludesRetiredCommands.
 	drifted := []string{"backlog", "downgrade", "followup", "import", "lifeboat", "next", "orphaned", "prefix", "snapshots"}
 	have := map[string]bool{}
 	for _, name := range topLevelNames(commandCompletionModel()) {

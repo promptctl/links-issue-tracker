@@ -14,9 +14,9 @@ import (
 // view prints. Deriving them there caps each fact at whatever survived the
 // narrowing, and the loss lands on the row that SURVIVED: the prerequisite
 // keeps its place in the list with its leverage line silently shortened, under
-// a preamble still promising "what closing it would unblock"
-// (links-listing-85sd). There is no gap on screen to notice, because the row
-// that went missing is the one nobody was looking at.
+// a preamble still promising "what closing it would unblock". There is no gap
+// on screen to notice, because the row that went missing is the one nobody was
+// looking at.
 //
 // It is a PROJECTION, not a copy. The queue has to be materialized to derive
 // these, but what survives the derivation is a map of ids and an int; the rows
@@ -59,9 +59,7 @@ func deriveQueueFacts(queue []annotation.AnnotatedIssue) queueFacts {
 // focus scope for a view to narrow by.
 //
 // [LAW:types-are-the-program] the rows and the queue facts have different types
-// and cannot be crossed at a call site. They used to be two
-// []annotation.AnnotatedIssue parameters — `issues` and `gathered` — and
-// reading the wrong one compiled, ran, and printed a shorter truth.
+// and cannot be crossed at a call site.
 type workableGather struct {
 	rows    []annotation.AnnotatedIssue
 	details map[string]storage.IssueRelations

@@ -25,9 +25,9 @@ func repoNamed(t *testing.T, name string) string {
 }
 
 // namesThatDeriveNothing is the two ways a repository name can fail to produce
-// a prefix: too little survives normalization, or nothing does. They were once
-// two error messages and two exits; the contract below is that they are one
-// condition, because the act that resolves them is the same one.
+// a prefix: too little survives normalization, or nothing does. The contract
+// below is that they are one condition, because the act that resolves them is
+// the same one.
 var namesThatDeriveNothing = []string{"ab", "a", "AB", "Qz", "___", "...", "--"}
 
 func TestResolveRefusesEveryNameItCannotDeriveAPrefixFrom(t *testing.T) {
@@ -37,14 +37,11 @@ func TestResolveRefusesEveryNameItCannotDeriveAPrefixFrom(t *testing.T) {
 			if err == nil {
 				t.Fatalf("Resolve() in a repository named %q succeeded, want a refusal", name)
 			}
-			// The type is what the CLI dispatches on. Untyped, this reached the
-			// unclassified default and told the caller to retry a deterministic
-			// refusal and then run `lit doctor` on a workspace that does not exist.
+			// The type is what the CLI dispatches on.
 			if !errors.Is(err, ErrIssuePrefixRefused) {
 				t.Fatalf("Resolve() error = %v, want it to wrap ErrIssuePrefixRefused", err)
 			}
-			// A refusal has to name an act that works. Renaming the repository was
-			// the only one before this flag existed.
+			// A refusal has to name an act that works.
 			if !strings.Contains(err.Error(), "--prefix") {
 				t.Fatalf("Resolve() error = %v, want it to name --prefix", err)
 			}

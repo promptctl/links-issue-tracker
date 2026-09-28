@@ -14,23 +14,20 @@ import (
 )
 
 // The mirror-pending marker is the owned state behind the on-change contract's
-// tail guarantee (links-sync-pgct.12): after every mutation, either a
-// not-yet-cleared mirror provably still has this commit ahead of its HEAD read,
-// or the mutating command spawns that mirror itself. No time constant carries
-// the guarantee — the 1s spawn debounce this replaces made the burst's final
-// mutation a timing bet on an earlier mirror's HEAD read.
+// tail guarantee: after every mutation, either a not-yet-cleared mirror
+// provably still has this commit ahead of its HEAD read, or the mutating
+// command spawns that mirror itself. No time constant carries the guarantee.
 // [LAW:no-ambient-temporal-coupling]
 //
-// The proof rides on write-engine serialization (links-sync-pgct.11):
-// embedded Dolt allows one write-capable engine per path — each holds Dolt's
-// own journal lock for its lifetime — so engine sessions are totally
-// ordered. The marker is claimed by a mutating command AFTER its own session
-// closed (maybeAutoSyncAfterCommand runs post-Close) and cleared by a push
-// attempt INSIDE its engine session (performSyncPush entry). A command that
-// observes a marker under a live beacon therefore knows the clearing session
-// has not run — and since sessions are disjoint, that session's engine open
-// (and its HEAD read) lies strictly after this command's committed, closed
-// session.
+// The proof rides on write-engine serialization: embedded Dolt allows one
+// write-capable engine per path — each holds Dolt's own journal lock for its
+// lifetime — so engine sessions are totally ordered. The marker is claimed by
+// a mutating command AFTER its own session closed (maybeAutoSyncAfterCommand
+// runs post-Close) and cleared by a push attempt INSIDE its engine session
+// (performSyncPush entry). A command that observes a marker under a live
+// beacon therefore knows the clearing session has not run — and since
+// sessions are disjoint, that session's engine open (and its HEAD read) lies
+// strictly after this command's committed, closed session.
 // Covered — conditional on the covering mirror reaching its push attempt.
 // The ordering proof is about WHOSE HEAD read covers the commit, never that
 // the push lands: a mirror (an observer's borrowed one, or one this command
@@ -41,10 +38,10 @@ import (
 // banner and retries at the next occasion rather than silently waiting.
 //
 // This marker is deliberately NOT a second representation of push health
-// (links-sync-pgct.10's push-outcome.last owns "how did the last attempt
-// end"): it answers only "is a mirror still owed", exists transiently between
-// a claim and the next push attempt, and failures that break the chain are
-// reported through the same pushOutcomeRecord seam as every other attempt.
+// (push-outcome.last owns "how did the last attempt end"): it answers only
+// "is a mirror still owed", exists transiently between a claim and the next
+// push attempt, and failures that break the chain are reported through the
+// same pushOutcomeRecord seam as every other attempt.
 // [LAW:one-source-of-truth]
 //
 // Nor does the marker carry liveness. Whether the owing mirror is still
@@ -95,12 +92,11 @@ func mirrorPendingMarkerPath(ws workspace.Info) string {
 // ensureMirrorCoverage) and any mirror it spawned all died running no code —
 // only SIGKILL-class endings leave residue, because every code-running
 // ending removes or completes the marker. Re-claiming residue can race
-// another claimant into a double-claim — the same tolerance as ever, now
-// confined to probe-instant windows, which the single-flight lock serializes
-// into one push and one cheap no-op. Observers never touch the marker's
-// mtime — only a claim does — so the claim stamp keeps meaning "when the
-// owed spawn was claimed" for the holder's post-release re-check, no matter
-// how busy the workspace is.
+// another claimant into a double-claim — confined to probe-instant windows,
+// which the single-flight lock serializes into one push and one cheap no-op.
+// Observers never touch the marker's mtime — only a claim does — so the claim
+// stamp keeps meaning "when the owed spawn was claimed" for the holder's
+// post-release re-check, no matter how busy the workspace is.
 //
 // A CLAIMED return also carries the answering hold: the shared beacon hold
 // is minted here, in the same function that mints the claim, so "owns the
@@ -143,17 +139,16 @@ func claimMirrorPending(ctx context.Context, ws workspace.Info, now time.Time) (
 		return pendingClaimed, func() {}, probeErr
 	}
 	if verdict == store.BeaconAnswered {
-		// The beacon proves SOME answerer (a claimant holding from its claim,
-		// or the mirror it spawned) was alive at the probe's deciding instant,
-		// not that THIS marker's dedicated mirror is — and that is sufficient,
-		// not approximate: every answerer's code-running failure path clears
-		// the marker and records a loud outcome, any live mirror that reaches
-		// a push attempt clears EVERY marker at entry, and its post-release
-		// re-check cycles for any claim stamped during its cycle. The
-		// uncovered remainder is an answerer that dies running no code after
-		// that instant, which no ownership granularity can close — no
-		// observable state proves a FUTURE push lands (the PR #391 round-5
-		// decline) — and which ends in this probe's re-claim at the next
+		// The beacon proves SOME answerer (a claimant holding from its claim, or
+		// the mirror it spawned) was alive at the probe's deciding instant, not
+		// that THIS marker's dedicated mirror is — and that is sufficient, not
+		// approximate: every answerer's code-running failure path clears the
+		// marker and records a loud outcome, any live mirror that reaches a push
+		// attempt clears EVERY marker at entry, and its post-release re-check
+		// cycles for any claim stamped during its cycle. The uncovered remainder
+		// is an answerer that dies running no code after that instant, which no
+		// ownership granularity can close — no observable state proves a FUTURE
+		// push lands — and which ends in this probe's re-claim at the next
 		// mutation.
 		return pendingCovered, func() {}, nil
 	}

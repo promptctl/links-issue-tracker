@@ -1,8 +1,8 @@
 # goreleaser config for lit.
 #
 # CONFIG VERSION: goreleaser v2 syntax. `version: 2` below is required —
-# release-validate proved it: running without it fails with "only version: 2
-# configuration files are supported". The release build runs goreleaser inside
+# running without it fails with "only version: 2 configuration files are
+# supported". The release build runs goreleaser inside
 # build/Dockerfile.release, which installs goreleaser v2.16.0 + zig 0.14.0 as
 # the single cross-toolchain (a pinned macOS SDK supplies the Apple frameworks
 # zig omits, link-only).
@@ -23,12 +23,12 @@ version: 2
 
 project_name: lit
 
-# No `before.hooks` — earlier iterations ran `go mod tidy` here, but that
-# can mutate go.mod/go.sum during a tagged release build, so artifacts
-# would be built from a working tree that no longer matches the tagged
-# commit. [LAW:single-enforcer] tidiness is enforced ONCE, in CI on every
-# PR/master push (.github/workflows/ci.yml "go mod tidy check"), BEFORE a
-# tag is cut — not at release time when mutation is destructive.
+# No `before.hooks` — `go mod tidy` here can mutate go.mod/go.sum during a
+# tagged release build, so artifacts would be built from a working tree that
+# no longer matches the tagged commit. [LAW:single-enforcer] tidiness is
+# enforced ONCE, in CI on every PR/master push (.github/workflows/ci.yml "go
+# mod tidy check"), BEFORE a tag is cut — not at release time when mutation is
+# destructive.
 
 builds:
   - id: lit
@@ -187,12 +187,10 @@ archives:
       # scripts/install.sh's validator enforces holds for these too.
       - THIRD_PARTY_LICENSES
       - LICENSE-REPORT.md
-      # The fork ledger, because the two files above now POINT at it: three of
+      # The fork ledger, because the two files above POINT at it: three of
       # their rows disclose that a component was built from a coordinate other
       # than the one naming it, and each says "see FORKS.md" for what the
-      # substitution changes and why. A recipient working from the archive had
-      # no way to follow that pointer — the compliance artifacts cited a
-      # document the release did not carry. [FRAMING:representation] the map
+      # substitution changes and why. [FRAMING:representation] the map
       # names the territory, so the territory ships.
       - FORKS.md
 

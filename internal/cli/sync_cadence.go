@@ -39,9 +39,8 @@ const DisableAutoSyncEnvVar = "LIT_DISABLE_AUTO_SYNC"
 // for the question — one `git ls-remote` round trip, 1.2–1.3s over ssh to
 // GitHub (sync_receive_ask.go), and the fetch only when the answer says the
 // remote moved — and that only holds while the interval comfortably exceeds a
-// command's own wall time. At 10s, slow read commands re-armed the debounce on
-// every invocation and every command paid the then-~7s fetch; receive
-// freshness is a minutes-scale concern, so the interval is minutes.
+// command's own wall time. Receive freshness is a minutes-scale concern, so the
+// interval is minutes.
 // [LAW:no-ambient-temporal-coupling] the bound must not depend on commands
 // staying fast.
 const receiveDebounceInterval = 5 * time.Minute
@@ -50,8 +49,7 @@ const receiveDebounceInterval = 5 * time.Minute
 // workspace re-runs the mirror path's git-remote check. The mirror-pending
 // claim carries the coverage guarantee only where a remote exists; without
 // one, every mutation would otherwise pay a git subprocess plus marker
-// create/remove churn re-confirming the same absence — the rate bound the
-// deleted spawn debounce used to provide for exactly this state.
+// create/remove churn re-confirming the same absence.
 // [LAW:carrying-cost] The only cost is mirror onset: a remote added to a
 // hot workspace waits at most this long before mutations resume claiming.
 const remoteAbsentRecheckInterval = 10 * time.Second
@@ -88,13 +86,8 @@ func maybeAutoSyncAfterCommand(ctx context.Context, accessMode app.AccessMode, w
 	// collects whatever the receive above just brought in, and so its own
 	// stall is never charged against the receive's timeout.
 	//
-	// That independence is why the policy half is its own unit. It used to be
-	// inline, so an unreadable config returned early and took compaction with
-	// it — leaving the workspace whose config is broken, which is squarely the
-	// "nothing else collects this store" case, as the one workspace that
-	// silently lost its backstop. The gate above said so in prose while the
-	// code said otherwise; the cut puts the boundary where the sentence
-	// already claimed it was. [LAW:decomposition]
+	// That independence is why the policy half is its own unit.
+	// [LAW:decomposition]
 	if accessMode == app.AccessWrite {
 		compactInline(ctx, ws)
 	}
@@ -130,8 +123,7 @@ func syncOnPolicy(ctx context.Context, accessMode app.AccessMode, ws workspace.I
 // not-yet-cleared mirror will read HEAD after this command's closed engine
 // session (see sync_mirror_pending.go for the ordering proof), or this
 // command owns the spawn. Spawn rate falls out of the claim itself — one spawn per
-// clear-to-claim cycle, however dense the burst — replacing the fixed 1s
-// debounce whose window was exactly the stranded-tail bug.
+// clear-to-claim cycle, however dense the burst.
 // [LAW:no-ambient-temporal-coupling]
 //
 // Every failure that breaks the claim-to-mirror chain completes through the
@@ -190,9 +182,7 @@ func ensureMirrorCoverage(ctx context.Context, ws workspace.Info) {
 	// Cheap precondition, mirroring receiveInline's own check: a remote-less
 	// workspace has nothing to push to, so skip the subprocess spawn entirely
 	// rather than pay fork/exec cost only to have the mirror discover "no
-	// remote" for itself. This matters more now that on-change is the shipped
-	// default (links-sync-pgct.3) rather than an opt-in a user chose knowing
-	// the cost. [LAW:carrying-cost]
+	// remote" for itself. [LAW:carrying-cost]
 	hasRemote, err := workspaceHasGitRemote(ctx, ws)
 	if err != nil {
 		releaseClaim()
@@ -230,9 +220,7 @@ func ensureMirrorCoverage(ctx context.Context, ws workspace.Info) {
 // (or cannot tell)" → allow. now and interval are parameters so the decision is
 // testable without sleeping. [LAW:one-type-per-behavior] The one debounce
 // primitive, parametrized by marker path and interval; automatic receive and
-// the remote-absent recheck are its instances (the on-change mirror spawn
-// stopped being one when links-sync-pgct.12 replaced its time window with the
-// mirror-pending claim — a rate bound cannot carry a coverage guarantee).
+// the remote-absent recheck are its instances.
 func shouldRunNow(markerPath string, now time.Time, interval time.Duration) bool {
 	info, err := os.Stat(markerPath)
 	if err != nil {

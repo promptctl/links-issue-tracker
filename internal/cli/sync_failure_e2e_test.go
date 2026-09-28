@@ -122,12 +122,11 @@ func proseDivergedClones(t *testing.T) (consumer, ticketID string) {
 	return consumer, ticketID
 }
 
-// TestInlineReconcileSurfacesContractOnProseHeld is the incident replay: a clone
-// diverges on a free-text field the engine cannot settle, and on the VERY FIRST
-// ordinary command afterward the inline auto-reconcile surfaces the full
-// sync-failure contract to stderr — directive, what, how, escalation — where the
-// 2026-07-08 incident printed only a raw "will retry" line an agent ignored for
-// two days. [LAW:no-silent-failure]
+// TestInlineReconcileSurfacesContractOnProseHeld: a clone diverges on a
+// free-text field the engine cannot settle, and on the VERY FIRST ordinary
+// command afterward the inline auto-reconcile surfaces the full sync-failure
+// contract to stderr — directive, what, how, escalation.
+// [LAW:no-silent-failure]
 func TestInlineReconcileSurfacesContractOnProseHeld(t *testing.T) {
 	consumer, ticketID := proseDivergedClones(t)
 
@@ -144,11 +143,10 @@ func TestInlineReconcileSurfacesContractOnProseHeld(t *testing.T) {
 	}
 }
 
-// TestExplicitPullSurfacesContractOnProseHeld proves the exit-contract change: an
-// explicit `lit sync pull` that meets a held free-text conflict now returns the
-// sync-failure contract and exits ExitConflict — the same exit `lit sync
-// reconcile` gives for the identical state — instead of the pre-change exit-0
-// stdout one-liner. [LAW:single-enforcer]
+// TestExplicitPullSurfacesContractOnProseHeld proves an explicit `lit sync pull`
+// that meets a held free-text conflict returns the sync-failure contract and
+// exits ExitConflict — the same exit `lit sync reconcile` gives for the
+// identical state. [LAW:single-enforcer]
 func TestExplicitPullSurfacesContractOnProseHeld(t *testing.T) {
 	t.Setenv(DisableAutoSyncEnvVar, "1") // drive sync explicitly; no inline race
 	consumer, ticketID := proseDivergedClones(t)
@@ -169,9 +167,9 @@ func TestExplicitPullSurfacesContractOnProseHeld(t *testing.T) {
 }
 
 // TestNoRawReconcileShrugInSource is the grep-level property from the acceptance:
-// the exact ignorable line the 2026-07-08 incident printed — a raw backend error
-// framed as "will retry" — must never return to the source. The inline reconcile
-// failure now routes through the sync-failure contract (blockString); a future raw
+// the exact ignorable line — a raw backend error framed as "will retry" — must
+// never return to the source. The inline reconcile failure routes through the
+// sync-failure contract (blockString); a future raw
 // reprint of this literal is the specific regression this guards. It is a
 // structural guard on purpose: no behavioral test can assert the ABSENCE of a
 // future bad print. [LAW:no-silent-failure]

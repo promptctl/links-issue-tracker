@@ -23,7 +23,7 @@ func TestCommandErrorReason(t *testing.T) {
 		{"unknown command", UnknownCommandError{Command: "wat"}, "unknown_command"},
 		{"not found", storage.NotFoundError{Entity: "issue", ID: "lit-abc"}, "entity_not_found"},
 		// A retired flag fails the same way on every run, so neither retired
-		// flag may fall to the default retry advice (links-output-format-yxjs).
+		// flag may fall to the default retry advice.
 		{"unsupported output flag", unsupportedOutputFlagError(), "unsupported_flag"},
 		{"unsupported continue flag", UnsupportedError{Message: "--continue is retired"}, "unsupported_flag"},
 		{"generic", UsageError{Message: "bad"}, "usage_error"},
@@ -33,7 +33,6 @@ func TestCommandErrorReason(t *testing.T) {
 		// ErrTransientGCContention) is true here too: reversing the errors.As and
 		// errors.Is checks in commandErrorReason would flip this to
 		// transient_gc_contention and fail — the ordering is actually guarded.
-		// links-sync-s3r6 #3.
 		{
 			"workspace write blocked",
 			store.WorkspaceWriteBlockedError{Cause: store.ErrTransientGCContention},
@@ -44,9 +43,9 @@ func TestCommandErrorReason(t *testing.T) {
 			store.RemoteUnreachableError{Attempts: 4, Symptom: "ssh: connect to host github.com port 22: Connection refused", Cause: errors.New("wrapped")},
 			"remote_unreachable",
 		},
-		// Both validation types share the one refusal reason (links-sync-r779
-		// defect 3): a deterministic policy refusal must never fall to the
-		// default "Retry the command" remediation.
+		// Both validation types share the one refusal reason: a deterministic
+		// policy refusal must never fall to the default "Retry the command"
+		// remediation.
 		{"cli validation refusal", ValidationError{Message: "Do not set 'blocks' relationships between two issues in the same epic."}, "validation_refused"},
 		{"storage validation refusal", storage.ValidationError{Message: "priority out of range"}, "validation_refused"},
 		// Both takeover-gate arms, and one wrapped: as bare errors they fell to
@@ -57,7 +56,7 @@ func TestCommandErrorReason(t *testing.T) {
 		// A managed template that cannot converge is refused deterministically
 		// like a validation failure, but the act it calls for is editing a file
 		// on disk — so it carries its own reason rather than inheriting
-		// validation_refused's "adjust the command" (links-templates-1bai).
+		// validation_refused's "adjust the command".
 		{"template shape refusal", templateShapeError{Message: "template must contain either no markers or be exactly one such block"}, "template_shape_refused"},
 		{
 			"workspace busy",
@@ -66,13 +65,11 @@ func TestCommandErrorReason(t *testing.T) {
 		},
 		// The router's terminal answers are answers, not faults, and each names
 		// a different act — so each is its own reason rather than both sharing
-		// one, and neither may fall through to "command_failed" (links-cli-cpou).
+		// one, and neither may fall through to "command_failed".
 		{"router scope exhausted", Exhausted{Epics: []string{"links-epic-abcd"}}, "scope_exhausted"},
 		{"router no ready work", NoWork{}, "no_ready_work"},
 		// A repository `lit init` has never run in is terminal: no rerun makes
-		// the workspace exist. It reached "command_failed" while it was a bare
-		// fmt.Errorf, and with it the default's retry-then-doctor advice
-		// (links-cli-errors-yfbg). Both the bare sentinel and a wrapped one are
+		// the workspace exist. Both the bare sentinel and a wrapped one are
 		// pinned, because the store returns it bare today and a caller adding
 		// context later must not silently drop back to the default.
 		{"workspace not initialized", store.ErrWorkspaceNotInitialized, "workspace_not_initialized"},
@@ -108,18 +105,14 @@ func TestCommandErrorReason(t *testing.T) {
 			fmt.Errorf("open store: %w", store.ErrWorkspaceNotInitialized),
 			"workspace_not_initialized",
 		},
-		// Acceptance 4 from the other side: a stat that failed for any reason
-		// but ENOENT is an unclassified fault, and the retry-then-doctor default
-		// is still the right advice for it. The new arm must not widen to it.
+		// A stat that failed for any reason but ENOENT is an unclassified fault,
+		// and the retry-then-doctor default is the right advice for it.
 		{"genuine stat fault stays unclassified", errors.New("stat database dir: permission denied"), "command_failed"},
-		// Acceptance 4: a genuine fault reaching the same surface keeps the
-		// reason it always had. The arms above dispatch on their concrete types,
-		// so adding them shadowed nothing.
 		{"genuine fault still classifies", CorruptionError{Message: "integrity_check failed"}, "corruption_detected"},
 		// A container action carries its own split: the request the children
 		// already satisfy needs nothing done, while the one they do not is a
 		// deterministic refusal joining the existing validation reason. Both
-		// must stay off the default's retry advice (links-cli-errors-1u9g).
+		// must stay off the default's retry advice.
 		{
 			"container action already satisfied",
 			model.ContainerActionError{
@@ -168,10 +161,10 @@ func TestWriteCommandError(t *testing.T) {
 	}
 }
 
-// TestWriteCommandErrorWorkspaceWriteBlocked pins defect #3 of links-sync-s3r6:
-// a write refused because another process holds the store surfaces the holder-
-// aware headline and its resolution steps — never the raw "database is read only"
-// line as the whole message. [FRAMING:representation]
+// TestWriteCommandErrorWorkspaceWriteBlocked: a write refused because another
+// process holds the store surfaces the holder-aware headline and its resolution
+// steps — never the raw "database is read only" line as the whole message.
+// [FRAMING:representation]
 func TestWriteCommandErrorWorkspaceWriteBlocked(t *testing.T) {
 	t.Parallel()
 	var stderr bytes.Buffer
@@ -199,10 +192,10 @@ func TestWriteCommandErrorWorkspaceWriteBlocked(t *testing.T) {
 	}
 }
 
-// TestWriteCommandErrorValidationRefusalNeverSaysRetry pins defect 3 of
-// links-sync-r779's comment: a policy refusal (exit 3) is deterministic —
-// retrying can never succeed — so its remediation must not tell the operator
-// to retry, and must not point at `lit doctor` (nothing is wrong).
+// TestWriteCommandErrorValidationRefusalNeverSaysRetry: a policy refusal
+// (exit 3) is deterministic — retrying can never succeed — so its remediation
+// must not tell the operator to retry, and must not point at `lit doctor`
+// (nothing is wrong).
 func TestWriteCommandErrorValidationRefusalNeverSaysRetry(t *testing.T) {
 	t.Parallel()
 	var stderr bytes.Buffer
@@ -219,8 +212,8 @@ func TestWriteCommandErrorValidationRefusalNeverSaysRetry(t *testing.T) {
 	}
 }
 
-// TestWriteCommandErrorUninitializedWorkspace pins links-cli-errors-yfbg at the
-// surface an agent actually reads. The condition is terminal — `lit init` has
+// TestWriteCommandErrorUninitializedWorkspace pins the surface an agent
+// actually reads. The condition is terminal — `lit init` has
 // never run here — so the remediation must agree with the message body instead
 // of contradicting it: no retry advice, and no referral to `lit doctor`, which
 // reads the very workspace that is missing.
@@ -248,19 +241,16 @@ func TestWriteCommandErrorUninitializedWorkspace(t *testing.T) {
 	if !strings.Contains(out, "Do not retry unchanged") || !strings.Contains(out, "lit init") {
 		t.Fatalf("remediation must say the condition is terminal and name `lit init`: %q", out)
 	}
-	// The terminal claim is about this command, not about all of them. An
-	// earlier draft said every store-touching command repeats this answer until
-	// a workspace exists, which is false — the write paths bootstrap one. A
-	// remediation is acted on, not read for flavour, so an overstatement here is
-	// the same defect as the advice it replaces. [LAW:no-silent-failure]
+	// The terminal claim is about this command, not about all of them — the
+	// write paths bootstrap one. A remediation is acted on, not read for
+	// flavour. [LAW:no-silent-failure]
 	if strings.Contains(out, "every store-touching command") {
 		t.Fatalf("remediation must not claim every command repeats this answer; the write paths bootstrap: %q", out)
 	}
 }
 
-// TestWriteCommandErrorRemoteUnreachable pins defect 2 of links-sync-r779: a
-// transport failure that survived the retry budget surfaces as the remote
-// being unreachable — naming the transport symptom — with remediation aimed at
+// TestWriteCommandErrorRemoteUnreachable: a transport failure that survived
+// the retry budget surfaces as the remote being unreachable — naming the transport symptom — with remediation aimed at
 // the network, never at credentials or `lit doctor`.
 func TestWriteCommandErrorRemoteUnreachable(t *testing.T) {
 	t.Parallel()

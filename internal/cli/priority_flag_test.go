@@ -10,17 +10,13 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
-// links-cli-bvko at the command surface: the value a read surface prints has to
-// be a value the flag that set it accepts. `lit show` and the issue rows print
-// model.Priority.String(), so that word is what these drive the flag with —
-// which is also what fails the moment --priority goes back to an fs.Int, since
-// pflag's strconv.ParseInt refuses "urgent" before lit's own gate runs.
+// The value a read surface prints has to be a value the flag that set it
+// accepts. `lit show` and the issue rows print model.Priority.String(), so that
+// word is what these drive the flag with.
 //
 // It quantifies over model.Priorities() and drives all three write commands
-// rather than naming "urgent" once, because the defect was never about one word
-// or one command: the flag was declared the same wrong way in new, followup and
-// update. [LAW:behavior-not-structure] asserts the stored priority, not the
-// parse call.
+// rather than naming "urgent" once. [LAW:behavior-not-structure] asserts the
+// stored priority, not the parse call.
 func TestPriorityFlagAcceptsEveryWordTheReadSurfacesPrint(t *testing.T) {
 	ctx := context.Background()
 
@@ -127,12 +123,10 @@ func priorityOtherThan(p model.Priority) model.Priority {
 	return p
 }
 
-// The ticket's second half. A flag value outside the domain is a deterministic
-// refusal, so it must exit ExitValidation and must NOT draw the default
-// "Retry the command" remediation — an agent that trusts remediation text over
-// the error body loops forever on a parse failure no retry can change. Before
-// this fix the refusal came from pflag's ParseInt as a bare error, which missed
-// the validation_refused arm and got exactly that advice.
+// A flag value outside the domain is a deterministic refusal, so it must exit
+// ExitValidation and must NOT draw the default "Retry the command" remediation
+// — an agent that trusts remediation text over the error body loops forever on
+// a parse failure no retry can change.
 func TestPriorityFlagRefusesOutOfDomainValuesWithoutAdvisingRetry(t *testing.T) {
 	ctx := context.Background()
 
@@ -196,8 +190,7 @@ func TestPriorityFlagDefaultsToNormal(t *testing.T) {
 }
 
 // Flag help and the usage strings are derived from the vocabulary, so they
-// cannot drift from the gate the way "Priority: 0=normal, 1=urgent" did while
-// every read surface printed words.
+// cannot drift from the gate.
 func TestPriorityChoicesNamesExactlyTheVocabulary(t *testing.T) {
 	got := priorityChoices()
 	want := make([]string, 0, len(model.Priorities()))
@@ -214,8 +207,7 @@ func TestPriorityChoicesNamesExactlyTheVocabulary(t *testing.T) {
 
 // The flag tolerates the surrounding space and casing a pasted value carries.
 // Driven through runNew rather than through parsePriorityFlag directly: a test
-// that named the wrapper would pin its signature, and the signature is the very
-// thing this ticket changed. [LAW:behavior-not-structure]
+// that named the wrapper would pin its signature. [LAW:behavior-not-structure]
 func TestPriorityFlagToleratesPastedCaseAndSpace(t *testing.T) {
 	ctx := context.Background()
 

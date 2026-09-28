@@ -31,7 +31,7 @@ func TestApplyRefusesContainerForEveryAction(t *testing.T) {
 }
 
 // TestApplyTargetStateOnLeafProducesTargetState exercises every (from, action)
-// pair on a hydrated leaf to confirm Issue.Apply now obeys the target-state
+// pair on a hydrated leaf to confirm Issue.Apply obeys the target-state
 // contract: action determines the post-state regardless of from-state, and
 // same-state pairs succeed as no-ops.
 func TestApplyTargetStateOnLeafProducesTargetState(t *testing.T) {
@@ -293,10 +293,10 @@ func TestIsContainerUsesIssueTypeNotLifecycle(t *testing.T) {
 	}
 }
 
-// The container⊆valid invariant the old parallel slices needed a test for is
-// now structural: ContainerTypes() filters IssueTypes through the IsContainer
-// predicate, so a container outside the vocabulary is unrepresentable. What
-// remains testable is the parse gate's contract. [LAW:behavior-not-structure]
+// The container⊆valid invariant is structural: ContainerTypes() filters
+// IssueTypes through the IsContainer predicate, so a container outside the
+// vocabulary is unrepresentable. What remains testable is the parse gate's
+// contract. [LAW:behavior-not-structure]
 func TestParseIssueType(t *testing.T) {
 	for _, valid := range IssueTypes() {
 		got, err := ParseIssueType(string(valid))

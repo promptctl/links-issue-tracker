@@ -28,11 +28,11 @@ func verifiedNativeEntries(t *testing.T) []Entry {
 	return entries
 }
 
-// TestNativeLibsInSBOMAndBundle is this ticket's acceptance criterion: the SBOM
-// and the attribution bundle both list ICU, zstd, and musl (and compiler-rt)
-// with a license and a version, and the bundle carries their notice text. It
-// renders from nativeEntries — the exact Entry values buildEntries appends to
-// the Go inventory — so it checks precisely what the generated artifacts contain.
+// TestNativeLibsInSBOMAndBundle: the SBOM and the attribution bundle both list
+// ICU, zstd, and musl (and compiler-rt) with a license and a version, and the
+// bundle carries their notice text. It renders from nativeEntries — the exact
+// Entry values buildEntries appends to the Go inventory — so it checks
+// precisely what the generated artifacts contain.
 func TestNativeLibsInSBOMAndBundle(t *testing.T) {
 	t.Parallel()
 	entries := verifiedNativeEntries(t)
@@ -171,17 +171,14 @@ func TestLicenseChoiceArms(t *testing.T) {
 	}
 }
 
-// TestNativeNotesSurfaceInReportAndSBOM is links-licensing-c0ce.8's acceptance
-// criterion for the curated notes: zstd's dual-license election and
+// TestNativeNotesSurfaceInReportAndSBOM: zstd's dual-license election and
 // compiler-rt's compound-expression provenance must be readable in the shipped
 // artifacts themselves — LICENSE-REPORT.md's Notes section and the SBOM — not
 // only in native.go, which ships to nobody.
 //
-// The SBOM half of that criterion is asserted against the note's home as of
-// links-licensing-c0ce.15, which is a namespaced property rather than
-// component.description. The criterion itself did not change: the note must
-// reach a reader of the shipped document. What changed is which field carries
-// it, because CycloneDX defines description as what the component IS.
+// The SBOM half is asserted against the note's home, which is a namespaced
+// property rather than component.description, because CycloneDX defines
+// description as what the component IS.
 func TestNativeNotesSurfaceInReportAndSBOM(t *testing.T) {
 	t.Parallel()
 	entries := verifiedNativeEntries(t)
@@ -270,8 +267,8 @@ func TestBundleOmitsEmptyNote(t *testing.T) {
 }
 
 // TestNativeLibsPassPolicy confirms the license-policy gate accepts every native
-// library — the ticket requires the gate to "account for them". Runs the real
-// predicate over just the native inventory against the committed policy.
+// library. Runs the real predicate over just the native inventory against the
+// committed policy.
 func TestNativeLibsPassPolicy(t *testing.T) {
 	t.Parallel()
 	policy, err := LoadPolicy()
@@ -343,14 +340,10 @@ func TestNativeZigVersionMatchesDockerfile(t *testing.T) {
 	}
 }
 
-// TestNativeDescriptionsSayWhatTheComponentIs pins the split
-// links-licensing-c0ce.15 made between the two claims a native component
-// carries. Before it, the curated licensing note rode in component.description,
-// which CycloneDX defines as what the component IS — a true statement in a field
-// that does not mean what the statement says, and one merge and dedup tooling
-// treats as identity metadata.
+// TestNativeDescriptionsSayWhatTheComponentIs pins the split between the two
+// claims a native component carries.
 //
-// Two assertions in the loop catch a restored `Description: e.Note`, and they
+// Two assertions in the loop catch a `Description: e.Note`, and they
 // catch different things. The equality check fails because the description is
 // no longer the curated one; the separation check below it fails because the
 // description IS the note. Only the second still fires if someone "fixes" the
@@ -407,23 +400,20 @@ func TestGoModulesCarryNoDescriptionOrNote(t *testing.T) {
 	}
 }
 
-// TestNativeDescriptionsMakeNoPlatformClaim pins the rule musl's description was
-// corrected to obey. The curated inventory is generated once per release and
-// rendered into artifacts that are not platform-specific — LICENSE-REPORT.md
-// ships inside EVERY archive goreleaser builds, under a preamble asserting the
-// components listed are compiled into this binary, and the SBOM is a single
-// standalone asset covering every platform. A description scoped to one of them
+// The curated inventory is generated once per release and rendered into artifacts that are
+// not platform-specific — LICENSE-REPORT.md ships inside EVERY archive
+// goreleaser builds, under a preamble asserting the components listed are
+// compiled into this binary, and the SBOM is a single standalone asset
+// covering every platform. A description scoped to one of them
 // ("linked into lit's fully-static Linux builds") is a false sentence in the
 // copies a darwin or windows recipient opens.
 //
 // The check is deliberately a keyword scan, because the mistake it catches is a
 // keyword: a maintainer adds a platform name to a description that ships
-// everywhere. (The first version of this comment justified the rule by saying
-// the SBOM ships inside every archive. It does not ship in any archive — it is
-// staged separately — and the rule survives on the report, which does.) Describing WHAT a component is never requires naming an operating
-// system; if a future component genuinely needs that qualification, it belongs
-// in the note, which is about lit's use of the component rather than about the
-// component itself.
+// everywhere. Describing WHAT a component is never requires naming an
+// operating system; if a future component genuinely needs that qualification,
+// it belongs in the note, which is about lit's use of the component rather
+// than about the component itself.
 func TestNativeDescriptionsMakeNoPlatformClaim(t *testing.T) {
 	for _, n := range nativeLibs {
 		for _, platform := range []string{"Linux", "linux", "darwin", "Darwin", "macOS", "Windows", "windows"} {
@@ -471,7 +461,7 @@ func withEvidence(n nativeLib, edit func([]armEvidence) []armEvidence) nativeLib
 // proves only that the check is not empty. A row asserting merely "some error"
 // would stay green if half these rules were deleted.
 //
-// The first row is the scenario the ticket was written from: zstd relicenses,
+// The first row is the scenario: zstd relicenses,
 // a maintainer writes the new identifier into native.go and adds it to
 // allowed_licenses, and every rule in policy.go passes it because the
 // classifier's taxonomy has no opinion about a 2021-corpus-absent license.
@@ -649,7 +639,7 @@ func TestVerifyNoticeFailureCarriesTheRemedy(t *testing.T) {
 // TestBuildEntriesRefusesALyingNativeRecord is the wiring proof. The rule is
 // only worth having if the GATE runs it: verifyNotice passing in a unit test
 // while `go run ./tools/licenses -check` never calls it would leave the four
-// literals exactly as unchecked as before. It swaps the package record for a
+// literals unchecked. It swaps the package record for a
 // lying one and drives the real inventory build, which is the single function
 // both -check and artifact generation go through.
 func TestBuildEntriesRefusesALyingNativeRecord(t *testing.T) {

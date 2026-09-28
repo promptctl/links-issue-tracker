@@ -324,7 +324,7 @@ func seedDiscoverableStore(t *testing.T, repoDir, prefix, workspaceID string) (s
 }
 
 // TestGatherCrossProjectRollupCountsWorkable is the happy-path guard for the core
-// new data path: discovery through classification to counts. A real Discover-able
+// data path: discovery through classification to counts. A real Discover-able
 // store with a known backlog must roll up to Err==nil with the exact
 // ready / in-flight / blocked counts and the config-derived prefix label — so a
 // regression in classification, store integration, or count assignment is caught.
@@ -371,13 +371,11 @@ func TestGatherCrossProjectRollupCountsWorkable(t *testing.T) {
 // drops the focus scope that call returns. The drop is the whole point: these
 // are whole-project counts, and a project that happens to carry a focus label
 // would otherwise report "ready 1" meaning "ready on that project's focus path"
-// — the same column, the same number shape, a different fact, which is the
-// silent-substitution class this PR exists to remove everywhere else.
+// — the same column, the same number shape, a different fact.
 //
-// Nothing checked it, so it was a claim in a comment rather than a property of
-// the code. The fixture puts the majority of the work OFF the focused path, so
-// a scope that leaked into the rollup cannot produce these numbers by accident:
-// it would report ready 1 / in-flight 0 / blocked 1.
+// The fixture puts the majority of the work OFF the focused path, so a scope
+// that leaked into the rollup cannot produce these numbers by accident: it
+// would report ready 1 / in-flight 0 / blocked 1.
 func TestGatherCrossProjectRollupCountsIgnoreTheFocusScope(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("LIT_CONFIG_GLOBAL_PATH", "")
@@ -444,10 +442,10 @@ func TestGatherCrossProjectRollupCountsIgnoreTheFocusScope(t *testing.T) {
 	}
 }
 
-// TestRunStoresCountsRendersRollup is the fold's acceptance: `stores --counts`
-// routes the same discovery walk into the cross-project count rollup (the former
-// `lit overview`), while bare `stores` still lists storage paths. Proves the flag
-// wiring end-to-end, not just the rollup helper in isolation.
+// TestRunStoresCountsRendersRollup: `stores --counts` routes the same discovery
+// walk into the cross-project count rollup, while bare `stores` lists storage
+// paths. Proves the flag wiring end-to-end, not just the rollup helper in
+// isolation.
 func TestRunStoresCountsRendersRollup(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("LIT_CONFIG_GLOBAL_PATH", "")

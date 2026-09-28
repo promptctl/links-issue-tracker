@@ -37,8 +37,7 @@ func (c *countingGraphSource) fetchCounts() map[string]int {
 }
 
 // The focus-path walk must reuse relations the listing pipeline already fetched
-// and must never re-query a subject within a single walk. This is the
-// query-count-shaped acceptance for links-query-efficiency-988d.2, observed
+// and must never re-query a subject within a single walk. This is observed
 // behaviorally by counting the subject ids handed to GetRelationsByIDs:
 //   - no subject is fetched more than once per walk (the per-walk memo dedups
 //     subjects that recur across BFS levels — here the focused epic is both a
@@ -67,8 +66,7 @@ func TestFocusPathWalkReusesFetchedRelations(t *testing.T) {
 	h.setLabels(epic.ID, FocusLabel)
 
 	// Unseeded walk: the canonical result, and proof the memo fetches each
-	// recurring subject at most once within one walk. Pre-memo, the epic was
-	// fetched twice (frontier subject, then parent-epic subject a level later).
+	// recurring subject at most once within one walk.
 	bare := &countingGraphSource{inner: h.ap.Store}
 	wantPath, err := fetchFocusPathGoals(h.ctx, bare)
 	if err != nil {

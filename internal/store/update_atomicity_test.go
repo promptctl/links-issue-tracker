@@ -70,12 +70,9 @@ func TestApplyTransitionAndFieldsCommitAsOneUnit(t *testing.T) {
 	}
 }
 
-// TestApplyRejectedFieldWriteLeavesNoTransition is the regression guard
-// for the ticket's exact hazard: a status transition paired with a field edit
-// that fails validation must leave the issue WHOLLY untouched. Before the
-// plan/apply split the transition committed first, so an invalid field left a
-// status-moved-but-fields-unwritten row and an audit event for a "failed"
-// command. Field validation now runs before any write, so the transition never
+// TestApplyRejectedFieldWriteLeavesNoTransition pins that a status transition
+// paired with a field edit that fails validation must leave the issue WHOLLY
+// untouched. Field validation runs before any write, so the transition never
 // lands — the torn state is unrepresentable.
 func TestApplyRejectedFieldWriteLeavesNoTransition(t *testing.T) {
 	t.Parallel()

@@ -32,9 +32,7 @@ func (r *cycleRepairer) FixRankInversions(context.Context) (int, error) { return
 
 // A repair walks up the parent chain to classify live issues, and that walk does
 // not return when the hierarchy holds a loop. So on a looped workspace the
-// repairs must not run at all: running them first is what made `lit doctor
-// --fix` overflow the stack before it could name the loop, leaving the operator
-// whose habit is --fix with no diagnosis whatsoever.
+// repairs must not run at all.
 func TestDoctorSkipsEveryRepairOnALoopedHierarchy(t *testing.T) {
 	t.Parallel()
 	repairer := &cycleRepairer{report: storage.HealthReport{

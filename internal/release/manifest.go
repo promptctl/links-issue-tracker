@@ -10,11 +10,6 @@
 //   - The refusal-message upgrade (downgrade epic .5, not yet built):
 //     consults a manifest to name a concrete prior version.
 //
-// NOTE: an earlier draft of this comment claimed the manifest is "embedded in
-// each binary" so a local binary could expose Artifact lists. That embedding is
-// not implemented in this PR; `lit version` only reports version.Info.
-// Embedding can be added later via go:embed if downstream tickets need it.
-//
 // [LAW:one-source-of-truth] One schema definition. The bytes mkmanifest writes
 // and the bytes a downgrade client reads share this Go type — there is no
 // parallel JSON schema description that could drift from this struct.
@@ -37,7 +32,7 @@ import "github.com/promptctl/links-issue-tracker/internal/version"
 // never appears: the question is meaningless for a release, and every lit
 // already installed would fail to decode a manifest carrying it. Adding a
 // field to Info is therefore a wire-format change — see the note on
-// FromSource for what it costs and HTTPResolver.Resolve for what now absorbs
+// FromSource for what it costs and HTTPResolver.Resolve for what absorbs
 // it going forward.
 type Manifest struct {
 	version.Info

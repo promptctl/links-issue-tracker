@@ -221,10 +221,9 @@ const canonicalApache2 = `
 `
 
 // nonStandardWTFPL is the short, profanely-worded WTFPL variant shipped by
-// github.com/kch42/buzhash — real text from a former dependency (removed in
-// links-licensing-c0ce.6), kept as the fixture that pins the classifier's
-// below-threshold "Unknown" behavior against text a real module actually
-// shipped rather than a hypothetical.
+// github.com/kch42/buzhash — real text, kept as the fixture that pins the
+// classifier's below-threshold "Unknown" behavior against text a real module
+// actually shipped rather than a hypothetical.
 const nonStandardWTFPL = `           DO WHATEVER THE FUCK YOU WANT, PUBLIC LICENSE
    TERMS AND CONDITIONS FOR COPYING, DISTRIBUTION AND MODIFICATION
 
@@ -307,10 +306,9 @@ func TestFindLicenseFileAcceptReject(t *testing.T) {
 		// every name recognized by one is bare-preferred by the other. This
 		// table pins that property for the full current set rather than
 		// re-adding one hand-picked subtest per name every time a gap is
-		// found (LICENCE, then COPYING/UNLICENSE, were each missed that way
-		// before the two checks were unified). The real shape this mirrors:
-		// gopkg.in/yaml.v2 ships both LICENSE and LICENSE.libyaml (the latter
-		// for a vendored C dependency) and LICENSE unambiguously wins.
+		// found. The real shape this mirrors: gopkg.in/yaml.v2 ships both
+		// LICENSE and LICENSE.libyaml (the latter for a vendored C dependency)
+		// and LICENSE unambiguously wins.
 		for _, name := range []string{"LICENSE", "LICENCE", "COPYING", "UNLICENSE"} {
 			dir := writeFiles(t, name, name+".libyaml")
 			got, err := FindLicenseFile(dir)

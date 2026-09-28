@@ -27,14 +27,9 @@
 // next engine would have to grow the internal to pass. [LAW:behavior-not-structure]
 //
 // Dolt's behavior is the tiebreak — not because it is the only implementation,
-// which it stopped being when the memory engine shipped, but because the S0
-// migration state's whole gate is that nothing observable changes. Where a
-// behavior was ambiguous these cases record what Dolt does rather than what
-// would be tidier; where the second engine answered BETTER, it was moved to
-// match rather than the contract moved to meet it, because an engine that is
-// right where the other is arbitrary still reads as divergence to the
-// differential oracle. Correcting one of those faults moves observable output,
-// which makes it a ticket rather than a cleanup.
+// but because the S0 migration state's whole gate is that nothing observable
+// changes. Where a behavior was ambiguous these cases record what Dolt does
+// rather than what would be tidier.
 package conformance
 
 import (
@@ -85,13 +80,12 @@ type engineCase struct {
 
 // clock is the instant the engine under test stamps its writes with.
 //
-// It runs on the real clock until a case pins it, so the great majority of
-// cases — which say nothing about time — behave exactly as they did before this
-// seam existed. Pinning is what makes two facts constructible that no real
-// clock will hand out on demand: a run of writes sharing one instant, which is
-// the tie the (created_at, id) rule exists to settle, and a pair of instants
-// whose TEXT order is the reverse of their instant order, which is how an
-// engine that sorts a timestamp by its spelling gets caught.
+// It runs on the real clock until a case pins it. Pinning is what makes two
+// facts constructible that no real clock will hand out on demand: a run of
+// writes sharing one instant, which is the tie the (created_at, id) rule exists
+// to settle, and a pair of instants whose TEXT order is the reverse of their
+// instant order, which is how an engine that sorts a timestamp by its spelling
+// gets caught.
 //
 // [LAW:dataflow-not-control-flow] Pinning replaces the function rather than
 // setting a "pinned" flag some branch consults, so there is one read path
@@ -136,13 +130,9 @@ const prefix = "conf"
 // three milliseconds before it.
 //
 // An engine that round-trips a stamp through text and then compares the text
-// orders this pair backwards. That is not hypothetical: the Dolt engine keeps
-// created_at in a varchar and did exactly that in its listings until
-// links-store-seam-q35v.6, and in its history reads until links-store-seam-8yv2
-// — which the first run of these cases is what caught. An engine holding a real
-// instant passes without noticing there was anything to get wrong. Left to a live nanosecond clock the collision arises
-// about once in ten million pairs, which is why no case could state it before
-// the contract had a clock seam.
+// orders this pair backwards. An engine holding a real instant passes without
+// noticing there was anything to get wrong. Left to a live nanosecond clock the
+// collision arises about once in ten million pairs.
 //
 // They are fixed values rather than offsets from the real clock because a case
 // that pins time is asserting about an exact stamp, and deriving one from
@@ -424,9 +414,7 @@ func applyToContainer(t *testing.T, ctx context.Context, st storage.Store, clk *
 // applyToArchivedNamesTheTypedVerb pins which of an action's two names reaches
 // the reader when a retention state refuses it. Name() is the persisted event
 // encoding -- what the events table stores -- and Verb() is the word a caller
-// types; they differ for exactly one action, so `lit open` on an archived issue
-// was refused as "cannot reopen archived or deleted issue", naming a command
-// lit does not have.
+// types; they differ for exactly one action.
 //
 // It lives in the conformance suite because the refusal exists in two copies,
 // one per engine, and a test beside either one would let the other drift. Here
@@ -551,17 +539,6 @@ func historyRecordsMutations(t *testing.T, ctx context.Context, st storage.Store
 // everyEditableFieldRecordsHistory holds the field axis to its own promise:
 // every field a patch can write, history reports. Not "the fields somebody
 // remembered" — every one of them.
-//
-// The case exists because the exception was real. Both engines wrote prompt and
-// neither recorded it, so an agent could rewrite the instruction another agent
-// would execute and leave nothing behind saying it had changed
-// (links-store-seam-q35v.8). Nothing about that omission was decided; it was a
-// field added to two apply blocks and to neither diff, in engines whose only
-// tie between those blocks was that one author edited both.
-//
-// So this walks the whole editable set rather than the one field that was
-// missing. A per-field case would have passed for the seven that worked and
-// never been written for the eighth, which is exactly how the hole got in.
 func everyEditableFieldRecordsHistory(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	newType := model.TypeBug
 	priority := model.PriorityUrgent
@@ -956,8 +933,8 @@ func listSortsStatusByDerivedState(t *testing.T, ctx context.Context, st storage
 	// is decided by the sort key alone and no id tie-break can supply the right
 	// answer by luck. Reading the stored column instead puts the epic at an END
 	// of the listing — leading ascending on its absent value, trailing
-	// descending — so both directions below fail loudly on the old behavior
-	// rather than one of them passing either way.
+	// descending — so both directions below fail loudly rather than one of them
+	// passing either way.
 	onlyLeavesAndEpic := []string{closedLeaf.ID, openLeaf.ID, epic.ID}
 
 	// "closed" < "in_progress" < "open" as tokens, and the epic derives
@@ -1041,10 +1018,7 @@ func listOrdersTimestampsByInstant(t *testing.T, ctx context.Context, st storage
 // order is the reverse of their instant order, so an engine comparing the
 // spelling fails here as well as in the listing. Inside a group every event
 // shares one stamp, so only the id tie-break is left — which is the whole
-// reason the rule names a second key, and it was unreachable while the engine
-// alone decided what time it was: on a live nanosecond clock the tie this
-// settles simply never occurred, and an engine returning raw recording order
-// passed.
+// reason the rule names a second key.
 func eventsAreTotallyOrdered(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	// The create is inside the first group, not before it: an unpinned create
 	// would stamp the real instant, which is later than either pinned one, and
@@ -1482,16 +1456,7 @@ func rankSetStaysInsideItsFrame(t *testing.T, ctx context.Context, st storage.St
 // verb is refused, and that the refusal costs the order nothing.
 //
 // Rank is a position among issues that are actually listed, so a deleted issue
-// has none — but nothing used to say so, and each verb improvised differently:
-// the SQL edge verbs failed deep inside their transaction on a row their own
-// precheck had just accepted (GetIssue carries no deleted_at filter), the
-// relative verbs wrote a key onto a row no view shows, and RankSet — once it
-// began rewriting its frame's slots in place — had the worst answer of the
-// three. Its slot list counts only live members while its replacement list
-// counted every representative, so a deleted one made the second longer than
-// the first and the rewrite committed the prefix that fit, dropping whichever
-// live sibling owned the slots that ran out. That issue then belonged to no
-// position at all.
+// has none.
 //
 // The survivor assertion is the point of this case and outlives the particular
 // answer: whatever a rank verb decides to do about a deleted issue, an issue
@@ -1500,9 +1465,8 @@ func rankVerbsRefuseADeletedIssue(t *testing.T, ctx context.Context, st storage.
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	gone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "gone", Topic: "core", ParentID: epic.ID})
 	sibling := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "sibling", Topic: "core", ParentID: epic.ID})
-	// bystander is named by nothing below. It is the issue the truncated rewrite
-	// used to drop, so its survival is what separates a refused write from a
-	// half-applied one.
+	// bystander is named by nothing below. Its survival is what separates a
+	// refused write from a half-applied one.
 	bystander := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "bystander", Topic: "core", ParentID: epic.ID})
 
 	if _, err := st.Apply(ctx, gone.ID, storage.Change{Action: model.Delete{}, Actor: "tester"}); err != nil {
@@ -1526,10 +1490,7 @@ func rankVerbsRefuseADeletedIssue(t *testing.T, ctx context.Context, st storage.
 	}
 	// The message is asserted whole, not merely as "some error", and compared
 	// against one expectation for both engines — which is the only thing that
-	// makes the parity claim testable. Containment would not do it: the memory
-	// engine's RankSet once wrapped this refusal with a "rank set: " prefix its
-	// SQL counterpart did not, and a substring check passes straight through a
-	// divergence like that. [LAW:one-source-of-truth]
+	// makes the parity claim testable. [LAW:one-source-of-truth]
 	wantRefusal := fmt.Sprintf("cannot rank deleted issue %s; restore it first", gone.ID)
 	for _, r := range refusals {
 		err := r.call()
@@ -2002,14 +1963,8 @@ func exportCarriesWholeStore(t *testing.T, ctx context.Context, st storage.Store
 	// and this case would pass an engine that exported its raw recording order,
 	// which is the defect it exists to catch.
 	//
-	// The pinned clock is what supplies the tie. Before the contract had one,
-	// ties could only be coaxed out of a live clock by recording several events
-	// per change and hoping — one group left the ids right half the time, so
-	// this case needed TEN independent groups to push agreement-by-coincidence
-	// down to 2^-10, and even then it was a probability rather than a
-	// statement. Every event below now shares one instant, so a broken export
-	// fails every run instead of 1023 times in 1024, and three groups say what
-	// ten used to.
+	// The pinned clock is what supplies the tie. Every event below shares one
+	// instant, so a broken export fails every run.
 	tied := make([]string, 0, 3)
 	for _, name := range []string{"a", "b", "c"} {
 		issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "tied " + name, Topic: "core"})

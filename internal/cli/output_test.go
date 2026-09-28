@@ -9,14 +9,14 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
-// TestShowOmitsHistoryTrailWhileHistoryViewRendersIt pins the split the
-// show-history epic delivers: fed one identical multi-edit IssueDetail,
-// `lit show` (printIssueDetail) renders the ticket's CURRENT fields and NOT the
-// field-level `from → to` change-log, while `lit history` (printIssueHistory)
-// renders that trail in full. Asserting both formatters against the same input
-// makes "same data, two views" the enforced contract [LAW:behavior-not-structure]:
-// a reader trusts show as current state, and the trail still has a home. Local
-// tz is pinned so the trail's timestamp format stays covered where it now lives.
+// TestShowOmitsHistoryTrailWhileHistoryViewRendersIt pins the split: fed one
+// identical multi-edit IssueDetail, `lit show` (printIssueDetail) renders the
+// ticket's CURRENT fields and NOT the field-level `from → to` change-log, while
+// `lit history` (printIssueHistory) renders that trail in full. Asserting both
+// formatters against the same input makes "same data, two views" the enforced
+// contract [LAW:behavior-not-structure]: a reader trusts show as current state,
+// and the trail still has a home. Local tz is pinned so the trail's timestamp
+// format stays covered.
 func TestShowOmitsHistoryTrailWhileHistoryViewRendersIt(t *testing.T) {
 	// serial: no t.Parallel — rewrites the process-global time.Local;
 	// parallel readers of it would race.
@@ -89,9 +89,7 @@ func TestShowOmitsHistoryTrailWhileHistoryViewRendersIt(t *testing.T) {
 
 // TestPrintIssueGroupNamesRetentionRatherThanStatus pins the relationship
 // groups to issueStanding: the two lifecycle axes are orthogonal, and a
-// soft-deleted ticket's status is still "open", so printing State() alone
-// rendered a dead blocker as "[open]" and sent the reader hunting for an id that
-// appears in no listing (links-readiness-9no1). Retention dominates because a
+// soft-deleted ticket's status is still "open". Retention dominates because a
 // frozen issue's status describes work nobody may do.
 // [LAW:behavior-not-structure] The contract asserted is the rendered line a
 // reader acts on, not which accessor produced the word.
@@ -135,12 +133,7 @@ func TestPrintIssueGroupNamesRetentionRatherThanStatus(t *testing.T) {
 
 // TestPrintIssueGroupNamesTheCloseReason pins the resolution into every
 // relation group. A closed ticket's resolution is stored, sealed, and rendered
-// in the `lit show` header, but the relation groups printed a bare "[closed]"
-// — so in exactly the views used to judge "is this area finished?", a wontfix
-// declination read identically to finished work. The loss was directional: it
-// could only make a body of work look MORE finished than it is, which is the
-// error that never prompts anyone to go check. An agent acted on it and
-// reported three declined tickets as folded-in work (promptctl-output-p60y).
+// in the `lit show` header.
 //
 // [LAW:behavior-not-structure] The contract is the line a reader acts on, so
 // the arms differ only in what was recorded at close. One renderer produces

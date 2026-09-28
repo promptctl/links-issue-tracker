@@ -16,7 +16,7 @@ import (
 // the newest version cyclonedx-cli (the validator the release workflow runs
 // against the shipped file) accepts; cyclonedx-go defaults a fresh BOM to 1.7,
 // so buildSBOM must convert down at encode time or a 1.7 document would fail
-// the very `cyclonedx validate` that is this ticket's acceptance check.
+// `cyclonedx validate`.
 // [LAW:one-source-of-truth] the emitted spec version lives here only; the
 // encoder call and any validator pin both read this single value.
 const sbomSpecVersion = cdx.SpecVersion1_6
@@ -150,8 +150,7 @@ func componentProperties(note string) *[]cdx.Property {
 // pedigreeNoteFork explains a fork-shaped substitution in the words the
 // structured fields cannot. `descendants` states a genealogy — that a fork of
 // this component exists — and nothing more; it does not say that the fork is
-// what lit actually compiled, which is the whole fact this ticket exists to
-// disclose.
+// what lit actually compiled.
 const pedigreeNoteFork = "lit's go.mod requires this coordinate, but a replace directive substitutes its source: " +
 	"the code compiled into lit came from the fork recorded under descendants, not from the version and purl above. " +
 	"Both coordinates resolve publicly; the fork is the one to fetch when diffing against a lit build. " +
@@ -172,8 +171,7 @@ const pedigreeNoteVersion = "lit's go.mod requires this coordinate at the versio
 // one learns the opposite of the truth — that nothing was substituted.
 // It also claims no containment. modfile.IsDirectoryPath accepts `../sibling`
 // and absolute paths as readily as `./internal/...`, so "carried inside lit's
-// own repository" — which this string said until bundle.go was corrected and
-// this twin was not — is false for a sibling checkout or /opt/src. Two
+// own repository" is false for a sibling checkout or /opt/src. Two
 // renderers stating one fact is exactly how one of them comes to state it
 // wrongly. [LAW:one-source-of-truth]
 const pedigreeNoteDirectory = "lit's go.mod requires this coordinate, but a replace directive substitutes its source with %s, " +
@@ -209,9 +207,7 @@ const pedigreeNoteDirectory = "lit's go.mod requires this coordinate, but a repl
 // this component names. Filing it under ancestors — "the component this one was
 // derived from" — would assert that dolthub/dolt derives from promptctl's fork,
 // reversing the real genealogy in a structured field a machine reads without
-// the notes beside it. Shipping a true-sounding claim in a field that means
-// something else is the defect this ticket was opened to remove, not one to
-// re-commit while removing it.
+// the notes beside it.
 //
 // [LAW:dataflow-not-control-flow] the single switch is the domain's own
 // discriminator — the three shapes admit different facts, and each arm says
@@ -249,10 +245,7 @@ func componentPedigree(r Replacement) *cdx.Pedigree {
 // differ: Entry.LicenseName is written in exactly two places — Classify, which
 // returns a corpus name or unclassifiedLicense, and native.go's four curated
 // literals. oversizeLicense is produced only by the graph scanner, into
-// LicenseHit, and never becomes an Entry. Widening this condition to the set
-// read as tidier and added a branch nothing can reach; it was the one rule in
-// this package whose mutation survived the whole suite, which is how it was
-// caught.
+// LicenseHit, and never becomes an Entry.
 func componentLicenses(name, acknowledgement string) *cdx.Licenses {
 	if name == "" || name == unclassifiedLicense {
 		return nil

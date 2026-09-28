@@ -6,19 +6,14 @@ import (
 	"time"
 )
 
-// TestConcurrentOpenWaitsForLiveWriteEngine pins the fix for
-// links-sync-pgct.11. Embedded Dolt permits only one write-capable engine per
-// path: before this fix, a second concurrent Open() on the same workspace
-// while the first was still live failed outright with Dolt's raw "cannot
-// update manifest: database is read only" (or, on a lucky timing, an
-// intermittent pass) instead of simply waiting for the first to release.
-// This is the exact shape of the field race: a foreground `lit new` opening
-// its engine while an earlier command's on-change mirror still has its own
-// engine open. The contract is behavioral — the second Open() waits on the
-// first, then succeeds — and is provided by the second open's bounded retry
-// against Dolt's own journal lock, which the first Store's engine holds for
-// its whole lifetime. (Originally provided by a lit-minted engine flock,
-// retired in links-locking-il18.3 as a partial shadow of that same lock.)
+// TestConcurrentOpenWaitsForLiveWriteEngine pins that a second concurrent
+// Open() on the same workspace waits for the first to release: embedded Dolt
+// permits only one write-capable engine per path. This is the exact shape of
+// the field race: a foreground `lit new` opening its engine while an earlier
+// command's on-change mirror still has its own engine open. The contract is
+// behavioral — the second Open() waits on the first, then succeeds — and is
+// provided by the second open's bounded retry against Dolt's own journal lock,
+// which the first Store's engine holds for its whole lifetime.
 func TestConcurrentOpenWaitsForLiveWriteEngine(t *testing.T) {
 	// serial: no t.Parallel — asserts through a 300ms must-not-have-completed-
 	// yet window; background load turns that window into a flake.
@@ -68,12 +63,10 @@ func TestConcurrentOpenWaitsForLiveWriteEngine(t *testing.T) {
 }
 
 // TestOpenSyncWaitsForLiveForegroundEngine reproduces the exact
-// cross-type race links-sync-pgct.11 describes: a foreground mutating
-// command's Store (Open) is still live when the on-change mirror's Store
-// (OpenSync) tries to open its own engine on the same path. Before the fix
-// these are two independent engine opens with nothing between them; both now
-// contend on Dolt's own journal lock with a bounded retry, so OpenSync waits
-// instead of colliding.
+// cross-type race: a foreground mutating command's Store (Open) is still live
+// when the on-change mirror's Store (OpenSync) tries to open its own engine on
+// the same path. Both contend on Dolt's own journal lock with a bounded retry,
+// so OpenSync waits instead of colliding.
 func TestOpenSyncWaitsForLiveForegroundEngine(t *testing.T) {
 	// serial: no t.Parallel — asserts through a 300ms must-not-have-completed-
 	// yet window; background load turns that window into a flake.

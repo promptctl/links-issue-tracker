@@ -41,8 +41,8 @@ func columnIndex(t *testing.T, table RawTable, column string) int {
 }
 
 // TestDumpRawReleasesDeadendedWorkspace is the foundation acceptance: a
-// workspace stamped past this binary's registry max with a corrupt baseline —
-// the links-recovery-icqp deadend shape — is refused by store.Open(), yet
+// workspace stamped past this binary's registry max with a corrupt baseline
+// is refused by store.Open(), yet
 // DumpRaw releases its application rows without ever calling Open().
 func TestDumpRawReleasesDeadendedWorkspace(t *testing.T) {
 	t.Parallel()

@@ -20,7 +20,7 @@ import (
 // — what closing a row releases, how many rank inversions the repo holds — are
 // properties of the queue. So the filtered and unfiltered costs are expected to
 // be EQUAL, and a filtered run that is much cheaper means a fact is being
-// derived from a narrowed set again (links-listing-85sd).
+// derived from a narrowed set.
 func benchGather(b *testing.B, rows int, rf workableFilter) {
 	// The benchmark's own b, not a hand-built harness: newTestCLIApp registers
 	// the store's Close and the temp workspaces' removal as cleanups on what it

@@ -127,7 +127,7 @@ func TestShowRendersRedirectDistinctFromRelated(t *testing.T) {
 
 // TestShowManualRelatedRendersUnchanged pins the no-regression half of the
 // acceptance: a ticket with a manual related edge and no redirect renders the
-// related group exactly as before, with no redirect group.
+// related group, with no redirect group.
 func TestShowManualRelatedRendersUnchanged(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
@@ -150,10 +150,9 @@ func TestShowManualRelatedRendersUnchanged(t *testing.T) {
 	}
 }
 
-// TestShowRedirectAlongsideManualPeers pins the recut's correctness win: the
-// redirect is a stored fact on the issue row, so it renders correctly even
-// when manual related edges exist — the case the old edge-count heuristic had
-// to refuse (it showed no redirect at all when a manual peer was present).
+// TestShowRedirectAlongsideManualPeers pins that the redirect is a stored fact
+// on the issue row, so it renders correctly even when manual related edges
+// exist.
 func TestShowRedirectAlongsideManualPeers(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
@@ -194,10 +193,8 @@ func TestShowRedirectAlongsideManualPeers(t *testing.T) {
 }
 
 // TestCloseDuplicateOfAlreadyRelatedTicketRoundTrip pins the acceptance round
-// trip that failed before the redirect became a column: a manual related edge
-// to the canonical no longer collides with the close (the old edge INSERT hit
-// the relations primary key), a reopen clears the redirect atomically with
-// the resolution instead of leaking a machine edge into related, and the
+// trip: a manual related edge to the canonical does not collide with the close,
+// a reopen clears the redirect atomically with the resolution, and the
 // re-close succeeds.
 func TestCloseDuplicateOfAlreadyRelatedTicketRoundTrip(t *testing.T) {
 	ctx := context.Background()

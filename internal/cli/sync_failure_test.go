@@ -15,7 +15,7 @@ import (
 // elements the contract promises: the unmissable directive, the domain-term WHAT,
 // the ordered HOW commands, and a value-driven escalation line. Mirrors the style
 // of TestUnsupportedSchemaVersionMessageShape — the shape is a contract, tested
-// directly so it cannot silently regress toward the old ignorable one-liner.
+// directly so it cannot silently regress.
 func assertContractElements(t *testing.T, block string, wantCommands ...string) {
 	t.Helper()
 	// (1) Directive — the standing not-ambient-noise fact.
@@ -46,8 +46,6 @@ func assertContractElements(t *testing.T, block string, wantCommands ...string) 
 	if !strings.HasPrefix(block, "<agent-instructions>") {
 		t.Errorf("block is not wrapped as agent-instructions:\n%s", block)
 	}
-	// Regression lock: the exact ignorable shrug the 2026-07-08 incident printed
-	// must never come back as the failure surface. [LAW:no-silent-failure]
 	if strings.Contains(block, "will retry") {
 		t.Errorf("block reintroduced the ignorable 'will retry' framing:\n%s", block)
 	}

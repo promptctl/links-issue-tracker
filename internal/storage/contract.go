@@ -68,10 +68,7 @@ type IssueReader interface {
 
 	// ListEvents reads one issue's history, ordered exactly as ListAllEvents
 	// orders the whole of it. It exists because "who does the record say holds
-	// this ticket" is a question about one issue, and the only reader that
-	// carried a history before this was GetIssueDetail — the single-issue view
-	// paid for in full, hydrating relations, comments and children a caller
-	// after the claimant never looks at.
+	// this ticket" is a question about one issue.
 	ListEvents(ctx context.Context, issueID string) ([]model.IssueEvent, error)
 
 	// LocalIssueCount reports how many issues this store holds. It is the

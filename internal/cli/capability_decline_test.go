@@ -21,8 +21,7 @@ import (
 // where a refactor turns a typed refusal into a nil dereference and nothing
 // says so.
 //
-// What makes the engines below honest rather than the stub this ticket spent
-// two rounds refusing: they are not Dolt with a capability hidden. They are the
+// What makes the engines below honest: they are not Dolt with a capability hidden. They are the
 // two partial shapes the CONTRACT already names. capabilities.go says the event
 // store "offers sync and not reconcile: its arrival needs no merge ... so it
 // has no diverged state, no base to merge through, and no side to take", and

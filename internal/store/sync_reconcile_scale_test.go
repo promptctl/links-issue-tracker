@@ -13,12 +13,8 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-// The scale the replay has to survive. The field incident folded tens of
-// commits over hundreds of issues; these numbers are the ticket's floor for
-// what two year-old stores meeting for the first time could look like, and they
-// are what the old shape could not do in bounded memory: it projected every
-// folded commit up front and held all of them at once, so its peak grew as
-// chain × backlog.
+// The scale the replay has to survive. These numbers are the ticket's floor for
+// what two year-old stores meeting for the first time could look like.
 const (
 	scaleBacklogIssues = 1000
 	scaleFoldedCommits = 500
@@ -53,10 +49,7 @@ func scaleEditTarget(i int) string { return scaleIssueID(i % scaleEditedIssues) 
 //
 // It is measured as RETAINED heap — a forced GC before every sample — rather
 // than allocated heap, because garbage is exactly what the two designs do NOT
-// differ in. The old shape's cost was materializing one projected export per
-// folded commit and HOLDING them all until the spine was built; that is live,
-// uncollectable memory, and it is invisible in a measure that garbage
-// dominates.
+// differ in.
 //
 // The number: the streamed replay measures ~83 MiB of growth at this scale,
 // and holds a fixed handful of exports whatever the chain's length. The
@@ -73,31 +66,24 @@ const scaleHeapGrowthBudget = 160 << 20 // 160 MiB
 // scaleWallClockBudget bounds how long the combine may take. Unlike the memory
 // bound this is NOT a claim that the cost stopped scaling: reading the backlog
 // at each folded commit is still one full export per commit, so time remains
-// proportional to chain × backlog. What changed is the constant — the replay no
-// longer rewrites every table for every step.
+// proportional to chain × backlog.
 //
-// It is a blowup ceiling and deliberately NOT a regression detector. The
-// arithmetic says it cannot be both: the entire pre-change shape — materialized
-// exports and wholesale rewrite together — measured 26.1s at 102 commits over 400
-// issues, which projects to about 5.3 minutes at this scale, comfortably inside
-// this budget. So passing here is no evidence the per-step rewrite stayed gone,
-// and the bound is not tightened toward that number to make it so: the minimality
-// tests already own that rule, and they assert how LITTLE each step writes, which
-// is the thing a wall-clock number can only ever proxy for. What this bound
-// catches is a genuine blowup — an unbounded fold, a step that wedged. One rule,
-// one enforcer. [LAW:single-enforcer]
+// It is a blowup ceiling and deliberately NOT a regression detector: the
+// minimality tests already own that rule, and they assert how LITTLE each step
+// writes, which is the thing a wall-clock number can only ever proxy for. What
+// this bound catches is a genuine blowup — an unbounded fold, a step that
+// wedged. One rule, one enforcer. [LAW:single-enforcer]
 const scaleWallClockBudget = 10 * time.Minute
 
 // TestSyncReconcileCombineIsBoundedOnALargeFoldedChain is the acceptance test
 // for links-sync-pgct.13: a combine folding scaleFoldedCommits commits over a
 // scaleBacklogIssues-issue backlog completes inside a stated time and memory
-// budget, with peak memory no longer scaling with chain × backlog — and every
+// budget, with peak memory not scaling with chain × backlog — and every
 // provenance guarantee the replay existed to provide still holding.
 //
-// It runs the UNRELATED-histories combine on purpose: that is the field
-// incident's own shape (two independent inits against one remote), and its
-// folded side is the whole local chain rather than just the ahead commits, so
-// it is the harshest version of the replay.
+// It runs the UNRELATED-histories combine on purpose: its folded side is the
+// whole local chain rather than just the ahead commits, so it is the harshest
+// version of the replay.
 func TestSyncReconcileCombineIsBoundedOnALargeFoldedChain(t *testing.T) {
 	// serial: no t.Parallel — a throughput benchmark asserting an elapsed bound;
 	// CPU contention from parallel tests would fail it for reasons unrelated to
@@ -220,9 +206,9 @@ func assertCombinedBacklogContents(t *testing.T, ctx context.Context, st *Store,
 
 func scaleIssueID(i int) string { return fmt.Sprintf("bench-%05d", i) }
 
-// seedUnrelatedBacklogPair builds the field incident at scale: two workspaces
-// that initialised INDEPENDENTLY against one remote, so their histories share
-// no commit. A holds the backlog and has pushed it; B holds the same backlog
+// seedUnrelatedBacklogPair builds two workspaces that initialised
+// INDEPENDENTLY against one remote, so their histories share no commit. A
+// holds the backlog and has pushed it; B holds the same backlog
 // (same ids, so the union is one backlog and the merge does real per-issue
 // field resolution) plus a long chain of local single-field edits that have
 // never been pushed. B's whole chain is therefore the folded side.
@@ -310,9 +296,7 @@ func plantScaleBacklog(t *testing.T, ctx context.Context, st *Store, issues int)
 }
 
 // heapWatch samples live heap while an operation runs, because the peak that
-// matters happens DURING the replay and is gone by the time it returns — the
-// materialized steps of the old shape were released the moment the spine was
-// built, so a measurement taken afterwards would report both designs as equal.
+// matters happens DURING the replay and is gone by the time it returns.
 type heapWatch struct {
 	done     chan struct{}
 	wg       sync.WaitGroup

@@ -14,14 +14,9 @@ import (
 //
 // lit has not tagged v0.1.0 yet, but real workspaces (unreal-3d-maps,
 // cc-nerf-buster) already exist on disk; every retcon of baseline.sql between
-// now and v0.1.0 would re-brick them by the same mechanism PR #143 / PR #145
-// just recovered from. The gate activates here and treats master as the
-// immutable baseline from this commit forward — referencing PRs (durable)
-// not commit hashes (subject to rewrites/squashes inside an immutable file).
+// now and v0.1.0 would brick them.
 //
-// [LAW:single-enforcer] One enforcer, not two. Reviewer attention and
-// documentation discipline both failed for the 2026-05-21 retcon incident;
-// this test is the only thing standing between that incident and its repeat.
+// [LAW:single-enforcer] One enforcer, not two.
 // [LAW:one-source-of-truth] The hash IS the schema-v1 identity. Two copies
 // (one here, one in some workflow yaml) would drift; one copy in Go, run
 // from the same code path in CI and `go test ./...`, cannot.
@@ -32,8 +27,8 @@ import (
 const baselineFrozenHash = "e86c1aa36ebe70ddbaa2b18f18ee310c33dfce1f07fb3c2811a1d76385ad1fbb"
 
 // TestBaselineFileIsFrozen asserts the bytes of 00001_baseline.sql match the
-// pinned hash. If this fails, you are about to ship the 2026-05-21 retcon
-// incident again — read the failure message before reaching for the constant.
+// pinned hash. If this fails, read the failure message before reaching for
+// the constant.
 func TestBaselineFileIsFrozen(t *testing.T) {
 	data, err := FS.ReadFile("00001_baseline.sql")
 	if err != nil {

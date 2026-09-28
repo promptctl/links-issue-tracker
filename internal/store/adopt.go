@@ -110,11 +110,9 @@ func clearAdoptPendingMarker(cleanRoot string) error {
 // residue from ever being opened as a store. A failed-and-returned clone
 // cleans up after itself, but the failure shapes that CANNOT return — init's
 // deadline abandoning the clone goroutine mid-write, a crash, SIGKILL — leave
-// whatever undefined partial state the clone had reached, and before this
-// marker existed the only signal downstream was "the database directory
-// exists", a map that reads residue as a valid store. [LAW:parse-dont-validate]
-// presence of the marker is the (negative) stamp: directory existence alone
-// is never again trusted as store validity.
+// whatever undefined partial state the clone had reached.
+// [LAW:parse-dont-validate] presence of the marker is the (negative) stamp:
+// directory existence alone is never trusted as store validity.
 //
 // Only a provably-absent marker returns nil. A present marker returns the
 // condemnation (wrapping errAdoptPending) whether or not its content parses —
@@ -204,8 +202,7 @@ func LocalHasTickets(ctx context.Context, doltRootDir, workspaceID string) (bool
 
 // AdoptRemoteByClone bootstraps the local store by CLONING the remote's history
 // wholesale, writing it directly into doltRootDir as the database's first
-// on-disk state. It is the medium-appropriate transfer for a git-backed remote,
-// and the reason init no longer fetches to adopt.
+// on-disk state. It is the medium-appropriate transfer for a git-backed remote.
 //
 // [FRAMING:representation] On a git-backed remote the Dolt table files live
 // inside git blob objects, which have no random access: dolt serves a ranged

@@ -9,14 +9,6 @@ import (
 // tests assert the consts rather than the package vars the deadline regression
 // tests shrink: the design is what is being pinned, not a test's knob.
 
-// TestMirrorHoldBudgetExceedsObservedCloneCost is the regression pin for
-// links-sync-dauk, carried onto the hold the mirror now takes. The retired test
-// asserted only that the budget fit inside the foreground's retry, which a
-// budget of one second would also satisfy — nothing anywhere checked the budget
-// against the cost of the work it bounds, so a 20s budget sat below the
-// measured p90 of a mirror cycle, cut 15.8% of them, and reported each one as a
-// remote-transport fault.
-//
 // A hold budget is a stall detector. Its whole claim is that work still running
 // at the deadline has stopped making progress, and that claim is false the
 // moment the deadline lands inside the distribution of healthy runs. So the
@@ -35,11 +27,10 @@ func TestMirrorHoldBudgetExceedsObservedCloneCost(t *testing.T) {
 	}
 }
 
-// TestMirrorHoldBudgetIsAHoldNotARoundTrip pins what links-scale-om3r.s2h
-// changed: the mirror's hold on the live store is a local clone, so its budget
-// must sit far under the network round trip the mirror used to hold the store
-// across. A hold budget that could accommodate a push would mean the push had
-// crept back under the hold — the wait every co-resident command paid.
+// TestMirrorHoldBudgetIsAHoldNotARoundTrip pins that the mirror's hold on the
+// live store is a local clone, so its budget must sit far under the network
+// round trip. A hold budget that could accommodate a push would mean the push
+// had crept under the hold.
 func TestMirrorHoldBudgetIsAHoldNotARoundTrip(t *testing.T) {
 	t.Parallel()
 	if mirrorHoldBudget >= mirrorPushObservedTail {
@@ -69,8 +60,7 @@ func TestMirrorPushDeadlineExceedsObservedPushCost(t *testing.T) {
 	}
 }
 
-// TestCoResidentWaitIsSizedToTheMirrorHold pins the relation the retired
-// test got wrong. A foreground write open waits out a co-resident holder for
+// A foreground write open waits out a co-resident holder for
 // coResidentHolderWait, and the holder it is sized for is the mirror — so the
 // wait has to outlast the mirror's longest LEGAL hold. That hold is not the
 // budget: a cut does not land on its deadline, so a wait sized against the

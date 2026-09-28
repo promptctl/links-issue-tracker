@@ -32,7 +32,7 @@ func isolate(t *testing.T) (workspaceRoot string, globalWorkflows string) {
 
 // findDefinition looks up one definition by id, so tests that authored their
 // own definitions can assert on those without also enumerating the embedded
-// defaults every Load() now carries alongside them.
+// defaults every Load() carries alongside them.
 func findDefinition(set Set, id string) (Definition, bool) {
 	for _, def := range set.Definitions {
 		if def.ID == id {

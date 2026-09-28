@@ -125,11 +125,7 @@ type orderEdge struct {
 //
 // A population with no members has exactly one position, and it is zero.
 // Absorbing that here is what lets place assign unconditionally, the way
-// rankBeyondTx absorbs the empty frame for the SQL engine. The alternative —
-// answering it in the caller, before the dispatch — is what this had before,
-// and it meant the first issue created in a workspace never reached the
-// dispatch at all, so it accepted any placement whatsoever while the second
-// issue with the same placement was correctly refused.
+// rankBeyondTx absorbs the empty frame for the SQL engine.
 // [LAW:dataflow-not-control-flow]
 func (e orderEdge) positionIn(mateIndexes []int) int {
 	if len(mateIndexes) == 0 {
@@ -201,11 +197,7 @@ func (e *Engine) filingFrame(parentID string) storage.Frame {
 // it must exist, and it must not be in the trash.
 //
 // Rank is a position in an order that only lists live issues, so a deleted one
-// has no position to hold and nothing to hold it against. Letting it through
-// used to mean one of two silent wrongs depending on the verb — a key written
-// onto a row no view shows, or, once RankSet began rewriting its frame's slots
-// in place, a live sibling dropped out of the order to make room for it.
-// Refusing here is what makes both unrepresentable rather than handled.
+// has no position to hold and nothing to hold it against.
 // [LAW:single-enforcer] [LAW:parse-dont-validate]
 func (e *Engine) mustRankable(id string) error {
 	if _, err := e.mustRecord(id); err != nil {
@@ -313,9 +305,7 @@ func (e *Engine) RankSet(ctx context.Context, ids []string) (storage.RankSetResu
 	}
 	// The stack lands at the head of the representatives' own frame. Every
 	// representative is a frame-mate by construction, so that frame is the only
-	// keyspace this order is ever read in; prepending to e.order — what this did
-	// before — shoved an epic's children ahead of every top-level issue and every
-	// other epic's, the cross-frame bleed the SQL engine stopped committing.
+	// keyspace this order is ever read in.
 	// [LAW:one-source-of-truth] the two engines are one behavior.
 	//
 	// The frame's slots are rewritten in place rather than detached and

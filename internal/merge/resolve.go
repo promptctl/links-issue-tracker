@@ -68,8 +68,8 @@ func (r IssueResolution) Provisional() model.Issue {
 // hand-written triples.
 //
 // It takes a SameEntity — a triple Classify has PROVEN to be two versions of one
-// ticket — so the input can no longer mean "two tickets that happen to share an
-// id". That case is a Collision, it never reaches here, and the field merge is
+// ticket — so the input cannot mean "two tickets that happen to share an id".
+// That case is a Collision, it never reaches here, and the field merge is
 // therefore always combining edits someone made to one row.
 //
 // Inside a SameEntity a missing base means one thing only: the two sides share no

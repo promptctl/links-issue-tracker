@@ -37,16 +37,12 @@ func (l *lockedBuffer) String() string {
 	return l.b.String()
 }
 
-// TestMirrorPushHoldsNothingOnTheLiveStore is links-scale-om3r.s2h's contract
-// in test form: the background mirror's push runs from a clone, so while the
-// push is mid-flight — wedged, here, in a git shim that never returns — a
-// foreground mutation on the live store opens, commits and returns. Before the
-// change the mirror pushed under the live store's one read-write engine (and
-// its journal lock), so the same `lit new` would have waited out the whole
-// hold; links-sync-pgct.11.1 bounded that hold with a budget, and this ticket
-// removes it.
+// TestMirrorPushHoldsNothingOnTheLiveStore is the contract in test form: the
+// background mirror's push runs from a clone, so while the push is mid-flight —
+// wedged, here, in a git shim that never returns — a foreground mutation on the
+// live store opens, commits and returns.
 //
-// The same run pins the deadline that replaced the budget: the wedged push is
+// The same run pins the deadline: the wedged push is
 // cut at store.MirrorPushDeadline, the cycle log says so, and the attempt's
 // own trace record names the deadline — the single-flight mirror must not sit
 // on a stalled transport forever, or every mirror spawned meanwhile loses the
@@ -73,9 +69,9 @@ func TestMirrorPushHoldsNothingOnTheLiveStore(t *testing.T) {
 	wedgedAt := awaitWedge(t, wedgeMarker, unboundedRunTripwire(healthyCycle, wedgedDeadline), mirror)
 
 	// The proof: with the push genuinely mid-hang, a foreground mutation on
-	// the live store completes. Its own timeout is the tripwire the retired
-	// hold budget would have tripped — a `lit new` that waits out the wedged
-	// push is the defect, and it fails here instead of passing after the cut.
+	// the live store completes. Its own timeout is the tripwire — a `lit new`
+	// that waits out the wedged push is the defect, and it fails here instead
+	// of passing after the cut.
 	mutationStart := time.Now()
 	if out, err := runInProcess(wedgedDeadline, "new", "--title", "mid-push probe", "--topic", "demo"); err != nil {
 		t.Fatalf("foreground mutation during the wedged push failed — the live store is still held across the push: %v\noutput:\n%s", err, out.String())
@@ -128,8 +124,7 @@ func TestMirrorPushHoldsNothingOnTheLiveStore(t *testing.T) {
 }
 
 // TestMirrorPushDeadlineCutsHungResolveJoinsOneTrace pins the could-not-attempt
-// arm of the deadline cut, the arm a prior review round found double-recording:
-// the clone's session opens, but the pre-push remote resolution (git ls-remote)
+// arm of the deadline cut: the clone's session opens, but the pre-push remote resolution (git ls-remote)
 // hangs and the push deadline kills it, so performSyncPush records no trace of
 // its own and mirrorCycle's out-of-band record is the event's one owner — the
 // deadline explanation joined onto the resolve failure. Exactly one record must
@@ -401,19 +396,11 @@ func shrinkMirrorPushDeadline(t *testing.T, healthyCycle time.Duration) time.Dur
 }
 
 // wedgeDeadlineMargin is how far above a measured healthy cycle the shrunk
-// deadline sits, and why these tests no longer name a duration at all.
+// deadline sits.
 //
 // A deadline is a stall detector: its whole claim is that work still running
 // at the deadline has stopped making progress, and that claim is false the
-// moment the deadline lands inside the cost of healthy work — the defect
-// links-sync-dauk filed against the production figure. The shrink here used to
-// be a flat 8s, which made the same mistake one level down: 8s was a wall-clock
-// bet against setup this test does not own. Measured at load average 270 on the
-// dev box, a cycle spent more than 8s between opening its engine and spawning
-// git push, so the budget fired before the wedge could engage and the run
-// reported the invariant broken when it had only failed to reach it. Raising
-// the number would have moved that threshold without removing the bet
-// (links-testperf-6vfg).
+// moment the deadline lands inside the cost of healthy work.
 //
 // So the base is measured rather than named, and this is the margin over it.
 // One whole healthy cycle is already a strict over-estimate of what has to fit
@@ -433,9 +420,8 @@ const wedgeDeadlineMargin = 2
 // It must run BEFORE installGitWedge (a cycle timed through the shim would be
 // timing the wedge). Running before the shrink needs no saying: the shrink
 // takes this function's result. A sample that was itself cut is censored — the
-// deadline standing in for the work, which is the very reading error
-// links-sync-dauk had to correct in the field log — so a cut sample is a
-// failure here rather than a smaller number. So is a sample whose push failed
+// deadline standing in for the work — so a cut sample is a failure here rather
+// than a smaller number. So is a sample whose push failed
 // fast: the mirror is best-effort and exits clean either way, and a rejected
 // push is cheaper than a landed one. Whether the push landed is read from the
 // push-outcome marker, the one record of that fact, and the marker must be
@@ -474,8 +460,7 @@ func measureHealthyMirrorCycle(t *testing.T, root string, runInProcess func(time
 // measured work ahead of the wedge (none for the sample, which has no measure
 // yet and no wedge), the deadline in force for this run, and the lag a cut
 // takes to unwind — then the same margin again, because a tripwire that lands
-// on legal work reports the wrong failure, which is the mistake this ticket is
-// about.
+// on legal work reports the wrong failure.
 func unboundedRunTripwire(healthyCycle, wedgedDeadline time.Duration) time.Duration {
 	return wedgeDeadlineMargin * (healthyCycle + wedgedDeadline + store.MirrorPushCancelLagObserved)
 }
@@ -518,12 +503,10 @@ func wedgeEngagedAt(t *testing.T, wedgeMarker, wedged string, out *lockedBuffer)
 
 // assertPushEndedWithinItsCeiling pins where a cut push ends, measured from
 // the wedge and not from the cycle's start: everything before the wedge engaged
-// is work whose cost this test does not own, and folding it into the bound is
-// the same wall-clock bet that made the old budget itself flaky.
+// is work whose cost this test does not own.
 //
 // The bound is the deadline plus the lag cancellation takes to unwind — the
-// store's own MirrorPushCancelLagObserved — rather than the bare 30s the two
-// tests used to restate. [LAW:one-source-of-truth]
+// store's own MirrorPushCancelLagObserved. [LAW:one-source-of-truth]
 func assertPushEndedWithinItsCeiling(t *testing.T, wedgedAt, cycleEnded time.Time, wedgedDeadline time.Duration, out *lockedBuffer) {
 	t.Helper()
 	ceiling := wedgedDeadline + store.MirrorPushCancelLagObserved
@@ -538,13 +521,6 @@ func assertPushEndedWithinItsCeiling(t *testing.T, wedgedAt, cycleEnded time.Tim
 // them through oneLineReason, which keeps the first line and caps it at 160
 // runes, so the part that stops a reader blaming the network (or the disk) has
 // to survive that cut.
-//
-// links-sync-dauk's first wording left five runes of margin and nothing
-// measured it, which is the same shape as the defect the ticket was about — an
-// invariant asserted in a comment and enforced nowhere. A later reword, or a
-// deadline whose Duration formats longer than "40s", would have truncated the
-// framing away silently and left the banner saying only that a budget was
-// exceeded.
 //
 // The duration cases are the enumeration this needs: the production values,
 // and a value in minutes, which Go renders as "1h40m0s" — more than twice the

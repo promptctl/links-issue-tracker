@@ -6,10 +6,6 @@ package cli
 // flag interception, unknown-flag classification), and splitArgs separates
 // positionals from flag tokens ahead of that parse. Nothing here knows any
 // command's business logic; handlers compose these.
-//
-// [LAW:decomposition] Split out of cli.go (links-store-mb6e.6) so the
-// flag-parsing framework, the business command handlers, and the typed error
-// taxonomy no longer grow in one file.
 
 import (
 	"errors"
@@ -44,10 +40,9 @@ func newCobraFlagSet(use string) *cobraFlagSet {
 	}
 	cmd.InitDefaultHelpFlag()
 	// Cobra writes that flag's text from cmd.Name(), which is the FIRST word of
-	// Use — so every multi-word leaf described itself by its family: `rank set`
-	// advertised "help for rank", `dep add` "help for dep". A leaf's name here is
-	// its whole invocation path, which is what the caller typed and what the
-	// surrounding "Usage of rank set:" line already says.
+	// Use. A leaf's name here is its whole invocation path, which is what the
+	// caller typed and what the surrounding "Usage of rank set:" line already
+	// says.
 	cmd.Flags().Lookup("help").Usage = "help for " + use
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
@@ -145,9 +140,7 @@ func parseFlagSet(fs *cobraFlagSet, args []string, stdout io.Writer) error {
 		// Past ErrHelp, pflag's Parse fails only with its four typed errors — an
 		// unknown flag, a missing value, an invalid value, bad syntax — and every
 		// one is the caller mis-writing the command line. So all of them are one
-		// UsageError, the same answer the root FlagErrorFunc gives. Classifying by
-		// message prefix instead left `-x`, `--limit abc` and `---x` as bare errors
-		// that exited 1 with "Retry the command" (links-output-format-yxjs).
+		// UsageError, the same answer the root FlagErrorFunc gives.
 		// [LAW:types-are-the-program] [LAW:single-enforcer]
 		//
 		// The retired flag is matched on the name pflag parsed, so `--continue`
@@ -173,28 +166,8 @@ func parseFlagSet(fs *cobraFlagSet, args []string, stdout io.Writer) error {
 // exactly for the flags that do not — so this ASKS the flag set instead of
 // inferring it from the shape of the following token.
 // [LAW:one-source-of-truth] the flag set is the authority on its own flags'
-// arity. splitArgs used to re-derive it from "the next token has no leading
-// dash", which is a statement about the ARGUMENT and not about the FLAG, and it
-// was wrong in both directions: it fed a boolean the positional that followed it
-// (`lit prefix set --apply <prefix>` lost the prefix and refused itself as
-// malformed), and it fed an optional-value flag a value pflag accepts only as
-// `--flag=value`, so the token arrived where nothing expected it.
+// arity.
 //
-// `lit children --include-archived <id>` is NOT an instance, though an earlier
-// draft of this comment and of the changelog both said it was. The mis-split
-// happened there too, but the listing surface declared zero positionals and read
-// its id back out of pflag's leftovers precisely to survive it, so the caller
-// always got the right answer. Checked against the master binary, which prints
-// the child. The surface stops needing that workaround now; it was never a bug
-// the caller could see.
-//
-// It does NOT by itself fix `lit quickstart --eject all`. pflag's rule for an
-// optional-value flag is the equals sign, so `all` is the topic no matter how
-// argv is split, and the command is genuinely refused either way. What was wrong
-// there was the SENTENCE — "quickstart <topic> takes no flags", said by a
-// command with three — and that is fixed in quickstartLeaf, which now names
-// `--eject=LIST`. Recorded because the first draft of this comment claimed the
-// split fixed it, and the two binaries printed the same line.
 // An unknown flag consumes nothing: pflag refuses it a moment later, and leaving
 // the following token where the caller put it keeps that refusal about the flag
 // actually mistyped. [LAW:no-silent-failure]
@@ -206,11 +179,8 @@ func (fs *cobraFlagSet) flagTakesValue(token string) bool {
 	var flag *pflag.Flag
 	switch {
 	case strings.HasPrefix(token, "---"):
-		// Not a spelling pflag accepts. TrimLeft used to strip every dash, so
-		// `---limit` resolved to the real --limit and consumed the next token as
-		// its value; pflag then refused the token anyway, so nothing visible
-		// broke, but the function answered about a flag the caller did not
-		// write. [LAW:one-source-of-truth] answer about the token as written.
+		// Not a spelling pflag accepts. [LAW:one-source-of-truth] answer about
+		// the token as written.
 		return false
 	case strings.HasPrefix(token, "--"):
 		flag = flags.Lookup(strings.TrimPrefix(token, "--"))
@@ -280,12 +250,10 @@ func (fs *cobraFlagSet) optionalValueFlagNames() []string {
 // followed immediately by the POSIX terminator. pflag pairs them — `--` becomes
 // the flag's literal value — and this loop mirrors pflag's pairing everywhere
 // else, so which token is a value is not in question here. What is in question
-// is whether a caller ever means it. `--` is the word for "no more flags", and
-// taking it as a value let `lit label add --by -- <id> <label>` apply a label
-// attributed to "--" at exit 0, on a command line that was refused before this
-// ticket touched the split. The caller who genuinely wants those two characters
-// as a value has a spelling that says so, `--by=--`, and it is unaffected: a
-// token containing `=` never reaches this pairing at all.
+// is whether a caller ever means it. `--` is the word for "no more flags". The
+// caller who genuinely wants those two characters as a value has a spelling
+// that says so, `--by=--`, and it is unaffected: a token containing `=` never
+// reaches this pairing at all.
 // [LAW:no-silent-failure] refuse the shape rather than perform a write on a
 // reading nobody asked for.
 type terminatorAsValue struct{ flag string }
@@ -330,18 +298,6 @@ func splitArgs(args []string, positionalCount int, fs *cobraFlagSet) ([]string, 
 			// like. That is pflag's own rule — it takes the following argv
 			// element unconditionally when NoOptDefVal is empty — and this loop
 			// must model it EXACTLY rather than approximate it.
-			//
-			// It approximated it twice, and both times the approximation was
-			// the bug. Declining to pair when the next token began with a dash
-			// assumed pflag would then refuse the flag; pflag pairs anyway
-			// (`lit upgrade --to --help` fetches a release tagged `v--help`),
-			// so the two disagreed about which token was a value and every
-			// consequence of that disagreement was a misfiled token: a
-			// positional pulled into the flag stream and then refused
-			// (`lit start --reason --reason <id>`), or the terminator withheld
-			// and the tokens behind it dropped, which let
-			// `lit init --prefix --prefix -- stray` create a workspace and lose
-			// `stray` — the very silent drop this ticket exists to remove.
 			// [LAW:one-source-of-truth] pflag is the authority on its own
 			// pairing; this must not become a second one.
 			if index+1 < len(args) && fs.flagTakesValue(arg) {

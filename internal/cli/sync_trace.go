@@ -174,10 +174,7 @@ func infoForLocation(loc workspace.Location) workspace.Info {
 }
 
 // recordEngineOpenContentionTrace leaves a durable sync-trace record when a
-// command's store acquisition failed against a co-resident holder — the
-// record that did not exist when links-sync-pgct.11.1 was hit in the field,
-// leaving the starved command uncorrelatable against the sync traces the
-// mirror DOES write. It fires only on the acquisition-boundary stamp above,
+// command's store acquisition failed against a co-resident holder. It fires only on the acquisition-boundary stamp above,
 // never on the bare busy sentinel — the mutation family's mid-command
 // commit-lock contention already leaves its handler's own trace, and a second
 // record here would give one event two stories. [LAW:single-enforcer] whether

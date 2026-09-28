@@ -31,11 +31,10 @@ import (
 //     target, never a reverse.
 //
 // [LAW:types-are-the-program] The message is a discriminated rendering of the
-// domain fact (openable), not a guess — the same misleading-remediation trap this
-// PR set out to kill would return if it unconditionally named downgrade. It is
-// the mirror of store.DowngradeTargetAheadError: each direction refuses the
-// other's job, so version traversal has exactly two entry points and neither
-// impersonates the other [LAW:one-type-per-behavior].
+// domain fact (openable), not a guess. It is the mirror of
+// store.DowngradeTargetAheadError: each direction refuses the other's job, so
+// version traversal has exactly two entry points and neither impersonates the
+// other [LAW:one-type-per-behavior].
 type UpgradeTargetBehindError struct {
 	Current int64
 	Target  int64
@@ -112,8 +111,7 @@ type upgradeLeafShape = leaf[upgradeScope]
 // withWorkspaceSchema adapts an upgrade leaf to the workspace pipeline, binding
 // the best-effort schema reader for the resolved workspace to this binary's
 // version info. [LAW:no-ambient-temporal-coupling] Only the WORK is wrapped, so
-// the declaration — and therefore `lit upgrade --help` — precedes both
-// (links-cli-1lxr).
+// the declaration — and therefore `lit upgrade --help` — precedes both.
 func withWorkspaceSchema(declare func() upgradeLeafShape) wsLeafFn {
 	return func() wsLeaf {
 		l := declare()

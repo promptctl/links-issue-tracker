@@ -119,8 +119,7 @@ func TestAddRelationRefusesAParentCycle(t *testing.T) {
 	}
 }
 
-// A parent that is not an epic is the case the earlier fix missed: the wait
-// graph carries no edge there, so a rule derived from waits cannot see it,
+// A parent that is not an epic: the wait graph carries no edge there, so a rule derived from waits cannot see it,
 // while hydration walks the parent chain regardless.
 func TestSetParentRefusesACycleThroughANonEpicParent(t *testing.T) {
 	ctx := context.Background()
@@ -285,9 +284,7 @@ func seedParentEdge(t *testing.T, ctx context.Context, st *Store, childID, paren
 // crashes on the fault it repairs leaves the workspace unreadable, which is the
 // condition this whole rule exists to prevent.
 //
-// The anti-vacuity precondition is the hydration check below: ClearParent used
-// to begin with GetIssue, so on this workspace it recursed until the stack
-// overflowed rather than returning any error at all.
+// The anti-vacuity precondition is the hydration check below.
 func TestClearParentBreaksAStoredCycleWithoutHydrating(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
@@ -360,8 +357,7 @@ func TestTheCycleRuleSeesAnEdgeThroughADeletedIssue(t *testing.T) {
 
 // VerifyCandidate's health gate exists for untrusted data, and a parent cycle is
 // exactly the untrusted shape that stops the gates below it: they all read
-// through Export, which hydrates. Before the early return, this overflowed the
-// stack instead of reporting.
+// through Export, which hydrates.
 func TestVerifyCandidateReportsAParentCycleRatherThanHanging(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
@@ -383,8 +379,7 @@ func TestVerifyCandidateReportsAParentCycleRatherThanHanging(t *testing.T) {
 	}
 }
 
-// Dropping ClearParent's hydrating pre-read must not also drop the diagnosis it
-// carried. "No such issue" and "that issue has no parent" send the operator to
+// "No such issue" and "that issue has no parent" send the operator to
 // different places, and a typo'd id reported as a missing edge is the opposite
 // answer: it says the hierarchy is fine when the id is not.
 func TestClearParentReportsAnUnknownIssueAsMissing(t *testing.T) {

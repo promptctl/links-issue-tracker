@@ -265,12 +265,10 @@ func TestRunTransitionRefusesEpicAndStartsLeaf(t *testing.T) {
 	}
 }
 
-// `update` no longer moves status: the transition verbs are the single enforcer
+// `update` does not move status: the transition verbs are the single enforcer
 // of the transition guardrails. Every requested status must be rejected with the
 // pointer to the verbs, and the issue must be left exactly as it was — no target
-// state has a back door through `update`. [LAW:single-enforcer] Closed is checked
-// explicitly because it was the sharpest gap: `--status closed` used to construct
-// a resolution-less Done, bypassing `close`'s required outcome.
+// state has a back door through `update`. [LAW:single-enforcer]
 func TestRunUpdateRejectsStatusFlag(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
@@ -582,8 +580,8 @@ func lastEventActorForAction(t *testing.T, ap *app.App, ctx context.Context, id,
 	return actor
 }
 
-// TestRunTransitionActorFromSessionEnv pins the attribution fix: with
-// CLAUDE_CODE_SESSION_ID set, the event actor (not just the assignee) resolves
+// TestRunTransitionActorFromSessionEnv pins that with CLAUDE_CODE_SESSION_ID
+// set, the event actor (not just the assignee) resolves
 // to claude_<session>, so history shows the agent performed the transition.
 func TestRunTransitionActorFromSessionEnv(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-actor")
@@ -623,10 +621,8 @@ func TestRunTransitionActorFallsBackToByFlag(t *testing.T) {
 	}
 }
 
-// The session env is deliberately set in the clear/verbatim tests below: the
-// bug being pinned was claim-time session resolution leaking into `update`,
-// where it silently rewrote an explicit clear (or third-party assignee) into
-// a self-assignment. [LAW:no-silent-failure]
+// The session env is deliberately set in the clear/verbatim tests below.
+// [LAW:no-silent-failure]
 func TestRunUpdateClearAssigneeLeavesOpenIssueUnassigned(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-grooming")
 	ctx := context.Background()

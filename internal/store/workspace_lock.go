@@ -24,8 +24,7 @@ import (
 //
 // [LAW:one-source-of-truth] Neither mode's caller roster is listed here: the
 // callers of those two functions ARE the roster, and a prose copy of it
-// drifts (a three-name list written in PR #379 was wrong before the PR
-// merged — it missed lifeboat recover's heal).
+// drifts.
 //
 // [LAW:dataflow-not-control-flow] Variability between shared and exclusive
 // modes lives in the (exclusive, maxAttempts, delay) arguments threaded into
@@ -70,9 +69,9 @@ func WorkspaceLockPath(databasePath string) string {
 // place when `lit snapshots restore` rotates that directory out from under
 // concurrent acquirers.
 //
-// [LAW:one-source-of-truth] Every *LockPath helper in this package spelled
-// this derivation out for itself; they now read it from one place, so the
-// position the ONE HOME rule names has exactly one definition.
+// [LAW:one-source-of-truth] Every *LockPath helper in this package reads it
+// from one place, so the position the ONE HOME rule names has exactly one
+// definition.
 func workspaceStorageDir(databasePath string) string {
 	return filepath.Dir(filepath.Clean(databasePath))
 }
@@ -101,10 +100,7 @@ func acquireWorkspaceShared(ctx context.Context, doltRootDir string) (func() err
 // a transient rotation is waited out rather than paper-cutting the caller.
 //
 // [LAW:single-enforcer] Reader-vs-rotator exclusion has exactly one boundary
-// — this lock, in shared mode. Before this export, the snapshot copy ran
-// under only the commit lock (a writer-vs-writer gate on a different file),
-// which an adopt's exclusive hold never contends with — the torn-snapshot
-// race of links-sync-pgct.14.
+// — this lock, in shared mode.
 func LockWorkspaceShared(ctx context.Context, doltRootDir string) (func() error, error) {
 	return acquireWorkspaceShared(ctx, doltRootDir)
 }
@@ -368,13 +364,12 @@ func acquireStoreLock(ctx context.Context, storageDir, lockPath string, exclusiv
 // DoltJournalLockPath returns Dolt's own journal-manifest lock path for a
 // Dolt root directory: <databasePath>/<database>/.dolt/noms/LOCK. This is not
 // a lit-minted lock — the embedded driver takes it (a kernel flock through
-// the same promptctl/primitives/filelock package lit's own locks use; the
-// dolt fork retired dolthub/fslock under links-licensing-c0ce.4) whenever
-// an engine opens, holds it
-// for the engine's lifetime, and demotes the open to Dolt's read-only
-// fallback when a 100ms attempt on it times out. Losing it is therefore the
-// one condition under which an engine performs no lifecycle writes — no
-// journal crash-recovery truncate, no close-time manifest flush.
+// the same promptctl/primitives/filelock package lit's own locks use)
+// whenever an engine opens, holds it for the engine's lifetime, and demotes
+// the open to Dolt's read-only fallback when a 100ms attempt on it times out.
+// Losing it is therefore the one condition under which an engine performs no
+// lifecycle writes — no journal crash-recovery truncate, no close-time
+// manifest flush.
 //
 // ONE HOME exception, stated here where the path is minted: the file lives
 // INSIDE the dolt directory because it is Dolt's file, and that placement is
@@ -386,12 +381,9 @@ func acquireStoreLock(ctx context.Context, storageDir, lockPath string, exclusiv
 // coResidentHolderWait budgets for — and a rotation under that holder
 // is outside lit's exclusion, as every lit-vs-non-lit interaction is.
 //
-// [LAW:one-source-of-truth] lit's retired .links-engine.lock was a partial
-// second representation of this exact fact ("one write-capable engine on this
-// path"), taken by write opens but not by OpenForRead — the disagreement that
-// let a read command's engine run journal recovery underneath a snapshot walk
-// (links-sync-pgct.15). Code that needs the fact contends on Dolt's own lock;
-// it does not mint a shadow.
+// [LAW:one-source-of-truth] Code that needs the fact ("one write-capable
+// engine on this path") contends on Dolt's own lock; it does not mint a
+// shadow.
 func DoltJournalLockPath(databasePath string) string {
 	return filepath.Join(filepath.Clean(databasePath), doltDatabaseName, ".dolt", "noms", "LOCK")
 }
@@ -436,8 +428,7 @@ func LockDoltJournalExclusive(ctx context.Context, databasePath string) (func() 
 	//
 	// Both get the fault error rather than a confident "run `lit init`", because
 	// that sentence is the one that loops: init refuses a root it cannot read
-	// and says retry, which is the defect this change removes, rebuilt one level
-	// down. For the interrupted half that is an accepted downgrade — re-running
+	// and says retry. For the interrupted half that is an accepted downgrade — re-running
 	// init would in fact fix it — and the trade is deliberate: a diagnosis that
 	// terminates beats an instruction that spins. [LAW:one-type-per-behavior]
 	if _, err := os.Stat(filepath.Dir(lockPath)); err != nil {

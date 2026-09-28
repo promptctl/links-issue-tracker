@@ -176,10 +176,7 @@ func TestRunProbeReportsAMissingBinaryAsAHarnessFailure(t *testing.T) {
 // This asserts on the ORDER OF EXECUTION, read back from the fake binary's own
 // log, and not on the order of the returned samples. The distinction is the
 // whole test: samples are built from the probe list, so they report
-// reads-before-writes no matter how the invocations were interleaved. An
-// earlier version of this test checked the slice, passed, and was passing while
-// the write probe really was running once per round with four rounds of reads
-// after it.
+// reads-before-writes no matter how the invocations were interleaved.
 func TestMeasureRunsEveryReadBeforeAnyWrite(t *testing.T) {
 	bin, log := fakeLit(t, 0)
 	samples, err := measure(bin, fakeStore(t))

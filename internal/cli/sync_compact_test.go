@@ -194,19 +194,10 @@ func TestRunSyncCompactCarriesTheDepthAndReportsThePass(t *testing.T) {
 }
 
 // Both compaction paths record through one renderer, so the durable trail
-// carries a single shape whichever entry point ran. They previously spelled
-// their own keys and drifted — the backstop writing "mode", the explicit
-// command "depth", and only the backstop carrying the detail — so a reader had
-// to know which path ran before it knew which key to read. Pinning the
-// vocabulary here is what keeps a third call site from inventing a fourth
-// spelling. [LAW:one-source-of-truth]
+// carries a single shape whichever entry point ran. [LAW:one-source-of-truth]
 // Both entry points describe a completed pass the same way, and only Command
-// says which one ran. The backstop previously recorded "ok" while the explicit
-// command recorded "compacted", so an operator filtering the trail for
-// successful compactions saw only the manual half — the automatic passes, which
-// are most of them, sat under a decision nobody would think to query. Asserting
-// both paths in one loop is the point: a test that only ever drove one is how
-// the divergence survived a round of review. [LAW:one-source-of-truth]
+// says which one ran. Asserting both paths in one loop is the point.
+// [LAW:one-source-of-truth]
 func TestBothCompactionPathsRecordOneDecision(t *testing.T) {
 	t.Parallel()
 	outcome := storage.CompactionOutcome{
@@ -265,9 +256,7 @@ func TestRunSyncCompactSurfacesAndTracesAFailedPass(t *testing.T) {
 
 	// The engine reports the depth it attempted even when the pass failed, which
 	// is what a real Store does: compactWithinLock sets it before anything can
-	// go wrong. The command no longer spells the depth itself, so this is the
-	// only place it can come from — and that is the point, since a second
-	// spelling is what let this vocabulary drift twice already.
+	// go wrong.
 	syncer := &compactSyncer{outcome: storage.CompactionOutcome{Depth: storage.GCNewGen}, err: failure}
 
 	err := runSyncCompact(context.Background(), &out, ws, syncSession{syncer: syncer}, nil)
@@ -292,10 +281,7 @@ func TestRunSyncCompactSurfacesAndTracesAFailedPass(t *testing.T) {
 }
 
 // compactThroughSession is what the backstop records with, and these are the
-// three things the durable trail can say about an automatic pass. None were
-// reachable before it was split out: the cadence e2e tests drive a fresh
-// workspace whose footprint is under every threshold, so CompactIfDue always
-// declines and every recording branch here sat unexecuted.
+// three things the durable trail can say about an automatic pass.
 // [LAW:behavior-not-structure]
 func TestCompactThroughSessionRecordsEachOutcome(t *testing.T) {
 	t.Parallel()
@@ -355,11 +341,8 @@ func TestCompactThroughSessionRecordsEachOutcome(t *testing.T) {
 	})
 
 	// A due-check whose own measurement fails never reaches a depth, so the
-	// trail must say nothing about one. Before the depths were renumbered off
-	// zero, the zero outcome carried GCNewGen and this recorded `depth: newgen`
-	// — a decision nobody made, indistinguishable in the trail from a real
-	// shallow pass that failed. A missing key is recoverable; a fabricated one
-	// misleads whoever reads it during an incident.
+	// trail must say nothing about one. A missing key is recoverable; a
+	// fabricated one misleads whoever reads it during an incident.
 	t.Run("a failure that never chose a depth records none", func(t *testing.T) {
 		t.Parallel()
 		ws := compactWorkspace(t)
@@ -401,8 +384,8 @@ func TestCompactThroughSessionRecordsEachOutcome(t *testing.T) {
 		}
 	})
 
-	// The case this whole change exists for: the engine's pass completed and the
-	// work after it failed, so the store really was rewritten. Recording a bare
+	// The engine's pass completed and the work after it failed, so the store
+	// really was rewritten. Recording a bare
 	// error here would lose a durable — possibly minutes-long, possibly
 	// old-generation-rewriting — side effect behind an unrelated failure.
 	t.Run("a pass that ran and then failed is recorded as the rewrite it was", func(t *testing.T) {

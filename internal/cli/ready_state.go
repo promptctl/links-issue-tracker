@@ -110,8 +110,8 @@ func fetchIssueRelations(ctx context.Context, st storage.Store, issues []model.I
 		return nil, err
 	}
 	// GetRelationsByIDs omits subjects that don't exist; the ready pipeline
-	// requires every workable issue to resolve, so a hole is a NotFound (matching
-	// the prior per-issue GetIssueDetail path), not a silent zero-value row.
+	// requires every workable issue to resolve, so a hole is a NotFound, not a
+	// silent zero-value row.
 	// [LAW:no-defensive-null-guards] Fail loudly at the store boundary.
 	for _, issue := range issues {
 		if _, ok := relations[issue.ID]; !ok {
@@ -131,9 +131,7 @@ func fetchIssueRelations(ctx context.Context, st storage.Store, issues []model.I
 // nested in it, in every lane, except an issue the blocker itself waits on
 // (heldAncestry), so each blocker an ancestor epic holds this issue back on
 // becomes an InheritedDependency here — through the same annotation mechanism,
-// and so the same ClassifyReadiness enforcer, a declared edge uses. It used to
-// be accepted and then ignored: `lit dep add` stored the edge, the epic's row
-// showed it, and every child stayed servable (links-epic-block-xpkz). An id the
+// and so the same ClassifyReadiness enforcer, a declared edge uses. An id the
 // issue already depends on directly is named once, as the direct edge. No
 // inherited edge is a rank inversion of this issue: rank hygiene of the epic's
 // own edge is a fact about the epic, which lit doctor's inversion pass orders.
@@ -146,12 +144,8 @@ func newBlockerAnnotator(details map[string]storage.IssueRelations, ancestry hel
 		// ordering. The annotation kind keeps its registered name
 		// (open_dependency); the predicate below decides what it means.
 		// [LAW:one-source-of-truth] InPlay is the one definition of
-		// "unfinished", and it reads both axes. The prior spelling here —
-		// State() != StateClosed — consulted the status sum alone, so a
-		// soft-deleted dependency kept emitting OpenDependency while every
-		// transition that could discharge it (close/open/start all refuse a
-		// frozen issue) was unreachable: a dependent blocked forever by a
-		// blocker no listing shows. Read and write must agree on retention.
+		// "unfinished", and it reads both axes. Read and write must agree on
+		// retention.
 		var blockingDeps []model.Issue
 		for _, dep := range detail.DependsOn {
 			if dep.InPlay() {
@@ -225,8 +219,7 @@ func fetchContainerAncestry(ctx context.Context, fetch relationsFetch, subjects 
 // batched query per nesting level, keyed by epic id. An issue's parent is one
 // level; an epic can itself sit under an epic, so the walk climbs until no level
 // names a parent epic it has not loaded. A top-level epic has no parent, so the
-// common one-level workspace costs exactly the one query it cost before this
-// walk existed.
+// common one-level workspace costs exactly one query.
 func climbContainers(ctx context.Context, fetch relationsFetch, subjects map[string]storage.IssueRelations) (map[string]storage.IssueRelations, error) {
 	ancestry := make(map[string]storage.IssueRelations)
 	for level := subjects; ; {
@@ -252,7 +245,7 @@ func climbContainers(ctx context.Context, fetch relationsFetch, subjects map[str
 
 // epicsAbove yields the ids of the epics above rel, nearest first, reading each
 // parent's relations from ancestry. A parent that is not an epic ends the walk,
-// as `epic: none` in lit backlog says, and so does a parent cycle (6m14).
+// as `epic: none` in lit backlog says, and so does a parent cycle.
 func epicsAbove(rel storage.IssueRelations, ancestry map[string]storage.IssueRelations) iter.Seq[string] {
 	return func(yield func(string) bool) {
 		seen := map[string]bool{rel.Issue.ID: true}
@@ -291,7 +284,7 @@ func (a epicAncestry) inheritedDependencies(subject storage.IssueRelations) []mo
 // dependencies there, and every issue under an epic the blocker contains. The
 // exception is read from the relations as they are now, so no write can leave a
 // loop behind it: not a new edge, a move, a lane or rank change, a reopen, nor
-// an import (links-hierarchy-lrz6).
+// an import.
 type heldAncestry struct {
 	ancestry epicAncestry
 	waitsOn  map[string]map[string]bool
@@ -430,8 +423,7 @@ func settleWaits(graph map[string][]waitLink, gates []string) map[string]map[str
 // The one rule: leaf L is blocked iff ∃ sibling S under the same epic with
 // S.Lane == L.Lane, S.Rank < L.Rank, and S unfinished. Lane is a plain string;
 // the empty lane is one value among many, so all-keyless children form a single
-// fully-sequential lane and a per-child distinct lane is fully parallel — the
-// old binary "parallel opt-out" is this mechanism's degenerate case.
+// fully-sequential lane and a per-child distinct lane is fully parallel.
 // [LAW:dataflow-not-control-flow] Grouping is by lane value, never a branch on
 // "has a lane". The annotator runs for every issue; model.LaneOf answers for a
 // leaf with no epic parent with a solo lane whose Epic() is "", and
@@ -459,10 +451,7 @@ func newSiblingGateAnnotator(details map[string]storage.IssueRelations, siblings
 // earlier unfinished lane-mate" is proved by one, and the rest of the prefix is
 // the lane's own rank order.
 // [LAW:one-source-of-truth] The lane order is the authority on the prefix; the
-// annotation carries the edge, never a second copy of the order. Carrying all of
-// them made a sequential lane's blocking text grow quadratically down the epic —
-// the tenth child restating the nine facts its nine predecessors had each
-// already stated — which is the noise links-listing-x943 was filed for.
+// annotation carries the edge, never a second copy of the order.
 //
 // The lane order is not always in front of the reader: the pending set is
 // deliberately unfiltered (pendingSiblingsByEpic), so under a filtered or
@@ -753,17 +742,11 @@ func newFocusPathAnnotator(pathGoals map[string]string) annotation.Annotator {
 
 // focusScope is the row set a focused view answers over: the prerequisite
 // closure of every focus-labeled goal, or the whole queue when nothing is
-// labeled. It is what replaced sortByFocusPath, which hoisted every path row
-// above every other row BEFORE rank was consulted — a second ordering authority
-// competing with the stored rank, while `lit backlog` went on describing itself
-// as "priority/rank order". With ~38 rows wired to one focused goal the hoisted
-// set simply was the top of the view, so a `lit rank <id> --top` that the store
-// honored landed at position 39 and no surface said why (links-listing-ju7i).
+// labeled.
 //
-// A scope changes MEMBERSHIP and leaves ordering alone, which is why it fixes
-// what a reworded preamble could only have documented: there is no second answer
-// to "what order is this in" left to keep in agreement, and `--top` reaches the
-// top of whatever view it is aimed at. [LAW:one-source-of-truth] rank is the one
+// A scope changes MEMBERSHIP and leaves ordering alone: there is no second
+// answer to "what order is this in" left to keep in agreement, and `--top`
+// reaches the top of whatever view it is aimed at. [LAW:one-source-of-truth] rank is the one
 // ordering authority.
 //
 // goals is read from the walk's own output and never from the gathered rows,
@@ -903,7 +886,7 @@ func isRequiredFieldSet(value any) bool {
 // tag drops them from JSON output and the renderer skips them.
 // [LAW:dataflow-not-control-flow] Every row flows through the same lookup;
 // variability lives in whether the parent exists and its type, not in whether
-// the enrichment step runs. (links-agent-epic-model-uew.2)
+// the enrichment step runs.
 func enrichWithParentEpic(rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations) {
 	for i := range rows {
 		detail := details[rows[i].ID]
@@ -925,7 +908,7 @@ func enrichWithParentEpic(rows []annotation.AnnotatedIssue, details map[string]s
 // the correct position.
 // [LAW:dataflow-not-control-flow] The sort key is a pure function of each
 // row and the shared details map; variability lives in the values, not in
-// whether some rows skip the sort. (links-agent-epic-model-uew.4)
+// whether some rows skip the sort.
 func sortByCompositeRank(rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations) {
 	epicRank := func(issue model.Issue) string {
 		parent := details[issue.ID].Parent
@@ -999,13 +982,6 @@ func partitionWorkable(issues []annotation.AnnotatedIssue) (inProgress, ready []
 // indented under a workable item. `lit next` shows exactly this common core;
 // the backlog view (printBacklogContext) composes its extra lines around the
 // same emitters. [LAW:single-enforcer]
-//
-// An "unblocks" line is not part of the core and never was: emitting one took a
-// reverse index, the only caller passed nil, and the line was unreachable while
-// the signature went on claiming otherwise.
-// [LAW:polishing-by-subtraction] the parameter is gone rather than wired up —
-// giving `lit next` a line it has never printed is a change to that command,
-// not a repair to this one.
 func printInlineDeps(w io.Writer, entry annotation.AnnotatedIssue, cc claimContext, lane model.LaneID) error {
 	if err := printEpicLine(w, contextIndent, entry.ParentEpic); err != nil {
 		return err
@@ -1029,10 +1005,8 @@ func printInlineDeps(w io.Writer, entry annotation.AnnotatedIssue, cc claimConte
 // enough to say its holder left. A lane somebody holds is not orphaned
 // whatever the row's own clock reads — the holder is active elsewhere in the
 // lane, or has locked their worktree, and the claim line printed directly
-// beneath names them. "(ORPHANED)" above that line was the self-contradiction
-// links-claims-2wk2 reported, over a worktree sitting locked on an open PR.
-// Where nobody holds the lane, the word stands: nothing was learned about the
-// holder, so nothing about the old reading was wrong.
+// beneath names them. Where nobody holds the lane, the word stands: nothing was
+// learned about the holder.
 func inProgressSuffix(entry annotation.AnnotatedIssue, laneHeld bool) string {
 	age := time.Since(entry.UpdatedAt).Truncate(time.Minute).String()
 	if laneHeld || !ClassifyReadiness(entry.Annotations).IsOrphaned() {

@@ -133,11 +133,9 @@ func rowIDsJoined(rows []annotation.AnnotatedIssue) string {
 	return strings.Join(out, ",")
 }
 
-// The ticket's headline, as a test: `lit rank --top` is honored by the store and
-// `lit ls` shows it first, while `lit backlog` put it at position 39 because
-// every focus-path row was hoisted above it. The view now answers over the
-// scope, so the rank a caller sets is the rank the view shows — and the off-path
-// row that used to sink silently is named as withheld instead.
+// `lit rank --top` is honored by the store and `lit ls` shows it first. The view
+// answers over the scope, so the rank a caller sets is the rank the view shows —
+// and the off-path row is named as withheld.
 func TestTopRankReachesTheTopOfTheFocusedView(t *testing.T) {
 	h := newReadyTestHarness(t)
 
@@ -167,9 +165,7 @@ func TestTopRankReachesTheTopOfTheFocusedView(t *testing.T) {
 
 // --limit narrows the printed rows AFTER the scope partition, so the notice has
 // to report it or the completeness sentence describes a list that was cut after
-// it was written. This is the ticket's own defect one narrowing over: "Nothing
-// is hidden" printed above a truncated view is the same false claim the
-// preamble used to make, and the notice exists to stop making it.
+// it was written.
 //
 // The wants are literal sentences for the same reason the scope test uses them:
 // a want rebuilt from focusNotice would agree with whatever focusNotice said.
@@ -229,8 +225,7 @@ func TestBacklogNoticeReportsTheLimitTrimNotJustTheScope(t *testing.T) {
 // across applyLimit alone, not across the whole keep→limit stretch, because the
 // sentence it feeds names --limit as the cause: a count spanning both would
 // report a view's own keep() drops as a trim the reader never asked for and
-// cannot undo by dropping the flag. That is this ticket's defect — a notice
-// asserting a cause it never established — one narrowing further out.
+// cannot undo by dropping the flag.
 //
 // backlogView keeps every row, so the two spans are equal there and no existing
 // want can tell them apart; this drives a view that filters, which is what keep
@@ -400,13 +395,11 @@ func TestNextRefusesToSubstituteOffPathWorkForAStuckFocusPath(t *testing.T) {
 // startable: withheldByScope stamps reachOffFocusPath on every excluded row
 // without consulting capacityFor, because the kind records which question the
 // run asked rather than a verdict about the row. A lead promising startable
-// work off the path is therefore an assertion nothing checked — the same
-// answer-shaped void links-cli-q7hg closed, one scope further out.
+// work off the path is therefore an assertion nothing checked.
 //
 // The fixture makes that claim false and not merely unverified: every off-path
 // row is itself blocked, so an agent sent to `lit next --all` finds nothing.
-// The sibling test above covers the case where the withheld row IS ready, which
-// is why the wrong lead survived it.
+// The sibling test above covers the case where the withheld row IS ready.
 func TestFocusPathDeadEndDoesNotClaimOffPathWorkIsStartable(t *testing.T) {
 	h := newReadyTestHarness(t)
 

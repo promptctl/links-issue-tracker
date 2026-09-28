@@ -83,8 +83,7 @@ func reconcileScratchName() string {
 // moves whichever branch it runs on. A replay that reads and writes on ONE
 // branch therefore cannot interleave: every read must finish before the first
 // write, because the first write's branch would be reset out from under the
-// spine. That forced the old shape — project every folded commit up front and
-// carry all of them in memory across the read/write boundary, O(chain × backlog).
+// spine.
 //
 // Two branches dissolve the conflict, and what separates them is not WHETHER
 // each is reset but when and how often. History is read on `read`, which is
@@ -95,8 +94,7 @@ func reconcileScratchName() string {
 // provenance commit lands, so there is no accumulated history for it to
 // destroy, and afterwards the spine only ever advances by commit. Dolt keeps a working set
 // per branch, so an uncommitted read on one is invisible to the other, and the
-// replay can stream one step at a time. [LAW:decomposition] two roles that were
-// sawing across each other now have one part each.
+// replay can stream one step at a time.
 type reconcileScratch struct {
 	spine string
 	read  string
@@ -382,7 +380,7 @@ func (s *Store) reconcile(ctx context.Context, remote string, branch string, set
 // replayUnderGuard runs a mutating reconcile body — the shared-history three-way OR the
 // no-base combine — inside the one safety envelope both need: refuse a schema-ahead remote
 // BEFORE any write (adopting an ahead head would author replay commits below its schema and
-// drop every field the newer schema added — the 2026-07-08 incident), sweep any scratch
+// drop every field the newer schema added), sweep any scratch
 // branch a killed run abandoned (the commit lock guarantees every one is an orphan), derive
 // this run's unique scratch name, and carry ONE snapshot guard across GC-contention retries
 // so exactly one recovery point of the pre-reconcile head is taken however many attempts run.
@@ -522,12 +520,11 @@ type replayStep struct {
 // deterministic tiebreak value mid-chain; the settled truth still lands in the
 // terminal marker).
 //
-// Producing steps one at a time rather than returning a slice is the whole
-// memory fix: the replay holds ONE projected export at a time instead of the
-// chain's worth, so peak memory tracks the backlog and no longer the product of
-// backlog and chain length. That is only expressible because the read lands on
-// the scratch pair's read branch (see reconcileScratch), leaving the spine the
-// writer is building untouched.
+// Producing steps one at a time rather than returning a slice, the replay holds
+// ONE projected export at a time instead of the chain's worth, so peak memory
+// tracks the backlog and not the product of backlog and chain length. That is
+// only expressible because the read lands on the scratch pair's read branch
+// (see reconcileScratch), leaving the spine the writer is building untouched.
 //
 // [LAW:effects-at-boundaries] the read is the only effect; the projection is
 // merge.ThreeWay, unchanged and pure. [LAW:one-source-of-truth] the merge policy
@@ -771,13 +768,11 @@ func (s *Store) mergeAndReplay(ctx context.Context, result *storage.SyncReconcil
 // body advances it with one atomic reset. [LAW:single-enforcer] the scratch lifecycle
 // is written once, shared by the three-way reconcile and the take-one resolver.
 //
-// Creating two branches is two statements where there was one, so the cleanup has
-// to be armed BEFORE the first of them rather than after the last. Registered
-// after, a failure creating the second branch would return past the defer and
-// strand the first — a branch this attempt made and nothing in this attempt
-// removes, left for some later reconcile's sweep to notice. The single-branch
-// version it replaced could not reach that state, and reintroducing it would be
-// the same partial-state hazard the rest of this file is built to avoid.
+// Creating two branches is two statements, so the cleanup has to be armed
+// BEFORE the first of them rather than after the last. Registered after, a
+// failure creating the second branch would return past the defer and strand the
+// first — a branch this attempt made and nothing in this attempt removes, left
+// for some later reconcile's sweep to notice.
 // [LAW:no-ambient-temporal-coupling] the cleanup covers whatever exists when it
 // runs, so it never depends on how far creation got.
 func (s *Store) runOnReconcileScratch(ctx context.Context, dataBranch string, scratch reconcileScratch, localHead string, body func() error) (err error) {

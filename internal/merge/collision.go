@@ -54,12 +54,12 @@ type SameEntity struct {
 // Base-absence alone CANNOT decide it either: the unrelated-history combine
 // (Store.combineFromAnchors) feeds this engine an empty base by construction, so
 // "no merge-base" is uniform on that path and would condemn every legitimately
-// shared row. [LAW:parse-dont-validate] the ambiguity the old signature carried is
-// resolved here, once, rather than downstream.
+// shared row. [LAW:parse-dont-validate] the ambiguity is resolved here, once,
+// rather than downstream.
 //
 // The rule errs toward the loud side by construction: two instants that are
 // genuinely one ticket would be reported to an operator (recoverable), where one
-// instant read as two would fuse silently (the defect this replaces).
+// instant read as two would fuse silently.
 // [LAW:no-silent-failure]
 func Classify(base *model.Issue, ours, theirs model.Issue, oursWS, theirsWS string) (SameEntity, *Collision) {
 	// Equal, not ==: created_at round-trips through RFC3339Nano, so two encodings

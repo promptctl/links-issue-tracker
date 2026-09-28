@@ -11,10 +11,7 @@ import (
 // `lit ls` reads the repo's ready policy only for a projection that names a
 // readiness-sourced column. That is not a performance note about one file read:
 // config.Load validates the WHOLE config — snapshot.retention_budget,
-// sync.cadence, claims.freshness_window — and returns an error for any of them,
-// so reading it unconditionally made `lit ls` fail on defects in settings it
-// does not render. A repo with a bad sync.cadence could not list its own
-// tickets, which is precisely when someone needs to.
+// sync.cadence, claims.freshness_window — and returns an error for any of them.
 //
 // The guarantee is invisible from inside — "we did not call config.Load" is not
 // something the output shows — so it is pinned from outside, by breaking the

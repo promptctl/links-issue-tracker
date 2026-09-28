@@ -12,9 +12,8 @@ import (
 // Hydration's two id-keyed reads must cover every id, not only the first batch.
 //
 // hydrateIssues loads labels for every row it hydrates, and children for every
-// container among them. Both were unbounded `IN (...)` lists until they were
-// batched, and batching them introduces the same failure the relation gather
-// has: a row whose labels were never queried is indistinguishable at the call
+// container among them. Batching them introduces the same failure the
+// relation gather has: a row whose labels were never queried is indistinguishable at the call
 // site from one that genuinely has none, and a container whose children were
 // never queried hydrates as though it were empty. Neither errors, and the
 // listing simply shows less than is there.

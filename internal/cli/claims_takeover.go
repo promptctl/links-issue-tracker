@@ -17,20 +17,14 @@ import (
 // laneRelation is what a lane's standing means TO THIS CHECKOUT — the single
 // reading of claims.Standing that every consumer in this package shares.
 //
-// It exists because a lane's standing was once read against an identity in
-// four places, and they disagreed: `lit start` read an aged-out claim as
-// yours, `lit next` read it as nobody's, and the renderer sided with start
-// (links-claims-1b0p, owner ruling 3). Resolving the reading once here is
-// what lets the takeover gate and the routing verdict consume a value instead
+// Resolving the reading once here is what lets the takeover gate and the routing verdict consume a value instead
 // of re-deriving "is this mine, is it fresh" inline.
 // [LAW:one-source-of-truth] [LAW:types-are-the-program]
 //
 // There are three relations and not four. A lane whose claim has expired is
 // laneUnclaimed, indistinguishable here from one nobody ever started, because
 // claims.Standing has no variant for it: an expired claim is over, not a
-// grade of claim (links-claims-y6yz). The relation that used to sit between
-// these — a lapsed lane, offered as a takeover with the lapsed holder's
-// provenance — is gone with the variant that carried it.
+// grade of claim.
 type laneRelation int
 
 const (

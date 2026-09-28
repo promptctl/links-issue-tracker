@@ -75,7 +75,7 @@ func TestParseAddColumnTargetsToleratesSemicolonInStringLiteral(t *testing.T) {
 }
 
 // TestParseAddColumnTargetsRejectsUnrecognizedForm pins the loud-failure
-// side raised in PR review: an "ADD COLUMN" occurrence in a shape
+// side: an "ADD COLUMN" occurrence in a shape
 // alterAddColumnRe cannot parse (here, IF NOT EXISTS) must fail loudly by
 // name, not silently register zero targets for the migration.
 func TestParseAddColumnTargetsRejectsUnrecognizedForm(t *testing.T) {
@@ -90,8 +90,8 @@ func TestParseAddColumnTargetsRejectsUnrecognizedForm(t *testing.T) {
 	}
 }
 
-// TestParseAddColumnTargetsRejectsMultiColumnForm covers the second shape
-// named in review: a parenthesized multi-column ADD COLUMN list.
+// TestParseAddColumnTargetsRejectsMultiColumnForm covers the second shape:
+// a parenthesized multi-column ADD COLUMN list.
 func TestParseAddColumnTargetsRejectsMultiColumnForm(t *testing.T) {
 	t.Parallel()
 	up := "ALTER TABLE issues ADD COLUMN (lane text NOT NULL DEFAULT '', resolution VARCHAR(32) NULL);"

@@ -13,9 +13,9 @@ import (
 
 // WriteCommandError renders a failed command to stderr: the exit code and
 // message, plus the actionable remediation for the error's typed reason. Text
-// is the one canonical surface, so the remediation guidance — once reachable
-// only under --json — now reaches every caller. [LAW:single-enforcer] The
-// error→reason→remediation mapping is derived in one boundary.
+// is the one canonical surface, so the remediation guidance reaches every
+// caller. [LAW:single-enforcer] The error→reason→remediation mapping is derived
+// in one boundary.
 func WriteCommandError(stderr io.Writer, err error) int {
 	exitCode := ExitCode(err)
 	_, _ = fmt.Fprintf(stderr, "error (code=%d): %v\n", exitCode, err)
@@ -69,8 +69,8 @@ func commandErrorReason(err error) string {
 	// (exit 3), deterministic for the command as issued. It must never fall to
 	// the default "Retry the command" — a refusal's message already names the
 	// rule (and often the alternative), and an agent that trusts remediation
-	// text over the error body will loop on a retry that can never succeed
-	// (links-sync-r779, defect 3). [LAW:one-type-per-behavior]
+	// text over the error body will loop on a retry that can never succeed.
+	// [LAW:one-type-per-behavior]
 	var validation ValidationError
 	if errors.As(err, &validation) {
 		return "validation_refused"
@@ -89,12 +89,11 @@ func commandErrorReason(err error) string {
 	}
 	// An action on an epic is refused because an epic's state is its children's
 	// to set. Both halves are terminal — no retry of the same command can move
-	// either — so neither may reach the default's "Retry the command", which is
-	// what told the agent closing a finished epic to loop on a condition that
-	// cannot change (links-cli-errors-1u9g). They are separate reasons because
-	// the act each calls for is different: one asks for a state that already
-	// holds and wants nothing done at all, the other asks for something only the
-	// children can do, and a single reason could only name one of them.
+	// either — so neither may reach the default's "Retry the command". They are
+	// separate reasons because the act each calls for is different: one asks
+	// for a state that already holds and wants nothing done at all, the other
+	// asks for something only the children can do, and a single reason could
+	// only name one of them.
 	// [LAW:one-type-per-behavior]
 	var containerAction model.ContainerActionError
 	if errors.As(err, &containerAction) {
@@ -118,8 +117,7 @@ func commandErrorReason(err error) string {
 		return "no_ready_work"
 	}
 	// A retired flag is refused on every run, so it must never reach the
-	// default "Retry the command" — the loop links-output-format-yxjs found
-	// `--continue` sending agents around. [LAW:no-silent-failure]
+	// default "Retry the command". [LAW:no-silent-failure]
 	var unsupported UnsupportedError
 	if errors.As(err, &unsupported) {
 		return "unsupported_flag"
@@ -138,9 +136,7 @@ func commandErrorReason(err error) string {
 	// The other negative answer to "am I somewhere lit can work?": a git
 	// repository that `lit init` has never run in. Terminal in the same way —
 	// no rerun of the same command can make the workspace exist — so it must
-	// not reach the default's retry advice, which pointed the agent at a loop
-	// and at `lit doctor`, a command that reads the very workspace that is
-	// missing (links-cli-errors-yfbg). It carries its own reason rather than
+	// not reach the default's retry advice. It carries its own reason rather than
 	// sharing outside_git_workspace's because the act differs: initialize
 	// here, versus go somewhere already initialized. [LAW:one-type-per-behavior]
 	if errors.Is(err, store.ErrWorkspaceNotInitialized) {
@@ -149,15 +145,15 @@ func commandErrorReason(err error) string {
 	// lit could not settle on an issue prefix, and the three ways it can fail
 	// split by the ACT that clears them, which is what a reason names.
 	//
-	// A stored issue_prefix config.json itself refuses is a refusal of a file on
-	// disk, not of the command as issued, and no command clears it — `lit prefix
-	// set` and `lit doctor` resolve the workspace before they run, so they die
-	// here too. It takes its own reason for the same cause template_shape_refused
-	// has one: validation_refused's remediation ends "adjust the command to
-	// satisfy it", which is false here, and an agent that acts on the remediation
-	// line rather than on the message body is the loop this whole mapping exists
-	// to prevent (links-cli-errors-1u9g, links-sync-r779). Checked BEFORE the
-	// sentinel it unwraps to, so the narrower answer wins.
+	// A stored issue_prefix config.json itself refuses is a refusal of a file
+	// on disk, not of the command as issued, and no command clears it — `lit
+	// prefix set` and `lit doctor` resolve the workspace before they run, so
+	// they die here too. It takes its own reason for the same cause
+	// template_shape_refused has one: validation_refused's remediation ends
+	// "adjust the command to satisfy it", which is false here, and an agent
+	// that acts on the remediation line rather than on the message body is the
+	// loop this whole mapping exists to prevent. Checked BEFORE the sentinel it
+	// unwraps to, so the narrower answer wins.
 	// [LAW:one-type-per-behavior]
 	var storedPrefix workspace.StoredPrefixError
 	if errors.As(err, &storedPrefix) {
@@ -166,10 +162,7 @@ func commandErrorReason(err error) string {
 	// The other two — a repository name that yields no prefix, and an explicit
 	// --prefix contradicting the one this workspace already carries — are both
 	// answered by adjusting the command, which is what validation_refused means,
-	// so they share it and each message names its own act. Before this they
-	// reached the default and told the caller to retry a refusal that repeats
-	// forever, then to run `lit doctor` against a workspace `lit init` had just
-	// declined to create (links-init-hn19).
+	// so they share it and each message names its own act.
 	if errors.Is(err, workspace.ErrIssuePrefixRefused) {
 		return "validation_refused"
 	}
@@ -259,21 +252,17 @@ func commandErrorRemediation(reason string) string {
 		// claimed scope is the opposite of mechanical.
 		return "Do not retry unchanged — routing is deterministic and repeats this answer until the work named above moves. Act on what the message names: start a blocker it marks as yours to take, or finish or hand off what you already hold. Leaving the scope is a re-focus, not a retry — choose a ticket from `lit backlog` and name it to `lit start <id>`."
 	case "no_ready_work":
-		// Three different situations used to reach one message ("no ready
-		// work") with no data to tell them apart, so this line separated them
-		// itself, cheapest test first. NoWork now carries the rows the pool walk
-		// went past, and the message names them (links-cli-q7hg) — so what is
-		// left here is the act for each, and the standing rule that this line
-		// must never assert which situation it was: "`lit new` adds work" under
-		// a message that just said the backlog is not empty is exactly the
-		// remediation-contradicts-message defect links-cli-cpou removed one
-		// level up. [LAW:no-silent-failure]
+		// NoWork carries the rows the pool walk went past, and the message names
+		// them — so what is left here is the act for each, and the standing rule
+		// that this line must never assert which situation it was: "`lit new`
+		// adds work" under a message that just said the backlog is not empty is
+		// exactly the remediation-contradicts-message defect.
+		// [LAW:no-silent-failure]
 		//
 		// The lead obeys that rule too, which is why it claims determinism and
 		// not startability: withheldByScope stamps every scope-excluded row
-		// off-path without ever running capacityFor on it, so "nothing here is
-		// startable" was a verdict this line had no reading to support — and
-		// NoWork.Error() already declines to make it. [LAW:one-source-of-truth]
+		// off-path without ever running capacityFor on it.
+		// [LAW:one-source-of-truth]
 		//
 		// The last clause names `lit backlog --all` rather than `lit backlog`
 		// because "the whole queue" has to be true on every path that reaches
@@ -286,9 +275,7 @@ func commandErrorRemediation(reason string) string {
 		return "Do not retry unchanged — routing is deterministic and repeats this answer until something in the backlog moves. That is the backlog's state, not a fault. If `--type`, `--labels`, `--assignee`, or `--status` narrowed this run, drop the filter and ask again. If a `focus` label narrowed it, `lit next --all` routes over the whole queue for one run and `lit label rm <id> focus` lifts the scope. Otherwise `lit backlog --all` shows the whole queue and who holds what, and `lit new` adds work if it is genuinely empty."
 	case "state_already_holds":
 		// No act to name, because there is none: the caller asked for a state
-		// the workspace is already in. It must still say "do not retry" — this
-		// is the exact condition whose old remediation sent an unattended agent
-		// back around a loop on a state nothing it runs can change. How the
+		// the workspace is already in. It must still say "do not retry". How the
 		// state was reached is the message's to say, not this line's, so nothing
 		// here restates it. [LAW:one-source-of-truth]
 		return "No action is needed — the command asked for a state the workspace is already in, and the message above says how that state was reached. Do not retry: running it again cannot change the answer, and `lit doctor` has nothing to diagnose because nothing is broken."
@@ -305,22 +292,18 @@ func commandErrorRemediation(reason string) string {
 		// condition and the command that resolves it, so what this line adds is
 		// that the condition is terminal and what the two ways out of it are.
 		//
-		// `lit doctor` is not named even to dismiss it. The default remediation
-		// this reason exists to displace sent agents there, at a workspace that
-		// does not exist for doctor to read; an agent that skims reads the
-		// command, not the negation around it, so the honest way to stop
-		// sending it is to leave the string out.
+		// `lit doctor` is not named even to dismiss it. An agent that skims
+		// reads the command, not the negation around it, so the honest way to
+		// stop sending it is to leave the string out.
 		//
 		// No agent-instructions envelope, deliberately. The envelopes elsewhere
 		// mean "mechanical, run it without asking"; `lit init` writes a
 		// workspace and an agents section into someone's repository, which is
 		// the repo owner's decision, not a step an agent takes on its own to
 		// get itself unblocked.
-		// The claim is about *this* command, not about every command. An
-		// earlier draft said every store-touching command repeats this answer
-		// until a workspace exists, which is false: the write paths bootstrap
-		// one. Remediation is the surface an agent acts on, so a convenient
-		// overstatement here is the same defect as the advice it replaces.
+		// The claim is about *this* command, not about every command.
+		// Remediation is the surface an agent acts on, so a convenient
+		// overstatement here is a defect.
 		// [LAW:no-silent-failure]
 		return "Do not retry unchanged — this repository has no lit workspace, and retrying this command cannot create one. Run `lit init` here to create it, or change to a directory that already has one."
 	case "bulk_partial_failure":

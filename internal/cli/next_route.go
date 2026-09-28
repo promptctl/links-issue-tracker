@@ -32,11 +32,7 @@ type ServedFromClaim struct{ Row annotation.AnnotatedIssue }
 // ResumedOwnWork is a ticket already in flight in a lane this checkout holds,
 // handed back to its holder — routing step 1 for work that is started rather
 // than startable. Nothing is claimed and nothing is begun, so it reports a
-// state rather than an act. Being reachable at all is this ticket's
-// headline: while routing gated servability on model.StateOpen, an in_progress
-// row was servable to nobody, which hid every orphan (links-claims-1b0p, G2)
-// and — with no staleness involved anywhere — the very ticket the checkout was
-// working at that moment (N8).
+// state rather than an act.
 type ResumedOwnWork struct{ Row annotation.AnnotatedIssue }
 
 // ServedFromEpicLane is a pick from a different lane of the same epic this
@@ -54,14 +50,7 @@ type ServedFromEpicLane struct {
 
 // ServedFromNewLane is a ready ticket in a lane this checkout does NOT hold, so
 // starting it would establish a claim — which is what Lane is carried to name.
-// The global pool (step 4) is now its only producer. Step 1b once came back here
-// too, and before that as ServedFromClaim, whose contract is that no claim is
-// established and nothing is announced — which left the one pick an agent is
-// least likely to predict as the only silent one (links-claims-1b0p, N3). Being
-// announced fixed the silence but not the sameness: sharing this type with the
-// pool meant the renderer could not tell the two apart, so step 1b now has its
-// own outcome and this one has a single producer again
-// (links-next-output-4hor, ServedFromDependency).
+// The global pool (step 4) is its only producer.
 //
 // Abandoned in-flight work arrives here too, and says so — startAdvice reads
 // the row's state. A ready ticket reads as a fresh start whatever its lane's
@@ -69,9 +58,7 @@ type ServedFromEpicLane struct {
 // expired claim is printed (links-claims-y6yz).
 //
 // Lane is the LaneID and not its String(): the rendering belongs to whoever
-// knows the reader, and stringifying here threw away the discriminator the
-// renderer needs to tell a lane worth naming from one that would only repeat the
-// ticket (links-next-output-5aee). [LAW:types-are-the-program]
+// knows the reader. [LAW:types-are-the-program]
 type ServedFromNewLane struct {
 	Row  annotation.AnnotatedIssue
 	Lane model.LaneID
@@ -94,9 +81,7 @@ type ServedFromNewLane struct {
 // the discriminated form cheaper here than the flag. [LAW:types-are-the-program]
 //
 // Step 2 already qualifies its pick ("a second lane of an epic you already hold
-// a lane in"); this pick has the stronger claim to one and carried none, which
-// left the hardest pick to predict as the only unexplained one
-// (links-next-output-4hor).
+// a lane in"); this pick has the stronger claim to one.
 type ServedFromDependency struct {
 	Row   annotation.AnnotatedIssue
 	Lane  model.LaneID
@@ -121,11 +106,8 @@ type Exhausted struct {
 }
 
 // reachKind is what one row is to this checkout right now — the one fact both
-// terminal diagnostics need, and the limit of what either may say. A bool here
-// read "takeable or not", so a row outside this run's filtered view, or one not
-// startable itself, rendered as the one reason the message named: claimed by
-// another checkout. The renderer picks a note per value rather than asserting a
-// cause it cannot see.
+// terminal diagnostics need, and the limit of what either may say. The renderer
+// picks a note per value rather than asserting a cause it cannot see.
 //
 // Exhaustion asks it of the dependencies gating our scope; an empty global pool
 // asks it of every row the walk went past. Same question, same four answers, so
@@ -192,16 +174,11 @@ func reachOf(row annotation.AnnotatedIssue, gathered bool, standing claims.Stand
 // back empty, which is the genuinely empty backlog. An error on the same terms
 // as Exhausted.
 //
-// It carried nothing at all before, and "no ready work" is an answer-shaped
-// void the moment it does: one sentence for "the backlog is empty" and for "the
-// backlog is full of work you may not have", two facts a caller can never pull
-// back apart. An agent narrowing `next` to --status in_progress is asking what
-// it was already on — the question asked after a crash — and got the empty-queue
-// wording back, which tells it its work is gone (links-cli-q7hg). The walk knew
-// every row and every verdict at the moment it discarded them; keeping them is
-// what lets the message name which emptiness this is, instead of the remediation
-// listing all three and hoping. [LAW:parse-dont-validate]
-// [LAW:types-are-the-program]
+// "No ready work" is an answer-shaped void the moment it carries nothing: one
+// sentence for "the backlog is empty" and for "the backlog is full of work you
+// may not have", two facts a caller can never pull back apart. The walk knows
+// every row and every verdict; keeping them is what lets the message name which
+// emptiness this is. [LAW:parse-dont-validate] [LAW:types-are-the-program]
 type NoWork struct{ Unreachable []rowReach }
 
 func (ServedFromClaim) isNextOutcome()      {}
@@ -214,19 +191,8 @@ func (NoWork) isNextOutcome()               {}
 
 // capacity is the single answer to "may this checkout take this row, and as
 // what?" — the eligibility verdict the owner ruling on links-claims-1b0p
-// demands. It replaces three independent booleans (heldBySelf, isReadyRow,
-// isUnclaimed) consulted at three points of one walk, each re-deriving a piece
-// of this question and disagreeing about what an aged-out claim means. With
-// the answer in one place a further capacity costs one arm of one switch
-// instead of an edit to three predicates and the loop.
-// [LAW:types-are-the-program] [LAW:single-enforcer]
-//
-// There were four. The fourth, takeoverWork, marked a pick that displaced
-// something — a lapsed claim, or in-flight work in a lane nobody held — and
-// no consumer ever read it apart from serveWork: every step accepted both or
-// neither, and the announcement reads the row's state, not the verdict. With
-// lapsed claims gone from the type (links-claims-y6yz) it named nothing that
-// serveWork did not, so it is gone. [LAW:polishing-by-subtraction]
+// demands. With the answer in one place a further capacity costs one arm of
+// one switch. [LAW:types-are-the-program] [LAW:single-enforcer]
 type capacity int
 
 const (
@@ -249,14 +215,6 @@ const (
 // when the lane is ours and served when it is nobody's: an in-progress row in
 // a lane nobody holds is abandoned by definition, because whoever started it
 // no longer holds a claim there (links-claims-y6yz).
-//
-// The orphan annotation used to enter here as a second proof of abandonment,
-// on a second clock — the row's own last write by anyone. It was needed while
-// an expired claim was still a standing in its own right that some readings
-// treated as a hold; with the lane's standing the one authority on whether
-// anybody holds it, the row's quiet clock adds nothing routing can act on.
-// `lit backlog` and `lit orphaned` still read that clock, as a description of
-// the row rather than a verdict about the lane. [LAW:single-enforcer]
 //
 // Readiness is asked only of startable rows. An in-flight row is not gated by
 // its dependencies — it is already past the point where they applied — so a
@@ -282,11 +240,8 @@ func capacityFor(row annotation.AnnotatedIssue, standing claims.Standing, self m
 // straight from the standings.
 //
 // [LAW:one-source-of-truth] It reads standings and NOT the gathered rows. The
-// rows are already narrowed by --type/--labels/--assignee, so deriving
-// ownership from them let any display filter empty this set and drop the whole
-// self-aware branch — a checkout with a perfectly fresh claim silently hopping
-// epics because it asked for one issue type (links-claims-1b0p, N1). Ownership
-// is a fact about the workspace; a display filter must not be able to change it.
+// rows are already narrowed by --type/--labels/--assignee. Ownership is a fact
+// about the workspace; a display filter must not be able to change it.
 //
 // An unidentified self needs no guard here: relationOf owns what a
 // public-checkout self may match, so ownership and the start gate cannot drift
@@ -323,8 +278,8 @@ func ownScope(standings claims.Standings, self model.Attribution) (map[model.Lan
 // The focus scope narrows STEP 4 AND NOTHING ELSE. Steps 1-3 route over lanes
 // this checkout already holds, and ownScope takes pains to read that from the
 // standings rather than the gathered rows precisely so a display narrowing
-// cannot empty the self-aware branch (links-claims-1b0p, N1). A scope applied to
-// `rows` before routing would re-open exactly that hole from the other side: a
+// cannot empty the self-aware branch. A scope applied to `rows` before
+// routing would re-open exactly that hole from the other side: a
 // checkout holding a ticket off the focused path would be told to start
 // something else while its own work sat in flight. Focus decides where a fresh
 // session goes; it does not decide whether your own work is still yours.
@@ -347,12 +302,9 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 	// and carries one of the accepted verdicts.
 	//
 	// accept is a SET and never a preference order: composite rank is the only
-	// tiebreak routing gets to apply, and ranking capacities against each other
-	// would quietly reintroduce this ticket's headline symptom — the backlog's
-	// #1 row, abandoned in flight, passed over for a lower-ranked leaf that
-	// was merely ready. [LAW:one-source-of-truth] one ordering, and the gather
-	// already established it.
-	// pickFrom takes the row set explicitly because the steps no longer share
+	// tiebreak routing gets to apply. [LAW:one-source-of-truth] one ordering,
+	// and the gather already established it.
+	// pickFrom takes the row set explicitly because the steps do not share
 	// one: steps 1-3 walk every gathered row, step 4 walks the focus-scoped
 	// pool. Passing the set is what keeps that difference visible at each call
 	// instead of hidden in a closure every step reads differently.
@@ -381,8 +333,7 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 		}
 		// Step 1b — a dependency outside our lanes that gates one of them. It
 		// establishes a claim on a lane we do not hold, so it is announced as
-		// one (N3) and its own lane's standing is honoured rather than
-		// ignored (N2).
+		// one and its own lane's standing is honoured rather than ignored.
 		if dep, gates, ok := onPathDependency(rows, laneOf, mine, reachFor); ok {
 			return ServedFromDependency{Row: dep, Lane: laneOf(dep), Gates: gates}
 		}
@@ -455,9 +406,7 @@ func passedOver(rows []annotation.AnnotatedIssue, reachFor func(annotation.Annot
 // gatedDep is one gating dependency together with the row it gates. The gated
 // id is the whole reason step 1b's pick is worth explaining, and this walk is
 // the only place it is ever in scope: the loop below holds the blocked row and
-// its dependency at the same instant, and used to keep only the dependency.
-// That discard is what left the renderer unable to say why the pick was handed
-// over (links-next-output-4hor).
+// its dependency at the same instant.
 //
 // It is a field of this walk's element rather than of rowReach because rowReach
 // serves two other walks — withheldByScope and passedOver — for which a gated id
@@ -506,7 +455,7 @@ func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation
 			seen[id] = true
 			dep, gathered := byID[id]
 			// row is the in-scope open row whose dependency this is — the fact
-			// step 1b needs and the one this walk used to drop on the floor.
+			// step 1b needs.
 			// `seen` keeps the FIRST row to reach a dependency, so when one
 			// dependency gates several of ours, Gates names the one the queue
 			// ranks first. That is the intent, not a leftover: the pick owes the
@@ -529,13 +478,10 @@ func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation
 // A same-lane gate (an earlier sibling) never reaches here: it shares the
 // blocked row's lane, so step 1 already served or resumed it.
 //
-// Takeability is the shared verdict, not a local readiness test. Before, this
-// function saw no standings at all and would happily offer a ticket sitting in
-// a lane another checkout holds fresh — which `lit start` then refused, so
-// `next` recommended what `start` blocked (links-claims-1b0p, N2). It also no
-// longer re-checks that the gated row is unservable: step 1 accepts every
-// capacity an own lane can produce, so by the time we are here every row in
-// `mine` is routeAround by construction.
+// Takeability is the shared verdict, not a local readiness test. It does not
+// re-check that the gated row is unservable: step 1 accepts every capacity an
+// own lane can produce, so by the time we are here every row in `mine` is
+// routeAround by construction.
 func onPathDependency(rows []annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID, mine func(model.LaneID) bool, reachFor func(annotation.AnnotatedIssue, bool) reachKind) (annotation.AnnotatedIssue, string, bool) {
 	for _, dep := range gatingDependencies(rows, laneOf, mine, reachFor) {
 		if dep.Kind == reachTakeable {
@@ -644,16 +590,12 @@ func describeReach(rows []rowReach, lead string, notes reachNotes) string {
 	return strings.Join(parts, "; ")
 }
 
-// Error names which emptiness this is, which the line could not do while the
-// type held nothing to tell them apart with.
+// Error names which emptiness this is.
 //
-// Nothing walked past: the gather came back empty and the backlog really is, so
-// this is the sentence `next` has always printed, unchanged. Rows walked past:
-// they are named and classified, because the fact is then the opposite one — the
-// pool was full, of work this checkout may not have — and it used to arrive in
-// identical words. The clause leads by refuting the empty reading outright,
-// since that reading is what the bare sentence cost an agent asking, after a
-// crash, what it was already on (links-cli-q7hg).
+// Nothing walked past: the gather came back empty and the backlog really is.
+// Rows walked past: they are named and classified, because the fact is then the
+// opposite one — the pool was full, of work this checkout may not have. The
+// clause leads by refuting the empty reading outright.
 func (o NoWork) Error() string {
 	if len(o.Unreachable) == 0 {
 		return "no ready work"

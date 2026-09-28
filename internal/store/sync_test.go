@@ -177,9 +177,9 @@ func TestBranchNormalizationDefersToFirstWriteOpen(t *testing.T) {
 	ctx := context.Background()
 	doltRoot, repoPath := premadeMainBranchDB(t, ctx)
 
-	// EnsureDatabase over a pre-existing database is a no-op — since the
-	// creation fast-path, branch normalization is owned by write opens, so a
-	// pre-made main-branch store stays on main here...
+	// EnsureDatabase over a pre-existing database is a no-op — branch
+	// normalization is owned by write opens, so a pre-made main-branch store
+	// stays on main here...
 	if _, err := EnsureDatabase(ctx, doltRoot, "test-workspace-id"); err != nil {
 		t.Fatalf("EnsureDatabase() error = %v", err)
 	}
@@ -924,15 +924,11 @@ func TestSyncCompactAndPushDeepensOnAFragmentedOldGeneration(t *testing.T) {
 
 // A pass that completed inside a call whose push then failed is still a pass
 // that rewrote the store — the push failing afterwards does not un-rewrite it.
-// Reporting maintenance only on the success path lost a deep collection whenever
-// the push it preceded failed, leaving an operator with "push failed" and no
-// account of the long full-store rewrite that had just happened, which is also
-// the only thing explaining why the failed attempt took so long.
 // [LAW:no-silent-failure]
 //
 // The push is failed by naming a remote that was never added, so the failure
 // lands in pushWithinLock — after compactWithinLock has already run inside the
-// same closure, which is precisely the ordering that makes the loss possible.
+// same closure.
 func TestSyncCompactAndPushNamesADeepPassInsideAFailedPush(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -976,9 +972,9 @@ func TestSyncCompactAndPushNamesADeepPassInsideAFailedPush(t *testing.T) {
 	}
 }
 
-// TestReconnectRotatorRecoversPoisonedOperation proves the links-sync-w3i3 fix
-// end to end against a REAL store: when an operation fails with Dolt's online-GC
-// connection-reset error, the retry boundary rotates the live connection via the
+// TestReconnectRotatorRecoversPoisonedOperation proves end to end against a
+// REAL store: when an operation fails with Dolt's online-GC connection-reset
+// error, the retry boundary rotates the live connection via the
 // real s.reconnect and the subsequent attempt succeeds on the fresh handle. The
 // CLI race that produces this error is timing-dependent and cannot be summoned
 // on demand, so this injects the exact Dolt error string at the seam and asserts
@@ -1059,7 +1055,7 @@ func TestStagedWorkingSetSurvivesReconnect(t *testing.T) {
 	}
 
 	// Rotate the connection between the staged write and the Dolt commit — the
-	// exact sequence the GC-contention retry now performs.
+	// exact sequence the GC-contention retry performs.
 	if err := st.reconnect(ctx); err != nil {
 		t.Fatalf("reconnect() error = %v", err)
 	}

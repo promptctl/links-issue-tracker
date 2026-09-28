@@ -3,9 +3,8 @@
 # yet" — so an evicted or failed release run is rescued by ANY later master
 # run re-deriving that state. The one silent hole in that design: the burst's
 # surviving run fails or is cancelled and no further push arrives, leaving a
-# promoted version pending indefinitely with nothing signalling why (the
-# 2026-08-27 v0.9.0 eviction chain came one failed run away from exactly
-# this). This workflow watches for that state and goes red while it persists.
+# promoted version pending indefinitely with nothing signalling why. This
+# workflow watches for that state and goes red while it persists.
 # [LAW:no-silent-failure]
 #
 # A watchdog whose failures nobody sees is deletion with extra steps (the

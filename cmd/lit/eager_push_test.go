@@ -14,22 +14,18 @@ import (
 )
 
 // TestEagerPushOnDefaultCadenceReachesRemoteWithoutExplicitPush is the
-// acceptance pin for links-sync-pgct.3: on a connected workspace with no
-// [sync] config at all — the shipped default — a mutating command's change
-// reaches the remote without any explicit `lit sync push` step. This is the
-// literal gap the field incident exposed: push staying a manual act nobody
-// remembered to do stranded 25 local changes for days with nothing surfacing
-// the drift. The on-change mirror and cadence machinery already existed
-// (#226, #227) as an opt-in; this test pins that they now actually fire for a
-// workspace that never touched `[sync] cadence`, by proving the contract
-// (does the remote observe the change) rather than the mechanism.
+// acceptance pin: on a connected workspace with no [sync] config at all — the
+// shipped default — a mutating command's change reaches the remote without any
+// explicit `lit sync push` step. This test pins that the on-change mirror and
+// cadence machinery actually fire for a workspace that never touched
+// `[sync] cadence`, by proving the contract (does the remote observe the
+// change) rather than the mechanism.
 //
 // The oracle is an independent `dolt clone` of the bare git remote, fetched
 // and inspected directly — not lit's own "sync: N local change(s) not
-// pushed" banner (links-sync-pgct.2). That banner reads freshness through the
-// same tracking-ref bookkeeping a known pre-existing quirk leaves briefly
-// wrong immediately after a workspace's very first `--set-upstream` push
-// (reproduced by hand while writing this test: the ahead-count can read
+// pushed" banner. That banner reads freshness through the same tracking-ref
+// bookkeeping a known pre-existing quirk leaves briefly wrong immediately after
+// a workspace's very first `--set-upstream` push (the ahead-count can read
 // stale for a beat even once the data has genuinely landed), so it is not a
 // reliable ground truth for "did the bytes actually reach the remote". The
 // dolt CLI is already this project's sanctioned test oracle (see
@@ -43,10 +39,7 @@ import (
 // completion signal available to a caller. [LAW:no-ambient-temporal-coupling]
 // If eager push never fired, this single local mutation reaches the remote by
 // no other means (nothing else pushes in this test), so the poll exhausts its
-// deadline and fails — a real regression signal, not a vacuous pass. This was
-// confirmed by hand: reverting the default to on-push left the oracle's
-// commit count unchanged for the full poll window, while the on-change
-// default delivers within about a second.
+// deadline and fails — a real regression signal, not a vacuous pass.
 func TestEagerPushOnDefaultCadenceReachesRemoteWithoutExplicitPush(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")

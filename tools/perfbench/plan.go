@@ -16,8 +16,7 @@ import "time"
 // probe is one user-facing invocation to time — the argv after the binary, and
 // the exit codes that prove the command actually did its job.
 //
-// okCodes is the load-bearing field, and the reason it exists is a trap this
-// tool walked into during design. `lit next` exits 6 with "no ready work" on
+// okCodes is the load-bearing field. `lit next` exits 6 with "no ready work" on
 // an empty store: that is the command answering correctly, not failing. But a
 // command that fails returns FAST — a refused invocation lands in ~30ms, which
 // is quicker than any real answer and would therefore win the min this tool

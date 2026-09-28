@@ -15,7 +15,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-// This file is the owner's out-of-band channel (links-sync-pgct.4): when sync
+// This file is the owner's out-of-band channel: when sync
 // detects a real divergence or a failing push, the OWNER — the human whose work
 // the backlog carries — hears about it the day it happens, through a hook they
 // configured (sync.owner_notify_cmd), not seven days later through an agent's

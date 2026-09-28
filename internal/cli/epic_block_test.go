@@ -29,9 +29,7 @@ func requireInheritedDependency(t *testing.T, rows []annotation.AnnotatedIssue, 
 
 // A blocks edge onto an epic holds back every child of that epic, in every
 // lane. The children sit in two lanes on purpose: the same-lane sibling gate
-// already serializes one lane behind its first child, so blocking only that
-// first child (the workaround this replaces) held a one-lane epic and let a
-// second lane straight through (links-epic-block-xpkz). The gate is ranked
+// already serializes one lane behind its first child. The gate is ranked
 // below both children, so rank cannot be what holds them.
 func TestBlockedEpicGatesEveryLaneOfItsChildren(t *testing.T) {
 	h := newReadyTestHarness(t)
@@ -98,11 +96,10 @@ func TestBlockedEpicGatesNestedEpicsAndNamesADirectEdgeOnce(t *testing.T) {
 // blocker waits on itself, directly or through other issues, because holding
 // that one back would leave the two waiting on each other forever. Every
 // workspace below was reachable through `lit dep add`, `lit parent set`,
-// `lit parent clear`, `lit rank` or a lane change, and each one used to stall
-// the issues in the loop. The exception is read from the workspace as it is,
-// so each case is stated as its final shape. held maps a row to the one
-// blocker it must inherit; every other row inherits none, and pullable lists
-// rows that must be startable.
+// `lit parent clear`, `lit rank` or a lane change. The exception is read from
+// the workspace as it is, so each case is stated as its final shape. held maps
+// a row to the one blocker it must inherit; every other row inherits none, and
+// pullable lists rows that must be startable.
 func TestAnEpicsBlockerHoldsBackNothingItWaitsOn(t *testing.T) {
 	// held is checked over every row, and again over the rows labeled view
 	// when it is set, so a blocker no row's epic names is settled too.
@@ -307,7 +304,7 @@ func TestRouteNextTreatsAnEpicsGateAsOnPath(t *testing.T) {
 		standings := claims.Standings{doneLane: heldBy(selfAttribution), gatedLane: heldBy(selfAttribution)}
 		outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
 		// An epic's gate reaches us through step 1b, so it arrives as the
-		// dependency outcome and says what it unblocks (links-next-output-4hor).
+		// dependency outcome and says what it unblocks.
 		served, ok := outcome.(ServedFromDependency)
 		if !ok || served.Row.ID != gate.ID {
 			t.Fatalf("routeNext = %#v (%T), want ServedFromDependency serving the gate %s", outcome, outcome, gate.ID)

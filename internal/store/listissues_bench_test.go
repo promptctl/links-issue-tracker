@@ -55,7 +55,7 @@ func BenchmarkListByIDs118(b *testing.B) { benchListByIDs(b, 118) }
 
 // The parent filter's axis is the number of PARENTS named, so each parent here
 // carries exactly one child: the id list the filter builds is as long as the
-// row set is small, which is the case the EXISTS subquery planned worst.
+// row set is small.
 func benchListByParents(b *testing.B, parents int) {
 	ctx := context.Background()
 	st := openIssueStore(b, ctx)

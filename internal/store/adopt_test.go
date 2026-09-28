@@ -87,10 +87,10 @@ func assertHasIssueAfterAdopt(t *testing.T, ctx context.Context, root, id string
 }
 
 // TestAdoptRemoteByCloneFailedCloneLeavesNoResidue pins AdoptRemoteByClone's
-// two-state postcondition on the RETURNED-failure arm (links-sync-pgct.9): a
-// clone that fails and returns leaves neither a partial database directory
-// nor an adopt-pending marker, so the retry the error text asks for starts
-// from a provably clean slate — and the retry itself succeeds.
+// two-state postcondition on the RETURNED-failure arm: a clone that fails and
+// returns leaves neither a partial database directory nor an adopt-pending
+// marker, so the retry the error text asks for starts from a provably clean
+// slate — and the retry itself succeeds.
 func TestAdoptRemoteByCloneFailedCloneLeavesNoResidue(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -121,14 +121,14 @@ func TestAdoptRemoteByCloneFailedCloneLeavesNoResidue(t *testing.T) {
 }
 
 // TestAdoptRemoteByCloneHealsAbandonedAdoptResidue pins the NON-returning
-// failure arm's recovery (links-sync-pgct.9): an adopt abandoned mid-clone
-// (crash, SIGKILL, init's deadline abandoning the clone goroutine) leaves the
-// durable marker plus whatever undefined partial state the clone had reached
-// — fabricated here directly, since the whole point of the marker is that no
-// in-process cleanup runs in that shape. The residue is deliberately
-// UNOPENABLE junk: LocalHasTickets answering (false, nil) therefore proves it
-// consumed the marker without opening the leftover, and the retried adopt
-// discards it and re-clones to a working store with the marker gone.
+// failure arm's recovery: an adopt abandoned mid-clone (crash, SIGKILL, init's
+// deadline abandoning the clone goroutine) leaves the durable marker plus
+// whatever undefined partial state the clone had reached — fabricated here
+// directly, since the whole point of the marker is that no in-process cleanup
+// runs in that shape. The residue is deliberately UNOPENABLE junk:
+// LocalHasTickets answering (false, nil) therefore proves it consumed the
+// marker without opening the leftover, and the retried adopt discards it and
+// re-clones to a working store with the marker gone.
 func TestAdoptRemoteByCloneHealsAbandonedAdoptResidue(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

@@ -134,8 +134,7 @@ func TestClaudePluginShipsNextSkill(t *testing.T) {
 // is a local-only check, not a CI gate — unlike the `dolt` binary, which CI
 // actually installs (`.github/actions/install-dolt`) for the tests that use
 // it as an oracle. Wiring `claude` into CI too is future work, deliberately
-// left out here rather than adding a new network dependency to the suite in
-// the same change that only needed a manifest tweak.
+// left out here rather than adding a new network dependency to the suite.
 func TestClaudePluginManifestsPassOfficialValidation(t *testing.T) {
 	t.Parallel()
 	claudeBin, err := exec.LookPath("claude")

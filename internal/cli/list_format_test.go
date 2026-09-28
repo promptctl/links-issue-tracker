@@ -25,9 +25,6 @@ func listFormatOutput(t *testing.T, expr string) (string, error) {
 }
 
 // TestListFormatRejectsUnknownName is the reject half of the `--format` table.
-// The bug it closes: a bad format was classified as a generic failure, so its
-// remediation told the caller to retry a command that can never succeed, and
-// the message never said which formats exist.
 func TestListFormatRejectsUnknownName(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

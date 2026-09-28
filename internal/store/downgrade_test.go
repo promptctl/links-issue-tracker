@@ -38,9 +38,8 @@ func openWorkspaceForDowngrade(t *testing.T) (*Store, string) {
 // machinery like the producer beacon file. [LAW:one-source-of-truth]
 //
 // Because List refuses producer-artifact names by design, the count alone
-// can no longer notice a Take that strands its .tmp/.reserve; the explicit
-// artifact scan keeps that cleanup invariant pinned (the raw-entry counter
-// this replaced guarded it incidentally).
+// cannot notice a Take that strands its .tmp/.reserve; the explicit
+// artifact scan keeps that cleanup invariant pinned.
 func snapshotCount(t *testing.T, doltRoot string) int {
 	t.Helper()
 	dir := migrationSnapshotsDir(doltRoot)

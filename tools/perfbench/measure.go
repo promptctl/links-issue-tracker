@@ -31,10 +31,7 @@ type sample struct {
 // execution rather than only of the output: sorting the probe list and then
 // replaying it once per round would order them inside a round and interleave
 // them across rounds, so the write would run five times and every round after
-// the first would read a store one row larger than the last. That was this
-// function's first shape, and the bug it produced was invisible from the table
-// -- worst on the empty control, whose whole job is isolating fixed cost, and
-// which would have been non-empty for four of its five rounds.
+// the first would read a store one row larger than the last.
 //
 // ROUND-ROBIN WITHIN A PHASE. Each round runs every probe in the phase once,
 // and only then repeats. Running all five `backlog` invocations back to back
@@ -89,9 +86,9 @@ func measure(bin litBinary, store generatedStore) ([]sample, error) {
 // phasesOf groups probes into the order they may be run in: everything that
 // only reads, then everything that writes.
 //
-// It returns groups rather than a sorted list because the difference is the
-// whole fix. A sorted list still has to be replayed once per round by whoever
-// repeats it, and that replay is what interleaves a write between two reads.
+// It returns groups rather than a sorted list. A sorted list still has to be
+// replayed once per round by whoever repeats it, and that replay is what
+// interleaves a write between two reads.
 // A group is a unit the round loop lives inside, so the ordering cannot be
 // undone downstream. An empty group is omitted, so a probe set with no writes
 // produces one phase rather than a second, empty pass.

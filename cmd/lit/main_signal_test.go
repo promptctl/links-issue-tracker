@@ -45,17 +45,17 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// TestSIGTERMDuringWedgedSyncExitsCleanly is the acceptance pin for
-// links-sync-s3r6 defect #1: a SIGTERM delivered while the POST-WRITE auto-sync
-// is wedged must cancel that phase, release the store, and exit promptly with the
-// write's own success code (0) — never sit until only SIGKILL ends it.
+// TestSIGTERMDuringWedgedSyncExitsCleanly is the acceptance pin: a SIGTERM
+// delivered while the POST-WRITE auto-sync is wedged must cancel that phase,
+// release the store, and exit promptly with the write's own success code (0) —
+// never sit until only SIGKILL ends it.
 //
 // The wedge targets the sync phase specifically, not the command's own work. A
 // `lit new` write acquires and RELEASES the commit lock to commit, then prints
 // the created-issue line, then (after ap.Close) the inline receive re-acquires
 // the lock at SyncAddRemote. Taking the flock from this test process the
 // instant that line appears lands the block in the receive — the write already
-// succeeded and is durable — so a clean cancel exits 0, exactly the incident's
+// succeeded and is durable — so a clean cancel exits 0, the
 // "commit present, only the sync wedged" shape, reproduced without a slow remote.
 // (The kernel excludes the child on the held flock no matter who the holder is,
 // so no foreign holder process is needed — and no eviction heuristic exists for
@@ -216,12 +216,8 @@ func setupWedgeWorkspace(t *testing.T, self string) (workspace.Info, string) {
 //
 // The SIGTERM wedge tests are specifically about the INLINE RECEIVE; the
 // on-change cadence's background push mirror is an orthogonal automatic
-// behavior that, once it became the shipped default (links-sync-pgct.3),
-// introduced a second async actor racing these tests' wedge/verification
-// steps and collided on the store's single read-write engine ("database is
-// read only") — a real flake these tests are not designed to account for. Both
-// wedge tests pin cadence explicitly instead of depending on whatever value
-// happens to be the shipped default. [LAW:locality-or-seam]
+// behavior. Both wedge tests pin cadence explicitly instead of depending on
+// whatever value happens to be the shipped default. [LAW:locality-or-seam]
 func pinOnPushCadence(t *testing.T, dir string) string {
 	t.Helper()
 	path := filepath.Join(dir, "wedge-test-config.toml")
@@ -282,18 +278,15 @@ func runGit(t *testing.T, dir string, args ...string) {
 	}
 }
 
-// TestSIGTERMDuringWedgedGitSubprocessExitsCleanly is the acceptance pin for
-// links-sync-srox: a SIGTERM delivered while the post-write auto-sync is wedged in
-// a git SUBPROCESS — an ls-remote to an unreachable remote during the receive's
+// TestSIGTERMDuringWedgedGitSubprocessExitsCleanly is the acceptance pin: a
+// SIGTERM delivered while the post-write auto-sync is wedged in a git
+// SUBPROCESS — an ls-remote to an unreachable remote during the receive's
 // first-push check — must cancel that subprocess and exit with the write's own
 // success code (0), not sit out the interrupt grace timer and hard-exit 143.
 //
 // This is the sibling of TestSIGTERMDuringWedgedSyncExitsCleanly, which wedges the
-// store's commit lock (a wait that already honored ctx). Here the wedge is the git
-// call that formerly shelled out with NO context: before the fix, cancelling the
-// root context left `git ls-remote` running and only interrupt's grace-timer
-// hard-exit (code 143) stopped the process. The clean path now kills the subprocess
-// on cancellation and lets main() exit with the write's 0.
+// store's commit lock. Here the wedge is the git call. The clean path kills the
+// subprocess on cancellation and lets main() exit with the write's 0.
 //
 // The remote is a black-hole TCP listener: it accepts git's connection and never
 // answers the ref advertisement, so `git ls-remote origin` blocks in git itself —
@@ -364,9 +357,9 @@ func TestSIGTERMDuringWedgedGitSubprocessExitsCleanly(t *testing.T) {
 	}
 
 	// Deliberately UNDER interrupt.DefaultGrace (5s): a clean ctx-cancel exit is
-	// milliseconds, while the pre-fix behavior — git ignoring the cancel — only ends
-	// at the grace-timer hard-exit (143) at ~5s. A deadline below grace fails the
-	// old path on BOTH counts (too slow AND non-zero), leaving no way for a
+	// milliseconds, while git ignoring the cancel only ends at the grace-timer
+	// hard-exit (143) at ~5s. A deadline below grace fails that path on BOTH
+	// counts (too slow AND non-zero), leaving no way for a
 	// grace-timer exit to masquerade as success.
 	const sigtermDeadline = 4 * time.Second
 	select {

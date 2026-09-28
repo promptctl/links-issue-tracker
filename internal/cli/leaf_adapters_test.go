@@ -11,10 +11,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-// Test adapters for the leaf split (links-cli-1lxr). Splitting each handler
-// into a declaration and a work phase changed how a command is INVOKED, not
-// what it does, so the ~200 existing call sites keep calling the handler name
-// and signature they always did and assert the same observable behavior.
+// Test adapters for the leaf split (links-cli-1lxr).
 // [LAW:behavior-not-structure] the contract under test is the command's output
 // and errors; which phase declares its flags is the implementation's business.
 //
@@ -99,7 +96,7 @@ func runBulkClose(ctx context.Context, stdout io.Writer, ap *app.App, args []str
 	return runLeaf(bulkCloseLeaf(), ctx, stdout, ap, args)
 }
 
-// runRank keeps the `set` dispatch the old handler owned, so a test passing
+// runRank keeps the `set` dispatch, so a test passing
 // `{"set", ...}` still reaches the rank-set surface.
 func runRank(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	l, rest := rankDispatch(args)

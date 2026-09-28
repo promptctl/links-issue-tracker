@@ -188,8 +188,7 @@ func parseReplacement(modulePath, path, version string) (Replacement, error) {
 // tab-separated columns of one module, with dot already bound to a module. Both
 // `go list` invocations in this package emit it — the linked-package scan below
 // and the build-list scan in graph.go — so the column count and order have ONE
-// spelling. They had two until the replacement's path and version were split
-// apart.
+// spelling.
 //
 // A diverging column COUNT would at least fail loudly, at parseModuleList's
 // arity guard. The divergence worth fearing is a same-count REORDER, which no

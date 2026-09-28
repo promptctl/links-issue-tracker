@@ -35,10 +35,10 @@ func containsID(rows []annotation.AnnotatedIssue, id string) bool {
 	return false
 }
 
-// The core defect the epic targets: an urgent later sibling that depends (by
-// intra-epic rank) on an unfinished earlier sibling must NOT surface ahead of
-// it. The fix makes the later sibling a non-member of the ready set while the
-// earlier one is open — priority ordering is untouched.
+// An urgent later sibling that depends (by intra-epic rank) on an unfinished
+// earlier sibling must NOT surface ahead of it. The later sibling is a
+// non-member of the ready set while the earlier one is open — priority
+// ordering is untouched.
 func TestLaneGateUrgentLaterSiblingBlockedByOpenEarlierSibling(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "lane", IssueType: "epic", Priority: 1})
@@ -89,8 +89,7 @@ func TestLaneGateUrgentLaterSiblingBlockedByOpenEarlierSibling(t *testing.T) {
 
 // A sibling in a different lane runs in parallel: it is pullable regardless of
 // an open earlier-ranked sibling in another lane. Distinct lane per child is
-// the fully-parallel degenerate case; the old binary "parallel opt-out" is just
-// "give it a lane nobody else shares".
+// the fully-parallel degenerate case.
 func TestLaneGateDistinctLaneRunsInParallel(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "lane", IssueType: "epic", Priority: 1})

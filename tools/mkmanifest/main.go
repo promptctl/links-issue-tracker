@@ -4,8 +4,7 @@
 // dist/checksums.txt. That workflow's publish job then runs
 // `gh release create ... ./dist/release-manifest.json` to upload it as an asset.
 //
-// (Earlier iterations had this as a goreleaser pre-release hook, but
-// goreleaser v2 has no valid hook point between "checksums exist" and
+// (goreleaser v2 has no valid hook point between "checksums exist" and
 // "release is published", so the workflow owns ordering.)
 //
 // The tool is deliberately a separate program (not a goreleaser plugin /
@@ -81,11 +80,8 @@ func main() {
 	// (this slice), not whichever key Go's runtime picked first.
 	//
 	// Each entry holds a pointer to the flag-bound string so we can trim
-	// in place at the boundary. Previously the loop checked TrimSpace for
-	// emptiness but downstream code used the untrimmed value — padded
-	// values like `-version "0.1.0 "` passed validation and silently
-	// produced URLs/filenames with embedded whitespace. Trimming in place
-	// gives downstream code one canonical form to consume.
+	// in place at the boundary. Trimming in place gives downstream code one
+	// canonical form to consume.
 	// [LAW:one-source-of-truth] every flag value flows downstream in one
 	// normalized form, not two.
 	required := []struct {
@@ -158,8 +154,7 @@ func main() {
 	// leaving a truncated manifest while the tool exits 0. The manifest is
 	// the contract downstream consumers read; a silently truncated file is
 	// a worst-case failure mode. [LAW:no-defensive-null-guards] cousin:
-	// the deferred Close was a guard that *hid* an error class — the
-	// success path must surface it explicitly.
+	// the success path must surface it explicitly.
 	if err := out.Close(); err != nil {
 		die("close %s: %v", *outPath, err)
 	}
@@ -265,7 +260,7 @@ func collectArtifacts(distDir, baseURL, ver, tag string) ([]release.Artifact, er
 		// into a checked fact before we promise a URL to it. Catches stale
 		// checksums (an aborted goreleaser run that wrote checksums.txt but
 		// failed to produce one of the archives) before they ship as 404s.
-		// [LAW:types-are-the-program] accept-shape now requires "filename matches
+		// [LAW:types-are-the-program] accept-shape requires "filename matches
 		// pattern AND file exists", not just "filename matches pattern".
 		artifactPath := filepath.Join(distDir, filename)
 		if _, err := os.Stat(artifactPath); err != nil {

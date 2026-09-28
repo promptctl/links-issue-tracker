@@ -116,9 +116,7 @@ func TestStartRefusesAndThenTakesOverAFreshForeignClaim(t *testing.T) {
 // time bravo looks, and bravo's start reads exactly as a start on a ticket
 // nobody ever touched — no refusal, no provenance line, no advisory to check
 // for unmerged work, no transfer notice. An expired claim is not a claim, so
-// there is nothing for the gate to inform anybody of (links-claims-y6yz). It
-// once printed the claim line tagged "(stale)" plus "check for unmerged
-// branches or PRs", which presented the expired claim as a grade of hold.
+// there is nothing for the gate to inform anybody of.
 //
 // The freshness window is configured down to force alpha's claim to expire by
 // the time bravo looks, rather than waiting out the real default — the same
@@ -190,16 +188,14 @@ func writeTinyFreshnessWindow(t *testing.T, dir string) {
 	}
 }
 
-// TestStartTakesOverALiveLaneUnderOneSharedIdentity is links-claims-6ghp: the
-// takeover that carries no assignee change at all.
+// TestStartTakesOverALiveLaneUnderOneSharedIdentity is the takeover that
+// carries no assignee change at all.
 //
 // Both checkouts name the SAME assignee, which is not a contrived case but the
 // ordinary one — a checkout driving no agent session resolves no assignee
 // whatsoever, so every checkout one person runs looks identical on that axis,
 // and two worktrees of one agent session share a session id. Ownership is keyed
-// on the checkout, not the assignee, so this IS a transfer; a write side that
-// compared assignees read it as a repeated self-start, exited 0, recorded
-// nothing, and left both checkouts believing they held the lane.
+// on the checkout, not the assignee, so this IS a transfer.
 // [LAW:no-silent-failure]
 func TestStartTakesOverALiveLaneUnderOneSharedIdentity(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
@@ -259,11 +255,8 @@ func TestStartTakesOverALiveLaneUnderOneSharedIdentity(t *testing.T) {
 // as Unclaimed and authorizeStart asks for no ceremony. The first start must
 // agree and stay silent.
 //
-// The regression this pins was real: comparing the whole Claimant against its
-// zero value read "assignee set at creation" as "previously held", and printed
-// `claim transferred: alice -> alice` for a ticket's first-ever start. Every
-// other test here creates its ticket without --assignee, so the prior claimant
-// is the exact zero value and the branch never fires.
+// Every other test here creates its ticket without --assignee, so the prior
+// claimant is the exact zero value and the branch never fires.
 func TestStartOnAPresetAssigneeAnnouncesNoTransfer(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
 	base := t.TempDir()

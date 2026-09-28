@@ -8,10 +8,7 @@ import (
 	"testing"
 )
 
-// Bulk operations once collected each item's outcome into a map, printed every
-// "id <status>" row to stdout (failures interleaved with results), then returned
-// nil unconditionally — so the process exited 0 even when items failed and the
-// failure rode the data channel. These tests pin the corrected contract through
+// These tests pin the contract through
 // behavior: any item failing yields a non-OK exit code, the failed ID's error
 // never reaches stdout, and successful items still persist and report.
 // [LAW:behavior-not-structure] [LAW:no-silent-failure]

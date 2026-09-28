@@ -12,16 +12,10 @@ import (
 // columnSpec is one printable column: the name `--columns` accepts and the cell
 // that name renders, carried on a single value.
 //
-// Those two facts used to live apart — an accept-list in resolveColumns, a
-// render switch in formatIssueColumns, a relationship-membership map beside
-// them, and the default projection spelled twice. Four maps of one territory,
-// and they had already drifted: `rank` was in none of them though it is the key
-// the listing is ordered by, and `state` is spelled `status` everywhere else in
-// the CLI, so the name a caller reaches for first was silently dropped. Keeping
-// name and renderer on one value is what makes a column that is acceptable but
-// unrenderable — or renderable but unnamed — unrepresentable rather than
-// merely absent today. [LAW:one-source-of-truth] the column vocabulary is this
-// table and nothing else.
+// Keeping name and renderer on one value is what makes a column that is
+// acceptable but unrenderable — or renderable but unnamed — unrepresentable
+// rather than merely absent today. [LAW:one-source-of-truth] the column
+// vocabulary is this table and nothing else.
 type columnSpec struct {
 	name string
 	// source names the data this column's cell is computed from. Selecting a
@@ -47,25 +41,18 @@ type columnSpec struct {
 // is the maximum over its columns and one load satisfies every column at or
 // below it.
 //
-// It replaced a `needsRelations bool`, and the ordering is the whole point.
-// Two levels cannot express "this column needs strictly more than that one",
-// so `blocked` — which needs the annotation registry's verdict — could only
-// declare the relation graph, and was served it: `lit ls --columns blocked`
-// answered "a still-open dependency edge" while `lit backlog` answered the
-// registry's four kinds, and the same column name printed different values on
-// the two surfaces (links-columns-4hdq). A bool had no way to say the column
-// was under-served, so nothing failed; the cell just quietly meant less.
-// [LAW:types-are-the-program] the ladder is the strongest true theorem about
-// this domain — three levels, strictly ordered — and it moves the guarantee off
-// the loader and onto the declaration: given what each column declares,
-// columnSourceFor makes "served less than the projection's maximum rung"
-// unrepresentable rather than merely absent today.
+// The ordering is the whole point. Two levels cannot express "this column
+// needs strictly more than that one". [LAW:types-are-the-program] the ladder is
+// the strongest true theorem about this domain — three levels, strictly ordered
+// — and it moves the guarantee off the loader and onto the declaration: given
+// what each column declares, columnSourceFor makes "served less than the
+// projection's maximum rung" unrepresentable rather than merely absent today.
 //
 // Be precise about what that does NOT cover: the type cannot check that a
 // column declares the RIGHT rung. Writing `source: sourceRelations` on `blocked`
-// compiles cleanly and reinstates this exact bug, so the compiler is not the
-// thing standing between the repo and a regression here — TestColumnSourceLadder
-// is, alongside both blocked-column agreement tests. Verified by mutation: that
+// compiles cleanly, so the compiler is not the thing standing between the repo
+// and a regression here — TestColumnSourceLadder is, alongside both
+// blocked-column agreement tests. Verified by mutation: that
 // one-word downgrade builds with no error and fails four tests.
 // [LAW:no-mode-explosion] a new level is a new constant here, not a new flag
 // threaded through every loader.
@@ -184,11 +171,7 @@ func columnsFlagUsage() string {
 // The output type is the proof: a []columnSpec can only be assembled here, out
 // of registry entries, so no stage downstream can be holding a column name that
 // nothing knows how to render — and none of them re-checks, because inland
-// there is nothing left to check. What this replaces was a validator that threw
-// the proof away and, worse, mapped failure onto the success-shaped default
-// projection: `--columns bogus` returned a well-formed table under exit 0, a
-// value with the exact shape of a real answer meaning "I could not do my job".
-// [LAW:parse-dont-validate] [LAW:no-silent-failure]
+// there is nothing left to check. [LAW:parse-dont-validate] [LAW:no-silent-failure]
 func parseColumnSelection(expr string) ([]columnSpec, error) {
 	names := splitCSV(strings.ToLower(expr))
 	if len(names) == 0 {

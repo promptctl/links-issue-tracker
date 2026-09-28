@@ -93,9 +93,7 @@ func TestApplySameStateReturnsReceiverUnchanged(t *testing.T) {
 // TestApplyClosedAtBookkeeping locks in the close-timestamp invariant under the
 // sum type: a transition into Closed stamps a timestamp; every transition out of
 // Closed lands on a variant that structurally cannot hold one, so the timestamp
-// is gone. The last case is the illegal-state removal — under the old flat
-// struct, start-on-closed left a stale close time on an in_progress row; the
-// in_progress variant has no such field, so it cannot.
+// is gone.
 func TestApplyClosedAtBookkeeping(t *testing.T) {
 	priorClosed := time.Unix(1_700_000_000, 0).UTC()
 
@@ -680,7 +678,7 @@ func TestEveryActionHasAnInvocationVerb(t *testing.T) {
 
 // TestReopenIsInvokedAsOpenAndPersistedAsReopen pins the one action whose two
 // names differ, in both directions, because each direction guards a different
-// mistake. Collapsing the verb to the persisted name puts `reopen` back into a
+// mistake. Collapsing the verb to the persisted name puts `reopen` into a
 // refusal answering `lit open`; renaming the persisted encoding to match the
 // command silently changes what the events table means for every row already
 // written.
@@ -694,11 +692,9 @@ func TestReopenIsInvokedAsOpenAndPersistedAsReopen(t *testing.T) {
 }
 
 // TestOnlyReopenDivergesFromItsPersistedName turns "the two names agree for
-// every action but one" from a remark into a checked claim. That near-agreement
-// is why interpolating the wrong name stayed invisible: it read correctly seven
-// times out of eight. A second divergence appearing here is the signal to
-// re-read every message that names an action, so the test names the set rather
-// than counting it.
+// every action but one" from a remark into a checked claim. A second divergence
+// appearing here is the signal to re-read every message that names an action,
+// so the test names the set rather than counting it.
 func TestOnlyReopenDivergesFromItsPersistedName(t *testing.T) {
 	diverged := []ActionName{}
 	for _, action := range Actions() {
@@ -717,9 +713,9 @@ func TestOnlyReopenDivergesFromItsPersistedName(t *testing.T) {
 	}
 }
 
-// TestVerbRefusesAnActionOutsideTheSealedSet: the behaviour this replaced was a
-// silent fallback to the persisted encoding, which is indistinguishable from
-// correct output for every action whose two names agree. A panic is found by
+// TestVerbRefusesAnActionOutsideTheSealedSet: a silent fallback to the
+// persisted encoding is indistinguishable from correct output for every action
+// whose two names agree. A panic is found by
 // the test above; a fallback is found by a reader holding an unrunnable command.
 func TestVerbRefusesAnActionOutsideTheSealedSet(t *testing.T) {
 	defer func() {

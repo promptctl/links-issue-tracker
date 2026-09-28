@@ -256,13 +256,12 @@ const insertIssueStmt = `INSERT INTO issues(id, title, description, agent_prompt
 // model.Issue it came from. A hydrated Issue carries `Labels`, denormalized
 // from the labels table, and for a container a lifecycle composed from every
 // child; neither is an issues column. Diffing whole Issue values therefore
-// called a row "changed" whenever a label moved or any child of an epic did,
-// and rewrote that issue and everything ON DELETE CASCADE takes with it.
+// would call a row "changed" whenever a label moved or any child of an epic
+// did, and rewrite that issue and everything ON DELETE CASCADE takes with it.
 //
-// Deriving the comparison from the writer keeps the property that motivated
-// comparing whole values in the first place — nothing is compared by a
-// hand-maintained field list that a new column could fall out of — while
-// making the subject the row rather than the view of it. Add a column and it
+// Deriving the comparison from the writer keeps the property — nothing is
+// compared by a hand-maintained field list that a new column could fall out
+// of — while making the subject the row rather than the view of it. Add a column and it
 // enters the write and the diff in the same edit, because they are the same
 // tuple. [LAW:one-source-of-truth]
 //

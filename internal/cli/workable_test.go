@@ -13,8 +13,7 @@ import (
 // (parseWorkableStatus), so one table over every workable command is the
 // whole contract: each rejects the same inputs with the same usage error,
 // whether it runs through the workableView preset (backlog) or its own
-// runner (next, forked out in next.go once claim routing gave it a
-// genuinely different shape). [LAW:single-enforcer]
+// runner (next). [LAW:single-enforcer]
 var workableCmds = []struct {
 	name string
 	run  func(h readyTestHarness, args ...string) error
@@ -32,9 +31,8 @@ func (h readyTestHarness) runViewErr(view workableView, args ...string) error {
 	return runWorkable(h.ctx, &stdout, h.ap, args, view)
 }
 
-// Unrecognized statuses used to be silently coerced to open, answering a
-// different question than asked; closed is rejected too because a workable
-// row is never closed — the result would be empty by construction.
+// Closed is rejected because a workable row is never closed — the result
+// would be empty by construction.
 func TestWorkableStatusRejectsInvalidValues(t *testing.T) {
 	h := newReadyTestHarness(t)
 	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Open leaf", Topic: "status", IssueType: "task", Priority: 1})

@@ -39,15 +39,12 @@ Use 'lit next' to pick the top workable item to start.`
 // answering over. It is printed on every run, focused or not, because "every
 // workable item is here" and "only the focus path is here" are the two readings
 // a reader picks between, and a view that says nothing leaves them picking by
-// assumption — which is how a `--top` that landed at position 39 read as a
-// ranking bug rather than a scoped view (links-listing-ju7i).
+// assumption.
 //
 // [FRAMING:representation] The notice is a map of the row set, so it carries
 // every narrowing that stands between the gathered rows and the printed ones —
 // the focus scope AND the --limit trim that runs after it. A notice derived
-// from the scope alone could not see the second, and printed "Nothing is
-// hidden" over a truncated list: the completeness claim this ticket moved out
-// of the preamble, made false again one narrowing over.
+// from the scope alone could not see the second.
 type focusNotice struct {
 	scope   focusScope
 	applied bool // false when --all asked for the whole queue anyway
@@ -65,8 +62,7 @@ func (n focusNotice) line() string {
 }
 
 // scopeClause states what the focus scope did — the unfocused workspace stating
-// the completeness the preamble used to assert on its own, or a scope in force
-// naming the goals, the count it withheld, and the flag that lifts it: a groove
+// the completeness, or a scope in force naming the goals, the count it withheld, and the flag that lifts it: a groove
 // with the way out written on it, never a wall. It claims completeness only
 // when --limit left the list whole, since "nothing is hidden" is a claim about
 // the printed rows and not about the scope alone.
@@ -83,8 +79,7 @@ func (n focusNotice) scopeClause() string {
 }
 
 // trimClause names the narrowing the scope cannot see. It is empty when --limit
-// cut nothing, so a run without the flag reads exactly as it did before the
-// clause existed. [LAW:dataflow-not-control-flow] the zero trim renders the
+// cut nothing. [LAW:dataflow-not-control-flow] the zero trim renders the
 // identity string rather than selecting a different notice.
 func (n focusNotice) trimClause() string {
 	if n.trimmed == 0 {
@@ -113,10 +108,8 @@ func (n focusNotice) emptyLine() string {
 // queue they were drawn from. A row's "unblocks" line and the inversion count
 // come from facts, because both describe the queue rather than this view of it.
 // Read off issues, they shrink as the view does and the loss lands on the row
-// that survived: a narrowing that cut the DEPENDENT deleted the leverage line
-// from the PREREQUISITE's row, one screen under a preamble still promising
-// "what closing it would unblock" (links-listing-85sd). Nothing on screen is
-// missing, so nothing prompts the reader to doubt it.
+// that survived. Nothing on screen is missing, so nothing prompts the reader to
+// doubt it.
 //
 // A view narrowed to nothing is that same trap with no survivor to carry the
 // loss: the rows are gone, the repo's rank inversions are not. So the empty
@@ -201,9 +194,8 @@ type backlogRowContext struct {
 	// laneHeld is whether anybody holds this row's lane right now. It is
 	// resolved here, beside the claim line and off the same lane, because the
 	// two describe one hold: an "in_progress: ... (ORPHANED)" line above a
-	// claim line naming a live worktree is the self-contradiction
-	// links-claims-2wk2 reported, and deriving both from one lookup is what
-	// makes it unspellable. [LAW:one-source-of-truth]
+	// claim line naming a live worktree is a self-contradiction, and deriving
+	// both from one lookup is what makes it unspellable. [LAW:one-source-of-truth]
 	laneHeld bool
 }
 
@@ -233,9 +225,9 @@ func (above backlogRun) advance(epic *annotation.ParentEpicRef, cc claimContext,
 // Only when something is standing, because the cost here is not the epic
 // line's. LaneOf gives a leaf with no epic parent a lane of one keyed by its
 // own id, so every standalone row opens its own lane run, and nearly every lane
-// is unclaimed — marking them all would put a line back under almost every row,
-// which is the noise this change removes. With nothing standing there is
-// nothing to correct and silence is already unambiguous.
+// is unclaimed — marking them all would put a line under almost every row. With
+// nothing standing there is nothing to correct and silence is already
+// unambiguous.
 //
 // Together with the lane subject this buys the invariant the preamble states: a
 // blank means the statement standing above it still holds.
@@ -247,11 +239,8 @@ func claimStatement(claim, standing string) string {
 }
 
 // backlogEpicLine is what a row that OPENS an epic run states. A run under no
-// epic says so out loud, because suppressing a repeat costs the reader the
-// thing absence used to mean: before the runs existed every row carried its
-// own epic line, so a row without one had no epic, full stop. Leave the
-// no-epic run silent and that one blank now means both "continues the epic
-// above" and "has none" — an absence shaped exactly like an answer — and a
+// epic says so out loud. Leave the no-epic run silent and that one blank means
+// both "continues the epic above" and "has none" — an absence shaped exactly like an answer — and a
 // standalone ticket that happens to sort under an epic's last child reads as
 // part of it. sortByCompositeRank interleaves them by rank, so that adjacency
 // is routine, and in a real backlog most rows have no epic at all.
@@ -273,9 +262,8 @@ func backlogEpicLine(epic *annotation.ParentEpicRef) string {
 // epic line and a repeated claim line is one behavior over two data types, so
 // it is one function. [LAW:one-type-per-behavior]
 //
-// A subject need only be comparable, never a string. Requiring a string forced
-// callers to hand over a rendering of the value instead of the value, and
-// LaneID.String — which exists "for logs and test failures" — is lossy: it
+// A subject need only be comparable, never a string. LaneID.String — which
+// exists "for logs and test failures" — is lossy: it
 // joins epic and lane with "#", so epic "AB" lane "C#D" reads the same as epic
 // "AB#C" lane "D", and a solo lane renders as a bare issue id that an
 // epic-scoped lane can also spell. Two distinct lanes comparing equal would
@@ -331,11 +319,7 @@ func printBacklogContext(w io.Writer, entry annotation.AnnotatedIssue, unblocks 
 // Dependencies, direct or inherited, are the ONE omission, and it is a placement
 // choice rather than a silence: this view prints them as concrete ids on its own
 // "depends on:" line. Every other blocking kind reaches the reader through
-// BlockingReason.Phrase, the single vocabulary — the phrasing switch used to
-// live here, where it was one surface's private list and fell a kind behind the
-// registry (EarlierSiblingPending, registered after the switch was written,
-// dropped into silence: the backlog said "top of the queue, nothing blocking"
-// while routing skipped the row — links-claims-gxxw).
+// BlockingReason.Phrase, the single vocabulary.
 // [LAW:one-source-of-truth] the registry is the single authority on what
 // blocks, Phrase on how it reads; rendering may not carry a shorter list of
 // either.

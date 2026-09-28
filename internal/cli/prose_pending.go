@@ -81,12 +81,11 @@ func renderProsePendingGuidance(w io.Writer, pending []merge.ProsePending, build
 // proseResolveCommand so both halves of the surface name the same family.
 const proseReconcileAbortHint = "lit sync reconcile abort"
 
-// The compact after-the-fact surface the inline auto-reconcile once emitted now
-// routes through the one sync-failure contract (SyncFailure/blockString) instead
-// of a bespoke nudge, so the held-conflict surface carries the same MUST-NOT-IGNORE
-// directive and escalation as every other sync failure. [LAW:single-enforcer] This
-// file keeps only renderProsePendingGuidance — the deep base/ours/theirs workbench
-// the compact contract points at.
+// The compact after-the-fact surface routes through the one sync-failure
+// contract (SyncFailure/blockString), so the held-conflict surface carries the
+// same MUST-NOT-IGNORE directive and escalation as every other sync failure.
+// [LAW:single-enforcer] This file keeps only renderProsePendingGuidance — the
+// deep base/ours/theirs workbench the compact contract points at.
 
 // writeProseSection prints one labeled version as a quoted span, making an empty
 // value explicit rather than rendering a blank the agent might misread as

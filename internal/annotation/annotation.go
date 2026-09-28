@@ -139,7 +139,7 @@ type Annotation struct {
 // ParentEpicRef identifies an issue's containing epic by id and title.
 // Present only when the issue has a parent AND the parent is type=epic —
 // the single most important context for an agent deciding which leaf to
-// claim (links-agent-epic-model-uew.2).
+// claim.
 type ParentEpicRef struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`

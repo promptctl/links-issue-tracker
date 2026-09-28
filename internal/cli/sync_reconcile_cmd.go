@@ -157,9 +157,9 @@ func syncReconcileAbortLeaf() syncLeaf {
 // explicitly rather than dropping silently. [LAW:no-silent-failure]
 //
 // The take is the epic's "agent-mediated destruction" path, so it runs only with
-// the owner's approval (links-sync-pgct.4): without a matching --owner-approved
-// token the store's gate refuses, and this surfaces the refusal block naming what
-// the take would destroy and how the owner authorizes it.
+// the owner's approval: without a matching --owner-approved token the store's
+// gate refuses, and this surfaces the refusal block naming what the take would
+// destroy and how the owner authorizes it.
 func syncReconcileTakeLeaf() syncLeaf {
 	fs := newCobraFlagSet("sync reconcile take")
 	ownerApproved := fs.String("owner-approved", "", "Owner-issued approval token for this exact divergence and side (printed by the refusal this command gives without it)")
@@ -403,14 +403,14 @@ func discardedIDs(inv *storage.UnrelatedInventory, choice storage.UnrelatedResol
 // ExitConflict), so `lit sync reconcile`, `lit sync pull`, and the inline receive
 // all surface no-common-ancestor identically; every other state is a one-line
 // success — Linearized and Combined follow it with reportContestedLanes, since
-// those are the two states where histories actually just merged (links-claims-1ihf.8).
+// those are the two states where histories actually just merged.
 // resolved=true distinguishes a finalize whose resolutions missed the live
 // divergence (re-surfaced) from a first-time surface, so the agent knows to re-merge
 // the CURRENT conflicts shown. It records the durable, unconditional trace for the
 // reconcile decision — the one point every one of the three callers' outcomes
 // passes through — and it feeds the owner channel the same way every surface does:
-// a held state notifies out-of-band, a converged one ends the divergence episode
-// (links-sync-pgct.4). [LAW:single-enforcer]
+// a held state notifies out-of-band, a converged one ends the divergence episode.
+// [LAW:single-enforcer]
 func reportReconcileResult(ctx context.Context, stdout io.Writer, ws workspace.Info, session syncSession, command string, remote, branch string, result storage.SyncReconcileResult, resolved bool) error {
 	// "replayed" mirrors reportTakeOutcome: the provenance-replay count is part
 	// of the durable trace for every outcome, zero included.

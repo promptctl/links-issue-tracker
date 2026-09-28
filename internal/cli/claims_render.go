@@ -14,7 +14,7 @@ import (
 // for Unclaimed — the zero state carries no holder to describe, so listings
 // render no line at all rather than an empty or placeholder one. A lane whose
 // claim has expired IS Unclaimed, so it renders nothing either: there is no
-// "(stale)" badge, because there is no claim left to badge (links-claims-y6yz).
+// "(stale)" badge, because there is no claim left to badge.
 //
 // Two tiers, exactly as the design spells them: the dossier (holder,
 // freshness, lane progress) is built entirely from cc.evidence and
@@ -58,11 +58,8 @@ func claimPrefix(by model.Attribution, cc claimContext) string {
 // "elsewhere" asserts the hold is not this checkout's, and only an addressable
 // holder supports that. The public checkout is a bucket every unattributed
 // write shares, so comparing it against this checkout's own identity
-// establishes that both are unaddressable and nothing more -- it was once read
-// here as proof the lane was ours, which rendered "claimed here: this checkout"
-// on `lit sync`'s contested-lane report, where the identity being compared is
-// the zero Attribution of an app.App built with no Stream at all rather than
-// any real checkout's. [LAW:parse-dont-validate]
+// establishes that both are unaddressable and nothing more.
+// [LAW:parse-dont-validate]
 func holdState(by model.Attribution) string {
 	if by.Present() {
 		return "elsewhere"
@@ -99,10 +96,8 @@ func formatLaneProgress(progress claims.LaneProgress) string {
 // names somebody. It is a bucket rather than an address, so beside a real name
 // it discriminates nothing, and "alice (the public checkout) -> bob (the public
 // checkout)" spends both halves on the half that did not move. Where there is
-// no assignee it is the whole answer, and a better one than the "(unassigned)"
-// this printed before the ruling: the record here holds an establishing event,
-// so somebody demonstrably took this ticket, and "(unassigned)" describes the
-// empty assignee field while saying nothing about the holder being announced.
+// no assignee it is the whole answer: the record here holds an establishing
+// event, so somebody demonstrably took this ticket.
 func describeClaimant(c claims.Claimant) string {
 	switch {
 	case c.Assignee == "":
@@ -126,9 +121,7 @@ func describeClaimant(c claims.Claimant) string {
 // by listing every contestant.
 //
 // The public checkout (model.Attribution.Present) is named rather than
-// rendered from its token, because it has none: reading its empty stream
-// through the label path produced "stream " with nothing after it, an
-// answer-shaped void that says a checkout was named while naming none. Being
+// rendered from its token, because it has none. Being
 // unaddressable is a fact worth printing, not a gap to paper over — "the public
 // checkout" tells a reader both that somebody worked here and that there is
 // nobody to go ask. [LAW:parse-dont-validate]

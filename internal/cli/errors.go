@@ -6,10 +6,6 @@ package cli
 // (reason/remediation), which dispatch on these types via errors.As; no sink
 // inspects message text. Feature-specific errors (e.g. SyncFailureError) live
 // with their features.
-//
-// [LAW:decomposition] Split out of cli.go (links-store-mb6e.6) so the
-// flag-parsing framework, the business command handlers, and the typed error
-// taxonomy no longer grow in one file.
 
 import "fmt"
 

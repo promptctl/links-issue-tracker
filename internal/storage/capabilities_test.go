@@ -324,8 +324,8 @@ func TestGCModeValidAcceptsOnlyTheContractsDepths(t *testing.T) {
 	// The zero is in this list deliberately, and it is the one that matters: the
 	// depths are numbered from one so that an outcome which chose no depth
 	// carries a value no engine will act on, rather than defaulting to the cheap
-	// depth and reporting it as a decision nobody made. A renumbering back to
-	// iota turns this arm red.
+	// depth and reporting it as a decision nobody made. A renumbering to iota
+	// turns this arm red.
 	for _, illegal := range []storage.GCMode{storage.GCMode(0), storage.GCMode(-1), storage.GCMode(3), storage.GCMode(99)} {
 		if illegal.Valid() {
 			t.Fatalf("GCMode(%d).Valid() = true, want false — an engine would collect at a depth nobody named", int(illegal))
@@ -336,7 +336,7 @@ func TestGCModeValidAcceptsOnlyTheContractsDepths(t *testing.T) {
 // The zero GCMode is what a depth-less outcome carries, so it must not be a
 // depth. This pins the numbering itself rather than Valid's opinion of it: a
 // reader that asks "was a depth chosen" by testing Valid gets the wrong answer
-// the moment the constants start at zero again, and every failure trace then
+// the moment the constants start at zero, and every failure trace then
 // reports `newgen` for passes that never chose one. [LAW:types-are-the-program]
 func TestTheZeroGCModeIsNotADepth(t *testing.T) {
 	t.Parallel()

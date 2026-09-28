@@ -16,7 +16,7 @@ import (
 // is, not be swallowed and misread as a real zero-rows "not found" result.
 // This drives ClearParent's DELETE through a driver that executes the
 // statement for real but forces the result's RowsAffected() to fail,
-// proving the two outcomes are now distinguishable. (links-store-mb6e.1)
+// proving the two outcomes are distinguishable.
 func TestClearParentSurfacesGenuineRowsAffectedError(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -49,7 +49,7 @@ func TestClearParentSurfacesGenuineRowsAffectedError(t *testing.T) {
 
 // The same masking risk exists in RemoveLabel's DELETE FROM labels statement;
 // this proves its RowsAffected() error is likewise surfaced rather than
-// misread as a real zero-rows "label not found" result. (links-store-mb6e.1)
+// misread as a real zero-rows "label not found" result.
 func TestRemoveLabelSurfacesGenuineRowsAffectedError(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -213,7 +213,7 @@ func namedValuesToValues(named []driver.NamedValue) []driver.Value {
 // execErrResult reports the query as having genuinely executed — the DELETE
 // really ran, and a real zero-rows case still returns 0 with no error from
 // the inner result — while RowsAffected() unconditionally fails. That is the
-// exact fault ClearParent and RemoveLabel now surface instead of masking as
+// exact fault ClearParent and RemoveLabel surface instead of masking as
 // NotFound.
 type execErrResult struct {
 	inner    driver.Result

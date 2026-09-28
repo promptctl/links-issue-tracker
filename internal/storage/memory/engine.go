@@ -159,9 +159,7 @@ func (e *Engine) mustRecord(id string) (*record, error) {
 //
 // It is derived on every read rather than maintained beside the slice: a
 // cached index is a second representation of the order that every mutation
-// site would have to remember to keep true, and the engines this contract is
-// carving a seam for exist because that kind of bookkeeping went wrong.
-// [LAW:one-source-of-truth]
+// site would have to remember to keep true. [LAW:one-source-of-truth]
 func (e *Engine) positions() map[string]int {
 	pos := make(map[string]int, len(e.order))
 	for i, id := range e.order {

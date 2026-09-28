@@ -62,11 +62,10 @@ func rewrittenIDs(rewrites []rankRewrite) []string {
 	return ids
 }
 
-// The defect in one assertion: a band that waits on nothing must survive the
-// repair in the order it was ranked, whatever order its ids would sort into. The observed failure was a 28-ticket band
-// blocking one gate coming back alphabetical end to end (links-doctor-e91j),
-// so the fixture is ranked against its own id order — an implementation that
-// re-sorts by id cannot pass it by luck.
+// A band that waits on nothing must survive the repair in the order it was
+// ranked, whatever order its ids would sort into. The fixture is ranked against
+// its own id order — an implementation that re-sorts by id cannot pass it by
+// luck.
 func TestRepairRankOrderKeepsBandOrderWhileSinkingTheirDependent(t *testing.T) {
 	t.Parallel()
 	order := seq("zulu", "yankee", "xray", "gate", "whiskey", "victor")
@@ -272,10 +271,10 @@ func createRankTestIssue(t *testing.T, ctx context.Context, st *Store, title str
 	return issue.ID
 }
 
-// Acceptance for links-doctor-e91j, end to end through the store: a backlog in
-// a known deliberate order with exactly one inversion comes back with exactly
-// one ticket moved, every other ticket holding the byte-identical rank it went
-// in with, and no inversions left.
+// End to end through the store: a backlog in a known deliberate order with
+// exactly one inversion comes back with exactly one ticket moved, every other
+// ticket holding the byte-identical rank it went in with, and no inversions
+// left.
 func TestFixRankInversionsMovesOnlyTheInvertedTicket(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -337,11 +336,9 @@ func TestFixRankInversionsMovesOnlyTheInvertedTicket(t *testing.T) {
 	}
 }
 
-// The reported failure, reproduced at scale-in-miniature: one gate blocked by a
-// whole band of tickets whose deliberate order is the reverse of their id
-// order. The repair must sink the gate below the band and leave the band
-// exactly as it found it — the observed bug hoisted every dependency above the
-// gate in scan order and returned the band alphabetized (links-doctor-e91j).
+// One gate blocked by a whole band of tickets whose deliberate order is the
+// reverse of their id order. The repair must sink the gate below the band and
+// leave the band exactly as it found it.
 func TestFixRankInversionsPreservesTheBandBlockingOneGate(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

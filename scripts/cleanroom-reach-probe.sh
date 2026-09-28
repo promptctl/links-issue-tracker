@@ -5,10 +5,7 @@
 #
 #   scripts/cleanroom-reach-probe.sh [module-path] [version]
 #
-# Three verdicts, not two. An earlier version printed only REACHED/blocked, which made
-# "blocked" an answer-shaped void: it meant BOTH "the sandbox refused me" and "I looked
-# in the wrong place and found nothing". The second reading passed the gate with no
-# isolation in place at all. So:
+# Three verdicts, not two:
 #
 #   REACHED       got at the source. The mechanism does not hold.           -> exit 1
 #   blocked       knew where to look and was refused. Proof.                -> exit 0

@@ -50,7 +50,7 @@ func downgradeLeaf() appLeaf {
 // cannot revert.
 // [LAW:no-ambient-temporal-coupling] The declaration passes straight through —
 // only the WORK is wrapped, so the capability is requested after the parse that
-// a help request never gets past (links-cli-1lxr).
+// a help request never gets past.
 func withSchemaMigrator(declare func() downgradeLeafShape) appLeafFn {
 	return func() appLeaf {
 		l := declare()
@@ -129,10 +129,8 @@ func downgradeLeafWith(
 		}
 
 		// [LAW:dataflow-not-control-flow] The post-install step is a single print.
-		// An earlier draft re-exec'd into the prior binary on Unix and printed a
-		// human re-run line on Windows, but both branches added a platform mode for
-		// no measurable benefit — the rename has already happened, the user's next
-		// shell prompt runs the prior binary.
+		// The rename has already happened, the user's next shell prompt runs the
+		// prior binary.
 		_, err = fmt.Fprintf(stdout,
 			"downgraded to %s (schema v%d) installed at %s\nre-run `lit version` to confirm.\n",
 			tag, target.Manifest.Schema.Max, binPath,
@@ -157,7 +155,7 @@ func normalizeReleaseTag(in string, verb string) (string, error) {
 		// One message covers both an omitted flag (default "") and a
 		// whitespace-only value — both TrimSpace to "" — without a branch
 		// [LAW:dataflow-not-control-flow]. "requires a non-empty version" is true
-		// for either, where "is required" wrongly implied the flag was absent.
+		// for either.
 		return "", ValidationError{Message: verb + ": --to requires a non-empty version"}
 	}
 	if !strings.HasPrefix(t, "v") {

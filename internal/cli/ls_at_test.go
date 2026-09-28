@@ -108,9 +108,7 @@ func TestLsAtLeavesStoreWritable(t *testing.T) {
 // TestLsAtContentionTraceFilesUnderTargetStore pins where a starved
 // `ls --at` files its contention trace: under the --at TARGET store — beside
 // the traces of whatever holds it — never resolved from the cwd, which for
-// --at is explicitly allowed to be no workspace at all. Pre-fix, a cwd-based
-// resolution silently dropped this exact record (no cwd workspace) or misfiled
-// it into an unrelated one.
+// --at is explicitly allowed to be no workspace at all.
 //
 // Not parallel: it chdirs.
 func TestLsAtContentionTraceFilesUnderTargetStore(t *testing.T) {

@@ -80,7 +80,7 @@ func TestRebuildCandidateValidMappingYieldsFreshWorkspace(t *testing.T) {
 	}
 }
 
-// TestRebuildCandidateRejectLeavesZeroResidue is the core new guarantee
+// TestRebuildCandidateRejectLeavesZeroResidue is the core guarantee
 // (acceptance #2): an invalid mapping is rejected and leaves nothing on disk, so
 // the very next attempt — under the same parent dir, reusing the same dump —
 // starts clean. The dump is read-only across both attempts.
@@ -119,8 +119,7 @@ func TestRebuildCandidateRejectLeavesZeroResidue(t *testing.T) {
 
 	// Discarding a SUCCESSFUL candidate must also leave zero residue under the
 	// parent — including the workspace lock and migration snapshots Open writes as
-	// siblings of the dolt directory. This is the guarantee a flat dolt-dir layout
-	// silently broke (those siblings escaped the candidate's own RemoveAll).
+	// siblings of the dolt directory.
 	if err := cand.Discard(); err != nil {
 		t.Fatalf("Discard: %v", err)
 	}

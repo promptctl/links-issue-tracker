@@ -20,16 +20,14 @@ import (
 // re-querying the store or the filesystem per row.
 //
 // addresses is the local half of "Finding a claimant"
-// (design-docs/work-claims.md): it resolves a claimant's attribution to a
-// live worktree's path and branch only when this machine's own liveness
-// enumeration proves one exists. It is built straight from
-// workspace.LiveCheckouts rather than through app.LocalCheckouts (which
-// projects the same enumeration down to bare tokens for the claim
-// predicate) because rendering needs the path and branch that projection
-// throws away — per the ticket's own review comment, the address book
-// already exists; render it, don't re-enumerate. Nothing in this map ever
-// reaches the shared database: it lives only as long as this command's
-// process. [privacy invariant]
+// (design-docs/work-claims.md): it resolves a claimant's attribution to a live
+// worktree's path and branch only when this machine's own liveness enumeration
+// proves one exists. It is built straight from workspace.LiveCheckouts rather
+// than through app.LocalCheckouts (which projects the same enumeration down to
+// bare tokens for the claim predicate) because rendering needs the path and
+// branch that projection throws away — the address book already exists; render
+// it, don't re-enumerate. Nothing in this map ever reaches the shared database:
+// it lives only as long as this command's process. [privacy invariant]
 type claimContext struct {
 	standings claims.Standings
 	evidence  claims.Evidence
@@ -50,10 +48,7 @@ func gatherClaimContext(ctx context.Context, stdout io.Writer, ap *app.App) (cla
 	// included, because a checkout's hold on a lane can rest entirely on a
 	// `done` against a ticket no longer open — and a deleted or archived
 	// issue is exactly such a ticket, still named by its own historical
-	// events. The zero-value filter excludes both, which is why a
-	// repository with even one deleted issue that ever carried an event
-	// (this one included) made NewEvidence fail outright on every `next` and
-	// `backlog` invocation before this widened the read.
+	// events. The zero-value filter excludes both.
 	allIssues, err := ap.Store.ListIssues(ctx, storage.ListIssuesFilter{IncludeArchived: true, IncludeDeleted: true})
 	if err != nil {
 		return claimContext{}, err
@@ -80,8 +75,7 @@ func gatherClaimContext(ctx context.Context, stdout io.Writer, ap *app.App) (cla
 	}
 
 	// [LAW:no-silent-failure] This machine cannot prove which of its own
-	// worktrees are still alive. The judgment call left open by
-	// links-claims-1ihf.4's comment: fall back to the zero LocalCheckouts,
+	// worktrees are still alive. Fall back to the zero LocalCheckouts,
 	// which voids nothing and lets freshness alone govern — but say so,
 	// every time, because the fallback silently changes which lanes route
 	// around this checkout otherwise, and it means no address ever resolves
@@ -142,12 +136,11 @@ func readClaimant(ctx context.Context, ap *app.App, issueID string) (claims.Clai
 // ticket's lane held — by this checkout or another. A lane nobody holds has no
 // claim to hand over: it was never started, is finished, or its claim expired,
 // and the notice would be wrong whatever the row's own history records about
-// who last started it, because an expired claim is not a claim
-// (links-claims-y6yz). The gate is the one read that knows the lane's
-// standing, so the question is asked there rather than answered twice. The
-// record's establisher still matters to the store, which compares claimants to
-// decide whether a same-state start owes a write; this governs only what is
-// announced.
+// who last started it, because an expired claim is not a claim. The gate is the
+// one read that knows the lane's standing, so the question is asked there
+// rather than answered twice. The record's establisher still matters to the
+// store, which compares claimants to decide whether a same-state start owes a
+// write; this governs only what is announced.
 //
 // Asking is what costs: the claimant is two round trips, and `start` is the one
 // verb whose result anything reads. The other three status verbs cannot take a
@@ -166,12 +159,8 @@ func readClaimant(ctx context.Context, ap *app.App, issueID string) (claims.Clai
 // [LAW:no-silent-failure] Both conditions on the notice are load-bearing and
 // neither implies the other: Held is whether anything ever established a hold —
 // a fact NEITHER identity half carries, since both go empty on real holders, so
-// a ticket carrying `lit new --assignee X` that nobody has started is silent
-// (reading it off the checkout instead is the wrong definition this fix already
-// tried and reverted; claimant.go says why) — and the claimant comparison is
-// whether that holder changed. Comparing assignees alone was silent for the two
-// takeovers that matter most: between two human checkouts (both assignees
-// empty) and between two worktrees of one agent session (both identical).
+// a ticket carrying `lit new --assignee X` that nobody has started is silent —
+// and the claimant comparison is whether that holder changed.
 func transferNotice(ctx context.Context, ap *app.App, issueID string, start model.Start) (string, error) {
 	prior, err := readClaimant(ctx, ap, issueID)
 	if err != nil {

@@ -13,8 +13,7 @@ import (
 // [LAW:one-source-of-truth] This is THE parser from sort expression to
 // []SortSpec. Both the `--sort` flag and the `--query sort:` token route through
 // here, so the two surfaces cannot drift on direction syntax or field naming.
-// It lives beside SortSpec because the query package cannot import cli, where the
-// caller originally kept a private copy.
+// It lives beside SortSpec because the query package cannot import cli.
 func ParseSortSpecs(input string) ([]SortSpec, error) {
 	out := make([]SortSpec, 0)
 	for _, part := range strings.Split(input, ",") {
@@ -36,8 +35,7 @@ func ParseSortSpecs(input string) ([]SortSpec, error) {
 			default:
 				// [LAW:no-silent-failure] An unrecognized direction is a typo, not
 				// an implicit default — reject it so a bad sort never silently
-				// reorders results. ValidationError maps to the same ExitValidation
-				// the CLI's prior UnsupportedError used.
+				// reorders results.
 				return nil, ValidationError{Message: fmt.Sprintf("unsupported sort direction %q", direction)}
 			}
 		}

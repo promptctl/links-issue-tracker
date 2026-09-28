@@ -78,17 +78,11 @@ func runVersion(stdout io.Writer, args []string) error {
 // synthetic Info. [LAW:effects-at-boundaries]
 //
 // The verdict comes from version.StaleSourceBuild, not from a second
-// comparison against StaleBuildThreshold here. This surface used to warn on
-// age alone, which told the holder of a months-old *release* binary to run
-// `just build` — advice that does not refresh it — while the build-status
-// note on doctor/sync/init reached the opposite verdict about that same
-// binary. One predicate now answers for both. [LAW:single-enforcer]
+// comparison against StaleBuildThreshold here. [LAW:single-enforcer]
 //
 // Both halves of the sentence are borrowed, not retyped: the threshold
 // parenthetical from stalenessThresholdClause and the cure from
-// buildRefreshRemedy. This line said "older than 7 days" while gating on `>=`,
-// which is false for the binary built exactly 7 days ago — the first one the
-// gate speaks about. [LAW:one-source-of-truth]
+// buildRefreshRemedy. [LAW:one-source-of-truth]
 func versionStalenessWarning(info version.Info, now time.Time) []string {
 	if _, stale := info.StaleSourceBuild(now); !stale {
 		return nil

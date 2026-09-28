@@ -13,13 +13,6 @@ import (
 
 // The compaction backstop is what collects a store that nothing else collects.
 //
-// Compaction previously rode entirely on the push path, so a workspace with no
-// remote — or one that simply goes a long time between explicit pushes — had
-// nothing reclaiming its storage at all. Measured on a fresh remote-less
-// workspace, 150 mutations with no push grew the chunk journal to 6.5 MB with
-// the per-mutation cost still climbing, and a single shallow pass reclaimed 69%
-// of it. That is the gap this closes.
-//
 // It runs where the inline receive runs and for the same reason: the depth of a
 // compaction pass is irrelevant to its safety, but its TIMING is not. DOLT_GC
 // transitions the store read-only mid-run and collides with a live engine, so
@@ -143,13 +136,9 @@ func compactThroughSession(ctx context.Context, ws workspace.Info, session syncS
 // genuinely differs between them: which command ran. [LAW:composability] the
 // variability crosses one boundary as a value.
 //
-// It exists because sharing the metadata renderer alone was not enough. The two
-// paths still passed their own decision string, so the same event was recorded
-// as "ok" by the backstop and "compacted" by the command, and an operator
-// filtering the trail for successful compactions saw only half of them. Command
-// already says which path ran — compactTraceCommand is deliberately distinct
-// from the command line for exactly that purpose — so a second axis saying it
-// again could only disagree. [LAW:one-source-of-truth]
+// Command already says which path ran — compactTraceCommand is deliberately
+// distinct from the command line for exactly that purpose — so a second axis
+// saying it again could only disagree. [LAW:one-source-of-truth]
 //
 // The decision is spelled here and nowhere else, which is what stops a third
 // entry point from inventing a fourth vocabulary: there is nothing left for it
@@ -163,24 +152,19 @@ func recordCompactionSuccess(ws workspace.Info, command string, outcome storage.
 // and the explicit `lit sync compact` — so the durable trail carries one shape
 // whichever entry point ran.
 //
-// It exists because the two paths spelled the keys themselves and drifted: one
-// wrote "mode" while the other wrote "depth", and only one carried the detail,
-// so a reader asking "what did the last compaction reclaim" had to know which
-// entry point ran before it could know which key to read. A single renderer
-// cannot disagree with itself. [LAW:one-source-of-truth]
+// A single renderer cannot disagree with itself. [LAW:one-source-of-truth]
 //
 // The depth is spelled "depth" because that is the contract's own name for it
-// (CompactionOutcome.Depth); "mode" was this file's older word for the same
-// fact. Detail rides along on both paths because a scheduled pass may have
-// nobody reading its stdout, which leaves the trace as the only surviving
-// account of what it reclaimed — the same reason syncPushTraceMetadata carries
-// the push's maintenance line. [LAW:no-silent-failure]
+// (CompactionOutcome.Depth). Detail rides along on both paths because a
+// scheduled pass may have nobody reading its stdout, which leaves the trace as
+// the only surviving account of what it reclaimed — the same reason
+// syncPushTraceMetadata carries the push's maintenance line.
+// [LAW:no-silent-failure]
 //
 // An empty Detail is dropped by compactTraceMetadata, which already owns what an
 // empty metadata value means, so this builder never re-decides it.
 // [LAW:single-enforcer] What makes Detail empty is the contract's to say, and it
-// says so on CompactionOutcome.Detail; restating it here is what put an earlier
-// version of this comment at odds with it. [LAW:one-source-of-truth]
+// says so on CompactionOutcome.Detail. [LAW:one-source-of-truth]
 func compactionTraceMetadata(outcome storage.CompactionOutcome) map[string]string {
 	metadata := compactionDepthMetadata(outcome.Depth)
 	metadata["detail"] = outcome.Detail
@@ -193,8 +177,7 @@ func compactionTraceMetadata(outcome storage.CompactionOutcome) map[string]strin
 // needs the trail to say which one kept failing.
 //
 // It is a separate renderer rather than a literal at the failure site because
-// the key would then be spelled in three places, and this vocabulary has
-// already drifted twice when it was spelled in two. [LAW:one-source-of-truth]
+// the key would then be spelled in three places. [LAW:one-source-of-truth]
 func compactionDepthMetadata(depth storage.GCMode) map[string]string {
 	return map[string]string{"depth": depth.String()}
 }

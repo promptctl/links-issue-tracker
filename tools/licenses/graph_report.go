@@ -55,10 +55,7 @@ const (
 //
 // Re-measure when the allowlist changes, because the allowlist decides what
 // this section can even contain: permitsHit drops an allowlisted license at
-// ANY depth, so links-licensing-c0ce.9's removal of ISC, MPL-2.0 and WTFPL
-// un-suppressed the classifier corpus's copies of those texts and moved both
-// numbers (137 of 144 → 140 of 148) in the same commit that changed the
-// policy. The counts above are re-measured on that branch.
+// ANY depth.
 //
 // What three rows is chosen against is the elision itself: a module whose run
 // exceeds the cap has its remainder replaced by a count, so anything after the
@@ -66,8 +63,7 @@ const (
 // branch, THREE runs already exceed it — the classifier corpus twice (nested,
 // +137; unclassified, +28) and gonum once (unclassified, +1). gonum's three
 // printed rows are THIRD_PARTY_LICENSES entries and the elided fourth is not,
-// since nothing in that directory sorts after W3C-TestSuite-LICENSE; it was
-// already elided before the allowlist change and is not caused by it.
+// since nothing in that directory sorts after W3C-TestSuite-LICENSE.
 //
 // One run sits exactly ON the cap and is worth naming rather than rounding
 // off: github.com/apache/thrift contributes three unclassified rows
@@ -217,9 +213,7 @@ func rootGrantLicense(hits []LicenseHit) string {
 // the day it landed, for reasons that are mostly noise, and a gate that cries
 // wolf gets switched off within a month.
 //
-// That is settled now rather than pending, and this comment used to defer it
-// to a ticket that has since decided it: links-licensing-c0ce.9's answer is
-// that graph mode never gates. The number behind the answer is above, at
+// Graph mode never gates. The number behind the answer is above, at
 // rowsPerModule — 140 of the 148 nested rows are one dependency's reference
 // corpus. What stands in for a gate is a written verdict per row, in
 // LICENSE-NOTES.md, which FORKS.md points at and which this report's sections

@@ -13,11 +13,9 @@ import (
 
 // Pre-goose reconcile data-survival tests.
 //
-// These tests pin the contract restored by reconcileToBaseline: every
+// These tests pin the contract of reconcileToBaseline: every
 // workspace at any historical canonical shape forward-migrates to v1
-// with every row of user data intact. The reconcile was deleted in
-// commit 254f86b; the deletion left pre-v1 workspaces refused with
-// "restore from a snapshot or recreate" (i.e. destroy your data).
+// with every row of user data intact.
 //
 // Each test simulates a specific pre-goose shape by mutating a freshly-
 // bootstrapped workspace (drop a column, rename a column, drop a table,
@@ -135,11 +133,9 @@ func assertReachedBaseline(t *testing.T, doltRoot string) *Store {
 	return st
 }
 
-// TestReconcileAddsMissingIssueEventsTables pins the headline failure shape
-// reported in the field: a pre-goose workspace missing issue_events and
-// issue_event_changes tables AND missing the issues.agent_prompt column
-// must forward-migrate to v1, not refuse. This is the exact shape the user
-// hit when the deletion shipped.
+// TestReconcileAddsMissingIssueEventsTables pins that a pre-goose workspace
+// missing issue_events and issue_event_changes tables AND missing the
+// issues.agent_prompt column must forward-migrate to v1, not refuse.
 func TestReconcileAddsMissingIssueEventsTables(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -156,7 +152,7 @@ func TestReconcileAddsMissingIssueEventsTables(t *testing.T) {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
 	}
-	// Simulate the user's workspace shape: drop issue_events + change-log
+	// Simulate the workspace shape: drop issue_events + change-log
 	// tables, drop the agent_prompt column. (Drop in FK-aware order:
 	// issue_event_changes before issue_events.) These run inside the reshape
 	// window because a Down migration reads issue_events; dropping it before
@@ -598,8 +594,7 @@ func TestCanonicalLegacyStatus(t *testing.T) {
 }
 
 // seedCanonicalIssueHistory creates the canonical-shape legacy
-// issue_history table — the exact column set the deleted insertHistoryTx
-// wrote in production. Tests use this to exercise the translation
+// issue_history table. Tests use this to exercise the translation
 // (translate-then-drop) path of the reconcile.
 func seedCanonicalIssueHistory(t *testing.T, st *Store) {
 	t.Helper()
@@ -648,15 +643,9 @@ func nullableStrPtr(p *string) any {
 }
 
 // TestReconcileTranslatesLegacyIssueHistoryToEvents pins the headline
-// contract of links-recovery-icqp.3: every row in a canonical-shape
-// issue_history table is preserved as an issue_events row (+ one
-// issue_event_changes row per non-trivial status transition) before
-// the legacy table is dropped. The previous bridge silently destroyed
-// these rows; PR #143's recovery on unreal-3d-maps lost 184 of them
-// and PR #145's on cc-nerf-buster lost 4.
-//
-// [LAW:no-silent-failure] Drop-without-translate was the silent
-// fallback this ticket eliminates.
+// contract: every row in a canonical-shape issue_history table is
+// preserved as an issue_events row (+ one issue_event_changes row per
+// non-trivial status transition) before the legacy table is dropped.
 func TestReconcileTranslatesLegacyIssueHistoryToEvents(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -676,7 +665,7 @@ func TestReconcileTranslatesLegacyIssueHistoryToEvents(t *testing.T) {
 	//   - hist-start:         status transition, named action
 	//   - hist-comment-null:  NULL action (the explicit-NULL no-action shape)
 	//   - hist-comment-empty: explicit empty-string action (the other no-action
-	//     shape historically written by insertHistoryTx; MUST normalize to NULL
+	//     shape; MUST normalize to NULL
 	//     post-translation to match recordEvent's convention)
 	//   - hist-close:         status transition, named action, different actor
 	//   - hist-same-status:   from_status == to_status — must NOT emit a
@@ -898,7 +887,7 @@ func TestReconcileTranslateSkipsOrphanedHistoryRows(t *testing.T) {
 }
 
 // TestReconcileTranslateRunsAfterActorRename pins the ordering
-// constraint Copilot caught on PR #147 review: workspaces whose
+// constraint: workspaces whose
 // issue_events table still carries the pre-rename `assignee` column
 // must NOT cause the translation INSERT to fail with unknown-column-
 // `actor`. The reconcile must run the assignee→actor rename BEFORE
@@ -983,8 +972,7 @@ func TestReconcileTranslateRunsAfterActorRename(t *testing.T) {
 // existing row untouched AND does not invent a status-change row
 // attached to it. The two-row fixture forces the translate function
 // past its early-exit (pending > 0), so the per-row INSERTs actually
-// fire — without this shape the LEFT-JOIN-only change-INSERT bug
-// Copilot caught on PR #147 would not be exercised.
+// fire.
 //
 // [LAW:types-are-the-program] The uniqueness of issue_events.id is
 // the type-level encoding of "have we translated this row already";
@@ -1019,13 +1007,12 @@ func TestReconcileTranslateIsIdempotentWithExistingEvents(t *testing.T) {
 	}
 	seedCanonicalIssueHistory(t, first)
 	// The legacy row carries different action/reason values from the
-	// pre-existing event AND a status transition that would (under the
-	// old JOIN-only change-INSERT bug) attach to the pre-existing event.
+	// pre-existing event AND a status transition that would attach to the
+	// pre-existing event.
 	insertLegacyHistory(t, first, "hist-already-translated", seeded.ID, strPtr("DIFFERENT"), "different reason", strPtr("open"), strPtr("closed"), "2026-01-01T10:00:00Z", "DIFFERENT_ACTOR")
 	// A second legacy row that is genuinely new — forces the translate
 	// function past its "pending == 0" early-exit so the per-row INSERTs
-	// actually run. Without this row the change-INSERT bug Copilot
-	// caught on PR #147 would not be exercised.
+	// actually run.
 	insertLegacyHistory(t, first, "hist-fresh", seeded.ID, strPtr("start"), "fresh row", strPtr("open"), strPtr("in_progress"), "2026-01-01T10:30:00Z", "alice")
 	hijackToPreGoose(t, first)
 	if err := first.Close(); err != nil {
@@ -1098,9 +1085,7 @@ func TestReconcileTranslateIsIdempotentWithExistingEvents(t *testing.T) {
 // workspaces that an older buggy binary partially-upgraded: the legacy
 // issue_history table is still present AND goose_db_version carries
 // fabricated rows (rows inserted at one tstamp without the migrations
-// actually running). Such workspaces were previously trapped in
-// phaseManaged with an ahead-of-registry refusal, because the lying log
-// claimed a v1+ shape the workspace never had.
+// actually running).
 //
 // Fix shape: disk-truth classification. issue_history's presence routes
 // the workspace through the legacy bridge regardless of goose
@@ -1131,8 +1116,7 @@ func TestReconcileRecoversFromFabricatedGooseRows(t *testing.T) {
 	revertToBaseline(t, first)
 	// Reproduce the field shape: legacy issue_history table present
 	// AND a goose_db_version log claiming a version beyond this binary's
-	// registry (the "stamped ahead by a buggy older binary" pattern seen in
-	// cc-nerf-buster).
+	// registry (the "stamped ahead by a buggy older binary" pattern).
 	if err := first.ExecRawForTest(ctx, `CREATE TABLE issue_history (id VARCHAR(191) PRIMARY KEY, issue_id VARCHAR(191) NOT NULL)`); err != nil {
 		_ = first.Close()
 		t.Fatalf("create legacy issue_history error = %v", err)
@@ -1421,8 +1405,7 @@ func TestReconcileRankBackfillCoexistsWithExistingRanks(t *testing.T) {
 // column presence), so if a non-issues canonical table exists but is
 // missing required columns, reconcile no-ops the CREATE and the
 // malformed table persists. Without the post-reconcile baseline check,
-// adoption would stamp v1 on a non-baseline schema — recreating the
-// PR #119 failure shape adoption was supposed to prevent.
+// adoption would stamp v1 on a non-baseline schema.
 //
 // [LAW:no-silent-failure] After reconcile finishes, runMigration
 // verifies the actual shape matches baseline; any remaining gap aborts
@@ -1485,10 +1468,8 @@ func TestPostReconcileBaselineVerificationCatchesNonIssuesGaps(t *testing.T) {
 
 // TestReconcileErrorMessageIsActionable pins the contract that the
 // reconcile, when it cannot bring a shape forward, names the specific
-// operation it failed on. The deleted code's failure message was
-// "restore from a snapshot or recreate it" — destructive guidance. The
-// replacement must point at the actual structural issue so the operator
-// can fix it without data loss.
+// operation it failed on. It must point at the actual structural issue
+// so the operator can fix it without data loss.
 func TestReconcileErrorMessageIsActionable(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -1527,14 +1508,14 @@ func TestReconcileErrorMessageIsActionable(t *testing.T) {
 	if !strings.Contains(err.Error(), "not a known historical shape") {
 		t.Fatalf("error %q does not classify the shape as unknown-history", err)
 	}
-	// Must NOT contain the destructive guidance the old code emitted.
+	// Must NOT contain the destructive guidance.
 	if strings.Contains(err.Error(), "restore it from a snapshot or recreate") {
 		t.Fatalf("error still contains the data-destroying guidance from the deleted gate: %q", err)
 	}
 }
 
 // The issue-type and priority CHECK clauses are derived from the sealed model
-// vocabularies (links-recut-types-mweb.3, .2). This pins the derivations to
+// vocabularies. This pins the derivations to
 // the exact literals reconcile has always installed: a byte-level change would
 // make every existing workspace's normalized-clause probes miss, dropping and
 // re-adding constraints on each Open. [LAW:one-source-of-truth] The literals

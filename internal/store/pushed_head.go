@@ -78,11 +78,11 @@ var ErrReceivedRefsNotRecorded = errors.New("received-refs record not written, s
 // the budget is a stalled one. A cut is returned wrapping ErrMirrorHoldCut.
 // [LAW:no-ambient-temporal-coupling]
 //
-// Why it exists: the on-change mirror pushes from a clone
-// (links-scale-om3r.s2h) so the live store is held for the clone step rather
-// than the network round trip. Left alone, every freshness read on the live
-// store — the staleness banner's "N local change(s) not pushed", `lit doctor`'s
-// ahead count — would report pushed commits as unpushed until the next fetch,
+// Why it exists: the on-change mirror pushes from a clone so the live store is
+// held for the clone step rather than the network round trip. Left alone,
+// every freshness read on the live store — the staleness banner's "N local
+// change(s) not pushed", `lit doctor`'s ahead count — would report pushed
+// commits as unpushed until the next fetch,
 // on every read command, for up to the receive interval. The tracking ref stays
 // the one source of "where the remote is"; this is the push's own bookkeeping
 // moved to the store that owns the ref. [LAW:one-source-of-truth]

@@ -31,11 +31,11 @@ func fabricateDeadResidue(t *testing.T, snapshotsDir, stamp string) (tmpPath, re
 	return tmpPath, reservePath
 }
 
-// TestCollectOrphanedResidue_RemovesDeadResidue pins the ticket's acceptance
-// shape (links-snapshots-3dtv): residue stranded by a killed producer — the
-// .tmp copy, the .reserve claim, and any .condemned corpse from an earlier
-// interrupted collection — is reclaimed, while real snapshots, legacy
-// directories, and the beacon itself are untouched.
+// TestCollectOrphanedResidue_RemovesDeadResidue pins the acceptance shape:
+// residue stranded by a killed producer — the .tmp copy, the .reserve claim,
+// and any .condemned corpse from an earlier interrupted collection — is
+// reclaimed, while real snapshots, legacy directories, and the beacon itself
+// are untouched.
 func TestCollectOrphanedResidue_RemovesDeadResidue(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

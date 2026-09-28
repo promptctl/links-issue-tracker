@@ -123,9 +123,8 @@ func TestOpenRecoversOnceForeignJournalHolderReleases(t *testing.T) {
 // foreign journal-lock holder, the error must carry ErrWorkspaceBusy — the
 // uniform contention sentinel pushOutcomeOf maps to the non-failed
 // workspace_busy outcome — alongside the ErrDatabaseLocked classification.
-// The retired engine lock's wrapper carried the sentinel; without it a
-// mirror blocked behind a healthy long-running writer records a push
-// FAILURE and pages the owner over ordinary serialization.
+// Without it a mirror blocked behind a healthy long-running writer records a
+// push FAILURE and pages the owner over ordinary serialization.
 func TestOpenSyncContentionCarriesWorkspaceBusy(t *testing.T) {
 	// serial: no t.Parallel — rewrites the package-level
 	// coResidentHolderWait budget, which would govern every concurrently
@@ -163,8 +162,8 @@ func TestOpenSyncContentionCarriesWorkspaceBusy(t *testing.T) {
 	}
 }
 
-// TestOpenForReadToleratesForeignJournalHolder pins the read-open contract the
-// write fix must NOT disturb: a read open beside a live foreign writer keeps
+// TestOpenForReadToleratesForeignJournalHolder pins the read-open contract: a
+// read open beside a live foreign writer keeps
 // dolt's read-only fallback and serves reads — reading a store someone else is
 // writing is exactly what a read open is for.
 func TestOpenForReadToleratesForeignJournalHolder(t *testing.T) {

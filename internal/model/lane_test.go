@@ -98,8 +98,7 @@ func TestLaneStringDistinguishesTheEpicFromItsDefaultLane(t *testing.T) {
 // renderings answer to different readers, and this is the contrast stated as a
 // test. String's "#" keeps a lane from reading as its epic in a log line;
 // Describe drops it because the words "epic" and "lane" draw the same
-// distinction, and the default lane's empty key left String trailing a bare "#"
-// that reads as an unfilled template slot (links-next-output-5aee).
+// distinction.
 //
 // The solo case is why Describe answers in two parts: a lane of one holds
 // exactly the ticket that names it, so every phrase for it repeats the id the

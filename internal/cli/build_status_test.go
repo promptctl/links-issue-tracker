@@ -20,12 +20,11 @@ func TestBuildStatusNoteReleaseBuild(t *testing.T) {
 	}
 }
 
-// TestBuildStatusNoteInstalledSourceBuildIsNotARelease is the regression pin for
-// links-build-status-1svs. `just install` stamps Version from `git describe`, so
-// the binary this repo puts on a PATH has IsDev == false while being built from
-// a working tree — and the note used to key on IsDev and call it a release, age
-// unmentioned. FromSource is what separates the two, and this is the exact shape
-// the field binary has: a stamped Version AND source provenance.
+// TestBuildStatusNoteInstalledSourceBuildIsNotARelease: `just install` stamps
+// Version from `git describe`, so the binary this repo puts on a PATH has
+// IsDev == false while being built from a working tree. FromSource is what
+// separates the two, and this is the exact shape the field binary has: a
+// stamped Version AND source provenance.
 func TestBuildStatusNoteInstalledSourceBuildIsNotARelease(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
@@ -223,23 +222,17 @@ func TestBuildStalenessLineNamesAgeAndRemedy(t *testing.T) {
 // the one age where its wording can lie — exactly its own threshold — and holds
 // each to the shared vocabulary. Every gate stays silent on `age < threshold`,
 // so a value sitting exactly on the threshold warns, and "(over 7 days)" is
-// false at that reachable age. Three surfaces shipped that contradiction:
-// buildStalenessLines, fetchStalenessLines and `lit version`'s own WARNING
-// each re-derived a sentence buildStatusNote had already gotten right and
-// documented. No shape table could catch it — each spends its "exactly at the
-// threshold" row asserting that a line is emitted, never what the line says.
+// false at that reachable age. No shape table could catch it — each spends its
+// "exactly at the threshold" row asserting that a line is emitted, never what
+// the line says.
 //
 // The surfaces are rows, so covering a fifth is a row rather than another
 // test, and the expected phrases stay literal: deriving them from
 // stalenessThresholdClause would pass for whatever that function happens to
-// return, which is the vacuous test this one exists to not be. The fourth row
-// arrived the way the third did — by grepping the claim across the tree rather
-// than re-reading the sites already cited.
+// return, which is the vacuous test this one exists to not be.
 //
 // The remedy travels with its surface. The build pair share one — one predicate
-// means one population, and the banner had prescribed `just install` alone,
-// which does not refresh the ./lit a developer runs out of the repo — while the
-// fetch surface prescribes its own.
+// means one population — while the fetch surface prescribes its own.
 func TestEveryStalenessSurfaceAgreesAtItsBoundary(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)

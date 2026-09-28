@@ -2,15 +2,14 @@
 # changelog-frozen.sh — a CHANGELOG section that has shipped is immutable, and
 # this is the proof.
 #
-# The defect it exists to stop (links-release-3ixp): a ticket PR branched while
+# The defect it exists to stop: a ticket PR branched while
 # `## [Unreleased]` is the live heading writes its entry there, exactly as
 # RELEASING.md requires. A release promotion then renames that heading to
 # `## [X.Y.Z]` and opens a fresh empty `## [Unreleased]` above it. The ticket PR
 # merges with no conflict and its addition lands under the RELEASED heading —
 # an insertion never reads the heading it lands beneath. The tagged notes then
 # describe code the tag does not contain, and the pending section loses the
-# entry: one bullet, two wrong releases. That happened on 2026-09-07 (#498 into
-# v0.14.0) and every gate in this repo was green over it.
+# entry: one bullet, two wrong releases.
 #
 # The check: origin's newest release tag is the authority on what shipped, and
 # HEAD's CHANGELOG is a map of it. Everything from that tag's own version
@@ -19,8 +18,7 @@
 # region in the tag's own CHANGELOG. [LAW:one-source-of-truth]
 #
 # Why the whole tail, and not section-by-section against each section's own tag:
-# v0.1.0's CHANGELOG carries no `## [0.1.0]` section at all — it was written
-# after the tag was cut, back when releases were promoted by hand. A per-section
+# v0.1.0's CHANGELOG carries no `## [0.1.0]` section at all. A per-section
 # check has to carry a hardcoded exemption for that, which is a second and
 # drifting record of which sections are "really" frozen. Comparing the tail as
 # ONE region against the newest tag's copy dissolves it: 0.1.0's section sits

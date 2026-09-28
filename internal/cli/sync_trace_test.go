@@ -133,8 +133,7 @@ func TestRecordSyncTraceCarriesTriggerWhenAutomated(t *testing.T) {
 // TestInitLeavesDurableSyncTraceInteractively is the end-to-end proof for
 // init's remote-adopt outcome, the ticket's first named acceptance case: a
 // directly-run `lit init`, with no automation trigger set, leaves a durable
-// JSON trace record — where before this ticket, init_sync.go's adopt step
-// reported its outcome only through progressf (stderr, never persisted).
+// JSON trace record.
 func TestInitLeavesDurableSyncTraceInteractively(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")
@@ -169,10 +168,7 @@ func TestInitLeavesDurableSyncTraceInteractively(t *testing.T) {
 // TestExplicitSyncCommandsLeaveDurableTracesInteractively is the end-to-end
 // proof for the ticket's second named acceptance case: `lit sync
 // fetch/pull/push/reconcile`, run directly with no automation trigger set,
-// each leave a durable trace record — the exact commands
-// internal/cli/sync.go, sync_receive.go, and sync_bg.go's existing
-// LNKS_AUTOMATION_TRIGGER-gated writer left no record for at all when run this
-// way. It drives the real CLI over a real git remote (mirroring
+// each leave a durable trace record. It drives the real CLI over a real git remote (mirroring
 // TestInitAdoptsExistingRemoteBacklog's fixture) and inspects the durable
 // trace directory afterward, not just the commands' own exit codes.
 func TestExplicitSyncCommandsLeaveDurableTracesInteractively(t *testing.T) {
@@ -266,9 +262,7 @@ func TestExplicitSyncCommandsLeaveDurableTracesInteractively(t *testing.T) {
 }
 
 // TestReconcileAbortLeavesDurableTraceInteractively proves `lit sync reconcile
-// abort` — the one reconcile subcommand that got no trace instrumentation in
-// this ticket's first pass, caught by review — leaves a durable record like
-// its resolve/take/combine siblings.
+// abort` leaves a durable record like its resolve/take/combine siblings.
 func TestReconcileAbortLeavesDurableTraceInteractively(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")
@@ -300,7 +294,7 @@ func TestReconcileAbortLeavesDurableTraceInteractively(t *testing.T) {
 // TestReconcileTakeAndCombineLeaveDurableTracesInteractively is the trace
 // counterpart to sync_unrelated_e2e_test.go's TestReconcileCombineUnionsUnrelatedHistories:
 // `lit sync reconcile take` and `lit sync reconcile combine` are the two
-// resolution commands new alongside this ticket's tracing work, and — unlike
+// resolution commands, and — unlike
 // TestExplicitSyncCommandsLeaveDurableTracesInteractively's plain "sync
 // reconcile" on a non-diverged clone — only fire their TookRemote/TookLocal/
 // Combined trace branches against a real unrelated-histories divergence, so
@@ -352,8 +346,7 @@ func TestReconcileTakeAndCombineLeaveDurableTracesInteractively(t *testing.T) {
 		consumer, ws := newDisjointConsumer(t)
 		before := len(readSyncTraceRecords(t, ws))
 
-		// The bare take is refused by the owner-approval gate (links-sync-pgct.4)
-		// and that refusal is itself a durably-traced decision.
+		// The bare take is refused by the owner-approval gate and that refusal is itself a durably-traced decision.
 		out, err := runCLIInDirErr(t, consumer, "sync", "reconcile", "take", "remote")
 		if err == nil {
 			t.Fatalf("`sync reconcile take remote` without approval succeeded:\n%s", out)

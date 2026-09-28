@@ -6,8 +6,7 @@ package lifecycle
 //
 // [LAW:types-are-the-program] An assignee on close, a redirect target on a
 // terminal outcome, or a resolution on reopen are unconstructible — the
-// variant has no field to put them in — so the runtime carve-outs that used to
-// reject those combinations do not exist. ActionName survives only as the
+// variant has no field to put them in. ActionName survives only as the
 // persisted event-verb encoding (Name()); the sum itself never reaches disk.
 
 // Action is the sealed lifecycle-action sum. Its only implementations are the

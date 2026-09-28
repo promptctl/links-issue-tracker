@@ -24,9 +24,8 @@ const workflowsUsage = "usage: lit workflows [show <id> | edit <id-or-point> | d
 // workflowsFamily is the named surface under `workflows`: one definition
 // resolved (`show <id>`), an override scaffolded or opened (`edit
 // <id-or-point>`), and a hypothetical occasion explained (`dry-run`). The
-// hand-rolled positional switch .4 established is gone: the legal-name set now
-// comes from this table like every other family's, and each shape's flag
-// surface is its own leaf's declaration. [LAW:one-source-of-truth]
+// legal-name set comes from this table like every other family's, and each
+// shape's flag surface is its own leaf's declaration. [LAW:one-source-of-truth]
 var workflowsFamily = commandFamily[wsSubcommand]{
 	usage: workflowsUsage,
 	subcommands: []subcommandRow[wsSubcommand]{

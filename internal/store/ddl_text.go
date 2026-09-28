@@ -6,9 +6,9 @@ package store
 // scanning they build on. Nothing here touches a Store, the database, or the
 // embedded registry; migration_runner.go composes these over registry content.
 //
-// [LAW:decomposition] Split out of migration_runner.go (links-store-mb6e.5) so
-// the phase-classification/quarantine orchestration engine and this
-// self-contained parsing toolkit are separately readable and testable.
+// [LAW:decomposition] The phase-classification/quarantine orchestration
+// engine and this self-contained parsing toolkit are separately readable and
+// testable.
 
 import (
 	"fmt"

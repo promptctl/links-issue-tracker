@@ -194,10 +194,7 @@ but one to the next free version(s).`,
 }
 
 // TestReleasedMigrationsAreContentPinned refuses any change that reuses a released
-// version number under different content — the exact mechanism that bricked
-// workspaces in the migrate-drift epic, where a baseline rewrite refilled version
-// slots 2/3 with new content while already-stamped workspaces kept the deleted
-// content, so goose skipped the new columns forever.
+// version number under different content.
 //
 // [LAW:single-enforcer] the one static gate on version-number reuse for v2+; v1 is
 // enforced by baseline_frozen_test.go.

@@ -33,10 +33,9 @@ func plantCollision(t *testing.T) (base, local, remote model.Export) {
 	return export("wsA", shared), export("wsA", shared, ourSixteen), export("wsB", shared, theirSixteen)
 }
 
-// TestThreeWayReportsIDCollisionInsteadOfFusing is the ticket's planted case. On
-// the pre-fix engine `epic.16` came back as ONE row — a title from one job over a
-// description tiebroken from the other, the loser gone, nothing said. The contract
-// now: both rows survive, the operator is told, and the export cannot be committed.
+// TestThreeWayReportsIDCollisionInsteadOfFusing is the ticket's planted case. The
+// contract: both rows survive, the operator is told, and the export cannot be
+// committed.
 func TestThreeWayReportsIDCollisionInsteadOfFusing(t *testing.T) {
 	base, local, remote := plantCollision(t)
 	got := ThreeWay(base, local, remote)
@@ -78,7 +77,7 @@ func TestThreeWayReportsIDCollisionInsteadOfFusing(t *testing.T) {
 			merged.Title, merged.Description)
 	}
 	// The fusion signature specifically: one job's title beside the other's
-	// description. If this ever holds again, the defect is back.
+	// description.
 	if merged.Title == "Wire the release watchdog" && merged.Description == "hash ids grow a character past 4k issues" {
 		t.Fatalf("epic.16 fused two unrelated tickets into one row")
 	}
@@ -87,10 +86,8 @@ func TestThreeWayReportsIDCollisionInsteadOfFusing(t *testing.T) {
 // TestThreeWayReportsIDCollisionWithNoProseDivergence is the defect at its
 // quietest, and the reason a prose conflict is not a safety net. Two agents on two
 // machines file the same-sounding ticket — both notice one flaky test — so both
-// rows carry identical text and the field merge raises nothing to hold. On the
-// pre-fix engine this measured Settled() ok=TRUE: one row committed autonomously,
-// the other destroyed, no operator signal anywhere. Only the birth certificates
-// ever differed.
+// rows carry identical text and the field merge raises nothing to hold. Only the
+// birth certificates ever differed.
 func TestThreeWayReportsIDCollisionWithNoProseDivergence(t *testing.T) {
 	twin := func(born time.Time) model.Issue {
 		return leaf(t, "epic.16", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) {

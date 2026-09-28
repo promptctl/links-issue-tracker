@@ -8,8 +8,8 @@ import (
 	"time"
 )
 
-// The two accept fixtures are verbatim from the sync traces that motivated
-// links-sync-r779: a real dropped connection and a real mid-handshake reset,
+// The two accept fixtures are verbatim from the sync traces: a real dropped
+// connection and a real mid-handshake reset,
 // both wrapped the way the backend's auth-normalizing layer renders them —
 // auth prose first, transport symptom buried in the git output.
 const traceConnectionRefused = `git authentication required but interactive prompting is disabled
@@ -38,7 +38,7 @@ func TestRemoteTransportSymptomClassification(t *testing.T) {
 		wantOK      bool
 	}{
 		{
-			// The observed defect: the transport symptom must win over the auth
+			// The transport symptom must win over the auth
 			// prose it is wrapped in, and the returned line names the concrete
 			// symptom, host and port included.
 			"dropped connection wrapped as auth failure",

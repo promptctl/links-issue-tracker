@@ -40,14 +40,13 @@ func TestExitCodeMappings(t *testing.T) {
 		{name: "workspace not initialized", err: store.ErrWorkspaceNotInitialized, want: ExitValidation},
 		{name: "workspace not initialized wrapped", err: fmt.Errorf("open store: %w", store.ErrWorkspaceNotInitialized), want: ExitValidation},
 		// A prefix lit cannot settle on is a self-fixable precondition, not
-		// "lit is broken" — ExitGeneric meant both, and a script could only
-		// tell them apart by parsing the English (links-init-hn19).
+		// "lit is broken".
 		{name: "issue prefix refused", err: workspace.ErrIssuePrefixRefused, want: ExitValidation},
 		{name: "issue prefix refused wrapped", err: fmt.Errorf("resolve workspace: %w", workspace.ErrIssuePrefixRefused), want: ExitValidation},
 		// The typed member keeps the family's code: it carries a different
 		// remediation, not a different exit contract, and it reaches this arm only
 		// through its Unwrap. Dropping that Unwrap would move it to ExitGeneric,
-		// which is the "lit is broken" code this ticket moved it off.
+		// which is the "lit is broken" code.
 		{
 			name: "stored prefix refused",
 			err:  workspace.StoredPrefixError{ConfigPath: "/w/config.json", Stored: "ab", Err: errors.New("too short")},
@@ -65,7 +64,7 @@ func TestExitCodeMappings(t *testing.T) {
 		// A container action splits on whether the children already establish
 		// the state that was asked for: a satisfied request changed nothing and
 		// shares the "nothing to hand back" code, while a refusal is an ordinary
-		// domain-constraint rejection. Neither is ExitGeneric any more
+		// domain-constraint rejection. Neither is ExitGeneric
 		// (links-cli-errors-1u9g). The command-driven proof is in
 		// container_action_error_test.go; these two pin the mapping itself.
 		{

@@ -15,16 +15,12 @@ import (
 
 // Compaction depth, and the on-disk evidence for when each depth is due.
 //
-// Dolt collects in two depths and lit historically pinned the shallower one by
-// calling DOLT_GC with no arguments, which made the deeper one unreachable from
-// anywhere in this codebase.
+// Dolt collects in two depths.
 //
 // How the two depths RELATE is storage.GCMode's to state, and is stated there.
 // This file is about what Dolt does and what its store looks like on disk. A
-// paraphrase of the contract here would be a second map of one fact — which is
-// exactly how this comment came to assert the depths were disjoint while the
-// contract said they nest. Correcting the copy would have left two maps and a
-// third drift; there is one map now. [LAW:one-source-of-truth]
+// paraphrase of the contract here would be a second map of one fact.
+// [LAW:one-source-of-truth]
 //
 // What each depth COSTS is engine knowledge and belongs here. Measured on this
 // repository's own store, the shallow depth freed zero bytes — its new
@@ -52,11 +48,7 @@ const (
 // It exists because "did the pass run" is observable only inside
 // compactWithinLock, and a bare error cannot carry it. The domain has three
 // outcomes — the pass never ran; the pass ran and the work after it failed; the
-// pass ran clean — while an error has two. Both callers used to reconstruct the
-// missing third by assuming, and they assumed OPPOSITE things: the push path
-// reported a deep pass that had never run, while the standalone path discarded
-// one that had. An assumption is worse than a branch here, because a branch
-// leaves something to read and an assumption leaves nothing.
+// pass ran clean — while an error has two.
 // [LAW:types-are-the-program] the discriminator is a value handed out by the one
 // function that can observe it, not a guess each caller makes from its own
 // position in the control flow. [LAW:dataflow-not-control-flow]
@@ -258,9 +250,8 @@ func footprintDelta(before, after storeFootprint, measureErr error) string {
 // It takes the attempt rather than a depth so that "did this actually run"
 // is answered HERE, once, instead of at each of the two failure paths that call
 // it. Both of those describe an error that may or may not have a completed pass
-// behind it, and one of them used to annotate unconditionally — announcing a
-// full pass in the same breath as the error saying the full pass failed. A
-// filter every caller has to remember is a filter one of them will forget.
+// behind it. A filter every caller has to remember is a filter one of them will
+// forget.
 // [LAW:one-source-of-truth] [LAW:single-enforcer]
 func compactionReport(attempt compactionAttempt, measureErr error) string {
 	switch {

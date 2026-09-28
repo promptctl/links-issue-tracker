@@ -243,7 +243,7 @@ func issueProjectionFrom(issue model.Issue) issueProjection {
 	// through the same projection (model.Capabilities / its StatusView), so the
 	// field set that decides "did this side move" cannot drift from the field set
 	// ResolveIssue merges — a new lifecycle field is covered by construction.
-	// [LAW:no-silent-failure] Omission would now over-report a change (routed to the
+	// [LAW:no-silent-failure] Omission would over-report a change (routed to the
 	// field-aware resolver) instead of silently reading a real edit as "unchanged".
 	return issueProjection{
 		ID:           issue.ID,
