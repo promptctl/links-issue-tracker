@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bytes"
+	"slices"
 	"strings"
 	"testing"
 
@@ -20,7 +22,7 @@ func TestListStateCellNamesTheCloseReason(t *testing.T) {
 	h := newReadyTestHarness(t)
 	canonical := h.createIssue(storage.CreateIssueInput{Title: "the canonical ticket", IssueType: model.TypeTask, Topic: "listing"})
 
-	for _, tc := range []struct {
+	cases := []struct {
 		title   string
 		actions []model.Action
 		want    string
@@ -31,30 +33,43 @@ func TestListStateCellNamesTheCloseReason(t *testing.T) {
 		{title: "overtaken", actions: []model.Action{model.Close{Outcome: model.Obsolete{}}}, want: "closed:obsolete"},
 		{title: "declined", actions: []model.Action{model.Close{Outcome: model.Wontfix{}}}, want: "closed:wontfix"},
 		{title: "declined and shelved", actions: []model.Action{model.Close{Outcome: model.Wontfix{}}, model.Archive{}}, want: "closed:wontfix+archived"},
-	} {
+	}
+	rows := make([]string, len(cases))
+	for i, tc := range cases {
 		issue := h.createIssue(storage.CreateIssueInput{Title: tc.title, IssueType: model.TypeTask, Topic: "listing"})
 		for _, action := range tc.actions {
 			if _, err := h.ap.Store.Apply(h.ctx, issue.ID, storage.Change{Action: action, Actor: "tester"}); err != nil {
 				t.Fatalf("Apply(%s, %T) error = %v", tc.title, action, err)
 			}
 		}
+		rows[i] = issue.ID + " | " + tc.want + " | listing | " + tc.title
+	}
+
+	// Exact lines, so a "closed" expectation cannot be met by a
+	// "closed:wontfix" row's prefix.
+	got := strings.Split(runLs(t, h.ap, "--status", "closed", "--include-archived"), "\n")
+	for i, tc := range cases {
 		t.Run(tc.title, func(t *testing.T) {
-			got := runLs(t, h.ap, "--status", "closed", "--include-archived")
-			want := issue.ID + " | " + tc.want + " | listing | " + tc.title
-			if !hasLine(got, want) {
-				t.Fatalf("ls --status closed missing row %q; output:\n%s", want, got)
+			if !slices.Contains(got, rows[i]) {
+				t.Fatalf("ls --status closed missing row %q; output:\n%s", rows[i], strings.Join(got, "\n"))
 			}
 		})
 	}
 }
 
-// hasLine reports whether out has a line exactly equal to want, so a
-// "closed" expectation cannot be satisfied by a "closed:wontfix" row's prefix.
-func hasLine(out, want string) bool {
-	for _, line := range strings.Split(out, "\n") {
-		if line == want {
-			return true
-		}
+// TestCloseSummarySharesTheStateCell pins the one-line summary `lit close`
+// prints to the same cell the listing shows, so the reply to the close and
+// the later listing name the reason identically.
+func TestCloseSummarySharesTheStateCell(t *testing.T) {
+	h := newReadyTestHarness(t)
+	issue := h.createIssue(storage.CreateIssueInput{Title: "declined", IssueType: model.TypeTask, Topic: "listing"})
+
+	var out bytes.Buffer
+	if err := runTransition(h.ctx, &out, h.ap, []string{issue.ID, "--resolution", "wontfix"}, closeSpec); err != nil {
+		t.Fatalf("runTransition(close wontfix) error = %v", err)
 	}
-	return false
+	want := issue.ID + " [closed:wontfix/task/listing/normal] declined"
+	if !slices.Contains(strings.Split(out.String(), "\n"), want) {
+		t.Fatalf("lit close output missing summary %q; output:\n%s", want, out.String())
+	}
 }

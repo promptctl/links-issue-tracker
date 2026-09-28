@@ -347,7 +347,9 @@ prefix (`cli.go`).
   title, rank, assignee, labels, updated_at, created_at, parent, blocked`
   (`columns.go`). An unknown name is a `UsageError` naming it and the valid
   set; an empty selection gives the default set (`columns.go`).
-- `formatIssueColumns` per-column rendering (`output.go`): `priority` uses
+- `formatIssueColumns` renders each selected column through its registry entry
+  (`output.go`); the per-column renderers live in `columnRegistry`
+  (`columns.go`): `priority` uses
   `Priority.String()` (normal/urgent); `assignee` and `labels` render `-` when
   empty; `updated_at`/`created_at` render RFC3339; `parent` renders the parent id
   or `-`; `blocked` renders the literal token `blocked` or `-`
