@@ -323,8 +323,9 @@ func performSyncReceive(ctx context.Context, ws workspace.Info, clone liveClone,
 
 	var result storage.SyncReceiveResult
 	receiveErr := fetch.fetchErr
+	var landed store.LandedFetch
 	if receiveErr == nil {
-		receiveErr = landFetch(ctx, ws, clone, target)
+		landed, receiveErr = landFetch(ctx, ws, clone, target)
 	}
 	var session syncSession
 	if receiveErr == nil {
@@ -332,6 +333,15 @@ func performSyncReceive(ctx context.Context, ws workspace.Info, clone liveClone,
 		if err != nil {
 			return syncReceiveOutcome{}, func() error { return nil }, fmt.Errorf("open sync store: %w", err)
 		}
+		// The clone's copy of the remotes was reconciled from git when the
+		// target was resolved there; the live store's is reconciled here, so
+		// a re-pointed git remote reaches it without an explicit sync command.
+		// Local only: git's remote config and the store's remote table.
+		if _, err := syncDoltRemotesFromGit(ctx, session, ws); err != nil {
+			receiveErr = fmt.Errorf("reconcile the live store's remotes from git: %w", err)
+		}
+	}
+	if receiveErr == nil {
 		result, receiveErr = session.syncer.SyncSettleReceived(ctx, remoteName, syncBranch)
 	}
 	traceMetadata := map[string]string{
@@ -340,6 +350,8 @@ func performSyncReceive(ctx context.Context, ws workspace.Info, clone liveClone,
 		"state":       string(result.State),
 		"ahead":       strconv.FormatInt(result.Ahead, 10),
 		"behind":      strconv.FormatInt(result.Behind, 10),
+		"landed":      landed.Record.String(),
+		"land_held":   landed.Held.Round(time.Millisecond).String(),
 	}
 	traceStatus := "ok"
 	traceReason := receiveReasonForState(result.State)

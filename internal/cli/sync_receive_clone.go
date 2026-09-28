@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -38,9 +39,11 @@ type receiveFetch struct {
 func takeReceiveClone(ctx context.Context, ws workspace.Info) (liveClone, error) {
 	clone, cut, err := cloneLiveStore(ctx, ws, receiveCloneBase(ws), func() {})
 	if err != nil {
-		err = fmt.Errorf("take the receive's clone: %w", err)
+		// The hold's cost travels with the failure, as the mirror's does: a
+		// cut read without it cannot tell a stalled copy from a slow one.
+		err = fmt.Errorf("take the receive's clone (live store held %s): %w", clone.held.Round(time.Millisecond), err)
 		if cut {
-			err = fmt.Errorf("%w: %w", receiveHoldCutExplanation("cloning the store"), err)
+			err = fmt.Errorf("%w: %w", receiveCloneCutExplanation(), err)
 		}
 		return liveClone{}, err
 	}
@@ -80,24 +83,23 @@ func fetchIntoClone(ctx context.Context, ws workspace.Info, clone liveClone) (fe
 	return fetch, nil
 }
 
-// landFetch carries the clone's fetch to the live store (store.LandFetchedHead).
-// A mirror whose git objects did not land is reported and not failed: the
-// chunks and the ref landed, which is the receive; what is lost is that the
-// live store's next network operation downloads those objects again.
-func landFetch(ctx context.Context, ws workspace.Info, clone liveClone, target syncTarget) error {
-	_, err := store.LandFetchedHead(ctx, ws.DatabasePath, clone.databasePath, target.remote, target.branch)
+// landFetch carries the clone's fetch to the live store (store.LandFetchedHead)
+// and reports what it did to the tracking ref and how long it held the store,
+// for the receive's trace. A mirror whose git objects did not land is reported
+// and not failed: the chunks and the ref landed, which is the receive; what is
+// lost is that the live store's next network operation downloads those
+// objects again.
+func landFetch(ctx context.Context, ws workspace.Info, clone liveClone, target syncTarget) (store.LandedFetch, error) {
+	landed, err := store.LandFetchedHead(ctx, ws.DatabasePath, clone.databasePath, target.remote, target.branch)
 	if errors.Is(err, store.ErrRemoteCacheNotLanded) {
 		fmt.Fprintf(os.Stderr, "lit: automatic receive: %v\n", err)
-		return nil
+		return landed, nil
 	}
-	if errors.Is(err, store.ErrMirrorHoldCut) {
-		return fmt.Errorf("%w: %w", receiveHoldCutExplanation("landing the fetch"), err)
-	}
-	return err
+	return landed, err
 }
 
-// receiveHoldCutExplanation is the one wording of "the receive's hold on the
-// live store cut itself loose", for either of its two holds.
-func receiveHoldCutExplanation(step string) error {
-	return fmt.Errorf("automatic receive's hold exceeded its %s budget %s — a deadline, not a diagnosis; the live store is released as the cut unwinds, and the next receive retries", store.MirrorHoldBudget, step)
+// receiveCloneCutExplanation is the one wording of "the receive's clone take
+// cut itself loose".
+func receiveCloneCutExplanation() error {
+	return fmt.Errorf("automatic receive's hold exceeded its %s budget cloning the store — a deadline, not a diagnosis; the live store is released as the cut unwinds, and the next receive retries", store.MirrorHoldBudget)
 }

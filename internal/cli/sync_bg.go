@@ -377,9 +377,13 @@ func cloneLiveStore(ctx context.Context, ws workspace.Info, base string, underHo
 		clone.held = time.Since(holdStart)
 	}
 	if err != nil {
-		// A failed take leaves nothing for the caller to remove; a removal
-		// that fails here is the next take's sweep to collect.
-		_ = os.RemoveAll(dir)
+		// A failed take leaves nothing for the caller to remove. A removal
+		// that fails here travels with the failure — the next take's sweep
+		// collects the tree, but a sweep that keeps failing the same way
+		// would otherwise fill the disk with no trail. [LAW:no-silent-failure]
+		if rmErr := os.RemoveAll(dir); rmErr != nil {
+			err = errors.Join(err, fmt.Errorf("remove the failed take's clone %s: %w", dir, rmErr))
+		}
 		// The hold's cost travels with the failure: a cut hold reported as
 		// hold=0s is the one reading a cut's explanation tells the operator
 		// to consult, erased. [LAW:no-silent-failure]

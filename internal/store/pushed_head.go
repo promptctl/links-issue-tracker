@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/dolthub/dolt/go/libraries/doltcore/dbfactory"
@@ -172,7 +173,7 @@ func RecordPushedHead(ctx context.Context, doltRootDir string, remote string, br
 // move, run inside holdForRefWrite. atHead reports whether the ref now names
 // head, moved there or already there, as against left on a descendant of it.
 func settlePushedHead(ctx context.Context, root, trimmedRemote, trimmedBranch, trimmedHead string) (record PushedHeadRecord, atHead bool, err error) {
-	err = holdForRefWrite(ctx, root, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
+	err = holdForRefWrite(ctx, root, MirrorHoldBudget, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
 		trackingRef := ref.NewRemoteRef(trimmedRemote, trimmedBranch)
 		pushed, err := ddb.ReadCommit(holdCtx, hash.Parse(trimmedHead))
 		if err != nil {
@@ -218,15 +219,16 @@ func settlePushedHead(ctx context.Context, root, trimmedRemote, trimmedBranch, t
 // store: the chunk-store open (Dolt's LOCK, waited out like any write open),
 // the commit lock, and write, all released before it returns. Both the mirror's
 // pushed-head record and the receive's landing of a fetch run through it, so the
-// two cannot drift on the lock order or on what their hold is bounded by.
-// [LAW:single-enforcer]
+// two cannot drift on the lock order. [LAW:single-enforcer]
 //
 // The hold — everything from the open's success to the end of write — runs
-// under MirrorHoldBudget: the lock waits before it are waiting, not holding,
-// and a write still running at the budget is a stalled one. A cut is returned
-// wrapping ErrMirrorHoldCut. The caller holds the workspace shared lock around
-// it, so a rotation of the Dolt directory cannot land inside the hold.
-func holdForRefWrite(ctx context.Context, root string, write func(holdCtx context.Context, ddb *doltdb.DoltDB) error) (err error) {
+// under budget: the lock waits before it are waiting, not holding. A cut is
+// returned wrapping ErrMirrorHoldCut. What the budget is sized against is the
+// caller's to say, because the two writes' costs differ in kind: a ref write is
+// one journal append, a landing copies whatever the remote moved. The caller
+// holds the workspace shared lock around it, so a rotation of the Dolt
+// directory cannot land inside the hold.
+func holdForRefWrite(ctx context.Context, root string, budget time.Duration, write func(holdCtx context.Context, ddb *doltdb.DoltDB) error) (err error) {
 	ddb, releaseRecord, err := openChunkStoreForRefWrite(ctx, root)
 	if err != nil {
 		return err
@@ -240,7 +242,7 @@ func holdForRefWrite(ctx context.Context, root string, write func(holdCtx contex
 	// The hold starts here: the open above took LOCK. Registered after the
 	// Close defer so it runs first and the cut is stamped on the error the
 	// hold produced, not on a Close failure after it.
-	holdCtx, cancelHold := context.WithTimeout(ctx, MirrorHoldBudget)
+	holdCtx, cancelHold := context.WithTimeout(ctx, budget)
 	defer cancelHold()
 	defer func() {
 		if err != nil && holdCtx.Err() != nil && ctx.Err() == nil {
