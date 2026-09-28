@@ -41,10 +41,10 @@ func setFlagFixture(t *testing.T) (h readyTestHarness, bugA, taskAB, featB strin
 // serves, and every spelling the CLI offers — comma list, repeated flag, query
 // term, flag and term together — must reach the same set.
 //
-// The "flag, repeated" rows are the ones a regression fails: while these flags
-// were single-value declarations, a second occurrence overwrote the first, so
-// `--type bug --type task` answered with tasks only and said nothing about the
-// bugs it dropped. [LAW:no-silent-failure]
+// The "flag, repeated" rows are the ones a regression fails: were these flags
+// single-value declarations, a second occurrence would overwrite the first, so
+// `--type bug --type task` would answer with tasks only and say nothing about
+// the bugs it dropped. [LAW:no-silent-failure]
 //
 // --labels is ALL-must-match, so its set narrows as it grows: naming a and b
 // selects only the issue carrying both, and the overwrite regression shows up
