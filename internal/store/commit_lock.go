@@ -9,8 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/promptctl/primitives/filelock"
 )
 
 // [LAW:single-enforcer] All commit-lock acquisition, transient-retry, and
@@ -30,47 +28,31 @@ import (
 // ErrTransientGCContention marks a failure caused by concurrent Dolt online
 // garbage collection — either the manifest going read-only mid-run or the
 // active connection being invalidated ("please reconnect"). Both are
-// recoverable by backing off, rotating the poisoned connection, and retrying.
+// recoverable by rotating the poisoned connection and retrying.
 var ErrTransientGCContention = errors.New("transient online-gc contention")
 
-// transientRetryMaxAttempts/transientRetryBaseDelay/transientRetryMaxDelay
-// shape the retry of a transient online-GC contention: the delay doubles
-// from 50ms to a 1s cap, and the count caps the attempts. Neither is the
-// bound that ends the loop in production: retryTransientGCContention stops
-// before its hold could outlast a commit-lock waiter (commitLockWaiterBudget,
-// which admits the holder wait plus one rotation), so at production figures
-// the loop makes one rotation — the one that replaces the connection the GC
-// invalidated, which is the recovery — and gives up after the next attempt.
-// That is deliberate: no peer runs GC on the live store (the mirror pushes
-// from a clone); a mutation that keeps failing after its connection was
-// replaced is blocked by a holder, and the holder is named by the waiter that
-// meets it, not waited out here.
-// A genuinely wedged holder still surfaces as WorkspaceWriteBlockedError.
-//
-// The attempt count is a package variable (the delays stay const) so tests
-// whose premise makes exhaustion CERTAIN — a foreign journal holder that
-// cannot release mid-test — can shrink it instead of sleeping through the
-// production one, the same convention coResidentHolderWait serves.
-var transientRetryMaxAttempts = 30
-
-const (
-	transientRetryBaseDelay = 50 * time.Millisecond
-	transientRetryMaxDelay  = 1 * time.Second
-)
-
 type retryOperation func(context.Context) error
-type retryDelayFunc func(attempt int) time.Duration
-type retrySleepFunc func(context.Context, time.Duration) error
 
-// connectionRotator rotates a poisoned SQL connection between retry attempts.
-// Online GC invalidates the connection that observed it, so the next attempt
-// must run on a fresh handle. [LAW:effects-at-boundaries] The retry loop stays
-// pure; the reconnect effect is injected here. It takes ctx because the
+// connectionRotator rotates a poisoned SQL connection before the retry. Online
+// GC invalidates the connection that observed it, so the retry must run on a
+// fresh handle. [LAW:effects-at-boundaries] The retry stays pure; the
+// reconnect effect is injected here. It takes ctx because the
 // rotation opens a real engine (a bounded wait on Dolt's journal lock), and a
 // cancelled mutation must be able to abandon that wait.
 type connectionRotator func(context.Context) error
 
+// commitLockContextKey marks a context whose caller holds the commit lock; its
+// value is the time the hold began, so anything spending that hold can budget
+// against all of it rather than only the part it saw.
 type commitLockContextKey struct{}
+
+// commitLockHeldSince reports when the commit lock ctx carries was taken, and
+// whether ctx carries one at all. [LAW:one-source-of-truth] the hold's start
+// lives with the marker that says the hold exists.
+func commitLockHeldSince(ctx context.Context) (time.Time, bool) {
+	since, held := ctx.Value(commitLockContextKey{}).(time.Time)
+	return since, held
+}
 
 // commitStamp is everything a mutation may declare about the Dolt commit it
 // produces. The zero value beyond Message is the ordinary mutation: stamped
@@ -153,11 +135,11 @@ func (s *Store) withStampedMutation(ctx context.Context, stamp commitStamp, fn f
 				staged = true
 			}
 			return s.commitWorkingSetOnce(ctx, stamp)
-		}, s.reconnect, transientRetryDelay, waitWithContext)
+		}, s.reconnect)
 	})
 }
 
-// rotationCloseReserve is what the retry loop sets aside for the one part of a
+// rotationCloseReserve is what the retry sets aside for the one part of a
 // connection rotation nothing can bound: Store.reconnect closes the previous,
 // live engine before opening the next, and `*sql.DB.Close()` takes no context,
 // so coResidentHolderWait — which bounds only the new engine's ping —
@@ -167,21 +149,19 @@ func (s *Store) withStampedMutation(ctx context.Context, stamp commitStamp, fn f
 // sizing uses: three `lit sync status` runs, each a whole process that opens a
 // sync session and closes it with no push, took 0.26s, 0.31s and 0.39s end to
 // end. That bounds open AND close together at under 0.4s in the healthy case,
-// so a second is comfortable headroom over the close alone — and it is 1.4% of
-// the engine-open budget it is added to, which is the point: the term is small,
-// but a reservation that assumed it was zero would be asserting something
-// nobody had measured. [FRAMING:representation]
+// so a second is comfortable headroom over the close alone, and a reservation
+// that assumed it was zero would be asserting something nobody had measured.
+// [FRAMING:representation]
 //
 // A variable, by the same convention the other budgets in this package follow:
 // a pin whose premise is that the reservation covers this term has to be able
-// to make the term large enough to matter, and at production scale it is
-// deliberately too small to change the loop's iteration count.
+// to set it.
 var rotationCloseReserve = time.Second
 
 // rotationReserve is the longest one connection rotation can hold the commit
 // lock: the new engine's open, waited out against a co-resident holder for
 // coResidentHolderWait, plus the old engine's unbounded close
-// (rotationCloseReserve). The retry loop reserves it before every rotation.
+// (rotationCloseReserve). The retry reserves it before its rotation.
 func rotationReserve() time.Duration {
 	return coResidentHolderWait + rotationCloseReserve
 }
@@ -192,8 +172,8 @@ func rotationReserve() time.Duration {
 //
 // It is the ordinary holder's whole allowance and nothing more. The ordinary
 // holder is a mutation, and the longest one is a mutation that suffered a
-// GC-contention rotation: coResidentHolderWait for its own work and settle
-// sleeps (retryTransientGCContention stops sleeping there), plus one
+// GC-contention rotation: coResidentHolderWait for its own work, both runs of
+// it (retryTransientGCContention refuses the rotation past that), plus one
 // rotation (rotationReserve). Strictly more than an engine open's wait, and
 // that order is load-bearing: a rotation re-opens LOCK under the held commit
 // lock, and a peer that took LOCK in the gap is by then waiting on this
@@ -211,66 +191,73 @@ func commitLockWaiterBudget() time.Duration {
 }
 
 // retryTransientGCContention runs operation, and on a transient online-GC
-// contention failure backs off, rotates the (poisoned) connection, and retries.
-// The rotate-between-attempts step is load-bearing: the GC reset invalidates the
-// connection that observed it, so re-running on the same handle would fail
-// identically — only a fresh connection can make progress. [LAW:single-enforcer]
-// All GC-contention recovery lives here; callers supply the rotate effect.
+// contention failure rotates the connection once and runs it once more.
+// [LAW:single-enforcer] All GC-contention recovery lives here; callers supply
+// the rotate effect.
 //
-// The loop has two termination conditions because it is spending two different
-// budgets. The attempt count bounds how many times it retries; the hold check
-// below bounds the WALL CLOCK it may spend doing so, because every rotation is
-// an engine open that can wait out a co-resident holder for
-// coResidentHolderWait, and all of it accrues while this mutation holds
-// the commit lock.
+// One rotation, and no sleep before it, because both shapes that classify as
+// transient are cured by a fresh connection and neither by time. A GC reset
+// poisons the one connection that saw it, and the only GC that runs on a live
+// store is lit's own DOLT_GC, under this process's commit lock, which rotates
+// the connection itself (compactWithinLock); the embedded driver runs no
+// auto-GC. A read-only manifest means the engine opened without Dolt's LOCK,
+// which a write engine cannot do: its open waits for LOCK (holdWait) and
+// fails naming the holder rather than falling back to read-only. So there is
+// no settle window to wait through, and a transient failure on the fresh
+// connection is a condition another rotation would not change: it surfaces.
+// [LAW:no-ambient-temporal-coupling] the open's own wait is the one owner of
+// "until the holder lets go"; a sleep here would be a second, unowned one.
 //
-// Without that second condition the two budgets multiply, so a holder
-// retrying exactly as designed would blow past what every waiter on that lock
-// is sized to tolerate, and they would fail with the workspace-busy sentinel
-// naming a holder that was never wedged — the precise wedge Store.reconnect's
-// comment promises cannot happen.
-// [LAW:no-ambient-temporal-coupling] the hold's own owner bounds it, rather
-// than the bound emerging from an arithmetic coincidence between two constants
-// that never referenced each other.
-func retryTransientGCContention(ctx context.Context, operation retryOperation, rotate connectionRotator, delayForAttempt retryDelayFunc, sleep retrySleepFunc) error {
-	var lastErr error
-	start := time.Now()
-	for attempt := 1; attempt <= transientRetryMaxAttempts; attempt++ {
-		err := classifyTransientGCError(operation(ctx))
-		if err == nil {
-			return nil
-		}
-		lastErr = err
-		if !errors.Is(err, ErrTransientGCContention) || attempt == transientRetryMaxAttempts {
-			break
-		}
-		// Checked before the sleep, and reserving room for EVERY term that
-		// runs between here and the next check — the inter-attempt sleep, and
-		// both halves of the rotation. A reservation that omits a term it
-		// cannot see is still a bound in prose only, with a smaller error,
-		// so each one is named: the sleep (up to transientRetryMaxDelay),
-		// the new engine's open (bounded by coResidentHolderWait), and the
-		// PREVIOUS engine's close (rotationCloseReserve). That last one is
-		// the term to be careful about — Store.reconnect closes the old
-		// engine before pinging the new one, `*sql.DB.Close()` takes no
-		// context, so no deadline anywhere can cut it and
-		// coResidentHolderWait does not cover it. Its cost is reserved
-		// rather than bounded, which makes the honest statement of the hold
-		// "the budget, plus at most one engine close" rather than the budget
-		// flat. Stopping here ends the same way exhausting the attempts
-		// does: the manifest never cleared, which is what
-		// exhaustedContentionError already says.
-		if time.Since(start)+delayForAttempt(attempt)+rotationReserve() >= commitLockWaiterBudget() {
-			break
-		}
-		if waitErr := sleep(ctx, delayForAttempt(attempt)); waitErr != nil {
-			return waitErr
-		}
-		if rotateErr := rotate(ctx); rotateErr != nil {
-			return rotateErr
-		}
+// Measured 2026-09-27 rather than argued alone, with every call through this
+// function logged: 0 of 8,826 calls met a transient failure Dolt produced.
+// 8,437 came from the store and cli test suites, every contention test among
+// them. 389 came from 960 lit processes contending for one workspace with a
+// local remote, in 40 rounds that each started 12 `lit comment add`, 4
+// `lit new`, 6 reads, a `lit sync compact` (DOLT_GC, --full every fifth
+// round) and a `lit sync push` at once; 14 of those compactions ran. The same
+// log recorded every failure the tests inject, so it could see one.
+//
+// The rotation is refused when the hold would not fit what every commit-lock
+// waiter is sized to tolerate (commitLockWaiterBudget). The hold is counted
+// from when the commit lock was taken (commitLockHeldSince), not from this
+// call, because callers do work under the lock before they get here. The
+// check reserves what runs after it: the new engine's open (bounded by
+// coResidentHolderWait), the PREVIOUS engine's close (rotationCloseReserve),
+// and the second run, projected at what the first one cost, since it is the
+// same operation. The close is the term to be careful about: Store.reconnect
+// closes the old engine before pinging the new one, `*sql.DB.Close()` takes
+// no context, so no deadline can cut it and coResidentHolderWait does not
+// cover it. Its cost is reserved rather than bounded, so the hold is "the
+// budget, plus at most one engine close". A refused rotation ends the way a
+// failed retry does: the manifest never cleared, which is what
+// exhaustedContentionError already says.
+//
+// It is only ever called under the commit lock, since the rotation swaps the
+// Store's connection (Store.reconnect), and a context without the lock's
+// marker is refused rather than budgeted from a guess.
+//
+// [LAW:nothing-unseen] A rotation is announced on the operator channel before
+// it runs, so a write that recovered here can be told apart from one that
+// never needed to.
+func retryTransientGCContention(ctx context.Context, operation retryOperation, rotate connectionRotator) error {
+	heldSince, held := commitLockHeldSince(ctx)
+	if !held {
+		return errors.New("retryTransientGCContention called without the commit lock held; its rotation swaps the store's connection, which only the lock's holder may do")
 	}
-	return exhaustedContentionError(lastErr)
+	runStart := time.Now()
+	err := classifyTransientGCError(operation(ctx))
+	if !errors.Is(err, ErrTransientGCContention) {
+		return err
+	}
+	firstRun := time.Since(runStart)
+	if time.Since(heldSince)+rotationReserve()+firstRun >= commitLockWaiterBudget() {
+		return exhaustedContentionError(err)
+	}
+	fmt.Fprintf(lockWaitNoticeWriter, "lit: the store connection failed (%v); reopening it and retrying once\n", err)
+	if rotateErr := rotate(ctx); rotateErr != nil {
+		return rotateErr
+	}
+	return exhaustedContentionError(classifyTransientGCError(operation(ctx)))
 }
 
 // WorkspaceWriteBlockedError is the terminal, cross-process refusal a mutation
@@ -301,13 +288,13 @@ func (e WorkspaceWriteBlockedError) Error() string {
 // surface recognizes this terminal type first.
 func (e WorkspaceWriteBlockedError) Unwrap() error { return e.Cause }
 
-// exhaustedContentionError promotes a manifest-read-only that survived the full
-// retry budget into the terminal WorkspaceWriteBlockedError. The discriminator is
-// exhaustion: an intra-process online-GC hiccup clears within the budget (each
-// attempt rotates the poisoned connection), so a manifest STILL read-only after
-// every rotation is a foreign writer holding the store — not a transient this
-// process can clear. A persistent GC-reset or any non-manifest error passes
-// through unchanged, so only the genuinely cross-process case is reclassified.
+// exhaustedContentionError promotes a manifest-read-only that survived the
+// retry into the terminal WorkspaceWriteBlockedError. The discriminator is
+// exhaustion: an intra-process online-GC hiccup clears on the rotated
+// connection, so a manifest STILL read-only after the rotation is a foreign
+// writer holding the store — not a transient this process can clear. A
+// persistent GC-reset or any non-manifest error passes through unchanged, so
+// only the genuinely cross-process case is reclassified.
 // [LAW:types-are-the-program] the accept/reject decision lives in the type the
 // surface dispatches on, not in message-string matching at the CLI.
 func exhaustedContentionError(err error) error {
@@ -317,31 +304,13 @@ func exhaustedContentionError(err error) error {
 	return err
 }
 
-func transientRetryDelay(attempt int) time.Duration {
-	if attempt < 1 {
-		attempt = 1
-	}
-	delay := transientRetryBaseDelay << (attempt - 1)
-	if delay > transientRetryMaxDelay {
-		delay = transientRetryMaxDelay
-	}
-	return delay
-}
-
-// waitWithContext delegates to filelock.SleepWithContext — one home for the
-// context-aware inter-attempt sleep — under the local name the retry
-// machinery passes around as a function value. [LAW:one-source-of-truth]
-func waitWithContext(ctx context.Context, duration time.Duration) error {
-	return filelock.SleepWithContext(ctx, duration)
-}
-
 func (s *Store) commitWorkingSet(ctx context.Context, message string) error {
 	// [LAW:single-enforcer] commitWorkingSet is the single mutation boundary that owns transient commit retry behavior.
 	// [LAW:one-source-of-truth] A process-shared commit lock at this boundary is the canonical writer serialization mechanism.
 	return s.withCommitLock(ctx, func(ctx context.Context) error {
 		return retryTransientGCContention(ctx, func(ctx context.Context) error {
 			return s.commitWorkingSetOnce(ctx, commitStamp{Message: message})
-		}, s.reconnect, transientRetryDelay, waitWithContext)
+		}, s.reconnect)
 	})
 }
 
@@ -425,14 +394,14 @@ func SettleCommitLockRelease(opErr, releaseErr error) error {
 }
 
 func (s *Store) acquireCommitLock(ctx context.Context) (context.Context, func() error, error) {
-	if alreadyLocked, _ := ctx.Value(commitLockContextKey{}).(bool); alreadyLocked {
+	if _, held := commitLockHeldSince(ctx); held {
 		return ctx, func() error { return nil }, nil
 	}
 	release, err := acquireCommitLockAtPath(ctx, s.commitLockStorageDir, s.commitLockPath)
 	if err != nil {
 		return ctx, nil, err
 	}
-	return context.WithValue(ctx, commitLockContextKey{}, true), release, nil
+	return context.WithValue(ctx, commitLockContextKey{}, time.Now()), release, nil
 }
 
 // LockCommitPath acquires the writer-exclusion commit lock for the workspace

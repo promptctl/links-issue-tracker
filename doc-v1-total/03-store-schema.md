@@ -19,7 +19,7 @@ If another process holds Dolt's journal lock (`<root>/links/.dolt/noms/LOCK`), t
 
 `OpenForRead` differs in that it stats the directory first — a missing directory yields "repository not initialized with lit — run 'lit init' first" — never bootstraps, and takes **no** commit lock: it classifies and verifies the schema with reads alone (`assessMigration`, `migration_runner.go`) and serves when nothing would be written. A workspace whose schema trails the binary (a pending version, or applied-version content drift) is closed and reopened through `Open`, which migrates under the commit lock — so a read command still brings a stale workspace forward, but never applies DDL itself, and under a journal-lock holder it fails with the write open's contention refusal rather than a read-only DDL error (`store.go`). Re-opening a current-schema workspace adds **no** Dolt commit; migration is idempotent across opens.
 
-`EnsureDatabase` performs the same validate → lock → adopt-check → bootstrap sequence standalone, returning whether it created the root (`store.go`). `Close` closes the DB (releasing the journal lock) before releasing the workspace lock (`store.go`). `reconnect` — used by retry loops — opens a new pool, swaps it in, closes the old one, and pings (`store.go`); it is the one place the journal lock is taken while the commit lock is held.
+`EnsureDatabase` performs the same validate → lock → adopt-check → bootstrap sequence standalone, returning whether it created the root (`store.go`). `Close` closes the DB (releasing the journal lock) before releasing the workspace lock (`store.go`). `reconnect` — used by the transient-GC retry — opens a new pool, swaps it in, closes the old one, and pings (`store.go`); it is the one place the journal lock is taken while the commit lock is held.
 
 Two `Open`s on one root serialize: the second blocks until the first `Close`. After a SIGKILL mid-commit or mid-migration, a fresh open succeeds — no stale-lock state survives process death, because all locks are kernel flocks.
 
@@ -31,7 +31,7 @@ Two `Open`s on one root serialize: the second blocks until the first `Close`. Af
 
 ### One mutation, one commit
 
-Every mutation routes through `withMutation(ctx, message, fn)` (`commit_lock.go`): under the commit lock and a transient-retry loop, `BeginTx` → `fn` → `tx.Commit` → `DOLT_COMMIT('-Am', <message>)`. The `-A` stages everything; there is no separate add step and no `--skip-empty` — a "nothing to commit" error is absorbed as success (`commit_lock.go`). A retry after a successful `tx.Commit` resumes at the DOLT_COMMIT step without re-running `fn` (the `staged` flag, `commit_lock.go`). A commit stamp may also carry `--allow-empty`, `--date` (RFC3339 UTC), and `--author`; ordinary store mutations pass only the message. A combined transition+field update is exactly one Dolt commit.
+Every mutation routes through `withMutation(ctx, message, fn)` (`commit_lock.go`): under the commit lock and the transient-GC retry, `BeginTx` → `fn` → `tx.Commit` → `DOLT_COMMIT('-Am', <message>)`. The `-A` stages everything; there is no separate add step and no `--skip-empty` — a "nothing to commit" error is absorbed as success (`commit_lock.go`). A retry after a successful `tx.Commit` resumes at the DOLT_COMMIT step without re-running `fn` (the `staged` flag, `commit_lock.go`). A commit stamp may also carry `--allow-empty`, `--date` (RFC3339 UTC), and `--author`; ordinary store mutations pass only the message. A combined transition+field update is exactly one Dolt commit.
 
 **Dolt commit identity** derives entirely from the workspace id: author name = workspace id with `@`→`_` (blank → `links`), email = `<name>@links.local` (`store.go`).
 
@@ -48,7 +48,7 @@ Both are zero-byte kernel flocks with **no** stale/PID/mtime heuristics — proc
 
 ### Transient-retry classification
 
-`retryTransientGCContention` retries up to 30 attempts (a variable, test-shrinkable) with exponential delay 50ms→1s, rotating the connection (`reconnect`) between attempts (`commit_lock.go`). Retryable errors are exactly two lowercased-substring matches: "cannot update manifest"+"read only" (manifest read-only) and "online garbage collection"+"reconnect" (GC reset) (`commit_lock.go`). An exhausted manifest-read-only run promotes to `WorkspaceWriteBlockedError` ("another lit process is holding this workspace open for writing; the store stayed read-only across every retry…"); an exhausted GC-reset does not promote. Non-transient errors are never retried.
+`retryTransientGCContention` runs the operation, and on a transient failure rotates the connection (`reconnect`) once, with no sleep, and runs it once more; the rotation is announced on stderr and refused when it would carry the hold past `commitLockWaiterBudget()` (`commit_lock.go`). Retryable errors are exactly two lowercased-substring matches: "cannot update manifest"+"read only" (manifest read-only) and "online garbage collection"+"reconnect" (GC reset) (`commit_lock.go`). A manifest-read-only that survives the retry promotes to `WorkspaceWriteBlockedError` ("another lit process is holding this workspace open for writing; the store stayed read-only across every retry…"); a surviving GC-reset does not promote. Non-transient errors are never retried.
 
 ## The SQL schema
 

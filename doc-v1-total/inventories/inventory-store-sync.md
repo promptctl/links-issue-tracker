@@ -169,7 +169,7 @@ Report type at `/Users/bmf/code/links-issue-tracker/internal/storage/sync.go`.
 - `execProcedureDiscard(ctx, db, procedure, args...)` (`sync.go`) — drains all rows and returns `rows.Err()`; column-count agnostic, used for `DOLT_MERGE`, `DOLT_CHECKOUT`, `DOLT_BRANCH`.
 - `buildProcedureCall(procedure, argCount)` (`sync.go`) — `"CALL P()"` for zero args, else `"CALL P(?,?,…)"`.
 - `stringArgsToAny` (`sync.go`), `nullStringValue` (`sync.go`).
-- `runSyncMutation` (`sync.go`) = `withCommitLock` → `retryTransientGCContention(op, s.reconnect, transientRetryDelay, waitWithContext)`.
+- `runSyncMutation` (`sync.go`) = `withCommitLock` → `retryTransientGCContention(op, s.reconnect)`.
 
 ---
 
@@ -179,7 +179,7 @@ Report type at `/Users/bmf/code/links-issue-tracker/internal/storage/sync.go`.
 
 - The commit lock is an **flock** via `acquireStoreLock` (`commit_lock.go`). Death of the holder releases it; there is no staleness/eviction heuristic.
 - Path: `commitLockPathForDolt` (`commit_lock.go`) = `filepath.Join(filepath.Dir(filepath.Clean(databasePath)), ".links-commit-flock.lock")`. The historical name `.links-commit.lock` is deliberately not used because O_EXCL-era binaries unlink it, splitting the lock across inodes (`commit_lock.go`). Exported as `CommitLockPath` (`commit_lock.go`).
-- Re-entrancy: `acquireCommitLock` (`commit_lock.go`) checks `ctx.Value(commitLockContextKey{})`; if already true it returns a no-op release. Otherwise it acquires and returns a ctx with the marker set.
+- Re-entrancy: `acquireCommitLock` (`commit_lock.go`) checks `commitLockHeldSince(ctx)`; if the marker is present it returns a no-op release. Otherwise it acquires and returns a ctx whose marker is the time the hold began.
 - Budget: `commitLockWaiterBudget()` = `coResidentHolderWait` + `rotationReserve()` (`commit_lock.go`) — 5.6s of unchanged holders, sized for a mutation that suffered one GC-contention rotation and strictly above `rotationReserve()` (`commit_lock.go`).
 - `wrapCommitLockContention` (`commit_lock.go`): only when `errors.Is(err, ErrWorkspaceBusy)` does it prepend `"another lit process is writing to this workspace (a concurrent mutation or snapshot still running); retry after it completes: %w"`. Every other error, cancellation included, passes through untouched.
 - `LockCommitPath(ctx, lockPath)` (`commit_lock.go`) — the same primitive for callers with no open Store.
@@ -188,9 +188,6 @@ Report type at `/Users/bmf/code/links-issue-tracker/internal/storage/sync.go`.
 ### 2.2 Transient online-GC contention
 
 - Sentinel `ErrTransientGCContention = errors.New("transient online-gc contention")` (`commit_lock.go`).
-- `transientRetryMaxAttempts = 30` (package **var**, so tests can shrink it) (`commit_lock.go`).
-- `transientRetryBaseDelay = 50ms`, `transientRetryMaxDelay = 1s` (`commit_lock.go`). Total ~25s.
-- `transientRetryDelay(attempt)` (`commit_lock.go`): `50ms << (attempt-1)`, capped at 1s; attempts < 1 are clamped to 1.
 - `retryTransientGCContention` (`commit_lock.go`): loop `attempt=1..30`. Run `classifyTransientGCError(operation(ctx))`. nil → return nil. If not transient, or last attempt → break. Else `sleep(ctx, delay)` (a sleep error is returned immediately), then `rotate(ctx)` (a rotate error is returned immediately). After the loop, `exhaustedContentionError(lastErr)`.
 - `exhaustedContentionError` (`commit_lock.go`): if the surviving error `isManifestReadOnlyError`, promote to `WorkspaceWriteBlockedError{Cause: err}`; otherwise return unchanged.
 - `WorkspaceWriteBlockedError.Error()` (`commit_lock.go`): `"another lit process is holding this workspace open for writing; the store stayed read-only across every retry, so this write could not proceed (backend detail: %v)"`. `Unwrap` preserves the cause (`commit_lock.go`).
@@ -456,7 +453,7 @@ Fields (`sync_schema_guard.go`): `Remote`, `Branch`, `RemoteVersion int64`, `Bin
 2. `s.sweepStaleReconcileScratch(ctx)`.
 3. `scratchBranch := newReconcileScratch()`.
 4. `guard := newSnapshotGuard(s.doltRootDir, migrationSnapshotsDir(s.doltRootDir), formatReconcileSnapshotLabel(time.Now()))` — **one** guard carried across all retries, so exactly one snapshot is taken however many attempts run.
-5. `retryTransientGCContention(body, s.reconnect, transientRetryDelay, waitWithContext)`.
+5. `retryTransientGCContention(body, s.reconnect)`.
 
 `sweepStaleReconcileScratch(ctx)` (`sync_reconcile.go`): `SELECT name FROM dolt_branches WHERE name LIKE ?` with `"links-reconcile-scratch-%"`; every match is deleted with `CALL DOLT_BRANCH('-D', name)`. Every failure (list, scan, iterate, delete) prints to stderr with the messages at `sync_reconcile.go` and **never fails the reconcile**. The commit lock guarantees every such branch is an orphan (`sync_reconcile.go`).
 

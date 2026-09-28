@@ -177,7 +177,7 @@ func (s *Store) applyUnrelatedTake(ctx context.Context, result *storage.SyncReco
 		trackingRef := fmt.Sprintf("remotes/%s/%s", remote, branch)
 		return retryTransientGCContention(ctx, func(ctx context.Context) error {
 			return s.takeRemoteHead(ctx, result, guard, trackingRef)
-		}, s.reconnect, transientRetryDelay, waitWithContext)
+		}, s.reconnect)
 	case storage.TakeLocal:
 		// take-local authors replay commits ON the remote head (commitReplayAndAdvance),
 		// so it shares the three-way path's full safe-replay envelope — schema-ahead refusal

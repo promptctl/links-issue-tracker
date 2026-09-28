@@ -28,6 +28,12 @@ func (f *fakeRetryOperation) run(_ context.Context) error {
 // noRotate is the rotate hook for retry tests that don't exercise reconnection.
 func noRotate(context.Context) error { return nil }
 
+// heldCommitLock marks ctx the way acquireCommitLock does, as a hold that began
+// `ago` before now, so the retry can be called without a real lock file.
+func heldCommitLock(ctx context.Context, ago time.Duration) context.Context {
+	return context.WithValue(ctx, commitLockContextKey{}, time.Now().Add(-ago))
+}
+
 func TestRetryTransientGCContentionRetriesTransientError(t *testing.T) {
 	t.Parallel()
 	op := &fakeRetryOperation{
@@ -38,11 +44,9 @@ func TestRetryTransientGCContentionRetriesTransientError(t *testing.T) {
 	}
 
 	err := retryTransientGCContention(
-		context.Background(),
+		heldCommitLock(context.Background(), 0),
 		op.run,
 		noRotate,
-		func(int) time.Duration { return 0 },
-		func(context.Context, time.Duration) error { return nil },
 	)
 	if err != nil {
 		t.Fatalf("retryTransientGCContention() error = %v", err)
@@ -54,20 +58,16 @@ func TestRetryTransientGCContentionRetriesTransientError(t *testing.T) {
 
 func TestRetryTransientGCContentionReturnsLastErrorAfterExhaustion(t *testing.T) {
 	t.Parallel()
-	results := make([]error, 0, transientRetryMaxAttempts)
-	for attempt := 1; attempt < transientRetryMaxAttempts; attempt++ {
-		results = append(results, transientGCContentionError{err: errors.New("transient")})
-	}
 	lastErr := transientGCContentionError{err: errors.New("transient final")}
-	results = append(results, lastErr)
-	op := &fakeRetryOperation{results: results}
+	op := &fakeRetryOperation{results: []error{
+		transientGCContentionError{err: errors.New("transient")},
+		lastErr,
+	}}
 
 	err := retryTransientGCContention(
-		context.Background(),
+		heldCommitLock(context.Background(), 0),
 		op.run,
 		noRotate,
-		func(int) time.Duration { return 0 },
-		func(context.Context, time.Duration) error { return nil },
 	)
 	if err == nil {
 		t.Fatal("retryTransientGCContention() error = nil, want non-nil")
@@ -78,8 +78,8 @@ func TestRetryTransientGCContentionReturnsLastErrorAfterExhaustion(t *testing.T)
 	if err.Error() != lastErr.Error() {
 		t.Fatalf("error = %q, want %q", err.Error(), lastErr.Error())
 	}
-	if op.calls != transientRetryMaxAttempts {
-		t.Fatalf("op.calls = %d, want %d", op.calls, transientRetryMaxAttempts)
+	if op.calls != 2 {
+		t.Fatalf("op.calls = %d, want 2 (the first run and one retry on the rotated connection)", op.calls)
 	}
 }
 
@@ -93,18 +93,15 @@ func TestRetryTransientGCContentionPromotesExhaustedManifestReadOnly(t *testing.
 	// Shape the input the way production does — through wrapCommitWorkingSetError,
 	// the real entry a Dolt commit error flows through — so the test is a true map
 	// of the production error, not a bare-string approximation.
-	results := make([]error, 0, transientRetryMaxAttempts)
-	for attempt := 1; attempt <= transientRetryMaxAttempts; attempt++ {
-		results = append(results, wrapCommitWorkingSetError(errors.New("Error 1105: cannot update manifest: database is read only")))
+	readOnly := func() error {
+		return wrapCommitWorkingSetError(errors.New("Error 1105: cannot update manifest: database is read only"))
 	}
-	op := &fakeRetryOperation{results: results}
+	op := &fakeRetryOperation{results: []error{readOnly(), readOnly()}}
 
 	err := retryTransientGCContention(
-		context.Background(),
+		heldCommitLock(context.Background(), 0),
 		op.run,
 		noRotate,
-		func(int) time.Duration { return 0 },
-		func(context.Context, time.Duration) error { return nil },
 	)
 	var blocked WorkspaceWriteBlockedError
 	if !errors.As(err, &blocked) {
@@ -118,8 +115,8 @@ func TestRetryTransientGCContentionPromotesExhaustedManifestReadOnly(t *testing.
 	if !errors.Is(err, ErrTransientGCContention) {
 		t.Fatalf("write-blocked error dropped its transient cause chain: %v", err)
 	}
-	if op.calls != transientRetryMaxAttempts {
-		t.Fatalf("op.calls = %d, want %d", op.calls, transientRetryMaxAttempts)
+	if op.calls != 2 {
+		t.Fatalf("op.calls = %d, want 2", op.calls)
 	}
 }
 
@@ -129,18 +126,13 @@ func TestRetryTransientGCContentionPromotesExhaustedManifestReadOnly(t *testing.
 // error, never the holder message.
 func TestRetryTransientGCContentionKeepsExhaustedGCResetTransient(t *testing.T) {
 	t.Parallel()
-	results := make([]error, 0, transientRetryMaxAttempts)
-	for attempt := 1; attempt <= transientRetryMaxAttempts; attempt++ {
-		results = append(results, errors.New("this connection was established when this server performed an online garbage collection. please reconnect."))
-	}
-	op := &fakeRetryOperation{results: results}
+	gcReset := errors.New("this connection was established when this server performed an online garbage collection. please reconnect.")
+	op := &fakeRetryOperation{results: []error{gcReset, gcReset}}
 
 	err := retryTransientGCContention(
-		context.Background(),
+		heldCommitLock(context.Background(), 0),
 		op.run,
 		noRotate,
-		func(int) time.Duration { return 0 },
-		func(context.Context, time.Duration) error { return nil },
 	)
 	var blocked WorkspaceWriteBlockedError
 	if errors.As(err, &blocked) {
@@ -161,11 +153,9 @@ func TestRetryTransientGCContentionDoesNotRetryNonTransientError(t *testing.T) {
 	}
 
 	err := retryTransientGCContention(
-		context.Background(),
+		heldCommitLock(context.Background(), 0),
 		op.run,
 		noRotate,
-		func(int) time.Duration { return 0 },
-		func(context.Context, time.Duration) error { return nil },
 	)
 	if err == nil {
 		t.Fatal("retryTransientGCContention() error = nil, want non-nil")
@@ -175,60 +165,32 @@ func TestRetryTransientGCContentionDoesNotRetryNonTransientError(t *testing.T) {
 	}
 }
 
-func TestRetryTransientGCContentionHonorsContextTimeoutDuringBackoff(t *testing.T) {
+// TestRetryTransientGCContentionRotatesConnectionOnceBeforeTheRetry pins
+// that the GC reset poisons the connection, so the retry must rotate it before
+// running again — once, and never after the succeeding call.
+func TestRetryTransientGCContentionRotatesConnectionOnceBeforeTheRetry(t *testing.T) {
 	t.Parallel()
 	op := &fakeRetryOperation{
 		results: []error{
-			transientGCContentionError{err: errors.New("transient timeout")},
-		},
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
-	defer cancel()
-
-	err := retryTransientGCContention(
-		ctx,
-		op.run,
-		noRotate,
-		func(int) time.Duration { return 50 * time.Millisecond },
-		waitWithContext,
-	)
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("retryTransientGCContention() error = %v, want context.DeadlineExceeded", err)
-	}
-	if op.calls != 1 {
-		t.Fatalf("op.calls = %d, want 1", op.calls)
-	}
-}
-
-// TestRetryTransientGCContentionRotatesConnectionBetweenAttempts pins that
-// the GC reset poisons the connection, so the retry must rotate it before each
-// re-attempt. One rotation per backoff, never after the final (succeeding) call.
-func TestRetryTransientGCContentionRotatesConnectionBetweenAttempts(t *testing.T) {
-	t.Parallel()
-	op := &fakeRetryOperation{
-		results: []error{
-			transientGCContentionError{err: errors.New("gc reset 1")},
-			transientGCContentionError{err: errors.New("gc reset 2")},
+			transientGCContentionError{err: errors.New("gc reset")},
 			nil,
 		},
 	}
 	rotations := 0
 
 	err := retryTransientGCContention(
-		context.Background(),
+		heldCommitLock(context.Background(), 0),
 		op.run,
 		func(context.Context) error { rotations++; return nil },
-		func(int) time.Duration { return 0 },
-		func(context.Context, time.Duration) error { return nil },
 	)
 	if err != nil {
 		t.Fatalf("retryTransientGCContention() error = %v", err)
 	}
-	if op.calls != 3 {
-		t.Fatalf("op.calls = %d, want 3", op.calls)
+	if op.calls != 2 {
+		t.Fatalf("op.calls = %d, want 2", op.calls)
 	}
-	if rotations != 2 {
-		t.Fatalf("rotations = %d, want 2 (one per backoff, none after success)", rotations)
+	if rotations != 1 {
+		t.Fatalf("rotations = %d, want 1 (before the retry, none after success)", rotations)
 	}
 }
 
@@ -246,11 +208,9 @@ func TestRetryTransientGCContentionSurfacesRotateFailure(t *testing.T) {
 	rotateErr := errors.New("reopen dolt failed")
 
 	err := retryTransientGCContention(
-		context.Background(),
+		heldCommitLock(context.Background(), 0),
 		op.run,
 		func(context.Context) error { return rotateErr },
-		func(int) time.Duration { return 0 },
-		func(context.Context, time.Duration) error { return nil },
 	)
 	if !errors.Is(err, rotateErr) {
 		t.Fatalf("retryTransientGCContention() error = %v, want rotate failure", err)
@@ -275,7 +235,7 @@ func TestRetryTransientGCContentionCancellationEscapesBlockedRotator(t *testing.
 			nil,
 		},
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(heldCommitLock(context.Background(), 0))
 	go func() {
 		time.Sleep(50 * time.Millisecond)
 		cancel()
@@ -287,8 +247,6 @@ func TestRetryTransientGCContentionCancellationEscapesBlockedRotator(t *testing.
 			ctx,
 			op.run,
 			func(rotateCtx context.Context) error { <-rotateCtx.Done(); return rotateCtx.Err() },
-			func(int) time.Duration { return 0 },
-			func(context.Context, time.Duration) error { return nil },
 		)
 	}()
 
@@ -302,19 +260,6 @@ func TestRetryTransientGCContentionCancellationEscapesBlockedRotator(t *testing.
 	}
 	if op.calls != 1 {
 		t.Fatalf("op.calls = %d, want 1 (no re-attempt after a cancelled rotation)", op.calls)
-	}
-}
-
-func TestTransientRetryDelayIsBounded(t *testing.T) {
-	t.Parallel()
-	for attempt := 1; attempt <= 10; attempt++ {
-		delay := transientRetryDelay(attempt)
-		if delay < transientRetryBaseDelay {
-			t.Fatalf("delay(%d) = %v, want >= %v", attempt, delay, transientRetryBaseDelay)
-		}
-		if delay > transientRetryMaxDelay {
-			t.Fatalf("delay(%d) = %v, want <= %v", attempt, delay, transientRetryMaxDelay)
-		}
 	}
 }
 
@@ -448,29 +393,34 @@ func TestWithCommitLockSerializesConcurrentOperations(t *testing.T) {
 // while holding the commit lock "cannot wedge" because its wait stays strictly
 // inside every commit-lock waiter's budget.
 //
-// The retry loop rotates the connection up to transientRetryMaxAttempts-1
-// times, and every second of it accrues while the commit lock is held, so the
-// real hold is the product of two budgets that never referenced each other.
-//
-// The loop's reservation has to cover every term that runs between one check
-// and the next, and there are three: the inter-attempt sleep, the new engine's
-// open, and the previous engine's close. Two rows, because which omission a
-// behavioural pin can SEE depends on whether the omitted term is big enough to
-// cost an iteration — so each row makes one term dominant and would lose an
-// iteration's worth of budget if the reservation dropped it. One row would
-// pass while a term it never weighted went unreserved.
+// Everything the check reserves is weighted by some row, and each refusing row
+// is sized so that dropping the term it weights lets the rotation through and
+// carries the hold past the budget: the new engine's open, the old engine's
+// close, the second run (projected at the first run's cost), and the hold the
+// caller had already spent before the retry was called. The last row is the
+// other side of the same check: a hold with room left gets its rotation.
 // [LAW:dataflow-not-control-flow] one body, the weighting is data.
 //
 // Not parallel: it mutates package budget variables.
 func TestRetryTransientGCContentionStopsBeforeOutlastingCommitLockWaiters(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		open      time.Duration
-		closeCost time.Duration
-		delay     time.Duration
+		name          string
+		open          time.Duration
+		closeCost     time.Duration
+		heldBefore    time.Duration
+		work          time.Duration
+		wantRotations int
 	}{
-		{name: "engine open dominates the reservation", open: 400 * time.Millisecond, closeCost: 100 * time.Millisecond, delay: 100 * time.Millisecond},
-		{name: "engine close dominates the reservation", open: 200 * time.Millisecond, closeCost: 450 * time.Millisecond, delay: 50 * time.Millisecond},
+		// 160+160+400 >= 700; without the close 620, without the open 420,
+		// without the second run 560: each lets a 720ms hold through.
+		{name: "engine open and second run weighted", open: 300 * time.Millisecond, closeCost: 100 * time.Millisecond, work: 160 * time.Millisecond, wantRotations: 0},
+		// 70+70+550 >= 650; without the close 240, without the open 590.
+		{name: "engine close weighted", open: 100 * time.Millisecond, closeCost: 450 * time.Millisecond, work: 70 * time.Millisecond, wantRotations: 0},
+		// 350+0+400 >= 700; counted from the call instead, 400 lets a 750ms
+		// hold through.
+		{name: "hold spent before the retry weighted", open: 300 * time.Millisecond, closeCost: 100 * time.Millisecond, heldBefore: 350 * time.Millisecond, wantRotations: 0},
+		// 50+50+400 < 700: the rotation lands and the hold ends near 500ms.
+		{name: "a hold with room left gets its rotation", open: 300 * time.Millisecond, closeCost: 100 * time.Millisecond, work: 50 * time.Millisecond, wantRotations: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			restoreOpen := coResidentHolderWait
@@ -479,22 +429,14 @@ func TestRetryTransientGCContentionStopsBeforeOutlastingCommitLockWaiters(t *tes
 			restoreClose := rotationCloseReserve
 			rotationCloseReserve = tc.closeCost
 			t.Cleanup(func() { rotationCloseReserve = restoreClose })
-
-			// The waiter budget is the holder wait plus one rotation, so the
-			// loop has exactly the holder wait to spend on sleeping and
-			// rotating before the reservation for the next rotation no longer
-			// fits: one rotation lands in both rows (600ms of a 900ms budget,
-			// 700ms of 850ms), and the second is refused before it starts.
-			// The margin to the budget is the rotation's own delay plus the
-			// reservation's slack, 200ms and 150ms here — enough to survive
-			// scheduler jitter across the real sleeps on a loaded runner.
 			waiterBudget := commitLockWaiterBudget()
 
 			// Contended forever, shaped through wrapCommitWorkingSetError so
 			// this is a map of the production error rather than a bare-string
-			// approximation. An operation that never clears is the sustained
-			// contention the invariant is about.
+			// approximation. Every run costs the same, as a re-run of one
+			// operation does.
 			op := func(context.Context) error {
+				time.Sleep(tc.work)
 				return wrapCommitWorkingSetError(errors.New("Error 1105: cannot update manifest: database is read only"))
 			}
 			rotations := 0
@@ -507,35 +449,62 @@ func TestRetryTransientGCContentionStopsBeforeOutlastingCommitLockWaiters(t *tes
 				time.Sleep(coResidentHolderWait + rotationCloseReserve)
 				return nil
 			}
-			// A real delay, really slept, for the same reason.
-			delayForAttempt := func(int) time.Duration { return tc.delay }
 
-			start := time.Now()
-			err := retryTransientGCContention(
-				context.Background(),
-				op,
-				rotate,
-				delayForAttempt,
-				func(_ context.Context, d time.Duration) error {
-					time.Sleep(d)
-					return nil
-				},
-			)
-			elapsed := time.Since(start)
+			ctx := heldCommitLock(context.Background(), tc.heldBefore)
+			heldSince, _ := commitLockHeldSince(ctx)
+			err := retryTransientGCContention(ctx, op, rotate)
+			hold := time.Since(heldSince)
 
-			if err == nil {
-				t.Fatal("retryTransientGCContention() error = nil, want the exhausted-contention error")
-			}
 			var blocked WorkspaceWriteBlockedError
 			if !errors.As(err, &blocked) {
-				t.Fatalf("retryTransientGCContention() error = %v, want a WorkspaceWriteBlockedError; giving up on the hold must fail the same way giving up on the attempts does", err)
+				t.Fatalf("retryTransientGCContention() error = %v, want a WorkspaceWriteBlockedError; a refused rotation must fail the same way a failed retry does", err)
 			}
-			if elapsed >= waiterBudget {
-				t.Fatalf("the retry held for %s against a commitLockWaiterBudget of %s; a commit-lock waiter arriving behind this holder fails with the workspace-busy sentinel naming a holder that was never wedged", elapsed, waiterBudget)
+			if rotations != tc.wantRotations {
+				t.Fatalf("rotations = %d, want %d", rotations, tc.wantRotations)
 			}
-			if rotations >= transientRetryMaxAttempts-1 {
-				t.Fatalf("rotations = %d, want fewer than the %d the attempt count alone allows; the loop ran its attempts out instead of stopping on the hold budget, so nothing is bounding the product of the two budgets", rotations, transientRetryMaxAttempts-1)
+			if hold >= waiterBudget {
+				t.Fatalf("the commit lock was held for %s against a commitLockWaiterBudget of %s; a commit-lock waiter arriving behind this holder fails with the workspace-busy sentinel naming a holder that was never wedged", hold, waiterBudget)
 			}
 		})
+	}
+}
+
+// TestRetryTransientGCContentionRefusesAContextWithoutTheCommitLock pins the
+// precondition the rotation depends on: the retry swaps the store's
+// connection, which only the commit lock's holder may do, and it budgets from
+// when that lock was taken, so a context without the lock's marker is refused
+// before the operation runs.
+func TestRetryTransientGCContentionRefusesAContextWithoutTheCommitLock(t *testing.T) {
+	t.Parallel()
+	op := &fakeRetryOperation{results: []error{nil}}
+	err := retryTransientGCContention(context.Background(), op.run, noRotate)
+	if err == nil || !strings.Contains(err.Error(), "without the commit lock held") {
+		t.Fatalf("retryTransientGCContention() error = %v, want the missing-lock refusal", err)
+	}
+	if op.calls != 0 {
+		t.Fatalf("op.calls = %d, want 0", op.calls)
+	}
+}
+
+// TestRetryTransientGCContentionAnnouncesTheRotation pins that a write which
+// recovered on a rotated connection says so on the operator channel, naming
+// the failure that caused it. [LAW:nothing-unseen]
+//
+// Not parallel: it swaps the package's notice writer.
+func TestRetryTransientGCContentionAnnouncesTheRotation(t *testing.T) {
+	var notices strings.Builder
+	restore := lockWaitNoticeWriter
+	lockWaitNoticeWriter = &notices
+	t.Cleanup(func() { lockWaitNoticeWriter = restore })
+
+	op := &fakeRetryOperation{results: []error{
+		transientGCContentionError{err: errors.New("gc reset seen by this connection")},
+		nil,
+	}}
+	if err := retryTransientGCContention(heldCommitLock(context.Background(), 0), op.run, noRotate); err != nil {
+		t.Fatalf("retryTransientGCContention() error = %v", err)
+	}
+	if got := notices.String(); !strings.Contains(got, "gc reset seen by this connection") || !strings.Contains(got, "retrying once") {
+		t.Fatalf("notice = %q, want the failure and the retry named", got)
 	}
 }

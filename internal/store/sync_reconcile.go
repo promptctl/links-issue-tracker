@@ -398,7 +398,7 @@ func (s *Store) replayUnderGuard(ctx context.Context, remote, branch, remoteHead
 	guard := newSnapshotGuard(s.doltRootDir, migrationSnapshotsDir(s.doltRootDir), formatReconcileSnapshotLabel(time.Now()))
 	return retryTransientGCContention(ctx, func(ctx context.Context) error {
 		return body(ctx, guard, scratchBranch)
-	}, s.reconnect, transientRetryDelay, waitWithContext)
+	}, s.reconnect)
 }
 
 // reconcileFromAnchors reads the three exports at fixed commit hashes, runs the

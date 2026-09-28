@@ -134,7 +134,7 @@ func TestReentrantWithCommitLockShortCircuits(t *testing.T) {
 		// Nested call should short-circuit: no deadlock, no second acquisition.
 		return s.withCommitLock(ctx, func(ctx context.Context) error {
 			// Verify the context still carries the marker.
-			if ctx.Value(commitLockContextKey{}) != true {
+			if _, held := commitLockHeldSince(ctx); !held {
 				return errors.New("nested context missing commit lock marker")
 			}
 			return nil
