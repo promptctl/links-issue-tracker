@@ -240,6 +240,8 @@ follow-ups:
 - **Signing.** `release.Signature` is reserved in the manifest schema; adding
   cosign/minisign verification later does not change the manifest format —
   unsigned manifests omit the `signature` field; signed ones populate it.
+  The change that adds signing adds `signature` to the key set
+  `release-validate.yml`'s "Assert manifest shape" step expects.
 - **Pre-release / nightly channel.** Not configured. The workflow's
   `tags: v*.*.*` filter is a glob that also matches `v0.1.0-rc1`, so the
   release job carries a `!contains(github.ref_name, '-')` guard that
