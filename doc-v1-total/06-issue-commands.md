@@ -161,7 +161,7 @@ Sequence: read the issue (missing → exit 4) → authorization (only `start` ha
 
 ## Workspace metadata and shell support
 
-**`lit prefix set <new-prefix> [--apply]`** (workspace-mode, no store; `prefix.go`). Without `--apply`, prints a preview; with it, writes `issue_prefix` to the workspace `config.json`. Existing issue IDs keep their old prefix; only new issues use the new one. An unchanged normalized prefix prints "(prefix unchanged)". Any invocation not starting with the literal `set` → usage error.
+**`lit prefix set <new-prefix> [--apply]`** (read-only store open; `prefix.go`). Without `--apply`, prints a preview; with it, writes `issue_prefix` to the workspace `config.json`. Every outcome also prints `issue ids in this store use: <census>` — the prefixes the existing ids carry, with counts — so an operator can tell repairing `config.json` back to the backlog's prefix from rewriting it to a new one. Existing issue IDs keep their old prefix; only new issues use the new one. An unchanged normalized prefix prints "(prefix unchanged)". It runs in a workspace whose stored prefix the rules refuse, and is the repair the `stored_prefix_refused` remediation names. Any invocation not starting with the literal `set` → usage error.
 
 **`lit workspace`**: prints `workspace_id`, `issue_prefix`, `git_common_dir`, `storage_dir`, `database_path`, `dolt_repo_path`, `traces_dir` as `key: value` lines (`cli.go`).
 

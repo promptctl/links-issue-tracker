@@ -210,14 +210,15 @@ Fixes — the registry is the single authority (`doctor.go`): `integrity` (forei
 
 Checks, printed to stdout in order (`doctor.go`):
 
-1. Workspace identity: `workspace: storage_dir=… workspace_id=… issue_prefix=… issue_prefix_source=configured|derived git_common_dir=…`.
+1. Workspace identity: `workspace: storage_dir=… workspace_id=… issue_prefix=… issue_prefix_source=configured|derived id_prefixes=… git_common_dir=…`. `issue_prefix` is the text `config.json` carries, legal or not; `id_prefixes` is the census of prefixes the store's issue ids actually use (`<prefix>:<n>,…`, `unreadable:<n>` last, `none` for an empty store — see `lit prefix set`).
+   Only when `issue_prefix` matches none of the readable ids: `prefix: issue_prefix "<p>" matches none of this store's issue ids (<census>) — run 'lit prefix set <most-used>' to preview adopting the prefix they use`. A stored prefix the rules refuse, and a legal one sitting over a backlog minted under another, both produce it; it is a report, not a failure.
 2. The build-status note.
 3. `integrity_check=<v> foreign_key_issues=<n> invalid_related_rows=<n> orphan_history_rows=<n> rank_inversions=<n|unchecked> dependency_cycle=<none|a->b->c|unchecked> parent_cycle=<none|a->b->c> wait_loops=<n|unchecked>`. A check the report could not run renders as `unchecked` rather than as its zero value, so an absent check is never read as a clean one. `wait_loops` is `unchecked` whenever `parent_cycle` names a loop, because its walk climbs the hierarchy (`wait_loops.go`).
 4. One `wait loop: <waiter> <rule> <prereq>, … — none of these is ready until one of the links is removed or one of the issues is closed` line per loop among open and in-progress issues, over the links readiness enforces: an issue's own blocks edge (`depends on`), an epic's unfinished child (`waits on its child`), and an earlier same-lane sibling (`waits on earlier sibling`). A blocker an epic passes down never appears, because readiness drops each one that would close a loop. When two links join the same pair, the clause names both, joined by `and`. Issues are taken in id order, and each one on no loop already printed gets the shortest loop through it (`wait_loops.go`).
 5. One sync-freshness line — a distinct message per state: no remote, unresolved (with detail), never synced, up to date, ahead (with `[ahead=n behind=0]`), behind, diverged (with both counts); an unhandled state is an error, exit 1. Freshness resolution never errors — every failure becomes an "unresolved" report with a reason (`doctor.go`).
 6. Only when the last push attempt failed: `sync: last push attempt FAILED <age> ago: <reason>[ — mirror log: <path> (last written <age> ago)]`.
 
-Exit: any integrity errors → `CorruptionError`, exit 7, which wins over the divergence exit; a persistent divergence (≥24h or >10 commits) → `SyncFailureError` class `diverged_unresolved`, exit 5, with owner notification; otherwise 0 (`doctor.go`).
+Exit: any integrity errors → `CorruptionError`, exit 7, which wins over both exits below; a stored prefix the rules refuse → `StoredPrefixError`, reason `stored_prefix_refused`, exit 3, after everything above is printed and after any divergence owner notification; a persistent divergence (≥24h or >10 commits) → `SyncFailureError` class `diverged_unresolved`, exit 5, with owner notification; otherwise 0 (`doctor.go`).
 
 ## `lit upgrade` and `lit downgrade`
 

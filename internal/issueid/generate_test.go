@@ -328,3 +328,35 @@ func TestComputeAdaptiveLength(t *testing.T) {
 		}
 	})
 }
+
+func TestPrefixOfReadsTopLevelNamespaceBackwards(t *testing.T) {
+	// Every accepted row is rendered by the minting path itself, so the table
+	// tests the inverse of what Mint writes rather than a hand-typed shape.
+	content := Content{Title: "t", CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	for _, tc := range []struct{ prefix, topic string }{
+		{"links", "init"},
+		{"my-app", "init"},             // a dashed prefix
+		{"links", "renderer-cleanup"},  // a dashed topic
+		{"my-app", "renderer-cleanup"}, // both
+	} {
+		id := GenerateHashID(TopLevelNamespace(tc.prefix, tc.topic), content, 4, 0)
+		got, ok := PrefixOf(id, tc.topic)
+		if !ok || got != tc.prefix {
+			t.Errorf("PrefixOf(%q, %q) = %q, %v, want %q", id, tc.topic, got, ok, tc.prefix)
+		}
+	}
+
+	for _, tc := range []struct{ name, id, topic string }{
+		{"child id", "links-init-0q1s.kd1", "init"},
+		{"topic does not match", "links-init-0q1s", "parser"},
+		{"topic matches only without its leading dash", "links-preinit-0q1s", "init"},
+		{"no prefix left over", "init-0q1s", "init"},
+		{"empty hash", "links-init-", "init"},
+		{"hash outside base36", "links-init-0Q1S", "init"},
+		{"no dash", "links", "init"},
+	} {
+		if got, ok := PrefixOf(tc.id, tc.topic); ok {
+			t.Errorf("%s: PrefixOf(%q, %q) = %q, true, want unreadable", tc.name, tc.id, tc.topic, got)
+		}
+	}
+}

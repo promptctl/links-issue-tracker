@@ -24,7 +24,7 @@ func TestResolveCreatesSharedConfigInGitCommonDir(t *testing.T) {
 	if info.WorkspaceID == "" {
 		t.Fatal("expected workspace ID")
 	}
-	if info.IssuePrefix.Value() == "" {
+	if info.IssuePrefix.Stored() == "" {
 		t.Fatal("expected issue prefix")
 	}
 	if !info.IssuePrefix.Derived() {
@@ -55,8 +55,8 @@ func TestResolveCreatesSharedConfigInGitCommonDir(t *testing.T) {
 	if info2.WorkspaceID != info.WorkspaceID {
 		t.Fatalf("workspace ID changed: %q != %q", info2.WorkspaceID, info.WorkspaceID)
 	}
-	if info2.IssuePrefix.Value() != info.IssuePrefix.Value() {
-		t.Fatalf("issue prefix changed: %q != %q", info2.IssuePrefix.Value(), info.IssuePrefix.Value())
+	if info2.IssuePrefix.Stored() != info.IssuePrefix.Stored() {
+		t.Fatalf("issue prefix changed: %q != %q", info2.IssuePrefix.Stored(), info.IssuePrefix.Stored())
 	}
 	// Provenance is per-load: the derived value was persisted, so the second
 	// resolve reads it back as configured.
@@ -196,8 +196,8 @@ func TestResolveNormalizesConfiguredIssuePrefix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve() normalized error = %v", err)
 	}
-	if info.IssuePrefix.Value() != "renderer-pla" {
-		t.Fatalf("IssuePrefix = %q, want renderer-pla", info.IssuePrefix.Value())
+	if info.IssuePrefix.Stored() != "renderer-pla" {
+		t.Fatalf("IssuePrefix = %q, want renderer-pla", info.IssuePrefix.Stored())
 	}
 	if info.IssuePrefix.Derived() {
 		t.Fatal("a configured prefix that only needed normalization is not derived")
@@ -218,7 +218,7 @@ func TestResolveDerivesPrefixWhenConfigValueAbsent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve() after blanking prefix error = %v", err)
 	}
-	if derivedInfo.IssuePrefix.Value() == "" {
+	if derivedInfo.IssuePrefix.Stored() == "" {
 		t.Fatal("expected a derived issue prefix")
 	}
 	if !derivedInfo.IssuePrefix.Derived() {
@@ -234,12 +234,15 @@ func TestResolveDerivesPrefixWhenConfigValueAbsent(t *testing.T) {
 	if err := json.Unmarshal(payload, &cfg); err != nil {
 		t.Fatalf("json.Unmarshal(config) error = %v", err)
 	}
-	if cfg.IssuePrefix != derivedInfo.IssuePrefix.Value() {
-		t.Fatalf("persisted prefix = %q, want %q", cfg.IssuePrefix, derivedInfo.IssuePrefix.Value())
+	if cfg.IssuePrefix != derivedInfo.IssuePrefix.Stored() {
+		t.Fatalf("persisted prefix = %q, want %q", cfg.IssuePrefix, derivedInfo.IssuePrefix.Stored())
 	}
 }
 
-func TestResolveRejectsInvalidConfiguredPrefix(t *testing.T) {
+// A stored value the rules refuse resolves — the workspace is readable and
+// repairable in that state — but is never silently replaced by derivation, never
+// rewritten on disk, and refuses anything that asks for a prefix to mint under.
+func TestResolveCarriesAnIllegalStoredPrefixAsUnmintable(t *testing.T) {
 	repo := t.TempDir()
 	run(t, repo, "git", "init")
 
@@ -249,25 +252,49 @@ func TestResolveRejectsInvalidConfiguredPrefix(t *testing.T) {
 	}
 	rewriteConfigPrefix(t, info.ConfigPath, "ab")
 
-	// Only an absent prefix falls back to derivation; a stored value the rules
-	// refuse is a loud error, never silently replaced.
-	_, err = Resolve(repo)
-	if err == nil {
-		t.Fatalf("Resolve() error = nil, want a refusal for a stored illegal prefix")
+	info, err = Resolve(repo)
+	if err != nil {
+		t.Fatalf("Resolve() over a stored illegal prefix error = %v, want the workspace resolved", err)
 	}
-	// [LAW:behavior-not-structure] the contract is the sentinel — it is what
-	// picks the exit code and the reason — not the wording that carries it.
-	if !errors.Is(err, ErrIssuePrefixRefused) {
-		t.Fatalf("Resolve() error = %v, want it to wrap ErrIssuePrefixRefused", err)
+	if got := info.IssuePrefix.Stored(); got != "ab" {
+		t.Fatalf("Stored() = %q, want the stored ab — derivation must not replace it", got)
 	}
-	// No command clears this state: `lit prefix set` and `lit doctor` both
-	// resolve the workspace first and die here too. So the remediation must name
-	// the file to edit; naming a command would name an act that does not work.
-	if !strings.Contains(err.Error(), info.ConfigPath) {
-		t.Fatalf("Resolve() error = %v, want it to name the config path %s", err, info.ConfigPath)
+	cfg, err := ReadConfig(info.ConfigPath)
+	if err != nil {
+		t.Fatalf("ReadConfig() error = %v", err)
 	}
-	if !strings.Contains(err.Error(), "issue_prefix") {
-		t.Fatalf("Resolve() error = %v, want it to name the issue_prefix field", err)
+	if cfg.IssuePrefix != "ab" {
+		t.Fatalf("config.json issue_prefix = %q after Resolve, want ab left as found", cfg.IssuePrefix)
+	}
+
+	_, err = info.IssuePrefix.Mintable()
+	// [LAW:behavior-not-structure] the contract is the sentinel and the type —
+	// they pick the exit code and the reason — not the wording that carries them.
+	var stored StoredPrefixError
+	if !errors.As(err, &stored) || !errors.Is(err, ErrIssuePrefixRefused) {
+		t.Fatalf("Mintable() error = %v, want a StoredPrefixError wrapping ErrIssuePrefixRefused", err)
+	}
+	if !strings.Contains(err.Error(), info.ConfigPath) || !strings.Contains(err.Error(), `"ab"`) {
+		t.Fatalf("Mintable() error = %v, want it to name %s and the stored value", err, info.ConfigPath)
+	}
+}
+
+// The control for the test above: a legal stored prefix mints.
+func TestResolveMintsUnderALegalStoredPrefix(t *testing.T) {
+	repo := t.TempDir()
+	run(t, repo, "git", "init")
+	info, err := Resolve(repo)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	rewriteConfigPrefix(t, info.ConfigPath, "abc")
+	info, err = Resolve(repo)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	spec, err := info.IssuePrefix.Mintable()
+	if err != nil || spec.Value() != "abc" {
+		t.Fatalf("Mintable() = %q, %v, want abc", spec.Value(), err)
 	}
 }
 

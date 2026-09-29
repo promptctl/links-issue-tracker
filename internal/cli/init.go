@@ -68,6 +68,13 @@ func initLeaf() (wsLeaf, wsAcquire) {
 	}
 
 	return wsLeaf{fs: fs, usage: initUsage, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+		// A workspace init leaves behind has to be able to mint, so a stored
+		// prefix the rules refuse is refused here, before any effect, with the
+		// remediation naming the command that repairs it.
+		prefix, err := ws.IssuePrefix.Mintable()
+		if err != nil {
+			return err
+		}
 		// Adopt runs BEFORE creating an empty store: when the remote carries a
 		// backlog, adopt clones it directly into the target path, so the path's
 		// first on-disk state is the cloned data (a pre-created empty store would
@@ -122,7 +129,7 @@ func initLeaf() (wsLeaf, wsAcquire) {
 		report := initReport{
 			Status:       "initialized",
 			WorkspaceID:  ws.WorkspaceID,
-			IssuePrefix:  ws.IssuePrefix.Value(),
+			IssuePrefix:  prefix.Value(),
 			DatabasePath: ws.DatabasePath,
 			DBCreated:    dbCreated,
 			Hooks:        "skipped",

@@ -26,7 +26,7 @@ var ErrNotGitRepo = errors.New("links requires a git repository/worktree")
 // sentinel carries.
 //
 // It is not the whole classification. Two of the three are cleared by adjusting
-// the command; the third is cleared only by editing a file, and
+// the command; the third is cleared by running a different command first, and
 // StoredPrefixError below is how a caller tells them apart without reading the
 // English.
 //
@@ -37,19 +37,20 @@ var ErrNotGitRepo = errors.New("links requires a git repository/worktree")
 // by the error, never re-derived from its text.
 var ErrIssuePrefixRefused = errors.New("issue prefix refused")
 
-// StoredPrefixError is the one member of that family no COMMAND can clear:
-// config.json carries an issue_prefix the rules refuse, and every lit command
-// resolves the workspace before its own work runs, so `lit prefix set` and `lit
-// doctor` die here too. The act it asks for is editing a file on disk, where its
-// two siblings ask for a different flag or a different command.
+// StoredPrefixError is the member of that family that no rewording of the
+// refused command clears: config.json carries an issue_prefix the rules refuse,
+// so no issue can be minted under it. It is raised by whatever asks the
+// workspace for a prefix to mint under, never by resolving the workspace, so
+// `lit prefix set` (the repair) and `lit doctor` (the diagnosis) both run in
+// the state it describes.
 //
 // That difference has to live in the type, because the CLI picks its remediation
 // from the classification: the shared one ends "adjust the command to satisfy
-// it", which is false here, and an agent that acts on the remediation line
-// rather than on the message body is the loop this whole mapping exists to
-// prevent. templateShapeError already carries exactly this distinction for a
-// malformed managed template. [LAW:one-type-per-behavior] the act each refusal
-// calls for is different, so a single reason could only name one of them.
+// it", which is false here — the refused command is fine, and it is the
+// workspace that needs a different command run against it first. An agent that
+// acts on the remediation line rather than on the message body is the loop this
+// whole mapping exists to prevent. [LAW:one-type-per-behavior] the act each
+// refusal calls for is different, so a single reason could only name one of them.
 //
 // Unwrap returns the family sentinel, so the exit-code mapping and every
 // existing errors.Is check still see one prefix refusal.
@@ -61,7 +62,7 @@ type StoredPrefixError struct {
 
 func (e StoredPrefixError) Error() string {
 	return fmt.Sprintf(
-		"%s carries issue_prefix %q, which is not a legal prefix (%v); edit issue_prefix in that file to a valid value",
+		"%s carries issue_prefix %q, which is not a legal prefix (%v), so no issue can be minted under it",
 		e.ConfigPath, e.Stored, e.Err,
 	)
 }
@@ -83,7 +84,7 @@ type Info struct {
 	Location
 	RootDir     string
 	WorkspaceID string
-	IssuePrefix PrefixSpec
+	IssuePrefix PrefixState
 	// PrivateGitDir is this CHECKOUT's own git directory, and it lives on Info
 	// rather than on the embedded Location for a reason that is easy to get
 	// backwards: Location is per-REPOSITORY geometry, identical from every
@@ -166,6 +167,48 @@ func RequestPrefix(raw string) (PrefixRequest, error) {
 // configured. Carried so the one run that invents a prefix the user never
 // chose is observable, not silent. [LAW:no-silent-failure]
 func (p PrefixSpec) Derived() bool { return p.derived }
+
+// PrefixState is what a resolved workspace knows about its issue prefix: the
+// legal PrefixSpec new issues are minted under, or the value config.json
+// carries that the rules refuse. The refused arm is a state the workspace is
+// IN, not a failure to resolve it — reading, diagnosing and re-prefixing a
+// workspace need no prefix to mint under, so only minting is refused, and
+// `lit prefix set` and `lit doctor` run in exactly the state they exist to
+// repair and report.
+//
+// There is no accessor that hands out the refused text as if it were a prefix:
+// a minting caller must go through Mintable, which is the one place the
+// refusal is raised. [LAW:types-are-the-program] [LAW:parse-dont-validate]
+type PrefixState struct {
+	spec    PrefixSpec
+	refusal *StoredPrefixError
+}
+
+// LegalPrefixState is the state of a workspace whose prefix is spec.
+func LegalPrefixState(spec PrefixSpec) PrefixState { return PrefixState{spec: spec} }
+
+// Mintable is the prefix a new issue is minted under, or the StoredPrefixError
+// that says why there is none. [LAW:single-enforcer] every minting path reads
+// its prefix here, so every one of them refuses the same way.
+func (p PrefixState) Mintable() (PrefixSpec, error) {
+	if p.refusal != nil {
+		return PrefixSpec{}, *p.refusal
+	}
+	return p.spec, nil
+}
+
+// Stored is the text config.json carries, legal or not — what an operator
+// reads to recognize their own workspace, never a value to mint under.
+func (p PrefixState) Stored() string {
+	if p.refusal != nil {
+		return p.refusal.Stored
+	}
+	return p.spec.Value()
+}
+
+// Derived reports whether this load minted the prefix from the repository
+// name. A refused prefix was read from config, so it never is.
+func (p PrefixState) Derived() bool { return p.spec.Derived() }
 
 type GitRemote struct {
 	Name string `json:"name"`
@@ -553,49 +596,53 @@ func GitRemotes(ctx context.Context, cwd string) ([]GitRemote, error) {
 // prefix has three possible sources and this is the one place that ranks them:
 // the value config.json already carries wins, an explicit request supplies one
 // for a workspace that carries none, and derivation from the repository name is
-// the last resort. A stored value the rules refuse is a loud, typed refusal
-// naming the file to edit — never a silent fallback to derivation.
+// the last resort. A stored value the rules refuse becomes the refused arm of
+// PrefixState — never a silent fallback to derivation, and never a failure to
+// resolve, since only minting needs a legal prefix.
 //
-// A request that CONTRADICTS a stored value is refused rather than applied.
-// Rewriting the prefix of a workspace that already has issues filed under it is
-// `lit prefix set`'s job, which previews the change before `--apply` writes it; honouring
-// it here would do that consequential thing silently, from a command whose whole
-// contract is to be safe to re-run. [LAW:single-enforcer] [LAW:no-silent-failure]
-func resolveIssuePrefix(rootDir string, configPath string, configured string, requested PrefixRequest) (PrefixSpec, error) {
+// A request that CONTRADICTS a stored value is refused rather than applied,
+// whether the stored value is legal or not. Rewriting the prefix of a workspace
+// that already carries one is `lit prefix set`'s job, which previews the change
+// against the ids the store actually holds before `--apply` writes it;
+// honouring the request here would do that consequential thing silently, from a
+// command whose whole contract is to be safe to re-run, and before the store
+// that could tell a repair from a rewrite is even open.
+// [LAW:single-enforcer] [LAW:no-silent-failure]
+func resolveIssuePrefix(rootDir string, configPath string, configured string, requested PrefixRequest) (PrefixState, error) {
 	if strings.TrimSpace(configured) == "" {
 		// The request is consulted BEFORE derivation, not bolted onto one of its
 		// failure exits, so every way the repository name can come up short is
 		// answered by the same flag. [LAW:dataflow-not-control-flow]
 		if requested.present {
-			return requested.spec, nil
+			return LegalPrefixState(requested.spec), nil
 		}
 		derived, err := deriveIssuePrefix(rootDir)
 		if err != nil {
-			return PrefixSpec{}, err
+			return PrefixState{}, err
 		}
-		return PrefixSpec{value: derived, derived: true}, nil
+		return LegalPrefixState(PrefixSpec{value: derived, derived: true}), nil
 	}
-	spec, err := ConfiguredPrefix(configured)
-	if err != nil {
-		// The third way lit fails to settle on a prefix, and the only one no
-		// command can clear: `lit prefix set` and `lit doctor` both resolve the
-		// workspace before they run, so they die here too. The message therefore
-		// names the FILE rather than a command, because editing it is the act
-		// that actually works — the same reason the derive message names
-		// `lit init --prefix`. It is typed rather than wrapped in a string so the
-		// CLI can route it to a remediation naming that act; sharing its siblings'
-		// reason would print "adjust the command to satisfy it" over a refusal no
-		// command touches.
-		// [LAW:no-silent-failure] [LAW:one-type-per-behavior]
-		return PrefixSpec{}, StoredPrefixError{ConfigPath: configPath, Stored: configured, Err: err}
-	}
-	if requested.present && requested.spec.Value() != spec.Value() {
-		return PrefixSpec{}, fmt.Errorf(
-			"%w: this workspace already uses %q, so --prefix %s cannot be honoured here; run `lit prefix set %s` to change the prefix of a workspace that already has one (it previews the change; `--apply` writes it)",
-			ErrIssuePrefixRefused, spec.Value(), requested.spec.Value(), requested.spec.Value(),
+	state := parseStoredPrefix(configPath, configured)
+	if requested.present && requested.spec.Value() != state.Stored() {
+		return PrefixState{}, fmt.Errorf(
+			"%w: this workspace already carries %q, so --prefix %s cannot be honoured here; run `lit prefix set %s` to change the prefix of a workspace that already has one (it previews the change; `--apply` writes it)",
+			ErrIssuePrefixRefused, state.Stored(), requested.spec.Value(), requested.spec.Value(),
 		)
 	}
-	return spec, nil
+	return state, nil
+}
+
+// parseStoredPrefix reads the prefix config.json carries into the state it puts
+// the workspace in. A refusal is kept typed rather than flattened into a string
+// so the CLI can route it to a remediation naming `lit prefix set`; sharing its
+// siblings' reason would print "adjust the command to satisfy it" over a
+// command that was never the problem. [LAW:one-type-per-behavior]
+func parseStoredPrefix(configPath string, configured string) PrefixState {
+	spec, err := ConfiguredPrefix(configured)
+	if err != nil {
+		return PrefixState{refusal: &StoredPrefixError{ConfigPath: configPath, Stored: configured, Err: err}}
+	}
+	return LegalPrefixState(spec)
 }
 
 // ReadConfig reads and validates a workspace config.json WITHOUT creating,
@@ -624,20 +671,23 @@ func ReadConfig(path string) (Config, error) {
 	return cfg, nil
 }
 
-func loadOrCreateConfig(rootDir string, path string, requested PrefixRequest) (Config, PrefixSpec, error) {
+func loadOrCreateConfig(rootDir string, path string, requested PrefixRequest) (Config, PrefixState, error) {
 	cfg, err := ReadConfig(path)
 	if err == nil {
 		prefix, err := resolveIssuePrefix(rootDir, path, cfg.IssuePrefix, requested)
 		if err != nil {
-			return Config{}, PrefixSpec{}, err
+			return Config{}, PrefixState{}, err
 		}
 		// [LAW:one-source-of-truth] config.json holds the resolved value, so a
 		// derivation or a normalization change is persisted the moment it happens.
-		if prefix.Value() != cfg.IssuePrefix {
-			cfg.IssuePrefix = prefix.Value()
+		// A refused value's Stored text is what config.json already carries, so
+		// it is left exactly as found: repairing it is `lit prefix set`'s
+		// decision, never a side effect of resolving.
+		if prefix.Stored() != cfg.IssuePrefix {
+			cfg.IssuePrefix = prefix.Stored()
 			cfg, err = writeConfig(path, cfg)
 			if err != nil {
-				return Config{}, PrefixSpec{}, err
+				return Config{}, PrefixState{}, err
 			}
 		}
 		return cfg, prefix, nil
@@ -647,21 +697,21 @@ func loadOrCreateConfig(rootDir string, path string, requested PrefixRequest) (C
 	// workspace_id, or any other read failure is already fully described by
 	// ReadConfig and must surface as-is rather than be mistaken for "create one".
 	if !errors.Is(err, os.ErrNotExist) {
-		return Config{}, PrefixSpec{}, err
+		return Config{}, PrefixState{}, err
 	}
 	prefix, err := resolveIssuePrefix(rootDir, path, "", requested)
 	if err != nil {
-		return Config{}, PrefixSpec{}, err
+		return Config{}, PrefixState{}, err
 	}
 	cfg = Config{
 		WorkspaceID: uuid.NewString(),
-		IssuePrefix: prefix.Value(),
+		IssuePrefix: prefix.Stored(),
 		CreatedAt:   time.Now().UTC(),
 		Version:     1,
 	}
 	cfg, err = writeConfig(path, cfg)
 	if err != nil {
-		return Config{}, PrefixSpec{}, err
+		return Config{}, PrefixState{}, err
 	}
 	return cfg, prefix, nil
 }

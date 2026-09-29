@@ -260,7 +260,7 @@ empty string means no `remediation:` line is printed:
 - `sync_divergence`: "" (empty — the `SyncFailureError` message carries the steps)
 - `remote_unreachable`: "The remote host was unreachable over the network; credentials are not the problem, and lit already retried with backoff. Check connectivity to the remote host (for SSH remotes: `ssh -o BatchMode=yes git@<host>`), then retry once the network path is restored."
 - `template_shape_refused`: "Edit the template override the message names so it is either plain content with no LIT INTEGRATION markers or exactly one whole marked block, or delete the override to fall back to lit's bundled default. The command itself is fine; rerunning it unchanged repeats this refusal."
-- `stored_prefix_refused`: "Edit `issue_prefix` in the config file named above, setting it to a legal prefix. No lit command can clear this for you: every command resolves the workspace before its own work runs, so each one refuses in this same place. Rerunning this command unchanged repeats this refusal."
+- `stored_prefix_refused`: "Run `lit prefix set <prefix>` to preview the repair — the preview lists the prefixes this store's issue ids already use — then rerun it with `--apply`. The command itself is fine; rerunning it unchanged repeats this refusal."
 - `validation_refused`: "Do not retry unchanged — this refusal is deterministic and will repeat until the command or the data changes. The error message above states the rule it enforces; adjust the command to satisfy it."
 - `workspace_busy`: "" (empty — each wrapping message carries its own retry guidance)
 - `owner_approval_required`: "" (empty — the refusal message carries the steps)
@@ -362,9 +362,11 @@ Issue IDs are passed verbatim to the store (e.g. `cli.go`,
 `cli.go`). A wrong ID yields `storage.NotFoundError` → exit 4.
 
 The word "prefix" in this codebase means the *cosmetic ID prefix* on new IDs
-(`lit prefix`, §2.24) — `ap.Workspace.IssuePrefix.Value()` is passed into
-`CreateIssue` (`cli.go`) and `ImportTree`/`BulkApply`
-(`cli.go`).
+(`lit prefix`, §2.24) — `ap.Workspace.IssuePrefix.Mintable()` is passed into
+`CreateIssue` (`lit new`, `lit followup`; `cli.go`) and `ImportTree`/`BulkApply`
+(`cli.go`); a stored prefix the rules refuse makes each of them return the
+`StoredPrefixError` before the store is written. `lit init` reads it the same way
+before any effect (`init.go`).
 
 The only "does the literal look like a subcommand" disambiguation is in `rank`:
 `args[0] == "set"` routes to `rank set`, justified because real IDs always carry a
@@ -1836,8 +1838,13 @@ updated <n> issues
 
 ### 2.24 `lit prefix set <new-prefix> [--apply]`
 
-- Registration `register.go`, workspace-mode (no store). Group
-  `maintenance`. Summary: "Manage the cosmetic issue ID prefix".
+- Registration `register.go`, app-mode family (`familyCmd`), `set` opens the
+  store with `AccessRead`: it reads the ids to census them and writes only
+  `config.json`, which is not the store. Group `maintenance`. Summary: "Manage
+  the cosmetic issue ID prefix".
+- Runs in a workspace whose stored prefix the rules refuse: it reads
+  `PrefixState.Stored()`, never `Mintable()`, so it is the repair
+  `stored_prefix_refused` names.
 - `prefixFamily` (`prefix.go`), dispatched by `resolve` (`register.go`): a
   first argument of `-h`/`--help` answers help; any other invocation whose
   `args[0]` is not the literal `set` (including no args) →
@@ -1850,12 +1857,24 @@ updated <n> issues
     `ValidationError{Message: fmt.Sprintf("invalid prefix %q: %v", requested, err)}` →
     reason `validation_refused`, exit 3 (`prefix.go`). Typed so a deterministic
     refusal does not reach the unclassified default's retry-then-doctor remediation.
-- Three outcomes (`prefixSetTextOutput`, `prefix.go`):
+- After the prefix validates, `readIDPrefixCensus` (`prefix_census.go`) reads
+  every issue's id and topic through `ListIssueIdentities` (archived and
+  deleted included, nothing hydrated, so a parent loop cannot stop it) and
+  counts each by the prefix its id carries: `issueid.PrefixOf(root, topic)` reads
+  `<prefix>-<topic>-<hash>` backwards using the topic the root issue stores, and
+  a child id counts under its root's prefix. An id that is not that rendering
+  (a legacy shape, a child whose root is gone) counts as `unreadable`. The
+  census renders as `<prefix>:<n>,…` descending by count, ties by prefix, with
+  `unreadable:<n>` last, or `none` for an empty store. A read failure →
+  `fmt.Errorf("read issue ids for the prefix census: %w", err)`.
+- Three outcomes (`prefixSetTextOutput`, `prefix.go`), each followed by the
+  census line `  issue ids in this store use: <census>`:
   - Normalized == current → `"issue_prefix: <p> (prefix unchanged)\n"`
     (`prefix.go`).
   - Changed, no `--apply` →
     ```
     issue_prefix: <old> -> <new> (preview)
+      issue ids in this store use: <census>
       preview only — pass --apply to write config.json. Existing issue IDs keep their old prefix; only new issues use the new one.
       Run with --apply to write config.json.
     ```
@@ -1872,6 +1891,8 @@ updated <n> issues
 - Output: one `key: value` line per field, in this exact order
   (`cli.go`): `workspace_id`, `issue_prefix`, `git_common_dir`,
   `storage_dir`, `database_path`, `dolt_repo_path`, `traces_dir`.
+  `issue_prefix` is `PrefixState.Stored()`, the text `config.json` carries,
+  legal or not.
 
 ### 2.26 `lit completion <bash|zsh|fish>`
 

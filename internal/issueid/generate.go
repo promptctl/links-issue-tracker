@@ -31,6 +31,27 @@ func TopLevelNamespace(prefix, topic string) Namespace {
 	return Namespace(prefix + "-" + topic + "-")
 }
 
+// PrefixOf reads the prefix a top-level id was minted under, given the topic it
+// was minted with: TopLevelNamespace followed by a hash, read backwards. The
+// topic is required because both a prefix and a topic may contain dashes, so
+// the id alone cannot say where one ends; the topic an issue stores is the one
+// its id was rendered from. ok is false for any id that is not that rendering —
+// a child id, one whose topic does not match, one with no prefix left over, or
+// one whose tail is not a hash — and the caller counts it as unreadable rather
+// than guessing. [LAW:parse-dont-validate]
+func PrefixOf(id, topic string) (prefix string, ok bool) {
+	cut := strings.LastIndexByte(id, '-')
+	if cut < 0 || strings.ContainsRune(id, '.') || !isHash(id[cut+1:]) {
+		return "", false
+	}
+	prefix, ok = strings.CutSuffix(id[:cut+1], "-"+topic+"-")
+	return prefix, ok && prefix != ""
+}
+
+func isHash(s string) bool {
+	return s != "" && strings.Trim(s, Base36Alphabet) == ""
+}
+
 // ChildNamespace is the id-space the direct children of parentID are minted
 // into. The dot is what every reader of an id's shape keys on — the top-level
 // population count excludes ids containing one — so it stays part of the

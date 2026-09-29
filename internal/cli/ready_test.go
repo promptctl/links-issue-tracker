@@ -83,7 +83,7 @@ func (h readyTestHarness) writeReadyConfig(requiredFields ...string) {
 func (h readyTestHarness) createIssue(input storage.CreateIssueInput) model.Issue {
 	h.t.Helper()
 	if input.Prefix == "" {
-		input.Prefix = h.ap.Workspace.IssuePrefix.Value()
+		input.Prefix = h.ap.Workspace.IssuePrefix.Stored()
 	}
 	// Fixtures author top-to-bottom in listing order, so append at the bottom
 	// to make creation order equal rank order. Stated rather than inherited —

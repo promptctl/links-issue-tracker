@@ -67,7 +67,7 @@ func TestResolveWithPrefixInitializesEveryNameDerivationRefuses(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ResolveWithPrefix() in a repository named %q error = %v", name, err)
 			}
-			if got := info.IssuePrefix.Value(); got != "demo" {
+			if got := info.IssuePrefix.Stored(); got != "demo" {
 				t.Fatalf("IssuePrefix = %q, want demo", got)
 			}
 			// Provenance: the user chose this, so `lit doctor` must report it as
@@ -95,7 +95,7 @@ func TestResolveWithPrefixInitializesEveryNameDerivationRefuses(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Resolve() after an explicit prefix was persisted error = %v", err)
 			}
-			if got := again.IssuePrefix.Value(); got != "demo" {
+			if got := again.IssuePrefix.Stored(); got != "demo" {
 				t.Fatalf("IssuePrefix on reload = %q, want demo", got)
 			}
 		})
@@ -109,7 +109,7 @@ func TestResolveWithPrefixLeavesADerivableNameAlone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
-	if got := info.IssuePrefix.Value(); got != "myrepo" {
+	if got := info.IssuePrefix.Stored(); got != "myrepo" {
 		t.Fatalf("IssuePrefix = %q, want myrepo", got)
 	}
 	if !info.IssuePrefix.Derived() {
@@ -124,7 +124,7 @@ func TestResolveWithPrefixLeavesADerivableNameAlone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveWithPrefix() error = %v", err)
 	}
-	if got := explicit.IssuePrefix.Value(); got != "demo" {
+	if got := explicit.IssuePrefix.Stored(); got != "demo" {
 		t.Fatalf("IssuePrefix = %q, want demo — an explicit prefix outranks a derivable name", got)
 	}
 }
@@ -158,8 +158,41 @@ func TestResolveWithPrefixRefusesToContradictAWorkspaceThatHasOne(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Resolve() after refusal error = %v", err)
 	}
-	if got := after.IssuePrefix.Value(); got != "myrepo" {
+	if got := after.IssuePrefix.Stored(); got != "myrepo" {
 		t.Fatalf("IssuePrefix after refusal = %q, want myrepo unchanged", got)
+	}
+}
+
+// An ILLEGAL stored prefix is contradicted like a legal one. Resolution runs
+// before the store is open, so it cannot see whether the request repairs the
+// ids already filed or rewrites them; `lit prefix set` can, so that is where the
+// refusal sends the caller, and nothing is written on the way.
+func TestResolveWithPrefixRefusesToOverrideAnIllegalStoredPrefix(t *testing.T) {
+	repo := repoNamed(t, "myrepo")
+	info, err := Resolve(repo)
+	if err != nil {
+		t.Fatalf("Resolve() initial error = %v", err)
+	}
+	rewriteConfigPrefix(t, info.ConfigPath, "ab")
+
+	requested, err := RequestPrefix("abc")
+	if err != nil {
+		t.Fatalf("RequestPrefix() error = %v", err)
+	}
+	_, err = ResolveWithPrefix(repo, requested)
+	var stored StoredPrefixError
+	if err == nil || errors.As(err, &stored) || !errors.Is(err, ErrIssuePrefixRefused) {
+		t.Fatalf("ResolveWithPrefix() error = %v, want the contradiction refusal", err)
+	}
+	if !strings.Contains(err.Error(), "lit prefix set abc") {
+		t.Fatalf("ResolveWithPrefix() error = %v, want it to name `lit prefix set abc`", err)
+	}
+	cfg, err := ReadConfig(info.ConfigPath)
+	if err != nil {
+		t.Fatalf("ReadConfig() error = %v", err)
+	}
+	if cfg.IssuePrefix != "ab" {
+		t.Fatalf("config.json issue_prefix = %q after the refusal, want ab left as found", cfg.IssuePrefix)
 	}
 }
 
@@ -180,7 +213,7 @@ func TestResolveWithPrefixAcceptsAPrefixTheWorkspaceAlreadyHas(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ResolveWithPrefix(%q) error = %v, want agreement", spelling, err)
 		}
-		if got := info.IssuePrefix.Value(); got != "myrepo" {
+		if got := info.IssuePrefix.Stored(); got != "myrepo" {
 			t.Fatalf("IssuePrefix = %q, want myrepo", got)
 		}
 	}

@@ -46,6 +46,15 @@ type IssueReader interface {
 	// ascending. It is a derived vocabulary, never a stored one.
 	ListTopics(ctx context.Context) ([]string, error)
 
+	// ListIssueIdentities returns every issue's id and topic — archived and
+	// deleted included, id ascending — and nothing else. It is the material an
+	// id was minted from, for a caller that asks what the ids in a store carry
+	// (the prefix census). Nothing is hydrated, so it never walks the
+	// hierarchy, and it answers in a store whose parent links loop, where
+	// ListIssues does not return; `lit doctor` reads it before it has any other
+	// way to know the hierarchy is sound.
+	ListIssueIdentities(ctx context.Context) ([]IssueIdentity, error)
+
 	// ListAllEvents reads the whole issue history, oldest first — by creation
 	// time, ties broken by event id ascending. Export uses it to serialize the
 	// history; claim derivation uses it because a claim is a reading of the

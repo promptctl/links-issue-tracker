@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -18,6 +19,10 @@ type prefixSetResult struct {
 	Current  string
 	Applied  bool
 	Note     string
+	// Census is what the ids already in the store use. It rides on every
+	// outcome because the decision it informs — is this a repair of config.json
+	// or a rewrite of it — is made at the preview and checked after the apply.
+	Census idPrefixCensus
 }
 
 // prefixFamily is the `lit prefix` surface: one legal first argument, `set`.
@@ -29,17 +34,19 @@ type prefixSetResult struct {
 // the leaf's usage and the arity refusal all read it. [LAW:one-source-of-truth]
 const prefixSetUsage = "usage: lit prefix set <new-prefix> [--apply]"
 
-var prefixFamily = commandFamily[wsSubcommand]{
+// set opens the store read-only: it reads the ids to census them and writes
+// only config.json, which is not the store.
+var prefixFamily = commandFamily[appSubcommand]{
 	usage: prefixSetUsage,
-	subcommands: []subcommandRow[wsSubcommand]{
-		{name: "set", payload: wsSubcommand{declare: prefixSetLeaf}},
+	subcommands: []subcommandRow[appSubcommand]{
+		{name: "set", payload: appSubcommand{access: app.AccessRead, declare: prefixSetLeaf}},
 	},
 }
 
-func prefixSetLeaf() wsLeaf {
+func prefixSetLeaf() appLeaf {
 	fs := newCobraFlagSet("prefix set")
 	apply := fs.Bool("apply", false, "Apply the rename (without this flag, prints a preview)")
-	return wsLeaf{fs: fs, positionals: 1, usage: prefixSetUsage, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+	return appLeaf{fs: fs, positionals: 1, usage: prefixSetUsage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
 			return UsageError{Message: prefixSetUsage}
 		}
@@ -55,15 +62,22 @@ func prefixSetLeaf() wsLeaf {
 			// [LAW:no-silent-failure]
 			return model.ValidationError{Message: fmt.Sprintf("invalid prefix %q: %v", requested, err)}
 		}
+		census, err := readIDPrefixCensus(ctx, ap.Store)
+		if err != nil {
+			return err
+		}
 		normalized := spec.Value()
-
-		previous := ws.IssuePrefix.Value()
+		// Stored, not Mintable: this command is the repair for a stored prefix
+		// the rules refuse, so it has to run in that state and name what it is
+		// replacing.
+		previous := ap.Workspace.IssuePrefix.Stored()
 		if normalized == previous {
 			result := prefixSetResult{
 				Previous: previous,
 				Current:  previous,
 				Applied:  false,
 				Note:     "prefix unchanged",
+				Census:   census,
 			}
 			return prefixSetTextOutput(stdout, result)
 		}
@@ -74,11 +88,12 @@ func prefixSetLeaf() wsLeaf {
 				Current:  normalized,
 				Applied:  false,
 				Note:     "preview only — pass --apply to write config.json. Existing issue IDs keep their old prefix; only new issues use the new one.",
+				Census:   census,
 			}
 			return prefixSetTextOutput(stdout, result)
 		}
 
-		if _, err := workspace.UpdateConfig(ws.ConfigPath, func(cfg workspace.Config) (workspace.Config, error) {
+		if _, err := workspace.UpdateConfig(ap.Workspace.ConfigPath, func(cfg workspace.Config) (workspace.Config, error) {
 			cfg.IssuePrefix = normalized
 			return cfg, nil
 		}); err != nil {
@@ -89,27 +104,28 @@ func prefixSetLeaf() wsLeaf {
 			Previous: previous,
 			Current:  normalized,
 			Applied:  true,
+			Census:   census,
 		}
 		return prefixSetTextOutput(stdout, result)
 	}}
 }
 
 func prefixSetTextOutput(w io.Writer, r prefixSetResult) error {
-	if r.Applied {
-		_, err := fmt.Fprintf(w, "issue_prefix: %s -> %s (applied)\n", r.Previous, r.Current)
+	head := fmt.Sprintf("issue_prefix: %s -> %s (preview)", r.Previous, r.Current)
+	switch {
+	case r.Applied:
+		head = fmt.Sprintf("issue_prefix: %s -> %s (applied)", r.Previous, r.Current)
+	case r.Previous == r.Current:
+		head = fmt.Sprintf("issue_prefix: %s (%s)", r.Current, r.Note)
+	}
+	if _, err := fmt.Fprintf(w, "%s\n  issue ids in this store use: %s\n", head, r.Census); err != nil {
 		return err
 	}
-	if r.Previous == r.Current {
-		_, err := fmt.Fprintf(w, "issue_prefix: %s (%s)\n", r.Current, r.Note)
-		return err
+	if r.Applied || r.Previous == r.Current {
+		return nil
 	}
-	if _, err := fmt.Fprintf(w, "issue_prefix: %s -> %s (preview)\n", r.Previous, r.Current); err != nil {
+	if _, err := fmt.Fprintf(w, "  %s\n", r.Note); err != nil {
 		return err
-	}
-	if r.Note != "" {
-		if _, err := fmt.Fprintf(w, "  %s\n", r.Note); err != nil {
-			return err
-		}
 	}
 	_, err := fmt.Fprintln(w, "  Run with --apply to write config.json.")
 	return err

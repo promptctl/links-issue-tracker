@@ -32,6 +32,13 @@ const (
 	RankTop                         // sorts before every item in the frame it is filed into
 )
 
+// IssueIdentity is an issue's id with the topic it was created under — the two
+// values its id is rendered from, and what ListIssueIdentities returns.
+type IssueIdentity struct {
+	ID    string
+	Topic string
+}
+
 type CreateIssueInput struct {
 	Title       string
 	Description string

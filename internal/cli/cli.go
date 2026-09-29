@@ -284,10 +284,14 @@ func newLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
+		prefix, err := ap.Workspace.IssuePrefix.Mintable()
+		if err != nil {
+			return err
+		}
 		issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 			Title: *title, Description: *description, Prompt: *prompt, IssueType: issueTypeValue, Topic: *topic, ParentID: *parentID, Priority: priorityValue, Assignee: strings.TrimSpace(*assignee), Labels: splitCSV(*labels), Lane: *lane,
 			Placement: rankPlacement(*top),
-			Prefix:    ap.Workspace.IssuePrefix.Value(),
+			Prefix:    prefix.Value(),
 		})
 		if err != nil {
 			return err
@@ -352,6 +356,10 @@ func followupLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
+		prefix, err := ap.Workspace.IssuePrefix.Mintable()
+		if err != nil {
+			return err
+		}
 		issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 			Title:       titleValue,
 			Description: resolvedDescription,
@@ -363,7 +371,7 @@ func followupLeaf() appLeaf {
 			Assignee:    strings.TrimSpace(*assignee),
 			Labels:      splitCSV(*labels),
 			Placement:   rankPlacement(*top),
-			Prefix:      ap.Workspace.IssuePrefix.Value(),
+			Prefix:      prefix.Value(),
 		})
 		if err != nil {
 			return err
@@ -1882,7 +1890,11 @@ func runImportTreeJSON(ctx context.Context, stdout io.Writer, ap *app.App, data 
 	if err != nil {
 		return err
 	}
-	result, err := ap.Store.ImportTree(ctx, ap.Workspace.IssuePrefix.Value(), specs)
+	prefix, err := ap.Workspace.IssuePrefix.Mintable()
+	if err != nil {
+		return err
+	}
+	result, err := ap.Store.ImportTree(ctx, prefix.Value(), specs)
 	if err != nil {
 		return err
 	}
@@ -1930,7 +1942,11 @@ func runImportBulk(ctx context.Context, stdout io.Writer, ap *app.App, data []by
 	if byChanged && !bulkSpecsHaveUpdate(specs) {
 		return UsageError{Message: "usage: --by only applies when the file has at least one update document (a document with `id` set); this file has none"}
 	}
-	result, err := ap.Store.BulkApply(ctx, ap.Workspace.IssuePrefix.Value(), actor, specs)
+	prefix, err := ap.Workspace.IssuePrefix.Mintable()
+	if err != nil {
+		return err
+	}
+	result, err := ap.Store.BulkApply(ctx, prefix.Value(), actor, specs)
 	if err != nil {
 		return err
 	}
@@ -1972,7 +1988,7 @@ func workspaceLeaf() wsLeaf {
 		// that needs one field (e.g. `lit workspace | sed -n 's/^traces_dir: //p'`).
 		fields := []struct{ key, value string }{
 			{"workspace_id", ws.WorkspaceID},
-			{"issue_prefix", ws.IssuePrefix.Value()},
+			{"issue_prefix", ws.IssuePrefix.Stored()},
 			{"git_common_dir", ws.GitCommonDir},
 			{"storage_dir", ws.StorageDir},
 			{"database_path", ws.DatabasePath},

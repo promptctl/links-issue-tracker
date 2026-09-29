@@ -597,6 +597,12 @@ SELECT DISTINCT topic FROM issues WHERE deleted_at IS NULL AND topic <> '' ORDER
 ```
 failure → `fmt.Errorf("list topics: %w", err)`. Returns `[]string{}` (never nil) plus `rows.Err()`.
 
+`ListIssueIdentities(ctx) ([]storage.IssueIdentity, error)` (`store.go`):
+```sql
+SELECT id, topic FROM issues ORDER BY id ASC
+```
+failure → `fmt.Errorf("list issue identities: %w", err)`. Returns `[]storage.IssueIdentity{}` (never nil) plus `rows.Err()`. No hydration, so it never reaches `lifecycleChildrenByEpicIDs`, whose walk does not return on a parent loop.
+
 #### 5.9 Relation, comment, and label reads
 
 `listRelations(ctx, issueID)` (`store.go`):

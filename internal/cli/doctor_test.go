@@ -22,7 +22,7 @@ func TestPrintWorkspaceIdentityReportsPrefixSource(t *testing.T) {
 		WorkspaceID: "ws-id",
 		IssuePrefix: testIssuePrefix(t, "test"),
 	}
-	if err := printWorkspaceIdentity(&out, ws); err != nil {
+	if err := printWorkspaceIdentity(&out, ws, idPrefixCensus{}); err != nil {
 		t.Fatalf("printWorkspaceIdentity() error = %v", err)
 	}
 	if !strings.Contains(out.String(), "issue_prefix=test issue_prefix_source=configured") {
@@ -49,7 +49,7 @@ func TestPrintWorkspaceIdentityReportsDerivedPrefix(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := printWorkspaceIdentity(&out, ws); err != nil {
+	if err := printWorkspaceIdentity(&out, ws, idPrefixCensus{}); err != nil {
 		t.Fatalf("printWorkspaceIdentity() error = %v", err)
 	}
 	if !strings.Contains(out.String(), "issue_prefix_source=derived") {
