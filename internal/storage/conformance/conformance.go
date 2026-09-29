@@ -187,6 +187,7 @@ var cases = []engineCase{
 	{"a_relative_move_keeps_every_rank_distinct", aRelativeMoveKeepsEveryRankDistinct},
 	{"rank_set_imposes_order", rankSetImposesOrder},
 	{"rank_set_stays_inside_its_frame", rankSetStaysInsideItsFrame},
+	{"rank_set_over_a_whole_frame_permutes_its_keys", rankSetOverAWholeFramePermutesItsKeys},
 	{"rank_verbs_refuse_a_deleted_issue", rankVerbsRefuseADeletedIssue},
 	{"close_redirects_to_a_canonical", closeRedirectsToCanonical},
 	{"comments_roundtrip", commentsRoundtrip},
@@ -1463,6 +1464,94 @@ func rankSetStaysInsideItsFrame(t *testing.T, ctx context.Context, st storage.St
 	if after := mustGet(t, ctx, st, epic.ID).Rank; after != epicBefore {
 		t.Errorf("rank set among an epic's children moved the epic itself: rank %q -> %q", epicBefore, after)
 	}
+}
+
+// rankSetOverAWholeFramePermutesItsKeys pins what rank set writes: the keys
+// its frame already held, handed round in the new order, and nothing else.
+//
+// The fixture is built so that minting keys instead has something to land on.
+// Every child of the epic is named, so no unnamed sibling anchors the stack,
+// and three top-level issues are ranked above the epic, onto keys below its
+// own, where a stack walking downward from just past the epic reaches them. A
+// rank set that computed fresh keys there wrote one of those top-level keys
+// onto a child, and sorted two of the children above their own epic.
+//
+// The assertions are on keys, because the rendered order cannot see either
+// failure: children list under their epic whatever keys they hold. The frame's
+// keys as a set, and every key outside the frame, are the same before and
+// after — which on the memory engine, whose keys are rendered positions, says
+// the same thing as it does on the SQL one.
+func rankSetOverAWholeFramePermutesItsKeys(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	// The outsider is the far wall past the epic's key, so the room just past
+	// the epic is a closed gap rather than the open end of the keyspace.
+	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "outsider", Topic: "core"})
+	low := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "low", Topic: "core"})
+	mid := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "mid", Topic: "core"})
+	high := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "high", Topic: "core"})
+	if _, err := st.RankAbove(ctx, low.ID, epic.ID); err != nil {
+		t.Fatalf("RankAbove(low, epic) error = %v", err)
+	}
+	if _, err := st.RankAbove(ctx, mid.ID, epic.ID); err != nil {
+		t.Fatalf("RankAbove(mid, epic) error = %v", err)
+	}
+	if _, err := st.RankBelow(ctx, high.ID, low.ID); err != nil {
+		t.Fatalf("RankBelow(high, low) error = %v", err)
+	}
+	children := []model.Issue{
+		mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "c1", Topic: "core", ParentID: epic.ID}),
+		mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "c2", Topic: "core", ParentID: epic.ID}),
+		mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "c3", Topic: "core", ParentID: epic.ID}),
+	}
+	frame := map[string]struct{}{}
+	for _, child := range children {
+		frame[child.ID] = struct{}{}
+	}
+	before := ranksByID(mustList(t, ctx, st, storage.ListIssuesFilter{}))
+
+	named := []string{children[2].ID, children[0].ID, children[1].ID}
+	if _, err := st.RankSet(ctx, named); err != nil {
+		t.Fatalf("RankSet over every child error = %v", err)
+	}
+
+	listed := mustList(t, ctx, st, storage.ListIssuesFilter{})
+	assertDistinctRanks(t, listed)
+	assertIssueIDs(t, "the epic's children after rank set", childrenOf(listed, frame), named)
+	after := ranksByID(listed)
+	var keysBefore, keysAfter []string
+	for id, key := range before {
+		if _, inFrame := frame[id]; inFrame {
+			keysBefore = append(keysBefore, key)
+			keysAfter = append(keysAfter, after[id])
+			continue
+		}
+		if after[id] != key {
+			t.Errorf("rank set among an epic's children moved %s outside it: rank %q -> %q", id, key, after[id])
+		}
+	}
+	slices.Sort(keysBefore)
+	slices.Sort(keysAfter)
+	if !slices.Equal(keysBefore, keysAfter) {
+		t.Errorf("the epic's children hold keys %v after rank set, want the keys %v they held before, reordered", keysAfter, keysBefore)
+	}
+}
+
+func ranksByID(issues []model.Issue) map[string]string {
+	out := make(map[string]string, len(issues))
+	for _, issue := range issues {
+		out[issue.ID] = issue.Rank
+	}
+	return out
+}
+
+func childrenOf(issues []model.Issue, frame map[string]struct{}) []model.Issue {
+	var out []model.Issue
+	for _, issue := range issues {
+		if _, in := frame[issue.ID]; in {
+			out = append(out, issue)
+		}
+	}
+	return out
 }
 
 // rankVerbsRefuseADeletedIssue pins that naming a trashed issue in any rank

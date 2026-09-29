@@ -91,10 +91,10 @@ import "strings"
 // batches' answers, and two shapes fail that test:
 //
 //   - A `NOT IN` exclusion inverts under splitting: each batch returns the very
-//     rows the others meant to exclude. ranking.go's frame queries keep the
-//     exclusion out of SQL entirely (see nearestRankOutside), which is the
-//     better answer wherever it is available, because it adds no round trips at
-//     all.
+//     rows the others meant to exclude. No id list is excluded that way in
+//     this package: the one `NOT IN` filters issue types, a closed vocabulary
+//     that is never batched, and the rank reads exclude at most the one issue
+//     a move vacates, as `id != ?`.
 //   - An `ORDER BY ... LIMIT` decided in SQL answers a question about the whole
 //     set, which no batch holds. ListIssues is safe from this by construction
 //     and not by luck: it carries no SQL ORDER BY and no SQL LIMIT, because the

@@ -1,5 +1,10 @@
 package storage
 
+import (
+	"fmt"
+	"slices"
+)
+
 // RankMove reports the pair a relative rank operation actually applied to
 // after frame resolution: MovedID was re-ranked relative to AnchorID. When
 // the named issue and target are frame-mates these are the inputs unchanged;
@@ -71,4 +76,38 @@ type RankSetResolution struct {
 type RankSetResult struct {
 	Resolutions []RankSetResolution
 	Frame       Frame
+}
+
+// RankSetOrder is the order a rank set leaves its frame in: the
+// representatives first, in the order named, then every other member of the
+// frame in the order it already held.
+//
+// occupants is the frame's ranked members in their current order, and the
+// result names the new occupant of each of those same slots. A rank set is
+// therefore a permutation of the frame and nothing else: it mints no key and
+// frees none, so it cannot land on a key another issue holds, cannot move
+// anything outside the frame, and asked twice leaves exactly what it left
+// once. Both engines apply this one answer — the memory engine to its slots,
+// the SQL engine to the keys those slots hold — so they cannot disagree about
+// what rank set means. [LAW:one-source-of-truth] [LAW:types-are-the-program]
+//
+// Every representative must be one of the occupants. One that is not — deleted,
+// unranked, or outside the frame — would make the result longer than the frame,
+// and writing the part that fits would drop a live sibling from the order, so
+// the whole request is refused instead. [LAW:no-silent-failure]
+func RankSetOrder(f Frame, occupants, reps []string) ([]string, error) {
+	named := make(map[string]struct{}, len(reps))
+	for _, rep := range reps {
+		named[rep] = struct{}{}
+	}
+	ordered := slices.Clone(reps)
+	for _, id := range occupants {
+		if _, isRep := named[id]; !isRep {
+			ordered = append(ordered, id)
+		}
+	}
+	if len(ordered) != len(occupants) {
+		return nil, fmt.Errorf("rank set: %d issues resolved into %s but the frame holds %d ranked — refusing to rewrite a partial order", len(ordered), f, len(occupants))
+	}
+	return ordered, nil
 }

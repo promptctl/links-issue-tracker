@@ -318,32 +318,18 @@ func (e *Engine) RankSet(ctx context.Context, ids []string) (storage.RankSetResu
 	//
 	// The frame's slots are rewritten in place rather than detached and
 	// reinserted: the positions the frame already occupies stay exactly where
-	// they are and only their occupants are permuted, so nothing outside the
-	// frame moves and the frame keeps its place even when the representatives
-	// are all of it.
+	// they are and only their occupants are permuted, as storage.RankSetOrder
+	// defines, so nothing outside the frame moves and the frame keeps its place
+	// even when the representatives are all of it.
 	f := e.frameOf(reps[0])
 	slots := e.frameMateIndexes(f, "")
-	named := make(map[string]struct{}, len(reps))
-	for _, rep := range reps {
-		named[rep] = struct{}{}
+	occupants := make([]string, len(slots))
+	for i, slot := range slots {
+		occupants[i] = e.order[slot]
 	}
-	ordered := slices.Clone(reps)
-	for _, slot := range slots {
-		if _, isRep := named[e.order[slot]]; !isRep {
-			ordered = append(ordered, e.order[slot])
-		}
-	}
-	// The rewrite permutes the frame's occupants among the frame's own slots, so
-	// the two sides have to name the same set. They do once every representative
-	// is a live frame-mate, which mustRankable is what guarantees: slots counts
-	// only live members, so a deleted representative reaching here would make
-	// ordered the longer of the two and the loop below would write a prefix of it
-	// — dropping whichever live sibling sat in the slots that ran out, and leaving
-	// it in no position at all. A permutation that cannot account for every slot
-	// is a resolution bug, and it stops here rather than committing the half of
-	// itself that fits. [LAW:no-silent-failure]
-	if len(ordered) != len(slots) {
-		return storage.RankSetResult{}, fmt.Errorf("rank set: %d issues resolved into %s but the frame holds %d ranked — refusing to rewrite a partial order", len(ordered), f, len(slots))
+	ordered, err := storage.RankSetOrder(f, occupants, reps)
+	if err != nil {
+		return storage.RankSetResult{}, err
 	}
 	for i, slot := range slots {
 		e.order[slot] = ordered[i]

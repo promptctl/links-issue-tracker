@@ -198,9 +198,9 @@ Rank comparisons are **frame-local**: an issue is only comparable to siblings un
 
 - `RankToTop` / `RankToBottom`: global — new rank before the current min / after the current max live rank; no frame resolution.
 - `RankAbove` / `RankBelow`: frame-resolved; the new rank is the midpoint between the anchor and its neighbor (an open bound at the edge). When that pair has no room, the store respaces the smoothing window around the upper of the two ranks, with no length threshold, reads the anchor and neighbor again, and takes the midpoint of the new pair; a second refusal fails the move. The neighbor queries filter `deleted_at IS NULL` but **not** `item_rank != ''`, unlike the top/bottom/create queries — unranked rows sort as the empty string there.
-- `RankSet(ids)`: ≥2 unique non-blank ids required; each resolves through frames, and two ids collapsing to the same representative are rejected ("their relative order is internal to <epic>…"). The whole resolved set is stacked **at the top** of the keyspace in the given order, atomically, sharing one timestamp. Resolutions are returned even when the mutation fails.
+- `RankSet(ids)`: ≥2 unique non-blank ids required; each resolves through frames, and two ids collapsing to the same representative are rejected ("their relative order is internal to <epic>…"). The whole resolved set is stacked **at the top of its frame** in the given order by permuting the keys the frame already holds, atomically; the representatives whose key changed share one `updated_at` timestamp. A failed write returns no resolutions.
 
-Every rank write also bumps `updated_at`, except smoothing.
+Every rank write also bumps `updated_at`, except smoothing and the keys a `RankSet` passes to the frame members it displaces.
 
 ### Smoothing
 

@@ -162,17 +162,9 @@ func TestListIssuesEmptySelectionVersusBlankFilter(t *testing.T) {
 
 // Repeating a rank-set that has already arrived must change nothing.
 //
-// The frame's top is read to find what the stack is placed above, and the rows
-// the stack itself holds are not walls — they are about to be vacated. When the
-// stack is already at the top, EVERY row the top-of-frame read yields before
-// the answer is one of them, so a read that stops at the first row anchors the
-// stack against its own current position and re-places it a little higher on
-// every repeat. That drift is invisible in the ORDER, which is why this asserts
-// on the keys: from the second application onward the assigned ranks are a
-// fixed point, because the row they are measured against is the same one.
-//
-// The stack is deliberately larger than one row so that a read bounded by a
-// constant — rather than by the size of the moving set — fails here too.
+// A rank set that re-placed its stack on every call would drift a little on
+// each repeat, and that drift is invisible in the ORDER, which is why this
+// asserts on the keys: the first application is already the fixed point.
 func TestRankSetRepeatedIsAFixedPoint(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -199,71 +191,10 @@ func TestRankSetRepeatedIsAFixedPoint(t *testing.T) {
 		return out
 	}
 
-	ranksAfter(1)
-	settled := ranksAfter(2)
-	for round := 3; round <= 5; round++ {
+	settled := ranksAfter(1)
+	for round := 2; round <= 5; round++ {
 		if got := ranksAfter(round); !maps.Equal(got, settled) {
-			t.Fatalf("round %d ranks = %v, want the round-2 ranks %v — the stack is being anchored against itself and drifting", round, got, settled)
+			t.Fatalf("round %d ranks = %v, want the round-1 ranks %v — a repeat of an order that has arrived rewrote keys", round, got, settled)
 		}
-	}
-}
-
-// nearestRankOutside must read past every row it may have to skip.
-//
-// This is tested directly rather than through RankSet because RankSet cannot
-// reach the case: it anchors on the topmost row of the frame that is NOT
-// moving, so in a single-frame workspace everything above the anchor is moving
-// and a read bounded at one row happens to give the same answer. The contract
-// the helper states is the stronger one — the first qualifying row in the
-// order, whatever it takes to get there — and a read bounded by a constant
-// answers "" instead, which every caller reads as the open end of the
-// keyspace.
-func TestNearestRankOutsideReadsPastEveryExcludedRow(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	st := openIssueStore(t, ctx)
-
-	ids := makeIssues(t, ctx, st, 5, "row %d")
-	listed, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
-	if err != nil {
-		t.Fatalf("ListIssues() error = %v", err)
-	}
-	byID := map[string]string{}
-	for _, issue := range listed {
-		byID[issue.ID] = issue.Rank
-	}
-
-	const query = `SELECT id, item_rank FROM issues
-		WHERE deleted_at IS NULL AND item_rank != ''
-		ORDER BY item_rank ASC`
-
-	// Everything ahead of ids[3] in the order is excluded, so the answer is
-	// four rows deep and no shallower read can find it.
-	got, err := nearestRankOutside(ctx, st.db, query, ids[:3])
-	if err != nil {
-		t.Fatalf("nearestRankOutside(3 excluded) error = %v", err)
-	}
-	if want := byID[ids[3]]; got != want {
-		t.Fatalf("nearestRankOutside(3 excluded) = %q, want %q — the read stopped before it had passed every excluded row", got, want)
-	}
-
-	// The two-sided pair: excluding nothing must not read past the first row,
-	// so a helper that skipped rows for some other reason fails here.
-	got, err = nearestRankOutside(ctx, st.db, query, nil)
-	if err != nil {
-		t.Fatalf("nearestRankOutside(none excluded) error = %v", err)
-	}
-	if want := byID[ids[0]]; got != want {
-		t.Fatalf("nearestRankOutside(none excluded) = %q, want the first row %q", got, want)
-	}
-
-	// Excluding every row there is means there is no key outside, which every
-	// caller turns into the open end of the keyspace rather than an error.
-	got, err = nearestRankOutside(ctx, st.db, query, ids)
-	if err != nil {
-		t.Fatalf("nearestRankOutside(all excluded) error = %v", err)
-	}
-	if got != "" {
-		t.Fatalf("nearestRankOutside(all excluded) = %q, want \"\" — the open end of the keyspace", got)
 	}
 }

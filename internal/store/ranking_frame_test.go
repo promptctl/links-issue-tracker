@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/rank"
@@ -1167,16 +1168,11 @@ func TestRankToEdgeOfAFrameWithNoRankedMemberFilesBesideItsContainer(t *testing.
 	}
 }
 
-// TestRankSetOverAWholeFrameIsIdempotent pins the rule that a write's own keys
-// are not walls against it, on the one path that reaches an empty frame edge.
-//
-// Every ranked member of the frame is in the stack, so the anchor query returns
-// nothing and the bounds come from the frame's container. Reading that room
-// without excluding the stack bounds each round by the round before it, so
-// repeating a request that changes nothing walks the key longer every time —
-// "V", then "VV", then "VF" — spending the container's gap until a respace is
-// forced. The assertion is on the rank strings, because the rendered order is
-// identical either way.
+// TestRankSetOverAWholeFrameIsIdempotent pins that repeating a rank set over
+// every member of a frame rewrites nothing. No unnamed sibling is left to
+// anchor the stack, which is where a rank set that minted fresh keys walked
+// them longer on every repeat — "V", then "VV", then "VF". The assertion is on
+// the rank strings, because the rendered order is identical either way.
 func TestRankSetOverAWholeFrameIsIdempotent(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -1234,23 +1230,15 @@ func TestRankSetOverAWholeFrameIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestRankSetOverEveryTopLevelIssueTakesADistinctKey covers the case where a
-// frame reading empty does not mean the workspace is.
-//
-// RankSet's anchor query excludes the ids it is placing, so naming every
-// top-level issue leaves the top level reading empty while issues inside the
-// epics still hold keys. Answering that with open bounds makes rank.Midpoint
-// return rank.Initial — the opening key of a workspace — and hands it to the
-// stack on top of whoever already holds it. The bound has to come from the
-// workspace's own last key, a read that excludes nothing and is therefore
-// empty only when nothing at all is ranked.
+// TestRankSetOverEveryTopLevelIssueTakesADistinctKey covers naming every
+// top-level issue while issues inside an epic still hold keys.
 //
 // The fixture reparents the workspace's FIRST issue, the one holding
-// rank.Initial, into an epic. That is what makes the case adversarial: the key
-// an open-bounds answer produces is held by an issue outside the stack, and
-// nothing else in the workspace can reach that key. Without the reparent every
-// surviving key is above rank.Initial, the collision cannot happen, and the
-// case passes whichever bound is used.
+// rank.Initial, into an epic. That is what makes the case adversarial: a rank
+// set that measured its room as though the workspace were empty would be
+// handed rank.Initial, the key that issue still holds. Without the reparent
+// every surviving key is above rank.Initial, the collision cannot happen, and
+// the case passes however the keys are chosen.
 func TestRankSetOverEveryTopLevelIssueTakesADistinctKey(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -1355,5 +1343,234 @@ func TestFilingIntoAContainerWithNoRankOfItsOwnFallsBackToTheWorkspace(t *testin
 		if child.Rank == other.Rank {
 			t.Errorf("the child took rank %q, the key %s holds; a rank orders one issue", child.Rank, other.ID)
 		}
+	}
+}
+
+// TestRepeatingARelativeMoveThatHasArrivedKeepsItsKey pins that the key a
+// relative move vacates is not a wall against it. Counted as one, a move
+// repeated after it has already arrived is bounded by its own current key and
+// halves the gap every time. The order is identical either way, so the
+// assertion is on the moved issue's key.
+func TestRepeatingARelativeMoveThatHasArrivedKeepsItsKey(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	issues := make([]model.Issue, 0, 3)
+	for _, title := range []string{"A", "B", "C"} {
+		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "frame", IssueType: "task"})
+		if err != nil {
+			t.Fatalf("CreateIssue(%s) error = %v", title, err)
+		}
+		issues = append(issues, issue)
+	}
+	a, b, c := issues[0], issues[1], issues[2]
+
+	moves := []struct {
+		name  string
+		moved model.Issue
+		move  func() error
+	}{
+		{"RankAbove(C, B)", c, func() error { _, err := st.RankAbove(ctx, c.ID, b.ID); return err }},
+		{"RankBelow(A, B)", a, func() error { _, err := st.RankBelow(ctx, a.ID, b.ID); return err }},
+	}
+	for _, m := range moves {
+		if err := m.move(); err != nil {
+			t.Fatalf("%s error = %v", m.name, err)
+		}
+		arrived := currentRanks(t, ctx, st, []model.Issue{m.moved})[m.moved.ID]
+		if err := m.move(); err != nil {
+			t.Fatalf("%s repeated error = %v", m.name, err)
+		}
+		if again := currentRanks(t, ctx, st, []model.Issue{m.moved})[m.moved.ID]; again != arrived {
+			t.Errorf("%s repeated moved %s from %q to %q; a move that has arrived is already where it was asked to be", m.name, m.moved.ID, arrived, again)
+		}
+	}
+}
+
+// TestRankSetOverALargeFrameRewritesEveryDisplacedKey stacks the last two
+// issues of a frame larger than two id batches, so every other member shifts
+// down a slot and the rewrite spans several batched statements. Every key the
+// frame held before is held after, by exactly one issue, in the named order.
+func TestRankSetOverALargeFrameRewritesEveryDisplacedKey(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	ids := makeIssues(t, ctx, st, 2*idBatchSize+3, "row %d")
+	before, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
+	if err != nil {
+		t.Fatalf("ListIssues() error = %v", err)
+	}
+	named := []string{ids[len(ids)-1], ids[len(ids)-2]}
+	if _, err := st.RankSet(ctx, named); err != nil {
+		t.Fatalf("RankSet error = %v", err)
+	}
+	after, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
+	if err != nil {
+		t.Fatalf("ListIssues() error = %v", err)
+	}
+
+	want := slices.Concat(named, ids[:len(ids)-2])
+	if got := issueIDs(after); !slices.Equal(got, want) {
+		t.Fatalf("order after rank set = %v, want %v", got, want)
+	}
+	for i, issue := range after {
+		if issue.Rank != before[i].Rank {
+			t.Errorf("slot %d holds %q after rank set, want the key %q it held before; %s did not take its slot's key", i, issue.Rank, before[i].Rank, issue.ID)
+		}
+	}
+}
+
+// TestRankSetStampsOnlyTheIssuesItNamed pins whose clock a rank set moves. The
+// named issue that changed place is updated now; a frame-mate the stack merely
+// displaced keeps its order among the unnamed and keeps its updated_at, which
+// is what says how long a ticket has sat untouched.
+func TestRankSetStampsOnlyTheIssuesItNamed(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	st.clock = func() time.Time { return created }
+
+	issues := make([]model.Issue, 0, 3)
+	for _, title := range []string{"A", "B", "C"} {
+		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "frame", IssueType: "task"})
+		if err != nil {
+			t.Fatalf("CreateIssue(%s) error = %v", title, err)
+		}
+		issues = append(issues, issue)
+	}
+	a, b, c := issues[0], issues[1], issues[2]
+
+	ranked := created.Add(time.Hour)
+	st.clock = func() time.Time { return ranked }
+	if _, err := st.RankSet(ctx, []string{c.ID, a.ID}); err != nil {
+		t.Fatalf("RankSet(C, A) error = %v", err)
+	}
+
+	for _, want := range []struct {
+		issue model.Issue
+		at    time.Time
+		why   string
+	}{
+		{c, ranked, "it was named and moved to the top"},
+		{a, ranked, "it was named and moved below C"},
+		{b, created, "it was not named; the stack only displaced it"},
+	} {
+		got, err := st.GetIssue(ctx, want.issue.ID)
+		if err != nil {
+			t.Fatalf("GetIssue(%s) error = %v", want.issue.ID, err)
+		}
+		if !got.UpdatedAt.Equal(want.at) {
+			t.Errorf("%s updated_at = %s, want %s: %s", got.Title, got.UpdatedAt, want.at, want.why)
+		}
+	}
+}
+
+// TestRankSetOverIssuesSharingAKey pins what a rank set does with two issues
+// on one key, as imported keys can be. A permutation leaves them sharing it,
+// and a listing breaks the tie by id: an order that agrees with the ids is
+// written, and one that reverses them is refused by name with nothing changed,
+// rather than reported as done while the listing shows the old order.
+func TestRankSetOverIssuesSharingAKey(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name      string
+		reversed  bool
+		wantError string
+	}{
+		{name: "in id order", reversed: false},
+		{name: "against id order", reversed: true, wantError: "share the key"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			st := openIssueStore(t, ctx)
+
+			ids := makeIssues(t, ctx, st, 3, "row %d")
+			slices.Sort(ids)
+			low, high, other := ids[0], ids[1], ids[2]
+			for id, key := range map[string]string{low: "M", high: "M", other: "T"} {
+				if _, err := st.db.ExecContext(ctx, `UPDATE issues SET item_rank = ? WHERE id = ?`, key, id); err != nil {
+					t.Fatalf("plant %q on %s: %v", key, id, err)
+				}
+			}
+			named := []string{low, high}
+			if tc.reversed {
+				named = []string{high, low}
+			}
+			before, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
+			if err != nil {
+				t.Fatalf("ListIssues() error = %v", err)
+			}
+
+			_, err = st.RankSet(ctx, named)
+			after, listErr := st.ListIssues(ctx, storage.ListIssuesFilter{})
+			if listErr != nil {
+				t.Fatalf("ListIssues() error = %v", listErr)
+			}
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) || !strings.Contains(err.Error(), "lit rank "+high+" --above "+low) {
+					t.Fatalf("RankSet(%v) error = %v, want a refusal naming the tie and the move that separates it", named, err)
+				}
+				for i := range after {
+					if after[i].ID != before[i].ID || after[i].Rank != before[i].Rank {
+						t.Fatalf("a refused rank set changed the store: %v -> %v", before, after)
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("RankSet(%v) error = %v", named, err)
+			}
+			if got, want := issueIDs(after)[:2], named; !slices.Equal(got, want) {
+				t.Fatalf("order after rank set starts %v, want %v (then %s)", got, want, other)
+			}
+		})
+	}
+}
+
+// TestRankSetPlacesANamedIssueThatHoldsNoKey pins that an unranked issue can be
+// named in a rank set. An import writes a row unranked when its source had
+// none, so the permutation has no slot for it to take; it joins its frame
+// first, and the set then orders it with the rest.
+func TestRankSetPlacesANamedIssueThatHoldsNoKey(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	ids := makeIssues(t, ctx, st, 3, "row %d")
+	a, b, c := ids[0], ids[1], ids[2]
+	if _, err := st.db.ExecContext(ctx, `UPDATE issues SET item_rank = '' WHERE id = ?`, b); err != nil {
+		t.Fatalf("unrank %s: %v", b, err)
+	}
+
+	if _, err := st.RankSet(ctx, []string{b, c}); err != nil {
+		t.Fatalf("RankSet naming an unranked issue error = %v", err)
+	}
+	after, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
+	if err != nil {
+		t.Fatalf("ListIssues() error = %v", err)
+	}
+	if got, want := issueIDs(after), []string{b, c, a}; !slices.Equal(got, want) {
+		t.Fatalf("order after rank set = %v, want %v", got, want)
+	}
+	assertDistinctStoredRanks(t, after)
+}
+
+// assertDistinctStoredRanks fails for every issue holding no key or a key
+// another listed issue holds.
+func assertDistinctStoredRanks(t *testing.T, issues []model.Issue) {
+	t.Helper()
+	seen := map[string]string{}
+	for _, issue := range issues {
+		if issue.Rank == "" {
+			t.Errorf("%s holds no key", issue.ID)
+		}
+		if prior, dup := seen[issue.Rank]; dup {
+			t.Errorf("%s and %s both hold %q", prior, issue.ID, issue.Rank)
+		}
+		seen[issue.Rank] = issue.ID
 	}
 }

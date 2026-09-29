@@ -56,7 +56,7 @@ Semantics fixed by the memory engine and conformance:
 
 ### Rank intents
 
-The rank vocabulary is relative intents only — never stored positions (`contract.go`): `RankAbove`, `RankBelow`, `RankToTop`, `RankToBottom`, `RankSet` (total order over the named ids, stacked at the top of the backlog in the order named).
+The rank vocabulary is relative intents only — never stored positions (`contract.go`): `RankAbove`, `RankBelow`, `RankToTop`, `RankToBottom`, `RankSet` (total order over the named ids, stacked at the top of their frame in the order named).
 
 Rank frames are nested: children rank against siblings inside their epic's frame. An intent naming two issues in different frames is resolved to the nearest *comparable* ancestors — the representatives one level below the lowest common ancestor (or the roots when there is none) — and the substitution is returned (`RankMove{MovedID, AnchorID}`; `RankSetResolution{NamedID, RankedID}`) so the caller can surface it. Nothing inside any epic is reordered by a cross-frame request. Two named ids collapsing onto one representative, or a request ranking an issue against its own container, is refused (`memory/rank.go`). A parent that is soft-deleted frames nothing — the chain skips it (`memory/rank.go`).
 
