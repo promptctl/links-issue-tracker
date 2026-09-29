@@ -214,12 +214,40 @@ func TestMirrorCycleSweepsADeadMirrorsClone(t *testing.T) {
 	for _, want := range []string{
 		"mirror hold released step=clone elapsed=",
 		"mirror hold released step=record elapsed=",
-		" hold=", " record=", " push=", " elapsed=",
+		" hold=", " record=", " open=", " push=", " elapsed=",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("cycle log lacks %q — the field check reads the holds' elapsed= off this log:\noutput:\n%s", want, out.String())
 		}
 	}
+	// open= is the clone engine's open and push= the whole span the push
+	// deadline bounds, so the open is a real, nonzero share of push= and
+	// never more than it.
+	open, push := cycleEndDuration(t, out.String(), "open"), cycleEndDuration(t, out.String(), "push")
+	if open <= 0 || open > push {
+		t.Fatalf("open=%s is not a nonzero share of push=%s:\noutput:\n%s", open, push, out.String())
+	}
+}
+
+// cycleEndDuration reads one duration field off the log's cycle-end line.
+func cycleEndDuration(t *testing.T, log, field string) time.Duration {
+	t.Helper()
+	for _, line := range strings.Split(log, "\n") {
+		if !strings.Contains(line, "mirror cycle end ") {
+			continue
+		}
+		for _, tok := range strings.Fields(line) {
+			if value, ok := strings.CutPrefix(tok, field+"="); ok {
+				d, err := time.ParseDuration(value)
+				if err != nil {
+					t.Fatalf("cycle end %s=%q is not a duration: %v", field, value, err)
+				}
+				return d
+			}
+		}
+	}
+	t.Fatalf("no cycle-end line carries %s=:\n%s", field, log)
+	return 0
 }
 
 // assertNoMirrorClone pins that no clone survives a cycle: the base directory
