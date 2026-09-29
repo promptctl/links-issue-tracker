@@ -124,7 +124,9 @@ type ServedPastExhaustion struct {
 // in-progress-only lane names none). OffPath names the rows outside the scope
 // that a focus label kept out of the pool, so "nothing ready outside it" is
 // never claimed of rows the pool was not asked about; with no focus active it
-// is empty.
+// is empty. EpicBlocked is whether some of that work is held back by a blocker
+// declared on its epic, which decides where the unblocking ticket can live: a
+// child filed under that epic would inherit the very block it exists to clear.
 //
 // It is also an error, for the same reason HelpRequestedError is: it is an
 // answer, not a failure, and the error channel is the only channel runNext has
@@ -133,9 +135,10 @@ type ServedPastExhaustion struct {
 // sinks reading the routing verdict rather than a copy of it that could drift
 // from these fields. [LAW:one-source-of-truth]
 type Exhausted struct {
-	Epics   []string
-	Blocked []rowReach
-	OffPath []rowReach
+	Epics       []string
+	Blocked     []rowReach
+	OffPath     []rowReach
+	EpicBlocked bool
 }
 
 // reachKind is what one row is to this checkout right now — the one fact both
@@ -428,6 +431,9 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 			Epics:   slices.Sorted(maps.Keys(ownEpics)),
 			Blocked: blockedRows(gating),
 			OffPath: withheldByScope(slices.DeleteFunc(slices.Clone(offPath), ours)),
+			EpicBlocked: slices.ContainsFunc(rows, func(row annotation.AnnotatedIssue) bool {
+				return ours(row) && row.State() == model.StateOpen && ClassifyReadiness(row.Annotations).InheritsDependency()
+			}),
 		}
 		if row, ok := fromPool(); ok {
 			return ServedPastExhaustion{Row: row, Lane: laneOf(row), Exhaustion: exhausted}
@@ -586,7 +592,7 @@ func (o Exhausted) Error() string {
 // why is what both exhaustion outcomes say first: which scope stopped, and
 // what stops it.
 func (o Exhausted) why() string {
-	scope, _ := o.scope()
+	scope := o.scope()
 	if len(o.Blocked) == 0 {
 		return fmt.Sprintf("no ready work in %s — nothing else is queued behind what's already in progress", scope)
 	}
@@ -608,31 +614,41 @@ func (o Exhausted) outside() string {
 // one so both renderers join it beside the others unconditionally. It exists
 // only against a block: with Blocked empty the rest of the scope is work already
 // underway, and a new ticket has nothing to clear. Filing alone clears nothing
-// either — the blocked work still waits on what it waited on — so the route
-// names moving the block onto the new ticket too.
+// either — the blocked work still waits on its blocker — so the route names the
+// edge too, and names it exactly: the blocker waits on the new ticket. The
+// blocker is one of the ids after "blocked on", never a ticket of the scope
+// itself, which lit would refuse as a blocks edge inside one epic.
 func (o Exhausted) stay() []string {
 	if len(o.Blocked) == 0 {
 		return nil
 	}
-	_, file := o.scope()
-	return []string{"to stay, file the ticket that unblocks it " + file + ", then move the block onto it with `lit dep`"}
+	return []string{"to stay, file the ticket that clears a blocker " + o.home() + ", then make that blocker wait on it with `lit dep add --from <new> --to <blocker>`"}
 }
 
-// scope names the stopped scope and how to file inside it, answered together
-// because both turn on one fact: an epic can take the unblocking ticket as a
-// child, ranked ahead of the work it unblocks, and a lane with no epic over it
-// has nothing to parent one under. Each epic gets its command spelled out, so
-// the agent copies an id rather than filling in a placeholder.
-func (o Exhausted) scope() (name, file string) {
-	if len(o.Epics) == 0 {
-		return "your claimed lane(s)", "with `lit new`"
+// home is where the unblocking ticket can be filed, spelled as the command.
+// Under the epic, ranked ahead of the work it unblocks, when the epic can hold
+// it — each epic's command spelled out, so the agent copies an id rather than
+// filling in a placeholder. It cannot when the block is declared on the epic
+// itself: a child inherits its epic's blockers, so the new ticket would be born
+// blocked, and making the blocker wait on it would close a wait loop. Nor can a
+// lane with no epic over it. Both file at the top of the backlog instead.
+func (o Exhausted) home() string {
+	if len(o.Epics) == 0 || o.EpicBlocked {
+		return "with `lit new --top`"
 	}
 	commands := make([]string, len(o.Epics))
 	for i, epic := range o.Epics {
 		commands[i] = fmt.Sprintf("`lit new --parent %s --top`", epic)
 	}
-	return fmt.Sprintf("epic(s) %s", strings.Join(o.Epics, ", ")),
-		"under the epic with " + strings.Join(commands, " or ")
+	return "under the epic with " + strings.Join(commands, " or ")
+}
+
+// scope names the stopped scope.
+func (o Exhausted) scope() string {
+	if len(o.Epics) == 0 {
+		return "your claimed lane(s)"
+	}
+	return fmt.Sprintf("epic(s) %s", strings.Join(o.Epics, ", "))
 }
 
 // reachNotes is what a diagnostic says about the rows of each kind, indexed by

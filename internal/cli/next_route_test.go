@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 
@@ -301,9 +302,87 @@ func TestRouteNextTerminalExhaustionNamesTheStayRouteAgainstABlock(t *testing.T)
 	}
 	want := "no ready work in epic(s) " + epicA.ID + " — blocked on " + blocker.ID +
 		" (on your path but claimed by another checkout right now); `lit next` has nothing ready outside it either" +
-		" — to stay, file the ticket that unblocks it under the epic with `lit new --parent " + epicA.ID + " --top`, then move the block onto it with `lit dep`"
+		" — to stay, file the ticket that clears a blocker under the epic with `lit new --parent " + epicA.ID + " --top`, then make that blocker wait on it with `lit dep add --from <new> --to <blocker>`"
 	if msg := exhausted.Error(); msg != want {
 		t.Fatalf("exhausted.Error() = %q, want exactly %q", msg, want)
+	}
+
+	// Follow the route as printed. The edge goes through the CLI's own policy
+	// boundary, which refuses a blocks edge inside one epic, and the next
+	// route serves the new ticket from the lane this checkout holds.
+	unblocker := followStayRoute(t, h, []string{"--parent", epicA.ID, "--top"}, blocker.ID)
+	rows, details = h.gather()
+	outcome = routeNext(rows, details, standings, selfAttribution, focusScope{})
+	if served, ok := outcome.(ServedFromClaim); !ok || served.Row.ID != unblocker {
+		t.Fatalf("after following the stay route, routeNext = %#v (%T), want ServedFromClaim serving %s", outcome, outcome, unblocker)
+	}
+}
+
+// followStayRoute runs the two commands the stay route prints — `lit new` with
+// the flags it names, then `lit dep add` making the blocker wait on the new
+// ticket — through the CLI's own handlers, so a route naming a placement or an
+// edge lit refuses or mis-ranks fails here. It returns the new ticket's id.
+func followStayRoute(t *testing.T, h readyTestHarness, newFlags []string, blockerID string) string {
+	t.Helper()
+	var out strings.Builder
+	args := append([]string{"--title", "Clears the blocker", "--topic", "next", "--type", "task"}, newFlags...)
+	if err := runNew(h.ctx, &out, h.ap, args); err != nil {
+		t.Fatalf("lit new %v, as the stay route prints it: %v", newFlags, err)
+	}
+	newID := strings.Fields(out.String())[0]
+	if err := runDepAdd(h.ctx, io.Discard, h.ap, []string{"--from", newID, "--to", blockerID}); err != nil {
+		t.Fatalf("lit dep add --from %s --to %s, as the stay route prints it: %v", newID, blockerID, err)
+	}
+	return newID
+}
+
+// When the block is declared on the epic itself, every child inherits it, so
+// a ticket filed under the epic would be born blocked — and making the blocker
+// wait on it would close a wait loop. The stay route files it outside the
+// epic instead, and following it gets the new ticket served.
+func TestRouteNextStayRouteFilesOutsideAnEpicThatIsItselfBlocked(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	h.transition(a1.ID, model.Start{Assignee: "tester"})
+	h.transition(a1.ID, model.Done{})
+	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Blocks the whole epic, theirs", Topic: "next", IssueType: "task", Priority: 0})
+	h.addDependency(epicA.ID, blocker.ID)
+
+	rows, details := h.gather()
+	standings := claims.Standings{
+		model.LaneOf(a1, &epicA):                         heldBy(selfAttribution),
+		laneOf(t, details, rowByID(t, rows, blocker.ID)): heldBy(otherAttribution),
+	}
+
+	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
+	exhausted, ok := outcome.(Exhausted)
+	if !ok {
+		t.Fatalf("routeNext = %#v (%T), want Exhausted — the only row outside epic A is another checkout's", outcome, outcome)
+	}
+	if !exhausted.EpicBlocked {
+		t.Fatalf("exhausted.EpicBlocked = false, want true — %s blocks epic %s itself", blocker.ID, epicA.ID)
+	}
+	msg := exhausted.Error()
+	if want := "to stay, file the ticket that clears a blocker with `lit new --top`, then make that blocker wait on it"; !strings.Contains(msg, want) {
+		t.Fatalf("exhausted.Error() = %q, want it to contain %q", msg, want)
+	}
+	if strings.Contains(msg, "--parent") {
+		t.Fatalf("exhausted.Error() = %q, want no --parent — a child of %s inherits the block it would exist to clear", msg, epicA.ID)
+	}
+
+	// The control: a child filed under the epic is held back by the epic's
+	// blocker, which is why the route does not send the ticket there.
+	child := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Would inherit the block", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	unblocker := followStayRoute(t, h, []string{"--top"}, blocker.ID)
+	rows, details = h.gather()
+	if ClassifyReadiness(rowByID(t, rows, child.ID).Annotations).IsReady() {
+		t.Fatalf("%s under blocked epic %s is ready, want it held back by %s — the control this test's route rests on", child.ID, epicA.ID, blocker.ID)
+	}
+	outcome = routeNext(rows, details, standings, selfAttribution, focusScope{})
+	if served, ok := outcome.(ServedPastExhaustion); !ok || served.Row.ID != unblocker {
+		t.Fatalf("after following the stay route, routeNext = %#v (%T), want %s served", outcome, outcome, unblocker)
 	}
 }
 

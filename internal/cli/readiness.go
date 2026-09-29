@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"slices"
+
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 )
 
@@ -106,6 +108,15 @@ func (r IssueReadiness) DependencyIDs() []string {
 		}
 	}
 	return ids
+}
+
+// InheritsDependency reports whether any dependency holding the issue back is
+// declared on an epic above it rather than on the issue — the case where a new
+// sibling would be held back by the same edge.
+func (r IssueReadiness) InheritsDependency() bool {
+	return slices.ContainsFunc(r.blocking, func(reason BlockingReason) bool {
+		return reason.Kind == annotation.InheritedDependency
+	})
 }
 
 // DependencyLabels returns the same dependencies as DependencyIDs, in the same
