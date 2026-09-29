@@ -461,8 +461,8 @@ func runList(ctx context.Context, stdout io.Writer, surface listSurface, args []
 		// noReadyPolicy, for the reason gatherCrossProjectRollup states at its own
 		// foreign-store call: a Location carries no repo root, so there is no ready
 		// policy to read. It opts out of ONLY the field-presence gate; every
-		// store-intrinsic annotation — blockers, the lane gate, needs-design —
-		// still runs, so `--columns blocked` over a foreign store answers the
+		// store-intrinsic annotation — blockers, the lane gate, reserved blocking
+		// labels — still runs, so `--columns blocked` over a foreign store answers the
 		// registry's question minus the one input that store cannot supply.
 		return l.work(ctx, stdout, listScope{store: st, policy: noReadyPolicy}, positional)
 	}
@@ -971,7 +971,7 @@ func annotateIssues(ctx context.Context, st storage.Store, requiredFields []stri
 		newBlockerAnnotator(details, held),
 		newSiblingGateAnnotator(details, pendingSiblingsByEpic(held.ancestry.relations)),
 		newOrphanedAnnotator(orphanedThreshold),
-		newNeedsDesignAnnotator(),
+		newBlockingLabelAnnotator(),
 		newFocusPathAnnotator(focusPaths),
 	)
 	if err != nil {

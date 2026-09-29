@@ -108,6 +108,7 @@ var (
 	RankInversion         = register("rank_inversion", RoleRankInversion)     // dependency is ranked below the dependent
 	Orphaned              = register("orphaned", RoleOrphaned)                // in_progress with no update past the orphaned threshold
 	NeedsDesign           = register("needs_design", RoleBlocking)            // carries the needs-design label
+	External              = register("external", RoleBlocking)                // carries the external label: the issue waits on an event outside this repo
 	EarlierSiblingPending = register("earlier_sibling_pending", RoleBlocking) // an earlier same-lane sibling under the parent epic is still open
 	FocusPath             = register("focus_path", RoleNone)                  // a focused goal or a derived prerequisite of one; the backlog/next focus-scope membership fact
 )

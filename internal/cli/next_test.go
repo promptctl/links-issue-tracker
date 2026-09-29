@@ -382,6 +382,20 @@ func TestRunNextSkipsBlockedLeaf(t *testing.T) {
 	}
 }
 
+// A ticket whose resolution is an outside event is not served, and neither is
+// the ticket waiting on it; next goes past both to work this repo can do.
+func TestRunNextSkipsATicketWaitingOnAnOutsideEvent(t *testing.T) {
+	h := newReadyTestHarness(t)
+	upstream := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Upstream fix lands", Topic: "next", IssueType: "task", Priority: 0, Labels: []string{ExternalLabel}})
+	waiting := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Adopt the upstream fix", Topic: "next", IssueType: "task", Priority: 0})
+	h.addDependency(waiting.ID, upstream.ID)
+	workable := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Workable here", Topic: "next", IssueType: "task", Priority: 0})
+
+	if got := h.runNextRow(); got.ID != workable.ID {
+		t.Fatalf("next.ID = %q, want %q — the outside event %s and its dependent %s are not workable here", got.ID, workable.ID, upstream.ID, waiting.ID)
+	}
+}
+
 // `lit next` exposes the standard narrowing knobs so "the next workable bug"
 // is expressible; the filter runs in the shared pipeline, so next answers the
 // same narrowed question ready/backlog/queue would.

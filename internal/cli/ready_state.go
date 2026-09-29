@@ -18,28 +18,47 @@ import (
 )
 
 // NeedsDesignLabel is the reserved label that flags an issue as awaiting
-// design work. The annotator below converts the label (a neutral fact on the
-// issue) into a NeedsDesign annotation; ClassifyReadiness is where the
-// consumer decides that this annotation blocks readiness.
+// design work.
 // [LAW:one-source-of-truth] Single definition of the needs-design label.
 const NeedsDesignLabel = "needs-design"
 
-// newNeedsDesignAnnotator returns an annotator that emits a NeedsDesign
-// annotation for any issue carrying NeedsDesignLabel.
+// ExternalLabel is the reserved label that flags an issue whose resolution is
+// an event outside this repository — an upstream fix, a vendor release. The
+// issue is correct and open, but no work here can move it; its description
+// names the event and how to re-check it, and whatever waits on it depends on
+// it with an ordinary blocks edge.
+// [LAW:one-source-of-truth] Single definition of the external label.
+const ExternalLabel = "external"
+
+// blockingLabels maps each reserved label that blocks readiness to the
+// annotation kind it raises. The label is a neutral fact on the issue; the
+// kind's registered role is what makes it block, and ClassifyReadiness is
+// where that role is interpreted.
+// [LAW:one-type-per-behavior] The reserved blocking labels differ only in
+// which label and which kind, so they are rows of one table read by one
+// annotator, not one annotator each.
+var blockingLabels = []struct {
+	label string
+	kind  annotation.Kind
+}{
+	{NeedsDesignLabel, annotation.NeedsDesign},
+	{ExternalLabel, annotation.External},
+}
+
+// newBlockingLabelAnnotator returns an annotator that emits one annotation per
+// reserved blocking label the issue carries, with the label as its message.
 // [LAW:dataflow-not-control-flow] The annotator runs unconditionally for
-// every issue; absence of the label produces a nil slice (Annotate
+// every issue; carrying none of the labels produces a nil slice (Annotate
 // normalizes to an empty slice at the row level), not a skipped operation.
-func newNeedsDesignAnnotator() annotation.Annotator {
+func newBlockingLabelAnnotator() annotation.Annotator {
 	return func(_ context.Context, issue model.Issue) ([]annotation.Annotation, error) {
-		for _, label := range issue.Labels {
-			if label == NeedsDesignLabel {
-				return []annotation.Annotation{{
-					Kind:    annotation.NeedsDesign,
-					Message: NeedsDesignLabel,
-				}}, nil
+		var out []annotation.Annotation
+		for _, reserved := range blockingLabels {
+			if slices.Contains(issue.Labels, reserved.label) {
+				out = append(out, annotation.Annotation{Kind: reserved.kind, Message: reserved.label})
 			}
 		}
-		return nil, nil
+		return out, nil
 	}
 }
 

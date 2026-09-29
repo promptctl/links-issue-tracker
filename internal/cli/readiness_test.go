@@ -46,6 +46,12 @@ func TestClassifyReadinessPerKind(t *testing.T) {
 			wantBlocking: []BlockingReason{{Kind: annotation.NeedsDesign, Detail: NeedsDesignLabel}},
 		},
 		{
+			name:         "external blocks",
+			ann:          annotation.Annotation{Kind: annotation.External, Message: ExternalLabel},
+			wantReady:    false,
+			wantBlocking: []BlockingReason{{Kind: annotation.External, Detail: ExternalLabel}},
+		},
+		{
 			name:         "earlier_sibling_pending blocks",
 			ann:          annotation.Annotation{Kind: annotation.EarlierSiblingPending, Message: "sib-1"},
 			wantReady:    false,

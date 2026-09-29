@@ -51,8 +51,8 @@ func (statusReady) marker() string { return "[ready]" }
 // blocked child with no reason cannot be constructed: the marker's claim is
 // "not startable, and here is why".
 //
-// Two of the registry's four blocking kinds have no id to name — a missing
-// field, a needs-design label — so one phrasing (BlockingReason.Phrase) covers
+// Some of the registry's blocking kinds have no id to name — a missing field,
+// a reserved blocking label — so one phrasing (BlockingReason.Phrase) covers
 // every kind, and the renderer never asks which kind it holds.
 // [LAW:dataflow-not-control-flow]
 type statusBlocked struct {
@@ -140,8 +140,8 @@ const statusMarkerWidth = len("[in_progress]")
 // [LAW:single-enforcer] readiness is the gate's verdict, read here, never
 // recomputed here. A display deriving its own blocker list from `blocks` edges
 // alone would draw [ready] a child held back by any of the registry's other
-// blocking kinds — a missing required field, needs-design, an earlier
-// same-lane sibling — while `lit next` refuses to serve it. IsReady is false
+// blocking kinds — a missing required field, a reserved blocking label, an
+// earlier same-lane sibling — while `lit next` refuses to serve it. IsReady is false
 // exactly when BlockingReasons is non-empty, by that type's construction, so
 // the head index below is total.
 func classifyChildStatus(child model.Issue, readiness IssueReadiness) childStatus {

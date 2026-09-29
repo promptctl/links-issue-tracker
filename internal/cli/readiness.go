@@ -19,7 +19,7 @@ import (
 // BlockingReason is one classified fact that prevents pulling an issue now.
 // Detail carries the annotation message: the missing field name, the open
 // dependency id (direct or inherited), the pending sibling id, or the
-// needs-design label.
+// reserved blocking label (needs-design, external).
 type BlockingReason struct {
 	Kind   annotation.Kind
 	Detail string
@@ -33,8 +33,8 @@ type BlockingReason struct {
 // second list to keep current, and the shorter of the two lists is always the
 // one nobody notices.
 // [LAW:no-silent-failure] The default panics rather than rendering a blocking
-// kind as empty text: a fifth kind must fail loudly here instead of arriving on
-// screen as a blank reason or, worse, no reason at all.
+// kind as empty text: a newly registered kind must fail loudly here instead of
+// arriving on screen as a blank reason or, worse, no reason at all.
 func (r BlockingReason) Phrase() string {
 	if label, ok := r.dependency(); ok {
 		return "depends on " + label
@@ -42,8 +42,8 @@ func (r BlockingReason) Phrase() string {
 	switch r.Kind {
 	case annotation.MissingField:
 		return "missing " + r.Detail
-	case annotation.NeedsDesign:
-		return NeedsDesignLabel
+	case annotation.NeedsDesign, annotation.External:
+		return r.Detail
 	case annotation.EarlierSiblingPending:
 		return "earlier sibling " + r.Detail + " still open"
 	default:
