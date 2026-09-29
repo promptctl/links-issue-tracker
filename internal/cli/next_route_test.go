@@ -937,6 +937,42 @@ func TestExhaustionNamesAnUnreadyBlockerWithoutNamingAHolder(t *testing.T) {
 	}
 }
 
+// A scope stopped by its own ticket, held by a label on that ticket, names the
+// ticket and the reason. Nothing in it is in progress, so the in-progress
+// sentence would be false; and a ticket inside the epic cannot take a blocks
+// edge, so no stay route is offered against it.
+func TestExhaustionNamesTheScopesOwnTicketHeldByALabel(t *testing.T) {
+	for _, tc := range []struct {
+		label string
+		note  string
+	}{
+		{label: ExternalLabel, note: "on your path but waiting on an event outside this repository"},
+		{label: NeedsDesignLabel, note: "on your path but not startable right now"},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			h := newReadyTestHarness(t)
+			epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+			lead := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a", Labels: []string{tc.label}})
+			h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a"})
+
+			rows, details, epics := h.gather()
+			standings := claims.Standings{laneOf(t, details, rowByID(t, rows, lead.ID)): heldBy(selfAttribution)}
+			outcome := routeNext(rows, details, epics, standings, selfAttribution, focusScope{})
+			exhausted, ok := outcome.(Exhausted)
+			if !ok {
+				t.Fatalf("routeNext = %#v (%T), want Exhausted — A.1 is held by %q and A.2 waits behind it", outcome, outcome, tc.label)
+			}
+			want := "no ready work in epic(s) " + epicA.ID + " — held here: " + lead.ID + " (" + tc.note
+			if msg := exhausted.Error(); !strings.HasPrefix(msg, want) {
+				t.Fatalf("exhausted.Error() = %q, want it to start %q", msg, want)
+			}
+			if msg := exhausted.Error(); strings.Contains(msg, "already in progress") || strings.Contains(msg, "to stay") {
+				t.Fatalf("exhausted.Error() = %q, want neither the in-progress sentence nor a stay route — nothing is in progress and %q is inside the epic", msg, lead.ID)
+			}
+		})
+	}
+}
+
 // A blocker the external label holds waits on an event outside the repository,
 // so exhaustion names it as such and never tells the agent to file a ticket
 // that would clear it: no ticket filed here can. Beside a blocker a ticket

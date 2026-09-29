@@ -110,6 +110,22 @@ func (r IssueReadiness) DependencyIDs() []string {
 	return ids
 }
 
+// waitsOnOtherWork reports whether the reason is another ticket still open — a
+// dependency or an earlier same-lane sibling — rather than a fact about the
+// issue itself, such as a reserved label or a missing field.
+func (r BlockingReason) waitsOnOtherWork() bool {
+	_, isDependency := r.dependency()
+	return isDependency || r.Kind == annotation.EarlierSiblingPending
+}
+
+// HeldByItself reports whether a reason about the issue itself blocks it, so
+// finishing other work would not make it startable.
+func (r IssueReadiness) HeldByItself() bool {
+	return slices.ContainsFunc(r.blocking, func(reason BlockingReason) bool {
+		return !reason.waitsOnOtherWork()
+	})
+}
+
 // AwaitsOutside reports whether an external label holds the issue: whatever
 // else blocks it, no ticket filed in this repository can make it startable.
 func (r IssueReadiness) AwaitsOutside() bool {

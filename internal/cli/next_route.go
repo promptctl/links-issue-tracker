@@ -126,7 +126,10 @@ type ServedPastExhaustion struct {
 // lane of the same epic — and the global pool having nothing ready outside it
 // either, or routing would have answered ServedPastExhaustion. Loud and
 // diagnostic. Blocked names the open dependencies from outside the scope gating
-// that work, if any (an in-progress-only lane names none). OffPath names the rows outside the scope
+// that work, if any. Held names the scope's own open rows held by a reason about
+// the row itself — a reserved label, a missing field — which no other work
+// finishing will clear; a scope with neither is waiting only on work already in
+// progress. OffPath names the rows outside the scope
 // that a focus label kept out of the pool, so "nothing ready outside it" is
 // never claimed of rows the pool was not asked about; with no focus active it
 // is empty, and on ServedPastExhaustion, whose pool did offer a row.
@@ -140,6 +143,7 @@ type ServedPastExhaustion struct {
 type Exhausted struct {
 	Epics   []string
 	Blocked []rowReach
+	Held    []rowReach
 	OffPath []rowReach
 }
 
@@ -458,6 +462,7 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 		exhausted := Exhausted{
 			Epics:   slices.Sorted(maps.Keys(ownEpics)),
 			Blocked: blockedRows(gating),
+			Held:    heldByThemselves(rows, func(row annotation.AnnotatedIssue) bool { return ourScope(laneOf(row)) }, reachFor),
 		}
 		if row, ok := fromPool(); ok {
 			return ServedPastExhaustion{Row: row, Lane: laneOf(row), Exhaustion: exhausted}
@@ -533,6 +538,20 @@ func passedOver(rows []annotation.AnnotatedIssue, reachFor func(annotation.Annot
 type gatedDep struct {
 	rowReach
 	Gates string
+}
+
+// heldByThemselves collects the open rows in scope, in rank order, that a reason
+// about the row itself holds back, each classified by the same reachOf every
+// other diagnostic row is. Blocked cannot carry them: it names dependencies from
+// outside the scope, and these rows are inside it.
+func heldByThemselves(rows []annotation.AnnotatedIssue, inScope func(annotation.AnnotatedIssue) bool, reachFor func(annotation.AnnotatedIssue) reachKind) []rowReach {
+	var held []rowReach
+	for _, row := range rows {
+		if inScope(row) && row.State() == model.StateOpen && ClassifyReadiness(row.Annotations).HeldByItself() {
+			held = append(held, rowReach{ID: row.ID, Row: row, Kind: reachFor(row)})
+		}
+	}
+	return held
 }
 
 // blockedRows drops the gated id, for Exhausted: that diagnostic reports WHICH
@@ -657,13 +676,18 @@ func (o Exhausted) Error() string {
 }
 
 // why is what both exhaustion outcomes say first: which scope stopped, and
-// what stops it.
+// what stops it — the dependencies from outside it, then its own rows held by
+// themselves. Only with neither is the rest of the scope work already in
+// progress, and only then does it say so.
 func (o Exhausted) why() string {
-	scope := o.scope()
-	if len(o.Blocked) == 0 {
-		return fmt.Sprintf("no ready work in %s — nothing else is queued behind what's already in progress", scope)
+	stops := slices.DeleteFunc([]string{
+		describeReach(o.Blocked, "blocked on ", exhaustedNotes),
+		describeReach(o.Held, "held here: ", exhaustedNotes),
+	}, func(clause string) bool { return clause == "" })
+	if len(stops) == 0 {
+		stops = []string{"nothing else is queued behind what's already in progress"}
 	}
-	return fmt.Sprintf("no ready work in %s — %s", scope, describeReach(o.Blocked, "blocked on ", exhaustedNotes))
+	return fmt.Sprintf("no ready work in %s — %s", o.scope(), strings.Join(stops, "; "))
 }
 
 // outside is what the pool held beyond the scope when it offered nothing: no

@@ -682,7 +682,7 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		// `lit update --assignee`. Hidden+dispatchable so an old invocation gets the
 		// documented pointer, not cobra's unknown-command error. [LAW:no-silent-failure]
 		retiredSpec("assign", "operations", "use `lit update <id> --assignee <name>`", assignRetirementGuidance),
-		{Name: doneSpec.name, Summary: "Finish claimed work (success path; requires in_progress)", GroupID: "operations",
+		{Name: doneSpec.name, Summary: "Finish work (success path; from any non-closed state)", GroupID: "operations",
 			Run: r.transitionCmd(doneSpec)},
 		{Name: closeSpec.name, Summary: "Close without finishing (wontfix / obsolete / duplicate; from any non-closed state)", GroupID: "operations",
 			Run: r.transitionCmd(closeSpec)},

@@ -138,7 +138,7 @@ Proven over two real clones and a git remote: the second clone's plain `start` f
 | `ServedFromEpicLane` | `Row`, `Lane model.LaneID` | a pick from a different lane of an epic this checkout already holds a lane in |
 | `ServedFromNewLane` | `Row`, `Lane model.LaneID` | a pick in a lane this checkout does not hold — from the global pool (step 4) |
 | `ServedFromDependency` | `Row`, `Lane model.LaneID`, `Gates string` | an on-path dependency (step 1b): a pick outside our lanes that unblocks one of our own rows, `Gates` naming the row it unblocks |
-| `Exhausted` | `Epics`, `Blocked` | the checkout's own epic(s) have open work, none of it reachable; returned as an error |
+| `Exhausted` | `Epics`, `Blocked`, `Held` | the checkout's own epic(s) have open work, none of it reachable; returned as an error |
 | `NoWork` | `Unreachable` | the global pool produced nothing; returned as an error |
 
 `ServedFromEpicLane` carries exactly `Row` and `Lane`; there is no `Epic` field, because the epic is `Lane.Epic()` and storing it beside the lane was two clocks for one fact. `ServedFromNewLane` likewise carries a `model.LaneID`, not a pre-rendered string.

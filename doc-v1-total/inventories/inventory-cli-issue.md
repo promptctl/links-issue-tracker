@@ -1012,7 +1012,7 @@ All eight route through one handler `transitionLeaf(spec)`
 
 Registry rows and summaries:
 - `start` — "Claim issue work", group `operations` (`register.go`)
-- `done` — "Finish claimed work (success path; requires in_progress)" (`register.go`)
+- `done` — "Finish work (success path; from any non-closed state)" (`register.go`)
 - `close` — "Close without finishing (wontfix / obsolete / duplicate; from any non-closed state)" (`register.go`)
 - `open` — "Reopen issue(s)" (`register.go`)
 - `archive` — "Archive issue(s)", group `retention` (`register.go`)
@@ -1102,9 +1102,7 @@ positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason 
 - **There is no from-state precondition on `done`.** `Store.Apply` performs no
   status-precondition check (`internal/store/store.go`), and
   `applyStatusAction` is total over the leaf states
-  (`internal/model/lifecycle/status_states.go`). The registry summary
-  "requires in_progress" (`register.go`) is not enforced by any code path in
-  this repo. A same-state transition is a no-op that records nothing
+  (`internal/model/lifecycle/status_states.go`). A same-state transition is a no-op that records nothing
   (`status_states.go`, `internal/store/store.go`).
 
 ### 2.11 `lit start` takeover gate
@@ -1299,7 +1297,7 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
 | `ServedFromNewLane` | `Row`, `Lane model.LaneID` | a ticket in a lane this checkout does **not** hold — produced by step 4 alone (`next_route.go`) |
 | `ServedFromDependency` | `Row`, `Lane model.LaneID`, `Gates string` | step 1b's or 2b's on-path dependency; `Gates` is the id of the blocked row it unblocks, so the pick explains itself (`next_route.go`) |
 | `ServedPastExhaustion` | `Row`, `Lane model.LaneID`, `Exhaustion Exhausted` | the checkout's own epic(s) have open work, none of it reachable, and the global pool has a ready ticket outside them — step 3 (`next_route.go`) |
-| `Exhausted` | `Epics []string`, `Blocked []rowReach`, `OffPath []rowReach` | the same, with nothing ready in the global pool either — step 3; `OffPath` is the rows outside the scope a focus label withheld from the pool, set only on the terminal answer (`next_route.go`) |
+| `Exhausted` | `Epics []string`, `Blocked []rowReach`, `Held []rowReach`, `OffPath []rowReach` | the same, with nothing ready in the global pool either — step 3; `OffPath` is the rows outside the scope a focus label withheld from the pool, set only on the terminal answer (`next_route.go`) |
 | `NoWork` | `Unreachable []rowReach` | the global pool produced nothing — step 4 (`next_route.go`) |
 
 `Exhausted` and `NoWork` implement `error` and travel outward as themselves
@@ -1367,10 +1365,10 @@ If `len(ownLanes) > 0` (`next_route.go`):
      where `ourScope` is `func(lane) bool { return mine(lane) || ourEpic(lane) }`,
      `onPathDependency(gating, laneOf)` →
      **`ServedFromDependency{Row: dep.Row, Lane: laneOf(dep.Row), Gates: dep.Gates, Blocker: dep.ID}`**.
-3. Else `exhausted := Exhausted{Epics, Blocked}` (`next_route.go`), where
+3. Else `exhausted := Exhausted{Epics, Blocked, Held}` (`next_route.go`), where
    `Epics` is `slices.Sorted(maps.Keys(ownEpics))` and `Blocked` is
    `blockedRows(gating)` — the walk step 2b declined; `blockedRows` drops the
-   gated id. When step 4's pick finds nothing, `OffPath` is set to
+   gated id. `Held` is `heldByThemselves` over the rows in `ourScope`: the open rows, in rank order, that `IssueReadiness.HeldByItself()` reports held by a reason about the row itself (a reserved label, a missing field) rather than by a dependency or an earlier sibling, each classified by `reachOf`. When step 4's pick finds nothing, `OffPath` is set to
    `withheldByScope` over the focus-excluded rows whose lane `ourScope` does
    not admit. If step 4's pick finds a row →
    **`ServedPastExhaustion{Row, Lane: laneOf(row), Exhaustion: exhausted}`**;
@@ -1429,8 +1427,8 @@ when `Epics` is empty, else `"under the epic with "` +
 `reachAwaitingOutside` (so when `Blocked` is empty too), else the one route
 ``"to stay, file the ticket that clears a blocker <home()>, then make that blocker wait on it with `lit dep add --from <new> --to <blocker>`"``.
 `Exhausted.why()`:
-- `Blocked` empty: `"no ready work in <scope> — nothing else is queued behind what's already in progress"`
-- Otherwise: `"no ready work in <scope> — <describeReach(Blocked, "blocked on ", exhaustedNotes)>"`
+- `"no ready work in <scope> — <clauses>"`, the clauses being the non-empty ones of `describeReach(Blocked, "blocked on ", exhaustedNotes)` and `describeReach(Held, "held here: ", exhaustedNotes)`, joined by `"; "`
+- Both empty: `"no ready work in <scope> — nothing else is queued behind what's already in progress"`
 
 `Exhausted.outside()`: ``"`lit next` has nothing ready outside it either"``
 when `OffPath` is empty, else
@@ -1960,5 +1958,3 @@ plus at most one positional topic.
    (`completion.go`), `nestUnder` on a missing nest point (`register.go`),
    and `store.planLifecycleAction` on an impostor action
    (`internal/store/store.go`).
-8. **The `done` "requires in_progress" claim in the registry summary
-   (`register.go`) has no enforcing code path** — see §2.10.
