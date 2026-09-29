@@ -586,6 +586,10 @@ func listLeaf(surface listSurface) (leaf[listScope], *string) {
 		// A surface's positionals are parent ids too, so `children <id>` and
 		// `ls --parent <id>` build the same filter. [LAW:one-source-of-truth]
 		parentIDs = append(parentIDs, positional...)
+		limitValue, err := query.ParseLimit(*limit)
+		if err != nil {
+			return fmt.Errorf("parse --limit: %w", err)
+		}
 		filter := storage.ListIssuesFilter{
 			Statuses:        statuses,
 			IssueTypes:      issueTypes,
@@ -595,7 +599,7 @@ func listLeaf(surface listSurface) (leaf[listScope], *string) {
 			Assignees:       toSlice(strings.TrimSpace(*assignee)),
 			IncludeArchived: *includeArchived,
 			IncludeDeleted:  *includeDeleted,
-			Limit:           *limit,
+			Limit:           limitValue,
 		}
 		if strings.TrimSpace(*sortExpr) != "" {
 			// [LAW:one-source-of-truth] Reuse the one store sort parser; the

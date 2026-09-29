@@ -11,6 +11,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/query"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workflows"
 )
@@ -169,6 +170,10 @@ func workableLeaf(view workableView) appLeaf {
 		if err != nil {
 			return err
 		}
+		limitValue, err := query.ParseLimit(*limit)
+		if err != nil {
+			return fmt.Errorf("parse --limit: %w", err)
+		}
 		// Backlog is exactly the "ordinary read command" surface: printed first,
 		// so unpushed/unfetched drift is the first thing on screen rather than a
 		// diagnostic nobody runs. (`next` — next.go — prints the same warning at
@@ -181,7 +186,7 @@ func workableLeaf(view workableView) appLeaf {
 			issueType: issueTypeValue,
 			status:    statusState,
 			labels:    splitCSV(*labels),
-			limit:     *limit,
+			limit:     limitValue,
 			columns:   columns,
 			all:       *all,
 		}

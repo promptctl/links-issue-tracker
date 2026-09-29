@@ -41,6 +41,9 @@ func TestFieldRefusalsAreDeterministicRefusals(t *testing.T) {
 	runLs := func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 		return runListWithStore(ctx, stdout, ap.Store, workspaceReadyPolicy(ap), args)
 	}
+	runBacklog := func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+		return runWorkable(ctx, stdout, ap, args, backlogView)
+	}
 
 	type runner func(context.Context, io.Writer, *app.App, []string) error
 	cases := []struct {
@@ -73,6 +76,8 @@ func TestFieldRefusalsAreDeterministicRefusals(t *testing.T) {
 		{"ls flag window inverted", runLs, []string{"--updated-after", "2026-02-01T00:00:00Z", "--updated-before", "2026-01-01T00:00:00Z"}, ExitValidation, "validation_refused"},
 		{"ls negative --limit", runLs, []string{"--limit", "-1"}, ExitValidation, "validation_refused"},
 		{"ls negative query limit", runLs, []string{"--query", "limit:-1"}, ExitValidation, "validation_refused"},
+		{"ls negative --limit beside a query limit", runLs, []string{"--limit", "-1", "--query", "limit:5"}, ExitValidation, "validation_refused"},
+		{"backlog negative --limit", runBacklog, []string{"--limit", "-1"}, ExitValidation, "validation_refused"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
