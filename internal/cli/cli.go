@@ -614,28 +614,29 @@ func listLeaf(surface listSurface) (leaf[listScope], *string) {
 			filter.HasComments = &value
 		}
 		if visited["updated-after"] {
-			parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(*updatedAfter))
+			parsed, err := query.ParseTimestamp(*updatedAfter)
 			if err != nil {
 				return fmt.Errorf("parse --updated-after: %w", err)
 			}
 			filter.UpdatedAfter = &parsed
 		}
 		if visited["updated-before"] {
-			parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(*updatedBefore))
+			parsed, err := query.ParseTimestamp(*updatedBefore)
 			if err != nil {
 				return fmt.Errorf("parse --updated-before: %w", err)
 			}
 			filter.UpdatedBefore = &parsed
 		}
-		if strings.TrimSpace(*queryExpr) != "" {
-			parsed, err := query.Parse(*queryExpr)
-			if err != nil {
-				return err
-			}
-			filter, err = query.Merge(filter, parsed.Filter)
-			if err != nil {
-				return err
-			}
+		// [LAW:dataflow-not-control-flow] An empty query parses to an empty
+		// filter, so the merge always runs and the flag-built filter always
+		// meets the whole-filter rules, query or no query.
+		parsed, err := query.Parse(*queryExpr)
+		if err != nil {
+			return err
+		}
+		filter, err = query.Merge(filter, parsed.Filter)
+		if err != nil {
+			return err
 		}
 		// [LAW:dataflow-not-control-flow] Default status filter is data, not a branch
 		// around ListIssues. Apply the active-work default (exclude closed) only when

@@ -38,7 +38,7 @@ func parse(input string) (storage.ListIssuesFilter, error) {
 			return storage.ListIssuesFilter{}, err
 		}
 	}
-	return filter, nil
+	return filter, validateFilter(filter)
 }
 
 // Merge joins the flag-built filter (base) with the query-built one
@@ -182,14 +182,6 @@ func applyTerm(filter *storage.ListIssuesFilter, term string) error {
 			// silent fallback to the uncapped default.
 			return fmt.Errorf("limit must be an integer, got %q", value)
 		}
-		if limit < 0 {
-			// [LAW:no-silent-failure] A negative limit is always a typo; without
-			// this, Merge's `> 0` guard (and the store's `capLimit`, which treats
-			// `<= 0` as uncapped) would swallow it and silently return everything.
-			// Zero stays legal — it IS the uncapped default, matching `--limit 0`,
-			// so rejecting it would break flag/query parity on a valid value.
-			return fmt.Errorf("limit must be non-negative, got %q", value)
-		}
 		filter.Limit = limit
 		return nil
 	case term == "archived":
@@ -234,12 +226,9 @@ func applyTimeTerm(filter *storage.ListIssuesFilter, expr string) error {
 	if err != nil {
 		return fmt.Errorf("parse updated term %q: %w", "updated"+expr, err)
 	}
-	parsed, err := time.Parse(time.RFC3339, value)
+	parsed, err := ParseTimestamp(value)
 	if err != nil {
-		parsed, err = time.Parse(time.RFC3339Nano, value)
-		if err != nil {
-			return fmt.Errorf("updated timestamp must be RFC3339")
-		}
+		return fmt.Errorf("parse updated term %q: %w", "updated"+expr, err)
 	}
 	switch comparator {
 	case ">=", ">":
@@ -300,7 +289,29 @@ func tokenize(input string) ([]string, error) {
 	return out, nil
 }
 
+// ParseTimestamp reads one bound of the updated window. The updated term and
+// the --updated-after/--updated-before flags all call it, so the listing has
+// one timestamp rule and one refusal for breaking it. [LAW:single-enforcer]
+func ParseTimestamp(value string) (time.Time, error) {
+	parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(value))
+	if err != nil {
+		return time.Time{}, model.ValidationError{Message: fmt.Sprintf("timestamp must be RFC3339, got %q", value)}
+	}
+	return parsed, nil
+}
+
+// validateFilter holds the rules that span the whole filter. Merge ends with it,
+// so a filter built from flags alone meets the same rules as one built from a
+// query. Parse ends with it too, because Merge takes a query's limit only when
+// it is positive: a negative one would be dropped before Merge's check saw it.
+// [LAW:single-enforcer]
 func validateFilter(filter storage.ListIssuesFilter) error {
+	if filter.Limit < 0 {
+		// [LAW:no-silent-failure] A negative limit is always a typo; the store's
+		// `capLimit` treats `<= 0` as uncapped and would silently return
+		// everything. Zero stays legal: it IS the uncapped default.
+		return fmt.Errorf("limit must be non-negative, got %d", filter.Limit)
+	}
 	if filter.UpdatedAfter != nil && filter.UpdatedBefore != nil && filter.UpdatedAfter.After(*filter.UpdatedBefore) {
 		return fmt.Errorf("updated-after cannot be greater than updated-before")
 	}
