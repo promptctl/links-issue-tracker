@@ -170,6 +170,18 @@ type rowReach struct {
 	Kind reachKind
 }
 
+// name is how a diagnostic names the entry. A dependency read through a ticket
+// under it is named as both, "<ticket> under <epic>": the note's `lit start` or
+// `lit show` acts on the ticket, since an epic cannot be started, and the epic
+// is what blocks. Every other entry is its own id. [LAW:dataflow-not-control-flow]
+// the last inch of rendering, where the two arms are different phrases.
+func (r rowReach) name() string {
+	if r.Row.ID == "" || r.Row.ID == r.ID {
+		return r.ID
+	}
+	return fmt.Sprintf("%s under %s", r.Row.ID, r.ID)
+}
+
 // reachOf classifies one row, consuming capacityFor rather than re-deriving
 // takeability so routing and the diagnostics read one authority.
 // [LAW:one-source-of-truth]
@@ -649,7 +661,7 @@ func nameIDs(ids []string) string {
 func describeReach(rows []rowReach, lead string, notes reachNotes) string {
 	byKind := map[reachKind][]string{}
 	for _, row := range rows {
-		byKind[row.Kind] = append(byKind[row.Kind], row.ID)
+		byKind[row.Kind] = append(byKind[row.Kind], row.name())
 	}
 	var parts []string
 	for kind, note := range notes {

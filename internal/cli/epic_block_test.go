@@ -370,10 +370,10 @@ func TestRouteNextDescendsAnEpicBlockerToItsWorkableChild(t *testing.T) {
 			h := newReadyTestHarness(t)
 			_ = h.createIssue(storage.CreateIssueInput{Title: "unrelated", Topic: "other", IssueType: "task"})
 			epicB := h.createIssue(storage.CreateIssueInput{Title: "B", Topic: "epic-block", IssueType: "epic"})
-			b1 := h.createIssue(storage.CreateIssueInput{Title: "b1", Topic: "epic-block", IssueType: "task", ParentID: epicB.ID})
+			b1 := h.createIssue(storage.CreateIssueInput{Title: "b1", Topic: "epic-block", IssueType: "task", ParentID: epicB.ID, Lane: "b1"})
 			h.transition(b1.ID, model.Start{Assignee: "tester"})
 			h.transition(b1.ID, model.Done{})
-			b2 := h.createIssue(storage.CreateIssueInput{Title: "b2", Topic: "epic-block", IssueType: "task", ParentID: epicB.ID})
+			b2 := h.createIssue(storage.CreateIssueInput{Title: "b2", Topic: "epic-block", IssueType: "task", ParentID: epicB.ID, Lane: "b2"})
 			epicA := h.createIssue(storage.CreateIssueInput{Title: "A", Topic: "epic-block", IssueType: "epic"})
 			parent := epicA.ID
 			for level := 1; level < depth; level++ {
@@ -416,6 +416,19 @@ func TestRouteNextDescendsAnEpicBlockerToItsWorkableChild(t *testing.T) {
 			// row is never gathered, and reading that would repeat the bug.
 			if kind := exhausted.Blocked[0].Kind; kind != reachHeldFresh {
 				t.Fatalf("blocker %s classified as %v, want reachHeldFresh (%s is held by another checkout)", epicA.ID, kind, a1.ID)
+			}
+
+			// Holding only b1's closed lane, b2 is ours by epic but not by lane,
+			// so step 1b does not look at it and exhaustion does. a1 is free, so
+			// the blocker is ours to take — and the line must name a1, the
+			// ticket `lit start` can act on, not A, which cannot be started.
+			b1Lane := model.LaneOf(b1, &epicB)
+			exhausted, ok = routeNext(rows, details, epics, claims.Standings{b1Lane: heldBy(selfAttribution)}, selfAttribution, focusScope{}).(Exhausted)
+			if !ok {
+				t.Fatalf("holding only %s's lane, routeNext did not report exhaustion", b1.ID)
+			}
+			if want := a1.ID + " under " + epicA.ID + " (on your path and yours to take"; !strings.Contains(exhausted.Error(), want) {
+				t.Fatalf("Exhausted = %q, want it to contain %q", exhausted.Error(), want)
 			}
 		})
 	}

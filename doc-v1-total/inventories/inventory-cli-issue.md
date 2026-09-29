@@ -1399,9 +1399,11 @@ now: `reachTakeable`, `reachHeldFresh`, `reachNotReady`, `reachOutOfView`, plus
 - `reachNotReady`: `"not startable — blocked by a dependency, or in flight and not abandoned"`
 - `reachOffFocusPath`: ``"off the focus path this run answered over — `lit next --all` to route over the whole queue"``
 
-`describeReach(rows, lead, notes)` renders `"<lead><ids> (<note>)"` for each kind
+`describeReach(rows, lead, notes)` renders `"<lead><names> (<note>)"` for each kind
 that has rows, joined by `"; "`, in `reachKind` declaration order
-(`next_route.go`). `nameIDs` names at most `maxNamedPerKind = 12` ids and
+(`next_route.go`). An entry's name is its `ID`, or `"<Row.ID> under <ID>"` when
+it carries a `Row` whose id differs — a dependency read through a ticket under it
+(`rowReach.name`, `next_route.go`). `nameIDs` names at most `maxNamedPerKind = 12` ids and
 otherwise appends `" and <n> more"` (`next_route.go`).
 
 **Terminal messages.** `Exhausted.Error()` (`next_route.go`): `scope` is
