@@ -673,7 +673,8 @@ The repair capability is asked once, up front: `storage.Repair.Of(ap.Store)`; a 
 ### 4.2 Checks and output (stdout, in order)
 
 1. `printWorkspaceIdentity` (`doctor.go`):
-   `workspace: storage_dir="<dir>" workspace_id=<id> issue_prefix=<p> issue_prefix_source=configured|derived git_common_dir="<dir>"` — path fields quoted with `%q`; source is `derived` when `ws.IssuePrefix.Derived()`.
+   `workspace: storage_dir="<dir>" workspace_id=<id> issue_prefix="<p>" issue_prefix_source=configured|derived id_prefixes=<census> git_common_dir="<dir>"` — path fields and `issue_prefix` quoted with `%q`; `<p>` is `ws.IssuePrefix.Stored()`, legal or not; source is `derived` when `ws.IssuePrefix.Derived()`; `<census>` is `readIDPrefixCensus` (`prefix_census.go`), rendered as in `lit prefix set`.
+   Then `printPrefixMismatch` (`doctor.go`), printed only when `census.mismatch(Stored())` — readable ids exist and none carries the stored prefix: `prefix: issue_prefix "<p>" matches none of this store's issue ids (<census>) — run 'lit prefix set <adoptable>' to preview the change`, where `<adoptable>` is `census.adoptable()` (`prefix_census.go`): the first census prefix, in count order, for which `workspace.ConfiguredPrefix` succeeds and returns it unchanged, else the literal `<prefix>`.
 2. `resolveBuildStatusNote(time.Now())` on its own line (`doctor.go`).
 3. `integrity_check=<v> foreign_key_issues=<n> invalid_related_rows=<n> orphan_history_rows=<n> rank_inversions=<n|unchecked> dependency_cycle=<none|a->b->c|unchecked> parent_cycle=<none|a->b->c> wait_loops=<n|unchecked>` (`doctor.go`). Fields named in `HealthReport.Unchecked` render as `unchecked`; `wait_loops` comes from `doctorWaitLoops` (`wait_loops.go`), which is `unchecked` when `ParentCycle` is non-empty and otherwise counts `findWaitLoops`.
 4. `printWaitLoops` (`wait_loops.go`) — one line per loop: `wait loop: <clause>, <clause>, … — none of these is ready until one of the links is removed or one of the issues is closed`. Each clause is one `waitHop`, every link between one pair: `<waiter> <phrase> <prereq>[ and <phrase> <prereq>]`, with the phrase from `waitPhrases` by the link's `waitKind`: `depends on`, `waits on its child`, `waits on earlier sibling`. The links are `fetchWaitGraph` over every open or in-progress issue, less the inherited ones `settleWaits` drops (`heldAgainst`), so no inherited link is on a loop. `stuck` peels off every issue whose prereqs can all finish; `loopsIn` walks the rest in id order and gives each one on no loop already named the shortest loop through it.
@@ -695,7 +696,8 @@ The repair capability is asked once, up front: `storage.Repair.Of(ap.Store)`; a 
 
 ### 4.4 Exit behavior
 
-- Any `report.Errors` → `CorruptionError{Message: strings.Join(report.Errors, "; ")}` → **exit 7**, and it wins over the divergence exit (`doctor.go`).
+- Any `report.Errors` → `CorruptionError{Message: strings.Join(report.Errors, "; ")}` → **exit 7**, and it wins over both exits below (`doctor.go`).
+- A stored prefix the rules refuse → `ws.IssuePrefix.Mintable()`'s `StoredPrefixError` → **exit 3**, reason `stored_prefix_refused`. Returned after every stdout line and after the divergence owner notification, and ahead of the divergence exit (`doctor.go`).
 - A divergence whose failure is `persistent()` (age ≥ 24h or ahead+behind > 10) → `SyncFailureError{Class: diverged_unresolved, …}` → **exit 5**, block printed by the error sink, and the owner is notified for that class (`doctor.go`).
 - Otherwise nil → exit 0.
 

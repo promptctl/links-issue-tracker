@@ -363,6 +363,19 @@ func sortEvents(events []model.IssueEvent) []model.IssueEvent {
 	return events
 }
 
+// ListIssueIdentities reads every record's id and topic, retention ignored.
+func (e *Engine) ListIssueIdentities(ctx context.Context) ([]storage.IssueIdentity, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	identities := make([]storage.IssueIdentity, 0, len(e.issues))
+	for _, rec := range e.issues {
+		identities = append(identities, storage.IssueIdentity{ID: rec.id, Topic: rec.topic})
+	}
+	slices.SortFunc(identities, func(a, b storage.IssueIdentity) int { return strings.Compare(a.ID, b.ID) })
+	return identities, nil
+}
+
 // LocalIssueCount reports how many issues this store holds — the adopt-safety
 // signal, so it counts what would be lost rather than what is in the flow.
 func (e *Engine) LocalIssueCount(ctx context.Context) (int64, error) {

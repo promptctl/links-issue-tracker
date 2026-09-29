@@ -11,15 +11,16 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-// testIssuePrefix mints a PrefixSpec for fixtures through the same validating
-// boundary production uses; fixtures cannot hold an un-normalized prefix.
-func testIssuePrefix(t testing.TB, raw string) workspace.PrefixSpec {
+// testIssuePrefix mints a legal PrefixState for fixtures through the same
+// validating boundary production uses; fixtures cannot hold an un-normalized
+// prefix.
+func testIssuePrefix(t testing.TB, raw string) workspace.PrefixState {
 	t.Helper()
 	spec, err := workspace.ConfiguredPrefix(raw)
 	if err != nil {
 		t.Fatalf("ConfiguredPrefix(%q) error = %v", raw, err)
 	}
-	return spec
+	return workspace.LegalPrefixState(spec)
 }
 
 // initRepoForPrefixTest stamps a fresh git repo + lit init in a temp dir and

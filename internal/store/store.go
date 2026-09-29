@@ -1844,6 +1844,26 @@ func (s *Store) ListTopics(ctx context.Context) ([]string, error) {
 	return topics, rows.Err()
 }
 
+// ListIssueIdentities reads two columns of every row and hydrates nothing, so
+// it cannot reach the lifecycle-children walk that ListIssues' hydration takes
+// and a parent loop never returns from.
+func (s *Store) ListIssueIdentities(ctx context.Context) ([]storage.IssueIdentity, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, topic FROM issues ORDER BY id ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("list issue identities: %w", err)
+	}
+	defer rows.Close()
+	identities := []storage.IssueIdentity{}
+	for rows.Next() {
+		var identity storage.IssueIdentity
+		if err := rows.Scan(&identity.ID, &identity.Topic); err != nil {
+			return nil, err
+		}
+		identities = append(identities, identity)
+	}
+	return identities, rows.Err()
+}
+
 // listRelations returns every relation incident to one issue.
 //
 // The `OR` across two columns is the shape listRelationsForIDs exists to avoid,

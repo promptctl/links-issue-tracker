@@ -332,18 +332,26 @@ Defaults are set in `Load` (`internal/config/config.go`).
 - `UpdateConfig(path, mutate)` is the single read-modify-write boundary
   (`internal/workspace/workspace.go`).
 - Issue-prefix resolution (`internal/workspace/workspace.go`, which takes the config
-  path as its second parameter so it can name that file in its own remediation) ranks three
+  path as its second parameter so it can name that file in its own refusal) ranks three
   sources: a non-blank configured value wins and is normalized; a blank one is filled by the
-  caller's explicit `PrefixRequest` if present, else by derivation. A stored value the rules
-  refuse is the typed `StoredPrefixError`, whose `Unwrap` returns `ErrIssuePrefixRefused`, so
-  it exits 3 with its siblings but classifies as its own reason `stored_prefix_refused`, and
-  its message names the config file by path and says to edit `issue_prefix` in it — because
-  no command clears that state: `lit prefix set` and `lit doctor` both resolve the workspace
-  first and die in the same place. The separate reason exists for that last fact:
-  `validation_refused`'s remediation ends "adjust the command to satisfy it", which is false
-  for a refusal no command touches, and `stored_prefix_refused`'s names no command at all. A request that contradicts a non-blank configured value is
-  refused, not applied, naming `lit prefix set <p>`, which previews the change while
-  `--apply` writes it. The resolved value is persisted
+  caller's explicit `PrefixRequest` if present, else by derivation. The result is a
+  `PrefixState`: the legal `PrefixSpec` issues are minted under, or a stored value the rules
+  refuse. A refused value does not fail resolution — reading, `lit doctor` and `lit prefix
+  set` all run in that state — and it is left in `config.json` exactly as found.
+  `PrefixState.Mintable()` is the one place the refusal is raised: it returns the typed
+  `StoredPrefixError`, naming the config file and the stored value, which every minting path
+  (`lit new`, `lit followup`, `lit import`, `lit init`) returns before any effect.
+  `StoredPrefixError.Unwrap` returns `ErrIssuePrefixRefused`, so it exits 3 with its
+  siblings but classifies as its own reason `stored_prefix_refused`, whose remediation names
+  `lit prefix set <prefix>` — the command it asks for is a different one, not an adjusted
+  one, so `validation_refused`'s "adjust the command to satisfy it" would be false.
+  `PrefixState.Stored()` is the text `config.json` carries, legal or not, typed
+  `StoredPrefix` (a named string, so a string-typed minting field refuses it without a
+  conversion), and is what the
+  display surfaces (`lit workspace`, `lit doctor`, `lit prefix set`) print. A request that
+  contradicts a non-blank configured value, legal or refused, is refused, not applied,
+  naming `lit prefix set <p>`, which previews the change against the ids the store holds
+  while `--apply` writes it. The resolved value is persisted
   back into `config.json` immediately (`internal/workspace/workspace.go`); a value
   that came from a request persists with `derived=false`, so `lit doctor` reports
   `issue_prefix_source=configured`.

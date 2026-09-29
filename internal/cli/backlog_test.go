@@ -34,7 +34,11 @@ func newBacklogTestHarness(t testing.TB) backlogTestHarness {
 func (h backlogTestHarness) createIssue(input storage.CreateIssueInput) (id string) {
 	h.t.Helper()
 	if input.Prefix == "" {
-		input.Prefix = h.ap.Workspace.IssuePrefix.Value()
+		prefix, err := h.ap.Workspace.IssuePrefix.Mintable()
+		if err != nil {
+			h.t.Fatalf("Mintable() error = %v", err)
+		}
+		input.Prefix = prefix.Value()
 	}
 	// Fixtures author top-to-bottom in listing order, so append at the bottom
 	// to make creation order equal rank order. Stated rather than inherited —

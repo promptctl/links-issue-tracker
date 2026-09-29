@@ -49,6 +49,9 @@ General contract: every method is a pure read from the caller's view; two identi
 **`ListTopics(ctx) ([]string, error)`** — `internal/storage/contract.go`
 - Distinct non-empty topics that *live* issues carry, ascending. Derived vocabulary, never stored (`internal/storage/contract.go`).
 
+**`ListIssueIdentities(ctx) ([]IssueIdentity, error)`** — `internal/storage/contract.go`
+- Every issue's `IssueIdentity{ID, Topic}` (`internal/storage/issues.go`), archived and deleted included, id ascending, and nothing else. Nothing is hydrated, so it never walks the hierarchy and answers in a store whose parent links loop, where `ListIssues` does not return. Its reader is the CLI's prefix census, which `lit doctor` takes before anything has shown the hierarchy is sound (`internal/storage/contract.go`).
+
 **`ListAllEvents(ctx) ([]model.IssueEvent, error)`** — `internal/storage/contract.go`
 - Whole issue history, oldest first by creation time, ties broken by event id ascending (`internal/storage/contract.go`).
 - Used by export and by claim derivation; claim derivation needs the whole history because the establishing event for a lane's holder can be arbitrarily old, so a recency cutoff would drop the claims it was meant to speed up (`internal/storage/contract.go`).
@@ -593,6 +596,8 @@ Order of checks is stated as contract: the parent must be resolved before the co
 
 **`ListTopics`** (`internal/storage/memory/issues.go`) — iterates `issues`; skips records whose retention is `model.Deleted` and records with an empty topic; dedupes; `slices.Sort`. **Deletion removes an issue's topic from the vocabulary; archival does not**.
 
+**`ListIssueIdentities`** (`internal/storage/memory/issues.go`) — one `IssueIdentity{ID: rec.id, Topic: rec.topic}` per record in `issues`, retention ignored; `slices.SortFunc` by id.
+
 **`ListAllEvents`** (`internal/storage/memory/issues.go`) — `sortEvents(cloneEvents(e.events))`. The append-only slice already holds true recording order, which is a better answer, and it is deliberately not the one given, because a same-tick tie is where two engines would part company.
 
 **`sortEvents`** (`internal/storage/memory/issues.go`) — `slices.SortStableFunc` on `cmp.Or(a.CreatedAt.Compare(b.CreatedAt), strings.Compare(a.ID, b.ID))`. It is the one place this engine orders history.
@@ -992,7 +997,7 @@ Stated in `internal/storage/memory/doc.go`:
 
 ### 3.2 The 36 registered cases (`internal/storage/conformance/conformance.go`)
 
-`create_read_roundtrip`, `create_defaults`, `create_requires_title`, `create_normalizes_topic`, `create_under_missing_parent_is_not_found`, `get_missing_issue_is_not_found`, `apply_field_patch`, `apply_status_transition`, `apply_missing_issue_is_not_found`, `apply_to_container_is_refused`, `container_state_follows_live_children`, `history_records_mutations`, `list_defaults_to_rank_order`, `list_filters_select`, `list_by_parent`, `list_hides_archived_and_deleted`, `list_sorts_and_limits`, `list_breaks_sort_ties_by_id`, `list_accepts_exactly_the_contract_sort_fields`, `list_sorts_status_by_stored_encoding`, `events_are_totally_ordered`, `rank_intents_reorder`, `rank_intents_resolve_across_frames`, `rank_set_imposes_order`, `close_redirects_to_a_canonical`, `comments_roundtrip`, `labels_roundtrip`, `relations_roundtrip`, `relations_batch_buckets_edges`, `parent_wiring`, `topics_derive_from_issues`, `export_carries_whole_store`, `bulk_apply_creates_and_updates`, `bulk_apply_compensates_a_failed_batch`, `import_tree_maps_local_ids`, `attribution_stamps_events`, `local_issue_count_tracks_creates`.
+`create_read_roundtrip`, `create_defaults`, `create_requires_title`, `create_normalizes_topic`, `create_under_missing_parent_is_not_found`, `get_missing_issue_is_not_found`, `apply_field_patch`, `apply_status_transition`, `apply_missing_issue_is_not_found`, `apply_to_container_is_refused`, `container_state_follows_live_children`, `history_records_mutations`, `list_defaults_to_rank_order`, `list_filters_select`, `list_by_parent`, `list_hides_archived_and_deleted`, `list_sorts_and_limits`, `list_breaks_sort_ties_by_id`, `list_accepts_exactly_the_contract_sort_fields`, `list_sorts_status_by_stored_encoding`, `events_are_totally_ordered`, `rank_intents_reorder`, `rank_intents_resolve_across_frames`, `rank_set_imposes_order`, `close_redirects_to_a_canonical`, `comments_roundtrip`, `labels_roundtrip`, `relations_roundtrip`, `relations_batch_buckets_edges`, `parent_wiring`, `topics_derive_from_issues`, `issue_identities_cover_every_row`, `export_carries_whole_store`, `bulk_apply_creates_and_updates`, `bulk_apply_compensates_a_failed_batch`, `import_tree_maps_local_ids`, `attribution_stamps_events`, `local_issue_count_tracks_creates`.
 
 ### 3.3 Every enforced invariant, by case
 
@@ -1187,6 +1192,9 @@ Stated in `internal/storage/memory/doc.go`:
 
 **`topics_derive_from_issues`**
 - Three issues across two topics yield exactly `["parser","renderer"]` — distinct, ascending, never a stored list that could disagree with the issues.
+
+**`issue_identities_cover_every_row`**
+- An epic, its child, an archived and a deleted issue: `ListIssueIdentities` returns all four, id ascending, each with the topic it was created under — retention is ignored because an archived or deleted id still occupies its prefix.
 
 **`export_carries_whole_store`**
 - Export carries the **whole** store, archived work included; an export honoring the listing default would silently drop archived work from every backup and every diff.

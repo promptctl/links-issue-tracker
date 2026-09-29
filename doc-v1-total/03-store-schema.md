@@ -130,6 +130,7 @@ All issue reads share one 18-column projection (`store.go`) and one hydration pa
 - `getIssuesByIDs`: one `IN` query; missing ids are silently absent from the map.
 - `GetIssueDetail` (`store.go`): the issue + its relations (all incident, ordered by `created_at`), comments, events, then one batch hydrate of every relation counterparty plus the redirect target; buckets into Parent/Children/DependsOn/Blocks; siblings = the parent's other children in rank order (empty for parentless issues); `Related` carries only manual `related-to` edges; the redirect target hydrates independently of the graph and is absent if the target row vanished.
 - `ListTopics`: distinct non-empty topics of non-deleted issues, ascending.
+- `ListIssueIdentities`: `SELECT id, topic FROM issues ORDER BY id ASC` — every row, retention ignored, nothing hydrated, so it answers where a parent loop stops `ListIssues`.
 
 ### ListIssues filtering
 

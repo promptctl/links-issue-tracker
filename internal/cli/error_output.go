@@ -196,12 +196,11 @@ func commandErrorReason(err error) commandReason {
 	// lit could not settle on an issue prefix, and the three ways it can fail
 	// split by the ACT that clears them, which is what a reason names.
 	//
-	// A stored issue_prefix config.json itself refuses is a refusal of a file
-	// on disk, not of the command as issued, and no command clears it — `lit
-	// prefix set` and `lit doctor` resolve the workspace before they run, so
-	// they die here too. It takes its own reason for the same cause
-	// template_shape_refused has one: validation_refused's remediation ends
-	// "adjust the command to satisfy it", which is false here, and an agent
+	// A stored issue_prefix the rules refuse is a refusal of the workspace, not
+	// of the command as issued: the command is fine, and a different one —
+	// `lit prefix set` — has to run first. It takes its own reason for the same
+	// cause template_shape_refused has one: validation_refused's remediation
+	// ends "adjust the command to satisfy it", which is false here, and an agent
 	// that acts on the remediation line rather than on the message body is the
 	// loop this whole mapping exists to prevent. Checked BEFORE the sentinel it
 	// unwraps to, so the narrower answer wins.
@@ -270,13 +269,12 @@ func commandErrorRemediation(reason commandReason) string {
 	case reasonTemplateShapeRefused:
 		return "Edit the template override the message names so it is either plain content with no LIT INTEGRATION markers or exactly one whole marked block, or delete the override to fall back to lit's bundled default. The command itself is fine; rerunning it unchanged repeats this refusal."
 	case reasonStoredPrefixRefused:
-		// Names no command at all, deliberately. Every lit command resolves the
-		// workspace before its own work runs, so every one of them refuses in
-		// this same place — and a remediation that named one would be handing the
-		// caller an act that does not work, which is the defect this whole
-		// mapping exists to remove. [LAW:no-silent-failure] the advice has to be
-		// true, not merely present.
-		return "Edit `issue_prefix` in the config file named above, setting it to a legal prefix. No lit command can clear this for you: every command resolves the workspace before its own work runs, so each one refuses in this same place. Rerunning this command unchanged repeats this refusal."
+		// Names the repair, and the preview before it: the right new prefix is
+		// usually the one the store's existing ids already use, and the preview is
+		// what shows it, so a typo is repaired to the original rather than
+		// rewritten to whatever the caller guesses. [LAW:no-silent-failure] the
+		// advice has to be an act that works, not merely present.
+		return "Run `lit prefix set <prefix>` to preview the repair — the preview lists the prefixes this store's issue ids already use — then rerun it with `--apply`. The command itself is fine; rerunning it unchanged repeats this refusal."
 	case reasonValidationRefused:
 		return "Do not retry unchanged — this refusal is deterministic and will repeat until the command or the data changes. The error message above states the rule it enforces; adjust the command to satisfy it."
 	case reasonWorkspaceBusy:

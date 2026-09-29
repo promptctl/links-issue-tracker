@@ -119,7 +119,7 @@ func TestInitAcceptsAnExplicitPrefixWhereDerivationRefuses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
-	if got := info.IssuePrefix.Value(); got != "demo" {
+	if got := info.IssuePrefix.Stored(); got != "demo" {
 		t.Fatalf("IssuePrefix = %q, want demo", got)
 	}
 	config, err := os.ReadFile(info.ConfigPath)
@@ -198,31 +198,49 @@ func rewriteStoredPrefix(t *testing.T, configPath string, prefix string) {
 	}
 }
 
-// The third way lit fails to settle on a prefix, and the one that proves why
-// this refusal names a FILE where the other two name a command.
+// storedIllegalPrefixWorkspace is a workspace named `myrepo` holding one issue
+// minted under myrepo, whose config.json then has its prefix set to one the
+// rules refuse — the typo'd-down-to-two-characters case the repair exists for.
 //
-// The test runs in a repository named `myrepo`, whose name derives cleanly on
-// purpose: in a repository that cannot derive, every command fails with the
-// DERIVE message, which also carries `issue_prefix` and would let this test
-// pass while measuring the wrong refusal entirely.
-func TestAStoredIllegalPrefixIsRefusedAndNamesTheFile(t *testing.T) {
+// The repository name derives cleanly on purpose: in one that cannot derive,
+// every command fails with the DERIVE message, which also carries
+// `issue_prefix` and would let these tests pass while measuring the wrong
+// refusal entirely.
+func storedIllegalPrefixWorkspace(t *testing.T) (info workspace.Info, issueID string, runLit func(args ...string) (string, error)) {
+	t.Helper()
 	repo := gitRepoNamed(t, "myrepo")
 	if err := runInit(t); err != nil {
 		t.Fatalf("Run(init) in a nameable repository error = %v", err)
 	}
-	info, err := workspace.Resolve(repo)
+	runLit = func(args ...string) (string, error) {
+		var out bytes.Buffer
+		err := Run(context.Background(), &out, &out, args)
+		return out.String(), err
+	}
+	out, err := runLit("new", "--title", "filed before the typo", "--topic", "probe")
+	if err != nil {
+		t.Fatalf("Run(new) error = %v\n%s", err, out)
+	}
+	issueID = issueIDFromNew(out)
+	info, err = workspace.Resolve(repo)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
 	rewriteStoredPrefix(t, info.ConfigPath, "ab")
+	return info, issueID, runLit
+}
 
-	var out bytes.Buffer
-	err = Run(context.Background(), &out, &out, []string{"new", "--title", "probe", "--topic", "probe"})
+// Minting is what a stored illegal prefix refuses, with its own reason and a
+// remediation naming the command that repairs it.
+func TestAStoredIllegalPrefixRefusesMintingAndNamesTheRepair(t *testing.T) {
+	info, _, runLit := storedIllegalPrefixWorkspace(t)
+
+	_, err := runLit("new", "--title", "probe", "--topic", "probe")
 	if err == nil {
 		t.Fatal("Run(new) over a stored illegal prefix succeeded, want a refusal")
 	}
 	if got := ExitCode(err); got != ExitValidation {
-		t.Fatalf("ExitCode = %d, want %d — a hand-fixable config is not a fault", got, ExitValidation)
+		t.Fatalf("ExitCode = %d, want %d — a repairable config is not a fault", got, ExitValidation)
 	}
 	// Its own reason, not the family's: the two command-fixable prefix refusals
 	// are cleared by adjusting the command, and this one is not, so it cannot
@@ -234,33 +252,90 @@ func TestAStoredIllegalPrefixIsRefusedAndNamesTheFile(t *testing.T) {
 	var stderr bytes.Buffer
 	WriteCommandError(&stderr, err)
 	rendered := stderr.String()
-	if strings.Contains(rendered, "Retry the command") || strings.Contains(rendered, "lit doctor") {
-		t.Fatalf("rendered error still carries the unclassified-fault advice:\n%s", rendered)
+	if strings.Contains(rendered, "Retry the command") || strings.Contains(rendered, "adjust the command") {
+		t.Fatalf("rendered error tells the caller to retry or adjust a command that was never the problem:\n%s", rendered)
 	}
-	// The assertion above is not enough:
-	// validation_refused clears "Retry the command" while still ending "adjust
-	// the command to satisfy it", which is the same false instruction in other
-	// words. No command adjusts this one.
-	if strings.Contains(rendered, "adjust the command") {
-		t.Fatalf("rendered error tells the caller to adjust a command that cannot clear this:\n%s", rendered)
+	if !strings.Contains(rendered, "lit prefix set") {
+		t.Fatalf("rendered error does not name the repair command:\n%s", rendered)
 	}
-	// The remediation has to name the config file, because it is the only thing
-	// that clears this state — see the sibling assertion below.
-	if !strings.Contains(rendered, info.ConfigPath) {
-		t.Fatalf("rendered error does not name the file to edit:\n%s", rendered)
+	if !strings.Contains(rendered, info.ConfigPath) || !strings.Contains(rendered, `"ab"`) {
+		t.Fatalf("rendered error does not name the file and the value it refuses:\n%s", rendered)
 	}
 }
 
-// Why the message above names a file and not a command: there is no command to
-// name. `lit prefix set` is the obvious thing a caller would reach for, and it
-// dies in the same place, because every workspace command resolves the
-// workspace before its own work runs. A remediation naming it would be an act
-// that does not work.
-// [LAW:no-silent-failure] the advice has to be true, not merely present.
-func TestNoCommandClearsAStoredIllegalPrefix(t *testing.T) {
+// The whole repair, in the order an operator meets it: nothing but minting is
+// refused, doctor reports the state and exits on it, init --prefix will not
+// overwrite it, and `lit prefix set` previews against the ids the store holds
+// and then repairs it.
+// [LAW:no-silent-failure] the remediation above has to name an act that works.
+func TestPrefixSetRepairsAStoredIllegalPrefix(t *testing.T) {
+	info, issueID, runLit := storedIllegalPrefixWorkspace(t)
+
+	// Reading needs no prefix to mint under, so it is not refused.
+	if out, err := runLit("show", issueID); err != nil {
+		t.Fatalf("Run(show) over a stored illegal prefix error = %v\n%s", err, out)
+	}
+
+	out, err := runLit("doctor")
+	if got := commandErrorReason(err); got != "stored_prefix_refused" {
+		t.Fatalf("doctor reason = %q (err %v), want stored_prefix_refused — a workspace that cannot mint is not healthy", got, err)
+	}
+	for _, want := range []string{
+		`issue_prefix="ab" `,
+		"id_prefixes=myrepo:1 ",
+		`prefix: issue_prefix "ab" matches none of this store's issue ids (myrepo:1) — run 'lit prefix set myrepo' to preview the change`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("doctor output missing %q:\n%s", want, out)
+		}
+	}
+
+	// init --prefix is not a second door onto the repair: it cannot see the ids.
+	out, err = runLit("init", "--skip-hooks", "--skip-agents", "--prefix", "myrepo")
+	if err == nil || !strings.Contains(err.Error(), "lit prefix set myrepo") {
+		t.Fatalf("Run(init --prefix) error = %v, want the refusal naming `lit prefix set myrepo`\n%s", err, out)
+	}
+
+	out, err = runLit("prefix", "set", "myrepo")
+	if err != nil {
+		t.Fatalf("Run(prefix set) preview error = %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "issue_prefix: ab -> myrepo (preview)") || !strings.Contains(out, "issue ids in this store use: myrepo:1") {
+		t.Fatalf("preview does not show both the stored prefix and what the ids use:\n%s", out)
+	}
+	cfg, err := workspace.ReadConfig(info.ConfigPath)
+	if err != nil || cfg.IssuePrefix != "ab" {
+		t.Fatalf("config issue_prefix after preview = %q (err %v), want ab untouched", cfg.IssuePrefix, err)
+	}
+
+	if out, err := runLit("prefix", "set", "myrepo", "--apply"); err != nil {
+		t.Fatalf("Run(prefix set --apply) error = %v\n%s", err, out)
+	}
+	out, err = runLit("new", "--title", "after the repair", "--topic", "probe")
+	if err != nil {
+		t.Fatalf("Run(new) after the repair error = %v\n%s", err, out)
+	}
+	if id := issueIDFromNew(out); !strings.HasPrefix(id, "myrepo-probe-") {
+		t.Fatalf("new id after the repair = %q, want it minted under myrepo", id)
+	}
+	if out, err := runLit("doctor"); err != nil || strings.Contains(out, "prefix: ") {
+		t.Fatalf("doctor after the repair error = %v, want a clean run with no prefix line\n%s", err, out)
+	}
+}
+
+// The repair has to work before the store exists too. A workspace command writes
+// config.json without creating the store, and init refuses a stored illegal
+// prefix before it creates one — so if `lit prefix set` needed the store, init
+// and it would each name the other and neither could run.
+func TestPrefixSetRepairsAStoredIllegalPrefixBeforeTheStoreExists(t *testing.T) {
 	repo := gitRepoNamed(t, "myrepo")
-	if err := runInit(t); err != nil {
-		t.Fatalf("Run(init) error = %v", err)
+	runLit := func(args ...string) (string, error) {
+		var out bytes.Buffer
+		err := Run(context.Background(), &out, &out, args)
+		return out.String(), err
+	}
+	if out, err := runLit("workspace"); err != nil {
+		t.Fatalf("Run(workspace) error = %v\n%s", err, out)
 	}
 	info, err := workspace.Resolve(repo)
 	if err != nil {
@@ -268,15 +343,22 @@ func TestNoCommandClearsAStoredIllegalPrefix(t *testing.T) {
 	}
 	rewriteStoredPrefix(t, info.ConfigPath, "ab")
 
-	for _, args := range [][]string{
-		{"prefix", "set", "goodprefix", "--apply"},
-		{"doctor"},
-		{"init", "--skip-hooks", "--skip-agents", "--prefix", "goodprefix"},
-	} {
-		var out bytes.Buffer
-		if err := Run(context.Background(), &out, &out, args); err == nil {
-			t.Fatalf("Run(%v) cleared a stored illegal prefix; the refusal message must then name it instead of the file", args)
-		}
+	if err := runInit(t); commandErrorReason(err) != "stored_prefix_refused" {
+		t.Fatalf("Run(init) reason = %q (err %v), want stored_prefix_refused", commandErrorReason(err), err)
+	}
+	out, err := runLit("prefix", "set", "myrepo")
+	if err != nil {
+		t.Fatalf("Run(prefix set) before the store exists error = %v\n%s", err, out)
+	}
+	// No store is a different fact from an empty one, and the preview says which.
+	if !strings.Contains(out, "issue ids in this store use: none (no store yet)") {
+		t.Fatalf("preview does not report the absent store:\n%s", out)
+	}
+	if out, err := runLit("prefix", "set", "myrepo", "--apply"); err != nil {
+		t.Fatalf("Run(prefix set --apply) error = %v\n%s", err, out)
+	}
+	if err := runInit(t); err != nil {
+		t.Fatalf("Run(init) after the repair error = %v", err)
 	}
 }
 
@@ -319,7 +401,7 @@ func TestInitReportsThePrefixItActuallyStored(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
-	if got := info.IssuePrefix.Value(); got != stored {
+	if got := info.IssuePrefix.Stored(); got != stored {
 		t.Fatalf("stored prefix = %q, want %q — init reported a value the workspace does not carry", got, stored)
 	}
 }

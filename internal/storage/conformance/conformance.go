@@ -199,6 +199,7 @@ var cases = []engineCase{
 	{"the_hierarchy_stays_a_tree", theHierarchyStaysATree},
 	{"blocks_never_runs_along_the_hierarchy", blocksNeverRunsAlongTheHierarchy},
 	{"topics_derive_from_issues", topicsDeriveFromIssues},
+	{"issue_identities_cover_every_row", issueIdentitiesCoverEveryRow},
 	{"export_carries_whole_store", exportCarriesWholeStore},
 	{"bulk_apply_creates_and_updates", bulkApplyCreatesAndUpdates},
 	{"bulk_apply_compensates_a_failed_batch", bulkApplyCompensatesFailure},
@@ -2210,6 +2211,37 @@ func topicsDeriveFromIssues(t *testing.T, ctx context.Context, st storage.Store,
 	// Topics are derived vocabulary — distinct, ascending, never a stored list
 	// that could disagree with the issues.
 	assertStrings(t, "topics", topics, []string{"parser", "renderer"})
+}
+
+// issueIdentitiesCoverEveryRow pins that the identity read ignores retention —
+// an archived or deleted issue's id still occupies its prefix — and answers in
+// id order with the topic each issue was created under.
+func issueIdentitiesCoverEveryRow(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "parser", ParentID: epic.ID})
+	archived := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "archived", Topic: "renderer"})
+	deleted := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "deleted", Topic: "renderer"})
+	if _, err := st.Apply(ctx, archived.ID, storage.Change{Action: model.Archive{}, Actor: "ada"}); err != nil {
+		t.Fatalf("Apply archive error = %v", err)
+	}
+	if _, err := st.Apply(ctx, deleted.ID, storage.Change{Action: model.Delete{}, Actor: "ada"}); err != nil {
+		t.Fatalf("Apply delete error = %v", err)
+	}
+
+	got, err := st.ListIssueIdentities(ctx)
+	if err != nil {
+		t.Fatalf("ListIssueIdentities error = %v", err)
+	}
+	want := []storage.IssueIdentity{
+		{ID: epic.ID, Topic: "core"},
+		{ID: child.ID, Topic: "parser"},
+		{ID: archived.ID, Topic: "renderer"},
+		{ID: deleted.ID, Topic: "renderer"},
+	}
+	slices.SortFunc(want, func(a, b storage.IssueIdentity) int { return strings.Compare(a.ID, b.ID) })
+	if !slices.Equal(got, want) {
+		t.Errorf("ListIssueIdentities = %v, want %v", got, want)
+	}
 }
 
 func exportCarriesWholeStore(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {

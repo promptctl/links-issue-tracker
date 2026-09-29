@@ -24,15 +24,37 @@ import (
 // confirm at a glance which store lit opened — the direct answer to "why am I
 // not seeing my issues". [LAW:one-source-of-truth] Renders the already-resolved
 // workspace.Info; it never re-resolves storage location.
-func printWorkspaceIdentity(w io.Writer, ws workspace.Info) error {
+//
+// issue_prefix is the text config.json carries, legal or not, and id_prefixes is
+// what the store's ids actually use, side by side, because the second is the
+// evidence the first is judged against.
+func printWorkspaceIdentity(w io.Writer, ws workspace.Info, census idPrefixCensus) error {
 	// Path fields use %q so values containing spaces (e.g. a checkout under
 	// "My Projects") stay unambiguous and copy-pasteable in the key=value line.
+	// issue_prefix is quoted for the same reason: a refused prefix is whatever
+	// text config.json carries, spaces and `=` included.
 	prefixSource := "configured"
 	if ws.IssuePrefix.Derived() {
 		prefixSource = "derived"
 	}
-	_, err := fmt.Fprintf(w, "workspace: storage_dir=%q workspace_id=%s issue_prefix=%s issue_prefix_source=%s git_common_dir=%q\n",
-		ws.StorageDir, ws.WorkspaceID, ws.IssuePrefix.Value(), prefixSource, ws.GitCommonDir)
+	_, err := fmt.Fprintf(w, "workspace: storage_dir=%q workspace_id=%s issue_prefix=%q issue_prefix_source=%s id_prefixes=%s git_common_dir=%q\n",
+		ws.StorageDir, ws.WorkspaceID, ws.IssuePrefix.Stored(), prefixSource, census, ws.GitCommonDir)
+	return err
+}
+
+// printPrefixMismatch renders the prefix line when — and only when — config.json
+// names a prefix none of the store's ids carry. Two arrivals produce it and one
+// sentence serves both: a stored value the rules refuse (no id was ever minted
+// under it), and a legal value sitting over a backlog minted under another, as
+// adopting a remote backlog into a differently-prefixed workspace leaves it.
+// Straight after a deliberate `lit prefix set` it is expected, so it is a report
+// and never a failure; the command it names previews before anything is written.
+func printPrefixMismatch(w io.Writer, prefix workspace.PrefixState, census idPrefixCensus) error {
+	if !census.mismatch(prefix.Stored()) {
+		return nil
+	}
+	_, err := fmt.Fprintf(w, "prefix: issue_prefix %q matches none of this store's issue ids (%s) — run 'lit prefix set %s' to preview the change\n",
+		prefix.Stored(), census, census.adoptable())
 	return err
 }
 
@@ -396,7 +418,14 @@ func doctorLeaf() appLeaf {
 		// reads the store, so it runs here, at the boundary, before the pure text
 		// rendering below.
 		syncReport := resolveDoctorSyncFreshness(ctx, ap.Workspace, ap.Store)
-		if err := printWorkspaceIdentity(stdout, ap.Workspace); err != nil {
+		census, err := readIDPrefixCensus(ctx, ap.Store)
+		if err != nil {
+			return err
+		}
+		if err := printWorkspaceIdentity(stdout, ap.Workspace, census); err != nil {
+			return err
+		}
+		if err := printPrefixMismatch(stdout, ap.Workspace.IssuePrefix, census); err != nil {
 			return err
 		}
 		// [LAW:one-source-of-truth] version.Info is the only source; resolved here
@@ -443,6 +472,13 @@ func doctorLeaf() appLeaf {
 			if ev, ok := ownerNotifyEventForFailure(syncFailure.Failure); ok {
 				maybeNotifyOwner(ctx, ap.Workspace, ev)
 			}
+		}
+		// A workspace that cannot mint is not healthy, so doctor reports the
+		// state above and then exits on it — after the owner notification, which
+		// a divergence is owed whatever else is wrong. It outranks the divergence
+		// exit because it is the one of the two the operator can clear right now.
+		if _, err := ap.Workspace.IssuePrefix.Mintable(); err != nil {
+			return err
 		}
 		return exitErr
 	}}
