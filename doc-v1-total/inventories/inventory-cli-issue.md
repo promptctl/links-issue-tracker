@@ -1361,7 +1361,7 @@ Only `laneHeldForeign` is routed around; a locked worktree past the clock
 derives `Held` and is one of these. Servability is not gated on `model.StateOpen`.
 
 **Routing precedence** — `routeNext(rows, details, epics, standings, self, scope focusScope)`
-(`next_route.go`). `rows` are already in composite-rank order (§1.18).
+(`next_route.go`). `rows` are already in rank order (§1.18).
 `laneOf(row) = model.LaneOf(row.Issue, details[row.ID].Parent)`
 (`next_route.go`);
 `verdict(row) = capacityFor(row, standings.Of(laneOf(row)), self)`
@@ -1376,7 +1376,7 @@ epic above them.
 rank order, whose lane `inScope` admits and whose verdict is in `accept`
 (`next_route.go`); `pick` is `pickFrom` over all `rows`
 (`next_route.go`). `accept` is a **set**, never a preference order —
-composite rank is the only tiebreak routing applies (`next_route.go`).
+rank order is the only tiebreak routing applies (`next_route.go`).
 `ownScope(standings, self)` yields `ownLanes` and `ownEpics`, read from the
 **standings** and not from the gathered rows (`next_route.go`);
 `mine(lane) = ownLanes[lane]` (`next_route.go`).

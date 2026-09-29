@@ -1684,6 +1684,20 @@ func aContainerListsBeforeEverythingInsideIt(t *testing.T, ctx context.Context, 
 	assertDistinctRanks(t, listed)
 	assertIssueIDs(t, "after a rank set displaces the epic past its own children", listed,
 		[]string{outer.ID, last.ID, epic.ID, child.ID, task.ID, grandchild.ID})
+
+	// A view's group of related issues follows the same rule: dependencies
+	// spread over three frames list in tree order, not by their own keys.
+	for _, dependency := range []model.Issue{grandchild, epic, last} {
+		if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: outer.ID, DstID: dependency.ID, Type: model.RelBlocks, CreatedBy: "ada"}); err != nil {
+			t.Fatalf("AddRelation(%s blocks-on %s) error = %v", outer.ID, dependency.ID, err)
+		}
+	}
+	detail, err := st.GetIssueDetail(ctx, outer.ID)
+	if err != nil {
+		t.Fatalf("GetIssueDetail(%s) error = %v", outer.ID, err)
+	}
+	assertIssueIDs(t, "an issue's dependencies across frames", detail.DependsOn,
+		[]string{last.ID, epic.ID, grandchild.ID})
 }
 
 // rankIntentsResolveAcrossFrames is why the anchored verbs report a RankMove

@@ -1,8 +1,10 @@
 package storage
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
@@ -47,18 +49,46 @@ type ParentLink struct {
 	ParentRank string
 }
 
-// RankAncestry holds, for every issue a container frames, the keys of its
-// containers outermost first. An issue absent from it sits at the top level.
+// RankAncestry holds, for every issue a container frames, the place of each
+// of its containers, outermost first. An issue absent from it sits at the top
+// level.
 //
 // It exists because a key is only comparable within its frame, and a listing
 // still has to put every issue in one sequence. The sequence is tree order:
-// compare the containers' keys from the outermost down, then the issues' own,
-// and when one issue's keys run out first, it comes first. A container's keys
-// are a prefix of every descendant's, so it lists before them and its subtree
-// lists together, whatever keys other frames hold in between. That leaves no
-// cross-frame arrangement of keys that a listing can show, so no rank verb has
-// to keep one. [LAW:types-are-the-program]
-type RankAncestry map[string][]string
+// compare the containers' places from the outermost down, then the issues'
+// own, and when one issue's places run out first, it comes first. A
+// container's places are a prefix of every descendant's, so it lists before
+// them and its subtree lists together, whatever keys other frames hold in
+// between. That leaves no cross-frame arrangement of keys that a listing can
+// show, so no rank verb has to keep one. [LAW:types-are-the-program]
+type RankAncestry map[string][]rankPlace
+
+// rankPlace is one step of an issue's path through tree order: a key, and the
+// id that breaks a tie on it. The tie is broken at every step rather than once
+// at the end, because two frame-mates can share a key (restored data, or the
+// empty key every unranked issue holds), and a tie left open at a container's
+// step hands the decision to the next step — which files an outsider between
+// the container and its children, and interleaves two tied containers'
+// subtrees.
+type rankPlace struct {
+	rank string
+	id   string
+}
+
+func (p rankPlace) compare(q rankPlace) int {
+	return cmp.Or(strings.Compare(p.rank, q.rank), strings.Compare(p.id, q.id))
+}
+
+// TwoParentsError reports a child that two framing edges claim. The write
+// boundary keeps one parent per child, so only restored data carries it.
+type TwoParentsError struct {
+	ChildID string
+	Parents [2]string
+}
+
+func (e TwoParentsError) Error() string {
+	return fmt.Sprintf("%s has two parents, %s and %s, so it has no one place in rank order; run 'lit parent clear %s', then set the parent it belongs under", e.ChildID, e.Parents[0], e.Parents[1], e.ChildID)
+}
 
 // NewRankAncestry builds the ancestry from an engine's framing edges.
 //
@@ -69,35 +99,68 @@ func NewRankAncestry(links []ParentLink) (RankAncestry, error) {
 	parentOf := make(map[string]ParentLink, len(links))
 	for _, link := range links {
 		if prior, dup := parentOf[link.ChildID]; dup {
-			return nil, fmt.Errorf("%s has two parents, %s and %s, so it has no one place in rank order; run 'lit parent clear %s', then set the parent it belongs under", link.ChildID, prior.ParentID, link.ParentID, link.ChildID)
+			return nil, TwoParentsError{ChildID: link.ChildID, Parents: [2]string{prior.ParentID, link.ParentID}}
 		}
 		parentOf[link.ChildID] = link
 	}
 	ancestry := make(RankAncestry, len(parentOf))
 	for child := range parentOf {
-		var keys []string
+		var places []rankPlace
 		visited := map[string]struct{}{child: {}}
 		for link, ok := parentOf[child]; ok; link, ok = parentOf[link.ParentID] {
 			if _, looped := visited[link.ParentID]; looped {
 				return nil, fmt.Errorf("the parent chain of %s loops back to %s, so it has no place in rank order; 'lit doctor' names the cycle, and 'lit parent clear' on one member breaks it", child, link.ParentID)
 			}
 			visited[link.ParentID] = struct{}{}
-			keys = append(keys, link.ParentRank)
+			places = append(places, rankPlace{rank: link.ParentRank, id: link.ParentID})
 		}
-		slices.Reverse(keys)
-		ancestry[child] = keys
+		slices.Reverse(places)
+		ancestry[child] = places
 	}
 	return ancestry, nil
 }
 
 // Compare orders two issues by tree order; it is what the "rank" sort key
-// means in every engine.
+// means in every engine. Two distinct issues never compare equal.
 func (a RankAncestry) Compare(x, y model.Issue) int {
-	return slices.Compare(a.path(x), a.path(y))
+	xs, ys := a[x.ID], a[y.ID]
+	for i := 0; ; i++ {
+		xp, xok := placeAt(xs, x, i)
+		yp, yok := placeAt(ys, y, i)
+		if !xok || !yok {
+			// The path that ran out first is the container's.
+			return cmp.Compare(presence(xok), presence(yok))
+		}
+		if c := xp.compare(yp); c != 0 {
+			return c
+		}
+	}
 }
 
-func (a RankAncestry) path(issue model.Issue) []string {
-	return append(slices.Clip(a[issue.ID]), issue.Rank)
+// Sort puts issues in tree order: the one ordering by rank, for a listing and
+// for every group of related issues a view assembles alike.
+// [LAW:one-source-of-truth]
+func (a RankAncestry) Sort(issues []model.Issue) {
+	slices.SortFunc(issues, a.Compare)
+}
+
+// placeAt is step i of an issue's path: its containers' places, then its own.
+func placeAt(containers []rankPlace, issue model.Issue, i int) (rankPlace, bool) {
+	switch {
+	case i < len(containers):
+		return containers[i], true
+	case i == len(containers):
+		return rankPlace{rank: issue.Rank, id: issue.ID}, true
+	default:
+		return rankPlace{}, false
+	}
+}
+
+func presence(ok bool) int {
+	if ok {
+		return 1
+	}
+	return 0
 }
 
 // RankEnd reports what a rank-to-edge verb did.

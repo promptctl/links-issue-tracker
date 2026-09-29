@@ -355,6 +355,10 @@ func (e *Engine) GetRelationsByIDs(ctx context.Context, ids []string) (map[strin
 	defer e.mu.Unlock()
 
 	pos := e.positions()
+	ancestry, err := e.rankAncestry(pos)
+	if err != nil {
+		return nil, err
+	}
 	out := map[string]storage.IssueRelations{}
 	for _, id := range ids {
 		if _, done := out[id]; done {
@@ -368,7 +372,7 @@ func (e *Engine) GetRelationsByIDs(ctx context.Context, ids []string) (map[strin
 		if err != nil {
 			return nil, err
 		}
-		bucketed, err := e.bucketRelations(id, e.incidentRelations(id), pos)
+		bucketed, err := e.bucketRelations(id, e.incidentRelations(id), pos, ancestry)
 		if err != nil {
 			return nil, err
 		}
@@ -449,7 +453,7 @@ func (e *Engine) dropRelations(matches func(model.Relation) bool) int {
 // (a blocks edge runs src=dependent, dst=dependency, which makes DependsOn and
 // Blocks the two readings of one edge set) lives in exactly one place.
 // [LAW:single-enforcer]
-func (e *Engine) bucketRelations(focalID string, relations []model.Relation, pos map[string]int) (storage.IssueRelations, error) {
+func (e *Engine) bucketRelations(focalID string, relations []model.Relation, pos map[string]int, ancestry storage.RankAncestry) (storage.IssueRelations, error) {
 	out := storage.IssueRelations{Children: []model.Issue{}, DependsOn: []model.Issue{}, Blocks: []model.Issue{}}
 	for _, rel := range relations {
 		// Which bucket an edge lands in is a function of its type and which
@@ -484,16 +488,16 @@ func (e *Engine) bucketRelations(focalID string, relations []model.Relation, pos
 		}
 		*bucket = append(*bucket, issue)
 	}
-	sortByRank(out.Children, pos)
-	sortByRank(out.DependsOn, pos)
-	sortByRank(out.Blocks, pos)
+	ancestry.Sort(out.Children)
+	ancestry.Sort(out.DependsOn)
+	ancestry.Sort(out.Blocks)
 	return out, nil
 }
 
 // relatedIssues returns the hydrated related-to counterparts of focalID. It is
 // GetIssueDetail's concern alone — no batch consumer wants peer links, which
 // is why they stay out of the shared IssueRelations shape.
-func (e *Engine) relatedIssues(focalID string, relations []model.Relation, pos map[string]int) ([]model.Issue, error) {
+func (e *Engine) relatedIssues(focalID string, relations []model.Relation, pos map[string]int, ancestry storage.RankAncestry) ([]model.Issue, error) {
 	out := []model.Issue{}
 	for _, rel := range relations {
 		if rel.Type != model.RelRelatedTo {
@@ -513,12 +517,8 @@ func (e *Engine) relatedIssues(focalID string, relations []model.Relation, pos m
 		}
 		out = append(out, issue)
 	}
-	sortByRank(out, pos)
+	ancestry.Sort(out)
 	return out, nil
-}
-
-func sortByRank(issues []model.Issue, pos map[string]int) {
-	slices.SortStableFunc(issues, func(a, b model.Issue) int { return pos[a.ID] - pos[b.ID] })
 }
 
 // authorOr names the writer of a row, falling back to the unknown author when

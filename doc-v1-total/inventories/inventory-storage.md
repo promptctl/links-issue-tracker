@@ -134,10 +134,11 @@ Parentage gets its own two verbs rather than riding `AddRelation` because it is 
 **`ParentLink`** — `internal/storage/rank.go`
 - `ChildID`, `ParentID`, `ParentRank string` — one parent-child edge whose parent is not deleted, with the key that parent holds.
 
-**`RankAncestry`** — `map[string][]string`, `internal/storage/rank.go`
-- For each issue a container frames, the keys of its containers, outermost first; an issue absent from it is top level.
-- `NewRankAncestry(links []ParentLink) (RankAncestry, error)` — a child named by two links → `"%s has two parents, %s and %s, so it has no one place in rank order; ..."`; a parent chain that returns to an issue already walked → `"the parent chain of %s loops back to %s, ..."`.
-- `Compare(x, y model.Issue) int` — `slices.Compare` of each issue's ancestor keys followed by its own `Rank`: tree order. A container's keys are a prefix of its descendants', so it sorts before them and its subtree sorts together. Both engines bind the `rank` sort key to it.
+**`RankAncestry`** — `map[string][]rankPlace`, `internal/storage/rank.go`
+- For each issue a container frames, the place (`rankPlace{rank, id}`) of each of its containers, outermost first; an issue absent from it is top level.
+- `NewRankAncestry(links []ParentLink) (RankAncestry, error)` — a child named by two links → `TwoParentsError{ChildID, Parents}`, message `"%s has two parents, %s and %s, so it has no one place in rank order; ..."`; a parent chain that returns to an issue already walked → `"the parent chain of %s loops back to %s, ..."`.
+- `Compare(x, y model.Issue) int` — walks each issue's path (its containers' places, then its own `{Rank, ID}`) step by step, comparing key then id at every step; the path that runs out first sorts first: tree order. A container's path is a prefix of its descendants', so it sorts before them and its subtree sorts together, even across a key two frame-mates share. Two distinct issues never compare equal. Both engines bind the `rank` sort key to it.
+- `Sort(issues []model.Issue)` — `slices.SortFunc` by `Compare`; both engines' relation groups (`Children`, `DependsOn`, `Blocks`, related) sort with it.
 
 **`RankSetResolution`** — `internal/storage/rank.go`
 - `NamedID string` (json `named_id`), `RankedID string` (json `ranked_id`). Equal for frame-mates; when they differ the caller must surface the substitution (`internal/storage/rank.go`).
@@ -603,7 +604,7 @@ Order of checks is stated as contract: the parent must be resolved before the co
 
 Pipeline is fixed and every stage always runs: **hydrate → select → order → cap** (`internal/storage/memory/list.go`).
 
-1. `e.rankAncestry(pos)` over `e.positions()` — for each id in `e.order` that `parentOf` gives a parent, a `storage.ParentLink{ChildID, ParentID, ParentRank: rankAt(pos[parent])}`, handed to `storage.NewRankAncestry`, whose error is returned (`internal/storage/memory/list.go`).
+1. `e.rankAncestry(pos)` over `e.positions()` — for each edge in `e.relations` that `frames` (a `RelParentChild` edge to a parent that is not deleted — the rule `parentOf` applies), a `storage.ParentLink{ChildID: rel.SrcID, ParentID: rel.DstID, ParentRank: rankAt(pos[rel.DstID])}`, handed to `storage.NewRankAncestry`, whose error is returned (`internal/storage/memory/list.go`).
 2. `storage.IssueOrdering(filter.SortBy, issueSortKeys(ancestry))` — parsed before selection, so an unknown sort field errors before any hydration (`internal/storage/memory/list.go`).
 3. `storage.ParseIssueCriteria(filter)` — canonicalizes the label criteria the same way stored labels are normalized, and is the one step of selection that can fail; everything after it answers yes or no.
 4. `e.mustRecord(id)` for each of `filter.ParentIDs`, in order — the first id with no record returns `NotFoundError`; a deleted record still exists.
@@ -815,7 +816,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 
 **`incidentRelations`** — every edge touching the id in either direction, in write order.
 
-**`bucketRelations(focalID, relations, pos)`** — the single definition of edge → bucket mapping:
+**`bucketRelations(focalID, relations, pos, ancestry)`** — the single definition of edge → bucket mapping:
 | Condition | Bucket | Counterpart |
 |---|---|---|
 | `Type == RelBlocks && SrcID == focalID` | `DependsOn` | `DstID` |
@@ -824,11 +825,10 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 | `Type == RelParentChild && SrcID == focalID` | `Parent` (pointer) | `DstID` |
 | anything else (e.g. `RelRelatedTo`) | skipped | — |
 - An edge whose counterpart record has vanished is simply not in the result.
-- `Children`, `DependsOn`, `Blocks` are each sorted by rank position; the returned struct initializes them to non-nil empty slices.
+- `Children`, `DependsOn`, `Blocks` are each sorted by `ancestry.Sort` (tree order); the returned struct initializes them to non-nil empty slices.
 
-**`relatedIssues`** — `RelRelatedTo` counterparts only (the other end of the edge), hydrated, rank-sorted. It is `GetIssueDetail`'s concern alone; peer links stay out of the shared `IssueRelations` shape.
+**`relatedIssues`** — `RelRelatedTo` counterparts only (the other end of the edge), hydrated, sorted by `ancestry.Sort`. It is `GetIssueDetail`'s concern alone; peer links stay out of the shared `IssueRelations` shape.
 
-**`sortByRank`** — `slices.SortStableFunc` on `pos[a.ID] - pos[b.ID]`.
 
 ### 2.12 Rank (`internal/storage/memory/rank.go`)
 

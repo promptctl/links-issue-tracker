@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -1041,11 +1040,15 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 	if err != nil {
 		return model.IssueDetail{}, err
 	}
+	ancestry, err := loadRankAncestry(ctx, s.db)
+	if err != nil {
+		return model.IssueDetail{}, err
+	}
 
 	// [LAW:one-source-of-truth] Structural edges (parent/child/blocks) are
 	// bucketed by the same helper the batch accessor uses, so the blocks
 	// convention has one definition. Related is GetIssueDetail's own concern.
-	structural := bucketRelations(id, relations, relatedByID)
+	structural := bucketRelations(id, relations, relatedByID, ancestry)
 	// Siblings are the parent's other children. The set exists only when the
 	// issue has a parent; an only child yields the empty slice and the renderer
 	// omits the group. [LAW:one-source-of-truth] derived from the same
@@ -1074,7 +1077,7 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 			redirectTarget = &hydrated
 		}
 	}
-	related := relatedFrom(id, relations, relatedByID)
+	related := relatedFrom(id, relations, relatedByID, ancestry)
 	detail := model.IssueDetail{
 		Issue:          issue,
 		Relations:      relations,
@@ -1965,17 +1968,6 @@ func issueSortKeys(ancestry storage.RankAncestry) storage.SortBindings {
 		"created_at": func(a, b model.Issue) int { return a.CreatedAt.Compare(b.CreatedAt) },
 		"updated_at": func(a, b model.Issue) int { return a.UpdatedAt.Compare(b.UpdatedAt) },
 	}
-}
-
-func sortIssuesByRank(issues []model.Issue) {
-	// [LAW:one-source-of-truth] Rank is the canonical default ordering for
-	// derived issue groups assembled outside the list query path.
-	sort.SliceStable(issues, func(i, j int) bool {
-		if issues[i].Rank == issues[j].Rank {
-			return issues[i].ID < issues[j].ID
-		}
-		return issues[i].Rank < issues[j].Rank
-	})
 }
 
 func (s *Store) listAllLabels(ctx context.Context) ([]model.Label, error) {

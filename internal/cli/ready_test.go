@@ -757,11 +757,10 @@ func TestRunReadyCarriesParentEpic(t *testing.T) {
 }
 
 // [LAW:dataflow-not-control-flow]
-// Leaves sort by (effective_epic_rank, own_rank), so all leaves under epic A
-// appear before any leaves under epic B when A ranks higher than B — even
-// when the leaves were created in interleaved order and their own ranks
-// alternate between epics.
-func TestRunReadyOrdersLeavesByCompositeRank(t *testing.T) {
+// Leaves sort in tree order, so all leaves under epic A appear before any
+// leaves under epic B when A ranks higher than B — even when the leaves were
+// created in interleaved order and their own ranks alternate between epics.
+func TestRunReadyOrdersLeavesInTreeOrder(t *testing.T) {
 	h := newReadyTestHarness(t)
 
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test",
@@ -777,7 +776,7 @@ func TestRunReadyOrdersLeavesByCompositeRank(t *testing.T) {
 		Priority:  1,
 	})
 	// Distinct lanes put the same-epic siblings in parallel sub-sequences so
-	// both are ready at once; this test's contract is composite-rank ORDERING,
+	// both are ready at once; this test's contract is tree-order ORDERING,
 	// not the lane gate's membership (covered by the lane-gate tests).
 	leafA1 := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title:     "A.1",

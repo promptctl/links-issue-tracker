@@ -113,14 +113,15 @@ func capLimit(issues []model.Issue, limit int) []model.Issue {
 	return issues[:limit]
 }
 
-// rankAncestry reads each issue's framing parent off parentOf, the one place
-// here that knows what contains what, keyed as rankAt renders it.
+// rankAncestry reads every framing edge in one pass, by the rule the frame
+// lookup applies (frames), keyed as rankAt renders it. Every edge goes in, so
+// a child two edges claim is refused here exactly as the SQL engine refuses it.
 // [LAW:one-source-of-truth]
 func (e *Engine) rankAncestry(pos map[string]int) (storage.RankAncestry, error) {
 	var links []storage.ParentLink
-	for _, id := range e.order {
-		if parent, ok := e.parentOf(id); ok {
-			links = append(links, storage.ParentLink{ChildID: id, ParentID: parent, ParentRank: rankAt(pos[parent])})
+	for _, rel := range e.relations {
+		if e.frames(rel) {
+			links = append(links, storage.ParentLink{ChildID: rel.SrcID, ParentID: rel.DstID, ParentRank: rankAt(pos[rel.DstID])})
 		}
 	}
 	return storage.NewRankAncestry(links)

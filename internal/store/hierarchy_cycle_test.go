@@ -383,6 +383,55 @@ func TestVerifyCandidateReportsAParentCycleRatherThanHanging(t *testing.T) {
 	}
 }
 
+// A child two parents claim has no place in tree order, so a listing refuses
+// it by name. That refusal must not also take away the tools that find and
+// clear it: doctor reports it as a finding, the verify gate reports it rather
+// than failing on the export behind it, and the repair the message names works
+// on the state it describes.
+func TestAChildWithTwoParentsIsReportedAndRepairable(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	first := parentChain(t, ctx, st, "E1", "C")
+	second := parentChain(t, ctx, st, "E2")
+	child := first[1]
+	seedParentEdge(t, ctx, st, child.ID, second[0].ID)
+
+	var twoParents storage.TwoParentsError
+	if _, err := st.ListIssues(ctx, storage.ListIssuesFilter{}); !errors.As(err, &twoParents) || twoParents.ChildID != child.ID {
+		t.Fatalf("ListIssues() error = %v, want a TwoParentsError naming %s", err, child.ID)
+	}
+
+	report, err := st.Doctor(ctx)
+	if err != nil {
+		t.Fatalf("Doctor() error = %v, want a report naming the child", err)
+	}
+	if len(report.Errors) != 1 || !strings.Contains(report.Errors[0], child.ID+" has two parents") {
+		t.Errorf("Doctor().Errors = %v, want one error naming %s's two parents", report.Errors, child.ID)
+	}
+	for _, want := range []string{storage.CheckRankInversions, storage.CheckDependencyCycle} {
+		if !slices.Contains(report.Unchecked, want) {
+			t.Errorf("Doctor().Unchecked = %v, want it to name %s as unrun", report.Unchecked, want)
+		}
+	}
+
+	verified, err := VerifyCandidate(ctx, RawDump{}, ShapeMapping{}, st)
+	if err != nil {
+		t.Fatalf("VerifyCandidate() error = %v, want a report naming the child", err)
+	}
+	if !slices.ContainsFunc(verified.Findings, func(f VerifyFinding) bool {
+		return f.Law == LawHealth && strings.Contains(f.Detail, child.ID+" has two parents")
+	}) {
+		t.Errorf("VerifyCandidate().Findings = %+v, want a health finding naming %s's two parents", verified.Findings, child.ID)
+	}
+
+	if err := st.ClearParent(ctx, child.ID); err != nil {
+		t.Fatalf("ClearParent(%s) error = %v, want both edges cleared", child.ID, err)
+	}
+	if _, err := st.ListIssues(ctx, storage.ListIssuesFilter{}); err != nil {
+		t.Errorf("ListIssues() after 'lit parent clear' error = %v, want the workspace listable", err)
+	}
+}
+
 // "No such issue" and "that issue has no parent" send the operator to
 // different places, and a typo'd id reported as a missing edge is the opposite
 // answer: it says the hierarchy is fine when the id is not.

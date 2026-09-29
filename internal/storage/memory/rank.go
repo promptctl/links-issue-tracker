@@ -419,19 +419,27 @@ func (e *Engine) ancestorChain(id string) ([]string, error) {
 // nothing.
 func (e *Engine) parentOf(childID string) (string, bool) {
 	for _, rel := range e.relations {
-		if rel.Type != model.RelParentChild || rel.SrcID != childID {
-			continue
+		if rel.SrcID == childID && e.frames(rel) {
+			return rel.DstID, true
 		}
-		parent, ok := e.issues[rel.DstID]
-		if !ok {
-			continue
-		}
-		if _, gone := parent.retention.(model.Deleted); gone {
-			continue
-		}
-		return rel.DstID, true
 	}
 	return "", false
+}
+
+// frames reports whether rel is an edge whose parent frames its child: a
+// parent-child edge to a parent that is not deleted. It is the one statement of
+// that rule, for the frame lookup and the listing's tree order alike.
+// [LAW:one-source-of-truth]
+func (e *Engine) frames(rel model.Relation) bool {
+	if rel.Type != model.RelParentChild {
+		return false
+	}
+	parent, ok := e.issues[rel.DstID]
+	if !ok {
+		return false
+	}
+	_, gone := parent.retention.(model.Deleted)
+	return !gone
 }
 
 // frameContainmentError reports a rank request naming an issue together with
