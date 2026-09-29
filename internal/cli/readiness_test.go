@@ -174,3 +174,14 @@ func TestClassifyReadinessComposite(t *testing.T) {
 		t.Errorf("RankInversions() = %v, want %v", got, want)
 	}
 }
+
+// A reserved blocking label is phrased from the label table, not from the
+// annotation's message, so an annotation that crossed a boundary without its
+// message still names the label rather than printing an empty reason.
+func TestReservedBlockingLabelsPhraseWithoutAMessage(t *testing.T) {
+	for _, reserved := range blockingLabels {
+		if got := (BlockingReason{Kind: reserved.kind}).Phrase(); got != reserved.label {
+			t.Errorf("BlockingReason{Kind: %s}.Phrase() = %q, want %q", reserved.kind, got, reserved.label)
+		}
+	}
+}

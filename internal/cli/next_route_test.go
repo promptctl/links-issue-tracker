@@ -973,6 +973,49 @@ func TestExhaustionNamesTheScopesOwnTicketHeldByALabel(t *testing.T) {
 	}
 }
 
+// The external label holds a ticket in flight too: it says no work here moves
+// the ticket, which starting it did not change. So lit next neither resumes it
+// for the checkout that started it nor offers it to another as abandoned work,
+// and it serves the plain ticket ranked behind it instead.
+func TestAnExternalTicketInFlightIsNeverServed(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		ownsLane bool
+	}{
+		{name: "in this checkout's own lane", ownsLane: true},
+		{name: "in a lane nobody holds", ownsLane: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newReadyTestHarness(t)
+			waiting := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Upstream fix lands", Topic: "next", IssueType: "task", Priority: 0, Labels: []string{ExternalLabel}})
+			h.transition(waiting.ID, model.Start{Assignee: "tester"})
+			plain := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Plain work", Topic: "next", IssueType: "task", Priority: 0})
+
+			rows, details, epics := h.gather()
+			standings := claims.Standings{}
+			if tc.ownsLane {
+				standings[laneOf(t, details, rowByID(t, rows, waiting.ID))] = heldBy(selfAttribution)
+			}
+			outcome := routeNext(rows, details, epics, standings, selfAttribution, focusScope{})
+			var served annotation.AnnotatedIssue
+			switch o := outcome.(type) {
+			case ServedFromNewLane:
+				served = o.Row
+			case ServedPastExhaustion:
+				served = o.Row
+				if want := waiting.ID + " (on your path but waiting on an event outside this repository"; !strings.Contains(o.Exhaustion.why(), want) {
+					t.Fatalf("exhaustion = %q, want it to contain %q", o.Exhaustion.why(), want)
+				}
+			default:
+				t.Fatalf("routeNext = %#v (%T), want %q served past the external ticket", outcome, outcome, plain.ID)
+			}
+			if served.ID != plain.ID {
+				t.Fatalf("routeNext served %q, want %q — %q is in flight but waits on an outside event", served.ID, plain.ID, waiting.ID)
+			}
+		})
+	}
+}
+
 // A blocker the external label holds waits on an event outside the repository,
 // so exhaustion names it as such and never tells the agent to file a ticket
 // that would clear it: no ticket filed here can. Beside a blocker a ticket
@@ -982,9 +1025,11 @@ func TestExhaustionNeverOffersToClearABlockerAwaitingAnOutsideEvent(t *testing.T
 	for _, tc := range []struct {
 		name        string
 		alsoPlain   bool
+		heldForeign bool
 		wantStaying bool
 	}{
 		{name: "external blocker alone", alsoPlain: false, wantStaying: false},
+		{name: "external blocker in a lane another checkout holds", heldForeign: true, wantStaying: false},
 		{name: "external blocker beside a clearable one", alsoPlain: true, wantStaying: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -997,6 +1042,10 @@ func TestExhaustionNeverOffersToClearABlockerAwaitingAnOutsideEvent(t *testing.T
 			upstream := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Upstream fix lands", Topic: "next", IssueType: "task", Priority: 0, Labels: []string{ExternalLabel}})
 			h.addDependency(a2.ID, upstream.ID)
 			standings := claims.Standings{model.LaneOf(a1, &epicA): heldBy(selfAttribution)}
+			if tc.heldForeign {
+				rows, details, _ := h.gather()
+				standings[laneOf(t, details, rowByID(t, rows, upstream.ID))] = heldBy(otherAttribution)
+			}
 			if tc.alsoPlain {
 				plain := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Theirs", Topic: "next", IssueType: "task", Priority: 0})
 				h.addDependency(a2.ID, plain.ID)

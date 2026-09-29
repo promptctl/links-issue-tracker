@@ -224,17 +224,17 @@ func (r rowReach) name() string {
 // fallthrough takes every routeAround reached for a reason other than a
 // foreign hold. A row that is both held fresh and not ready reports as
 // held — ownership decides whether this checkout may act at all, readiness
-// only whether acting would get anywhere. An unready row the external label
-// holds reports as awaiting outside whatever else also blocks it: clearing the
-// rest would still leave it waiting on the outside event.
+// only whether acting would get anywhere. The external label outranks both: a
+// row it holds reports as awaiting outside whoever holds its lane and whatever
+// else blocks it, because no one's work here would move it.
 func reachOf(row annotation.AnnotatedIssue, standing claims.Standing, self model.Attribution) reachKind {
 	switch {
 	case capacityFor(row, standing, self) != routeAround:
 		return reachTakeable
-	case relationOf(standing, self) == laneHeldForeign:
-		return reachHeldFresh
 	case ClassifyReadiness(row.Annotations).AwaitsOutside():
 		return reachAwaitingOutside
+	case relationOf(standing, self) == laneHeldForeign:
+		return reachHeldFresh
 	}
 	return reachNotReady
 }
@@ -300,17 +300,21 @@ const (
 // it as a description of the row rather than a verdict about the lane.
 // [LAW:single-enforcer]
 //
-// Readiness is asked only of startable rows. An in-flight row is not gated by
-// its dependencies — it is already past the point where they applied — so a
-// blocked-but-started row of ours is still resumed and a blocked-but-started
-// row of nobody's is still served.
+// Readiness is asked only of startable rows, with one exception. An in-flight
+// row is not gated by its dependencies — it is already past the point where
+// they applied — so a blocked-but-started row of ours is still resumed and a
+// blocked-but-started row of nobody's is still served. The external label is
+// the exception because it is not a precondition of starting: it says no work
+// in this repository moves the row, which is as true in flight as before, so a
+// row it holds is routed around in every state.
 func capacityFor(row annotation.AnnotatedIssue, standing claims.Standing, self model.Attribution) capacity {
 	relation := relationOf(standing, self)
 	started := row.State() == model.StateInProgress
+	readiness := ClassifyReadiness(row.Annotations)
 	switch {
-	case relation == laneHeldForeign:
+	case relation == laneHeldForeign, readiness.AwaitsOutside():
 		return routeAround
-	case !started && ClassifyReadiness(row.Annotations).IsReady():
+	case !started && readiness.IsReady():
 		return serveWork
 	case !started:
 		return routeAround
@@ -459,10 +463,11 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 		// Step 3 — loud, and never a silent hop. The pool's pick is outside our
 		// scope by construction: steps 1 and 2 took every serveWork row in our
 		// lanes and our epic, and the pool is a subset of the rows they walked.
+		ours := func(row annotation.AnnotatedIssue) bool { return ourScope(laneOf(row)) }
 		exhausted := Exhausted{
 			Epics:   slices.Sorted(maps.Keys(ownEpics)),
 			Blocked: blockedRows(gating),
-			Held:    heldByThemselves(rows, func(row annotation.AnnotatedIssue) bool { return ourScope(laneOf(row)) }, reachFor),
+			Held:    heldByThemselves(rows, ours, reachFor),
 		}
 		if row, ok := fromPool(); ok {
 			return ServedPastExhaustion{Row: row, Lane: laneOf(row), Exhaustion: exhausted}
@@ -470,7 +475,6 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 		// The pool offered nothing, so what the focus kept from it is the rest
 		// of the answer: the withheld rows outside our scope — ours were walked
 		// by steps 1-2b, focus or not.
-		ours := func(row annotation.AnnotatedIssue) bool { return ourScope(laneOf(row)) }
 		exhausted.OffPath = withheldByScope(slices.DeleteFunc(slices.Clone(offPath), ours))
 		return exhausted
 	}
@@ -540,15 +544,18 @@ type gatedDep struct {
 	Gates string
 }
 
-// heldByThemselves collects the open rows in scope, in rank order, that a reason
-// about the row itself holds back, each classified by the same reachOf every
-// other diagnostic row is. Blocked cannot carry them: it names dependencies from
-// outside the scope, and these rows are inside it.
+// heldByThemselves collects, in rank order, the rows in scope that routing
+// passed over for a reason about the row itself — a reserved label, a missing
+// field — each with the reachOf kind that says so. A row another checkout holds is that
+// checkout's work in progress, not held by itself, so its kind keeps it out.
+// Blocked cannot carry these rows: it names dependencies from outside the
+// scope, and these are inside it.
 func heldByThemselves(rows []annotation.AnnotatedIssue, inScope func(annotation.AnnotatedIssue) bool, reachFor func(annotation.AnnotatedIssue) reachKind) []rowReach {
 	var held []rowReach
 	for _, row := range rows {
-		if inScope(row) && row.State() == model.StateOpen && ClassifyReadiness(row.Annotations).HeldByItself() {
-			held = append(held, rowReach{ID: row.ID, Row: row, Kind: reachFor(row)})
+		kind := reachFor(row)
+		if inScope(row) && (kind == reachNotReady || kind == reachAwaitingOutside) && ClassifyReadiness(row.Annotations).HeldByItself() {
+			held = append(held, rowReach{ID: row.ID, Row: row, Kind: kind})
 		}
 	}
 	return held

@@ -1310,10 +1310,11 @@ are `routeAround`, `serveWork`, `resumeWork` (`next_route.go`). With
 `relation = relationOf(standing, self)` (`claims_takeover.go` —
 `laneOurs` requires `self.Present() && held.By == self`, so a checkout with
 no minted token never reads a lane as its own, even one the public checkout
-itself holds) and `started = row.State() == model.StateInProgress`:
+itself holds), `started = row.State() == model.StateInProgress` and
+`readiness = ClassifyReadiness(row.Annotations)`:
 
-1. `relation == laneHeldForeign` → `routeAround`.
-2. `!started` → `ClassifyReadiness(row.Annotations).IsReady()` ? `serveWork`: `routeAround`.
+1. `relation == laneHeldForeign` or `readiness.AwaitsOutside()` → `routeAround`.
+2. `!started` → `readiness.IsReady()` ? `serveWork`: `routeAround`.
 3. `started` and `relation == laneOurs` → `resumeWork`.
 4. `started`, otherwise (`laneUnclaimed`) → `serveWork`.
 
@@ -1368,7 +1369,7 @@ If `len(ownLanes) > 0` (`next_route.go`):
 3. Else `exhausted := Exhausted{Epics, Blocked, Held}` (`next_route.go`), where
    `Epics` is `slices.Sorted(maps.Keys(ownEpics))` and `Blocked` is
    `blockedRows(gating)` — the walk step 2b declined; `blockedRows` drops the
-   gated id. `Held` is `heldByThemselves` over the rows in `ourScope`: the open rows, in rank order, that `IssueReadiness.HeldByItself()` reports held by a reason about the row itself (a reserved label, a missing field) rather than by a dependency or an earlier sibling, each classified by `reachOf`. When step 4's pick finds nothing, `OffPath` is set to
+   gated id. `Held` is `heldByThemselves` over the rows in `ourScope`: in rank order, the rows `reachOf` classifies `reachNotReady` or `reachAwaitingOutside` that `IssueReadiness.HeldByItself()` reports held by a reason about the row itself (a reserved label, a missing field) rather than by a dependency or an earlier sibling. When step 4's pick finds nothing, `OffPath` is set to
    `withheldByScope` over the focus-excluded rows whose lane `ourScope` does
    not admit. If step 4's pick finds a row →
    **`ServedPastExhaustion{Row, Lane: laneOf(row), Exhaustion: exhausted}`**;
@@ -1393,9 +1394,9 @@ visible (`next_route.go`).
 now: `reachTakeable`, `reachHeldFresh`, `reachNotReady`, `reachAwaitingOutside`, `reachOutOfView`, plus
 `reachOffFocusPath`, which only the pool diagnostic stamps, and the bound
 `reachKindCount`. `reachOf(row, standing, self)` answers `reachTakeable` when
-`capacityFor(...) != routeAround`, `reachHeldFresh` when
-`relationOf(...) == laneHeldForeign`, `reachAwaitingOutside` when
-`ClassifyReadiness(row.Annotations).AwaitsOutside()`, else `reachNotReady`
+`capacityFor(...) != routeAround`, `reachAwaitingOutside` when
+`ClassifyReadiness(row.Annotations).AwaitsOutside()`, `reachHeldFresh` when
+`relationOf(...) == laneHeldForeign`, else `reachNotReady`
 (`next_route.go`). `rowReach{ID string, Row annotation.AnnotatedIssue, Kind reachKind}`
 (`next_route.go`) is what both terminal outcomes carry.
 

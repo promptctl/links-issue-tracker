@@ -36,13 +36,27 @@ const ExternalLabel = "external"
 // where that role is interpreted.
 // [LAW:one-type-per-behavior] The reserved blocking labels differ only in
 // which label and which kind, so they are rows of one table read by one
-// annotator, not one annotator each.
-var blockingLabels = []struct {
-	label string
-	kind  annotation.Kind
-}{
+// annotator, and phrased by one lookup, not one of each per label.
+var blockingLabels = []blockingLabel{
 	{NeedsDesignLabel, annotation.NeedsDesign},
 	{ExternalLabel, annotation.External},
+}
+
+// blockingLabelOf returns the reserved label that raises kind, so a reason is
+// phrased from the table rather than from whatever message its annotation
+// carried.
+func blockingLabelOf(kind annotation.Kind) (string, bool) {
+	i := slices.IndexFunc(blockingLabels, func(reserved blockingLabel) bool { return reserved.kind == kind })
+	if i < 0 {
+		return "", false
+	}
+	return blockingLabels[i].label, true
+}
+
+// blockingLabel is one row of blockingLabels.
+type blockingLabel struct {
+	label string
+	kind  annotation.Kind
 }
 
 // newBlockingLabelAnnotator returns an annotator that emits one annotation per

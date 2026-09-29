@@ -41,11 +41,12 @@ func (r BlockingReason) Phrase() string {
 	if label, ok := r.dependency(); ok {
 		return "depends on " + label
 	}
+	if label, ok := blockingLabelOf(r.Kind); ok {
+		return label
+	}
 	switch r.Kind {
 	case annotation.MissingField:
 		return "missing " + r.Detail
-	case annotation.NeedsDesign, annotation.External:
-		return r.Detail
 	case annotation.EarlierSiblingPending:
 		return "earlier sibling " + r.Detail + " still open"
 	default:
