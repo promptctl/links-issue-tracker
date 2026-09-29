@@ -228,11 +228,25 @@ func TestRouteNextServesPastAnExhaustedEpic(t *testing.T) {
 	if len(served.Exhaustion.Blocked) != 0 {
 		t.Fatalf("exhaustion.Blocked = %v, want none (epic A has nothing queued)", served.Exhaustion.Blocked)
 	}
+
+	// Nothing blocks epic A, so there is nothing a new ticket could clear:
+	// moving on is the only route, and it is not phrased as an alternative.
+	var out strings.Builder
+	if _, err := renderNextOutcome(&out, served, details, claimContext{}, ""); err != nil {
+		t.Fatalf("renderNextOutcome error = %v", err)
+	}
+	text := out.String()
+	if strings.Contains(text, "to stay") {
+		t.Fatalf("rendered = %q, want no stay route — nothing blocks epic A", text)
+	}
+	if !strings.Contains(text, "\nmove on to the top ready ticket outside it: run `lit start "+b1.ID) {
+		t.Fatalf("rendered = %q, want the move-on route alone on its line, naming %q", text, b1.ID)
+	}
 }
 
 // With nothing ready outside the exhausted epic either, exhaustion is the
-// answer, and staying — filing the ticket that unblocks the epic — is the one
-// route it can name.
+// answer. Nothing blocks epic A here — its lane is merely done — so no route
+// stays: a new ticket would have nothing to clear.
 func TestRouteNextExhaustionIsTerminalWhenNothingElseIsReady(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
@@ -255,10 +269,80 @@ func TestRouteNextExhaustionIsTerminalWhenNothingElseIsReady(t *testing.T) {
 		t.Fatalf("routeNext = %#v (%T), want Exhausted — B.1's lane is held elsewhere, so nothing outside epic A is ready", outcome, outcome)
 	}
 	msg := exhausted.Error()
-	for _, want := range []string{epicA.ID, "nothing ready outside it", "`lit new --parent <epic> --top`"} {
-		if !strings.Contains(msg, want) {
-			t.Fatalf("exhausted.Error() = %q, want it to contain %q", msg, want)
-		}
+	if want := "no ready work in epic(s) " + epicA.ID + " — nothing else is queued behind what's already in progress; `lit next` has nothing ready outside it either"; msg != want {
+		t.Fatalf("exhausted.Error() = %q, want exactly %q", msg, want)
+	}
+}
+
+// A blocked epic with nothing ready outside it names the one route left:
+// stay, file the ticket that unblocks it under the epic — spelled with the
+// epic's own id — and move the block onto that ticket, since filing alone
+// leaves the blocked work waiting on what it waited on.
+func TestRouteNextTerminalExhaustionNamesTheStayRouteAgainstABlock(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	h.transition(a1.ID, model.Start{Assignee: "tester"})
+	h.transition(a1.ID, model.Done{})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Outside, theirs", Topic: "next", IssueType: "task", Priority: 0})
+	h.addDependency(a2.ID, blocker.ID)
+
+	rows, details := h.gather()
+	standings := claims.Standings{
+		model.LaneOf(a1, &epicA):                         heldBy(selfAttribution),
+		laneOf(t, details, rowByID(t, rows, blocker.ID)): heldBy(otherAttribution),
+	}
+
+	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
+	exhausted, ok := outcome.(Exhausted)
+	if !ok {
+		t.Fatalf("routeNext = %#v (%T), want Exhausted — the only row outside epic A is another checkout's", outcome, outcome)
+	}
+	want := "no ready work in epic(s) " + epicA.ID + " — blocked on " + blocker.ID +
+		" (on your path but claimed by another checkout right now); `lit next` has nothing ready outside it either" +
+		" — to stay, file the ticket that unblocks it under the epic with `lit new --parent " + epicA.ID + " --top`, then move the block onto it with `lit dep`"
+	if msg := exhausted.Error(); msg != want {
+		t.Fatalf("exhausted.Error() = %q, want exactly %q", msg, want)
+	}
+}
+
+// Under a focus label the pool is the focus path, so an empty pool is not
+// "nothing ready outside the epic": ready rows off the path were never asked
+// about. They are named, with the way to ask — and our own epic's rows are
+// not among them, since steps 1-2b walk those whether focus is on or not.
+func TestRouteNextExhaustionNamesReadyRowsTheFocusWithheld(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
+	h.transition(a1.ID, model.Start{Assignee: "tester"})
+	h.transition(a1.ID, model.Done{})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
+	offPath := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Ready, off the focus path", Topic: "next", IssueType: "task", Priority: 0})
+
+	rows, details := h.gather()
+	standings := claims.Standings{
+		model.LaneOf(a1, &epicA):                    heldBy(selfAttribution),
+		laneOf(t, details, rowByID(t, rows, a2.ID)): heldBy(otherAttribution),
+	}
+	// No gathered row carries the FocusPath annotation, so an active scope
+	// withholds every one of them from the pool.
+	focused := focusScope{goals: []string{"test-goal"}}
+
+	outcome := routeNext(rows, details, standings, selfAttribution, focused)
+	exhausted, ok := outcome.(Exhausted)
+	if !ok {
+		t.Fatalf("routeNext = %#v (%T), want Exhausted — the focus path holds nothing ready", outcome, outcome)
+	}
+	if len(exhausted.OffPath) != 1 || exhausted.OffPath[0].ID != offPath.ID {
+		t.Fatalf("exhausted.OffPath = %+v, want exactly [%s] — %s is epic A's own, walked by steps 1-2b", exhausted.OffPath, offPath.ID, a2.ID)
+	}
+	msg := exhausted.Error()
+	if strings.Contains(msg, "nothing ready outside it either") {
+		t.Fatalf("exhausted.Error() = %q, want no claim that nothing outside is ready — %s is, off the focus path", msg, offPath.ID)
+	}
+	if want := "nothing on the focus path outside it is ready either: " + offPath.ID + " (off the focus path this run answered over — `lit next --all` to route over the whole queue)"; !strings.Contains(msg, want) {
+		t.Fatalf("exhausted.Error() = %q, want it to contain %q", msg, want)
 	}
 }
 

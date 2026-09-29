@@ -125,13 +125,12 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 		row = o.Row
 		announce = startAdvice(o.Row, o.Lane) +
 			fmt.Sprintf(" (gates %s, which is on your path)\n", o.Gates)
-	// Leaving the scope is the agent's choice, so both routes are named and
-	// neither is taken: the row is the second route, printed like any pick.
+	// Leaving the scope is the agent's choice, so every route is named and
+	// none is taken: the row is the last route, printed like any pick.
 	case ServedPastExhaustion:
 		row = o.Row
-		_, stay := o.Exhaustion.scope()
-		announce = fmt.Sprintf("%s\nto stay, %s\nor move on to the top ready ticket outside it: %s\n",
-			o.Exhaustion.why(), stay, startAdvice(o.Row, o.Lane))
+		routes := append(o.Exhaustion.stay(), "move on to the top ready ticket outside it: "+startAdvice(o.Row, o.Lane))
+		announce = o.Exhaustion.why() + "\n" + strings.Join(routes, "\nor ") + "\n"
 	// The two terminal outcomes travel outward AS THEMSELVES. Rendering them
 	// into an untyped error here would discard the very discriminator routing
 	// has just established, so both sinks — ExitCode and commandErrorReason —

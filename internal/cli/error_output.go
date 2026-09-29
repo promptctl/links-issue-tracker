@@ -243,12 +243,12 @@ func commandErrorRemediation(reason string) string {
 		// like every other case here. [LAW:one-source-of-truth]
 		return "Wait a moment and retry — a normal command releases the store in well under a second. If it persists, a lit process is stuck: find it with `ps aux | grep '[l]it'` and terminate it, then retry; if none is running the hold is stale, so run `lit doctor --fix`. " + agentInstructionsOpen + "This is a mechanical, self-diagnosable state — the steps above resolve it without needing the user's input." + agentInstructionsClose
 	case "scope_exhausted":
-		// Stands where the message cannot: the message names the blockers and
-		// the ticket that would unblock them, but not that the pool it found
-		// empty may be focus-scoped. No agent-instructions envelope — the
-		// envelopes elsewhere mean "mechanical, run it without asking", and
-		// deciding what unblocks a scope is the opposite of mechanical.
-		return "Do not retry unchanged — routing is deterministic and repeats this answer until the work named above moves. Act on what the message names: file the ticket that unblocks your scope, or finish or hand off what you already hold. If a focus label narrows the queue, `lit next --all` looks for ready work outside your scope across all of it."
+		// Stands where the message cannot: the message names what stops the
+		// scope and each route it has, but not that a bare retry changes
+		// nothing. No agent-instructions envelope — the envelopes elsewhere mean
+		// "mechanical, run it without asking", and deciding what unblocks a
+		// scope is the opposite of mechanical.
+		return "Do not retry unchanged — routing is deterministic and repeats this answer until the work named above moves. Act on what the message names — the route it offers, or the rows off your focus path — or finish or hand off what you already hold."
 	case "no_ready_work":
 		// NoWork carries the rows the pool walk went past, and the message names
 		// them — so what is left here is the act for each, and the standing rule
