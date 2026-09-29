@@ -218,7 +218,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/09-workflows.md", Text: "unknown event %q: not in this lit's catalog, will never fire here", Src: "unknown event %q: not in this lit's catalog, will never fire here"},
 	{Doc: "doc-v1-total/09-workflows.md", Text: "unterminated frontmatter: missing closing ---", Src: "unterminated frontmatter: missing closing ---"},
 	{Doc: "doc-v1-total/10-platform.md", Text: "--to <version>", Src: "usage: lit downgrade --to <version>"},
-	{Doc: "doc-v1-total/10-platform.md", Text: "error (code=%d): %v", Src: "error (code=%d): %v\n"},
+	{Doc: "doc-v1-total/10-platform.md", Text: "error (code=%d, reason=%s): %v", Src: "error (code=%d, reason=%s): %v\n"},
 	{Doc: "doc-v1-total/10-platform.md", Text: "git ls-remote", Src: "check the remote URL, credentials, or run `git ls-remote <remote>`."},
 	{Doc: "doc-v1-total/10-platform.md", Text: "git rev-parse --git-common-dir", Src: "git rev-parse --git-common-dir in %q"},
 	{Doc: "doc-v1-total/10-platform.md", Text: "git rev-parse --git-dir", Src: "git rev-parse --git-dir in %q"},

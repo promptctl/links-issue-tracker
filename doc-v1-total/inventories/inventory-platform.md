@@ -194,7 +194,7 @@ Constants (`internal/cli/exit.go`):
 
 ### 2.8 Error rendering (`internal/cli/error_output.go`)
 
-- `WriteCommandError` prints `error (code=%d): %v\n` to stderr, then, when a remediation exists
+- `WriteCommandError` prints `error (code=%d, reason=%s): %v\n` to stderr, then, when a remediation exists
   for the error's reason, `remediation: %s\n`; it returns the exit code
   (`internal/cli/error_output.go`).
 - `commandErrorReason` maps typed errors to machine reason strings, including

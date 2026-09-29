@@ -40,6 +40,13 @@ repository/worktree, one where `lit init` has never run, or a workspace whose sc
 newer than the installed `lit` supports. Running the same command
 again without changing something reproduces the same refusal.
 
+A failed command's first stderr line carries the code and a reason:
+`error (code=3, reason=workspace_not_initialized): <message>`. The reason is a stable
+token that tells apart failures sharing a code — within code 3, `validation_refused`,
+`outside_git_workspace` and `workspace_not_initialized` each call for a different act —
+so a script branches on it rather than on the message, which may span several lines.
+A `remediation:` line follows the message when the reason has one.
+
 Code 6 is not a failure: the command ran correctly and changed nothing. It exists so a
 caller looping `lit next` can tell "stop, there is nothing for you" from "lit is broken"
 without reading the message, and it carries the same answer for a mutation that was

@@ -141,11 +141,18 @@ func TestCommandErrorReason(t *testing.T) {
 			"validation_refused",
 		},
 	}
+	// Asserted on the rendered header, not on commandErrorReason: the header
+	// is where a caller reads the reason, so a reason computed correctly and
+	// printed nowhere must fail here.
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			if got := commandErrorReason(tc.err); got != tc.want {
-				t.Fatalf("commandErrorReason = %q, want %q", got, tc.want)
+			var stderr bytes.Buffer
+			WriteCommandError(&stderr, tc.err)
+			header, _, _ := strings.Cut(stderr.String(), "\n")
+			wantPrefix := fmt.Sprintf("error (code=%d, reason=%s): ", ExitCode(tc.err), tc.want)
+			if !strings.HasPrefix(header, wantPrefix) {
+				t.Fatalf("header = %q, want prefix %q", header, wantPrefix)
 			}
 		})
 	}
@@ -162,7 +169,7 @@ func TestWriteCommandError(t *testing.T) {
 		t.Fatalf("exitCode = %d, want %d", exitCode, ExitValidation)
 	}
 	out := stderr.String()
-	if !strings.Contains(out, "error (code=3): unknown command \"unknown\"") {
+	if !strings.Contains(out, "error (code=3, reason=unknown_command): unknown command \"unknown\"") {
 		t.Fatalf("missing error line: %q", out)
 	}
 	if !strings.Contains(out, "remediation: Run `lit --help`") {
@@ -238,7 +245,7 @@ func TestWriteCommandErrorUninitializedWorkspace(t *testing.T) {
 		t.Fatalf("exitCode = %d, want %d (ExitValidation)", code, ExitValidation)
 	}
 	out := stderr.String()
-	if !strings.Contains(out, "error (code=3): repository not initialized with lit — run 'lit init' first") {
+	if !strings.Contains(out, "error (code=3, reason=workspace_not_initialized): repository not initialized with lit — run 'lit init' first") {
 		t.Fatalf("missing the message body at the precondition exit code: %q", out)
 	}
 	if strings.Contains(out, "Retry the command") {
@@ -280,8 +287,9 @@ func upgradeTargetBehindError() *UpgradeTargetBehindError {
 func TestWriteCommandErrorSchemaVersionRefusals(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name string
-		err  error
+		name   string
+		err    error
+		reason string
 		// want is the remediation's act; absent is advice that would be false
 		// for this refusal.
 		want, absent string
@@ -290,9 +298,9 @@ func TestWriteCommandErrorSchemaVersionRefusals(t *testing.T) {
 		// the agent looking for a flag that does not exist.
 		// Both paths the message names change more than this command, so the
 		// agent is told to wait for the user rather than take either.
-		{"workspace schema ahead", schemaAheadError(), "take such a path only when the user directs it", "adjust the command"},
+		{"workspace schema ahead", schemaAheadError(), "workspace_schema_ahead", "take such a path only when the user directs it", "adjust the command"},
 		// The message names a newer target, which is the command adjusted.
-		{"upgrade target behind", upgradeTargetBehindError(), "adjust the command to satisfy it", "supported path"},
+		{"upgrade target behind", upgradeTargetBehindError(), "validation_refused", "adjust the command to satisfy it", "supported path"},
 	}
 	for _, tc := range tests {
 		tc := tc
@@ -303,7 +311,7 @@ func TestWriteCommandErrorSchemaVersionRefusals(t *testing.T) {
 				t.Fatalf("exitCode = %d, want %d (ExitValidation)", code, ExitValidation)
 			}
 			out := stderr.String()
-			if !strings.Contains(out, "error (code=3): "+tc.err.Error()) {
+			if !strings.Contains(out, "error (code=3, reason="+tc.reason+"): "+tc.err.Error()) {
 				t.Fatalf("missing the message body at exit 3: %q", out)
 			}
 			_, remediation, ok := strings.Cut(out, "\nremediation: ")

@@ -11,15 +11,23 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-// WriteCommandError renders a failed command to stderr: the exit code and
-// message, plus the actionable remediation for the error's typed reason. Text
-// is the one canonical surface, so the remediation guidance reaches every
-// caller. [LAW:single-enforcer] The error→reason→remediation mapping is derived
-// in one boundary.
+// WriteCommandError renders a failed command to stderr: a header carrying the
+// exit code and the error's typed reason, the message, then the actionable
+// remediation for that reason. Text is the one canonical surface, so the
+// remediation guidance reaches every caller. [LAW:single-enforcer] The
+// error→reason→remediation mapping is derived in one boundary.
+//
+// The reason rides in the header beside the code because the exit code is
+// deliberately coarse — exit 3 alone covers a bad flag, a directory that is
+// not a repository, and a repository with no workspace, each cleared by a
+// different act — and the header is the one line whose position is fixed: a
+// message can span lines, so a reason printed after it would sit at an offset
+// no caller can find without parsing the message.
 func WriteCommandError(stderr io.Writer, err error) int {
 	exitCode := ExitCode(err)
-	_, _ = fmt.Fprintf(stderr, "error (code=%d): %v\n", exitCode, err)
-	if remediation := commandErrorRemediation(commandErrorReason(err)); remediation != "" {
+	reason := commandErrorReason(err)
+	_, _ = fmt.Fprintf(stderr, "error (code=%d, reason=%s): %v\n", exitCode, reason, err)
+	if remediation := commandErrorRemediation(reason); remediation != "" {
 		_, _ = fmt.Fprintf(stderr, "remediation: %s\n", remediation)
 	}
 	return exitCode
