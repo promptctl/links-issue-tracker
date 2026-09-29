@@ -2948,7 +2948,8 @@ Frame behavior pinned by tests — `internal/store/ranking_frame_test.go`:
   ```sql
   SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' AND <frame> = ? ORDER BY item_rank ASC, id ASC
   ```
-  bound with the frame alone, through `rankRows`; error → `fmt.Errorf("rank set: read the keys of frame %q: %w", f, err)`.
+  bound with the frame alone, through `frameSlotsTx`; error → `fmt.Errorf("rank set: read the keys of frame %q: %w", f, err)`.
+- Each key two slots share (`tiedKeys`) is respaced by `smoothRanksTx(ctx, tx, key)`, error → `fmt.Errorf("rank set: separate the issues sharing %q: %w", key, err)`, and the slots are read again. A tie that survives → `fmt.Errorf("rank set: frame %q still holds issues sharing the keys %v after respacing — refusing to write an order they cannot hold", f, tied)`.
 - `storage.RankSetOrder(f, occupants, ranked)` (`internal/storage/rank.go`) names each slot's new occupant: the representatives in the order named, then every other frame member in its current order. A representative that is not one of the frame's ranked members makes the result longer than the frame → `fmt.Errorf("rank set: %d issues resolved into %s but the frame holds %d ranked — refusing to rewrite a partial order", len(ordered), f, len(occupants))`. The memory engine applies the same function to its slots (`internal/storage/memory/rank.go`).
 - Each slot's key passes to its new occupant; a slot whose occupant is unchanged is not written. `writeRanksTx` writes the moved keys in one statement per `idBatches` batch — `UPDATE issues SET item_rank = CASE id WHEN ? THEN ? … END, updated_at = COALESCE(CASE id WHEN ? THEN ? … END, updated_at) WHERE deleted_at IS NULL AND id IN (…)`, error → `fmt.Errorf("rewrite the keys of %v: %w", batch, err)`, wrapped `fmt.Errorf("rank set: %w", err)`. A write is `touched` only for a representative whose key changed; it takes one shared `now`, and every other write is bound NULL, so it keeps its `updated_at`. No key is minted, so the frame holds the same set of keys before and after, and a repeat of an order that has arrived writes nothing.
 - Atomic: all assignments in one mutation.
@@ -2963,23 +2964,23 @@ Tests: absolute top ordering — `internal/store/store_test.go`; duplicates reje
 2. `half := rank.SmoothingWindow / 2` = 16.
 3. Below half:
    ```sql
-   SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank <= ? ORDER BY item_rank DESC LIMIT ?
+   SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank <= ? ORDER BY item_rank DESC, id DESC LIMIT ?
    ```
    bound `(triggerRank, half)`; error → `"smooth: below: %w"`. The rows come back descending and are reversed to ascending.
 4. Above half:
    ```sql
-   SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank > ? ORDER BY item_rank ASC LIMIT ?
+   SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank > ? ORDER BY item_rank ASC, id ASC LIMIT ?
    ```
    bound `(triggerRank, half)`; error → `"smooth: above: %w"`. The two halves concatenate into the window.
 5. Empty window → no-op; a window of one entry is respaced like any other.
 6. The run bounds are computed from the window's own ends rather than scanned for: `runFloor` is `rank.Significant(window[0].rank)`, the least rank sharing the bottom end's significant part; `runCeiling` is `rank.Significant(window[len-1].rank) + "1"`, the least rank sorting above every rank sharing the top end's. Ranks sharing a significant part sort contiguously, so these two values delimit exactly the runs the window's ends sit in.
 7. Two bounded range queries pick up the rest of each run:
    ```sql
-   SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank >= ? AND item_rank < ? ORDER BY item_rank ASC
+   SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank >= ? AND item_rank < ? ORDER BY item_rank ASC, id ASC
    ```
    bound `(runFloor, window[0].rank)`, error → `"smooth: lower run: %w"`; and
    ```sql
-   SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank > ? AND item_rank < ? ORDER BY item_rank ASC
+   SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank > ? AND item_rank < ? ORDER BY item_rank ASC, id ASC
    ```
    bound `(window[len-1].rank, runCeiling)`, error → `"smooth: upper run: %w"`. Both already ascend, so they concatenate around the window in order. Both ranges are bounded on each side, so a run costs the rows it holds rather than a scan of the sorted set.
 8. The bounds themselves, one row each: the greatest rank below `runFloor` (`ORDER BY item_rank DESC LIMIT 1`), error → `"smooth: lower bound: %w"`; and the least rank at or above `runCeiling` (`ORDER BY item_rank ASC LIMIT 1`), error → `"smooth: upper bound: %w"`. A side with no such row leaves the bound `""` (meaning open-ended).

@@ -632,15 +632,27 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 				return storage.RankSetResult{}, fmt.Errorf("rank set: %w", err)
 			}
 		}
-		// The frame's own keys, lowest first, are the slots the new order fills.
-		// Every representative is a frame-mate by construction, so this is the
-		// whole keyspace the order is read in. Ties fall to id, as they do in
-		// every listing, so a slot's place here is its place on screen.
-		slots, err := rankRows(ctx, tx, fmt.Sprintf(`SELECT id, item_rank FROM issues
-			WHERE deleted_at IS NULL AND item_rank != '' AND %s = ?
-			ORDER BY item_rank ASC, id ASC`, frameColumn), string(f))
+		slots, err := frameSlotsTx(ctx, tx, f)
 		if err != nil {
-			return storage.RankSetResult{}, fmt.Errorf("rank set: read the keys of frame %q: %w", f, err)
+			return storage.RankSetResult{}, err
+		}
+		// Two slots on one key cannot carry an order between them: the
+		// permutation hands keys round unchanged, so the pair would still sort by
+		// id whichever way it was named. Keys arrive verbatim through an import
+		// and can tie, so each tied key is respaced first — the room-making
+		// smoothing does anywhere — and the slots are read again. A tie that
+		// survives is refused rather than written as though the order held.
+		// [LAW:no-silent-failure]
+		for _, key := range tiedKeys(slots) {
+			if err := smoothRanksTx(ctx, tx, key); err != nil {
+				return storage.RankSetResult{}, fmt.Errorf("rank set: separate the issues sharing %q: %w", key, err)
+			}
+		}
+		if slots, err = frameSlotsTx(ctx, tx, f); err != nil {
+			return storage.RankSetResult{}, err
+		}
+		if tied := tiedKeys(slots); len(tied) > 0 {
+			return storage.RankSetResult{}, fmt.Errorf("rank set: frame %q still holds issues sharing the keys %v after respacing — refusing to write an order they cannot hold", f, tied)
 		}
 		occupants := make([]string, len(slots))
 		for i, slot := range slots {
@@ -673,6 +685,31 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 		}
 		return storage.RankSetResult{Resolutions: resolutions, Frame: f}, nil
 	})
+}
+
+// frameSlotsTx is a frame's ranked members, lowest key first: the slots a rank
+// set's new order fills. Ties fall to id, as they do in every listing, so a
+// slot's place here is its place on screen.
+func frameSlotsTx(ctx context.Context, tx *sql.Tx, f storage.Frame) ([]rankedIssue, error) {
+	slots, err := rankRows(ctx, tx, fmt.Sprintf(`SELECT id, item_rank FROM issues
+		WHERE deleted_at IS NULL AND item_rank != '' AND %s = ?
+		ORDER BY item_rank ASC, id ASC`, frameColumn), string(f))
+	if err != nil {
+		return nil, fmt.Errorf("rank set: read the keys of frame %q: %w", f, err)
+	}
+	return slots, nil
+}
+
+// tiedKeys lists, once each, every key more than one slot holds. The slots are
+// in key order, so a tie is two neighbours.
+func tiedKeys(slots []rankedIssue) []string {
+	var tied []string
+	for i := 1; i < len(slots); i++ {
+		if slots[i].rank == slots[i-1].rank {
+			tied = append(tied, slots[i].rank)
+		}
+	}
+	return slices.Compact(tied)
 }
 
 // rankWrite is one issue's new key, and whether the write is an update to that
@@ -1053,15 +1090,17 @@ func smoothRanksIfNeededTx(ctx context.Context, tx *sql.Tx, triggerRank string) 
 // taken from outside that run: below the run's own least rank, and at or above
 // the least rank sorting past every member of the top run. Bounds picked that
 // way can never share a significant part, so the primitive always has room.
-// The window keeps its order, and its new ranks are longer than both bounds,
-// so a window bounded by long ranks comes out long.
+// The window keeps its order — rows sharing a key in id order, as every
+// listing shows them, which is also how a tie comes out separated — and its
+// new ranks are longer than both bounds, so a window bounded by long ranks
+// comes out long.
 func smoothRanksTx(ctx context.Context, tx *sql.Tx, triggerRank string) error {
 	half := rank.SmoothingWindow / 2
 
 	// Collect the window: up to half items at or below the trigger, plus
 	// up to half items above it.
 	below, err := rankRows(ctx, tx,
-		`SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank <= ? ORDER BY item_rank DESC LIMIT ?`,
+		`SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank <= ? ORDER BY item_rank DESC, id DESC LIMIT ?`,
 		triggerRank, half)
 	if err != nil {
 		return fmt.Errorf("smooth: below: %w", err)
@@ -1069,7 +1108,7 @@ func smoothRanksTx(ctx context.Context, tx *sql.Tx, triggerRank string) error {
 	slices.Reverse(below)
 
 	above, err := rankRows(ctx, tx,
-		`SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank > ? ORDER BY item_rank ASC LIMIT ?`,
+		`SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank > ? ORDER BY item_rank ASC, id ASC LIMIT ?`,
 		triggerRank, half)
 	if err != nil {
 		return fmt.Errorf("smooth: above: %w", err)
@@ -1091,13 +1130,13 @@ func smoothRanksTx(ctx context.Context, tx *sql.Tx, triggerRank string) error {
 	runCeiling := rank.Significant(window[len(window)-1].rank) + "1"
 
 	lowerRun, err := rankRows(ctx, tx,
-		`SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank >= ? AND item_rank < ? ORDER BY item_rank ASC`,
+		`SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank >= ? AND item_rank < ? ORDER BY item_rank ASC, id ASC`,
 		runFloor, window[0].rank)
 	if err != nil {
 		return fmt.Errorf("smooth: lower run: %w", err)
 	}
 	upperRun, err := rankRows(ctx, tx,
-		`SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank > ? AND item_rank < ? ORDER BY item_rank ASC`,
+		`SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank > ? AND item_rank < ? ORDER BY item_rank ASC, id ASC`,
 		window[len(window)-1].rank, runCeiling)
 	if err != nil {
 		return fmt.Errorf("smooth: upper run: %w", err)

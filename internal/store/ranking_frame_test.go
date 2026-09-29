@@ -1468,6 +1468,36 @@ func TestRankSetStampsOnlyTheIssuesItNamed(t *testing.T) {
 	}
 }
 
+// TestRankSetSeparatesIssuesSharingAKey pins that a rank set's order holds
+// when two of the frame's issues share a key, as imported keys can. Handing
+// the pair each other's key would leave both on one key, listed by id — the
+// order named reversed here would come back unchanged, reported as success.
+func TestRankSetSeparatesIssuesSharingAKey(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	ids := makeIssues(t, ctx, st, 3, "row %d")
+	slices.Sort(ids)
+	a, b, c := ids[0], ids[1], ids[2]
+	held := currentRanks(t, ctx, st, []model.Issue{{ID: a}})[a]
+	if _, err := st.db.ExecContext(ctx, `UPDATE issues SET item_rank = ? WHERE id = ?`, held, b); err != nil {
+		t.Fatalf("tie %s to %s: %v", b, a, err)
+	}
+
+	if _, err := st.RankSet(ctx, []string{b, a}); err != nil {
+		t.Fatalf("RankSet over a tied pair error = %v", err)
+	}
+	after, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
+	if err != nil {
+		t.Fatalf("ListIssues() error = %v", err)
+	}
+	if got, want := issueIDs(after), []string{b, a, c}; !slices.Equal(got, want) {
+		t.Fatalf("order after rank set = %v, want %v", got, want)
+	}
+	assertDistinctStoredRanks(t, after)
+}
+
 // TestRankSetPlacesANamedIssueThatHoldsNoKey pins that an unranked issue can be
 // named in a rank set. An import writes a row unranked when its source had
 // none, so the permutation has no slot for it to take; it joins its frame
@@ -1493,10 +1523,17 @@ func TestRankSetPlacesANamedIssueThatHoldsNoKey(t *testing.T) {
 	if got, want := issueIDs(after), []string{b, c, a}; !slices.Equal(got, want) {
 		t.Fatalf("order after rank set = %v, want %v", got, want)
 	}
+	assertDistinctStoredRanks(t, after)
+}
+
+// assertDistinctStoredRanks fails for every issue holding no key or a key
+// another listed issue holds.
+func assertDistinctStoredRanks(t *testing.T, issues []model.Issue) {
+	t.Helper()
 	seen := map[string]string{}
-	for _, issue := range after {
+	for _, issue := range issues {
 		if issue.Rank == "" {
-			t.Errorf("%s holds no key after rank set", issue.ID)
+			t.Errorf("%s holds no key", issue.ID)
 		}
 		if prior, dup := seen[issue.Rank]; dup {
 			t.Errorf("%s and %s both hold %q", prior, issue.ID, issue.Rank)
