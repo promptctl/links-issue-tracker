@@ -224,8 +224,11 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 		if _, err := fmt.Fprintln(w, "\ncomments:"); err != nil {
 			return err
 		}
+		// A body renders in its authored lines: each continuation line is indented
+		// under its "- [author]" row, so a body line can never read as the start of
+		// the next comment and the list stays delimited without escaping anything.
 		for _, c := range detail.Comments {
-			if _, err := fmt.Fprintf(w, "- [%s] %s\n", c.CreatedBy, strings.ReplaceAll(c.Body, "\n", "\\n")); err != nil {
+			if _, err := fmt.Fprintf(w, "- [%s] %s\n", c.CreatedBy, strings.ReplaceAll(c.Body, "\n", "\n  ")); err != nil {
 				return err
 			}
 		}

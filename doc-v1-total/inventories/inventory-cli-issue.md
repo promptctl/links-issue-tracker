@@ -856,7 +856,7 @@ lines|table") is built from the same map (`cli.go`, `output.go`).
    `[closed:duplicate]`, `[closed:superseded]`, `[closed:obsolete]`,
    `[closed:wontfix]` — with a bare `[closed]` for a close that recorded none.
    There is deliberately **no** `siblings` group here (`output.go`).
-8. `\ncomments:` then `- [<createdBy>] <body>` with newlines in the body escaped
+8. `\ncomments:` then `- [<createdBy>] <body>` with each line of the body after its first indented two spaces
    to the literal `\n` (`output.go`).
 9. **No** history block — history lives behind `lit history` (`output.go`).
 10. Then `writeEpicContext` appends the epic plan block (§2.5). The block is
