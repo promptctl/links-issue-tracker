@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/rank"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -274,7 +275,7 @@ func createRankTestIssue(t *testing.T, ctx context.Context, st *Store, title str
 // End to end through the store: a backlog in a known deliberate order with
 // exactly one inversion comes back with exactly one ticket moved, every other
 // ticket holding the byte-identical rank it went in with, and no inversions
-// left.
+// left. The moved ticket is stamped as updated by the repair; no other is.
 func TestFixRankInversionsMovesOnlyTheInvertedTicket(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -305,6 +306,8 @@ func TestFixRankInversionsMovesOnlyTheInvertedTicket(t *testing.T) {
 		t.Fatalf("Doctor(before).RankInversions = %d, want exactly 1", report.RankInversions)
 	}
 
+	fixedAt := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	st.clock = func() time.Time { return fixedAt }
 	fixed, err := st.FixRankInversions(ctx)
 	if err != nil {
 		t.Fatalf("FixRankInversions() error = %v", err)
@@ -315,6 +318,13 @@ func TestFixRankInversionsMovesOnlyTheInvertedTicket(t *testing.T) {
 
 	after := ranksByID(t, ctx, st, deliberate)
 	for _, id := range deliberate {
+		issue, err := st.GetIssue(ctx, id)
+		if err != nil {
+			t.Fatalf("GetIssue(%s) error = %v", id, err)
+		}
+		if stamped := issue.UpdatedAt.Equal(fixedAt); stamped != (id == dependent) {
+			t.Fatalf("issue %s updated_at = %s; the repair stamps the ticket it moved and no other", id, issue.UpdatedAt)
+		}
 		if id == dependent {
 			continue
 		}
