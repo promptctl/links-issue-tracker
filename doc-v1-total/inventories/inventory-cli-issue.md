@@ -1610,8 +1610,8 @@ Family `depFamily`, usage `"usage: lit dep <add|rm|ls> ..."` (`dependency.go`).
      (`internal/storage/edges.go` — note the double space).
      Leaf epic: the parent's ID if the issue is not a container and its parent
      is, else `""` (`leafEpicID`, `dependency.go`). Two floating issues are not
-     same-epic (`dependency.go`). An endpoint that is an ancestor of the other
-     at any depth is refused with the same message by the store's `AddRelation`
+     same-epic (`dependency.go`). An endpoint inside the other's epic at any
+     depth, climbing only through epic parents, is refused with the same message by the store's `AddRelation`
      (`storage.RejectBlocksAlongHierarchy`, `internal/storage/edges.go`).
 - Endpoint orientation: `rt.StoreEndpoints(from, to)` swaps the pair for `blocks`
   (stored dependent→dependency) and is an involution

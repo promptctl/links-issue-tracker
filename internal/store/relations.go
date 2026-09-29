@@ -367,17 +367,17 @@ func addRelationTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
 func rejectCycleTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
 	switch rel.Type {
 	case model.RelBlocks:
-		parentOf, err := loadParentEdges(ctx, tx)
-		if err != nil {
-			return fmt.Errorf("blocks hierarchy check: %w", err)
-		}
-		if err := storage.RejectBlocksAlongHierarchy(parentOf, rel.SrcID, rel.DstID); err != nil {
-			return err
-		}
 		// A rank order is a total order, and one that honors every blocks edge
 		// exists iff there is no cycle, so a cycle is an unsatisfiable
 		// constraint set rather than an awkward shape.
-		return rejectBlocksCycle(ctx, tx, rel.SrcID, rel.DstID)
+		if err := rejectBlocksCycle(ctx, tx, rel.SrcID, rel.DstID); err != nil {
+			return err
+		}
+		epicParentOf, err := loadEpicParentEdges(ctx, tx)
+		if err != nil {
+			return fmt.Errorf("blocks hierarchy check: %w", err)
+		}
+		return storage.RejectBlocksAlongHierarchy(epicParentOf, rel.SrcID, rel.DstID)
 	case model.RelParentChild:
 		return rejectParentCycle(ctx, tx, rel.SrcID, rel.DstID)
 	}
@@ -585,10 +585,27 @@ func parentCycle(parentOf map[string][]string) []string {
 // and the detector exists for precisely that data.
 // [LAW:types-are-the-program] The strongest theorem that is still true.
 func loadParentEdges(ctx context.Context, q rowQueryer) (map[string][]string, error) {
+	return queryParentEdges(ctx, q, "TRUE")
+}
+
+// epicParentPredicate keeps the parent edges whose parent is an epic.
+var epicParentPredicate = fmt.Sprintf("p.issue_type IN (%s)", quotedIssueTypeList(model.ContainerTypes()))
+
+// loadEpicParentEdges is loadParentEdges narrowed to edges whose parent is an
+// epic: the containment an epic's blockers reach down through, and the only
+// containment storage.RejectBlocksAlongHierarchy climbs.
+func loadEpicParentEdges(ctx context.Context, q rowQueryer) (map[string][]string, error) {
+	return queryParentEdges(ctx, q, epicParentPredicate)
+}
+
+// queryParentEdges reads child -> parents for the parent edges parentFilter
+// keeps; `p` is the parent's issues row. [LAW:one-source-of-truth] One query
+// body, so the full and epic-only readings cannot drift apart.
+func queryParentEdges(ctx context.Context, q rowQueryer, parentFilter string) (map[string][]string, error) {
 	rows, err := q.QueryContext(ctx, `SELECT r.src_id, r.dst_id FROM relations r
 		JOIN issues i ON i.id = r.src_id
 		JOIN issues p ON p.id = r.dst_id
-		WHERE r.type = 'parent-child'
+		WHERE r.type = 'parent-child' AND `+parentFilter+`
 		ORDER BY r.src_id, r.dst_id`)
 	if err != nil {
 		return nil, fmt.Errorf("query parent edges: %w", err)

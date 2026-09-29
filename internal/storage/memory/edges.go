@@ -211,26 +211,33 @@ func (e *Engine) addRelation(in storage.AddRelationInput) (model.Relation, error
 func (e *Engine) rejectCycle(relType model.RelationType, srcID, dstID string) error {
 	switch relType {
 	case model.RelBlocks:
-		parentOf := map[string][]string{}
-		for _, rel := range e.relations {
-			if rel.Type == model.RelParentChild {
-				parentOf[rel.SrcID] = append(parentOf[rel.SrcID], rel.DstID)
-			}
-		}
-		if err := storage.RejectBlocksAlongHierarchy(parentOf, srcID, dstID); err != nil {
-			return err
-		}
 		// A rank order is a total order, and one honoring every blocks edge
 		// exists exactly when there is no cycle, so a cycle is an unsatisfiable
 		// constraint set rather than an awkward shape. Rejecting the
 		// cycle-closing edge at this write boundary is what makes the state
 		// unrepresentable rather than something a later repair pass notices.
 		// [LAW:types-are-the-program]
-		return e.rejectBlocksCycle(srcID, dstID)
+		if err := e.rejectBlocksCycle(srcID, dstID); err != nil {
+			return err
+		}
+		return storage.RejectBlocksAlongHierarchy(e.epicParentOf(), srcID, dstID)
 	case model.RelParentChild:
 		return e.rejectParentCycle(srcID, dstID)
 	}
 	return nil
+}
+
+// epicParentOf maps each child to its parents that are epics — the Dolt
+// engine's loadEpicParentEdges, rendered over this engine's slices. An edge
+// whose parent has no record is dropped, as that engine's join on issues drops it.
+func (e *Engine) epicParentOf() map[string][]string {
+	epicParentOf := map[string][]string{}
+	for _, rel := range e.relations {
+		if parent, ok := e.issues[rel.DstID]; ok && rel.Type == model.RelParentChild && parent.issueType.IsContainer() {
+			epicParentOf[rel.SrcID] = append(epicParentOf[rel.SrcID], rel.DstID)
+		}
+	}
+	return epicParentOf
 }
 
 // rejectParentCycle refuses an edge that would close a loop in the hierarchy.

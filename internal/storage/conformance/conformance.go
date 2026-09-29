@@ -1994,6 +1994,27 @@ func blocksNeverRunsAlongTheHierarchy(t *testing.T, ctx context.Context, st stor
 		t.Fatalf("AddRelation(leaf depends on a cousin) error = %v; neither is above the other", err)
 	}
 
+	// Only an epic contains: a parent that is not an epic ends the climb, as it
+	// ends readiness's, so nothing below it is inside the epic above it either.
+	holder := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "task parent", Topic: "core", ParentID: root.ID})
+	held := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "task child", Topic: "core", ParentID: holder.ID})
+	accepted := []struct {
+		what                  string
+		dependent, dependency string
+	}{
+		{"a task parent blocking its child", held.ID, holder.ID},
+		{"a task child blocking its parent", holder.ID, held.ID},
+		{"an epic blocking an issue under its task child", held.ID, root.ID},
+	}
+	for _, a := range accepted {
+		if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: a.dependent, DstID: a.dependency, Type: model.RelBlocks}); err != nil {
+			t.Errorf("AddRelation(%s) error = %v; no epic contains both", a.what, err)
+		}
+		if err := st.RemoveRelation(ctx, a.dependent, a.dependency, model.RelBlocks); err != nil {
+			t.Fatalf("RemoveRelation(%s) error = %v", a.what, err)
+		}
+	}
+
 	_, err := st.ImportTree(ctx, prefix, []storage.ImportTreeSpec{
 		{LocalID: "e", Title: "imported epic", IssueType: "epic", Topic: "core"},
 		{LocalID: "s", Title: "imported sub-epic", IssueType: "epic", Topic: "core", Parent: "e"},

@@ -138,8 +138,8 @@ func depRelationForCLI(rel model.Relation) model.Relation {
 
 // rejectSameEpicBlocks errors when both endpoints are leaves of one epic —
 // siblings, which rank already orders. The other half of the rule, an edge
-// between an issue and any of its ancestors, is the store's: it refuses that
-// shape on every write path, imports included, with the same message.
+// between an issue and an epic it sits under, is the store's: it refuses that
+// shape on every blocks write, imports included, with the same message.
 func rejectSameEpicBlocks(ctx context.Context, ap *app.App, fromID, toID string) error {
 	fromEpic, err := leafEpicID(ctx, ap, fromID)
 	if err != nil {
