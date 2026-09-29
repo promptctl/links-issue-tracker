@@ -67,7 +67,7 @@ On failure the process prints to stderr: `error (code=N, reason=<reason>): <mess
    - *Reserved blocking labels* — the label `needs-design` → `NeedsDesign`; the label `external` → `External`. The message is the label (`ready_state.go`).
    - *Focus path* — issues on the prerequisite closure of any open goal labeled `focus`, computed by BFS over dependencies, dependencies inherited from ancestor epics, container children, and earlier same-lane siblings; shared prerequisites attribute to the first goal reached (`ready_state.go`).
 4. **Classification**: annotations map to roles — blocking (`MissingField`, `OpenDependency`, `InheritedDependency`, `EarlierSiblingPending`, `NeedsDesign`, `External`), orphaned, rank-inversion, or none (`FocusPath`). **Ready = zero blocking annotations** (`readiness.go`). An unclassified kind panics.
-5. **Ordering**, three stable sorts in sequence: composite rank (a leaf inside an epic sorts by the epic's rank, then its own), then priority (urgent first), then focus-path rows first — so focus outranks urgent (`cli.go`, `ready_state.go`).
+5. **Ordering**: the listing's rank order — tree order, so a leaf inside an epic sorts at the epic's place, then by its own rank — then one stable sort by priority (urgent first). Focus is a scope over the rows, not a sort key (`cli.go`, `ready_state.go`).
 
 Rollups partition rows as: `in_progress` first (even if also blocked), else blocked, else ready (`ready_state.go`).
 

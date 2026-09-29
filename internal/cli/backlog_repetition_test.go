@@ -163,8 +163,8 @@ func TestBacklogReopensARunAfterAnInterruption(t *testing.T) {
 }
 
 // Suppressing a repeat changes what absence means: a row without an epic line
-// could have no epic, or could continue the epic above, and sortByCompositeRank
-// interleaves standalone leaves with epic children by rank, so a standalone
+// could have no epic, or could continue the epic above, and rank order
+// interleaves standalone leaves with epics, so a standalone
 // ticket sitting under an epic's last child is routine. A run opening under no
 // epic therefore says so.
 func TestBacklogSaysWhenARunOpensUnderNoEpic(t *testing.T) {

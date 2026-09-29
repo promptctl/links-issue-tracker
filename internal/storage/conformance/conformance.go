@@ -189,6 +189,7 @@ var cases = []engineCase{
 	{"rank_set_stays_inside_its_frame", rankSetStaysInsideItsFrame},
 	{"rank_set_over_a_whole_frame_permutes_its_keys", rankSetOverAWholeFramePermutesItsKeys},
 	{"rank_verbs_refuse_a_deleted_issue", rankVerbsRefuseADeletedIssue},
+	{"a_container_lists_before_everything_inside_it", aContainerListsBeforeEverythingInsideIt},
 	{"close_redirects_to_a_canonical", closeRedirectsToCanonical},
 	{"comments_roundtrip", commentsRoundtrip},
 	{"labels_roundtrip", labelsRoundtrip},
@@ -1630,6 +1631,73 @@ func rankVerbsRefuseADeletedIssue(t *testing.T, ctx context.Context, st storage.
 		t.Errorf("a refused rank write moved the unnamed %s: rank %q -> %q", bystander.ID, bystanderRank, after)
 	}
 	assertPrecedes(t, listed, sibling.ID, bystander.ID)
+}
+
+// aContainerListsBeforeEverythingInsideIt pins what "rank order" means once
+// frames nest: tree order. A container lists before everything inside it and
+// its subtree lists together, whatever keys the frames around it hold.
+//
+// Keys are frame-local, so nothing stops a container's key from passing its
+// descendants' — a container moved past an outsider crosses them, and one a
+// rank set displaces crosses them without being named. The fixture builds
+// both, with a grandchild under a task so the rule is seen to hold at a second
+// level and under a parent that is not an epic. Every listing is asserted
+// whole, because a key-ordered listing puts the container after its own
+// children in each of them.
+func aContainerListsBeforeEverythingInsideIt(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	outer := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "outer", Topic: "core"})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", ParentID: epic.ID})
+	task := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "task", Topic: "core", ParentID: epic.ID})
+	grandchild := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "grandchild", Topic: "core", ParentID: task.ID})
+	last := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "last", Topic: "core"})
+
+	// Moved: the epic's new key lies past every key its subtree holds.
+	if _, err := st.RankBelow(ctx, epic.ID, last.ID); err != nil {
+		t.Fatalf("RankBelow(epic, last) error = %v", err)
+	}
+	listed := mustList(t, ctx, st, storage.ListIssuesFilter{})
+	assertDistinctRanks(t, listed)
+	assertIssueIDs(t, "after the epic is moved past its own children", listed,
+		[]string{outer.ID, last.ID, epic.ID, child.ID, task.ID, grandchild.ID})
+	assertIssueIDs(t, "descending is the same order reversed",
+		mustList(t, ctx, st, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: "rank", Desc: true}}}),
+		[]string{grandchild.ID, task.ID, child.ID, epic.ID, last.ID, outer.ID})
+	// The epic's key orders its descendants even in a listing that leaves the
+	// epic out.
+	assertIssueIDs(t, "a listing without the container still orders by it",
+		mustList(t, ctx, st, storage.ListIssuesFilter{ExcludeIssueTypes: []model.IssueType{model.TypeEpic}}),
+		[]string{outer.ID, last.ID, child.ID, task.ID, grandchild.ID})
+
+	if _, err := st.RankAbove(ctx, epic.ID, outer.ID); err != nil {
+		t.Fatalf("RankAbove(epic, outer) error = %v", err)
+	}
+	assertOrder(t, ctx, st, "after the epic returns to the top",
+		epic.ID, child.ID, task.ID, grandchild.ID, outer.ID, last.ID)
+
+	// Displaced: a rank set names only the outsiders, and the epic takes the
+	// last of its frame's keys, past everything inside it.
+	if _, err := st.RankSet(ctx, []string{outer.ID, last.ID}); err != nil {
+		t.Fatalf("RankSet(outer, last) error = %v", err)
+	}
+	listed = mustList(t, ctx, st, storage.ListIssuesFilter{})
+	assertDistinctRanks(t, listed)
+	assertIssueIDs(t, "after a rank set displaces the epic past its own children", listed,
+		[]string{outer.ID, last.ID, epic.ID, child.ID, task.ID, grandchild.ID})
+
+	// A view's group of related issues follows the same rule: dependencies
+	// spread over three frames list in tree order, not by their own keys.
+	for _, dependency := range []model.Issue{grandchild, epic, last} {
+		if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: outer.ID, DstID: dependency.ID, Type: model.RelBlocks, CreatedBy: "ada"}); err != nil {
+			t.Fatalf("AddRelation(%s blocks-on %s) error = %v", outer.ID, dependency.ID, err)
+		}
+	}
+	detail, err := st.GetIssueDetail(ctx, outer.ID)
+	if err != nil {
+		t.Fatalf("GetIssueDetail(%s) error = %v", outer.ID, err)
+	}
+	assertIssueIDs(t, "an issue's dependencies across frames", detail.DependsOn,
+		[]string{last.ID, epic.ID, grandchild.ID})
 }
 
 // rankIntentsResolveAcrossFrames is why the anchored verbs report a RankMove

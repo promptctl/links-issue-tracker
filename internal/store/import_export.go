@@ -122,6 +122,17 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 		report.Errors = append(report.Errors, fmt.Sprintf("parent cycle: %s (a hierarchy has no root once it loops; every walk up this chain runs forever, so the rank and dependency checks below could not be run — break the loop with 'lit parent clear' on one member, which detaches without reading the hierarchy, then re-run)", strings.Join(cycle, " -> ")))
 		return report, nil
 	}
+	// A child more than one framing edge claims still lists — under its lowest
+	// parent id, which is where tree order and the frame lookup both put it —
+	// so this is the one place the fault is said out loud, and the checks
+	// below it still run. [LAW:no-silent-failure] [LAW:single-enforcer]
+	ancestry, err := loadRankAncestry(ctx, s.db)
+	if err != nil {
+		return report, fmt.Errorf("rank ancestry: %w", err)
+	}
+	for _, conflict := range ancestry.Conflicts() {
+		report.Errors = append(report.Errors, conflict.Finding())
+	}
 	// Rank inversions and a blocks dependency cycle are two questions about one
 	// snapshot — the live rank order and the blocks edges — so it is read once.
 	// Liveness is the lifecycle's classification, never a SQL filter; see

@@ -383,6 +383,66 @@ func TestVerifyCandidateReportsAParentCycleRatherThanHanging(t *testing.T) {
 	}
 }
 
+// A child two parents claim is a fault in the data, and every reader still
+// answers over it — the listing, the export behind backup and sync, `lit show`
+// — because the readers are not where it is enforced. Tree order and the frame
+// lookup both put the child under the lower parent id, so a rank move and the
+// listing agree on where it sits; doctor is where the fault is said out loud,
+// with its other checks still run; and the repair it names clears it.
+func TestAChildWithTwoParentsIsReportedAndRepairable(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	first := parentChain(t, ctx, st, "E1", "C")
+	second := parentChain(t, ctx, st, "E2")
+	child := first[1]
+	seedParentEdge(t, ctx, st, child.ID, second[0].ID)
+	lower := min(first[0].ID, second[0].ID)
+
+	listed, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
+	if err != nil {
+		t.Fatalf("ListIssues() error = %v, want the workspace listed", err)
+	}
+	at := slices.IndexFunc(listed, func(issue model.Issue) bool { return issue.ID == child.ID })
+	if at < 1 || listed[at-1].ID != lower {
+		t.Errorf("ListIssues() = %v, want %s listed right after %s, the lower of its parents", issueIDs(listed), child.ID, lower)
+	}
+	end, err := st.RankToTop(ctx, child.ID)
+	if err != nil {
+		t.Fatalf("RankToTop(%s) error = %v", child.ID, err)
+	}
+	if end.Frame != storage.Frame(lower) {
+		t.Errorf("RankToTop(%s).Frame = %q, want %q: the frame lookup and tree order must agree on its parent", child.ID, end.Frame, lower)
+	}
+	if _, err := st.Export(ctx); err != nil {
+		t.Errorf("Export() error = %v, want the export behind backup and sync to answer", err)
+	}
+	if _, err := st.GetIssueDetail(ctx, child.ID); err != nil {
+		t.Errorf("GetIssueDetail(%s) error = %v, want the child itself showable", child.ID, err)
+	}
+
+	report, err := st.Doctor(ctx)
+	if err != nil {
+		t.Fatalf("Doctor() error = %v, want a report naming the child", err)
+	}
+	if len(report.Errors) != 1 || !strings.Contains(report.Errors[0], child.ID+" has 2 parents") || !strings.Contains(report.Errors[0], "lit parent clear "+child.ID) {
+		t.Errorf("Doctor().Errors = %v, want one error naming %s's parents and the repair", report.Errors, child.ID)
+	}
+	if len(report.Unchecked) != 0 {
+		t.Errorf("Doctor().Unchecked = %v, want every check run: the fault stops no read", report.Unchecked)
+	}
+
+	if err := st.ClearParent(ctx, child.ID); err != nil {
+		t.Fatalf("ClearParent(%s) error = %v, want both edges cleared", child.ID, err)
+	}
+	after, err := st.Doctor(ctx)
+	if err != nil {
+		t.Fatalf("Doctor() after repair error = %v", err)
+	}
+	if len(after.Errors) != 0 {
+		t.Errorf("Doctor().Errors = %v after 'lit parent clear', want none", after.Errors)
+	}
+}
+
 // "No such issue" and "that issue has no parent" send the operator to
 // different places, and a typo'd id reported as a missing edge is the opposite
 // answer: it says the hierarchy is fine when the id is not.

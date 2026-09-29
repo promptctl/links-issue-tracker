@@ -96,7 +96,7 @@ func (h readyTestHarness) gather() ([]annotation.AnnotatedIssue, map[string]stor
 
 // A checkout's own held lane wins over a higher-ranked, entirely unclaimed
 // epic — routing step 1 outranks plain backlog order. Without claims, `next`
-// would return B.1 (top composite rank); with the checkout's own claim on
+// would return B.1 (top of rank order); with the checkout's own claim on
 // epic A, it must not.
 func TestRouteNextServesOwnClaimOverHigherRankedUnclaimedLane(t *testing.T) {
 	h := newReadyTestHarness(t)
@@ -1287,13 +1287,13 @@ func TestRouteNextStep1RanksAcrossCapacitiesRatherThanBetweenThem(t *testing.T) 
 			if tc.resumeFirst {
 				resumed, ok := outcome.(ResumedOwnWork)
 				if !ok || resumed.Row.ID != inFlight.ID {
-					t.Fatalf("routeNext = %#v (%T), want ResumedOwnWork on %q — composite rank decides, never a preference for servable work", outcome, outcome, inFlight.ID)
+					t.Fatalf("routeNext = %#v (%T), want ResumedOwnWork on %q — rank order decides, never a preference for servable work", outcome, outcome, inFlight.ID)
 				}
 				return
 			}
 			served, ok := outcome.(ServedFromClaim)
 			if !ok || served.Row.ID != ready.ID {
-				t.Fatalf("routeNext = %#v (%T), want ServedFromClaim on %q — composite rank decides, never a preference for resumable work", outcome, outcome, ready.ID)
+				t.Fatalf("routeNext = %#v (%T), want ServedFromClaim on %q — rank order decides, never a preference for resumable work", outcome, outcome, ready.ID)
 			}
 		})
 	}

@@ -150,7 +150,7 @@ func (h readyTestHarness) runNextText(args ...string) string {
 }
 
 // `lit next` returns the top of the ready partition: the first open, unblocked
-// leaf in the same composite-rank order `lit ready` produces.
+// leaf in the same rank order `lit ready` produces.
 func TestRunNextReturnsTopReadyLeaf(t *testing.T) {
 	h := newReadyTestHarness(t)
 	first := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "First leaf", Topic: "next", IssueType: "task", Priority: 1})

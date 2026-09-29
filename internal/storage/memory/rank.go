@@ -417,21 +417,33 @@ func (e *Engine) ancestorChain(id string) ([]string, error) {
 // parentOf names an issue's parent, skipping a parent that has been deleted:
 // a frame is what an issue is ranked within, and work in the trash frames
 // nothing.
+//
+// A child restored data gives two parents is framed by the lower parent id,
+// the rule storage.RankAncestry lists it by. [LAW:one-source-of-truth]
 func (e *Engine) parentOf(childID string) (string, bool) {
+	parent, found := "", false
 	for _, rel := range e.relations {
-		if rel.Type != model.RelParentChild || rel.SrcID != childID {
-			continue
+		if rel.SrcID == childID && e.frames(rel) && (!found || rel.DstID < parent) {
+			parent, found = rel.DstID, true
 		}
-		parent, ok := e.issues[rel.DstID]
-		if !ok {
-			continue
-		}
-		if _, gone := parent.retention.(model.Deleted); gone {
-			continue
-		}
-		return rel.DstID, true
 	}
-	return "", false
+	return parent, found
+}
+
+// frames reports whether rel is an edge whose parent frames its child: a
+// parent-child edge to a parent that is not deleted. It is the one statement of
+// that rule, for the frame lookup and the listing's tree order alike.
+// [LAW:one-source-of-truth]
+func (e *Engine) frames(rel model.Relation) bool {
+	if rel.Type != model.RelParentChild {
+		return false
+	}
+	parent, ok := e.issues[rel.DstID]
+	if !ok {
+		return false
+	}
+	_, gone := parent.retention.(model.Deleted)
+	return !gone
 }
 
 // frameContainmentError reports a rank request naming an issue together with

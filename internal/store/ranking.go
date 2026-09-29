@@ -26,9 +26,42 @@ import (
 // about what contains what; this is that rule's SQL rendering, not a second
 // rule. The expression correlates on issues.id, so it belongs only in a query
 // selecting FROM issues.
+//
+// A child restored data gives two parents is framed by the lower parent id,
+// the rule storage.RankAncestry lists it by, so a rank move and the listing
+// agree on where it sits until doctor's finding is repaired.
+// [LAW:one-source-of-truth]
 const frameColumn = `COALESCE((SELECT r.dst_id FROM relations r
 		JOIN issues p ON p.id = r.dst_id
-		WHERE r.src_id = issues.id AND r.type = 'parent-child' AND p.deleted_at IS NULL), '')`
+		WHERE r.src_id = issues.id AND r.type = 'parent-child' AND p.deleted_at IS NULL
+		ORDER BY r.dst_id LIMIT 1), '')`
+
+// loadRankAncestry reads every framing edge in the workspace, with the key its
+// parent holds, for a listing to order by tree order. Which edges frame is
+// frameColumn's rule — a parent that is not deleted — asked of every issue at
+// once instead of one. [LAW:one-source-of-truth]
+func loadRankAncestry(ctx context.Context, q rowQueryer) (storage.RankAncestry, error) {
+	rows, err := q.QueryContext(ctx, `SELECT r.src_id, r.dst_id, p.item_rank FROM relations r
+		JOIN issues p ON p.id = r.dst_id
+		WHERE r.type = 'parent-child' AND p.deleted_at IS NULL
+		ORDER BY r.src_id, r.dst_id`)
+	if err != nil {
+		return storage.RankAncestry{}, fmt.Errorf("query rank ancestry: %w", err)
+	}
+	defer rows.Close()
+	var links []storage.ParentLink
+	for rows.Next() {
+		var link storage.ParentLink
+		if err := rows.Scan(&link.ChildID, &link.ParentID, &link.ParentRank); err != nil {
+			return storage.RankAncestry{}, fmt.Errorf("scan rank ancestry: %w", err)
+		}
+		links = append(links, link)
+	}
+	if err := rows.Err(); err != nil {
+		return storage.RankAncestry{}, fmt.Errorf("rank ancestry rows: %w", err)
+	}
+	return storage.NewRankAncestry(links), nil
+}
 
 // rankEdge is one end of a frame's keyspace as the query and the key algebra
 // see it: the ordering that brings that end to the front of a result, the way
@@ -138,13 +171,12 @@ func (e rankEdge) roomBesideTx(ctx context.Context, tx *sql.Tx, anchorRank, vaca
 // beside the issue that contains it, so it lands just past the container's own
 // key, which is also the one key an empty frame does offer to sit beside.
 //
-// Filing it past the workspace's LAST key instead would read as "last" rather
-// than "first" wherever a view sorts by the issue's own key. That is every
-// view, for a child whose parent is not an epic: sortByCompositeRank
-// substitutes a parent's rank only for a container, so a task's first child
-// filed --top would sort to the very bottom of the backlog, the opposite of
-// what was asked. [LAW:one-source-of-truth] The memory engine says the same
-// thing positionally, inserting immediately after the container.
+// A listing reads tree order, so it would list the child in the same place
+// whichever key it held. The dependency-order checks do not: they still
+// compare raw keys across frames, and a key beside the container is the one
+// that agrees with tree order when they do. [LAW:one-source-of-truth] The
+// memory engine says the same thing positionally, inserting immediately after
+// the container.
 //
 // The top level names no containing issue, so it takes the fallback below
 // rather than a container's key. It is NOT answered with open bounds: that
@@ -769,7 +801,8 @@ func ancestorChain(ctx context.Context, q rowQueryer, id string) ([]string, erro
 		var parent string
 		err := q.QueryRowContext(ctx,
 			`SELECT r.dst_id FROM relations r JOIN issues p ON p.id = r.dst_id
-			 WHERE r.src_id = ? AND r.type = 'parent-child' AND p.deleted_at IS NULL`, cur).Scan(&parent)
+			 WHERE r.src_id = ? AND r.type = 'parent-child' AND p.deleted_at IS NULL
+			 ORDER BY r.dst_id LIMIT 1`, cur).Scan(&parent)
 		if errors.Is(err, sql.ErrNoRows) {
 			return chain, nil
 		}

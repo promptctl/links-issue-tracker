@@ -131,6 +131,16 @@ Parentage gets its own two verbs rather than riding `AddRelation` because it is 
 - `AnchorID string` — the issue it was re-ranked relative to.
 - For frame-mates these are the inputs unchanged; cross-frame, one or both are containing ancestors (`internal/storage/rank.go`).
 
+**`ParentLink`** — `internal/storage/rank.go`
+- `ChildID`, `ParentID`, `ParentRank string` — one parent-child edge whose parent is not deleted, with the key that parent holds.
+
+**`RankAncestry`** — `struct{ places map[string][]rankPlace; conflicts []ParentConflict }`, `internal/storage/rank.go`
+- For each issue a container frames, the place (`rankPlace{rank, id}`) of each of its containers, outermost first; an issue absent from `places` is top level.
+- `NewRankAncestry(links []ParentLink) RankAncestry` — never fails and never refuses. A child named by more than one link is placed under the lowest `ParentID` and recorded as a `ParentConflict{ChildID, Parents}` (parents lowest id first); a chain that returns to an issue already walked ends where it would repeat.
+- `Conflicts() []ParentConflict` — by child id; `Store.Doctor` appends each `Finding()`, `"%s has %d parents (%s); it lists under %s, the lowest id, until one remains — run 'lit parent clear %s', then set the parent it belongs under"`, as an error.
+- `Compare(x, y model.Issue) int` — walks each issue's path (its containers' places, then its own `{Rank, ID}`) step by step, comparing key then id at every step; the path that runs out first sorts first: tree order. A container's path is a prefix of its descendants', so it sorts before them and its subtree sorts together, even across a key two frame-mates share. Two distinct issues never compare equal. Both engines bind the `rank` sort key to it.
+- `Sort(issues []model.Issue)` — `slices.SortFunc` by `Compare`; both engines' relation groups (`Children`, `DependsOn`, `Blocks`, related) sort with it.
+
 **`RankSetResolution`** — `internal/storage/rank.go`
 - `NamedID string` (json `named_id`), `RankedID string` (json `ranked_id`). Equal for frame-mates; when they differ the caller must surface the substitution (`internal/storage/rank.go`).
 
@@ -185,7 +195,7 @@ Other error surfaces in the contract package: `ParseSortSpecs` returns `Validati
 - `RankBottom RankPlacement = iota` — sorts after all existing items; **the zero value and the default** (`internal/storage/issues.go`).
 - `RankTop` — sorts before every item in the frame it is filed into (`internal/storage/issues.go`).
 - The zero value being bottom is the whole enforcement mechanism for "one default across every creation surface" (`internal/storage/issues.go`).
-- Rationale that bottom-of-order is bottom-of-frame: a child's rank is only compared against siblings', composite rank keyed on the containing epic's rank first (`internal/storage/issues.go`).
+- Rationale that bottom-of-order is bottom-of-frame: a child's rank is only compared against siblings', tree order comparing the containers' keys first (`internal/storage/issues.go`).
 
 #### `CreateIssueInput` (`internal/storage/issues.go`)
 | Field | Type | Effect |
@@ -595,13 +605,14 @@ Order of checks is stated as contract: the parent must be resolved before the co
 
 Pipeline is fixed and every stage always runs: **hydrate → select → order → cap** (`internal/storage/memory/list.go`).
 
-1. `storage.IssueOrdering(filter.SortBy, issueSortKeys)` — parsed first, so an unknown sort field errors before any work (`internal/storage/memory/list.go`).
-2. `storage.ParseIssueCriteria(filter)` — canonicalizes the label criteria the same way stored labels are normalized, and is the one step of selection that can fail; everything after it answers yes or no.
-3. `e.mustRecord(id)` for each of `filter.ParentIDs`, in order — the first id with no record returns `NotFoundError`; a deleted record still exists.
-4. Hydrates **all** issues in `e.order` sequence.
-5. `e.selects(issue, filter, criteria)` per issue.
-6. `slices.SortStableFunc(selected, order)` — the ordering is total (every comparison ends in a distinct id), so the result does not depend on arrival order.
-7. `capLimit(selected, filter.Limit)`.
+1. `e.rankAncestry(pos)` over `e.positions()` — for each edge in `e.relations` that `frames` (a `RelParentChild` edge to a parent that is not deleted — the rule `parentOf` applies), a `storage.ParentLink{ChildID: rel.SrcID, ParentID: rel.DstID, ParentRank: rankAt(pos[rel.DstID])}`, handed to `storage.NewRankAncestry` (`internal/storage/memory/list.go`).
+2. `storage.IssueOrdering(filter.SortBy, issueSortKeys(ancestry))` — parsed before selection, so an unknown sort field errors before any hydration (`internal/storage/memory/list.go`).
+3. `storage.ParseIssueCriteria(filter)` — canonicalizes the label criteria the same way stored labels are normalized, and is the one step of selection that can fail; everything after it answers yes or no.
+4. `e.mustRecord(id)` for each of `filter.ParentIDs`, in order — the first id with no record returns `NotFoundError`; a deleted record still exists.
+5. Hydrates **all** issues in `e.order` sequence.
+6. `e.selects(issue, filter, criteria)` per issue.
+7. `slices.SortStableFunc(selected, order)` — the ordering is total (every comparison ends in a distinct id), so the result does not depend on arrival order.
+8. `capLimit(selected, filter.Limit)`.
 
 **`selects`** — the composition, and only the half no issue can answer alone (`internal/storage/memory/list.go`): `criteria.Selects(issue)` first, then `ParentIDs` and `HasComments`, which are readings of the engine's own edge and comment tables.
 
@@ -633,14 +644,14 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 
 **`capLimit`** (`internal/storage/memory/list.go`) — `limit <= 0` or `len <= limit` → unchanged; else `issues[:limit]`. **A limit of zero is the absence of a limit, not a limit of zero**; truncation, never sampling.
 
-**`issueSortKeys`** (`internal/storage/memory/list.go`) — exactly ten entries, matching `storage.SortFields`:
+**`issueSortKeys(ancestry storage.RankAncestry)`** (`internal/storage/memory/list.go`) — returns exactly ten entries, matching `storage.SortFields`:
 | Key | Comparison |
 |---|---|
 | `id` | `strings.Compare(a.ID, b.ID)` |
 | `title` | `strings.Compare(a.Title, b.Title)` |
 | `status` | `strings.Compare(string(a.State()), string(b.State()))` — the **DERIVED** state, as the `Statuses` filter compares |
 | `priority` | `cmp.Compare(a.Priority, b.Priority)` |
-| `rank` | `strings.Compare(a.Rank, b.Rank)` |
+| `rank` | `ancestry.Compare` — tree order (`storage.RankAncestry.Compare`, `internal/storage/rank.go`) |
 | `type` | `strings.Compare(string(a.IssueType), string(b.IssueType))` |
 | `topic` | `strings.Compare(a.Topic, b.Topic)` |
 | `assignee` | `strings.Compare(a.Assignee, b.Assignee)` |
@@ -649,9 +660,9 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 
 **`status` ordering** — `strings.Compare(string(a.State()), string(b.State()))`. It compares the **derived** state, the same reading `matchesStates` filters on, so an epic orders by the state its children compute rather than by a stored field it does not have. There is no separate stored-status comparator.
 
-**`storage.IssueOrdering`** (`internal/storage/ordering.go`), called with the memory engine's `issueSortKeys` (`internal/storage/memory/list.go`)
+**`storage.IssueOrdering`** (`internal/storage/ordering.go`), called with the memory engine's `issueSortKeys(ancestry)` (`internal/storage/memory/list.go`)
 - No specs → `[]SortSpec{{Field: "rank"}}` — the canonical ordering expressed as the spec list it stands for.
-- Each spec's field is `strings.ToLower(strings.TrimSpace(...))` then looked up in `issueSortKeys`; a miss → `model.ValidationError{Message: fmt.Sprintf("unsupported sort field %q", spec.Field)}`.
+- Each spec's field is `strings.ToLower(strings.TrimSpace(...))` then looked up in the bindings; a miss → `model.ValidationError{Message: fmt.Sprintf("unsupported sort field %q", spec.Field)}`.
 - `Desc` negates the ascending comparator.
 - **`strings.Compare(a.ID, b.ID)` ascending is appended as the final key always** — so descending reverses only the named keys, never the tie-break.
 - The composed comparator returns the first non-zero result, else 0.
@@ -806,7 +817,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 
 **`incidentRelations`** — every edge touching the id in either direction, in write order.
 
-**`bucketRelations(focalID, relations, pos)`** — the single definition of edge → bucket mapping:
+**`bucketRelations(focalID, relations, pos, ancestry)`** — the single definition of edge → bucket mapping:
 | Condition | Bucket | Counterpart |
 |---|---|---|
 | `Type == RelBlocks && SrcID == focalID` | `DependsOn` | `DstID` |
@@ -815,11 +826,10 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 | `Type == RelParentChild && SrcID == focalID` | `Parent` (pointer) | `DstID` |
 | anything else (e.g. `RelRelatedTo`) | skipped | — |
 - An edge whose counterpart record has vanished is simply not in the result.
-- `Children`, `DependsOn`, `Blocks` are each sorted by rank position; the returned struct initializes them to non-nil empty slices.
+- `Children`, `DependsOn`, `Blocks` are each sorted by `ancestry.Sort` (tree order); the returned struct initializes them to non-nil empty slices.
 
-**`relatedIssues`** — `RelRelatedTo` counterparts only (the other end of the edge), hydrated, rank-sorted. It is `GetIssueDetail`'s concern alone; peer links stay out of the shared `IssueRelations` shape.
+**`relatedIssues`** — `RelRelatedTo` counterparts only (the other end of the edge), hydrated, sorted by `ancestry.Sort`. It is `GetIssueDetail`'s concern alone; peer links stay out of the shared `IssueRelations` shape.
 
-**`sortByRank`** — `slices.SortStableFunc` on `pos[a.ID] - pos[b.ID]`.
 
 ### 2.12 Rank (`internal/storage/memory/rank.go`)
 

@@ -23,7 +23,9 @@ func (e *Engine) ListIssues(ctx context.Context, filter storage.ListIssuesFilter
 }
 
 func (e *Engine) listIssues(filter storage.ListIssuesFilter) ([]model.Issue, error) {
-	order, err := storage.IssueOrdering(filter.SortBy, issueSortKeys)
+	pos := e.positions()
+	ancestry := e.rankAncestry(pos)
+	order, err := storage.IssueOrdering(filter.SortBy, issueSortKeys(ancestry))
 	if err != nil {
 		return nil, err
 	}
@@ -36,7 +38,6 @@ func (e *Engine) listIssues(filter storage.ListIssuesFilter) ([]model.Issue, err
 			return nil, err
 		}
 	}
-	pos := e.positions()
 	ranked := make([]*record, 0, len(e.order))
 	for _, id := range e.order {
 		ranked = append(ranked, e.issues[id])
@@ -109,18 +110,34 @@ func capLimit(issues []model.Issue, limit int) []model.Issue {
 	return issues[:limit]
 }
 
+// rankAncestry reads every framing edge in one pass, by the rule the frame
+// lookup applies (frames), keyed as rankAt renders it. Every edge goes in, so
+// a child two edges claim is placed and reported exactly as in the SQL engine.
+// [LAW:one-source-of-truth]
+func (e *Engine) rankAncestry(pos map[string]int) storage.RankAncestry {
+	var links []storage.ParentLink
+	for _, rel := range e.relations {
+		if e.frames(rel) {
+			links = append(links, storage.ParentLink{ChildID: rel.SrcID, ParentID: rel.DstID, ParentRank: rankAt(pos[rel.DstID])})
+		}
+	}
+	return storage.NewRankAncestry(links)
+}
+
 // issueSortKeys is this engine's reading of the contract's sort vocabulary; see
 // storage.SortFields for what each key orders, which is why "status" compares
-// derived state rather than a field.
-var issueSortKeys = storage.SortBindings{
-	"id":         func(a, b model.Issue) int { return strings.Compare(a.ID, b.ID) },
-	"title":      func(a, b model.Issue) int { return strings.Compare(a.Title, b.Title) },
-	"status":     func(a, b model.Issue) int { return strings.Compare(string(a.State()), string(b.State())) },
-	"priority":   func(a, b model.Issue) int { return cmp.Compare(a.Priority, b.Priority) },
-	"rank":       func(a, b model.Issue) int { return strings.Compare(a.Rank, b.Rank) },
-	"type":       func(a, b model.Issue) int { return strings.Compare(string(a.IssueType), string(b.IssueType)) },
-	"topic":      func(a, b model.Issue) int { return strings.Compare(a.Topic, b.Topic) },
-	"assignee":   func(a, b model.Issue) int { return strings.Compare(a.Assignee, b.Assignee) },
-	"created_at": func(a, b model.Issue) int { return a.CreatedAt.Compare(b.CreatedAt) },
-	"updated_at": func(a, b model.Issue) int { return a.UpdatedAt.Compare(b.UpdatedAt) },
+// derived state and "rank" compares tree order rather than a field.
+func issueSortKeys(ancestry storage.RankAncestry) storage.SortBindings {
+	return storage.SortBindings{
+		"id":         func(a, b model.Issue) int { return strings.Compare(a.ID, b.ID) },
+		"title":      func(a, b model.Issue) int { return strings.Compare(a.Title, b.Title) },
+		"status":     func(a, b model.Issue) int { return strings.Compare(string(a.State()), string(b.State())) },
+		"priority":   func(a, b model.Issue) int { return cmp.Compare(a.Priority, b.Priority) },
+		"rank":       ancestry.Compare,
+		"type":       func(a, b model.Issue) int { return strings.Compare(string(a.IssueType), string(b.IssueType)) },
+		"topic":      func(a, b model.Issue) int { return strings.Compare(a.Topic, b.Topic) },
+		"assignee":   func(a, b model.Issue) int { return strings.Compare(a.Assignee, b.Assignee) },
+		"created_at": func(a, b model.Issue) int { return a.CreatedAt.Compare(b.CreatedAt) },
+		"updated_at": func(a, b model.Issue) int { return a.UpdatedAt.Compare(b.UpdatedAt) },
+	}
 }

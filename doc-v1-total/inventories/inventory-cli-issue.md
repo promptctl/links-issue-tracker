@@ -555,12 +555,10 @@ and `DependencyLabels()` the same list with ` (via epic)` appended to each
 inherited one, which the backlog and `lit next` print on their `depends on:`
 lines (`readiness.go`).
 
-**Step 5 — canonical ordering**, applied in this sequence (`cli.go`):
-1. `sortByCompositeRank(rows, details)` — stable sort by
-   (effective epic rank, own rank); a leaf whose parent is a container uses the
-   parent's rank as its epic-position, otherwise its own rank
-   (`ready_state.go`).
-2. `sortByPriority` — stable, urgent (higher `Priority`) first
+**Step 5 — canonical ordering** (`cli.go`): the rows arrive in the listing's
+default `rank` order — tree order, so every epic's leaves sit together at the
+epic's own place — and one sort is applied:
+1. `sortByPriority` — stable, urgent (higher `Priority`) first
    (`ready_state.go`).
 Then `enrichWithParentEpic` sets `ParentEpic{ID,Title}` on rows whose parent is a
 container (`ready_state.go`). Focus does not reorder rows: the `FocusPath`
@@ -1363,7 +1361,7 @@ Only `laneHeldForeign` is routed around; a locked worktree past the clock
 derives `Held` and is one of these. Servability is not gated on `model.StateOpen`.
 
 **Routing precedence** — `routeNext(rows, details, epics, standings, self, scope focusScope)`
-(`next_route.go`). `rows` are already in composite-rank order (§1.18).
+(`next_route.go`). `rows` are already in rank order (§1.18).
 `laneOf(row) = model.LaneOf(row.Issue, details[row.ID].Parent)`
 (`next_route.go`);
 `verdict(row) = capacityFor(row, standings.Of(laneOf(row)), self)`
@@ -1378,7 +1376,7 @@ epic above them.
 rank order, whose lane `inScope` admits and whose verdict is in `accept`
 (`next_route.go`); `pick` is `pickFrom` over all `rows`
 (`next_route.go`). `accept` is a **set**, never a preference order —
-composite rank is the only tiebreak routing applies (`next_route.go`).
+rank order is the only tiebreak routing applies (`next_route.go`).
 `ownScope(standings, self)` yields `ownLanes` and `ownEpics`, read from the
 **standings** and not from the gathered rows (`next_route.go`);
 `mine(lane) = ownLanes[lane]` (`next_route.go`).

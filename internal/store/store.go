@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -648,10 +647,15 @@ func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter)
 	if err != nil {
 		return nil, err
 	}
-	// Parsed before the query rather than after it, so an unsupported sort field
-	// costs nothing; the comparator it yields reads hydrated values, so the
-	// ordering itself cannot run until the rows are back and built.
-	ordering, err := storage.IssueOrdering(filter.SortBy, issueSortKeys)
+	// Parsed before the listing query rather than after it, so an unsupported
+	// sort field costs only the ancestry read; the comparator it yields reads
+	// hydrated values, so the ordering itself cannot run until the rows are back
+	// and built.
+	ancestry, err := loadRankAncestry(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	ordering, err := storage.IssueOrdering(filter.SortBy, issueSortKeys(ancestry))
 	if err != nil {
 		return nil, err
 	}
@@ -1036,11 +1040,15 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 	if err != nil {
 		return model.IssueDetail{}, err
 	}
+	ancestry, err := loadRankAncestry(ctx, s.db)
+	if err != nil {
+		return model.IssueDetail{}, err
+	}
 
 	// [LAW:one-source-of-truth] Structural edges (parent/child/blocks) are
 	// bucketed by the same helper the batch accessor uses, so the blocks
 	// convention has one definition. Related is GetIssueDetail's own concern.
-	structural := bucketRelations(id, relations, relatedByID)
+	structural := bucketRelations(id, relations, relatedByID, ancestry)
 	// Siblings are the parent's other children. The set exists only when the
 	// issue has a parent; an only child yields the empty slice and the renderer
 	// omits the group. [LAW:one-source-of-truth] derived from the same
@@ -1069,7 +1077,7 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 			redirectTarget = &hydrated
 		}
 	}
-	related := relatedFrom(id, relations, relatedByID)
+	related := relatedFrom(id, relations, relatedByID, ancestry)
 	detail := model.IssueDetail{
 		Issue:          issue,
 		Relations:      relations,
@@ -1944,28 +1952,22 @@ func (s *Store) ensureMetaDefault(ctx context.Context, guard *snapshotGuard, key
 // past that boundary (see filterByState); leaving the sort on the query side of
 // it would let one listing mean two different things by "status".
 // [LAW:one-source-of-truth]
-var issueSortKeys = storage.SortBindings{
-	"id":         func(a, b model.Issue) int { return strings.Compare(a.ID, b.ID) },
-	"title":      func(a, b model.Issue) int { return strings.Compare(a.Title, b.Title) },
-	"status":     func(a, b model.Issue) int { return strings.Compare(string(a.State()), string(b.State())) },
-	"priority":   func(a, b model.Issue) int { return cmp.Compare(a.Priority, b.Priority) },
-	"rank":       func(a, b model.Issue) int { return strings.Compare(a.Rank, b.Rank) },
-	"type":       func(a, b model.Issue) int { return strings.Compare(string(a.IssueType), string(b.IssueType)) },
-	"topic":      func(a, b model.Issue) int { return strings.Compare(a.Topic, b.Topic) },
-	"assignee":   func(a, b model.Issue) int { return strings.Compare(a.Assignee, b.Assignee) },
-	"created_at": func(a, b model.Issue) int { return a.CreatedAt.Compare(b.CreatedAt) },
-	"updated_at": func(a, b model.Issue) int { return a.UpdatedAt.Compare(b.UpdatedAt) },
-}
-
-func sortIssuesByRank(issues []model.Issue) {
-	// [LAW:one-source-of-truth] Rank is the canonical default ordering for
-	// derived issue groups assembled outside the list query path.
-	sort.SliceStable(issues, func(i, j int) bool {
-		if issues[i].Rank == issues[j].Rank {
-			return issues[i].ID < issues[j].ID
-		}
-		return issues[i].Rank < issues[j].Rank
-	})
+//
+// "rank" is the same: tree order reads the keys of containers the listing may
+// have filtered out, so no ORDER BY on the selected rows could express it.
+func issueSortKeys(ancestry storage.RankAncestry) storage.SortBindings {
+	return storage.SortBindings{
+		"id":         func(a, b model.Issue) int { return strings.Compare(a.ID, b.ID) },
+		"title":      func(a, b model.Issue) int { return strings.Compare(a.Title, b.Title) },
+		"status":     func(a, b model.Issue) int { return strings.Compare(string(a.State()), string(b.State())) },
+		"priority":   func(a, b model.Issue) int { return cmp.Compare(a.Priority, b.Priority) },
+		"rank":       ancestry.Compare,
+		"type":       func(a, b model.Issue) int { return strings.Compare(string(a.IssueType), string(b.IssueType)) },
+		"topic":      func(a, b model.Issue) int { return strings.Compare(a.Topic, b.Topic) },
+		"assignee":   func(a, b model.Issue) int { return strings.Compare(a.Assignee, b.Assignee) },
+		"created_at": func(a, b model.Issue) int { return a.CreatedAt.Compare(b.CreatedAt) },
+		"updated_at": func(a, b model.Issue) int { return a.UpdatedAt.Compare(b.UpdatedAt) },
+	}
 }
 
 func (s *Store) listAllLabels(ctx context.Context) ([]model.Label, error) {

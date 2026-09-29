@@ -124,7 +124,6 @@ Test evidence: a foreign holder of `<doltRoot>/links/.dolt/noms/LOCK` makes `Ope
 - `retentionColumns(issue model.Issue) (archivedAt, deletedAt any)` — projects `model.RetentionTimestamps(issue.Retention())` through `nullableTime` (`store.go`). Sole feeder of the `archived_at`/`deleted_at` column pair.
 - `statusForStorage(issue model.Issue) sql.NullString` — if `issue.Capabilities().Status != nil` returns `{String: string(status.Value), Valid: true}`, else the zero `NullString` (SQL NULL) (`store.go`). Containers therefore store NULL status.
 - `retentionWord(model.Retention) string` — `"live"` / `"archived"` / `"deleted"`; **panics** `fmt.Sprintf("illegal Retention value %T", r)` on anything else (`store.go`).
-- `sortIssuesByRank([]model.Issue)` — stable sort on `Rank`, tie-break `ID` ascending (`store.go`).
 
 ---
 
@@ -537,11 +536,11 @@ Errors: `"batch load issues: %w"`, `"scan batch-loaded issue: %w"`, `"iterate ba
 4. `ListEvents(ctx, id)` (`store.go`).
 5. `collectRelatedIssueIDs(id, relations)` (`store.go`; defined `store.go`) — distinct counterparties of both `SrcID` and `DstID`, excluding `""` and the focal id, in first-seen order.
 6. If `issue.RedirectTargetValue()` is non-nil and not already in the list, it is appended (`store.go`).
-7. `getIssuesByIDs(ctx, relatedIDs)` — one batch hydrate (`store.go`).
-8. `bucketRelations(id, relations, relatedByID)` → `structural` with `Parent`, `Children`, `DependsOn`, `Blocks` (`store.go`; `internal/store/relations.go`).
+7. `getIssuesByIDs(ctx, relatedIDs)` — one batch hydrate — then `loadRankAncestry(ctx, s.db)`, the tree order the relation groups sort in (`store.go`).
+8. `bucketRelations(id, relations, relatedByID, ancestry)` → `structural` with `Parent`, `Children`, `DependsOn`, `Blocks` (`store.go`; `internal/store/relations.go`).
 9. If `structural.Parent != nil`: `ListIssues(ctx, ListIssuesFilter{ParentIDs: [structural.Parent.ID], IncludeArchived: true, IncludeDeleted: true})` — the parent's children in every retention state, rank order then id — then `siblingsOf(id, parentChildren)`; otherwise `siblings := []model.Issue{}` (`store.go`).
 10. `redirectTarget` is set only if the target id is present in `relatedByID`; a vanished target hydrates as absent (`store.go`).
-11. `related := relatedFrom(id, relations, relatedByID)` (`store.go`).
+11. `related := relatedFrom(id, relations, relatedByID, ancestry)` (`store.go`).
 12. Assembles `model.IssueDetail{Issue, Relations, Comments, Events, Children, Siblings, DependsOn, Blocks, Parent, Related, RedirectTarget}` (`store.go`).
 
 Evidence: `DependsOn`, `Blocks`, `Children`, `Related` all come back in rank order (`store_test.go`); relation counterparties are fully hydrated including container progress and label slices (`store_test.go`); siblings are the parent's other children in rank order excluding self, and empty for parentless issues and only children (`store_test.go`); the redirect target is exposed via `detail.RedirectTarget` with **no** `related-to` edge written (`store_test.go`).
@@ -572,9 +571,9 @@ Clauses are joined with `" AND "` (`store.go`).
 
 **Status and resolution are NOT filtered in SQL.** `parseStatusFilter(filter.Statuses)` (`store.go`, defined `store.go`) only maps each raw value through `model.DefaultOpen(string(raw))` and never errors; the actual filtering happens post-hydration.
 
-Ordering is not SQL. `storage.IssueOrdering(filter.SortBy, issueSortKeys)` (`internal/storage/ordering.go`, called from `store.go`) is parsed before the query, so an unsupported sort field (`model.ValidationError{Message: fmt.Sprintf("unsupported sort field %q", spec.Field)}`) costs no query; it yields a comparator over hydrated issues:
+Ordering is not SQL. `loadRankAncestry(ctx, s.db)` (`ranking.go`) runs first: `SELECT r.src_id, r.dst_id, p.item_rank FROM relations r JOIN issues p ON p.id = r.dst_id WHERE r.type = 'parent-child' AND p.deleted_at IS NULL ORDER BY r.src_id, r.dst_id` — `frameColumn`'s rule for every issue at once — scanned into `storage.ParentLink`s and handed to `storage.NewRankAncestry`; a query or scan error is returned. Then `storage.IssueOrdering(filter.SortBy, issueSortKeys(ancestry))` (`internal/storage/ordering.go`, called from `store.go`) is parsed before the listing query, so an unsupported sort field (`model.ValidationError{Message: fmt.Sprintf("unsupported sort field %q", spec.Field)}`) costs only the ancestry read; it yields a comparator over hydrated issues:
 - no specs → `rank`;
-- sort keys (`issueSortKeys`, `store.go`): `id`, `title`, `status` (compares the derived `State()`), `priority`, `rank`, `type`, `topic`, `assignee`, `created_at`, `updated_at`;
+- sort keys (`issueSortKeys(ancestry)`, `store.go`): `id`, `title`, `status` (compares the derived `State()`), `priority`, `rank` (`ancestry.Compare` — tree order), `type`, `topic`, `assignee`, `created_at`, `updated_at`;
 - `Desc` negates a key's comparator;
 - ascending `id` is always the final tiebreaker.
 
@@ -2659,15 +2658,15 @@ Error-vs-not-found distinction: `execDelete` wraps a delete failure as `fmt.Erro
 - `SingleValuedFromSrc()` — `internal/model/relation_type.go`: true only for `parent-child`. blocks and related-to are many-valued from src.
 - `CanonicalEndpoints(src, dst)` — `internal/model/relation_type.go`: for `related-to`, if `dst < src` returns `(dst, src)` (lexicographic sort of the endpoint pair, giving an undirected edge exactly one representation); directed types unchanged.
 
-Bucketing convention, `bucketRelations(focalID, relations, issuesByID)` — `internal/store/relations.go`:
+Bucketing convention, `bucketRelations(focalID, relations, issuesByID, ancestry)` — `internal/store/relations.go`:
 - `RelBlocks` with `rel.SrcID == focalID` → the counterpart lands in `DependsOn`; with `rel.DstID == focalID` → counterpart lands in `Blocks`. Both branches run, so a self-blocks row would populate both.
 - `RelParentChild` with `rel.SrcID == focalID` → `Parent = &<dst issue>`; with `rel.DstID == focalID` → append to `Children`.
 - Counterparts absent from `issuesByID` are silently skipped (every `if …, ok :=` guard).
 - `Children`, `DependsOn`, `Blocks` are initialized to empty (non-nil) slices; `Parent` stays nil.
-- All three slices are sorted by `sortIssuesByRank`, which is a stable sort on `Rank` ascending with `ID` ascending as tiebreak — `internal/store/store.go`.
+- All three slices are sorted by `ancestry.Sort` — tree order, the listing's `rank` order (`storage.RankAncestry`, `internal/storage/rank.go`).
 - `related-to` is not bucketed here at all.
 
-`relatedFrom(focalID, relations, issuesByID)` — `internal/store/relations.go`: keeps only `RelRelatedTo` rows; the counterpart is `rel.SrcID`, or `rel.DstID` when `rel.SrcID == focalID`; result sorted by rank; returns an empty non-nil slice.
+`relatedFrom(focalID, relations, issuesByID, ancestry)` — `internal/store/relations.go`: keeps only `RelRelatedTo` rows; the counterpart is `rel.SrcID`, or `rel.DstID` when `rel.SrcID == focalID`; result sorted by `ancestry.Sort`; returns an empty non-nil slice.
 
 `siblingsOf(focalID, parentChildren)` — `internal/store/relations.go`: returns the input minus the focal ID, order preserved; an only child yields an empty slice.
 
@@ -2788,7 +2787,8 @@ via `fmt.Sprintf` with placeholder lists from `repeatPlaceholder` (`internal/sto
 - Builds a `subjectSet` and a `needed` set seeded with the subjects; every relation endpoint is added to `needed`.
 - Buckets rows per subject; a row whose src and dst are both the same subject is added once (`rel.DstID != rel.SrcID` guard).
 - Hydrates `s.getIssuesByIDs(ctx, mapKeys(needed))` (`mapKeys`, unspecified order).
-- For each subject present in `issuesByID`, produces `bucketRelations(id, bySubject[id], issuesByID)` with `.Issue` set; subjects that no longer exist are simply omitted from the result map.
+- Loads `loadRankAncestry(ctx, s.db)` once for every subject's groups.
+- For each subject present in `issuesByID`, produces `bucketRelations(id, bySubject[id], issuesByID, ancestry)` with `.Issue` set; subjects that no longer exist are simply omitted from the result map.
 - `TestGetRelationsByIDsMatchesIssueDetail` asserts parity with `GetIssueDetail` for Children/DependsOn/Blocks/Parent, absence of a nonexistent subject, epic children in rank order, and the DependsOn/Blocks orientation — `internal/store/relations_batch_test.go`.
 
 ### 4.11 Listing by parent
@@ -2865,7 +2865,9 @@ Rank meaning is frame-local: an issue's rank is only compared against frame-mate
 ```sql
 SELECT r.dst_id FROM relations r JOIN issues p ON p.id = r.dst_id
 WHERE r.src_id = ? AND r.type = 'parent-child' AND p.deleted_at IS NULL
+ORDER BY r.dst_id LIMIT 1
 ```
+- A child restored data gives two parents follows the lowest parent id, as `frameColumn` and `storage.RankAncestry` do.
 - Chain is self-first, root-last, starting `[id]`.
 - `sql.ErrNoRows` terminates the walk; other error → `fmt.Errorf("ancestor chain of %s: %w", id, err)`.
 - Revisiting a seen node → `fmt.Errorf("ancestor chain of %s: parent cycle at %s", id, parent)`.
@@ -3539,6 +3541,7 @@ Usage strings: `restoreUsage = "usage: lit backup restore (--latest | --path <ex
   - `> 0` → error line `"foreign key violations: %d"`.
 - `SELECT COUNT(*) FROM relations WHERE type='related-to' AND src_id >= dst_id` → `InvalidRelatedRows`; wrap `"count invalid related rows: %w"`; warning `"invalid related-to ordering rows: %d"`.
 - `SELECT COUNT(*) FROM issue_events e LEFT JOIN issues i ON i.id = e.issue_id WHERE i.id IS NULL` → `OrphanHistoryRows`; wrap `"count orphan event rows: %w"`; warning `"orphan issue event rows: %d"`.
+- `loadRankAncestry(ctx, s.db)`, error wrap `"rank ancestry: %w"`; each `ancestry.Conflicts()` entry appends its `Finding()` as an error line, and the checks below still run.
 - `s.liveIssueIDs(ctx)`, `loadRankOrder(ctx, s.db, liveIDs)` and `loadBlocksEdges(ctx, s.db)`, loaded once for both rank checks; each error wraps `"rank checks: %w"`.
 - `RankInversions = len(invertedEdges(order, edges))`; warning `"rank inversions: %d (dependencies ranked below dependents)"`.
 - `blocksCycle(order, edges)` non-empty → `DependencyCycle`; warning `"blocks dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)"` with members joined by `" -> "`.
@@ -3953,8 +3956,9 @@ The concrete checks whose text can appear as a `health` finding, in `Doctor`'s e
    Query error → `fmt.Errorf("count foreign key issues: %w", err)` (`import_export.go`). If sum > 0, appends **error** `foreign key violations: %d` (`import_export.go`).
 3. **Invalid related-to ordering.** SQL: `SELECT COUNT(*) FROM relations WHERE type='related-to' AND src_id >= dst_id` (`import_export.go`). Error → `count invalid related rows: %w`. If > 0, appends **warning** `invalid related-to ordering rows: %d` (`import_export.go`) — a warning, therefore **ignored by verify**.
 4. **Orphan event rows.** SQL: `SELECT COUNT(*) FROM issue_events e LEFT JOIN issues i ON i.id = e.issue_id WHERE i.id IS NULL` (`import_export.go`). Error → `count orphan event rows: %w`. If > 0, **warning** `orphan issue event rows: %d` (`import_export.go`) — ignored by verify.
-5. **Rank inversions.** Computed in Go: `s.liveIssueIDs(ctx)`, `loadRankOrder(ctx, s.db, liveIDs)` and `loadBlocksEdges(ctx, s.db)` load once for this check and the next (`import_export.go`); each error → `rank checks: %w`. `RankInversions = len(invertedEdges(order, edges))` (`import_export.go`); if > 0, **warning** `rank inversions: %d (dependencies ranked below dependents)` (`import_export.go`) — ignored by verify.
-6. **Blocks dependency cycle.** `blocksCycle(order, edges)` over the same load (`import_export.go`). If non-empty, sets `DependencyCycle` and appends **warning** `blocks dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)` with members joined by `" -> "` (`import_export.go`) — ignored by verify.
+5. **Parent conflicts.** `loadRankAncestry(ctx, s.db)` (`import_export.go`); each child more than one framing edge claims (`ancestry.Conflicts()`) appends **error** `%s has %d parents (%s); it lists under %s, the lowest id, until one remains — ...` (`internal/storage/rank.go`). The checks below still run.
+6. **Rank inversions.** Computed in Go: `s.liveIssueIDs(ctx)`, `loadRankOrder(ctx, s.db, liveIDs)` and `loadBlocksEdges(ctx, s.db)` load once for this check and the next (`import_export.go`); each error → `rank checks: %w`. `RankInversions = len(invertedEdges(order, edges))` (`import_export.go`); if > 0, **warning** `rank inversions: %d (dependencies ranked below dependents)` (`import_export.go`) — ignored by verify.
+7. **Blocks dependency cycle.** `blocksCycle(order, edges)` over the same load (`import_export.go`). If non-empty, sets `DependencyCycle` and appends **warning** `blocks dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)` with members joined by `" -> "` (`import_export.go`) — ignored by verify.
 
 Net effect: only checks 1 and 2 (constraint violations, foreign-key violations) can ever fail the verify health half.
 

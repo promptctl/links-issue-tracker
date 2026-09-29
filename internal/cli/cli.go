@@ -785,7 +785,7 @@ func (f workableFilter) criteria() (storage.IssueCriteria, error) {
 // lookups) avoid a second fetch round-trip.
 //
 // The returned order is the canonical backlog order: priority desc, then
-// composite rank asc. Ready-specific presentation (e.g. pushing blocked items
+// rank order (tree order) asc. Ready-specific presentation (e.g. pushing blocked items
 // to the bottom) is applied by the caller, not here, so consumers that want the
 // unmodified ranking (`lit backlog`) see it as ordered.
 //
@@ -874,8 +874,9 @@ func classifyWorkable(ctx context.Context, st storage.Store, requiredFields []st
 	// list handed to a renderer could reach back past it. The narrowing is
 	// applied — and the rest released — once those facts are derived.
 	//
-	// [LAW:one-source-of-truth] rank is the canonical ordering; no explicit SortBy
-	// needed — the store default is item_rank ASC.
+	// [LAW:one-source-of-truth] rank is the canonical ordering, and the store's
+	// default sort is it: tree order, so every epic's leaves arrive together at
+	// the epic's own place in the queue.
 	listFilter := storage.ListIssuesFilter{
 		Statuses:        []model.State{model.StateOpen, model.StateInProgress},
 		IncludeArchived: false,
@@ -891,10 +892,9 @@ func classifyWorkable(ctx context.Context, st storage.Store, requiredFields []st
 	if err != nil {
 		return workableGather{}, err
 	}
-	// Two sorts, and they are the whole ordering story: composite rank, then
-	// priority. Focus is a scope, returned alongside the rows for the views to
-	// answer over, so ordering has one authority. [LAW:one-source-of-truth]
-	sortByCompositeRank(queue.rows, queue.details)
+	// The listing's rank order, then one stable sort by priority, are the whole
+	// ordering story. Focus is a scope, returned alongside the rows for the views
+	// to answer over, so ordering has one authority. [LAW:one-source-of-truth]
 	sortByPriority(queue.rows)
 	enrichWithParentEpic(queue.rows, queue.details)
 	// Derived over the queue, then the queue is let go: keepRows returns the

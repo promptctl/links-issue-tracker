@@ -377,7 +377,7 @@ func ownScope(standings claims.Standings, self model.Attribution) (map[model.Lan
 // decide whether your own work is still yours.
 //
 // [LAW:dataflow-not-control-flow] Every step walks the same rows in the same
-// composite-rank order and asks capacityFor the same question; a step differs
+// rank order and asks capacityFor the same question; a step differs
 // only in which lanes it admits and which verdicts it accepts. No step decides
 // eligibility on its own.
 //
@@ -396,7 +396,7 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 	// pick keeps the first row, in rank order, that sits in an admitted lane
 	// and carries one of the accepted verdicts.
 	//
-	// accept is a SET and never a preference order: composite rank is the only
+	// accept is a SET and never a preference order: rank order is the only
 	// tiebreak routing gets to apply, and ranking capacities against each other
 	// would pass over the backlog's #1 row, abandoned in flight, for a
 	// lower-ranked leaf that is merely ready. [LAW:one-source-of-truth] one

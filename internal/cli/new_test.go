@@ -144,7 +144,7 @@ func TestRunNewAppendsWithinItsFrame(t *testing.T) {
 	if rankOf(a2) >= rankOf(b1) {
 		t.Fatalf("A two rank %q >= B one rank %q; want the later-created child appended after the earlier ones", rankOf(a2), rankOf(b1))
 	}
-	// Children never reorder their epics: composite rank keys on the epic's
+	// Children never reorder their epics: tree order places an epic by its
 	// own rank, which no child create touches.
 	if rankOf(epicA) >= rankOf(epicB) {
 		t.Fatalf("Epic A rank %q >= Epic B rank %q; want the epics still in creation order after their children were filed", rankOf(epicA), rankOf(epicB))

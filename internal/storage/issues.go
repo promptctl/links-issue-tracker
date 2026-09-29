@@ -16,8 +16,8 @@ import (
 // placement it does not mean. [LAW:one-source-of-truth]
 //
 // A rank that sorts after everything also sorts after every frame-mate, and a
-// child's rank is only ever compared against its siblings' (composite rank is
-// keyed on the containing epic's rank first), so bottom-of-order is
+// child's rank is only ever compared against its siblings' (tree order compares
+// the containers' keys first), so bottom-of-order is
 // bottom-of-frame with no frame-scoped machinery.
 //
 // The top has no such luck: sorting before everything is not sorting before my
@@ -124,12 +124,14 @@ type SortSpec struct {
 // accepts a key the other rejects. The set lives here; an engine's binding is
 // checked against it by the conformance suite rather than trusted.
 //
-// Every key orders the issue's own recorded value except "status", which
-// orders the DERIVED lifecycle state — the same reading the status FILTER
-// takes, so one listing means one thing by the word. [LAW:one-source-of-truth]
-// A container holds no stored status; its state is a reading of its children,
-// so an engine that ordered on the column would file every container at an end
-// of the listing whatever state it derives to.
+// Every key orders the issue's own recorded value except two. "status" orders
+// the DERIVED lifecycle state — the same reading the status FILTER takes, so
+// one listing means one thing by the word. [LAW:one-source-of-truth] A
+// container holds no stored status; its state is a reading of its children, so
+// an engine that ordered on the column would file every container at an end of
+// the listing whatever state it derives to. "rank" orders by tree order
+// ([RankAncestry.Compare]), because an issue's own key is comparable only
+// within its frame.
 var SortFields = []string{
 	"id",
 	"title",
