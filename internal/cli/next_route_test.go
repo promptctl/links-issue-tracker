@@ -386,6 +386,72 @@ func TestRouteNextStayRouteWorksWhenTheEpicItselfIsBlocked(t *testing.T) {
 	}
 }
 
+// A dependency inside the epic is never the blocker exhaustion names. lit
+// refuses a blocks edge between two tickets of one epic, yet one can exist — an
+// import writes it, or it predates the rule — and a stay route named against it
+// prints a `lit dep add` lit then refuses. Here the sibling is another
+// checkout's work, so the epic waits on work underway and no route stays.
+func TestRouteNextExhaustionNeverNamesASiblingAsTheBlocker(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
+	h.transition(a1.ID, model.Start{Assignee: "tester"})
+	h.transition(a1.ID, model.Done{})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2, theirs", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
+	a3 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.3", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a3"})
+	h.addDependency(a3.ID, a2.ID)
+
+	rows, details, epics := h.gather()
+	standings := claims.Standings{
+		model.LaneOf(a1, &epicA):                    heldBy(selfAttribution),
+		laneOf(t, details, rowByID(t, rows, a2.ID)): heldBy(otherAttribution),
+	}
+
+	outcome := routeNext(rows, details, epics, standings, selfAttribution, focusScope{})
+	exhausted, ok := outcome.(Exhausted)
+	if !ok {
+		t.Fatalf("routeNext = %#v (%T), want Exhausted — A.2 is another checkout's and A.3 waits on it", outcome, outcome)
+	}
+	if want := "no ready work in epic(s) " + epicA.ID + " — nothing else is queued behind what's already in progress; `lit next` has nothing ready outside it either"; exhausted.Error() != want {
+		t.Fatalf("exhausted.Error() = %q, want exactly %q — sibling %s is not a blocker to clear from outside", exhausted.Error(), want, a2.ID)
+	}
+}
+
+// A sibling that is itself blocked is not named either: it is an open row of
+// the epic, so the walk reaches past it to what holds it back, and the stay
+// route names that — an edge lit accepts, followed here as printed.
+func TestRouteNextExhaustionNamesTheOutsideBlockerBehindASibling(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	h.transition(a1.ID, model.Start{Assignee: "tester"})
+	h.transition(a1.ID, model.Done{})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
+	a3 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.3", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a3"})
+	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Outside, theirs", Topic: "next", IssueType: "task", Priority: 0})
+	h.addDependency(a3.ID, a2.ID)
+	h.addDependency(a2.ID, blocker.ID)
+
+	rows, details, epics := h.gather()
+	standings := claims.Standings{
+		model.LaneOf(a1, &epicA):                         heldBy(selfAttribution),
+		laneOf(t, details, rowByID(t, rows, blocker.ID)): heldBy(otherAttribution),
+	}
+
+	outcome := routeNext(rows, details, epics, standings, selfAttribution, focusScope{})
+	exhausted, ok := outcome.(Exhausted)
+	if !ok {
+		t.Fatalf("routeNext = %#v (%T), want Exhausted — the only row outside epic A is another checkout's", outcome, outcome)
+	}
+	want := "no ready work in epic(s) " + epicA.ID + " — blocked on " + blocker.ID +
+		" (on your path but claimed by another checkout right now); `lit next` has nothing ready outside it either" +
+		" — to stay, file the ticket that clears a blocker under the epic with `lit new --parent " + epicA.ID + " --top`, then make that blocker wait on it with `lit dep add --from <new> --to <blocker>`"
+	if msg := exhausted.Error(); msg != want {
+		t.Fatalf("exhausted.Error() = %q, want exactly %q — naming %s alone, not sibling %s", msg, want, blocker.ID, a2.ID)
+	}
+	followStayRoute(t, h, []string{"--parent", epicA.ID, "--top"}, blocker.ID)
+}
+
 // Under a focus label the pool is the focus path, so an empty pool is not
 // "nothing ready outside the epic": ready rows off the path were never asked
 // about. They are named, with the way to ask — and our own epic's rows are

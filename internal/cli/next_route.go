@@ -125,8 +125,8 @@ type ServedPastExhaustion struct {
 // of it reachable: not the held lanes, not an on-path dependency, not another
 // lane of the same epic — and the global pool having nothing ready outside it
 // either, or routing would have answered ServedPastExhaustion. Loud and
-// diagnostic. Blocked names the open dependencies gating that work, if any (an
-// in-progress-only lane names none). OffPath names the rows outside the scope
+// diagnostic. Blocked names the open dependencies from outside the scope gating
+// that work, if any (an in-progress-only lane names none). OffPath names the rows outside the scope
 // that a focus label kept out of the pool, so "nothing ready outside it" is
 // never claimed of rows the pool was not asked about; with no focus active it
 // is empty, and on ServedPastExhaustion, whose pool did offer a row.
@@ -569,6 +569,14 @@ func workTowardEach(rows []annotation.AnnotatedIssue, details, epics map[string]
 // first row in rank order to reach it, so an epic whose one ticket another
 // checkout holds reads as held, not as outside the view. With no work in view
 // it is reachOutOfView, which every row's kind outranks.
+//
+// Only dependencies from outside the scope are collected. One whose work sits
+// inside it is already covered by the scope's own walk: the pick before each
+// call served it if it could be served, and when it is itself blocked it is an
+// open row in scope, so this walk collects what holds it back instead. Naming
+// it would offer a sibling's block to be cleared by a ticket filed beside it,
+// an edge lit refuses inside one epic — and a sibling edge can still exist,
+// written by an import or before that rule.
 func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID, inScope func(model.LaneID) bool, reachFor func(annotation.AnnotatedIssue) reachKind, workToward map[string][]annotation.AnnotatedIssue) []gatedDep {
 	seen := map[string]bool{}
 	var deps []gatedDep
@@ -586,6 +594,9 @@ func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation
 				if kind := reachFor(work); kind < dep.Kind {
 					dep.Row, dep.Kind = work, kind
 				}
+			}
+			if dep.Kind != reachOutOfView && inScope(laneOf(dep.Row)) {
+				continue
 			}
 			// row is the in-scope open row whose dependency this is — the fact
 			// step 1b needs.
@@ -606,9 +617,8 @@ func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation
 // found, the first work this checkout may itself take toward closing one — "a
 // dependency outside the claimed lane that gates it is offered as on-path"
 // (design-docs/work-claims.md, Routing step 1). Step 1b asks it of our own
-// lanes and step 2b of our whole epic. A same-lane gate (an earlier sibling)
-// never reaches here: it shares the blocked row's lane, so step 1 or 2 already
-// served it.
+// lanes and step 2b of our whole epic. A gate inside the scope never reaches
+// here: the walk leaves it out, since step 1 or 2 already served it.
 //
 // The pick is the row gatingDependencies classified the dependency by: the
 // dependency itself when it is a leaf, a ticket under it when it is an epic,
