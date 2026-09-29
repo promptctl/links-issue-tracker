@@ -1467,3 +1467,40 @@ func TestRankSetStampsOnlyTheIssuesItNamed(t *testing.T) {
 		}
 	}
 }
+
+// TestRankSetPlacesANamedIssueThatHoldsNoKey pins that an unranked issue can be
+// named in a rank set. An import writes a row unranked when its source had
+// none, so the permutation has no slot for it to take; it joins its frame
+// first, and the set then orders it with the rest.
+func TestRankSetPlacesANamedIssueThatHoldsNoKey(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	ids := makeIssues(t, ctx, st, 3, "row %d")
+	a, b, c := ids[0], ids[1], ids[2]
+	if _, err := st.db.ExecContext(ctx, `UPDATE issues SET item_rank = '' WHERE id = ?`, b); err != nil {
+		t.Fatalf("unrank %s: %v", b, err)
+	}
+
+	if _, err := st.RankSet(ctx, []string{b, c}); err != nil {
+		t.Fatalf("RankSet naming an unranked issue error = %v", err)
+	}
+	after, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
+	if err != nil {
+		t.Fatalf("ListIssues() error = %v", err)
+	}
+	if got, want := issueIDs(after), []string{b, c, a}; !slices.Equal(got, want) {
+		t.Fatalf("order after rank set = %v, want %v", got, want)
+	}
+	seen := map[string]string{}
+	for _, issue := range after {
+		if issue.Rank == "" {
+			t.Errorf("%s holds no key after rank set", issue.ID)
+		}
+		if prior, dup := seen[issue.Rank]; dup {
+			t.Errorf("%s and %s both hold %q", prior, issue.ID, issue.Rank)
+		}
+		seen[issue.Rank] = issue.ID
+	}
+}

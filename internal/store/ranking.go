@@ -429,18 +429,15 @@ func requireLiveTx(ctx context.Context, q rowQueryer, id string) error {
 // of through a plain bug.
 //
 // The read below makes the refusal loud. The predicate itself rides on
-// rekeyTx's UPDATE, which every rank verb's key write runs — this one and rank
-// set's batched rewrite alike — so "a rank never lands on a deleted issue" has
-// one enforcement site, and it holds even if the read is ever removed or
+// writeRanksTx's UPDATE, which every rank verb's key write runs — this one and
+// rank set's batched rewrite alike — so "a rank never lands on a deleted issue"
+// has one enforcement site, and it holds even if the read is ever removed or
 // reordered. [LAW:single-enforcer]
 func writeRankTx(ctx context.Context, tx *sql.Tx, id, newRank, now string) error {
 	if err := requireLiveTx(ctx, tx, id); err != nil {
 		return err
 	}
-	if err := rekeyTx(ctx, tx, []rankedIssue{{id: id, rank: newRank}}); err != nil {
-		return err
-	}
-	return stampUpdatedTx(ctx, tx, []string{id}, now)
+	return writeRanksTx(ctx, tx, []rankWrite{{id: id, rank: newRank, touched: true}}, now)
 }
 
 // RankToTop moves an issue to the top of its own frame.
@@ -503,19 +500,25 @@ func (s *Store) rankToEdge(ctx context.Context, issueID string, placement storag
 		if !end.Moved {
 			return end, nil
 		}
-		newRank, err := edge.rankBeyondTx(ctx, tx, f, issueID, func() (string, error) {
-			_, edgeRank, err := frameEdgeHolderTx(ctx, tx, f, edge)
-			return edgeRank, err
-		})
-		if err != nil {
-			return storage.RankEnd{}, fmt.Errorf("rank to %s: %w", edge.name, err)
-		}
-		now := s.clock.Now().Format(time.RFC3339Nano)
-		if err := writeRankTx(ctx, tx, issueID, newRank, now); err != nil {
-			return storage.RankEnd{}, err
-		}
-		return end, smoothRanksIfNeededTx(ctx, tx, newRank)
+		return end, edge.placeBeyondTx(ctx, tx, f, issueID, s.clock.Now().Format(time.RFC3339Nano))
 	})
+}
+
+// placeBeyondTx writes an issue a key past its frame's edge. It is the whole of
+// a move to one end, shared with rank set, which places a named issue that
+// holds no key yet at its frame's bottom this way before permuting the frame.
+func (e rankEdge) placeBeyondTx(ctx context.Context, tx *sql.Tx, f storage.Frame, issueID, now string) error {
+	newRank, err := e.rankBeyondTx(ctx, tx, f, issueID, func() (string, error) {
+		_, edgeRank, err := frameEdgeHolderTx(ctx, tx, f, e)
+		return edgeRank, err
+	})
+	if err != nil {
+		return fmt.Errorf("rank to %s: %w", e.name, err)
+	}
+	if err := writeRankTx(ctx, tx, issueID, newRank, now); err != nil {
+		return err
+	}
+	return smoothRanksIfNeededTx(ctx, tx, newRank)
 }
 
 func rankSetValidateIDs(ids []string) error {
@@ -593,7 +596,7 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 	// Existence and liveness run before the lock so a caller naming a missing or
 	// deleted issue gets that answer directly, rather than out of a transaction.
 	// The answer cannot stay true — the row can be deleted between here and the
-	// write — so this gate decides the message, never the invariant: writeRankTx
+	// write — so this gate decides the message, never the invariant: the write
 	// owns liveness under the lock, as resolveRankSet owns the frame.
 	// [LAW:parse-dont-validate]
 	for _, id := range ids {
@@ -610,12 +613,32 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 		for i, r := range resolutions {
 			ranked[i] = r.RankedID
 		}
+		now := s.clock.Now().Format(time.RFC3339Nano)
+		// A named issue can hold no key yet — an import writes a row unranked
+		// when its source had none — and then it has no slot for the
+		// permutation to hand anyone. It first joins the bottom of its frame,
+		// exactly as rank to bottom would place it, and the permutation then
+		// leads the frame with it like any other named issue.
+		unranked, err := rankRows(ctx, tx, fmt.Sprintf(`SELECT id, item_rank FROM issues
+			WHERE deleted_at IS NULL AND item_rank = '' AND %s = ?`, frameColumn), string(f))
+		if err != nil {
+			return storage.RankSetResult{}, fmt.Errorf("rank set: read the unranked members of frame %q: %w", f, err)
+		}
+		for _, member := range unranked {
+			if !slices.Contains(ranked, member.id) {
+				continue
+			}
+			if err := bottomEdge.placeBeyondTx(ctx, tx, f, member.id, now); err != nil {
+				return storage.RankSetResult{}, fmt.Errorf("rank set: %w", err)
+			}
+		}
 		// The frame's own keys, lowest first, are the slots the new order fills.
 		// Every representative is a frame-mate by construction, so this is the
-		// whole keyspace the order is read in.
+		// whole keyspace the order is read in. Ties fall to id, as they do in
+		// every listing, so a slot's place here is its place on screen.
 		slots, err := rankRows(ctx, tx, fmt.Sprintf(`SELECT id, item_rank FROM issues
 			WHERE deleted_at IS NULL AND item_rank != '' AND %s = ?
-			ORDER BY item_rank ASC`, frameColumn), string(f))
+			ORDER BY item_rank ASC, id ASC`, frameColumn), string(f))
 		if err != nil {
 			return storage.RankSetResult{}, fmt.Errorf("rank set: read the keys of frame %q: %w", f, err)
 		}
@@ -638,67 +661,60 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 		// way a respace keeps it, and stamping them would reset the clock that
 		// says how long an unnamed ticket has sat untouched. The representatives
 		// fill the first len(ranked) slots, so the index says which is which.
-		var moves []rankedIssue
-		var stamped []string
+		var writes []rankWrite
 		for i, slot := range slots {
 			if ordered[i] == slot.id {
 				continue
 			}
-			moves = append(moves, rankedIssue{id: ordered[i], rank: slot.rank})
-			if i < len(ranked) {
-				stamped = append(stamped, ordered[i])
-			}
+			writes = append(writes, rankWrite{id: ordered[i], rank: slot.rank, touched: i < len(ranked)})
 		}
-		now := s.clock.Now().Format(time.RFC3339Nano)
-		if err := rekeyTx(ctx, tx, moves); err != nil {
-			return storage.RankSetResult{}, fmt.Errorf("rank set: %w", err)
-		}
-		if err := stampUpdatedTx(ctx, tx, stamped, now); err != nil {
+		if err := writeRanksTx(ctx, tx, writes, now); err != nil {
 			return storage.RankSetResult{}, fmt.Errorf("rank set: %w", err)
 		}
 		return storage.RankSetResult{Resolutions: resolutions, Frame: f}, nil
 	})
 }
 
-// rekeyTx hands each issue the key its move names, one statement per id batch.
+// rankWrite is one issue's new key, and whether the write is an update to that
+// issue — which a named issue's move is and a displaced frame-mate's is not.
+type rankWrite struct {
+	id, rank string
+	touched  bool
+}
+
+// writeRanksTx hands each issue the key its write names, one statement per id
+// batch.
 //
 // A rank set can displace every member of a large frame, so the keys are
 // written as a batched CASE rather than a statement per issue: the cost of the
-// write grows by round trips per batch, never per row. The liveness predicate
-// on the UPDATE is the one enforcement of "a rank never lands on a deleted
-// issue" that every rank verb's key write passes through (see writeRankTx).
-func rekeyTx(ctx context.Context, tx *sql.Tx, moves []rankedIssue) error {
-	keyOf := make(map[string]string, len(moves))
-	ids := make([]string, len(moves))
-	for i, m := range moves {
-		keyOf[m.id] = m.rank
-		ids[i] = m.id
+// write grows by round trips per batch, never per row. updated_at rides in the
+// same statement: a touched issue takes now, and an untouched one is handed
+// NULL, which COALESCE turns back into the stamp it already held. The liveness
+// predicate on the UPDATE is the one enforcement of "a rank never lands on a
+// deleted issue" that every rank verb's key write passes through (see
+// writeRankTx).
+func writeRanksTx(ctx context.Context, tx *sql.Tx, writes []rankWrite, now string) error {
+	byID := make(map[string]rankWrite, len(writes))
+	ids := make([]string, len(writes))
+	for i, w := range writes {
+		byID[w.id] = w
+		ids[i] = w.id
 	}
+	stampOf := map[bool]any{true: now, false: nil}
 	for _, batch := range idBatches(ids) {
 		in, inArgs := batch.inList()
-		args := make([]any, 0, 3*len(batch))
+		keys := make([]any, 0, 2*len(batch))
+		stamps := make([]any, 0, 2*len(batch))
 		for _, id := range batch {
-			args = append(args, id, keyOf[id])
+			keys = append(keys, id, byID[id].rank)
+			stamps = append(stamps, id, stampOf[byID[id].touched])
 		}
-		args = append(args, inArgs...)
-		query := fmt.Sprintf(`UPDATE issues SET item_rank = CASE id %s END
-			WHERE deleted_at IS NULL AND id IN (%s)`,
-			strings.Repeat("WHEN ? THEN ? ", len(batch)), in)
-		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+		whens := strings.Repeat("WHEN ? THEN ? ", len(batch))
+		query := fmt.Sprintf(`UPDATE issues SET item_rank = CASE id %s END,
+			updated_at = COALESCE(CASE id %s END, updated_at)
+			WHERE deleted_at IS NULL AND id IN (%s)`, whens, whens, in)
+		if _, err := tx.ExecContext(ctx, query, slices.Concat(keys, stamps, inArgs)...); err != nil {
 			return fmt.Errorf("rewrite the keys of %v: %w", []string(batch), err)
-		}
-	}
-	return nil
-}
-
-// stampUpdatedTx marks the given issues as updated at now, one statement per
-// id batch.
-func stampUpdatedTx(ctx context.Context, tx *sql.Tx, ids []string, now string) error {
-	for _, batch := range idBatches(ids) {
-		in, inArgs := batch.inList()
-		query := fmt.Sprintf(`UPDATE issues SET updated_at = ? WHERE deleted_at IS NULL AND id IN (%s)`, in)
-		if _, err := tx.ExecContext(ctx, query, append([]any{now}, inArgs...)...); err != nil {
-			return fmt.Errorf("stamp %v as updated: %w", []string(batch), err)
 		}
 	}
 	return nil

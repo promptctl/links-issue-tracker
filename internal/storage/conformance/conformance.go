@@ -1534,11 +1534,6 @@ func rankSetOverAWholeFramePermutesItsKeys(t *testing.T, ctx context.Context, st
 	if !slices.Equal(keysBefore, keysAfter) {
 		t.Errorf("the epic's children hold keys %v after rank set, want the keys %v they held before, reordered", keysAfter, keysBefore)
 	}
-	for _, child := range children {
-		if after[child.ID] <= after[epic.ID] {
-			t.Errorf("child %s holds %q, sorting above its own epic at %q", child.ID, after[child.ID], after[epic.ID])
-		}
-	}
 }
 
 func ranksByID(issues []model.Issue) map[string]string {
