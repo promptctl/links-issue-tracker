@@ -362,19 +362,19 @@ func acquireStoreLock(ctx context.Context, storageDir, lockPath string, exclusiv
 	// to do filesystem I/O for the life of the process.
 	defer announceLockWait(ctx, storageDir, lockPath)()
 	var release func() error
-	// lastAttempt is the outcome of the most recent try: the retry loop
-	// returns a bare ctx error when the ctx ends between tries, and this is
-	// what still knows the lock was held when it did.
-	var lastAttempt error
+	// sawHeld stays set once any try found the lock held: a ctx that ends
+	// mid-wait surfaces as a bare ctx error — from the retry loop between
+	// tries, or from filelock's own entry check on the next try — and this is
+	// what still knows a holder was in front of it.
+	var sawHeld bool
 	policy := newHoldWait(storageDir, lockPath, func() time.Duration { return wait })
 	err := backoff.Retry(func() error {
 		acquiredRelease, acquired, err := filelock.Acquire(ctx, lockPath, exclusive, 1, 0)
 		if err != nil {
-			lastAttempt = err
 			return backoff.Permanent(err)
 		}
 		if !acquired {
-			lastAttempt = errLockHeld
+			sawHeld = true
 			return errLockHeld
 		}
 		release = acquiredRelease
@@ -383,7 +383,7 @@ func acquireStoreLock(ctx context.Context, storageDir, lockPath string, exclusiv
 	if errors.Is(err, errLockHeld) {
 		return nil, fmt.Errorf("%s: %w", describeLockHolders(storageDir, lockPath), ErrWorkspaceBusy)
 	}
-	if err != nil && errors.Is(lastAttempt, errLockHeld) && errors.Is(err, ctx.Err()) {
+	if err != nil && sawHeld && errors.Is(err, ctx.Err()) {
 		return nil, fmt.Errorf("%w waiting for %s, %s", err, lockPath, describeLockHolders(storageDir, lockPath))
 	}
 	if err != nil {

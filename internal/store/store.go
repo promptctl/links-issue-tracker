@@ -3017,9 +3017,9 @@ const (
 // production one.
 var MirrorHoldBudget = mirrorHoldBudget
 
-// MirrorPushDeadline is the deadline the background mirror's push — the
-// clone engine's open and the push from it; the close after them takes no
-// ctx and is not bounded by it — runs under. The push traverses
+// MirrorPushDeadline is the deadline the background mirror's push runs
+// under: the clone engine's open and the push from it. The close after them
+// takes no ctx and is not bounded by it. The push traverses
 // the network with no inherent bound, so the bound is imposed by the actor
 // that owns it. It holds nothing on the live store; it exists so a stalled
 // transport cannot wedge the single-flight mirror forever.
