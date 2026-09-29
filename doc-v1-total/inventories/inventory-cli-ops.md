@@ -719,7 +719,7 @@ Refusals and sequence (`upgradeLeafWith`, `upgrade.go`):
 5. **Backward-move refusal, before any install**: `target.Manifest.Schema.Max < ws.AppliedVersion` → `*UpgradeTargetBehindError` (`upgrade.go`), whose message depends on `WorkspaceOpenable` (`upgrade.go`):
    - openable → `cannot upgrade to <tag>: its schema support ends at v<target> but this workspace is already at v<current> — that is a backward move; use \`lit downgrade --to <tag>\` instead (it reverses the schema before installing the older binary)`
    - not openable → `cannot upgrade to <tag>: it supports only through schema v<target> but this workspace is at v<current>, which this binary cannot open — pick an upgrade target whose schema support reaches v<current> or newer (this binary is too old to reverse the schema here, so an older target is not an option)`
-   Exit 1 (plain error type).
+   Exit 3, reason `validation_refused` (`exit.go`, `error_output.go`).
 6. **Already current**: when `--to` was omitted, this binary is not a dev build (`IsDev`), the tag is valid semver, and `v<version>` compares at or above the tag → stdout `already current: keeping v<version> (latest published release is <tag>); nothing to install.`, exit 0, nothing installed (`upgrade.go`). A given `--to` always installs.
 7. `currentBinaryPath()` (`os.Executable` + `filepath.EvalSymlinks`, `downgrade.go`); error → `upgrade: resolve current binary: %w`.
 8. `installer.Install(ctx, target, binPath)`; error → `upgrade: installing <tag> failed: <err>\n\nrecover by installing <tag> manually (download from <artifactURL>), then re-running lit` (`upgrade.go`).
@@ -1075,7 +1075,9 @@ All eight are also the payload of `lit quickstart --eject`, written to `<config.
 | Existing global override without `--force` | `quickstart --eject` | `MergeConflictError`, exit 5, nothing written | `quickstart_eject.go` |
 | Non-bash existing pre-push hook | `hooks install`, `init`, `quickstart --refresh` | left untouched, reported `incompatible`, exit 0 | `hooks.go` |
 | Pending-adopt marker | `snapshots new` | refused via `store.PendingAdopt` | `snapshots.go` |
-| Backward-move upgrade target | `upgrade` | `*UpgradeTargetBehindError`, exit 1, nothing installed | `upgrade.go` |
+| Workspace schema newer than this binary | any command that opens the store | `*store.UnsupportedSchemaVersionError`, exit 3, reason `workspace_schema_ahead` | `migration_runner.go`, `exit.go` |
+| Backward-move upgrade target | `upgrade` | `*UpgradeTargetBehindError`, exit 3, nothing installed | `upgrade.go` |
+| Forward-move or below-baseline downgrade target | `downgrade` | `*store.DowngradeTargetAheadError` / `*store.DowngradeBelowBaselineError`, exit 3, before any snapshot | `downgrade.go` |
 | Empty/invalid `--to` | `upgrade`, `downgrade` | `ValidationError`, exit 3 | `downgrade.go` |
 | Unknown `--fix` name | `doctor` | `unknown fix %q; available: integrity, rank`, exit 1 | `doctor.go` |
 | Unknown quickstart topic | `quickstart` | `UsageError`, exit 2 | `cli.go` |

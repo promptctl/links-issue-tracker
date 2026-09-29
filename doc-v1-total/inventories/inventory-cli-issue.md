@@ -217,7 +217,8 @@ rules in `internal/model/validation.go`.
 `corruption_detected`, `unknown_command`, `retired_command`, `usage_error`,
 `unsupported_flag` (every `UnsupportedError`, `error_output.go`),
 `takeover_unconfirmed` (`takeoverUnconfirmedError`), `outside_git_workspace`, `bulk_partial_failure`, `workspace_write_blocked`,
-`transient_gc_contention`, `workspace_not_initialized`, default `command_failed`.
+`transient_gc_contention`, `workspace_not_initialized`,
+`workspace_schema_ahead` (`*store.UnsupportedSchemaVersionError`), default `command_failed`.
 
 `commandErrorRemediation(reason)` (`error_output.go`), verbatim strings:
 - `unknown_command`: "Run `lit --help` (or `lit help <command>`) to select a supported command path."
@@ -234,6 +235,7 @@ rules in `internal/model/validation.go`.
 - `takeover_unconfirmed`: "Rerun with `--take` to take the lane over, or run `lit next` for work nobody else holds. \<agent-instructions>Taking over a lane another checkout holds right now overrides that checkout's work: pass `--take` only when the user directs the takeover.\</agent-instructions>"
 - `outside_git_workspace`: "Run the command inside a git repository/worktree with links initialized."
 - `workspace_not_initialized`: "Do not retry unchanged — this repository has no lit workspace, and retrying this command cannot create one. Run `lit init` here to create it, or change to a directory that already has one."
+- `workspace_schema_ahead`: "Do not retry unchanged — this lit is older than the workspace's schema, and rerunning the command with the same binary repeats this refusal. Take the supported path the message above names."
 - `bulk_partial_failure`: "Some items failed; see the per-item errors above. Re-run the command for only the failed IDs after addressing each error."
 - default: "Retry the command. If it still fails, run `lit doctor` for diagnostics."
 
