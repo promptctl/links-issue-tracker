@@ -336,11 +336,12 @@ func followStayRoute(t *testing.T, h readyTestHarness, newFlags []string, blocke
 	return newID
 }
 
-// When the block is declared on the epic itself, every child inherits it, so
-// a ticket filed under the epic would be born blocked — and making the blocker
-// wait on it would close a wait loop. The stay route files it outside the
-// epic instead, and following it gets the new ticket served.
-func TestRouteNextStayRouteFilesOutsideAnEpicThatIsItselfBlocked(t *testing.T) {
+// When the block is declared on the epic itself, every child inherits it — a
+// ticket filed under the epic starts out held back too. The stay route still
+// files it there, because the edge it prints next is what frees it: an epic's
+// blocker never holds back a child it waits on. Both halves are observed, the
+// new child held back before the edge and served after it.
+func TestRouteNextStayRouteWorksWhenTheEpicItselfIsBlocked(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
@@ -361,28 +362,27 @@ func TestRouteNextStayRouteFilesOutsideAnEpicThatIsItselfBlocked(t *testing.T) {
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want Exhausted — the only row outside epic A is another checkout's", outcome, outcome)
 	}
-	if !exhausted.EpicBlocked {
-		t.Fatalf("exhausted.EpicBlocked = false, want true — %s blocks epic %s itself", blocker.ID, epicA.ID)
-	}
-	msg := exhausted.Error()
-	if want := "to stay, file the ticket that clears a blocker with `lit new --top`, then make that blocker wait on it"; !strings.Contains(msg, want) {
-		t.Fatalf("exhausted.Error() = %q, want it to contain %q", msg, want)
-	}
-	if strings.Contains(msg, "--parent") {
-		t.Fatalf("exhausted.Error() = %q, want no --parent — a child of %s inherits the block it would exist to clear", msg, epicA.ID)
+	if want := "under the epic with `lit new --parent " + epicA.ID + " --top`, then make that blocker wait on it"; !strings.Contains(exhausted.Error(), want) {
+		t.Fatalf("exhausted.Error() = %q, want it to contain %q", exhausted.Error(), want)
 	}
 
-	// The control: a child filed under the epic is held back by the epic's
-	// blocker, which is why the route does not send the ticket there.
-	child := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Would inherit the block", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
-	unblocker := followStayRoute(t, h, []string{"--top"}, blocker.ID)
-	rows, details = h.gather()
-	if ClassifyReadiness(rowByID(t, rows, child.ID).Annotations).IsReady() {
-		t.Fatalf("%s under blocked epic %s is ready, want it held back by %s — the control this test's route rests on", child.ID, epicA.ID, blocker.ID)
+	var out strings.Builder
+	if err := runNew(h.ctx, &out, h.ap, []string{"--title", "Clears the blocker", "--topic", "next", "--type", "task", "--parent", epicA.ID, "--top"}); err != nil {
+		t.Fatalf("lit new --parent %s --top: %v", epicA.ID, err)
 	}
+	unblocker := strings.Fields(out.String())[0]
+	rows, _ = h.gather()
+	if ClassifyReadiness(rowByID(t, rows, unblocker).Annotations).IsReady() {
+		t.Fatalf("%s under blocked epic %s is ready before the edge, want it held back by %s — else the edge below proves nothing", unblocker, epicA.ID, blocker.ID)
+	}
+
+	if err := runDepAdd(h.ctx, io.Discard, h.ap, []string{"--from", unblocker, "--to", blocker.ID}); err != nil {
+		t.Fatalf("lit dep add --from %s --to %s: %v", unblocker, blocker.ID, err)
+	}
+	rows, details = h.gather()
 	outcome = routeNext(rows, details, standings, selfAttribution, focusScope{})
-	if served, ok := outcome.(ServedPastExhaustion); !ok || served.Row.ID != unblocker {
-		t.Fatalf("after following the stay route, routeNext = %#v (%T), want %s served", outcome, outcome, unblocker)
+	if served, ok := outcome.(ServedFromClaim); !ok || served.Row.ID != unblocker {
+		t.Fatalf("after following the stay route, routeNext = %#v (%T), want ServedFromClaim serving %s", outcome, outcome, unblocker)
 	}
 }
 
