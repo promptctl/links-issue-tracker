@@ -210,8 +210,9 @@ rules in `internal/model/validation.go`.
 
 `WriteCommandError(stderr, err)` (`error_output.go`) — called from
 `cmd/lit/main.go` as the process exit path:
-- Line 1: `error (code=%d): %v\n` (exit code + `err.Error()`).
-- Line 2 (only when non-empty): `remediation: %s\n`.
+- Line 1: `error (code=%d, reason=%s): %v\n` (exit code + reason +
+  `err.Error()`, which may itself span lines).
+- Then, only when non-empty: `remediation: %s\n`.
 
 `commandErrorReason(err)` maps type → reason string (`error_output.go`). The
 checks run in this order and the first match wins, so an error that wraps

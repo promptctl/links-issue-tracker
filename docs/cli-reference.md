@@ -40,6 +40,42 @@ repository/worktree, one where `lit init` has never run, or a workspace whose sc
 newer than the installed `lit` supports. Running the same command
 again without changing something reproduces the same refusal.
 
+A failed command's first stderr line carries the code and a reason:
+`error (code=3, reason=workspace_not_initialized): <message>`. The reason is a stable
+token that tells apart failures sharing a code — within code 3, `validation_refused`,
+`outside_git_workspace` and `workspace_not_initialized` each call for a different act —
+so a script branches on it rather than on the message, which may span several lines.
+A `remediation:` line follows the message when the reason has one. Every reason, with
+the code it arrives on:
+
+| Reason | Code | Failure |
+|--------|------|---------|
+| `command_failed` | 1 | An unclassified fault |
+| `bulk_partial_failure` | 1 | Some items of a multi-id command failed; the message lists each |
+| `remote_unreachable` | 1 | The sync remote could not be reached after retries |
+| `workspace_busy` | 1 | Another lit process is writing to this workspace |
+| `workspace_write_blocked` | 1 | Another process holds the store and did not release it |
+| `transient_gc_contention` | 1 | The store was briefly contended; one retry usually clears it |
+| `usage_error` | 2 | Bad arguments or flags |
+| `unknown_command` | 3 | No such command |
+| `retired_command` | 3 | The command was retired; the message names its replacement |
+| `unsupported_flag` | 3 | A retired flag, refused on every run |
+| `validation_refused` | 3 | A value or action the rules refuse; the message states the rule |
+| `template_shape_refused` | 3 | A template override on disk has the wrong shape |
+| `stored_prefix_refused` | 3 | The `issue_prefix` stored in the workspace config is not a legal prefix |
+| `takeover_unconfirmed` | 3 | The lane is held by another checkout; `--take` was not passed |
+| `outside_git_workspace` | 3 | The working directory is not in a git repository/worktree |
+| `workspace_not_initialized` | 3 | The repository has no lit workspace (`lit init` has never run) |
+| `workspace_schema_ahead` | 3 | The workspace's schema is newer than this `lit` supports |
+| `entity_not_found` | 4 | The named issue or resource does not exist |
+| `merge_conflict` | 5 | A sync merge conflict |
+| `sync_divergence` | 5 | Local and remote diverged in a way the message tells you how to resolve |
+| `owner_approval_required` | 5 | `lit sync reconcile take` would discard one side's issues and needs the owner's approval |
+| `no_ready_work` | 6 | `lit next` had no ticket for you |
+| `scope_exhausted` | 6 | `lit next` found open work in your claimed epic but none you can reach; the message names what stops it |
+| `state_already_holds` | 6 | The state the command asked for already holds |
+| `corruption_detected` | 7 | The store failed an integrity check |
+
 Code 6 is not a failure: the command ran correctly and changed nothing. It exists so a
 caller looping `lit next` can tell "stop, there is nothing for you" from "lit is broken"
 without reading the message, and it carries the same answer for a mutation that was

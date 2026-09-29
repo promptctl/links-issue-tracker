@@ -4,6 +4,12 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -13,13 +19,71 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
+// reasonCodes is the published reason vocabulary, each token with the exit code
+// it arrives on, written out by hand: the expected code must not come from
+// ExitCode, the function under test. TestCommandReasonVocabulary holds it equal
+// to the constants in error_output.go and to the table in docs/cli-reference.md.
+var reasonCodes = map[commandReason]int{
+	"bulk_partial_failure":      1,
+	"command_failed":            1,
+	"corruption_detected":       7,
+	"entity_not_found":          4,
+	"merge_conflict":            5,
+	"no_ready_work":             6,
+	"outside_git_workspace":     3,
+	"owner_approval_required":   5,
+	"remote_unreachable":        1,
+	"retired_command":           3,
+	"scope_exhausted":           6,
+	"state_already_holds":       6,
+	"stored_prefix_refused":     3,
+	"sync_divergence":           5,
+	"takeover_unconfirmed":      3,
+	"template_shape_refused":    3,
+	"transient_gc_contention":   1,
+	"unknown_command":           3,
+	"unsupported_flag":          3,
+	"usage_error":               2,
+	"validation_refused":        3,
+	"workspace_busy":            1,
+	"workspace_not_initialized": 3,
+	"workspace_schema_ahead":    3,
+	"workspace_write_blocked":   1,
+}
+
 func TestCommandErrorReason(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name string
 		err  error
-		want string
+		want commandReason
 	}{
+		{"merge conflict", MergeConflictError{Message: "sync conflict"}, "merge_conflict"},
+		{
+			"sync divergence",
+			SyncFailureError{Failure: SyncFailure{Class: syncFailureProseHeld, Remote: "origin", Branch: "master"}},
+			"sync_divergence",
+		},
+		{
+			"owner approval required",
+			ownerApprovalRefusalError{
+				Approval: store.OwnerApprovalRequiredError{
+					Choice: storage.TakeLocal, ApprovalToken: "deadbeef0123",
+					LocalHead: "aaaaaaaaaaaaaaaaaaaa", RemoteHead: "bbbbbbbbbbbbbbbbbbbb",
+					Inventory: &storage.UnrelatedInventory{OnlyLocal: []string{"proj-mine"}},
+				},
+				Remote: "origin", Branch: "master",
+			},
+			"owner_approval_required",
+		},
+		{"retired command", RetiredCommandError{Command: "ready", Replacement: "use `lit next`"}, "retired_command"},
+		{"outside git workspace", OutsideWorkspaceError{Message: "links requires running inside a git repository/worktree"}, "outside_git_workspace"},
+		{"transient gc contention", store.ErrTransientGCContention, "transient_gc_contention"},
+		{
+			"bulk partial failure",
+			BulkFailureError{Failures: []itemFailure{{IssueID: "lit-abc", Err: storage.NotFoundError{Entity: "issue", ID: "lit-abc"}}}},
+			"bulk_partial_failure",
+		},
 		{"unknown command", UnknownCommandError{Command: "wat"}, "unknown_command"},
 		{"not found", storage.NotFoundError{Entity: "issue", ID: "lit-abc"}, "entity_not_found"},
 		// A retired flag fails the same way on every run, so neither retired
@@ -141,13 +205,102 @@ func TestCommandErrorReason(t *testing.T) {
 			"validation_refused",
 		},
 	}
+	// Asserted on the rendered header, not on commandErrorReason: the header
+	// is where a caller reads the reason, so a reason computed correctly and
+	// printed nowhere must fail here.
+	produced := map[commandReason]bool{}
 	for _, tc := range tests {
 		tc := tc
+		produced[tc.want] = true
 		t.Run(tc.name, func(t *testing.T) {
-			if got := commandErrorReason(tc.err); got != tc.want {
-				t.Fatalf("commandErrorReason = %q, want %q", got, tc.want)
+			code, ok := reasonCodes[tc.want]
+			if !ok {
+				t.Fatalf("reason %q is not in reasonCodes", tc.want)
+			}
+			var stderr bytes.Buffer
+			WriteCommandError(&stderr, tc.err)
+			header, _, _ := strings.Cut(stderr.String(), "\n")
+			wantPrefix := fmt.Sprintf("error (code=%d, reason=%s): ", code, tc.want)
+			if !strings.HasPrefix(header, wantPrefix) {
+				t.Fatalf("header = %q, want prefix %q", header, wantPrefix)
 			}
 		})
+	}
+	// Every published reason is rendered by at least one real error above, so
+	// no row of the vocabulary is a token nothing prints.
+	for reason := range reasonCodes {
+		if !produced[reason] {
+			t.Errorf("no case renders reason %q", reason)
+		}
+	}
+}
+
+// TestCommandReasonVocabulary holds the published reason list to the code:
+// the constants in error_output.go, reasonCodes, and the table in
+// docs/cli-reference.md name the same tokens, and the doc gives each the code
+// reasonCodes does. A script branches on these tokens, so a reason added,
+// renamed, or moved to another code without the reference changing is a
+// broken contract, not a doc nit.
+func TestCommandReasonVocabulary(t *testing.T) {
+	t.Parallel()
+	file, err := parser.ParseFile(token.NewFileSet(), "error_output.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse error_output.go: %v", err)
+	}
+	declared := map[commandReason]bool{}
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			vs := spec.(*ast.ValueSpec)
+			if ident, ok := vs.Type.(*ast.Ident); !ok || ident.Name != "commandReason" {
+				continue
+			}
+			for _, v := range vs.Values {
+				lit, err := strconv.Unquote(v.(*ast.BasicLit).Value)
+				if err != nil {
+					t.Fatalf("unquote %s: %v", v.(*ast.BasicLit).Value, err)
+				}
+				declared[commandReason(lit)] = true
+			}
+		}
+	}
+	for reason := range declared {
+		if _, ok := reasonCodes[reason]; !ok {
+			t.Errorf("error_output.go declares %q; reasonCodes does not list it", reason)
+		}
+	}
+	for reason := range reasonCodes {
+		if !declared[reason] {
+			t.Errorf("reasonCodes lists %q; error_output.go declares no such constant", reason)
+		}
+	}
+
+	doc, err := os.ReadFile("../../docs/cli-reference.md")
+	if err != nil {
+		t.Fatalf("read reference: %v", err)
+	}
+	row := regexp.MustCompile("(?m)^\\| `([a-z_]+)` \\| ([0-9]) \\|")
+	documented := map[commandReason]int{}
+	for _, m := range row.FindAllStringSubmatch(string(doc), -1) {
+		documented[commandReason(m[1])] = int(m[2][0] - '0')
+	}
+	for reason, code := range reasonCodes {
+		got, ok := documented[reason]
+		if !ok {
+			t.Errorf("docs/cli-reference.md has no row for reason %q", reason)
+			continue
+		}
+		if got != code {
+			t.Errorf("docs/cli-reference.md gives %q code %d; it arrives on %d", reason, got, code)
+		}
+	}
+	for reason := range documented {
+		if _, ok := reasonCodes[reason]; !ok {
+			t.Errorf("docs/cli-reference.md documents %q, which no failure prints", reason)
+		}
 	}
 }
 
@@ -162,7 +315,7 @@ func TestWriteCommandError(t *testing.T) {
 		t.Fatalf("exitCode = %d, want %d", exitCode, ExitValidation)
 	}
 	out := stderr.String()
-	if !strings.Contains(out, "error (code=3): unknown command \"unknown\"") {
+	if !strings.Contains(out, "error (code=3, reason=unknown_command): unknown command \"unknown\"") {
 		t.Fatalf("missing error line: %q", out)
 	}
 	if !strings.Contains(out, "remediation: Run `lit --help`") {
@@ -238,7 +391,7 @@ func TestWriteCommandErrorUninitializedWorkspace(t *testing.T) {
 		t.Fatalf("exitCode = %d, want %d (ExitValidation)", code, ExitValidation)
 	}
 	out := stderr.String()
-	if !strings.Contains(out, "error (code=3): repository not initialized with lit — run 'lit init' first") {
+	if !strings.Contains(out, "error (code=3, reason=workspace_not_initialized): repository not initialized with lit — run 'lit init' first") {
 		t.Fatalf("missing the message body at the precondition exit code: %q", out)
 	}
 	if strings.Contains(out, "Retry the command") {
@@ -280,8 +433,9 @@ func upgradeTargetBehindError() *UpgradeTargetBehindError {
 func TestWriteCommandErrorSchemaVersionRefusals(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name string
-		err  error
+		name   string
+		err    error
+		reason string
 		// want is the remediation's act; absent is advice that would be false
 		// for this refusal.
 		want, absent string
@@ -290,9 +444,9 @@ func TestWriteCommandErrorSchemaVersionRefusals(t *testing.T) {
 		// the agent looking for a flag that does not exist.
 		// Both paths the message names change more than this command, so the
 		// agent is told to wait for the user rather than take either.
-		{"workspace schema ahead", schemaAheadError(), "take such a path only when the user directs it", "adjust the command"},
+		{"workspace schema ahead", schemaAheadError(), "workspace_schema_ahead", "take such a path only when the user directs it", "adjust the command"},
 		// The message names a newer target, which is the command adjusted.
-		{"upgrade target behind", upgradeTargetBehindError(), "adjust the command to satisfy it", "supported path"},
+		{"upgrade target behind", upgradeTargetBehindError(), "validation_refused", "adjust the command to satisfy it", "supported path"},
 	}
 	for _, tc := range tests {
 		tc := tc
@@ -303,7 +457,7 @@ func TestWriteCommandErrorSchemaVersionRefusals(t *testing.T) {
 				t.Fatalf("exitCode = %d, want %d (ExitValidation)", code, ExitValidation)
 			}
 			out := stderr.String()
-			if !strings.Contains(out, "error (code=3): "+tc.err.Error()) {
+			if !strings.Contains(out, "error (code=3, reason="+tc.reason+"): "+tc.err.Error()) {
 				t.Fatalf("missing the message body at exit 3: %q", out)
 			}
 			_, remediation, ok := strings.Cut(out, "\nremediation: ")

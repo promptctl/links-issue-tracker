@@ -136,7 +136,7 @@ func TestStartAndDoneOnOneClosedEpicDoNotShareOneAnswer(t *testing.T) {
 // most work left that there is none. [LAW:dataflow-not-control-flow] the cell's
 // declared reason selects the phrases as a value, so the loop below runs one
 // set of assertions for every cell rather than branching per answer.
-var renderedPhrases = map[string]struct{ want, forbidden []string }{
+var renderedPhrases = map[commandReason]struct{ want, forbidden []string }{
 	reasonSatisfied: {
 		want:      []string{"nothing to do"},
 		forbidden: []string{retryAdvice, doctorAdvice},
@@ -172,7 +172,7 @@ func TestEveryContainerRejectionCellHasItsOwnReasonAndExit(t *testing.T) {
 		children, closed int
 		action           string
 		spec             transitionSpec
-		wantReason       string
+		wantReason       commandReason
 		wantExit         int
 	}{
 		{"childless", 0, 0, "done", doneSpec, reasonRefused, ExitValidation},

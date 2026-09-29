@@ -196,7 +196,7 @@ func recordEngineOpenContentionTrace(args []string, err error) {
 	}
 	recordSyncTraceLogged(open.ws, syncTraceRecord{
 		Command:   formatCommand(commandPath(args)),
-		Decision:  commandErrorReason(err),
+		Decision:  string(commandErrorReason(err)),
 		Status:    "error",
 		Reason:    err.Error(),
 		BuildNote: resolveBuildStatusNote(time.Now()),
