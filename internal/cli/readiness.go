@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"slices"
+
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 )
 
@@ -106,6 +108,14 @@ func (r IssueReadiness) DependencyIDs() []string {
 		}
 	}
 	return ids
+}
+
+// AwaitsOutside reports whether an external label holds the issue: whatever
+// else blocks it, no ticket filed in this repository can make it startable.
+func (r IssueReadiness) AwaitsOutside() bool {
+	return slices.ContainsFunc(r.blocking, func(reason BlockingReason) bool {
+		return reason.Kind == annotation.External
+	})
 }
 
 // DependencyLabels returns the same dependencies as DependencyIDs, in the same

@@ -109,8 +109,8 @@ type crossEpicEdge struct {
 // direction enum: the partition lives in the value, so the renderer cannot
 // misclassify an edge and no callsite re-derives a side it was already told.
 type crossEpicEdges struct {
-	BlocksExternally  []crossEpicEdge // external ticket blocked by an internal one
-	BlockedExternally []crossEpicEdge // internal ticket blocked by an external one
+	BlocksOutside      []crossEpicEdge // ticket outside the epic blocked by one inside it
+	BlockedFromOutside []crossEpicEdge // ticket inside the epic blocked by one outside it
 }
 
 // statusMarkerWidth pads the short markers ([closed]/[in_progress]/[ready]) to
@@ -324,10 +324,10 @@ func (x *crossEpicEdges) collect(member storage.IssueRelations, internal map[str
 	}
 	id := member.Issue.ID
 	for _, blocker := range inPlayExcluding(member.DependsOn, internal) {
-		x.BlockedExternally = append(x.BlockedExternally, crossEpicEdge{Blocked: id, Blocker: blocker.ID})
+		x.BlockedFromOutside = append(x.BlockedFromOutside, crossEpicEdge{Blocked: id, Blocker: blocker.ID})
 	}
 	for _, dependent := range inPlayExcluding(member.Blocks, internal) {
-		x.BlocksExternally = append(x.BlocksExternally, crossEpicEdge{Blocked: dependent.ID, Blocker: id})
+		x.BlocksOutside = append(x.BlocksOutside, crossEpicEdge{Blocked: dependent.ID, Blocker: id})
 	}
 }
 
@@ -364,14 +364,14 @@ func (x *crossEpicEdges) sortByEndpoints() {
 			return edges[i].Blocker < edges[j].Blocker
 		})
 	}
-	byEndpoints(x.BlocksExternally)
-	byEndpoints(x.BlockedExternally)
+	byEndpoints(x.BlocksOutside)
+	byEndpoints(x.BlockedFromOutside)
 }
 
 // empty reports whether no boundary-crossing edges exist in either direction —
 // the single value test that decides whether the section renders at all.
 func (x crossEpicEdges) empty() bool {
-	return len(x.BlocksExternally) == 0 && len(x.BlockedExternally) == 0
+	return len(x.BlocksOutside) == 0 && len(x.BlockedFromOutside) == 0
 }
 
 // renderEpicContext renders an EpicContext as a plain-text block: the epic id,
@@ -413,8 +413,8 @@ func renderCrossEpic(x crossEpicEdges) string {
 	}
 	var b strings.Builder
 	b.WriteString("\nCross-epic dependencies:\n")
-	b.WriteString(renderCrossSubsection("Blocks externally", x.BlocksExternally))
-	b.WriteString(renderCrossSubsection("Blocked externally", x.BlockedExternally))
+	b.WriteString(renderCrossSubsection("Blocks outside the epic", x.BlocksOutside))
+	b.WriteString(renderCrossSubsection("Blocked from outside the epic", x.BlockedFromOutside))
 	return b.String()
 }
 

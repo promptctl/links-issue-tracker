@@ -501,9 +501,9 @@ Precedence, with `ownLanes, ownEpics := ownScope(standings, self)` and `mine := 
 
 Steps 1-3 walk every gathered row; step 4 walks the focus-scoped pool. The row set is passed to `pickFrom` explicitly at each call so that difference stays visible. The focus scope narrows step 4 and nothing else.
 
-**`reachKind`** (`internal/cli/next_route.go`) is what one row is to this checkout right now — four classifications plus the pool walk's own, and a bound: `reachTakeable`, `reachHeldFresh`, `reachNotReady`, `reachOutOfView`, `reachOffFocusPath`, `reachKindCount`. A bool here read "takeable or not", so a row outside the run's filtered view, or one not startable itself, rendered as the one reason the message named: claimed by another checkout. `rowReach{ID string; Row annotation.AnnotatedIssue; Kind reachKind}`.
+**`reachKind`** (`internal/cli/next_route.go`) is what one row is to this checkout right now — five classifications plus the pool walk's own, and a bound: `reachTakeable`, `reachHeldFresh`, `reachNotReady`, `reachAwaitingOutside`, `reachOutOfView`, `reachOffFocusPath`, `reachKindCount`. A bool here read "takeable or not", so a row outside the run's filtered view, or one not startable itself, rendered as the one reason the message named: claimed by another checkout. `rowReach{ID string; Row annotation.AnnotatedIssue; Kind reachKind}`.
 
-**`reachOf(row, standing, self)`**: `capacityFor(...) != routeAround` → `reachTakeable`; `relationOf(...) == laneHeldForeign` → `reachHeldFresh`; otherwise `reachNotReady`. Exhaustion asks it of the dependencies gating our scope; an empty global pool asks it of every row the walk went past.
+**`reachOf(row, standing, self)`**: `capacityFor(...) != routeAround` → `reachTakeable`; `relationOf(...) == laneHeldForeign` → `reachHeldFresh`; `ClassifyReadiness(row.Annotations).AwaitsOutside()` → `reachAwaitingOutside`; otherwise `reachNotReady`. Exhaustion asks it of the dependencies gating our scope; an empty global pool asks it of every row the walk went past.
 
 **`workTowardEach(rows, details, epics)`**: the gathered rows, in rank order, indexed by every dependency finishing them is work toward — each row under its own id, and under every epic `epicsAbove` yields for it. **`gatingDependencies`**: the distinct open dependency ids, in rank order, gating the open rows whose lane `inScope` admits, each already carrying its `reachKind` and the id of the in-scope row it gates — the yielded `gatedDep` embeds `rowReach` and adds `Gates`. A dependency's `Kind` is the lowest `reachKind` among `workToward[id]`, and its `Row` the first row in rank order with that kind; with no row there it is `reachOutOfView` with a zero `Row`. **`onPathDependency(deps []gatedDep, laneOf) (ServedFromDependency, bool)`** returns the first of those whose `Kind == reachTakeable`, served as its `Row`. A same-lane gate never reaches here: it shares the blocked row's lane, so step 1 or 2 already served it.
 
@@ -512,18 +512,20 @@ Steps 1-3 walk every gathered row; step 4 walks the focus-scoped pool. The row s
 `exhaustedNotes`, exact strings (no `reachTakeable`: exhaustion reports the very walk step 2b declined, so it never holds one):
 - `reachHeldFresh`: `on your path but claimed by another checkout right now`
 - `reachNotReady`: ``on your path but not startable right now — `lit show` it``
+- `reachAwaitingOutside`: ``on your path but waiting on an event outside this repository — `lit show` it names the event``
 - `reachOutOfView`: ``on your path but outside this view — `lit show` it``
 
 `poolNotes`, exact strings:
 - `reachHeldFresh`: `in progress or claimed in a lane another checkout holds right now`
 - `reachNotReady`: ``not startable right now — `lit show` it names what blocks it``
+- `reachAwaitingOutside`: ``waiting on an event outside this repository — `lit show` it names the event``
 - `reachOffFocusPath`: ``off the focus path this run answered over — `lit next --all` to route over the whole queue``
 
 **`Exhausted.scope()`**: `fmt.Sprintf("epic(s) %s", strings.Join(o.Epics, ", "))` when `Epics` is non-empty, else `"your claimed lane(s)"`.
 
 **`Exhausted.home()`**: ``"with `lit new --top`"`` when `Epics` is empty; otherwise `"under the epic with "` + one ``fmt.Sprintf("`lit new --parent %s --top`", epic)`` per epic, joined by `" or "`.
 
-**`Exhausted.stay()`** is `nil` when `Blocked` is empty; otherwise the one route ``"to stay, file the ticket that clears a blocker " + home() + ", then make that blocker wait on it with `lit dep add --from <new> --to <blocker>`"``.
+**`Exhausted.stay()`** is `nil` when every entry of `Blocked` is `reachAwaitingOutside`, which includes `Blocked` empty; otherwise the one route ``"to stay, file the ticket that clears a blocker " + home() + ", then make that blocker wait on it with `lit dep add --from <new> --to <blocker>`"``.
 
 **`Exhausted.why()`**:
 - `len(o.Blocked) == 0`: `no ready work in %s — nothing else is queued behind what's already in progress`

@@ -151,14 +151,14 @@ type Exhausted struct {
 // asserting a cause it cannot see.
 //
 // Exhaustion asks it of the dependencies gating our scope; an empty global pool
-// asks it of every row the walk went past. Same question, same four answers, so
-// one type answers it — a second enum beside this one, saying the same things
+// asks it of every row the walk went past. Same question, same answers, so one
+// type answers it — a second enum beside this one, saying the same things
 // about a different set of rows, is two clocks.
 // [LAW:types-are-the-program] [LAW:one-type-per-behavior] [LAW:no-silent-failure]
 //
-// The first four are declared from most to least this checkout can do, which
-// is what lets a dependency with several tickets under it report the best of
-// them (gatingDependencies).
+// Every kind but reachOffFocusPath is declared from most to least this
+// checkout can do, which is what lets a dependency with several tickets under
+// it report the best of them (gatingDependencies).
 type reachKind int
 
 const (
@@ -168,6 +168,11 @@ const (
 	// reachNotReady: gathered and not held elsewhere, but not startable —
 	// blocked by a further dependency.
 	reachNotReady
+	// reachAwaitingOutside: gathered and not held elsewhere, and held by the
+	// external label — it waits on an event outside this repository, so no
+	// ticket filed here can clear it. Below reachNotReady because nothing here
+	// moves it, above reachOutOfView because this run can see it.
+	reachAwaitingOutside
 	// reachOutOfView: nothing that would clear it is among the gathered rows,
 	// so this run knows nothing about it. --type/--labels/--assignee and
 	// leaf-only membership narrow the gather; the dependency annotation is read
@@ -215,13 +220,17 @@ func (r rowReach) name() string {
 // fallthrough takes every routeAround reached for a reason other than a
 // foreign hold. A row that is both held fresh and not ready reports as
 // held — ownership decides whether this checkout may act at all, readiness
-// only whether acting would get anywhere.
+// only whether acting would get anywhere. An unready row the external label
+// holds reports as awaiting outside whatever else also blocks it: clearing the
+// rest would still leave it waiting on the outside event.
 func reachOf(row annotation.AnnotatedIssue, standing claims.Standing, self model.Attribution) reachKind {
 	switch {
 	case capacityFor(row, standing, self) != routeAround:
 		return reachTakeable
 	case relationOf(standing, self) == laneHeldForeign:
 		return reachHeldFresh
+	case ClassifyReadiness(row.Annotations).AwaitsOutside():
+		return reachAwaitingOutside
 	}
 	return reachNotReady
 }
@@ -670,14 +679,18 @@ func (o Exhausted) outside() string {
 
 // stay is the route that keeps the checkout in its scope, as a list of at most
 // one so both renderers join it beside the others unconditionally. It exists
-// only against a block: with Blocked empty the rest of the scope is work already
-// underway, and a new ticket has nothing to clear. Filing alone clears nothing
-// either — the blocked work still waits on its blocker — so the route names the
-// edge too, and names it exactly: the blocker waits on the new ticket. The
-// blocker to name is one outside the scope; lit refuses a blocks edge between
-// two tickets of one epic.
+// only against a block a ticket filed here could clear: with Blocked empty the
+// rest of the scope is work already underway, and a blocker awaiting an outside
+// event is cleared by that event, never by a ticket here. Filing alone clears
+// nothing either — the blocked work still waits on its blocker — so the route
+// names the edge too, and names it exactly: the blocker waits on the new
+// ticket. The blocker to name is one outside the scope; lit refuses a blocks
+// edge between two tickets of one epic.
 func (o Exhausted) stay() []string {
-	if len(o.Blocked) == 0 {
+	clearable := slices.ContainsFunc(o.Blocked, func(blocker rowReach) bool {
+		return blocker.Kind != reachAwaitingOutside
+	})
+	if !clearable {
 		return nil
 	}
 	return []string{"to stay, file the ticket that clears a blocker " + o.home() + ", then make that blocker wait on it with `lit dep add --from <new> --to <blocker>`"}
@@ -743,14 +756,16 @@ type reachNotes [reachKindCount]string
 // the very walk step 2b just declined, so it never holds a takeable one.
 var (
 	exhaustedNotes = reachNotes{
-		reachHeldFresh: "on your path but claimed by another checkout right now",
-		reachNotReady:  "on your path but not startable right now — `lit show` it",
-		reachOutOfView: "on your path but outside this view — `lit show` it",
+		reachHeldFresh:       "on your path but claimed by another checkout right now",
+		reachNotReady:        "on your path but not startable right now — `lit show` it",
+		reachAwaitingOutside: "on your path but waiting on an event outside this repository — `lit show` it names the event",
+		reachOutOfView:       "on your path but outside this view — `lit show` it",
 	}
 	poolNotes = reachNotes{
-		reachHeldFresh:    "in progress or claimed in a lane another checkout holds right now",
-		reachNotReady:     "not startable right now — `lit show` it names what blocks it",
-		reachOffFocusPath: "off the focus path this run answered over — `lit next --all` to route over the whole queue",
+		reachHeldFresh:       "in progress or claimed in a lane another checkout holds right now",
+		reachNotReady:        "not startable right now — `lit show` it names what blocks it",
+		reachAwaitingOutside: "waiting on an event outside this repository — `lit show` it names the event",
+		reachOffFocusPath:    "off the focus path this run answered over — `lit next --all` to route over the whole queue",
 	}
 )
 

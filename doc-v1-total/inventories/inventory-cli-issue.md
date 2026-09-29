@@ -862,8 +862,8 @@ lines|table") is built from the same map (`cli.go`, `output.go`).
   (`readiness.go`): `depends on <id>`, `earlier sibling <id> still open`,
   `missing <field>`, `needs-design`, `external`.
 - Cross-epic edges: for the epic node and every child that is not closed, each
-  open `DependsOn` outside the epic membership set becomes a `BlockedExternally`
-  edge, and each open `Blocks` outside becomes a `BlocksExternally` edge
+  open `DependsOn` outside the epic membership set becomes a `BlockedFromOutside`
+  edge, and each open `Blocks` outside becomes a `BlocksOutside` edge
   (`epic_context.go`). Membership = the epic id plus all child ids
   (`epicMemberIDs`, `epic_context.go`). Edges are sorted by
   (blocked, blocker) (`epic_context.go`).
@@ -889,9 +889,9 @@ Children:
 ```
 
 Cross-epic dependencies:
-  Blocks externally:
+  Blocks outside the epic:
     <blocked> blocked by <blocker>
-  Blocked externally:
+  Blocked from outside the epic:
     <blocked> blocked by <blocker>
 ```
   Each subsection is omitted when its slice is empty (`epic_context.go`).
@@ -1231,9 +1231,9 @@ Use 'lit next' to pick the top workable item to start.
    - `    epic: <epicID>  <epicTitle>` (`output.go`)
    - `    blocked: <reasons joined by "; ">` — only non-dependency blockers,
      rendered as `missing <field>` for `MissingField`, `needs-design` for
-     `NeedsDesign`, and `external` for `External` (`backlog.go`, `nonDependencyBlockingReasons` at
-     `backlog.go`). `EarlierSiblingPending` appears in **neither** the
-     blocked line nor the depends-on line.
+     `NeedsDesign`, `external` for `External`, and `earlier sibling <id> still
+     open` for `EarlierSiblingPending` (`backlog.go`,
+     `nonDependencyBlockingReasons` at `backlog.go`).
    - `    depends on: <ids joined by ", ">` (`backlog.go`, `output.go`)
    - `    in_progress: <age truncated to minute>[ (ORPHANED)]` for in-progress
      rows (`backlog.go`, `inProgressSuffix` at `ready_state.go`);
@@ -1392,22 +1392,25 @@ set is passed to `pickFrom` explicitly at each step so that difference stays
 visible (`next_route.go`).
 
 **`reachKind`** (`next_route.go`) — what one row is to this checkout right
-now: `reachTakeable`, `reachHeldFresh`, `reachNotReady`, `reachOutOfView`, plus
+now: `reachTakeable`, `reachHeldFresh`, `reachNotReady`, `reachAwaitingOutside`, `reachOutOfView`, plus
 `reachOffFocusPath`, which only the pool diagnostic stamps, and the bound
 `reachKindCount`. `reachOf(row, standing, self)` answers `reachTakeable` when
 `capacityFor(...) != routeAround`, `reachHeldFresh` when
-`relationOf(...) == laneHeldForeign`, else `reachNotReady`
+`relationOf(...) == laneHeldForeign`, `reachAwaitingOutside` when
+`ClassifyReadiness(row.Annotations).AwaitsOutside()`, else `reachNotReady`
 (`next_route.go`). `rowReach{ID string, Row annotation.AnnotatedIssue, Kind reachKind}`
 (`next_route.go`) is what both terminal outcomes carry.
 
 `exhaustedNotes` (`next_route.go`), with no `reachTakeable` entry — exhaustion reports the very walk step 2b declined:
 - `reachHeldFresh`: `"on your path but claimed by another checkout right now"`
 - `reachNotReady`: ``"on your path but not startable right now — `lit show` it"``
+- `reachAwaitingOutside`: ``"on your path but waiting on an event outside this repository — `lit show` it names the event"``
 - `reachOutOfView`: ``"on your path but outside this view — `lit show` it"``
 
 `poolNotes` (`next_route.go`):
 - `reachHeldFresh`: `"in progress or claimed in a lane another checkout holds right now"`
-- `reachNotReady`: `"not startable — blocked by a dependency, or in flight and not abandoned"`
+- `reachNotReady`: ``"not startable right now — `lit show` it names what blocks it"``
+- `reachAwaitingOutside`: ``"waiting on an event outside this repository — `lit show` it names the event"``
 - `reachOffFocusPath`: ``"off the focus path this run answered over — `lit next --all` to route over the whole queue"``
 
 `describeReach(rows, lead, notes)` renders `"<lead><names> (<note>)"` for each kind
@@ -1422,7 +1425,8 @@ otherwise appends `" and <n> more"` (`next_route.go`).
 `"your claimed lane(s)"`. `Exhausted.home()` is ``"with `lit new --top`"``
 when `Epics` is empty, else `"under the epic with "` +
 ``"`lit new --parent <epic> --top`"`` for each epic, joined by `" or "`.
-`Exhausted.stay()` is empty when `Blocked` is empty, else the one route
+`Exhausted.stay()` is empty when no entry of `Blocked` is anything but
+`reachAwaitingOutside` (so when `Blocked` is empty too), else the one route
 ``"to stay, file the ticket that clears a blocker <home()>, then make that blocker wait on it with `lit dep add --from <new> --to <blocker>`"``.
 `Exhausted.why()`:
 - `Blocked` empty: `"no ready work in <scope> — nothing else is queued behind what's already in progress"`
