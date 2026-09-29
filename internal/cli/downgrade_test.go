@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/release"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 )
@@ -180,11 +181,11 @@ func TestNormalizeReleaseTag(t *testing.T) {
 					t.Errorf("normalizeReleaseTag(%q, %q) err = %q; want %q-prefixed", c.in, verb, err, verb)
 				}
 				// Both flavors of bad --to input are the same failure class and
-				// must exit alike: ValidationError (exit 3), never a plain error
+				// must exit alike: model.ValidationError (exit 3), never a plain error
 				// (exit 1). [LAW:one-type-per-behavior]
-				var ve ValidationError
+				var ve model.ValidationError
 				if !errors.As(err, &ve) {
-					t.Errorf("normalizeReleaseTag(%q, %q) err = %v (%T); want ValidationError", c.in, verb, err, err)
+					t.Errorf("normalizeReleaseTag(%q, %q) err = %v (%T); want model.ValidationError", c.in, verb, err, err)
 				}
 				continue
 			}

@@ -42,7 +42,7 @@ func depAddLeaf() appLeaf {
 		// would otherwise corrupt downstream blocker traversals. Cheap to catch
 		// here; transitive cycle detection is a follow-up.
 		if fromID == toID {
-			return fmt.Errorf("dep add: self-loop rejected (%s -> %s)", fromID, toID)
+			return model.ValidationError{Message: fmt.Sprintf("dep add: self-loop rejected (%s -> %s)", fromID, toID)}
 		}
 		// [LAW:single-enforcer] Same-epic blocks are rejected at the CLI policy
 		// boundary so the store stays a thin substrate. Within one epic, rank is
@@ -152,7 +152,7 @@ func rejectSameEpicBlocks(ctx context.Context, ap *app.App, fromID, toID string)
 		return err
 	}
 	if fromEpic != "" && fromEpic == toEpic {
-		return ValidationError{Message: sameEpicBlocksRejectionMessage}
+		return model.ValidationError{Message: sameEpicBlocksRejectionMessage}
 	}
 	return nil
 }

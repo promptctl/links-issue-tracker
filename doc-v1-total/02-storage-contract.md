@@ -32,10 +32,10 @@ Contract points a reimplementation must not lose:
 
 ### Error taxonomy
 
-Three error types (`internal/storage/errors.go`, `capabilities.go`):
+Three error types (`internal/storage/errors.go`, `capabilities.go`, `internal/model/validation.go`):
 
 - `NotFoundError{Entity, ID}` — renders `<entity> "<id>" not found`; matched with `errors.As`; entity strings pinned by conformance: `issue`, `comment`, `label`, `relation`, `parent relation`.
-- `ValidationError{Message}` — a domain-constraint violation; message verbatim.
+- `model.ValidationError{Message}` — a domain-constraint violation; message verbatim. It is defined in `internal/model` beside the rules, so a rule raises it where it is written; conformance pins a blank title and a refused topic to it.
 - `UnsupportedError{Capability, Engine}` — renders `<engine> engine does not offer the <capability> capability`.
 
 ### Listing filters

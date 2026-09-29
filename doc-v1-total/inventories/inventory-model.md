@@ -740,6 +740,16 @@ may be carried, because the database syncs to shared remotes
   `FieldChange{Field: "status", From: h.FromStatus, To: h.ToStatus}`
   (`model.go`). v2+ exports ignore any `history` array.
 
+## 2.11 `ValidationError` — `validation.go`
+
+`ValidationError{Message string}`; `Error()` returns `Message` verbatim. The
+one refusal type for a caller-supplied value that breaks a domain rule; the CLI
+maps it to exit 3 and the `validation_refused` remediation. The rules raise it
+where they are written: `ParseIssueType` / `ParsePriority` /
+`ParsePriorityName` (through `errInvalidIssueType` / `errInvalidPriority`),
+`ParseRelationType`, `NormalizeLabel`, and in `internal/issueid`
+`NormalizeConfiguredPrefix` and `NormalizeTopicForCreate`.
+
 ---
 
 # 3. `internal/issueid`
@@ -1292,7 +1302,7 @@ A listing that says nothing about retention sees only live issues
 | `resolution:<v>` | `model.ParseResolution` (trim only); appended to `Resolutions` | |
 | `type:<v>[,<v>...]` | `model.ParseIssueTypes`; appended to `IssueTypes`; a typo or blank member is an error, never an empty result | |
 | `assignee:<v>` | value trimmed, appended to `Assignees` (no validation, empty allowed) | |
-| `id:<v>[,<v>...]` | `storage.ParseNames`: comma-split, fragments trimmed; appended to `IDs`; any blank slot → `storage.ValidationError` | |
+| `id:<v>[,<v>...]` | `storage.ParseNames`: comma-split, fragments trimmed; appended to `IDs`; any blank slot → `model.ValidationError` | |
 | `parent:<v>[,<v>...]` | `storage.ParseNames`, as `id:`; appended to `ParentIDs` | |
 | `label:<v>[,<v>...]` | `storage.ParseNames`, as `id:`; appended to `LabelsAll` (AND semantics) | |
 | `has:comments` | sets `HasComments` to `true` via `mergeBoolPointer("has-comments", …)` | |

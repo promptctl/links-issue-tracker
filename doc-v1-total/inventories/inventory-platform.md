@@ -181,8 +181,7 @@ Constants (`internal/cli/exit.go`):
 - `UsageError` ⇒ 2
 - `UnknownCommandError` ⇒ 3
 - `RetiredCommandError` ⇒ 3
-- `ValidationError` ⇒ 3
-- `storage.ValidationError` ⇒ 3
+- `model.ValidationError` ⇒ 3
 - `model.ContainerActionError` ⇒ 6 when `Satisfied()`, else 3
 - `UnsupportedError` ⇒ 3
 - `Exhausted` ⇒ 6

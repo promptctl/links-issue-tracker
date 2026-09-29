@@ -390,7 +390,7 @@ Test evidence:
 #### 4.1 `CreateIssue(ctx, in storage.CreateIssueInput) (model.Issue, error)`
 
 `store.go`. Pre-transaction (pure/validation) phase:
-1. `strings.TrimSpace(in.Title) == ""` → `errors.New("title is required")` (`store.go`).
+1. `strings.TrimSpace(in.Title) == ""` → `model.ValidationError{Message: "title is required"}` (`store.go`).
 2. `issueType := in.IssueType`; if `""` → `model.TypeTask` (`store.go`).
 3. `now := time.Now().UTC()` (`store.go`).
 4. `canonicalizeLabels(in.Labels)` (`store.go`; `internal/store/labels.go`) — error propagated.
@@ -572,7 +572,7 @@ Clauses are joined with `" AND "` (`store.go`).
 
 **Status and resolution are NOT filtered in SQL.** `parseStatusFilter(filter.Statuses)` (`store.go`, defined `store.go`) only maps each raw value through `model.DefaultOpen(string(raw))` and never errors; the actual filtering happens post-hydration.
 
-Ordering is not SQL. `storage.IssueOrdering(filter.SortBy, issueSortKeys)` (`internal/storage/ordering.go`, called from `store.go`) is parsed before the query, so an unsupported sort field (`fmt.Errorf("unsupported sort field %q", spec.Field)`) costs no query; it yields a comparator over hydrated issues:
+Ordering is not SQL. `storage.IssueOrdering(filter.SortBy, issueSortKeys)` (`internal/storage/ordering.go`, called from `store.go`) is parsed before the query, so an unsupported sort field (`model.ValidationError{Message: fmt.Sprintf("unsupported sort field %q", spec.Field)}`) costs no query; it yields a comparator over hydrated issues:
 - no specs → `rank`;
 - sort keys (`issueSortKeys`, `store.go`): `id`, `title`, `status` (compares the derived `State()`), `priority`, `rank`, `type`, `topic`, `assignee`, `created_at`, `updated_at`;
 - `Desc` negates a key's comparator;
@@ -765,10 +765,10 @@ Evidence: a hard-deleted endpoint makes both `AddRelation` and `SetParent` fail 
 `fieldWrite` (`store.go`): `issue model.Issue; replaceLabels bool; actor, reason string; changes []model.FieldChange`.
 
 `planFieldUpdate(baseline model.Issue, in storage.UpdateIssueInput, actor string) (fieldWrite, error)` (`store.go`) — pure, no clock, no IO:
-- `Title != nil` → `strings.TrimSpace(*in.Title)`; empty result → `errors.New("title cannot be empty")` (`store.go`);
+- `Title != nil` → `strings.TrimSpace(*in.Title)`; empty result → `model.ValidationError{Message: "title cannot be empty"}` (`store.go`);
 - `Description != nil` → trimmed (`store.go`);
 - `Prompt != nil` → trimmed (`store.go`);
-- `IssueType != nil` → if `issue.IssueType.IsContainer() != in.IssueType.IsContainer()` → `fmt.Errorf("cannot change issue_type between container (%v) and leaf types: lifecycle capability would change", model.ContainerTypes())` (`store.go`);
+- `IssueType != nil` → if `issue.IssueType.IsContainer() != in.IssueType.IsContainer()` → `model.ValidationError{Message: fmt.Sprintf("cannot change issue_type between container (%v) and leaf types: lifecycle capability would change", model.ContainerTypes())}` (`store.go`);
 - `Priority != nil` → assigned as-is (`store.go`);
 - `Assignee != nil` → trimmed (`store.go`);
 - `Lane != nil` → trimmed (`store.go`);
@@ -2573,8 +2573,8 @@ There is no ID parser or validator in this slice: lookups bind the id verbatim (
 
 `model.NormalizeLabel` — `internal/model/label.go`:
 - `strings.ToLower(strings.TrimSpace(label))`.
-- Empty after trim → `errors.New("label is required")`.
-- Contains a comma → `errors.New("label cannot contain commas")`.
+- Empty after trim → `model.ValidationError{Message: "label is required"}`.
+- Contains a comma → `model.ValidationError{Message: "label cannot contain commas"}`.
 - No other characters are rejected; no length cap in code (the column is `VARCHAR(191)`, `migrations/00001_baseline.sql`).
 
 `store.normalizeLabel` is a pass-through wrapper — `internal/store/labels.go`.
@@ -2651,7 +2651,7 @@ Error-vs-not-found distinction: `execDelete` wraps a delete failure as `fmt.Erro
 - `RelParentChild RelationType = "parent-child"`
 - `RelRelatedTo RelationType = "related-to"`
 
-`ParseRelationType(s)` — `internal/model/relation_type.go`: `strings.TrimSpace(s)` then matches the three constants; anything else → `errors.New("relation type must be blocks, parent-child, or related-to")`. This is the only string→type gate; the store does no re-validation (`internal/store/relations.go` comment).
+`ParseRelationType(s)` — `internal/model/relation_type.go`: `strings.TrimSpace(s)` then matches the three constants; anything else → `model.ValidationError{Message: "relation type must be blocks, parent-child, or related-to"}`. This is the only string→type gate; the store does no re-validation (`internal/store/relations.go` comment).
 
 ### 4.2 Direction and canonicalization rules
 
@@ -2674,7 +2674,7 @@ Bucketing convention, `bucketRelations(focalID, relations, issuesByID)` — `int
 ### 4.3 AddRelation
 
 `Store.AddRelation(ctx, storage.AddRelationInput{SrcID, DstID, Type, CreatedBy})` — `internal/store/relations.go`:
-1. Pre-tx: `in.Type == model.RelRelatedTo && in.SrcID == in.DstID` → `errors.New("related-to cannot target itself")`. Note this self-check is only for related-to at this point.
+1. Pre-tx: `in.Type == model.RelRelatedTo && in.SrcID == in.DstID` → `model.ValidationError{Message: "related-to cannot target itself"}`. Note this self-check is only for related-to at this point.
 2. `srcID, dstID := in.Type.CanonicalEndpoints(in.SrcID, in.DstID)` — related-to endpoints get sorted.
 3. `now := time.Now().UTC()`; the returned `model.Relation` is built with the canonical endpoints, the type, `now`, and `strings.TrimSpace(in.CreatedBy)`; empty createdBy → `"unknown"`.
 4. Inside `s.withMutation(ctx, "add relation", ...)`:
@@ -2712,9 +2712,9 @@ subject string `fmt.Sprintf("relation %s->%s (%s)", key.srcID, key.dstID, key.ki
 ### 4.5 Cycle detection on write
 
 `rejectBlocksCycle(ctx, tx, dependent, dependency)` — `internal/store/relations.go`:
-- Self-edge: `dependent == dependency` → `fmt.Errorf("blocks: %s cannot block itself", dependent)`.
+- Self-edge: `dependent == dependency` → `model.ValidationError{Message: fmt.Sprintf("blocks: %s cannot block itself", dependent)}`.
 - Loads every live blocks edge with `loadBlocksEdges` (see §5.9); load error → `fmt.Errorf("blocks cycle check: %w", err)`.
-- `blocksPrecedes(blocksPrecedenceAdj(edges), dependent, dependency)` true → error text:
+- `blocksPrecedes(blocksPrecedenceAdj(edges), dependent, dependency)` true → `model.ValidationError` with text:
   `"blocks: cannot add %s depends-on %s — %s already depends on %s (directly or transitively), so this edge would close a dependency cycle, which has no valid rank order"` with args `(dependent, dependency, dependency, dependent)`.
 
 Tests: `TestAddRelationRejectsBlocksCycle` (A→B then B→A rejected) — `internal/store/store_test.go`; `TestAddRelationRejectsTransitiveBlocksCycle` (A→B, B→C, C→A rejected) —; `TestAddRelationRejectsSelfBlock` —.
@@ -2745,10 +2745,10 @@ Tests: `TestAddRelationRejectsBlocksCycle` (A→B then B→A rejected) — `inte
 ### 4.8 SetParent
 
 `Store.SetParent(ctx, storage.SetParentInput{ChildID, ParentID, CreatedBy})` — `internal/store/relations.go`:
-- Blank check: either id empty after `strings.TrimSpace` → `errors.New("child and parent ids are required")`.
-- `in.ChildID == in.ParentID` → `errors.New("child and parent cannot be the same issue")`.
+- Blank check: either id empty after `strings.TrimSpace` → `model.ValidationError{Message: "child and parent ids are required"}`.
+- `in.ChildID == in.ParentID` → `model.ValidationError{Message: "child and parent cannot be the same issue"}`.
 - Builds `model.Relation{SrcID: ChildID, DstID: ParentID, Type: RelParentChild, CreatedAt: time.Now().UTC(), CreatedBy: trimmed}`; empty CreatedBy → `"unknown"`.
-- In `s.withMutation(ctx, "set parent"...)`: `requireIssueExistsTx` for child then parent, then `setSingleValuedEdgeTx`. No ancestry/cycle check on parent-child — a parent cycle is only detected later at read time by `ancestorChain` (§5.3).
+- In `s.withMutation(ctx, "set parent"...)`: `addRelationTx`, the same write `lit dep add` uses — endpoint existence, the parent-cycle refusal (`model.ValidationError`), and the single-parent clear-then-insert.
 - Returns the relation value.
 
 `TestAddRelationEnforcesSingleParentCardinality` — `internal/store/store_test.go`: adding a second `parent-child` edge for a child through `AddRelation` succeeds and leaves exactly one parent edge (the newer one), same as `SetParent`.
@@ -3579,7 +3579,7 @@ DependsOn   []string `json:"depends_on,omitempty"`
 The file is **one JSON array of these objects** (`ParseImportTreeSpecs`, `storage/specs.go`):
 - `json.NewDecoder` with `DisallowUnknownFields()` — any key not listed above is an error, wrapped as `"import: parse spec: %w"` around a `ValidationError` carrying the decoder's message. A top-level value that is not an array is instead reported by its JSON kind, with a pointer to `lit backup restore` for an export (`treeSpecRefusal`).
 - After decoding, `dec.More()` → `ValidationError{Message: "import: unexpected trailing data after spec array"}`.
-- Every parse refusal is a `storage.ValidationError`, so it exits 3 with the `validation_refused` remediation.
+- Every parse refusal is a `model.ValidationError`, so it exits 3 with the `validation_refused` remediation.
 
 Hand-writable example (pinned verbatim by `import_tree_test.go`):
 

@@ -174,7 +174,7 @@ func (e *Engine) AddRelation(ctx context.Context, in storage.AddRelationInput) (
 
 func (e *Engine) addRelation(in storage.AddRelationInput) (model.Relation, error) {
 	if in.Type == model.RelRelatedTo && in.SrcID == in.DstID {
-		return model.Relation{}, errors.New("related-to cannot target itself")
+		return model.Relation{}, model.ValidationError{Message: "related-to cannot target itself"}
 	}
 	srcID, dstID := in.Type.CanonicalEndpoints(in.SrcID, in.DstID)
 	if _, err := e.mustRecord(srcID); err != nil {
@@ -235,7 +235,7 @@ func (e *Engine) rejectCycle(relType model.RelationType, srcID, dstID string) er
 // already at or below the child.
 func (e *Engine) rejectParentCycle(childID, parentID string) error {
 	if childID == parentID {
-		return fmt.Errorf("parent-child: %s cannot be its own parent", childID)
+		return model.ValidationError{Message: fmt.Sprintf("parent-child: %s cannot be its own parent", childID)}
 	}
 	parentOf := map[string]string{}
 	for _, rel := range e.relations {
@@ -248,7 +248,7 @@ func (e *Engine) rejectParentCycle(childID, parentID string) error {
 	seen := map[string]struct{}{parentID: {}}
 	for at := parentOf[parentID]; at != ""; at = parentOf[at] {
 		if at == childID {
-			return fmt.Errorf("parent-child: cannot make %s a child of %s — %s is already below %s in the hierarchy, so this edge would close a parent cycle, which has no root", childID, parentID, parentID, childID)
+			return model.ValidationError{Message: fmt.Sprintf("parent-child: cannot make %s a child of %s — %s is already below %s in the hierarchy, so this edge would close a parent cycle, which has no root", childID, parentID, parentID, childID)}
 		}
 		if _, visited := seen[at]; visited {
 			return fmt.Errorf("parent-child: cannot make %s a child of %s — the hierarchy above %s already holds a cycle; run 'lit doctor' to find it", childID, parentID, parentID)
@@ -264,7 +264,7 @@ func (e *Engine) rejectParentCycle(childID, parentID string) error {
 // the reverse.
 func (e *Engine) rejectBlocksCycle(dependent, dependency string) error {
 	if dependent == dependency {
-		return fmt.Errorf("blocks: %s cannot block itself", dependent)
+		return model.ValidationError{Message: fmt.Sprintf("blocks: %s cannot block itself", dependent)}
 	}
 	// dependency -> dependents: who is forced to come after whom.
 	precedes := map[string][]string{}
@@ -292,7 +292,7 @@ func (e *Engine) rejectBlocksCycle(dependent, dependency string) error {
 		return false
 	}
 	if reaches(dependent) {
-		return fmt.Errorf("blocks: cannot add %s depends-on %s — %s already depends on %s (directly or transitively), so this edge would close a dependency cycle, which has no valid rank order", dependent, dependency, dependency, dependent)
+		return model.ValidationError{Message: fmt.Sprintf("blocks: cannot add %s depends-on %s — %s already depends on %s (directly or transitively), so this edge would close a dependency cycle, which has no valid rank order", dependent, dependency, dependency, dependent)}
 	}
 	return nil
 }
@@ -367,10 +367,10 @@ func (e *Engine) SetParent(ctx context.Context, in storage.SetParentInput) (mode
 	defer e.mu.Unlock()
 
 	if strings.TrimSpace(in.ChildID) == "" || strings.TrimSpace(in.ParentID) == "" {
-		return model.Relation{}, errors.New("child and parent ids are required")
+		return model.Relation{}, model.ValidationError{Message: "child and parent ids are required"}
 	}
 	if in.ChildID == in.ParentID {
-		return model.Relation{}, errors.New("child and parent cannot be the same issue")
+		return model.Relation{}, model.ValidationError{Message: "child and parent cannot be the same issue"}
 	}
 	// SetParent is one validated caller of the single-valued write, not a
 	// second copy of the cardinality rule: reparenting replaces in one act

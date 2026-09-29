@@ -88,12 +88,8 @@ func ExitCode(err error) int {
 	if errors.As(err, &retiredCmd) {
 		return ExitValidation
 	}
-	var validation ValidationError
+	var validation model.ValidationError
 	if errors.As(err, &validation) {
-		return ExitValidation
-	}
-	var storeValidation storage.ValidationError
-	if errors.As(err, &storeValidation) {
 		return ExitValidation
 	}
 	// The two halves of a container refusal are different answers and exit

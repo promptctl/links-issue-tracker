@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/release"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
@@ -159,17 +160,17 @@ func normalizeReleaseTag(in string, verb string) (string, error) {
 		// [LAW:dataflow-not-control-flow]. "requires a non-empty version" is
 		// true for either, where "is required" would wrongly imply the flag was
 		// absent.
-		return "", ValidationError{Message: verb + ": --to requires a non-empty version"}
+		return "", model.ValidationError{Message: verb + ": --to requires a non-empty version"}
 	}
 	if !strings.HasPrefix(t, "v") {
 		t = "v" + t
 	}
 	// Reject obvious URL-path foot-guns; resolver re-validates the v-prefix.
 	// [LAW:one-type-per-behavior] An invalid tag is the same class of failure as a
-	// missing one — bad --to input — so both return ValidationError (exit 3), not
+	// missing one — bad --to input — so both return model.ValidationError (exit 3), not
 	// a plain error that would dispatch to the generic exit 1.
 	if strings.ContainsAny(t, "/\\") || strings.Contains(t, "..") || strings.ContainsAny(t, " \t\r\n") {
-		return "", ValidationError{Message: fmt.Sprintf("%s: --to %q is not a valid release tag", verb, in)}
+		return "", model.ValidationError{Message: fmt.Sprintf("%s: --to %q is not a valid release tag", verb, in)}
 	}
 	return t, nil
 }

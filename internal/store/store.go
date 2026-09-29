@@ -527,7 +527,7 @@ func (s *Store) RecordSyncState(ctx context.Context, state storage.SyncState) er
 
 func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (model.Issue, error) {
 	if strings.TrimSpace(in.Title) == "" {
-		return model.Issue{}, errors.New("title is required")
+		return model.Issue{}, model.ValidationError{Message: "title is required"}
 	}
 	// [LAW:dataflow-not-control-flow] The zero value is data meaning
 	// "unspecified"; resolving it to the task default here keeps every caller's

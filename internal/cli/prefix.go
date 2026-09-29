@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -52,7 +53,7 @@ func prefixSetLeaf() wsLeaf {
 			// default's retry-then-doctor advice. Untyped, the two sibling
 			// commands would classify this one condition two different ways.
 			// [LAW:no-silent-failure]
-			return ValidationError{Message: fmt.Sprintf("invalid prefix %q: %v", requested, err)}
+			return model.ValidationError{Message: fmt.Sprintf("invalid prefix %q: %v", requested, err)}
 		}
 		normalized := spec.Value()
 

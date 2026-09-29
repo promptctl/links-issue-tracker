@@ -106,13 +106,13 @@ func sortedListFormatNames() []string {
 // parseListFormat is the one checkpoint for `--format`, run before the query so
 // a bad value costs no store read. It returns the renderer itself, so nothing
 // downstream holds a format name that could still be wrong. A bad value is a
-// ValidationError naming the valid formats: the same command can never succeed.
+// model.ValidationError naming the valid formats: the same command can never succeed.
 // [LAW:parse-dont-validate] [LAW:no-silent-failure]
 func parseListFormat(expr string) (issueListRenderer, error) {
 	name := strings.ToLower(strings.TrimSpace(expr))
 	render, ok := listFormats[name]
 	if !ok {
-		return nil, ValidationError{Message: fmt.Sprintf("unsupported --format %q (valid: %s)", name, strings.Join(sortedListFormatNames(), ", "))}
+		return nil, model.ValidationError{Message: fmt.Sprintf("unsupported --format %q (valid: %s)", name, strings.Join(sortedListFormatNames(), ", "))}
 	}
 	return render, nil
 }

@@ -1,7 +1,6 @@
 package model
 
 import (
-	"errors"
 	"slices"
 	"strings"
 )
@@ -15,10 +14,10 @@ import (
 func NormalizeLabel(label string) (string, error) {
 	normalized := strings.ToLower(strings.TrimSpace(label))
 	if normalized == "" {
-		return "", errors.New("label is required")
+		return "", ValidationError{Message: "label is required"}
 	}
 	if strings.Contains(normalized, ",") {
-		return "", errors.New("label cannot contain commas")
+		return "", ValidationError{Message: "label cannot contain commas"}
 	}
 	return normalized, nil
 }

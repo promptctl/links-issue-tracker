@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/workflows"
 )
 
@@ -141,11 +142,11 @@ func TestWorkflowsShowUnknownIDIsAValidationError(t *testing.T) {
 
 	_, err := runLit(t, "workflows", "show", "does-not-exist")
 	if err == nil {
-		t.Fatalf("Run(workflows show does-not-exist) error = nil, want a ValidationError")
+		t.Fatalf("Run(workflows show does-not-exist) error = nil, want a model.ValidationError")
 	}
-	var validation ValidationError
+	var validation model.ValidationError
 	if !errors.As(err, &validation) {
-		t.Fatalf("Run(workflows show does-not-exist) error = %v (%T), want ValidationError", err, err)
+		t.Fatalf("Run(workflows show does-not-exist) error = %v (%T), want model.ValidationError", err, err)
 	}
 }
 

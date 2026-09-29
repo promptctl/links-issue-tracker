@@ -38,7 +38,7 @@ data — described as assets, not as documentation of behavior).
 | 0 | `ExitOK` (`exit.go`) | nil error |
 | 1 | `ExitGeneric` (`exit.go`) | default; also `BulkFailureError` (`exit.go`), `store.ErrTransientGCContention` (`exit.go`) |
 | 2 | `ExitUsage` (`exit.go`) | `UsageError` (`exit.go`) |
-| 3 | `ExitValidation` (`exit.go`) | `templateShapeError` (`exit.go`), `UnknownCommandError` (`exit.go`), `RetiredCommandError` (`exit.go`), `ValidationError` (`exit.go`), `storage.ValidationError` (`exit.go`), `model.ContainerActionError` when not satisfied (`exit.go`), `UnsupportedError` (`exit.go`), `OutsideWorkspaceError` (`exit.go`), `store.ErrWorkspaceNotInitialized` (`exit.go`), `workspace.ErrIssuePrefixRefused` (`exit.go`) |
+| 3 | `ExitValidation` (`exit.go`) | `templateShapeError` (`exit.go`), `UnknownCommandError` (`exit.go`), `RetiredCommandError` (`exit.go`), `model.ValidationError` (`exit.go`), `model.ContainerActionError` when not satisfied (`exit.go`), `UnsupportedError` (`exit.go`), `OutsideWorkspaceError` (`exit.go`), `store.ErrWorkspaceNotInitialized` (`exit.go`), `workspace.ErrIssuePrefixRefused` (`exit.go`) |
 | 4 | `ExitNotFound` (`exit.go`) | `storage.NotFoundError` (`exit.go`) |
 | 5 | `ExitConflict` (`exit.go`) | `MergeConflictError` (`exit.go`), `SyncFailureError` (`exit.go`), `ownerApprovalRefusalError` (`exit.go`) |
 | 6 | `ExitNoWork` (`exit.go`) | `Exhausted` (`exit.go`), `NoWork` (`exit.go`), `model.ContainerActionError` when `Satisfied()` (`exit.go`) |

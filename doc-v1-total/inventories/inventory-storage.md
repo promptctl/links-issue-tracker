@@ -167,9 +167,9 @@ Interface-wide failure contract: **compensated, not transactional**. A batch tha
 - Every engine returns it — wrapped or bare, matched with `errors.As` — for a read or mutation against an id that no issue, comment, or relation holds (`internal/storage/errors.go`).
 - Callers dispatch on it; the CLI maps it to its own exit code (`internal/storage/errors.go`).
 
-**`ValidationError{Message string}`** — `internal/storage/errors.go`
-- `Error()` returns `Message` verbatim (`internal/storage/errors.go`).
-- Returned when a domain constraint (field value, type, range) is violated (`internal/storage/errors.go`).
+**`model.ValidationError{Message string}`** — `internal/model/validation.go`
+- `Error()` returns `Message` verbatim (`internal/model/validation.go`).
+- Returned when a domain constraint (field value, type, range) is violated. It lives in `internal/model`, below both the storage contract and the CLI, so the rules in `internal/model` and `internal/issueid` raise it directly (`internal/model/validation.go`).
 
 **`UnsupportedError{Capability, Engine string}`** — `internal/storage/capabilities.go`
 - `Error()` renders `fmt.Sprintf("%s engine does not offer the %s capability", e.Engine, e.Capability)` (`internal/storage/capabilities.go`).
@@ -541,7 +541,7 @@ These types live in the contract, not in an engine, because a capability interfa
 
 Order of checks is stated as contract: the parent must be resolved before the cosmetic prefix, so naming a missing parent reports the missing issue (`internal/storage/memory/issues.go`).
 
-1. `title = strings.TrimSpace(in.Title)`; empty → `errors.New("title is required")`.
+1. `title = strings.TrimSpace(in.Title)`; empty → `model.ValidationError{Message: "title is required"}`.
 2. `canonicalLabels(in.Labels)` — normalize/dedupe/sort; error propagates.
 3. `issueid.NormalizeTopicForCreate(in.Topic)` — error propagates.
 4. `issueType`: if `in.IssueType == ""` → `model.TypeTask`.
@@ -651,7 +651,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 
 **`storage.IssueOrdering`** (`internal/storage/ordering.go`), called with the memory engine's `issueSortKeys` (`internal/storage/memory/list.go`)
 - No specs → `[]SortSpec{{Field: "rank"}}` — the canonical ordering expressed as the spec list it stands for.
-- Each spec's field is `strings.ToLower(strings.TrimSpace(...))` then looked up in `issueSortKeys`; a miss → `fmt.Errorf("unsupported sort field %q", spec.Field)`.
+- Each spec's field is `strings.ToLower(strings.TrimSpace(...))` then looked up in `issueSortKeys`; a miss → `model.ValidationError{Message: fmt.Sprintf("unsupported sort field %q", spec.Field)}`.
 - `Desc` negates the ascending comparator.
 - **`strings.Compare(a.ID, b.ID)` ascending is appended as the final key always** — so descending reverses only the named keys, never the tie-break.
 - The composed comparator returns the first non-zero result, else 0.
@@ -693,9 +693,9 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 - **Archived stays legal**, because "duplicate of something already done" is the most common real redirect.
 
 **`planFields`** (`internal/storage/memory/apply.go`) — a pure function of (baseline, patch, actor, now); no clock beyond the stamp handed in, no store, no writes. It applies the patch through `storage.ApplyIssueFields` (`internal/storage/fields.go`), which carries the per-field rules below.
-- `Title` set → `strings.TrimSpace`; if the result is empty → `errors.New("title cannot be empty")`.
+- `Title` set → `strings.TrimSpace`; if the result is empty → `model.ValidationError{Message: "title cannot be empty"}`.
 - `Description`, `Prompt`, `Assignee`, `Lane` set → `strings.TrimSpace`.
-- `IssueType` set → **refused if it would cross the container/leaf line**: `fmt.Errorf("cannot change issue_type between container (%v) and leaf types: lifecycle capability would change", model.ContainerTypes())`.
+- `IssueType` set → **refused if it would cross the container/leaf line**: `model.ValidationError{Message: fmt.Sprintf("cannot change issue_type between container (%v) and leaf types: lifecycle capability would change", model.ContainerTypes())}`.
 - `Priority` set → assigned as-is.
 - `Labels` set → `model.CanonicalizeLabels(*in.Labels)`.
 - `patch.statesLabels = (in.Labels != nil)` — **not** the same question as "did the labels change": a patch restating the existing set rewrites the label rows (authorship and timestamps included), while a patch never mentioning labels leaves them as an earlier writer left them.
@@ -767,7 +767,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 ### 2.11 Relations (`internal/storage/memory/edges.go`)
 
 **`addRelation`**
-1. `RelRelatedTo` with `SrcID == DstID` → `errors.New("related-to cannot target itself")`.
+1. `RelRelatedTo` with `SrcID == DstID` → `model.ValidationError{Message: "related-to cannot target itself"}`.
 2. `in.Type.CanonicalEndpoints(in.SrcID, in.DstID)` normalizes endpoint order.
 3. `mustRecord(srcID)` then `mustRecord(dstID)` → `NotFoundError`.
 4. For `RelBlocks`, `rejectBlocksCycle(srcID, dstID)`.
@@ -777,9 +777,9 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 8. Appends and returns.
 
 **`rejectBlocksCycle(dependent, dependency)`**
-- Self-edge → `fmt.Errorf("blocks: %s cannot block itself", dependent)`.
+- Self-edge → `model.ValidationError{Message: fmt.Sprintf("blocks: %s cannot block itself", dependent)}`.
 - Builds `precedes` = dependency → dependents from all `RelBlocks` edges.
-- DFS from `dependent`; if `dependency` is reachable → long error: `"blocks: cannot add %s depends-on %s — %s already depends on %s (directly or transitively), so this edge would close a dependency cycle, which has no valid rank order"`.
+- DFS from `dependent`; if `dependency` is reachable → `model.ValidationError` with the long message: `"blocks: cannot add %s depends-on %s — %s already depends on %s (directly or transitively), so this edge would close a dependency cycle, which has no valid rank order"`.
 - Rationale: a rank order is a total order and one honoring every blocks edge exists exactly when there is no cycle.
 
 **`RemoveRelation`**
@@ -796,8 +796,8 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 - `nil` input yields an empty (non-nil) map.
 
 **`SetParent`**
-- Blank child or parent (after trim) → `errors.New("child and parent ids are required")`.
-- `ChildID == ParentID` → `errors.New("child and parent cannot be the same issue")`.
+- Blank child or parent (after trim) → `model.ValidationError{Message: "child and parent ids are required"}`.
+- `ChildID == ParentID` → `model.ValidationError{Message: "child and parent cannot be the same issue"}`.
 - Delegates to `addRelation` with `Type: model.RelParentChild` — one validated caller of the single-valued write, so reparenting replaces in one act.
 
 **`ClearParent`**

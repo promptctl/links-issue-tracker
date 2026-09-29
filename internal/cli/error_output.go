@@ -65,18 +65,13 @@ func commandErrorReason(err error) string {
 	if errors.As(err, &usage) {
 		return "usage_error"
 	}
-	// Both validation types are one reason: a domain-constraint refusal
-	// (exit 3), deterministic for the command as issued. It must never fall to
-	// the default "Retry the command" — a refusal's message already names the
-	// rule (and often the alternative), and an agent that trusts remediation
-	// text over the error body will loop on a retry that can never succeed.
-	// [LAW:one-type-per-behavior]
-	var validation ValidationError
+	// A domain-constraint refusal (exit 3), deterministic for the command as
+	// issued. It must never fall to the default "Retry the command" — a
+	// refusal's message already names the rule (and often the alternative), and
+	// an agent that trusts remediation text over the error body will loop on a
+	// retry that can never succeed.
+	var validation model.ValidationError
 	if errors.As(err, &validation) {
-		return "validation_refused"
-	}
-	var storeValidation storage.ValidationError
-	if errors.As(err, &storeValidation) {
 		return "validation_refused"
 	}
 	// A malformed managed template is a refusal of a file on disk, not of the

@@ -115,10 +115,10 @@ func bulkLabelLeaf() appLeaf {
 		}
 		issueIDs := splitCSV(*ids)
 		if len(issueIDs) == 0 {
-			return ValidationError{Message: "--ids is required"}
+			return model.ValidationError{Message: "--ids is required"}
 		}
 		if strings.TrimSpace(*label) == "" {
-			return ValidationError{Message: "--label is required"}
+			return model.ValidationError{Message: "--label is required"}
 		}
 		// Resolved after the flag checks to preserve the established error
 		// precedence: missing --ids/--label surface before an unknown action does.
@@ -149,7 +149,7 @@ func bulkCloseLeaf() appLeaf {
 	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		issueIDs := splitCSV(*ids)
 		if len(issueIDs) == 0 {
-			return ValidationError{Message: "--ids is required"}
+			return model.ValidationError{Message: "--ids is required"}
 		}
 		outcome, err := closeOutcomeFromFlags(*resolution, *target, "usage: lit bulk close --ids <id,id,...> --resolution <duplicate|superseded|obsolete|wontfix> [--of <canonical-id>] [--reason <text>]")
 		if err != nil {
@@ -179,7 +179,7 @@ func bulkTransitionLeaf(action model.Action) appLeafFn {
 		return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 			issueIDs := splitCSV(*ids)
 			if len(issueIDs) == 0 {
-				return ValidationError{Message: "--ids is required"}
+				return model.ValidationError{Message: "--ids is required"}
 			}
 			actor := resolveActor()
 			return runBulkOver(stdout, issueIDs, func(issueID string) error {

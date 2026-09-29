@@ -209,8 +209,8 @@ func TestPriorityChoicesNamesExactlyTheVocabulary(t *testing.T) {
 }
 
 // The flag tolerates the surrounding space and casing a pasted value carries.
-// Driven through runNew rather than through parsePriorityFlag directly: a test
-// that named the wrapper would pin its signature. [LAW:behavior-not-structure]
+// Driven through runNew rather than through the parser directly: a test that
+// named the parser would pin its signature. [LAW:behavior-not-structure]
 func TestPriorityFlagToleratesPastedCaseAndSpace(t *testing.T) {
 	ctx := context.Background()
 

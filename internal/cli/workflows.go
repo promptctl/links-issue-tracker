@@ -265,7 +265,7 @@ func printWorkflowWarnings(w io.Writer, warnings []workflows.Warning) error {
 func renderWorkflowDefinition(w io.Writer, set workflows.Set, id string) error {
 	def, ok := set.Lookup(id)
 	if !ok {
-		return ValidationError{Message: fmt.Sprintf("no workflow definition with id %q (run `lit workflows` to see loaded ids)", id)}
+		return model.ValidationError{Message: fmt.Sprintf("no workflow definition with id %q (run `lit workflows` to see loaded ids)", id)}
 	}
 	fields := []struct{ key, value string }{
 		{"id", def.ID},

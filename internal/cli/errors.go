@@ -42,13 +42,6 @@ type UnknownCommandError struct {
 
 func (e UnknownCommandError) Error() string { return fmt.Sprintf("unknown command %q", e.Command) }
 
-// ValidationError signals that a user-supplied value failed a domain constraint check.
-type ValidationError struct {
-	Message string
-}
-
-func (e ValidationError) Error() string { return e.Message }
-
 // UnsupportedError signals use of a flag lit no longer accepts. Its message
 // names what to use instead, so the type carries no more than the message.
 type UnsupportedError struct {

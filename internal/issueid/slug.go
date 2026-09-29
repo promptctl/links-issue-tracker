@@ -3,6 +3,8 @@ package issueid
 import (
 	"fmt"
 	"strings"
+
+	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 const (
@@ -32,14 +34,14 @@ func NormalizeConfiguredPrefix(input string) (string, error) {
 	// [LAW:single-enforcer] Prefix length and slug rules are enforced once in the shared ID boundary so config and storage cannot drift.
 	normalized := NormalizeSlug(input)
 	if normalized == "" {
-		return "", fmt.Errorf("issue prefix is required")
+		return "", model.ValidationError{Message: "issue prefix is required"}
 	}
 	if len(normalized) > PrefixMaxLength {
 		normalized = normalized[:PrefixMaxLength]
 		normalized = strings.Trim(normalized, "-")
 	}
 	if len(normalized) < PrefixMinLength {
-		return "", fmt.Errorf("issue prefix must be at least %d characters after normalization", PrefixMinLength)
+		return "", model.ValidationError{Message: fmt.Sprintf("issue prefix must be at least %d characters after normalization", PrefixMinLength)}
 	}
 	return normalized, nil
 }
@@ -47,13 +49,13 @@ func NormalizeConfiguredPrefix(input string) (string, error) {
 func NormalizeTopicForCreate(input string) (string, error) {
 	normalized := NormalizeSlug(input)
 	if normalized == "" {
-		return "", fmt.Errorf("topic is required")
+		return "", model.ValidationError{Message: "topic is required"}
 	}
 	if len(normalized) < TopicMinLength {
-		return "", fmt.Errorf("topic must be at least %d characters after normalization", TopicMinLength)
+		return "", model.ValidationError{Message: fmt.Sprintf("topic must be at least %d characters after normalization", TopicMinLength)}
 	}
 	if len(normalized) > TopicMaxLength {
-		return "", fmt.Errorf("topic must be at most %d characters after normalization", TopicMaxLength)
+		return "", model.ValidationError{Message: fmt.Sprintf("topic must be at most %d characters after normalization", TopicMaxLength)}
 	}
 	return normalized, nil
 }

@@ -1,7 +1,6 @@
 package model
 
 import (
-	"errors"
 	"strconv"
 	"strings"
 )
@@ -81,7 +80,7 @@ func priorityTokens() []string {
 	return tokens
 }
 
-var errInvalidPriority = errors.New("priority must be " + oxfordOr(priorityTokens()))
+var errInvalidPriority = ValidationError{Message: "priority must be " + oxfordOr(priorityTokens())}
 
 // ParsePriority maps an untrusted priority int (import payload, bulk spec)
 // into the sealed set, rejecting exactly the values CanonicalPriority would
@@ -103,6 +102,10 @@ func ParsePriority(v int) (Priority, error) {
 // `lit import` payload carries — because a value a caller reads back has to be
 // a value they can paste into the flag that set it. Every other token is
 // refused, so `--priority 7` is unrepresentable rather than merely unusual.
+//
+// It takes the raw string, and the CLI declares --priority as a string flag,
+// because an int flag would let pflag refuse "urgent" before this gate ran,
+// rejecting the word every read surface prints.
 //
 // [LAW:parse-dont-validate] Returns a Priority, so no write path downstream
 // re-checks the range. [LAW:single-enforcer] The only string-to-Priority gate.

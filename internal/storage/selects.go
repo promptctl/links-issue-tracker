@@ -193,7 +193,7 @@ func ParseNames(refusal string, inputs ...string) ([]string, error) {
 		for _, field := range strings.Split(input, ",") {
 			name := strings.TrimSpace(field)
 			if name == "" {
-				return nil, ValidationError{Message: refusal}
+				return nil, model.ValidationError{Message: refusal}
 			}
 			out = append(out, name)
 		}
