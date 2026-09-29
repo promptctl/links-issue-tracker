@@ -192,11 +192,13 @@ func TestRouteNextContinuesEpicBeforeHigherRankedOtherEpic(t *testing.T) {
 }
 
 // A checkout's own epic having no reachable work — its held lane holds
-// nothing, and the epic has no other lane to offer — is a loud diagnostic,
-// never a silent hop to a leaf outside the epic.
+// nothing, and the epic has no other lane to offer — does not trap the
+// checkout there. `next` serves the top ready ticket outside the epic, carrying
+// the exhaustion so the pick is announced beside why the epic stopped, never
+// as a silent hop (links-next-5sxz).
 //
-// This diagnostic is reachable only while the claim is live.
-func TestRouteNextExhaustionNeverFallsToAnotherEpic(t *testing.T) {
+// This outcome is reachable only while the claim is live.
+func TestRouteNextServesPastAnExhaustedEpic(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
@@ -204,24 +206,59 @@ func TestRouteNextExhaustionNeverFallsToAnotherEpic(t *testing.T) {
 	h.transition(a1.ID, model.Done{})
 
 	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
-	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
+	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
 
 	rows, details := h.gather()
 	standings := claims.Standings{model.LaneOf(a1, &epicA): heldBy(selfAttribution)}
 
 	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
+	served, ok := outcome.(ServedPastExhaustion)
+	if !ok {
+		t.Fatalf("routeNext = %#v (%T), want ServedPastExhaustion serving epic B's B.1", outcome, outcome)
+	}
+	if served.Row.ID != b1.ID {
+		t.Fatalf("served = %q, want %q", served.Row.ID, b1.ID)
+	}
+	if served.Lane.Epic() != epicB.ID {
+		t.Fatalf("served.Lane.Epic() = %q, want %q — starting the pick claims epic B's lane", served.Lane.Epic(), epicB.ID)
+	}
+	if len(served.Exhaustion.Epics) != 1 || served.Exhaustion.Epics[0] != epicA.ID {
+		t.Fatalf("exhaustion.Epics = %v, want [%q]", served.Exhaustion.Epics, epicA.ID)
+	}
+	if len(served.Exhaustion.Blocked) != 0 {
+		t.Fatalf("exhaustion.Blocked = %v, want none (epic A has nothing queued)", served.Exhaustion.Blocked)
+	}
+}
+
+// With nothing ready outside the exhausted epic either, exhaustion is the
+// answer, and staying — filing the ticket that unblocks the epic — is the one
+// route it can name.
+func TestRouteNextExhaustionIsTerminalWhenNothingElseIsReady(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	h.transition(a1.ID, model.Start{Assignee: "tester"})
+	h.transition(a1.ID, model.Done{})
+
+	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
+	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
+
+	rows, details := h.gather()
+	standings := claims.Standings{
+		model.LaneOf(a1, &epicA):                    heldBy(selfAttribution),
+		laneOf(t, details, rowByID(t, rows, b1.ID)): heldBy(otherAttribution),
+	}
+
+	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
 	exhausted, ok := outcome.(Exhausted)
 	if !ok {
-		t.Fatalf("routeNext = %#v (%T), want Exhausted (never epic B's B.1)", outcome, outcome)
+		t.Fatalf("routeNext = %#v (%T), want Exhausted — B.1's lane is held elsewhere, so nothing outside epic A is ready", outcome, outcome)
 	}
-	if len(exhausted.Epics) != 1 || exhausted.Epics[0] != epicA.ID {
-		t.Fatalf("exhausted.Epics = %v, want [%q]", exhausted.Epics, epicA.ID)
-	}
-	if len(exhausted.Blocked) != 0 {
-		t.Fatalf("exhausted.Blocked = %v, want none (epic A has nothing queued)", exhausted.Blocked)
-	}
-	if msg := exhausted.Error(); !strings.Contains(msg, epicA.ID) {
-		t.Fatalf("exhausted.Error() = %q, want the diagnostic to name the exhausted scope %q", msg, epicA.ID)
+	msg := exhausted.Error()
+	for _, want := range []string{epicA.ID, "nothing ready outside it", "`lit new --parent <epic> --top`"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("exhausted.Error() = %q, want it to contain %q", msg, want)
+		}
 	}
 }
 
@@ -471,9 +508,9 @@ func TestRouteNextLeavesUnabandonedInFlightWorkAlone(t *testing.T) {
 // Ownership is a fact about the workspace, so a display filter must not be able
 // to change it. The checkout holds a FRESH claim on a lane whose only ticket is
 // a task, and asks for bugs. Its own lane's rows vanish from the gathered set —
-// and it must still get its epic's Exhausted diagnostic rather than another
-// epic's leaf, which is what deriving ownership from the filtered rows would
-// produce.
+// and the pick it gets must still be announced as leaving its exhausted epic,
+// rather than as a plain global-pool pick, which is what deriving ownership
+// from the filtered rows would produce.
 func TestRouteNextKeepsOwnershipUnderADisplayFilter(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
@@ -491,12 +528,12 @@ func TestRouteNextKeepsOwnershipUnderADisplayFilter(t *testing.T) {
 	standings := claims.Standings{model.LaneOf(a1, &epicA): heldBy(selfAttribution)}
 
 	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
-	exhausted, ok := outcome.(Exhausted)
+	served, ok := outcome.(ServedPastExhaustion)
 	if !ok {
-		t.Fatalf("routeNext = %#v (%T), want Exhausted (epic B's bug is a hop)", outcome, outcome)
+		t.Fatalf("routeNext = %#v (%T), want ServedPastExhaustion (epic B's bug, announced as leaving epic A)", outcome, outcome)
 	}
-	if len(exhausted.Epics) != 1 || exhausted.Epics[0] != epicA.ID {
-		t.Fatalf("exhausted.Epics = %v, want [%q]", exhausted.Epics, epicA.ID)
+	if len(served.Exhaustion.Epics) != 1 || served.Exhaustion.Epics[0] != epicA.ID {
+		t.Fatalf("exhaustion.Epics = %v, want [%q]", served.Exhaustion.Epics, epicA.ID)
 	}
 }
 
@@ -619,7 +656,8 @@ func TestExhaustionNamesABlockerOutsideThisViewAsSuch(t *testing.T) {
 // A blocker nobody holds, blocked by a further dependency of its own. It is
 // unreachable for a readiness reason, not a claims reason, so the diagnostic
 // must not name a holder — the agent's next move is down the chain, not to
-// stand down.
+// stand down. The further dependency's lane is held elsewhere, so nothing
+// outside the epic is ready and the diagnostic is the whole answer.
 func TestExhaustionNamesAnUnreadyBlockerWithoutNamingAHolder(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
@@ -634,8 +672,9 @@ func TestExhaustionNamesAnUnreadyBlockerWithoutNamingAHolder(t *testing.T) {
 
 	rows, details := h.gather()
 	standings := claims.Standings{
-		model.LaneOf(a1, &epicA):                    heldBy(selfAttribution),
-		laneOf(t, details, rowByID(t, rows, a2.ID)): heldBy(selfAttribution),
+		model.LaneOf(a1, &epicA):                        heldBy(selfAttribution),
+		laneOf(t, details, rowByID(t, rows, a2.ID)):     heldBy(selfAttribution),
+		laneOf(t, details, rowByID(t, rows, deeper.ID)): heldBy(otherAttribution),
 	}
 
 	outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
@@ -1077,20 +1116,23 @@ func TestRouteNextRoutesAroundAFreshPublicHold(t *testing.T) {
 // some walk claims it.
 func TestEveryReachKindHasWordsInBothDiagnostics(t *testing.T) {
 	t.Parallel()
-	// reachOf's switch is total and returns these four and nothing else, so they
-	// are what the exhaustion walk can stamp — it reaches laneOurs rows and, via
-	// gatingDependencies, deps the gather never returned.
+	// reachOf's switch is total over four kinds. The exhaustion walk reaches
+	// laneOurs rows and, via gatingDependencies, deps the gather never
+	// returned — but never a takeable one: step 2b serves the first takeable
+	// dependency over the same scope before exhaustion is reached.
 	//
-	// The pool walk stamps a strictly smaller set through the same reachOf:
-	// step 4 runs only with no lane held, so nothing there is laneOurs and the
-	// pick has already declined every takeable row, leaving routeAround as the
-	// only verdict passedOver sees; and it asks reachOf about gathered rows
-	// only. So reachTakeable and reachOutOfView are unreachable here, and words
-	// for them would describe an answer this walk can never give.
-	exhaustedSpeaks := []reachKind{reachTakeable, reachHeldFresh, reachNotReady, reachOutOfView}
+	// The pool walk stamps no takeable row either: NoWork is answered only with
+	// no lane held, so nothing there is laneOurs and the pick has already
+	// declined every takeable row, leaving routeAround as the only verdict
+	// passedOver sees; and it asks reachOf about gathered rows only. So
+	// reachOutOfView is unreachable there, and words for it would describe an
+	// answer that walk can never give.
+	exhaustedSpeaks := []reachKind{reachHeldFresh, reachNotReady, reachOutOfView}
 	poolSpeaks := []reachKind{reachHeldFresh, reachNotReady, reachOffFocusPath}
 
-	spoken := map[reachKind]bool{}
+	// reachTakeable is the one kind routing acts on instead of reporting: steps
+	// 1b and 2b serve it. It means something without a walk that says it.
+	spoken := map[reachKind]bool{reachTakeable: true}
 	for _, diagnostic := range []struct {
 		name   string
 		notes  reachNotes

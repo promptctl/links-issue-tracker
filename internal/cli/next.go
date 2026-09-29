@@ -117,14 +117,21 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 	case ServedFromNewLane:
 		row = o.Row
 		announce = startAdvice(o.Row, o.Lane) + "\n"
-	// Step 1b says what it is for. This is the one pick whose reason the row
-	// cannot show on its own: a global-pool pick is self-explanatory from the
-	// row, and step 2's shared epic is visible in the id, but "this unblocks
-	// work you are already holding" is a fact about the WALK.
+	// Steps 1b and 2b say what they are for. This is the one pick whose reason
+	// the row cannot show on its own: a global-pool pick is self-explanatory
+	// from the row, and step 2's shared epic is visible in the id, but "this
+	// unblocks work on your path" is a fact about the WALK.
 	case ServedFromDependency:
 		row = o.Row
 		announce = startAdvice(o.Row, o.Lane) +
-			fmt.Sprintf(" (gates %s, which is in a lane you hold)\n", o.Gates)
+			fmt.Sprintf(" (gates %s, which is on your path)\n", o.Gates)
+	// Leaving the scope is the agent's choice, so both routes are named and
+	// neither is taken: the row is the second route, printed like any pick.
+	case ServedPastExhaustion:
+		row = o.Row
+		_, stay := o.Exhaustion.scope()
+		announce = fmt.Sprintf("%s\nto stay, %s\nor move on to the top ready ticket outside it: %s\n",
+			o.Exhaustion.why(), stay, startAdvice(o.Row, o.Lane))
 	// The two terminal outcomes travel outward AS THEMSELVES. Rendering them
 	// into an untyped error here would discard the very discriminator routing
 	// has just established, so both sinks — ExitCode and commandErrorReason —

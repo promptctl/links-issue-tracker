@@ -71,11 +71,12 @@ type ServedFromNewLane struct {
 	Lane model.LaneID
 }
 
-// ServedFromDependency is routing step 1b: a ready ticket OUTSIDE our lanes that
-// gates one of our own blocked rows. Like ServedFromNewLane it establishes a
-// claim on a lane this checkout does not hold, so Lane is carried for the same
-// reason. Unlike it, the pick has a reason the row cannot show on its own —
-// it unblocks work we are already holding — and Gates names the row it unblocks.
+// ServedFromDependency is routing step 1b or 2b: a ready ticket OUTSIDE our
+// lanes that gates one of our blocked rows — in a lane we hold (1b), or anywhere
+// in our epic (2b). Like ServedFromNewLane it establishes a claim on a lane this
+// checkout does not hold, so Lane is carried for the same reason. Unlike it, the
+// pick has a reason the row cannot show on its own — it unblocks work on our
+// path — and Gates names the row it unblocks.
 //
 // It is its own outcome rather than a nullable qualifier on ServedFromNewLane
 // because the two picks answer different questions. A Gates field hanging off
@@ -96,11 +97,30 @@ type ServedFromDependency struct {
 	Gates string
 }
 
+// ServedPastExhaustion is routing step 3 with somewhere to go: this checkout's
+// own scope has nothing reachable (Exhaustion says why), and the global pool
+// has a ready ticket outside it. An epic holding only blocked work used to
+// answer with Exhausted alone, and since routing is deterministic every later
+// `next` repeated it: the agent stayed in the epic with nothing to do until
+// its claim expired (owner ruling, links-next-5sxz, 2026-09-29).
+//
+// It carries the whole exhaustion rather than a flag, because the renderer
+// owes the agent both routes out, and only the exhaustion knows the first: stay
+// and file the ticket that unblocks the scope, or move on to Row. Leaving is
+// never silent — the pick is announced beside the reason the scope stopped.
+// [LAW:types-are-the-program] [LAW:no-silent-failure]
+type ServedPastExhaustion struct {
+	Row        annotation.AnnotatedIssue
+	Lane       model.LaneID
+	Exhaustion Exhausted
+}
+
 // Exhausted is the checkout's own claimed epic(s) having open work with none
 // of it reachable: not the held lanes, not an on-path dependency, not another
-// lane of the same epic. Routing step 3 — loud and diagnostic, never a
-// silent hop to a leaf outside the epic. Blocked names the open dependencies
-// gating that work, if any (an in-progress-only lane names none).
+// lane of the same epic — and the global pool having nothing ready outside it
+// either, or routing would have answered ServedPastExhaustion. Loud and
+// diagnostic. Blocked names the open dependencies gating that work, if any (an
+// in-progress-only lane names none).
 //
 // It is also an error, for the same reason HelpRequestedError is: it is an
 // answer, not a failure, and the error channel is the only channel runNext has
@@ -201,6 +221,7 @@ func (ResumedOwnWork) isNextOutcome()       {}
 func (ServedFromEpicLane) isNextOutcome()   {}
 func (ServedFromNewLane) isNextOutcome()    {}
 func (ServedFromDependency) isNextOutcome() {}
+func (ServedPastExhaustion) isNextOutcome() {}
 func (Exhausted) isNextOutcome()            {}
 func (NoWork) isNextOutcome()               {}
 
@@ -297,10 +318,11 @@ func ownScope(standings claims.Standings, self model.Attribution) (map[model.Lan
 // Precedence: this checkout's own lanes first, startable work and work of ours
 // already underway alike; then an on-path external dependency that gates one of
 // them; then the rest of its epic's lanes (the GRANULARITY RULING's epic-major
-// amendment); then a loud exhaustion diagnostic if the epic has open work but
-// none of it is reachable; then the global pool. A checkout with no lanes of its
-// own starts straight at the global pool — unfocus is the zero state, not a hop
-// through the earlier steps.
+// amendment); then, if the epic has open work but none of it is reachable, the
+// global pool's pick announced beside why the epic stopped, or the loud
+// exhaustion diagnostic when the pool has nothing either. A checkout with no
+// lanes of its own starts straight at the global pool — unfocus is the zero
+// state, not a hop through the earlier steps.
 //
 // The focus scope narrows STEP 4 AND NOTHING ELSE. Steps 1-3 route over lanes
 // this checkout already holds, and ownScope takes pains to read that from the
@@ -349,6 +371,14 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 		return pickFrom(rows, inScope, accept...)
 	}
 
+	// Step 4's pick, shared by the step that falls through to it. The pool is
+	// the focus-scoped one — see the step 4 comment below.
+	pool, offPath := scope.partition(rows)
+	fromPool := func() (annotation.AnnotatedIssue, bool) {
+		row, _, ok := pickFrom(pool, func(model.LaneID) bool { return true }, serveWork)
+		return row, ok
+	}
+
 	ownLanes, ownEpics := ownScope(standings, self)
 	mine := func(lane model.LaneID) bool { return ownLanes[lane] }
 	if len(ownLanes) > 0 {
@@ -373,13 +403,25 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 		if row, _, ok := pick(func(lane model.LaneID) bool { return ourEpic(lane) && !mine(lane) }, serveWork); ok {
 			return ServedFromEpicLane{Row: row, Lane: laneOf(row)}
 		}
-		// Step 3 — loud, and never a hop.
-		return Exhausted{
-			Epics: slices.Sorted(maps.Keys(ownEpics)),
-			Blocked: blockedRows(gatingDependencies(rows, laneOf, func(lane model.LaneID) bool {
-				return mine(lane) || ourEpic(lane)
-			}, reachFor)),
+		// Step 2b — a dependency outside our epic that gates any of it. Clearing
+		// it is how the epic moves again, so it outranks every ticket the pool
+		// could offer; after step 2, because a ready lane of the epic moves it
+		// without leaving it.
+		ourScope := func(lane model.LaneID) bool { return mine(lane) || ourEpic(lane) }
+		if dep, gates, ok := onPathDependency(rows, laneOf, ourScope, reachFor); ok {
+			return ServedFromDependency{Row: dep, Lane: laneOf(dep), Gates: gates}
 		}
+		// Step 3 — loud, and never a silent hop. The pool's pick is outside our
+		// scope by construction: steps 1 and 2 took every serveWork row in our
+		// lanes and our epic, and the pool is a subset of the rows they walked.
+		exhausted := Exhausted{
+			Epics:   slices.Sorted(maps.Keys(ownEpics)),
+			Blocked: blockedRows(gatingDependencies(rows, laneOf, ourScope, reachFor)),
+		}
+		if row, ok := fromPool(); ok {
+			return ServedPastExhaustion{Row: row, Lane: laneOf(row), Exhaustion: exhausted}
+		}
+		return exhausted
 	}
 
 	// Step 4 — the global pool, and the diagnostic half of the same walk: what
@@ -391,8 +433,7 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 	// "nothing on your focus path is startable" are different answers, and a
 	// pool that quietly served an off-path row instead would be substituting a
 	// similar-looking query for the one asked. [LAW:no-silent-failure]
-	pool, offPath := scope.partition(rows)
-	if row, _, ok := pickFrom(pool, func(model.LaneID) bool { return true }, serveWork); ok {
+	if row, ok := fromPool(); ok {
 		return ServedFromNewLane{Row: row, Lane: laneOf(row)}
 	}
 	return NoWork{Unreachable: append(passedOver(pool, reachFor), withheldByScope(offPath)...)}
@@ -501,20 +542,22 @@ func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation
 	return deps
 }
 
-// onPathDependency finds the first dependency gating one of our own lanes that
+// onPathDependency finds the first dependency gating a lane inScope admits that
 // this checkout may itself take — "a dependency outside the claimed lane that
 // gates it is offered as on-path" (design-docs/work-claims.md, Routing step 1).
-// A same-lane gate (an earlier sibling) never reaches here: it shares the
-// blocked row's lane, so step 1 already served or resumed it.
+// Step 1b asks it of our own lanes and step 2b of our whole epic. A same-lane
+// gate (an earlier sibling) never reaches here: it shares the blocked row's
+// lane, so step 1 or 2 already served it.
 //
 // Takeability is the shared verdict, not a local readiness test. A local test
 // sees no standings, so it would offer a ticket sitting in a lane another
 // checkout holds fresh — which `lit start` then refuses, so `next` would
 // recommend what `start` blocks. It does not re-check that the gated row is
-// unservable: step 1 accepts every capacity an own lane can produce, so by the
-// time we are here every row in `mine` is routeAround by construction.
-func onPathDependency(rows []annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID, mine func(model.LaneID) bool, reachFor func(annotation.AnnotatedIssue, bool) reachKind) (annotation.AnnotatedIssue, string, bool) {
-	for _, dep := range gatingDependencies(rows, laneOf, mine, reachFor) {
+// unservable: the steps before each call already took every servable row
+// inScope admits, so by the time we are here each of them is routeAround by
+// construction.
+func onPathDependency(rows []annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID, inScope func(model.LaneID) bool, reachFor func(annotation.AnnotatedIssue, bool) reachKind) (annotation.AnnotatedIssue, string, bool) {
+	for _, dep := range gatingDependencies(rows, laneOf, inScope, reachFor) {
 		if dep.Kind == reachTakeable {
 			return dep.Row, dep.Gates, true
 		}
@@ -522,17 +565,34 @@ func onPathDependency(rows []annotation.AnnotatedIssue, laneOf func(annotation.A
 	return annotation.AnnotatedIssue{}, "", false
 }
 
-// Error renders Exhausted as the loud diagnostic the design demands in place
-// of a silent hop to another epic's leaf.
+// Error renders Exhausted as the loud diagnostic it is when nothing outside the
+// scope is ready either, so staying is the one route left to name.
 func (o Exhausted) Error() string {
-	scope := "your claimed lane(s)"
-	if len(o.Epics) > 0 {
-		scope = fmt.Sprintf("epic(s) %s", strings.Join(o.Epics, ", "))
-	}
+	_, stay := o.scope()
+	return fmt.Sprintf("%s; `lit next` has nothing ready outside it either — %s", o.why(), stay)
+}
+
+// why is what both exhaustion outcomes say first: which scope stopped, and
+// what stops it.
+func (o Exhausted) why() string {
+	scope, _ := o.scope()
 	if len(o.Blocked) == 0 {
-		return fmt.Sprintf("no ready work in %s — nothing else is queued behind what's already in progress; picking up other work is a deliberate re-focus, not a bare `next`", scope)
+		return fmt.Sprintf("no ready work in %s — nothing else is queued behind what's already in progress", scope)
 	}
-	return fmt.Sprintf("no ready work in %s — %s; picking up other work is a deliberate re-focus, not a bare `next`", scope, describeReach(o.Blocked, "blocked on ", exhaustedNotes))
+	return fmt.Sprintf("no ready work in %s — %s", scope, describeReach(o.Blocked, "blocked on ", exhaustedNotes))
+}
+
+// scope names the stopped scope and the route that stays in it — file the
+// ticket that unblocks it — answered
+// together because both turn on one fact: an epic can take the unblocking
+// ticket as a child, ranked ahead of the work it unblocks, and a lane with no
+// epic over it has nothing to parent one under.
+func (o Exhausted) scope() (name, stay string) {
+	if len(o.Epics) == 0 {
+		return "your claimed lane(s)", "file the ticket that unblocks it with `lit new`"
+	}
+	return fmt.Sprintf("epic(s) %s", strings.Join(o.Epics, ", ")),
+		"file the ticket that unblocks it under the epic with `lit new --parent <epic> --top`"
 }
 
 // reachNotes is what a diagnostic says about the rows of each kind, indexed by
@@ -558,15 +618,16 @@ type reachNotes [reachKindCount]string
 // kinds it can stamp, and the two sets differ at both ends.
 //
 // reachOffFocusPath is the pool walk's alone, stamped by withheldByScope.
-// reachTakeable and reachOutOfView are the exhaustion walk's alone: step 4 runs
-// only when this checkout holds no lane, so no pool row is laneOurs and
-// capacityFor cannot answer resumeWork, while the pick just declined every
-// serveWork over that same set — leaving routeAround as the
-// only verdict passedOver can see. It also classifies gathered rows only, where
-// gatingDependencies reaches deps the gather never returned.
+// reachOutOfView is the exhaustion walk's alone: passedOver classifies gathered
+// rows only, where gatingDependencies reaches deps the gather never returned.
+// reachTakeable is neither's. NoWork is answered only to a checkout holding no
+// lane, so no pool row is laneOurs and capacityFor cannot answer resumeWork,
+// while the pick just declined every serveWork over that same set — leaving
+// routeAround as the only verdict passedOver can see. And step 2b serves the
+// first takeable dependency the exhaustion walk would find, over the same
+// scope, so exhaustion only ever reports dependencies it could not offer.
 var (
 	exhaustedNotes = reachNotes{
-		reachTakeable:  "on your path and yours to take — `lit start` it",
 		reachHeldFresh: "on your path but claimed by another checkout right now",
 		reachNotReady:  "on your path but not startable right now — `lit show` it",
 		reachOutOfView: "on your path but outside this view — `lit show` it",

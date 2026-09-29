@@ -308,10 +308,11 @@ func TestFocusOnAChildOfABlockedEpicReachesTheGate(t *testing.T) {
 }
 
 // Routing treats the epic's gate as a dependency of the epic's lanes. A checkout
-// holding a lane of the blocked epic is offered the gate as on-path work, and a
-// checkout that holds only the epic is told its epic is blocked by the gate. It
-// is never handed the unrelated ready ticket ranked above the gate, and never
-// the gated child it would have been handed before the gate held.
+// holding a lane of the blocked epic is offered the gate as on-path work through
+// step 1b, and a checkout that holds only a finished lane of the epic is offered
+// it through step 2b. It is never handed the unrelated ready ticket ranked above
+// the gate, and never the gated child it would have been handed before the gate
+// held.
 func TestRouteNextTreatsAnEpicsGateAsOnPath(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Title: "Epic", Topic: "epic-block", IssueType: "epic"})
@@ -342,16 +343,15 @@ func TestRouteNextTreatsAnEpicsGateAsOnPath(t *testing.T) {
 	t.Run("holding only the epic", func(t *testing.T) {
 		standings := claims.Standings{doneLane: heldBy(selfAttribution)}
 		outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
-		exhausted, ok := outcome.(Exhausted)
-		if !ok {
-			t.Fatalf("routeNext = %#v (%T), want Exhausted naming the gate", outcome, outcome)
+		// The gated child sits in a lane we do not hold, so the gate reaches us
+		// through step 2b rather than 1b — and still ahead of the unrelated
+		// ticket the pool would serve once the epic is exhausted.
+		served, ok := outcome.(ServedFromDependency)
+		if !ok || served.Row.ID != gate.ID {
+			t.Fatalf("routeNext = %#v (%T), want ServedFromDependency serving the gate %s", outcome, outcome, gate.ID)
 		}
-		blockers := make([]string, len(exhausted.Blocked))
-		for i, b := range exhausted.Blocked {
-			blockers[i] = b.ID
-		}
-		if !slices.Equal(blockers, []string{gate.ID}) {
-			t.Fatalf("Exhausted.Blocked = %v, want exactly the gate %s", blockers, gate.ID)
+		if served.Gates != gated.ID {
+			t.Fatalf("served.Gates = %q, want %q", served.Gates, gated.ID)
 		}
 	})
 }
