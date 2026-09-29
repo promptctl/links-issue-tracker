@@ -417,13 +417,17 @@ func (e *Engine) ancestorChain(id string) ([]string, error) {
 // parentOf names an issue's parent, skipping a parent that has been deleted:
 // a frame is what an issue is ranked within, and work in the trash frames
 // nothing.
+//
+// A child restored data gives two parents is framed by the lower parent id,
+// the rule storage.RankAncestry lists it by. [LAW:one-source-of-truth]
 func (e *Engine) parentOf(childID string) (string, bool) {
+	parent, found := "", false
 	for _, rel := range e.relations {
-		if rel.SrcID == childID && e.frames(rel) {
-			return rel.DstID, true
+		if rel.SrcID == childID && e.frames(rel) && (!found || rel.DstID < parent) {
+			parent, found = rel.DstID, true
 		}
 	}
-	return "", false
+	return parent, found
 }
 
 // frames reports whether rel is an edge whose parent frames its child: a

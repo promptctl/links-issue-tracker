@@ -134,13 +134,12 @@ Parentage gets its own two verbs rather than riding `AddRelation` because it is 
 **`ParentLink`** — `internal/storage/rank.go`
 - `ChildID`, `ParentID`, `ParentRank string` — one parent-child edge whose parent is not deleted, with the key that parent holds.
 
-**`RankAncestry`** — `struct{ places map[string][]rankPlace; unplaced map[string]error }`, `internal/storage/rank.go`
+**`RankAncestry`** — `struct{ places map[string][]rankPlace; conflicts []ParentConflict }`, `internal/storage/rank.go`
 - For each issue a container frames, the place (`rankPlace{rank, id}`) of each of its containers, outermost first; an issue absent from `places` is top level.
-- `NewRankAncestry(links []ParentLink) RankAncestry` — never fails. A child named by two links, and every issue whose chain passes through it, is recorded in `unplaced` with `TwoParentsError{ChildID, Parents}`, message `"%s has two parents, %s and %s, so it has no one place in rank order; ..."`; an issue whose chain returns to an issue already walked with `"the parent chain of %s loops back to %s, ..."`.
-- `Place(issues []model.Issue) error` — the `unplaced` error of the lowest id among `issues`, or nil. Both engines call it on a listing's selected rows before sorting, so only a view holding such an issue refuses.
-- `Refusal() error` — the `unplaced` error of the lowest id overall; `Store.Doctor` reports it.
+- `NewRankAncestry(links []ParentLink) RankAncestry` — never fails and never refuses. A child named by more than one link is placed under the lowest `ParentID` and recorded as a `ParentConflict{ChildID, Parents}` (parents lowest id first); a chain that returns to an issue already walked ends where it would repeat.
+- `Conflicts() []ParentConflict` — by child id; `Store.Doctor` appends each `Finding()`, `"%s has %d parents (%s); it lists under %s, the lowest id, until one remains — run 'lit parent clear %s', then set the parent it belongs under"`, as an error.
 - `Compare(x, y model.Issue) int` — walks each issue's path (its containers' places, then its own `{Rank, ID}`) step by step, comparing key then id at every step; the path that runs out first sorts first: tree order. A container's path is a prefix of its descendants', so it sorts before them and its subtree sorts together, even across a key two frame-mates share. Two distinct issues never compare equal. Both engines bind the `rank` sort key to it.
-- `Sort(issues []model.Issue) error` — `Place`, then `slices.SortFunc` by `Compare`; both engines' relation groups (`Children`, `DependsOn`, `Blocks`, related) sort with it, and a group holding an unplaced issue fails the read.
+- `Sort(issues []model.Issue)` — `slices.SortFunc` by `Compare`; both engines' relation groups (`Children`, `DependsOn`, `Blocks`, related) sort with it.
 
 **`RankSetResolution`** — `internal/storage/rank.go`
 - `NamedID string` (json `named_id`), `RankedID string` (json `ranked_id`). Equal for frame-mates; when they differ the caller must surface the substitution (`internal/storage/rank.go`).
@@ -606,7 +605,7 @@ Order of checks is stated as contract: the parent must be resolved before the co
 
 Pipeline is fixed and every stage always runs: **hydrate → select → order → cap** (`internal/storage/memory/list.go`).
 
-1. `e.rankAncestry(pos)` over `e.positions()` — for each edge in `e.relations` that `frames` (a `RelParentChild` edge to a parent that is not deleted — the rule `parentOf` applies), a `storage.ParentLink{ChildID: rel.SrcID, ParentID: rel.DstID, ParentRank: rankAt(pos[rel.DstID])}`, handed to `storage.NewRankAncestry` (`internal/storage/memory/list.go`). After selection, `ancestry.Place(selected)` refuses before the sort.
+1. `e.rankAncestry(pos)` over `e.positions()` — for each edge in `e.relations` that `frames` (a `RelParentChild` edge to a parent that is not deleted — the rule `parentOf` applies), a `storage.ParentLink{ChildID: rel.SrcID, ParentID: rel.DstID, ParentRank: rankAt(pos[rel.DstID])}`, handed to `storage.NewRankAncestry` (`internal/storage/memory/list.go`).
 2. `storage.IssueOrdering(filter.SortBy, issueSortKeys(ancestry))` — parsed before selection, so an unknown sort field errors before any hydration (`internal/storage/memory/list.go`).
 3. `storage.ParseIssueCriteria(filter)` — canonicalizes the label criteria the same way stored labels are normalized, and is the one step of selection that can fail; everything after it answers yes or no.
 4. `e.mustRecord(id)` for each of `filter.ParentIDs`, in order — the first id with no record returns `NotFoundError`; a deleted record still exists.

@@ -26,9 +26,15 @@ import (
 // about what contains what; this is that rule's SQL rendering, not a second
 // rule. The expression correlates on issues.id, so it belongs only in a query
 // selecting FROM issues.
+//
+// A child restored data gives two parents is framed by the lower parent id,
+// the rule storage.RankAncestry lists it by, so a rank move and the listing
+// agree on where it sits until doctor's finding is repaired.
+// [LAW:one-source-of-truth]
 const frameColumn = `COALESCE((SELECT r.dst_id FROM relations r
 		JOIN issues p ON p.id = r.dst_id
-		WHERE r.src_id = issues.id AND r.type = 'parent-child' AND p.deleted_at IS NULL), '')`
+		WHERE r.src_id = issues.id AND r.type = 'parent-child' AND p.deleted_at IS NULL
+		ORDER BY r.dst_id LIMIT 1), '')`
 
 // loadRankAncestry reads every framing edge in the workspace, with the key its
 // parent holds, for a listing to order by tree order. Which edges frame is
@@ -795,7 +801,8 @@ func ancestorChain(ctx context.Context, q rowQueryer, id string) ([]string, erro
 		var parent string
 		err := q.QueryRowContext(ctx,
 			`SELECT r.dst_id FROM relations r JOIN issues p ON p.id = r.dst_id
-			 WHERE r.src_id = ? AND r.type = 'parent-child' AND p.deleted_at IS NULL`, cur).Scan(&parent)
+			 WHERE r.src_id = ? AND r.type = 'parent-child' AND p.deleted_at IS NULL
+			 ORDER BY r.dst_id LIMIT 1`, cur).Scan(&parent)
 		if errors.Is(err, sql.ErrNoRows) {
 			return chain, nil
 		}

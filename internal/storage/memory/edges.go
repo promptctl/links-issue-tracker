@@ -485,11 +485,9 @@ func (e *Engine) bucketRelations(focalID string, relations []model.Relation, pos
 		}
 		*bucket = append(*bucket, issue)
 	}
-	for _, group := range [][]model.Issue{out.Children, out.DependsOn, out.Blocks} {
-		if err := ancestry.Sort(group); err != nil {
-			return storage.IssueRelations{}, err
-		}
-	}
+	ancestry.Sort(out.Children)
+	ancestry.Sort(out.DependsOn)
+	ancestry.Sort(out.Blocks)
 	return out, nil
 }
 
@@ -516,9 +514,7 @@ func (e *Engine) relatedIssues(focalID string, relations []model.Relation, pos m
 		}
 		out = append(out, issue)
 	}
-	if err := ancestry.Sort(out); err != nil {
-		return nil, err
-	}
+	ancestry.Sort(out)
 	return out, nil
 }
 

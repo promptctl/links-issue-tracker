@@ -122,19 +122,16 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 		report.Errors = append(report.Errors, fmt.Sprintf("parent cycle: %s (a hierarchy has no root once it loops; every walk up this chain runs forever, so the rank and dependency checks below could not be run — break the loop with 'lit parent clear' on one member, which detaches without reading the hierarchy, then re-run)", strings.Join(cycle, " -> ")))
 		return report, nil
 	}
-	// A child two framing edges claim has no place in tree order, nor does
-	// anything beneath it, so every view holding one refuses — the liveness
-	// read below among them. It is reported as the finding it is, with the
-	// checks it stops, rather than surfacing as some listing's failure.
-	// [LAW:no-silent-failure]
+	// A child more than one framing edge claims still lists — under its lowest
+	// parent id, which is where tree order and the frame lookup both put it —
+	// so this is the one place the fault is said out loud, and the checks
+	// below it still run. [LAW:no-silent-failure] [LAW:single-enforcer]
 	ancestry, err := loadRankAncestry(ctx, s.db)
 	if err != nil {
 		return report, fmt.Errorf("rank ancestry: %w", err)
 	}
-	if refusal := ancestry.Refusal(); refusal != nil {
-		report.Unchecked = []string{storage.CheckRankInversions, storage.CheckDependencyCycle}
-		report.Errors = append(report.Errors, refusal.Error())
-		return report, nil
+	for _, conflict := range ancestry.Conflicts() {
+		report.Errors = append(report.Errors, conflict.Finding())
 	}
 	// Rank inversions and a blocks dependency cycle are two questions about one
 	// snapshot — the live rank order and the blocks edges — so it is read once.

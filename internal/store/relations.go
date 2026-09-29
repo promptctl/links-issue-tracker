@@ -18,7 +18,7 @@ import (
 // — shared by single-issue detail loading and batch relation loading so the
 // "blocks convention: src=dependent, dst=dependency" lives in exactly one place.
 // [LAW:single-enforcer] Relation-direction semantics decided once, here.
-func bucketRelations(focalID string, relations []model.Relation, issuesByID map[string]model.Issue, ancestry storage.RankAncestry) (storage.IssueRelations, error) {
+func bucketRelations(focalID string, relations []model.Relation, issuesByID map[string]model.Issue, ancestry storage.RankAncestry) storage.IssueRelations {
 	out := storage.IssueRelations{
 		Children:  []model.Issue{},
 		DependsOn: []model.Issue{},
@@ -51,18 +51,16 @@ func bucketRelations(focalID string, relations []model.Relation, issuesByID map[
 			}
 		}
 	}
-	for _, group := range [][]model.Issue{out.Children, out.DependsOn, out.Blocks} {
-		if err := ancestry.Sort(group); err != nil {
-			return storage.IssueRelations{}, err
-		}
-	}
-	return out, nil
+	ancestry.Sort(out.Children)
+	ancestry.Sort(out.DependsOn)
+	ancestry.Sort(out.Blocks)
+	return out
 }
 
 // relatedFrom returns the hydrated "related-to" counterparts of focalID. It is
 // GetIssueDetail's concern only — no batch consumer needs related edges, so it
 // stays out of the shared IssueRelations shape.
-func relatedFrom(focalID string, relations []model.Relation, issuesByID map[string]model.Issue, ancestry storage.RankAncestry) ([]model.Issue, error) {
+func relatedFrom(focalID string, relations []model.Relation, issuesByID map[string]model.Issue, ancestry storage.RankAncestry) []model.Issue {
 	out := []model.Issue{}
 	for _, rel := range relations {
 		if rel.Type != model.RelRelatedTo {
@@ -76,10 +74,8 @@ func relatedFrom(focalID string, relations []model.Relation, issuesByID map[stri
 			out = append(out, related)
 		}
 	}
-	if err := ancestry.Sort(out); err != nil {
-		return nil, err
-	}
-	return out, nil
+	ancestry.Sort(out)
+	return out
 }
 
 // siblingsOf returns parentChildren with the focal issue removed — the
@@ -146,10 +142,7 @@ func (s *Store) GetRelationsByIDs(ctx context.Context, ids []string) (map[string
 		if !ok {
 			continue
 		}
-		rel, err := bucketRelations(id, bySubject[id], issuesByID, ancestry)
-		if err != nil {
-			return nil, err
-		}
+		rel := bucketRelations(id, bySubject[id], issuesByID, ancestry)
 		rel.Issue = issue
 		out[id] = rel
 	}

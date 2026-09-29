@@ -784,9 +784,6 @@ func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter)
 	// [LAW:dataflow-not-control-flow] Sort, filter and cap always run; the helpers
 	// absorb "no order", "no filter" and "no limit" as data so the body stays a
 	// straight pipe.
-	if err := ancestry.Place(hydrated); err != nil {
-		return nil, err
-	}
 	slices.SortStableFunc(hydrated, ordering)
 	return capLimit(filterByResolution(filterByState(hydrated, allowedStates), filter.Resolutions), filter.Limit), nil
 }
@@ -1051,10 +1048,7 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 	// [LAW:one-source-of-truth] Structural edges (parent/child/blocks) are
 	// bucketed by the same helper the batch accessor uses, so the blocks
 	// convention has one definition. Related is GetIssueDetail's own concern.
-	structural, err := bucketRelations(id, relations, relatedByID, ancestry)
-	if err != nil {
-		return model.IssueDetail{}, err
-	}
+	structural := bucketRelations(id, relations, relatedByID, ancestry)
 	// Siblings are the parent's other children. The set exists only when the
 	// issue has a parent; an only child yields the empty slice and the renderer
 	// omits the group. [LAW:one-source-of-truth] derived from the same
@@ -1083,10 +1077,7 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 			redirectTarget = &hydrated
 		}
 	}
-	related, err := relatedFrom(id, relations, relatedByID, ancestry)
-	if err != nil {
-		return model.IssueDetail{}, err
-	}
+	related := relatedFrom(id, relations, relatedByID, ancestry)
 	detail := model.IssueDetail{
 		Issue:          issue,
 		Relations:      relations,

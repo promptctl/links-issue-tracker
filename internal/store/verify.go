@@ -124,21 +124,19 @@ func VerifyCandidate(ctx context.Context, dump RawDump, mapping ShapeMapping, st
 	if err != nil {
 		return VerifyReport{}, fmt.Errorf("verify health gate (doctor): %w", err)
 	}
-	// A hierarchy with no tree order is the one health finding that stops the
-	// remaining gates rather than joining them: a parent cycle, or a child with
-	// two parents. They all read through Export, which lists in tree order and
-	// hydrates every container — on a loop hydration's walk never returns, and
-	// on either the listing refuses — so continuing here would crash or fail on
-	// exactly the untrusted candidate this gate exists to reject. The report is
-	// returned with the finding that can be made, which is the honest answer:
-	// the rest was not checked, and saying so beats crashing.
-	// [LAW:no-silent-failure]
+	// A parent cycle is the one health finding that stops the remaining gates
+	// rather than joining them. They all read through Export, which hydrates
+	// every container, and hydration is a walk up the parent chain that does not
+	// return on a loop — so continuing here would overflow the stack on exactly
+	// the untrusted candidate this gate exists to reject. The report is returned
+	// with the finding that can be made, which is the honest answer: the rest was
+	// not checked, and saying so beats crashing. [LAW:no-silent-failure]
 	//
 	// This is not a gate branching around itself: the health gate has run and
 	// produced its verdict. What is skipped is the conservation gates, whose
 	// input cannot be built. Doctor makes the same call internally, one level
-	// down, for the same reason, and its Unchecked is that call's record.
-	if len(health.Unchecked) > 0 {
+	// down, for the same reason.
+	if len(health.ParentCycle) > 0 {
 		return VerifyReport{Findings: healthFindings(health)}, nil
 	}
 	export, err := st.Export(ctx)

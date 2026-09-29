@@ -1,57 +1,69 @@
 package storage
 
 import (
-	"errors"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 // The conformance suite pins tree order on both engines through listings, but
-// neither engine can be driven into the two hierarchies tree order has no
-// answer for: the write boundary refuses a second parent and a parent cycle.
-// Restored data can still carry either, so the refusals are pinned here, on
-// the edges alone.
+// neither engine can be driven into the two hierarchies the write boundary
+// refuses: a second parent and a parent cycle. Restored data can still carry
+// either, so what tree order does with them is pinned here, on the edges alone.
 
-// A child two parents claim has no place, and neither does anything beneath
-// it; the refusal names the child whose edges are the fault. An issue outside
-// that subtree still has its place, so a view that holds none of them answers.
-func TestTwoParentsLeaveOnlyThatSubtreeUnplaced(t *testing.T) {
+func treeOrder(t *testing.T, ancestry RankAncestry, issues []model.Issue) []string {
+	t.Helper()
+	ancestry.Sort(issues)
+	ids := make([]string, 0, len(issues))
+	for _, issue := range issues {
+		ids = append(ids, issue.ID)
+	}
+	return ids
+}
+
+// A child two parents claim lists under the lower parent id, with its own
+// subtree, however the edges arrive — and the conflict is kept for doctor.
+// The parent ranked first is the higher id, so listing the child under
+// whichever edge came first would put it in the other place.
+func TestAChildTwoParentsClaimListsUnderTheLowerID(t *testing.T) {
 	t.Parallel()
 	ancestry := NewRankAncestry([]ParentLink{
-		{ChildID: "c", ParentID: "p1", ParentRank: "a"},
-		{ChildID: "c", ParentID: "p2", ParentRank: "b"},
+		{ChildID: "c", ParentID: "p2", ParentRank: "a"},
+		{ChildID: "c", ParentID: "p1", ParentRank: "b"},
 		{ChildID: "c.g", ParentID: "c", ParentRank: "m"},
-		{ChildID: "p1.x", ParentID: "p1", ParentRank: "a"},
+		{ChildID: "p1.x", ParentID: "p1", ParentRank: "b"},
 	})
-	for _, id := range []string{"c", "c.g"} {
-		err := ancestry.Place([]model.Issue{{ID: "p1.x"}, {ID: id}})
-		var twoParents TwoParentsError
-		if !errors.As(err, &twoParents) || !strings.Contains(err.Error(), "c has two parents, p1 and p2") {
-			t.Errorf("Place(%s) error = %v, want a TwoParentsError naming c and both parents", id, err)
-		}
+	got := treeOrder(t, ancestry, []model.Issue{
+		{ID: "p1.x", Rank: "z"},
+		{ID: "c.g", Rank: "a"},
+		{ID: "p1", Rank: "b"},
+		{ID: "c", Rank: "m"},
+		{ID: "p2", Rank: "a"},
+	})
+	if want := []string{"p2", "p1", "c", "c.g", "p1.x"}; !slices.Equal(got, want) {
+		t.Errorf("tree order = %v, want %v", got, want)
 	}
-	if err := ancestry.Place([]model.Issue{{ID: "p1"}, {ID: "p1.x"}, {ID: "p2"}}); err != nil {
-		t.Errorf("Place(outside the subtree) error = %v, want nil", err)
-	}
-	if err := ancestry.Refusal(); err == nil || !strings.Contains(err.Error(), "c has two parents") {
-		t.Errorf("Refusal() = %v, want the workspace's one refusal", err)
+	want := []ParentConflict{{ChildID: "c", Parents: []string{"p1", "p2"}}}
+	if got := ancestry.Conflicts(); !slices.EqualFunc(got, want, func(a, b ParentConflict) bool {
+		return a.ChildID == b.ChildID && slices.Equal(a.Parents, b.Parents)
+	}) {
+		t.Errorf("Conflicts() = %v, want %v", got, want)
 	}
 }
 
-func TestAParentCycleLeavesItsMembersUnplaced(t *testing.T) {
+// A chain that loops still yields a place for every issue on it: the walk
+// ends where it would repeat, so a listing over the loop returns.
+func TestAParentLoopStillSorts(t *testing.T) {
 	t.Parallel()
 	ancestry := NewRankAncestry([]ParentLink{
 		{ChildID: "a", ParentID: "b", ParentRank: "k"},
 		{ChildID: "b", ParentID: "a", ParentRank: "m"},
+		{ChildID: "d", ParentID: "a", ParentRank: "m"},
 	})
-	if err := ancestry.Place([]model.Issue{{ID: "a"}}); err == nil || !strings.Contains(err.Error(), "loops back") {
-		t.Fatalf("Place(a) error = %v, want a refusal naming the loop", err)
-	}
-	if err := ancestry.Place([]model.Issue{{ID: "outsider"}}); err != nil {
-		t.Errorf("Place(outsider) error = %v, want nil", err)
+	got := treeOrder(t, ancestry, []model.Issue{{ID: "d", Rank: "x"}, {ID: "a", Rank: "m"}, {ID: "b", Rank: "k"}, {ID: "t", Rank: "a"}})
+	if len(got) != 4 {
+		t.Errorf("tree order = %v, want all four issues", got)
 	}
 }
 
@@ -77,13 +89,7 @@ func TestTreeOrderKeepsASubtreeWholeAcrossATiedKey(t *testing.T) {
 		{ID: "e3", Rank: "k"},
 		{ID: "e1", Rank: "k"},
 	}
-	if err := ancestry.Sort(issues); err != nil {
-		t.Fatalf("Sort error = %v", err)
-	}
-	got := make([]string, 0, len(issues))
-	for _, issue := range issues {
-		got = append(got, issue.ID)
-	}
+	got := treeOrder(t, ancestry, issues)
 	want := []string{"e0", "e1", "e1.a", "e1.b", "e2", "e2.a", "e3"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("tree order = %v, want %v", got, want)

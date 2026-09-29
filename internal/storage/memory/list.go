@@ -55,9 +55,6 @@ func (e *Engine) listIssues(filter storage.ListIssuesFilter) ([]model.Issue, err
 	// The ordering is total — every comparison ends in a distinct id — so the
 	// result does not depend on the order this slice arrived in, and sorting it
 	// twice cannot produce two answers.
-	if err := ancestry.Place(selected); err != nil {
-		return nil, err
-	}
 	slices.SortStableFunc(selected, order)
 	return capLimit(selected, filter.Limit), nil
 }
@@ -115,7 +112,7 @@ func capLimit(issues []model.Issue, limit int) []model.Issue {
 
 // rankAncestry reads every framing edge in one pass, by the rule the frame
 // lookup applies (frames), keyed as rankAt renders it. Every edge goes in, so
-// a child two edges claim has no place here exactly as in the SQL engine.
+// a child two edges claim is placed and reported exactly as in the SQL engine.
 // [LAW:one-source-of-truth]
 func (e *Engine) rankAncestry(pos map[string]int) storage.RankAncestry {
 	var links []storage.ParentLink
