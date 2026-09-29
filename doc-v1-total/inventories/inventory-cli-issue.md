@@ -228,8 +228,9 @@ several of these types gets the reason of the earliest one:
 10. any error implementing `model.Refusal` → `validation_refused`
 11. `templateShapeError` → `template_shape_refused`
 12. `model.ContainerActionError` → `state_already_holds` when its `Satisfied()`
-    is true (the epic's children already establish the requested state and
-    none remain unfinished), otherwise `validation_refused`
+    is true (the epic has at least one child, its derived state already
+    equals the requested one, and no child remains unfinished), otherwise
+    `validation_refused`
 13. `Exhausted` → `scope_exhausted`
 14. `NoWork` → `no_ready_work`
 15. `UnsupportedError` → `unsupported_flag`
