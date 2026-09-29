@@ -1294,7 +1294,7 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
 | `ServedFromNewLane` | `Row`, `Lane model.LaneID` | a ticket in a lane this checkout does **not** hold — produced by step 4 alone (`next_route.go`) |
 | `ServedFromDependency` | `Row`, `Lane model.LaneID`, `Gates string` | step 1b's or 2b's on-path dependency; `Gates` is the id of the blocked row it unblocks, so the pick explains itself (`next_route.go`) |
 | `ServedPastExhaustion` | `Row`, `Lane model.LaneID`, `Exhaustion Exhausted` | the checkout's own epic(s) have open work, none of it reachable, and the global pool has a ready ticket outside them — step 3 (`next_route.go`) |
-| `Exhausted` | `Epics []string`, `Blocked []rowReach`, `OffPath []rowReach` | the same, with nothing ready in the global pool either — step 3; `OffPath` is the rows outside the scope a focus label withheld from the pool (`next_route.go`) |
+| `Exhausted` | `Epics []string`, `Blocked []rowReach`, `OffPath []rowReach`, `EpicBlocked bool` | the same, with nothing ready in the global pool either — step 3; `OffPath` is the rows outside the scope a focus label withheld from the pool, `EpicBlocked` whether an open row in scope inherits a dependency from its epic (`next_route.go`) |
 | `NoWork` | `Unreachable []rowReach` | the global pool produced nothing — step 4 (`next_route.go`) |
 
 `Exhausted` and `NoWork` implement `error` and travel outward as themselves
@@ -1404,13 +1404,13 @@ that has rows, joined by `"; "`, in `reachKind` declaration order
 (`next_route.go`). `nameIDs` names at most `maxNamedPerKind = 12` ids and
 otherwise appends `" and <n> more"` (`next_route.go`).
 
-**Terminal messages.** `Exhausted.scope()` (`next_route.go`) names the scope
-and how to file inside it: `"epic(s) <Epics joined by ", ">"` with
-`"under the epic with "` + ``"`lit new --parent <epic> --top`"`` for each epic,
-joined by `" or "`, when `Epics` is non-empty, else `"your claimed lane(s)"`
-with ``"with `lit new`"``. `Exhausted.stay()` is empty when `Blocked` is
-empty, else the one route
-``"to stay, file the ticket that unblocks it <filing text>, then move the block onto it with `lit dep`"``.
+**Terminal messages.** `Exhausted.scope()` (`next_route.go`) names the scope:
+`"epic(s) <Epics joined by ", ">"` when `Epics` is non-empty, else
+`"your claimed lane(s)"`. `Exhausted.home()` is ``"with `lit new --top`"``
+when `Epics` is empty or `EpicBlocked`, else `"under the epic with "` +
+``"`lit new --parent <epic> --top`"`` for each epic, joined by `" or "`.
+`Exhausted.stay()` is empty when `Blocked` is empty, else the one route
+``"to stay, file the ticket that clears a blocker <home()>, then make that blocker wait on it with `lit dep add --from <new> --to <blocker>`"``.
 `Exhausted.why()`:
 - `Blocked` empty: `"no ready work in <scope> — nothing else is queued behind what's already in progress"`
 - Otherwise: `"no ready work in <scope> — <describeReach(Blocked, "blocked on ", exhaustedNotes)>"`

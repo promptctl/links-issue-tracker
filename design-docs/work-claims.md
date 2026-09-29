@@ -323,15 +323,18 @@ step, so each step below says only which lanes it looks in:
    startable yet, or outside the view this run gathered — so the diagnostic
    never recommends what `lit start` would refuse, and never asserts a
    standing it did not read. Beneath the reason it names the ways on and
-   serves step 4's pick: stay, by filing the ticket that unblocks the epic
-   under it and moving the block onto that ticket, or move on, by starting the
-   ticket served. The agent chooses. Staying is named only against a block —
-   an epic whose remaining work is only underway elsewhere has nothing a new
-   ticket could clear. Only when the global pool has nothing ready either is
-   the diagnostic the whole answer; under a `focus` label it then names the
-   rows outside the epic that the focus withheld, since those were never
-   asked about. It once never fell
-   through to a leaf outside the epic, and since routing is deterministic a
+   serves step 4's pick: stay, by filing the ticket that clears a blocker and
+   making the blocker wait on it, or move on, by starting the ticket served.
+   The ticket goes under the epic, ranked first, unless the block is declared
+   on the epic itself: every child inherits that, so a child would be born
+   blocked and the new edge would close a wait loop, and the ticket goes to the
+   top of the backlog instead. The agent chooses. Staying is named only
+   against a block — an epic whose remaining work is only underway elsewhere
+   has nothing a new ticket could clear. Only when the global pool has nothing
+   ready either is the diagnostic the whole answer; under a `focus` label it
+   then names the rows outside the epic that the focus withheld, since those
+   were never asked about. It once never fell through to a leaf outside the
+   epic, and since routing is deterministic a
    checkout whose epic held only blocked work was answered the same way on
    every `next` until its claim expired — trapped in an epic with nothing to
    do (owner ruling, links-next-5sxz, 2026-09-29). Leaving is still never

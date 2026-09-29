@@ -276,8 +276,8 @@ func TestRouteNextExhaustionIsTerminalWhenNothingElseIsReady(t *testing.T) {
 }
 
 // A blocked epic with nothing ready outside it names the one route left:
-// stay, file the ticket that unblocks it under the epic — spelled with the
-// epic's own id — and move the block onto that ticket, since filing alone
+// stay, file the ticket that clears the blocker under the epic — spelled with
+// the epic's own id — and make the blocker wait on it, since filing alone
 // leaves the blocked work waiting on what it waited on.
 func TestRouteNextTerminalExhaustionNamesTheStayRouteAgainstABlock(t *testing.T) {
 	h := newReadyTestHarness(t)

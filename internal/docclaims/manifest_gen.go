@@ -264,7 +264,6 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-claims.md", Text: "read stream id %q: %w", Src: "read stream id %q: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-claims.md", Text: "run `lit start %s` to claim %s", Src: "run `lit start %s` to claim %s"},
 	{Doc: "doc-v1-total/inventories/inventory-claims.md", Text: "stream id %q vanished immediately after it was written", Src: "stream id %q vanished immediately after it was written"},
-	{Doc: "doc-v1-total/inventories/inventory-claims.md", Text: "with `lit new`", Src: "with `lit new`"},
 	{Doc: "doc-v1-total/inventories/inventory-claims.md", Text: "worktree <path>", Src: "git worktree list --porcelain -z opened with %q, which is not a `worktree <path>` field"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-issue.md", Text: "#compdef lit", Src: "#compdef lit\n\n"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-issue.md", Text: "(backlog empty)", Src: "(backlog empty)"},

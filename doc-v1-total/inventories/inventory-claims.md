@@ -469,7 +469,7 @@ The leaf gathers rows, relation details and the focus scope, then the claim cont
 - `ServedFromNewLane{Row, Lane model.LaneID}` — a ready ticket in a lane this checkout does **not** hold. **One** step produces it: the global pool (step 4). Step 1b once shared it and now has its own `ServedFromDependency`, because sharing this type left the renderer unable to tell the two picks apart (`links-next-output-4hor`). `Lane` is the `model.LaneID`, not its `String()`: stringifying here would throw away the discriminator the renderer needs to tell a lane worth naming from one that would only repeat the ticket.
 - `ServedFromDependency{Row, Lane model.LaneID, Gates string}` — a ready ticket outside the lanes this checkout holds that gates one of this checkout's blocked rows. **Two** steps produce it: routing step 1b, for a row in a lane this checkout holds, and step 2b, for a row anywhere in its epic. Starting it would establish a claim on a lane this checkout does not hold, as with `ServedFromNewLane`, which is why `Lane` is carried. `Gates` is the id of the blocked row the pick unblocks — open, in a lane this checkout holds (1b) or in its epic (2b) — and is always set by construction: a dependency is only yielded because some in-scope row depends on it.
 - `ServedPastExhaustion{Row, Lane model.LaneID, Exhaustion Exhausted}` — the checkout's own claimed epic(s) have open work with none of it reachable, and the global pool has a ready ticket outside them. Routing step 3. It carries the whole exhaustion because the announcement names why the epic stopped and, when something blocks it, the route that stays in it (links-next-5sxz).
-- `Exhausted{Epics []string, Blocked []rowReach, OffPath []rowReach}` — the same, with nothing ready in the global pool either. Routing step 3. `OffPath` is the rows outside the scope that a focus label withheld from the pool, empty with no focus active.
+- `Exhausted{Epics []string, Blocked []rowReach, OffPath []rowReach, EpicBlocked bool}` — the same, with nothing ready in the global pool either. Routing step 3. `OffPath` is the rows outside the scope that a focus label withheld from the pool, empty with no focus active. `EpicBlocked` is whether any open row in our scope carries an inherited dependency (`IssueReadiness.InheritsDependency`), so a child filed under the epic would inherit the block.
 - `NoWork{Unreachable []rowReach}` — the global pool handed back nothing.
 
 `Exhausted` and `NoWork` are themselves `error` implementations and travel outward **as themselves** rather than being rendered into a generic error, which is what keeps the exit-code and reason sinks reading the routing verdict instead of a copy that could drift (`internal/cli/next.go`).
@@ -519,11 +519,11 @@ Steps 1-3 walk every gathered row; step 4 walks the focus-scoped pool. The row s
 - `reachNotReady`: ``not startable right now — `lit show` it names what blocks it``
 - `reachOffFocusPath`: ``off the focus path this run answered over — `lit next --all` to route over the whole queue``
 
-**`Exhausted.scope()`** returns the scope's name and how to file inside it:
-- epics named: `fmt.Sprintf("epic(s) %s", strings.Join(o.Epics, ", "))` and `"under the epic with "` + one ``fmt.Sprintf("`lit new --parent %s --top`", epic)`` per epic, joined by `" or "`.
-- otherwise: `"your claimed lane(s)"` and ``with `lit new` ``.
+**`Exhausted.scope()`**: `fmt.Sprintf("epic(s) %s", strings.Join(o.Epics, ", "))` when `Epics` is non-empty, else `"your claimed lane(s)"`.
 
-**`Exhausted.stay()`** is `nil` when `Blocked` is empty; otherwise the one route ``"to stay, file the ticket that unblocks it " + <scope()'s filing text> + ", then move the block onto it with `lit dep`"``.
+**`Exhausted.home()`**: ``"with `lit new --top`"`` when `Epics` is empty or `EpicBlocked`; otherwise `"under the epic with "` + one ``fmt.Sprintf("`lit new --parent %s --top`", epic)`` per epic, joined by `" or "`.
+
+**`Exhausted.stay()`** is `nil` when `Blocked` is empty; otherwise the one route ``"to stay, file the ticket that clears a blocker " + home() + ", then make that blocker wait on it with `lit dep add --from <new> --to <blocker>`"``.
 
 **`Exhausted.why()`**:
 - `len(o.Blocked) == 0`: `no ready work in %s — nothing else is queued behind what's already in progress`
