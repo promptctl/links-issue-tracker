@@ -497,10 +497,11 @@ func (p pushedHead) landed() bool { return p.head != "" }
 // end carrying every phase's cost — the detached worker's stdout is
 // mirror.log, and those lines are the durable record that the contract
 // "every hold under one second" is checked against in the field. push= is
-// the whole span the push deadline bounds, open included, so a cut reads
-// against it directly; open= is the clone engine's open, its share of that
-// span, so a push= that grew is attributable to the open or to the network
-// from the log alone. [LAW:nothing-unseen]
+// the clone session end to end — the open and the push, which the push
+// deadline bounds, and the close after them, which it does not — so a cut
+// reads against it directly; open= is the open's share of it, so a push=
+// that grew is attributable to the open or to the network from the log
+// alone. [LAW:nothing-unseen]
 // Only a cycle that holds the single-flight lock writes: a mirror that loses
 // the race stays silent, as the quiescence property requires.
 func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnswering func()) (attempted bool) {

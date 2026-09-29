@@ -349,7 +349,11 @@ var errLockHeld = errors.New("lock held")
 // that live here rather than at each wrapper: while the wait runs,
 // announceLockWait reports it instead of leaving the caller to guess whether
 // lit is wedged or merely slow; when the wait elapses, the holder account
-// rides the sentinel out to every wrapper's message for free.
+// rides the sentinel out to every wrapper's message for free. A ctx that ends
+// while the lock is still held cuts the wait with the ctx's own error, which
+// keeps its identity — an ended wait is not contention, so it never becomes
+// ErrWorkspaceBusy — and carries the same account, so a caller whose deadline
+// ran out in the wait learns who it was waiting on.
 // [LAW:single-enforcer]
 func acquireStoreLock(ctx context.Context, storageDir, lockPath string, exclusive bool, wait time.Duration) (func() error, error) {
 	// Deferred, not called after the acquire: the reporter is a goroutine
@@ -358,13 +362,19 @@ func acquireStoreLock(ctx context.Context, storageDir, lockPath string, exclusiv
 	// to do filesystem I/O for the life of the process.
 	defer announceLockWait(ctx, storageDir, lockPath)()
 	var release func() error
+	// lastAttempt is the outcome of the most recent try: the retry loop
+	// returns a bare ctx error when the ctx ends between tries, and this is
+	// what still knows the lock was held when it did.
+	var lastAttempt error
 	policy := newHoldWait(storageDir, lockPath, func() time.Duration { return wait })
 	err := backoff.Retry(func() error {
 		acquiredRelease, acquired, err := filelock.Acquire(ctx, lockPath, exclusive, 1, 0)
 		if err != nil {
+			lastAttempt = err
 			return backoff.Permanent(err)
 		}
 		if !acquired {
+			lastAttempt = errLockHeld
 			return errLockHeld
 		}
 		release = acquiredRelease
@@ -372,6 +382,9 @@ func acquireStoreLock(ctx context.Context, storageDir, lockPath string, exclusiv
 	}, backoff.WithContext(policy, ctx))
 	if errors.Is(err, errLockHeld) {
 		return nil, fmt.Errorf("%s: %w", describeLockHolders(storageDir, lockPath), ErrWorkspaceBusy)
+	}
+	if err != nil && errors.Is(lastAttempt, errLockHeld) && errors.Is(err, ctx.Err()) {
+		return nil, fmt.Errorf("%w waiting for %s, %s", err, lockPath, describeLockHolders(storageDir, lockPath))
 	}
 	if err != nil {
 		return nil, err

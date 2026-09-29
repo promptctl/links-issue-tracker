@@ -220,11 +220,11 @@ func TestMirrorCycleSweepsADeadMirrorsClone(t *testing.T) {
 			t.Fatalf("cycle log lacks %q — the field check reads the holds' elapsed= off this log:\noutput:\n%s", want, out.String())
 		}
 	}
-	// open= is the clone engine's open and push= the whole span the push
-	// deadline bounds, so the open is a real, nonzero share of push= and
-	// never more than it.
+	// open= is the clone engine's open and push= the whole span that holds
+	// it and the push after it, so the open is a real share of push= and a
+	// strictly smaller one: the push to the remote is the rest.
 	open, push := cycleEndDuration(t, out.String(), "open"), cycleEndDuration(t, out.String(), "push")
-	if open <= 0 || open > push {
+	if open <= 0 || open >= push {
 		t.Fatalf("open=%s is not a nonzero share of push=%s:\noutput:\n%s", open, push, out.String())
 	}
 }
