@@ -44,9 +44,10 @@ func depAddLeaf() appLeaf {
 		if fromID == toID {
 			return model.ValidationError{Message: fmt.Sprintf("dep add: self-loop rejected (%s -> %s)", fromID, toID)}
 		}
-		// [LAW:single-enforcer] Same-epic blocks are rejected at the CLI policy
-		// boundary so the store stays a thin substrate. Within one epic, rank is
-		// the canonical ordering; a 'blocks' edge would duplicate that signal.
+		// [LAW:single-enforcer] Sibling blocks are rejected at the CLI policy
+		// boundary, and only here: import's depends_on may still order siblings.
+		// Within one epic, rank is the canonical ordering; a 'blocks' edge would
+		// duplicate that signal.
 		if rt == model.RelBlocks {
 			if err := rejectSameEpicBlocks(ctx, ap, fromID, toID); err != nil {
 				return err
@@ -135,40 +136,34 @@ func depRelationForCLI(rel model.Relation) model.Relation {
 	return rel
 }
 
-// [LAW:one-source-of-truth] The rejection text is part of the user-facing CLI
-// contract and is asserted verbatim in tests; both sites read it from here so
-// they cannot drift.
-const sameEpicBlocksRejectionMessage = "Do not set 'blocks' relationships between two issues in the same epic.  Use rank to specify that one issue must be completed before another issue"
-
-// rejectSameEpicBlocks errors when both endpoints resolve to the same epic
-// membership.
+// rejectSameEpicBlocks errors when both endpoints are leaves of one epic —
+// siblings, which rank already orders. The other half of the rule, an edge
+// between an issue and any of its ancestors, is the store's: it refuses that
+// shape on every write path, imports included, with the same message.
 func rejectSameEpicBlocks(ctx context.Context, ap *app.App, fromID, toID string) error {
-	fromEpic, err := issueEpicID(ctx, ap, fromID)
+	fromEpic, err := leafEpicID(ctx, ap, fromID)
 	if err != nil {
 		return err
 	}
-	toEpic, err := issueEpicID(ctx, ap, toID)
+	toEpic, err := leafEpicID(ctx, ap, toID)
 	if err != nil {
 		return err
 	}
 	if fromEpic != "" && fromEpic == toEpic {
-		return model.ValidationError{Message: sameEpicBlocksRejectionMessage}
+		return model.ValidationError{Message: storage.SameEpicBlocksRejectionMessage}
 	}
 	return nil
 }
 
-// issueEpicID returns the issue's epic membership for the same-epic check:
-// its own ID if it is a container (epic), its parent ID if the parent is a
-// container, otherwise "" (floating — not a member of any epic).
-func issueEpicID(ctx context.Context, ap *app.App, issueID string) (string, error) {
+// leafEpicID returns the epic a leaf issue belongs to: its parent's ID when the
+// parent is a container, otherwise "" (floating, or itself a container — an
+// epic's ordering against its own children is the store's ancestry rule).
+func leafEpicID(ctx context.Context, ap *app.App, issueID string) (string, error) {
 	detail, err := ap.Store.GetIssueDetail(ctx, issueID)
 	if err != nil {
 		return "", err
 	}
-	if detail.Issue.IsContainer() {
-		return detail.Issue.ID, nil
-	}
-	if detail.Parent != nil && detail.Parent.IsContainer() {
+	if !detail.Issue.IsContainer() && detail.Parent != nil && detail.Parent.IsContainer() {
 		return detail.Parent.ID, nil
 	}
 	return "", nil

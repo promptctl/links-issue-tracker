@@ -560,7 +560,9 @@ lit dep ls <issue-id> [--type <t>]
 Manages relationship edges. `--from`/`--to` are required for `add` and `rm`; there is
 no positional form. The default type is `blocks`, where `--from` is the blocker and
 `--to` is the blocked issue. `blocks` edges are not allowed between two issues in the
-same epic — within an epic, rank is the ordering signal. A `blocks` edge onto an
+same epic, or between an issue and any epic above it at any depth — within an epic,
+rank is the ordering signal. `lit import` refuses that ancestor edge in `depends_on`
+too. A `blocks` edge onto an
 epic holds back every issue in that epic and in epics nested inside it, in every
 lane (an issue under a parent that is not an epic belongs to no epic, as
 `epic: none` in `lit backlog` says, and is not held back):

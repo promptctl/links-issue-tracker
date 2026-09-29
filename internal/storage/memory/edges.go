@@ -211,6 +211,15 @@ func (e *Engine) addRelation(in storage.AddRelationInput) (model.Relation, error
 func (e *Engine) rejectCycle(relType model.RelationType, srcID, dstID string) error {
 	switch relType {
 	case model.RelBlocks:
+		parentOf := map[string][]string{}
+		for _, rel := range e.relations {
+			if rel.Type == model.RelParentChild {
+				parentOf[rel.SrcID] = append(parentOf[rel.SrcID], rel.DstID)
+			}
+		}
+		if err := storage.RejectBlocksAlongHierarchy(parentOf, srcID, dstID); err != nil {
+			return err
+		}
 		// A rank order is a total order, and one honoring every blocks edge
 		// exists exactly when there is no cycle, so a cycle is an unsatisfiable
 		// constraint set rather than an awkward shape. Rejecting the

@@ -94,6 +94,21 @@ func TestBlockedEpicGatesNestedEpicsAndNamesADirectEdgeOnce(t *testing.T) {
 	}
 }
 
+// dependThenReparent reaches a blocks edge between an issue and its ancestor
+// the one way it still can be reached: the store refuses that edge outright,
+// so childID is detached from parentID while the edge is written and put back
+// after. Readiness has to stay correct over the shape a reparent leaves.
+func (h readyTestHarness) dependThenReparent(dependentID, dependencyID, childID, parentID string) {
+	h.t.Helper()
+	if err := h.ap.Store.ClearParent(h.ctx, childID); err != nil {
+		h.t.Fatalf("ClearParent(%s) error = %v", childID, err)
+	}
+	h.addDependency(dependentID, dependencyID)
+	if _, err := h.ap.Store.SetParent(h.ctx, storage.SetParentInput{ChildID: childID, ParentID: parentID, CreatedBy: "agent"}); err != nil {
+		h.t.Fatalf("SetParent(%s under %s) error = %v", childID, parentID, err)
+	}
+}
+
 // An epic's blocker holds back every issue under the epic except one the
 // blocker waits on itself, directly or through other issues, because holding
 // that one back would leave the two waiting on each other forever. Every
@@ -131,24 +146,24 @@ func TestAnEpicsBlockerHoldsBackNothingItWaitsOn(t *testing.T) {
 		build func(h readyTestHarness) expectation
 	}{
 		{"a leaf blocks its outer epic behind a lane-mate", func(h readyTestHarness) expectation {
-			outer, _, first, second, other := nested(h)
-			h.addDependency(outer.ID, second.ID)
+			outer, inner, first, second, other := nested(h)
+			h.dependThenReparent(outer.ID, second.ID, inner.ID, outer.ID)
 			return expectation{held: map[string]string{other.ID: second.ID}, pullable: []string{first.ID}}
 		}},
 		{"that leaf also depends on another child of the epic", func(h readyTestHarness) expectation {
-			outer, _, first, second, other := nested(h)
-			h.addDependency(outer.ID, second.ID)
+			outer, inner, first, second, other := nested(h)
+			h.dependThenReparent(outer.ID, second.ID, inner.ID, outer.ID)
 			h.addDependency(second.ID, other.ID)
 			return expectation{pullable: []string{first.ID, other.ID}}
 		}},
 		{"a nested epic blocks its outer epic", func(h readyTestHarness) expectation {
 			outer, inner, first, _, other := nested(h)
-			h.addDependency(outer.ID, inner.ID)
+			h.dependThenReparent(outer.ID, inner.ID, inner.ID, outer.ID)
 			return expectation{held: map[string]string{other.ID: inner.ID}, pullable: []string{first.ID}}
 		}},
 		{"the outer epic blocks a nested epic", func(h readyTestHarness) expectation {
 			outer, inner, first, _, other := nested(h)
-			h.addDependency(inner.ID, outer.ID)
+			h.dependThenReparent(inner.ID, outer.ID, inner.ID, outer.ID)
 			return expectation{pullable: []string{first.ID, other.ID}}
 		}},
 		{"a gate that depends on a child of the epic it blocks", func(h readyTestHarness) expectation {

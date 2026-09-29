@@ -367,6 +367,13 @@ func addRelationTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
 func rejectCycleTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
 	switch rel.Type {
 	case model.RelBlocks:
+		parentOf, err := loadParentEdges(ctx, tx)
+		if err != nil {
+			return fmt.Errorf("blocks hierarchy check: %w", err)
+		}
+		if err := storage.RejectBlocksAlongHierarchy(parentOf, rel.SrcID, rel.DstID); err != nil {
+			return err
+		}
 		// A rank order is a total order, and one that honors every blocks edge
 		// exists iff there is no cycle, so a cycle is an unsatisfiable
 		// constraint set rather than an awkward shape.
