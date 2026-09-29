@@ -87,6 +87,47 @@ func TestShowOmitsHistoryTrailWhileHistoryViewRendersIt(t *testing.T) {
 	}
 }
 
+// TestShowRendersCommentBodiesInTheirAuthoredLines pins the detail view's
+// rendering of a stored body: a body of N lines prints as N lines, not one line
+// of literal backslash-n. The first body carries a blank line and a line shaped
+// like a comment row, so the expectation also pins that the indentation keeps
+// the second comment the only unindented "- [" row. The second body keeps the
+// trailing newline an imported comment can carry, which prints no extra line.
+// [LAW:behavior-not-structure]
+func TestShowRendersCommentBodiesInTheirAuthoredLines(t *testing.T) {
+	t.Parallel()
+	issue, err := model.HydrateStatus(model.Issue{
+		ID:        "links-test.1",
+		Title:     "Commented",
+		IssueType: "task",
+		Topic:     "cli",
+	}, model.StatusView{Value: model.StateOpen})
+	if err != nil {
+		t.Fatalf("HydrateStatus() error = %v", err)
+	}
+	detail := model.IssueDetail{
+		Issue: issue,
+		Comments: []model.Comment{
+			{CreatedBy: "alice", Body: "Close note.\n\n- [bob] not a comment\nlast line"},
+			{CreatedBy: "bob", Body: "one line\n"},
+		},
+	}
+
+	var show bytes.Buffer
+	if err := printIssueDetail(&show, detail); err != nil {
+		t.Fatalf("printIssueDetail() error = %v", err)
+	}
+	want := "\ncomments:\n" +
+		"- [alice] Close note.\n" +
+		"  \n" +
+		"  - [bob] not a comment\n" +
+		"  last line\n" +
+		"- [bob] one line\n"
+	if !strings.HasSuffix(show.String(), want) {
+		t.Fatalf("lit show comments =\n%s\nwant suffix:\n%s", show.String(), want)
+	}
+}
+
 // TestPrintIssueGroupNamesRetentionRatherThanStatus pins the relationship
 // groups to issueStanding: the two lifecycle axes are orthogonal, and a
 // soft-deleted ticket's status is still "open", so printing State() alone
