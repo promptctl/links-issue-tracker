@@ -151,16 +151,16 @@ which is already what they list when the flag is absent.
 `--columns` takes the same vocabulary `lit ls` documents below and rejects an unknown
 name the same way, exit 2. Here the rejection lands ahead of the sync-staleness
 warning, so a rejected `lit backlog` prints nothing at all. `blocked` marks a ticket
-that is not workable, for any of the four reasons the readiness classifier knows — a
+that is not workable, for any of the five reasons the readiness classifier knows — a
 still-open dependency, an earlier same-lane sibling still open, a missing required
-field, or needs-design. The column agrees with that classification, and so with the
+field, needs-design, or external. The column agrees with that classification, and so with the
 context block printed under the row, but the block splits the reasons across two
 lines: `depends on:` names the still-open dependencies as concrete blocker ids, and
-`blocked:` carries the other three. A ticket held up by nothing but a dependency
+`blocked:` carries the other four. A ticket held up by nothing but a dependency
 therefore prints `blocked` in the column with a `depends on:` line under it and no
 `blocked:` line at all. `lit ls --columns blocked` reads that same verdict and so
 answers the same question — except over a foreign store, where `lit ls --at <dir>`
-evaluates three of the four reasons (see `lit ls` below); what stays particular to
+evaluates four of the five reasons (see `lit ls` below); what stays particular to
 `backlog` is the context block, which is where the reason is named.
 
 ### `lit next`
@@ -261,7 +261,7 @@ General-purpose listing, ranked by default. `--at <store-dir>` points `ls` at a
 discovered store by its storage directory (a path from `lit stores`), read-only,
 without depending on the current directory being a lit workspace — every filter,
 sort, column, and format below applies to that foreign store, with one narrowing:
-the `blocked` column evaluates three of its four reasons across a store boundary,
+the `blocked` column evaluates four of its five reasons across a store boundary,
 described with that column below. This is the folded-in
 former `lit ls-at`; an old `lit ls-at <dir>` invocation returns a pointer to
 `lit ls --at <dir>`. `--search` matches title and description
@@ -307,15 +307,15 @@ issue's own fields (`id`, `state`, `type`, `topic`, `priority`, `rank`, `title`,
 rather than read off the row, and from different places: `parent` (the parent/epic id
 from the canonical graph, `-` if none) and `blocked` (`blocked` when the readiness
 classifier says the ticket cannot be pulled, else `-`). That classifier is the one
-`lit backlog --columns blocked` reads, over all four reasons it knows — a still-open
+`lit backlog --columns blocked` reads, over all five reasons it knows — a still-open
 dependency, an earlier same-lane sibling still open, a missing required field,
-needs-design — so the cell means the same thing on both commands. Across a store
+needs-design, external — so the cell means the same thing on both commands. Across a store
 boundary it narrows by one reason: under `--at <dir>` readiness is
 **store-intrinsic**, because a discovered store carries no repo root to load a
 `required_fields` policy from (the same caveat `lit stores --counts` carries), so
 the missing-required-field reason cannot fire there. A `-` from `--at` is
-authoritative about the other three reasons and silent about that one. What `ls` reports
-is the fact, never which of the four reasons applies: it is a flat projection, one
+authoritative about the other four reasons and silent about that one. What `ls` reports
+is the fact, never which of the five reasons applies: it is a flat projection, one
 cell per column and no context block, so a reader who needs the why runs
 `lit backlog`, where the `depends on:` and `blocked:` lines name it. The two
 commands render different amounts of one verdict; neither holds a second opinion.
@@ -420,8 +420,10 @@ lit label add <issue-id> <label>
 lit label rm <issue-id> <label>
 ```
 
-Incremental label edits. Two labels are reserved and carry derived behavior:
-`needs-design` marks an issue blocked (membership), and `focus` marks an issue
+Incremental label edits. Three labels are reserved and carry derived behavior:
+`needs-design` marks an issue blocked (membership); `external` marks it blocked
+because its resolution is an event outside the repository, such as an upstream
+fix, so whatever depends on it waits too; and `focus` marks an issue
 as a goal whose unfinished prerequisite chain — explicit dependencies, epic
 children, and earlier same-lane siblings, transitively — becomes the row set
 `lit backlog` lists and `lit next` routes its global pool over. The path

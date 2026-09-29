@@ -108,8 +108,8 @@ var columnRegistry = []columnSpec{
 	}},
 	// blocked is sourceReadiness, not sourceRelations: it means "the annotation
 	// registry says this cannot be pulled", which is a still-open dependency, an
-	// earlier same-lane sibling still open, a missing required field, or
-	// needs-design. The registry is the single authority on what blocks and
+	// earlier same-lane sibling still open, a missing required field, or a
+	// reserved blocking label. The registry is the single authority on what blocks and
 	// rendering may not carry a shorter list, so the cell is computed from the
 	// verdict and never re-derived from edges. [LAW:one-source-of-truth]
 	{name: "blocked", source: sourceReadiness, render: func(_ model.Issue, cells derivedColumns) string {

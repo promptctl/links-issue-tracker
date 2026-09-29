@@ -134,9 +134,9 @@ func rollupLocation(ctx context.Context, loc workspace.Location) (row projectRol
 	}()
 	// nil required-fields opts out of ONLY the per-repo required_fields policy (the
 	// field-presence gate driven by that config). Every store-intrinsic annotation
-	// — blockers, the lane gate, needs-design — still runs, so those DO cross the
-	// boundary; the required_fields policy is repo config, not a store fact, and a
-	// Location carries no repo root. See gatherCrossProjectRollup's callers
+	// — blockers, the lane gate, reserved blocking labels — still runs, so those
+	// DO cross the boundary; the required_fields policy is repo config, not a
+	// store fact, and a Location carries no repo root. See gatherCrossProjectRollup's callers
 	// (`lit stores --counts`) and its [LAW:one-source-of-truth].
 	// The focus scope is dropped deliberately. These are whole-project counts,
 	// and a project that happens to carry a focus label would otherwise report

@@ -96,8 +96,8 @@ func (v workableView) usage() string {
 // [LAW:one-source-of-truth] the annotation registry decides what blocks, and
 // rendering may not carry a shorter list; deriving this cell from DependsOn
 // edges alone would carry exactly that shorter list, and it would disagree on
-// screen for any row gated by an earlier sibling, a missing field, or
-// needs-design.
+// screen for any row gated by an earlier sibling, a missing field, or a
+// reserved blocking label.
 //
 // This is the ONLY producer of a blocked cell. `lit ls` runs the annotation
 // pipeline when `blocked` is projected and lands here too, which is why there

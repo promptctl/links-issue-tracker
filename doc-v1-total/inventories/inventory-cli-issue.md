@@ -474,8 +474,10 @@ not `closed` (`cli.go`). Epics are therefore never workable rows.
    `"in_progress for <dur truncated to minute> with no update"`
    (`ready_state.go`; threshold constant `orphanedThreshold = 6 * time.Hour`
    at `ready_state.go`).
-5. `newNeedsDesignAnnotator()` — emits `NeedsDesign` for any issue carrying the
-   label `needs-design` (`ready_state.go`).
+5. `newBlockingLabelAnnotator()` — emits `NeedsDesign` for any issue carrying
+   the label `needs-design` and `External` for any carrying `external`, each
+   with the label as its message; one table, `blockingLabels`, pairs label and
+   kind (`ready_state.go`).
 6. `newFocusPathAnnotator(focusPaths)` — emits `FocusPath{Message: goalID}` for
    issues on a focused goal's prerequisite closure (`ready_state.go`).
 
@@ -510,7 +512,7 @@ each annotation is dispatched on its declared `ReadinessRole`:
 
 `IsReady() := len(blocking) == 0` (`readiness.go`). So an issue is **ready**
 iff it has no `MissingField`, no `OpenDependency`, no `InheritedDependency`, no
-`EarlierSiblingPending`, and no `NeedsDesign` annotation. `DependencyIDs()`
+`EarlierSiblingPending`, no `NeedsDesign`, and no `External` annotation. `DependencyIDs()`
 returns the details of the `OpenDependency` and `InheritedDependency` reasons,
 and `DependencyLabels()` the same list with ` (via epic)` appended to each
 inherited one, which the backlog and `lit next` print on their `depends on:`
@@ -858,10 +860,10 @@ lines|table") is built from the same map (`cli.go`, `output.go`).
   `[ready]`, otherwise `[blocked: <reason>[; <reason>…]]` over every blocking
   reason the annotation registry minted, phrased by `BlockingReason.Phrase`
   (`readiness.go`): `depends on <id>`, `earlier sibling <id> still open`,
-  `missing <field>`, `needs-design`.
+  `missing <field>`, `needs-design`, `external`.
 - Cross-epic edges: for the epic node and every child that is not closed, each
-  open `DependsOn` outside the epic membership set becomes a `BlockedExternally`
-  edge, and each open `Blocks` outside becomes a `BlocksExternally` edge
+  open `DependsOn` outside the epic membership set becomes a `BlockedFromOutside`
+  edge, and each open `Blocks` outside becomes a `BlocksOutside` edge
   (`epic_context.go`). Membership = the epic id plus all child ids
   (`epicMemberIDs`, `epic_context.go`). Edges are sorted by
   (blocked, blocker) (`epic_context.go`).
@@ -887,9 +889,9 @@ Children:
 ```
 
 Cross-epic dependencies:
-  Blocks externally:
+  Blocks outside the epic:
     <blocked> blocked by <blocker>
-  Blocked externally:
+  Blocked from outside the epic:
     <blocked> blocked by <blocker>
 ```
   Each subsection is omitted when its slice is empty (`epic_context.go`).
@@ -1010,7 +1012,7 @@ All eight route through one handler `transitionLeaf(spec)`
 
 Registry rows and summaries:
 - `start` — "Claim issue work", group `operations` (`register.go`)
-- `done` — "Finish claimed work (success path; requires in_progress)" (`register.go`)
+- `done` — "Finish work (success path; from any non-closed state)" (`register.go`)
 - `close` — "Close without finishing (wontfix / obsolete / duplicate; from any non-closed state)" (`register.go`)
 - `open` — "Reopen issue(s)" (`register.go`)
 - `archive` — "Archive issue(s)", group `retention` (`register.go`)
@@ -1100,9 +1102,7 @@ positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason 
 - **There is no from-state precondition on `done`.** `Store.Apply` performs no
   status-precondition check (`internal/store/store.go`), and
   `applyStatusAction` is total over the leaf states
-  (`internal/model/lifecycle/status_states.go`). The registry summary
-  "requires in_progress" (`register.go`) is not enforced by any code path in
-  this repo. A same-state transition is a no-op that records nothing
+  (`internal/model/lifecycle/status_states.go`). A same-state transition is a no-op that records nothing
   (`status_states.go`, `internal/store/store.go`).
 
 ### 2.11 `lit start` takeover gate
@@ -1228,10 +1228,10 @@ Use 'lit next' to pick the top workable item to start.
    this order, each omitted when empty:
    - `    epic: <epicID>  <epicTitle>` (`output.go`)
    - `    blocked: <reasons joined by "; ">` — only non-dependency blockers,
-     rendered as `missing <field>` for `MissingField` and `needs-design` for
-     `NeedsDesign` (`backlog.go`, `nonDependencyBlockingReasons` at
-     `backlog.go`). `EarlierSiblingPending` appears in **neither** the
-     blocked line nor the depends-on line.
+     rendered as `missing <field>` for `MissingField`, `needs-design` for
+     `NeedsDesign`, `external` for `External`, and `earlier sibling <id> still
+     open` for `EarlierSiblingPending` (`backlog.go`,
+     `nonDependencyBlockingReasons` at `backlog.go`).
    - `    depends on: <ids joined by ", ">` (`backlog.go`, `output.go`)
    - `    in_progress: <age truncated to minute>[ (ORPHANED)]` for in-progress
      rows (`backlog.go`, `inProgressSuffix` at `ready_state.go`);
@@ -1297,7 +1297,7 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
 | `ServedFromNewLane` | `Row`, `Lane model.LaneID` | a ticket in a lane this checkout does **not** hold — produced by step 4 alone (`next_route.go`) |
 | `ServedFromDependency` | `Row`, `Lane model.LaneID`, `Gates string` | step 1b's or 2b's on-path dependency; `Gates` is the id of the blocked row it unblocks, so the pick explains itself (`next_route.go`) |
 | `ServedPastExhaustion` | `Row`, `Lane model.LaneID`, `Exhaustion Exhausted` | the checkout's own epic(s) have open work, none of it reachable, and the global pool has a ready ticket outside them — step 3 (`next_route.go`) |
-| `Exhausted` | `Epics []string`, `Blocked []rowReach`, `OffPath []rowReach` | the same, with nothing ready in the global pool either — step 3; `OffPath` is the rows outside the scope a focus label withheld from the pool, set only on the terminal answer (`next_route.go`) |
+| `Exhausted` | `Epics []string`, `Blocked []rowReach`, `Held []rowReach`, `OffPath []rowReach` | the same, with nothing ready in the global pool either — step 3; `OffPath` is the rows outside the scope a focus label withheld from the pool, set only on the terminal answer (`next_route.go`) |
 | `NoWork` | `Unreachable []rowReach` | the global pool produced nothing — step 4 (`next_route.go`) |
 
 `Exhausted` and `NoWork` implement `error` and travel outward as themselves
@@ -1310,10 +1310,11 @@ are `routeAround`, `serveWork`, `resumeWork` (`next_route.go`). With
 `relation = relationOf(standing, self)` (`claims_takeover.go` —
 `laneOurs` requires `self.Present() && held.By == self`, so a checkout with
 no minted token never reads a lane as its own, even one the public checkout
-itself holds) and `started = row.State() == model.StateInProgress`:
+itself holds), `started = row.State() == model.StateInProgress` and
+`readiness = ClassifyReadiness(row.Annotations)`:
 
-1. `relation == laneHeldForeign` → `routeAround`.
-2. `!started` → `ClassifyReadiness(row.Annotations).IsReady()` ? `serveWork`: `routeAround`.
+1. `relation == laneHeldForeign` or `readiness.AwaitsOutside()` → `routeAround`.
+2. `!started` → `readiness.IsReady()` ? `serveWork`: `routeAround`.
 3. `started` and `relation == laneOurs` → `resumeWork`.
 4. `started`, otherwise (`laneUnclaimed`) → `serveWork`.
 
@@ -1365,10 +1366,10 @@ If `len(ownLanes) > 0` (`next_route.go`):
      where `ourScope` is `func(lane) bool { return mine(lane) || ourEpic(lane) }`,
      `onPathDependency(gating, laneOf)` →
      **`ServedFromDependency{Row: dep.Row, Lane: laneOf(dep.Row), Gates: dep.Gates, Blocker: dep.ID}`**.
-3. Else `exhausted := Exhausted{Epics, Blocked}` (`next_route.go`), where
+3. Else `exhausted := Exhausted{Epics, Blocked, Held}` (`next_route.go`), where
    `Epics` is `slices.Sorted(maps.Keys(ownEpics))` and `Blocked` is
    `blockedRows(gating)` — the walk step 2b declined; `blockedRows` drops the
-   gated id. When step 4's pick finds nothing, `OffPath` is set to
+   gated id. `Held` is `heldByThemselves` over the rows in `ourScope`: in rank order, the rows `reachOf` classifies `reachNotReady` or `reachAwaitingOutside` that `IssueReadiness.HeldByItself()` reports held by a reason about the row itself (a reserved label, a missing field) rather than by a dependency or an earlier sibling. When step 4's pick finds nothing, `OffPath` is set to
    `withheldByScope` over the focus-excluded rows whose lane `ourScope` does
    not admit. If step 4's pick finds a row →
    **`ServedPastExhaustion{Row, Lane: laneOf(row), Exhaustion: exhausted}`**;
@@ -1390,10 +1391,11 @@ set is passed to `pickFrom` explicitly at each step so that difference stays
 visible (`next_route.go`).
 
 **`reachKind`** (`next_route.go`) — what one row is to this checkout right
-now: `reachTakeable`, `reachHeldFresh`, `reachNotReady`, `reachOutOfView`, plus
+now: `reachTakeable`, `reachHeldFresh`, `reachNotReady`, `reachAwaitingOutside`, `reachOutOfView`, plus
 `reachOffFocusPath`, which only the pool diagnostic stamps, and the bound
 `reachKindCount`. `reachOf(row, standing, self)` answers `reachTakeable` when
-`capacityFor(...) != routeAround`, `reachHeldFresh` when
+`capacityFor(...) != routeAround`, `reachAwaitingOutside` when
+`ClassifyReadiness(row.Annotations).AwaitsOutside()`, `reachHeldFresh` when
 `relationOf(...) == laneHeldForeign`, else `reachNotReady`
 (`next_route.go`). `rowReach{ID string, Row annotation.AnnotatedIssue, Kind reachKind}`
 (`next_route.go`) is what both terminal outcomes carry.
@@ -1401,11 +1403,13 @@ now: `reachTakeable`, `reachHeldFresh`, `reachNotReady`, `reachOutOfView`, plus
 `exhaustedNotes` (`next_route.go`), with no `reachTakeable` entry — exhaustion reports the very walk step 2b declined:
 - `reachHeldFresh`: `"on your path but claimed by another checkout right now"`
 - `reachNotReady`: ``"on your path but not startable right now — `lit show` it"``
+- `reachAwaitingOutside`: ``"on your path but waiting on an event outside this repository — `lit show` it names the event"``
 - `reachOutOfView`: ``"on your path but outside this view — `lit show` it"``
 
 `poolNotes` (`next_route.go`):
 - `reachHeldFresh`: `"in progress or claimed in a lane another checkout holds right now"`
-- `reachNotReady`: `"not startable — blocked by a dependency, or in flight and not abandoned"`
+- `reachNotReady`: ``"not startable right now — `lit show` it names what blocks it"``
+- `reachAwaitingOutside`: ``"waiting on an event outside this repository — `lit show` it names the event"``
 - `reachOffFocusPath`: ``"off the focus path this run answered over — `lit next --all` to route over the whole queue"``
 
 `describeReach(rows, lead, notes)` renders `"<lead><names> (<note>)"` for each kind
@@ -1420,11 +1424,12 @@ otherwise appends `" and <n> more"` (`next_route.go`).
 `"your claimed lane(s)"`. `Exhausted.home()` is ``"with `lit new --top`"``
 when `Epics` is empty, else `"under the epic with "` +
 ``"`lit new --parent <epic> --top`"`` for each epic, joined by `" or "`.
-`Exhausted.stay()` is empty when `Blocked` is empty, else the one route
+`Exhausted.stay()` is empty when no entry of `Blocked` is anything but
+`reachAwaitingOutside` (so when `Blocked` is empty too), else the one route
 ``"to stay, file the ticket that clears a blocker <home()>, then make that blocker wait on it with `lit dep add --from <new> --to <blocker>`"``.
 `Exhausted.why()`:
-- `Blocked` empty: `"no ready work in <scope> — nothing else is queued behind what's already in progress"`
-- Otherwise: `"no ready work in <scope> — <describeReach(Blocked, "blocked on ", exhaustedNotes)>"`
+- `"no ready work in <scope> — <clauses>"`, the clauses being the non-empty ones of `describeReach(Blocked, "blocked on ", exhaustedNotes)` and `describeReach(Held, "held here: ", exhaustedNotes)`, joined by `"; "`
+- Both empty: `"no ready work in <scope> — nothing else is queued behind what's already in progress"`
 
 `Exhausted.outside()`: ``"`lit next` has nothing ready outside it either"``
 when `OffPath` is empty, else
@@ -1584,7 +1589,7 @@ Family `labelFamily`, usage `"usage: lit label <add|rm> ..."`
 - Calls `Store.RemoveLabel(issueID, label)`; prints the remaining labels and the
   `update` breadcrumb.
 
-Reserved label semantics: `needs-design` blocks readiness (§1.18, `ready_state.go`);
+Reserved label semantics: `needs-design` and `external` block readiness (§1.18, `ready_state.go`);
 `focus` marks a goal for focus-path ordering (`ready_state.go`).
 
 ### 2.19 `lit parent` — Manage parent relationships
@@ -1954,5 +1959,3 @@ plus at most one positional topic.
    (`completion.go`), `nestUnder` on a missing nest point (`register.go`),
    and `store.planLifecycleAction` on an impostor action
    (`internal/store/store.go`).
-8. **The `done` "requires in_progress" claim in the registry summary
-   (`register.go`) has no enforcing code path** — see §2.10.

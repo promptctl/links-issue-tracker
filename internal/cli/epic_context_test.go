@@ -437,16 +437,16 @@ func TestRenderEpicContextCrossEpicOneDirection(t *testing.T) {
 	f := newEpicFixture(t, "One direction", "deps")
 	child := f.addChild("Inside")
 	ext := f.outsider("Outside")
-	f.block(child, ext) // inside depends on outside => "Blocked externally"
+	f.block(child, ext) // inside depends on outside => "Blocked from outside the epic"
 
 	out := f.render("")
 	if !strings.Contains(out, "Cross-epic dependencies:") {
 		t.Fatalf("expected cross-epic section, got:\n%s", out)
 	}
-	if !strings.Contains(out, "Blocked externally:\n    "+child+" blocked by "+ext) {
+	if !strings.Contains(out, "Blocked from outside the epic:\n    "+child+" blocked by "+ext) {
 		t.Errorf("expected inbound edge %q blocked by %q in:\n%s", child, ext, out)
 	}
-	if strings.Contains(out, "Blocks externally:") {
+	if strings.Contains(out, "Blocks outside the epic:") {
 		t.Errorf("no outbound edge exists, that subsection must be omitted:\n%s", out)
 	}
 }
@@ -461,16 +461,16 @@ func TestRenderEpicContextCrossEpicBothDirections(t *testing.T) {
 
 	out := f.render("")
 	wantLines := []string{
-		"Blocks externally:\n    " + downstream + " blocked by " + child,
-		"Blocked externally:\n    " + child + " blocked by " + upstream,
+		"Blocks outside the epic:\n    " + downstream + " blocked by " + child,
+		"Blocked from outside the epic:\n    " + child + " blocked by " + upstream,
 	}
 	for _, want := range wantLines {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing cross-epic line %q in:\n%s", want, out)
 		}
 	}
-	// Both-directions ordering: "Blocks externally" precedes "Blocked externally".
-	if idx(out, "Blocks externally") > idx(out, "Blocked externally") {
+	// Both-directions ordering: "Blocks outside the epic" precedes "Blocked from outside the epic".
+	if idx(out, "Blocks outside the epic") > idx(out, "Blocked from outside the epic") {
 		t.Errorf("subsection order wrong:\n%s", out)
 	}
 }
@@ -559,8 +559,8 @@ func TestRenderEpicContextEpicNodeCrossEpicEdges(t *testing.T) {
 
 	out := f.render("")
 	wantLines := []string{
-		"Blocks externally:\n    " + downstream + " blocked by " + f.epicID,
-		"Blocked externally:\n    " + f.epicID + " blocked by " + upstream,
+		"Blocks outside the epic:\n    " + downstream + " blocked by " + f.epicID,
+		"Blocked from outside the epic:\n    " + f.epicID + " blocked by " + upstream,
 	}
 	for _, want := range wantLines {
 		if !strings.Contains(out, want) {

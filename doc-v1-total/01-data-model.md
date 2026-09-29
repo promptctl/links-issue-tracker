@@ -135,7 +135,7 @@ Relation-type parsing trims but does not lowercase (`relation_type.go`).
 
 A label row is `(issue_id, name, created_at, created_by)` (`model.go`). Names are normalized to lowercase and trimmed; an empty result is rejected, and commas are forbidden because comma is the list separator on input surfaces (`internal/model/label.go`). There is no label registry — labels exist only as attachments to issues — and no label-rename operation exists anywhere in the store.
 
-One label has behavioral meaning: `needs-design` makes an issue not-ready (see readiness in `06-issue-commands.md`).
+Two labels make an issue not-ready: `needs-design` and `external` (see readiness in `06-issue-commands.md`).
 
 ## Events (history)
 

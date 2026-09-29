@@ -55,15 +55,15 @@ func blockedCellFromBacklog(h readyTestHarness, id string) (cell, out string) {
 }
 
 // TestBlockedColumnAgreesAcrossSurfaces is the acceptance pin: one fixture
-// carrying all four blocking kinds, and for each of them `lit ls` and
+// carrying every blocking kind, and for each of them `lit ls` and
 // `lit backlog` print the same `blocked` cell.
 //
-// One fixture rather than four, because the kinds have to coexist to prove
-// anything. Three of the four (the sibling gate, the missing field, needs-design)
-// leave no dependency edge at all, so a dependency-only predicate cannot see
-// them — a per-kind fixture would let a regression that restored that predicate
-// keep passing three tests out of four while the whole column went back to
-// meaning less than its name.
+// One fixture rather than one per kind, because the kinds have to coexist to
+// prove anything. All but the dependency (the sibling gate, the missing field,
+// the reserved blocking labels) leave no dependency edge at all, so a
+// dependency-only predicate cannot see them — a per-kind fixture would let a
+// regression that restored that predicate keep passing most of the tests
+// while the whole column went back to meaning less than its name.
 //
 // Each row is blocked by exactly ONE kind. A row blocked by two would still
 // print `blocked` after a regression removed one of them, so the assertion
@@ -104,6 +104,12 @@ func TestBlockedColumnAgreesAcrossSurfaces(t *testing.T) {
 		Description: "d", Labels: []string{NeedsDesignLabel},
 	})
 
+	// external, carried by a label.
+	byExternal := h.createIssue(storage.CreateIssueInput{
+		Prefix: "agree", Title: "Waits on an upstream fix", Topic: "agree", IssueType: "task",
+		Description: "d", Labels: []string{ExternalLabel},
+	})
+
 	// The control: nothing holds it up. Without it, a map populated with
 	// `blocked` for every row would satisfy every assertion above it.
 	unblocked := h.createIssue(storage.CreateIssueInput{
@@ -125,6 +131,7 @@ func TestBlockedColumnAgreesAcrossSurfaces(t *testing.T) {
 		{kind: "earlier sibling pending", id: bySibling.ID, want: "blocked", fired: "earlier sibling " + firstSibling.ID + " still open"},
 		{kind: "missing required field", id: byMissingField.ID, want: "blocked", fired: "missing description"},
 		{kind: "needs design", id: byNeedsDesign.ID, want: "blocked", fired: NeedsDesignLabel},
+		{kind: "external", id: byExternal.ID, want: "blocked", fired: "blocked: " + ExternalLabel},
 		{kind: "nothing", id: unblocked.ID, want: "-"},
 	} {
 		t.Run(tc.kind, func(t *testing.T) {

@@ -46,6 +46,12 @@ func TestClassifyReadinessPerKind(t *testing.T) {
 			wantBlocking: []BlockingReason{{Kind: annotation.NeedsDesign, Detail: NeedsDesignLabel}},
 		},
 		{
+			name:         "external blocks",
+			ann:          annotation.Annotation{Kind: annotation.External, Message: ExternalLabel},
+			wantReady:    false,
+			wantBlocking: []BlockingReason{{Kind: annotation.External, Detail: ExternalLabel}},
+		},
+		{
 			name:         "earlier_sibling_pending blocks",
 			ann:          annotation.Annotation{Kind: annotation.EarlierSiblingPending, Message: "sib-1"},
 			wantReady:    false,
@@ -166,5 +172,16 @@ func TestClassifyReadinessComposite(t *testing.T) {
 	}
 	if got, want := r.RankInversions(), []string{"dep-2"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("RankInversions() = %v, want %v", got, want)
+	}
+}
+
+// A reserved blocking label is phrased from the label table, not from the
+// annotation's message, so an annotation that crossed a boundary without its
+// message still names the label rather than printing an empty reason.
+func TestReservedBlockingLabelsPhraseWithoutAMessage(t *testing.T) {
+	for _, reserved := range blockingLabels {
+		if got := (BlockingReason{Kind: reserved.kind}).Phrase(); got != reserved.label {
+			t.Errorf("BlockingReason{Kind: %s}.Phrase() = %q, want %q", reserved.kind, got, reserved.label)
+		}
 	}
 }

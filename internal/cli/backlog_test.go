@@ -174,6 +174,7 @@ func TestBacklogTextShowsBlockedReasonsInline(t *testing.T) {
 	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Blocker", Topic: "blk", IssueType: "task", Priority: 1})
 	blocked := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Blocked", Topic: "blk", IssueType: "task", Priority: 1})
 	flagged := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Needs design", Topic: "blk", IssueType: "task", Priority: 0, Labels: []string{NeedsDesignLabel}})
+	outside := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Upstream fix lands", Topic: "blk", IssueType: "task", Priority: 0, Labels: []string{ExternalLabel}})
 	h.addDependency(blocked, blocker)
 
 	text := h.runBacklogText()
@@ -185,6 +186,9 @@ func TestBacklogTextShowsBlockedReasonsInline(t *testing.T) {
 	}
 	if !strings.Contains(text, "blocked: needs-design") {
 		t.Fatalf("expected 'blocked: needs-design' line for %s; got:\n%s", flagged, text)
+	}
+	if !strings.Contains(text, "blocked: external") {
+		t.Fatalf("expected 'blocked: external' line for %s; got:\n%s", outside, text)
 	}
 }
 

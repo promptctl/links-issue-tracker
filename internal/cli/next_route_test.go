@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 
@@ -936,6 +937,143 @@ func TestExhaustionNamesAnUnreadyBlockerWithoutNamingAHolder(t *testing.T) {
 	}
 }
 
+// A scope stopped by its own ticket, held by a label on that ticket, names the
+// ticket and the reason. Nothing in it is in progress, so the in-progress
+// sentence would be false; and a ticket inside the epic cannot take a blocks
+// edge, so no stay route is offered against it.
+func TestExhaustionNamesTheScopesOwnTicketHeldByALabel(t *testing.T) {
+	for _, tc := range []struct {
+		label string
+		note  string
+	}{
+		{label: ExternalLabel, note: "on your path but waiting on an event outside this repository"},
+		{label: NeedsDesignLabel, note: "on your path but not startable right now"},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			h := newReadyTestHarness(t)
+			epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+			lead := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a", Labels: []string{tc.label}})
+			h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a"})
+
+			rows, details, epics := h.gather()
+			standings := claims.Standings{laneOf(t, details, rowByID(t, rows, lead.ID)): heldBy(selfAttribution)}
+			outcome := routeNext(rows, details, epics, standings, selfAttribution, focusScope{})
+			exhausted, ok := outcome.(Exhausted)
+			if !ok {
+				t.Fatalf("routeNext = %#v (%T), want Exhausted — A.1 is held by %q and A.2 waits behind it", outcome, outcome, tc.label)
+			}
+			want := "no ready work in epic(s) " + epicA.ID + " — held here: " + lead.ID + " (" + tc.note
+			if msg := exhausted.Error(); !strings.HasPrefix(msg, want) {
+				t.Fatalf("exhausted.Error() = %q, want it to start %q", msg, want)
+			}
+			if msg := exhausted.Error(); strings.Contains(msg, "already in progress") || strings.Contains(msg, "to stay") {
+				t.Fatalf("exhausted.Error() = %q, want neither the in-progress sentence nor a stay route — nothing is in progress and %q is inside the epic", msg, lead.ID)
+			}
+		})
+	}
+}
+
+// The external label holds a ticket in flight too: it says no work here moves
+// the ticket, which starting it did not change. So lit next neither resumes it
+// for the checkout that started it nor offers it to another as abandoned work,
+// and it serves the plain ticket ranked behind it instead.
+func TestAnExternalTicketInFlightIsNeverServed(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		ownsLane bool
+	}{
+		{name: "in this checkout's own lane", ownsLane: true},
+		{name: "in a lane nobody holds", ownsLane: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newReadyTestHarness(t)
+			waiting := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Upstream fix lands", Topic: "next", IssueType: "task", Priority: 0, Labels: []string{ExternalLabel}})
+			h.transition(waiting.ID, model.Start{Assignee: "tester"})
+			plain := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Plain work", Topic: "next", IssueType: "task", Priority: 0})
+
+			rows, details, epics := h.gather()
+			standings := claims.Standings{}
+			if tc.ownsLane {
+				standings[laneOf(t, details, rowByID(t, rows, waiting.ID))] = heldBy(selfAttribution)
+			}
+			outcome := routeNext(rows, details, epics, standings, selfAttribution, focusScope{})
+			var served annotation.AnnotatedIssue
+			switch o := outcome.(type) {
+			case ServedFromNewLane:
+				served = o.Row
+			case ServedPastExhaustion:
+				served = o.Row
+				if want := waiting.ID + " (on your path but waiting on an event outside this repository"; !strings.Contains(o.Exhaustion.why(), want) {
+					t.Fatalf("exhaustion = %q, want it to contain %q", o.Exhaustion.why(), want)
+				}
+			default:
+				t.Fatalf("routeNext = %#v (%T), want %q served past the external ticket", outcome, outcome, plain.ID)
+			}
+			if served.ID != plain.ID {
+				t.Fatalf("routeNext served %q, want %q — %q is in flight but waits on an outside event", served.ID, plain.ID, waiting.ID)
+			}
+		})
+	}
+}
+
+// A blocker the external label holds waits on an event outside the repository,
+// so exhaustion names it as such and never tells the agent to file a ticket
+// that would clear it: no ticket filed here can. Beside a blocker a ticket
+// could clear, the route comes back, naming the blockers it can act on.
+func TestExhaustionNeverOffersToClearABlockerAwaitingAnOutsideEvent(t *testing.T) {
+	stayRoute := "to stay, file the ticket that clears a blocker"
+	for _, tc := range []struct {
+		name        string
+		alsoPlain   bool
+		heldForeign bool
+		wantStaying bool
+	}{
+		{name: "external blocker alone", alsoPlain: false, wantStaying: false},
+		{name: "external blocker in a lane another checkout holds", heldForeign: true, wantStaying: false},
+		{name: "external blocker beside a clearable one", alsoPlain: true, wantStaying: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newReadyTestHarness(t)
+			epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+			a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
+			h.transition(a1.ID, model.Start{Assignee: "tester"})
+			h.transition(a1.ID, model.Done{})
+			a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
+			upstream := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Upstream fix lands", Topic: "next", IssueType: "task", Priority: 0, Labels: []string{ExternalLabel}})
+			h.addDependency(a2.ID, upstream.ID)
+			standings := claims.Standings{model.LaneOf(a1, &epicA): heldBy(selfAttribution)}
+			if tc.heldForeign {
+				rows, details, _ := h.gather()
+				standings[laneOf(t, details, rowByID(t, rows, upstream.ID))] = heldBy(otherAttribution)
+			}
+			if tc.alsoPlain {
+				plain := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Theirs", Topic: "next", IssueType: "task", Priority: 0})
+				h.addDependency(a2.ID, plain.ID)
+				rows, details, _ := h.gather()
+				standings[laneOf(t, details, rowByID(t, rows, plain.ID))] = heldBy(otherAttribution)
+			}
+
+			rows, details, epics := h.gather()
+			outcome := routeNext(rows, details, epics, standings, selfAttribution, focusScope{})
+			exhausted, ok := outcome.(Exhausted)
+			if !ok {
+				t.Fatalf("routeNext = %#v (%T), want Exhausted — epic A's one open row waits on %q", outcome, outcome, upstream.ID)
+			}
+			idx := slices.IndexFunc(exhausted.Blocked, func(r rowReach) bool { return r.ID == upstream.ID })
+			if idx < 0 || exhausted.Blocked[idx].Kind != reachAwaitingOutside {
+				t.Fatalf("exhausted.Blocked = %v, want %q classified reachAwaitingOutside", exhausted.Blocked, upstream.ID)
+			}
+			msg := exhausted.Error()
+			if want := upstream.ID + " (on your path but waiting on an event outside this repository"; !strings.Contains(msg, want) {
+				t.Fatalf("exhausted.Error() = %q, want it to contain %q", msg, want)
+			}
+			if staying := strings.Contains(msg, stayRoute); staying != tc.wantStaying {
+				t.Fatalf("exhausted.Error() = %q, stay route present = %v, want %v", msg, staying, tc.wantStaying)
+			}
+		})
+	}
+}
+
 // Step 2's other admission. Every expired-foreign test for this step uses an
 // open row, which announces as a plain start; this is the in-flight disjunct,
 // which is the case ServedFromEpicLane's doc comment actually asserts and the
@@ -1345,7 +1483,7 @@ func TestRouteNextRoutesAroundAFreshPublicHold(t *testing.T) {
 // some walk claims it.
 func TestEveryReachKindHasWordsInBothDiagnostics(t *testing.T) {
 	t.Parallel()
-	// reachOf's switch is total over four kinds. The exhaustion walk reaches
+	// reachOf's switch is total over its kinds. The exhaustion walk reaches
 	// laneOurs rows and, via gatingDependencies, deps the gather never
 	// returned — but never a takeable one: step 2b serves the first takeable
 	// dependency over the same scope before exhaustion is reached.
@@ -1356,8 +1494,8 @@ func TestEveryReachKindHasWordsInBothDiagnostics(t *testing.T) {
 	// passedOver sees; and it asks reachOf about gathered rows only. So
 	// reachOutOfView is unreachable there, and words for it would describe an
 	// answer that walk can never give.
-	exhaustedSpeaks := []reachKind{reachHeldFresh, reachNotReady, reachOutOfView}
-	poolSpeaks := []reachKind{reachHeldFresh, reachNotReady, reachOffFocusPath}
+	exhaustedSpeaks := []reachKind{reachHeldFresh, reachNotReady, reachAwaitingOutside, reachOutOfView}
+	poolSpeaks := []reachKind{reachHeldFresh, reachNotReady, reachAwaitingOutside, reachOffFocusPath}
 
 	// reachTakeable is the one kind routing acts on instead of reporting: steps
 	// 1b and 2b serve it. It means something without a walk that says it.

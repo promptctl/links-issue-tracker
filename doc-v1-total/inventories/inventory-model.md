@@ -1086,6 +1086,7 @@ Complete registered kind set (`annotation.go`):
 | `RankInversion` | `rank_inversion` | `RoleRankInversion` | dependency is ranked below the dependent |
 | `Orphaned` | `orphaned` | `RoleOrphaned` | in_progress with no update past the orphaned threshold |
 | `NeedsDesign` | `needs_design` | `RoleBlocking` | carries the needs-design label |
+| `External` | `external` | `RoleBlocking` | carries the external label: the issue waits on an event outside this repo |
 | `EarlierSiblingPending` | `earlier_sibling_pending` | `RoleBlocking` | an earlier same-lane sibling under the parent epic is still open |
 | `FocusPath` | `focus_path` | `RoleNone` | a focused goal or a derived prerequisite of one; an ordering signal |
 

@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"slices"
+
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 )
 
@@ -19,7 +21,7 @@ import (
 // BlockingReason is one classified fact that prevents pulling an issue now.
 // Detail carries the annotation message: the missing field name, the open
 // dependency id (direct or inherited), the pending sibling id, or the
-// needs-design label.
+// reserved blocking label (needs-design, external).
 type BlockingReason struct {
 	Kind   annotation.Kind
 	Detail string
@@ -33,17 +35,18 @@ type BlockingReason struct {
 // second list to keep current, and the shorter of the two lists is always the
 // one nobody notices.
 // [LAW:no-silent-failure] The default panics rather than rendering a blocking
-// kind as empty text: a fifth kind must fail loudly here instead of arriving on
-// screen as a blank reason or, worse, no reason at all.
+// kind as empty text: a newly registered kind must fail loudly here instead of
+// arriving on screen as a blank reason or, worse, no reason at all.
 func (r BlockingReason) Phrase() string {
 	if label, ok := r.dependency(); ok {
 		return "depends on " + label
 	}
+	if label, ok := blockingLabelOf(r.Kind); ok {
+		return label
+	}
 	switch r.Kind {
 	case annotation.MissingField:
 		return "missing " + r.Detail
-	case annotation.NeedsDesign:
-		return NeedsDesignLabel
 	case annotation.EarlierSiblingPending:
 		return "earlier sibling " + r.Detail + " still open"
 	default:
@@ -106,6 +109,30 @@ func (r IssueReadiness) DependencyIDs() []string {
 		}
 	}
 	return ids
+}
+
+// waitsOnOtherWork reports whether the reason is another ticket still open — a
+// dependency or an earlier same-lane sibling — rather than a fact about the
+// issue itself, such as a reserved label or a missing field.
+func (r BlockingReason) waitsOnOtherWork() bool {
+	_, isDependency := r.dependency()
+	return isDependency || r.Kind == annotation.EarlierSiblingPending
+}
+
+// HeldByItself reports whether a reason about the issue itself blocks it, so
+// finishing other work would not make it startable.
+func (r IssueReadiness) HeldByItself() bool {
+	return slices.ContainsFunc(r.blocking, func(reason BlockingReason) bool {
+		return !reason.waitsOnOtherWork()
+	})
+}
+
+// AwaitsOutside reports whether an external label holds the issue: whatever
+// else blocks it, no ticket filed in this repository can make it startable.
+func (r IssueReadiness) AwaitsOutside() bool {
+	return slices.ContainsFunc(r.blocking, func(reason BlockingReason) bool {
+		return reason.Kind == annotation.External
+	})
 }
 
 // DependencyLabels returns the same dependencies as DependencyIDs, in the same

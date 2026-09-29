@@ -881,7 +881,7 @@ Positional args are the roots; with none, the cwd is used (`os.Getwd`, error `ge
 - Label = `cfg.IssuePrefix` from `workspace.ReadConfig(loc.ConfigPath)` when non-empty, else the `StorageDir` (`stores.go`).
 - `app.OpenLocationForRead`; failure → `row.Err`, no counts (`stores.go`).
 - Read-only close failure → `row.CloseErr`, set only when `row.Err` is nil (`stores.go`).
-- `classifyWorkable(ctx, st, nil, workableFilter{})` — a **nil required-fields** argument opts out of the per-repo `required_fields` policy only; blockers, the lane gate, and needs-design still apply (`stores.go`). Counts come from `partitionWorkable` (`stores.go`).
+- `classifyWorkable(ctx, st, nil, workableFilter{})` — a **nil required-fields** argument opts out of the per-repo `required_fields` policy only; blockers, the lane gate, and the reserved blocking labels still apply (`stores.go`). Counts come from `partitionWorkable` (`stores.go`).
 
 `printCrossProjectRollup` (`stores.go`):
 - Zero rows → `(no stores discovered)` and return (`stores.go`).
@@ -1045,7 +1045,7 @@ Markers (`agents_internal.go`): current `<!-- BEGIN LIT INTEGRATION -->` / `<!--
 | `quickstart.md` | `lit quickstart` (bare), bare `lit`, `lit quickstart --refresh` (rendered, never written to the repo) | stdout | 18-line router: an `<agent-instructions>` framing note, a paragraph on ticket provenance, a bulleted list of the five topic subcommands, and a "Fastpath" of `lit next` / `lit start <id>` / `lit workflows` |
 | `quickstart-work.md` | `lit quickstart work` | stdout | 11 lines on finding/starting work: `lit ls --limit --search`, `lit next`, `lit backlog`, `lit show`, claims-first selection, `lit start` and `--take` |
 | `quickstart-new.md` | `lit quickstart new` | stdout | 15 lines on `lit new` flags (`--title/--topic/--type/--parent/--top`), `<agent-instructions>` notes on `--description`, `--topic`, and default bottom-of-frame ranking; `lit followup`; `lit import --path` for batches |
-| `quickstart-update.md` | `lit quickstart update` | stdout | 13 lines: `lit update`, `lit import`, `lit rank`, `lit label add/rm` (`needs-design`, `focus`), `lit parent set`, `lit dep add` (`blocks`, `related-to`), `lit comment add` |
+| `quickstart-update.md` | `lit quickstart update` | stdout | 14 lines: `lit update`, `lit import`, `lit rank`, `lit label add/rm` (`needs-design`, `external`, `focus`), `lit parent set`, `lit dep add` (`blocks`, `related-to`), `lit comment add` |
 | `quickstart-done.md` | `lit quickstart done` | stdout | 9 lines: `lit done`, `lit close --resolution <duplicate\|superseded\|obsolete\|wontfix>`, `lit followup`, `lit workflows edit done`, and a commit reminder |
 | `quickstart-doctor.md` | `lit quickstart doctor` | stdout | 5 lines: `lit doctor [--fix]` plus an `<agent-instructions>` note to self-resolve first |
 

@@ -306,37 +306,51 @@ func TestRunReadyBlocksOnlyOnDependenciesStillInPlay(t *testing.T) {
 	}
 }
 
-func TestRunReadyMarksNeedsDesignLabelAsBlocked(t *testing.T) {
-	h := newReadyTestHarness(t)
+func TestRunReadyMarksReservedBlockingLabelsAsBlocked(t *testing.T) {
+	for _, tc := range []struct {
+		label string
+		kind  annotation.Kind
+	}{
+		{label: "needs-design", kind: annotation.NeedsDesign},
+		{label: "external", kind: annotation.External},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			h := newReadyTestHarness(t)
 
-	plain := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "Ready leaf",
-		Topic:     "alpha",
-		IssueType: "task",
-		Priority:  0,
-	})
-	flagged := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "Needs design first",
-		Topic:     "alpha",
-		IssueType: "task",
-		Priority:  0,
-		Labels:    []string{NeedsDesignLabel},
-	})
+			plain := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+				Title:     "Ready leaf",
+				Topic:     "alpha",
+				IssueType: "task",
+				Priority:  0,
+			})
+			flagged := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+				Title:     "Flagged",
+				Topic:     "alpha",
+				IssueType: "task",
+				Priority:  0,
+				Labels:    []string{tc.label},
+			})
 
-	got := h.runWorkableAnnotated(workableFilter{}, 0)
-	if len(got) != 2 {
-		t.Fatalf("len(got) = %d, want 2; got=%#v", len(got), got)
-	}
+			got := h.runWorkableAnnotated(workableFilter{}, 0)
+			if len(got) != 2 {
+				t.Fatalf("len(got) = %d, want 2; got=%#v", len(got), got)
+			}
 
-	byID := map[string]annotation.AnnotatedIssue{got[0].ID: got[0], got[1].ID: got[1]}
-	if !ClassifyReadiness(byID[plain.ID].Annotations).IsReady() {
-		t.Fatalf("plain issue should not be blocked, annotations=%#v", byID[plain.ID].Annotations)
-	}
-	if ClassifyReadiness(byID[flagged.ID].Annotations).IsReady() {
-		t.Fatalf("needs-design issue should be blocked, annotations=%#v", byID[flagged.ID].Annotations)
-	}
-	if _, ok := findAnnotation(byID[flagged.ID].Annotations, annotation.NeedsDesign); !ok {
-		t.Fatalf("missing NeedsDesign annotation: %#v", byID[flagged.ID].Annotations)
+			byID := map[string]annotation.AnnotatedIssue{got[0].ID: got[0], got[1].ID: got[1]}
+			if !ClassifyReadiness(byID[plain.ID].Annotations).IsReady() {
+				t.Fatalf("plain issue should not be blocked, annotations=%#v", byID[plain.ID].Annotations)
+			}
+			if ClassifyReadiness(byID[flagged.ID].Annotations).IsReady() {
+				t.Fatalf("%s issue should be blocked, annotations=%#v", tc.label, byID[flagged.ID].Annotations)
+			}
+			ann, ok := findAnnotation(byID[flagged.ID].Annotations, tc.kind)
+			if !ok {
+				t.Fatalf("missing %s annotation: %#v", tc.kind, byID[flagged.ID].Annotations)
+			}
+			if ann.Message != tc.label {
+				t.Fatalf("%s annotation message = %q, want the label %q", tc.kind, ann.Message, tc.label)
+			}
+		})
 	}
 }
 
