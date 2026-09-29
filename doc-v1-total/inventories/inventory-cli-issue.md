@@ -213,26 +213,62 @@ rules in `internal/model/validation.go`.
 - Line 1: `error (code=%d): %v\n` (exit code + `err.Error()`).
 - Line 2 (only when non-empty): `remediation: %s\n`.
 
-`commandErrorReason(err)` maps type → reason string (`error_output.go`):
-`entity_not_found`, `merge_conflict`, `sync_divergence`, `owner_approval_required`,
-`corruption_detected`, `unknown_command`, `retired_command`, `usage_error`,
-`unsupported_flag` (every `UnsupportedError`, `error_output.go`),
-`takeover_unconfirmed` (`takeoverUnconfirmedError`), `outside_git_workspace`, `bulk_partial_failure`, `workspace_write_blocked`,
-`transient_gc_contention`, `workspace_not_initialized`,
-`workspace_schema_ahead` (`*store.UnsupportedSchemaVersionError`), default `command_failed`.
+`commandErrorReason(err)` maps type → reason string (`error_output.go`). The
+checks run in this order and the first match wins, so an error that wraps
+several of these types gets the reason of the earliest one:
+1. `storage.NotFoundError` → `entity_not_found`
+2. `MergeConflictError` → `merge_conflict`
+3. `SyncFailureError` → `sync_divergence`
+4. `store.RemoteUnreachableError` → `remote_unreachable`
+5. `ownerApprovalRefusalError` → `owner_approval_required`
+6. `CorruptionError` → `corruption_detected`
+7. `UnknownCommandError` → `unknown_command`
+8. `RetiredCommandError` → `retired_command`
+9. `UsageError` → `usage_error`
+10. any error implementing `model.Refusal` → `validation_refused`
+11. `templateShapeError` → `template_shape_refused`
+12. `model.ContainerActionError` → `state_already_holds` when its `Satisfied()`
+    is true (the epic has at least one child, its derived state already
+    equals the requested one, and no child remains unfinished), otherwise
+    `validation_refused`
+13. `Exhausted` → `scope_exhausted`
+14. `NoWork` → `no_ready_work`
+15. `UnsupportedError` → `unsupported_flag`
+16. `takeoverUnconfirmedError` → `takeover_unconfirmed`
+17. `OutsideWorkspaceError` → `outside_git_workspace`
+18. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → `workspace_not_initialized`
+19. `*store.UnsupportedSchemaVersionError` → `workspace_schema_ahead`
+20. `workspace.StoredPrefixError` → `stored_prefix_refused`
+21. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → `validation_refused`
+    (`StoredPrefixError` unwraps to this sentinel; step 20 catches it first)
+22. `BulkFailureError` → `bulk_partial_failure`
+23. `store.WorkspaceWriteBlockedError` → `workspace_write_blocked` (it unwraps
+    to `store.ErrTransientGCContention`; this step catches it first)
+24. `errors.Is(err, store.ErrWorkspaceBusy)` → `workspace_busy`
+25. `errors.Is(err, store.ErrTransientGCContention)` → `transient_gc_contention`
+26. anything else → `command_failed`
 
-`commandErrorRemediation(reason)` (`error_output.go`), verbatim strings:
+`commandErrorRemediation(reason)` (`error_output.go`), verbatim strings. An
+empty string means no `remediation:` line is printed:
 - `unknown_command`: "Run `lit --help` (or `lit help <command>`) to select a supported command path."
 - `retired_command`: "" (empty — message is self-contained)
 - `usage_error`: "Run the command with `--help` and retry with valid arguments."
 - `unsupported_flag`: "Do not retry unchanged — this flag is refused on every run. Drop it and use what the message above names instead."
 - `entity_not_found`: "Verify the target ID exists with `lit ls` or `lit show <id>`."
 - `merge_conflict`: "Sync and retry after resolving conflicts."
-- `sync_divergence`: ""
-- `owner_approval_required`: ""
+- `sync_divergence`: "" (empty — the `SyncFailureError` message carries the steps)
+- `remote_unreachable`: "The remote host was unreachable over the network; credentials are not the problem, and lit already retried with backoff. Check connectivity to the remote host (for SSH remotes: `ssh -o BatchMode=yes git@<host>`), then retry once the network path is restored."
+- `template_shape_refused`: "Edit the template override the message names so it is either plain content with no LIT INTEGRATION markers or exactly one whole marked block, or delete the override to fall back to lit's bundled default. The command itself is fine; rerunning it unchanged repeats this refusal."
+- `stored_prefix_refused`: "Edit `issue_prefix` in the config file named above, setting it to a legal prefix. No lit command can clear this for you: every command resolves the workspace before its own work runs, so each one refuses in this same place. Rerunning this command unchanged repeats this refusal."
+- `validation_refused`: "Do not retry unchanged — this refusal is deterministic and will repeat until the command or the data changes. The error message above states the rule it enforces; adjust the command to satisfy it."
+- `workspace_busy`: "" (empty — each wrapping message carries its own retry guidance)
+- `owner_approval_required`: "" (empty — the refusal message carries the steps)
 - `corruption_detected`: "Run `lit doctor --fix integrity` and retry. \<agent-instructions>This command is idempotent and safe to run without confirmation.\</agent-instructions>"
-- `transient_gc_contention`: "Retry once. If the error persists, run `lit doctor --fix`. \<agent-instructions>…\</agent-instructions>"
-- `workspace_write_blocked`: "Wait a moment and retry — a normal command releases the store in well under a second. If it persists, a lit process is stuck: find it with `ps aux | grep '[l]it'` and terminate it, then retry; if none is running the hold is stale, so run `lit doctor --fix`. \<agent-instructions>…\</agent-instructions>"
+- `transient_gc_contention`: "Retry once. If the error persists, run `lit doctor --fix`. \<agent-instructions>This command is idempotent and safe to run without confirmation.\</agent-instructions>"
+- `workspace_write_blocked`: "Wait a moment and retry — a normal command releases the store in well under a second. If it persists, a lit process is stuck: find it with `ps aux | grep '[l]it'` and terminate it, then retry; if none is running the hold is stale, so run `lit doctor --fix`. \<agent-instructions>This is a mechanical, self-diagnosable state — the steps above resolve it without needing the user's input.\</agent-instructions>"
+- `scope_exhausted`: "Do not retry unchanged — routing is deterministic and repeats this answer until the work named above moves. Act on what the message names — the route it offers, or the rows off your focus path — or finish or hand off what you already hold."
+- `no_ready_work`: "Do not retry unchanged — routing is deterministic and repeats this answer until something in the backlog moves. That is the backlog's state, not a fault. If `--type`, `--labels`, `--assignee`, or `--status` narrowed this run, drop the filter and ask again. If a `focus` label narrowed it, `lit next --all` routes over the whole queue for one run and `lit label rm <id> focus` lifts the scope. Otherwise `lit backlog --all` shows the whole queue and who holds what, and `lit new` adds work if it is genuinely empty."
+- `state_already_holds`: "No action is needed — the command asked for a state the workspace is already in, and the message above says how that state was reached. Do not retry: running it again cannot change the answer, and `lit doctor` has nothing to diagnose because nothing is broken."
 - `takeover_unconfirmed`: "Rerun with `--take` to take the lane over, or run `lit next` for work nobody else holds. \<agent-instructions>Taking over a lane another checkout holds right now overrides that checkout's work: pass `--take` only when the user directs the takeover.\</agent-instructions>"
 - `outside_git_workspace`: "Run the command inside a git repository/worktree with links initialized."
 - `workspace_not_initialized`: "Do not retry unchanged — this repository has no lit workspace, and retrying this command cannot create one. Run `lit init` here to create it, or change to a directory that already has one."
