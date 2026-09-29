@@ -309,10 +309,11 @@ func TestFocusOnAChildOfABlockedEpicReachesTheGate(t *testing.T) {
 }
 
 // Routing treats the epic's gate as a dependency of the epic's lanes. A checkout
-// holding a lane of the blocked epic is offered the gate as on-path work, and a
-// checkout that holds only the epic is told its epic is blocked by the gate. It
-// is never handed the unrelated ready ticket ranked above the gate, and never
-// the gated child it would have been handed before the gate held.
+// holding a lane of the blocked epic is offered the gate as on-path work through
+// step 1b, and a checkout that holds only a finished lane of the epic is offered
+// it through step 2b. It is never handed the unrelated ready ticket ranked above
+// the gate, and never the gated child it would have been handed before the gate
+// held.
 func TestRouteNextTreatsAnEpicsGateAsOnPath(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Title: "Epic", Topic: "epic-block", IssueType: "epic"})
@@ -343,16 +344,15 @@ func TestRouteNextTreatsAnEpicsGateAsOnPath(t *testing.T) {
 	t.Run("holding only the epic", func(t *testing.T) {
 		standings := claims.Standings{doneLane: heldBy(selfAttribution)}
 		outcome := routeNext(rows, details, epics, standings, selfAttribution, focusScope{})
-		exhausted, ok := outcome.(Exhausted)
-		if !ok {
-			t.Fatalf("routeNext = %#v (%T), want Exhausted naming the gate", outcome, outcome)
+		// The gated child sits in a lane we do not hold, so the gate reaches us
+		// through step 2b rather than 1b — and still ahead of the unrelated
+		// ticket the pool would serve once the epic is exhausted.
+		served, ok := outcome.(ServedFromDependency)
+		if !ok || served.Row.ID != gate.ID {
+			t.Fatalf("routeNext = %#v (%T), want ServedFromDependency serving the gate %s", outcome, outcome, gate.ID)
 		}
-		blockers := make([]string, len(exhausted.Blocked))
-		for i, b := range exhausted.Blocked {
-			blockers[i] = b.ID
-		}
-		if !slices.Equal(blockers, []string{gate.ID}) {
-			t.Fatalf("Exhausted.Blocked = %v, want exactly the gate %s", blockers, gate.ID)
+		if served.Gates != gated.ID {
+			t.Fatalf("served.Gates = %q, want %q", served.Gates, gated.ID)
 		}
 	})
 }
@@ -399,11 +399,15 @@ func TestRouteNextDescendsAnEpicBlockerToItsWorkableChild(t *testing.T) {
 				t.Fatalf("served.Lane = %v, want %v, the lane a start of %s would claim", served.Lane, aLane, a1.ID)
 			}
 
+			// With a1 held elsewhere epic B is exhausted, and the unrelated ready
+			// ticket is served past it — beside the exhaustion, which is what
+			// this half reads.
 			held := claims.Standings{bLane: heldBy(selfAttribution), aLane: heldBy(otherAttribution)}
-			exhausted, ok := routeNext(rows, details, epics, held, selfAttribution, focusScope{}).(Exhausted)
+			past, ok := routeNext(rows, details, epics, held, selfAttribution, focusScope{}).(ServedPastExhaustion)
 			if !ok {
-				t.Fatalf("with %s's lane held elsewhere, routeNext did not report exhaustion", a1.ID)
+				t.Fatalf("with %s's lane held elsewhere, routeNext did not serve past the exhausted epic", a1.ID)
 			}
+			exhausted := past.Exhaustion
 			blockers := make([]string, len(exhausted.Blocked))
 			for i, b := range exhausted.Blocked {
 				blockers[i] = b.ID
@@ -419,16 +423,13 @@ func TestRouteNextDescendsAnEpicBlockerToItsWorkableChild(t *testing.T) {
 			}
 
 			// Holding only b1's closed lane, b2 is ours by epic but not by lane,
-			// so step 1b does not look at it and exhaustion does. a1 is free, so
-			// the blocker is ours to take — and the line must name a1, the
-			// ticket `lit start` can act on, not A, which cannot be started.
+			// so step 1b does not look at it and step 2b does. a1 is free, so it
+			// is served — a1, the ticket `lit start` can act on, not A, which
+			// cannot be started, with A named as what gates b2.
 			b1Lane := model.LaneOf(b1, &epicB)
-			exhausted, ok = routeNext(rows, details, epics, claims.Standings{b1Lane: heldBy(selfAttribution)}, selfAttribution, focusScope{}).(Exhausted)
-			if !ok {
-				t.Fatalf("holding only %s's lane, routeNext did not report exhaustion", b1.ID)
-			}
-			if want := a1.ID + " under " + epicA.ID + " (on your path and yours to take"; !strings.Contains(exhausted.Error(), want) {
-				t.Fatalf("Exhausted = %q, want it to contain %q", exhausted.Error(), want)
+			served, ok = routeNext(rows, details, epics, claims.Standings{b1Lane: heldBy(selfAttribution)}, selfAttribution, focusScope{}).(ServedFromDependency)
+			if !ok || served.Row.ID != a1.ID || served.Gates != b2.ID || served.Blocker != epicA.ID {
+				t.Fatalf("holding only %s's lane, routeNext = %#v, want step 2b serving %s through %s for %s", b1.ID, served, a1.ID, epicA.ID, b2.ID)
 			}
 		})
 	}

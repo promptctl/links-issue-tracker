@@ -285,8 +285,8 @@ step, so each step below says only which lanes it looks in:
   this checkout holds another lane in — which `gatingDependencies` permits,
   since it scopes the blocked rows and not the dependencies it collects from
   them. The clause answers "why was I handed a lane I do not hold?", and step
-  1b's answer is that the row gates work of ours — "(gates B.2, which is in a
-  lane you hold)", or "(it is in epic A, which gates B.2 in a lane you hold)"
+  1b's answer is that the row gates work of ours — "(gates B.2, which is on
+  your path)", or "(it is in epic A, which gates B.2 on your path)"
   when the dependency is an epic the row sits under — which is the more
   specific reason and the one worth saying; the epic it happens to share would explain
   the pick less well, not better.
@@ -307,24 +307,41 @@ step, so each step below says only which lanes it looks in:
 1. **The checkout's own live claims come first**: ready tickets within claimed
    lanes and the work already in flight there — a ticket in progress in the
    checkout's own lane is handed back to resume rather than started fresh —
-   in backlog order, including the prerequisite closure: a dependency outside
+   in backlog order, including its direct prerequisites: a dependency outside
    the claimed lane that gates one inside it is on the path and is offered on
    the same terms, announced as the second lane its start claims. An epic
    cannot be started, so a dependency that is an epic is offered as the ticket
    under it, at any depth, and the announcement names the epic.
 2. **Then the rest of its epic**: the claimed lane's epic's other lanes,
    before any lane of any other epic — the GRANULARITY RULING above, expressed
-   as a routing step rather than a bias. A parentless (solo) claim has no epic
-   to continue into and falls straight to step 3 once its own lane has nothing
+   as a routing step rather than a bias. Then the whole epic's direct
+   prerequisites: a dependency outside it that gates any of its lanes is
+   offered as step 1's is, ahead of anything outside the epic, because clearing
+   it is how the epic moves again. A parentless (solo) claim has no epic to
+   continue into and falls straight to step 3 once its own lane has nothing
    left to serve or resume.
-3. **Exhaustion is loud and diagnostic**, never silent: "blocked on E.4 (on
-   your path and yours to take — `lit start` it)". Each blocker is named by
-   what it is to this checkout — yours to take, held by another checkout,
-   not startable yet, or outside the view this run gathered — so the
-   diagnostic never recommends what `lit start` would refuse, and never
-   asserts a standing it did not read. It fires only once steps 1 and 2 have
-   both found nothing — the epic's own claimed lane and the rest of its lanes
-   — and it never falls through to a leaf outside the epic.
+3. **Exhaustion is loud, and it is not a wall.** When steps 1 and 2 have both
+   found nothing, `next` says why: "no ready work in epic(s) E — blocked on
+   E.4 (on your path but claimed by another checkout right now)". Each blocker
+   is named by what it is to this checkout — held by another checkout, not
+   startable yet, or outside the view this run gathered — so the diagnostic
+   never recommends what `lit start` would refuse, and never asserts a
+   standing it did not read. Beneath the reason it names the ways on and
+   serves step 4's pick: stay, by filing the ticket that clears a blocker and
+   making the blocker wait on it, or move on, by starting the ticket served.
+   The ticket goes under the epic, ranked first — even when the block is
+   declared on the epic itself, since an epic's blocker never holds back a
+   child it waits on. The agent chooses. Staying is named only
+   against a block — an epic whose remaining work is only underway elsewhere
+   has nothing a new ticket could clear. Only when the global pool has nothing
+   ready either is the diagnostic the whole answer; under a `focus` label it
+   then names the rows outside the epic that the focus withheld, since those
+   were never asked about. It once never fell through to a leaf outside the
+   epic, and since routing is deterministic a
+   checkout whose epic held only blocked work was answered the same way on
+   every `next` until its claim expired — trapped in an epic with nothing to
+   do (owner ruling, links-next-5sxz, 2026-09-29). Leaving is still never
+   silent: the pick is announced beside the reason the epic stopped.
    Completing the last ticket announces the epic's completion; the claim has
    dissolved by predicate, and the checkout is global again. Unfocus is not an
    action.
@@ -332,8 +349,9 @@ step, so each step below says only which lanes it looks in:
    what it is, so the commitment is visible before it is made rather than
    discovered after. Reached directly, with no detour through steps 1–3, by a
    checkout that holds no live claims at all — unfocus is the zero state, not
-   a hop through the earlier steps. An active `focus` label narrows this
-   pool — and only this pool — to the focused goal's unfinished prerequisite
+   a hop through the earlier steps — and past an exhausted epic by step 3.
+   An active `focus` label narrows this pool — and only this pool — to the
+   focused goal's unfinished prerequisite
    chain, with `lit next --all` or removing the label as the escapes. Steps
    1–3 never read it, so a lane this checkout already holds is served whether
    or not it sits on the path: focus decides where a fresh session goes, not

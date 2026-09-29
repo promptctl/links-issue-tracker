@@ -117,13 +117,19 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 	case ServedFromNewLane:
 		row = o.Row
 		announce = startAdvice(o.Row, o.Lane) + "\n"
-	// Step 1b says what it is for. This is the one pick whose reason the row
-	// cannot show on its own: a global-pool pick is self-explanatory from the
-	// row, and step 2's shared epic is visible in the id, but "this unblocks
-	// work you are already holding" is a fact about the WALK.
+	// Steps 1b and 2b say what they are for. This is the one pick whose reason
+	// the row cannot show on its own: a global-pool pick is self-explanatory
+	// from the row, and step 2's shared epic is visible in the id, but "this
+	// unblocks work on your path" is a fact about the WALK.
 	case ServedFromDependency:
 		row = o.Row
 		announce = startAdvice(o.Row, o.Lane) + dependencyReason(o) + "\n"
+	// Leaving the scope is the agent's choice, so every route is named and
+	// none is taken: the row is the last route, printed like any pick.
+	case ServedPastExhaustion:
+		row = o.Row
+		routes := append(o.Exhaustion.stay(), "move on to the top ready ticket outside it: "+startAdvice(o.Row, o.Lane))
+		announce = o.Exhaustion.why() + "\n" + strings.Join(routes, "\nor ") + "\n"
 	// The two terminal outcomes travel outward AS THEMSELVES. Rendering them
 	// into an untyped error here would discard the very discriminator routing
 	// has just established, so both sinks — ExitCode and commandErrorReason —
@@ -196,15 +202,17 @@ func resumeAdvice(row annotation.AnnotatedIssue, actingAs string) string {
 	return fmt.Sprintf("%s is already in progress in a lane you hold — continue where you left off", row.ID)
 }
 
-// dependencyReason says why step 1b handed this row over. A pick under an epic
-// that blocks names the epic, because the row itself has no edge to the ticket
-// it frees. [LAW:dataflow-not-control-flow] the last inch of rendering, where
-// the two arms are different sentences.
+// dependencyReason says why step 1b or 2b handed this row over. A pick under an
+// epic that blocks names the epic, because the row itself has no edge to the
+// ticket it frees. "On your path" rather than "in a lane you hold", because
+// step 2b's gated row may sit in a sibling lane of the epic.
+// [LAW:dataflow-not-control-flow] the last inch of rendering, where the two
+// arms are different sentences.
 func dependencyReason(o ServedFromDependency) string {
 	if o.Blocker == o.Row.ID {
-		return fmt.Sprintf(" (gates %s, which is in a lane you hold)", o.Gates)
+		return fmt.Sprintf(" (gates %s, which is on your path)", o.Gates)
 	}
-	return fmt.Sprintf(" (it is in epic %s, which gates %s in a lane you hold)", o.Blocker, o.Gates)
+	return fmt.Sprintf(" (it is in epic %s, which gates %s on your path)", o.Blocker, o.Gates)
 }
 
 // startAdvice is the line every pick that would establish a claim prints above

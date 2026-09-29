@@ -184,9 +184,17 @@ not a claim: the lane is unclaimed, nothing about the old claim is printed, and
 `lit start` on it needs no ceremony. Only a lane another checkout holds right now
 is passed over, and reaching one takes a deliberate `lit start` on it, which asks
 to confirm the takeover or requires `--take` when there is no terminal to ask. A
-checkout whose epic has open work it cannot reach gets a diagnostic naming what
-blocks it, never a silent hop out of the epic; a checkout holding no claims of
-its own starts straight at the global pool.
+checkout whose epic has open work it cannot reach is offered first a ready
+dependency outside the epic that gates it. Failing that, it is served the top
+ready ticket from the global pool, printed beneath a line naming what blocks the
+epic and the ways on: when something blocks it, file the ticket that clears a
+blocker under the epic (`lit new --parent <epic> --top`, printed with the
+epic's id) and make the blocker wait on it with
+`lit dep add --from <new> --to <blocker>`; or start the ticket served. Only
+when nothing outside the epic is ready either does `next` exit with that
+diagnostic alone, and under a focus label it then names the rows outside the
+epic that the focus withheld. A
+checkout holding no claims of its own starts straight at the global pool.
 See design-docs/work-claims.md for the full precedence.
 
 `next` is read-only. It claims nothing and starts nothing — `lit start` does both
@@ -196,7 +204,8 @@ one of epic E". A lane of one is not named, because it is the ticket already on
 the line. A pick that continues an epic you already hold a lane in closes on a
 qualifier saying so, and a pick that gates one of your blocked tickets closes
 on a qualifier naming the ticket it unblocks. The same line from the global
-pool carries neither.
+pool carries neither, unless the pool was reached past an exhausted epic, when
+the lines above it say so.
 
 Work already in flight in one of your own lanes reports the state it is in rather
 than a command to run. When the ticket carries an assignee that is not the

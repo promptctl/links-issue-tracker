@@ -72,6 +72,8 @@ func servedRow(outcome NextOutcome) (annotation.AnnotatedIssue, bool) {
 		return served.Row, true
 	case ServedFromDependency:
 		return served.Row, true
+	case ServedPastExhaustion:
+		return served.Row, true
 	}
 	return annotation.AnnotatedIssue{}, false
 }
@@ -94,14 +96,15 @@ func TestServedRowIsTotalOverTheSealedSum(t *testing.T) {
 		{"the epic's next lane", ServedFromEpicLane{Row: row}, true},
 		{"the global pool", ServedFromNewLane{Row: row}, true},
 		{"the on-path dependency", ServedFromDependency{Row: row, Gates: "test-gated-1", Blocker: row.ID}, true},
+		{"past an exhausted scope", ServedPastExhaustion{Row: row, Exhaustion: Exhausted{Epics: []string{"test-epic-1"}}}, true},
 		{"exhausted carries none", Exhausted{}, false},
 		{"no work carries none", NoWork{}, false},
 	}
-	// The sum is sealed at seven cases (isNextOutcome, next_route.go). Counting
+	// The sum is sealed at eight cases (isNextOutcome, next_route.go). Counting
 	// them here is what makes an added variant fail loudly at this table instead
 	// of passing unnoticed because nobody thought to cover it.
-	if len(cases) != 7 {
-		t.Fatalf("table covers %d outcomes, want all 7 NextOutcome variants — add the new one", len(cases))
+	if len(cases) != 8 {
+		t.Fatalf("table covers %d outcomes, want all 8 NextOutcome variants — add the new one", len(cases))
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -304,17 +307,21 @@ func TestRunNextServesTheNextTicketOfALaneWeHold(t *testing.T) {
 	}
 }
 
-// Exhaustion is the loud refusal: our epic still has open work, none of it is
-// reachable, and `next` says so instead of hopping to a leaf outside the epic.
-// It is an error and not a row, so a caller that ignored the distinction would
-// hand an agent the zero ticket — which is why the outcome type seals the two
-// apart and why this asserts through runNext, where the exit path is decided.
+// The trap links-next-5sxz names: our epic still has open work, none of it is
+// reachable, and another epic has a ready ticket. `next` serves that ticket and
+// says why our epic stopped and how to stay in it instead — the agent chooses.
+// Asserted through runNext, where the exit path is decided: before the fix this
+// was an error, repeated verbatim by every later `next`, and the agent sat in
+// the epic until its claim expired.
 //
 // The gating dependency is itself blocked, so it is on our path and NOT ours to
-// take: that is what forecloses routing step 1b and leaves exhaustion as the
-// only honest answer.
-func TestRunNextExhaustedNamesTheBlockerGatingOurEpic(t *testing.T) {
+// take: that is what forecloses routing steps 1b and 2b and leaves the epic
+// exhausted. Its own blocker is ready, but ranked below the other epic's
+// ticket, so the pool's pick is the other epic's.
+func TestRunNextServesPastAnEpicWhoseWorkIsAllBlocked(t *testing.T) {
 	h := newReadyTestHarness(t)
+	otherEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Other epic", Topic: "next", IssueType: "epic", Priority: 1})
+	elsewhere := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Ready elsewhere", Topic: "next", IssueType: "task", Priority: 1, ParentID: otherEpic.ID})
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Our epic", Topic: "next", IssueType: "epic", Priority: 1})
 	finished := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "First", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
 	gated := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Second", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
@@ -325,28 +332,33 @@ func TestRunNextExhaustedNamesTheBlockerGatingOurEpic(t *testing.T) {
 	h.applyAction(finished.ID, model.Done{}, "finished")
 
 	outcome := h.runNextOutcome()
-	exhausted, ok := outcome.(Exhausted)
+	served, ok := outcome.(ServedPastExhaustion)
 	if !ok {
-		t.Fatalf("routeNext = %#v (%T), want Exhausted", outcome, outcome)
+		t.Fatalf("routeNext = %#v (%T), want ServedPastExhaustion", outcome, outcome)
 	}
-	if len(exhausted.Epics) != 1 || exhausted.Epics[0] != epic.ID {
-		t.Fatalf("exhausted.Epics = %v, want [%s]", exhausted.Epics, epic.ID)
+	if served.Row.ID != elsewhere.ID {
+		t.Fatalf("served = %q, want %q — the top ready ticket outside our epic", served.Row.ID, elsewhere.ID)
 	}
-	if len(exhausted.Blocked) != 1 || exhausted.Blocked[0].ID != blocker.ID {
-		t.Fatalf("exhausted.Blocked = %+v, want the one gating dependency %s", exhausted.Blocked, blocker.ID)
+	if len(served.Exhaustion.Epics) != 1 || served.Exhaustion.Epics[0] != epic.ID {
+		t.Fatalf("exhaustion.Epics = %v, want [%s]", served.Exhaustion.Epics, epic.ID)
+	}
+	if len(served.Exhaustion.Blocked) != 1 || served.Exhaustion.Blocked[0].ID != blocker.ID {
+		t.Fatalf("exhaustion.Blocked = %+v, want the one gating dependency %s", served.Exhaustion.Blocked, blocker.ID)
 	}
 
-	err := h.runNextErr()
-	if err == nil {
-		t.Fatalf("runNext on an exhausted epic = nil error, want the loud diagnostic")
-	}
-	for _, want := range []string{epic.ID, blocker.ID, "not startable right now"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("runNext error = %q, want it to name %q", err, want)
+	text := h.runNextText()
+	for _, want := range []string{
+		"no ready work in epic(s) " + epic.ID,
+		blocker.ID + " (on your path but not startable right now",
+		"to stay, file the ticket that clears a blocker under the epic with `lit new --parent " + epic.ID + " --top`, then make that blocker wait on it with `lit dep add --from <new> --to <blocker>`",
+		"or move on to the top ready ticket outside it: run `lit start " + elsewhere.ID + "`",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("next output = %q, want it to contain %q", text, want)
 		}
 	}
-	if strings.Contains(err.Error(), blockersBlocker.ID) {
-		t.Fatalf("runNext error = %q, want it to stop at our own path and not walk %q", err, blockersBlocker.ID)
+	if strings.Contains(text, blockersBlocker.ID+" (") {
+		t.Fatalf("next output = %q, want the diagnostic to stop at our own path and not walk %q", text, blockersBlocker.ID)
 	}
 }
 
@@ -511,7 +523,7 @@ func TestRenderNextOutcomeTerminalOutcomesKeepTheirType(t *testing.T) {
 			name:       "exhausted",
 			outcome:    Exhausted{Epics: []string{"links-epic-abcd"}},
 			wantReason: "scope_exhausted",
-			wantAct:    "lit start <id>",
+			wantAct:    "finish or hand off what you already hold",
 		},
 		{
 			name:       "no work",
@@ -777,13 +789,13 @@ func TestRenderNextOutcomeSpeaksOnlyInTheConditional(t *testing.T) {
 		// an agent is least likely to predict, and these two cells pin that it
 		// never renders the global pool's line verbatim.
 		{"the on-path dependency names the row it unblocks", ServedFromDependency{Row: freshRow, Lane: freshLane, Gates: inFlight.ID, Blocker: fresh.ID},
-			"run `lit start " + fresh.ID + "` to claim lane a1 of epic " + epicA.ID + " (gates " + inFlight.ID + ", which is in a lane you hold)"},
+			"run `lit start " + fresh.ID + "` to claim lane a1 of epic " + epicA.ID + " (gates " + inFlight.ID + ", which is on your path)"},
 		{"an abandoned dependency is served and still names what it unblocks", ServedFromDependency{Row: inFlightRow, Lane: inFlightLane, Gates: fresh.ID, Blocker: inFlight.ID},
-			inFlight.ID + " is in progress and nobody holds it — run `lit start " + inFlight.ID + "` to claim lane a2 of epic " + epicA.ID + " (gates " + fresh.ID + ", which is in a lane you hold)"},
+			inFlight.ID + " is in progress and nobody holds it — run `lit start " + inFlight.ID + "` to claim lane a2 of epic " + epicA.ID + " (gates " + fresh.ID + ", which is on your path)"},
 		// Work under an epic that blocks has no edge of its own to the row it
 		// frees, so the line names the epic between them.
 		{"work under a blocking epic names the epic that gates", ServedFromDependency{Row: freshRow, Lane: freshLane, Gates: "test-gated", Blocker: epicA.ID},
-			"run `lit start " + fresh.ID + "` to claim lane a1 of epic " + epicA.ID + " (it is in epic " + epicA.ID + ", which gates test-gated in a lane you hold)"},
+			"run `lit start " + fresh.ID + "` to claim lane a1 of epic " + epicA.ID + " (it is in epic " + epicA.ID + ", which gates test-gated on your path)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer
