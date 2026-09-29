@@ -355,10 +355,7 @@ func (e *Engine) GetRelationsByIDs(ctx context.Context, ids []string) (map[strin
 	defer e.mu.Unlock()
 
 	pos := e.positions()
-	ancestry, err := e.rankAncestry(pos)
-	if err != nil {
-		return nil, err
-	}
+	ancestry := e.rankAncestry(pos)
 	out := map[string]storage.IssueRelations{}
 	for _, id := range ids {
 		if _, done := out[id]; done {
@@ -488,9 +485,11 @@ func (e *Engine) bucketRelations(focalID string, relations []model.Relation, pos
 		}
 		*bucket = append(*bucket, issue)
 	}
-	ancestry.Sort(out.Children)
-	ancestry.Sort(out.DependsOn)
-	ancestry.Sort(out.Blocks)
+	for _, group := range [][]model.Issue{out.Children, out.DependsOn, out.Blocks} {
+		if err := ancestry.Sort(group); err != nil {
+			return storage.IssueRelations{}, err
+		}
+	}
 	return out, nil
 }
 
@@ -517,7 +516,9 @@ func (e *Engine) relatedIssues(focalID string, relations []model.Relation, pos m
 		}
 		out = append(out, issue)
 	}
-	ancestry.Sort(out)
+	if err := ancestry.Sort(out); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 

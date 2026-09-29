@@ -3,6 +3,7 @@ package storage
 import (
 	"cmp"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -61,7 +62,16 @@ type ParentLink struct {
 // them and its subtree lists together, whatever keys other frames hold in
 // between. That leaves no cross-frame arrangement of keys that a listing can
 // show, so no rank verb has to keep one. [LAW:types-are-the-program]
-type RankAncestry map[string][]rankPlace
+//
+// An issue with two parents, or whose parent chain loops, has no one place,
+// and neither does anything beneath it. Those issues are recorded with the
+// reason rather than failing the whole ancestry, so the refusal reaches only
+// the views that hold one: an unrelated listing or `lit show` still answers,
+// and the repair stays reachable. [LAW:no-silent-failure]
+type RankAncestry struct {
+	places   map[string][]rankPlace
+	unplaced map[string]error
+}
 
 // rankPlace is one step of an issue's path through tree order: a key, and the
 // id that breaks a tie on it. The tie is broken at every step rather than once
@@ -91,39 +101,81 @@ func (e TwoParentsError) Error() string {
 }
 
 // NewRankAncestry builds the ancestry from an engine's framing edges.
-//
-// An issue with two parents, or a parent chain that loops, has no one place in
-// tree order, so both are refused by name rather than listed in an order that
-// guessed. [LAW:no-silent-failure]
-func NewRankAncestry(links []ParentLink) (RankAncestry, error) {
+func NewRankAncestry(links []ParentLink) RankAncestry {
 	parentOf := make(map[string]ParentLink, len(links))
+	twoParents := map[string]TwoParentsError{}
 	for _, link := range links {
 		if prior, dup := parentOf[link.ChildID]; dup {
-			return nil, TwoParentsError{ChildID: link.ChildID, Parents: [2]string{prior.ParentID, link.ParentID}}
+			twoParents[link.ChildID] = TwoParentsError{ChildID: link.ChildID, Parents: [2]string{prior.ParentID, link.ParentID}}
+			continue
 		}
 		parentOf[link.ChildID] = link
 	}
-	ancestry := make(RankAncestry, len(parentOf))
+	ancestry := RankAncestry{places: make(map[string][]rankPlace, len(parentOf)), unplaced: map[string]error{}}
 	for child := range parentOf {
-		var places []rankPlace
-		visited := map[string]struct{}{child: {}}
-		for link, ok := parentOf[child]; ok; link, ok = parentOf[link.ParentID] {
-			if _, looped := visited[link.ParentID]; looped {
-				return nil, fmt.Errorf("the parent chain of %s loops back to %s, so it has no place in rank order; 'lit doctor' names the cycle, and 'lit parent clear' on one member breaks it", child, link.ParentID)
-			}
-			visited[link.ParentID] = struct{}{}
-			places = append(places, rankPlace{rank: link.ParentRank, id: link.ParentID})
+		if err := ancestry.walk(child, parentOf, twoParents); err != nil {
+			ancestry.unplaced[child] = err
 		}
-		slices.Reverse(places)
-		ancestry[child] = places
 	}
-	return ancestry, nil
+	return ancestry
+}
+
+// walk records child's containers' places, or reports why it has none: a
+// chain that passes through a child two parents claim, or that loops.
+func (a RankAncestry) walk(child string, parentOf map[string]ParentLink, twoParents map[string]TwoParentsError) error {
+	var places []rankPlace
+	visited := map[string]struct{}{child: {}}
+	for id := child; ; {
+		if conflict, ok := twoParents[id]; ok {
+			return conflict
+		}
+		link, ok := parentOf[id]
+		if !ok {
+			break
+		}
+		if _, looped := visited[link.ParentID]; looped {
+			return fmt.Errorf("the parent chain of %s loops back to %s, so it has no place in rank order; 'lit doctor' names the cycle, and 'lit parent clear' on one member breaks it", child, link.ParentID)
+		}
+		visited[link.ParentID] = struct{}{}
+		places = append(places, rankPlace{rank: link.ParentRank, id: link.ParentID})
+		id = link.ParentID
+	}
+	slices.Reverse(places)
+	a.places[child] = places
+	return nil
+}
+
+// Place reports whether every issue given has a place in tree order, naming
+// the first by id that does not. A view calls it on exactly the issues it
+// will order, so the refusal is as wide as the fault and no wider.
+func (a RankAncestry) Place(issues []model.Issue) error {
+	var first *model.Issue
+	for i := range issues {
+		if _, bad := a.unplaced[issues[i].ID]; bad && (first == nil || issues[i].ID < first.ID) {
+			first = &issues[i]
+		}
+	}
+	if first == nil {
+		return nil
+	}
+	return a.unplaced[first.ID]
+}
+
+// Refusal is the first refusal by id across every framing edge the ancestry
+// was built from — what `lit doctor` reports, whichever views hold the issue.
+func (a RankAncestry) Refusal() error {
+	ids := slices.Sorted(maps.Keys(a.unplaced))
+	if len(ids) == 0 {
+		return nil
+	}
+	return a.unplaced[ids[0]]
 }
 
 // Compare orders two issues by tree order; it is what the "rank" sort key
-// means in every engine. Two distinct issues never compare equal.
+// means in every engine. Two distinct issues never compare equal. It reads
+// only issues [RankAncestry.Place] has passed.
 func (a RankAncestry) Compare(x, y model.Issue) int {
-	xs, ys := a[x.ID], a[y.ID]
+	xs, ys := a.places[x.ID], a.places[y.ID]
 	for i := 0; ; i++ {
 		xp, xok := placeAt(xs, x, i)
 		yp, yok := placeAt(ys, y, i)
@@ -138,10 +190,15 @@ func (a RankAncestry) Compare(x, y model.Issue) int {
 }
 
 // Sort puts issues in tree order: the one ordering by rank, for a listing and
-// for every group of related issues a view assembles alike.
+// for every group of related issues a view assembles alike. It refuses, as
+// [RankAncestry.Place] does, a group holding an issue with no place.
 // [LAW:one-source-of-truth]
-func (a RankAncestry) Sort(issues []model.Issue) {
+func (a RankAncestry) Sort(issues []model.Issue) error {
+	if err := a.Place(issues); err != nil {
+		return err
+	}
 	slices.SortFunc(issues, a.Compare)
+	return nil
 }
 
 // placeAt is step i of an issue's path: its containers' places, then its own.

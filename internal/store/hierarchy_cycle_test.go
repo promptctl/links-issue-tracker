@@ -393,12 +393,21 @@ func TestAChildWithTwoParentsIsReportedAndRepairable(t *testing.T) {
 	st := openIssueStore(t, ctx)
 	first := parentChain(t, ctx, st, "E1", "C")
 	second := parentChain(t, ctx, st, "E2")
+	unrelated := parentChain(t, ctx, st, "U")[0]
 	child := first[1]
 	seedParentEdge(t, ctx, st, child.ID, second[0].ID)
 
 	var twoParents storage.TwoParentsError
 	if _, err := st.ListIssues(ctx, storage.ListIssuesFilter{}); !errors.As(err, &twoParents) || twoParents.ChildID != child.ID {
 		t.Fatalf("ListIssues() error = %v, want a TwoParentsError naming %s", err, child.ID)
+	}
+	// The refusal is as wide as the fault: a view holding neither the child nor
+	// anything beneath it still answers.
+	if _, err := st.GetIssueDetail(ctx, second[0].ID); err == nil {
+		t.Fatalf("GetIssueDetail(%s) succeeded, want its children refused: the child is one of them", second[0].ID)
+	}
+	if _, err := st.GetIssueDetail(ctx, unrelated.ID); err != nil {
+		t.Errorf("GetIssueDetail(%s) error = %v, want an issue outside the fault readable", unrelated.ID, err)
 	}
 
 	report, err := st.Doctor(ctx)

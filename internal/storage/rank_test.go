@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -14,25 +15,43 @@ import (
 // Restored data can still carry either, so the refusals are pinned here, on
 // the edges alone.
 
-func TestNewRankAncestryRefusesAChildWithTwoParents(t *testing.T) {
+// A child two parents claim has no place, and neither does anything beneath
+// it; the refusal names the child whose edges are the fault. An issue outside
+// that subtree still has its place, so a view that holds none of them answers.
+func TestTwoParentsLeaveOnlyThatSubtreeUnplaced(t *testing.T) {
 	t.Parallel()
-	_, err := NewRankAncestry([]ParentLink{
+	ancestry := NewRankAncestry([]ParentLink{
 		{ChildID: "c", ParentID: "p1", ParentRank: "a"},
 		{ChildID: "c", ParentID: "p2", ParentRank: "b"},
+		{ChildID: "c.g", ParentID: "c", ParentRank: "m"},
+		{ChildID: "p1.x", ParentID: "p1", ParentRank: "a"},
 	})
-	if err == nil || !strings.Contains(err.Error(), "c has two parents, p1 and p2") {
-		t.Fatalf("NewRankAncestry error = %v, want one naming c and both parents", err)
+	for _, id := range []string{"c", "c.g"} {
+		err := ancestry.Place([]model.Issue{{ID: "p1.x"}, {ID: id}})
+		var twoParents TwoParentsError
+		if !errors.As(err, &twoParents) || !strings.Contains(err.Error(), "c has two parents, p1 and p2") {
+			t.Errorf("Place(%s) error = %v, want a TwoParentsError naming c and both parents", id, err)
+		}
+	}
+	if err := ancestry.Place([]model.Issue{{ID: "p1"}, {ID: "p1.x"}, {ID: "p2"}}); err != nil {
+		t.Errorf("Place(outside the subtree) error = %v, want nil", err)
+	}
+	if err := ancestry.Refusal(); err == nil || !strings.Contains(err.Error(), "c has two parents") {
+		t.Errorf("Refusal() = %v, want the workspace's one refusal", err)
 	}
 }
 
-func TestNewRankAncestryRefusesAParentCycle(t *testing.T) {
+func TestAParentCycleLeavesItsMembersUnplaced(t *testing.T) {
 	t.Parallel()
-	_, err := NewRankAncestry([]ParentLink{
+	ancestry := NewRankAncestry([]ParentLink{
 		{ChildID: "a", ParentID: "b", ParentRank: "k"},
 		{ChildID: "b", ParentID: "a", ParentRank: "m"},
 	})
-	if err == nil || !strings.Contains(err.Error(), "loops back") {
-		t.Fatalf("NewRankAncestry error = %v, want a refusal naming the loop", err)
+	if err := ancestry.Place([]model.Issue{{ID: "a"}}); err == nil || !strings.Contains(err.Error(), "loops back") {
+		t.Fatalf("Place(a) error = %v, want a refusal naming the loop", err)
+	}
+	if err := ancestry.Place([]model.Issue{{ID: "outsider"}}); err != nil {
+		t.Errorf("Place(outsider) error = %v, want nil", err)
 	}
 }
 
@@ -44,14 +63,11 @@ func TestNewRankAncestryRefusesAParentCycle(t *testing.T) {
 // order their own keys would put them in.
 func TestTreeOrderKeepsASubtreeWholeAcrossATiedKey(t *testing.T) {
 	t.Parallel()
-	ancestry, err := NewRankAncestry([]ParentLink{
+	ancestry := NewRankAncestry([]ParentLink{
 		{ChildID: "e1.a", ParentID: "e1", ParentRank: "k"},
 		{ChildID: "e1.b", ParentID: "e1", ParentRank: "k"},
 		{ChildID: "e2.a", ParentID: "e2", ParentRank: "k"},
 	})
-	if err != nil {
-		t.Fatalf("NewRankAncestry error = %v", err)
-	}
 	issues := []model.Issue{
 		{ID: "e2.a", Rank: "a"},
 		{ID: "e1.b", Rank: "z"},
@@ -61,7 +77,9 @@ func TestTreeOrderKeepsASubtreeWholeAcrossATiedKey(t *testing.T) {
 		{ID: "e3", Rank: "k"},
 		{ID: "e1", Rank: "k"},
 	}
-	ancestry.Sort(issues)
+	if err := ancestry.Sort(issues); err != nil {
+		t.Fatalf("Sort error = %v", err)
+	}
 	got := make([]string, 0, len(issues))
 	for _, issue := range issues {
 		got = append(got, issue.ID)

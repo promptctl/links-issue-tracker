@@ -24,10 +24,7 @@ func (e *Engine) ListIssues(ctx context.Context, filter storage.ListIssuesFilter
 
 func (e *Engine) listIssues(filter storage.ListIssuesFilter) ([]model.Issue, error) {
 	pos := e.positions()
-	ancestry, err := e.rankAncestry(pos)
-	if err != nil {
-		return nil, err
-	}
+	ancestry := e.rankAncestry(pos)
 	order, err := storage.IssueOrdering(filter.SortBy, issueSortKeys(ancestry))
 	if err != nil {
 		return nil, err
@@ -58,6 +55,9 @@ func (e *Engine) listIssues(filter storage.ListIssuesFilter) ([]model.Issue, err
 	// The ordering is total — every comparison ends in a distinct id — so the
 	// result does not depend on the order this slice arrived in, and sorting it
 	// twice cannot produce two answers.
+	if err := ancestry.Place(selected); err != nil {
+		return nil, err
+	}
 	slices.SortStableFunc(selected, order)
 	return capLimit(selected, filter.Limit), nil
 }
@@ -115,9 +115,9 @@ func capLimit(issues []model.Issue, limit int) []model.Issue {
 
 // rankAncestry reads every framing edge in one pass, by the rule the frame
 // lookup applies (frames), keyed as rankAt renders it. Every edge goes in, so
-// a child two edges claim is refused here exactly as the SQL engine refuses it.
+// a child two edges claim has no place here exactly as in the SQL engine.
 // [LAW:one-source-of-truth]
-func (e *Engine) rankAncestry(pos map[string]int) (storage.RankAncestry, error) {
+func (e *Engine) rankAncestry(pos map[string]int) storage.RankAncestry {
 	var links []storage.ParentLink
 	for _, rel := range e.relations {
 		if e.frames(rel) {

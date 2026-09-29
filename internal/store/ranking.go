@@ -40,21 +40,21 @@ func loadRankAncestry(ctx context.Context, q rowQueryer) (storage.RankAncestry, 
 		WHERE r.type = 'parent-child' AND p.deleted_at IS NULL
 		ORDER BY r.src_id, r.dst_id`)
 	if err != nil {
-		return nil, fmt.Errorf("query rank ancestry: %w", err)
+		return storage.RankAncestry{}, fmt.Errorf("query rank ancestry: %w", err)
 	}
 	defer rows.Close()
 	var links []storage.ParentLink
 	for rows.Next() {
 		var link storage.ParentLink
 		if err := rows.Scan(&link.ChildID, &link.ParentID, &link.ParentRank); err != nil {
-			return nil, fmt.Errorf("scan rank ancestry: %w", err)
+			return storage.RankAncestry{}, fmt.Errorf("scan rank ancestry: %w", err)
 		}
 		links = append(links, link)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("rank ancestry rows: %w", err)
+		return storage.RankAncestry{}, fmt.Errorf("rank ancestry rows: %w", err)
 	}
-	return storage.NewRankAncestry(links)
+	return storage.NewRankAncestry(links), nil
 }
 
 // rankEdge is one end of a frame's keyspace as the query and the key algebra

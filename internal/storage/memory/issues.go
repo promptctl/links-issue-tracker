@@ -254,10 +254,7 @@ func (e *Engine) GetIssueDetail(ctx context.Context, id string) (model.IssueDeta
 		return model.IssueDetail{}, err
 	}
 	pos := e.positions()
-	ancestry, err := e.rankAncestry(pos)
-	if err != nil {
-		return model.IssueDetail{}, err
-	}
+	ancestry := e.rankAncestry(pos)
 	relations := e.incidentRelations(id)
 	structural, err := e.bucketRelations(id, relations, pos, ancestry)
 	if err != nil {

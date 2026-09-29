@@ -239,7 +239,8 @@ func allDoctorFixNames() []string {
 //
 // climbsHierarchy marks a repair whose work begins with the live-issue
 // classification, which is a walk up the parent chain — and that walk does not
-// return when the hierarchy holds a loop. Carrying it as data on the repair,
+// return when the hierarchy holds a loop, and refuses a child two parents
+// claim. Carrying it as data on the repair,
 // rather than as a branch where the repairs are dispatched, is what keeps the
 // skip honest: a repair that cannot crash is not withheld, and a new repair
 // declares its own reach instead of some caller guessing at it.
@@ -310,13 +311,14 @@ func doctorFieldValue(report storage.HealthReport, field, value string) string {
 //
 // The order is the whole point. A repair that climbs the hierarchy starts from
 // the live-issue classification, and that walk does not return when the
-// hierarchy holds a loop — so repairing first would make `lit doctor --fix`
-// overflow the stack before it could name the loop, and the operator whose
-// habit is `--fix` would get no diagnosis at all. Diagnosis has to survive the
+// hierarchy holds a loop, and refuses a child two parents claim — so
+// repairing first would make `lit doctor --fix` overflow the stack or fail
+// before it could name the fault, and the operator whose habit is `--fix`
+// would get no diagnosis at all. Diagnosis has to survive the
 // state it diagnoses. Store.Doctor answers the same ordering question one level
 // down, for the same reason.
 //
-// A loop withholds only the repairs that would crash on it. Repairs that never
+// Such a fault withholds only the repairs that would fail on it. Repairs that never
 // read the hierarchy still run, because refusing them would strand faults the
 // operator can fix in a workspace they cannot yet climb.
 // [LAW:dataflow-not-control-flow] What runs is decided by the report and by
@@ -326,7 +328,11 @@ func diagnoseThenRepair(ctx context.Context, progress io.Writer, repairer storag
 	if err != nil {
 		return storage.HealthReport{}, err
 	}
-	if len(report.ParentCycle) > 0 {
+	// Unchecked is Doctor's own record that the hierarchy stopped its reads —
+	// a loop, or a child two parents claim — so it is the one signal for
+	// both, rather than a second guess at which faults stop a climb here.
+	// [LAW:single-enforcer]
+	if len(report.Unchecked) > 0 {
 		var runnable []doctorFix
 		var withheld []string
 		for _, fix := range fixes {
@@ -340,7 +346,7 @@ func diagnoseThenRepair(ctx context.Context, progress io.Writer, repairer storag
 			// [LAW:no-silent-failure] The skip is stated. A run that printed only
 			// the cycle would read as though these repairs had run and found
 			// nothing.
-			fmt.Fprintf(progress, "doctor: skipping --fix %s because the hierarchy holds a cycle (%s); those repairs walk up the parent chain and that walk does not return on a loop — break it first, then re-run\n", strings.Join(withheld, ","), strings.Join(report.ParentCycle, " -> "))
+			fmt.Fprintf(progress, "doctor: skipping --fix %s because the hierarchy cannot be read (%s); those repairs walk up the parent chain — clear the fault with 'lit parent clear' first, then re-run\n", strings.Join(withheld, ","), strings.Join(report.Errors, "; "))
 		}
 		fixes = runnable
 	}

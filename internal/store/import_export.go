@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -123,18 +122,18 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 		report.Errors = append(report.Errors, fmt.Sprintf("parent cycle: %s (a hierarchy has no root once it loops; every walk up this chain runs forever, so the rank and dependency checks below could not be run — break the loop with 'lit parent clear' on one member, which detaches without reading the hierarchy, then re-run)", strings.Join(cycle, " -> ")))
 		return report, nil
 	}
-	// A child two framing edges claim has no place in tree order, so every
-	// listing refuses it — the liveness read below among them. It is reported
-	// as the finding it is, with the checks it stops, rather than surfacing as
-	// the first listing's failure. The same restored data is the only source,
-	// and the same repair clears it. [LAW:no-silent-failure]
-	if _, err := loadRankAncestry(ctx, s.db); err != nil {
-		var twoParents storage.TwoParentsError
-		if !errors.As(err, &twoParents) {
-			return report, fmt.Errorf("rank ancestry: %w", err)
-		}
+	// A child two framing edges claim has no place in tree order, nor does
+	// anything beneath it, so every view holding one refuses — the liveness
+	// read below among them. It is reported as the finding it is, with the
+	// checks it stops, rather than surfacing as some listing's failure.
+	// [LAW:no-silent-failure]
+	ancestry, err := loadRankAncestry(ctx, s.db)
+	if err != nil {
+		return report, fmt.Errorf("rank ancestry: %w", err)
+	}
+	if refusal := ancestry.Refusal(); refusal != nil {
 		report.Unchecked = []string{storage.CheckRankInversions, storage.CheckDependencyCycle}
-		report.Errors = append(report.Errors, twoParents.Error())
+		report.Errors = append(report.Errors, refusal.Error())
 		return report, nil
 	}
 	// Rank inversions and a blocks dependency cycle are two questions about one

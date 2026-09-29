@@ -35,44 +35,53 @@ func (r *cycleRepairer) FixRankInversions(context.Context) (int, error) { return
 // repairs must not run at all: running them first would make `lit doctor
 // --fix` overflow the stack before it could name the loop, leaving the operator
 // whose habit is --fix with no diagnosis whatsoever.
-func TestDoctorSkipsEveryRepairOnALoopedHierarchy(t *testing.T) {
+//
+// A child two parents claim stops the same climb, by refusal rather than by
+// overflow, and Doctor records both the same way: the checks it could not run.
+func TestDoctorSkipsEveryRepairOnAnUnreadableHierarchy(t *testing.T) {
 	t.Parallel()
-	repairer := &cycleRepairer{report: storage.HealthReport{
-		ParentCycle: []string{"E", "S"},
-		Errors:      []string{"parent cycle: E -> S"},
-	}}
-	climbed := false
-	cleaned := false
-	fixes := []doctorFix{
-		{name: "rank", climbsHierarchy: true, run: func(context.Context, io.Writer, storage.Repairer) error {
-			climbed = true
-			return errors.New("a climbing repair ran on a looped hierarchy and would have overflowed the stack")
-		}},
-		// A repair that never reads the hierarchy cannot crash on a loop, so
-		// withholding it would strand faults the operator can still fix.
-		{name: "integrity", run: func(context.Context, io.Writer, storage.Repairer) error {
-			cleaned = true
-			return nil
-		}},
-	}
+	unchecked := []string{storage.CheckRankInversions, storage.CheckDependencyCycle}
+	for name, health := range map[string]storage.HealthReport{
+		"loop":        {ParentCycle: []string{"E", "S"}, Errors: []string{"parent cycle: E -> S"}, Unchecked: unchecked},
+		"two parents": {Errors: []string{"C has two parents, E1 and E2, so it has no one place in rank order"}, Unchecked: unchecked},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			repairer := &cycleRepairer{report: health}
+			climbed := false
+			cleaned := false
+			fixes := []doctorFix{
+				{name: "rank", climbsHierarchy: true, run: func(context.Context, io.Writer, storage.Repairer) error {
+					climbed = true
+					return errors.New("a climbing repair ran on an unreadable hierarchy")
+				}},
+				// A repair that never reads the hierarchy cannot fail on it, so
+				// withholding it would strand faults the operator can still fix.
+				{name: "integrity", run: func(context.Context, io.Writer, storage.Repairer) error {
+					cleaned = true
+					return nil
+				}},
+			}
 
-	var progress bytes.Buffer
-	report, err := diagnoseThenRepair(context.Background(), &progress, repairer, fixes)
-	if err != nil {
-		t.Fatalf("diagnoseThenRepair() error = %v, want the cycle reported", err)
-	}
-	if climbed {
-		t.Error("a repair that climbs the hierarchy ran on a workspace whose hierarchy holds a cycle")
-	}
-	if !cleaned {
-		t.Error("a repair that never reads the hierarchy was withheld; a loop only blocks the repairs it would crash")
-	}
-	if len(report.ParentCycle) == 0 {
-		t.Error("the returned report does not name the cycle, so the operator gets no diagnosis")
-	}
-	// [LAW:no-silent-failure] The skip is stated, not inferred from a quiet run.
-	if !strings.Contains(progress.String(), "skipping --fix rank") {
-		t.Errorf("progress = %q, want it to name the repair withheld and why", progress.String())
+			var progress bytes.Buffer
+			report, err := diagnoseThenRepair(context.Background(), &progress, repairer, fixes)
+			if err != nil {
+				t.Fatalf("diagnoseThenRepair() error = %v, want the fault reported", err)
+			}
+			if climbed {
+				t.Error("a repair that climbs the hierarchy ran on a workspace whose hierarchy cannot be read")
+			}
+			if !cleaned {
+				t.Error("a repair that never reads the hierarchy was withheld; the fault only blocks the repairs it would fail")
+			}
+			if len(report.Errors) == 0 {
+				t.Error("the returned report does not name the fault, so the operator gets no diagnosis")
+			}
+			// [LAW:no-silent-failure] The skip is stated, not inferred from a quiet run.
+			if !strings.Contains(progress.String(), "skipping --fix rank") || !strings.Contains(progress.String(), health.Errors[0]) {
+				t.Errorf("progress = %q, want it to name the repair withheld and the fault", progress.String())
+			}
+		})
 	}
 }
 
