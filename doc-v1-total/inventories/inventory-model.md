@@ -1308,7 +1308,7 @@ A listing that says nothing about retention sees only live issues
 | `has:comments` | sets `HasComments` to `true` via `mergeBoolPointer("has-comments", …)` | |
 | `has:<other>` | error `unsupported has: filter %q` (quoting the **whole** term) | |
 | `sort:<expr>` | `storage.ParseSortSpecs`; specs appended to `SortBy` | |
-| `limit:<n>` | `strconv.Atoi`; non-integer → `limit must be an integer, got %q`; negative → `limit must be non-negative, got %q`; **0 is legal** and means uncapped | |
+| `limit:<n>` | `strconv.Atoi`; non-integer → `limit must be an integer, got %q`; then `ParseLimit` (see 9.5), so negative → `limit must be non-negative, got %d`; **0 is legal** and means uncapped | |
 | `archived` (exact) | sets `IncludeArchived = true` | |
 | `deleted` (exact) | sets `IncludeDeleted = true` | |
 | `updated<expr>` | delegates to `applyTimeTerm` with the remainder after `"updated"` | |
@@ -1331,8 +1331,7 @@ Pinned by: `TestQueryTokenSupersetOfDiscreteFlags` (`query_test.go`),
   tried in this order: `>=`, `<=`, `>`, `<`, `:`. Missing comparator → error
   `missing comparator`; empty payload after the comparator → `missing value`;
   both are wrapped as `parse updated term "updated<expr>": <err>`.
-- Timestamp parsed as `time.RFC3339`, falling back to `time.RFC3339Nano`; on
-  failure error `updated timestamp must be RFC3339`.
+- Timestamp read by `ParseTimestamp` (see 9.5); its refusal is returned as is.
 - `>=` and `>` both set `UpdatedAfter`; `<=` and `<` both set `UpdatedBefore`
   (inclusive/exclusive is not distinguished).
 - The `:` comparator parses but then falls to the default arm and errors
@@ -1370,9 +1369,19 @@ Pinned by: `TestQueryTokenSupersetOfDiscreteFlags` (`query_test.go`),
 - `mergeSlice[T comparable](base, incoming []T) []T` — `query.go`: if
   `incoming` is empty, returns `base` unchanged (nil stays nil); otherwise
   returns a new slice = base plus incoming values not already present in base.
-- `validateFilter(filter)` — `query.go`: errors
-  `updated-after cannot be greater than updated-before` when both are set and
-  `UpdatedAfter.After(*UpdatedBefore)`.
+- `ParseTimestamp(value string) (time.Time, error)` — `query.go`: trims the
+  value and parses it as `time.RFC3339` (fractional seconds included); failure →
+  `model.ValidationError{"timestamp must be RFC3339, got %q"}` quoting the
+  trimmed value. The `updated` term and `lit ls --updated-after`/`--updated-before`
+  all read through it.
+- `ParseLimit(limit int) (int, error)` — `query.go`: negative →
+  `model.ValidationError{"limit must be non-negative, got %d"}`; zero and
+  positive values pass through. The `limit:` term, `lit ls --limit` and
+  `lit backlog --limit` all read through it where the value enters, so a bad
+  flag value is refused before `Merge` can replace it.
+- `validateFilter(filter)` — `query.go`: `Merge` ends with it. Both bounds set
+  with `UpdatedAfter.After(*UpdatedBefore)` →
+  `updated-after cannot be greater than updated-before`.
 
 ## 9.6 Sort expression grammar (`storage.ParseSortSpecs`, consumed by `sort:`)
 `internal/storage/sort.go`: comma-separated; each part trimmed; empty parts

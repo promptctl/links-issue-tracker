@@ -12,11 +12,10 @@ import (
 )
 
 // A value a rule refuses is refused identically on every run, so each refusal
-// on the issue-writing and relation commands must exit ExitValidation with the
-// validation_refused remediation. The one exception is `update` naming no
-// field at all: that is a malformed invocation rather than a rejected value, so
-// it is a usage error. Before these were typed, every row below except the
-// missing-field one exited 1 with advice to retry and run `lit doctor`.
+// on the issue-writing, relation and listing commands must exit ExitValidation
+// with the validation_refused remediation. The one exception is `update`
+// naming no field at all: that is a malformed invocation rather than a rejected
+// value, so it is a usage error.
 //
 // Each case drives the real command handler, and asserts the exact reason and
 // exit code rather than the absence of retry advice: "does not say retry"
@@ -42,6 +41,9 @@ func TestFieldRefusalsAreDeterministicRefusals(t *testing.T) {
 	runLs := func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 		return runListWithStore(ctx, stdout, ap.Store, workspaceReadyPolicy(ap), args)
 	}
+	runBacklog := func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+		return runWorkable(ctx, stdout, ap, args, backlogView)
+	}
 
 	type runner func(context.Context, io.Writer, *app.App, []string) error
 	cases := []struct {
@@ -64,6 +66,18 @@ func TestFieldRefusalsAreDeterministicRefusals(t *testing.T) {
 		{"dep add self-loop", runDepAdd, []string{"--from", task.ID, "--to", task.ID}, ExitValidation, "validation_refused"},
 		{"dep add closing a blocks cycle", runDepAdd, []string{"--from", blocked.ID, "--to", task.ID}, ExitValidation, "validation_refused"},
 		{"ls unsupported sort field", runLs, []string{"--sort", "bogus"}, ExitValidation, "validation_refused"},
+		{"ls unknown state in --status", runLs, []string{"--status", "bogus"}, ExitValidation, "validation_refused"},
+		{"ls query term refused", runLs, []string{"--query", "has:nope"}, ExitValidation, "validation_refused"},
+		{"ls query timestamp refused", runLs, []string{"--query", "updated>=junk"}, ExitValidation, "validation_refused"},
+		{"ls query term contradicting a flag", runLs, []string{"--updated-after", "2026-02-01T00:00:00Z", "--query", "updated>=2026-01-01T00:00:00Z"}, ExitValidation, "validation_refused"},
+		{"ls query window inverted", runLs, []string{"--query", "updated>=2026-02-01T00:00:00Z updated<=2026-01-01T00:00:00Z"}, ExitValidation, "validation_refused"},
+		{"ls --updated-after not a timestamp", runLs, []string{"--updated-after", "junk"}, ExitValidation, "validation_refused"},
+		{"ls --updated-before not a timestamp", runLs, []string{"--updated-before", "junk"}, ExitValidation, "validation_refused"},
+		{"ls flag window inverted", runLs, []string{"--updated-after", "2026-02-01T00:00:00Z", "--updated-before", "2026-01-01T00:00:00Z"}, ExitValidation, "validation_refused"},
+		{"ls negative --limit", runLs, []string{"--limit", "-1"}, ExitValidation, "validation_refused"},
+		{"ls negative query limit", runLs, []string{"--query", "limit:-1"}, ExitValidation, "validation_refused"},
+		{"ls negative --limit beside a query limit", runLs, []string{"--limit", "-1", "--query", "limit:5"}, ExitValidation, "validation_refused"},
+		{"backlog negative --limit", runBacklog, []string{"--limit", "-1"}, ExitValidation, "validation_refused"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
