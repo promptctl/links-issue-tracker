@@ -709,7 +709,7 @@ func listDerivedColumns(ctx context.Context, st storage.Store, policy readyPolic
 		if err != nil {
 			return nil, err
 		}
-		annotated, relations, _, err := annotateIssues(ctx, st, requiredFields, issues)
+		annotated, relations, _, _, err := annotateIssues(ctx, st, requiredFields, issues)
 		if err != nil {
 			return nil, err
 		}
@@ -887,7 +887,7 @@ func classifyWorkable(ctx context.Context, st storage.Store, requiredFields []st
 		return workableGather{}, err
 	}
 	issues = filterWorkableIssues(issues)
-	annotated, details, scope, err := annotateIssues(ctx, st, requiredFields, issues)
+	annotated, details, epics, scope, err := annotateIssues(ctx, st, requiredFields, issues)
 	if err != nil {
 		return workableGather{}, err
 	}
@@ -900,7 +900,7 @@ func classifyWorkable(ctx context.Context, st storage.Store, requiredFields []st
 	// Derived over the queue, then the queue is let go: keepRows returns the
 	// caller's rows and their relations, and the facts outlive the set they came
 	// from as a map of ids and an int.
-	queue := workableGather{rows: annotated, details: details, facts: deriveQueueFacts(annotated), scope: scope}
+	queue := workableGather{rows: annotated, details: details, epics: epics, facts: deriveQueueFacts(annotated), scope: scope}
 	return queue.keepRows(criteria), nil
 }
 
@@ -920,14 +920,19 @@ func classifyWorkable(ctx context.Context, st storage.Store, requiredFields []st
 // and the scope is read from that walk's own output rather than from the rows it
 // annotated — see focusScope, whose goals a row-derived scope would lose exactly
 // when every path row was narrowed away. [LAW:one-source-of-truth]
-func annotateIssues(ctx context.Context, st storage.Store, requiredFields []string, issues []model.Issue) ([]annotation.AnnotatedIssue, map[string]storage.IssueRelations, focusScope, error) {
+//
+// The epics above the issues come back too, keyed by epic id: the blocker
+// annotator already loaded them to pass an epic's blockers down, and routing
+// climbs the same chain to find the work under an epic that blocks. One load,
+// so "which epics is this issue under" has one answer on both sides.
+func annotateIssues(ctx context.Context, st storage.Store, requiredFields []string, issues []model.Issue) ([]annotation.AnnotatedIssue, map[string]storage.IssueRelations, map[string]storage.IssueRelations, focusScope, error) {
 	fieldAnnotator, err := newFieldAnnotator(requiredFields)
 	if err != nil {
-		return nil, nil, focusScope{}, err
+		return nil, nil, nil, focusScope{}, err
 	}
 	details, err := fetchIssueRelations(ctx, st, issues)
 	if err != nil {
-		return nil, nil, focusScope{}, err
+		return nil, nil, nil, focusScope{}, err
 	}
 	// Annotate the subjects as this fetch returned them, not as the caller passed
 	// them in. The caller's copies came from an earlier read — a list query, or an
@@ -948,7 +953,7 @@ func annotateIssues(ctx context.Context, st storage.Store, requiredFields []stri
 	memo, loaded := memoizeRelations(st.GetRelationsByIDs, details)
 	held, err := fetchHeldAncestry(ctx, memo, details)
 	if err != nil {
-		return nil, nil, focusScope{}, err
+		return nil, nil, nil, focusScope{}, err
 	}
 	// The focus path is derived from the full dependency DAG (unfiltered by the
 	// CLI narrowing) on every gather — the focus fact lives on the one goal
@@ -960,7 +965,7 @@ func annotateIssues(ctx context.Context, st storage.Store, requiredFields []stri
 	// byte-identical to a refetch.
 	focusPaths, err := fetchFocusPathGoals(ctx, st, loaded)
 	if err != nil {
-		return nil, nil, focusScope{}, err
+		return nil, nil, nil, focusScope{}, err
 	}
 	annotated, err := annotation.Annotate(ctx, subjects,
 		fieldAnnotator,
@@ -971,9 +976,9 @@ func annotateIssues(ctx context.Context, st storage.Store, requiredFields []stri
 		newFocusPathAnnotator(focusPaths),
 	)
 	if err != nil {
-		return nil, nil, focusScope{}, err
+		return nil, nil, nil, focusScope{}, err
 	}
-	return annotated, details, focusScopeOf(focusPaths), nil
+	return annotated, details, held.ancestry.relations, focusScopeOf(focusPaths), nil
 }
 
 // runOrphaned lists in_progress issues whose last update is older than

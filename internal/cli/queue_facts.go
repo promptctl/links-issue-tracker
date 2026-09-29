@@ -65,8 +65,12 @@ func deriveQueueFacts(queue []annotation.AnnotatedIssue) queueFacts {
 type workableGather struct {
 	rows    []annotation.AnnotatedIssue
 	details map[string]storage.IssueRelations
-	facts   queueFacts
-	scope   focusScope
+	// epics is the relations of every epic above a gathered row, keyed by epic
+	// id — the chain epicsAbove climbs. keepRows keeps it whole: routing asks
+	// which kept rows sit under an epic the gather never returns as a row.
+	epics map[string]storage.IssueRelations
+	facts queueFacts
+	scope focusScope
 }
 
 // keepRows narrows the gather to the rows the criteria select and RELEASES
@@ -86,5 +90,5 @@ func (g workableGather) keepRows(criteria storage.IssueCriteria) workableGather 
 			details[row.ID] = g.details[row.ID]
 		}
 	}
-	return workableGather{rows: rows, details: details, facts: g.facts, scope: g.scope}
+	return workableGather{rows: rows, details: details, epics: g.epics, facts: g.facts, scope: g.scope}
 }
