@@ -107,12 +107,10 @@ func TestCommandErrorReason(t *testing.T) {
 		// A binary older than the workspace is not refused for its command, so
 		// it takes its own reason rather than validation_refused's "adjust the
 		// command"; the traversal refusals are refused for their --to, so they
-		// take validation_refused.
+		// are model.Refusal and take validation_refused.
 		{"workspace schema ahead", schemaAheadError(), "workspace_schema_ahead"},
 		{"workspace schema ahead wrapped", fmt.Errorf("open store: %w", schemaAheadError()), "workspace_schema_ahead"},
-		{"upgrade target behind", upgradeTargetBehindError(), "validation_refused"},
-		{"downgrade target ahead", &store.DowngradeTargetAheadError{Current: 5, Target: 7}, "validation_refused"},
-		{"downgrade below baseline", &store.DowngradeBelowBaselineError{Target: 0}, "validation_refused"},
+		{"upgrade target behind wrapped", fmt.Errorf("upgrade: %w", upgradeTargetBehindError()), "validation_refused"},
 		// A stat that failed for any reason but ENOENT is an unclassified fault,
 		// and the retry-then-doctor default is the right advice for it. The
 		// workspace_not_initialized arm must not widen to it.
@@ -290,7 +288,9 @@ func TestWriteCommandErrorSchemaVersionRefusals(t *testing.T) {
 	}{
 		// The command is not what is wrong, so "adjust the command" would send
 		// the agent looking for a flag that does not exist.
-		{"workspace schema ahead", schemaAheadError(), "Take the supported path the message above names", "adjust the command"},
+		// Both paths the message names change more than this command, so the
+		// agent is told to wait for the user rather than take either.
+		{"workspace schema ahead", schemaAheadError(), "take either path only when the user directs it", "adjust the command"},
 		// The message names a newer target, which is the command adjusted.
 		{"upgrade target behind", upgradeTargetBehindError(), "adjust the command to satisfy it", "supported path"},
 	}

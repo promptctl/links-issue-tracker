@@ -167,7 +167,6 @@ var doltWorkspaceMachinery = map[string][]string{
 		"ErrWorkspaceBusy", "ErrTransientGCContention", "WorkspaceWriteBlockedError",
 		"RemoteUnreachableError", "ErrWorkspaceNotInitialized",
 		"UnsupportedSchemaVersionError", "RemoteSchemaAheadError",
-		"DowngradeTargetAheadError", "DowngradeBelowBaselineError",
 		"OwnerApprovalRequiredError",
 	},
 }

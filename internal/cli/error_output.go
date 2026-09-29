@@ -70,8 +70,8 @@ func commandErrorReason(err error) string {
 	// refusal's message already names the rule (and often the alternative), and
 	// an agent that trusts remediation text over the error body will loop on a
 	// retry that can never succeed.
-	var validation model.ValidationError
-	if errors.As(err, &validation) {
+	var refusal model.Refusal
+	if errors.As(err, &refusal) {
 		return "validation_refused"
 	}
 	// A malformed managed template is a refusal of a file on disk, not of the
@@ -148,22 +148,6 @@ func commandErrorReason(err error) string {
 	var schemaAhead *store.UnsupportedSchemaVersionError
 	if errors.As(err, &schemaAhead) {
 		return "workspace_schema_ahead"
-	}
-	// Version traversal refusing a target: upgrade to one behind the workspace,
-	// downgrade to one ahead of it or below the baseline. The same --to repeats
-	// the answer on every run, and each message names the command or target
-	// that does the job, which is validation_refused's "adjust the command".
-	var upgradeBehind *UpgradeTargetBehindError
-	if errors.As(err, &upgradeBehind) {
-		return "validation_refused"
-	}
-	var downgradeAhead *store.DowngradeTargetAheadError
-	if errors.As(err, &downgradeAhead) {
-		return "validation_refused"
-	}
-	var belowBaseline *store.DowngradeBelowBaselineError
-	if errors.As(err, &belowBaseline) {
-		return "validation_refused"
 	}
 	// lit could not settle on an issue prefix, and the three ways it can fail
 	// split by the ACT that clears them, which is what a reason names.
@@ -335,13 +319,13 @@ func commandErrorRemediation(reason string) string {
 		// [LAW:no-silent-failure]
 		return "Do not retry unchanged — this repository has no lit workspace, and retrying this command cannot create one. Run `lit init` here to create it, or change to a directory that already has one."
 	case "workspace_schema_ahead":
-		// Action-only: the message names the supported path and, when a
-		// snapshot exists, the lossy rollback, so this line defers to it rather
-		// than restating either. [LAW:one-source-of-truth] No `lit doctor`, and
-		// no agent-instructions envelope: installing a different lit changes
-		// the machine, not just this workspace, which is not a step to take
-		// without asking.
-		return "Do not retry unchanged — this lit is older than the workspace's schema, and rerunning the command with the same binary repeats this refusal. Take the supported path the message above names."
+		// The message names the supported path and, when a snapshot exists,
+		// the lossy rollback, so this line defers to it rather than restating
+		// either. [LAW:one-source-of-truth] Both paths change more than this
+		// command: installing a lit replaces it for every workspace on the
+		// machine, and the rollback discards data. So the agent is told to take
+		// neither on its own, the way takeover_unconfirmed gates `--take`.
+		return "Do not retry unchanged — this lit is older than the workspace's schema, and rerunning the command with the same binary repeats this refusal. The message above names the supported path. " + agentInstructionsOpen + "Installing a different lit replaces it for every workspace on this machine, and the snapshot rollback discards data: take either path only when the user directs it, and until then surface this refusal to the user as blocking." + agentInstructionsClose
 	case "bulk_partial_failure":
 		return "Some items failed; see the per-item errors above. Re-run the command for only the failed IDs after addressing each error."
 	default:

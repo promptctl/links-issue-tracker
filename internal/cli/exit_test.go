@@ -41,11 +41,10 @@ func TestExitCodeMappings(t *testing.T) {
 		{name: "workspace not initialized wrapped", err: fmt.Errorf("open store: %w", store.ErrWorkspaceNotInitialized), want: ExitValidation},
 		// A binary too old for the workspace and a version traversal refusing
 		// its target repeat on every run, so neither is ExitGeneric
-		// (links-cli-errors-9te7).
+		// (links-cli-errors-9te7). The traversal refusal reaches exit 3 as a
+		// model.Refusal, which is how store's downgrade refusals reach it too.
 		{name: "workspace schema ahead wrapped", err: fmt.Errorf("open store: %w", schemaAheadError()), want: ExitValidation},
-		{name: "upgrade target behind", err: upgradeTargetBehindError(), want: ExitValidation},
-		{name: "downgrade target ahead", err: &store.DowngradeTargetAheadError{Current: 5, Target: 7}, want: ExitValidation},
-		{name: "downgrade below baseline", err: &store.DowngradeBelowBaselineError{Target: 0}, want: ExitValidation},
+		{name: "upgrade target behind wrapped", err: fmt.Errorf("upgrade: %w", upgradeTargetBehindError()), want: ExitValidation},
 		// A prefix lit cannot settle on is a self-fixable precondition, not
 		// "lit is broken" — one code for both would leave a script to tell
 		// them apart by parsing the English.
