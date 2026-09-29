@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 )
 
@@ -234,20 +233,10 @@ func TestConcurrentFirstMutationsAgreeOnOneToken(t *testing.T) {
 	const racers = 12
 	tokens := make([]string, racers)
 	errs := make([]error, racers)
-	var start sync.WaitGroup
-	var done sync.WaitGroup
-	start.Add(1)
-	for i := range racers {
-		done.Add(1)
-		go func() {
-			defer done.Done()
-			start.Wait()
-			id, err := EnsureStream(info.PrivateGitDir)
-			tokens[i], errs[i] = id.Value(), err
-		}()
-	}
-	start.Done()
-	done.Wait()
+	raceN(racers, func(i int) {
+		id, err := EnsureStream(info.PrivateGitDir)
+		tokens[i], errs[i] = id.Value(), err
+	})
 
 	for i, err := range errs {
 		if err != nil {

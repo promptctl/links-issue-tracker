@@ -139,12 +139,12 @@ func runWithApp(ctx context.Context, stdout io.Writer, accessMode app.AccessMode
 			return OutsideWorkspaceError{Message: "links requires running inside a git repository/worktree"}
 		}
 		// The open boundary stamps holder contention so Run's trace can tell a
-		// starved OPEN from a handler-traced mid-command contention. cwd is
-		// definitionally the store this boundary opens; a cwd that cannot
-		// resolve cannot be busy (app.Open resolved it to get here), so the
-		// unstamped fall-through carries no contention.
-		if ws, wsErr := workspace.Resolve(cwd); wsErr == nil {
-			return markEngineOpenContention(err, ws)
+		// starved OPEN from a handler-traced mid-command contention, filed under
+		// the workspace app.Open resolved. A failure to resolve has no workspace
+		// to file under, so it passes through unstamped.
+		var storeErr app.StoreOpenError
+		if errors.As(err, &storeErr) {
+			return markEngineOpenContention(err, storeErr.Workspace)
 		}
 		return err
 	}

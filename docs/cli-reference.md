@@ -53,7 +53,7 @@ the code it arrives on:
 | `command_failed` | 1 | An unclassified fault |
 | `bulk_partial_failure` | 1 | Some items of a multi-id command failed; the message lists each |
 | `remote_unreachable` | 1 | The sync remote could not be reached after retries |
-| `workspace_busy` | 1 | Another lit process is writing to this workspace |
+| `workspace_busy` | 1 | Another lit process holds a lock this command needs: the workspace's store, or its `config.json` |
 | `workspace_write_blocked` | 1 | Another process holds the store and did not release it |
 | `transient_gc_contention` | 1 | The store was briefly contended; one retry usually clears it |
 | `usage_error` | 2 | Bad arguments or flags |

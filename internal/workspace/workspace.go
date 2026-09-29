@@ -659,8 +659,8 @@ func parseStoredPrefix(configPath string, configured string) PrefixState {
 // this store is one we must never mutate, so the create/derive/persist path is
 // not an option. [LAW:effects-at-boundaries] Exactly one file read, no writes.
 // [LAW:single-enforcer] The read+parse+workspace_id-present check is defined
-// here; loadOrCreateConfig reuses it so the two cannot validate a config two
-// different ways. The read error is wrapped preserving os.ErrNotExist via %w, so
+// here; loadOrCreateConfig and UpdateConfig reuse it so no two paths can
+// validate a config two different ways. The read error is wrapped preserving os.ErrNotExist via %w, so
 // loadOrCreateConfig can still tell "no config yet, create one" from a real
 // failure.
 func ReadConfig(path string) (Config, error) {
@@ -786,13 +786,9 @@ func UpdateConfig(path string, mutate func(Config) (Config, error)) (updated Con
 }
 
 func updateConfigLocked(path string, mutate func(Config) (Config, error)) (Config, error) {
-	payload, err := os.ReadFile(path)
+	cfg, err := ReadConfig(path)
 	if err != nil {
-		return Config{}, fmt.Errorf("read workspace config: %w", err)
-	}
-	var cfg Config
-	if err := json.Unmarshal(payload, &cfg); err != nil {
-		return Config{}, fmt.Errorf("parse workspace config: %w", err)
+		return Config{}, err
 	}
 	updated, err := mutate(cfg)
 	if err != nil {

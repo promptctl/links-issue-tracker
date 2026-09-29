@@ -68,40 +68,30 @@ func prefixSetLeaf() wsLeaf {
 		// the rules refuse, so it has to run in that state and name what it is
 		// replacing.
 		previous := string(ws.IssuePrefix.Stored())
-		if normalized == previous {
-			result := prefixSetResult{
-				Previous: previous,
-				Current:  previous,
-				Applied:  false,
-				Note:     "prefix unchanged",
-				Census:   census,
+		if *apply {
+			// [LAW:no-ambient-temporal-coupling] An apply reads the prefix it
+			// replaces under the lock that orders its write, so of two racing
+			// applies the second reports the first's value as what it replaced,
+			// rather than the one both resolved before either wrote.
+			if _, err := workspace.UpdateConfig(ws.ConfigPath, func(cfg workspace.Config) (workspace.Config, error) {
+				previous = cfg.IssuePrefix
+				cfg.IssuePrefix = normalized
+				return cfg, nil
+			}); err != nil {
+				return fmt.Errorf("update workspace config: %w", err)
 			}
-			return prefixSetTextOutput(stdout, result)
 		}
-
-		if !*apply {
-			result := prefixSetResult{
-				Previous: previous,
-				Current:  normalized,
-				Applied:  false,
-				Note:     "preview only — pass --apply to write config.json. Existing issue IDs keep their old prefix; only new issues use the new one.",
-				Census:   census,
-			}
-			return prefixSetTextOutput(stdout, result)
-		}
-
-		if _, err := workspace.UpdateConfig(ws.ConfigPath, func(cfg workspace.Config) (workspace.Config, error) {
-			cfg.IssuePrefix = normalized
-			return cfg, nil
-		}); err != nil {
-			return fmt.Errorf("update workspace config: %w", err)
-		}
-
 		result := prefixSetResult{
 			Previous: previous,
 			Current:  normalized,
-			Applied:  true,
+			Applied:  *apply && normalized != previous,
 			Census:   census,
+		}
+		switch {
+		case normalized == previous:
+			result.Note = "prefix unchanged"
+		case !*apply:
+			result.Note = "preview only — pass --apply to write config.json. Existing issue IDs keep their old prefix; only new issues use the new one."
 		}
 		return prefixSetTextOutput(stdout, result)
 	}}
