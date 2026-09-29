@@ -771,6 +771,8 @@ func writeConfig(path string, cfg Config) (Config, error) {
 // UpdateConfig reads the workspace config at path, applies mutate, and writes
 // the result back. The mutate callback owns validation of the new shape; a
 // non-nil error from it aborts the write. Returns the post-mutate config.
+// mutate runs holding the config lock, which is a leaf, so it must compute and
+// return without taking any lock of its own.
 //
 // [LAW:single-enforcer] All in-place edits to the workspace config go through
 // this single read-modify-write boundary so partial writes can't desync
