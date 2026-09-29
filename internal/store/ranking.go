@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -100,12 +101,12 @@ var (
 //
 // A key at the workspace's own end has nothing outside it, and the read says so
 // by coming back empty, which beside turns into the open bound — the same pair
-// the whole keyspace is measured by. moving lists the keys this write is about
-// to vacate, and they are left out: a key nobody will be holding is not a wall,
-// and counting one halves the gap on every repeat of a move that has already
-// arrived. It is a list because rank set moves a whole stack at once, and
-// excluding only one of them would wall the rest in behind their own keys.
-func (e rankEdge) roomBesideTx(ctx context.Context, tx *sql.Tx, anchorRank string, moving ...string) (lower, upper string, err error) {
+// the whole keyspace is measured by. vacating is the issue this write is
+// moving, and its key is left out: a key nobody will be holding is not a wall,
+// and counting it halves the gap on every repeat of a move that has already
+// arrived. A write that moves nothing passes "", which no issue id is, so the
+// read excludes nothing.
+func (e rankEdge) roomBesideTx(ctx context.Context, tx *sql.Tx, anchorRank, vacating string) (lower, upper string, err error) {
 	// An anchor holding no rank is not a key, and the comparison reads it
 	// differently at each end: `item_rank < ''` matches nothing, while
 	// `item_rank > ''` matches every rank there is. The same empty anchor would
@@ -119,9 +120,9 @@ func (e rankEdge) roomBesideTx(ctx context.Context, tx *sql.Tx, anchorRank strin
 	if anchorRank == "" {
 		return "", "", fmt.Errorf("no room beside the %s of this frame: the key it was read from is empty", e.name)
 	}
-	query := fmt.Sprintf(`SELECT id, item_rank FROM issues
-		WHERE deleted_at IS NULL AND item_rank != '' AND %s`, e.outside)
-	outsideRank, err := nearestRankOutside(ctx, tx, query, moving, anchorRank)
+	query := fmt.Sprintf(`SELECT item_rank FROM issues
+		WHERE deleted_at IS NULL AND item_rank != '' AND id != ? AND %s LIMIT 1`, e.outside)
+	outsideRank, err := nearestRank(ctx, tx, query, vacating, anchorRank)
 	if err != nil {
 		return "", "", fmt.Errorf("query the key outside the %s: %w", e.name, err)
 	}
@@ -148,15 +149,13 @@ func (e rankEdge) roomBesideTx(ctx context.Context, tx *sql.Tx, anchorRank strin
 // The top level names no containing issue, so it takes the fallback below
 // rather than a container's key. It is NOT answered with open bounds: that
 // would be reading "this frame has nothing ranked" as "the workspace has
-// nothing ranked", and the two part company the moment a write excludes what
-// it is moving.
+// nothing ranked", and the two part company whenever a top-level container
+// carries no rank while its children do.
 //
-// moving carries through for the same reason it exists anywhere: the keys this
-// write is about to vacate are not walls. Dropping it here would leave rank set
-// bounded by its own previous result, so repeating the same stack — an
-// idempotent request — would walk the key longer every round, V then VV then
-// VF, spending the container's gap on a command that changes nothing.
-func firstInFrameBoundsTx(ctx context.Context, tx *sql.Tx, f storage.Frame, moving ...string) (lower, upper string, err error) {
+// Nothing is excluded from these reads. A frame reads empty only when the
+// issue being placed holds no key of its own, so there is no key it could be
+// walled in by.
+func firstInFrameBoundsTx(ctx context.Context, tx *sql.Tx, f storage.Frame) (lower, upper string, err error) {
 	if f != storage.TopLevel {
 		containerRank, err := nearestRank(ctx, tx, `SELECT item_rank FROM issues
 			WHERE id = ? AND deleted_at IS NULL AND item_rank != ''`, string(f))
@@ -164,28 +163,17 @@ func firstInFrameBoundsTx(ctx context.Context, tx *sql.Tx, f storage.Frame, movi
 			return "", "", fmt.Errorf("query the rank of frame %q: %w", f, err)
 		}
 		if containerRank != "" {
-			return bottomEdge.roomBesideTx(ctx, tx, containerRank, moving...)
+			return bottomEdge.roomBesideTx(ctx, tx, containerRank, "")
 		}
 	}
 	// No container names a key to sit beside: the top level has no containing
 	// issue, and a container carrying no rank of its own names none either. The
 	// position then falls back to the far side of the workspace's own last key.
 	//
-	// That read deliberately does NOT exclude moving, and the whole safety of
-	// this arm rests on it. Its emptiness is then a statement about the table
-	// rather than about this write: it comes back empty only when nothing at all
-	// is ranked, which is the one case where open bounds are true and
-	// rank.Midpoint's answer — rank.Initial, the first key in a workspace —
-	// belongs to nobody. Short-circuiting the top level to open bounds instead
-	// would read as "nothing is ranked" whenever a write merely excludes
-	// everything it can see: rank set over every top-level issue leaves this
-	// read empty while children inside the epics still hold keys, and the stack
-	// would then be handed rank.Initial on top of one of them.
+	// That read comes back empty only when nothing at all is ranked, which is
+	// the one case where open bounds are true and rank.Midpoint's answer —
+	// rank.Initial, the first key in a workspace — belongs to nobody.
 	// [LAW:no-silent-failure]
-	//
-	// lastRank IS that maximum, so the far-side read below can never return a
-	// row: moving is not passed to it because there is nothing it could
-	// exclude, and a mover holding that key is bounded past it either way.
 	lastRank, err := workspaceEdgeRankTx(ctx, tx, storage.TopLevel, bottomEdge)
 	if err != nil {
 		return "", "", err
@@ -193,7 +181,7 @@ func firstInFrameBoundsTx(ctx context.Context, tx *sql.Tx, f storage.Frame, movi
 	if lastRank == "" {
 		return "", "", nil
 	}
-	return bottomEdge.roomBesideTx(ctx, tx, lastRank)
+	return bottomEdge.roomBesideTx(ctx, tx, lastRank, "")
 }
 
 // filingBoundsTx is the pair a create's key is placed between: the population
@@ -214,7 +202,7 @@ func (e rankEdge) filingBoundsTx(ctx context.Context, tx *sql.Tx, f storage.Fram
 	if anchorRank == "" {
 		return firstInFrameBoundsTx(ctx, tx, f)
 	}
-	return e.roomBesideTx(ctx, tx, anchorRank)
+	return e.roomBesideTx(ctx, tx, anchorRank, "")
 }
 
 // frameEdgeRankTx is the key held at one end of a frame, and it is the whole
@@ -277,7 +265,7 @@ func edgeFor(p storage.RankPlacement) (rankEdge, error) {
 // has to make room. [LAW:single-enforcer] Every placement against stored keys
 // goes through that one function, so an edge whose key leaves no room past it
 // is made room for exactly as a relative move's neighbors are.
-func (e rankEdge) rankBeyondTx(ctx context.Context, tx *sql.Tx, f storage.Frame, moving []string, readEdge func() (string, error)) (string, error) {
+func (e rankEdge) rankBeyondTx(ctx context.Context, tx *sql.Tx, f storage.Frame, vacating string, readEdge func() (string, error)) (string, error) {
 	return rankBetweenTx(ctx, tx, func() (string, string, error) {
 		edgeRank, err := readEdge()
 		if err != nil {
@@ -289,9 +277,9 @@ func (e rankEdge) rankBeyondTx(ctx context.Context, tx *sql.Tx, f storage.Frame,
 		// key instead would send an issue asked for its frame's bottom to the
 		// top of the workspace. [LAW:one-source-of-truth]
 		if edgeRank == "" {
-			return firstInFrameBoundsTx(ctx, tx, f, moving...)
+			return firstInFrameBoundsTx(ctx, tx, f)
 		}
-		return e.roomBesideTx(ctx, tx, edgeRank, moving...)
+		return e.roomBesideTx(ctx, tx, edgeRank, vacating)
 	})
 }
 
@@ -440,24 +428,19 @@ func requireLiveTx(ctx context.Context, q rowQueryer, id string) error {
 // shows — the state the gate exists to prevent, reached through timing instead
 // of through a plain bug.
 //
-// [LAW:single-enforcer] Every rank verb writes its key through here, so "a rank
-// never lands on a deleted issue" has one enforcement site.
-//
-// now is supplied rather than read here because a set writes one timestamp
-// across every row it touches; deriving it per write would stamp one logical
-// move with a spread of instants.
+// The read below makes the refusal loud. The predicate itself rides on
+// rekeyTx's UPDATE, which every rank verb's key write runs — this one and rank
+// set's batched rewrite alike — so "a rank never lands on a deleted issue" has
+// one enforcement site, and it holds even if the read is ever removed or
+// reordered. [LAW:single-enforcer]
 func writeRankTx(ctx context.Context, tx *sql.Tx, id, newRank, now string) error {
 	if err := requireLiveTx(ctx, tx, id); err != nil {
 		return err
 	}
-	// The predicate rides on the UPDATE as well, so the write cannot land on a
-	// deleted row even if the read above is ever removed or reordered.
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`,
-		newRank, now, id); err != nil {
-		return fmt.Errorf("set rank of %s: %w", id, err)
+	if err := rekeyTx(ctx, tx, []rankedIssue{{id: id, rank: newRank}}); err != nil {
+		return err
 	}
-	return nil
+	return stampUpdatedTx(ctx, tx, []string{id}, now)
 }
 
 // RankToTop moves an issue to the top of its own frame.
@@ -520,7 +503,7 @@ func (s *Store) rankToEdge(ctx context.Context, issueID string, placement storag
 		if !end.Moved {
 			return end, nil
 		}
-		newRank, err := edge.rankBeyondTx(ctx, tx, f, []string{issueID}, func() (string, error) {
+		newRank, err := edge.rankBeyondTx(ctx, tx, f, issueID, func() (string, error) {
 			_, edgeRank, err := frameEdgeHolderTx(ctx, tx, f, edge)
 			return edgeRank, err
 		})
@@ -562,10 +545,10 @@ func rankSetValidateIDs(ids []string) error {
 //
 // It reads through whatever querier it is handed so the caller decides whether
 // the parentage is walked under the commit lock. RankSet hands it the
-// transaction, because the frame this returns is what scopes the anchor query:
-// resolved beforehand, a concurrent reparent leaves it naming a container the
-// representatives have already left, and the stack is written into a keyspace
-// nothing reads it in. [LAW:no-ambient-temporal-coupling]
+// transaction, because the frame this returns is what scopes the read of the
+// frame's keys: resolved beforehand, a concurrent reparent leaves it naming a
+// container the representatives have already left, and the stack is written
+// into a keyspace nothing reads it in. [LAW:no-ambient-temporal-coupling]
 func resolveRankSet(ctx context.Context, q rowQueryer, ids []string) ([]storage.RankSetResolution, storage.Frame, error) {
 	chains := make([][]string, len(ids))
 	for i, id := range ids {
@@ -596,7 +579,8 @@ func resolveRankSet(ctx context.Context, q rowQueryer, ids []string) ([]storage.
 // becomes topmost, ids[1] ranks just below, etc. IDs are first resolved to
 // their frame-comparable representatives (a child's stand-in is its epic), so
 // the order written is always frame-coherent and nothing inside any epic is
-// reordered. The anchor is that frame's top, never the workspace's: setting an
+// reordered. The stack is written by permuting the keys the frame already
+// holds (see storage.RankSetOrder), never by minting new ones: setting an
 // order among one epic's children leads that epic's children and moves nothing
 // outside it. Atomic — every assignment commits together or none does.
 // Validates IDs exist and rejects duplicates before any write.
@@ -626,50 +610,98 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 		for i, r := range resolutions {
 			ranked[i] = r.RankedID
 		}
-		// Find the topmost rank in the representatives' own frame, excluding the
-		// IDs being reassigned (so we anchor against rows that aren't moving).
-		// Every representative is a frame-mate by construction, so that frame is
-		// the whole keyspace this stack is read in.
-		query := fmt.Sprintf(`SELECT id, item_rank FROM issues
+		// The frame's own keys, lowest first, are the slots the new order fills.
+		// Every representative is a frame-mate by construction, so this is the
+		// whole keyspace the order is read in.
+		slots, err := rankRows(ctx, tx, fmt.Sprintf(`SELECT id, item_rank FROM issues
 			WHERE deleted_at IS NULL AND item_rank != '' AND %s = ?
-			ORDER BY item_rank ASC`, frameColumn)
-		// Walk IDs in reverse, assigning each a rank just above the previous one.
-		// The last ID (idx N-1) is placed past the frame's top, as any top-edge
-		// placement is; each earlier ID is anchored just above the
-		// previously-assigned rank, so the final order is
-		// ids[0] < ids[1] < ... < ids[N-1] < (existing top).
-		cursor, err := topEdge.rankBeyondTx(ctx, tx, f, ranked, func() (string, error) {
-			topRank, err := nearestRankOutside(ctx, tx, query, ranked, string(f))
-			if err != nil {
-				return "", fmt.Errorf("query top: %w", err)
-			}
-			return topRank, nil
-		})
+			ORDER BY item_rank ASC`, frameColumn), string(f))
 		if err != nil {
-			return storage.RankSetResult{}, fmt.Errorf("rank set: %w", err)
+			return storage.RankSetResult{}, fmt.Errorf("rank set: read the keys of frame %q: %w", f, err)
+		}
+		occupants := make([]string, len(slots))
+		for i, slot := range slots {
+			occupants[i] = slot.id
+		}
+		ordered, err := storage.RankSetOrder(f, occupants, ranked)
+		if err != nil {
+			return storage.RankSetResult{}, err
+		}
+		// Each slot's key passes to its new occupant, which is how a permutation
+		// is spelled in keys: the set of keys the frame holds is the same before
+		// and after, so none can collide and none can escape the frame. A slot
+		// whose occupant stays put is already right and is not written, which is
+		// what makes a repeat of an order that has arrived write nothing at all.
+		//
+		// Only a named issue that actually moved is stamped as updated. The
+		// frame-mates a stack displaces keep their order among themselves, the
+		// way a respace keeps it, and stamping them would reset the clock that
+		// says how long an unnamed ticket has sat untouched. The representatives
+		// fill the first len(ranked) slots, so the index says which is which.
+		var moves []rankedIssue
+		var stamped []string
+		for i, slot := range slots {
+			if ordered[i] == slot.id {
+				continue
+			}
+			moves = append(moves, rankedIssue{id: ordered[i], rank: slot.rank})
+			if i < len(ranked) {
+				stamped = append(stamped, ordered[i])
+			}
 		}
 		now := s.clock.Now().Format(time.RFC3339Nano)
-		newRanks := make([]string, len(ranked))
-		newRanks[len(ranked)-1] = cursor
-		for i := len(ranked) - 2; i >= 0; i-- {
-			// A key this loop placed is never all zeros, so Before always has
-			// room here; its error is still returned rather than assumed away.
-			if cursor, err = rank.Before(cursor); err != nil {
-				return storage.RankSetResult{}, fmt.Errorf("rank set: %w", err)
-			}
-			newRanks[i] = cursor
+		if err := rekeyTx(ctx, tx, moves); err != nil {
+			return storage.RankSetResult{}, fmt.Errorf("rank set: %w", err)
 		}
-		for i, id := range ranked {
-			if err := writeRankTx(ctx, tx, id, newRanks[i], now); err != nil {
-				return storage.RankSetResult{}, err
-			}
+		if err := stampUpdatedTx(ctx, tx, stamped, now); err != nil {
+			return storage.RankSetResult{}, fmt.Errorf("rank set: %w", err)
 		}
-		result := storage.RankSetResult{Resolutions: resolutions, Frame: f}
-		if len(newRanks) == 0 {
-			return result, nil
-		}
-		return result, smoothRanksIfNeededTx(ctx, tx, newRanks[0])
+		return storage.RankSetResult{Resolutions: resolutions, Frame: f}, nil
 	})
+}
+
+// rekeyTx hands each issue the key its move names, one statement per id batch.
+//
+// A rank set can displace every member of a large frame, so the keys are
+// written as a batched CASE rather than a statement per issue: the cost of the
+// write grows by round trips per batch, never per row. The liveness predicate
+// on the UPDATE is the one enforcement of "a rank never lands on a deleted
+// issue" that every rank verb's key write passes through (see writeRankTx).
+func rekeyTx(ctx context.Context, tx *sql.Tx, moves []rankedIssue) error {
+	keyOf := make(map[string]string, len(moves))
+	ids := make([]string, len(moves))
+	for i, m := range moves {
+		keyOf[m.id] = m.rank
+		ids[i] = m.id
+	}
+	for _, batch := range idBatches(ids) {
+		in, inArgs := batch.inList()
+		args := make([]any, 0, 3*len(batch))
+		for _, id := range batch {
+			args = append(args, id, keyOf[id])
+		}
+		args = append(args, inArgs...)
+		query := fmt.Sprintf(`UPDATE issues SET item_rank = CASE id %s END
+			WHERE deleted_at IS NULL AND id IN (%s)`,
+			strings.Repeat("WHEN ? THEN ? ", len(batch)), in)
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+			return fmt.Errorf("rewrite the keys of %v: %w", []string(batch), err)
+		}
+	}
+	return nil
+}
+
+// stampUpdatedTx marks the given issues as updated at now, one statement per
+// id batch.
+func stampUpdatedTx(ctx context.Context, tx *sql.Tx, ids []string, now string) error {
+	for _, batch := range idBatches(ids) {
+		in, inArgs := batch.inList()
+		query := fmt.Sprintf(`UPDATE issues SET updated_at = ? WHERE deleted_at IS NULL AND id IN (%s)`, in)
+		if _, err := tx.ExecContext(ctx, query, append([]any{now}, inArgs...)...); err != nil {
+			return fmt.Errorf("stamp %v as updated: %w", []string(batch), err)
+		}
+	}
+	return nil
 }
 
 // ancestorChain returns the parent-child ancestry of an issue, self first,
@@ -1102,58 +1134,6 @@ func rankRows(ctx context.Context, q rowQueryer, query string, args ...any) ([]r
 		out = append(out, item)
 	}
 	return out, rows.Err()
-}
-
-// nearestRankOutside returns the first rank the query's order yields whose id
-// is not one the caller is about to vacate, or "" — the open end of the
-// keyspace — when there is no such row.
-//
-// The exclusion is applied here and not as `AND id NOT IN (...)` in the query,
-// and that is the point. The excluded set is the stack a rank-set move carries,
-// so it is as large as the caller says; written as a clause it would be the
-// quadratic planner shape idBatchSize describes, and it is the one instance of
-// that shape batching cannot fix, because a `NOT IN` split across batches
-// returns from each batch exactly the rows the others meant to exclude.
-//
-// The caller supplies the query WITHOUT a LIMIT but WITH an ORDER BY, and the
-// ordering is a requirement rather than a convention: this function cannot check
-// for one, and without one the LIMIT below selects an arbitrary window instead of
-// the nearest rows. An unordered caller that happened to draw a window entirely
-// inside exclude would be told "" — which every caller here reads as the open end
-// of the keyspace, the one input that makes rank.Midpoint hand out a key another
-// issue already holds. Both call sites satisfy it today, and neither does so by
-// accident: rankEdge.outside carries the comparison and its ordering as one
-// string precisely so the two cannot drift apart. [LAW:no-silent-failure]
-//
-// The LIMIT is this function's to add, because how many rows must be read is a
-// function of how many may be skipped and the two belong in one place. Reading len(exclude)+1 is what makes the Go-side filter complete
-// rather than a sample: at most len(exclude) of the rows the order yields can
-// be excluded, so if any qualifying row exists at all, one of these is it. A
-// caller that held the bound in its own format string would be holding half of
-// that fact, free to drift from the other half. [LAW:one-source-of-truth]
-//
-// So the query stays a bounded read even though the exclusion set is not, and
-// the row count it reads is decided by this function alone.
-func nearestRankOutside(ctx context.Context, q rowQueryer, query string, exclude []string, args ...any) (string, error) {
-	rows, err := q.QueryContext(ctx, fmt.Sprintf("%s LIMIT %d", query, len(exclude)+1), args...)
-	if err != nil {
-		return "", err
-	}
-	defer rows.Close()
-	skip := make(map[string]struct{}, len(exclude))
-	for _, id := range exclude {
-		skip[id] = struct{}{}
-	}
-	for rows.Next() {
-		var id, rank string
-		if err := rows.Scan(&id, &rank); err != nil {
-			return "", err
-		}
-		if _, vacating := skip[id]; !vacating {
-			return rank, nil
-		}
-	}
-	return "", rows.Err()
 }
 
 // nearestRank returns the single rank a LIMIT 1 query selects, or "" — the

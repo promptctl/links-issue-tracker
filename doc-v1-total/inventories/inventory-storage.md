@@ -839,7 +839,7 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 - Builds an ancestor chain per id (missing id → `NotFoundError` from `ancestorChain`).
 - `frameRepresentatives(chains)`; error wrapped as `fmt.Errorf("rank set: %w", err)`.
 - **Two named ids collapsing onto one representative is refused**: `"rank set: %s and %s both resolve to %s — their relative order is internal to %s and cannot be set against outside issues; run rank set among siblings instead"`.
-- Detaches every representative and **prepends the representatives to the head of the order** — the named issues are stacked at the TOP, in the order named.
+- Rewrites the frame's own slots in place with `storage.RankSetOrder` — the representatives first, in the order named, then every other frame-mate in its current order; nothing outside the frame moves (`internal/storage/rank.go`).
 - Returns one `RankSetResolution{NamedID, RankedID}` per input, in input order.
 
 **`detach`** — `slices.DeleteFunc` on id equality.
