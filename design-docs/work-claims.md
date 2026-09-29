@@ -305,28 +305,32 @@ step, so each step below says only which lanes it looks in:
 1. **The checkout's own live claims come first**: ready tickets within claimed
    lanes and the work already in flight there — a ticket in progress in the
    checkout's own lane is handed back to resume rather than started fresh —
-   in backlog order, including the prerequisite closure: a dependency outside
+   in backlog order, including its direct prerequisites: a dependency outside
    the claimed lane that gates one inside it is on the path and is offered on
    the same terms, announced as the second lane its start claims.
 2. **Then the rest of its epic**: the claimed lane's epic's other lanes,
    before any lane of any other epic — the GRANULARITY RULING above, expressed
-   as a routing step rather than a bias. Then the prerequisite closure of the
-   whole epic: a dependency outside it that gates any of its lanes is offered
-   as step 1's is, ahead of anything outside the epic, because clearing it is
-   how the epic moves again. A parentless (solo) claim has no epic to continue
-   into and falls straight to step 3 once its own lane has nothing left to
-   serve or resume.
+   as a routing step rather than a bias. Then the whole epic's direct
+   prerequisites: a dependency outside it that gates any of its lanes is
+   offered as step 1's is, ahead of anything outside the epic, because clearing
+   it is how the epic moves again. A parentless (solo) claim has no epic to
+   continue into and falls straight to step 3 once its own lane has nothing
+   left to serve or resume.
 3. **Exhaustion is loud, and it is not a wall.** When steps 1 and 2 have both
    found nothing, `next` says why: "no ready work in epic(s) E — blocked on
    E.4 (on your path but claimed by another checkout right now)". Each blocker
    is named by what it is to this checkout — held by another checkout, not
    startable yet, or outside the view this run gathered — so the diagnostic
    never recommends what `lit start` would refuse, and never asserts a
-   standing it did not read. Beneath the reason it names both ways on and
+   standing it did not read. Beneath the reason it names the ways on and
    serves step 4's pick: stay, by filing the ticket that unblocks the epic
-   under it, or move on, by starting the ticket served. The agent chooses.
-   Only when the global pool has nothing ready either is the diagnostic the
-   whole answer, and then staying is the route it names. It once never fell
+   under it and moving the block onto that ticket, or move on, by starting the
+   ticket served. The agent chooses. Staying is named only against a block —
+   an epic whose remaining work is only underway elsewhere has nothing a new
+   ticket could clear. Only when the global pool has nothing ready either is
+   the diagnostic the whole answer; under a `focus` label it then names the
+   rows outside the epic that the focus withheld, since those were never
+   asked about. It once never fell
    through to a leaf outside the epic, and since routing is deterministic a
    checkout whose epic held only blocked work was answered the same way on
    every `next` until its claim expired — trapped in an epic with nothing to
@@ -339,8 +343,9 @@ step, so each step below says only which lanes it looks in:
    what it is, so the commitment is visible before it is made rather than
    discovered after. Reached directly, with no detour through steps 1–3, by a
    checkout that holds no live claims at all — unfocus is the zero state, not
-   a hop through the earlier steps — and past an exhausted epic by step 3. An active `focus` label narrows this
-   pool — and only this pool — to the focused goal's unfinished prerequisite
+   a hop through the earlier steps — and past an exhausted epic by step 3.
+   An active `focus` label narrows this pool — and only this pool — to the
+   focused goal's unfinished prerequisite
    chain, with `lit next --all` or removing the label as the escapes. Steps
    1–3 never read it, so a lane this checkout already holds is served whether
    or not it sits on the path: focus decides where a fresh session goes, not

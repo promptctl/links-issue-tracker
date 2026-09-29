@@ -523,7 +523,7 @@ func TestRenderNextOutcomeTerminalOutcomesKeepTheirType(t *testing.T) {
 			name:       "exhausted",
 			outcome:    Exhausted{Epics: []string{"links-epic-abcd"}},
 			wantReason: "scope_exhausted",
-			wantAct:    "lit next --all",
+			wantAct:    "finish or hand off what you already hold",
 		},
 		{
 			name:       "no work",

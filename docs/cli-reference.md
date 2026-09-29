@@ -187,9 +187,12 @@ to confirm the takeover or requires `--take` when there is no terminal to ask. A
 checkout whose epic has open work it cannot reach is offered first a ready
 dependency outside the epic that gates it. Failing that, it is served the top
 ready ticket from the global pool, printed beneath a line naming what blocks the
-epic and both ways on: file the ticket that unblocks it under the epic
-(`lit new --parent <epic> --top`), or start the ticket served. Only when nothing
-outside the epic is ready either does `next` exit with that diagnostic alone. A
+epic and the ways on: when something blocks it, file the ticket that unblocks it
+under the epic (`lit new --parent <epic> --top`, printed with the epic's id) and
+move the block onto that ticket with `lit dep`; or start the ticket served. Only
+when nothing outside the epic is ready either does `next` exit with that
+diagnostic alone, and under a focus label it then names the rows outside the
+epic that the focus withheld. A
 checkout holding no claims of its own starts straight at the global pool.
 See design-docs/work-claims.md for the full precedence.
 
