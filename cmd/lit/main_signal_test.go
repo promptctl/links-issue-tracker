@@ -102,12 +102,13 @@ func TestSIGTERMDuringWedgedSyncExitsCleanly(t *testing.T) {
 	sigtermReceiveWorker(t, ws, pid, 8*time.Second) // comfortably under the receive's 15s deadline
 
 	// The receive's one recorded failure is the cancellation reaching its clone
-	// of the store. A worker that was never at the clone, or one that ignored
-	// the cancel and ended when the commit lock's own wait gave up — also on
-	// the clean path, end line and all — records something else.
+	// of the store while it waited on the seized lock — the cut wait names the
+	// holder after the cancel. A worker that was never at the clone, or one
+	// that ignored the cancel and ended when the commit lock's own wait gave up
+	// — also on the clean path, end line and all — records something else.
 	reasons := receiveTraceReasons(t, ws)
 	if len(reasons) != 1 || !strings.Contains(reasons[0], "clone") ||
-		!strings.HasSuffix(reasons[0], context.Canceled.Error()) {
+		!strings.Contains(reasons[0], context.Canceled.Error()+" waiting for ") {
 		t.Fatalf("want one receive trace, the clone take cancelled; got %q", reasons)
 	}
 

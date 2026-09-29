@@ -3,8 +3,10 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -366,5 +368,49 @@ func TestRecordPushedHeadCutsAtTheHoldBudget(t *testing.T) {
 	_, err = RecordPushedHead(ctx, doltRoot, "origin", "master", head, nil)
 	if !errors.Is(err, ErrMirrorHoldCut) {
 		t.Fatalf("RecordPushedHead() under a zero hold budget error = %v, want ErrMirrorHoldCut", err)
+	}
+}
+
+// TestRecordPushedHeadCutInTheCommitLockWaitNamesTheHolder pins what a cut
+// says when the budget ran out waiting on a live holder: the commit-lock wait
+// runs inside the hold (Dolt's LOCK is already taken), so the budget cuts it,
+// and the cut names the holder it was waiting on instead of reading as a
+// write that stopped making progress.
+func TestRecordPushedHeadCutInTheCommitLockWaitNamesTheHolder(t *testing.T) {
+	// serial: no t.Parallel — MirrorHoldBudget is a package variable.
+	ctx := context.Background()
+	doltRoot := migratedDoltDir(t)
+	st, err := Open(ctx, doltRoot, "ws")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	var head string
+	if err := st.db.QueryRowContext(ctx, `SELECT commit_hash FROM dolt_log() LIMIT 1`).Scan(&head); err != nil {
+		t.Fatalf("read head: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	release, err := LockCommitPath(ctx, doltRoot)
+	if err != nil {
+		t.Fatalf("LockCommitPath() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := release(); err != nil {
+			t.Errorf("release commit lock: %v", err)
+		}
+	})
+	previous := MirrorHoldBudget
+	MirrorHoldBudget = 300 * time.Millisecond
+	t.Cleanup(func() { MirrorHoldBudget = previous })
+	_, err = RecordPushedHead(ctx, doltRoot, "origin", "master", head, nil)
+	if !errors.Is(err, ErrMirrorHoldCut) {
+		t.Fatalf("RecordPushedHead() against a held commit lock error = %v, want ErrMirrorHoldCut", err)
+	}
+	if errors.Is(err, ErrWorkspaceBusy) {
+		t.Fatalf("RecordPushedHead() cut by its budget reports ErrWorkspaceBusy, a contention outcome its wait never reached: %v", err)
+	}
+	if want := fmt.Sprintf("held by pid %d", os.Getpid()); !strings.Contains(err.Error(), want) {
+		t.Fatalf("RecordPushedHead() cut in the commit-lock wait = %v, want the holder named (%q)", err, want)
 	}
 }

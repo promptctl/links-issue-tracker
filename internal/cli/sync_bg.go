@@ -496,7 +496,12 @@ func (p pushedHead) landed() bool { return p.head != "" }
 // is released (`hold released step=clone|record elapsed=`), and one at cycle
 // end carrying every phase's cost — the detached worker's stdout is
 // mirror.log, and those lines are the durable record that the contract
-// "every hold under one second" is checked against in the field.
+// "every hold under one second" is checked against in the field. push= is
+// the clone session end to end — the open and the push, which the push
+// deadline bounds, and the close after them, which it does not — so a cut
+// reads against it directly; open= is the open's share of it, so a push=
+// that grew is attributable to the open or to the network from the log
+// alone. [LAW:nothing-unseen]
 // Only a cycle that holds the single-flight lock writes: a mirror that loses
 // the race stays silent, as the quiescence property requires.
 func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnswering func()) (attempted bool) {
@@ -517,8 +522,10 @@ func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnsw
 	defer cancel()
 	var onceErr error
 	var landed pushedHead
+	var openElapsed time.Duration
 	attempted = func() bool {
 		session, closeStore, err := openSyncSessionAt(pushCtx, clone.databasePath, ws.WorkspaceID)
+		openElapsed = time.Since(pushStart)
 		if err != nil {
 			_ = completeMirrorWithoutAttempt(ctx, ws, fmt.Errorf("open sync store on the clone: %w", err), stopAnswering)
 			return false
@@ -578,9 +585,9 @@ func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnsw
 		}
 		fmt.Fprintf(log, "%s mirror hold released step=record elapsed=%s ref=%s\n", time.Now().UTC().Format(time.RFC3339), recordHeld.Round(time.Millisecond), record)
 	}
-	fmt.Fprintf(log, "%s mirror cycle end attempted=%t push_deadline_cut=%t hold=%s record=%s ref=%s push=%s elapsed=%s\n",
+	fmt.Fprintf(log, "%s mirror cycle end attempted=%t push_deadline_cut=%t hold=%s record=%s ref=%s open=%s push=%s elapsed=%s\n",
 		time.Now().UTC().Format(time.RFC3339), attempted, deadlineCut,
-		clone.held.Round(time.Millisecond), recordHeld.Round(time.Millisecond), record, pushElapsed.Round(time.Millisecond), time.Since(start).Round(time.Millisecond))
+		clone.held.Round(time.Millisecond), recordHeld.Round(time.Millisecond), record, openElapsed.Round(time.Millisecond), pushElapsed.Round(time.Millisecond), time.Since(start).Round(time.Millisecond))
 	return attempted
 }
 
