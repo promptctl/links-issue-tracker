@@ -534,8 +534,14 @@ func TestRenderEpicContextCrossEpicLiveSidesRender(t *testing.T) {
 
 func TestRenderEpicContextEdgeToOwnEpicNotCrossEpic(t *testing.T) {
 	f := newEpicFixture(t, "Epic self edge", "deps")
-	child := f.addChild("Inside")
-	f.block(child, f.epicID) // child depends on its own epic: inside the boundary
+	// The store refuses a blocks edge between an issue and its own epic, so the
+	// edge is written first and the issue moved in after — the way a workspace
+	// still reaches this shape.
+	child := f.outsider("Inside")
+	f.block(child, f.epicID)
+	if _, err := f.ap.Store.SetParent(f.ctx, storage.SetParentInput{ChildID: child, ParentID: f.epicID, CreatedBy: "test"}); err != nil {
+		t.Fatalf("SetParent(%s under %s) error = %v", child, f.epicID, err)
+	}
 
 	out := f.render("")
 	if strings.Contains(out, "Cross-epic dependencies") {

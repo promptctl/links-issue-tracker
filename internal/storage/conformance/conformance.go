@@ -195,6 +195,7 @@ var cases = []engineCase{
 	{"relations_batch_buckets_edges", relationsBatchBucketsEdges},
 	{"parent_wiring", parentWiring},
 	{"the_hierarchy_stays_a_tree", theHierarchyStaysATree},
+	{"blocks_never_runs_along_the_hierarchy", blocksNeverRunsAlongTheHierarchy},
 	{"topics_derive_from_issues", topicsDeriveFromIssues},
 	{"export_carries_whole_store", exportCarriesWholeStore},
 	{"bulk_apply_creates_and_updates", bulkApplyCreatesAndUpdates},
@@ -1949,6 +1950,95 @@ func theHierarchyStaysATree(t *testing.T, ctx context.Context, st storage.Store,
 	}
 	assertIssueIDs(t, "children of the sibling epic", mustChildren(t, ctx, st, sibling.ID), []string{leaf.ID})
 	assertIssueIDs(t, "children of the mid epic after the move", mustChildren(t, ctx, st, mid.ID), nil)
+}
+
+// blocksNeverRunsAlongTheHierarchy pins that a blocks edge between an issue and
+// any of its ancestors is refused at every depth and in both directions, and on
+// each write path that can create one: AddRelation and both import formats.
+// Depth is the point — a check that compared nearest epics refused the
+// direct-child case and let everything two levels down through.
+func blocksNeverRunsAlongTheHierarchy(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	root := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "root epic", Topic: "core", IssueType: model.TypeEpic})
+	mid := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "mid epic", Topic: "core", IssueType: model.TypeEpic, ParentID: root.ID})
+	leaf := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "leaf", Topic: "core", ParentID: mid.ID})
+	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "direct child", Topic: "core", ParentID: root.ID})
+
+	refusedPairs := []struct {
+		what                  string
+		dependent, dependency string
+	}{
+		{"a leaf blocking its grandparent epic", root.ID, leaf.ID},
+		{"a grandparent epic blocking its leaf", leaf.ID, root.ID},
+		{"a sub-epic blocking its parent epic", root.ID, mid.ID},
+		{"an epic blocking its sub-epic", mid.ID, root.ID},
+		{"a leaf blocking its parent epic", mid.ID, leaf.ID},
+		{"a direct child blocking its epic", root.ID, child.ID},
+	}
+	for _, r := range refusedPairs {
+		_, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: r.dependent, DstID: r.dependency, Type: model.RelBlocks})
+		assertHierarchyBlocksRefused(t, err, "AddRelation("+r.what+")")
+	}
+	for _, id := range []string{root.ID, mid.ID, leaf.ID, child.ID} {
+		edges, err := st.ListRelationsForIssue(ctx, id, model.RelBlocks)
+		if err != nil {
+			t.Fatalf("ListRelationsForIssue(%s) error = %v", id, err)
+		}
+		if len(edges) != 0 {
+			t.Errorf("blocks edges at %s after the refusals = %+v, want none", id, edges)
+		}
+	}
+
+	// Branches of one tree are not ancestry: the direct child and the leaf
+	// share an ancestor but neither sits above the other.
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: leaf.ID, DstID: child.ID, Type: model.RelBlocks}); err != nil {
+		t.Fatalf("AddRelation(leaf depends on a cousin) error = %v; neither is above the other", err)
+	}
+
+	// Only an epic contains: a parent that is not an epic ends the climb, as it
+	// ends readiness's, so nothing below it is inside the epic above it either.
+	holder := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "task parent", Topic: "core", ParentID: root.ID})
+	held := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "task child", Topic: "core", ParentID: holder.ID})
+	accepted := []struct {
+		what                  string
+		dependent, dependency string
+	}{
+		{"a task parent blocking its child", held.ID, holder.ID},
+		{"a task child blocking its parent", holder.ID, held.ID},
+		{"an epic blocking an issue under its task child", held.ID, root.ID},
+	}
+	for _, a := range accepted {
+		if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: a.dependent, DstID: a.dependency, Type: model.RelBlocks}); err != nil {
+			t.Errorf("AddRelation(%s) error = %v; no epic contains both", a.what, err)
+		}
+		if err := st.RemoveRelation(ctx, a.dependent, a.dependency, model.RelBlocks); err != nil {
+			t.Fatalf("RemoveRelation(%s) error = %v", a.what, err)
+		}
+	}
+
+	_, err := st.ImportTree(ctx, prefix, []storage.ImportTreeSpec{
+		{LocalID: "e", Title: "imported epic", IssueType: "epic", Topic: "core"},
+		{LocalID: "s", Title: "imported sub-epic", IssueType: "epic", Topic: "core", Parent: "e"},
+		{LocalID: "l", Title: "imported leaf", IssueType: "task", Topic: "core", Parent: "s", DependsOn: []string{"e"}},
+	})
+	assertHierarchyBlocksRefused(t, err, "ImportTree(a leaf depending on its grandparent epic)")
+
+	title, topic, issueType := "bulk leaf", "core", "task"
+	_, err = st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
+		{Title: &title, Topic: &topic, IssueType: &issueType, Parent: mid.ID, DependsOn: []string{root.ID}},
+	})
+	assertHierarchyBlocksRefused(t, err, "BulkApply(a leaf depending on its grandparent epic)")
+}
+
+func assertHierarchyBlocksRefused(t *testing.T, err error, what string) {
+	t.Helper()
+	if err == nil {
+		t.Errorf("%s succeeded; want the same-epic refusal", what)
+		return
+	}
+	assertRefused(t, err, what)
+	if !strings.Contains(err.Error(), storage.SameEpicBlocksRejectionMessage) {
+		t.Errorf("%s error = %q, want it to carry %q", what, err, storage.SameEpicBlocksRejectionMessage)
+	}
 }
 
 func topicsDeriveFromIssues(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {

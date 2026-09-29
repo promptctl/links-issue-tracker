@@ -170,6 +170,15 @@ func TestDepAddRejectsSameEpicBlocks(t *testing.T) {
 		t.Fatalf("CreateIssue(siblingB) error = %v", err)
 	}
 
+	subEpic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Sub-epic", Topic: "dep", IssueType: "epic", Priority: 0, ParentID: epic.ID})
+	if err != nil {
+		t.Fatalf("CreateIssue(subEpic) error = %v", err)
+	}
+	nestedLeaf, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Nested leaf", Topic: "dep", IssueType: "task", Priority: 0, ParentID: subEpic.ID})
+	if err != nil {
+		t.Fatalf("CreateIssue(nestedLeaf) error = %v", err)
+	}
+
 	cases := []struct {
 		name string
 		args []string
@@ -177,6 +186,10 @@ func TestDepAddRejectsSameEpicBlocks(t *testing.T) {
 		{name: "sibling named flags", args: []string{"add", "--type", "blocks", "--from", siblingA.ID, "--to", siblingB.ID}},
 		{name: "epic blocks its own child", args: []string{"add", "--type", "blocks", "--from", epic.ID, "--to", siblingA.ID}},
 		{name: "epic blocked by its own child", args: []string{"add", "--type", "blocks", "--from", siblingA.ID, "--to", epic.ID}},
+		{name: "nested leaf blocks its outer epic", args: []string{"add", "--type", "blocks", "--from", nestedLeaf.ID, "--to", epic.ID}},
+		{name: "outer epic blocks its nested leaf", args: []string{"add", "--type", "blocks", "--from", epic.ID, "--to", nestedLeaf.ID}},
+		{name: "sub-epic blocks its parent epic", args: []string{"add", "--type", "blocks", "--from", subEpic.ID, "--to", epic.ID}},
+		{name: "epic blocks its sub-epic", args: []string{"add", "--type", "blocks", "--from", epic.ID, "--to", subEpic.ID}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -185,8 +198,8 @@ func TestDepAddRejectsSameEpicBlocks(t *testing.T) {
 			if err == nil {
 				t.Fatalf("dep add should reject same-epic block, got nil; stdout=%q", stdout.String())
 			}
-			if err.Error() != sameEpicBlocksRejectionMessage {
-				t.Fatalf("error = %q, want %q", err.Error(), sameEpicBlocksRejectionMessage)
+			if err.Error() != storage.SameEpicBlocksRejectionMessage {
+				t.Fatalf("error = %q, want %q", err.Error(), storage.SameEpicBlocksRejectionMessage)
 			}
 			if code := ExitCode(err); code != ExitValidation {
 				t.Fatalf("ExitCode(err) = %d, want %d (ExitValidation)", code, ExitValidation)
