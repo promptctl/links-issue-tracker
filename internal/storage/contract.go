@@ -25,8 +25,9 @@ type IssueReader interface {
 
 	// ListIssues returns the issues the filter selects, ordered by SortBy and
 	// then — always, as the last key — by id ascending. With no SortBy the
-	// order is rank ascending, ties broken by id: the canonical ordering, so an
-	// unsorted listing is reproducible rather than merely arbitrary.
+	// order is rank ascending — tree order, see [RankAncestry] — ties broken by
+	// id: the canonical ordering, so an unsorted listing is reproducible rather
+	// than merely arbitrary.
 	//
 	// The trailing id key is contract, not an engine's convenience. Without it
 	// a sort on any field with duplicate values (two issues sharing a title, a

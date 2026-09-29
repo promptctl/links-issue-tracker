@@ -3,6 +3,8 @@ package storage
 import (
 	"fmt"
 	"slices"
+
+	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 // RankMove reports the pair a relative rank operation actually applied to
@@ -19,9 +21,9 @@ type RankMove struct {
 // Frame names the keyspace an issue's rank is read within: the id of the
 // container holding it, or TopLevel for an issue no container holds.
 //
-// Rank meaning is frame-local — the backlog sorts by (container's rank, own
-// rank), so an issue's rank orders it among its frame-mates and against
-// nothing else. That makes the frame the scope every neighbor lookup has to be
+// Rank meaning is frame-local — listings sort in tree order (see
+// [RankAncestry]), so an issue's rank orders it among its frame-mates and
+// against nothing else. That makes the frame the scope every neighbor lookup has to be
 // taken in: a rank computed against a neighbor from another frame is a
 // midpoint between two values no view ever compares, and it lands the issue in
 // a keyspace it shares with issues it does not order.
@@ -34,6 +36,69 @@ type Frame string
 // serve children and top-level issues alike, instead of one query shape for
 // each. [LAW:dataflow-not-control-flow]
 const TopLevel Frame = ""
+
+// ParentLink is one parent-child edge whose parent frames its child — the
+// parent is not deleted — together with the key that parent holds in its own
+// frame. It is what an engine hands [NewRankAncestry]; which edges qualify is
+// the same rule each engine's frame lookup applies.
+type ParentLink struct {
+	ChildID    string
+	ParentID   string
+	ParentRank string
+}
+
+// RankAncestry holds, for every issue a container frames, the keys of its
+// containers outermost first. An issue absent from it sits at the top level.
+//
+// It exists because a key is only comparable within its frame, and a listing
+// still has to put every issue in one sequence. The sequence is tree order:
+// compare the containers' keys from the outermost down, then the issues' own,
+// and when one issue's keys run out first, it comes first. A container's keys
+// are a prefix of every descendant's, so it lists before them and its subtree
+// lists together, whatever keys other frames hold in between. That leaves no
+// cross-frame arrangement of keys that a listing can show, so no rank verb has
+// to keep one. [LAW:types-are-the-program]
+type RankAncestry map[string][]string
+
+// NewRankAncestry builds the ancestry from an engine's framing edges.
+//
+// An issue with two parents, or a parent chain that loops, has no one place in
+// tree order, so both are refused by name rather than listed in an order that
+// guessed. [LAW:no-silent-failure]
+func NewRankAncestry(links []ParentLink) (RankAncestry, error) {
+	parentOf := make(map[string]ParentLink, len(links))
+	for _, link := range links {
+		if prior, dup := parentOf[link.ChildID]; dup {
+			return nil, fmt.Errorf("%s has two parents, %s and %s, so it has no one place in rank order; run 'lit parent clear %s', then set the parent it belongs under", link.ChildID, prior.ParentID, link.ParentID, link.ChildID)
+		}
+		parentOf[link.ChildID] = link
+	}
+	ancestry := make(RankAncestry, len(parentOf))
+	for child := range parentOf {
+		var keys []string
+		visited := map[string]struct{}{child: {}}
+		for link, ok := parentOf[child]; ok; link, ok = parentOf[link.ParentID] {
+			if _, looped := visited[link.ParentID]; looped {
+				return nil, fmt.Errorf("the parent chain of %s loops back to %s, so it has no place in rank order; 'lit doctor' names the cycle, and 'lit parent clear' on one member breaks it", child, link.ParentID)
+			}
+			visited[link.ParentID] = struct{}{}
+			keys = append(keys, link.ParentRank)
+		}
+		slices.Reverse(keys)
+		ancestry[child] = keys
+	}
+	return ancestry, nil
+}
+
+// Compare orders two issues by tree order; it is what the "rank" sort key
+// means in every engine.
+func (a RankAncestry) Compare(x, y model.Issue) int {
+	return slices.Compare(a.path(x), a.path(y))
+}
+
+func (a RankAncestry) path(issue model.Issue) []string {
+	return append(slices.Clip(a[issue.ID]), issue.Rank)
+}
 
 // RankEnd reports what a rank-to-edge verb did.
 //

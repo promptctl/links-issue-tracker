@@ -961,32 +961,6 @@ func enrichWithParentEpic(rows []annotation.AnnotatedIssue, details map[string]s
 	}
 }
 
-// sortByCompositeRank orders rows by (effective_epic_rank, own_rank) so all
-// leaves under a higher-ranked epic appear before any leaves under a
-// lower-ranked epic — staying in one epic's context before moving to the
-// next. A leaf with no parent, or a parent that is not an epic, uses its
-// own rank as its epic-position, which interleaves it with epic groups at
-// the correct position.
-// [LAW:dataflow-not-control-flow] The sort key is a pure function of each
-// row and the shared details map; variability lives in the values, not in
-// whether some rows skip the sort.
-func sortByCompositeRank(rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations) {
-	epicRank := func(issue model.Issue) string {
-		parent := details[issue.ID].Parent
-		if parent != nil && parent.IsContainer() {
-			return parent.Rank
-		}
-		return issue.Rank
-	}
-	sort.SliceStable(rows, func(i, j int) bool {
-		iEpic, jEpic := epicRank(rows[i].Issue), epicRank(rows[j].Issue)
-		if iEpic != jEpic {
-			return iEpic < jEpic
-		}
-		return rows[i].Rank < rows[j].Rank
-	})
-}
-
 // sortByPriority places urgent issues before normal issues, preserving the
 // existing ordering within each priority group via stable sort.
 // [LAW:dataflow-not-control-flow] Every issue flows through the same comparator;

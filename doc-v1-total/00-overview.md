@@ -19,7 +19,7 @@ A repository joins lit with `lit init`, which — before creating anything — c
 From there the agent loop is:
 
 1. **`lit backlog`** — the ranked queue, annotated per row with why it is or isn't workable.
-2. **`lit next`** — routes to one ticket. "Workable" is a computed predicate: open, a leaf, no unmet required fields, no open dependencies, no earlier open sibling in the same lane, not labeled `needs-design` or `external`. Ordering is composite rank, then priority, then a `focus` label's prerequisite closure.
+2. **`lit next`** — routes to one ticket. "Workable" is a computed predicate: open, a leaf, no unmet required fields, no open dependencies, no earlier open sibling in the same lane, not labeled `needs-design` or `external`. Ordering is rank in tree order (an epic's leaves at the epic's place), then priority, then a `focus` label's prerequisite closure.
 3. **`lit start <id>`** — takes the work. If another checkout actively holds the ticket's lane, start refuses without an explicit `--take` (or an interactive confirmation).
 4. Work happens in the repo; `lit update`, `lit comment`, `lit dep`, `lit label` record progress.
 5. **`lit done`** (success) or **`lit close --resolution …`** (any other ending); `lit followup` files a successor parented to what just closed.

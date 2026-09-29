@@ -555,12 +555,10 @@ and `DependencyLabels()` the same list with ` (via epic)` appended to each
 inherited one, which the backlog and `lit next` print on their `depends on:`
 lines (`readiness.go`).
 
-**Step 5 — canonical ordering**, applied in this sequence (`cli.go`):
-1. `sortByCompositeRank(rows, details)` — stable sort by
-   (effective epic rank, own rank); a leaf whose parent is a container uses the
-   parent's rank as its epic-position, otherwise its own rank
-   (`ready_state.go`).
-2. `sortByPriority` — stable, urgent (higher `Priority`) first
+**Step 5 — canonical ordering** (`cli.go`): the rows arrive in the listing's
+default `rank` order — tree order, so every epic's leaves sit together at the
+epic's own place — and one sort is applied:
+1. `sortByPriority` — stable, urgent (higher `Priority`) first
    (`ready_state.go`).
 Then `enrichWithParentEpic` sets `ParentEpic{ID,Title}` on rows whose parent is a
 container (`ready_state.go`). Focus does not reorder rows: the `FocusPath`

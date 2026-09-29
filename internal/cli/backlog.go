@@ -246,8 +246,8 @@ func claimStatement(claim, standing string) string {
 // epic says so out loud. Leave the no-epic run silent and that one blank means
 // both "continues the epic above" and "has none" — an absence shaped exactly
 // like an answer — and a standalone ticket that happens to sort under an
-// epic's last child reads as part of it. sortByCompositeRank interleaves them
-// by rank, so that adjacency is routine, and in a real backlog most rows have
+// epic's last child reads as part of it. Rank order interleaves them with the
+// epics, so that adjacency is routine, and in a real backlog most rows have
 // no epic at all.
 // [FRAMING:representation]
 //

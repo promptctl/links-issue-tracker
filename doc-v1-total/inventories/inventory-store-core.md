@@ -572,9 +572,9 @@ Clauses are joined with `" AND "` (`store.go`).
 
 **Status and resolution are NOT filtered in SQL.** `parseStatusFilter(filter.Statuses)` (`store.go`, defined `store.go`) only maps each raw value through `model.DefaultOpen(string(raw))` and never errors; the actual filtering happens post-hydration.
 
-Ordering is not SQL. `storage.IssueOrdering(filter.SortBy, issueSortKeys)` (`internal/storage/ordering.go`, called from `store.go`) is parsed before the query, so an unsupported sort field (`model.ValidationError{Message: fmt.Sprintf("unsupported sort field %q", spec.Field)}`) costs no query; it yields a comparator over hydrated issues:
+Ordering is not SQL. `loadRankAncestry(ctx, s.db)` (`ranking.go`) runs first: `SELECT r.src_id, r.dst_id, p.item_rank FROM relations r JOIN issues p ON p.id = r.dst_id WHERE r.type = 'parent-child' AND p.deleted_at IS NULL ORDER BY r.src_id, r.dst_id` — `frameColumn`'s rule for every issue at once — scanned into `storage.ParentLink`s and handed to `storage.NewRankAncestry`, whose error is returned. Then `storage.IssueOrdering(filter.SortBy, issueSortKeys(ancestry))` (`internal/storage/ordering.go`, called from `store.go`) is parsed before the listing query, so an unsupported sort field (`model.ValidationError{Message: fmt.Sprintf("unsupported sort field %q", spec.Field)}`) costs only the ancestry read; it yields a comparator over hydrated issues:
 - no specs → `rank`;
-- sort keys (`issueSortKeys`, `store.go`): `id`, `title`, `status` (compares the derived `State()`), `priority`, `rank`, `type`, `topic`, `assignee`, `created_at`, `updated_at`;
+- sort keys (`issueSortKeys(ancestry)`, `store.go`): `id`, `title`, `status` (compares the derived `State()`), `priority`, `rank` (`ancestry.Compare` — tree order), `type`, `topic`, `assignee`, `created_at`, `updated_at`;
 - `Desc` negates a key's comparator;
 - ascending `id` is always the final tiebreaker.
 
