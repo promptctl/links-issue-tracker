@@ -583,10 +583,9 @@ func (o Exhausted) why() string {
 }
 
 // scope names the stopped scope and the route that stays in it — file the
-// ticket that unblocks it — answered
-// together because both turn on one fact: an epic can take the unblocking
-// ticket as a child, ranked ahead of the work it unblocks, and a lane with no
-// epic over it has nothing to parent one under.
+// ticket that unblocks it — answered together because both turn on one fact:
+// an epic can take the unblocking ticket as a child, ranked ahead of the work
+// it unblocks, and a lane with no epic over it has nothing to parent one under.
 func (o Exhausted) scope() (name, stay string) {
 	if len(o.Epics) == 0 {
 		return "your claimed lane(s)", "file the ticket that unblocks it with `lit new`"
