@@ -546,8 +546,10 @@ type gatedDep struct {
 
 // heldByThemselves collects, in rank order, the rows in scope that routing
 // passed over for a reason about the row itself — a reserved label, a missing
-// field — each with the reachOf kind that says so. A row another checkout holds is that
-// checkout's work in progress, not held by itself, so its kind keeps it out.
+// field — each with the reachOf kind that says so. A row another checkout holds
+// reads reachHeldFresh and stays out, being that checkout's to move; one the
+// external label holds is the exception, as it is in reachOf, since no one's
+// work here moves it.
 // Blocked cannot carry these rows: it names dependencies from outside the
 // scope, and these are inside it.
 func heldByThemselves(rows []annotation.AnnotatedIssue, inScope func(annotation.AnnotatedIssue) bool, reachFor func(annotation.AnnotatedIssue) reachKind) []rowReach {
