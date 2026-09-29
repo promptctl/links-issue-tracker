@@ -245,7 +245,8 @@ several of these types gets the reason of the earliest one:
 22. `BulkFailureError` → `bulk_partial_failure`
 23. `store.WorkspaceWriteBlockedError` → `workspace_write_blocked` (it unwraps
     to `store.ErrTransientGCContention`; this step catches it first)
-24. `errors.Is(err, store.ErrWorkspaceBusy)` → `workspace_busy`
+24. `errors.Is(err, store.ErrWorkspaceBusy)` or
+    `errors.Is(err, workspace.ErrConfigBusy)` → `workspace_busy`
 25. `errors.Is(err, store.ErrTransientGCContention)` → `transient_gc_contention`
 26. anything else → `command_failed`
 

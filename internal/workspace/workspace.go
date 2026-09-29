@@ -678,7 +678,17 @@ func ReadConfig(path string) (Config, error) {
 	return cfg, nil
 }
 
-func loadOrCreateConfig(rootDir string, path string, requested PrefixRequest) (Config, PrefixState, error) {
+func loadOrCreateConfig(rootDir string, path string, requested PrefixRequest) (cfg Config, prefix PrefixState, err error) {
+	err = withConfigLock(path, func() error {
+		cfg, prefix, err = settleConfig(rootDir, path, requested)
+		return err
+	})
+	return cfg, prefix, err
+}
+
+// settleConfig reads config.json, decides what it should hold, and writes that
+// back. The caller holds the config lock across all three.
+func settleConfig(rootDir string, path string, requested PrefixRequest) (Config, PrefixState, error) {
 	cfg, err := ReadConfig(path)
 	if err == nil {
 		prefix, err := resolveIssuePrefix(rootDir, path, cfg.IssuePrefix, requested)
@@ -765,7 +775,15 @@ func writeConfig(path string, cfg Config) (Config, error) {
 // [LAW:single-enforcer] All in-place edits to the workspace config go through
 // this single read-modify-write boundary so partial writes can't desync
 // callers from on-disk state.
-func UpdateConfig(path string, mutate func(Config) (Config, error)) (Config, error) {
+func UpdateConfig(path string, mutate func(Config) (Config, error)) (updated Config, err error) {
+	err = withConfigLock(path, func() error {
+		updated, err = updateConfigLocked(path, mutate)
+		return err
+	})
+	return updated, err
+}
+
+func updateConfigLocked(path string, mutate func(Config) (Config, error)) (Config, error) {
 	payload, err := os.ReadFile(path)
 	if err != nil {
 		return Config{}, fmt.Errorf("read workspace config: %w", err)

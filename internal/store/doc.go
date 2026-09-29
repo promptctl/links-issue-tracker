@@ -1,6 +1,6 @@
 // Package store owns lit's workspace state in an embedded Dolt database:
 // opening and closing it, mutating it under locks, and minting every
-// lit-owned lock path.
+// lit-owned lock path but the config lock (see below).
 //
 // # The lock discipline
 //
@@ -115,6 +115,14 @@
 // else. No wait edge exists here at all: a reader's liveness probe passes
 // maxAttempts 1, and a publisher holds only a private name no reader can
 // reach, so neither ever waits on a record's flock. See lock_holder.go.
+//
+// The config lock sits outside the slots, and outside this package: the
+// workspace package mints it beside config.json and holds it exclusively
+// across each read-decide-write of that file, because workspace resolution
+// runs before any store exists and sits below this package. It is a leaf —
+// its holder reads and writes config.json and acquires nothing else — so any
+// holder of any slot may take it, and no wait edge leaves it. See
+// workspace.withConfigLock.
 //
 // ONE HOME. A lock file sits beside the dolt directory — at
 // dirname(databasePath), the position every lit-minted *LockPath helper in
