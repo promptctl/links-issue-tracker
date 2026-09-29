@@ -655,7 +655,7 @@ else ready.
 | `--sort` | string | `""` | `storage.ParseSortSpecs`, applied when non-blank after trim (`cli.go`) |
 | `--columns` | string | `""` | CSV of column names, lowercased, via `parseColumnSelection` (`cli.go`, `columns.go`) |
 | `--format` | string | `lines` | `lines` or `table` via `parseListFormat` (`cli.go`) |
-| `--limit` | int | `0` | `filter.Limit`; negative → `limit must be non-negative, got %d` → exit 3 (`cli.go`, `query.go`) |
+| `--limit` | int | `0` | `filter.Limit`, read by `query.ParseLimit` before the query merge; a negative value → `limit must be non-negative, got %d` wrapped `parse --limit: %w` → exit 3 (`cli.go`, `query.go`) |
 
 - Flag help for `--query` (verbatim): "Query language: status:closed,in_progress
   resolution:wontfix type:task has:comments sort:rank:asc limit:5 archived deleted
@@ -695,8 +695,8 @@ else ready.
   search term (`query.go`).
 - `updated` terms (`applyTimeTerm`, `query.go`; `splitComparator`,
   `query.go`): the comparator is one of `>=`, `<=`, `>`, `<`, `:`; a missing
-  comparator, empty value, or a value `query.ParseTimestamp` refuses
-  (`timestamp must be RFC3339, got %q`) is wrapped `parse updated term %q`. `>=` and
+  comparator or empty value is wrapped `parse updated term %q`; a value
+  `query.ParseTimestamp` refuses → `timestamp must be RFC3339, got %q`. `>=` and
   `>` both set updated-after; `<=` and `<` both set updated-before; `:` with a
   valid timestamp → `updated supports only >=, >, <=, <`.
 - `query.Merge(filter, parsed.Filter)` (`query.go`): statuses, types,
@@ -705,10 +705,10 @@ else ready.
   plain append; `IncludeArchived`/`IncludeDeleted` OR; `Limit` overwritten when the
   query limit > 0. Conflicting `has-comments` → `conflicting has-comments filters`;
   conflicting time bounds → `conflicting updated-after filters <t1> and <t2>`
-  (`query.go`). `Parse` and `Merge` both end with `validateFilter`: a negative
-  limit → `limit must be non-negative, got %d`; `UpdatedAfter > UpdatedBefore` →
+  (`query.go`). `Merge` ends with `validateFilter`: `UpdatedAfter > UpdatedBefore` →
   `updated-after cannot be greater than updated-before` (`query.go`). `Merge`
-  returns each refusal as a `model.ValidationError`, so each exits 3.
+  returns each refusal as a `model.ValidationError`, so each exits 3, and `lit ls`
+  runs it even with no `--query`.
 
 **Default active-work filter** (`cli.go`): if after all merging both
 `filter.Statuses` and `filter.Resolutions` are empty, statuses default to
@@ -1189,7 +1189,7 @@ line for `done` and `close`, each group omitted when empty:
 | `--type` | string | `""` | "Filter by issue type" |
 | `--status` | string | `""` | "Filter by status: open\|in_progress" |
 | `--labels` | string | `""` | "Comma-separated labels all of which must match" |
-| `--limit` | int | `0` | "Limit results" — applied **after** ordering (`workable.go`) |
+| `--limit` | int | `0` | "Limit results" — applied **after** ordering; read by `query.ParseLimit`, so a negative value → `parse --limit: %w` → exit 3 (`workable.go`) |
 | `--columns` | string | `""` | "Comma-separated output columns" |
 
 - Refusal: any positional argument → `UsageError{view.usage()}` (`workable.go`).
