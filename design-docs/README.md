@@ -47,3 +47,7 @@ see the [README](../README.md) and the [docs](../docs/) site.
   four roles and the wall between them, what may cross each boundary, the
   measured isolation mechanism, and the contamination rule. *Accepted design,
   normative for the licensing epic.*
+- **[MINIMAL-LIT-SKETCH-2026-09-29.md](MINIMAL-LIT-SKETCH-2026-09-29.md)** — the
+  core value proposition, the smallest lit that still delivers it, and every
+  other feature sorted by why it can go, measured before the event-store
+  campaign. *Snapshot.*
