@@ -140,6 +140,31 @@ func commandErrorReason(err error) string {
 	if errors.Is(err, store.ErrWorkspaceNotInitialized) {
 		return "workspace_not_initialized"
 	}
+	// A workspace whose schema is ahead of this binary. Terminal for the binary
+	// that raised it — no rerun changes which lit is installed — so it must not
+	// reach the default's retry advice. Not validation_refused: the command is
+	// not what is wrong, so "adjust the command" would be false advice.
+	// [LAW:one-type-per-behavior]
+	var schemaAhead *store.UnsupportedSchemaVersionError
+	if errors.As(err, &schemaAhead) {
+		return "workspace_schema_ahead"
+	}
+	// Version traversal refusing a target: upgrade to one behind the workspace,
+	// downgrade to one ahead of it or below the baseline. The same --to repeats
+	// the answer on every run, and each message names the command or target
+	// that does the job, which is validation_refused's "adjust the command".
+	var upgradeBehind *UpgradeTargetBehindError
+	if errors.As(err, &upgradeBehind) {
+		return "validation_refused"
+	}
+	var downgradeAhead *store.DowngradeTargetAheadError
+	if errors.As(err, &downgradeAhead) {
+		return "validation_refused"
+	}
+	var belowBaseline *store.DowngradeBelowBaselineError
+	if errors.As(err, &belowBaseline) {
+		return "validation_refused"
+	}
 	// lit could not settle on an issue prefix, and the three ways it can fail
 	// split by the ACT that clears them, which is what a reason names.
 	//
@@ -309,6 +334,14 @@ func commandErrorRemediation(reason string) string {
 		// acts on, so a convenient overstatement here is a defect.
 		// [LAW:no-silent-failure]
 		return "Do not retry unchanged — this repository has no lit workspace, and retrying this command cannot create one. Run `lit init` here to create it, or change to a directory that already has one."
+	case "workspace_schema_ahead":
+		// Action-only: the message names the supported path and, when a
+		// snapshot exists, the lossy rollback, so this line defers to it rather
+		// than restating either. [LAW:one-source-of-truth] No `lit doctor`, and
+		// no agent-instructions envelope: installing a different lit changes
+		// the machine, not just this workspace, which is not a step to take
+		// without asking.
+		return "Do not retry unchanged — this lit is older than the workspace's schema, and rerunning the command with the same binary repeats this refusal. Take the supported path the message above names."
 	case "bulk_partial_failure":
 		return "Some items failed; see the per-item errors above. Re-run the command for only the failed IDs after addressing each error."
 	default:

@@ -148,6 +148,26 @@ func ExitCode(err error) int {
 	if errors.Is(err, store.ErrWorkspaceNotInitialized) {
 		return ExitValidation
 	}
+	// A binary too old for the workspace and a version traversal refusing its
+	// target are self-fixable preconditions no retry changes, not "lit is
+	// broken" — the code an invalid `--to` already exits with. Which act each
+	// asks for is carried by the reason. [LAW:no-mode-explosion]
+	var schemaAhead *store.UnsupportedSchemaVersionError
+	if errors.As(err, &schemaAhead) {
+		return ExitValidation
+	}
+	var upgradeBehind *UpgradeTargetBehindError
+	if errors.As(err, &upgradeBehind) {
+		return ExitValidation
+	}
+	var downgradeAhead *store.DowngradeTargetAheadError
+	if errors.As(err, &downgradeAhead) {
+		return ExitValidation
+	}
+	var belowBaseline *store.DowngradeBelowBaselineError
+	if errors.As(err, &belowBaseline) {
+		return ExitValidation
+	}
 	// Not ExitGeneric, which also means "lit is broken": a prefix lit cannot
 	// settle on is a self-fixable precondition, and under one code a script
 	// could only tell the two apart by parsing the English.
