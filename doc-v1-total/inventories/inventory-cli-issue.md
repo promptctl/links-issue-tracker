@@ -474,8 +474,10 @@ not `closed` (`cli.go`). Epics are therefore never workable rows.
    `"in_progress for <dur truncated to minute> with no update"`
    (`ready_state.go`; threshold constant `orphanedThreshold = 6 * time.Hour`
    at `ready_state.go`).
-5. `newNeedsDesignAnnotator()` — emits `NeedsDesign` for any issue carrying the
-   label `needs-design` (`ready_state.go`).
+5. `newBlockingLabelAnnotator()` — emits `NeedsDesign` for any issue carrying
+   the label `needs-design` and `External` for any carrying `external`, each
+   with the label as its message; one table, `blockingLabels`, pairs label and
+   kind (`ready_state.go`).
 6. `newFocusPathAnnotator(focusPaths)` — emits `FocusPath{Message: goalID}` for
    issues on a focused goal's prerequisite closure (`ready_state.go`).
 
@@ -510,7 +512,7 @@ each annotation is dispatched on its declared `ReadinessRole`:
 
 `IsReady() := len(blocking) == 0` (`readiness.go`). So an issue is **ready**
 iff it has no `MissingField`, no `OpenDependency`, no `InheritedDependency`, no
-`EarlierSiblingPending`, and no `NeedsDesign` annotation. `DependencyIDs()`
+`EarlierSiblingPending`, no `NeedsDesign`, and no `External` annotation. `DependencyIDs()`
 returns the details of the `OpenDependency` and `InheritedDependency` reasons,
 and `DependencyLabels()` the same list with ` (via epic)` appended to each
 inherited one, which the backlog and `lit next` print on their `depends on:`
@@ -858,7 +860,7 @@ lines|table") is built from the same map (`cli.go`, `output.go`).
   `[ready]`, otherwise `[blocked: <reason>[; <reason>…]]` over every blocking
   reason the annotation registry minted, phrased by `BlockingReason.Phrase`
   (`readiness.go`): `depends on <id>`, `earlier sibling <id> still open`,
-  `missing <field>`, `needs-design`.
+  `missing <field>`, `needs-design`, `external`.
 - Cross-epic edges: for the epic node and every child that is not closed, each
   open `DependsOn` outside the epic membership set becomes a `BlockedExternally`
   edge, and each open `Blocks` outside becomes a `BlocksExternally` edge
@@ -1228,8 +1230,8 @@ Use 'lit next' to pick the top workable item to start.
    this order, each omitted when empty:
    - `    epic: <epicID>  <epicTitle>` (`output.go`)
    - `    blocked: <reasons joined by "; ">` — only non-dependency blockers,
-     rendered as `missing <field>` for `MissingField` and `needs-design` for
-     `NeedsDesign` (`backlog.go`, `nonDependencyBlockingReasons` at
+     rendered as `missing <field>` for `MissingField`, `needs-design` for
+     `NeedsDesign`, and `external` for `External` (`backlog.go`, `nonDependencyBlockingReasons` at
      `backlog.go`). `EarlierSiblingPending` appears in **neither** the
      blocked line nor the depends-on line.
    - `    depends on: <ids joined by ", ">` (`backlog.go`, `output.go`)
@@ -1584,7 +1586,7 @@ Family `labelFamily`, usage `"usage: lit label <add|rm> ..."`
 - Calls `Store.RemoveLabel(issueID, label)`; prints the remaining labels and the
   `update` breadcrumb.
 
-Reserved label semantics: `needs-design` blocks readiness (§1.18, `ready_state.go`);
+Reserved label semantics: `needs-design` and `external` block readiness (§1.18, `ready_state.go`);
 `focus` marks a goal for focus-path ordering (`ready_state.go`).
 
 ### 2.19 `lit parent` — Manage parent relationships

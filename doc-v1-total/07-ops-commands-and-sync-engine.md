@@ -259,7 +259,7 @@ For stores the normal engine refuses to open. Rows: `dump`, `recover` (`lifeboat
 Not app-mode; positional args are discovery roots (default: cwd) (`stores.go`).
 
 - **Default**: streams one canonical storage dir per discovered store; none found is empty output, exit 0.
-- **`--counts`**: a cross-project rollup. Each store is opened read-only; its label is the configured issue prefix (falling back to the storage dir); workability is classified with a nil required-fields policy — opting out of per-repo required fields only, while blockers, the lane gate, and needs-design still apply. Output: a `PROJECT / READY / IN-FLIGHT / BLOCKED` table with a TOTAL row summing exactly the shown rows (table omitted when every store errored), then `! <dir>: <err>` per unreadable store and `~ <dir>: close warning: <err>` per close warning (`stores.go`).
+- **`--counts`**: a cross-project rollup. Each store is opened read-only; its label is the configured issue prefix (falling back to the storage dir); workability is classified with a nil required-fields policy — opting out of per-repo required fields only, while blockers, the lane gate, and the reserved blocking labels still apply. Output: a `PROJECT / READY / IN-FLIGHT / BLOCKED` table with a TOTAL row summing exactly the shown rows (table omitted when every store errored), then `! <dir>: <err>` per unreadable store and `~ <dir>: close warning: <err>` per close warning (`stores.go`).
 
 ## `lit hooks`
 
