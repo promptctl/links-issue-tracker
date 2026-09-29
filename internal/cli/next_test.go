@@ -33,7 +33,7 @@ func (h readyTestHarness) runNextOutcome() NextOutcome {
 	// The gathered scope, not focusScope{}: this helper stands in for `lit next`
 	// itself, and handing routing an empty scope here would quietly answer every
 	// focus test from the unfocused path — green, and about a command nobody runs.
-	return routeNext(gathered.rows, gathered.details, cc.standings, cc.self, gathered.scope)
+	return routeNext(gathered.rows, gathered.details, gathered.epics, cc.standings, cc.self, gathered.scope)
 }
 
 // runNextRow narrows an outcome to the row it served, for the ordering and
@@ -95,7 +95,7 @@ func TestServedRowIsTotalOverTheSealedSum(t *testing.T) {
 		{"own work resumed", ResumedOwnWork{Row: row}, true},
 		{"the epic's next lane", ServedFromEpicLane{Row: row}, true},
 		{"the global pool", ServedFromNewLane{Row: row}, true},
-		{"the on-path dependency", ServedFromDependency{Row: row, Gates: "test-gated-1"}, true},
+		{"the on-path dependency", ServedFromDependency{Row: row, Gates: "test-gated-1", Blocker: row.ID}, true},
 		{"past an exhausted scope", ServedPastExhaustion{Row: row, Exhaustion: Exhausted{Epics: []string{"test-epic-1"}}}, true},
 		{"exhausted carries none", Exhausted{}, false},
 		{"no work carries none", NoWork{}, false},
@@ -648,7 +648,7 @@ func TestRenderNextOutcomeNamesTheOtherSessionWorkingOurLane(t *testing.T) {
 	inFlight := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Theirs, in flight", Topic: "next", IssueType: "task", Priority: 1})
 	h.transition(inFlight.ID, model.Start{Assignee: "claude_sess-peer"})
 
-	rows, _ := h.gather()
+	rows, _, _ := h.gather()
 	inFlightRow := rowByID(t, rows, inFlight.ID)
 	cc := claimContext{self: selfAttribution}
 	const reader = "claude_sess-mine"
@@ -677,7 +677,7 @@ func TestRenderNextOutcomeStillNamesTheHolderOfAQuietTicket(t *testing.T) {
 	h.transition(quiet.ID, model.Start{Assignee: "claude_sess-peer"})
 	h.backdateUpdatedAt(quiet.ID, 7*time.Hour)
 
-	rows, _ := h.gather()
+	rows, _, _ := h.gather()
 	cc := claimContext{self: selfAttribution}
 	const reader = "claude_sess-mine"
 
@@ -703,7 +703,7 @@ func TestRenderNextOutcomeNamesTheHolderToAnUnidentifiedReader(t *testing.T) {
 	agents := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "An agent started this", Topic: "next", IssueType: "task", Priority: 1})
 	h.transition(agents.ID, model.Start{Assignee: "claude_sess-agent"})
 
-	rows, _ := h.gather()
+	rows, _, _ := h.gather()
 	cc := claimContext{self: selfAttribution}
 	// The whole point: this reader resolved no identity at all.
 	const reader = ""
@@ -729,7 +729,7 @@ func TestRenderNextOutcomeSaysNothingAboutAnUnassignedTicketInFlight(t *testing.
 	unassigned := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Started by nobody in particular", Topic: "next", IssueType: "task", Priority: 1})
 	h.transition(unassigned.ID, model.Start{Assignee: ""})
 
-	rows, _ := h.gather()
+	rows, _, _ := h.gather()
 	cc := claimContext{self: selfAttribution}
 	const reader = "claude_sess-mine"
 
@@ -754,7 +754,7 @@ func TestRenderNextOutcomeSpeaksOnlyInTheConditional(t *testing.T) {
 	inFlight := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
 	h.transition(inFlight.ID, model.Start{Assignee: "other"})
 
-	rows, details := h.gather()
+	rows, details, _ := h.gather()
 	cc := claimContext{self: selfAttribution}
 	// The reader is the row's assignee, so the ResumedOwnWork case below is
 	// genuinely their own work. Any other reader makes it a mismatch and prints
@@ -788,10 +788,14 @@ func TestRenderNextOutcomeSpeaksOnlyInTheConditional(t *testing.T) {
 		// needs both cells: a ready row and an abandoned one. This is the pick
 		// an agent is least likely to predict, and these two cells pin that it
 		// never renders the global pool's line verbatim.
-		{"the on-path dependency names the row it unblocks", ServedFromDependency{Row: freshRow, Lane: freshLane, Gates: inFlight.ID},
+		{"the on-path dependency names the row it unblocks", ServedFromDependency{Row: freshRow, Lane: freshLane, Gates: inFlight.ID, Blocker: fresh.ID},
 			"run `lit start " + fresh.ID + "` to claim lane a1 of epic " + epicA.ID + " (gates " + inFlight.ID + ", which is on your path)"},
-		{"an abandoned dependency is served and still names what it unblocks", ServedFromDependency{Row: inFlightRow, Lane: inFlightLane, Gates: fresh.ID},
+		{"an abandoned dependency is served and still names what it unblocks", ServedFromDependency{Row: inFlightRow, Lane: inFlightLane, Gates: fresh.ID, Blocker: inFlight.ID},
 			inFlight.ID + " is in progress and nobody holds it — run `lit start " + inFlight.ID + "` to claim lane a2 of epic " + epicA.ID + " (gates " + fresh.ID + ", which is on your path)"},
+		// Work under an epic that blocks has no edge of its own to the row it
+		// frees, so the line names the epic between them.
+		{"work under a blocking epic names the epic that gates", ServedFromDependency{Row: freshRow, Lane: freshLane, Gates: "test-gated", Blocker: epicA.ID},
+			"run `lit start " + fresh.ID + "` to claim lane a1 of epic " + epicA.ID + " (it is in epic " + epicA.ID + ", which gates test-gated on your path)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer
@@ -868,7 +872,7 @@ func TestDependencyPickIsDistinguishableFromThePool(t *testing.T) {
 	fresh := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
 	blocked := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
 
-	rows, details := h.gather()
+	rows, details, _ := h.gather()
 	cc := claimContext{self: selfAttribution}
 	// Every outcome here is announced by startAdvice, whose sentences carry no
 	// identity, so the reader is passed only because renderNextOutcome's
@@ -885,7 +889,7 @@ func TestDependencyPickIsDistinguishableFromThePool(t *testing.T) {
 		return buf.String()
 	}
 	pool := render(ServedFromNewLane{Row: row, Lane: lane})
-	dep := render(ServedFromDependency{Row: row, Lane: lane, Gates: blocked.ID})
+	dep := render(ServedFromDependency{Row: row, Lane: lane, Gates: blocked.ID, Blocker: row.ID})
 
 	if pool == dep {
 		t.Fatalf("the global pool and the on-path dependency render identically as %q — the pick an agent cannot predict is the one that must explain itself", pool)

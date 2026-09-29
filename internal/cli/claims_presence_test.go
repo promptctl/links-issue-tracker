@@ -62,7 +62,7 @@ func TestCapacityForReadsAbandonmentOffTheLane(t *testing.T) {
 	ticket := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "In flight", Topic: "next", IssueType: "task", Priority: 0})
 	h.transition(ticket.ID, model.Start{Assignee: "tester"})
 
-	rows, _ := h.gather()
+	rows, _, _ := h.gather()
 	quiet := rowByID(t, rows, ticket.ID)
 	if ClassifyReadiness(quiet.Annotations).IsOrphaned() {
 		t.Fatalf("fixture %q is orphaned; the pair below needs one row inside the orphan window and one past it", ticket.ID)

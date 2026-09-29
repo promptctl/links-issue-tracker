@@ -1321,14 +1321,18 @@ orphan annotation does not enter routing. A lane whose claim has expired is
 Only `laneHeldForeign` is routed around; a locked worktree past the clock
 derives `Held` and is one of these. Servability is not gated on `model.StateOpen`.
 
-**Routing precedence** — `routeNext(rows, details, standings, self, scope focusScope)`
+**Routing precedence** — `routeNext(rows, details, epics, standings, self, scope focusScope)`
 (`next_route.go`). `rows` are already in composite-rank order (§1.18).
 `laneOf(row) = model.LaneOf(row.Issue, details[row.ID].Parent)`
 (`next_route.go`);
 `verdict(row) = capacityFor(row, standings.Of(laneOf(row)), self)`
 (`next_route.go`);
-`reachFor(row, gathered) = reachOf(row, gathered, standings.Of(laneOf(row)), self)`
-(`next_route.go`).
+`reachFor(row) = reachOf(row, standings.Of(laneOf(row)), self)`
+(`next_route.go`);
+and, once the checkout holds a lane,
+`workToward = workTowardEach(rows, details, epics)` (`next_route.go`), the
+gathered rows indexed by each id they are work toward: their own, and every
+epic above them.
 `pickFrom(from, inScope, accept ...capacity)` keeps the first row of `from`, in
 rank order, whose lane `inScope` admits and whose verdict is in `accept`
 (`next_route.go`); `pick` is `pickFrom` over all `rows`
@@ -1343,19 +1347,21 @@ If `len(ownLanes) > 0` (`next_route.go`):
 1. **Own lanes**, accepting `{serveWork, resumeWork}`, whichever the backlog ranks
    first (`next_route.go`). `resumeWork` → **`ResumedOwnWork{Row}`**;
    `serveWork` → **`ServedFromClaim{Row}`**.
-   - 1b. Else `onPathDependency(gatingDependencies(rows, laneOf, mine, reachFor))`
+   - 1b. Else `onPathDependency(gatingDependencies(rows, laneOf, mine, reachFor, workToward), laneOf)`
      — the first dependency gating one of our own lanes whose `reachKind` is
      `reachTakeable` (`next_route.go`), drawn from `gatingDependencies`, which
      collects the distinct open dependency IDs of the in-scope **open** rows in
-     rank order and stamps each with `reachFor` (`next_route.go`) →
-     **`ServedFromDependency{Row: dep.Row, Lane: laneOf(dep.Row), Gates: dep.Gates}`** (`next_route.go`), the `Gates` being the blocked row the dependency gates.
+     rank order and stamps each with the lowest `reachFor` among
+     `workToward[id]`, carried by the first row in rank order with it, or
+     `reachOutOfView` when that is empty (`next_route.go`) →
+     **`ServedFromDependency{Row: dep.Row, Lane: laneOf(dep.Row), Gates: dep.Gates, Blocker: dep.ID}`** (`next_route.go`), the `Gates` being the blocked row the dependency gates and `Row` the dependency itself or, for an epic, a ticket under it.
 2. Else **the rest of our epic, in lanes we do not already hold** — predicate
    `lane.Epic() != "" && ownEpics[lane.Epic()] && !mine(lane)`, accepting
    `serveWork` → **`ServedFromEpicLane{Row, Lane: laneOf(row)}`**.
-   - 2b. Else, with `gating := gatingDependencies(rows, laneOf, ourScope, reachFor)`
+   - 2b. Else, with `gating := gatingDependencies(rows, laneOf, ourScope, reachFor, workToward)`
      where `ourScope` is `func(lane) bool { return mine(lane) || ourEpic(lane) }`,
-     `onPathDependency(gating)` →
-     **`ServedFromDependency{Row: dep.Row, Lane: laneOf(dep.Row), Gates: dep.Gates}`**.
+     `onPathDependency(gating, laneOf)` →
+     **`ServedFromDependency{Row: dep.Row, Lane: laneOf(dep.Row), Gates: dep.Gates, Blocker: dep.ID}`**.
 3. Else `exhausted := Exhausted{Epics, Blocked}` (`next_route.go`), where
    `Epics` is `slices.Sorted(maps.Keys(ownEpics))` and `Blocked` is
    `blockedRows(gating)` — the walk step 2b declined; `blockedRows` drops the
@@ -1373,7 +1379,7 @@ Step 4 is reached directly by a checkout holding no lanes:
    **`ServedFromNewLane{Row, Lane: laneOf(row)}`**.
    Else → **`NoWork{Unreachable: append(passedOver(pool, reachFor), withheldByScope(offPath)...)}`**
    (`next_route.go`), where `passedOver` stamps every walked pool row with
-   `reachFor(row, true)` (`next_route.go`) and `withheldByScope` stamps
+   `reachFor(row)` (`next_route.go`) and `withheldByScope` stamps
    every scope-excluded row `reachOffFocusPath` (`next_route.go`).
 
 Steps 1-3 walk every gathered row; step 4 walks the focus-scoped pool. The row
@@ -1383,8 +1389,7 @@ visible (`next_route.go`).
 **`reachKind`** (`next_route.go`) — what one row is to this checkout right
 now: `reachTakeable`, `reachHeldFresh`, `reachNotReady`, `reachOutOfView`, plus
 `reachOffFocusPath`, which only the pool diagnostic stamps, and the bound
-`reachKindCount`. `reachOf(row, gathered, standing, self)` answers
-`reachOutOfView` when `!gathered`, `reachTakeable` when
+`reachKindCount`. `reachOf(row, standing, self)` answers `reachTakeable` when
 `capacityFor(...) != routeAround`, `reachHeldFresh` when
 `relationOf(...) == laneHeldForeign`, else `reachNotReady`
 (`next_route.go`). `rowReach{ID string, Row annotation.AnnotatedIssue, Kind reachKind}`
@@ -1400,9 +1405,11 @@ now: `reachTakeable`, `reachHeldFresh`, `reachNotReady`, `reachOutOfView`, plus
 - `reachNotReady`: `"not startable — blocked by a dependency, or in flight and not abandoned"`
 - `reachOffFocusPath`: ``"off the focus path this run answered over — `lit next --all` to route over the whole queue"``
 
-`describeReach(rows, lead, notes)` renders `"<lead><ids> (<note>)"` for each kind
+`describeReach(rows, lead, notes)` renders `"<lead><names> (<note>)"` for each kind
 that has rows, joined by `"; "`, in `reachKind` declaration order
-(`next_route.go`). `nameIDs` names at most `maxNamedPerKind = 12` ids and
+(`next_route.go`). An entry's name is its `ID`, or `"<Row.ID> under <ID>"` when
+it carries a `Row` whose id differs — a dependency read through a ticket under it
+(`rowReach.name`, `next_route.go`). `nameIDs` names at most `maxNamedPerKind = 12` ids and
 otherwise appends `" and <n> more"` (`next_route.go`).
 
 **Terminal messages.** `Exhausted.scope()` (`next_route.go`) names the scope:
@@ -1442,7 +1449,9 @@ Both map to `ExitNoWork` = **6** (`exit.go`), with reasons
 - `ServedFromEpicLane` → `startAdvice(o.Row, o.Lane)`
   + `" (a second lane of an epic you already hold a lane in)\n"`.
 - `ServedFromNewLane` → the same `startAdvice(...)` + `"\n"`.
-- `ServedFromDependency` → the same `startAdvice(...)` + `" (gates %s, which is on your path)\n"` on `Gates`.
+- `ServedFromDependency` → the same `startAdvice(...)` + `dependencyReason(o)` + `"\n"`:
+  `" (gates %s, which is on your path)"` on `Gates` when `Blocker == Row.ID`,
+  else `" (it is in epic %s, which gates %s on your path)"` on `Blocker`, `Gates`.
 - `ServedPastExhaustion` → `"<why()>\n"`, then the `stay()` routes followed by `"move on to the top ready ticket outside it: <startAdvice(o.Row, o.Lane)>"`, joined by `"\nor "`, then `"\n"`.
 - `Exhausted`, `NoWork` → returned as themselves; no ticket printed.
 - Any other outcome type → panic.

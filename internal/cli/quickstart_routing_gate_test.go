@@ -105,7 +105,7 @@ var laneRoutingTable = []laneRoutingCase{
 func TestCapacityForEachLaneRelation(t *testing.T) {
 	h := newReadyTestHarness(t)
 	issue := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "ready leaf", Topic: "next", IssueType: "task", Priority: 0})
-	rows, _ := h.gather()
+	rows, _, _ := h.gather()
 	row := rowByID(t, rows, issue.ID)
 	if row.State() != model.StateOpen || !ClassifyReadiness(row.Annotations).IsReady() {
 		t.Fatalf("fixture row is state=%v ready=%v, want an open ready row — the table below reads the lane relation only, so the row must contribute nothing", row.State(), ClassifyReadiness(row.Annotations).IsReady())

@@ -81,7 +81,7 @@ func nextLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		occasion, err := renderNextOutcome(stdout, routeNext(gathered.rows, gathered.details, cc.standings, cc.self, gathered.scope.scopeFor(*all)), gathered.details, cc, actor())
+		occasion, err := renderNextOutcome(stdout, routeNext(gathered.rows, gathered.details, gathered.epics, cc.standings, cc.self, gathered.scope.scopeFor(*all)), gathered.details, cc, actor())
 		if err != nil {
 			return err
 		}
@@ -123,8 +123,7 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 	// unblocks work on your path" is a fact about the WALK.
 	case ServedFromDependency:
 		row = o.Row
-		announce = startAdvice(o.Row, o.Lane) +
-			fmt.Sprintf(" (gates %s, which is on your path)\n", o.Gates)
+		announce = startAdvice(o.Row, o.Lane) + dependencyReason(o) + "\n"
 	// Leaving the scope is the agent's choice, so every route is named and
 	// none is taken: the row is the last route, printed like any pick.
 	case ServedPastExhaustion:
@@ -201,6 +200,19 @@ func resumeAdvice(row annotation.AnnotatedIssue, actingAs string) string {
 		return fmt.Sprintf("%s is in progress and assigned to %s, not to you — check that they have stopped before you continue it, or take other work from `lit backlog`", row.ID, assignee)
 	}
 	return fmt.Sprintf("%s is already in progress in a lane you hold — continue where you left off", row.ID)
+}
+
+// dependencyReason says why step 1b or 2b handed this row over. A pick under an
+// epic that blocks names the epic, because the row itself has no edge to the
+// ticket it frees. "On your path" rather than "in a lane you hold", because
+// step 2b's gated row may sit in a sibling lane of the epic.
+// [LAW:dataflow-not-control-flow] the last inch of rendering, where the two
+// arms are different sentences.
+func dependencyReason(o ServedFromDependency) string {
+	if o.Blocker == o.Row.ID {
+		return fmt.Sprintf(" (gates %s, which is on your path)", o.Gates)
+	}
+	return fmt.Sprintf(" (it is in epic %s, which gates %s on your path)", o.Blocker, o.Gates)
 }
 
 // startAdvice is the line every pick that would establish a claim prints above

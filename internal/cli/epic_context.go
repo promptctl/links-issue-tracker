@@ -187,11 +187,11 @@ func buildEpicContext(ctx context.Context, st storage.Store, requiredFields []st
 	// The focus scope is dropped rather than applied: the epic plan is the epic's
 	// own child list, and narrowing it to the focus path would print a partial
 	// plan that still reads as the whole one. [LAW:no-silent-failure]
-	annotated, childRels, _, err := annotateIssues(ctx, st, requiredFields, epic.Children)
+	annotated, err := annotateIssues(ctx, st, requiredFields, epic.Children)
 	if err != nil {
 		return EpicContext{}, err
 	}
-	children := make([]epicChild, 0, len(annotated))
+	children := make([]epicChild, 0, len(annotated.rows))
 	var cross crossEpicEdges
 	// [LAW:one-source-of-truth] "Inside the epic" is one boundary used two ways:
 	// epicMemberIDs excludes intra-epic edges, and collect gathers the crossing
@@ -199,11 +199,11 @@ func buildEpicContext(ctx context.Context, st storage.Store, requiredFields []st
 	// boundary exactly as a child's do — collect from the epic too, or the two
 	// uses of "inside" would disagree.
 	cross.collect(epic, internal)
-	for _, row := range annotated {
+	for _, row := range annotated.rows {
 		// A child listed as an epic member but absent from the batch is a data
 		// inconsistency, not a row to fabricate — fail loudly rather than append
 		// a zero-value Issue. [LAW:no-defensive-null-guards]
-		childRel, ok := childRels[row.ID]
+		childRel, ok := annotated.details[row.ID]
 		if !ok {
 			return EpicContext{}, storage.NotFoundError{Entity: "issue", ID: row.ID}
 		}
