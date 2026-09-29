@@ -224,11 +224,11 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 		if _, err := fmt.Fprintln(w, "\ncomments:"); err != nil {
 			return err
 		}
-		// A body renders in its authored lines: each continuation line is indented
-		// under its "- [author]" row, so a body line can never read as the start of
-		// the next comment and the list stays delimited without escaping anything.
+		// A body renders in its authored lines, each after the first hung under
+		// its "- [author]" row, so only a comment row starts at column 0 and the
+		// list stays delimited without escaping the body.
 		for _, c := range detail.Comments {
-			if _, err := fmt.Fprintf(w, "- [%s] %s\n", c.CreatedBy, strings.ReplaceAll(c.Body, "\n", "\n  ")); err != nil {
+			if _, err := fmt.Fprintf(w, "- [%s] %s\n", c.CreatedBy, hangLines(c.Body, "  ")); err != nil {
 				return err
 			}
 		}
@@ -614,12 +614,16 @@ func formatIssueState(issue model.Issue) string {
 }
 
 // indentLines prefixes every line of s with prefix, preserving internal line
-// breaks. Trailing newlines are stripped so callers that append their own "\n"
-// (e.g., via Fprintf) do not produce a stray prefix-only line at the end.
+// breaks. [LAW:one-source-of-truth] hangLines owns the per-line rule; a block
+// indent is a hanging indent whose first line carries the prefix too.
 func indentLines(s, prefix string) string {
-	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
-	for i, line := range lines {
-		lines[i] = prefix + line
-	}
-	return strings.Join(lines, "\n")
+	return prefix + hangLines(s, prefix)
+}
+
+// hangLines prefixes every line of s after the first with prefix: a hanging
+// indent for text that continues a line the caller has already started.
+// Trailing newlines are stripped so callers that append their own "\n"
+// (e.g., via Fprintf) do not produce a stray prefix-only line at the end.
+func hangLines(s, prefix string) string {
+	return strings.ReplaceAll(strings.TrimRight(s, "\n"), "\n", "\n"+prefix)
 }

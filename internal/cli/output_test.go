@@ -87,11 +87,12 @@ func TestShowOmitsHistoryTrailWhileHistoryViewRendersIt(t *testing.T) {
 	}
 }
 
-// TestShowRendersCommentBodiesInTheirAuthoredLines pins the read path's
-// round trip: a comment that went in as N lines comes back out of `lit show` as
-// N lines, not one line of literal backslash-n. The first body carries a blank
-// line and a line shaped like a comment row, so the expectation also pins that
-// the indentation keeps the second comment the only unindented "- [" row.
+// TestShowRendersCommentBodiesInTheirAuthoredLines pins the detail view's
+// rendering of a stored body: a body of N lines prints as N lines, not one line
+// of literal backslash-n. The first body carries a blank line and a line shaped
+// like a comment row, so the expectation also pins that the indentation keeps
+// the second comment the only unindented "- [" row. The second body keeps the
+// trailing newline an imported comment can carry, which prints no extra line.
 // [LAW:behavior-not-structure]
 func TestShowRendersCommentBodiesInTheirAuthoredLines(t *testing.T) {
 	t.Parallel()
@@ -108,7 +109,7 @@ func TestShowRendersCommentBodiesInTheirAuthoredLines(t *testing.T) {
 		Issue: issue,
 		Comments: []model.Comment{
 			{CreatedBy: "alice", Body: "Close note.\n\n- [bob] not a comment\nlast line"},
-			{CreatedBy: "bob", Body: "one line"},
+			{CreatedBy: "bob", Body: "one line\n"},
 		},
 	}
 

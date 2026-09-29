@@ -387,8 +387,9 @@ axis, so `closed:wontfix+archived` is a declined ticket that was later archived.
 lit show <id>
 ```
 
-Full detail for one issue: description, status, labels, comments, history. History
-entries include the actor and a human-readable timestamp in the user's current timezone.
+Full detail for one issue: description, status, labels, and comments, each comment in
+the lines it was written in. The change trail is `lit history <id>`, whose entries
+include the actor and a human-readable timestamp in the user's current timezone.
 For an issue inside an epic, also prints the epic plan — siblings in rank order with
 status and any cross-epic dependencies. Exits 4 if the ID doesn't exist.
 
