@@ -324,8 +324,10 @@ func commandErrorRemediation(reason string) string {
 		// either. [LAW:one-source-of-truth] Both paths change more than this
 		// command: installing a lit replaces it for every workspace on the
 		// machine, and the rollback discards data. So the agent is told to take
-		// neither on its own, the way takeover_unconfirmed gates `--take`.
-		return "Do not retry unchanged — this lit is older than the workspace's schema, and rerunning the command with the same binary repeats this refusal. The message above names the supported path. " + agentInstructionsOpen + "Installing a different lit replaces it for every workspace on this machine, and the snapshot rollback discards data: take either path only when the user directs it, and until then surface this refusal to the user as blocking." + agentInstructionsClose
+		// neither on its own, the way takeover_unconfirmed gates `--take`. The
+		// rollback is named conditionally because the message offers it only
+		// when a recovery snapshot exists.
+		return "Do not retry unchanged — this lit is older than the workspace's schema, and rerunning the command with the same binary repeats this refusal. The message above names the supported path. " + agentInstructionsOpen + "Installing a different lit replaces it for every workspace on this machine, and any snapshot rollback the message offers discards data: take such a path only when the user directs it, and until then surface this refusal to the user as blocking." + agentInstructionsClose
 	case "bulk_partial_failure":
 		return "Some items failed; see the per-item errors above. Re-run the command for only the failed IDs after addressing each error."
 	default:

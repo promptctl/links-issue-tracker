@@ -290,7 +290,7 @@ func TestWriteCommandErrorSchemaVersionRefusals(t *testing.T) {
 		// the agent looking for a flag that does not exist.
 		// Both paths the message names change more than this command, so the
 		// agent is told to wait for the user rather than take either.
-		{"workspace schema ahead", schemaAheadError(), "take either path only when the user directs it", "adjust the command"},
+		{"workspace schema ahead", schemaAheadError(), "take such a path only when the user directs it", "adjust the command"},
 		// The message names a newer target, which is the command adjusted.
 		{"upgrade target behind", upgradeTargetBehindError(), "adjust the command to satisfy it", "supported path"},
 	}
