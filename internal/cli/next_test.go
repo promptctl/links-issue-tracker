@@ -524,7 +524,7 @@ func TestRenderNextOutcomeTerminalOutcomesKeepTheirType(t *testing.T) {
 	tests := []struct {
 		name       string
 		outcome    NextOutcome
-		wantReason string
+		wantReason commandReason
 		// wantAct is the deliberate act the message calls for but cannot name,
 		// which is the whole job the remediation line has left to do.
 		wantAct string

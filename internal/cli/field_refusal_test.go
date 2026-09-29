@@ -51,7 +51,7 @@ func TestFieldRefusalsAreDeterministicRefusals(t *testing.T) {
 		run      runner
 		args     []string
 		wantCode int
-		reason   string
+		reason   commandReason
 	}{
 		{"new topic below the floor", runNew, []string{"--title", "t", "--topic", "ci"}, ExitValidation, "validation_refused"},
 		{"new topic above the cap", runNew, []string{"--title", "t", "--topic", strings.Repeat("a", 31)}, ExitValidation, "validation_refused"},

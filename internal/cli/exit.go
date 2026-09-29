@@ -138,9 +138,8 @@ func ExitCode(err error) int {
 	// — the thing every sink in this package exists to stop callers doing. The
 	// act each calls for differs — change directory, or run `lit init` here —
 	// and that difference is carried by the reason rather than by a code of its
-	// own. The reason string is not itself printed: what the caller reads is the
-	// remediation it selects, and the two remediations name the two different
-	// acts. [LAW:no-mode-explosion]
+	// own: the reason is printed beside the code on the error line, and the
+	// remediation it selects names the act. [LAW:no-mode-explosion]
 	var outsideWorkspace OutsideWorkspaceError
 	if errors.As(err, &outsideWorkspace) {
 		return ExitValidation
