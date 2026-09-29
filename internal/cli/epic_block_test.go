@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -254,11 +255,11 @@ func TestAnEpicsBlockerHoldsBackNothingItWaitsOn(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ListIssues error = %v", err)
 			}
-			annotated, _, _, err := annotateIssues(h.ctx, h.ap.Store, nil, all)
+			annotated, err := annotateIssues(h.ctx, h.ap.Store, nil, all)
 			if err != nil {
 				t.Fatalf("annotateIssues error = %v", err)
 			}
-			for _, row := range annotated {
+			for _, row := range annotated.rows {
 				for _, ann := range row.Annotations {
 					if ann.Kind == annotation.InheritedDependency && ann.Message == row.ID {
 						t.Fatalf("%s inherits itself", row.ID)
@@ -322,13 +323,13 @@ func TestRouteNextTreatsAnEpicsGateAsOnPath(t *testing.T) {
 	_ = h.createIssue(storage.CreateIssueInput{Title: "unrelated", Topic: "other", IssueType: "task"})
 	gate := h.createIssue(storage.CreateIssueInput{Title: "gate", Topic: "gate", IssueType: "task"})
 	h.addDependency(epic.ID, gate.ID)
-	rows, details := h.gather()
+	rows, details, epics := h.gather()
 	doneLane := model.LaneOf(done, &epic)
 	gatedLane := laneOf(t, details, rowByID(t, rows, gated.ID))
 
 	t.Run("holding the gated lane", func(t *testing.T) {
 		standings := claims.Standings{doneLane: heldBy(selfAttribution), gatedLane: heldBy(selfAttribution)}
-		outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
+		outcome := routeNext(rows, details, epics, standings, selfAttribution, focusScope{})
 		// An epic's gate reaches us through step 1b, so it arrives as the
 		// dependency outcome and says what it unblocks.
 		served, ok := outcome.(ServedFromDependency)
@@ -341,7 +342,7 @@ func TestRouteNextTreatsAnEpicsGateAsOnPath(t *testing.T) {
 	})
 	t.Run("holding only the epic", func(t *testing.T) {
 		standings := claims.Standings{doneLane: heldBy(selfAttribution)}
-		outcome := routeNext(rows, details, standings, selfAttribution, focusScope{})
+		outcome := routeNext(rows, details, epics, standings, selfAttribution, focusScope{})
 		exhausted, ok := outcome.(Exhausted)
 		if !ok {
 			t.Fatalf("routeNext = %#v (%T), want Exhausted naming the gate", outcome, outcome)
@@ -354,4 +355,81 @@ func TestRouteNextTreatsAnEpicsGateAsOnPath(t *testing.T) {
 			t.Fatalf("Exhausted.Blocked = %v, want exactly the gate %s", blockers, gate.ID)
 		}
 	})
+}
+
+// When the dependency on a checkout's path is an epic, the work that clears it
+// sits under it: an epic cannot be started, and the gather never returns one as
+// a row. Routing therefore descends to the epic's ready ticket, at any depth,
+// and serves it as on-path work, naming the epic and the row it frees. When
+// nothing under the epic is this checkout's to take, it still reports
+// exhaustion naming the epic. Either way it never hops to the unrelated ready
+// ticket.
+func TestRouteNextDescendsAnEpicBlockerToItsWorkableChild(t *testing.T) {
+	for depth := 1; depth <= 2; depth++ {
+		t.Run(fmt.Sprintf("the ready ticket %d epic(s) down", depth), func(t *testing.T) {
+			h := newReadyTestHarness(t)
+			_ = h.createIssue(storage.CreateIssueInput{Title: "unrelated", Topic: "other", IssueType: "task"})
+			epicB := h.createIssue(storage.CreateIssueInput{Title: "B", Topic: "epic-block", IssueType: "epic"})
+			b1 := h.createIssue(storage.CreateIssueInput{Title: "b1", Topic: "epic-block", IssueType: "task", ParentID: epicB.ID, Lane: "b1"})
+			h.transition(b1.ID, model.Start{Assignee: "tester"})
+			h.transition(b1.ID, model.Done{})
+			b2 := h.createIssue(storage.CreateIssueInput{Title: "b2", Topic: "epic-block", IssueType: "task", ParentID: epicB.ID, Lane: "b2"})
+			epicA := h.createIssue(storage.CreateIssueInput{Title: "A", Topic: "epic-block", IssueType: "epic"})
+			parent := epicA.ID
+			for level := 1; level < depth; level++ {
+				parent = h.createIssue(storage.CreateIssueInput{Title: "nested", Topic: "epic-block", IssueType: "epic", ParentID: parent}).ID
+			}
+			a1 := h.createIssue(storage.CreateIssueInput{Title: "a1", Topic: "epic-block", IssueType: "task", ParentID: parent})
+			h.addDependency(epicB.ID, epicA.ID)
+
+			rows, details, epics := h.gather()
+			requireInheritedDependency(t, rows, b2.ID, epicA.ID)
+			bLane := laneOf(t, details, rowByID(t, rows, b2.ID))
+			aLane := laneOf(t, details, rowByID(t, rows, a1.ID))
+
+			outcome := routeNext(rows, details, epics, claims.Standings{bLane: heldBy(selfAttribution)}, selfAttribution, focusScope{})
+			served, ok := outcome.(ServedFromDependency)
+			if !ok || served.Row.ID != a1.ID {
+				t.Fatalf("routeNext = %#v (%T), want ServedFromDependency serving %s, the ready ticket under the blocking epic %s", outcome, outcome, a1.ID, epicA.ID)
+			}
+			if served.Gates != b2.ID || served.Blocker != epicA.ID {
+				t.Fatalf("served gates %q through %q, want %q through %q — a1 has no edge to b2, so the pick must name the epic between them", served.Gates, served.Blocker, b2.ID, epicA.ID)
+			}
+			if served.Lane != aLane {
+				t.Fatalf("served.Lane = %v, want %v, the lane a start of %s would claim", served.Lane, aLane, a1.ID)
+			}
+
+			held := claims.Standings{bLane: heldBy(selfAttribution), aLane: heldBy(otherAttribution)}
+			exhausted, ok := routeNext(rows, details, epics, held, selfAttribution, focusScope{}).(Exhausted)
+			if !ok {
+				t.Fatalf("with %s's lane held elsewhere, routeNext did not report exhaustion", a1.ID)
+			}
+			blockers := make([]string, len(exhausted.Blocked))
+			for i, b := range exhausted.Blocked {
+				blockers[i] = b.ID
+			}
+			if !slices.Equal(exhausted.Epics, []string{epicB.ID}) || !slices.Equal(blockers, []string{epicA.ID}) {
+				t.Fatalf("Exhausted = epics %v blocked on %v, want epic %s blocked on %s", exhausted.Epics, blockers, epicB.ID, epicA.ID)
+			}
+			// The epic is read through the work under it: its one ticket is held
+			// elsewhere, so it is held, not outside the view — the epic's own
+			// row is never gathered, and reading that would repeat the bug.
+			if kind := exhausted.Blocked[0].Kind; kind != reachHeldFresh {
+				t.Fatalf("blocker %s classified as %v, want reachHeldFresh (%s is held by another checkout)", epicA.ID, kind, a1.ID)
+			}
+
+			// Holding only b1's closed lane, b2 is ours by epic but not by lane,
+			// so step 1b does not look at it and exhaustion does. a1 is free, so
+			// the blocker is ours to take — and the line must name a1, the
+			// ticket `lit start` can act on, not A, which cannot be started.
+			b1Lane := model.LaneOf(b1, &epicB)
+			exhausted, ok = routeNext(rows, details, epics, claims.Standings{b1Lane: heldBy(selfAttribution)}, selfAttribution, focusScope{}).(Exhausted)
+			if !ok {
+				t.Fatalf("holding only %s's lane, routeNext did not report exhaustion", b1.ID)
+			}
+			if want := a1.ID + " under " + epicA.ID + " (on your path and yours to take"; !strings.Contains(exhausted.Error(), want) {
+				t.Fatalf("Exhausted = %q, want it to contain %q", exhausted.Error(), want)
+			}
+		})
+	}
 }

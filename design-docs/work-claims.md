@@ -285,8 +285,10 @@ step, so each step below says only which lanes it looks in:
   this checkout holds another lane in — which `gatingDependencies` permits,
   since it scopes the blocked rows and not the dependencies it collects from
   them. The clause answers "why was I handed a lane I do not hold?", and step
-  1b's answer is that the row gates work of ours, which is the more specific
-  reason and the one worth saying; the epic it happens to share would explain
+  1b's answer is that the row gates work of ours — "(gates B.2, which is in a
+  lane you hold)", or "(it is in epic A, which gates B.2 in a lane you hold)"
+  when the dependency is an epic the row sits under — which is the more
+  specific reason and the one worth saying; the epic it happens to share would explain
   the pick less well, not better.
 
   Nothing here may be said in the perfect tense. A line that reports a start or
@@ -307,7 +309,9 @@ step, so each step below says only which lanes it looks in:
    checkout's own lane is handed back to resume rather than started fresh —
    in backlog order, including the prerequisite closure: a dependency outside
    the claimed lane that gates one inside it is on the path and is offered on
-   the same terms, announced as the second lane its start claims.
+   the same terms, announced as the second lane its start claims. An epic
+   cannot be started, so a dependency that is an epic is offered as the ticket
+   under it, at any depth, and the announcement names the epic.
 2. **Then the rest of its epic**: the claimed lane's epic's other lanes,
    before any lane of any other epic — the GRANULARITY RULING above, expressed
    as a routing step rather than a bias. A parentless (solo) claim has no epic

@@ -63,10 +63,8 @@ func deriveQueueFacts(queue []annotation.AnnotatedIssue) queueFacts {
 // parameters, reading the wrong one would compile, run, and print a shorter
 // truth.
 type workableGather struct {
-	rows    []annotation.AnnotatedIssue
-	details map[string]storage.IssueRelations
-	facts   queueFacts
-	scope   focusScope
+	annotatedRows
+	facts queueFacts
 }
 
 // keepRows narrows the gather to the rows the criteria select and RELEASES
@@ -86,5 +84,7 @@ func (g workableGather) keepRows(criteria storage.IssueCriteria) workableGather 
 			details[row.ID] = g.details[row.ID]
 		}
 	}
-	return workableGather{rows: rows, details: details, facts: g.facts, scope: g.scope}
+	// epics is kept whole: routing asks which kept rows sit under an epic the
+	// gather never returns as a row.
+	return workableGather{annotatedRows: annotatedRows{rows: rows, details: details, epics: g.epics, scope: g.scope}, facts: g.facts}
 }

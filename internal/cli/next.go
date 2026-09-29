@@ -81,7 +81,7 @@ func nextLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		occasion, err := renderNextOutcome(stdout, routeNext(gathered.rows, gathered.details, cc.standings, cc.self, gathered.scope.scopeFor(*all)), gathered.details, cc, actor())
+		occasion, err := renderNextOutcome(stdout, routeNext(gathered.rows, gathered.details, gathered.epics, cc.standings, cc.self, gathered.scope.scopeFor(*all)), gathered.details, cc, actor())
 		if err != nil {
 			return err
 		}
@@ -123,8 +123,7 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 	// work you are already holding" is a fact about the WALK.
 	case ServedFromDependency:
 		row = o.Row
-		announce = startAdvice(o.Row, o.Lane) +
-			fmt.Sprintf(" (gates %s, which is in a lane you hold)\n", o.Gates)
+		announce = startAdvice(o.Row, o.Lane) + dependencyReason(o) + "\n"
 	// The two terminal outcomes travel outward AS THEMSELVES. Rendering them
 	// into an untyped error here would discard the very discriminator routing
 	// has just established, so both sinks — ExitCode and commandErrorReason —
@@ -195,6 +194,17 @@ func resumeAdvice(row annotation.AnnotatedIssue, actingAs string) string {
 		return fmt.Sprintf("%s is in progress and assigned to %s, not to you — check that they have stopped before you continue it, or take other work from `lit backlog`", row.ID, assignee)
 	}
 	return fmt.Sprintf("%s is already in progress in a lane you hold — continue where you left off", row.ID)
+}
+
+// dependencyReason says why step 1b handed this row over. A pick under an epic
+// that blocks names the epic, because the row itself has no edge to the ticket
+// it frees. [LAW:dataflow-not-control-flow] the last inch of rendering, where
+// the two arms are different sentences.
+func dependencyReason(o ServedFromDependency) string {
+	if o.Blocker == o.Row.ID {
+		return fmt.Sprintf(" (gates %s, which is in a lane you hold)", o.Gates)
+	}
+	return fmt.Sprintf(" (it is in epic %s, which gates %s in a lane you hold)", o.Blocker, o.Gates)
 }
 
 // startAdvice is the line every pick that would establish a claim prints above
