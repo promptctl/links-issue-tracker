@@ -377,7 +377,7 @@ func settleWaits(graph map[string][]waitLink, gates []string) map[string]map[str
 	}
 	for _, links := range graph {
 		for _, link := range links {
-			if link.inherited {
+			if link.kind == waitInherited {
 				blockers[link.prereq] = true
 			}
 		}
@@ -402,11 +402,6 @@ func settleWaits(graph map[string][]waitLink, gates []string) map[string]map[str
 		}
 		return waitsOn
 	}
-	heldAgainst := func(waitsOn map[string]map[string]bool) func(waitLink) bool {
-		return func(link waitLink) bool {
-			return !link.inherited || !waitsOn[link.prereq][link.waiter]
-		}
-	}
 	upper := closures(func(waitLink) bool { return true })
 	for {
 		lower := closures(heldAgainst(upper))
@@ -415,6 +410,14 @@ func settleWaits(graph map[string][]waitLink, gates []string) map[string]map[str
 			return upper
 		}
 		upper = next
+	}
+}
+
+// heldAgainst reports whether a link holds, given what each blocker waits on:
+// every link does except a passed-down blocker that waits on its own waiter.
+func heldAgainst(waitsOn map[string]map[string]bool) func(waitLink) bool {
+	return func(link waitLink) bool {
+		return link.kind != waitInherited || !waitsOn[link.prereq][link.waiter]
 	}
 }
 
@@ -620,10 +623,24 @@ func fetchFocusPathGoals(ctx context.Context, src focusGraphSource, seeds ...map
 type waitLink struct {
 	waiter, prereq string
 	holds          bool
-	// inherited marks a blocker an epic above the waiter passes down, which
-	// heldAncestry drops when it would close a loop.
-	inherited bool
+	kind           waitKind
 }
+
+// waitKind is the readiness rule a waitLink comes from. heldAncestry drops the
+// inherited links that would close a loop, and lit doctor names each link of a
+// loop by its rule, so the reader knows which edge to cut.
+type waitKind int
+
+const (
+	// waitDependency is the waiter's own blocks edge.
+	waitDependency waitKind = iota
+	// waitInherited is a blocker an epic above the waiter passes down.
+	waitInherited
+	// waitChild is a container waiting on its unfinished child.
+	waitChild
+	// waitEarlierSibling is an unfinished same-lane sibling ranked ahead.
+	waitEarlierSibling
+)
 
 // fetchWaitLinks returns the prerequisite links of every issue in frontier, in
 // frontier order: its unfinished explicit dependencies, the unfinished blockers
@@ -652,28 +669,28 @@ func fetchWaitLinks(ctx context.Context, fetch relationsFetch, frontier []string
 			return nil, storage.NotFoundError{Entity: "issue", ID: id}
 		}
 		leaf := !rel.Issue.IsContainer()
-		link := func(prereq string, holds bool) {
-			links = append(links, waitLink{waiter: id, prereq: prereq, holds: holds})
+		link := func(prereq string, holds bool, kind waitKind) {
+			links = append(links, waitLink{waiter: id, prereq: prereq, holds: holds, kind: kind})
 		}
 		for _, dep := range rel.DependsOn {
 			if dep.InPlay() {
-				link(dep.ID, leaf)
+				link(dep.ID, leaf, waitDependency)
 			}
 		}
 		for _, dep := range ancestry.inheritedDependencies(rel) {
-			links = append(links, waitLink{waiter: id, prereq: dep.ID, holds: leaf, inherited: true})
+			link(dep.ID, leaf, waitInherited)
 		}
 		if !leaf {
 			for _, child := range rel.Children {
 				if child.InPlay() {
-					link(child.ID, true)
+					link(child.ID, true, waitChild)
 				}
 			}
 		}
 		if rel.Parent != nil && rel.Parent.IsContainer() {
 			for _, sib := range pending[rel.Parent.ID] {
 				if isEarlierSameLaneSibling(sib, rel.Issue) {
-					link(sib.ID, leaf)
+					link(sib.ID, leaf, waitEarlierSibling)
 				}
 			}
 		}
