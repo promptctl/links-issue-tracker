@@ -410,7 +410,14 @@ func doctorLeaf() appLeaf {
 		// states a clean check rather than leaving its absence to be read as one.
 		parentCycle := doctorFieldValue(report, "parent_cycle", joinCycle(report.ParentCycle))
 		rankInversions := doctorFieldValue(report, storage.CheckRankInversions, strconv.Itoa(report.RankInversions))
-		if _, err := fmt.Fprintf(stdout, "integrity_check=%s foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d rank_inversions=%s dependency_cycle=%s parent_cycle=%s\n", report.IntegrityCheck, report.ForeignKeyIssues, report.InvalidRelatedRows, report.OrphanHistoryRows, rankInversions, dependencyCycle, parentCycle); err != nil {
+		waitLoopCount, loops, err := doctorWaitLoops(ctx, ap.Store, report)
+		if err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(stdout, "integrity_check=%s foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d rank_inversions=%s dependency_cycle=%s parent_cycle=%s wait_loops=%s\n", report.IntegrityCheck, report.ForeignKeyIssues, report.InvalidRelatedRows, report.OrphanHistoryRows, rankInversions, dependencyCycle, parentCycle, waitLoopCount); err != nil {
+			return err
+		}
+		if err := printWaitLoops(stdout, loops); err != nil {
 			return err
 		}
 		if err := printSyncFreshness(stdout, syncReport); err != nil {

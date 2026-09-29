@@ -271,6 +271,15 @@ func TestAnEpicsBlockerHoldsBackNothingItWaitsOn(t *testing.T) {
 					t.Fatalf("pullable = %v, want %s among them", ids(pullable), id)
 				}
 			}
+			// A blocker readiness drops closes no loop, so lit doctor, reading
+			// the same links, finds none either.
+			loops, err := findWaitLoops(h.ctx, h.ap.Store)
+			if err != nil {
+				t.Fatalf("findWaitLoops error = %v", err)
+			}
+			if len(loops) != 0 {
+				t.Fatalf("findWaitLoops = %v, want none", loops)
+			}
 		})
 	}
 }

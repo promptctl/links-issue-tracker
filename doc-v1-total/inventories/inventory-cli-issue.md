@@ -486,11 +486,11 @@ first goal reached and cycles terminate. Relations are memoized through
 seeds; `annotateIssues` passes the memo it built for `fetchHeldAncestry`.
 
 **Wait links** (`fetchWaitLinks`, `ready_state.go`): for each frontier
-issue, in frontier order, a `waitLink{waiter, prereq, holds, inherited}` for
-each `InPlay()` `DependsOn`, each `epicAncestry.inheritedDependencies` entry over
+issue, in frontier order, a `waitLink{waiter, prereq, holds, kind}` for
+each `InPlay()` `DependsOn` (`waitDependency`), each `epicAncestry.inheritedDependencies` entry over
 the frontier's `fetchContainerAncestry` (every gate, before `heldAncestry` drops
-any; `inherited` set), each `InPlay()` child of a container, and each earlier same-lane
-`InPlay()` sibling under a container parent. `holds` is true for a child link,
+any; `waitInherited`), each `InPlay()` child of a container (`waitChild`), and each earlier same-lane
+`InPlay()` sibling under a container parent (`waitEarlierSibling`). `holds` is true for a child link,
 and for any other link only when the waiter is not a container. A frontier id
 missing from the fetch → `storage.NotFoundError`. The focus walk
 follows every link; `fetchWaitGraph` keeps only links that hold.
