@@ -281,9 +281,9 @@ func TestPrefixSetRepairsAStoredIllegalPrefix(t *testing.T) {
 		t.Fatalf("doctor reason = %q (err %v), want stored_prefix_refused — a workspace that cannot mint is not healthy", got, err)
 	}
 	for _, want := range []string{
-		"issue_prefix=ab ",
+		`issue_prefix="ab" `,
 		"id_prefixes=myrepo:1 ",
-		`prefix: issue_prefix "ab" matches none of this store's issue ids (myrepo:1) — run 'lit prefix set myrepo'`,
+		`prefix: issue_prefix "ab" matches none of this store's issue ids (myrepo:1) — run 'lit prefix set myrepo' to preview the change`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("doctor output missing %q:\n%s", want, out)
@@ -320,6 +320,45 @@ func TestPrefixSetRepairsAStoredIllegalPrefix(t *testing.T) {
 	}
 	if out, err := runLit("doctor"); err != nil || strings.Contains(out, "prefix: ") {
 		t.Fatalf("doctor after the repair error = %v, want a clean run with no prefix line\n%s", err, out)
+	}
+}
+
+// The repair has to work before the store exists too. A workspace command writes
+// config.json without creating the store, and init refuses a stored illegal
+// prefix before it creates one — so if `lit prefix set` needed the store, init
+// and it would each name the other and neither could run.
+func TestPrefixSetRepairsAStoredIllegalPrefixBeforeTheStoreExists(t *testing.T) {
+	repo := gitRepoNamed(t, "myrepo")
+	runLit := func(args ...string) (string, error) {
+		var out bytes.Buffer
+		err := Run(context.Background(), &out, &out, args)
+		return out.String(), err
+	}
+	if out, err := runLit("workspace"); err != nil {
+		t.Fatalf("Run(workspace) error = %v\n%s", err, out)
+	}
+	info, err := workspace.Resolve(repo)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	rewriteStoredPrefix(t, info.ConfigPath, "ab")
+
+	if err := runInit(t); commandErrorReason(err) != "stored_prefix_refused" {
+		t.Fatalf("Run(init) reason = %q (err %v), want stored_prefix_refused", commandErrorReason(err), err)
+	}
+	out, err := runLit("prefix", "set", "myrepo")
+	if err != nil {
+		t.Fatalf("Run(prefix set) before the store exists error = %v\n%s", err, out)
+	}
+	// No store is a different fact from an empty one, and the preview says which.
+	if !strings.Contains(out, "issue ids in this store use: none (no store yet)") {
+		t.Fatalf("preview does not report the absent store:\n%s", out)
+	}
+	if out, err := runLit("prefix", "set", "myrepo", "--apply"); err != nil {
+		t.Fatalf("Run(prefix set --apply) error = %v\n%s", err, out)
+	}
+	if err := runInit(t); err != nil {
+		t.Fatalf("Run(init) after the repair error = %v", err)
 	}
 }
 

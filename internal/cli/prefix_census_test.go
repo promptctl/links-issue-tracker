@@ -42,3 +42,27 @@ func TestCensusOfAnEmptyStoreIsNoneAndNeverAMismatch(t *testing.T) {
 		t.Fatalf("mismatch reported over an empty store")
 	}
 }
+
+func TestCensusSuggestsOnlyAPrefixSetWouldStoreAsIs(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		issues []storage.IssueIdentity
+		want   string
+	}{
+		{"the most-used prefix when it is legal", []storage.IssueIdentity{
+			{ID: "links-core-a1b2", Topic: "core"}, {ID: "links-core-c3d4", Topic: "core"}, {ID: "demo-core-e5f6", Topic: "core"},
+		}, "links"},
+		// Minted when shorter prefixes were legal: adopting it would fail, so
+		// the next legal one is named instead.
+		{"the next legal prefix past an illegal most-used one", []storage.IssueIdentity{
+			{ID: "ab-core-a1b2", Topic: "core"}, {ID: "ab-core-c3d4", Topic: "core"}, {ID: "demo-core-e5f6", Topic: "core"},
+		}, "demo"},
+		{"the placeholder when no prefix is legal", []storage.IssueIdentity{
+			{ID: "ab-core-a1b2", Topic: "core"},
+		}, "<prefix>"},
+	} {
+		if got := censusOf(tc.issues).adoptable(); got != tc.want {
+			t.Errorf("%s: adoptable() = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}

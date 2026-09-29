@@ -234,7 +234,7 @@ func TestResolveDerivesPrefixWhenConfigValueAbsent(t *testing.T) {
 	if err := json.Unmarshal(payload, &cfg); err != nil {
 		t.Fatalf("json.Unmarshal(config) error = %v", err)
 	}
-	if cfg.IssuePrefix != derivedInfo.IssuePrefix.Stored() {
+	if cfg.IssuePrefix != string(derivedInfo.IssuePrefix.Stored()) {
 		t.Fatalf("persisted prefix = %q, want %q", cfg.IssuePrefix, derivedInfo.IssuePrefix.Stored())
 	}
 }

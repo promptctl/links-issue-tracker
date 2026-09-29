@@ -31,11 +31,13 @@ import (
 func printWorkspaceIdentity(w io.Writer, ws workspace.Info, census idPrefixCensus) error {
 	// Path fields use %q so values containing spaces (e.g. a checkout under
 	// "My Projects") stay unambiguous and copy-pasteable in the key=value line.
+	// issue_prefix is quoted for the same reason: a refused prefix is whatever
+	// text config.json carries, spaces and `=` included.
 	prefixSource := "configured"
 	if ws.IssuePrefix.Derived() {
 		prefixSource = "derived"
 	}
-	_, err := fmt.Fprintf(w, "workspace: storage_dir=%q workspace_id=%s issue_prefix=%s issue_prefix_source=%s id_prefixes=%s git_common_dir=%q\n",
+	_, err := fmt.Fprintf(w, "workspace: storage_dir=%q workspace_id=%s issue_prefix=%q issue_prefix_source=%s id_prefixes=%s git_common_dir=%q\n",
 		ws.StorageDir, ws.WorkspaceID, ws.IssuePrefix.Stored(), prefixSource, census, ws.GitCommonDir)
 	return err
 }
@@ -51,8 +53,8 @@ func printPrefixMismatch(w io.Writer, prefix workspace.PrefixState, census idPre
 	if !census.mismatch(prefix.Stored()) {
 		return nil
 	}
-	_, err := fmt.Fprintf(w, "prefix: issue_prefix %q matches none of this store's issue ids (%s) — run 'lit prefix set %s' to preview adopting the prefix they use\n",
-		prefix.Stored(), census, census.counts[0].prefix)
+	_, err := fmt.Fprintf(w, "prefix: issue_prefix %q matches none of this store's issue ids (%s) — run 'lit prefix set %s' to preview the change\n",
+		prefix.Stored(), census, census.adoptable())
 	return err
 }
 

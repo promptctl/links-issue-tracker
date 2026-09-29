@@ -6,7 +6,6 @@ import (
 	"io"
 	"strings"
 
-	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -34,19 +33,17 @@ type prefixSetResult struct {
 // the leaf's usage and the arity refusal all read it. [LAW:one-source-of-truth]
 const prefixSetUsage = "usage: lit prefix set <new-prefix> [--apply]"
 
-// set opens the store read-only: it reads the ids to census them and writes
-// only config.json, which is not the store.
-var prefixFamily = commandFamily[appSubcommand]{
+var prefixFamily = commandFamily[wsSubcommand]{
 	usage: prefixSetUsage,
-	subcommands: []subcommandRow[appSubcommand]{
-		{name: "set", payload: appSubcommand{access: app.AccessRead, declare: prefixSetLeaf}},
+	subcommands: []subcommandRow[wsSubcommand]{
+		{name: "set", payload: wsSubcommand{declare: prefixSetLeaf}},
 	},
 }
 
-func prefixSetLeaf() appLeaf {
+func prefixSetLeaf() wsLeaf {
 	fs := newCobraFlagSet("prefix set")
 	apply := fs.Bool("apply", false, "Apply the rename (without this flag, prints a preview)")
-	return appLeaf{fs: fs, positionals: 1, usage: prefixSetUsage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	return wsLeaf{fs: fs, positionals: 1, usage: prefixSetUsage, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
 		if len(positional) != 1 {
 			return UsageError{Message: prefixSetUsage}
 		}
@@ -62,7 +59,7 @@ func prefixSetLeaf() appLeaf {
 			// [LAW:no-silent-failure]
 			return model.ValidationError{Message: fmt.Sprintf("invalid prefix %q: %v", requested, err)}
 		}
-		census, err := readIDPrefixCensus(ctx, ap.Store)
+		census, err := readWorkspaceIDPrefixCensus(ctx, ws)
 		if err != nil {
 			return err
 		}
@@ -70,7 +67,7 @@ func prefixSetLeaf() appLeaf {
 		// Stored, not Mintable: this command is the repair for a stored prefix
 		// the rules refuse, so it has to run in that state and name what it is
 		// replacing.
-		previous := ap.Workspace.IssuePrefix.Stored()
+		previous := string(ws.IssuePrefix.Stored())
 		if normalized == previous {
 			result := prefixSetResult{
 				Previous: previous,
@@ -93,7 +90,7 @@ func prefixSetLeaf() appLeaf {
 			return prefixSetTextOutput(stdout, result)
 		}
 
-		if _, err := workspace.UpdateConfig(ap.Workspace.ConfigPath, func(cfg workspace.Config) (workspace.Config, error) {
+		if _, err := workspace.UpdateConfig(ws.ConfigPath, func(cfg workspace.Config) (workspace.Config, error) {
 			cfg.IssuePrefix = normalized
 			return cfg, nil
 		}); err != nil {

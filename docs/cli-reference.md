@@ -851,10 +851,11 @@ as of the last fetch), diverged, up to date, or never synced — and names the
 the local remote-tracking ref, so it reflects the last fetch; doctor does not reach
 the network.
 
-The identity line prints `issue_prefix=` — the prefix new issues are minted under —
+The identity line prints `issue_prefix="…"` — the prefix `config.json` carries, which new
+issues are minted under when it is legal —
 beside `id_prefixes=`, the prefixes the store's existing issue ids actually carry, with
 counts. When the first matches none of the second, a `prefix:` line says so and names
-the `lit prefix set` to preview. A stored `issue_prefix` that is not a legal prefix
+a `lit prefix set` to preview. A stored `issue_prefix` that is not a legal prefix
 makes doctor exit 3 (`stored_prefix_refused`) after printing its report.
 
 ### `lit hooks install`
@@ -908,7 +909,7 @@ would change. Every run also prints `issue ids in this store use: <prefix>:<coun
 so you can tell setting the prefix back to the one the backlog already uses from moving
 new issues onto a new one. It is also the repair for a stored prefix that is not legal
 (`stored_prefix_refused`): that state refuses only commands that create issues, so
-`lit prefix set` still runs in it.
+`lit prefix set` still runs in it, including before `lit init` has created the store.
 
 ### `lit upgrade`
 

@@ -1988,7 +1988,7 @@ func workspaceLeaf() wsLeaf {
 		// that needs one field (e.g. `lit workspace | sed -n 's/^traces_dir: //p'`).
 		fields := []struct{ key, value string }{
 			{"workspace_id", ws.WorkspaceID},
-			{"issue_prefix", ws.IssuePrefix.Stored()},
+			{"issue_prefix", string(ws.IssuePrefix.Stored())},
 			{"git_common_dir", ws.GitCommonDir},
 			{"storage_dir", ws.StorageDir},
 			{"database_path", ws.DatabasePath},

@@ -339,10 +339,12 @@ func TestPrefixOfReadsTopLevelNamespaceBackwards(t *testing.T) {
 		{"links", "renderer-cleanup"},  // a dashed topic
 		{"my-app", "renderer-cleanup"}, // both
 	} {
-		id := GenerateHashID(TopLevelNamespace(tc.prefix, tc.topic), content, 4, 0)
-		got, ok := PrefixOf(id, tc.topic)
-		if !ok || got != tc.prefix {
-			t.Errorf("PrefixOf(%q, %q) = %q, %v, want %q", id, tc.topic, got, ok, tc.prefix)
+		for _, length := range []int{MinHashLength, MaxHashLength} {
+			id := GenerateHashID(TopLevelNamespace(tc.prefix, tc.topic), content, length, 0)
+			got, ok := PrefixOf(id, tc.topic)
+			if !ok || got != tc.prefix {
+				t.Errorf("PrefixOf(%q, %q) = %q, %v, want %q", id, tc.topic, got, ok, tc.prefix)
+			}
 		}
 	}
 
@@ -353,6 +355,8 @@ func TestPrefixOfReadsTopLevelNamespaceBackwards(t *testing.T) {
 		{"no prefix left over", "init-0q1s", "init"},
 		{"empty hash", "links-init-", "init"},
 		{"hash outside base36", "links-init-0Q1S", "init"},
+		{"hash shorter than any minted", "links-init-" + strings.Repeat("a", MinHashLength-1), "init"},
+		{"hash longer than any minted", "links-init-" + strings.Repeat("a", MaxHashLength+1), "init"},
 		{"no dash", "links", "init"},
 	} {
 		if got, ok := PrefixOf(tc.id, tc.topic); ok {

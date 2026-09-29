@@ -197,13 +197,20 @@ func (p PrefixState) Mintable() (PrefixSpec, error) {
 	return p.spec, nil
 }
 
-// Stored is the text config.json carries, legal or not — what an operator
-// reads to recognize their own workspace, never a value to mint under.
-func (p PrefixState) Stored() string {
+// StoredPrefix is the issue_prefix text config.json carries, legal or not:
+// what an operator reads to recognize their own workspace. It is its own type
+// so it cannot be handed to a minting path as a prefix — a string-typed prefix
+// field refuses it without a conversion, and Mintable is the accessor that
+// fits. [LAW:types-are-the-program]
+type StoredPrefix string
+
+// Stored is the text config.json carries, legal or not — never a value to mint
+// under.
+func (p PrefixState) Stored() StoredPrefix {
 	if p.refusal != nil {
-		return p.refusal.Stored
+		return StoredPrefix(p.refusal.Stored)
 	}
-	return p.spec.Value()
+	return StoredPrefix(p.spec.Value())
 }
 
 // Derived reports whether this load minted the prefix from the repository
@@ -623,7 +630,7 @@ func resolveIssuePrefix(rootDir string, configPath string, configured string, re
 		return LegalPrefixState(PrefixSpec{value: derived, derived: true}), nil
 	}
 	state := parseStoredPrefix(configPath, configured)
-	if requested.present && requested.spec.Value() != state.Stored() {
+	if requested.present && StoredPrefix(requested.spec.Value()) != state.Stored() {
 		return PrefixState{}, fmt.Errorf(
 			"%w: this workspace already carries %q, so --prefix %s cannot be honoured here; run `lit prefix set %s` to change the prefix of a workspace that already has one (it previews the change; `--apply` writes it)",
 			ErrIssuePrefixRefused, state.Stored(), requested.spec.Value(), requested.spec.Value(),
@@ -683,8 +690,8 @@ func loadOrCreateConfig(rootDir string, path string, requested PrefixRequest) (C
 		// A refused value's Stored text is what config.json already carries, so
 		// it is left exactly as found: repairing it is `lit prefix set`'s
 		// decision, never a side effect of resolving.
-		if prefix.Stored() != cfg.IssuePrefix {
-			cfg.IssuePrefix = prefix.Stored()
+		if string(prefix.Stored()) != cfg.IssuePrefix {
+			cfg.IssuePrefix = string(prefix.Stored())
 			cfg, err = writeConfig(path, cfg)
 			if err != nil {
 				return Config{}, PrefixState{}, err
@@ -705,7 +712,7 @@ func loadOrCreateConfig(rootDir string, path string, requested PrefixRequest) (C
 	}
 	cfg = Config{
 		WorkspaceID: uuid.NewString(),
-		IssuePrefix: prefix.Stored(),
+		IssuePrefix: string(prefix.Stored()),
 		CreatedAt:   time.Now().UTC(),
 		Version:     1,
 	}

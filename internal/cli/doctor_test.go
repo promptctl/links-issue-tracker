@@ -25,7 +25,7 @@ func TestPrintWorkspaceIdentityReportsPrefixSource(t *testing.T) {
 	if err := printWorkspaceIdentity(&out, ws, idPrefixCensus{}); err != nil {
 		t.Fatalf("printWorkspaceIdentity() error = %v", err)
 	}
-	if !strings.Contains(out.String(), "issue_prefix=test issue_prefix_source=configured") {
+	if !strings.Contains(out.String(), `issue_prefix="test" issue_prefix_source=configured`) {
 		t.Fatalf("identity line = %q, want configured provenance", out.String())
 	}
 }

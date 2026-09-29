@@ -1838,10 +1838,10 @@ updated <n> issues
 
 ### 2.24 `lit prefix set <new-prefix> [--apply]`
 
-- Registration `register.go`, app-mode family (`familyCmd`), `set` opens the
-  store with `AccessRead`: it reads the ids to census them and writes only
-  `config.json`, which is not the store. Group `maintenance`. Summary: "Manage
-  the cosmetic issue ID prefix".
+- Registration `register.go`, workspace-mode (`wsFamilyCmd`). Group
+  `maintenance`. Summary: "Manage the cosmetic issue ID prefix". It opens the
+  store itself for the census (below), so it also runs before the store
+  exists.
 - Runs in a workspace whose stored prefix the rules refuse: it reads
   `PrefixState.Stored()`, never `Mintable()`, so it is the repair
   `stored_prefix_refused` names.
@@ -1857,12 +1857,18 @@ updated <n> issues
     `ValidationError{Message: fmt.Sprintf("invalid prefix %q: %v", requested, err)}` →
     reason `validation_refused`, exit 3 (`prefix.go`). Typed so a deterministic
     refusal does not reach the unclassified default's retry-then-doctor remediation.
-- After the prefix validates, `readIDPrefixCensus` (`prefix_census.go`) reads
+- After the prefix validates, `readWorkspaceIDPrefixCensus`
+  (`prefix_census.go`) opens the store with `engine.Open(ctx, engine.ReadOnly,
+  ws.DatabasePath, ws.WorkspaceID)`. An open failing with
+  `store.ErrWorkspaceNotInitialized` is the census of an absent store, rendered
+  `none (no store yet)`; any other open failure is returned; a close error is
+  returned only when nothing else failed. On an open store, `readIDPrefixCensus` reads
   every issue's id and topic through `ListIssueIdentities` (archived and
   deleted included, nothing hydrated, so a parent loop cannot stop it) and
   counts each by the prefix its id carries: `issueid.PrefixOf(root, topic)` reads
   `<prefix>-<topic>-<hash>` backwards using the topic the root issue stores, and
-  a child id counts under its root's prefix. An id that is not that rendering
+  a child id counts under its root's prefix. The hash must be base36 with a
+  length in `[MinHashLength, MaxHashLength]`. An id that is not that rendering
   (a legacy shape, a child whose root is gone) counts as `unreadable`. The
   census renders as `<prefix>:<n>,…` descending by count, ties by prefix, with
   `unreadable:<n>` last, or `none` for an empty store. A read failure →

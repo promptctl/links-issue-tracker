@@ -2,12 +2,16 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 
+	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/issueid"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 // idPrefixCensus is what the issue ids in a store actually use, read off the
@@ -25,11 +29,40 @@ type idPrefixCensus struct {
 	// no current rule, or a child whose root is gone. Counted rather than
 	// dropped, so the total always matches the store. [LAW:no-silent-failure]
 	unreadable int
+	// noStore marks a workspace whose store `lit init` has not created yet:
+	// there are no ids, which is not the same fact as a store holding none.
+	// [LAW:nothing-unseen] zero and absent render differently.
+	noStore bool
 }
 
 type idPrefixCount struct {
 	prefix string
 	issues int
+}
+
+// readWorkspaceIDPrefixCensus is the census `lit prefix set` takes. It opens
+// the store itself, read-only, because the command must also run before the
+// store exists: config.json can carry a refused prefix in a workspace `lit
+// init` never finished, and init refuses on that prefix before it creates the
+// store, so requiring one here would send each command's remediation to the
+// other. Not-initialized is read as the census of an absent store; every other
+// open failure propagates. [LAW:no-silent-failure]
+func readWorkspaceIDPrefixCensus(ctx context.Context, ws workspace.Info) (census idPrefixCensus, err error) {
+	st, err := engine.Open(ctx, engine.ReadOnly, ws.DatabasePath, ws.WorkspaceID)
+	if errors.Is(err, store.ErrWorkspaceNotInitialized) {
+		return idPrefixCensus{noStore: true}, nil
+	}
+	if err != nil {
+		return idPrefixCensus{}, err
+	}
+	// Close releases the workspace's shared lock, so its error is surfaced, but
+	// never over a read error. [LAW:no-silent-failure]
+	defer func() {
+		if cerr := st.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
+	return readIDPrefixCensus(ctx, st)
 }
 
 // readIDPrefixCensus counts every issue the store holds — archived and deleted
@@ -78,9 +111,13 @@ func censusOf(issues []storage.IssueIdentity) idPrefixCensus {
 }
 
 // String renders the census as one field value: `links:118,demo:2`, with
-// `unreadable:N` last when any id could not be read, and `none` for a store
-// with no issues — a clean answer, not a missing one.
+// `unreadable:N` last when any id could not be read, `none` for a store with no
+// issues — a clean answer, not a missing one — and `none (no store yet)` before
+// the store exists.
 func (c idPrefixCensus) String() string {
+	if c.noStore {
+		return "none (no store yet)"
+	}
 	parts := make([]string, 0, len(c.counts)+1)
 	for _, count := range c.counts {
 		parts = append(parts, fmt.Sprintf("%s:%d", count.prefix, count.issues))
@@ -99,14 +136,30 @@ func (c idPrefixCensus) String() string {
 // issue uses. That is legitimate straight after a deliberate `lit prefix set`,
 // and it is also what adopting a backlog minted under another prefix looks
 // like, so it is reported, never refused.
-func (c idPrefixCensus) mismatch(prefix string) bool {
+func (c idPrefixCensus) mismatch(prefix workspace.StoredPrefix) bool {
 	if len(c.counts) == 0 {
 		return false
 	}
 	for _, count := range c.counts {
-		if count.prefix == prefix {
+		if workspace.StoredPrefix(count.prefix) == prefix {
 			return false
 		}
 	}
 	return true
+}
+
+// adoptable is the prefix a mismatch report suggests: the most-used one that
+// `lit prefix set` would store exactly as the ids carry it. Ids minted under a
+// prefix the current rules refuse cannot be adopted, so when no counted prefix
+// qualifies the suggestion is the placeholder — naming a command that fails is
+// the false remediation the error mapping exists to prevent.
+// [LAW:single-enforcer] legality is workspace.ConfiguredPrefix's answer, the
+// same boundary `lit prefix set` parses its argument through.
+func (c idPrefixCensus) adoptable() string {
+	for _, count := range c.counts {
+		if spec, err := workspace.ConfiguredPrefix(count.prefix); err == nil && spec.Value() == count.prefix {
+			return count.prefix
+		}
+	}
+	return "<prefix>"
 }

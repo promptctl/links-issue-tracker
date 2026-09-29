@@ -48,8 +48,10 @@ func PrefixOf(id, topic string) (prefix string, ok bool) {
 	return prefix, ok && prefix != ""
 }
 
+// isHash reports whether s has the shape GenerateHashID mints: base36, and a
+// length inside the bounds the generator draws from.
 func isHash(s string) bool {
-	return s != "" && strings.Trim(s, Base36Alphabet) == ""
+	return len(s) >= MinHashLength && len(s) <= MaxHashLength && strings.Trim(s, Base36Alphabet) == ""
 }
 
 // ChildNamespace is the id-space the direct children of parentID are minted

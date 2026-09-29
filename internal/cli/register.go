@@ -729,7 +729,7 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		retiredSpec("ls-at", "maintenance", "use `lit ls --at <store-dir>`", lsAtRetirementGuidance),
 		retiredSpec("overview", "maintenance", "use `lit stores --counts`", overviewRetirementGuidance),
 		{Name: "prefix", Summary: "Manage the cosmetic issue ID prefix", GroupID: "maintenance",
-			Run: r.familyCmd(prefixFamily), Subcommands: prefixFamily.visibleSubcommands()},
+			Run: r.wsFamilyCmd(prefixFamily), Subcommands: prefixFamily.visibleSubcommands()},
 		{Name: "doctor", Summary: "Health check", GroupID: "maintenance",
 			Run: r.appCmdDynamic(resolveDoctorAccessMode, doctorLeaf)},
 		{Name: "backup", Summary: "Rotating JSON data-export backups — create/list/restore (wraps `export`; the data-recovery family, distinct from `snapshots`)", GroupID: "data",
