@@ -9,6 +9,7 @@ import (
 	"golang.org/x/mod/semver"
 
 	"github.com/promptctl/links-issue-tracker/internal/engine"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/release"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
@@ -59,6 +60,11 @@ func (e *UpgradeTargetBehindError) Error() string {
 		e.Tag, e.Target, e.Current, e.Current,
 	)
 }
+
+// RefusesCommand: the same --to is refused on every run. [LAW:single-enforcer]
+func (*UpgradeTargetBehindError) RefusesCommand() {}
+
+var _ model.Refusal = (*UpgradeTargetBehindError)(nil)
 
 // upgradeLeaf composes the release pipeline (internal/release) into the
 // forward-direction counterpart of `lit downgrade`. Where downgrade must reverse

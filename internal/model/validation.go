@@ -14,3 +14,17 @@ type ValidationError struct {
 }
 
 func (e ValidationError) Error() string { return e.Message }
+
+// RefusesCommand marks ValidationError as a Refusal.
+func (ValidationError) RefusesCommand() {}
+
+// Refusal is every error that refuses the command as issued: the same command
+// against the same data is refused the same way on every run, and the message
+// names what to change. The CLI maps it to exit 3 and to advice to adjust the
+// command, never to retry. A refusal type that carries its own fields opts in
+// by declaring the method beside itself, so it is classified where it is
+// defined rather than by an arm every sink must remember. [LAW:single-enforcer]
+type Refusal interface {
+	error
+	RefusesCommand()
+}

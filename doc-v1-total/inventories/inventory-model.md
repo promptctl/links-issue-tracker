@@ -750,6 +750,13 @@ where they are written: `ParseIssueType` / `ParsePriority` /
 `ParseRelationType`, `NormalizeLabel`, and in `internal/issueid`
 `NormalizeConfiguredPrefix` and `NormalizeTopicForCreate`.
 
+`Refusal` (`validation.go`) is the interface the CLI actually matches: `error`
+plus a marker method `RefusesCommand()`. `ValidationError` implements it, and so
+does any refusal type that carries its own fields and declares the method beside
+itself: `store.DowngradeTargetAheadError` and `store.DowngradeBelowBaselineError`
+(`downgrade.go`) and `cli.UpgradeTargetBehindError` (`upgrade.go`), each with a
+compile-time `var _ model.Refusal` assertion.
+
 ---
 
 # 3. `internal/issueid`

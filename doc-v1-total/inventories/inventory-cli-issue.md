@@ -182,7 +182,7 @@ Constants (`exit.go`):
 7. `UsageError` → 2 (`exit.go`)
 8. `UnknownCommandError` → 3 (`exit.go`)
 9. `RetiredCommandError` → 3 (`exit.go`)
-10. `model.ValidationError` → 3 (`exit.go`)
+10. `model.Refusal` (every `model.ValidationError`, and the upgrade/downgrade target refusals) → 3 (`exit.go`)
 11. `model.ContainerActionError` → 6 when `Satisfied()`, else 3 (`exit.go`)
 12. `UnsupportedError` → 3 (`exit.go`)
 13. `takeoverUnconfirmedError` → 3 (`exit.go`)
@@ -190,10 +190,11 @@ Constants (`exit.go`):
 15. `NoWork` → 6 (`exit.go`)
 16. `OutsideWorkspaceError` → 3 (`exit.go`)
 17. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → 3 (`exit.go`)
-18. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → 3 (`exit.go`)
-19. `BulkFailureError` → 1 (`exit.go`)
-20. `errors.Is(err, store.ErrTransientGCContention)` → 1 (`exit.go`)
-21. anything else → 1 (`exit.go`)
+18. `*store.UnsupportedSchemaVersionError` → 3 (`exit.go`)
+19. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → 3 (`exit.go`)
+20. `BulkFailureError` → 1 (`exit.go`)
+21. `errors.Is(err, store.ErrTransientGCContention)` → 1 (`exit.go`)
+22. anything else → 1 (`exit.go`)
 
 Error types defined in `cli.go`: `MergeConflictError` (`cli.go`),
 `CorruptionError` (`cli.go`), `UsageError` (`cli.go`),
@@ -217,7 +218,8 @@ rules in `internal/model/validation.go`.
 `corruption_detected`, `unknown_command`, `retired_command`, `usage_error`,
 `unsupported_flag` (every `UnsupportedError`, `error_output.go`),
 `takeover_unconfirmed` (`takeoverUnconfirmedError`), `outside_git_workspace`, `bulk_partial_failure`, `workspace_write_blocked`,
-`transient_gc_contention`, `workspace_not_initialized`, default `command_failed`.
+`transient_gc_contention`, `workspace_not_initialized`,
+`workspace_schema_ahead` (`*store.UnsupportedSchemaVersionError`), default `command_failed`.
 
 `commandErrorRemediation(reason)` (`error_output.go`), verbatim strings:
 - `unknown_command`: "Run `lit --help` (or `lit help <command>`) to select a supported command path."
@@ -234,6 +236,7 @@ rules in `internal/model/validation.go`.
 - `takeover_unconfirmed`: "Rerun with `--take` to take the lane over, or run `lit next` for work nobody else holds. \<agent-instructions>Taking over a lane another checkout holds right now overrides that checkout's work: pass `--take` only when the user directs the takeover.\</agent-instructions>"
 - `outside_git_workspace`: "Run the command inside a git repository/worktree with links initialized."
 - `workspace_not_initialized`: "Do not retry unchanged — this repository has no lit workspace, and retrying this command cannot create one. Run `lit init` here to create it, or change to a directory that already has one."
+- `workspace_schema_ahead`: "Do not retry unchanged — this lit is older than the workspace's schema, and rerunning the command with the same binary repeats this refusal. The message above names the supported path. \<agent-instructions>Installing a different lit replaces it for every workspace on this machine, and any snapshot rollback the message offers discards data: take such a path only when the user directs it, and until then surface this refusal to the user as blocking.\</agent-instructions>"
 - `bulk_partial_failure`: "Some items failed; see the per-item errors above. Re-run the command for only the failed IDs after addressing each error."
 - default: "Retry the command. If it still fails, run `lit doctor` for diagnostics."
 

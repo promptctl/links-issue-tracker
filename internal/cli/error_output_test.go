@@ -104,6 +104,13 @@ func TestCommandErrorReason(t *testing.T) {
 			fmt.Errorf("open store: %w", store.ErrWorkspaceNotInitialized),
 			"workspace_not_initialized",
 		},
+		// A binary older than the workspace is not refused for its command, so
+		// it takes its own reason rather than validation_refused's "adjust the
+		// command"; the traversal refusals are refused for their --to, so they
+		// are model.Refusal and take validation_refused.
+		{"workspace schema ahead", schemaAheadError(), "workspace_schema_ahead"},
+		{"workspace schema ahead wrapped", fmt.Errorf("open store: %w", schemaAheadError()), "workspace_schema_ahead"},
+		{"upgrade target behind wrapped", fmt.Errorf("upgrade: %w", upgradeTargetBehindError()), "validation_refused"},
 		// A stat that failed for any reason but ENOENT is an unclassified fault,
 		// and the retry-then-doctor default is the right advice for it. The
 		// workspace_not_initialized arm must not widen to it.
@@ -250,6 +257,69 @@ func TestWriteCommandErrorUninitializedWorkspace(t *testing.T) {
 	// retry advice. [LAW:no-silent-failure]
 	if strings.Contains(out, "every store-touching command") {
 		t.Fatalf("remediation must not claim every command repeats this answer; the write paths bootstrap: %q", out)
+	}
+}
+
+// schemaAheadError is the ticket's reproduction: a workspace at schema 999
+// whose baseline is broken, opened by a binary that supports up to 5.
+func schemaAheadError() *store.UnsupportedSchemaVersionError {
+	return &store.UnsupportedSchemaVersionError{WorkspaceVersion: 999, MaxSupported: 5, MissingBaseline: []string{"issues.title"}}
+}
+
+// upgradeTargetBehindError is `lit upgrade` against that same workspace: the
+// latest release stops at schema 5, and this binary cannot open the workspace.
+func upgradeTargetBehindError() *UpgradeTargetBehindError {
+	return &UpgradeTargetBehindError{Current: 999, Target: 5, Tag: "v0.14.0", WorkspaceOpenable: false}
+}
+
+// TestWriteCommandErrorSchemaVersionRefusals pins the surface an agent reads
+// for the two refusals the ticket reproduced. Each repeats on every run, so
+// its remediation must not send the agent to retry or to `lit doctor`, and
+// must not contradict the remedy its message already names. The reason and
+// exit code are pinned as data in the tables; this asserts the words.
+func TestWriteCommandErrorSchemaVersionRefusals(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		err  error
+		// want is the remediation's act; absent is advice that would be false
+		// for this refusal.
+		want, absent string
+	}{
+		// The command is not what is wrong, so "adjust the command" would send
+		// the agent looking for a flag that does not exist.
+		// Both paths the message names change more than this command, so the
+		// agent is told to wait for the user rather than take either.
+		{"workspace schema ahead", schemaAheadError(), "take such a path only when the user directs it", "adjust the command"},
+		// The message names a newer target, which is the command adjusted.
+		{"upgrade target behind", upgradeTargetBehindError(), "adjust the command to satisfy it", "supported path"},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var stderr bytes.Buffer
+			if code := WriteCommandError(&stderr, tc.err); code != ExitValidation {
+				t.Fatalf("exitCode = %d, want %d (ExitValidation)", code, ExitValidation)
+			}
+			out := stderr.String()
+			if !strings.Contains(out, "error (code=3): "+tc.err.Error()) {
+				t.Fatalf("missing the message body at exit 3: %q", out)
+			}
+			_, remediation, ok := strings.Cut(out, "\nremediation: ")
+			if !ok {
+				t.Fatalf("missing remediation line: %q", out)
+			}
+			if strings.Contains(remediation, "Retry the command") || strings.Contains(remediation, "lit doctor") {
+				t.Fatalf("a refusal that repeats on every run must not carry the retry-then-doctor advice: %q", remediation)
+			}
+			if !strings.HasPrefix(remediation, "Do not retry unchanged") || !strings.Contains(remediation, tc.want) {
+				t.Fatalf("remediation must say not to retry and name %q: %q", tc.want, remediation)
+			}
+			if strings.Contains(remediation, tc.absent) {
+				t.Fatalf("remediation must not say %q: %q", tc.absent, remediation)
+			}
+		})
 	}
 }
 

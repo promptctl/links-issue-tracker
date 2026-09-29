@@ -88,8 +88,8 @@ func ExitCode(err error) int {
 	if errors.As(err, &retiredCmd) {
 		return ExitValidation
 	}
-	var validation model.ValidationError
-	if errors.As(err, &validation) {
+	var refusal model.Refusal
+	if errors.As(err, &refusal) {
 		return ExitValidation
 	}
 	// The two halves of a container refusal are different answers and exit
@@ -146,6 +146,14 @@ func ExitCode(err error) int {
 		return ExitValidation
 	}
 	if errors.Is(err, store.ErrWorkspaceNotInitialized) {
+		return ExitValidation
+	}
+	// A binary too old for the workspace is a self-fixable precondition no
+	// retry changes, not "lit is broken". The act it asks for — a different
+	// lit, not a different command — is carried by the reason.
+	// [LAW:no-mode-explosion]
+	var schemaAhead *store.UnsupportedSchemaVersionError
+	if errors.As(err, &schemaAhead) {
 		return ExitValidation
 	}
 	// Not ExitGeneric, which also means "lit is broken": a prefix lit cannot

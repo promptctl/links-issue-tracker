@@ -70,8 +70,8 @@ func commandErrorReason(err error) string {
 	// refusal's message already names the rule (and often the alternative), and
 	// an agent that trusts remediation text over the error body will loop on a
 	// retry that can never succeed.
-	var validation model.ValidationError
-	if errors.As(err, &validation) {
+	var refusal model.Refusal
+	if errors.As(err, &refusal) {
 		return "validation_refused"
 	}
 	// A malformed managed template is a refusal of a file on disk, not of the
@@ -139,6 +139,15 @@ func commandErrorReason(err error) string {
 	// go somewhere already initialized. [LAW:one-type-per-behavior]
 	if errors.Is(err, store.ErrWorkspaceNotInitialized) {
 		return "workspace_not_initialized"
+	}
+	// A workspace whose schema is ahead of this binary. Terminal for the binary
+	// that raised it — no rerun changes which lit is installed — so it must not
+	// reach the default's retry advice. Not validation_refused: the command is
+	// not what is wrong, so "adjust the command" would be false advice.
+	// [LAW:one-type-per-behavior]
+	var schemaAhead *store.UnsupportedSchemaVersionError
+	if errors.As(err, &schemaAhead) {
+		return "workspace_schema_ahead"
 	}
 	// lit could not settle on an issue prefix, and the three ways it can fail
 	// split by the ACT that clears them, which is what a reason names.
@@ -309,6 +318,16 @@ func commandErrorRemediation(reason string) string {
 		// acts on, so a convenient overstatement here is a defect.
 		// [LAW:no-silent-failure]
 		return "Do not retry unchanged — this repository has no lit workspace, and retrying this command cannot create one. Run `lit init` here to create it, or change to a directory that already has one."
+	case "workspace_schema_ahead":
+		// The message names the supported path and, when a snapshot exists,
+		// the lossy rollback, so this line defers to it rather than restating
+		// either. [LAW:one-source-of-truth] Both paths change more than this
+		// command: installing a lit replaces it for every workspace on the
+		// machine, and the rollback discards data. So the agent is told to take
+		// neither on its own, the way takeover_unconfirmed gates `--take`. The
+		// rollback is named conditionally because the message offers it only
+		// when a recovery snapshot exists.
+		return "Do not retry unchanged — this lit is older than the workspace's schema, and rerunning the command with the same binary repeats this refusal. The message above names the supported path. " + agentInstructionsOpen + "Installing a different lit replaces it for every workspace on this machine, and any snapshot rollback the message offers discards data: take such a path only when the user directs it, and until then surface this refusal to the user as blocking." + agentInstructionsClose
 	case "bulk_partial_failure":
 		return "Some items failed; see the per-item errors above. Re-run the command for only the failed IDs after addressing each error."
 	default:

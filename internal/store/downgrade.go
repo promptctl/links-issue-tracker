@@ -9,6 +9,7 @@ import (
 
 	"github.com/pressly/goose/v3"
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 // migrationDownForTest, if non-nil, replaces provider.Down(ctx) inside
@@ -88,6 +89,11 @@ func (e *DowngradeTargetAheadError) Error() string {
 	)
 }
 
+// RefusesCommand: the same --to is refused on every run. [LAW:single-enforcer]
+func (*DowngradeTargetAheadError) RefusesCommand() {}
+
+var _ model.Refusal = (*DowngradeTargetAheadError)(nil)
+
 // DowngradeBelowBaselineError reports that the requested target sits below the
 // embedded baseline. Running Down past baseline drops every table; Downgrade
 // refuses before invoking goose so the destructive baseline Down is unreachable
@@ -104,6 +110,11 @@ func (e *DowngradeBelowBaselineError) Error() string {
 		e.Target, baselineVersion,
 	)
 }
+
+// RefusesCommand: the same --to is refused on every run. [LAW:single-enforcer]
+func (*DowngradeBelowBaselineError) RefusesCommand() {}
+
+var _ model.Refusal = (*DowngradeBelowBaselineError)(nil)
 
 // DowngradeRollbackError wraps a downgrade failure that occurred after the
 // recovery snapshot was taken. Parallel in shape and intent to
