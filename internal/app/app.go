@@ -78,7 +78,7 @@ func Open(ctx context.Context, cwd string, mode AccessMode) (*App, error) {
 	}
 	st, err := engine.Open(ctx, contract.mode, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
-		return nil, err
+		return nil, StoreOpenError{Workspace: ws, Err: err}
 	}
 	// Resolved after the store opens so a command that cannot reach its store
 	// mints nothing: identity marks a checkout that started doing work, and a
@@ -100,6 +100,18 @@ func Open(ctx context.Context, cwd string, mode AccessMode) (*App, error) {
 	// [LAW:dataflow-not-control-flow]
 	return New(ws, st, stream), nil
 }
+
+// StoreOpenError is a store that would not open in a workspace that did
+// resolve. It carries that workspace so a caller filing the failure under it
+// reuses this resolution instead of resolving again, which would wait on the
+// config lock a second time. [LAW:one-source-of-truth]
+type StoreOpenError struct {
+	Workspace workspace.Info
+	Err       error
+}
+
+func (e StoreOpenError) Error() string { return e.Err.Error() }
+func (e StoreOpenError) Unwrap() error { return e.Err }
 
 // New pairs an opened store with this checkout's stream: the store stamps
 // exactly the identity the App reports as Stream, so the attribution on this

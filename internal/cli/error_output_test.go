@@ -126,6 +126,11 @@ func TestCommandErrorReason(t *testing.T) {
 			fmt.Errorf("another lit process is writing to this workspace; retry after it completes: %w", store.ErrWorkspaceBusy),
 			"workspace_busy",
 		},
+		{
+			"workspace config busy",
+			fmt.Errorf("%w: another lit process held config.json's lock for over 5s; retry once it exits", workspace.ErrConfigBusy),
+			"workspace_busy",
+		},
 		// The router's terminal answers are answers, not faults, and each names
 		// a different act — so each is its own reason rather than both sharing
 		// one, and neither may fall through to "command_failed".

@@ -180,6 +180,34 @@ func TestPrefixSetIdempotentWhenAlreadyCurrent(t *testing.T) {
 	}
 }
 
+// An apply whose workspace was resolved before another process rewrote the
+// prefix reports the prefix its own write replaced, not the one it resolved:
+// reporting the stale one names a value config.json no longer held.
+func TestPrefixSetApplyReportsThePrefixItReplaced(t *testing.T) {
+	repo, _ := initRepoForPrefixTest(t)
+	stale, err := workspace.Resolve(repo)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if _, err := workspace.UpdateConfig(stale.ConfigPath, func(cfg workspace.Config) (workspace.Config, error) {
+		cfg.IssuePrefix = "between"
+		return cfg, nil
+	}); err != nil {
+		t.Fatalf("UpdateConfig() error = %v", err)
+	}
+	leaf := prefixSetLeaf()
+	if err := leaf.fs.Parse([]string{"--apply"}); err != nil {
+		t.Fatalf("Parse(--apply) error = %v", err)
+	}
+	var out bytes.Buffer
+	if err := leaf.work(context.Background(), &out, stale, []string{"newproj"}); err != nil {
+		t.Fatalf("prefix set --apply error = %v\n%s", err, out.String())
+	}
+	if want := "issue_prefix: between -> newproj (applied)"; !strings.Contains(out.String(), want) {
+		t.Fatalf("apply output = %q, want %q", out.String(), want)
+	}
+}
+
 func TestPrefixSetRejectsInvalidPrefix(t *testing.T) {
 	_, runLit := initRepoForPrefixTest(t)
 

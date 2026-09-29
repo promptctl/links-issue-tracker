@@ -229,7 +229,9 @@ func commandErrorReason(err error) commandReason {
 	if errors.As(err, &writeBlocked) {
 		return reasonWorkspaceWriteBlocked
 	}
-	if errors.Is(err, store.ErrWorkspaceBusy) {
+	// A store lock and the config lock are two locks with one answer: another
+	// lit process holds what this one needs, and a retry after it exits succeeds.
+	if errors.Is(err, store.ErrWorkspaceBusy) || errors.Is(err, workspace.ErrConfigBusy) {
 		return reasonWorkspaceBusy
 	}
 	if errors.Is(err, store.ErrTransientGCContention) {

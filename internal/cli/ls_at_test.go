@@ -143,29 +143,63 @@ func TestLsAtContentionTraceFilesUnderTargetStore(t *testing.T) {
 	// The record names the command, never its payload: its command field is
 	// exactly `lit ls`, the --at path redacted — the filing location already
 	// carries the target.
-	traced := false
-	if entries, readErr := os.ReadDir(syncTraceDir(infoForLocation(loc))); readErr == nil {
-		for _, entry := range entries {
-			content, fileErr := os.ReadFile(filepath.Join(syncTraceDir(infoForLocation(loc)), entry.Name()))
-			if fileErr != nil {
-				continue
-			}
-			var rec struct {
-				Command string `json:"command"`
-			}
-			if json.Unmarshal(content, &rec) != nil || !strings.HasPrefix(rec.Command, "lit ls") {
-				continue
-			}
-			if rec.Command != "lit ls" {
-				t.Fatalf("contention trace command = %q; the record carries only the command path `lit ls`, never the invocation's payload", rec.Command)
-			}
-			traced = true
-			break
+	requireLsContentionTrace(t, infoForLocation(loc))
+}
+
+// TestStarvedOpenTraceFilesUnderCwdWorkspace pins the cwd path's half of the
+// same contract: a command starved opening its own store files the trace
+// under the workspace app.Open resolved, carried out on the open's error.
+//
+// Not parallel: it chdirs.
+func TestStarvedOpenTraceFilesUnderCwdWorkspace(t *testing.T) {
+	repo, runLit := initRepoForPrefixTest(t)
+	ws, err := workspace.Resolve(repo)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	release, err := store.LockWorkspaceExclusive(context.Background(), ws.DatabasePath)
+	if err != nil {
+		t.Fatalf("LockWorkspaceExclusive: %v", err)
+	}
+	defer func() {
+		if relErr := release(); relErr != nil {
+			t.Errorf("release exclusive: %v", relErr)
 		}
+	}()
+
+	out, err := runLit("ls")
+	if !errors.Is(err, store.ErrWorkspaceBusy) {
+		t.Fatalf("ls against an exclusively held store: error = %v, want store.ErrWorkspaceBusy\noutput=%s", err, out)
 	}
-	if !traced {
-		t.Fatalf("no sync trace under the --at target records the starved `lit ls`; the contention is unattributable")
+	requireLsContentionTrace(t, ws)
+}
+
+// requireLsContentionTrace fails unless ws's sync traces record a starved
+// `lit ls` under exactly that command path.
+func requireLsContentionTrace(t *testing.T, ws workspace.Info) {
+	t.Helper()
+	dir := syncTraceDir(ws)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir(%s): %v; no contention trace was filed", dir, err)
 	}
+	for _, entry := range entries {
+		content, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", entry.Name(), err)
+		}
+		var rec struct {
+			Command string `json:"command"`
+		}
+		if json.Unmarshal(content, &rec) != nil || !strings.HasPrefix(rec.Command, "lit ls") {
+			continue
+		}
+		if rec.Command != "lit ls" {
+			t.Fatalf("contention trace command = %q; the record carries only the command path `lit ls`, never the invocation's payload", rec.Command)
+		}
+		return
+	}
+	t.Fatalf("no sync trace under %s records the starved `lit ls`; the contention is unattributable", dir)
 }
 
 // TestLsAtRejectsMissingStore pins the loud-failure contract: a path with no
