@@ -1468,34 +1468,67 @@ func TestRankSetStampsOnlyTheIssuesItNamed(t *testing.T) {
 	}
 }
 
-// TestRankSetSeparatesIssuesSharingAKey pins that a rank set's order holds
-// when two of the frame's issues share a key, as imported keys can. Handing
-// the pair each other's key would leave both on one key, listed by id — the
-// order named reversed here would come back unchanged, reported as success.
-func TestRankSetSeparatesIssuesSharingAKey(t *testing.T) {
+// TestRankSetOverIssuesSharingAKey pins what a rank set does with two issues
+// on one key, as imported keys can be. A permutation leaves them sharing it,
+// and a listing breaks the tie by id: an order that agrees with the ids is
+// written, and one that reverses them is refused by name with nothing changed,
+// rather than reported as done while the listing shows the old order.
+func TestRankSetOverIssuesSharingAKey(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
-	st := openIssueStore(t, ctx)
+	for _, tc := range []struct {
+		name      string
+		reversed  bool
+		wantError string
+	}{
+		{name: "in id order", reversed: false},
+		{name: "against id order", reversed: true, wantError: "share the key"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			st := openIssueStore(t, ctx)
 
-	ids := makeIssues(t, ctx, st, 3, "row %d")
-	slices.Sort(ids)
-	a, b, c := ids[0], ids[1], ids[2]
-	held := currentRanks(t, ctx, st, []model.Issue{{ID: a}})[a]
-	if _, err := st.db.ExecContext(ctx, `UPDATE issues SET item_rank = ? WHERE id = ?`, held, b); err != nil {
-		t.Fatalf("tie %s to %s: %v", b, a, err)
-	}
+			ids := makeIssues(t, ctx, st, 3, "row %d")
+			slices.Sort(ids)
+			low, high, other := ids[0], ids[1], ids[2]
+			for id, key := range map[string]string{low: "M", high: "M", other: "T"} {
+				if _, err := st.db.ExecContext(ctx, `UPDATE issues SET item_rank = ? WHERE id = ?`, key, id); err != nil {
+					t.Fatalf("plant %q on %s: %v", key, id, err)
+				}
+			}
+			named := []string{low, high}
+			if tc.reversed {
+				named = []string{high, low}
+			}
+			before, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
+			if err != nil {
+				t.Fatalf("ListIssues() error = %v", err)
+			}
 
-	if _, err := st.RankSet(ctx, []string{b, a}); err != nil {
-		t.Fatalf("RankSet over a tied pair error = %v", err)
+			_, err = st.RankSet(ctx, named)
+			after, listErr := st.ListIssues(ctx, storage.ListIssuesFilter{})
+			if listErr != nil {
+				t.Fatalf("ListIssues() error = %v", listErr)
+			}
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) || !strings.Contains(err.Error(), "lit rank "+high+" --above "+low) {
+					t.Fatalf("RankSet(%v) error = %v, want a refusal naming the tie and the move that separates it", named, err)
+				}
+				for i := range after {
+					if after[i].ID != before[i].ID || after[i].Rank != before[i].Rank {
+						t.Fatalf("a refused rank set changed the store: %v -> %v", before, after)
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("RankSet(%v) error = %v", named, err)
+			}
+			if got, want := issueIDs(after)[:2], named; !slices.Equal(got, want) {
+				t.Fatalf("order after rank set starts %v, want %v (then %s)", got, want, other)
+			}
+		})
 	}
-	after, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
-	if err != nil {
-		t.Fatalf("ListIssues() error = %v", err)
-	}
-	if got, want := issueIDs(after), []string{b, a, c}; !slices.Equal(got, want) {
-		t.Fatalf("order after rank set = %v, want %v", got, want)
-	}
-	assertDistinctStoredRanks(t, after)
 }
 
 // TestRankSetPlacesANamedIssueThatHoldsNoKey pins that an unranked issue can be

@@ -2944,12 +2944,12 @@ Frame behavior pinned by tests — `internal/store/ranking_frame_test.go`:
 - `resolveRankSet` — `internal/store/ranking.go`: per id, `GetIssue` then `ancestorChain`; `resolveFrameRepresentatives` errors are wrapped `fmt.Errorf("rank set: %w", err)`; two named ids collapsing to the same representative →
   `fmt.Errorf("rank set: %s and %s both resolve to %s — their relative order is internal to %s and cannot be set against outside issues; run rank set among siblings instead", prior, id, reps[i], reps[i])`.
   Returns `[]storage.RankSetResolution{{NamedID, RankedID}}` parallel to the input order.
-- In `withMutation(ctx, "rank set", …)`, the frame's unranked members are read first — `SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank = '' AND <frame> = ?`, error → `fmt.Errorf("rank set: read the unranked members of frame %q: %w", f, err)` — and each one that is a representative is placed at the frame's bottom by `bottomEdge.placeBeyondTx`, error wrapped `fmt.Errorf("rank set: %w", err)`. Then the frame's keys are read lowest first, ties by id:
+- In `withMutation(ctx, "rank set", …)`, `unrankedAmongTx` first reads which representatives are live and hold no key, one `SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank = '' AND id IN (…)` per `idBatches` batch, error → `fmt.Errorf("read which of %v hold no key: %w", batch, err)` wrapped `fmt.Errorf("rank set: %w", err)`; each is placed at the frame's bottom by `bottomEdge.placeBeyondTx`, error wrapped `fmt.Errorf("rank set: %w", err)`. Then the frame's keys are read lowest first, ties by id:
   ```sql
   SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' AND <frame> = ? ORDER BY item_rank ASC, id ASC
   ```
-  bound with the frame alone, through `frameSlotsTx`; error → `fmt.Errorf("rank set: read the keys of frame %q: %w", f, err)`.
-- Each key two slots share (`tiedKeys`) is respaced by `smoothRanksTx(ctx, tx, key)`, error → `fmt.Errorf("rank set: separate the issues sharing %q: %w", key, err)`, and the slots are read again. A tie that survives → `fmt.Errorf("rank set: frame %q still holds issues sharing the keys %v after respacing — refusing to write an order they cannot hold", f, tied)`.
+  bound with the frame alone, through `rankRows`; error → `fmt.Errorf("rank set: read the keys of frame %q: %w", f, err)`.
+- A permutation leaves two slots on one key sharing it, and a listing breaks the tie by id. Where adjacent slots share a key and the id of the issue ordered into the later one sorts before the earlier one's, the set is refused: `fmt.Errorf("rank set: %s and %s share the key %q, which a listing breaks by id, so %s cannot be written above %s; separate them first with `lit rank %s --above %s`", …)`.
 - `storage.RankSetOrder(f, occupants, ranked)` (`internal/storage/rank.go`) names each slot's new occupant: the representatives in the order named, then every other frame member in its current order. A representative that is not one of the frame's ranked members makes the result longer than the frame → `fmt.Errorf("rank set: %d issues resolved into %s but the frame holds %d ranked — refusing to rewrite a partial order", len(ordered), f, len(occupants))`. The memory engine applies the same function to its slots (`internal/storage/memory/rank.go`).
 - Each slot's key passes to its new occupant; a slot whose occupant is unchanged is not written. `writeRanksTx` writes the moved keys in one statement per `idBatches` batch — `UPDATE issues SET item_rank = CASE id WHEN ? THEN ? … END, updated_at = COALESCE(CASE id WHEN ? THEN ? … END, updated_at) WHERE deleted_at IS NULL AND id IN (…)`, error → `fmt.Errorf("rewrite the keys of %v: %w", batch, err)`, wrapped `fmt.Errorf("rank set: %w", err)`. A write is `touched` only for a representative whose key changed; it takes one shared `now`, and every other write is bound NULL, so it keeps its `updated_at`. No key is minted, so the frame holds the same set of keys before and after, and a repeat of an order that has arrived writes nothing.
 - Atomic: all assignments in one mutation.
@@ -2964,7 +2964,7 @@ Tests: absolute top ordering — `internal/store/store_test.go`; duplicates reje
 2. `half := rank.SmoothingWindow / 2` = 16.
 3. Below half:
    ```sql
-   SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank <= ? ORDER BY item_rank DESC, id DESC LIMIT ?
+   SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' AND item_rank <= ? ORDER BY item_rank DESC, id DESC LIMIT ?
    ```
    bound `(triggerRank, half)`; error → `"smooth: below: %w"`. The rows come back descending and are reversed to ascending.
 4. Above half:
@@ -2976,7 +2976,7 @@ Tests: absolute top ordering — `internal/store/store_test.go`; duplicates reje
 6. The run bounds are computed from the window's own ends rather than scanned for: `runFloor` is `rank.Significant(window[0].rank)`, the least rank sharing the bottom end's significant part; `runCeiling` is `rank.Significant(window[len-1].rank) + "1"`, the least rank sorting above every rank sharing the top end's. Ranks sharing a significant part sort contiguously, so these two values delimit exactly the runs the window's ends sit in.
 7. Two bounded range queries pick up the rest of each run:
    ```sql
-   SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank >= ? AND item_rank < ? ORDER BY item_rank ASC, id ASC
+   SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' AND item_rank >= ? AND item_rank < ? ORDER BY item_rank ASC, id ASC
    ```
    bound `(runFloor, window[0].rank)`, error → `"smooth: lower run: %w"`; and
    ```sql
@@ -2985,9 +2985,9 @@ Tests: absolute top ordering — `internal/store/store_test.go`; duplicates reje
    bound `(window[len-1].rank, runCeiling)`, error → `"smooth: upper run: %w"`. Both already ascend, so they concatenate around the window in order. Both ranges are bounded on each side, so a run costs the rows it holds rather than a scan of the sorted set.
 8. The bounds themselves, one row each: the greatest rank below `runFloor` (`ORDER BY item_rank DESC LIMIT 1`), error → `"smooth: lower bound: %w"`; and the least rank at or above `runCeiling` (`ORDER BY item_rank ASC LIMIT 1`), error → `"smooth: upper bound: %w"`. A side with no such row leaves the bound `""` (meaning open-ended).
 9. `rank.SpacedRanksBetween(lowerBound, upperBound, len(window))`; error → `fmt.Errorf("smooth: compute ranks: %w", err)`. The two bounds cannot pad to the same value — the one pair that primitive rejects (`internal/rank/rank.go`) is unreachable from here. `lowerBound` sorts below `runFloor`, so it cannot share the bottom end's significant part; and were the two bounds to share one with each other, every rank between them would belong to that single run, while `window[0]` lies between them with a different significant part.
-10. `UPDATE issues SET item_rank = ? WHERE id = ?` for each window entry whose new rank differs from the old — `updated_at` is **not** touched here; error → `fmt.Errorf("smooth: update %s: %w", item.id, err)`.
+10. Each window entry whose new rank differs from the old is written through `writeRanksTx` as an untouched `rankWrite`, so `updated_at` is **not** changed; error → `fmt.Errorf("smooth: %w", err)`. Neither window read admits an unranked row (`item_rank != ''`), so a respace never ranks an issue.
 
-An all-zero rank at the bottom end takes the same path with no special case: its `rank.Significant` is `""`, so `runFloor` is `""`; `item_rank < ''` matches nothing and leaves `lowerBound` the open end, which is correct, while `item_rank >= '' AND item_rank < window[0].rank` is exactly the all-zero ranks below the window, everything sorting below an all-zero rank being itself all-zero.
+An all-zero rank at the bottom end takes the same path with no special case: its `rank.Significant` is `""`, so `runFloor` is `""`; `item_rank < ''` matches nothing and leaves `lowerBound` the open end, which is correct, while `item_rank != '' AND item_rank >= '' AND item_rank < window[0].rank` is exactly the all-zero ranks below the window, everything ranked that sorts below an all-zero rank being itself all-zero.
 
 `rankRows(ctx, q, query, args…)` — `internal/store/ranking.go`, over a `rowQueryer` (`*sql.DB` or `*sql.Tx`): runs a rank query and returns every row it matches, in the order the query asks for. Every caller bounds its own query — by range or by `LIMIT` — so the rows read stay proportional to the window rather than to the backlog.
 
@@ -2995,7 +2995,7 @@ An all-zero rank at the bottom end takes the same path with no special case: its
 
 [LAW:one-source-of-truth] `rank.Significant` is the one definition of room here, the same one `anchorRun` compares anchors by: ranks sharing a significant part leave nothing between them, so a bound sharing the window's would leave the window nowhere to go.
 
-Smoothing is invoked from `RankToTop`, `RankToBottom`, `RankAbove`, `RankBelow`, `rankBetweenTx` (with no length threshold, when a placement's pair of bounds has no room), and `FixRankInversions` (once per rewritten rank after every repair write has landed). It ignores parent/epic frames entirely: the window is whatever is adjacent in the global rank keyspace.
+Smoothing is invoked from `RankToTop`, `RankToBottom`, `RankSet` (when it places a named issue that holds no key, through `placeBeyondTx`), `RankAbove`, `RankBelow`, `rankBetweenTx` (with no length threshold, when a placement's pair of bounds has no room), and `FixRankInversions` (once per rewritten rank after every repair write has landed). It ignores parent/epic frames entirely: the window is whatever is adjacent in the global rank keyspace.
 
 ### 5.8 Rank inversions
 
@@ -3058,7 +3058,7 @@ Pure and DB-free, in `internal/store/rank_repair.go`; `FixRankInversions` suppli
    - `loadRankOrder(ctx, tx, liveIDs)`; error → `fmt.Errorf("fix rank inversions: %w", err)`.
    - `loadBlocksEdges(ctx, tx)`; error → `fmt.Errorf("fix rank inversions: load blocks edges: %w", err)`.
    - `repairRankOrder(order, edges)`; error → `fmt.Errorf("fix rank inversions: %w", err)`. This is the arm a dependency cycle takes.
-   - `UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?` per rewrite, stamped `s.clock.Now().Format(time.RFC3339Nano)`; error → `fmt.Errorf("fix rank inversions: update %s: %w", rewrite.id, err)`.
+   - Every rewrite goes through `writeRanksTx` as a touched `rankWrite`, stamped `s.clock.Now().Format(time.RFC3339Nano)`; error → `fmt.Errorf("fix rank inversions: %w", err)`.
    - `smoothRanksIfNeededTx` per rewritten rank, in a second loop after every write has landed rather than interleaved with them: a pass that re-spaced a window mid-repair would move the anchor ranks the remaining placements were computed against. Error → `fmt.Errorf("fix rank inversions: smooth ranks: %w", err)`.
    - `rerankedCount = len(rewrites)`, assigned rather than accumulated, because `withStampedMutation` may re-run the function after a transient failure rolls its writes back.
 3. On mutation error returns `(0, err)`; otherwise `(rerankedCount, nil)`. The count is issues whose rank was rewritten by the repair, one per issue. Smoothing may rewrite further ranks, anchors included, without changing order or `updated_at`, and those are not counted.

@@ -429,10 +429,9 @@ func requireLiveTx(ctx context.Context, q rowQueryer, id string) error {
 // of through a plain bug.
 //
 // The read below makes the refusal loud. The predicate itself rides on
-// writeRanksTx's UPDATE, which every rank verb's key write runs — this one and
-// rank set's batched rewrite alike — so "a rank never lands on a deleted issue"
-// has one enforcement site, and it holds even if the read is ever removed or
-// reordered. [LAW:single-enforcer]
+// writeRanksTx's UPDATE, which every key write in the store's rank paths runs,
+// so "a rank never lands on a deleted issue" has one enforcement site, and it
+// holds even if the read is ever removed or reordered. [LAW:single-enforcer]
 func writeRankTx(ctx context.Context, tx *sql.Tx, id, newRank, now string) error {
 	if err := requireLiveTx(ctx, tx, id); err != nil {
 		return err
@@ -619,40 +618,24 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 		// permutation to hand anyone. It first joins the bottom of its frame,
 		// exactly as rank to bottom would place it, and the permutation then
 		// leads the frame with it like any other named issue.
-		unranked, err := rankRows(ctx, tx, fmt.Sprintf(`SELECT id, item_rank FROM issues
-			WHERE deleted_at IS NULL AND item_rank = '' AND %s = ?`, frameColumn), string(f))
+		unranked, err := unrankedAmongTx(ctx, tx, ranked)
 		if err != nil {
-			return storage.RankSetResult{}, fmt.Errorf("rank set: read the unranked members of frame %q: %w", f, err)
+			return storage.RankSetResult{}, fmt.Errorf("rank set: %w", err)
 		}
-		for _, member := range unranked {
-			if !slices.Contains(ranked, member.id) {
-				continue
-			}
-			if err := bottomEdge.placeBeyondTx(ctx, tx, f, member.id, now); err != nil {
+		for _, id := range unranked {
+			if err := bottomEdge.placeBeyondTx(ctx, tx, f, id, now); err != nil {
 				return storage.RankSetResult{}, fmt.Errorf("rank set: %w", err)
 			}
 		}
-		slots, err := frameSlotsTx(ctx, tx, f)
+		// The frame's own keys, lowest first, are the slots the new order fills.
+		// Every representative is a frame-mate by construction, so this is the
+		// whole keyspace the order is read in. Ties fall to id, as they do in
+		// every listing, so a slot's place here is its place on screen.
+		slots, err := rankRows(ctx, tx, fmt.Sprintf(`SELECT id, item_rank FROM issues
+			WHERE deleted_at IS NULL AND item_rank != '' AND %s = ?
+			ORDER BY item_rank ASC, id ASC`, frameColumn), string(f))
 		if err != nil {
-			return storage.RankSetResult{}, err
-		}
-		// Two slots on one key cannot carry an order between them: the
-		// permutation hands keys round unchanged, so the pair would still sort by
-		// id whichever way it was named. Keys arrive verbatim through an import
-		// and can tie, so each tied key is respaced first — the room-making
-		// smoothing does anywhere — and the slots are read again. A tie that
-		// survives is refused rather than written as though the order held.
-		// [LAW:no-silent-failure]
-		for _, key := range tiedKeys(slots) {
-			if err := smoothRanksTx(ctx, tx, key); err != nil {
-				return storage.RankSetResult{}, fmt.Errorf("rank set: separate the issues sharing %q: %w", key, err)
-			}
-		}
-		if slots, err = frameSlotsTx(ctx, tx, f); err != nil {
-			return storage.RankSetResult{}, err
-		}
-		if tied := tiedKeys(slots); len(tied) > 0 {
-			return storage.RankSetResult{}, fmt.Errorf("rank set: frame %q still holds issues sharing the keys %v after respacing — refusing to write an order they cannot hold", f, tied)
+			return storage.RankSetResult{}, fmt.Errorf("rank set: read the keys of frame %q: %w", f, err)
 		}
 		occupants := make([]string, len(slots))
 		for i, slot := range slots {
@@ -661,6 +644,18 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 		ordered, err := storage.RankSetOrder(f, occupants, ranked)
 		if err != nil {
 			return storage.RankSetResult{}, err
+		}
+		// Two slots on one key keep sharing it, because a permutation hands keys
+		// round unchanged, and a listing orders the pair by id. Where that id
+		// order is the reverse of the one asked for, no permutation can write
+		// the request, and reporting success would leave the order unchanged.
+		// The pair is named instead, with the move that gives them keys of
+		// their own. [LAW:no-silent-failure]
+		for i := 1; i < len(slots); i++ {
+			if slots[i].rank == slots[i-1].rank && ordered[i] < ordered[i-1] {
+				return storage.RankSetResult{}, fmt.Errorf("rank set: %s and %s share the key %q, which a listing breaks by id, so %s cannot be written above %s; separate them first with `lit rank %s --above %s`",
+					ordered[i-1], ordered[i], slots[i].rank, ordered[i-1], ordered[i], ordered[i-1], ordered[i])
+			}
 		}
 		// Each slot's key passes to its new occupant, which is how a permutation
 		// is spelled in keys: the set of keys the frame holds is the same before
@@ -687,29 +682,22 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 	})
 }
 
-// frameSlotsTx is a frame's ranked members, lowest key first: the slots a rank
-// set's new order fills. Ties fall to id, as they do in every listing, so a
-// slot's place here is its place on screen.
-func frameSlotsTx(ctx context.Context, tx *sql.Tx, f storage.Frame) ([]rankedIssue, error) {
-	slots, err := rankRows(ctx, tx, fmt.Sprintf(`SELECT id, item_rank FROM issues
-		WHERE deleted_at IS NULL AND item_rank != '' AND %s = ?
-		ORDER BY item_rank ASC, id ASC`, frameColumn), string(f))
-	if err != nil {
-		return nil, fmt.Errorf("rank set: read the keys of frame %q: %w", f, err)
-	}
-	return slots, nil
-}
-
-// tiedKeys lists, once each, every key more than one slot holds. The slots are
-// in key order, so a tie is two neighbours.
-func tiedKeys(slots []rankedIssue) []string {
-	var tied []string
-	for i := 1; i < len(slots); i++ {
-		if slots[i].rank == slots[i-1].rank {
-			tied = append(tied, slots[i].rank)
+// unrankedAmongTx is which of the given issues are live and hold no key, one
+// read per id batch.
+func unrankedAmongTx(ctx context.Context, tx *sql.Tx, ids []string) ([]string, error) {
+	var unranked []string
+	for _, batch := range idBatches(ids) {
+		in, args := batch.inList()
+		rows, err := rankRows(ctx, tx, fmt.Sprintf(`SELECT id, item_rank FROM issues
+			WHERE deleted_at IS NULL AND item_rank = '' AND id IN (%s)`, in), args...)
+		if err != nil {
+			return nil, fmt.Errorf("read which of %v hold no key: %w", []string(batch), err)
+		}
+		for _, row := range rows {
+			unranked = append(unranked, row.id)
 		}
 	}
-	return slices.Compact(tied)
+	return unranked, nil
 }
 
 // rankWrite is one issue's new key, and whether the write is an update to that
@@ -726,10 +714,10 @@ type rankWrite struct {
 // written as a batched CASE rather than a statement per issue: the cost of the
 // write grows by round trips per batch, never per row. updated_at rides in the
 // same statement: a touched issue takes now, and an untouched one is handed
-// NULL, which COALESCE turns back into the stamp it already held. The liveness
-// predicate on the UPDATE is the one enforcement of "a rank never lands on a
-// deleted issue" that every rank verb's key write passes through (see
-// writeRankTx).
+// NULL, which COALESCE turns back into the stamp it already held. Every key
+// write a rank verb, a respace, or the inversion repair makes goes through
+// here, so the liveness predicate on the UPDATE is the one enforcement of "a
+// rank never lands on a deleted issue" (see writeRankTx).
 func writeRanksTx(ctx context.Context, tx *sql.Tx, writes []rankWrite, now string) error {
 	byID := make(map[string]rankWrite, len(writes))
 	ids := make([]string, len(writes))
@@ -1091,16 +1079,17 @@ func smoothRanksIfNeededTx(ctx context.Context, tx *sql.Tx, triggerRank string) 
 // the least rank sorting past every member of the top run. Bounds picked that
 // way can never share a significant part, so the primitive always has room.
 // The window keeps its order — rows sharing a key in id order, as every
-// listing shows them, which is also how a tie comes out separated — and its
-// new ranks are longer than both bounds, so a window bounded by long ranks
-// comes out long.
+// listing shows them — and its new ranks are longer than both bounds, so a
+// window bounded by long ranks comes out long. An unranked row is never in it:
+// the empty key sorts below every other, and a respace that swept it up would
+// rank an issue nobody asked to rank.
 func smoothRanksTx(ctx context.Context, tx *sql.Tx, triggerRank string) error {
 	half := rank.SmoothingWindow / 2
 
 	// Collect the window: up to half items at or below the trigger, plus
 	// up to half items above it.
 	below, err := rankRows(ctx, tx,
-		`SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank <= ? ORDER BY item_rank DESC, id DESC LIMIT ?`,
+		`SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' AND item_rank <= ? ORDER BY item_rank DESC, id DESC LIMIT ?`,
 		triggerRank, half)
 	if err != nil {
 		return fmt.Errorf("smooth: below: %w", err)
@@ -1130,7 +1119,7 @@ func smoothRanksTx(ctx context.Context, tx *sql.Tx, triggerRank string) error {
 	runCeiling := rank.Significant(window[len(window)-1].rank) + "1"
 
 	lowerRun, err := rankRows(ctx, tx,
-		`SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank >= ? AND item_rank < ? ORDER BY item_rank ASC, id ASC`,
+		`SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' AND item_rank >= ? AND item_rank < ? ORDER BY item_rank ASC, id ASC`,
 		runFloor, window[0].rank)
 	if err != nil {
 		return fmt.Errorf("smooth: lower run: %w", err)
@@ -1161,12 +1150,15 @@ func smoothRanksTx(ctx context.Context, tx *sql.Tx, triggerRank string) error {
 		return fmt.Errorf("smooth: compute ranks: %w", err)
 	}
 
+	// A respace is not an update to anyone, so no write in it is touched.
+	var writes []rankWrite
 	for i, item := range window {
 		if newRanks[i] != item.rank {
-			if _, err := tx.ExecContext(ctx, `UPDATE issues SET item_rank = ? WHERE id = ?`, newRanks[i], item.id); err != nil {
-				return fmt.Errorf("smooth: update %s: %w", item.id, err)
-			}
+			writes = append(writes, rankWrite{id: item.id, rank: newRanks[i]})
 		}
+	}
+	if err := writeRanksTx(ctx, tx, writes, ""); err != nil {
+		return fmt.Errorf("smooth: %w", err)
 	}
 	return nil
 }
@@ -1434,10 +1426,12 @@ func (s *Store) FixRankInversions(ctx context.Context) (int, error) {
 			return fmt.Errorf("fix rank inversions: %w", err)
 		}
 		now := s.clock.Now().Format(time.RFC3339Nano)
-		for _, rewrite := range rewrites {
-			if _, err := tx.ExecContext(ctx, "UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?", rewrite.newRank, now, rewrite.id); err != nil {
-				return fmt.Errorf("fix rank inversions: update %s: %w", rewrite.id, err)
-			}
+		writes := make([]rankWrite, len(rewrites))
+		for i, rewrite := range rewrites {
+			writes[i] = rankWrite{id: rewrite.id, rank: rewrite.newRank, touched: true}
+		}
+		if err := writeRanksTx(ctx, tx, writes, now); err != nil {
+			return fmt.Errorf("fix rank inversions: %w", err)
 		}
 		// Smoothing runs once the repair is fully applied, never interleaved
 		// with it: a pass that re-spaced a window mid-repair would move the

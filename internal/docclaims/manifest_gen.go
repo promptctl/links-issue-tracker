@@ -703,7 +703,6 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "SHOW CREATE TABLE", Src: "internal/store/migrations/00001_baseline.sql"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "UPDATE issues SET closed_at = NULL WHERE status <> 'closed' AND closed_at IS NOT NULL", Src: "UPDATE issues SET closed_at = NULL WHERE status <> 'closed' AND closed_at IS NOT NULL"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "UPDATE issues SET item_rank = ? WHERE id = ?", Src: "UPDATE issues SET item_rank = ? WHERE id = ?"},
-	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?", Src: "UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "UPDATE issues SET status = 'closed' WHERE closed_at IS NOT NULL AND status <> 'closed'", Src: "UPDATE issues SET status = 'closed' WHERE closed_at IS NOT NULL AND status <> 'closed'"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "UPDATE issues SET status = 'closed' WHERE status = 'done'", Src: "UPDATE issues SET status = 'closed' WHERE status = 'done'"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "UPDATE issues SET status = 'in_progress' WHERE status = 'in-progress'", Src: "UPDATE issues SET status = 'in_progress' WHERE status = 'in-progress'"},

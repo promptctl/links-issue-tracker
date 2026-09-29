@@ -666,3 +666,47 @@ func TestSmoothingWidensPastAnAllZeroRun(t *testing.T) {
 			ids[run], planted[ids[run]], after[ids[run]])
 	}
 }
+
+// An unranked row's empty key sorts below every other, so a window reaching
+// the bottom of the keyspace would sweep it up and hand it a key. A respace
+// only re-spaces keys that exist; it never ranks an issue.
+func TestSmoothingLeavesUnrankedIssuesUnranked(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	unranked := createRankTestIssue(t, ctx, st, "Unranked")
+	ids := make([]string, 0, 3)
+	for i := 0; i < 3; i++ {
+		ids = append(ids, createRankTestIssue(t, ctx, st, fmt.Sprintf("Issue %d", i)))
+	}
+	planted := map[string]string{unranked: "", ids[0]: "V", ids[1]: "V" + strings.Repeat("0", rank.SmoothingThreshold), ids[2]: "W"}
+	for id, stored := range planted {
+		if err := st.ExecRawForTest(ctx, "UPDATE issues SET item_rank = ? WHERE id = ?", stored, id); err != nil {
+			t.Fatalf("plant rank for %s: %v", id, err)
+		}
+	}
+
+	tx, err := st.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx() error = %v", err)
+	}
+	if err := smoothRanksIfNeededTx(ctx, tx, planted[ids[1]]); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("smoothRanksIfNeededTx error = %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+
+	after := ranksByID(t, ctx, st, append([]string{unranked}, ids...))
+	if after[unranked] != "" {
+		t.Fatalf("smoothing ranked %s at %q; an unranked issue is not in any window", unranked, after[unranked])
+	}
+	if got := orderByRank(map[string]string{ids[0]: after[ids[0]], ids[1]: after[ids[1]], ids[2]: after[ids[2]]}); !equalIDs(got, ids) {
+		t.Fatalf("order after smoothing = %v, want %v", got, ids)
+	}
+	if after[ids[1]] == planted[ids[1]] {
+		t.Fatalf("%s kept %q; the fixture did not smooth", ids[1], planted[ids[1]])
+	}
+}
