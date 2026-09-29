@@ -349,7 +349,6 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 	reachFor := func(row annotation.AnnotatedIssue) reachKind {
 		return reachOf(row, standings.Of(laneOf(row)), self)
 	}
-	workToward := workTowardEach(rows, details, epics)
 	// pick keeps the first row, in rank order, that sits in an admitted lane
 	// and carries one of the accepted verdicts.
 	//
@@ -377,6 +376,7 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 	ownLanes, ownEpics := ownScope(standings, self)
 	mine := func(lane model.LaneID) bool { return ownLanes[lane] }
 	if len(ownLanes) > 0 {
+		workToward := workTowardEach(rows, details, epics)
 		// Step 1 — our own lanes, startable work and work already underway
 		// alike, whichever the backlog ranks first.
 		if row, how, ok := pick(mine, serveWork, resumeWork); ok {

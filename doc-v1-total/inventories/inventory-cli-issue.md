@@ -1328,6 +1328,7 @@ derives `Held` and is one of these. Servability is not gated on `model.StateOpen
 (`next_route.go`);
 `reachFor(row) = reachOf(row, standings.Of(laneOf(row)), self)`
 (`next_route.go`);
+and, once the checkout holds a lane,
 `workToward = workTowardEach(rows, details, epics)` (`next_route.go`), the
 gathered rows indexed by each id they are work toward: their own, and every
 epic above them.
