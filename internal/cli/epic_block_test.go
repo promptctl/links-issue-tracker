@@ -255,11 +255,11 @@ func TestAnEpicsBlockerHoldsBackNothingItWaitsOn(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ListIssues error = %v", err)
 			}
-			annotated, _, _, _, err := annotateIssues(h.ctx, h.ap.Store, nil, all)
+			annotated, err := annotateIssues(h.ctx, h.ap.Store, nil, all)
 			if err != nil {
 				t.Fatalf("annotateIssues error = %v", err)
 			}
-			for _, row := range annotated {
+			for _, row := range annotated.rows {
 				for _, ann := range row.Annotations {
 					if ann.Kind == annotation.InheritedDependency && ann.Message == row.ID {
 						t.Fatalf("%s inherits itself", row.ID)
@@ -410,6 +410,12 @@ func TestRouteNextDescendsAnEpicBlockerToItsWorkableChild(t *testing.T) {
 			}
 			if !slices.Equal(exhausted.Epics, []string{epicB.ID}) || !slices.Equal(blockers, []string{epicA.ID}) {
 				t.Fatalf("Exhausted = epics %v blocked on %v, want epic %s blocked on %s", exhausted.Epics, blockers, epicB.ID, epicA.ID)
+			}
+			// The epic is read through the work under it: its one ticket is held
+			// elsewhere, so it is held, not outside the view — the epic's own
+			// row is never gathered, and reading that would repeat the bug.
+			if kind := exhausted.Blocked[0].Kind; kind != reachHeldFresh {
+				t.Fatalf("blocker %s classified as %v, want reachHeldFresh (%s is held by another checkout)", epicA.ID, kind, a1.ID)
 			}
 		})
 	}

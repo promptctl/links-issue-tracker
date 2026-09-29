@@ -93,7 +93,7 @@ func TestServedRowIsTotalOverTheSealedSum(t *testing.T) {
 		{"own work resumed", ResumedOwnWork{Row: row}, true},
 		{"the epic's next lane", ServedFromEpicLane{Row: row}, true},
 		{"the global pool", ServedFromNewLane{Row: row}, true},
-		{"the on-path dependency", ServedFromDependency{Row: row, Gates: "test-gated-1"}, true},
+		{"the on-path dependency", ServedFromDependency{Row: row, Gates: "test-gated-1", Blocker: row.ID}, true},
 		{"exhausted carries none", Exhausted{}, false},
 		{"no work carries none", NoWork{}, false},
 	}
@@ -877,7 +877,7 @@ func TestDependencyPickIsDistinguishableFromThePool(t *testing.T) {
 		return buf.String()
 	}
 	pool := render(ServedFromNewLane{Row: row, Lane: lane})
-	dep := render(ServedFromDependency{Row: row, Lane: lane, Gates: blocked.ID})
+	dep := render(ServedFromDependency{Row: row, Lane: lane, Gates: blocked.ID, Blocker: row.ID})
 
 	if pool == dep {
 		t.Fatalf("the global pool and the on-path dependency render identically as %q — the pick an agent cannot predict is the one that must explain itself", pool)

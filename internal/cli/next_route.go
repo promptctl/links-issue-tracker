@@ -72,17 +72,21 @@ type ServedFromNewLane struct {
 }
 
 // ServedFromDependency is routing step 1b: a ready ticket OUTSIDE our lanes that
-// gates one of our own blocked rows. Like ServedFromNewLane it establishes a
-// claim on a lane this checkout does not hold, so Lane is carried for the same
-// reason. Unlike it, the pick has a reason the row cannot show on its own —
-// it unblocks work we are already holding — and Gates names the row it unblocks.
+// is work toward a dependency gating one of our own blocked rows. Blocker is
+// that dependency — Row's own id when it is a leaf, or an epic Row sits under,
+// since an epic cannot be started — and Gates is the row of ours it holds back.
+// Like ServedFromNewLane it establishes a claim on a lane this checkout does not
+// hold, so Lane is carried for the same reason. Unlike it, the pick has a reason
+// the row cannot show on its own — it unblocks work we are already holding —
+// and without Blocker the announcement would say Row gates a ticket that Row
+// may have no edge to.
 //
 // It is its own outcome rather than a nullable qualifier on ServedFromNewLane
 // because the two picks answer different questions. A Gates field hanging off
 // the shared type would make "a global-pool pick that gates something" and "a
 // dependency pick that gates nothing" both representable, and neither exists.
-// Here Gates is always set, by construction: gatingDependencies only yields a
-// dependency because some in-scope row depends on it. The renderer's switch
+// Here Gates and Blocker are always set, by construction: gatingDependencies
+// only yields a dependency because some in-scope row depends on it. The renderer's switch
 // panics on an unhandled outcome, so a new type announces itself at the first
 // unhandled call site instead of falling through silently — which is what makes
 // the discriminated form cheaper here than the flag. [LAW:types-are-the-program]
@@ -90,11 +94,6 @@ type ServedFromNewLane struct {
 // Step 2 already qualifies its pick ("a second lane of an epic you already hold
 // a lane in"); this pick has the stronger claim to one, and without it the
 // hardest pick to predict would be the only unexplained one.
-//
-// Blocker is the dependency Gates waits on, and it is always set: Row's own id
-// when the dependency is a leaf, or the epic Row sits under when the dependency
-// is an epic, which cannot be started itself. Without it the announcement would
-// say Row gates a ticket that Row has no edge to.
 type ServedFromDependency struct {
 	Row     annotation.AnnotatedIssue
 	Lane    model.LaneID
@@ -131,6 +130,10 @@ type Exhausted struct {
 // one type answers it — a second enum beside this one, saying the same things
 // about a different set of rows, is two clocks.
 // [LAW:types-are-the-program] [LAW:one-type-per-behavior] [LAW:no-silent-failure]
+//
+// The first four are declared from most to least this checkout can do, which
+// is what lets a dependency with several tickets under it report the best of
+// them (gatingDependencies).
 type reachKind int
 
 const (
@@ -140,12 +143,12 @@ const (
 	// reachNotReady: gathered and not held elsewhere, but not startable —
 	// blocked by a further dependency.
 	reachNotReady
-	// reachOutOfView: absent from the gathered rows, so this run knows
-	// nothing about it. --type/--labels/--assignee and leaf-only membership
-	// narrow the gather; the dependency annotation is read from the store and
-	// does not. Only the exhaustion walk can reach it — that one reads
-	// dependency ids off annotations, while the pool walk classifies rows it is
-	// already holding.
+	// reachOutOfView: nothing that would clear it is among the gathered rows,
+	// so this run knows nothing about it. --type/--labels/--assignee and
+	// leaf-only membership narrow the gather; the dependency annotation is read
+	// from the store and does not. Only the exhaustion walk can reach it — that
+	// one reads dependency ids off annotations, while the pool walk classifies
+	// rows it is already holding.
 	reachOutOfView
 	// reachOffFocusPath: gathered and possibly startable, but outside the focus
 	// scope this run answered over, so the pool walk never offered it. Not a
@@ -158,7 +161,9 @@ const (
 )
 
 // rowReach is a row a walk went past, carrying what this checkout may do about
-// it. Row is the gathered issue for every kind but reachOutOfView.
+// it. Row is the gathered row Kind was read from, for every kind but
+// reachOutOfView: the row itself, or for a dependency, the ticket that would
+// clear it.
 type rowReach struct {
 	ID   string
 	Row  annotation.AnnotatedIssue
@@ -174,10 +179,8 @@ type rowReach struct {
 // foreign hold. A row that is both held fresh and not ready reports as
 // held — ownership decides whether this checkout may act at all, readiness
 // only whether acting would get anywhere.
-func reachOf(row annotation.AnnotatedIssue, gathered bool, standing claims.Standing, self model.Attribution) reachKind {
+func reachOf(row annotation.AnnotatedIssue, standing claims.Standing, self model.Attribution) reachKind {
 	switch {
-	case !gathered:
-		return reachOutOfView
 	case capacityFor(row, standing, self) != routeAround:
 		return reachTakeable
 	case relationOf(standing, self) == laneHeldForeign:
@@ -328,19 +331,13 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 	laneOf := func(row annotation.AnnotatedIssue) model.LaneID {
 		return model.LaneOf(row.Issue, details[row.ID].Parent)
 	}
-	// clears reports whether finishing row is work toward closing dep: row is
-	// dep, or sits under dep at any depth. The same epicsAbove the blocker
-	// annotator passes an epic's blockers down with, so "under this epic" means
-	// one thing to readiness and to routing. [LAW:one-source-of-truth]
-	clears := func(row annotation.AnnotatedIssue, dep string) bool {
-		return row.ID == dep || slices.Contains(slices.Collect(epicsAbove(details[row.ID], epics)), dep)
-	}
 	verdict := func(row annotation.AnnotatedIssue) capacity {
 		return capacityFor(row, standings.Of(laneOf(row)), self)
 	}
-	reachFor := func(row annotation.AnnotatedIssue, gathered bool) reachKind {
-		return reachOf(row, gathered, standings.Of(laneOf(row)), self)
+	reachFor := func(row annotation.AnnotatedIssue) reachKind {
+		return reachOf(row, standings.Of(laneOf(row)), self)
 	}
+	workToward := workTowardEach(rows, details, epics)
 	// pick keeps the first row, in rank order, that sits in an admitted lane
 	// and carries one of the accepted verdicts.
 	//
@@ -379,7 +376,7 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 		// Step 1b — a dependency outside our lanes that gates one of them. It
 		// establishes a claim on a lane we do not hold, so it is announced as
 		// one and its own lane's standing is honoured rather than ignored.
-		if served, ok := onPathDependency(rows, laneOf, mine, reachFor, clears); ok {
+		if served, ok := onPathDependency(rows, laneOf, mine, reachFor, workToward); ok {
 			return served
 		}
 		// Step 2 — the rest of our epic, in lanes we do not already hold.
@@ -394,7 +391,7 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 			Epics: slices.Sorted(maps.Keys(ownEpics)),
 			Blocked: blockedRows(gatingDependencies(rows, laneOf, func(lane model.LaneID) bool {
 				return mine(lane) || ourEpic(lane)
-			}, reachFor)),
+			}, reachFor, workToward)),
 		}
 	}
 
@@ -440,10 +437,10 @@ func withheldByScope(rows []annotation.AnnotatedIssue) []rowReach {
 // rows" here would hand the next reader the conclusion that the off-path rows
 // are already covered, and the separate function that exists to cover them
 // would read as redundant. [LAW:one-source-of-truth]
-func passedOver(rows []annotation.AnnotatedIssue, reachFor func(annotation.AnnotatedIssue, bool) reachKind) []rowReach {
+func passedOver(rows []annotation.AnnotatedIssue, reachFor func(annotation.AnnotatedIssue) reachKind) []rowReach {
 	passed := make([]rowReach, 0, len(rows))
 	for _, row := range rows {
-		passed = append(passed, rowReach{ID: row.ID, Row: row, Kind: reachFor(row, true)})
+		passed = append(passed, rowReach{ID: row.ID, Row: row, Kind: reachFor(row)})
 	}
 	return passed
 }
@@ -475,18 +472,39 @@ func blockedRows(deps []gatedDep) []rowReach {
 	return rows
 }
 
-// gatingDependencies collects the distinct open dependencies that gate the open
-// rows whose lane inScope admits, in rank order, each already carrying whether
-// this checkout may take it. Both consumers are this walk plus one question:
-// onPathDependency offers the first takeable work toward one, and Exhausted reports them
-// all so the diagnostic can say which is which. They differ in the scope they
-// pass and in what they do with the answer — never in how it is found, and
-// neither re-derives it. [LAW:one-source-of-truth]
-func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID, inScope func(model.LaneID) bool, reachFor func(annotation.AnnotatedIssue, bool) reachKind) []gatedDep {
-	byID := make(map[string]annotation.AnnotatedIssue, len(rows))
+// workTowardEach indexes the gathered rows, in rank order, by every dependency
+// finishing them is work toward: each row under its own id, and under every
+// epic above it at any depth. That makes a leaf dependency and an epic one the
+// same lookup — nothing sits under a leaf, and an epic is never a gathered row,
+// so a leaf finds itself and an epic finds its tickets. It climbs the same
+// epicsAbove the blocker annotator passes an epic's blockers down with, so
+// "under this epic" means one thing to readiness and to routing.
+// [LAW:one-source-of-truth] [LAW:dataflow-not-control-flow]
+func workTowardEach(rows []annotation.AnnotatedIssue, details, epics map[string]storage.IssueRelations) map[string][]annotation.AnnotatedIssue {
+	work := make(map[string][]annotation.AnnotatedIssue, len(rows))
 	for _, row := range rows {
-		byID[row.ID] = row
+		work[row.ID] = append(work[row.ID], row)
+		for epic := range epicsAbove(details[row.ID], epics) {
+			work[epic] = append(work[epic], row)
+		}
 	}
+	return work
+}
+
+// gatingDependencies collects the distinct open dependencies that gate the open
+// rows whose lane inScope admits, in rank order, each already carrying what
+// this checkout may do about it. Both consumers are this walk plus one
+// question: onPathDependency offers the first takeable one, and Exhausted
+// reports them all so the diagnostic can say which is which. They differ in the
+// scope they pass and in what they do with the answer — never in how it is
+// found, and neither re-derives it. [LAW:one-source-of-truth]
+//
+// A dependency is classified by the work toward it, not by its own row, which
+// an epic never has: it takes the best kind among that work, carried by the
+// first row in rank order to reach it, so an epic whose one ticket another
+// checkout holds reads as held, not as outside the view. With no work in view
+// it is reachOutOfView, which every row's kind outranks.
+func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID, inScope func(model.LaneID) bool, reachFor func(annotation.AnnotatedIssue) reachKind, workToward map[string][]annotation.AnnotatedIssue) []gatedDep {
 	seen := map[string]bool{}
 	var deps []gatedDep
 	for _, row := range rows {
@@ -498,7 +516,12 @@ func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation
 				continue
 			}
 			seen[id] = true
-			dep, gathered := byID[id]
+			dep := rowReach{ID: id, Kind: reachOutOfView}
+			for _, work := range workToward[id] {
+				if kind := reachFor(work); kind < dep.Kind {
+					dep.Row, dep.Kind = work, kind
+				}
+			}
 			// row is the in-scope open row whose dependency this is — the fact
 			// step 1b needs.
 			// `seen` keeps the FIRST row to reach a dependency, so when one
@@ -508,10 +531,7 @@ func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation
 			// highest-ranked thing it unblocks. Naming every gated row would put
 			// an unbounded list in a one-line announcement.
 			// [LAW:polishing-by-subtraction]
-			deps = append(deps, gatedDep{
-				rowReach: rowReach{ID: id, Row: dep, Kind: reachFor(dep, gathered)},
-				Gates:    row.ID,
-			})
+			deps = append(deps, gatedDep{rowReach: dep, Gates: row.ID})
 		}
 	}
 	return deps
@@ -524,12 +544,9 @@ func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation
 // sibling) never reaches here: it shares the blocked row's lane, so step 1
 // already served or resumed it.
 //
-// The work toward a dependency is every gathered row clears admits, in rank
-// order: the dependency itself when it is a leaf, and the tickets under it when
-// it is an epic. An epic cannot be started and the gather never returns one, so
-// stopping at the epic's own id would name work nobody can pick up. One walk
-// covers both shapes, because nothing sits under a leaf and an epic is never a
-// gathered row. [LAW:dataflow-not-control-flow]
+// The pick is the row gatingDependencies classified the dependency by: the
+// dependency itself when it is a leaf, a ticket under it when it is an epic,
+// which cannot be started.
 //
 // Takeability is the shared verdict, not a local readiness test. A local test
 // sees no standings, so it would offer a ticket sitting in a lane another
@@ -537,12 +554,10 @@ func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation
 // recommend what `start` blocks. It does not re-check that the gated row is
 // unservable: step 1 accepts every capacity an own lane can produce, so by the
 // time we are here every row in `mine` is routeAround by construction.
-func onPathDependency(rows []annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID, mine func(model.LaneID) bool, reachFor func(annotation.AnnotatedIssue, bool) reachKind, clears func(annotation.AnnotatedIssue, string) bool) (ServedFromDependency, bool) {
-	for _, dep := range gatingDependencies(rows, laneOf, mine, reachFor) {
-		for _, row := range rows {
-			if clears(row, dep.ID) && reachFor(row, true) == reachTakeable {
-				return ServedFromDependency{Row: row, Lane: laneOf(row), Gates: dep.Gates, Blocker: dep.ID}, true
-			}
+func onPathDependency(rows []annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID, mine func(model.LaneID) bool, reachFor func(annotation.AnnotatedIssue) reachKind, workToward map[string][]annotation.AnnotatedIssue) (ServedFromDependency, bool) {
+	for _, dep := range gatingDependencies(rows, laneOf, mine, reachFor, workToward) {
+		if dep.Kind == reachTakeable {
+			return ServedFromDependency{Row: dep.Row, Lane: laneOf(dep.Row), Gates: dep.Gates, Blocker: dep.ID}, true
 		}
 	}
 	return ServedFromDependency{}, false

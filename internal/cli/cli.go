@@ -709,11 +709,11 @@ func listDerivedColumns(ctx context.Context, st storage.Store, policy readyPolic
 		if err != nil {
 			return nil, err
 		}
-		annotated, relations, _, _, err := annotateIssues(ctx, st, requiredFields, issues)
+		annotated, err := annotateIssues(ctx, st, requiredFields, issues)
 		if err != nil {
 			return nil, err
 		}
-		return readinessColumnsFor(annotated, relations), nil
+		return readinessColumnsFor(annotated.rows, annotated.details), nil
 	default:
 		panic(fmt.Sprintf("cli: no loader for column source %d", source))
 	}
@@ -887,21 +887,20 @@ func classifyWorkable(ctx context.Context, st storage.Store, requiredFields []st
 		return workableGather{}, err
 	}
 	issues = filterWorkableIssues(issues)
-	annotated, details, epics, scope, err := annotateIssues(ctx, st, requiredFields, issues)
+	queue, err := annotateIssues(ctx, st, requiredFields, issues)
 	if err != nil {
 		return workableGather{}, err
 	}
 	// Two sorts, and they are the whole ordering story: composite rank, then
 	// priority. Focus is a scope, returned alongside the rows for the views to
 	// answer over, so ordering has one authority. [LAW:one-source-of-truth]
-	sortByCompositeRank(annotated, details)
-	sortByPriority(annotated)
-	enrichWithParentEpic(annotated, details)
+	sortByCompositeRank(queue.rows, queue.details)
+	sortByPriority(queue.rows)
+	enrichWithParentEpic(queue.rows, queue.details)
 	// Derived over the queue, then the queue is let go: keepRows returns the
 	// caller's rows and their relations, and the facts outlive the set they came
 	// from as a map of ids and an int.
-	queue := workableGather{rows: annotated, details: details, epics: epics, facts: deriveQueueFacts(annotated), scope: scope}
-	return queue.keepRows(criteria), nil
+	return workableGather{annotatedRows: queue, facts: deriveQueueFacts(queue.rows)}.keepRows(criteria), nil
 }
 
 // annotateIssues runs every registered annotator over the given issues and
@@ -921,18 +920,18 @@ func classifyWorkable(ctx context.Context, st storage.Store, requiredFields []st
 // annotated — see focusScope, whose goals a row-derived scope would lose exactly
 // when every path row was narrowed away. [LAW:one-source-of-truth]
 //
-// The epics above the issues come back too, keyed by epic id: the blocker
-// annotator already loaded them to pass an epic's blockers down, and routing
-// climbs the same chain to find the work under an epic that blocks. One load,
-// so "which epics is this issue under" has one answer on both sides.
-func annotateIssues(ctx context.Context, st storage.Store, requiredFields []string, issues []model.Issue) ([]annotation.AnnotatedIssue, map[string]storage.IssueRelations, map[string]storage.IssueRelations, focusScope, error) {
+// The epics above the issues come back too: the blocker annotator already
+// loaded them to pass an epic's blockers down, and routing climbs the same
+// chain to find the work under an epic that blocks. One load, so "which epics
+// is this issue under" has one answer on both sides.
+func annotateIssues(ctx context.Context, st storage.Store, requiredFields []string, issues []model.Issue) (annotatedRows, error) {
 	fieldAnnotator, err := newFieldAnnotator(requiredFields)
 	if err != nil {
-		return nil, nil, nil, focusScope{}, err
+		return annotatedRows{}, err
 	}
 	details, err := fetchIssueRelations(ctx, st, issues)
 	if err != nil {
-		return nil, nil, nil, focusScope{}, err
+		return annotatedRows{}, err
 	}
 	// Annotate the subjects as this fetch returned them, not as the caller passed
 	// them in. The caller's copies came from an earlier read — a list query, or an
@@ -953,7 +952,7 @@ func annotateIssues(ctx context.Context, st storage.Store, requiredFields []stri
 	memo, loaded := memoizeRelations(st.GetRelationsByIDs, details)
 	held, err := fetchHeldAncestry(ctx, memo, details)
 	if err != nil {
-		return nil, nil, nil, focusScope{}, err
+		return annotatedRows{}, err
 	}
 	// The focus path is derived from the full dependency DAG (unfiltered by the
 	// CLI narrowing) on every gather — the focus fact lives on the one goal
@@ -965,7 +964,7 @@ func annotateIssues(ctx context.Context, st storage.Store, requiredFields []stri
 	// byte-identical to a refetch.
 	focusPaths, err := fetchFocusPathGoals(ctx, st, loaded)
 	if err != nil {
-		return nil, nil, nil, focusScope{}, err
+		return annotatedRows{}, err
 	}
 	annotated, err := annotation.Annotate(ctx, subjects,
 		fieldAnnotator,
@@ -976,9 +975,22 @@ func annotateIssues(ctx context.Context, st storage.Store, requiredFields []stri
 		newFocusPathAnnotator(focusPaths),
 	)
 	if err != nil {
-		return nil, nil, nil, focusScope{}, err
+		return annotatedRows{}, err
 	}
-	return annotated, details, held.ancestry.relations, focusScopeOf(focusPaths), nil
+	return annotatedRows{rows: annotated, details: details, epics: held.ancestry.relations, scope: focusScopeOf(focusPaths)}, nil
+}
+
+// annotatedRows is one annotateIssues pass. Named rather than positional
+// because details and epics share a type: as two map results in a row, a
+// caller that crossed them would compile and route on the wrong map.
+// [LAW:types-are-the-program]
+type annotatedRows struct {
+	rows    []annotation.AnnotatedIssue
+	details map[string]storage.IssueRelations
+	// epics is the relations of every epic above a row, keyed by epic id — the
+	// chain epicsAbove climbs.
+	epics map[string]storage.IssueRelations
+	scope focusScope
 }
 
 // runOrphaned lists in_progress issues whose last update is older than

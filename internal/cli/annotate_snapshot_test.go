@@ -31,19 +31,19 @@ func TestAnnotateIssuesRowsComeFromTheRelationsFetch(t *testing.T) {
 	stale := created
 	stale.Title = "Title from an older read"
 
-	annotated, details, _, _, err := annotateIssues(ctx, ap.Store, nil, []model.Issue{stale})
+	annotated, err := annotateIssues(ctx, ap.Store, nil, []model.Issue{stale})
 	if err != nil {
 		t.Fatalf("annotateIssues() error = %v", err)
 	}
-	if len(annotated) != 1 {
-		t.Fatalf("annotateIssues() returned %d rows, want 1", len(annotated))
+	if len(annotated.rows) != 1 {
+		t.Fatalf("annotateIssues() returned %d rows, want 1", len(annotated.rows))
 	}
-	if got := annotated[0].Issue.Title; got != "Current title" {
+	if got := annotated.rows[0].Issue.Title; got != "Current title" {
 		t.Errorf("row must carry the fetched issue, got title %q, want %q", got, "Current title")
 	}
 	// The row and the details returned beside it must be the same snapshot —
 	// that is what lets a caller render from either without them disagreeing.
-	if got, want := annotated[0].Issue.Title, details[created.ID].Issue.Title; got != want {
+	if got, want := annotated.rows[0].Issue.Title, annotated.details[created.ID].Issue.Title; got != want {
 		t.Errorf("row and details disagree: row title %q, details title %q", got, want)
 	}
 }
