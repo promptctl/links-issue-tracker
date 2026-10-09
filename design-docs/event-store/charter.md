@@ -100,9 +100,8 @@ These are settled. Do not reopen them in the design.
 10. **lit touches git no more than the Dolt store does.** Locally, lit keeps
     its data in its own storage under the git common dir and adds nothing to
     the code repo's refs or object database. On the remote, lit's data lives
-    under its own refs and nowhere else. Apart from those refs appearing in
-    listings of the remote's refs, no git operation the developer runs changes
-    in behavior, output, or speed.
+    under its own refs and nowhere else. No git operation the developer runs
+    changes in behavior, output, or speed.
 
 ## Calibration
 
