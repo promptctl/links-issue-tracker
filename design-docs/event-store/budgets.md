@@ -30,7 +30,7 @@ add detail but never substitute a different construction):
   budgets table) run against this — **on a machine concurrently running the
   breadth fleet's background sync load**, so command latency is measured
   under both axes at once, not on a quiet machine. The per-store rows of the
-  Storage table (per-store disk, the git-experience ceiling, the dead-refs
+  Storage table (per-store disk, the git-impact check, the dead-refs
   predicate under churn replay) also run against the depth corpus, being
   properties of one repo keyed to the largest-store baseline.
 - **Breadth fleet** — 10x the measured store count, **with each store's
@@ -61,14 +61,14 @@ foreground at all.
 
 ## Storage and repo-impact budgets (at 10x)
 
-Growth is monotone by charter #7 (no truncation), so these are ceilings on
+Growth is monotone by charter #7 (no truncation; purge is the one exception), so these are ceilings on
 rate and footprint, not promises of shrinkage.
 
 | Quantity | Budget | Notes |
 |---|---|---|
 | Event store disk per store at 10x history | ≤ 1/10 of today's Dolt store at 1x (i.e. ≤ ~19 MB where Dolt spends 190 MB) | hypothesis to verify in S1; if missed, it is a design problem to solve before S2, not a note |
 | Aggregate lit disk per machine at 10x both axes | ≤ the measured aggregate in the baselines table | checked against the breadth fleet |
-| Added latency to the code repo's own `git status` / `git fetch` | < 5 ms p95 vs a control clone without lit refs/objects | lit may not degrade the developer's ordinary git experience |
+| Change to any git operation the developer runs in the code repo (`git status`, `git fetch`, `git gc`, `git log --all`, …): behavior, output, or latency | none: indistinguishable from a control clone without lit, apart from lit's refs in listings of the remote's refs | charter #10 |
 | Dead-checkout writer refs remaining after maintenance | 0 (refs present = live checkouts + unswept inbox refs) | countable predicate; dead-ref growth is a hygiene bug the harness asserts away |
 
 ## Harness contract
