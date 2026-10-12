@@ -191,6 +191,14 @@ func TestDoctorNamesAStoredParentCycle(t *testing.T) {
 	if len(report.Errors) == 0 {
 		t.Error("Doctor().Errors is empty, want the parent cycle reported as an error")
 	}
+	// The repair it names has to work on the state it names: a loop is
+	// usually leaves, and `lit parent clear` refuses a leaf, so the one named
+	// is the reparent, which replaces the edge without climbing.
+	for _, line := range report.Errors {
+		if strings.Contains(line, "parent cycle") && !strings.Contains(line, "lit parent set --child") {
+			t.Errorf("Doctor().Errors names %q as the repair; want 'lit parent set --child'", line)
+		}
+	}
 	// The checks this report could not run say so. Otherwise their zero values
 	// are indistinguishable from a clean result, and the status line renders a
 	// check that never happened as a check that found nothing.

@@ -44,6 +44,18 @@ func RejectParentThatIsNotAContainer(parentID string, parentType model.IssueType
 	return model.ValidationError{Message: fmt.Sprintf("cannot file a ticket under %s: it is a %s, and only an epic contains tickets", parentID, parentType)}
 }
 
+// RejectNonContainerParentEdge is RejectParentThatIsNotAContainer asked of an
+// edge: only parent-child names a parent, so every other type passes. Both
+// engines prove the edge's dst exists by reading its type, and hand that type
+// here, so the rule is one function rather than one per engine.
+// [LAW:dataflow-not-control-flow] The one branch here is the domain's own enum.
+func RejectNonContainerParentEdge(relType model.RelationType, parentID string, parentType model.IssueType) error {
+	if relType != model.RelParentChild {
+		return nil
+	}
+	return RejectParentThatIsNotAContainer(parentID, parentType)
+}
+
 // RejectDetachingALeaf refuses removing childID's parent edge when the child
 // is not a container: with no parent it would be outside every epic. Moving
 // it is `lit parent set`, which replaces the parent in one act.

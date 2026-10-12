@@ -184,7 +184,7 @@ func (e *Engine) addRelation(in storage.AddRelationInput) (model.Relation, error
 	if err != nil {
 		return model.Relation{}, err
 	}
-	if err := rejectNonContainerParent(in.Type, dstID, dst.issueType); err != nil {
+	if err := storage.RejectNonContainerParentEdge(in.Type, dstID, dst.issueType); err != nil {
 		return model.Relation{}, err
 	}
 	if err := e.rejectCycle(in.Type, srcID, dstID); err != nil {
@@ -335,18 +335,6 @@ func (e *Engine) RemoveRelation(ctx context.Context, srcID, dstID string, relTyp
 		return rel.SrcID == srcID && rel.DstID == dstID && rel.Type == relType
 	})
 	return nil
-}
-
-// rejectNonContainerParent refuses a parent-child edge onto a parent that is
-// not a container (storage.RejectParentThatIsNotAContainer). Only parent-child
-// carries the rule, which it states by being the one arm — the Dolt engine's
-// rejectNonContainerParentTx, rendered over a record.
-// [LAW:dataflow-not-control-flow] The one branch here is the domain's own enum.
-func rejectNonContainerParent(relType model.RelationType, parentID string, parentType model.IssueType) error {
-	if relType != model.RelParentChild {
-		return nil
-	}
-	return storage.RejectParentThatIsNotAContainer(parentID, parentType)
 }
 
 // rejectDetachingALeaf refuses removing a leaf's parent edge

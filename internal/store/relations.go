@@ -346,10 +346,13 @@ func addRelationTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
 	if err := requireIssueExistsTx(ctx, tx, rel.SrcID); err != nil {
 		return err
 	}
-	if err := requireIssueExistsTx(ctx, tx, rel.DstID); err != nil {
+	// The dst's type is the dst's existence proof: one read answers both,
+	// as the memory engine's record lookup does. [LAW:one-source-of-truth]
+	dstType, err := issueTypeTx(ctx, tx, rel.DstID)
+	if err != nil {
 		return err
 	}
-	if err := rejectNonContainerParentTx(ctx, tx, rel); err != nil {
+	if err := storage.RejectNonContainerParentEdge(rel.Type, rel.DstID, dstType); err != nil {
 		return err
 	}
 	if err := rejectCycleTx(ctx, tx, rel); err != nil {
@@ -392,24 +395,11 @@ func rejectCycleTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
 	return nil
 }
 
-// rejectNonContainerParentTx refuses a parent-child edge onto a parent that is
-// not a container: every parent is an epic (storage.RejectParentThatIsNotAContainer).
-// Only parent-child carries the rule, which it states by being the one arm.
-// [LAW:dataflow-not-control-flow] The one branch here is the domain's own enum.
-func rejectNonContainerParentTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
-	if rel.Type != model.RelParentChild {
-		return nil
-	}
-	parentType, err := issueTypeTx(ctx, tx, rel.DstID)
-	if err != nil {
-		return err
-	}
-	return storage.RejectParentThatIsNotAContainer(rel.DstID, parentType)
-}
-
 // issueTypeTx reads an issue's type on the tx, proving the row exists in the
-// same read. It hydrates nothing — no parent chain is climbed — so it is safe
-// on a hierarchy holding a loop, which is what ClearParent needs it for.
+// same read: the containment rules judge an endpoint by its type, so this is
+// the existence proof the relation writes take for it. It hydrates nothing —
+// no parent chain is climbed — so it is safe on a hierarchy holding a loop,
+// which is what ClearParent needs it for.
 func issueTypeTx(ctx context.Context, tx *sql.Tx, issueID string) (model.IssueType, error) {
 	var issueType model.IssueType
 	if err := tx.QueryRowContext(ctx, `SELECT issue_type FROM issues WHERE id = ?`, issueID).Scan(&issueType); err != nil {

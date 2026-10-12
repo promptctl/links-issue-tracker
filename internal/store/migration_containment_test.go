@@ -168,6 +168,25 @@ func TestContainmentMigrationHomesEveryLeaf(t *testing.T) {
 	f.parent(t, ctx, "t-fork", "t-l1")
 	f.parent(t, ctx, "t-fork", "t-l2")
 
+	// Restored data: a child holding an epic parent and a leaf parent in
+	// another epic. It is already home, so it does not move: the leaf edge
+	// goes, the epic edge stays, and its lane is left alone.
+	f.issue(t, ctx, seedRow{id: "t-e3", issueType: "epic", rank: "I"})
+	f.issue(t, ctx, seedRow{id: "t-e4", issueType: "epic", rank: "J"})
+	f.issue(t, ctx, seedRow{id: "t-l4", issueType: "task", rank: "V"})
+	f.parent(t, ctx, "t-l4", "t-e4")
+	f.issue(t, ctx, seedRow{id: "t-held", issueType: "task", rank: "V", lane: "right"})
+	f.parent(t, ctx, "t-held", "t-e3")
+	f.parent(t, ctx, "t-held", "t-l4")
+
+	// Restored data: a loop through an epic. The leaf keeps its epic; the
+	// epic's climb comes back to itself, so it is given no edge and comes out
+	// at the top level, where an epic may live.
+	f.issue(t, ctx, seedRow{id: "t-loop-epic", issueType: "epic", rank: "K"})
+	f.issue(t, ctx, seedRow{id: "t-loop-leaf", issueType: "task", rank: "V"})
+	f.parent(t, ctx, "t-loop-leaf", "t-loop-epic")
+	f.parent(t, ctx, "t-loop-epic", "t-loop-leaf")
+
 	if _, err := provider.UpTo(ctx, 7); err != nil {
 		t.Fatalf("UpTo(7) error = %v", err)
 	}
@@ -195,6 +214,10 @@ func TestContainmentMigrationHomesEveryLeaf(t *testing.T) {
 		"t-l1":               "t-e1",
 		"t-l2":               "t-e2",
 		"t-fork":             "t-e1",
+		"t-l4":               "t-e4",
+		"t-held":             "t-e3",
+		"t-loop-leaf":        "t-loop-epic",
+		"t-loop-epic":        "",
 		unfiledID:            "",
 	}
 	for id, want := range wantParent {
@@ -218,6 +241,7 @@ func TestContainmentMigrationHomesEveryLeaf(t *testing.T) {
 		"t-nested-epic":      "t-nested-epic",
 		"t-nested-epic.1":    "",
 		"t-fork":             "t-fork",
+		"t-held":             "right",
 	}
 	for id, want := range wantLane {
 		if got := f.lane(t, ctx, id); got != want {
@@ -262,6 +286,9 @@ func TestContainmentMigrationHomesEveryLeaf(t *testing.T) {
 		"acme-core-ee55.1.1": "acme-core-ee55",
 		"t-deep-c":           "acme-core-ff66",
 		"t-fork":             "t-e1",
+		"t-held":             "t-e3",
+		"t-loop-leaf":        "t-loop-epic",
+		"t-loop-epic":        "",
 		"acme-core-aa11.1":   "acme-core-aa11",
 	}
 	for id, want := range wantRestored {

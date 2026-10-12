@@ -9,7 +9,9 @@
 -- it. A leaf with no epic above it at all — a top-level leaf, or a child of
 -- leaves with no epic over them — moves under one epic this migration creates
 -- for the store, "Unfiled tickets", where it stays until an agent files it
--- where it belongs. No column changes.
+-- where it belongs. A deleted ticket moves like a live one, since a delete is
+-- reversible and a restored ticket needs its home; only live ones decide the
+-- epic's rank. No column changes.
 --
 -- Nothing here is materialized in a temporary table, and that is deliberate:
 -- the engine corrupts a temporary table that a modifying statement reads
@@ -89,9 +91,15 @@ WHERE (
     issue_type <> 'epic'
     AND NOT EXISTS (SELECT 1 FROM relations r WHERE r.src_id = issues.id AND r.type = 'parent-child')
   )
-  OR EXISTS (
-    SELECT 1 FROM relations r JOIN issues p ON p.id = r.dst_id
-    WHERE r.src_id = issues.id AND r.type = 'parent-child' AND p.issue_type <> 'epic'
+  OR (
+    EXISTS (
+      SELECT 1 FROM relations r JOIN issues p ON p.id = r.dst_id
+      WHERE r.src_id = issues.id AND r.type = 'parent-child' AND p.issue_type <> 'epic'
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM relations held JOIN issues e ON e.id = held.dst_id
+      WHERE held.src_id = issues.id AND held.type = 'parent-child' AND e.issue_type = 'epic'
+    )
   );
 -- +goose StatementEnd
 -- +goose StatementBegin
@@ -129,11 +137,15 @@ WHERE @minted;
 -- than runs. The deepest row is where the walk stopped: an epic, which is the
 -- destination, or a leaf with no parent of its own or the depth cut, which
 -- leaves the child with no epic above it, so it goes unfiled. Restored data
--- admits shapes the write boundary refuses — a child with two parents forks
--- the climb, and the deepest fork's lowest id wins, the lower-id rule every
--- listing applies — and the climb yields one destination per child under all
--- of them. Every leaf with no parent at all goes unfiled too. The new edge is
--- stamped with the child's own created_at and 'links', the stamps `lit new
+-- admits shapes the write boundary refuses, and the climb yields one
+-- destination per child under all of them: a child with two leaf parents
+-- forks the climb, and the deepest fork's lowest id wins, the lower-id rule
+-- every listing applies; a child that already holds an epic parent beside a
+-- leaf parent is home and is not climbed, so the DELETE below leaves it its
+-- epic alone; and an epic in a loop through a leaf climbs back to itself,
+-- which is no edge at all, so it comes out at the top level, where an epic
+-- may live. Every leaf with no parent at all goes unfiled too. The new edge
+-- is stamped with the child's own created_at and 'links', the stamps `lit new
 -- --parent` writes on the edge it creates, and is not written again where the
 -- child already holds it.
 INSERT INTO relations (src_id, dst_id, type, created_at, created_by)
@@ -142,6 +154,10 @@ WITH RECURSIVE climb (child, anc, depth) AS (
   FROM relations r
   JOIN issues p ON p.id = r.dst_id
   WHERE r.type = 'parent-child' AND p.issue_type <> 'epic'
+    AND NOT EXISTS (
+      SELECT 1 FROM relations held JOIN issues e ON e.id = held.dst_id
+      WHERE held.src_id = r.src_id AND held.type = 'parent-child' AND e.issue_type = 'epic'
+    )
   UNION ALL
   SELECT climb.child, up.dst_id, climb.depth + 1
   FROM climb
@@ -167,7 +183,8 @@ moved (child, dst) AS (
 SELECT m.child, m.dst, 'parent-child', i.created_at, 'links'
 FROM moved m
 JOIN issues i ON i.id = m.child
-WHERE NOT EXISTS (
+WHERE m.child <> m.dst
+  AND NOT EXISTS (
   SELECT 1 FROM relations held
   WHERE held.src_id = m.child AND held.dst_id = m.dst AND held.type = 'parent-child'
 );
