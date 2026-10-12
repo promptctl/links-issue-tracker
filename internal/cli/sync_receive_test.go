@@ -38,7 +38,8 @@ func TestAutomaticReceiveFastForwardsEstablishedClone(t *testing.T) {
 	runGit(t, producer, "commit", "-m", "seed")
 	runGit(t, producer, "push", "origin", "HEAD")
 	runCLIInDir(t, producer, "init", "--skip-hooks", "--skip-agents")
-	runCLIInDir(t, producer, "new", "--title", "first-ticket", "--topic", "demo", "--type", "task")
+	epicID := newEpicInDir(t, producer, "shared-epic")
+	runCLIInDir(t, producer, "new", "--title", "first-ticket", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, producer, "sync", "push", "--set-upstream")
 
 	// Consumer adopts the producer's backlog on init.
@@ -52,7 +53,7 @@ func TestAutomaticReceiveFastForwardsEstablishedClone(t *testing.T) {
 	}
 
 	// Another machine pushes a second ticket to the remote.
-	runCLIInDir(t, producer, "new", "--title", "second-ticket", "--topic", "demo", "--type", "task")
+	runCLIInDir(t, producer, "new", "--title", "second-ticket", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, producer, "sync", "push")
 
 	// With automatic sync still disabled (TestMain default), the established

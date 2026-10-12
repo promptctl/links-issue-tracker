@@ -122,7 +122,11 @@ func TestJournalLockHoldExcludesJournalRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	if _, err := s.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "journal payload", Topic: "sync"}); err != nil {
+	epic, err := s.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "journal epic", Topic: "sync", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	if _, err := s.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "journal payload", Topic: "sync", ParentID: epic.ID}); err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	if err := s.Close(); err != nil {
@@ -158,10 +162,10 @@ func TestJournalLockHoldExcludesJournalRecovery(t *testing.T) {
 		_ = release()
 		t.Fatalf("OpenForRead() under the journal hold error = %v; the read-only fallback must serve it", err)
 	}
-	if count, err := reader.LocalIssueCount(ctx); err != nil || count != 1 {
+	if count, err := reader.LocalIssueCount(ctx); err != nil || count != 2 {
 		_ = reader.Close()
 		_ = release()
-		t.Fatalf("LocalIssueCount() under the hold = %d, %v; want 1, nil", count, err)
+		t.Fatalf("LocalIssueCount() under the hold = %d, %v; want 2 (the epic and its payload), nil", count, err)
 	}
 	if err := reader.Close(); err != nil {
 		_ = release()

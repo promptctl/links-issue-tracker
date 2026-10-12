@@ -19,10 +19,14 @@ const attributionSessionID = "attribution-sess"
 
 func attributionWantActor() string { return "claude_" + attributionSessionID }
 
+// newAttributionIssue creates a task inside an epic of its own and returns the
+// task's id.
 func newAttributionIssue(t *testing.T, ap *app.App, title string) string {
 	t.Helper()
-	issue, err := ap.Store.CreateIssue(context.Background(), storage.CreateIssueInput{
+	ctx := context.Background()
+	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: title, Topic: "attribution", IssueType: "task", Priority: 0,
+		ParentID: seedEpicRaw(t, ctx, ap, title+" (epic)", "attribution"),
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue(%q) error = %v", title, err)
@@ -49,7 +53,7 @@ func TestRelationLabelBulkVerbsResolveActingIdentity(t *testing.T) {
 	t.Run("parent set", func(t *testing.T) {
 		ap := newTestCLIApp(t)
 		child := newAttributionIssue(t, ap, "child")
-		parent := newAttributionIssue(t, ap, "parent")
+		parent := seedEpicRaw(t, context.Background(), ap, "parent", "attribution")
 		var out bytes.Buffer
 		if err := runParentSet(ctx, &out, ap, []string{"--child", child, "--parent", parent}); err != nil {
 			t.Fatalf("runParentSet error = %v", err)

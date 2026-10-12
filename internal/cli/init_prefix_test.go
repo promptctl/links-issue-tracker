@@ -80,7 +80,7 @@ func TestABootstrappingCommandIsGivenAnActThatWorks(t *testing.T) {
 	gitRepoNamed(t, "ab")
 
 	var out bytes.Buffer
-	err := Run(context.Background(), &out, &out, []string{"new", "--title", "probe", "--topic", "probe"})
+	err := Run(context.Background(), &out, &out, []string{"new", "--type", "epic", "--title", "probe", "--topic", "probe"})
 	if err == nil {
 		t.Fatal("Run(new) in a repository named \"ab\" succeeded, want a refusal")
 	}
@@ -199,8 +199,9 @@ func rewriteStoredPrefix(t *testing.T, configPath string, prefix string) {
 }
 
 // storedIllegalPrefixWorkspace is a workspace named `myrepo` holding one issue
-// minted under myrepo, whose config.json then has its prefix set to one the
-// rules refuse — the typo'd-down-to-two-characters case the repair exists for.
+// — an epic, the ticket whose id carries the prefix — minted under myrepo,
+// whose config.json then has its prefix set to one the rules refuse — the
+// typo'd-down-to-two-characters case the repair exists for.
 //
 // The repository name derives cleanly on purpose: in one that cannot derive,
 // every command fails with the DERIVE message, which also carries
@@ -217,7 +218,7 @@ func storedIllegalPrefixWorkspace(t *testing.T) (info workspace.Info, issueID st
 		err := Run(context.Background(), &out, &out, args)
 		return out.String(), err
 	}
-	out, err := runLit("new", "--title", "filed before the typo", "--topic", "probe")
+	out, err := runLit("new", "--type", "epic", "--title", "filed before the typo", "--topic", "probe")
 	if err != nil {
 		t.Fatalf("Run(new) error = %v\n%s", err, out)
 	}
@@ -235,7 +236,7 @@ func storedIllegalPrefixWorkspace(t *testing.T) (info workspace.Info, issueID st
 func TestAStoredIllegalPrefixRefusesMintingAndNamesTheRepair(t *testing.T) {
 	info, _, runLit := storedIllegalPrefixWorkspace(t)
 
-	_, err := runLit("new", "--title", "probe", "--topic", "probe")
+	_, err := runLit("new", "--type", "epic", "--title", "probe", "--topic", "probe")
 	if err == nil {
 		t.Fatal("Run(new) over a stored illegal prefix succeeded, want a refusal")
 	}
@@ -311,7 +312,7 @@ func TestPrefixSetRepairsAStoredIllegalPrefix(t *testing.T) {
 	if out, err := runLit("prefix", "set", "myrepo", "--apply"); err != nil {
 		t.Fatalf("Run(prefix set --apply) error = %v\n%s", err, out)
 	}
-	out, err = runLit("new", "--title", "after the repair", "--topic", "probe")
+	out, err = runLit("new", "--type", "epic", "--title", "after the repair", "--topic", "probe")
 	if err != nil {
 		t.Fatalf("Run(new) after the repair error = %v\n%s", err, out)
 	}

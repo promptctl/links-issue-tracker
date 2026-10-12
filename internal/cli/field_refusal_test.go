@@ -23,15 +23,17 @@ import (
 func TestFieldRefusalsAreDeterministicRefusals(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	task, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "a task", Topic: "fields", IssueType: "task"})
-	if err != nil {
-		t.Fatalf("CreateIssue(task) error = %v", err)
-	}
 	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "an epic", Topic: "fields", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
-	blocked, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "blocked by the task", Topic: "fields", IssueType: "task"})
+	task, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "a task", Topic: "fields", IssueType: "task", ParentID: epic.ID})
+	if err != nil {
+		t.Fatalf("CreateIssue(task) error = %v", err)
+	}
+	// In an epic of its own: a blocks edge between siblings is refused, and the
+	// edge below is the fixture for the cycle case, not a refusal under test.
+	blocked, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "blocked by the task", Topic: "fields", IssueType: "task", ParentID: seedEpicRaw(t, ctx, ap, "another epic", "fields")})
 	if err != nil {
 		t.Fatalf("CreateIssue(blocked) error = %v", err)
 	}

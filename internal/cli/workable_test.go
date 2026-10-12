@@ -36,7 +36,8 @@ func (h readyTestHarness) runViewErr(view workableView, args ...string) error {
 // workable row is never closed — the result would be empty by construction.
 func TestWorkableStatusRejectsInvalidValues(t *testing.T) {
 	h := newReadyTestHarness(t)
-	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Open leaf", Topic: "status", IssueType: "task", Priority: 1})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "status", IssueType: "epic", Priority: 1})
+	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Open leaf", Topic: "status", IssueType: "task", Priority: 1, ParentID: epic.ID})
 
 	for _, cmd := range workableCmds {
 		for _, value := range []string{"weird", "closed", "CLOSED", "done"} {
@@ -60,7 +61,8 @@ func TestWorkableStatusRejectsInvalidValues(t *testing.T) {
 
 func TestWorkableStatusAcceptsLegalValues(t *testing.T) {
 	h := newReadyTestHarness(t)
-	issue := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Open leaf", Topic: "status", IssueType: "task", Priority: 1})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "status", IssueType: "epic", Priority: 1})
+	issue := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Open leaf", Topic: "status", IssueType: "task", Priority: 1, ParentID: epic.ID})
 
 	text := h.runWorkableText("--status", "open")
 	if !strings.Contains(text, issue.ID) {

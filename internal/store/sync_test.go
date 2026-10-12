@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -79,6 +80,26 @@ func TestOpenSyncCreatesDatabaseWhenMissing(t *testing.T) {
 // still on Dolt's own default branch rather than master. Returns the dolt
 // root and the database's repo path, having asserted the branch is not yet
 // master — the precondition both normalization tests depend on.
+// seedSyncEpic opens the store at doltRoot, creates one top-level epic, and closes
+// it again, returning the epic's id: every leaf a test then commits lives
+// inside it. The create is one commit of its own, landed before the test's
+// first.
+func seedSyncEpic(t *testing.T, ctx context.Context, doltRoot, workspace string) string {
+	t.Helper()
+	st, err := Open(ctx, doltRoot, workspace)
+	if err != nil {
+		t.Fatalf("Open(epic) error = %v", err)
+	}
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "epic", Topic: "topic", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close(epic) error = %v", err)
+	}
+	return epic.ID
+}
+
 func premadeMainBranchDB(t *testing.T, ctx context.Context) (doltRoot, repoPath string) {
 	t.Helper()
 	doltRoot = filepath.Join(t.TempDir(), "dolt")
@@ -327,7 +348,11 @@ func TestSyncCompactRunsCleanlyAndPreservesData(t *testing.T) {
 		t.Fatalf("Open() error = %v", err)
 	}
 	defer st.Close()
-	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "gc target", Topic: "gc-test", IssueType: "task", Priority: 0})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "gc epic", Topic: "gc-test", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "gc target", Topic: "gc-test", IssueType: "task", Priority: 0, ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
@@ -491,9 +516,13 @@ func TestMeasureFootprintMatchesDoltsRealOldGenLayout(t *testing.T) {
 	}
 	// Enough history that a pass has something to archive; an empty store would
 	// leave an old generation Dolt never wrote, proving nothing.
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "layout epic", Topic: "layout", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
 	for i := range 8 {
 		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-			Prefix: "test", Title: fmt.Sprintf("layout %d", i), Topic: "layout", IssueType: "task", Priority: 0,
+			Prefix: "test", Title: fmt.Sprintf("layout %d", i), Topic: "layout", IssueType: "task", Priority: 0, ParentID: epic.ID,
 		}); err != nil {
 			t.Fatalf("CreateIssue() error = %v", err)
 		}
@@ -638,13 +667,14 @@ func TestSyncFreshnessTracksAheadBehindAgainstRemote(t *testing.T) {
 	base := t.TempDir()
 	doltRoot := migratedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(base, "remote")
+	epicID := seedSyncEpic(t, ctx, doltRoot, "ws")
 
 	commit := func(title string) {
 		st, err := Open(ctx, doltRoot, "ws")
 		if err != nil {
 			t.Fatalf("Open(%q) error = %v", title, err)
 		}
-		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task", Priority: 0}); err != nil {
+		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task", Priority: 0, ParentID: epicID}); err != nil {
 			t.Fatalf("CreateIssue(%q) error = %v", title, err)
 		}
 		if err := st.Close(); err != nil {
@@ -753,13 +783,14 @@ func TestSyncPushDelivers(t *testing.T) {
 	base := t.TempDir()
 	doltRoot := migratedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(base, "remote")
+	epicID := seedSyncEpic(t, ctx, doltRoot, "ws")
 
 	commit := func(title string) {
 		st, err := Open(ctx, doltRoot, "ws")
 		if err != nil {
 			t.Fatalf("Open(%q) error = %v", title, err)
 		}
-		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task", Priority: 0}); err != nil {
+		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task", Priority: 0, ParentID: epicID}); err != nil {
 			t.Fatalf("CreateIssue(%q) error = %v", title, err)
 		}
 		if err := st.Close(); err != nil {
@@ -832,7 +863,11 @@ func TestSyncCompactAndPushDelivers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "c1", Topic: "topic", IssueType: "task", Priority: 0}); err != nil {
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "epic", Topic: "topic", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "c1", Topic: "topic", IssueType: "task", Priority: 0, ParentID: epic.ID}); err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	if err := st.Close(); err != nil {
@@ -885,8 +920,12 @@ func TestSyncCompactAndPushDeepensOnAFragmentedOldGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "epic", Topic: "topic", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
 	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "fragmented", Topic: "topic", IssueType: "task", Priority: 0,
+		Prefix: "test", Title: "fragmented", Topic: "topic", IssueType: "task", Priority: 0, ParentID: epic.ID,
 	}); err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
@@ -942,8 +981,12 @@ func TestSyncCompactAndPushNamesADeepPassInsideAFailedPush(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "epic", Topic: "topic", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
 	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "doomed push", Topic: "topic", IssueType: "task", Priority: 0,
+		Prefix: "test", Title: "doomed push", Topic: "topic", IssueType: "task", Priority: 0, ParentID: epic.ID,
 	}); err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
@@ -995,6 +1038,10 @@ func TestReconnectRotatorRecoversPoisonedOperation(t *testing.T) {
 		t.Fatalf("Open() error = %v", err)
 	}
 	defer st.Close()
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "epic", Topic: "topic", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
 
 	// The exact Dolt ErrServerPerformedGC text (verified against the pinned
 	// module), wrapped the way callIntProcedure would surface it.
@@ -1023,7 +1070,7 @@ func TestReconnectRotatorRecoversPoisonedOperation(t *testing.T) {
 
 	// The rotated connection must be a fully working handle, not just non-nil:
 	// a real mutation through it has to commit.
-	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "after-reconnect", Topic: "topic", IssueType: "task", Priority: 0}); err != nil {
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "after-reconnect", Topic: "topic", IssueType: "task", Priority: 0, ParentID: epic.ID}); err != nil {
 		t.Fatalf("CreateIssue() after reconnect error = %v", err)
 	}
 }
@@ -1101,13 +1148,17 @@ func TestSyncResetToRemoteHeadAdoptsUnrelatedHistory(t *testing.T) {
 	base := t.TempDir()
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
-	// Producer: a real workspace with a ticket, pushed to the remote.
+	// Producer: a real workspace with a ticket inside an epic, pushed to the remote.
 	producerRoot := migratedDoltDir(t)
 	producer, err := Open(ctx, producerRoot, "ws-producer")
 	if err != nil {
 		t.Fatalf("Open(producer) error = %v", err)
 	}
-	if _, err := producer.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "remote-ticket", Topic: "topic", IssueType: "task", Priority: 0}); err != nil {
+	epic, err := producer.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "remote-epic", Topic: "topic", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(producer epic) error = %v", err)
+	}
+	if _, err := producer.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "remote-ticket", Topic: "topic", IssueType: "task", Priority: 0, ParentID: epic.ID}); err != nil {
 		t.Fatalf("CreateIssue(producer) error = %v", err)
 	}
 	if err := producer.Close(); err != nil {
@@ -1155,7 +1206,8 @@ func TestSyncResetToRemoteHeadAdoptsUnrelatedHistory(t *testing.T) {
 		t.Fatalf("Close(consumer) error = %v", err)
 	}
 
-	// A regular Open runs migrations on the adopted store and reads the ticket.
+	// A regular Open runs migrations on the adopted store and reads the ticket
+	// and the epic it lives in.
 	adopted, err := Open(ctx, consumerRoot, "ws-consumer")
 	if err != nil {
 		t.Fatalf("Open(consumer after adopt) error = %v", err)
@@ -1165,8 +1217,13 @@ func TestSyncResetToRemoteHeadAdoptsUnrelatedHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListIssues(consumer) error = %v", err)
 	}
-	if len(issues) != 1 || issues[0].Title != "remote-ticket" {
-		t.Fatalf("adopted issues = %+v, want exactly [remote-ticket]", issues)
+	titles := make([]string, 0, len(issues))
+	for _, issue := range issues {
+		titles = append(titles, issue.Title)
+	}
+	slices.Sort(titles)
+	if !slices.Equal(titles, []string{"remote-epic", "remote-ticket"}) {
+		t.Fatalf("adopted issues = %+v, want exactly [remote-epic remote-ticket]", issues)
 	}
 }
 
@@ -1200,11 +1257,18 @@ func TestLocalIssueCountAcrossLifecycle(t *testing.T) {
 	if got, err := st.LocalIssueCount(ctx); err != nil || got != 0 {
 		t.Fatalf("migrated-empty LocalIssueCount() = %d, %v; want 0, nil", got, err)
 	}
-	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "t1", Topic: "topic", IssueType: "task", Priority: 0}); err != nil {
-		t.Fatalf("CreateIssue() error = %v", err)
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "e1", Topic: "topic", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
 	if got, err := st.LocalIssueCount(ctx); err != nil || got != 1 {
-		t.Fatalf("after-ticket LocalIssueCount() = %d, %v; want 1, nil", got, err)
+		t.Fatalf("after-epic LocalIssueCount() = %d, %v; want 1, nil", got, err)
+	}
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "t1", Topic: "topic", IssueType: "task", Priority: 0, ParentID: epic.ID}); err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	if got, err := st.LocalIssueCount(ctx); err != nil || got != 2 {
+		t.Fatalf("after-ticket LocalIssueCount() = %d, %v; want 2, nil", got, err)
 	}
 	if err := st.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -1335,13 +1399,16 @@ func TestSyncReceiveFastForwardsWhenBehindAndDefersDivergence(t *testing.T) {
 	rootB := unrelatedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
+	// A's epic is the one every issue in this test lives in; B holds it once it
+	// adopts the remote, so B's own commit files under it too.
+	epicID := seedSyncEpic(t, ctx, rootA, "ws")
 	createIssue := func(root, title string) {
 		t.Helper()
 		st, err := Open(ctx, root, "ws")
 		if err != nil {
 			t.Fatalf("Open(%s,%q) error = %v", root, title, err)
 		}
-		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task"}); err != nil {
+		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task", ParentID: epicID}); err != nil {
 			t.Fatalf("CreateIssue(%q) error = %v", title, err)
 		}
 		if err := st.Close(); err != nil {
@@ -1391,7 +1458,7 @@ func TestSyncReceiveFastForwardsWhenBehindAndDefersDivergence(t *testing.T) {
 		return res
 	}
 
-	// A seeds the remote with one issue.
+	// A seeds the remote with its epic and one issue.
 	createIssue(rootA, "c1")
 	syncA, err := OpenSync(ctx, rootA, "ws")
 	if err != nil {
@@ -1407,7 +1474,7 @@ func TestSyncReceiveFastForwardsWhenBehindAndDefersDivergence(t *testing.T) {
 		t.Fatalf("Close(A) error = %v", err)
 	}
 
-	// B adopts the remote: it now has c1 and is up to date.
+	// B adopts the remote: it now has the epic and c1 and is up to date.
 	syncB, err := OpenSync(ctx, rootB, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync(B) error = %v", err)
@@ -1424,14 +1491,14 @@ func TestSyncReceiveFastForwardsWhenBehindAndDefersDivergence(t *testing.T) {
 	if err := syncB.Close(); err != nil {
 		t.Fatalf("Close(B) after adopt error = %v", err)
 	}
-	if got := issueCount(rootB); got != 1 {
-		t.Fatalf("B issue count after adopt = %d, want 1", got)
+	if got := issueCount(rootB); got != 2 {
+		t.Fatalf("B issue count after adopt = %d, want 2", got)
 	}
 
 	// Up to date: receive is a no-op.
 	receive("up to date", storage.SyncReceiveUpToDate)
-	if got := issueCount(rootB); got != 1 {
-		t.Fatalf("B issue count after up-to-date receive = %d, want 1", got)
+	if got := issueCount(rootB); got != 2 {
+		t.Fatalf("B issue count after up-to-date receive = %d, want 2", got)
 	}
 
 	// A pushes c2: B is now behind by one. Receive fast-forwards it.
@@ -1441,8 +1508,8 @@ func TestSyncReceiveFastForwardsWhenBehindAndDefersDivergence(t *testing.T) {
 	if res.Behind != 1 {
 		t.Fatalf("behind receive: Behind = %d, want 1", res.Behind)
 	}
-	if got := issueCount(rootB); got != 2 {
-		t.Fatalf("B issue count after fast-forward = %d, want 2", got)
+	if got := issueCount(rootB); got != 3 {
+		t.Fatalf("B issue count after fast-forward = %d, want 3", got)
 	}
 
 	// B makes a local, unpushed commit: it is ahead, remote unchanged. No-op.
@@ -1451,19 +1518,19 @@ func TestSyncReceiveFastForwardsWhenBehindAndDefersDivergence(t *testing.T) {
 	if res.Ahead != 1 {
 		t.Fatalf("ahead receive: Ahead = %d, want 1", res.Ahead)
 	}
-	if got := issueCount(rootB); got != 3 {
-		t.Fatalf("B issue count after ahead receive = %d, want 3", got)
+	if got := issueCount(rootB); got != 4 {
+		t.Fatalf("B issue count after ahead receive = %d, want 4", got)
 	}
 
 	// A pushes c3 while B holds its unpushed commit: B is diverged. Receive must
-	// report it and NOT merge — B's three issues are untouched.
+	// report it and NOT merge — B's four issues are untouched.
 	createIssue(rootA, "c3")
 	pushFrom(rootA, false)
 	res = receive("diverged", storage.SyncReceiveDiverged)
 	if res.Ahead != 1 || res.Behind != 1 {
 		t.Fatalf("diverged receive: ahead=%d behind=%d, want 1/1", res.Ahead, res.Behind)
 	}
-	if got := issueCount(rootB); got != 3 {
-		t.Fatalf("B issue count after diverged receive = %d, want 3 (no merge)", got)
+	if got := issueCount(rootB); got != 4 {
+		t.Fatalf("B issue count after diverged receive = %d, want 4 (no merge)", got)
 	}
 }

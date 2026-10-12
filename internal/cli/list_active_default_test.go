@@ -29,8 +29,9 @@ func runLs(t *testing.T, ap *app.App, args ...string) string {
 // only active work. [LAW:no-silent-failure]
 func TestListClosedOnlyFilterIsNotSilentlyEmptied(t *testing.T) {
 	h := newReadyTestHarness(t)
-	openBug := h.createIssue(storage.CreateIssueInput{Title: "still open", IssueType: model.TypeBug, Topic: "filtering"})
-	wontfixBug := h.createIssue(storage.CreateIssueInput{Title: "declined bug", IssueType: model.TypeBug, Topic: "filtering"})
+	epic := h.createIssue(storage.CreateIssueInput{Title: "filtering", IssueType: model.TypeEpic, Topic: "filtering"})
+	openBug := h.createIssue(storage.CreateIssueInput{Title: "still open", IssueType: model.TypeBug, Topic: "filtering", ParentID: epic.ID})
+	wontfixBug := h.createIssue(storage.CreateIssueInput{Title: "declined bug", IssueType: model.TypeBug, Topic: "filtering", ParentID: epic.ID})
 	if _, err := h.ap.Store.Apply(h.ctx, wontfixBug.ID, storage.Change{
 		Action: model.Close{Outcome: model.Wontfix{}},
 		Actor:  "tester",

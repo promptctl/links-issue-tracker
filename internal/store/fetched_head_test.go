@@ -21,12 +21,17 @@ type landFixture struct {
 	live      string
 	remoteURL string
 	clones    int
+	// epics is the epic every ticket commit() files into, by store root; a
+	// copy of a root shares its epic, a store of unrelated history seeds its
+	// own. Seeding it is its own commit, so each commit() is exactly one.
+	epics map[string]string
 }
 
 func newLandFixture(t *testing.T) *landFixture {
 	t.Helper()
-	f := &landFixture{t: t, ctx: context.Background(), base: t.TempDir(), live: migratedDoltDir(t)}
+	f := &landFixture{t: t, ctx: context.Background(), base: t.TempDir(), live: migratedDoltDir(t), epics: map[string]string{}}
 	f.remoteURL = "file://" + filepath.Join(f.base, "remote")
+	f.seedEpic(f.live)
 	f.commit(f.live, "c1")
 	st := f.openSync(f.live)
 	if err := st.SyncAddRemote(f.ctx, "origin", f.remoteURL); err != nil {
@@ -55,15 +60,34 @@ func (f *landFixture) close(st *Store) {
 	}
 }
 
+// seedEpic lands the epic commit() files tickets into on the store at root.
+func (f *landFixture) seedEpic(root string) {
+	f.t.Helper()
+	st, err := Open(f.ctx, root, "ws")
+	if err != nil {
+		f.t.Fatalf("Open(epic) error = %v", err)
+	}
+	defer f.close(st)
+	epic, err := st.CreateIssue(f.ctx, storage.CreateIssueInput{Prefix: "test", Title: "epic", Topic: "topic", IssueType: "epic"})
+	if err != nil {
+		f.t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	f.epics[root] = epic.ID
+}
+
 // commit lands one issue on the store at root and returns the new head.
 func (f *landFixture) commit(root, title string) string {
 	f.t.Helper()
+	epic, ok := f.epics[root]
+	if !ok {
+		f.t.Fatalf("commit(%q): no epic seeded on %s", title, root)
+	}
 	st, err := Open(f.ctx, root, "ws")
 	if err != nil {
 		f.t.Fatalf("Open(%q) error = %v", title, err)
 	}
 	defer f.close(st)
-	if _, err := st.CreateIssue(f.ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task", Priority: 0}); err != nil {
+	if _, err := st.CreateIssue(f.ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task", Priority: 0, ParentID: epic}); err != nil {
 		f.t.Fatalf("CreateIssue(%q) error = %v", title, err)
 	}
 	var head string
@@ -84,6 +108,7 @@ func (f *landFixture) copyOf(root string) string {
 	if err := dbsnapshot.CloneTree(f.ctx, root, dst); err != nil {
 		f.t.Fatalf("CloneTree() error = %v", err)
 	}
+	f.epics[dst] = f.epics[root]
 	return dst
 }
 
@@ -228,6 +253,7 @@ func TestLandFetchedHeadRecordsWhatTheFetchSaw(t *testing.T) {
 		t.Parallel()
 		f := newLandFixture(t)
 		unrelated := unrelatedDoltDir(t)
+		f.seedEpic(unrelated)
 		unrelatedHead := f.commit(unrelated, "unrelated-ticket")
 		st := f.openSync(unrelated)
 		if err := st.SyncAddRemote(f.ctx, "origin", f.remoteURL); err != nil {

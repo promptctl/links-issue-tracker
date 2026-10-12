@@ -7,17 +7,43 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-// seedOpenIssueRaw creates an issue through the CLI and returns its id.
-func seedOpenIssueRaw(t *testing.T, ctx context.Context, ap *app.App, title string) string {
+// seedEpicRaw creates a top-level epic through the store and returns its id:
+// the container a test's tasks live inside, since a task is never outside one.
+func seedEpicRaw(t *testing.T, ctx context.Context, ap *app.App, title, topic string) string {
+	t.Helper()
+	prefix, err := ap.Workspace.IssuePrefix.Mintable()
+	if err != nil {
+		t.Fatalf("Mintable() error = %v", err)
+	}
+	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: prefix.Value(), Title: title, Topic: topic, IssueType: model.TypeEpic})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic %q) error = %v", title, err)
+	}
+	return epic.ID
+}
+
+// seedTaskIn creates a task through the CLI inside the epic epicID and returns
+// its id.
+func seedTaskIn(t *testing.T, ctx context.Context, ap *app.App, title, epicID string) string {
 	t.Helper()
 	var out bytes.Buffer
-	if err := runNew(ctx, &out, ap, []string{"--title", title, "--topic", "redirect", "--type", "task"}); err != nil {
+	if err := runNew(ctx, &out, ap, []string{"--title", title, "--topic", "redirect", "--type", "task", "--parent", epicID}); err != nil {
 		t.Fatalf("runNew(%q) error = %v", title, err)
 	}
 	return strings.Fields(out.String())[0]
+}
+
+// seedOpenIssueRaw creates a task through the CLI, inside an epic of its own,
+// and returns the task's id. Each task in its own epic keeps the tasks a test
+// seeds independent of one another: none is held back by a sibling ranked
+// ahead of it in a shared lane.
+func seedOpenIssueRaw(t *testing.T, ctx context.Context, ap *app.App, title string) string {
+	t.Helper()
+	return seedTaskIn(t, ctx, ap, title, seedEpicRaw(t, ctx, ap, title+" (epic)", "redirect"))
 }
 
 // TestCloseAsDuplicateRequiresTarget pins the parse-boundary requirement: a

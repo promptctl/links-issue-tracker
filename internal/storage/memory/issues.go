@@ -45,8 +45,18 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 		issueType = model.TypeTask
 	}
 	parentID := strings.TrimSpace(in.ParentID)
+	// Containment: a leaf is never created outside an epic, and the parent it
+	// names is one. The parent's record answers both its presence and its
+	// type in one lookup. [LAW:single-enforcer]
+	if err := storage.RejectLeafWithoutParent(issueType, parentID); err != nil {
+		return model.Issue{}, err
+	}
 	if parentID != "" {
-		if _, err := e.mustRecord(parentID); err != nil {
+		parent, err := e.mustRecord(parentID)
+		if err != nil {
+			return model.Issue{}, err
+		}
+		if err := storage.RejectParentThatIsNotAContainer(parentID, parent.issueType); err != nil {
 			return model.Issue{}, err
 		}
 	}

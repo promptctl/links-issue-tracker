@@ -261,10 +261,23 @@ func orderByRank(ranks map[string]string) []string {
 	return ids
 }
 
-func createRankTestIssue(t *testing.T, ctx context.Context, st *Store, title string) string {
+// createRankTestEpic creates the epic a test's ranked issues share, so they
+// are one frame.
+func createRankTestEpic(t *testing.T, ctx context.Context, st *Store) string {
+	t.Helper()
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{
+		Prefix: "test", Title: "Rank epic", Topic: "rank", IssueType: "epic",
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	return epic.ID
+}
+
+func createRankTestIssue(t *testing.T, ctx context.Context, st *Store, epic, title string) string {
 	t.Helper()
 	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: title, Topic: "rank", IssueType: "task", Priority: 0, Placement: storage.RankBottom,
+		Prefix: "test", Title: title, Topic: "rank", IssueType: "task", Priority: 0, Placement: storage.RankBottom, ParentID: epic,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue(%s) error = %v", title, err)
@@ -280,10 +293,11 @@ func TestFixRankInversionsMovesOnlyTheInvertedTicket(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
+	epic := createRankTestEpic(t, ctx, st)
 
 	ids := make([]string, 0, 6)
 	for _, title := range []string{"Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot"} {
-		ids = append(ids, createRankTestIssue(t, ctx, st, title))
+		ids = append(ids, createRankTestIssue(t, ctx, st, epic, title))
 	}
 	// Rank them in reverse id order, so the deliberate order is exactly the one
 	// an id-sorting repair would destroy.
@@ -353,13 +367,14 @@ func TestFixRankInversionsPreservesTheBandBlockingOneGate(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
+	epic := createRankTestEpic(t, ctx, st)
 
 	band := make([]string, 0, 6)
 	for _, title := range []string{"Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot"} {
-		band = append(band, createRankTestIssue(t, ctx, st, title))
+		band = append(band, createRankTestIssue(t, ctx, st, epic, title))
 	}
 	sort.Sort(sort.Reverse(sort.StringSlice(band)))
-	gate := createRankTestIssue(t, ctx, st, "Gate")
+	gate := createRankTestIssue(t, ctx, st, epic, "Gate")
 	// The gate sits mid-band, so two of its dependencies are ranked below it.
 	deliberate := append(append(append([]string(nil), band[:4]...), gate), band[4:]...)
 	deliberatelyRank(t, ctx, st, deliberate)
@@ -503,10 +518,11 @@ func TestFixRankInversionsTwiceWritesNothingWithSmoothing(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
+	epic := createRankTestEpic(t, ctx, st)
 
 	ids := make([]string, 0, 8)
 	for _, title := range []string{"Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel"} {
-		ids = append(ids, createRankTestIssue(t, ctx, st, title))
+		ids = append(ids, createRankTestIssue(t, ctx, st, epic, title))
 	}
 	prefix := strings.Repeat("V", rank.SmoothingThreshold)
 	for _, item := range seq(ids...) {
@@ -575,6 +591,7 @@ func TestSmoothingWidensPastRanksThatLeaveNoRoom(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
+	epic := createRankTestEpic(t, ctx, st)
 
 	// The run is long enough that a full window around its middle leaves a
 	// member of the run on each side: SmoothingWindow/2 at or below the trigger,
@@ -582,7 +599,7 @@ func TestSmoothingWidensPastRanksThatLeaveNoRoom(t *testing.T) {
 	run := rank.SmoothingWindow + 2
 	ids := make([]string, 0, run+2)
 	for i := 0; i < run+2; i++ {
-		ids = append(ids, createRankTestIssue(t, ctx, st, fmt.Sprintf("Issue %d", i)))
+		ids = append(ids, createRankTestIssue(t, ctx, st, epic, fmt.Sprintf("Issue %d", i)))
 	}
 	planted := make(map[string]string, len(ids))
 	planted[ids[0]] = "U"
@@ -637,11 +654,12 @@ func TestSmoothingWidensPastAnAllZeroRun(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
+	epic := createRankTestEpic(t, ctx, st)
 
 	run := rank.SmoothingWindow + 2
 	ids := make([]string, 0, run+1)
 	for i := 0; i < run+1; i++ {
-		ids = append(ids, createRankTestIssue(t, ctx, st, fmt.Sprintf("Issue %d", i)))
+		ids = append(ids, createRankTestIssue(t, ctx, st, epic, fmt.Sprintf("Issue %d", i)))
 	}
 	planted := make(map[string]string, len(ids))
 	for i := 0; i < run; i++ {
@@ -684,11 +702,12 @@ func TestSmoothingLeavesUnrankedIssuesUnranked(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
+	epic := createRankTestEpic(t, ctx, st)
 
-	unranked := createRankTestIssue(t, ctx, st, "Unranked")
+	unranked := createRankTestIssue(t, ctx, st, epic, "Unranked")
 	ids := make([]string, 0, 3)
 	for i := 0; i < 3; i++ {
-		ids = append(ids, createRankTestIssue(t, ctx, st, fmt.Sprintf("Issue %d", i)))
+		ids = append(ids, createRankTestIssue(t, ctx, st, epic, fmt.Sprintf("Issue %d", i)))
 	}
 	planted := map[string]string{unranked: "", ids[0]: "V", ids[1]: "V" + strings.Repeat("0", rank.SmoothingThreshold), ids[2]: "W"}
 	for id, stored := range planted {

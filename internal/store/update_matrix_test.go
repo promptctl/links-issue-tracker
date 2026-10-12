@@ -76,9 +76,19 @@ func TestApplyIssueTypeFlagMatrix(t *testing.T) {
 		{name: "title_and_status_open", in: storage.Change{Fields: storage.UpdateIssueInput{Title: ptr("Renamed")}, Action: model.Reopen{}}},
 	}
 
+	// Every leaf cell is filed inside this epic; an epic cell is top-level.
+	home, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Matrix epic", Topic: "update-matrix", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(home epic) error = %v", err)
+	}
+
 	for _, issueType := range model.IssueTypes() {
 		for _, combo := range combos {
 			t.Run(string(issueType)+"/"+combo.name, func(t *testing.T) {
+				var parentID string
+				if !issueType.IsContainer() {
+					parentID = home.ID
+				}
 				created, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 					Prefix:      "test",
 					Title:       initialTitle,
@@ -86,6 +96,7 @@ func TestApplyIssueTypeFlagMatrix(t *testing.T) {
 					Topic:       "update-matrix",
 					IssueType:   issueType,
 					Priority:    initialPriority,
+					ParentID:    parentID,
 				})
 				if err != nil {
 					t.Fatalf("CreateIssue(%s) error = %v", issueType, err)

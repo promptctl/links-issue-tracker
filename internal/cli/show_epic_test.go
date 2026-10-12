@@ -82,11 +82,13 @@ func TestRunShowEpicRendersChildrenNoFocus(t *testing.T) {
 	}
 }
 
-// A parentless non-epic issue is unchanged: no epic block at all.
-func TestRunShowParentlessTicketHasNoEpicBlock(t *testing.T) {
+// The only parentless ticket is a top-level epic, and the block it renders is
+// its own: a childless one shows its body plus an epic block with no child
+// rows and no focus marker.
+func TestRunShowTopLevelEpicRendersItsOwnBlock(t *testing.T) {
 	ap := newTestCLIApp(t)
 	free, err := ap.Store.CreateIssue(context.Background(), storage.CreateIssueInput{
-		Prefix: "test", Title: "Free floating", Topic: "misc", IssueType: "task", Priority: 0,
+		Prefix: "test", Title: "Free floating", Topic: "misc", IssueType: "epic", Priority: 0,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue(free) error = %v", err)
@@ -97,8 +99,11 @@ func TestRunShowParentlessTicketHasNoEpicBlock(t *testing.T) {
 	if !strings.Contains(out, "Free floating") {
 		t.Fatalf("show output missing the issue body:\n%s", out)
 	}
-	if strings.Contains(out, "Epic:") {
-		t.Errorf("an issue in no epic must render no epic block:\n%s", out)
+	if !strings.Contains(out, "Epic: "+free.ID+" — Free floating") {
+		t.Errorf("a top-level epic renders its own epic block:\n%s", out)
+	}
+	if strings.Contains(out, "▶") {
+		t.Errorf("a top-level epic has no focused child, must not render a you-are-here marker:\n%s", out)
 	}
 }
 
@@ -117,13 +122,14 @@ func writeUnrelatedlyBrokenConfig(t *testing.T, ap *app.App) {
 	}
 }
 
-// An issue in no epic needs no ready policy, so it must not be coupled to
-// whether this repo's config loads at all. The plan slice is what wants the
-// policy, and a parentless ticket has none.
-func TestRunShowParentlessTicketIgnoresUnreadableConfig(t *testing.T) {
+// The only parentless ticket is a top-level epic, and its plan slice — its
+// own — wants the ready policy, so an unreadable config is a real failure for
+// it too, even with no children to classify. It arrives before the body is
+// written, for the reason the epic-member test below states.
+func TestRunShowTopLevelEpicFailsBeforeWritingBodyOnUnreadableConfig(t *testing.T) {
 	ap := newTestCLIApp(t)
 	free, err := ap.Store.CreateIssue(context.Background(), storage.CreateIssueInput{
-		Prefix: "test", Title: "Free floating", Topic: "misc", IssueType: "task", Priority: 0,
+		Prefix: "test", Title: "Free floating", Topic: "misc", IssueType: "epic", Priority: 0,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue(free) error = %v", err)
@@ -131,11 +137,14 @@ func TestRunShowParentlessTicketIgnoresUnreadableConfig(t *testing.T) {
 	writeUnrelatedlyBrokenConfig(t, ap)
 
 	var buf bytes.Buffer
-	if err := runShow(context.Background(), &buf, ap, []string{free.ID}); err != nil {
-		t.Fatalf("show of a ticket in no epic must not read repo config, got error = %v", err)
+	err = runShow(context.Background(), &buf, ap, []string{free.ID})
+	if err == nil {
+		t.Fatalf("show of a top-level epic under an unreadable config must fail, got nil; output:\n%s", buf.String())
 	}
-	if !strings.Contains(buf.String(), "Free floating") {
-		t.Errorf("show output missing the issue body:\n%s", buf.String())
+	for _, unwanted := range []string{free.ID, "Free floating", "Epic: "} {
+		if strings.Contains(buf.String(), unwanted) {
+			t.Errorf("failed plan resolution must print neither body nor block, found %q in:\n%s", unwanted, buf.String())
+		}
 	}
 }
 

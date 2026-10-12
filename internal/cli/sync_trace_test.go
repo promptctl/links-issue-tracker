@@ -189,7 +189,8 @@ func TestExplicitSyncCommandsLeaveDurableTracesInteractively(t *testing.T) {
 	runGit(t, producer, "commit", "-m", "seed")
 	runGit(t, producer, "push", "origin", "HEAD")
 	runCLIInDir(t, producer, "init", "--skip-hooks", "--skip-agents")
-	runCLIInDir(t, producer, "new", "--title", "seed-ticket", "--topic", "demo", "--type", "task")
+	epicID := newEpicInDir(t, producer, "seed-epic")
+	runCLIInDir(t, producer, "new", "--title", "seed-ticket", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, producer, "sync", "push", "--set-upstream")
 
 	consumer := filepath.Join(base, "bravo")
@@ -321,14 +322,16 @@ func TestReconcileTakeAndCombineLeaveDurableTracesInteractively(t *testing.T) {
 		runGit(t, producer, "commit", "-m", "seed")
 		runGit(t, producer, "push", "origin", "HEAD")
 		runCLIInDir(t, producer, "init", "--skip-hooks", "--skip-agents")
-		runCLIInDir(t, producer, "new", "--title", "producer-ticket", "--topic", "demo", "--type", "task")
+		producerEpic := newEpicInDir(t, producer, "producer-epic")
+		runCLIInDir(t, producer, "new", "--title", "producer-ticket", "--topic", "demo", "--type", "task", "--parent", producerEpic)
 
 		consumer = filepath.Join(base, "bravo")
 		runGit(t, base, "clone", remote, "bravo")
 		runGit(t, consumer, "config", "user.email", "b@b.co")
 		runGit(t, consumer, "config", "user.name", "bravo")
 		runCLIInDir(t, consumer, "init", "--skip-hooks", "--skip-agents")
-		runCLIInDir(t, consumer, "new", "--title", "consumer-ticket", "--topic", "demo", "--type", "task")
+		consumerEpic := newEpicInDir(t, consumer, "consumer-epic")
+		runCLIInDir(t, consumer, "new", "--title", "consumer-ticket", "--topic", "demo", "--type", "task", "--parent", consumerEpic)
 
 		// Producer publishes last, so the consumer's independently-inited
 		// history and the producer's are disjoint by the time consumer reconciles.

@@ -20,6 +20,19 @@ import (
 // different default ref — this fails instead of the prune quietly deleting a
 // live mirror. [LAW:behavior-not-structure] it asserts the contract our code
 // depends on (which directory a remote maps to), never how Dolt computes it.
+// commitPayload gives the store something to push: an epic and one task
+// filed under it, since a task lives inside an epic.
+func commitPayload(t *testing.T, ctx context.Context, st *Store, title string) {
+	t.Helper()
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title + " epic", Topic: "topic", IssueType: "epic", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue(%q epic) error = %v", title, err)
+	}
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task", Priority: 0, ParentID: epic.ID}); err != nil {
+		t.Fatalf("CreateIssue(%q) error = %v", title, err)
+	}
+}
+
 func TestRemoteCacheKeyMatchesDoltLayout(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -32,11 +45,7 @@ func TestRemoteCacheKeyMatchesDoltLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "c1", Topic: "topic", IssueType: "task", Priority: 0,
-	}); err != nil {
-		t.Fatalf("CreateIssue() error = %v", err)
-	}
+	commitPayload(t, ctx, st, "c1")
 	if err := st.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
@@ -106,11 +115,7 @@ func TestPruneRemoteCacheKeepsTheLiveMirror(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "c1", Topic: "topic", IssueType: "task", Priority: 0,
-	}); err != nil {
-		t.Fatalf("CreateIssue() error = %v", err)
-	}
+	commitPayload(t, ctx, st, "c1")
 	if err := st.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
@@ -157,11 +162,7 @@ func TestPruneRemoteCacheCollectsAbandonedMirrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "c1", Topic: "topic", IssueType: "task", Priority: 0,
-	}); err != nil {
-		t.Fatalf("CreateIssue() error = %v", err)
-	}
+	commitPayload(t, ctx, st, "c1")
 	if err := st.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
@@ -235,11 +236,7 @@ func TestPruneRemoteCacheIsNotBlockedByOneStuckMirror(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "c1", Topic: "topic", IssueType: "task", Priority: 0,
-	}); err != nil {
-		t.Fatalf("CreateIssue() error = %v", err)
-	}
+	commitPayload(t, ctx, st, "c1")
 	if err := st.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
@@ -340,11 +337,7 @@ func TestRemoteCacheKeyIsStillAbandonedFollowsTheRemotesNotASnapshot(t *testing.
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "c1", Topic: "topic", IssueType: "task", Priority: 0,
-	}); err != nil {
-		t.Fatalf("CreateIssue() error = %v", err)
-	}
+	commitPayload(t, ctx, st, "c1")
 	if err := st.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
@@ -417,9 +410,7 @@ func TestSyncRemoteMirrorHoldsItsOwnPushNotAPeersLaterOne(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Open(%q) error = %v", title, err)
 		}
-		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task", Priority: 0}); err != nil {
-			t.Fatalf("CreateIssue(%q) error = %v", title, err)
-		}
+		commitPayload(t, ctx, st, title)
 		if err := st.Close(); err != nil {
 			t.Fatalf("Close(%q) error = %v", title, err)
 		}

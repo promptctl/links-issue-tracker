@@ -31,7 +31,8 @@ func TestAutomaticReconcileLinearizesDivergedClone(t *testing.T) {
 	runGit(t, producer, "commit", "-m", "seed")
 	runGit(t, producer, "push", "origin", "HEAD")
 	runCLIInDir(t, producer, "init", "--skip-hooks", "--skip-agents")
-	ticketID := extractTicketID(t, runCLIInDir(t, producer, "new", "--title", "shared-ticket", "--topic", "demo", "--type", "task"))
+	epicID := newEpicInDir(t, producer, "shared-epic")
+	ticketID := extractTicketID(t, runCLIInDir(t, producer, "new", "--title", "shared-ticket", "--topic", "demo", "--type", "task", "--parent", epicID))
 	runCLIInDir(t, producer, "sync", "push", "--set-upstream")
 
 	// Consumer adopts the backlog on init.

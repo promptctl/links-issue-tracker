@@ -46,6 +46,7 @@ func TestRunImportOfAnExportNamesBackupRestore(t *testing.T) {
 	ap := newTestCLIApp(t)
 	if _, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: "Exported", Topic: "import", IssueType: "task",
+		ParentID: seedEpicRaw(t, ctx, ap, "Import", "import"),
 	}); err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
@@ -135,7 +136,7 @@ func TestRunImportTreeJSONMappingOrderIsDeterministic(t *testing.T) {
 		{"local_id":"t2","title":"Second","type":"task","topic":"import","priority":0,"parent":"e1","depends_on":["t1"]},
 		{"local_id":"t1","title":"First","type":"task","topic":"import","priority":0,"parent":"e1"},
 		{"local_id":"t3","title":"Third","type":"task","topic":"import","priority":0,"parent":"e1"},
-		{"local_id":"t4","title":"Fourth","type":"task","topic":"import","priority":0}
+		{"local_id":"t4","title":"Fourth","type":"task","topic":"import","priority":0,"parent":"e1"}
 	]`
 	want := "e1,t1,t2,t3,t4"
 	for run := 0; run < 2; run++ {
@@ -182,6 +183,7 @@ local_id: t4
 title: Fourth
 type: task
 topic: import
+parent: e1
 `
 	want := "e1,t1,t2,t3,t4"
 	for run := 0; run < 2; run++ {
@@ -202,6 +204,7 @@ func TestRunImportYAMLUpdatesByID(t *testing.T) {
 	ap := newTestCLIApp(t)
 	created, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: "Before", Topic: "import", IssueType: "task",
+		ParentID: seedEpicRaw(t, ctx, ap, "Import", "import"),
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
@@ -234,16 +237,19 @@ labels: [reviewed]
 func TestRunImportYAMLMixedFileIsLegal(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
+	epic := seedEpicRaw(t, ctx, ap, "Import", "import")
 	existing, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "Old", Topic: "import", IssueType: "task",
+		Prefix: "test", Title: "Old", Topic: "import", IssueType: "task", ParentID: epic,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
+	// A create names its epic by real id when the epic is not in the file.
 	path := writeImportFile(t, "mixed.yaml", `
 title: Fresh
 type: task
 topic: import
+parent: `+epic+`
 ---
 id: `+existing.ID+`
 priority: 1
@@ -332,6 +338,7 @@ func TestRunImportYAMLUpdateHonorsByFlag(t *testing.T) {
 	ap := newTestCLIApp(t)
 	created, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: "Before", Topic: "import", IssueType: "task",
+		ParentID: seedEpicRaw(t, ctx, ap, "Import", "import"),
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
@@ -361,6 +368,7 @@ func TestRunImportYAMLUpdateTrimsReason(t *testing.T) {
 	ap := newTestCLIApp(t)
 	created, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: "Reason trim", Topic: "import", IssueType: "task",
+		ParentID: seedEpicRaw(t, ctx, ap, "Import", "import"),
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)

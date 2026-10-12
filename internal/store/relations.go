@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -348,6 +349,9 @@ func addRelationTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
 	if err := requireIssueExistsTx(ctx, tx, rel.DstID); err != nil {
 		return err
 	}
+	if err := rejectNonContainerParentTx(ctx, tx, rel); err != nil {
+		return err
+	}
 	if err := rejectCycleTx(ctx, tx, rel); err != nil {
 		return err
 	}
@@ -386,6 +390,35 @@ func rejectCycleTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
 		return rejectParentCycle(ctx, tx, rel.SrcID, rel.DstID)
 	}
 	return nil
+}
+
+// rejectNonContainerParentTx refuses a parent-child edge onto a parent that is
+// not a container: every parent is an epic (storage.RejectParentThatIsNotAContainer).
+// Only parent-child carries the rule, which it states by being the one arm.
+// [LAW:dataflow-not-control-flow] The one branch here is the domain's own enum.
+func rejectNonContainerParentTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
+	if rel.Type != model.RelParentChild {
+		return nil
+	}
+	parentType, err := issueTypeTx(ctx, tx, rel.DstID)
+	if err != nil {
+		return err
+	}
+	return storage.RejectParentThatIsNotAContainer(rel.DstID, parentType)
+}
+
+// issueTypeTx reads an issue's type on the tx, proving the row exists in the
+// same read. It hydrates nothing — no parent chain is climbed — so it is safe
+// on a hierarchy holding a loop, which is what ClearParent needs it for.
+func issueTypeTx(ctx context.Context, tx *sql.Tx, issueID string) (model.IssueType, error) {
+	var issueType model.IssueType
+	if err := tx.QueryRowContext(ctx, `SELECT issue_type FROM issues WHERE id = ?`, issueID).Scan(&issueType); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", storage.NotFoundError{Entity: "issue", ID: issueID}
+		}
+		return "", fmt.Errorf("read issue type: %w", err)
+	}
+	return issueType, nil
 }
 
 // insertRelationTx writes one relation row on the given transaction. It runs on
@@ -642,8 +675,26 @@ func (s *Store) RemoveRelation(ctx context.Context, srcID, dstID string, relType
 		if affected == 0 {
 			return storage.NotFoundError{Entity: "relation", ID: fmt.Sprintf("src=%s dst=%s type=%s", srcID, dstID, relType)}
 		}
-		return nil
+		// `lit dep rm --type parent-child` is the other door onto a detach,
+		// so it meets ClearParent's rule: a leaf keeps its parent. Judged
+		// after the delete so a missing edge is still reported as missing;
+		// the refusal rolls the delete back. [LAW:single-enforcer]
+		return rejectDetachingALeafTx(ctx, tx, relType, srcID)
 	})
+}
+
+// rejectDetachingALeafTx refuses removing a leaf's parent edge
+// (storage.RejectDetachingALeaf); any other relation type passes.
+// [LAW:dataflow-not-control-flow] The one branch here is the domain's own enum.
+func rejectDetachingALeafTx(ctx context.Context, tx *sql.Tx, relType model.RelationType, childID string) error {
+	if relType != model.RelParentChild {
+		return nil
+	}
+	childType, err := issueTypeTx(ctx, tx, childID)
+	if err != nil {
+		return err
+	}
+	return storage.RejectDetachingALeaf(childID, childType)
 }
 
 // ListRelationsForIssue returns the relations incident to issueID, optionally
@@ -704,21 +755,23 @@ func (s *Store) SetParent(ctx context.Context, in storage.SetParentInput) (model
 	return rel, nil
 }
 
-// ClearParent detaches a child from its parent.
+// ClearParent detaches a child from its parent. Only a container can be
+// detached: a leaf lives inside an epic (storage.RejectDetachingALeaf), so
+// the one thing this verb does is lift a nested epic to the top level.
 //
-// It reads nothing before the DELETE. That is what makes it usable on the one
-// workspace that needs it most: a hierarchy holding a loop, which `lit doctor`
-// names and tells the operator to break here. Hydrating the child first —
-// GetIssue climbs the parent chain — would overflow the stack on exactly that
-// state, so the repair would crash on the fault it is the repair for.
-// Existence is still proven, on the tx and without hydrating, because the two
-// absences are different diagnoses: "no such issue" and "that issue has no
-// parent" send the operator to different places, and collapsing them into the
-// DELETE's rows-affected would report a typo'd id as a missing edge.
-// [LAW:no-silent-failure]
+// It hydrates nothing before the DELETE. That is what makes it usable on the
+// one workspace that needs it most: a hierarchy holding a loop, which `lit
+// doctor` names and tells the operator to break here. Hydrating the child
+// first — GetIssue climbs the parent chain — would overflow the stack on
+// exactly that state, so the repair would crash on the fault it is the repair
+// for. The child's type is read as a column on the tx, which also proves it
+// exists, because the two absences are different diagnoses: "no such issue"
+// and "that issue has no parent" send the operator to different places, and
+// collapsing them into the DELETE's rows-affected would report a typo'd id as
+// a missing edge. [LAW:no-silent-failure]
 func (s *Store) ClearParent(ctx context.Context, childID string) error {
 	return s.withMutation(ctx, "clear parent", func(ctx context.Context, tx *sql.Tx) error {
-		if err := requireIssueExistsTx(ctx, tx, childID); err != nil {
+		if err := rejectDetachingALeafTx(ctx, tx, model.RelParentChild, childID); err != nil {
 			return err
 		}
 		res, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE src_id = ? AND type = 'parent-child'`, childID)

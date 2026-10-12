@@ -103,6 +103,7 @@ func TestRunShowUnknownFieldReturnsUsageError(t *testing.T) {
 	ap := newTestCLIApp(t)
 	issue, err := ap.Store.CreateIssue(context.Background(), storage.CreateIssueInput{
 		Prefix: "test", Title: "Free floating", Topic: "misc", IssueType: "task", Priority: 0,
+		ParentID: seedEpicRaw(t, context.Background(), ap, "Misc", "misc"),
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)

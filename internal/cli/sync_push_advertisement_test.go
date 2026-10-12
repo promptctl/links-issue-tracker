@@ -20,7 +20,7 @@ import (
 // [LAW:behavior-not-structure] every assertion reads a trace or a record on
 // disk.
 func TestAPushRecordsTheAdvertisementItLeft(t *testing.T) {
-	remote, producer, consumer, ws := twoClonesOverOneDoltRemote(t)
+	remote, producer, consumer, ws, epicID := twoClonesOverOneDoltRemote(t)
 	advertised := func() string {
 		return "origin " + remote + "\n" + remoteDoltHead(t, remote) + "\trefs/dolt/data\n"
 	}
@@ -35,7 +35,7 @@ func TestAPushRecordsTheAdvertisementItLeft(t *testing.T) {
 
 	// (a) The explicit push: it proves and records what it left, and the next
 	// receive is answered without a fetch.
-	runCLIInDir(t, consumer, "new", "--title", "pushed-by-hand", "--topic", "demo", "--type", "task")
+	runCLIInDir(t, consumer, "new", "--title", "pushed-by-hand", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, consumer, "sync", "push")
 	if got, want := string(readReceivedRefs(ws)), advertised(); got != want {
 		t.Fatalf("received-refs record after `lit sync push` = %q, want the remote's advertisement %q", got, want)
@@ -49,7 +49,7 @@ func TestAPushRecordsTheAdvertisementItLeft(t *testing.T) {
 
 	// (b) The on-change mirror: it pushes from a clone and records on the
 	// live store, with the same effect.
-	runCLIInDir(t, consumer, "new", "--title", "pushed-by-the-mirror", "--topic", "demo", "--type", "task")
+	runCLIInDir(t, consumer, "new", "--title", "pushed-by-the-mirror", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, consumer, "sync", backgroundMirrorSubcommand, "--parent-pid", "0")
 	if got, want := string(readReceivedRefs(ws)), advertised(); got != want {
 		t.Fatalf("received-refs record after the mirror = %q, want the remote's advertisement %q", got, want)
@@ -62,7 +62,7 @@ func TestAPushRecordsTheAdvertisementItLeft(t *testing.T) {
 	// now, the proof finds a head the consumer's mirror has never seen and
 	// proves nothing, so the peer's push can never be recorded as received.
 	runCLIInDir(t, producer, "sync", "pull")
-	runCLIInDir(t, producer, "new", "--title", "pushed-by-the-peer", "--topic", "demo", "--type", "task")
+	runCLIInDir(t, producer, "new", "--title", "pushed-by-the-peer", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, producer, "sync", "push")
 	resolved, err := workspace.Resolve(consumer)
 	if err != nil {

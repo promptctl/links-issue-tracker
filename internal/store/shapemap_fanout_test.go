@@ -71,7 +71,7 @@ func TestFanOutConservesIssueHistoryAgainstReconcile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(first): %v", err)
 	}
-	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Has history", Topic: "history", IssueType: "task", Priority: 0})
+	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Has history", Topic: "history", IssueType: "task", Priority: 0, ParentID: reconcileSeedEpic(t, ctx, first, "history")})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue: %v", err)

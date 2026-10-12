@@ -50,7 +50,7 @@ func TestMutationTextOutputEndsWithBreadcrumb(t *testing.T) {
 	}
 
 	var newOut bytes.Buffer
-	if err := runNew(ctx, &newOut, ap, []string{"--title", "Crumb probe", "--topic", "crumbs", "--type", "task"}); err != nil {
+	if err := runNew(ctx, &newOut, ap, []string{"--title", "Crumb probe", "--topic", "crumbs", "--type", "task", "--parent", seedEpicRaw(t, ctx, ap, "Crumbs", "crumbs")}); err != nil {
 		t.Fatalf("runNew() error = %v", err)
 	}
 	if got, want := lastLine(newOut.String()), quickstartBreadcrumb("new"); got != want {

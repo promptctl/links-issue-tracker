@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -15,7 +16,9 @@ import (
 )
 
 // frameFixture builds the canonical cross-frame scenario: epic E with three
-// ranked children, plus a standalone task ranked below everything.
+// ranked children, plus a standalone epic ranked below everything. The
+// standalone is an epic because the top level holds only epics: a leaf always
+// lives inside one (storage.RejectLeafWithoutParent).
 type frameFixture struct {
 	epic       model.Issue
 	children   []model.Issue
@@ -36,11 +39,51 @@ func newFrameFixture(t *testing.T, ctx context.Context, st *Store) frameFixture 
 		}
 		children = append(children, child)
 	}
-	standalone, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Standalone X", Topic: "frame", IssueType: "task", Placement: storage.RankBottom})
+	standalone, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Standalone X", Topic: "frame", IssueType: "epic", Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(standalone) error = %v", err)
 	}
 	return frameFixture{epic: epic, children: children, standalone: standalone}
+}
+
+// createTopLevelIssue files one issue at the bottom of the top-level frame and
+// returns its id. It is an epic because that is the only thing the top level
+// holds; the cases that use it are about keys in a frame, not about types.
+func createTopLevelIssue(t *testing.T, ctx context.Context, st *Store, title string) string {
+	t.Helper()
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{
+		Prefix: "test", Title: title, Topic: "rank", IssueType: "epic", Priority: 0, Placement: storage.RankBottom,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue(%s) error = %v", title, err)
+	}
+	return issue.ID
+}
+
+// makeTopLevelIssues files n issues at the bottom of the top-level frame, in
+// order, and returns their ids. Epics, for the reason createTopLevelIssue is.
+func makeTopLevelIssues(t *testing.T, ctx context.Context, st *Store, n int, titlef string) []string {
+	t.Helper()
+	ids := make([]string, 0, n)
+	for i := range n {
+		ids = append(ids, createTopLevelIssue(t, ctx, st, fmt.Sprintf(titlef, i)))
+	}
+	return ids
+}
+
+// makeChildrenOf files one leaf per title under epicID, each in its own lane,
+// and returns them in filing order.
+func makeChildrenOf(t *testing.T, ctx context.Context, st *Store, epicID string, titles ...string) []model.Issue {
+	t.Helper()
+	issues := make([]model.Issue, 0, len(titles))
+	for _, title := range titles {
+		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "frame", IssueType: "task", ParentID: epicID, Lane: title})
+		if err != nil {
+			t.Fatalf("CreateIssue(%s) error = %v", title, err)
+		}
+		issues = append(issues, issue)
+	}
+	return issues
 }
 
 func currentRanks(t *testing.T, ctx context.Context, st *Store, issues []model.Issue) map[string]string {
@@ -151,7 +194,7 @@ func TestPlacementMakesRoomBetweenKeysThatPadToTheSameValue(t *testing.T) {
 			return []string{ids.moved, ids.lower}
 		}},
 		{"rank set past an all-zero frame leader", "", "0", func(t *testing.T, ctx context.Context, st *Store, ids noRoomFixture) []string {
-			other := createRankTestIssue(t, ctx, st, "Other")
+			other := createTopLevelIssue(t, ctx, st, "Other")
 			if _, err := st.RankSet(ctx, []string{other, ids.moved}); err != nil {
 				t.Fatalf("RankSet error = %v", err)
 			}
@@ -163,14 +206,14 @@ func TestPlacementMakesRoomBetweenKeysThatPadToTheSameValue(t *testing.T) {
 			if err := st.ExecRawForTest(ctx, "UPDATE issues SET deleted_at = ? WHERE id = ?", "2026-01-01T00:00:00Z", ids.moved); err != nil {
 				t.Fatalf("delete the moved issue: %v", err)
 			}
-			created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Created", Topic: "rank", IssueType: "task", Placement: storage.RankTop})
+			created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Created", Topic: "rank", IssueType: "epic", Placement: storage.RankTop})
 			if err != nil {
 				t.Fatalf("CreateIssue(top) error = %v", err)
 			}
 			return []string{created.ID, ids.lower}
 		}},
 		{"created at the top past an all-zero leader", "", "0", func(t *testing.T, ctx context.Context, st *Store, ids noRoomFixture) []string {
-			created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Created", Topic: "rank", IssueType: "task", Placement: storage.RankTop})
+			created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Created", Topic: "rank", IssueType: "epic", Placement: storage.RankTop})
 			if err != nil {
 				t.Fatalf("CreateIssue(top) error = %v", err)
 			}
@@ -182,9 +225,9 @@ func TestPlacementMakesRoomBetweenKeysThatPadToTheSameValue(t *testing.T) {
 			ctx := context.Background()
 			st := openIssueStore(t, ctx)
 			ids := noRoomFixture{
-				upper: createRankTestIssue(t, ctx, st, "Upper"),
-				lower: createRankTestIssue(t, ctx, st, "Lower"),
-				moved: createRankTestIssue(t, ctx, st, "Moved"),
+				upper: createTopLevelIssue(t, ctx, st, "Upper"),
+				lower: createTopLevelIssue(t, ctx, st, "Lower"),
+				moved: createTopLevelIssue(t, ctx, st, "Moved"),
 			}
 			planted := map[string]string{ids.lower: tc.lower, ids.moved: "z"}
 			if tc.upper != "" {
@@ -699,7 +742,7 @@ func TestWriteRankRefusesAnIssueDeletedUnderTheLock(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
-	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Doomed", Topic: "frame", IssueType: "task", Placement: storage.RankBottom})
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Doomed", Topic: "frame", IssueType: "epic", Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue error = %v", err)
 	}
@@ -855,9 +898,9 @@ func TestRelativeMoveRefusesAnUnrankedAnchor(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
-	moved := createRankTestIssue(t, ctx, st, "Moved")
-	anchor := createRankTestIssue(t, ctx, st, "Anchor")
-	createRankTestIssue(t, ctx, st, "Other")
+	moved := createTopLevelIssue(t, ctx, st, "Moved")
+	anchor := createTopLevelIssue(t, ctx, st, "Anchor")
+	createTopLevelIssue(t, ctx, st, "Other")
 	if err := st.ExecRawForTest(ctx, "UPDATE issues SET item_rank = '' WHERE id = ?", anchor); err != nil {
 		t.Fatalf("unrank the anchor: %v", err)
 	}
@@ -943,7 +986,7 @@ func TestCreateAtTopDrawsItsKeyFromItsOwnFrame(t *testing.T) {
 
 	// A top-level --top create now: its key must come from the top-level
 	// leader, never from the child that happens to hold a smaller string.
-	topLead, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "New top-level lead", Topic: "frame", IssueType: "task", Placement: storage.RankTop})
+	topLead, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "New top-level lead", Topic: "frame", IssueType: "epic", Placement: storage.RankTop})
 	if err != nil {
 		t.Fatalf("CreateIssue(top-level, --top) error = %v", err)
 	}
@@ -985,7 +1028,7 @@ func TestCreateAtTopOfAnEmptyFrameTakesADistinctKey(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	first, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "First", Topic: "frame", IssueType: "task"})
+	first, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "First", Topic: "frame", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(first) error = %v", err)
 	}
@@ -999,7 +1042,7 @@ func TestCreateAtTopOfAnEmptyFrameTakesADistinctKey(t *testing.T) {
 	// Ranked after the epic so that "beside the container" and "past the
 	// workspace's last key" are different answers. With the epic trailing
 	// everything, the two coincide and the case cannot tell them apart.
-	trailing, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Trailing", Topic: "frame", IssueType: "task"})
+	trailing, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Trailing", Topic: "frame", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(trailing) error = %v", err)
 	}
@@ -1061,7 +1104,7 @@ func TestRelativeMoveDrawsItsRoomFromTheWholeWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
-	standalone, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Standalone", Topic: "frame", IssueType: "task"})
+	standalone, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Standalone", Topic: "frame", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(standalone) error = %v", err)
 	}
@@ -1118,7 +1161,7 @@ func TestRankToEdgeOfAFrameWithNoRankedMemberFilesBesideItsContainer(t *testing.
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	standalone, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Standalone", Topic: "frame", IssueType: "task"})
+	standalone, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Standalone", Topic: "frame", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(standalone) error = %v", err)
 	}
@@ -1134,7 +1177,7 @@ func TestRankToEdgeOfAFrameWithNoRankedMemberFilesBesideItsContainer(t *testing.
 	// different keys. Without it the epic holds the trailing key, the two
 	// answers coincide, and the case cannot tell which rule produced the one it
 	// sees.
-	trailing, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Trailing", Topic: "frame", IssueType: "task"})
+	trailing, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Trailing", Topic: "frame", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(trailing) error = %v", err)
 	}
@@ -1185,7 +1228,7 @@ func TestRankSetOverAWholeFrameIsIdempotent(t *testing.T) {
 	// An outsider ranked after the epic gives the container's gap a far wall,
 	// so a bound that excludes the stack is stable while one that does not
 	// keeps closing in.
-	outsider, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Outsider", Topic: "frame", IssueType: "task"})
+	outsider, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Outsider", Topic: "frame", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(outsider) error = %v", err)
 	}
@@ -1244,7 +1287,7 @@ func TestRankSetOverEveryTopLevelIssueTakesADistinctKey(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	opener, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Opener", Topic: "frame", IssueType: "task"})
+	opener, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Opener", Topic: "frame", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(opener) error = %v", err)
 	}
@@ -1255,7 +1298,7 @@ func TestRankSetOverEveryTopLevelIssueTakesADistinctKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
-	other, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Other top-level", Topic: "frame", IssueType: "task"})
+	other, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Other top-level", Topic: "frame", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(other) error = %v", err)
 	}
@@ -1312,7 +1355,7 @@ func TestFilingIntoAContainerWithNoRankOfItsOwnFallsBackToTheWorkspace(t *testin
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	standalone, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Standalone", Topic: "frame", IssueType: "task"})
+	standalone, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Standalone", Topic: "frame", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(standalone) error = %v", err)
 	}
@@ -1320,7 +1363,7 @@ func TestFilingIntoAContainerWithNoRankOfItsOwnFallsBackToTheWorkspace(t *testin
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
-	trailing, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Trailing", Topic: "frame", IssueType: "task"})
+	trailing, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Trailing", Topic: "frame", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(trailing) error = %v", err)
 	}
@@ -1356,14 +1399,11 @@ func TestRepeatingARelativeMoveThatHasArrivedKeepsItsKey(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	issues := make([]model.Issue, 0, 3)
-	for _, title := range []string{"A", "B", "C"} {
-		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "frame", IssueType: "task"})
-		if err != nil {
-			t.Fatalf("CreateIssue(%s) error = %v", title, err)
-		}
-		issues = append(issues, issue)
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "frame", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
+	issues := makeChildrenOf(t, ctx, st, epic.ID, "A", "B", "C")
 	a, b, c := issues[0], issues[1], issues[2]
 
 	moves := []struct {
@@ -1397,7 +1437,7 @@ func TestRankSetOverALargeFrameRewritesEveryDisplacedKey(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	ids := makeIssues(t, ctx, st, 2*idBatchSize+3, "row %d")
+	ids := makeTopLevelIssues(t, ctx, st, 2*idBatchSize+3, "row %d")
 	before, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
@@ -1433,14 +1473,11 @@ func TestRankSetStampsOnlyTheIssuesItNamed(t *testing.T) {
 	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	st.clock = func() time.Time { return created }
 
-	issues := make([]model.Issue, 0, 3)
-	for _, title := range []string{"A", "B", "C"} {
-		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "frame", IssueType: "task"})
-		if err != nil {
-			t.Fatalf("CreateIssue(%s) error = %v", title, err)
-		}
-		issues = append(issues, issue)
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "frame", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
+	issues := makeChildrenOf(t, ctx, st, epic.ID, "A", "B", "C")
 	a, b, c := issues[0], issues[1], issues[2]
 
 	ranked := created.Add(time.Hour)
@@ -1488,7 +1525,7 @@ func TestRankSetOverIssuesSharingAKey(t *testing.T) {
 			ctx := context.Background()
 			st := openIssueStore(t, ctx)
 
-			ids := makeIssues(t, ctx, st, 3, "row %d")
+			ids := makeTopLevelIssues(t, ctx, st, 3, "row %d")
 			slices.Sort(ids)
 			low, high, other := ids[0], ids[1], ids[2]
 			for id, key := range map[string]string{low: "M", high: "M", other: "T"} {
@@ -1540,7 +1577,7 @@ func TestRankSetPlacesANamedIssueThatHoldsNoKey(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	ids := makeIssues(t, ctx, st, 3, "row %d")
+	ids := makeTopLevelIssues(t, ctx, st, 3, "row %d")
 	a, b, c := ids[0], ids[1], ids[2]
 	if _, err := st.db.ExecContext(ctx, `UPDATE issues SET item_rank = '' WHERE id = ?`, b); err != nil {
 		t.Fatalf("unrank %s: %v", b, err)

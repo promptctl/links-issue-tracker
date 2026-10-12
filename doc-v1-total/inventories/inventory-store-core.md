@@ -398,9 +398,10 @@ Test evidence:
 7. Builds `model.Issue` with **`strings.TrimSpace` applied to** Title, Description, Prompt, Lane, Assignee; `Priority`, `IssueType`, `Topic`, `Labels` copied; `CreatedAt = UpdatedAt = now` (`store.go`).
 8. `model.HydrateRow(issue, model.StatusView{Value: model.StateOpen}, nil)` — new issues start `open` (`store.go`). An invalid issue type is rejected here or downstream (`store_test.go`).
 9. `parentID := strings.TrimSpace(in.ParentID)` (`store.go`).
+10. `storage.RejectLeafWithoutParent(issueType, parentID)` (`internal/storage/containment.go`) → `model.ValidationError` for a leaf with no parent (`store.go`).
 
 Inside `withMutation(ctx, "create issue"...)` (`store.go`):
-1. `frame, err := filingFrameTx(ctx, tx, parentID)` (`store.go`; defined `internal/store/ranking.go`): an empty `parentID` → `storage.TopLevel`; otherwise `SELECT deleted_at FROM issues WHERE id = ?`, with `sql.ErrNoRows` → `storage.NotFoundError{Entity: "issue", ID: parentID}`, other error → `fmt.Errorf("lookup parent issue %q: %w", parentID, err)`, a non-NULL `deleted_at` → `storage.TopLevel`, and a live parent → `storage.Frame(parentID)`.
+1. `frame, parentType, err := filingParentTx(ctx, tx, parentID)` (`store.go`; defined `internal/store/ranking.go`): an empty `parentID` → `storage.TopLevel` and the empty type; otherwise `SELECT issue_type, deleted_at FROM issues WHERE id = ?`, the type then judged by `storage.RejectParentThatIsNotAContainer(parentID, parentType)` → `model.ValidationError` for a parent that is not an epic (`store.go`), with `sql.ErrNoRows` → `storage.NotFoundError{Entity: "issue", ID: parentID}`, other error → `fmt.Errorf("lookup parent issue %q: %w", parentID, err)`, a non-NULL `deleted_at` → `storage.TopLevel`, and a live parent → `storage.Frame(parentID)`.
 2. `issueid.NormalizeConfiguredPrefix(in.Prefix)`; failure → `fmt.Errorf("normalize issue prefix: %w", err)` (`store.go`).
 3. `issue.ID, err = newIssueID(ctx, tx, prefix, issue.Topic, issue.Title, issue.Description, createdBy, issue.CreatedAt, parentID)` (`store.go`; defined `internal/store/issue_ids.go`).
 4. `issue.Rank, err = nextRankForPlacement(ctx, tx, in.Placement, frame)` (`store.go`).
@@ -2684,6 +2685,7 @@ Bucketing convention, `bucketRelations(focalID, relations, issuesByID, ancestry)
 3. `now := time.Now().UTC()`; the returned `model.Relation` is built with the canonical endpoints, the type, `now`, and `strings.TrimSpace(in.CreatedBy)`; empty createdBy → `"unknown"`.
 4. Inside `s.withMutation(ctx, "add relation", ...)`:
    - `requireIssueExistsTx(ctx, tx, in.SrcID)` then `requireIssueExistsTx(ctx, tx, in.DstID)` — note these use the **input** ids, not the canonicalized ones. `requireIssueExistsTx` runs `SELECT 1 FROM issues WHERE id = ?` and maps `sql.ErrNoRows` to `storage.NotFoundError{Entity: "issue", ID: issueID}`, other errors to `fmt.Errorf("check issue exists: %w", err)` — `internal/store/store.go`. It deliberately does not filter on `deleted_at`, so archived/soft-deleted rows count as existing (`internal/store/store.go` comment).
+   - `rejectNonContainerParentTx(ctx, tx, rel)` (`relations.go`): for `parent-child` only, `issueTypeTx(ctx, tx, rel.DstID)` (`SELECT issue_type FROM issues WHERE id = ?`, `ErrNoRows` → `storage.NotFoundError`) then `storage.RejectParentThatIsNotAContainer` → `model.ValidationError` for a parent that is not an epic; other types pass.
    - If type is `blocks`: `rejectBlocksCycle(ctx, tx, rel.SrcID, rel.DstID)`, then `loadEpicParentEdges` (parent edges whose parent is an epic; load error → `fmt.Errorf("blocks hierarchy check: %w", err)`) and `storage.RejectBlocksAlongHierarchy(epicParentOf, rel.SrcID, rel.DstID)` — either endpoint inside the other's epic at any depth, climbing only through epic parents → `model.ValidationError{Message: storage.SameEpicBlocksRejectionMessage}` (`internal/storage/edges.go`; the memory engine calls the same function, pinned by conformance case `blocks_never_runs_along_the_hierarchy`).
    - If `rel.Type.SingleValuedFromSrc()` (parent-child only): `setSingleValuedEdgeTx`; otherwise `insertRelationTx`.
 5. Returns the constructed `model.Relation` (with canonical endpoints and the pre-tx timestamp) on success.
@@ -2730,6 +2732,7 @@ Tests: `TestAddRelationRejectsBlocksCycle` (A→B then B→A rejected) — `inte
 - `srcID, dstID = relType.CanonicalEndpoints(srcID, dstID)` first (so related-to removal is order-insensitive).
 - Inside `s.withMutation(ctx, "remove relation", ...)`: `deleteRelationRowTx` with that key.
 - `affected == 0` → `storage.NotFoundError{Entity: "relation", ID: fmt.Sprintf("src=%s dst=%s type=%s", srcID, dstID, relType)}`, rendering as `relation "src=… dst=… type=…" not found`.
+- Then `rejectDetachingALeafTx(ctx, tx, relType, srcID)` (`relations.go`): for `parent-child` only, `issueTypeTx` on the child then `storage.RejectDetachingALeaf` → `model.ValidationError` for a leaf, which rolls the delete back; other types pass. Judged after the delete so a missing edge is still reported missing.
 - No existence check on the endpoints; no `GetIssue` precheck.
 
 `TestRemovePerChildBlockAfterRankReorder` — `internal/store/store_test.go` — removes per-child and epic-level blocks edges after a `RankAbove`, asserting store orientation `src=dependent, dst=dependency` holds after reordering.
@@ -2737,8 +2740,7 @@ Tests: `TestAddRelationRejectsBlocksCycle` (A→B then B→A rejected) — `inte
 ### 4.7 ClearParent
 
 `Store.ClearParent(ctx, childID)` — `internal/store/relations.go`:
-- `GetIssue(ctx, childID)` precheck.
-- Inside `s.withMutation(ctx, "clear parent", ...)`:
+- Inside `s.withMutation(ctx, "clear parent", ...)`, first `rejectDetachingALeafTx(ctx, tx, model.RelParentChild, childID)`: `issueTypeTx` proves the child exists (`storage.NotFoundError` otherwise) and reads its type as a column — no hydration, so this answers on a hierarchy holding a loop — and `storage.RejectDetachingALeaf` → `model.ValidationError` for a leaf; only an epic is detached. Then:
   ```sql
   DELETE FROM relations WHERE src_id = ? AND type = 'parent-child'
   ```
@@ -2753,7 +2755,7 @@ Tests: `TestAddRelationRejectsBlocksCycle` (A→B then B→A rejected) — `inte
 - Blank check: either id empty after `strings.TrimSpace` → `model.ValidationError{Message: "child and parent ids are required"}`.
 - `in.ChildID == in.ParentID` → `model.ValidationError{Message: "child and parent cannot be the same issue"}`.
 - Builds `model.Relation{SrcID: ChildID, DstID: ParentID, Type: RelParentChild, CreatedAt: time.Now().UTC(), CreatedBy: trimmed}`; empty CreatedBy → `"unknown"`.
-- In `s.withMutation(ctx, "set parent"...)`: `addRelationTx`, the same write `lit dep add` uses — endpoint existence, the parent-cycle refusal (`model.ValidationError`), and the single-parent clear-then-insert.
+- In `s.withMutation(ctx, "set parent"...)`: `addRelationTx`, the same write `lit dep add` uses — endpoint existence, the refusal of a parent that is not an epic (`rejectNonContainerParentTx`, `model.ValidationError`), the parent-cycle refusal (`model.ValidationError`), and the single-parent clear-then-insert.
 - Returns the relation value.
 
 `TestAddRelationEnforcesSingleParentCardinality` — `internal/store/store_test.go`: adding a second `parent-child` edge for a child through `AddRelation` succeeds and leaves exactly one parent edge (the newer one), same as `SetParent`.

@@ -82,7 +82,8 @@ func TestWriteInitSyncLine(t *testing.T) {
 func TestAdoptRemoteTicketsOnInitGates(t *testing.T) {
 	t.Run("preserves a store that already holds local tickets", func(t *testing.T) {
 		repo := newInitTestRepo(t)
-		runCLIInDir(t, repo, "new", "--title", "local-work", "--topic", "demo", "--type", "task")
+		epicID := newEpicInDir(t, repo, "local-epic")
+		runCLIInDir(t, repo, "new", "--title", "local-work", "--topic", "demo", "--type", "task", "--parent", epicID)
 		ws, err := workspace.Resolve(repo)
 		if err != nil {
 			t.Fatalf("workspace.Resolve() error = %v", err)
@@ -142,7 +143,8 @@ func TestInitAdoptsExistingRemoteBacklog(t *testing.T) {
 	runGit(t, producer, "commit", "-m", "seed")
 	runGit(t, producer, "push", "origin", "HEAD")
 	runCLIInDir(t, producer, "init", "--skip-hooks", "--skip-agents")
-	runCLIInDir(t, producer, "new", "--title", "remote-ticket", "--topic", "demo", "--type", "task")
+	epicID := newEpicInDir(t, producer, "remote-epic")
+	runCLIInDir(t, producer, "new", "--title", "remote-ticket", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, producer, "sync", "push", "--set-upstream")
 
 	// Consumer: a fresh clone whose init must adopt the producer's backlog.
@@ -210,7 +212,8 @@ func TestInitHardStopsWhenRemoteHasDataButAdoptCannotComplete(t *testing.T) {
 	runGit(t, producer, "commit", "-m", "seed")
 	runGit(t, producer, "push", "origin", "HEAD")
 	runCLIInDir(t, producer, "init", "--skip-hooks", "--skip-agents")
-	runCLIInDir(t, producer, "new", "--title", "remote-ticket", "--topic", "demo", "--type", "task")
+	epicID := newEpicInDir(t, producer, "remote-epic")
+	runCLIInDir(t, producer, "new", "--title", "remote-ticket", "--topic", "demo", "--type", "task", "--parent", epicID)
 	// A successful sync push lands the backlog under refs/dolt/* on the remote.
 	runCLIInDir(t, producer, "sync", "push", "--set-upstream")
 
@@ -302,7 +305,8 @@ func TestInitHealsAbandonedAdoptResidueOtherCommandsRefuse(t *testing.T) {
 	runGit(t, producer, "commit", "-m", "seed")
 	runGit(t, producer, "push", "origin", "HEAD")
 	runCLIInDir(t, producer, "init", "--skip-hooks", "--skip-agents")
-	runCLIInDir(t, producer, "new", "--title", "remote-ticket", "--topic", "demo", "--type", "task")
+	epicID := newEpicInDir(t, producer, "remote-epic")
+	runCLIInDir(t, producer, "new", "--title", "remote-ticket", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, producer, "sync", "push", "--set-upstream")
 
 	consumer := filepath.Join(base, "bravo")
@@ -338,7 +342,7 @@ func TestInitHealsAbandonedAdoptResidueOtherCommandsRefuse(t *testing.T) {
 		}
 	}
 	assertRefusal("backlog")
-	assertRefusal("new", "--title", "shadow", "--topic", "demo", "--type", "task")
+	assertRefusal("new", "--title", "shadow", "--topic", "demo", "--type", "epic")
 	// The refused `lit new` must not have created ANY store artifact: the
 	// residue plus marker is exactly what was fabricated, nothing more.
 	entries, err := os.ReadDir(ws.DatabasePath)
@@ -500,6 +504,14 @@ func runCLIInDir(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("Run(%v) error = %v\noutput:\n%s", args, err, out)
 	}
 	return out
+}
+
+// newEpicInDir files an epic in the workspace at dir and returns its id. Every
+// ticket but an epic lives inside one (storage.Containment), so a test that
+// files a leaf through the real CLI names the epic it belongs to.
+func newEpicInDir(t *testing.T, dir, title string) string {
+	t.Helper()
+	return extractTicketID(t, runCLIInDir(t, dir, "new", "--type", "epic", "--title", title, "--topic", "demo"))
 }
 
 // runCLIInDirAllowError is runCLIInDir's counterpart for callers that expect

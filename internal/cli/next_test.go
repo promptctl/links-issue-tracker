@@ -153,8 +153,9 @@ func (h readyTestHarness) runNextText(args ...string) string {
 // leaf in the same rank order `lit ready` produces.
 func TestRunNextReturnsTopReadyLeaf(t *testing.T) {
 	h := newReadyTestHarness(t)
-	first := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "First leaf", Topic: "next", IssueType: "task", Priority: 1})
-	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Second leaf", Topic: "next", IssueType: "task", Priority: 0})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
+	first := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "First leaf", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID, Lane: "first"})
+	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Second leaf", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: "second"})
 
 	got := h.runNextRow()
 	if got.ID != first.ID {
@@ -168,8 +169,11 @@ func TestRunNextReturnsTopReadyLeaf(t *testing.T) {
 // stated against a foreign holder rather than against the state alone.
 func TestRunNextRoutesAroundAnInProgressLeafHeldElsewhere(t *testing.T) {
 	h := newReadyTestHarness(t)
-	inProgress := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Already started", Topic: "next", IssueType: "task", Priority: 1})
-	openLeaf := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Workable", Topic: "next", IssueType: "task", Priority: 0})
+	// Distinct lanes: the foreign hold, not lane order, is what keeps the open
+	// leaf from being served first.
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
+	inProgress := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Already started", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID, Lane: "theirs"})
+	openLeaf := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Workable", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: "open"})
 	h.asCheckout("otherstream01")
 	h.applyAction(inProgress.ID, model.Start{Assignee: "tester"}, "")
 
@@ -190,8 +194,9 @@ func TestRunNextResumesOwnWorkInFlight(t *testing.T) {
 	// developer machine inside an agent session.
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-mine")
 	h := newReadyTestHarness(t)
-	inProgress := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Already started", Topic: "next", IssueType: "task", Priority: 1})
-	lowerRanked := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Workable", Topic: "next", IssueType: "task", Priority: 0})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
+	inProgress := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Already started", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID, Lane: "mine"})
+	lowerRanked := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Workable", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: "other"})
 	h.applyAction(inProgress.ID, model.Start{Assignee: "claude_sess-mine"}, "")
 
 	outcome := h.runNextOutcome()
@@ -225,7 +230,8 @@ func TestRunNextResumesOwnWorkInFlight(t *testing.T) {
 func TestRunNextNamesThePeerSessionWorkingThisCheckoutsLane(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-peer")
 	h := newReadyTestHarness(t)
-	theirs := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Peer's work, in flight", Topic: "next", IssueType: "task", Priority: 1})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
+	theirs := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Peer's work, in flight", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
 	h.applyAction(theirs.ID, model.Start{Assignee: "claude_sess-peer"}, "")
 
 	// Same checkout, same stream token, different session — asCheckout is
@@ -257,7 +263,8 @@ func TestRunNextNamesThePeerSessionWorkingThisCheckoutsLane(t *testing.T) {
 func TestRunNextTreatsTheByFallbackAsTheReadersIdentity(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
 	h := newReadyTestHarness(t)
-	mine := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Assigned to me by flag", Topic: "next", IssueType: "task", Priority: 1})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
+	mine := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Assigned to me by flag", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
 	h.applyAction(mine.ID, model.Start{Assignee: "bob"}, "")
 
 	text := h.runNextText("--by", "bob")
@@ -325,8 +332,9 @@ func TestRunNextServesPastAnEpicWhoseWorkIsAllBlocked(t *testing.T) {
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Our epic", Topic: "next", IssueType: "epic", Priority: 1})
 	finished := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "First", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
 	gated := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Second", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
-	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Outside dependency", Topic: "next", IssueType: "task", Priority: 0})
-	blockersBlocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Deeper still", Topic: "next", IssueType: "task", Priority: 0})
+	outside := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Outside epic", Topic: "next", IssueType: "epic", Priority: 0})
+	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Outside dependency", Topic: "next", IssueType: "task", Priority: 0, ParentID: outside.ID, Lane: "blocker"})
+	blockersBlocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Deeper still", Topic: "next", IssueType: "task", Priority: 0, ParentID: outside.ID, Lane: "deeper"})
 	h.addDependency(gated.ID, blocker.ID)
 	h.addDependency(blocker.ID, blockersBlocker.ID)
 	h.applyAction(finished.ID, model.Done{}, "finished")
@@ -364,14 +372,16 @@ func TestRunNextServesPastAnEpicWhoseWorkIsAllBlocked(t *testing.T) {
 
 // Blocked leaves (open dependency) are skipped just as `lit ready` partitions
 // them out of the ready section. With deterministic creation-order ranking the
-// blocker (rank 1, no parent epic, no own dependencies) is unambiguously top,
-// so the assertion pins both "dependent skipped" and the exact expected pick.
+// blocker (rank 1 in its epic, its own lane, no own dependencies) is
+// unambiguously top, so the assertion pins both "dependent skipped" and the
+// exact expected pick.
 func TestRunNextSkipsBlockedLeaf(t *testing.T) {
 	h := newReadyTestHarness(t)
-	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Blocker", Topic: "next", IssueType: "task", Priority: 1})
-	dependent := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Dependent", Topic: "next", IssueType: "task", Priority: 0})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
+	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Blocker", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID, Lane: "blocker"})
+	dependent := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Dependent", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: "dependent"})
 	h.addDependency(dependent.ID, blocker.ID)
-	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Unblocked third", Topic: "next", IssueType: "task", Priority: 0})
+	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Unblocked third", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: "third"})
 
 	got := h.runNextRow()
 	if got.ID == dependent.ID {
@@ -386,10 +396,11 @@ func TestRunNextSkipsBlockedLeaf(t *testing.T) {
 // the ticket waiting on it; next goes past both to work this repo can do.
 func TestRunNextSkipsATicketWaitingOnAnOutsideEvent(t *testing.T) {
 	h := newReadyTestHarness(t)
-	upstream := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Upstream fix lands", Topic: "next", IssueType: "task", Priority: 0, Labels: []string{ExternalLabel}})
-	waiting := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Adopt the upstream fix", Topic: "next", IssueType: "task", Priority: 0})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
+	upstream := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Upstream fix lands", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: "upstream", Labels: []string{ExternalLabel}})
+	waiting := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Adopt the upstream fix", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: "waiting"})
 	h.addDependency(waiting.ID, upstream.ID)
-	workable := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Workable here", Topic: "next", IssueType: "task", Priority: 0})
+	workable := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Workable here", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: "workable"})
 
 	if got := h.runNextRow(); got.ID != workable.ID {
 		t.Fatalf("next.ID = %q, want %q — the outside event %s and its dependent %s are not workable here", got.ID, workable.ID, upstream.ID, waiting.ID)
@@ -401,8 +412,9 @@ func TestRunNextSkipsATicketWaitingOnAnOutsideEvent(t *testing.T) {
 // same narrowed question ready/backlog/queue would.
 func TestRunNextTypeFilterPicksMatchingLeaf(t *testing.T) {
 	h := newReadyTestHarness(t)
-	task := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Top-ranked task", Topic: "next", IssueType: "task", Priority: 1})
-	bug := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Lower-ranked bug", Topic: "next", IssueType: "bug", Priority: 0})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
+	task := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Top-ranked task", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID, Lane: "task"})
+	bug := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Lower-ranked bug", Topic: "next", IssueType: "bug", Priority: 0, ParentID: epic.ID, Lane: "bug"})
 
 	text := h.runNextText("--type", "bug")
 	if !strings.Contains(text, bug.ID) {
@@ -437,7 +449,8 @@ func TestRunNextRejectsLimitAndColumns(t *testing.T) {
 func TestRunNextStatusInProgressResumesOurOwnWorkInFlight(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-mine")
 	h := newReadyTestHarness(t)
-	mine := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Already started", Topic: "next", IssueType: "task", Priority: 1})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
+	mine := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Already started", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
 	h.applyAction(mine.ID, model.Start{Assignee: "claude_sess-mine"}, "")
 
 	text := h.runNextText("--status", "in_progress")
@@ -455,7 +468,8 @@ func TestRunNextStatusInProgressResumesOurOwnWorkInFlight(t *testing.T) {
 // what it was on that its work is gone.
 func TestRunNextStatusInProgressNamesForeignHeldWorkRatherThanReadingEmpty(t *testing.T) {
 	h := newReadyTestHarness(t)
-	theirs := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Theirs, in flight", Topic: "next", IssueType: "task", Priority: 1})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
+	theirs := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Theirs, in flight", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
 	h.asCheckout("otherstream01")
 	h.applyAction(theirs.ID, model.Start{Assignee: "tester"}, "")
 
@@ -659,7 +673,8 @@ func TestRunNextCarriesParentEpic(t *testing.T) {
 // the claim.
 func TestRenderNextOutcomeNamesTheOtherSessionWorkingOurLane(t *testing.T) {
 	h := newReadyTestHarness(t)
-	inFlight := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Theirs, in flight", Topic: "next", IssueType: "task", Priority: 1})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
+	inFlight := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Theirs, in flight", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
 	h.transition(inFlight.ID, model.Start{Assignee: "claude_sess-peer"})
 
 	rows, _, _ := h.gather()
@@ -687,7 +702,8 @@ func TestRenderNextOutcomeNamesTheOtherSessionWorkingOurLane(t *testing.T) {
 // crosses the orphan threshold while still working.
 func TestRenderNextOutcomeStillNamesTheHolderOfAQuietTicket(t *testing.T) {
 	h := newReadyTestHarness(t)
-	quiet := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Held, and silent about it", Topic: "next", IssueType: "task", Priority: 1})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
+	quiet := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Held, and silent about it", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
 	h.transition(quiet.ID, model.Start{Assignee: "claude_sess-peer"})
 	h.backdateUpdatedAt(quiet.ID, 7*time.Hour)
 
@@ -714,7 +730,8 @@ func TestRenderNextOutcomeStillNamesTheHolderOfAQuietTicket(t *testing.T) {
 // a checkout an agent session has work in flight in.
 func TestRenderNextOutcomeNamesTheHolderToAnUnidentifiedReader(t *testing.T) {
 	h := newReadyTestHarness(t)
-	agents := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "An agent started this", Topic: "next", IssueType: "task", Priority: 1})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
+	agents := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "An agent started this", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
 	h.transition(agents.ID, model.Start{Assignee: "claude_sess-agent"})
 
 	rows, _, _ := h.gather()
@@ -740,7 +757,8 @@ func TestRenderNextOutcomeNamesTheHolderToAnUnidentifiedReader(t *testing.T) {
 // reason: absence is not an identity.
 func TestRenderNextOutcomeSaysNothingAboutAnUnassignedTicketInFlight(t *testing.T) {
 	h := newReadyTestHarness(t)
-	unassigned := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Started by nobody in particular", Topic: "next", IssueType: "task", Priority: 1})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
+	unassigned := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Started by nobody in particular", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
 	h.transition(unassigned.ID, model.Start{Assignee: ""})
 
 	rows, _, _ := h.gather()
@@ -836,12 +854,13 @@ func TestRenderNextOutcomeSpeaksOnlyInTheConditional(t *testing.T) {
 //
 // Asserted through runNext rather than renderNextOutcome so the whole command
 // path is under it, and over the pick that has the most to lie about: an
-// unclaimed solo ticket.
+// unclaimed ticket in a lane nobody holds.
 // The wording assertions elsewhere in this file all become vacuous if the
 // command ever does start claiming, and this is what would still fail.
 func TestRunNextClaimsNothingAndStartsNothing(t *testing.T) {
 	h := newReadyTestHarness(t)
-	target := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Unclaimed", Topic: "next", IssueType: "task", Priority: 0})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
+	target := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Unclaimed", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID})
 
 	before := h.issueDetail(target.ID)
 	text := h.runNextText()

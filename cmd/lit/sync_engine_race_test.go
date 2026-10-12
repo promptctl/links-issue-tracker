@@ -100,6 +100,10 @@ func TestBurstOfMutationsNeverHitsEngineReadOnlyCollision(t *testing.T) {
 	// lives, so the sweep runs against no process at all.
 	// [LAW:no-ambient-temporal-coupling]
 	awaitMirrorQuiescence(t, root)
+	// The epic the burst files into is part of the bootstrap, made with
+	// auto-sync off and carried by the manual push, so the burst's commits are
+	// exactly the ones the oracle counts past the baseline.
+	epic := newEpicViaLit(t, root, self, isolatedEnv(xdgConfigHome, "1"), "burst-epic")
 	if out, err := runLit(t, root, self, isolatedEnv(xdgConfigHome, "1"),
 		"sync", "push", "--set-upstream"); err != nil {
 		t.Fatalf("bootstrap lit sync push: %v\noutput:\n%s", err, out)
@@ -120,7 +124,7 @@ func TestBurstOfMutationsNeverHitsEngineReadOnlyCollision(t *testing.T) {
 	const burstSize = 15
 	for i := 0; i < burstSize; i++ {
 		out, err := runLit(t, root, self, isolatedEnv(xdgConfigHome, "0"),
-			"new", "--title", "burst-issue", "--topic", "demo")
+			"new", "--title", "burst-issue", "--topic", "demo", "--parent", epic)
 		if err != nil {
 			t.Fatalf("lit new #%d failed: %v\noutput:\n%s\n%s", i, err, out, dumpMirrorLog(root))
 		}

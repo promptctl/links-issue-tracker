@@ -110,7 +110,17 @@ func TestPrefixSetApplyWritesConfigAndOldIDsSurvive(t *testing.T) {
 	repo, runLit := initRepoForPrefixTest(t)
 	configPath := filepath.Join(repo, ".git", "links", "config.json")
 
-	newOut, err := runLit("new", "--title", "first", "--topic", "onboarding", "--type", "task")
+	// A task lives inside an epic, and its id hangs under the epic's: the
+	// old-prefix id that must survive the rename is the whole dotted child id.
+	epicOut, err := runLit("new", "--title", "home", "--topic", "onboarding", "--type", "epic")
+	if err != nil {
+		t.Fatalf("Run(new epic) error = %v\n%s", err, epicOut)
+	}
+	epicID := issueIDFromNew(epicOut)
+	if epicID == "" {
+		t.Fatalf("epic missing id: %s", epicOut)
+	}
+	newOut, err := runLit("new", "--title", "first", "--topic", "onboarding", "--type", "task", "--parent", epicID)
 	if err != nil {
 		t.Fatalf("Run(new) error = %v\n%s", err, newOut)
 	}
@@ -136,7 +146,9 @@ func TestPrefixSetApplyWritesConfigAndOldIDsSurvive(t *testing.T) {
 		t.Fatalf("config.json missing new prefix; got: %s", string(configBytes))
 	}
 
-	secondOut, err := runLit("new", "--title", "second", "--topic", "onboarding", "--type", "task")
+	// Only a top-level id carries the prefix directly, and only an epic is
+	// top-level, so the epic is the ticket that shows the rename.
+	secondOut, err := runLit("new", "--title", "second", "--topic", "onboarding", "--type", "epic")
 	if err != nil {
 		t.Fatalf("Run(new after rename) error = %v\n%s", err, secondOut)
 	}

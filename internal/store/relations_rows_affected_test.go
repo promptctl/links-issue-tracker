@@ -16,7 +16,9 @@ import (
 // is, not be swallowed and misread as a real zero-rows "not found" result.
 // This drives ClearParent's DELETE through a driver that executes the
 // statement for real but forces the result's RowsAffected() to fail,
-// proving the two outcomes are distinguishable.
+// proving the two outcomes are distinguishable. The child is a nested epic:
+// only a container can be detached, so that is the shape that reaches the
+// DELETE.
 func TestClearParentSurfacesGenuineRowsAffectedError(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -26,7 +28,7 @@ func TestClearParentSurfacesGenuineRowsAffectedError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(parent) error = %v", err)
 	}
-	child, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Child", Topic: "rows", IssueType: "task", Priority: 0, ParentID: parent.ID, Placement: storage.RankBottom})
+	child, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Child", Topic: "rows", IssueType: "epic", Priority: 0, ParentID: parent.ID, Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(child) error = %v", err)
 	}
@@ -55,7 +57,11 @@ func TestRemoveLabelSurfacesGenuineRowsAffectedError(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Labeled", Topic: "rows", IssueType: "task", Priority: 0})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "rows", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Labeled", Topic: "rows", IssueType: "task", Priority: 0, ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}

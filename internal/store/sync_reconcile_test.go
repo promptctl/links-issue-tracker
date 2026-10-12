@@ -290,15 +290,17 @@ func TestSyncReconcileResolvedRejectsStaleResolutions(t *testing.T) {
 
 func strptr(s string) *string { return &s }
 
-// seedReconcileRemote creates one issue at root, adds the remote, pushes it, and
-// returns the issue id.
+// seedReconcileRemote creates one epic at root, adds the remote, pushes it, and
+// returns the epic's id. An epic, because the collision tests file children
+// under it and only an epic contains tickets; every caller edits fields an
+// epic carries (title, lane, priority, labels).
 func seedReconcileRemote(t *testing.T, ctx context.Context, root, remoteURL string) string {
 	t.Helper()
 	st, err := Open(ctx, root, "ws")
 	if err != nil {
 		t.Fatalf("Open(seed %s): %v", root, err)
 	}
-	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "seed", Topic: "topic", IssueType: "task"})
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "seed", Topic: "topic", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(seed): %v", err)
 	}

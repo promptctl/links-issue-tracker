@@ -269,7 +269,7 @@ func newLeaf() appLeaf {
 	prompt := fs.String("prompt", "", "Reusable agent prompt for the work this issue captures")
 	issueType := fs.String("type", string(model.TypeTask), "Issue type: "+issueTypeChoices())
 	topic := fs.String("topic", "", "Required immutable issue topic slug (1-2 words; stable area of focus; e.g., 'refactor' or 'field-history')")
-	parentID := fs.String("parent", "", "Optional parent issue ID; child IDs become parentID.<hash>")
+	parentID := fs.String("parent", "", "Epic the ticket lives inside — required for every type but epic, which may be top-level or inside another epic; child IDs become parentID.<hash>")
 	priority := fs.String("priority", model.PriorityNormal.String(), "Priority: "+priorityChoices())
 	assignee := fs.String("assignee", "", "Assignee")
 	labels := fs.String("labels", "", "Comma-separated labels")
@@ -312,9 +312,12 @@ func newLeaf() appLeaf {
 // it follows up — under that ticket's own parent, ranked among the same epic's
 // children — never under it: nesting new work inside finished work puts the
 // open follow-up out of its epic's rank order and turns the closed ticket into
-// an accidental container. The link to the ticket it follows up is the row's
-// FollowsUp, which `lit show` renders on both ends. Topic inherits from that
-// ticket when omitted; description defaults to a reference back to it.
+// an accidental container. Beside a top-level epic is the top level, where
+// only an epic may live, so a follow-up of one is filed as an epic
+// (`--type epic`) or the store refuses it, naming `lit new --parent`. The
+// link to the ticket it follows up is the row's FollowsUp, which `lit show`
+// renders on both ends. Topic inherits from that ticket when omitted;
+// description defaults to a reference back to it.
 //
 // See design-docs/preparing-the-next-loop.md for the principle this
 // implements (capture-at-close affordances).
@@ -347,9 +350,10 @@ func followupLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		// A follow-up of a top-level ticket is itself top-level: the empty
-		// parent id is the same value the parentless case already files under.
-		// [LAW:dataflow-not-control-flow]
+		// A follow-up of a top-level epic is itself top-level: the empty parent
+		// id is the value a top-level create carries, and the store judges it
+		// against the follow-up's type as it judges every create.
+		// [LAW:dataflow-not-control-flow] [LAW:single-enforcer]
 		parentID := ""
 		if origin.Parent != nil {
 			parentID = origin.Parent.ID

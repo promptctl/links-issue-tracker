@@ -391,6 +391,17 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 		t.Fatalf("Open(seed) error = %v", err)
 	}
 
+	// The epic every leaf below lives in: a leaf is never created outside one.
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{
+		Prefix:    "test",
+		Title:     "Seed epic",
+		Topic:     "seed",
+		IssueType: "epic",
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+
 	// Issue A: feature, urgent priority, labels, transitions to in_progress with assignee.
 	issueA, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix:    "test",
@@ -399,6 +410,7 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 		IssueType: "feature",
 		Priority:  model.PriorityUrgent,
 		Labels:    []string{"backend", "critical"},
+		ParentID:  epic.ID,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue(A) error = %v", err)
@@ -414,6 +426,7 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 		Topic:     "backend",
 		IssueType: "task",
 		Priority:  model.PriorityNormal,
+		ParentID:  epic.ID,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue(B) error = %v", err)
@@ -434,6 +447,7 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 		IssueType: "chore",
 		Priority:  model.PriorityNormal,
 		Labels:    []string{"infra"},
+		ParentID:  epic.ID,
 	}); err != nil {
 		t.Fatalf("CreateIssue(C) error = %v", err)
 	}
@@ -526,6 +540,7 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 		Title:     "Post-restore write check",
 		Topic:     "verify",
 		IssueType: "task",
+		ParentID:  epic.ID,
 	}); err != nil {
 		t.Fatalf("CreateIssue(post-restore) error = %v", err)
 	}

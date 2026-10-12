@@ -50,6 +50,7 @@ func TestPriorityFlagAcceptsEveryWordTheReadSurfacesPrint(t *testing.T) {
 					"--title", "priority round trip",
 					"--topic", "priority",
 					"--type", "task",
+					"--parent", seedEpicRaw(t, ctx, ap, "Priority", "priority"),
 					"--priority", raw,
 				}); err != nil {
 					t.Fatalf("runNew(--priority %q) error = %v", raw, err)
@@ -180,6 +181,7 @@ func TestPriorityFlagDefaultsToNormal(t *testing.T) {
 		"--title", "no priority flag",
 		"--topic", "priority",
 		"--type", "task",
+		"--parent", seedEpicRaw(t, ctx, ap, "Priority", "priority"),
 	}); err != nil {
 		t.Fatalf("runNew() error = %v", err)
 	}
@@ -223,6 +225,7 @@ func TestPriorityFlagToleratesPastedCaseAndSpace(t *testing.T) {
 				"--title", "pasted priority",
 				"--topic", "priority",
 				"--type", "task",
+				"--parent", seedEpicRaw(t, ctx, ap, "Priority", "priority"),
 				"--priority", raw,
 			}); err != nil {
 				t.Fatalf("runNew(--priority %q) error = %v", raw, err)

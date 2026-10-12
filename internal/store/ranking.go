@@ -358,12 +358,15 @@ func frameOfTx(ctx context.Context, tx *sql.Tx, issueID string) (storage.Frame, 
 	return storage.Frame(f), nil
 }
 
-// filingFrameTx names the frame a new issue is being created into, and
-// refuses a parent that is not there.
+// filingParentTx reads what a create needs to know about the parent it names:
+// the frame the new issue is filed into and the parent's type, which the
+// containment rule (storage.RejectParentThatIsNotAContainer) judges. It refuses
+// a parent that is not there; a create that names no parent gets the top-level
+// frame and the empty type.
 //
-// The two answers are one read because they are one question: a create that
-// names a parent is asking to be filed in that parent's frame, and a parent
-// nothing can be filed under is the not-found the caller has to hear about.
+// The answers are one read because they are one question: a create that names
+// a parent is asking to be filed under that parent, and a parent nothing can be
+// filed under is the not-found the caller has to hear about.
 // [LAW:no-silent-failure]
 //
 // A deleted container frames nothing, so a child named under one is filed at
@@ -373,22 +376,23 @@ func frameOfTx(ctx context.Context, tx *sql.Tx, issueID string) (storage.Frame, 
 // written by the same statement sequence: reading it afterwards would mean
 // placing the key before knowing which keyspace it belongs to.
 // [LAW:one-source-of-truth]
-func filingFrameTx(ctx context.Context, tx *sql.Tx, parentID string) (storage.Frame, error) {
+func filingParentTx(ctx context.Context, tx *sql.Tx, parentID string) (storage.Frame, model.IssueType, error) {
 	if parentID == "" {
-		return storage.TopLevel, nil
+		return storage.TopLevel, "", nil
 	}
+	var issueType model.IssueType
 	var deletedAt sql.NullString
-	err := tx.QueryRowContext(ctx, `SELECT deleted_at FROM issues WHERE id = ?`, parentID).Scan(&deletedAt)
+	err := tx.QueryRowContext(ctx, `SELECT issue_type, deleted_at FROM issues WHERE id = ?`, parentID).Scan(&issueType, &deletedAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return storage.TopLevel, storage.NotFoundError{Entity: "issue", ID: parentID}
+		return storage.TopLevel, "", storage.NotFoundError{Entity: "issue", ID: parentID}
 	}
 	if err != nil {
-		return storage.TopLevel, fmt.Errorf("lookup parent issue %q: %w", parentID, err)
+		return storage.TopLevel, "", fmt.Errorf("lookup parent issue %q: %w", parentID, err)
 	}
 	if deletedAt.Valid {
-		return storage.TopLevel, nil
+		return storage.TopLevel, issueType, nil
 	}
-	return storage.Frame(parentID), nil
+	return storage.Frame(parentID), issueType, nil
 }
 
 // mustRankable is the one gate every rank verb passes a named issue through:

@@ -155,11 +155,17 @@ func TestSettleCommitLockRelease(t *testing.T) {
 // versioning alone. Re-running the mutation body against its own staged
 // writes would double-apply it — for CreateIssue, the in-tx collision check
 // would find the staged row and mint a SECOND issue under a higher nonce —
-// so the discriminating assertion is that exactly one issue exists afterward.
+// so the discriminating assertion is that exactly one issue exists afterward
+// beyond the epic it is filed into.
 func TestWithMutationResumesAtVersioningAfterStagedCommit(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
+
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Sync epic", Topic: "sync", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
 
 	fires := 0
 	st.commitWorkingSetHookForTest = func() error {
@@ -170,7 +176,7 @@ func TestWithMutationResumesAtVersioningAfterStagedCommit(t *testing.T) {
 		return nil
 	}
 
-	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "survives a versioning retry", Topic: "sync"})
+	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "survives a versioning retry", Topic: "sync", ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
@@ -186,8 +192,8 @@ func TestWithMutationResumesAtVersioningAfterStagedCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LocalIssueCount() error = %v", err)
 	}
-	if count != 1 {
-		t.Fatalf("LocalIssueCount() = %d, want exactly 1 — more means the retry re-ran the staged mutation body", count)
+	if count != 2 {
+		t.Fatalf("LocalIssueCount() = %d, want exactly 2 (the epic and the one task) — more means the retry re-ran the staged mutation body", count)
 	}
 }
 

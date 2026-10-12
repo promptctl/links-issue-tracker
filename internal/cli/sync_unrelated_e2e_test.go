@@ -34,7 +34,8 @@ func TestExplicitReconcileSurfacesUnrelatedHistories(t *testing.T) {
 	runGit(t, producer, "commit", "-m", "seed")
 	runGit(t, producer, "push", "origin", "HEAD")
 	runCLIInDir(t, producer, "init", "--skip-hooks", "--skip-agents")
-	producerID := firstIssueID(t, runCLIInDir(t, producer, "new", "--title", "producer-ticket", "--topic", "demo", "--type", "task"))
+	producerEpic := newEpicInDir(t, producer, "producer-epic")
+	producerID := firstIssueID(t, runCLIInDir(t, producer, "new", "--title", "producer-ticket", "--topic", "demo", "--type", "task", "--parent", producerEpic))
 
 	// Consumer initializes its OWN backlog while the remote still has no lit data —
 	// so it keeps its own bootstrap root instead of adopting the producer's. The two
@@ -44,7 +45,8 @@ func TestExplicitReconcileSurfacesUnrelatedHistories(t *testing.T) {
 	runGit(t, consumer, "config", "user.email", "b@b.co")
 	runGit(t, consumer, "config", "user.name", "bravo")
 	runCLIInDir(t, consumer, "init", "--skip-hooks", "--skip-agents")
-	consumerID := firstIssueID(t, runCLIInDir(t, consumer, "new", "--title", "consumer-ticket", "--topic", "demo", "--type", "task"))
+	consumerEpic := newEpicInDir(t, consumer, "consumer-epic")
+	consumerID := firstIssueID(t, runCLIInDir(t, consumer, "new", "--title", "consumer-ticket", "--topic", "demo", "--type", "task", "--parent", consumerEpic))
 
 	// Producer publishes its history to the shared branch.
 	runCLIInDir(t, producer, "sync", "push", "--set-upstream")
@@ -68,12 +70,13 @@ func TestExplicitReconcileSurfacesUnrelatedHistories(t *testing.T) {
 	}
 
 	// The block enumerates the both-sides partition of the two known issue sets: the
-	// consumer's ticket is only-local, the producer's is only-remote, and — since the
-	// two stores generated ids independently — nothing is on both.
+	// consumer's epic and ticket are only-local, the producer's are only-remote, and
+	// — since the two stores generated ids independently — nothing is on both. Each
+	// set lists sorted, and a child's id starts with its epic's, so the epic leads.
 	for _, want := range []string{
 		"WHAT EACH SIDE HOLDS",
-		"only on local:  (1): «" + consumerID + "»",
-		"only on remote: (1): «" + producerID + "»",
+		"only on local:  (2): «" + consumerEpic + "», «" + consumerID + "»",
+		"only on remote: (2): «" + producerEpic + "», «" + producerID + "»",
 		"on both:        (0)",
 	} {
 		if !strings.Contains(msg, want) {
@@ -116,7 +119,8 @@ func TestReconcileCombineUnionsUnrelatedHistories(t *testing.T) {
 	runGit(t, producer, "commit", "-m", "seed")
 	runGit(t, producer, "push", "origin", "HEAD")
 	runCLIInDir(t, producer, "init", "--skip-hooks", "--skip-agents")
-	producerID := firstIssueID(t, runCLIInDir(t, producer, "new", "--title", "producer-ticket", "--topic", "demo", "--type", "task"))
+	producerEpic := newEpicInDir(t, producer, "producer-epic")
+	producerID := firstIssueID(t, runCLIInDir(t, producer, "new", "--title", "producer-ticket", "--topic", "demo", "--type", "task", "--parent", producerEpic))
 
 	// Consumer inits its OWN backlog while the remote still has no lit data, so it keeps
 	// its own bootstrap root — the two histories are now disjoint.
@@ -125,7 +129,8 @@ func TestReconcileCombineUnionsUnrelatedHistories(t *testing.T) {
 	runGit(t, consumer, "config", "user.email", "b@b.co")
 	runGit(t, consumer, "config", "user.name", "bravo")
 	runCLIInDir(t, consumer, "init", "--skip-hooks", "--skip-agents")
-	consumerID := firstIssueID(t, runCLIInDir(t, consumer, "new", "--title", "consumer-ticket", "--topic", "demo", "--type", "task"))
+	consumerEpic := newEpicInDir(t, consumer, "consumer-epic")
+	consumerID := firstIssueID(t, runCLIInDir(t, consumer, "new", "--title", "consumer-ticket", "--topic", "demo", "--type", "task", "--parent", consumerEpic))
 
 	// Producer now publishes its history to the shared branch, creating the disjoint divergence.
 	runCLIInDir(t, producer, "sync", "push", "--set-upstream")
@@ -140,7 +145,7 @@ func TestReconcileCombineUnionsUnrelatedHistories(t *testing.T) {
 	}
 	// The report evidences what was kept from each side (the ids are disjoint, so both are
 	// unique to their side and nothing is on-both).
-	for _, want := range []string{consumerID, producerID} {
+	for _, want := range []string{consumerEpic, consumerID, producerEpic, producerID} {
 		if !strings.Contains(out, want) {
 			t.Errorf("combine report does not name kept issue %q:\n%s", want, out)
 		}

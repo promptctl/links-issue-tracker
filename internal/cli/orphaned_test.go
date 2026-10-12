@@ -33,15 +33,20 @@ func startIssueForTest(t *testing.T, h readyTestHarness, id string) {
 func TestRunOrphanedListsStaleInProgress(t *testing.T) {
 	h := newReadyTestHarness(t)
 
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "topic", IssueType: "epic"})
 	stale := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title:     "Stale work",
 		Topic:     "stale",
 		IssueType: "task",
+		ParentID:  epic.ID,
+		Lane:      "stale",
 	})
 	fresh := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title:     "Fresh work",
 		Topic:     "fresh",
 		IssueType: "task",
+		ParentID:  epic.ID,
+		Lane:      "fresh",
 	})
 	startIssueForTest(t, h, stale.ID)
 	startIssueForTest(t, h, fresh.ID)
@@ -59,8 +64,9 @@ func TestRunOrphanedListsStaleInProgress(t *testing.T) {
 func TestRunOrphanedExcludesOpenAndClosed(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	open := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Open", Topic: "topic", IssueType: "task"})
-	closed := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Closed", Topic: "topic", IssueType: "task"})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "topic", IssueType: "epic"})
+	open := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Open", Topic: "topic", IssueType: "task", ParentID: epic.ID, Lane: "open"})
+	closed := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Closed", Topic: "topic", IssueType: "task", ParentID: epic.ID, Lane: "closed"})
 	h.backdateUpdatedAt(open.ID, 7*time.Hour)
 	h.closeIssue(closed.ID, "done")
 	h.backdateUpdatedAt(closed.ID, 7*time.Hour)
@@ -74,8 +80,9 @@ func TestRunOrphanedExcludesOpenAndClosed(t *testing.T) {
 func TestRunOrphanedSortsOldestFirst(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	older := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Older", Topic: "topic", IssueType: "task"})
-	newer := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Newer", Topic: "topic", IssueType: "task"})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "topic", IssueType: "epic"})
+	older := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Older", Topic: "topic", IssueType: "task", ParentID: epic.ID, Lane: "older"})
+	newer := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Newer", Topic: "topic", IssueType: "task", ParentID: epic.ID, Lane: "newer"})
 	startIssueForTest(t, h, older.ID)
 	startIssueForTest(t, h, newer.ID)
 	h.backdateUpdatedAt(older.ID, 48*time.Hour)
@@ -104,8 +111,9 @@ func TestRunOrphanedTextEmpty(t *testing.T) {
 func TestRunOrphanedAssigneeFilter(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	mine := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Mine", Topic: "topic", IssueType: "task"})
-	theirs := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Theirs", Topic: "topic", IssueType: "task"})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "topic", IssueType: "epic"})
+	mine := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Mine", Topic: "topic", IssueType: "task", ParentID: epic.ID, Lane: "mine"})
+	theirs := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Theirs", Topic: "topic", IssueType: "task", ParentID: epic.ID, Lane: "theirs"})
 	if _, err := h.ap.Store.Apply(h.ctx, mine.ID, storage.Change{Action: model.Start{Assignee: "alice"}, Actor: "alice"}); err != nil {
 		t.Fatalf("StartIssue(mine) error = %v", err)
 	}

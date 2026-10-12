@@ -101,7 +101,7 @@ type ParentConflict struct {
 
 // Finding is the conflict as `lit doctor` reports it.
 func (c ParentConflict) Finding() string {
-	return fmt.Sprintf("%s has %d parents (%s); it lists under %s, the lowest id, until one remains — run 'lit parent clear %s', then set the parent it belongs under", c.ChildID, len(c.Parents), strings.Join(c.Parents, ", "), c.Parents[0], c.ChildID)
+	return fmt.Sprintf("%s has %d parents (%s); it lists under %s, the lowest id, until one remains — run 'lit parent set --child %s --parent <the epic it belongs under>', which replaces every parent it holds with that one", c.ChildID, len(c.Parents), strings.Join(c.Parents, ", "), c.Parents[0], c.ChildID)
 }
 
 // NewRankAncestry builds the ancestry from an engine's framing edges.

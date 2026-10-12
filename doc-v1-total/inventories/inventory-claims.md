@@ -59,7 +59,7 @@ type LaneID struct { epic string; key string; solo bool }
 `internal/model/model.go`. Fields unexported; `LaneOf` is the only constructor (`internal/model/model.go`).
 
 `LaneOf(issue, parent)` (`internal/model/model.go`):
-- `parent == nil` **or** `!parent.IsContainer()` → `LaneID{key: issue.ID, solo: true}` (a "lane of one").
+- `parent == nil` **or** `!parent.IsContainer()` → `LaneID{key: issue.ID, solo: true}` (a "lane of one" — a top-level epic under containment; a leaf reaches this arm only from restored data).
 - otherwise → `LaneID{epic: parent.ID, key: issue.Lane}`. An epic that declares no lanes is exactly one lane keyed by `""` (`internal/model/model.go`).
 
 `Epic()` / `Key()` accessors at `internal/model/model.go`. `String()`: solo → bare key; otherwise `epic + "#" + key`, so an epic's unnamed default lane renders `"E#"` (`internal/model/model.go`).

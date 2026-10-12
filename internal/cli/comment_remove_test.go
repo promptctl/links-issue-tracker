@@ -46,7 +46,11 @@ func TestCommentRemove(t *testing.T) {
 	}
 
 	// `lit new` text prints the issue summary, whose first token is the id.
-	newOut, err := run("new", "--title", "comment removal", "--topic", "comments", "--type", "task", "--priority", "1")
+	epicOut, err := run("new", "--title", "comments", "--topic", "comments", "--type", "epic")
+	if err != nil {
+		t.Fatalf("new epic error = %v", err)
+	}
+	newOut, err := run("new", "--title", "comment removal", "--topic", "comments", "--type", "task", "--priority", "1", "--parent", firstToken(epicOut.String()))
 	if err != nil {
 		t.Fatalf("new error = %v", err)
 	}

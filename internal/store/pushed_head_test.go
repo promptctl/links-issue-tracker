@@ -28,12 +28,13 @@ func TestRecordPushedHeadMovesTheTrackingRefWithoutTheNetwork(t *testing.T) {
 	doltRoot := migratedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
+	epic := seedCommitEpic(t, ctx, doltRoot)
 	commit := func(title string) {
 		st, err := Open(ctx, doltRoot, "ws")
 		if err != nil {
 			t.Fatalf("Open(%q) error = %v", title, err)
 		}
-		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task", Priority: 0}); err != nil {
+		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task", Priority: 0, ParentID: epic}); err != nil {
 			t.Fatalf("CreateIssue(%q) error = %v", title, err)
 		}
 		if err := st.Close(); err != nil {
@@ -234,13 +235,14 @@ func TestRecordPushedHeadNeverMovesTheTrackingRefBackwards(t *testing.T) {
 	doltRoot := migratedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
+	epic := seedCommitEpic(t, ctx, doltRoot)
 	commit := func(title string) string {
 		t.Helper()
 		st, err := Open(ctx, doltRoot, "ws")
 		if err != nil {
 			t.Fatalf("Open(%q) error = %v", title, err)
 		}
-		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task", Priority: 0}); err != nil {
+		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task", Priority: 0, ParentID: epic}); err != nil {
 			t.Fatalf("CreateIssue(%q) error = %v", title, err)
 		}
 		var head string
@@ -413,4 +415,24 @@ func TestRecordPushedHeadCutInTheCommitLockWaitNamesTheHolder(t *testing.T) {
 	if want := fmt.Sprintf("held by pid %d", os.Getpid()); !strings.Contains(err.Error(), want) {
 		t.Fatalf("RecordPushedHead() cut in the commit-lock wait = %v, want the holder named (%q)", err, want)
 	}
+}
+
+// seedCommitEpic lands, before any commit a test counts, the one epic every
+// ticket those commits file into, and returns its id. It is its own commit so
+// each later commit() is exactly one commit, which the ahead-by-one reads
+// depend on.
+func seedCommitEpic(t *testing.T, ctx context.Context, doltRoot string) string {
+	t.Helper()
+	st, err := Open(ctx, doltRoot, "ws")
+	if err != nil {
+		t.Fatalf("Open(epic) error = %v", err)
+	}
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "epic", Topic: "topic", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close(epic) error = %v", err)
+	}
+	return epic.ID
 }

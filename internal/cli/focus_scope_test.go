@@ -139,14 +139,17 @@ func rowIDsJoined(rows []annotation.AnnotatedIssue) string {
 func TestTopRankReachesTheTopOfTheFocusedView(t *testing.T) {
 	h := newReadyTestHarness(t)
 
+	goalEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Goal epic", Topic: "goal", IssueType: "epic",
+	})
 	goal := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Goal", Topic: "goal", IssueType: "task",
+		Title: "Goal", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "goal",
 	})
 	early := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Path step one", Topic: "goal", IssueType: "task",
+		Title: "Path step one", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "early",
 	})
 	late := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Path step two", Topic: "goal", IssueType: "task",
+		Title: "Path step two", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "late",
 	})
 	h.addDependency(goal.ID, early.ID)
 	h.addDependency(goal.ID, late.ID)
@@ -172,17 +175,23 @@ func TestTopRankReachesTheTopOfTheFocusedView(t *testing.T) {
 func TestBacklogNoticeReportsTheLimitTrimNotJustTheScope(t *testing.T) {
 	h := newReadyTestHarness(t)
 
+	goalEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Goal epic", Topic: "goal", IssueType: "epic",
+	})
 	goal := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Goal", Topic: "goal", IssueType: "task",
+		Title: "Goal", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "goal",
 	})
 	prereqA := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Prereq A", Topic: "goal", IssueType: "task",
+		Title: "Prereq A", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "a",
 	})
 	prereqB := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Prereq B", Topic: "goal", IssueType: "task",
+		Title: "Prereq B", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "b",
+	})
+	noise := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Noise epic", Topic: "noise", IssueType: "epic",
 	})
 	_ = h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Unrelated", Topic: "noise", IssueType: "task",
+		Title: "Unrelated", Topic: "noise", IssueType: "task", ParentID: noise.ID,
 	})
 	h.addDependency(goal.ID, prereqA.ID)
 	h.addDependency(goal.ID, prereqB.ID)
@@ -235,9 +244,12 @@ func TestBacklogNoticeReportsTheLimitTrimNotJustTheScope(t *testing.T) {
 func TestBacklogTrimCountNamesOnlyTheLimitNarrowing(t *testing.T) {
 	h := newReadyTestHarness(t)
 
+	noise := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Noise epic", Topic: "noise", IssueType: "epic",
+	})
 	for _, title := range []string{"Alpha", "Beta", "Gamma", "Delta"} {
 		_ = h.createIssue(storage.CreateIssueInput{Prefix: "test",
-			Title: title, Topic: "noise", IssueType: "task",
+			Title: title, Topic: "noise", IssueType: "task", ParentID: noise.ID,
 		})
 	}
 
@@ -266,14 +278,20 @@ func TestBacklogTrimCountNamesOnlyTheLimitNarrowing(t *testing.T) {
 func TestFocusedBacklogNamesItsScopeAndItsEscape(t *testing.T) {
 	h := newReadyTestHarness(t)
 
+	goalEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Goal epic", Topic: "goal", IssueType: "epic",
+	})
 	goal := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Goal", Topic: "goal", IssueType: "task",
+		Title: "Goal", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "goal",
 	})
 	prereq := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Prereq", Topic: "goal", IssueType: "task",
+		Title: "Prereq", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "prereq",
+	})
+	noise := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Noise epic", Topic: "noise", IssueType: "epic",
 	})
 	off := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Unrelated", Topic: "noise", IssueType: "task",
+		Title: "Unrelated", Topic: "noise", IssueType: "task", ParentID: noise.ID,
 	})
 	h.addDependency(goal.ID, prereq.ID)
 
@@ -318,11 +336,17 @@ func TestFocusedBacklogNamesItsScopeAndItsEscape(t *testing.T) {
 func TestFocusedBacklogSaysWhichEmptinessThisIs(t *testing.T) {
 	h := newReadyTestHarness(t)
 
+	goalEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Goal epic", Topic: "goal", IssueType: "epic",
+	})
 	goal := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Goal", Topic: "goal", IssueType: "bug",
+		Title: "Goal", Topic: "goal", IssueType: "bug", ParentID: goalEpic.ID,
+	})
+	noise := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Noise epic", Topic: "noise", IssueType: "epic",
 	})
 	h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Unrelated", Topic: "noise", IssueType: "task",
+		Title: "Unrelated", Topic: "noise", IssueType: "task", ParentID: noise.ID,
 	})
 	h.setLabels(goal.ID, FocusLabel)
 
@@ -343,17 +367,23 @@ func TestFocusedBacklogSaysWhichEmptinessThisIs(t *testing.T) {
 func TestNextRefusesToSubstituteOffPathWorkForAStuckFocusPath(t *testing.T) {
 	h := newReadyTestHarness(t)
 
+	goalEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Goal epic", Topic: "goal", IssueType: "epic",
+	})
 	goal := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Goal", Topic: "goal", IssueType: "task",
+		Title: "Goal", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "goal",
 	})
 	blocked := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Prereq", Topic: "goal", IssueType: "task",
+		Title: "Prereq", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "prereq",
 	})
 	gate := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Design gate", Topic: "goal", IssueType: "task",
+		Title: "Design gate", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "gate",
+	})
+	noise := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Noise epic", Topic: "noise", IssueType: "epic",
 	})
 	off := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Unrelated ready work", Topic: "noise", IssueType: "task",
+		Title: "Unrelated ready work", Topic: "noise", IssueType: "task", ParentID: noise.ID,
 	})
 	h.addDependency(goal.ID, blocked.ID)
 	h.addDependency(blocked.ID, gate.ID)
@@ -403,11 +433,14 @@ func TestNextRefusesToSubstituteOffPathWorkForAStuckFocusPath(t *testing.T) {
 func TestFocusPathDeadEndDoesNotClaimOffPathWorkIsStartable(t *testing.T) {
 	h := newReadyTestHarness(t)
 
+	goalEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Goal epic", Topic: "goal", IssueType: "epic",
+	})
 	goal := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Goal", Topic: "goal", IssueType: "task",
+		Title: "Goal", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "goal",
 	})
 	gate := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Design gate", Topic: "goal", IssueType: "task",
+		Title: "Design gate", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "gate",
 	})
 	h.addDependency(goal.ID, gate.ID)
 	h.setLabels(gate.ID, NeedsDesignLabel)
@@ -415,11 +448,14 @@ func TestFocusPathDeadEndDoesNotClaimOffPathWorkIsStartable(t *testing.T) {
 
 	// Off the path, and not startable either: blocked by its own open
 	// prerequisite, which is likewise off the path and likewise gated.
+	noise := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Noise epic", Topic: "noise", IssueType: "epic",
+	})
 	off := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Off-path, blocked", Topic: "noise", IssueType: "task",
+		Title: "Off-path, blocked", Topic: "noise", IssueType: "task", ParentID: noise.ID, Lane: "off",
 	})
 	offGate := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Off-path blocker", Topic: "noise", IssueType: "task",
+		Title: "Off-path blocker", Topic: "noise", IssueType: "task", ParentID: noise.ID, Lane: "off-gate",
 	})
 	h.addDependency(off.ID, offGate.ID)
 	h.setLabels(offGate.ID, NeedsDesignLabel)
@@ -479,14 +515,20 @@ func TestFocusPathDeadEndDoesNotClaimOffPathWorkIsStartable(t *testing.T) {
 func TestFocusScopeNeverHidesThisCheckoutsOwnWork(t *testing.T) {
 	h := newReadyTestHarness(t)
 
+	goalEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Goal epic", Topic: "goal", IssueType: "epic",
+	})
 	goal := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Goal", Topic: "goal", IssueType: "task",
+		Title: "Goal", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "goal",
 	})
 	onPath := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Path work", Topic: "goal", IssueType: "task",
+		Title: "Path work", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "path",
+	})
+	elsewhere := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Elsewhere epic", Topic: "elsewhere", IssueType: "epic",
 	})
 	mine := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "My in-flight work", Topic: "elsewhere", IssueType: "task",
+		Title: "My in-flight work", Topic: "elsewhere", IssueType: "task", ParentID: elsewhere.ID,
 	})
 	h.addDependency(goal.ID, onPath.ID)
 

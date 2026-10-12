@@ -32,8 +32,10 @@ func TestCreateIssueRefusesAnUnknownPlacementInAnEmptyWorkspace(t *testing.T) {
 		}
 	})
 
+	// An epic, so that no parent is owed and the placement is the one thing
+	// wrong with the request.
 	if _, err := engine.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "mem", Title: "first", Topic: "place", IssueType: "task",
+		Prefix: "mem", Title: "first", Topic: "place", IssueType: "epic",
 		Placement: storage.RankPlacement(99),
 	}); err == nil {
 		t.Fatal("the first issue in a workspace was created with an unrecognized placement; want the same refusal the second would get")
@@ -77,8 +79,10 @@ func TestCreateIssueLeavesNoRecordWhenPlacementFails(t *testing.T) {
 		}
 	})
 
+	// Both are epics: top-level frame-mates that owe no parent, so the
+	// placement is the one thing wrong with the second request.
 	if _, err := engine.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "mem", Title: "anchor", Topic: "place", IssueType: "task",
+		Prefix: "mem", Title: "anchor", Topic: "place", IssueType: "epic",
 	}); err != nil {
 		t.Fatalf("CreateIssue(anchor) error = %v", err)
 	}
@@ -86,7 +90,7 @@ func TestCreateIssueLeavesNoRecordWhenPlacementFails(t *testing.T) {
 
 	// An unrecognized placement fails the dispatch inside place.
 	if _, err := engine.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "mem", Title: "doomed", Topic: "place", IssueType: "task",
+		Prefix: "mem", Title: "doomed", Topic: "place", IssueType: "epic",
 		Placement: storage.RankPlacement(99),
 	}); err == nil {
 		t.Fatal("CreateIssue with an unrecognized placement succeeded; want an error")

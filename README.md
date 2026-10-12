@@ -60,8 +60,10 @@ From inside any git repository:
 
 ```sh
 lit init                                              # set up the workspace for this clone
+lit new --title "Launch the site" \
+        --topic landing --type epic                   # every ticket lives inside an epic
 lit new --title "Build the landing page" \
-        --topic landing --type task                   # file your first issue
+        --topic landing --type task --parent <epic>   # file your first issue, inside it
 lit backlog                                           # see what's workable, in priority order
 lit start <id>                                        # claim a ticket
 lit done <id>                                         # finish it (closes immediately)

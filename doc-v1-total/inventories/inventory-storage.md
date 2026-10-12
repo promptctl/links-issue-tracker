@@ -115,6 +115,7 @@ Parentage gets its own two verbs rather than riding `AddRelation` because it is 
 
 **`ClearParent(ctx, childID string) error`** — `internal/storage/contract.go`
 - Clearing a child that has no parent is `NotFoundError`, not a silent success (`internal/storage/contract.go`).
+- Only a container can be detached: clearing a leaf is refused with `storage.RejectDetachingALeaf` (`internal/storage/containment.go`), the same rule `RemoveRelation` applies to a leaf's parent-child edge; `AddRelation`/`SetParent` refuse a parent that is not a container with `storage.RejectParentThatIsNotAContainer`, and `CreateIssue` refuses a leaf with no parent with `storage.RejectLeafWithoutParent` (`internal/storage/containment.go`).
 
 ---
 
@@ -140,7 +141,7 @@ Parentage gets its own two verbs rather than riding `AddRelation` because it is 
 **`RankAncestry`** — `struct{ places map[string][]rankPlace; conflicts []ParentConflict }`, `internal/storage/rank.go`
 - For each issue a container frames, the place (`rankPlace{rank, id}`) of each of its containers, outermost first; an issue absent from `places` is top level.
 - `NewRankAncestry(links []ParentLink) RankAncestry` — never fails and never refuses. A child named by more than one link is placed under the lowest `ParentID` and recorded as a `ParentConflict{ChildID, Parents}` (parents lowest id first); a chain that returns to an issue already walked ends where it would repeat.
-- `Conflicts() []ParentConflict` — by child id; `Store.Doctor` appends each `Finding()`, `"%s has %d parents (%s); it lists under %s, the lowest id, until one remains — run 'lit parent clear %s', then set the parent it belongs under"`, as an error.
+- `Conflicts() []ParentConflict` — by child id; `Store.Doctor` appends each `Finding()`, `"%s has %d parents (%s); it lists under %s, the lowest id, until one remains — run 'lit parent set --child %s --parent <the epic it belongs under>', which replaces every parent it holds with that one"`, as an error.
 - `Compare(x, y model.Issue) int` — walks each issue's path (its containers' places, then its own `{Rank, ID}`) step by step, comparing key then id at every step; the path that runs out first sorts first: tree order. A container's path is a prefix of its descendants', so it sorts before them and its subtree sorts together, even across a key two frame-mates share. Two distinct issues never compare equal. Both engines bind the `rank` sort key to it.
 - `Sort(issues []model.Issue)` — `slices.SortFunc` by `Compare`; both engines' relation groups (`Children`, `DependsOn`, `Blocks`, related) sort with it.
 
@@ -208,7 +209,7 @@ Other error surfaces in the contract package: `ParseSortSpecs` returns `Validati
 | `Prompt` | `string` | `internal/storage/issues.go` |
 | `IssueType` | `model.IssueType` | Already-parsed vocabulary, never a raw flag string; trust boundaries route through `model.ParseIssueType`. Zero value means "unspecified" and defaults to task (`internal/storage/issues.go`) |
 | `Topic` | `string` | `internal/storage/issues.go` |
-| `ParentID` | `string` | `internal/storage/issues.go` |
+| `ParentID` | `string` | The epic the issue lives inside; required for every type but a container, and must name a container (`internal/storage/containment.go`) — `internal/storage/issues.go` |
 | `Priority` | `model.Priority` | Already-parsed domain vocabulary; trust boundaries route through `model.ParsePriority` or `model.CanonicalPriority` (`internal/storage/issues.go`) |
 | `Assignee` | `string` | `internal/storage/issues.go` |
 | `Lane` | `string` | `internal/storage/issues.go` |
@@ -558,7 +559,7 @@ Order of checks is stated as contract: the parent must be resolved before the co
 2. `canonicalLabels(in.Labels)` — normalize/dedupe/sort; error propagates.
 3. `issueid.NormalizeTopicForCreate(in.Topic)` — error propagates.
 4. `issueType`: if `in.IssueType == ""` → `model.TypeTask`.
-5. `parentID = strings.TrimSpace(in.ParentID)`; if non-empty, `mustRecord(parentID)` → `NotFoundError` on miss.
+5. `parentID = strings.TrimSpace(in.ParentID)`; `storage.RejectLeafWithoutParent(issueType, parentID)` → `ValidationError` for a leaf with none; if non-empty, `mustRecord(parentID)` → `NotFoundError` on miss, then `storage.RejectParentThatIsNotAContainer(parentID, parent.issueType)` → `ValidationError` for a parent that is not an epic.
 6. `issueid.NormalizeConfiguredPrefix(in.Prefix)`; error → `fmt.Errorf("normalize issue prefix: %w", err)`.
 7. `now := e.now()`; `mintID(...)`.
 8. Builds the record with all string fields `strings.TrimSpace`'d (description, prompt, assignee, lane), `status: model.StatusView{Value: model.StateOpen}`, `retention: model.Live{}`.

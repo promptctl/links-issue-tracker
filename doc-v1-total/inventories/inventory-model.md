@@ -562,8 +562,8 @@ unexported so `LaneOf` is the only construction route (`model.go`).
 
 `LaneOf(issue Issue, parent *Issue) LaneID` — `model.go`:
 - `parent == nil` **or** `!parent.IsContainer()` → `LaneID{key: issue.ID, solo: true}`
-  (a "lane of one"; a non-container parent scopes nothing —
-  `model.go`).
+  (a "lane of one"; a non-container parent scopes nothing, a shape only
+  restored data holds under containment — `model.go`).
 - otherwise → `LaneID{epic: parent.ID, key: issue.Lane}` — siblings sharing the
   same `Lane` spelling (including the empty spelling) are one lane.
 - Reads no lifecycle, so it answers for an unhydrated issue (`model.go`).

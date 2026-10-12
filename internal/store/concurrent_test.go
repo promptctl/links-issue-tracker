@@ -31,6 +31,11 @@ func TestConcurrentMutationsCreateIssues(t *testing.T) {
 	var mu sync.Mutex
 	createdIDs := make([]string, 0, goroutines)
 
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Concurrent epic", Topic: "concurrent", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+
 	eg, egCtx := errgroup.WithContext(ctx)
 
 	for i := range goroutines {
@@ -41,6 +46,7 @@ func TestConcurrentMutationsCreateIssues(t *testing.T) {
 				IssueType: "task",
 				Priority:  model.Priority(i % 2),
 				Labels:    []string{"concurrent-test"},
+				ParentID:  epic.ID,
 			})
 			if err != nil {
 				return fmt.Errorf("goroutine %d: CreateIssue error: %w", i, err)
@@ -103,6 +109,11 @@ func TestConcurrentMutationsMixedOperations(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Mixed epic", Topic: "mixed", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+
 	// Pre-create issues for update/comment/transition goroutines.
 	const preCreateCount = 10
 	issues := make([]string, preCreateCount)
@@ -113,6 +124,7 @@ func TestConcurrentMutationsMixedOperations(t *testing.T) {
 			IssueType: "task",
 			Priority:  0,
 			Labels:    []string{"mixed-test"},
+			ParentID:  epic.ID,
 		})
 		if err != nil {
 			t.Fatalf("pre-create issue %d error = %v", i, err)
@@ -143,6 +155,7 @@ func TestConcurrentMutationsMixedOperations(t *testing.T) {
 				IssueType: "task",
 				Priority:  1,
 				Labels:    []string{"mixed-test"},
+				ParentID:  epic.ID,
 			})
 			return err
 		})

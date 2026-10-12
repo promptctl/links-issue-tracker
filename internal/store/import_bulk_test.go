@@ -55,12 +55,13 @@ func TestBulkApplyCreatesLandInFileOrder(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
+	epic := bulkEpic(t, ctx, st)
 	title := func(s string) *string { return &s }
 	issueType := title("task")
 	topic := title("bulk")
 	specs := []storage.BulkIssueSpec{
-		{Title: title("First"), IssueType: issueType, Topic: topic},
-		{Title: title("Second"), IssueType: issueType, Topic: topic},
+		{Title: title("First"), IssueType: issueType, Topic: topic, Parent: epic.ID},
+		{Title: title("Second"), IssueType: issueType, Topic: topic, Parent: epic.ID},
 	}
 	result, err := st.BulkApply(ctx, "test", "agent", specs)
 	if err != nil {
@@ -90,9 +91,10 @@ func TestBulkApplyCreateWithoutLocalIDIsReportedByRealID(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
+	epic := bulkEpic(t, ctx, st)
 	title := func(s string) *string { return &s }
 	specs := []storage.BulkIssueSpec{
-		{Title: title("Loose"), IssueType: title("task"), Topic: title("bulk")},
+		{Title: title("Loose"), IssueType: title("task"), Topic: title("bulk"), Parent: epic.ID},
 	}
 	result, err := st.BulkApply(ctx, "test", "agent", specs)
 	if err != nil {
@@ -104,6 +106,17 @@ func TestBulkApplyCreateWithoutLocalIDIsReportedByRealID(t *testing.T) {
 	if m := result.Created[0]; m.Ref != m.ID {
 		t.Fatalf("Created[0] = %+v, want self-referenced (no local_id given)", m)
 	}
+}
+
+// bulkEpic creates the epic a batch's tasks are filed under: a task lives
+// inside an epic, so a create document names one.
+func bulkEpic(t *testing.T, ctx context.Context, st *Store) model.Issue {
+	t.Helper()
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "Epic", Topic: "bulk", IssueType: "epic", Prefix: "test"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	return epic
 }
 
 // createdIDByRef resolves one create's real id from a result's ordered
@@ -123,7 +136,7 @@ func TestBulkApplyUpdatesExistingIssueByID(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
-	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "Before", Topic: "bulk", IssueType: "task", Prefix: "test"})
+	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "Before", Topic: "bulk", IssueType: "task", Prefix: "test", ParentID: bulkEpic(t, ctx, st).ID})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
@@ -151,14 +164,15 @@ func TestBulkApplyMixedCreateAndUpdate(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
-	existing, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "Old", Topic: "bulk", IssueType: "task", Prefix: "test"})
+	epic := bulkEpic(t, ctx, st)
+	existing, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "Old", Topic: "bulk", IssueType: "task", Prefix: "test", ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	title := func(s string) *string { return &s }
 	newTitle := "Updated"
 	specs := []storage.BulkIssueSpec{
-		{LocalID: "new1", Title: title("Fresh"), IssueType: title("task"), Topic: title("bulk")},
+		{LocalID: "new1", Title: title("Fresh"), IssueType: title("task"), Topic: title("bulk"), Parent: epic.ID},
 		{ID: existing.ID, Title: &newTitle},
 	}
 	result, err := st.BulkApply(ctx, "test", "agent", specs)
@@ -194,7 +208,7 @@ func TestBulkApplyRejectsUpdateWithNoFields(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
-	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "X", Topic: "bulk", IssueType: "task", Prefix: "test"})
+	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "X", Topic: "bulk", IssueType: "task", Prefix: "test", ParentID: bulkEpic(t, ctx, st).ID})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
@@ -208,7 +222,7 @@ func TestBulkApplyRejectsUpdateWithTopic(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
-	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "X", Topic: "bulk", IssueType: "task", Prefix: "test"})
+	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "X", Topic: "bulk", IssueType: "task", Prefix: "test", ParentID: bulkEpic(t, ctx, st).ID})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
@@ -223,7 +237,7 @@ func TestBulkApplyRejectsUpdateWithParentOrDependsOn(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
-	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "X", Topic: "bulk", IssueType: "task", Prefix: "test"})
+	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "X", Topic: "bulk", IssueType: "task", Prefix: "test", ParentID: bulkEpic(t, ctx, st).ID})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
@@ -238,7 +252,7 @@ func TestBulkApplyRejectsInvalidTypeOrPriorityOnUpdate(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
-	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "X", Topic: "bulk", IssueType: "task", Prefix: "test"})
+	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "X", Topic: "bulk", IssueType: "task", Prefix: "test", ParentID: bulkEpic(t, ctx, st).ID})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
@@ -267,7 +281,7 @@ func TestBulkApplyRejectsDuplicateID(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
-	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "X", Topic: "bulk", IssueType: "task", Prefix: "test"})
+	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "X", Topic: "bulk", IssueType: "task", Prefix: "test", ParentID: bulkEpic(t, ctx, st).ID})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
@@ -282,7 +296,7 @@ func TestBulkApplyRejectsIDAndLocalIDTogether(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
-	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "X", Topic: "bulk", IssueType: "task", Prefix: "test"})
+	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "X", Topic: "bulk", IssueType: "task", Prefix: "test", ParentID: bulkEpic(t, ctx, st).ID})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
@@ -322,6 +336,7 @@ func TestBulkApplyRollsBackCreatesOnLaterFailure(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
+	epic := bulkEpic(t, ctx, st)
 	title := "will roll back"
 	issueType := "task"
 	topic := "bulk"
@@ -330,7 +345,7 @@ func TestBulkApplyRollsBackCreatesOnLaterFailure(t *testing.T) {
 	// it passes validateBulkSpecs (which cannot check external existence)
 	// and fails inside CreateIssue — after doc a has already been created.
 	specs := []storage.BulkIssueSpec{
-		{LocalID: "a", Title: &title, IssueType: &issueType, Topic: &topic},
+		{LocalID: "a", Title: &title, IssueType: &issueType, Topic: &topic, Parent: epic.ID},
 		{LocalID: "b", Title: &badTitle, IssueType: &issueType, Topic: &topic, Parent: "ghost-does-not-exist"},
 	}
 	_, err := st.BulkApply(ctx, "test", "agent", specs)

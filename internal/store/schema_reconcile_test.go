@@ -45,6 +45,20 @@ import (
 // the migrations' own Down sections — the single source of "how to reach
 // baseline" — keeps this helper correct as migrations accrue with no
 // per-migration edits here. [LAW:one-source-of-truth]
+// reconcileSeedEpic creates the epic a test's seeded leaves live in: a leaf is never
+// created outside one (storage.RejectLeafWithoutParent), so each seeded task
+// below names this epic as its parent and the migration under test finds it
+// already homed.
+func reconcileSeedEpic(t *testing.T, ctx context.Context, st *Store, topic string) string {
+	t.Helper()
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Seed epic", Topic: topic, IssueType: "epic", Priority: 0})
+	if err != nil {
+		_ = st.Close()
+		t.Fatalf("seed CreateIssue(epic) error = %v", err)
+	}
+	return epic.ID
+}
+
 func hijackToPreGoose(t *testing.T, st *Store) {
 	t.Helper()
 	hijackToPreGooseReshaping(t, st, func() {})
@@ -147,7 +161,7 @@ func TestReconcileAddsMissingIssueEventsTables(t *testing.T) {
 	}
 	// Seed real data so the migration's data-preservation contract is
 	// observable.
-	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Real issue", Topic: "real", IssueType: "task", Priority: 0})
+	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Real issue", Topic: "real", IssueType: "task", Priority: 0, ParentID: reconcileSeedEpic(t, ctx, first, "real")})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
@@ -198,7 +212,7 @@ func TestReconcileRenamesPromptToAgentPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
-	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Has prompt", Topic: "prompt", IssueType: "task", Priority: 0, Prompt: "the historical prompt body"})
+	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Has prompt", Topic: "prompt", IssueType: "task", Priority: 0, Prompt: "the historical prompt body", ParentID: reconcileSeedEpic(t, ctx, first, "prompt")})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
@@ -440,7 +454,7 @@ func TestReconcileDropsLegacyIssueHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
-	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Survives history drop", Topic: "history", IssueType: "task", Priority: 0})
+	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Survives history drop", Topic: "history", IssueType: "task", Priority: 0, ParentID: reconcileSeedEpic(t, ctx, first, "history")})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
@@ -658,7 +672,7 @@ func TestReconcileTranslatesLegacyIssueHistoryToEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
-	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Has history", Topic: "history", IssueType: "task", Priority: 0})
+	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Has history", Topic: "history", IssueType: "task", Priority: 0, ParentID: reconcileSeedEpic(t, ctx, first, "history")})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
@@ -856,7 +870,7 @@ func TestReconcileTranslateSkipsOrphanedHistoryRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
-	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Existing", Topic: "history", IssueType: "task", Priority: 0})
+	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Existing", Topic: "history", IssueType: "task", Priority: 0, ParentID: reconcileSeedEpic(t, ctx, first, "history")})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
@@ -909,7 +923,7 @@ func TestReconcileTranslateRunsAfterActorRename(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
-	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Has legacy events", Topic: "history", IssueType: "task", Priority: 0})
+	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Has legacy events", Topic: "history", IssueType: "task", Priority: 0, ParentID: reconcileSeedEpic(t, ctx, first, "history")})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
@@ -991,7 +1005,7 @@ func TestReconcileTranslateIsIdempotentWithExistingEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
-	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Idem", Topic: "history", IssueType: "task", Priority: 0})
+	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Idem", Topic: "history", IssueType: "task", Priority: 0, ParentID: reconcileSeedEpic(t, ctx, first, "history")})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
@@ -1109,7 +1123,7 @@ func TestReconcileRecoversFromFabricatedGooseRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
-	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Survives fabricated-goose recovery", Topic: "history", IssueType: "task", Priority: 0})
+	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Survives fabricated-goose recovery", Topic: "history", IssueType: "task", Priority: 0, ParentID: reconcileSeedEpic(t, ctx, first, "history")})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
@@ -1203,7 +1217,7 @@ func TestReconcileIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
-	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Idempotent", Topic: "idem", IssueType: "task", Priority: 0})
+	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Idempotent", Topic: "idem", IssueType: "task", Priority: 0, ParentID: reconcileSeedEpic(t, ctx, first, "idem")})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
@@ -1311,12 +1325,16 @@ func TestReconcileTopicHasNoDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
-	// Drop the topic column so reconcile must re-add it.
-	if err := first.ExecRawForTest(ctx, `ALTER TABLE issues DROP COLUMN topic`); err != nil {
-		_ = first.Close()
-		t.Fatalf("drop topic error = %v", err)
-	}
-	hijackToPreGoose(t, first)
+	// Drop the topic column so reconcile must re-add it. The drop runs in the
+	// reshape window, after the Down migrations have read the head schema
+	// (00007's Down reads issues.topic) and before the workspace is stamped
+	// pre-goose.
+	hijackToPreGooseReshaping(t, first, func() {
+		if err := first.ExecRawForTest(ctx, `ALTER TABLE issues DROP COLUMN topic`); err != nil {
+			_ = first.Close()
+			t.Fatalf("drop topic error = %v", err)
+		}
+	})
 	if err := first.Close(); err != nil {
 		t.Fatalf("Close(first) error = %v", err)
 	}
@@ -1359,7 +1377,7 @@ func TestReconcileRankBackfillCoexistsWithExistingRanks(t *testing.T) {
 	// mixed state where ensureIssueRanks must coexist with existing
 	// rank values. Capture the first issue's actual rank so we can
 	// assert no duplication.
-	ranked, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Already ranked", Topic: "rank", IssueType: "task", Priority: 0})
+	ranked, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Already ranked", Topic: "rank", IssueType: "task", Priority: 0, ParentID: reconcileSeedEpic(t, ctx, first, "rank")})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed ranked CreateIssue error = %v", err)

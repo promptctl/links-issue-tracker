@@ -591,7 +591,7 @@ else ready.
 | `--prompt` | string | `""` | "Reusable agent prompt for the work this issue captures" |
 | `--type` | string | `task` | "Issue type: task\|feature\|bug\|chore\|epic" |
 | `--topic` | string | `""` | "Required immutable issue topic slug (1-2 words; stable area of focus; e.g., 'refactor' or 'field-history')" |
-| `--parent` | string | `""` | "Optional parent issue ID; child IDs become parentID.\<n>" |
+| `--parent` | string | `""` | "Epic the ticket lives inside — required for every type but epic, which may be top-level or inside another epic; child IDs become parentID.\<hash>" |
 | `--priority` | string | `normal` | "Priority: normal\|urgent", the choice list derived from `model.Priorities()` via `priorityChoices()`. A string, not an int, deliberately: an `fs.Int` let pflag's `strconv.ParseInt` refuse the display word before lit's own gate ran (links-cli-bvko). The decimal spelling is still accepted, by `ParsePriorityName` rather than by pflag |
 | `--assignee` | string | `""` | "Assignee" (trimmed, `cli.go`) |
 | `--labels` | string | `""` | "Comma-separated labels" (split by `splitCSV`) |
@@ -610,7 +610,9 @@ else ready.
   blank title → `"title is required"` (`store.go`); blank/short/long topic
   → `"topic is required"` / `"topic must be at least N characters after
   normalization"` / `"topic must be at most N characters after normalization"`
-  (`internal/issueid/slug.go`); a `--parent` id that does not exist → a
+  (`internal/issueid/slug.go`); a leaf with no `--parent` → `storage.RejectLeafWithoutParent`
+  and a `--parent` naming anything but an epic → `storage.RejectParentThatIsNotAContainer`
+  (`internal/storage/containment.go`); a `--parent` id that does not exist → a
   not-found error (`store.go`). Labels are canonicalized, de-duplicated and
   sorted (`internal/store/labels.go`).
 - Side effects: creates the issue; dispatches `EventTicketCreated`
@@ -1655,7 +1657,7 @@ Family `parentFamily`, usage `"usage: lit parent <set|clear> ..."`
   `UsageError{"usage: lit parent clear <child-id>"}` → exit 2
   (`issue_relations.go`). Surplus positionals refused by
   `refuseSurplusPositionals` (`register.go`) before `parent clear`'s work runs.
-- Calls `Store.ClearParent(childID)`; prints `ok` then the `update` breadcrumb.
+- Calls `Store.ClearParent(childID)`, which refuses a leaf (`storage.RejectDetachingALeaf`, exit 3) and detaches an epic; prints `ok` then the `update` breadcrumb.
 
 ### 2.20 `lit dep` — Manage dependency edges
 

@@ -121,7 +121,10 @@ func TestAddRelationRefusesAParentCycle(t *testing.T) {
 
 // A parent that is not an epic: the wait graph carries no edge there, so a
 // rule derived from waits cannot see it, while hydration walks the parent
-// chain regardless.
+// chain regardless. Containment refuses a non-epic parent outright
+// (storage.RejectParentThatIsNotAContainer), so this is refused before the
+// cycle is even judged; what is pinned is that the refusal, whichever rule
+// speaks it, leaves the tree untouched.
 func TestSetParentRefusesACycleThroughANonEpicParent(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
@@ -424,22 +427,22 @@ func TestAChildWithTwoParentsIsReportedAndRepairable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Doctor() error = %v, want a report naming the child", err)
 	}
-	if len(report.Errors) != 1 || !strings.Contains(report.Errors[0], child.ID+" has 2 parents") || !strings.Contains(report.Errors[0], "lit parent clear "+child.ID) {
+	if len(report.Errors) != 1 || !strings.Contains(report.Errors[0], child.ID+" has 2 parents") || !strings.Contains(report.Errors[0], "lit parent set --child "+child.ID) {
 		t.Errorf("Doctor().Errors = %v, want one error naming %s's parents and the repair", report.Errors, child.ID)
 	}
 	if len(report.Unchecked) != 0 {
 		t.Errorf("Doctor().Unchecked = %v, want every check run: the fault stops no read", report.Unchecked)
 	}
 
-	if err := st.ClearParent(ctx, child.ID); err != nil {
-		t.Fatalf("ClearParent(%s) error = %v, want both edges cleared", child.ID, err)
+	if _, err := st.SetParent(ctx, storage.SetParentInput{ChildID: child.ID, ParentID: first[0].ID, CreatedBy: "test"}); err != nil {
+		t.Fatalf("SetParent(%s under %s) error = %v, want every parent it held replaced with that one", child.ID, first[0].ID, err)
 	}
 	after, err := st.Doctor(ctx)
 	if err != nil {
 		t.Fatalf("Doctor() after repair error = %v", err)
 	}
 	if len(after.Errors) != 0 {
-		t.Errorf("Doctor().Errors = %v after 'lit parent clear', want none", after.Errors)
+		t.Errorf("Doctor().Errors = %v after 'lit parent set', want none", after.Errors)
 	}
 }
 
@@ -462,10 +465,11 @@ func TestClearParentReportsAnUnknownIssueAsMissing(t *testing.T) {
 		t.Errorf("ClearParent(unknown id) reported a missing %q; the id names no issue at all, so reporting a missing parent edge is the opposite diagnosis", notFound.Entity)
 	}
 
-	// Anti-vacuity: an issue that exists and simply has no parent still reports
-	// the edge as the missing thing, so the case above is not passing because
-	// every absence is called an issue.
-	solo, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Solo", Topic: "hier", IssueType: "task", Placement: storage.RankBottom})
+	// Anti-vacuity: an issue that exists and simply has no parent — an epic,
+	// the one shape that can be parentless — still reports the edge as the
+	// missing thing, so the case above is not passing because every absence is
+	// called an issue.
+	solo, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Solo", Topic: "hier", IssueType: "epic", Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue error = %v", err)
 	}

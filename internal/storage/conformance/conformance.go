@@ -197,6 +197,7 @@ var cases = []engineCase{
 	{"relations_roundtrip", relationsRoundtrip},
 	{"relations_batch_buckets_edges", relationsBatchBucketsEdges},
 	{"parent_wiring", parentWiring},
+	{"every_ticket_lives_inside_a_container", everyTicketLivesInsideAContainer},
 	{"the_hierarchy_stays_a_tree", theHierarchyStaysATree},
 	{"blocks_never_runs_along_the_hierarchy", blocksNeverRunsAlongTheHierarchy},
 	{"topics_derive_from_issues", topicsDeriveFromIssues},
@@ -210,6 +211,7 @@ var cases = []engineCase{
 }
 
 func createReadRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "renderer", IssueType: model.TypeEpic})
 	created := mustCreate(t, ctx, st, storage.CreateIssueInput{
 		Title:       "  Renderer cleanup  ",
 		Description: "  drop the legacy pass  ",
@@ -220,6 +222,7 @@ func createReadRoundtrip(t *testing.T, ctx context.Context, st storage.Store, cl
 		Assignee:    "ada",
 		Lane:        "left",
 		Labels:      []string{"perf"},
+		ParentID:    epic.ID,
 	})
 
 	// Surrounding whitespace is stripped on the way in, so what a reader sees
@@ -271,8 +274,11 @@ func createReadRoundtrip(t *testing.T, ctx context.Context, st storage.Store, cl
 
 func createDefaults(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	// Saying nothing about type or placement must reach the product defaults,
-	// since that is the path every non-interactive creation surface takes.
-	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "unspecified", Topic: "core"})
+	// since that is the path every non-interactive creation surface takes. The
+	// epic is the home every leaf needs; it leads the listing as the container
+	// of everything filed below.
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "unspecified", Topic: "core", ParentID: epic.ID})
 	if issue.IssueType != model.TypeTask {
 		t.Errorf("IssueType = %q, want task for an unspecified type", issue.IssueType)
 	}
@@ -284,18 +290,21 @@ func createDefaults(t *testing.T, ctx context.Context, st storage.Store, clk *cl
 	}
 
 	// RankBottom is the zero value, so a second create files below the first.
-	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second", Topic: "core"})
-	assertOrder(t, ctx, st, "default placement appends", issue.ID, second.ID)
+	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second", Topic: "core", ParentID: epic.ID})
+	assertOrder(t, ctx, st, "default placement appends", epic.ID, issue.ID, second.ID)
 
-	top := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "top", Topic: "core", Placement: storage.RankTop})
-	assertOrder(t, ctx, st, "RankTop leads", top.ID, issue.ID, second.ID)
+	top := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "top", Topic: "core", ParentID: epic.ID, Placement: storage.RankTop})
+	assertOrder(t, ctx, st, "RankTop leads", epic.ID, top.ID, issue.ID, second.ID)
 }
 
 func createRequiresTitle(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	// The leaf is filed under an epic so the title is the only thing wrong with
+	// it: a refusal here has to be the title's.
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	// Whitespace is not a title: the trim happens before the requirement, so a
 	// blank-looking title cannot slip in as a non-empty string.
 	for _, title := range []string{"", "   "} {
-		_, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: title, Topic: "core"})
+		_, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: title, Topic: "core", ParentID: epic.ID})
 		assertRefused(t, err, fmt.Sprintf("CreateIssue(title=%q)", title))
 	}
 }
@@ -306,7 +315,9 @@ func createRequiresTitle(t *testing.T, ctx context.Context, st storage.Store, cl
 // normalizing is the store's job, not each caller's, and a name too short to
 // be one is refused rather than stored. [LAW:parse-dont-validate]
 func createNormalizesTopic(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "shaped", Topic: "  Renderer Cleanup  "})
+	// The epic shares the leaf's topic so the vocabulary below is one name.
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "renderer-cleanup", IssueType: model.TypeEpic})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "shaped", Topic: "  Renderer Cleanup  ", ParentID: epic.ID})
 	if issue.Topic != "renderer-cleanup" {
 		t.Errorf("Topic = %q, want the normalized renderer-cleanup", issue.Topic)
 	}
@@ -316,8 +327,10 @@ func createNormalizesTopic(t *testing.T, ctx context.Context, st storage.Store, 
 	}
 	assertStrings(t, "topics after a normalized create", topics, []string{"renderer-cleanup"})
 
+	// Filed under the epic so the topic is the only fault the refusal can be
+	// about.
 	for _, topic := range []string{"", "   ", "ab", "-!-", strings.Repeat("a", 31)} {
-		_, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "unnamed", Topic: topic, Prefix: prefix})
+		_, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "unnamed", Topic: topic, ParentID: epic.ID, Prefix: prefix})
 		assertRefused(t, err, fmt.Sprintf("CreateIssue(topic=%q)", topic))
 	}
 }
@@ -336,7 +349,8 @@ func getMissingIssue(t *testing.T, ctx context.Context, st storage.Store, clk *c
 }
 
 func applyFieldPatch(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "before", Topic: "core", Assignee: "ada"})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "before", Topic: "core", Assignee: "ada", ParentID: epic.ID})
 
 	title := "after"
 	priority := model.PriorityUrgent
@@ -366,7 +380,8 @@ func applyFieldPatch(t *testing.T, ctx context.Context, st storage.Store, clk *c
 }
 
 func applyStatusTransition(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "work", Topic: "core"})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "work", Topic: "core", ParentID: epic.ID})
 
 	started, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Start{Assignee: "ada"}, Actor: "ada"})
 	if err != nil {
@@ -431,7 +446,8 @@ func applyToContainer(t *testing.T, ctx context.Context, st storage.Store, clk *
 // one per engine, and a test beside either one would let the other drift. Here
 // both answer to the same statement. [LAW:single-enforcer]
 func applyToArchivedNamesTheTypedVerb(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "archived", Topic: "core"})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "archived", Topic: "core", ParentID: epic.ID})
 	if _, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Archive{}, Actor: "ada"}); err != nil {
 		t.Fatalf("archive error = %v", err)
 	}
@@ -481,7 +497,8 @@ func containerStateFollowsLiveChildren(t *testing.T, ctx context.Context, st sto
 }
 
 func historyRecordsMutations(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "tracked", Topic: "core"})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "tracked", Topic: "core", ParentID: epic.ID})
 	title := "retitled"
 	if _, err := st.Apply(ctx, issue.ID, storage.Change{Actor: "ada", Fields: storage.UpdateIssueInput{Title: &title}}); err != nil {
 		t.Fatalf("Apply error = %v", err)
@@ -527,6 +544,10 @@ func historyRecordsMutations(t *testing.T, ctx context.Context, st storage.Store
 	after = mustEvents(t, ctx, st)
 	var sawRetitle bool
 	for _, e := range after {
+		// The epic's own create is the one event here that is not the issue's.
+		if e.IssueID == epic.ID {
+			continue
+		}
 		if e.IssueID != issue.ID {
 			t.Errorf("event for unexpected issue %q", e.IssueID)
 		}
@@ -559,6 +580,7 @@ func everyEditableFieldRecordsHistory(t *testing.T, ctx context.Context, st stor
 	priority := model.PriorityUrgent
 	labels := []string{"beta"}
 	title, description, prompt, assignee, lane := "retitled", "described", "render at 1024x768", "ada", "left"
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 
 	// One patch per field, each moving exactly that field, so a recorded row
 	// can only have come from the field the case names.
@@ -576,7 +598,7 @@ func everyEditableFieldRecordsHistory(t *testing.T, ctx context.Context, st stor
 		{"lane", storage.UpdateIssueInput{Lane: &lane}, "left"},
 		{"labels", storage.UpdateIssueInput{Labels: &labels}, "beta"},
 	} {
-		issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "recorded", Topic: "core", IssueType: model.TypeTask})
+		issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "recorded", Topic: "core", IssueType: model.TypeTask, ParentID: epic.ID})
 		if _, err := st.Apply(ctx, issue.ID, storage.Change{Actor: "ada", Fields: edit.patch}); err != nil {
 			t.Errorf("Apply %s patch error = %v", edit.field, err)
 			continue
@@ -613,7 +635,8 @@ func everyEditableFieldRecordsHistory(t *testing.T, ctx context.Context, st stor
 // the lane stays with the first checkout while the second believes it holds it,
 // and both work the same ticket. [LAW:no-silent-failure]
 func takeoverByANewCheckoutRecords(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "contested", Topic: "core"})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "contested", Topic: "core", ParentID: epic.ID})
 
 	st.AttributeTo("checkout-a")
 	if _, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Start{Assignee: "ada"}, Actor: "ada"}); err != nil {
@@ -672,8 +695,9 @@ func takeoverByANewCheckoutRecords(t *testing.T, ctx context.Context, st storage
 // records, and would then be pinning this test's memory of the engine rather
 // than the contract. [LAW:one-source-of-truth]
 func oneIssuesHistoryMatchesTheWholeLog(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	subject := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "subject", Topic: "core"})
-	other := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "other", Topic: "core"})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	subject := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "subject", Topic: "core", ParentID: epic.ID})
+	other := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "other", Topic: "core", ParentID: epic.ID})
 
 	// Interleaved on purpose. A reader that returns the wrong issue's events,
 	// and one that returns the right issue's in the wrong order, both survive a
@@ -726,21 +750,27 @@ func sameIssueInOrder(all []model.IssueEvent, issueID string) []model.IssueEvent
 }
 
 func listDefaultsToRankOrder(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first", Topic: "core"})
-	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second", Topic: "core"})
-	third := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "third", Topic: "core"})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first", Topic: "core", ParentID: epic.ID})
+	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second", Topic: "core", ParentID: epic.ID})
+	third := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "third", Topic: "core", ParentID: epic.ID})
 
 	// An unsorted listing is reproducible, not merely arbitrary: rank ascending
-	// with ties broken by id. Callers rely on it — `lit backlog` is this order.
-	assertOrder(t, ctx, st, "default listing", first.ID, second.ID, third.ID)
+	// with ties broken by id, the container ahead of what it holds. Callers
+	// rely on it — `lit backlog` is this order.
+	assertOrder(t, ctx, st, "default listing", epic.ID, first.ID, second.ID, third.ID)
 }
 
 func listFiltersSelect(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	// The epic that homes both leaves is a row like any other: it lists wherever
+	// its own type, its derived state (in_progress, once the task starts) and
+	// its stamps match, and nowhere a field it does not carry is asked for.
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "gamma home", Topic: "core", IssueType: model.TypeEpic})
 	bug := mustCreate(t, ctx, st, storage.CreateIssueInput{
-		Title: "alpha widget", Topic: "renderer", IssueType: model.TypeBug, Assignee: "ada", Labels: []string{"perf", "ui"},
+		Title: "alpha widget", Topic: "renderer", IssueType: model.TypeBug, Assignee: "ada", Labels: []string{"perf", "ui"}, ParentID: epic.ID,
 	})
 	task := mustCreate(t, ctx, st, storage.CreateIssueInput{
-		Title: "beta gadget", Topic: "parser", IssueType: model.TypeTask, Assignee: "grace",
+		Title: "beta gadget", Topic: "parser", IssueType: model.TypeTask, Assignee: "grace", ParentID: epic.ID,
 	})
 	if _, err := st.Apply(ctx, task.ID, storage.Change{Action: model.Start{Assignee: "grace"}, Actor: "grace"}); err != nil {
 		t.Fatalf("Apply start error = %v", err)
@@ -757,9 +787,9 @@ func listFiltersSelect(t *testing.T, ctx context.Context, st storage.Store, clk 
 		filter storage.ListIssuesFilter
 		want   []string
 	}{
-		{"by status", storage.ListIssuesFilter{Statuses: []model.State{model.StateInProgress}}, []string{task.ID}},
+		{"by status", storage.ListIssuesFilter{Statuses: []model.State{model.StateInProgress}}, []string{epic.ID, task.ID}},
 		{"by type", storage.ListIssuesFilter{IssueTypes: []model.IssueType{model.TypeBug}}, []string{bug.ID}},
-		{"excluding a type", storage.ListIssuesFilter{ExcludeIssueTypes: []model.IssueType{model.TypeBug}}, []string{task.ID}},
+		{"excluding a type", storage.ListIssuesFilter{ExcludeIssueTypes: []model.IssueType{model.TypeBug}}, []string{epic.ID, task.ID}},
 		{"by assignee", storage.ListIssuesFilter{Assignees: []string{"grace"}}, []string{task.ID}},
 		{"by id", storage.ListIssuesFilter{IDs: []string{bug.ID}}, []string{bug.ID}},
 		{"by search term", storage.ListIssuesFilter{SearchTerms: []string{"widget"}}, []string{bug.ID}},
@@ -767,9 +797,9 @@ func listFiltersSelect(t *testing.T, ctx context.Context, st storage.Store, clk 
 		{"by all labels", storage.ListIssuesFilter{LabelsAll: []string{"perf", "ui"}}, []string{bug.ID}},
 		{"by a label the issue lacks", storage.ListIssuesFilter{LabelsAll: []string{"perf", "absent"}}, nil},
 		{"by comment presence", storage.ListIssuesFilter{HasComments: &hasComments}, []string{bug.ID}},
-		{"updated before the future", storage.ListIssuesFilter{UpdatedBefore: &future}, []string{bug.ID, task.ID}},
+		{"updated before the future", storage.ListIssuesFilter{UpdatedBefore: &future}, []string{epic.ID, bug.ID, task.ID}},
 		{"updated after the future", storage.ListIssuesFilter{UpdatedAfter: &future}, nil},
-		{"updated after the past", storage.ListIssuesFilter{UpdatedAfter: &past}, []string{bug.ID, task.ID}},
+		{"updated after the past", storage.ListIssuesFilter{UpdatedAfter: &past}, []string{epic.ID, bug.ID, task.ID}},
 		// Criteria are ANDed across axes: a filter naming two axes selects the
 		// intersection, so no caller can widen a listing by adding a criterion.
 		{"two axes intersect", storage.ListIssuesFilter{IssueTypes: []model.IssueType{model.TypeBug}, Assignees: []string{"grace"}}, nil},
@@ -785,10 +815,14 @@ func listByParent(t *testing.T, ctx context.Context, st storage.Store, clk *cloc
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	other := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "other epic", Topic: "core", IssueType: model.TypeEpic})
 	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first", Topic: "core", ParentID: epic.ID})
-	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second", Topic: "core", ParentID: epic.ID})
+	// The second child is itself an epic: only an epic holds children, so it is
+	// the one kind of child that can parent the grandchild.
+	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second", Topic: "core", IssueType: model.TypeEpic, ParentID: epic.ID})
 	grandchild := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "grandchild", Topic: "core", ParentID: second.ID})
 	cousin := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "cousin", Topic: "core", ParentID: other.ID})
-	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "loose", Topic: "core"})
+	// A top-level epic nobody below names, so a parent filter has something to
+	// leave out.
+	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "loose epic", Topic: "core", IssueType: model.TypeEpic})
 	if _, err := st.Apply(ctx, first.ID, storage.Change{Action: model.Start{Assignee: "ada"}, Actor: "ada"}); err != nil {
 		t.Fatalf("Apply start error = %v", err)
 	}
@@ -816,9 +850,12 @@ func listByParent(t *testing.T, ctx context.Context, st storage.Store, clk *cloc
 }
 
 func listHidesArchivedAndDeleted(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	live := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "live", Topic: "core"})
-	archived := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "archived", Topic: "core"})
-	deleted := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "deleted", Topic: "core"})
+	// The epic stays in the flow throughout, so it leads every listing below
+	// whatever retention state its children are in.
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	live := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "live", Topic: "core", ParentID: epic.ID})
+	archived := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "archived", Topic: "core", ParentID: epic.ID})
+	deleted := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "deleted", Topic: "core", ParentID: epic.ID})
 	if _, err := st.Apply(ctx, archived.ID, storage.Change{Action: model.Archive{}, Actor: "ada"}); err != nil {
 		t.Fatalf("Apply archive error = %v", err)
 	}
@@ -828,33 +865,36 @@ func listHidesArchivedAndDeleted(t *testing.T, ctx context.Context, st storage.S
 
 	// Retention is the one axis whose default is a filter rather than an
 	// absence: saying nothing means "only what is in the flow".
-	assertIssueIDs(t, "default listing", mustList(t, ctx, st, storage.ListIssuesFilter{}), []string{live.ID})
+	assertIssueIDs(t, "default listing", mustList(t, ctx, st, storage.ListIssuesFilter{}), []string{epic.ID, live.ID})
 	assertIssueIDs(t, "including archived",
-		mustList(t, ctx, st, storage.ListIssuesFilter{IncludeArchived: true}), []string{live.ID, archived.ID})
+		mustList(t, ctx, st, storage.ListIssuesFilter{IncludeArchived: true}), []string{epic.ID, live.ID, archived.ID})
 	assertIssueIDs(t, "including deleted",
-		mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true}), []string{live.ID, deleted.ID})
+		mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true}), []string{epic.ID, live.ID, deleted.ID})
 	assertIssueIDs(t, "including both",
 		mustList(t, ctx, st, storage.ListIssuesFilter{IncludeArchived: true, IncludeDeleted: true}),
-		[]string{live.ID, archived.ID, deleted.ID})
+		[]string{epic.ID, live.ID, archived.ID, deleted.ID})
 }
 
 func listSortsAndLimits(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	b := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "b", Topic: "core"})
-	a := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "a", Topic: "core"})
-	c := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "c", Topic: "core"})
+	// Titled past its children so a title sort puts it at one end or the other
+	// and never between them.
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "d", Topic: "core", IssueType: model.TypeEpic})
+	b := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "b", Topic: "core", ParentID: epic.ID})
+	a := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "a", Topic: "core", ParentID: epic.ID})
+	c := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "c", Topic: "core", ParentID: epic.ID})
 
 	assertIssueIDs(t, "sorted by title ascending",
 		mustList(t, ctx, st, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: "title"}}}),
-		[]string{a.ID, b.ID, c.ID})
+		[]string{a.ID, b.ID, c.ID, epic.ID})
 	assertIssueIDs(t, "sorted by title descending",
 		mustList(t, ctx, st, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: "title", Desc: true}}}),
-		[]string{c.ID, b.ID, a.ID})
+		[]string{epic.ID, c.ID, b.ID, a.ID})
 
 	// Limit truncates the ordered result rather than sampling it, so a limited
 	// listing is the head of the unlimited one.
-	assertIssueIDs(t, "limited to two", mustList(t, ctx, st, storage.ListIssuesFilter{Limit: 2}), []string{b.ID, a.ID})
+	assertIssueIDs(t, "limited to two", mustList(t, ctx, st, storage.ListIssuesFilter{Limit: 2}), []string{epic.ID, b.ID})
 	// Zero is not a limit of zero; it is the absence of a limit.
-	assertIssueIDs(t, "unlimited", mustList(t, ctx, st, storage.ListIssuesFilter{Limit: 0}), []string{b.ID, a.ID, c.ID})
+	assertIssueIDs(t, "unlimited", mustList(t, ctx, st, storage.ListIssuesFilter{Limit: 0}), []string{epic.ID, b.ID, a.ID, c.ID})
 
 	if _, err := st.ListIssues(ctx, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: "nonsense"}}}); err == nil {
 		t.Error("sorting by an unknown field succeeded; want an error")
@@ -867,13 +907,15 @@ func listSortsAndLimits(t *testing.T, ctx context.Context, st storage.Store, clk
 // engines holding them differently is what the differential oracle would read
 // as divergence.
 func listBreaksSortTiesByID(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	// One title across three issues: the sort key cannot separate them, so the
-	// contract's tie-break is the only thing deciding the order.
-	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "same", Topic: "core"})
-	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "same", Topic: "core"})
-	third := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "same", Topic: "core"})
+	// One title across four issues, the epic included: the sort key cannot
+	// separate them, so the contract's tie-break is the only thing deciding the
+	// order.
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "same", Topic: "core", IssueType: model.TypeEpic})
+	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "same", Topic: "core", ParentID: epic.ID})
+	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "same", Topic: "core", ParentID: epic.ID})
+	third := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "same", Topic: "core", ParentID: epic.ID})
 
-	ascending := []string{first.ID, second.ID, third.ID}
+	ascending := []string{epic.ID, first.ID, second.ID, third.ID}
 	slices.Sort(ascending)
 	assertIssueIDs(t, "tied titles ordered by id",
 		mustList(t, ctx, st, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: "title"}}}),
@@ -893,8 +935,9 @@ func listBreaksSortTiesByID(t *testing.T, ctx context.Context, st storage.Store,
 // other engine will reject. Neither shows up in a case that sorts by one
 // hand-picked field. [LAW:one-source-of-truth]
 func listAcceptsContractSortFields(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "a", Topic: "core"})
-	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "b", Topic: "core"})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "a", Topic: "core", ParentID: epic.ID})
+	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "b", Topic: "core", ParentID: epic.ID})
 
 	for _, field := range storage.SortFields {
 		if _, err := st.ListIssues(ctx, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: field}}}); err != nil {
@@ -930,8 +973,11 @@ func listAcceptsContractSortFields(t *testing.T, ctx context.Context, st storage
 // and a container, holding no stored status at all, is the row that makes an
 // engine which regressed to the column visible.
 func listSortsStatusByDerivedState(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	closedLeaf := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "closed leaf", Topic: "core"})
-	openLeaf := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "open leaf", Topic: "core"})
+	// The two leaves live in their own epic, which the listings below leave out
+	// along with the child, so the epic under test is the only container read.
+	home := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "home", Topic: "core", IssueType: model.TypeEpic})
+	closedLeaf := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "closed leaf", Topic: "core", ParentID: home.ID})
+	openLeaf := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "open leaf", Topic: "core", ParentID: home.ID})
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", ParentID: epic.ID})
 
@@ -974,7 +1020,8 @@ func listSortsStatusByDerivedState(t *testing.T, ctx context.Context, st storage
 // so a wall-clock stamp cannot coincide with it. [LAW:verifiable-goals]
 func stampsComeFromTheClock(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	clk.Pin(earlierInstant)
-	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "stamped", Topic: "clock"})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "clock", IssueType: model.TypeEpic})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "stamped", Topic: "clock", ParentID: epic.ID})
 
 	// Both columns, because a create reads the clock once and an engine that
 	// stamped only one of them from it would be half-honoring the seam.
@@ -1009,18 +1056,22 @@ func listOrdersTimestampsByInstant(t *testing.T, ctx context.Context, st storage
 	// the clock entirely pass — its real stamps would land in the same relative
 	// order the case asserts — and the case would be pinning nothing.
 	// CreateIssue stamps created_at and updated_at from one read of the clock,
-	// so pinning before each create sets both columns for that issue.
+	// so pinning before each create sets both columns for that issue. The epic
+	// is stamped by the live clock, years past either pinned instant, and the
+	// listings are narrowed to the pair so it decides nothing below.
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "clock", IssueType: model.TypeEpic})
 	clk.Pin(laterInstant)
-	later := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "later instant", Topic: "clock"})
+	later := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "later instant", Topic: "clock", ParentID: epic.ID})
 	clk.Pin(earlierInstant)
-	earlier := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "earlier instant", Topic: "clock"})
+	earlier := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "earlier instant", Topic: "clock", ParentID: epic.ID})
 
+	pair := []string{earlier.ID, later.ID}
 	for _, field := range []string{"created_at", "updated_at"} {
 		assertIssueIDs(t, "sorted by "+field+" ascending",
-			mustList(t, ctx, st, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: field}}}),
+			mustList(t, ctx, st, storage.ListIssuesFilter{IDs: pair, SortBy: []storage.SortSpec{{Field: field}}}),
 			[]string{earlier.ID, later.ID})
 		assertIssueIDs(t, "sorted by "+field+" descending",
-			mustList(t, ctx, st, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: field, Desc: true}}}),
+			mustList(t, ctx, st, storage.ListIssuesFilter{IDs: pair, SortBy: []storage.SortSpec{{Field: field, Desc: true}}}),
 			[]string{later.ID, earlier.ID})
 	}
 }
@@ -1037,11 +1088,12 @@ func listOrdersTimestampsByInstant(t *testing.T, ctx context.Context, st storage
 // decides what time it is: on a live nanosecond clock the tie this settles
 // simply never occurs, and an engine returning raw recording order passes.
 func eventsAreTotallyOrdered(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	// The create is inside the first group, not before it: an unpinned create
+	// The creates are inside the first group, not before it: an unpinned create
 	// would stamp the real instant, which is later than either pinned one, and
 	// the sequence would step backwards for a reason unrelated to the rule.
 	clk.Pin(earlierInstant)
-	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "audited", Topic: "core"})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "audited", Topic: "core", ParentID: epic.ID})
 	for _, group := range []struct {
 		at     time.Time
 		titles []string
@@ -1081,9 +1133,11 @@ func eventsAreTotallyOrdered(t *testing.T, ctx context.Context, st storage.Store
 }
 
 func rankIntentsReorder(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	a := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "a", Topic: "core"})
-	b := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "b", Topic: "core"})
-	c := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "c", Topic: "core"})
+	// Three epics: the top level holds only epics, so they are the frame-mates
+	// a top-level reorder is read against.
+	a := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "a", Topic: "core", IssueType: model.TypeEpic})
+	b := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "b", Topic: "core", IssueType: model.TypeEpic})
+	c := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "c", Topic: "core", IssueType: model.TypeEpic})
 	assertOrder(t, ctx, st, "as created", a.ID, b.ID, c.ID)
 
 	move, err := st.RankAbove(ctx, c.ID, a.ID)
@@ -1156,7 +1210,9 @@ func rankToEdgeStaysInsideItsFrame(t *testing.T, ctx context.Context, st storage
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first", Topic: "core", ParentID: epic.ID})
 	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second", Topic: "core", ParentID: epic.ID})
-	standalone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "standalone", Topic: "core"})
+	// The outsider is an epic: nothing but an epic sits at the top level beside
+	// the one under test.
+	standalone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "standalone epic", Topic: "core", IssueType: model.TypeEpic})
 
 	end, err := st.RankToTop(ctx, second.ID)
 	if err != nil {
@@ -1264,8 +1320,8 @@ func rankToEdgeIgnoresADeletedFrameMate(t *testing.T, ctx context.Context, st st
 // overtakes the first's and the two frames come back inverted.
 func createAtTopFilesInsideItsFrame(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	// Filed in this order so that each frame's keys sit above the frame filed
-	// before it, and a top-level issue holds the workspace's first key.
-	outsider := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "outsider", Topic: "core"})
+	// before it, and a top-level epic holds the workspace's first key.
+	outsider := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "outsider epic", Topic: "core", IssueType: model.TypeEpic})
 	firstEpic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first epic", Topic: "core", IssueType: model.TypeEpic})
 	firstChild := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first child", Topic: "core", ParentID: firstEpic.ID})
 	secondEpic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second epic", Topic: "core", IssueType: model.TypeEpic})
@@ -1288,9 +1344,9 @@ func createAtTopFilesInsideItsFrame(t *testing.T, ctx context.Context, st storag
 	// exists, which is what keeps an authored batch in its file's order.
 	assertPrecedes(t, listed, firstChild.ID, secondChild.ID)
 
-	// The top level is a frame like any other, so an issue filed at the top
-	// with no parent leads the issues that share that frame.
-	topLead := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "top lead", Topic: "core", Placement: storage.RankTop})
+	// The top level is a frame like any other, so an epic filed at the top
+	// with no parent leads the epics that share that frame.
+	topLead := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "top lead", Topic: "core", IssueType: model.TypeEpic, Placement: storage.RankTop})
 	listed = mustList(t, ctx, st, storage.ListIssuesFilter{})
 	assertDistinctRanks(t, listed)
 	assertPrecedes(t, listed, topLead.ID, outsider.ID)
@@ -1317,8 +1373,9 @@ func createAtTopFilesInsideItsFrame(t *testing.T, ctx context.Context, st storag
 func placingAtAFrameEdgeKeepsTheKeyBesideItsFrame(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", ParentID: epic.ID})
-	trailing := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "trailing", Topic: "core"})
-	leading := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "leading", Topic: "core", Placement: storage.RankTop})
+	// The two top-level issues are epics, the only kind the top level holds.
+	trailing := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "trailing", Topic: "core", IssueType: model.TypeEpic})
+	leading := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "leading", Topic: "core", IssueType: model.TypeEpic, Placement: storage.RankTop})
 	// Parks a top-level key between the two the frame's own placement would
 	// otherwise treat as an empty span.
 	if _, err := st.RankBelow(ctx, trailing.ID, leading.ID); err != nil {
@@ -1363,13 +1420,14 @@ func placingAtAFrameEdgeKeepsTheKeyBesideItsFrame(t *testing.T, ctx context.Cont
 // any view that orders an issue by its own position.
 func createAtTopOfAnEmptyFrameTakesADistinctKey(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	// The first issue in a workspace holds the opening key — the very key a
-	// "middle of the keyspace" answer would hand out a second time.
-	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first", Topic: "core"})
+	// "middle of the keyspace" answer would hand out a second time. It and the
+	// trailing issue are epics, since only an epic sits at the top level.
+	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first", Topic: "core", IssueType: model.TypeEpic})
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "childless epic", Topic: "core", IssueType: model.TypeEpic})
 	// Filed after the epic so that "beside the container" and "past everything"
 	// are different positions. With the epic trailing the workspace the two
 	// coincide, and the case cannot tell them apart.
-	trailing := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "trailing", Topic: "core"})
+	trailing := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "trailing", Topic: "core", IssueType: model.TypeEpic})
 	only := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "only child", Topic: "core", ParentID: epic.ID, Placement: storage.RankTop})
 
 	listed := mustList(t, ctx, st, storage.ListIssuesFilter{})
@@ -1391,8 +1449,8 @@ func createAtTopOfAnEmptyFrameTakesADistinctKey(t *testing.T, ctx context.Contex
 }
 
 // aRelativeMoveKeepsEveryRankDistinct is the four-command case: an epic, a
-// top-level issue after it, and a child of the epic after that, then the child
-// ranked below the top-level issue.
+// top-level epic after it, and a child of the first epic after that, then the
+// child ranked below the top-level epic.
 //
 // Rank pair resolution substitutes the epic for the child, which is the frame's
 // say in the move — it picks the key the move lands beside. The room beside
@@ -1407,7 +1465,7 @@ func createAtTopOfAnEmptyFrameTakesADistinctKey(t *testing.T, ctx context.Contex
 // an id tiebreak.
 func aRelativeMoveKeepsEveryRankDistinct(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	standalone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "standalone", Topic: "core"})
+	standalone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "standalone epic", Topic: "core", IssueType: model.TypeEpic})
 	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", ParentID: epic.ID})
 
 	if _, err := st.RankBelow(ctx, child.ID, standalone.ID); err != nil {
@@ -1439,7 +1497,7 @@ func aRelativeMoveKeepsEveryRankDistinct(t *testing.T, ctx context.Context, st s
 // outsider whose rank changed is the observable that a write reached outside
 // the frame it named.
 func rankSetStaysInsideItsFrame(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	outsider := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "outsider", Topic: "core"})
+	outsider := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "outsider epic", Topic: "core", IssueType: model.TypeEpic})
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	c1 := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "c1", Topic: "core", ParentID: epic.ID})
 	c2 := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "c2", Topic: "core", ParentID: epic.ID})
@@ -1460,7 +1518,7 @@ func rankSetStaysInsideItsFrame(t *testing.T, ctx context.Context, st storage.St
 	assertPrecedes(t, listed, c1.ID, c2.ID)
 
 	// Nothing outside the frame was rewritten. Neither the epic nor an unrelated
-	// top-level issue was named, so neither key may move.
+	// top-level epic was named, so neither key may move.
 	if after := mustGet(t, ctx, st, outsider.ID).Rank; after != before {
 		t.Errorf("rank set among an epic's children moved an outside issue: %s rank %q -> %q", outsider.ID, before, after)
 	}
@@ -1474,7 +1532,7 @@ func rankSetStaysInsideItsFrame(t *testing.T, ctx context.Context, st storage.St
 //
 // The fixture is built so that minting keys instead has something to land on.
 // Every child of the epic is named, so no unnamed sibling anchors the stack,
-// and three top-level issues are ranked above the epic, onto keys below its
+// and three top-level epics are ranked above the epic, onto keys below its
 // own, where a stack walking downward from just past the epic reaches them. A
 // rank set that computed fresh keys there wrote one of those top-level keys
 // onto a child, and sorted two of the children above their own epic.
@@ -1488,10 +1546,10 @@ func rankSetOverAWholeFramePermutesItsKeys(t *testing.T, ctx context.Context, st
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	// The outsider is the far wall past the epic's key, so the room just past
 	// the epic is a closed gap rather than the open end of the keyspace.
-	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "outsider", Topic: "core"})
-	low := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "low", Topic: "core"})
-	mid := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "mid", Topic: "core"})
-	high := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "high", Topic: "core"})
+	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "outsider epic", Topic: "core", IssueType: model.TypeEpic})
+	low := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "low", Topic: "core", IssueType: model.TypeEpic})
+	mid := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "mid", Topic: "core", IssueType: model.TypeEpic})
+	high := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "high", Topic: "core", IssueType: model.TypeEpic})
 	if _, err := st.RankAbove(ctx, low.ID, epic.ID); err != nil {
 		t.Fatalf("RankAbove(low, epic) error = %v", err)
 	}
@@ -1642,17 +1700,17 @@ func rankVerbsRefuseADeletedIssue(t *testing.T, ctx context.Context, st storage.
 // Keys are frame-local, so nothing stops a container's key from passing its
 // descendants' — a container moved past an outsider crosses them, and one a
 // rank set displaces crosses them without being named. The fixture builds
-// both, with a grandchild under a task so the rule is seen to hold at a second
-// level and under a parent that is not an epic. Every listing is asserted
-// whole, because a key-ordered listing puts the container after its own
-// children in each of them.
+// both, with a grandchild under a nested epic so the rule is seen to hold at a
+// second level. The outsiders are epics, the only kind the top level holds.
+// Every listing is asserted whole, because a key-ordered listing puts the
+// container after its own children in each of them.
 func aContainerListsBeforeEverythingInsideIt(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	outer := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "outer", Topic: "core"})
+	outer := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "outer", Topic: "core", IssueType: model.TypeEpic})
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", ParentID: epic.ID})
-	task := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "task", Topic: "core", ParentID: epic.ID})
-	grandchild := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "grandchild", Topic: "core", ParentID: task.ID})
-	last := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "last", Topic: "core"})
+	nested := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "nested epic", Topic: "core", IssueType: model.TypeEpic, ParentID: epic.ID})
+	grandchild := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "grandchild", Topic: "core", ParentID: nested.ID})
+	last := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "last", Topic: "core", IssueType: model.TypeEpic})
 
 	// Moved: the epic's new key lies past every key its subtree holds.
 	if _, err := st.RankBelow(ctx, epic.ID, last.ID); err != nil {
@@ -1661,21 +1719,21 @@ func aContainerListsBeforeEverythingInsideIt(t *testing.T, ctx context.Context, 
 	listed := mustList(t, ctx, st, storage.ListIssuesFilter{})
 	assertDistinctRanks(t, listed)
 	assertIssueIDs(t, "after the epic is moved past its own children", listed,
-		[]string{outer.ID, last.ID, epic.ID, child.ID, task.ID, grandchild.ID})
+		[]string{outer.ID, last.ID, epic.ID, child.ID, nested.ID, grandchild.ID})
 	assertIssueIDs(t, "descending is the same order reversed",
 		mustList(t, ctx, st, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: "rank", Desc: true}}}),
-		[]string{grandchild.ID, task.ID, child.ID, epic.ID, last.ID, outer.ID})
+		[]string{grandchild.ID, nested.ID, child.ID, epic.ID, last.ID, outer.ID})
 	// The epic's key orders its descendants even in a listing that leaves the
 	// epic out.
 	assertIssueIDs(t, "a listing without the container still orders by it",
-		mustList(t, ctx, st, storage.ListIssuesFilter{ExcludeIssueTypes: []model.IssueType{model.TypeEpic}}),
-		[]string{outer.ID, last.ID, child.ID, task.ID, grandchild.ID})
+		mustList(t, ctx, st, storage.ListIssuesFilter{IDs: []string{outer.ID, last.ID, child.ID, nested.ID, grandchild.ID}}),
+		[]string{outer.ID, last.ID, child.ID, nested.ID, grandchild.ID})
 
 	if _, err := st.RankAbove(ctx, epic.ID, outer.ID); err != nil {
 		t.Fatalf("RankAbove(epic, outer) error = %v", err)
 	}
 	assertOrder(t, ctx, st, "after the epic returns to the top",
-		epic.ID, child.ID, task.ID, grandchild.ID, outer.ID, last.ID)
+		epic.ID, child.ID, nested.ID, grandchild.ID, outer.ID, last.ID)
 
 	// Displaced: a rank set names only the outsiders, and the epic takes the
 	// last of its frame's keys, past everything inside it.
@@ -1685,7 +1743,7 @@ func aContainerListsBeforeEverythingInsideIt(t *testing.T, ctx context.Context, 
 	listed = mustList(t, ctx, st, storage.ListIssuesFilter{})
 	assertDistinctRanks(t, listed)
 	assertIssueIDs(t, "after a rank set displaces the epic past its own children", listed,
-		[]string{outer.ID, last.ID, epic.ID, child.ID, task.ID, grandchild.ID})
+		[]string{outer.ID, last.ID, epic.ID, child.ID, nested.ID, grandchild.ID})
 
 	// A view's group of related issues follows the same rule: dependencies
 	// spread over three frames list in tree order, not by their own keys.
@@ -1710,7 +1768,7 @@ func aContainerListsBeforeEverythingInsideIt(t *testing.T, ctx context.Context, 
 func rankIntentsResolveAcrossFrames(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", ParentID: epic.ID})
-	standalone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "standalone", Topic: "core"})
+	standalone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "standalone epic", Topic: "core", IssueType: model.TypeEpic})
 
 	// "put the child above the standalone" is a request about the epic: the
 	// child has no position the standalone can be compared against.
@@ -1738,9 +1796,10 @@ func rankIntentsResolveAcrossFrames(t *testing.T, ctx context.Context, st storag
 }
 
 func rankSetImposesOrder(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	a := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "a", Topic: "core"})
-	b := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "b", Topic: "core"})
-	c := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "c", Topic: "core"})
+	// Three epics, so the frame they share is the top level.
+	a := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "a", Topic: "core", IssueType: model.TypeEpic})
+	b := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "b", Topic: "core", IssueType: model.TypeEpic})
+	c := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "c", Topic: "core", IssueType: model.TypeEpic})
 
 	result, err := st.RankSet(ctx, []string{c.ID, a.ID, b.ID})
 	if err != nil {
@@ -1762,7 +1821,7 @@ func rankSetImposesOrder(t *testing.T, ctx context.Context, st storage.Store, cl
 			t.Errorf("resolution %d RankedID = %q, want the same frame-mate %q", i, resolutions[i].RankedID, want)
 		}
 	}
-	// Three top-level issues stack in the top-level frame, and both engines must
+	// Three top-level epics stack in the top-level frame, and both engines must
 	// say so — the frame is what the CLI names in its summary, so a wrong one
 	// there tells the reader the backlog head moved when it did not.
 	if result.Frame != storage.TopLevel {
@@ -1867,8 +1926,9 @@ func followUpsLinkBothWays(t *testing.T, ctx context.Context, st storage.Store, 
 // reopen clears all of it at once, and a redirect to an issue that is not
 // there is refused rather than stored as a dangling pointer.
 func closeRedirectsToCanonical(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	canonical := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "canonical", Topic: "core"})
-	duplicate := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "duplicate", Topic: "core"})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	canonical := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "canonical", Topic: "core", ParentID: epic.ID})
+	duplicate := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "duplicate", Topic: "core", ParentID: epic.ID})
 
 	closed, err := st.Apply(ctx, duplicate.ID, storage.Change{
 		Action: model.Close{Outcome: model.Duplicate{Of: canonical.ID}}, Actor: "ada",
@@ -1915,7 +1975,8 @@ func closeRedirectsToCanonical(t *testing.T, ctx context.Context, st storage.Sto
 }
 
 func commentsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "discussed", Topic: "core"})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "discussed", Topic: "core", ParentID: epic.ID})
 
 	comment, withComment, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: issue.ID, Body: "first", CreatedBy: "ada"})
 	if err != nil {
@@ -1964,7 +2025,8 @@ func commentsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk 
 }
 
 func labelsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "tagged", Topic: "core"})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "tagged", Topic: "core", ParentID: epic.ID})
 
 	// Every mutating verb returns the resulting set, so "what does it have now"
 	// is never a follow-up read a concurrent writer could answer differently.
@@ -2015,9 +2077,12 @@ func labelsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk *c
 }
 
 func relationsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	dependent := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "dependent", Topic: "core"})
-	dependency := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "dependency", Topic: "core"})
-	peer := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "peer", Topic: "core"})
+	// Siblings under one epic: a blocks edge between branches of one tree is
+	// allowed, only one along the hierarchy is not.
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	dependent := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "dependent", Topic: "core", ParentID: epic.ID})
+	dependency := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "dependency", Topic: "core", ParentID: epic.ID})
+	peer := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "peer", Topic: "core", ParentID: epic.ID})
 
 	rel, err := st.AddRelation(ctx, storage.AddRelationInput{
 		SrcID: dependent.ID, DstID: dependency.ID, Type: model.RelBlocks, CreatedBy: "ada",
@@ -2041,8 +2106,10 @@ func relationsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk
 	if err != nil {
 		t.Fatalf("ListRelationsForIssue error = %v", err)
 	}
-	if len(all) != 2 {
-		t.Errorf("ListRelationsForIssue returned %d edges, want both", len(all))
+	// Both edges just written, plus the parent edge the dependent was born
+	// with: naming no type narrows nothing.
+	if len(all) != 3 {
+		t.Errorf("ListRelationsForIssue returned %d edges, want the two written and the parent edge", len(all))
 	}
 
 	// The variadic types argument narrows rather than switching behavior:
@@ -2081,7 +2148,10 @@ func relationsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk
 func relationsBatchBucketsEdges(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", ParentID: epic.ID})
-	dependency := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "dependency", Topic: "core"})
+	// The dependency lives in another epic, so the epic under test holds the
+	// one child its bucket is asserted to.
+	other := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "other epic", Topic: "core", IssueType: model.TypeEpic})
+	dependency := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "dependency", Topic: "core", ParentID: other.ID})
 	if _, err := st.AddRelation(ctx, storage.AddRelationInput{
 		SrcID: child.ID, DstID: dependency.ID, Type: model.RelBlocks, CreatedBy: "ada",
 	}); err != nil {
@@ -2122,7 +2192,9 @@ func relationsBatchBucketsEdges(t *testing.T, ctx context.Context, st storage.St
 func parentWiring(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	other := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "other epic", Topic: "core", IssueType: model.TypeEpic})
-	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core"})
+	// The child is itself an epic: a leaf cannot be detached, and the clearing
+	// half of this case is about the edge, not the child's kind.
+	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", IssueType: model.TypeEpic})
 
 	if _, err := st.SetParent(ctx, storage.SetParentInput{ChildID: child.ID, ParentID: epic.ID, CreatedBy: "ada"}); err != nil {
 		t.Fatalf("SetParent error = %v", err)
@@ -2151,6 +2223,85 @@ func parentWiring(t *testing.T, ctx context.Context, st storage.Store, clk *cloc
 	}
 	_, err = st.SetParent(ctx, storage.SetParentInput{ChildID: child.ID, ParentID: "no-such-issue"})
 	assertNotFound(t, err, "issue", "SetParent under a missing parent")
+}
+
+// everyTicketLivesInsideAContainer pins containment, the rule the hierarchy
+// obeys: a leaf always has a parent, and every parent is an epic. Each write
+// that could break it is tried, through every door onto that write, and the
+// assertion after each refusal is on the stored shape — a write that errored
+// and still landed would pass an error-only check while leaving the state
+// this case forbids.
+func everyTicketLivesInsideAContainer(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	leaf := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "leaf", Topic: "core", ParentID: epic.ID})
+	nested := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "nested epic", Topic: "core", IssueType: model.TypeEpic, ParentID: epic.ID})
+
+	// A leaf is never created outside an epic, whatever its type. The refusal
+	// is a validation refusal, not a not-found: nothing was looked up.
+	for _, leafType := range []model.IssueType{model.TypeTask, model.TypeBug, model.TypeFeature, model.TypeChore} {
+		_, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "loose", Topic: "core", IssueType: leafType, Prefix: prefix})
+		var refused model.ValidationError
+		if !errors.As(err, &refused) {
+			t.Errorf("CreateIssue(%s with no parent) error = %v; want a ValidationError", leafType, err)
+		}
+	}
+	// The default type is a leaf, so an input that states no type is refused
+	// the same way.
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "loose", Topic: "core", Prefix: prefix}); err == nil {
+		t.Error("CreateIssue(default type, no parent) succeeded; want a refusal")
+	}
+	// An epic may be top-level, and may sit inside another epic.
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "top-level epic", Topic: "core", IssueType: model.TypeEpic, Prefix: prefix}); err != nil {
+		t.Errorf("CreateIssue(epic with no parent) error = %v; an epic is the one thing that may be top-level", err)
+	}
+
+	// Every parent is an epic: a create, a reparent, and the dep-add door onto
+	// the same edge all refuse a leaf as the parent.
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "under a leaf", Topic: "core", ParentID: leaf.ID, Prefix: prefix}); err == nil {
+		t.Error("CreateIssue(under a leaf) succeeded; want a refusal")
+	}
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "epic under a leaf", Topic: "core", IssueType: model.TypeEpic, ParentID: leaf.ID, Prefix: prefix}); err == nil {
+		t.Error("CreateIssue(epic under a leaf) succeeded; want a refusal")
+	}
+	if _, err := st.SetParent(ctx, storage.SetParentInput{ChildID: nested.ID, ParentID: leaf.ID}); err == nil {
+		t.Error("SetParent(epic under a leaf) succeeded; want a refusal")
+	}
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: nested.ID, DstID: leaf.ID, Type: model.RelParentChild}); err == nil {
+		t.Error("AddRelation(parent-child onto a leaf) succeeded; want a refusal")
+	}
+	assertIssueIDs(t, "children of the leaf after the refusals", mustChildren(t, ctx, st, leaf.ID), nil)
+	assertIssueIDs(t, "children of the epic after the refusals", mustChildren(t, ctx, st, epic.ID), []string{leaf.ID, nested.ID})
+
+	// A leaf keeps its parent: neither detach door removes the edge, and the
+	// refusal names the move that does what the caller meant.
+	for _, detach := range []struct {
+		door string
+		do   func() error
+	}{
+		{"ClearParent", func() error { return st.ClearParent(ctx, leaf.ID) }},
+		{"RemoveRelation(parent-child)", func() error { return st.RemoveRelation(ctx, leaf.ID, epic.ID, model.RelParentChild) }},
+	} {
+		err := detach.do()
+		var refused model.ValidationError
+		if !errors.As(err, &refused) {
+			t.Errorf("%s on a leaf error = %v; want a ValidationError", detach.door, err)
+		} else if !strings.Contains(err.Error(), "lit parent set") {
+			t.Errorf("%s on a leaf error = %q; want it to name lit parent set as the move", detach.door, err)
+		}
+	}
+	assertIssueIDs(t, "children of the epic after the detach refusals", mustChildren(t, ctx, st, epic.ID), []string{leaf.ID, nested.ID})
+
+	// A nested epic is the one thing a detach lifts to the top level, through
+	// either door; the second finds nothing left to remove.
+	if err := st.RemoveRelation(ctx, nested.ID, epic.ID, model.RelParentChild); err != nil {
+		t.Fatalf("RemoveRelation(nested epic's parent edge) error = %v; an epic may be top-level", err)
+	}
+	assertIssueIDs(t, "children of the epic after lifting the nested epic", mustChildren(t, ctx, st, epic.ID), []string{leaf.ID})
+	assertNotFound(t, st.ClearParent(ctx, nested.ID), "parent relation", "ClearParent of the lifted epic")
+
+	// A missing edge is still reported as missing before the rule is judged,
+	// so a typo names the edge rather than the leaf.
+	assertNotFound(t, st.RemoveRelation(ctx, leaf.ID, nested.ID, model.RelParentChild), "relation", "RemoveRelation of a parent edge the leaf does not hold")
 }
 
 // theHierarchyStaysATree pins the rule both engines owe the parent graph: an
@@ -2245,21 +2396,23 @@ func blocksNeverRunsAlongTheHierarchy(t *testing.T, ctx context.Context, st stor
 		t.Fatalf("AddRelation(leaf depends on a cousin) error = %v; neither is above the other", err)
 	}
 
-	// Only an epic contains: a parent that is not an epic ends the climb, as it
-	// ends readiness's, so nothing below it is inside the epic above it either.
-	holder := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "task parent", Topic: "core", ParentID: root.ID})
-	held := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "task child", Topic: "core", ParentID: holder.ID})
+	// Ancestry is the line, not the tree: a second sub-epic beside mid and an
+	// issue under it sit in root's tree with mid and leaf, yet neither branch is
+	// above the other, so edges between the branches are accepted at every
+	// depth.
+	holder := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "sibling sub-epic", Topic: "core", IssueType: model.TypeEpic, ParentID: root.ID})
+	held := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "held leaf", Topic: "core", ParentID: holder.ID})
 	accepted := []struct {
 		what                  string
 		dependent, dependency string
 	}{
-		{"a task parent blocking its child", held.ID, holder.ID},
-		{"a task child blocking its parent", holder.ID, held.ID},
-		{"an epic blocking an issue under its task child", held.ID, root.ID},
+		{"a sub-epic blocking its sibling sub-epic", holder.ID, mid.ID},
+		{"a sub-epic blocking a leaf under its sibling", mid.ID, held.ID},
+		{"a leaf blocking its parent's sibling sub-epic", held.ID, mid.ID},
 	}
 	for _, a := range accepted {
 		if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: a.dependent, DstID: a.dependency, Type: model.RelBlocks}); err != nil {
-			t.Errorf("AddRelation(%s) error = %v; no epic contains both", a.what, err)
+			t.Errorf("AddRelation(%s) error = %v; neither is above the other", a.what, err)
 		}
 		if err := st.RemoveRelation(ctx, a.dependent, a.dependency, model.RelBlocks); err != nil {
 			t.Fatalf("RemoveRelation(%s) error = %v", a.what, err)
@@ -2293,9 +2446,10 @@ func assertHierarchyBlocksRefused(t *testing.T, err error, what string) {
 }
 
 func topicsDeriveFromIssues(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "one", Topic: "renderer"})
-	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "two", Topic: "renderer"})
-	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "three", Topic: "parser"})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "renderer", IssueType: model.TypeEpic})
+	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "one", Topic: "renderer", ParentID: epic.ID})
+	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "two", Topic: "renderer", ParentID: epic.ID})
+	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "three", Topic: "parser", ParentID: epic.ID})
 
 	topics, err := st.ListTopics(ctx)
 	if err != nil {
@@ -2312,8 +2466,8 @@ func topicsDeriveFromIssues(t *testing.T, ctx context.Context, st storage.Store,
 func issueIdentitiesCoverEveryRow(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "parser", ParentID: epic.ID})
-	archived := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "archived", Topic: "renderer"})
-	deleted := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "deleted", Topic: "renderer"})
+	archived := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "archived", Topic: "renderer", ParentID: epic.ID})
+	deleted := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "deleted", Topic: "renderer", ParentID: epic.ID})
 	if _, err := st.Apply(ctx, archived.ID, storage.Change{Action: model.Archive{}, Actor: "ada"}); err != nil {
 		t.Fatalf("Apply archive error = %v", err)
 	}
@@ -2346,7 +2500,7 @@ func exportCarriesWholeStore(t *testing.T, ctx context.Context, st storage.Store
 	if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: child.ID, Body: "note", CreatedBy: "ada"}); err != nil {
 		t.Fatalf("AddComment error = %v", err)
 	}
-	archived := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "archived", Topic: "core"})
+	archived := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "archived", Topic: "core", ParentID: epic.ID})
 	if _, err := st.Apply(ctx, archived.ID, storage.Change{Action: model.Archive{}, Actor: "ada"}); err != nil {
 		t.Fatalf("Apply archive error = %v", err)
 	}
@@ -2360,7 +2514,7 @@ func exportCarriesWholeStore(t *testing.T, ctx context.Context, st storage.Store
 	// instant, so a broken export fails every run.
 	tied := make([]string, 0, 3)
 	for _, name := range []string{"a", "b", "c"} {
-		issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "tied " + name, Topic: "core"})
+		issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "tied " + name, Topic: "core", ParentID: epic.ID})
 		title := "started " + name
 		if _, err := st.Apply(ctx, issue.ID, storage.Change{
 			Action: model.Start{Assignee: "ada"},
@@ -2379,10 +2533,22 @@ func exportCarriesWholeStore(t *testing.T, ctx context.Context, st storage.Store
 	// Export is the differential oracle's surface, so it is the WHOLE store —
 	// out-of-flow issues included. An export that honored the listing default
 	// would silently drop archived work from every backup and every diff.
-	assertIssueIDs(t, "exported issues", export.Issues, append([]string{epic.ID, child.ID, archived.ID}, tied...))
-	if len(export.Relations) != 1 || export.Relations[0].SrcID != child.ID {
-		t.Errorf("exported relations = %+v, want the one parent edge", export.Relations)
+	leaves := append([]string{child.ID, archived.ID}, tied...)
+	assertIssueIDs(t, "exported issues", export.Issues, append([]string{epic.ID}, leaves...))
+	// Every leaf holds a parent edge to the epic, and the export carries each
+	// one — the archived leaf's included.
+	var parented []string
+	for _, rel := range export.Relations {
+		if rel.Type != model.RelParentChild || rel.DstID != epic.ID {
+			t.Errorf("exported relation %+v, want a parent edge onto the epic", rel)
+			continue
+		}
+		parented = append(parented, rel.SrcID)
 	}
+	slices.Sort(parented)
+	wantParented := slices.Clone(leaves)
+	slices.Sort(wantParented)
+	assertStrings(t, "exported parent edges", parented, wantParented)
 	if len(export.Comments) != 1 || export.Comments[0].IssueID != child.ID {
 		t.Errorf("exported comments = %+v, want the one comment", export.Comments)
 	}
@@ -2479,13 +2645,16 @@ func bulkApplyCreatesAndUpdates(t *testing.T, ctx context.Context, st storage.St
 // left its early creates standing and said nothing would be the worst of both.
 // [LAW:no-silent-failure]
 func bulkApplyCompensatesFailure(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	home := "the epic created first"
 	kept := "created before the failure"
 	orphan := "parented to nothing"
 	topic := "core"
 	issueType := "task"
+	epicType := "epic"
 
 	_, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
-		{LocalID: "first", Title: &kept, Topic: &topic, IssueType: &issueType},
+		{LocalID: "home", Title: &home, Topic: &topic, IssueType: &epicType},
+		{LocalID: "first", Title: &kept, Topic: &topic, IssueType: &issueType, Parent: "home"},
 		// A parent that is neither a name in this batch nor a real id passes
 		// the file's own validation and fails at the write — which is exactly
 		// the mid-batch failure the compensation exists for.
@@ -2498,12 +2667,12 @@ func bulkApplyCompensatesFailure(t *testing.T, ctx context.Context, st storage.S
 }
 
 func importTreeMapsLocalIDs(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	// The file lists dependents first: other depends on leaf, which parents to
-	// root, so creation must reverse the file order — the asserted sequence
+	// The file lists dependents first: other depends on leaf, and both parent
+	// to root, so creation must reverse the file order — the asserted sequence
 	// below fails for an engine that reports file order instead of creation
 	// order.
 	result, err := st.ImportTree(ctx, prefix, []storage.ImportTreeSpec{
-		{LocalID: "other", Title: "other", IssueType: "task", Topic: "core", DependsOn: []string{"leaf"}},
+		{LocalID: "other", Title: "other", IssueType: "task", Topic: "core", Parent: "root", DependsOn: []string{"leaf"}},
 		{LocalID: "leaf", Title: "leaf", IssueType: "task", Topic: "core", Parent: "root"},
 		{LocalID: "root", Title: "root", IssueType: "epic", Topic: "core"},
 	})
@@ -2516,7 +2685,7 @@ func importTreeMapsLocalIDs(t *testing.T, ctx context.Context, st storage.Store,
 	rootID := mustCreatedID(t, result.Created, "root")
 	leafID := mustCreatedID(t, result.Created, "leaf")
 	otherID := mustCreatedID(t, result.Created, "other")
-	assertIssueIDs(t, "imported children", mustChildren(t, ctx, st, rootID), []string{leafID})
+	assertIssueIDs(t, "imported children", mustChildren(t, ctx, st, rootID), []string{leafID, otherID})
 
 	// depends_on in the file means "this issue depends on that one", so the
 	// dependent is the edge's src.
@@ -2561,10 +2730,11 @@ func refsOf(created []storage.IDMapping) []string {
 func attributionStampsEvents(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	// Before attribution is named, work is recorded unattributed rather than
 	// half-attributed — the read-mode open of a never-mutated checkout.
-	before := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "anonymous", Topic: "core"})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	before := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "anonymous", Topic: "core", ParentID: epic.ID})
 
 	st.AttributeTo("stream-token")
-	after := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "attributed", Topic: "core"})
+	after := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "attributed", Topic: "core", ParentID: epic.ID})
 
 	byIssue := map[string][]model.IssueEvent{}
 	for _, e := range mustEvents(t, ctx, st) {
@@ -2607,8 +2777,9 @@ func localIssueCountTracksCreates(t *testing.T, ctx context.Context, st storage.
 		t.Errorf("LocalIssueCount on a fresh engine = %d, want 0", count)
 	}
 
-	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "one", Topic: "core"})
-	deleted := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "two", Topic: "core"})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "one", Topic: "core", ParentID: epic.ID})
+	deleted := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "two", Topic: "core", ParentID: epic.ID})
 	if _, err := st.Apply(ctx, deleted.ID, storage.Change{Action: model.Delete{}, Actor: "ada"}); err != nil {
 		t.Fatalf("Apply delete error = %v", err)
 	}
@@ -2618,9 +2789,10 @@ func localIssueCountTracksCreates(t *testing.T, ctx context.Context, st storage.
 		t.Fatalf("LocalIssueCount error = %v", err)
 	}
 	// It counts what the store holds, which is the adopt-safety question —
-	// a soft-deleted issue is still work that would be lost.
-	if count != 2 {
-		t.Errorf("LocalIssueCount = %d, want 2", count)
+	// the epic is a row, and a soft-deleted issue is still work that would be
+	// lost.
+	if count != 3 {
+		t.Errorf("LocalIssueCount = %d, want 3", count)
 	}
 }
 

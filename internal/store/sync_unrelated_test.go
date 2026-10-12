@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -34,7 +35,7 @@ func TestSyncReconcileDetectsUnrelatedHistories(t *testing.T) {
 	// its own bootstrap root, its own local issue, pointed at the same remote but
 	// never adopting its head — so the two histories share no commit.
 	remoteIssueID := seedReconcileRemote(t, ctx, rootA, remoteURL)
-	localIssueID := forkUnrelatedClone(t, ctx, rootB, remoteURL)
+	localEpicID, localIssueID := forkUnrelatedClone(t, ctx, rootB, remoteURL)
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer func() { _ = syncB.Close() }()
@@ -70,7 +71,7 @@ func TestSyncReconcileDetectsUnrelatedHistories(t *testing.T) {
 	if res.Unrelated == nil {
 		t.Fatalf("unrelated reconcile carried no both-sides inventory")
 	}
-	assertIDSet(t, "only-local", res.Unrelated.OnlyLocal, []string{localIssueID})
+	assertIDSet(t, "only-local", res.Unrelated.OnlyLocal, []string{localEpicID, localIssueID})
 	assertIDSet(t, "only-remote", res.Unrelated.OnlyRemote, []string{remoteIssueID})
 	assertIDSet(t, "on-both", res.Unrelated.OnBoth, nil)
 
@@ -126,8 +127,8 @@ func TestSyncReconcileUnrelatedInventoryPartitionsAllThreeSides(t *testing.T) {
 	if res.Unrelated == nil {
 		t.Fatalf("unrelated reconcile carried no both-sides inventory")
 	}
-	assertIDSet(t, "only-local", res.Unrelated.OnlyLocal, []string{localOnly})
-	assertIDSet(t, "only-remote", res.Unrelated.OnlyRemote, []string{remoteOnly})
+	assertIDSet(t, "only-local", res.Unrelated.OnlyLocal, localOnly)
+	assertIDSet(t, "only-remote", res.Unrelated.OnlyRemote, remoteOnly)
 	assertIDSet(t, "on-both", res.Unrelated.OnBoth, []string{shared})
 }
 
@@ -164,7 +165,7 @@ func TestSyncResolveUnrelatedTakeRemote(t *testing.T) {
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
 	remoteIssueID := seedReconcileRemote(t, ctx, rootA, remoteURL)
-	localIssueID := forkUnrelatedClone(t, ctx, rootB, remoteURL)
+	localEpicID, localIssueID := forkUnrelatedClone(t, ctx, rootB, remoteURL)
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer func() { _ = syncB.Close() }()
@@ -185,7 +186,7 @@ func TestSyncResolveUnrelatedTakeRemote(t *testing.T) {
 	if res.Unrelated == nil {
 		t.Fatalf("take-remote carried no inventory to report the discard")
 	}
-	assertIDSet(t, "only-local (discarded)", res.Unrelated.OnlyLocal, []string{localIssueID})
+	assertIDSet(t, "only-local (discarded)", res.Unrelated.OnlyLocal, []string{localEpicID, localIssueID})
 	assertIDSet(t, "only-remote (kept)", res.Unrelated.OnlyRemote, []string{remoteIssueID})
 
 	// Local content now equals the remote: the remote issue is present, the local-only
@@ -218,7 +219,7 @@ func TestSyncResolveUnrelatedTakeLocal(t *testing.T) {
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
 	remoteIssueID := seedReconcileRemote(t, ctx, rootA, remoteURL)
-	localIssueID := forkUnrelatedClone(t, ctx, rootB, remoteURL)
+	localEpicID, localIssueID := forkUnrelatedClone(t, ctx, rootB, remoteURL)
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
@@ -237,11 +238,11 @@ func TestSyncResolveUnrelatedTakeLocal(t *testing.T) {
 		t.Fatalf("take-local carried no inventory to report the discard")
 	}
 	assertIDSet(t, "only-remote (discarded)", res.Unrelated.OnlyRemote, []string{remoteIssueID})
-	assertIDSet(t, "only-local (kept)", res.Unrelated.OnlyLocal, []string{localIssueID})
+	assertIDSet(t, "only-local (kept)", res.Unrelated.OnlyLocal, []string{localEpicID, localIssueID})
 
 	// Local content is the local backlog wholesale: the local issue survives, the
 	// remote-only issue is dropped.
-	assertLocalIssueIDs(t, ctx, syncB, []string{localIssueID})
+	assertLocalIssueIDs(t, ctx, syncB, []string{localEpicID, localIssueID})
 
 	// Local is now a fast-forwardable descendant of the remote head: not diverged,
 	// strictly ahead, so the push fast-forwards. [LAW:one-source-of-truth] the head is
@@ -273,7 +274,7 @@ func TestSyncResolveUnrelatedTakeLocal(t *testing.T) {
 	if recv.State != storage.SyncReceiveFastForwarded {
 		t.Fatalf("A receive state = %q, want fast_forwarded", recv.State)
 	}
-	assertLocalIssueIDs(t, ctx, syncA, []string{localIssueID})
+	assertLocalIssueIDs(t, ctx, syncA, []string{localEpicID, localIssueID})
 }
 
 // TestSyncResolveUnrelatedOwnerApprovalBindsForkAndSide pins the gate's binding
@@ -290,7 +291,7 @@ func TestSyncResolveUnrelatedOwnerApprovalBindsForkAndSide(t *testing.T) {
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
 	seedReconcileRemote(t, ctx, rootA, remoteURL)
-	localIssueID := forkUnrelatedClone(t, ctx, rootB, remoteURL)
+	_, localIssueID := forkUnrelatedClone(t, ctx, rootB, remoteURL)
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
@@ -369,12 +370,12 @@ func TestSyncReconcileCombineUnionsBothSides(t *testing.T) {
 	if res.Unrelated == nil {
 		t.Fatalf("combine carried no both-sides inventory to report the union")
 	}
-	assertIDSet(t, "kept only-local", res.Unrelated.OnlyLocal, []string{localOnly})
-	assertIDSet(t, "kept only-remote", res.Unrelated.OnlyRemote, []string{remoteOnly})
+	assertIDSet(t, "kept only-local", res.Unrelated.OnlyLocal, localOnly)
+	assertIDSet(t, "kept only-remote", res.Unrelated.OnlyRemote, remoteOnly)
 	assertIDSet(t, "field-merged on-both", res.Unrelated.OnBoth, []string{shared})
 
-	// Nothing dropped: local now holds the UNION of all three ids.
-	assertLocalIssueIDs(t, ctx, syncB, []string{localOnly, remoteOnly, shared})
+	// Nothing dropped: local now holds the UNION of every id from both sides.
+	assertLocalIssueIDs(t, ctx, syncB, slices.Concat(localOnly, remoteOnly, []string{shared}))
 
 	// The union is a fast-forwardable descendant of the remote head, so the push converges
 	// the remote onto it (the mirror of take-local, but keeping BOTH sides).
@@ -402,7 +403,7 @@ func TestSyncReconcileCombineUnionsBothSides(t *testing.T) {
 	if recv.State != storage.SyncReceiveFastForwarded {
 		t.Fatalf("A receive state = %q, want fast_forwarded", recv.State)
 	}
-	assertLocalIssueIDs(t, ctx, syncA, []string{localOnly, remoteOnly, shared})
+	assertLocalIssueIDs(t, ctx, syncA, slices.Concat(localOnly, remoteOnly, []string{shared}))
 }
 
 // TestSyncReconcileCombineHoldsAndFinalizesProse drives the ticket's per-issue-overlap
@@ -467,7 +468,7 @@ func TestSyncReconcileCombineHoldsAndFinalizesProse(t *testing.T) {
 		t.Fatalf("finalized combine state = %q, want %q", res.State, storage.SyncReconcileCombined)
 	}
 	// The union is present AND the shared id carries the agent's merged title — nothing dropped.
-	assertLocalIssueIDs(t, ctx, syncB, []string{localOnly, remoteOnly, shared})
+	assertLocalIssueIDs(t, ctx, syncB, slices.Concat(localOnly, remoteOnly, []string{shared}))
 	got := getIssueOrFatal(t, ctx, syncB, shared)
 	if got.Title != "merged A and B shared title" {
 		t.Fatalf("shared title after combine finalize = %q, want the agent's merged text", got.Title)
@@ -479,19 +480,24 @@ func TestSyncReconcileCombineHoldsAndFinalizesProse(t *testing.T) {
 // B (the local side, its own bootstrap root) gets a local-only issue, then A's shared issue
 // is planted verbatim — the one way independently-generated ids can genuinely collide (the
 // same logical ticket filed in both). sharedTitleOnB, when non-empty, overrides the planted
-// title so the shared id's free text diverges with no base. Returns (onlyLocalID,
-// onlyRemoteID, sharedID).
-func seedUnrelatedPairWithShared(t *testing.T, ctx context.Context, rootA, rootB, remoteURL, sharedTitleOnB string) (string, string, string) {
+// title so the shared id's free text diverges with no base. Each side's unique issues live
+// inside an epic of that side's own, which is unique to it too. Returns (onlyLocalIDs,
+// onlyRemoteIDs, sharedID).
+func seedUnrelatedPairWithShared(t *testing.T, ctx context.Context, rootA, rootB, remoteURL, sharedTitleOnB string) ([]string, []string, string) {
 	t.Helper()
 	stA, err := Open(ctx, rootA, "wsA")
 	if err != nil {
 		t.Fatalf("Open(A): %v", err)
 	}
-	remoteOnly, err := stA.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "remote-only", Topic: "topic", IssueType: "task"})
+	remoteEpic, err := stA.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "remote-epic", Topic: "topic", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(A remote-epic): %v", err)
+	}
+	remoteOnly, err := stA.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "remote-only", Topic: "topic", IssueType: "task", ParentID: remoteEpic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(A remote-only): %v", err)
 	}
-	shared, err := stA.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "shared", Topic: "topic", IssueType: "task"})
+	shared, err := stA.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "shared", Topic: "topic", IssueType: "task", ParentID: remoteEpic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(A shared): %v", err)
 	}
@@ -517,7 +523,11 @@ func seedUnrelatedPairWithShared(t *testing.T, ctx context.Context, rootA, rootB
 	if err != nil {
 		t.Fatalf("Open(B): %v", err)
 	}
-	localOnly, err := stB.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "local-only", Topic: "topic", IssueType: "task"})
+	localEpic, err := stB.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "local-epic", Topic: "topic", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(B local-epic): %v", err)
+	}
+	localOnly, err := stB.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "local-only", Topic: "topic", IssueType: "task", ParentID: localEpic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(B local-only): %v", err)
 	}
@@ -544,7 +554,7 @@ func seedUnrelatedPairWithShared(t *testing.T, ctx context.Context, rootA, rootB
 	if err := syncBSetup.Close(); err != nil {
 		t.Fatalf("Close(B setup): %v", err)
 	}
-	return localOnly.ID, remoteOnly.ID, shared.ID
+	return []string{localEpic.ID, localOnly.ID}, []string{remoteEpic.ID, remoteOnly.ID}, shared.ID
 }
 
 // TestSyncResolveUnrelatedRefusesSharedHistory proves take-one is scoped to unrelated
@@ -727,9 +737,10 @@ func TestSyncReconcileCombinePreservesFoldedProvenance(t *testing.T) {
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
 	remoteIssueID := seedReconcileRemote(t, ctx, rootA, remoteURL)
-	// B's folded side: three data commits with distinct messages — create,
-	// update, add label — so each one is individually identifiable on the spine.
-	localIssueID := forkUnrelatedClone(t, ctx, rootB, remoteURL)
+	// B's folded side: four data commits with distinct messages — plant the
+	// epic, create, update, add label — so each one is individually
+	// identifiable on the spine.
+	localEpicID, localIssueID := forkUnrelatedClone(t, ctx, rootB, remoteURL)
 	updateLocal(t, ctx, rootB, localIssueID, storage.UpdateIssueInput{Lane: strptr("fold-lane")})
 	addLabelLocal(t, ctx, rootB, localIssueID, "fold-label")
 
@@ -737,7 +748,7 @@ func TestSyncReconcileCombinePreservesFoldedProvenance(t *testing.T) {
 	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
-	foldedMessages := []string{"create issue", "apply update", "add label"}
+	foldedMessages := []string{forkEpicCommitMessage, "create issue", "apply update", "add label"}
 	originals := originalCommitsByMessage(t, ctx, syncB, foldedMessages...)
 
 	res, err := syncB.SyncReconcileCombine(ctx, "origin", "master")
@@ -751,7 +762,7 @@ func TestSyncReconcileCombinePreservesFoldedProvenance(t *testing.T) {
 		t.Fatalf("replayed provenance commits = %d, want %d", res.Replayed, len(foldedMessages))
 	}
 
-	// The spine: B's three data commits in original order under original
+	// The spine: B's four data commits in original order under original
 	// messages and timestamps, then the combine marker. B's bootstrap commits
 	// (init, migrations, workspace meta) project no backlog change onto the
 	// spine, so they land nothing.
@@ -765,7 +776,7 @@ func TestSyncReconcileCombinePreservesFoldedProvenance(t *testing.T) {
 
 	// Contents equal the union, and the spine fast-forward-pushes; the remote
 	// side converges onto it.
-	assertLocalIssueIDs(t, ctx, syncB, []string{localIssueID, remoteIssueID})
+	assertLocalIssueIDs(t, ctx, syncB, []string{localEpicID, localIssueID, remoteIssueID})
 	assertWorkingSetClean(t, ctx, syncB)
 	if _, err := syncB.SyncPush(ctx, "origin", "master", false, false); err != nil {
 		t.Fatalf("fast-forward SyncPush(B) after combine: %v", err)
@@ -782,7 +793,7 @@ func TestSyncReconcileCombinePreservesFoldedProvenance(t *testing.T) {
 	if recv.State != storage.SyncReceiveFastForwarded {
 		t.Fatalf("A receive state = %q, want fast_forwarded", recv.State)
 	}
-	assertLocalIssueIDs(t, ctx, syncA, []string{localIssueID, remoteIssueID})
+	assertLocalIssueIDs(t, ctx, syncA, []string{localEpicID, localIssueID, remoteIssueID})
 }
 
 // TestSyncResolveUnrelatedTakeLocalPreservesFoldedProvenance is the same
@@ -802,7 +813,7 @@ func TestSyncResolveUnrelatedTakeLocalPreservesFoldedProvenance(t *testing.T) {
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
 	remoteIssueID := seedReconcileRemote(t, ctx, rootA, remoteURL)
-	localIssueID := forkUnrelatedClone(t, ctx, rootB, remoteURL)
+	localEpicID, localIssueID := forkUnrelatedClone(t, ctx, rootB, remoteURL)
 	updateLocal(t, ctx, rootB, localIssueID, storage.UpdateIssueInput{Lane: strptr("fold-lane")})
 	addLabelLocal(t, ctx, rootB, localIssueID, "fold-label")
 
@@ -810,7 +821,7 @@ func TestSyncResolveUnrelatedTakeLocalPreservesFoldedProvenance(t *testing.T) {
 	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
-	foldedMessages := []string{"create issue", "apply update", "add label"}
+	foldedMessages := []string{forkEpicCommitMessage, "create issue", "apply update", "add label"}
 	originals := originalCommitsByMessage(t, ctx, syncB, foldedMessages...)
 
 	token := ownerApprovedTakeToken(t, ctx, syncB, "origin", "master", storage.TakeLocal)
@@ -838,7 +849,7 @@ func TestSyncResolveUnrelatedTakeLocalPreservesFoldedProvenance(t *testing.T) {
 
 	// Contents are local's backlog wholesale, and the spine fast-forward-pushes;
 	// the remote side converges onto it.
-	assertLocalIssueIDs(t, ctx, syncB, []string{localIssueID})
+	assertLocalIssueIDs(t, ctx, syncB, []string{localEpicID, localIssueID})
 	assertWorkingSetClean(t, ctx, syncB)
 	if _, err := syncB.SyncPush(ctx, "origin", "master", false, false); err != nil {
 		t.Fatalf("fast-forward SyncPush(B) after take-local: %v", err)
@@ -855,7 +866,7 @@ func TestSyncResolveUnrelatedTakeLocalPreservesFoldedProvenance(t *testing.T) {
 	if recv.State != storage.SyncReceiveFastForwarded {
 		t.Fatalf("A receive state = %q, want fast_forwarded", recv.State)
 	}
-	assertLocalIssueIDs(t, ctx, syncA, []string{localIssueID})
+	assertLocalIssueIDs(t, ctx, syncA, []string{localEpicID, localIssueID})
 }
 
 // assertFoldedSpine fails unless the replayed spine is exactly the folded
@@ -901,18 +912,38 @@ func addLabelLocal(t *testing.T, ctx context.Context, root, id, label string) {
 	}
 }
 
+// forkEpicCommitMessage is the message on the commit forkUnrelatedClone plants
+// its epic under.
+const forkEpicCommitMessage = "plant fork epic"
+
 // forkUnrelatedClone creates a store at root with its OWN bootstrap root (never
-// adopting the remote's history), seeds one local issue, points it at remoteURL,
-// and leaves it configured to fetch. Unlike adoptRemote, it never resets to the
-// remote head, so the store's history is disjoint from the remote's — the
-// unrelated-histories scenario. It returns the local-only issue's id.
-func forkUnrelatedClone(t *testing.T, ctx context.Context, root, remoteURL string) string {
+// adopting the remote's history), seeds one local epic with one issue inside
+// it, points it at remoteURL, and leaves it configured to fetch. Unlike
+// adoptRemote, it never resets to the remote head, so the store's history is
+// disjoint from the remote's — the unrelated-histories scenario. It returns
+// the local-only epic's id and the local-only issue's id.
+//
+// The epic is planted through the export replace under the commit message
+// forkEpicCommitMessage rather than created: the provenance tests identify
+// each of this store's data commits by its message, so the issue's "create
+// issue" has to stay the one commit that says so.
+func forkUnrelatedClone(t *testing.T, ctx context.Context, root, remoteURL string) (string, string) {
 	t.Helper()
 	st, err := Open(ctx, root, "ws")
 	if err != nil {
 		t.Fatalf("Open(fork %s): %v", root, err)
 	}
-	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "fork-local", Topic: "topic", IssueType: "task"})
+	export, err := st.Export(ctx)
+	if err != nil {
+		t.Fatalf("Export(fork): %v", err)
+	}
+	now := time.Now().UTC()
+	epic := model.Issue{ID: "test-fork-epic", Title: "fork-epic", IssueType: model.TypeEpic, Topic: "topic", CreatedAt: now, UpdatedAt: now}
+	export.Issues = append(export.Issues, epic)
+	if err := st.replaceFromExport(ctx, export, commitStamp{Message: forkEpicCommitMessage}); err != nil {
+		t.Fatalf("replaceFromExport(fork epic): %v", err)
+	}
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "fork-local", Topic: "topic", IssueType: "task", ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(fork): %v", err)
 	}
@@ -926,7 +957,7 @@ func forkUnrelatedClone(t *testing.T, ctx context.Context, root, remoteURL strin
 	if err := sync.Close(); err != nil {
 		t.Fatalf("Close(fork sync): %v", err)
 	}
-	return issue.ID
+	return epic.ID, issue.ID
 }
 
 // TestSyncReconcileCombineRecoversFromTransientFailureMidReplay pins the
@@ -973,7 +1004,7 @@ func TestSyncReconcileCombineRecoversFromTransientFailureMidReplay(t *testing.T)
 			remoteURL := "file://" + filepath.Join(base, "remote")
 
 			remoteIssueID := seedReconcileRemote(t, ctx, rootA, remoteURL)
-			localIssueID := forkUnrelatedClone(t, ctx, rootB, remoteURL)
+			localEpicID, localIssueID := forkUnrelatedClone(t, ctx, rootB, remoteURL)
 			updateLocal(t, ctx, rootB, localIssueID, storage.UpdateIssueInput{Lane: strptr("fold-lane")})
 
 			syncB := openSyncOrFatal(t, ctx, rootB)
@@ -981,7 +1012,7 @@ func TestSyncReconcileCombineRecoversFromTransientFailureMidReplay(t *testing.T)
 			if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
 				t.Fatalf("SyncFetch(B): %v", err)
 			}
-			foldedMessages := []string{"create issue", "apply update"}
+			foldedMessages := []string{forkEpicCommitMessage, "create issue", "apply update"}
 			originals := originalCommitsByMessage(t, ctx, syncB, foldedMessages...)
 
 			fires := 0
@@ -1014,7 +1045,7 @@ func TestSyncReconcileCombineRecoversFromTransientFailureMidReplay(t *testing.T)
 			assertLinearSpineToRemoteHead(t, ctx, syncB, res.RemoteHead)
 			spine := spineSince(t, ctx, syncB, res.RemoteHead)
 			assertFoldedSpine(t, spine, foldedMessages, originals, combineCommitMessage)
-			assertLocalIssueIDs(t, ctx, syncB, []string{localIssueID, remoteIssueID})
+			assertLocalIssueIDs(t, ctx, syncB, []string{localEpicID, localIssueID, remoteIssueID})
 			assertScratchBranchCleanedUp(t, ctx, syncB)
 			assertWorkingSetClean(t, ctx, syncB)
 		})

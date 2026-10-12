@@ -45,19 +45,26 @@ func TestListRelationColumns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(child): %v", err)
 	}
-	openBlocker, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: "Open blocker", Topic: "rel", IssueType: "task", Priority: 0})
+	// The blocking pairs live in a second epic, each row in a lane of its own,
+	// so `blocked` can only come from the dependency edge and never from a
+	// sibling ranked ahead in a shared lane.
+	other, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: "Other epic", Topic: "rel", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(other): %v", err)
+	}
+	openBlocker, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: "Open blocker", Topic: "rel", IssueType: "task", Priority: 0, ParentID: other.ID, Lane: "open-blocker"})
 	if err != nil {
 		t.Fatalf("CreateIssue(openBlocker): %v", err)
 	}
-	blockedByOpen, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: "Blocked by open", Topic: "rel", IssueType: "task", Priority: 0})
+	blockedByOpen, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: "Blocked by open", Topic: "rel", IssueType: "task", Priority: 0, ParentID: other.ID, Lane: "blocked-by-open"})
 	if err != nil {
 		t.Fatalf("CreateIssue(blockedByOpen): %v", err)
 	}
-	closedBlocker, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: "Closed blocker", Topic: "rel", IssueType: "task", Priority: 0})
+	closedBlocker, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: "Closed blocker", Topic: "rel", IssueType: "task", Priority: 0, ParentID: other.ID, Lane: "closed-blocker"})
 	if err != nil {
 		t.Fatalf("CreateIssue(closedBlocker): %v", err)
 	}
-	blockedByClosed, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: "Blocked by closed", Topic: "rel", IssueType: "task", Priority: 0})
+	blockedByClosed, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: "Blocked by closed", Topic: "rel", IssueType: "task", Priority: 0, ParentID: other.ID, Lane: "blocked-by-closed"})
 	if err != nil {
 		t.Fatalf("CreateIssue(blockedByClosed): %v", err)
 	}
@@ -86,10 +93,11 @@ func TestListRelationColumns(t *testing.T) {
 		wantParent string
 		wantBlocks string
 	}{
+		{epic.ID, "-", "-"}, // top-level: nothing above it
 		{child.ID, epic.ID, "-"},
-		{openBlocker.ID, "-", "-"},
-		{blockedByOpen.ID, "-", "blocked"},
-		{blockedByClosed.ID, "-", "-"}, // blocker is closed → not live → not blocked
+		{openBlocker.ID, other.ID, "-"},
+		{blockedByOpen.ID, other.ID, "blocked"},
+		{blockedByClosed.ID, other.ID, "-"}, // blocker is closed → not live → not blocked
 	}
 	for _, tc := range cases {
 		got := fieldsOf(lineForID(t, relOut.String(), tc.id))
@@ -165,11 +173,12 @@ func TestColumnSourceLadder(t *testing.T) {
 func TestListDerivedColumnsLoadsOnlyWhatIsProjected(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	blocker, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "gate", Title: "Blocker", Topic: "gate", IssueType: "task", Priority: 0})
+	epic := seedEpicRaw(t, ctx, ap, "Gate", "gate")
+	blocker, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "gate", Title: "Blocker", Topic: "gate", IssueType: "task", Priority: 0, ParentID: epic, Lane: "blocker"})
 	if err != nil {
 		t.Fatalf("CreateIssue(blocker): %v", err)
 	}
-	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "gate", Title: "X", Topic: "gate", IssueType: "task", Priority: 0})
+	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "gate", Title: "X", Topic: "gate", IssueType: "task", Priority: 0, ParentID: epic, Lane: "x"})
 	if err != nil {
 		t.Fatalf("CreateIssue: %v", err)
 	}

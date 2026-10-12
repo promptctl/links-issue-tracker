@@ -36,15 +36,21 @@ func TestBlockedColumnOnFrozenRows(t *testing.T) {
 		t.Run(freeze.name, func(t *testing.T) {
 			h := newReadyTestHarness(t)
 
+			// One epic, three lanes: each row is sequenced by nothing but its own
+			// dependency, so the cell reads the dependency and not a sibling
+			// ranked ahead of it in a shared lane.
+			epic := h.createIssue(storage.CreateIssueInput{
+				Prefix: "frozen", Title: "Frozen", Topic: "frozen", IssueType: "epic",
+			})
 			blocker := h.createIssue(storage.CreateIssueInput{
-				Prefix: "frozen", Title: "Blocker", Topic: "frozen", IssueType: "task", Description: "d",
+				Prefix: "frozen", Title: "Blocker", Topic: "frozen", IssueType: "task", Description: "d", ParentID: epic.ID, Lane: "blocker",
 			})
 			gated := h.createIssue(storage.CreateIssueInput{
-				Prefix: "frozen", Title: "Gated", Topic: "frozen", IssueType: "task", Description: "d",
+				Prefix: "frozen", Title: "Gated", Topic: "frozen", IssueType: "task", Description: "d", ParentID: epic.ID, Lane: "gated",
 			})
 			h.addDependency(gated.ID, blocker.ID)
 			ungated := h.createIssue(storage.CreateIssueInput{
-				Prefix: "frozen", Title: "Ungated", Topic: "frozen", IssueType: "task", Description: "d",
+				Prefix: "frozen", Title: "Ungated", Topic: "frozen", IssueType: "task", Description: "d", ParentID: epic.ID, Lane: "ungated",
 			})
 
 			cellOf := func(id string, args ...string) string {

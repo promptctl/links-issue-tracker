@@ -26,7 +26,7 @@ func listColumnsOutput(t *testing.T, expr string) (string, error) {
 	t.Helper()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	if _, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "col", Title: "T", Topic: "col", IssueType: "task", Priority: 0}); err != nil {
+	if _, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "col", Title: "T", Topic: "col", IssueType: "task", Priority: 0, ParentID: seedEpicRaw(t, ctx, ap, "Col", "col")}); err != nil {
 		t.Fatalf("CreateIssue: %v", err)
 	}
 	var out bytes.Buffer
@@ -135,7 +135,7 @@ func TestColumnsAcceptsCaseAndSpacing(t *testing.T) {
 func TestColumnsBlankExpressionKeepsDefaultProjection(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "dflt", Title: "T", Topic: "dflt", IssueType: "task", Priority: 0})
+	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "dflt", Title: "T", Topic: "dflt", IssueType: "task", Priority: 0, ParentID: seedEpicRaw(t, ctx, ap, "Dflt", "dflt")})
 	if err != nil {
 		t.Fatalf("CreateIssue: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestColumnsBlankExpressionKeepsDefaultProjection(t *testing.T) {
 func TestColumnsRankRendersTheIssueRank(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rank", Title: "T", Topic: "rank", IssueType: "task", Priority: 0})
+	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rank", Title: "T", Topic: "rank", IssueType: "task", Priority: 0, ParentID: seedEpicRaw(t, ctx, ap, "Rank", "rank")})
 	if err != nil {
 		t.Fatalf("CreateIssue: %v", err)
 	}

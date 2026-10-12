@@ -48,7 +48,13 @@ func TestMutationCommandsDoNotDeadlock(t *testing.T) {
 		t.Fatalf("Run(init --skip-hooks --skip-agents) error = %v", err)
 	}
 
-	newOut, err := runWithTimeout([]string{"new", "--title", "deadlock regression probe", "--topic", "deadlock", "--type", "task", "--priority", "1"}, 10*time.Second)
+	epicOut, err := runWithTimeout([]string{"new", "--type", "epic", "--title", "deadlock regression epic", "--topic", "deadlock"}, 10*time.Second)
+	if err != nil {
+		t.Fatalf("Run(new --type epic) error = %v", err)
+	}
+	epicID := extractTicketID(t, epicOut.String())
+
+	newOut, err := runWithTimeout([]string{"new", "--title", "deadlock regression probe", "--topic", "deadlock", "--type", "task", "--priority", "1", "--parent", epicID}, 10*time.Second)
 	if err != nil {
 		t.Fatalf("Run(new) error = %v", err)
 	}

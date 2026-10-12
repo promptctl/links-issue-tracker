@@ -180,7 +180,11 @@ func (e *Engine) addRelation(in storage.AddRelationInput) (model.Relation, error
 	if _, err := e.mustRecord(srcID); err != nil {
 		return model.Relation{}, err
 	}
-	if _, err := e.mustRecord(dstID); err != nil {
+	dst, err := e.mustRecord(dstID)
+	if err != nil {
+		return model.Relation{}, err
+	}
+	if err := rejectNonContainerParent(in.Type, dstID, dst.issueType); err != nil {
 		return model.Relation{}, err
 	}
 	if err := e.rejectCycle(in.Type, srcID, dstID); err != nil {
@@ -318,13 +322,46 @@ func (e *Engine) RemoveRelation(ctx context.Context, srcID, dstID string, relTyp
 	defer e.mu.Unlock()
 
 	srcID, dstID = relType.CanonicalEndpoints(srcID, dstID)
-	removed := e.dropRelations(func(rel model.Relation) bool {
-		return rel.SrcID == srcID && rel.DstID == dstID && rel.Type == relType
-	})
-	if removed == 0 {
+	if !e.hasRelation(srcID, dstID, relType) {
 		return storage.NotFoundError{Entity: "relation", ID: fmt.Sprintf("src=%s dst=%s type=%s", srcID, dstID, relType)}
 	}
+	// `lit dep rm --type parent-child` is the other door onto a detach, so it
+	// meets ClearParent's rule: a leaf keeps its parent. The edge exists, so
+	// its src does. [LAW:single-enforcer]
+	if err := e.rejectDetachingALeaf(relType, srcID); err != nil {
+		return err
+	}
+	e.dropRelations(func(rel model.Relation) bool {
+		return rel.SrcID == srcID && rel.DstID == dstID && rel.Type == relType
+	})
 	return nil
+}
+
+// rejectNonContainerParent refuses a parent-child edge onto a parent that is
+// not a container (storage.RejectParentThatIsNotAContainer). Only parent-child
+// carries the rule, which it states by being the one arm — the Dolt engine's
+// rejectNonContainerParentTx, rendered over a record.
+// [LAW:dataflow-not-control-flow] The one branch here is the domain's own enum.
+func rejectNonContainerParent(relType model.RelationType, parentID string, parentType model.IssueType) error {
+	if relType != model.RelParentChild {
+		return nil
+	}
+	return storage.RejectParentThatIsNotAContainer(parentID, parentType)
+}
+
+// rejectDetachingALeaf refuses removing a leaf's parent edge
+// (storage.RejectDetachingALeaf); any other relation type passes. The record
+// is read for its type alone, so this answers on a hierarchy holding a loop.
+// [LAW:dataflow-not-control-flow] The one branch here is the domain's own enum.
+func (e *Engine) rejectDetachingALeaf(relType model.RelationType, childID string) error {
+	if relType != model.RelParentChild {
+		return nil
+	}
+	child, err := e.mustRecord(childID)
+	if err != nil {
+		return err
+	}
+	return storage.RejectDetachingALeaf(childID, child.issueType)
 }
 
 // ListRelationsForIssue returns every edge incident to the issue in either
@@ -397,15 +434,17 @@ func (e *Engine) SetParent(ctx context.Context, in storage.SetParentInput) (mode
 	})
 }
 
-// ClearParent detaches a child from its parent. Clearing a child that has no
-// parent is an absence report, not a silent success: the caller asked to
-// remove an edge, and reporting removal of one that was never there would be
-// an answer-shaped void. [LAW:no-silent-failure]
+// ClearParent detaches a child from its parent. Only a container can be
+// detached: a leaf lives inside an epic (storage.RejectDetachingALeaf), so
+// the one thing this verb does is lift a nested epic to the top level.
+// Clearing a child that has no parent is an absence report, not a silent
+// success: the caller asked to remove an edge, and reporting removal of one
+// that was never there would be an answer-shaped void. [LAW:no-silent-failure]
 func (e *Engine) ClearParent(ctx context.Context, childID string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if _, err := e.mustRecord(childID); err != nil {
+	if err := e.rejectDetachingALeaf(model.RelParentChild, childID); err != nil {
 		return err
 	}
 	removed := e.dropRelations(func(rel model.Relation) bool {

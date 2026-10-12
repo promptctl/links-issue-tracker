@@ -61,14 +61,16 @@ func forkedBacklogs(t *testing.T, base string) (producer, consumer, producerID, 
 	runGit(t, producer, "commit", "-m", "seed")
 	runGit(t, producer, "push", "origin", "HEAD")
 	runCLIInDir(t, producer, "init", "--skip-hooks", "--skip-agents")
-	producerID = firstIssueID(t, runCLIInDir(t, producer, "new", "--title", "producer-ticket", "--topic", "demo", "--type", "task"))
+	producerEpic := firstIssueID(t, runCLIInDir(t, producer, "new", "--title", "producer-epic", "--topic", "demo", "--type", "epic"))
+	producerID = firstIssueID(t, runCLIInDir(t, producer, "new", "--title", "producer-ticket", "--topic", "demo", "--type", "task", "--parent", producerEpic))
 
 	consumer = filepath.Join(base, "bravo")
 	runGit(t, base, "clone", remote, "bravo")
 	runGit(t, consumer, "config", "user.email", "b@b.co")
 	runGit(t, consumer, "config", "user.name", "bravo")
 	runCLIInDir(t, consumer, "init", "--skip-hooks", "--skip-agents")
-	consumerID = firstIssueID(t, runCLIInDir(t, consumer, "new", "--title", "consumer-ticket", "--topic", "demo", "--type", "task"))
+	consumerEpic := firstIssueID(t, runCLIInDir(t, consumer, "new", "--title", "consumer-epic", "--topic", "demo", "--type", "epic"))
+	consumerID = firstIssueID(t, runCLIInDir(t, consumer, "new", "--title", "consumer-ticket", "--topic", "demo", "--type", "task", "--parent", consumerEpic))
 
 	runCLIInDir(t, producer, "sync", "push", "--set-upstream")
 	return producer, consumer, producerID, consumerID
@@ -163,11 +165,12 @@ func TestTakeRefusesWithoutOwnerApprovalEndToEnd(t *testing.T) {
 		t.Fatalf("approved take did not report taking local:\n%s", approved)
 	}
 	// The take reports its provenance replay with the exact count: the
-	// consumer's one create-issue data commit landed individually, not as one
-	// squash. The count makes the assertion falsifiable — a squash regression
-	// reports 0 and cannot satisfy it.
-	if !strings.Contains(approved, "1 local commit replayed with original messages and timestamps") {
-		t.Fatalf("approved take did not report the one-commit provenance replay:\n%s", approved)
+	// consumer's two create-issue data commits — its epic, then the ticket
+	// under it — landed individually, not as one squash. The count makes the
+	// assertion falsifiable — a squash regression reports 0 or 1 and cannot
+	// satisfy it.
+	if !strings.Contains(approved, "2 local commits replayed with original messages and timestamps") {
+		t.Fatalf("approved take did not report the two-commit provenance replay:\n%s", approved)
 	}
 	assertBacklogHolds(t, consumer, "consumer-ticket", true)
 	assertBacklogHolds(t, consumer, "producer-ticket", false)
@@ -195,7 +198,8 @@ func TestPushFailureNotifiesOwner(t *testing.T) {
 	runGit(t, repo, "commit", "-m", "seed")
 	runGit(t, repo, "push", "origin", "HEAD")
 	runCLIInDir(t, repo, "init", "--skip-hooks", "--skip-agents")
-	firstIssueID(t, runCLIInDir(t, repo, "new", "--title", "solo-ticket", "--topic", "demo", "--type", "task"))
+	soloEpic := firstIssueID(t, runCLIInDir(t, repo, "new", "--title", "solo-epic", "--topic", "demo", "--type", "epic"))
+	firstIssueID(t, runCLIInDir(t, repo, "new", "--title", "solo-ticket", "--topic", "demo", "--type", "task", "--parent", soloEpic))
 
 	sink := filepath.Join(base, "notifications")
 	writeOwnerNotifyProjectConfig(t, repo, sink)
