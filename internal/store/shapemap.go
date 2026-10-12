@@ -239,7 +239,7 @@ func buildTargetRegistry() map[TargetKey]targetField {
 		}
 	}
 	add(collIssues, TransformIdentity, required, "id", "title", "description", "priority", "issue_type")
-	add(collIssues, TransformIdentity, optional, "prompt", "assignee", "topic", "rank", "lane", "resolution", "redirect_target")
+	add(collIssues, TransformIdentity, optional, "prompt", "assignee", "topic", "rank", "lane", "resolution", "redirect_target", "follows_up")
 	add(collIssues, TransformTimestamp, required, "created_at", "updated_at", "closed_at")
 	add(collIssues, TransformTimestamp, optional, "archived_at", "deleted_at")
 	add(collIssues, TransformLegacyStatus, required, "status")
@@ -684,6 +684,7 @@ func buildIssue(rec map[string]any) (model.Issue, error) {
 		Topic:     cellString(rec["topic"]),
 		Assignee:  cellString(rec["assignee"]),
 		Rank:      cellString(rec["rank"]),
+		FollowsUp: cellString(rec["follows_up"]),
 		CreatedAt: cellTime(rec["created_at"]),
 		UpdatedAt: cellTime(rec["updated_at"]),
 	}

@@ -252,8 +252,8 @@ func writeExportTx(ctx context.Context, tx *sql.Tx, export model.Export) error {
 // It is NOT the only INSERT into issues: CreateIssue (store.go) writes a
 // creation-time row with a narrower column list of its own. A schema change
 // that adds a column has to be carried to both.
-const insertIssueStmt = `INSERT INTO issues(id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, lane, created_at, updated_at, closed_at, resolution, redirect_target, archived_at, deleted_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'misc'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+const insertIssueStmt = `INSERT INTO issues(id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, lane, follows_up, created_at, updated_at, closed_at, resolution, redirect_target, archived_at, deleted_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'misc'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // issueRowValues is the issues row an export issue becomes: every persisted
 // column, in insertIssueStmt's order, with the three normalizations the storage
@@ -298,7 +298,7 @@ func issueRowValues(issue model.Issue) []any {
 	archivedCol, deletedCol := retentionColumns(issue)
 	return []any{
 		issue.ID, issue.Title, issue.Description, nullableString(issue.Prompt), status, priority,
-		issue.IssueType, issueid.NormalizeSlug(issue.Topic), issue.AssigneeValue(), issue.Rank, issue.Lane,
+		issue.IssueType, issueid.NormalizeSlug(issue.Topic), issue.AssigneeValue(), issue.Rank, issue.Lane, nullableString(issue.FollowsUp),
 		issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), closedAt,
 		nullableResolution(issue.ResolutionValue()), nullableStringPtr(issue.RedirectTargetValue()),
 		archivedCol, deletedCol,

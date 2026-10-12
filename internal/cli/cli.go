@@ -306,16 +306,21 @@ func newLeaf() appLeaf {
 	}}
 }
 
-// runFollowup creates a child issue parented to --on, intended for the
-// capture-at-close moment when a closing agent has fresh context about
-// follow-up work the close surfaced. Topic inherits from the parent when
-// omitted; description defaults to a reference back to the parent.
+// followupLeaf files a follow-up of --on: the next piece of the same effort,
+// intended for the capture-at-close moment when a closing agent has fresh
+// context about work the close surfaced. The follow-up lands beside the ticket
+// it follows up — under that ticket's own parent, ranked among the same epic's
+// children — never under it: nesting new work inside finished work puts the
+// open follow-up out of its epic's rank order and turns the closed ticket into
+// an accidental container. The link to the ticket it follows up is the row's
+// FollowsUp, which `lit show` renders on both ends. Topic inherits from that
+// ticket when omitted; description defaults to a reference back to it.
 //
 // See design-docs/preparing-the-next-loop.md for the principle this
 // implements (capture-at-close affordances).
 func followupLeaf() appLeaf {
 	fs := newCobraFlagSet("followup")
-	on := fs.String("on", "", "Required parent issue ID (typically the just-closed ticket)")
+	on := fs.String("on", "", "Required id of the ticket this follows up (typically the just-closed ticket)")
 	title := fs.String("title", "", "Required follow-up title")
 	description := fs.String("description", "", "Optional description; defaults to a reference back to --on")
 	prompt := fs.String("prompt", "", "Optional reusable agent prompt for the follow-up")
@@ -331,22 +336,31 @@ func followupLeaf() appLeaf {
 	// written inside it. [LAW:one-source-of-truth]
 	usage := "usage: lit followup --on <id> --title <text> [--description <text>] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--top]"
 	return appLeaf{fs: fs, positionals: 0, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
-		parentID := strings.TrimSpace(*on)
+		onID := strings.TrimSpace(*on)
 		titleValue := strings.TrimSpace(*title)
-		if parentID == "" || titleValue == "" {
+		if onID == "" || titleValue == "" {
 			return UsageError{Message: usage}
 		}
-		parent, err := ap.Store.GetIssue(ctx, parentID)
+		// The detail, not the bare issue: the follow-up's parent is the
+		// followed-up ticket's parent, which only the hierarchy knows.
+		origin, err := ap.Store.GetIssueDetail(ctx, onID)
 		if err != nil {
 			return err
 		}
+		// A follow-up of a top-level ticket is itself top-level: the empty
+		// parent id is the same value the parentless case already files under.
+		// [LAW:dataflow-not-control-flow]
+		parentID := ""
+		if origin.Parent != nil {
+			parentID = origin.Parent.ID
+		}
 		resolvedTopic := strings.TrimSpace(*topic)
 		if resolvedTopic == "" {
-			resolvedTopic = parent.Topic
+			resolvedTopic = origin.Issue.Topic
 		}
 		resolvedDescription := strings.TrimSpace(*description)
 		if resolvedDescription == "" {
-			resolvedDescription = fmt.Sprintf("Follow-up surfaced at the close of %s: %s", parent.ID, parent.Title)
+			resolvedDescription = fmt.Sprintf("Follow-up surfaced at the close of %s: %s", origin.Issue.ID, origin.Issue.Title)
 		}
 		issueTypeValue, err := model.ParseIssueType(*issueType)
 		if err != nil {
@@ -366,7 +380,8 @@ func followupLeaf() appLeaf {
 			Prompt:      strings.TrimSpace(*prompt),
 			IssueType:   issueTypeValue,
 			Topic:       resolvedTopic,
-			ParentID:    parent.ID,
+			ParentID:    parentID,
+			FollowsUp:   origin.Issue.ID,
 			Priority:    priorityValue,
 			Assignee:    strings.TrimSpace(*assignee),
 			Labels:      splitCSV(*labels),

@@ -475,19 +475,6 @@ checkout already holds even when it is off the path (your own work in flight
 stays yours), and the cross-project counts in `lit stores --counts` stay
 whole-project.
 
-### `lit followup`
-
-```text
-lit followup --on <closed-id> --title <text> [--description <text>] [--topic <slug>]
-             [--type <t>] [--priority normal|urgent] [--assignee <a>] [--labels <csv>]
-             [--top]
-```
-
-Files a follow-up parented to a just-closed ticket — the way to capture work surfaced
-during a ticket while context is fresh. Inherits `--topic` from `--on` when omitted;
-the description defaults to a reference back to the source ticket. Like `lit new`, it
-appends to the bottom of the parent's children unless `--top` says otherwise.
-
 ### `lit rank`
 
 ```text

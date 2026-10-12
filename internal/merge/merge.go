@@ -229,6 +229,7 @@ type issueProjection struct {
 	Rank        string
 	Lane        string
 	Labels      []string
+	FollowsUp   string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 	Retention   model.Retention
@@ -257,6 +258,7 @@ func issueProjectionFrom(issue model.Issue) issueProjection {
 		Rank:         issue.Rank,
 		Lane:         issue.Lane,
 		Labels:       append([]string{}, issue.Labels...),
+		FollowsUp:    issue.FollowsUp,
 		CreatedAt:    issue.CreatedAt,
 		UpdatedAt:    issue.UpdatedAt,
 		Retention:    issue.Retention(),

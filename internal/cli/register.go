@@ -648,7 +648,7 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 			Run: r.wsFamilyCmd(syncFamily), Subcommands: syncSubcommands},
 		{Name: "new", Summary: "Create an issue", GroupID: "operations",
 			Run: r.appCmd(app.AccessWrite, newLeaf)},
-		{Name: "followup", Summary: "File a follow-up issue parented to a just-closed ticket", GroupID: "operations",
+		{Name: "followup", Summary: "File a follow-up beside a just-closed ticket, in its epic", GroupID: "operations",
 			Run: r.appCmd(app.AccessWrite, followupLeaf)},
 		// ready and queue are retired: next (one leaf) and backlog (the ranked
 		// queue, blocked inline) are the only named workable views. Kept as hidden,

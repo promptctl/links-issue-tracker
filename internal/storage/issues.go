@@ -59,6 +59,11 @@ type CreateIssueInput struct {
 	Assignee string
 	Lane     string
 	Labels   []string
+	// FollowsUp names the ticket the new issue follows up (`lit followup --on`);
+	// empty for an ordinary create. It is the only way the field is ever
+	// written: UpdateIssueInput does not carry it, so a follow-up's origin is
+	// fixed at birth. [LAW:types-are-the-program]
+	FollowsUp string
 	// Placement decides where the new issue lands in the rank order. Zero value
 	// (RankBottom) appends, so an authored batch keeps its order for free;
 	// callers filing a ticket ahead of the issues it will be ordered against —

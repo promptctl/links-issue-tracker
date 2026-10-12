@@ -22,7 +22,7 @@ From there the agent loop is:
 2. **`lit next`** — routes to one ticket. "Workable" is a computed predicate: open, a leaf, no unmet required fields, no open dependencies, no earlier open sibling in the same lane, not labeled `needs-design` or `external`. Ordering is priority (urgent first), then rank in tree order (an epic's leaves at the epic's place); a `focus` label scopes the rows to its prerequisite closure rather than reordering them.
 3. **`lit start <id>`** — takes the work. If another checkout actively holds the ticket's lane, start refuses without an explicit `--take` (or an interactive confirmation).
 4. Work happens in the repo; `lit update`, `lit comment`, `lit dep`, `lit label` record progress.
-5. **`lit done`** (success) or **`lit close --resolution …`** (any other ending); `lit followup` files a successor parented to what just closed.
+5. **`lit done`** (success) or **`lit close --resolution …`** (any other ending); `lit followup` files a successor beside what just closed, under the same parent, recording on the new row which ticket it follows up.
 
 At each of these moments, matching **workflow** definitions — markdown files with label/state/event matchers, overridable per project — inject their body text into the command's output. They are guidance, not automation: nothing executes.
 

@@ -96,8 +96,15 @@ type Issue struct {
 	// sub-sequences: same lane → sequenced by rank, different lanes → parallel.
 	// Empty string is the shared default lane (fully-sequential). Meaningful
 	// only within an epic; the readiness gate is what scopes it.
-	Lane      string    `json:"lane"`
-	Labels    []string  `json:"labels"`
+	Lane   string   `json:"lane"`
+	Labels []string `json:"labels"`
+	// FollowsUp is the id of the ticket this one was filed as a follow-up of
+	// (`lit followup --on`), or empty for every ticket that was not. It is a
+	// birth fact: written once at creation and absent from UpdateIssueInput, so
+	// no later write can move it. The hierarchy no longer carries this link —
+	// a follow-up is parented beside the ticket it follows up, not under it —
+	// so this field is the one record of it. [LAW:one-source-of-truth]
+	FollowsUp string    `json:"follows_up,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 
@@ -551,6 +558,7 @@ type issueJSON struct {
 	Rank        string                `json:"rank"`
 	Lane        string                `json:"lane"`
 	Labels      []string              `json:"labels"`
+	FollowsUp   string                `json:"follows_up,omitempty"`
 	CreatedAt   time.Time             `json:"created_at"`
 	UpdatedAt   time.Time             `json:"updated_at"`
 	ClosedAt    *time.Time            `json:"closed_at,omitempty"`
@@ -626,6 +634,7 @@ func (i Issue) MarshalJSON() ([]byte, error) {
 		Rank:           i.Rank,
 		Lane:           i.Lane,
 		Labels:         i.Labels,
+		FollowsUp:      i.FollowsUp,
 		CreatedAt:      i.CreatedAt,
 		UpdatedAt:      i.UpdatedAt,
 		ClosedAt:       closedAt,
@@ -653,6 +662,7 @@ func (i *Issue) UnmarshalJSON(data []byte) error {
 		Rank:        payload.Rank,
 		Lane:        payload.Lane,
 		Labels:      payload.Labels,
+		FollowsUp:   payload.FollowsUp,
 		CreatedAt:   payload.CreatedAt,
 		UpdatedAt:   payload.UpdatedAt,
 		retention:   lifecycle.RetentionFromTimestamps(payload.ArchivedAt, payload.DeletedAt),
@@ -859,8 +869,17 @@ type IssueDetail struct {
 	// graph. Related carries only manual peer links, so the two render
 	// independently: a redirect and a manual edge to the same ticket are two
 	// facts, shown as two groups. [LAW:one-source-of-truth]
-	RedirectTarget *Issue       `json:"redirect_target,omitempty"`
-	Events         []IssueEvent `json:"events"`
+	RedirectTarget *Issue `json:"redirect_target,omitempty"`
+	// FollowsUp is the ticket this one was filed as a follow-up of, hydrated
+	// from the issue's own FollowsUp id; FollowUps are the tickets filed as
+	// follow-ups of this one, the reverse reading of the same column. Neither
+	// is read from the relations graph: the link is a birth fact on the row,
+	// and the hierarchy places a follow-up beside its ticket, not under it.
+	// A followed-up ticket whose row has since been purged hydrates as absent.
+	// [LAW:one-source-of-truth]
+	FollowsUp *Issue       `json:"follows_up,omitempty"`
+	FollowUps []Issue      `json:"follow_ups"`
+	Events    []IssueEvent `json:"events"`
 }
 
 type Export struct {

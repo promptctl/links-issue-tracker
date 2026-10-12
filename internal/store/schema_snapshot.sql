@@ -67,6 +67,7 @@ CREATE TABLE `issues` (
   `lane` text NOT NULL DEFAULT '',
   `resolution` varchar(32),
   `redirect_target` varchar(191),
+  `follows_up` varchar(191),
   PRIMARY KEY (`id`),
   KEY `idx_issues_rank` (`item_rank`(191)),
   KEY `idx_issues_status_priority` (`status`,`priority`,`updated_at`),

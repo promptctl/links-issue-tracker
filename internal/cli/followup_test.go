@@ -10,52 +10,139 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-func TestRunFollowupParentsToClosedTicket(t *testing.T) {
+// TestRunFollowupFilesBesideTheClosedTicket pins where a follow-up lands: under
+// the closed ticket's own parent, as its sibling, with the link to the ticket
+// it follows up carried on the row rather than by the hierarchy.
+func TestRunFollowupFilesBesideTheClosedTicket(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	parent, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
+	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
+		Title: "Renderer", Topic: "renderer", IssueType: model.TypeEpic,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	closed, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
 		Title:     "Renderer cache invalidation",
 		Topic:     "renderer",
 		IssueType: "task",
 		Priority:  0,
+		ParentID:  epic.ID,
 	})
 	if err != nil {
-		t.Fatalf("CreateIssue(parent) error = %v", err)
+		t.Fatalf("CreateIssue(closed) error = %v", err)
 	}
-	if _, err := ap.Store.Apply(ctx, parent.ID, storage.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
+	if _, err := ap.Store.Apply(ctx, closed.ID, storage.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
 		t.Fatalf("StartIssue error = %v", err)
 	}
-	if _, err := ap.Store.Apply(ctx, parent.ID, storage.Change{Action: model.Done{}, Actor: "tester"}); err != nil {
+	if _, err := ap.Store.Apply(ctx, closed.ID, storage.Change{Action: model.Done{}, Actor: "tester"}); err != nil {
 		t.Fatalf("Apply(done) error = %v", err)
 	}
 
 	var stdout bytes.Buffer
 	if err := runFollowup(ctx, &stdout, ap, []string{
-		"--on", parent.ID,
+		"--on", closed.ID,
 		"--title", "Surface stale cache rows in doctor",
 	}); err != nil {
 		t.Fatalf("runFollowup() error = %v", err)
 	}
 
 	createdID := firstIssueID(t, stdout.String())
-	// The id hangs under the parent; the segment beneath it is a content hash,
-	// not a position, so nothing asserts its value. [LAW:behavior-not-structure]
-	if !strings.HasPrefix(createdID, parent.ID+".") {
-		t.Fatalf("created.ID = %q, want it to hang under %q", createdID, parent.ID)
+	// The id hangs under the epic, not under the closed ticket; the segment
+	// beneath it is a content hash, not a position, so nothing asserts its
+	// value. [LAW:behavior-not-structure]
+	if !strings.HasPrefix(createdID, epic.ID+".") {
+		t.Fatalf("created.ID = %q, want it to hang under the epic %q", createdID, epic.ID)
 	}
-	created, err := ap.Store.GetIssue(ctx, createdID)
+	detail, err := ap.Store.GetIssueDetail(ctx, createdID)
 	if err != nil {
-		t.Fatalf("GetIssue(%s) error = %v", createdID, err)
+		t.Fatalf("GetIssueDetail(%s) error = %v", createdID, err)
 	}
-	if created.Topic != parent.Topic {
-		t.Fatalf("created.Topic = %q, want inherited %q", created.Topic, parent.Topic)
+	created := detail.Issue
+	if detail.Parent == nil || detail.Parent.ID != epic.ID {
+		t.Fatalf("created parent = %v, want the epic %s", detail.Parent, epic.ID)
 	}
-	if !strings.Contains(created.Description, parent.ID) {
-		t.Fatalf("created.Description = %q, want reference to parent %q", created.Description, parent.ID)
+	if created.FollowsUp != closed.ID {
+		t.Fatalf("created.FollowsUp = %q, want %q", created.FollowsUp, closed.ID)
+	}
+	if created.Topic != closed.Topic {
+		t.Fatalf("created.Topic = %q, want inherited %q", created.Topic, closed.Topic)
+	}
+	if !strings.Contains(created.Description, closed.ID) {
+		t.Fatalf("created.Description = %q, want reference to %q", created.Description, closed.ID)
 	}
 	if created.IssueType != "task" {
 		t.Fatalf("created.IssueType = %q, want task", created.IssueType)
+	}
+	// The closed ticket did not become a container.
+	closedDetail, err := ap.Store.GetIssueDetail(ctx, closed.ID)
+	if err != nil {
+		t.Fatalf("GetIssueDetail(%s) error = %v", closed.ID, err)
+	}
+	if len(closedDetail.Children) != 0 {
+		t.Fatalf("closed ticket has children %v, want none", closedDetail.Children)
+	}
+	if len(closedDetail.FollowUps) != 1 || closedDetail.FollowUps[0].ID != createdID {
+		t.Fatalf("closed ticket follow-ups = %v, want [%s]", closedDetail.FollowUps, createdID)
+	}
+}
+
+// TestRunFollowupOnATopLevelTicketIsTopLevel pins the parentless case: a
+// follow-up of a ticket outside any epic lands beside it at the top level.
+func TestRunFollowupOnATopLevelTicketIsTopLevel(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+
+	closed, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
+		Title: "Loose end", Topic: "sync", IssueType: "task", Priority: 0,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue error = %v", err)
+	}
+	var stdout bytes.Buffer
+	if err := runFollowup(ctx, &stdout, ap, []string{"--on", closed.ID, "--title", "Tie it off"}); err != nil {
+		t.Fatalf("runFollowup() error = %v", err)
+	}
+	detail, err := ap.Store.GetIssueDetail(ctx, firstIssueID(t, stdout.String()))
+	if err != nil {
+		t.Fatalf("GetIssueDetail error = %v", err)
+	}
+	if detail.Parent != nil {
+		t.Fatalf("created parent = %s, want none", detail.Parent.ID)
+	}
+	if detail.Issue.FollowsUp != closed.ID {
+		t.Fatalf("created.FollowsUp = %q, want %q", detail.Issue.FollowsUp, closed.ID)
+	}
+}
+
+// TestShowRendersTheFollowUpLinkOnBothEnds pins the rendering: the follow-up
+// shows the ticket it follows up under `follows_up:`, and that ticket shows it
+// under `follow_ups:`; neither renders as parent or child.
+func TestShowRendersTheFollowUpLinkOnBothEnds(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	closed := seedOpenIssueRaw(t, ctx, ap, "Origin")
+
+	var sink bytes.Buffer
+	if err := runFollowup(ctx, &sink, ap, []string{"--on", closed, "--title", "Follow-up"}); err != nil {
+		t.Fatalf("runFollowup() error = %v", err)
+	}
+	followUp := firstIssueID(t, sink.String())
+
+	var out bytes.Buffer
+	if err := runShow(ctx, &out, ap, []string{followUp}); err != nil {
+		t.Fatalf("runShow(%s) error = %v", followUp, err)
+	}
+	if text := out.String(); !strings.Contains(text, "follows_up:\n- "+closed) || strings.Contains(text, "parent:") {
+		t.Fatalf("show of the follow-up wants a follows_up group naming %s and no parent; got:\n%s", closed, text)
+	}
+	out.Reset()
+	if err := runShow(ctx, &out, ap, []string{closed}); err != nil {
+		t.Fatalf("runShow(%s) error = %v", closed, err)
+	}
+	if text := out.String(); !strings.Contains(text, "follow_ups:\n- "+followUp) || strings.Contains(text, "children:") {
+		t.Fatalf("show of the origin wants a follow_ups group naming %s and no children; got:\n%s", followUp, text)
 	}
 }
 

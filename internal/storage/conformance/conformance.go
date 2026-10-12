@@ -191,6 +191,7 @@ var cases = []engineCase{
 	{"rank_verbs_refuse_a_deleted_issue", rankVerbsRefuseADeletedIssue},
 	{"a_container_lists_before_everything_inside_it", aContainerListsBeforeEverythingInsideIt},
 	{"close_redirects_to_a_canonical", closeRedirectsToCanonical},
+	{"follow_ups_link_both_ways", followUpsLinkBothWays},
 	{"comments_roundtrip", commentsRoundtrip},
 	{"labels_roundtrip", labelsRoundtrip},
 	{"relations_roundtrip", relationsRoundtrip},
@@ -1767,6 +1768,98 @@ func rankSetImposesOrder(t *testing.T, ctx context.Context, st storage.Store, cl
 	if result.Frame != storage.TopLevel {
 		t.Errorf("RankSet frame = %q, want the top level", result.Frame)
 	}
+}
+
+// followUpsLinkBothWays pins the follow-up link as a birth fact on the row:
+// a create that names the ticket it follows up reads it back, the detail of
+// each side hydrates the other (the followed-up ticket on the follow-up, every
+// follow-up on the ticket they follow up, in rank order), the create event
+// records which ticket it was filed on, and no later field write moves it. The
+// hierarchy is not consulted: the follow-up here is a sibling of the ticket it
+// follows up, under the same epic, exactly as `lit followup` files it.
+func followUpsLinkBothWays(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	origin := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "origin", Topic: "core", ParentID: epic.ID})
+	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first follow-up", Topic: "core", ParentID: epic.ID, FollowsUp: "  " + origin.ID + "  "})
+	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second follow-up", Topic: "core", ParentID: epic.ID, FollowsUp: origin.ID})
+
+	if first.FollowsUp != origin.ID {
+		t.Errorf("created FollowsUp = %q, want the trimmed %q", first.FollowsUp, origin.ID)
+	}
+	if got := mustGet(t, ctx, st, first.ID).FollowsUp; got != origin.ID {
+		t.Errorf("GetIssue FollowsUp = %q, want %q", got, origin.ID)
+	}
+	if got := mustGet(t, ctx, st, origin.ID).FollowsUp; got != "" {
+		t.Errorf("the followed-up ticket's own FollowsUp = %q, want none", got)
+	}
+
+	detail, err := st.GetIssueDetail(ctx, first.ID)
+	if err != nil {
+		t.Fatalf("GetIssueDetail(follow-up) error = %v", err)
+	}
+	if detail.FollowsUp == nil || detail.FollowsUp.ID != origin.ID {
+		t.Errorf("detail.FollowsUp = %v, want %s", detail.FollowsUp, origin.ID)
+	}
+	assertIssueIDs(t, "follow-ups of a follow-up", detail.FollowUps, nil)
+	// The follow-up sits beside the ticket it follows up, not under it.
+	if detail.Parent == nil || detail.Parent.ID != epic.ID {
+		t.Errorf("detail.Parent = %v, want the epic %s", detail.Parent, epic.ID)
+	}
+	originDetail, err := st.GetIssueDetail(ctx, origin.ID)
+	if err != nil {
+		t.Fatalf("GetIssueDetail(origin) error = %v", err)
+	}
+	assertIssueIDs(t, "follow-ups of the origin", originDetail.FollowUps, []string{first.ID, second.ID})
+	if originDetail.FollowsUp != nil {
+		t.Errorf("origin detail.FollowsUp = %v, want none", originDetail.FollowsUp)
+	}
+	assertIssueIDs(t, "children of the origin", originDetail.Children, nil)
+
+	// The create event is the one record of the origin in history.
+	events, err := st.ListEvents(ctx, first.ID)
+	if err != nil {
+		t.Fatalf("ListEvents(follow-up) error = %v", err)
+	}
+	var recorded bool
+	for _, event := range events {
+		for _, change := range event.Changes {
+			if event.Action == "created" && change.Field == "follows_up" && change.From == "" && change.To == origin.ID {
+				recorded = true
+			}
+		}
+	}
+	if !recorded {
+		t.Errorf("the create event does not record follows_up %q: %+v", origin.ID, events)
+	}
+
+	// A birth fact: a later field write leaves it where it was.
+	title := "retitled follow-up"
+	retitled, err := st.Apply(ctx, first.ID, storage.Change{Actor: "ada", Fields: storage.UpdateIssueInput{Title: &title}})
+	if err != nil {
+		t.Fatalf("Apply error = %v", err)
+	}
+	if retitled.FollowsUp != origin.ID {
+		t.Errorf("FollowsUp after a field write = %q, want %q", retitled.FollowsUp, origin.ID)
+	}
+
+	export, err := st.Export(ctx)
+	if err != nil {
+		t.Fatalf("Export error = %v", err)
+	}
+	var exported bool
+	for _, issue := range export.Issues {
+		if issue.ID == first.ID && issue.FollowsUp == origin.ID {
+			exported = true
+		}
+	}
+	if !exported {
+		t.Errorf("export does not carry follows_up for %s", first.ID)
+	}
+
+	// The link names a ticket that exists, as a parent must; a follows_up no
+	// row answers to is refused at the write, not stored and never rendered.
+	_, err = st.CreateIssue(ctx, storage.CreateIssueInput{Title: "dangling follow-up", Topic: "core", ParentID: epic.ID, FollowsUp: "core-nope"})
+	assertNotFound(t, err, "issue", "CreateIssue(FollowsUp names no issue)")
 }
 
 // closeRedirectsToCanonical pins the close payload as a whole: a redirecting

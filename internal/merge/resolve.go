@@ -112,6 +112,9 @@ func ResolveIssue(in SameEntity) IssueResolution {
 	merged.Lane = twoTier(r.hasBase, r.base.Lane, ours.Lane, theirs.Lane, r.tiebreak)
 	merged.Rank = twoTier(r.hasBase, r.base.Rank, ours.Rank, theirs.Rank, r.tiebreak)
 	merged.Labels = mergeLabelNames(r.hasBase, r.base.Labels, ours.Labels, theirs.Labels)
+	// A birth fact, so both sides normally agree; the two-tier rule covers the
+	// one way they differ, a side that predates the column and carries "".
+	merged.FollowsUp = twoTier(r.hasBase, r.base.FollowsUp, ours.FollowsUp, theirs.FollowsUp, r.tiebreak)
 
 	// [LAW:one-source-of-truth] id/created_at are immutable; the archive/delete
 	// timestamps are DERIVED, slaved to the resolved archive/delete state, never
