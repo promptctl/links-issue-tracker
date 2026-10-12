@@ -40,10 +40,10 @@ GPL-3.0) informs at the behavior level only and is never copied.
 
 These are settled. Do not reopen them in the design.
 
-1. **One repo, no server, git-native.** Ticket data lives in the code repo's
-   own git object database and syncs as git refs to the same remote the code
-   uses. The remote stays a dumb replicated store; all intelligence is
-   client-side. (Inherits access-control charter constraints 1–2.)
+1. **One repo, no server, git-native.** Ticket data lives in lit's own git
+   object database under the code repo's git common dir and syncs as git refs
+   to the same remote the code uses. The remote stays a dumb replicated store;
+   all intelligence is client-side. (Inherits access-control charter constraints 1–2.)
 2. **Writes are appends; state is a fold.** Every mutation is an immutable,
    content-addressed event. Current state is a deterministic pure function of
    the event set — same events, same backlog, on every machine, every time. No
@@ -56,9 +56,11 @@ These are settled. Do not reopen them in the design.
    in [budgets.md](budgets.md). Network transfer is excluded only where
    physics demands (first-clone download); network never sits on a command's
    foreground path.
-4. **Permissive licensing only.** No copyleft dependencies. Executing the
-   system `git` binary is acceptable; linked libraries must be permissive.
-   Where prior art is non-permissive, rewrite from behavior, never from code.
+4. **Permissive licensing only; no subprocesses.** No copyleft dependencies;
+   linked libraries must be permissive. lit reads and writes git objects and
+   refs in-process through such a library and never runs the `git` binary or
+   any other subprocess to do it. Where prior art is non-permissive, rewrite
+   from behavior, never from code.
 5. **Local enforcement stays; cross-machine conflicts resolve at the fold.**
    A machine validates its own writes against its own current fold exactly as
    strictly as today. Contradictions that only concurrent offline machines can
@@ -74,10 +76,14 @@ These are settled. Do not reopen them in the design.
    access-control layers and the user-defined hierarchy feature; retrofitting
    any of them is a fleet migration, so they ship in v1 even where v1 leaves
    them inert.
-7. **The audit log is complete.** Signed events are never truncated,
-   compacted away, or rewritten. Storage growth is monotone and bounded by
-   budget, not by deletion. Erasure of content is cryptographic (key
-   destruction), never physical.
+7. **The audit log is complete, except for purge.** Signed events are never
+   truncated, compacted away, or rewritten, with one exception: an explicit
+   purge permanently removes one ticket's own events, the way a git history
+   rewrite removes content, and that removal has to reach every store that
+   holds them. Purge never edits other tickets' events, so a mention of the
+   purged id elsewhere stays. Apart from purge, storage growth is monotone and
+   bounded by budget, not by deletion, and erasing content within a ticket is
+   cryptographic (key destruction), never physical.
 8. **No heartbeats, no liveness probes.** The standing owner ban applies to
    this store as to all of lit, mechanism-wide, storage and locking included
    (design-docs/work-claims.md records the ban).
@@ -91,6 +97,11 @@ These are settled. Do not reopen them in the design.
    superseded mechanism is deleted in the same campaign that replaces it. A
    store with two truths is a temporary state with a gate out, never a
    resting place.
+10. **lit touches git no more than the Dolt store does.** Locally, lit keeps
+    its data in its own storage under the git common dir and adds nothing to
+    the code repo's refs or object database. On the remote, lit's data lives
+    under its own refs and nowhere else. No git operation the developer runs
+    changes in behavior, output, or speed.
 
 ## Calibration
 
@@ -117,3 +128,6 @@ is a second thing to keep true.
 - 2026-08-25: charter written from the owner's directive, distilled from the
   design conversation that produced it; design.md and budgets.md first drafts
   alongside.
+- 2026-10-09: owner amendments: #1 and #10 keep lit's data out of the code
+  repo's refs and object database; #4 forbids running the `git` binary or any
+  subprocess; #7 admits purge.

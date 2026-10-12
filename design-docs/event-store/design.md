@@ -25,8 +25,8 @@ shipped state must still say so somewhere a reader will look.
 ## The shape in one paragraph
 
 Every lit mutation is an immutable, signed-slot, content-addressed **event**
-appended to the writing checkout's own git ref inside the code repo's object
-database. Nothing is ever modified or merged: state is a deterministic
+appended to the writing checkout's own git ref inside lit's own object
+database under the git common dir. Nothing is ever modified or merged: state is a deterministic
 **fold** over the union of all writers' events, computed locally, cached
 disposably, and identical on every machine that holds the same events. Sync is
 `git fetch`/`git push` of per-writer refs against the code repo's ordinary
@@ -141,8 +141,8 @@ package boundary.
 ## §store — git as the substrate
 status: destination
 
-Events live in the code repo's git object database under
-`$(git rev-parse --git-common-dir)`, the same shared location the Dolt store
+Events live in lit's own git object database under
+`$(git rev-parse --git-common-dir)`, never the code repo's, in the same shared location the Dolt store
 occupies today, so all worktrees of a clone see one store. Each checkout
 appends to exactly one ref — `refs/lit/log/<checkout-id>` — and no checkout
 ever writes another's ref (`INV:single-writer-ref`). The checkout-id is a
@@ -163,8 +163,10 @@ mistaken close — is corrected by appending the correcting event, exactly as a
 ledger corrects an entry. The temptation is git fluency itself: *"I'll just
 rewrite my ref and drop the bad commit, it's my ref."* Refuse it. A rewritten
 ref breaks every peer's fast-forward fetch, voids any signature chain over the
-sequence, and teaches the codebase that history is negotiable. There is one
-eraser in the whole design and it is cryptographic (§security-and-config).
+sequence, and teaches the codebase that history is negotiable. Content leaves
+the store in exactly two ways: purge removes one ticket's events entirely
+(charter #7), and cryptographic erasure destroys content within a ticket
+(§security-and-config).
 
 **Ref hygiene.** Writer refs are per-checkout, and checkouts die; the store
 prunes refs whose checkout the existing dead-checkout detection (work-claims
@@ -192,10 +194,9 @@ until its next mutation, which resumes from the anchor and durably restores
 the ref. Two survivors racing to sweep the same
 corpse is harmless: sweep events are idempotent facts the fold deduplicates,
 and each CAS delete has at most one winner — the loser no-ops.
-Loose objects from event bursts are packed on the same maintenance occasions
-git already runs; the budgets file carries the ceiling on what lit may add to
-the code repo's own `git status`/`git fetch` times, because the first place
-this design may not degrade is the developer's ordinary git experience.
+lit may not change the behavior, output, or speed of any
+git operation the developer runs (charter #10); the budgets file carries the
+check.
 
 **Remote filing** is the ordinary write path from a storeless machine: mint
 events, commit them parentless, push to a fresh uniquely-named ref under
@@ -381,9 +382,10 @@ remains the normative home for the layers themselves.
   enforcement section exists to prevent. Any fix must stay deterministic (a
   rule keyed to what a receiver happens to know would fold differently on
   different machines); see OPEN #6.
-- **Erasure is cryptographic.** An append-only replicated store has no
-  physical delete (`INV:append-only`, restated where it bites: even an owner
-  cannot recall pushed plaintext). Content that may ever need destroying is
+- **Erasure within a ticket is cryptographic.** Apart from purging a whole
+  ticket (charter #7), the store has no physical delete (`INV:append-only`,
+  restated where it bites: even an owner cannot recall one field's pushed
+  plaintext). Content that may ever need destroying is
   ciphertext whose key can be shredded — which moves the read layer's
   encrypted-by-default posture from good hygiene to the load-bearing erasure
   mechanism. The access-control design owns the key machinery.
