@@ -569,6 +569,16 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 		if err != nil {
 			return err
 		}
+		// The followed-up ticket must exist when the link is written, as the
+		// parent must: the column has no foreign key, so this is the one place
+		// a dangling follows_up is refused rather than stored and never shown.
+		// Retained rows pass — a follow-up of an archived ticket is still its
+		// follow-up. [LAW:single-enforcer] [LAW:no-silent-failure]
+		if issue.FollowsUp != "" {
+			if err := requireIssueExistsTx(ctx, tx, issue.FollowsUp); err != nil {
+				return err
+			}
+		}
 		prefix, err := issueid.NormalizeConfiguredPrefix(in.Prefix)
 		if err != nil {
 			return fmt.Errorf("normalize issue prefix: %w", err)

@@ -50,6 +50,15 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 			return model.Issue{}, err
 		}
 	}
+	// The followed-up ticket must exist when the link is written, as the
+	// parent must; a dangling follows_up is refused here, never stored.
+	// Retained records pass. [LAW:single-enforcer] [LAW:no-silent-failure]
+	followsUp := strings.TrimSpace(in.FollowsUp)
+	if followsUp != "" {
+		if _, err := e.mustRecord(followsUp); err != nil {
+			return model.Issue{}, err
+		}
+	}
 	prefix, err := issueid.NormalizeConfiguredPrefix(in.Prefix)
 	if err != nil {
 		return model.Issue{}, fmt.Errorf("normalize issue prefix: %w", err)
@@ -70,7 +79,7 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 		assignee:    strings.TrimSpace(in.Assignee),
 		lane:        strings.TrimSpace(in.Lane),
 		priority:    in.Priority,
-		followsUp:   strings.TrimSpace(in.FollowsUp),
+		followsUp:   followsUp,
 		createdAt:   now,
 		updatedAt:   now,
 		status:      model.StatusView{Value: model.StateOpen},

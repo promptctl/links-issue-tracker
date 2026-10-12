@@ -1855,6 +1855,11 @@ func followUpsLinkBothWays(t *testing.T, ctx context.Context, st storage.Store, 
 	if !exported {
 		t.Errorf("export does not carry follows_up for %s", first.ID)
 	}
+
+	// The link names a ticket that exists, as a parent must; a follows_up no
+	// row answers to is refused at the write, not stored and never rendered.
+	_, err = st.CreateIssue(ctx, storage.CreateIssueInput{Title: "dangling follow-up", Topic: "core", ParentID: epic.ID, FollowsUp: "core-nope"})
+	assertNotFound(t, err, "issue", "CreateIssue(FollowsUp names no issue)")
 }
 
 // closeRedirectsToCanonical pins the close payload as a whole: a redirecting

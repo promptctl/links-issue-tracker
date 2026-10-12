@@ -272,6 +272,7 @@ var issueFieldNames = map[string]func(model.Issue) string{
 	"labels":      func(i model.Issue) string { return strings.Join(i.Labels, ",") },
 	"rank":        func(i model.Issue) string { return i.Rank },
 	"lane":        func(i model.Issue) string { return i.Lane },
+	"follows_up":  func(i model.Issue) string { return i.FollowsUp },
 	"created_at":  func(i model.Issue) string { return i.CreatedAt.Format(time.RFC3339) },
 	"updated_at":  func(i model.Issue) string { return i.UpdatedAt.Format(time.RFC3339) },
 }

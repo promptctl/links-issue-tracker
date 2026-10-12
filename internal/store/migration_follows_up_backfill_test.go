@@ -85,6 +85,38 @@ func TestFollowsUpMigrationBackfill(t *testing.T) {
 	seedIssue("t-open", "task", "open")
 	seedIssue("t-c", "task", "open")
 	seedParent("t-c", "t-open")
+	// Shapes only restored data holds (relations.go, loadParentEdges), each of
+	// which has to leave the table with one row per child and no duplicate edge.
+	// t-fork has two closed-leaf parents in two epics: the lower id, t-l1, is
+	// recorded, t-fork moves into t-l1's epic, and the edge to t-l2 — finished
+	// work it was nested under — goes.
+	seedIssue("t-e1", "epic", nil)
+	seedIssue("t-l1", "task", "closed")
+	seedParent("t-l1", "t-e1")
+	seedIssue("t-e2", "epic", nil)
+	seedIssue("t-l2", "task", "closed")
+	seedParent("t-l2", "t-e2")
+	seedIssue("t-fork", "task", "open")
+	seedParent("t-fork", "t-l1")
+	seedParent("t-fork", "t-l2")
+	// t-dup sits under closed leaf t-l3 and, by a second edge, already under
+	// t-l3's epic: the move would land on the edge it holds, so the edge to the
+	// leaf is dropped instead and one parent remains.
+	seedIssue("t-e3", "epic", nil)
+	seedIssue("t-l3", "task", "closed")
+	seedParent("t-l3", "t-e3")
+	seedIssue("t-dup", "task", "open")
+	seedParent("t-dup", "t-l3")
+	seedParent("t-dup", "t-e3")
+	// t-cyc-a and t-cyc-b are closed leaves parented to each other, with t-f4
+	// under t-cyc-a: the climb never meets an open ancestor and ends at the
+	// depth cut, and every edge onto the finished pair goes.
+	seedIssue("t-cyc-a", "task", "closed")
+	seedIssue("t-cyc-b", "task", "closed")
+	seedParent("t-cyc-a", "t-cyc-b")
+	seedParent("t-cyc-b", "t-cyc-a")
+	seedIssue("t-f4", "task", "open")
+	seedParent("t-f4", "t-cyc-a")
 
 	if _, err := provider.UpTo(ctx, 6); err != nil {
 		t.Fatalf("UpTo(6) error = %v", err)
@@ -97,6 +129,11 @@ func TestFollowsUpMigrationBackfill(t *testing.T) {
 		"t-f3":     "t-mid",
 		"t-c":      "",
 		"t-closed": "",
+		"t-fork":   "t-l1",
+		"t-dup":    "t-l3",
+		"t-cyc-a":  "t-cyc-b",
+		"t-cyc-b":  "t-cyc-a",
+		"t-f4":     "t-cyc-a",
 	}
 	for id, want := range wantFollowsUp {
 		if got := readFollowsUp(t, ctx, st, id); got != want {
@@ -110,6 +147,11 @@ func TestFollowsUpMigrationBackfill(t *testing.T) {
 		"t-f3":     "",
 		"t-c":      "t-open",
 		"t-closed": "t-epic",
+		"t-fork":   "t-e1",
+		"t-dup":    "t-e3",
+		"t-cyc-a":  "",
+		"t-cyc-b":  "",
+		"t-f4":     "",
 	}
 	for id, want := range wantParent {
 		if got := readParent(t, ctx, st, id); got != want {
@@ -120,13 +162,19 @@ func TestFollowsUpMigrationBackfill(t *testing.T) {
 	if _, err := provider.DownTo(ctx, 5); err != nil {
 		t.Fatalf("DownTo(5) after backfill error = %v", err)
 	}
-	// Every follow-up is back under the ticket it follows up: the moved edge
-	// repointed, the deleted ones re-materialized. The controls are untouched.
+	// Every follow-up is back under the ticket it follows up, and under it
+	// alone: the two-parent children come back with the one edge the column
+	// names, the loss the Down contract states. The controls are untouched.
 	wantRestored := map[string]string{
 		"t-f1":     "t-closed",
 		"t-f2":     "t-top",
 		"t-mid":    "t-chain",
 		"t-f3":     "t-mid",
+		"t-fork":   "t-l1",
+		"t-dup":    "t-l3",
+		"t-cyc-a":  "t-cyc-b",
+		"t-cyc-b":  "t-cyc-a",
+		"t-f4":     "t-cyc-a",
 		"t-c":      "t-open",
 		"t-closed": "t-epic",
 	}
