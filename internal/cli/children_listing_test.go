@@ -14,15 +14,15 @@ import (
 // `lit children <id>` is `lit ls --parent <id>`: for every flag combination the
 // two surfaces print the same bytes. The cases are the ones an agent that learned
 // ls reaches for first — the output shapers and the status set — plus the
-// default. The fixture closes one child and nests a grandchild, so a surface
-// that ignored --status, or listed descendants instead of direct children,
-// prints a different row set than ls does.
+// default. The fixture closes one child and nests a grandchild under a nested
+// epic, so a surface that ignored --status, or listed descendants instead of
+// direct children, prints a different row set than ls does.
 // [LAW:behavior-not-structure] the assertion is the rendered output, not which
 // leaf ran.
 func TestChildrenIsLsWithAParent(t *testing.T) {
 	f := newEpicFixture(t, "Listing epic", "# Why\nthe plan")
 	first := f.addChild("First child")
-	second := f.addChild("Second child")
+	second := f.addEpicChild("Second child")
 	f.transition(first, model.Done{})
 	grandchild, err := f.ap.Store.CreateIssue(f.ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: "Grandchild", Topic: "epic-view", IssueType: "task", ParentID: second,
@@ -166,7 +166,7 @@ func TestListingRefusesAnEmptyParent(t *testing.T) {
 func TestLsRepeatedParentIsAUnion(t *testing.T) {
 	f := newEpicFixture(t, "Listing epic", "# Why\nthe plan")
 	first := f.addChild("First child")
-	second := f.addChild("Second child")
+	second := f.addEpicChild("Second child")
 	grandchild, err := f.ap.Store.CreateIssue(f.ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: "Grandchild", Topic: "epic-view", IssueType: "task", ParentID: second,
 	})

@@ -58,6 +58,20 @@ func (f epicFixture) addChild(title string) string {
 // machine are two axes of one lifecycle, and the store applies both through one
 // Apply. Taking model.Action rather than one sealed subset keeps the fixture from
 // growing a near-identical twin per axis. [LAW:one-type-per-behavior]
+// addEpicChild nests an epic inside the fixture's epic: the one child shape
+// that can itself hold children, since only an epic contains tickets.
+func (f epicFixture) addEpicChild(title string) string {
+	f.t.Helper()
+	child, err := f.ap.Store.CreateIssue(f.ctx, storage.CreateIssueInput{
+		Prefix: "test", Title: title, Topic: "epic-view", IssueType: "epic", Priority: 0, ParentID: f.epicID,
+		Placement: storage.RankBottom,
+	})
+	if err != nil {
+		f.t.Fatalf("CreateIssue(epic child %q) error = %v", title, err)
+	}
+	return child.ID
+}
+
 func (f epicFixture) transition(id string, action model.Action) {
 	f.t.Helper()
 	if _, err := f.ap.Store.Apply(f.ctx, id, storage.Change{Action: action, Actor: "test"}); err != nil {
