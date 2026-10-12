@@ -619,24 +619,25 @@ else ready.
   breadcrumb (`cli.go`). Plus the mutation staleness banner from
   `runWithApp` (§1.13).
 
-### 2.2 `lit followup` — File a follow-up parented to a just-closed ticket
+### 2.2 `lit followup` — File a follow-up beside a just-closed ticket, in its epic
 
 - Registration `register.go`, `app.AccessWrite`. Handler `followupLeaf`
   (`cli.go`).
-- Flags (`cli.go`): `--on` (string, `""`, "Required parent issue ID
-  (typically the just-closed ticket)"), `--title` (required), `--description`,
+- Flags (`cli.go`): `--on` (string, `""`, "Required id of the ticket this
+  follows up (typically the just-closed ticket)"), `--title` (required), `--description`,
   `--prompt`, `--type` (default `task`), `--topic`, `--priority` (default 0),
   `--assignee`, `--labels`, `--top`. No `--parent`, no `--lane`.
 - Refusal: blank `--on` or blank `--title` (after trim) →
   `UsageError{"usage: lit followup --on <id> --title <text> [--description <text>] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--top]"}`
   → exit 2 (`cli.go`).
-- Reads the parent via `GetIssue(parentID)`; a missing parent is not-found → exit 4
+- Reads the `--on` ticket via `GetIssueDetail(onID)`; a missing ticket is not-found → exit 4
   (`cli.go`).
-- Defaults derived from the parent: blank `--topic` inherits `parent.Topic`
+- Defaults derived from the `--on` ticket: blank `--topic` inherits its `Topic`
   (`cli.go`); blank `--description` becomes
-  `"Follow-up surfaced at the close of <parent.ID>: <parent.Title>"`
+  `"Follow-up surfaced at the close of <origin.Issue.ID>: <origin.Issue.Title>"`
   (`cli.go`).
-- Creates with `ParentID = parent.ID` (`cli.go`), dispatches
+- Creates with `ParentID` = the `--on` ticket's parent id (`""` when it has
+  none) and `FollowsUp = origin.Issue.ID` (`cli.go`), dispatches
   `EventTicketCreated`, prints the summary line, emits breadcrumb `new`
   (`cli.go`).
 - Surplus positionals refused by `refuseSurplusPositionals` (`register.go`),

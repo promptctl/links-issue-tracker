@@ -21,6 +21,7 @@ An issue carries these persisted fields (`internal/model/model.go`):
 | `rank` | string | fractional-index ordering key; `""` means unranked; see [Ranking](#ranking) |
 | `lane` | string | partitions an epic's children into parallel sequences; see [Lanes](#lanes) |
 | `labels` | []string | normalized lowercase; see [Labels](#labels) |
+| `follows_up` | string | id of the ticket this one was filed as a follow-up of (`lit followup --on`); a birth fact, set at creation and not carried by `UpdateIssueInput`; omitted from the wire when empty (`model.go`) |
 | `created_at`, `updated_at` | timestamp | |
 | status fields | | `status`, `closed_at`, `resolution`, `redirect_target` — present on the wire only for non-epics; see [Status lifecycle](#the-status-lifecycle) |
 | retention fields | | `archived_at`, `deleted_at` — the wire encoding of the retention axis; see [Retention](#the-retention-axis) |

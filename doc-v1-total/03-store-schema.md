@@ -54,7 +54,7 @@ Both are zero-byte kernel flocks with **no** stale/PID/mtime heuristics — proc
 
 ### Producers and pinning
 
-Exactly four producers of live DDL exist: the goose baseline migration `00001_baseline.sql` (v1), goose migrations v2–v5 (`add_lane`, `add_resolution`, `add_redirect_target`, `add_event_attribution`), the pre-goose reconciler (`schema_reconcile.go`), and the quarantine-table bootstrap (`migration_runner.go`) — plus goose's own `goose_db_version` bookkeeping table. The baseline file is **byte-frozen** by a SHA-256 canary test (`e86c1aa3…ad1fbb`); no schema hash is stored in the database — the recorded version is the integer in `goose_db_version` plus a `producer_binary_version` string in `meta`. The converged schema is pinned as a byte-compared `SHOW CREATE TABLE` golden file (`schema_snapshot.sql`), regenerated only via a test flag; the dump enumerates live tables, so a leftover table is drift.
+Exactly four producers of live DDL exist: the goose baseline migration `00001_baseline.sql` (v1), goose migrations v2–v6 (`add_lane`, `add_resolution`, `add_redirect_target`, `add_event_attribution`, `add_follows_up`), the pre-goose reconciler (`schema_reconcile.go`), and the quarantine-table bootstrap (`migration_runner.go`) — plus goose's own `goose_db_version` bookkeeping table. The baseline file is **byte-frozen** by a SHA-256 canary test (`e86c1aa3…ad1fbb`); no schema hash is stored in the database — the recorded version is the integer in `goose_db_version` plus a `producer_binary_version` string in `meta`. The converged schema is pinned as a byte-compared `SHOW CREATE TABLE` golden file (`schema_snapshot.sql`), regenerated only via a test flag; the dump enumerates live tables, so a leftover table is drift.
 
 All application tables are InnoDB, `utf8mb4_0900_bin`, no `AUTO_INCREMENT` anywhere except `goose_db_version.id`.
 
@@ -78,6 +78,7 @@ Nine tables. `issues` (`schema_snapshot.sql`):
 | `lane` | TEXT | NOT NULL | `''` | v2 |
 | `resolution` | VARCHAR(32) | NULL | — | v3 |
 | `redirect_target` | VARCHAR(191) | NULL | — | v4 |
+| `follows_up` | VARCHAR(191) | NULL | — | v6 |
 
 Timestamps are **strings** (RFC3339Nano), parsed at one boundary (`scanTime`, `store.go`). Indexes: `idx_issues_rank (item_rank(191))`, `idx_issues_status_priority (status, priority, updated_at)`. Five named CHECK constraints: status is NULL exactly for epics and otherwise in (`open`,`in_progress`,`closed`); priority in [0,1]; type in the five-type set; resolution NULL or in the four-resolution set; `redirect_target` non-NULL only when resolution is `duplicate` or `superseded`. `redirect_target` deliberately has **no** foreign key.
 
@@ -108,7 +109,7 @@ Each step is gated by an `information_schema` probe (table/index/column existenc
 
 ## Creating issues
 
-`CreateIssue` (`store.go`) validates before the transaction: title required (trimmed non-empty); type defaults to `task`; labels canonicalized; topic normalized (required). Inside one `create issue` mutation: the parent (if given) must exist; the workspace prefix is normalized; the ID is minted; the rank is placed; the row is inserted (`closed_at` literal NULL; `resolution`/`redirect_target` not in the insert list); a `parent-child` edge is written for a parent; labels are replaced; a `created` event is recorded (reason `issue created`, actor `links` — a hardcoded literal that also signs the parent edge and initial labels); ranks are smoothed if needed. The returned issue is the in-memory value, not a re-read. Leaves store `status='open'`; containers store NULL (enforced by the CHECK).
+`CreateIssue` (`store.go`) validates before the transaction: title required (trimmed non-empty); type defaults to `task`; labels canonicalized; topic normalized (required). Inside one `create issue` mutation: the parent (if given) must exist; the workspace prefix is normalized; the ID is minted; the rank is placed; the row is inserted (`closed_at` literal NULL; `follows_up` from the input, NULL when empty; `resolution`/`redirect_target` not in the insert list); a `parent-child` edge is written for a parent; labels are replaced; a `created` event is recorded (reason `issue created`, actor `links` — a hardcoded literal that also signs the parent edge and initial labels); ranks are smoothed if needed. The returned issue is the in-memory value, not a re-read. Leaves store `status='open'`; containers store NULL (enforced by the CHECK).
 
 ### ID minting
 

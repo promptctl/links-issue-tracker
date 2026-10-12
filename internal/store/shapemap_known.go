@@ -208,6 +208,7 @@ var knownSourceColumns = map[string]map[string]TargetKey{
 		"closed_at":       "issues.closed_at",
 		"resolution":      "issues.resolution",
 		"redirect_target": "issues.redirect_target",
+		"follows_up":      "issues.follows_up",
 		"archived_at":     "issues.archived_at",
 		"deleted_at":      "issues.deleted_at",
 		"item_rank":       "issues.rank", // v1 name

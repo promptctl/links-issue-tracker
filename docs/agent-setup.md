@@ -119,7 +119,6 @@ Other commands you'll need:
 ```sh
 lit new --title "..." --topic <slug> --type task|bug|feature|chore|epic [--parent <id>]
 lit close <id>            # close without finishing (wontfix / obsolete / duplicate)
-lit followup --on <closed-id> --title "..."   # capture surfaced work while context is fresh
 lit doctor [--fix]        # health check; run --fix yourself before escalating any error
 ```
 

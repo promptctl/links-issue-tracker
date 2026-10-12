@@ -70,6 +70,7 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 		assignee:    strings.TrimSpace(in.Assignee),
 		lane:        strings.TrimSpace(in.Lane),
 		priority:    in.Priority,
+		followsUp:   strings.TrimSpace(in.FollowsUp),
 		createdAt:   now,
 		updatedAt:   now,
 		status:      model.StatusView{Value: model.StateOpen},
@@ -96,6 +97,11 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 	changes := []model.FieldChange{}
 	if !issueType.IsContainer() {
 		changes = append(changes, model.FieldChange{Field: "status", From: "", To: string(model.StateOpen)})
+	}
+	// A follow-up's origin is a birth fact no later event can record, so the
+	// create event carries it, as the Dolt engine's does. [LAW:nothing-unseen]
+	if rec.followsUp != "" {
+		changes = append(changes, model.FieldChange{Field: "follows_up", From: "", To: rec.followsUp})
 	}
 	e.recordEvent(id, eventSpec{action: "created", reason: "issue created", actor: createdBy, changes: changes}, now)
 
@@ -292,6 +298,29 @@ func (e *Engine) GetIssueDetail(ctx context.Context, id string) (model.IssueDeta
 			redirectTarget = &hydrated
 		}
 	}
+	// Both readings of follows_up hydrate from the record, never from the
+	// graph; a followed-up ticket whose record is gone hydrates as absent.
+	// [LAW:one-source-of-truth]
+	var followsUp *model.Issue
+	if rec, ok := e.issues[issue.FollowsUp]; ok {
+		hydrated, err := e.hydrate(rec, pos)
+		if err != nil {
+			return model.IssueDetail{}, err
+		}
+		followsUp = &hydrated
+	}
+	followUps := []model.Issue{}
+	for _, rec := range e.issues {
+		if rec.followsUp != id {
+			continue
+		}
+		hydrated, err := e.hydrate(rec, pos)
+		if err != nil {
+			return model.IssueDetail{}, err
+		}
+		followUps = append(followUps, hydrated)
+	}
+	ancestry.Sort(followUps)
 	return model.IssueDetail{
 		Issue:          issue,
 		Relations:      relations,
@@ -304,6 +333,8 @@ func (e *Engine) GetIssueDetail(ctx context.Context, id string) (model.IssueDeta
 		Parent:         structural.Parent,
 		Related:        related,
 		RedirectTarget: redirectTarget,
+		FollowsUp:      followsUp,
+		FollowUps:      followUps,
 	}, nil
 }
 

@@ -555,6 +555,7 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 		Lane:        strings.TrimSpace(in.Lane),
 		Labels:      labels,
 		Assignee:    strings.TrimSpace(in.Assignee),
+		FollowsUp:   strings.TrimSpace(in.FollowsUp),
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
@@ -582,10 +583,10 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 		}
 		archivedCol, deletedCol := retentionColumns(issue)
 		if _, err := tx.ExecContext(ctx, `INSERT INTO issues(
-			id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, lane, created_at, updated_at, closed_at, archived_at, deleted_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+			id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, lane, follows_up, created_at, updated_at, closed_at, archived_at, deleted_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
 			issue.ID, issue.Title, issue.Description, nullableString(issue.Prompt), statusForStorage(issue), issue.Priority, issue.IssueType, issue.Topic,
-			issue.AssigneeValue(), issue.Rank, issue.Lane, issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), archivedCol, deletedCol); err != nil {
+			issue.AssigneeValue(), issue.Rank, issue.Lane, nullableString(issue.FollowsUp), issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), archivedCol, deletedCol); err != nil {
 			return fmt.Errorf("insert issue: %w", err)
 		}
 		if parentID != "" {
@@ -618,6 +619,12 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 		createChanges := []model.FieldChange{}
 		if !issue.IssueType.IsContainer() {
 			createChanges = append(createChanges, model.FieldChange{Field: "status", From: "", To: "open"})
+		}
+		// A follow-up's origin is a birth fact no later event can record, so
+		// the create event carries it: `lit history` shows which ticket this
+		// one was filed on. [LAW:nothing-unseen]
+		if issue.FollowsUp != "" {
+			createChanges = append(createChanges, model.FieldChange{Field: "follows_up", From: "", To: issue.FollowsUp})
 		}
 		if err := s.recordEvent(ctx, tx, issue.ID, "created", "issue created", createdBy, createChanges); err != nil {
 			return err
@@ -1036,6 +1043,17 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 	if target := issue.RedirectTargetValue(); target != nil && !slices.Contains(relatedIDs, *target) {
 		relatedIDs = append(relatedIDs, *target)
 	}
+	// The follow-up link in both directions joins the same batch: the ticket
+	// this one follows up, and every ticket filed as a follow-up of this one.
+	followUpIDs, err := s.followUpIDsOf(ctx, id)
+	if err != nil {
+		return model.IssueDetail{}, err
+	}
+	for _, other := range append(followUpIDs, issue.FollowsUp) {
+		if other != "" && !slices.Contains(relatedIDs, other) {
+			relatedIDs = append(relatedIDs, other)
+		}
+	}
 	relatedByID, err := s.getIssuesByIDs(ctx, relatedIDs)
 	if err != nil {
 		return model.IssueDetail{}, err
@@ -1078,6 +1096,20 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 		}
 	}
 	related := relatedFrom(id, relations, relatedByID, ancestry)
+	// Both readings of follows_up hydrate from the row, never from the graph;
+	// a followed-up ticket whose row has vanished hydrates as absent, matching
+	// getIssuesByIDs' hole-skipping contract. [LAW:one-source-of-truth]
+	var followsUp *model.Issue
+	if hydrated, ok := relatedByID[issue.FollowsUp]; ok {
+		followsUp = &hydrated
+	}
+	followUps := []model.Issue{}
+	for _, other := range followUpIDs {
+		if hydrated, ok := relatedByID[other]; ok {
+			followUps = append(followUps, hydrated)
+		}
+	}
+	ancestry.Sort(followUps)
 	detail := model.IssueDetail{
 		Issue:          issue,
 		Relations:      relations,
@@ -1090,8 +1122,21 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 		Parent:         structural.Parent,
 		Related:        related,
 		RedirectTarget: redirectTarget,
+		FollowsUp:      followsUp,
+		FollowUps:      followUps,
 	}
 	return detail, nil
+}
+
+// followUpIDsOf returns the ids of every ticket filed as a follow-up of
+// focalID — the reverse reading of issues.follows_up. Every retention state,
+// as the column records it: an archived follow-up is still a follow-up.
+func (s *Store) followUpIDsOf(ctx context.Context, focalID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM issues WHERE follows_up = ?`, focalID)
+	if err != nil {
+		return nil, fmt.Errorf("list follow-ups of %s: %w", focalID, err)
+	}
+	return scanIDColumn(rows)
 }
 
 // collectRelatedIssueIDs returns every distinct counterparty id referenced
@@ -2264,6 +2309,7 @@ type partialIssue struct {
 	Rank        string
 	Lane        string
 	Labels      []string
+	FollowsUp   string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 	Retention   model.Retention
@@ -2312,7 +2358,7 @@ func nextRankForPlacement(ctx context.Context, tx *sql.Tx, p storage.RankPlaceme
 var issueColumns = []string{
 	"id", "title", "description", "agent_prompt", "status", "priority",
 	"issue_type", "topic", "assignee", "item_rank", "lane", "created_at",
-	"updated_at", "closed_at", "resolution", "redirect_target", "archived_at", "deleted_at",
+	"updated_at", "closed_at", "resolution", "redirect_target", "follows_up", "archived_at", "deleted_at",
 }
 
 // issueProjection renders issueColumns as a SELECT list. A non-empty alias
@@ -2346,11 +2392,12 @@ func scanIssue(row issueScanner) (issueRow, error) {
 	var status sql.NullString
 	var assignee string
 	var createdAt, updatedAt string
-	var closedAt, resolution, redirectTarget, archivedAt, deletedAt sql.NullString
-	if err := row.Scan(&issue.ID, &issue.Title, &issue.Description, &prompt, &status, &issue.Priority, &issue.IssueType, &issue.Topic, &assignee, &issue.Rank, &issue.Lane, &createdAt, &updatedAt, &closedAt, &resolution, &redirectTarget, &archivedAt, &deletedAt); err != nil {
+	var closedAt, resolution, redirectTarget, followsUp, archivedAt, deletedAt sql.NullString
+	if err := row.Scan(&issue.ID, &issue.Title, &issue.Description, &prompt, &status, &issue.Priority, &issue.IssueType, &issue.Topic, &assignee, &issue.Rank, &issue.Lane, &createdAt, &updatedAt, &closedAt, &resolution, &redirectTarget, &followsUp, &archivedAt, &deletedAt); err != nil {
 		return issueRow{}, err
 	}
 	issue.Prompt = prompt.String
+	issue.FollowsUp = followsUp.String
 	return parsedIssueRow(issue, status, assignee, createdAt, updatedAt, closedAt, resolution, redirectTarget, archivedAt, deletedAt)
 }
 
@@ -2361,11 +2408,12 @@ func scanIssueWithParent(row issueScanner) (string, issueRow, error) {
 	var status sql.NullString
 	var assignee string
 	var createdAt, updatedAt string
-	var closedAt, resolution, redirectTarget, archivedAt, deletedAt sql.NullString
-	if err := row.Scan(&parentID, &issue.ID, &issue.Title, &issue.Description, &prompt, &status, &issue.Priority, &issue.IssueType, &issue.Topic, &assignee, &issue.Rank, &issue.Lane, &createdAt, &updatedAt, &closedAt, &resolution, &redirectTarget, &archivedAt, &deletedAt); err != nil {
+	var closedAt, resolution, redirectTarget, followsUp, archivedAt, deletedAt sql.NullString
+	if err := row.Scan(&parentID, &issue.ID, &issue.Title, &issue.Description, &prompt, &status, &issue.Priority, &issue.IssueType, &issue.Topic, &assignee, &issue.Rank, &issue.Lane, &createdAt, &updatedAt, &closedAt, &resolution, &redirectTarget, &followsUp, &archivedAt, &deletedAt); err != nil {
 		return "", issueRow{}, err
 	}
 	issue.Prompt = prompt.String
+	issue.FollowsUp = followsUp.String
 	parsed, err := parsedIssueRow(issue, status, assignee, createdAt, updatedAt, closedAt, resolution, redirectTarget, archivedAt, deletedAt)
 	return parentID, parsed, err
 }
@@ -2499,6 +2547,7 @@ func (s *Store) hydrateIssues(ctx context.Context, rows []issueRow) ([]model.Iss
 			Rank:        row.Issue.Rank,
 			Lane:        row.Issue.Lane,
 			Labels:      labelsByID[row.Issue.ID],
+			FollowsUp:   row.Issue.FollowsUp,
 			CreatedAt:   row.Issue.CreatedAt,
 			UpdatedAt:   row.Issue.UpdatedAt,
 		}

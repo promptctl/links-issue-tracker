@@ -84,8 +84,11 @@ type record struct {
 	assignee    string
 	lane        string
 	priority    model.Priority
-	createdAt   time.Time
-	updatedAt   time.Time
+	// followsUp is the ticket this one was filed as a follow-up of, or "". A
+	// birth fact: createIssue writes it and writeIssue never touches it.
+	followsUp string
+	createdAt time.Time
+	updatedAt time.Time
 
 	// status is the leaf status view. A container's state derives from its
 	// children, so its view stays zero and hydration never reads it — the same
@@ -194,6 +197,7 @@ func (e *Engine) hydrate(rec *record, pos map[string]int) (model.Issue, error) {
 		Rank:        rankAt(pos[rec.id]),
 		Lane:        rec.lane,
 		Labels:      e.labelNames(rec.id),
+		FollowsUp:   rec.followsUp,
 		CreatedAt:   rec.createdAt,
 		UpdatedAt:   rec.updatedAt,
 	}

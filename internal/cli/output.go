@@ -220,6 +220,16 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 	if err := printIssueGroup(w, "related", detail.Related); err != nil {
 		return err
 	}
+	// The follow-up link, read from the row in both directions: the ticket
+	// this one was filed as a follow-up of, then the tickets filed as
+	// follow-ups of this one. Neither is a hierarchy edge, so neither appears
+	// under parent or children. [LAW:one-source-of-truth]
+	if err := printIssueGroup(w, "follows_up", optionalGroup(detail.FollowsUp)); err != nil {
+		return err
+	}
+	if err := printIssueGroup(w, "follow_ups", detail.FollowUps); err != nil {
+		return err
+	}
 	if len(detail.Comments) > 0 {
 		if _, err := fmt.Fprintln(w, "\ncomments:"); err != nil {
 			return err
