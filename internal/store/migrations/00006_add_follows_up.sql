@@ -13,10 +13,14 @@
 ALTER TABLE issues ADD COLUMN follows_up VARCHAR(191) NULL;
 -- +goose StatementEnd
 -- +goose StatementBegin
--- Backfill, step one: every child of a closed non-container is a follow-up of
--- that parent. A closed task, bug, feature or chore holds children only because
--- `lit followup` put them there; nothing else in the product files work under a
--- leaf. The parent is recorded before any edge moves, so the link names the
+-- Backfill, step one: every child of a closed non-container is read as a
+-- follow-up of that parent. `lit followup` is how children land under a closed
+-- task, bug, feature or chore, but not the only way — `lit new --parent` and
+-- `lit parent set` accept a leaf too — and the rows hold nothing that tells the
+-- two apart. Every such child is finished work's child by the same accident,
+-- so the move applies to all of them, and the link records the closed leaf as
+-- the ticket the child came out of, the only reading the data supports.
+-- The parent is recorded before any edge moves, so the link names the
 -- ticket the follow-up was actually filed on, not wherever the climb below
 -- lands it. A single-table UPDATE with correlated subqueries, not a join onto
 -- a second issues alias: the engine checks issues_status_check against the
