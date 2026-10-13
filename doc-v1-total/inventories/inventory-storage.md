@@ -952,13 +952,14 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 - Empty input → `"bulk: no issues in input"`.
 - Per doc: `id`, `local_id`, `parent` must have no surrounding whitespace → `"bulk: doc %d %s %q has surrounding whitespace"`.
 - Each `blocked_by` entry: no surrounding whitespace; and if `LocalID != "" && dep == spec.LocalID` → `"bulk: doc %d (local_id %q) cannot depend on itself"`.
+- `Labels` set → parsed by `model.CanonicalizeLabels`, the parser either write runs; its refusal → `fmt.Errorf("bulk: doc %d: %w", i, err)`.
 - `ID != ""` → `validateBulkUpdateDoc`; duplicate `ID` → `"bulk: duplicate id %q"`.
 - Else → `validateBulkCreateDoc`, whose parsed type is kept; duplicate non-empty `LocalID` → `"bulk: duplicate local_id %q"`.
 - Second pass over the create documents: a non-container type with `Parent == ""` → `fmt.Errorf("bulk: doc %d: %w", i, storage.RejectLeafWithoutParent(...))`; a `Parent` naming a create document in the file whose type is not a container → `fmt.Errorf("bulk: doc %d: %w", i, storage.RejectParentThatIsNotAContainer(...))`; a `Parent` matching no `local_id` is left to `createIssue`.
 
 **`validateBulkCreateDoc`** (`internal/storage/import_validate.go`)
 - Missing/blank `Title` → `"bulk: doc %d missing title"`.
-- Missing/blank `Topic` → `"bulk: doc %d missing topic"`.
+- `Topic == nil` → `"bulk: doc %d missing topic"`; otherwise parsed by `issueid.NormalizeTopicForCreate`, the parser `CreateIssue` runs; its refusal → `fmt.Errorf("bulk: doc %d: %w", i, err)`.
 - Missing `IssueType` → `"bulk: doc %d missing type"`.
 - Unparseable type → `"bulk: doc %d has invalid type %q"`.
 - Unparseable priority (when set) → `"bulk: doc %d has invalid priority %d"`.
@@ -969,13 +970,14 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 - `Topic != nil` → `"... sets topic; topic is immutable and update cannot change it"`.
 - `Parent != ""` → `"... sets parent; reparent with \`lit parent set\` instead"`.
 - `len(BlockedBy) > 0` → `"... sets blocked_by; wire dependencies with \`lit dep add\` instead"`.
+- `Title` set and trims to `""` → `"bulk: doc %d (id %q) sets an empty title"`.
 - Invalid type / priority → `"... has invalid type %q"` / `"... has invalid priority %d"`.
 - No updatable field stated → `"bulk: doc %d (id %q) has no fields to update"`. Updatable fields are exactly: `Title`, `Description`, `Prompt`, `IssueType`, `Priority`, `Assignee`, `Labels`, `Lane`.
 
 **`storage.validateImportTreeSpecs`** (`internal/storage/import_validate.go`)
 - Empty → `"import: no issues in input"`.
 - Blank `LocalID` → `"import: spec %d missing local_id"`; untrimmed → `"import: spec %d local_id %q has surrounding whitespace"`.
-- Blank `Title` → `"import: spec %q missing title"`; blank `Topic` → `"import: spec %q missing topic"`.
+- Blank `Title` → `"import: spec %q missing title"`; `issueid.NormalizeTopicForCreate(Topic)` or `model.CanonicalizeLabels(Labels)` refuses → `"import: spec %q: %w"`, the parsers `CreateIssue` runs.
 - Invalid type → `"import: spec %q has invalid type %q"`; invalid priority → `"import: spec %q has invalid priority %d"`.
 - Duplicate `LocalID` → `"import: duplicate local_id %q"`.
 - Second loop: `Parent` untrimmed → error; **`Parent` must name a spec in the file** → `"import: spec %q references missing parent %q"`; a `Parent` whose spec is not a container → `"import: spec %q: %w"` around `storage.RejectParentThatIsNotAContainer`; a non-container spec with no `Parent` → `"import: spec %q: %w"` around `storage.RejectLeafWithoutParent`.

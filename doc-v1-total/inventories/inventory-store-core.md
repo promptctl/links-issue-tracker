@@ -3664,7 +3664,8 @@ Defaults for absent fields: every field is a non-pointer, so an absent key is th
 | `strings.TrimSpace(LocalID) == ""` | `import: spec %d missing local_id` |
 | `LocalID != TrimSpace(LocalID)` | `import: spec %d local_id %q has surrounding whitespace` |
 | `strings.TrimSpace(Title) == ""` | `import: spec %q missing title` (local id) |
-| `strings.TrimSpace(Topic) == ""` | `import: spec %q missing topic` (local id) |
+| `issueid.NormalizeTopicForCreate(Topic)` fails | `import: spec %q: %w` (local id) |
+| `model.CanonicalizeLabels(Labels)` fails | `import: spec %q: %w` (local id) |
 | `ParseIssueType` fails | `import: spec %q has invalid type %q` |
 | `ParsePriority` fails | `import: spec %q has invalid priority %d` |
 | local_id already seen | `import: duplicate local_id %q` |
@@ -3771,6 +3772,7 @@ Per-document checks that run for **both** shapes (`import_validate.go`):
 | `Parent != TrimSpace(Parent)` | `bulk: doc %d parent %q has surrounding whitespace` |
 | a `dep != TrimSpace(dep)` | `bulk: doc %d blocked_by entry %q has surrounding whitespace` |
 | `LocalID != "" && dep == LocalID` | `bulk: doc %d (local_id %q) cannot depend on itself` |
+| `Labels` set and `model.CanonicalizeLabels` fails | `bulk: doc %d: %w` |
 
 Update-document checks (`validateBulkUpdateDoc`, `import_validate.go`), in order:
 
@@ -3780,6 +3782,7 @@ Update-document checks (`validateBulkUpdateDoc`, `import_validate.go`), in order
 | `Topic != nil` | `bulk: doc %d (id %q) sets topic; topic is immutable and update cannot change it` |
 | `Parent != ""` | ``bulk: doc %d (id %q) sets parent; reparent with `lit parent set` instead`` |
 | `len(BlockedBy) > 0` | ``bulk: doc %d (id %q) sets blocked_by; wire dependencies with `lit dep add` instead`` |
+| `Title` set and trims to `""` | `bulk: doc %d (id %q) sets an empty title` |
 | `IssueType` set and unparseable | `bulk: doc %d (id %q) has invalid type %q` |
 | `Priority` set and unparseable | `bulk: doc %d (id %q) has invalid priority %d` |
 | `!bulkUpdateHasField(spec)` | `bulk: doc %d (id %q) has no fields to update` |
@@ -3792,7 +3795,8 @@ Create-document checks (`validateBulkCreateDoc`, `import_validate.go`, which ret
 | condition | error |
 |---|---|
 | `Title == nil` or trims to `""` | `bulk: doc %d missing title` |
-| `Topic == nil` or trims to `""` | `bulk: doc %d missing topic` |
+| `Topic == nil` | `bulk: doc %d missing topic` |
+| `issueid.NormalizeTopicForCreate(*Topic)` fails | `bulk: doc %d: %w` |
 | `IssueType == nil` | `bulk: doc %d missing type` |
 | `ParseIssueType` fails | `bulk: doc %d has invalid type %q` |
 | `Priority` set and `ParsePriority` fails | `bulk: doc %d has invalid priority %d` |
@@ -3837,7 +3841,7 @@ Note the create branch does **not** require `LocalID` (unlike ImportTree), and d
 | `lane` | not settable | settable on create and update |
 | `reason` | absent from the schema | update-only, rejected on a create |
 | priority default | `0` (the int zero value, parsed strictly) | `PriorityNormal` when the pointer is nil; parsed only when set |
-| topic | required by `CreateIssue`, not by the tree validator | required by the validator (`missing topic`) on create; forbidden on update |
+| topic | required, parsed by the validator with `CreateIssue`'s `issueid.NormalizeTopicForCreate` | required (`missing topic`) and parsed the same way on create; forbidden on update |
 | actor | always `"links"` (CLI rejects `--by`) | `--by` actor threaded into update Changes only |
 | result | `ImportTreeResult{IDMap}` | `BulkApplyResult{Created map, Updated []string}` |
 
@@ -3918,11 +3922,11 @@ updated %d issues\n         (len(result.Updated))
 
 `import_export.go`: `verify constraints: %w`, `count foreign key issues: %w`, `count invalid related rows: %w`, `count orphan event rows: %w`, `rank ancestry: %w`, `rank checks: %w`, `parent cycle check: %w`, `constraint violations: %d`, `foreign key violations: %d`, `invalid related-to ordering rows: %d`, `orphan issue event rows: %d`, `rank inversions: %d (dependencies ranked below dependents)`, `blocked-by dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)`, `repair orphan events: %w`, `repair self related rows: %w`, `repair related ordering: %w`, `clear %s: %w`, `restore issue %s: %w`, `restore comment %s: %w`, `restore label %s:%s: %w`, `insert issue event %s: %w`, `issue event %s: field name cannot be empty`, `insert issue event change %s.%s: %w`.
 
-`import_validate.go` (tree gate): `import: no issues in input`, `import: spec %d missing local_id`, `import: spec %d local_id %q has surrounding whitespace`, `import: spec %q missing title`, `import: spec %q missing topic`, `import: spec %q has invalid type %q`, `import: spec %q has invalid priority %d`, `import: duplicate local_id %q`, `import: spec %q parent %q has surrounding whitespace`, `import: spec %q references missing parent %q`, `import: spec %q blocked_by entry %q has surrounding whitespace`, `import: spec %q references missing blocked_by %q`, `import: spec %q cannot depend on itself`, `import: spec %q: %w`, and from `writeOrder` `%s: cycle detected involving %q` (`import` or `bulk`).
+`import_validate.go` (tree gate): `import: no issues in input`, `import: spec %d missing local_id`, `import: spec %d local_id %q has surrounding whitespace`, `import: spec %q missing title`, `import: spec %q has invalid type %q`, `import: spec %q has invalid priority %d`, `import: duplicate local_id %q`, `import: spec %q parent %q has surrounding whitespace`, `import: spec %q references missing parent %q`, `import: spec %q blocked_by entry %q has surrounding whitespace`, `import: spec %q references missing blocked_by %q`, `import: spec %q cannot depend on itself`, `import: spec %q: %w`, and from `writeOrder` `%s: cycle detected involving %q` (`import` or `bulk`).
 
 `import_tree.go`: `import: spec %q: %w`, `import: create %q: %w (rollback leaked %d: %s)`, `import: blocked_by %q -> %q: %w (rollback leaked %d: %s)`.
 
-`import_bulk.go`: `bulk: no issues in input`, `bulk: doc %d id %q has surrounding whitespace`, `bulk: doc %d local_id %q has surrounding whitespace`, `bulk: doc %d parent %q has surrounding whitespace`, `bulk: doc %d blocked_by entry %q has surrounding whitespace`, `bulk: doc %d (local_id %q) cannot depend on itself`, `bulk: duplicate id %q`, `bulk: duplicate local_id %q`, `bulk: doc %d missing title`, `bulk: doc %d missing topic`, `bulk: doc %d missing type`, `bulk: doc %d has invalid type %q`, `bulk: doc %d has invalid priority %d`, `bulk: doc %d sets reason without id (reason only applies to updates)`, `bulk: doc %d (id %q) sets local_id; local_id only applies to new tickets`, `bulk: doc %d (id %q) sets topic; topic is immutable and update cannot change it`, ``bulk: doc %d (id %q) sets parent; reparent with `lit parent set` instead``, ``bulk: doc %d (id %q) sets blocked_by; wire dependencies with `lit dep add` instead``, `bulk: doc %d (id %q) has invalid type %q`, `bulk: doc %d (id %q) has invalid priority %d`, `bulk: doc %d (id %q) has no fields to update`, `bulk: %w`, `bulk: doc %d: %w`, `bulk: update %q: %w`, `bulk: update %q: %w (rollback leaked %d: %s)`, `bulk: create doc %d: %w (rollback leaked %d: %s)`, `bulk: blocked_by doc %d -> %q: %w (rollback leaked %d: %s)`.
+`import_bulk.go`: `bulk: no issues in input`, `bulk: doc %d id %q has surrounding whitespace`, `bulk: doc %d local_id %q has surrounding whitespace`, `bulk: doc %d parent %q has surrounding whitespace`, `bulk: doc %d blocked_by entry %q has surrounding whitespace`, `bulk: doc %d (local_id %q) cannot depend on itself`, `bulk: duplicate id %q`, `bulk: duplicate local_id %q`, `bulk: doc %d missing title`, `bulk: doc %d missing topic`, `bulk: doc %d missing type`, `bulk: doc %d has invalid type %q`, `bulk: doc %d has invalid priority %d`, `bulk: doc %d sets reason without id (reason only applies to updates)`, `bulk: doc %d (id %q) sets local_id; local_id only applies to new tickets`, `bulk: doc %d (id %q) sets topic; topic is immutable and update cannot change it`, ``bulk: doc %d (id %q) sets parent; reparent with `lit parent set` instead``, ``bulk: doc %d (id %q) sets blocked_by; wire dependencies with `lit dep add` instead``, `bulk: doc %d (id %q) has invalid type %q`, `bulk: doc %d (id %q) has invalid priority %d`, `bulk: doc %d (id %q) sets an empty title`, `bulk: doc %d (id %q) has no fields to update`, `bulk: %w`, `bulk: doc %d: %w`, `bulk: update %q: %w`, `bulk: update %q: %w (rollback leaked %d: %s)`, `bulk: create doc %d: %w (rollback leaked %d: %s)`, `bulk: blocked_by doc %d -> %q: %w (rollback leaked %d: %s)`.
 
 Parsers (`internal/storage/specs.go`): `bulk: parse spec: %w`, `import: parse spec: %w`, `import: unexpected trailing data after spec array`.
 
