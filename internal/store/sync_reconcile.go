@@ -224,8 +224,7 @@ func (s *Store) landProse(export model.Export, texts map[string]merge.ProseTexts
 			// is nothing to record, exactly as for an edit that restates a value.
 			continue
 		}
-		event := s.newEvent(issue.ID, "", proseResolvedReason, actor, changes)
-		issue.UpdatedAt = event.CreatedAt
+		issue, event := s.stampEdit(issue, proseResolvedReason, actor, changes)
 		issues[i] = issue
 		events = append(events, event)
 		recorded += len(changes)
@@ -272,8 +271,9 @@ func (s *Store) SyncReconcile(ctx context.Context, remote string, branch string)
 // divergence. It re-derives the SAME three-way state SyncReconcile read — the
 // prose-pending state is never snapshot-persisted, so the live refs are the one
 // source of truth ([LAW:one-source-of-truth]) — and replays the merge with the
-// agent's merged prose spliced in, through the SAME provenance replay onto the
-// remote head (the agent's resolutions land as the marker commit's diff).
+// agent's merged prose landed as the agent's edit, recorded in history, through
+// the SAME provenance replay onto the remote head (the agent's resolutions land
+// as the marker commit's diff).
 // Resolutions that no longer match the live divergence do not commit; the
 // result comes back SyncReconcileProsePending with the CURRENT conflicts for the
 // agent to re-merge. [LAW:no-silent-failure]
@@ -285,7 +285,7 @@ func (s *Store) SyncReconcileResolved(ctx context.Context, remote string, branch
 	// unionCombine: `lit sync reconcile resolve` is the ONE finalize command, so it must
 	// finalize whichever divergence the refs describe — a shared-history three-way (the
 	// base branch handles it) OR an unrelated combine (the !shared branch, with the agent's
-	// prose spliced in). Reusing the same command means renderProsePendingGuidance's printed
+	// prose landed). Reusing the same command means renderProsePendingGuidance's printed
 	// resolve line is correct for both surfaces. [LAW:single-enforcer] one finalize path.
 	return s.reconcile(ctx, remote, branch, s.resolvedSettle(resolutions, actor), unionCombine)
 }

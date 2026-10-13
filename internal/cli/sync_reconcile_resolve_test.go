@@ -274,6 +274,14 @@ func TestProseReconcileSurfacesAndResolves(t *testing.T) {
 	if trace == nil || trace.Metadata["prose_recorded"] != "1" {
 		t.Fatalf("resolve trace = %+v, want prose_recorded=1", trace)
 	}
+	// It is this checkout's edit, so its event carries this checkout's pair.
+	attributed := false
+	for _, event := range eventsByAttribution(t, consumer)[checkoutIdentity(t, consumer)] {
+		attributed = attributed || event.Reason == "merged both sides' text in lit sync reconcile resolve"
+	}
+	if !attributed {
+		t.Fatalf("no resolve event carries the consumer checkout's attribution pair")
+	}
 
 	// The consumer now carries the merged text and fast-forward pushes with no force.
 	show := runCLIInDir(t, consumer, "show", ticketID)

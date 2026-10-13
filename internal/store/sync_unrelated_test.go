@@ -409,7 +409,7 @@ func TestSyncReconcileCombineUnionsBothSides(t *testing.T) {
 // TestSyncReconcileCombineHoldsAndFinalizesProse drives the ticket's per-issue-overlap
 // criterion: when the shared id's free text diverged on both sides, combine holds it as
 // prose-pending (never auto-picking a side) rather than dropping or guessing, and the SAME
-// `lit sync reconcile resolve` finalize path splices the agent's merged text and commits the
+// `lit sync reconcile resolve` finalize path lands the agent's merged text and commits the
 // union. It proves the two-way (no base) resolution surfaces prose exactly as the shared-history
 // three-way does. [LAW:no-silent-failure]
 func TestSyncReconcileCombineHoldsAndFinalizesProse(t *testing.T) {
@@ -457,7 +457,7 @@ func TestSyncReconcileCombineHoldsAndFinalizesProse(t *testing.T) {
 	assertWorkingSetClean(t, ctx, syncB)
 
 	// Finalize through the SAME resolve path the three-way reconcile uses: the divergence is
-	// re-derived (no base), the merged text spliced, and the union committed as one commit.
+	// re-derived (no base), the merged text landed, and the union committed as one commit.
 	res, err := syncB.SyncReconcileResolved(ctx, "origin", "master", []merge.ProseResolution{
 		{Fingerprint: p.Fingerprint(), Text: "merged A and B shared title"},
 	}, "judge")

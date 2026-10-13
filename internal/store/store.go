@@ -254,8 +254,8 @@ func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (_
 // store already holds happens here, which is why no caller can pair them
 // differently and no caller can supply half of one.
 //
-// Attribution is the store's, not each mutation's: recordEvent is the single
-// insertion point for issue history, so stamping there makes "every work
+// Attribution is the store's, not each mutation's: newEvent mints every event
+// the store writes, so stamping there makes "every work
 // mutation carries its checkout's attribution pair" a property of the write
 // path rather than an obligation on ten call sites that each have to remember.
 //
@@ -263,14 +263,16 @@ func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (_
 // open — leaves the store unattributed rather than half-attributed; that is
 // NewAttribution's contract, and it is why this takes no presence flag.
 //
-// [LAW:single-enforcer] app.Open is the one caller. It is not the only opener —
-// OpenSync serves the sync commands, RebuildCandidate opens a recovery
-// workspace, adopt probes one, the upgrade path reads a workspace's schema, and
-// OpenLocationForRead reaches foreign stores — but it is the only opener whose
-// store records NEW events. The others read, or replay a dump through
-// insertEventTx, which preserves the producer's attribution instead of stamping.
-// A mutating operation added to any of those paths would NOT be attributed by
-// anything here, and would need to answer that question for itself.
+// [LAW:single-enforcer] Two callers attribute, each the moment its store is
+// about to record new events: app.Open, and `lit sync reconcile resolve`, the
+// one sync verb whose store mints events (the agent's merged text, landed as
+// its edit). Both ensure the checkout's stream first, as any write does. The
+// other openers — RebuildCandidate opens a recovery workspace, adopt probes
+// one, the upgrade path reads a workspace's schema, OpenLocationForRead reaches
+// foreign stores, and the rest of the sync verbs — read, or replay a dump
+// through insertEventTx, which preserves the producer's attribution instead of
+// stamping. A mutating operation added to any of those paths would NOT be
+// attributed by anything here, and would need to answer that question for itself.
 func (s *Store) AttributeTo(streamToken string) {
 	s.attribution = model.NewAttribution(streamToken, s.workspaceID)
 }
@@ -1297,10 +1299,9 @@ func planFieldUpdate(baseline model.Issue, in storage.UpdateIssueInput, actor st
 // lifecycle change — the cross-axis write is unwritable, not guarded.
 // [LAW:dataflow-not-control-flow]
 func (s *Store) applyFieldsTx(ctx context.Context, tx *sql.Tx, w fieldWrite) error {
-	issue := w.issue
 	// [LAW:effects-at-boundaries] The clock is read here, at the write boundary,
 	// not in planFieldUpdate — so the plan stays a pure function of its inputs.
-	issue.UpdatedAt = s.clock.Now()
+	issue, event := s.stampEdit(w.issue, w.reason, w.actor, w.changes)
 	if _, err := tx.ExecContext(ctx, `UPDATE issues SET
 		title = ?, description = ?, agent_prompt = ?, priority = ?, issue_type = ?, assignee = ?, lane = ?, updated_at = ?
 		WHERE id = ?`, issue.Title, issue.Description, nullableString(issue.Prompt), issue.Priority, issue.IssueType, issue.AssigneeValue(), issue.Lane, issue.UpdatedAt.Format(time.RFC3339Nano), issue.ID); err != nil {
@@ -1312,7 +1313,7 @@ func (s *Store) applyFieldsTx(ctx context.Context, tx *sql.Tx, w fieldWrite) err
 		}
 	}
 	if len(w.changes) > 0 {
-		if err := s.recordEvent(ctx, tx, issue.ID, "", w.reason, w.actor, w.changes); err != nil {
+		if err := insertEventTx(ctx, tx, event); err != nil {
 			return err
 		}
 	}
@@ -2107,31 +2108,21 @@ func (s *Store) newEvent(issueID, action, reason, actor string, changes []model.
 	return event
 }
 
-// recordEvent writes one issue_events row plus N issue_event_changes rows.
-// [LAW:single-enforcer] Single insertion point for a mutation's history. Every
-// mutation site computes its field-change diff and routes through here.
+// recordEvent writes a mutation's history: the event newEvent mints for it,
+// through insertEventTx, the one writer of issue_events rows. [LAW:single-enforcer]
+// Every mutation site computes its field-change diff and routes through here.
 func (s *Store) recordEvent(ctx context.Context, tx *sql.Tx, issueID, action, reason, actor string, changes []model.FieldChange) error {
-	event := s.newEvent(issueID, action, reason, actor, changes)
-	var actionArg any
-	if event.Action != "" {
-		actionArg = event.Action
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO issue_events(id, issue_id, action, reason, actor, created_at, stream_id, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		event.ID, event.IssueID, actionArg, event.Reason, event.Actor, event.CreatedAt.Format(time.RFC3339Nano),
-		nullableString(event.Attribution.Stream()), nullableString(event.Attribution.Workspace())); err != nil {
-		return fmt.Errorf("insert issue event: %w", err)
-	}
-	for _, change := range changes {
-		field := strings.TrimSpace(change.Field)
-		if field == "" {
-			return fmt.Errorf("issue event %s: field name cannot be empty", event.ID)
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO issue_event_changes(event_id, field, from_value, to_value) VALUES (?, ?, ?, ?)`,
-			event.ID, field, nullableString(change.From), nullableString(change.To)); err != nil {
-			return fmt.Errorf("insert issue event change %s.%s: %w", event.ID, field, err)
-		}
-	}
-	return nil
+	return insertEventTx(ctx, tx, s.newEvent(issueID, action, reason, actor, changes))
+}
+
+// stampEdit is how an edit lands: the event recording the fields it moved, and
+// the issue's updated_at at that event's instant. A field edit and a resolved
+// reconcile's merged text are both edits, so both take their stamp here and
+// cannot disagree about when one happened. [LAW:single-enforcer]
+func (s *Store) stampEdit(issue model.Issue, reason, actor string, changes []model.FieldChange) (model.Issue, model.IssueEvent) {
+	event := s.newEvent(issue.ID, "", reason, actor, changes)
+	issue.UpdatedAt = event.CreatedAt
+	return issue, event
 }
 
 func (s *Store) listComments(ctx context.Context, issueID string) ([]model.Comment, error) {

@@ -1,6 +1,7 @@
 package storage_test
 
 import (
+	"errors"
 	"slices"
 	"testing"
 
@@ -42,5 +43,23 @@ func TestApplyProseFieldsRefusesAFieldItCannotWrite(t *testing.T) {
 	_, _, err := storage.ApplyProseFields(model.Issue{ID: "i1", Title: "t"}, merge.ProseTexts{"lane": "x"})
 	if err == nil {
 		t.Fatalf("ApplyProseFields accepted a merged text for a field it cannot write")
+	}
+}
+
+// TestApplyProseFieldsHoldsMergedTextToTheFieldRules: merged text lands under
+// the rules every edit of that field obeys — trimmed, and never an empty title —
+// because it is decided by the same field table, not written around it.
+func TestApplyProseFieldsHoldsMergedTextToTheFieldRules(t *testing.T) {
+	provisional := model.Issue{ID: "i1", Title: "ours title", Description: "ours desc"}
+	issue, _, err := storage.ApplyProseFields(provisional, merge.ProseTexts{merge.ProseDescription: "  merged desc\n"})
+	if err != nil {
+		t.Fatalf("ApplyProseFields: %v", err)
+	}
+	if issue.Description != "merged desc" {
+		t.Fatalf("description = %q, want the merged text trimmed", issue.Description)
+	}
+	var invalid model.ValidationError
+	if _, _, err := storage.ApplyProseFields(provisional, merge.ProseTexts{merge.ProseTitle: "   "}); !errors.As(err, &invalid) {
+		t.Fatalf("ApplyProseFields(blank title) error = %v, want a ValidationError", err)
 	}
 }

@@ -786,7 +786,7 @@ Change rows, emitted only for fields that actually moved, in this order (`store.
 Return: `fieldWrite{issue, replaceLabels: in.Labels != nil, actor, reason: in.Reason, changes}` (`store.go`).
 
 `applyFieldsTx(ctx, tx, w fieldWrite)` (`store.go`):
-1. `issue.UpdatedAt = time.Now().UTC()` — the clock is read here, at the write boundary (`store.go`).
+1. `issue, event := s.stampEdit(w.issue, w.reason, w.actor, w.changes)` — the clock is read here, at the write boundary: `stampEdit` mints the event (`newEvent`, empty action) and sets `issue.UpdatedAt = event.CreatedAt` (`store.go`).
 2. The UPDATE (`store.go`):
 ```sql
 UPDATE issues SET
@@ -795,7 +795,7 @@ UPDATE issues SET
 ```
 bound `issue.Title, issue.Description, nullableString(issue.Prompt), issue.Priority, issue.IssueType, issue.AssigneeValue(), issue.Lane, issue.UpdatedAt.Format(time.RFC3339Nano), issue.ID`. Failure → `fmt.Errorf("update issue: %w", err)`. It is **unguarded** (no CAS) but touches no lifecycle column — `status`, `closed_at`, `resolution`, `redirect_target`, `archived_at`, `deleted_at` are all absent from the SET list (`store.go`).
 3. `if w.replaceLabels` → `s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, w.actor)` (`store.go`).
-4. `if len(w.changes) > 0` → `s.recordEvent(ctx, tx, issue.ID, "" /* empty action */, w.reason, w.actor, w.changes)` (`store.go`). A field-only update writes an event with a **NULL** `action` column (see §7).
+4. `if len(w.changes) > 0` → `insertEventTx(ctx, tx, event)` (`store.go`). A field-only update writes an event with a **NULL** `action` column (see §7).
 
 Evidence: a field plan taken against a stale snapshot lands its title change while a concurrently-applied close and archive both survive untouched (`store_test.go`); container↔leaf type changes are refused in both directions while a same-kind change (`task`→`bug`) succeeds (`store_test.go`); label replacement through `Apply` replaces the whole set (`store_test.go`).
 
@@ -803,7 +803,7 @@ Evidence: a field plan taken against a stale snapshot lands its title change whi
 
 ### 7. Event / attribution rows
 
-`recordEvent(ctx, tx, issueID, action, reason, actor string, changes []model.FieldChange) error` — the single insertion point for a mutation's history (`store.go`). The event it inserts comes from `newEvent(issueID, action, reason, actor, changes) model.IssueEvent` (`store.go`), which also mints the events a resolved reconcile's settled export carries (`landProse`, `sync_reconcile.go`).
+`recordEvent(ctx, tx, issueID, action, reason, actor string, changes []model.FieldChange) error` — a mutation's history: `insertEventTx(ctx, tx, s.newEvent(issueID, action, reason, actor, changes))` (`store.go`). `newEvent(issueID, action, reason, actor, changes) model.IssueEvent` mints every event the store writes (`store.go`); `stampEdit(issue, reason, actor, changes) (model.Issue, model.IssueEvent)` mints an edit's event with an empty action and sets `issue.UpdatedAt = event.CreatedAt`, for `applyFieldsTx` and for the events a resolved reconcile's settled export carries (`landProse`, `sync_reconcile.go`). `insertEventTx` (`import_export.go`) is the one writer of `issue_events` and `issue_event_changes`.
 
 Constructed event (`store.go`):
 - `ID = "evt-" + uuid.NewString()`;
@@ -812,21 +812,21 @@ Constructed event (`store.go`):
 - `Attribution = s.attribution` — read off the store, never passed in;
 - `Changes = changes`.
 
-Then: `if event.Actor == "" { event.Actor = "unknown" }` (`store.go`); `actionArg` is `nil` when the trimmed action is empty, otherwise the string (`store.go`).
+Then: `if event.Actor == "" { event.Actor = "unknown" }` (`store.go`). In `insertEventTx`, `actionArg` is `nil` when the action is empty, otherwise the string (`import_export.go`).
 
-The event insert (`store.go`):
+The event insert (`import_export.go`):
 ```sql
 INSERT INTO issue_events(id, issue_id, action, reason, actor, created_at, stream_id, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ```
-bound `event.ID, event.IssueID, actionArg, event.Reason, event.Actor, event.CreatedAt.Format(time.RFC3339Nano), nullableString(event.Attribution.Stream()), nullableString(event.Attribution.Workspace())`. Failure → `fmt.Errorf("insert issue event: %w", err)`.
+bound `event.ID, event.IssueID, actionArg, event.Reason, event.Actor, event.CreatedAt.Format(time.RFC3339Nano), nullableString(event.Attribution.Stream()), nullableString(event.Attribution.Workspace())`. Failure → `fmt.Errorf("insert issue event %s: %w", event.ID, err)`.
 
-Per change row (`store.go`):
+Per change row (`import_export.go`):
 - a blank trimmed field name → `fmt.Errorf("issue event %s: field name cannot be empty", event.ID)`;
 - otherwise:
 ```sql
 INSERT INTO issue_event_changes(event_id, field, from_value, to_value) VALUES (?, ?, ?, ?)
 ```
-bound `event.ID, field, nullableString(change.From), nullableString(change.To)` — empty from/to become SQL NULL. Failure → `fmt.Errorf("insert issue event change %s.%s: %w", event.ID, field, err)`.
+bound `event.ID, change.Field, nullableString(change.From), nullableString(change.To)` — empty from/to become SQL NULL. Failure → `fmt.Errorf("insert issue event change %s.%s: %w", event.ID, change.Field, err)`.
 
 Which mutations emit which event:
 
@@ -3558,8 +3558,8 @@ Events (`insertEventTx`, `import_export.go`):
 - `action` binds `nil` when `event.Action == ""`, else the string (`import_export.go`).
 - `created_at` RFC3339Nano.
 - `stream_id` = `nullableString(event.Attribution.Stream())`, `workspace_id` = `nullableString(event.Attribution.Workspace())` — **attribution is replayed verbatim from the dump; the restoring checkout never substitutes its own** (`import_export.go`). No re-validation of the pair here: `Attribution.UnmarshalJSON` already collapsed half pairs.
-- error `"restore issue event %s: %w"`.
-- Then one `INSERT INTO issue_event_changes(event_id, field, from_value, to_value)` per `event.Changes` entry, with `from`/`to` through `nullableString` (`""` → NULL); error `"restore issue event change %s.%s: %w"` (event id, field).
+- error `"insert issue event %s: %w"`.
+- Then, per `event.Changes` entry, a blank trimmed field name fails `"issue event %s: field name cannot be empty"`; otherwise one `INSERT INTO issue_event_changes(event_id, field, from_value, to_value)`, with `from`/`to` through `nullableString` (`""` → NULL); error `"insert issue event change %s.%s: %w"` (event id, field).
 
 ### 3.4 ID remapping / conflict policy
 
@@ -3919,7 +3919,7 @@ updated %d issues\n         (len(result.Updated))
 
 ## 7. Cross-cutting error-message index for this slice
 
-`import_export.go`: `verify constraints: %w`, `count foreign key issues: %w`, `count invalid related rows: %w`, `count orphan event rows: %w`, `rank ancestry: %w`, `rank checks: %w`, `parent cycle check: %w`, `constraint violations: %d`, `foreign key violations: %d`, `invalid related-to ordering rows: %d`, `orphan issue event rows: %d`, `rank inversions: %d (dependencies ranked below dependents)`, `blocked-by dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)`, `repair orphan events: %w`, `repair self related rows: %w`, `repair related ordering: %w`, `clear %s: %w`, `restore issue %s: %w`, `restore comment %s: %w`, `restore label %s:%s: %w`, `restore issue event %s: %w`, `restore issue event change %s.%s: %w`.
+`import_export.go`: `verify constraints: %w`, `count foreign key issues: %w`, `count invalid related rows: %w`, `count orphan event rows: %w`, `rank ancestry: %w`, `rank checks: %w`, `parent cycle check: %w`, `constraint violations: %d`, `foreign key violations: %d`, `invalid related-to ordering rows: %d`, `orphan issue event rows: %d`, `rank inversions: %d (dependencies ranked below dependents)`, `blocked-by dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)`, `repair orphan events: %w`, `repair self related rows: %w`, `repair related ordering: %w`, `clear %s: %w`, `restore issue %s: %w`, `restore comment %s: %w`, `restore label %s:%s: %w`, `insert issue event %s: %w`, `issue event %s: field name cannot be empty`, `insert issue event change %s.%s: %w`.
 
 `import_tree.go`: `import: no issues in input`, `import: spec %d missing local_id`, `import: spec %d local_id %q has surrounding whitespace`, `import: spec %q missing title`, `import: spec %q has invalid type %q`, `import: spec %q has invalid priority %d`, `import: duplicate local_id %q`, `import: spec %q parent %q has surrounding whitespace`, `import: spec %q references missing parent %q`, `import: spec %q blocked_by entry %q has surrounding whitespace`, `import: spec %q references missing blocked_by %q`, `import: spec %q cannot depend on itself`, `import: spec %q: %w`, `import: create %q: %w (rollback leaked %d: %s)`, `import: blocked_by %q -> %q: %w (rollback leaked %d: %s)`, `import: %w`, `cycle detected involving %q`.
 

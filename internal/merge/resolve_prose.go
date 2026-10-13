@@ -48,11 +48,11 @@ func ParseFingerprint(text string) (Fingerprint, bool) {
 // diverged on both sides: the single coherent Text that preserves BOTH the Ours
 // and Theirs intent. It is the enactment of the one judgment step the engine
 // deliberately refuses to make. [LAW:decomposition] The agent owns the decision
-// (the Text); this package owns only where that text lands in the export.
+// (the Text); this package owns only which live conflict that text settles.
 //
 // Fingerprint names the conflict the agent merged against, copied from the pending
 // field's guidance. It is looked up among the LIVE conflicts before the text is
-// spliced, so a merge produced for a since-changed conflict finds nothing and is
+// matched to a field, so a merge produced for a since-changed conflict finds nothing and is
 // rejected rather than silently applied. [LAW:no-silent-failure]
 type ProseResolution struct {
 	Fingerprint Fingerprint

@@ -109,6 +109,14 @@ func syncReconcileResolveLeaf() syncLeaf {
 		if err != nil {
 			return err
 		}
+		// The merged text is this checkout's edit, so the sync engine is attributed
+		// the way a write open attributes its store: the checkout's stream, minted
+		// on its first mutation if this is it. [LAW:one-type-per-behavior]
+		stream, err := workspace.EnsureStream(ws.PrivateGitDir)
+		if err != nil {
+			return err
+		}
+		session.engine.AttributeTo(stream.Value())
 		reconciler, err := reconcilerFor(ws, session, proseResolveCommand)
 		if err != nil {
 			return err
