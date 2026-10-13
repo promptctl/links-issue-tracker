@@ -2,8 +2,11 @@ package store
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -56,5 +59,30 @@ func TestRestoreNeverUnpurges(t *testing.T) {
 	}
 	if len(restored.Issues) != 1 || restored.Issues[0].ID != epic.ID {
 		t.Errorf("issues after restore = %+v, want the epic alone", restored.Issues)
+	}
+}
+
+// TestPurgingOneOfALeafsTwoParentsKeepsItInside pins the purge's read of the
+// parents a child keeps. Restored data can leave a leaf under two epics;
+// purging one of them leaves the leaf inside the other, so it goes through,
+// and the leaf's last epic is then refused like any occupied container.
+func TestPurgingOneOfALeafsTwoParentsKeepsItInside(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	first := parentChain(t, ctx, st, "E1")[0]
+	second := parentChain(t, ctx, st, "E2")[0]
+	child, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "C", Topic: "hier", IssueType: "task", ParentID: first.ID, Placement: storage.RankBottom})
+	if err != nil {
+		t.Fatalf("CreateIssue(C) error = %v", err)
+	}
+	seedParentEdge(t, ctx, st, child.ID, second.ID)
+
+	if _, err := st.Purge(ctx, storage.PurgeInput{IssueID: second.ID, Actor: "tester"}); err != nil {
+		t.Fatalf("Purge(%s) error = %v, want it purged: %s keeps %s", second.ID, err, child.ID, first.ID)
+	}
+	_, err = st.Purge(ctx, storage.PurgeInput{IssueID: first.ID, Actor: "tester"})
+	var refused model.ValidationError
+	if !errors.As(err, &refused) || !strings.Contains(err.Error(), child.ID) {
+		t.Fatalf("Purge(%s) error = %v, want a refusal naming %s: it is the leaf's last epic", first.ID, err, child.ID)
 	}
 }
