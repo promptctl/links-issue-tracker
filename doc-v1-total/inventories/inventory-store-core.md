@@ -4131,7 +4131,7 @@ Signature: `Recover(ctx, canonicalDoltDir string, dump RawDump, mapper Mapper, m
 - `os.MkdirTemp(parentDir, "lit-candidate-*")` creates the candidate root (`candidate.go`); the literal pattern is `lit-candidate-*`.
 - On any failure after that point, a deferred cleanup closes the store (if opened) and runs `os.RemoveAll(root)`, joining errors into the return (`candidate.go`).
 - `Open(ctx, filepath.Join(root, "workspace"), dump.WorkspaceID)` — the Dolt workspace is nested at `<root>/workspace` so the workspace lock and migration snapshots land inside the owned root (`candidate.go`). Error: `open candidate workspace: %w`.
-- `st.ReplaceFromExport(ctx, export)` loads the data (`candidate.go`), error `load export into candidate: %w`. That path commits inside the candidate's own Dolt database with commit message `"replace from export"` (`internal/store/import_export.go`) — the only commit any recovery pass makes, and it is made in the throwaway candidate, never in the canonical workspace.
+- `st.rebuildFromExport(ctx, export, commitStamp{Message: "replace from export"})` loads the data (`candidate.go`), error `load export into candidate: %w`. That path commits inside the candidate's own Dolt database with commit message `"replace from export"` (`internal/store/import_export.go`) — the only commit any recovery pass makes, and it is made in the throwaway candidate, never in the canonical workspace.
 - The candidate stamps `expectedHead: dump.DoltHead` and `workspaceID: dump.WorkspaceID` for a later promotion's lost-update check (`candidate.go`).
 - `Candidate.Discard()` closes the store then `os.RemoveAll(c.root)`; `root` is cleared only on successful removal, so a later `Discard` retries. It is documented and implemented as **idempotent** (`candidate.go`).
 
@@ -4594,7 +4594,7 @@ Ordered:
 2. `os.MkdirTemp(parentDir, "lit-candidate-*")`; on error → `"create candidate workspace dir: %w"` (`candidate.go`).
 3. Installs the unconditional cleanup defer keyed on a `success bool` (`candidate.go`): if not successful, `err = errors.Join(err, st.Close())` when `st != nil`, then `err = errors.Join(err, os.RemoveAll(root))`.
 4. `Open(ctx, filepath.Join(root, "workspace"), dump.WorkspaceID)`; on error → `"open candidate workspace: %w"` (`candidate.go`).
-5. `st.ReplaceFromExport(ctx, export)` (defined `internal/store/import_export.go`); on error → `"load export into candidate: %w"` (`candidate.go`).
+5. `st.rebuildFromExport(ctx, export, commitStamp{Message: "replace from export"})` (defined `internal/store/import_export.go`; no homing, so the verify gate's row and id counts hold); on error → `"load export into candidate: %w"` (`candidate.go`).
 6. `success = true`; returns `&Candidate{store: st, root: root, expectedHead: dump.DoltHead, workspaceID: dump.WorkspaceID}` (`candidate.go`).
 
 Documented: `dump` is read-only and reusable unchanged across attempts; `Apply` never mutates it, so two attempts from one dump yield identical candidates (`candidate.go`).

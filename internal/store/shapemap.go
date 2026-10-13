@@ -490,7 +490,7 @@ func tablesByName(m ShapeMapping) map[string]TableMapping {
 }
 
 // Apply is the pure applier: it folds a RawDump through a validated mapping into
-// a model.Export — the version-independent domain contract that ReplaceFromExport
+// a model.Export — the version-independent domain contract that rebuildFromExport
 // loads onto a fresh baseline. It assumes nothing about which producer wrote the
 // mapping; deterministic, operator, and LLM mappers route through the identical
 // fold.
