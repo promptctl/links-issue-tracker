@@ -1933,59 +1933,59 @@ Built once at package init by `buildTargetRegistry()` into `var targetRegistry m
 
 Helper `add(c, canonical, opt, fields...)` sets `admits = {canonical: true}` only (shapemap.go). Helper `addMulti(c, canonical, extra, opt, field)` sets `admits = {canonical} ∪ extra` (shapemap.go).
 
-Complete registry (49 entries; the `add(...)` variadic lines register several fields each, and `line` is the `shapemap.go` line that registers the entry):
+Complete registry (49 entries; the `add(...)` variadic lines register several fields each):
 
-| TargetKey | collection | field | canonical | admits | optional | line |
-|---|---|---|---|---|---|---|
-| `issues.id` | issues | id | identity | {identity} | required | 242 |
-| `issues.title` | issues | title | identity | {identity} | required | 242 |
-| `issues.description` | issues | description | identity | {identity} | required | 242 |
-| `issues.priority` | issues | priority | identity | {identity} | required | 242 |
-| `issues.issue_type` | issues | issue_type | identity | {identity} | required | 242 |
-| `issues.prompt` | issues | prompt | identity | {identity} | optional | 243 |
-| `issues.assignee` | issues | assignee | identity | {identity} | optional | 243 |
-| `issues.topic` | issues | topic | identity | {identity} | optional | 243 |
-| `issues.rank` | issues | rank | identity | {identity} | optional | 243 |
-| `issues.lane` | issues | lane | identity | {identity} | optional | 243 |
-| `issues.resolution` | issues | resolution | identity | {identity} | optional | 243 |
-| `issues.redirect_target` | issues | redirect_target | identity | {identity} | optional | 243 |
-| `issues.follows_up` | issues | follows_up | identity | {identity} | optional | 243 |
-| `issues.created_at` | issues | created_at | timestamp | {timestamp} | required | 244 |
-| `issues.updated_at` | issues | updated_at | timestamp | {timestamp} | required | 244 |
-| `issues.closed_at` | issues | closed_at | timestamp | {timestamp} | required | 244 |
-| `issues.archived_at` | issues | archived_at | timestamp | {timestamp} | optional | 245 |
-| `issues.deleted_at` | issues | deleted_at | timestamp | {timestamp} | optional | 245 |
-| `issues.status` | issues | status | legacy_status_value | {legacy_status_value} | required | 246 |
-| `relations.src_id` | relations | src_id | identity | {identity} | required | 247 |
-| `relations.dst_id` | relations | dst_id | identity | {identity} | required | 247 |
-| `relations.type` | relations | type | identity | {identity} | required | 247 |
-| `relations.created_by` | relations | created_by | identity | {identity} | required | 247 |
-| `relations.created_at` | relations | created_at | timestamp | {timestamp} | required | 248 |
-| `comments.id` | comments | id | identity | {identity} | required | 249 |
-| `comments.issue_id` | comments | issue_id | identity | {identity} | required | 249 |
-| `comments.body` | comments | body | identity | {identity} | required | 249 |
-| `comments.created_by` | comments | created_by | identity | {identity} | required | 249 |
-| `comments.created_at` | comments | created_at | timestamp | {timestamp} | required | 250 |
-| `labels.issue_id` | labels | issue_id | identity | {identity} | required | 251 |
-| `labels.name` | labels | name | identity | {identity} | required | 251 |
-| `labels.created_by` | labels | created_by | identity | {identity} | required | 251 |
-| `labels.created_at` | labels | created_at | timestamp | {timestamp} | required | 252 |
-| `events.id` | events | id | identity | {identity} | required | 253 |
-| `events.issue_id` | events | issue_id | identity | {identity} | required | 253 |
-| `events.action` | events | action | identity | {identity, event_action} | optional | 254 |
-| `events.reason` | events | reason | identity | {identity, event_reason} | required | 255 |
-| `events.actor` | events | actor | identity | {identity, event_actor} | required | 256 |
-| `events.created_at` | events | created_at | timestamp | {timestamp} | required | 257 |
-| `events.stream` | events | stream | identity | {identity} | optional | 261 |
-| `events.workspace` | events | workspace | identity | {identity} | optional | 261 |
-| `event_changes.event_id` | event_changes | event_id | identity | {identity} | required | 262 |
-| `event_changes.field` | event_changes | field | identity | {identity} | required | 262 |
-| `event_changes.from` | event_changes | from | identity | {identity, legacy_status_value} | optional | 263 |
-| `event_changes.to` | event_changes | to | identity | {identity, legacy_status_value} | optional | 264 |
-| `purges.issue_id` | purges | issue_id | identity | {identity} | required | 265 |
-| `purges.purged_by` | purges | purged_by | identity | {identity} | required | 265 |
-| `purges.issue_created_at` | purges | issue_created_at | timestamp | {timestamp} | required | 266 |
-| `purges.purged_at` | purges | purged_at | timestamp | {timestamp} | required | 266 |
+| TargetKey | collection | field | canonical | admits | optional |
+|---|---|---|---|---|---|
+| `issues.id` | issues | id | identity | {identity} | required |
+| `issues.title` | issues | title | identity | {identity} | required |
+| `issues.description` | issues | description | identity | {identity} | required |
+| `issues.priority` | issues | priority | identity | {identity} | required |
+| `issues.issue_type` | issues | issue_type | identity | {identity} | required |
+| `issues.prompt` | issues | prompt | identity | {identity} | optional |
+| `issues.assignee` | issues | assignee | identity | {identity} | optional |
+| `issues.topic` | issues | topic | identity | {identity} | optional |
+| `issues.rank` | issues | rank | identity | {identity} | optional |
+| `issues.lane` | issues | lane | identity | {identity} | optional |
+| `issues.resolution` | issues | resolution | identity | {identity} | optional |
+| `issues.redirect_target` | issues | redirect_target | identity | {identity} | optional |
+| `issues.follows_up` | issues | follows_up | identity | {identity} | optional |
+| `issues.created_at` | issues | created_at | timestamp | {timestamp} | required |
+| `issues.updated_at` | issues | updated_at | timestamp | {timestamp} | required |
+| `issues.closed_at` | issues | closed_at | timestamp | {timestamp} | required |
+| `issues.archived_at` | issues | archived_at | timestamp | {timestamp} | optional |
+| `issues.deleted_at` | issues | deleted_at | timestamp | {timestamp} | optional |
+| `issues.status` | issues | status | legacy_status_value | {legacy_status_value} | required |
+| `relations.src_id` | relations | src_id | identity | {identity} | required |
+| `relations.dst_id` | relations | dst_id | identity | {identity} | required |
+| `relations.type` | relations | type | identity | {identity} | required |
+| `relations.created_by` | relations | created_by | identity | {identity} | required |
+| `relations.created_at` | relations | created_at | timestamp | {timestamp} | required |
+| `comments.id` | comments | id | identity | {identity} | required |
+| `comments.issue_id` | comments | issue_id | identity | {identity} | required |
+| `comments.body` | comments | body | identity | {identity} | required |
+| `comments.created_by` | comments | created_by | identity | {identity} | required |
+| `comments.created_at` | comments | created_at | timestamp | {timestamp} | required |
+| `labels.issue_id` | labels | issue_id | identity | {identity} | required |
+| `labels.name` | labels | name | identity | {identity} | required |
+| `labels.created_by` | labels | created_by | identity | {identity} | required |
+| `labels.created_at` | labels | created_at | timestamp | {timestamp} | required |
+| `events.id` | events | id | identity | {identity} | required |
+| `events.issue_id` | events | issue_id | identity | {identity} | required |
+| `events.action` | events | action | identity | {identity, event_action} | optional |
+| `events.reason` | events | reason | identity | {identity, event_reason} | required |
+| `events.actor` | events | actor | identity | {identity, event_actor} | required |
+| `events.created_at` | events | created_at | timestamp | {timestamp} | required |
+| `events.stream` | events | stream | identity | {identity} | optional |
+| `events.workspace` | events | workspace | identity | {identity} | optional |
+| `event_changes.event_id` | event_changes | event_id | identity | {identity} | required |
+| `event_changes.field` | event_changes | field | identity | {identity} | required |
+| `event_changes.from` | event_changes | from | identity | {identity, legacy_status_value} | optional |
+| `event_changes.to` | event_changes | to | identity | {identity, legacy_status_value} | optional |
+| `purges.issue_id` | purges | issue_id | identity | {identity} | required |
+| `purges.purged_by` | purges | purged_by | identity | {identity} | required |
+| `purges.issue_created_at` | purges | issue_created_at | timestamp | {timestamp} | required |
+| `purges.purged_at` | purges | purged_at | timestamp | {timestamp} | required |
 
 
 `knownCollections map[collection]bool` is derived from `targetRegistry` values' `coll` (shapemap.go), i.e. exactly the seven collections above.
@@ -2545,71 +2545,25 @@ Scope: `internal/store/issue_ids.go`, `internal/store/labels.go`, `internal/stor
 
 ### 2.1 Constants (literal values)
 
-`internal/issueid/generate.go`:
-- `CollisionProbabilityThreshold = 0.25`
-- `MinHashLength = 3`
-- `MaxHashLength = 8`
-- `NonceAttempts = 10`
-- `Base36Alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"`
-
-`internal/issueid/slug.go`:
-- `PrefixMinLength = 3`
-- `PrefixMaxLength = 12`
-- `TopicMinLength = 3`
-- `TopicMaxLength = 30`
+The `internal/issueid` constants are specified in `inventory-model.md` §3.1, with the rest of that package: namespaces and `GenerateHashID` (§3.2), `CollisionProbability` and `ComputeAdaptiveLength` (§3.3), slug normalization (§3.4), and `Mint`. This section covers how the store drives them.
 
 ### 2.2 ID grammar
 
-Every ID is its namespace followed by the hash: `GenerateHashID` returns `string(ns) + encodeBase36(...)` — `internal/issueid/generate.go`. A top-level ID's namespace is `TopLevelNamespace(prefix, topic)`, which renders `prefix + "-" + topic + "-"`. So: `<prefix>-<topic>-<hash>` where prefix and topic are normalized slugs and hash is `length` base-36 lowercase characters (`Base36Alphabet`, `internal/issueid/generate.go`).
-
-A child ID's namespace is `ChildNamespace(parentID)`, which renders `parentID + "."` — `internal/issueid/generate.go`. So: `<parentID>.<hash>`, a base-36 hash appended to the full parent ID after a dot, and grandchildren nest (`<parentID>.<hash>.<hash>`) because a child's own ID is the namespace of its children. `idSpace` picks the namespace — `internal/store/issue_ids.go`.
+Every ID is a namespace followed by a base-36 hash. `idSpace` (`internal/store/issue_ids.go`, §2.5) picks the namespace: `issueid.TopLevelNamespace(prefix, topic)` for an issue with no parent, giving `<prefix>-<topic>-<hash>`, and `issueid.ChildNamespace(parentID)` for a child, giving `<parentID>.<hash>`. Grandchildren nest (`<parentID>.<hash>.<hash>`) because a child's own ID is the namespace of its children.
 
 "Top-level" is defined in SQL as an id with no dot: `SELECT COUNT(*) FROM issues WHERE id NOT LIKE ?` with argument `"%.%"` — `internal/store/issue_ids.go`.
 
-The test locking the shape: `TestGenerateHashID` requires an ID minted under `TopLevelNamespace("proj", "storage")` to start with `"proj-storage-"` and one minted under `ChildNamespace("proj-storage-a7k9")` to start with `"proj-storage-a7k9."`, and the remainder to have exactly `length` characters, checked for lengths `MinHashLength`, `5`, `MaxHashLength` (`assertNamespacedShape`) — `internal/issueid/generate_test.go`.
-
 ### 2.3 Slug normalization (prefix and topic)
 
-`NormalizeSlug` — `internal/issueid/slug.go`:
-- Input is `strings.TrimSpace` then `strings.ToLower`d before iteration.
-- Runes in `a-z` or `0-9` are kept verbatim.
-- Any other rune becomes a single `-`, and consecutive non-alphanumerics collapse to one `-` (`previousDash` guard).
-- Leading/trailing `-` are trimmed: `strings.Trim(builder.String(), "-")`.
-
-`NormalizeConfiguredPrefix` — `internal/issueid/slug.go`:
-- Normalizes via `NormalizeSlug`.
-- Empty result → error `"issue prefix is required"`.
-- Longer than `PrefixMaxLength` (12) → truncated to 12 bytes then re-trimmed of `-` — no error.
-- Shorter than `PrefixMinLength` (3) after normalization → error `fmt.Errorf("issue prefix must be at least %d characters after normalization", PrefixMinLength)`, i.e. `"issue prefix must be at least 3 characters after normalization"`.
-
-`NormalizeTopicForCreate` — `internal/issueid/slug.go`:
-- Empty result → `"topic is required"`.
-- Shorter than 3 → `"topic must be at least 3 characters after normalization"`.
-- Longer than 30 → `"topic must be at most 30 characters after normalization"`. Note the asymmetry with prefix: topic over-length is an error, prefix over-length is silently truncated.
-
-Callers at creation: topic normalized before the transaction (`internal/store/store.go`), prefix normalized inside the transaction with error wrapped as `fmt.Errorf("normalize issue prefix: %w", err)` (`internal/store/store.go`).
+The normalizers are specified in `inventory-model.md` §3.4. Callers at creation: topic normalized before the transaction (`internal/store/store.go`), prefix normalized inside the transaction with error wrapped as `fmt.Errorf("normalize issue prefix: %w", err)` (`internal/store/store.go`).
 
 ### 2.4 Hash minting
 
-`GenerateHashID(ns Namespace, c Content, length int, nonce int)` — `internal/issueid/generate.go`:
-- Content string: `fmt.Sprintf("%s|%s|%s|%s|%d|%d", c.Topic, c.Title, c.Description, c.Creator, c.CreatedAt.UnixNano(), nonce)`. Note the namespace (and so the prefix or parent ID) is NOT part of the hashed content — only of the rendered ID.
-- `sha256.Sum256` of that content.
-- Takes the first `hashBytesForLength(length)` bytes, base-36 encodes them to exactly `length` chars, and appends that to `string(ns)`.
-
-`hashBytesForLength` — `internal/issueid/generate.go`: the byte length of `36^length - 1` (the fewest bytes addressing every `length`-character base-36 value), capped at `sha256.Size` (32): `3→2`, `4→3`, `5→4`, `6→4`, `7→5`, `8→6`. `TestHashBytesForLength` pins that minimality for every length in `[MinHashLength, MaxHashLength]`, plus `MaxHashLength→6` and `99→32` — `internal/issueid/generate_test.go`.
-
-`encodeBase36(data, length)` — `internal/issueid/generate.go`:
-- Big-int division by 36, digits from `Base36Alphabet`, most-significant first.
-- Left-pads with `"0"` when shorter than `length`; tests: all-zero bytes → `"000000"` at length 6, `[]byte{1}` → `"000001"` — `internal/issueid/generate_test.go`.
-- Truncates by taking the **tail** when longer: `value = value[len(value)-length:]`; test asserts the clamped value equals the tail of the full encoding — `internal/issueid/generate_test.go`.
-
-Determinism: same inputs + same nonce → same ID; different nonce → different ID; a change to any one `Content` field → different ID — `internal/issueid/generate_test.go`.
+Specified in `inventory-model.md` §3.2 (`GenerateHashID`, `hashBytesForLength`, `encodeBase36`).
 
 ### 2.5 Adaptive length
 
-`ComputeAdaptiveLength(numIssues)` — `internal/issueid/generate.go`: returns the smallest `length` in `[3,8]` with `CollisionProbability(numIssues, length) <= 0.25`; falls through to `MaxHashLength` (8).
-
-`CollisionProbability(numIssues, idLength)` — `internal/issueid/generate.go`: `1 - exp(-(n*n) / (2 * 36^idLength))` (birthday bound).
+The length a namespace starts minting at is `ComputeAdaptiveLength(population)` (`inventory-model.md` §3.3); the store supplies the population.
 
 `idSpace` — `internal/store/issue_ids.go`: returns the namespace a new issue mints into and that namespace's population. `strings.TrimSpace(parentID) == ""` → `issueid.TopLevelNamespace(prefix, topic)` with `countTopLevelIssues`; otherwise `issueid.ChildNamespace(parentID)` with `countChildren`. A count error is returned as-is; no default length stands in for it.
 
@@ -2617,17 +2571,11 @@ Determinism: same inputs + same nonce → same ID; different nonce → different
 
 `countChildren` — `internal/store/issue_ids.go`: `SELECT COUNT(*) FROM relations WHERE dst_id = ? AND type = 'parent-child'` — the parent's direct children, read from the relations table; error → `fmt.Errorf("count children of %s: %w", parentID, err)`.
 
-`TestComputeAdaptiveLength` pins `ComputeAdaptiveLength(163) == MinHashLength` and `ComputeAdaptiveLength(164) > MinHashLength`, so a child mints at `MinHashLength` until its parent holds more than 163 direct children — `internal/issueid/generate_test.go`.
-
 ### 2.6 Minting algorithm and collision handling
 
 `newIssueID` — `internal/store/issue_ids.go`: builds an `issueid.Content` from topic, title, description, creator and creation instant; resolves the namespace and population through `idSpace`; returns `issueid.Mint(namespace, content, population, taken)`, where `taken` runs `SELECT (SELECT COUNT(*) FROM issues WHERE id = ?) + (SELECT COUNT(*) FROM purges WHERE issue_id = ?)` and reports the candidate occupied when the sum is above zero. Top-level and child IDs take this one path.
 
-`Mint` — `internal/issueid/generate.go`:
-1. `baseLength := min(ComputeAdaptiveLength(population), MaxHashLength)`.
-2. For `length` from `baseLength` to `MaxHashLength` (8) inclusive, for `nonce` from `0` to `NonceAttempts-1` (0..9): `GenerateHashID(ns, c, length, nonce)`, then `taken(candidate)`. Probe error → `fmt.Errorf("check issue id collision: %w", err)`.
-3. The first unoccupied candidate is returned. The existence check is over ALL issues including soft-deleted ones, so a soft-deleted issue's ID stays occupied while its row exists, and over every purge record, so a purged ID is never issued again. An ID whose row was removed without a purge record (a replay's delta dropping it) is free again, reachable only by a hash coincidence.
-4. Exhaustion error: `fmt.Errorf("generate unique issue id: exhausted lengths %d-%d", baseLength, MaxHashLength)`.
+The store's `taken` probe counts ALL issues including soft-deleted ones, so a soft-deleted issue's ID stays occupied while its row exists, and every purge record, so a purged ID is never issued again. An ID whose row was removed without a purge record (a replay's delta dropping it) is free again, reachable only by a hash coincidence. `issueid.Mint`'s length and nonce sweep and its error strings are in `inventory-model.md` §3.2.
 
 ### 2.7 Parsing / validation of an existing ID
 

@@ -261,7 +261,7 @@ The field-axis patch. Only columns the field axis owns are representable, so a s
 
 #### `SortFields` — the closed set (`internal/storage/issues.go`)
 Exactly ten keys: `"id"`, `"title"`, `"status"`, `"priority"`, `"rank"`, `"type"`, `"topic"`, `"assignee"`, `"created_at"`, `"updated_at"`.
-- Exists because each engine binds these names to its own mechanism (Dolt → SQL columns; memory → comparison functions); the set lives in the contract and each engine's binding is checked against it by the conformance suite (`internal/storage/issues.go`).
+- Exists because each engine binds these names to its own comparisons over hydrated `model.Issue` values (`SortBindings`, `internal/storage/ordering.go`); neither engine orders a listing in SQL. The set lives in the contract and each engine's binding is checked against it by the conformance suite (`internal/storage/issues.go`).
 - `"status"` orders the DERIVED lifecycle state — the reading the status FILTER takes — so one listing means one thing by the word. A container holds no stored status; it sorts among the leaves by the state its children give it (`internal/storage/issues.go`).
 
 #### `ListIssuesFilter` (`internal/storage/issues.go`)
@@ -1098,7 +1098,7 @@ Stated in `internal/storage/memory/doc.go`:
 - The last such event has `Action == "start"` (`model.ActionStart`).
 
 **`one_issues_history_matches_the_whole_log`**
-- Fixture: an epic, then children `subject` and `other`; three title patches (`"one"`, `"two"`, `"three"`) applied alternately to `subject` and `other`, then `Start{Assignee: "ada"}` on each.
+- Fixture: an epic, then children `subject` and `other`; for each title `"one"`, `"two"`, `"three"` in turn, a title patch to `subject` then to `other` (six patches, three per issue), then `Start{Assignee: "ada"}` on each.
 - The case fatals if every event in `ListAllEvents` belongs to `subject`.
 - `ListEvents(subject)` returns, by event `ID` and in order, exactly the `ListAllEvents` events with `IssueID == subject.ID`, sorted by `storage.EventOrdering`.
 

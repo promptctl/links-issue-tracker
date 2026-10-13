@@ -835,8 +835,12 @@ hangs under. Two constructors:
   base-36 encoded to exactly `length` characters (`generate.go`).
 - Result: `string(ns) + hash`, where `hash` is `length` characters from
   `Base36Alphabet` (`generate.go`). Deterministic for identical inputs; a
-  different nonce yields a different ID (pinned by `TestGenerateHashID`,
-  `generate_test.go`, subtests).
+  different nonce, or a change to any one `Content` field, yields a different
+  ID. `TestGenerateHashID` (`generate_test.go`) pins both, and requires an ID
+  minted under `TopLevelNamespace("proj", "storage")` to start
+  `proj-storage-` and one minted under `ChildNamespace("proj-storage-a7k9")`
+  to start `proj-storage-a7k9.`, with exactly `length` characters after the
+  namespace at lengths 3, 5 and 8.
 
 `type TakenFunc func(candidate string) (bool, error)` — `generate.go`: the
 occupancy probe; an error is never read as "free".
@@ -872,7 +876,9 @@ whose value space addresses all `36^length` renderable hashes, capped at
   an all-zero hash yields all `'0'` characters.
 - If longer than `length`: clamped by taking the **tail** (`value[len-length:]`)
   (`generate.go`).
-- Pinned by `TestEncodeBase36`, `generate_test.go` (subtests).
+- Pinned by `TestEncodeBase36`, `generate_test.go`: all-zero bytes →
+  `"000000"` at length 6; `[]byte{1}` → `"000001"`; four `0xFF` bytes at
+  length 3 equal the last 3 characters of their length-20 encoding.
 
 ## 3.3 Collision sizing
 `CollisionProbability(numIssues, idLength int) float64` — `generate.go`:
@@ -885,7 +891,9 @@ smallest `length` in `[MinHashLength=3, MaxHashLength=8]` whose
 `CollisionProbability(numIssues, length) <= 0.25`; if none qualifies returns
 `MaxHashLength = 8`. Pinned by `TestComputeAdaptiveLength`,
 `generate_test.go` (bounds, minimum for small counts,
-monotonic non-decreasing, clamp at max).
+monotonic non-decreasing, clamp at max, and `163` → `MinHashLength` while
+`164` → longer, so a child mints at length 3 until its parent already holds
+more than 163 direct children).
 
 ## 3.4 Slug normalization — `slug.go`
 

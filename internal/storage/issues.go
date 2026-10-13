@@ -145,9 +145,8 @@ type SortSpec struct {
 // SortFields is the closed set of keys a listing may be ordered by, and the
 // contract's statement of what each one orders.
 //
-// [LAW:one-source-of-truth] It exists because each engine necessarily binds
-// these names to its own mechanism — the Dolt engine to SQL columns, the
-// memory engine to comparison functions — and two private copies of the same
+// [LAW:one-source-of-truth] It exists because each engine binds these names to
+// its own comparisons ([SortBindings]), and two private copies of the same
 // closed set are two maps of one territory, free to drift into an engine that
 // accepts a key the other rejects. The set lives here; an engine's binding is
 // checked against it by the conformance suite rather than trusted.
