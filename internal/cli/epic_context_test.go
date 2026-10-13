@@ -202,7 +202,7 @@ func TestRenderEpicContextMixedStatesWithFocus(t *testing.T) {
 		"    [closed]      " + closed + "  Closed one  [lane: a]",
 		"    [in_progress] " + inProgress + "  Working one  [lane: b]",
 		"  ▶ [ready]       " + ready + "  Ready one  [lane: c]   (you are here)",
-		"    [blocked: by " + ready + "] " + blocked + "  Blocked one  [lane: d]",
+		"    [blocked: blocker " + ready + " still open] " + blocked + "  Blocked one  [lane: d]",
 	}
 	for _, want := range wantLines {
 		if !strings.Contains(out, want) {
@@ -376,7 +376,7 @@ func TestRenderEpicContextChildBlockedBySibling(t *testing.T) {
 	f.block(blocked, blocker)
 
 	out := f.render("")
-	want := "[blocked: by " + blocker + "; earlier sibling " + blocker + " still open] " + blocked + "  Blocked sibling"
+	want := "[blocked: blocker " + blocker + " still open; earlier sibling " + blocker + " still open] " + blocked + "  Blocked sibling"
 	if !strings.Contains(out, want) {
 		t.Errorf("sibling blocker should be named, want %q in:\n%s", want, out)
 	}
@@ -390,7 +390,7 @@ func TestRenderEpicContextChildBlockedByNonChild(t *testing.T) {
 	f.block(blocked, outsider)
 
 	out := f.render("")
-	want := "[blocked: by " + outsider + "] " + blocked + "  Blocked by outsider"
+	want := "[blocked: blocker " + outsider + " still open] " + blocked + "  Blocked by outsider"
 	if !strings.Contains(out, want) {
 		t.Errorf("external blocker should be named inline, want %q in:\n%s", want, out)
 	}
@@ -545,7 +545,7 @@ func TestRenderEpicContextCrossEpicLiveSidesRender(t *testing.T) {
 
 func TestRenderEpicContextEdgeToOwnEpicNotCrossEpic(t *testing.T) {
 	f := newEpicFixture(t, "Epic self edge", "deps")
-	// The store refuses a blocks edge between an issue and its own epic, so the
+	// The store refuses a blocked-by edge between an issue and its own epic, so the
 	// edge is written first and the issue moved in after — the way a workspace
 	// still reaches this shape.
 	child := f.outsider("Inside")

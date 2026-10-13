@@ -28,7 +28,7 @@ func bucketRelations(focalID string, relations []model.Relation, issuesByID map[
 	for _, rel := range relations {
 		switch rel.Type {
 		case model.RelBlockedBy:
-			// blocks convention: src_id=dependent, dst_id=dependency.
+			// src blocked-by dst: src waits, dst is what it waits for.
 			if rel.SrcID == focalID {
 				if dep, ok := issuesByID[rel.DstID]; ok {
 					out.BlockedBy = append(out.BlockedBy, dep)
@@ -360,8 +360,9 @@ func addRelationTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
 	}
 	// [LAW:single-enforcer] Single-parent cardinality is enforced here for
 	// every write path, not only in SetParent: a single-valued type clears any
-	// existing edge from this src before inserting, so 'lit dep add --type
-	// parent-child' can never leave a child with two parents.
+	// existing edge from this src before inserting, so a parent-child edge
+	// written through AddRelation (an import, say) can never leave a child with
+	// two parents.
 	// [LAW:dataflow-not-control-flow] The clear-or-not choice is driven by the
 	// type's cardinality value, not by which store method the caller invoked.
 	if rel.Type.SingleValuedFromSrc() {
@@ -452,7 +453,7 @@ func rejectBlocksCycle(ctx context.Context, tx *sql.Tx, dependent, dependency st
 	}
 	edges, err := loadBlocksEdges(ctx, tx)
 	if err != nil {
-		return fmt.Errorf("blocks cycle check: %w", err)
+		return fmt.Errorf("blocked-by cycle check: %w", err)
 	}
 	if blocksPrecedes(blocksPrecedenceAdj(edges), dependent, dependency) {
 		return model.ValidationError{Message: fmt.Sprintf("blocked-by: cannot add %s blocked by %s — %s is already blocked by %s (directly or transitively), so this edge would close a dependency cycle, which has no valid rank order", dependent, dependency, dependency, dependent)}
@@ -673,8 +674,8 @@ func (s *Store) RemoveRelation(ctx context.Context, srcID, dstID string, relType
 		if affected == 0 {
 			return storage.NotFoundError{Entity: "relation", ID: fmt.Sprintf("src=%s dst=%s type=%s", srcID, dstID, relType)}
 		}
-		// `lit dep rm --type parent-child` is the other door onto a detach,
-		// so it meets ClearParent's rule: a leaf keeps a parent. Judged after
+		// Removing a parent-child edge is a detach whatever the caller, so it
+		// meets ClearParent's rule: a leaf keeps a parent. Judged after
 		// the delete, against the parent edges left, so a missing edge is
 		// still reported as missing; the refusal rolls the delete back.
 		// [LAW:single-enforcer]

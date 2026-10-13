@@ -144,7 +144,7 @@ Deletion here is whole-row absence; soft deletion (retention) travels as a field
 
 `MergeResult.Collisions` holds the collisions sorted by issue id (`merge.go`, `collision.go`). A merge that holds any collision withholds its export: `Settled()` reports ok only when both `Pending` and `Collisions` are empty, and `Provisional()` reports ok only when `Collisions` is empty (`merge.go`).
 
-Merged-export assembly: issues sorted by ID; `Version` = max of the three exports' versions (`merge.go`); `WorkspaceID` and `ExportedAt` are taken from local, remote's discarded. Side tables:
+Merged-export assembly: issues sorted by ID; `Version` = `model.ExportVersion`, the format every decoded export is already in (`merge.go`); `WorkspaceID` and `ExportedAt` are taken from local, remote's discarded. Side tables:
 
 | Table | Merge | Collision rule | Referential filter |
 |---|---|---|---|

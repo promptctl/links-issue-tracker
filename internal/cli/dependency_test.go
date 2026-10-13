@@ -99,28 +99,37 @@ func TestDepAddRelatedTo(t *testing.T) {
 
 // TestDepAddRmNameExactlyOneEdge pins that each command takes one issue and
 // exactly one relation flag, and that every other shape — two bare ids, no
-// relation, two relations — is refused with the usage line naming the form
-// that works.
+// relation, two relations, one relation repeated, an empty relation — is
+// refused with the usage line naming the form that works. A repeated flag is
+// the shape pflag would otherwise read as its last value alone, dropping the
+// first edge without a word.
 func TestDepAddRmNameExactlyOneEdge(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	issueA, issueB := seedCrossEpicPair(t, ctx, ap, "A", "B")
 
 	for _, verb := range []string{"add", "rm"} {
-		for name, args := range map[string][]string{
-			"two bare ids":  {verb, issueA, issueB},
-			"no relation":   {verb, issueA},
-			"no issue":      {verb, "--blocked-by", issueB},
-			"two relations": {verb, issueA, "--blocked-by", issueB, "--related-to", issueB},
+		usage := "lit dep " + verb + " <id> --blocked-by <blocker-id>"
+		for name, tc := range map[string]struct {
+			args []string
+			want string
+		}{
+			"two bare ids":                     {args: []string{verb, issueA, issueB}, want: usage},
+			"no relation":                      {args: []string{verb, issueA}, want: usage},
+			"no issue":                         {args: []string{verb, "--blocked-by", issueB}, want: usage},
+			"two relations":                    {args: []string{verb, issueA, "--blocked-by", issueB, "--related-to", issueB}, want: usage},
+			"empty relation":                   {args: []string{verb, issueA, "--blocked-by", ""}, want: usage},
+			"empty relation beside a relation": {args: []string{verb, issueA, "--blocked-by", "", "--related-to", issueB}, want: usage},
+			"relation repeated":                {args: []string{verb, issueA, "--blocked-by", issueB, "--blocked-by", issueA}, want: `"--blocked-by" flag: given more than once`},
 		} {
 			var stdout bytes.Buffer
-			err := runAppFamily(depFamily, ctx, &stdout, ap, args)
+			err := runAppFamily(depFamily, ctx, &stdout, ap, tc.args)
 			if _, ok := err.(UsageError); !ok {
 				t.Errorf("dep %s (%s) error = %v (%T), want UsageError", verb, name, err, err)
 				continue
 			}
-			if want := "lit dep " + verb + " <id> --blocked-by <blocker-id>"; !strings.Contains(err.Error(), want) {
-				t.Errorf("dep %s (%s) error = %q, want it to name %q", verb, name, err.Error(), want)
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("dep %s (%s) error = %q, want it to name %q", verb, name, err.Error(), tc.want)
 			}
 		}
 	}

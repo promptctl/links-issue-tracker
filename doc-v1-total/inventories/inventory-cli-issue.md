@@ -902,7 +902,8 @@ lines|table") is built from the same map (`cli.go`, `output.go`).
   `[closed:wontfix]`). An `open` child gets the readiness verdict — ready →
   `[ready]`, otherwise `[blocked: <reason>[; <reason>…]]` over every blocking
   reason the annotation registry minted, phrased by `BlockingReason.Phrase`
-  (`readiness.go`): `by <id>`, `earlier sibling <id> still open`,
+  (`readiness.go`): `blocker <id> still open` (`blocker <id> (via epic) still
+  open` for one an epic above passes down), `earlier sibling <id> still open`,
   `missing <field>`, `needs-design`, `external`.
 - Cross-epic edges: for the epic node and every child that is not closed, each
   open `BlockedBy` outside the epic membership set becomes a `BlockedFromOutside`
@@ -1679,8 +1680,13 @@ Family `depFamily`, usage `"usage: lit dep <add|rm|ls> ..."` (`dependency.go`).
      positional →
      `UsageError{"usage: lit dep add <id> --blocked-by <blocker-id> | --related-to <peer-id>"}`
      → exit 2 (`dependency.go`).
-  2. Not exactly one relation flag set → the same `UsageError` → exit 2
-     (`registerEdgeFlags`, `dependency.go`).
+  2. Not exactly one relation flag given → the same `UsageError` → exit 2
+     (`registerEdgeFlags`, `dependency.go`). A flag given with an empty value
+     still counts as given, and then refuses the same way. A flag given twice is
+     refused while parsing: each edge flag is a `StringOnce` (`flagset.go`),
+     whose second `Set` fails, so the parse returns
+     `UsageError{"invalid argument \"<value>\" for \"--blocked-by\" flag: given more than once"}`
+     → exit 2.
   3. Self-loop `id == value` → `model.ValidationError{Message: fmt.Sprintf("dep add: self-loop rejected (%s %s %s)")}`
      (issue, relation type, other) → exit 3 (`dependency.go`). A transitive
      cycle is refused by the store's `AddRelation`, not here.
@@ -1690,8 +1696,10 @@ Family `depFamily`, usage `"usage: lit dep <add|rm|ls> ..."` (`dependency.go`).
      "Do not set blocked-by relationships between two issues in the same epic.  Use
      rank to specify that one issue must be completed before another issue"
      (`internal/storage/edges.go` — note the double space).
-     Leaf epic: the parent's ID if the issue is not a container and its parent
-     is, else `""` (`leafEpicID`, `dependency.go`). Two floating issues are not
+     Both endpoints are read in one `GetRelationsByIDs`; an id it omits is
+     `storage.NotFoundError{Entity: "issue"}`. Leaf epic: the parent's ID if the
+     issue is not a container and its parent is, else `""` (`leafEpicID`,
+     `dependency.go`). Two floating issues are not
      same-epic (`dependency.go`). An endpoint inside the other's epic at any
      depth, climbing only through epic parents, is refused with the same message by the store's `AddRelation`
      (`storage.RejectBlocksAlongHierarchy`, `internal/storage/edges.go`).
@@ -1700,7 +1708,8 @@ Family `depFamily`, usage `"usage: lit dep <add|rm|ls> ..."` (`dependency.go`).
   "A blocked-by B" (`dependency.go`, `internal/model/relation_type.go`).
 - Output: `depRelationLine(rel)` then the `update` breadcrumb
   (`dependency.go`). `depRelationLine` prints `"<src> <verb> <dst>"` with the
-  verb from `relationVerb` (`dependency.go`):
+  verb from `relationReading` (`dependency.go`), which panics on a type it has
+  no reading for:
   - `blocked-by` → `"<src> blocked by <dst>"`
   - `parent-child` → `"<src> child of <dst>"`
   - `related-to` → `"<src> related to <dst>"`

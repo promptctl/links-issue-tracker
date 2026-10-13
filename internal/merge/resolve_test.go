@@ -184,7 +184,7 @@ func TestResolveIssueAssigneeTiebreakSymmetry(t *testing.T) {
 }
 
 func TestThreeWayUnionsConcurrentNonParentRelations(t *testing.T) {
-	// blocks / related-to are additively unioned: a blocks edge added on one side
+	// blocked-by / related-to are additively unioned: a blocked-by edge added on one side
 	// and a related-to edge added on the other both survive. They are different
 	// keys with no single-valued constraint, so unlike parent-child neither is
 	// pruned — concurrent links from two machines accrue rather than overwrite.

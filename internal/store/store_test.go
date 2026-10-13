@@ -2890,7 +2890,7 @@ func TestRelationEndpointVanishedRejected(t *testing.T) {
 	assertNotFound("SetParent", parentErr)
 
 	// Neither rejected call wrote an edge: src still holds exactly the
-	// parent-child edge its creation wrote, to home, and no blocks edge.
+	// parent-child edge its creation wrote, to home, and no blocked-by edge.
 	rels, err := st.listRelations(ctx, src.ID)
 	if err != nil {
 		t.Fatalf("listRelations(src) error = %v", err)

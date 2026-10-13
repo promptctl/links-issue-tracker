@@ -66,7 +66,7 @@ func TestDoctorNamesAWaitLoop(t *testing.T) {
 // C stands behind B in their lane and also depends on B, so two links run from
 // C to B. Removing either alone leaves C waiting on B, so the loop names both.
 // The loop runs back through epic F's child, since the store refuses a loop
-// of blocks edges alone.
+// of blocked-by edges alone.
 func TestDoctorNamesEveryLinkBetweenAPair(t *testing.T) {
 	h := newReadyTestHarness(t)
 	e := h.createIssue(storage.CreateIssueInput{Title: "E", Topic: "loop", IssueType: "epic"})

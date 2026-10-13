@@ -310,7 +310,7 @@ func TestRouteNextTerminalExhaustionNamesTheStayRouteAgainstABlock(t *testing.T)
 	}
 
 	// Follow the route as printed. The edge goes through the CLI's own policy
-	// boundary, which refuses a blocks edge inside one epic, and the next
+	// boundary, which refuses a blocked-by edge inside one epic, and the next
 	// route serves the new ticket from the lane this checkout holds.
 	unblocker := followStayRoute(t, h, []string{"--parent", epicA.ID, "--top"}, blocker.ID)
 	rows, details, epics = h.gather()
@@ -390,7 +390,7 @@ func TestRouteNextStayRouteWorksWhenTheEpicItselfIsBlocked(t *testing.T) {
 }
 
 // A dependency inside the epic is never the blocker exhaustion names. lit
-// refuses a blocks edge between two tickets of one epic, yet one can exist — an
+// refuses a blocked-by edge between two tickets of one epic, yet one can exist — an
 // import writes it, or it predates the rule — and a stay route named against it
 // prints a `lit dep add` lit then refuses. Here the sibling is another
 // checkout's work, so the epic waits on work underway and no route stays.

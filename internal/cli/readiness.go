@@ -39,7 +39,7 @@ type BlockingReason struct {
 // arriving on screen as a blank reason or, worse, no reason at all.
 func (r BlockingReason) Phrase() string {
 	if label, ok := r.dependency(); ok {
-		return "by " + label
+		return "blocker " + label + " still open"
 	}
 	if label, ok := blockingLabelOf(r.Kind); ok {
 		return label

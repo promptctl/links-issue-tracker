@@ -1011,7 +1011,7 @@ Files: `/Users/bmf/code/links-issue-tracker/internal/merge/merge.go`, `collision
 
 ### 11.1 Signatures
 
-merge.go: `MergeResult struct{ export model.Export; Pending []ProsePending; Collisions []Collision }` (merge.go; `Collision` is declared at collision.go); `(MergeResult) Settled() (model.Export, bool)`, ok only when `Pending` and `Collisions` are both empty (merge.go); `(MergeResult) Provisional() (model.Export, bool)`, ok only when `Collisions` is empty (merge.go); `side uint8`; `issueScope map[string]side` with `admits`; `sidedRows[T any]`; `bothSidesOf[T any]`; `ThreeWay(base model.Export, local model.Export, remote model.Export) MergeResult` (merge.go); `mapIssues`; `optionalIssuePtr`; `unionIssueIDs`; `issueChanged`; `issueEqual`; `issueProjection` struct; `issueProjectionFrom`; `mergeRelations`; `enforceSingleParent`; `breakParentCycles`; `maxString`; `mergeComments`; `mergeLabels`; `mergeEvents`; `maxInt`.
+merge.go: `MergeResult struct{ export model.Export; Pending []ProsePending; Collisions []Collision }` (merge.go; `Collision` is declared at collision.go); `(MergeResult) Settled() (model.Export, bool)`, ok only when `Pending` and `Collisions` are both empty (merge.go); `(MergeResult) Provisional() (model.Export, bool)`, ok only when `Collisions` is empty (merge.go); `side uint8`; `issueScope map[string]side` with `admits`; `sidedRows[T any]`; `bothSidesOf[T any]`; `ThreeWay(base model.Export, local model.Export, remote model.Export) MergeResult` (merge.go); `mapIssues`; `optionalIssuePtr`; `unionIssueIDs`; `issueChanged`; `issueEqual`; `issueProjection` struct; `issueProjectionFrom`; `mergeRelations`; `enforceSingleParent`; `breakParentCycles`; `maxString`; `mergeComments`; `mergeLabels`; `mergeEvents`.
 
 collision.go: `Collision{IssueID string; Ours model.Issue; Theirs model.Issue}` with JSON tags `issue_id/ours/theirs`; `SameEntity{base *model.Issue; ours, theirs model.Issue; oursWS, theirsWS string}` — every field unexported, so outside the package `Classify` is the only way to obtain one; `Classify(base *model.Issue, ours, theirs model.Issue, oursWS, theirsWS string) (SameEntity, *Collision)`; `ancestorOf(base *model.Issue, ours model.Issue) *model.Issue`; `SortCollisions(collisions []Collision) []Collision`.
 
@@ -1071,7 +1071,7 @@ Tests: `merge_test.go` (nil vs empty `Labels` compare equal, so JSON round-trip 
 
 - `mergedIssues` sorted ascending by `ID` (merge.go).
 - `scope` is an `issueScope` (`map[string]side`, where `side` is the bit set `fromLocal = 1`, `fromRemote = 2`, `bothSides = 3`, merge.go). Every surviving issue id is set to `bothSides` (merge.go); each collided id is then set to `fromLocal` (merge.go). `scope.admits(id, from)` is `scope[id]&from != 0`, so an id absent from the merged issues admits no side (merge.go). The scope gates every side-table.
-- `Version = maxInt(local.Version, remote.Version, base.Version)` (merge.go; `maxInt` returns 1 for an empty argument list, merge.go).
+- `Version = model.ExportVersion` (merge.go).
 - `WorkspaceID = local.WorkspaceID` — remote's is discarded (merge.go).
 - `ExportedAt = local.ExportedAt` — remote's is discarded (merge.go).
 - `Relations = mergeRelations(scope, local.Relations, remote.Relations)` — **base not passed** (merge.go).

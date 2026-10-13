@@ -39,20 +39,23 @@ const edgeFlagsUsage = "--blocked-by <blocker-id> | --related-to <peer-id>"
 
 // registerEdgeFlags declares every edgeFlags row on fs and returns the reader
 // that turns the parsed flags into the one edge they name. [LAW:single-enforcer]
-// Exactly-one is decided here for both commands; a command names one edge.
+// Exactly-one is decided here for both commands; a command names one edge. A
+// flag repeated is refused while parsing (StringOnce), and a flag given counts
+// as naming its edge even when its value is empty, so `--blocked-by ""` beside
+// `--related-to X` is refused rather than read as the related-to edge alone.
 func registerEdgeFlags(fs *cobraFlagSet) func(usage string) (model.RelationType, string, error) {
 	values := make([]*string, len(edgeFlags))
 	for i, row := range edgeFlags {
-		values[i] = fs.String(row.name, "", row.usage)
+		values[i] = fs.StringOnce(row.name, row.usage)
 	}
 	return func(usage string) (model.RelationType, string, error) {
 		var named []int
-		for i, value := range values {
-			if *value != "" {
+		for i, row := range edgeFlags {
+			if fs.Changed(row.name) {
 				named = append(named, i)
 			}
 		}
-		if len(named) != 1 {
+		if len(named) != 1 || strings.TrimSpace(*values[named[0]]) == "" {
 			return "", "", UsageError{Message: usage}
 		}
 		return edgeFlags[named[0]].rel, *values[named[0]], nil
@@ -156,13 +159,17 @@ func depLsLeaf() appLeaf {
 // rejectSameEpicBlocks errors when both endpoints are leaves of one epic —
 // siblings, which rank already orders. The other half of the rule, an edge
 // between an issue and an epic it sits under, is the store's: it refuses that
-// shape on every blocks write, imports included, with the same message.
+// shape on every blocked-by write, imports included, with the same message.
 func rejectSameEpicBlocks(ctx context.Context, ap *app.App, fromID, toID string) error {
-	fromEpic, err := leafEpicID(ctx, ap, fromID)
+	relations, err := ap.Store.GetRelationsByIDs(ctx, []string{fromID, toID})
 	if err != nil {
 		return err
 	}
-	toEpic, err := leafEpicID(ctx, ap, toID)
+	fromEpic, err := leafEpicID(relations, fromID)
+	if err != nil {
+		return err
+	}
+	toEpic, err := leafEpicID(relations, toID)
 	if err != nil {
 		return err
 	}
@@ -175,13 +182,15 @@ func rejectSameEpicBlocks(ctx context.Context, ap *app.App, fromID, toID string)
 // leafEpicID returns the epic a leaf issue belongs to: its parent's ID when the
 // parent is a container, otherwise "" (floating, or itself a container — an
 // epic's ordering against its own children is the store's ancestry rule).
-func leafEpicID(ctx context.Context, ap *app.App, issueID string) (string, error) {
-	detail, err := ap.Store.GetIssueDetail(ctx, issueID)
-	if err != nil {
-		return "", err
+// GetRelationsByIDs omits an id that names no issue, so its absence is the
+// NotFoundError a detail read would have returned.
+func leafEpicID(relations map[string]storage.IssueRelations, issueID string) (string, error) {
+	rel, ok := relations[issueID]
+	if !ok {
+		return "", storage.NotFoundError{Entity: "issue", ID: issueID}
 	}
-	if !detail.Issue.IsContainer() && detail.Parent != nil && detail.Parent.IsContainer() {
-		return detail.Parent.ID, nil
+	if !rel.Issue.IsContainer() && rel.Parent != nil && rel.Parent.IsContainer() {
+		return rel.Parent.ID, nil
 	}
 	return "", nil
 }
@@ -189,12 +198,21 @@ func leafEpicID(ctx context.Context, ap *app.App, issueID string) (string, error
 // depRelationLine renders an edge as the sentence it records, endpoints in
 // stored order: "A blocked by B", "C child of P", "A related to B".
 func depRelationLine(rel model.Relation) string {
-	return fmt.Sprintf("%s %s %s", rel.SrcID, relationVerb[rel.Type], rel.DstID)
+	return fmt.Sprintf("%s %s %s", rel.SrcID, relationReading(rel.Type), rel.DstID)
 }
 
-// relationVerb is each relation's reading between its src and dst.
-var relationVerb = map[model.RelationType]string{
-	model.RelBlockedBy:   "blocked by",
-	model.RelParentChild: "child of",
-	model.RelRelatedTo:   "related to",
+// relationReading is each relation's reading between its src and dst.
+// [LAW:no-silent-failure] The default panics rather than printing two ids with
+// nothing between them, which would hide which end waits.
+func relationReading(rt model.RelationType) string {
+	switch rt {
+	case model.RelBlockedBy:
+		return "blocked by"
+	case model.RelParentChild:
+		return "child of"
+	case model.RelRelatedTo:
+		return "related to"
+	default:
+		panic("relationReading: relation type with no reading: " + string(rt))
+	}
 }

@@ -71,6 +71,12 @@ func TestExportDecodeRenamesLegacyBlocksEdges(t *testing.T) {
 		if err := json.Unmarshal([]byte(doc), &export); err != nil {
 			t.Fatalf("version %d: Unmarshal: %v", tc.version, err)
 		}
+		// The decoded value is in the current format, so it says so: a version
+		// 2 label over blocked-by rows would be re-encoded as a version 2 file
+		// no version 2 reader can read.
+		if export.Version != ExportVersion {
+			t.Errorf("version %d: decoded Version = %d, want %d", tc.version, export.Version, ExportVersion)
+		}
 		want := []Relation{
 			{SrcID: "waiter", DstID: "blocker", Type: tc.wantType},
 			{SrcID: "child", DstID: "epic", Type: RelParentChild},

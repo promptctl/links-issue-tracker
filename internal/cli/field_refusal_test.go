@@ -31,7 +31,7 @@ func TestFieldRefusalsAreDeterministicRefusals(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(task) error = %v", err)
 	}
-	// In an epic of its own: a blocks edge between siblings is refused, and the
+	// In an epic of its own: a blocked-by edge between siblings is refused, and the
 	// edge below is the fixture for the cycle case, not a refusal under test.
 	blocked, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "blocked by the task", Topic: "fields", IssueType: "task", ParentID: seedEpicRaw(t, ctx, ap, "another epic", "fields")})
 	if err != nil {

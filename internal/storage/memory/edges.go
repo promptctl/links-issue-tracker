@@ -325,7 +325,7 @@ func (e *Engine) RemoveRelation(ctx context.Context, srcID, dstID string, relTyp
 	if !e.hasRelation(srcID, dstID, relType) {
 		return storage.NotFoundError{Entity: "relation", ID: fmt.Sprintf("src=%s dst=%s type=%s", srcID, dstID, relType)}
 	}
-	// `lit dep rm --type parent-child` is the other door onto a detach, so it
+	// Removing a parent-child edge is a detach whatever the caller, so it
 	// meets ClearParent's rule: a leaf keeps a parent, judged against the
 	// parent edges left once this one goes. The edge exists, so its src does.
 	// [LAW:single-enforcer]

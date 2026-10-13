@@ -925,7 +925,9 @@ func v1EventID(issueID, action, fromStatus, toStatus, createdBy string, createdA
 
 // UnmarshalJSON handles v1 (history array), v2 (events array, blocked-by edges
 // spelled "blocks") and v3 export formats so old sync files and backup
-// restores remain readable after each format change.
+// restores remain readable after each format change. The decoded value is in
+// the current format whatever version it was read from, so it carries
+// ExportVersion: the version read is consumed here, by the dispatch.
 // [LAW:single-enforcer] Version dispatch lives here; every JSON decode path
 // (syncfile, backup, store tests) inherits it through json.Unmarshal.
 func (e *Export) UnmarshalJSON(data []byte) error {
@@ -945,7 +947,7 @@ func (e *Export) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*e = Export{
-		Version:     raw.Version,
+		Version:     ExportVersion,
 		WorkspaceID: raw.WorkspaceID,
 		ExportedAt:  raw.ExportedAt,
 		Issues:      raw.Issues,

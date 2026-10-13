@@ -743,7 +743,9 @@ may be carried, because the database syncs to shared remotes
   `FieldChange{Field: "status", From: h.FromStatus, To: h.ToStatus}`
   (`model.go`). v2+ exports ignore any `history` array. If `raw.Version < 3`,
   every relation's `Type` is read through `RelationTypeFromStored`, so a
-  `blocks` edge decodes as `blocked-by` (`model.go`). Pinned by
+  `blocks` edge decodes as `blocked-by` (`model.go`). The decoded value's
+  `Version` is `ExportVersion` whatever version was read, since it is now in
+  the current format (`model.go`). Pinned by
   `TestExportDecodeRenamesLegacyBlocksEdges`, `relation_type_test.go`.
 
 ## 2.11 `ValidationError` — `validation.go`

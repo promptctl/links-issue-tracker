@@ -1274,7 +1274,7 @@ func (s *Store) liveIssueIDs(ctx context.Context) (map[string]struct{}, error) {
 	return out, nil
 }
 
-// blocksEdge is one blocks relation hydrated as a precedence constraint: the
+// blocksEdge is one blocked-by relation hydrated as a precedence constraint: the
 // dependent must be ranked below the dependency, i.e. the dependency comes
 // first. A rank order is a total order over issues, and a total order that
 // satisfies every blocked-by edge exists if and only if the precedence graph is
@@ -1286,7 +1286,7 @@ type blocksEdge struct {
 	dependency string // dst — ranked above
 }
 
-// loadBlocksEdges returns every blocks relation whose endpoints are both
+// loadBlocksEdges returns every blocked-by relation whose endpoints are both
 // non-deleted. It does not filter on rank: the constraint graph is what it is
 // whatever the current ranks say, and every caller asks about the graph rather
 // than about placement.
