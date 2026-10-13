@@ -76,6 +76,14 @@ func relationOf(standing claims.Standing, self model.Attribution) laneRelation {
 // start` is the one command that transfers a claim, so it is the one place
 // that gates the transfer.
 func authorizeStart(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue, start model.Start, take bool) (notice string, err error) {
+	// A takeover is worth confirming only for a start that can land. Issue.Apply
+	// refuses a frozen issue and a container whoever holds the lane, so its
+	// refusal answers first; gating first would send the caller to --take and
+	// then to this same refusal. Store.Apply runs it again on the row it writes.
+	// [LAW:single-enforcer]
+	if _, err := prior.Apply(start); err != nil {
+		return "", err
+	}
 	relations, err := ap.Store.GetRelationsByIDs(ctx, []string{issueID})
 	if err != nil {
 		return "", err

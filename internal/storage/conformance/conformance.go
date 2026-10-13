@@ -450,7 +450,7 @@ func applyToContainer(t *testing.T, ctx context.Context, st storage.Store, clk *
 // [LAW:single-enforcer]
 func applyToFrozenNamesTheThaw(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	for _, tc := range []struct {
-		freeze model.Action
+		freeze model.RetentionAction
 		state  string
 		thaw   string
 	}{

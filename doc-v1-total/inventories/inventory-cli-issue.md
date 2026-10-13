@@ -1163,8 +1163,11 @@ positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason 
 
 **Store-level refusals reaching every transition:**
 - An archived or deleted issue rejects any status action with
-  `model.FrozenIssueError`:
-  ` + MSG + ` (`internal/model/model.go`).
+  `model.FrozenIssueError`: ``issue <id> is archived, so its status cannot
+  change: run `lit unarchive <id>` first`` (or `deleted` and `lit restore`)
+  (`internal/model/model.go`). For `start` it answers before the takeover
+  gate, so a frozen ticket in a lane another checkout holds is refused, not
+  offered a takeover (`claims_takeover.go`).
 - A container (epic) rejects any status action with `ContainerActionError`
   (`internal/model/model.go`).
 - The redirect target must exist, must not be the closing issue itself, and must

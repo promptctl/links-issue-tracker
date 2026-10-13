@@ -388,7 +388,7 @@ func (e ContainerActionError) childClause() string {
 // FrozenIssueError refuses a status action on an issue that has left the flow.
 // It names the state the issue is in and the command that brings it back,
 // never the refused action: a sentence built around the action's verb would
-// have to fit all eight verbs, and `done` is not a bare infinitive.
+// have to fit every status verb, and `done` is not a bare infinitive.
 // [LAW:single-enforcer] Raised only by Issue.Apply, which both storage engines
 // call, so there is one refusal and no per-engine copy of its wording.
 type FrozenIssueError struct {
