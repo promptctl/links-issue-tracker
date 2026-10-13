@@ -65,6 +65,11 @@ func TestRunHistoryPrintsMultiEditTransitionTrail(t *testing.T) {
 			t.Fatalf("lit history output missing transition %q in:\n%s", want, out)
 		}
 	}
+	// No prose field changed, so the trail is the whole output: it ends at the
+	// last change it records.
+	if !strings.HasSuffix(out, "    priority: 0 → 1\n") {
+		t.Fatalf("lit history output does not end at its last transition:\n%s", out)
+	}
 }
 
 // seedProseHistory creates a ticket and edits its prose fields through the
