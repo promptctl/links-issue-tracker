@@ -17,10 +17,10 @@ import (
 // about evidence that actually made the trip through sync, not an in-process
 // stub.
 func TestStartRefusesAndThenTakesOverAFreshForeignClaim(t *testing.T) {
-	// resolveIdentity prefers CLAUDE_CODE_SESSION_ID over --assignee whenever
+	// resolveIdentity prefers CLAUDE_CODE_SESSION_ID over --by whenever
 	// it is set, which would flatten alpha's and bravo's assignees to one value
 	// if this process inherited it from an agent's own shell. Clearing it makes
-	// --assignee the real identity source, as CLAUDE_CODE_SESSION_ID is for a
+	// --by the real identity source, as CLAUDE_CODE_SESSION_ID is for a
 	// real agent session, so this test drives the two-distinct-identities case.
 	// The shared-identity case is its own test below, and it transfers too.
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
@@ -42,7 +42,7 @@ func TestStartRefusesAndThenTakesOverAFreshForeignClaim(t *testing.T) {
 
 	epic := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "takeover epic", "--topic", "takeover-e2e", "--type", "epic"))
 	ticket := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "the one ticket of its epic", "--topic", "takeover-e2e", "--type", "task", "--parent", epic))
-	runCLIInDir(t, alpha, "start", ticket, "--assignee", "alpha-agent")
+	runCLIInDir(t, alpha, "start", ticket, "--by", "alpha-agent")
 	runCLIInDir(t, alpha, "sync", "push", "--set-upstream")
 
 	bravo := filepath.Join(base, "bravo")
@@ -54,7 +54,7 @@ func TestStartRefusesAndThenTakesOverAFreshForeignClaim(t *testing.T) {
 	// Fresh foreign claim, no --take: refused, and the refusal names the
 	// holder and instructs the flag rather than failing silently.
 	// [LAW:no-silent-failure]
-	out, err := runCLIInDirAllowError(t, bravo, "start", ticket, "--assignee", "bravo-agent")
+	out, err := runCLIInDirAllowError(t, bravo, "start", ticket, "--by", "bravo-agent")
 	if err == nil {
 		t.Fatalf("start %s without --take = %q, want a refusal (alpha's claim is fresh)", ticket, out)
 	}
@@ -85,7 +85,7 @@ func TestStartRefusesAndThenTakesOverAFreshForeignClaim(t *testing.T) {
 
 	// Same command, --take: proceeds, and the takeover is visible in the
 	// output rather than silent.
-	out = runCLIInDir(t, bravo, "start", ticket, "--assignee", "bravo-agent", "--take")
+	out = runCLIInDir(t, bravo, "start", ticket, "--by", "bravo-agent", "--take")
 	if !strings.Contains(out, "taking over") {
 		t.Fatalf("start %s --take = %q, want it to announce the takeover", ticket, out)
 	}
@@ -104,7 +104,7 @@ func TestStartRefusesAndThenTakesOverAFreshForeignClaim(t *testing.T) {
 
 	// The lane is now bravo's: starting it again, still as bravo-agent, is
 	// the happy path — no confirmation, no warning, no ceremony.
-	out = runCLIInDir(t, bravo, "start", ticket, "--assignee", "bravo-agent")
+	out = runCLIInDir(t, bravo, "start", ticket, "--by", "bravo-agent")
 	if strings.Contains(out, "claimed") || strings.Contains(out, "--take") {
 		t.Fatalf("start %s on bravo's own lane = %q, want no takeover ceremony", ticket, out)
 	}
@@ -140,7 +140,7 @@ func TestStartOnAnExpiredForeignClaimIsSilent(t *testing.T) {
 
 	epic := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "takeover epic", "--topic", "takeover-e2e", "--type", "epic"))
 	ticket := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "the one ticket of its epic", "--topic", "takeover-e2e", "--type", "task", "--parent", epic))
-	runCLIInDir(t, alpha, "start", ticket, "--assignee", "alpha-agent")
+	runCLIInDir(t, alpha, "start", ticket, "--by", "alpha-agent")
 	runCLIInDir(t, alpha, "sync", "push", "--set-upstream")
 
 	bravo := filepath.Join(base, "bravo")
@@ -152,7 +152,7 @@ func TestStartOnAnExpiredForeignClaimIsSilent(t *testing.T) {
 	writeTinyFreshnessWindow(t, bravo)
 	waitPastFreshnessWindow(t)
 
-	out := runCLIInDir(t, bravo, "start", ticket, "--assignee", "bravo-agent")
+	out := runCLIInDir(t, bravo, "start", ticket, "--by", "bravo-agent")
 	// "--take", "take over" and "taking over" rather than a bare "take": the
 	// fixture's topic is takeover-e2e, and the ticket id carries it.
 	for _, residue := range []string{"claimed", "stale", "check for unmerged", "--take", "take over", "taking over", "claim transferred"} {
@@ -220,7 +220,7 @@ func TestStartTakesOverALiveLaneUnderOneSharedIdentity(t *testing.T) {
 	const shared = "one-identity"
 	epic := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "takeover epic", "--topic", "takeover-e2e", "--type", "epic"))
 	ticket := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "the one ticket of its epic", "--topic", "takeover-e2e", "--type", "task", "--parent", epic))
-	runCLIInDir(t, alpha, "start", ticket, "--assignee", shared)
+	runCLIInDir(t, alpha, "start", ticket, "--by", shared)
 	runCLIInDir(t, alpha, "sync", "push", "--set-upstream")
 
 	bravo := filepath.Join(base, "bravo")
@@ -231,7 +231,7 @@ func TestStartTakesOverALiveLaneUnderOneSharedIdentity(t *testing.T) {
 
 	// Alpha's claim is live, so the takeover is the deliberate --take crossing;
 	// the notice it prints is the subject here.
-	out := runCLIInDir(t, bravo, "start", ticket, "--assignee", shared, "--take")
+	out := runCLIInDir(t, bravo, "start", ticket, "--by", shared, "--take")
 	if !strings.Contains(out, "claim transferred") {
 		t.Fatalf("start %s --take over a live lane of the same identity = %q, want the transfer announced", ticket, out)
 	}
@@ -245,7 +245,7 @@ func TestStartTakesOverALiveLaneUnderOneSharedIdentity(t *testing.T) {
 	// about the line just printed: a second start by bravo is the happy path —
 	// no gate, no notice — which is only true if the first start wrote the
 	// establishing event that moved the lane here.
-	out = runCLIInDir(t, bravo, "start", ticket, "--assignee", shared)
+	out = runCLIInDir(t, bravo, "start", ticket, "--by", shared)
 	if strings.Contains(out, "claim transferred") || strings.Contains(out, "--take") {
 		t.Fatalf("start %s on bravo's own lane = %q, want no ceremony and no transfer notice: nothing moved", ticket, out)
 	}
@@ -283,14 +283,14 @@ func TestStartOnAPresetAssigneeAnnouncesNoTransfer(t *testing.T) {
 	epic := extractTicketID(t, runCLIInDir(t, repo, "new", "--title", "takeover epic", "--topic", "takeover-e2e", "--type", "epic"))
 	ticket := extractTicketID(t, runCLIInDir(t, repo, "new", "--title", "preset", "--topic", "takeover-e2e", "--type", "task", "--parent", epic, "--assignee", "alice"))
 
-	out := runCLIInDir(t, repo, "start", ticket, "--assignee", "alice")
+	out := runCLIInDir(t, repo, "start", ticket, "--by", "alice")
 	if strings.Contains(out, "claim transferred") {
 		t.Fatalf("first start of %s = %q, want no transfer notice: an assignee set at creation is a field, not a hold", ticket, out)
 	}
 
 	// The same command once the lane IS held announces the change, so the
 	// silence above is the preset case specifically and not a dead notice.
-	out = runCLIInDir(t, repo, "start", ticket, "--assignee", "bob")
+	out = runCLIInDir(t, repo, "start", ticket, "--by", "bob")
 	if !strings.Contains(out, "claim transferred") {
 		t.Fatalf("start %s over a held lane = %q, want the transfer announced", ticket, out)
 	}

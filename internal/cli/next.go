@@ -26,6 +26,7 @@ const nextUsage = "usage: lit next [--type ...] [--status ...] [--labels ...] [-
 
 func nextLeaf() appLeaf {
 	fs := newCobraFlagSet("next")
+	fs.Retire("continue", "--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag")
 	assignee := fs.String("assignee", "", "Filter by assignee")
 	issueType := fs.String("type", "", "Filter by issue type")
 	status := fs.String("status", "", "Filter by status: open|in_progress")
@@ -36,15 +37,13 @@ func nextLeaf() appLeaf {
 	all := fs.Bool("all", false, "Ignore the focus scope and route over the whole queue")
 	// `next` is read-only and still needs to know who is asking, because it is
 	// the one read command whose output names an identity — resumeAdvice says
-	// whether the ticket in flight is yours. So it takes the same hidden --by
-	// fallback every mutating command takes, and reads it the same way: the
-	// session env wins, --by answers when there is none. Without it the two
-	// halves of that comparison would be resolved by different rules — the
-	// assignee written through `lit start --assignee bob` with no session env,
-	// the reader resolved from the env alone — and lit would tell bob the
-	// ticket he assigned himself belongs to somebody else, with no flag on this
-	// command able to say otherwise. Not the command's own --assignee: that
-	// narrows the view, and a filter must not be able to rename the reader.
+	// whether the ticket in flight is yours. So it takes the same --by every
+	// mutating command takes, and reads it the same way: the session env wins,
+	// --by answers when there is none. `lit start --by bob` wrote the assignee
+	// through that rule, so `lit next --by bob` compares like with like; read
+	// from the env alone, lit would tell bob the ticket he assigned himself
+	// belongs to somebody else. Not the command's own --assignee: that narrows
+	// the view, and a filter must not be able to rename the reader.
 	//
 	// It travels to the renderer as an argument rather than on claimContext.
 	// That context is gathered by four commands and read for its standings; a

@@ -122,15 +122,17 @@ into* one of those, the call and its observable effect are recorded here.
 - Registration helpers: `String`, `Bool`, `Int` (`cli.go`), `StringArray`
   (repeatable, never comma-split — `cli.go`), `StringOptional`
   (`--flag` with no value takes `defaultIfPresent`, absent takes
-  `defaultIfAbsent` — `cli.go`), `Hide(name)` marks a flag hidden but
-  functional (`cli.go`).
+  `defaultIfAbsent` — `cli.go`).
 - `parseFlagSet(fs, args, stdout)` (`flagset.go`) is the single parse boundary:
   - On `pflag.ErrHelp` it prints `"Usage of <use>:\n"` followed by
     `PrintDefaults()` **to stdout** and returns `errHelpHandled` → exit 0
     (`cli.go`, printer at `cli.go`).
-  - A `*pflag.NotExistError` whose parsed name is `continue` (from `--continue`
-    or `--continue=<x>`; not `--continuex`, and not `-continue`, which pflag
-    reads as the shorthand group `-c…`) →
+  - A `*pflag.NotExistError` whose parsed name the leaf declared retired with
+    `fs.Retire` (from `--name` or `--name=<x>`; not `--namex`, and not `-name`,
+    which pflag reads as a shorthand group) → `UnsupportedError` carrying that
+    leaf's sentence → exit 3 (`flagset.go`). `registerActor` retires `assignee`
+    with ``"--assignee does not name who is acting here; name yourself with --by <name> (CLAUDE_CODE_SESSION_ID wins when set), or change a ticket's assignee with `lit update <id> --assignee <name>`"`` (`cli.go`), inert on a leaf that registers its own
+    `--assignee`; `next` retires `continue` (`next.go`) →
     `UnsupportedError{Message: "--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag"}`
     → exit 3 (`flagset.go`).
   - Every other parse error — unknown flag, missing value, invalid value, bad
@@ -296,10 +298,9 @@ Stdout stays the result channel.
   `CLAUDE_CODE_SESSION_ID` is non-empty (after trim), the identity is
   `"claude_" + sessionID`, **overriding any explicit value**; otherwise the
   trimmed explicit value.
-- `registerActor(fs)` (`cli.go`) declares a **hidden** `--by` string
-  flag (default `""`, empty usage string) and returns a resolver closure. The raw
-  flag value is never exposed; `--by` does not appear in help output
-  (`cli.go`).
+- `registerActor(fs)` (`cli.go`) declares a `--by` string
+  flag (default `""`, usage `byUsage`) and returns a resolver closure. The raw
+  flag value is never exposed (`cli.go`).
 - Empty actor is normalized by the store to `"unknown"`
   (`internal/store/store.go`).
 - A claimant with no assignee is named by its checkout: `describeClaimant` returns `nameCheckout(c.Checkout)` when `c.Assignee == ""` (`claims_render.go`).
@@ -604,7 +605,6 @@ else ready.
 | `--labels` | string | `""` | "Comma-separated labels" (split by `splitCSV`) |
 | `--lane` | string | `""` | "Lane key partitioning an epic's children into parallel rank-ordered sub-sequences; shared lane serializes, distinct lane parallelizes" |
 | `--top` | bool | `false` | "Promote the new issue to the top of its frame (the default appends it to the bottom)" |
-| `--by` | string (hidden) | `""` | actor fallback (§1.11) — *note*: `newLeaf` registers no actor; `CreatedBy` is not set from the CLI here |
 
 - `--top` maps to `storage.RankTop`; unflagged uses the zero `RankPlacement`
   (`rankPlacement`, `cli.go`).
@@ -998,7 +998,7 @@ history:
   (default `""`), `--priority` (int, default 0), `--assignee`, `--labels`,
   `--lane`, `--status` (registered only to intercept it; help text
   "(removed) change status with the transition verbs: lit start|done|close|open"),
-  `--reason` ("Reason recorded on the field-change event"), and hidden `--by`.
+  `--reason` ("Reason recorded on the field-change event"), and `--by`.
 - Refusals:
   - `len(positional) != 1` → `UsageError` with the usage line
     `"usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--lane <key>] [--reason <text>]"`
@@ -1096,15 +1096,15 @@ The `retention` group also holds `purge`, which is not a transition and does not
 route through `transitionLeaf` — §2.29.
 
 **Common flags on every transition** (`cli.go`):
-`--reason` (string, `""`, "Transition reason") and hidden `--by`.
+`--reason` (string, `""`, "Transition reason") and `--by`.
 
 **Per-spec flags** (`cli.go`):
-- `start` adds `--assignee` (string, `""`, help "Assignee fallback when
-  CLAUDE_CODE_SESSION_ID is unset (env always wins when set)") and `--take` (bool,
+- `start` adds `--take` (bool,
   `false`, help "Confirm taking over a lane another checkout claims right now
   (required for non-interactive callers; without it an interactive terminal is
   prompted instead)") (`cli.go`). The action is
-  `model.Start{Assignee: resolveIdentity(*assignee)}` (`cli.go`).
+  `model.Start{Assignee: actor()}`, `actor` being the `--by` resolver
+  `transitionLeaf` passes to `registerFlags` (`cli.go`).
 - `close` adds `--resolution` (string, `""`, "Close resolution (required):
   duplicate|superseded|obsolete|wontfix") and `--of` (string, `""`, "Canonical
   ticket a duplicate/superseded close redirects to (required for those, rejected
@@ -1335,7 +1335,7 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
 
 - Registration `register.go`, `app.AccessRead`, handler `nextLeaf`
   (`next.go`). Summary: "Print the next workable leaf to lit start".
-- Flags (`next.go`, and the hidden `--by`):
+- Flags (`next.go`, and the `--by`):
 
 | Flag | Type | Default | Effect |
 |---|---|---|---|
@@ -1344,7 +1344,7 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
 | `--status` | string | `""` | "Filter by status: open\|in_progress" |
 | `--labels` | string | `""` | "Comma-separated labels all of which must match" |
 | `--all` | bool | `false` | "Ignore the focus scope and route over the whole queue" |
-| `--by` | string (hidden) | `""` | identity fallback (§1.11), read by `resumeAdvice` to say whether work in flight is the reader's (`next.go`) |
+| `--by` | string | `""` | identity fallback (§1.11), read by `resumeAdvice` to say whether work in flight is the reader's (`next.go`) |
 
 - `--status` and `--type` go through the same `parseWorkableStatus` /
   `parseWorkableType` refusals as `backlog` (`next.go`). **No** `--limit`,
@@ -1624,7 +1624,7 @@ Both subcommands are `app.AccessWrite`. Missing/unknown subcommand → the bare
 usage string as a `UsageError` → exit 2 (`resolve`, `register.go`).
 
 **`lit comment add <id> --body <text>`** (`commentAddLeaf`, `cli.go`):
-- Flags: `--body` (string, `""`, "Comment body"), hidden `--by`.
+- Flags: `--body` (string, `""`, "Comment body"), `--by`.
 - Refusal: `len(positional) != 1` →
   `UsageError{"usage: lit comment add <id> --body <text>"}` → exit 2
   (`cli.go`).
@@ -1654,7 +1654,7 @@ Family `labelFamily`, usage `"usage: lit label <add|rm> ..."`
 
 **`lit label add <issue-id> <label>`** (`issue_relations.go`):
 - Declares `positionals: 2` (`issue_relations.go`); `parseLeaf` splits once.
-  Hidden `--by` registered.
+  `--by` registered.
 - Refusal: `len(positional) != 2` →
   `UsageError{"usage: lit label add <issue-id> <label>"}` → exit 2
   (`issue_relations.go`).
@@ -1680,7 +1680,7 @@ Family `parentFamily`, usage `"usage: lit parent <set|clear> ..."`
 
 **`lit parent set --child <id> --parent <id>`** (`issue_relations.go`):
 - Flags: `--child` ("Child issue ID (required)"), `--parent` ("Parent issue ID
-  (required)"), hidden `--by`.
+  (required)"), `--by`.
 - Refusals, in order: blank `--child` or blank `--parent` →
   `UsageError{"usage: lit parent set --child <id> --parent <id>"}` → exit 2
   (`issue_relations.go`).
@@ -1709,7 +1709,7 @@ Family `depFamily`, usage `"usage: lit dep <add|rm|ls> ..."` (`dependency.go`).
   `edgeFlags`, declared by `registerEdgeFlags`: `--blocked-by` ("Issue that
   must close before this one can start", `model.RelBlockedBy`) and
   `--related-to` ("Issue this one is related to (no ordering)",
-  `model.RelRelatedTo`); hidden `--by`. `parent-child` has no flag — `lit
+  `model.RelRelatedTo`); `--by`. `parent-child` has no flag — `lit
   parent set`/`clear` own that edge.
 - Refusals, in order:
   1. Surplus positionals → `refuseSurplusPositionals` (`register.go`); no
@@ -1792,7 +1792,7 @@ Rows: `label` (write), `close` (write), `archive` (write), and hidden
 - With zero args after `label` → `errors.New(bulkLabelFamily.usage)` → exit 1
   (`bulk.go`).
 - Flags parsed from `args[1:]`: `--ids` ("Comma-separated issue IDs"),
-  `--label` ("Label name"), hidden `--by` (`bulk.go`).
+  `--label` ("Label name"), `--by` (`bulk.go`).
 - **Error precedence is deliberate** (`bulk.go`): empty `--ids` →
   `ValidationError{"--ids is required"}` → exit 3; then blank `--label` →
   `ValidationError{"--label is required"}` → exit 3; only *then* is an unknown
@@ -1803,7 +1803,7 @@ Rows: `label` (write), `close` (write), `archive` (write), and hidden
 **`lit bulk close --ids <csv> --resolution <res> [--of <id>] [--reason <text>]`**
 (`bulkCloseLeaf`, `bulk.go`):
 - Flags: `--ids`, `--reason` ("Lifecycle reason"), `--resolution` + `--of` (via the
-  shared `registerCloseOutcomeFlags`), hidden `--by` (`bulk.go`).
+  shared `registerCloseOutcomeFlags`), `--by` (`bulk.go`).
 - Empty `--ids` → `ValidationError{"--ids is required"}` → exit 3
   (`bulk.go`).
 - Outcome via the same `closeOutcomeFromFlags` gate as `lit close`, with usage
@@ -1818,7 +1818,7 @@ Rows: `label` (write), `close` (write), `archive` (write), and hidden
 **`lit bulk archive --ids <csv> [--reason <text>]`** (`bulkTransitionLeaf(model.Archive{})`,
 `bulk.go`, registered at `bulk.go`):
 - Flag set name is `"bulk archive"` derived from `action.Name()` (`bulk.go`).
-- Flags: `--ids`, `--reason`, hidden `--by`.
+- Flags: `--ids`, `--reason`, `--by`.
 - Empty `--ids` → `ValidationError{"--ids is required"}` → exit 3 (`bulk.go`).
 - Applies `model.Archive{}` per id.
 
@@ -1849,7 +1849,7 @@ outside a git repository (`register.go`; asserted in `retired_command_test.go`).
   for create-or-update by id selector".
 - Handler `importTreeLeaf` (`cli.go`).
 - Flags: `--path` (string, `""`, "Path to a JSON tree-spec file or a YAML bulk
-  create/update file"), hidden `--by` (`cli.go`).
+  create/update file"), `--by` (`cli.go`).
 - Refusals: blank `--path` (after trim) →
   `UsageError{importUsage}` → exit 2. `importUsage` verbatim:
   `"usage: lit import --path <tree-spec.json | bulk-file.yaml> (run `lit import --help` for both formats)"`
@@ -2052,7 +2052,7 @@ Description: `helptext/purge.txt`.
 `purgeLeaf` (`purge.go`):
 - Flags: `--yes` (bool, `false`, "Confirm the purge (required for
   non-interactive callers; without it an interactive terminal is prompted
-  instead)") and hidden `--by` (`registerActor`, `cli.go`), resolved through
+  instead)") and `--by` (`registerActor`, `cli.go`), resolved through
   `resolveIdentity` into the purge record's actor.
 - `positionals: 1`, usage `"usage: lit purge <id> [--yes]"`. No positional →
   `UsageError{"usage: lit purge <id> [--yes]"}` → exit 2; a surplus positional →

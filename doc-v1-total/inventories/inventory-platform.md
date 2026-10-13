@@ -108,11 +108,13 @@ to `/Users/bmf/code/links-issue-tracker`.
   (`internal/cli/cli.go`).
 - There are **no persistent global flags** registered on the root beyond cobra's own `help`;
   per-command flag sets are constructed by `newCobraFlagSet` (`internal/cli/cli.go`).
-- Per-command flag parsing (`parseFlagSet`, `internal/cli/flagset.go`) maps specific
-  removed flags to typed errors:
-  - `--continue` ⇒ `UnsupportedError` "--continue is retired; claim routing already keeps
+- Per-command flag parsing (`parseFlagSet`, `internal/cli/flagset.go`) maps the
+  flags each leaf declares retired (`fs.Retire`) to typed errors:
+  - on `next`, `--continue` ⇒ `UnsupportedError` "--continue is retired; claim routing already keeps
     `lit next` in your checkout's own epic first — run `lit next` with no flag"
     (`internal/cli/flagset.go`);
+  - on every leaf `registerActor` gives `--by` that registers no `--assignee` of its own,
+    `--assignee` ⇒ `UnsupportedError` naming `--by` (`internal/cli/cli.go`);
   - every other parse error (unknown flag, missing value, invalid value, bad syntax) ⇒
     `UsageError` (`internal/cli/flagset.go`).
   - `--help` (or `pflag.ErrHelp`) prints `Usage of <cmd>:` followed by `PrintDefaults()` to
@@ -216,7 +218,7 @@ Complete grep of `os.Getenv` / `os.LookupEnv` / `os.Environ` across non-vendored
 | `LIT_CONFIG_GLOBAL_PATH` | `internal/config/config.go`, read at | Overrides the global config file path entirely; otherwise `ConfigDir()/config.toml` (`internal/config/config.go`). |
 | `LIT_CONFIG_PROJECT_PATH` | `internal/config/config.go`, read at | Overrides the project config file path; otherwise `<workspaceRoot>/.lit/config.toml` (`internal/config/config.go`). |
 | `LIT_DISABLE_AUTO_SYNC` | const at `internal/cli/sync_cadence.go`; read at `internal/cli/sync_cadence.go` and `internal/cli/owner_notify.go` | When truthy, no command schedules a push mirror or a receive, prints a pending receive block, **or** compacts (`internal/cli/sync_cadence.go`), and the owner-notify hook never runs (`internal/cli/owner_notify.go`). Truthiness = `strconv.ParseBool` of the trimmed value; a parse error is false (`internal/cli/sync_cadence.go`). |
-| `CLAUDE_CODE_SESSION_ID` | `internal/cli/cli.go` | When non-empty (after trim), the acting identity is always `claude_<sessionID>`, overriding `--assignee`/`--by`; otherwise the trimmed explicit value passes through (`internal/cli/cli.go`). |
+| `CLAUDE_CODE_SESSION_ID` | `internal/cli/cli.go` | When non-empty (after trim), the acting identity is always `claude_<sessionID>`, overriding `--by`; otherwise the trimmed explicit value passes through (`internal/cli/cli.go`). |
 | `LNKS_AUTOMATION_TRIGGER` | const `internal/cli/automation_trace.go`; read | Non-empty enables automation-trace recording for the command; the value becomes the trace's `Trigger` field (`internal/cli/automation_trace.go`). Empty ⇒ no trace is written. |
 | `LNKS_AUTOMATION_REASON` | const `internal/cli/automation_trace.go`; read | Default `Reason` on the automation trace when the caller supplied none (`internal/cli/automation_trace.go`). |
 | `LNKS_AUTOMATION_TRACE_REF_FILE` | const `internal/cli/automation_trace.go`; read | When non-empty, the recorded trace's path is written (plus newline, mode 0644) to that file (`internal/cli/automation_trace.go`). |

@@ -111,10 +111,10 @@ func TestRejectsJSONFlag(t *testing.T) {
 
 // TestParseFlagSetClassifiesFlagErrors is the table for the command-local flag
 // boundary. Every mis-written flag must reach a sink typed, because an untyped
-// one falls to the "Retry the command" remediation. The retired `--continue`
-// is matched as a whole flag name, so `--continuex` is not misreported as
-// retired, and `-continue` is a shorthand group pflag reads as `-c`, so it is
-// an ordinary unknown flag.
+// one falls to the "Retry the command" remediation. A retired flag is matched
+// as a whole flag name, so `--continuex` is not misreported as retired, and
+// `-continue` is a shorthand group pflag reads as `-c`, so it is an ordinary
+// unknown flag.
 func TestParseFlagSetClassifiesFlagErrors(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -135,6 +135,7 @@ func TestParseFlagSetClassifiesFlagErrors(t *testing.T) {
 			t.Parallel()
 			fs := newCobraFlagSet("probe")
 			fs.Int("limit", 0, "")
+			fs.Retire("continue", "--continue is retired")
 			err := parseFlagSet(fs, []string{tc.arg}, io.Discard)
 			if err == nil {
 				t.Fatalf("parseFlagSet(%q) succeeded; want an error", tc.arg)

@@ -55,8 +55,8 @@ signal we layer on, not a definition.
 
 **1. Canonical assignee shape: `claude_<sessionId>`**
 
-The `--assignee` help text on transition commands (see `runTransition`
-in `internal/cli/cli.go`) already hints this. Make it a
+The `--by` help text (`byUsage` in `internal/cli/cli.go`) already
+hints this. Make it a
 recommendation, not a hard validation — humans still need to assign
 things to themselves (`bmf`, etc.), and agents on other tools (Cursor,
 Codex) need a slot too. Document the convention:
@@ -98,7 +98,7 @@ remaining false-positive rate justifies the integration cost.
 3. **How do we enforce ownership?** Not strictly, today. `resolveIdentity`
    (`internal/cli/cli.go`) stamps `claude_<sessionId>` whenever
    `CLAUDE_CODE_SESSION_ID` is set; otherwise it passes the explicit
-   `--assignee` through unenforced, and `start` still succeeds with an
+   `--by` through unenforced, and `start` still succeeds with an
    empty assignee. Phase 2 adds process-level liveness.
 4. **What about compaction?** Same session, same owner.
 5. **What about worktree agents?** Worktree existence is a soft

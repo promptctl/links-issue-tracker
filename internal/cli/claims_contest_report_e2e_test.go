@@ -43,12 +43,12 @@ func TestSyncReconcileNamesContestedLaneAfterPartitionedDoubleStart(t *testing.T
 	runGit(t, bravo, "config", "user.name", "bravo")
 	runCLIInDir(t, bravo, "init", "--skip-hooks", "--skip-agents")
 
-	runCLIInDir(t, alpha, "start", ticket, "--assignee", "alpha-agent")
+	runCLIInDir(t, alpha, "start", ticket, "--by", "alpha-agent")
 	runCLIInDir(t, alpha, "sync", "push")
 
 	// bravo starts the SAME lane without ever having pulled alpha's start —
 	// the double-start the design says a partition cannot prevent.
-	runCLIInDir(t, bravo, "start", ticket, "--assignee", "bravo-agent")
+	runCLIInDir(t, bravo, "start", ticket, "--by", "bravo-agent")
 
 	// The histories meet: bravo's explicit reconcile is the first moment
 	// either side CAN know about the other's evidence.
@@ -95,7 +95,7 @@ func TestSyncReconcileNoContestNamesNoContest(t *testing.T) {
 	// Ordinary divergence with no shared lane: alpha starts its own ticket,
 	// bravo files an unrelated one. Reconciling this merges histories with no
 	// contest anywhere in them.
-	runCLIInDir(t, alpha, "start", ticketA, "--assignee", "alpha-agent")
+	runCLIInDir(t, alpha, "start", ticketA, "--by", "alpha-agent")
 	runCLIInDir(t, alpha, "sync", "push")
 	epicB := extractTicketID(t, runCLIInDir(t, bravo, "new", "--title", "bravos epic", "--topic", "contest-e2e", "--type", "epic"))
 	runCLIInDir(t, bravo, "new", "--title", "bravos ticket", "--topic", "contest-e2e", "--type", "task", "--parent", epicB)

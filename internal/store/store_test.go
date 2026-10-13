@@ -1734,8 +1734,8 @@ func TestIssueStatusClaimAndDoneAreDeterministic(t *testing.T) {
 		t.Fatalf("started.State() = %q, want in_progress", started.State())
 	}
 
-	// Under the target-state lifecycle, `start --assignee` is sugar for
-	// "set to InProgress + wire --assignee to the assignee column." A second
+	// Under the target-state lifecycle, `start --by` is sugar for
+	// "set to InProgress + wire --by to the assignee column." A second
 	// start on an already-in-progress issue is therefore a same-state claim
 	// transfer (assignee column rewritten) rather than a verb-strict
 	// rejection. Persistence is the contract — reload from the store to
