@@ -80,7 +80,7 @@ type epicChild struct {
 
 // EpicContext is the fully-resolved plan slice for one epic: the epic itself
 // plus its children in rank order, each pre-classified, the id of the focused
-// child (empty when none), and the open blocks edges that cross the epic
+// child (empty when none), and the open blocked-by edges that cross the epic
 // boundary. It is the seam between data resolution (buildEpicContext) and
 // rendering (renderEpicContext); siblings extend this value rather than the
 // renderer.
@@ -91,7 +91,7 @@ type EpicContext struct {
 	CrossEpic crossEpicEdges
 }
 
-// crossEpicEdge is one direct blocks edge that crosses the epic boundary.
+// crossEpicEdge is one direct blocked-by edge that crosses the epic boundary.
 // Blocked is the id that is blocked; Blocker is the id that blocks. Rendering
 // is identical regardless of which endpoint is inside the epic — the inside
 // endpoint decides only which subsection the edge lands in, never the line
@@ -310,7 +310,7 @@ func epicMemberIDs(epicID string, children []model.Issue) map[string]struct{} {
 	return set
 }
 
-// collect appends the boundary-crossing blocks edges incident to one epic
+// collect appends the boundary-crossing blocked-by edges incident to one epic
 // member — the epic node or any of its children. A member that has left the
 // flow carries no live plan context, so it contributes nothing; same-epic
 // counterparts are excluded because their ordering is already conveyed by rank
@@ -323,7 +323,7 @@ func (x *crossEpicEdges) collect(member storage.IssueRelations, internal map[str
 		return
 	}
 	id := member.Issue.ID
-	for _, blocker := range inPlayExcluding(member.DependsOn, internal) {
+	for _, blocker := range inPlayExcluding(member.BlockedBy, internal) {
 		x.BlockedFromOutside = append(x.BlockedFromOutside, crossEpicEdge{Blocked: id, Blocker: blocker.ID})
 	}
 	for _, dependent := range inPlayExcluding(member.Blocks, internal) {

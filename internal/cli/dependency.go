@@ -20,46 +20,79 @@ var depFamily = commandFamily[appSubcommand]{
 	},
 }
 
+// edgeFlags are the relations `lit dep add` and `lit dep rm` write, one flag
+// per relation, each named for the sentence its edge records: `lit dep add A
+// --blocked-by B` is "A is blocked by B". The issue named first is the edge's
+// src and the flag's value its dst, the order the store keeps, so nothing flips
+// on the way through. parent-child is absent: `lit parent set` and `lit parent
+// clear` own that edge. [LAW:one-source-of-truth]
+var edgeFlags = []struct {
+	name  string
+	usage string
+	rel   model.RelationType
+}{
+	{name: "blocked-by", usage: "Issue that must close before this one can start", rel: model.RelBlockedBy},
+	{name: "related-to", usage: "Issue this one is related to (no ordering)", rel: model.RelRelatedTo},
+}
+
+const edgeFlagsUsage = "--blocked-by <blocker-id> | --related-to <peer-id>"
+
+// registerEdgeFlags declares every edgeFlags row on fs and returns the reader
+// that turns the parsed flags into the one edge they name. [LAW:single-enforcer]
+// Exactly-one is decided here for both commands; a command names one edge.
+func registerEdgeFlags(fs *cobraFlagSet) func(usage string) (model.RelationType, string, error) {
+	values := make([]*string, len(edgeFlags))
+	for i, row := range edgeFlags {
+		values[i] = fs.String(row.name, "", row.usage)
+	}
+	return func(usage string) (model.RelationType, string, error) {
+		var named []int
+		for i, value := range values {
+			if *value != "" {
+				named = append(named, i)
+			}
+		}
+		if len(named) != 1 {
+			return "", "", UsageError{Message: usage}
+		}
+		return edgeFlags[named[0]].rel, *values[named[0]], nil
+	}
+}
+
 func depAddLeaf() appLeaf {
 	fs := newCobraFlagSet("dep add")
-	relType := fs.String("type", "blocks", "Relation type: blocks|parent-child|related-to")
-	from := fs.String("from", "", "Source issue ID (required)")
-	to := fs.String("to", "", "Target issue ID (required)")
+	edge := registerEdgeFlags(fs)
 	resolveActor := registerActor(fs)
-	const usageLine0 = "usage: lit dep add --from <id> --to <id> [--type blocks|parent-child|related-to]"
-	return appLeaf{fs: fs, usage: usageLine0, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
-		if *from == "" || *to == "" {
+	const usageLine0 = "usage: lit dep add <id> " + edgeFlagsUsage
+	return appLeaf{fs: fs, usage: usageLine0, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		if len(positional) != 1 {
 			return UsageError{Message: usageLine0}
 		}
-		// [LAW:single-enforcer] The CLI flag is the trust boundary; everything
-		// downstream receives the sealed RelationType.
-		rt, err := model.ParseRelationType(*relType)
+		rt, otherID, err := edge(usageLine0)
 		if err != nil {
 			return err
 		}
-		fromID, toID := *from, *to
+		issueID := positional[0]
 		// Self-loop check: a relation from an issue to itself is meaningless and
 		// would otherwise corrupt downstream blocker traversals. Cheap to catch
-		// here; transitive cycle detection is a follow-up.
-		if fromID == toID {
-			return model.ValidationError{Message: fmt.Sprintf("dep add: self-loop rejected (%s -> %s)", fromID, toID)}
+		// here; transitive cycle detection is the store's.
+		if issueID == otherID {
+			return model.ValidationError{Message: fmt.Sprintf("dep add: self-loop rejected (%s %s %s)", issueID, rt, otherID)}
 		}
-		// [LAW:single-enforcer] Sibling blocks are rejected at the CLI policy
-		// boundary, and only here: import's depends_on may still order siblings.
-		// Within one epic, rank is the canonical ordering; a 'blocks' edge would
-		// duplicate that signal.
-		if rt == model.RelBlocks {
-			if err := rejectSameEpicBlocks(ctx, ap, fromID, toID); err != nil {
+		// [LAW:single-enforcer] Sibling blocked-by edges are rejected at the CLI
+		// policy boundary, and only here: import's blocked_by may still order
+		// siblings. Within one epic, rank is the canonical ordering; a blocked-by
+		// edge would duplicate that signal.
+		if rt == model.RelBlockedBy {
+			if err := rejectSameEpicBlocks(ctx, ap, issueID, otherID); err != nil {
 				return err
 			}
 		}
-		srcID, dstID := rt.StoreEndpoints(fromID, toID)
-		rel, err := ap.Store.AddRelation(ctx, storage.AddRelationInput{SrcID: srcID, DstID: dstID, Type: rt, CreatedBy: resolveActor()})
+		rel, err := ap.Store.AddRelation(ctx, storage.AddRelationInput{SrcID: issueID, DstID: otherID, Type: rt, CreatedBy: resolveActor()})
 		if err != nil {
 			return err
 		}
-		cliRel := depRelationForCLI(rel)
-		if _, err := fmt.Fprintln(stdout, depRelationLine(cliRel)); err != nil {
+		if _, err := fmt.Fprintln(stdout, depRelationLine(rel)); err != nil {
 			return err
 		}
 		return emitBreadcrumb(stdout, "update")
@@ -68,20 +101,17 @@ func depAddLeaf() appLeaf {
 
 func depRmLeaf() appLeaf {
 	fs := newCobraFlagSet("dep rm")
-	relType := fs.String("type", "blocks", "Relation type: blocks|parent-child|related-to")
-	from := fs.String("from", "", "Source issue ID (required)")
-	to := fs.String("to", "", "Target issue ID (required)")
-	const usageLine1 = "usage: lit dep rm --from <id> --to <id> [--type blocks|parent-child|related-to]"
-	return appLeaf{fs: fs, usage: usageLine1, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
-		if *from == "" || *to == "" {
+	edge := registerEdgeFlags(fs)
+	const usageLine1 = "usage: lit dep rm <id> " + edgeFlagsUsage
+	return appLeaf{fs: fs, usage: usageLine1, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		if len(positional) != 1 {
 			return UsageError{Message: usageLine1}
 		}
-		rt, err := model.ParseRelationType(*relType)
+		rt, otherID, err := edge(usageLine1)
 		if err != nil {
 			return err
 		}
-		srcID, dstID := rt.StoreEndpoints(*from, *to)
-		if err := ap.Store.RemoveRelation(ctx, srcID, dstID, rt); err != nil {
+		if err := ap.Store.RemoveRelation(ctx, positional[0], otherID, rt); err != nil {
 			return err
 		}
 		if _, err := fmt.Fprintln(stdout, "ok"); err != nil {
@@ -93,8 +123,8 @@ func depRmLeaf() appLeaf {
 
 func depLsLeaf() appLeaf {
 	fs := newCobraFlagSet("dep ls")
-	relType := fs.String("type", "", "Filter relation type")
-	const usageLine2 = "usage: lit dep ls <issue-id> [--type blocks|parent-child|related-to]"
+	relType := fs.String("type", "", "Filter relation type: blocked-by|parent-child|related-to")
+	const usageLine2 = "usage: lit dep ls <issue-id> [--type blocked-by|parent-child|related-to]"
 	return appLeaf{fs: fs, usage: usageLine2, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
 			return UsageError{Message: usageLine2}
@@ -114,26 +144,13 @@ func depLsLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		cliRelations := make([]model.Relation, 0, len(relations))
 		for _, rel := range relations {
-			cliRelations = append(cliRelations, depRelationForCLI(rel))
-		}
-		for _, rel := range cliRelations {
 			if _, err := fmt.Fprintln(stdout, depRelationLine(rel)); err != nil {
 				return err
 			}
 		}
 		return nil
 	}}
-}
-
-// depRelationForCLI flips a store-oriented relation back into the CLI's human
-// order. StoreEndpoints is an involution, so the same mapping serves both
-// directions. [LAW:dataflow-not-control-flow] Applied unconditionally;
-// the per-type variability lives in the RelationType value.
-func depRelationForCLI(rel model.Relation) model.Relation {
-	rel.SrcID, rel.DstID = rel.Type.StoreEndpoints(rel.SrcID, rel.DstID)
-	return rel
 }
 
 // rejectSameEpicBlocks errors when both endpoints are leaves of one epic —
@@ -169,15 +186,15 @@ func leafEpicID(ctx context.Context, ap *app.App, issueID string) (string, error
 	return "", nil
 }
 
+// depRelationLine renders an edge as the sentence it records, endpoints in
+// stored order: "A blocked by B", "C child of P", "A related to B".
 func depRelationLine(rel model.Relation) string {
-	switch rel.Type {
-	case model.RelBlocks:
-		return fmt.Sprintf("%s --blocks--> %s", rel.SrcID, rel.DstID)
-	case model.RelParentChild:
-		return fmt.Sprintf("%s --child-of--> %s", rel.SrcID, rel.DstID)
-	case model.RelRelatedTo:
-		return fmt.Sprintf("%s --related-to--> %s", rel.SrcID, rel.DstID)
-	default:
-		return fmt.Sprintf("%s --depends-on--> %s", rel.SrcID, rel.DstID)
-	}
+	return fmt.Sprintf("%s %s %s", rel.SrcID, relationVerb[rel.Type], rel.DstID)
+}
+
+// relationVerb is each relation's reading between its src and dst.
+var relationVerb = map[model.RelationType]string{
+	model.RelBlockedBy:   "blocked by",
+	model.RelParentChild: "child of",
+	model.RelRelatedTo:   "related to",
 }

@@ -15,7 +15,7 @@ func TestImportTreeCreatesEpicWithChildAndDep(t *testing.T) {
 	specs := []storage.ImportTreeSpec{
 		{LocalID: "e1", Title: "Epic", IssueType: "epic", Topic: "tree", Priority: 0},
 		{LocalID: "t1", Title: "First", IssueType: "task", Topic: "tree", Priority: 0, Parent: "e1"},
-		{LocalID: "t2", Title: "Second", IssueType: "task", Topic: "tree", Priority: 0, Parent: "e1", DependsOn: []string{"t1"}},
+		{LocalID: "t2", Title: "Second", IssueType: "task", Topic: "tree", Priority: 0, Parent: "e1", BlockedBy: []string{"t1"}},
 	}
 	result, err := st.ImportTree(ctx, "test", specs)
 	if err != nil {
@@ -31,13 +31,13 @@ func TestImportTreeCreatesEpicWithChildAndDep(t *testing.T) {
 		t.Fatalf("GetIssueDetail(t2) error = %v", err)
 	}
 	foundDep := false
-	for _, d := range detail.DependsOn {
+	for _, d := range detail.BlockedBy {
 		if d.ID == t1 {
 			foundDep = true
 		}
 	}
 	if !foundDep {
-		t.Fatalf("t2.DependsOn missing t1: %#v", detail.DependsOn)
+		t.Fatalf("t2.BlockedBy missing t1: %#v", detail.BlockedBy)
 	}
 	if detail.Parent == nil || detail.Parent.ID != createdIDByRef(t, result.Created, "e1") {
 		t.Fatalf("t2.Parent = %#v, want epic e1", detail.Parent)
@@ -50,8 +50,8 @@ func TestImportTreeRejectsCycle(t *testing.T) {
 	st := openIssueStore(t, ctx)
 	specs := []storage.ImportTreeSpec{
 		{LocalID: "e", Title: "E", IssueType: "epic", Topic: "x", Priority: 0},
-		{LocalID: "a", Title: "A", IssueType: "task", Topic: "x", Priority: 0, Parent: "e", DependsOn: []string{"b"}},
-		{LocalID: "b", Title: "B", IssueType: "task", Topic: "x", Priority: 0, Parent: "e", DependsOn: []string{"a"}},
+		{LocalID: "a", Title: "A", IssueType: "task", Topic: "x", Priority: 0, Parent: "e", BlockedBy: []string{"b"}},
+		{LocalID: "b", Title: "B", IssueType: "task", Topic: "x", Priority: 0, Parent: "e", BlockedBy: []string{"a"}},
 	}
 	if _, err := st.ImportTree(ctx, "test", specs); err == nil || !strings.Contains(err.Error(), "cycle") {
 		t.Fatalf("ImportTree(cycle) error = %v, want cycle error", err)
@@ -82,7 +82,7 @@ func TestImportTreeRejectsInvalidType(t *testing.T) {
 	}
 }
 
-// The valid flat form (local_id + parent + depends_on) must survive the strict
+// The valid flat form (local_id + parent + blocked_by) must survive the strict
 // parse and import unchanged: same wiring the in-memory spec form produces.
 func TestParseImportTreeSpecsValidFlatFormImports(t *testing.T) {
 	t.Parallel()
@@ -91,7 +91,7 @@ func TestParseImportTreeSpecsValidFlatFormImports(t *testing.T) {
 	flat := []byte(`[
 		{"local_id":"e1","title":"Epic","type":"epic","topic":"tree","priority":0},
 		{"local_id":"t1","title":"First","type":"task","topic":"tree","priority":0,"parent":"e1"},
-		{"local_id":"t2","title":"Second","type":"task","topic":"tree","priority":0,"parent":"e1","depends_on":["t1"]}
+		{"local_id":"t2","title":"Second","type":"task","topic":"tree","priority":0,"parent":"e1","blocked_by":["t1"]}
 	]`)
 	specs, err := storage.ParseImportTreeSpecs(flat)
 	if err != nil {
@@ -112,12 +112,12 @@ func TestParseImportTreeSpecsValidFlatFormImports(t *testing.T) {
 		t.Fatalf("t2.Parent = %#v, want epic e1", detail.Parent)
 	}
 	foundDep := false
-	for _, d := range detail.DependsOn {
+	for _, d := range detail.BlockedBy {
 		if d.ID == createdIDByRef(t, result.Created, "t1") {
 			foundDep = true
 		}
 	}
 	if !foundDep {
-		t.Fatalf("t2.DependsOn missing t1: %#v", detail.DependsOn)
+		t.Fatalf("t2.BlockedBy missing t1: %#v", detail.BlockedBy)
 	}
 }

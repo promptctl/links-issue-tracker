@@ -12,4 +12,4 @@ Creating (or updating) several tickets at once: `lit import --path <file.yaml>` 
 multi-document YAML file, one ticket per document — a document without an `id` creates,
 one with an `id` updates that existing ticket. Cheaper than N separate `lit new`/`lit
 update` invocations for a batch. Run `lit import --help` for the full format
-(create/update field lists, `parent`/`depends_on` wiring, error behavior).
+(create/update field lists, `parent`/`blocked_by` wiring, error behavior).

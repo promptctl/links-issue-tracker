@@ -34,7 +34,7 @@ func TestRejectDetachingParentEdge(t *testing.T) {
 			}
 		})
 	}
-	for _, relType := range []model.RelationType{model.RelBlocks, model.RelRelatedTo} {
+	for _, relType := range []model.RelationType{model.RelBlockedBy, model.RelRelatedTo} {
 		err := RejectDetachingParentEdge(relType, "c", func() (model.IssueType, int, error) {
 			t.Errorf("RejectDetachingParentEdge(%s) read the child; an edge of another type names no parent", relType)
 			return model.TypeTask, 0, nil

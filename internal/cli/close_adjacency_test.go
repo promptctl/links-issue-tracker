@@ -38,7 +38,7 @@ func TestCloseRendersLiveAdjacency(t *testing.T) {
 	}
 	// blocks convention: SrcID=dependent, DstID=dependency. dependent depends on
 	// focal, so closing focal unblocks dependent.
-	if _, err := ap.Store.AddRelation(ctx, storage.AddRelationInput{SrcID: dependent, DstID: focal, Type: "blocks", CreatedBy: "test"}); err != nil {
+	if _, err := ap.Store.AddRelation(ctx, storage.AddRelationInput{SrcID: dependent, DstID: focal, Type: "blocked-by", CreatedBy: "test"}); err != nil {
 		t.Fatalf("AddRelation(blocks) error = %v", err)
 	}
 	// Close the sibling that must not appear as live adjacency.

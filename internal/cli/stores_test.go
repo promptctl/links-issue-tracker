@@ -315,7 +315,7 @@ func seedDiscoverableStore(t *testing.T, repoDir, prefix, workspaceID string) (s
 	// blocked depends on the still-unfinished in-progress leaf, so it is blocked
 	// without adding a second ready leaf that would perturb the asserted counts.
 	if _, err := st.AddRelation(ctx, storage.AddRelationInput{
-		SrcID: blocked.ID, DstID: wip.ID, Type: "blocks", CreatedBy: "tester",
+		SrcID: blocked.ID, DstID: wip.ID, Type: "blocked-by", CreatedBy: "tester",
 	}); err != nil {
 		t.Fatalf("AddRelation(blocks) error = %v", err)
 	}
@@ -428,7 +428,7 @@ func TestGatherCrossProjectRollupCountsIgnoreTheFocusScope(t *testing.T) {
 	goal := newLeaf("focused goal")
 	prereq := newLeaf("on the focus path")
 	if _, err := st.AddRelation(ctx, storage.AddRelationInput{
-		SrcID: goal.ID, DstID: prereq.ID, Type: "blocks", CreatedBy: "tester",
+		SrcID: goal.ID, DstID: prereq.ID, Type: "blocked-by", CreatedBy: "tester",
 	}); err != nil {
 		t.Fatalf("AddRelation(blocks) error = %v", err)
 	}

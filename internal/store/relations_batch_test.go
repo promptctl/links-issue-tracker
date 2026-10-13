@@ -48,8 +48,8 @@ func TestGetRelationsByIDsMatchesIssueDetail(t *testing.T) {
 		t.Fatalf("CreateIssue(peer) error = %v", err)
 	}
 	// childA depends on upstream; downstream depends on childA; childA related-to peer.
-	mustRelate(t, ctx, st, childA.ID, upstream.ID, "blocks")
-	mustRelate(t, ctx, st, downstream.ID, childA.ID, "blocks")
+	mustRelate(t, ctx, st, childA.ID, upstream.ID, "blocked-by")
+	mustRelate(t, ctx, st, downstream.ID, childA.ID, "blocked-by")
 	mustRelate(t, ctx, st, childA.ID, peer.ID, "related-to")
 
 	subjects := []string{epic.ID, childA.ID, childB.ID}
@@ -75,7 +75,7 @@ func TestGetRelationsByIDsMatchesIssueDetail(t *testing.T) {
 			t.Errorf("%s: Issue.ID = %q, want %q", id, rel.Issue.ID, detail.Issue.ID)
 		}
 		assertSameIDs(t, id+" Children", rel.Children, detail.Children)
-		assertSameIDs(t, id+" DependsOn", rel.DependsOn, detail.DependsOn)
+		assertSameIDs(t, id+" BlockedBy", rel.BlockedBy, detail.BlockedBy)
 		assertSameIDs(t, id+" Blocks", rel.Blocks, detail.Blocks)
 		if (rel.Parent == nil) != (detail.Parent == nil) {
 			t.Errorf("%s: Parent nil-ness differs (batch %v, detail %v)", id, rel.Parent, detail.Parent)
@@ -89,8 +89,8 @@ func TestGetRelationsByIDsMatchesIssueDetail(t *testing.T) {
 	if got := rels[epic.ID].Children; len(got) != 2 || got[0].ID != childA.ID || got[1].ID != childB.ID {
 		t.Errorf("epic children = %v, want [%s %s] in rank order", ids(got), childA.ID, childB.ID)
 	}
-	if got := rels[childA.ID].DependsOn; len(got) != 1 || got[0].ID != upstream.ID {
-		t.Errorf("childA DependsOn = %v, want [%s]", ids(got), upstream.ID)
+	if got := rels[childA.ID].BlockedBy; len(got) != 1 || got[0].ID != upstream.ID {
+		t.Errorf("childA BlockedBy = %v, want [%s]", ids(got), upstream.ID)
 	}
 	if got := rels[childA.ID].Blocks; len(got) != 1 || got[0].ID != downstream.ID {
 		t.Errorf("childA Blocks = %v, want [%s]", ids(got), downstream.ID)
@@ -139,9 +139,9 @@ func TestMergeRelationsDedupesAndOrders(t *testing.T) {
 	}
 	shared := edge("epic-1", "epic-1.2", model.RelParentChild, at(1))
 	srcOnly := edge("epic-1", "outside-a", model.RelParentChild, at(3))
-	dstOnly := edge("outside-b", "epic-1.2", model.RelBlocks, at(0))
+	dstOnly := edge("outside-b", "epic-1.2", model.RelBlockedBy, at(0))
 	// Same timestamp as shared: order must still be deterministic, by key.
-	tied := edge("epic-1", "epic-1.2", model.RelBlocks, at(1))
+	tied := edge("epic-1", "epic-1.2", model.RelBlockedBy, at(1))
 
 	got := mergeRelations(
 		[]model.Relation{shared, srcOnly, tied},

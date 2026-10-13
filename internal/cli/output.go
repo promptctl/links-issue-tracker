@@ -65,7 +65,7 @@ func printContextLine(w io.Writer, indent, text string) error {
 }
 
 // printIDListLine renders one indented "<label>: id, id, ..." context line —
-// the shared shape behind both "depends on:" and "unblocks:". An empty list
+// the shared shape behind both "blocked by:" and "unblocks:". An empty list
 // emits nothing, so callers pass the list rather than branching on its length.
 // [LAW:one-type-per-behavior] both lines are one behavior differing only in
 // label and data. [LAW:dataflow-not-control-flow]
@@ -205,7 +205,7 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 	// order — a strict superset of a bare siblings list. Printing both would
 	// repeat the same ids twice for zero added information.
 	// [LAW:one-source-of-truth]
-	if err := printIssueGroup(w, "depends_on", detail.DependsOn); err != nil {
+	if err := printIssueGroup(w, "blocked_by", detail.BlockedBy); err != nil {
 		return err
 	}
 	if err := printIssueGroup(w, "blocks", detail.Blocks); err != nil {

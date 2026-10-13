@@ -27,7 +27,7 @@ func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []sto
 	for i, spec := range specs {
 		localID[i] = spec.LocalID
 		parent[i] = spec.Parent
-		dependsOn[i] = spec.DependsOn
+		dependsOn[i] = spec.BlockedBy
 	}
 	order, err := topoSortLocalGraph(localID, parent, dependsOn)
 	if err != nil {
@@ -101,21 +101,19 @@ func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []sto
 		if spec.ID != "" {
 			continue
 		}
-		for _, dep := range spec.DependsOn {
+		for _, dep := range spec.BlockedBy {
 			srcID := createdRealID[i]
 			dstID := resolveBulkRef(dep, localRealID)
-			// blocks convention in the store: src is dependent, dst is
-			// dependency. spec says "srcID depends_on dstID", so src is dependent.
-			if _, err := s.AddRelation(ctx, storage.AddRelationInput{SrcID: srcID, DstID: dstID, Type: "blocks", CreatedBy: "links"}); err != nil {
+			if _, err := s.AddRelation(ctx, storage.AddRelationInput{SrcID: srcID, DstID: dstID, Type: model.RelBlockedBy, CreatedBy: "links"}); err != nil {
 				leaked := s.rollbackCreatedIssues(ctx, createdIDs)
-				return storage.BulkApplyResult{}, fmt.Errorf("bulk: depends_on doc %d -> %q: %w (rollback leaked %d: %s)", i, dep, err, len(leaked), strings.Join(leaked, ","))
+				return storage.BulkApplyResult{}, fmt.Errorf("bulk: blocked_by doc %d -> %q: %w (rollback leaked %d: %s)", i, dep, err, len(leaked), strings.Join(leaked, ","))
 			}
 		}
 	}
 	return result, nil
 }
 
-// resolveBulkRef resolves a parent/depends_on reference against this batch's
+// resolveBulkRef resolves a parent/blocked_by reference against this batch's
 // LocalID -> real-ID map; a reference that matches nothing in the batch
 // passes through unchanged as a real, pre-existing issue ID for CreateIssue
 // or AddRelation to validate. [LAW:dataflow-not-control-flow] one

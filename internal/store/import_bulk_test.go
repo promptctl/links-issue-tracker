@@ -17,7 +17,7 @@ func TestBulkApplyCreatesEpicWithChildAndDep(t *testing.T) {
 	specs := []storage.BulkIssueSpec{
 		{LocalID: "e1", Title: title("Epic"), IssueType: title("epic"), Topic: title("bulk")},
 		{LocalID: "t1", Title: title("First"), IssueType: title("task"), Topic: title("bulk"), Parent: "e1"},
-		{LocalID: "t2", Title: title("Second"), IssueType: title("task"), Topic: title("bulk"), Parent: "e1", DependsOn: []string{"t1"}},
+		{LocalID: "t2", Title: title("Second"), IssueType: title("task"), Topic: title("bulk"), Parent: "e1", BlockedBy: []string{"t1"}},
 	}
 	result, err := st.BulkApply(ctx, "test", "agent", specs)
 	if err != nil {
@@ -36,13 +36,13 @@ func TestBulkApplyCreatesEpicWithChildAndDep(t *testing.T) {
 		t.Fatalf("t2.Parent = %#v, want epic e1", detail.Parent)
 	}
 	foundDep := false
-	for _, d := range detail.DependsOn {
+	for _, d := range detail.BlockedBy {
 		if d.ID == t1 {
 			foundDep = true
 		}
 	}
 	if !foundDep {
-		t.Fatalf("t2.DependsOn missing t1: %#v", detail.DependsOn)
+		t.Fatalf("t2.BlockedBy missing t1: %#v", detail.BlockedBy)
 	}
 }
 

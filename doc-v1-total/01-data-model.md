@@ -121,13 +121,13 @@ A relation is a typed directed edge between two issues: `src_id`, `dst_id`, `typ
 
 | Type | Directionality | Multiplicity |
 |---|---|---|
-| `blocks` | directed | many-to-many |
+| `blocked-by` | directed | many-to-many |
 | `parent-child` | directed | a child has at most one parent (`relation_type.go`); a leaf has exactly one, and every parent is an epic (`containment.go`) |
 | `related-to` | undirected | many-to-many |
 
 Two storage canonicalizations matter for anything reading rows directly:
 
-- `blocks` is stored **dependent → dependency** — the reverse of the human reading "X blocks Y". The swap is an involution, so the same conversion maps store order back to display order (`relation_type.go`).
+- Every type reads as the sentence `<src> <type> <dst>`: `blocked-by` is stored **dependent → dependency** ("A blocked-by B": A waits for B), `parent-child` child → parent. The store, the export, and every command name an edge in that one order (`relation_type.go`).
 - `related-to`, being undirected, is stored with its endpoints sorted ascending (`relation_type.go`).
 
 Relation-type parsing trims but does not lowercase (`relation_type.go`).
@@ -181,7 +181,7 @@ Global ordering uses **lexicographic fractional indexing**: a rank is a string o
 
 ## Export format
 
-`Export` is the interchange shape for sync files, backups, and `lit export`: `version`, `workspace_id`, `exported_at`, plus arrays of issues, relations, comments, labels, and events (`model.go`). Current version is 2. Version 1 files carried a `history` array instead of `events`; the decoder converts each v1 history row into an event with a single `status` field-change and a deterministic content-derived ID (`evt-v1-` + 16 hex chars of SHA-256), so merging two v1 exports cannot mint duplicate IDs for different events (`model.go`). v2+ files' `history` arrays are ignored.
+`Export` is the interchange shape for sync files, backups, and `lit export`: `version`, `workspace_id`, `exported_at`, plus arrays of issues, relations, comments, labels, and events (`model.go`). Current version is 3 (`ExportVersion`, `model.go`). Version 1 and 2 files spell the `blocked-by` type `blocks`; the decoder reads every relation type of a version < 3 file through `RelationTypeFromStored`, which maps `blocks` to `blocked-by` and passes every other spelling through (`model.go`, `relation_type.go`). Version 1 files carried a `history` array instead of `events`; the decoder converts each v1 history row into an event with a single `status` field-change and a deterministic content-derived ID (`evt-v1-` + 16 hex chars of SHA-256), so merging two v1 exports cannot mint duplicate IDs for different events (`model.go`). v2+ files' `history` arrays are ignored.
 
 ## Serialization boundary rules
 

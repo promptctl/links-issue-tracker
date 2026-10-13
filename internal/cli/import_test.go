@@ -133,7 +133,7 @@ func TestRunImportTreeJSONMappingOrderIsDeterministic(t *testing.T) {
 	ctx := context.Background()
 	content := `[
 		{"local_id":"e1","title":"Epic","type":"epic","topic":"import","priority":0},
-		{"local_id":"t2","title":"Second","type":"task","topic":"import","priority":0,"parent":"e1","depends_on":["t1"]},
+		{"local_id":"t2","title":"Second","type":"task","topic":"import","priority":0,"parent":"e1","blocked_by":["t1"]},
 		{"local_id":"t1","title":"First","type":"task","topic":"import","priority":0,"parent":"e1"},
 		{"local_id":"t3","title":"Third","type":"task","topic":"import","priority":0,"parent":"e1"},
 		{"local_id":"t4","title":"Fourth","type":"task","topic":"import","priority":0,"parent":"e1"}
@@ -165,7 +165,7 @@ title: Second
 type: task
 topic: import
 parent: e1
-depends_on: [t1]
+blocked_by: [t1]
 ---
 local_id: t1
 title: First

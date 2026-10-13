@@ -32,7 +32,7 @@ type generatedStore struct {
 }
 
 // importRecord is one issue in the JSON tree spec `lit import` consumes. The
-// field names and the local_id/depends_on referencing rules are that command's
+// field names and the local_id/blocked_by referencing rules are that command's
 // contract, not this tool's invention.
 type importRecord struct {
 	LocalID     string   `json:"local_id"`
@@ -40,7 +40,7 @@ type importRecord struct {
 	Type        string   `json:"type"`
 	Topic       string   `json:"topic"`
 	Description string   `json:"description"`
-	DependsOn   []string `json:"depends_on,omitempty"`
+	BlockedBy   []string `json:"blocked_by,omitempty"`
 }
 
 // generate builds a workspace at the requested size under parent.
@@ -162,7 +162,7 @@ func importBatches(rows int) [][]importRecord {
 		// The first row has no predecessor to depend on, which is why the
 		// blocked share is "roughly" a third rather than exactly one.
 		if i > 0 && i%blockedEveryNth == 0 {
-			rec.DependsOn = []string{fmt.Sprintf("r%d", i-1)}
+			rec.BlockedBy = []string{fmt.Sprintf("r%d", i-1)}
 		}
 		records = append(records, rec)
 	}

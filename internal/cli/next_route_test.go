@@ -302,9 +302,9 @@ func TestRouteNextTerminalExhaustionNamesTheStayRouteAgainstABlock(t *testing.T)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want Exhausted — the only row outside epic A is another checkout's", outcome, outcome)
 	}
-	want := "no ready work in epic(s) " + epicA.ID + " — blocked on " + blocker.ID +
+	want := "no ready work in epic(s) " + epicA.ID + " — blocked by " + blocker.ID +
 		" (on your path but claimed by another checkout right now); `lit next` has nothing ready outside it either" +
-		" — to stay, file the ticket that clears a blocker under the epic with `lit new --parent " + epicA.ID + " --top`, then make that blocker wait on it with `lit dep add --from <new> --to <blocker>`"
+		" — to stay, file the ticket that clears a blocker under the epic with `lit new --parent " + epicA.ID + " --top`, then make that blocker blocked by it with `lit dep add <blocker> --blocked-by <new>`"
 	if msg := exhausted.Error(); msg != want {
 		t.Fatalf("exhausted.Error() = %q, want exactly %q", msg, want)
 	}
@@ -332,8 +332,8 @@ func followStayRoute(t *testing.T, h readyTestHarness, newFlags []string, blocke
 		t.Fatalf("lit new %v, as the stay route prints it: %v", newFlags, err)
 	}
 	newID := strings.Fields(out.String())[0]
-	if err := runDepAdd(h.ctx, io.Discard, h.ap, []string{"--from", newID, "--to", blockerID}); err != nil {
-		t.Fatalf("lit dep add --from %s --to %s, as the stay route prints it: %v", newID, blockerID, err)
+	if err := runDepAdd(h.ctx, io.Discard, h.ap, []string{blockerID, "--blocked-by", newID}); err != nil {
+		t.Fatalf("lit dep add %s --blocked-by %s, as the stay route prints it: %v", blockerID, newID, err)
 	}
 	return newID
 }
@@ -365,7 +365,7 @@ func TestRouteNextStayRouteWorksWhenTheEpicItselfIsBlocked(t *testing.T) {
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want Exhausted — the only row outside epic A is another checkout's", outcome, outcome)
 	}
-	if want := "under the epic with `lit new --parent " + epicA.ID + " --top`, then make that blocker wait on it"; !strings.Contains(exhausted.Error(), want) {
+	if want := "under the epic with `lit new --parent " + epicA.ID + " --top`, then make that blocker blocked by it"; !strings.Contains(exhausted.Error(), want) {
 		t.Fatalf("exhausted.Error() = %q, want it to contain %q", exhausted.Error(), want)
 	}
 
@@ -379,8 +379,8 @@ func TestRouteNextStayRouteWorksWhenTheEpicItselfIsBlocked(t *testing.T) {
 		t.Fatalf("%s under blocked epic %s is ready before the edge, want it held back by %s — else the edge below proves nothing", unblocker, epicA.ID, blocker.ID)
 	}
 
-	if err := runDepAdd(h.ctx, io.Discard, h.ap, []string{"--from", unblocker, "--to", blocker.ID}); err != nil {
-		t.Fatalf("lit dep add --from %s --to %s: %v", unblocker, blocker.ID, err)
+	if err := runDepAdd(h.ctx, io.Discard, h.ap, []string{blocker.ID, "--blocked-by", unblocker}); err != nil {
+		t.Fatalf("lit dep add %s --blocked-by %s: %v", blocker.ID, unblocker, err)
 	}
 	rows, details, epics = h.gather()
 	outcome = routeNext(rows, details, epics, standings, selfAttribution, focusScope{})
@@ -447,9 +447,9 @@ func TestRouteNextExhaustionNamesTheOutsideBlockerBehindASibling(t *testing.T) {
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want Exhausted — the only row outside epic A is another checkout's", outcome, outcome)
 	}
-	want := "no ready work in epic(s) " + epicA.ID + " — blocked on " + blocker.ID +
+	want := "no ready work in epic(s) " + epicA.ID + " — blocked by " + blocker.ID +
 		" (on your path but claimed by another checkout right now); `lit next` has nothing ready outside it either" +
-		" — to stay, file the ticket that clears a blocker under the epic with `lit new --parent " + epicA.ID + " --top`, then make that blocker wait on it with `lit dep add --from <new> --to <blocker>`"
+		" — to stay, file the ticket that clears a blocker under the epic with `lit new --parent " + epicA.ID + " --top`, then make that blocker blocked by it with `lit dep add <blocker> --blocked-by <new>`"
 	if msg := exhausted.Error(); msg != want {
 		t.Fatalf("exhausted.Error() = %q, want exactly %q — naming %s alone, not sibling %s", msg, want, blocker.ID, a2.ID)
 	}

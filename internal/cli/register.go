@@ -257,9 +257,9 @@ type leaf[R any] struct {
 	// usage is the sentence the arity refusal prints: the act that works, in the
 	// leaf's own words. WHETHER to refuse a surplus positional is a universal
 	// rule and lives in parseLeaf; WHAT to tell the caller instead is local
-	// knowledge and lives here. `lit dep add a b` is a caller who believes the
-	// ids are positional, and "takes no positional arguments" answers the wrong
-	// question — "use --from <id> --to <id>" names the act. A remediation that
+	// knowledge and lives here. `lit dep add a b` is a caller who believes both
+	// ids are positional, and "takes one positional argument" answers the wrong
+	// question — "use <id> --blocked-by <id>" names the act. A remediation that
 	// names no working act is a defect, so the generic phrasing is the
 	// fallback, never the goal.
 	// [LAW:decomposition] the rule is shared, the guidance is the leaf's.

@@ -162,7 +162,7 @@ func TestPrintIssueGroupNamesRetentionRatherThanStatus(t *testing.T) {
 			dep.SetRetention(tc.retention)
 
 			var buf bytes.Buffer
-			if err := printIssueGroup(&buf, "depends_on", []model.Issue{dep}); err != nil {
+			if err := printIssueGroup(&buf, "blocked_by", []model.Issue{dep}); err != nil {
 				t.Fatalf("printIssueGroup() error = %v", err)
 			}
 
@@ -184,7 +184,7 @@ func TestPrintIssueGroupNamesRetentionRatherThanStatus(t *testing.T) {
 //
 // [LAW:behavior-not-structure] The contract is the line a reader acts on, so
 // the arms differ only in what was recorded at close. One renderer produces
-// every relation group `lit show` prints — parent, depends_on, blocks,
+// every relation group `lit show` prints — parent, blocked_by, blocks,
 // redirect, related — so pinning it here pins all of them; the epic plan's
 // Children block is the other surface and is pinned in epic_context_test.go.
 func TestPrintIssueGroupNamesTheCloseReason(t *testing.T) {
@@ -213,7 +213,7 @@ func TestPrintIssueGroupNamesTheCloseReason(t *testing.T) {
 			}
 
 			var buf bytes.Buffer
-			if err := printIssueGroup(&buf, "depends_on", []model.Issue{dep}); err != nil {
+			if err := printIssueGroup(&buf, "blocked_by", []model.Issue{dep}); err != nil {
 				t.Fatalf("printIssueGroup() error = %v", err)
 			}
 

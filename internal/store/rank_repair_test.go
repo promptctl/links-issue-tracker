@@ -309,7 +309,7 @@ func TestFixRankInversionsMovesOnlyTheInvertedTicket(t *testing.T) {
 	// One inversion: the ticket at position 1 depends on the ticket at
 	// position 4, which is ranked below it.
 	dependent, dependency := deliberate[1], deliberate[4]
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: dependent, DstID: dependency, Type: "blocks", CreatedBy: "tester"}); err != nil {
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: dependent, DstID: dependency, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation(%s blocked by %s) error = %v", dependent, dependency, err)
 	}
 	report, err := st.Doctor(ctx)
@@ -381,7 +381,7 @@ func TestFixRankInversionsPreservesTheBandBlockingOneGate(t *testing.T) {
 	before := ranksByID(t, ctx, st, deliberate)
 
 	for _, dependency := range band {
-		if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: gate, DstID: dependency, Type: "blocks", CreatedBy: "tester"}); err != nil {
+		if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: gate, DstID: dependency, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
 			t.Fatalf("AddRelation(gate blocked by %s) error = %v", dependency, err)
 		}
 	}
@@ -535,7 +535,7 @@ func TestFixRankInversionsTwiceWritesNothingWithSmoothing(t *testing.T) {
 		{ids[1], ids[3]},
 		{ids[5], ids[7]},
 	} {
-		if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: edge.dependent, DstID: edge.dependency, Type: "blocks", CreatedBy: "tester"}); err != nil {
+		if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: edge.dependent, DstID: edge.dependency, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
 			t.Fatalf("AddRelation(%s blocked by %s) error = %v", edge.dependent, edge.dependency, err)
 		}
 	}

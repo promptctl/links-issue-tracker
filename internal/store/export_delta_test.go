@@ -68,7 +68,7 @@ func TestExportDeltaMatchesFullRewriteAcrossEveryChangeShape(t *testing.T) {
 // unchanged and silently keep the stale row forever.
 func TestExportDeltaRewritesARelationChangedOutsideItsKey(t *testing.T) {
 	t.Parallel()
-	relation := model.Relation{SrcID: "a", DstID: "b", Type: model.RelBlocks, CreatedAt: time.Unix(0, 0).UTC(), CreatedBy: "first"}
+	relation := model.Relation{SrcID: "a", DstID: "b", Type: model.RelBlockedBy, CreatedAt: time.Unix(0, 0).UTC(), CreatedBy: "first"}
 	restamped := relation
 	restamped.CreatedBy = "second"
 
@@ -83,7 +83,7 @@ func TestExportDeltaRewritesARelationChangedOutsideItsKey(t *testing.T) {
 	if len(got.issues.remove) != 0 || len(got.issues.add) != 0 {
 		t.Fatalf("issues delta = remove %v add %v, want untouched: only the relation changed", got.issues.remove, got.issues.add)
 	}
-	wantKey := relationKey{srcID: "a", dstID: "b", kind: model.RelBlocks}
+	wantKey := relationKey{srcID: "a", dstID: "b", kind: model.RelBlockedBy}
 	if len(got.relations.remove) != 1 || got.relations.remove[0] != wantKey {
 		t.Fatalf("relation removals = %v, want exactly %v: a value change under a stable key must delete the stale row", got.relations.remove, wantKey)
 	}
@@ -110,7 +110,7 @@ func TestExportDeltaReinsertsChildrenOfARewrittenIssue(t *testing.T) {
 	event := model.IssueEvent{ID: "e1", IssueID: "touched"}
 	// Spans the rewritten issue and the untouched one: cascades away with
 	// "touched", so it must come back even though the row itself never changed.
-	spanning := model.Relation{SrcID: "touched", DstID: "untouched", Type: model.RelBlocks}
+	spanning := model.Relation{SrcID: "touched", DstID: "untouched", Type: model.RelBlockedBy}
 
 	prev := model.Export{
 		Issues:    []model.Issue{touched, untouched},
@@ -157,7 +157,7 @@ func TestExportDeltaLeavesAnUnchangedBacklogAlone(t *testing.T) {
 			hydratedIssue(t, model.Issue{ID: "a", IssueType: model.TypeTask, Title: "t"}, model.StateOpen),
 			hydratedIssue(t, model.Issue{ID: "b", IssueType: model.TypeTask}, model.StateOpen),
 		},
-		Relations: []model.Relation{{SrcID: "a", DstID: "b", Type: model.RelBlocks}},
+		Relations: []model.Relation{{SrcID: "a", DstID: "b", Type: model.RelBlockedBy}},
 		Comments:  []model.Comment{{ID: "c", IssueID: "a"}},
 		Labels:    []model.Label{{IssueID: "a", Name: "l"}},
 		Events:    []model.IssueEvent{{ID: "e", IssueID: "a"}},
@@ -372,7 +372,7 @@ func buildDeltaScenarioStates(t *testing.T, ctx context.Context) []deltaScenario
 	}
 	snapshot("label added")
 
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: first.ID, DstID: second.ID, Type: model.RelBlocks, CreatedBy: "tester"}); err != nil {
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: first.ID, DstID: second.ID, Type: model.RelBlockedBy, CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation(blocks): %v", err)
 	}
 	snapshot("relation spanning two issues added")

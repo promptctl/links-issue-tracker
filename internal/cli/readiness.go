@@ -39,7 +39,7 @@ type BlockingReason struct {
 // arriving on screen as a blank reason or, worse, no reason at all.
 func (r BlockingReason) Phrase() string {
 	if label, ok := r.dependency(); ok {
-		return "depends on " + label
+		return "by " + label
 	}
 	if label, ok := blockingLabelOf(r.Kind); ok {
 		return label
@@ -136,7 +136,7 @@ func (r IssueReadiness) AwaitsOutside() bool {
 }
 
 // DependencyLabels returns the same dependencies as DependencyIDs, in the same
-// order, worded for the "depends on:" lines a reader sees.
+// order, worded for the "blocked by:" lines a reader sees.
 func (r IssueReadiness) DependencyLabels() []string {
 	var labels []string
 	for _, reason := range r.blocking {

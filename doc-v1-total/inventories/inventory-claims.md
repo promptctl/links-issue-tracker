@@ -525,10 +525,10 @@ Steps 1-3 walk every gathered row; step 4 walks the focus-scoped pool. The row s
 
 **`Exhausted.home()`**: ``"with `lit new --top`"`` when `Epics` is empty; otherwise `"under the epic with "` + one ``fmt.Sprintf("`lit new --parent %s --top`", epic)`` per epic, joined by `" or "`.
 
-**`Exhausted.stay()`** is `nil` when every entry of `Blocked` is `reachAwaitingOutside`, which includes `Blocked` empty; otherwise the one route ``"to stay, file the ticket that clears a blocker " + home() + ", then make that blocker wait on it with `lit dep add --from <new> --to <blocker>`"``.
+**`Exhausted.stay()`** is `nil` when every entry of `Blocked` is `reachAwaitingOutside`, which includes `Blocked` empty; otherwise the one route ``"to stay, file the ticket that clears a blocker " + home() + ", then make that blocker blocked by it with `lit dep add <blocker> --blocked-by <new>`"``.
 
 **`Exhausted.why()`**:
-- `no ready work in %s — %s`, the second being the non-empty clauses of `describeReach(o.Blocked, "blocked on ", exhaustedNotes)` and `describeReach(o.Held, "held here: ", exhaustedNotes)`, joined by `"; "`.
+- `no ready work in %s — %s`, the second being the non-empty clauses of `describeReach(o.Blocked, "blocked by ", exhaustedNotes)` and `describeReach(o.Held, "held here: ", exhaustedNotes)`, joined by `"; "`.
 - with both empty, the second is `nothing else is queued behind what's already in progress`.
 
 **`Exhausted.outside()`**:
@@ -595,7 +595,7 @@ E2E: two clones partition-start the same lane; `lit sync reconcile` on bravo pri
 ### 9.4 Surfaces that render but do not gate
 
 - `lit backlog` — `printBacklogContext` prints the claim line, indented, after the `in_progress:` line and before `unblocks:` (`internal/cli/backlog.go`). `backlogView` is the only `workableView` preset (`internal/cli/workable.go`), and its render function is `printBacklogOutput(w, columns, issues, details, cc)` (`internal/cli/backlog.go`).
-- `printInlineDeps` — the shared epic/depends-on/claim/unblocks block used by `lit next`'s summary, printing the claim line between `depends on` and `unblocks` (`internal/cli/ready_state.go`). `printNextSummary` calls it after the issue's column line (`internal/cli/ready_state.go`).
+- `printInlineDeps` — the shared epic/blocked-by/claim/unblocks block used by `lit next`'s summary, printing the claim line between `blocked by` and `unblocks` (`internal/cli/ready_state.go`). `printNextSummary` calls it after the issue's column line (`internal/cli/ready_state.go`).
 
 No other command consults `claims.Standings`: the only readers of `cc.standings` / `cc.self` outside `internal/cli/claims_*.go` are `next.go` (routing) — everything else consumes `cc` only for rendering (`internal/cli/workable.go`, `internal/cli/backlog.go`, `internal/cli/ready_state.go`).
 

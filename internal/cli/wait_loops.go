@@ -173,7 +173,7 @@ func shortestLoop(graph map[string][]waitHop, start string) waitLoop {
 // drops each one that would; its phrase is here so that the day one does, it
 // is named like the rest.
 var waitPhrases = [...]string{
-	waitDependency:     "depends on",
+	waitDependency:     "is blocked by",
 	waitInherited:      "is held back by its epic's blocker",
 	waitChild:          "waits on its child",
 	waitEarlierSibling: "waits on earlier sibling",

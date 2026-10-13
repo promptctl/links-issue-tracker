@@ -42,7 +42,7 @@ var backlogCellGap = regexp.MustCompile(`\s{2,}`)
 // spaces; the context lines carry no such prefix.
 //
 // The context half exists because the preamble discusses "blocked:" and
-// "depends on:" in prose, so a substring match against the whole output is
+// "blocked by:" in prose, so a substring match against the whole output is
 // satisfied by text no row ever printed. Scoping to one row's own block is what
 // makes an assertion about that row's context lines mean anything.
 func backlogRow(t *testing.T, out, id string) (cells, context []string) {
@@ -169,13 +169,13 @@ func TestBacklogRendersRelationColumns(t *testing.T) {
 
 	// The cell reads "blocked" and no "blocked:" line explains it: this row is
 	// held up by a dependency, and nonDependencyBlockingReasons routes
-	// OpenDependency to the "depends on:" id list instead. Pinning the absence
+	// OpenDependency to the "blocked by:" id list instead. Pinning the absence
 	// is what keeps the prose true — cli-reference and the CHANGELOG both
 	// describe which line carries which reason, and folding OpenDependency back
 	// into the reasons list would make both wrong with nothing to say so.
 	var explained bool
 	for _, line := range context {
-		explained = explained || line == "depends on: "+blocker.ID
+		explained = explained || line == "blocked by: "+blocker.ID
 		if strings.HasPrefix(line, "blocked:") {
 			t.Errorf("dependency-blocked row printed %q; this case is carried by the "+
 				"depends-on list, and the docs say so\ncontext: %q\nfull output:\n%s", line, context, out)
@@ -183,7 +183,7 @@ func TestBacklogRendersRelationColumns(t *testing.T) {
 	}
 	if !explained {
 		t.Errorf("dependency-blocked row context = %q, want a %q line explaining the blocked cell\nfull output:\n%s",
-			context, "depends on: "+blocker.ID, out)
+			context, "blocked by: "+blocker.ID, out)
 	}
 
 	// The unblocked blocker, under an epic of its own, is the control: its
@@ -200,7 +200,7 @@ func TestBacklogRendersRelationColumns(t *testing.T) {
 // TestBacklogBlockedColumnAgreesWithTheContextLine covers the blocker that has
 // no dependency edge at all: a leaf whose only blocker is the sibling gate must
 // not render "-" under `blocked` on the line directly above its own "blocked:
-// earlier sibling X still open" context line. A column that asks DependsOn
+// earlier sibling X still open" context line. A column that asks BlockedBy
 // while the line asks the readiness classifier would make one row say both
 // things at once.
 //

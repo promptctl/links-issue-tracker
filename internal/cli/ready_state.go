@@ -26,7 +26,7 @@ const NeedsDesignLabel = "needs-design"
 // an event outside this repository — an upstream fix, a vendor release. The
 // issue is correct and open, but no work here can move it; its description
 // names the event and how to re-check it, and whatever waits on it depends on
-// it with an ordinary blocks edge.
+// it with an ordinary blocked-by edge.
 // [LAW:one-source-of-truth] Single definition of the external label.
 const ExternalLabel = "external"
 
@@ -160,7 +160,7 @@ func fetchIssueRelations(ctx context.Context, st storage.Store, issues []model.I
 // fetching from the store, so fetch cost is paid once upstream in
 // fetchIssueRelations and fetchHeldAncestry.
 //
-// A blocks edge onto an epic is a dependency of every issue in it or in an epic
+// A blocked-by edge onto an epic is a dependency of every issue in it or in an epic
 // nested in it, in every lane, except an issue the blocker itself waits on
 // (heldAncestry), so each blocker an ancestor epic holds this issue back on
 // becomes an InheritedDependency here — through the same annotation mechanism,
@@ -184,7 +184,7 @@ func newBlockerAnnotator(details map[string]storage.IssueRelations, ancestry hel
 		// dependent blocked forever by a blocker no listing shows. Read and
 		// write must agree on retention.
 		var blockingDeps []model.Issue
-		for _, dep := range detail.DependsOn {
+		for _, dep := range detail.BlockedBy {
 			if dep.InPlay() {
 				blockingDeps = append(blockingDeps, dep)
 			}
@@ -243,7 +243,7 @@ func fetchContainerAncestry(ctx context.Context, fetch relationsFetch, subjects 
 	}
 	gates := make(map[string][]model.Issue, len(relations))
 	for epicID, epic := range relations {
-		for _, dep := range epic.DependsOn {
+		for _, dep := range epic.BlockedBy {
 			if dep.InPlay() {
 				gates[epicID] = append(gates[epicID], dep)
 			}
@@ -665,7 +665,7 @@ type waitLink struct {
 type waitKind int
 
 const (
-	// waitDependency is the waiter's own blocks edge.
+	// waitDependency is the waiter's own blocked-by edge.
 	waitDependency waitKind = iota
 	// waitInherited is a blocker an epic above the waiter passes down.
 	waitInherited
@@ -705,7 +705,7 @@ func fetchWaitLinks(ctx context.Context, fetch relationsFetch, frontier []string
 		link := func(prereq string, holds bool, kind waitKind) {
 			links = append(links, waitLink{waiter: id, prereq: prereq, holds: holds, kind: kind})
 		}
-		for _, dep := range rel.DependsOn {
+		for _, dep := range rel.BlockedBy {
 			if dep.InPlay() {
 				link(dep.ID, leaf, waitDependency)
 			}
@@ -1013,7 +1013,7 @@ func partitionWorkable(issues []annotation.AnnotatedIssue) (inProgress, ready []
 	return inProgress, ready, blocked
 }
 
-// printInlineDeps prints the shared epic/depends-on/claim context lines
+// printInlineDeps prints the shared epic/blocked-by/claim context lines
 // indented under a workable item. `lit next` shows exactly this common core;
 // the backlog view (printBacklogContext) composes its extra lines around the
 // same emitters. [LAW:single-enforcer]
@@ -1025,7 +1025,7 @@ func printInlineDeps(w io.Writer, entry annotation.AnnotatedIssue, cc claimConte
 	if err := printEpicLine(w, contextIndent, entry.ParentEpic); err != nil {
 		return err
 	}
-	if err := printIDListLine(w, contextIndent, "depends on", ClassifyReadiness(entry.Annotations).DependencyLabels()); err != nil {
+	if err := printIDListLine(w, contextIndent, "blocked by", ClassifyReadiness(entry.Annotations).DependencyLabels()); err != nil {
 		return err
 	}
 	line, ok := formatClaimLine(cc, lane, time.Now())

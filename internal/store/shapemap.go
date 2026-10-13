@@ -586,7 +586,7 @@ func cellsDiffer(a, b any) bool {
 // by event_id.
 func assembleExport(workspaceID string, records map[collection][]map[string]any) (model.Export, error) {
 	export := model.Export{
-		Version:     2,
+		Version:     model.ExportVersion,
 		WorkspaceID: workspaceID,
 		Issues:      []model.Issue{},
 		Relations:   []model.Relation{},
@@ -605,7 +605,7 @@ func assembleExport(workspaceID string, records map[collection][]map[string]any)
 		export.Relations = append(export.Relations, model.Relation{
 			SrcID:     cellString(rec["src_id"]),
 			DstID:     cellString(rec["dst_id"]),
-			Type:      model.RelationType(cellString(rec["type"])), // [LAW:single-enforcer] exception: lifeboat salvage conserves bytes; Doctor re-checks
+			Type:      model.RelationTypeFromStored(cellString(rec["type"])), // [LAW:single-enforcer] exception: lifeboat salvage conserves bytes, reading a pre-v8 store's spelling as today's; Doctor re-checks
 			CreatedAt: cellTime(rec["created_at"]),
 			CreatedBy: cellString(rec["created_by"]),
 		})

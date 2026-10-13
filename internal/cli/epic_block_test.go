@@ -55,14 +55,14 @@ func TestBlockedEpicGatesEveryLaneOfItsChildren(t *testing.T) {
 	}
 
 	text := h.runWorkableText()
-	if want := "depends on: " + gate.ID + " (via epic)"; strings.Count(text, want) != 2 {
+	if want := "blocked by: " + gate.ID + " (via epic)"; strings.Count(text, want) != 2 {
 		t.Fatalf("backlog should name the inherited gate once under each child as %q; got:\n%s", want, text)
 	}
 	if !unblocksLineNames(text, laneA.ID) || !unblocksLineNames(text, laneB.ID) {
 		t.Fatalf("the gate's row should say closing it unblocks both children; got:\n%s", text)
 	}
 	if strings.Contains(text, "blocked: depends on") {
-		t.Fatalf("an inherited dependency belongs on the \"depends on:\" line alone; got:\n%s", text)
+		t.Fatalf("an inherited dependency belongs on the \"blocked by:\" line alone; got:\n%s", text)
 	}
 
 	h.closeIssue(gate.ID, "done")

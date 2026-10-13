@@ -862,7 +862,7 @@ type IssueDetail struct {
 	Comments  []Comment  `json:"comments"`
 	Children  []Issue    `json:"children"`
 	Siblings  []Issue    `json:"siblings"`
-	DependsOn []Issue    `json:"depends_on"`
+	BlockedBy []Issue    `json:"blocked_by"`
 	Related   []Issue    `json:"related"`
 	Blocks    []Issue    `json:"blocks"`
 	Parent    *Issue     `json:"parent,omitempty"`
@@ -884,6 +884,11 @@ type IssueDetail struct {
 	FollowUps []Issue      `json:"follow_ups"`
 	Events    []IssueEvent `json:"events"`
 }
+
+// ExportVersion is the export format every store writes. Version 3 spells the
+// blocked-by edge "blocked-by"; versions 1 and 2 spelled it "blocks", and
+// UnmarshalJSON reads them through RelationTypeFromStored.
+const ExportVersion = 3
 
 type Export struct {
 	Version     int          `json:"version"`
@@ -918,9 +923,9 @@ func v1EventID(issueID, action, fromStatus, toStatus, createdBy string, createdA
 	return "evt-v1-" + hex.EncodeToString(sum[:8])
 }
 
-// UnmarshalJSON handles both v1 (history array) and v2 (events array) export
-// formats so old sync files and backup restores remain readable after the
-// schema upgrade to Version 2.
+// UnmarshalJSON handles v1 (history array), v2 (events array, blocked-by edges
+// spelled "blocks") and v3 export formats so old sync files and backup
+// restores remain readable after each format change.
 // [LAW:single-enforcer] Version dispatch lives here; every JSON decode path
 // (syncfile, backup, store tests) inherits it through json.Unmarshal.
 func (e *Export) UnmarshalJSON(data []byte) error {
@@ -948,6 +953,11 @@ func (e *Export) UnmarshalJSON(data []byte) error {
 		Comments:    raw.Comments,
 		Labels:      raw.Labels,
 		Events:      raw.Events,
+	}
+	if raw.Version < 3 {
+		for i := range e.Relations {
+			e.Relations[i].Type = RelationTypeFromStored(string(e.Relations[i].Type))
+		}
 	}
 	// v1 exports carry "history" rows instead of "events". Convert each row to
 	// an IssueEvent with a single status field-change so ReplaceFromExport and

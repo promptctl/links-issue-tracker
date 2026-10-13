@@ -65,7 +65,7 @@ func TestStoreCreateEpicAndRelations(t *testing.T) {
 	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: child.ID, DstID: epic.ID, Type: "parent-child", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation parent-child error = %v", err)
 	}
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: child.ID, DstID: related.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: child.ID, DstID: related.ID, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation blocks error = %v", err)
 	}
 	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: child.ID, DstID: related.ID, Type: "related-to", CreatedBy: "tester"}); err != nil {
@@ -81,8 +81,8 @@ func TestStoreCreateEpicAndRelations(t *testing.T) {
 	if detail.Parent == nil || detail.Parent.ID != epic.ID {
 		t.Fatalf("parent = %#v, want %s", detail.Parent, epic.ID)
 	}
-	if len(detail.DependsOn) != 1 || detail.DependsOn[0].ID != related.ID {
-		t.Fatalf("depends_on = %#v, want %s", detail.DependsOn, related.ID)
+	if len(detail.BlockedBy) != 1 || detail.BlockedBy[0].ID != related.ID {
+		t.Fatalf("blocked_by = %#v, want %s", detail.BlockedBy, related.ID)
 	}
 	if len(detail.Related) != 1 || detail.Related[0].ID != related.ID {
 		t.Fatalf("related = %#v, want %s", detail.Related, related.ID)
@@ -312,10 +312,10 @@ func TestFixRankInversionsConvergesWhenDependencyBlocksMultipleIssues(t *testing
 		t.Fatalf("CreateIssue(blocker) error = %v", err)
 	}
 
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: dependentA.ID, DstID: blocker.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: dependentA.ID, DstID: blocker.ID, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation(A blocks blocker) error = %v", err)
 	}
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: dependentB.ID, DstID: blocker.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: dependentB.ID, DstID: blocker.ID, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation(B blocks blocker) error = %v", err)
 	}
 
@@ -366,10 +366,10 @@ func TestFixRankInversionsConvergesWhenPassCreatesNewInversion(t *testing.T) {
 		t.Fatalf("CreateIssue(blocker) error = %v", err)
 	}
 
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: dependent.ID, DstID: blocker.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: dependent.ID, DstID: blocker.ID, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation(dependent blocks blocker) error = %v", err)
 	}
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: blocker.ID, DstID: upstream.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: blocker.ID, DstID: upstream.ID, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation(blocker blocks upstream) error = %v", err)
 	}
 
@@ -425,7 +425,7 @@ func TestFixRankInversionsDetectsEpicDependency(t *testing.T) {
 	if _, err := st.RankToBottom(ctx, epic.ID); err != nil {
 		t.Fatalf("RankToBottom(epic) error = %v", err)
 	}
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: dependent.ID, DstID: epic.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: dependent.ID, DstID: epic.ID, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation(dependent blocks epic) error = %v", err)
 	}
 
@@ -484,7 +484,7 @@ func TestFixRankInversionsIgnoresClosedEpic(t *testing.T) {
 	if _, err := st.RankToBottom(ctx, epic.ID); err != nil {
 		t.Fatalf("RankToBottom(epic) error = %v", err)
 	}
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: dependent.ID, DstID: epic.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: dependent.ID, DstID: epic.ID, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation(dependent blocks epic) error = %v", err)
 	}
 
@@ -514,7 +514,7 @@ func TestFixRankInversionsIgnoresDeletedIssues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(blocker) error = %v", err)
 	}
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: dependent.ID, DstID: blocker.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: dependent.ID, DstID: blocker.ID, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation(dependent blocks blocker) error = %v", err)
 	}
 	if _, err := st.Apply(ctx, blocker.ID, storage.Change{Action: model.Delete{}, Reason: "removed", Actor: "tester"}); err != nil {
@@ -618,10 +618,10 @@ func TestAddRelationRejectsBlocksCycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(B) error = %v", err)
 	}
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: a.ID, DstID: b.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: a.ID, DstID: b.ID, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation(A blocks B) error = %v", err)
 	}
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: b.ID, DstID: a.ID, Type: "blocks", CreatedBy: "tester"}); err == nil {
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: b.ID, DstID: a.ID, Type: "blocked-by", CreatedBy: "tester"}); err == nil {
 		t.Fatal("AddRelation(B blocks A) = nil, want cycle rejection")
 	} else if !strings.Contains(err.Error(), "cycle") {
 		t.Fatalf("AddRelation(B blocks A) error = %v, want cycle rejection", err)
@@ -655,13 +655,13 @@ func TestAddRelationRejectsTransitiveBlocksCycle(t *testing.T) {
 		return issue.ID
 	}
 	a, b, c := mk("A"), mk("B"), mk("C")
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: a, DstID: b, Type: "blocks", CreatedBy: "tester"}); err != nil {
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: a, DstID: b, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation(A blocks B) error = %v", err)
 	}
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: b, DstID: c, Type: "blocks", CreatedBy: "tester"}); err != nil {
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: b, DstID: c, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation(B blocks C) error = %v", err)
 	}
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: c, DstID: a, Type: "blocks", CreatedBy: "tester"}); err == nil {
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: c, DstID: a, Type: "blocked-by", CreatedBy: "tester"}); err == nil {
 		t.Fatal("AddRelation(C blocks A) = nil, want transitive cycle rejection")
 	}
 }
@@ -678,7 +678,7 @@ func TestAddRelationRejectsSelfBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(A) error = %v", err)
 	}
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: a.ID, DstID: a.ID, Type: "blocks", CreatedBy: "tester"}); err == nil {
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: a.ID, DstID: a.ID, Type: "blocked-by", CreatedBy: "tester"}); err == nil {
 		t.Fatal("AddRelation(A blocks A) = nil, want self-block rejection")
 	}
 }
@@ -708,7 +708,7 @@ func TestDoctorAndFixDetectImportedBlocksCycle(t *testing.T) {
 	// through a path that does not run the AddRelation cycle guard.
 	for _, e := range [][2]string{{a.ID, b.ID}, {b.ID, a.ID}} {
 		if _, err := st.db.ExecContext(ctx,
-			`INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'blocks', ?, 'import')`,
+			`INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'blocked-by', ?, 'import')`,
 			e[0], e[1], time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 			t.Fatalf("seed cyclic edge %v error = %v", e, err)
 		}
@@ -1253,16 +1253,16 @@ func TestStoreGetIssueDetailDefaultsRelatedIssueGroupsToRankOrder(t *testing.T) 
 		t.Fatalf("CreateIssue(relatedB) error = %v", err)
 	}
 
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: main.ID, DstID: depB.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: main.ID, DstID: depB.ID, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation(main->depB) error = %v", err)
 	}
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: main.ID, DstID: depA.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: main.ID, DstID: depA.ID, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation(main->depA) error = %v", err)
 	}
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: blockedB.ID, DstID: main.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: blockedB.ID, DstID: main.ID, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation(blockedB->main) error = %v", err)
 	}
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: blockedA.ID, DstID: main.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: blockedA.ID, DstID: main.ID, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation(blockedA->main) error = %v", err)
 	}
 	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: main.ID, DstID: relatedB.ID, Type: "related-to", CreatedBy: "tester"}); err != nil {
@@ -1276,8 +1276,8 @@ func TestStoreGetIssueDetailDefaultsRelatedIssueGroupsToRankOrder(t *testing.T) 
 	if err != nil {
 		t.Fatalf("GetIssueDetail() error = %v", err)
 	}
-	if got, want := issueIDs(detail.DependsOn), []string{depA.ID, depB.ID}; strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("DependsOn ids = %#v, want %#v", got, want)
+	if got, want := issueIDs(detail.BlockedBy), []string{depA.ID, depB.ID}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("BlockedBy ids = %#v, want %#v", got, want)
 	}
 	if got, want := issueIDs(detail.Blocks), []string{blockedA.ID, blockedB.ID}; strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("Blocks ids = %#v, want %#v", got, want)
@@ -2068,13 +2068,13 @@ func TestGetIssueDetailRelationSidesAreHydrated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(blocked) error = %v", err)
 	}
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: subject.ID, DstID: dependency.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: subject.ID, DstID: dependency.ID, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation(depends on epic) error = %v", err)
 	}
 	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: subject.ID, DstID: related.ID, Type: "related-to", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation(related epic) error = %v", err)
 	}
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: blocked.ID, DstID: subject.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: blocked.ID, DstID: subject.ID, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation(blocked) error = %v", err)
 	}
 
@@ -2085,8 +2085,8 @@ func TestGetIssueDetailRelationSidesAreHydrated(t *testing.T) {
 	if detail.Parent == nil || !detail.Parent.IsContainer() {
 		t.Fatalf("parent = %#v, want hydrated container", detail.Parent)
 	}
-	if len(detail.DependsOn) != 1 || !detail.DependsOn[0].IsContainer() || detail.DependsOn[0].State() != model.StateClosed {
-		t.Fatalf("DependsOn = %#v, want closed hydrated epic", detail.DependsOn)
+	if len(detail.BlockedBy) != 1 || !detail.BlockedBy[0].IsContainer() || detail.BlockedBy[0].State() != model.StateClosed {
+		t.Fatalf("BlockedBy = %#v, want closed hydrated epic", detail.BlockedBy)
 	}
 	if len(detail.Related) != 1 || !detail.Related[0].IsContainer() {
 		t.Fatalf("Related = %#v, want hydrated epic", detail.Related)
@@ -2094,8 +2094,8 @@ func TestGetIssueDetailRelationSidesAreHydrated(t *testing.T) {
 	if len(detail.Blocks) != 1 || detail.Blocks[0].Capabilities().Status == nil {
 		t.Fatalf("Blocks = %#v, want hydrated leaf", detail.Blocks)
 	}
-	if len(detail.DependsOn) > 0 && detail.DependsOn[0].Labels == nil {
-		t.Fatalf("DependsOn[0].Labels = nil, want hydrated label slice")
+	if len(detail.BlockedBy) > 0 && detail.BlockedBy[0].Labels == nil {
+		t.Fatalf("BlockedBy[0].Labels = nil, want hydrated label slice")
 	}
 	if detail.Parent != nil && detail.Parent.Labels == nil {
 		t.Fatalf("Parent.Labels = nil, want hydrated label slice")
@@ -2126,15 +2126,15 @@ func TestEpicAsDependencyDerivedState(t *testing.T) {
 	if _, err := st.Apply(ctx, child.ID, storage.Change{Action: model.Done{}, Actor: "tester"}); err != nil {
 		t.Fatalf("Apply(close) error = %v", err)
 	}
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: leaf.ID, DstID: epic.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: leaf.ID, DstID: epic.ID, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation(blocks) error = %v", err)
 	}
 	detail, err := st.GetIssueDetail(ctx, leaf.ID)
 	if err != nil {
 		t.Fatalf("GetIssueDetail() error = %v", err)
 	}
-	if len(detail.DependsOn) != 1 || detail.DependsOn[0].State() != model.StateClosed {
-		t.Fatalf("DependsOn = %#v, want epic dependency with closed derived state", detail.DependsOn)
+	if len(detail.BlockedBy) != 1 || detail.BlockedBy[0].State() != model.StateClosed {
+		t.Fatalf("BlockedBy = %#v, want epic dependency with closed derived state", detail.BlockedBy)
 	}
 }
 
@@ -2884,7 +2884,7 @@ func TestRelationEndpointVanishedRejected(t *testing.T) {
 		}
 	}
 
-	_, addErr := st.AddRelation(ctx, storage.AddRelationInput{SrcID: src.ID, DstID: dst.ID, Type: "blocks", CreatedBy: "tester"})
+	_, addErr := st.AddRelation(ctx, storage.AddRelationInput{SrcID: src.ID, DstID: dst.ID, Type: "blocked-by", CreatedBy: "tester"})
 	assertNotFound("AddRelation", addErr)
 	_, parentErr := st.SetParent(ctx, storage.SetParentInput{ChildID: src.ID, ParentID: dst.ID, CreatedBy: "tester"})
 	assertNotFound("SetParent", parentErr)
@@ -3072,13 +3072,13 @@ func TestRemovePerChildBlockAfterRankReorder(t *testing.T) {
 
 	// Add epic-to-epic block: A blocks B.
 	// Store convention: src=blocked (B), dst=blocker (A).
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: epicB.ID, DstID: epicA.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: epicB.ID, DstID: epicA.ID, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation(epic-level block) error = %v", err)
 	}
 
 	// Add per-child blocks: A blocks B.1, B.2, B.3.
 	for _, childID := range []string{childB1.ID, childB2.ID, childB3.ID} {
-		if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: childID, DstID: epicA.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+		if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: childID, DstID: epicA.ID, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
 			t.Fatalf("AddRelation(per-child block %s) error = %v", childID, err)
 		}
 	}
@@ -3090,13 +3090,13 @@ func TestRemovePerChildBlockAfterRankReorder(t *testing.T) {
 
 	// Remove per-child blocks.
 	for _, childID := range []string{childB1.ID, childB2.ID, childB3.ID} {
-		if err := st.RemoveRelation(ctx, childID, epicA.ID, "blocks"); err != nil {
+		if err := st.RemoveRelation(ctx, childID, epicA.ID, "blocked-by"); err != nil {
 			t.Errorf("RemoveRelation(per-child block %s) error = %v", childID, err)
 		}
 	}
 
 	// Remove epic-level block.
-	if err := st.RemoveRelation(ctx, epicB.ID, epicA.ID, "blocks"); err != nil {
+	if err := st.RemoveRelation(ctx, epicB.ID, epicA.ID, "blocked-by"); err != nil {
 		t.Fatalf("RemoveRelation(epic-level block) error = %v", err)
 	}
 }

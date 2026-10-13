@@ -36,7 +36,7 @@ func (s *Store) Export(ctx context.Context) (model.Export, error) {
 	// hydrateIssues guarantees every Issue it returns is fully hydrated
 	// (post-condition in store.go), so Export does not re-check. Issue.MarshalJSON
 	// remains the boundary that rejects partial values from any other source.
-	return model.Export{Version: 2, WorkspaceID: s.workspaceID, ExportedAt: s.clock.Now(), Issues: issues, Relations: rels, Comments: comments, Labels: labels, Events: events}, nil
+	return model.Export{Version: model.ExportVersion, WorkspaceID: s.workspaceID, ExportedAt: s.clock.Now(), Issues: issues, Relations: rels, Comments: comments, Labels: labels, Events: events}, nil
 }
 
 func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
@@ -145,8 +145,8 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 	for _, conflict := range ancestry.Conflicts() {
 		report.Errors = append(report.Errors, conflict.Finding())
 	}
-	// Rank inversions and a blocks dependency cycle are two questions about one
-	// snapshot — the live rank order and the blocks edges — so it is read once.
+	// Rank inversions and a blocked-by dependency cycle are two questions about one
+	// snapshot — the live rank order and the blocked-by edges — so it is read once.
 	// Liveness is the lifecycle's classification, never a SQL filter; see
 	// liveIssueIDs.
 	liveIDs, err := s.liveIssueIDs(ctx)
@@ -171,14 +171,14 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 	if report.RankInversions > 0 {
 		report.Warnings = append(report.Warnings, fmt.Sprintf("rank inversions: %d (dependencies ranked below dependents)", report.RankInversions))
 	}
-	// A blocks dependency cycle is the root cause behind a rank inversion that
+	// A blocked-by dependency cycle is the root cause behind a rank inversion that
 	// --fix can never clear: it is unsatisfiable by any rank order. Surface the
 	// members so the operator knows exactly which edge to remove.
 	// [LAW:single-enforcer] blocksCycle reads the constraints the repair sorts,
 	// so this reports a cycle exactly when FixRankInversions refuses on one.
 	if cycle := blocksCycle(order, edges); len(cycle) > 0 {
 		report.DependencyCycle = cycle
-		report.Warnings = append(report.Warnings, fmt.Sprintf("blocks dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)", strings.Join(cycle, " -> ")))
+		report.Warnings = append(report.Warnings, fmt.Sprintf("blocked-by dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)", strings.Join(cycle, " -> ")))
 	}
 	return report, nil
 }
