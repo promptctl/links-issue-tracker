@@ -75,6 +75,23 @@
 // engine outside the Store lifecycle, the adopt clone's, runs under the
 // exclusive workspace hold and never takes the commit lock.)
 //
+// ONE ROOT PER ENGINE. An engine reads the root it loaded when it opened and
+// never reloads it: Dolt rebases a session's root at transaction start only
+// for a read replica (dsess StartTransaction), which lit never configures. A
+// write engine holds LOCK, so no other writer moves the root under it; a read
+// engine beside a live writer is on the read-only fallback and never sees
+// that writer's commits. So an engine answers from the moment it opened plus
+// its Store's own writes. A Store changes engines only at Store.reconnect,
+// whose new engine loads the root as it then stands, and every reconnect runs
+// inside a mutation under the commit lock, never inside a read. A read call
+// therefore answers from one moment however many statements it runs — one
+// per idBatches batch, the relation gather's two endpoint queries and its
+// issue lookup, ListIssues' scan and the label and lifecycle reads that
+// hydrate it. TestGetRelationsByIDsAnswersFromTheMomentItsStoreOpened pins
+// it. Should an engine ever reload its root mid-life, every multi-statement
+// read in this package tears at once, and the fix is a read transaction over
+// the whole call, not over a batch loop.
+//
 // The "one write-capable engine per path" fact has one lock: every engine
 // open contends on LOCK itself with a bounded retry. A lock minted beside
 // LOCK, under any name, is a partial shadow of it and creates the

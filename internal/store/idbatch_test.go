@@ -6,6 +6,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -113,7 +114,120 @@ func TestGetRelationsByIDsSpansEveryBatch(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
+	fx := newBatchedRelationFixture(t, ctx, st)
 
+	// One subject per batch the slice spans: the first, one inside the second,
+	// and the last, which is in the trailing partial batch.
+	wired := []int{0, idBatchSize + 1, len(fx.subjects) - 1}
+	fx.wire(t, ctx, st, wired)
+
+	rels, err := st.GetRelationsByIDs(ctx, fx.subjects)
+	if err != nil {
+		t.Fatalf("GetRelationsByIDs(%d ids) error = %v", len(fx.subjects), err)
+	}
+
+	for _, i := range wired {
+		id := fx.subjects[i]
+		got, ok := rels[id]
+		if !ok {
+			t.Fatalf("subject %d of %d (%s) is missing from the result: its batch was never queried", i, len(fx.subjects), id)
+		}
+		if len(got.BlockedBy) != 1 || got.BlockedBy[0].ID != fx.sink.ID {
+			t.Fatalf("subject %d of %d (%s) BlockedBy = %v, want [%s] — a src_id batch went unqueried", i, len(fx.subjects), id, ids(got.BlockedBy), fx.sink.ID)
+		}
+		if len(got.Blocks) != 1 || got.Blocks[0].ID != fx.source.ID {
+			t.Fatalf("subject %d of %d (%s) Blocks = %v, want [%s] — a dst_id batch went unqueried", i, len(fx.subjects), id, ids(got.Blocks), fx.source.ID)
+		}
+	}
+}
+
+// A batched read answers from the moment its store opened even while another
+// engine writes, because an engine reads the root it loaded at open and never
+// reloads it — see ONE ROOT PER ENGINE in the package doc. Splitting the read
+// into one statement per batch is sound only while that holds, so this pins it
+// at the contract.
+//
+// Edges wired before the reader opens must all reach it, and edges wired after
+// must not. The two sets sit on different subjects in the first, a middle and
+// the trailing partial batch, so a reader frozen at an older root or answering
+// nothing fails the first half, and one that picks up later writes fails the
+// second. A store opened after the writes must see the later edges, which keeps
+// the second half from passing on writes that never landed.
+func TestGetRelationsByIDsAnswersFromTheMomentItsStoreOpened(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot := migratedDoltDir(t)
+	writer, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = writer.Close() })
+	fx := newBatchedRelationFixture(t, ctx, writer)
+	last := len(fx.subjects) - 1
+	early := []int{0, idBatchSize + 1, last}
+	late := []int{1, idBatchSize + 2, last - 1}
+	fx.wire(t, ctx, writer, early)
+
+	reader, err := OpenForRead(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("OpenForRead() beside a live writer error = %v", err)
+	}
+	t.Cleanup(func() { _ = reader.Close() })
+	fx.wire(t, ctx, writer, late)
+
+	before, err := reader.GetRelationsByIDs(ctx, fx.subjects)
+	if err != nil {
+		t.Fatalf("reader GetRelationsByIDs(%d ids) error = %v", len(fx.subjects), err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("writer Close() error = %v", err)
+	}
+	later, err := OpenForRead(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("OpenForRead() after the writes error = %v", err)
+	}
+	t.Cleanup(func() { _ = later.Close() })
+	after, err := later.GetRelationsByIDs(ctx, fx.subjects)
+	if err != nil {
+		t.Fatalf("later GetRelationsByIDs(%d ids) error = %v", len(fx.subjects), err)
+	}
+
+	for _, i := range early {
+		id := fx.subjects[i]
+		if got := before[id]; len(got.BlockedBy) != 1 || len(got.Blocks) != 1 {
+			t.Fatalf("subject %d of %d (%s) wired before the reader opened: BlockedBy = %v, Blocks = %v, want one edge each — the reader did not answer from the moment it opened", i, len(fx.subjects), id, ids(got.BlockedBy), ids(got.Blocks))
+		}
+	}
+	for _, i := range late {
+		id := fx.subjects[i]
+		if got := before[id]; len(got.BlockedBy) != 0 || len(got.Blocks) != 0 {
+			t.Fatalf("subject %d of %d (%s) wired after the reader opened: BlockedBy = %v, Blocks = %v, want both empty — the reader saw a write made after it opened", i, len(fx.subjects), id, ids(got.BlockedBy), ids(got.Blocks))
+		}
+		if got := after[id]; len(got.BlockedBy) != 1 || len(got.Blocks) != 1 {
+			t.Fatalf("subject %d of %d (%s) read after the writes: BlockedBy = %v, Blocks = %v, want one edge each — the writes never landed, so the check above proved nothing", i, len(fx.subjects), id, ids(got.BlockedBy), ids(got.Blocks))
+		}
+	}
+}
+
+// batchedRelationFixture is an epic holding enough subjects to span two full
+// batches and a trailing partial one, plus the two peers their edges run to.
+//
+// The two endpoint queries need edges that only one of them can see. Every
+// edge wire makes runs between a queried subject and a peer that is never
+// queried, so a subject's edge to sink is reachable only through the src_id
+// query and its edge from source only through the dst_id query.
+//
+// Wiring both directions to one shared peer instead would cover neither: if
+// that peer were itself queried, whichever query reached it would return the
+// whole edge set and answer for the other, and the first truncation aimed at
+// either would pass.
+type batchedRelationFixture struct {
+	subjects     []string
+	sink, source model.Issue
+}
+
+func newBatchedRelationFixture(t *testing.T, ctx context.Context, st *Store) batchedRelationFixture {
+	t.Helper()
 	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Batch epic", Topic: "batch", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
@@ -130,17 +244,6 @@ func TestGetRelationsByIDsSpansEveryBatch(t *testing.T) {
 		}
 		subjects = append(subjects, issue.ID)
 	}
-	// The two endpoint queries need edges that only one of them can see. Every
-	// edge here runs between a queried subject and a peer that is never queried,
-	// so a subject's edge to sink is reachable only through the src_id query and
-	// its edge from source only through the dst_id query. Hanging both on the
-	// same wired subjects checks each query across the first, a middle and the
-	// trailing partial batch at once.
-	//
-	// Wiring both directions to one shared peer instead would cover neither: if
-	// that peer were itself queried, whichever query reached it would return the
-	// whole edge set and answer for the other, and the first truncation aimed at
-	// either would pass.
 	sink, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Sink", Topic: "batch", IssueType: "task", ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(sink) error = %v", err)
@@ -149,116 +252,15 @@ func TestGetRelationsByIDsSpansEveryBatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(source) error = %v", err)
 	}
-
-	// One subject per batch the slice spans: the first, one inside the second,
-	// and the last, which is in the trailing partial batch.
-	wired := []int{0, idBatchSize + 1, subjectCount - 1}
-	for _, i := range wired {
-		mustRelate(t, ctx, st, subjects[i], sink.ID, "blocked-by")
-		mustRelate(t, ctx, st, source.ID, subjects[i], "blocked-by")
-	}
-
-	rels, err := st.GetRelationsByIDs(ctx, subjects)
-	if err != nil {
-		t.Fatalf("GetRelationsByIDs(%d ids) error = %v", len(subjects), err)
-	}
-
-	for _, i := range wired {
-		id := subjects[i]
-		got, ok := rels[id]
-		if !ok {
-			t.Fatalf("subject %d of %d (%s) is missing from the result: its batch was never queried", i, subjectCount, id)
-		}
-		if len(got.BlockedBy) != 1 || got.BlockedBy[0].ID != sink.ID {
-			t.Fatalf("subject %d of %d (%s) BlockedBy = %v, want [%s] — a src_id batch went unqueried", i, subjectCount, id, ids(got.BlockedBy), sink.ID)
-		}
-		if len(got.Blocks) != 1 || got.Blocks[0].ID != source.ID {
-			t.Fatalf("subject %d of %d (%s) Blocks = %v, want [%s] — a dst_id batch went unqueried", i, subjectCount, id, ids(got.Blocks), source.ID)
-		}
-	}
+	return batchedRelationFixture{subjects: subjects, sink: sink, source: source}
 }
 
-// A batched read answers from one point in time even while another engine
-// writes, because a Store's engine reads the root it loaded at open and never
-// reloads it — see idBatches. Splitting the read into one statement per batch
-// is sound only while that holds, so this pins it at the contract.
-//
-// The writer adds edges after the reader opened, on subjects in the first, a
-// middle and the trailing partial batch, through both endpoint columns. The
-// reader must see none of them. A store opened after the writes must see every
-// one, which is what keeps the first assertion from passing on writes that
-// never landed.
-func TestGetRelationsByIDsAnswersFromTheMomentItsStoreOpened(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	doltRoot := migratedDoltDir(t)
-	writer, err := Open(ctx, doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
-	t.Cleanup(func() { _ = writer.Close() })
-
-	epic, err := writer.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Snapshot epic", Topic: "batch", IssueType: "epic"})
-	if err != nil {
-		t.Fatalf("CreateIssue(epic) error = %v", err)
-	}
-	const subjectCount = 2*idBatchSize + 2
-	subjects := make([]string, 0, subjectCount)
-	for i := range subjectCount {
-		issue, err := writer.CreateIssue(ctx, storage.CreateIssueInput{
-			Prefix: "test", Title: fmt.Sprintf("Subject %d", i), Topic: "batch",
-			IssueType: "task", Placement: storage.RankBottom, ParentID: epic.ID,
-		})
-		if err != nil {
-			t.Fatalf("CreateIssue(%d) error = %v", i, err)
-		}
-		subjects = append(subjects, issue.ID)
-	}
-	sink, err := writer.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Sink", Topic: "batch", IssueType: "task", ParentID: epic.ID})
-	if err != nil {
-		t.Fatalf("CreateIssue(sink) error = %v", err)
-	}
-	source, err := writer.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Source", Topic: "batch", IssueType: "task", ParentID: epic.ID})
-	if err != nil {
-		t.Fatalf("CreateIssue(source) error = %v", err)
-	}
-
-	reader, err := OpenForRead(ctx, doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("OpenForRead() beside a live writer error = %v", err)
-	}
-	t.Cleanup(func() { _ = reader.Close() })
-
-	wired := []int{0, idBatchSize + 1, subjectCount - 1}
-	for _, i := range wired {
-		mustRelate(t, ctx, writer, subjects[i], sink.ID, "blocked-by")
-		mustRelate(t, ctx, writer, source.ID, subjects[i], "blocked-by")
-	}
-
-	before, err := reader.GetRelationsByIDs(ctx, subjects)
-	if err != nil {
-		t.Fatalf("reader GetRelationsByIDs(%d ids) error = %v", len(subjects), err)
-	}
-	if err := writer.Close(); err != nil {
-		t.Fatalf("writer Close() error = %v", err)
-	}
-	later, err := OpenForRead(ctx, doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("OpenForRead() after the writes error = %v", err)
-	}
-	t.Cleanup(func() { _ = later.Close() })
-	after, err := later.GetRelationsByIDs(ctx, subjects)
-	if err != nil {
-		t.Fatalf("later GetRelationsByIDs(%d ids) error = %v", len(subjects), err)
-	}
-
-	for _, i := range wired {
-		id := subjects[i]
-		if got := before[id]; len(got.BlockedBy) != 0 || len(got.Blocks) != 0 {
-			t.Fatalf("subject %d of %d (%s) read beside the writer: BlockedBy = %v, Blocks = %v, want both empty — the reader saw a write made after it opened", i, subjectCount, id, ids(got.BlockedBy), ids(got.Blocks))
-		}
-		if got := after[id]; len(got.BlockedBy) != 1 || len(got.Blocks) != 1 {
-			t.Fatalf("subject %d of %d (%s) read after the writes: BlockedBy = %v, Blocks = %v, want one edge each — the writes never landed, so the first check proved nothing", i, subjectCount, id, ids(got.BlockedBy), ids(got.Blocks))
-		}
+// wire gives each named subject one edge through each endpoint column: it is
+// blocked by sink, and it blocks source.
+func (fx batchedRelationFixture) wire(t *testing.T, ctx context.Context, st *Store, subjects []int) {
+	t.Helper()
+	for _, i := range subjects {
+		mustRelate(t, ctx, st, fx.subjects[i], fx.sink.ID, "blocked-by")
+		mustRelate(t, ctx, st, fx.source.ID, fx.subjects[i], "blocked-by")
 	}
 }

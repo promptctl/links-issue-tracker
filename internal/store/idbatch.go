@@ -180,20 +180,9 @@ func (b idBatch) inList() (string, []any) {
 // loop body never runs on nothing and no caller needs its own emptiness guard
 // to avoid building `IN ()`. [LAW:no-defensive-null-guards]
 //
-// Splitting one statement into several costs no consistency, and the reason is
-// the engine rather than the batching. A Store's embedded Dolt engine reads the
-// root it loaded at open for its whole life: Dolt reloads the manifest at
-// transaction start only for a read replica (dsess StartTransaction), which lit
-// never configures. A write open holds Dolt's LOCK exclusively, so no second
-// writer exists beside it; a read open beside a live writer gets Dolt's
-// read-only fallback, which never sees that writer's commits. Every statement a
-// Store runs — each batch, the relation gather's src_id and dst_id queries and
-// its issue lookup, ListIssues' scan and the label and lifecycle reads that
-// hydrate it — therefore reads one point in time plus that Store's own writes.
-// TestGetRelationsByIDsAnswersFromTheMomentItsStoreOpened pins it. Should an
-// engine ever reload its root mid-life, every multi-statement read in this
-// package tears at once, and the fix is a read transaction over the whole call,
-// not over a batch loop.
+// Splitting one statement into several costs no consistency: every statement
+// of one read call runs on one engine, which reads one root — see ONE ROOT PER
+// ENGINE in the package doc.
 func idBatches(ids []string) []idBatch {
 	unique := dedupeStrings(ids)
 	if len(unique) == 0 {
