@@ -251,28 +251,46 @@ func TestRunNextNamesThePeerSessionWorkingThisCheckoutsLane(t *testing.T) {
 	}
 }
 
-// The reader with no session of their own, who is nonetheless somebody. `lit
-// start abc --assignee bob` with no CLAUDE_CODE_SESSION_ID writes `bob` on the
-// row, and `--assignee`'s own help calls itself the fallback for exactly that
-// case. Reading the reader from the env alone would then resolve the two halves
-// of one comparison by two different rules, and tell bob that the ticket he
-// assigned himself belongs to somebody else — with nothing on this command able
-// to say otherwise, since `next --assignee` narrows the view and must not double
-// as an identity. The hidden `--by` every mutating command carries answers it
-// here too.
-func TestRunNextTreatsTheByFallbackAsTheReadersIdentity(t *testing.T) {
+// The operator with no session of their own, who is nonetheless somebody, names
+// themselves once and is the same person to the write and to the read: `lit
+// start --by bob` assigns bob, and `lit next --by bob` reports that ticket as
+// bob's own rather than warning him off somebody else's. One flag on both
+// commands, driven through the CLI, so a start that read its assignee from
+// anywhere but --by fails here.
+func TestStartAndNextNameTheSessionlessOperatorWithOneFlag(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
-	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
-	mine := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Assigned to me by flag", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
-	h.applyAction(mine.ID, model.Start{Assignee: "bob"}, "")
+	repo, _ := initBootstrapTestRepo(t)
+	epic := extractTicketID(t, runCLIInDir(t, repo, "new", "--title", "Home epic", "--topic", "next", "--type", "epic"))
+	mine := extractTicketID(t, runCLIInDir(t, repo, "new", "--title", "Bob's ticket", "--topic", "next", "--type", "task", "--parent", epic))
 
-	text := h.runNextText("--by", "bob")
-	if !strings.Contains(text, mine.ID+" is already in progress in a lane you hold — continue where you left off") {
-		t.Fatalf("next --by bob = %q, want bob's own work reported as his", text)
+	runCLIInDir(t, repo, "start", mine, "--by", "bob")
+	// An unassigned ticket also reads as the reader's own, so the start event is
+	// asserted first: without it a start that dropped the name would pass. One
+	// event names bob twice, as the actor and as the assignee it wrote.
+	history := runCLIInDir(t, repo, "history", mine)
+	if !strings.Contains(history, "[bob @") || !strings.Contains(history, "assignee: - → bob") {
+		t.Fatalf("history after start --by bob = %q, want the start recorded by bob, assigning bob", history)
+	}
+
+	text := runCLIInDir(t, repo, "next", "--by", "bob")
+	if !strings.Contains(text, mine+" is already in progress in a lane you hold — continue where you left off") {
+		t.Fatalf("next --by bob after start --by bob = %q, want bob's own work reported as his", text)
 	}
 	if strings.Contains(text, "not to you") {
-		t.Fatalf("next --by bob = %q, want no warning about the reader's own assignee", text)
+		t.Fatalf("next --by bob after start --by bob = %q, want no warning about the reader's own ticket", text)
+	}
+}
+
+// --by is how a session-less operator names themselves, so --help has to say
+// so: on start, where it becomes the assignee, on next, where it is the reader,
+// and on a mutating command, where it is the actor.
+func TestByFlagIsDocumentedInHelp(t *testing.T) {
+	initBootstrapTestRepo(t)
+	for _, command := range [][]string{{"start"}, {"next"}, {"label", "add"}} {
+		page := render(t, append(command, "--help"))
+		if !strings.Contains(page, "--by string") || !strings.Contains(page, byUsage) {
+			t.Errorf("`lit %s --help` = %q, want --by listed with its usage %q", strings.Join(command, " "), page, byUsage)
+		}
 	}
 }
 

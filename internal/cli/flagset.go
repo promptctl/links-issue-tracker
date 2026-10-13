@@ -136,12 +136,6 @@ func (fs *cobraFlagSet) Changed(name string) bool {
 	return fs.cmd.Flags().Changed(name)
 }
 
-// Hide marks a flag as hidden so it does not appear in help output. The flag
-// itself remains functional for any caller that still passes it explicitly.
-func (fs *cobraFlagSet) Hide(name string) {
-	_ = fs.cmd.Flags().MarkHidden(name)
-}
-
 // Detail declares the command's long-form description, next to the flags it
 // describes. Returning the set keeps it chainable onto newCobraFlagSet at the
 // top of a leaf declaration.

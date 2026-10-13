@@ -110,7 +110,7 @@ func TestRunTransitionTargetStateMatrix(t *testing.T) {
 
 				var extra []string
 				if verb.spec.name == "start" {
-					extra = []string{"--assignee", owner}
+					extra = []string{"--by", owner}
 				}
 				// `lit close` requires a resolution at its command boundary; supply
 				// a valid one so the cell exercises the transition, not the parse
@@ -207,12 +207,12 @@ func TestRunTransitionStartClaimTransferEmitsNotice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if err := runTransition(ctx, &bytes.Buffer{}, ap, []string{issue.ID, "--assignee", "agent-alice"}, startSpec); err != nil {
+	if err := runTransition(ctx, &bytes.Buffer{}, ap, []string{issue.ID, "--by", "agent-alice"}, startSpec); err != nil {
 		t.Fatalf("runTransition(first start) error = %v", err)
 	}
 
 	var stdout bytes.Buffer
-	if err := runTransition(ctx, &stdout, ap, []string{issue.ID, "--assignee", "agent-bob"}, startSpec); err != nil {
+	if err := runTransition(ctx, &stdout, ap, []string{issue.ID, "--by", "agent-bob"}, startSpec); err != nil {
 		t.Fatalf("runTransition(reclaim) error = %v, want success with notice", err)
 	}
 	out := stdout.String()
@@ -251,12 +251,12 @@ func TestRunTransitionRefusesEpicAndStartsLeaf(t *testing.T) {
 		t.Fatalf("CreateIssue(leaf) error = %v", err)
 	}
 	var stdout bytes.Buffer
-	err = runTransition(ctx, &stdout, ap, []string{epic.ID, "--assignee", "tester"}, startSpec)
+	err = runTransition(ctx, &stdout, ap, []string{epic.ID, "--by", "tester"}, startSpec)
 	if err == nil {
 		t.Fatal("runTransition(start epic) returned nil; want refusal")
 	}
 	stdout.Reset()
-	if err := runTransition(ctx, &stdout, ap, []string{leaf.ID, "--assignee", "tester"}, startSpec); err != nil {
+	if err := runTransition(ctx, &stdout, ap, []string{leaf.ID, "--by", "tester"}, startSpec); err != nil {
 		t.Fatalf("runTransition(start leaf) error = %v", err)
 	}
 	started, err := ap.Store.GetIssue(ctx, leaf.ID)
@@ -532,7 +532,7 @@ func TestRunTransitionStartWithoutAssigneeSucceeds(t *testing.T) {
 	}
 	var stdout bytes.Buffer
 	if err := runTransition(ctx, &stdout, ap, []string{issue.ID}, startSpec); err != nil {
-		t.Fatalf("runTransition(start without --assignee) error = %v", err)
+		t.Fatalf("runTransition(start without --by) error = %v", err)
 	}
 	started, err := ap.Store.GetIssue(ctx, issue.ID)
 	if err != nil {

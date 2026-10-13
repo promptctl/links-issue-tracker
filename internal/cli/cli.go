@@ -1493,8 +1493,8 @@ func filterWorkableIssues(issues []model.Issue) []model.Issue {
 // both the assignee (who owns the work) and the event actor (who performed the
 // transition), which are the same agent. When CLAUDE_CODE_SESSION_ID is set the
 // value is always claude_<sessionId>, regardless of what (if anything) the
-// caller passed. When the env var is empty the caller's explicit value (an
-// --assignee or --by fallback, trimmed) passes through.
+// caller passed. When the env var is empty the caller's explicit --by value,
+// trimmed, passes through.
 // [LAW:one-source-of-truth] sole producer of the acting identity; assignee and
 // actor cannot diverge because both derive from this one rule.
 // [LAW:types-are-the-program] env presence is the discriminator; no callsite
@@ -1516,21 +1516,24 @@ func resolveIdentity(explicit string) string {
 // cannot split provenance by forgetting to resolve.
 type actorResolver func() string
 
-// registerActor declares the hidden --by fallback flag on fs and returns the
-// resolver that reads it. Call the returned resolver after parseFlagSet has run.
+// byUsage is the one help line for --by, shown on every command that registers
+// it, so the flag reads the same wherever an operator meets it.
+const byUsage = "Who you are when CLAUDE_CODE_SESSION_ID is unset (the session always wins when set): the actor recorded on a change, the assignee lit start claims for, and the reader lit next routes for"
+
+// registerActor declares the --by flag on fs and returns the resolver that
+// reads it. Call the returned resolver after parseFlagSet has run.
+// [LAW:one-source-of-truth] --by is the one spelling of the session-less
+// identity: the actor every mutating command records, the assignee `start`
+// writes, and the reader `next` compares against, so an operator naming
+// themselves once is the same person to the write and to the read.
 // [LAW:one-source-of-truth] the fallback default lives here alone, not at each
-// mutating callsite.
-// [LAW:one-type-per-behavior] the fallback identity, absent both
-// CLAUDE_CODE_SESSION_ID and an explicit flag, is "" for --by exactly as it
-// already is for --assignee (see startSpec) — one answer to "what identity
-// applies when there is no session," not a divergent one per flag. The shared
+// callsite. Absent both CLAUDE_CODE_SESSION_ID and --by it is "": the shared
 // database syncs to remotes and admits no username-shaped values
-// (design-docs/work-claims.md, "The privacy invariant"). "" resolves through the
-// store's existing empty-actor normalization (store.go Apply) to the opaque
-// "unknown", the same sentinel --assignee's default has always produced.
+// (design-docs/work-claims.md, "The privacy invariant"), and "" resolves
+// through the store's empty-actor normalization (store.go Apply) to the opaque
+// "unknown".
 func registerActor(fs *cobraFlagSet) actorResolver {
-	by := fs.String("by", "", "")
-	fs.Hide("by")
+	by := fs.String("by", "", byUsage)
 	return func() string { return resolveIdentity(*by) }
 }
 
@@ -1556,8 +1559,9 @@ type transitionSpec struct {
 	name string
 	// registerFlags declares the action's own flags on fs and returns the
 	// builder invoked after parsing, which turns the flag values into the
-	// sealed action variant.
-	registerFlags func(fs *cobraFlagSet) func() (model.Action, error)
+	// sealed action variant. actor is the invocation's resolved identity, for
+	// an action that carries one.
+	registerFlags func(fs *cobraFlagSet, actor actorResolver) func() (model.Action, error)
 	// authorize, when set, runs after the action is built and before Apply,
 	// and may abort the transition by returning an error. Only `start`
 	// supplies one — the fresh-claim takeover gate
@@ -1590,8 +1594,8 @@ func noAuthorize(*cobraFlagSet) func(context.Context, io.Writer, *app.App, strin
 
 // fixedAction is the registerFlags of every transition whose action carries no
 // payload and therefore consumes no flags.
-func fixedAction(action model.Action) func(fs *cobraFlagSet) func() (model.Action, error) {
-	return func(*cobraFlagSet) func() (model.Action, error) {
+func fixedAction(action model.Action) func(*cobraFlagSet, actorResolver) func() (model.Action, error) {
+	return func(*cobraFlagSet, actorResolver) func() (model.Action, error) {
 		return func() (model.Action, error) { return action, nil }
 	}
 }
@@ -1599,14 +1603,13 @@ func fixedAction(action model.Action) func(fs *cobraFlagSet) func() (model.Actio
 var (
 	startSpec = transitionSpec{
 		name: "start",
-		registerFlags: func(fs *cobraFlagSet) func() (model.Action, error) {
-			// Start is the claim transition and the only action that carries an
-			// assignee. The resolver overrides the flag with CLAUDE_CODE_SESSION_ID
-			// whenever set; the flag survives only as a fallback for environments
-			// without the env var.
-			assignee := fs.String("assignee", "", "Assignee fallback when CLAUDE_CODE_SESSION_ID is unset (env always wins when set)")
+		// Start is the claim transition and the only action that carries an
+		// assignee: whoever performs the start is who it assigns.
+		// [LAW:one-source-of-truth] the assignee is the actor, read from the one
+		// --by flag, never from a flag of its own.
+		registerFlags: func(_ *cobraFlagSet, actor actorResolver) func() (model.Action, error) {
 			return func() (model.Action, error) {
-				return model.Start{Assignee: resolveIdentity(*assignee)}, nil
+				return model.Start{Assignee: actor()}, nil
 			}
 		},
 		authorize: func(fs *cobraFlagSet) func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue, action model.Action) (string, error) {
@@ -1626,7 +1629,7 @@ var (
 	doneSpec  = transitionSpec{name: "done", registerFlags: fixedAction(model.Done{}), authorize: noAuthorize}
 	closeSpec = transitionSpec{
 		name: "close",
-		registerFlags: func(fs *cobraFlagSet) func() (model.Action, error) {
+		registerFlags: func(fs *cobraFlagSet, _ actorResolver) func() (model.Action, error) {
 			resolution, target := registerCloseOutcomeFlags(fs)
 			return func() (model.Action, error) {
 				outcome, err := closeOutcomeFromFlags(*resolution, *target, "usage: lit close <id> --resolution <duplicate|superseded|obsolete|wontfix> [--of <canonical-id>] [--reason <text>]")
@@ -1694,7 +1697,7 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 	fs := newCobraFlagSet(spec.name)
 	reason := fs.String("reason", "", "Transition reason")
 	resolveActor := registerActor(fs)
-	buildAction := spec.registerFlags(fs)
+	buildAction := spec.registerFlags(fs, resolveActor)
 	authorize := spec.authorize(fs)
 	// The issue id, declared: the declared channel carries it and parseLeaf
 	// refuses a second id rather than this leaf discovering it.
@@ -1743,9 +1746,9 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 		}
 
 		// [LAW:single-enforcer] The event actor resolves through the same identity
-		// rule as the assignee: the agent's session wins, else --by/$USER. History
-		// must record who actually performed the transition (claude_<session>), not
-		// the shell user.
+		// rule as the assignee: the agent's session wins, else --by. History must
+		// record who actually performed the transition (claude_<session>), not the
+		// shell user.
 		actor := resolveActor()
 		issue, err := ap.Store.Apply(ctx, issueID, storage.Change{Action: action, Actor: actor, Reason: *reason})
 		if err != nil {

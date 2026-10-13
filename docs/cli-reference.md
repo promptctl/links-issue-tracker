@@ -87,9 +87,12 @@ closed itself when its last child did and there is no transition left to make.
 ### Identity
 
 Commands that record an actor resolve it from the `CLAUDE_CODE_SESSION_ID` environment
-variable (producing an identity like `claude_<session-id>`). The `--assignee` flag on
-lifecycle commands is a *fallback* for when that variable is unset — when both are
-present, the environment wins.
+variable (producing an identity like `claude_<session-id>`). The `--by` flag is the
+*fallback* for when that variable is unset — when both are present, the environment
+wins. It is one name for one person: the actor every mutating command records, the
+assignee `lit start` claims for, and the reader `lit next` routes for, so an operator
+with no session runs `lit start <id> --by bob` and `lit next --by bob` and is the same
+person to both.
 
 This session resolution is claim-time only: it applies to `lit start`. Field-writing
 commands — `new`, `followup`, `update` — honor an explicit `--assignee`
@@ -256,9 +259,7 @@ no liveness probe — so the line asks for the check rather than answering it. A
 ticket assigned to you, or to nobody at all, prints the lane's own sentence
 instead: there is no name to contradict. The identity `next` compares against is
 the session environment, falling back to `--by` as every mutating command's does,
-never the `--assignee` filter. With no session environment the two flags differ by
-command — `lit start` takes the identity as `--assignee`, `lit next` as `--by` —
-so a shell operator naming themselves needs both.
+never the `--assignee` filter.
 
 Both endings that hand back no ticket — the exhaustion diagnostic and an empty
 result — exit 6 rather than 1, and their remediation names the deliberate act each
@@ -568,7 +569,7 @@ clears the field. An old `lit assign` invocation returns a pointer here (exit 3)
 All transitions share one shape, and each verb accepts only the flags its
 action consumes — an inapplicable flag is an unknown-flag parse error (see
 [Transition guidance](#transition-guidance) and [Identity](#identity) for
-guidance and `--assignee` semantics):
+guidance and `--by` semantics):
 
 ```text
 lit <verb> <id> [--reason <text>]
@@ -584,7 +585,7 @@ Status lifecycle (Agent Operations):
 
 | Command | Transition | Flags | Notes |
 |---------|-----------|-------|-------|
-| `lit start` | any state → `in_progress` | `[--assignee <fallback>] [--take]` | Claims the issue and assigns it to you; from `closed` it is a reopen-and-claim. `--take` confirms taking over a lane another checkout holds fresh, and is how a caller with no terminal to prompt does it. |
+| `lit start` | any state → `in_progress` | `[--by <name>] [--take]` | Claims the issue and assigns it to you; from `closed` it is a reopen-and-claim. `--take` confirms taking over a lane another checkout holds fresh, and is how a caller with no terminal to prompt does it. |
 | `lit done` | any non-closed → `closed` | | Success path; prints post-close capture guidance. Transitions are target-state: the verb names the destination, whatever the current status. |
 | `lit close` | any non-closed → `closed` | `--resolution <duplicate\|superseded\|obsolete\|wontfix> [--of <canonical-id>]` | Closing without finishing; `--of` names the canonical ticket for the redirecting resolutions (required for those, unrepresentable otherwise). |
 | `lit open` | any non-open → `open` | | Returns the issue to the backlog; ownership (assignee) is untouched — only `start` rewrites it. |
