@@ -166,3 +166,99 @@ func openOrFatal(t *testing.T, ctx context.Context, root string) *Store {
 	}
 	return st
 }
+
+// TestSyncResolveUnrelatedTakeRemoteAdoptsAPrePurgeRemote pins take-remote
+// against a remote last written below the migration that adds the purges
+// table, the shape every remote a released lit pushed has. With nothing to
+// carry the take is the plain reset and adopts that head as before; with a
+// local purge to carry it lifts the head on scratch and lands the record, and
+// the remote drops the ticket once the push lands.
+func TestSyncResolveUnrelatedTakeRemoteAdoptsAPrePurgeRemote(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		purge bool
+	}{{"nothing to carry", false}, {"a purge to carry", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			rootA := migratedDoltDir(t)
+			rootB := unrelatedDoltDir(t)
+			remoteURL := "file://" + filepath.Join(t.TempDir(), "remote")
+
+			sharedID := seedPrePurgeRemote(t, ctx, rootA, remoteURL)
+			forkUnrelatedClone(t, ctx, rootB, remoteURL)
+			shareIssue(t, ctx, rootA, rootB, sharedID)
+			want := []string{sharedID}
+			if tc.purge {
+				purgeIssue(t, ctx, rootB, sharedID)
+				want = nil
+			}
+
+			syncB := openSyncOrFatal(t, ctx, rootB)
+			if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+				t.Fatalf("SyncFetch(B): %v", err)
+			}
+			token := ownerApprovedTakeToken(t, ctx, syncB, "origin", "master", storage.TakeRemote)
+			res, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", storage.TakeRemote, token)
+			if err != nil {
+				t.Fatalf("SyncResolveUnrelated(TakeRemote) onto a pre-purge remote: %v", err)
+			}
+			if res.State != storage.SyncReconcileTookRemote {
+				t.Fatalf("state = %q, want %q", res.State, storage.SyncReconcileTookRemote)
+			}
+			assertScratchBranchCleanedUp(t, ctx, syncB)
+			fresh, err := syncB.SyncFreshness(ctx, "origin", "master")
+			if err != nil {
+				t.Fatalf("SyncFreshness(B): %v", err)
+			}
+			wantState := map[bool]storage.SyncFreshnessState{false: storage.SyncUpToDate, true: storage.SyncAhead}[tc.purge]
+			if fresh.State() != wantState {
+				t.Fatalf("freshness = %q ahead=%d, want %q: the take writes only when it carries a purge", fresh.State(), fresh.Ahead, wantState)
+			}
+			if tc.purge {
+				if _, err := syncB.SyncPush(ctx, "origin", "master", false, false); err != nil {
+					t.Fatalf("SyncPush(B): %v", err)
+				}
+			}
+			// A plain take-remote leaves this session on the adopted head's own
+			// schema; the next open lifts it, so the content is read from one.
+			if err := syncB.Close(); err != nil {
+				t.Fatalf("Close(B): %v", err)
+			}
+			reopened := openOrFatal(t, ctx, rootB)
+			defer func() { _ = reopened.Close() }()
+			assertLocalIssueIDs(t, ctx, reopened, want)
+			if tc.purge {
+				assertPurged(t, ctx, reopened, sharedID)
+			}
+		})
+	}
+}
+
+// seedPrePurgeRemote is seedReconcileRemote with the seed store stepped back
+// below the purges migration before its first push, so the remote head is the
+// shape a released lit writes.
+func seedPrePurgeRemote(t *testing.T, ctx context.Context, root, remoteURL string) string {
+	t.Helper()
+	st := openOrFatal(t, ctx, root)
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "seed", Topic: "topic", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(seed): %v", err)
+	}
+	if err := st.Downgrade(ctx, 8); err != nil {
+		t.Fatalf("Downgrade(seed) to v8: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close(seed): %v", err)
+	}
+	sync := openSyncOrFatal(t, ctx, root)
+	defer func() { _ = sync.Close() }()
+	if err := sync.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+		t.Fatalf("SyncAddRemote(seed): %v", err)
+	}
+	if _, err := sync.SyncPush(ctx, "origin", "master", true, false); err != nil {
+		t.Fatalf("SyncPush(seed): %v", err)
+	}
+	return epic.ID
+}
