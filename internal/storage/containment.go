@@ -22,7 +22,9 @@ import (
 // an epic, a reparent refuses a parent that is not an epic, a detach refuses
 // to leave a leaf with no parent, since that would leave it nowhere, and a
 // purge refuses a container whose removal would strand a ticket it holds, for
-// the same reason.
+// the same reason. A write that lands an export whole — a sync, a restore —
+// has no single write to refuse, so it brings what it lands under the rule
+// instead (HomeStranded).
 // Changing a ticket's type across the container line is refused elsewhere
 // (ApplyIssueFields), so neither half can be broken by retyping an endpoint
 // afterwards. The four refusals live here, once, so the two engines render one rule rather than two

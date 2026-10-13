@@ -86,13 +86,14 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 	if report.OrphanHistoryRows > 0 {
 		report.Warnings = append(report.Warnings, fmt.Sprintf("orphan issue event rows: %d", report.OrphanHistoryRows))
 	}
-	// Containment is refused at every write, so a ticket outside an epic is
-	// what the boundary was not there to refuse: a restored export, which
-	// writes rows as they were, can hold one from before schema v7. It is a
-	// column read, no hydration, so it runs on a hierarchy holding a loop. A
-	// warning, not an error: every read still answers over it, and a faithful
-	// rebuild of a pre-v7 source reproduces it, which the recovery gate must
-	// not refuse (healthFindings). [LAW:single-enforcer]
+	// Containment is refused at every write, and a sync or a restore homes
+	// what it lands (storage.HomeStranded), so a ticket outside an epic is what
+	// neither was there to refuse: a recovery rebuild writes its source as it
+	// was (rebuildFromExport), and a pre-v7 source holds them. It is a column
+	// read, no hydration, so it runs on a hierarchy holding a loop. A warning,
+	// not an error: every read still answers over it, and the faithful rebuild
+	// reproduces it, which the recovery gate must not refuse (healthFindings).
+	// [LAW:single-enforcer]
 	containment, err := containmentFindings(ctx, s.db)
 	if err != nil {
 		return report, fmt.Errorf("containment check: %w", err)

@@ -379,10 +379,10 @@ func TestSetParentBreaksAStoredLoopOfLeaves(t *testing.T) {
 	}
 }
 
-// A restore writes rows as they were, so a backup taken before every ticket
-// lived inside an epic brings back the tickets the write boundary refuses.
-// Doctor names each of them and the repair, as a warning the recovery gate
-// does not refuse, and the repair clears them.
+// A recovery rebuild writes its source as it was, so a source from before
+// every ticket lived inside an epic brings back the tickets the write boundary
+// refuses. Doctor names each of them and the repair, as a warning the recovery
+// gate does not refuse, and the repair clears them.
 func TestDoctorNamesTicketsOutsideAnEpic(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
