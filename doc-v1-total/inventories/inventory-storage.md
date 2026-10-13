@@ -905,21 +905,19 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 ### 2.13 Bulk / import (`internal/storage/memory/bulk.go`)
 
 **`BulkApply(ctx, prefix, actor, specs)`**
-1. `storage.ValidateBulkSpecs(specs)` (`internal/storage/import_validate.go`, shared with the Dolt engine) — the entire file is gated before any document is applied.
-2. `creationOrder(bulkGraph(specs))`; a cycle → `fmt.Errorf("bulk: %w", err)`.
-3. Walks documents in topological order:
+1. `order, err := storage.BulkWriteOrder(specs)` (`internal/storage/import_validate.go`, shared with the Dolt engine) — the entire file is gated before any document is applied, and the gate returns the order the documents are written in. Its error is returned as is.
+2. Walks documents in topological order:
    - `spec.ID != ""` (update): `bulkUpdateChange(spec, actor)` then `e.apply(spec.ID, change)`. On apply failure → `e.compensate(batch, fmt.Errorf("bulk: update %q: %w", spec.ID, err))`. Appends `issue.ID` to `result.Updated`.
    - Otherwise (create): `bulkCreateInput(spec, prefix, batch)` then `e.createIssue(in)`. On failure → `e.compensate(batch, fmt.Errorf("bulk: create doc %d: %w", index, err))`. Records into the batch, and into `result.Created` under `spec.LocalID` if set, else under the new real id.
    - Note: `bulkUpdateChange` and `bulkCreateInput` errors are returned **without** compensation.
-4. **Second pass, in original spec order (not topological)**: wires every `BlockedBy` edge as `blocked-by` with `src = the document's own issue`, `dst = batch.resolve(dep)`. On failure → `e.compensate(batch, fmt.Errorf("bulk: blocked_by doc %d -> %q: %w", index, dep, err))`.
+3. **Second pass, in original spec order (not topological)**: wires every `BlockedBy` edge as `blocked-by` with `src = the document's own issue`, `dst = batch.resolve(dep)`. On failure → `e.compensate(batch, fmt.Errorf("bulk: blocked_by doc %d -> %q: %w", index, dep, err))`.
 
 **`ImportTree(ctx, prefix, specs)`**
-1. `storage.ValidateImportTreeSpecs(specs)` (`internal/storage/import_validate.go`, shared with the Dolt engine).
-2. `creationOrder(importGraph(specs))`; cycle → `fmt.Errorf("import: %w", err)`.
-3. Per spec in topological order: re-parses `IssueType` and `Priority` (errors → `fmt.Errorf("import: spec %q: %w", spec.LocalID, err)`, **without** compensation), then `createIssue` with `ParentID: batch.resolveLocal(spec.Parent)` and `Prefix: prefix`. Create failure → `e.compensate(batch, fmt.Errorf("import: create %q: %w", spec.LocalID, err))`.
+1. `order, err := storage.ImportTreeWriteOrder(specs)` (`internal/storage/import_validate.go`, shared with the Dolt engine); its error is returned as is.
+2. Per spec in topological order: re-parses `IssueType` and `Priority` (errors → `fmt.Errorf("import: spec %q: %w", spec.LocalID, err)`, **without** compensation), then `createIssue` with `ParentID: batch.resolveLocal(spec.Parent)` and `Prefix: prefix`. Create failure → `e.compensate(batch, fmt.Errorf("import: create %q: %w", spec.LocalID, err))`.
    - Note: `Lane` and `Placement` are not carried from `ImportTreeSpec` (it has no such fields).
-4. Second pass in spec order wires `BlockedBy`.
-5. Returns `ImportTreeResult{IDMap: batch.idMap()}` — the `byLocalID` map.
+3. Second pass in spec order wires `BlockedBy`.
+4. Returns `ImportTreeResult{IDMap: batch.idMap()}` — the `byLocalID` map.
 
 **`wireDependency(dependent, dependency)`** — `addRelation` with `Type: model.RelBlockedBy`, `CreatedBy: createdBy` (`"links"`).
 
@@ -946,14 +944,16 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 - `IssueType` and `Priority` are parsed into pointers; parse errors → `fmt.Errorf("bulk: update %q: %w", spec.ID, err)`.
 - Returns `storage.Change{Actor: actor, Fields: fields}` — **an update document never carries an Action**.
 
-**`creationOrder(graph)`** — DFS topological sort over intra-batch references only. States `unvisited`/`visiting`/`done`; re-entering `visiting` → `fmt.Errorf("cycle detected involving %q", graph.localID[i])`. A reference matching no local name is not an edge. Both authored formats reduce to the same `localGraph` shape.
+**`storage.BulkWriteOrder(specs)`** / **`storage.ImportTreeWriteOrder(specs)`** (`internal/storage/import_validate.go`) — run `validateBulkSpecs` / `validateImportTreeSpecs`, then `storage.writeOrder(format, specs, refsOf)` (`internal/storage/import_validate.go`) with `format` `"bulk"` / `"import"` and each spec's references as `Parent` followed by `BlockedBy`. Every refusal either returns is a `model.ValidationError`; the `%w` rows below wrap the containment helpers' own `ValidationError`.
 
-**`storage.ValidateBulkSpecs`** (`internal/storage/import_validate.go`)
-- Empty input → `errors.New("bulk: no issues in input")`.
-- Per doc: `id`, `local_id`, `parent` must have no surrounding whitespace → `fmt.Errorf("bulk: doc %d %s %q has surrounding whitespace"...)`.
-- Each `blocked_by` entry: no surrounding whitespace; and if `LocalID != "" && dep == spec.LocalID` → `fmt.Errorf("bulk: doc %d (local_id %q) cannot depend on itself"...)`.
-- `ID != ""` → `validateBulkUpdateDoc`; duplicate `ID` → `fmt.Errorf("bulk: duplicate id %q", spec.ID)`.
-- Else → `validateBulkCreateDoc`, whose parsed type is kept; duplicate non-empty `LocalID` → `fmt.Errorf("bulk: duplicate local_id %q", spec.LocalID)`.
+`storage.writeOrder(format, specs, refsOf)` (`internal/storage/import_validate.go`) — DFS topological sort over intra-file references only. States `unvisited`/`visiting`/`done`; re-entering `visiting` → `model.ValidationError{Message: fmt.Sprintf("%s: cycle detected involving %q", format, localIDs[i])}`. A reference matching no local_id is not an edge.
+
+**`storage.validateBulkSpecs`** (`internal/storage/import_validate.go`)
+- Empty input → `"bulk: no issues in input"`.
+- Per doc: `id`, `local_id`, `parent` must have no surrounding whitespace → `"bulk: doc %d %s %q has surrounding whitespace"`.
+- Each `blocked_by` entry: no surrounding whitespace; and if `LocalID != "" && dep == spec.LocalID` → `"bulk: doc %d (local_id %q) cannot depend on itself"`.
+- `ID != ""` → `validateBulkUpdateDoc`; duplicate `ID` → `"bulk: duplicate id %q"`.
+- Else → `validateBulkCreateDoc`, whose parsed type is kept; duplicate non-empty `LocalID` → `"bulk: duplicate local_id %q"`.
 - Second pass over the create documents: a non-container type with `Parent == ""` → `fmt.Errorf("bulk: doc %d: %w", i, storage.RejectLeafWithoutParent(...))`; a `Parent` naming a create document in the file whose type is not a container → `fmt.Errorf("bulk: doc %d: %w", i, storage.RejectParentThatIsNotAContainer(...))`; a `Parent` matching no `local_id` is left to `createIssue`.
 
 **`validateBulkCreateDoc`** (`internal/storage/import_validate.go`)
@@ -972,10 +972,10 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 - Invalid type / priority → `"... has invalid type %q"` / `"... has invalid priority %d"`.
 - No updatable field stated → `"bulk: doc %d (id %q) has no fields to update"`. Updatable fields are exactly: `Title`, `Description`, `Prompt`, `IssueType`, `Priority`, `Assignee`, `Labels`, `Lane`.
 
-**`storage.ValidateImportTreeSpecs`** (`internal/storage/import_validate.go`)
-- Empty → `errors.New("import: no issues in input")`.
+**`storage.validateImportTreeSpecs`** (`internal/storage/import_validate.go`)
+- Empty → `"import: no issues in input"`.
 - Blank `LocalID` → `"import: spec %d missing local_id"`; untrimmed → `"import: spec %d local_id %q has surrounding whitespace"`.
-- Blank `Title` → `"import: spec %q missing title"`.
+- Blank `Title` → `"import: spec %q missing title"`; blank `Topic` → `"import: spec %q missing topic"`.
 - Invalid type → `"import: spec %q has invalid type %q"`; invalid priority → `"import: spec %q has invalid priority %d"`.
 - Duplicate `LocalID` → `"import: duplicate local_id %q"`.
 - Second loop: `Parent` untrimmed → error; **`Parent` must name a spec in the file** → `"import: spec %q references missing parent %q"`; a `Parent` whose spec is not a container → `"import: spec %q: %w"` around `storage.RejectParentThatIsNotAContainer`; a non-container spec with no `Parent` → `"import: spec %q: %w"` around `storage.RejectLeafWithoutParent`.

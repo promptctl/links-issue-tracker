@@ -77,6 +77,50 @@ func TestRunImportOfAnExportNamesBackupRestore(t *testing.T) {
 	}
 }
 
+// A file that parses but breaks a rule is refused the way a file that does
+// not parse is: exit 3 and advice to change the file. The file is what is
+// wrong, so retrying repeats the refusal and lit doctor has nothing to find.
+func TestRunImportRefusesARuleBreakingFileWithoutRetryAdvice(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name, file, content, want string
+	}{
+		{"tree spec missing a title", "x.json", `[{"local_id":"a","type":"task","topic":"demo"}]`, `import: spec "a" missing title`},
+		{"tree spec missing a topic", "x.json", `[{"local_id":"a","title":"x","type":"epic"}]`, `import: spec "a" missing topic`},
+		{"tree spec of null", "x.json", `null`, "import: no issues in input"},
+		{"tree spec with a cycle", "x.json", `[
+			{"local_id":"a","title":"a","type":"epic","topic":"demo","blocked_by":["b"]},
+			{"local_id":"b","title":"b","type":"epic","topic":"demo","blocked_by":["a"]}
+		]`, "import: cycle detected involving"},
+		{"bulk file missing a topic", "x.yaml", "title: x\ntype: task\n", "bulk: doc 0 missing topic"},
+		{"bulk file with a cycle", "x.yaml", "local_id: a\ntitle: a\ntype: epic\ntopic: demo\nblocked_by: [b]\n---\nlocal_id: b\ntitle: b\ntype: epic\ntopic: demo\nblocked_by: [a]\n", "bulk: cycle detected involving"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ap := newTestCLIApp(t)
+			path := writeImportFile(t, tc.file, tc.content)
+			err := runImportTree(ctx, &bytes.Buffer{}, ap, []string{"--path", path})
+			if err == nil {
+				t.Fatal("runImportTree error = nil, want a refusal")
+			}
+			var stderr bytes.Buffer
+			if code := WriteCommandError(&stderr, err); code != ExitValidation {
+				t.Fatalf("exit code = %d, want %d (a deterministic refusal); error = %v", code, ExitValidation, err)
+			}
+			rendered := stderr.String()
+			for _, want := range []string{"reason=validation_refused", tc.want} {
+				if !strings.Contains(rendered, want) {
+					t.Fatalf("rendered error = %q, want it to contain %q", rendered, want)
+				}
+			}
+			for _, misdirection := range []string{"Retry the command", "lit doctor"} {
+				if strings.Contains(rendered, misdirection) {
+					t.Fatalf("rendered error = %q, must not contain %q", rendered, misdirection)
+				}
+			}
+		})
+	}
+}
+
 func TestRunImportYAMLCreatesEpicAndChild(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)

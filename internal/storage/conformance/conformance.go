@@ -202,6 +202,7 @@ var cases = []engineCase{
 	{"relations_batch_buckets_edges", relationsBatchBucketsEdges},
 	{"parent_wiring", parentWiring},
 	{"every_ticket_lives_inside_a_container", everyTicketLivesInsideAContainer},
+	{"an_import_file_that_breaks_a_rule_is_refused_whole", anImportFileThatBreaksARuleIsRefusedWhole},
 	{"the_hierarchy_stays_a_tree", theHierarchyStaysATree},
 	{"blocks_never_runs_along_the_hierarchy", blocksNeverRunsAlongTheHierarchy},
 	{"topics_derive_from_issues", topicsDeriveFromIssues},
@@ -2231,6 +2232,59 @@ func parentWiring(t *testing.T, ctx context.Context, st storage.Store, clk *cloc
 	}
 	_, err = st.SetParent(ctx, storage.SetParentInput{ChildID: child.ID, ParentID: "no-such-issue"})
 	assertNotFound(t, err, "issue", "SetParent under a missing parent")
+}
+
+// anImportFileThatBreaksARuleIsRefusedWhole pins that every rule an import
+// file can break is a ValidationError, in both formats and whatever the rule:
+// the file is what is wrong, so the same file is refused the same way on every
+// run, and a caller tells that from a fault by the type alone. A refused file
+// writes nothing.
+func anImportFileThatBreaksARuleIsRefusedWhole(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	before := mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true, IncludeArchived: true})
+	title, topic, epicType := "imported", "core", "epic"
+	tree := func(specs ...storage.ImportTreeSpec) func() error {
+		return func() error { _, err := st.ImportTree(ctx, prefix, specs); return err }
+	}
+	bulk := func(specs ...storage.BulkIssueSpec) func() error {
+		return func() error { _, err := st.BulkApply(ctx, prefix, "ada", specs); return err }
+	}
+	epic := func(localID, blockedBy string) storage.BulkIssueSpec {
+		spec := storage.BulkIssueSpec{LocalID: localID, Title: &title, Topic: &topic, IssueType: &epicType}
+		if blockedBy != "" {
+			spec.BlockedBy = []string{blockedBy}
+		}
+		return spec
+	}
+	for _, imp := range []struct {
+		what string
+		do   func() error
+	}{
+		{"ImportTree(no specs)", tree()},
+		{"ImportTree(a spec missing its title)", tree(storage.ImportTreeSpec{LocalID: "a", IssueType: "epic", Topic: "core"})},
+		{"ImportTree(a spec missing its topic, after one that would land)", tree(
+			storage.ImportTreeSpec{LocalID: "e", Title: "lands", IssueType: "epic", Topic: "core"},
+			storage.ImportTreeSpec{LocalID: "a", Title: "no topic", IssueType: "epic"},
+		)},
+		{"ImportTree(a duplicate local_id)", tree(
+			storage.ImportTreeSpec{LocalID: "a", Title: "one", IssueType: "epic", Topic: "core"},
+			storage.ImportTreeSpec{LocalID: "a", Title: "two", IssueType: "epic", Topic: "core"},
+		)},
+		{"ImportTree(a parent no spec names)", tree(storage.ImportTreeSpec{LocalID: "a", Title: "t", IssueType: "task", Topic: "core", Parent: "nowhere"})},
+		{"ImportTree(a blocked_by cycle)", tree(
+			storage.ImportTreeSpec{LocalID: "a", Title: "a", IssueType: "epic", Topic: "core", BlockedBy: []string{"b"}},
+			storage.ImportTreeSpec{LocalID: "b", Title: "b", IssueType: "epic", Topic: "core", BlockedBy: []string{"a"}},
+		)},
+		{"BulkApply(no documents)", bulk()},
+		{"BulkApply(a create missing its topic)", bulk(storage.BulkIssueSpec{Title: &title, IssueType: &epicType})},
+		{"BulkApply(a duplicate local_id)", bulk(epic("a", ""), epic("a", ""))},
+		{"BulkApply(a blocked_by cycle)", bulk(epic("a", "b"), epic("b", "a"))},
+	} {
+		assertRefused(t, imp.do(), imp.what)
+	}
+	after := mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true, IncludeArchived: true})
+	if len(after) != len(before) {
+		t.Errorf("issues after the refused imports = %d, want %d: a file the gate refuses writes nothing", len(after), len(before))
+	}
 }
 
 // everyTicketLivesInsideAContainer pins containment, the rule the hierarchy

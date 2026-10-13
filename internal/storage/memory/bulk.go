@@ -22,12 +22,9 @@ func (e *Engine) BulkApply(ctx context.Context, prefix, actor string, specs []st
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if err := storage.ValidateBulkSpecs(specs); err != nil {
-		return storage.BulkApplyResult{}, err
-	}
-	order, err := creationOrder(bulkGraph(specs))
+	order, err := storage.BulkWriteOrder(specs)
 	if err != nil {
-		return storage.BulkApplyResult{}, fmt.Errorf("bulk: %w", err)
+		return storage.BulkApplyResult{}, err
 	}
 
 	batch := newBatch(len(specs))
@@ -74,12 +71,9 @@ func (e *Engine) ImportTree(ctx context.Context, prefix string, specs []storage.
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if err := storage.ValidateImportTreeSpecs(specs); err != nil {
-		return storage.ImportTreeResult{}, err
-	}
-	order, err := creationOrder(importGraph(specs))
+	order, err := storage.ImportTreeWriteOrder(specs)
 	if err != nil {
-		return storage.ImportTreeResult{}, fmt.Errorf("import: %w", err)
+		return storage.ImportTreeResult{}, err
 	}
 
 	batch := newBatch(len(specs))
@@ -269,82 +263,3 @@ func valueOr[T any](value *T, fallback T) T {
 	}
 	return *value
 }
-
-// --- creation order -------------------------------------------------------
-
-// localGraph is a batch's internal reference structure: the name each document
-// answers to, and the names it points at. Both authored formats reduce to it,
-// so the ordering rule is stated once. [LAW:one-type-per-behavior]
-type localGraph struct {
-	localID []string
-	refs    [][]string
-}
-
-func bulkGraph(specs []storage.BulkIssueSpec) localGraph {
-	graph := localGraph{localID: make([]string, len(specs)), refs: make([][]string, len(specs))}
-	for i, spec := range specs {
-		graph.localID[i] = spec.LocalID
-		graph.refs[i] = append(append([]string{}, spec.Parent), spec.BlockedBy...)
-	}
-	return graph
-}
-
-func importGraph(specs []storage.ImportTreeSpec) localGraph {
-	graph := localGraph{localID: make([]string, len(specs)), refs: make([][]string, len(specs))}
-	for i, spec := range specs {
-		graph.localID[i] = spec.LocalID
-		graph.refs[i] = append(append([]string{}, spec.Parent), spec.BlockedBy...)
-	}
-	return graph
-}
-
-// creationOrder orders the documents so every one lands after everything it
-// names inside the batch. A reference matching no local name is not an edge —
-// it resolves outside the batch, and the write that receives it decides
-// whether it is real. Cycles among the internal edges are refused.
-func creationOrder(graph localGraph) ([]int, error) {
-	indexByLocal := map[string]int{}
-	for i, id := range graph.localID {
-		if id == "" {
-			continue
-		}
-		indexByLocal[id] = i
-	}
-	const (
-		unvisited = iota
-		visiting
-		done
-	)
-	state := make([]int, len(graph.localID))
-	order := make([]int, 0, len(graph.localID))
-	var visit func(int) error
-	visit = func(i int) error {
-		switch state[i] {
-		case done:
-			return nil
-		case visiting:
-			return fmt.Errorf("cycle detected involving %q", graph.localID[i])
-		}
-		state[i] = visiting
-		for _, ref := range graph.refs[i] {
-			j, internal := indexByLocal[ref]
-			if !internal {
-				continue
-			}
-			if err := visit(j); err != nil {
-				return err
-			}
-		}
-		state[i] = done
-		order = append(order, i)
-		return nil
-	}
-	for i := range graph.localID {
-		if err := visit(i); err != nil {
-			return nil, err
-		}
-	}
-	return order, nil
-}
-
-// --- validation -----------------------------------------------------------
