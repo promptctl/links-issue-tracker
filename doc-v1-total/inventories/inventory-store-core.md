@@ -2732,7 +2732,7 @@ Tests: `TestAddRelationRejectsBlocksCycle` (A→B then B→A rejected) — `inte
 - `srcID, dstID = relType.CanonicalEndpoints(srcID, dstID)` first (so related-to removal is order-insensitive).
 - Inside `s.withMutation(ctx, "remove relation", ...)`: `deleteRelationRowTx` with that key.
 - `affected == 0` → `storage.NotFoundError{Entity: "relation", ID: fmt.Sprintf("src=%s dst=%s type=%s", srcID, dstID, relType)}`, rendering as `relation "src=… dst=… type=…" not found`.
-- Then `rejectDetachingALeafTx(ctx, tx, relType, srcID)` (`relations.go`): for `parent-child` only, `issueTypeTx` on the child then `storage.RejectDetachingALeaf` → `model.ValidationError` for a leaf, which rolls the delete back; other types pass. Judged after the delete so a missing edge is still reported missing.
+- Then `storage.RejectDetachingParentEdge(relType, srcID, read)` (`relations.go`, `internal/storage/containment.go`): for `parent-child` only, `read` runs `issueTypeTx` on the child and counts the parent-child edges it still holds (`SELECT COUNT(*) FROM relations WHERE src_id = ? AND type = 'parent-child'`), and `storage.RejectDetachingALeaf` → `model.ValidationError` for a leaf left with none, which rolls the delete back; a leaf that keeps another parent edge passes, and other types pass without the read. Judged after the delete so a missing edge is still reported missing.
 - No existence check on the endpoints; no `GetIssue` precheck.
 
 `TestRemovePerChildBlockAfterRankReorder` — `internal/store/store_test.go` — removes per-child and epic-level blocks edges after a `RankAbove`, asserting store orientation `src=dependent, dst=dependency` holds after reordering.
@@ -2740,7 +2740,7 @@ Tests: `TestAddRelationRejectsBlocksCycle` (A→B then B→A rejected) — `inte
 ### 4.7 ClearParent
 
 `Store.ClearParent(ctx, childID)` — `internal/store/relations.go`:
-- Inside `s.withMutation(ctx, "clear parent", ...)`, first `rejectDetachingALeafTx(ctx, tx, model.RelParentChild, childID)`: `issueTypeTx` proves the child exists (`storage.NotFoundError` otherwise) and reads its type as a column — no hydration, so this answers on a hierarchy holding a loop — and `storage.RejectDetachingALeaf` → `model.ValidationError` for a leaf; only an epic is detached. Then:
+- Inside `s.withMutation(ctx, "clear parent", ...)`, first `issueTypeTx(ctx, tx, childID)`: it proves the child exists (`storage.NotFoundError` otherwise) and reads its type as a column — no hydration, so this answers on a hierarchy holding a loop — and `storage.RejectDetachingALeaf(childID, childType, 0)` → `model.ValidationError` for a leaf, since every parent edge goes; only an epic is detached. Then:
   ```sql
   DELETE FROM relations WHERE src_id = ? AND type = 'parent-child'
   ```
@@ -3549,6 +3549,7 @@ Usage strings: `restoreUsage = "usage: lit backup restore (--latest | --path <ex
   - `> 0` → error line `"foreign key violations: %d"`.
 - `SELECT COUNT(*) FROM relations WHERE type='related-to' AND src_id >= dst_id` → `InvalidRelatedRows`; wrap `"count invalid related rows: %w"`; warning `"invalid related-to ordering rows: %d"`.
 - `SELECT COUNT(*) FROM issue_events e LEFT JOIN issues i ON i.id = e.issue_id WHERE i.id IS NULL` → `OrphanHistoryRows`; wrap `"count orphan event rows: %w"`; warning `"orphan issue event rows: %d"`.
+- `containmentFindings(ctx, s.db)` (`import_export.go`), error wrap `"containment check: %w"`: one query lists every non-epic with no parent-child edge and every parent-child edge onto a non-epic; warning `"tickets outside an epic: %s (every ticket except an epic lives inside one; move each into the epic it belongs to with 'lit parent set --child <id> --parent <epic-id>')"` naming each as `id (type)`, and warning `"tickets under a parent that is not an epic: %s (only an epic contains tickets; …)"` naming each as `id under parent (parent type)`. Column reads, so it runs before the parent-cycle check.
 - `loadRankAncestry(ctx, s.db)`, error wrap `"rank ancestry: %w"`; each `ancestry.Conflicts()` entry appends its `Finding()` as an error line, and the checks below still run.
 - `s.liveIssueIDs(ctx)`, `loadRankOrder(ctx, s.db, liveIDs)` and `loadBlocksEdges(ctx, s.db)`, loaded once for both rank checks; each error wraps `"rank checks: %w"`.
 - `RankInversions = len(invertedEdges(order, edges))`; warning `"rank inversions: %d (dependencies ranked below dependents)"`.
@@ -3640,7 +3641,7 @@ Second pass, over all specs (`import_validate.go`) — i.e. **forward references
 | `Parent != TrimSpace(Parent)` | `import: spec %q parent %q has surrounding whitespace` |
 | `Parent` not in `types` | `import: spec %q references missing parent %q` |
 | `Parent` names a spec whose type is not a container (`storage.RejectParentThatIsNotAContainer`) | `import: spec %q: cannot file a ticket under %s: it is a %s, and only an epic contains tickets` (wraps a `model.ValidationError`) |
-| type is not a container and `Parent == ""` (`storage.RejectLeafWithoutParent`) | `import: spec %q: cannot create a %s outside an epic: every ticket except an epic lives inside one, so name the epic it belongs to (lit new --parent <epic-id>) or create an epic for it (--type epic)` (wraps a `model.ValidationError`) |
+| type is not a container and `Parent == ""` (`storage.RejectLeafWithoutParent`) | `import: spec %q: cannot create a %s outside an epic: every ticket except an epic lives inside one, so give it the epic it belongs to as its parent, or make it an epic` (wraps a `model.ValidationError`) |
 | a `dep != TrimSpace(dep)` | `import: spec %q depends_on entry %q has surrounding whitespace` |
 | `dep` not in `types` | `import: spec %q references missing depends_on %q` |
 | `dep == spec.LocalID` | `import: spec %q cannot depend on itself` |
@@ -3769,7 +3770,7 @@ A second pass over the create documents, in file order (`import_validate.go`), j
 
 | condition | error |
 |---|---|
-| type is not a container and `Parent == ""` (`storage.RejectLeafWithoutParent`) | `bulk: doc %d: cannot create a %s outside an epic: every ticket except an epic lives inside one, so name the epic it belongs to (lit new --parent <epic-id>) or create an epic for it (--type epic)` (wraps a `model.ValidationError`) |
+| type is not a container and `Parent == ""` (`storage.RejectLeafWithoutParent`) | `bulk: doc %d: cannot create a %s outside an epic: every ticket except an epic lives inside one, so give it the epic it belongs to as its parent, or make it an epic` (wraps a `model.ValidationError`) |
 | `Parent` names a create document in the file (by `local_id`) whose type is not a container (`storage.RejectParentThatIsNotAContainer`) | `bulk: doc %d: cannot file a ticket under %s: it is a %s, and only an epic contains tickets` (wraps a `model.ValidationError`) |
 
 Note the create branch does **not** require `LocalID` (unlike ImportTree), and does not reject an unresolvable `Parent`/`depends_on` — those pass through as presumed real ids; a real-id parent that is not an epic is refused by `CreateIssue` (`storage.RejectParentThatIsNotAContainer`), after any earlier documents have been created, and is compensated as any mid-batch refusal is.
@@ -3973,6 +3974,7 @@ The concrete checks whose text can appear as a `health` finding, in `Doctor`'s e
    Query error → `fmt.Errorf("count foreign key issues: %w", err)` (`import_export.go`). If sum > 0, appends **error** `foreign key violations: %d` (`import_export.go`).
 3. **Invalid related-to ordering.** SQL: `SELECT COUNT(*) FROM relations WHERE type='related-to' AND src_id >= dst_id` (`import_export.go`). Error → `count invalid related rows: %w`. If > 0, appends **warning** `invalid related-to ordering rows: %d` (`import_export.go`) — a warning, therefore **ignored by verify**.
 4. **Orphan event rows.** SQL: `SELECT COUNT(*) FROM issue_events e LEFT JOIN issues i ON i.id = e.issue_id WHERE i.id IS NULL` (`import_export.go`). Error → `count orphan event rows: %w`. If > 0, **warning** `orphan issue event rows: %d` (`import_export.go`) — ignored by verify.
+   **Containment.** `containmentFindings(ctx, s.db)` (`import_export.go`): a non-epic with no parent-child edge, or a parent-child edge onto a non-epic, is a **warning** naming each and the repair `lit parent set --child <id> --parent <epic-id>` — ignored by verify, so a faithful rebuild of a pre-v7 source is not refused.
 5. **Parent conflicts.** `loadRankAncestry(ctx, s.db)` (`import_export.go`); each child more than one framing edge claims (`ancestry.Conflicts()`) appends **error** `%s has %d parents (%s); it lists under %s, the lowest id, until one remains — ...` (`internal/storage/rank.go`). The checks below still run.
 6. **Rank inversions.** Computed in Go: `s.liveIssueIDs(ctx)`, `loadRankOrder(ctx, s.db, liveIDs)` and `loadBlocksEdges(ctx, s.db)` load once for this check and the next (`import_export.go`); each error → `rank checks: %w`. `RankInversions = len(invertedEdges(order, edges))` (`import_export.go`); if > 0, **warning** `rank inversions: %d (dependencies ranked below dependents)` (`import_export.go`) — ignored by verify.
 7. **Blocks dependency cycle.** `blocksCycle(order, edges)` over the same load (`import_export.go`). If non-empty, sets `DependencyCycle` and appends **warning** `blocks dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)` with members joined by `" -> "` (`import_export.go`) — ignored by verify.

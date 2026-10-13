@@ -326,30 +326,28 @@ func (e *Engine) RemoveRelation(ctx context.Context, srcID, dstID string, relTyp
 		return storage.NotFoundError{Entity: "relation", ID: fmt.Sprintf("src=%s dst=%s type=%s", srcID, dstID, relType)}
 	}
 	// `lit dep rm --type parent-child` is the other door onto a detach, so it
-	// meets ClearParent's rule: a leaf keeps its parent. The edge exists, so
-	// its src does. [LAW:single-enforcer]
-	if err := e.rejectDetachingALeaf(relType, srcID); err != nil {
+	// meets ClearParent's rule: a leaf keeps a parent, judged against the
+	// parent edges left once this one goes. The edge exists, so its src does.
+	// [LAW:single-enforcer]
+	if err := storage.RejectDetachingParentEdge(relType, srcID, func() (model.IssueType, int, error) {
+		child, err := e.mustRecord(srcID)
+		if err != nil {
+			return "", 0, err
+		}
+		parentsLeft := 0
+		for _, rel := range e.relations {
+			if rel.SrcID == srcID && rel.Type == model.RelParentChild && rel.DstID != dstID {
+				parentsLeft++
+			}
+		}
+		return child.issueType, parentsLeft, nil
+	}); err != nil {
 		return err
 	}
 	e.dropRelations(func(rel model.Relation) bool {
 		return rel.SrcID == srcID && rel.DstID == dstID && rel.Type == relType
 	})
 	return nil
-}
-
-// rejectDetachingALeaf refuses removing a leaf's parent edge
-// (storage.RejectDetachingALeaf); any other relation type passes. The record
-// is read for its type alone, so this answers on a hierarchy holding a loop.
-// [LAW:dataflow-not-control-flow] The one branch here is the domain's own enum.
-func (e *Engine) rejectDetachingALeaf(relType model.RelationType, childID string) error {
-	if relType != model.RelParentChild {
-		return nil
-	}
-	child, err := e.mustRecord(childID)
-	if err != nil {
-		return err
-	}
-	return storage.RejectDetachingALeaf(childID, child.issueType)
 }
 
 // ListRelationsForIssue returns every edge incident to the issue in either
@@ -432,7 +430,13 @@ func (e *Engine) ClearParent(ctx context.Context, childID string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if err := e.rejectDetachingALeaf(model.RelParentChild, childID); err != nil {
+	// The record is read for its type alone, so this answers on a hierarchy
+	// holding a loop. Every parent edge goes, so none is left.
+	child, err := e.mustRecord(childID)
+	if err != nil {
+		return err
+	}
+	if err := storage.RejectDetachingALeaf(childID, child.issueType, 0); err != nil {
 		return err
 	}
 	removed := e.dropRelations(func(rel model.Relation) bool {

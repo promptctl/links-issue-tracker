@@ -410,7 +410,7 @@ Creates an issue and **prints its generated ID** — capture it; IDs are not gue
 
 Every ticket lives inside an epic. `--parent` names the epic a task, feature, bug or
 chore belongs to and is required for those types: without it the command exits 3,
-naming the flag and `--type epic` as the two ways on, and an id that names anything
+naming a parent epic and the epic type as the two ways on, and an id that names anything
 but an epic is refused the same way. Only an epic may be top-level, and an epic may
 sit inside another epic. There is no loose ticket, so file the epic first when the
 work has none; `lit ls --type epic` lists the ones that exist.

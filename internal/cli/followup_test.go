@@ -92,9 +92,10 @@ func TestRunFollowupFilesBesideTheClosedTicket(t *testing.T) {
 // TestRunFollowupOnATopLevelTicketIsTopLevel pins the parentless case. The
 // only ticket outside any epic is a top-level epic, and a follow-up lands
 // beside the ticket it follows up: a task beside a top-level epic would be a
-// task outside every epic, so the store refuses it and names the way in
-// (lit new --parent); a follow-up that is itself an epic lands at the top
-// level with the link carried on its row.
+// task outside every epic, so the store refuses it and names the two ways in;
+// a follow-up that is itself an epic lands at the top level, and a task filed
+// with --parent lands in the epic it names, each with the link carried on its
+// row.
 func TestRunFollowupOnATopLevelTicketIsTopLevel(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
@@ -112,8 +113,8 @@ func TestRunFollowupOnATopLevelTicketIsTopLevel(t *testing.T) {
 	if !errors.As(err, &validation) {
 		t.Fatalf("runFollowup(task beside a top-level epic) error = %v (%T), want model.ValidationError", err, err)
 	}
-	if !strings.Contains(err.Error(), "lit new --parent") {
-		t.Fatalf("runFollowup(task beside a top-level epic) error = %q, want it to name lit new --parent", err.Error())
+	if !strings.Contains(err.Error(), "as its parent, or make it an epic") {
+		t.Fatalf("runFollowup(task beside a top-level epic) error = %q, want it to name a parent epic and the epic type as the ways in", err.Error())
 	}
 
 	var stdout bytes.Buffer
@@ -129,6 +130,27 @@ func TestRunFollowupOnATopLevelTicketIsTopLevel(t *testing.T) {
 	}
 	if detail.Issue.FollowsUp != closed.ID {
 		t.Fatalf("created.FollowsUp = %q, want %q", detail.Issue.FollowsUp, closed.ID)
+	}
+
+	home, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
+		Title: "Where the work goes", Topic: "sync", IssueType: model.TypeEpic,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue(home epic) error = %v", err)
+	}
+	var filed bytes.Buffer
+	if err := runFollowup(ctx, &filed, ap, []string{"--on", closed.ID, "--title", "Tie it off", "--parent", home.ID}); err != nil {
+		t.Fatalf("runFollowup(--parent) error = %v", err)
+	}
+	task, err := ap.Store.GetIssueDetail(ctx, firstIssueID(t, filed.String()))
+	if err != nil {
+		t.Fatalf("GetIssueDetail error = %v", err)
+	}
+	if task.Parent == nil || task.Parent.ID != home.ID {
+		t.Fatalf("created parent = %v, want %s, the epic --parent named", task.Parent, home.ID)
+	}
+	if task.Issue.IssueType != model.TypeTask || task.Issue.FollowsUp != closed.ID {
+		t.Fatalf("created type = %s, FollowsUp = %q; want a task that follows up %s", task.Issue.IssueType, task.Issue.FollowsUp, closed.ID)
 	}
 }
 

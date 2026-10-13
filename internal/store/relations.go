@@ -516,10 +516,18 @@ func rejectParentCycle(ctx context.Context, tx *sql.Tx, childID, parentID string
 	// [LAW:one-source-of-truth] The same detector Doctor reports with, asked
 	// about the subgraph this edge would attach to rather than the workspace.
 	if cycle := parentCycle(above); len(cycle) > 0 {
-		return fmt.Errorf("parent-child: cannot make %s a child of %s — the hierarchy above %s already holds a cycle (%s); break it with 'lit dep rm' on one of those edges, then retry", childID, parentID, parentID, strings.Join(cycle, " -> "))
+		return fmt.Errorf("parent-child: cannot make %s a child of %s — the hierarchy above %s already holds a cycle (%s); %s, then retry", childID, parentID, parentID, strings.Join(cycle, " -> "), parentCycleRepair)
 	}
 	return nil
 }
+
+// parentCycleRepair is the repair every report of a stored parent loop names.
+// A loop is usually leaves, and a leaf cannot be detached, so the first way is
+// the reparent: it replaces every parent the member holds, and it climbs only
+// above the epic it names, so that epic must sit outside the loop. The second
+// way is for a member that is an epic belonging at the top level.
+// [LAW:one-source-of-truth] Doctor and the write boundary name one repair.
+const parentCycleRepair = "break it with 'lit parent set --child <one member> --parent <an epic outside the loop>', which replaces every parent that member holds, or with 'lit parent clear <member>' for a member that is an epic belonging at the top level"
 
 // parentCycle returns the members of one loop in the hierarchy, in walk order,
 // or nothing when the parent graph is a forest.
@@ -666,25 +674,22 @@ func (s *Store) RemoveRelation(ctx context.Context, srcID, dstID string, relType
 			return storage.NotFoundError{Entity: "relation", ID: fmt.Sprintf("src=%s dst=%s type=%s", srcID, dstID, relType)}
 		}
 		// `lit dep rm --type parent-child` is the other door onto a detach,
-		// so it meets ClearParent's rule: a leaf keeps its parent. Judged
-		// after the delete so a missing edge is still reported as missing;
-		// the refusal rolls the delete back. [LAW:single-enforcer]
-		return rejectDetachingALeafTx(ctx, tx, relType, srcID)
+		// so it meets ClearParent's rule: a leaf keeps a parent. Judged after
+		// the delete, against the parent edges left, so a missing edge is
+		// still reported as missing; the refusal rolls the delete back.
+		// [LAW:single-enforcer]
+		return storage.RejectDetachingParentEdge(relType, srcID, func() (model.IssueType, int, error) {
+			childType, err := issueTypeTx(ctx, tx, srcID)
+			if err != nil {
+				return "", 0, err
+			}
+			var parentsLeft int
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM relations WHERE src_id = ? AND type = 'parent-child'`, srcID).Scan(&parentsLeft); err != nil {
+				return "", 0, fmt.Errorf("count parent edges of %s: %w", srcID, err)
+			}
+			return childType, parentsLeft, nil
+		})
 	})
-}
-
-// rejectDetachingALeafTx refuses removing a leaf's parent edge
-// (storage.RejectDetachingALeaf); any other relation type passes.
-// [LAW:dataflow-not-control-flow] The one branch here is the domain's own enum.
-func rejectDetachingALeafTx(ctx context.Context, tx *sql.Tx, relType model.RelationType, childID string) error {
-	if relType != model.RelParentChild {
-		return nil
-	}
-	childType, err := issueTypeTx(ctx, tx, childID)
-	if err != nil {
-		return err
-	}
-	return storage.RejectDetachingALeaf(childID, childType)
 }
 
 // ListRelationsForIssue returns the relations incident to issueID, optionally
@@ -761,7 +766,14 @@ func (s *Store) SetParent(ctx context.Context, in storage.SetParentInput) (model
 // a missing edge. [LAW:no-silent-failure]
 func (s *Store) ClearParent(ctx context.Context, childID string) error {
 	return s.withMutation(ctx, "clear parent", func(ctx context.Context, tx *sql.Tx) error {
-		if err := rejectDetachingALeafTx(ctx, tx, model.RelParentChild, childID); err != nil {
+		// The type read also proves the child exists, so an unknown id is
+		// reported as a missing issue, not a missing edge. Every parent edge
+		// goes, so none is left. [LAW:single-enforcer]
+		childType, err := issueTypeTx(ctx, tx, childID)
+		if err != nil {
+			return err
+		}
+		if err := storage.RejectDetachingALeaf(childID, childType, 0); err != nil {
 			return err
 		}
 		res, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE src_id = ? AND type = 'parent-child'`, childID)

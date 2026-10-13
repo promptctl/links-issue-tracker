@@ -627,10 +627,11 @@ else ready.
   (`cli.go`).
 - Flags (`cli.go`): `--on` (string, `""`, "Required id of the ticket this
   follows up (typically the just-closed ticket)"), `--title` (required), `--description`,
-  `--prompt`, `--type` (default `task`), `--topic`, `--priority` (default 0),
-  `--assignee`, `--labels`, `--top`. No `--parent`, no `--lane`.
+  `--prompt`, `--type` (default `task`), `--parent` (string, `""`, "Epic to file
+  the follow-up in; defaults to the parent of --on, beside it"), `--topic`,
+  `--priority` (default 0), `--assignee`, `--labels`, `--top`. No `--lane`.
 - Refusal: blank `--on` or blank `--title` (after trim) →
-  `UsageError{"usage: lit followup --on <id> --title <text> [--description <text>] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--top]"}`
+  `UsageError{"usage: lit followup --on <id> --title <text> [--description <text>] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--parent <epic-id>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--top]"}`
   → exit 2 (`cli.go`).
 - Reads the `--on` ticket via `GetIssueDetail(onID)`; a missing ticket is not-found → exit 4
   (`cli.go`).
@@ -638,8 +639,9 @@ else ready.
   (`cli.go`); blank `--description` becomes
   `"Follow-up surfaced at the close of <origin.Issue.ID>: <origin.Issue.Title>"`
   (`cli.go`).
-- Creates with `ParentID` = the `--on` ticket's parent id (`""` when it has
-  none) and `FollowsUp = origin.Issue.ID` (`cli.go`), dispatches
+- Creates with `ParentID` = the trimmed `--parent`, or when blank the `--on`
+  ticket's parent id (`""` when it has none), and `FollowsUp = origin.Issue.ID`
+  (`cli.go`), dispatches
   `EventTicketCreated`, prints the summary line, emits breadcrumb `new`
   (`cli.go`).
 - Surplus positionals refused by `refuseSurplusPositionals` (`register.go`),

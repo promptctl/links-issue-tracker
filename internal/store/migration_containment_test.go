@@ -111,8 +111,8 @@ func TestContainmentMigrationHomesEveryLeaf(t *testing.T) {
 	f.parent(t, ctx, "acme-core-aa11.2.1", "acme-core-aa11.2")
 
 	// Top-level leaves, live and deleted. The live ones' keys decide the
-	// unfiled epic's rank: "B" is the best of them, so the epic takes "B". The
-	// deleted one's "A" would be better and does not count, since work in the
+	// unfiled epic's rank: "B" is the best of them, so the epic takes "B0", the
+	// next key after it, and "B" stays with its leaf. The deleted one's "A" would be better and does not count, since work in the
 	// trash frames nothing. One top-level id carries another prefix so the
 	// majority rule has something to decide.
 	f.issue(t, ctx, seedRow{id: "acme-core-bb22", issueType: "task", rank: "M"})
@@ -141,7 +141,9 @@ func TestContainmentMigrationHomesEveryLeaf(t *testing.T) {
 	f.issue(t, ctx, seedRow{id: "t-under", issueType: "task", rank: "V"})
 	f.parent(t, ctx, "t-under", "t-top-leaf")
 
-	// An epic under a top-level leaf: the epic itself is the child that moves.
+	// An epic under a top-level leaf: no epic is above it, and an epic may be
+	// top-level, so it loses the leaf edge and stays at the top level with its
+	// own child, while the leaf goes unfiled.
 	f.issue(t, ctx, seedRow{id: "t-top-leaf2", issueType: "feature", rank: "P"})
 	f.issue(t, ctx, seedRow{id: "t-nested-epic", issueType: "epic", rank: "V"})
 	f.parent(t, ctx, "t-nested-epic", "t-top-leaf2")
@@ -154,6 +156,20 @@ func TestContainmentMigrationHomesEveryLeaf(t *testing.T) {
 	f.issue(t, ctx, seedRow{id: "t-cyc-b", issueType: "task", rank: "V"})
 	f.parent(t, ctx, "t-cyc-a", "t-cyc-b")
 	f.parent(t, ctx, "t-cyc-b", "t-cyc-a")
+
+	// Restored data: a loop of leaves with a fork in it. Each lap through the
+	// fork doubles the ways up, so a climb that kept every way would hold some
+	// 2^32 rows by the depth cut; kept as a set, it ends, and the child and the
+	// loop all go unfiled.
+	f.issue(t, ctx, seedRow{id: "t-fl-1", issueType: "task", rank: "V"})
+	f.issue(t, ctx, seedRow{id: "t-fl-2", issueType: "task", rank: "V"})
+	f.issue(t, ctx, seedRow{id: "t-fl-3", issueType: "task", rank: "V"})
+	f.issue(t, ctx, seedRow{id: "t-fl-child", issueType: "bug", rank: "V"})
+	f.parent(t, ctx, "t-fl-1", "t-fl-2")
+	f.parent(t, ctx, "t-fl-1", "t-fl-3")
+	f.parent(t, ctx, "t-fl-2", "t-fl-1")
+	f.parent(t, ctx, "t-fl-3", "t-fl-1")
+	f.parent(t, ctx, "t-fl-child", "t-fl-1")
 
 	// Restored data: a child with two leaf parents in two epics. The climb
 	// forks, both forks end on an epic at the same depth, and the lower id
@@ -221,10 +237,14 @@ func TestContainmentMigrationHomesEveryLeaf(t *testing.T) {
 		"t-top-leaf":         unfiledID,
 		"t-under":            unfiledID,
 		"t-top-leaf2":        unfiledID,
-		"t-nested-epic":      unfiledID,
+		"t-nested-epic":      "",
 		"t-nested-epic.1":    "t-nested-epic",
 		"t-cyc-a":            unfiledID,
 		"t-cyc-b":            unfiledID,
+		"t-fl-1":             unfiledID,
+		"t-fl-2":             unfiledID,
+		"t-fl-3":             unfiledID,
+		"t-fl-child":         unfiledID,
 		"t-l1":               "t-e1",
 		"t-l2":               "t-e2",
 		"t-fork":             "t-e1",
@@ -281,8 +301,15 @@ func TestContainmentMigrationHomesEveryLeaf(t *testing.T) {
 	if status.Valid || closedAt.Valid || issueType != "epic" || topic != "unfiled" || lane != "" || priority != 0 {
 		t.Errorf("unfiled epic row = status %v closed_at %v type %q topic %q lane %q priority %d; want an open epic of topic unfiled in the default lane at normal priority", status, closedAt, issueType, topic, lane, priority)
 	}
-	if rank != "B" {
-		t.Errorf("unfiled epic rank = %q, want %q, the best key among the live top-level leaves it absorbed", rank, "B")
+	if rank != "B0" {
+		t.Errorf("unfiled epic rank = %q, want %q, the next key after the best key among the live top-level leaves it absorbed", rank, "B0")
+	}
+	var holders int
+	if err := f.st.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM issues WHERE item_rank = ?`, rank).Scan(&holders); err != nil {
+		t.Fatalf("count holders of the unfiled epic's rank: %v", err)
+	}
+	if holders != 1 {
+		t.Errorf("%d rows hold the unfiled epic's rank %q; want the epic alone, since a rank orders one row", holders, rank)
 	}
 	if createdAt != "2026-10-12T00:00:00Z" {
 		t.Errorf("unfiled epic created_at = %q, want the fixed authoring date", createdAt)

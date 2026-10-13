@@ -239,7 +239,7 @@ func TestRunNewLeafWithoutParentIsRefused(t *testing.T) {
 	if reason := commandErrorReason(err); reason != "validation_refused" {
 		t.Fatalf("runNew(no --parent) reason = %q, want validation_refused (error: %v)", reason, err)
 	}
-	want := "cannot create a task outside an epic: every ticket except an epic lives inside one, so name the epic it belongs to (lit new --parent <epic-id>) or create an epic for it (--type epic)"
+	want := "cannot create a task outside an epic: every ticket except an epic lives inside one, so give it the epic it belongs to as its parent, or make it an epic"
 	if !strings.Contains(err.Error(), want) {
 		t.Fatalf("runNew(no --parent) error = %q, want it to contain %q", err.Error(), want)
 	}

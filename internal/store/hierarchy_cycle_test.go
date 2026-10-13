@@ -291,10 +291,11 @@ func seedParentEdge(t *testing.T, ctx context.Context, st *Store, childID, paren
 	}
 }
 
-// Doctor tells the operator to break a reported loop with 'lit parent clear'.
-// That instruction has to work on the state doctor just described: a repair that
-// crashes on the fault it repairs leaves the workspace unreadable, which is the
-// condition this whole rule exists to prevent.
+// Doctor names 'lit parent clear' as the repair for a loop member that is an
+// epic belonging at the top level. That instruction has to work on the state
+// doctor just described: a repair that crashes on the fault it repairs leaves
+// the workspace unreadable, which is the condition this whole rule exists to
+// prevent.
 //
 // The anti-vacuity precondition is the hydration check below: on this
 // workspace a ClearParent that begins with GetIssue recurses until the stack
@@ -329,6 +330,115 @@ func TestClearParentBreaksAStoredCycleWithoutHydrating(t *testing.T) {
 	// The repaired workspace reads again, which is the point of the repair.
 	if _, err := st.GetIssue(ctx, chain[0].ID); err != nil {
 		t.Errorf("GetIssue(%s) after repair error = %v, want the workspace readable", chain[0].ID, err)
+	}
+}
+
+// A loop is usually leaves, which 'lit parent clear' refuses to detach, so the
+// repair doctor names first is the reparent onto an epic outside the loop. It
+// has to work on the stored loop: its writes read columns and edges, never a
+// hydrated issue, and the climb it runs starts above the epic it names.
+func TestSetParentBreaksAStoredLoopOfLeaves(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	epic := parentChain(t, ctx, st, "E")[0]
+	var leaves []model.Issue
+	for _, title := range []string{"A", "B"} {
+		leaf, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "hier", IssueType: "task", ParentID: epic.ID, Placement: storage.RankBottom})
+		if err != nil {
+			t.Fatalf("CreateIssue(%s) error = %v", title, err)
+		}
+		leaves = append(leaves, leaf)
+	}
+	a, b := leaves[0], leaves[1]
+	if _, err := st.db.ExecContext(ctx, `DELETE FROM relations WHERE type = 'parent-child' AND src_id IN (?, ?)`, a.ID, b.ID); err != nil {
+		t.Fatalf("detach the leaves: %v", err)
+	}
+	seedParentEdge(t, ctx, st, a.ID, b.ID)
+	seedParentEdge(t, ctx, st, b.ID, a.ID)
+	report, err := st.Doctor(ctx)
+	if err != nil {
+		t.Fatalf("Doctor() error = %v", err)
+	}
+	if len(report.ParentCycle) == 0 {
+		t.Fatal("Doctor().ParentCycle is empty; the fixture did not create a loop")
+	}
+
+	if _, err := st.SetParent(ctx, storage.SetParentInput{ChildID: a.ID, ParentID: epic.ID, CreatedBy: "test"}); err != nil {
+		t.Fatalf("SetParent(%s under %s) on a stored loop of leaves error = %v, want the loop broken", a.ID, epic.ID, err)
+	}
+	after, err := st.Doctor(ctx)
+	if err != nil {
+		t.Fatalf("Doctor() after the reparent error = %v", err)
+	}
+	if len(after.ParentCycle) != 0 {
+		t.Errorf("Doctor().ParentCycle = %v after 'lit parent set', want the loop gone", after.ParentCycle)
+	}
+	if _, err := st.GetIssue(ctx, a.ID); err != nil {
+		t.Errorf("GetIssue(%s) after the reparent error = %v, want the workspace readable", a.ID, err)
+	}
+}
+
+// A restore writes rows as they were, so a backup taken before every ticket
+// lived inside an epic brings back the tickets the write boundary refuses.
+// Doctor names each of them and the repair, as a warning the recovery gate
+// does not refuse, and the repair clears them.
+func TestDoctorNamesTicketsOutsideAnEpic(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	epic := parentChain(t, ctx, st, "E")[0]
+	var leaves []model.Issue
+	for _, title := range []string{"loose", "host", "under"} {
+		leaf, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "hier", IssueType: "task", ParentID: epic.ID, Placement: storage.RankBottom})
+		if err != nil {
+			t.Fatalf("CreateIssue(%s) error = %v", title, err)
+		}
+		leaves = append(leaves, leaf)
+	}
+	loose, host, under := leaves[0], leaves[1], leaves[2]
+
+	clean, err := st.Doctor(ctx)
+	if err != nil {
+		t.Fatalf("Doctor() error = %v", err)
+	}
+	if len(clean.Errors) != 0 || len(clean.Warnings) != 0 {
+		t.Fatalf("Doctor() errors %v, warnings %v on a contained hierarchy; want none", clean.Errors, clean.Warnings)
+	}
+
+	if _, err := st.db.ExecContext(ctx, `DELETE FROM relations WHERE type = 'parent-child' AND src_id IN (?, ?)`, loose.ID, under.ID); err != nil {
+		t.Fatalf("detach the leaves: %v", err)
+	}
+	seedParentEdge(t, ctx, st, under.ID, host.ID)
+	report, err := st.Doctor(ctx)
+	if err != nil {
+		t.Fatalf("Doctor() error = %v", err)
+	}
+	wantLines := []string{
+		"tickets outside an epic: " + loose.ID + " (task)",
+		"tickets under a parent that is not an epic: " + under.ID + " under " + host.ID + " (task)",
+	}
+	if len(report.Errors) != 0 {
+		t.Errorf("Doctor().Errors = %v, want none: every read still answers over a ticket outside an epic", report.Errors)
+	}
+	if len(report.Warnings) != len(wantLines) {
+		t.Fatalf("Doctor().Warnings = %v, want %d warnings, one per broken half of containment", report.Warnings, len(wantLines))
+	}
+	for i, want := range wantLines {
+		if !strings.HasPrefix(report.Warnings[i], want) || !strings.Contains(report.Warnings[i], "lit parent set --child <id> --parent <epic-id>") {
+			t.Errorf("Doctor().Warnings[%d] = %q, want it to begin %q and name the repair", i, report.Warnings[i], want)
+		}
+	}
+
+	for _, leaf := range []model.Issue{loose, under} {
+		if _, err := st.SetParent(ctx, storage.SetParentInput{ChildID: leaf.ID, ParentID: epic.ID, CreatedBy: "test"}); err != nil {
+			t.Fatalf("SetParent(%s under %s) error = %v", leaf.ID, epic.ID, err)
+		}
+	}
+	after, err := st.Doctor(ctx)
+	if err != nil {
+		t.Fatalf("Doctor() after the repair error = %v", err)
+	}
+	if len(after.Errors) != 0 || len(after.Warnings) != 0 {
+		t.Errorf("Doctor() errors %v, warnings %v after 'lit parent set'; want none", after.Errors, after.Warnings)
 	}
 }
 
@@ -451,6 +561,34 @@ func TestAChildWithTwoParentsIsReportedAndRepairable(t *testing.T) {
 	}
 	if len(after.Errors) != 0 {
 		t.Errorf("Doctor().Errors = %v after 'lit parent set', want none", after.Errors)
+	}
+}
+
+// The detach rule keeps a leaf inside an epic, so it is judged on the parent
+// edges the removal leaves. A leaf two parents claim stays inside an epic when
+// one edge goes, and removing that edge is a repair, not a detach; removing the
+// last one is the detach the rule refuses, and the refusal leaves the edge.
+func TestRemovingOneOfTwoParentEdgesKeepsALeafInside(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	first := parentChain(t, ctx, st, "E1")[0]
+	second := parentChain(t, ctx, st, "E2")[0]
+	child, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "C", Topic: "hier", IssueType: "task", ParentID: first.ID, Placement: storage.RankBottom})
+	if err != nil {
+		t.Fatalf("CreateIssue(C) error = %v", err)
+	}
+	seedParentEdge(t, ctx, st, child.ID, second.ID)
+
+	if err := st.RemoveRelation(ctx, child.ID, second.ID, model.RelParentChild); err != nil {
+		t.Fatalf("RemoveRelation(%s -> %s) error = %v, want the second parent edge removed: %s keeps %s", child.ID, second.ID, err, child.ID, first.ID)
+	}
+	err = st.RemoveRelation(ctx, child.ID, first.ID, model.RelParentChild)
+	var refused model.ValidationError
+	if !errors.As(err, &refused) {
+		t.Fatalf("RemoveRelation(%s -> %s) error = %v, want a refusal: it is the leaf's last parent", child.ID, first.ID, err)
+	}
+	if got := parentOf(t, ctx, st, []model.Issue{child})[child.ID]; got != first.ID {
+		t.Errorf("parent of %s after the refusal = %q, want %q kept", child.ID, got, first.ID)
 	}
 }
 

@@ -73,6 +73,7 @@ The CLI restore flow (`lit backup restore`, `internal/cli/backup.go`): usage is 
 | FK orphans | three LEFT-JOIN counts (relations' endpoints, comments' issue, labels' issue), summed | **error** `foreign key violations: %d` |
 | invalid related-to ordering | `COUNT(*) ... type='related-to' AND src_id >= dst_id` | **warning** `invalid related-to ordering rows: %d` |
 | orphan event rows | events joined to missing issues | **warning** `orphan issue event rows: %d` |
+| containment | non-epics with no parent-child edge, and parent-child edges onto a non-epic (`containmentFindings`) | **warning** `tickets outside an epic: …` and `tickets under a parent that is not an epic: …`, naming each and `lit parent set --child <id> --parent <epic-id>` |
 | rank inversions | `len(invertedEdges(order, edges))` over the live rank order and blocks edges, loaded once for this row and the next (computed in Go) | **warning** `rank inversions: %d (dependencies ranked below dependents)` |
 | blocks cycle | `blocksCycle(order, edges)` — the constraints `FixRankInversions` refuses on | **warning** `blocks dependency cycle: <a -> b -> ...> (no rank order exists; remove one edge with 'lit dep rm' to break it)` |
 
