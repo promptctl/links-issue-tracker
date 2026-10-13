@@ -20,6 +20,10 @@ var born = time.Date(2026, time.March, 1, 9, 0, 0, 0, time.UTC)
 const (
 	acmeUnfiled     = "acme-unfiled-0bf7"
 	fallbackUnfiled = "lit-unfiled-e2be"
+	// acmeUnfiledNext is the id after acmeUnfiled in acme's chain: the same
+	// rendering over SHA-256("acme-unfiled-0bf7"). Pinned for the same reason:
+	// two clones holding the same purge records must walk to the same id.
+	acmeUnfiledNext = "acme-unfiled-3a40"
 )
 
 func leaf(t *testing.T, id, rank string) model.Issue {
@@ -176,6 +180,89 @@ func TestHomeStrandedMintsUnderTheFallbackPrefix(t *testing.T) {
 		t.Errorf("rehomed = %+v, want %+v", rehomed, want)
 	}
 	assertContained(t, out)
+}
+
+// A retitled unfiled epic is still the store's: it holds the id the mint would
+// write, so the stranded leaf goes there and no second row takes the id.
+func TestHomeStrandedFindsARetitledUnfiledEpicByItsID(t *testing.T) {
+	held := epic(acmeUnfiled)
+	held.Title, held.Topic = "Renamed", "unfiled"
+	in := model.Export{Issues: []model.Issue{epic("acme-core-aa11"), held, leaf(t, "acme-core-bb22", "M")}}
+	out, rehomed := storage.HomeStranded(in)
+	if want := []storage.Rehomed{{IssueID: "acme-core-bb22", Epic: acmeUnfiled}}; !reflect.DeepEqual(rehomed, want) {
+		t.Errorf("rehomed = %+v, want %+v", rehomed, want)
+	}
+	if len(out.Issues) != len(in.Issues) {
+		t.Errorf("issues = %d, want %d: the id is held, so nothing is minted under it", len(out.Issues), len(in.Issues))
+	}
+}
+
+// A purged id is never reoccupied: with the unfiled epic purged, the stranded
+// leaf goes under a new one at the next id in the chain, which the purge does
+// not cut.
+func TestHomeStrandedNeverReoccupiesAPurgedUnfiledEpic(t *testing.T) {
+	in := model.Export{
+		Issues: []model.Issue{epic("acme-core-aa11"), leaf(t, "acme-core-bb22", "M")},
+		Purges: []model.Purge{{IssueID: acmeUnfiled, IssueCreatedAt: time.Date(2026, time.October, 12, 0, 0, 0, 0, time.UTC), PurgedAt: born, PurgedBy: "seed"}},
+	}
+	out, rehomed := storage.HomeStranded(in)
+	if want := []storage.Rehomed{{IssueID: "acme-core-bb22", Epic: acmeUnfiledNext}}; !reflect.DeepEqual(rehomed, want) {
+		t.Errorf("rehomed = %+v, want %+v", rehomed, want)
+	}
+	cut := out.ApplyPurges(out.Purges)
+	assertContained(t, cut)
+	issueOf(t, cut, acmeUnfiledNext)
+}
+
+// An unfiled epic that is deleted or archived takes no ticket, whether it is
+// found by its title or by its id: the chain walks past it and mints the next.
+func TestHomeStrandedFilesNoTicketUnderAFrozenUnfiledEpic(t *testing.T) {
+	for name, retention := range map[string]model.Retention{
+		"deleted":  model.Deleted{At: born},
+		"archived": model.Archived{At: born},
+	} {
+		t.Run(name, func(t *testing.T) {
+			frozen := epic(acmeUnfiled)
+			frozen.Title, frozen.Topic = "Unfiled tickets", "unfiled"
+			frozen.SetRetention(retention)
+			in := model.Export{Issues: []model.Issue{epic("acme-core-aa11"), frozen, leaf(t, "acme-core-bb22", "M")}}
+			_, rehomed := storage.HomeStranded(in)
+			if want := []storage.Rehomed{{IssueID: "acme-core-bb22", Epic: acmeUnfiledNext}}; !reflect.DeepEqual(rehomed, want) {
+				t.Errorf("rehomed = %+v, want %+v", rehomed, want)
+			}
+		})
+	}
+}
+
+// An edge whose child the export does not hold names no ticket: it is not
+// homed, and it does not stop the tickets that are.
+func TestHomeStrandedMovesNoTicketTheExportDoesNotHold(t *testing.T) {
+	in := model.Export{
+		Issues:    []model.Issue{epic("acme-core-aa11"), leaf(t, "host", "M")},
+		Relations: []model.Relation{under("host", "acme-core-aa11"), under("ghost", "host")},
+	}
+	_, rehomed := storage.HomeStranded(in)
+	if rehomed != nil {
+		t.Errorf("rehomed = %+v, want nothing named: ghost is no ticket of this export", rehomed)
+	}
+}
+
+// An epic in a loop through a leaf climbs back to itself. It is not its own
+// parent: it stands at the top level, as 00007 leaves it, and the leaf keeps
+// its epic.
+func TestHomeStrandedSendsAnEpicInALoopThroughALeafToTheTopLevel(t *testing.T) {
+	in := model.Export{
+		Issues:    []model.Issue{epic("acme-core-e01"), leaf(t, "acme-core-l01", "M")},
+		Relations: []model.Relation{under("acme-core-e01", "acme-core-l01"), under("acme-core-l01", "acme-core-e01")},
+	}
+	out, rehomed := storage.HomeStranded(in)
+	if want := []storage.Rehomed{{IssueID: "acme-core-e01", Epic: ""}}; !reflect.DeepEqual(rehomed, want) {
+		t.Errorf("rehomed = %+v, want %+v", rehomed, want)
+	}
+	got := parents(out)
+	if len(got["acme-core-e01"]) != 0 || !reflect.DeepEqual(got["acme-core-l01"], []string{"acme-core-e01"}) {
+		t.Errorf("parents = %v, want the epic at the top level and the leaf under it", got)
+	}
 }
 
 // A child whose parent is not an epic climbs to the nearest epic above it, the

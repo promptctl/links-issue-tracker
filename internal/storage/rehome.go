@@ -3,6 +3,7 @@ package storage
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -57,11 +58,21 @@ const (
 
 var unfiledBorn = time.Date(2026, time.October, 12, 0, 0, 0, 0, time.UTC)
 
-// UnfiledEpicID is the id of the unfiled epic of a store whose ids carry
-// prefix: rendered the way `lit new` renders a top-level id, with the hash
-// fixed to the first four hex digits of SHA-256 over the prefix and the topic.
+// UnfiledEpicID is the id migration 00007 mints for the unfiled epic of a
+// store whose ids carry prefix, the first id in prefix's chain: rendered the
+// way `lit new` renders a top-level id, with the hash fixed to the first four
+// hex digits of SHA-256 over the prefix and the topic.
 func UnfiledEpicID(prefix string) string {
-	sum := sha256.Sum256([]byte(prefix + "-" + UnfiledTopic))
+	return unfiledEpicIDOver(prefix, prefix+"-"+UnfiledTopic)
+}
+
+// unfiledEpicIDOver renders an unfiled epic id under prefix with the hash
+// taken over seed. Each id after the first in prefix's chain is hashed over the
+// one before it: a purged id is never reoccupied, so when the unfiled epic is
+// purged the next one takes the next id, and every clone holding the same
+// purge records walks to the same one.
+func unfiledEpicIDOver(prefix, seed string) string {
+	sum := sha256.Sum256([]byte(seed))
 	return prefix + "-" + UnfiledTopic + "-" + hex.EncodeToString(sum[:])[:4]
 }
 
@@ -90,11 +101,11 @@ func HomeStranded(export model.Export) (model.Export, []Rehomed) {
 		if len(parents) == 0 && issue.IsContainer() {
 			continue
 		}
-		epic, found := h.nearestEpicAbove(parents)
+		epic, found := h.nearestEpicAbove(issue.ID, parents)
 		moves[issue.ID] = epic
 		strandedLeaf = strandedLeaf || (!found && !issue.IsContainer())
 	}
-	trimmed := h.childrenOfNonEpics(moves)
+	trimmed := h.childrenOfNonEpics(export.Issues, moves)
 	if len(moves) == 0 && len(trimmed) == 0 {
 		return export, nil
 	}
@@ -166,13 +177,15 @@ func (h hierarchy) isEpic(id string) bool {
 	return ok && t.IsContainer()
 }
 
-// nearestEpicAbove climbs from parents, none of them an epic, through each
-// ancestor that is a ticket but not an epic, and returns the nearest epic any
-// climb reaches — the lowest id among epics at that depth, the lower-id rule
-// every listing applies. The climb is a set, so a fork inside a loop is walked
-// once; it stops at an epic, at a ticket with no parent, at an id the export
-// does not hold, and at the depth cut.
-func (h hierarchy) nearestEpicAbove(parents []string) (string, bool) {
+// nearestEpicAbove climbs from child's parents, none of them an epic, through
+// each ancestor that is a ticket but not an epic, and returns the nearest epic
+// any climb reaches — the lowest id among epics at that depth, the lower-id
+// rule every listing applies. The climb is a set, so a fork inside a loop is
+// walked once; it stops at an epic, at a ticket with no parent, at an id the
+// export does not hold, and at the depth cut. An epic in a loop through a
+// ticket that is not one can climb back to itself; when it is the nearest, it
+// has no epic above it and stands at the top level, as 00007 leaves it.
+func (h hierarchy) nearestEpicAbove(child string, parents []string) (string, bool) {
 	seen := map[string]bool{}
 	level := parents
 	for depth := 0; depth <= climbDepthCut && len(level) > 0; depth++ {
@@ -191,7 +204,10 @@ func (h hierarchy) nearestEpicAbove(parents []string) (string, bool) {
 			}
 		}
 		if len(epics) > 0 {
-			return slices.Min(epics), true
+			if nearest := slices.Min(epics); nearest != child {
+				return nearest, true
+			}
+			return "", false
 		}
 		level = next
 	}
@@ -200,15 +216,17 @@ func (h hierarchy) nearestEpicAbove(parents []string) (string, bool) {
 
 // childrenOfNonEpics is every ticket that stays inside its epic but also holds
 // an edge onto a parent that is not one, sorted. moves is excluded: a moved
-// ticket loses all its edges and is named by its move.
-func (h hierarchy) childrenOfNonEpics(moves map[string]string) []string {
+// ticket loses all its edges and is named by its move. It walks the tickets,
+// not the edges: an edge whose child the export does not hold names no ticket
+// to move, and is left for the store's own write to refuse.
+func (h hierarchy) childrenOfNonEpics(issues []model.Issue, moves map[string]string) []string {
 	var out []string
-	for child, parents := range h.parentsOf {
-		if _, moved := moves[child]; moved {
+	for _, issue := range issues {
+		if _, moved := moves[issue.ID]; moved {
 			continue
 		}
-		if slices.ContainsFunc(parents, func(p string) bool { return !h.isEpic(p) }) {
-			out = append(out, child)
+		if slices.ContainsFunc(h.parentsOf[issue.ID], func(p string) bool { return !h.isEpic(p) }) {
+			out = append(out, issue.ID)
 		}
 	}
 	slices.Sort(out)
@@ -224,18 +242,25 @@ func (h hierarchy) epicParentOf(child string) string {
 // unfiledEpic returns the id of the store's unfiled epic, and the row to add
 // when the export does not hold it yet. An epic the export holds — minted by
 // the migration, received from a peer, or minted by an earlier rewrite — is
-// recognized by what makes it the unfiled epic, its type, topic and title, and
-// is never rewritten. Otherwise the epic is minted under the prefix most of the
-// export's top-level ids carry, ties to the lower prefix. It sits where the
-// highest-ranked live top-level leaf sits, one key after it, and is unranked
-// when no such leaf has a key — the placement 00007 gives it.
+// never rewritten. It is recognized by its type, topic and title, which still
+// find it once most ids carry another prefix, and by its id, which still finds
+// it once it is retitled. Otherwise the epic takes the first id in the chain
+// under the prefix most of the export's top-level ids carry (ties to the lower
+// prefix) that the export neither holds nor has purged. An epic that is
+// archived or deleted takes no ticket — one filed there would leave the flow
+// with it — so neither rule picks it and the chain walks past its id, as it
+// walks past a purged one. The minted epic sits where the highest-ranked live
+// top-level leaf sits, one key after it, and is unranked when no such leaf has
+// a key — the placement 00007 gives it.
 func (h hierarchy) unfiledEpic(export model.Export) (string, *model.Issue) {
-	var held []string
+	var titled []string
+	held := make(map[string]model.Issue, len(export.Issues))
 	counts := map[string]int{}
 	topRank := ""
 	for _, issue := range export.Issues {
-		if issue.IsContainer() && issue.Topic == UnfiledTopic && issue.Title == UnfiledTitle {
-			held = append(held, issue.ID)
+		held[issue.ID] = issue
+		if takesTickets(issue) && issue.Topic == UnfiledTopic && issue.Title == UnfiledTitle {
+			titled = append(titled, issue.ID)
 		}
 		if prefix, ok := issueid.PrefixOf(issue.ID, issue.Topic); ok {
 			counts[prefix]++
@@ -245,8 +270,12 @@ func (h hierarchy) unfiledEpic(export model.Export) (string, *model.Issue) {
 			topRank = issue.Rank
 		}
 	}
-	if len(held) > 0 {
-		return slices.Min(held), nil
+	if len(titled) > 0 {
+		return slices.Min(titled), nil
+	}
+	purged := make(map[string]bool, len(export.Purges))
+	for _, p := range export.Purges {
+		purged[p.IssueID] = true
 	}
 	prefix, most := unfiledFallbackPrefix, 0
 	for _, p := range slices.Sorted(maps.Keys(counts)) {
@@ -258,14 +287,33 @@ func (h hierarchy) unfiledEpic(export model.Export) (string, *model.Issue) {
 	if topRank != "" {
 		rank = topRank + "0"
 	}
-	return UnfiledEpicID(prefix), &model.Issue{
-		ID:          UnfiledEpicID(prefix),
-		Title:       UnfiledTitle,
-		Description: unfiledDescription,
-		IssueType:   model.TypeEpic,
-		Topic:       UnfiledTopic,
-		Rank:        rank,
-		CreatedAt:   unfiledBorn,
-		UpdatedAt:   unfiledBorn,
+	// Every id the chain walks past is a row or a purge record the export
+	// holds, so a free id comes within one more than their count.
+	id := UnfiledEpicID(prefix)
+	for range len(held) + len(purged) + 1 {
+		row, occupied := held[id]
+		switch {
+		case occupied && takesTickets(row):
+			return id, nil
+		case !occupied && !purged[id]:
+			return id, &model.Issue{
+				ID:          id,
+				Title:       UnfiledTitle,
+				Description: unfiledDescription,
+				IssueType:   model.TypeEpic,
+				Topic:       UnfiledTopic,
+				Rank:        rank,
+				CreatedAt:   unfiledBorn,
+				UpdatedAt:   unfiledBorn,
+			}
+		}
+		id = unfiledEpicIDOver(prefix, id)
 	}
+	panic(fmt.Sprintf("unfiled epic: the id chain under %q cycled through %d held or purged ids without a free one", prefix, len(held)+len(purged)))
+}
+
+// takesTickets reports whether issue is an epic in the flow, the one kind of
+// row a ticket can be filed under and stay in the flow itself.
+func takesTickets(issue model.Issue) bool {
+	return issue.IsContainer() && !model.Frozen(issue.Retention())
 }
