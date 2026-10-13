@@ -266,6 +266,7 @@ func (s *Store) SyncPull(ctx context.Context, remote string, branch string) (sto
 				return err
 			}
 			result.Ahead, result.Behind = rec.Ahead, rec.Behind
+			result.Rehomed = rec.Rehomed
 			switch rec.State {
 			case storage.SyncReconcileLinearized:
 				result.State = storage.SyncPullLinearized

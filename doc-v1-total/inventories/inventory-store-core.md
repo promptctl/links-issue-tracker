@@ -889,11 +889,11 @@ Any error returns a zero `storage.PurgeResult`. No `issue_events` row is recorde
 
 #### 8a.2 `insertPurgeTx(ctx, tx, p model.Purge) error`
 
-`INSERT INTO purges(issue_id, issue_created_at, purged_at, purged_by) VALUES (?, ?, ?, ?)` with `p.Key()`'s `IssueID` and `IssueCreatedAt` (the birth in UTC RFC3339Nano) and `p.PurgedAt.Format(time.RFC3339Nano)`; error → `fmt.Errorf("record purge of %s: %w", p.IssueID, err)`. The only INSERT into `purges`, shared by `Purge`, a restore (`writeExportTx`), and the replay's delta (`purge.go`).
+`INSERT INTO purges(issue_id, issue_created_at, purged_at, purged_by) VALUES (?, ?, ?, ?)` with `p.Key()`'s `IssueID` and `IssueCreatedAt` (the birth in UTC RFC3339Nano) and `p.PurgedAt.Format(time.RFC3339Nano)`; error → `fmt.Errorf("record purge of %s: %w", p.IssueID, err)`. The only INSERT into `purges`, shared by `Purge`, a restore or rebuild (`writeWholeExportTx`), and the replay's delta (`purge.go`).
 
 #### 8a.3 `listPurges(ctx, q rowQueryer) ([]model.Purge, error)`
 
-`SELECT issue_id, issue_created_at, purged_at, purged_by FROM purges` (no ORDER BY); query error → `fmt.Errorf("list purges: %w", err)`; each row decoded by `scanPurge`; returns `model.UnionPurges(out)`, a non-nil slice ordered by issue id and then birth ascending. Takes a `rowQueryer` so `Export` reads it from `s.db` and `writeExportTx` from its own transaction (`purge.go`).
+`SELECT issue_id, issue_created_at, purged_at, purged_by FROM purges` (no ORDER BY); query error → `fmt.Errorf("list purges: %w", err)`; each row decoded by `scanPurge`; returns `model.UnionPurges(out)`, a non-nil slice ordered by issue id and then birth ascending. Takes a `rowQueryer` so `Export` reads it from `s.db` and `cutByHeldPurges` from its own transaction (`purge.go`).
 
 `scanPurge(rows *sql.Rows) (model.Purge, error)` decodes one row selected as `issue_id, issue_created_at, purged_at, purged_by`, both timestamps through `scanTime`; a scan or parse error is returned as is. `listPurges` and `purgesAtCommit` (`sync_unrelated.go`) both use it (`purge.go`).
 
@@ -1341,8 +1341,8 @@ CREATE TABLE `purges` (
 `internal/store/schema_snapshot.sql`. Source: `00009_purges.sql` (v9).
 
 - PRIMARY KEY `(issue_id, issue_created_at)`; no indexes, no CHECKs, and **no foreign key** on either key column: the issue a row names has been deleted (`00009_purges.sql`).
-- One row per purged issue, named by its id and its `created_at`. The only INSERT is `insertPurgeTx` — `INSERT INTO purges(issue_id, issue_created_at, purged_at, purged_by) VALUES (?, ?, ?, ?)`, `issue_created_at` from `model.Purge.Key` (UTC RFC3339Nano) and `purged_at` formatted RFC3339Nano — reached from `Purge`, a restore, and the replay's delta (`internal/store/purge.go`). The only single-row DELETE is `deletePurgeTx`, reached only from the replay's delta (`internal/store/row_deletes.go`); `writeExportTx` clears the table wholesale before re-inserting the export's union (`internal/store/import_export.go`).
-- Read by `listPurges` (`SELECT issue_id, issue_created_at, purged_at, purged_by FROM purges`, both timestamps through `scanTime`, ordered by `model.UnionPurges`), from `Export` and `writeExportTx` (`internal/store/purge.go`), and by the id-mint existence probe (`internal/store/issue_ids.go`).
+- One row per purged issue, named by its id and its `created_at`. The only INSERT is `insertPurgeTx` — `INSERT INTO purges(issue_id, issue_created_at, purged_at, purged_by) VALUES (?, ?, ?, ?)`, `issue_created_at` from `model.Purge.Key` (UTC RFC3339Nano) and `purged_at` formatted RFC3339Nano — reached from `Purge`, a restore, and the replay's delta (`internal/store/purge.go`). The only single-row DELETE is `deletePurgeTx`, reached only from the replay's delta (`internal/store/row_deletes.go`); `writeWholeExportTx` clears the table wholesale before re-inserting the export's union (`internal/store/import_export.go`).
+- Read by `listPurges` (`SELECT issue_id, issue_created_at, purged_at, purged_by FROM purges`, both timestamps through `scanTime`, ordered by `model.UnionPurges`), from `Export` and `cutByHeldPurges` (`internal/store/purge.go`), and by the id-mint existence probe (`internal/store/issue_ids.go`).
 
 ---
 
@@ -3365,8 +3365,8 @@ There is **no manifest or index file**: `backup.List` derives the listing by rea
 It is **not** a commit range, checkpoint, or timestamp comparison. It is a pure value diff between **two `model.Export` values held in memory**: `diffExports(prev, next model.Export) exportDelta` (`export_delta.go`). `prev` is "what the live tables currently hold"; `next` is "what they must hold". No SQL query is issued to compute it (`export_delta.go`: "pure: the SQL lives in applyExportDelta").
 
 Who supplies `prev`:
-- `writeExportTx` supplies `model.Export{}` — the empty export — after having deleted every row, making the restore the degenerate "everything is an add" case (`import_export.go`).
-- `spineWriter` owns `landed`, seeded by an actual `Store.Export(ctx)` read of the spine branch in `newSpineWriter` (`internal/store/sync_reconcile.go`), and advanced to `next` only after a successful landing (`sync_reconcile.go`). The comment at `export_delta.go` states the previous export is never taken from a caller's belief.
+- `writeWholeExportTx` supplies `model.Export{}` — the empty export — after having deleted every row, making a restore or a rebuild the degenerate "everything is an add" case (`import_export.go`).
+- `spineWriter` owns `landed`, seeded by an actual `Store.Export(ctx)` read of the spine branch in `newSpineWriter` (`internal/store/sync_reconcile.go`), and advanced to the landed export only after a successful landing (`sync_reconcile.go`). The comment at `export_delta.go` states the previous export is never taken from a caller's belief.
 
 ### 2.2 The delta record types
 
@@ -3453,7 +3453,7 @@ Delete error text: `execDelete` wraps as `"delete %s: %w"` and `"delete %s: rows
 
 `replayDeltaOnScratch(ctx, delta, stamp)` (`sync_reconcile.go`): under `withCommitLock`, `BeginTx` → `applyExportDelta` → `tx.Commit()` → `commitWorkingSetOnce(ctx, stamp)`. Deliberately a **single attempt** with no self-rotating transient retry (`sync_reconcile.go`); errors bubble to the outer scratch-rebuilding retry. Error texts: `"begin %s tx: %w"` and `"commit %s tx: %w"` with `stamp.Message` interpolated (`sync_reconcile.go`).
 
-`spineWriter.land` does `DOLT_CHECKOUT <spine branch>` first, unconditionally (`sync_reconcile.go`, error `"switch to reconcile spine branch %q: %w"`), then `replayDeltaOnScratch(ctx, diffExports(w.landed, next), stamp)`, then advances `w.landed = next` only on success (`sync_reconcile.go`).
+`spineWriter.land` does `DOLT_CHECKOUT <spine branch>` first, unconditionally (`sync_reconcile.go`, error `"switch to reconcile spine branch %q: %w"`), then `contained, rehomed := storage.HomeStranded(next)`, then `replayDeltaOnScratch(ctx, diffExports(w.landed, contained), stamp)`, then advances `w.landed = contained` only on success and returns `rehomed` (`sync_reconcile.go`).
 
 `commitStamp` (`internal/store/commit_lock.go`): `Message string`, `Date time.Time` (non-zero → `--date`, second-granular), `Author string` (non-empty → `--author "Name <email>"`), `AllowEmpty bool`.
 
@@ -3461,7 +3461,7 @@ Delete error text: `execDelete` wraps as `"delete %s: %w"` and `"delete %s: rows
 
 `internal/store/export_delta_test.go`:
 
-- `TestExportDeltaMatchesFullRewriteAcrossEveryChangeShape` drives two stores through the same state sequence — one via `replaceFromExport(..., commitStamp{Message:"rewrite"})`, one via `applyDeltaForTest` — and after every step asserts `reflect.DeepEqual` on `Issues`, `Relations`, `Comments`, `Labels`, `Events`, `Purges` (`assertSameRows`), and also checks the delta store's `Purges` directly against the state's own, since both paths share `applyExportDelta`. The envelope (`workspace_id`, `exported_at`) is explicitly excluded.
+- `TestExportDeltaMatchesFullRewriteAcrossEveryChangeShape` drives two stores through the same state sequence — one via `rebuildFromExport(..., commitStamp{Message:"rewrite"})`, one via `applyDeltaForTest` — and after every step asserts `reflect.DeepEqual` on `Issues`, `Relations`, `Comments`, `Labels`, `Events`, `Purges` (`assertSameRows`), and also checks the delta store's `Purges` directly against the state's own, since both paths share `applyExportDelta`. The envelope (`workspace_id`, `exported_at`) is explicitly excluded.
 - The state sequence (`buildDeltaScenarioStates`), named: `"epic with two children"`, `"one field edited on one issue"`, `"comment added"`, `"label added"`, `"relation spanning two issues added"`, `"relation endpoint rewritten"`, `"issue added"`, `"issue removed outright"`, `"issue purged"`. `"issue removed outright"` is synthesized by `withoutIssue` dropping the issue plus every relation touching it and every comment/label/event referencing it — the shape a merge projection yields for a row removed without a purge record. `"issue purged"` is the previous export with `ApplyPurges(UnionPurges(prev.Purges, {one record}))` — a purge as a merge hands it on.
 - `TestExportDeltaRewritesARelationChangedOutsideItsKey`: changing only `CreatedBy` from `"first"` to `"second"` on a relation with a stable `(a,b,blocked-by)` key yields exactly `relations.remove == [relationKey{a,b,blocked-by}]` and `relations.add == [restamped]`, and **zero** issues work.
 - `TestExportDeltaReinsertsChildrenOfARewrittenIssue`: retitling issue `touched` yields `issues.remove == ["touched"]`, `issues.add == [retitled]`, and for each of relations/comments/labels/events exactly **1 add and 0 removes** — including a `touched -> untouched` spanning relation.
@@ -3473,24 +3473,31 @@ Delete error text: `execDelete` wraps as `"delete %s: %w"` and `"delete %s: rows
 
 ---
 
-## 3. IMPORT — `ReplaceFromExport` / `writeExportTx` (`import_export.go`)
+## 3. IMPORT — `ReplaceFromExport` / `rebuildFromExport` (`import_export.go`)
 
 ### 3.1 Entry point and transaction
 
-`func (s *Store) ReplaceFromExport(ctx context.Context, export model.Export) error` → `s.replaceFromExport(ctx, export, commitStamp{Message: "replace from export"})` (`import_export.go`). The Dolt commit message for a restore is the literal string **`replace from export`**.
+`func (s *Store) ReplaceFromExport(ctx context.Context, export model.Export) ([]storage.Rehomed, error)` (`import_export.go`) is the restore. It runs under `withStampedMutation` with `commitStamp{Message: "replace from export"}` — the Dolt commit message for a restore is the literal string **`replace from export`** — i.e. under the commit lock, inside one `sql.Tx`, followed by `commitWorkingSetOnce`, with the transient-GC retry wrapping the whole staging+versioning unit (`commit_lock.go`). So it **is transactional** at the SQL level and **does commit** a Dolt commit. It returns the moves `storage.HomeStranded` made, assigned on every attempt so a retried mutation returns the committing attempt's.
 
-`replaceFromExport` (`import_export.go`) runs `writeExportTx` under `withStampedMutation`, i.e. under the commit lock, inside one `sql.Tx`, followed by `commitWorkingSetOnce`, with the transient-GC retry wrapping the whole staging+versioning unit (`commit_lock.go`). So it **is transactional** at the SQL level and **does commit** a Dolt commit.
+`func (s *Store) rebuildFromExport(ctx context.Context, export model.Export, stamp commitStamp) error` (`import_export.go`) is the same transaction under the caller's stamp without the homing: `RebuildCandidate` writes the recovery candidate through it with `commitStamp{Message: "replace from export"}`, so the verify gate's row counts and id set compare against the dump, and tests plant states through it.
 
 ### 3.2 What it does
 
-`writeExportTx` (`import_export.go`):
+The restore's transaction body (`import_export.go`):
 
 ```go
-held, err := listPurges(ctx, tx)
+cut, err := cutByHeldPurges(ctx, tx, export)
 if err != nil {
     return err
 }
-export = export.ApplyPurges(model.UnionPurges(held, export.Purges))
+var contained model.Export
+contained, rehomed = storage.HomeStranded(cut)
+return writeWholeExportTx(ctx, tx, contained)
+```
+
+The rebuild's is `cutByHeldPurges` then `writeWholeExportTx(ctx, tx, cut)`. `cutByHeldPurges` (`import_export.go`) is `held, err := listPurges(ctx, tx)` (error returned as is), then `export.ApplyPurges(model.UnionPurges(held, export.Purges))`. `writeWholeExportTx` (`import_export.go`):
+
+```go
 for _, table := range []string{"labels", "comments", "relations", "issues", "purges"} {
     if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
         return fmt.Errorf("clear %s: %w", table, err)
@@ -3500,6 +3507,8 @@ return applyExportDelta(ctx, tx, diffExports(model.Export{}, export))
 ```
 
 A restore never un-purges: the store's own purge records are read before the clear, unioned with the export's, and the export is cut by the union (`ApplyPurges`), so a backup taken before a purge lands without the purged issue and every record survives the rewrite (`import_export.go`). Pinned by `TestRestoreNeverUnpurges` (`internal/store/purge_test.go`).
+
+A restore lands every ticket inside an epic: `storage.HomeStranded` (`01-data-model.md`) moves each ticket the cut export holds outside one — a backup from before migration v7 holds top-level leaves, and one taken before a purge can hold a child of the purged epic, whose edge the cut removed. Pinned by `TestRestoreHomesWhatTheBackupLeavesOutsideAnEpic` (`internal/store/rehome_test.go`).
 
 Deletion order is literally `labels, comments, relations, issues, purges`. `issue_events` and `issue_event_changes` are deliberately **not** named — they cascade from `issues` (`import_export.go`). Error text: `"clear labels: …"`, `"clear comments: …"`, etc.
 
@@ -3558,7 +3567,7 @@ Events (`insertEventTx`, `import_export.go`):
 
 ### 3.5 The surrounding CLI restore flow
 
-`restoreFromExportPath` (`internal/cli/backup.go`), in order: acquire `storage.Sync.Of(ap.Store)` and `storage.Import.Of(ap.Store)` capabilities up front; `syncfile.Read(restorePath)`; `ap.Store.Export(ctx)` for the local state; `syncer.GetSyncState`; if a sync state exists and `--force` was not passed, hash `last-sync-base.json` and compare against `hashExport(localExport)` — mismatch → `MergeConflictError{Message: "restore conflict: local workspace has unsynced changes since last sync base"}` (`backup.go`); `backup.Create` a pre-restore snapshot; `backup.Prune(dir, 20)`; `importer.ReplaceFromExport`; re-`Export` and `syncfile.WriteAtomic(syncBasePath(ap), restoredExport)`; `syncfile.HashFile(restorePath)`; `syncer.RecordSyncState({Path, ContentHash})`.
+`restoreFromExportPath` (`internal/cli/backup.go`), in order: acquire `storage.Sync.Of(ap.Store)` and `storage.Import.Of(ap.Store)` capabilities up front; `syncfile.Read(restorePath)`; `ap.Store.Export(ctx)` for the local state; `syncer.GetSyncState`; if a sync state exists and `--force` was not passed, hash `last-sync-base.json` and compare against `hashExport(localExport)` — mismatch → `MergeConflictError{Message: "restore conflict: local workspace has unsynced changes since last sync base"}` (`backup.go`); `backup.Create` a pre-restore snapshot; `backup.Prune(dir, 20)`; `rehomed := importer.ReplaceFromExport`; re-`Export` and `syncfile.WriteAtomic(syncBasePath(ap), restoredExport)`; `syncfile.HashFile(restorePath)`; `syncer.RecordSyncState({Path, ContentHash})`; return `rehomed`. `restoreFromExportPath` wraps that sequence (`restoreFromExport`) and, on the way out whatever the outcome, records one sync trace record: `recordSyncCommandTrace(ws, "lit backup restore", "restored", err, metadata)` with metadata `path`, `rehomed`, `rehomed_moves` (`rehomedMetadata`, `internal/cli/rehomed_report.go`). The leaf prints `restored <path>`, then `writeRehomed(stdout, "the backup", rehomed)`.
 
 `hashExport` uses `json.MarshalIndent(export, "", "  ")` (`backup.go`) — note: **no trailing newline**, unlike `syncfile.marshalExport`.
 
@@ -3891,7 +3900,7 @@ updated %d issues\n         (len(result.Updated))
 | `FixIntegrity` Dolt commit message | `"fix integrity"` | `import_export.go` |
 | Doctor healthy `IntegrityCheck` | `"ok"` | `import_export.go` |
 | Doctor failing `IntegrityCheck` | `"constraint_violations"` | `import_export.go` |
-| clear order in `writeExportTx` | `labels, comments, relations, issues, purges` | `import_export.go` |
+| clear order in `writeWholeExportTx` | `labels, comments, relations, issues, purges` | `import_export.go` |
 | `insertIssueStmt` topic default | `COALESCE(NULLIF(?, ''), 'misc')` → `misc` | `import_export.go` |
 | relation type written by both importers | `model.RelBlockedBy` (`"blocked-by"`) | `import_bulk.go`, `import_tree.go` |
 | relation `CreatedBy` written by both importers | `"links"` | `import_bulk.go`, `import_tree.go` |
@@ -4122,7 +4131,7 @@ Signature: `Recover(ctx, canonicalDoltDir string, dump RawDump, mapper Mapper, m
 - `os.MkdirTemp(parentDir, "lit-candidate-*")` creates the candidate root (`candidate.go`); the literal pattern is `lit-candidate-*`.
 - On any failure after that point, a deferred cleanup closes the store (if opened) and runs `os.RemoveAll(root)`, joining errors into the return (`candidate.go`).
 - `Open(ctx, filepath.Join(root, "workspace"), dump.WorkspaceID)` — the Dolt workspace is nested at `<root>/workspace` so the workspace lock and migration snapshots land inside the owned root (`candidate.go`). Error: `open candidate workspace: %w`.
-- `st.ReplaceFromExport(ctx, export)` loads the data (`candidate.go`), error `load export into candidate: %w`. That path commits inside the candidate's own Dolt database with commit message `"replace from export"` (`internal/store/import_export.go`) — the only commit any recovery pass makes, and it is made in the throwaway candidate, never in the canonical workspace.
+- `st.rebuildFromExport(ctx, export, commitStamp{Message: "replace from export"})` loads the data (`candidate.go`), error `load export into candidate: %w`. That path commits inside the candidate's own Dolt database with commit message `"replace from export"` (`internal/store/import_export.go`) — the only commit any recovery pass makes, and it is made in the throwaway candidate, never in the canonical workspace.
 - The candidate stamps `expectedHead: dump.DoltHead` and `workspaceID: dump.WorkspaceID` for a later promotion's lost-update check (`candidate.go`).
 - `Candidate.Discard()` closes the store then `os.RemoveAll(c.root)`; `root` is cleared only on successful removal, so a later `Discard` retries. It is documented and implemented as **idempotent** (`candidate.go`).
 
@@ -4255,7 +4264,7 @@ Bind order for relations is `key.srcID, key.dstID, string(key.kind)` (`row_delet
 
 ### 4.6 Deletes deliberately NOT routed here
 
-Set-matching deletes are separate statements on purpose (`row_deletes.go`): `setSingleValuedEdgeTx` (relations.go), `ClearParent` (relations.go), `replaceLabelsTx` (labels.go), and the self-edge sweep in import_export.go. Also outside: `writeExportTx`'s wholesale clear, which issues `DELETE FROM` for `labels, comments, relations, issues, purges` in that order and deliberately does not name `issue_events`/`issue_event_changes` because they cascade from issues (`internal/store/import_export.go`), and `FixIntegrity`'s repairs (`import_export.go`).
+Set-matching deletes are separate statements on purpose (`row_deletes.go`): `setSingleValuedEdgeTx` (relations.go), `ClearParent` (relations.go), `replaceLabelsTx` (labels.go), and the self-edge sweep in import_export.go. Also outside: `writeWholeExportTx`'s wholesale clear, which issues `DELETE FROM` for `labels, comments, relations, issues, purges` in that order and deliberately does not name `issue_events`/`issue_event_changes` because they cascade from issues (`internal/store/import_export.go`), and `FixIntegrity`'s repairs (`import_export.go`).
 
 ---
 
@@ -4585,7 +4594,7 @@ Ordered:
 2. `os.MkdirTemp(parentDir, "lit-candidate-*")`; on error → `"create candidate workspace dir: %w"` (`candidate.go`).
 3. Installs the unconditional cleanup defer keyed on a `success bool` (`candidate.go`): if not successful, `err = errors.Join(err, st.Close())` when `st != nil`, then `err = errors.Join(err, os.RemoveAll(root))`.
 4. `Open(ctx, filepath.Join(root, "workspace"), dump.WorkspaceID)`; on error → `"open candidate workspace: %w"` (`candidate.go`).
-5. `st.ReplaceFromExport(ctx, export)` (defined `internal/store/import_export.go`); on error → `"load export into candidate: %w"` (`candidate.go`).
+5. `st.rebuildFromExport(ctx, export, commitStamp{Message: "replace from export"})` (defined `internal/store/import_export.go`; no homing, so the verify gate's row and id counts hold); on error → `"load export into candidate: %w"` (`candidate.go`).
 6. `success = true`; returns `&Candidate{store: st, root: root, expectedHead: dump.DoltHead, workspaceID: dump.WorkspaceID}` (`candidate.go`).
 
 Documented: `dump` is read-only and reusable unchanged across attempts; `Apply` never mutates it, so two attempts from one dump yield identical candidates (`candidate.go`).

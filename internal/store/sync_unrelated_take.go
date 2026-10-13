@@ -271,10 +271,12 @@ func (s *Store) takeRemoteCarryingPurges(ctx context.Context, result *storage.Sy
 		}
 		terminal := theirs.ApplyPurges(model.UnionPurges(theirs.Purges, local.Purges))
 		stepper := foldStepper{store: s, readBranch: scratch.read, base: model.Export{}, theirs: theirs}
-		if _, err := s.commitReplayAndAdvance(ctx, guard, dataBranch, scratch, remoteHead, takeRemotePurgesCommitMessage, terminal, stepper); err != nil {
+		landing, err := s.commitReplayAndAdvance(ctx, guard, dataBranch, scratch, remoteHead, takeRemotePurgesCommitMessage, terminal, stepper)
+		if err != nil {
 			return err
 		}
 		result.State = storage.SyncReconcileTookRemote
+		result.Rehomed = landing.rehomed
 		return nil
 	})
 }
@@ -329,12 +331,13 @@ func (s *Store) takeLocalOntoRemoteHead(ctx context.Context, result *storage.Syn
 		// [LAW:dataflow-not-control-flow]
 		stepper := foldStepper{store: s, readBranch: scratch.read, chain: chain, base: model.Export{}, theirs: theirs}
 		terminal := local.ApplyPurges(model.UnionPurges(local.Purges, theirs.Purges))
-		replayed, err := s.commitReplayAndAdvance(ctx, guard, dataBranch, scratch, remoteHead, takeLocalCommitMessage, terminal, stepper)
+		landing, err := s.commitReplayAndAdvance(ctx, guard, dataBranch, scratch, remoteHead, takeLocalCommitMessage, terminal, stepper)
 		if err != nil {
 			return err
 		}
 		result.State = storage.SyncReconcileTookLocal
-		result.Replayed = replayed
+		result.Replayed = landing.replayed
+		result.Rehomed = landing.rehomed
 		return nil
 	})
 }

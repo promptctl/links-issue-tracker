@@ -145,7 +145,7 @@ func TestSyncReconcileHealsSchemaSkew(t *testing.T) {
 		t.Fatalf("merged resolution = %q, want nil (lifted rows default NULL)", *r)
 	}
 
-	// Event correctness across the replay: replaceFromExport clears issues, whose
+	// Event correctness across the replay: a wholesale write clears issues, whose
 	// ON DELETE CASCADE clears issue_events/issue_event_changes, so the merged
 	// export's events are re-inserted onto a clean base — every event survives with
 	// no duplicate id (a collision would mean the cascade was not clearing them).

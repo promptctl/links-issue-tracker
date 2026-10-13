@@ -89,7 +89,7 @@ func retagIssueLocally(t *testing.T, ctx context.Context, root, workspace, oldID
 	for i := range export.Events {
 		export.Events[i].IssueID = swap(export.Events[i].IssueID)
 	}
-	if err := st.ReplaceFromExport(ctx, export); err != nil {
+	if _, err := st.ReplaceFromExport(ctx, export); err != nil {
 		t.Fatalf("ReplaceFromExport(%s): %v", root, err)
 	}
 }
@@ -334,8 +334,8 @@ func seedUnrelatedCollision(t *testing.T, ctx context.Context, rootA, rootB, rem
 	planted.Description = "hash ids grow a character past 4k issues"
 	planted.CreatedAt = planted.CreatedAt.Add(-90 * time.Minute)
 	exportB.Issues = append(exportB.Issues, planted)
-	if err := stB.replaceFromExport(ctx, exportB, commitStamp{Message: "plant B's own job under A's id"}); err != nil {
-		t.Fatalf("replaceFromExport(B): %v", err)
+	if err := stB.rebuildFromExport(ctx, exportB, commitStamp{Message: "plant B's own job under A's id"}); err != nil {
+		t.Fatalf("rebuildFromExport(B): %v", err)
 	}
 	if err := stB.Close(); err != nil {
 		t.Fatalf("Close(B): %v", err)
@@ -422,8 +422,8 @@ func removeIssueLocally(t *testing.T, ctx context.Context, root, workspace, id s
 	export.Comments = filterRows(export.Comments, func(c model.Comment) bool { return c.IssueID != id })
 	export.Labels = filterRows(export.Labels, func(l model.Label) bool { return l.IssueID != id })
 	export.Events = filterRows(export.Events, func(e model.IssueEvent) bool { return e.IssueID != id })
-	if err := st.replaceFromExport(ctx, export, commitStamp{Message: "drop the locally filed child"}); err != nil {
-		t.Fatalf("replaceFromExport(%s): %v", root, err)
+	if err := st.rebuildFromExport(ctx, export, commitStamp{Message: "drop the locally filed child"}); err != nil {
+		t.Fatalf("rebuildFromExport(%s): %v", root, err)
 	}
 }
 

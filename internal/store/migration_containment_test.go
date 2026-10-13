@@ -43,6 +43,18 @@ type seedRow struct {
 	topic, title string
 }
 
+// topicAndTitle is the row's topic and title with their defaults filled in.
+func (row seedRow) topicAndTitle() (string, string) {
+	topic, title := row.topic, row.title
+	if topic == "" {
+		topic = "core"
+	}
+	if title == "" {
+		title = "issue " + row.id
+	}
+	return topic, title
+}
+
 func (f containmentFixture) issue(t *testing.T, ctx context.Context, row seedRow) {
 	t.Helper()
 	var status, deletedAt any
@@ -52,13 +64,7 @@ func (f containmentFixture) issue(t *testing.T, ctx context.Context, row seedRow
 	if row.deleted {
 		deletedAt = f.now
 	}
-	topic, title := row.topic, row.title
-	if topic == "" {
-		topic = "core"
-	}
-	if title == "" {
-		title = "issue " + row.id
-	}
+	topic, title := row.topicAndTitle()
 	if _, err := f.st.db.ExecContext(ctx, `INSERT INTO issues(id, title, description, status, priority, issue_type, topic, assignee, item_rank, lane, created_at, updated_at, deleted_at)
 		VALUES (?, ?, '', ?, 0, ?, ?, '', ?, ?, ?, ?, ?)`,
 		row.id, title, status, row.issueType, topic, row.rank, row.lane, f.now, f.now, deletedAt); err != nil {
@@ -88,6 +94,202 @@ func (f containmentFixture) lane(t *testing.T, ctx context.Context, id string) s
 // test asserts the contract two checkouts must agree on, not the formula.
 const unfiledID = "acme-unfiled-0bf7"
 
+// shapeSeeder writes one ticket or one parent edge of the containment fixture.
+// The migration test writes them as rows at schema v6; the HomeStranded test
+// builds an export of them. Both then answer to containmentHomes and
+// containmentLanes, so the migration and the homing a sync or a restore applies
+// are held to one rule over one set of shapes. [LAW:one-source-of-truth]
+type shapeSeeder interface {
+	issue(row seedRow)
+	parent(child, parent string)
+}
+
+// fixtureSeeder writes the shapes into a store at schema v6.
+type fixtureSeeder struct {
+	t   *testing.T
+	ctx context.Context
+	f   containmentFixture
+}
+
+func (s fixtureSeeder) issue(row seedRow)           { s.f.issue(s.t, s.ctx, row) }
+func (s fixtureSeeder) parent(child, parent string) { s.f.parent(s.t, s.ctx, child, parent) }
+
+// seedContainmentShapes writes every pre-v7 shape the rule has to home.
+func seedContainmentShapes(s shapeSeeder) {
+	// Controls: an epic with a leaf child, an epic inside an epic, and a leaf
+	// inside the nested epic. None of these moves.
+	s.issue(seedRow{id: "acme-core-aa11", issueType: "epic", rank: "D"})
+	s.issue(seedRow{id: "acme-core-aa11.1", issueType: "task", rank: "V", lane: "left"})
+	s.parent("acme-core-aa11.1", "acme-core-aa11")
+	s.issue(seedRow{id: "acme-core-aa11.2", issueType: "epic", rank: "W"})
+	s.parent("acme-core-aa11.2", "acme-core-aa11")
+	s.issue(seedRow{id: "acme-core-aa11.2.1", issueType: "bug", rank: "V"})
+	s.parent("acme-core-aa11.2.1", "acme-core-aa11.2")
+
+	// Top-level leaves, live and deleted. The live ones' keys decide the
+	// unfiled epic's rank: "B" is the best of them, so the epic takes "B0", the
+	// next key after it, and "B" stays with its leaf. The deleted one's "A" would be better and does not count, since work in the
+	// trash frames nothing. One top-level id carries another prefix so the
+	// majority rule has something to decide.
+	s.issue(seedRow{id: "acme-core-bb22", issueType: "task", rank: "M"})
+	s.issue(seedRow{id: "acme-core-cc33", issueType: "bug", rank: "B"})
+	s.issue(seedRow{id: "zed-core-dd44", issueType: "chore", rank: "A", deleted: true})
+
+	// A leaf under a leaf under an epic: the child moves up to the epic.
+	s.issue(seedRow{id: "acme-core-ee55", issueType: "epic", rank: "E"})
+	s.issue(seedRow{id: "acme-core-ee55.1", issueType: "task", rank: "V"})
+	s.parent("acme-core-ee55.1", "acme-core-ee55")
+	s.issue(seedRow{id: "acme-core-ee55.1.1", issueType: "task", rank: "V"})
+	s.parent("acme-core-ee55.1.1", "acme-core-ee55.1")
+
+	// Two leaves deep: both move up to the epic, the deeper one climbing past
+	// the shallower.
+	s.issue(seedRow{id: "acme-core-ff66", issueType: "epic", rank: "F"})
+	s.issue(seedRow{id: "t-deep-a", issueType: "task", rank: "V"})
+	s.parent("t-deep-a", "acme-core-ff66")
+	s.issue(seedRow{id: "t-deep-b", issueType: "task", rank: "V"})
+	s.parent("t-deep-b", "t-deep-a")
+	s.issue(seedRow{id: "t-deep-c", issueType: "chore", rank: "V"})
+	s.parent("t-deep-c", "t-deep-b")
+
+	// A leaf under a top-level leaf: no epic above either, so both go unfiled.
+	s.issue(seedRow{id: "t-top-leaf", issueType: "task", rank: "N"})
+	s.issue(seedRow{id: "t-under", issueType: "task", rank: "V"})
+	s.parent("t-under", "t-top-leaf")
+
+	// An epic under a top-level leaf: no epic is above it, and an epic may be
+	// top-level, so it loses the leaf edge and stays at the top level with its
+	// own child, while the leaf goes unfiled.
+	s.issue(seedRow{id: "t-top-leaf2", issueType: "feature", rank: "P"})
+	s.issue(seedRow{id: "t-nested-epic", issueType: "epic", rank: "V"})
+	s.parent("t-nested-epic", "t-top-leaf2")
+	s.issue(seedRow{id: "t-nested-epic.1", issueType: "task", rank: "V"})
+	s.parent("t-nested-epic.1", "t-nested-epic")
+
+	// A loop of leaves: the climb meets the depth cut, both go unfiled, and
+	// the loop is gone with them.
+	s.issue(seedRow{id: "t-cyc-a", issueType: "task", rank: "V"})
+	s.issue(seedRow{id: "t-cyc-b", issueType: "task", rank: "V"})
+	s.parent("t-cyc-a", "t-cyc-b")
+	s.parent("t-cyc-b", "t-cyc-a")
+
+	// Restored data: a loop of leaves with a fork in it. Each lap through the
+	// fork doubles the ways up, so a climb that kept every way would hold some
+	// 2^32 rows by the depth cut; kept as a set, it ends, and the child and the
+	// loop all go unfiled.
+	s.issue(seedRow{id: "t-fl-1", issueType: "task", rank: "V"})
+	s.issue(seedRow{id: "t-fl-2", issueType: "task", rank: "V"})
+	s.issue(seedRow{id: "t-fl-3", issueType: "task", rank: "V"})
+	s.issue(seedRow{id: "t-fl-child", issueType: "bug", rank: "V"})
+	s.parent("t-fl-1", "t-fl-2")
+	s.parent("t-fl-1", "t-fl-3")
+	s.parent("t-fl-2", "t-fl-1")
+	s.parent("t-fl-3", "t-fl-1")
+	s.parent("t-fl-child", "t-fl-1")
+
+	// Restored data: a child with two leaf parents in two epics. The climb
+	// forks, both forks end on an epic at the same depth, and the lower id
+	// wins; the other edge goes, so one parent remains.
+	s.issue(seedRow{id: "t-e1", issueType: "epic", rank: "G"})
+	s.issue(seedRow{id: "t-l1", issueType: "task", rank: "V"})
+	s.parent("t-l1", "t-e1")
+	s.issue(seedRow{id: "t-e2", issueType: "epic", rank: "H"})
+	s.issue(seedRow{id: "t-l2", issueType: "task", rank: "V"})
+	s.parent("t-l2", "t-e2")
+	s.issue(seedRow{id: "t-fork", issueType: "task", rank: "V"})
+	s.parent("t-fork", "t-l1")
+	s.parent("t-fork", "t-l2")
+
+	// Restored data: a child with two leaf parents, one under an epic and
+	// one under a leaf that goes nowhere. The dead end is as deep as the epic
+	// and sorts before it; the epic is the destination all the same, since
+	// it is the nearest epic any fork reached.
+	s.issue(seedRow{id: "t-e5", issueType: "epic", rank: "L"})
+	s.issue(seedRow{id: "t-l5", issueType: "task", rank: "V"})
+	s.parent("t-l5", "t-e5")
+	s.issue(seedRow{id: "t-d2", issueType: "task", rank: "V"})
+	s.issue(seedRow{id: "t-d1", issueType: "task", rank: "V"})
+	s.parent("t-d1", "t-d2")
+	s.issue(seedRow{id: "t-fork2", issueType: "task", rank: "V"})
+	s.parent("t-fork2", "t-l5")
+	s.parent("t-fork2", "t-d1")
+
+	// Restored data: a child holding an epic parent and a leaf parent in
+	// another epic. It is already home, so it does not move: the leaf edge
+	// goes, the epic edge stays, and its lane is left alone.
+	s.issue(seedRow{id: "t-e3", issueType: "epic", rank: "I"})
+	s.issue(seedRow{id: "t-e4", issueType: "epic", rank: "J"})
+	s.issue(seedRow{id: "t-l4", issueType: "task", rank: "V"})
+	s.parent("t-l4", "t-e4")
+	s.issue(seedRow{id: "t-held", issueType: "task", rank: "V", lane: "right"})
+	s.parent("t-held", "t-e3")
+	s.parent("t-held", "t-l4")
+
+	// Restored data: a loop through an epic. The leaf keeps its epic; the
+	// epic's climb comes back to itself, so it is given no edge and comes out
+	// at the top level, where an epic may live.
+	s.issue(seedRow{id: "t-loop-epic", issueType: "epic", rank: "K"})
+	s.issue(seedRow{id: "t-loop-leaf", issueType: "task", rank: "V"})
+	s.parent("t-loop-leaf", "t-loop-epic")
+	s.parent("t-loop-epic", "t-loop-leaf")
+}
+
+// containmentHomes is each seeded ticket's parent once the shapes are homed,
+// empty for the top level.
+var containmentHomes = map[string]string{
+	"acme-core-aa11":     "",
+	"acme-core-aa11.1":   "acme-core-aa11",
+	"acme-core-aa11.2":   "acme-core-aa11",
+	"acme-core-aa11.2.1": "acme-core-aa11.2",
+	"acme-core-bb22":     unfiledID,
+	"acme-core-cc33":     unfiledID,
+	"zed-core-dd44":      unfiledID,
+	"acme-core-ee55.1":   "acme-core-ee55",
+	"acme-core-ee55.1.1": "acme-core-ee55",
+	"t-deep-a":           "acme-core-ff66",
+	"t-deep-b":           "acme-core-ff66",
+	"t-deep-c":           "acme-core-ff66",
+	"t-top-leaf":         unfiledID,
+	"t-under":            unfiledID,
+	"t-top-leaf2":        unfiledID,
+	"t-nested-epic":      "",
+	"t-nested-epic.1":    "t-nested-epic",
+	"t-cyc-a":            unfiledID,
+	"t-cyc-b":            unfiledID,
+	"t-fl-1":             unfiledID,
+	"t-fl-2":             unfiledID,
+	"t-fl-3":             unfiledID,
+	"t-fl-child":         unfiledID,
+	"t-l1":               "t-e1",
+	"t-l2":               "t-e2",
+	"t-fork":             "t-e1",
+	"t-l4":               "t-e4",
+	"t-held":             "t-e3",
+	"t-l5":               "t-e5",
+	"t-d2":               unfiledID,
+	"t-d1":               unfiledID,
+	"t-fork2":            "t-e5",
+	"t-loop-leaf":        "t-loop-epic",
+	"t-loop-epic":        "",
+	unfiledID:            "",
+}
+
+// containmentLanes is the lane of each seeded ticket whose lane the homing
+// sets or must leave alone.
+var containmentLanes = map[string]string{
+	"acme-core-aa11.1":   "left",
+	"acme-core-aa11.2.1": "",
+	"acme-core-bb22":     "acme-core-bb22",
+	"acme-core-ee55.1":   "",
+	"acme-core-ee55.1.1": "acme-core-ee55.1.1",
+	"t-deep-c":           "t-deep-c",
+	"t-under":            "t-under",
+	"t-nested-epic":      "t-nested-epic",
+	"t-nested-epic.1":    "",
+	"t-fork":             "t-fork",
+	"t-held":             "right",
+}
+
 // TestContainmentMigrationHomesEveryLeaf exercises 00007's Up against every
 // shape it names and the Down against the result. After Up, every leaf has a
 // parent and every parent is an epic: a child under a leaf sits under the
@@ -100,165 +302,13 @@ func TestContainmentMigrationHomesEveryLeaf(t *testing.T) {
 	ctx := context.Background()
 	f, provider := newContainmentFixture(t, ctx)
 
-	// Controls: an epic with a leaf child, an epic inside an epic, and a leaf
-	// inside the nested epic. None of these moves.
-	f.issue(t, ctx, seedRow{id: "acme-core-aa11", issueType: "epic", rank: "D"})
-	f.issue(t, ctx, seedRow{id: "acme-core-aa11.1", issueType: "task", rank: "V", lane: "left"})
-	f.parent(t, ctx, "acme-core-aa11.1", "acme-core-aa11")
-	f.issue(t, ctx, seedRow{id: "acme-core-aa11.2", issueType: "epic", rank: "W"})
-	f.parent(t, ctx, "acme-core-aa11.2", "acme-core-aa11")
-	f.issue(t, ctx, seedRow{id: "acme-core-aa11.2.1", issueType: "bug", rank: "V"})
-	f.parent(t, ctx, "acme-core-aa11.2.1", "acme-core-aa11.2")
-
-	// Top-level leaves, live and deleted. The live ones' keys decide the
-	// unfiled epic's rank: "B" is the best of them, so the epic takes "B0", the
-	// next key after it, and "B" stays with its leaf. The deleted one's "A" would be better and does not count, since work in the
-	// trash frames nothing. One top-level id carries another prefix so the
-	// majority rule has something to decide.
-	f.issue(t, ctx, seedRow{id: "acme-core-bb22", issueType: "task", rank: "M"})
-	f.issue(t, ctx, seedRow{id: "acme-core-cc33", issueType: "bug", rank: "B"})
-	f.issue(t, ctx, seedRow{id: "zed-core-dd44", issueType: "chore", rank: "A", deleted: true})
-
-	// A leaf under a leaf under an epic: the child moves up to the epic.
-	f.issue(t, ctx, seedRow{id: "acme-core-ee55", issueType: "epic", rank: "E"})
-	f.issue(t, ctx, seedRow{id: "acme-core-ee55.1", issueType: "task", rank: "V"})
-	f.parent(t, ctx, "acme-core-ee55.1", "acme-core-ee55")
-	f.issue(t, ctx, seedRow{id: "acme-core-ee55.1.1", issueType: "task", rank: "V"})
-	f.parent(t, ctx, "acme-core-ee55.1.1", "acme-core-ee55.1")
-
-	// Two leaves deep: both move up to the epic, the deeper one climbing past
-	// the shallower.
-	f.issue(t, ctx, seedRow{id: "acme-core-ff66", issueType: "epic", rank: "F"})
-	f.issue(t, ctx, seedRow{id: "t-deep-a", issueType: "task", rank: "V"})
-	f.parent(t, ctx, "t-deep-a", "acme-core-ff66")
-	f.issue(t, ctx, seedRow{id: "t-deep-b", issueType: "task", rank: "V"})
-	f.parent(t, ctx, "t-deep-b", "t-deep-a")
-	f.issue(t, ctx, seedRow{id: "t-deep-c", issueType: "chore", rank: "V"})
-	f.parent(t, ctx, "t-deep-c", "t-deep-b")
-
-	// A leaf under a top-level leaf: no epic above either, so both go unfiled.
-	f.issue(t, ctx, seedRow{id: "t-top-leaf", issueType: "task", rank: "N"})
-	f.issue(t, ctx, seedRow{id: "t-under", issueType: "task", rank: "V"})
-	f.parent(t, ctx, "t-under", "t-top-leaf")
-
-	// An epic under a top-level leaf: no epic is above it, and an epic may be
-	// top-level, so it loses the leaf edge and stays at the top level with its
-	// own child, while the leaf goes unfiled.
-	f.issue(t, ctx, seedRow{id: "t-top-leaf2", issueType: "feature", rank: "P"})
-	f.issue(t, ctx, seedRow{id: "t-nested-epic", issueType: "epic", rank: "V"})
-	f.parent(t, ctx, "t-nested-epic", "t-top-leaf2")
-	f.issue(t, ctx, seedRow{id: "t-nested-epic.1", issueType: "task", rank: "V"})
-	f.parent(t, ctx, "t-nested-epic.1", "t-nested-epic")
-
-	// A loop of leaves: the climb meets the depth cut, both go unfiled, and
-	// the loop is gone with them.
-	f.issue(t, ctx, seedRow{id: "t-cyc-a", issueType: "task", rank: "V"})
-	f.issue(t, ctx, seedRow{id: "t-cyc-b", issueType: "task", rank: "V"})
-	f.parent(t, ctx, "t-cyc-a", "t-cyc-b")
-	f.parent(t, ctx, "t-cyc-b", "t-cyc-a")
-
-	// Restored data: a loop of leaves with a fork in it. Each lap through the
-	// fork doubles the ways up, so a climb that kept every way would hold some
-	// 2^32 rows by the depth cut; kept as a set, it ends, and the child and the
-	// loop all go unfiled.
-	f.issue(t, ctx, seedRow{id: "t-fl-1", issueType: "task", rank: "V"})
-	f.issue(t, ctx, seedRow{id: "t-fl-2", issueType: "task", rank: "V"})
-	f.issue(t, ctx, seedRow{id: "t-fl-3", issueType: "task", rank: "V"})
-	f.issue(t, ctx, seedRow{id: "t-fl-child", issueType: "bug", rank: "V"})
-	f.parent(t, ctx, "t-fl-1", "t-fl-2")
-	f.parent(t, ctx, "t-fl-1", "t-fl-3")
-	f.parent(t, ctx, "t-fl-2", "t-fl-1")
-	f.parent(t, ctx, "t-fl-3", "t-fl-1")
-	f.parent(t, ctx, "t-fl-child", "t-fl-1")
-
-	// Restored data: a child with two leaf parents in two epics. The climb
-	// forks, both forks end on an epic at the same depth, and the lower id
-	// wins; the other edge goes, so one parent remains.
-	f.issue(t, ctx, seedRow{id: "t-e1", issueType: "epic", rank: "G"})
-	f.issue(t, ctx, seedRow{id: "t-l1", issueType: "task", rank: "V"})
-	f.parent(t, ctx, "t-l1", "t-e1")
-	f.issue(t, ctx, seedRow{id: "t-e2", issueType: "epic", rank: "H"})
-	f.issue(t, ctx, seedRow{id: "t-l2", issueType: "task", rank: "V"})
-	f.parent(t, ctx, "t-l2", "t-e2")
-	f.issue(t, ctx, seedRow{id: "t-fork", issueType: "task", rank: "V"})
-	f.parent(t, ctx, "t-fork", "t-l1")
-	f.parent(t, ctx, "t-fork", "t-l2")
-
-	// Restored data: a child with two leaf parents, one under an epic and
-	// one under a leaf that goes nowhere. The dead end is as deep as the epic
-	// and sorts before it; the epic is the destination all the same, since
-	// it is the nearest epic any fork reached.
-	f.issue(t, ctx, seedRow{id: "t-e5", issueType: "epic", rank: "L"})
-	f.issue(t, ctx, seedRow{id: "t-l5", issueType: "task", rank: "V"})
-	f.parent(t, ctx, "t-l5", "t-e5")
-	f.issue(t, ctx, seedRow{id: "t-d2", issueType: "task", rank: "V"})
-	f.issue(t, ctx, seedRow{id: "t-d1", issueType: "task", rank: "V"})
-	f.parent(t, ctx, "t-d1", "t-d2")
-	f.issue(t, ctx, seedRow{id: "t-fork2", issueType: "task", rank: "V"})
-	f.parent(t, ctx, "t-fork2", "t-l5")
-	f.parent(t, ctx, "t-fork2", "t-d1")
-
-	// Restored data: a child holding an epic parent and a leaf parent in
-	// another epic. It is already home, so it does not move: the leaf edge
-	// goes, the epic edge stays, and its lane is left alone.
-	f.issue(t, ctx, seedRow{id: "t-e3", issueType: "epic", rank: "I"})
-	f.issue(t, ctx, seedRow{id: "t-e4", issueType: "epic", rank: "J"})
-	f.issue(t, ctx, seedRow{id: "t-l4", issueType: "task", rank: "V"})
-	f.parent(t, ctx, "t-l4", "t-e4")
-	f.issue(t, ctx, seedRow{id: "t-held", issueType: "task", rank: "V", lane: "right"})
-	f.parent(t, ctx, "t-held", "t-e3")
-	f.parent(t, ctx, "t-held", "t-l4")
-
-	// Restored data: a loop through an epic. The leaf keeps its epic; the
-	// epic's climb comes back to itself, so it is given no edge and comes out
-	// at the top level, where an epic may live.
-	f.issue(t, ctx, seedRow{id: "t-loop-epic", issueType: "epic", rank: "K"})
-	f.issue(t, ctx, seedRow{id: "t-loop-leaf", issueType: "task", rank: "V"})
-	f.parent(t, ctx, "t-loop-leaf", "t-loop-epic")
-	f.parent(t, ctx, "t-loop-epic", "t-loop-leaf")
+	seedContainmentShapes(fixtureSeeder{t: t, ctx: ctx, f: f})
 
 	if _, err := provider.UpTo(ctx, 7); err != nil {
 		t.Fatalf("UpTo(7) error = %v", err)
 	}
 
-	wantParent := map[string]string{
-		"acme-core-aa11":     "",
-		"acme-core-aa11.1":   "acme-core-aa11",
-		"acme-core-aa11.2":   "acme-core-aa11",
-		"acme-core-aa11.2.1": "acme-core-aa11.2",
-		"acme-core-bb22":     unfiledID,
-		"acme-core-cc33":     unfiledID,
-		"zed-core-dd44":      unfiledID,
-		"acme-core-ee55.1":   "acme-core-ee55",
-		"acme-core-ee55.1.1": "acme-core-ee55",
-		"t-deep-a":           "acme-core-ff66",
-		"t-deep-b":           "acme-core-ff66",
-		"t-deep-c":           "acme-core-ff66",
-		"t-top-leaf":         unfiledID,
-		"t-under":            unfiledID,
-		"t-top-leaf2":        unfiledID,
-		"t-nested-epic":      "",
-		"t-nested-epic.1":    "t-nested-epic",
-		"t-cyc-a":            unfiledID,
-		"t-cyc-b":            unfiledID,
-		"t-fl-1":             unfiledID,
-		"t-fl-2":             unfiledID,
-		"t-fl-3":             unfiledID,
-		"t-fl-child":         unfiledID,
-		"t-l1":               "t-e1",
-		"t-l2":               "t-e2",
-		"t-fork":             "t-e1",
-		"t-l4":               "t-e4",
-		"t-held":             "t-e3",
-		"t-l5":               "t-e5",
-		"t-d2":               unfiledID,
-		"t-d1":               unfiledID,
-		"t-fork2":            "t-e5",
-		"t-loop-leaf":        "t-loop-epic",
-		"t-loop-epic":        "",
-		unfiledID:            "",
-	}
-	for id, want := range wantParent {
+	for id, want := range containmentHomes {
 		if got := readParent(t, ctx, f.st, id); got != want {
 			t.Errorf("after Up: %s parent = %q, want %q", id, got, want)
 		}
@@ -268,20 +318,7 @@ func TestContainmentMigrationHomesEveryLeaf(t *testing.T) {
 	// still be caught.
 	assertContainmentHolds(t, ctx, f.st)
 
-	wantLane := map[string]string{
-		"acme-core-aa11.1":   "left",
-		"acme-core-aa11.2.1": "",
-		"acme-core-bb22":     "acme-core-bb22",
-		"acme-core-ee55.1":   "",
-		"acme-core-ee55.1.1": "acme-core-ee55.1.1",
-		"t-deep-c":           "t-deep-c",
-		"t-under":            "t-under",
-		"t-nested-epic":      "t-nested-epic",
-		"t-nested-epic.1":    "",
-		"t-fork":             "t-fork",
-		"t-held":             "right",
-	}
-	for id, want := range wantLane {
+	for id, want := range containmentLanes {
 		if got := f.lane(t, ctx, id); got != want {
 			t.Errorf("after Up: %s lane = %q, want %q", id, got, want)
 		}

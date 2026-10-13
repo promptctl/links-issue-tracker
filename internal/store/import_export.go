@@ -86,13 +86,14 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 	if report.OrphanHistoryRows > 0 {
 		report.Warnings = append(report.Warnings, fmt.Sprintf("orphan issue event rows: %d", report.OrphanHistoryRows))
 	}
-	// Containment is refused at every write, so a ticket outside an epic is
-	// what the boundary was not there to refuse: a restored export, which
-	// writes rows as they were, can hold one from before schema v7. It is a
-	// column read, no hydration, so it runs on a hierarchy holding a loop. A
-	// warning, not an error: every read still answers over it, and a faithful
-	// rebuild of a pre-v7 source reproduces it, which the recovery gate must
-	// not refuse (healthFindings). [LAW:single-enforcer]
+	// Containment is refused at every write, and a sync or a restore homes
+	// what it lands (storage.HomeStranded), so a ticket outside an epic is what
+	// neither was there to refuse: a recovery rebuild writes its source as it
+	// was (rebuildFromExport), and a pre-v7 source holds them. It is a column
+	// read, no hydration, so it runs on a hierarchy holding a loop. A warning,
+	// not an error: every read still answers over it, and the faithful rebuild
+	// reproduces it, which the recovery gate must not refuse (healthFindings).
+	// [LAW:single-enforcer]
 	containment, err := containmentFindings(ctx, s.db)
 	if err != nil {
 		return report, fmt.Errorf("containment check: %w", err)
@@ -260,26 +261,65 @@ ORDER BY 1, 3`)
 	return findings, nil
 }
 
-func (s *Store) ReplaceFromExport(ctx context.Context, export model.Export) error {
-	return s.replaceFromExport(ctx, export, commitStamp{Message: "replace from export"})
+// ReplaceFromExport is the restore: it clears the live tables and rewrites them
+// from export as the store's rules stand now, under the ordinary self-retrying
+// mutation pipeline, and names the tickets it moved into an epic. Two rules
+// apply that the backup itself cannot know: a restore never un-purges, and every
+// ticket lives inside an epic — a backup taken before v7 holds top-level leaves,
+// and one taken before a purge can hold a child of the purged epic, which the
+// cut leaves with no parent. [LAW:single-enforcer] the cut is ApplyPurges and
+// the homing is HomeStranded, the same two a sync landing applies.
+func (s *Store) ReplaceFromExport(ctx context.Context, export model.Export) ([]storage.Rehomed, error) {
+	var rehomed []storage.Rehomed
+	err := s.withStampedMutation(ctx, commitStamp{Message: "replace from export"}, func(ctx context.Context, tx *sql.Tx) error {
+		cut, err := cutByHeldPurges(ctx, tx, export)
+		if err != nil {
+			return err
+		}
+		// Assigned on every attempt, so a retried mutation reports the moves of
+		// the attempt that committed.
+		var contained model.Export
+		contained, rehomed = storage.HomeStranded(cut)
+		return writeWholeExportTx(ctx, tx, contained)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return rehomed, nil
 }
 
-// replaceFromExport clears the live tables and rewrites them from an export
-// under the ordinary self-retrying mutation pipeline. Restore uses the default
-// message; the reconcile's scratch-branch replay does NOT come through here —
-// it uses replayDeltaOnScratch, whose transient failures must bubble to the
-// scratch-rebuilding outer retry instead of self-rotating the connection.
-// [LAW:single-enforcer] One import body (writeExportTx); the stamp and the
-// retry policy are the only per-caller values.
-func (s *Store) replaceFromExport(ctx context.Context, export model.Export, stamp commitStamp) error {
+// rebuildFromExport writes export as it stands, cut only by purges, for the
+// recovery candidate. A rebuild is trusted only when it conserves its source —
+// the verify gate counts its rows and compares its ids against the dump's — so
+// it must not add the edges and the epic a restore's homing would; a ticket the
+// source held outside an epic is left there for `lit doctor` to name.
+func (s *Store) rebuildFromExport(ctx context.Context, export model.Export, stamp commitStamp) error {
 	return s.withStampedMutation(ctx, stamp, func(ctx context.Context, tx *sql.Tx) error {
-		return writeExportTx(ctx, tx, export)
+		cut, err := cutByHeldPurges(ctx, tx, export)
+		if err != nil {
+			return err
+		}
+		return writeWholeExportTx(ctx, tx, cut)
 	})
 }
 
-// writeExportTx clears the live tables and rewrites them from an export inside
-// one transaction — the path for a caller who does NOT know what the tables
-// currently hold (a restore) and so must establish the state wholesale.
+// cutByHeldPurges returns export with the store's own purge records folded
+// into its own and every row they name removed, so a backup taken before a
+// purge lands without the purged ticket and the record survives the rewrite. A
+// write never un-purges. [LAW:single-enforcer] the cut is ApplyPurges, the same
+// one the merge makes.
+func cutByHeldPurges(ctx context.Context, tx *sql.Tx, export model.Export) (model.Export, error) {
+	held, err := listPurges(ctx, tx)
+	if err != nil {
+		return model.Export{}, err
+	}
+	return export.ApplyPurges(model.UnionPurges(held, export.Purges)), nil
+}
+
+// writeWholeExportTx clears the live tables and rewrites them from an export
+// inside one transaction — the path for a caller who does NOT know what the
+// tables currently hold (a restore, a rebuild) and so must establish the state
+// wholesale.
 //
 // It is the degenerate case of applyExportDelta, not a second import body: the
 // clear makes the live state provably empty, and the transition from empty to
@@ -294,18 +334,7 @@ func (s *Store) replaceFromExport(ctx context.Context, export model.Export, stam
 // from issues (ON DELETE CASCADE), so clearing issues already removes them, and
 // re-listing them here would be a second, drift-prone statement of a fact the
 // schema owns.
-//
-// A restore never un-purges. The store's own purge records are read before the
-// clear and folded into the export's, and the export is cut by the union, so
-// a backup taken before a purge lands without the purged ticket and the record
-// survives the rewrite. [LAW:single-enforcer] the cut is ApplyPurges, the same
-// one the merge makes.
-func writeExportTx(ctx context.Context, tx *sql.Tx, export model.Export) error {
-	held, err := listPurges(ctx, tx)
-	if err != nil {
-		return err
-	}
-	export = export.ApplyPurges(model.UnionPurges(held, export.Purges))
+func writeWholeExportTx(ctx context.Context, tx *sql.Tx, export model.Export) error {
 	for _, table := range []string{"labels", "comments", "relations", "issues", "purges"} {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
 			return fmt.Errorf("clear %s: %w", table, err)

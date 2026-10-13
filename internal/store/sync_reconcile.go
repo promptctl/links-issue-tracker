@@ -660,20 +660,27 @@ func (s *Store) newSpineWriter(ctx context.Context, branch string) (*spineWriter
 	return &spineWriter{store: s, branch: branch, landed: landed}, nil
 }
 
-// land commits next onto the spine under stamp. It switches to the spine branch
+// land commits next onto the spine under stamp, with every ticket inside an
+// epic, and names the tickets it had to move. It switches to the spine branch
 // first because the caller is expected to have just read history on the read
 // branch; the switch is unconditional so that no landing depends on which
 // branch a previous operation happened to leave the session on.
 // [LAW:no-ambient-temporal-coupling]
-func (w *spineWriter) land(ctx context.Context, next model.Export, stamp commitStamp) error {
+//
+// Every sync write lands through here — each folded commit's projection and
+// every settling export, merged or taken — so this is where a backlog the data
+// added up to is brought under containment: a purge on one side can drop the
+// epic a ticket on the other side was filed under. [LAW:single-enforcer]
+func (w *spineWriter) land(ctx context.Context, next model.Export, stamp commitStamp) ([]storage.Rehomed, error) {
 	if err := execProcedureDiscard(ctx, w.store.db, "DOLT_CHECKOUT", w.branch); err != nil {
-		return fmt.Errorf("switch to reconcile spine branch %q: %w", w.branch, err)
+		return nil, fmt.Errorf("switch to reconcile spine branch %q: %w", w.branch, err)
 	}
-	if err := w.store.replayDeltaOnScratch(ctx, diffExports(w.landed, next), stamp); err != nil {
-		return err
+	contained, rehomed := storage.HomeStranded(next)
+	if err := w.store.replayDeltaOnScratch(ctx, diffExports(w.landed, contained), stamp); err != nil {
+		return nil, err
 	}
-	w.landed = next
-	return nil
+	w.landed = contained
+	return rehomed, nil
 }
 
 // holdForCollisions is the ONE conversion from "an id names two tickets" to a
@@ -746,7 +753,7 @@ func (s *Store) mergeAndReplay(ctx context.Context, result *storage.SyncReconcil
 		return err
 	}
 	stepper := foldStepper{store: s, readBranch: scratch.read, chain: chain, base: base, theirs: theirs}
-	replayed, err := s.commitReplayAndAdvance(ctx, guard, dataBranch, scratch, remoteHead, message, export, stepper)
+	landing, err := s.commitReplayAndAdvance(ctx, guard, dataBranch, scratch, remoteHead, message, export, stepper)
 	var foldCollision foldCollisionError
 	if errors.As(err, &foldCollision) {
 		holdForCollisions(result, foldCollision.collisions)
@@ -757,7 +764,8 @@ func (s *Store) mergeAndReplay(ctx context.Context, result *storage.SyncReconcil
 	}
 	result.State = settledState
 	result.Pending = nil
-	result.Replayed = replayed
+	result.Replayed = landing.replayed
+	result.Rehomed = landing.rehomed
 	return nil
 }
 
@@ -831,12 +839,12 @@ func (s *Store) runOnReconcileScratch(ctx context.Context, dataBranch string, sc
 // intermediate because it is untouched until the single atomic reset.
 // [LAW:no-ambient-temporal-coupling] no observer sees a half-built state; it lives
 // only on the scratch branch.
-func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, remoteHead, message string, export model.Export, stepper foldStepper) (int, error) {
+func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, remoteHead, message string, export model.Export, stepper foldStepper) (replayLanding, error) {
 	if err := execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", scratch.spine); err != nil {
-		return 0, fmt.Errorf("switch to reconcile spine branch %q: %w", scratch.spine, err)
+		return replayLanding{}, fmt.Errorf("switch to reconcile spine branch %q: %w", scratch.spine, err)
 	}
 	if err := s.resetAndLift(ctx, remoteHead); err != nil {
-		return 0, fmt.Errorf("adopt remote head %q on scratch: %w", remoteHead, err)
+		return replayLanding{}, fmt.Errorf("adopt remote head %q on scratch: %w", remoteHead, err)
 	}
 	// The lift's own changes (schema DDL, migration bookkeeping) land as the
 	// machinery's own named commit — or no commit at all on a current-schema
@@ -846,11 +854,11 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 	// below goes through replayDeltaOnScratch: a self-rotating retry would
 	// resume on the data branch (see replayDeltaOnScratch).
 	if err := s.commitWorkingSetOnce(ctx, commitStamp{Message: reconcileLiftCommitMessage}); err != nil {
-		return 0, fmt.Errorf("commit schema lift of %q: %w", remoteHead, err)
+		return replayLanding{}, fmt.Errorf("commit schema lift of %q: %w", remoteHead, err)
 	}
 	liftedBase, err := readDoltHead(ctx, s.db)
 	if err != nil {
-		return 0, fmt.Errorf("read lifted base: %w", err)
+		return replayLanding{}, fmt.Errorf("read lifted base: %w", err)
 	}
 	// The writer is constructed AFTER the lift commit, so the state it seeds
 	// itself with is the spine's real starting content — the remote head at this
@@ -858,7 +866,7 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 	// what the step before it actually landed.
 	writer, err := s.newSpineWriter(ctx, scratch.spine)
 	if err != nil {
-		return 0, err
+		return replayLanding{}, err
 	}
 	// Read one step, land one step: the projected export for commit i is
 	// produced, written, and released before commit i+1 is read, so the replay's
@@ -866,25 +874,29 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 	for i := 0; i < stepper.len(); i++ {
 		step, err := stepper.step(ctx, i)
 		if err != nil {
-			return 0, err
+			return replayLanding{}, err
 		}
-		if err := writer.land(ctx, step.export, step.stamp); err != nil {
-			return 0, fmt.Errorf("replay folded commit %q: %w", step.stamp.Message, err)
+		// A step's moves are not reported: the settling export below is what
+		// the backlog holds once the replay is done, and its moves are the ones
+		// that stand.
+		if _, err := writer.land(ctx, step.export, step.stamp); err != nil {
+			return replayLanding{}, fmt.Errorf("replay folded commit %q: %w", step.stamp.Message, err)
 		}
 	}
-	if err := writer.land(ctx, export, commitStamp{Message: message, AllowEmpty: true}); err != nil {
-		return 0, err
+	rehomed, err := writer.land(ctx, export, commitStamp{Message: message, AllowEmpty: true})
+	if err != nil {
+		return replayLanding{}, err
 	}
 	replayedCommit, err := readDoltHead(ctx, s.db)
 	if err != nil {
-		return 0, fmt.Errorf("read replayed commit: %w", err)
+		return replayLanding{}, fmt.Errorf("read replayed commit: %w", err)
 	}
 	// What landed is what Dolt kept, not what was attempted: count the spine
 	// segment above the lifted base and subtract the marker, so the reported
 	// number is folded-side provenance only. [FRAMING:representation]
 	landed, err := countCommitsInRange(ctx, s.db, liftedBase, replayedCommit)
 	if err != nil {
-		return 0, err
+		return replayLanding{}, err
 	}
 	replayed := landed - 1
 
@@ -897,7 +909,7 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 	// The guard is owned by the caller and shared across GC-contention retries, so
 	// ensure() takes exactly one snapshot no matter how many attempts run.
 	if _, err := guard.ensure(ctx); err != nil {
-		return 0, fmt.Errorf("snapshot before reconcile: %w", err)
+		return replayLanding{}, fmt.Errorf("snapshot before reconcile: %w", err)
 	}
 
 	// Advance the data branch to the finished commit with one atomic reset. This is
@@ -906,10 +918,10 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 	// in-between. [LAW:one-source-of-truth] one authoritative ordering; no per-machine
 	// merge-commit DAG — linear history that fast-forward pushes.
 	if err := execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", dataBranch); err != nil {
-		return 0, fmt.Errorf("return to data branch %q: %w", dataBranch, err)
+		return replayLanding{}, fmt.Errorf("return to data branch %q: %w", dataBranch, err)
 	}
 	if _, err := callIntProcedure(ctx, s.db, "DOLT_RESET", "--hard", replayedCommit); err != nil {
-		return 0, fmt.Errorf("advance %q to replayed commit: %w", dataBranch, err)
+		return replayLanding{}, fmt.Errorf("advance %q to replayed commit: %w", dataBranch, err)
 	}
 	// The data branch now durably holds the result; roll the recovery snapshots off to
 	// the retention budget. IsReconcileSnapshotName is disjoint from the
@@ -926,7 +938,15 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 	if err := dbsnapshot.PruneMatching(migrationSnapshotsDir(s.doltRootDir), reconcileSnapshotRetention, IsReconcileSnapshotName); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: reconcile could not prune old recovery snapshots (replay already committed): %v\n", err)
 	}
-	return replayed, nil
+	return replayLanding{replayed: replayed, rehomed: rehomed}, nil
+}
+
+// replayLanding is what a replay landed: how many of the folded side's commits
+// landed ahead of the marker, and the tickets the settling export moved into an
+// epic.
+type replayLanding struct {
+	replayed int
+	rehomed  []storage.Rehomed
 }
 
 // countCommitsInRange counts the commits reachable from head but not from

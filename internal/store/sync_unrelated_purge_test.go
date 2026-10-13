@@ -132,7 +132,7 @@ func shareIssue(t *testing.T, ctx context.Context, fromRoot, toRoot, id string) 
 		t.Fatalf("Export(to): %v", err)
 	}
 	target.Issues = append(target.Issues, issueByID(t, source, id))
-	if err := to.ReplaceFromExport(ctx, target); err != nil {
+	if _, err := to.ReplaceFromExport(ctx, target); err != nil {
 		t.Fatalf("ReplaceFromExport(to): %v", err)
 	}
 }

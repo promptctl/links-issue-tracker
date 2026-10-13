@@ -185,7 +185,7 @@ func TestRestoreKeepsTheProducersAttribution(t *testing.T) {
 	}
 	defer target.Close()
 	target.AttributeTo("restorerstrm")
-	if err := target.ReplaceFromExport(ctx, dump); err != nil {
+	if _, err := target.ReplaceFromExport(ctx, dump); err != nil {
 		t.Fatalf("ReplaceFromExport() error = %v", err)
 	}
 
@@ -232,7 +232,7 @@ func TestRestoringACorruptedExportWritesNoHalfPair(t *testing.T) {
 		t.Fatalf("Open(target) error = %v", err)
 	}
 	defer target.Close()
-	if err := target.ReplaceFromExport(ctx, corrupted); err != nil {
+	if _, err := target.ReplaceFromExport(ctx, corrupted); err != nil {
 		t.Fatalf("ReplaceFromExport() error = %v", err)
 	}
 

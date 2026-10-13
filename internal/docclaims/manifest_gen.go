@@ -13,6 +13,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/00-overview.md", Text: "lit followup", Src: "usage: lit followup --on <id> --title <text> [--description <text>] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--parent <epic-id>] [--priority <"},
 	{Doc: "doc-v1-total/00-overview.md", Text: "lit quickstart", Src: "deeper guidance: lit quickstart "},
 	{Doc: "doc-v1-total/00-overview.md", Text: "lit start <id>", Src: "lit update no longer changes status — the transition verbs are the single enforcer of the transition guardrails. Use: `lit start <id>` (claim → in_progress), `lit done <id>` (finish → closed), `lit close <id> --resolution <duplicate|superseded|obsolete|wontfix>` (close with an outcome), `lit open <id>` (reopen)"},
+	{Doc: "doc-v1-total/01-data-model.md", Text: "Unfiled tickets", Src: "Unfiled tickets"},
 	{Doc: "doc-v1-total/01-data-model.md", Text: "lit followup --on", Src: "usage: lit followup --on <id> --title <text> [--description <text>] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--parent <epic-id>] [--priority <"},
 	{Doc: "doc-v1-total/02-storage-contract.md", Text: "import rollback", Src: "import rollback"},
 	{Doc: "doc-v1-total/02-storage-contract.md", Text: "parent relation", Src: "parent relation"},

@@ -41,7 +41,7 @@ func TestExportDeltaMatchesFullRewriteAcrossEveryChangeShape(t *testing.T) {
 	held := model.Export{}
 
 	for i, state := range states {
-		if err := rewritten.replaceFromExport(ctx, state.export, commitStamp{Message: "rewrite"}); err != nil {
+		if err := rewritten.rebuildFromExport(ctx, state.export, commitStamp{Message: "rewrite"}); err != nil {
 			t.Fatalf("step %d (%s): full rewrite: %v", i, state.name, err)
 		}
 		if err := applyDeltaForTest(ctx, delta, held, state.export); err != nil {

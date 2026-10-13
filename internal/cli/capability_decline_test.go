@@ -191,7 +191,7 @@ func TestRestoreRefusesAPartialEngineBeforeTouchingAnything(t *testing.T) {
 			ws := declineWorkspace(t)
 			ap := &app.App{Workspace: ws, Store: tc.engine}
 
-			err := restoreFromExportPath(context.Background(), ap, filepath.Join(t.TempDir(), "no-such-export.json"), false)
+			_, err := restoreFromExportPath(context.Background(), ap, filepath.Join(t.TempDir(), "no-such-export.json"), false)
 
 			wantUnsupported(t, err, tc.capability)
 			snapshots, listErr := backup.List(ws.StorageDir)

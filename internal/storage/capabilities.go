@@ -215,7 +215,8 @@ type SchemaMigrator interface {
 	Downgrade(ctx context.Context, targetSchemaVersion int64) error
 }
 
-// Importer replaces the store's entire contents with an export.
+// Importer replaces the store's entire contents with an export, and names the
+// tickets it moved into an epic on the way in (HomeStranded).
 //
 // Its counterpart, Export, is core rather than a capability: the campaign's
 // differential oracle compares two engines through it, so every engine must
@@ -223,7 +224,7 @@ type SchemaMigrator interface {
 // readable-out without being replaceable-in.
 // (design-docs/event-store/design.md §migration)
 type Importer interface {
-	ReplaceFromExport(ctx context.Context, export model.Export) error
+	ReplaceFromExport(ctx context.Context, export model.Export) ([]Rehomed, error)
 }
 
 // RawExecutor runs an engine-native statement against the store.
