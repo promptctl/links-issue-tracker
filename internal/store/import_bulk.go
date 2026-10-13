@@ -16,22 +16,12 @@ import (
 // this call (never issues it updated — an update has no "prior create" to
 // unwind). Run `lit doctor` after a failed batch to detect orphans left if
 // rollback itself failed. [LAW:single-enforcer] one boundary owns ID
-// resolution, create/update dispatch, and topological create order.
+// resolution and create/update dispatch; the order it writes in is the one
+// storage.BulkWriteOrder hands back once it has judged the file.
 func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []storage.BulkIssueSpec) (storage.BulkApplyResult, error) {
-	if err := storage.ValidateBulkSpecs(specs); err != nil {
-		return storage.BulkApplyResult{}, err
-	}
-	localID := make([]string, len(specs))
-	parent := make([]string, len(specs))
-	dependsOn := make([][]string, len(specs))
-	for i, spec := range specs {
-		localID[i] = spec.LocalID
-		parent[i] = spec.Parent
-		dependsOn[i] = spec.BlockedBy
-	}
-	order, err := topoSortLocalGraph(localID, parent, dependsOn)
+	order, err := storage.BulkWriteOrder(specs)
 	if err != nil {
-		return storage.BulkApplyResult{}, fmt.Errorf("bulk: %w", err)
+		return storage.BulkApplyResult{}, err
 	}
 
 	result := storage.BulkApplyResult{}

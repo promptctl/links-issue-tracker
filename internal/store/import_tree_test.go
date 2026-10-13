@@ -49,9 +49,9 @@ func TestImportTreeRejectsCycle(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	specs := []storage.ImportTreeSpec{
-		{LocalID: "e", Title: "E", IssueType: "epic", Topic: "x", Priority: 0},
-		{LocalID: "a", Title: "A", IssueType: "task", Topic: "x", Priority: 0, Parent: "e", BlockedBy: []string{"b"}},
-		{LocalID: "b", Title: "B", IssueType: "task", Topic: "x", Priority: 0, Parent: "e", BlockedBy: []string{"a"}},
+		{LocalID: "e", Title: "E", IssueType: "epic", Topic: "demo", Priority: 0},
+		{LocalID: "a", Title: "A", IssueType: "task", Topic: "demo", Priority: 0, Parent: "e", BlockedBy: []string{"b"}},
+		{LocalID: "b", Title: "B", IssueType: "task", Topic: "demo", Priority: 0, Parent: "e", BlockedBy: []string{"a"}},
 	}
 	if _, err := st.ImportTree(ctx, "test", specs); err == nil || !strings.Contains(err.Error(), "cycle") {
 		t.Fatalf("ImportTree(cycle) error = %v, want cycle error", err)
@@ -63,7 +63,7 @@ func TestImportTreeRejectsMissingReference(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	specs := []storage.ImportTreeSpec{
-		{LocalID: "a", Title: "A", IssueType: "task", Topic: "x", Priority: 0, Parent: "ghost"},
+		{LocalID: "a", Title: "A", IssueType: "task", Topic: "demo", Priority: 0, Parent: "ghost"},
 	}
 	if _, err := st.ImportTree(ctx, "test", specs); err == nil || !strings.Contains(err.Error(), "missing parent") {
 		t.Fatalf("ImportTree(missing parent) error = %v, want missing-parent error", err)
@@ -75,7 +75,7 @@ func TestImportTreeRejectsInvalidType(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	specs := []storage.ImportTreeSpec{
-		{LocalID: "a", Title: "A", IssueType: "ghost", Topic: "x", Priority: 0},
+		{LocalID: "a", Title: "A", IssueType: "ghost", Topic: "demo", Priority: 0},
 	}
 	if _, err := st.ImportTree(ctx, "test", specs); err == nil || !strings.Contains(err.Error(), "invalid type") {
 		t.Fatalf("ImportTree(bad type) error = %v, want invalid-type error", err)

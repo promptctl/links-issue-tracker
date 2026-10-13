@@ -21,12 +21,10 @@ import (
 // import to detect orphans.
 //
 // [LAW:single-enforcer] Atomic tree import is the one shared boundary that
-// owns ID resolution + topological create order.
+// owns ID resolution; the create order is the one storage.ImportTreeWriteOrder
+// hands back once it has judged the file.
 func (s *Store) ImportTree(ctx context.Context, prefix string, specs []storage.ImportTreeSpec) (storage.ImportTreeResult, error) {
-	if err := storage.ValidateImportTreeSpecs(specs); err != nil {
-		return storage.ImportTreeResult{}, err
-	}
-	order, err := topoSortImportSpecs(specs)
+	order, err := storage.ImportTreeWriteOrder(specs)
 	if err != nil {
 		return storage.ImportTreeResult{}, err
 	}
@@ -98,84 +96,4 @@ func (s *Store) rollbackCreatedIssues(ctx context.Context, createdIDs []string) 
 		}
 	}
 	return leaked
-}
-
-// topoSortImportSpecs returns indices of specs in an order such that for
-// every (i, j) where j depends on i (via Parent or BlockedBy), i appears
-// first. Cycle in the graph is rejected with an error.
-func topoSortImportSpecs(specs []storage.ImportTreeSpec) ([]int, error) {
-	localID := make([]string, len(specs))
-	parent := make([]string, len(specs))
-	dependsOn := make([][]string, len(specs))
-	for i, spec := range specs {
-		localID[i] = spec.LocalID
-		parent[i] = spec.Parent
-		dependsOn[i] = spec.BlockedBy
-	}
-	order, err := topoSortLocalGraph(localID, parent, dependsOn)
-	if err != nil {
-		return nil, fmt.Errorf("import: %w", err)
-	}
-	return order, nil
-}
-
-// topoSortLocalGraph orders the n nodes named by localID so that every node
-// appears after every other node it names via parent or dependsOn. A
-// reference that does not match any localID entry is not a graph edge — it
-// resolves outside this batch, and the caller (CreateIssue/AddRelation for a
-// real ID, or upstream validation for a required internal one) is
-// responsible for treating that as it needs to. Entries with an empty
-// localID cannot be referenced (an empty string is never treated as a name)
-// and always sort by encounter order relative to their own edges. Cycles
-// among graph-internal edges are rejected. Shared by ImportTree's tree spec
-// (every reference is internal, validated before this runs) and BulkApply's
-// create graph (references may be internal or external — external refs are
-// exactly the ones this function ignores). [LAW:one-source-of-truth]
-func topoSortLocalGraph(localID, parent []string, dependsOn [][]string) ([]int, error) {
-	indexByLocal := make(map[string]int, len(localID))
-	for i, id := range localID {
-		if id == "" {
-			continue
-		}
-		indexByLocal[id] = i
-	}
-	const (
-		stateUnvisited = 0
-		stateVisiting  = 1
-		stateDone      = 2
-	)
-	state := make([]int, len(localID))
-	order := make([]int, 0, len(localID))
-
-	var visit func(i int) error
-	visit = func(i int) error {
-		switch state[i] {
-		case stateDone:
-			return nil
-		case stateVisiting:
-			return fmt.Errorf("cycle detected involving %q", localID[i])
-		}
-		state[i] = stateVisiting
-		if j, ok := indexByLocal[parent[i]]; parent[i] != "" && ok {
-			if err := visit(j); err != nil {
-				return err
-			}
-		}
-		for _, dep := range dependsOn[i] {
-			if j, ok := indexByLocal[dep]; ok {
-				if err := visit(j); err != nil {
-					return err
-				}
-			}
-		}
-		state[i] = stateDone
-		order = append(order, i)
-		return nil
-	}
-	for i := range localID {
-		if err := visit(i); err != nil {
-			return nil, err
-		}
-	}
-	return order, nil
 }
