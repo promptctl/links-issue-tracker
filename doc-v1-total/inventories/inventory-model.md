@@ -819,9 +819,14 @@ hangs under. Two constructors:
 - `TopLevelNamespace(prefix, topic string) Namespace` → `prefix + "-" + topic + "-"`.
 - `ChildNamespace(parentID string) Namespace` → `parentID + "."`, so a child ID
   is `<parentID>.<hash>` and grandchildren nest.
-- No two id-spaces render as one namespace, and a rendered suffix carries
-  neither dot nor dash, so IDs of different spaces never collide (pinned by
-  `TestNamespacesAreDisjoint`, `generate_test.go`).
+- Under one prefix, no two id-spaces render as one namespace, and a rendered
+  suffix carries neither dot nor dash, so IDs of different spaces never
+  collide (pinned by `TestNamespacesAreDisjoint`, `generate_test.go`, over the
+  spaces of the one prefix `proj`). Across prefixes two top-level spaces can
+  render as one: prefix and topic both carry dashes, so `pro` + `abc-def` and
+  `pro-abc` + `def` both render `pro-abc-def-`. The store sizes every
+  top-level space by the count of all dotless IDs, whatever their prefix, and
+  probes occupancy store-wide (`internal/store/issue_ids.go`).
 
 `type Content struct { Topic, Title, Description, Creator string; CreatedAt time.Time }`
 — `generate.go`: the material an ID is hashed from.

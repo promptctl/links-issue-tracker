@@ -53,7 +53,7 @@ Semantics fixed by the memory engine and conformance:
 
 `SortFields` is a closed ten-key set: `id`, `title`, `status`, `priority`, `rank`, `type`, `topic`, `assignee`, `created_at`, `updated_at` (`issues.go`). Conformance requires every one accepted and requires rejection of `description`, `lane`, `labels`, `issue_type`, `item_rank`, `state` (`conformance.go`).
 
-Sorting by `status` orders the **derived** lifecycle state, the same reading the status filter takes, compared as its name — ascending `closed`, `in_progress`, `open`. A container stores no status, so it sorts among the leaves by the state its children give it, not at an end of the listing; both engines bind the key to `State()` (`issues.go`, `memory/list.go`, `conformance.go`).
+Sorting by `status` orders the **derived** lifecycle state, the same reading the status filter takes, compared as its name — ascending `closed`, `in_progress`, `open`. A container stores no status, so it sorts among the leaves by the state its children give it, not at an end of the listing; both engines bind the key to `State()` (`issues.go`; Dolt's `issueSortKeys`, `internal/store/store.go`; `memory/list.go`; `conformance.go`).
 
 ### Rank intents
 
