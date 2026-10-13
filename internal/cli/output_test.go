@@ -89,9 +89,10 @@ func TestShowOmitsHistoryTrailWhileHistoryViewRendersIt(t *testing.T) {
 
 // TestShowRendersCommentBodiesInTheirAuthoredLines pins the detail view's
 // rendering of a stored comment: its row leads with the comment's id, and a
-// body of N lines prints as N lines, not one line of literal backslash-n. The first body carries a blank line and a line shaped
-// like a comment row, so the expectation also pins that the indentation keeps
-// the second comment the only unindented "- " row. The second body keeps the
+// body of N lines prints as N lines, not one line of literal backslash-n. The
+// first body carries a blank line and a line shaped like a comment row, so the
+// expectation also pins that the indentation keeps that line from starting a
+// row: only the two comments' rows are unindented. The second body keeps the
 // trailing newline an imported comment can carry, which prints no extra line.
 // [LAW:behavior-not-structure]
 func TestShowRendersCommentBodiesInTheirAuthoredLines(t *testing.T) {

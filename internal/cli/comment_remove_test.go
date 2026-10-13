@@ -126,12 +126,16 @@ func secondToken(out string) string {
 	return ""
 }
 
-// shownCommentID returns the id leading the `lit show` comment row whose body
-// starts with body — the "- <id> [author] <body>" shape.
+// shownCommentID returns the id leading the `lit show` comment row whose
+// one-line body is body — the "- <id> [author] <body>" shape. Only a row starts
+// at column 0, so an indented body line never matches, and an author holding a
+// space still does.
 func shownCommentID(show, body string) string {
 	for _, line := range strings.Split(show, "\n") {
-		if fields := strings.Fields(line); len(fields) >= 4 && fields[0] == "-" && fields[3] == body {
-			return fields[1]
+		row, isRow := strings.CutPrefix(line, "- ")
+		if isRow && strings.HasSuffix(row, "] "+body) {
+			id, _, _ := strings.Cut(row, " ")
+			return id
 		}
 	}
 	return ""
