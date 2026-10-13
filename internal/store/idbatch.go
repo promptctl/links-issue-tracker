@@ -180,23 +180,20 @@ func (b idBatch) inList() (string, []any) {
 // loop body never runs on nothing and no caller needs its own emptiness guard
 // to avoid building `IN ()`. [LAW:no-defensive-null-guards]
 //
-// Splitting one statement into several gives up whatever consistency the single
-// statement had: a writer landing between batch k and k+1 leaves the result
-// carrying some subjects as they stood before the write and others as they
-// stood after, and nothing errors. The reads this serves are several
-// statements — the relation gather runs a src_id query, a dst_id query, and a
-// separate issue lookup, with no transaction over them — so no caller has a
-// snapshot to lose. Providing one means a read transaction spanning all three,
-// not the batch loop alone, which is why it is not attempted here. Tracked as
-// links-scale-6iiv.
-//
-// ListIssues is the case worth stating separately. Under an id filter its row
-// scan is one statement per batch, so which rows match is not decided at one
-// instant. But its RESULT is not a snapshot either: hydrateIssues runs the
-// label load and the lifecycle-children query afterwards, outside any
-// transaction, so a write landing between the scan and the hydration produces
-// a row carrying its own old identity and its new labels. Same ticket, same
-// fix — one read transaction over the whole call, not a narrower batch loop.
+// Splitting one statement into several costs no consistency, and the reason is
+// the engine rather than the batching. A Store's embedded Dolt engine reads the
+// root it loaded at open for its whole life: Dolt reloads the manifest at
+// transaction start only for a read replica (dsess StartTransaction), which lit
+// never configures. A write open holds Dolt's LOCK exclusively, so no second
+// writer exists beside it; a read open beside a live writer gets Dolt's
+// read-only fallback, which never sees that writer's commits. Every statement a
+// Store runs — each batch, the relation gather's src_id and dst_id queries and
+// its issue lookup, ListIssues' scan and the label and lifecycle reads that
+// hydrate it — therefore reads one point in time plus that Store's own writes.
+// TestGetRelationsByIDsAnswersFromTheMomentItsStoreOpened pins it. Should an
+// engine ever reload its root mid-life, every multi-statement read in this
+// package tears at once, and the fix is a read transaction over the whole call,
+// not over a batch loop.
 func idBatches(ids []string) []idBatch {
 	unique := dedupeStrings(ids)
 	if len(unique) == 0 {

@@ -177,3 +177,88 @@ func TestGetRelationsByIDsSpansEveryBatch(t *testing.T) {
 		}
 	}
 }
+
+// A batched read answers from one point in time even while another engine
+// writes, because a Store's engine reads the root it loaded at open and never
+// reloads it — see idBatches. Splitting the read into one statement per batch
+// is sound only while that holds, so this pins it at the contract.
+//
+// The writer adds edges after the reader opened, on subjects in the first, a
+// middle and the trailing partial batch, through both endpoint columns. The
+// reader must see none of them. A store opened after the writes must see every
+// one, which is what keeps the first assertion from passing on writes that
+// never landed.
+func TestGetRelationsByIDsAnswersFromTheMomentItsStoreOpened(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot := migratedDoltDir(t)
+	writer, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = writer.Close() })
+
+	epic, err := writer.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Snapshot epic", Topic: "batch", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	const subjectCount = 2*idBatchSize + 2
+	subjects := make([]string, 0, subjectCount)
+	for i := range subjectCount {
+		issue, err := writer.CreateIssue(ctx, storage.CreateIssueInput{
+			Prefix: "test", Title: fmt.Sprintf("Subject %d", i), Topic: "batch",
+			IssueType: "task", Placement: storage.RankBottom, ParentID: epic.ID,
+		})
+		if err != nil {
+			t.Fatalf("CreateIssue(%d) error = %v", i, err)
+		}
+		subjects = append(subjects, issue.ID)
+	}
+	sink, err := writer.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Sink", Topic: "batch", IssueType: "task", ParentID: epic.ID})
+	if err != nil {
+		t.Fatalf("CreateIssue(sink) error = %v", err)
+	}
+	source, err := writer.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Source", Topic: "batch", IssueType: "task", ParentID: epic.ID})
+	if err != nil {
+		t.Fatalf("CreateIssue(source) error = %v", err)
+	}
+
+	reader, err := OpenForRead(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("OpenForRead() beside a live writer error = %v", err)
+	}
+	t.Cleanup(func() { _ = reader.Close() })
+
+	wired := []int{0, idBatchSize + 1, subjectCount - 1}
+	for _, i := range wired {
+		mustRelate(t, ctx, writer, subjects[i], sink.ID, "blocked-by")
+		mustRelate(t, ctx, writer, source.ID, subjects[i], "blocked-by")
+	}
+
+	before, err := reader.GetRelationsByIDs(ctx, subjects)
+	if err != nil {
+		t.Fatalf("reader GetRelationsByIDs(%d ids) error = %v", len(subjects), err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("writer Close() error = %v", err)
+	}
+	later, err := OpenForRead(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("OpenForRead() after the writes error = %v", err)
+	}
+	t.Cleanup(func() { _ = later.Close() })
+	after, err := later.GetRelationsByIDs(ctx, subjects)
+	if err != nil {
+		t.Fatalf("later GetRelationsByIDs(%d ids) error = %v", len(subjects), err)
+	}
+
+	for _, i := range wired {
+		id := subjects[i]
+		if got := before[id]; len(got.BlockedBy) != 0 || len(got.Blocks) != 0 {
+			t.Fatalf("subject %d of %d (%s) read beside the writer: BlockedBy = %v, Blocks = %v, want both empty — the reader saw a write made after it opened", i, subjectCount, id, ids(got.BlockedBy), ids(got.Blocks))
+		}
+		if got := after[id]; len(got.BlockedBy) != 1 || len(got.Blocks) != 1 {
+			t.Fatalf("subject %d of %d (%s) read after the writes: BlockedBy = %v, Blocks = %v, want one edge each — the writes never landed, so the first check proved nothing", i, subjectCount, id, ids(got.BlockedBy), ids(got.Blocks))
+		}
+	}
+}
