@@ -79,6 +79,57 @@ func TestUnfiledEpicMatchesMigration00007(t *testing.T) {
 	}
 }
 
+// TestHomeStrandedHomesWhatMigration00007Homes runs HomeStranded over the
+// shapes TestContainmentMigrationHomesEveryLeaf migrates and holds it to the
+// same parents and lanes: a ticket stranded by a sync or a restore today lands
+// where one stranded before v7 landed.
+func TestHomeStrandedHomesWhatMigration00007Homes(t *testing.T) {
+	t.Parallel()
+	seeded := &exportSeeder{}
+	seedContainmentShapes(seeded)
+	out, _ := storage.HomeStranded(seeded.export)
+
+	parents := map[string][]string{}
+	for _, r := range out.Relations {
+		if r.Type == model.RelParentChild {
+			parents[r.SrcID] = append(parents[r.SrcID], r.DstID)
+		}
+	}
+	for id, want := range containmentHomes {
+		got := parents[id]
+		if (want == "" && len(got) != 0) || (want != "" && !reflect.DeepEqual(got, []string{want})) {
+			t.Errorf("%s parents = %v, want %q as 00007 leaves it", id, got, want)
+		}
+	}
+	lanes := map[string]string{}
+	for _, issue := range out.Issues {
+		lanes[issue.ID] = issue.Lane
+	}
+	for id, want := range containmentLanes {
+		if lanes[id] != want {
+			t.Errorf("%s lane = %q, want %q as 00007 leaves it", id, lanes[id], want)
+		}
+	}
+}
+
+// exportSeeder builds the containment shapes as an export.
+type exportSeeder struct{ export model.Export }
+
+func (s *exportSeeder) issue(row seedRow) {
+	topic, title := row.topicAndTitle()
+	issue := model.Issue{ID: row.id, Title: title, IssueType: model.IssueType(row.issueType), Topic: topic, Rank: row.rank, Lane: row.lane, CreatedAt: migrationSeedBorn, UpdatedAt: migrationSeedBorn}
+	if row.deleted {
+		issue.SetRetention(model.Deleted{At: migrationSeedBorn})
+	}
+	s.export.Issues = append(s.export.Issues, issue)
+}
+
+func (s *exportSeeder) parent(child, parent string) {
+	s.export.Relations = append(s.export.Relations, model.Relation{SrcID: child, DstID: parent, Type: model.RelParentChild, CreatedAt: migrationSeedBorn, CreatedBy: "seed"})
+}
+
+var migrationSeedBorn = time.Date(2026, time.March, 1, 9, 0, 0, 0, time.UTC)
+
 func mustParseTime(t *testing.T, value string) time.Time {
 	t.Helper()
 	parsed, err := time.Parse(time.RFC3339Nano, value)
