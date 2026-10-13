@@ -589,7 +589,7 @@ Retention (Issue Retention):
 |---------|-----------|-------|-------|
 | `lit archive` / `lit unarchive` | set / clear the archived flag | | Archived issues hide from listings. |
 | `lit delete` / `lit restore` | set / clear the deleted flag | | Soft delete; `restore` brings it back. |
-| `lit purge` | removes the issue for good | `[--yes]` | Removes the row, its comments, labels, history and every edge to or from it, and leaves a purge record naming the id. Sync carries the record, and every store that receives it drops the issue, even one that edited it meanwhile; a restored backup does not bring it back, and the id is never issued again. An epic that still holds tickets is refused. Past Dolt commits, the remote's `refs/dolt/data`, snapshots and JSON backups made before the purge still hold the issue. At a terminal it asks for confirmation; elsewhere `--yes` confirms. |
+| `lit purge` | removes the issue for good | `[--yes]` | Removes the row, its comments, labels, history and every edge to or from it, and leaves a purge record naming the issue by its id and creation time. Sync carries the record, and every store that receives it drops the issue, even one that edited it meanwhile, but not a different issue another store created under the same id; a restored backup does not bring it back, and the id is never issued again. An epic is refused while purging it would leave a ticket under it outside any epic; a child epic becomes top-level. Past Dolt commits, the remote's `refs/dolt/data`, snapshots and JSON backups made before the purge still hold the issue. At a terminal it asks for confirmation; elsewhere `--yes` confirms. |
 
 ---
 
@@ -776,7 +776,7 @@ lane prints nothing extra. See `design-docs/work-claims.md` in the repository.
 For **unrelated histories** (no common ancestor, so the field-aware merge has no
 base), `combine` unions both backlogs with nothing dropped and needs no
 approval, while `take local|remote` adopts one side wholesale and **permanently
-discards the other side's unique issues** — run bare it exits 5 with a refusal
+discards the other side's unique issues**, keeping both sides' purge records — run bare it exits 5 with a refusal
 naming what would be destroyed and a one-time token; only the owner's explicit
 go-ahead, asserted via `--owner-approved <token>`, runs it. See
 [Sync and remotes](dolt-remote-sync.md) for the owner-notification hook

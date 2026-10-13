@@ -368,6 +368,7 @@ Fields (`sync_schema_guard.go`): `Remote`, `Branch`, `RemoteVersion int64`, `Bin
 - `combineCommitMessage = "reconcile: combine unrelated histories (union of both backlogs)"` (`sync_reconcile.go`)
 - `reconcileLiftCommitMessage = "reconcile: lift remote head to current schema"` (`sync_reconcile.go`)
 - `takeLocalCommitMessage = "reconcile: take local backlog over unrelated remote history"` (`/Users/bmf/code/links-issue-tracker/internal/store/sync_unrelated_take.go`)
+- `takeRemotePurgesCommitMessage = "reconcile: carry local purge records over the adopted remote history"` (`sync_unrelated_take.go`)
 
 ### 5.2 Unrelated-history handling value
 
@@ -617,18 +618,19 @@ Test `TestSyncResolveUnrelatedOwnerApprovalBindsForkAndSide` (`sync_unrelated_te
 ### 6.4 `applyUnrelatedTake` dispatch
 
 `applyUnrelatedTake` (`sync_unrelated_take.go`):
-- `storage.TakeRemote` → its **own** snapshot guard (`newSnapshotGuard(..., formatReconcileSnapshotLabel(time.Now()))`), tracking ref `remotes/<remote>/<branch>`, then `retryTransientGCContention(takeRemoteHead)`. **No scratch envelope, no schema-ahead refusal** (`sync_unrelated_take.go`).
+- `storage.TakeRemote` → its **own** snapshot guard (`newSnapshotGuard(..., formatReconcileSnapshotLabel(time.Now()))`), tracking ref `remotes/<remote>/<branch>`, local's purge records read once before the first attempt (`listPurges(ctx, s.db)`, error returned as is), then `retryTransientGCContention(takeRemoteHead)` with those records. **No scratch envelope, no schema-ahead refusal** (`sync_unrelated_take.go`).
 - `storage.TakeLocal` → `s.replayUnderGuard(ctx, remote, branch, plan.remoteHead, takeLocalOntoRemoteHead)` — the **full** envelope including the schema-ahead refusal (`sync_unrelated_take.go`).
 - default → `"resolve unrelated histories: unhandled side %q"` (`sync_unrelated_take.go`). The combine resolution never reaches this dispatch; it lives on the reconcile boundary.
 
 ### 6.5 `takeRemoteHead`
 
-`takeRemoteHead(ctx, result, guard, trackingRef)` (`sync_unrelated_take.go`):
+`takeRemoteHead(ctx, result, guard, trackingRef, localPurges)` (`sync_unrelated_take.go`):
 1. `guard.ensure(ctx)`; failure → `"snapshot before take-remote: %w"`.
 2. `resetHardToRef(ctx, s.db, trackingRef)`.
+2a. `s.carryPurges(ctx, localPurges)`; failure → `"take-remote: %w"`. `carryPurges` exports the adopted state (failure → `"read the adopted head to carry purge records onto: %w"`), computes `diffExports(current, current.ApplyPurges(model.UnionPurges(current.Purges, purges)))`, and applies it with `applyExportDelta` in one `withMutation` under `takeRemotePurgesCommitMessage`. An empty delta commits nothing. Afterward local equals the remote head less every ticket local's records name, and holds both sides' records; when local held records the remote lacked, local is one commit ahead of the remote.
 3. `dbsnapshot.PruneMatching(migrationSnapshotsDir(...), 10, IsReconcileSnapshotName)`; failure prints `"lit: take-remote could not prune old recovery snapshots (reset already done): %v"` to stderr, **not** promoted.
 4. `result.State = SyncReconcileTookRemote`.
-Idempotent under retry (cached snapshot, fixed ref). Test `TestSyncResolveUnrelatedTakeRemote` (`sync_unrelated_test.go`).
+Idempotent under retry (cached snapshot, fixed ref, the carry computed from the state the reset left). Tests `TestSyncResolveUnrelatedTakeRemote` (`sync_unrelated_test.go`), `TestSyncResolveUnrelatedTakeRemoteCarriesTheLocalPurge` (`sync_unrelated_purge_test.go`).
 
 ### 6.6 `takeLocalOntoRemoteHead`
 
@@ -637,10 +639,10 @@ Idempotent under retry (cached snapshot, fixed ref). Test `TestSyncResolveUnrela
 2. `theirs = exportAtCommit(scratch.read, remoteHead)`.
 3. `chain = readFoldedChain(remoteHead, localHead)`.
 4. `stepper = foldStepper{base: model.Export{}, theirs: theirs...}` — the **same no-base union projection combine uses**, so mid-chain history stays a whole backlog (`sync_unrelated_take.go`).
-5. `commitReplayAndAdvance(guard, dataBranch, scratch, remoteHead, takeLocalCommitMessage, local, stepper)` — the terminal export is **local's content, not the union**, so the marker commit's diff is exactly the discard of the remote-only issues (`sync_unrelated_take.go`).
+5. `commitReplayAndAdvance(guard, dataBranch, scratch, remoteHead, takeLocalCommitMessage, terminal, stepper)` with `terminal = local.ApplyPurges(model.UnionPurges(local.Purges, theirs.Purges))` — the terminal export is **local's content, not the union**, cut by both sides' purge records and carrying them, so the marker commit holds the remote's records and no row they name, and its diff is the discard of the remote-only issues (`sync_unrelated_take.go`).
 6. `result.State = SyncReconcileTookLocal`; `result.Replayed = replayed`.
 
-Tests: `TestSyncResolveUnrelatedTakeLocal` (`sync_unrelated_test.go`), `TestSyncResolveUnrelatedTakeLocalPreservesFoldedProvenance` (`sync_unrelated_test.go`).
+Tests: `TestSyncResolveUnrelatedTakeLocal` (`sync_unrelated_test.go`), `TestSyncResolveUnrelatedTakeLocalPreservesFoldedProvenance` (`sync_unrelated_test.go`), `TestSyncResolveUnrelatedTakeLocalKeepsTheRemotesPurge` (`sync_unrelated_purge_test.go`).
 
 ### 6.7 Combine
 
@@ -679,7 +681,7 @@ Determinism: the input slices are walked, not the maps, so identical inputs prod
 - comments: `c.ID` (`export_delta.go`)
 - labels: `labelKey{issueID, name}` (`export_delta.go`)
 - events: `e.ID` (`export_delta.go`)
-- purges: `p.IssueID` (`export_delta.go`)
+- purges: `keyOfPurge(p)` = `purgeKey{issueID, issueCreatedAt}`, the birth formatted RFC3339Nano (`export_delta.go`, `row_deletes.go`)
 Primary-key types live in `/Users/bmf/code/links-issue-tracker/internal/store/row_deletes.go` (`export_delta.go`).
 
 ### 7.5 Cascade rule
@@ -1024,7 +1026,7 @@ resolve_prose.go: `type Fingerprint string`; `fingerprintBytes = 6`; `(ProsePend
 
 ### 11.2 `ThreeWay` — export-level algorithm
 
-0. `purges := model.UnionPurges(base.Purges, local.Purges, remote.Purges)`, then `base, local, remote = base.ApplyPurges(purges), local.ApplyPurges(purges), remote.ApplyPurges(purges)` — before any row is compared, so a purged id and every row belonging to it are absent from all three sides and no branch below can keep it (merge.go; `UnionPurges`/`ApplyPurges` in `internal/model/purge.go`). Test `TestThreeWayAPurgeOutranksAConcurrentEdit` (`purge_test.go`): local purged/remote edited, remote purged/local edited, and no common ancestor all yield only the unpurged issue (with its edit), no relation, comment, or label of the purged one, and the purge record carried in the merged export.
+0. `purges := model.UnionPurges(base.Purges, local.Purges, remote.Purges)`, then `base, local, remote = base.ApplyPurges(purges), local.ApplyPurges(purges), remote.ApplyPurges(purges)` — before any row is compared, so a purged ticket (an issue some record `Names`: same id and `created_at`) and every row belonging to it are absent from all three sides and no branch below can keep it; an issue under a purged id with a different `created_at` is kept (merge.go; `UnionPurges`/`ApplyPurges` in `internal/model/purge.go`). Test `TestThreeWayAPurgeOutranksAConcurrentEdit` (`purge_test.go`): local purged/remote edited, remote purged/local edited, and no common ancestor all yield only the unpurged issue (with its edit), no relation, comment, or label of the purged one, and the purge record carried in the merged export. Test `TestThreeWayKeepsAnotherTicketUnderAPurgedID` (`purge_test.go`): with no base, one side holding a record of `x` and the other a ticket `x` born at another instant, the merge keeps that ticket and its comment beside the record.
 1. Three id→issue maps from `base.Issues`, `local.Issues`, `remote.Issues`; a duplicate id within one export lets the **last row in slice order** win (merge.go).
 2. Candidate id set = union of all three, **sorted ascending** (merge.go).
 3. Per id, a copied `*model.Issue` per side, `nil` when absent (merge.go).
@@ -1039,7 +1041,7 @@ The four-way presence/change branch (merge.go):
 | only remote changed | append `remoteIssue` if present; else nothing (merge.go) |
 | both changed, both present, `Classify` returns a `*Collision` | append the collision to the collision list and append `localIssue` unchanged; `ResolveIssue` is not called and no pending entry is added (merge.go) |
 | both changed, both present, `Classify` returns a `SameEntity` | `ResolveIssue(same)`; append `resolution.Provisional()` and append its `Pending...` to the export pending list (merge.go) |
-| both changed, local only | append `localIssue` — remote removed it, local edited → the surviving edit is preserved (merge.go). Reached only for a row removed **without** a purge record; a purged id was dropped from all three sides in step 0 |
+| both changed, local only | append `localIssue` — remote removed it, local edited → the surviving edit is preserved (merge.go). Reached only for a row removed **without** a purge record; a purged ticket was dropped from all three sides in step 0 |
 | both changed, remote only | append `remoteIssue` (merge.go) |
 | both changed, neither present | append nothing — converged removal (merge.go) |
 
@@ -1082,7 +1084,7 @@ Tests: `merge_test.go` (nil vs empty `Labels` compare equal, so JSON round-trip 
 - `Comments = mergeComments(scope, local.Comments, remote.Comments)` — base not passed (merge.go).
 - `Labels = mergeLabels(scope, base.Labels, local.Labels, remote.Labels)` — the only three-way side-table (merge.go).
 - `Events = mergeEvents(scope, local.Events, remote.Events)` — base not passed (merge.go).
-- `Purges = purges` — the union computed in step 0 of §11.2, sorted by issue id (merge.go).
+- `Purges = purges` — the union computed in step 0 of §11.2, sorted by issue id, then birth (merge.go).
 
 `Settled()` returns `(export, len(Pending)==0 && len(Collisions)==0)` (merge.go); `Provisional()` returns `(export, len(Collisions)==0)` (merge.go). Both return the export value alongside `ok`, including when `ok` is false. The export field is unexported, so those two methods are the only access. Tests `resolve_test.go` (pending prose → `Settled()` `ok=false`; a clean merge → `ok=true`) and `collision_test.go` (a collision → `Settled()` and `Provisional()` both `ok=false`).
 
@@ -1429,9 +1431,9 @@ sha256 `ed625b2817365ed357ad477cd0691994a93a65a7ab1005d1b05456c39d159a70`.
 
 ### 12.6a `00009_purges.sql`
 
-sha256 `11bb1d6d158ce0775afb44aa29baba1718284fe3af2c36298e40e47add98a664`.
+sha256 `f3af8e534e5b7fd3d09b310574f4b8925ca281bb942e040c83d25ebd64fdf852`.
 
-**Up** — one statement: `CREATE TABLE purges (issue_id VARCHAR(191) NOT NULL, purged_at VARCHAR(64) NOT NULL, purged_by TEXT NOT NULL, PRIMARY KEY (issue_id));`. Bare (no `IF NOT EXISTS`), no index beyond the primary key, no constraint, **no foreign key**, no backfill. The comment states one row per purged issue — the id, when, and by whom, never the content — kept so that a merge drops the id from every side, a restore does not bring it back, and id minting never hands it out again; `issue_id` carries no foreign key because the issue it names no longer exists.
+**Up** — one statement: `CREATE TABLE purges (issue_id VARCHAR(191) NOT NULL, issue_created_at VARCHAR(64) NOT NULL, purged_at VARCHAR(64) NOT NULL, purged_by TEXT NOT NULL, PRIMARY KEY (issue_id, issue_created_at));`. Bare (no `IF NOT EXISTS`), no index beyond the primary key, no constraint, **no foreign key**, no backfill. The comment states one row per purged issue — the id and the instant the issue was created, which together name the ticket, and when and by whom it was purged, never the content — kept so that a merge drops the ticket from every side, a restore does not bring it back, and id minting never hands its id out again; neither key column carries a foreign key because the issue it names no longer exists.
 
 **Down** — `DROP TABLE purges;` (no `IF EXISTS`). LOSS CONTRACT: the purged issues stay gone (their rows were deleted by the purge, not by this migration), but a store stepped back below this version no longer knows which ids were purged, so a sync with a store that still holds one of them can bring it back, and minting can hand a purged id out again; operators who need the records must restore from a pre-downgrade dbsnapshot.
 
@@ -1510,7 +1512,7 @@ The literal pins, `pinnedVersionContent` — all eight verified against the on-d
 6: {file: "00006_add_follows_up.sql", sha256: "f01b4b1ef42071526c8c97bc0acf4bfa4451e0b95981576e63d8170080441b45"},
 7: {file: "00007_every_ticket_inside_a_container.sql", sha256: "2eb2ae5ab7a43df7116e4dd9137901d8272f03f89a7569bb67b7437182101458"},
 8: {file: "00008_blocked_by_edge.sql", sha256: "2ab61664b7a73c4e36dc0a11d37e2f5b86b261a97aebf67ffa364ae9596e9deb"},
-9: {file: "00009_purges.sql", sha256: "11bb1d6d158ce0775afb44aa29baba1718284fe3af2c36298e40e47add98a664"},
+9: {file: "00009_purges.sql", sha256: "f3af8e534e5b7fd3d09b310574f4b8925ca281bb942e040c83d25ebd64fdf852"},
 ```
 Version 1 is deliberately absent — `baseline_frozen_test.go` is its content enforcer.
 

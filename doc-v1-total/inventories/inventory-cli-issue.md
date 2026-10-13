@@ -2033,19 +2033,21 @@ Description: `helptext/purge.txt`.
 **Sequence** (`purge.go`):
 1. `ap.Store.GetIssue(ctx, id)` — missing → `storage.NotFoundError` → exit 4,
    reason `entity_not_found`, before any confirmation is asked for.
-2. `confirmPurge(stdout, issue, *yes)`:
+2. `confirmPurge(stdout, issue.ID, *yes)`:
    - `--yes` → proceeds, at a terminal or not.
    - Non-interactive stdout (`!isTerminal(stdout)`) and no `--yes` →
      `purgeUnconfirmedError` "purging <id> cannot be undone; pass --yes to confirm it"
      → exit 3, reason `purge_unconfirmed`.
    - Interactive and no `--yes` → `askYesNo(stdout, …)` (`claims_takeover.go`)
-     prints `"<id> \"<title>\": a purge removes it, its comments, labels, history and edges for good, here and in every store it syncs to\npurge it? [y/N] "`
-     (the title `%q`-quoted), reads a line from stdin; a read error other than EOF →
+     prints `"<id>: a purge removes it, its comments, labels, history and edges for good, here and in every store it syncs to\npurge it? [y/N] "`
+     (no title), reads a line from stdin; a read error other than EOF →
      `"read confirmation: %w"`; an answer whose trimmed lowercase form does not
      start with `y` → `purgeUnconfirmedError` "purge declined" → exit 3, reason
      `purge_unconfirmed`.
 3. `ap.Store.Purge(ctx, storage.PurgeInput{IssueID: issue.ID, Actor: resolveActor()})`.
-   An issue holding any parent-child child → `model.ValidationError` from
+   An issue whose purge would leave a child leaf with no parent edge (deleted
+   and archived children counted; a child epic, or a leaf with another parent,
+   does not count) → `model.ValidationError` from
    `storage.RejectPurgeOfOccupiedContainer` → exit 3, reason `validation_refused`.
 4. Prints `"purged %s (comments=%d labels=%d edges=%d events=%d)\n"` with the
    purged id and `PurgeResult`'s `Comments`, `Labels`, `Relations`, `Events`.

@@ -74,11 +74,12 @@ General contract: every method is a pure read from the caller's view; two identi
 - An illegal transition is refused rather than silently ignored (`internal/storage/contract.go`).
 
 **`Purge(ctx, in PurgeInput) (PurgeResult, error)`** — `internal/storage/contract.go`
-- Permanently removes an issue — its row, comments, labels, history, and every edge to or from it — in one write, leaving a `model.Purge` record that names the id and nothing else (`internal/storage/contract.go`).
+- Permanently removes an issue — its row, comments, labels, history, and every edge to or from it — in one write, leaving a `model.Purge` record that names the ticket by its id and `created_at` and holds nothing of its content (`internal/storage/contract.go`; `internal/model/purge.go`).
 - `Delete` is the reversible removal; `Purge` cannot be undone (`internal/storage/contract.go`).
 - Other issues are not edited: a mention of the id in their text, `follows_up`, or redirect target stays (`internal/storage/contract.go`).
 - The id is never minted again, and every merge drops it from both sides (`model.Export.ApplyPurges`) (`internal/storage/contract.go`).
-- A missing id is `NotFoundError`; an issue that still holds tickets is refused, since purging it would leave them outside any epic (`internal/storage/contract.go`) — `storage.RejectPurgeOfOccupiedContainer(issueID, children)` returns nil for `children == 0`, otherwise `model.ValidationError` "cannot purge <id>: it holds <n> ticket(s), and purging it would leave them outside any epic; move them with lit parent set --child <id> --parent <epic-id>, or purge them first" (`internal/storage/containment.go`).
+- A missing id is `NotFoundError`; an issue whose purge would leave a ticket it holds outside any epic is refused (`internal/storage/contract.go`) — `storage.RejectPurgeOfOccupiedContainer(issueID string, children []DetachedChild)` collects each child for which `leftOutsideAnyEpic(child.Type, child.ParentsLeft)` holds (not a container, and no parent edge left once the purged issue's edge is gone), the predicate `RejectDetachingALeaf` also uses; none → nil, otherwise `model.ValidationError` "cannot purge <id>: it would leave <ids> outside any epic; move them with lit parent set --child <id> --parent <epic-id>, or purge them first", `<ids>` the stranded children's ids sorted and joined with `", "`. A child epic is left top-level and does not refuse the purge (`internal/storage/containment.go`).
+- `DetachedChild{ID string; Type model.IssueType; ParentsLeft int}` is a child filed under the issue being purged, with the count of parent-child edges it keeps once its edge to that issue is gone (`internal/storage/containment.go`).
 
 ---
 
@@ -520,7 +521,7 @@ These types live in the contract, not in an engine, because a capability interfa
 | `comments` | `[]model.Comment` | Comment table, insertion order |
 | `events` | `[]model.IssueEvent` | History, insertion order |
 | `labels` | `map[string][]model.Label` | Keyed by issue, kept **sorted by name** because the sorted set is what every label read returns |
-| `purges` | `map[string]model.Purge` | The purge records, keyed by issue id; an id here holds no row anywhere above and is never minted again |
+| `purges` | `[]model.Purge` | The records of the tickets this engine has purged; a purged ticket holds no row anywhere above, and its id is never minted again |
 
 **`record`** (`internal/storage/memory/engine.go`): `id`, `title`, `description`, `prompt`, `issueType model.IssueType`, `topic`, `assignee`, `lane`, `priority model.Priority`, `createdAt`, `updatedAt time.Time`, `status model.StatusView`, `retention model.Retention`.
 - **Rank is deliberately absent** from `record`; position lives in `Engine.order`, and a rank string beside it would be a second representation of one fact (`internal/storage/memory/engine.go`).
@@ -583,7 +584,7 @@ Order of checks is stated as contract: the parent must be resolved before the co
 **`place(id, f, placement)`** (`internal/storage/memory/issues.go`) — `RankTop` takes the first slot among the frame `f`'s members; `RankBottom` (the zero value) appends to the whole order; any other value → `fmt.Errorf("unknown rank placement: %d", p)` from `orderEdgeFor`. A population with no members takes neither end: `place` takes the slot from `e.slotInsideContainer(f)`, propagates its error, and otherwise inserts there, so the first member of a frame lands immediately after the issue that frames it — `slices.Index(e.order, string(f))` plus one. `storage.TopLevel` names no such issue and gives slot `0`; a frame absent from the order is refused with `fmt.Errorf("frame %s holds no position in the order; an issue cannot be filed inside one that is not there", f)`.
 
 **`mintID`** (`internal/storage/memory/issues.go`)
-- Builds an `issueid.Content` from topic, title, description, creator and `createdAt`, resolves the namespace and its population through `idSpace`, and returns `issueid.Mint(namespace, content, population, taken)`, where `taken` reports whether the candidate is already a key of `e.issues` or of `e.purges` — a purged id is taken for good.
+- Builds an `issueid.Content` from topic, title, description, creator and `createdAt`, resolves the namespace and its population through `idSpace`, and returns `issueid.Mint(namespace, content, population, taken)`, where `taken` reports whether the candidate is already a key of `e.issues` or the `IssueID` of any record in `e.purges` — a purged id is taken for good.
 - `issueid.Mint` (`internal/issueid/generate.go`): `baseLength = min(ComputeAdaptiveLength(population), MaxHashLength)`; then for `length` from `baseLength` to `MaxHashLength`, for `nonce` in `[0, NonceAttempts)`, generates `GenerateHashID(namespace, content, length, nonce)` and returns the first candidate not taken.
 - Exhaustion → `fmt.Errorf("generate unique issue id: exhausted lengths %d-%d", baseLength, issueid.MaxHashLength)`.
 
@@ -979,16 +980,16 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 - Locks, then builds issues via `listIssues(ListIssuesFilter{IncludeArchived: true, IncludeDeleted: true})` — **the WHOLE store**, out-of-flow work included, because an export honoring the listing default would silently drop exactly the rows a diff exists to notice.
 - Labels: flattened from the `labels` map, then sorted by `(IssueID, Name)` via `cmpThen`.
 - Returns `model.Export{Version: model.ExportVersion (4), WorkspaceID: e.workspaceID, ExportedAt: e.now(), Issues, Relations: slices.Clone(e.relations), Comments: slices.Clone(e.comments), Labels, Events: sortEvents(cloneEvents(e.events)), Purges: e.purgeList()}`.
-- `Relations` and `Comments` come back in **write order** (cloned, unsorted); `Issues` in rank order; `Labels` in `(issue, name)` order; `Events` in `(created_at, id)` order; `Purges` in issue-id order (`purgeList`, `internal/storage/memory/purge.go`).
+- `Relations` and `Comments` come back in **write order** (cloned, unsorted); `Issues` in rank order; `Labels` in `(issue, name)` order; `Events` in `(created_at, id)` order; `Purges` in issue-id, then birth order (`purgeList` returns `model.UnionPurges(e.purges)`, `internal/storage/memory/purge.go`).
 - Every collection comes back in a total order so two stores holding the same facts serialize to the same bytes rather than to the same multiset.
 
 ### 2.14a `Purge` (`internal/storage/memory/purge.go`)
 
 - Locks `e.mu` for the whole operation, so no reader sees the issue half gone.
 - Not a key of `e.issues` → `storage.NotFoundError{Entity: "issue", ID: id}`.
-- `storage.RejectPurgeOfOccupiedContainer(id, e.childCount(id))` — `childCount` counts every `RelParentChild` relation whose `DstID` is the issue, whatever the child's retention.
+- `storage.RejectPurgeOfOccupiedContainer(id, e.detachedChildren(id))` — `detachedChildren` returns one `storage.DetachedChild` per `RelParentChild` relation whose `DstID` is the issue, whatever the child's retention, with the child's type and its count of other `RelParentChild` relations.
 - Removes, counting each: comments with `IssueID == id`; relations with `SrcID == id` or `DstID == id`; events with `IssueID == id` (`removeWhere`, which returns the slice and the number dropped); the issue's label set (counted by its length); its entry in `e.order`; its `e.issues` record.
-- Stores `model.Purge{IssueID: id, PurgedAt: e.clock.Now(), PurgedBy: in.Actor}` in `e.purges[id]` and returns it in `storage.PurgeResult` with the four counts.
+- Builds `model.Purge{IssueID: id, IssueCreatedAt: <the record's createdAt>, PurgedAt: e.clock.Now(), PurgedBy: in.Actor}` before removing the `e.issues` record, appends it to `e.purges`, and returns it in `storage.PurgeResult` with the four counts.
 
 ### 2.15 Capabilities offered by the memory engine
 
@@ -1171,15 +1172,15 @@ Stated in `internal/storage/memory/doc.go`:
 - Closing an issue as a duplicate of **itself** is an error.
 
 **`a_purge_removes_the_issue_and_everything_it_owns`** (`internal/storage/conformance/purge.go`)
-- With the clock pinned, `Purge` returns the record `{IssueID, PurgedAt: the pinned instant, PurgedBy: the input actor}`.
+- With the clock pinned, `Purge` returns the record `{IssueID, IssueCreatedAt: the issue's CreatedAt, PurgedAt: the pinned instant, PurgedBy: the input actor}`.
 - The counts are exactly the purged issue's comments (1), labels (1), relations at either end (3: its parent edge, the blocked-by edge it holds, the blocked-by edge onto it — a related-to edge between two other issues is not counted), and events (its whole history, non-empty).
 - `GetIssue(purged)` → `NotFoundError{Entity: "issue"}`.
 - The export holds no issue, relation, comment, label, or event of the purged id, and exactly one purge record, equal to the returned one.
 - Every other issue's title, description, `follows_up`, and redirect target, and every other comment's body, are unchanged — a follow-up keeps `FollowsUp` naming the purged id and a duplicate keeps its redirect target naming it.
 
 **`a_purge_refuses_a_container_that_holds_tickets`** (`internal/storage/conformance/purge.go`)
-- Purging an epic whose only child is **deleted** is refused with `model.ValidationError` (`assertRefused`); the epic still reads back and the export holds no purge record.
-- After the child is purged, the emptied epic purges, and the export holds no row of it.
+- Purging an epic that holds a **deleted** leaf and a child epic is refused with `model.ValidationError` (`assertRefused`); the refusal names the leaf and not the child epic; the epic still reads back and the export holds no purge record.
+- After the leaf is purged, the epic holding only the child epic purges; the export holds no row of it, the child epic still reads back, and no parent-child relation has the child epic as its source (it is top-level).
 
 **`a_purge_of_a_missing_issue_is_not_found`** (`internal/storage/conformance/purge.go`)
 - `Purge("no-such-issue")` → `NotFoundError{Entity: "issue"}`.

@@ -172,8 +172,8 @@ the store in exactly two ways: purge removes one ticket's events entirely
 in three parts.
 
 - *The record.* A purge is an event like any other mutation, appended to the
-  purging checkout's own ref: it names the issue id and carries nothing else
-  of the ticket. Nothing un-purges, and the purge event is what reaches every
+  purging checkout's own ref: it names the ticket by its issue id and birth
+  (`created_at`) and carries nothing else of the ticket. Nothing un-purges, and the purge event is what reaches every
   other store.
 - *The fold.* The fold drops every event whose subject is a purged id,
   wherever it sits and whenever it was minted — before the purge, or after it
@@ -200,7 +200,8 @@ in three parts.
 
 The purged id is never reused: ids derive from writer and position
 (§events). Before the switch, the Dolt store keeps the same promise with its
-`purges` table — a purge record per purged id, unioned by every merge — and
+`purges` table — a purge record per purged ticket, named by its id and
+birth (`created_at`), unioned by every merge — and
 the backfill (§migration) carries each record over as a purge event.
 
 **Ref hygiene.** Writer refs are per-checkout, and checkouts die; the store

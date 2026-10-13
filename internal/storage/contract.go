@@ -106,13 +106,15 @@ type IssueWriter interface {
 
 	// Purge permanently removes an issue: its row, comments, labels, history,
 	// and every edge to or from it, in one write, leaving a model.Purge record
-	// that names the id and nothing else. Delete is the reversible removal;
-	// Purge is the one that cannot be undone. Other issues are not edited — a
-	// mention of the id in their text, follows_up, or redirect target stays.
-	// The id is never minted again, and every merge drops it from both sides
+	// that names the ticket by its id and created_at and holds nothing of its
+	// content. Delete is the reversible removal; Purge is the one that cannot
+	// be undone. Other issues are not edited — a mention of the id in their
+	// text, follows_up, or redirect target stays. The id is never minted
+	// again, and every merge drops the ticket from both sides
 	// (model.Export.ApplyPurges), so the purge reaches every store the record
-	// reaches. A missing id is NotFoundError, and a container that still holds
-	// tickets is refused: purging it would leave them outside any epic.
+	// reaches. A missing id is NotFoundError, and a purge that would leave a
+	// ticket under the issue outside any epic is refused
+	// (RejectPurgeOfOccupiedContainer); a child epic becomes top-level.
 	Purge(ctx context.Context, in PurgeInput) (PurgeResult, error)
 }
 

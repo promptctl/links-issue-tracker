@@ -13,7 +13,7 @@ Day-to-day reads and writes are only half of what the store does; the other half
 | 3 | comments | `SELECT ... FROM comments` | `created_at ASC` |
 | 4 | labels | `SELECT ... FROM labels` | `issue_id ASC, label ASC` |
 | 5 | events | `issue_events LEFT JOIN issue_event_changes` | events by `(created_at, id)`, each event's changes by `field ASC` (`store.go`) |
-| 6 | purges | `SELECT issue_id, purged_at, purged_by FROM purges` (`listPurges`, `purge.go`) | `issue_id ASC` |
+| 6 | purges | `SELECT issue_id, issue_created_at, purged_at, purged_by FROM purges` (`listPurges`, `purge.go`) | none in SQL; `model.UnionPurges` orders by issue id, then `issue_created_at` |
 
 The envelope carries `version: 4` (`model.ExportVersion`), `workspace_id`, `exported_at` (wall-clock UTC at export time), and the six arrays. No key has `omitempty`; every list helper initializes a non-nil slice, so empty tables serialize as `[]`, never `null` (`import_export.go`; `store.go`). The per-record wire shapes (issue, relation, comment, label, event, attribution) and the decode fallbacks (v1 `history`, the pre-v3 `blocks` relation type) are specified in `01-data-model.md`; two facts worth restating from the export side: a label's JSON key is `name` while its DB column is `label`, and an unattributed event omits its `attribution` key entirely.
 
@@ -29,7 +29,7 @@ Three surfaces write the export to disk or stdout:
 
 Mechanics (`export_delta.go`):
 
-- Per table, the delta is `remove []key` + `add []row`. **There is no modify**: a changed row appears in both lists (delete-then-reinsert), which is why no UPDATE statement exists anywhere in this path. Keys are the schema primary keys — `(src_id, dst_id, type)` for relations, `(issue_id, label)` for labels, `issue_id` for purges, the `id` string for issues/comments/events (`row_deletes.go`, `export_delta.go`).
+- Per table, the delta is `remove []key` + `add []row`. **There is no modify**: a changed row appears in both lists (delete-then-reinsert), which is why no UPDATE statement exists anywhere in this path. Keys are the schema primary keys — `(src_id, dst_id, type)` for relations, `(issue_id, label)` for labels, `(issue_id, issue_created_at)` for purges, the `id` string for issues/comments/events (`row_deletes.go`, `export_delta.go`).
 - Comparison is `reflect.DeepEqual` over a persisted projection: issues compare their normalized row tuple (`issueRowValues`), the other five tables compare whole model values. Iteration is over input slices, not maps, so identical inputs produce an identical statement sequence (`export_delta.go`).
 - **Cascade**: the issues diff is computed first; each child table's live side is then filtered to surviving issues — a relation dies if *either* endpoint dies; comments, labels, and events die with their issue (`export_delta.go`). Purge records reference no issue row, so nothing cascades into them and they are diffed against `prev` unfiltered (`export_delta.go`). Nested `issue_event_changes` get no layer of their own: an event whose changes differ is removed and re-added whole (`export_delta.go`).
 - The delta is an unexported in-memory value — never serialized to disk or JSON (`export_delta.go`).

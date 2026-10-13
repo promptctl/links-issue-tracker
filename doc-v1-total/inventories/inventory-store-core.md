@@ -879,23 +879,27 @@ with `created_at` as RFC3339Nano; failure → `fmt.Errorf("insert comment: %w", 
 #### 8a.1 `Purge(ctx, in storage.PurgeInput) (storage.PurgeResult, error)`
 
 One `withMutation(ctx, "purge issue", ...)` — one transaction, one Dolt commit (`purge.go`). Inside it, in order:
-1. `SELECT id FROM issues WHERE id = ?` with `in.IssueID` bound verbatim (no trim). `sql.ErrNoRows` → `storage.NotFoundError{Entity: "issue", ID: in.IssueID}`; other → `fmt.Errorf("read issue %s: %w", in.IssueID, err)`.
-2. `countChildren(ctx, tx, id)` (`issue_ids.go`) — every `parent-child` edge onto the issue, whatever the child's retention — then `storage.RejectPurgeOfOccupiedContainer(id, children)` (`internal/storage/containment.go`): a nonzero count → `model.ValidationError` "cannot purge <id>: it holds <n> ticket(s), and purging it would leave them outside any epic; move them with lit parent set --child <id> --parent <epic-id>, or purge them first".
+1. `SELECT id, created_at FROM issues WHERE id = ?` with `in.IssueID` bound verbatim (no trim). `sql.ErrNoRows` → `storage.NotFoundError{Entity: "issue", ID: in.IssueID}`; other → `fmt.Errorf("read issue %s: %w", in.IssueID, err)`. `created_at` is parsed through `scanTime` into the issue's birth instant; a parse error is returned as is.
+2. `detachedChildrenTx(ctx, tx, id)` (`purge.go`, §8a.4) — one `storage.DetachedChild{ID, Type, ParentsLeft}` per child with a `parent-child` edge onto the issue, whatever the child's retention — then `storage.RejectPurgeOfOccupiedContainer(id, children)` (`internal/storage/containment.go`): a child that is not a container and keeps no other parent edge would be left outside any epic, and any such child → `model.ValidationError` "cannot purge <id>: it would leave <ids> outside any epic; move them with lit parent set --child <id> --parent <epic-id>, or purge them first", where `<ids>` is the stranded children's ids sorted and joined with `", "`. A child epic, or a leaf that keeps another parent edge, does not refuse the purge; the child epic is left with no parent edge (top-level).
 3. One SELECT of four subqueries — `(SELECT COUNT(*) FROM comments WHERE issue_id = ?)`, `(SELECT COUNT(*) FROM labels WHERE issue_id = ?)`, `(SELECT COUNT(*) FROM relations WHERE src_id = ? OR dst_id = ?)`, `(SELECT COUNT(*) FROM issue_events WHERE issue_id = ?)` — scanned into `result.Comments`, `Labels`, `Relations`, `Events`; error → `fmt.Errorf("count rows of issue %s: %w", id, err)`.
 4. `deleteIssueTx(ctx, tx, id)` (`row_deletes.go`), count discarded. `ON DELETE CASCADE` removes the comments, labels, relations, `issue_events`, and `issue_event_changes` rows; no statement names them.
-5. `result.Purge = model.Purge{IssueID: id, PurgedAt: s.clock.Now(), PurgedBy: in.Actor}` — the actor verbatim, no `unknown` default — written by `insertPurgeTx`.
+5. `result.Purge = model.Purge{IssueID: id, IssueCreatedAt: born, PurgedAt: s.clock.Now(), PurgedBy: in.Actor}` — the birth read in step 1, the actor verbatim, no `unknown` default — written by `insertPurgeTx`.
 
 Any error returns a zero `storage.PurgeResult`. No `issue_events` row is recorded for the purge, and no other issue's row is written.
 
 #### 8a.2 `insertPurgeTx(ctx, tx, p model.Purge) error`
 
-`INSERT INTO purges(issue_id, purged_at, purged_by) VALUES (?, ?, ?)` with `p.PurgedAt.Format(time.RFC3339Nano)`; error → `fmt.Errorf("record purge of %s: %w", p.IssueID, err)`. The only INSERT into `purges`, shared by `Purge`, a restore (`writeExportTx`), and the replay's delta (`purge.go`).
+`INSERT INTO purges(issue_id, issue_created_at, purged_at, purged_by) VALUES (?, ?, ?, ?)` with `p.IssueCreatedAt.Format(time.RFC3339Nano)` and `p.PurgedAt.Format(time.RFC3339Nano)`; error → `fmt.Errorf("record purge of %s: %w", p.IssueID, err)`. The only INSERT into `purges`, shared by `Purge`, a restore (`writeExportTx`), and the replay's delta (`purge.go`).
 
 #### 8a.3 `listPurges(ctx, q rowQueryer) ([]model.Purge, error)`
 
-`SELECT issue_id, purged_at, purged_by FROM purges ORDER BY issue_id ASC`; query error → `fmt.Errorf("list purges: %w", err)`; `purged_at` through `scanTime`; returns a non-nil slice. Takes a `rowQueryer` so `Export` reads it from `s.db` and `writeExportTx` from its own transaction (`purge.go`).
+`SELECT issue_id, issue_created_at, purged_at, purged_by FROM purges` (no ORDER BY); query error → `fmt.Errorf("list purges: %w", err)`; `issue_created_at` and `purged_at` through `scanTime`; returns `model.UnionPurges(out)`, a non-nil slice ordered by issue id and then birth ascending. Takes a `rowQueryer` so `Export` reads it from `s.db` and `writeExportTx` from its own transaction (`purge.go`).
 
-Tests: `TestRestoreNeverUnpurges` (`purge_test.go`) — a pre-purge backup restored after the purge lands without the purged issue or its comment, with the one purge record kept; the conformance cases in `internal/storage/conformance/purge.go` run against this engine.
+#### 8a.4 `detachedChildrenTx(ctx, tx, parentID string) ([]storage.DetachedChild, error)`
+
+One SELECT of `r.src_id, c.issue_type, COUNT(o.dst_id)` from `relations r` joined to the child's `issues` row and LEFT JOINed to the child's other `parent-child` edges (`o.dst_id <> r.dst_id`), for `r.dst_id = ? AND r.type = 'parent-child'`, grouped per child; the count is the child's `ParentsLeft`. No retention filter. Query error → `fmt.Errorf("read children of %s: %w", parentID, err)` (`purge.go`).
+
+Tests: `TestRestoreNeverUnpurges` (`purge_test.go`) — a pre-purge backup restored after the purge lands without the purged issue or its comment, with the one purge record kept; `TestPurgingOneOfALeafsTwoParentsKeepsItInside` (`purge_test.go`) — a leaf under two epics does not block purging one of them, and its remaining epic is then refused; the conformance cases in `internal/storage/conformance/purge.go` run against this engine.
 
 ---
 
@@ -1323,17 +1327,18 @@ created_by TEXT NOT NULL`
 ```sql
 CREATE TABLE `purges` (
   `issue_id` varchar(191) NOT NULL,
+  `issue_created_at` varchar(64) NOT NULL,
   `purged_at` varchar(64) NOT NULL,
   `purged_by` text NOT NULL,
-  PRIMARY KEY (`issue_id`)
+  PRIMARY KEY (`issue_id`,`issue_created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 ```
 
 `internal/store/schema_snapshot.sql`. Source: `00009_purges.sql` (v9).
 
-- PRIMARY KEY `(issue_id)`; no indexes, no CHECKs, and **no foreign key**: the issue a row names has been deleted (`00009_purges.sql`).
-- One row per purged issue. The only INSERT is `insertPurgeTx` — `INSERT INTO purges(issue_id, purged_at, purged_by) VALUES (?, ?, ?)`, `purged_at` formatted RFC3339Nano — reached from `Purge`, a restore, and the replay's delta (`internal/store/purge.go`). The only single-row DELETE is `deletePurgeTx`, reached only from the replay's delta (`internal/store/row_deletes.go`); `writeExportTx` clears the table wholesale before re-inserting the export's union (`internal/store/import_export.go`).
-- Read by `listPurges` (`SELECT issue_id, purged_at, purged_by FROM purges ORDER BY issue_id ASC`, `purged_at` through `scanTime`), from `Export` and `writeExportTx` (`internal/store/purge.go`), and by the id-mint existence probe (`internal/store/issue_ids.go`).
+- PRIMARY KEY `(issue_id, issue_created_at)`; no indexes, no CHECKs, and **no foreign key** on either key column: the issue a row names has been deleted (`00009_purges.sql`).
+- One row per purged issue, named by its id and its `created_at`. The only INSERT is `insertPurgeTx` — `INSERT INTO purges(issue_id, issue_created_at, purged_at, purged_by) VALUES (?, ?, ?, ?)`, `issue_created_at` and `purged_at` formatted RFC3339Nano — reached from `Purge`, a restore, and the replay's delta (`internal/store/purge.go`). The only single-row DELETE is `deletePurgeTx`, reached only from the replay's delta (`internal/store/row_deletes.go`); `writeExportTx` clears the table wholesale before re-inserting the export's union (`internal/store/import_export.go`).
+- Read by `listPurges` (`SELECT issue_id, issue_created_at, purged_at, purged_by FROM purges`, both timestamps through `scanTime`, ordered by `model.UnionPurges`), from `Export` and `writeExportTx` (`internal/store/purge.go`), and by the id-mint existence probe (`internal/store/issue_ids.go`).
 
 ---
 
@@ -1974,9 +1979,10 @@ Complete registry (33 entries):
 | `event_changes.to` | event_changes | to | identity | {identity, legacy_status_value} | optional | 263 |
 | `purges.issue_id` | purges | issue_id | identity | {identity} | required | shapemap.go |
 | `purges.purged_by` | purges | purged_by | identity | {identity} | required | shapemap.go |
+| `purges.issue_created_at` | purges | issue_created_at | timestamp | {timestamp} | required | shapemap.go |
 | `purges.purged_at` | purges | purged_at | timestamp | {timestamp} | required | shapemap.go |
 
-(48 entries total; the `add(...)` variadic lines register several fields each.)
+(49 entries total; the `add(...)` variadic lines register several fields each.)
 
 `knownCollections map[collection]bool` is derived from `targetRegistry` values' `coll` (shapemap.go), i.e. exactly the seven collections above.
 
@@ -1987,7 +1993,7 @@ Per-collection required-field sets (what `emitterProblems` enforces at shapemap.
 - labels: issue_id, name, created_by, created_at
 - events: id, issue_id, reason, actor, created_at
 - event_changes: event_id, field
-- purges: issue_id, purged_by, purged_at
+- purges: issue_id, purged_by, issue_created_at, purged_at
 
 ### 3. The KNOWN shapes registry (shapemap_known.go)
 
@@ -2041,11 +2047,11 @@ Table `"issue_events"`:
 
 Table `"issue_event_changes"`: `event_id`→`event_changes.event_id`, `field`→`event_changes.field`, `from_value`→`event_changes.from`, `to_value`→`event_changes.to`.
 
-Table `"purges"`: `issue_id`→`purges.issue_id`, `purged_at`→`purges.purged_at`, `purged_by`→`purges.purged_by` (shapemap_known.go).
+Table `"purges"`: `issue_id`→`purges.issue_id`, `issue_created_at`→`purges.issue_created_at`, `purged_at`→`purges.purged_at`, `purged_by`→`purges.purged_by` (shapemap_known.go).
 
 `issue_history` is deliberately absent from this map (shapemap_known.go); it is handled by `issueHistoryFanOut`.
 
-Because `simpleEmitter` reads `tf.canonical`, the effective transform per recognized column is: `timestamp` for `created_at`/`updated_at`/`closed_at`/`archived_at`/`deleted_at` (all tables) and `purges.purged_at`, `legacy_status_value` for `issues.status`, `identity` for everything else — including `issue_events.action/reason/actor`, whose canonical is `identity` (shapemap.go).
+Because `simpleEmitter` reads `tf.canonical`, the effective transform per recognized column is: `timestamp` for `created_at`/`updated_at`/`closed_at`/`archived_at`/`deleted_at` (all tables) and `purges.issue_created_at`/`purges.purged_at`, `legacy_status_value` for `issues.status`, `identity` for everything else — including `issue_events.action/reason/actor`, whose canonical is `identity` (shapemap.go).
 
 #### 3.2 `bookkeepingTables` — table name → drop reason, verbatim
 
@@ -2257,7 +2263,7 @@ model.Export{Version: model.ExportVersion, WorkspaceID: workspaceID,
   event change references unknown event_id %q
   ```
   (shapemap.go). Otherwise appends `model.FieldChange{Field: cellString(rec["field"]), From: cellString(rec["from"]), To: cellString(rec["to"])}` to that event's `Changes` (shapemap.go). Note NULL `from`/`to` become `""` here even though the transform preserved NULL.
-- **Purges** (shapemap.go): `model.Purge{IssueID: cellString(rec["issue_id"]), PurgedAt: cellTime(rec["purged_at"]), PurgedBy: cellString(rec["purged_by"])}` per record, appended in record order. Pinned by `TestDeterministicMapCleanAhead` (`shapemap_test.go`): a purge record survives dump → map → apply → rebuilt store, with no count-conservation finding.
+- **Purges** (shapemap.go): `model.Purge{IssueID: cellString(rec["issue_id"]), IssueCreatedAt: cellTime(rec["issue_created_at"]), PurgedAt: cellTime(rec["purged_at"]), PurgedBy: cellString(rec["purged_by"])}` per record, appended in record order. Pinned by `TestDeterministicMapCleanAhead` (`shapemap_test.go`): a purge record survives dump → map → apply → rebuilt store, with no count-conservation finding.
 
 `buildIssue(rec)` — shapemap.go:
 - `model.Issue{ID: cellString(rec["id"]), Title, Description, Prompt: cellString(rec["prompt"]), Priority: model.Priority(cellInt(rec["priority"])), IssueType: model.IssueType(cellString(rec["issue_type"])), Topic, Assignee, Rank: cellString(rec["rank"]), CreatedAt: cellTime(rec["created_at"]), UpdatedAt: cellTime(rec["updated_at"])}` (shapemap.go). **`rec["lane"]` is never read**, despite `issues.lane` being a registered target and `lane` being in `knownSourceColumns`.
@@ -3168,7 +3174,7 @@ It performs six reads and assembles one value (`import_export.go`):
 3. `s.listAllComments(ctx)` (`import_export.go`) — `SELECT id, issue_id, body, created_at, created_by FROM comments ORDER BY created_at ASC` (`store.go`).
 4. `s.listAllLabels(ctx)` (`import_export.go`) — `SELECT issue_id, label, created_at, created_by FROM labels ORDER BY issue_id ASC, label ASC` (`store.go`).
 5. `s.ListAllEvents(ctx)` (`import_export.go`) — `queryEvents(ctx, "")`, i.e. `SELECT e.id, e.issue_id, e.action, e.reason, e.actor, e.created_at, e.stream_id, e.workspace_id, c.field, c.from_value, c.to_value FROM issue_events e LEFT JOIN issue_event_changes c ON c.event_id = e.id ORDER BY e.id ASC, c.field ASC` (`store.go`). The per-change rows are collapsed back into `IssueEvent.Changes`, so **an event's changes are ordered by field name ascending**; the collapsed events are then sorted by `storage.EventOrdering` — the `created_at` instant, then id (`internal/storage/ordering.go`).
-6. `listPurges(ctx, s.db)` (`import_export.go`) — `SELECT issue_id, purged_at, purged_by FROM purges ORDER BY issue_id ASC`, `purged_at` parsed through `scanTime`; the result is never nil (`internal/store/purge.go`).
+6. `listPurges(ctx, s.db)` (`import_export.go`) — `SELECT issue_id, issue_created_at, purged_at, purged_by FROM purges`, both timestamps parsed through `scanTime`, returned through `model.UnionPurges`, so **purge records are ordered by issue id, then birth ascending**; the result is never nil (`internal/store/purge.go`).
 
 Any read error is returned with a zero `model.Export{}` (`import_export.go`).
 
@@ -3427,12 +3433,12 @@ type exportDelta struct {
 	comments  tableDelta[string, model.Comment]
 	labels    tableDelta[labelKey, model.Label]
 	events    tableDelta[string, model.IssueEvent]
-	purges    tableDelta[string, model.Purge]
+	purges    tableDelta[purgeKey, model.Purge]
 }
 ```
 `export_delta.go`; `empty()` at `export_delta.go` is true only when all six table deltas are empty. These are unexported Go values — **the delta is never serialized to disk or JSON anywhere**.
 
-Key types (`internal/store/row_deletes.go`): `relationKey{srcID, dstID string; kind model.RelationType}` (`row_deletes.go`) = the relations PRIMARY KEY; `labelKey{issueID, name string}` (`row_deletes.go`) = labels PRIMARY KEY. Comments, issues and events key on their `string` id; purge records key on `IssueID` (`export_delta.go`).
+Key types (`internal/store/row_deletes.go`): `relationKey{srcID, dstID string; kind model.RelationType}` (`row_deletes.go`) = the relations PRIMARY KEY; `labelKey{issueID, name string}` (`row_deletes.go`) = labels PRIMARY KEY; `purgeKey{issueID, issueCreatedAt string}` (`row_deletes.go`) = purges PRIMARY KEY, the birth formatted RFC3339Nano by `keyOfPurge`. Comments, issues and events key on their `string` id; purge records key on `keyOfPurge` (`export_delta.go`).
 
 ### 2.3 Add / modify / delete representation
 
@@ -3487,9 +3493,9 @@ Statements bound per table:
 | comments | `DELETE FROM comments WHERE id = ?` (`row_deletes.go`) | `INSERT INTO comments(id, issue_id, body, created_at, created_by) VALUES (?, ?, ?, ?, ?)` (`import_export.go`) |
 | labels | `DELETE FROM labels WHERE issue_id = ? AND label = ?` (`row_deletes.go`) | `INSERT INTO labels(issue_id, label, created_at, created_by) VALUES (?, ?, ?, ?)` (`import_export.go`) |
 | events | `DELETE FROM issue_events WHERE id = ?` (`row_deletes.go`) | `INSERT INTO issue_events(...)` + N `INSERT INTO issue_event_changes(...)` (`import_export.go`) |
-| purges | `DELETE FROM purges WHERE issue_id = ?` (`row_deletes.go`) | `INSERT INTO purges(issue_id, purged_at, purged_by) VALUES (?, ?, ?)` (`insertPurgeTx`, `purge.go`) |
+| purges | `DELETE FROM purges WHERE issue_id = ? AND issue_created_at = ?` (`row_deletes.go`) | `INSERT INTO purges(issue_id, issue_created_at, purged_at, purged_by) VALUES (?, ?, ?, ?)` (`insertPurgeTx`, `purge.go`) |
 
-Delete error text: `execDelete` wraps as `"delete %s: %w"` and `"delete %s: rows affected: %w"` with subjects `"issue <id>"`, `"relation <src>-><dst> (<type>)"`, `"comment <id>"`, `"label <issue>:<name>"`, `"issue event <id>"`, `"purge record <issue-id>"` (`row_deletes.go`).
+Delete error text: `execDelete` wraps as `"delete %s: %w"` and `"delete %s: rows affected: %w"` with subjects `"issue <id>"`, `"relation <src>-><dst> (<type>)"`, `"comment <id>"`, `"label <issue>:<name>"`, `"issue event <id>"`, `"purge record <issue-id>@<created_at>"` (`row_deletes.go`).
 
 ### 2.6 Where a delta is committed
 
@@ -4254,12 +4260,13 @@ The dump is **read-only** on the database — the only SQL issued is the three S
 
 ---
 
-## 4. ROW_DELETES (`internal/store/row_deletes.go`, 125 lines; no dedicated test file)
+## 4. ROW_DELETES (`internal/store/row_deletes.go`, 137 lines; no dedicated test file)
 
 ### 4.1 Key types
 
 - `relationKey{srcID string; dstID string; kind model.RelationType}` — exactly the schema PK `(src_id, dst_id, type)` (`row_deletes.go`).
 - `labelKey{issueID string; name string}` — the labels PK `(issue_id, label)` (`row_deletes.go`).
+- `purgeKey{issueID string; issueCreatedAt string}` — the purges PK `(issue_id, issue_created_at)`; `keyOfPurge(p)` builds it with the birth formatted RFC3339Nano, as the row stores it (`row_deletes.go`).
 
 ### 4.2 The six deletes — all HARD deletes, all single-row by full primary key
 
@@ -4270,9 +4277,9 @@ The dump is **read-only** on the database — the only SQL issued is the three S
 | `deleteCommentTx(ctx, tx, id)` | `DELETE FROM comments WHERE id = ?` | `fmt.Sprintf("comment %s", id)` | `row_deletes.go` |
 | `deleteLabelTx(ctx, tx, key)` | `DELETE FROM labels WHERE issue_id = ? AND label = ?` | `fmt.Sprintf("label %s:%s", key.issueID, key.name)` | `row_deletes.go` |
 | `deleteEventTx(ctx, tx, id)` | `DELETE FROM issue_events WHERE id = ?` | `fmt.Sprintf("issue event %s", id)` | `row_deletes.go` |
-| `deletePurgeTx(ctx, tx, issueID)` | `DELETE FROM purges WHERE issue_id = ?` | `fmt.Sprintf("purge record %s", issueID)` | `row_deletes.go` |
+| `deletePurgeTx(ctx, tx, key)` | `DELETE FROM purges WHERE issue_id = ? AND issue_created_at = ?` | `fmt.Sprintf("purge record %s@%s", key.issueID, key.issueCreatedAt)` | `row_deletes.go` |
 
-Bind order for relations is `key.srcID, key.dstID, string(key.kind)` (`row_deletes.go`); for labels `key.issueID, key.name` (`row_deletes.go`).
+Bind order for relations is `key.srcID, key.dstID, string(key.kind)` (`row_deletes.go`); for labels `key.issueID, key.name` (`row_deletes.go`); for purges `key.issueID, key.issueCreatedAt` (`row_deletes.go`).
 
 ### 4.3 Tombstone vs hard delete
 
