@@ -58,6 +58,12 @@ func TestExportDeltaMatchesFullRewriteAcrossEveryChangeShape(t *testing.T) {
 			t.Fatalf("step %d (%s): export delta store: %v", i, state.name, err)
 		}
 		assertSameRows(t, i, state.name, want, got)
+		// The two paths share applyExportDelta, so their agreeing cannot catch a
+		// table that body skips. Purge records reference nothing and are not
+		// re-derived on export, so the state's own are checked directly.
+		if !reflect.DeepEqual(got.Purges, state.export.Purges) {
+			t.Errorf("step %d (%s): purges = %+v, want the state's %+v", i, state.name, got.Purges, state.export.Purges)
+		}
 	}
 }
 
