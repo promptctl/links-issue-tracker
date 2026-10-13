@@ -177,7 +177,7 @@ func TestRunHistoryVersionPastTheTrailIsNotFound(t *testing.T) {
 		{untouched.ID, "description@1", "records 0 versions of description"},
 	} {
 		err := runHistory(ctx, &bytes.Buffer{}, ap, []string{tc.id, "--version", tc.ref})
-		if ExitCode(err) != ExitNotFound || !strings.Contains(err.Error(), tc.want) {
+		if ExitCode(err) != ExitNotFound || commandErrorReason(err) != reasonVersionNotFound || !strings.Contains(err.Error(), tc.want) {
 			t.Fatalf("runHistory(%s --version %s) = exit %d %v, want exit %d naming %q", tc.id, tc.ref, ExitCode(err), err, ExitNotFound, tc.want)
 		}
 	}

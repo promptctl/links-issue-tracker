@@ -173,6 +173,7 @@ Constants (`internal/cli/exit.go`):
 (`internal/cli/exit.go`):
 
 - `storage.NotFoundError` ⇒ 4
+- `VersionNotFoundError` ⇒ 4
 - `MergeConflictError` ⇒ 5
 - `SyncFailureError` ⇒ 5
 - `templateShapeError` ⇒ 3

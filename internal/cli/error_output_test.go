@@ -46,6 +46,7 @@ var reasonCodes = map[commandReason]int{
 	"unsupported_flag":          3,
 	"usage_error":               2,
 	"validation_refused":        3,
+	"version_not_found":         4,
 	"workspace_busy":            1,
 	"workspace_not_initialized": 3,
 	"workspace_schema_ahead":    3,
@@ -87,6 +88,7 @@ func TestCommandErrorReason(t *testing.T) {
 		},
 		{"unknown command", UnknownCommandError{Command: "wat"}, "unknown_command"},
 		{"not found", storage.NotFoundError{Entity: "issue", ID: "lit-abc"}, "entity_not_found"},
+		{"version not found", VersionNotFoundError{IssueID: "lit-abc", Ref: versionRef{field: "description", number: 4}, Held: 3}, "version_not_found"},
 		// A retired flag fails the same way on every run, so neither retired
 		// flag may fall to the default retry advice.
 		{"unsupported output flag", unsupportedOutputFlagError(), "unsupported_flag"},

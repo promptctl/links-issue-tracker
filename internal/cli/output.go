@@ -440,12 +440,26 @@ func parseVersionRef(raw string) (versionRef, error) {
 func printFieldVersion(w io.Writer, detail model.IssueDetail, ref versionRef) error {
 	versions := fieldVersions(detail.Events, ref.field)
 	if ref.number > len(versions) {
-		return fmt.Errorf("%w: %s records %d versions of %s; `lit show %s --field %s` prints the current text",
-			storage.NotFoundError{Entity: "version", ID: fmt.Sprintf("%s@%d", ref.field, ref.number)},
-			detail.Issue.ID, len(versions), ref.field, detail.Issue.ID, ref.field)
+		return VersionNotFoundError{IssueID: detail.Issue.ID, Ref: ref, Held: len(versions)}
 	}
 	_, err := fmt.Fprintln(w, versions[ref.number-1])
 	return err
+}
+
+// VersionNotFoundError is a --version reference past the versions an issue's
+// trail holds. It is not storage.NotFoundError: that one's remediation sends
+// the caller to check the issue id, and here the id resolved — what is missing
+// is the version, and the message says how many there are and where the
+// current text is. [LAW:one-type-per-behavior]
+type VersionNotFoundError struct {
+	IssueID string
+	Ref     versionRef
+	Held    int
+}
+
+func (e VersionNotFoundError) Error() string {
+	return fmt.Sprintf("%s has no %s@%d: its history records %d versions of %s; `lit history %s` numbers them, and `lit show %s --field %s` prints the current text",
+		e.IssueID, e.Ref.field, e.Ref.number, e.Held, e.Ref.field, e.IssueID, e.IssueID, e.Ref.field)
 }
 
 // optionalGroup adapts a single optional issue — a redirect target, a parent —

@@ -174,28 +174,29 @@ Constants (`exit.go`):
 
 `ExitCode(err)` dispatches by `errors.As`, in this order (`exit.go`):
 1. `storage.NotFoundError` → 4 (`exit.go`)
-2. `MergeConflictError` → 5 (`exit.go`)
-3. `SyncFailureError` → 5 (`exit.go`)
-4. `templateShapeError` → 3 (`exit.go`)
-5. `ownerApprovalRefusalError` → 5 (`exit.go`)
-6. `CorruptionError` → 7 (`exit.go`)
-7. `UsageError` → 2 (`exit.go`)
-8. `UnknownCommandError` → 3 (`exit.go`)
-9. `RetiredCommandError` → 3 (`exit.go`)
-10. `model.Refusal` (every `model.ValidationError`, and the upgrade/downgrade target refusals) → 3 (`exit.go`)
-11. `model.ContainerActionError` → 6 when `Satisfied()`, else 3 (`exit.go`)
-12. `UnsupportedError` → 3 (`exit.go`)
-13. `takeoverUnconfirmedError` → 3 (`exit.go`)
-14. `purgeUnconfirmedError` → 3 (`exit.go`)
-15. `Exhausted` → 6 (`exit.go`)
-16. `NoWork` → 6 (`exit.go`)
-17. `OutsideWorkspaceError` → 3 (`exit.go`)
-18. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → 3 (`exit.go`)
-19. `*store.UnsupportedSchemaVersionError` → 3 (`exit.go`)
-20. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → 3 (`exit.go`)
-21. `BulkFailureError` → 1 (`exit.go`)
-22. `errors.Is(err, store.ErrTransientGCContention)` → 1 (`exit.go`)
-23. anything else → 1 (`exit.go`)
+2. `VersionNotFoundError` → 4 (`exit.go`)
+3. `MergeConflictError` → 5 (`exit.go`)
+4. `SyncFailureError` → 5 (`exit.go`)
+5. `templateShapeError` → 3 (`exit.go`)
+6. `ownerApprovalRefusalError` → 5 (`exit.go`)
+7. `CorruptionError` → 7 (`exit.go`)
+8. `UsageError` → 2 (`exit.go`)
+9. `UnknownCommandError` → 3 (`exit.go`)
+10. `RetiredCommandError` → 3 (`exit.go`)
+11. `model.Refusal` (every `model.ValidationError`, and the upgrade/downgrade target refusals) → 3 (`exit.go`)
+12. `model.ContainerActionError` → 6 when `Satisfied()`, else 3 (`exit.go`)
+13. `UnsupportedError` → 3 (`exit.go`)
+14. `takeoverUnconfirmedError` → 3 (`exit.go`)
+15. `purgeUnconfirmedError` → 3 (`exit.go`)
+16. `Exhausted` → 6 (`exit.go`)
+17. `NoWork` → 6 (`exit.go`)
+18. `OutsideWorkspaceError` → 3 (`exit.go`)
+19. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → 3 (`exit.go`)
+20. `*store.UnsupportedSchemaVersionError` → 3 (`exit.go`)
+21. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → 3 (`exit.go`)
+22. `BulkFailureError` → 1 (`exit.go`)
+23. `errors.Is(err, store.ErrTransientGCContention)` → 1 (`exit.go`)
+24. anything else → 1 (`exit.go`)
 
 Error types defined in `cli.go`: `MergeConflictError` (`cli.go`),
 `CorruptionError` (`cli.go`), `UsageError` (`cli.go`),
@@ -219,38 +220,39 @@ rules in `internal/model/validation.go`.
 checks run in this order and the first match wins, so an error that wraps
 several of these types gets the reason of the earliest one:
 1. `storage.NotFoundError` → `entity_not_found`
-2. `MergeConflictError` → `merge_conflict`
-3. `SyncFailureError` → `sync_divergence`
-4. `store.RemoteUnreachableError` → `remote_unreachable`
-5. `ownerApprovalRefusalError` → `owner_approval_required`
-6. `CorruptionError` → `corruption_detected`
-7. `UnknownCommandError` → `unknown_command`
-8. `RetiredCommandError` → `retired_command`
-9. `UsageError` → `usage_error`
-10. any error implementing `model.Refusal` → `validation_refused`
-11. `templateShapeError` → `template_shape_refused`
-12. `model.ContainerActionError` → `state_already_holds` when its `Satisfied()`
+2. `VersionNotFoundError` → `version_not_found`
+3. `MergeConflictError` → `merge_conflict`
+4. `SyncFailureError` → `sync_divergence`
+5. `store.RemoteUnreachableError` → `remote_unreachable`
+6. `ownerApprovalRefusalError` → `owner_approval_required`
+7. `CorruptionError` → `corruption_detected`
+8. `UnknownCommandError` → `unknown_command`
+9. `RetiredCommandError` → `retired_command`
+10. `UsageError` → `usage_error`
+11. any error implementing `model.Refusal` → `validation_refused`
+12. `templateShapeError` → `template_shape_refused`
+13. `model.ContainerActionError` → `state_already_holds` when its `Satisfied()`
     is true (the epic has at least one child, its derived state already
     equals the requested one, and no child remains unfinished), otherwise
     `validation_refused`
-13. `Exhausted` → `scope_exhausted`
-14. `NoWork` → `no_ready_work`
-15. `UnsupportedError` → `unsupported_flag`
-16. `takeoverUnconfirmedError` → `takeover_unconfirmed`
-17. `purgeUnconfirmedError` → `purge_unconfirmed`
-18. `OutsideWorkspaceError` → `outside_git_workspace`
-19. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → `workspace_not_initialized`
-20. `*store.UnsupportedSchemaVersionError` → `workspace_schema_ahead`
-21. `workspace.StoredPrefixError` → `stored_prefix_refused`
-22. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → `validation_refused`
-    (`StoredPrefixError` unwraps to this sentinel; step 21 catches it first)
-23. `BulkFailureError` → `bulk_partial_failure`
-24. `store.WorkspaceWriteBlockedError` → `workspace_write_blocked` (it unwraps
+14. `Exhausted` → `scope_exhausted`
+15. `NoWork` → `no_ready_work`
+16. `UnsupportedError` → `unsupported_flag`
+17. `takeoverUnconfirmedError` → `takeover_unconfirmed`
+18. `purgeUnconfirmedError` → `purge_unconfirmed`
+19. `OutsideWorkspaceError` → `outside_git_workspace`
+20. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → `workspace_not_initialized`
+21. `*store.UnsupportedSchemaVersionError` → `workspace_schema_ahead`
+22. `workspace.StoredPrefixError` → `stored_prefix_refused`
+23. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → `validation_refused`
+    (`StoredPrefixError` unwraps to this sentinel; step 22 catches it first)
+24. `BulkFailureError` → `bulk_partial_failure`
+25. `store.WorkspaceWriteBlockedError` → `workspace_write_blocked` (it unwraps
     to `store.ErrTransientGCContention`; this step catches it first)
-25. `errors.Is(err, store.ErrWorkspaceBusy)` or
+26. `errors.Is(err, store.ErrWorkspaceBusy)` or
     `errors.Is(err, workspace.ErrConfigBusy)` → `workspace_busy`
-26. `errors.Is(err, store.ErrTransientGCContention)` → `transient_gc_contention`
-27. anything else → `command_failed`
+27. `errors.Is(err, store.ErrTransientGCContention)` → `transient_gc_contention`
+28. anything else → `command_failed`
 
 `commandErrorRemediation(reason)` (`error_output.go`), verbatim strings. An
 empty string means no `remediation:` line is printed:
@@ -259,6 +261,7 @@ empty string means no `remediation:` line is printed:
 - `usage_error`: "Run the command with `--help` and retry with valid arguments."
 - `unsupported_flag`: "Do not retry unchanged — this flag is refused on every run. Drop it and use what the message above names instead."
 - `entity_not_found`: "Verify the target ID exists with `lit ls` or `lit show <id>`."
+- `version_not_found`: "" (empty — the `VersionNotFoundError` message names how many versions there are and where the current text is)
 - `merge_conflict`: "Sync and retry after resolving conflicts."
 - `sync_divergence`: "" (empty — the `SyncFailureError` message carries the steps)
 - `remote_unreachable`: "The remote host was unreachable over the network; credentials are not the problem, and lit already retried with backoff. Check connectivity to the remote host (for SSH remotes: `ssh -o BatchMode=yes git@<host>`), then retry once the network path is restored."
@@ -948,9 +951,15 @@ Cross-epic dependencies:
 
 - Registration `register.go`, `app.AccessRead`. Handler `historyLeaf`
   (`cli.go`).
-- No flags beyond the implicit `--help`.
+- Flags: `--version <field>@<n>`, given at most once (`StringOnce`).
 - Refusal: `len(positional) != 1` →
-  `UsageError{"usage: lit history <id>"}` → exit 2 (`cli.go`).
+  `UsageError{"usage: lit history <id> [--version <field>@<n>]"}` → exit 2 (`cli.go`).
+- `--version`, when given, is parsed before the store is read
+  (`parseVersionRef`, `output.go`): the field must be one of
+  `storage.ProseFields()` — the editable fields whose row in the field table
+  declares `ProseText`, today `description` and `prompt` (`fields.go`) — and
+  the number an integer ≥ 1; anything else is a `UsageError` → exit 2,
+  whatever the id names.
 - Reads `GetIssueDetail(id)` (`cli.go`).
 - Output (`printIssueHistory`, `output.go`):
 ```
@@ -963,8 +972,20 @@ history:
   `- [<actor> @ <Jan 2, 2006 3:04 PM MST, local>] <action> <reason>` with newlines
   in the reason escaped to `\n`; an event with no `Action` displays the literal
   `update` (`output.go`). Then per change,
-  `    <field>: <from or -> → <to or ->` (`output.go`).
+  `    <field>: <from or -> → <to or ->` (`output.go`) — except a change to a
+  prose field, which prints `    <field>: v<k> → v<k+1>` for the field's k-th
+  recorded change and no text (`output.go`).
+- Then, when the trail versions any prose field, a blank line, `versions:`,
+  and per such field in table order
+  `    <field>: <N> versions — lit history <id> --version <field>@<n> prints one`
+  (`output.go`).
 - An empty event slice prints just the header (`output.go`).
+- With `--version <field>@<n>`: prints version n's text bare, newline-terminated
+  (`printFieldVersion`, `output.go`). The versions are read off the trail by
+  `fieldVersions` (`output.go`): the `from` of the field's first recorded
+  change, then the `to` of each change in event order. n past them is
+  `VersionNotFoundError` → exit 4, reason `version_not_found`, message
+  `<id> has no <field>@<n>: its history records <N> versions of <field>; `lit history <id>` numbers them, and `lit show <id> --field <field>` prints the current text`.
 
 ### 2.7 `lit update` — Update issue fields
 
