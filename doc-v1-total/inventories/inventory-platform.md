@@ -108,11 +108,13 @@ to `/Users/bmf/code/links-issue-tracker`.
   (`internal/cli/cli.go`).
 - There are **no persistent global flags** registered on the root beyond cobra's own `help`;
   per-command flag sets are constructed by `newCobraFlagSet` (`internal/cli/cli.go`).
-- Per-command flag parsing (`parseFlagSet`, `internal/cli/flagset.go`) maps specific
-  removed flags to typed errors:
-  - `--continue` ⇒ `UnsupportedError` "--continue is retired; claim routing already keeps
+- Per-command flag parsing (`parseFlagSet`, `internal/cli/flagset.go`) maps the
+  flags each leaf declares retired (`fs.Retire`) to typed errors:
+  - on `next`, `--continue` ⇒ `UnsupportedError` "--continue is retired; claim routing already keeps
     `lit next` in your checkout's own epic first — run `lit next` with no flag"
     (`internal/cli/flagset.go`);
+  - on every leaf `registerActor` gives `--by` that registers no `--assignee` of its own,
+    `--assignee` ⇒ `UnsupportedError` naming `--by` (`internal/cli/cli.go`);
   - every other parse error (unknown flag, missing value, invalid value, bad syntax) ⇒
     `UsageError` (`internal/cli/flagset.go`).
   - `--help` (or `pflag.ErrHelp`) prints `Usage of <cmd>:` followed by `PrintDefaults()` to

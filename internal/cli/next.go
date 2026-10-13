@@ -26,6 +26,7 @@ const nextUsage = "usage: lit next [--type ...] [--status ...] [--labels ...] [-
 
 func nextLeaf() appLeaf {
 	fs := newCobraFlagSet("next")
+	fs.Retire("continue", "--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag")
 	assignee := fs.String("assignee", "", "Filter by assignee")
 	issueType := fs.String("type", "", "Filter by issue type")
 	status := fs.String("status", "", "Filter by status: open|in_progress")

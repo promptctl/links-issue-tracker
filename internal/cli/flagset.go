@@ -34,6 +34,11 @@ type cobraFlagSet struct {
 	// [LAW:one-source-of-truth] The help answer is carried whole by the value
 	// that renders it; nothing points outward at a file to finish the sentence.
 	detail string
+	// retired maps each flag this command no longer accepts to the sentence
+	// naming what to run instead. A retirement belongs to the command it was
+	// retired from, so `lit show --assignee` stays an ordinary unknown flag
+	// while `lit start --assignee` is pointed at --by.
+	retired map[string]string
 }
 
 func newCobraFlagSet(use string) *cobraFlagSet {
@@ -52,7 +57,7 @@ func newCobraFlagSet(use string) *cobraFlagSet {
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
 	cmd.Flags().SetOutput(io.Discard)
-	return &cobraFlagSet{cmd: cmd}
+	return &cobraFlagSet{cmd: cmd, retired: map[string]string{}}
 }
 
 func (fs *cobraFlagSet) SetOutput(w io.Writer) {
@@ -136,6 +141,16 @@ func (fs *cobraFlagSet) Changed(name string) bool {
 	return fs.cmd.Flags().Changed(name)
 }
 
+// Retire declares a flag this command no longer accepts, and the sentence
+// naming what to run instead; parseFlagSet answers the flag with it. A flag the
+// command still registers parses normally, so a retirement answers only where
+// the name is otherwise unknown.
+// [LAW:one-type-per-behavior] every retired flag is one more entry, not one
+// more branch in the parser.
+func (fs *cobraFlagSet) Retire(name, pointer string) {
+	fs.retired[name] = pointer
+}
+
 // Detail declares the command's long-form description, next to the flags it
 // describes. Returning the set keeps it chainable onto newCobraFlagSet at the
 // top of a leaf declaration.
@@ -151,16 +166,6 @@ func (fs *cobraFlagSet) printHelp(helpOutput io.Writer) error {
 	}
 	fs.cmd.Flags().PrintDefaults()
 	return nil
-}
-
-// retiredFlags maps each flag lit no longer accepts to the sentence naming
-// what to run instead. A command that still registers the name parses it
-// normally, so an entry answers only where the flag is unknown.
-// [LAW:one-type-per-behavior] every retired flag is one more row, not one more
-// branch.
-var retiredFlags = map[string]string{
-	"continue": "--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag",
-	"assignee": "--assignee does not name who is acting here; name yourself with --by <name> (CLAUDE_CODE_SESSION_ID wins when set), or change a ticket's assignee with `lit update <id> --assignee <name>`",
 }
 
 func parseFlagSet(fs *cobraFlagSet, args []string, stdout io.Writer) error {
@@ -185,7 +190,7 @@ func parseFlagSet(fs *cobraFlagSet, args []string, stdout io.Writer) error {
 		// and `--continue=x` match while `--continuex` stays an unknown flag.
 		var unknown *pflag.NotExistError
 		if errors.As(err, &unknown) {
-			if pointer, retired := retiredFlags[unknown.GetSpecifiedName()]; retired {
+			if pointer, retired := fs.retired[unknown.GetSpecifiedName()]; retired {
 				return UnsupportedError{Message: pointer}
 			}
 		}

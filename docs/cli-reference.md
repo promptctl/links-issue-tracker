@@ -568,12 +568,13 @@ clears the field. An old `lit assign` invocation returns a pointer here (exit 3)
 ## Lifecycle transitions
 
 All transitions share one shape, and each verb accepts only the flags its
-action consumes — an inapplicable flag is an unknown-flag parse error (see
+action consumes — an inapplicable flag is an unknown-flag parse error, except
+`--assignee`, which is refused with a pointer to `--by` (see
 [Transition guidance](#transition-guidance) and [Identity](#identity) for
 guidance and `--by` semantics):
 
 ```text
-lit <verb> <id> [--reason <text>]
+lit <verb> <id> [--by <name>] [--reason <text>]
 ```
 
 The verbs are the single enforcer of the transition guardrails — status is not
@@ -586,7 +587,7 @@ Status lifecycle (Agent Operations):
 
 | Command | Transition | Flags | Notes |
 |---------|-----------|-------|-------|
-| `lit start` | any state → `in_progress` | `[--by <name>] [--take]` | Claims the issue and assigns it to you; from `closed` it is a reopen-and-claim. `--take` confirms taking over a lane another checkout holds fresh, and is how a caller with no terminal to prompt does it. |
+| `lit start` | any state → `in_progress` | `[--take]` | Claims the issue and assigns it to you; from `closed` it is a reopen-and-claim. `--take` confirms taking over a lane another checkout holds fresh, and is how a caller with no terminal to prompt does it. |
 | `lit done` | any non-closed → `closed` | | Success path; prints post-close capture guidance. Transitions are target-state: the verb names the destination, whatever the current status. |
 | `lit close` | any non-closed → `closed` | `--resolution <duplicate\|superseded\|obsolete\|wontfix> [--of <canonical-id>]` | Closing without finishing; `--of` names the canonical ticket for the redirecting resolutions (required for those, unrepresentable otherwise). |
 | `lit open` | any non-open → `open` | | Returns the issue to the backlog; ownership (assignee) is untouched — only `start` rewrites it. |

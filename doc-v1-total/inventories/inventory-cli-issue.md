@@ -127,9 +127,12 @@ into* one of those, the call and its observable effect are recorded here.
   - On `pflag.ErrHelp` it prints `"Usage of <use>:\n"` followed by
     `PrintDefaults()` **to stdout** and returns `errHelpHandled` → exit 0
     (`cli.go`, printer at `cli.go`).
-  - A `*pflag.NotExistError` whose parsed name is `continue` (from `--continue`
-    or `--continue=<x>`; not `--continuex`, and not `-continue`, which pflag
-    reads as the shorthand group `-c…`) →
+  - A `*pflag.NotExistError` whose parsed name the leaf declared retired with
+    `fs.Retire` (from `--name` or `--name=<x>`; not `--namex`, and not `-name`,
+    which pflag reads as a shorthand group) → `UnsupportedError` carrying that
+    leaf's sentence → exit 3 (`flagset.go`). `registerActor` retires `assignee`
+    with ``"--assignee does not name who is acting here; name yourself with --by <name> (CLAUDE_CODE_SESSION_ID wins when set), or change a ticket's assignee with `lit update <id> --assignee <name>`"`` (`cli.go`), inert on a leaf that registers its own
+    `--assignee`; `next` retires `continue` (`next.go`) →
     `UnsupportedError{Message: "--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag"}`
     → exit 3 (`flagset.go`).
   - Every other parse error — unknown flag, missing value, invalid value, bad

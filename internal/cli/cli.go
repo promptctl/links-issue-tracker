@@ -1533,6 +1533,10 @@ const byUsage = "Who you are when CLAUDE_CODE_SESSION_ID is unset (when it is se
 // "unknown".
 func registerActor(fs *cobraFlagSet) actorResolver {
 	by := fs.String("by", "", byUsage)
+	// --assignee was start's spelling of this identity before --by replaced it.
+	// A command that registers its own --assignee (a filter, a field write)
+	// parses it normally; everywhere else it is pointed here.
+	fs.Retire("assignee", "--assignee does not name who is acting here; name yourself with --by <name> (CLAUDE_CODE_SESSION_ID wins when set), or change a ticket's assignee with `lit update <id> --assignee <name>`")
 	return func() string { return resolveIdentity(*by) }
 }
 

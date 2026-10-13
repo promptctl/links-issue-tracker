@@ -24,7 +24,7 @@ data — described as assets, not as documentation of behavior).
 - `internal/cli/cli.go` `newCobraFlagSet(use)` builds a cobra command with a default `--help` flag, output discarded.
 - `internal/cli/cli.go` `parseFlagSet`:
   - `--help` → prints `Usage of <use>:` plus `PrintDefaults()` to stdout, returns `errHelpHandled` (exit 0) — `cli.go`.
-  - `--continue` → `UnsupportedError{Message: "--continue is retired; claim routing already keeps \`lit next\` in your checkout's own epic first — run \`lit next\` with no flag"}` (exit 3) — `flagset.go`.
+  - A flag the leaf declared retired with `fs.Retire` → `UnsupportedError` carrying the leaf's sentence (exit 3): `next`'s `--continue` → `UnsupportedError{Message: "--continue is retired; claim routing already keeps \`lit next\` in your checkout's own epic first — run \`lit next\` with no flag"}` (exit 3) — `flagset.go`.
   - Every other parse error (unknown flag, missing value, invalid value, bad syntax) → `UsageError` (exit 2) — `flagset.go`.
 - `internal/cli/cli.go` `StringOptional(name, defaultIfPresent, defaultIfAbsent, usage)` — used only by `quickstart --eject`.
 - `internal/cli/flagset.go` `splitArgs(args []string, positionalCount int, fs *cobraFlagSet)` splits leading positionals from flags; its one non-test call site is `parseLeaf` (`internal/cli/register.go`).

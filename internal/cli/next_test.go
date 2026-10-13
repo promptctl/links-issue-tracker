@@ -283,7 +283,8 @@ func TestStartAndNextNameTheSessionlessOperatorWithOneFlag(t *testing.T) {
 
 // `lit start --assignee` was the session-less identity flag before --by
 // replaced it, so a caller still passing it is pointed at --by rather than
-// told only that the flag is unknown.
+// told only that the flag is unknown. A command that takes no identity has
+// nothing to point at, so there it stays an ordinary unknown flag.
 func TestStartAssigneePointsToBy(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
 	repo, _ := initBootstrapTestRepo(t)
@@ -293,6 +294,10 @@ func TestStartAssigneePointsToBy(t *testing.T) {
 	_, err := runCLIInDirErr(t, repo, "start", ticket, "--assignee", "bob")
 	if err == nil || ExitCode(err) != ExitValidation || !strings.Contains(err.Error(), "--by <name>") {
 		t.Fatalf("start --assignee bob = %v (exit %d), want exit %d naming --by", err, ExitCode(err), ExitValidation)
+	}
+	_, err = runCLIInDirErr(t, repo, "show", ticket, "--assignee", "bob")
+	if err == nil || ExitCode(err) != ExitUsage || !strings.Contains(err.Error(), "unknown flag: --assignee") {
+		t.Fatalf("show --assignee bob = %v (exit %d), want exit %d unknown flag", err, ExitCode(err), ExitUsage)
 	}
 }
 

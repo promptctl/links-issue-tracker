@@ -124,8 +124,6 @@ func TestParseFlagSetClassifiesFlagErrors(t *testing.T) {
 		{arg: "--continue", want: ExitValidation},
 		{arg: "--continue=true", want: ExitValidation},
 		{arg: "--continuex", want: ExitUsage},
-		{arg: "--assignee", want: ExitValidation},
-		{arg: "--assignee=bob", want: ExitValidation},
 		{arg: "--bogus", want: ExitUsage},
 		{arg: "-x", want: ExitUsage},
 		{arg: "-continue", want: ExitUsage},
@@ -137,6 +135,7 @@ func TestParseFlagSetClassifiesFlagErrors(t *testing.T) {
 			t.Parallel()
 			fs := newCobraFlagSet("probe")
 			fs.Int("limit", 0, "")
+			fs.Retire("continue", "--continue is retired")
 			err := parseFlagSet(fs, []string{tc.arg}, io.Discard)
 			if err == nil {
 				t.Fatalf("parseFlagSet(%q) succeeded; want an error", tc.arg)
