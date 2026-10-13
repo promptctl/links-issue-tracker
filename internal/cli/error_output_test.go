@@ -115,6 +115,7 @@ func TestCommandErrorReason(t *testing.T) {
 		// remediation.
 		{"cli validation refusal", model.ValidationError{Message: "Do not set blocked-by relationships between two issues in the same epic."}, "validation_refused"},
 		{"storage validation refusal", model.ValidationError{Message: "priority out of range"}, "validation_refused"},
+		{"frozen issue refusal", model.FrozenIssueError{ID: "lit-1", Retention: model.Archived{}, Thaw: model.Unarchive{}}, "validation_refused"},
 		// Both takeover-gate arms, and one wrapped.
 		{"takeover without --take", takeoverUnconfirmedError{Message: "claimed here: … — this lane is claimed and active; pass --take to confirm the takeover"}, "takeover_unconfirmed"},
 		{"takeover declined", takeoverUnconfirmedError{Message: "takeover declined"}, "takeover_unconfirmed"},

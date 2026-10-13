@@ -385,6 +385,28 @@ func (e ContainerActionError) childClause() string {
 	}
 }
 
+// FrozenIssueError refuses a status action on an issue that has left the flow.
+// It names the state the issue is in and the command that brings it back,
+// never the refused action: a sentence built around the action's verb would
+// have to fit all eight verbs, and `done` is not a bare infinitive.
+// [LAW:single-enforcer] Raised only by Issue.Apply, which both storage engines
+// call, so there is one refusal and no per-engine copy of its wording.
+type FrozenIssueError struct {
+	ID        string
+	Retention lifecycle.Retention
+	Thaw      lifecycle.RetentionAction
+}
+
+func (e FrozenIssueError) Error() string {
+	return fmt.Sprintf("issue %s is %s, so its status cannot change: run `lit %s %s` first", e.ID, lifecycle.RetentionName(e.Retention), e.Thaw.Name().Verb(), e.ID)
+}
+
+// RefusesCommand marks FrozenIssueError as a Refusal: the same command against
+// the same issue is refused the same way until the thaw runs, so no retry helps.
+func (FrozenIssueError) RefusesCommand() {}
+
+var _ Refusal = FrozenIssueError{}
+
 // Apply is root-only: it dispatches to the root lifecycle primitive's Apply.
 // Multi-leaf composition (AllOf containing multiple actionable members)
 // is intentionally unsupported here; that requires a dedicated disambiguation
@@ -396,7 +418,7 @@ func (e ContainerActionError) childClause() string {
 // [LAW:types-are-the-program] No idempotent / from-state branching here: the
 // leaf's Apply is target-state, so same-state inputs round-trip through the
 // leaf and back unchanged; the only rejections that survive are the real
-// invariants (unhydrated lifecycle, container here) — the leaf itself cannot
+// invariants (unhydrated lifecycle, container, frozen retention) — the leaf itself cannot
 // fail, since StatusAction makes an unsupported action unrepresentable.
 func (i Issue) Apply(action lifecycle.StatusAction) (Issue, error) {
 	root, err := i.lifecycleOrError()
@@ -427,6 +449,12 @@ func (i Issue) Apply(action lifecycle.StatusAction) (Issue, error) {
 			State:    State(root.State()),
 			Progress: root.Progress(),
 		}
+	}
+	// After the container refusal, not before: FrozenIssueError tells the
+	// caller the thaw makes the command legal, which is false for a container
+	// whatever its retention.
+	if thaw, frozen := lifecycle.Thaw(i.Retention()); frozen {
+		return Issue{}, FrozenIssueError{ID: i.ID, Retention: i.Retention(), Thaw: thaw}
 	}
 	actionable, ok := root.(lifecycle.Actionable)
 	if !ok {

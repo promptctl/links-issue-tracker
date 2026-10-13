@@ -183,7 +183,7 @@ Constants (`exit.go`):
 8. `UsageError` → 2 (`exit.go`)
 9. `UnknownCommandError` → 3 (`exit.go`)
 10. `RetiredCommandError` → 3 (`exit.go`)
-11. `model.Refusal` (every `model.ValidationError`, and the upgrade/downgrade target refusals) → 3 (`exit.go`)
+11. `model.Refusal` (every `model.ValidationError`, `model.FrozenIssueError`, and the upgrade/downgrade target refusals) → 3 (`exit.go`)
 12. `model.ContainerActionError` → 6 when `Satisfied()`, else 3 (`exit.go`)
 13. `UnsupportedError` → 3 (`exit.go`)
 14. `takeoverUnconfirmedError` → 3 (`exit.go`)
@@ -1162,8 +1162,9 @@ positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason 
   (`cli.go`).
 
 **Store-level refusals reaching every transition:**
-- An archived or deleted issue rejects any status action:
-  `"cannot <action> archived or deleted issue"` (`internal/store/store.go`).
+- An archived or deleted issue rejects any status action with
+  `model.FrozenIssueError`:
+  ` + MSG + ` (`internal/model/model.go`).
 - A container (epic) rejects any status action with `ContainerActionError`
   (`internal/model/model.go`).
 - The redirect target must exist, must not be the closing issue itself, and must

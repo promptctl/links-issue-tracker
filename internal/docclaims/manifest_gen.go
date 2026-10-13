@@ -524,6 +524,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-model.md", Text: "issue %q: illegal Retention value %T", Src: "issue %q: illegal Retention value %T"},
 	{Doc: "doc-v1-total/inventories/inventory-model.md", Text: "issue %q: lifecycle read on unhydrated issue: %v", Src: "issue %q: lifecycle read on unhydrated issue: %v"},
 	{Doc: "doc-v1-total/inventories/inventory-model.md", Text: "issue %s has no hydrated lifecycle", Src: "issue %s has no hydrated lifecycle"},
+	{Doc: "doc-v1-total/inventories/inventory-model.md", Text: "issue %s is %s, so its status cannot change: run `lit %s %s` first", Src: "issue %s is %s, so its status cannot change: run `lit %s %s` first"},
 	{Doc: "doc-v1-total/inventories/inventory-model.md", Text: "issue %s requires store hydration", Src: "issue %s requires store hydration"},
 	{Doc: "doc-v1-total/inventories/inventory-model.md", Text: "issue %s: cannot hydrate lifecycle from JSON (missing status field on non-epic)", Src: "issue %s: cannot hydrate lifecycle from JSON (missing status field on non-epic)"},
 	{Doc: "doc-v1-total/inventories/inventory-model.md", Text: "issue is already archived", Src: "issue is already archived"},

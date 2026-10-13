@@ -296,6 +296,13 @@ pointer variant) **panics** `illegal Retention value %T` (`retention.go`).
 Pinned by `TestFrozen` (`retention_test.go`) and
 `TestFrozenRefusesImpostors`.
 
+### `Thaw(r Retention) (RetentionAction, bool)` — `retention.go`
+`Live` → `(nil, false)`; `Archived` → `(Unarchive{}, true)`; `Deleted` →
+`(Restore{}, true)`; anything else **panics** like `Frozen`. `Frozen` is
+defined as Thaw's second result. Pinned by `TestThawIsTheActionRetainTakesToLive`
+(`retention_test.go`), which derives the expected action from `Retain`'s table:
+for each frozen variant, the one retention action `Retain` takes to `Live`.
+
 ### `Retain(cur Retention, action RetentionAction, at time.Time) (Retention, error)` — `retention.go`
 Pure (no clock, no store); caller supplies `at`. Complete transition table:
 
@@ -582,6 +589,12 @@ never mistaken for the epic itself. Pinned by
 `TestLaneAccessorsReportBothHalves`.
 
 ### Action dispatch
+`FrozenIssueError` — `model.go`: fields `ID string`, `Retention
+lifecycle.Retention`, `Thaw lifecycle.RetentionAction`. `Error()` →
+``issue %s is %s, so its status cannot change: run `lit %s %s` first`` with the
+id, `RetentionName(Retention)`, `Thaw.Name().Verb()`, and the id. Implements
+`Refusal`.
+
 `ContainerActionError` — `model.go`: fields `ID string`,
 `Action ActionName`, `Target State`, `State State`, `Progress Progress`.
 `Target` is the state the action asked for; `State` is the one the children
@@ -614,9 +627,14 @@ establish.
    compares `StatusValue` (vacuously `""` for a container) and would decide on
    the claimant alone. Pinned by `TestApplyRefusesContainerForEveryAction`,
    `model_test.go`.
-3. If the root is not `lifecycle.Actionable` → error
+3. If `lifecycle.Thaw(Retention())` reports frozen → returns
+   `FrozenIssueError{ID, Retention(), thaw}`. After the container check, so a
+   frozen container still refuses as a container. Pinned by
+   `TestApplyRefusesFrozenLeafNamingTheThaw` and
+   `TestApplyOnFrozenContainerRefusesAsContainer` (`model_test.go`).
+4. If the root is not `lifecycle.Actionable` → error
    `no %s action available on this issue`.
-4. Otherwise replaces the lifecycle with `actionable.Apply(action)` and returns
+5. Otherwise replaces the lifecycle with `actionable.Apply(action)` and returns
    the modified copy. Root-only; multi-leaf `AllOf` composition is
    intentionally unsupported (`model.go`). Pinned by
    `TestApplyTargetStateOnLeafProducesTargetState` (`model_test.go`) and
@@ -798,8 +816,9 @@ where they are written: `ParseIssueType` / `ParsePriority` /
 plus a marker method `RefusesCommand()`. `ValidationError` implements it, and so
 does any refusal type that carries its own fields and declares the method beside
 itself: `store.DowngradeTargetAheadError` and `store.DowngradeBelowBaselineError`
-(`downgrade.go`) and `cli.UpgradeTargetBehindError` (`upgrade.go`), each with a
-compile-time `var _ model.Refusal` assertion.
+(`downgrade.go`), `cli.UpgradeTargetBehindError` (`upgrade.go`), and
+`model.FrozenIssueError` (`model.go`), each with a compile-time
+`var _ model.Refusal` assertion.
 
 ---
 

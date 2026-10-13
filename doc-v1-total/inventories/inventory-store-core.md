@@ -678,18 +678,18 @@ Evidence: transition + field lands as exactly one Dolt commit with both halves v
 
 `lifecycleWrite` interface (`store.go`): `applyTx(ctx, s *Store, tx *sql.Tx) error`, `postIssue() model.Issue`, `isNoop() bool`.
 
-#### 6.3 `applyTransition` (the guard)
+#### 6.3 The guard: `Issue.Apply`
 
-`store.go`: if `model.Frozen(issue.Retention())` → `fmt.Errorf("cannot %s archived or deleted issue", action.Name().Verb())`; otherwise `issue.Apply(action)`. Never mutates the store.
+`planStatusTransition` calls `issue.Apply(action)` (`model.go`) and propagates its refusals: `ContainerActionError` for a container, then `FrozenIssueError` for an archived or deleted issue. The Dolt store adds no guard of its own; the memory engine's `planStatus` calls the same method, so both engines refuse with one error.
 
-Evidence: a container refuses `Reopen`; a live leaf accepts `Start`; an archived leaf refuses `Close` (`store_test.go`).
+Evidence: conformance case `apply_to_frozen_names_the_thaw` (`conformance.go`).
 
 #### 6.4 `transitionWrite` and `planStatusTransition`
 
 `transitionWrite` fields (`store.go`): `issueID, fromStatus, toStatus, postAssignee string; now time.Time; closedAtArg, resolutionArg, redirectTargetArg any; action model.ActionName; reason, actor string; changes []model.FieldChange; post model.Issue; noop bool`. Methods at `store.go`.
 
 `planStatusTransition(ctx, issue, actor, reason, action) (transitionWrite, error)` (`store.go`):
-1. `applyTransition(issue, action)` → `updated` or the rejection.
+1. `issue.Apply(action)` → `updated` or the rejection.
 2. `priorAssignee := issue.AssigneeValue()`; `postAssignee := priorAssignee` unless the action is `model.Start`, in which case `postAssignee = strings.TrimSpace(start.Assignee)` (`store.go`). Only `Start` rewrites the assignee.
 3. `fromStatus := issue.StatusValue()`, `toStatus := updated.StatusValue()` (`store.go`).
 4. **No-op rule**: `toStatus == fromStatus && postAssignee == priorAssignee` → `transitionWrite{noop: true, post: issue}` — no write, no event (`store.go`).

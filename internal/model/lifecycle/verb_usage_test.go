@@ -440,8 +440,10 @@ func TestActionNameSpellingsAreAccountedFor(t *testing.T) {
 	// ContainerActionError.Action, and the status and retention writers in the
 	// Dolt store, whose fields are both named `action`.
 	wantFields := []string{"Action", "action"}
-	// The parameter every Apply and plan path names its action.
-	wantValues := []string{"Action", "action"}
+	// The parameter every Apply and plan path names its action; FrozenIssueError's
+	// Thaw, the retention action its refusal names; and the conformance case's
+	// freeze, the retention action that puts an issue out of the flow.
+	wantValues := []string{"Action", "Thaw", "action", "freeze"}
 	// Verb()'s own receiver: the only ActionName declared inside a function.
 	wantScoped := []string{"n"}
 

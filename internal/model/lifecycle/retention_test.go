@@ -172,6 +172,31 @@ func TestFrozen(t *testing.T) {
 	}
 }
 
+// Thaw's pairing is held against Retain's table rather than restated: for each
+// frozen variant, the one retention action that lands on Live is found by
+// running all four through Retain, and Thaw must name that one.
+func TestThawIsTheActionRetainTakesToLive(t *testing.T) {
+	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	if action, frozen := Thaw(Live{}); frozen || action != nil {
+		t.Fatalf("Thaw(Live) = (%#v, %v), want (nil, false)", action, frozen)
+	}
+	for _, r := range []Retention{Archived{At: at}, Deleted{At: at}} {
+		var toLive []RetentionAction
+		for _, action := range []RetentionAction{Archive{}, Unarchive{}, Delete{}, Restore{}} {
+			if next, err := Retain(r, action, at); err == nil && next == (Live{}) {
+				toLive = append(toLive, action)
+			}
+		}
+		if len(toLive) != 1 {
+			t.Fatalf("Retain has %d actions from %#v to Live, want exactly 1: %#v", len(toLive), r, toLive)
+		}
+		action, frozen := Thaw(r)
+		if !frozen || action != toLive[0] {
+			t.Fatalf("Thaw(%#v) = (%#v, %v), want (%#v, true)", r, action, frozen, toLive[0])
+		}
+	}
+}
+
 func TestRetentionName(t *testing.T) {
 	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	for _, tc := range []struct {

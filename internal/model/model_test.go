@@ -32,6 +32,57 @@ func TestApplyRefusesContainerForEveryAction(t *testing.T) {
 	}
 }
 
+// A frozen leaf refuses every status action with one sentence that names its
+// state and the thaw, and no action's verb: the sentence is compared whole
+// across all four actions, so a verb spliced back in fails here.
+func TestApplyRefusesFrozenLeafNamingTheThaw(t *testing.T) {
+	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	for _, tc := range []struct {
+		retention Retention
+		thaw      RetentionAction
+		want      string
+	}{
+		{Archived{At: at}, Unarchive{}, "issue leaf is archived, so its status cannot change: run `lit unarchive leaf` first"},
+		{Deleted{At: at}, Restore{}, "issue leaf is deleted, so its status cannot change: run `lit restore leaf` first"},
+	} {
+		for _, action := range []StatusAction{Start{}, Done{}, Close{Outcome: Wontfix{}}, Reopen{}} {
+			leaf := hydratedIssue(t, Issue{ID: "leaf", IssueType: "task"}, StateOpen)
+			leaf.SetRetention(tc.retention)
+			_, err := leaf.Apply(action)
+			var frozen FrozenIssueError
+			if !errors.As(err, &frozen) {
+				t.Fatalf("Apply(%s on %T) error = %v, want FrozenIssueError", action.Name(), tc.retention, err)
+			}
+			if frozen.Thaw != tc.thaw {
+				t.Errorf("Apply(%s on %T).Thaw = %#v, want %#v", action.Name(), tc.retention, frozen.Thaw, tc.thaw)
+			}
+			if err.Error() != tc.want {
+				t.Errorf("Apply(%s on %T) error = %q, want %q", action.Name(), tc.retention, err.Error(), tc.want)
+			}
+			var refusal Refusal
+			if !errors.As(err, &refusal) {
+				t.Errorf("FrozenIssueError is not a Refusal, so the CLI would advise a retry that cannot succeed")
+			}
+		}
+	}
+}
+
+// Unarchiving a container would not make any status action legal, so the
+// container refusal must win: a frozen refusal there names a thaw that leads
+// only to the next refusal.
+func TestApplyOnFrozenContainerRefusesAsContainer(t *testing.T) {
+	child := hydratedIssue(t, Issue{ID: "a", IssueType: "task"}, StateOpen)
+	container, err := HydrateAllOf(Issue{ID: "epic", IssueType: "epic"}, []Issue{child})
+	if err != nil {
+		t.Fatalf("HydrateAllOf() error = %v", err)
+	}
+	container.SetRetention(Archived{At: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)})
+	var containerErr ContainerActionError
+	if _, err := container.Apply(Done{}); !errors.As(err, &containerErr) {
+		t.Fatalf("Apply(done on archived epic) error = %v, want ContainerActionError", err)
+	}
+}
+
 // TestApplyTargetStateOnLeafProducesTargetState exercises every (from, action)
 // pair on a hydrated leaf to confirm Issue.Apply obeys the target-state
 // contract: action determines the post-state regardless of from-state, and

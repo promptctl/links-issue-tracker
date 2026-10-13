@@ -94,20 +94,6 @@ type Store struct {
 	commitWorkingSetHookForTest func() error
 }
 
-// applyTransition runs every guard a status transition must pass before it
-// writes — the archived/deleted refusal and the lifecycle Apply (which rejects
-// every action on a container, whose state is derived from children) — and
-// returns the post-transition issue, or the error the write would surface. It
-// never mutates the store. [LAW:single-enforcer]
-func applyTransition(issue model.Issue, action model.StatusAction) (model.Issue, error) {
-	// [LAW:single-enforcer] What counts as out-of-the-flow is the typed Frozen
-	// predicate beside the Retention sum, not a variant match owned here.
-	if model.Frozen(issue.Retention()) {
-		return model.Issue{}, fmt.Errorf("cannot %s archived or deleted issue", action.Name().Verb())
-	}
-	return issue.Apply(action)
-}
-
 func Open(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store, err error) {
 	if err := validateOpenArgs(doltRootDir, workspaceID); err != nil {
 		return nil, err
@@ -1500,7 +1486,7 @@ func (s *Store) planLifecycleAction(ctx context.Context, issue model.Issue, acto
 
 // transitionWrite is a fully-planned status transition, ready to execute
 // against a tx. planStatusTransition is the read+validate+compute half — it runs
-// the applyTransition guards, the assignee rule, the redirect-target validation
+// Issue.Apply's guards, the assignee rule, the redirect-target validation
 // (which reads the DB to confirm the target exists), and the change-row diff,
 // but performs no writes. applyTransitionTx is the write half: the single
 // guarded UPDATE plus the event. The split is read/compute vs
@@ -1533,7 +1519,7 @@ func (w transitionWrite) postIssue() model.Issue { return w.post }
 func (w transitionWrite) isNoop() bool           { return w.noop }
 
 func (s *Store) planStatusTransition(ctx context.Context, issue model.Issue, actor string, reason string, action model.StatusAction) (transitionWrite, error) {
-	updated, err := applyTransition(issue, action)
+	updated, err := issue.Apply(action)
 	if err != nil {
 		return transitionWrite{}, err
 	}

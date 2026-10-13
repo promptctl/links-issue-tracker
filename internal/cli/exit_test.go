@@ -30,6 +30,7 @@ func TestExitCodeMappings(t *testing.T) {
 		{name: "usage unknown flag", err: UsageError{Message: "unknown flag: --json"}, want: ExitUsage},
 		{name: "string conflict", err: MergeConflictError{Message: "sync import conflict"}, want: ExitConflict},
 		{name: "store validation", err: model.ValidationError{Message: "issue type must be task, feature, bug, chore, or epic"}, want: ExitValidation},
+		{name: "frozen issue", err: model.FrozenIssueError{ID: "lit-1", Retention: model.Deleted{}, Thaw: model.Restore{}}, want: ExitValidation},
 		{name: "unsupported flag", err: UnsupportedError{Message: "--output is no longer supported; omit it for text output"}, want: ExitValidation},
 		{name: "takeover declined wrapped", err: fmt.Errorf("start: %w", takeoverUnconfirmedError{Message: "takeover declined"}), want: ExitValidation},
 		{name: "purge declined", err: purgeUnconfirmedError{Message: "purge declined"}, want: ExitValidation},
