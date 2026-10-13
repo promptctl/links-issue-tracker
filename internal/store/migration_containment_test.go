@@ -168,6 +168,20 @@ func TestContainmentMigrationHomesEveryLeaf(t *testing.T) {
 	f.parent(t, ctx, "t-fork", "t-l1")
 	f.parent(t, ctx, "t-fork", "t-l2")
 
+	// Restored data: a child with two leaf parents, one under an epic and
+	// one under a leaf that goes nowhere. The dead end is as deep as the epic
+	// and sorts before it; the epic is the destination all the same, since
+	// it is the nearest epic any fork reached.
+	f.issue(t, ctx, seedRow{id: "t-e5", issueType: "epic", rank: "L"})
+	f.issue(t, ctx, seedRow{id: "t-l5", issueType: "task", rank: "V"})
+	f.parent(t, ctx, "t-l5", "t-e5")
+	f.issue(t, ctx, seedRow{id: "t-d2", issueType: "task", rank: "V"})
+	f.issue(t, ctx, seedRow{id: "t-d1", issueType: "task", rank: "V"})
+	f.parent(t, ctx, "t-d1", "t-d2")
+	f.issue(t, ctx, seedRow{id: "t-fork2", issueType: "task", rank: "V"})
+	f.parent(t, ctx, "t-fork2", "t-l5")
+	f.parent(t, ctx, "t-fork2", "t-d1")
+
 	// Restored data: a child holding an epic parent and a leaf parent in
 	// another epic. It is already home, so it does not move: the leaf edge
 	// goes, the epic edge stays, and its lane is left alone.
@@ -216,6 +230,10 @@ func TestContainmentMigrationHomesEveryLeaf(t *testing.T) {
 		"t-fork":             "t-e1",
 		"t-l4":               "t-e4",
 		"t-held":             "t-e3",
+		"t-l5":               "t-e5",
+		"t-d2":               unfiledID,
+		"t-d1":               unfiledID,
+		"t-fork2":            "t-e5",
 		"t-loop-leaf":        "t-loop-epic",
 		"t-loop-epic":        "",
 		unfiledID:            "",

@@ -2,7 +2,6 @@ package memory
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -23,7 +22,7 @@ func (e *Engine) BulkApply(ctx context.Context, prefix, actor string, specs []st
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if err := validateBulkSpecs(specs); err != nil {
+	if err := storage.ValidateBulkSpecs(specs); err != nil {
 		return storage.BulkApplyResult{}, err
 	}
 	order, err := creationOrder(bulkGraph(specs))
@@ -78,7 +77,7 @@ func (e *Engine) ImportTree(ctx context.Context, prefix string, specs []storage.
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if err := validateImportSpecs(specs); err != nil {
+	if err := storage.ValidateImportTreeSpecs(specs); err != nil {
 		return storage.ImportTreeResult{}, err
 	}
 	order, err := creationOrder(importGraph(specs))
@@ -352,171 +351,3 @@ func creationOrder(graph localGraph) ([]int, error) {
 }
 
 // --- validation -----------------------------------------------------------
-
-// validateBulkSpecs enumerates the whole accept/reject shape of a bulk file
-// before any document is applied, so a batch either wholly makes sense or
-// fails before touching the store. There are exactly two legal document
-// shapes — a create and an update — and the ID is what tells them apart.
-// [LAW:types-are-the-program]
-func validateBulkSpecs(specs []storage.BulkIssueSpec) error {
-	if len(specs) == 0 {
-		return errors.New("bulk: no issues in input")
-	}
-	seenID := map[string]struct{}{}
-	seenLocal := map[string]struct{}{}
-	for i, spec := range specs {
-		for _, field := range []struct{ name, value string }{
-			{"id", spec.ID}, {"local_id", spec.LocalID}, {"parent", spec.Parent},
-		} {
-			if field.value != strings.TrimSpace(field.value) {
-				return fmt.Errorf("bulk: doc %d %s %q has surrounding whitespace", i, field.name, field.value)
-			}
-		}
-		for _, dep := range spec.DependsOn {
-			if dep != strings.TrimSpace(dep) {
-				return fmt.Errorf("bulk: doc %d depends_on entry %q has surrounding whitespace", i, dep)
-			}
-			if spec.LocalID != "" && dep == spec.LocalID {
-				return fmt.Errorf("bulk: doc %d (local_id %q) cannot depend on itself", i, spec.LocalID)
-			}
-		}
-		if spec.ID != "" {
-			if err := validateBulkUpdate(i, spec); err != nil {
-				return err
-			}
-			if _, dup := seenID[spec.ID]; dup {
-				return fmt.Errorf("bulk: duplicate id %q", spec.ID)
-			}
-			seenID[spec.ID] = struct{}{}
-			continue
-		}
-		if err := validateBulkCreate(i, spec); err != nil {
-			return err
-		}
-		if spec.LocalID == "" {
-			continue
-		}
-		if _, dup := seenLocal[spec.LocalID]; dup {
-			return fmt.Errorf("bulk: duplicate local_id %q", spec.LocalID)
-		}
-		seenLocal[spec.LocalID] = struct{}{}
-	}
-	return nil
-}
-
-func validateBulkCreate(i int, spec storage.BulkIssueSpec) error {
-	if spec.Title == nil || strings.TrimSpace(*spec.Title) == "" {
-		return fmt.Errorf("bulk: doc %d missing title", i)
-	}
-	if spec.Topic == nil || strings.TrimSpace(*spec.Topic) == "" {
-		return fmt.Errorf("bulk: doc %d missing topic", i)
-	}
-	if spec.IssueType == nil {
-		return fmt.Errorf("bulk: doc %d missing type", i)
-	}
-	if _, err := model.ParseIssueType(*spec.IssueType); err != nil {
-		return fmt.Errorf("bulk: doc %d has invalid type %q", i, *spec.IssueType)
-	}
-	if spec.Priority != nil {
-		if _, err := model.ParsePriority(*spec.Priority); err != nil {
-			return fmt.Errorf("bulk: doc %d has invalid priority %d", i, *spec.Priority)
-		}
-	}
-	if spec.Reason != "" {
-		return fmt.Errorf("bulk: doc %d sets reason without id (reason only applies to updates)", i)
-	}
-	return nil
-}
-
-// validateBulkUpdate refuses the fields an update document has no business
-// setting. Each one is somebody else's verb — topic is immutable, reparenting
-// and dependency wiring are their own commands — so a document that states one
-// is asking for something this path would silently not do.
-func validateBulkUpdate(i int, spec storage.BulkIssueSpec) error {
-	if spec.LocalID != "" {
-		return fmt.Errorf("bulk: doc %d (id %q) sets local_id; local_id only applies to new tickets", i, spec.ID)
-	}
-	if spec.Topic != nil {
-		return fmt.Errorf("bulk: doc %d (id %q) sets topic; topic is immutable and update cannot change it", i, spec.ID)
-	}
-	if spec.Parent != "" {
-		return fmt.Errorf("bulk: doc %d (id %q) sets parent; reparent with `lit parent set` instead", i, spec.ID)
-	}
-	if len(spec.DependsOn) > 0 {
-		return fmt.Errorf("bulk: doc %d (id %q) sets depends_on; wire dependencies with `lit dep add` instead", i, spec.ID)
-	}
-	if spec.IssueType != nil {
-		if _, err := model.ParseIssueType(*spec.IssueType); err != nil {
-			return fmt.Errorf("bulk: doc %d (id %q) has invalid type %q", i, spec.ID, *spec.IssueType)
-		}
-	}
-	if spec.Priority != nil {
-		if _, err := model.ParsePriority(*spec.Priority); err != nil {
-			return fmt.Errorf("bulk: doc %d (id %q) has invalid priority %d", i, spec.ID, *spec.Priority)
-		}
-	}
-	if !statesAnyUpdatableField(spec) {
-		return fmt.Errorf("bulk: doc %d (id %q) has no fields to update", i, spec.ID)
-	}
-	return nil
-}
-
-func statesAnyUpdatableField(spec storage.BulkIssueSpec) bool {
-	return spec.Title != nil || spec.Description != nil || spec.Prompt != nil ||
-		spec.IssueType != nil || spec.Priority != nil || spec.Assignee != nil ||
-		spec.Labels != nil || spec.Lane != nil
-}
-
-// validateImportSpecs gates a tree-import file. Every reference in it must
-// resolve inside the file — a tree import states a whole tree — which is what
-// lets the create loop below it read parent and dependency names without
-// asking whether they are there.
-func validateImportSpecs(specs []storage.ImportTreeSpec) error {
-	if len(specs) == 0 {
-		return errors.New("import: no issues in input")
-	}
-	named := map[string]struct{}{}
-	for i, spec := range specs {
-		if strings.TrimSpace(spec.LocalID) == "" {
-			return fmt.Errorf("import: spec %d missing local_id", i)
-		}
-		if spec.LocalID != strings.TrimSpace(spec.LocalID) {
-			return fmt.Errorf("import: spec %d local_id %q has surrounding whitespace", i, spec.LocalID)
-		}
-		if strings.TrimSpace(spec.Title) == "" {
-			return fmt.Errorf("import: spec %q missing title", spec.LocalID)
-		}
-		if _, err := model.ParseIssueType(spec.IssueType); err != nil {
-			return fmt.Errorf("import: spec %q has invalid type %q", spec.LocalID, spec.IssueType)
-		}
-		if _, err := model.ParsePriority(spec.Priority); err != nil {
-			return fmt.Errorf("import: spec %q has invalid priority %d", spec.LocalID, spec.Priority)
-		}
-		if _, dup := named[spec.LocalID]; dup {
-			return fmt.Errorf("import: duplicate local_id %q", spec.LocalID)
-		}
-		named[spec.LocalID] = struct{}{}
-	}
-	for _, spec := range specs {
-		if spec.Parent != "" {
-			if spec.Parent != strings.TrimSpace(spec.Parent) {
-				return fmt.Errorf("import: spec %q parent %q has surrounding whitespace", spec.LocalID, spec.Parent)
-			}
-			if _, ok := named[spec.Parent]; !ok {
-				return fmt.Errorf("import: spec %q references missing parent %q", spec.LocalID, spec.Parent)
-			}
-		}
-		for _, dep := range spec.DependsOn {
-			if dep != strings.TrimSpace(dep) {
-				return fmt.Errorf("import: spec %q depends_on entry %q has surrounding whitespace", spec.LocalID, dep)
-			}
-			if dep == spec.LocalID {
-				return fmt.Errorf("import: spec %q cannot depend on itself", spec.LocalID)
-			}
-			if _, ok := named[dep]; !ok {
-				return fmt.Errorf("import: spec %q references missing depends_on %q", spec.LocalID, dep)
-			}
-		}
-	}
-	return nil
-}

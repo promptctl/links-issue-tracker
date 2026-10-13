@@ -108,8 +108,10 @@ WHERE (
 -- members sat; the members keep their own keys, which now order them among
 -- each other inside the epic. No top-level leaf with a key means an unranked
 -- epic. created_at is the date this migration was authored rather than the
--- moment it ran, for the same reason the id is fixed: two checkouts must mint
--- one row, not two rows that disagree in a cell.
+-- moment it ran, for the same reason the id is fixed: two checkouts mint one
+-- row. The rank is the one cell read from this checkout's own data, so two
+-- checkouts that diverged in their top-level leaves can disagree in it, and
+-- sync merges that cell as it merges any concurrent edit to one row.
 INSERT INTO issues (
   id, title, description, agent_prompt, status, priority, issue_type, topic, assignee,
   item_rank, lane, created_at, updated_at, closed_at, archived_at, deleted_at,
@@ -134,17 +136,20 @@ WHERE @minted;
 -- The move. For every child under a parent that is not an epic, the climb
 -- starts at that parent and walks up while the ancestor is still not an epic,
 -- cut at a depth no real hierarchy approaches so a loop of leaves ends rather
--- than runs. The deepest row is where the walk stopped: an epic, which is the
--- destination, or a leaf with no parent of its own or the depth cut, which
--- leaves the child with no epic above it, so it goes unfiled. Restored data
--- admits shapes the write boundary refuses, and the climb yields one
--- destination per child under all of them: a child with two leaf parents
--- forks the climb, and the deepest fork's lowest id wins, the lower-id rule
--- every listing applies; a child that already holds an epic parent beside a
--- leaf parent is home and is not climbed, so the DELETE below leaves it its
--- epic alone; and an epic in a loop through a leaf climbs back to itself,
--- which is no edge at all, so it comes out at the top level, where an epic
--- may live. Every leaf with no parent at all goes unfiled too. The new edge
+-- than runs. A walk stops at an epic, at a leaf with no parent of its own, or
+-- at the depth cut; the destination is the nearest epic any walk reached, and
+-- a child none of whose walks reached one has no epic above it, so it goes
+-- unfiled. Restored data admits shapes the write boundary refuses, and the
+-- climb yields one destination per child under all of them: a child with two
+-- leaf parents forks the climb, and the nearest epic wins, the lowest id
+-- among epics at that depth, the lower-id rule every listing applies; a child
+-- that already holds an epic parent beside a leaf parent is home and is not
+-- climbed, so the DELETE below leaves it its epic alone; and an epic in a
+-- loop through a leaf climbs back to itself, which is no edge at all, so it
+-- comes out at the top level, where an epic may live. The nearest epic is
+-- picked through grouped CTEs rather than a correlated subquery: a subquery
+-- correlated on the recursive member and joined to issues returned no rows
+-- on this engine, so every child went unfiled. Every leaf with no parent at all goes unfiled too. The new edge
 -- is stamped with the child's own created_at and 'links', the stamps `lit new
 -- --parent` writes on the edge it creates, and is not written again where the
 -- child already holds it.
@@ -165,15 +170,24 @@ WITH RECURSIVE climb (child, anc, depth) AS (
   JOIN relations up ON up.src_id = a.id AND up.type = 'parent-child'
   WHERE a.issue_type <> 'epic' AND climb.depth < 64
 ),
+reached (child, anc, depth) AS (
+  SELECT c.child, c.anc, c.depth
+  FROM climb c
+  JOIN issues e ON e.id = c.anc AND e.issue_type = 'epic'
+),
+nearest (child, depth) AS (
+  SELECT reached.child, MIN(reached.depth) FROM reached GROUP BY reached.child
+),
 dest (child, anc) AS (
-  SELECT c1.child, MIN(c1.anc)
-  FROM climb c1
-  WHERE c1.depth = (SELECT MAX(c2.depth) FROM climb c2 WHERE c2.child = c1.child)
-  GROUP BY c1.child
+  SELECT r.child, MIN(r.anc)
+  FROM reached r
+  JOIN nearest n ON n.child = r.child AND n.depth = r.depth
+  GROUP BY r.child
 ),
 moved (child, dst) AS (
-  SELECT d.child, COALESCE((SELECT e.id FROM issues e WHERE e.id = d.anc AND e.issue_type = 'epic'), @unfiled)
-  FROM dest d
+  SELECT c.child, COALESCE(d.anc, @unfiled)
+  FROM (SELECT DISTINCT climb.child FROM climb) c
+  LEFT JOIN dest d ON d.child = c.child
   UNION ALL
   SELECT i.id, @unfiled
   FROM issues i

@@ -2272,6 +2272,58 @@ func everyTicketLivesInsideAContainer(t *testing.T, ctx context.Context, st stor
 	assertIssueIDs(t, "children of the leaf after the refusals", mustChildren(t, ctx, st, leaf.ID), nil)
 	assertIssueIDs(t, "children of the epic after the refusals", mustChildren(t, ctx, st, epic.ID), []string{leaf.ID, nested.ID})
 
+	// The two file imports are gated before their first write: a file with a
+	// loose leaf, or a leaf named as a parent, is refused whole, with nothing
+	// of it landed — not even the tombstones a compensated import leaves.
+	before := mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true, IncludeArchived: true})
+	epicTitle, leafTitle, underTitle, topic := "bulk epic", "bulk leaf", "bulk under a leaf", "core"
+	epicType, leafType, bugType := "epic", "task", "bug"
+	for _, imp := range []struct {
+		what string
+		do   func() error
+	}{
+		{"ImportTree(a loose leaf after an epic)", func() error {
+			_, err := st.ImportTree(ctx, prefix, []storage.ImportTreeSpec{
+				{LocalID: "e", Title: "imported epic", IssueType: "epic", Topic: "core"},
+				{LocalID: "l", Title: "loose leaf", IssueType: "task", Topic: "core"},
+			})
+			return err
+		}},
+		{"ImportTree(a leaf under a leaf)", func() error {
+			_, err := st.ImportTree(ctx, prefix, []storage.ImportTreeSpec{
+				{LocalID: "e", Title: "imported epic", IssueType: "epic", Topic: "core"},
+				{LocalID: "l", Title: "imported leaf", IssueType: "task", Topic: "core", Parent: "e"},
+				{LocalID: "u", Title: "under a leaf", IssueType: "bug", Topic: "core", Parent: "l"},
+			})
+			return err
+		}},
+		{"BulkApply(a loose leaf after an epic)", func() error {
+			_, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
+				{LocalID: "e", Title: &epicTitle, Topic: &topic, IssueType: &epicType},
+				{Title: &leafTitle, Topic: &topic, IssueType: &leafType},
+			})
+			return err
+		}},
+		{"BulkApply(a leaf under a leaf in the file)", func() error {
+			_, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
+				{LocalID: "e", Title: &epicTitle, Topic: &topic, IssueType: &epicType},
+				{LocalID: "l", Title: &leafTitle, Topic: &topic, IssueType: &leafType, Parent: "e"},
+				{Title: &underTitle, Topic: &topic, IssueType: &bugType, Parent: "l"},
+			})
+			return err
+		}},
+	} {
+		err := imp.do()
+		var refused model.ValidationError
+		if !errors.As(err, &refused) {
+			t.Errorf("%s error = %v; want a ValidationError", imp.what, err)
+		}
+	}
+	after := mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true, IncludeArchived: true})
+	if len(after) != len(before) {
+		t.Errorf("issues after the refused imports = %d, want %d: a file the gate refuses writes nothing", len(after), len(before))
+	}
+
 	// A leaf keeps its parent: neither detach door removes the edge, and the
 	// refusal names the move that does what the caller meant.
 	for _, detach := range []struct {
