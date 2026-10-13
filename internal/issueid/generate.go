@@ -107,13 +107,14 @@ type TakenFunc func(candidate string) (bool, error)
 // topic though a candidate can only collide inside its own, deliberately
 // conservative in the direction that costs id length rather than uniqueness.
 //
-// What population cannot see is the ids hard-deleted out of ns, which leave the
-// count while a fresh candidate can still land on them — a freed id is
-// reoccupiable by coincidence and uncountable by construction, since the delete
-// takes the row. That residual is bounded and accepted rather than fixed:
-// MinHashLength holds until one parent's direct children number in the
-// hundreds, a boundary TestComputeAdaptiveLength pins so this claim cannot
-// drift from the arithmetic.
+// What population cannot see is the ids purged out of ns, which leave the
+// count. A purged id is still never reoccupied — each store's taken probe
+// reads its purge records beside its live rows — so the only cost is a hash
+// sized by a count a little short of every id ns has held. That residual is
+// bounded and accepted rather than fixed: MinHashLength holds until one
+// parent's direct children number in the hundreds, a boundary
+// TestComputeAdaptiveLength pins so this claim cannot drift from the
+// arithmetic.
 //
 // [LAW:dataflow-not-control-flow] One sweep runs for every id ever minted;
 // the namespace and population are values it reads, never branches it takes.

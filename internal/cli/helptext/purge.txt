@@ -1,0 +1,19 @@
+Permanently remove a ticket: its fields, comments, labels, history, and every
+edge to or from it. `lit delete` hides a ticket and `lit restore` brings it
+back; a purge cannot be undone.
+
+What remains is a purge record that names the id and nothing else. Sync
+carries the record to every store lit syncs with, and each store that receives
+it drops the ticket, even one that edited the ticket in the meantime.
+Restoring an older backup does not bring it back, and the id is never issued
+again. Other tickets are not edited: a description, comment, follow-up or
+duplicate that mentions the id keeps the mention.
+
+An epic that still holds tickets is refused. Move them to another epic with
+`lit parent set`, or purge them first.
+
+Copies made before the purge are not reached: past Dolt commits, the store's
+history on the git remote (refs/dolt/data), `lit snapshots`, and JSON backups
+still hold the ticket until they are pruned.
+
+At a terminal the purge asks for confirmation; elsewhere, pass --yes.

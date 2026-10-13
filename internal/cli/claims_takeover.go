@@ -125,17 +125,29 @@ func confirmFreshTakeover(stdout io.Writer, cc claimContext, lane model.LaneID, 
 	if !isTerminal(stdout) {
 		return takeoverUnconfirmedError{Message: fmt.Sprintf("%s — this lane is claimed and active; pass --take to confirm the takeover", line)}
 	}
-	if _, err := fmt.Fprintf(stdout, "%s\ntake over this lane? [y/N] ", line); err != nil {
+	confirmed, err := askYesNo(stdout, line+"\ntake over this lane?")
+	if err != nil {
 		return err
 	}
-	answer, err := bufio.NewReader(os.Stdin).ReadString('\n')
-	if err != nil && err != io.EOF {
-		return fmt.Errorf("read takeover confirmation: %w", err)
-	}
-	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(answer)), "y") {
+	if !confirmed {
 		return takeoverUnconfirmedError{Message: "takeover declined"}
 	}
 	return nil
+}
+
+// askYesNo asks question at the terminal and reports whether the answer
+// starts with y. Anything else — including no answer at all — is a no, so the
+// destructive side of every gate that asks is the one a person has to type.
+// [LAW:single-enforcer] the takeover and the purge gates ask through here.
+func askYesNo(stdout io.Writer, question string) (bool, error) {
+	if _, err := fmt.Fprintf(stdout, "%s [y/N] ", question); err != nil {
+		return false, err
+	}
+	answer, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil && err != io.EOF {
+		return false, fmt.Errorf("read confirmation: %w", err)
+	}
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(answer)), "y"), nil
 }
 
 // takeoverUnconfirmedError is the gate's answer when a live foreign hold was

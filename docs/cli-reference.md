@@ -64,6 +64,7 @@ the code it arrives on:
 | `template_shape_refused` | 3 | A template override on disk has the wrong shape |
 | `stored_prefix_refused` | 3 | The `issue_prefix` stored in the workspace config is not a legal prefix |
 | `takeover_unconfirmed` | 3 | The lane is held by another checkout; `--take` was not passed |
+| `purge_unconfirmed` | 3 | `lit purge` was not confirmed: `--yes` was not passed, or the prompt was declined |
 | `outside_git_workspace` | 3 | The working directory is not in a git repository/worktree |
 | `workspace_not_initialized` | 3 | The repository has no lit workspace (`lit init` has never run) |
 | `workspace_schema_ahead` | 3 | The workspace's schema is newer than this `lit` supports |
@@ -588,6 +589,7 @@ Retention (Issue Retention):
 |---------|-----------|-------|-------|
 | `lit archive` / `lit unarchive` | set / clear the archived flag | | Archived issues hide from listings. |
 | `lit delete` / `lit restore` | set / clear the deleted flag | | Soft delete; `restore` brings it back. |
+| `lit purge` | removes the issue for good | `[--yes]` | Removes the row, its comments, labels, history and every edge to or from it, and leaves a purge record naming the id. Sync carries the record, and every store that receives it drops the issue, even one that edited it meanwhile; a restored backup does not bring it back, and the id is never issued again. An epic that still holds tickets is refused. Past Dolt commits, the remote's `refs/dolt/data`, snapshots and JSON backups made before the purge still hold the issue. At a terminal it asks for confirmation; elsewhere `--yes` confirms. |
 
 ---
 

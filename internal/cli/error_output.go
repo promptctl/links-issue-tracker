@@ -50,6 +50,7 @@ const (
 	reasonNoReadyWork             commandReason = "no_ready_work"
 	reasonOutsideGitWorkspace     commandReason = "outside_git_workspace"
 	reasonOwnerApprovalRequired   commandReason = "owner_approval_required"
+	reasonPurgeUnconfirmed        commandReason = "purge_unconfirmed"
 	reasonRemoteUnreachable       commandReason = "remote_unreachable"
 	reasonRetiredCommand          commandReason = "retired_command"
 	reasonScopeExhausted          commandReason = "scope_exhausted"
@@ -168,6 +169,12 @@ func commandErrorReason(err error) commandReason {
 	var takeover takeoverUnconfirmedError
 	if errors.As(err, &takeover) {
 		return reasonTakeoverUnconfirmed
+	}
+	// A purge not confirmed. Its own reason for the same cause as takeover's:
+	// the adjustment that clears it is a flag the remediation has to name.
+	var purge purgeUnconfirmedError
+	if errors.As(err, &purge) {
+		return reasonPurgeUnconfirmed
 	}
 	var outsideWorkspace OutsideWorkspaceError
 	if errors.As(err, &outsideWorkspace) {
@@ -338,6 +345,10 @@ func commandErrorRemediation(reason commandReason) string {
 		// call the takeover is — an agent acts on this line, and --take
 		// overrides another checkout's live work.
 		return "Rerun with `--take` to take the lane over, or run `lit next` for work nobody else holds. " + agentInstructionsOpen + "Taking over a lane another checkout holds right now overrides that checkout's work: pass `--take` only when the user directs the takeover." + agentInstructionsClose
+	case reasonPurgeUnconfirmed:
+		// The reversible way out is named beside the flag, and the envelope says
+		// whose call a purge is: it cannot be undone and reaches every store.
+		return "Rerun with `--yes` to purge it, or run `lit delete <id>` to remove it reversibly. " + agentInstructionsOpen + "A purge cannot be undone and reaches every store lit syncs with: pass `--yes` only when the user directs the purge." + agentInstructionsClose
 	case reasonOutsideGitWorkspace:
 		return "Run the command inside a git repository/worktree with links initialized."
 	case reasonWorkspaceNotInitialized:
