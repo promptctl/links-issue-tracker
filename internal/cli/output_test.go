@@ -88,10 +88,11 @@ func TestShowOmitsHistoryTrailWhileHistoryViewRendersIt(t *testing.T) {
 }
 
 // TestShowRendersCommentBodiesInTheirAuthoredLines pins the detail view's
-// rendering of a stored body: a body of N lines prints as N lines, not one line
-// of literal backslash-n. The first body carries a blank line and a line shaped
-// like a comment row, so the expectation also pins that the indentation keeps
-// the second comment the only unindented "- [" row. The second body keeps the
+// rendering of a stored comment: its row leads with the comment's id, and a
+// body of N lines prints as N lines, not one line of literal backslash-n. The
+// first body carries a blank line and a line shaped like a comment row, so the
+// expectation also pins that the indentation keeps that line from starting a
+// row: only the two comments' rows are unindented. The second body keeps the
 // trailing newline an imported comment can carry, which prints no extra line.
 // [LAW:behavior-not-structure]
 func TestShowRendersCommentBodiesInTheirAuthoredLines(t *testing.T) {
@@ -108,8 +109,8 @@ func TestShowRendersCommentBodiesInTheirAuthoredLines(t *testing.T) {
 	detail := model.IssueDetail{
 		Issue: issue,
 		Comments: []model.Comment{
-			{CreatedBy: "alice", Body: "Close note.\n\n- [bob] not a comment\nlast line"},
-			{CreatedBy: "bob", Body: "one line\n"},
+			{ID: "cmt-a", CreatedBy: "alice", Body: "Close note.\n\n- cmt-b [bob] not a comment\nlast line"},
+			{ID: "cmt-b", CreatedBy: "bob", Body: "one line\n"},
 		},
 	}
 
@@ -118,11 +119,11 @@ func TestShowRendersCommentBodiesInTheirAuthoredLines(t *testing.T) {
 		t.Fatalf("printIssueDetail() error = %v", err)
 	}
 	want := "\ncomments:\n" +
-		"- [alice] Close note.\n" +
+		"- cmt-a [alice] Close note.\n" +
 		"  \n" +
-		"  - [bob] not a comment\n" +
+		"  - cmt-b [bob] not a comment\n" +
 		"  last line\n" +
-		"- [bob] one line\n"
+		"- cmt-b [bob] one line\n"
 	if !strings.HasSuffix(show.String(), want) {
 		t.Fatalf("lit show comments =\n%s\nwant suffix:\n%s", show.String(), want)
 	}

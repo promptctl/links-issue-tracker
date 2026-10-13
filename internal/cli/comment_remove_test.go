@@ -74,13 +74,16 @@ func TestCommentRemove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("show (before) error = %v", err)
 	}
-	if !bytes.Contains(before.Bytes(), []byte(marker)) {
-		t.Fatalf("comment not visible in show before delete: %s", before.String())
+	// The id rm takes is read off `lit show`, the way an agent finds it: the
+	// comment's row leads with it.
+	shownID := shownCommentID(before.String(), marker)
+	if shownID != commentID {
+		t.Fatalf("show lists the comment under id %q, want %s:\n%s", shownID, commentID, before.String())
 	}
 
 	// `lit comment rm` text prints "<issueID> <commentID>" for the removed
 	// comment; assert it names the comment we just removed.
-	rmOut, err := run("comment", "rm", commentID)
+	rmOut, err := run("comment", "rm", shownID)
 	if err != nil {
 		t.Fatalf("comment rm error = %v", err)
 	}
@@ -118,6 +121,21 @@ func secondToken(out string) string {
 	for _, line := range strings.Split(out, "\n") {
 		if fields := strings.Fields(line); len(fields) >= 2 {
 			return fields[1]
+		}
+	}
+	return ""
+}
+
+// shownCommentID returns the id leading the `lit show` comment row whose
+// one-line body is body — the "- <id> [author] <body>" shape. Only a row starts
+// at column 0, so an indented body line never matches, and an author holding a
+// space still does.
+func shownCommentID(show, body string) string {
+	for _, line := range strings.Split(show, "\n") {
+		row, isRow := strings.CutPrefix(line, "- ")
+		if isRow && strings.HasSuffix(row, "] "+body) {
+			id, _, _ := strings.Cut(row, " ")
+			return id
 		}
 	}
 	return ""
