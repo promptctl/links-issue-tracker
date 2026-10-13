@@ -153,6 +153,16 @@ func (fs *cobraFlagSet) printHelp(helpOutput io.Writer) error {
 	return nil
 }
 
+// retiredFlags maps each flag lit no longer accepts to the sentence naming
+// what to run instead. A command that still registers the name parses it
+// normally, so an entry answers only where the flag is unknown.
+// [LAW:one-type-per-behavior] every retired flag is one more row, not one more
+// branch.
+var retiredFlags = map[string]string{
+	"continue": "--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag",
+	"assignee": "--assignee does not name who is acting here; name yourself with --by <name> (CLAUDE_CODE_SESSION_ID wins when set), or change a ticket's assignee with `lit update <id> --assignee <name>`",
+}
+
 func parseFlagSet(fs *cobraFlagSet, args []string, stdout io.Writer) error {
 	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
@@ -171,11 +181,13 @@ func parseFlagSet(fs *cobraFlagSet, args []string, stdout io.Writer) error {
 		// bare errors that exit 1 with "Retry the command".
 		// [LAW:types-are-the-program] [LAW:single-enforcer]
 		//
-		// The retired flag is matched on the name pflag parsed, so `--continue`
+		// A retired flag is matched on the name pflag parsed, so `--continue`
 		// and `--continue=x` match while `--continuex` stays an unknown flag.
 		var unknown *pflag.NotExistError
-		if errors.As(err, &unknown) && unknown.GetSpecifiedName() == "continue" {
-			return UnsupportedError{Message: "--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag"}
+		if errors.As(err, &unknown) {
+			if pointer, retired := retiredFlags[unknown.GetSpecifiedName()]; retired {
+				return UnsupportedError{Message: pointer}
+			}
 		}
 		return UsageError{Message: err.Error()}
 	}

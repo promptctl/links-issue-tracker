@@ -617,7 +617,7 @@ func TestRunTransitionActorFromSessionEnv(t *testing.T) {
 }
 
 // TestRunTransitionActorFallsBackToByFlag pins the no-agent path: without the
-// session env, the actor keeps the existing --by/$USER behavior.
+// session env, the actor is the --by value.
 func TestRunTransitionActorFallsBackToByFlag(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
 	ctx := context.Background()

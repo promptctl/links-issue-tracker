@@ -71,7 +71,9 @@ YAML bulk file (creates and updates)
   An update document must set at least one of title, description, prompt,
   type, priority, assignee, labels, lane. A document carrying only id, or
   only id and reason, has nothing to apply and is rejected; reason is
-  free text recorded on the change event, not itself a change.
+  free text recorded on the change event, not itself a change. --by
+  names the actor those change events record; only a YAML file takes
+  it, and a JSON import given --by is refused.
 
   Four keys are rejected outright on an update document, each belonging
   to something else: topic (immutable — no command changes it after

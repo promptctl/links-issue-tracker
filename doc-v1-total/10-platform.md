@@ -17,7 +17,7 @@ Argument handling before any command runs (`internal/cli/cli.go`):
 - `parseGlobalArgs` scans the flag-shaped arguments before the first positional; a `--` among them is removed and ends the scan; a `--output`/`--output=…` among them is a typed `UnsupportedError` ("--output is no longer supported; omit it for text output") (`cli.go`).
 - The root command is `lit` ("Agent-native issue tracker"). With no args it resolves the workspace from cwd: outside a git repo it prints cobra help; inside one it prints the quickstart guidance for the workspace root (`cli.go`). An unrecognized positional is `UnknownCommandError` (`cli.go`).
 - Cobra's default `completion` command is disabled; `SilenceErrors`/`SilenceUsage` are both set; help requests are swallowed and reported as success (`cli.go`).
-- There are no persistent global flags. Per-command flag parsing maps two removed flags to typed errors — `--output` (as above) and `--continue` ("--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag") — and any other unknown flag to `UsageError` (exit 2) (`flagset.go`). `--help` prints `Usage of <cmd>:` plus flag defaults to stdout (`cli.go`).
+- There are no persistent global flags. Per-command flag parsing maps three removed flags to typed errors — `--output` (as above), and from the `retiredFlags` table `--continue` ("--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag") and `--assignee` wherever the command does not register it ("--assignee does not name who is acting here; name yourself with --by <name> (CLAUDE_CODE_SESSION_ID wins when set), or change a ticket's assignee with `lit update <id> --assignee <name>`") — and any other unknown flag to `UsageError` (exit 2) (`flagset.go`). `--help` prints `Usage of <cmd>:` plus flag defaults to stdout (`cli.go`).
 
 Per-command bootstrap (`runWithApp`, `cli.go`): get cwd → `app.Open(ctx, cwd, accessMode)` (outside a git repo → `OutsideWorkspaceError`: "links requires running inside a git repository/worktree") → run the handler with `defer Close()` → on success of a write-mode command, print the mutation sync-staleness banner → after the engine is closed, `maybeAutoSyncAfterCommand` (see chapter 07).
 
@@ -52,7 +52,7 @@ Every variable the shipped binary reads:
 | `LIT_CONFIG_GLOBAL_PATH` | Overrides the global config file path entirely (`config.go`) |
 | `LIT_CONFIG_PROJECT_PATH` | Overrides the project config file path (`config.go`) |
 | `LIT_DISABLE_AUTO_SYNC` | Truthy (`strconv.ParseBool`, parse error = false) → no command schedules a push mirror or a receive, prints a pending receive block, or compacts, and the owner-notify hook never runs (`internal/cli/sync_cadence.go`; `owner_notify.go`) |
-| `CLAUDE_CODE_SESSION_ID` | Non-empty after trim → the acting identity is always `claude_<sessionID>`, overriding `--assignee`/`--by` (`cli.go`) |
+| `CLAUDE_CODE_SESSION_ID` | Non-empty after trim → the acting identity is always `claude_<sessionID>`, overriding `--by` (`cli.go`) |
 | `LNKS_AUTOMATION_TRIGGER` | Non-empty → automation-trace recording is on; the value is the trace's `Trigger` (`internal/cli/automation_trace.go`) |
 | `LNKS_AUTOMATION_REASON` | Default `Reason` on the automation trace when the caller supplied none (`automation_trace.go`) |
 | `LNKS_AUTOMATION_TRACE_REF_FILE` | Non-empty → the recorded trace's path is appended (mode 0644) to that file (`automation_trace.go`) |

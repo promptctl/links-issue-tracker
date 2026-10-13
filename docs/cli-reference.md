@@ -90,11 +90,12 @@ Commands that record an actor resolve it from the `CLAUDE_CODE_SESSION_ID` envir
 variable (producing an identity like `claude_<session-id>`). The `--by` flag is the
 *fallback* for when that variable is unset — when both are present, the environment
 wins. It is one name for one person: the actor every mutating command records, the
-assignee `lit start` claims for, and the reader `lit next` routes for, so an operator
-with no session runs `lit start <id> --by bob` and `lit next --by bob` and is the same
-person to both.
+assignee `lit start` writes, and the reader `lit next` tells whether a ticket in flight
+is theirs, so an operator with no session runs `lit start <id> --by bob` and
+`lit next --by bob` and is the same person to both. `lit start --assignee` is refused
+with a pointer to `--by`.
 
-This session resolution is claim-time only: it applies to `lit start`. Field-writing
+Only `lit start` writes that identity into the assignee field. Field-writing
 commands — `new`, `followup`, `update` — honor an explicit `--assignee`
 verbatim and never substitute the caller's identity; on `lit update`, an empty
 `--assignee ""` clears the assignee, returning the issue to unassigned.

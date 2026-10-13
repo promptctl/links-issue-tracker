@@ -132,14 +132,14 @@ func resolveIdentity(explicit string) string {
 
 Precedence, exactly: **`CLAUDE_CODE_SESSION_ID` (trimmed, non-empty) always wins** and yields `"claude_" + sessionID` regardless of any flag; otherwise the caller's explicit value, trimmed; otherwise `""` (`internal/cli/cli.go`).
 
-- Assignee on `start`: the action is built as `model.Start{Assignee: actor()}`, where `actor` is the `--by` resolver `transitionLeaf` passes to `registerFlags` (`internal/cli/cli.go`).
+- Assignee on `start`: the action is built as `model.Start{Assignee: actor}`, where `actor` is the identity `transitionLeaf` resolves once from `--by` and hands to the builder `registerFlags` returned (`internal/cli/cli.go`).
 - Actor flag: `--by`, empty default, help string `byUsage`, registered by `registerActor` which never exposes the raw pointer — every read passes through `resolveIdentity` (`internal/cli/cli.go`). `os.Getenv("USER")` was deliberately removed as a privacy violation; the fallback is `""`, normalized by the store to the opaque `"unknown"` (`internal/cli/cli.go`).
-- Applied in `transitionLeaf`: `actor := resolveActor()` then `Store.Apply(ctx, issueID, storage.Change{Action: action, Actor: actor, Reason: *reason})` (`internal/cli/cli.go`).
+- Applied in `transitionLeaf`: the same `actor` goes to `Store.Apply(ctx, issueID, storage.Change{Action: action, Actor: actor, Reason: *reason})` (`internal/cli/cli.go`).
 - Every relation/label/bulk verb resolves through the same rule; tests pin `label add`, `parent set`, `dep add`, `bulk label add`, `bulk close` to `"claude_" + sessionID` and assert raw `$USER` never lands in `CreatedBy`/`Actor` (`internal/cli/attribution_test.go`, helpers).
 - A claimant with no assignee is named by its checkout: `describeClaimant` returns `nameCheckout(c.Checkout)` when `c.Assignee == ""` (`internal/cli/claims_render.go`).
 - `Start` is the only lifecycle action that rewrites the assignee: `type Start struct{ Assignee string }` (`internal/model/lifecycle/action.go`), `Target() State` = `InProgress` (`internal/model/lifecycle/action.go`). `Issue.Assignee` is orthogonal to the status machine (`internal/model/model.go`).
 
-Note the interaction pinned by test: because the env var overrides `--assignee`, an e2e test must clear `CLAUDE_CODE_SESSION_ID` or both checkouts flatten to one assignee and a same-state `start` becomes a documented no-op in `store.Apply`, so the claim never transfers (`internal/cli/claims_takeover_e2e_test.go`).
+Note the interaction pinned by test: because the env var overrides `--by`, an e2e test must clear `CLAUDE_CODE_SESSION_ID` or both checkouts flatten to one assignee and a same-state `start` becomes a documented no-op in `store.Apply`, so the claim never transfers (`internal/cli/claims_takeover_e2e_test.go`).
 
 ---
 

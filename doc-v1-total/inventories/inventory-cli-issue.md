@@ -602,7 +602,6 @@ else ready.
 | `--labels` | string | `""` | "Comma-separated labels" (split by `splitCSV`) |
 | `--lane` | string | `""` | "Lane key partitioning an epic's children into parallel rank-ordered sub-sequences; shared lane serializes, distinct lane parallelizes" |
 | `--top` | bool | `false` | "Promote the new issue to the top of its frame (the default appends it to the bottom)" |
-| `--by` | string | `""` | actor fallback (§1.11) — *note*: `newLeaf` registers no actor; `CreatedBy` is not set from the CLI here |
 
 - `--top` maps to `storage.RankTop`; unflagged uses the zero `RankPlacement`
   (`rankPlacement`, `cli.go`).
@@ -1652,7 +1651,7 @@ Family `labelFamily`, usage `"usage: lit label <add|rm> ..."`
 
 **`lit label add <issue-id> <label>`** (`issue_relations.go`):
 - Declares `positionals: 2` (`issue_relations.go`); `parseLeaf` splits once.
-  Hidden `--by` registered.
+  `--by` registered.
 - Refusal: `len(positional) != 2` →
   `UsageError{"usage: lit label add <issue-id> <label>"}` → exit 2
   (`issue_relations.go`).

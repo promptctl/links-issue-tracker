@@ -281,6 +281,21 @@ func TestStartAndNextNameTheSessionlessOperatorWithOneFlag(t *testing.T) {
 	}
 }
 
+// `lit start --assignee` was the session-less identity flag before --by
+// replaced it, so a caller still passing it is pointed at --by rather than
+// told only that the flag is unknown.
+func TestStartAssigneePointsToBy(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	repo, _ := initBootstrapTestRepo(t)
+	epic := extractTicketID(t, runCLIInDir(t, repo, "new", "--title", "Home epic", "--topic", "next", "--type", "epic"))
+	ticket := extractTicketID(t, runCLIInDir(t, repo, "new", "--title", "Bob's ticket", "--topic", "next", "--type", "task", "--parent", epic))
+
+	_, err := runCLIInDirErr(t, repo, "start", ticket, "--assignee", "bob")
+	if err == nil || ExitCode(err) != ExitValidation || !strings.Contains(err.Error(), "--by <name>") {
+		t.Fatalf("start --assignee bob = %v (exit %d), want exit %d naming --by", err, ExitCode(err), ExitValidation)
+	}
+}
+
 // --by is how a session-less operator names themselves, so --help has to say
 // so: on start, where it becomes the assignee, on next, where it is the reader,
 // and on a mutating command, where it is the actor.
