@@ -885,10 +885,11 @@ type IssueDetail struct {
 	Events    []IssueEvent `json:"events"`
 }
 
-// ExportVersion is the export format every store writes. Version 3 spells the
-// blocked-by edge "blocked-by"; versions 1 and 2 spelled it "blocks", and
-// UnmarshalJSON reads them through RelationTypeFromStored.
-const ExportVersion = 3
+// ExportVersion is the export format every store writes. Version 4 carries
+// the purge records; an export from an earlier version has none. Version 3
+// spells the blocked-by edge "blocked-by"; versions 1 and 2 spelled it
+// "blocks", and UnmarshalJSON reads them through RelationTypeFromStored.
+const ExportVersion = 4
 
 type Export struct {
 	Version     int          `json:"version"`
@@ -899,6 +900,7 @@ type Export struct {
 	Comments    []Comment    `json:"comments"`
 	Labels      []Label      `json:"labels"`
 	Events      []IssueEvent `json:"events"`
+	Purges      []Purge      `json:"purges"`
 }
 
 // v1ExportHistory is the legacy history row produced by Version 1 exports.
@@ -924,7 +926,7 @@ func v1EventID(issueID, action, fromStatus, toStatus, createdBy string, createdA
 }
 
 // UnmarshalJSON handles v1 (history array), v2 (events array, blocked-by edges
-// spelled "blocks") and v3 export formats so old sync files and backup
+// spelled "blocks"), v3, and v4 (purge records) export formats so old sync files and backup
 // restores remain readable after each format change. The decoded value is in
 // the current format whatever version it was read from, so it carries
 // ExportVersion: the version read is consumed here, by the dispatch.
@@ -940,6 +942,7 @@ func (e *Export) UnmarshalJSON(data []byte) error {
 		Comments    []Comment         `json:"comments"`
 		Labels      []Label           `json:"labels"`
 		Events      []IssueEvent      `json:"events"`
+		Purges      []Purge           `json:"purges"`
 		History     []v1ExportHistory `json:"history"`
 	}
 	var raw rawExport
@@ -955,6 +958,7 @@ func (e *Export) UnmarshalJSON(data []byte) error {
 		Comments:    raw.Comments,
 		Labels:      raw.Labels,
 		Events:      raw.Events,
+		Purges:      raw.Purges,
 	}
 	if raw.Version < 3 {
 		for i := range e.Relations {

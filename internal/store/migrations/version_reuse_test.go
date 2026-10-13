@@ -38,6 +38,7 @@ var pinnedVersionContent = map[int64]pinnedMigration{
 	6: {file: "00006_add_follows_up.sql", sha256: "f01b4b1ef42071526c8c97bc0acf4bfa4451e0b95981576e63d8170080441b45"},
 	7: {file: "00007_every_ticket_inside_a_container.sql", sha256: "2eb2ae5ab7a43df7116e4dd9137901d8272f03f89a7569bb67b7437182101458"},
 	8: {file: "00008_blocked_by_edge.sql", sha256: "2ab61664b7a73c4e36dc0a11d37e2f5b86b261a97aebf67ffa364ae9596e9deb"},
+	9: {file: "00009_purges.sql", sha256: "11bb1d6d158ce0775afb44aa29baba1718284fe3af2c36298e40e47add98a664"},
 }
 
 // migrationFile is one on-disk, non-baseline registry entry reduced to the identity

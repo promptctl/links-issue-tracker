@@ -92,7 +92,7 @@ type IssueReader interface {
 	LocalIssueCount(ctx context.Context) (int64, error)
 }
 
-// IssueWriter creates and changes issue records.
+// IssueWriter creates, changes, and purges issue records.
 type IssueWriter interface {
 	// CreateIssue records a new issue and returns it as stored, id minted.
 	CreateIssue(ctx context.Context, in CreateIssueInput) (model.Issue, error)
@@ -103,6 +103,17 @@ type IssueWriter interface {
 	// actual mutations — and an illegal transition is refused rather than
 	// silently ignored. [LAW:dataflow-not-control-flow]
 	Apply(ctx context.Context, id string, c Change) (model.Issue, error)
+
+	// Purge permanently removes an issue: its row, comments, labels, history,
+	// and every edge to or from it, in one write, leaving a model.Purge record
+	// that names the id and nothing else. Delete is the reversible removal;
+	// Purge is the one that cannot be undone. Other issues are not edited — a
+	// mention of the id in their text, follows_up, or redirect target stays.
+	// The id is never minted again, and every merge drops it from both sides
+	// (model.Export.ApplyPurges), so the purge reaches every store the record
+	// reaches. A missing id is NotFoundError, and a container that still holds
+	// tickets is refused: purging it would leave them outside any epic.
+	Purge(ctx context.Context, in PurgeInput) (PurgeResult, error)
 }
 
 // CommentStore records and removes the free-text commentary attached to an

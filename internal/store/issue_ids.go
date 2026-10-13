@@ -26,9 +26,11 @@ func newIssueID(ctx context.Context, tx *sql.Tx, prefix string, topic string, ti
 	if err != nil {
 		return "", err
 	}
+	// A purged id is taken for good: its record is what drops it from every
+	// merge, so a new ticket minted onto it would be dropped along with it.
 	return issueid.Mint(namespace, content, population, func(candidate string) (bool, error) {
 		var count int
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM issues WHERE id = ?`, candidate).Scan(&count); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM issues WHERE id = ?) + (SELECT COUNT(*) FROM purges WHERE issue_id = ?)`, candidate, candidate).Scan(&count); err != nil {
 			return false, err
 		}
 		return count > 0, nil

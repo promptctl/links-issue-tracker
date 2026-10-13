@@ -251,6 +251,11 @@ var knownSourceColumns = map[string]map[string]TargetKey{
 		"from_value": "event_changes.from",
 		"to_value":   "event_changes.to",
 	},
+	"purges": {
+		"issue_id":  "purges.issue_id",
+		"purged_at": "purges.purged_at",
+		"purged_by": "purges.purged_by",
+	},
 }
 
 // bookkeepingTables are the tables a dump carries that have no domain

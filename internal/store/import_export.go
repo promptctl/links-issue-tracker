@@ -33,10 +33,14 @@ func (s *Store) Export(ctx context.Context) (model.Export, error) {
 	if err != nil {
 		return model.Export{}, err
 	}
+	purges, err := listPurges(ctx, s.db)
+	if err != nil {
+		return model.Export{}, err
+	}
 	// hydrateIssues guarantees every Issue it returns is fully hydrated
 	// (post-condition in store.go), so Export does not re-check. Issue.MarshalJSON
 	// remains the boundary that rejects partial values from any other source.
-	return model.Export{Version: model.ExportVersion, WorkspaceID: s.workspaceID, ExportedAt: s.clock.Now(), Issues: issues, Relations: rels, Comments: comments, Labels: labels, Events: events}, nil
+	return model.Export{Version: model.ExportVersion, WorkspaceID: s.workspaceID, ExportedAt: s.clock.Now(), Issues: issues, Relations: rels, Comments: comments, Labels: labels, Events: events, Purges: purges}, nil
 }
 
 func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
@@ -290,8 +294,19 @@ func (s *Store) replaceFromExport(ctx context.Context, export model.Export, stam
 // from issues (ON DELETE CASCADE), so clearing issues already removes them, and
 // re-listing them here would be a second, drift-prone statement of a fact the
 // schema owns.
+//
+// A restore never un-purges. The store's own purge records are read before the
+// clear and folded into the export's, and the export is cut by the union, so
+// a backup taken before a purge lands without the purged ticket and the record
+// survives the rewrite. [LAW:single-enforcer] the cut is ApplyPurges, the same
+// one the merge makes.
 func writeExportTx(ctx context.Context, tx *sql.Tx, export model.Export) error {
-	for _, table := range []string{"labels", "comments", "relations", "issues"} {
+	held, err := listPurges(ctx, tx)
+	if err != nil {
+		return err
+	}
+	export = export.ApplyPurges(model.UnionPurges(held, export.Purges))
+	for _, table := range []string{"labels", "comments", "relations", "issues", "purges"} {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
 			return fmt.Errorf("clear %s: %w", table, err)
 		}

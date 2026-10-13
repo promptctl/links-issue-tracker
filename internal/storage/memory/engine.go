@@ -65,6 +65,10 @@ type Engine struct {
 	// set is what every label read returns and re-sorting on each read would
 	// be deriving the same fact twice.
 	labels map[string][]model.Label
+
+	// purges are the ids this engine has purged, each with its record. An id
+	// here holds no row anywhere above and is never minted again.
+	purges map[string]model.Purge
 }
 
 // record is one stored issue: what an engine must keep to answer with a
@@ -128,6 +132,7 @@ func New(workspaceID string, clock storage.Clock) (*Engine, error) {
 		clock:       clock,
 		issues:      map[string]*record{},
 		labels:      map[string][]model.Label{},
+		purges:      map[string]model.Purge{},
 	}, nil
 }
 

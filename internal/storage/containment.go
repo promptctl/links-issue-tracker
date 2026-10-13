@@ -17,11 +17,12 @@ import (
 // The rule is enforced where the hierarchy is written, in both engines, so a
 // ticket without a home is unrepresentable rather than a stray a later check
 // reports: a create refuses a leaf with no parent and any parent that is not
-// an epic, a reparent refuses a parent that is not an epic, and a detach
-// refuses to leave a leaf with no parent, since that would leave it nowhere. Changing a
-// ticket's type across the container line is refused elsewhere (ApplyIssueFields),
-// so neither half can be broken by retyping an endpoint afterwards. The three
-// refusals live here, once, so the two engines render one rule rather than two
+// an epic, a reparent refuses a parent that is not an epic, a detach refuses
+// to leave a leaf with no parent, since that would leave it nowhere, and a
+// purge refuses a container that still holds tickets, for the same reason.
+// Changing a ticket's type across the container line is refused elsewhere
+// (ApplyIssueFields), so neither half can be broken by retyping an endpoint
+// afterwards. The four refusals live here, once, so the two engines render one rule rather than two
 // that happen to agree. [LAW:single-enforcer] [LAW:one-source-of-truth]
 // [LAW:types-are-the-program]
 
@@ -88,4 +89,16 @@ func RejectDetachingParentEdge(relType model.RelationType, childID string, readC
 		return err
 	}
 	return RejectDetachingALeaf(childID, childType, parentsLeft)
+}
+
+// RejectPurgeOfOccupiedContainer refuses purging issueID while it still holds
+// children: the purge takes every edge to the issue with it, so each child
+// would be left outside any epic. The way on is to move the children or purge
+// them first — both deliberate acts the caller names, never a cascade the
+// purge decides on its own.
+func RejectPurgeOfOccupiedContainer(issueID string, children int) error {
+	if children == 0 {
+		return nil
+	}
+	return model.ValidationError{Message: fmt.Sprintf("cannot purge %s: it holds %d ticket(s), and purging it would leave them outside any epic; move them with lit parent set --child <id> --parent <epic-id>, or purge them first", issueID, children)}
 }

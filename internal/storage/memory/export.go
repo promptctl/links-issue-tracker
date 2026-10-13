@@ -47,6 +47,7 @@ func (e *Engine) Export(ctx context.Context) (model.Export, error) {
 		// events differed from a listing's would be a divergence inside one
 		// engine, before the oracle ever compared two. [LAW:single-enforcer]
 		Events: sortEvents(cloneEvents(e.events)),
+		Purges: e.purgeList(),
 	}, nil
 }
 

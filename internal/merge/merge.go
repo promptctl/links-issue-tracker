@@ -83,6 +83,14 @@ func bothSidesOf[T any](locals, remotes []T) []sidedRows[T] {
 }
 
 func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeResult {
+	// A purge on any side is applied to every side before a single row is
+	// compared, so a purged id is in none of the three and nothing below can
+	// keep it — not an edit on the other side, which would otherwise outrank a
+	// removal, and not a union of unrelated histories. [LAW:single-enforcer]
+	// the rows go through ApplyPurges, the one place a purge is applied.
+	purges := model.UnionPurges(base.Purges, local.Purges, remote.Purges)
+	base, local, remote = base.ApplyPurges(purges), local.ApplyPurges(purges), remote.ApplyPurges(purges)
+
 	baseMap := mapIssues(base.Issues)
 	localMap := mapIssues(local.Issues)
 	remoteMap := mapIssues(remote.Issues)
@@ -120,8 +128,10 @@ func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeR
 			// Both sides changed. A field-aware merge needs both rows present; a
 			// missing side here means one machine removed the whole row while the
 			// other edited it. (Routine deletion is soft — a DeletedAt stamp on a
-			// still-present row — so this whole-row-absence path is reached only by
-			// genuine row removal, and presence is a collection fact, not a field.)
+			// still-present row — and a purge never reaches here, having been
+			// applied to all three sides above, so this whole-row-absence path is
+			// reached only by a row removed without a purge record, and presence
+			// is a collection fact, not a field.)
 			switch {
 			case hasLocal && hasRemote:
 				same, collision := Classify(basePtr, localIssue, remoteIssue, local.WorkspaceID, remote.WorkspaceID)
@@ -168,6 +178,7 @@ func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeR
 		Comments:    mergeComments(scope, local.Comments, remote.Comments),
 		Labels:      mergeLabels(scope, base.Labels, local.Labels, remote.Labels),
 		Events:      mergeEvents(scope, local.Events, remote.Events),
+		Purges:      purges,
 	}
 	return MergeResult{export: merged, Pending: pending, Collisions: SortCollisions(collisions)}
 }
