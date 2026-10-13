@@ -3,13 +3,16 @@ package cli
 import (
 	"fmt"
 	"io"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // contextIndent is the single indent used for every context line printed under
@@ -326,12 +329,15 @@ func printIssueFields(w io.Writer, issue model.Issue, fields []string) error {
 
 // printHistoryEvents renders the field-level transition trail: one
 // "- [actor @ time] action reason" line per event, followed by that event's
-// indented "field: from → to" change lines. This is the single definition of
-// how the transition trail is formatted; the dedicated `lit history` command
-// (printIssueHistory) is its only caller. [LAW:one-source-of-truth] one renderer,
-// so the trail can never render two ways; [LAW:decomposition] carved at the
-// event/detail joint, ready for any future surface that needs the same trail.
-func printHistoryEvents(w io.Writer, events []model.IssueEvent) error {
+// indented change lines. A short field's change reads "field: from → to"; a
+// long text field's reads "field: vN → vM", the numbers its entry in versions
+// gives each text, so the trail says that the text moved without reprinting
+// every text it ever held. This is the single definition of how the transition
+// trail is formatted; the dedicated `lit history` command (printIssueHistory)
+// is its only caller. [LAW:one-source-of-truth] one renderer, so the trail
+// can never render two ways; [LAW:decomposition] carved at the event/detail
+// joint, ready for any future surface that needs the same trail.
+func printHistoryEvents(w io.Writer, events []model.IssueEvent, versions map[string][]string) error {
 	for _, event := range events {
 		// Plain field updates carry no Action; "update" is their display label.
 		// [LAW:dataflow-not-control-flow] absence of intent is data, not a mode.
@@ -343,7 +349,11 @@ func printHistoryEvents(w io.Writer, events []model.IssueEvent) error {
 			return err
 		}
 		for _, change := range event.Changes {
-			if _, err := fmt.Fprintf(w, "    %s: %s → %s\n", change.Field, emptyDash(change.From), emptyDash(change.To)); err != nil {
+			from, to := emptyDash(change.From), emptyDash(change.To)
+			if texts, long := versions[change.Field]; long {
+				from, to = versionLabel(texts, change.From), versionLabel(texts, change.To)
+			}
+			if _, err := fmt.Fprintf(w, "    %s: %s → %s\n", change.Field, from, to); err != nil {
 				return err
 			}
 		}
@@ -353,14 +363,135 @@ func printHistoryEvents(w io.Writer, events []model.IssueEvent) error {
 
 // printIssueHistory renders the standalone `lit history` view: an identifying
 // header (id + title) so the output stands alone, then the field-level
-// transition trail via the shared printHistoryEvents. Every issue carries at
-// least its "created" event, so the trail is never empty in practice; an empty
-// Events slice honestly prints just the header rather than fabricating a line.
+// transition trail via the shared printHistoryEvents, then one line per long
+// text field that once held a text it no longer holds, naming how many
+// versions it has and the command that prints one. Every issue carries at
+// least its "created" event, so the trail is never empty in practice; an
+// empty Events slice honestly prints just the header rather than fabricating
+// a line.
 func printIssueHistory(w io.Writer, detail model.IssueDetail) error {
 	if _, err := fmt.Fprintf(w, "%s\n%s\n\nhistory:\n", detail.Issue.ID, detail.Issue.Title); err != nil {
 		return err
 	}
-	return printHistoryEvents(w, detail.Events)
+	versions := map[string][]string{}
+	var superseded []string
+	for _, field := range storage.LongTextFields() {
+		texts := textVersions(detail, field)
+		versions[field.Name] = texts
+		current := field.Current(detail.Issue)
+		if slices.ContainsFunc(texts, func(text string) bool { return text != current }) {
+			superseded = append(superseded, fmt.Sprintf("    %s: %s — lit history %s --version %s@<n> prints one\n", field.Name, describeVersions(len(texts)), detail.Issue.ID, field.Name))
+		}
+	}
+	if err := printHistoryEvents(w, detail.Events, versions); err != nil {
+		return err
+	}
+	if len(superseded) == 0 {
+		return nil
+	}
+	_, err := fmt.Fprintf(w, "\nversions:\n%s", strings.Join(superseded, ""))
+	return err
+}
+
+// textVersions is every text a long text field is recorded holding, each
+// once, numbered from 1 in the order its record first shows it: the texts
+// the trail's changes move between, then the current text if the trail never
+// reaches it. Each text has one number, so two edits made at once on two
+// machines and merged by sync both step from the number of the text they
+// started from, and a change back to an earlier text returns to its number.
+// The numbers follow the record's order, so a sync that merges in an edit
+// older than ones already here renumbers the texts after it. The empty text is no version; the trail shows it as -, as it
+// shows an empty short field. A field never changed has one version, its
+// current text.
+func textVersions(detail model.IssueDetail, field storage.LongTextField) []string {
+	var texts []string
+	record := func(text string) {
+		if text != "" && !slices.Contains(texts, text) {
+			texts = append(texts, text)
+		}
+	}
+	for _, event := range detail.Events {
+		for _, change := range event.Changes {
+			if change.Field == field.Name {
+				record(change.From)
+				record(change.To)
+			}
+		}
+	}
+	record(field.Current(detail.Issue))
+	return texts
+}
+
+// versionLabel is how the trail shows one text of a long text field: v and
+// its version number in texts, or - for the empty text.
+func versionLabel(texts []string, text string) string {
+	if text == "" {
+		return "-"
+	}
+	return "v" + strconv.Itoa(slices.Index(texts, text)+1)
+}
+
+func describeVersions(count int) string {
+	if count == 1 {
+		return "1 version"
+	}
+	return fmt.Sprintf("%d versions", count)
+}
+
+// versionRef names one recorded text of a long text field, written
+// <field>@<n> — the number `lit history` shows it by.
+type versionRef struct {
+	field  storage.LongTextField
+	number int
+}
+
+// parseVersionRef is the one place a --version value becomes a versionRef:
+// the field must be a long text field and the number a version number in its
+// plain decimal spelling, counted from 1. A version past the ones recorded is
+// a lookup miss the record answers, not a malformed reference.
+// [LAW:parse-dont-validate]
+func parseVersionRef(raw string) (versionRef, error) {
+	name, digits, _ := strings.Cut(raw, "@")
+	fields := storage.LongTextFields()
+	at := slices.IndexFunc(fields, func(field storage.LongTextField) bool { return field.Name == name })
+	number, err := strconv.Atoi(digits)
+	if at < 0 || err != nil || number < 1 || strconv.Itoa(number) != digits {
+		names := make([]string, len(fields))
+		for i, field := range fields {
+			names[i] = field.Name
+		}
+		return versionRef{}, UsageError{Message: fmt.Sprintf("--version takes <field>@<n>: a long text field (%s) and a version number lit history shows, counted from 1; got %q", strings.Join(names, ", "), raw)}
+	}
+	return versionRef{field: fields[at], number: number}, nil
+}
+
+// printFieldVersion prints the text one version of a long text field held,
+// bare, so it round-trips into `lit update --description` the way
+// `lit show --field` output does.
+func printFieldVersion(w io.Writer, detail model.IssueDetail, ref versionRef) error {
+	texts := textVersions(detail, ref.field)
+	if ref.number > len(texts) {
+		return VersionNotFoundError{IssueID: detail.Issue.ID, Field: ref.field.Name, Number: ref.number, Held: len(texts)}
+	}
+	_, err := fmt.Fprintln(w, texts[ref.number-1])
+	return err
+}
+
+// VersionNotFoundError is a --version reference past the versions an issue's
+// record holds. It is not storage.NotFoundError: that one's remediation sends
+// the caller to check the issue id, and here the id resolved — what is missing
+// is the version, and the message says how many there are and where the
+// current text is. [LAW:one-type-per-behavior]
+type VersionNotFoundError struct {
+	IssueID string
+	Field   string
+	Number  int
+	Held    int
+}
+
+func (e VersionNotFoundError) Error() string {
+	return fmt.Sprintf("%s has no %s@%d: its record holds %s of %s, numbered from 1; `lit show %s --field %s` prints the current text",
+		e.IssueID, e.Field, e.Number, describeVersions(e.Held), e.Field, e.IssueID, e.Field)
 }
 
 // optionalGroup adapts a single optional issue — a redirect target, a parent —

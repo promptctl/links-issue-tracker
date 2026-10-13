@@ -69,6 +69,7 @@ the code it arrives on:
 | `workspace_not_initialized` | 3 | The repository has no lit workspace (`lit init` has never run) |
 | `workspace_schema_ahead` | 3 | The workspace's schema is newer than this `lit` supports |
 | `entity_not_found` | 4 | The named issue or resource does not exist |
+| `version_not_found` | 4 | `lit history --version` named a version past the ones the issue's history records |
 | `merge_conflict` | 5 | A sync merge conflict |
 | `sync_divergence` | 5 | Local and remote diverged in a way the message tells you how to resolve |
 | `owner_approval_required` | 5 | `lit sync reconcile take` would discard one side's issues and needs the owner's approval |
@@ -390,6 +391,11 @@ lit show <id>
 Full detail for one issue: description, status, labels, and comments, each comment in
 the lines it was written in. The change trail is `lit history <id>`, whose entries
 include the actor and a human-readable timestamp in the user's current timezone.
+A change to a long text field (`description`, `prompt`) shows in the trail as a
+step between numbered versions, `description: v1 → v2`, without the text;
+`lit history <id> --version description@1` prints the text a version held.
+The numbers follow the history's order, so a sync that merges in an older
+edit renumbers the versions after it.
 For an issue inside an epic, also prints the epic plan — siblings in rank order with
 status and any cross-epic dependencies. Exits 4 if the ID doesn't exist.
 

@@ -64,6 +64,7 @@ const (
 	reasonUnsupportedFlag         commandReason = "unsupported_flag"
 	reasonUsageError              commandReason = "usage_error"
 	reasonValidationRefused       commandReason = "validation_refused"
+	reasonVersionNotFound         commandReason = "version_not_found"
 	reasonWorkspaceBusy           commandReason = "workspace_busy"
 	reasonWorkspaceNotInitialized commandReason = "workspace_not_initialized"
 	reasonWorkspaceSchemaAhead    commandReason = "workspace_schema_ahead"
@@ -77,6 +78,10 @@ func commandErrorReason(err error) commandReason {
 	var notFound storage.NotFoundError
 	if errors.As(err, &notFound) {
 		return reasonEntityNotFound
+	}
+	var versionNotFound VersionNotFoundError
+	if errors.As(err, &versionNotFound) {
+		return reasonVersionNotFound
 	}
 	var mergeConflict MergeConflictError
 	if errors.As(err, &mergeConflict) {
@@ -262,6 +267,11 @@ func commandErrorRemediation(reason commandReason) string {
 		return "Do not retry unchanged — this flag is refused on every run. Drop it and use what the message above names instead."
 	case reasonEntityNotFound:
 		return "Verify the target ID exists with `lit ls` or `lit show <id>`."
+	case reasonVersionNotFound:
+		// The message names how many versions there are and where the current
+		// text is, so a remediation line would be a drifting copy of it. Emit
+		// none. [LAW:one-source-of-truth]
+		return ""
 	case reasonMergeConflict:
 		return "Sync and retry after resolving conflicts."
 	case reasonSyncDivergence:
