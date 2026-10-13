@@ -397,7 +397,7 @@ suppresses the hook along with all other automatic sync side effects.
 Unrelated histories (independently-initialized stores sharing one remote) never
 merge automatically — resolving them is a deliberate choice among:
 
-- `lit sync reconcile combine` — the union: every issue kept, shared ids
+- `lit sync reconcile combine` — the union: every issue kept but those a purge on either side names, shared ids
   field-merged, an on-both prose conflict held for inline resolution. This is
   the keep-everything default and stays **agent-runnable** with no approval. It
   stops wholesale on one condition: a shared id that names two different
@@ -411,7 +411,8 @@ merge automatically — resolving them is a deliberate choice among:
 
 Because a take destroys one side's work, it refuses to run without the owner's
 explicit approval. Run bare, it exits 5 with a refusal block naming exactly
-which issues the take would discard and a one-time approval token; only
+which issues the take would discard (the other side's unique issues, and
+every issue a purge on either side names) and a one-time approval token; only
 
 ```text
 lit sync reconcile take <side> --owner-approved <token>

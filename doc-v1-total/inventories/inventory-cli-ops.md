@@ -323,14 +323,14 @@ Zero `--resolve` values → `UsageError{"sync reconcile resolve needs at least o
 - Trace command is `"lit sync reconcile take local"` / `"… take remote"` (`sync_reconcile_cmd.go`).
 - `SyncResolveUnrelated(ctx, remote, branch, choice, trimmed token)`. A `store.OwnerApprovalRequiredError` → trace decision `owner_approval_required` with status `ok`, notifies the owner with an `unrelated_histories` event, returns `ownerApprovalRefusalError` → exit 5 (`sync_reconcile_cmd.go`). Any other error → traced, `asSyncFailure`.
 
-Outcome rendering (`reportTakeOutcome`, `sync_reconcile_cmd.go`). Durable trace metadata `{remote, sync_branch, replayed}`; reason from `takeReasonForState` (`sync_reconcile_cmd.go`); an unmapped state becomes decision/status `error` with reason `unexpected result state %q`.
+Outcome rendering (`reportTakeOutcome`, `sync_reconcile_cmd.go`). Durable trace metadata `{remote, sync_branch, replayed, carried_purges, purged}` (`carried_purges` = `result.CarriedPurges`, `purged` = the count of `purgedIDs(result.Unrelated)`); reason from `takeReasonForState` (`sync_reconcile_cmd.go`); an unmapped state becomes decision/status `error` with reason `unexpected result state %q`.
 - `SyncReconcileTookRemote`: `endDivergenceEpisode(ws)`; prints
-  `took remote: the local backlog now equals <r>/<b> and sync is clean (no push needed).` newline `DISCARDED the local-only issue(s), by design: <idset>`.
-- `SyncReconcileTookLocal`: `endDivergenceEpisode(ws)`; prints `took local: your backlog now sits on top of <r>/<b> — <N local commit(s)> replayed with original messages and timestamps; run \`lit sync push\` (or let auto-sync) to fast-forward the remote onto it.` newline `DISCARDED the remote-only issue(s), by design: <idset>`.
+  `took remote: <state>.` newline `DISCARDED the local-only issue(s), by design: <idset>` newline `DROPPED the issue(s) a purge on either side names: <idset>`, where `<state>` is `the local backlog now equals <r>/<b> and sync is clean (no push needed)`, or, when `CarriedPurges > 0`, `the local backlog now equals <r>/<b> less what you purged, with <n> purge record(s) carried onto it; run \`lit sync push\` (or let auto-sync) to deliver them`.
+- `SyncReconcileTookLocal`: `endDivergenceEpisode(ws)`; prints `took local: your backlog now sits on top of <r>/<b> — <N local commit(s)> replayed with original messages and timestamps; run \`lit sync push\` (or let auto-sync) to fast-forward the remote onto it.` newline `DISCARDED the remote-only issue(s), by design: <idset>` newline `DROPPED the issue(s) a purge on either side names: <idset>`.
 - `SyncReconcileNotDiverged`: `endDivergenceEpisode(ws)`; prints `nothing to reconcile: the clone is not diverged from the remote`.
 - Any other state → `fmt.Errorf("sync reconcile take: unexpected result state %q — this is a bug; please report it")`, exit 1.
 
-`describeIDSet` renders `(0)` for an empty set, else `(N): «id», «id»…`, each id through `quoteRemote(id).inline()` (`sync_failure.go`). `describeReplayed` renders `1 local commit` or `N local commits` (`sync_reconcile_cmd.go`). `discardedIDs` maps `TakeRemote→OnlyLocal`, `TakeLocal→OnlyRemote` (`sync_reconcile_cmd.go`).
+`describeIDSet` renders `(0)` for an empty set, else `(N): «id», «id»…`, each id through `quoteRemote(id).inline()` (`sync_failure.go`). `describeReplayed` renders `1 local commit` or `N local commits` (`sync_reconcile_cmd.go`). `discardedIDs` maps `TakeRemote→OnlyLocal`, `TakeLocal→OnlyRemote` (`sync_reconcile_cmd.go`). `purgedIDs(inv)` returns `inv.Purged`, nil for a nil inventory (`sync_reconcile_cmd.go`). Test `TestReportTakeOutcomeNamesPurgedAndCarried` (`sync_unrelated_test.go`): a take-remote with `CarriedPurges: 2` prints the `DROPPED` line and the push instruction, not `no push needed`, and traces `carried_purges=2`, `purged=1`.
 
 #### 2.8.5 `lit sync reconcile combine`
 `syncReconcileCombineLeaf` — `sync_reconcile_cmd.go`. No flags. Trace command `"lit sync reconcile combine"` (`sync_reconcile_cmd.go`). Calls `SyncReconcileCombine`, then `reportReconcileResult(..., resolved=false)`.
@@ -341,7 +341,7 @@ Outcome rendering (`reportTakeOutcome`, `sync_reconcile_cmd.go`). Durable trace 
 - `SyncReconcileUnrelated` → builds `SyncFailureError{Class: unrelated_histories, Remote, Branch, Ahead, Behind, Inventory, BuildNote}`, records a held trace, notifies the owner, RETURNS it (exit 5, block printed by the error sink) (`sync_reconcile_cmd.go`).
 - `SyncReconcileProsePending` → metadata gains `pending: <count>`; trace decision `prose_pending` status `ok`; notifies owner; prints `renderProsePendingGuidance(stdout, result.Pending, buildNote)`; returns `MergeConflictError{"reconcile holds N free-text field(s) for inline merge; run \`<proseResolveCommand>\` with your merged text"}` → exit 5 (`sync_reconcile_cmd.go`).
 - `SyncReconcileLinearized` → trace, clear notify, print `reconciled: the divergence merged into linear history — <N local commit(s)> replayed with original messages and timestamps; the next push fast-forwards`, then `reportContestedLanes` (`sync_reconcile_cmd.go`).
-- `SyncReconcileCombined` → trace, clear notify, print a 4-line block: `combined: unioned both backlogs onto <r>/<b> — <N local commit(s)> replayed …; run \`lit sync push\` (or let auto-sync) to fast-forward the remote onto it.` then `  kept local-only:  …`, `  kept remote-only: …`, `  field-merged on both: …`; then `reportContestedLanes` (`sync_reconcile_cmd.go`).
+- `SyncReconcileCombined` → trace, clear notify, print a 5-line block: `combined: unioned both backlogs onto <r>/<b> — <N local commit(s)> replayed …; run \`lit sync push\` (or let auto-sync) to fast-forward the remote onto it.` then `  kept local-only:  …`, `  kept remote-only: …`, `  field-merged on both: …`, `  dropped, purged on a side: …`; then `reportContestedLanes` (`sync_reconcile_cmd.go`).
 - `SyncReconcileNotDiverged` → trace, clear notify, `nothing to reconcile: the clone is not diverged from the remote` (`sync_reconcile_cmd.go`).
 - default → trace decision/status `error`, reason `unrecognized reconcile result state %q`; prints `reconcile completed with state <state>`; returns nil (exit 0) (`sync_reconcile_cmd.go`).
 
@@ -544,6 +544,7 @@ WHAT HAPPENED: <whatLine>
   only on local:  …
   only on remote: …
   on both:        …
+  purged on a side, dropped by any resolution: …
 ]
 [WHAT COLLIDED (<N> id(s), each naming a different ticket on each side):
   «<id>»
@@ -592,7 +593,7 @@ The block has no trailing newline after `</agent-instructions>` (`sync_failure.g
 
 `ownerApprovalRefusalError.blockString()` (`sync_take_approval.go`) renders an `<agent-instructions>` block:
 - Header: `lit sync reconcile take <side> is DESTRUCTIVE and did not run: it needs the owner's explicit approval.`
-- `WHAT IT WOULD DO: keep the <kept> backlog wholesale and permanently discard every issue only the <dropped> side holds — <idset>.`
+- `WHAT IT WOULD DO: keep the <kept> backlog wholesale and permanently discard every issue only the <dropped> side holds — <idset> — and every issue a purge on either side names — <idset>.`
 - The `WHAT EACH SIDE HOLDS` inventory lines.
 - `WHY YOU ARE BLOCKED: choosing which side of a forked backlog survives is the OWNER's decision … Do not self-approve; approval asserted without the owner's explicit instruction is a false claim.`
 - `HOW TO PROCEED (in order):` 1. `lit sync reconcile combine   # NO approval needed…` 2. `Surface this fork to the owner…` 3. `lit sync reconcile take <side> --owner-approved <token>`

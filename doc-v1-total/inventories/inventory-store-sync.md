@@ -354,8 +354,8 @@ Fields (`sync_schema_guard.go`): `Remote`, `Branch`, `RemoteVersion int64`, `Bin
 
 - `SyncPush`/`SyncCompactAndPush` with a non-empty branch: guarded (`sync.go`). Test `TestSyncPushRefusesWhenRemoteSchemaAhead` (`sync_schema_guard_test.go`).
 - Push with an empty branch: **not** guarded (`sync.go`).
-- Every reconcile that replays (three-way, combine, take-local): guarded inside `replayUnderGuard` before any write (`sync_reconcile.go`). Tests `TestSyncReconcileRefusesWhenRemoteSchemaAhead` (`sync_schema_guard_test.go`), `TestSyncResolveUnrelatedTakeLocalRefusesSchemaAheadRemote` (`sync_unrelated_test.go`).
-- **take-remote is exempt** — it authors no replay commit and adopting an ahead head is a safe recovery (`sync_unrelated_take.go`).
+- Every reconcile that replays (three-way, combine, take-local, and take-remote carrying purge records): guarded inside `replayUnderGuard` before any write (`sync_reconcile.go`, `sync_unrelated_take.go`). Tests `TestSyncReconcileRefusesWhenRemoteSchemaAhead` (`sync_schema_guard_test.go`), `TestSyncResolveUnrelatedTakeLocalRefusesSchemaAheadRemote` (`sync_unrelated_test.go`).
+- **take-remote with no purge records to carry is exempt** — it authors no commit and adopting an ahead head is a safe recovery (`sync_unrelated_take.go`).
 - Other tests: `TestRemoteHeadSchemaReadsVersion` (`sync_schema_guard_test.go`), `TestGuardRemoteSchemaAheadDetects` (`sync_schema_guard_test.go`), `TestGuardRemoteSchemaNotAheadAtOrBelowMax` (`sync_schema_guard_test.go`).
 
 ---
@@ -553,7 +553,7 @@ Invariant: the data branch is at its pre-reconcile head before step 12 and at th
 
 ### 5.17 Reconcile result vocabulary
 
-`SyncReconcileResult` at `/Users/bmf/code/links-issue-tracker/internal/storage/sync.go`: `State`, `Ahead`, `Behind`, `LocalHead`, `RemoteHead`, `BaseCommit`, `Pending []merge.ProsePending`, `Unrelated *UnrelatedInventory`, `Replayed int`.
+`SyncReconcileResult` at `/Users/bmf/code/links-issue-tracker/internal/storage/sync.go`: `State`, `Ahead`, `Behind`, `LocalHead`, `RemoteHead`, `BaseCommit`, `Pending []merge.ProsePending`, `Unrelated *UnrelatedInventory`, `Replayed int`, `CarriedPurges int`.
 
 States and their string values (`storage/sync.go`):
 - `SyncReconcileNotDiverged = "not_diverged"`
@@ -566,6 +566,8 @@ States and their string values (`storage/sync.go`):
 
 `Replayed` counts folded commits that **actually landed** (read back off the spine), zero for non-mutating outcomes and for a fold whose every projection was already contained in the spine (`storage/sync.go`).
 
+`CarriedPurges` counts the local purge records a take-remote carried onto the remote head; nonzero means local is ahead of the remote by the commit carrying them, which the next push delivers; zero for every other outcome (`storage/sync.go`).
+
 Tests: `TestSyncReconcileLinearizesDivergenceAndFastForwardPushes` (`sync_reconcile_test.go`), `TestSyncReconcileHoldsProseDivergenceForAgent` (`sync_reconcile_test.go`), `TestSyncReconcileResolvedFinalizesWithAgentText` (`sync_reconcile_test.go`), `TestSyncReconcileHealsSchemaSkew` (`sync_reconcile_schema_skew_test.go`), `TestSyncReconcileCombineIsBoundedOnALargeFoldedChain` (`sync_reconcile_scale_test.go`), `TestSyncReconcileCombinePreservesFoldedProvenance` (`sync_unrelated_test.go`).
 
 ---
@@ -575,19 +577,26 @@ Tests: `TestSyncReconcileLinearizesDivergenceAndFastForwardPushes` (`sync_reconc
 ### 6.1 Inventory (`internal/store/sync_unrelated.go`)
 
 `unrelatedInventory(ctx, localHead, remoteHead) (*storage.UnrelatedInventory, error)` (`sync_unrelated.go`):
-1. `issueIDsAtCommit(localHead)`; error `"read local issue inventory: %w"`.
-2. `issueIDsAtCommit(remoteHead)`; error `"read remote issue inventory: %w"`.
-3. Returns `{OnlyLocal: setDifference(local, remote), OnlyRemote: setDifference(remote, local), OnBoth: setIntersection(local, remote)}` (`sync_unrelated.go`).
+1. `issuesAtCommit(localHead)`; error `"read local issue inventory: %w"`.
+2. `issuesAtCommit(remoteHead)`; error `"read remote issue inventory: %w"`.
+3. `purgesAtCommit(localHead)`; error `"read local purge records: %w"`.
+4. `purgesAtCommit(remoteHead)`; error `"read remote purge records: %w"`.
+5. `records := model.UnionPurges(localPurges, remotePurges)`; an id at either head is purged when some record `Names` that head's issue (same id and `created_at`).
+6. Returns `{OnlyLocal: setDifference(localIDs, remoteIDs), OnlyRemote: setDifference(remoteIDs, localIDs), OnBoth: setIntersection(localIDs, remoteIDs), Purged: <the purged ids, sorted>}`, where `localIDs`/`remoteIDs` are each head's ids less the purged ones (`sync_unrelated.go`).
 
-`issueIDsAtCommit(ctx, db, commitHash)` (`sync_unrelated.go`):
-- **Refuses** unless `isDoltCommitHash(commitHash)`: `"issue inventory: %q is not a Dolt commit hash"` (`sync_unrelated.go`).
-- `SELECT id FROM issues AS OF '<hash>'` (interpolated literal).
-- Missing table (MySQL 1146) → the **empty set**, not an error — a pristine bootstrap root genuinely holds no issues (`sync_unrelated.go`).
-- Errors: `"read issue ids at %q: %w"`, `"scan issue id at %q: %w"`, `"iterate issue ids at %q: %w"`.
+`queryAsOf(ctx, db, commitHash, queryFormat, scan)` (`sync_unrelated.go`) — the one AS OF reader; `queryFormat` carries one `%s` for the hash:
+- **Refuses** unless `isDoltCommitHash(commitHash)`: `"read as of commit: %q is not a Dolt commit hash"` (`sync_unrelated.go`).
+- The query runs with the hash interpolated as a literal; each row goes to `scan`.
+- Missing table (MySQL 1146) → **no rows**, not an error — a commit from before the baseline holds no issues, and one from before migration v9 holds no purge records (`sync_unrelated.go`).
+- Errors: `"read at %q: %w"`, `"scan at %q: %w"`, `"iterate at %q: %w"`.
+
+`issuesAtCommit(ctx, db, commitHash) (map[string]model.Issue, error)` (`sync_unrelated.go`): `SELECT id, created_at FROM issues AS OF '%s'` through `queryAsOf`; each issue carries only `ID` and `CreatedAt` (`created_at` through `scanTime`), keyed by id.
+
+`purgesAtCommit(ctx, db, commitHash) ([]model.Purge, error)` (`sync_unrelated.go`): `SELECT issue_id, issue_created_at, purged_at, purged_by FROM purges AS OF '%s'` through `queryAsOf`, each row decoded by `scanPurge` (`purge.go`).
 
 Pure `AS OF` reads: no branch moves, no schema lift — preserving the detection's no-write guarantee (`sync_unrelated.go`).
 
-`UnrelatedInventory{OnlyLocal, OnlyRemote, OnBoth []string}` with JSON tags `only_local`, `only_remote`, `on_both`, all `omitempty` (`/Users/bmf/code/links-issue-tracker/internal/storage/sync.go`). The three slices are sorted and mutually disjoint by construction (`storage/sync.go`). Test `TestSyncReconcileUnrelatedInventoryPartitionsAllThreeSides` (`sync_unrelated_test.go`).
+`UnrelatedInventory{OnlyLocal, OnlyRemote, OnBoth, Purged []string}` with JSON tags `only_local`, `only_remote`, `on_both`, `purged`, all `omitempty` (`/Users/bmf/code/links-issue-tracker/internal/storage/sync.go`). The four slices are sorted and mutually disjoint by construction; `Purged` holds the ids a purge record on either side names, which every resolution drops (`storage/sync.go`). Tests `TestSyncReconcileUnrelatedInventoryPartitionsAllThreeSides` (`sync_unrelated_test.go`); `TestSyncResolveUnrelatedTakeLocalKeepsTheRemotesPurge` and `TestSyncResolveUnrelatedTakeRemoteCarriesTheLocalPurge` assert the `Purged` class (`sync_unrelated_purge_test.go`).
 
 ### 6.2 The owner-approval token
 
@@ -618,7 +627,7 @@ Test `TestSyncResolveUnrelatedOwnerApprovalBindsForkAndSide` (`sync_unrelated_te
 ### 6.4 `applyUnrelatedTake` dispatch
 
 `applyUnrelatedTake` (`sync_unrelated_take.go`):
-- `storage.TakeRemote` → `carry := s.purgesMissingAt(ctx, plan.remoteHead)` (error returned as is). When `len(carry) > 0` → `s.replayUnderGuard(ctx, remote, branch, plan.remoteHead, takeRemoteCarryingPurges)` — the **full** envelope including the schema-ahead refusal. Otherwise its **own** snapshot guard (`newSnapshotGuard(..., formatReconcileSnapshotLabel(time.Now()))`), tracking ref `remotes/<remote>/<branch>`, then `retryTransientGCContention(takeRemoteHead)`. **No scratch envelope, no schema-ahead refusal** on that path (`sync_unrelated_take.go`).
+- `storage.TakeRemote` → `carry := s.purgesMissingAt(ctx, plan.remoteHead)` (error returned as is). When `len(carry) > 0` → `s.replayUnderGuard(ctx, remote, branch, plan.remoteHead, takeRemoteCarryingPurges)` — the **full** envelope including the schema-ahead refusal, so a binary older than the remote head's schema that holds a purge the remote lacks is refused — and, on success, `result.CarriedPurges = len(carry)`. Otherwise its **own** snapshot guard (`newSnapshotGuard(..., formatReconcileSnapshotLabel(time.Now()))`), tracking ref `remotes/<remote>/<branch>`, then `retryTransientGCContention(takeRemoteHead)`. **No scratch envelope, no schema-ahead refusal** on that path (`sync_unrelated_take.go`).
 - `storage.TakeLocal` → `s.replayUnderGuard(ctx, remote, branch, plan.remoteHead, takeLocalOntoRemoteHead)` — the **full** envelope including the schema-ahead refusal (`sync_unrelated_take.go`).
 - default → `"resolve unrelated histories: unhandled side %q"` (`sync_unrelated_take.go`). The combine resolution never reaches this dispatch; it lives on the reconcile boundary.
 
@@ -638,7 +647,7 @@ Idempotent under retry (cached snapshot, fixed ref). The session's working set i
 4. `result.State = SyncReconcileTookRemote`.
 Tests `TestSyncResolveUnrelatedTakeRemoteCarriesTheLocalPurge`, `TestSyncResolveUnrelatedTakeRemoteAdoptsAPrePurgeRemote` "a purge to carry" (`sync_unrelated_purge_test.go`).
 
-`purgesMissingAt(ctx, commit)` (`sync_unrelated_take.go`): `listPurges(ctx, s.db)`, then a commit that is not a Dolt hash → `"purge records at commit: %q is not a Dolt commit hash"`; `SELECT issue_id, issue_created_at FROM purges AS OF '<commit>'` — a missing-table error is no records, any other error → `"read purge records at %q: %w"`; returns the local records whose `keyOfPurge` the commit does not hold.
+`purgesMissingAt(ctx, commit)` (`sync_unrelated_take.go`): `listPurges(ctx, s.db)` (error returned as is), then `purgesAtCommit(ctx, s.db, commit)` (error → `"read the remote head's purge records: %w"`; a head with no `purges` table holds none); returns the local records whose `Key()` none of the commit's records has.
 
 ### 6.6 `takeLocalOntoRemoteHead`
 
@@ -689,8 +698,8 @@ Determinism: the input slices are walked, not the maps, so identical inputs prod
 - comments: `c.ID` (`export_delta.go`)
 - labels: `labelKey{issueID, name}` (`export_delta.go`)
 - events: `e.ID` (`export_delta.go`)
-- purges: `keyOfPurge(p)` = `purgeKey{issueID, issueCreatedAt}`, the birth formatted RFC3339Nano (`export_delta.go`, `row_deletes.go`)
-Primary-key types live in `/Users/bmf/code/links-issue-tracker/internal/store/row_deletes.go` (`export_delta.go`).
+- purges: `model.Purge.Key` = `model.PurgeKey{IssueID, IssueCreatedAt}`, the birth spelled in UTC RFC3339Nano (`export_delta.go`, `internal/model/purge.go`)
+Primary-key types live in `/Users/bmf/code/links-issue-tracker/internal/store/row_deletes.go`, except `model.PurgeKey` in `internal/model/purge.go` (`export_delta.go`).
 
 ### 7.5 Cascade rule
 

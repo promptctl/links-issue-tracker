@@ -709,8 +709,16 @@ the Go field name when the tag name is empty. Pinned by
 - `(Purge).Names(issue Issue) bool` — `purge.go`: `p.IssueID == issue.ID &&
   p.IssueCreatedAt.Equal(issue.CreatedAt)` — the same id, born at the same
   instant (`Equal`, so one instant in two offsets matches).
+- `PurgeKey` — `purge.go`: `IssueID, IssueCreatedAt string` — a record's
+  identity, the birth spelled once per instant, and what the store's primary
+  key holds.
+- `(Purge).Key() PurgeKey` — `purge.go`: `IssueID` and
+  `IssueCreatedAt.UTC().Format(time.RFC3339Nano)`, so one instant in two
+  offsets is one key. Pinned by `TestPurgeKeyIsOneSpellingPerInstant`
+  (`purge_test.go`), which also holds `UnionPurges` of the two spellings to one
+  record.
 - `UnionPurges(sets ...[]Purge) []Purge` — `purge.go`: one record per ticket,
-  keyed by `IssueID` and `IssueCreatedAt.UnixNano()`, sorted by `IssueID`
+  keyed by `Key()`, sorted by `IssueID`
   ascending, then `IssueCreatedAt` ascending. Between two records of one ticket
   the one ranked first by `purgeOrder` is kept: earlier `PurgedAt`
   (`time.Time.Compare`), then lesser `PurgedBy` (`strings.Compare`); on a full

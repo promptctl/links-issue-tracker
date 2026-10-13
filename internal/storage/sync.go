@@ -446,12 +446,12 @@ type SyncReconcileResult struct {
 	// collided rather than a count. Empty unless State is
 	// SyncReconcileIDCollision.
 	Collisions []merge.Collision
-	// Unrelated carries the both-sides issue-id partition (only-local, only-remote,
-	// on-both) so the operator can see what each side holds before choosing a
-	// wholesale/union resolution. Non-nil only for SyncReconcileUnrelated; there is
-	// no base to diff against, so it is read directly off the LocalHead/RemoteHead
-	// anchors. [LAW:types-are-the-program] the field present names the state that
-	// produced it.
+	// Unrelated carries the both-sides issue-id partition (purged, only-local,
+	// only-remote, on-both) so the operator can see what each side holds before
+	// choosing a wholesale/union resolution, and what the chosen one dropped.
+	// Non-nil for SyncReconcileUnrelated and for the outcomes of resolving one —
+	// took_remote, took_local, combined; there is no base to diff against, so it
+	// is read directly off the LocalHead/RemoteHead anchors.
 	Unrelated *UnrelatedInventory
 	// Replayed counts the folded side's commits that landed individually — with
 	// their original message, timestamp, and author — ahead of the settling marker

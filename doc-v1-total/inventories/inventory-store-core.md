@@ -889,11 +889,13 @@ Any error returns a zero `storage.PurgeResult`. No `issue_events` row is recorde
 
 #### 8a.2 `insertPurgeTx(ctx, tx, p model.Purge) error`
 
-`INSERT INTO purges(issue_id, issue_created_at, purged_at, purged_by) VALUES (?, ?, ?, ?)` with `p.IssueCreatedAt.Format(time.RFC3339Nano)` and `p.PurgedAt.Format(time.RFC3339Nano)`; error → `fmt.Errorf("record purge of %s: %w", p.IssueID, err)`. The only INSERT into `purges`, shared by `Purge`, a restore (`writeExportTx`), and the replay's delta (`purge.go`).
+`INSERT INTO purges(issue_id, issue_created_at, purged_at, purged_by) VALUES (?, ?, ?, ?)` with `p.Key()`'s `IssueID` and `IssueCreatedAt` (the birth in UTC RFC3339Nano) and `p.PurgedAt.Format(time.RFC3339Nano)`; error → `fmt.Errorf("record purge of %s: %w", p.IssueID, err)`. The only INSERT into `purges`, shared by `Purge`, a restore (`writeExportTx`), and the replay's delta (`purge.go`).
 
 #### 8a.3 `listPurges(ctx, q rowQueryer) ([]model.Purge, error)`
 
-`SELECT issue_id, issue_created_at, purged_at, purged_by FROM purges` (no ORDER BY); query error → `fmt.Errorf("list purges: %w", err)`; `issue_created_at` and `purged_at` through `scanTime`; returns `model.UnionPurges(out)`, a non-nil slice ordered by issue id and then birth ascending. Takes a `rowQueryer` so `Export` reads it from `s.db` and `writeExportTx` from its own transaction (`purge.go`).
+`SELECT issue_id, issue_created_at, purged_at, purged_by FROM purges` (no ORDER BY); query error → `fmt.Errorf("list purges: %w", err)`; each row decoded by `scanPurge`; returns `model.UnionPurges(out)`, a non-nil slice ordered by issue id and then birth ascending. Takes a `rowQueryer` so `Export` reads it from `s.db` and `writeExportTx` from its own transaction (`purge.go`).
+
+`scanPurge(rows *sql.Rows) (model.Purge, error)` decodes one row selected as `issue_id, issue_created_at, purged_at, purged_by`, both timestamps through `scanTime`; a scan or parse error is returned as is. `listPurges` and `purgesAtCommit` (`sync_unrelated.go`) both use it (`purge.go`).
 
 #### 8a.4 `detachedChildrenTx(ctx, tx, parentID string) ([]storage.DetachedChild, error)`
 
@@ -1337,7 +1339,7 @@ CREATE TABLE `purges` (
 `internal/store/schema_snapshot.sql`. Source: `00009_purges.sql` (v9).
 
 - PRIMARY KEY `(issue_id, issue_created_at)`; no indexes, no CHECKs, and **no foreign key** on either key column: the issue a row names has been deleted (`00009_purges.sql`).
-- One row per purged issue, named by its id and its `created_at`. The only INSERT is `insertPurgeTx` — `INSERT INTO purges(issue_id, issue_created_at, purged_at, purged_by) VALUES (?, ?, ?, ?)`, `issue_created_at` and `purged_at` formatted RFC3339Nano — reached from `Purge`, a restore, and the replay's delta (`internal/store/purge.go`). The only single-row DELETE is `deletePurgeTx`, reached only from the replay's delta (`internal/store/row_deletes.go`); `writeExportTx` clears the table wholesale before re-inserting the export's union (`internal/store/import_export.go`).
+- One row per purged issue, named by its id and its `created_at`. The only INSERT is `insertPurgeTx` — `INSERT INTO purges(issue_id, issue_created_at, purged_at, purged_by) VALUES (?, ?, ?, ?)`, `issue_created_at` from `model.Purge.Key` (UTC RFC3339Nano) and `purged_at` formatted RFC3339Nano — reached from `Purge`, a restore, and the replay's delta (`internal/store/purge.go`). The only single-row DELETE is `deletePurgeTx`, reached only from the replay's delta (`internal/store/row_deletes.go`); `writeExportTx` clears the table wholesale before re-inserting the export's union (`internal/store/import_export.go`).
 - Read by `listPurges` (`SELECT issue_id, issue_created_at, purged_at, purged_by FROM purges`, both timestamps through `scanTime`, ordered by `model.UnionPurges`), from `Export` and `writeExportTx` (`internal/store/purge.go`), and by the id-mint existence probe (`internal/store/issue_ids.go`).
 
 ---
@@ -3433,12 +3435,12 @@ type exportDelta struct {
 	comments  tableDelta[string, model.Comment]
 	labels    tableDelta[labelKey, model.Label]
 	events    tableDelta[string, model.IssueEvent]
-	purges    tableDelta[purgeKey, model.Purge]
+	purges    tableDelta[model.PurgeKey, model.Purge]
 }
 ```
 `export_delta.go`; `empty()` at `export_delta.go` is true only when all six table deltas are empty. These are unexported Go values — **the delta is never serialized to disk or JSON anywhere**.
 
-Key types (`internal/store/row_deletes.go`): `relationKey{srcID, dstID string; kind model.RelationType}` (`row_deletes.go`) = the relations PRIMARY KEY; `labelKey{issueID, name string}` (`row_deletes.go`) = labels PRIMARY KEY; `purgeKey{issueID, issueCreatedAt string}` (`row_deletes.go`) = purges PRIMARY KEY, the birth formatted RFC3339Nano by `keyOfPurge`. Comments, issues and events key on their `string` id; purge records key on `keyOfPurge` (`export_delta.go`).
+Key types (`internal/store/row_deletes.go`): `relationKey{srcID, dstID string; kind model.RelationType}` (`row_deletes.go`) = the relations PRIMARY KEY; `labelKey{issueID, name string}` (`row_deletes.go`) = labels PRIMARY KEY; `model.PurgeKey{IssueID, IssueCreatedAt string}` (`internal/model/purge.go`) = purges PRIMARY KEY, the birth spelled in UTC RFC3339Nano by `model.Purge.Key`. Comments, issues and events key on their `string` id; purge records key on `model.Purge.Key` (`export_delta.go`).
 
 ### 2.3 Add / modify / delete representation
 
@@ -4260,13 +4262,13 @@ The dump is **read-only** on the database — the only SQL issued is the three S
 
 ---
 
-## 4. ROW_DELETES (`internal/store/row_deletes.go`, 137 lines; no dedicated test file)
+## 4. ROW_DELETES (`internal/store/row_deletes.go`, 127 lines; no dedicated test file)
 
 ### 4.1 Key types
 
 - `relationKey{srcID string; dstID string; kind model.RelationType}` — exactly the schema PK `(src_id, dst_id, type)` (`row_deletes.go`).
 - `labelKey{issueID string; name string}` — the labels PK `(issue_id, label)` (`row_deletes.go`).
-- `purgeKey{issueID string; issueCreatedAt string}` — the purges PK `(issue_id, issue_created_at)`; `keyOfPurge(p)` builds it with the birth formatted RFC3339Nano, as the row stores it (`row_deletes.go`).
+- Purges key on `model.PurgeKey{IssueID, IssueCreatedAt string}` (`internal/model/purge.go`) — the purges PK `(issue_id, issue_created_at)`, the birth spelled in UTC RFC3339Nano as the row stores it.
 
 ### 4.2 The six deletes — all HARD deletes, all single-row by full primary key
 
@@ -4277,9 +4279,9 @@ The dump is **read-only** on the database — the only SQL issued is the three S
 | `deleteCommentTx(ctx, tx, id)` | `DELETE FROM comments WHERE id = ?` | `fmt.Sprintf("comment %s", id)` | `row_deletes.go` |
 | `deleteLabelTx(ctx, tx, key)` | `DELETE FROM labels WHERE issue_id = ? AND label = ?` | `fmt.Sprintf("label %s:%s", key.issueID, key.name)` | `row_deletes.go` |
 | `deleteEventTx(ctx, tx, id)` | `DELETE FROM issue_events WHERE id = ?` | `fmt.Sprintf("issue event %s", id)` | `row_deletes.go` |
-| `deletePurgeTx(ctx, tx, key)` | `DELETE FROM purges WHERE issue_id = ? AND issue_created_at = ?` | `fmt.Sprintf("purge record %s@%s", key.issueID, key.issueCreatedAt)` | `row_deletes.go` |
+| `deletePurgeTx(ctx, tx, key)` | `DELETE FROM purges WHERE issue_id = ? AND issue_created_at = ?` | `fmt.Sprintf("purge record %s@%s", key.IssueID, key.IssueCreatedAt)` | `row_deletes.go` |
 
-Bind order for relations is `key.srcID, key.dstID, string(key.kind)` (`row_deletes.go`); for labels `key.issueID, key.name` (`row_deletes.go`); for purges `key.issueID, key.issueCreatedAt` (`row_deletes.go`).
+Bind order for relations is `key.srcID, key.dstID, string(key.kind)` (`row_deletes.go`); for labels `key.issueID, key.name` (`row_deletes.go`); for purges `key.IssueID, key.IssueCreatedAt` (`row_deletes.go`).
 
 ### 4.3 Tombstone vs hard delete
 
