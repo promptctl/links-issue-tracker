@@ -237,11 +237,13 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 		if _, err := fmt.Fprintln(w, "\ncomments:"); err != nil {
 			return err
 		}
-		// A body renders in its authored lines, each after the first hung under
-		// its "- [author]" row, so only a comment row starts at column 0 and the
-		// list stays delimited without escaping the body.
+		// A row leads with the comment's id, the handle `lit comment rm` takes,
+		// so the read view is the way to it. A body renders in its authored
+		// lines, each after the first hung under its "- <id> [author]" row, so
+		// only a comment row starts at column 0 and the list stays delimited
+		// without escaping the body.
 		for _, c := range detail.Comments {
-			if _, err := fmt.Fprintf(w, "- [%s] %s\n", c.CreatedBy, hangLines(c.Body, "  ")); err != nil {
+			if _, err := fmt.Fprintf(w, "- %s [%s] %s\n", c.ID, c.CreatedBy, hangLines(c.Body, "  ")); err != nil {
 				return err
 			}
 		}

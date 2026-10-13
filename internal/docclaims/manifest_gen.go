@@ -126,6 +126,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/06-issue-commands.md", Text: "lit backup restore --path <export.json>", Src: "use `lit backup restore --path <export.json>` — it owns the same export-restore mechanism `bulk import` duplicated"},
 	{Doc: "doc-v1-total/06-issue-commands.md", Text: "lit bulk <label|close|archive>", Src: "usage: lit bulk <label|close|archive> ..."},
 	{Doc: "doc-v1-total/06-issue-commands.md", Text: "lit comment add <id> --body <text>", Src: "usage: lit comment add <id> --body <text>"},
+	{Doc: "doc-v1-total/06-issue-commands.md", Text: "lit comment rm", Src: "usage: lit comment rm <comment-id>"},
 	{Doc: "doc-v1-total/06-issue-commands.md", Text: "lit comment rm <comment-id>", Src: "usage: lit comment rm <comment-id>"},
 	{Doc: "doc-v1-total/06-issue-commands.md", Text: "lit completion <bash|zsh|fish>", Src: "usage: lit completion <bash|zsh|fish>"},
 	{Doc: "doc-v1-total/06-issue-commands.md", Text: "lit delete <id>", Src: "Rerun with `--yes` to purge it, or run `lit delete <id>` to remove it reversibly. "},
