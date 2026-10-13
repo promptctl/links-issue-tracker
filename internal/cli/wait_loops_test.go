@@ -55,7 +55,7 @@ func TestDoctorNamesAWaitLoop(t *testing.T) {
 	for _, link := range []string{
 		b.ID + " waits on earlier sibling " + e1.ID,
 		e1.ID + " waits on its child " + c.ID,
-		c.ID + " depends on " + b.ID,
+		c.ID + " is blocked by " + b.ID,
 	} {
 		if !strings.Contains(line, link) {
 			t.Fatalf("the wait loop line should name %q; got:\n%s", link, got)
@@ -66,7 +66,7 @@ func TestDoctorNamesAWaitLoop(t *testing.T) {
 // C stands behind B in their lane and also depends on B, so two links run from
 // C to B. Removing either alone leaves C waiting on B, so the loop names both.
 // The loop runs back through epic F's child, since the store refuses a loop
-// of blocks edges alone.
+// of blocked-by edges alone.
 func TestDoctorNamesEveryLinkBetweenAPair(t *testing.T) {
 	h := newReadyTestHarness(t)
 	e := h.createIssue(storage.CreateIssueInput{Title: "E", Topic: "loop", IssueType: "epic"})
@@ -80,10 +80,10 @@ func TestDoctorNamesEveryLinkBetweenAPair(t *testing.T) {
 
 	got, line := h.doctorWaitLoopLine()
 	for _, link := range []string{
-		c.ID + " depends on " + b.ID + " and waits on earlier sibling " + b.ID,
-		b.ID + " depends on " + f.ID,
+		c.ID + " is blocked by " + b.ID + " and waits on earlier sibling " + b.ID,
+		b.ID + " is blocked by " + f.ID,
 		f.ID + " waits on its child " + x.ID,
-		x.ID + " depends on " + c.ID,
+		x.ID + " is blocked by " + c.ID,
 	} {
 		if !strings.Contains(line, link) {
 			t.Fatalf("the wait loop line should name %q; got:\n%s", link, got)

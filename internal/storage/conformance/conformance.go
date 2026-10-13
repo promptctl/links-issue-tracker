@@ -1748,7 +1748,7 @@ func aContainerListsBeforeEverythingInsideIt(t *testing.T, ctx context.Context, 
 	// A view's group of related issues follows the same rule: dependencies
 	// spread over three frames list in tree order, not by their own keys.
 	for _, dependency := range []model.Issue{grandchild, epic, last} {
-		if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: outer.ID, DstID: dependency.ID, Type: model.RelBlocks, CreatedBy: "ada"}); err != nil {
+		if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: outer.ID, DstID: dependency.ID, Type: model.RelBlockedBy, CreatedBy: "ada"}); err != nil {
 			t.Fatalf("AddRelation(%s blocks-on %s) error = %v", outer.ID, dependency.ID, err)
 		}
 	}
@@ -1756,7 +1756,7 @@ func aContainerListsBeforeEverythingInsideIt(t *testing.T, ctx context.Context, 
 	if err != nil {
 		t.Fatalf("GetIssueDetail(%s) error = %v", outer.ID, err)
 	}
-	assertIssueIDs(t, "an issue's dependencies across frames", detail.DependsOn,
+	assertIssueIDs(t, "an issue's dependencies across frames", detail.BlockedBy,
 		[]string{last.ID, epic.ID, grandchild.ID})
 }
 
@@ -2077,7 +2077,7 @@ func labelsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk *c
 }
 
 func relationsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	// Siblings under one epic: a blocks edge between branches of one tree is
+	// Siblings under one epic: a blocked-by edge between branches of one tree is
 	// allowed, only one along the hierarchy is not.
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	dependent := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "dependent", Topic: "core", ParentID: epic.ID})
@@ -2085,7 +2085,7 @@ func relationsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk
 	peer := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "peer", Topic: "core", ParentID: epic.ID})
 
 	rel, err := st.AddRelation(ctx, storage.AddRelationInput{
-		SrcID: dependent.ID, DstID: dependency.ID, Type: model.RelBlocks, CreatedBy: "ada",
+		SrcID: dependent.ID, DstID: dependency.ID, Type: model.RelBlockedBy, CreatedBy: "ada",
 	})
 	if err != nil {
 		t.Fatalf("AddRelation blocks error = %v", err)
@@ -2114,27 +2114,27 @@ func relationsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk
 
 	// The variadic types argument narrows rather than switching behavior:
 	// naming no type means "every type", never "no types".
-	blocks, err := st.ListRelationsForIssue(ctx, dependent.ID, model.RelBlocks)
+	blocks, err := st.ListRelationsForIssue(ctx, dependent.ID, model.RelBlockedBy)
 	if err != nil {
 		t.Fatalf("ListRelationsForIssue(blocks) error = %v", err)
 	}
-	if len(blocks) != 1 || blocks[0].Type != model.RelBlocks {
-		t.Errorf("filtered edges = %+v, want the one blocks edge", blocks)
+	if len(blocks) != 1 || blocks[0].Type != model.RelBlockedBy {
+		t.Errorf("filtered edges = %+v, want the one blocked-by edge", blocks)
 	}
 
 	// Edges are read from either end — the dependency sees its dependent.
-	fromOtherEnd, err := st.ListRelationsForIssue(ctx, dependency.ID, model.RelBlocks)
+	fromOtherEnd, err := st.ListRelationsForIssue(ctx, dependency.ID, model.RelBlockedBy)
 	if err != nil {
 		t.Fatalf("ListRelationsForIssue from the dependency error = %v", err)
 	}
 	if len(fromOtherEnd) != 1 {
-		t.Errorf("edges at the dependency = %+v, want the one blocks edge", fromOtherEnd)
+		t.Errorf("edges at the dependency = %+v, want the one blocked-by edge", fromOtherEnd)
 	}
 
-	if err := st.RemoveRelation(ctx, dependent.ID, dependency.ID, model.RelBlocks); err != nil {
+	if err := st.RemoveRelation(ctx, dependent.ID, dependency.ID, model.RelBlockedBy); err != nil {
 		t.Fatalf("RemoveRelation error = %v", err)
 	}
-	err = st.RemoveRelation(ctx, dependent.ID, dependency.ID, model.RelBlocks)
+	err = st.RemoveRelation(ctx, dependent.ID, dependency.ID, model.RelBlockedBy)
 	assertNotFound(t, err, "relation", "RemoveRelation of an absent edge")
 
 	// related-to is symmetric, so an issue cannot be related to itself.
@@ -2153,7 +2153,7 @@ func relationsBatchBucketsEdges(t *testing.T, ctx context.Context, st storage.St
 	other := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "other epic", Topic: "core", IssueType: model.TypeEpic})
 	dependency := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "dependency", Topic: "core", ParentID: other.ID})
 	if _, err := st.AddRelation(ctx, storage.AddRelationInput{
-		SrcID: child.ID, DstID: dependency.ID, Type: model.RelBlocks, CreatedBy: "ada",
+		SrcID: child.ID, DstID: dependency.ID, Type: model.RelBlockedBy, CreatedBy: "ada",
 	}); err != nil {
 		t.Fatalf("AddRelation error = %v", err)
 	}
@@ -2170,11 +2170,11 @@ func relationsBatchBucketsEdges(t *testing.T, ctx context.Context, st storage.St
 	if childEdges.Parent == nil || childEdges.Parent.ID != epic.ID {
 		t.Errorf("child Parent = %+v, want the epic", childEdges.Parent)
 	}
-	assertIssueIDs(t, "child DependsOn", childEdges.DependsOn, []string{dependency.ID})
+	assertIssueIDs(t, "child BlockedBy", childEdges.BlockedBy, []string{dependency.ID})
 
 	assertIssueIDs(t, "epic Children", byID[epic.ID].Children, []string{child.ID})
 
-	// DependsOn and Blocks are the two readings of one edge set, which is why
+	// BlockedBy and Blocks are the two readings of one edge set, which is why
 	// the dependency sees the child under Blocks without a second row existing.
 	assertIssueIDs(t, "dependency Blocks", byID[dependency.ID].Blocks, []string{child.ID})
 
@@ -2406,7 +2406,7 @@ func theHierarchyStaysATree(t *testing.T, ctx context.Context, st storage.Store,
 	assertIssueIDs(t, "children of the mid epic after the move", mustChildren(t, ctx, st, mid.ID), nil)
 }
 
-// blocksNeverRunsAlongTheHierarchy pins that a blocks edge between an issue and
+// blocksNeverRunsAlongTheHierarchy pins that a blocked-by edge between an issue and
 // any of its ancestors is refused at every depth and in both directions, and on
 // each write path that can create one: AddRelation and both import formats.
 // Depth is the point — a check that compared nearest epics refused the
@@ -2429,22 +2429,22 @@ func blocksNeverRunsAlongTheHierarchy(t *testing.T, ctx context.Context, st stor
 		{"a direct child blocking its epic", root.ID, child.ID},
 	}
 	for _, r := range refusedPairs {
-		_, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: r.dependent, DstID: r.dependency, Type: model.RelBlocks})
+		_, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: r.dependent, DstID: r.dependency, Type: model.RelBlockedBy})
 		assertHierarchyBlocksRefused(t, err, "AddRelation("+r.what+")")
 	}
 	for _, id := range []string{root.ID, mid.ID, leaf.ID, child.ID} {
-		edges, err := st.ListRelationsForIssue(ctx, id, model.RelBlocks)
+		edges, err := st.ListRelationsForIssue(ctx, id, model.RelBlockedBy)
 		if err != nil {
 			t.Fatalf("ListRelationsForIssue(%s) error = %v", id, err)
 		}
 		if len(edges) != 0 {
-			t.Errorf("blocks edges at %s after the refusals = %+v, want none", id, edges)
+			t.Errorf("blocked-by edges at %s after the refusals = %+v, want none", id, edges)
 		}
 	}
 
 	// Branches of one tree are not ancestry: the direct child and the leaf
 	// share an ancestor but neither sits above the other.
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: leaf.ID, DstID: child.ID, Type: model.RelBlocks}); err != nil {
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: leaf.ID, DstID: child.ID, Type: model.RelBlockedBy}); err != nil {
 		t.Fatalf("AddRelation(leaf depends on a cousin) error = %v; neither is above the other", err)
 	}
 
@@ -2463,10 +2463,10 @@ func blocksNeverRunsAlongTheHierarchy(t *testing.T, ctx context.Context, st stor
 		{"a leaf blocking its parent's sibling sub-epic", held.ID, mid.ID},
 	}
 	for _, a := range accepted {
-		if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: a.dependent, DstID: a.dependency, Type: model.RelBlocks}); err != nil {
+		if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: a.dependent, DstID: a.dependency, Type: model.RelBlockedBy}); err != nil {
 			t.Errorf("AddRelation(%s) error = %v; neither is above the other", a.what, err)
 		}
-		if err := st.RemoveRelation(ctx, a.dependent, a.dependency, model.RelBlocks); err != nil {
+		if err := st.RemoveRelation(ctx, a.dependent, a.dependency, model.RelBlockedBy); err != nil {
 			t.Fatalf("RemoveRelation(%s) error = %v", a.what, err)
 		}
 	}
@@ -2474,13 +2474,13 @@ func blocksNeverRunsAlongTheHierarchy(t *testing.T, ctx context.Context, st stor
 	_, err := st.ImportTree(ctx, prefix, []storage.ImportTreeSpec{
 		{LocalID: "e", Title: "imported epic", IssueType: "epic", Topic: "core"},
 		{LocalID: "s", Title: "imported sub-epic", IssueType: "epic", Topic: "core", Parent: "e"},
-		{LocalID: "l", Title: "imported leaf", IssueType: "task", Topic: "core", Parent: "s", DependsOn: []string{"e"}},
+		{LocalID: "l", Title: "imported leaf", IssueType: "task", Topic: "core", Parent: "s", BlockedBy: []string{"e"}},
 	})
 	assertHierarchyBlocksRefused(t, err, "ImportTree(a leaf depending on its grandparent epic)")
 
 	title, topic, issueType := "bulk leaf", "core", "task"
 	_, err = st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
-		{Title: &title, Topic: &topic, IssueType: &issueType, Parent: mid.ID, DependsOn: []string{root.ID}},
+		{Title: &title, Topic: &topic, IssueType: &issueType, Parent: mid.ID, BlockedBy: []string{root.ID}},
 	})
 	assertHierarchyBlocksRefused(t, err, "BulkApply(a leaf depending on its grandparent epic)")
 }
@@ -2724,7 +2724,7 @@ func importTreeMapsLocalIDs(t *testing.T, ctx context.Context, st storage.Store,
 	// below fails for an engine that reports file order instead of creation
 	// order.
 	result, err := st.ImportTree(ctx, prefix, []storage.ImportTreeSpec{
-		{LocalID: "other", Title: "other", IssueType: "task", Topic: "core", Parent: "root", DependsOn: []string{"leaf"}},
+		{LocalID: "other", Title: "other", IssueType: "task", Topic: "core", Parent: "root", BlockedBy: []string{"leaf"}},
 		{LocalID: "leaf", Title: "leaf", IssueType: "task", Topic: "core", Parent: "root"},
 		{LocalID: "root", Title: "root", IssueType: "epic", Topic: "core"},
 	})
@@ -2739,9 +2739,9 @@ func importTreeMapsLocalIDs(t *testing.T, ctx context.Context, st storage.Store,
 	otherID := mustCreatedID(t, result.Created, "other")
 	assertIssueIDs(t, "imported children", mustChildren(t, ctx, st, rootID), []string{leafID, otherID})
 
-	// depends_on in the file means "this issue depends on that one", so the
+	// blocked_by in the file means "this issue is blocked by that one", so the
 	// dependent is the edge's src.
-	edges, err := st.ListRelationsForIssue(ctx, otherID, model.RelBlocks)
+	edges, err := st.ListRelationsForIssue(ctx, otherID, model.RelBlockedBy)
 	if err != nil {
 		t.Fatalf("ListRelationsForIssue error = %v", err)
 	}

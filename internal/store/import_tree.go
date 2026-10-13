@@ -10,9 +10,9 @@ import (
 )
 
 // ImportTree validates and creates a tree of issues described by specs in
-// dependency order: parents and DependsOn referents are created first, then
+// dependency order: parents and BlockedBy referents are created first, then
 // their children/dependents. Parent relations are wired by CreateIssue itself
-// (via ParentID); blocks edges are added in a second pass.
+// (via ParentID); blocked-by edges are added in a second pass.
 //
 // On any failure mid-import, ImportTree best-effort rolls back already-created
 // issues by transitioning them to deleted. Atomicity is therefore best-effort:
@@ -72,14 +72,12 @@ func (s *Store) ImportTree(ctx context.Context, prefix string, specs []storage.I
 		createdIDs = append(createdIDs, issue.ID)
 	}
 	for _, spec := range specs {
-		for _, dep := range spec.DependsOn {
+		for _, dep := range spec.BlockedBy {
 			srcID := idMap[spec.LocalID]
 			dstID := idMap[dep]
-			// blocks convention in the store: src is dependent, dst is dependency.
-			// spec says "srcID depends_on dstID", so we pass src as dependent.
-			if _, err := s.AddRelation(ctx, storage.AddRelationInput{SrcID: srcID, DstID: dstID, Type: "blocks", CreatedBy: "links"}); err != nil {
+			if _, err := s.AddRelation(ctx, storage.AddRelationInput{SrcID: srcID, DstID: dstID, Type: model.RelBlockedBy, CreatedBy: "links"}); err != nil {
 				leaked := s.rollbackCreatedIssues(ctx, createdIDs)
-				return storage.ImportTreeResult{}, fmt.Errorf("import: depends_on %q -> %q: %w (rollback leaked %d: %s)", spec.LocalID, dep, err, len(leaked), strings.Join(leaked, ","))
+				return storage.ImportTreeResult{}, fmt.Errorf("import: blocked_by %q -> %q: %w (rollback leaked %d: %s)", spec.LocalID, dep, err, len(leaked), strings.Join(leaked, ","))
 			}
 		}
 	}
@@ -103,7 +101,7 @@ func (s *Store) rollbackCreatedIssues(ctx context.Context, createdIDs []string) 
 }
 
 // topoSortImportSpecs returns indices of specs in an order such that for
-// every (i, j) where j depends on i (via Parent or DependsOn), i appears
+// every (i, j) where j depends on i (via Parent or BlockedBy), i appears
 // first. Cycle in the graph is rejected with an error.
 func topoSortImportSpecs(specs []storage.ImportTreeSpec) ([]int, error) {
 	localID := make([]string, len(specs))
@@ -112,7 +110,7 @@ func topoSortImportSpecs(specs []storage.ImportTreeSpec) ([]int, error) {
 	for i, spec := range specs {
 		localID[i] = spec.LocalID
 		parent[i] = spec.Parent
-		dependsOn[i] = spec.DependsOn
+		dependsOn[i] = spec.BlockedBy
 	}
 	order, err := topoSortLocalGraph(localID, parent, dependsOn)
 	if err != nil {

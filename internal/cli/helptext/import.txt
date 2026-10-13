@@ -19,15 +19,15 @@ JSON tree spec (creates only)
        "type": "epic", "topic": "exporter"},
       {"local_id": "design", "parent": "epic-x", "title": "Design it",
        "type": "task", "topic": "exporter", "priority": 1},
-      {"local_id": "build", "parent": "epic-x", "depends_on": ["design"],
+      {"local_id": "build", "parent": "epic-x", "blocked_by": ["design"],
        "title": "Build it", "type": "task", "topic": "exporter"}
     ]
 
   Keys: local_id, title, type, topic, priority, description, prompt,
-  assignee, labels, parent, depends_on. Anything after the closing
+  assignee, labels, parent, blocked_by. Anything after the closing
   bracket is an error.
 
-  local_id is required on every record: it is how parent and depends_on
+  local_id is required on every record: it is how parent and blocked_by
   name another record before real IDs exist. Those two may only name a
   local_id in this same file — a real, already-existing issue ID is
   rejected here; use the YAML format to hang new issues off issues that
@@ -64,7 +64,7 @@ YAML bulk file (creates and updates)
   A create document requires title, type and topic exactly as a JSON
   record does, and takes the same optional keys plus lane. local_id is
   optional here (a create without one is reported under its new real ID).
-  parent and depends_on may name either a local_id in this file or the
+  parent and blocked_by may name either a local_id in this file or the
   real ID of an issue that already exists. reason is rejected on a
   create: there is no prior value for it to annotate.
 
@@ -76,7 +76,7 @@ YAML bulk file (creates and updates)
   Four keys are rejected outright on an update document, each belonging
   to something else: topic (immutable — no command changes it after
   create), local_id (create-only), parent (reparent with lit parent set),
-  depends_on (wire dependencies with lit dep add).
+  blocked_by (wire dependencies with lit dep add).
 
 Values both formats enforce
 
@@ -90,14 +90,14 @@ Values both formats enforce
 
   labels are lowercased and deduplicated, and may not contain commas.
 
-  id, local_id, parent and depends_on values are matched literally:
+  id, local_id, parent and blocked_by values are matched literally:
   leading or trailing whitespace in any of them is rejected, not trimmed.
 
   A local_id may not be used twice in one file, a record may not name its
-  own local_id in its own depends_on, and parent/depends_on references
-  within the file may not form a cycle. A depends_on pointing at an issue
+  own local_id in its own blocked_by, and parent/blocked_by references
+  within the file may not form a cycle. A blocked_by pointing at an issue
   that already exists is also rejected if it would close a cycle in the
-  blocks graph.
+  blocked-by graph.
 
   A file with zero records or zero documents is an error.
 

@@ -68,12 +68,12 @@ func ValidateImportTreeSpecs(specs []ImportTreeSpec) error {
 		if err := RejectLeafWithoutParent(types[spec.LocalID], spec.Parent); err != nil {
 			return fmt.Errorf("import: spec %q: %w", spec.LocalID, err)
 		}
-		for _, dep := range spec.DependsOn {
+		for _, dep := range spec.BlockedBy {
 			if dep != strings.TrimSpace(dep) {
-				return fmt.Errorf("import: spec %q depends_on entry %q has surrounding whitespace", spec.LocalID, dep)
+				return fmt.Errorf("import: spec %q blocked_by entry %q has surrounding whitespace", spec.LocalID, dep)
 			}
 			if _, ok := types[dep]; !ok {
-				return fmt.Errorf("import: spec %q references missing depends_on %q", spec.LocalID, dep)
+				return fmt.Errorf("import: spec %q references missing blocked_by %q", spec.LocalID, dep)
 			}
 			if dep == spec.LocalID {
 				return fmt.Errorf("import: spec %q cannot depend on itself", spec.LocalID)
@@ -104,9 +104,9 @@ func ValidateBulkSpecs(specs []BulkIssueSpec) error {
 		if spec.Parent != strings.TrimSpace(spec.Parent) {
 			return fmt.Errorf("bulk: doc %d parent %q has surrounding whitespace", i, spec.Parent)
 		}
-		for _, dep := range spec.DependsOn {
+		for _, dep := range spec.BlockedBy {
 			if dep != strings.TrimSpace(dep) {
-				return fmt.Errorf("bulk: doc %d depends_on entry %q has surrounding whitespace", i, dep)
+				return fmt.Errorf("bulk: doc %d blocked_by entry %q has surrounding whitespace", i, dep)
 			}
 			if spec.LocalID != "" && dep == spec.LocalID {
 				return fmt.Errorf("bulk: doc %d (local_id %q) cannot depend on itself", i, spec.LocalID)
@@ -194,8 +194,8 @@ func validateBulkUpdateDoc(i int, spec BulkIssueSpec) error {
 	if spec.Parent != "" {
 		return fmt.Errorf("bulk: doc %d (id %q) sets parent; reparent with `lit parent set` instead", i, spec.ID)
 	}
-	if len(spec.DependsOn) > 0 {
-		return fmt.Errorf("bulk: doc %d (id %q) sets depends_on; wire dependencies with `lit dep add` instead", i, spec.ID)
+	if len(spec.BlockedBy) > 0 {
+		return fmt.Errorf("bulk: doc %d (id %q) sets blocked_by; wire dependencies with `lit dep add` instead", i, spec.ID)
 	}
 	if spec.IssueType != nil {
 		if _, err := model.ParseIssueType(*spec.IssueType); err != nil {

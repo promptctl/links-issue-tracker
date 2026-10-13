@@ -110,7 +110,7 @@ func TestCommandErrorReason(t *testing.T) {
 		// Both validation types share the one refusal reason: a deterministic
 		// policy refusal must never fall to the default "Retry the command"
 		// remediation.
-		{"cli validation refusal", model.ValidationError{Message: "Do not set 'blocks' relationships between two issues in the same epic."}, "validation_refused"},
+		{"cli validation refusal", model.ValidationError{Message: "Do not set blocked-by relationships between two issues in the same epic."}, "validation_refused"},
 		{"storage validation refusal", model.ValidationError{Message: "priority out of range"}, "validation_refused"},
 		// Both takeover-gate arms, and one wrapped.
 		{"takeover without --take", takeoverUnconfirmedError{Message: "claimed here: … — this lane is claimed and active; pass --take to confirm the takeover"}, "takeover_unconfirmed"},
@@ -366,7 +366,7 @@ func TestWriteCommandErrorWorkspaceWriteBlocked(t *testing.T) {
 func TestWriteCommandErrorValidationRefusalNeverSaysRetry(t *testing.T) {
 	t.Parallel()
 	var stderr bytes.Buffer
-	err := model.ValidationError{Message: "Do not set 'blocks' relationships between two issues in the same epic.  Use rank to specify that one issue must be completed before another issue"}
+	err := model.ValidationError{Message: "Do not set blocked-by relationships between two issues in the same epic.  Use rank to specify that one issue must be completed before another issue"}
 	if code := WriteCommandError(&stderr, err); code != ExitValidation {
 		t.Fatalf("exitCode = %d, want %d", code, ExitValidation)
 	}

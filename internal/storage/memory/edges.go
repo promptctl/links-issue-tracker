@@ -214,8 +214,8 @@ func (e *Engine) addRelation(in storage.AddRelationInput) (model.Relation, error
 // [LAW:one-source-of-truth] [LAW:dataflow-not-control-flow]
 func (e *Engine) rejectCycle(relType model.RelationType, srcID, dstID string) error {
 	switch relType {
-	case model.RelBlocks:
-		// A rank order is a total order, and one honoring every blocks edge
+	case model.RelBlockedBy:
+		// A rank order is a total order, and one honoring every blocked-by edge
 		// exists exactly when there is no cycle, so a cycle is an unsatisfiable
 		// constraint set rather than an awkward shape. Rejecting the
 		// cycle-closing edge at this write boundary is what makes the state
@@ -284,12 +284,12 @@ func (e *Engine) rejectParentCycle(childID, parentID string) error {
 // the reverse.
 func (e *Engine) rejectBlocksCycle(dependent, dependency string) error {
 	if dependent == dependency {
-		return model.ValidationError{Message: fmt.Sprintf("blocks: %s cannot block itself", dependent)}
+		return model.ValidationError{Message: fmt.Sprintf("blocked-by: %s cannot be blocked by itself", dependent)}
 	}
 	// dependency -> dependents: who is forced to come after whom.
 	precedes := map[string][]string{}
 	for _, rel := range e.relations {
-		if rel.Type != model.RelBlocks {
+		if rel.Type != model.RelBlockedBy {
 			continue
 		}
 		precedes[rel.DstID] = append(precedes[rel.DstID], rel.SrcID)
@@ -312,7 +312,7 @@ func (e *Engine) rejectBlocksCycle(dependent, dependency string) error {
 		return false
 	}
 	if reaches(dependent) {
-		return model.ValidationError{Message: fmt.Sprintf("blocks: cannot add %s depends-on %s — %s already depends on %s (directly or transitively), so this edge would close a dependency cycle, which has no valid rank order", dependent, dependency, dependency, dependent)}
+		return model.ValidationError{Message: fmt.Sprintf("blocked-by: cannot add %s blocked by %s — %s is already blocked by %s (directly or transitively), so this edge would close a dependency cycle, which has no valid rank order", dependent, dependency, dependency, dependent)}
 	}
 	return nil
 }
@@ -325,7 +325,7 @@ func (e *Engine) RemoveRelation(ctx context.Context, srcID, dstID string, relTyp
 	if !e.hasRelation(srcID, dstID, relType) {
 		return storage.NotFoundError{Entity: "relation", ID: fmt.Sprintf("src=%s dst=%s type=%s", srcID, dstID, relType)}
 	}
-	// `lit dep rm --type parent-child` is the other door onto a detach, so it
+	// Removing a parent-child edge is a detach whatever the caller, so it
 	// meets ClearParent's rule: a leaf keeps a parent, judged against the
 	// parent edges left once this one goes. The edge exists, so its src does.
 	// [LAW:single-enforcer]
@@ -477,12 +477,12 @@ func (e *Engine) dropRelations(matches func(model.Relation) bool) int {
 
 // bucketRelations sorts the edges incident to focalID into the four structural
 // slices, hydrating counterparts. It is the single definition of how an edge
-// maps to parent / child / depends-on / blocks — so the direction convention
-// (a blocks edge runs src=dependent, dst=dependency, which makes DependsOn and
+// maps to parent / child / blocked-by / blocks — so the direction convention
+// (a blocked-by edge reads "src blocked-by dst", which makes BlockedBy and
 // Blocks the two readings of one edge set) lives in exactly one place.
 // [LAW:single-enforcer]
 func (e *Engine) bucketRelations(focalID string, relations []model.Relation, pos map[string]int, ancestry storage.RankAncestry) (storage.IssueRelations, error) {
-	out := storage.IssueRelations{Children: []model.Issue{}, DependsOn: []model.Issue{}, Blocks: []model.Issue{}}
+	out := storage.IssueRelations{Children: []model.Issue{}, BlockedBy: []model.Issue{}, Blocks: []model.Issue{}}
 	for _, rel := range relations {
 		// Which bucket an edge lands in is a function of its type and which
 		// end the focal issue is on — the four readings of two edge types,
@@ -491,9 +491,9 @@ func (e *Engine) bucketRelations(focalID string, relations []model.Relation, pos
 		// the hole.
 		bucket, otherID := (*[]model.Issue)(nil), ""
 		switch {
-		case rel.Type == model.RelBlocks && rel.SrcID == focalID:
-			bucket, otherID = &out.DependsOn, rel.DstID
-		case rel.Type == model.RelBlocks && rel.DstID == focalID:
+		case rel.Type == model.RelBlockedBy && rel.SrcID == focalID:
+			bucket, otherID = &out.BlockedBy, rel.DstID
+		case rel.Type == model.RelBlockedBy && rel.DstID == focalID:
 			bucket, otherID = &out.Blocks, rel.SrcID
 		case rel.Type == model.RelParentChild && rel.DstID == focalID:
 			bucket, otherID = &out.Children, rel.SrcID
@@ -517,7 +517,7 @@ func (e *Engine) bucketRelations(focalID string, relations []model.Relation, pos
 		*bucket = append(*bucket, issue)
 	}
 	ancestry.Sort(out.Children)
-	ancestry.Sort(out.DependsOn)
+	ancestry.Sort(out.BlockedBy)
 	ancestry.Sort(out.Blocks)
 	return out, nil
 }

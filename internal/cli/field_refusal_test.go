@@ -31,14 +31,14 @@ func TestFieldRefusalsAreDeterministicRefusals(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(task) error = %v", err)
 	}
-	// In an epic of its own: a blocks edge between siblings is refused, and the
+	// In an epic of its own: a blocked-by edge between siblings is refused, and the
 	// edge below is the fixture for the cycle case, not a refusal under test.
 	blocked, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "blocked by the task", Topic: "fields", IssueType: "task", ParentID: seedEpicRaw(t, ctx, ap, "another epic", "fields")})
 	if err != nil {
 		t.Fatalf("CreateIssue(blocked) error = %v", err)
 	}
-	if err := runDepAdd(ctx, io.Discard, ap, []string{"--from", task.ID, "--to", blocked.ID}); err != nil {
-		t.Fatalf("dep add %s blocks %s: %v", task.ID, blocked.ID, err)
+	if err := runDepAdd(ctx, io.Discard, ap, []string{blocked.ID, "--blocked-by", task.ID}); err != nil {
+		t.Fatalf("dep add %s --blocked-by %s: %v", blocked.ID, task.ID, err)
 	}
 	runLs := func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 		return runListWithStore(ctx, stdout, ap.Store, workspaceReadyPolicy(ap), args)
@@ -64,9 +64,8 @@ func TestFieldRefusalsAreDeterministicRefusals(t *testing.T) {
 		{"update container to leaf", runUpdate, []string{epic.ID, "--type", "task"}, ExitValidation, "validation_refused"},
 		{"update naming no field", runUpdate, []string{task.ID}, ExitUsage, "usage_error"},
 		{"label add blank label", runLabelAdd, []string{task.ID, " "}, ExitValidation, "validation_refused"},
-		{"dep add unknown relation type", runDepAdd, []string{"--from", task.ID, "--to", epic.ID, "--type", "bogus"}, ExitValidation, "validation_refused"},
-		{"dep add self-loop", runDepAdd, []string{"--from", task.ID, "--to", task.ID}, ExitValidation, "validation_refused"},
-		{"dep add closing a blocks cycle", runDepAdd, []string{"--from", blocked.ID, "--to", task.ID}, ExitValidation, "validation_refused"},
+		{"dep add self-loop", runDepAdd, []string{task.ID, "--blocked-by", task.ID}, ExitValidation, "validation_refused"},
+		{"dep add closing a blocked-by cycle", runDepAdd, []string{task.ID, "--blocked-by", blocked.ID}, ExitValidation, "validation_refused"},
 		{"ls unsupported sort field", runLs, []string{"--sort", "bogus"}, ExitValidation, "validation_refused"},
 		{"ls unknown state in --status", runLs, []string{"--status", "bogus"}, ExitValidation, "validation_refused"},
 		{"ls query term refused", runLs, []string{"--query", "has:nope"}, ExitValidation, "validation_refused"},

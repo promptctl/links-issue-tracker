@@ -358,7 +358,7 @@ func TestRunNextServesPastAnEpicWhoseWorkIsAllBlocked(t *testing.T) {
 	for _, want := range []string{
 		"no ready work in epic(s) " + epic.ID,
 		blocker.ID + " (on your path but not startable right now",
-		"to stay, file the ticket that clears a blocker under the epic with `lit new --parent " + epic.ID + " --top`, then make that blocker wait on it with `lit dep add --from <new> --to <blocker>`",
+		"to stay, file the ticket that clears a blocker under the epic with `lit new --parent " + epic.ID + " --top`, then make that blocker blocked by it with `lit dep add <blocker> --blocked-by <new>`",
 		"or move on to the top ready ticket outside it: run `lit start " + elsewhere.ID + "`",
 	} {
 		if !strings.Contains(text, want) {

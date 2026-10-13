@@ -1274,10 +1274,10 @@ func (s *Store) liveIssueIDs(ctx context.Context) (map[string]struct{}, error) {
 	return out, nil
 }
 
-// blocksEdge is one blocks relation hydrated as a precedence constraint: the
+// blocksEdge is one blocked-by relation hydrated as a precedence constraint: the
 // dependent must be ranked below the dependency, i.e. the dependency comes
 // first. A rank order is a total order over issues, and a total order that
-// satisfies every blocks edge exists if and only if the precedence graph is
+// satisfies every blocked-by edge exists if and only if the precedence graph is
 // acyclic. A cycle is therefore not a transient rank stall but an
 // unsatisfiable constraint set — no assignment can place every dependency
 // above its dependent once the dependencies form a loop.
@@ -1286,7 +1286,7 @@ type blocksEdge struct {
 	dependency string // dst — ranked above
 }
 
-// loadBlocksEdges returns every blocks relation whose endpoints are both
+// loadBlocksEdges returns every blocked-by relation whose endpoints are both
 // non-deleted. It does not filter on rank: the constraint graph is what it is
 // whatever the current ranks say, and every caller asks about the graph rather
 // than about placement.
@@ -1297,23 +1297,23 @@ func loadBlocksEdges(ctx context.Context, q rowQueryer) ([]blocksEdge, error) {
 	rows, err := q.QueryContext(ctx, `SELECT r.src_id, r.dst_id FROM relations r
 		JOIN issues src ON src.id = r.src_id
 		JOIN issues dst ON dst.id = r.dst_id
-		WHERE r.type = 'blocks'
+		WHERE r.type = 'blocked-by'
 		AND src.deleted_at IS NULL AND dst.deleted_at IS NULL
 		ORDER BY r.src_id, r.dst_id`)
 	if err != nil {
-		return nil, fmt.Errorf("query blocks edges: %w", err)
+		return nil, fmt.Errorf("query blocked-by edges: %w", err)
 	}
 	defer rows.Close()
 	edges := make([]blocksEdge, 0)
 	for rows.Next() {
 		var e blocksEdge
 		if err := rows.Scan(&e.dependent, &e.dependency); err != nil {
-			return nil, fmt.Errorf("scan blocks edge: %w", err)
+			return nil, fmt.Errorf("scan blocked-by edge: %w", err)
 		}
 		edges = append(edges, e)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("blocks edges rows: %w", err)
+		return nil, fmt.Errorf("blocked-by edges rows: %w", err)
 	}
 	return edges, nil
 }
@@ -1328,7 +1328,7 @@ func blocksPrecedenceAdj(edges []blocksEdge) map[string][]string {
 }
 
 // blocksPrecedes reports whether `from` already precedes `to` through a chain
-// of blocks edges — i.e. existing relations already force `from` to be ranked
+// of blocked-by edges — i.e. existing relations already force `from` to be ranked
 // ahead of `to`. Adding a `to`-precedes-`from` edge on top of that would close
 // a cycle.
 func blocksPrecedes(adj map[string][]string, from, to string) bool {
@@ -1404,7 +1404,7 @@ func findBlocksCycle(edges []blocksEdge) []string {
 // loadRankOrder returns the live issues in the order the store ranks them:
 // item_rank ascending, with id breaking ties so the sequence is total even
 // where two rows share a rank. This sequence is both the repair's input order
-// and its membership test for which blocks edges constrain live work.
+// and its membership test for which blocked-by edges constrain live work.
 func loadRankOrder(ctx context.Context, q rowQueryer, liveIDs map[string]struct{}) ([]rankedIssue, error) {
 	rows, err := q.QueryContext(ctx, `SELECT id, item_rank FROM issues WHERE deleted_at IS NULL ORDER BY item_rank ASC, id ASC`)
 	if err != nil {
@@ -1434,7 +1434,7 @@ func loadRankOrder(ctx context.Context, q rowQueryer, liveIDs map[string]struct{
 // returns how many it moved.
 //
 // [LAW:single-enforcer] Doctor's rank_inversions count and this repair read the
-// same blocks edges over the same live set, so "no edge is inverted" is one
+// same blocked-by edges over the same live set, so "no edge is inverted" is one
 // predicate seen twice: the count reports the edges that break it, and the
 // order this produces satisfies it by construction.
 func (s *Store) FixRankInversions(ctx context.Context) (int, error) {
@@ -1456,7 +1456,7 @@ func (s *Store) FixRankInversions(ctx context.Context) (int, error) {
 		}
 		edges, err := loadBlocksEdges(ctx, tx)
 		if err != nil {
-			return fmt.Errorf("fix rank inversions: load blocks edges: %w", err)
+			return fmt.Errorf("fix rank inversions: load blocked-by edges: %w", err)
 		}
 		rewrites, err := repairRankOrder(order, edges)
 		if err != nil {

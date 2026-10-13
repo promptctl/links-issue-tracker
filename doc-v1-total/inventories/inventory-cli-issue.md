@@ -431,8 +431,8 @@ prefix (`cli.go`).
 - Resolutions: `duplicate, superseded, obsolete, wontfix`; error
   `"resolution must be one of: duplicate, superseded, obsolete, wontfix"`
   (`internal/model/lifecycle/resolution.go`).
-- Relation types: `blocks, parent-child, related-to`; error
-  `"relation type must be blocks, parent-child, or related-to"`
+- Relation types: `blocked-by, parent-child, related-to`; error
+  `"relation type must be blocked-by, parent-child, or related-to"`
   (`internal/model/relation_type.go`).
 - The write-path `--type` and `--priority` flags call `model.ParseIssueType` and
   `model.ParsePriorityName` directly; both refuse with `model.ValidationError` →
@@ -472,7 +472,7 @@ not `closed` (`cli.go`). Epics are therefore never workable rows.
    `MissingField` annotation (`ready_state.go`). "Set" means: non-nil, and
    for strings non-blank, for arrays/maps non-empty; anything else counts as set
    (`isRequiredFieldSet`, `ready_state.go`).
-2. `newBlockerAnnotator(details, ancestry)` — for each `DependsOn` that is
+2. `newBlockerAnnotator(details, ancestry)` — for each `BlockedBy` that is
    `InPlay()`, sorted by ID, emits `OpenDependency{Message: dep.ID}`; and
    additionally `RankInversion{Message: dep.ID}` when `dep.Rank > issue.Rank`.
    Then, for each id from `ancestry.inheritedDependencies(detail)` not already
@@ -481,7 +481,7 @@ not `closed` (`cli.go`). Epics are therefore never workable rows.
 , built by `fetchHeldAncestry` from an
    `epicAncestry`: the relations of every epic above the issues, keyed by epic
    id, and each epic's gates. `fetchContainerAncestry` builds both,
-   a gate being any `InPlay()` `DependsOn` of a loaded epic.
+   a gate being any `InPlay()` `BlockedBy` of a loaded epic.
    `climbContainers` loads `parentEpicIDs` of the subjects, then of each loaded
    level, one fetch per level, until a level names no epic it has not loaded
 . `epicsAbove` yields the container parents of an issue, nearest
@@ -532,7 +532,7 @@ seeds; `annotateIssues` passes the memo it built for `fetchHeldAncestry`.
 
 **Wait links** (`fetchWaitLinks`, `ready_state.go`): for each frontier
 issue, in frontier order, a `waitLink{waiter, prereq, holds, kind}` for
-each `InPlay()` `DependsOn` (`waitDependency`), each `epicAncestry.inheritedDependencies` entry over
+each `InPlay()` `BlockedBy` (`waitDependency`), each `epicAncestry.inheritedDependencies` entry over
 the frontier's `fetchContainerAncestry` (every gate, before `heldAncestry` drops
 any; `waitInherited`), each `InPlay()` child of a container (`waitChild`), and each earlier same-lane
 `InPlay()` sibling under a container parent (`waitEarlierSibling`). `holds` is true for a child link,
@@ -555,7 +555,7 @@ iff it has no `MissingField`, no `OpenDependency`, no `InheritedDependency`, no
 `EarlierSiblingPending`, no `NeedsDesign`, and no `External` annotation. `DependencyIDs()`
 returns the details of the `OpenDependency` and `InheritedDependency` reasons,
 and `DependencyLabels()` the same list with ` (via epic)` appended to each
-inherited one, which the backlog and `lit next` print on their `depends on:`
+inherited one, which the backlog and `lit next` print on their `blocked by:`
 lines (`readiness.go`).
 
 **Step 5 — canonical ordering** (`cli.go`): the rows arrive in the listing's
@@ -851,7 +851,7 @@ lines|table") is built from the same map (`cli.go`, `output.go`).
 7. Group blocks, each rendered as `\n<label>:\n` followed by
    `- <id> [<standing>] <title>` lines and omitted entirely when empty
    (`printIssueGroup`, `output.go`), in this order:
-   `children` (`output.go`), `depends_on` (`output.go`),
+   `children` (`output.go`), `blocked_by` (`output.go`),
    `blocks` (`output.go`), `redirect` (single optional target adapted to a
    slice, `output.go`, `optionalGroup` at `output.go`),
    `related` (`output.go`).
@@ -902,10 +902,11 @@ lines|table") is built from the same map (`cli.go`, `output.go`).
   `[closed:wontfix]`). An `open` child gets the readiness verdict — ready →
   `[ready]`, otherwise `[blocked: <reason>[; <reason>…]]` over every blocking
   reason the annotation registry minted, phrased by `BlockingReason.Phrase`
-  (`readiness.go`): `depends on <id>`, `earlier sibling <id> still open`,
+  (`readiness.go`): `blocker <id> still open` (`blocker <id> (via epic) still
+  open` for one an epic above passes down), `earlier sibling <id> still open`,
   `missing <field>`, `needs-design`, `external`.
 - Cross-epic edges: for the epic node and every child that is not closed, each
-  open `DependsOn` outside the epic membership set becomes a `BlockedFromOutside`
+  open `BlockedBy` outside the epic membership set becomes a `BlockedFromOutside`
   edge, and each open `Blocks` outside becomes a `BlocksOutside` edge
   (`epic_context.go`). Membership = the epic id plus all child ids
   (`epicMemberIDs`, `epic_context.go`). Edges are sorted by
@@ -1275,7 +1276,7 @@ Use 'lit next' to pick the top workable item to start.
      `NeedsDesign`, `external` for `External`, and `earlier sibling <id> still
      open` for `EarlierSiblingPending` (`backlog.go`,
      `nonDependencyBlockingReasons` at `backlog.go`).
-   - `    depends on: <ids joined by ", ">` (`backlog.go`, `output.go`)
+   - `    blocked by: <ids joined by ", ">` (`backlog.go`, `output.go`)
    - `    in_progress: <age truncated to minute>[ (ORPHANED)]` for in-progress
      rows (`backlog.go`, `inProgressSuffix` at `ready_state.go`);
      the `(ORPHANED)` suffix is withdrawn when somebody holds the row's lane
@@ -1469,9 +1470,9 @@ when `Epics` is empty, else `"under the epic with "` +
 ``"`lit new --parent <epic> --top`"`` for each epic, joined by `" or "`.
 `Exhausted.stay()` is empty when no entry of `Blocked` is anything but
 `reachAwaitingOutside` (so when `Blocked` is empty too), else the one route
-``"to stay, file the ticket that clears a blocker <home()>, then make that blocker wait on it with `lit dep add --from <new> --to <blocker>`"``.
+``"to stay, file the ticket that clears a blocker <home()>, then make that blocker blocked by it with `lit dep add <blocker> --blocked-by <new>`"``.
 `Exhausted.why()`:
-- `"no ready work in <scope> — <clauses>"`, the clauses being the non-empty ones of `describeReach(Blocked, "blocked on ", exhaustedNotes)` and `describeReach(Held, "held here: ", exhaustedNotes)`, joined by `"; "`
+- `"no ready work in <scope> — <clauses>"`, the clauses being the non-empty ones of `describeReach(Blocked, "blocked by ", exhaustedNotes)` and `describeReach(Held, "held here: ", exhaustedNotes)`, joined by `"; "`
 - Both empty: `"no ready work in <scope> — nothing else is queued behind what's already in progress"`
 
 `Exhausted.outside()`: ``"`lit next` has nothing ready outside it either"``
@@ -1525,7 +1526,7 @@ On a served row, `renderNextOutcome` calls `printNextSummary(w, row, cc, lane)`
 with `lane = model.LaneOf(row.Issue, details[row.ID].Parent)` (`next.go`),
 which prints the **default columns** (`id state topic title`) joined by two
 spaces (`ready_state.go`, `columns.go`), then `printInlineDeps`
-(`ready_state.go`): `    epic: …`, `    depends on: …`, the claim line,
+(`ready_state.go`): `    epic: …`, `    blocked by: …`, the claim line,
 and `    unblocks: …` — but `next` passes a **nil** unblocks map, so the unblocks
 line never appears (`ready_state.go`). It then returns
 `nextPulledOccasion(row.Issue)` (`next.go`, `workflow_events.go`),
@@ -1649,9 +1650,9 @@ Family `parentFamily`, usage `"usage: lit parent <set|clear> ..."`
   (`issue_relations.go`).
 - Calls `Store.SetParent(SetParentInput{ChildID, ParentID, CreatedBy})`
   (`issue_relations.go`).
-- Output: the edge rendered through the *same* projection `dep` uses —
-  `"<child> --child-of--> <parent>"` (`issue_relations.go`, via
-  `depRelationForCLI`/`depRelationLine`, `dependency.go`) —
+- Output: the edge rendered through the *same* sentence `dep` uses —
+  `"<child> child of <parent>"` (`issue_relations.go`, via
+  `depRelationLine`, `dependency.go`) —
   then the `update` breadcrumb.
 
 **`lit parent clear <child-id>`** (`issue_relations.go`):
@@ -1667,54 +1668,68 @@ Family `depFamily`, usage `"usage: lit dep <add|rm|ls> ..."` (`dependency.go`).
 `add`/`rm` are `app.AccessWrite`, `ls` is `app.AccessRead`. Group `structure`
 (`register.go`).
 
-**`lit dep add --from <id> --to <id> [--type ...]`** (`dependency.go`):
-- Flags: `--type` (string, default `"blocks"`, help "Relation type:
-  blocks|parent-child|related-to"), `--from` ("Source issue ID (required)"),
-  `--to` ("Target issue ID (required)"), hidden `--by`.
+**`lit dep add <id> --blocked-by <blocker-id> | --related-to <peer-id>`** (`dependency.go`):
+- One positional, the issue the edge starts from. Relation flags come from
+  `edgeFlags`, declared by `registerEdgeFlags`: `--blocked-by` ("Issue that
+  must close before this one can start", `model.RelBlockedBy`) and
+  `--related-to` ("Issue this one is related to (no ordering)",
+  `model.RelRelatedTo`); hidden `--by`. `parent-child` has no flag — `lit
+  parent set`/`clear` own that edge.
 - Refusals, in order:
-  1. Blank `--from` or `--to` →
-     `UsageError{"usage: lit dep add --from <id> --to <id> [--type blocks|parent-child|related-to]"}`
+  1. Surplus positionals → `refuseSurplusPositionals` (`register.go`); no
+     positional →
+     `UsageError{"usage: lit dep add <id> --blocked-by <blocker-id> | --related-to <peer-id>"}`
      → exit 2 (`dependency.go`).
-  2. Bad `--type` → the bare `model.ParseRelationType` error → exit 1
-     (`dependency.go`).
-  3. Self-loop `from == to` → `model.ValidationError{Message: fmt.Sprintf("dep add: self-loop rejected (%s -> %s)")}`
-     → exit 1 (`dependency.go`). Transitive cycles are **not** detected
-     (`dependency.go`).
-  4. For `blocks` only: `rejectSameEpicBlocks` — if both endpoints are leaves of
+  2. Not exactly one relation flag given → the same `UsageError` → exit 2
+     (`registerEdgeFlags`, `dependency.go`). A flag given with an empty value
+     still counts as given, and then refuses the same way. A flag given twice is
+     refused while parsing: each edge flag is a `StringOnce` (`flagset.go`),
+     whose second `Set` fails, so the parse returns
+     `UsageError{"invalid argument \"<value>\" for \"--blocked-by\" flag: given more than once"}`
+     → exit 2.
+  3. Self-loop `id == value` → `model.ValidationError{Message: fmt.Sprintf("dep add: self-loop rejected (%s %s %s)")}`
+     (issue, relation type, other) → exit 3 (`dependency.go`). A transitive
+     cycle is refused by the store's `AddRelation`, not here.
+  4. For `blocked-by` only: `rejectSameEpicBlocks` — if both endpoints are leaves of
      the same epic, `ValidationError{storage.SameEpicBlocksRejectionMessage}` →
      exit 3 (`dependency.go`). Verbatim message:
-     "Do not set 'blocks' relationships between two issues in the same epic.  Use
+     "Do not set blocked-by relationships between two issues in the same epic.  Use
      rank to specify that one issue must be completed before another issue"
      (`internal/storage/edges.go` — note the double space).
-     Leaf epic: the parent's ID if the issue is not a container and its parent
-     is, else `""` (`leafEpicID`, `dependency.go`). Two floating issues are not
+     Both endpoints are read in one `GetRelationsByIDs`; an id it omits is
+     `storage.NotFoundError{Entity: "issue"}`. Leaf epic: the parent's ID if the
+     issue is not a container and its parent is, else `""` (`leafEpicID`,
+     `dependency.go`). Two floating issues are not
      same-epic (`dependency.go`). An endpoint inside the other's epic at any
      depth, climbing only through epic parents, is refused with the same message by the store's `AddRelation`
      (`storage.RejectBlocksAlongHierarchy`, `internal/storage/edges.go`).
-- Endpoint orientation: `rt.StoreEndpoints(from, to)` swaps the pair for `blocks`
-  (stored dependent→dependency) and is an involution
-  (`dependency.go`, `internal/model/relation_type.go`).
-- Output: `depRelationLine(depRelationForCLI(rel))` then the `update` breadcrumb
-  (`dependency.go`). Line formats (`dependency.go`):
-  - `blocks` → `"<src> --blocks--> <dst>"`
-  - `parent-child` → `"<src> --child-of--> <dst>"`
-  - `related-to` → `"<src> --related-to--> <dst>"`
-  - default → `"<src> --depends-on--> <dst>"`
+- Endpoint orientation: the positional is `SrcID` and the flag's value `DstID`,
+  the stored order — `lit dep add A --blocked-by B` stores
+  "A blocked-by B" (`dependency.go`, `internal/model/relation_type.go`).
+- Output: `depRelationLine(rel)` then the `update` breadcrumb
+  (`dependency.go`). `depRelationLine` prints `"<src> <verb> <dst>"` with the
+  verb from `relationReading` (`dependency.go`), which panics on a type it has
+  no reading for:
+  - `blocked-by` → `"<src> blocked by <dst>"`
+  - `parent-child` → `"<src> child of <dst>"`
+  - `related-to` → `"<src> related to <dst>"`
 
-**`lit dep rm --from <id> --to <id> [--type ...]`** (`dependency.go`):
-- Same flags minus `--by`; same usage refusal string with `rm`
+**`lit dep rm <id> --blocked-by <blocker-id> | --related-to <peer-id>`** (`dependency.go`):
+- Same positional and relation flags, no `--by`; same refusals 1–2 with the
+  usage string `"usage: lit dep rm <id> --blocked-by <blocker-id> | --related-to <peer-id>"`
   (`dependency.go`). No self-loop or same-epic check.
-- Calls `Store.RemoveRelation(srcID, dstID, rt)`; prints `ok` and the `update`
+- Calls `Store.RemoveRelation(id, value, rt)`; prints `ok` and the `update`
   breadcrumb (`dependency.go`).
 
 **`lit dep ls <issue-id> [--type ...]`** (`dependency.go`):
-- One positional; `--type` (string, `""`, "Filter relation type").
+- One positional; `--type` (string, `""`, "Filter relation type:
+  blocked-by|parent-child|related-to").
 - Refusal: `len(positional) != 1` →
-  `UsageError{"usage: lit dep ls <issue-id> [--type blocks|parent-child|related-to]"}`
+  `UsageError{"usage: lit dep ls <issue-id> [--type blocked-by|parent-child|related-to]"}`
   → exit 2 (`dependency.go`).
 - A non-blank `--type` is parsed (bad value errors); blank means no filter
   (`dependency.go`).
-- Output: one `depRelationLine` per relation, flipped back to CLI orientation
+- Output: one `depRelationLine` per relation, in stored order
   (`dependency.go`). No breadcrumb, no header, empty output for none.
 
 ### 2.21 `lit bulk` — Bulk issue operations
@@ -1815,7 +1830,7 @@ outside a git repository (`register.go`; asserted in `retired_command_test.go`).
 - `storage.ParseImportTreeSpecs(data)` then
   `Store.ImportTree(ctx, prefix, specs)`.
 - Documented spec shape (`cli.go`): an array of records each with
-  `local_id`, optional `parent` (a local_id), optional `depends_on` (array of
+  `local_id`, optional `parent` (a local_id), optional `blocked_by` (array of
   local_ids), `title`, `type`, `topic`, `priority`.
 - Output: `"imported %d issues\n"` then, per mapping, `"  <local> -> <real>\n"`
   (map iteration order is unspecified) (`cli.go`).

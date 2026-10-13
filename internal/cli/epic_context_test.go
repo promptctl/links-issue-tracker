@@ -82,7 +82,7 @@ func (f epicFixture) transition(id string, action model.Action) {
 // block makes blocked depend on blocker (blocks convention: src=dependent).
 func (f epicFixture) block(blocked, blocker string) {
 	f.t.Helper()
-	if _, err := f.ap.Store.AddRelation(f.ctx, storage.AddRelationInput{SrcID: blocked, DstID: blocker, Type: "blocks", CreatedBy: "test"}); err != nil {
+	if _, err := f.ap.Store.AddRelation(f.ctx, storage.AddRelationInput{SrcID: blocked, DstID: blocker, Type: "blocked-by", CreatedBy: "test"}); err != nil {
 		f.t.Fatalf("AddRelation(blocks %s<-%s) error = %v", blocked, blocker, err)
 	}
 }
@@ -141,7 +141,7 @@ func TestRenderEpicContextFrozenBlockerStopsBlocking(t *testing.T) {
 	if !strings.Contains(out, want) {
 		t.Errorf("missing line %q in:\n%s", want, out)
 	}
-	if strings.Contains(out, blocker+" still open") || strings.Contains(out, "depends on "+blocker) {
+	if strings.Contains(out, blocker+" still open") || strings.Contains(out, "by "+blocker) {
 		t.Errorf("deleted blocker %s should not block, got:\n%s", blocker, out)
 	}
 }
@@ -202,7 +202,7 @@ func TestRenderEpicContextMixedStatesWithFocus(t *testing.T) {
 		"    [closed]      " + closed + "  Closed one  [lane: a]",
 		"    [in_progress] " + inProgress + "  Working one  [lane: b]",
 		"  ▶ [ready]       " + ready + "  Ready one  [lane: c]   (you are here)",
-		"    [blocked: depends on " + ready + "] " + blocked + "  Blocked one  [lane: d]",
+		"    [blocked: blocker " + ready + " still open] " + blocked + "  Blocked one  [lane: d]",
 	}
 	for _, want := range wantLines {
 		if !strings.Contains(out, want) {
@@ -376,7 +376,7 @@ func TestRenderEpicContextChildBlockedBySibling(t *testing.T) {
 	f.block(blocked, blocker)
 
 	out := f.render("")
-	want := "[blocked: depends on " + blocker + "; earlier sibling " + blocker + " still open] " + blocked + "  Blocked sibling"
+	want := "[blocked: blocker " + blocker + " still open; earlier sibling " + blocker + " still open] " + blocked + "  Blocked sibling"
 	if !strings.Contains(out, want) {
 		t.Errorf("sibling blocker should be named, want %q in:\n%s", want, out)
 	}
@@ -390,7 +390,7 @@ func TestRenderEpicContextChildBlockedByNonChild(t *testing.T) {
 	f.block(blocked, outsider)
 
 	out := f.render("")
-	want := "[blocked: depends on " + outsider + "] " + blocked + "  Blocked by outsider"
+	want := "[blocked: blocker " + outsider + " still open] " + blocked + "  Blocked by outsider"
 	if !strings.Contains(out, want) {
 		t.Errorf("external blocker should be named inline, want %q in:\n%s", want, out)
 	}
@@ -545,7 +545,7 @@ func TestRenderEpicContextCrossEpicLiveSidesRender(t *testing.T) {
 
 func TestRenderEpicContextEdgeToOwnEpicNotCrossEpic(t *testing.T) {
 	f := newEpicFixture(t, "Epic self edge", "deps")
-	// The store refuses a blocks edge between an issue and its own epic, so the
+	// The store refuses a blocked-by edge between an issue and its own epic, so the
 	// edge is written first and the issue moved in after — the way a workspace
 	// still reaches this shape.
 	child := f.outsider("Inside")

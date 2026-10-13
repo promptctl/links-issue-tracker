@@ -134,7 +134,7 @@ func TestBlockedColumnAgreesAcrossSurfaces(t *testing.T) {
 		// would go on agreeing on "-" and passing.
 		fired string
 	}{
-		{kind: "open dependency", id: byDependency.ID, want: "blocked", fired: "depends on: " + depBlocker.ID},
+		{kind: "open dependency", id: byDependency.ID, want: "blocked", fired: "blocked by: " + depBlocker.ID},
 		{kind: "earlier sibling pending", id: bySibling.ID, want: "blocked", fired: "earlier sibling " + firstSibling.ID + " still open"},
 		{kind: "missing required field", id: byMissingField.ID, want: "blocked", fired: "missing description"},
 		{kind: "needs design", id: byNeedsDesign.ID, want: "blocked", fired: NeedsDesignLabel},
@@ -163,7 +163,7 @@ func TestBlockedColumnAgreesAcrossSurfaces(t *testing.T) {
 // TestBlockedColumnOnListIsTheRegistrysVerdictNotTheEdges states the same rule
 // as the narrowest regression it prevents, on `lit ls`. The row here carries NO
 // dependency edge, so a dependency-only predicate —
-// `len(liveIssues(rel.DependsOn)) > 0` — could only ever answer "-" for it.
+// `len(liveIssues(rel.BlockedBy)) > 0` — could only ever answer "-" for it.
 //
 // It exists beside the agreement test because agreement is satisfiable from
 // either side: if a future change made `lit backlog` answer the dependency-only
@@ -179,9 +179,9 @@ func TestBlockedColumnOnListIsTheRegistrysVerdictNotTheEdges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssueDetail(%s): %v", gated.ID, err)
 	}
-	if len(detail.DependsOn) != 0 {
+	if len(detail.BlockedBy) != 0 {
 		t.Fatalf("%s has %d dependency edges; this test is only meaningful with none, "+
-			"since the old predicate read exactly those", gated.ID, len(detail.DependsOn))
+			"since the old predicate read exactly those", gated.ID, len(detail.BlockedBy))
 	}
 
 	if got := blockedCellFromLS(h, gated.ID); got != "blocked" {

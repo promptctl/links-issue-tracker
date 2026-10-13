@@ -191,9 +191,9 @@ that is not workable, for any of the five reasons the readiness classifier knows
 still-open dependency, an earlier same-lane sibling still open, a missing required
 field, needs-design, or external. The column agrees with that classification, and so with the
 context block printed under the row, but the block splits the reasons across two
-lines: `depends on:` names the still-open dependencies as concrete blocker ids, and
+lines: `blocked by:` names the still-open dependencies as concrete blocker ids, and
 `blocked:` carries the other four. A ticket held up by nothing but a dependency
-therefore prints `blocked` in the column with a `depends on:` line under it and no
+therefore prints `blocked` in the column with a `blocked by:` line under it and no
 `blocked:` line at all. `lit ls --columns blocked` reads that same verdict and so
 answers the same question — except over a foreign store, where `lit ls --at <dir>`
 evaluates four of the five reasons (see `lit ls` below); what stays particular to
@@ -226,8 +226,8 @@ dependency outside the epic that gates it. Failing that, it is served the top
 ready ticket from the global pool, printed beneath a line naming what blocks the
 epic and the ways on: when something blocks it, file the ticket that clears a
 blocker under the epic (`lit new --parent <epic> --top`, printed with the
-epic's id) and make the blocker wait on it with
-`lit dep add --from <new> --to <blocker>`; or start the ticket served. Only
+epic's id) and make the blocker blocked by it with
+`lit dep add <blocker> --blocked-by <new>`; or start the ticket served. Only
 when nothing outside the epic is ready either does `next` exit with that
 diagnostic alone, and under a focus label it then names the rows outside the
 epic that the focus withheld. A
@@ -352,7 +352,7 @@ the missing-required-field reason cannot fire there. A `-` from `--at` is
 authoritative about the other four reasons and silent about that one. What `ls` reports
 is the fact, never which of the five reasons applies: it is a flat projection, one
 cell per column and no context block, so a reader who needs the why runs
-`lit backlog`, where the `depends on:` and `blocked:` lines name it. The two
+`lit backlog`, where the `blocked by:` and `blocked:` lines name it. The two
 commands render different amounts of one verdict; neither holds a second opinion.
 And because the cell is a verdict about the row rather than a property of the
 listing, `ls` prints `blocked` on rows the workable commands never list at all — a
@@ -596,20 +596,24 @@ Retention (Issue Retention):
 ### `lit dep add` / `lit dep rm` / `lit dep ls`
 
 ```text
-lit dep add --from <id> --to <id> [--type blocks|parent-child|related-to]
-lit dep rm --from <id> --to <id> [--type <t>]
-lit dep ls <issue-id> [--type <t>]
+lit dep add <id> --blocked-by <blocker-id> | --related-to <peer-id>
+lit dep rm <id> --blocked-by <blocker-id> | --related-to <peer-id>
+lit dep ls <issue-id> [--type blocked-by|parent-child|related-to]
 ```
 
-Manages relationship edges. `--from`/`--to` are required for `add` and `rm`; there is
-no positional form. The default type is `blocks`, where `--from` is the blocker and
-`--to` is the blocked issue. `blocks` edges are not allowed between two issues in the
-same epic, or between an issue and any epic above it at any depth — within an epic,
-rank is the ordering signal. `lit import` refuses that ancestor edge in `depends_on`
-too. A `blocks` edge onto an
+Manages dependency and related-to edges. Each command reads as the sentence it
+records: `lit dep add A --blocked-by B` is "A is blocked by B" — A waits, and B
+must close first. `add` and `rm` take the issue as their one positional argument
+and exactly one relation flag; `ls` prints each edge the same way
+(`A blocked by B`, `A related to B`, `C child of P`). `lit show` lists the
+same edge from both ends: under `blocked_by` on the issue that waits, and under
+`blocks` on the issue it waits for. `blocked-by` edges are not allowed between two
+issues in the same epic, or between an issue and any epic above it at any depth —
+within an epic, rank is the ordering signal. `lit import` refuses that ancestor
+edge in `blocked_by` too. A `blocked-by` edge onto an
 epic holds back every issue in that epic and in epics nested inside it, in every
 lane: `lit next` offers none of them until the blocker closes, and `lit backlog` shows
-the blocker on each one as `depends on: <id> (via epic)`. The one exception is an
+the blocker on each one as `blocked by: <id> (via epic)`. The one exception is an
 issue the blocker already waits on, directly or through other issues, such as
 its own dependencies, its earlier lane-mates, or the blocker itself when it sits
 in that epic: holding that issue back would leave the two waiting on each other
@@ -635,10 +639,8 @@ ticket instead, since detaching one would leave it outside every epic. `set` rep
 whatever parent the child holds in one act, which is also how `lit doctor`'s
 two-parent finding is repaired.
 
-Parent-child is one of the relation edges `lit dep` manages (`--type parent-child`);
-`parent` is the ergonomic face over that same store write, and both render the
-edge identically (`<child> --child-of--> <parent>`). Use whichever reads better —
-they are two faces of one edge, not two writers.
+`parent set` and `parent clear` are the only commands that write the parent-child
+edge. `parent set` prints it as `lit dep ls` does: `<child> child of <parent>`.
 
 ### `lit children`
 

@@ -347,7 +347,7 @@ func (e *Engine) GetIssueDetail(ctx context.Context, id string) (model.IssueDeta
 		Events:         e.eventsFor(id),
 		Children:       structural.Children,
 		Siblings:       siblings,
-		DependsOn:      structural.DependsOn,
+		BlockedBy:      structural.BlockedBy,
 		Blocks:         structural.Blocks,
 		Parent:         structural.Parent,
 		Related:        related,

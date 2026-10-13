@@ -1140,7 +1140,7 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 		Events:         events,
 		Children:       structural.Children,
 		Siblings:       siblings,
-		DependsOn:      structural.DependsOn,
+		BlockedBy:      structural.BlockedBy,
 		Blocks:         structural.Blocks,
 		Parent:         structural.Parent,
 		Related:        related,

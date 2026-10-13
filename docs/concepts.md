@@ -27,7 +27,8 @@ epic" are its siblings.
 
 Issues can be linked as:
 
-- `blocks`
+- `blocked-by` — `A blocked-by B`: A waits for B to close. Read from B's end, B
+  `blocks` A.
 - `related-to`
 - `parent-child`
 

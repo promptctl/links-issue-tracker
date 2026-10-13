@@ -102,8 +102,9 @@ func TestSetParentRefusesACycle(t *testing.T) {
 	}
 }
 
-// The dep-add form reaches the same edge by another door. It must refuse on the
-// same terms, or the rule is only as strong as which command the caller typed.
+// AddRelation reaches the same edge by another door. It must refuse on the
+// same terms, or the rule is only as strong as which store method the caller
+// invoked.
 func TestAddRelationRefusesAParentCycle(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)

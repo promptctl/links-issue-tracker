@@ -80,12 +80,9 @@ func parentSetLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		// [LAW:one-source-of-truth] `parent set` and `dep add --type parent-child`
-		// write the SAME parent-child edge through the SAME store owner
-		// (setSingleValuedEdgeTx); `parent` is the ergonomic face of that one path,
-		// not a divergent second writer. Rendering through the same canonical
-		// projection here means one edge reads one way whichever command created it.
-		if _, err := fmt.Fprintln(stdout, depRelationLine(depRelationForCLI(rel))); err != nil {
+		// [LAW:one-source-of-truth] One edge reads one way whichever command
+		// prints it: `parent set` renders through the same sentence as `dep ls`.
+		if _, err := fmt.Fprintln(stdout, depRelationLine(rel)); err != nil {
 			return err
 		}
 		return emitBreadcrumb(stdout, "update")

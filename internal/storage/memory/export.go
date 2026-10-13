@@ -9,12 +9,6 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-// exportVersion is the export schema this engine writes. It is the contract's
-// current version, not the engine's: an export is the one full-state read two
-// engines both serve, so a differing version number would make two identical
-// stores compare unequal.
-const exportVersion = 2
-
 // Export serializes the whole store as one value.
 //
 // It is the campaign's differential oracle surface, which decides two things
@@ -39,7 +33,7 @@ func (e *Engine) Export(ctx context.Context) (model.Export, error) {
 		return cmpThen(strings.Compare(a.IssueID, b.IssueID), strings.Compare(a.Name, b.Name))
 	})
 	return model.Export{
-		Version:     exportVersion,
+		Version:     model.ExportVersion,
 		WorkspaceID: e.workspaceID,
 		ExportedAt:  e.clock.Now(),
 		Issues:      issues,

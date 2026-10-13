@@ -5,7 +5,7 @@ package storage
 // update patch of only the fields it sets (the same fields UpdateIssueInput
 // exposes, one YAML key per field). Absent, the document creates a new
 // issue and behaves like ImportTreeSpec's flat form — LocalID, Parent, and
-// DependsOn wire the new issue against siblings created in the same file (by
+// BlockedBy wire the new issue against siblings created in the same file (by
 // LocalID) or against pre-existing issues (by real ID); title/topic/type are
 // required as they are for any create. [LAW:types-are-the-program] Pointer
 // fields are exactly the update-patch fields: nil means "leave unchanged,"
@@ -29,7 +29,7 @@ type BulkIssueSpec struct {
 	Labels      *[]string `yaml:"labels,omitempty"`
 	Lane        *string   `yaml:"lane,omitempty"`
 	Parent      string    `yaml:"parent,omitempty"`
-	DependsOn   []string  `yaml:"depends_on,omitempty"`
+	BlockedBy   []string  `yaml:"blocked_by,omitempty"`
 	// Reason is optional free text recorded on an update's field-change
 	// event; it does not apply to a create (there is no prior state to
 	// annotate a change against).
@@ -66,7 +66,7 @@ type BulkApplyResult struct {
 }
 
 // ImportTreeSpec is a single record in a declarative tree-import file. LocalID
-// is opaque — it's used inside the spec to wire Parent and DependsOn refs and
+// is opaque — it's used inside the spec to wire Parent and BlockedBy refs and
 // is replaced with the generated lit issue ID at import time.
 type ImportTreeSpec struct {
 	LocalID     string   `json:"local_id"`
@@ -79,7 +79,7 @@ type ImportTreeSpec struct {
 	Assignee    string   `json:"assignee,omitempty"`
 	Labels      []string `json:"labels,omitempty"`
 	Parent      string   `json:"parent,omitempty"`
-	DependsOn   []string `json:"depends_on,omitempty"`
+	BlockedBy   []string `json:"blocked_by,omitempty"`
 }
 
 // ImportTreeResult reports the local-ID → real-issue-ID mapping produced by a

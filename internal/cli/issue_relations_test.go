@@ -53,8 +53,8 @@ func TestParentSetWithNamedFlags(t *testing.T) {
 	}
 	// `parent set` renders the parent-child edge through the same canonical
 	// projection `dep` uses, so the same edge reads the same way whichever
-	// command wrote it: child --child-of--> parent.
-	if !strings.Contains(stdout.String(), child.ID+" --child-of--> "+parent.ID) {
+	// command wrote it: child child of parent.
+	if !strings.Contains(stdout.String(), child.ID+" child of "+parent.ID) {
 		t.Fatalf("parent set output = %q, want child-of arrow", stdout.String())
 	}
 

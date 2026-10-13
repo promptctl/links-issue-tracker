@@ -10,7 +10,7 @@ The unit of work is the issue: a title, a description, an optional reusable work
 
 An epic is not a separate concept with its own rules; it is simply an issue of type epic that contains children. Its open, in-progress, or closed state is never set by anyone — it is computed from its children (an epic with no children counts as open), so an epic closes itself when its last child closes and can never disagree with the work underneath it. Progress counts roll up the same way.
 
-Issues relate to each other three ways: parent–child (an issue belongs to at most one epic), blocks (a dependency edge — this must finish before that can start), and related-to (a free association carrying no rules). Dependency cycles are rejected when created, so the backlog always admits a valid working order.
+Issues relate to each other three ways: parent–child (an issue belongs to at most one epic), blocked-by (a dependency edge — this one cannot start until that one finishes), and related-to (a free association carrying no rules). Dependency cycles are rejected when created, so the backlog always admits a valid working order.
 
 Every mutation to a ticket is recorded in an append-only history: who acted, what action, an optional stated reason, and the exact before-and-after value of every field that moved. The history is a first-class feature rather than an audit afterthought — lit's coordination model (described below) is derived entirely from it.
 

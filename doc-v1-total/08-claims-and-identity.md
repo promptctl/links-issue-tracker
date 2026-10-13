@@ -167,7 +167,7 @@ After a reconcile whose outcome actually merged histories (linearized or combine
 
 ### Render-only surfaces
 
-`lit backlog` prints the claim line (indented, between the `in_progress:` and `unblocks:` lines), and `lit next`'s summary block prints it between `depends on` and `unblocks` (`internal/cli/backlog.go`, `internal/cli/ready_state.go`). No other command consults standings; every other consumer of the claim context uses it only for rendering.
+`lit backlog` prints the claim line (indented, between the `in_progress:` and `unblocks:` lines), and `lit next`'s summary block prints it between `blocked by` and `unblocks` (`internal/cli/backlog.go`, `internal/cli/ready_state.go`). No other command consults standings; every other consumer of the claim context uses it only for rendering.
 
 ## Rendering the claim line
 

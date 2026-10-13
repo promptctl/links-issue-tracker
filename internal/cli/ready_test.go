@@ -144,14 +144,14 @@ func (h readyTestHarness) backdateUpdatedAt(issueID string, age time.Duration) {
 	}
 }
 
-// addDependency creates a "blocks" relation: dependent depends on dependency.
+// addDependency creates a blocked-by relation: dependent is blocked by dependency.
 // In the relation table: SrcID=dependent, DstID=dependency.
 func (h readyTestHarness) addDependency(dependentID, dependencyID string) {
 	h.t.Helper()
 	if _, err := h.ap.Store.AddRelation(h.ctx, storage.AddRelationInput{
 		SrcID:     dependentID,
 		DstID:     dependencyID,
-		Type:      "blocks",
+		Type:      "blocked-by",
 		CreatedBy: "agent",
 	}); err != nil {
 		h.t.Fatalf("AddRelation(blocks) error = %v", err)

@@ -457,7 +457,7 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 	if _, err := st.AddRelation(ctx, storage.AddRelationInput{
 		SrcID:     issueA.ID,
 		DstID:     issueB.ID,
-		Type:      "blocks",
+		Type:      "blocked-by",
 		CreatedBy: "alice",
 	}); err != nil {
 		t.Fatalf("AddRelation(A depends on B) error = %v", err)

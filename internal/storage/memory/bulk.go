@@ -58,12 +58,9 @@ func (e *Engine) BulkApply(ctx context.Context, prefix, actor string, specs []st
 	}
 	result.Created = batch.createdMappings()
 	for index, spec := range specs {
-		for _, dep := range spec.DependsOn {
-			// depends_on reads "this issue depends on that one", and the store
-			// runs a blocks edge dependent → dependency, so the document's own
-			// issue is the edge's src.
+		for _, dep := range spec.BlockedBy {
 			if err := e.wireDependency(batch.realID(index), batch.resolve(dep)); err != nil {
-				return storage.BulkApplyResult{}, e.compensate(batch, fmt.Errorf("bulk: depends_on doc %d -> %q: %w", index, dep, err))
+				return storage.BulkApplyResult{}, e.compensate(batch, fmt.Errorf("bulk: blocked_by doc %d -> %q: %w", index, dep, err))
 			}
 		}
 	}
@@ -117,9 +114,9 @@ func (e *Engine) ImportTree(ctx context.Context, prefix string, specs []storage.
 		batch.created(index, spec.LocalID, issue.ID)
 	}
 	for index, spec := range specs {
-		for _, dep := range spec.DependsOn {
+		for _, dep := range spec.BlockedBy {
 			if err := e.wireDependency(batch.realID(index), batch.resolveLocal(dep)); err != nil {
-				return storage.ImportTreeResult{}, e.compensate(batch, fmt.Errorf("import: depends_on %q -> %q: %w", spec.LocalID, dep, err))
+				return storage.ImportTreeResult{}, e.compensate(batch, fmt.Errorf("import: blocked_by %q -> %q: %w", spec.LocalID, dep, err))
 			}
 		}
 	}
@@ -128,7 +125,7 @@ func (e *Engine) ImportTree(ctx context.Context, prefix string, specs []storage.
 
 func (e *Engine) wireDependency(dependent, dependency string) error {
 	_, err := e.addRelation(storage.AddRelationInput{
-		SrcID: dependent, DstID: dependency, Type: model.RelBlocks, CreatedBy: createdBy,
+		SrcID: dependent, DstID: dependency, Type: model.RelBlockedBy, CreatedBy: createdBy,
 	})
 	return err
 }
@@ -147,7 +144,7 @@ func (e *Engine) compensate(batch *batchIDs, cause error) error {
 }
 
 // batchIDs is a batch's answer to "what did the file's names turn into". It
-// holds one mapping, so a parent reference, a depends_on reference, and the
+// holds one mapping, so a parent reference, a blocked_by reference, and the
 // caller's report all read the same resolution rather than three that could
 // disagree. [LAW:one-source-of-truth]
 type batchIDs struct {
@@ -287,7 +284,7 @@ func bulkGraph(specs []storage.BulkIssueSpec) localGraph {
 	graph := localGraph{localID: make([]string, len(specs)), refs: make([][]string, len(specs))}
 	for i, spec := range specs {
 		graph.localID[i] = spec.LocalID
-		graph.refs[i] = append(append([]string{}, spec.Parent), spec.DependsOn...)
+		graph.refs[i] = append(append([]string{}, spec.Parent), spec.BlockedBy...)
 	}
 	return graph
 }
@@ -296,7 +293,7 @@ func importGraph(specs []storage.ImportTreeSpec) localGraph {
 	graph := localGraph{localID: make([]string, len(specs)), refs: make([][]string, len(specs))}
 	for i, spec := range specs {
 		graph.localID[i] = spec.LocalID
-		graph.refs[i] = append(append([]string{}, spec.Parent), spec.DependsOn...)
+		graph.refs[i] = append(append([]string{}, spec.Parent), spec.BlockedBy...)
 	}
 	return graph
 }

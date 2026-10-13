@@ -54,7 +54,7 @@ func TestImportBatchesBuildsTheRequestedRows(t *testing.T) {
 	// The first row has no predecessor, so 9 rows give edges at 3, 6 — hence 2.
 	blocked := 0
 	for _, r := range recs {
-		if len(r.DependsOn) > 0 {
+		if len(r.BlockedBy) > 0 {
 			blocked++
 		}
 	}
@@ -68,7 +68,7 @@ func TestImportBatchesBuildsTheRequestedRows(t *testing.T) {
 		ids[r.LocalID] = true
 	}
 	for _, r := range recs {
-		for _, dep := range r.DependsOn {
+		for _, dep := range r.BlockedBy {
 			if !ids[dep] {
 				t.Errorf("record %s depends on %q, which is not a local_id in the same spec", r.LocalID, dep)
 			}

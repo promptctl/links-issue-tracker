@@ -28,7 +28,7 @@ func requireInheritedDependency(t *testing.T, rows []annotation.AnnotatedIssue, 
 	}
 }
 
-// A blocks edge onto an epic holds back every child of that epic, in every
+// A blocked-by edge onto an epic holds back every child of that epic, in every
 // lane. The children sit in two lanes on purpose: the same-lane sibling gate
 // already serializes one lane behind its first child, so blocking only that
 // first child would hold a one-lane epic and let a second lane straight
@@ -55,14 +55,14 @@ func TestBlockedEpicGatesEveryLaneOfItsChildren(t *testing.T) {
 	}
 
 	text := h.runWorkableText()
-	if want := "depends on: " + gate.ID + " (via epic)"; strings.Count(text, want) != 2 {
+	if want := "blocked by: " + gate.ID + " (via epic)"; strings.Count(text, want) != 2 {
 		t.Fatalf("backlog should name the inherited gate once under each child as %q; got:\n%s", want, text)
 	}
 	if !unblocksLineNames(text, laneA.ID) || !unblocksLineNames(text, laneB.ID) {
 		t.Fatalf("the gate's row should say closing it unblocks both children; got:\n%s", text)
 	}
 	if strings.Contains(text, "blocked: depends on") {
-		t.Fatalf("an inherited dependency belongs on the \"depends on:\" line alone; got:\n%s", text)
+		t.Fatalf("an inherited dependency belongs on the \"blocked by:\" line alone; got:\n%s", text)
 	}
 
 	h.closeIssue(gate.ID, "done")
@@ -97,7 +97,7 @@ func TestBlockedEpicGatesNestedEpicsAndNamesADirectEdgeOnce(t *testing.T) {
 	}
 }
 
-// dependThenReparent reaches a blocks edge between an issue and its ancestor
+// dependThenReparent reaches a blocked-by edge between an issue and its ancestor
 // the one way it still can be reached: the store refuses that edge outright,
 // so childID is detached from parentID while the edge is written and put back
 // after. Readiness has to stay correct over the shape a reparent leaves.

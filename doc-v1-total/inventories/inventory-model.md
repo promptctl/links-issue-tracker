@@ -442,23 +442,25 @@ Complete value set (`issue_type.go`): `TypeTask="task"`,
 ## 2.4 `RelationType` — `relation_type.go`
 
 `type RelationType string` — `relation_type.go`. Complete value set
-(`relation_type.go`): `RelBlocks="blocks"`,
-`RelParentChild="parent-child"`, `RelRelatedTo="related-to"`.
+(`relation_type.go`): `RelBlockedBy="blocked-by"`,
+`RelParentChild="parent-child"`, `RelRelatedTo="related-to"`. Every type reads
+as the sentence `<src> <type> <dst>` — `blocked-by` is stored
+**dependent → dependency** ("<waiting ticket> blocked-by <blocker>"),
+`parent-child` child → parent — and the store, the export, and every command
+name an edge in that one order (`relation_type.go`).
 
 - `ParseRelationType(s string) (RelationType, error)` — `relation_type.go`:
   `strings.TrimSpace` only — **no lowercasing**; accepts the three constants;
-  error text `relation type must be blocks, parent-child, or related-to`
+  error text `relation type must be blocked-by, parent-child, or related-to`
   (`relation_type.go`). Pinned by `TestParseRelationType`,
   `relation_type_test.go`.
-- `(RelationType).StoreEndpoints(from, to string) (string, string)` —
-  `relation_type.go`: for `blocks` returns `(to, from)` — i.e. `blocks` is
-  stored **dependent → dependency**, the reverse of the human reading
-  "<blocker> blocks <blocked>"; every other type passes through unchanged. The
-  swap is an involution, so the same call converts store order back to display
-  order (`relation_type.go`). Pinned by
-  `TestRelationTypeStoreEndpoints`, `relation_type_test.go`.
+- `RelationTypeFromStored(s string) RelationType` — `relation_type.go`:
+  reads a relation type as a pre-v8 store or a version < 3 export wrote it —
+  `"blocks"` (`legacyBlockedBySpelling`) maps to `RelBlockedBy`, the same
+  orientation; every other spelling passes through unchanged, unvalidated.
+  Pinned by `TestRelationTypeFromStored`, `relation_type_test.go`.
 - `(RelationType).SingleValuedFromSrc() bool` — `relation_type.go`: true
-  only for `parent-child` (a child has at most one parent); `blocks` and
+  only for `parent-child` (a child has at most one parent); `blocked-by` and
   `related-to` are many-valued.
 - `(RelationType).CanonicalEndpoints(src, dst string) (string, string)` —
   `relation_type.go`: for `related-to` (undirected) returns the pair
@@ -690,14 +692,15 @@ the Go field name when the tag name is empty. Pinned by
   `Attribution` (`attribution,omitzero`), `Changes []FieldChange` (`changes`).
 - `IssueDetail` — `model.go`: `Issue` (`issue`), `Relations`
   (`relations`), `Comments` (`comments`), `Children` (`children`), `Siblings`
-  (`siblings`), `DependsOn` (`depends_on`), `Related` (`related`), `Blocks`
+  (`siblings`), `BlockedBy` (`blocked_by`), `Related` (`related`), `Blocks`
   (`blocks`), `Parent *Issue` (`parent,omitempty`), `RedirectTarget *Issue`
   (`redirect_target,omitempty` — hydrated from the issue's own redirect target,
   never from the relations graph; `Related` carries only manual peer links,
   `model.go`), `Events` (`events`).
 - `Export` — `model.go`: `Version int` (`version`), `WorkspaceID`
   (`workspace_id`), `ExportedAt` (`exported_at`), `Issues`, `Relations`,
-  `Comments`, `Labels`, `Events`.
+  `Comments`, `Labels`, `Events`. `ExportVersion = 3` — `model.go`: the
+  version every store writes.
 
 ## 2.9 `Attribution` — `model.go`
 
@@ -738,7 +741,12 @@ may be carried, because the database syncs to shared remotes
   `len(raw.History) > 0`, each history row is appended to `Events` as an
   `IssueEvent` with `ID = v1EventID(...)`, `Actor = h.CreatedBy`, and exactly one
   `FieldChange{Field: "status", From: h.FromStatus, To: h.ToStatus}`
-  (`model.go`). v2+ exports ignore any `history` array.
+  (`model.go`). v2+ exports ignore any `history` array. If `raw.Version < 3`,
+  every relation's `Type` is read through `RelationTypeFromStored`, so a
+  `blocks` edge decodes as `blocked-by` (`model.go`). The decoded value's
+  `Version` is `ExportVersion` whatever version was read, since it is now in
+  the current format (`model.go`). Pinned by
+  `TestExportDecodeRenamesLegacyBlocksEdges`, `relation_type_test.go`.
 
 ## 2.11 `ValidationError` — `validation.go`
 

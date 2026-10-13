@@ -2,14 +2,14 @@ package storage
 
 import "github.com/promptctl/links-issue-tracker/internal/model"
 
-// SameEpicBlocksRejectionMessage refuses a blocks edge that would order work
+// SameEpicBlocksRejectionMessage refuses a blocked-by edge that would order work
 // inside one epic, where rank is already the ordering signal.
 // [LAW:one-source-of-truth] The text is user-facing contract and asserted
 // verbatim in tests; the CLI's sibling check and both engines' ancestry check
 // read it from here so the two halves of the rule cannot drift apart.
-const SameEpicBlocksRejectionMessage = "Do not set 'blocks' relationships between two issues in the same epic.  Use rank to specify that one issue must be completed before another issue"
+const SameEpicBlocksRejectionMessage = "Do not set blocked-by relationships between two issues in the same epic.  Use rank to specify that one issue must be completed before another issue"
 
-// RejectBlocksAlongHierarchy refuses a blocks edge whose endpoints sit one
+// RejectBlocksAlongHierarchy refuses a blocked-by edge whose endpoints sit one
 // inside the other's epic, at any depth. epicParentOf maps each child to every
 // parent it can climb to that is an epic; a parent that is not an epic is left
 // out, so the walk ends there, where readiness's own climb (epicsAbove) ends.
@@ -19,7 +19,7 @@ const SameEpicBlocksRejectionMessage = "Do not set 'blocks' relationships betwee
 // waits on itself, and an epic blocking something it contains waits on its own
 // work. Both are intra-epic ordering, which is rank's job.
 //
-// Both engines call this where every blocks edge is written, so `lit dep add`
+// Both engines call this where every blocked-by edge is written, so `lit dep add`
 // and both import formats meet the same rule. A reparent can still leave the
 // shape behind; readiness reads the workspace as it is and stays correct.
 // [LAW:single-enforcer] [LAW:one-source-of-truth]
@@ -78,7 +78,7 @@ type SetParentInput struct {
 }
 
 // IssueRelations is one issue together with its structural graph edges —
-// parent, children, dependencies (DependsOn), and dependents (Blocks) — each
+// parent, children, dependencies (BlockedBy), and dependents (Blocks) — each
 // hydrated, but WITHOUT the comment/event/related payload GetIssueDetail also
 // loads. It is the shared lightweight per-issue shape batch consumers read, so
 // neither the ready pipeline nor the epic view pays GetIssueDetail's per-row
@@ -86,14 +86,14 @@ type SetParentInput struct {
 // [LAW:one-source-of-truth] One shape for "an issue's open blockers / parent
 // epic" across consumers; a second batch type would let them drift.
 //
-// The direction convention it encodes — a blocks edge runs src=dependent,
-// dst=dependency, so DependsOn and Blocks are the two readings of one edge set
-// — is contract, not engine detail: two engines that bucketed an edge
+// The direction convention it encodes — a blocked-by edge reads "src blocked-by
+// dst", so BlockedBy (the edges out) and Blocks (the edges in) are the two
+// readings of one edge set — is contract, not engine detail: two engines that bucketed an edge
 // differently would disagree about which work is ready.
 type IssueRelations struct {
 	Issue     model.Issue
 	Parent    *model.Issue
 	Children  []model.Issue
-	DependsOn []model.Issue
+	BlockedBy []model.Issue
 	Blocks    []model.Issue
 }

@@ -84,6 +84,33 @@ func (fs *cobraFlagSet) StringArray(name string, usage string) *[]string {
 	return fs.cmd.Flags().StringArray(name, nil, usage)
 }
 
+// StringOnce declares a string flag that may be given at most once. String
+// keeps the last of repeated occurrences and drops every earlier value with no
+// error; a flag whose repetition reads as a second request refuses the second
+// occurrence as a usage error instead. [LAW:no-silent-failure]
+func (fs *cobraFlagSet) StringOnce(name string, usage string) *string {
+	flag := &onceString{}
+	fs.cmd.Flags().Var(flag, name, usage)
+	return &flag.value
+}
+
+type onceString struct {
+	value string
+	set   bool
+}
+
+func (s *onceString) String() string { return s.value }
+
+func (s *onceString) Type() string { return "string" }
+
+func (s *onceString) Set(value string) error {
+	if s.set {
+		return errors.New("given more than once")
+	}
+	s.value, s.set = value, true
+	return nil
+}
+
 // StringOptional declares a string flag whose value is `defaultIfAbsent` when
 // the flag is not passed, `defaultIfPresent` when the flag is passed with no
 // value (e.g. `--eject`), or the caller-supplied value otherwise.

@@ -115,5 +115,5 @@ CREATE TABLE `relations` (
   KEY `idx_relations_src_type` (`src_id`,`type`),
   CONSTRAINT `relations_ibfk_1` FOREIGN KEY (`src_id`) REFERENCES `issues` (`id`) ON DELETE CASCADE,
   CONSTRAINT `relations_ibfk_2` FOREIGN KEY (`dst_id`) REFERENCES `issues` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `relations_type_check` CHECK ((`type` IN ('blocks', 'parent-child', 'related-to')))
+  CONSTRAINT `relations_type_check` CHECK ((`type` IN ('blocked-by', 'parent-child', 'related-to')))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;

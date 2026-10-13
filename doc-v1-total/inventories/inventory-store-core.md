@@ -538,13 +538,13 @@ Errors: `"batch load issues: %w"`, `"scan batch-loaded issue: %w"`, `"iterate ba
 5. `collectRelatedIssueIDs(id, relations)` (`store.go`; defined `store.go`) — distinct counterparties of both `SrcID` and `DstID`, excluding `""` and the focal id, in first-seen order.
 6. If `issue.RedirectTargetValue()` is non-nil and not already in the list, it is appended (`store.go`).
 7. `getIssuesByIDs(ctx, relatedIDs)` — one batch hydrate — then `loadRankAncestry(ctx, s.db)`, the tree order the relation groups sort in (`store.go`).
-8. `bucketRelations(id, relations, relatedByID, ancestry)` → `structural` with `Parent`, `Children`, `DependsOn`, `Blocks` (`store.go`; `internal/store/relations.go`).
+8. `bucketRelations(id, relations, relatedByID, ancestry)` → `structural` with `Parent`, `Children`, `BlockedBy`, `Blocks` (`store.go`; `internal/store/relations.go`).
 9. If `structural.Parent != nil`: `ListIssues(ctx, ListIssuesFilter{ParentIDs: [structural.Parent.ID], IncludeArchived: true, IncludeDeleted: true})` — the parent's children in every retention state, rank order then id — then `siblingsOf(id, parentChildren)`; otherwise `siblings := []model.Issue{}` (`store.go`).
 10. `redirectTarget` is set only if the target id is present in `relatedByID`; a vanished target hydrates as absent (`store.go`).
 11. `related := relatedFrom(id, relations, relatedByID, ancestry)` (`store.go`).
-12. Assembles `model.IssueDetail{Issue, Relations, Comments, Events, Children, Siblings, DependsOn, Blocks, Parent, Related, RedirectTarget}` (`store.go`).
+12. Assembles `model.IssueDetail{Issue, Relations, Comments, Events, Children, Siblings, BlockedBy, Blocks, Parent, Related, RedirectTarget}` (`store.go`).
 
-Evidence: `DependsOn`, `Blocks`, `Children`, `Related` all come back in rank order (`store_test.go`); relation counterparties are fully hydrated including container progress and label slices (`store_test.go`); siblings are the parent's other children in rank order excluding self, and empty for parentless issues and only children (`store_test.go`); the redirect target is exposed via `detail.RedirectTarget` with **no** `related-to` edge written (`store_test.go`).
+Evidence: `BlockedBy`, `Blocks`, `Children`, `Related` all come back in rank order (`store_test.go`); relation counterparties are fully hydrated including container progress and label slices (`store_test.go`); siblings are the parent's other children in rank order excluding self, and empty for parentless issues and only children (`store_test.go`); the redirect target is exposed via `detail.RedirectTarget` with **no** `related-to` edge written (`store_test.go`).
 
 #### 5.7 `ListIssues(ctx, filter storage.ListIssuesFilter) ([]model.Issue, error)`
 
@@ -1100,7 +1100,7 @@ CREATE TABLE `relations` (
   KEY `idx_relations_src_type` (`src_id`,`type`),
   CONSTRAINT `relations_ibfk_1` FOREIGN KEY (`src_id`) REFERENCES `issues` (`id`) ON DELETE CASCADE,
   CONSTRAINT `relations_ibfk_2` FOREIGN KEY (`dst_id`) REFERENCES `issues` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `relations_type_check` CHECK ((`type` IN ('blocks', 'parent-child', 'related-to')))
+  CONSTRAINT `relations_type_check` CHECK ((`type` IN ('blocked-by', 'parent-child', 'related-to')))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 ```
 
@@ -1112,7 +1112,7 @@ CREATE TABLE `relations` (
 - No UNIQUE constraints.
 - Indexes: `idx_relations_src_type (src_id, type)` (`00001_baseline.sql`; reconcile `schema_reconcile.go`), `idx_relations_dst_type (dst_id, type)` (`00001_baseline.sql`; reconcile `schema_reconcile.go`), plus the Dolt-auto-generated FK backing index `KEY dst_id (dst_id)` (`internal/store/schema_snapshot.sql`) — no such statement exists in any migration file; it materializes from the `dst_id` FK.
 - FOREIGN KEYs, both `ON DELETE CASCADE`, no `ON UPDATE` clause declared: `src_id → issues(id)` and `dst_id → issues(id)` (`00001_baseline.sql`), auto-named `relations_ibfk_1` / `relations_ibfk_2` (`internal/store/schema_snapshot.sql`).
-- CHECK `relations_type_check` on `type IN ('blocks','parent-child','related-to')` (`00001_baseline.sql`).
+- CHECK `relations_type_check` on `type IN ('blocks','parent-child','related-to')` (`00001_baseline.sql`); `00008_blocked_by_edge.sql` drops it and re-adds `relations_type_check` on `type IN ('blocked-by','parent-child','related-to')`, the snapshot's form.
 
 ### 2.3 `comments`
 
@@ -2190,14 +2190,14 @@ This runs after the totality and problem phases, so a shape fault masks an arity
 
 shapemap.go. Starts from:
 ```go
-model.Export{Version: 2, WorkspaceID: workspaceID,
+model.Export{Version: model.ExportVersion, WorkspaceID: workspaceID,
   Issues: []model.Issue{}, Relations: []model.Relation{}, Comments: []model.Comment{},
   Labels: []model.Label{}, Events: []model.IssueEvent{}}
 ```
-(shapemap.go) — `Version` is hardcoded `2`; all slices non-nil.
+(shapemap.go) — `Version` is `model.ExportVersion` (3); all slices non-nil.
 
 - **Issues** (596-602): `buildIssue(rec)` per record; error propagated as `model.Export{}, err`.
-- **Relations** (603-611): `model.Relation{SrcID: cellString(rec["src_id"]), DstID: cellString(rec["dst_id"]), Type: model.RelationType(cellString(rec["type"])), CreatedAt: cellTime(rec["created_at"]), CreatedBy: cellString(rec["created_by"])}` — the `type` value is cast without validation.
+- **Relations** (603-611): `model.Relation{SrcID: cellString(rec["src_id"]), DstID: cellString(rec["dst_id"]), Type: model.RelationTypeFromStored(cellString(rec["type"])), CreatedAt: cellTime(rec["created_at"]), CreatedBy: cellString(rec["created_by"])}` — the `type` value is read through `RelationTypeFromStored` (a pre-v8 `blocks` becomes `blocked-by`) and otherwise not validated.
 - **Comments** (612-620): `model.Comment{ID, IssueID, Body, CreatedAt: cellTime, CreatedBy}` from `rec["id"]`, `rec["issue_id"]`, `rec["body"]`, `rec["created_at"]`, `rec["created_by"]`.
 - **Labels** (621-628): `model.Label{IssueID, Name: cellString(rec["name"]), CreatedAt: cellTime, CreatedBy}`.
 - **Events** (632-650): `model.IssueEvent{ID: cellString(rec["id"]), IssueID, Action: cellString(rec["action"]), Reason, Actor, CreatedAt: cellTime(rec["created_at"]), Attribution: model.NewAttribution(cellString(rec["stream"]), cellString(rec["workspace"])), Changes: []model.FieldChange{}}`. An index `byID[ev.ID] = len(events)` is built (shapemap.go) — **last event with a duplicate id wins the index**.
@@ -2471,7 +2471,7 @@ Scope: `internal/store/issue_ids.go`, `internal/store/labels.go`, `internal/stor
 
 - `issues.item_rank TEXT NOT NULL DEFAULT ''` — `internal/store/migrations/00001_baseline.sql`.
 - `issues.id VARCHAR(191) PRIMARY KEY` — `internal/store/migrations/00001_baseline.sql`.
-- `relations` table: `src_id VARCHAR(191) NOT NULL`, `dst_id VARCHAR(191) NOT NULL`, `type VARCHAR(32) NOT NULL`, `created_at VARCHAR(64) NOT NULL`, `created_by TEXT NOT NULL`, `PRIMARY KEY (src_id, dst_id, type)`, `FOREIGN KEY (src_id) REFERENCES issues(id) ON DELETE CASCADE`, `FOREIGN KEY (dst_id) REFERENCES issues(id) ON DELETE CASCADE`, `CONSTRAINT relations_type_check CHECK (type IN ('blocks','parent-child','related-to'))` — `internal/store/migrations/00001_baseline.sql`.
+- `relations` table: `src_id VARCHAR(191) NOT NULL`, `dst_id VARCHAR(191) NOT NULL`, `type VARCHAR(32) NOT NULL`, `created_at VARCHAR(64) NOT NULL`, `created_by TEXT NOT NULL`, `PRIMARY KEY (src_id, dst_id, type)`, `FOREIGN KEY (src_id) REFERENCES issues(id) ON DELETE CASCADE`, `FOREIGN KEY (dst_id) REFERENCES issues(id) ON DELETE CASCADE`, `CONSTRAINT relations_type_check CHECK (type IN ('blocks','parent-child','related-to'))` — `internal/store/migrations/00001_baseline.sql`; `00008_blocked_by_edge.sql` re-adds it as `type IN ('blocked-by','parent-child','related-to')`.
 - `labels` table: `issue_id VARCHAR(191) NOT NULL`, `label VARCHAR(191) NOT NULL`, `created_at VARCHAR(64) NOT NULL`, `created_by TEXT NOT NULL`, `PRIMARY KEY (issue_id, label)`, `FOREIGN KEY (issue_id) REFERENCES issues(id) ON DELETE CASCADE` — `internal/store/migrations/00001_baseline.sql`.
 - Indexes: `CREATE INDEX idx_issues_rank ON issues(item_rank(191));`, `CREATE INDEX idx_relations_src_type ON relations(src_id, type);`, `CREATE INDEX idx_relations_dst_type ON relations(dst_id, type);`, `CREATE INDEX idx_labels_issue ON labels(issue_id, label);`, `CREATE INDEX idx_labels_name ON labels(label, issue_id);`.
 - Down section drops `labels` and `relations`.
@@ -2653,23 +2653,24 @@ Error-vs-not-found distinction: `execDelete` wraps a delete failure as `fmt.Erro
 
 `internal/model/relation_type.go`:
 - `type RelationType string`
-- `RelBlocks RelationType = "blocks"`
+- `RelBlockedBy RelationType = "blocked-by"`
 - `RelParentChild RelationType = "parent-child"`
 - `RelRelatedTo RelationType = "related-to"`
 
-`ParseRelationType(s)` — `internal/model/relation_type.go`: `strings.TrimSpace(s)` then matches the three constants; anything else → `model.ValidationError{Message: "relation type must be blocks, parent-child, or related-to"}`. This is the only string→type gate; the store does no re-validation (`internal/store/relations.go` comment).
+`ParseRelationType(s)` — `internal/model/relation_type.go`: `strings.TrimSpace(s)` then matches the three constants; anything else → `model.ValidationError{Message: "relation type must be blocked-by, parent-child, or related-to"}`. This is the only string→type gate; the store does no re-validation (`internal/store/relations.go` comment).
 
 ### 4.2 Direction and canonicalization rules
 
-- `StoreEndpoints(from, to)` — `internal/model/relation_type.go`: for `blocks` returns `(to, from)`; all other types pass through. It is its own inverse. Stored orientation for blocks is therefore **src = dependent, dst = dependency**, the reverse of the human "<blocker> blocks <blocked>" reading.
-- `SingleValuedFromSrc()` — `internal/model/relation_type.go`: true only for `parent-child`. blocks and related-to are many-valued from src.
+- Every type reads as the sentence `<src> <type> <dst>` (`internal/model/relation_type.go`): stored orientation for blocked-by is **src = dependent, dst = dependency** ("<waiting ticket> blocked-by <blocker>"), the order every command and the export name the edge in.
+- `RelationTypeFromStored(s)` — `internal/model/relation_type.go`: `"blocks"` → `RelBlockedBy`; every other spelling passes through unchanged and unvalidated. Readers of pre-v8 bytes use it: `assembleExport` (shapemap.go) and `Export.UnmarshalJSON` for version < 3 (`internal/model/model.go`).
+- `SingleValuedFromSrc()` — `internal/model/relation_type.go`: true only for `parent-child`. blocked-by and related-to are many-valued from src.
 - `CanonicalEndpoints(src, dst)` — `internal/model/relation_type.go`: for `related-to`, if `dst < src` returns `(dst, src)` (lexicographic sort of the endpoint pair, giving an undirected edge exactly one representation); directed types unchanged.
 
 Bucketing convention, `bucketRelations(focalID, relations, issuesByID, ancestry)` — `internal/store/relations.go`:
-- `RelBlocks` with `rel.SrcID == focalID` → the counterpart lands in `DependsOn`; with `rel.DstID == focalID` → counterpart lands in `Blocks`. Both branches run, so a self-blocks row would populate both.
+- `RelBlockedBy` with `rel.SrcID == focalID` → the counterpart lands in `BlockedBy`; with `rel.DstID == focalID` → counterpart lands in `Blocks`. Both branches run, so a blocked-by row from an issue to itself would populate both.
 - `RelParentChild` with `rel.SrcID == focalID` → `Parent = &<dst issue>`; with `rel.DstID == focalID` → append to `Children`.
 - Counterparts absent from `issuesByID` are silently skipped (every `if …, ok :=` guard).
-- `Children`, `DependsOn`, `Blocks` are initialized to empty (non-nil) slices; `Parent` stays nil.
+- `Children`, `BlockedBy`, `Blocks` are initialized to empty (non-nil) slices; `Parent` stays nil.
 - All three slices are sorted by `ancestry.Sort` — tree order, the listing's `rank` order (`storage.RankAncestry`, `internal/storage/rank.go`).
 - `related-to` is not bucketed here at all.
 
@@ -2686,11 +2687,11 @@ Bucketing convention, `bucketRelations(focalID, relations, issuesByID, ancestry)
 4. Inside `s.withMutation(ctx, "add relation", ...)`:
    - `requireIssueExistsTx(ctx, tx, in.SrcID)` then `issueTypeTx(ctx, tx, in.DstID)` — note these use the **input** ids, not the canonicalized ones. `requireIssueExistsTx` runs `SELECT 1 FROM issues WHERE id = ?` and maps `sql.ErrNoRows` to `storage.NotFoundError{Entity: "issue", ID: issueID}`, other errors to `fmt.Errorf("check issue exists: %w", err)` — `internal/store/store.go`. It deliberately does not filter on `deleted_at`, so archived/soft-deleted rows count as existing (`internal/store/store.go` comment).
    - `issueTypeTx` (`relations.go`) is the dst's existence proof and its type in one read (`SELECT issue_type FROM issues WHERE id = ?`, `ErrNoRows` → `storage.NotFoundError{Entity: "issue"}`, other errors → `fmt.Errorf("read issue type: %w", err)`); then `storage.RejectNonContainerParentEdge(rel.Type, rel.DstID, dstType)` (`internal/storage/containment.go`, shared with the memory engine): for `parent-child` only, `storage.RejectParentThatIsNotAContainer` → `model.ValidationError` for a parent that is not an epic; other types pass.
-   - If type is `blocks`: `rejectBlocksCycle(ctx, tx, rel.SrcID, rel.DstID)`, then `loadEpicParentEdges` (parent edges whose parent is an epic; load error → `fmt.Errorf("blocks hierarchy check: %w", err)`) and `storage.RejectBlocksAlongHierarchy(epicParentOf, rel.SrcID, rel.DstID)` — either endpoint inside the other's epic at any depth, climbing only through epic parents → `model.ValidationError{Message: storage.SameEpicBlocksRejectionMessage}` (`internal/storage/edges.go`; the memory engine calls the same function, pinned by conformance case `blocks_never_runs_along_the_hierarchy`).
+   - If type is `blocked-by`: `rejectBlocksCycle(ctx, tx, rel.SrcID, rel.DstID)`, then `loadEpicParentEdges` (parent edges whose parent is an epic; load error → `fmt.Errorf("blocks hierarchy check: %w", err)`) and `storage.RejectBlocksAlongHierarchy(epicParentOf, rel.SrcID, rel.DstID)` — either endpoint inside the other's epic at any depth, climbing only through epic parents → `model.ValidationError{Message: storage.SameEpicBlocksRejectionMessage}` (`internal/storage/edges.go`; the memory engine calls the same function, pinned by conformance case `blocks_never_runs_along_the_hierarchy`).
    - If `rel.Type.SingleValuedFromSrc()` (parent-child only): `setSingleValuedEdgeTx`; otherwise `insertRelationTx`.
 5. Returns the constructed `model.Relation` (with canonical endpoints and the pre-tx timestamp) on success.
 
-Duplicate handling: a repeat of the same `(src,dst,type)` for `blocks`/`related-to` goes through the raw INSERT and hits the primary key, surfacing as `fmt.Errorf("insert relation %s->%s (%s): %w"...)` from `insertRelationTx` (`internal/store/relations.go`). There is no upsert.
+Duplicate handling: a repeat of the same `(src,dst,type)` for `blocked-by`/`related-to` goes through the raw INSERT and hits the primary key, surfacing as `fmt.Errorf("insert relation %s->%s (%s): %w"...)` from `insertRelationTx` (`internal/store/relations.go`). There is no upsert.
 
 Endpoint-vanished behavior is pinned by `TestRelationEndpointVanishedRejected` — `internal/store/store_test.go`.
 
@@ -2712,17 +2713,17 @@ bound `rel.SrcID, string(rel.Type)`; error → `fmt.Errorf("clear single-valued 
 ```sql
 DELETE FROM relations WHERE src_id = ? AND dst_id = ? AND type = ?
 ```
-subject string `fmt.Sprintf("relation %s->%s (%s)", key.srcID, key.dstID, key.kind)`; errors from `execDelete` are `delete relation a->b (blocks): <err>` and `delete relation a->b (blocks): rows affected: <err>` (`internal/store/row_deletes.go`).
+subject string `fmt.Sprintf("relation %s->%s (%s)", key.srcID, key.dstID, key.kind)`; errors from `execDelete` are `delete relation a->b (blocked-by): <err>` and `delete relation a->b (blocked-by): rows affected: <err>` (`internal/store/row_deletes.go`).
 
 `relationKey` is exactly the schema primary key `(src_id, dst_id, type)` — `internal/store/row_deletes.go`.
 
 ### 4.5 Cycle detection on write
 
 `rejectBlocksCycle(ctx, tx, dependent, dependency)` — `internal/store/relations.go`:
-- Self-edge: `dependent == dependency` → `model.ValidationError{Message: fmt.Sprintf("blocks: %s cannot block itself", dependent)}`.
-- Loads every live blocks edge with `loadBlocksEdges` (see §5.9); load error → `fmt.Errorf("blocks cycle check: %w", err)`.
+- Self-edge: `dependent == dependency` → `model.ValidationError{Message: fmt.Sprintf("blocked-by: %s cannot be blocked by itself", dependent)}`.
+- Loads every live blocked-by edge with `loadBlocksEdges` (see §5.9); load error → `fmt.Errorf("blocks cycle check: %w", err)`.
 - `blocksPrecedes(blocksPrecedenceAdj(edges), dependent, dependency)` true → `model.ValidationError` with text:
-  `"blocks: cannot add %s depends-on %s — %s already depends on %s (directly or transitively), so this edge would close a dependency cycle, which has no valid rank order"` with args `(dependent, dependency, dependency, dependent)`.
+  `"blocked-by: cannot add %s blocked by %s — %s is already blocked by %s (directly or transitively), so this edge would close a dependency cycle, which has no valid rank order"` with args `(dependent, dependency, dependency, dependent)`.
 
 Tests: `TestAddRelationRejectsBlocksCycle` (A→B then B→A rejected) — `internal/store/store_test.go`; `TestAddRelationRejectsTransitiveBlocksCycle` (A→B, B→C, C→A rejected) —; `TestAddRelationRejectsSelfBlock` —.
 
@@ -2735,7 +2736,7 @@ Tests: `TestAddRelationRejectsBlocksCycle` (A→B then B→A rejected) — `inte
 - Then `storage.RejectDetachingParentEdge(relType, srcID, read)` (`relations.go`, `internal/storage/containment.go`): for `parent-child` only, `read` runs `issueTypeTx` on the child and counts the parent-child edges it still holds (`SELECT COUNT(*) FROM relations WHERE src_id = ? AND type = 'parent-child'`), and `storage.RejectDetachingALeaf` → `model.ValidationError` for a leaf left with none, which rolls the delete back; a leaf that keeps another parent edge passes, and other types pass without the read. Judged after the delete so a missing edge is still reported missing.
 - No existence check on the endpoints; no `GetIssue` precheck.
 
-`TestRemovePerChildBlockAfterRankReorder` — `internal/store/store_test.go` — removes per-child and epic-level blocks edges after a `RankAbove`, asserting store orientation `src=dependent, dst=dependency` holds after reordering.
+`TestRemovePerChildBlockAfterRankReorder` — `internal/store/store_test.go` — removes per-child and epic-level blocked-by edges after a `RankAbove`, asserting store orientation `src=dependent, dst=dependency` holds after reordering.
 
 ### 4.7 ClearParent
 
@@ -2775,7 +2776,7 @@ Query error → `fmt.Errorf("list relations: %w", err)`; created_at parsed with 
 
 ### 4.10 Batch relations
 
-`structuralRelationTypes = []model.RelationType{model.RelBlocks, model.RelParentChild}` — `internal/store/relations.go`. `related-to` is excluded from every batch path.
+`structuralRelationTypes = []model.RelationType{model.RelBlockedBy, model.RelParentChild}` — `internal/store/relations.go`. `related-to` is excluded from every batch path.
 
 `relationEndpointColumns = map[string]struct{}{"src_id": {}, "dst_id": {}}` — `internal/store/relations.go`; a column not in that set → `fmt.Errorf("list relations by endpoint: unknown column %q", column)` (`internal/store/relations.go`).
 
@@ -2797,7 +2798,7 @@ via `fmt.Sprintf` with placeholder lists from `repeatPlaceholder` (`internal/sto
 - Hydrates `s.getIssuesByIDs(ctx, mapKeys(needed))` (`mapKeys`, unspecified order).
 - Loads `loadRankAncestry(ctx, s.db)` once for every subject's groups.
 - For each subject present in `issuesByID`, produces `bucketRelations(id, bySubject[id], issuesByID, ancestry)` with `.Issue` set; subjects that no longer exist are simply omitted from the result map.
-- `TestGetRelationsByIDsMatchesIssueDetail` asserts parity with `GetIssueDetail` for Children/DependsOn/Blocks/Parent, absence of a nonexistent subject, epic children in rank order, and the DependsOn/Blocks orientation — `internal/store/relations_batch_test.go`.
+- `TestGetRelationsByIDsMatchesIssueDetail` asserts parity with `GetIssueDetail` for Children/BlockedBy/Blocks/Parent, absence of a nonexistent subject, epic children in rank order, and the BlockedBy/Blocks orientation — `internal/store/relations_batch_test.go`.
 
 ### 4.11 Listing by parent
 
@@ -3013,7 +3014,7 @@ Smoothing is invoked from `RankToTop`, `RankToBottom`, `RankSet` (when it places
 
 `liveIssueIDs(ctx)` — `internal/store/ranking.go`: `s.ListIssues(ctx, storage.ListIssuesFilter{Statuses: []model.State{model.StateOpen, model.StateInProgress}})`; error → `fmt.Errorf("list live issues: %w", err)`. Archived and deleted issues are excluded by that listing; epics get their state by rollup over children rather than a column peek.
 
-`loadRankOrder(ctx, q, liveIDs)` — `internal/store/ranking.go`: `SELECT id, item_rank FROM issues WHERE deleted_at IS NULL ORDER BY item_rank ASC, id ASC`, appending only rows present in `liveIDs`; errors `fmt.Errorf("query rank order: %w", err)`, `fmt.Errorf("scan rank order: %w", err)`, `fmt.Errorf("rank order rows: %w", err)`. The `id ASC` tiebreak makes the sequence deterministic where two rows share a rank. This sequence is both the repair's input order and its membership test for which blocks edges constrain live work.
+`loadRankOrder(ctx, q, liveIDs)` — `internal/store/ranking.go`: `SELECT id, item_rank FROM issues WHERE deleted_at IS NULL ORDER BY item_rank ASC, id ASC`, appending only rows present in `liveIDs`; errors `fmt.Errorf("query rank order: %w", err)`, `fmt.Errorf("scan rank order: %w", err)`, `fmt.Errorf("rank order rows: %w", err)`. The `id ASC` tiebreak makes the sequence deterministic where two rows share a rank. This sequence is both the repair's input order and its membership test for which blocked-by edges constrain live work.
 
 `rankedIssue{id, rank}` — `internal/store/rank_repair.go`: one row of that sequence.
 
@@ -3034,11 +3035,11 @@ Smoothing is invoked from `RankToTop`, `RankToBottom`, `RankSet` (when it places
 SELECT r.src_id, r.dst_id FROM relations r
 JOIN issues src ON src.id = r.src_id
 JOIN issues dst ON dst.id = r.dst_id
-WHERE r.type = 'blocks'
+WHERE r.type = 'blocked-by'
 AND src.deleted_at IS NULL AND dst.deleted_at IS NULL
 ORDER BY r.src_id, r.dst_id
 ```
-No rank filter; the ORDER BY exists to make DFS adjacency order — and therefore the reported cycle path — deterministic. Errors: `"query blocks edges: %w"`, `"scan blocks edge: %w"`, `"blocks edges rows: %w"`.
+No rank filter; the ORDER BY exists to make DFS adjacency order — and therefore the reported cycle path — deterministic. Errors: `"query blocked-by edges: %w"`, `"scan blocked-by edge: %w"`, `"blocked-by edges rows: %w"`.
 
 `blocksPrecedenceAdj(edges)` — `internal/store/ranking.go`: adjacency `dependency -> []dependent`.
 
@@ -3052,7 +3053,7 @@ Pure and DB-free, in `internal/store/rank_repair.go`; `FixRankInversions` suppli
 
 `rankRewrite{id, newRank}` — `internal/store/rank_repair.go`: one issue whose rank must change, and the value to write.
 
-`blocksCycleError{path}` — `internal/store/rank_repair.go`: `Error()` renders `blocks dependency cycle <a -> b -> … -> a> — a cycle has no valid rank order; break it by removing one edge with 'lit dep rm'`.
+`blocksCycleError{path}` — `internal/store/rank_repair.go`: `Error()` renders `blocked-by dependency cycle <a -> b -> … -> a> — a cycle has no valid rank order; break it by removing one edge with 'lit dep rm'`.
 
 `repairRankOrder(order, edges)` — `internal/store/rank_repair.go`: `stableTopoOrder(order, edges)`, then `rankRewrites(order, target)`.
 
@@ -3066,7 +3067,7 @@ Pure and DB-free, in `internal/store/rank_repair.go`; `FixRankInversions` suppli
 1. `liveIssueIDs(ctx)` **before** the transaction; error → `fmt.Errorf("fix rank inversions: snapshot live set: %w", err)`. The repair mutates only `item_rank`, so closure status is invariant across the write.
 2. In `withMutation(ctx, "fix rank inversions", …)`:
    - `loadRankOrder(ctx, tx, liveIDs)`; error → `fmt.Errorf("fix rank inversions: %w", err)`.
-   - `loadBlocksEdges(ctx, tx)`; error → `fmt.Errorf("fix rank inversions: load blocks edges: %w", err)`.
+   - `loadBlocksEdges(ctx, tx)`; error → `fmt.Errorf("fix rank inversions: load blocked-by edges: %w", err)`.
    - `repairRankOrder(order, edges)`; error → `fmt.Errorf("fix rank inversions: %w", err)`. This is the arm a dependency cycle takes.
    - Every rewrite goes through `writeRanksTx` as a touched `rankWrite`, stamped `s.clock.Now().Format(time.RFC3339Nano)`; error → `fmt.Errorf("fix rank inversions: %w", err)`.
    - `smoothRanksIfNeededTx` per rewritten rank, in a second loop after every write has landed rather than interleaved with them: a pass that re-spaced a window mid-repair would move the anchor ranks the remaining placements were computed against. Error → `fmt.Errorf("fix rank inversions: smooth ranks: %w", err)`.
@@ -3122,14 +3123,14 @@ The returned value (`import_export.go`):
 
 ```go
 model.Export{
-    Version:     2,
+    Version:     model.ExportVersion,
     WorkspaceID: s.workspaceID,
     ExportedAt:  time.Now().UTC(),
     Issues:      issues, Relations: rels, Comments: comments, Labels: labels, Events: events,
 }
 ```
 
-`Version` is the literal `2`. `ExportedAt` is wall-clock UTC at export time.
+`Version` is `model.ExportVersion` (3). `ExportedAt` is wall-clock UTC at export time.
 
 Export does **not** re-check hydration; the comment at `import_export.go` states `hydrateIssues` guarantees every issue is hydrated, and `Issue.MarshalJSON` is the boundary that rejects partial values.
 
@@ -3254,7 +3255,7 @@ CreatedBy string       `json:"created_by"`
 ```
 
 ```json
-{"src_id":"links-a-1","dst_id":"links-b-2","type":"blocks","created_at":"2026-08-27T10:00:00Z","created_by":"links"}
+{"src_id":"links-a-1","dst_id":"links-b-2","type":"blocked-by","created_at":"2026-08-27T10:00:00Z","created_by":"links"}
 ```
 
 `model.Comment` (`model.go`):
@@ -3309,6 +3310,8 @@ If `raw.Version < 2 && len(raw.History) > 0` (`model.go`), every `v1ExportHistor
 - `Changes` = exactly one `{"field":"status","from":<from_status>,"to":<to_status>}` (`model.go`).
 
 These are **appended** to any already-present `events`.
+
+If `raw.Version < 3` (`model.go`), every relation's `Type` is replaced by `RelationTypeFromStored(string(Type))`, so a v1/v2 `"blocks"` edge decodes as `"blocked-by"` with its endpoints unchanged.
 
 Issue decode (`Issue.UnmarshalJSON`, `model.go`): fields copied straight through; `retention` from `lifecycle.RetentionFromTimestamps(archived_at, deleted_at)` (`model.go`); then a three-way dispatch (`model.go`):
 - container type → `pendingHydration = true`, `lifecycle = nil` (so it cannot be re-marshaled until the store hydrates it),
@@ -3444,7 +3447,7 @@ Delete error text: `execDelete` wraps as `"delete %s: %w"` and `"delete %s: rows
 
 - `TestExportDeltaMatchesFullRewriteAcrossEveryChangeShape` drives two stores through the same state sequence — one via `replaceFromExport(..., commitStamp{Message:"rewrite"})`, one via `applyDeltaForTest` — and after every step asserts `reflect.DeepEqual` on `Issues`, `Relations`, `Comments`, `Labels`, `Events` (`assertSameRows`). The envelope (`workspace_id`, `exported_at`) is explicitly excluded.
 - The state sequence (`buildDeltaScenarioStates`), named: `"epic with two children"`, `"one field edited on one issue"`, `"comment added"`, `"label added"`, `"relation spanning two issues added"`, `"relation endpoint rewritten"`, `"issue added"`, `"issue removed outright"`. The last is synthesized by `withoutIssue` dropping the issue plus every relation touching it and every comment/label/event referencing it — the shape a merge projection yields.
-- `TestExportDeltaRewritesARelationChangedOutsideItsKey`: changing only `CreatedBy` from `"first"` to `"second"` on a relation with a stable `(a,b,blocks)` key yields exactly `relations.remove == [relationKey{a,b,blocks}]` and `relations.add == [restamped]`, and **zero** issues work.
+- `TestExportDeltaRewritesARelationChangedOutsideItsKey`: changing only `CreatedBy` from `"first"` to `"second"` on a relation with a stable `(a,b,blocked-by)` key yields exactly `relations.remove == [relationKey{a,b,blocked-by}]` and `relations.add == [restamped]`, and **zero** issues work.
 - `TestExportDeltaReinsertsChildrenOfARewrittenIssue`: retitling issue `touched` yields `issues.remove == ["touched"]`, `issues.add == [retitled]`, and for each of relations/comments/labels/events exactly **1 add and 0 removes** — including a `touched -> untouched` spanning relation.
 - `TestExportDeltaLeavesAnUnchangedBacklogAlone`: `diffExports(export, export).empty()` must be true.
 - `TestExportDeltaLeavesTheIssueRowAloneWhenOnlyALabelMoves`: adding label `urgent` to the hydrated `Labels` slice plus a labels row → `issues` delta empty, `labels.add == [{IssueID:"a",Name:"urgent"}]`, `labels.remove` empty, and comments/events deltas empty.
@@ -3553,7 +3556,7 @@ Usage strings: `restoreUsage = "usage: lit backup restore (--latest | --path <ex
 - `loadRankAncestry(ctx, s.db)`, error wrap `"rank ancestry: %w"`; each `ancestry.Conflicts()` entry appends its `Finding()` as an error line, and the checks below still run.
 - `s.liveIssueIDs(ctx)`, `loadRankOrder(ctx, s.db, liveIDs)` and `loadBlocksEdges(ctx, s.db)`, loaded once for both rank checks; each error wraps `"rank checks: %w"`.
 - `RankInversions = len(invertedEdges(order, edges))`; warning `"rank inversions: %d (dependencies ranked below dependents)"`.
-- `blocksCycle(order, edges)` non-empty → `DependencyCycle`; warning `"blocks dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)"` with members joined by `" -> "`.
+- `blocksCycle(order, edges)` non-empty → `DependencyCycle`; warning `"blocked-by dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)"` with members joined by `" -> "`.
 
 `FixIntegrity` (`import_export.go`) always runs the repair under `withMutation(ctx, "fix integrity", …)` — Dolt commit message literal **`fix integrity`** — executing exactly three statements:
 ```sql
@@ -3584,7 +3587,7 @@ Priority    int      `json:"priority"`
 Assignee    string   `json:"assignee,omitempty"`
 Labels      []string `json:"labels,omitempty"`
 Parent      string   `json:"parent,omitempty"`
-DependsOn   []string `json:"depends_on,omitempty"`
+BlockedBy   []string `json:"blocked_by,omitempty"`
 ```
 
 The file is **one JSON array of these objects** (`ParseImportTreeSpecs`, `storage/specs.go`):
@@ -3598,13 +3601,13 @@ Hand-writable example (pinned verbatim by `import_tree_test.go`):
 [
 	{"local_id":"e1","title":"Epic","type":"epic","topic":"tree","priority":0},
 	{"local_id":"t1","title":"First","type":"task","topic":"tree","priority":0,"parent":"e1"},
-	{"local_id":"t2","title":"Second","type":"task","topic":"tree","priority":0,"parent":"e1","depends_on":["t1"]}
+	{"local_id":"t2","title":"Second","type":"task","topic":"tree","priority":0,"parent":"e1","blocked_by":["t1"]}
 ]
 ```
 
-Defaults for absent fields: every field is a non-pointer, so an absent key is the Go zero value. `priority` absent → `0` → `PriorityNormal` (and `ParsePriority(0)` succeeds). `description`/`prompt`/`assignee`/`parent` absent → `""`. `labels`/`depends_on` absent → nil slice. **`title`, `type`, `topic` and `local_id` have no defaults** — absent `local_id`/`title`/`type` are rejected by validation; absent `topic` is `""` and is *not* rejected here (it reaches `CreateIssue`).
+Defaults for absent fields: every field is a non-pointer, so an absent key is the Go zero value. `priority` absent → `0` → `PriorityNormal` (and `ParsePriority(0)` succeeds). `description`/`prompt`/`assignee`/`parent` absent → `""`. `labels`/`blocked_by` absent → nil slice. **`title`, `type`, `topic` and `local_id` have no defaults** — absent `local_id`/`title`/`type` are rejected by validation; absent `topic` is `""` and is *not* rejected here (it reaches `CreateIssue`).
 
-### 4.2 "Tree" = local_id graph over parent + depends_on
+### 4.2 "Tree" = local_id graph over parent + blocked_by
 
 `ImportTree(ctx, prefix, specs)` (`import_tree.go`):
 
@@ -3617,7 +3620,7 @@ Defaults for absent fields: every field is a non-pointer, so an absent key is th
    - `s.CreateIssue(ctx, storage.CreateIssueInput{Title, Description, Prompt, IssueType, Topic, Priority, Assignee, Labels, ParentID, Prefix})`. **`Lane` is never set** on this path (contrast bulk). `Placement` is left at its zero value = `RankBottom` (`internal/storage/issues.go`), so creates append in file order.
    - On error: `leaked := s.rollbackCreatedIssues(ctx, createdIDs)` then `"import: create %q: %w (rollback leaked %d: %s)"` with the leaked ids comma-joined.
    - `idMap[spec.LocalID] = issue.ID`; append to `createdIDs`.
-4. Second pass over `specs` **in file order** (not topo order) wiring `depends_on` (`import_tree.go`): for each dep, `AddRelation(storage.AddRelationInput{SrcID: idMap[spec.LocalID], DstID: idMap[dep], Type: "blocks", CreatedBy: "links"})`. The convention is stated at `import_tree.go`: **src is the dependent, dst is the dependency**. On error: rollback, then `"import: depends_on %q -> %q: %w (rollback leaked %d: %s)"`.
+4. Second pass over `specs` **in file order** (not topo order) wiring `blocked_by` (`import_tree.go`): for each dep, `AddRelation(storage.AddRelationInput{SrcID: idMap[spec.LocalID], DstID: idMap[dep], Type: model.RelBlockedBy, CreatedBy: "links"})` — **src is the dependent, dst is the dependency**. On error: rollback, then `"import: blocked_by %q -> %q: %w (rollback leaked %d: %s)"`.
 5. Returns `storage.ImportTreeResult{IDMap: idMap}` (`import_tree.go`), whose field tag is `json:"id_map"` (`storage/bulk.go`).
 
 ### 4.3 Validation and every rejection text
@@ -3642,11 +3645,11 @@ Second pass, over all specs (`import_validate.go`) — i.e. **forward references
 | `Parent` not in `types` | `import: spec %q references missing parent %q` |
 | `Parent` names a spec whose type is not a container (`storage.RejectParentThatIsNotAContainer`) | `import: spec %q: cannot file a ticket under %s: it is a %s, and only an epic contains tickets` (wraps a `model.ValidationError`) |
 | type is not a container and `Parent == ""` (`storage.RejectLeafWithoutParent`) | `import: spec %q: cannot create a %s outside an epic: every ticket except an epic lives inside one, so give it the epic it belongs to as its parent, or make it an epic` (wraps a `model.ValidationError`) |
-| a `dep != TrimSpace(dep)` | `import: spec %q depends_on entry %q has surrounding whitespace` |
-| `dep` not in `types` | `import: spec %q references missing depends_on %q` |
+| a `dep != TrimSpace(dep)` | `import: spec %q blocked_by entry %q has surrounding whitespace` |
+| `dep` not in `types` | `import: spec %q references missing blocked_by %q` |
 | `dep == spec.LocalID` | `import: spec %q cannot depend on itself` |
 
-Consequence: on the tree path **every parent/depends_on reference must be internal to the file** — naming a pre-existing real issue id is rejected as "missing parent". (Test `TestImportTreeRejectsMissingReference`, `import_tree_test.go`, uses `parent:"ghost"` and asserts the error contains `"missing parent"`.)
+Consequence: on the tree path **every parent/blocked_by reference must be internal to the file** — naming a pre-existing real issue id is rejected as "missing parent". (Test `TestImportTreeRejectsMissingReference`, `import_tree_test.go`, uses `parent:"ghost"` and asserts the error contains `"missing parent"`.)
 
 ### 4.4 Topological order and cycles
 
@@ -3659,7 +3662,7 @@ Consequence: on the tree path **every parent/depends_on reference must be intern
 - the outer loop visits indices `0..n-1` in file order (`import_tree.go`), so the emitted order is post-order DFS seeded by file order — an unconstrained batch keeps file order.
 - **References that match no localID are simply not edges** (`import_tree.go`); they neither create an ordering constraint nor an error at this layer.
 
-Test `TestImportTreeRejectsCycle` (`import_tree_test.go`) uses `a depends_on b`, `b depends_on a` and asserts the error contains `"cycle"`.
+Test `TestImportTreeRejectsCycle` (`import_tree_test.go`) uses `a blocked_by b`, `b blocked_by a` and asserts the error contains `"cycle"`.
 
 ### 4.5 Rollback
 
@@ -3696,7 +3699,7 @@ Assignee    *string   `yaml:"assignee,omitempty"`
 Labels      *[]string `yaml:"labels,omitempty"`
 Lane        *string   `yaml:"lane,omitempty"`
 Parent      string    `yaml:"parent,omitempty"`
-DependsOn   []string  `yaml:"depends_on,omitempty"`
+BlockedBy   []string  `yaml:"blocked_by,omitempty"`
 Reason      string    `yaml:"reason,omitempty"`
 ```
 
@@ -3736,7 +3739,7 @@ Per-document checks that run for **both** shapes (`import_validate.go`):
 | `ID != TrimSpace(ID)` | `bulk: doc %d id %q has surrounding whitespace` |
 | `LocalID != TrimSpace(LocalID)` | `bulk: doc %d local_id %q has surrounding whitespace` |
 | `Parent != TrimSpace(Parent)` | `bulk: doc %d parent %q has surrounding whitespace` |
-| a `dep != TrimSpace(dep)` | `bulk: doc %d depends_on entry %q has surrounding whitespace` |
+| a `dep != TrimSpace(dep)` | `bulk: doc %d blocked_by entry %q has surrounding whitespace` |
 | `LocalID != "" && dep == LocalID` | `bulk: doc %d (local_id %q) cannot depend on itself` |
 
 Update-document checks (`validateBulkUpdateDoc`, `import_validate.go`), in order:
@@ -3746,7 +3749,7 @@ Update-document checks (`validateBulkUpdateDoc`, `import_validate.go`), in order
 | `LocalID != ""` | `bulk: doc %d (id %q) sets local_id; local_id only applies to new tickets` |
 | `Topic != nil` | `bulk: doc %d (id %q) sets topic; topic is immutable and update cannot change it` |
 | `Parent != ""` | ``bulk: doc %d (id %q) sets parent; reparent with `lit parent set` instead`` |
-| `len(DependsOn) > 0` | ``bulk: doc %d (id %q) sets depends_on; wire dependencies with `lit dep add` instead`` |
+| `len(BlockedBy) > 0` | ``bulk: doc %d (id %q) sets blocked_by; wire dependencies with `lit dep add` instead`` |
 | `IssueType` set and unparseable | `bulk: doc %d (id %q) has invalid type %q` |
 | `Priority` set and unparseable | `bulk: doc %d (id %q) has invalid priority %d` |
 | `!bulkUpdateHasField(spec)` | `bulk: doc %d (id %q) has no fields to update` |
@@ -3773,7 +3776,7 @@ A second pass over the create documents, in file order (`import_validate.go`), j
 | type is not a container and `Parent == ""` (`storage.RejectLeafWithoutParent`) | `bulk: doc %d: cannot create a %s outside an epic: every ticket except an epic lives inside one, so give it the epic it belongs to as its parent, or make it an epic` (wraps a `model.ValidationError`) |
 | `Parent` names a create document in the file (by `local_id`) whose type is not a container (`storage.RejectParentThatIsNotAContainer`) | `bulk: doc %d: cannot file a ticket under %s: it is a %s, and only an epic contains tickets` (wraps a `model.ValidationError`) |
 
-Note the create branch does **not** require `LocalID` (unlike ImportTree), and does not reject an unresolvable `Parent`/`depends_on` — those pass through as presumed real ids; a real-id parent that is not an epic is refused by `CreateIssue` (`storage.RejectParentThatIsNotAContainer`), after any earlier documents have been created, and is compensated as any mid-batch refusal is.
+Note the create branch does **not** require `LocalID` (unlike ImportTree), and does not reject an unresolvable `Parent`/`blocked_by` — those pass through as presumed real ids; a real-id parent that is not an epic is refused by `CreateIssue` (`storage.RejectParentThatIsNotAContainer`), after any earlier documents have been created, and is compensated as any mid-batch refusal is.
 
 ### 5.3 Execution
 
@@ -3786,7 +3789,7 @@ Note the create branch does **not** require `LocalID` (unlike ImportTree), and d
    - **Update branch** (`spec.ID != ""`): `bulkUpdateChange(spec, actor)` then `s.Apply(ctx, spec.ID, change)`. `bulkUpdateChange` error is returned **without** a rollback (`import_bulk.go`). `Apply` error → rollback then `"bulk: update %q: %w (rollback leaked %d: %s)"`. On success append `issue.ID` to `result.Updated`.
    - **Create branch**: re-parse type (`"bulk: doc %d: %w"`, no rollback, `import_bulk.go`); priority defaults to `model.PriorityNormal` and is re-parsed only if set (`"bulk: doc %d: %w"`, no rollback); then `CreateIssue` with `Title: TrimSpace(*spec.Title)`, `Description: derefOr(spec.Description, "")`, `Prompt: derefOr(spec.Prompt, "")`, `IssueType`, `Topic: TrimSpace(*spec.Topic)`, `ParentID: resolveBulkRef(spec.Parent, localRealID)`, `Priority`, `Assignee: derefOr(spec.Assignee, "")`, `Lane: derefOr(spec.Lane, "")`, `Labels: derefOr(spec.Labels, nil)`, `Prefix: prefix` (`import_bulk.go`). `Placement` deliberately left at its zero value `RankBottom` so file order is preserved, matching ImportTree (`import_bulk.go`). Failure → rollback then `"bulk: create doc %d: %w (rollback leaked %d: %s)"`.
    - Record `createdRealID[idx]`, append `createdIDs`. If `spec.LocalID != ""` → `localRealID[LocalID] = issue.ID` and `result.Created[LocalID] = issue.ID`; **else `result.Created[issue.ID] = issue.ID`** (self-keyed) (`import_bulk.go`).
-5. Second pass over `specs` in **file order**, skipping update docs (`import_bulk.go`): for each `dep`, `AddRelation({SrcID: createdRealID[i], DstID: resolveBulkRef(dep, localRealID), Type: "blocks", CreatedBy: "links"})`. Failure → rollback then `"bulk: depends_on doc %d -> %q: %w (rollback leaked %d: %s)"`.
+5. Second pass over `specs` in **file order**, skipping update docs (`import_bulk.go`): for each `dep`, `AddRelation({SrcID: createdRealID[i], DstID: resolveBulkRef(dep, localRealID), Type: model.RelBlockedBy, CreatedBy: "links"})`. Failure → rollback then `"bulk: blocked_by doc %d -> %q: %w (rollback leaked %d: %s)"`.
 
 `derefOr[T](p *T, fallback T) T` (`import_bulk.go`) is the nil-to-default helper.
 
@@ -3833,7 +3836,7 @@ updated %d issues\n         (len(result.Updated))
 
 `internal/store/import_bulk_test.go`:
 
-- `TestBulkApplyCreatesEpicWithChildAndDep`: three specs (`e1` epic, `t1` task parent e1, `t2` task parent e1 depends_on t1) → `len(result.Created) == 3`; `t2`'s detail has `Parent.ID == Created["e1"]` and `DependsOn` contains `Created["t1"]`.
+- `TestBulkApplyCreatesEpicWithChildAndDep`: three specs (`e1` epic, `t1` task parent e1, `t2` task parent e1 blocked_by t1) → `len(result.Created) == 3`; `t2`'s detail has `Parent.ID == Created["e1"]` and `BlockedBy` contains `Created["t1"]`.
 - `TestBulkApplyCreatesLandInFileOrder`: two specs with no placement → `first.Rank < second.Rank`.
 - `TestBulkApplyCreateWithoutLocalIDIsReportedByRealID`: one create with no `local_id` → the single `Created` entry is self-keyed (`ref == real`).
 - `TestBulkApplyUpdatesExistingIssueByID`: `{ID, Title:"After"}` → `Updated == [id]` and the stored title is `"After"`.
@@ -3867,7 +3870,7 @@ updated %d issues\n         (len(result.Updated))
 | Doctor failing `IntegrityCheck` | `"constraint_violations"` | `import_export.go` |
 | clear order in `writeExportTx` | `labels, comments, relations, issues` | `import_export.go` |
 | `insertIssueStmt` topic default | `COALESCE(NULLIF(?, ''), 'misc')` → `misc` | `import_export.go` |
-| relation type written by both importers | `"blocks"` | `import_bulk.go`, `import_tree.go` |
+| relation type written by both importers | `model.RelBlockedBy` (`"blocked-by"`) | `import_bulk.go`, `import_tree.go` |
 | relation `CreatedBy` written by both importers | `"links"` | `import_bulk.go`, `import_tree.go` |
 | rollback Change actor / reason | `"links"` / `"import rollback"` | `import_tree.go` |
 | `CreateIssue` createdBy | `"links"` | `internal/store/store.go` |
@@ -3884,11 +3887,11 @@ updated %d issues\n         (len(result.Updated))
 
 ## 7. Cross-cutting error-message index for this slice
 
-`import_export.go`: `verify constraints: %w`, `count foreign key issues: %w`, `count invalid related rows: %w`, `count orphan event rows: %w`, `count rank inversions: %w`, `detect blocks dependency cycle: %w`, `constraint violations: %d`, `foreign key violations: %d`, `invalid related-to ordering rows: %d`, `orphan issue event rows: %d`, `rank inversions: %d (dependencies ranked below dependents)`, `blocks dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)`, `repair orphan events: %w`, `repair self related rows: %w`, `repair related ordering: %w`, `clear %s: %w`, `restore issue %s: %w`, `restore comment %s: %w`, `restore label %s:%s: %w`, `restore issue event %s: %w`, `restore issue event change %s.%s: %w`.
+`import_export.go`: `verify constraints: %w`, `count foreign key issues: %w`, `count invalid related rows: %w`, `count orphan event rows: %w`, `rank ancestry: %w`, `rank checks: %w`, `parent cycle check: %w`, `constraint violations: %d`, `foreign key violations: %d`, `invalid related-to ordering rows: %d`, `orphan issue event rows: %d`, `rank inversions: %d (dependencies ranked below dependents)`, `blocked-by dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)`, `repair orphan events: %w`, `repair self related rows: %w`, `repair related ordering: %w`, `clear %s: %w`, `restore issue %s: %w`, `restore comment %s: %w`, `restore label %s:%s: %w`, `restore issue event %s: %w`, `restore issue event change %s.%s: %w`.
 
-`import_tree.go`: `import: no issues in input`, `import: spec %d missing local_id`, `import: spec %d local_id %q has surrounding whitespace`, `import: spec %q missing title`, `import: spec %q has invalid type %q`, `import: spec %q has invalid priority %d`, `import: duplicate local_id %q`, `import: spec %q parent %q has surrounding whitespace`, `import: spec %q references missing parent %q`, `import: spec %q depends_on entry %q has surrounding whitespace`, `import: spec %q references missing depends_on %q`, `import: spec %q cannot depend on itself`, `import: spec %q: %w`, `import: create %q: %w (rollback leaked %d: %s)`, `import: depends_on %q -> %q: %w (rollback leaked %d: %s)`, `import: %w`, `cycle detected involving %q`.
+`import_tree.go`: `import: no issues in input`, `import: spec %d missing local_id`, `import: spec %d local_id %q has surrounding whitespace`, `import: spec %q missing title`, `import: spec %q has invalid type %q`, `import: spec %q has invalid priority %d`, `import: duplicate local_id %q`, `import: spec %q parent %q has surrounding whitespace`, `import: spec %q references missing parent %q`, `import: spec %q blocked_by entry %q has surrounding whitespace`, `import: spec %q references missing blocked_by %q`, `import: spec %q cannot depend on itself`, `import: spec %q: %w`, `import: create %q: %w (rollback leaked %d: %s)`, `import: blocked_by %q -> %q: %w (rollback leaked %d: %s)`, `import: %w`, `cycle detected involving %q`.
 
-`import_bulk.go`: `bulk: no issues in input`, `bulk: doc %d id %q has surrounding whitespace`, `bulk: doc %d local_id %q has surrounding whitespace`, `bulk: doc %d parent %q has surrounding whitespace`, `bulk: doc %d depends_on entry %q has surrounding whitespace`, `bulk: doc %d (local_id %q) cannot depend on itself`, `bulk: duplicate id %q`, `bulk: duplicate local_id %q`, `bulk: doc %d missing title`, `bulk: doc %d missing topic`, `bulk: doc %d missing type`, `bulk: doc %d has invalid type %q`, `bulk: doc %d has invalid priority %d`, `bulk: doc %d sets reason without id (reason only applies to updates)`, `bulk: doc %d (id %q) sets local_id; local_id only applies to new tickets`, `bulk: doc %d (id %q) sets topic; topic is immutable and update cannot change it`, ``bulk: doc %d (id %q) sets parent; reparent with `lit parent set` instead``, ``bulk: doc %d (id %q) sets depends_on; wire dependencies with `lit dep add` instead``, `bulk: doc %d (id %q) has invalid type %q`, `bulk: doc %d (id %q) has invalid priority %d`, `bulk: doc %d (id %q) has no fields to update`, `bulk: %w`, `bulk: doc %d: %w`, `bulk: update %q: %w`, `bulk: update %q: %w (rollback leaked %d: %s)`, `bulk: create doc %d: %w (rollback leaked %d: %s)`, `bulk: depends_on doc %d -> %q: %w (rollback leaked %d: %s)`.
+`import_bulk.go`: `bulk: no issues in input`, `bulk: doc %d id %q has surrounding whitespace`, `bulk: doc %d local_id %q has surrounding whitespace`, `bulk: doc %d parent %q has surrounding whitespace`, `bulk: doc %d blocked_by entry %q has surrounding whitespace`, `bulk: doc %d (local_id %q) cannot depend on itself`, `bulk: duplicate id %q`, `bulk: duplicate local_id %q`, `bulk: doc %d missing title`, `bulk: doc %d missing topic`, `bulk: doc %d missing type`, `bulk: doc %d has invalid type %q`, `bulk: doc %d has invalid priority %d`, `bulk: doc %d sets reason without id (reason only applies to updates)`, `bulk: doc %d (id %q) sets local_id; local_id only applies to new tickets`, `bulk: doc %d (id %q) sets topic; topic is immutable and update cannot change it`, ``bulk: doc %d (id %q) sets parent; reparent with `lit parent set` instead``, ``bulk: doc %d (id %q) sets blocked_by; wire dependencies with `lit dep add` instead``, `bulk: doc %d (id %q) has invalid type %q`, `bulk: doc %d (id %q) has invalid priority %d`, `bulk: doc %d (id %q) has no fields to update`, `bulk: %w`, `bulk: doc %d: %w`, `bulk: update %q: %w`, `bulk: update %q: %w (rollback leaked %d: %s)`, `bulk: create doc %d: %w (rollback leaked %d: %s)`, `bulk: blocked_by doc %d -> %q: %w (rollback leaked %d: %s)`.
 
 Parsers (`internal/storage/specs.go`): `bulk: parse spec: %w`, `import: parse spec: %w`, `import: unexpected trailing data after spec array`.
 
@@ -3977,7 +3980,7 @@ The concrete checks whose text can appear as a `health` finding, in `Doctor`'s e
    **Containment.** `containmentFindings(ctx, s.db)` (`import_export.go`): a non-epic with no parent-child edge, or a parent-child edge onto a non-epic, is a **warning** naming each and the repair `lit parent set --child <id> --parent <epic-id>` — ignored by verify, so a faithful rebuild of a pre-v7 source is not refused.
 5. **Parent conflicts.** `loadRankAncestry(ctx, s.db)` (`import_export.go`); each child more than one framing edge claims (`ancestry.Conflicts()`) appends **error** `%s has %d parents (%s); it lists under %s, the lowest id, until one remains — ...` (`internal/storage/rank.go`). The checks below still run.
 6. **Rank inversions.** Computed in Go: `s.liveIssueIDs(ctx)`, `loadRankOrder(ctx, s.db, liveIDs)` and `loadBlocksEdges(ctx, s.db)` load once for this check and the next (`import_export.go`); each error → `rank checks: %w`. `RankInversions = len(invertedEdges(order, edges))` (`import_export.go`); if > 0, **warning** `rank inversions: %d (dependencies ranked below dependents)` (`import_export.go`) — ignored by verify.
-7. **Blocks dependency cycle.** `blocksCycle(order, edges)` over the same load (`import_export.go`). If non-empty, sets `DependencyCycle` and appends **warning** `blocks dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)` with members joined by `" -> "` (`import_export.go`) — ignored by verify.
+7. **Blocked-by dependency cycle.** `blocksCycle(order, edges)` over the same load (`import_export.go`). If non-empty, sets `DependencyCycle` and appends **warning** `blocked-by dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)` with members joined by `" -> "` (`import_export.go`) — ignored by verify.
 
 Net effect: only checks 1 and 2 (constraint violations, foreign-key violations) can ever fail the verify health half.
 

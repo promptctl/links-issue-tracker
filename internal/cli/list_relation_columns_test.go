@@ -71,8 +71,8 @@ func TestListRelationColumns(t *testing.T) {
 
 	// blocks convention: SrcID=dependent, DstID=dependency.
 	for _, edge := range []storage.AddRelationInput{
-		{SrcID: blockedByOpen.ID, DstID: openBlocker.ID, Type: "blocks", CreatedBy: "test"},
-		{SrcID: blockedByClosed.ID, DstID: closedBlocker.ID, Type: "blocks", CreatedBy: "test"},
+		{SrcID: blockedByOpen.ID, DstID: openBlocker.ID, Type: "blocked-by", CreatedBy: "test"},
+		{SrcID: blockedByClosed.ID, DstID: closedBlocker.ID, Type: "blocked-by", CreatedBy: "test"},
 	} {
 		if _, err := ap.Store.AddRelation(ctx, edge); err != nil {
 			t.Fatalf("AddRelation(%s->%s): %v", edge.SrcID, edge.DstID, err)
@@ -182,7 +182,7 @@ func TestListDerivedColumnsLoadsOnlyWhatIsProjected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue: %v", err)
 	}
-	if _, err := ap.Store.AddRelation(ctx, storage.AddRelationInput{SrcID: issue.ID, DstID: blocker.ID, Type: "blocks", CreatedBy: "test"}); err != nil {
+	if _, err := ap.Store.AddRelation(ctx, storage.AddRelationInput{SrcID: issue.ID, DstID: blocker.ID, Type: "blocked-by", CreatedBy: "test"}); err != nil {
 		t.Fatalf("AddRelation: %v", err)
 	}
 	issues := []model.Issue{issue, blocker}

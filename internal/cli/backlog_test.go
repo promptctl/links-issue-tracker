@@ -55,7 +55,7 @@ func (h backlogTestHarness) createIssue(input storage.CreateIssueInput) (id stri
 func (h backlogTestHarness) addDependency(dependentID, dependencyID string) {
 	h.t.Helper()
 	if _, err := h.ap.Store.AddRelation(h.ctx, storage.AddRelationInput{
-		SrcID: dependentID, DstID: dependencyID, Type: "blocks", CreatedBy: "agent",
+		SrcID: dependentID, DstID: dependencyID, Type: "blocked-by", CreatedBy: "agent",
 	}); err != nil {
 		h.t.Fatalf("AddRelation(blocks) error = %v", err)
 	}
@@ -187,8 +187,8 @@ func TestBacklogTextShowsBlockedReasonsInline(t *testing.T) {
 	h.addDependency(blocked, blocker)
 
 	text := h.runBacklogText()
-	if !strings.Contains(text, "depends on: "+blocker) {
-		t.Fatalf("expected 'depends on: %s' for blocked item; got:\n%s", blocker, text)
+	if !strings.Contains(text, "blocked by: "+blocker) {
+		t.Fatalf("expected 'blocked by: %s' for blocked item; got:\n%s", blocker, text)
 	}
 	if !strings.Contains(text, "unblocks: "+blocked) {
 		t.Fatalf("expected 'unblocks: %s' on blocker; got:\n%s", blocked, text)
@@ -281,7 +281,7 @@ func issueIDsFromText(text string) []string {
 			continue
 		}
 		// A primary list row leads with the issue ID, or with an "N." position
-		// number followed by it. Indented context lines (epic:/depends on:/...)
+		// number followed by it. Indented context lines (epic:/blocked by:/...)
 		// lead with a label token and are intentionally skipped.
 		if isIssueIDToken(fields[0]) {
 			ids = append(ids, fields[0])
@@ -363,7 +363,7 @@ func TestBacklogNamesTheSiblingGateAndNextAgreesWithIt(t *testing.T) {
 // The gate, driven off the annotation registry rather than a list maintained
 // beside it: every kind the registry classifies as blocking must reach the
 // reader. Dependencies, direct and inherited, are the one deliberate silence
-// here — printBacklogContext gives them their own "depends on:" line — so each
+// here — printBacklogContext gives them their own "blocked by:" line — so each
 // one must reach that line instead, rather than being left to a length check
 // that would pass for a kind nobody phrased.
 // [LAW:one-source-of-truth] [LAW:verifiable-goals]
@@ -376,7 +376,7 @@ func TestBacklogPhrasesEveryBlockingKind(t *testing.T) {
 		reasons := nonDependencyBlockingReasons(readiness)
 		if labels := readiness.DependencyLabels(); len(labels) != 0 {
 			if len(labels) != 1 || !strings.HasPrefix(labels[0], "test-detail") || len(reasons) != 0 {
-				t.Errorf("kind %s rendered %v on \"depends on:\" and %v in \"blocked:\"; a dependency belongs on \"depends on:\" alone, named by its id", kind, labels, reasons)
+				t.Errorf("kind %s rendered %v on \"blocked by:\" and %v in \"blocked:\"; a dependency belongs on \"blocked by:\" alone, named by its id", kind, labels, reasons)
 			}
 			continue
 		}

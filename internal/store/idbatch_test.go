@@ -154,8 +154,8 @@ func TestGetRelationsByIDsSpansEveryBatch(t *testing.T) {
 	// and the last, which is in the trailing partial batch.
 	wired := []int{0, idBatchSize + 1, subjectCount - 1}
 	for _, i := range wired {
-		mustRelate(t, ctx, st, subjects[i], sink.ID, "blocks")
-		mustRelate(t, ctx, st, source.ID, subjects[i], "blocks")
+		mustRelate(t, ctx, st, subjects[i], sink.ID, "blocked-by")
+		mustRelate(t, ctx, st, source.ID, subjects[i], "blocked-by")
 	}
 
 	rels, err := st.GetRelationsByIDs(ctx, subjects)
@@ -169,8 +169,8 @@ func TestGetRelationsByIDsSpansEveryBatch(t *testing.T) {
 		if !ok {
 			t.Fatalf("subject %d of %d (%s) is missing from the result: its batch was never queried", i, subjectCount, id)
 		}
-		if len(got.DependsOn) != 1 || got.DependsOn[0].ID != sink.ID {
-			t.Fatalf("subject %d of %d (%s) DependsOn = %v, want [%s] — a src_id batch went unqueried", i, subjectCount, id, ids(got.DependsOn), sink.ID)
+		if len(got.BlockedBy) != 1 || got.BlockedBy[0].ID != sink.ID {
+			t.Fatalf("subject %d of %d (%s) BlockedBy = %v, want [%s] — a src_id batch went unqueried", i, subjectCount, id, ids(got.BlockedBy), sink.ID)
 		}
 		if len(got.Blocks) != 1 || got.Blocks[0].ID != source.ID {
 			t.Fatalf("subject %d of %d (%s) Blocks = %v, want [%s] — a dst_id batch went unqueried", i, subjectCount, id, ids(got.Blocks), source.ID)

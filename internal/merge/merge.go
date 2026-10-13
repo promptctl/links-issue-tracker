@@ -160,7 +160,7 @@ func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeR
 	}
 
 	merged := model.Export{
-		Version:     maxInt(local.Version, remote.Version, base.Version),
+		Version:     model.ExportVersion,
 		WorkspaceID: local.WorkspaceID,
 		ExportedAt:  local.ExportedAt,
 		Issues:      mergedIssues,
@@ -477,17 +477,4 @@ func mergeEvents(scope issueScope, locals, remotes []model.IssueEvent) []model.I
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
-}
-
-func maxInt(values ...int) int {
-	if len(values) == 0 {
-		return 1
-	}
-	max := values[0]
-	for _, value := range values[1:] {
-		if value > max {
-			max = value
-		}
-	}
-	return max
 }

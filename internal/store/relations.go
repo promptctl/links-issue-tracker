@@ -15,23 +15,23 @@ import (
 
 // bucketRelations sorts the structural edges incident to focalID into the four
 // relation slices, hydrating counterparts from issuesByID. It is the single
-// definition of how a relation row maps to parent / child / depends-on / blocks
+// definition of how a relation row maps to parent / child / blocked-by / blocks
 // — shared by single-issue detail loading and batch relation loading so the
-// "blocks convention: src=dependent, dst=dependency" lives in exactly one place.
+// reading "src blocked-by dst" lives in exactly one place.
 // [LAW:single-enforcer] Relation-direction semantics decided once, here.
 func bucketRelations(focalID string, relations []model.Relation, issuesByID map[string]model.Issue, ancestry storage.RankAncestry) storage.IssueRelations {
 	out := storage.IssueRelations{
 		Children:  []model.Issue{},
-		DependsOn: []model.Issue{},
+		BlockedBy: []model.Issue{},
 		Blocks:    []model.Issue{},
 	}
 	for _, rel := range relations {
 		switch rel.Type {
-		case model.RelBlocks:
-			// blocks convention: src_id=dependent, dst_id=dependency.
+		case model.RelBlockedBy:
+			// src blocked-by dst: src waits, dst is what it waits for.
 			if rel.SrcID == focalID {
 				if dep, ok := issuesByID[rel.DstID]; ok {
-					out.DependsOn = append(out.DependsOn, dep)
+					out.BlockedBy = append(out.BlockedBy, dep)
 				}
 			}
 			if rel.DstID == focalID {
@@ -53,7 +53,7 @@ func bucketRelations(focalID string, relations []model.Relation, issuesByID map[
 		}
 	}
 	ancestry.Sort(out.Children)
-	ancestry.Sort(out.DependsOn)
+	ancestry.Sort(out.BlockedBy)
 	ancestry.Sort(out.Blocks)
 	return out
 }
@@ -154,7 +154,7 @@ func (s *Store) GetRelationsByIDs(ctx context.Context, ids []string) (map[string
 // GetRelationsByIDs returns. related-to is excluded so its endpoints are never
 // pulled into the batch's hydration set — that is the whole point of the
 // lightweight accessor vs GetIssueDetail.
-var structuralRelationTypes = []model.RelationType{model.RelBlocks, model.RelParentChild}
+var structuralRelationTypes = []model.RelationType{model.RelBlockedBy, model.RelParentChild}
 
 // listRelationsForIDs returns every structural relation row incident to any of
 // the given ids — the batch counterpart of listRelations, scoped to the edge
@@ -360,8 +360,9 @@ func addRelationTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
 	}
 	// [LAW:single-enforcer] Single-parent cardinality is enforced here for
 	// every write path, not only in SetParent: a single-valued type clears any
-	// existing edge from this src before inserting, so 'lit dep add --type
-	// parent-child' can never leave a child with two parents.
+	// existing edge from this src before inserting, so a parent-child edge
+	// written through AddRelation (an import, say) can never leave a child with
+	// two parents.
 	// [LAW:dataflow-not-control-flow] The clear-or-not choice is driven by the
 	// type's cardinality value, not by which store method the caller invoked.
 	if rel.Type.SingleValuedFromSrc() {
@@ -377,8 +378,8 @@ func addRelationTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
 // [LAW:dataflow-not-control-flow] The one branch here is the domain's own enum.
 func rejectCycleTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
 	switch rel.Type {
-	case model.RelBlocks:
-		// A rank order is a total order, and one that honors every blocks edge
+	case model.RelBlockedBy:
+		// A rank order is a total order, and one that honors every blocked-by edge
 		// exists iff there is no cycle, so a cycle is an unsatisfiable
 		// constraint set rather than an awkward shape.
 		if err := rejectBlocksCycle(ctx, tx, rel.SrcID, rel.DstID); err != nil {
@@ -440,22 +441,22 @@ func setSingleValuedEdgeTx(ctx context.Context, tx *sql.Tx, rel model.Relation) 
 	return insertRelationTx(ctx, tx, rel)
 }
 
-// rejectBlocksCycle errors if inserting the blocks edge dependent->dependency
+// rejectBlocksCycle errors if inserting the blocked-by edge dependent->dependency
 // would close a cycle in the precedence graph. A self-edge is the degenerate
 // 1-cycle; a longer cycle exists when the new dependent already precedes the
-// new dependency through existing blocks edges, since the new edge asserts the
+// new dependency through existing blocked-by edges, since the new edge asserts the
 // reverse. The check runs inside the mutation tx so it sees a consistent
 // snapshot of existing edges.
 func rejectBlocksCycle(ctx context.Context, tx *sql.Tx, dependent, dependency string) error {
 	if dependent == dependency {
-		return model.ValidationError{Message: fmt.Sprintf("blocks: %s cannot block itself", dependent)}
+		return model.ValidationError{Message: fmt.Sprintf("blocked-by: %s cannot be blocked by itself", dependent)}
 	}
 	edges, err := loadBlocksEdges(ctx, tx)
 	if err != nil {
-		return fmt.Errorf("blocks cycle check: %w", err)
+		return fmt.Errorf("blocked-by cycle check: %w", err)
 	}
 	if blocksPrecedes(blocksPrecedenceAdj(edges), dependent, dependency) {
-		return model.ValidationError{Message: fmt.Sprintf("blocks: cannot add %s depends-on %s — %s already depends on %s (directly or transitively), so this edge would close a dependency cycle, which has no valid rank order", dependent, dependency, dependency, dependent)}
+		return model.ValidationError{Message: fmt.Sprintf("blocked-by: cannot add %s blocked by %s — %s is already blocked by %s (directly or transitively), so this edge would close a dependency cycle, which has no valid rank order", dependent, dependency, dependency, dependent)}
 	}
 	return nil
 }
@@ -465,7 +466,7 @@ func rejectBlocksCycle(ctx context.Context, tx *sql.Tx, dependent, dependency st
 //
 // A hierarchy is a tree: every issue reaches a root by walking up, and that walk
 // is what container state derivation, the ancestor walk gating a leaf on its
-// container's blocks edges, and rank's top-level-ancestor resolution are all
+// container's blocked-by edges, and rank's top-level-ancestor resolution are all
 // built on. A cycle has no root, so those walks do not return a wrong answer —
 // they do not terminate, and hydrating any issue in the loop overflows the
 // stack. That is incoherent state rather than an unusual hierarchy, so the edge
@@ -673,8 +674,8 @@ func (s *Store) RemoveRelation(ctx context.Context, srcID, dstID string, relType
 		if affected == 0 {
 			return storage.NotFoundError{Entity: "relation", ID: fmt.Sprintf("src=%s dst=%s type=%s", srcID, dstID, relType)}
 		}
-		// `lit dep rm --type parent-child` is the other door onto a detach,
-		// so it meets ClearParent's rule: a leaf keeps a parent. Judged after
+		// Removing a parent-child edge is a detach whatever the caller, so it
+		// meets ClearParent's rule: a leaf keeps a parent. Judged after
 		// the delete, against the parent edges left, so a missing edge is
 		// still reported as missing; the refusal rolls the delete back.
 		// [LAW:single-enforcer]

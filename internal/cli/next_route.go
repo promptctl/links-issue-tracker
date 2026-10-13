@@ -690,7 +690,7 @@ func (o Exhausted) Error() string {
 // progress, and only then does it say so.
 func (o Exhausted) why() string {
 	stops := slices.DeleteFunc([]string{
-		describeReach(o.Blocked, "blocked on ", exhaustedNotes),
+		describeReach(o.Blocked, "blocked by ", exhaustedNotes),
 		describeReach(o.Held, "held here: ", exhaustedNotes),
 	}, func(clause string) bool { return clause == "" })
 	if len(stops) == 0 {
@@ -717,8 +717,8 @@ func (o Exhausted) outside() string {
 // event is cleared by that event, never by a ticket here. Filing alone clears
 // nothing either — the blocked work still waits on its blocker — so the route
 // names the edge too, and names it exactly: the blocker waits on the new
-// ticket. The blocker to name is one outside the scope; lit refuses a blocks
-// edge between two tickets of one epic.
+// ticket. The blocker to name is one outside the scope; lit refuses a
+// blocked-by edge between two tickets of one epic.
 func (o Exhausted) stay() []string {
 	clearable := slices.ContainsFunc(o.Blocked, func(blocker rowReach) bool {
 		return blocker.Kind != reachAwaitingOutside
@@ -726,7 +726,7 @@ func (o Exhausted) stay() []string {
 	if !clearable {
 		return nil
 	}
-	return []string{"to stay, file the ticket that clears a blocker " + o.home() + ", then make that blocker wait on it with `lit dep add --from <new> --to <blocker>`"}
+	return []string{"to stay, file the ticket that clears a blocker " + o.home() + ", then make that blocker blocked by it with `lit dep add <blocker> --blocked-by <new>`"}
 }
 
 // home is where the unblocking ticket is filed, spelled as the command: under

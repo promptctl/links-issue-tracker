@@ -184,7 +184,7 @@ func TestResolveIssueAssigneeTiebreakSymmetry(t *testing.T) {
 }
 
 func TestThreeWayUnionsConcurrentNonParentRelations(t *testing.T) {
-	// blocks / related-to are additively unioned: a blocks edge added on one side
+	// blocked-by / related-to are additively unioned: a blocked-by edge added on one side
 	// and a related-to edge added on the other both survive. They are different
 	// keys with no single-valued constraint, so unlike parent-child neither is
 	// pruned — concurrent links from two machines accrue rather than overwrite.
@@ -193,7 +193,7 @@ func TestThreeWayUnionsConcurrentNonParentRelations(t *testing.T) {
 	local := model.Export{
 		WorkspaceID: "wsA",
 		Issues:      issues,
-		Relations:   []model.Relation{{SrcID: "a", DstID: "b", Type: model.RelBlocks, CreatedAt: t1}},
+		Relations:   []model.Relation{{SrcID: "a", DstID: "b", Type: model.RelBlockedBy, CreatedAt: t1}},
 	}
 	remote := model.Export{
 		WorkspaceID: "wsB",
@@ -203,7 +203,7 @@ func TestThreeWayUnionsConcurrentNonParentRelations(t *testing.T) {
 	got := ThreeWay(base, local, remote)
 	var hasBlocks, hasRelated bool
 	for _, relation := range provisional(t, got).Relations {
-		if relation.SrcID == "a" && relation.DstID == "b" && relation.Type == model.RelBlocks {
+		if relation.SrcID == "a" && relation.DstID == "b" && relation.Type == model.RelBlockedBy {
 			hasBlocks = true
 		}
 		if relation.SrcID == "a" && relation.DstID == "c" && relation.Type == model.RelRelatedTo {

@@ -28,7 +28,7 @@ type rankRewrite struct {
 type blocksCycleError struct{ path []string }
 
 func (e *blocksCycleError) Error() string {
-	return fmt.Sprintf("blocks dependency cycle %s — a cycle has no valid rank order; break it by removing one edge with 'lit dep rm'", strings.Join(e.path, " -> "))
+	return fmt.Sprintf("blocked-by dependency cycle %s — a cycle has no valid rank order; break it by removing one edge with 'lit dep rm'", strings.Join(e.path, " -> "))
 }
 
 // repairRankOrder returns the rank writes that make every dependency outrank
@@ -45,7 +45,7 @@ func repairRankOrder(order []rankedIssue, edges []blocksEdge) ([]rankRewrite, er
 	return rankRewrites(order, target)
 }
 
-// projectEdges keeps the blocks edges that constrain the given order, deduped.
+// projectEdges keeps the blocked-by edges that constrain the given order, deduped.
 // An edge with an endpoint outside the order — closed, archived, or deleted
 // work — says nothing about where live work sits, and one edge counted twice
 // would leave its dependent blocked by a dependency that is only placed once.
@@ -230,7 +230,7 @@ func invertedEdges(order []rankedIssue, edges []blocksEdge) []blocksEdge {
 	return inverted
 }
 
-// blocksCycle returns one blocks dependency cycle among the issues in order, as
+// blocksCycle returns one blocked-by dependency cycle among the issues in order, as
 // a repeated-endpoint path, or nil when the edges that constrain order are
 // acyclic.
 //

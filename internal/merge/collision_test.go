@@ -251,7 +251,7 @@ func TestThreeWayDoesNotFuseCollidingChildRows(t *testing.T) {
 		return model.Export{
 			WorkspaceID: ws,
 			Issues:      append([]model.Issue{sixteen(hour, title)}, endpoints...),
-			Relations:   []model.Relation{{SrcID: "epic.16", DstID: endpoint, Type: model.RelBlocks, CreatedAt: born(hour)}},
+			Relations:   []model.Relation{{SrcID: "epic.16", DstID: endpoint, Type: model.RelBlockedBy, CreatedAt: born(hour)}},
 			Comments:    []model.Comment{{ID: "c-" + suffix, IssueID: "epic.16", Body: suffix, CreatedAt: born(hour)}},
 			Labels:      []model.Label{{IssueID: "epic.16", Name: suffix, CreatedAt: born(hour)}},
 			Events:      []model.IssueEvent{{ID: "e-" + suffix, IssueID: "epic.16", Reason: suffix, CreatedAt: born(hour)}},

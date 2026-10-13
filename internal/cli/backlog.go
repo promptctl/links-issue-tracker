@@ -14,7 +14,7 @@ import (
 // backlogPreamble explains what the backlog view is so an agent reading top to
 // bottom understands the ordering story before scanning rows. It stresses what
 // makes the order auditable: blocked items keep their ranked position, and the
-// surrounding context (epic, depends-on, blocking reasons) is visible. What the
+// surrounding context (epic, blocked-by, blocking reasons) is visible. What the
 // view does and does not contain is focusNotice's to say, not this constant's.
 //
 // It also has to state how the view says a group-scoped fact, because the view
@@ -286,7 +286,7 @@ func openingRun[T any, S comparable](value T, subject, above S) T {
 // printBacklogContext prints the indented context block under a single
 // backlog row. Every annotation kind has its own line shape so a reader
 // can scan vertically and see exactly why an item sits where it does:
-// "blocked: ..." surfaces non-dependency blockers, "depends on: ..." names
+// "blocked: ..." surfaces non-dependency blockers, "blocked by: ..." names
 // open dependencies, "in_progress: ..." surfaces age/orphan status, and
 // "unblocks: ..." shows leverage.
 func printBacklogContext(w io.Writer, entry annotation.AnnotatedIssue, unblocks []string, group backlogRowContext) error {
@@ -301,7 +301,7 @@ func printBacklogContext(w io.Writer, entry annotation.AnnotatedIssue, unblocks 
 			return err
 		}
 	}
-	if err := printIDListLine(w, contextIndent, "depends on", readiness.DependencyLabels()); err != nil {
+	if err := printIDListLine(w, contextIndent, "blocked by", readiness.DependencyLabels()); err != nil {
 		return err
 	}
 	if entry.State() == model.StateInProgress {
@@ -316,7 +316,7 @@ func printBacklogContext(w io.Writer, entry annotation.AnnotatedIssue, unblocks 
 }
 
 // nonDependencyBlockingReasons formats the classified blocking reasons that
-// aren't already represented by the "depends on:" line. Open dependencies are
+// aren't already represented by the "blocked by:" line. Open dependencies are
 // surfaced separately so a reader sees them as the concrete blocker IDs rather
 // than a category label; the sibling gate names its blocker too, because the
 // remedy differs from a declared edge's — close, re-rank, or re-lane the
@@ -324,7 +324,7 @@ func printBacklogContext(w io.Writer, entry annotation.AnnotatedIssue, unblocks 
 //
 // Dependencies, direct or inherited, are the ONE omission, and it is a placement
 // choice rather than a silence: this view prints them as concrete ids on its own
-// "depends on:" line. Every other blocking kind reaches the reader through
+// "blocked by:" line. Every other blocking kind reaches the reader through
 // BlockingReason.Phrase, the single vocabulary.
 // [LAW:one-source-of-truth] the registry is the single authority on what
 // blocks, Phrase on how it reads; rendering may not carry a shorter list of

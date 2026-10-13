@@ -1896,7 +1896,7 @@ func importTreeLeaf() appLeaf {
 // runImportTreeJSON consumes a JSON tree spec and creates issues in
 // dependency order with best-effort rollback on failure (see
 // Store.ImportTree). The spec is an array of records; each carries a
-// local_id used inside the spec to wire parent/depends_on refs. Real issue
+// local_id used inside the spec to wire parent/blocked_by refs. Real issue
 // IDs are generated at create time and printed as an ordered mapping. Run
 // `lit doctor` after a failed import to detect any orphans left if rollback
 // itself failed.
@@ -1906,7 +1906,7 @@ func importTreeLeaf() appLeaf {
 //	[
 //	  {"local_id": "epic-x", "title": "Build X", "type": "epic", "topic": "exporter", "priority": 0},
 //	  {"local_id": "task-1", "parent": "epic-x", "title": "Design", "type": "task", "topic": "exporter", "priority": 0},
-//	  {"local_id": "task-2", "parent": "epic-x", "depends_on": ["task-1"], "title": "Build", "type": "task", "topic": "exporter", "priority": 0}
+//	  {"local_id": "task-2", "parent": "epic-x", "blocked_by": ["task-1"], "title": "Build", "type": "task", "topic": "exporter", "priority": 0}
 //	]
 func runImportTreeJSON(ctx context.Context, stdout io.Writer, ap *app.App, data []byte) error {
 	specs, err := storage.ParseImportTreeSpecs(data)
@@ -1938,7 +1938,7 @@ func runImportTreeJSON(ctx context.Context, stdout io.Writer, ap *app.App, data 
 //
 // YAML shape — one document per issue, documents separated by `---`:
 //
-//	local_id: epic-x        # optional; lets a later document's parent/depends_on name this one
+//	local_id: epic-x        # optional; lets a later document's parent/blocked_by name this one
 //	title: Build X
 //	type: epic
 //	topic: x
