@@ -217,7 +217,7 @@ func TestSyncReconcileResolvedFinalizesWithAgentText(t *testing.T) {
 	}
 	res, err := syncB.SyncReconcileResolved(ctx, "origin", "master", []merge.ProseResolution{
 		{Fingerprint: pendingRes.Pending[0].Fingerprint(), Text: "both A's and B's intent merged"},
-	})
+	}, "judge")
 	if err != nil {
 		t.Fatalf("SyncReconcileResolved(B): %v", err)
 	}
@@ -235,6 +235,148 @@ func TestSyncReconcileResolvedFinalizesWithAgentText(t *testing.T) {
 	}
 	if fresh.State() != storage.SyncAhead {
 		t.Fatalf("post-finalize freshness = %q, want ahead (linear, fast-forward-pushable)", fresh.State())
+	}
+}
+
+// TestSyncReconcileResolvedRecordsTheMergedText drives a real reconcile in which
+// all three prose fields diverged, and proves the agent's merged text reaches
+// history the way an edit does: one event, by the resolving actor, with one
+// change row per field from the provisional value (ours) to the merged text,
+// stamped at the issue's new updated_at.
+func TestSyncReconcileResolvedRecordsTheMergedText(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	base := t.TempDir()
+	rootA := migratedDoltDir(t)
+	rootB := unrelatedDoltDir(t)
+	remoteURL := "file://" + filepath.Join(base, "remote")
+
+	id := seedReconcileRemote(t, ctx, rootA, remoteURL)
+	adoptRemote(t, ctx, rootB, remoteURL)
+
+	updateAndPush(t, ctx, rootA, id, storage.UpdateIssueInput{Title: strptr("A title"), Description: strptr("A desc"), Prompt: strptr("A prompt")})
+	updateLocal(t, ctx, rootB, id, storage.UpdateIssueInput{Title: strptr("B title"), Description: strptr("B desc"), Prompt: strptr("B prompt")})
+
+	syncB := openSyncOrFatal(t, ctx, rootB)
+	defer func() { _ = syncB.Close() }()
+	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+		t.Fatalf("SyncFetch(B): %v", err)
+	}
+	pendingRes, err := syncB.SyncReconcile(ctx, "origin", "master")
+	if err != nil {
+		t.Fatalf("SyncReconcile(B): %v", err)
+	}
+	if len(pendingRes.Pending) != 3 {
+		t.Fatalf("pending = %+v, want title, description and prompt", pendingRes.Pending)
+	}
+	merged := map[merge.ProseField]string{
+		merge.ProseTitle:       "A and B title",
+		merge.ProseDescription: "A and B desc",
+		merge.ProsePrompt:      "A and B prompt",
+	}
+	resolutions := make([]merge.ProseResolution, 0, len(pendingRes.Pending))
+	for _, p := range pendingRes.Pending {
+		resolutions = append(resolutions, merge.ProseResolution{Fingerprint: p.Fingerprint(), Text: merged[p.Field]})
+	}
+	res, err := syncB.SyncReconcileResolved(ctx, "origin", "master", resolutions, "judge")
+	if err != nil {
+		t.Fatalf("SyncReconcileResolved(B): %v", err)
+	}
+	if res.State != storage.SyncReconcileLinearized {
+		t.Fatalf("resolved state = %q, want %q", res.State, storage.SyncReconcileLinearized)
+	}
+	if res.ProseRecorded != 3 {
+		t.Errorf("ProseRecorded = %d, want 3", res.ProseRecorded)
+	}
+
+	events, err := syncB.ListEvents(ctx, id)
+	if err != nil {
+		t.Fatalf("ListEvents: %v", err)
+	}
+	var recorded []model.IssueEvent
+	for _, event := range events {
+		if event.Reason == proseResolvedReason {
+			recorded = append(recorded, event)
+		}
+	}
+	if len(recorded) != 1 {
+		t.Fatalf("events recording the merged text = %d, want 1: %+v", len(recorded), events)
+	}
+	event := recorded[0]
+	if event.Actor != "judge" {
+		t.Errorf("event actor = %q, want the resolving actor %q", event.Actor, "judge")
+	}
+	want := map[string]model.FieldChange{
+		"title":       {Field: "title", From: "B title", To: "A and B title"},
+		"description": {Field: "description", From: "B desc", To: "A and B desc"},
+		"prompt":      {Field: "prompt", From: "B prompt", To: "A and B prompt"},
+	}
+	if len(event.Changes) != len(want) {
+		t.Fatalf("event changes = %+v, want one row per resolved field: %+v", event.Changes, want)
+	}
+	for _, change := range event.Changes {
+		if change != want[change.Field] {
+			t.Errorf("change %q = %+v, want %+v", change.Field, change, want[change.Field])
+		}
+	}
+	got := getIssueOrFatal(t, ctx, syncB, id)
+	if got.Title != "A and B title" || got.Description != "A and B desc" || got.Prompt != "A and B prompt" {
+		t.Fatalf("issue after finalize = %q / %q / %q, want the merged texts", got.Title, got.Description, got.Prompt)
+	}
+	if !got.UpdatedAt.Equal(event.CreatedAt) {
+		t.Errorf("updated_at = %s, want the event's time %s", got.UpdatedAt, event.CreatedAt)
+	}
+}
+
+// TestSyncReconcileResolvedRecordsNothingForTheProvisionalText is the other side
+// of the record: an agent whose merge is the provisional text (ours) moved no
+// field, so history gains no event, exactly as for an edit restating a value.
+func TestSyncReconcileResolvedRecordsNothingForTheProvisionalText(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	base := t.TempDir()
+	rootA := migratedDoltDir(t)
+	rootB := unrelatedDoltDir(t)
+	remoteURL := "file://" + filepath.Join(base, "remote")
+
+	id := seedReconcileRemote(t, ctx, rootA, remoteURL)
+	adoptRemote(t, ctx, rootB, remoteURL)
+
+	updateAndPush(t, ctx, rootA, id, storage.UpdateIssueInput{Title: strptr("A title")})
+	updateLocal(t, ctx, rootB, id, storage.UpdateIssueInput{Title: strptr("B title")})
+
+	syncB := openSyncOrFatal(t, ctx, rootB)
+	defer func() { _ = syncB.Close() }()
+	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+		t.Fatalf("SyncFetch(B): %v", err)
+	}
+	pendingRes, err := syncB.SyncReconcile(ctx, "origin", "master")
+	if err != nil {
+		t.Fatalf("SyncReconcile(B): %v", err)
+	}
+	if len(pendingRes.Pending) != 1 {
+		t.Fatalf("expected one pending field, got %+v", pendingRes.Pending)
+	}
+	res, err := syncB.SyncReconcileResolved(ctx, "origin", "master", []merge.ProseResolution{
+		{Fingerprint: pendingRes.Pending[0].Fingerprint(), Text: "B title"},
+	}, "judge")
+	if err != nil {
+		t.Fatalf("SyncReconcileResolved(B): %v", err)
+	}
+	if res.State != storage.SyncReconcileLinearized {
+		t.Fatalf("resolved state = %q, want %q", res.State, storage.SyncReconcileLinearized)
+	}
+	if res.ProseRecorded != 0 {
+		t.Errorf("ProseRecorded = %d, want 0", res.ProseRecorded)
+	}
+	events, err := syncB.ListEvents(ctx, id)
+	if err != nil {
+		t.Fatalf("ListEvents: %v", err)
+	}
+	for _, event := range events {
+		if event.Reason == proseResolvedReason {
+			t.Fatalf("an unchanged merged text recorded an event: %+v", event)
+		}
 	}
 }
 
@@ -267,7 +409,7 @@ func TestSyncReconcileResolvedRejectsStaleResolutions(t *testing.T) {
 	// no live conflict, so the set is stale.
 	res, err := syncB.SyncReconcileResolved(ctx, "origin", "master", []merge.ProseResolution{
 		{Fingerprint: merge.ProsePending{IssueID: id, Field: merge.ProseDescription}.Fingerprint(), Text: "wrong field"},
-	})
+	}, "judge")
 	if err != nil {
 		t.Fatalf("SyncReconcileResolved(B): %v", err)
 	}

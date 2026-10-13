@@ -137,8 +137,8 @@ type Reconciler interface {
 	SyncReconcileCombine(ctx context.Context, remote string, branch string) (SyncReconcileResult, error)
 
 	// SyncReconcileResolved finishes a reconcile that was held for prose,
-	// splicing in the text a judge merged.
-	SyncReconcileResolved(ctx context.Context, remote string, branch string, resolutions []merge.ProseResolution) (SyncReconcileResult, error)
+	// landing the text a judge merged as actor's edit, recorded in history.
+	SyncReconcileResolved(ctx context.Context, remote string, branch string, resolutions []merge.ProseResolution, actor string) (SyncReconcileResult, error)
 
 	// SyncResolveUnrelated settles an unrelated-history divergence by taking
 	// one side wholesale. It destroys the other side's unique issues, which is

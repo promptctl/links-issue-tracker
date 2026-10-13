@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
@@ -196,4 +197,31 @@ func ApplyIssueFields(baseline model.Issue, in UpdateIssueInput) (model.Issue, [
 		changes = append(changes, model.FieldChange{Field: field.name, From: priors[i], To: current})
 	}
 	return issue, changes, nil
+}
+
+// ApplyProseFields lands a reconcile's merged prose on the provisional issue
+// the way any edit lands: stated on a patch and decided by ApplyIssueFields,
+// so each field the agent's text moves comes back as its change row, from the
+// provisional value to the merged text. The merged text is the agent's edit,
+// and an edit cannot be written without being recorded. [LAW:single-enforcer]
+//
+// The switch is the one mapping from a merge.ProseField to the patch pointer
+// that states it; a field it does not name is refused rather than dropped,
+// since dropping it would publish the provisional value as if it were merged.
+// [LAW:no-silent-failure]
+func ApplyProseFields(provisional model.Issue, texts merge.ProseTexts) (model.Issue, []model.FieldChange, error) {
+	var in UpdateIssueInput
+	for field, text := range texts {
+		switch field {
+		case merge.ProseTitle:
+			in.Title = &text
+		case merge.ProseDescription:
+			in.Description = &text
+		case merge.ProsePrompt:
+			in.Prompt = &text
+		default:
+			return model.Issue{}, nil, fmt.Errorf("issue %s: no editable field for merged prose field %q", provisional.ID, field)
+		}
+	}
+	return ApplyIssueFields(provisional, in)
 }

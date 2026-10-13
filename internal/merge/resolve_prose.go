@@ -24,7 +24,7 @@ type Fingerprint string
 
 // fingerprintBytes is how much of the digest a Fingerprint keeps. A pending set is
 // a handful of fields, and two of them sharing a truncation fail the bijection in
-// ApplyProseResolutions rather than receiving one text.
+// MatchProseResolutions rather than receiving one text.
 const fingerprintBytes = 6
 
 func (p ProsePending) Fingerprint() Fingerprint {
@@ -48,11 +48,11 @@ func ParseFingerprint(text string) (Fingerprint, bool) {
 // diverged on both sides: the single coherent Text that preserves BOTH the Ours
 // and Theirs intent. It is the enactment of the one judgment step the engine
 // deliberately refuses to make. [LAW:decomposition] The agent owns the decision
-// (the Text); this package owns only where that text lands in the export.
+// (the Text); this package owns only which live conflict that text settles.
 //
 // Fingerprint names the conflict the agent merged against, copied from the pending
 // field's guidance. It is looked up among the LIVE conflicts before the text is
-// spliced, so a merge produced for a since-changed conflict finds nothing and is
+// matched to a field, so a merge produced for a since-changed conflict finds nothing and is
 // rejected rather than silently applied. [LAW:no-silent-failure]
 type ProseResolution struct {
 	Fingerprint Fingerprint
@@ -68,21 +68,33 @@ type proseKey struct {
 	Field   ProseField
 }
 
-// ApplyProseResolutions turns a prose-pending merge into a fully settled export
-// by splicing the agent's merged text into the provisional rows — but ONLY when
-// the supplied resolutions are an exact bijection with the live pending set. A
-// resolution missing for a pending field, or a resolution for a field that is no
-// longer pending, returns ok=false: the caller re-derives and re-surfaces the
-// CURRENT divergence rather than committing against a stale picture.
-// [LAW:no-silent-failure] An incomplete or mismatched resolution never produces a
-// committable export, so a provisional prose value can never be published by
-// omission, and the agent can never silently overwrite a field whose divergence
-// changed underneath it. A merge holding an id collision has no export to splice
-// into at all, which Provisional reports rather than this function re-deriving.
+// ProseTexts is the agent's merged text for each resolved prose field of one
+// issue. It is what the agent decided and nothing more: where the text lands,
+// and the history that records it landing, belong to the field table that every
+// edit goes through (storage.ApplyProseFields). [LAW:decomposition]
+type ProseTexts map[ProseField]string
+
+// MatchProseResolutions pairs the agent's merged texts with the live pending
+// set of a prose-pending merge, and returns them, keyed by issue id, beside the
+// provisional export they settle — but ONLY when the supplied resolutions are an
+// exact bijection with the live pending set. A resolution missing for a pending
+// field, or a resolution for a field that is no longer pending, returns
+// ok=false: the caller re-derives and re-surfaces the CURRENT divergence rather
+// than committing against a stale picture. [LAW:no-silent-failure] An
+// incomplete or mismatched resolution never produces a committable export, so a
+// provisional prose value can never be published by omission, and the agent can
+// never silently overwrite a field whose divergence changed underneath it. A
+// merge holding an id collision has no export to settle at all, which
+// Provisional reports rather than this function re-deriving.
+//
+// The texts are matched, not spliced. Writing them is an edit like any other,
+// and an edit lands through the one table that records each field it moves, so
+// a resolved text cannot reach a ticket without reaching its history.
+// [LAW:single-enforcer]
 //
 // It is pure: the live pending set comes from the MergeResult, the merged text
 // from the agent — no IO, no clock. [LAW:effects-at-boundaries]
-func ApplyProseResolutions(result MergeResult, resolutions []ProseResolution) (model.Export, bool) {
+func MatchProseResolutions(result MergeResult, resolutions []ProseResolution) (model.Export, map[string]ProseTexts, bool) {
 	// Each pending field is addressed by the fingerprint of its LIVE conflict, so
 	// one lookup settles both which field a resolution is for and that it was
 	// merged against THIS conflict, not a since-changed one.
@@ -98,7 +110,7 @@ func ApplyProseResolutions(result MergeResult, resolutions []ProseResolution) (m
 		// rather than apply a stale merge. [LAW:no-silent-failure]
 		key, ok := pendingByFingerprint[resolution.Fingerprint]
 		if !ok {
-			return model.Export{}, false
+			return model.Export{}, nil, false
 		}
 		// A second resolution for the same field is an ambiguous, malformed set:
 		// silently keeping the last would finalize one of two conflicting texts the
@@ -106,7 +118,7 @@ func ApplyProseResolutions(result MergeResult, resolutions []ProseResolution) (m
 		// bijection count below cannot catch this on its own — a duplicate key keeps
 		// the map the same size — so the duplicate must fail here. [LAW:no-silent-failure]
 		if _, dup := resolvedByKey[key]; dup {
-			return model.Export{}, false
+			return model.Export{}, nil, false
 		}
 		resolvedByKey[key] = resolution.Text
 	}
@@ -115,36 +127,21 @@ func ApplyProseResolutions(result MergeResult, resolutions []ProseResolution) (m
 	// the fingerprint index: two live conflicts that truncate to one fingerprint
 	// share an index entry, and must fail here instead of passing as one field.
 	if len(resolvedByKey) != len(result.Pending) {
-		return model.Export{}, false
+		return model.Export{}, nil, false
 	}
 
 	export, ok := result.Provisional()
 	if !ok {
-		return model.Export{}, false
+		return model.Export{}, nil, false
 	}
-	issues := make([]model.Issue, len(export.Issues))
-	copy(issues, export.Issues)
-	for i := range issues {
-		applyIssueProse(&issues[i], resolvedByKey)
-	}
-	export.Issues = issues
-	return export, true
-}
-
-// applyIssueProse writes the resolved text for each of an issue's pending prose
-// fields. [LAW:single-enforcer] This is the one mapping from ProseField to the
-// concrete export field; ResolveIssue emits these same three fields and nothing
-// else ever reaches the agent surface.
-func applyIssueProse(issue *model.Issue, resolved map[proseKey]string) {
-	for field, set := range map[ProseField]func(string){
-		ProseTitle:       func(text string) { issue.Title = text },
-		ProseDescription: func(text string) { issue.Description = text },
-		ProsePrompt:      func(text string) { issue.Prompt = text },
-	} {
-		if text, ok := resolved[proseKey{IssueID: issue.ID, Field: field}]; ok {
-			set(text)
+	texts := make(map[string]ProseTexts, len(resolvedByKey))
+	for key, text := range resolvedByKey {
+		if texts[key.IssueID] == nil {
+			texts[key.IssueID] = ProseTexts{}
 		}
+		texts[key.IssueID][key.Field] = text
 	}
+	return export, texts, true
 }
 
 // SortPending orders a pending set deterministically (by issue id, then field) so

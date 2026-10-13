@@ -393,15 +393,15 @@ Fields (`sync_schema_guard.go`): `Remote`, `Branch`, `RemoteVersion int64`, `Bin
 
 ### 5.5 Settle policies (`settleFn`)
 
-`type settleFn func(merge.MergeResult) (model.Export, []merge.ProsePending)` (`sync_reconcile.go`).
+`type settleFn func(merge.MergeResult) (settlement, error)` (`sync_reconcile.go`); `settlement{export model.Export; pending []merge.ProsePending; proseRecorded int}`. `mergeAndReplay` returns a settle error as is, before the pending check.
 
-- `autonomousSettle` (`sync_reconcile.go`): if `merged.Settled()` returns `ok` → that export, no pending. Otherwise `(model.Export{}, merged.Pending)`. **Prose is never auto-committed by picking a side.**
-- `resolvedSettle(resolutions)` (`sync_reconcile.go`): first honor `merged.Settled()` (the divergence converged on its own between the agent reading and finalizing). Then `merge.ApplyProseResolutions(merged, resolutions)` — accepted **only** when the resolutions are an exact bijection with the live pending set. A stale/partial set falls through to `(model.Export{}, merged.Pending)`, re-surfacing the CURRENT pending. Test `TestSyncReconcileResolvedRejectsStaleResolutions` (`sync_reconcile_test.go`).
+- `autonomousSettle` (`sync_reconcile.go`): if `merged.Settled()` returns `ok` → that export, no pending. Otherwise the pending set, `merged.Pending`. **Prose is never auto-committed by picking a side.**
+- `(*Store).resolvedSettle(resolutions, actor)` (`sync_reconcile.go`): first honor `merged.Settled()` (the divergence converged on its own between the agent reading and finalizing). Then `merge.MatchProseResolutions(merged, resolutions)` — accepted **only** when the resolutions are an exact bijection with the live pending set. A stale/partial set falls through to the pending set `merged.Pending`, re-surfacing the CURRENT pending. A matched set goes to `landProse(export, texts, actor)` (`sync_reconcile.go`): it copies the issue and event slices; per issue with texts, `storage.ApplyProseFields` (an error is wrapped `land merged text on <id>: …`); when it returns change rows, `newEvent(id, "", proseResolvedReason, actor, changes)` is appended to the events, the issue's `UpdatedAt` becomes the event's `CreatedAt`, and `proseRecorded` grows by the row count. `proseResolvedReason = "merged both sides' text in lit sync reconcile resolve"`. `mergeAndReplay` copies `proseRecorded` to `result.ProseRecorded`. Tests `TestSyncReconcileResolvedRecordsTheMergedText`, `TestSyncReconcileResolvedRecordsNothingForTheProvisionalText` (`sync_reconcile_test.go`). Test `TestSyncReconcileResolvedRejectsStaleResolutions` (`sync_reconcile_test.go`).
 
 ### 5.6 Public reconcile entry points
 
 - `SyncReconcile(ctx, remote, branch)` (`sync_reconcile.go`) = `reconcile(..., autonomousSettle, detectOnly)`.
-- `SyncReconcileResolved(ctx, remote, branch, resolutions)` (`sync_reconcile.go`) = `reconcile(..., resolvedSettle(resolutions), unionCombine)` — one finalize path serving both shared-history three-way and unrelated combine (`sync_reconcile.go`).
+- `SyncReconcileResolved(ctx, remote, branch, resolutions, actor)` (`sync_reconcile.go`) = `reconcile(..., s.resolvedSettle(resolutions, actor), unionCombine)` — one finalize path serving both shared-history three-way and unrelated combine (`sync_reconcile.go`).
 - `SyncReconcileCombine(ctx, remote, branch)` (`sync_reconcile.go`) = `reconcile(..., autonomousSettle, unionCombine)`. On a divergence **with** a common base it merges through that base like an ordinary reconcile (`sync_reconcile.go`).
 
 ### 5.7 `reconcilePlan` and its capture
@@ -553,7 +553,7 @@ Invariant: the data branch is at its pre-reconcile head before step 12 and at th
 
 ### 5.17 Reconcile result vocabulary
 
-`SyncReconcileResult` at `/Users/bmf/code/links-issue-tracker/internal/storage/sync.go`: `State`, `Ahead`, `Behind`, `LocalHead`, `RemoteHead`, `BaseCommit`, `Pending []merge.ProsePending`, `Collisions []merge.Collision`, `Unrelated *UnrelatedInventory`, `Replayed int`, `CarriedPurges int`, `Rehomed []Rehomed`.
+`SyncReconcileResult` at `/Users/bmf/code/links-issue-tracker/internal/storage/sync.go`: `State`, `Ahead`, `Behind`, `LocalHead`, `RemoteHead`, `BaseCommit`, `Pending []merge.ProsePending`, `Collisions []merge.Collision`, `Unrelated *UnrelatedInventory`, `Replayed int`, `CarriedPurges int`, `Rehomed []Rehomed`, `ProseRecorded int`.
 
 States and their string values (`storage/sync.go`):
 - `SyncReconcileNotDiverged = "not_diverged"`
@@ -1041,7 +1041,7 @@ collision.go: `Collision{IssueID string; Ours model.Issue; Theirs model.Issue}` 
 
 resolve.go: `ProseField string` with `ProseTitle="title"`, `ProseDescription="description"`, `ProsePrompt="agent_prompt"`; `ProsePending{IssueID,Field,Base,Ours,Theirs}` with JSON tags `issue_id/field/base/ours/theirs`; `IssueResolution{merged model.Issue; Pending []ProsePending}` with `Settled() (model.Issue, bool)` and `Provisional() model.Issue`; `ResolveIssue(in SameEntity) IssueResolution`; `resolver` struct; `twoTier[T comparable]`; `(*resolver).prose`; `(*resolver).resolveStatus`; `(*resolver).tiebreak`; `typedTiebreak[T ~string]`; `resolveClosePayload`; `closePayload`; `closePayloadOf`; `(*resolver).derivedFlagTime`; `higher[T cmp.Ordered]`; `stateRank`; `stateFromRank`; `boolBase`; `mergeLabelNames`; `presentOr`; `nameSet`; `unionNameSet`; `latest`; `earliestTime`; `cloneTimePtr`.
 
-resolve_prose.go: `type Fingerprint string`; `fingerprintBytes = 6`; `(ProsePending) Fingerprint() Fingerprint`; `ParseFingerprint(text string) (Fingerprint, bool)`; `ProseResolution{Fingerprint, Text}` — **no JSON tags**; `proseKey{IssueID, Field}`; `ApplyProseResolutions(result MergeResult, resolutions []ProseResolution) (model.Export, bool)`; `applyIssueProse`; `SortPending`.
+resolve_prose.go: `type Fingerprint string`; `fingerprintBytes = 6`; `(ProsePending) Fingerprint() Fingerprint`; `ParseFingerprint(text string) (Fingerprint, bool)`; `ProseResolution{Fingerprint, Text}` — **no JSON tags**; `proseKey{IssueID, Field}`; `type ProseTexts map[ProseField]string`; `MatchProseResolutions(result MergeResult, resolutions []ProseResolution) (model.Export, map[string]ProseTexts, bool)`; `SortPending`.
 
 ### 11.2 `ThreeWay` — export-level algorithm
 
@@ -1241,35 +1241,33 @@ Plus `resolve_test.go`: both archive (t2 vs t1) off a live base → `Archived{At
 
 **`ParseFingerprint(text)`** (resolve_prose.go): returns `(Fingerprint(text), true)` only when `hex.DecodeString(text)` succeeds, yields exactly `fingerprintBytes` bytes, and `hex.EncodeToString` of those bytes equals `text`, so only exactly 12 lowercase hex characters pass; anything else returns `("", false)`.
 
-**`ApplyProseResolutions(result, resolutions) (model.Export, bool)`** (resolve_prose.go):
+**`MatchProseResolutions(result, resolutions) (model.Export, map[string]ProseTexts, bool)`** (resolve_prose.go):
 1. Builds `pendingByFingerprint map[Fingerprint]proseKey` from `result.Pending`: live `Fingerprint()` → `{IssueID, Field}` (resolve_prose.go). Pending fields that share a fingerprint collapse to one entry (last wins).
 2. Per supplied resolution, looked up by `resolution.Fingerprint`:
-   - **Reject** (`return model.Export{}, false`) if the fingerprint is not in `pendingByFingerprint` (resolve_prose.go).
+   - **Reject** (`return model.Export{}, nil, false`) if the fingerprint is not in `pendingByFingerprint` (resolve_prose.go).
    - **Reject** if the looked-up `{IssueID, Field}` already has a text in this call — a second resolution for one field (resolve_prose.go).
    - Else record `resolvedByKey[key] = resolution.Text` (resolve_prose.go).
 3. **Reject** if `len(resolvedByKey) != len(result.Pending)` — the completeness gate, counted against the pending slice rather than `pendingByFingerprint`, so pending fields that collapsed to one fingerprint entry fail it (resolve_prose.go).
 4. **Reject** if `result.Provisional()` returns `ok=false`, which it does when the merge holds an id collision (resolve_prose.go; merge.go).
-5. On success: allocates a **fresh** `[]model.Issue` and copies the provisional slice (resolve_prose.go), applies `applyIssueProse` to each element, assigns the new slice, returns `(export, true)`. The original `MergeResult`'s issue slice is not mutated; Relations/Comments/Labels/Events are shared by reference with the provisional export.
+5. On success: returns the provisional export unchanged, the texts regrouped from `resolvedByKey` as `map[issueID]ProseTexts`, and `true` (resolve_prose.go). Nothing is written into the export.
 6. Pure — no IO, no clock (resolve_prose.go).
 
-Every rejection returns the **zero** `model.Export{}` paired with `false` (resolve_prose.go) — never a partially-spliced export.
-
-**`applyIssueProse`** (resolve_prose.go): the single `ProseField` → field mapping as a map of setter closures — `ProseTitle → issue.Title`, `ProseDescription → issue.Description`, `ProsePrompt → issue.Prompt`. A field is written only if `resolved[{issue.ID, field}]` exists.
+Every rejection returns the **zero** `model.Export{}` and nil texts paired with `false` (resolve_prose.go).
 
 **`SortPending`** (resolve_prose.go): copies the slice and sorts by `IssueID`, then `Field` (raw string, so `"agent_prompt" < "description" < "title"`). Does not mutate the input. Not called anywhere inside the package.
 
 Prose tests (`resolve_prose_test.go`), fixture `prosePendingFixture` = one issue `i1` with concurrent title *and* description rewrites → exactly 2 pending; `fingerprintOf` returns a pending field's live fingerprint:
-- — exact bijection with live fingerprints splices `merged-title`/`merged-desc`, and the original provisional export is asserted **not** mutated in place.
+- — exact bijection with live fingerprints returns `{title: merged-title, description: merged-desc}` for `i1` alone, and the export's title is the provisional one.
 - — one resolution for a two-field pending set → rejected.
 - — fingerprint `"deadbeefcafe"`, which names no live conflict, plus a valid description resolution → whole set rejected.
 - — two resolutions carrying the title's fingerprint plus the description's → rejected; the comment notes the count gate alone cannot catch this.
-- — issues `i1` and `i2` with the same title rewrite on each → 2 pending fields; resolving each by its own fingerprint succeeds and gives each issue its own merged text.
+- — issues `i1` and `i2` with the same title rewrite on each → 2 pending fields; resolving each by its own fingerprint succeeds and returns each issue its own merged text.
 - — `ParseFingerprint` returns a live fingerprint unchanged and refuses `""`, `"deadbeef"`, `"deadbeefcafe00"`, `"DEADBEEFCAFE"`, `"deadbeefcafg"`, and `"i1:title:<live fingerprint>"`.
-- — fixture `proseAndCollisionFixture` holds one pending title and one id collision; an exact bijection is rejected and the returned export has no issues.
+- — fixture `proseAndCollisionFixture` holds one pending title and one id collision; an exact bijection is rejected, the texts are nil, and the returned export has no issues.
 
 ### 11.8 Errors, sentinels, aborts in `internal/merge`
 
-The package declares **no** error type, no sentinel `var Err...`, and **no function returns `error`**. Every failure is a `bool` second return: `MergeResult.Settled` (merge.go), `MergeResult.Provisional` (merge.go), `IssueResolution.Settled` (resolve.go), `ParseFingerprint` (resolve_prose.go), `ApplyProseResolutions` (resolve_prose.go).
+The package declares **no** error type, no sentinel `var Err...`, and **no function returns `error`**. Every failure is a `bool` second return: `MergeResult.Settled` (merge.go), `MergeResult.Provisional` (merge.go), `IssueResolution.Settled` (resolve.go), `ParseFingerprint` (resolve_prose.go), `MatchProseResolutions` (resolve_prose.go).
 
 The only explicit abort is `panic(err)` when `model.HydrateStatus` returns an error inside `resolveStatus` (resolve.go). Implicit panics reachable from this package: `maxString` on an empty slice (merge.go, only called at merge.go with the non-empty `path[idx:]`); `issueProjectionFrom → issue.Capabilities() → mustLifecycle` on an unhydrated non-container (`/Users/bmf/code/links-issue-tracker/internal/model/model.go`), reached from `issueChanged` for every id (merge.go); `model.RetentionTimestamps` on an illegal retention variant (`/Users/bmf/code/links-issue-tracker/internal/model/lifecycle/retention.go`), called at resolve.go; `merged.SetRetention(...)` on an illegal retention variant (`model.go`), called at resolve.go. `ResolveIssue` dereferences no caller-supplied pointer that can be nil: `ours` and `theirs` are addresses of `SameEntity` fields, and `base` is dereferenced only when `hasBase` (resolve.go).
 
