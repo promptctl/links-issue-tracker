@@ -269,7 +269,7 @@ func newLeaf() appLeaf {
 	prompt := fs.String("prompt", "", "Reusable agent prompt for the work this issue captures")
 	issueType := fs.String("type", string(model.TypeTask), "Issue type: "+issueTypeChoices())
 	topic := fs.String("topic", "", "Required immutable issue topic slug (1-2 words; stable area of focus; e.g., 'refactor' or 'field-history')")
-	parentID := fs.String("parent", "", "Optional parent issue ID; child IDs become parentID.<hash>")
+	parentID := fs.String("parent", "", "Epic the ticket lives inside — required for every type but epic, which may be top-level or inside another epic; child IDs become parentID.<hash>")
 	priority := fs.String("priority", model.PriorityNormal.String(), "Priority: "+priorityChoices())
 	assignee := fs.String("assignee", "", "Assignee")
 	labels := fs.String("labels", "", "Comma-separated labels")
@@ -312,9 +312,14 @@ func newLeaf() appLeaf {
 // it follows up — under that ticket's own parent, ranked among the same epic's
 // children — never under it: nesting new work inside finished work puts the
 // open follow-up out of its epic's rank order and turns the closed ticket into
-// an accidental container. The link to the ticket it follows up is the row's
-// FollowsUp, which `lit show` renders on both ends. Topic inherits from that
-// ticket when omitted; description defaults to a reference back to it.
+// an accidental container. Beside a top-level epic is the top level, where
+// only an epic may live, so a follow-up of one is filed as an epic
+// (`--type epic`) or in the epic it belongs to (`--parent`), and the store
+// refuses anything else. --parent files any follow-up in the epic it names
+// instead of beside --on, and the follow-up keeps its link either way. The
+// link to the ticket it follows up is the row's FollowsUp, which `lit show`
+// renders on both ends. Topic inherits from that ticket when omitted;
+// description defaults to a reference back to it.
 //
 // See design-docs/preparing-the-next-loop.md for the principle this
 // implements (capture-at-close affordances).
@@ -325,6 +330,7 @@ func followupLeaf() appLeaf {
 	description := fs.String("description", "", "Optional description; defaults to a reference back to --on")
 	prompt := fs.String("prompt", "", "Optional reusable agent prompt for the follow-up")
 	issueType := fs.String("type", string(model.TypeTask), "Issue type: "+issueTypeChoices())
+	parent := fs.String("parent", "", "Epic to file the follow-up in; defaults to the parent of --on, beside it")
 	topic := fs.String("topic", "", "Topic slug; inherits from --on when omitted")
 	priority := fs.String("priority", model.PriorityNormal.String(), "Priority: "+priorityChoices())
 	assignee := fs.String("assignee", "", "Assignee")
@@ -334,7 +340,7 @@ func followupLeaf() appLeaf {
 	// and a value typed where no positional is taken. It is declared outside the
 	// work because the seam's arity check runs first and cannot reach a sentence
 	// written inside it. [LAW:one-source-of-truth]
-	usage := "usage: lit followup --on <id> --title <text> [--description <text>] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--top]"
+	usage := "usage: lit followup --on <id> --title <text> [--description <text>] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--parent <epic-id>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--top]"
 	return appLeaf{fs: fs, positionals: 0, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		onID := strings.TrimSpace(*on)
 		titleValue := strings.TrimSpace(*title)
@@ -347,11 +353,13 @@ func followupLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		// A follow-up of a top-level ticket is itself top-level: the empty
-		// parent id is the same value the parentless case already files under.
-		// [LAW:dataflow-not-control-flow]
-		parentID := ""
-		if origin.Parent != nil {
+		// The follow-up lands where --parent names, or beside --on: under its
+		// parent, or at the top level for a top-level --on, the empty parent id
+		// being the value a top-level create carries. The store judges the
+		// parent against the follow-up's type as it judges every create.
+		// [LAW:dataflow-not-control-flow] [LAW:single-enforcer]
+		parentID := strings.TrimSpace(*parent)
+		if parentID == "" && origin.Parent != nil {
 			parentID = origin.Parent.ID
 		}
 		resolvedTopic := strings.TrimSpace(*topic)

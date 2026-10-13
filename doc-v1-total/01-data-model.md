@@ -105,11 +105,15 @@ Deleting an archived issue drops the archive stamp, so a later `restore` always 
 
 An issue that is archived or deleted is **frozen**. The single program-wide definition of "still unfinished work" is `InPlay`: not frozen and not closed (`model.go`). Readiness gating and claim derivation both read this one predicate.
 
+### Containment
+
+Every ticket lives inside a container (`internal/storage/containment.go`). A leaf — `task`, `feature`, `bug`, `chore` — always has a parent, and every parent is an epic, so only an epic may be top-level and an epic may sit inside another epic. The rule is enforced where the hierarchy is written, in both engines, as three refusals, each a `model.ValidationError`: a create of a leaf with no parent (`storage.RejectLeafWithoutParent`), a create, reparent or parent-child edge naming a parent that is not an epic (`storage.RejectParentThatIsNotAContainer`), and a detach that would leave a leaf with no parent (`storage.RejectDetachingALeaf`, asked of a removed edge through `storage.RejectDetachingParentEdge`) — detaching otherwise only lifts a nested epic to the top level. A type change across the container line is refused by the field patch (`internal/storage/fields.go`), so neither half can be broken by retyping an endpoint. Data restored from before the rule (migration v7, `05-sync-merge-compaction.md`) is the one source of a leaf parent or a parentless leaf, and `lit doctor` warns on each (`04-store-operations.md`).
+
 ## Lanes
 
 A **lane** partitions an epic's children into parallel, rank-ordered sub-sequences: children in the same lane are sequenced by rank (an earlier open sibling blocks a later one — see readiness in `06-issue-commands.md`); children in different lanes proceed in parallel (`model.go`). The empty string is the default lane, so an epic that declares no lanes is one fully-sequential lane, not a special case.
 
-Lane identity is `(epic, lane-string)` — the same lane spelling under two different epics is two different lanes. An issue with no parent, or whose parent is not a container, is a "lane of one" keyed by its own ID (`model.go`). Lanes render as `epic#lane` (the default lane as `epic#`), a solo lane as the bare issue ID (`model.go`). The lane is the unit a checkout can claim (see `08-claims-and-identity.md`).
+Lane identity is `(epic, lane-string)` — the same lane spelling under two different epics is two different lanes. An issue with no parent, or whose parent is not a container, is a "lane of one" keyed by its own ID (`model.go`) — a top-level epic, under containment; a leaf reaches that arm only from restored data. Lanes render as `epic#lane` (the default lane as `epic#`), a solo lane as the bare issue ID (`model.go`). The lane is the unit a checkout can claim (see `08-claims-and-identity.md`).
 
 ## Relations
 
@@ -118,7 +122,7 @@ A relation is a typed directed edge between two issues: `src_id`, `dst_id`, `typ
 | Type | Directionality | Multiplicity |
 |---|---|---|
 | `blocks` | directed | many-to-many |
-| `parent-child` | directed | a child has at most one parent (`relation_type.go`) |
+| `parent-child` | directed | a child has at most one parent (`relation_type.go`); a leaf has exactly one, and every parent is an epic (`containment.go`) |
 | `related-to` | undirected | many-to-many |
 
 Two storage canonicalizations matter for anything reading rows directly:

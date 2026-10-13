@@ -55,10 +55,13 @@ func litRepoForCadence(t *testing.T) (dir, marker string) {
 	return dir, marker
 }
 
+// newTicket is the one write these tests make. It creates an epic because an
+// epic is the one ticket that lives at the top level; which write it is does
+// not matter to the gate, only that the store was written.
 func newTicket(t *testing.T, dir string) {
 	t.Helper()
 	runCLIInDir(t, dir, "new",
-		"--title", "cadence-ticket", "--description", "d", "--topic", "demo", "--type", "task")
+		"--title", "cadence-ticket", "--description", "d", "--topic", "demo", "--type", "epic")
 }
 
 // A mutating command runs the backstop: only a mutation grows the store, and a

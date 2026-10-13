@@ -55,17 +55,23 @@ func copyTree(t *testing.T, src, dst string) {
 	}
 }
 
-// seedRealWorkspace builds a real Dolt workspace at doltRoot carrying one issue
-// per title, then returns its below-the-gate dump. The dump's DoltHead is the
+// seedRealWorkspace builds a real Dolt workspace at doltRoot carrying one epic
+// and, inside it, one issue per title, then returns its below-the-gate dump. The dump's DoltHead is the
 // workspace's actual live head, so a candidate Recover builds from it promotes
 // cleanly unless the workspace advances afterward — the realistic recover input,
 // unlike a synthetic dump whose head would never match a real canonical.
 func seedRealWorkspace(t *testing.T, ctx context.Context, doltRoot string, titles ...string) RawDump {
 	t.Helper()
 	withStore(t, ctx, doltRoot, func(st *Store) {
+		epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{
+			Title: "recovery epic", IssueType: "epic", Topic: "recovery", Prefix: "links",
+		})
+		if err != nil {
+			t.Fatalf("seed epic: %v", err)
+		}
 		for _, title := range titles {
 			if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-				Title: title, IssueType: "task", Topic: "recovery", Prefix: "links",
+				Title: title, IssueType: "task", Topic: "recovery", Prefix: "links", ParentID: epic.ID,
 			}); err != nil {
 				t.Fatalf("seed issue %q: %v", title, err)
 			}
@@ -150,8 +156,8 @@ func TestPromoteCandidateEndToEnd(t *testing.T) {
 
 	dump := seedRealWorkspace(t, ctx, canonical, "alpha rescue subject", "beta rescue subject")
 	originalIDs := freshExportIDs(t, ctx, canonical)
-	if len(originalIDs) != 2 {
-		t.Fatalf("seed produced %d issues, want 2", len(originalIDs))
+	if len(originalIDs) != 3 {
+		t.Fatalf("seed produced %d issues, want 3 (the epic and its two subjects)", len(originalIDs))
 	}
 
 	outcome, err := Recover(ctx, canonical, dump, DeterministicMapper, 1)
@@ -184,8 +190,8 @@ func TestPromoteCandidateEndToEnd(t *testing.T) {
 	// every source issue conserved. Read via a fresh path so the assertion reflects
 	// the swapped-in directory on disk, not a cached engine for the canonical path.
 	promotedIDs := freshExportIDs(t, ctx, canonical)
-	if len(promotedIDs) != 2 {
-		t.Fatalf("promoted workspace lost data: want 2 issues, got %d", len(promotedIDs))
+	if len(promotedIDs) != 3 {
+		t.Fatalf("promoted workspace lost data: want 3 issues, got %d", len(promotedIDs))
 	}
 	for id := range originalIDs {
 		if !promotedIDs[id] {
@@ -228,8 +234,14 @@ func TestPromoteCandidateAbortsOnConcurrentCommit(t *testing.T) {
 	// the candidate was rebuilt from.
 	var concurrentID string
 	withStore(t, ctx, canonical, func(st *Store) {
+		epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{
+			Title: "landed during recovery epic", IssueType: "epic", Topic: "recovery", Prefix: "links",
+		})
+		if err != nil {
+			t.Fatalf("concurrent commit (epic): %v", err)
+		}
 		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-			Title: "landed during recovery", IssueType: "task", Topic: "recovery", Prefix: "links",
+			Title: "landed during recovery", IssueType: "task", Topic: "recovery", Prefix: "links", ParentID: epic.ID,
 		})
 		if err != nil {
 			t.Fatalf("concurrent commit: %v", err)

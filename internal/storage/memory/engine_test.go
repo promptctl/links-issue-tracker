@@ -25,6 +25,14 @@ func TestConcurrentUseIsSerialized(t *testing.T) {
 	engine := newEngine(t, storage.SystemClock)
 	ctx := context.Background()
 
+	// One epic, made before the writers start, homes every leaf they file.
+	epic, err := engine.CreateIssue(ctx, storage.CreateIssueInput{
+		Title: "epic", Topic: "core", Prefix: "conf", IssueType: model.TypeEpic,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+
 	const writers = 8
 	const perWriter = 6
 	var wg sync.WaitGroup
@@ -34,9 +42,10 @@ func TestConcurrentUseIsSerialized(t *testing.T) {
 			defer wg.Done()
 			for i := range perWriter {
 				issue, err := engine.CreateIssue(ctx, storage.CreateIssueInput{
-					Title:  fmt.Sprintf("writer %d item %d", writer, i),
-					Topic:  "core",
-					Prefix: "conf",
+					Title:    fmt.Sprintf("writer %d item %d", writer, i),
+					Topic:    "core",
+					Prefix:   "conf",
+					ParentID: epic.ID,
 				})
 				if err != nil {
 					t.Errorf("CreateIssue error = %v", err)
@@ -59,12 +68,13 @@ func TestConcurrentUseIsSerialized(t *testing.T) {
 
 	// Every write landed exactly once: the rank order and the issue table are
 	// two views of one set, and a lost or doubled update would show as a
-	// disagreement between them.
+	// disagreement between them. The epic is the one row the writers did not
+	// file.
 	count, err := engine.LocalIssueCount(ctx)
 	if err != nil {
 		t.Fatalf("LocalIssueCount error = %v", err)
 	}
-	if want := int64(writers * perWriter); count != want {
+	if want := int64(writers*perWriter + 1); count != want {
 		t.Errorf("LocalIssueCount = %d, want %d", count, want)
 	}
 	listed, err := engine.ListIssues(ctx, storage.ListIssuesFilter{})

@@ -115,6 +115,7 @@ Parentage gets its own two verbs rather than riding `AddRelation` because it is 
 
 **`ClearParent(ctx, childID string) error`** — `internal/storage/contract.go`
 - Clearing a child that has no parent is `NotFoundError`, not a silent success (`internal/storage/contract.go`).
+- Only a container can be detached: clearing a leaf is refused with `storage.RejectDetachingALeaf` (`internal/storage/containment.go`), the same rule `RemoveRelation` applies through `storage.RejectDetachingParentEdge` to a leaf's last parent-child edge; `AddRelation`/`SetParent` refuse a parent that is not a container with `storage.RejectParentThatIsNotAContainer`, and `CreateIssue` refuses a leaf with no parent with `storage.RejectLeafWithoutParent` (`internal/storage/containment.go`).
 
 ---
 
@@ -140,7 +141,7 @@ Parentage gets its own two verbs rather than riding `AddRelation` because it is 
 **`RankAncestry`** — `struct{ places map[string][]rankPlace; conflicts []ParentConflict }`, `internal/storage/rank.go`
 - For each issue a container frames, the place (`rankPlace{rank, id}`) of each of its containers, outermost first; an issue absent from `places` is top level.
 - `NewRankAncestry(links []ParentLink) RankAncestry` — never fails and never refuses. A child named by more than one link is placed under the lowest `ParentID` and recorded as a `ParentConflict{ChildID, Parents}` (parents lowest id first); a chain that returns to an issue already walked ends where it would repeat.
-- `Conflicts() []ParentConflict` — by child id; `Store.Doctor` appends each `Finding()`, `"%s has %d parents (%s); it lists under %s, the lowest id, until one remains — run 'lit parent clear %s', then set the parent it belongs under"`, as an error.
+- `Conflicts() []ParentConflict` — by child id; `Store.Doctor` appends each `Finding()`, `"%s has %d parents (%s); it lists under %s, the lowest id, until one remains — run 'lit parent set --child %s --parent <the epic it belongs under>', which replaces every parent it holds with that one"`, as an error.
 - `Compare(x, y model.Issue) int` — walks each issue's path (its containers' places, then its own `{Rank, ID}`) step by step, comparing key then id at every step; the path that runs out first sorts first: tree order. A container's path is a prefix of its descendants', so it sorts before them and its subtree sorts together, even across a key two frame-mates share. Two distinct issues never compare equal. Both engines bind the `rank` sort key to it.
 - `Sort(issues []model.Issue)` — `slices.SortFunc` by `Compare`; both engines' relation groups (`Children`, `DependsOn`, `Blocks`, related) sort with it.
 
@@ -208,7 +209,7 @@ Other error surfaces in the contract package: `ParseSortSpecs` returns `Validati
 | `Prompt` | `string` | `internal/storage/issues.go` |
 | `IssueType` | `model.IssueType` | Already-parsed vocabulary, never a raw flag string; trust boundaries route through `model.ParseIssueType`. Zero value means "unspecified" and defaults to task (`internal/storage/issues.go`) |
 | `Topic` | `string` | `internal/storage/issues.go` |
-| `ParentID` | `string` | `internal/storage/issues.go` |
+| `ParentID` | `string` | The epic the issue lives inside; required for every type but a container, and must name a container (`internal/storage/containment.go`) — `internal/storage/issues.go` |
 | `Priority` | `model.Priority` | Already-parsed domain vocabulary; trust boundaries route through `model.ParsePriority` or `model.CanonicalPriority` (`internal/storage/issues.go`) |
 | `Assignee` | `string` | `internal/storage/issues.go` |
 | `Lane` | `string` | `internal/storage/issues.go` |
@@ -558,7 +559,7 @@ Order of checks is stated as contract: the parent must be resolved before the co
 2. `canonicalLabels(in.Labels)` — normalize/dedupe/sort; error propagates.
 3. `issueid.NormalizeTopicForCreate(in.Topic)` — error propagates.
 4. `issueType`: if `in.IssueType == ""` → `model.TypeTask`.
-5. `parentID = strings.TrimSpace(in.ParentID)`; if non-empty, `mustRecord(parentID)` → `NotFoundError` on miss.
+5. `parentID = strings.TrimSpace(in.ParentID)`; `storage.RejectLeafWithoutParent(issueType, parentID)` → `ValidationError` for a leaf with none; if non-empty, `mustRecord(parentID)` → `NotFoundError` on miss, then `storage.RejectParentThatIsNotAContainer(parentID, parent.issueType)` → `ValidationError` for a parent that is not an epic.
 6. `issueid.NormalizeConfiguredPrefix(in.Prefix)`; error → `fmt.Errorf("normalize issue prefix: %w", err)`.
 7. `now := e.now()`; `mintID(...)`.
 8. Builds the record with all string fields `strings.TrimSpace`'d (description, prompt, assignee, lane), `status: model.StatusView{Value: model.StateOpen}`, `retention: model.Live{}`.
@@ -884,7 +885,7 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 ### 2.13 Bulk / import (`internal/storage/memory/bulk.go`)
 
 **`BulkApply(ctx, prefix, actor, specs)`**
-1. `validateBulkSpecs(specs)` — the entire file is gated before any document is applied.
+1. `storage.ValidateBulkSpecs(specs)` (`internal/storage/import_validate.go`, shared with the Dolt engine) — the entire file is gated before any document is applied.
 2. `creationOrder(bulkGraph(specs))`; a cycle → `fmt.Errorf("bulk: %w", err)`.
 3. Walks documents in topological order:
    - `spec.ID != ""` (update): `bulkUpdateChange(spec, actor)` then `e.apply(spec.ID, change)`. On apply failure → `e.compensate(batch, fmt.Errorf("bulk: update %q: %w", spec.ID, err))`. Appends `issue.ID` to `result.Updated`.
@@ -893,7 +894,7 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 4. **Second pass, in original spec order (not topological)**: wires every `DependsOn` edge as `blocks` with `src = the document's own issue`, `dst = batch.resolve(dep)`. On failure → `e.compensate(batch, fmt.Errorf("bulk: depends_on doc %d -> %q: %w", index, dep, err))`.
 
 **`ImportTree(ctx, prefix, specs)`**
-1. `validateImportSpecs(specs)`.
+1. `storage.ValidateImportTreeSpecs(specs)` (`internal/storage/import_validate.go`, shared with the Dolt engine).
 2. `creationOrder(importGraph(specs))`; cycle → `fmt.Errorf("import: %w", err)`.
 3. Per spec in topological order: re-parses `IssueType` and `Priority` (errors → `fmt.Errorf("import: spec %q: %w", spec.LocalID, err)`, **without** compensation), then `createIssue` with `ParentID: batch.resolveLocal(spec.Parent)` and `Prefix: prefix`. Create failure → `e.compensate(batch, fmt.Errorf("import: create %q: %w", spec.LocalID, err))`.
    - Note: `Lane` and `Placement` are not carried from `ImportTreeSpec` (it has no such fields).
@@ -927,14 +928,15 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 
 **`creationOrder(graph)`** — DFS topological sort over intra-batch references only. States `unvisited`/`visiting`/`done`; re-entering `visiting` → `fmt.Errorf("cycle detected involving %q", graph.localID[i])`. A reference matching no local name is not an edge. Both authored formats reduce to the same `localGraph` shape.
 
-**`validateBulkSpecs`**
+**`storage.ValidateBulkSpecs`** (`internal/storage/import_validate.go`)
 - Empty input → `errors.New("bulk: no issues in input")`.
 - Per doc: `id`, `local_id`, `parent` must have no surrounding whitespace → `fmt.Errorf("bulk: doc %d %s %q has surrounding whitespace"...)`.
 - Each `depends_on` entry: no surrounding whitespace; and if `LocalID != "" && dep == spec.LocalID` → `fmt.Errorf("bulk: doc %d (local_id %q) cannot depend on itself"...)`.
-- `ID != ""` → `validateBulkUpdate`; duplicate `ID` → `fmt.Errorf("bulk: duplicate id %q", spec.ID)`.
-- Else → `validateBulkCreate`; duplicate non-empty `LocalID` → `fmt.Errorf("bulk: duplicate local_id %q", spec.LocalID)`.
+- `ID != ""` → `validateBulkUpdateDoc`; duplicate `ID` → `fmt.Errorf("bulk: duplicate id %q", spec.ID)`.
+- Else → `validateBulkCreateDoc`, whose parsed type is kept; duplicate non-empty `LocalID` → `fmt.Errorf("bulk: duplicate local_id %q", spec.LocalID)`.
+- Second pass over the create documents: a non-container type with `Parent == ""` → `fmt.Errorf("bulk: doc %d: %w", i, storage.RejectLeafWithoutParent(...))`; a `Parent` naming a create document in the file whose type is not a container → `fmt.Errorf("bulk: doc %d: %w", i, storage.RejectParentThatIsNotAContainer(...))`; a `Parent` matching no `local_id` is left to `createIssue`.
 
-**`validateBulkCreate`**
+**`validateBulkCreateDoc`** (`internal/storage/import_validate.go`)
 - Missing/blank `Title` → `"bulk: doc %d missing title"`.
 - Missing/blank `Topic` → `"bulk: doc %d missing topic"`.
 - Missing `IssueType` → `"bulk: doc %d missing type"`.
@@ -942,7 +944,7 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 - Unparseable priority (when set) → `"bulk: doc %d has invalid priority %d"`.
 - `Reason != ""` on a create → `"bulk: doc %d sets reason without id (reason only applies to updates)"`.
 
-**`validateBulkUpdate`** — refuses the fields an update document has no business setting; each is somebody else's verb:
+**`validateBulkUpdateDoc`** — refuses the fields an update document has no business setting; each is somebody else's verb:
 - `LocalID != ""` → `"bulk: doc %d (id %q) sets local_id; local_id only applies to new tickets"`.
 - `Topic != nil` → `"... sets topic; topic is immutable and update cannot change it"`.
 - `Parent != ""` → `"... sets parent; reparent with \`lit parent set\` instead"`.
@@ -950,13 +952,13 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 - Invalid type / priority → `"... has invalid type %q"` / `"... has invalid priority %d"`.
 - No updatable field stated → `"bulk: doc %d (id %q) has no fields to update"`. Updatable fields are exactly: `Title`, `Description`, `Prompt`, `IssueType`, `Priority`, `Assignee`, `Labels`, `Lane`.
 
-**`validateImportSpecs`**
+**`storage.ValidateImportTreeSpecs`** (`internal/storage/import_validate.go`)
 - Empty → `errors.New("import: no issues in input")`.
 - Blank `LocalID` → `"import: spec %d missing local_id"`; untrimmed → `"import: spec %d local_id %q has surrounding whitespace"`.
 - Blank `Title` → `"import: spec %q missing title"`.
 - Invalid type → `"import: spec %q has invalid type %q"`; invalid priority → `"import: spec %q has invalid priority %d"`.
 - Duplicate `LocalID` → `"import: duplicate local_id %q"`.
-- Second loop: `Parent` untrimmed → error; **`Parent` must name a spec in the file** → `"import: spec %q references missing parent %q"`.
+- Second loop: `Parent` untrimmed → error; **`Parent` must name a spec in the file** → `"import: spec %q references missing parent %q"`; a `Parent` whose spec is not a container → `"import: spec %q: %w"` around `storage.RejectParentThatIsNotAContainer`; a non-container spec with no `Parent` → `"import: spec %q: %w"` around `storage.RejectLeafWithoutParent`.
 - Each `DependsOn` entry: untrimmed → error; self-reference → `"import: spec %q cannot depend on itself"`; **must name a spec in the file** → `"import: spec %q references missing depends_on %q"`.
 - So: **`ImportTree` references must all resolve inside the file; `BulkApply` references may resolve to pre-existing real ids.**
 

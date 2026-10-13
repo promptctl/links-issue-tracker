@@ -105,6 +105,10 @@ func TestEagerPushOnDefaultCadenceReachesRemoteWithoutExplicitPush(t *testing.T)
 	// TempDir sweep. Same guard, same reason as the sibling mirror-spawning
 	// tests. [LAW:no-ambient-temporal-coupling]
 	awaitMirrorQuiescence(t, root)
+	// The epic the mutation under test files into is part of the bootstrap:
+	// created with auto-sync off and carried by the manual push, so the one
+	// mutation below is the only thing left for eager push to deliver.
+	epic := newEpicViaLit(t, root, self, isolatedEnv(xdgConfigHome, "1"), "eager-epic")
 	if out, err := runLit(t, root, self, isolatedEnv(xdgConfigHome, "1"),
 		"sync", "push", "--set-upstream"); err != nil {
 		t.Fatalf("bootstrap lit sync push: %v\noutput:\n%s", err, out)
@@ -126,7 +130,7 @@ func TestEagerPushOnDefaultCadenceReachesRemoteWithoutExplicitPush(t *testing.T)
 	// No config.toml exists anywhere under xdgConfigHome: this run exercises
 	// config.Load's shipped default, not an explicit on-change opt-in.
 	if out, err := runLit(t, root, self, isolatedEnv(xdgConfigHome, "0"),
-		"new", "--title", "eager-push", "--topic", "demo"); err != nil {
+		"new", "--title", "eager-push", "--topic", "demo", "--parent", epic); err != nil {
 		t.Fatalf("lit new: %v\noutput:\n%s", err, out)
 	}
 

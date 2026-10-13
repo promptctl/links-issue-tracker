@@ -81,8 +81,10 @@ func TestSyncCarriesAttributionToASecondClone(t *testing.T) {
 
 	// Creation and a lifecycle transition: the two event kinds the claim
 	// predicate treats as establishing, so both must arrive attributed.
+	producerEpic := extractTicketID(t, runCLIInDir(t, producer,
+		"new", "--title", "producer-epic", "--topic", "demo", "--type", "epic"))
 	producerTicket := extractTicketID(t, runCLIInDir(t, producer,
-		"new", "--title", "producer-ticket", "--topic", "demo", "--type", "task"))
+		"new", "--title", "producer-ticket", "--topic", "demo", "--type", "task", "--parent", producerEpic))
 	runCLIInDir(t, producer, "start", producerTicket)
 	runCLIInDir(t, producer, "sync", "push", "--set-upstream")
 
@@ -112,7 +114,8 @@ func TestSyncCarriesAttributionToASecondClone(t *testing.T) {
 	// The payoff: the consumer's own work is distinguishable from the
 	// producer's in the one shared backlog. Two checkouts, two identities, no
 	// coordination between them beyond the database itself.
-	runCLIInDir(t, consumer, "new", "--title", "consumer-ticket", "--topic", "demo", "--type", "task")
+	consumerEpic := extractTicketID(t, runCLIInDir(t, consumer, "new", "--title", "consumer-epic", "--topic", "demo", "--type", "epic"))
+	runCLIInDir(t, consumer, "new", "--title", "consumer-ticket", "--topic", "demo", "--type", "task", "--parent", consumerEpic)
 	consumerPair := checkoutIdentity(t, consumer)
 	if consumerPair == producerPair {
 		t.Fatalf("both checkouts report the same identity %+v — their work is indistinguishable", consumerPair)

@@ -36,7 +36,11 @@ func TestLiftWorkingSetToRegistryRecoversDowngradedSchema(t *testing.T) {
 	}
 	defer st.Close()
 
-	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "orig", Topic: "topic", IssueType: "task"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "epic", Topic: "topic", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic): %v", err)
+	}
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "orig", Topic: "topic", IssueType: "task", ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue: %v", err)
 	}
@@ -59,19 +63,16 @@ func TestLiftWorkingSetToRegistryRecoversDowngradedSchema(t *testing.T) {
 		t.Fatalf("liftWorkingSetToRegistry: %v", err)
 	}
 
-	// Post-lift: Export succeeds, the row survives, and the lifted column carries
-	// its NULL default (no resolution recorded on a non-closed issue).
+	// Post-lift: Export succeeds, both rows survive, and the lifted column
+	// carries its NULL default (no resolution recorded on a non-closed issue).
 	export, err := st.Export(ctx)
 	if err != nil {
 		t.Fatalf("Export after lift: %v", err)
 	}
-	if len(export.Issues) != 1 {
-		t.Fatalf("export has %d issues after lift, want 1", len(export.Issues))
+	if len(export.Issues) != 2 {
+		t.Fatalf("export has %d issues after lift, want 2 (the epic and the issue inside it)", len(export.Issues))
 	}
-	got := export.Issues[0]
-	if got.ID != issue.ID {
-		t.Fatalf("lifted issue id = %q, want %q", got.ID, issue.ID)
-	}
+	got := issueByID(t, export, issue.ID)
 	if got.Title != "orig" {
 		t.Fatalf("lifted issue title = %q, want orig (data lost across the lift)", got.Title)
 	}
@@ -383,16 +384,20 @@ func assertWorkingSetClean(t *testing.T, ctx context.Context, st *Store) {
 	}
 }
 
-// seedOldSchemaRemote creates one issue at root, downgrades the store below the
-// resolution migration, then pushes — so the remote head is a pre-migration
-// commit. Returns the issue id.
+// seedOldSchemaRemote creates one issue (inside an epic) at root, downgrades
+// the store below the resolution migration, then pushes — so the remote head
+// is a pre-migration commit. Returns the issue id.
 func seedOldSchemaRemote(t *testing.T, ctx context.Context, root, remoteURL string) string {
 	t.Helper()
 	st, err := Open(ctx, root, "ws")
 	if err != nil {
 		t.Fatalf("Open(seed %s): %v", root, err)
 	}
-	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "seed", Topic: "topic", IssueType: "task"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "seed epic", Topic: "topic", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(seed epic): %v", err)
+	}
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "seed", Topic: "topic", IssueType: "task", ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(seed): %v", err)
 	}

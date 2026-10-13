@@ -40,7 +40,8 @@ func TestStartRefusesAndThenTakesOverAFreshForeignClaim(t *testing.T) {
 	runGit(t, alpha, "push", "origin", "HEAD")
 	runCLIInDir(t, alpha, "init", "--skip-hooks", "--skip-agents")
 
-	ticket := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "solo ticket", "--topic", "takeover-e2e", "--type", "task"))
+	epic := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "takeover epic", "--topic", "takeover-e2e", "--type", "epic"))
+	ticket := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "the one ticket of its epic", "--topic", "takeover-e2e", "--type", "task", "--parent", epic))
 	runCLIInDir(t, alpha, "start", ticket, "--assignee", "alpha-agent")
 	runCLIInDir(t, alpha, "sync", "push", "--set-upstream")
 
@@ -137,7 +138,8 @@ func TestStartOnAnExpiredForeignClaimIsSilent(t *testing.T) {
 	runGit(t, alpha, "push", "origin", "HEAD")
 	runCLIInDir(t, alpha, "init", "--skip-hooks", "--skip-agents")
 
-	ticket := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "solo ticket", "--topic", "takeover-e2e", "--type", "task"))
+	epic := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "takeover epic", "--topic", "takeover-e2e", "--type", "epic"))
+	ticket := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "the one ticket of its epic", "--topic", "takeover-e2e", "--type", "task", "--parent", epic))
 	runCLIInDir(t, alpha, "start", ticket, "--assignee", "alpha-agent")
 	runCLIInDir(t, alpha, "sync", "push", "--set-upstream")
 
@@ -216,7 +218,8 @@ func TestStartTakesOverALiveLaneUnderOneSharedIdentity(t *testing.T) {
 
 	// One identity, both checkouts. Every start below names it.
 	const shared = "one-identity"
-	ticket := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "solo ticket", "--topic", "takeover-e2e", "--type", "task"))
+	epic := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "takeover epic", "--topic", "takeover-e2e", "--type", "epic"))
+	ticket := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "the one ticket of its epic", "--topic", "takeover-e2e", "--type", "task", "--parent", epic))
 	runCLIInDir(t, alpha, "start", ticket, "--assignee", shared)
 	runCLIInDir(t, alpha, "sync", "push", "--set-upstream")
 
@@ -277,7 +280,8 @@ func TestStartOnAPresetAssigneeAnnouncesNoTransfer(t *testing.T) {
 	runGit(t, repo, "push", "origin", "HEAD")
 	runCLIInDir(t, repo, "init", "--skip-hooks", "--skip-agents")
 
-	ticket := extractTicketID(t, runCLIInDir(t, repo, "new", "--title", "preset", "--topic", "takeover-e2e", "--type", "task", "--assignee", "alice"))
+	epic := extractTicketID(t, runCLIInDir(t, repo, "new", "--title", "takeover epic", "--topic", "takeover-e2e", "--type", "epic"))
+	ticket := extractTicketID(t, runCLIInDir(t, repo, "new", "--title", "preset", "--topic", "takeover-e2e", "--type", "task", "--parent", epic, "--assignee", "alice"))
 
 	out := runCLIInDir(t, repo, "start", ticket, "--assignee", "alice")
 	if strings.Contains(out, "claim transferred") {

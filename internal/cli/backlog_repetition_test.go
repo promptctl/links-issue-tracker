@@ -163,41 +163,43 @@ func TestBacklogReopensARunAfterAnInterruption(t *testing.T) {
 }
 
 // Suppressing a repeat changes what absence means: a row without an epic line
-// could have no epic, or could continue the epic above, and rank order
-// interleaves standalone leaves with epics, so a standalone
-// ticket sitting under an epic's last child is routine. A run opening under no
-// epic therefore says so.
-func TestBacklogSaysWhenARunOpensUnderNoEpic(t *testing.T) {
+// continues the epic above, so the row that opens the next epic's run — a
+// one-row run sitting directly under another epic's last child is routine in
+// rank order — must state its own epic, or it reads as part of the one above.
+// It says so whether it follows another epic's run or opens the list.
+func TestBacklogSaysWhichEpicARunOpensUnder(t *testing.T) {
 	h := newBacklogTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "solo", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A one", Topic: "solo", IssueType: "task", Priority: 1, ParentID: epicA})
-	loner := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Belongs to nothing", Topic: "solo", IssueType: "task", Priority: 1})
+	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "solo", IssueType: "epic", Priority: 1})
+	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B one, alone in its epic", Topic: "solo", IssueType: "task", Priority: 1, ParentID: epicB})
 
 	gathered, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
 	if err != nil {
 		t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}
 	rows, details := gathered.rows, gathered.details
+	wantLine := "epic: " + epicB + "  Epic B"
 
-	// The standalone leaf directly below the epic's run must not read as part of it.
-	after := []annotation.AnnotatedIssue{rowByID(t, rows, a1), rowByID(t, rows, loner)}
+	// The one-row run directly below epic A's run must not read as part of it.
+	after := []annotation.AnnotatedIssue{rowByID(t, rows, a1), rowByID(t, rows, b1)}
 	var out bytes.Buffer
 	if err := printBacklogOutput(&out, defaultColumns(), after, deriveQueueFacts(after), details, readinessColumnsFor(after, details), claimContext{self: selfAttribution}, focusNotice{}); err != nil {
 		t.Fatalf("printBacklogOutput error = %v", err)
 	}
-	if got := blockedOrEpicLines(out.String(), loner); !strings.Contains(got, "epic: none") {
-		t.Errorf("%s follows a row of epic %s and states %q; without an epic line it reads as part of that epic", loner, epicA, got)
+	if got := blockedOrEpicLines(out.String(), b1); !strings.Contains(got, wantLine) {
+		t.Errorf("%s follows a row of epic %s and states %q, want %q; without its own epic line it reads as part of that epic", b1, epicA, got, wantLine)
 	}
 
-	// Opening the list with it is the other half: there is no row above to
-	// misattribute it to, so the marker would be noise.
+	// Opening the list, the run still states its epic: the line describes the
+	// run, not the row above it.
 	out.Reset()
-	first := []annotation.AnnotatedIssue{rowByID(t, rows, loner), rowByID(t, rows, a1)}
+	first := []annotation.AnnotatedIssue{rowByID(t, rows, b1), rowByID(t, rows, a1)}
 	if err := printBacklogOutput(&out, defaultColumns(), first, deriveQueueFacts(first), details, readinessColumnsFor(first, details), claimContext{self: selfAttribution}, focusNotice{}); err != nil {
 		t.Fatalf("printBacklogOutput error = %v", err)
 	}
-	if got := blockedOrEpicLines(out.String(), loner); strings.Contains(got, "epic: none") {
-		t.Errorf("%s opens the list and states %q; nothing above it could claim it", loner, got)
+	if got := blockedOrEpicLines(out.String(), b1); !strings.Contains(got, wantLine) {
+		t.Errorf("%s opens the list and states %q, want %q", b1, got, wantLine)
 	}
 }
 

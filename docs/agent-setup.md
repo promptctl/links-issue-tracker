@@ -117,7 +117,7 @@ post-merge close, which runs after the change has already landed.
 Other commands you'll need:
 
 ```sh
-lit new --title "..." --topic <slug> --type task|bug|feature|chore|epic [--parent <id>]
+lit new --title "..." --topic <slug> --type task|bug|feature|chore|epic --parent <epic-id>   # --parent is required for every type but epic
 lit close <id>            # close without finishing (wontfix / obsolete / duplicate)
 lit doctor [--fix]        # health check; run --fix yourself before escalating any error
 ```

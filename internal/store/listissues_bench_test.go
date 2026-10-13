@@ -22,11 +22,15 @@ func benchIssueIDs(b *testing.B, rows int) (*Store, context.Context, []string) {
 	b.Helper()
 	ctx := context.Background()
 	st := openIssueStore(b, ctx)
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "env epic", Topic: "env", IssueType: "epic"})
+	if err != nil {
+		b.Fatalf("CreateIssue(epic) error = %v", err)
+	}
 	ids := make([]string, 0, rows)
 	for i := range rows {
 		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 			Prefix: "test", Title: fmt.Sprintf("row %d", i), Topic: "env",
-			IssueType: "task", Placement: storage.RankBottom,
+			IssueType: "task", Placement: storage.RankBottom, ParentID: epic.ID,
 		})
 		if err != nil {
 			b.Fatalf("CreateIssue(%d) error = %v", i, err)
@@ -63,7 +67,7 @@ func benchListByParents(b *testing.B, parents int) {
 	for i := range parents {
 		parent, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 			Prefix: "test", Title: fmt.Sprintf("parent %d", i), Topic: "env",
-			IssueType: "task", Placement: storage.RankBottom,
+			IssueType: "epic", Placement: storage.RankBottom,
 		})
 		if err != nil {
 			b.Fatalf("CreateIssue(parent %d) error = %v", i, err)

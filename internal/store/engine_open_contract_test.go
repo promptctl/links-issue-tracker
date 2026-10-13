@@ -109,7 +109,11 @@ func TestOpenRecoversOnceForeignJournalHolderReleases(t *testing.T) {
 	defer reopened.Close()
 	// The store must be genuinely writable — the whole point of failing fast
 	// instead of accepting dolt's silent read-only fallback.
-	created, err := reopened.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "post-handoff write works", Topic: "sync"})
+	epic, err := reopened.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "post-handoff epic", Topic: "sync", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) on the recovered store error = %v", err)
+	}
+	created, err := reopened.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "post-handoff write works", Topic: "sync", ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue() on the recovered store error = %v", err)
 	}
@@ -174,7 +178,11 @@ func TestOpenForReadToleratesForeignJournalHolder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("initial Open() error = %v", err)
 	}
-	if _, err := s.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "visible to readers", Topic: "sync"}); err != nil {
+	epic, err := s.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "visible epic", Topic: "sync", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	if _, err := s.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "visible to readers", Topic: "sync", ParentID: epic.ID}); err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	if err := s.Close(); err != nil {
@@ -196,8 +204,8 @@ func TestOpenForReadToleratesForeignJournalHolder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LocalIssueCount() on fallback reader error = %v", err)
 	}
-	if count != 1 {
-		t.Fatalf("LocalIssueCount() = %d, want 1", count)
+	if count != 2 {
+		t.Fatalf("LocalIssueCount() = %d, want 2 (the epic and the ticket inside it)", count)
 	}
 }
 

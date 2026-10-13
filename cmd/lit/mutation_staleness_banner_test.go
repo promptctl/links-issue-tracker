@@ -76,6 +76,9 @@ func TestPushFailureBannerReachesMutationOnlySession(t *testing.T) {
 	// The mutations below spawn detached mirrors; the last one can outlive the
 	// test body, so the TempDir sweep must wait for mirror quiescence.
 	awaitMirrorQuiescence(t, root)
+	// The epic every mutation below files into is part of the bootstrap, made
+	// with auto-sync off and carried by the manual push.
+	epic := newEpicViaLit(t, root, self, isolatedEnv(xdgConfigHome, "1"), "banner-epic")
 	if out, err := runLit(t, root, self, isolatedEnv(xdgConfigHome, "1"),
 		"sync", "push", "--set-upstream"); err != nil {
 		t.Fatalf("bootstrap lit sync push: %v\noutput:\n%s", err, out)
@@ -84,7 +87,7 @@ func TestPushFailureBannerReachesMutationOnlySession(t *testing.T) {
 	// No cry-wolf: a mutation on a HEALTHY workspace prints no failure banner,
 	// even though its own commit has not been pushed yet at print time.
 	healthyOut, err := runLit(t, root, self, isolatedEnv(xdgConfigHome, "0"),
-		"new", "--title", "healthy-mutation", "--topic", "demo")
+		"new", "--title", "healthy-mutation", "--topic", "demo", "--parent", epic)
 	if err != nil {
 		t.Fatalf("lit new (healthy): %v\noutput:\n%s", err, healthyOut)
 	}
@@ -103,7 +106,7 @@ func TestPushFailureBannerReachesMutationOnlySession(t *testing.T) {
 	var lastOut string
 	for time.Now().Before(deadline) {
 		out, err := runLit(t, root, self, isolatedEnv(xdgConfigHome, "0"),
-			"new", "--title", "mutation-against-dead-remote", "--topic", "demo")
+			"new", "--title", "mutation-against-dead-remote", "--topic", "demo", "--parent", epic)
 		if err != nil {
 			t.Fatalf("lit new (mutation-only chain): %v\noutput:\n%s", err, out)
 		}

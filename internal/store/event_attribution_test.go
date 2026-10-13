@@ -46,8 +46,14 @@ func allEvents(t *testing.T, ctx context.Context, st *Store) []model.IssueEvent 
 // rather than whichever one a single-mutation fixture happened to pick.
 func exerciseEveryEventKind(t *testing.T, ctx context.Context, st *Store) {
 	t.Helper()
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{
+		Prefix: "test", Title: "Attributed epic", Topic: "claims", IssueType: "epic",
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
 	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "Attributed work", Topic: "claims", IssueType: "task", Priority: 0,
+		Prefix: "test", Title: "Attributed work", Topic: "claims", IssueType: "task", Priority: 0, ParentID: epic.ID,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)

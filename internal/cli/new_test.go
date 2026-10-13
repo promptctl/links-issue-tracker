@@ -73,10 +73,12 @@ func TestRunNewAppendsByDefaultAndPromotesOnTopFlag(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
+	// Epics: the top level is the frame whose whole order the listing shows,
+	// and epics are what lives there.
 	runCreate := func(title string, args ...string) string {
 		t.Helper()
 		var stdout bytes.Buffer
-		base := []string{"--title", title, "--topic", "place", "--type", "task"}
+		base := []string{"--title", title, "--topic", "place", "--type", "epic"}
 		if err := runNew(ctx, &stdout, ap, append(base, args...)); err != nil {
 			t.Fatalf("runNew(%q) error = %v", title, err)
 		}
@@ -184,7 +186,7 @@ func TestRunNewWithoutAssigneeCreatesUnassigned(t *testing.T) {
 	ap := newTestCLIApp(t)
 	var stdout bytes.Buffer
 	if err := runNew(ctx, &stdout, ap, []string{
-		"--title", "Born unclaimed", "--topic", "lifecycle",
+		"--title", "Born unclaimed", "--topic", "lifecycle", "--parent", seedEpicRaw(t, ctx, ap, "Lifecycle", "lifecycle"),
 	}); err != nil {
 		t.Fatalf("runNew() error = %v", err)
 	}
@@ -205,7 +207,7 @@ func TestRunNewExplicitAssigneeHonoredVerbatim(t *testing.T) {
 	ap := newTestCLIApp(t)
 	var stdout bytes.Buffer
 	if err := runNew(ctx, &stdout, ap, []string{
-		"--title", "Pre-assigned", "--topic", "lifecycle", "--assignee", "alice",
+		"--title", "Pre-assigned", "--topic", "lifecycle", "--assignee", "alice", "--parent", seedEpicRaw(t, ctx, ap, "Lifecycle", "lifecycle"),
 	}); err != nil {
 		t.Fatalf("runNew() error = %v", err)
 	}
@@ -215,5 +217,53 @@ func TestRunNewExplicitAssigneeHonoredVerbatim(t *testing.T) {
 	}
 	if got, want := created.AssigneeValue(), "alice"; got != want {
 		t.Fatalf("created.AssigneeValue() = %q, want %q: explicit assignee must not be rewritten to the caller", got, want)
+	}
+}
+
+// TestRunNewLeafWithoutParentIsRefused pins the containment rule at the
+// command surface: every ticket except an epic lives inside one, so `lit new`
+// with the default type and no --parent is a validation refusal (exit 3, the
+// same shape as any other refused value) whose message names the way in.
+func TestRunNewLeafWithoutParentIsRefused(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+
+	var stdout bytes.Buffer
+	err := runNew(ctx, &stdout, ap, []string{"--title", "Homeless", "--topic", "lifecycle"})
+	if err == nil {
+		t.Fatalf("runNew(no --parent) = nil, want a refusal; output:\n%s", stdout.String())
+	}
+	if code := ExitCode(err); code != ExitValidation {
+		t.Fatalf("runNew(no --parent) exit code = %d, want %d (error: %v)", code, ExitValidation, err)
+	}
+	if reason := commandErrorReason(err); reason != "validation_refused" {
+		t.Fatalf("runNew(no --parent) reason = %q, want validation_refused (error: %v)", reason, err)
+	}
+	want := "cannot create a task outside an epic: every ticket except an epic lives inside one, so give it the epic it belongs to as its parent, or make it an epic"
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("runNew(no --parent) error = %q, want it to contain %q", err.Error(), want)
+	}
+}
+
+// TestRunNewEpicWithoutParentIsTopLevel is the other half of the rule: an epic
+// is the one type that may live at the top level, so `--type epic` with no
+// --parent creates it there.
+func TestRunNewEpicWithoutParentIsTopLevel(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+
+	var stdout bytes.Buffer
+	if err := runNew(ctx, &stdout, ap, []string{"--title", "A home", "--topic", "lifecycle", "--type", "epic"}); err != nil {
+		t.Fatalf("runNew(--type epic, no --parent) error = %v", err)
+	}
+	detail, err := ap.Store.GetIssueDetail(ctx, firstIssueID(t, stdout.String()))
+	if err != nil {
+		t.Fatalf("GetIssueDetail() error = %v", err)
+	}
+	if detail.Issue.IssueType != "epic" {
+		t.Fatalf("created.IssueType = %q, want epic", detail.Issue.IssueType)
+	}
+	if detail.Parent != nil {
+		t.Fatalf("created parent = %s, want none: an epic may be top-level", detail.Parent.ID)
 	}
 }

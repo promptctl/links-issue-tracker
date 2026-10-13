@@ -59,7 +59,8 @@ func TestInProgressSuffixSaysNothingWithoutTheAnnotation(t *testing.T) {
 // and that is the whole of what "abandoned" means to routing.
 func TestCapacityForReadsAbandonmentOffTheLane(t *testing.T) {
 	h := newReadyTestHarness(t)
-	ticket := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "In flight", Topic: "next", IssueType: "task", Priority: 0})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
+	ticket := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "In flight", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID})
 	h.transition(ticket.ID, model.Start{Assignee: "tester"})
 
 	rows, _, _ := h.gather()

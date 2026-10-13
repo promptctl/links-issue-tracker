@@ -27,8 +27,11 @@ func TestListReadsReadyPolicyOnlyWhenProjected(t *testing.T) {
 	// could pass while `lit ls` still read config for every projection.
 	h.writeProjectConfig("[sync]\ncadence = \"not-a-cadence\"\n")
 
+	epic := h.createIssue(storage.CreateIssueInput{
+		Prefix: "policy", Title: "Home epic", Topic: "policy", IssueType: "epic", Description: "d",
+	})
 	issue := h.createIssue(storage.CreateIssueInput{
-		Prefix: "policy", Title: "Listable", Topic: "policy", IssueType: "task", Description: "d",
+		Prefix: "policy", Title: "Listable", Topic: "policy", IssueType: "task", Description: "d", ParentID: epic.ID,
 	})
 
 	runLS := func(args ...string) (string, error) {

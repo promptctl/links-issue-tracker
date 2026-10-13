@@ -564,10 +564,23 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 		return model.Issue{}, err
 	}
 	parentID := strings.TrimSpace(in.ParentID)
+	// Containment, first half: a leaf is never created outside an epic. Pure,
+	// so it is answered before the mutation opens. [LAW:single-enforcer]
+	if err := storage.RejectLeafWithoutParent(issueType, parentID); err != nil {
+		return model.Issue{}, err
+	}
 	if err := s.withMutation(ctx, "create issue", func(ctx context.Context, tx *sql.Tx) error {
-		frame, err := filingFrameTx(ctx, tx, parentID)
+		frame, parentType, err := filingParentTx(ctx, tx, parentID)
 		if err != nil {
 			return err
+		}
+		// Containment, second half: the named parent is an epic. Read on the
+		// tx with the frame, so the type and the row's presence are one
+		// snapshot. [LAW:single-enforcer]
+		if parentID != "" {
+			if err := storage.RejectParentThatIsNotAContainer(parentID, parentType); err != nil {
+				return err
+			}
 		}
 		// The followed-up ticket must exist when the link is written, as the
 		// parent must: the column has no foreign key, so this is the one place

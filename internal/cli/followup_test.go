@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -88,21 +89,37 @@ func TestRunFollowupFilesBesideTheClosedTicket(t *testing.T) {
 	}
 }
 
-// TestRunFollowupOnATopLevelTicketIsTopLevel pins the parentless case: a
-// follow-up of a ticket outside any epic lands beside it at the top level.
+// TestRunFollowupOnATopLevelTicketIsTopLevel pins the parentless case. The
+// only ticket outside any epic is a top-level epic, and a follow-up lands
+// beside the ticket it follows up: a task beside a top-level epic would be a
+// task outside every epic, so the store refuses it and names the two ways in;
+// a follow-up that is itself an epic lands at the top level, and a task filed
+// with --parent lands in the epic it names, each with the link carried on its
+// row.
 func TestRunFollowupOnATopLevelTicketIsTopLevel(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
 	closed, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
-		Title: "Loose end", Topic: "sync", IssueType: "task", Priority: 0,
+		Title: "Loose end", Topic: "sync", IssueType: model.TypeEpic, Priority: 0,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue error = %v", err)
 	}
+
+	var refused bytes.Buffer
+	err = runFollowup(ctx, &refused, ap, []string{"--on", closed.ID, "--title", "Tie it off"})
+	var validation model.ValidationError
+	if !errors.As(err, &validation) {
+		t.Fatalf("runFollowup(task beside a top-level epic) error = %v (%T), want model.ValidationError", err, err)
+	}
+	if !strings.Contains(err.Error(), "as its parent, or make it an epic") {
+		t.Fatalf("runFollowup(task beside a top-level epic) error = %q, want it to name a parent epic and the epic type as the ways in", err.Error())
+	}
+
 	var stdout bytes.Buffer
-	if err := runFollowup(ctx, &stdout, ap, []string{"--on", closed.ID, "--title", "Tie it off"}); err != nil {
-		t.Fatalf("runFollowup() error = %v", err)
+	if err := runFollowup(ctx, &stdout, ap, []string{"--on", closed.ID, "--title", "Tie it off", "--type", "epic"}); err != nil {
+		t.Fatalf("runFollowup(--type epic) error = %v", err)
 	}
 	detail, err := ap.Store.GetIssueDetail(ctx, firstIssueID(t, stdout.String()))
 	if err != nil {
@@ -113,6 +130,27 @@ func TestRunFollowupOnATopLevelTicketIsTopLevel(t *testing.T) {
 	}
 	if detail.Issue.FollowsUp != closed.ID {
 		t.Fatalf("created.FollowsUp = %q, want %q", detail.Issue.FollowsUp, closed.ID)
+	}
+
+	home, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
+		Title: "Where the work goes", Topic: "sync", IssueType: model.TypeEpic,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue(home epic) error = %v", err)
+	}
+	var filed bytes.Buffer
+	if err := runFollowup(ctx, &filed, ap, []string{"--on", closed.ID, "--title", "Tie it off", "--parent", home.ID}); err != nil {
+		t.Fatalf("runFollowup(--parent) error = %v", err)
+	}
+	task, err := ap.Store.GetIssueDetail(ctx, firstIssueID(t, filed.String()))
+	if err != nil {
+		t.Fatalf("GetIssueDetail error = %v", err)
+	}
+	if task.Parent == nil || task.Parent.ID != home.ID {
+		t.Fatalf("created parent = %v, want %s, the epic --parent named", task.Parent, home.ID)
+	}
+	if task.Issue.IssueType != model.TypeTask || task.Issue.FollowsUp != closed.ID {
+		t.Fatalf("created type = %s, FollowsUp = %q; want a task that follows up %s", task.Issue.IssueType, task.Issue.FollowsUp, closed.ID)
 	}
 }
 
@@ -134,8 +172,8 @@ func TestShowRendersTheFollowUpLinkOnBothEnds(t *testing.T) {
 	if err := runShow(ctx, &out, ap, []string{followUp}); err != nil {
 		t.Fatalf("runShow(%s) error = %v", followUp, err)
 	}
-	if text := out.String(); !strings.Contains(text, "follows_up:\n- "+closed) || strings.Contains(text, "parent:") {
-		t.Fatalf("show of the follow-up wants a follows_up group naming %s and no parent; got:\n%s", closed, text)
+	if text := out.String(); !strings.Contains(text, "follows_up:\n- "+closed) || strings.Contains(text, "parent:\n- "+closed) {
+		t.Fatalf("show of the follow-up wants a follows_up group naming %s and no parent group naming it; got:\n%s", closed, text)
 	}
 	out.Reset()
 	if err := runShow(ctx, &out, ap, []string{closed}); err != nil {
@@ -150,11 +188,13 @@ func TestRunFollowupRespectsExplicitOverrides(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
+	epic := seedEpicRaw(t, ctx, ap, "Sync", "sync")
 	parent, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
 		Title:     "Sync flow tightening",
 		Topic:     "sync",
 		IssueType: "task",
 		Priority:  0,
+		ParentID:  epic,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue(parent) error = %v", err)
@@ -232,6 +272,7 @@ func TestRunFollowupWithoutAssigneeCreatesUnassigned(t *testing.T) {
 	ap := newTestCLIApp(t)
 	parent, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
 		Title: "Closed work", Topic: "lifecycle", IssueType: "task", Priority: 0,
+		ParentID: seedEpicRaw(t, ctx, ap, "Lifecycle", "lifecycle"),
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue(parent) error = %v", err)

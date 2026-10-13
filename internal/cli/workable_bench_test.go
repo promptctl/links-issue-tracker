@@ -29,7 +29,8 @@ func benchGather(b *testing.B, rows int, rf workableFilter) {
 	// setup Fatalf would Goexit without failing the benchmark.
 	h := newBacklogTestHarness(b)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "env", IssueType: "epic"})
-	gate := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Gate", Topic: "env", IssueType: "task"})
+	gates := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Gates", Topic: "env", IssueType: "epic"})
+	gate := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Gate", Topic: "env", IssueType: "task", ParentID: gates})
 	h.addDependency(epic, gate)
 	for i := 0; i < rows; i++ {
 		kind := model.IssueType("task")

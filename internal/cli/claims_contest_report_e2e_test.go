@@ -30,7 +30,8 @@ func TestSyncReconcileNamesContestedLaneAfterPartitionedDoubleStart(t *testing.T
 	runGit(t, alpha, "commit", "-m", "seed")
 	runGit(t, alpha, "push", "origin", "HEAD")
 	runCLIInDir(t, alpha, "init", "--skip-hooks", "--skip-agents")
-	ticket := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "contested lane", "--topic", "contest-e2e", "--type", "task"))
+	epic := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "contest epic", "--topic", "contest-e2e", "--type", "epic"))
+	ticket := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "contested lane", "--topic", "contest-e2e", "--type", "task", "--parent", epic))
 	runCLIInDir(t, alpha, "sync", "push", "--set-upstream")
 
 	// bravo clones AFTER the ticket exists on the remote but BEFORE either
@@ -81,7 +82,8 @@ func TestSyncReconcileNoContestNamesNoContest(t *testing.T) {
 	runGit(t, alpha, "commit", "-m", "seed")
 	runGit(t, alpha, "push", "origin", "HEAD")
 	runCLIInDir(t, alpha, "init", "--skip-hooks", "--skip-agents")
-	ticketA := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "alphas ticket", "--topic", "contest-e2e", "--type", "task"))
+	epicA := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "alphas epic", "--topic", "contest-e2e", "--type", "epic"))
+	ticketA := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "alphas ticket", "--topic", "contest-e2e", "--type", "task", "--parent", epicA))
 	runCLIInDir(t, alpha, "sync", "push", "--set-upstream")
 
 	bravo := filepath.Join(base, "bravo")
@@ -95,7 +97,8 @@ func TestSyncReconcileNoContestNamesNoContest(t *testing.T) {
 	// contest anywhere in them.
 	runCLIInDir(t, alpha, "start", ticketA, "--assignee", "alpha-agent")
 	runCLIInDir(t, alpha, "sync", "push")
-	runCLIInDir(t, bravo, "new", "--title", "bravos ticket", "--topic", "contest-e2e", "--type", "task")
+	epicB := extractTicketID(t, runCLIInDir(t, bravo, "new", "--title", "bravos epic", "--topic", "contest-e2e", "--type", "epic"))
+	runCLIInDir(t, bravo, "new", "--title", "bravos ticket", "--topic", "contest-e2e", "--type", "task", "--parent", epicB)
 
 	out := runCLIInDir(t, bravo, "sync", "reconcile")
 	if strings.Contains(out, "contested") {

@@ -49,8 +49,9 @@ func TestImportTreeRejectsCycle(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	specs := []storage.ImportTreeSpec{
-		{LocalID: "a", Title: "A", IssueType: "task", Topic: "x", Priority: 0, DependsOn: []string{"b"}},
-		{LocalID: "b", Title: "B", IssueType: "task", Topic: "x", Priority: 0, DependsOn: []string{"a"}},
+		{LocalID: "e", Title: "E", IssueType: "epic", Topic: "x", Priority: 0},
+		{LocalID: "a", Title: "A", IssueType: "task", Topic: "x", Priority: 0, Parent: "e", DependsOn: []string{"b"}},
+		{LocalID: "b", Title: "B", IssueType: "task", Topic: "x", Priority: 0, Parent: "e", DependsOn: []string{"a"}},
 	}
 	if _, err := st.ImportTree(ctx, "test", specs); err == nil || !strings.Contains(err.Error(), "cycle") {
 		t.Fatalf("ImportTree(cycle) error = %v, want cycle error", err)

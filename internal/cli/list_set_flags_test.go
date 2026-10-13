@@ -30,9 +30,10 @@ type setFlagCase struct {
 func setFlagFixture(t *testing.T) (h readyTestHarness, bugA, taskAB, featB string) {
 	t.Helper()
 	h = newReadyTestHarness(t)
-	bug := h.createIssue(storage.CreateIssueInput{Title: "bug a", IssueType: model.TypeBug, Topic: "filtering", Labels: []string{"a"}})
-	task := h.createIssue(storage.CreateIssueInput{Title: "task ab", IssueType: model.TypeTask, Topic: "filtering", Labels: []string{"a", "b"}})
-	feat := h.createIssue(storage.CreateIssueInput{Title: "feature b", IssueType: model.TypeFeature, Topic: "filtering", Labels: []string{"b"}})
+	epic := h.createIssue(storage.CreateIssueInput{Title: "filtering", IssueType: model.TypeEpic, Topic: "filtering"})
+	bug := h.createIssue(storage.CreateIssueInput{Title: "bug a", IssueType: model.TypeBug, Topic: "filtering", Labels: []string{"a"}, ParentID: epic.ID})
+	task := h.createIssue(storage.CreateIssueInput{Title: "task ab", IssueType: model.TypeTask, Topic: "filtering", Labels: []string{"a", "b"}, ParentID: epic.ID})
+	feat := h.createIssue(storage.CreateIssueInput{Title: "feature b", IssueType: model.TypeFeature, Topic: "filtering", Labels: []string{"b"}, ParentID: epic.ID})
 	return h, bug.ID, task.ID, feat.ID
 }
 

@@ -117,8 +117,14 @@ func TestDerivedClaimSurvivesARoundTripThroughTheDatabase(t *testing.T) {
 	const token = "abc23456defgh"
 	st.AttributeTo(token)
 
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{
+		Prefix: "test", Title: "Claims epic", Topic: "claims", IssueType: "epic",
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
 	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "Claimable work", Topic: "claims", IssueType: "task", Priority: 0,
+		Prefix: "test", Title: "Claimable work", Topic: "claims", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: "solo",
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
@@ -129,8 +135,9 @@ func TestDerivedClaimSurvivesARoundTripThroughTheDatabase(t *testing.T) {
 		t.Fatalf("Apply(start) error = %v", err)
 	}
 
-	// The ticket has no epic, so it is a lane of one keyed by its own id.
-	lane := model.LaneOf(issue, nil)
+	// The ticket is alone in its lane of the epic, so the lane is keyed by the
+	// epic and the lane it names.
+	lane := model.LaneOf(issue, &epic)
 	standing := deriveClaims(t, ctx, st).Of(lane)
 	held, ok := standing.(claims.Held)
 	if !ok {

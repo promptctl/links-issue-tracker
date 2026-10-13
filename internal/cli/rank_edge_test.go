@@ -33,7 +33,8 @@ func TestRankToEdgeReportsItsFrame(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(second) error = %v", err)
 	}
-	standalone, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Standalone", Topic: "edge", IssueType: "task", Placement: storage.RankBottom})
+	// Top-level, so an epic: the backlog frame holds epics and nothing else.
+	standalone, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Standalone", Topic: "edge", IssueType: "epic", Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(standalone) error = %v", err)
 	}

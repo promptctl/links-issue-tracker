@@ -28,12 +28,17 @@ func TestApplyTransitionAndFieldsCommitAsOneUnit(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Atomicity epic", Topic: "atomicity", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
 	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix:    "test",
 		Title:     "Original",
 		Topic:     "atomicity",
 		IssueType: "task",
 		Priority:  model.PriorityNormal,
+		ParentID:  epic.ID,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
@@ -79,12 +84,17 @@ func TestApplyRejectedFieldWriteLeavesNoTransition(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Atomicity epic", Topic: "atomicity", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
 	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix:    "test",
 		Title:     "Original",
 		Topic:     "atomicity",
 		IssueType: "task",
 		Priority:  model.PriorityNormal,
+		ParentID:  epic.ID,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)

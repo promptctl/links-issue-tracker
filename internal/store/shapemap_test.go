@@ -312,7 +312,7 @@ func TestDeterministicMapCleanAhead(t *testing.T) {
 		if err != nil {
 			t.Fatalf("create child: %v", err)
 		}
-		solo, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "Solo task", IssueType: "task", Topic: "recovery", Prefix: "links"})
+		solo, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "Solo task", IssueType: "task", Topic: "recovery", Prefix: "links", ParentID: epic.ID, Lane: "solo"})
 		if err != nil {
 			t.Fatalf("create solo: %v", err)
 		}

@@ -13,7 +13,8 @@ func TestParentSetRejectsBarePositionalArgs(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	child, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Child", Topic: "parent", IssueType: "task", Priority: 0})
+	// The child starts inside another epic; `parent set` moves it.
+	child, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Child", Topic: "parent", IssueType: "task", Priority: 0, ParentID: seedEpicRaw(t, ctx, ap, "Former home", "parent")})
 	if err != nil {
 		t.Fatalf("CreateIssue(child) error = %v", err)
 	}
@@ -36,7 +37,8 @@ func TestParentSetWithNamedFlags(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	child, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Child", Topic: "parent", IssueType: "task", Priority: 0})
+	// The child starts inside another epic; `parent set` moves it.
+	child, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Child", Topic: "parent", IssueType: "task", Priority: 0, ParentID: seedEpicRaw(t, ctx, ap, "Former home", "parent")})
 	if err != nil {
 		t.Fatalf("CreateIssue(child) error = %v", err)
 	}

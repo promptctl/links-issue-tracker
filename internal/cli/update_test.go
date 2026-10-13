@@ -28,6 +28,7 @@ func TestRunTransitionDoneClosesAndPrintsPostGuidance(t *testing.T) {
 
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
 		Title: "Done guidance test", Topic: "guidance", IssueType: "task", Priority: 0,
+		ParentID: seedEpicRaw(t, ctx, ap, "Epic", "lifecycle"),
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
@@ -84,6 +85,7 @@ func TestRunTransitionTargetStateMatrix(t *testing.T) {
 				ap := newTestCLIApp(t)
 				issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 					Prefix: "test", Title: "matrix " + verb.spec.name, Topic: "lifecycle", IssueType: "task", Priority: 0,
+					ParentID: seedEpicRaw(t, ctx, ap, "Epic", "lifecycle"),
 				})
 				if err != nil {
 					t.Fatalf("CreateIssue() error = %v", err)
@@ -200,6 +202,7 @@ func TestRunTransitionStartClaimTransferEmitsNotice(t *testing.T) {
 	ap := newTestCLIApp(t)
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: "Contested claim", Topic: "lifecycle", IssueType: "task", Priority: 0,
+		ParentID: seedEpicRaw(t, ctx, ap, "Epic", "lifecycle"),
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
@@ -280,6 +283,7 @@ func TestRunUpdateRejectsStatusFlag(t *testing.T) {
 		Topic:     "status",
 		IssueType: "task",
 		Priority:  0,
+		ParentID:  seedEpicRaw(t, ctx, ap, "Epic", "lifecycle"),
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
@@ -327,6 +331,7 @@ func TestRunUpdateSupportsFieldMutations(t *testing.T) {
 		Topic:     "fields",
 		IssueType: "task",
 		Priority:  0,
+		ParentID:  seedEpicRaw(t, ctx, ap, "Epic", "lifecycle"),
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
@@ -361,6 +366,7 @@ func TestRunNewAndUpdateCarryPromptField(t *testing.T) {
 		"--title", "Wire prompt field",
 		"--topic", "prompts",
 		"--type", "task",
+		"--parent", seedEpicRaw(t, ctx, ap, "Prompts", "prompts"),
 		"--priority", "1",
 		"--prompt", "Render at 1024x768 and verify no NaNs.",
 	}); err != nil {
@@ -397,6 +403,7 @@ func TestRunUpdateRejectsReasonWithNoChanges(t *testing.T) {
 		Topic:     "validation",
 		IssueType: "task",
 		Priority:  0,
+		ParentID:  seedEpicRaw(t, ctx, ap, "Epic", "lifecycle"),
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
@@ -468,6 +475,7 @@ func TestRunUpdateRejectsEmptyStatusValue(t *testing.T) {
 		Topic:     "status",
 		IssueType: "task",
 		Priority:  0,
+		ParentID:  seedEpicRaw(t, ctx, ap, "Epic", "lifecycle"),
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
@@ -517,6 +525,7 @@ func TestRunTransitionStartWithoutAssigneeSucceeds(t *testing.T) {
 	ap := newTestCLIApp(t)
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: "No assignee start", Topic: "lifecycle", IssueType: "task", Priority: 0,
+		ParentID: seedEpicRaw(t, ctx, ap, "Epic", "lifecycle"),
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
@@ -543,6 +552,7 @@ func TestRunTransitionStartStampsAssigneeFromSessionEnv(t *testing.T) {
 	ap := newTestCLIApp(t)
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: "Env-stamped start", Topic: "lifecycle", IssueType: "task", Priority: 0,
+		ParentID: seedEpicRaw(t, ctx, ap, "Epic", "lifecycle"),
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
@@ -591,6 +601,7 @@ func TestRunTransitionActorFromSessionEnv(t *testing.T) {
 	ap := newTestCLIApp(t)
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: "Actor from session", Topic: "attribution", IssueType: "task", Priority: 0,
+		ParentID: seedEpicRaw(t, ctx, ap, "Epic", "lifecycle"),
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
@@ -613,6 +624,7 @@ func TestRunTransitionActorFallsBackToByFlag(t *testing.T) {
 	ap := newTestCLIApp(t)
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: "Actor from by flag", Topic: "attribution", IssueType: "task", Priority: 0,
+		ParentID: seedEpicRaw(t, ctx, ap, "Epic", "lifecycle"),
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
@@ -634,6 +646,7 @@ func TestRunUpdateClearAssigneeLeavesOpenIssueUnassigned(t *testing.T) {
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: "Stale claim", Topic: "lifecycle", IssueType: "task", Priority: 0,
 		Assignee: "claude_abandoned-session",
+		ParentID: seedEpicRaw(t, ctx, ap, "Epic", "lifecycle"),
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
@@ -660,6 +673,7 @@ func TestRunUpdateExplicitAssigneeHonoredVerbatim(t *testing.T) {
 	ap := newTestCLIApp(t)
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: "Hand off", Topic: "lifecycle", IssueType: "task", Priority: 0,
+		ParentID: seedEpicRaw(t, ctx, ap, "Epic", "lifecycle"),
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)

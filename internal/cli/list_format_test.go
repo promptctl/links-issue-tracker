@@ -16,11 +16,17 @@ func listFormatOutput(t *testing.T, expr string) (string, error) {
 	t.Helper()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	if _, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "fmt", Title: "T", Topic: "fmt", IssueType: "task", Priority: 0}); err != nil {
+	// The epic carries the same prefix as the task, since the task's id hangs
+	// under the epic's and the accept rows read the prefix off every row.
+	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "fmt", Title: "Fmt", Topic: "fmt", IssueType: "epic", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic): %v", err)
+	}
+	if _, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "fmt", Title: "T", Topic: "fmt", IssueType: "task", Priority: 0, ParentID: epic.ID}); err != nil {
 		t.Fatalf("CreateIssue: %v", err)
 	}
 	var out bytes.Buffer
-	err := runListWithStore(ctx, &out, ap.Store, noReadyPolicy, []string{"--format", expr})
+	err = runListWithStore(ctx, &out, ap.Store, noReadyPolicy, []string{"--format", expr})
 	return out.String(), err
 }
 

@@ -120,9 +120,10 @@ func TestBacklogUnblocksLinesSurviveTheFocusScope(t *testing.T) {
 	// every inversion sits on an on-path row, both views count it, and the
 	// warning compares equal no matter which population it was counted over —
 	// the assertion passes against the defect it was written to catch.
-	offPath := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Off-path dependent", Topic: "noise", IssueType: "task"})
-	goal := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Goal", Topic: "goal", IssueType: "task", Labels: []string{FocusLabel}})
-	onPath := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Path work", Topic: "goal", IssueType: "task"})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
+	offPath := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Off-path dependent", Topic: "noise", IssueType: "task", ParentID: epic, Lane: "off"})
+	goal := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Goal", Topic: "goal", IssueType: "task", ParentID: epic, Lane: "goal", Labels: []string{FocusLabel}})
+	onPath := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Path work", Topic: "goal", IssueType: "task", ParentID: epic, Lane: "path"})
 	h.addDependency(goal, onPath)
 	// Off the focused path, and unblocked by an on-path row all the same.
 	h.addDependency(offPath, onPath)
@@ -141,8 +142,9 @@ func TestBacklogUnblocksLinesSurviveTheFocusScope(t *testing.T) {
 
 func TestBacklogUnblocksLinesSurviveLimit(t *testing.T) {
 	h := newBacklogTestHarness(t)
-	first := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Blocker", Topic: "lim", IssueType: "task"})
-	second := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Dependent", Topic: "lim", IssueType: "task"})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
+	first := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Blocker", Topic: "lim", IssueType: "task", ParentID: epic, Lane: "first"})
+	second := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Dependent", Topic: "lim", IssueType: "task", ParentID: epic, Lane: "second"})
 	h.addDependency(second, first)
 
 	// --limit 1 cuts the dependent's own row, not the fact that it is a dependent.
@@ -156,9 +158,10 @@ func TestBacklogUnblocksLinesSurviveLimit(t *testing.T) {
 // them to the bottom — that's the whole reason it exists alongside `lit ready`.
 func TestBacklogKeepsBlockedItemsInRankOrder(t *testing.T) {
 	h := newBacklogTestHarness(t)
-	a := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A urgent", Topic: "blk", IssueType: "task", Priority: 1})
-	b := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B urgent", Topic: "blk", IssueType: "task", Priority: 1})
-	c := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "C normal", Topic: "blk", IssueType: "task", Priority: 0})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
+	a := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A urgent", Topic: "blk", IssueType: "task", Priority: 1, ParentID: epic, Lane: "a"})
+	b := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B urgent", Topic: "blk", IssueType: "task", Priority: 1, ParentID: epic, Lane: "b"})
+	c := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "C normal", Topic: "blk", IssueType: "task", Priority: 0, ParentID: epic, Lane: "c"})
 	h.addDependency(b, a) // b is blocked
 
 	got := h.runBacklogIDs()
@@ -175,10 +178,12 @@ func TestBacklogKeepsBlockedItemsInRankOrder(t *testing.T) {
 
 func TestBacklogTextShowsBlockedReasonsInline(t *testing.T) {
 	h := newBacklogTestHarness(t)
-	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Blocker", Topic: "blk", IssueType: "task", Priority: 1})
-	blocked := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Blocked", Topic: "blk", IssueType: "task", Priority: 1})
-	flagged := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Needs design", Topic: "blk", IssueType: "task", Priority: 0, Labels: []string{NeedsDesignLabel}})
-	outside := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Upstream fix lands", Topic: "blk", IssueType: "task", Priority: 0, Labels: []string{ExternalLabel}})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
+	// Each in its own lane, so the reason printed is the one the row carries.
+	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Blocker", Topic: "blk", IssueType: "task", Priority: 1, ParentID: epic, Lane: "blocker"})
+	blocked := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Blocked", Topic: "blk", IssueType: "task", Priority: 1, ParentID: epic, Lane: "blocked"})
+	flagged := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Needs design", Topic: "blk", IssueType: "task", Priority: 0, ParentID: epic, Lane: "flagged", Labels: []string{NeedsDesignLabel}})
+	outside := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Upstream fix lands", Topic: "blk", IssueType: "task", Priority: 0, ParentID: epic, Lane: "outside", Labels: []string{ExternalLabel}})
 	h.addDependency(blocked, blocker)
 
 	text := h.runBacklogText()
@@ -198,7 +203,8 @@ func TestBacklogTextShowsBlockedReasonsInline(t *testing.T) {
 
 func TestBacklogTextShowsPreamble(t *testing.T) {
 	h := newBacklogTestHarness(t)
-	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Anything", Topic: "any", IssueType: "task", Priority: 1})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
+	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Anything", Topic: "any", IssueType: "task", Priority: 1, ParentID: epic})
 
 	text := h.runBacklogText()
 	if !strings.Contains(text, "backlog in priority/rank order") {
@@ -225,8 +231,9 @@ func TestBacklogEmptyDataShowsMarker(t *testing.T) {
 
 func TestBacklogRespectsLimit(t *testing.T) {
 	h := newBacklogTestHarness(t)
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
 	for i := 0; i < 5; i++ {
-		h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "T", Topic: "lim", IssueType: "task", Priority: 1})
+		h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "T", Topic: "lim", IssueType: "task", Priority: 1, ParentID: epic})
 	}
 
 	got := h.runBacklogIDs("--limit", "2")
@@ -237,9 +244,10 @@ func TestBacklogRespectsLimit(t *testing.T) {
 
 func TestBacklogIncludesInProgressInline(t *testing.T) {
 	h := newBacklogTestHarness(t)
-	a := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A", Topic: "inp", IssueType: "task", Priority: 1})
-	b := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B", Topic: "inp", IssueType: "task", Priority: 1})
-	c := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "C", Topic: "inp", IssueType: "task", Priority: 1})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
+	a := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A", Topic: "inp", IssueType: "task", Priority: 1, ParentID: epic, Lane: "a"})
+	b := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B", Topic: "inp", IssueType: "task", Priority: 1, ParentID: epic, Lane: "b"})
+	c := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "C", Topic: "inp", IssueType: "task", Priority: 1, ParentID: epic, Lane: "c"})
 	if _, err := h.ap.Store.Apply(h.ctx, b, storage.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
 		t.Fatalf("start(%s) error = %v", b, err)
 	}
@@ -406,8 +414,9 @@ func TestBacklogUnblocksLinesSurviveTheStoreSideNarrowings(t *testing.T) {
 		{
 			name: "--type",
 			build: func(h backlogTestHarness) (string, string) {
-				p := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Prerequisite", Topic: "nar", IssueType: "task"})
-				d := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Dependent", Topic: "nar", IssueType: "bug"})
+				e := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic"})
+				p := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Prerequisite", Topic: "nar", IssueType: "task", ParentID: e, Lane: "p"})
+				d := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Dependent", Topic: "nar", IssueType: "bug", ParentID: e, Lane: "d"})
 				return p, d
 			},
 			args: []string{"--type", "task"},
@@ -415,8 +424,9 @@ func TestBacklogUnblocksLinesSurviveTheStoreSideNarrowings(t *testing.T) {
 		{
 			name: "--status",
 			build: func(h backlogTestHarness) (string, string) {
-				p := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Prerequisite", Topic: "nar", IssueType: "task"})
-				d := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Dependent", Topic: "nar", IssueType: "task"})
+				e := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic"})
+				p := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Prerequisite", Topic: "nar", IssueType: "task", ParentID: e, Lane: "p"})
+				d := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Dependent", Topic: "nar", IssueType: "task", ParentID: e, Lane: "d"})
 				h.start(p)
 				return p, d
 			},
@@ -425,8 +435,9 @@ func TestBacklogUnblocksLinesSurviveTheStoreSideNarrowings(t *testing.T) {
 		{
 			name: "--labels",
 			build: func(h backlogTestHarness) (string, string) {
-				p := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Prerequisite", Topic: "nar", IssueType: "task", Labels: []string{"keep"}})
-				d := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Dependent", Topic: "nar", IssueType: "task"})
+				e := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic"})
+				p := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Prerequisite", Topic: "nar", IssueType: "task", ParentID: e, Lane: "p", Labels: []string{"keep"}})
+				d := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Dependent", Topic: "nar", IssueType: "task", ParentID: e, Lane: "d"})
 				return p, d
 			},
 			args: []string{"--labels", "keep"},
@@ -434,8 +445,9 @@ func TestBacklogUnblocksLinesSurviveTheStoreSideNarrowings(t *testing.T) {
 		{
 			name: "--assignee",
 			build: func(h backlogTestHarness) (string, string) {
-				p := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Prerequisite", Topic: "nar", IssueType: "task", Assignee: "alice"})
-				d := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Dependent", Topic: "nar", IssueType: "task"})
+				e := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic"})
+				p := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Prerequisite", Topic: "nar", IssueType: "task", ParentID: e, Lane: "p", Assignee: "alice"})
+				d := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Dependent", Topic: "nar", IssueType: "task", ParentID: e, Lane: "d"})
 				return p, d
 			},
 			args: []string{"--assignee", "alice"},
@@ -470,8 +482,9 @@ func TestRankInversionCountIsIndependentOfTheStoreSideNarrowings(t *testing.T) {
 	h := newBacklogTestHarness(t)
 	// The dependent outranks its prerequisite, which is the inversion. It is a
 	// bug so --type task removes its row while leaving the inversion in place.
-	dependent := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Dependent", Topic: "inv", IssueType: "bug"})
-	prerequisite := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Prerequisite", Topic: "inv", IssueType: "task"})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
+	dependent := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Dependent", Topic: "inv", IssueType: "bug", ParentID: epic, Lane: "dependent"})
+	prerequisite := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Prerequisite", Topic: "inv", IssueType: "task", ParentID: epic, Lane: "prerequisite"})
 	h.addDependency(dependent, prerequisite)
 
 	whole := rankInversionWarning(h.runBacklogText())

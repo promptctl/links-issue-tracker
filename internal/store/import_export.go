@@ -82,6 +82,18 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 	if report.OrphanHistoryRows > 0 {
 		report.Warnings = append(report.Warnings, fmt.Sprintf("orphan issue event rows: %d", report.OrphanHistoryRows))
 	}
+	// Containment is refused at every write, so a ticket outside an epic is
+	// what the boundary was not there to refuse: a restored export, which
+	// writes rows as they were, can hold one from before schema v7. It is a
+	// column read, no hydration, so it runs on a hierarchy holding a loop. A
+	// warning, not an error: every read still answers over it, and a faithful
+	// rebuild of a pre-v7 source reproduces it, which the recovery gate must
+	// not refuse (healthFindings). [LAW:single-enforcer]
+	containment, err := containmentFindings(ctx, s.db)
+	if err != nil {
+		return report, fmt.Errorf("containment check: %w", err)
+	}
+	report.Warnings = append(report.Warnings, containment...)
 	// ORDERING IS LOAD-BEARING: this check must precede every hydrating read in
 	// Doctor, and the rank and dependency checks below are hydrating reads. Do
 	// not move it down for readability and do not hoist a shared listing above
@@ -119,7 +131,7 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 		// An error, not a warning: this is reported through the arm that makes
 		// `lit doctor` exit nonzero, so the zeros left on the unrun checks below
 		// can never be read as a clean bill of health. [LAW:no-silent-failure]
-		report.Errors = append(report.Errors, fmt.Sprintf("parent cycle: %s (a hierarchy has no root once it loops; every walk up this chain runs forever, so the rank and dependency checks below could not be run — break the loop with 'lit parent clear' on one member, which detaches without reading the hierarchy, then re-run)", strings.Join(cycle, " -> ")))
+		report.Errors = append(report.Errors, fmt.Sprintf("parent cycle: %s (a hierarchy has no root once it loops; every walk up this chain runs forever, so the rank and dependency checks below could not be run — %s, then re-run)", strings.Join(cycle, " -> "), parentCycleRepair))
 		return report, nil
 	}
 	// A child more than one framing edge claims still lists — under its lowest
@@ -198,6 +210,50 @@ func (s *Store) FixIntegrity(ctx context.Context) (storage.HealthReport, error) 
 	// reports and what an examination reports cannot drift.
 	// [LAW:one-source-of-truth]
 	return s.Doctor(ctx)
+}
+
+// containmentFindings names every ticket the containment rule does not hold
+// for (storage.RejectLeafWithoutParent, storage.RejectParentThatIsNotAContainer):
+// a task, bug, feature or chore with no parent, and a ticket under a parent
+// that is not an epic. Each finding names the one repair that fixes both, the
+// `lit parent set` that replaces every parent of its child.
+func containmentFindings(ctx context.Context, q rowQueryer) ([]string, error) {
+	rows, err := q.QueryContext(ctx, `
+SELECT i.id, i.issue_type, '' FROM issues i
+WHERE i.issue_type <> 'epic'
+  AND NOT EXISTS (SELECT 1 FROM relations r WHERE r.src_id = i.id AND r.type = 'parent-child')
+UNION ALL
+SELECT r.src_id, p.issue_type, r.dst_id FROM relations r JOIN issues p ON p.id = r.dst_id
+WHERE r.type = 'parent-child' AND p.issue_type <> 'epic'
+ORDER BY 1, 3`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var loose, underLeaf []string
+	for rows.Next() {
+		var id, issueType, parentID string
+		if err := rows.Scan(&id, &issueType, &parentID); err != nil {
+			return nil, err
+		}
+		if parentID == "" {
+			loose = append(loose, fmt.Sprintf("%s (%s)", id, issueType))
+			continue
+		}
+		underLeaf = append(underLeaf, fmt.Sprintf("%s under %s (%s)", id, parentID, issueType))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	const repair = "move each into the epic it belongs to with 'lit parent set --child <id> --parent <epic-id>'"
+	var findings []string
+	if len(loose) > 0 {
+		findings = append(findings, fmt.Sprintf("tickets outside an epic: %s (every ticket except an epic lives inside one; %s)", strings.Join(loose, ", "), repair))
+	}
+	if len(underLeaf) > 0 {
+		findings = append(findings, fmt.Sprintf("tickets under a parent that is not an epic: %s (only an epic contains tickets; %s)", strings.Join(underLeaf, ", "), repair))
+	}
+	return findings, nil
 }
 
 func (s *Store) ReplaceFromExport(ctx context.Context, export model.Export) error {

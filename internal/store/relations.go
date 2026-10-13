@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -345,7 +346,13 @@ func addRelationTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
 	if err := requireIssueExistsTx(ctx, tx, rel.SrcID); err != nil {
 		return err
 	}
-	if err := requireIssueExistsTx(ctx, tx, rel.DstID); err != nil {
+	// The dst's type is the dst's existence proof: one read answers both,
+	// as the memory engine's record lookup does. [LAW:one-source-of-truth]
+	dstType, err := issueTypeTx(ctx, tx, rel.DstID)
+	if err != nil {
+		return err
+	}
+	if err := storage.RejectNonContainerParentEdge(rel.Type, rel.DstID, dstType); err != nil {
 		return err
 	}
 	if err := rejectCycleTx(ctx, tx, rel); err != nil {
@@ -386,6 +393,22 @@ func rejectCycleTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
 		return rejectParentCycle(ctx, tx, rel.SrcID, rel.DstID)
 	}
 	return nil
+}
+
+// issueTypeTx reads an issue's type on the tx, proving the row exists in the
+// same read: the containment rules judge an endpoint by its type, so this is
+// the existence proof the relation writes take for it. It hydrates nothing —
+// no parent chain is climbed — so it is safe on a hierarchy holding a loop,
+// which is what ClearParent needs it for.
+func issueTypeTx(ctx context.Context, tx *sql.Tx, issueID string) (model.IssueType, error) {
+	var issueType model.IssueType
+	if err := tx.QueryRowContext(ctx, `SELECT issue_type FROM issues WHERE id = ?`, issueID).Scan(&issueType); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", storage.NotFoundError{Entity: "issue", ID: issueID}
+		}
+		return "", fmt.Errorf("read issue type: %w", err)
+	}
+	return issueType, nil
 }
 
 // insertRelationTx writes one relation row on the given transaction. It runs on
@@ -493,10 +516,18 @@ func rejectParentCycle(ctx context.Context, tx *sql.Tx, childID, parentID string
 	// [LAW:one-source-of-truth] The same detector Doctor reports with, asked
 	// about the subgraph this edge would attach to rather than the workspace.
 	if cycle := parentCycle(above); len(cycle) > 0 {
-		return fmt.Errorf("parent-child: cannot make %s a child of %s — the hierarchy above %s already holds a cycle (%s); break it with 'lit dep rm' on one of those edges, then retry", childID, parentID, parentID, strings.Join(cycle, " -> "))
+		return fmt.Errorf("parent-child: cannot make %s a child of %s — the hierarchy above %s already holds a cycle (%s); %s, then retry", childID, parentID, parentID, strings.Join(cycle, " -> "), parentCycleRepair)
 	}
 	return nil
 }
+
+// parentCycleRepair is the repair every report of a stored parent loop names.
+// A loop is usually leaves, and a leaf cannot be detached, so the first way is
+// the reparent: it replaces every parent the member holds, and it climbs only
+// above the epic it names, so that epic must sit outside the loop. The second
+// way is for a member that is an epic belonging at the top level.
+// [LAW:one-source-of-truth] Doctor and the write boundary name one repair.
+const parentCycleRepair = "break it with 'lit parent set --child <one member> --parent <an epic outside the loop>', which replaces every parent that member holds, or with 'lit parent clear <member>' for a member that is an epic belonging at the top level"
 
 // parentCycle returns the members of one loop in the hierarchy, in walk order,
 // or nothing when the parent graph is a forest.
@@ -642,7 +673,22 @@ func (s *Store) RemoveRelation(ctx context.Context, srcID, dstID string, relType
 		if affected == 0 {
 			return storage.NotFoundError{Entity: "relation", ID: fmt.Sprintf("src=%s dst=%s type=%s", srcID, dstID, relType)}
 		}
-		return nil
+		// `lit dep rm --type parent-child` is the other door onto a detach,
+		// so it meets ClearParent's rule: a leaf keeps a parent. Judged after
+		// the delete, against the parent edges left, so a missing edge is
+		// still reported as missing; the refusal rolls the delete back.
+		// [LAW:single-enforcer]
+		return storage.RejectDetachingParentEdge(relType, srcID, func() (model.IssueType, int, error) {
+			childType, err := issueTypeTx(ctx, tx, srcID)
+			if err != nil {
+				return "", 0, err
+			}
+			var parentsLeft int
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM relations WHERE src_id = ? AND type = 'parent-child'`, srcID).Scan(&parentsLeft); err != nil {
+				return "", 0, fmt.Errorf("count parent edges of %s: %w", srcID, err)
+			}
+			return childType, parentsLeft, nil
+		})
 	})
 }
 
@@ -704,21 +750,30 @@ func (s *Store) SetParent(ctx context.Context, in storage.SetParentInput) (model
 	return rel, nil
 }
 
-// ClearParent detaches a child from its parent.
+// ClearParent detaches a child from its parent. Only a container can be
+// detached: a leaf lives inside an epic (storage.RejectDetachingALeaf), so
+// the one thing this verb does is lift a nested epic to the top level.
 //
-// It reads nothing before the DELETE. That is what makes it usable on the one
-// workspace that needs it most: a hierarchy holding a loop, which `lit doctor`
-// names and tells the operator to break here. Hydrating the child first —
-// GetIssue climbs the parent chain — would overflow the stack on exactly that
-// state, so the repair would crash on the fault it is the repair for.
-// Existence is still proven, on the tx and without hydrating, because the two
-// absences are different diagnoses: "no such issue" and "that issue has no
-// parent" send the operator to different places, and collapsing them into the
-// DELETE's rows-affected would report a typo'd id as a missing edge.
-// [LAW:no-silent-failure]
+// It hydrates nothing before the DELETE. That is what makes it usable on the
+// one workspace that needs it most: a hierarchy holding a loop, which `lit
+// doctor` names and tells the operator to break here. Hydrating the child
+// first — GetIssue climbs the parent chain — would overflow the stack on
+// exactly that state, so the repair would crash on the fault it is the repair
+// for. The child's type is read as a column on the tx, which also proves it
+// exists, because the two absences are different diagnoses: "no such issue"
+// and "that issue has no parent" send the operator to different places, and
+// collapsing them into the DELETE's rows-affected would report a typo'd id as
+// a missing edge. [LAW:no-silent-failure]
 func (s *Store) ClearParent(ctx context.Context, childID string) error {
 	return s.withMutation(ctx, "clear parent", func(ctx context.Context, tx *sql.Tx) error {
-		if err := requireIssueExistsTx(ctx, tx, childID); err != nil {
+		// The type read also proves the child exists, so an unknown id is
+		// reported as a missing issue, not a missing edge. Every parent edge
+		// goes, so none is left. [LAW:single-enforcer]
+		childType, err := issueTypeTx(ctx, tx, childID)
+		if err != nil {
+			return err
+		}
+		if err := storage.RejectDetachingALeaf(childID, childType, 0); err != nil {
 			return err
 		}
 		res, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE src_id = ? AND type = 'parent-child'`, childID)

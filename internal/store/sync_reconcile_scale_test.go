@@ -161,11 +161,11 @@ func TestSyncReconcileCombineIsBoundedOnALargeFoldedChain(t *testing.T) {
 	}
 }
 
-// scaleFoldedChainOverhead is the two commits B's chain carries besides its
-// per-edit commits: the issue that bootstraps the workspace, and the one that
-// plants the backlog. Both are part of the folded side and are replayed like
-// any other.
-const scaleFoldedChainOverhead = 2
+// scaleFoldedChainOverhead is the three commits B's chain carries besides its
+// per-edit commits: the epic and the issue inside it that bootstrap the
+// workspace, and the one that plants the backlog. All three are part of the
+// folded side and are replayed like any other.
+const scaleFoldedChainOverhead = 3
 
 // scalePlantedBirth is the one creation instant every planted row carries on both
 // sides of the pair. A ticket's created_at is what identifies it across stores, so
@@ -271,14 +271,21 @@ func seedUnrelatedBacklogPair(t *testing.T, ctx context.Context, rootA, rootB, r
 // produced on its own.
 func plantScaleBacklog(t *testing.T, ctx context.Context, st *Store, issues int) {
 	t.Helper()
-	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "seed", Topic: "scale", IssueType: "task"}); err != nil {
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "scale epic", Topic: "scale", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic): %v", err)
+	}
+	seedIssue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "seed", Topic: "scale", IssueType: "task", ParentID: epic.ID})
+	if err != nil {
 		t.Fatalf("CreateIssue(seed): %v", err)
 	}
 	export, err := st.Export(ctx)
 	if err != nil {
 		t.Fatalf("Export(seed): %v", err)
 	}
-	seed := export.Issues[0]
+	seed := issueByID(t, export, seedIssue.ID)
+	// The planted rows replace the seed and its epic alike; the backlog is
+	// issue rows only, planted below the write boundary.
 	export.Issues = make([]model.Issue, 0, issues)
 	for i := 0; i < issues; i++ {
 		issue := seed

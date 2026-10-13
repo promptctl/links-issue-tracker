@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -24,7 +23,7 @@ import (
 // [LAW:single-enforcer] Atomic tree import is the one shared boundary that
 // owns ID resolution + topological create order.
 func (s *Store) ImportTree(ctx context.Context, prefix string, specs []storage.ImportTreeSpec) (storage.ImportTreeResult, error) {
-	if err := validateImportTreeSpecs(specs); err != nil {
+	if err := storage.ValidateImportTreeSpecs(specs); err != nil {
 		return storage.ImportTreeResult{}, err
 	}
 	order, err := topoSortImportSpecs(specs)
@@ -101,60 +100,6 @@ func (s *Store) rollbackCreatedIssues(ctx context.Context, createdIDs []string) 
 		}
 	}
 	return leaked
-}
-
-func validateImportTreeSpecs(specs []storage.ImportTreeSpec) error {
-	if len(specs) == 0 {
-		return errors.New("import: no issues in input")
-	}
-	seen := make(map[string]struct{}, len(specs))
-	for i, spec := range specs {
-		if strings.TrimSpace(spec.LocalID) == "" {
-			return fmt.Errorf("import: spec %d missing local_id", i)
-		}
-		if spec.LocalID != strings.TrimSpace(spec.LocalID) {
-			return fmt.Errorf("import: spec %d local_id %q has surrounding whitespace", i, spec.LocalID)
-		}
-		if strings.TrimSpace(spec.Title) == "" {
-			return fmt.Errorf("import: spec %q missing title", spec.LocalID)
-		}
-		// [LAW:single-enforcer] Membership comes from the one ParseIssueType
-		// gate; specs are agent-authored input, so they parse strictly here —
-		// before any issue is created — rather than relying on the salvage
-		// convention.
-		if _, err := model.ParseIssueType(spec.IssueType); err != nil {
-			return fmt.Errorf("import: spec %q has invalid type %q", spec.LocalID, spec.IssueType)
-		}
-		if _, err := model.ParsePriority(spec.Priority); err != nil {
-			return fmt.Errorf("import: spec %q has invalid priority %d", spec.LocalID, spec.Priority)
-		}
-		if _, dup := seen[spec.LocalID]; dup {
-			return fmt.Errorf("import: duplicate local_id %q", spec.LocalID)
-		}
-		seen[spec.LocalID] = struct{}{}
-	}
-	for _, spec := range specs {
-		if spec.Parent != "" {
-			if spec.Parent != strings.TrimSpace(spec.Parent) {
-				return fmt.Errorf("import: spec %q parent %q has surrounding whitespace", spec.LocalID, spec.Parent)
-			}
-			if _, ok := seen[spec.Parent]; !ok {
-				return fmt.Errorf("import: spec %q references missing parent %q", spec.LocalID, spec.Parent)
-			}
-		}
-		for _, dep := range spec.DependsOn {
-			if dep != strings.TrimSpace(dep) {
-				return fmt.Errorf("import: spec %q depends_on entry %q has surrounding whitespace", spec.LocalID, dep)
-			}
-			if _, ok := seen[dep]; !ok {
-				return fmt.Errorf("import: spec %q references missing depends_on %q", spec.LocalID, dep)
-			}
-			if dep == spec.LocalID {
-				return fmt.Errorf("import: spec %q cannot depend on itself", spec.LocalID)
-			}
-		}
-	}
-	return nil
 }
 
 // topoSortImportSpecs returns indices of specs in an order such that for

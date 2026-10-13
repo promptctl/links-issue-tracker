@@ -180,7 +180,11 @@ func (e *Engine) addRelation(in storage.AddRelationInput) (model.Relation, error
 	if _, err := e.mustRecord(srcID); err != nil {
 		return model.Relation{}, err
 	}
-	if _, err := e.mustRecord(dstID); err != nil {
+	dst, err := e.mustRecord(dstID)
+	if err != nil {
+		return model.Relation{}, err
+	}
+	if err := storage.RejectNonContainerParentEdge(in.Type, dstID, dst.issueType); err != nil {
 		return model.Relation{}, err
 	}
 	if err := e.rejectCycle(in.Type, srcID, dstID); err != nil {
@@ -318,12 +322,31 @@ func (e *Engine) RemoveRelation(ctx context.Context, srcID, dstID string, relTyp
 	defer e.mu.Unlock()
 
 	srcID, dstID = relType.CanonicalEndpoints(srcID, dstID)
-	removed := e.dropRelations(func(rel model.Relation) bool {
-		return rel.SrcID == srcID && rel.DstID == dstID && rel.Type == relType
-	})
-	if removed == 0 {
+	if !e.hasRelation(srcID, dstID, relType) {
 		return storage.NotFoundError{Entity: "relation", ID: fmt.Sprintf("src=%s dst=%s type=%s", srcID, dstID, relType)}
 	}
+	// `lit dep rm --type parent-child` is the other door onto a detach, so it
+	// meets ClearParent's rule: a leaf keeps a parent, judged against the
+	// parent edges left once this one goes. The edge exists, so its src does.
+	// [LAW:single-enforcer]
+	if err := storage.RejectDetachingParentEdge(relType, srcID, func() (model.IssueType, int, error) {
+		child, err := e.mustRecord(srcID)
+		if err != nil {
+			return "", 0, err
+		}
+		parentsLeft := 0
+		for _, rel := range e.relations {
+			if rel.SrcID == srcID && rel.Type == model.RelParentChild && rel.DstID != dstID {
+				parentsLeft++
+			}
+		}
+		return child.issueType, parentsLeft, nil
+	}); err != nil {
+		return err
+	}
+	e.dropRelations(func(rel model.Relation) bool {
+		return rel.SrcID == srcID && rel.DstID == dstID && rel.Type == relType
+	})
 	return nil
 }
 
@@ -397,15 +420,23 @@ func (e *Engine) SetParent(ctx context.Context, in storage.SetParentInput) (mode
 	})
 }
 
-// ClearParent detaches a child from its parent. Clearing a child that has no
-// parent is an absence report, not a silent success: the caller asked to
-// remove an edge, and reporting removal of one that was never there would be
-// an answer-shaped void. [LAW:no-silent-failure]
+// ClearParent detaches a child from its parent. Only a container can be
+// detached: a leaf lives inside an epic (storage.RejectDetachingALeaf), so
+// the one thing this verb does is lift a nested epic to the top level.
+// Clearing a child that has no parent is an absence report, not a silent
+// success: the caller asked to remove an edge, and reporting removal of one
+// that was never there would be an answer-shaped void. [LAW:no-silent-failure]
 func (e *Engine) ClearParent(ctx context.Context, childID string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if _, err := e.mustRecord(childID); err != nil {
+	// The record is read for its type alone, so this answers on a hierarchy
+	// holding a loop. Every parent edge goes, so none is left.
+	child, err := e.mustRecord(childID)
+	if err != nil {
+		return err
+	}
+	if err := storage.RejectDetachingALeaf(childID, child.issueType, 0); err != nil {
 		return err
 	}
 	removed := e.dropRelations(func(rel model.Relation) bool {

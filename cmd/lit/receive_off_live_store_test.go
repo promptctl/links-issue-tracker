@@ -63,7 +63,10 @@ func TestReceiveFetchLeavesTheLiveStoreFree(t *testing.T) {
 		return out
 	}
 	mustLit(producer, quiet, "init", "--skip-hooks", "--skip-agents")
-	mustLit(producer, quiet, "new", "--title", "first-ticket", "--topic", "demo", "--type", "task")
+	// The epic travels with the first push, so the consumer's init adopts it
+	// and the consumer's own leaf below can name it.
+	epic := newEpicViaLit(t, producer, self, quiet, "shared-epic")
+	mustLit(producer, quiet, "new", "--title", "first-ticket", "--topic", "demo", "--type", "task", "--parent", epic)
 	mustLit(producer, quiet, "sync", "push", "--set-upstream")
 
 	consumer := filepath.Join(base, "bravo")
@@ -72,7 +75,7 @@ func TestReceiveFetchLeavesTheLiveStoreFree(t *testing.T) {
 	runGit(t, consumer, "config", "user.name", "bravo")
 	mustLit(consumer, quiet, "init", "--skip-hooks", "--skip-agents")
 
-	mustLit(producer, quiet, "new", "--title", "peer-ticket", "--topic", "demo", "--type", "task")
+	mustLit(producer, quiet, "new", "--title", "peer-ticket", "--topic", "demo", "--type", "task", "--parent", epic)
 	mustLit(producer, quiet, "sync", "push")
 
 	const fetchStall = 5 * time.Second
@@ -112,7 +115,7 @@ func TestReceiveFetchLeavesTheLiveStoreFree(t *testing.T) {
 	}
 
 	writeStart := time.Now()
-	out, err := runLit(t, consumer, self, quiet, "new", "--title", "local-ticket", "--topic", "demo", "--type", "task")
+	out, err := runLit(t, consumer, self, quiet, "new", "--title", "local-ticket", "--topic", "demo", "--type", "task", "--parent", epic)
 	writeTook := time.Since(writeStart)
 	if err != nil {
 		t.Fatalf("a write during the receive's fetch failed after %s; the fetch must not hold the live store:\n%s", writeTook, out)

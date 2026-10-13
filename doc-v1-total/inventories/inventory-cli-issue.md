@@ -591,7 +591,7 @@ else ready.
 | `--prompt` | string | `""` | "Reusable agent prompt for the work this issue captures" |
 | `--type` | string | `task` | "Issue type: task\|feature\|bug\|chore\|epic" |
 | `--topic` | string | `""` | "Required immutable issue topic slug (1-2 words; stable area of focus; e.g., 'refactor' or 'field-history')" |
-| `--parent` | string | `""` | "Optional parent issue ID; child IDs become parentID.\<n>" |
+| `--parent` | string | `""` | "Epic the ticket lives inside — required for every type but epic, which may be top-level or inside another epic; child IDs become parentID.\<hash>" |
 | `--priority` | string | `normal` | "Priority: normal\|urgent", the choice list derived from `model.Priorities()` via `priorityChoices()`. A string, not an int, deliberately: an `fs.Int` let pflag's `strconv.ParseInt` refuse the display word before lit's own gate ran (links-cli-bvko). The decimal spelling is still accepted, by `ParsePriorityName` rather than by pflag |
 | `--assignee` | string | `""` | "Assignee" (trimmed, `cli.go`) |
 | `--labels` | string | `""` | "Comma-separated labels" (split by `splitCSV`) |
@@ -610,7 +610,9 @@ else ready.
   blank title → `"title is required"` (`store.go`); blank/short/long topic
   → `"topic is required"` / `"topic must be at least N characters after
   normalization"` / `"topic must be at most N characters after normalization"`
-  (`internal/issueid/slug.go`); a `--parent` id that does not exist → a
+  (`internal/issueid/slug.go`); a leaf with no `--parent` → `storage.RejectLeafWithoutParent`
+  and a `--parent` naming anything but an epic → `storage.RejectParentThatIsNotAContainer`
+  (`internal/storage/containment.go`); a `--parent` id that does not exist → a
   not-found error (`store.go`). Labels are canonicalized, de-duplicated and
   sorted (`internal/store/labels.go`).
 - Side effects: creates the issue; dispatches `EventTicketCreated`
@@ -625,10 +627,11 @@ else ready.
   (`cli.go`).
 - Flags (`cli.go`): `--on` (string, `""`, "Required id of the ticket this
   follows up (typically the just-closed ticket)"), `--title` (required), `--description`,
-  `--prompt`, `--type` (default `task`), `--topic`, `--priority` (default 0),
-  `--assignee`, `--labels`, `--top`. No `--parent`, no `--lane`.
+  `--prompt`, `--type` (default `task`), `--parent` (string, `""`, "Epic to file
+  the follow-up in; defaults to the parent of --on, beside it"), `--topic`,
+  `--priority` (default 0), `--assignee`, `--labels`, `--top`. No `--lane`.
 - Refusal: blank `--on` or blank `--title` (after trim) →
-  `UsageError{"usage: lit followup --on <id> --title <text> [--description <text>] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--top]"}`
+  `UsageError{"usage: lit followup --on <id> --title <text> [--description <text>] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--parent <epic-id>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--top]"}`
   → exit 2 (`cli.go`).
 - Reads the `--on` ticket via `GetIssueDetail(onID)`; a missing ticket is not-found → exit 4
   (`cli.go`).
@@ -636,8 +639,9 @@ else ready.
   (`cli.go`); blank `--description` becomes
   `"Follow-up surfaced at the close of <origin.Issue.ID>: <origin.Issue.Title>"`
   (`cli.go`).
-- Creates with `ParentID` = the `--on` ticket's parent id (`""` when it has
-  none) and `FollowsUp = origin.Issue.ID` (`cli.go`), dispatches
+- Creates with `ParentID` = the trimmed `--parent`, or when blank the `--on`
+  ticket's parent id (`""` when it has none), and `FollowsUp = origin.Issue.ID`
+  (`cli.go`), dispatches
   `EventTicketCreated`, prints the summary line, emits breadcrumb `new`
   (`cli.go`).
 - Surplus positionals refused by `refuseSurplusPositionals` (`register.go`),
@@ -1655,7 +1659,7 @@ Family `parentFamily`, usage `"usage: lit parent <set|clear> ..."`
   `UsageError{"usage: lit parent clear <child-id>"}` → exit 2
   (`issue_relations.go`). Surplus positionals refused by
   `refuseSurplusPositionals` (`register.go`) before `parent clear`'s work runs.
-- Calls `Store.ClearParent(childID)`; prints `ok` then the `update` breadcrumb.
+- Calls `Store.ClearParent(childID)`, which refuses a leaf (`storage.RejectDetachingALeaf`, exit 3) and detaches an epic; prints `ok` then the `update` breadcrumb.
 
 ### 2.20 `lit dep` — Manage dependency edges
 

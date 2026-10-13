@@ -211,9 +211,12 @@ type LaneID struct {
 //
 // A non-container parent scopes nothing: lanes partition an epic's children, so
 // an issue parented to a leaf is in its own lane exactly as a parentless one is.
-// The readiness gate makes the same call on the same field; keeping the rule here
-// means "which lane is this in" has one answer for both consumers.
-// [LAW:single-enforcer]
+// Containment (storage.RejectParentThatIsNotAContainer) means no write produces
+// that shape any more — every parent is an epic, and only an epic is parentless
+// — so the solo arm is a top-level epic's, and a leaf under a leaf reaches it
+// only from restored data. The readiness gate makes the same call on the same
+// field; keeping the rule here means "which lane is this in" has one answer for
+// both consumers. [LAW:single-enforcer]
 //
 // Reads no lifecycle, so it answers for an unhydrated issue: lane identity is
 // structural, and asking which lane a ticket is in never needs to know how it

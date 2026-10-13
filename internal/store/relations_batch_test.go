@@ -29,15 +29,21 @@ func TestGetRelationsByIDsMatchesIssueDetail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(childB) error = %v", err)
 	}
-	upstream, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Upstream", Topic: "rel", IssueType: "task", Priority: 0})
+	// The dependency endpoints live under a second epic, so the subject
+	// epic's children stay exactly the two the spot-check below counts.
+	other, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Other", Topic: "rel", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(other) error = %v", err)
+	}
+	upstream, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Upstream", Topic: "rel", IssueType: "task", Priority: 0, ParentID: other.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(upstream) error = %v", err)
 	}
-	downstream, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Downstream", Topic: "rel", IssueType: "task", Priority: 0})
+	downstream, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Downstream", Topic: "rel", IssueType: "task", Priority: 0, ParentID: other.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(downstream) error = %v", err)
 	}
-	peer, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Peer", Topic: "rel", IssueType: "task", Priority: 0})
+	peer, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Peer", Topic: "rel", IssueType: "task", Priority: 0, ParentID: other.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(peer) error = %v", err)
 	}

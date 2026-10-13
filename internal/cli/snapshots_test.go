@@ -267,7 +267,7 @@ func TestDataMutations_ProduceZeroSnapshots(t *testing.T) {
 	before := snapshotsOnDisk(t, ws)
 
 	// Drive a series of data mutations and reads that must not produce snapshots.
-	captureRun(t, "new", "--title", "test", "--type", "task", "--topic", "test-topic")
+	captureRun(t, "new", "--title", "test", "--type", "epic", "--topic", "test-topic")
 	captureRun(t, "ls")
 
 	after := snapshotsOnDisk(t, ws)

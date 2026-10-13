@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -19,7 +18,7 @@ import (
 // rollback itself failed. [LAW:single-enforcer] one boundary owns ID
 // resolution, create/update dispatch, and topological create order.
 func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []storage.BulkIssueSpec) (storage.BulkApplyResult, error) {
-	if err := validateBulkSpecs(specs); err != nil {
+	if err := storage.ValidateBulkSpecs(specs); err != nil {
 		return storage.BulkApplyResult{}, err
 	}
 	localID := make([]string, len(specs))
@@ -184,145 +183,4 @@ func derefOr[T any](p *T, fallback T) T {
 		return fallback
 	}
 	return *p
-}
-
-// validateBulkSpecs enumerates the full accept/reject shape of a bulk-input
-// file before any document is applied, so a batch either wholly makes sense
-// or fails before touching the store:
-//
-//	MUST ACCEPT
-//	  - id set; only update-eligible fields set (title/description/prompt/
-//	    type/priority/assignee/labels/lane, at least one); no local_id,
-//	    topic, parent, or depends_on.
-//	  - id unset; title, topic, and type set (type valid); priority unset
-//	    (defaults) or valid; parent/depends_on/local_id set freely.
-//	  - two different documents naming the same local_id-or-external parent,
-//	    or the same depends_on target — sharing a reference is not sharing
-//	    an id.
-//
-//	MUST REJECT
-//	  - empty file (zero documents).
-//	  - id or local_id with surrounding whitespace.
-//	  - id set and local_id also set (local_id is create-only).
-//	  - id set and topic set (topic is immutable; update cannot change it).
-//	  - id set and parent set (reparenting is `lit parent set`'s job).
-//	  - id set and depends_on set (dependency wiring is `lit dep add`'s job).
-//	  - id set and reason set with no other field set (nothing to annotate).
-//	  - id set but zero update-eligible fields set (matches `lit update`
-//	    requiring at least one field flag).
-//	  - id set twice across documents (each document owns one ticket).
-//	  - id unset and title, topic, or type missing.
-//	  - id unset and reason set (no field-change event to annotate).
-//	  - local_id duplicated across two create documents.
-//	  - a document's own local_id appearing in its own depends_on.
-//	  - type or priority present but invalid, on either side.
-//
-// [LAW:types-are-the-program] the two branches below are exactly the two
-// legal document shapes; nothing outside them is representable as valid.
-func validateBulkSpecs(specs []storage.BulkIssueSpec) error {
-	if len(specs) == 0 {
-		return errors.New("bulk: no issues in input")
-	}
-	seenID := make(map[string]struct{}, len(specs))
-	seenLocal := make(map[string]struct{}, len(specs))
-	for i, spec := range specs {
-		if spec.ID != strings.TrimSpace(spec.ID) {
-			return fmt.Errorf("bulk: doc %d id %q has surrounding whitespace", i, spec.ID)
-		}
-		if spec.LocalID != strings.TrimSpace(spec.LocalID) {
-			return fmt.Errorf("bulk: doc %d local_id %q has surrounding whitespace", i, spec.LocalID)
-		}
-		if spec.Parent != strings.TrimSpace(spec.Parent) {
-			return fmt.Errorf("bulk: doc %d parent %q has surrounding whitespace", i, spec.Parent)
-		}
-		for _, dep := range spec.DependsOn {
-			if dep != strings.TrimSpace(dep) {
-				return fmt.Errorf("bulk: doc %d depends_on entry %q has surrounding whitespace", i, dep)
-			}
-			if spec.LocalID != "" && dep == spec.LocalID {
-				return fmt.Errorf("bulk: doc %d (local_id %q) cannot depend on itself", i, spec.LocalID)
-			}
-		}
-
-		if spec.ID != "" {
-			if err := validateBulkUpdateDoc(i, spec); err != nil {
-				return err
-			}
-			if _, dup := seenID[spec.ID]; dup {
-				return fmt.Errorf("bulk: duplicate id %q", spec.ID)
-			}
-			seenID[spec.ID] = struct{}{}
-			continue
-		}
-
-		if err := validateBulkCreateDoc(i, spec); err != nil {
-			return err
-		}
-		if spec.LocalID != "" {
-			if _, dup := seenLocal[spec.LocalID]; dup {
-				return fmt.Errorf("bulk: duplicate local_id %q", spec.LocalID)
-			}
-			seenLocal[spec.LocalID] = struct{}{}
-		}
-	}
-	return nil
-}
-
-func validateBulkCreateDoc(i int, spec storage.BulkIssueSpec) error {
-	if spec.Title == nil || strings.TrimSpace(*spec.Title) == "" {
-		return fmt.Errorf("bulk: doc %d missing title", i)
-	}
-	if spec.Topic == nil || strings.TrimSpace(*spec.Topic) == "" {
-		return fmt.Errorf("bulk: doc %d missing topic", i)
-	}
-	if spec.IssueType == nil {
-		return fmt.Errorf("bulk: doc %d missing type", i)
-	}
-	if _, err := model.ParseIssueType(*spec.IssueType); err != nil {
-		return fmt.Errorf("bulk: doc %d has invalid type %q", i, *spec.IssueType)
-	}
-	if spec.Priority != nil {
-		if _, err := model.ParsePriority(*spec.Priority); err != nil {
-			return fmt.Errorf("bulk: doc %d has invalid priority %d", i, *spec.Priority)
-		}
-	}
-	if spec.Reason != "" {
-		return fmt.Errorf("bulk: doc %d sets reason without id (reason only applies to updates)", i)
-	}
-	return nil
-}
-
-func validateBulkUpdateDoc(i int, spec storage.BulkIssueSpec) error {
-	if spec.LocalID != "" {
-		return fmt.Errorf("bulk: doc %d (id %q) sets local_id; local_id only applies to new tickets", i, spec.ID)
-	}
-	if spec.Topic != nil {
-		return fmt.Errorf("bulk: doc %d (id %q) sets topic; topic is immutable and update cannot change it", i, spec.ID)
-	}
-	if spec.Parent != "" {
-		return fmt.Errorf("bulk: doc %d (id %q) sets parent; reparent with `lit parent set` instead", i, spec.ID)
-	}
-	if len(spec.DependsOn) > 0 {
-		return fmt.Errorf("bulk: doc %d (id %q) sets depends_on; wire dependencies with `lit dep add` instead", i, spec.ID)
-	}
-	if spec.IssueType != nil {
-		if _, err := model.ParseIssueType(*spec.IssueType); err != nil {
-			return fmt.Errorf("bulk: doc %d (id %q) has invalid type %q", i, spec.ID, *spec.IssueType)
-		}
-	}
-	if spec.Priority != nil {
-		if _, err := model.ParsePriority(*spec.Priority); err != nil {
-			return fmt.Errorf("bulk: doc %d (id %q) has invalid priority %d", i, spec.ID, *spec.Priority)
-		}
-	}
-	if !bulkUpdateHasField(spec) {
-		return fmt.Errorf("bulk: doc %d (id %q) has no fields to update", i, spec.ID)
-	}
-	return nil
-}
-
-func bulkUpdateHasField(spec storage.BulkIssueSpec) bool {
-	return spec.Title != nil || spec.Description != nil || spec.Prompt != nil ||
-		spec.IssueType != nil || spec.Priority != nil || spec.Assignee != nil ||
-		spec.Labels != nil || spec.Lane != nil
 }

@@ -38,6 +38,7 @@ func TestRunTransitionInjectsProjectWorkflowFromArbitraryNestedPath(t *testing.T
 
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
 		Title: "Injection test", Topic: "workflows", IssueType: "task", Priority: 0,
+		ParentID: seedEpicRaw(t, ctx, ap, "Workflows", "workflows"),
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
@@ -63,6 +64,7 @@ func TestRunTransitionProjectLayerOverridesEmbeddedDoneByID(t *testing.T) {
 
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
 		Title: "Override test", Topic: "workflows", IssueType: "task", Priority: 0,
+		ParentID: seedEpicRaw(t, ctx, ap, "Workflows", "workflows"),
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)

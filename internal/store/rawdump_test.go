@@ -51,12 +51,20 @@ func TestDumpRawReleasesDeadendedWorkspace(t *testing.T) {
 	const workspaceID = "test-workspace-id"
 
 	// Seed real application data through the normal write path, then capture
-	// the IDs the dump must later surface.
+	// the IDs the dump must later surface: the epic the subjects live in and
+	// the subjects themselves.
 	var ids []string
 	withStore(t, ctx, doltRoot, func(st *Store) {
+		epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{
+			Title: "rescue epic", IssueType: "epic", Topic: "recovery", Prefix: "links",
+		})
+		if err != nil {
+			t.Fatalf("CreateIssue(epic) error = %v", err)
+		}
+		ids = append(ids, epic.ID)
 		for _, title := range []string{"first rescue subject", "second rescue subject"} {
 			issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-				Title: title, IssueType: "task", Topic: "recovery", Prefix: "links",
+				Title: title, IssueType: "task", Topic: "recovery", Prefix: "links", ParentID: epic.ID,
 			})
 			if err != nil {
 				t.Fatalf("CreateIssue(%q) error = %v", title, err)
@@ -135,10 +143,18 @@ func TestDumpRawHealthyWorkspaceRoundTripsValues(t *testing.T) {
 	doltRoot := migratedDoltDir(t)
 	const workspaceID = "test-workspace-id"
 
+	// The subject lives in an epic, so the dump holds two rows; the one
+	// inspected is the subject's, found by id.
 	var id string
 	withStore(t, ctx, doltRoot, func(st *Store) {
+		epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{
+			Title: "fidelity epic", IssueType: "epic", Topic: "recovery", Prefix: "links",
+		})
+		if err != nil {
+			t.Fatalf("CreateIssue(epic) error = %v", err)
+		}
 		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-			Title: "fidelity subject", IssueType: "task", Topic: "recovery", Prefix: "links",
+			Title: "fidelity subject", IssueType: "task", Topic: "recovery", Prefix: "links", ParentID: epic.ID,
 		})
 		if err != nil {
 			t.Fatalf("CreateIssue error = %v", err)
@@ -152,17 +168,25 @@ func TestDumpRawHealthyWorkspaceRoundTripsValues(t *testing.T) {
 	}
 
 	issues := findTable(t, dump, "issues")
-	if len(issues.Rows) != 1 {
-		t.Fatalf("issues rows = %d, want 1", len(issues.Rows))
+	if len(issues.Rows) != 2 {
+		t.Fatalf("issues rows = %d, want 2 (the epic and the subject)", len(issues.Rows))
 	}
-	row := issues.Rows[0]
+	idCol := columnIndex(t, issues, "id")
+	var row []any
+	for _, candidate := range issues.Rows {
+		if got, ok := candidate[idCol].(string); ok && got == id {
+			row = candidate
+		}
+	}
+	if row == nil {
+		t.Fatalf("dump holds no row with id %q; rows = %v", id, issues.Rows)
+	}
 
 	titleCol := columnIndex(t, issues, "title")
 	if title, ok := row[titleCol].(string); !ok || title != "fidelity subject" {
 		t.Errorf("title cell = %v (%T); want string %q", row[titleCol], row[titleCol], "fidelity subject")
 	}
 
-	idCol := columnIndex(t, issues, "id")
 	if got, ok := row[idCol].(string); !ok || got != id {
 		t.Errorf("id cell = %v (%T); want string %q", row[idCol], row[idCol], id)
 	}

@@ -21,6 +21,7 @@ func TestRunHistoryPrintsMultiEditTransitionTrail(t *testing.T) {
 
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
 		Title: "Original title", Topic: "history", IssueType: "task", Priority: 0,
+		ParentID: seedEpicRaw(t, ctx, ap, "History", "history"),
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)

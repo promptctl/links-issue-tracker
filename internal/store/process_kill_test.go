@@ -41,6 +41,10 @@ func TestHelperKillMidCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("helper Open() error = %v", err)
 	}
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "kill target epic", Topic: "crash", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("helper CreateIssue(epic) error = %v", err)
+	}
 	st.commitWorkingSetHookForTest = func() error {
 		_ = syscall.Kill(os.Getpid(), syscall.SIGKILL)
 		select {} // unreachable if the kill lands; guards against any delay
@@ -51,6 +55,7 @@ func TestHelperKillMidCommit(t *testing.T) {
 		Topic:     "crash",
 		IssueType: "task",
 		Priority:  0,
+		ParentID:  epic.ID,
 	})
 	t.Fatal("helper process was not killed inside the commitWorkingSetOnce hook")
 }
@@ -106,7 +111,11 @@ func TestMidMutationProcessKillRecovers(t *testing.T) {
 
 	// A fresh mutation must succeed — proves the store is not wedged behind
 	// a lock the dead holder failed to release.
-	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "post-kill issue", Topic: "crash", IssueType: "task", Priority: 0})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "post-kill epic", Topic: "crash", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) after mid-commit kill error = %v", err)
+	}
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "post-kill issue", Topic: "crash", IssueType: "task", Priority: 0, ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue() after mid-commit kill error = %v", err)
 	}
@@ -195,7 +204,11 @@ func TestMidMigrationStepProcessKillRecovers(t *testing.T) {
 	// The schema must be fully usable: CreateIssue depends on the complete,
 	// current schema, so its success is the proof no partially-applied
 	// migration left the working set in a broken shape.
-	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "post-migration-kill issue", Topic: "crash", IssueType: "task", Priority: 0})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "post-migration-kill epic", Topic: "crash", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) after mid-migration-step kill error = %v", err)
+	}
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "post-migration-kill issue", Topic: "crash", IssueType: "task", Priority: 0, ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue() after mid-migration-step kill error = %v", err)
 	}

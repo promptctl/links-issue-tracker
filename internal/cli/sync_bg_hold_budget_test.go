@@ -75,7 +75,7 @@ func TestMirrorPushHoldsNothingOnTheLiveStore(t *testing.T) {
 	// that waits out the wedged push is the defect, and it fails here instead
 	// of passing after the cut.
 	mutationStart := time.Now()
-	if out, err := runInProcess(wedgedDeadline, "new", "--title", "mid-push probe", "--topic", "demo"); err != nil {
+	if out, err := runInProcess(wedgedDeadline, "new", "--type", "epic", "--title", "mid-push probe", "--topic", "demo"); err != nil {
 		t.Fatalf("foreground mutation during the wedged push failed — the live store is still held across the push: %v\noutput:\n%s", err, out.String())
 	}
 	mutationElapsed := time.Since(mutationStart)
@@ -369,7 +369,7 @@ func setupMirrorDeadlineRepo(t *testing.T) (base, root, gitPath string, runInPro
 	}
 	// A real unpushed commit, so the mirror's push has work and must reach the
 	// wedged git subprocess rather than short-circuiting as up-to-date.
-	if out, err := runInProcess(60*time.Second, "new", "--title", "hold-budget probe", "--topic", "demo"); err != nil {
+	if out, err := runInProcess(60*time.Second, "new", "--type", "epic", "--title", "hold-budget probe", "--topic", "demo"); err != nil {
 		t.Fatalf("lit new (pre-wedge): %v\noutput:\n%s", err, out.String())
 	}
 	return base, root, gitPath, runInProcess, startInProcess
@@ -487,7 +487,7 @@ func measureHealthyMirrorCycle(t *testing.T, root string, runInProcess func(time
 		t.Fatalf("the sample cycle did not land a push (outcome %+v, recorded %t, %s old against a %s sample), so its cost is not the cost of a healthy cycle:\noutput:\n%s",
 			outcome, recorded, age, now.Sub(started), out.String())
 	}
-	if probe, probeErr := runInProcess(90*time.Second, "new", "--title", "post-measurement probe", "--topic", "demo"); probeErr != nil {
+	if probe, probeErr := runInProcess(90*time.Second, "new", "--type", "epic", "--title", "post-measurement probe", "--topic", "demo"); probeErr != nil {
 		t.Fatalf("re-seed the unpushed commit the sample cycle pushed: %v\noutput:\n%s", probeErr, probe.String())
 	}
 	return healthyCycle

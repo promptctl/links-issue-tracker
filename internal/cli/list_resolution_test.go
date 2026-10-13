@@ -20,7 +20,8 @@ import (
 // [LAW:behavior-not-structure] the contract is the rendered row a reader acts on.
 func TestListStateCellNamesTheCloseReason(t *testing.T) {
 	h := newReadyTestHarness(t)
-	canonical := h.createIssue(storage.CreateIssueInput{Title: "the canonical ticket", IssueType: model.TypeTask, Topic: "listing"})
+	epic := h.createIssue(storage.CreateIssueInput{Title: "listing", IssueType: model.TypeEpic, Topic: "listing"})
+	canonical := h.createIssue(storage.CreateIssueInput{Title: "the canonical ticket", IssueType: model.TypeTask, Topic: "listing", ParentID: epic.ID})
 
 	cases := []struct {
 		title   string
@@ -36,7 +37,7 @@ func TestListStateCellNamesTheCloseReason(t *testing.T) {
 	}
 	rows := make([]string, len(cases))
 	for i, tc := range cases {
-		issue := h.createIssue(storage.CreateIssueInput{Title: tc.title, IssueType: model.TypeTask, Topic: "listing"})
+		issue := h.createIssue(storage.CreateIssueInput{Title: tc.title, IssueType: model.TypeTask, Topic: "listing", ParentID: epic.ID})
 		for _, action := range tc.actions {
 			if _, err := h.ap.Store.Apply(h.ctx, issue.ID, storage.Change{Action: action, Actor: "tester"}); err != nil {
 				t.Fatalf("Apply(%s, %T) error = %v", tc.title, action, err)
@@ -62,7 +63,8 @@ func TestListStateCellNamesTheCloseReason(t *testing.T) {
 // the later listing name the reason identically.
 func TestCloseSummarySharesTheStateCell(t *testing.T) {
 	h := newReadyTestHarness(t)
-	issue := h.createIssue(storage.CreateIssueInput{Title: "declined", IssueType: model.TypeTask, Topic: "listing"})
+	epic := h.createIssue(storage.CreateIssueInput{Title: "listing", IssueType: model.TypeEpic, Topic: "listing"})
+	issue := h.createIssue(storage.CreateIssueInput{Title: "declined", IssueType: model.TypeTask, Topic: "listing", ParentID: epic.ID})
 
 	var out bytes.Buffer
 	if err := runTransition(h.ctx, &out, h.ap, []string{issue.ID, "--resolution", "wontfix"}, closeSpec); err != nil {

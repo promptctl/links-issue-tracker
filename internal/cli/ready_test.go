@@ -201,12 +201,17 @@ func findAnnotation(annotations []annotation.Annotation, kind annotation.Kind) (
 func TestRunReadyAnnotatesBlockedIssues(t *testing.T) {
 	h := newReadyTestHarness(t)
 
+	// Each leaf in its own lane, so the dependency edge is the one thing that
+	// can hold openB back.
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
 	openA := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title:     "Open issue A",
 		Topic:     "alpha",
 		IssueType: "task",
 		Priority:  0,
 		Assignee:  "alice",
+		ParentID:  epic.ID,
+		Lane:      "a",
 	})
 	openB := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title:     "Open issue B",
@@ -214,6 +219,8 @@ func TestRunReadyAnnotatesBlockedIssues(t *testing.T) {
 		IssueType: "bug",
 		Priority:  1,
 		Assignee:  "bob",
+		ParentID:  epic.ID,
+		Lane:      "b",
 	})
 	h.addDependency(openB.ID, openA.ID)
 
@@ -222,6 +229,8 @@ func TestRunReadyAnnotatesBlockedIssues(t *testing.T) {
 		Topic:     "closed",
 		IssueType: "task",
 		Priority:  0,
+		ParentID:  epic.ID,
+		Lane:      "closed",
 	})
 	h.closeIssue(closed.ID, "not ready work")
 
@@ -273,15 +282,21 @@ func TestRunReadyBlocksOnlyOnDependenciesStillInPlay(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newReadyTestHarness(t)
+			epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
+			// Distinct lanes: the edge, not lane order, is what gates the dependent.
 			blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 				Title:     "The blocker",
 				Topic:     "alpha",
 				IssueType: "task",
+				ParentID:  epic.ID,
+				Lane:      "blocker",
 			})
 			dependent := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 				Title:     "The dependent",
 				Topic:     "alpha",
 				IssueType: "task",
+				ParentID:  epic.ID,
+				Lane:      "dependent",
 			})
 			h.addDependency(dependent.ID, blocker.ID)
 			// The live arm leaves the blocker where it started, so the four arms
@@ -321,11 +336,15 @@ func TestRunReadyMarksReservedBlockingLabelsAsBlocked(t *testing.T) {
 		t.Run(tc.label, func(t *testing.T) {
 			h := newReadyTestHarness(t)
 
+			epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
+			// Distinct lanes: the label, not lane order, is what holds the flagged leaf.
 			plain := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 				Title:     "Ready leaf",
 				Topic:     "alpha",
 				IssueType: "task",
 				Priority:  0,
+				ParentID:  epic.ID,
+				Lane:      "plain",
 			})
 			flagged := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 				Title:     "Flagged",
@@ -333,6 +352,8 @@ func TestRunReadyMarksReservedBlockingLabelsAsBlocked(t *testing.T) {
 				IssueType: "task",
 				Priority:  0,
 				Labels:    []string{tc.label},
+				ParentID:  epic.ID,
+				Lane:      "flagged",
 			})
 
 			got := h.runWorkableAnnotated(workableFilter{}, 0)
@@ -361,12 +382,15 @@ func TestRunReadyMarksReservedBlockingLabelsAsBlocked(t *testing.T) {
 func TestRunReadySupportsAssigneeAndLimit(t *testing.T) {
 	h := newReadyTestHarness(t)
 
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
 	h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title:     "Alice old",
 		Topic:     "alice",
 		IssueType: "task",
 		Priority:  1,
 		Assignee:  "alice",
+		ParentID:  epic.ID,
+		Lane:      "alice",
 	})
 	h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title:     "Bob task",
@@ -374,6 +398,8 @@ func TestRunReadySupportsAssigneeAndLimit(t *testing.T) {
 		IssueType: "task",
 		Priority:  0,
 		Assignee:  "bob",
+		ParentID:  epic.ID,
+		Lane:      "bob",
 	})
 
 	got := h.runWorkableAnnotated(workableFilter{Assignee: "alice"}, 1)
@@ -390,12 +416,14 @@ func TestRunReadyAcceptsOmitemptyRequiredFieldAndAnnotatesMissing(t *testing.T) 
 	h := newReadyTestHarness(t)
 	h.writeReadyConfig("assignee")
 
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
 	issue := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title:       "Needs assignee",
 		Topic:       "assignee",
 		IssueType:   "task",
 		Priority:    1,
 		Description: "still missing assignee",
+		ParentID:    epic.ID,
 	})
 
 	got := h.runWorkableAnnotated(workableFilter{}, 0)
@@ -437,11 +465,13 @@ func TestRunReadyErrorsOnInvalidRequiredField(t *testing.T) {
 func TestRunReadyShowsInProgressSection(t *testing.T) {
 	h := newReadyTestHarness(t)
 
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
 	issue := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title:     "Claimed work",
 		Topic:     "claimed",
 		IssueType: "task",
 		Priority:  1,
+		ParentID:  epic.ID,
 	})
 	if _, err := h.ap.Store.Apply(h.ctx, issue.ID, storage.Change{Action: model.Start{Assignee: "agent"}, Actor: "agent", Reason: "claim"}); err != nil {
 		t.Fatalf("StartIssue error = %v", err)
@@ -462,11 +492,13 @@ func TestRunReadyShowsInProgressSection(t *testing.T) {
 func TestRunReadyAnnotatesOrphanedInProgressIssues(t *testing.T) {
 	h := newReadyTestHarness(t)
 
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
 	issue := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title:     "Stale work",
 		Topic:     "stale",
 		IssueType: "task",
 		Priority:  1,
+		ParentID:  epic.ID,
 	})
 	if _, err := h.ap.Store.Apply(h.ctx, issue.ID, storage.Change{Action: model.Start{Assignee: "agent"}, Actor: "agent", Reason: "claim"}); err != nil {
 		t.Fatalf("StartIssue error = %v", err)
@@ -486,11 +518,13 @@ func TestRunReadyAnnotatesOrphanedInProgressIssues(t *testing.T) {
 func TestRunReadyNoOrphanedAnnotationWhenRecent(t *testing.T) {
 	h := newReadyTestHarness(t)
 
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
 	issue := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title:     "Fresh work",
 		Topic:     "fresh",
 		IssueType: "task",
 		Priority:  1,
+		ParentID:  epic.ID,
 	})
 	if _, err := h.ap.Store.Apply(h.ctx, issue.ID, storage.Change{Action: model.Start{Assignee: "agent"}, Actor: "agent", Reason: "claim"}); err != nil {
 		t.Fatalf("StartIssue error = %v", err)
@@ -511,18 +545,24 @@ func TestRunReadyAnnotatesRankInversion(t *testing.T) {
 	// first is created first (better rank), second is created second (worse rank).
 	// second depends on first — first is ranked above second, no inversion.
 	// But if we make first depend on second (second blocks first), second has
-	// worse rank than first — that's a rank inversion.
+	// worse rank than first — that's a rank inversion. Distinct lanes, so rank
+	// alone — not lane order — relates the two.
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
 	first := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title:     "First issue (better rank)",
 		Topic:     "first",
 		IssueType: "task",
 		Priority:  1,
+		ParentID:  epic.ID,
+		Lane:      "first",
 	})
 	second := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title:     "Second issue (worse rank)",
 		Topic:     "second",
 		IssueType: "task",
 		Priority:  0,
+		ParentID:  epic.ID,
+		Lane:      "second",
 	})
 	// first depends on second — second (dependency) has worse rank → inversion.
 	h.addDependency(first.ID, second.ID)
@@ -556,17 +596,22 @@ func TestRunReadyNoRankInversionWhenDependencyRankedAbove(t *testing.T) {
 
 	// first is created first (better rank), second is created second (worse rank).
 	// second depends on first — first (dependency) has better rank → no inversion.
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
 	first := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title:     "First issue (better rank)",
 		Topic:     "first",
 		IssueType: "task",
 		Priority:  1,
+		ParentID:  epic.ID,
+		Lane:      "first",
 	})
 	second := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title:     "Second issue (worse rank)",
 		Topic:     "second",
 		IssueType: "task",
 		Priority:  0,
+		ParentID:  epic.ID,
+		Lane:      "second",
 	})
 	// second depends on first — first (dependency) ranked above second → no inversion.
 	h.addDependency(second.ID, first.ID)
@@ -587,17 +632,22 @@ func TestRunReadyNoRankInversionWhenDependencyRankedAbove(t *testing.T) {
 func TestRunReadyTextOutputShowsRankInversions(t *testing.T) {
 	h := newReadyTestHarness(t)
 
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
 	first := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title:     "First issue",
 		Topic:     "first",
 		IssueType: "task",
 		Priority:  1,
+		ParentID:  epic.ID,
+		Lane:      "first",
 	})
 	second := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title:     "Second issue",
 		Topic:     "second",
 		IssueType: "task",
 		Priority:  0,
+		ParentID:  epic.ID,
+		Lane:      "second",
 	})
 	// first depends on second — second (dependency) has worse rank → inversion.
 	h.addDependency(first.ID, second.ID)
@@ -614,11 +664,12 @@ func TestRunReadyTextOutputShowsRankInversions(t *testing.T) {
 func TestRunReadyTextOutputShowsNumberedItems(t *testing.T) {
 	h := newReadyTestHarness(t)
 
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
 	a := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "First", Topic: "aaa", IssueType: "task", Priority: 1,
+		Title: "First", Topic: "aaa", IssueType: "task", Priority: 1, ParentID: epic.ID, Lane: "a",
 	})
 	b := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Second", Topic: "bbb", IssueType: "task", Priority: 0,
+		Title: "Second", Topic: "bbb", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: "b",
 	})
 
 	text := h.runWorkableText()
@@ -654,11 +705,18 @@ func TestRunReadyExcludesEpics(t *testing.T) {
 		Priority:  1,
 		ParentID:  epic.ID,
 	})
-	standaloneBug := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "Standalone bug",
+	otherEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title:     "Other epic container",
+		Topic:     "bug-topic",
+		IssueType: "epic",
+		Priority:  1,
+	})
+	bugUnderOtherEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title:     "Bug under the other epic",
 		Topic:     "bug-topic",
 		IssueType: "bug",
 		Priority:  1,
+		ParentID:  otherEpic.ID,
 	})
 
 	got := h.runWorkableAnnotated(workableFilter{}, 0)
@@ -673,18 +731,21 @@ func TestRunReadyExcludesEpics(t *testing.T) {
 	if !gotIDs[leafTask.ID] {
 		t.Errorf("ready missing leaf task %q; got=%v", leafTask.ID, gotIDs)
 	}
-	if !gotIDs[standaloneBug.ID] {
-		t.Errorf("ready missing standalone bug %q; got=%v", standaloneBug.ID, gotIDs)
+	if !gotIDs[bugUnderOtherEpic.ID] {
+		t.Errorf("ready missing bug %q; got=%v", bugUnderOtherEpic.ID, gotIDs)
 	}
-	if gotIDs[epic.ID] {
-		t.Errorf("ready included epic %q; want excluded", epic.ID)
+	for _, id := range []string{epic.ID, otherEpic.ID} {
+		if gotIDs[id] {
+			t.Errorf("ready included epic %q; want excluded", id)
+		}
 	}
 }
 
 // [LAW:dataflow-not-control-flow]
-// Each ready row carries its parent epic inline when the parent is type=epic,
-// so an agent scanning ready knows which epic they'd be joining before they
-// claim a leaf. Rows without an epic parent get no ParentEpic field.
+// Each ready row carries its parent epic inline, so an agent scanning ready
+// knows which epic they'd be joining before they claim a leaf. Every leaf lives
+// in an epic, so every row carries one — and it is the epic directly over the
+// leaf: a leaf under a nested epic names the inner epic, not the outer.
 func TestRunReadyCarriesParentEpic(t *testing.T) {
 	h := newReadyTestHarness(t)
 
@@ -701,24 +762,32 @@ func TestRunReadyCarriesParentEpic(t *testing.T) {
 		Priority:  1,
 		ParentID:  epic.ID,
 	})
-	standalone := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "Standalone bug",
+	otherEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title:     "Fix the bugs",
+		Topic:     "bug-topic",
+		IssueType: "epic",
+		Priority:  1,
+	})
+	bugUnderOtherEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title:     "A bug of its own epic",
 		Topic:     "bug-topic",
 		IssueType: "bug",
 		Priority:  1,
+		ParentID:  otherEpic.ID,
 	})
-	nonEpicParent := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "Parent feature",
-		Topic:     "feat-topic",
-		IssueType: "feature",
+	nestedEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title:     "Nested epic",
+		Topic:     "epic-topic",
+		IssueType: "epic",
 		Priority:  1,
+		ParentID:  epic.ID,
 	})
-	childOfFeature := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "Feature subtask",
-		Topic:     "feat-topic",
+	childOfNested := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title:     "Nested subtask",
+		Topic:     "epic-topic",
 		IssueType: "task",
 		Priority:  1,
-		ParentID:  nonEpicParent.ID,
+		ParentID:  nestedEpic.ID,
 	})
 
 	got := h.runWorkableAnnotated(workableFilter{}, 0)
@@ -742,16 +811,16 @@ func TestRunReadyCarriesParentEpic(t *testing.T) {
 		t.Errorf("ParentEpic.Title = %q, want %q", leafRow.ParentEpic.Title, epic.Title)
 	}
 
-	if standaloneRow, ok := byID[standalone.ID]; !ok {
-		t.Errorf("standalone %q missing from ready output", standalone.ID)
-	} else if standaloneRow.ParentEpic != nil {
-		t.Errorf("standalone row has ParentEpic=%+v; want nil", standaloneRow.ParentEpic)
+	if bugRow, ok := byID[bugUnderOtherEpic.ID]; !ok {
+		t.Errorf("bug %q missing from ready output", bugUnderOtherEpic.ID)
+	} else if bugRow.ParentEpic == nil || bugRow.ParentEpic.ID != otherEpic.ID {
+		t.Errorf("bug row has ParentEpic=%+v; want %q — each row names its own epic", bugRow.ParentEpic, otherEpic.ID)
 	}
 
-	if featureChildRow, ok := byID[childOfFeature.ID]; !ok {
-		t.Errorf("feature child %q missing from ready output", childOfFeature.ID)
-	} else if featureChildRow.ParentEpic != nil {
-		t.Errorf("feature-child row has ParentEpic=%+v; want nil (parent is non-epic)", featureChildRow.ParentEpic)
+	if nestedRow, ok := byID[childOfNested.ID]; !ok {
+		t.Errorf("nested child %q missing from ready output", childOfNested.ID)
+	} else if nestedRow.ParentEpic == nil || nestedRow.ParentEpic.ID != nestedEpic.ID {
+		t.Errorf("nested-child row has ParentEpic=%+v; want %q (the epic directly over it, not %q)", nestedRow.ParentEpic, nestedEpic.ID, epic.ID)
 	}
 
 	text := h.runWorkableText()
@@ -851,8 +920,11 @@ func (h readyTestHarness) setLabels(issueID string, labels ...string) {
 func TestFocusPathSurfacesEarliestPrerequisiteAndAdvances(t *testing.T) {
 	h := newReadyTestHarness(t)
 
+	noise := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Noise epic", Topic: "noise", IssueType: "epic",
+	})
 	urgent := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Unrelated urgent", Topic: "noise", IssueType: "task", Priority: 1,
+		Title: "Unrelated urgent", Topic: "noise", IssueType: "task", Priority: 1, ParentID: noise.ID,
 	})
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title: "Goal epic", Topic: "goal", IssueType: "epic",
@@ -917,17 +989,25 @@ func TestFocusPathFollowsExplicitDependenciesTransitively(t *testing.T) {
 
 	// A standing-urgent, unrelated item the focus scope must withhold — it would
 	// otherwise win on priority, so the pick proves the pool narrowed.
+	noise := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Noise epic", Topic: "noise", IssueType: "epic",
+	})
 	_ = h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Unrelated urgent", Topic: "noise", IssueType: "task", Priority: 1,
+		Title: "Unrelated urgent", Topic: "noise", IssueType: "task", Priority: 1, ParentID: noise.ID,
+	})
+	// The chain's members sit in distinct lanes of one epic, so the explicit
+	// edges — not lane order — are what sequence them.
+	chain := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Chain epic", Topic: "chain", IssueType: "epic",
 	})
 	b := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "B", Topic: "chain", IssueType: "task",
+		Title: "B", Topic: "chain", IssueType: "task", ParentID: chain.ID, Lane: "b",
 	})
 	a := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "A", Topic: "chain", IssueType: "task",
+		Title: "A", Topic: "chain", IssueType: "task", ParentID: chain.ID, Lane: "a",
 	})
 	goal := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Goal", Topic: "chain", IssueType: "task",
+		Title: "Goal", Topic: "chain", IssueType: "task", ParentID: chain.ID, Lane: "goal",
 	})
 	h.addDependency(goal.ID, a.ID)
 	h.addDependency(a.ID, b.ID)
@@ -945,14 +1025,21 @@ func TestFocusPathFollowsExplicitDependenciesTransitively(t *testing.T) {
 func TestFocusRemovalRestoresTheWholePoolAndUrgentDoesNotPropagate(t *testing.T) {
 	h := newReadyTestHarness(t)
 
+	noise := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Noise epic", Topic: "noise", IssueType: "epic",
+	})
 	urgent := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Unrelated urgent", Topic: "noise", IssueType: "task", Priority: 1,
+		Title: "Unrelated urgent", Topic: "noise", IssueType: "task", Priority: 1, ParentID: noise.ID,
+	})
+	// Distinct lanes: the edge, not lane order, is what gates the goal.
+	chain := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Chain epic", Topic: "chain", IssueType: "epic",
 	})
 	prereq := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Prereq", Topic: "chain", IssueType: "task",
+		Title: "Prereq", Topic: "chain", IssueType: "task", ParentID: chain.ID, Lane: "prereq",
 	})
 	goal := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Urgent goal", Topic: "chain", IssueType: "task", Priority: 1,
+		Title: "Urgent goal", Topic: "chain", IssueType: "task", Priority: 1, ParentID: chain.ID, Lane: "goal",
 	})
 	h.addDependency(goal.ID, prereq.ID)
 
@@ -983,8 +1070,11 @@ func TestFocusPathExpandsContainerChildren(t *testing.T) {
 
 	// A standing-urgent, unrelated item the focus scope must withhold — it would
 	// otherwise win on priority, so the pick proves the pool narrowed.
+	noise := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Noise epic", Topic: "noise", IssueType: "epic",
+	})
 	_ = h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Unrelated urgent", Topic: "noise", IssueType: "task", Priority: 1,
+		Title: "Unrelated urgent", Topic: "noise", IssueType: "task", Priority: 1, ParentID: noise.ID,
 	})
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title: "Focused epic", Topic: "goal", IssueType: "epic",

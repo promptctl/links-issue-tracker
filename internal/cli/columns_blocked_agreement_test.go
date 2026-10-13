@@ -72,12 +72,19 @@ func TestBlockedColumnAgreesAcrossSurfaces(t *testing.T) {
 	h := newReadyTestHarness(t)
 	h.writeReadyConfig("description")
 
-	// The dependency reason, standing alone: no epic, so no sibling gate.
+	// Every row but the sibling-gate pair lives in this epic, each in a lane
+	// of its own, so no sibling gate reaches any of them. It carries a
+	// description so the field gate stays out of it too.
+	home := h.createIssue(storage.CreateIssueInput{
+		Prefix: "agree", Title: "Home epic", Topic: "agree", IssueType: "epic", Description: "d",
+	})
+
+	// The dependency reason, standing alone: its own lane, so no sibling gate.
 	depBlocker := h.createIssue(storage.CreateIssueInput{
-		Prefix: "agree", Title: "Dependency", Topic: "agree", IssueType: "task", Description: "d",
+		Prefix: "agree", Title: "Dependency", Topic: "agree", IssueType: "task", Description: "d", ParentID: home.ID, Lane: "dep-blocker",
 	})
 	byDependency := h.createIssue(storage.CreateIssueInput{
-		Prefix: "agree", Title: "Blocked by a dependency", Topic: "agree", IssueType: "task", Description: "d",
+		Prefix: "agree", Title: "Blocked by a dependency", Topic: "agree", IssueType: "task", Description: "d", ParentID: home.ID, Lane: "by-dependency",
 	})
 	h.addDependency(byDependency.ID, depBlocker.ID)
 
@@ -95,25 +102,25 @@ func TestBlockedColumnAgreesAcrossSurfaces(t *testing.T) {
 
 	// The required-field gate: the one row with no description.
 	byMissingField := h.createIssue(storage.CreateIssueInput{
-		Prefix: "agree", Title: "Missing the required field", Topic: "agree", IssueType: "task",
+		Prefix: "agree", Title: "Missing the required field", Topic: "agree", IssueType: "task", ParentID: home.ID, Lane: "by-missing-field",
 	})
 
 	// needs-design, carried by a label.
 	byNeedsDesign := h.createIssue(storage.CreateIssueInput{
 		Prefix: "agree", Title: "Needs design", Topic: "agree", IssueType: "task",
-		Description: "d", Labels: []string{NeedsDesignLabel},
+		Description: "d", Labels: []string{NeedsDesignLabel}, ParentID: home.ID, Lane: "by-needs-design",
 	})
 
 	// external, carried by a label.
 	byExternal := h.createIssue(storage.CreateIssueInput{
 		Prefix: "agree", Title: "Waits on an upstream fix", Topic: "agree", IssueType: "task",
-		Description: "d", Labels: []string{ExternalLabel},
+		Description: "d", Labels: []string{ExternalLabel}, ParentID: home.ID, Lane: "by-external",
 	})
 
 	// The control: nothing holds it up. Without it, a map populated with
 	// `blocked` for every row would satisfy every assertion above it.
 	unblocked := h.createIssue(storage.CreateIssueInput{
-		Prefix: "agree", Title: "Workable", Topic: "agree", IssueType: "task", Description: "d",
+		Prefix: "agree", Title: "Workable", Topic: "agree", IssueType: "task", Description: "d", ParentID: home.ID, Lane: "unblocked",
 	})
 
 	for _, tc := range []struct {

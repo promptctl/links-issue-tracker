@@ -24,7 +24,8 @@ func TestRankCrossFrameReportsResolution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(child) error = %v", err)
 	}
-	standalone, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Standalone", Topic: "frame", IssueType: "task", Placement: storage.RankBottom})
+	// Top-level, so an epic: the backlog frame holds epics and nothing else.
+	standalone, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Standalone", Topic: "frame", IssueType: "epic", Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(standalone) error = %v", err)
 	}
@@ -85,7 +86,8 @@ func TestRankSetNamesTheFrameItStackedIn(t *testing.T) {
 		}
 		children = append(children, child.ID)
 	}
-	outsider, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Outsider", Topic: "set", IssueType: "task", Placement: storage.RankBottom})
+	// Top-level, so an epic: the backlog frame holds epics and nothing else.
+	outsider, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Outsider", Topic: "set", IssueType: "epic", Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(outsider) error = %v", err)
 	}

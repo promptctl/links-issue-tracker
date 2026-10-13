@@ -58,6 +58,20 @@ func (f epicFixture) addChild(title string) string {
 // machine are two axes of one lifecycle, and the store applies both through one
 // Apply. Taking model.Action rather than one sealed subset keeps the fixture from
 // growing a near-identical twin per axis. [LAW:one-type-per-behavior]
+// addEpicChild nests an epic inside the fixture's epic: the one child shape
+// that can itself hold children, since only an epic contains tickets.
+func (f epicFixture) addEpicChild(title string) string {
+	f.t.Helper()
+	child, err := f.ap.Store.CreateIssue(f.ctx, storage.CreateIssueInput{
+		Prefix: "test", Title: title, Topic: "epic-view", IssueType: "epic", Priority: 0, ParentID: f.epicID,
+		Placement: storage.RankBottom,
+	})
+	if err != nil {
+		f.t.Fatalf("CreateIssue(epic child %q) error = %v", title, err)
+	}
+	return child.ID
+}
+
 func (f epicFixture) transition(id string, action model.Action) {
 	f.t.Helper()
 	if _, err := f.ap.Store.Apply(f.ctx, id, storage.Change{Action: action, Actor: "test"}); err != nil {
@@ -371,22 +385,17 @@ func TestRenderEpicContextChildBlockedBySibling(t *testing.T) {
 func TestRenderEpicContextChildBlockedByNonChild(t *testing.T) {
 	f := newEpicFixture(t, "External block", "deps")
 	blocked := f.addChild("Blocked by outsider")
-	// An issue outside this epic (no ParentID).
-	outsider, err := f.ap.Store.CreateIssue(f.ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "Outsider", Topic: "other", IssueType: "task", Priority: 0,
-	})
-	if err != nil {
-		t.Fatalf("CreateIssue(outsider) error = %v", err)
-	}
-	f.block(blocked, outsider.ID)
+	// An issue outside this epic.
+	outsider := f.outsider("Outsider")
+	f.block(blocked, outsider)
 
 	out := f.render("")
-	want := "[blocked: depends on " + outsider.ID + "] " + blocked + "  Blocked by outsider"
+	want := "[blocked: depends on " + outsider + "] " + blocked + "  Blocked by outsider"
 	if !strings.Contains(out, want) {
 		t.Errorf("external blocker should be named inline, want %q in:\n%s", want, out)
 	}
 	// The outsider is not a child, so it must not appear as its own row.
-	if strings.Contains(out, "  "+outsider.ID+"  Outsider") {
+	if strings.Contains(out, "  "+outsider+"  Outsider") {
 		t.Errorf("non-child blocker should not be listed as a child:\n%s", out)
 	}
 }
@@ -408,12 +417,14 @@ func TestRenderEpicContextClosedBlockerUnblocks(t *testing.T) {
 	}
 }
 
-// outsider creates an issue outside the fixture's epic (no parent) and returns
-// its id — the external endpoint for cross-epic edge tests.
+// outsider creates an issue outside the fixture's epic — inside an epic of its
+// own, since a task is never outside one — and returns its id: the external
+// endpoint for cross-epic edge tests.
 func (f epicFixture) outsider(title string) string {
 	f.t.Helper()
 	out, err := f.ap.Store.CreateIssue(f.ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: title, Topic: "other", IssueType: "task", Priority: 0,
+		ParentID: seedEpicRaw(f.t, f.ctx, f.ap, title+" (epic)", "other"),
 	})
 	if err != nil {
 		f.t.Fatalf("CreateIssue(outsider %q) error = %v", title, err)

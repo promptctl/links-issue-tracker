@@ -287,7 +287,8 @@ func TestRouteNextTerminalExhaustionNamesTheStayRouteAgainstABlock(t *testing.T)
 	h.transition(a1.ID, model.Start{Assignee: "tester"})
 	h.transition(a1.ID, model.Done{})
 	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
-	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Outside, theirs", Topic: "next", IssueType: "task", Priority: 0})
+	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic X", Topic: "next", IssueType: "epic", Priority: 1})
+	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Outside, theirs", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID})
 	h.addDependency(a2.ID, blocker.ID)
 
 	rows, details, epics := h.gather()
@@ -349,7 +350,8 @@ func TestRouteNextStayRouteWorksWhenTheEpicItselfIsBlocked(t *testing.T) {
 	h.transition(a1.ID, model.Start{Assignee: "tester"})
 	h.transition(a1.ID, model.Done{})
 	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
-	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Blocks the whole epic, theirs", Topic: "next", IssueType: "task", Priority: 0})
+	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic X", Topic: "next", IssueType: "epic", Priority: 1})
+	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Blocks the whole epic, theirs", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID})
 	h.addDependency(epicA.ID, blocker.ID)
 
 	rows, details, epics := h.gather()
@@ -429,7 +431,8 @@ func TestRouteNextExhaustionNamesTheOutsideBlockerBehindASibling(t *testing.T) {
 	h.transition(a1.ID, model.Done{})
 	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
 	a3 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.3", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a3"})
-	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Outside, theirs", Topic: "next", IssueType: "task", Priority: 0})
+	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic X", Topic: "next", IssueType: "epic", Priority: 1})
+	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Outside, theirs", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID})
 	h.addDependency(a3.ID, a2.ID)
 	h.addDependency(a2.ID, blocker.ID)
 
@@ -464,7 +467,8 @@ func TestRouteNextExhaustionNamesReadyRowsTheFocusWithheld(t *testing.T) {
 	h.transition(a1.ID, model.Start{Assignee: "tester"})
 	h.transition(a1.ID, model.Done{})
 	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
-	offPath := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Ready, off the focus path", Topic: "next", IssueType: "task", Priority: 0})
+	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic X", Topic: "next", IssueType: "epic", Priority: 1})
+	offPath := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Ready, off the focus path", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID})
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{
@@ -544,7 +548,8 @@ func TestRouteNextOffersOnPathDependencyAsANewLane(t *testing.T) {
 	h.transition(a1.ID, model.Start{Assignee: "tester"})
 	h.transition(a1.ID, model.Done{})
 	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
-	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "External blocker", Topic: "next", IssueType: "task", Priority: 0})
+	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic X", Topic: "next", IssueType: "epic", Priority: 1})
+	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "External blocker", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID})
 	h.addDependency(a2.ID, dep.ID)
 
 	rows, details, epics := h.gather()
@@ -582,7 +587,8 @@ func TestOnPathDependencyNamesTheQueueFirstRowItGates(t *testing.T) {
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
 	a3 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.3", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a3"})
-	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "External blocker", Topic: "next", IssueType: "task", Priority: 0})
+	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic X", Topic: "next", IssueType: "epic", Priority: 1})
+	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "External blocker", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID})
 	h.addDependency(a2.ID, dep.ID)
 	h.addDependency(a3.ID, dep.ID)
 
@@ -780,7 +786,8 @@ func TestRouteNextRoutesAroundOnPathDependencyHeldFresh(t *testing.T) {
 	h.transition(a1.ID, model.Start{Assignee: "tester"})
 	h.transition(a1.ID, model.Done{})
 	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
-	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "External blocker", Topic: "next", IssueType: "task", Priority: 0})
+	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic X", Topic: "next", IssueType: "epic", Priority: 1})
+	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "External blocker", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID})
 	h.addDependency(a2.ID, dep.ID)
 
 	rows, details, epics := h.gather()
@@ -835,7 +842,8 @@ func TestExhaustionNamesABlockerOutsideThisViewAsSuch(t *testing.T) {
 	h.transition(a1.ID, model.Start{Assignee: "tester"})
 	h.transition(a1.ID, model.Done{})
 	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
-	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "External blocker", Topic: "next", IssueType: "task", Priority: 0})
+	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic X", Topic: "next", IssueType: "epic", Priority: 1})
+	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "External blocker", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID})
 	h.addDependency(a2.ID, dep.ID)
 
 	rows, details, epics := h.gather()
@@ -895,8 +903,9 @@ func TestExhaustionNamesAnUnreadyBlockerWithoutNamingAHolder(t *testing.T) {
 	h.transition(a1.ID, model.Start{Assignee: "tester"})
 	h.transition(a1.ID, model.Done{})
 	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
-	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "External blocker", Topic: "next", IssueType: "task", Priority: 0})
-	deeper := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Blocker's blocker", Topic: "next", IssueType: "task", Priority: 0})
+	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic X", Topic: "next", IssueType: "epic", Priority: 1})
+	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "External blocker", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID, Lane: "dep"})
+	deeper := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Blocker's blocker", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID, Lane: "deeper"})
 	h.addDependency(a2.ID, dep.ID)
 	h.addDependency(dep.ID, deeper.ID)
 
@@ -987,9 +996,15 @@ func TestAnExternalTicketInFlightIsNeverServed(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newReadyTestHarness(t)
-			waiting := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Upstream fix lands", Topic: "next", IssueType: "task", Priority: 0, Labels: []string{ExternalLabel}})
+			// The two sit in different epics: with the waiting ticket's lane
+			// held, its epic is the checkout's scope, and the plain ticket
+			// has to be outside it to be served past the exhaustion rather
+			// than as a sibling lane of the same epic.
+			epicW := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic W", Topic: "next", IssueType: "epic", Priority: 1})
+			waiting := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Upstream fix lands", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicW.ID, Labels: []string{ExternalLabel}})
 			h.transition(waiting.ID, model.Start{Assignee: "tester"})
-			plain := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Plain work", Topic: "next", IssueType: "task", Priority: 0})
+			epicP := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic P", Topic: "next", IssueType: "epic", Priority: 1})
+			plain := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Plain work", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicP.ID})
 
 			rows, details, epics := h.gather()
 			standings := claims.Standings{}
@@ -1039,7 +1054,8 @@ func TestExhaustionNeverOffersToClearABlockerAwaitingAnOutsideEvent(t *testing.T
 			h.transition(a1.ID, model.Start{Assignee: "tester"})
 			h.transition(a1.ID, model.Done{})
 			a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
-			upstream := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Upstream fix lands", Topic: "next", IssueType: "task", Priority: 0, Labels: []string{ExternalLabel}})
+			epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic X", Topic: "next", IssueType: "epic", Priority: 1})
+			upstream := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Upstream fix lands", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID, Lane: "upstream", Labels: []string{ExternalLabel}})
 			h.addDependency(a2.ID, upstream.ID)
 			standings := claims.Standings{model.LaneOf(a1, &epicA): heldBy(selfAttribution)}
 			if tc.heldForeign {
@@ -1047,7 +1063,7 @@ func TestExhaustionNeverOffersToClearABlockerAwaitingAnOutsideEvent(t *testing.T
 				standings[laneOf(t, details, rowByID(t, rows, upstream.ID))] = heldBy(otherAttribution)
 			}
 			if tc.alsoPlain {
-				plain := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Theirs", Topic: "next", IssueType: "task", Priority: 0})
+				plain := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Theirs", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID, Lane: "plain"})
 				h.addDependency(a2.ID, plain.ID)
 				rows, details, _ := h.gather()
 				standings[laneOf(t, details, rowByID(t, rows, plain.ID))] = heldBy(otherAttribution)
@@ -1186,6 +1202,12 @@ func TestRouteNextContinuesEpicIntoAnExpiredForeignLane(t *testing.T) {
 // empty, trails a bare "#" that reads as an unfilled template slot. Only the
 // named lane carries information, and it is the rarest of the three.
 //
+// The solo shape is the type's, not the store's: every leaf lives in an epic,
+// so no gathered row derives one (LaneOf keys a solo lane only for a row with
+// no container over it, which is now a top-level epic — never a row `next`
+// serves). The solo cells build the lane directly, so the arm startAdvice
+// keeps for that shape is still pinned.
+//
 // Whatever else changes here, no cell may contain "#" or say the ticket's id
 // where a lane belongs, and a table is the only way to see all three shapes
 // fail at once.
@@ -1194,33 +1216,40 @@ func TestStartAdviceNamesTheCommandAndTheLaneShape(t *testing.T) {
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	named := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
 	unnamed := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
-	solo := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Parentless", Topic: "next", IssueType: "task", Priority: 0})
+	solo := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.5, read as a lane of one", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a5"})
 	inFlight := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.3", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a3"})
 	unnamedInFlight := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.4", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
-	soloInFlight := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Parentless, abandoned", Topic: "next", IssueType: "task", Priority: 0})
+	soloInFlight := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.6, read as a lane of one, abandoned", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a6"})
 	for _, abandoned := range []string{inFlight.ID, unnamedInFlight.ID, soloInFlight.ID} {
 		h.transition(abandoned, model.Start{Assignee: "other"})
 	}
 
 	rows, details, _ := h.gather()
 
-	for _, tc := range []struct{ name, id, want string }{
+	for _, tc := range []struct {
+		name, id, want string
+		solo           bool
+	}{
 		{"a named lane is the one shape worth naming", named.ID,
-			"run `lit start " + named.ID + "` to claim lane a1 of epic " + epicA.ID},
+			"run `lit start " + named.ID + "` to claim lane a1 of epic " + epicA.ID, false},
 		{"an epic's default lane is words, not a trailing #", unnamed.ID,
-			"run `lit start " + unnamed.ID + "` to claim the default lane of epic " + epicA.ID},
+			"run `lit start " + unnamed.ID + "` to claim the default lane of epic " + epicA.ID, false},
 		{"a solo lane is the ticket, so the lane goes unnamed", solo.ID,
-			"run `lit start " + solo.ID + "` to claim it"},
+			"run `lit start " + solo.ID + "` to claim it", true},
 		{"an in-flight row says so before the same advice", inFlight.ID,
-			inFlight.ID + " is in progress and nobody holds it — run `lit start " + inFlight.ID + "` to claim lane a3 of epic " + epicA.ID},
+			inFlight.ID + " is in progress and nobody holds it — run `lit start " + inFlight.ID + "` to claim lane a3 of epic " + epicA.ID, false},
 		{"a default lane is still words on an in-flight row", unnamedInFlight.ID,
-			unnamedInFlight.ID + " is in progress and nobody holds it — run `lit start " + unnamedInFlight.ID + "` to claim the default lane of epic " + epicA.ID},
+			unnamedInFlight.ID + " is in progress and nobody holds it — run `lit start " + unnamedInFlight.ID + "` to claim the default lane of epic " + epicA.ID, false},
 		{"a solo lane still goes unnamed on an in-flight row", soloInFlight.ID,
-			soloInFlight.ID + " is in progress and nobody holds it — run `lit start " + soloInFlight.ID + "` to claim it"},
+			soloInFlight.ID + " is in progress and nobody holds it — run `lit start " + soloInFlight.ID + "` to claim it", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			row := rowByID(t, rows, tc.id)
-			got := startAdvice(row, laneOf(t, details, row))
+			lane := laneOf(t, details, row)
+			if tc.solo {
+				lane = model.LaneOf(row.Issue, nil)
+			}
+			got := startAdvice(row, lane)
 			if got != tc.want {
 				t.Fatalf("startAdvice = %q, want %q", got, tc.want)
 			}
@@ -1235,17 +1264,19 @@ func TestStartAdviceNamesTheCommandAndTheLaneShape(t *testing.T) {
 }
 
 // The tautology, stated as its own premise rather than left implicit in the
-// table above. A parentless ticket's lane IS that ticket — LaneOf keys a solo
-// lane by the issue id — so any advice that names both says one id twice. The
-// table's expected string would survive a rename of the phrase "it"; this does
-// not survive naming the lane at all.
+// table above. A solo lane IS its ticket — LaneOf keys a solo lane by the issue
+// id — so any advice that names both says one id twice. The table's expected
+// string would survive a rename of the phrase "it"; this does not survive
+// naming the lane at all. The lane is built directly, as in the table: no leaf
+// row derives one now that every leaf lives in an epic.
 func TestStartAdviceNeverSpellsASoloTicketTwice(t *testing.T) {
 	h := newReadyTestHarness(t)
-	solo := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Parentless", Topic: "next", IssueType: "task", Priority: 0})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	solo := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1, read as a lane of one", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
 
-	rows, details, _ := h.gather()
+	rows, _, _ := h.gather()
 	row := rowByID(t, rows, solo.ID)
-	got := startAdvice(row, laneOf(t, details, row))
+	got := startAdvice(row, model.LaneOf(row.Issue, nil))
 
 	if n := strings.Count(got, solo.ID); n != 1 {
 		t.Fatalf("startAdvice = %q names %q %d times, want exactly 1 — a solo lane is its ticket, so naming the lane repeats the id and reads as a log line rather than as advice", got, solo.ID, n)
@@ -1310,7 +1341,8 @@ func TestRouteNextServesAnAbandonedOnPathDependency(t *testing.T) {
 	h.transition(a1.ID, model.Start{Assignee: "tester"})
 	h.transition(a1.ID, model.Done{})
 	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
-	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "External blocker", Topic: "next", IssueType: "task", Priority: 0})
+	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic X", Topic: "next", IssueType: "epic", Priority: 1})
+	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "External blocker", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID})
 	h.addDependency(a2.ID, dep.ID)
 	h.transition(dep.ID, model.Start{Assignee: "other"})
 
@@ -1450,7 +1482,8 @@ func TestRouteNextRoutesAroundAFreshPublicHold(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
-	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 1})
+	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
+	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 1, ParentID: epicB.ID})
 	h.transition(a1.ID, model.Start{Assignee: "whoever-is-working-it"})
 
 	rows, details, epics := h.gather()
@@ -1537,11 +1570,13 @@ func TestEveryReachKindHasWordsInBothDiagnostics(t *testing.T) {
 // merely gated, because those call for different acts.
 func TestNoWorkNamesEachRowThePoolWalkWentPast(t *testing.T) {
 	h := newReadyTestHarness(t)
-	held := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Theirs, in flight", Topic: "next", IssueType: "task", Priority: 1})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	held := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Theirs, in flight", Topic: "next", IssueType: "task", Priority: 1, ParentID: epicA.ID, Lane: "held"})
 	h.transition(held.ID, model.Start{Assignee: "tester"})
-	// Gated by the row above, so the whole pool is unstartable without either
-	// row being takeable — and for two different reasons.
-	gated := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Ours to want, not to start", Topic: "next", IssueType: "task", Priority: 0})
+	// Gated by the row above — in its own lane, so the dependency is the one
+	// thing holding it — and the whole pool is unstartable without either
+	// row being takeable, for two different reasons.
+	gated := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Ours to want, not to start", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "gated"})
 	h.addDependency(gated.ID, held.ID)
 
 	rows, details, epics := h.gather()

@@ -398,9 +398,10 @@ Test evidence:
 7. Builds `model.Issue` with **`strings.TrimSpace` applied to** Title, Description, Prompt, Lane, Assignee; `Priority`, `IssueType`, `Topic`, `Labels` copied; `CreatedAt = UpdatedAt = now` (`store.go`).
 8. `model.HydrateRow(issue, model.StatusView{Value: model.StateOpen}, nil)` — new issues start `open` (`store.go`). An invalid issue type is rejected here or downstream (`store_test.go`).
 9. `parentID := strings.TrimSpace(in.ParentID)` (`store.go`).
+10. `storage.RejectLeafWithoutParent(issueType, parentID)` (`internal/storage/containment.go`) → `model.ValidationError` for a leaf with no parent (`store.go`).
 
 Inside `withMutation(ctx, "create issue"...)` (`store.go`):
-1. `frame, err := filingFrameTx(ctx, tx, parentID)` (`store.go`; defined `internal/store/ranking.go`): an empty `parentID` → `storage.TopLevel`; otherwise `SELECT deleted_at FROM issues WHERE id = ?`, with `sql.ErrNoRows` → `storage.NotFoundError{Entity: "issue", ID: parentID}`, other error → `fmt.Errorf("lookup parent issue %q: %w", parentID, err)`, a non-NULL `deleted_at` → `storage.TopLevel`, and a live parent → `storage.Frame(parentID)`.
+1. `frame, parentType, err := filingParentTx(ctx, tx, parentID)` (`store.go`; defined `internal/store/ranking.go`): an empty `parentID` → `storage.TopLevel` and the empty type; otherwise `SELECT issue_type, deleted_at FROM issues WHERE id = ?`, the type then judged by `storage.RejectParentThatIsNotAContainer(parentID, parentType)` → `model.ValidationError` for a parent that is not an epic (`store.go`), with `sql.ErrNoRows` → `storage.NotFoundError{Entity: "issue", ID: parentID}`, other error → `fmt.Errorf("lookup parent issue %q: %w", parentID, err)`, a non-NULL `deleted_at` → `storage.TopLevel`, and a live parent → `storage.Frame(parentID)`.
 2. `issueid.NormalizeConfiguredPrefix(in.Prefix)`; failure → `fmt.Errorf("normalize issue prefix: %w", err)` (`store.go`).
 3. `issue.ID, err = newIssueID(ctx, tx, prefix, issue.Topic, issue.Title, issue.Description, createdBy, issue.CreatedAt, parentID)` (`store.go`; defined `internal/store/issue_ids.go`).
 4. `issue.Rank, err = nextRankForPlacement(ctx, tx, in.Placement, frame)` (`store.go`).
@@ -2683,7 +2684,8 @@ Bucketing convention, `bucketRelations(focalID, relations, issuesByID, ancestry)
 2. `srcID, dstID := in.Type.CanonicalEndpoints(in.SrcID, in.DstID)` — related-to endpoints get sorted.
 3. `now := time.Now().UTC()`; the returned `model.Relation` is built with the canonical endpoints, the type, `now`, and `strings.TrimSpace(in.CreatedBy)`; empty createdBy → `"unknown"`.
 4. Inside `s.withMutation(ctx, "add relation", ...)`:
-   - `requireIssueExistsTx(ctx, tx, in.SrcID)` then `requireIssueExistsTx(ctx, tx, in.DstID)` — note these use the **input** ids, not the canonicalized ones. `requireIssueExistsTx` runs `SELECT 1 FROM issues WHERE id = ?` and maps `sql.ErrNoRows` to `storage.NotFoundError{Entity: "issue", ID: issueID}`, other errors to `fmt.Errorf("check issue exists: %w", err)` — `internal/store/store.go`. It deliberately does not filter on `deleted_at`, so archived/soft-deleted rows count as existing (`internal/store/store.go` comment).
+   - `requireIssueExistsTx(ctx, tx, in.SrcID)` then `issueTypeTx(ctx, tx, in.DstID)` — note these use the **input** ids, not the canonicalized ones. `requireIssueExistsTx` runs `SELECT 1 FROM issues WHERE id = ?` and maps `sql.ErrNoRows` to `storage.NotFoundError{Entity: "issue", ID: issueID}`, other errors to `fmt.Errorf("check issue exists: %w", err)` — `internal/store/store.go`. It deliberately does not filter on `deleted_at`, so archived/soft-deleted rows count as existing (`internal/store/store.go` comment).
+   - `issueTypeTx` (`relations.go`) is the dst's existence proof and its type in one read (`SELECT issue_type FROM issues WHERE id = ?`, `ErrNoRows` → `storage.NotFoundError{Entity: "issue"}`, other errors → `fmt.Errorf("read issue type: %w", err)`); then `storage.RejectNonContainerParentEdge(rel.Type, rel.DstID, dstType)` (`internal/storage/containment.go`, shared with the memory engine): for `parent-child` only, `storage.RejectParentThatIsNotAContainer` → `model.ValidationError` for a parent that is not an epic; other types pass.
    - If type is `blocks`: `rejectBlocksCycle(ctx, tx, rel.SrcID, rel.DstID)`, then `loadEpicParentEdges` (parent edges whose parent is an epic; load error → `fmt.Errorf("blocks hierarchy check: %w", err)`) and `storage.RejectBlocksAlongHierarchy(epicParentOf, rel.SrcID, rel.DstID)` — either endpoint inside the other's epic at any depth, climbing only through epic parents → `model.ValidationError{Message: storage.SameEpicBlocksRejectionMessage}` (`internal/storage/edges.go`; the memory engine calls the same function, pinned by conformance case `blocks_never_runs_along_the_hierarchy`).
    - If `rel.Type.SingleValuedFromSrc()` (parent-child only): `setSingleValuedEdgeTx`; otherwise `insertRelationTx`.
 5. Returns the constructed `model.Relation` (with canonical endpoints and the pre-tx timestamp) on success.
@@ -2730,6 +2732,7 @@ Tests: `TestAddRelationRejectsBlocksCycle` (A→B then B→A rejected) — `inte
 - `srcID, dstID = relType.CanonicalEndpoints(srcID, dstID)` first (so related-to removal is order-insensitive).
 - Inside `s.withMutation(ctx, "remove relation", ...)`: `deleteRelationRowTx` with that key.
 - `affected == 0` → `storage.NotFoundError{Entity: "relation", ID: fmt.Sprintf("src=%s dst=%s type=%s", srcID, dstID, relType)}`, rendering as `relation "src=… dst=… type=…" not found`.
+- Then `storage.RejectDetachingParentEdge(relType, srcID, read)` (`relations.go`, `internal/storage/containment.go`): for `parent-child` only, `read` runs `issueTypeTx` on the child and counts the parent-child edges it still holds (`SELECT COUNT(*) FROM relations WHERE src_id = ? AND type = 'parent-child'`), and `storage.RejectDetachingALeaf` → `model.ValidationError` for a leaf left with none, which rolls the delete back; a leaf that keeps another parent edge passes, and other types pass without the read. Judged after the delete so a missing edge is still reported missing.
 - No existence check on the endpoints; no `GetIssue` precheck.
 
 `TestRemovePerChildBlockAfterRankReorder` — `internal/store/store_test.go` — removes per-child and epic-level blocks edges after a `RankAbove`, asserting store orientation `src=dependent, dst=dependency` holds after reordering.
@@ -2737,8 +2740,7 @@ Tests: `TestAddRelationRejectsBlocksCycle` (A→B then B→A rejected) — `inte
 ### 4.7 ClearParent
 
 `Store.ClearParent(ctx, childID)` — `internal/store/relations.go`:
-- `GetIssue(ctx, childID)` precheck.
-- Inside `s.withMutation(ctx, "clear parent", ...)`:
+- Inside `s.withMutation(ctx, "clear parent", ...)`, first `issueTypeTx(ctx, tx, childID)`: it proves the child exists (`storage.NotFoundError` otherwise) and reads its type as a column — no hydration, so this answers on a hierarchy holding a loop — and `storage.RejectDetachingALeaf(childID, childType, 0)` → `model.ValidationError` for a leaf, since every parent edge goes; only an epic is detached. Then:
   ```sql
   DELETE FROM relations WHERE src_id = ? AND type = 'parent-child'
   ```
@@ -2753,7 +2755,7 @@ Tests: `TestAddRelationRejectsBlocksCycle` (A→B then B→A rejected) — `inte
 - Blank check: either id empty after `strings.TrimSpace` → `model.ValidationError{Message: "child and parent ids are required"}`.
 - `in.ChildID == in.ParentID` → `model.ValidationError{Message: "child and parent cannot be the same issue"}`.
 - Builds `model.Relation{SrcID: ChildID, DstID: ParentID, Type: RelParentChild, CreatedAt: time.Now().UTC(), CreatedBy: trimmed}`; empty CreatedBy → `"unknown"`.
-- In `s.withMutation(ctx, "set parent"...)`: `addRelationTx`, the same write `lit dep add` uses — endpoint existence, the parent-cycle refusal (`model.ValidationError`), and the single-parent clear-then-insert.
+- In `s.withMutation(ctx, "set parent"...)`: `addRelationTx`, the same write `lit dep add` uses — endpoint existence, the refusal of a parent that is not an epic (`storage.RejectNonContainerParentEdge`, `model.ValidationError`), the parent-cycle refusal (`model.ValidationError`), and the single-parent clear-then-insert.
 - Returns the relation value.
 
 `TestAddRelationEnforcesSingleParentCardinality` — `internal/store/store_test.go`: adding a second `parent-child` edge for a child through `AddRelation` succeeds and leaves exactly one parent edge (the newer one), same as `SetParent`.
@@ -3547,6 +3549,7 @@ Usage strings: `restoreUsage = "usage: lit backup restore (--latest | --path <ex
   - `> 0` → error line `"foreign key violations: %d"`.
 - `SELECT COUNT(*) FROM relations WHERE type='related-to' AND src_id >= dst_id` → `InvalidRelatedRows`; wrap `"count invalid related rows: %w"`; warning `"invalid related-to ordering rows: %d"`.
 - `SELECT COUNT(*) FROM issue_events e LEFT JOIN issues i ON i.id = e.issue_id WHERE i.id IS NULL` → `OrphanHistoryRows`; wrap `"count orphan event rows: %w"`; warning `"orphan issue event rows: %d"`.
+- `containmentFindings(ctx, s.db)` (`import_export.go`), error wrap `"containment check: %w"`: one query lists every non-epic with no parent-child edge and every parent-child edge onto a non-epic; warning `"tickets outside an epic: %s (every ticket except an epic lives inside one; move each into the epic it belongs to with 'lit parent set --child <id> --parent <epic-id>')"` naming each as `id (type)`, and warning `"tickets under a parent that is not an epic: %s (only an epic contains tickets; …)"` naming each as `id under parent (parent type)`. Column reads, so it runs before the parent-cycle check.
 - `loadRankAncestry(ctx, s.db)`, error wrap `"rank ancestry: %w"`; each `ancestry.Conflicts()` entry appends its `Finding()` as an error line, and the checks below still run.
 - `s.liveIssueIDs(ctx)`, `loadRankOrder(ctx, s.db, liveIDs)` and `loadBlocksEdges(ctx, s.db)`, loaded once for both rank checks; each error wraps `"rank checks: %w"`.
 - `RankInversions = len(invertedEdges(order, edges))`; warning `"rank inversions: %d (dependencies ranked below dependents)"`.
@@ -3605,7 +3608,7 @@ Defaults for absent fields: every field is a non-pointer, so an absent key is th
 
 `ImportTree(ctx, prefix, specs)` (`import_tree.go`):
 
-1. `validateImportTreeSpecs(specs)` — full pre-flight, no store writes.
+1. `storage.ValidateImportTreeSpecs(specs)` (`internal/storage/import_validate.go`, shared with the memory engine) — full pre-flight, no store writes.
 2. `topoSortImportSpecs(specs)` → indices.
 3. Create loop in topo order (`import_tree.go`):
    - `parentID = idMap[spec.Parent]` when `spec.Parent != ""` — resolved **only** from this batch's map, so an external/real parent id resolves to `""` (see §4.5).
@@ -3619,7 +3622,7 @@ Defaults for absent fields: every field is a non-pointer, so an absent key is th
 
 ### 4.3 Validation and every rejection text
 
-`validateImportTreeSpecs` (`import_tree.go`). First pass, per spec index `i`:
+`storage.ValidateImportTreeSpecs` (`internal/storage/import_validate.go`). First pass, per spec index `i`:
 
 | condition | error |
 |---|---|
@@ -3631,14 +3634,16 @@ Defaults for absent fields: every field is a non-pointer, so an absent key is th
 | `ParsePriority` fails | `import: spec %q has invalid priority %d` |
 | local_id already seen | `import: duplicate local_id %q` |
 
-Second pass, over all specs (`import_tree.go`) — i.e. **forward references are legal**, because references are checked against the complete `seen` set built in the first pass:
+Second pass, over all specs (`import_validate.go`) — i.e. **forward references are legal**, because references are checked against the complete `types` map (local_id → parsed `model.IssueType`) built in the first pass:
 
 | condition | error |
 |---|---|
 | `Parent != TrimSpace(Parent)` | `import: spec %q parent %q has surrounding whitespace` |
-| `Parent` not in `seen` | `import: spec %q references missing parent %q` |
+| `Parent` not in `types` | `import: spec %q references missing parent %q` |
+| `Parent` names a spec whose type is not a container (`storage.RejectParentThatIsNotAContainer`) | `import: spec %q: cannot file a ticket under %s: it is a %s, and only an epic contains tickets` (wraps a `model.ValidationError`) |
+| type is not a container and `Parent == ""` (`storage.RejectLeafWithoutParent`) | `import: spec %q: cannot create a %s outside an epic: every ticket except an epic lives inside one, so give it the epic it belongs to as its parent, or make it an epic` (wraps a `model.ValidationError`) |
 | a `dep != TrimSpace(dep)` | `import: spec %q depends_on entry %q has surrounding whitespace` |
-| `dep` not in `seen` | `import: spec %q references missing depends_on %q` |
+| `dep` not in `types` | `import: spec %q references missing depends_on %q` |
 | `dep == spec.LocalID` | `import: spec %q cannot depend on itself` |
 
 Consequence: on the tree path **every parent/depends_on reference must be internal to the file** — naming a pre-existing real issue id is rejected as "missing parent". (Test `TestImportTreeRejectsMissingReference`, `import_tree_test.go`, uses `parent:"ghost"` and asserts the error contains `"missing parent"`.)
@@ -3697,7 +3702,7 @@ Reason      string    `yaml:"reason,omitempty"`
 
 Pointer fields carry the patch distinction: nil = "leave unchanged / unspecified", set = "write this value" (`bulk.go`).
 
-`ParseBulkSpecs` (`internal/storage/specs.go`): `yaml.NewDecoder` with `dec.KnownFields(true)` — unknown keys are an error. It loops `dec.Decode(&spec)` until `io.EOF`, appending each document; any other error → `"bulk: parse spec: %w"` around a `ValidationError` carrying the decoder's message, so it exits 3 with the `validation_refused` remediation. **A file with zero documents parses to a nil slice**, which `validateBulkSpecs` then rejects.
+`ParseBulkSpecs` (`internal/storage/specs.go`): `yaml.NewDecoder` with `dec.KnownFields(true)` — unknown keys are an error. It loops `dec.Decode(&spec)` until `io.EOF`, appending each document; any other error → `"bulk: parse spec: %w"` around a `ValidationError` carrying the decoder's message, so it exits 3 with the `validation_refused` remediation. **A file with zero documents parses to a nil slice**, which `storage.ValidateBulkSpecs` then rejects.
 
 Example (from `cli.go`):
 
@@ -3721,9 +3726,9 @@ labels: [reviewed]
 
 `ID` present → **update patch** of an existing issue. `ID` absent → **create**, behaving like the tree flat form.
 
-The full accept/reject enumeration is written out at `import_bulk.go` and enforced by `validateBulkSpecs` (`import_bulk.go`).
+The full accept/reject enumeration is enforced by `storage.ValidateBulkSpecs` (`internal/storage/import_validate.go`, shared with the memory engine).
 
-Per-document checks that run for **both** shapes (`import_bulk.go`):
+Per-document checks that run for **both** shapes (`import_validate.go`):
 
 | condition | error |
 |---|---|
@@ -3734,7 +3739,7 @@ Per-document checks that run for **both** shapes (`import_bulk.go`):
 | a `dep != TrimSpace(dep)` | `bulk: doc %d depends_on entry %q has surrounding whitespace` |
 | `LocalID != "" && dep == LocalID` | `bulk: doc %d (local_id %q) cannot depend on itself` |
 
-Update-document checks (`validateBulkUpdateDoc`, `import_bulk.go`), in order:
+Update-document checks (`validateBulkUpdateDoc`, `import_validate.go`), in order:
 
 | condition | error |
 |---|---|
@@ -3745,11 +3750,11 @@ Update-document checks (`validateBulkUpdateDoc`, `import_bulk.go`), in order:
 | `IssueType` set and unparseable | `bulk: doc %d (id %q) has invalid type %q` |
 | `Priority` set and unparseable | `bulk: doc %d (id %q) has invalid priority %d` |
 | `!bulkUpdateHasField(spec)` | `bulk: doc %d (id %q) has no fields to update` |
-| id already seen | `bulk: duplicate id %q` (`import_bulk.go`) |
+| id already seen | `bulk: duplicate id %q` (`import_validate.go`) |
 
-`bulkUpdateHasField` (`import_bulk.go`) is true iff any of `Title, Description, Prompt, IssueType, Priority, Assignee, Labels, Lane` is non-nil. **`Reason` alone does not count** — hence "id set and reason set with no other field set" is rejected.
+`bulkUpdateHasField` (`import_validate.go`) is true iff any of `Title, Description, Prompt, IssueType, Priority, Assignee, Labels, Lane` is non-nil. **`Reason` alone does not count** — hence "id set and reason set with no other field set" is rejected.
 
-Create-document checks (`validateBulkCreateDoc`, `import_bulk.go`), in order:
+Create-document checks (`validateBulkCreateDoc`, `import_validate.go`, which returns the parsed `model.IssueType`), in order:
 
 | condition | error |
 |---|---|
@@ -3759,15 +3764,22 @@ Create-document checks (`validateBulkCreateDoc`, `import_bulk.go`), in order:
 | `ParseIssueType` fails | `bulk: doc %d has invalid type %q` |
 | `Priority` set and `ParsePriority` fails | `bulk: doc %d has invalid priority %d` |
 | `Reason != ""` | `bulk: doc %d sets reason without id (reason only applies to updates)` |
-| local_id already seen (non-empty) | `bulk: duplicate local_id %q` (`import_bulk.go`) |
+| local_id already seen (non-empty) | `bulk: duplicate local_id %q` (`import_validate.go`) |
 
-Note the create branch does **not** require `LocalID` (unlike ImportTree), and does not reject an unresolvable `Parent`/`depends_on` — those pass through as presumed real ids.
+A second pass over the create documents, in file order (`import_validate.go`), judges containment on what the file alone can answer:
+
+| condition | error |
+|---|---|
+| type is not a container and `Parent == ""` (`storage.RejectLeafWithoutParent`) | `bulk: doc %d: cannot create a %s outside an epic: every ticket except an epic lives inside one, so give it the epic it belongs to as its parent, or make it an epic` (wraps a `model.ValidationError`) |
+| `Parent` names a create document in the file (by `local_id`) whose type is not a container (`storage.RejectParentThatIsNotAContainer`) | `bulk: doc %d: cannot file a ticket under %s: it is a %s, and only an epic contains tickets` (wraps a `model.ValidationError`) |
+
+Note the create branch does **not** require `LocalID` (unlike ImportTree), and does not reject an unresolvable `Parent`/`depends_on` — those pass through as presumed real ids; a real-id parent that is not an epic is refused by `CreateIssue` (`storage.RejectParentThatIsNotAContainer`), after any earlier documents have been created, and is compensated as any mid-batch refusal is.
 
 ### 5.3 Execution
 
 `BulkApply(ctx, prefix, actor string, specs)` (`import_bulk.go`):
 
-1. `validateBulkSpecs` — whole file validated before anything is written (`import_bulk.go`).
+1. `storage.ValidateBulkSpecs` — whole file validated before anything is written (`internal/storage/import_validate.go`).
 2. Flatten to `localID/parent/dependsOn` slices and `topoSortLocalGraph` (`import_bulk.go`); error wrapped as `"bulk: %w"` (so a cycle reads `bulk: cycle detected involving "x"`).
 3. `result := storage.BulkApplyResult{Created: map[string]string{}}`; `createdRealID` (index-parallel), `createdIDs` (ordered), `localRealID` map (`import_bulk.go`).
 4. Loop in topo order (`import_bulk.go`):
@@ -3962,6 +3974,7 @@ The concrete checks whose text can appear as a `health` finding, in `Doctor`'s e
    Query error → `fmt.Errorf("count foreign key issues: %w", err)` (`import_export.go`). If sum > 0, appends **error** `foreign key violations: %d` (`import_export.go`).
 3. **Invalid related-to ordering.** SQL: `SELECT COUNT(*) FROM relations WHERE type='related-to' AND src_id >= dst_id` (`import_export.go`). Error → `count invalid related rows: %w`. If > 0, appends **warning** `invalid related-to ordering rows: %d` (`import_export.go`) — a warning, therefore **ignored by verify**.
 4. **Orphan event rows.** SQL: `SELECT COUNT(*) FROM issue_events e LEFT JOIN issues i ON i.id = e.issue_id WHERE i.id IS NULL` (`import_export.go`). Error → `count orphan event rows: %w`. If > 0, **warning** `orphan issue event rows: %d` (`import_export.go`) — ignored by verify.
+   **Containment.** `containmentFindings(ctx, s.db)` (`import_export.go`): a non-epic with no parent-child edge, or a parent-child edge onto a non-epic, is a **warning** naming each and the repair `lit parent set --child <id> --parent <epic-id>` — ignored by verify, so a faithful rebuild of a pre-v7 source is not refused.
 5. **Parent conflicts.** `loadRankAncestry(ctx, s.db)` (`import_export.go`); each child more than one framing edge claims (`ancestry.Conflicts()`) appends **error** `%s has %d parents (%s); it lists under %s, the lowest id, until one remains — ...` (`internal/storage/rank.go`). The checks below still run.
 6. **Rank inversions.** Computed in Go: `s.liveIssueIDs(ctx)`, `loadRankOrder(ctx, s.db, liveIDs)` and `loadBlocksEdges(ctx, s.db)` load once for this check and the next (`import_export.go`); each error → `rank checks: %w`. `RankInversions = len(invertedEdges(order, edges))` (`import_export.go`); if > 0, **warning** `rank inversions: %d (dependencies ranked below dependents)` (`import_export.go`) — ignored by verify.
 7. **Blocks dependency cycle.** `blocksCycle(order, edges)` over the same load (`import_export.go`). If non-empty, sets `DependencyCycle` and appends **warning** `blocks dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)` with members joined by `" -> "` (`import_export.go`) — ignored by verify.

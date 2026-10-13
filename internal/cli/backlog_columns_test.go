@@ -90,7 +90,8 @@ func TestBacklogRejectsUnknownColumn(t *testing.T) {
 	} {
 		t.Run(tc.expr, func(t *testing.T) {
 			h := newReadyTestHarness(t)
-			h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Row one", Topic: "cols", IssueType: "task", Priority: 0})
+			epic := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Epic", Topic: "cols", IssueType: "epic", Priority: 1})
+			h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Row one", Topic: "cols", IssueType: "task", Priority: 0, ParentID: epic.ID})
 
 			out, err := runBacklogColumns(h, tc.expr)
 			if err == nil {
@@ -125,7 +126,8 @@ func TestBacklogRejectsUnknownColumn(t *testing.T) {
 // defaultColumns() instead would print `id state topic title` and fail.
 func TestBacklogAcceptsValidColumns(t *testing.T) {
 	h := newReadyTestHarness(t)
-	issue := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Projected row", Topic: "cols", IssueType: "task", Priority: 0})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Epic", Topic: "cols", IssueType: "epic", Priority: 1})
+	issue := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Projected row", Topic: "cols", IssueType: "task", Priority: 0, ParentID: epic.ID})
 
 	out, err := runBacklogColumns(h, "id,rank,title")
 	if err != nil {
@@ -150,7 +152,8 @@ func TestBacklogRendersRelationColumns(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Epic", Topic: "cols", IssueType: "epic", Priority: 1})
 	child := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Child", Topic: "cols", IssueType: "task", Priority: 0, ParentID: epic.ID})
-	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Blocker", Topic: "cols", IssueType: "task", Priority: 0})
+	otherEpic := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Other epic", Topic: "cols", IssueType: "epic", Priority: 1})
+	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Blocker", Topic: "cols", IssueType: "task", Priority: 0, ParentID: otherEpic.ID})
 	h.addDependency(child.ID, blocker.ID)
 
 	out, err := runBacklogColumns(h, "id,parent,blocked")
@@ -183,12 +186,12 @@ func TestBacklogRendersRelationColumns(t *testing.T) {
 			context, "depends on: "+blocker.ID, out)
 	}
 
-	// The unblocked, parentless blocker is the control: it proves "-" still
-	// reaches the page for a row that genuinely has no parent and no live
-	// dependency, so the assertion above is reading real data rather than a
-	// map that happens to be populated for everything.
+	// The unblocked blocker, under an epic of its own, is the control: its
+	// parent cell names a different epic than the child's and its blocked
+	// cell is "-", so the assertion above is reading real per-row data rather
+	// than a map that happens to be populated the same way for everything.
 	gotBlocker := backlogCells(t, out, blocker.ID)
-	wantBlocker := []string{blocker.ID, "-", "-"}
+	wantBlocker := []string{blocker.ID, otherEpic.ID, "-"}
 	if strings.Join(gotBlocker, "|") != strings.Join(wantBlocker, "|") {
 		t.Errorf("blocker cells = %v, want %v\nfull output:\n%s", gotBlocker, wantBlocker, out)
 	}

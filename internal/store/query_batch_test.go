@@ -10,15 +10,16 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-// makeIssues creates n issues at the bottom of the workspace and returns their
-// ids in creation order, which is also their rank order.
-func makeIssues(t *testing.T, ctx context.Context, st *Store, n int, titlef string) []string {
+// makeEpics creates n epics at the bottom of the workspace and returns their
+// ids in creation order, which is also their rank order. Epics, because the
+// callers name them as parents and as the whole top level of the workspace.
+func makeEpics(t *testing.T, ctx context.Context, st *Store, n int, titlef string) []string {
 	t.Helper()
 	ids := make([]string, 0, n)
 	for i := range n {
 		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 			Prefix: "test", Title: fmt.Sprintf(titlef, i), Topic: "batch",
-			IssueType: "task", Placement: storage.RankBottom,
+			IssueType: "epic", Placement: storage.RankBottom,
 		})
 		if err != nil {
 			t.Fatalf("CreateIssue(%d) error = %v", i, err)
@@ -45,7 +46,7 @@ func TestListIssuesByIDsSpansEveryBatch(t *testing.T) {
 	st := openIssueStore(t, ctx)
 
 	const count = 2*idBatchSize + 2
-	ids := makeIssues(t, ctx, st, count, "subject %d")
+	ids := makeEpics(t, ctx, st, count, "subject %d")
 
 	got, err := st.ListIssues(ctx, storage.ListIssuesFilter{IDs: ids})
 	if err != nil {
@@ -71,7 +72,7 @@ func TestListIssuesByParentIDsSpansEveryBatch(t *testing.T) {
 	st := openIssueStore(t, ctx)
 
 	const count = 2*idBatchSize + 2
-	parents := makeIssues(t, ctx, st, count, "parent %d")
+	parents := makeEpics(t, ctx, st, count, "parent %d")
 	children := make([]string, 0, count)
 	for i, parent := range parents {
 		child, err := st.CreateIssue(ctx, storage.CreateIssueInput{
@@ -103,7 +104,7 @@ func TestListIssuesByIDsIntersectsParentIDs(t *testing.T) {
 	st := openIssueStore(t, ctx)
 
 	const count = 2*idBatchSize + 2
-	parents := makeIssues(t, ctx, st, count, "parent %d")
+	parents := makeEpics(t, ctx, st, count, "parent %d")
 	children := make([]string, 0, count)
 	for i, parent := range parents {
 		child, err := st.CreateIssue(ctx, storage.CreateIssueInput{
@@ -140,7 +141,7 @@ func TestListIssuesEmptySelectionVersusBlankFilter(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	all := makeIssues(t, ctx, st, 3, "row %d")
+	all := makeEpics(t, ctx, st, 3, "row %d")
 	childless := all[0]
 
 	narrowed, err := st.ListIssues(ctx, storage.ListIssuesFilter{ParentIDs: []string{childless}})
@@ -170,7 +171,7 @@ func TestRankSetRepeatedIsAFixedPoint(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	ids := makeIssues(t, ctx, st, 6, "row %d")
+	ids := makeEpics(t, ctx, st, 6, "row %d")
 	stack := []string{ids[5], ids[4], ids[3]}
 
 	ranksAfter := func(round int) map[string]string {

@@ -207,7 +207,8 @@ func TestDescribeClaimantNamesAnUnaddressableHolder(t *testing.T) {
 // sees: the public checkout, with no assignee beside it.
 func TestTransferNoticeNamesAPredecessorThatMintedNoToken(t *testing.T) {
 	h := newReadyTestHarness(t)
-	issue := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "unattributed hold", Topic: "claims", IssueType: "task"})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "claims", IssueType: "epic"})
+	issue := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "unattributed hold", Topic: "claims", IssueType: "task", ParentID: epic.ID})
 	h.asCheckout("")
 	h.transition(issue.ID, model.Start{})
 

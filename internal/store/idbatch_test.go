@@ -114,12 +114,16 @@ func TestGetRelationsByIDsSpansEveryBatch(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Batch epic", Topic: "batch", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
 	const subjectCount = 2*idBatchSize + 2
 	subjects := make([]string, 0, subjectCount)
 	for i := range subjectCount {
 		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 			Prefix: "test", Title: fmt.Sprintf("Subject %d", i), Topic: "batch",
-			IssueType: "task", Placement: storage.RankBottom,
+			IssueType: "task", Placement: storage.RankBottom, ParentID: epic.ID,
 		})
 		if err != nil {
 			t.Fatalf("CreateIssue(%d) error = %v", i, err)
@@ -137,11 +141,11 @@ func TestGetRelationsByIDsSpansEveryBatch(t *testing.T) {
 	// that peer were itself queried, whichever query reached it would return the
 	// whole edge set and answer for the other, and the first truncation aimed at
 	// either would pass.
-	sink, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Sink", Topic: "batch", IssueType: "task"})
+	sink, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Sink", Topic: "batch", IssueType: "task", ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(sink) error = %v", err)
 	}
-	source, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Source", Topic: "batch", IssueType: "task"})
+	source, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Source", Topic: "batch", IssueType: "task", ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(source) error = %v", err)
 	}

@@ -25,7 +25,7 @@ import (
 // [LAW:behavior-not-structure] every assertion reads a durable trace or a
 // marker on disk, never how the receive reached its decision.
 func TestAutomaticReceiveAsksBeforeFetching(t *testing.T) {
-	remote, producer, consumer, ws := twoClonesOverOneDoltRemote(t)
+	remote, producer, consumer, ws, epicID := twoClonesOverOneDoltRemote(t)
 
 	// Nothing recorded yet: the first receive cannot know the remote is
 	// unmoved, so it fetches, and the record it leaves is the remote's
@@ -66,7 +66,7 @@ func TestAutomaticReceiveAsksBeforeFetching(t *testing.T) {
 
 	// (b) Moved: the other clone pushes, the advertisement changes, and the next
 	// receive fetches and fast-forwards; its record is the new head.
-	runCLIInDir(t, producer, "new", "--title", "second-ticket", "--topic", "demo", "--type", "task")
+	runCLIInDir(t, producer, "new", "--title", "second-ticket", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, producer, "sync", "push")
 	receiveNow(t, consumer)
 	moved := lastReceiveTrace(t, ws)
@@ -134,8 +134,9 @@ func TestAutomaticReceiveAsksBeforeFetching(t *testing.T) {
 
 // twoClonesOverOneDoltRemote builds a bare git remote and two lit clones of
 // it: the producer, whose `first-ticket` is already pushed, and the consumer,
-// initialised but not yet received. It returns the consumer's workspace.
-func twoClonesOverOneDoltRemote(t *testing.T) (remote, producer, consumer string, ws workspace.Info) {
+// initialised but not yet received. It returns the consumer's workspace and
+// the epic `first-ticket` lives in, which both clones hold.
+func twoClonesOverOneDoltRemote(t *testing.T) (remote, producer, consumer string, ws workspace.Info, epicID string) {
 	t.Helper()
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
@@ -152,7 +153,8 @@ func twoClonesOverOneDoltRemote(t *testing.T) (remote, producer, consumer string
 	runGit(t, producer, "commit", "-m", "seed")
 	runGit(t, producer, "push", "origin", "HEAD")
 	runCLIInDir(t, producer, "init", "--skip-hooks", "--skip-agents")
-	runCLIInDir(t, producer, "new", "--title", "first-ticket", "--topic", "demo", "--type", "task")
+	epicID = newEpicInDir(t, producer, "shared-epic")
+	runCLIInDir(t, producer, "new", "--title", "first-ticket", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, producer, "sync", "push", "--set-upstream")
 
 	consumer = filepath.Join(base, "bravo")
@@ -161,7 +163,7 @@ func twoClonesOverOneDoltRemote(t *testing.T) (remote, producer, consumer string
 	runGit(t, consumer, "config", "user.name", "bravo")
 	runCLIInDir(t, consumer, "init", "--skip-hooks", "--skip-agents")
 	ws = workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(consumer, ".git", "links"))}
-	return remote, producer, consumer, ws
+	return remote, producer, consumer, ws, epicID
 }
 
 // receiveTraces returns the durable sync traces the automatic receive wrote,

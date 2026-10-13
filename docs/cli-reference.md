@@ -237,8 +237,7 @@ See design-docs/work-claims.md for the full precedence.
 `next` is read-only. It claims nothing and starts nothing — `lit start` does both
 — so where a pick's start would establish a claim, the line above the row says so
 in the conditional and names that command: "run `lit start <id>` to claim lane
-one of epic E". A lane of one is not named, because it is the ticket already on
-the line. A pick that continues an epic you already hold a lane in closes on a
+one of epic E". A pick that continues an epic you already hold a lane in closes on a
 qualifier saying so, and a pick that gates one of your blocked tickets closes
 on a qualifier naming the ticket it unblocks. The same line from the global
 pool carries neither, unless the pool was reached past an exhausted epic, when
@@ -400,18 +399,27 @@ status and any cross-epic dependencies. Exits 4 if the ID doesn't exist.
 ### `lit new`
 
 ```text
-lit new --title <text> --topic <slug> [--type task|feature|bug|chore|epic]
-        [--description <text>] [--parent <id>] [--lane <key>] [--priority normal|urgent]
+lit new --title <text> --topic <slug> --parent <epic-id> [--type task|feature|bug|chore]
+        [--description <text>] [--lane <key>] [--priority normal|urgent]
         [--labels <csv>] [--assignee <a>] [--prompt <text>] [--top]
+lit new --title <text> --topic <slug> --type epic [--parent <epic-id>] [...]
 ```
 
 Creates an issue and **prints its generated ID** — capture it; IDs are not guessable.
 `--topic` is required and immutable: a 1–2 word slug naming the stable area of work.
+
+Every ticket lives inside an epic. `--parent` names the epic a task, feature, bug or
+chore belongs to and is required for those types: without it the command exits 3,
+naming a parent epic and the epic type as the two ways on, and an id that names anything
+but an epic is refused the same way. Only an epic may be top-level, and an epic may
+sit inside another epic. There is no loose ticket, so file the epic first when the
+work has none; `lit ls --type epic` lists the ones that exist.
+
 New issues append to the bottom of their frame — the bottom of the epic named by
-`--parent`, or of the top-level order without one — so filing work records it rather
-than promoting it, and a batch authored in order keeps that order with no flag. `--top`
-files the issue at the front of that frame — the epic's children, or the top level; `lit rank`
-moves one afterwards. With `--parent`, the child's ID becomes `<parentID>.<hash>`. `--lane`
+`--parent`, or of the top-level order for a top-level epic — so filing work records it
+rather than promoting it, and a batch authored in order keeps that order with no flag.
+`--top` files the issue at the front of that frame — the epic's children, or the top
+level; `lit rank` moves one afterwards. A child's ID becomes `<parentID>.<hash>`. `--lane`
 partitions an epic's children into parallel rank-ordered sub-sequences: a shared lane
 serializes, distinct lanes parallelize. `--prompt` stores a reusable agent prompt for
 the work the issue captures.
@@ -600,9 +608,7 @@ same epic, or between an issue and any epic above it at any depth — within an 
 rank is the ordering signal. `lit import` refuses that ancestor edge in `depends_on`
 too. A `blocks` edge onto an
 epic holds back every issue in that epic and in epics nested inside it, in every
-lane (an issue under a parent that is not an epic belongs to no epic, as
-`epic: none` in `lit backlog` says, and is not held back):
-`lit next` offers none of them until the blocker closes, and `lit backlog` shows
+lane: `lit next` offers none of them until the blocker closes, and `lit backlog` shows
 the blocker on each one as `depends on: <id> (via epic)`. The one exception is an
 issue the blocker already waits on, directly or through other issues, such as
 its own dependencies, its earlier lane-mates, or the blocker itself when it sits
@@ -620,6 +626,14 @@ lit parent clear <child-id>
 Manages epic membership. `--child`/`--parent` are required for `set`; there is no
 positional form. Epics contain children; an epic's completion is derived from
 its children rather than tracked as its own status.
+
+Every ticket lives inside an epic, and the two verbs keep it so. `set` refuses a
+`--parent` that is not an epic (exit 3). `clear` detaches only an epic from the epic
+above it, lifting it to the top level; on a task, feature, bug or chore it refuses
+(exit 3), naming the `lit parent set --child <id> --parent <epic-id>` that moves the
+ticket instead, since detaching one would leave it outside every epic. `set` replaces
+whatever parent the child holds in one act, which is also how `lit doctor`'s
+two-parent finding is repaired.
 
 Parent-child is one of the relation edges `lit dep` manages (`--type parent-child`);
 `parent` is the ergonomic face over that same store write, and both render the

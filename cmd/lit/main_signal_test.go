@@ -69,10 +69,12 @@ func TestSIGTERMDuringWedgedSyncExitsCleanly(t *testing.T) {
 	}
 
 	ws, cadenceConfig := setupWedgeWorkspace(t, self)
-	// One write first, so the store is past its baseline and the read below
-	// needs no write open of its own — only the worker is left to wedge.
+	// A write first, so the store is past its baseline and the read below
+	// needs no write open of its own — only the worker is left to wedge. The
+	// epic homes the leaf filed here and the one filed after the wedge.
+	epic := newEpicViaLit(t, ws.RootDir, self, onPushEnv(cadenceConfig, "1"), "wedge-epic")
 	if out, err := runLit(t, ws.RootDir, self, onPushEnv(cadenceConfig, "1"),
-		"new", "--title", "before-wedge", "--topic", "demo"); err != nil {
+		"new", "--title", "before-wedge", "--topic", "demo", "--parent", epic); err != nil {
 		t.Fatalf("lit new before the wedge: %v\noutput:\n%s", err, out)
 	}
 
@@ -119,7 +121,7 @@ func TestSIGTERMDuringWedgedSyncExitsCleanly(t *testing.T) {
 		t.Fatalf("release seized commit lock: %v", err)
 	}
 	verifyOut, err := runLit(t, ws.RootDir, self, onPushEnv(cadenceConfig, "1"),
-		"new", "--title", "after-wedge", "--topic", "demo")
+		"new", "--title", "after-wedge", "--topic", "demo", "--parent", epic)
 	if err != nil {
 		t.Fatalf("workspace not usable after the SIGTERM-ed receive: %v\noutput:\n%s", err, verifyOut)
 	}
@@ -312,6 +314,33 @@ func onPushEnv(cadenceConfigPath, disableAutoSync string) map[string]string {
 	}
 }
 
+// newEpicViaLit files a top-level epic titled title in dir through the binary
+// and returns its id: the home every leaf a test files afterwards names with
+// --parent, since a leaf is never created outside an epic.
+func newEpicViaLit(t *testing.T, dir, self string, env map[string]string, title string) string {
+	t.Helper()
+	out, err := runLit(t, dir, self, env, "new", "--type", "epic", "--title", title, "--topic", "demo")
+	if err != nil {
+		t.Fatalf("lit new --type epic %q in %s: %v\noutput:\n%s", title, dir, err, out)
+	}
+	return issueIDFromLitNew(t, out, title)
+}
+
+// issueIDFromLitNew returns the id leading the summary row `lit new` printed
+// for title. The row is found by its title rather than taken as the first
+// line, because the command's output can open with a sync banner.
+func issueIDFromLitNew(t *testing.T, out, title string) string {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 1 && strings.Contains(line, title) {
+			return fields[0]
+		}
+	}
+	t.Fatalf("lit new output has no summary row for %q:\n%s", title, out)
+	return ""
+}
+
 // runLit runs a lit command to completion via a re-exec of the test binary.
 func runLit(t *testing.T, dir, self string, extraEnv map[string]string, args ...string) (string, error) {
 	t.Helper()
@@ -400,10 +429,12 @@ func TestSIGTERMDuringWedgedGitSubprocessExitsCleanly(t *testing.T) {
 	sigtermReceiveWorker(t, ws, pid, 4*time.Second)
 
 	// The store was released and lit stranded no lock of its own: with the black-hole
-	// remote removed, an ordinary write proceeds normally.
+	// remote removed, an ordinary write proceeds normally — the epic, then the
+	// leaf filed inside it.
 	runGit(t, ws.RootDir, "remote", "remove", "origin")
+	epic := newEpicViaLit(t, ws.RootDir, self, onPushEnv(cadenceConfig, "1"), "wedge-epic")
 	verifyOut, err := runLit(t, ws.RootDir, self, onPushEnv(cadenceConfig, "1"),
-		"new", "--title", "after-wedge", "--topic", "demo")
+		"new", "--title", "after-wedge", "--topic", "demo", "--parent", epic)
 	if err != nil {
 		t.Fatalf("workspace not usable after the SIGTERM-ed git wedge: %v\noutput:\n%s", err, verifyOut)
 	}
@@ -447,7 +478,8 @@ func TestAPeerPushReachesTheStoreThroughTheReceiveWorker(t *testing.T) {
 	runGit(t, producer, "commit", "-m", "seed")
 	runGit(t, producer, "push", "origin", "HEAD")
 	lit(producer, quiet, "init", "--skip-hooks", "--skip-agents")
-	lit(producer, quiet, "new", "--title", "first-ticket", "--topic", "demo", "--type", "task")
+	epic := newEpicViaLit(t, producer, self, quiet, "peer-epic")
+	lit(producer, quiet, "new", "--title", "first-ticket", "--topic", "demo", "--type", "task", "--parent", epic)
 	lit(producer, quiet, "sync", "push", "--set-upstream")
 
 	consumer := filepath.Join(base, "bravo")
@@ -460,7 +492,7 @@ func TestAPeerPushReachesTheStoreThroughTheReceiveWorker(t *testing.T) {
 		t.Fatalf("resolve consumer workspace: %v", err)
 	}
 
-	lit(producer, quiet, "new", "--title", "second-ticket", "--topic", "demo", "--type", "task")
+	lit(producer, quiet, "new", "--title", "second-ticket", "--topic", "demo", "--type", "task", "--parent", epic)
 	lit(producer, quiet, "sync", "push")
 	if strings.Contains(lit(consumer, quiet, "backlog"), "second-ticket") {
 		t.Fatalf("consumer saw second-ticket before any receive — the test cannot prove the receive")

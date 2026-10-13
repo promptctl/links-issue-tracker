@@ -71,19 +71,26 @@ func TestOpenForwardMigratesPreConvergedColumnShape(t *testing.T) {
 		t.Fatalf("Open(first) error = %v", err)
 	}
 	// Seed a real issue so the forward migration must preserve it.
-	if _, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Pre-migration issue", Topic: "fwd", IssueType: "task", Priority: 0}); err != nil {
+	epic, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Pre-migration epic", Topic: "fwd", IssueType: "epic"})
+	if err != nil {
+		_ = first.Close()
+		t.Fatalf("seed CreateIssue(epic) error = %v", err)
+	}
+	if _, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Pre-migration issue", Topic: "fwd", IssueType: "task", Priority: 0, ParentID: epic.ID}); err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
 	}
-	// Simulate a pre-converged shape: drop a column the baseline requires
-	// and remove goose history so the next Open hits the adoption path.
-	if err := first.ExecRawForTest(ctx, `ALTER TABLE issues DROP COLUMN topic`); err != nil {
-		_ = first.Close()
-		t.Fatalf("drop topic column error = %v", err)
-	}
-	// Revert post-baseline migrations and strip goose history so the next Open
-	// hits the adoption path on a genuine pre-goose (baseline-shaped) workspace.
-	hijackToPreGoose(t, first)
+	// Revert post-baseline migrations, then simulate a pre-converged shape by
+	// dropping a column the baseline requires, and strip goose history so the
+	// next Open hits the adoption path on a genuine pre-goose (baseline-shaped)
+	// workspace. The drop runs after the revert because the Down sections read
+	// the head schema — 00007's reads issues.topic to find the unfiled epic.
+	hijackToPreGooseReshaping(t, first, func() {
+		if err := first.ExecRawForTest(ctx, `ALTER TABLE issues DROP COLUMN topic`); err != nil {
+			_ = first.Close()
+			t.Fatalf("drop topic column error = %v", err)
+		}
+	})
 	if err := first.Close(); err != nil {
 		t.Fatalf("Close(first) error = %v", err)
 	}

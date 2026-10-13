@@ -35,13 +35,16 @@ func unpushedCloneWithOneLocalChange(t *testing.T) (dir, ticketID string) {
 
 	t.Setenv(DisableAutoSyncEnvVar, "1")
 	runCLIInDir(t, dir, "init", "--skip-hooks", "--skip-agents")
+	// The epic the ticket lives inside is filed before the push below, so it
+	// is part of what the push lands rather than a second unpushed change.
+	epicID := newEpicInDir(t, dir, "unpushed-epic")
 	// Establish the remote-tracking ref (Synced=true) with nothing pending, so
 	// the ticket created below is the ONLY unpushed change — otherwise the
 	// freshly-created store reads SyncNeverSynced, not SyncAhead.
 	runCLIInDir(t, dir, "sync", "push", "--set-upstream")
 
 	ticketID = extractTicketID(t, runCLIInDir(t, dir, "new",
-		"--title", "unpushed-ticket", "--description", "d", "--topic", "demo", "--type", "task"))
+		"--title", "unpushed-ticket", "--description", "d", "--topic", "demo", "--type", "task", "--parent", epicID))
 	return dir, ticketID
 }
 

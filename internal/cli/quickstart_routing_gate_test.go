@@ -104,7 +104,8 @@ var laneRoutingTable = []laneRoutingCase{
 // gather, not asserted by hand.
 func TestCapacityForEachLaneRelation(t *testing.T) {
 	h := newReadyTestHarness(t)
-	issue := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "ready leaf", Topic: "next", IssueType: "task", Priority: 0})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
+	issue := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "ready leaf", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID})
 	rows, _, _ := h.gather()
 	row := rowByID(t, rows, issue.ID)
 	if row.State() != model.StateOpen || !ClassifyReadiness(row.Annotations).IsReady() {
