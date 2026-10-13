@@ -108,6 +108,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/05-sync-merge-compaction.md", Text: "labels(issue_id, label)", Src: "CREATE INDEX idx_labels_issue ON labels(issue_id, label);"},
 	{Doc: "doc-v1-total/05-sync-merge-compaction.md", Text: "lit snapshots restore <name>", Src: "usage: lit snapshots restore <name>"},
 	{Doc: "doc-v1-total/05-sync-merge-compaction.md", Text: "lit sync reconcile", Src: "lit sync reconcile"},
+	{Doc: "doc-v1-total/05-sync-merge-compaction.md", Text: "merged both sides' text in lit sync reconcile resolve", Src: "merged both sides' text in lit sync reconcile resolve"},
 	{Doc: "doc-v1-total/05-sync-merge-compaction.md", Text: "reconcile: carry local purge records over the adopted remote history", Src: "reconcile: carry local purge records over the adopted remote history"},
 	{Doc: "doc-v1-total/05-sync-merge-compaction.md", Text: "redirect_target IS NULL OR resolution IN ('duplicate','superseded')", Src: "internal/store/migrations/00004_add_redirect_target.sql"},
 	{Doc: "doc-v1-total/05-sync-merge-compaction.md", Text: "relations(src_id, dst_id, type, created_at, created_by)", Src: "INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, ?, ?, ?)"},

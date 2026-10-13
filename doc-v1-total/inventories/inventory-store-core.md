@@ -78,7 +78,7 @@ const (
 | `commitLockPath` | `string` | `store.go` = `commitLockPathForDolt(doltRootDir)` | flock path, `filepath.Join(filepath.Dir(filepath.Clean(doltRootDir)), ".links-commit-flock.lock")` (`commit_lock.go`) |
 | `telemetryDir` | `string` | `store.go` = `filepath.Join(filepath.Clean(doltRootDir), "telemetry")` | never read inside `store.go` |
 | `releaseWorkspaceLock` | `func() error` | `store.go` (Open), `store.go` (OpenForRead); cleared to `nil` on failure at `store.go`, and in `Close` at `store.go` | the workspace shared-lock release |
-| `attribution` | `model.Attribution` | only by `AttributeTo` (`store.go`) | stamped on every `recordEvent` row (`store.go`) |
+| `attribution` | `model.Attribution` | only by `AttributeTo` (`store.go`) | stamped on every event `newEvent` mints (`store.go`) |
 | `applyPreMutationHookForTest` | `func()` | nil in production; fired at `store.go` | test seam between planning and `withMutation` in `Apply` |
 | `commitWorkingSetHookForTest` | `func() error` | nil in production; fired at `commit_lock.go` | test seam at the top of every `commitWorkingSetOnce` |
 
@@ -803,7 +803,7 @@ Evidence: a field plan taken against a stale snapshot lands its title change whi
 
 ### 7. Event / attribution rows
 
-`recordEvent(ctx, tx, issueID, action, reason, actor string, changes []model.FieldChange) error` — the single insertion point for issue history (`store.go`).
+`recordEvent(ctx, tx, issueID, action, reason, actor string, changes []model.FieldChange) error` — the single insertion point for a mutation's history (`store.go`). The event it inserts comes from `newEvent(issueID, action, reason, actor, changes) model.IssueEvent` (`store.go`), which also mints the events a resolved reconcile's settled export carries (`landProse`, `sync_reconcile.go`).
 
 Constructed event (`store.go`):
 - `ID = "evt-" + uuid.NewString()`;

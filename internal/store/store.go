@@ -2081,10 +2081,12 @@ func (s *Store) listAllLabels(ctx context.Context) ([]model.Label, error) {
 	return out, rows.Err()
 }
 
-// recordEvent writes one issue_events row plus N issue_event_changes rows.
-// [LAW:single-enforcer] Single insertion point for issue history. Every
-// mutation site computes its field-change diff and routes through here.
-func (s *Store) recordEvent(ctx context.Context, tx *sql.Tx, issueID, action, reason, actor string, changes []model.FieldChange) error {
+// newEvent stamps one history event for issueID: its id, its time and its
+// attribution, read off the store. Every event the store writes is minted
+// here — the row-at-a-time recordEvent, and a reconcile's settled export,
+// whose events reach the same tables through applyExportDelta — so two
+// writers of history cannot stamp an event two ways. [LAW:single-enforcer]
+func (s *Store) newEvent(issueID, action, reason, actor string, changes []model.FieldChange) model.IssueEvent {
 	event := model.IssueEvent{
 		ID:        "evt-" + uuid.NewString(),
 		IssueID:   issueID,
@@ -2102,6 +2104,14 @@ func (s *Store) recordEvent(ctx context.Context, tx *sql.Tx, issueID, action, re
 	if event.Actor == "" {
 		event.Actor = "unknown"
 	}
+	return event
+}
+
+// recordEvent writes one issue_events row plus N issue_event_changes rows.
+// [LAW:single-enforcer] Single insertion point for a mutation's history. Every
+// mutation site computes its field-change diff and routes through here.
+func (s *Store) recordEvent(ctx context.Context, tx *sql.Tx, issueID, action, reason, actor string, changes []model.FieldChange) error {
+	event := s.newEvent(issueID, action, reason, actor, changes)
 	var actionArg any
 	if event.Action != "" {
 		actionArg = event.Action

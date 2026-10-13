@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/merge"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 func TestParseProseResolutions(t *testing.T) {
@@ -249,6 +250,29 @@ func TestProseReconcileSurfacesAndResolves(t *testing.T) {
 	resolved := runCLIInDir(t, consumer, "sync", "reconcile", "resolve", "--resolve", fp+"=alpha-desc and bravo-desc merged")
 	if !strings.Contains(strings.ToLower(resolved), "reconciled") {
 		t.Fatalf("resolve did not report a reconciled state:\n%s", resolved)
+	}
+
+	// The merged text is an edit, so the trail shows the step to it: from the
+	// provisional text (bravo's, v3) to the merge (v4), under the resolve's reason.
+	history := runCLIInDir(t, consumer, "history", ticketID)
+	if !strings.Contains(history, "merged both sides' text in lit sync reconcile resolve\n    description: v3 → v4") {
+		t.Fatalf("history has no step to the merged text:\n%s", history)
+	}
+	if version := runCLIInDir(t, consumer, "history", ticketID, "--version", "description@4"); !strings.Contains(version, "alpha-desc and bravo-desc merged") {
+		t.Fatalf("description@4 is not the merged text:\n%s", version)
+	}
+	ws, err := workspace.Resolve(consumer)
+	if err != nil {
+		t.Fatalf("workspace.Resolve() error = %v", err)
+	}
+	var trace *syncTraceRecord
+	for _, record := range readSyncTraceRecords(t, ws) {
+		if record.Command == proseResolveCommand {
+			trace = &record
+		}
+	}
+	if trace == nil || trace.Metadata["prose_recorded"] != "1" {
+		t.Fatalf("resolve trace = %+v, want prose_recorded=1", trace)
 	}
 
 	// The consumer now carries the merged text and fast-forward pushes with no force.

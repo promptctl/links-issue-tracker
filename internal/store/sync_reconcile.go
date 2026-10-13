@@ -139,46 +139,100 @@ func formatReconcileSnapshotLabel(t time.Time) string {
 	return fmt.Sprintf("%s-%d", reconcileSnapshotLabel, t.UTC().UnixNano())
 }
 
-// settleFn turns the three-way merge of a divergence into the export the replay
-// settles on (the marker commit's content), OR a non-empty pending set that holds
-// the reconcile for the agent surface. It is the ONLY thing that differs between the autonomous
-// reconcile (which can never resolve prose itself) and the agent-resolved finalize
-// (which splices the agent's merged text in): the lock, freshness gate, anchor
-// capture, scratch branch, and atomic reparent are identical for both, so they
-// live in one shared core and the policy crosses the seam as a value.
+// settleFn turns the three-way merge of a divergence into the settlement the
+// replay lands — the marker commit's content — OR a non-empty pending set that
+// holds the reconcile for the agent surface. It is the ONLY thing that differs
+// between the autonomous reconcile (which can never resolve prose itself) and
+// the agent-resolved finalize (which lands the agent's merged text): the lock,
+// freshness gate, anchor capture, scratch branch, and atomic reparent are
+// identical for both, so they live in one shared core and the policy crosses
+// the seam as a value.
 // [LAW:dataflow-not-control-flow] the per-path variability is this value, not a
 // branch duplicated through the safety-critical replay. [LAW:single-enforcer] the
 // scratch-branch safe-replay is written once.
-type settleFn func(merge.MergeResult) (model.Export, []merge.ProsePending)
+type settleFn func(merge.MergeResult) (settlement, error)
+
+// settlement is what a settle policy decided: the export to land, or the prose
+// still pending, and how many resolved prose fields the export records as
+// changed.
+type settlement struct {
+	export  model.Export
+	pending []merge.ProsePending
+	// proseRecorded counts the change rows the agent's merged text added to
+	// history: one per resolved field whose text differs from its provisional
+	// value. Zero for every settlement the agent took no part in.
+	proseRecorded int
+}
 
 // autonomousSettle is the reconcile's own policy: commit the merge only when every
 // field — prose included — converged without the agent; otherwise hold the live
 // prose conflicts. [LAW:no-silent-failure] prose is never auto-committed by picking
 // a side.
-func autonomousSettle(merged merge.MergeResult) (model.Export, []merge.ProsePending) {
+func autonomousSettle(merged merge.MergeResult) (settlement, error) {
 	if export, ok := merged.Settled(); ok {
-		return export, nil
+		return settlement{export: export}, nil
 	}
-	return model.Export{}, merged.Pending
+	return settlement{pending: merged.Pending}, nil
 }
 
-// resolvedSettle is the finalize policy: splice the agent's merged prose into the
+// proseResolvedReason is the reason a resolved prose field's change row carries,
+// naming the command whose merge wrote it.
+const proseResolvedReason = "merged both sides' text in lit sync reconcile resolve"
+
+// resolvedSettle is the finalize policy: land the agent's merged prose on the
 // provisional export and commit it. It first honors a divergence that converged on
-// its own between the agent reading and finalizing (Settled), then applies the
+// its own between the agent reading and finalizing (Settled), then matches the
 // agent's resolutions — but only when they are an exact bijection with the LIVE
 // pending set. A stale or partial set falls back to holding the CURRENT pending so
 // the caller re-surfaces it; the agent never commits against a divergence that
 // changed underneath it. [LAW:no-silent-failure]
-func resolvedSettle(resolutions []merge.ProseResolution) settleFn {
-	return func(merged merge.MergeResult) (model.Export, []merge.ProsePending) {
+//
+// The merged text lands as actor's edit, through the same field table and the
+// same event stamp as any other edit, so the trail shows the step from the
+// provisional value to the merged text. [LAW:single-enforcer]
+func (s *Store) resolvedSettle(resolutions []merge.ProseResolution, actor string) settleFn {
+	return func(merged merge.MergeResult) (settlement, error) {
 		if export, ok := merged.Settled(); ok {
-			return export, nil
+			return settlement{export: export}, nil
 		}
-		if export, ok := merge.ApplyProseResolutions(merged, resolutions); ok {
-			return export, nil
+		export, texts, ok := merge.MatchProseResolutions(merged, resolutions)
+		if !ok {
+			return settlement{pending: merged.Pending}, nil
 		}
-		return model.Export{}, merged.Pending
+		return s.landProse(export, texts, actor)
 	}
+}
+
+// landProse writes each issue's merged texts onto the provisional export and
+// appends the event recording the fields they moved. The export's issue and
+// event slices are copied, so the merge result it came from is not mutated.
+func (s *Store) landProse(export model.Export, texts map[string]merge.ProseTexts, actor string) (settlement, error) {
+	issues := append([]model.Issue(nil), export.Issues...)
+	events := append([]model.IssueEvent(nil), export.Events...)
+	recorded := 0
+	for i, provisional := range issues {
+		issueTexts, ok := texts[provisional.ID]
+		if !ok {
+			continue
+		}
+		issue, changes, err := storage.ApplyProseFields(provisional, issueTexts)
+		if err != nil {
+			return settlement{}, fmt.Errorf("land merged text on %s: %w", provisional.ID, err)
+		}
+		if len(changes) == 0 {
+			// The agent's merge is the provisional text: nothing moved, so there
+			// is nothing to record, exactly as for an edit that restates a value.
+			continue
+		}
+		event := s.newEvent(issue.ID, "", proseResolvedReason, actor, changes)
+		issue.UpdatedAt = event.CreatedAt
+		issues[i] = issue
+		events = append(events, event)
+		recorded += len(changes)
+	}
+	export.Issues = issues
+	export.Events = events
+	return settlement{export: export, proseRecorded: recorded}, nil
 }
 
 // SyncReconcile reconciles a DIVERGED local branch into LINEAR history using the
@@ -227,13 +281,13 @@ func (s *Store) SyncReconcile(ctx context.Context, remote string, branch string)
 // It shares SyncReconcile's safe-replay verbatim: the replayed spine is built on a
 // unique scratch branch and the data branch advances with one atomic reset, so an
 // interrupted finalize can never orphan the clone's local work.
-func (s *Store) SyncReconcileResolved(ctx context.Context, remote string, branch string, resolutions []merge.ProseResolution) (storage.SyncReconcileResult, error) {
+func (s *Store) SyncReconcileResolved(ctx context.Context, remote string, branch string, resolutions []merge.ProseResolution, actor string) (storage.SyncReconcileResult, error) {
 	// unionCombine: `lit sync reconcile resolve` is the ONE finalize command, so it must
 	// finalize whichever divergence the refs describe — a shared-history three-way (the
 	// base branch handles it) OR an unrelated combine (the !shared branch, with the agent's
 	// prose spliced in). Reusing the same command means renderProsePendingGuidance's printed
 	// resolve line is correct for both surfaces. [LAW:single-enforcer] one finalize path.
-	return s.reconcile(ctx, remote, branch, resolvedSettle(resolutions), unionCombine)
+	return s.reconcile(ctx, remote, branch, s.resolvedSettle(resolutions, actor), unionCombine)
 }
 
 // SyncReconcileCombine resolves an unrelated-history divergence by COMBINING both sides:
@@ -729,8 +783,11 @@ func (s *Store) mergeAndReplay(ctx context.Context, result *storage.SyncReconcil
 		holdForCollisions(result, merged.Collisions)
 		return nil
 	}
-	export, pending := settle(merged)
-	if len(pending) > 0 {
+	settled, err := settle(merged)
+	if err != nil {
+		return err
+	}
+	if len(settled.pending) > 0 {
 		// Prose still diverges on both sides: commit nothing. The data branch is still
 		// at localHead (only the scratch branch moved), so the clone keeps working on
 		// local truth, still diverged; the unresolved divergence IS the durable
@@ -744,7 +801,7 @@ func (s *Store) mergeAndReplay(ctx context.Context, result *storage.SyncReconcil
 		// prose settles, and finding those eagerly costs a full folded-chain export on
 		// every attempt. Deferred, never dropped. [LAW:carrying-cost]
 		result.State = storage.SyncReconcileProsePending
-		result.Pending = pending
+		result.Pending = settled.pending
 		return nil
 	}
 
@@ -753,7 +810,7 @@ func (s *Store) mergeAndReplay(ctx context.Context, result *storage.SyncReconcil
 		return err
 	}
 	stepper := foldStepper{store: s, readBranch: scratch.read, chain: chain, base: base, theirs: theirs}
-	landing, err := s.commitReplayAndAdvance(ctx, guard, dataBranch, scratch, remoteHead, message, export, stepper)
+	landing, err := s.commitReplayAndAdvance(ctx, guard, dataBranch, scratch, remoteHead, message, settled.export, stepper)
 	var foldCollision foldCollisionError
 	if errors.As(err, &foldCollision) {
 		holdForCollisions(result, foldCollision.collisions)
@@ -766,6 +823,7 @@ func (s *Store) mergeAndReplay(ctx context.Context, result *storage.SyncReconcil
 	result.Pending = nil
 	result.Replayed = landing.replayed
 	result.Rehomed = landing.rehomed
+	result.ProseRecorded = settled.proseRecorded
 	return nil
 }
 

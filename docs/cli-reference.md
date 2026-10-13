@@ -769,6 +769,9 @@ fingerprint is a usage error and exits 2. The pending state is
 re-derived live and never persisted; the fingerprint pins each merge to the exact
 conflict it was made against, so a partial or stale resolution (including one
 merged against a since-changed base/ours/theirs) is rejected and re-surfaced.
+An accepted merge lands like `lit update`: `lit history` records each field the
+merged text changes, from the local text to the merged one, by whoever ran the
+resolve.
 `abort` defers — the clone stays diverged and usable.
 
 When two partitioned checkouts started the same lane before either saw the

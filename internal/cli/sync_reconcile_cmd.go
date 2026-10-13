@@ -99,6 +99,7 @@ func syncReconcileShowLeaf() syncLeaf {
 func syncReconcileResolveLeaf() syncLeaf {
 	fs := newCobraFlagSet("sync reconcile resolve")
 	resolveValues := fs.StringArray("resolve", "Merged text for one diverged field, as FINGERPRINT=TEXT with the fingerprint from that field's heading (repeat for every pending field)")
+	resolveActor := registerActor(fs)
 	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope syncScope, positional []string) error {
 		ws, session := scope.ws, scope.session
 		if len(*resolveValues) == 0 {
@@ -122,7 +123,7 @@ func syncReconcileResolveLeaf() syncLeaf {
 			_, writeErr := fmt.Fprintln(stdout, "nothing to reconcile: no remote with shared ticket history yet")
 			return writeErr
 		}
-		result, err := reconciler.SyncReconcileResolved(ctx, remote, branch, resolutions)
+		result, err := reconciler.SyncReconcileResolved(ctx, remote, branch, resolutions, resolveActor())
 		if err != nil {
 			recordSyncCommandTrace(ws, proseResolveCommand, "error", err, map[string]string{"remote": remote, "sync_branch": branch})
 			return asSyncFailure(err)
@@ -435,6 +436,7 @@ func reportReconcileResult(ctx context.Context, stdout io.Writer, ws workspace.I
 	// of the durable trace for every outcome, zero included.
 	metadata := map[string]string{"remote": remote, "sync_branch": branch, "replayed": strconv.Itoa(result.Replayed)}
 	rehomedMetadata(metadata, result.Rehomed)
+	metadata["prose_recorded"] = strconv.Itoa(result.ProseRecorded)
 	switch result.State {
 	case storage.SyncReconcileIDCollision:
 		// Routed through the same one sync-failure contract as every other held

@@ -162,7 +162,7 @@ One LEFT JOIN query collapses `issue_events` × `issue_event_changes` into event
 
 ## Events
 
-`recordEvent` is the single insertion point (`store.go`): id `evt-<uuid>`, trimmed action/reason/actor (blank actor → `unknown`), `created_at` now-UTC, attribution read off the store. Empty action stores SQL NULL; empty from/to values in change rows store NULL. Which mutation emits what:
+`newEvent` stamps every event the store writes (`store.go`): id `evt-<uuid>`, trimmed action/reason/actor (blank actor → `unknown`), `created_at` now-UTC, attribution read off the store. `recordEvent` inserts a mutation's event and its change rows (`store.go`); the events a resolved reconcile mints reach the same tables inside its settled export (`landProse`, `sync_reconcile.go`). In `recordEvent`, empty action stores SQL NULL; empty from/to values in change rows store NULL. Which mutation emits what:
 
 | Mutation | `action` | change rows |
 |---|---|---|

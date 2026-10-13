@@ -473,6 +473,11 @@ type SyncReconcileResult struct {
 	// epic a ticket on the other side was just filed under. Empty when nothing
 	// was stranded, and for every non-mutating outcome.
 	Rehomed []Rehomed
+	// ProseRecorded counts the change rows the agent's merged text added to
+	// history on a resolved finalize: one per resolved field whose merged text
+	// differs from the provisional value the replay carried. Zero for every
+	// outcome the agent's text took no part in.
+	ProseRecorded int
 }
 
 // UnrelatedInventory partitions issue ids across the two sides of an
