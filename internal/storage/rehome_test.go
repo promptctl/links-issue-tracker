@@ -8,7 +8,6 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/model/lifecycle"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -106,7 +105,7 @@ func TestHomeStrandedLeavesAContainedExportAlone(t *testing.T) {
 // becomes its own lane and its edge carries its own birth, by "links".
 func TestHomeStrandedFilesALooseLeafUnderAMintedUnfiledEpic(t *testing.T) {
 	gone := leaf(t, "acme-core-dd44", "A")
-	gone.SetRetention(lifecycle.Deleted{At: born})
+	gone.SetRetention(model.Deleted{At: born})
 	in := model.Export{
 		Issues: []model.Issue{
 			epic("acme-core-aa11"),

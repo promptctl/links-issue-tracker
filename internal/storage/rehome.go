@@ -10,7 +10,6 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/issueid"
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/model/lifecycle"
 )
 
 // The write boundary refuses every write that would leave a ticket outside an
@@ -241,7 +240,7 @@ func (h hierarchy) unfiledEpic(export model.Export) (string, *model.Issue) {
 		if prefix, ok := issueid.PrefixOf(issue.ID, issue.Topic); ok {
 			counts[prefix]++
 		}
-		_, deleted := issue.Retention().(lifecycle.Deleted)
+		_, deleted := issue.Retention().(model.Deleted)
 		if !issue.IsContainer() && len(h.parentsOf[issue.ID]) == 0 && issue.Rank != "" && !deleted && (topRank == "" || issue.Rank < topRank) {
 			topRank = issue.Rank
 		}
