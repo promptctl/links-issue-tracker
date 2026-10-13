@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -19,6 +20,10 @@ import (
 // reconcileCommitMessage. Its diff is the take's own act: the discard of the
 // remote-only issues the owner approved dropping.
 const takeLocalCommitMessage = "reconcile: take local backlog over unrelated remote history"
+
+// takeRemotePurgesCommitMessage labels the commit a take-remote lands on the
+// adopted head when local held purge records the remote lacks.
+const takeRemotePurgesCommitMessage = "reconcile: carry local purge records over the adopted remote history"
 
 // takeApprovalToken derives the owner-approval token that authorizes destroying
 // one side of THIS exact unrelated-history fork: a digest of both heads and the
@@ -175,8 +180,14 @@ func (s *Store) applyUnrelatedTake(ctx context.Context, result *storage.SyncReco
 		// safe recovery (the stale binary gets the newer data), not a regression.
 		guard := newSnapshotGuard(s.doltRootDir, migrationSnapshotsDir(s.doltRootDir), formatReconcileSnapshotLabel(time.Now()))
 		trackingRef := fmt.Sprintf("remotes/%s/%s", remote, branch)
+		// Read before the first attempt: the reset discards them from the
+		// branch, so a retry must not read them again.
+		localPurges, err := listPurges(ctx, s.db)
+		if err != nil {
+			return err
+		}
 		return retryTransientGCContention(ctx, func(ctx context.Context) error {
-			return s.takeRemoteHead(ctx, result, guard, trackingRef)
+			return s.takeRemoteHead(ctx, result, guard, trackingRef, localPurges)
 		}, s.reconnect)
 	case storage.TakeLocal:
 		// take-local authors replay commits ON the remote head (commitReplayAndAdvance),
@@ -200,16 +211,20 @@ func (s *Store) applyUnrelatedTake(ctx context.Context, result *storage.SyncReco
 // takeRemoteHead adopts the remote head wholesale: it snapshots the pre-reset local
 // truth (so this destructive adopt is reversible via `lit snapshots restore`, exactly
 // as the three-way reconcile snapshots before it advances the data branch), resets the
-// data branch to the remote head, then rolls the recovery snapshots off to budget.
-// Local content then equals the remote and sync is clean; the local-only issues are
-// discarded by design. It is idempotent under retry: the snapshot is cached and the
-// reset targets a fixed ref. [LAW:no-silent-failure]
-func (s *Store) takeRemoteHead(ctx context.Context, result *storage.SyncReconcileResult, guard *snapshotGuard, trackingRef string) error {
+// data branch to the remote head, carries local's purge records onto it, then rolls
+// the recovery snapshots off to budget. Local content then equals the remote, less
+// whatever local had purged; the local-only issues are discarded by design. It is
+// idempotent under retry: the snapshot is cached, the reset targets a fixed ref, and
+// the carry is computed from the state the reset left. [LAW:no-silent-failure]
+func (s *Store) takeRemoteHead(ctx context.Context, result *storage.SyncReconcileResult, guard *snapshotGuard, trackingRef string, localPurges []model.Purge) error {
 	if _, err := guard.ensure(ctx); err != nil {
 		return fmt.Errorf("snapshot before take-remote: %w", err)
 	}
 	if err := resetHardToRef(ctx, s.db, trackingRef); err != nil {
 		return err
+	}
+	if err := s.carryPurges(ctx, localPurges); err != nil {
+		return fmt.Errorf("take-remote: %w", err)
 	}
 	// Prune runs AFTER the durable reset, so a prune failure must not fail a completed
 	// take (a retry would find nothing to do). A leftover snapshot is inert.
@@ -221,6 +236,23 @@ func (s *Store) takeRemoteHead(ctx context.Context, result *storage.SyncReconcil
 	return nil
 }
 
+// carryPurges lands purge records on the store as it stands, cutting every row
+// they name, in one commit. A take discards one side's work, but a purge is not
+// a side's work to discard: it is the one act that must reach every store, so
+// both takes carry the other side's records. Records the store already holds
+// change nothing, and an empty delta commits nothing. [LAW:single-enforcer] the
+// cut is ApplyPurges, as in the merge and the restore.
+func (s *Store) carryPurges(ctx context.Context, purges []model.Purge) error {
+	current, err := s.Export(ctx)
+	if err != nil {
+		return fmt.Errorf("read the adopted head to carry purge records onto: %w", err)
+	}
+	delta := diffExports(current, current.ApplyPurges(model.UnionPurges(current.Purges, purges)))
+	return s.withMutation(ctx, takeRemotePurgesCommitMessage, func(ctx context.Context, tx *sql.Tx) error {
+		return applyExportDelta(ctx, tx, delta)
+	})
+}
+
 // takeLocalOntoRemoteHead replays the local backlog forward onto the remote head, so
 // local becomes a fast-forwardable descendant carrying its own content — the mirror
 // of take-remote, built to converge the remote onto local on the next push (the local
@@ -228,9 +260,9 @@ func (s *Store) takeRemoteHead(ctx context.Context, result *storage.SyncReconcil
 // through a fast-forward). The local chain's commits land individually under their
 // own provenance, projected as unions with the remote content exactly as a combine
 // projects them — so mid-chain history stays a whole backlog — and the take's marker
-// commit settles on local's own content: ITS diff is the discard of the remote-only
-// issues, attributing the owner-approved destruction to the take itself rather than
-// smearing it into local's first commit. It reuses the exact safe-replay the
+// commit settles on local's own content, cut by both sides' purge records: ITS diff is
+// the discard of the remote-only issues, attributing the owner-approved destruction to
+// the take itself rather than smearing it into local's first commit. It reuses the exact safe-replay the
 // three-way reconcile uses: scratch branch, snapshot-first, one atomic data-branch
 // advance. [LAW:single-enforcer] one safe-replay, one step builder, one scratch
 // lifecycle, shared with the field-aware path.
@@ -249,10 +281,13 @@ func (s *Store) takeLocalOntoRemoteHead(ctx context.Context, result *storage.Syn
 			return err
 		}
 		// The no-base union projection combine uses; only the terminal export
-		// differs — the take settles on local's content, not the union.
+		// differs — the take settles on local's content, not the union. The
+		// remote's purge records are not remote work the take may discard, so
+		// the terminal carries them and holds nothing they name.
 		// [LAW:dataflow-not-control-flow]
 		stepper := foldStepper{store: s, readBranch: scratch.read, chain: chain, base: model.Export{}, theirs: theirs}
-		replayed, err := s.commitReplayAndAdvance(ctx, guard, dataBranch, scratch, remoteHead, takeLocalCommitMessage, local, stepper)
+		terminal := local.ApplyPurges(model.UnionPurges(local.Purges, theirs.Purges))
+		replayed, err := s.commitReplayAndAdvance(ctx, guard, dataBranch, scratch, remoteHead, takeLocalCommitMessage, terminal, stepper)
 		if err != nil {
 			return err
 		}

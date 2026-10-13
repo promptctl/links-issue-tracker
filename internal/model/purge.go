@@ -18,36 +18,62 @@ import (
 // over everything, because every merge applies the union of the purge sets it
 // sees before it compares a single row. [LAW:types-are-the-program] the
 // purge is a fact that travels, not an absence each store has to infer.
+//
+// It names the ticket by its id and its birth certificate, the created_at the
+// merge's Classify already treats as the whole of a ticket's identity: two rows
+// under one id are one ticket exactly when they were born at one instant. So
+// an unrelated store's different ticket that happens to wear the purged id is
+// not this record's to remove; it meets the merge as an id collision would.
+// [LAW:one-source-of-truth] identity is the birth certificate, here as there.
 type Purge struct {
-	IssueID  string    `json:"issue_id"`
-	PurgedAt time.Time `json:"purged_at"`
-	PurgedBy string    `json:"purged_by"`
+	IssueID        string    `json:"issue_id"`
+	IssueCreatedAt time.Time `json:"issue_created_at"`
+	PurgedAt       time.Time `json:"purged_at"`
+	PurgedBy       string    `json:"purged_by"`
 }
 
-// UnionPurges combines purge sets into one, by issue id ascending. A set only
-// ever grows — nothing un-purges — so the union of two stores' sets is the set
-// both converge on. Two stores that purged one id independently each hold a
-// record of it; the earlier purge is kept, the actor breaking a same-instant
-// tie, so every store keeps the same record whatever order the sets arrive in.
+// Names reports whether this record purged that ticket: the same id, born at
+// the same instant. Equal, not ==, since one instant may be spelled in two
+// offsets.
+func (p Purge) Names(issue Issue) bool {
+	return p.IssueID == issue.ID && p.IssueCreatedAt.Equal(issue.CreatedAt)
+}
+
+// UnionPurges combines purge sets into one, by issue id and then birth
+// ascending — the order every Export carries them in. A set only ever grows —
+// nothing un-purges — so the union of two stores' sets is the set both converge
+// on. Two stores that purged one ticket independently each hold a record of
+// it; the earlier purge is kept, the actor breaking a same-instant tie, so
+// every store keeps the same record whatever order the sets arrive in.
 func UnionPurges(sets ...[]Purge) []Purge {
-	byID := map[string]Purge{}
+	type ticket struct {
+		id   string
+		born int64
+	}
+	byTicket := map[ticket]Purge{}
 	for _, set := range sets {
 		for _, p := range set {
-			held, ok := byID[p.IssueID]
+			key := ticket{p.IssueID, p.IssueCreatedAt.UnixNano()}
+			held, ok := byTicket[key]
 			if !ok || purgeOrder(p, held) < 0 {
-				byID[p.IssueID] = p
+				byTicket[key] = p
 			}
 		}
 	}
-	out := make([]Purge, 0, len(byID))
-	for _, p := range byID {
+	out := make([]Purge, 0, len(byTicket))
+	for _, p := range byTicket {
 		out = append(out, p)
 	}
-	slices.SortFunc(out, func(a, b Purge) int { return strings.Compare(a.IssueID, b.IssueID) })
+	slices.SortFunc(out, func(a, b Purge) int {
+		if c := strings.Compare(a.IssueID, b.IssueID); c != 0 {
+			return c
+		}
+		return a.IssueCreatedAt.Compare(b.IssueCreatedAt)
+	})
 	return out
 }
 
-// purgeOrder ranks two records of one id: earlier purge first, then actor.
+// purgeOrder ranks two records of one ticket: earlier purge first, then actor.
 func purgeOrder(a, b Purge) int {
 	if c := a.PurgedAt.Compare(b.PurgedAt); c != 0 {
 		return c
@@ -57,9 +83,10 @@ func purgeOrder(a, b Purge) int {
 
 // ApplyPurges returns the export with purges as its purge set and no row that
 // belongs to a purged issue: the issue itself, every relation with a purged
-// endpoint, and the purged issues' comments, labels and history. Rows of other
-// issues stay byte-for-byte, so an id another ticket mentions in its text, its
-// follows_up, or its redirect target keeps the mention.
+// endpoint, and the purged issues' comments, labels and history. An issue is
+// purged when a record Names it; a different ticket under a purged id stays.
+// Rows of other issues stay byte-for-byte, so an id another ticket mentions in
+// its text, its follows_up, or its redirect target keeps the mention.
 //
 // It is the one place "a purged id holds no rows" is applied to an export.
 // The merge applies it to all three sides before comparing anything, and a
@@ -67,9 +94,15 @@ func purgeOrder(a, b Purge) int {
 // concurrent edit nor an old backup can bring a purged ticket back.
 // [LAW:single-enforcer]
 func (e Export) ApplyPurges(purges []Purge) Export {
-	purged := make(map[string]bool, len(purges))
+	recordsOf := make(map[string][]Purge, len(purges))
 	for _, p := range purges {
-		purged[p.IssueID] = true
+		recordsOf[p.IssueID] = append(recordsOf[p.IssueID], p)
+	}
+	// Every other row hangs off an issue row of this same export, so the
+	// purged ids are read off the issues once and the rest key on the id.
+	purged := map[string]bool{}
+	for _, issue := range e.Issues {
+		purged[issue.ID] = slices.ContainsFunc(recordsOf[issue.ID], func(p Purge) bool { return p.Names(issue) })
 	}
 	kept := func(id string) bool { return !purged[id] }
 	out := e

@@ -410,7 +410,7 @@ func buildDeltaScenarioStates(t *testing.T, ctx context.Context) []deltaScenario
 	// A purge as a merge hands it on: the record lands and every row of the
 	// issue goes, its edge to the first issue and its label included.
 	prev := states[len(states)-1].export
-	purged := model.Purge{IssueID: second.ID, PurgedAt: time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC), PurgedBy: "tester"}
+	purged := model.Purge{IssueID: second.ID, IssueCreatedAt: second.CreatedAt, PurgedAt: time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC), PurgedBy: "tester"}
 	states = append(states, deltaScenarioState{
 		name:   "issue purged",
 		export: prev.ApplyPurges(model.UnionPurges(prev.Purges, []model.Purge{purged})),

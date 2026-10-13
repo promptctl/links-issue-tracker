@@ -114,7 +114,7 @@ type exportDelta struct {
 	comments  tableDelta[string, model.Comment]
 	labels    tableDelta[labelKey, model.Label]
 	events    tableDelta[string, model.IssueEvent]
-	purges    tableDelta[string, model.Purge]
+	purges    tableDelta[purgeKey, model.Purge]
 }
 
 // empty reports whether the two exports hold the same rows, so a caller can tell
@@ -170,8 +170,7 @@ func diffExports(prev, next model.Export) exportDelta {
 			func(e model.IssueEvent) string { return e.ID }, wholeRow),
 		// Purge records reference no issue row — the issue they name is gone —
 		// so nothing cascades into them and they diff against prev unfiltered.
-		purges: diffTable(prev.Purges, next.Purges,
-			func(p model.Purge) string { return p.IssueID }, wholeRow),
+		purges: diffTable(prev.Purges, next.Purges, keyOfPurge, wholeRow),
 	}
 }
 

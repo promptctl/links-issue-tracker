@@ -2,6 +2,7 @@ package conformance
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -53,8 +54,8 @@ func aPurgeRemovesTheIssueAndEverythingItOwns(t *testing.T, ctx context.Context,
 		t.Fatalf("Purge error = %v", err)
 	}
 
-	want := model.Purge{IssueID: doomed.ID, PurgedAt: laterInstant, PurgedBy: "grace"}
-	if !result.Purge.PurgedAt.Equal(want.PurgedAt) || result.Purge.IssueID != want.IssueID || result.Purge.PurgedBy != want.PurgedBy {
+	want := model.Purge{IssueID: doomed.ID, IssueCreatedAt: doomed.CreatedAt, PurgedAt: laterInstant, PurgedBy: "grace"}
+	if !result.Purge.PurgedAt.Equal(want.PurgedAt) || !result.Purge.IssueCreatedAt.Equal(want.IssueCreatedAt) || result.Purge.IssueID != want.IssueID || result.Purge.PurgedBy != want.PurgedBy {
 		t.Errorf("purge record = %+v, want %+v", result.Purge, want)
 	}
 	// Three edges touch the doomed issue: its parent edge, the blocker it
@@ -73,7 +74,7 @@ func aPurgeRemovesTheIssueAndEverythingItOwns(t *testing.T, ctx context.Context,
 
 	after := mustExport(t, ctx, st)
 	assertNoRowOf(t, after, doomed.ID)
-	if len(after.Purges) != 1 || after.Purges[0].IssueID != doomed.ID || after.Purges[0].PurgedBy != "grace" || !after.Purges[0].PurgedAt.Equal(laterInstant) {
+	if len(after.Purges) != 1 || after.Purges[0].IssueID != doomed.ID || !after.Purges[0].IssueCreatedAt.Equal(doomed.CreatedAt) || after.Purges[0].PurgedBy != "grace" || !after.Purges[0].PurgedAt.Equal(laterInstant) {
 		t.Errorf("export purges = %+v, want exactly %+v", after.Purges, want)
 	}
 	// Every other issue's row is exactly what it was: the purge edits no text
@@ -88,17 +89,23 @@ func aPurgeRemovesTheIssueAndEverythingItOwns(t *testing.T, ctx context.Context,
 }
 
 // aPurgeRefusesAContainerThatHoldsTickets pins the containment half: purging
-// an epic with a child would leave the child outside any epic, so it is
-// refused and nothing is removed; once the epic is empty it purges.
+// an epic with a leaf under it would leave the leaf outside any epic, so it is
+// refused, the refusal names the leaf, and nothing is removed. A child epic is
+// no reason to refuse — it becomes top-level, which is legal — so once only
+// the child epic is left the purge goes through and leaves it top-level.
 func aPurgeRefusesAContainerThatHoldsTickets(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", ParentID: epic.ID})
+	childEpic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child epic", Topic: "core", IssueType: model.TypeEpic, ParentID: epic.ID})
 	if _, err := st.Apply(ctx, child.ID, storage.Change{Action: model.Delete{}, Actor: "ada"}); err != nil {
 		t.Fatalf("Apply delete error = %v", err)
 	}
 
 	_, err := st.Purge(ctx, storage.PurgeInput{IssueID: epic.ID, Actor: "ada"})
 	assertRefused(t, err, "Purge(epic holding a deleted child)")
+	if err != nil && (!strings.Contains(err.Error(), child.ID) || strings.Contains(err.Error(), childEpic.ID)) {
+		t.Errorf("refusal = %q, want it to name the stranded leaf %s and not the child epic %s", err, child.ID, childEpic.ID)
+	}
 	mustGet(t, ctx, st, epic.ID)
 	if purges := mustExport(t, ctx, st).Purges; len(purges) != 0 {
 		t.Errorf("a refused purge left records %+v", purges)
@@ -108,9 +115,18 @@ func aPurgeRefusesAContainerThatHoldsTickets(t *testing.T, ctx context.Context, 
 		t.Fatalf("Purge(child) error = %v", err)
 	}
 	if _, err := st.Purge(ctx, storage.PurgeInput{IssueID: epic.ID, Actor: "ada"}); err != nil {
-		t.Fatalf("Purge(emptied epic) error = %v", err)
+		t.Fatalf("Purge(epic holding only an epic) error = %v", err)
 	}
-	assertNoRowOf(t, mustExport(t, ctx, st), epic.ID)
+	after := mustExport(t, ctx, st)
+	assertNoRowOf(t, after, epic.ID)
+	if got := mustGet(t, ctx, st, childEpic.ID); got.ID != childEpic.ID {
+		t.Errorf("child epic = %+v, want it kept", got)
+	}
+	for _, rel := range after.Relations {
+		if rel.SrcID == childEpic.ID && rel.Type == model.RelParentChild {
+			t.Errorf("child epic still has a parent edge %+v, want it top-level", rel)
+		}
+	}
 }
 
 // aPurgeOfAMissingIssueIsNotFound pins absence: an id that never existed, and
@@ -134,8 +150,8 @@ func aPurgeOfAMissingIssueIsNotFound(t *testing.T, ctx context.Context, st stora
 // aPurgedIDIsNeverMintedAgain pins that a purge does not free its id. Minting
 // is a hash of the ticket's content and the instant it was made, so with the
 // clock pinned, the same ticket created again lands on the same candidate; a
-// store that let the purged id go would hand it straight back, and the next
-// merge would drop the new ticket along with the purged one.
+// store that let the purged id go would hand it straight back, and every
+// mention of the purged ticket elsewhere would then name the new one.
 func aPurgedIDIsNeverMintedAgain(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	clk.Pin(earlierInstant)
 	in := storage.CreateIssueInput{Title: "same content", Topic: "core", IssueType: model.TypeEpic}

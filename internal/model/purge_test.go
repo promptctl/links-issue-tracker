@@ -1,6 +1,7 @@
 package model
 
 import (
+	"slices"
 	"testing"
 	"time"
 )
@@ -12,7 +13,7 @@ import (
 func TestApplyPurgesDropsEveryRowOfAPurgedIssueAndNothingElse(t *testing.T) {
 	now := time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)
 	in := Export{
-		Issues: []Issue{{ID: "gone"}, {ID: "kept", FollowsUp: "gone"}},
+		Issues: []Issue{{ID: "gone", CreatedAt: now}, {ID: "kept", CreatedAt: now, FollowsUp: "gone"}},
 		Relations: []Relation{
 			{SrcID: "gone", DstID: "kept", Type: RelBlockedBy},
 			{SrcID: "kept", DstID: "gone", Type: RelRelatedTo},
@@ -21,7 +22,7 @@ func TestApplyPurgesDropsEveryRowOfAPurgedIssueAndNothingElse(t *testing.T) {
 		Labels:   []Label{{IssueID: "gone", Name: "a"}, {IssueID: "kept", Name: "b"}},
 		Events:   []IssueEvent{{ID: "e-gone", IssueID: "gone"}, {ID: "e-kept", IssueID: "kept"}},
 	}
-	purges := []Purge{{IssueID: "gone", PurgedAt: now, PurgedBy: "grace"}}
+	purges := []Purge{{IssueID: "gone", IssueCreatedAt: now, PurgedAt: now, PurgedBy: "grace"}}
 
 	out := in.ApplyPurges(purges)
 
@@ -45,18 +46,39 @@ func TestApplyPurgesDropsEveryRowOfAPurgedIssueAndNothingElse(t *testing.T) {
 	}
 }
 
-// TestUnionPurgesKeepsTheEarliestRecordOfEachID pins convergence: two stores
-// that purged one id independently, read in either order, keep one record —
-// the earlier one, the actor breaking a tie — and the union is by id.
-func TestUnionPurgesKeepsTheEarliestRecordOfEachID(t *testing.T) {
+// TestApplyPurgesLeavesAnotherTicketUnderAPurgedID pins identity: a record
+// names a ticket by its id and its birth, so a different ticket wearing the
+// same id — an unrelated store's coincidence — keeps every row. The same birth
+// spelled in another offset is still the purged ticket.
+func TestApplyPurgesLeavesAnotherTicketUnderAPurgedID(t *testing.T) {
+	born := time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)
+	purges := []Purge{{IssueID: "x", IssueCreatedAt: born, PurgedAt: born, PurgedBy: "grace"}}
+	stranger := Export{
+		Issues:   []Issue{{ID: "x", CreatedAt: born.Add(time.Second)}},
+		Comments: []Comment{{ID: "c", IssueID: "x"}},
+	}
+	if out := stranger.ApplyPurges(purges); len(out.Issues) != 1 || len(out.Comments) != 1 {
+		t.Errorf("ApplyPurges cut a different ticket under the purged id: %+v", out)
+	}
+	replica := Export{Issues: []Issue{{ID: "x", CreatedAt: born.In(time.FixedZone("east", 3600))}}}
+	if out := replica.ApplyPurges(purges); len(out.Issues) != 0 {
+		t.Errorf("ApplyPurges kept the purged ticket spelled in another offset: %+v", out.Issues)
+	}
+}
+
+// TestUnionPurgesKeepsTheEarliestRecordOfEachTicket pins convergence: two
+// stores that purged one ticket independently, read in either order, keep one
+// record — the earlier one, the actor breaking a tie. Two tickets under one id
+// are two records, ordered by birth.
+func TestUnionPurgesKeepsTheEarliestRecordOfEachTicket(t *testing.T) {
 	early := time.Date(2026, 10, 13, 1, 0, 0, 0, time.UTC)
 	late := early.Add(time.Hour)
-	a := []Purge{{IssueID: "z", PurgedAt: late, PurgedBy: "ada"}, {IssueID: "x", PurgedAt: early, PurgedBy: "zed"}}
-	b := []Purge{{IssueID: "z", PurgedAt: early, PurgedBy: "grace"}, {IssueID: "x", PurgedAt: early, PurgedBy: "ada"}}
-	want := []Purge{{IssueID: "x", PurgedAt: early, PurgedBy: "ada"}, {IssueID: "z", PurgedAt: early, PurgedBy: "grace"}}
+	a := []Purge{{IssueID: "z", PurgedAt: late, PurgedBy: "ada"}, {IssueID: "x", IssueCreatedAt: late, PurgedAt: early, PurgedBy: "zed"}}
+	b := []Purge{{IssueID: "z", PurgedAt: early, PurgedBy: "grace"}, {IssueID: "x", IssueCreatedAt: late, PurgedAt: early, PurgedBy: "ada"}, {IssueID: "x", IssueCreatedAt: early, PurgedAt: late, PurgedBy: "bo"}}
+	want := []Purge{{IssueID: "x", IssueCreatedAt: early, PurgedAt: late, PurgedBy: "bo"}, {IssueID: "x", IssueCreatedAt: late, PurgedAt: early, PurgedBy: "ada"}, {IssueID: "z", PurgedAt: early, PurgedBy: "grace"}}
 
 	for _, got := range [][]Purge{UnionPurges(a, b), UnionPurges(b, a)} {
-		if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		if !slices.Equal(got, want) {
 			t.Errorf("UnionPurges = %+v, want %+v", got, want)
 		}
 	}

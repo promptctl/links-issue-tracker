@@ -252,9 +252,10 @@ var knownSourceColumns = map[string]map[string]TargetKey{
 		"to_value":   "event_changes.to",
 	},
 	"purges": {
-		"issue_id":  "purges.issue_id",
-		"purged_at": "purges.purged_at",
-		"purged_by": "purges.purged_by",
+		"issue_id":         "purges.issue_id",
+		"issue_created_at": "purges.issue_created_at",
+		"purged_at":        "purges.purged_at",
+		"purged_by":        "purges.purged_by",
 	},
 }
 

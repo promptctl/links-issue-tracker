@@ -6,7 +6,6 @@ import (
 	"io"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
-	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -25,20 +24,18 @@ func purgeLeaf() appLeaf {
 			return UsageError{Message: usage}
 		}
 		// Read first, so a missing id is reported before anyone is asked to
-		// confirm, and the prompt can name what is about to go.
+		// confirm.
 		issue, err := ap.Store.GetIssue(ctx, positional[0])
 		if err != nil {
 			return err
 		}
-		if err := confirmPurge(stdout, issue, *yes); err != nil {
+		if err := confirmPurge(stdout, issue.ID, *yes); err != nil {
 			return err
 		}
 		result, err := ap.Store.Purge(ctx, storage.PurgeInput{IssueID: issue.ID, Actor: resolveActor()})
 		if err != nil {
 			return err
 		}
-		// The title is not echoed: a ticket is often purged because of what it
-		// says, and this line lands in transcripts and logs.
 		_, err = fmt.Fprintf(stdout, "purged %s (comments=%d labels=%d edges=%d events=%d)\n",
 			result.Purge.IssueID, result.Comments, result.Labels, result.Relations, result.Events)
 		return err
@@ -46,16 +43,17 @@ func purgeLeaf() appLeaf {
 }
 
 // confirmPurge is the purge's crossing: --yes confirms it, a terminal is
-// asked, and anything else is refused. The prompt names the ticket so the
-// person at the terminal confirms the one they meant.
-func confirmPurge(stdout io.Writer, issue model.Issue, yes bool) error {
+// asked, and anything else is refused. Neither the prompt nor any other line
+// the command prints shows the ticket's text: a ticket is often purged because
+// of what it says, and terminal output lands in scrollback, captures and logs.
+func confirmPurge(stdout io.Writer, id string, yes bool) error {
 	if yes {
 		return nil
 	}
 	if !isTerminal(stdout) {
-		return purgeUnconfirmedError{Message: fmt.Sprintf("purging %s cannot be undone; pass --yes to confirm it", issue.ID)}
+		return purgeUnconfirmedError{Message: fmt.Sprintf("purging %s cannot be undone; pass --yes to confirm it", id)}
 	}
-	confirmed, err := askYesNo(stdout, fmt.Sprintf("%s %q: a purge removes it, its comments, labels, history and edges for good, here and in every store it syncs to\npurge it?", issue.ID, issue.Title))
+	confirmed, err := askYesNo(stdout, fmt.Sprintf("%s: a purge removes it, its comments, labels, history and edges for good, here and in every store it syncs to\npurge it?", id))
 	if err != nil {
 		return err
 	}

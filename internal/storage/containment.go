@@ -2,6 +2,8 @@ package storage
 
 import (
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
@@ -19,7 +21,8 @@ import (
 // reports: a create refuses a leaf with no parent and any parent that is not
 // an epic, a reparent refuses a parent that is not an epic, a detach refuses
 // to leave a leaf with no parent, since that would leave it nowhere, and a
-// purge refuses a container that still holds tickets, for the same reason.
+// purge refuses a container whose removal would strand a ticket it holds, for
+// the same reason.
 // Changing a ticket's type across the container line is refused elsewhere
 // (ApplyIssueFields), so neither half can be broken by retyping an endpoint
 // afterwards. The four refusals live here, once, so the two engines render one rule rather than two
@@ -66,10 +69,17 @@ func RejectNonContainerParentEdge(relType model.RelationType, parentID string, p
 // edges restored data left on a leaf passes, since the leaf is still inside an
 // epic. Moving a leaf is `lit parent set`, which replaces the parent in one act.
 func RejectDetachingALeaf(childID string, childType model.IssueType, parentsLeft int) error {
-	if childType.IsContainer() || parentsLeft > 0 {
+	if !leftOutsideAnyEpic(childType, parentsLeft) {
 		return nil
 	}
 	return model.ValidationError{Message: fmt.Sprintf("cannot detach %s from its epic: a %s lives inside an epic, so move it with lit parent set --child %s --parent <epic-id>", childID, childType, childID)}
+}
+
+// leftOutsideAnyEpic is the one statement of when losing a parent edge strands
+// a ticket: it is not a container, and it keeps no parent. An epic left with
+// no parent is top-level, which is legal.
+func leftOutsideAnyEpic(childType model.IssueType, parentsLeft int) bool {
+	return !childType.IsContainer() && parentsLeft == 0
 }
 
 // RejectDetachingParentEdge is RejectDetachingALeaf asked of a removed edge:
@@ -91,14 +101,31 @@ func RejectDetachingParentEdge(relType model.RelationType, childID string, readC
 	return RejectDetachingALeaf(childID, childType, parentsLeft)
 }
 
-// RejectPurgeOfOccupiedContainer refuses purging issueID while it still holds
-// children: the purge takes every edge to the issue with it, so each child
-// would be left outside any epic. The way on is to move the children or purge
-// them first — both deliberate acts the caller names, never a cascade the
-// purge decides on its own.
-func RejectPurgeOfOccupiedContainer(issueID string, children int) error {
-	if children == 0 {
+// DetachedChild is a ticket filed under an issue being purged, as the purge
+// would leave it: the purge takes every edge to the issue with it, so the
+// child keeps only its other parent edges.
+type DetachedChild struct {
+	ID          string
+	Type        model.IssueType
+	ParentsLeft int
+}
+
+// RejectPurgeOfOccupiedContainer refuses purging issueID while that would
+// leave a child outside any epic: a purge detaches every child at once, so it
+// meets the detach rule child by child. A child epic becomes top-level, which
+// is legal, and passes. The way on is to move the named children or purge them
+// first — both deliberate acts the caller names, never a cascade the purge
+// decides on its own.
+func RejectPurgeOfOccupiedContainer(issueID string, children []DetachedChild) error {
+	var stranded []string
+	for _, child := range children {
+		if leftOutsideAnyEpic(child.Type, child.ParentsLeft) {
+			stranded = append(stranded, child.ID)
+		}
+	}
+	if len(stranded) == 0 {
 		return nil
 	}
-	return model.ValidationError{Message: fmt.Sprintf("cannot purge %s: it holds %d ticket(s), and purging it would leave them outside any epic; move them with lit parent set --child <id> --parent <epic-id>, or purge them first", issueID, children)}
+	slices.Sort(stranded)
+	return model.ValidationError{Message: fmt.Sprintf("cannot purge %s: it would leave %s outside any epic; move them with lit parent set --child <id> --parent <epic-id>, or purge them first", issueID, strings.Join(stranded, ", "))}
 }

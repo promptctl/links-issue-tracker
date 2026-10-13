@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
@@ -106,8 +107,19 @@ func deleteEventTx(ctx context.Context, tx *sql.Tx, id string) (int64, error) {
 	return execDelete(ctx, tx, `DELETE FROM issue_events WHERE id = ?`, fmt.Sprintf("issue event %s", id), id)
 }
 
-func deletePurgeTx(ctx context.Context, tx *sql.Tx, issueID string) (int64, error) {
-	return execDelete(ctx, tx, `DELETE FROM purges WHERE issue_id = ?`, fmt.Sprintf("purge record %s", issueID), issueID)
+// purgeKey is a purges row's primary key (issue_id, issue_created_at), the
+// birth spelled as the row stores it.
+type purgeKey struct {
+	issueID, issueCreatedAt string
+}
+
+func keyOfPurge(p model.Purge) purgeKey {
+	return purgeKey{issueID: p.IssueID, issueCreatedAt: p.IssueCreatedAt.Format(time.RFC3339Nano)}
+}
+
+func deletePurgeTx(ctx context.Context, tx *sql.Tx, key purgeKey) (int64, error) {
+	return execDelete(ctx, tx, `DELETE FROM purges WHERE issue_id = ? AND issue_created_at = ?`,
+		fmt.Sprintf("purge record %s@%s", key.issueID, key.issueCreatedAt), key.issueID, key.issueCreatedAt)
 }
 
 // execDelete runs one delete and reports how many rows it removed, naming the

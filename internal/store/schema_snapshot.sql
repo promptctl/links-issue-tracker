@@ -105,9 +105,10 @@ CREATE TABLE `migration_quarantine` (
 
 CREATE TABLE `purges` (
   `issue_id` varchar(191) NOT NULL,
+  `issue_created_at` varchar(64) NOT NULL,
   `purged_at` varchar(64) NOT NULL,
   `purged_by` text NOT NULL,
-  PRIMARY KEY (`issue_id`)
+  PRIMARY KEY (`issue_id`,`issue_created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
 CREATE TABLE `relations` (

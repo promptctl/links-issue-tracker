@@ -19,14 +19,18 @@ import (
 func (s *Store) Purge(ctx context.Context, in storage.PurgeInput) (storage.PurgeResult, error) {
 	var result storage.PurgeResult
 	err := s.withMutation(ctx, "purge issue", func(ctx context.Context, tx *sql.Tx) error {
-		var id string
-		if err := tx.QueryRowContext(ctx, `SELECT id FROM issues WHERE id = ?`, in.IssueID).Scan(&id); err != nil {
+		var id, createdAt string
+		if err := tx.QueryRowContext(ctx, `SELECT id, created_at FROM issues WHERE id = ?`, in.IssueID).Scan(&id, &createdAt); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return storage.NotFoundError{Entity: "issue", ID: in.IssueID}
 			}
 			return fmt.Errorf("read issue %s: %w", in.IssueID, err)
 		}
-		children, err := countChildren(ctx, tx, id)
+		born, err := scanTime(createdAt)
+		if err != nil {
+			return err
+		}
+		children, err := detachedChildrenTx(ctx, tx, id)
 		if err != nil {
 			return err
 		}
@@ -49,7 +53,7 @@ func (s *Store) Purge(ctx context.Context, in storage.PurgeInput) (storage.Purge
 		if _, err := deleteIssueTx(ctx, tx, id); err != nil {
 			return err
 		}
-		result.Purge = model.Purge{IssueID: id, PurgedAt: s.clock.Now(), PurgedBy: in.Actor}
+		result.Purge = model.Purge{IssueID: id, IssueCreatedAt: born, PurgedAt: s.clock.Now(), PurgedBy: in.Actor}
 		return insertPurgeTx(ctx, tx, result.Purge)
 	})
 	if err != nil {
@@ -58,22 +62,48 @@ func (s *Store) Purge(ctx context.Context, in storage.PurgeInput) (storage.Purge
 	return result, nil
 }
 
+// detachedChildrenTx reads every child filed under parentID, with the parent
+// edges it keeps once its edge to parentID is gone.
+func detachedChildrenTx(ctx context.Context, tx *sql.Tx, parentID string) ([]storage.DetachedChild, error) {
+	rows, err := tx.QueryContext(ctx, `
+SELECT r.src_id, c.issue_type, COUNT(o.dst_id)
+FROM relations r
+JOIN issues c ON c.id = r.src_id
+LEFT JOIN relations o ON o.src_id = r.src_id AND o.type = 'parent-child' AND o.dst_id <> r.dst_id
+WHERE r.dst_id = ? AND r.type = 'parent-child'
+GROUP BY r.src_id, c.issue_type`, parentID)
+	if err != nil {
+		return nil, fmt.Errorf("read children of %s: %w", parentID, err)
+	}
+	defer rows.Close()
+	var out []storage.DetachedChild
+	for rows.Next() {
+		var child storage.DetachedChild
+		if err := rows.Scan(&child.ID, &child.Type, &child.ParentsLeft); err != nil {
+			return nil, err
+		}
+		out = append(out, child)
+	}
+	return out, rows.Err()
+}
+
 // insertPurgeTx writes one purge record. It is the only INSERT into purges:
 // a purge writes its record through it, and so do a restore and the replay's
 // delta, which carry records another store wrote.
 func insertPurgeTx(ctx context.Context, tx *sql.Tx, p model.Purge) error {
-	if _, err := tx.ExecContext(ctx, `INSERT INTO purges(issue_id, purged_at, purged_by) VALUES (?, ?, ?)`,
-		p.IssueID, p.PurgedAt.Format(time.RFC3339Nano), p.PurgedBy); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO purges(issue_id, issue_created_at, purged_at, purged_by) VALUES (?, ?, ?, ?)`,
+		p.IssueID, p.IssueCreatedAt.Format(time.RFC3339Nano), p.PurgedAt.Format(time.RFC3339Nano), p.PurgedBy); err != nil {
 		return fmt.Errorf("record purge of %s: %w", p.IssueID, err)
 	}
 	return nil
 }
 
-// listPurges reads every purge record, by issue id ascending. It takes a
+// listPurges reads every purge record, by issue id and then birth ascending,
+// the order model.UnionPurges gives an export. It takes a
 // rowQueryer because Export reads it outside any transaction and a restore
 // reads it inside the one it is about to rewrite the tables in.
 func listPurges(ctx context.Context, q rowQueryer) ([]model.Purge, error) {
-	rows, err := q.QueryContext(ctx, `SELECT issue_id, purged_at, purged_by FROM purges ORDER BY issue_id ASC`)
+	rows, err := q.QueryContext(ctx, `SELECT issue_id, issue_created_at, purged_at, purged_by FROM purges`)
 	if err != nil {
 		return nil, fmt.Errorf("list purges: %w", err)
 	}
@@ -81,8 +111,11 @@ func listPurges(ctx context.Context, q rowQueryer) ([]model.Purge, error) {
 	out := []model.Purge{}
 	for rows.Next() {
 		var p model.Purge
-		var purgedAt string
-		if err := rows.Scan(&p.IssueID, &purgedAt, &p.PurgedBy); err != nil {
+		var createdAt, purgedAt string
+		if err := rows.Scan(&p.IssueID, &createdAt, &purgedAt, &p.PurgedBy); err != nil {
+			return nil, err
+		}
+		if p.IssueCreatedAt, err = scanTime(createdAt); err != nil {
 			return nil, err
 		}
 		if p.PurgedAt, err = scanTime(purgedAt); err != nil {
@@ -90,5 +123,11 @@ func listPurges(ctx context.Context, q rowQueryer) ([]model.Purge, error) {
 		}
 		out = append(out, p)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// [LAW:one-source-of-truth] the order is UnionPurges', not a second
+	// statement of it in SQL; each ticket holds one record, so the union only
+	// sorts.
+	return model.UnionPurges(out), nil
 }
