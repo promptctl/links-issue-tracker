@@ -1391,7 +1391,16 @@ func TestReplaceFromExportAndSyncState(t *testing.T) {
 			Labels:      []string{"imported"},
 			CreatedAt:   time.Now().UTC(),
 			UpdatedAt:   time.Now().UTC(),
-		}, model.StateOpen)},
+		}, model.StateOpen), {
+			ID:        "issue-home",
+			Title:     "Home",
+			IssueType: "epic",
+			CreatedAt: time.Now().UTC(),
+			UpdatedAt: time.Now().UTC(),
+		}},
+		// Every ticket but an epic lives inside one, so the task carries its
+		// epic; a restore would otherwise move it under the unfiled epic.
+		Relations: []model.Relation{{SrcID: "issue-replaced", DstID: "issue-home", Type: model.RelParentChild, CreatedAt: time.Now().UTC(), CreatedBy: "sync"}},
 		Labels: []model.Label{{
 			IssueID:   "issue-replaced",
 			Name:      "imported",
@@ -1410,19 +1419,17 @@ func TestReplaceFromExportAndSyncState(t *testing.T) {
 			},
 		}},
 	}
-	if _, err := st.ReplaceFromExport(ctx, export); err != nil {
+	rehomed, err := st.ReplaceFromExport(ctx, export)
+	if err != nil {
 		t.Fatalf("ReplaceFromExport() error = %v", err)
 	}
+	if len(rehomed) != 0 {
+		t.Fatalf("rehomed = %+v, want nothing: the task is inside its epic", rehomed)
+	}
 
-	issues, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
-	if err != nil {
-		t.Fatalf("ListIssues() error = %v", err)
-	}
-	if len(issues) != 1 || issues[0].ID != "issue-replaced" {
-		t.Fatalf("issues = %#v", issues)
-	}
-	if len(issues[0].Labels) != 1 || issues[0].Labels[0] != "imported" {
-		t.Fatalf("labels = %#v", issues[0].Labels)
+	replaced := getIssueOrFatal(t, ctx, st, "issue-replaced")
+	if len(replaced.Labels) != 1 || replaced.Labels[0] != "imported" {
+		t.Fatalf("labels = %#v", replaced.Labels)
 	}
 
 	state := storage.SyncState{Path: "/tmp/export.json", ContentHash: "abc123"}
