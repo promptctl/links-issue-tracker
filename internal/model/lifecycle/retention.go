@@ -34,14 +34,28 @@ func (Deleted) isRetention()  {}
 // Frozen reports whether r has left the flow: archived and deleted issues are
 // read-only for activity transitions and invisible to pending-work traversal
 // until a retention transition returns them to Live.
-// [LAW:single-enforcer] The one definition of out-of-the-flow; consumers ask
-// this predicate instead of matching retention variants themselves.
+// [LAW:single-enforcer] The one predicate consumers ask instead of matching
+// retention variants themselves; it reads Thaw, so "frozen" and "has a way
+// back" cannot disagree.
 func Frozen(r Retention) bool {
+	_, frozen := Thaw(r)
+	return frozen
+}
+
+// Thaw is the retention action that returns r to Live, and false when r is
+// already Live. A frozen issue is refused every activity transition, so the
+// refusal has to name this action: it is the one move that makes the refused
+// command legal again.
+// [LAW:one-source-of-truth] The pairing is the inverse of Retain's table, and a
+// test holds it there: Retain(r, Thaw(r)) is Live for every frozen variant.
+func Thaw(r Retention) (RetentionAction, bool) {
 	switch r.(type) {
 	case Live:
-		return false
-	case Archived, Deleted:
-		return true
+		return nil, false
+	case Archived:
+		return Unarchive{}, true
+	case Deleted:
+		return Restore{}, true
 	default:
 		// [LAW:no-silent-failure] Same refusal as RetentionTimestamps: an
 		// impostor answered either way would silently mislabel the issue.

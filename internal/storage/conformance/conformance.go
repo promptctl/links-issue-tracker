@@ -160,7 +160,7 @@ var cases = []engineCase{
 	{"apply_status_transition", applyStatusTransition},
 	{"apply_missing_issue_is_not_found", applyMissingIssue},
 	{"apply_to_container_is_refused", applyToContainer},
-	{"apply_to_archived_names_the_typed_verb", applyToArchivedNamesTheTypedVerb},
+	{"apply_to_frozen_names_the_thaw", applyToFrozenNamesTheThaw},
 	{"container_state_follows_live_children", containerStateFollowsLiveChildren},
 	{"history_records_mutations", historyRecordsMutations},
 	{"every_editable_field_records_history", everyEditableFieldRecordsHistory},
@@ -439,34 +439,38 @@ func applyToContainer(t *testing.T, ctx context.Context, st storage.Store, clk *
 	}
 }
 
-// applyToArchivedNamesTheTypedVerb pins which of an action's two names reaches
-// the reader when a retention state refuses it. Name() is the persisted event
-// encoding -- what the events table stores -- and Verb() is the word a caller
-// types; they differ for exactly one action, so a refusal that named the
-// encoding would answer `lit open` on an archived issue with "cannot reopen
-// archived or deleted issue", naming a command lit does not have.
+// applyToFrozenNamesTheThaw pins the refusal a status action meets on an
+// archived or deleted issue: the issue's state and the command that returns it
+// to the flow, with no verb of the refused action in it. Reopen is the action
+// under test because its persisted name, reopen, is a command lit does not have.
 //
-// It lives in the conformance suite because the refusal exists in two copies,
-// one per engine, and a test beside either one would let the other drift. Here
-// both answer to the same statement. [LAW:single-enforcer]
-func applyToArchivedNamesTheTypedVerb(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "archived", Topic: "core", ParentID: epic.ID})
-	if _, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Archive{}, Actor: "ada"}); err != nil {
-		t.Fatalf("archive error = %v", err)
-	}
-	_, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Reopen{}, Actor: "ada"})
-	if err == nil {
-		t.Fatal("Apply(Reopen) to an archived issue = nil error, want a refusal")
-	}
-	// "open" is a substring of "reopen", so presence alone proves nothing: the
-	// absence of the persisted encoding is the assertion that can fail.
-	if strings.Contains(err.Error(), string(model.ActionReopen)) {
-		t.Errorf("refusal names %q, the events-table encoding; the caller typed `lit open` and there is no `lit %s`: %v",
-			string(model.ActionReopen), string(model.ActionReopen), err)
-	}
-	if !strings.Contains(err.Error(), "cannot "+model.ActionReopen.Verb()+" ") {
-		t.Errorf("refusal does not name the verb the caller typed (%q): %v", model.ActionReopen.Verb(), err)
+// It lives in the conformance suite because each engine reaches the refusal
+// through its own planning path, and a test beside either one would let the
+// other wrap or replace it. Here both answer to the same statement.
+// [LAW:single-enforcer]
+func applyToFrozenNamesTheThaw(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	for _, tc := range []struct {
+		freeze model.RetentionAction
+		state  string
+		thaw   string
+	}{
+		{model.Archive{}, "archived", "unarchive"},
+		{model.Delete{}, "deleted", "restore"},
+	} {
+		epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+		issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: tc.state, Topic: "core", ParentID: epic.ID})
+		if _, err := st.Apply(ctx, issue.ID, storage.Change{Action: tc.freeze, Actor: "ada"}); err != nil {
+			t.Fatalf("%s error = %v", tc.freeze.Name(), err)
+		}
+		_, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Reopen{}, Actor: "ada"})
+		var frozen model.FrozenIssueError
+		if !errors.As(err, &frozen) {
+			t.Fatalf("Apply(Reopen) to a %s issue error = %v, want FrozenIssueError", tc.state, err)
+		}
+		want := fmt.Sprintf("issue %s is %s, so its status cannot change: run `lit %s %s` first", issue.ID, tc.state, tc.thaw, issue.ID)
+		if err.Error() != want {
+			t.Errorf("Apply(Reopen) to a %s issue error = %q, want %q", tc.state, err.Error(), want)
+		}
 	}
 }
 

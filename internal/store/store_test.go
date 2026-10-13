@@ -731,50 +731,6 @@ func TestDoctorAndFixDetectImportedBlocksCycle(t *testing.T) {
 	}
 }
 
-// applyTransition owns the guards every status transition passes before the
-// write: a container derives its state from children and exposes no action,
-// and an archived/deleted issue is frozen regardless of the action's own
-// legality. It must never mutate.
-func TestApplyTransitionRejectsContainerAndArchived(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	st := openIssueStore(t, ctx)
-
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "dryrun", IssueType: "epic", Priority: 0})
-	if err != nil {
-		t.Fatalf("CreateIssue(epic) error = %v", err)
-	}
-	hydratedEpic, err := st.GetIssue(ctx, epic.ID)
-	if err != nil {
-		t.Fatalf("GetIssue(epic) error = %v", err)
-	}
-	if _, err := applyTransition(hydratedEpic, model.Reopen{}); err == nil {
-		t.Fatal("applyTransition(container, reopen) = nil, want rejection (containers expose no action)")
-	}
-
-	leaf, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Leaf", Topic: "dryrun", IssueType: "task", Priority: 0, ParentID: epic.ID})
-	if err != nil {
-		t.Fatalf("CreateIssue(leaf) error = %v", err)
-	}
-	hydratedLeaf, err := st.GetIssue(ctx, leaf.ID)
-	if err != nil {
-		t.Fatalf("GetIssue(leaf) error = %v", err)
-	}
-	if _, err := applyTransition(hydratedLeaf, model.Start{Assignee: "agent"}); err != nil {
-		t.Fatalf("applyTransition(leaf, start) = %v, want acceptance", err)
-	}
-
-	// The archived/deleted guard refuses a transition regardless of the action's
-	// own legality — an archived issue is frozen.
-	archived, err := st.Apply(ctx, leaf.ID, storage.Change{Action: model.Archive{}, Reason: "inactive", Actor: "tester"})
-	if err != nil {
-		t.Fatalf("Apply(archive) error = %v", err)
-	}
-	if _, err := applyTransition(archived, model.Close{Outcome: model.Obsolete{}}); err == nil {
-		t.Fatal("applyTransition(archived, close) = nil, want refusal (archived issue is frozen)")
-	}
-}
-
 func TestStoreRejectsInvalidIssueType(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

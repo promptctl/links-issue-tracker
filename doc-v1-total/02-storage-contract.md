@@ -87,7 +87,7 @@ Behaviors that define the reference semantics (each mirrored by Dolt unless note
 
 **Apply pipeline** (`memory/apply.go`): plan the transition, then plan the field patch **baselined on the post-action issue** (so `start --assignee X` plus a field patch doesn't double-record the assignee); then write, then record events. Key rules:
 
-- Any status action on an archived/deleted issue is refused (`cannot <action> archived or deleted issue`).
+- Any status action on an archived/deleted issue is refused with `model.FrozenIssueError` (`issue <id> is <archived|deleted>, so its status cannot change: run `lit <unarchive|restore> <id>` first`).
 - No-op rule: a status action whose target state and resulting assignee already hold records nothing. A same-state `start` naming a *new* assignee is the reclaim path — it records and rewrites ownership.
 - Retention has no same-state no-op: re-archiving an archived issue is an error (the model's transition table).
 - Redirect-target validation on close: a redirecting resolution requires a target; self-redirect refused; missing target `NotFoundError`; a *deleted* target refused; an *archived* target legal ("duplicate of something already done" is the common case) (`memory/apply.go`).
