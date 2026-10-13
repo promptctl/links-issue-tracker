@@ -1027,6 +1027,15 @@ func (s *Store) resetAndLift(ctx context.Context, commit string) error {
 	if _, err := callIntProcedure(ctx, s.db, "DOLT_RESET", "--hard", commit); err != nil {
 		return fmt.Errorf("reset scratch to %q: %w", commit, err)
 	}
+	// A hard reset keeps untracked tables, and an earlier lift on this branch
+	// leaves the tables its migrations created untracked in the working set
+	// (the lift commits nothing). DOLT_CLEAN drops them, so the working set is
+	// exactly the commit's: without it the next lift re-runs a CREATE TABLE
+	// against a table the previous lift left behind, or reads its rows as if
+	// they belonged to this commit.
+	if err := execProcedureDiscard(ctx, s.db, "DOLT_CLEAN"); err != nil {
+		return fmt.Errorf("clean scratch at %q: %w", commit, err)
+	}
 	if err := s.liftWorkingSetToRegistry(ctx); err != nil {
 		return fmt.Errorf("lift %q to current schema: %w", commit, err)
 	}
