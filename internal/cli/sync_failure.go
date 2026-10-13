@@ -424,6 +424,7 @@ func (f SyncFailure) inventoryLines() []string {
 		"  only on local:  " + describeIDSet(f.Inventory.OnlyLocal),
 		"  only on remote: " + describeIDSet(f.Inventory.OnlyRemote),
 		"  on both:        " + describeIDSet(f.Inventory.OnBoth),
+		"  purged on a side, dropped by any resolution: " + describeIDSet(f.Inventory.Purged),
 		"",
 	}
 }

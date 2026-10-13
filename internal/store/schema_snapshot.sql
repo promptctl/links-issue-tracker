@@ -103,6 +103,14 @@ CREATE TABLE `migration_quarantine` (
   PRIMARY KEY (`version`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
+CREATE TABLE `purges` (
+  `issue_id` varchar(191) NOT NULL,
+  `issue_created_at` varchar(64) NOT NULL,
+  `purged_at` varchar(64) NOT NULL,
+  `purged_by` text NOT NULL,
+  PRIMARY KEY (`issue_id`,`issue_created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
+
 CREATE TABLE `relations` (
   `src_id` varchar(191) NOT NULL,
   `dst_id` varchar(191) NOT NULL,

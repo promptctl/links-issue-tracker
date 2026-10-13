@@ -325,7 +325,8 @@ func reportTakeOutcome(stdout io.Writer, ws workspace.Info, command string, remo
 	// "replayed" makes the provenance-replay count part of the durable trace,
 	// not just the stdout line; zero is honest data for outcomes that fold
 	// nothing. [LAW:dataflow-not-control-flow] recorded unconditionally.
-	metadata := map[string]string{"remote": remote, "sync_branch": branch, "replayed": strconv.Itoa(result.Replayed)}
+	metadata := map[string]string{"remote": remote, "sync_branch": branch, "replayed": strconv.Itoa(result.Replayed),
+		"carried_purges": strconv.Itoa(result.CarriedPurges), "purged": strconv.Itoa(len(purgedIDs(result.Unrelated)))}
 	decision := string(result.State)
 	status := "ok"
 	// [LAW:one-source-of-truth] a dedicated mapping, not reconcileReasonForState:
@@ -350,15 +351,19 @@ func reportTakeOutcome(stdout io.Writer, ws workspace.Info, command string, remo
 	switch result.State {
 	case storage.SyncReconcileTookRemote:
 		endDivergenceEpisode(ws)
+		state := "the local backlog now equals " + ref + " and sync is clean (no push needed)"
+		if result.CarriedPurges > 0 {
+			state = fmt.Sprintf("the local backlog now equals %s less what you purged, with %d purge record(s) carried onto it; run `lit sync push` (or let auto-sync) to deliver them", ref, result.CarriedPurges)
+		}
 		_, err := fmt.Fprintf(stdout,
-			"took remote: the local backlog now equals %s and sync is clean (no push needed).\nDISCARDED the local-only issue(s), by design: %s\n",
-			ref, describeIDSet(discardedIDs(result.Unrelated, storage.TakeRemote)))
+			"took remote: %s.\nDISCARDED the local-only issue(s), by design: %s\nDROPPED the issue(s) a purge on either side names: %s\n",
+			state, describeIDSet(discardedIDs(result.Unrelated, storage.TakeRemote)), describeIDSet(purgedIDs(result.Unrelated)))
 		return err
 	case storage.SyncReconcileTookLocal:
 		endDivergenceEpisode(ws)
 		_, err := fmt.Fprintf(stdout,
-			"took local: your backlog now sits on top of %s — %s replayed with original messages and timestamps; run `lit sync push` (or let auto-sync) to fast-forward the remote onto it.\nDISCARDED the remote-only issue(s), by design: %s\n",
-			ref, describeReplayed(result.Replayed), describeIDSet(discardedIDs(result.Unrelated, storage.TakeLocal)))
+			"took local: your backlog now sits on top of %s — %s replayed with original messages and timestamps; run `lit sync push` (or let auto-sync) to fast-forward the remote onto it.\nDISCARDED the remote-only issue(s), by design: %s\nDROPPED the issue(s) a purge on either side names: %s\n",
+			ref, describeReplayed(result.Replayed), describeIDSet(discardedIDs(result.Unrelated, storage.TakeLocal)), describeIDSet(purgedIDs(result.Unrelated)))
 		return err
 	case storage.SyncReconcileNotDiverged:
 		endDivergenceEpisode(ws)
@@ -395,6 +400,15 @@ func discardedIDs(inv *storage.UnrelatedInventory, choice storage.UnrelatedResol
 	default:
 		return nil
 	}
+}
+
+// purgedIDs is the issues a purge record on either side names, which every
+// resolution drops. A nil inventory yields none, as in discardedIDs.
+func purgedIDs(inv *storage.UnrelatedInventory) []string {
+	if inv == nil {
+		return nil
+	}
+	return inv.Purged
 }
 
 // reportReconcileResult renders a reconcile outcome. A prose-pending result prints
@@ -518,12 +532,14 @@ func reportReconcileResult(ctx context.Context, stdout io.Writer, ws workspace.I
 			"combined: unioned both backlogs onto %s — %s replayed with original messages and timestamps; run `lit sync push` (or let auto-sync) to fast-forward the remote onto it.\n"+
 				"  kept local-only:  %s\n"+
 				"  kept remote-only: %s\n"+
-				"  field-merged on both: %s\n",
+				"  field-merged on both: %s\n"+
+				"  dropped, purged on a side: %s\n",
 			remote+"/"+branch,
 			describeReplayed(result.Replayed),
 			describeIDSet(inv.OnlyLocal),
 			describeIDSet(inv.OnlyRemote),
-			describeIDSet(inv.OnBoth)); err != nil {
+			describeIDSet(inv.OnBoth),
+			describeIDSet(inv.Purged)); err != nil {
 			return err
 		}
 		return reportContestedLanes(ctx, stdout, ws, session.engine)

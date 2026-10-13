@@ -27,7 +27,7 @@ import (
 // and the rows that must land. A row whose value changed under a stable key
 // appears in BOTH — removed by key, then re-added — so no UPDATE statement (and
 // no second copy of the table's column list) has to exist.
-// [LAW:one-type-per-behavior] five tables, one cutter; only the key function and
+// [LAW:one-type-per-behavior] six tables, one cutter; only the key function and
 // the two SQL statements differ, and those cross the boundary as values.
 type tableDelta[K comparable, R any] struct {
 	remove []K
@@ -114,12 +114,13 @@ type exportDelta struct {
 	comments  tableDelta[string, model.Comment]
 	labels    tableDelta[labelKey, model.Label]
 	events    tableDelta[string, model.IssueEvent]
+	purges    tableDelta[model.PurgeKey, model.Purge]
 }
 
 // empty reports whether the two exports hold the same rows, so a caller can tell
 // a genuinely no-op step from one that merely looks small.
 func (d exportDelta) empty() bool {
-	return d.issues.empty() && d.relations.empty() && d.comments.empty() && d.labels.empty() && d.events.empty()
+	return d.issues.empty() && d.relations.empty() && d.comments.empty() && d.labels.empty() && d.events.empty() && d.purges.empty()
 }
 
 // diffExports derives the row work that turns live tables holding prev into
@@ -167,6 +168,9 @@ func diffExports(prev, next model.Export) exportDelta {
 			filterRows(prev.Events, func(e model.IssueEvent) bool { return survivors[e.IssueID] }),
 			next.Events,
 			func(e model.IssueEvent) string { return e.ID }, wholeRow),
+		// Purge records reference no issue row — the issue they name is gone —
+		// so nothing cascades into them and they diff against prev unfiltered.
+		purges: diffTable(prev.Purges, next.Purges, model.Purge.Key, wholeRow),
 	}
 }
 
@@ -227,7 +231,10 @@ func applyExportDelta(ctx context.Context, tx *sql.Tx, delta exportDelta) error 
 	if err := applyTableDelta(ctx, tx, delta.labels, deleteLabelTx, insertLabelTx); err != nil {
 		return err
 	}
-	return applyTableDelta(ctx, tx, delta.events, deleteEventTx, insertEventTx)
+	if err := applyTableDelta(ctx, tx, delta.events, deleteEventTx, insertEventTx); err != nil {
+		return err
+	}
+	return applyTableDelta(ctx, tx, delta.purges, deletePurgeTx, insertPurgeTx)
 }
 
 // applyTableDelta is the one body every table's change runs through; the table's

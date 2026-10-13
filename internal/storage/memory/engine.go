@@ -65,6 +65,10 @@ type Engine struct {
 	// set is what every label read returns and re-sorting on each read would
 	// be deriving the same fact twice.
 	labels map[string][]model.Label
+
+	// purges are the records of the tickets this engine has purged. A purged
+	// ticket holds no row anywhere above, and its id is never minted again.
+	purges []model.Purge
 }
 
 // record is one stored issue: what an engine must keep to answer with a

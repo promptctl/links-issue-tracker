@@ -68,7 +68,8 @@ func ChildNamespace(parentID string) Namespace {
 // exists elsewhere, so two stores holding identical rows do not converge on one
 // id the way a count over local rows does. It also stops a hard-deleted id
 // from being handed straight to the next create: reaching it again takes a
-// hash coincidence rather than a certainty.
+// hash coincidence rather than a certainty — and a purged id is not reached at
+// all, since each store's taken probe reads its purge records.
 //
 // The guarantee is the one top-level ids run on, no weaker and no stronger,
 // and it is probabilistic: the hash is truncated, so Mint re-rolls against the
@@ -107,13 +108,14 @@ type TakenFunc func(candidate string) (bool, error)
 // topic though a candidate can only collide inside its own, deliberately
 // conservative in the direction that costs id length rather than uniqueness.
 //
-// What population cannot see is the ids hard-deleted out of ns, which leave the
-// count while a fresh candidate can still land on them — a freed id is
-// reoccupiable by coincidence and uncountable by construction, since the delete
-// takes the row. That residual is bounded and accepted rather than fixed:
-// MinHashLength holds until one parent's direct children number in the
-// hundreds, a boundary TestComputeAdaptiveLength pins so this claim cannot
-// drift from the arithmetic.
+// What population cannot see is the ids purged out of ns, which leave the
+// count. A purged id is still never reoccupied — each store's taken probe
+// reads its purge records beside its live rows — so the only cost is a hash
+// sized by a count a little short of every id ns has held. That residual is
+// bounded and accepted rather than fixed: MinHashLength holds until one
+// parent's direct children number in the hundreds, a boundary
+// TestComputeAdaptiveLength pins so this claim cannot drift from the
+// arithmetic.
 //
 // [LAW:dataflow-not-control-flow] One sweep runs for every id ever minted;
 // the namespace and population are values it reads, never branches it takes.

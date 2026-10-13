@@ -214,9 +214,13 @@ func (e *Engine) mintID(prefix, topic, title, description string, createdAt time
 		CreatedAt:   createdAt,
 	}
 	namespace, population := e.idSpace(prefix, topic, parentID)
+	// A purged id is taken for good: other tickets' text, follow-ups and
+	// redirects still name it, and a new ticket wearing it would answer for
+	// the purged one.
 	return issueid.Mint(namespace, content, population, func(candidate string) (bool, error) {
-		_, taken := e.issues[candidate]
-		return taken, nil
+		_, live := e.issues[candidate]
+		purged := slices.ContainsFunc(e.purges, func(p model.Purge) bool { return p.IssueID == candidate })
+		return live || purged, nil
 	})
 }
 

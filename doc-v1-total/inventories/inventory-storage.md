@@ -73,6 +73,14 @@ General contract: every method is a pure read from the caller's view; two identi
 - A pure no-op records nothing in history (`internal/storage/contract.go`).
 - An illegal transition is refused rather than silently ignored (`internal/storage/contract.go`).
 
+**`Purge(ctx, in PurgeInput) (PurgeResult, error)`** — `internal/storage/contract.go`
+- Permanently removes an issue — its row, comments, labels, history, and every edge to or from it — in one write, leaving a `model.Purge` record that names the ticket by its id and `created_at` and holds nothing of its content (`internal/storage/contract.go`; `internal/model/purge.go`).
+- `Delete` is the reversible removal; `Purge` cannot be undone (`internal/storage/contract.go`).
+- Other issues are not edited: a mention of the id in their text, `follows_up`, or redirect target stays (`internal/storage/contract.go`).
+- The id is never minted again, and every merge drops it from both sides (`model.Export.ApplyPurges`) (`internal/storage/contract.go`).
+- A missing id is `NotFoundError`; an issue whose purge would leave a ticket it holds outside any epic is refused (`internal/storage/contract.go`) — `storage.RejectPurgeOfOccupiedContainer(issueID string, children []DetachedChild)` collects each child for which `leftOutsideAnyEpic(child.Type, child.ParentsLeft)` holds (not a container, and no parent edge left once the purged issue's edge is gone), the predicate `RejectDetachingALeaf` also uses; none → nil, otherwise `model.ValidationError` "cannot purge <id>: it would leave <ids> outside any epic; move them with lit parent set --child <id> --parent <epic-id>, or purge them first", `<ids>` the stranded children's ids sorted and joined with `", "`. A child epic is left top-level and does not refuse the purge (`internal/storage/containment.go`).
+- `DetachedChild{ID string; Type model.IssueType; ParentsLeft int}` is a child filed under the issue being purged, with the count of parent-child edges it keeps once its edge to that issue is gone (`internal/storage/containment.go`).
+
 ---
 
 ### 1.5 `CommentStore` (`internal/storage/contract.go`)
@@ -243,6 +251,10 @@ The field-axis patch. Only columns the field axis owns are representable, so a s
 | `Reason` | `string` | Belongs to the **transition** event; `Fields.Reason` belongs to the **field-change** event. A combined change records two events whose reasons are independently set (`internal/storage/issues.go`) |
 
 - `IsEmpty()` is true iff `Action == nil && Fields.IsEmpty()` (`internal/storage/issues.go`).
+
+#### `PurgeInput` / `PurgeResult` (`internal/storage/issues.go`)
+- `PurgeInput{IssueID string; Actor string}` — the issue to purge and who is purging it.
+- `PurgeResult{Purge model.Purge; Comments, Labels, Relations, Events int}` — the record the purge left and how many of the issue's comments, labels, relations, and events went with it, so a caller can report what was removed without reading first.
 
 #### `SortSpec` (`internal/storage/issues.go`)
 - `Field string`, `Desc bool`.
@@ -458,8 +470,8 @@ These types live in the contract, not in an engine, because a capability interfa
 - **`CompactionOutcome`** (`internal/storage/sync.go`) — `Ran bool` (whether a pass was actually performed; a due-check that found nothing owing returns false, an ordinary outcome and not a failure); `Depth GCMode` (meaningful only when `Ran`); `Detail string` (the engine's own already-rendered account; an engine that could not measure its own reclaim says so here rather than blanking the field — empty belongs only to the outcome that did nothing).
 - **`SyncPushResult`** (`internal/storage/sync.go`) — `Status int64` (json `status`), `Message string` (json `message`, the engine's verbatim push output, rendered as `raw`), `Head string` (json `head`; the commit the push sent as HEAD, read under the lock the push ran under), `Superseded string` (json `superseded,omitempty`; the engine's rejection, set when the push was rejected and the re-check found the remote already carrying `Head`; empty for a push that landed itself), `Maintenance string` (json `maintenance,omitempty`; deliberately separate from `Message` so `raw` stays raw; empty when nothing worth reporting, and every state a reader would act on — work performed, work declined, an I/O failure — is non-empty).
 - **`SyncReconcileState`** enum (`internal/storage/sync.go`): `not_diverged`, `linearized`, `prose_pending`, `unrelated_histories`, `took_local`, `took_remote`, `combined`. `took_local`/`took_remote` are produced only by `SyncResolveUnrelated`; the autonomous reconcile never picks a side. `combined` is produced only by the combine resolution, and only when every prose field settled — an on-both prose divergence lands `prose_pending` instead.
-- **`SyncReconcileResult`** (`internal/storage/sync.go`) — `State`, `Ahead`, `Behind`, `LocalHead`, `RemoteHead`, `BaseCommit`, `Pending []merge.ProsePending` (empty unless `prose_pending`), `Unrelated *UnrelatedInventory` (non-nil only for `unrelated_histories`), `Replayed int` (counts the folded side's commits that landed individually; zero for every non-mutating outcome and for a fold whose every per-commit projection was already contained in the spine; read back off the spine after the replay).
-- **`UnrelatedInventory`** (`internal/storage/sync.go`) — `OnlyLocal`, `OnlyRemote`, `OnBoth []string` (json `only_local,omitempty` etc.). The three slices are sorted and mutually disjoint by construction; every id present on either side lands in exactly one (`internal/storage/sync.go`).
+- **`SyncReconcileResult`** (`internal/storage/sync.go`) — `State`, `Ahead`, `Behind`, `LocalHead`, `RemoteHead`, `BaseCommit`, `Pending []merge.ProsePending` (empty unless `prose_pending`), `Unrelated *UnrelatedInventory` (non-nil for `unrelated_histories` and for `took_remote`, `took_local` and `combined`), `Replayed int` (counts the folded side's commits that landed individually; zero for every non-mutating outcome and for a fold whose every per-commit projection was already contained in the spine; read back off the spine after the replay), `CarriedPurges int` (the local purge records a take-remote carried onto the remote head; nonzero means local is ahead by the commit carrying them, which the next push delivers; zero for every other outcome).
+- **`UnrelatedInventory`** (`internal/storage/sync.go`) — `OnlyLocal`, `OnlyRemote`, `OnBoth`, `Purged []string` (json `only_local,omitempty`, `only_remote,omitempty`, `on_both,omitempty`, `purged,omitempty`). `Purged` is the ids a purge record on either side names, which every resolution drops; the other three partition the rest. The four slices are sorted and mutually disjoint by construction; every id present on either side lands in exactly one (`internal/storage/sync.go`).
 - **`UnrelatedResolution`** string (`internal/storage/sync.go`): `TakeLocal = "local"` (keeps local backlog, discards remote-only issues), `TakeRemote = "remote"` (keeps remote backlog, discards local-only issues).
   - `Valid()` returns true only for those two; the door guard every `Reconciler` runs before touching the store (`internal/storage/sync.go`).
 
@@ -509,6 +521,7 @@ These types live in the contract, not in an engine, because a capability interfa
 | `comments` | `[]model.Comment` | Comment table, insertion order |
 | `events` | `[]model.IssueEvent` | History, insertion order |
 | `labels` | `map[string][]model.Label` | Keyed by issue, kept **sorted by name** because the sorted set is what every label read returns |
+| `purges` | `[]model.Purge` | The records of the tickets this engine has purged; a purged ticket holds no row anywhere above, and its id is never minted again |
 
 **`record`** (`internal/storage/memory/engine.go`): `id`, `title`, `description`, `prompt`, `issueType model.IssueType`, `topic`, `assignee`, `lane`, `priority model.Priority`, `createdAt`, `updatedAt time.Time`, `status model.StatusView`, `retention model.Retention`.
 - **Rank is deliberately absent** from `record`; position lives in `Engine.order`, and a rank string beside it would be a second representation of one fact (`internal/storage/memory/engine.go`).
@@ -571,7 +584,7 @@ Order of checks is stated as contract: the parent must be resolved before the co
 **`place(id, f, placement)`** (`internal/storage/memory/issues.go`) — `RankTop` takes the first slot among the frame `f`'s members; `RankBottom` (the zero value) appends to the whole order; any other value → `fmt.Errorf("unknown rank placement: %d", p)` from `orderEdgeFor`. A population with no members takes neither end: `place` takes the slot from `e.slotInsideContainer(f)`, propagates its error, and otherwise inserts there, so the first member of a frame lands immediately after the issue that frames it — `slices.Index(e.order, string(f))` plus one. `storage.TopLevel` names no such issue and gives slot `0`; a frame absent from the order is refused with `fmt.Errorf("frame %s holds no position in the order; an issue cannot be filed inside one that is not there", f)`.
 
 **`mintID`** (`internal/storage/memory/issues.go`)
-- Builds an `issueid.Content` from topic, title, description, creator and `createdAt`, resolves the namespace and its population through `idSpace`, and returns `issueid.Mint(namespace, content, population, taken)`, where `taken` reports whether the candidate is already a key of `e.issues`.
+- Builds an `issueid.Content` from topic, title, description, creator and `createdAt`, resolves the namespace and its population through `idSpace`, and returns `issueid.Mint(namespace, content, population, taken)`, where `taken` reports whether the candidate is already a key of `e.issues` or the `IssueID` of any record in `e.purges` — a purged id is taken for good.
 - `issueid.Mint` (`internal/issueid/generate.go`): `baseLength = min(ComputeAdaptiveLength(population), MaxHashLength)`; then for `length` from `baseLength` to `MaxHashLength`, for `nonce` in `[0, NonceAttempts)`, generates `GenerateHashID(namespace, content, length, nonce)` and returns the first candidate not taken.
 - Exhaustion → `fmt.Errorf("generate unique issue id: exhausted lengths %d-%d", baseLength, issueid.MaxHashLength)`.
 
@@ -966,9 +979,17 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 
 - Locks, then builds issues via `listIssues(ListIssuesFilter{IncludeArchived: true, IncludeDeleted: true})` — **the WHOLE store**, out-of-flow work included, because an export honoring the listing default would silently drop exactly the rows a diff exists to notice.
 - Labels: flattened from the `labels` map, then sorted by `(IssueID, Name)` via `cmpThen`.
-- Returns `model.Export{Version: model.ExportVersion (3), WorkspaceID: e.workspaceID, ExportedAt: e.now(), Issues, Relations: slices.Clone(e.relations), Comments: slices.Clone(e.comments), Labels, Events: sortEvents(cloneEvents(e.events))}`.
-- `Relations` and `Comments` come back in **write order** (cloned, unsorted); `Issues` in rank order; `Labels` in `(issue, name)` order; `Events` in `(created_at, id)` order.
+- Returns `model.Export{Version: model.ExportVersion (4), WorkspaceID: e.workspaceID, ExportedAt: e.now(), Issues, Relations: slices.Clone(e.relations), Comments: slices.Clone(e.comments), Labels, Events: sortEvents(cloneEvents(e.events)), Purges: e.purgeList()}`.
+- `Relations` and `Comments` come back in **write order** (cloned, unsorted); `Issues` in rank order; `Labels` in `(issue, name)` order; `Events` in `(created_at, id)` order; `Purges` in issue-id, then birth order (`purgeList` returns `model.UnionPurges(e.purges)`, `internal/storage/memory/purge.go`).
 - Every collection comes back in a total order so two stores holding the same facts serialize to the same bytes rather than to the same multiset.
+
+### 2.14a `Purge` (`internal/storage/memory/purge.go`)
+
+- Locks `e.mu` for the whole operation, so no reader sees the issue half gone.
+- Not a key of `e.issues` → `storage.NotFoundError{Entity: "issue", ID: id}`.
+- `storage.RejectPurgeOfOccupiedContainer(id, e.detachedChildren(id))` — `detachedChildren` returns one `storage.DetachedChild` per `RelParentChild` relation whose `DstID` is the issue, whatever the child's retention, with the child's type and `parentsLeftWithout(child, id)` — its count of other `RelParentChild` relations (`internal/storage/memory/edges.go`), the same count `RemoveRelation`'s detach check reads.
+- Removes, counting each: comments with `IssueID == id` and events with `IssueID == id` (`removeWhere`, which returns the slice and the number dropped); relations with `SrcID == id` or `DstID == id` (`dropRelations`, which counts through `removeWhere`); the issue's label set (counted by its length); its entry in `e.order` (`detach`); its `e.issues` record.
+- Builds `model.Purge{IssueID: id, IssueCreatedAt: <the record's createdAt>, PurgedAt: e.clock.Now(), PurgedBy: in.Actor}` before removing the `e.issues` record, appends it to `e.purges`, and returns it in `storage.PurgeResult` with the four counts.
 
 ### 2.15 Capabilities offered by the memory engine
 
@@ -997,9 +1018,9 @@ Stated in `internal/storage/memory/doc.go`:
 - Rule for what may be asserted: only what a caller can observe through the contract; no case may reach past the interface into engine internals (`internal/storage/conformance/conformance.go`).
 - Dolt's behavior is the tiebreak where a behavior was ambiguous; where the second engine answered better, it was moved to match rather than the contract moved to meet it (`internal/storage/conformance/conformance.go`).
 
-### 3.2 The 36 registered cases (`internal/storage/conformance/conformance.go`)
+### 3.2 The 62 registered cases (`internal/storage/conformance/conformance.go`)
 
-`create_read_roundtrip`, `create_defaults`, `create_requires_title`, `create_normalizes_topic`, `create_under_missing_parent_is_not_found`, `get_missing_issue_is_not_found`, `apply_field_patch`, `apply_status_transition`, `apply_missing_issue_is_not_found`, `apply_to_container_is_refused`, `container_state_follows_live_children`, `history_records_mutations`, `list_defaults_to_rank_order`, `list_filters_select`, `list_by_parent`, `list_hides_archived_and_deleted`, `list_sorts_and_limits`, `list_breaks_sort_ties_by_id`, `list_accepts_exactly_the_contract_sort_fields`, `list_sorts_status_by_stored_encoding`, `events_are_totally_ordered`, `rank_intents_reorder`, `rank_intents_resolve_across_frames`, `rank_set_imposes_order`, `close_redirects_to_a_canonical`, `comments_roundtrip`, `labels_roundtrip`, `relations_roundtrip`, `relations_batch_buckets_edges`, `parent_wiring`, `topics_derive_from_issues`, `issue_identities_cover_every_row`, `export_carries_whole_store`, `bulk_apply_creates_and_updates`, `bulk_apply_compensates_a_failed_batch`, `import_tree_maps_local_ids`, `attribution_stamps_events`, `local_issue_count_tracks_creates`.
+`create_read_roundtrip`, `create_defaults`, `create_requires_title`, `create_normalizes_topic`, `create_under_missing_parent_is_not_found`, `get_missing_issue_is_not_found`, `apply_field_patch`, `apply_status_transition`, `apply_missing_issue_is_not_found`, `apply_to_container_is_refused`, `apply_to_archived_names_the_typed_verb`, `container_state_follows_live_children`, `history_records_mutations`, `every_editable_field_records_history`, `a_new_checkout_taking_a_ticket_records`, `one_issues_history_matches_the_whole_log`, `list_defaults_to_rank_order`, `list_filters_select`, `list_by_parent`, `list_hides_archived_and_deleted`, `list_sorts_and_limits`, `list_breaks_sort_ties_by_id`, `list_accepts_exactly_the_contract_sort_fields`, `list_sorts_status_by_derived_state`, `stamps_come_from_the_clock_the_engine_was_given`, `list_orders_timestamps_by_instant_not_spelling`, `events_are_totally_ordered`, `rank_intents_reorder`, `rank_intents_resolve_across_frames`, `rank_to_edge_stays_inside_its_frame`, `rank_to_edge_ignores_a_deleted_frame_mate`, `create_at_top_files_inside_its_frame`, `create_at_top_of_an_empty_frame_takes_a_distinct_key`, `placing_at_a_frame_edge_keeps_the_key_beside_its_frame`, `a_relative_move_keeps_every_rank_distinct`, `rank_set_imposes_order`, `rank_set_stays_inside_its_frame`, `rank_set_over_a_whole_frame_permutes_its_keys`, `rank_verbs_refuse_a_deleted_issue`, `a_container_lists_before_everything_inside_it`, `close_redirects_to_a_canonical`, `follow_ups_link_both_ways`, `a_purge_removes_the_issue_and_everything_it_owns`, `a_purge_refuses_a_container_that_holds_tickets`, `a_purge_of_a_missing_issue_is_not_found`, `a_purged_id_is_never_minted_again`, `comments_roundtrip`, `labels_roundtrip`, `relations_roundtrip`, `relations_batch_buckets_edges`, `parent_wiring`, `every_ticket_lives_inside_a_container`, `the_hierarchy_stays_a_tree`, `blocks_never_runs_along_the_hierarchy`, `topics_derive_from_issues`, `issue_identities_cover_every_row`, `export_carries_whole_store`, `bulk_apply_creates_and_updates`, `bulk_apply_compensates_a_failed_batch`, `import_tree_maps_local_ids`, `attribution_stamps_events`, `local_issue_count_tracks_creates`.
 
 ### 3.3 Every enforced invariant, by case
 
@@ -1149,6 +1170,24 @@ Stated in `internal/storage/memory/doc.go`:
 - `Reopen{}` clears the **whole** close payload together: resolution, redirect target, and closed-at all become nil.
 - Closing as a duplicate of a missing issue → `NotFoundError{Entity: "issue"}`.
 - Closing an issue as a duplicate of **itself** is an error.
+
+**`a_purge_removes_the_issue_and_everything_it_owns`** (`internal/storage/conformance/purge.go`)
+- With the clock pinned, `Purge` returns the record `{IssueID, IssueCreatedAt: the issue's CreatedAt, PurgedAt: the pinned instant, PurgedBy: the input actor}`.
+- The counts are exactly the purged issue's comments (1), labels (1), relations at either end (3: its parent edge, the blocked-by edge it holds, the blocked-by edge onto it — a related-to edge between two other issues is not counted), and events (its whole history, non-empty).
+- `GetIssue(purged)` → `NotFoundError{Entity: "issue"}`.
+- The export holds no issue, relation, comment, label, or event of the purged id, and exactly one purge record, equal to the returned one.
+- Every other issue's title, description, `follows_up`, and redirect target, and every other comment's body, are unchanged — a follow-up keeps `FollowsUp` naming the purged id and a duplicate keeps its redirect target naming it.
+
+**`a_purge_refuses_a_container_that_holds_tickets`** (`internal/storage/conformance/purge.go`)
+- Purging an epic that holds a **deleted** leaf and a child epic is refused with `model.ValidationError` (`assertRefused`); the refusal names the leaf and not the child epic; the epic still reads back and the export holds no purge record.
+- After the leaf is purged, the epic holding only the child epic purges; the export holds no row of it, the child epic still reads back, and no parent-child relation has the child epic as its source (it is top-level).
+
+**`a_purge_of_a_missing_issue_is_not_found`** (`internal/storage/conformance/purge.go`)
+- `Purge("no-such-issue")` → `NotFoundError{Entity: "issue"}`.
+- Purging an already-purged id → `NotFoundError{Entity: "issue"}`, and the export still holds only the first record (first actor).
+
+**`a_purged_id_is_never_minted_again`** (`internal/storage/conformance/purge.go`)
+- With the clock pinned, creating, purging, and re-creating an issue with identical content mints a different id the second time.
 
 **`comments_roundtrip`**
 - `AddComment` returns the comment as written (`Body`, `CreatedBy`, `IssueID`).

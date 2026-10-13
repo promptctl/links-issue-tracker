@@ -117,6 +117,22 @@ type Change struct {
 	Reason string
 }
 
+// PurgeInput names the issue to purge and who is purging it.
+type PurgeInput struct {
+	IssueID string
+	Actor   string
+}
+
+// PurgeResult is the record a purge left and how many of the issue's rows went
+// with it, so the caller can say what was removed without a read beforehand.
+type PurgeResult struct {
+	Purge     model.Purge
+	Comments  int
+	Labels    int
+	Relations int
+	Events    int
+}
+
 func (c Change) IsEmpty() bool {
 	return c.Action == nil && c.Fields.IsEmpty()
 }

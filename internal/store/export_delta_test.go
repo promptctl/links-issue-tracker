@@ -58,6 +58,12 @@ func TestExportDeltaMatchesFullRewriteAcrossEveryChangeShape(t *testing.T) {
 			t.Fatalf("step %d (%s): export delta store: %v", i, state.name, err)
 		}
 		assertSameRows(t, i, state.name, want, got)
+		// The two paths share applyExportDelta, so their agreeing cannot catch a
+		// table that body skips. Purge records reference nothing and are not
+		// re-derived on export, so the state's own are checked directly.
+		if !reflect.DeepEqual(got.Purges, state.export.Purges) {
+			t.Errorf("step %d (%s): purges = %+v, want the state's %+v", i, state.name, got.Purges, state.export.Purges)
+		}
 	}
 }
 
@@ -390,14 +396,24 @@ func buildDeltaScenarioStates(t *testing.T, ctx context.Context) []deltaScenario
 	}
 	snapshot("issue added")
 
-	// Whole-row removal has no ordinary API — routine deletion is a soft
-	// DeletedAt stamp — but a merge projection reaches it whenever an id exists
-	// on only one side, so the delta must handle it. Derive that state by
-	// dropping the issue and everything hanging off it from the last export,
-	// which is precisely the shape merge.ThreeWay would hand the replay.
+	// Whole-row removal without a purge record has no ordinary API — routine
+	// deletion is a soft DeletedAt stamp, and a purge leaves its record — but a
+	// merge projection reaches it whenever an id exists on only one side, so
+	// the delta must handle it. Derive that state by dropping the issue and
+	// everything hanging off it from the last export, which is precisely the
+	// shape merge.ThreeWay would hand the replay.
 	states = append(states, deltaScenarioState{
 		name:   "issue removed outright",
 		export: withoutIssue(states[len(states)-1].export, third.ID),
+	})
+
+	// A purge as a merge hands it on: the record lands and every row of the
+	// issue goes, its edge to the first issue and its label included.
+	prev := states[len(states)-1].export
+	purged := model.Purge{IssueID: second.ID, IssueCreatedAt: second.CreatedAt, PurgedAt: time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC), PurgedBy: "tester"}
+	states = append(states, deltaScenarioState{
+		name:   "issue purged",
+		export: prev.ApplyPurges(model.UnionPurges(prev.Purges, []model.Purge{purged})),
 	})
 
 	return states
@@ -437,6 +453,7 @@ func assertSameRows(t *testing.T, step int, name string, want, got model.Export)
 		{"comments", want.Comments, got.Comments},
 		{"labels", want.Labels, got.Labels},
 		{"events", want.Events, got.Events},
+		{"purges", want.Purges, got.Purges},
 	} {
 		if !reflect.DeepEqual(table.want, table.got) {
 			t.Errorf("step %d (%s): %s after the delta differ from the full rewrite\n full rewrite: %+v\n       delta: %+v", step, name, table.table, table.want, table.got)

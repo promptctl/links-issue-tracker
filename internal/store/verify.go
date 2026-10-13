@@ -170,7 +170,7 @@ func healthFindings(h storage.HealthReport) []VerifyFinding {
 // conservationCollections is the fixed order findings are reported in, so a
 // report is deterministic regardless of map iteration order.
 var conservationCollections = []collection{
-	collIssues, collRelations, collComments, collLabels, collEvents, collEventChanges,
+	collIssues, collRelations, collComments, collLabels, collEvents, collEventChanges, collPurges,
 }
 
 // countFindings checks count conservation per collection. [LAW:types-are-the-program]
@@ -219,6 +219,7 @@ func countFindings(dump RawDump, m ShapeMapping, export model.Export) []VerifyFi
 		collLabels:       len(export.Labels),
 		collEvents:       len(export.Events),
 		collEventChanges: nestedChanges,
+		collPurges:       len(export.Purges),
 	}
 
 	var out []VerifyFinding

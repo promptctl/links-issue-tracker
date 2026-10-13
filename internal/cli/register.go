@@ -699,6 +699,8 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 			Run: r.transitionCmd(deleteSpec)},
 		{Name: restoreSpec.name, Summary: "Restore deleted issue(s)", GroupID: "retention",
 			Run: r.transitionCmd(restoreSpec)},
+		{Name: "purge", Summary: "Permanently remove an issue and everything it owns", GroupID: "retention",
+			Run: r.appCmd(app.AccessWrite, purgeLeaf)},
 		{Name: "comment", Summary: "Add issue comments", GroupID: "operations",
 			Run: r.familyCmd(commentFamily), Subcommands: commentFamily.visibleSubcommands()},
 		{Name: "label", Summary: "Manage labels", GroupID: "operations",

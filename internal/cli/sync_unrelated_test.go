@@ -306,3 +306,32 @@ func TestSyncFailureFromPullUnrelated(t *testing.T) {
 		t.Fatalf("unrelated pull exit code = %d, want %d (ExitConflict)", code, ExitConflict)
 	}
 }
+
+// TestReportTakeOutcomeNamesPurgedAndCarried pins the two purge facts a take
+// introduces. The issues a purge on either side names are dropped by every
+// resolution, so the output names them on their own line; and a take-remote that
+// carried local purge records left local ahead, so it does not claim a clean
+// sync and sends the operator to push. Both counts land on the trace record.
+func TestReportTakeOutcomeNamesPurgedAndCarried(t *testing.T) {
+	t.Parallel()
+	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
+	var out strings.Builder
+	if err := reportTakeOutcome(&out, ws, "lit sync reconcile take remote", "origin", "master", storage.SyncReconcileResult{
+		State:         storage.SyncReconcileTookRemote,
+		Unrelated:     &storage.UnrelatedInventory{OnlyLocal: []string{"proj-localA"}, Purged: []string{"proj-purged"}},
+		CarriedPurges: 2,
+	}); err != nil {
+		t.Fatalf("reportTakeOutcome: %v", err)
+	}
+	text := out.String()
+	if !strings.Contains(text, "DROPPED the issue(s) a purge on either side names: (1): «proj-purged»") {
+		t.Errorf("take-remote output does not name the purged issue on its own line:\n%s", text)
+	}
+	if strings.Contains(text, "no push needed") || !strings.Contains(text, "2 purge record(s) carried") || !strings.Contains(text, "lit sync push") {
+		t.Errorf("take-remote that carried purges must send the operator to push, not report a clean sync:\n%s", text)
+	}
+	records := readSyncTraceRecords(t, ws)
+	if len(records) != 1 || records[0].Metadata["carried_purges"] != "2" || records[0].Metadata["purged"] != "1" {
+		t.Errorf("trace records = %+v, want one with carried_purges=2 purged=1", records)
+	}
+}

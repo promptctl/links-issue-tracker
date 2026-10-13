@@ -1,6 +1,6 @@
 # Dolt store: engine, schema, and core records
 
-lit's shared backend stores every workspace in an embedded [Dolt](https://github.com/dolthub/dolt) database — a MySQL-compatible SQL engine with git-like versioning — living under a per-repo directory, database name `links` (`internal/store/store.go`). Every mutation lands as one SQL transaction followed by one Dolt commit, so the store carries its own full history independent of the issue-event table. This chapter covers the engine lifecycle, commit and locking semantics, the complete SQL schema and its reconciliation machinery, and the core record operations: create, read, update, events, comments, labels, relations, and ranking, plus the shapemap recovery mapping. Import/export, verify/recover, checkpoints, and the adopt/candidate/promote/downgrade workspace flows are in `04-store-operations.md`; sync, compaction, and migration-runner mechanics are in `05-sync-merge-compaction.md`.
+lit's shared backend stores every workspace in an embedded [Dolt](https://github.com/dolthub/dolt) database — a MySQL-compatible SQL engine with git-like versioning — living under a per-repo directory, database name `links` (`internal/store/store.go`). Every mutation lands as one SQL transaction followed by one Dolt commit, so the store carries its own full history independent of the issue-event table. This chapter covers the engine lifecycle, commit and locking semantics, the complete SQL schema and its reconciliation machinery, and the core record operations: create, read, update, purge, events, comments, labels, relations, and ranking, plus the shapemap recovery mapping. Import/export, verify/recover, checkpoints, and the adopt/candidate/promote/downgrade workspace flows are in `04-store-operations.md`; sync, compaction, and migration-runner mechanics are in `05-sync-merge-compaction.md`.
 
 ## Engine lifecycle
 
@@ -35,7 +35,7 @@ Every mutation routes through `withMutation(ctx, message, fn)` (`commit_lock.go`
 
 **Dolt commit identity** derives entirely from the workspace id: author name = workspace id with `@`→`_` (blank → `links`), email = `<name>@links.local` (`store.go`).
 
-Store-level commit messages used verbatim: `record sync state`, `create issue`, `apply update`, `add comment`, `delete comment` (`store.go`), plus `add label`, `remove label`, `replace labels`, `add relation`, `remove relation`, `set parent`, `clear parent`, `rank to top`, `rank set`, `rank to bottom`, `rank above`, `rank below`, `fix rank inversions` from their subsystems (`labels.go`, `relations.go`, `ranking.go`).
+Store-level commit messages used verbatim: `record sync state`, `create issue`, `apply update`, `add comment`, `delete comment` (`store.go`), `purge issue` (`purge.go`), plus `add label`, `remove label`, `replace labels`, `add relation`, `remove relation`, `set parent`, `clear parent`, `rank to top`, `rank set`, `rank to bottom`, `rank above`, `rank below`, `fix rank inversions` from their subsystems (`labels.go`, `relations.go`, `ranking.go`).
 
 ### The two locks
 
@@ -54,13 +54,13 @@ Both are zero-byte kernel flocks with **no** stale/PID/mtime heuristics — proc
 
 ### Producers and pinning
 
-Exactly four producers of live DDL exist: the goose baseline migration `00001_baseline.sql` (v1), goose migrations v2–v8 (`add_lane`, `add_resolution`, `add_redirect_target`, `add_event_attribution`, `add_follows_up`, `every_ticket_inside_a_container`, `blocked_by_edge`), the pre-goose reconciler (`schema_reconcile.go`), and the quarantine-table bootstrap (`migration_runner.go`) — plus goose's own `goose_db_version` bookkeeping table. The baseline file is **byte-frozen** by a SHA-256 canary test (`e86c1aa3…ad1fbb`); no schema hash is stored in the database — the recorded version is the integer in `goose_db_version` plus a `producer_binary_version` string in `meta`. The converged schema is pinned as a byte-compared `SHOW CREATE TABLE` golden file (`schema_snapshot.sql`), regenerated only via a test flag; the dump enumerates live tables, so a leftover table is drift.
+Exactly four producers of live DDL exist: the goose baseline migration `00001_baseline.sql` (v1), goose migrations v2–v9 (`add_lane`, `add_resolution`, `add_redirect_target`, `add_event_attribution`, `add_follows_up`, `every_ticket_inside_a_container`, `blocked_by_edge`, `purges`), the pre-goose reconciler (`schema_reconcile.go`), and the quarantine-table bootstrap (`migration_runner.go`) — plus goose's own `goose_db_version` bookkeeping table. The baseline file is **byte-frozen** by a SHA-256 canary test (`e86c1aa3…ad1fbb`); no schema hash is stored in the database — the recorded version is the integer in `goose_db_version` plus a `producer_binary_version` string in `meta`. The converged schema is pinned as a byte-compared `SHOW CREATE TABLE` golden file (`schema_snapshot.sql`), regenerated only via a test flag; the dump enumerates live tables, so a leftover table is drift.
 
 All application tables are InnoDB, `utf8mb4_0900_bin`, no `AUTO_INCREMENT` anywhere except `goose_db_version.id`.
 
 ### Tables
 
-Nine tables. `issues` (`schema_snapshot.sql`):
+Ten tables. `issues` (`schema_snapshot.sql`):
 
 | Column | Type | Null | Default | Since |
 |---|---|---|---|---|
@@ -91,11 +91,12 @@ The other tables:
 | `labels` | `issue_id`, `label` VARCHAR(191); `created_at`; `created_by` | PK `(issue_id,label)`; FK → issues CASCADE; indexes `(issue_id,label)`, `(label,issue_id)` |
 | `issue_events` | `id`, `issue_id` VARCHAR(191); `action` VARCHAR(64) NULL; `reason`, `actor` TEXT NOT NULL; `created_at`; `stream_id` VARCHAR(64) NULL (v5); `workspace_id` VARCHAR(191) NULL (v5) | PK `(id)`; FK → issues CASCADE; index `(issue_id,created_at)` |
 | `issue_event_changes` | `event_id` VARCHAR(191); `field` VARCHAR(64); `from_value`, `to_value` TEXT NULL | PK `(event_id,field)`; FK → issue_events CASCADE |
+| `purges` | `issue_id` VARCHAR(191); `issue_created_at` VARCHAR(64); `purged_at` VARCHAR(64); `purged_by` TEXT — all NOT NULL (v9) | PK `(issue_id, issue_created_at)`; **no foreign key** on either key column — the issue it names no longer exists |
 | `meta` | `meta_key` VARCHAR(191) PK; `meta_value` TEXT | key-value; upsert via `ON DUPLICATE KEY UPDATE` |
 | `migration_quarantine` | `version` BIGINT PK; `name`, `error_text` TEXT; `created_at` | created outside the goose batch so a rollback cannot erase it |
 | `goose_db_version` | goose's own (id AUTO_INCREMENT, version_id, is_applied, tstamp) | migration bookkeeping |
 
-Because every issue-row deletion in normal operation is a soft `deleted_at` stamp, the ON DELETE CASCADEs never fire from CRUD paths.
+Ordinary issue deletion is a soft `deleted_at` stamp; the one CRUD path that deletes an issue row is `Purge` (below), and the ON DELETE CASCADEs fire from it.
 
 `meta` keys used in production: `workspace_id`, `producer_binary_version`, `last_sync_path`, `last_sync_hash`. `GetSyncState`/`RecordSyncState` read/write the last two (`store.go`).
 
@@ -103,7 +104,7 @@ A legacy `issue_history` table (columns `id, issue_id, action, reason, from_stat
 
 ### Pre-goose reconciliation
 
-When a workspace predates goose management (marker: `issue_history` exists, or canonical tables exist with no goose log — `migration_runner.go`), `reconcileToBaseline` (`schema_reconcile.go`) forward-migrates it to the v1 baseline before goose applies v2–v5. Steps, in order: create any missing v1 tables/indexes (FK-safe order, `meta` first); drop a fabricated `goose_db_version`; rename `issue_events.assignee`→`actor`; translate `issue_history` rows into events (one event per row, plus one `status` field-change when the normalized from/to actually differ; orphaned rows skipped; idempotent against existing event ids); drop `issue_history`; add `item_rank` + its index; add `topic` (backfilled `'misc'`, then its temporary default dropped); rename `prompt`→`agent_prompt`, add/relax it as needed; normalize statuses (`in-progress`→`in_progress`, `todo`→`open`, `done`→`closed`, anything invalid→`open`; `closed_at` implies closed and vice versa; epic status forced NULL); backfill missing topics and ranks (unranked rows get sequential ranks appended after the current max, ordered by status/priority/updated_at/id); reset out-of-range priorities to 0 and install the canonical priority CHECK; canonicalize the status CHECK; record `workspace_id` in meta.
+When a workspace predates goose management (marker: `issue_history` exists, or canonical tables exist with no goose log — `migration_runner.go`), `reconcileToBaseline` (`schema_reconcile.go`) forward-migrates it to the v1 baseline before goose applies v2–v9. Steps, in order: create any missing v1 tables/indexes (FK-safe order, `meta` first); drop a fabricated `goose_db_version`; rename `issue_events.assignee`→`actor`; translate `issue_history` rows into events (one event per row, plus one `status` field-change when the normalized from/to actually differ; orphaned rows skipped; idempotent against existing event ids); drop `issue_history`; add `item_rank` + its index; add `topic` (backfilled `'misc'`, then its temporary default dropped); rename `prompt`→`agent_prompt`, add/relax it as needed; normalize statuses (`in-progress`→`in_progress`, `todo`→`open`, `done`→`closed`, anything invalid→`open`; `closed_at` implies closed and vice versa; epic status forced NULL); backfill missing topics and ranks (unranked rows get sequential ranks appended after the current max, ordered by status/priority/updated_at/id); reset out-of-range priorities to 0 and install the canonical priority CHECK; canonicalize the status CHECK; record `workspace_id` in meta.
 
 Each step is gated by an `information_schema` probe (table/index/column existence, nullability, default presence, CHECK-clause shape, or a row-level predicate); CREATE steps swallow "already exists"-class races, mutation steps don't. Reconcile compares **presence only** — never column types, index shapes, FKs, or collations. A pre-gate refuses shapes missing `status`/`priority`/`updated_at`/`issue_type`/`closed_at`/`description` ("not a known historical shape"); a post-gate re-verifies every baseline column and aborts before stamping v1 if gaps remain. Down-migration effects (v5→v1) drop the added columns in reverse; v4's Down re-materializes one `related-to` edge per redirect target, and v4's Up did the inverse backfill-and-delete.
 
@@ -113,7 +114,7 @@ Each step is gated by an `information_schema` probe (table/index/column existenc
 
 ### ID minting
 
-Top-level IDs are `<prefix>-<topic>-<hash>` (grammar and slug rules in `01-data-model.md`). The store side (`issue_ids.go`): adaptive hash length = smallest 3–8 keeping birthday-collision probability ≤ 0.25 for the current top-level count ("top-level" = id containing no dot; the count includes archived/deleted rows); on a count error the length defaults to 6. For each length from base to 8, up to 10 nonces are tried; the first candidate with zero existing rows (including soft-deleted) wins; exhaustion errors out.
+Top-level IDs are `<prefix>-<topic>-<hash>` (grammar and slug rules in `01-data-model.md`). The store side (`issue_ids.go`): adaptive hash length = smallest 3–8 keeping birthday-collision probability ≤ 0.25 for the current top-level count ("top-level" = id containing no dot; the count includes archived/deleted rows); on a count error the length defaults to 6. For each length from base to 8, up to 10 nonces are tried; the first candidate with zero existing rows (including soft-deleted) and no purge record wins — a purged id is taken for good (`issue_ids.go`); exhaustion errors out.
 
 **Child IDs** are sequential dotted suffixes: `<parentID>.N`, N = max existing direct-child number + 1, starting at `.1`; non-numeric and nested suffixes are ignored when computing the max; deleted children keep their numbers reserved (`issue_ids.go`). Grandchildren nest (`parent.1.2`).
 
@@ -155,6 +156,10 @@ One LEFT JOIN query collapses `issue_events` × `issue_event_changes` into event
 
 **Field updates** (`store.go`): title trimmed and non-empty; description/prompt/assignee/lane trimmed; container↔leaf type changes refused ("lifecycle capability would change"); labels canonicalized and replaced as a whole set. The UPDATE is unguarded (no CAS) but touches no lifecycle column, so a stale field plan cannot clobber a concurrent close or archive. Change rows record only fields that moved (priority as its numeric string; labels as comma-joined comparison).
 
+## Purging
+
+`Purge(ctx, PurgeInput{IssueID, Actor})` (`purge.go`) runs as one `purge issue` mutation — one transaction, one Dolt commit. Inside it: `SELECT id, created_at FROM issues WHERE id = ?` (no row → `storage.NotFoundError`); read each child with a parent-child edge onto the issue, with its type and the count of its other parent-child edges (`detachedChildrenTx`, retention ignored), and refuse when any child that is not an epic would keep no parent edge (`storage.RejectPurgeOfOccupiedContainer`, `model.ValidationError`); count the issue's comments, labels, relations with it at either end, and `issue_events` rows in one SELECT; delete the issue row through `deleteIssueTx`, letting ON DELETE CASCADE take the comments, labels, relations, events, and event changes; insert the purge record (`issue_created_at` = the issue's `created_at`, spelled in UTC RFC3339Nano by `model.Purge.Key`; `purged_at` = store clock, RFC3339Nano; `purged_by` = the input actor, verbatim) through `insertPurgeTx`, the only INSERT into `purges`. Returns `storage.PurgeResult` with the record and the four counts. No `issue_events` row is written; other issues' rows are not touched.
+
 ## Events
 
 `recordEvent` is the single insertion point (`store.go`): id `evt-<uuid>`, trimmed action/reason/actor (blank actor → `unknown`), `created_at` now-UTC, attribution read off the store. Empty action stores SQL NULL; empty from/to values in change rows store NULL. Which mutation emits what:
@@ -167,6 +172,7 @@ One LEFT JOIN query collapses `issue_events` × `issue_event_changes` into event
 | retention transition | the verb (`archive`/…) | `archived_at`/`deleted_at` as moved |
 | field update | NULL | one per moved field |
 | add/delete comment, record sync state | no event | — |
+| purge | no event (the issue's events are deleted with it) | — |
 
 ## Comments
 
@@ -216,9 +222,9 @@ An inversion is a live `blocked-by` edge whose dependency ranks below its depend
 
 The shapemap is the declarative bridge used by recovery (chapter 04): it maps a **raw dump** (tables → columns → positional rows, as produced by `DumpRaw`) into a `model.Export`, so data can be lifted out of a workspace whose schema this binary does not manage.
 
-- A `ShapeMapping` lists per-table **emitters** (into one of six collections: issues, relations, comments, labels, events, event_changes) and **drops** (columns discarded with a provenance: `intended` — bookkeeping tables or columns dropped by a known migration — or `unexplained`). A closed **target registry** (44 entries, `shapemap.go`) fixes each collection's fields, which transform each admits (`identity`, `timestamp`, `legacy_status_value`, `event_action`, `event_reason`, `event_actor`), and which fields are required.
+- A `ShapeMapping` lists per-table **emitters** (into one of seven collections: issues, relations, comments, labels, events, event_changes, purges) and **drops** (columns discarded with a provenance: `intended` — bookkeeping tables or columns dropped by a known migration — or `unexplained`). A closed **target registry** (49 entries, `shapemap.go`) fixes each collection's fields, which transform each admits (`identity`, `timestamp`, `legacy_status_value`, `event_action`, `event_reason`, `event_actor`), and which fields are required.
 - `DeterministicMap` auto-derives a mapping with no operator input: bookkeeping tables (`goose_db_version`, `migration_quarantine`, `meta`) drop wholesale; `issue_history` fans out into an events emitter plus a conditional event_changes emitter (change row only when normalized from/to differ; `created_by` becomes the actor); any other table must match the known-columns registry exactly — historical aliases included (`prompt`→prompt, `issue_events.assignee`→actor, `labels.label`→name). Any unknown table or column makes it decline (return false) rather than guess; an operator-authored mapping (JSON) then covers the gap.
-- `Validate` enforces: totality (every dump column mapped or dropped), known collections/fields, admissible transforms, required-field coverage, string-only constants on identity fields, condition fields produced, and row arity. `Apply` re-validates, folds rows through the transforms (NULL-preserving; timestamps parse RFC3339Nano/RFC3339; legacy statuses canonicalize; actor blank→`unknown`), and assembles a `model.ExportVersion` (3) export, reading each relation type through `model.RelationTypeFromStored` (a stored `blocks` becomes `blocked-by`) — hydrating issues exactly as the live read path does (container status ignored, retention from the timestamp pair). An event-change referencing an unknown event id errors.
+- `Validate` enforces: totality (every dump column mapped or dropped), known collections/fields, admissible transforms, required-field coverage, string-only constants on identity fields, condition fields produced, and row arity. `Apply` re-validates, folds rows through the transforms (NULL-preserving; timestamps parse RFC3339Nano/RFC3339; legacy statuses canonicalize; actor blank→`unknown`), and assembles a `model.ExportVersion` (4) export (purge records included), reading each relation type through `model.RelationTypeFromStored` (a stored `blocks` becomes `blocked-by`) — hydrating issues exactly as the live read path does (container status ignored, retention from the timestamp pair). An event-change referencing an unknown event id errors.
 - The JSON wire form is strict: unknown keys, trailing data, duplicate tables/fields/drops, and unknown source/condition kinds are all decode errors; encoding is deterministically sorted so re-marshal is byte-stable.
 - Behavioral edges pinned in code: `issues.lane` is mapped and validated but **discarded at assembly** (`buildIssue` never reads it); `migrationDroppedCols` is currently empty (every DROP COLUMN in the corpus lives in a Down section); `DoltHead` from the dump is not carried into the export.
 

@@ -339,6 +339,9 @@ What that buys, and what it does not:
   that matters is caught rather than absorbed, because the other store still
   holding the original presents `reconcile` with two tickets under one id,
   which it refuses on their differing creation instants instead of fusing.
+  A purged id is the exception to all of this: `lit purge` leaves a record of
+  the id, and the probe reads those records beside the live rows, so a purged
+  id is never minted again.
 - **Existing ids are untouched.** This changes how NEW children are minted and
   migrates nothing. Every `<epic>.7` still resolves, still ranks, still exports.
   An epic will commonly hold both shapes.
@@ -394,18 +397,22 @@ suppresses the hook along with all other automatic sync side effects.
 Unrelated histories (independently-initialized stores sharing one remote) never
 merge automatically — resolving them is a deliberate choice among:
 
-- `lit sync reconcile combine` — the union: every issue kept, shared ids
+- `lit sync reconcile combine` — the union: every issue kept but those a purge on either side names, shared ids
   field-merged, an on-both prose conflict held for inline resolution. This is
   the keep-everything default and stays **agent-runnable** with no approval. It
   stops wholesale on one condition: a shared id that names two different
   tickets, where it commits nothing and reports both sides — see "Two tickets
   under one id" above.
 - `lit sync reconcile take local|remote` — one side survives **wholesale and
-  the other side's unique issues are permanently discarded**.
+  the other side's unique issues are permanently discarded**. Purge records
+  are kept from both sides: a ticket either side purged is gone afterward, and
+  when local held records the remote lacked, `take remote` lands them in a
+  commit on top of the remote head that the next push carries.
 
 Because a take destroys one side's work, it refuses to run without the owner's
 explicit approval. Run bare, it exits 5 with a refusal block naming exactly
-which issues the take would discard and a one-time approval token; only
+which issues the take would discard (the other side's unique issues, and
+every issue a purge on either side names) and a one-time approval token; only
 
 ```text
 lit sync reconcile take <side> --owner-approved <token>

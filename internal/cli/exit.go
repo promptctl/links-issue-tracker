@@ -117,6 +117,12 @@ func ExitCode(err error) int {
 	if errors.As(err, &takeover) {
 		return ExitValidation
 	}
+	// An unconfirmed purge is the same kind of refusal: deterministic for the
+	// command as issued.
+	var purge purgeUnconfirmedError
+	if errors.As(err, &purge) {
+		return ExitValidation
+	}
 	// Both of the router's terminal answers share one code: the caller's
 	// question here is binary — was a ticket handed back? — and which of the two
 	// emptinesses it was is carried by the reason string and the message.

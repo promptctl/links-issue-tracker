@@ -32,6 +32,7 @@ var reasonCodes = map[commandReason]int{
 	"no_ready_work":             6,
 	"outside_git_workspace":     3,
 	"owner_approval_required":   5,
+	"purge_unconfirmed":         3,
 	"remote_unreachable":        1,
 	"retired_command":           3,
 	"scope_exhausted":           6,
@@ -116,6 +117,9 @@ func TestCommandErrorReason(t *testing.T) {
 		{"takeover without --take", takeoverUnconfirmedError{Message: "claimed here: … — this lane is claimed and active; pass --take to confirm the takeover"}, "takeover_unconfirmed"},
 		{"takeover declined", takeoverUnconfirmedError{Message: "takeover declined"}, "takeover_unconfirmed"},
 		{"takeover declined wrapped", fmt.Errorf("start: %w", takeoverUnconfirmedError{Message: "takeover declined"}), "takeover_unconfirmed"},
+		// Both purge-gate arms.
+		{"purge without --yes", purgeUnconfirmedError{Message: "purging links-x cannot be undone; pass --yes to confirm it"}, "purge_unconfirmed"},
+		{"purge declined", purgeUnconfirmedError{Message: "purge declined"}, "purge_unconfirmed"},
 		// A managed template that cannot converge is refused deterministically
 		// like a validation failure, but the act it calls for is editing a file
 		// on disk — so it carries its own reason rather than inheriting

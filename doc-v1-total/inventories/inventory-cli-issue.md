@@ -186,15 +186,16 @@ Constants (`exit.go`):
 11. `model.ContainerActionError` → 6 when `Satisfied()`, else 3 (`exit.go`)
 12. `UnsupportedError` → 3 (`exit.go`)
 13. `takeoverUnconfirmedError` → 3 (`exit.go`)
-14. `Exhausted` → 6 (`exit.go`)
-15. `NoWork` → 6 (`exit.go`)
-16. `OutsideWorkspaceError` → 3 (`exit.go`)
-17. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → 3 (`exit.go`)
-18. `*store.UnsupportedSchemaVersionError` → 3 (`exit.go`)
-19. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → 3 (`exit.go`)
-20. `BulkFailureError` → 1 (`exit.go`)
-21. `errors.Is(err, store.ErrTransientGCContention)` → 1 (`exit.go`)
-22. anything else → 1 (`exit.go`)
+14. `purgeUnconfirmedError` → 3 (`exit.go`)
+15. `Exhausted` → 6 (`exit.go`)
+16. `NoWork` → 6 (`exit.go`)
+17. `OutsideWorkspaceError` → 3 (`exit.go`)
+18. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → 3 (`exit.go`)
+19. `*store.UnsupportedSchemaVersionError` → 3 (`exit.go`)
+20. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → 3 (`exit.go`)
+21. `BulkFailureError` → 1 (`exit.go`)
+22. `errors.Is(err, store.ErrTransientGCContention)` → 1 (`exit.go`)
+23. anything else → 1 (`exit.go`)
 
 Error types defined in `cli.go`: `MergeConflictError` (`cli.go`),
 `CorruptionError` (`cli.go`), `UsageError` (`cli.go`),
@@ -236,19 +237,20 @@ several of these types gets the reason of the earliest one:
 14. `NoWork` → `no_ready_work`
 15. `UnsupportedError` → `unsupported_flag`
 16. `takeoverUnconfirmedError` → `takeover_unconfirmed`
-17. `OutsideWorkspaceError` → `outside_git_workspace`
-18. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → `workspace_not_initialized`
-19. `*store.UnsupportedSchemaVersionError` → `workspace_schema_ahead`
-20. `workspace.StoredPrefixError` → `stored_prefix_refused`
-21. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → `validation_refused`
-    (`StoredPrefixError` unwraps to this sentinel; step 20 catches it first)
-22. `BulkFailureError` → `bulk_partial_failure`
-23. `store.WorkspaceWriteBlockedError` → `workspace_write_blocked` (it unwraps
+17. `purgeUnconfirmedError` → `purge_unconfirmed`
+18. `OutsideWorkspaceError` → `outside_git_workspace`
+19. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → `workspace_not_initialized`
+20. `*store.UnsupportedSchemaVersionError` → `workspace_schema_ahead`
+21. `workspace.StoredPrefixError` → `stored_prefix_refused`
+22. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → `validation_refused`
+    (`StoredPrefixError` unwraps to this sentinel; step 21 catches it first)
+23. `BulkFailureError` → `bulk_partial_failure`
+24. `store.WorkspaceWriteBlockedError` → `workspace_write_blocked` (it unwraps
     to `store.ErrTransientGCContention`; this step catches it first)
-24. `errors.Is(err, store.ErrWorkspaceBusy)` or
+25. `errors.Is(err, store.ErrWorkspaceBusy)` or
     `errors.Is(err, workspace.ErrConfigBusy)` → `workspace_busy`
-25. `errors.Is(err, store.ErrTransientGCContention)` → `transient_gc_contention`
-26. anything else → `command_failed`
+26. `errors.Is(err, store.ErrTransientGCContention)` → `transient_gc_contention`
+27. anything else → `command_failed`
 
 `commandErrorRemediation(reason)` (`error_output.go`), verbatim strings. An
 empty string means no `remediation:` line is printed:
@@ -272,6 +274,7 @@ empty string means no `remediation:` line is printed:
 - `no_ready_work`: "Do not retry unchanged — routing is deterministic and repeats this answer until something in the backlog moves. That is the backlog's state, not a fault. If `--type`, `--labels`, `--assignee`, or `--status` narrowed this run, drop the filter and ask again. If a `focus` label narrowed it, `lit next --all` routes over the whole queue for one run and `lit label rm <id> focus` lifts the scope. Otherwise `lit backlog --all` shows the whole queue and who holds what, and `lit new` adds work if it is genuinely empty."
 - `state_already_holds`: "No action is needed — the command asked for a state the workspace is already in, and the message above says how that state was reached. Do not retry: running it again cannot change the answer, and `lit doctor` has nothing to diagnose because nothing is broken."
 - `takeover_unconfirmed`: "Rerun with `--take` to take the lane over, or run `lit next` for work nobody else holds. \<agent-instructions>Taking over a lane another checkout holds right now overrides that checkout's work: pass `--take` only when the user directs the takeover.\</agent-instructions>"
+- `purge_unconfirmed`: "Rerun with `--yes` to purge it, or run `lit delete <id>` to remove it reversibly. \<agent-instructions>A purge cannot be undone and reaches every store lit syncs with: pass `--yes` only when the user directs the purge.\</agent-instructions>"
 - `outside_git_workspace`: "Run the command inside a git repository/worktree with links initialized."
 - `workspace_not_initialized`: "Do not retry unchanged — this repository has no lit workspace, and retrying this command cannot create one. Run `lit init` here to create it, or change to a directory that already has one."
 - `workspace_schema_ahead`: "Do not retry unchanged — this lit is older than the workspace's schema, and rerunning the command with the same binary repeats this refusal. The message above names the supported path. \<agent-instructions>Installing a different lit replaces it for every workspace on this machine, and any snapshot rollback the message offers discards data: take such a path only when the user directs it, and until then surface this refusal to the user as blocking.\</agent-instructions>"
@@ -323,7 +326,8 @@ and transitions via the table below.
 
 `transitionBreadcrumbTopics` (`cli.go`): `start` → `"work"`,
 `done` → `"done"`, `close` → `"done"`. Absent for `open`, `archive`,
-`unarchive`, `delete`, `restore` → no breadcrumb (`cli.go`).
+`unarchive`, `delete`, `restore` → no breadcrumb (`cli.go`). `purge` emits no
+breadcrumb (`purge.go`).
 
 ### 1.13 Sync-staleness banners
 
@@ -354,7 +358,7 @@ Occasion builders (`workflow_events.go`):
   action name.
 
 Retention actions (archive/unarchive/delete/restore) are not `StatusAction`s and
-fire no event (`cli.go`).
+fire no event (`cli.go`). `purge` fires none either (`purge.go`).
 
 ### 1.15 Prefix / ID resolution
 
@@ -1064,6 +1068,9 @@ Registry rows and summaries:
 - `delete` — "Delete issue(s)" (`register.go`)
 - `restore` — "Restore deleted issue(s)" (`register.go`)
 
+The `retention` group also holds `purge`, which is not a transition and does not
+route through `transitionLeaf` — §2.29.
+
 **Common flags on every transition** (`cli.go`):
 `--reason` (string, `""`, "Transition reason") and hidden `--by`.
 
@@ -1166,9 +1173,10 @@ positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason 
      - Non-interactive stdout (`!isTerminal(stdout)`) and no `--take` →
        `takeoverUnconfirmedError` "<claim line> — this lane is claimed and active; pass --take to confirm the takeover"
        → exit 3, reason `takeover_unconfirmed`.
-     - Interactive and no `--take` → prints `"<claim line>\ntake over this lane? [y/N] "`, reads a
+     - Interactive and no `--take` → `askYesNo(stdout, line+"\ntake over this lane?")`
+       (`claims_takeover.go`) prints `"<claim line>\ntake over this lane? [y/N] "`, reads a
        line from stdin; a read error other than EOF →
-       `"read takeover confirmation: %w"`; an answer not starting with `y`
+       `"read confirmation: %w"`; an answer not starting with `y`
        (case-insensitive, trimmed) → `takeoverUnconfirmedError` "takeover declined" → exit 3,
        reason `takeover_unconfirmed`.
 4. Returns the line the start owes after Apply: from a held lane, ours or another's,
@@ -2006,6 +2014,51 @@ plus at most one positional topic.
 - An unknown topic →
   `UsageError{"usage: unknown quickstart topic \"<x>\" (must be one of: <tokens>)"}`
   (`cli.go`).
+
+### 2.29 `lit purge <id> [--yes]`
+
+Registry row: `purge` — "Permanently remove an issue and everything it owns",
+group `retention`, `Run: r.appCmd(app.AccessWrite, purgeLeaf)` (`register.go`).
+Description: `helptext/purge.txt`.
+
+`purgeLeaf` (`purge.go`):
+- Flags: `--yes` (bool, `false`, "Confirm the purge (required for
+  non-interactive callers; without it an interactive terminal is prompted
+  instead)") and hidden `--by` (`registerActor`, `cli.go`), resolved through
+  `resolveIdentity` into the purge record's actor.
+- `positionals: 1`, usage `"usage: lit purge <id> [--yes]"`. No positional →
+  `UsageError{"usage: lit purge <id> [--yes]"}` → exit 2; a surplus positional →
+  `refuseSurplusPositionals` `UsageError` → exit 2.
+
+**Sequence** (`purge.go`):
+1. `ap.Store.GetIssue(ctx, id)` — missing → `storage.NotFoundError` → exit 4,
+   reason `entity_not_found`, before any confirmation is asked for.
+2. `confirmPurge(stdout, issue.ID, *yes)`:
+   - `--yes` → proceeds, at a terminal or not.
+   - Non-interactive stdout (`!isTerminal(stdout)`) and no `--yes` →
+     `purgeUnconfirmedError` "purging <id> cannot be undone; pass --yes to confirm it"
+     → exit 3, reason `purge_unconfirmed`.
+   - Interactive and no `--yes` → `askYesNo(stdout, …)` (`claims_takeover.go`)
+     prints `"<id>: a purge removes it, its comments, labels, history and edges for good, here and in every store it syncs to\npurge it? [y/N] "`
+     (no title), reads a line from stdin; a read error other than EOF →
+     `"read confirmation: %w"`; an answer whose trimmed lowercase form does not
+     start with `y` → `purgeUnconfirmedError` "purge declined" → exit 3, reason
+     `purge_unconfirmed`.
+3. `ap.Store.Purge(ctx, storage.PurgeInput{IssueID: issue.ID, Actor: resolveActor()})`.
+   An issue whose purge would leave a child leaf with no parent edge (deleted
+   and archived children counted; a child epic, or a leaf with another parent,
+   does not count) → `model.ValidationError` from
+   `storage.RejectPurgeOfOccupiedContainer` → exit 3, reason `validation_refused`.
+4. Prints `"purged %s (comments=%d labels=%d edges=%d events=%d)\n"` with the
+   purged id and `PurgeResult`'s `Comments`, `Labels`, `Relations`, `Events`.
+   The title is not printed.
+
+No workflow occasion is dispatched and no breadcrumb is emitted. As a write
+command, the mutation sync-staleness warning and post-command auto-sync follow
+a successful run (§1.4).
+
+`purgeUnconfirmedError{Message}` (`purge.go`) → exit 3 (`exit.go`), reason
+`purge_unconfirmed` (`error_output.go`).
 
 ---
 

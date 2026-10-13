@@ -446,12 +446,12 @@ type SyncReconcileResult struct {
 	// collided rather than a count. Empty unless State is
 	// SyncReconcileIDCollision.
 	Collisions []merge.Collision
-	// Unrelated carries the both-sides issue-id partition (only-local, only-remote,
-	// on-both) so the operator can see what each side holds before choosing a
-	// wholesale/union resolution. Non-nil only for SyncReconcileUnrelated; there is
-	// no base to diff against, so it is read directly off the LocalHead/RemoteHead
-	// anchors. [LAW:types-are-the-program] the field present names the state that
-	// produced it.
+	// Unrelated carries the both-sides issue-id partition (purged, only-local,
+	// only-remote, on-both) so the operator can see what each side holds before
+	// choosing a wholesale/union resolution, and what the chosen one dropped.
+	// Non-nil for SyncReconcileUnrelated and for the outcomes of resolving one —
+	// took_remote, took_local, combined; there is no base to diff against, so it
+	// is read directly off the LocalHead/RemoteHead anchors.
 	Unrelated *UnrelatedInventory
 	// Replayed counts the folded side's commits that landed individually — with
 	// their original message, timestamp, and author — ahead of the settling marker
@@ -460,20 +460,26 @@ type SyncReconcileResult struct {
 	// landed). It is read back off the spine after the replay, so it reports what
 	// actually landed, not what was attempted. [FRAMING:representation]
 	Replayed int
+	// CarriedPurges counts the local purge records a take-remote carried onto the
+	// remote head. Nonzero means local is ahead of the remote by the commit that
+	// carries them, and the next push delivers them; zero for every other outcome.
+	CarriedPurges int
 }
 
 // UnrelatedInventory partitions issue ids across the two sides of an
-// unrelated-history divergence by which side holds each: ids only the local head
-// carries, ids only the remote head carries, and ids both carry. The three slices
-// are sorted and mutually disjoint by construction — every id present on either
-// side lands in exactly one — so the partition is total and a consumer renders or
-// resolves it without re-deriving membership. [LAW:types-are-the-program] the type
+// unrelated-history divergence: ids a purge record on either side names, which
+// every resolution drops, and of the rest, ids only the local head carries, ids
+// only the remote head carries, and ids both carry. The four slices are sorted and
+// mutually disjoint by construction — every id present on either side lands in
+// exactly one — so the partition is total and a consumer renders or resolves it
+// without re-deriving membership. [LAW:types-are-the-program] the type
 // is the "what each side holds" answer; the take-one/union resolutions later in the
 // epic read the same partition rather than re-querying both heads.
 type UnrelatedInventory struct {
 	OnlyLocal  []string `json:"only_local,omitempty"`
 	OnlyRemote []string `json:"only_remote,omitempty"`
 	OnBoth     []string `json:"on_both,omitempty"`
+	Purged     []string `json:"purged,omitempty"`
 }
 
 // UnrelatedResolution is the whole-store choice that settles an unrelated-history

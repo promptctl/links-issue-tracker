@@ -303,6 +303,7 @@ func TestDeterministicMapCleanAhead(t *testing.T) {
 	const ws = "test-workspace-id"
 
 	wantIDs := map[string]bool{}
+	var purgedID string
 	withStore(t, ctx, src, func(st *Store) {
 		epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "Epic", IssueType: "epic", Topic: "recovery", Prefix: "links"})
 		if err != nil {
@@ -325,6 +326,14 @@ func TestDeterministicMapCleanAhead(t *testing.T) {
 		if _, err := st.Apply(ctx, solo.ID, storage.Change{Action: model.Start{Assignee: "claude"}, Actor: "claude", Reason: "begin"}); err != nil {
 			t.Fatalf("start solo: %v", err)
 		}
+		purged, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "Purged task", IssueType: "task", Topic: "recovery", Prefix: "links", ParentID: epic.ID})
+		if err != nil {
+			t.Fatalf("create purged: %v", err)
+		}
+		if _, err := st.Purge(ctx, storage.PurgeInput{IssueID: purged.ID, Actor: "claude"}); err != nil {
+			t.Fatalf("purge: %v", err)
+		}
+		purgedID = purged.ID
 		for _, id := range []string{epic.ID, child.ID, solo.ID} {
 			wantIDs[id] = true
 		}
@@ -359,6 +368,14 @@ func TestDeterministicMapCleanAhead(t *testing.T) {
 			t.Fatalf("issue %q lost across map+apply; got %v", id, gotIDs)
 		}
 	}
+	// A salvaged store that lost its purge records would let the next sync
+	// bring the purged ticket back, so the record crosses the lifeboat too.
+	if len(export.Purges) != 1 || export.Purges[0].IssueID != purgedID {
+		t.Fatalf("purges across map+apply = %+v, want the record of %s", export.Purges, purgedID)
+	}
+	if findings := countFindings(dump, mapping, export); len(findings) != 0 {
+		t.Fatalf("count conservation findings = %+v, want none", findings)
+	}
 
 	dst := filepath.Join(t.TempDir(), "dst")
 	withStore(t, ctx, dst, func(st *Store) {
@@ -378,6 +395,13 @@ func TestDeterministicMapCleanAhead(t *testing.T) {
 		}
 		if epic.StatusValue() != "" {
 			t.Fatalf("rebuilt epic status = %q, want empty (NULL)", epic.StatusValue())
+		}
+		rebuilt, err := st.Export(ctx)
+		if err != nil {
+			t.Fatalf("export rebuilt: %v", err)
+		}
+		if len(rebuilt.Purges) != 1 || rebuilt.Purges[0].IssueID != purgedID {
+			t.Fatalf("rebuilt purges = %+v, want the record of %s", rebuilt.Purges, purgedID)
 		}
 	})
 }

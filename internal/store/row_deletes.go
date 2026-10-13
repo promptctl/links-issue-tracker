@@ -11,13 +11,13 @@ import (
 // The per-table row deletes, and the primary-key types that address them.
 //
 // They live apart from both of their callers on purpose. Two layers need them —
-// the ordinary CRUD commands (RemoveRelation, RemoveLabel, DeleteComment) and
+// the commands (Purge, RemoveRelation, RemoveLabel, DeleteComment) and
 // the reconcile replay's delta — and a primitive shared by two layers belongs
 // under both rather than inside whichever one happened to need it first.
 // Holding them in the diff layer would make the CRUD commands reach UP into it
 // for a statement that has nothing to do with diffing.
 // [LAW:one-way-deps] everything here depends on the schema and nothing above it,
-// so all four callers depend downhill.
+// so every caller depends downhill.
 //
 // This is also why the deletes do not simply sit beside the insert*Tx helpers
 // in import_export.go, which would be the tidier-looking arrangement: the two
@@ -48,17 +48,19 @@ type labelKey struct {
 // lives, the same way the restore/replay whole-row INSERTs route through one
 // insert*Tx each.
 //
-// Three of the five have two callers, and that is what made sharing them worth
-// doing: relations, comments and labels are each deleted both by the replay's
-// delta and by an ordinary CRUD command (RemoveRelation, DeleteComment,
-// RemoveLabel). The other two have only the delta, and in both cases that is
-// structural rather than an omission waiting to be filled. Ordinary issue
-// deletion is the soft DeletedAt stamp, so no CRUD path hard-deletes an issue
-// row at all. Event history is append-only from the CRUD side: events ARE
-// inserted one at a time as things happen (store.go), but nothing outside this
-// delta removes one by id — an event goes away only when its issue's row does,
-// via the cascade. Looking for a CRUD caller of deleteIssueTx or deleteEventTx
-// will turn up nothing, and nothing is the correct answer.
+// Four of the six have two callers, and that is what made sharing them worth
+// doing: issues, relations, comments and labels are each deleted both by the
+// replay's delta and by a command (Purge, RemoveRelation, DeleteComment,
+// RemoveLabel). Ordinary issue deletion is the soft DeletedAt stamp; Purge is
+// the one command that removes the row. The other two have only the delta,
+// and in both cases that is structural rather than an omission waiting to be
+// filled. Event history is append-only from the CRUD side: events ARE inserted
+// one at a time as things happen (store.go), but nothing outside this delta
+// removes one by id — an event goes away only when its issue's row does, via
+// the cascade. And no command un-purges, so a purge record leaves only when a
+// replay's next export does not hold it. Looking for a CRUD caller of
+// deleteEventTx or deletePurgeTx will turn up nothing, and nothing is the
+// correct answer.
 //
 // That is deliberately narrower than "the only DELETE against this table," and
 // the difference is a real one rather than an exception being excused. These
@@ -102,6 +104,12 @@ func deleteLabelTx(ctx context.Context, tx *sql.Tx, key labelKey) (int64, error)
 // Deleting an event takes its issue_event_changes rows with it.
 func deleteEventTx(ctx context.Context, tx *sql.Tx, id string) (int64, error) {
 	return execDelete(ctx, tx, `DELETE FROM issue_events WHERE id = ?`, fmt.Sprintf("issue event %s", id), id)
+}
+
+// deletePurgeTx deletes one purges row by its primary key, model.PurgeKey.
+func deletePurgeTx(ctx context.Context, tx *sql.Tx, key model.PurgeKey) (int64, error) {
+	return execDelete(ctx, tx, `DELETE FROM purges WHERE issue_id = ? AND issue_created_at = ?`,
+		fmt.Sprintf("purge record %s@%s", key.IssueID, key.IssueCreatedAt), key.IssueID, key.IssueCreatedAt)
 }
 
 // execDelete runs one delete and reports how many rows it removed, naming the

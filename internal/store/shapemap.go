@@ -173,6 +173,7 @@ const (
 	collLabels       collection = "labels"
 	collEvents       collection = "events"
 	collEventChanges collection = "event_changes"
+	collPurges       collection = "purges"
 )
 
 type targetField struct {
@@ -261,6 +262,8 @@ func buildTargetRegistry() map[TargetKey]targetField {
 	add(collEventChanges, TransformIdentity, required, "event_id", "field")
 	addMulti(collEventChanges, TransformIdentity, []Transform{TransformLegacyStatus}, optional, "from")
 	addMulti(collEventChanges, TransformIdentity, []Transform{TransformLegacyStatus}, optional, "to")
+	add(collPurges, TransformIdentity, required, "issue_id", "purged_by")
+	add(collPurges, TransformTimestamp, required, "issue_created_at", "purged_at")
 	return reg
 }
 
@@ -593,6 +596,7 @@ func assembleExport(workspaceID string, records map[collection][]map[string]any)
 		Comments:    []model.Comment{},
 		Labels:      []model.Label{},
 		Events:      []model.IssueEvent{},
+		Purges:      []model.Purge{},
 	}
 	for _, rec := range records[collIssues] {
 		issue, err := buildIssue(rec)
@@ -662,6 +666,14 @@ func assembleExport(workspaceID string, records map[collection][]map[string]any)
 		})
 	}
 	export.Events = events
+	for _, rec := range records[collPurges] {
+		export.Purges = append(export.Purges, model.Purge{
+			IssueID:        cellString(rec["issue_id"]),
+			IssueCreatedAt: cellTime(rec["issue_created_at"]),
+			PurgedAt:       cellTime(rec["purged_at"]),
+			PurgedBy:       cellString(rec["purged_by"]),
+		})
+	}
 	return export, nil
 }
 

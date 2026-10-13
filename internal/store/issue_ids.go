@@ -26,9 +26,12 @@ func newIssueID(ctx context.Context, tx *sql.Tx, prefix string, topic string, ti
 	if err != nil {
 		return "", err
 	}
+	// A purged id is taken for good: other tickets' text, follow-ups and
+	// redirects still name it, and a new ticket wearing it would answer for
+	// the purged one.
 	return issueid.Mint(namespace, content, population, func(candidate string) (bool, error) {
 		var count int
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM issues WHERE id = ?`, candidate).Scan(&count); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM issues WHERE id = ?) + (SELECT COUNT(*) FROM purges WHERE issue_id = ?)`, candidate, candidate).Scan(&count); err != nil {
 			return false, err
 		}
 		return count > 0, nil

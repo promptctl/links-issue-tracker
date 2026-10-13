@@ -1263,24 +1263,27 @@ func TestReconcileCreatedTablesMatchBaselineConstraintNames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
-	// FK-aware drop order: dependents before parents.
-	stmts := []string{
-		`DROP TABLE issue_event_changes`,
-		`DROP TABLE issue_events`,
-		`DROP TABLE labels`,
-		`DROP TABLE comments`,
-		`DROP TABLE relations`,
-		`DROP TABLE issues`,
-	}
-	for _, stmt := range stmts {
-		if err := first.ExecRawForTest(ctx, stmt); err != nil {
-			_ = first.Close()
-			t.Fatalf("drop %q error = %v", stmt, err)
-		}
-	}
 	// Force phaseAdopt: leave meta in place so verifyBaselineShape sees
-	// >0 canonical tables present, then strip goose so adoption fires.
-	hijackToPreGoose(t, first)
+	// >0 canonical tables present, then strip goose so adoption fires. The
+	// drops run after the revert to baseline, so the tables later migrations
+	// add are gone too and adoption replays them.
+	hijackToPreGooseReshaping(t, first, func() {
+		// FK-aware drop order: dependents before parents.
+		stmts := []string{
+			`DROP TABLE issue_event_changes`,
+			`DROP TABLE issue_events`,
+			`DROP TABLE labels`,
+			`DROP TABLE comments`,
+			`DROP TABLE relations`,
+			`DROP TABLE issues`,
+		}
+		for _, stmt := range stmts {
+			if err := first.ExecRawForTest(ctx, stmt); err != nil {
+				_ = first.Close()
+				t.Fatalf("drop %q error = %v", stmt, err)
+			}
+		}
+	})
 	if err := first.Close(); err != nil {
 		t.Fatalf("Close(first) error = %v", err)
 	}

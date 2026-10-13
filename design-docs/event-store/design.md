@@ -44,7 +44,7 @@ Tokens are stable; cite them from code comments, tickets, and reviews as
 
 | Token | One line |
 |---|---|
-| `INV:append-only` | events are written once and never modified, rewritten, or dropped |
+| `INV:append-only` | events are written once and never modified, rewritten, or dropped — save by a purge, which drops one ticket's events (§store) |
 | `INV:deterministic-fold` | same event set ⇒ byte-identical derived state on every machine; only a fold-version bump may change it |
 | `INV:single-writer-ref` | each ref has exactly one writing checkout; all cross-writer coordination is read-side |
 | `INV:preserve-unknown` | an event a reader cannot interpret is carried and surfaced, never discarded |
@@ -167,6 +167,42 @@ sequence, and teaches the codebase that history is negotiable. Content leaves
 the store in exactly two ways: purge removes one ticket's events entirely
 (charter #7), and cryptographic erasure destroys content within a ticket
 (§security-and-config).
+
+**Purge** removes one ticket the way a git history rewrite removes content,
+in three parts.
+
+- *The record.* A purge is an event like any other mutation, appended to the
+  purging checkout's own ref: it names the ticket by its issue id and birth
+  (`created_at`) and carries nothing else of the ticket. Nothing un-purges, and the purge event is what reaches every
+  other store.
+- *The fold.* The fold drops every event whose subject is a purged id,
+  wherever it sits and whenever it was minted — before the purge, or after it
+  by a writer that had not yet received it. The ticket is gone from derived
+  state on every machine the purge event has reached, the moment it arrives,
+  whatever that machine had done to it. Another ticket's events stay: an edge
+  that names the purged id folds to no edge, as an edge to an id that never
+  existed does, and a mention in text stays text.
+- *The rewrite.* Each checkout rewrites its own ref without the purged
+  ticket's events — a commit that carried only them is dropped, one that
+  carried them beside other events is re-made without them — including the
+  dead writers' and inbox chains it anchors through sweep parents, and pushes
+  the new head as a compare-and-swap against the head it replaced. This is
+  the one exception to `INV:append-only` and to fast-forward-only refs, and it
+  is checkable: a receiver accepts a ref moving non-fast-forward only when
+  every event the new chain lacks belongs to an id a purge event names, and
+  refuses any other rewrite as the eraser the store does not have. Surviving
+  events keep their bytes and their per-event signatures; only the commits
+  around them change. A checkout writes only its own ref
+  (`INV:single-writer-ref`), so the purge completes as each writer next runs,
+  and the fold hides the events everywhere in the meantime. Once nothing
+  reaches the objects, gc removes them: locally at the next gc, and on the
+  remote only when its host collects garbage, as after any git force-push.
+
+The purged id is never reused: ids derive from writer and position
+(§events). Before the switch, the Dolt store keeps the same promise with its
+`purges` table — a purge record per purged ticket, named by its id and
+birth (`created_at`), unioned by every merge — and
+the backfill (§migration) carries each record over as a purge event.
 
 **Ref hygiene.** Writer refs are per-checkout, and checkouts die; the store
 prunes refs whose checkout the existing dead-checkout detection (work-claims
@@ -383,7 +419,7 @@ remains the normative home for the layers themselves.
   rule keyed to what a receiver happens to know would fold differently on
   different machines); see OPEN #6.
 - **Erasure within a ticket is cryptographic.** Apart from purging a whole
-  ticket (charter #7), the store has no physical delete (`INV:append-only`,
+  ticket (charter #7, §store), the store has no physical delete (`INV:append-only`,
   restated where it bites: even an owner cannot recall one field's pushed
   plaintext). Content that may ever need destroying is
   ciphertext whose key can be shredded — which moves the read layer's
@@ -460,7 +496,10 @@ engines at once rather than refining it.
 
 S1 is also where history backfills: the existing backlog replays into events
 via export, with a provenance marker so pre-migration history is attributed
-honestly rather than re-authored.
+honestly rather than re-authored. A ticket purged before the backfill has no
+rows in the export to replay, and the export's purge records backfill as purge
+events, so a store that still held the ticket when it backfilled drops it as
+the record arrives, the same as after the switch (§store).
 
 Gate scope, stated once: the budgets gate binds from S1 onward — at S0 no
 event store exists to measure, so S0's gate is behavioral identity alone.
