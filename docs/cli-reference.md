@@ -394,6 +394,8 @@ include the actor and a human-readable timestamp in the user's current timezone.
 A change to a long text field (`description`, `prompt`) shows in the trail as a
 step between numbered versions, `description: v1 → v2`, without the text;
 `lit history <id> --version description@1` prints the text a version held.
+The numbers follow the history's order, so a sync that merges in an older
+edit renumbers the versions after it.
 For an issue inside an epic, also prints the epic plan — siblings in rank order with
 status and any cross-epic dependencies. Exits 4 if the ID doesn't exist.
 

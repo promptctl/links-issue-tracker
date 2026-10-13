@@ -396,10 +396,11 @@ func printIssueHistory(w io.Writer, detail model.IssueDetail) error {
 // textVersions is every text a long text field is recorded holding, each
 // once, numbered from 1 in the order its record first shows it: the texts
 // the trail's changes move between, then the current text if the trail never
-// reaches it. A version names a text, not a position in a chain — two edits
-// made at once on two machines and merged by sync both step from the number
-// of the text they started from, and a change back to an earlier text returns
-// to its number. The empty text is no version; the trail shows it as -, as it
+// reaches it. Each text has one number, so two edits made at once on two
+// machines and merged by sync both step from the number of the text they
+// started from, and a change back to an earlier text returns to its number.
+// The numbers follow the record's order, so a sync that merges in an edit
+// older than ones already here renumbers the texts after it. The empty text is no version; the trail shows it as -, as it
 // shows an empty short field. A field never changed has one version, its
 // current text.
 func textVersions(detail model.IssueDetail, field storage.LongTextField) []string {

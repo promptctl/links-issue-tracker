@@ -194,7 +194,7 @@ func TestRunHistoryVersionPastTheRecordIsNotFound(t *testing.T) {
 // never produce: sync merges two machines' edits from one text as a union, a
 // change can go back to an earlier text or empty the field, and a write can
 // change the text without recording a change (a reconciled merge, a prompt
-// edited before prompt changes were recorded). A version names a text, so each
+// edited before prompt changes were recorded). Each text has one number, so each
 // of those reads true: both merged edits step from the text they started
 // from, the revert returns to its number, the emptied field shows -, and the
 // unrecorded current text is still a version --version prints.
