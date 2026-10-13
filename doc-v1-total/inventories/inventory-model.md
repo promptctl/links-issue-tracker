@@ -699,8 +699,26 @@ the Go field name when the tag name is empty. Pinned by
   `model.go`), `Events` (`events`).
 - `Export` — `model.go`: `Version int` (`version`), `WorkspaceID`
   (`workspace_id`), `ExportedAt` (`exported_at`), `Issues`, `Relations`,
-  `Comments`, `Labels`, `Events`. `ExportVersion = 3` — `model.go`: the
-  version every store writes.
+  `Comments`, `Labels`, `Events`, `Purges []Purge` (`purges`).
+  `ExportVersion = 4` — `model.go`: the version every store writes; version 4
+  is the first to carry purge records.
+- `Purge` — `purge.go`: `IssueID` (`issue_id`), `PurgedAt time.Time`
+  (`purged_at`), `PurgedBy` (`purged_by`). The record of a permanently removed
+  issue: the id and the act, no content.
+- `UnionPurges(sets ...[]Purge) []Purge` — `purge.go`: one record per issue
+  id, sorted by `IssueID` ascending. Between two records of one id the one
+  ranked first by `purgeOrder` is kept: earlier `PurgedAt` (`time.Time.Compare`),
+  then lesser `PurgedBy` (`strings.Compare`); on a full tie the record seen
+  first is kept. Pinned by `TestUnionPurgesKeepsTheEarliestRecordOfEachID`
+  (`purge_test.go`).
+- `(Export).ApplyPurges(purges []Purge) Export` — `purge.go`: returns a copy
+  with `Purges = purges` and with every row of a purged id filtered out: issues
+  by `ID`, relations whose `SrcID` or `DstID` is purged, comments, labels and
+  events by `IssueID`. Filtering is over clones (`keepRows`), so the receiver's
+  slices are untouched and a nil collection stays nil. Rows of other issues are
+  kept unchanged, including a `FollowsUp`, redirect target, or text naming a
+  purged id. Pinned by `TestApplyPurgesDropsEveryRowOfAPurgedIssueAndNothingElse`
+  (`purge_test.go`).
 
 ## 2.9 `Attribution` — `model.go`
 
@@ -743,7 +761,8 @@ may be carried, because the database syncs to shared remotes
   `FieldChange{Field: "status", From: h.FromStatus, To: h.ToStatus}`
   (`model.go`). v2+ exports ignore any `history` array. If `raw.Version < 3`,
   every relation's `Type` is read through `RelationTypeFromStored`, so a
-  `blocks` edge decodes as `blocked-by` (`model.go`). The decoded value's
+  `blocks` edge decodes as `blocked-by` (`model.go`). `purges` is read at every
+  version; a pre-v4 file has none (`model.go`). The decoded value's
   `Version` is `ExportVersion` whatever version was read, since it is now in
   the current format (`model.go`). Pinned by
   `TestExportDecodeRenamesLegacyBlocksEdges`, `relation_type_test.go`.

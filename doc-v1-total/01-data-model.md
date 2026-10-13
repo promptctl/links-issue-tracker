@@ -101,7 +101,7 @@ The complete transition table (`retention.go`):
 | archived | error | → live | → deleted | error |
 | deleted | error | error | error | → live |
 
-Deleting an archived issue drops the archive stamp, so a later `restore` always lands on `live`, never back on `archived` (`retention.go`).
+Deleting an archived issue drops the archive stamp, so a later `restore` always lands on `live`, never back on `archived` (`retention.go`). Permanent removal is not a retention state: a purge deletes the issue's row and leaves a purge record (see [Export format](#export-format)).
 
 An issue that is archived or deleted is **frozen**. The single program-wide definition of "still unfinished work" is `InPlay`: not frozen and not closed (`model.go`). Readiness gating and claim derivation both read this one predicate.
 
@@ -181,7 +181,9 @@ Global ordering uses **lexicographic fractional indexing**: a rank is a string o
 
 ## Export format
 
-`Export` is the interchange shape for sync files, backups, and `lit export`: `version`, `workspace_id`, `exported_at`, plus arrays of issues, relations, comments, labels, and events (`model.go`). Current version is 3 (`ExportVersion`, `model.go`). Version 1 and 2 files spell the `blocked-by` type `blocks`; the decoder reads every relation type of a version < 3 file through `RelationTypeFromStored`, which maps `blocks` to `blocked-by` and passes every other spelling through (`model.go`, `relation_type.go`). Version 1 files carried a `history` array instead of `events`; the decoder converts each v1 history row into an event with a single `status` field-change and a deterministic content-derived ID (`evt-v1-` + 16 hex chars of SHA-256), so merging two v1 exports cannot mint duplicate IDs for different events (`model.go`). v2+ files' `history` arrays are ignored.
+`Export` is the interchange shape for sync files, backups, and `lit export`: `version`, `workspace_id`, `exported_at`, plus arrays of issues, relations, comments, labels, events, and purges (`model.go`). Current version is 4 (`ExportVersion`, `model.go`); the decoder reads `purges` whatever the file's version, and a file written before version 4 has none. Version 1 and 2 files spell the `blocked-by` type `blocks`; the decoder reads every relation type of a version < 3 file through `RelationTypeFromStored`, which maps `blocks` to `blocked-by` and passes every other spelling through (`model.go`, `relation_type.go`). Version 1 files carried a `history` array instead of `events`; the decoder converts each v1 history row into an event with a single `status` field-change and a deterministic content-derived ID (`evt-v1-` + 16 hex chars of SHA-256), so merging two v1 exports cannot mint duplicate IDs for different events (`model.go`). v2+ files' `history` arrays are ignored.
+
+A **purge record** (`Purge`, `internal/model/purge.go`) is `issue_id`, `purged_at`, `purged_by` — the id and the act, never the issue's content. `UnionPurges` combines purge sets into one, sorted by issue id ascending; when two sets each hold a record of one id, the earlier `purged_at` is kept, and at an equal instant the lexicographically lesser `purged_by` (`purge.go`). `Export.ApplyPurges(purges)` returns the export with `purges` as its purge set and with no row belonging to a purged id: the issue itself, every relation with a purged endpoint, and the purged issue's comments, labels, and events. Rows of other issues are untouched, so a description, `follows_up`, or redirect target that names a purged id keeps naming it (`purge.go`).
 
 ## Serialization boundary rules
 

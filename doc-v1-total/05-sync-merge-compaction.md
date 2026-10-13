@@ -75,7 +75,7 @@ Scratch roles: `read` is hard-reset once per folded commit and keeps nothing; `s
 
 **The merge/settle/replay tail** (`mergeAndReplay`, `sync_reconcile.go`):
 
-1. Export the local head and the remote head at fixed anchors (each read = checkout the read branch, hard-reset to the commit, **lift the working set to the current schema**, then run the normal export — so schema skew between the two sides is healed before comparison).
+1. Export the local head and the remote head at fixed anchors (each read = checkout the read branch, hard-reset to the commit, `DOLT_CLEAN` away untracked tables an earlier lift left in the working set, **lift the working set to the current schema**, then run the normal export — so schema skew between the two sides is healed before comparison).
 2. `merge.ThreeWay(base, ours, theirs)` — the base is the export at the merge-base commit for a shared-history reconcile, or the empty `model.Export{}` for combine, which the merge reads as "both sides changed every field from empty", i.e. a two-way union.
 3. If the merge holds any id collision, set state `id_collision`, carry the collisions, clear the pending set, and return with **nothing committed** — the data branch is still at the local head. This check runs before the settle policy, so neither policy proceeds past a collision (`sync_reconcile.go`).
 4. Apply the settle policy. If any prose conflicts remain pending, return `prose_pending` with the pending set and **nothing committed** — the data branch is still at the local head.
@@ -113,16 +113,18 @@ With approval:
 
 The replay never issues UPDATEs. `diffExports` (`internal/store/export_delta.go`) compares two whole exports table by table:
 
-- Per table, rows are indexed by key — issues by `id`; relations by `(src_id, dst_id, type)`; comments by `id`; labels by `(issue_id, name)`; events by `id`. A live row absent from the wanted set (or whose persisted projection differs, by `reflect.DeepEqual`) is queued for removal; a wanted row absent from live (or differing) is queued for addition. A changed row therefore appears in both lists — delete then re-insert; there is no UPDATE. Input slices are walked in order, so identical inputs produce an identical statement sequence.
+- Per table, rows are indexed by key — issues by `id`; relations by `(src_id, dst_id, type)`; comments by `id`; labels by `(issue_id, name)`; events by `id`; purge records by `issue_id`. A live row absent from the wanted set (or whose persisted projection differs, by `reflect.DeepEqual`) is queued for removal; a wanted row absent from live (or differing) is queued for addition. A changed row therefore appears in both lists — delete then re-insert; there is no UPDATE. Input slices are walked in order, so identical inputs produce an identical statement sequence.
 - Issues are compared through `issueRowValues` (row fields only) rather than the whole hydrated struct, because the hydrated view carries labels and (for containers) child-derived lifecycle — comparing those would make every label edit and child status change look like an issue-row change. Other tables compare the whole row; an event's `Changes` are part of its value.
-- **Cascade rule**: the issues diff is computed first; each child table's "live" input is filtered to the post-cascade survivors (a relation cascades away if *either* endpoint is removed; comments/labels/events by their issue). This mirrors the schema fact that every child table is `ON DELETE CASCADE` from issues (and `issue_event_changes` from `issue_events`).
-- Application order: issues, relations, comments, labels, events; per table, all removals before all additions. Deletion row counts are ignored.
+- **Cascade rule**: the issues diff is computed first; each child table's "live" input is filtered to the post-cascade survivors (a relation cascades away if *either* endpoint is removed; comments/labels/events by their issue). This mirrors the schema fact that every child table is `ON DELETE CASCADE` from issues (and `issue_event_changes` from `issue_events`). Purge records reference no issue row and are diffed unfiltered.
+- Application order: issues, relations, comments, labels, events, purges; per table, all removals before all additions. Deletion row counts are ignored.
 
 ## Merge rules (`internal/merge`)
 
 The merge is pure — no IO, no clock, no error returns (a refused merge is reported as a `bool` or a `*Collision` value) — and fully deterministic. Field-level tie-breaks are symmetric: both machines compute the same winner without knowing which side is "ours". The export's `WorkspaceID` and `ExportedAt` come from the local side, as do a collided id's row and child rows. Causality comes from the merge-base, never from timestamps. Both `UpdatedAt` and `CreatedAt` are part of the change-detection projection. Beyond that, `UpdatedAt` decides nothing, and `CreatedAt` decides one thing: whether two rows that share an id are one ticket, and with it whether a base row is that ticket's ancestor (`collision.go`). Neither picks a winner between two versions of one ticket.
 
 ### Export level (`ThreeWay`)
+
+Before any row is compared, the three sides' purge sets are combined (`model.UnionPurges(base.Purges, local.Purges, remote.Purges)`) and that union is applied to all three sides (`Export.ApplyPurges`), so a purged id, and every row belonging to it, is absent from base, local, and remote alike. Nothing below can keep it — not an edit on the side that had not purged it, and not a merge with no common ancestor (`merge.go`; test `TestThreeWayAPurgeOutranksAConcurrentEdit`, `internal/merge/purge_test.go`).
 
 Issue IDs from base ∪ local ∪ remote, sorted ascending (a duplicate ID within one export lets the last row win). Per ID, with `changed` = differs from base (no base ⇒ both sides count as changed):
 
@@ -132,10 +134,10 @@ Issue IDs from base ∪ local ∪ remote, sorted ascending (a duplicate ID withi
 | only one side changed | that side's row; if that side deleted it, the row is dropped |
 | both changed, both present, equal `CreatedAt` instants | field-wise `ResolveIssue` (below) |
 | both changed, both present, different `CreatedAt` instants | id collision: local row kept unchanged, collision recorded (below) |
-| both changed, one present | the surviving edit is preserved (edit beats concurrent delete) |
+| both changed, one present | the surviving edit is preserved (edit beats concurrent delete) — reached only by a row removed without a purge record, since purged ids were dropped from all three sides first |
 | both changed, neither present | converged removal |
 
-Deletion here is whole-row absence; soft deletion (retention) travels as a field on a present row. Change detection compares a projection of every persisted field including the whole leaf-lifecycle payload (status, closed_at, resolution, redirect_target — so a resolution-only re-close registers as a change) with nil and empty label slices normalized equal (JSON round-trip drift does not synthesize changes). `ThreeWay` panics on an unhydrated leaf issue.
+Deletion here is whole-row absence; soft deletion (retention) travels as a field on a present row, and a purge travels as a purge record. Change detection compares a projection of every persisted field including the whole leaf-lifecycle payload (status, closed_at, resolution, redirect_target — so a resolution-only re-close registers as a change) with nil and empty label slices normalized equal (JSON round-trip drift does not synthesize changes). `ThreeWay` panics on an unhydrated leaf issue.
 
 **Id collisions** (`internal/merge/collision.go`). In the both-changed, both-present case `ThreeWay` calls `Classify(basePtr, localIssue, remoteIssue, local.WorkspaceID, remote.WorkspaceID)` before any field merge (`merge.go`). `Classify` compares the two rows' `CreatedAt` with `time.Time.Equal`, so two encodings of one instant in different UTC offsets count as equal (`collision.go`):
 
@@ -144,7 +146,7 @@ Deletion here is whole-row absence; soft deletion (retention) travels as a field
 
 `MergeResult.Collisions` holds the collisions sorted by issue id (`merge.go`, `collision.go`). A merge that holds any collision withholds its export: `Settled()` reports ok only when both `Pending` and `Collisions` are empty, and `Provisional()` reports ok only when `Collisions` is empty (`merge.go`).
 
-Merged-export assembly: issues sorted by ID; `Version` = `model.ExportVersion`, the format every decoded export is already in (`merge.go`); `WorkspaceID` and `ExportedAt` are taken from local, remote's discarded. Side tables:
+Merged-export assembly: issues sorted by ID; `Version` = `model.ExportVersion`, the format every decoded export is already in (`merge.go`); `WorkspaceID` and `ExportedAt` are taken from local, remote's discarded; `Purges` is the union computed before the comparison. Side tables:
 
 | Table | Merge | Collision rule | Referential filter |
 |---|---|---|---|
@@ -202,7 +204,7 @@ Reporting: the delta reads `"journal %s -> %s, old-generation archives %d -> %d"
 
 ## Schema migrations
 
-Schema is versioned by [goose](https://github.com/pressly/goose) migrations embedded in the binary (`internal/store/migrations/`, embed glob `*.sql` only). Current registry: versions 1–8. The version table is `goose_db_version`; the baseline version constant is 1.
+Schema is versioned by [goose](https://github.com/pressly/goose) migrations embedded in the binary (`internal/store/migrations/`, embed glob `*.sql` only). Current registry: versions 1–9. The version table is `goose_db_version`; the baseline version constant is 1.
 
 ### The migration runner
 
@@ -232,7 +234,7 @@ Every store open runs `migrate` (`internal/store/migration_runner.go`): a snapsh
 
 **The transient schema lift** (`liftWorkingSetToRegistry`): loops goose `UpByOne` to the registry max, commits nothing, takes no checkpoint and no snapshot; a nil-result/nil-error iteration fails loud rather than spinning. Its only caller is the reconcile, on a throwaway scratch branch — this is what heals schema skew between diverged sides.
 
-### The migration registry (v1–v5)
+### The migration registry (v1–v9)
 
 Every statement in every file is wrapped in goose `StatementBegin`/`StatementEnd` pairs; up sections carry **no** idempotency guards (bare `CREATE TABLE` / `ADD COLUMN`); only the baseline's down section uses `IF EXISTS`. Each migration ships a down section with a documented loss contract.
 
@@ -261,6 +263,8 @@ Plus eight indexes: `issues(status,priority,updated_at)`, `issues(item_rank(191)
 **v7 `00007_every_ticket_inside_a_container.sql`** — no column change; brings stored data under containment (`01-data-model.md`). One `INSERT … SELECT` computes every destination in a recursive CTE and writes the new edges; a `DELETE` then removes every parent-child edge onto a non-epic. The climb starts at each child whose parent is not an epic and that holds no epic parent beside it, walks up through non-epic ancestors, is depth-cut at 64, and is kept as a set (`UNION`, so a row reached two ways is kept once and a fork inside a loop of leaves does not multiply); the destination is the nearest epic any walk reached, the lowest id among epics at that depth, picked through grouped CTEs because the engine returns no rows for a subquery correlated on the recursive member. A child no walk took to an epic goes under the unfiled epic when it is a leaf and stays at the top level when it is an epic (its destination is itself, which writes no edge), as does an epic in a loop through a leaf; a child holding an epic parent beside a leaf parent keeps the epic edge. Every parentless leaf goes under the unfiled epic too. The unfiled epic is minted once per store: title `Unfiled tickets`, topic `unfiled`, id `<prefix>-unfiled-<hash>`: the prefix is the one most of the store's top-level ids carry, read back the way `issueid.PrefixOf` reads them, `lit` when none is readable; the hash is the first four hex digits of SHA-256 over `<prefix>-unfiled`, so two checkouts of one workspace mint one id and the one that already holds it (received through sync) inserts nothing; `created_at` is the fixed authoring date `2026-10-12T00:00:00Z` for the same reason; its rank is the best key among the live top-level leaves it absorbs with `0` appended — the next key after it, so the leaf keeps its own key — or unranked. Each new edge is stamped with the child's `created_at` and `links`, and a ticket that was a lane of one — a top-level leaf, or a child of a leaf held by no epic — has its `lane` set to its own id, so it stays one. A store with nothing to home keeps no epic. Down (loss contract): resets every `lane` equal to its row's id to the default lane, deletes the parent edges onto the unfiled epic (recognized by type, topic and title) and the epic itself; a child moved under an epic above it stays there. Tests: `TestContainmentMigrationHomesEveryLeaf` and `TestContainmentMigrationIsIdempotentAcrossCheckouts` (`internal/store/migration_containment_test.go`).
 
 **v8 `00008_blocked_by_edge.sql`** — no column change; renames the dependency relation type. Up drops the one CHECK `relations` carries, found by table in `information_schema.table_constraints` whatever its name (a pre-goose store declared it inline, so the engine named it per store) and dropped through a prepared statement, so none or more than one fails the migration; then rewrites every `type = 'blocks'` row to `'blocked-by'` with its `src_id`/`dst_id` untouched (src is the ticket that waits, dst the ticket it waits for), and re-adds the check as `relations_type_check`, `type IN ('blocked-by','parent-child','related-to')`. Down is the exact inverse, dropping the check the same way and restoring `'blocks'` and the v1 check; loss contract: none, the rename is a bijection on the type column. Test: `TestMigrationRenamesBlocksEdgesKeepingTheirMeaning` (`internal/store/migration_blocked_by_test.go`), on a store whose CHECK carries an engine-generated name.
+
+**v9 `00009_purges.sql`** — creates `purges(issue_id VARCHAR(191) NOT NULL, purged_at VARCHAR(64) NOT NULL, purged_by TEXT NOT NULL, PRIMARY KEY (issue_id))`, one row per purged issue, with **no foreign key**: the issue it names no longer exists. No backfill. Down drops the table; loss contract: the purged issues stay gone, but a store stepped back below v9 no longer knows which ids were purged, so a sync with a store that still holds one can bring it back and minting can hand a purged id out again; the records are recoverable only from a pre-downgrade dbsnapshot. No test exercises the migration's Up or Down by itself; the table's behavior is pinned by `TestRestoreNeverUnpurges` (`internal/store/purge_test.go`) and `TestDeterministicMapCleanAhead` (`internal/store/shapemap_test.go`).
 
 **Registry invariants, test-enforced**: baseline bytes frozen by SHA-256 pin; every v2+ migration content-pinned by SHA-256 and filename (`detectVersionReuse` classifies content-changed / renamed / unpinned / deleted / duplicate, with content-change taking priority over rename and duplicates suppressing content checks); every migration must have a non-empty, non-comment down section (comment-aware parser with 15 pinned accept/reject shapes); filename version parsing is exact (`<digits>_<name>.sql`, rejecting signs, whitespace, leading-junk — 12 pinned cases); `MaxVersion` must agree with a fresh registry scan (no hard-coded literal) and be ≥ the baseline.
 

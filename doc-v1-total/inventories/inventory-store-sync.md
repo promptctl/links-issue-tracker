@@ -474,7 +474,8 @@ Fields (`sync_schema_guard.go`): `Remote`, `Branch`, `RemoteVersion int64`, `Bin
 
 `resetAndLift(ctx, commit)` (`sync_reconcile.go`):
 1. `CALL DOLT_RESET('--hard', commit)`; error `"reset scratch to %q: %w"`.
-2. `s.liftWorkingSetToRegistry(ctx)`; error `"lift %q to current schema: %w"`.
+2. `CALL DOLT_CLEAN()` (`execProcedureDiscard`, `sync.go`); error `"clean scratch at %q: %w"`. A hard reset keeps untracked tables, and an earlier lift on the branch leaves the tables its migrations created untracked (the lift commits nothing); the clean drops them so the working set is exactly the commit's (`sync_reconcile.go`).
+3. `s.liftWorkingSetToRegistry(ctx)`; error `"lift %q to current schema: %w"`.
 Only ever run on a scratch branch.
 
 `exportAtCommit(ctx, readBranch, commit)` (`sync_reconcile.go`):
@@ -654,7 +655,7 @@ Detection-only: `TestSyncReconcileDetectsUnrelatedHistories` (`sync_unrelated_te
 ### 7.1 Delta types
 
 `tableDelta[K comparable, R any]{remove []K; add []R}` (`export_delta.go`); `empty()` at `export_delta.go`.
-`exportDelta{issues, relations, comments, labels, events}` (`export_delta.go`), ordered so issues precede everything referencing them. `exportDelta.empty()` at `export_delta.go`.
+`exportDelta{issues, relations, comments, labels, events, purges}` (`export_delta.go`), ordered so issues precede everything referencing them. `exportDelta.empty()` at `export_delta.go`.
 
 ### 7.2 `diffTable` — the per-table comparison rule
 
@@ -668,7 +669,7 @@ Determinism: the input slices are walked, not the maps, so identical inputs prod
 
 ### 7.3 Projections
 
-- `wholeRow[R](row R) any { return row }` (`export_delta.go`) — used for relations, comments, labels, and events. An event's `Changes` are part of its value, so an event whose changes differ is a changed row (`export_delta.go`).
+- `wholeRow[R](row R) any { return row }` (`export_delta.go`) — used for relations, comments, labels, events, and purges. An event's `Changes` are part of its value, so an event whose changes differ is a changed row (`export_delta.go`).
 - `issues` uses `issueRowValues(i)` because `model.Issue` is a hydrated view that also carries labels from another table and, for a container, a lifecycle derived from its children; comparing those made every label edit and every child status change look like an issue-row change (`export_delta.go`).
 
 ### 7.4 Keys
@@ -678,6 +679,7 @@ Determinism: the input slices are walked, not the maps, so identical inputs prod
 - comments: `c.ID` (`export_delta.go`)
 - labels: `labelKey{issueID, name}` (`export_delta.go`)
 - events: `e.ID` (`export_delta.go`)
+- purges: `p.IssueID` (`export_delta.go`)
 Primary-key types live in `/Users/bmf/code/links-issue-tracker/internal/store/row_deletes.go` (`export_delta.go`).
 
 ### 7.5 Cascade rule
@@ -691,10 +693,11 @@ Primary-key types live in `/Users/bmf/code/links-issue-tracker/internal/store/ro
    - labels: `survivors[l.IssueID]` (`export_delta.go`)
    - events: `survivors[e.IssueID]` (`export_delta.go`)
 The schema fact this rests on: every child table is `ON DELETE CASCADE` from issues (and `issue_event_changes` from `issue_events`) (`export_delta.go`).
+4. Purge records reference no issue row, so nothing cascades into them: `diffTable(prev.Purges, next.Purges, …)` runs unfiltered (`export_delta.go`).
 
 ### 7.6 Application order
 
-`applyExportDelta(ctx, tx, delta)` (`export_delta.go`) applies, in this exact order: issues, relations, comments, labels, events (`export_delta.go`), each via `applyTableDelta` (`export_delta.go`) which performs **all removals before all additions** for that table (`export_delta.go`). Row counts from deletions are deliberately ignored (`export_delta.go`).
+`applyExportDelta(ctx, tx, delta)` (`export_delta.go`) applies, in this exact order: issues, relations, comments, labels, events, purges (`export_delta.go`), each via `applyTableDelta` (`export_delta.go`) which performs **all removals before all additions** for that table (`export_delta.go`). Row counts from deletions are deliberately ignored (`export_delta.go`).
 
 ---
 
@@ -1021,6 +1024,7 @@ resolve_prose.go: `type Fingerprint string`; `fingerprintBytes = 6`; `(ProsePend
 
 ### 11.2 `ThreeWay` — export-level algorithm
 
+0. `purges := model.UnionPurges(base.Purges, local.Purges, remote.Purges)`, then `base, local, remote = base.ApplyPurges(purges), local.ApplyPurges(purges), remote.ApplyPurges(purges)` — before any row is compared, so a purged id and every row belonging to it are absent from all three sides and no branch below can keep it (merge.go; `UnionPurges`/`ApplyPurges` in `internal/model/purge.go`). Test `TestThreeWayAPurgeOutranksAConcurrentEdit` (`purge_test.go`): local purged/remote edited, remote purged/local edited, and no common ancestor all yield only the unpurged issue (with its edit), no relation, comment, or label of the purged one, and the purge record carried in the merged export.
 1. Three id→issue maps from `base.Issues`, `local.Issues`, `remote.Issues`; a duplicate id within one export lets the **last row in slice order** win (merge.go).
 2. Candidate id set = union of all three, **sorted ascending** (merge.go).
 3. Per id, a copied `*model.Issue` per side, `nil` when absent (merge.go).
@@ -1035,11 +1039,11 @@ The four-way presence/change branch (merge.go):
 | only remote changed | append `remoteIssue` if present; else nothing (merge.go) |
 | both changed, both present, `Classify` returns a `*Collision` | append the collision to the collision list and append `localIssue` unchanged; `ResolveIssue` is not called and no pending entry is added (merge.go) |
 | both changed, both present, `Classify` returns a `SameEntity` | `ResolveIssue(same)`; append `resolution.Provisional()` and append its `Pending...` to the export pending list (merge.go) |
-| both changed, local only | append `localIssue` — remote removed it, local edited → the surviving edit is preserved (merge.go) |
+| both changed, local only | append `localIssue` — remote removed it, local edited → the surviving edit is preserved (merge.go). Reached only for a row removed **without** a purge record; a purged id was dropped from all three sides in step 0 |
 | both changed, remote only | append `remoteIssue` (merge.go) |
 | both changed, neither present | append nothing — converged removal (merge.go) |
 
-`Classify` is called as `Classify(basePtr, localIssue, remoteIssue, local.WorkspaceID, remote.WorkspaceID)` (merge.go), so `ours` = local, `theirs` = remote, `oursWS = local.WorkspaceID`, `theirsWS = remote.WorkspaceID`. Deletion here is whole-row absence; soft deletion is a `DeletedAt` stamp on a present row and travels through the retention field instead (merge.go). The result's `Collisions` is `SortCollisions(collisions)` (merge.go).
+`Classify` is called as `Classify(basePtr, localIssue, remoteIssue, local.WorkspaceID, remote.WorkspaceID)` (merge.go), so `ours` = local, `theirs` = remote, `oursWS = local.WorkspaceID`, `theirsWS = remote.WorkspaceID`. Deletion here is whole-row absence; soft deletion is a `DeletedAt` stamp on a present row and travels through the retention field instead, and a purge travels as a purge record applied in step 0 (merge.go). The result's `Collisions` is `SortCollisions(collisions)` (merge.go).
 
 **`Classify`** (collision.go): when `ours.CreatedAt.Equal(theirs.CreatedAt)` is false it returns `(SameEntity{}, &Collision{IssueID: ours.ID, Ours: ours, Theirs: theirs})`; otherwise it returns a `SameEntity` carrying `ours`, `theirs`, both workspace ids and `ancestorOf(base, ours)`, with a nil `*Collision`. The test is `time.Time.Equal`, so two encodings of one instant in different offsets compare equal (collision.go). The base row takes no part in deciding a collision.
 
@@ -1078,6 +1082,7 @@ Tests: `merge_test.go` (nil vs empty `Labels` compare equal, so JSON round-trip 
 - `Comments = mergeComments(scope, local.Comments, remote.Comments)` — base not passed (merge.go).
 - `Labels = mergeLabels(scope, base.Labels, local.Labels, remote.Labels)` — the only three-way side-table (merge.go).
 - `Events = mergeEvents(scope, local.Events, remote.Events)` — base not passed (merge.go).
+- `Purges = purges` — the union computed in step 0 of §11.2, sorted by issue id (merge.go).
 
 `Settled()` returns `(export, len(Pending)==0 && len(Collisions)==0)` (merge.go); `Provisional()` returns `(export, len(Collisions)==0)` (merge.go). Both return the export value alongside `ok`, including when `ok` is false. The export field is unexported, so those two methods are the only access. Tests `resolve_test.go` (pending prose → `Settled()` `ok=false`; a clean merge → `ok=true`) and `collision_test.go` (a collision → `Settled()` and `Provisional()` both `ok=false`).
 
@@ -1422,6 +1427,14 @@ sha256 `ed625b2817365ed357ad477cd0691994a93a65a7ab1005d1b05456c39d159a70`.
 
 **Down** — `ALTER TABLE issue_events DROP COLUMN stream_id;` and `ALTER TABLE issue_events DROP COLUMN workspace_id;`. LOSS CONTRACT: attribution collected on this version is not restored; the claim predicate reads unattributed history as zero claims.
 
+### 12.6a `00009_purges.sql`
+
+sha256 `11bb1d6d158ce0775afb44aa29baba1718284fe3af2c36298e40e47add98a664`.
+
+**Up** — one statement: `CREATE TABLE purges (issue_id VARCHAR(191) NOT NULL, purged_at VARCHAR(64) NOT NULL, purged_by TEXT NOT NULL, PRIMARY KEY (issue_id));`. Bare (no `IF NOT EXISTS`), no index beyond the primary key, no constraint, **no foreign key**, no backfill. The comment states one row per purged issue — the id, when, and by whom, never the content — kept so that a merge drops the id from every side, a restore does not bring it back, and id minting never hands it out again; `issue_id` carries no foreign key because the issue it names no longer exists.
+
+**Down** — `DROP TABLE purges;` (no `IF EXISTS`). LOSS CONTRACT: the purged issues stay gone (their rows were deleted by the purge, not by this migration), but a store stepped back below this version no longer knows which ids were purged, so a sync with a store that still holds one of them can bring it back, and minting can hand a purged id out again; operators who need the records must restore from a pre-downgrade dbsnapshot.
+
 ### 12.7 `embed.go`
 
 Package `migrations` (`embed.go`), imports `"embed"`. Embed directive `//go:embed *.sql` on `var FS embed.FS`. The glob is `*.sql` only — non-`.sql` files in the directory are not embedded. `FS` is the only exported symbol in the file, described as "the embedded goose migration registry… the one source the runner reads from; nothing applies schema outside this set". The package doc records that only SQL migrations are wired and that adding a Go migration would require registering it with goose and widening the embed pattern.
@@ -1488,12 +1501,16 @@ Each runs as a subtest; mismatch is `t.Errorf("hasDownSection() = %v, want %v\nb
 
 Types: `pinnedMigration{file, sha256 string}`; `migrationFile{version int64; name, sha256 string}`; `reuseKind int` with, in iota order, `kindContentChanged`=0 (a pinned version's bytes no longer match its pin), `kindRenamed`=1 (content matches, filename changed), `kindUnpinned`=2 (an on-disk non-baseline version has no pin), `kindDeleted`=3 (a pinned version is gone from disk), `kindDuplicate`=4 (two on-disk files claim the same version); `reuseFinding{kind; version int64; pinned pinnedMigration; onDisk []migrationFile}`.
 
-The literal pins, `pinnedVersionContent` — all four verified against the on-disk sha256s:
+The literal pins, `pinnedVersionContent` — all eight verified against the on-disk sha256s:
 ```go
 2: {file: "00002_add_lane.sql",              sha256: "9126cd9e9c3a01137898fb9023c50b3f8741950f1e5d943dad521852939a4b75"},
 3: {file: "00003_add_resolution.sql",        sha256: "47b50dea1a1e2b7e31ba6b0fa95f5f77c6411b81ee525b04e1ff5e5fdb469563"},
 4: {file: "00004_add_redirect_target.sql",   sha256: "e171b9a18f13d67967e6c235499fc35254125ac23b36f9a687eddc7c411b590d"},
 5: {file: "00005_add_event_attribution.sql", sha256: "ed625b2817365ed357ad477cd0691994a93a65a7ab1005d1b05456c39d159a70"},
+6: {file: "00006_add_follows_up.sql", sha256: "f01b4b1ef42071526c8c97bc0acf4bfa4451e0b95981576e63d8170080441b45"},
+7: {file: "00007_every_ticket_inside_a_container.sql", sha256: "2eb2ae5ab7a43df7116e4dd9137901d8272f03f89a7569bb67b7437182101458"},
+8: {file: "00008_blocked_by_edge.sql", sha256: "2ab61664b7a73c4e36dc0a11d37e2f5b86b261a97aebf67ffa364ae9596e9deb"},
+9: {file: "00009_purges.sql", sha256: "11bb1d6d158ce0775afb44aa29baba1718284fe3af2c36298e40e47add98a664"},
 ```
 Version 1 is deliberately absent — `baseline_frozen_test.go` is its content enforcer.
 
@@ -1558,7 +1575,7 @@ ok-mismatch → `t.Errorf("ParseVersion(%q) ok = %v, want %v")` then `continue`;
 | invariant | enforcer | literals |
 |---|---|---|
 | `00001_baseline.sql` bytes never change | `TestBaselineFileIsFrozen` (`baseline_frozen_test.go`) | sha256 `e86c1aa3…d1fbb` |
-| v2+ bytes never change; filename never changes; never deleted; never duplicated; always pinned | `TestReleasedMigrationsAreContentPinned` (`version_reuse_test.go`) via `detectVersionReuse` | four pins at `version_reuse_test.go` |
+| v2+ bytes never change; filename never changes; never deleted; never duplicated; always pinned | `TestReleasedMigrationsAreContentPinned` (`version_reuse_test.go`) via `detectVersionReuse` | eight pins at `version_reuse_test.go` |
 | every `.sql` has a non-empty non-comment Down section | `TestEveryMigrationHasDownSection` (`down_section_test.go`) | none pinned; registry must be non-empty |
 | filename → version parse shape | `TestParseVersionShape` (`bounds_test.go`) over `ParseVersion` (`bounds.go`) | 12-row table |
 | `MaxVersion()` equals a fresh FS scan and is ≥ `Baseline` | `TestMaxVersionReflectsEmbeddedRegistry` (`bounds_test.go`) | `Baseline = 1` (`bounds.go`) |

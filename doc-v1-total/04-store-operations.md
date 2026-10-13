@@ -4,7 +4,7 @@ Day-to-day reads and writes are only half of what the store does; the other half
 
 ## Export
 
-`Store.Export` performs five reads and assembles one `model.Export` value (`internal/store/import_export.go`):
+`Store.Export` performs six reads and assembles one `model.Export` value (`internal/store/import_export.go`):
 
 | # | Data | Query semantics | Order |
 |---|---|---|---|
@@ -13,8 +13,9 @@ Day-to-day reads and writes are only half of what the store does; the other half
 | 3 | comments | `SELECT ... FROM comments` | `created_at ASC` |
 | 4 | labels | `SELECT ... FROM labels` | `issue_id ASC, label ASC` |
 | 5 | events | `issue_events LEFT JOIN issue_event_changes` | events by `(created_at, id)`, each event's changes by `field ASC` (`store.go`) |
+| 6 | purges | `SELECT issue_id, purged_at, purged_by FROM purges` (`listPurges`, `purge.go`) | `issue_id ASC` |
 
-The envelope carries `version: 3` (`model.ExportVersion`), `workspace_id`, `exported_at` (wall-clock UTC at export time), and the five arrays. No key has `omitempty`; every list helper initializes a non-nil slice, so empty tables serialize as `[]`, never `null` (`import_export.go`; `store.go`). The per-record wire shapes (issue, relation, comment, label, event, attribution) and the decode fallbacks (v1 `history`, the pre-v3 `blocks` relation type) are specified in `01-data-model.md`; two facts worth restating from the export side: a label's JSON key is `name` while its DB column is `label`, and an unattributed event omits its `attribution` key entirely.
+The envelope carries `version: 4` (`model.ExportVersion`), `workspace_id`, `exported_at` (wall-clock UTC at export time), and the six arrays. No key has `omitempty`; every list helper initializes a non-nil slice, so empty tables serialize as `[]`, never `null` (`import_export.go`; `store.go`). The per-record wire shapes (issue, relation, comment, label, event, attribution) and the decode fallbacks (v1 `history`, the pre-v3 `blocks` relation type) are specified in `01-data-model.md`; two facts worth restating from the export side: a label's JSON key is `name` while its DB column is `label`, and an unattributed event omits its `attribution` key entirely.
 
 Three surfaces write the export to disk or stdout:
 
@@ -28,22 +29,22 @@ Three surfaces write the export to disk or stdout:
 
 Mechanics (`export_delta.go`):
 
-- Per table, the delta is `remove []key` + `add []row`. **There is no modify**: a changed row appears in both lists (delete-then-reinsert), which is why no UPDATE statement exists anywhere in this path. Keys are the schema primary keys — `(src_id, dst_id, type)` for relations, `(issue_id, label)` for labels, the `id` string for issues/comments/events (`row_deletes.go`).
-- Comparison is `reflect.DeepEqual` over a persisted projection: issues compare their normalized row tuple (`issueRowValues`), the other four tables compare whole model values. Iteration is over input slices, not maps, so identical inputs produce an identical statement sequence (`export_delta.go`).
-- **Cascade**: the issues diff is computed first; each child table's live side is then filtered to surviving issues — a relation dies if *either* endpoint dies; comments, labels, and events die with their issue (`export_delta.go`). Nested `issue_event_changes` get no layer of their own: an event whose changes differ is removed and re-added whole (`export_delta.go`).
+- Per table, the delta is `remove []key` + `add []row`. **There is no modify**: a changed row appears in both lists (delete-then-reinsert), which is why no UPDATE statement exists anywhere in this path. Keys are the schema primary keys — `(src_id, dst_id, type)` for relations, `(issue_id, label)` for labels, `issue_id` for purges, the `id` string for issues/comments/events (`row_deletes.go`, `export_delta.go`).
+- Comparison is `reflect.DeepEqual` over a persisted projection: issues compare their normalized row tuple (`issueRowValues`), the other five tables compare whole model values. Iteration is over input slices, not maps, so identical inputs produce an identical statement sequence (`export_delta.go`).
+- **Cascade**: the issues diff is computed first; each child table's live side is then filtered to surviving issues — a relation dies if *either* endpoint dies; comments, labels, and events die with their issue (`export_delta.go`). Purge records reference no issue row, so nothing cascades into them and they are diffed against `prev` unfiltered (`export_delta.go`). Nested `issue_event_changes` get no layer of their own: an event whose changes differ is removed and re-added whole (`export_delta.go`).
 - The delta is an unexported in-memory value — never serialized to disk or JSON (`export_delta.go`).
 
-`applyExportDelta` runs the five tables in the fixed order **issues, relations, comments, labels, events**, and within each table all removes before all adds; removal row counts are discarded (`export_delta.go`). Issues go first so child inserts satisfy their foreign keys. The bound statements are single-row deletes by full primary key (§ Row deletes) and the same inserts the import path uses.
+`applyExportDelta` runs the six tables in the fixed order **issues, relations, comments, labels, events, purges**, and within each table all removes before all adds; removal row counts are discarded (`export_delta.go`). Issues go first so child inserts satisfy their foreign keys. The bound statements are single-row deletes by full primary key (§ Row deletes) and the same inserts the import path uses.
 
 Where a delta is committed: `replayDeltaOnScratch` runs, under the commit lock, one `BeginTx` → `applyExportDelta` → `tx.Commit` → `commitWorkingSetOnce(stamp)`, deliberately as a **single attempt** with no transient retry — errors bubble to the outer scratch-rebuilding retry (`sync_reconcile.go`). The spine writer checks out the spine branch unconditionally before replaying (`sync_reconcile.go`). A `commitStamp` carries `Message`, optional `Date` (second-granular `--date`), optional `Author` (`--author "Name <email>"`), and `AllowEmpty` (`commit_lock.go`).
 
-Tests pin, among other shapes: a delta of an export against itself is empty; changing a relation's `CreatedBy` (outside its key) yields exactly one remove + one add and zero issue work; retitling an issue re-inserts its relations/comments/labels/events (one add, zero removes each); adding one label touches only the labels table; a child closing moves the epic's hydrated value but not its row; removing an issue does not resurrect its children; and delta-application produces row-for-row the same tables as a full rewrite across every change shape (`export_delta_test.go`).
+Tests pin, among other shapes: a delta of an export against itself is empty; changing a relation's `CreatedBy` (outside its key) yields exactly one remove + one add and zero issue work; retitling an issue re-inserts its relations/comments/labels/events (one add, zero removes each); adding one label touches only the labels table; a child closing moves the epic's hydrated value but not its row; removing an issue does not resurrect its children; and delta-application produces row-for-row the same tables as a full rewrite across every change shape, including an issue purged as a merge hands it on, with each state's purge records checked directly (`export_delta_test.go`).
 
 ## Full-replace import
 
 `ReplaceFromExport` → `replaceFromExport(ctx, export, commitStamp{Message: "replace from export"})` — the Dolt commit message for a restore is the literal `replace from export` (`import_export.go`). It runs under the commit lock, inside one SQL transaction, followed by one Dolt commit, with the transient-GC retry wrapping the whole unit — all-or-nothing at the SQL level (`import_export.go`; `commit_lock.go`).
 
-`writeExportTx` clears tables in the literal order `labels, comments, relations, issues` (issue_events and issue_event_changes are deliberately not named — they cascade from issues), then applies `diffExports(empty, export)` (`import_export.go`).
+`writeExportTx` first reads the store's own purge records (`listPurges`) and replaces the export with `export.ApplyPurges(model.UnionPurges(held, export.Purges))`, so a backup taken before a purge lands without the purged issue and the record survives the rewrite. It then clears tables in the literal order `labels, comments, relations, issues, purges` (issue_events and issue_event_changes are deliberately not named — they cascade from issues), then applies `diffExports(empty, export)` (`import_export.go`). Test: `TestRestoreNeverUnpurges` (`purge_test.go`).
 
 **No ID remapping, no dedup, no conflict policy**: IDs are written verbatim; duplicate ids in the input reach the INSERT and fail on the primary key, aborting the transaction (`export_delta.go`).
 
@@ -110,7 +111,7 @@ CLI: `--by` with a file containing no update document is a usage error. Output: 
 | Law | Value | What it checks |
 |---|---|---|
 | `health` | `"health"` | Doctor **errors** become findings verbatim; Doctor **warnings are discarded**, so a faithful rebuild of messy source is not rejected (`verify.go`) |
-| `count` | `"count"` | per collection (issues, relations, comments, labels, events, event_changes): rows the dump maps into the collection via unconditional (`Always`) emitters must equal the rebuild's count; any conditional emitter permanently excludes its collection from the law; message `collection %q: source dump carries %d row(s) mapped here, rebuild has %d` (`verify.go`) |
+| `count` | `"count"` | per collection (issues, relations, comments, labels, events, event_changes, purges): rows the dump maps into the collection via unconditional (`Always`) emitters must equal the rebuild's count; any conditional emitter permanently excludes its collection from the law; message `collection %q: source dump carries %d row(s) mapped here, rebuild has %d` (`verify.go`) |
 | `id_stability` | `"id_stability"` | the set of source cells mapping into `issues.id` (union across all tables/columns) vs rebuilt issue ids; two findings possible — missing and extra, each listing sorted ids; no `issues.id` mapping at all → no findings (`verify.go`) |
 | `rank_permutation` | `"rank_permutation"` | over rebuilt issues only: every non-empty rank must be well-formed base-62 and distinct; empty ranks are skipped as legal (`verify.go`) |
 
@@ -126,9 +127,9 @@ Cell rules: columns come from the live result set; each `[]byte` cell converts t
 
 ## Row deletes
 
-Five hard single-row deletes by full primary key, used by the reconcile delta and a few CRUD paths (`row_deletes.go`): issues, relations, comments, labels, issue_events. Cascade is owned by the schema (`ON DELETE CASCADE`), not by code: deleting an issue takes its relations, comments, labels, events, and event changes; deleting an event takes its change rows. **No CRUD path hard-deletes an issue row** — ordinary deletion is the retention stamp; `deleteIssueTx`/`deleteEventTx` have only the reconcile delta as caller, deliberately (`row_deletes.go`). Errors render `delete <subject>: ...` with per-entity subject strings.
+Six hard single-row deletes by full primary key, used by the reconcile delta and a few CRUD paths (`row_deletes.go`): issues, relations, comments, labels, issue_events, purges. Cascade is owned by the schema (`ON DELETE CASCADE`), not by code: deleting an issue takes its relations, comments, labels, events, and event changes; deleting an event takes its change rows. Ordinary deletion is the retention stamp; `Purge` is the one CRUD path that hard-deletes an issue row, through `deleteIssueTx` (`purge.go`). `deleteEventTx` and `deletePurgeTx` have only the reconcile delta as caller, deliberately — nothing un-purges, so a purge record leaves only when a replay's next export does not hold it (`row_deletes.go`). Errors render `delete <subject>: ...` with per-entity subject strings.
 
-The rows-affected count exists for CRUD callers: `RemoveLabel` and `RemoveRelation` convert 0 rows into typed `NotFoundError`s; `DeleteComment` discards the count; the delta ignores it (`labels.go`; `relations.go`; `store.go`). Set-matching deletes (single-valued edge replacement, `ClearParent`, label replacement, the self-edge sweep, `writeExportTx`'s wholesale clear, `FixIntegrity`) are deliberately separate statements (`row_deletes.go`).
+The rows-affected count exists for CRUD callers: `RemoveLabel` and `RemoveRelation` convert 0 rows into typed `NotFoundError`s; `DeleteComment` and `Purge` discard the count; the delta ignores it (`labels.go`; `relations.go`; `store.go`). Set-matching deletes (single-valued edge replacement, `ClearParent`, label replacement, the self-edge sweep, `writeExportTx`'s wholesale clear, `FixIntegrity`) are deliberately separate statements (`row_deletes.go`).
 
 ## Checkpoints
 

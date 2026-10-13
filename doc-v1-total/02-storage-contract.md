@@ -7,12 +7,12 @@ Dependency and vocabulary rules: engine → contract → model, never back; no t
 
 ## The Store interface
 
-`Store` composes nine role interfaces plus `Close()` (`internal/storage/contract.go`) — 36 methods total:
+`Store` composes nine role interfaces plus `Close()` (`internal/storage/contract.go`) — 33 methods total:
 
 | Role | Methods |
 |---|---|
-| `IssueReader` | `GetIssue`, `GetIssueDetail`, `ListIssues`, `ListTopics`, `ListIssueIdentities`, `ListAllEvents`, `LocalIssueCount` |
-| `IssueWriter` | `CreateIssue`, `Apply` |
+| `IssueReader` | `GetIssue`, `GetIssueDetail`, `ListIssues`, `ListTopics`, `ListIssueIdentities`, `ListAllEvents`, `ListEvents`, `LocalIssueCount` |
+| `IssueWriter` | `CreateIssue`, `Apply`, `Purge` |
 | `CommentStore` | `AddComment`, `DeleteComment` |
 | `LabelStore` | `AddLabel`, `RemoveLabel`, `ReplaceLabels`, `ListLabels` |
 | `RelationStore` | `AddRelation`, `RemoveRelation`, `ListRelationsForIssue`, `GetRelationsByIDs`, `SetParent`, `ClearParent` |
@@ -24,6 +24,7 @@ Dependency and vocabulary rules: engine → contract → model, never back; no t
 Contract points a reimplementation must not lose:
 
 - **`Apply` is the single mutation verb** for the issue record. A `Change` carries an optional `Action` (a status or retention transition — the sealed sum decides which axis, never a caller-side mode) and an `UpdateIssueInput` field patch (all pointer fields; nil = leave unchanged). A pure no-op records no history; an illegal transition is refused, not ignored (`contract.go`, `issues.go`). The change's `Reason` belongs to the transition event; `Fields.Reason` belongs to the field-change event — a combined change records two events with independent reasons (`issues.go`).
+- **`Purge` is the one irreversible removal.** `Purge(ctx, PurgeInput{IssueID, Actor})` removes the issue's row, comments, labels, history, and every edge to or from it in one write, and returns `PurgeResult{Purge, Comments, Labels, Relations, Events}` — the `model.Purge` record left behind and how many of each row went with it. Other issues are not edited. The purged id is never minted again, and every merge and restore drops it (`model.Export.ApplyPurges`). A missing id is `NotFoundError`; an issue that still holds any parent-child child — deleted and archived children included — is refused with `model.ValidationError` (`storage.RejectPurgeOfOccupiedContainer`, `containment.go`): "cannot purge <id>: it holds N ticket(s), and purging it would leave them outside any epic; move them with lit parent set --child <id> --parent <epic-id>, or purge them first" (`contract.go`, `issues.go`).
 - **Mutating reads return the answer.** `AddComment` returns the comment *and* the post-write issue; every label mutation returns the resulting label set; `DeleteComment` returns what was removed — so no follow-up read exists for a concurrent writer to answer differently (`contract.go`).
 - **Ordering is contract.** `ListIssues` orders by `SortBy`, then always by id ascending as the final tie-break (descending sorts reverse only the named keys, never the tie-break). No `SortBy` means rank ascending. `ListAllEvents` is oldest-first by `(created_at, id)` — explicitly *not* recording order; event IDs are random, so same-tick events return in an order unrelated to causality, identically in both engines (`contract.go`).
 - **`Exporter` is core, `Importer` is a capability**: export is the differential-oracle surface both engines serve; only replace-from-export is optional (`contract.go`, `capabilities.go`).
@@ -105,13 +106,15 @@ Behaviors that define the reference semantics (each mirrored by Dolt unless note
 
 **Bulk and import** (`memory/bulk.go`): both parse-validate the whole file before applying anything, topologically sort intra-batch references, create/update in that order, then wire `blocked_by` edges (as `blocked-by`, dependent → dependency) in a second pass. Failure triggers **compensation, not rollback**: created issues are soft-deleted (reason `import rollback`), un-undoable ids are named in the error, and already-applied updates stay applied. Spec validation rejects surrounding whitespace, duplicates, self-dependency, forbidden fields on updates, and missing required fields on creates (`internal/storage/specs.go`, `memory/bulk.go`). `ImportTree` references must all resolve inside the file; `BulkApply` references may name pre-existing real ids. Bulk files are multi-document YAML with unknown fields rejected; import trees are a single JSON array with unknown fields and trailing data rejected (`internal/storage/specs.go`).
 
-**Export** (`memory/export.go`): the whole store — archived and deleted included — with every collection in a total order (issues by rank, labels by issue+name, events by created_at+id, relations/comments in write order) so two stores holding the same facts serialize to the same bytes. Version `model.ExportVersion` (3).
+**Purge** (`memory/purge.go`): under the one lock, a missing id is `NotFoundError` and an issue with any parent-child edge onto it is refused (`storage.RejectPurgeOfOccupiedContainer`); otherwise the comments, the relations with the issue at either end, the events, the labels, its place in the order, and the record are removed, and the purge record (stamped with the engine clock and the input actor) is kept. Minting treats a purged id as taken (`memory/issues.go`).
+
+**Export** (`memory/export.go`): the whole store — archived and deleted included — with every collection in a total order (issues by rank, labels by issue+name, events by created_at+id, purges by issue id, relations/comments in write order) so two stores holding the same facts serialize to the same bytes. Version `model.ExportVersion` (4).
 
 **Rank storage**: the memory engine stores no rank strings at all — the total order is a slice, `Issue.Rank` is rendered at read time as a zero-padded 9-digit index (`%09d`), and a rank inversion is unrepresentable (`memory/engine.go`). The conformance suite never asserts rank encoding, only observable order.
 
 ## What conformance requires — and doesn't
 
-The suite runs 36 cases (`conformance.go`), each against a fresh engine, asserting only what a caller can observe through the contract. Where behavior was ambiguous, Dolt's answer was the tie-break (`conformance.go`).
+The suite runs 62 cases (`conformance.go`), each against a fresh engine, asserting only what a caller can observe through the contract. Where behavior was ambiguous, Dolt's answer was the tie-break (`conformance.go`).
 
 Not required by the suite (each is engine-tested or unexercised) — relevant when judging what v1 actually guarantees across engines:
 
