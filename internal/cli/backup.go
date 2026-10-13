@@ -188,25 +188,25 @@ func restoreFromExport(ctx context.Context, ap *app.App, path string, force bool
 	if err != nil {
 		return nil, err
 	}
+	// The moves are committed from here on, so every later failure still
+	// returns them: the trace records what the store now holds, not what the
+	// command finished.
 	// [LAW:single-enforcer] Restored sync base is serialized from the store so container lifecycles pass through the hydration boundary before JSON output.
 	restoredExport, err := ap.Store.Export(ctx)
 	if err != nil {
-		return nil, err
+		return rehomed, err
 	}
 	if _, err := syncfile.WriteAtomic(syncBasePath(ap), restoredExport); err != nil {
-		return nil, err
+		return rehomed, err
 	}
 	hash, err := syncfile.HashFile(restorePath)
 	if err != nil {
-		return nil, err
+		return rehomed, err
 	}
-	if err := syncer.RecordSyncState(ctx, storage.SyncState{
+	return rehomed, syncer.RecordSyncState(ctx, storage.SyncState{
 		Path:        restorePath,
 		ContentHash: hash,
-	}); err != nil {
-		return nil, err
-	}
-	return rehomed, nil
+	})
 }
 
 func hashExport(export model.Export) (string, error) {
