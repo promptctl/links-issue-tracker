@@ -339,6 +339,9 @@ What that buys, and what it does not:
   that matters is caught rather than absorbed, because the other store still
   holding the original presents `reconcile` with two tickets under one id,
   which it refuses on their differing creation instants instead of fusing.
+  A purged id is the exception to all of this: `lit purge` leaves a record of
+  the id, and the probe reads those records beside the live rows, so a purged
+  id is never minted again.
 - **Existing ids are untouched.** This changes how NEW children are minted and
   migrates nothing. Every `<epic>.7` still resolves, still ranks, still exports.
   An epic will commonly hold both shapes.

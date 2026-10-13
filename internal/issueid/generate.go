@@ -68,7 +68,8 @@ func ChildNamespace(parentID string) Namespace {
 // exists elsewhere, so two stores holding identical rows do not converge on one
 // id the way a count over local rows does. It also stops a hard-deleted id
 // from being handed straight to the next create: reaching it again takes a
-// hash coincidence rather than a certainty.
+// hash coincidence rather than a certainty — and a purged id is not reached at
+// all, since each store's taken probe reads its purge records.
 //
 // The guarantee is the one top-level ids run on, no weaker and no stronger,
 // and it is probabilistic: the hash is truncated, so Mint re-rolls against the
