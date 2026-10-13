@@ -450,7 +450,7 @@ They live beside the specs rather than in an engine because the schema is the co
 
 - `HomeStranded(export model.Export) (model.Export, []Rehomed)` — pure; returns the export with every ticket inside an epic and the moves, sorted by id. The rule, the climb and the minted unfiled epic are described in `01-data-model.md`. Called by `spineWriter.land` and `ReplaceFromExport` (`internal/store`), never by `rebuildFromExport`.
 - `Rehomed{IssueID string; Epic string}` (json `issue_id`, `epic`) — a ticket moved and the epic it lives in now; `Epic` is empty only for an epic moved to the top level.
-- `UnfiledEpicID(prefix string) string`, `UnfiledTitle = "Unfiled tickets"`, `UnfiledTopic = "unfiled"` — the unfiled epic's id rule and identity, the values migration v7 writes.
+- `UnfiledEpicID(prefix string) string`, `UnfiledTitle = "Unfiled tickets"`, `UnfiledTopic = "unfiled"` — the first id of the unfiled epic's chain and its identity, the values migration v7 writes; `HomeStranded` walks the rest of the chain (`01-data-model.md`).
 
 ### 1.18 Sync/reconcile vocabulary (`internal/storage/sync.go`)
 

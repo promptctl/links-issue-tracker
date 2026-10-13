@@ -28,14 +28,19 @@ func TestWriteRehomedNamesEachMoveAndIsSilentWithoutOne(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("writeRehomed error = %v", err)
 	}
-	for _, want := range []string{
-		"moved 2 ticket(s) the merged backlog held outside an epic:",
-		"acme-core-bb22", "into", "acme-unfiled-0bf7",
-		"acme-core-cc33", "to the top level",
-		"lit parent set --child <id> --parent <epic-id>",
+	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("output %q is %d line(s), want a header and one line per move", out.String(), len(lines))
+	}
+	for i, want := range [][]string{
+		{"moved 2 ticket(s) the merged backlog held outside an epic;", "lit parent set --child <id> --parent <epic-id>"},
+		{"acme-core-bb22", " into ", "acme-unfiled-0bf7"},
+		{"acme-core-cc33", " to the top level"},
 	} {
-		if !strings.Contains(out.String(), want) {
-			t.Errorf("output %q lacks %q", out.String(), want)
+		for _, part := range want {
+			if !strings.Contains(lines[i], part) {
+				t.Errorf("line %d %q lacks %q", i, lines[i], part)
+			}
 		}
 	}
 
@@ -54,7 +59,7 @@ func TestBackupRestoreNamesTheTicketsItMovesIntoAnEpic(t *testing.T) {
 	repo, task, path := newPreContainmentBackup(t)
 
 	out := runCLIInDir(t, repo, "backup", "restore", "--path", path)
-	if !strings.Contains(out, "moved 1 ticket(s) the backup held outside an epic:") || !strings.Contains(out, task) {
+	if !strings.Contains(out, "moved 1 ticket(s) the backup held outside an epic;") || !strings.Contains(out, task) {
 		t.Errorf("restore output %q does not name the move of %s", out, task)
 	}
 	shown := runCLIInDir(t, repo, "show", task)
