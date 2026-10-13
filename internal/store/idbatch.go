@@ -180,23 +180,9 @@ func (b idBatch) inList() (string, []any) {
 // loop body never runs on nothing and no caller needs its own emptiness guard
 // to avoid building `IN ()`. [LAW:no-defensive-null-guards]
 //
-// Splitting one statement into several gives up whatever consistency the single
-// statement had: a writer landing between batch k and k+1 leaves the result
-// carrying some subjects as they stood before the write and others as they
-// stood after, and nothing errors. The reads this serves are several
-// statements — the relation gather runs a src_id query, a dst_id query, and a
-// separate issue lookup, with no transaction over them — so no caller has a
-// snapshot to lose. Providing one means a read transaction spanning all three,
-// not the batch loop alone, which is why it is not attempted here. Tracked as
-// links-scale-6iiv.
-//
-// ListIssues is the case worth stating separately. Under an id filter its row
-// scan is one statement per batch, so which rows match is not decided at one
-// instant. But its RESULT is not a snapshot either: hydrateIssues runs the
-// label load and the lifecycle-children query afterwards, outside any
-// transaction, so a write landing between the scan and the hydration produces
-// a row carrying its own old identity and its new labels. Same ticket, same
-// fix — one read transaction over the whole call, not a narrower batch loop.
+// Splitting one statement into several costs no consistency: every statement
+// of one read call runs on one engine, which reads one root — see ONE ROOT PER
+// ENGINE in the package doc.
 func idBatches(ids []string) []idBatch {
 	unique := dedupeStrings(ids)
 	if len(unique) == 0 {
