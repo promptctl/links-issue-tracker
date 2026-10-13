@@ -1144,7 +1144,7 @@ func showLeaf() appLeaf {
 // itself only numbers.
 func historyLeaf() appLeaf {
 	fs := newCobraFlagSet("history")
-	version := fs.StringOnce("version", "Print the text one version of a long text field held, as <field>@<n> (description@1 is the description before its first change); the trail shows each change to one as vN → vN+1")
+	version := fs.StringOnce("version", "Print the text one version of a long text field held, as <field>@<n>; each text the field has held is numbered once, from 1, in the order its history first shows it, and the trail shows each change as vN → vM")
 	const usage = "usage: lit history <id> [--version <field>@<n>]"
 	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if len(positional) != 1 {

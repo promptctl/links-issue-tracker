@@ -33,30 +33,39 @@ type issueField struct {
 
 // FieldText is the shape a field's value takes for the person reading it.
 // History records every value in full whatever the shape; the shape decides
-// only how a change to it is shown.
+// only how a change to it is shown. It is not merge.ProseField: that set is
+// the fields only a reader can merge, title among them, and a title is short
+// enough to show whole.
 type FieldText int
 
 const (
-	// ScalarText reads whole on one line — a name, a number, a label set — so
+	// ShortText reads whole on one line — a name, a number, a label set — so
 	// a change shows as its old value and its new one.
-	ScalarText FieldText = iota
-	// ProseText is free text an author writes and rewrites. A change to it
+	ShortText FieldText = iota
+	// LongText is free text an author writes and rewrites. A change to it
 	// shows as a step between numbered versions, so a reader of the trail is
 	// not handed every superseded text alongside the current one.
-	ProseText
+	LongText
 )
 
-// ProseFields names the editable fields whose values are prose, in table
-// order. The set is read off the table, so a field joins it by declaring
-// its shape on its row and nowhere else. [LAW:one-source-of-truth]
-func ProseFields() []string {
-	var names []string
+// LongTextField is one editable field whose value is long text: its name in
+// history's vocabulary, and how to read its current text off an issue.
+type LongTextField struct {
+	Name    string
+	Current func(model.Issue) string
+}
+
+// LongTextFields is the editable fields whose values are long text, in table
+// order. The set is read off the table, so a field joins it by declaring its
+// shape on its row and nowhere else. [LAW:one-source-of-truth]
+func LongTextFields() []LongTextField {
+	var fields []LongTextField
 	for _, field := range issueFields {
-		if field.text == ProseText {
-			names = append(names, field.name)
+		if field.text == LongText {
+			fields = append(fields, LongTextField{Name: field.name, Current: field.encode})
 		}
 	}
-	return names
+	return fields
 }
 
 // patchField builds a row from the parts that differ per field: the shape of
@@ -91,7 +100,7 @@ func patchField[T any](
 // issueFields is the editable set, in the order history reports a change to
 // them — fixed, so two reads of one mutation describe it identically.
 var issueFields = []issueField{
-	patchField("title", ScalarText,
+	patchField("title", ShortText,
 		func(in UpdateIssueInput) *string { return in.Title },
 		func(issue *model.Issue, v string) error {
 			issue.Title = strings.TrimSpace(v)
@@ -101,15 +110,15 @@ var issueFields = []issueField{
 			return nil
 		},
 		func(issue model.Issue) string { return issue.Title }),
-	patchField("description", ProseText,
+	patchField("description", LongText,
 		func(in UpdateIssueInput) *string { return in.Description },
 		func(issue *model.Issue, v string) error { issue.Description = strings.TrimSpace(v); return nil },
 		func(issue model.Issue) string { return issue.Description }),
-	patchField("prompt", ProseText,
+	patchField("prompt", LongText,
 		func(in UpdateIssueInput) *string { return in.Prompt },
 		func(issue *model.Issue, v string) error { issue.Prompt = strings.TrimSpace(v); return nil },
 		func(issue model.Issue) string { return issue.Prompt }),
-	patchField("issue_type", ScalarText,
+	patchField("issue_type", ShortText,
 		func(in UpdateIssueInput) *model.IssueType { return in.IssueType },
 		func(issue *model.Issue, v model.IssueType) error {
 			// [LAW:single-enforcer] Container vs leaf decides which lifecycle
@@ -125,24 +134,24 @@ var issueFields = []issueField{
 			return nil
 		},
 		func(issue model.Issue) string { return string(issue.IssueType) }),
-	patchField("priority", ScalarText,
+	patchField("priority", ShortText,
 		func(in UpdateIssueInput) *model.Priority { return in.Priority },
 		func(issue *model.Issue, v model.Priority) error { issue.Priority = v; return nil },
 		// The numeric wire encoding, not the display name: history keeps what
 		// the field stores, so a replay reads back the value that was written.
 		func(issue model.Issue) string { return strconv.Itoa(int(issue.Priority)) }),
-	patchField("assignee", ScalarText,
+	patchField("assignee", ShortText,
 		func(in UpdateIssueInput) *string { return in.Assignee },
 		// [LAW:decomposition] Assignee is an issue-level field independent of
 		// the lifecycle; reassigning is a plain field write, not a status
 		// mutation.
 		func(issue *model.Issue, v string) error { issue.Assignee = strings.TrimSpace(v); return nil },
 		func(issue model.Issue) string { return issue.AssigneeValue() }),
-	patchField("lane", ScalarText,
+	patchField("lane", ShortText,
 		func(in UpdateIssueInput) *string { return in.Lane },
 		func(issue *model.Issue, v string) error { issue.Lane = strings.TrimSpace(v); return nil },
 		func(issue model.Issue) string { return issue.Lane }),
-	patchField("labels", ScalarText,
+	patchField("labels", ShortText,
 		func(in UpdateIssueInput) *[]string { return in.Labels },
 		func(issue *model.Issue, v []string) error {
 			labels, err := model.CanonicalizeLabels(v)

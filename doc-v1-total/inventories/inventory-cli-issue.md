@@ -956,9 +956,10 @@ Cross-epic dependencies:
   `UsageError{"usage: lit history <id> [--version <field>@<n>]"}` → exit 2 (`cli.go`).
 - `--version`, when given, is parsed before the store is read
   (`parseVersionRef`, `output.go`): the field must be one of
-  `storage.ProseFields()` — the editable fields whose row in the field table
-  declares `ProseText`, today `description` and `prompt` (`fields.go`) — and
-  the number an integer ≥ 1; anything else is a `UsageError` → exit 2,
+  `storage.LongTextFields()` — the editable fields whose row in the field
+  table declares `LongText`, today `description` and `prompt` (`fields.go`) —
+  and the number an integer ≥ 1 in plain decimal digits (no sign, no leading
+  zero); anything else is a `UsageError` → exit 2,
   whatever the id names.
 - Reads `GetIssueDetail(id)` (`cli.go`).
 - Output (`printIssueHistory`, `output.go`):
@@ -973,19 +974,21 @@ history:
   in the reason escaped to `\n`; an event with no `Action` displays the literal
   `update` (`output.go`). Then per change,
   `    <field>: <from or -> → <to or ->` (`output.go`) — except a change to a
-  prose field, which prints `    <field>: v<k> → v<k+1>` for the field's k-th
-  recorded change and no text (`output.go`).
-- Then, when the trail versions any prose field, a blank line, `versions:`,
-  and per such field in table order
+  long text field, which prints each side as `v<n>`, its version number, or
+  `-` when empty, and no text (`versionLabel`, `output.go`).
+- Then, when any long text field holds a version other than its current
+  text, a blank line, `versions:`, and per such field in table order
   `    <field>: <N> versions — lit history <id> --version <field>@<n> prints one`
-  (`output.go`).
+  (`1 version` when N is 1) (`output.go`).
 - An empty event slice prints just the header (`output.go`).
 - With `--version <field>@<n>`: prints version n's text bare, newline-terminated
-  (`printFieldVersion`, `output.go`). The versions are read off the trail by
-  `fieldVersions` (`output.go`): the `from` of the field's first recorded
-  change, then the `to` of each change in event order. n past them is
-  `VersionNotFoundError` → exit 4, reason `version_not_found`, message
-  `<id> has no <field>@<n>: its history records <N> versions of <field>; `lit history <id>` numbers them, and `lit show <id> --field <field>` prints the current text`.
+  (`printFieldVersion`, `output.go`). The versions are `textVersions`
+  (`output.go`): each distinct non-empty text the field's changes move
+  between — `from`, then `to`, in event order — then the issue's current text
+  if not already among them, so a field never changed holds one version. n
+  past them is `VersionNotFoundError` → exit 4, reason `version_not_found`,
+  message
+  `<id> has no <field>@<n>: its record holds <N> versions of <field>, numbered from 1; `lit show <id> --field <field>` prints the current text`.
 
 ### 2.7 `lit update` — Update issue fields
 
