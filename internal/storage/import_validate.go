@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/promptctl/links-issue-tracker/internal/issueid"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
@@ -30,8 +31,8 @@ func ImportTreeWriteOrder(specs []ImportTreeSpec) ([]int, error) {
 	if err := validateImportTreeSpecs(specs); err != nil {
 		return nil, err
 	}
-	return writeOrder("import", specs, func(spec ImportTreeSpec) (string, []string) {
-		return spec.LocalID, append([]string{spec.Parent}, spec.BlockedBy...)
+	return writeOrder("import", specs, func(spec ImportTreeSpec) (string, string, []string) {
+		return spec.LocalID, spec.Parent, spec.BlockedBy
 	})
 }
 
@@ -41,8 +42,8 @@ func BulkWriteOrder(specs []BulkIssueSpec) ([]int, error) {
 	if err := validateBulkSpecs(specs); err != nil {
 		return nil, err
 	}
-	return writeOrder("bulk", specs, func(spec BulkIssueSpec) (string, []string) {
-		return spec.LocalID, append([]string{spec.Parent}, spec.BlockedBy...)
+	return writeOrder("bulk", specs, func(spec BulkIssueSpec) (string, string, []string) {
+		return spec.LocalID, spec.Parent, spec.BlockedBy
 	})
 }
 
@@ -51,12 +52,13 @@ func BulkWriteOrder(specs []BulkIssueSpec) ([]int, error) {
 // every document it names. A reference matching no local_id in the file is
 // not an edge: it names a real issue, and the write that receives it judges
 // it. A cycle among the file's own references is refused.
-func writeOrder[S any](format string, specs []S, refsOf func(S) (localID string, refs []string)) ([]int, error) {
+func writeOrder[S any](format string, specs []S, refsOf func(S) (localID, parent string, blockedBy []string)) ([]int, error) {
 	localIDs := make([]string, len(specs))
 	refs := make([][]string, len(specs))
 	indexByLocal := make(map[string]int, len(specs))
 	for i, spec := range specs {
-		localIDs[i], refs[i] = refsOf(spec)
+		localID, parent, blockedBy := refsOf(spec)
+		localIDs[i], refs[i] = localID, append([]string{parent}, blockedBy...)
 		if localIDs[i] != "" {
 			indexByLocal[localIDs[i]] = i
 		}
@@ -113,8 +115,14 @@ func validateImportTreeSpecs(specs []ImportTreeSpec) error {
 		if strings.TrimSpace(spec.Title) == "" {
 			return model.ValidationError{Message: fmt.Sprintf("import: spec %q missing title", spec.LocalID)}
 		}
-		if strings.TrimSpace(spec.Topic) == "" {
-			return model.ValidationError{Message: fmt.Sprintf("import: spec %q missing topic", spec.LocalID)}
+		// Topic and labels parse by the parsers the create runs, so a file
+		// the create would refuse is refused here, before anything lands.
+		// [LAW:single-enforcer]
+		if _, err := issueid.NormalizeTopicForCreate(spec.Topic); err != nil {
+			return fmt.Errorf("import: spec %q: %w", spec.LocalID, err)
+		}
+		if _, err := model.CanonicalizeLabels(spec.Labels); err != nil {
+			return fmt.Errorf("import: spec %q: %w", spec.LocalID, err)
 		}
 		// Membership comes from the one ParseIssueType gate; specs are
 		// agent-authored input, so they parse strictly here rather than
@@ -163,10 +171,11 @@ func validateImportTreeSpecs(specs []ImportTreeSpec) error {
 	return nil
 }
 
-// validateBulkSpecs judges a bulk file by every rule but the cycle check: every document is a create or an
-// update by whether it names an id, and each shape admits exactly the fields
-// its verb owns. A create document's parent may be a local_id in the file or
-// a real id; only the first can be judged here.
+// validateBulkSpecs judges a bulk file by every rule but the cycle check:
+// every document is a create or an update by whether it names an id, and each
+// shape admits exactly the fields its verb owns. A create document's parent
+// may be a local_id in the file or a real id; only the first can be judged
+// here.
 func validateBulkSpecs(specs []BulkIssueSpec) error {
 	if len(specs) == 0 {
 		return model.ValidationError{Message: "bulk: no issues in input"}
@@ -190,6 +199,13 @@ func validateBulkSpecs(specs []BulkIssueSpec) error {
 			}
 			if spec.LocalID != "" && dep == spec.LocalID {
 				return model.ValidationError{Message: fmt.Sprintf("bulk: doc %d (local_id %q) cannot depend on itself", i, spec.LocalID)}
+			}
+		}
+		// A create and an update both write labels, by the one parser either
+		// write runs. [LAW:single-enforcer]
+		if spec.Labels != nil {
+			if _, err := model.CanonicalizeLabels(*spec.Labels); err != nil {
+				return fmt.Errorf("bulk: doc %d: %w", i, err)
 			}
 		}
 
@@ -239,8 +255,11 @@ func validateBulkCreateDoc(i int, spec BulkIssueSpec) (model.IssueType, error) {
 	if spec.Title == nil || strings.TrimSpace(*spec.Title) == "" {
 		return "", model.ValidationError{Message: fmt.Sprintf("bulk: doc %d missing title", i)}
 	}
-	if spec.Topic == nil || strings.TrimSpace(*spec.Topic) == "" {
+	if spec.Topic == nil {
 		return "", model.ValidationError{Message: fmt.Sprintf("bulk: doc %d missing topic", i)}
+	}
+	if _, err := issueid.NormalizeTopicForCreate(*spec.Topic); err != nil {
+		return "", fmt.Errorf("bulk: doc %d: %w", i, err)
 	}
 	if spec.IssueType == nil {
 		return "", model.ValidationError{Message: fmt.Sprintf("bulk: doc %d missing type", i)}
@@ -276,6 +295,9 @@ func validateBulkUpdateDoc(i int, spec BulkIssueSpec) error {
 	}
 	if len(spec.BlockedBy) > 0 {
 		return model.ValidationError{Message: fmt.Sprintf("bulk: doc %d (id %q) sets blocked_by; wire dependencies with `lit dep add` instead", i, spec.ID)}
+	}
+	if spec.Title != nil && strings.TrimSpace(*spec.Title) == "" {
+		return model.ValidationError{Message: fmt.Sprintf("bulk: doc %d (id %q) sets an empty title", i, spec.ID)}
 	}
 	if spec.IssueType != nil {
 		if _, err := model.ParseIssueType(*spec.IssueType); err != nil {

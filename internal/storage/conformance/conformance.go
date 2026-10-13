@@ -2240,8 +2240,11 @@ func parentWiring(t *testing.T, ctx context.Context, st storage.Store, clk *cloc
 // run, and a caller tells that from a fault by the type alone. A refused file
 // writes nothing.
 func anImportFileThatBreaksARuleIsRefusedWhole(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	existing := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "existing", Topic: "core", IssueType: model.TypeEpic})
 	before := mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true, IncludeArchived: true})
-	title, topic, epicType := "imported", "core", "epic"
+	title, topic, epicType, shortTopic, blank := "imported", "core", "epic", "x", " "
+	commaLabel := []string{"a,b"}
+	lands := storage.ImportTreeSpec{LocalID: "e", Title: "lands", IssueType: "epic", Topic: "core"}
 	tree := func(specs ...storage.ImportTreeSpec) func() error {
 		return func() error { _, err := st.ImportTree(ctx, prefix, specs); return err }
 	}
@@ -2261,9 +2264,14 @@ func anImportFileThatBreaksARuleIsRefusedWhole(t *testing.T, ctx context.Context
 	}{
 		{"ImportTree(no specs)", tree()},
 		{"ImportTree(a spec missing its title)", tree(storage.ImportTreeSpec{LocalID: "a", IssueType: "epic", Topic: "core"})},
-		{"ImportTree(a spec missing its topic, after one that would land)", tree(
-			storage.ImportTreeSpec{LocalID: "e", Title: "lands", IssueType: "epic", Topic: "core"},
+		{"ImportTree(a spec missing its topic, after one that would land)", tree(lands,
 			storage.ImportTreeSpec{LocalID: "a", Title: "no topic", IssueType: "epic"},
+		)},
+		{"ImportTree(a topic too short to be one, after one that would land)", tree(lands,
+			storage.ImportTreeSpec{LocalID: "a", Title: "short topic", IssueType: "epic", Topic: shortTopic},
+		)},
+		{"ImportTree(a label the create refuses, after one that would land)", tree(lands,
+			storage.ImportTreeSpec{LocalID: "a", Title: "comma label", IssueType: "epic", Topic: "core", Labels: commaLabel},
 		)},
 		{"ImportTree(a duplicate local_id)", tree(
 			storage.ImportTreeSpec{LocalID: "a", Title: "one", IssueType: "epic", Topic: "core"},
@@ -2276,6 +2284,14 @@ func anImportFileThatBreaksARuleIsRefusedWhole(t *testing.T, ctx context.Context
 		)},
 		{"BulkApply(no documents)", bulk()},
 		{"BulkApply(a create missing its topic)", bulk(storage.BulkIssueSpec{Title: &title, IssueType: &epicType})},
+		{"BulkApply(a topic too short to be one, after a create that would land)", bulk(epic("e", ""),
+			storage.BulkIssueSpec{Title: &title, Topic: &shortTopic, IssueType: &epicType})},
+		{"BulkApply(a label the create refuses, after a create that would land)", bulk(epic("e", ""),
+			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &epicType, Labels: &commaLabel})},
+		{"BulkApply(an update that empties a title, after a create that would land)", bulk(epic("e", ""),
+			storage.BulkIssueSpec{ID: existing.ID, Title: &blank})},
+		{"BulkApply(an update with a label the update refuses, after a create that would land)", bulk(epic("e", ""),
+			storage.BulkIssueSpec{ID: existing.ID, Labels: &commaLabel})},
 		{"BulkApply(a duplicate local_id)", bulk(epic("a", ""), epic("a", ""))},
 		{"BulkApply(a blocked_by cycle)", bulk(epic("a", "b"), epic("b", "a"))},
 	} {
