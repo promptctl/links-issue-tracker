@@ -1061,7 +1061,7 @@ func TestCreateIssueDoesNotReuseADeletedChildID(t *testing.T) {
 		}
 	}
 	export.Events = keptEvents
-	if err := st.ReplaceFromExport(ctx, export); err != nil {
+	if _, err := st.ReplaceFromExport(ctx, export); err != nil {
 		t.Fatalf("ReplaceFromExport() error = %v", err)
 	}
 	if _, err := st.GetIssue(ctx, first.ID); err == nil {
@@ -1410,7 +1410,7 @@ func TestReplaceFromExportAndSyncState(t *testing.T) {
 			},
 		}},
 	}
-	if err := st.ReplaceFromExport(ctx, export); err != nil {
+	if _, err := st.ReplaceFromExport(ctx, export); err != nil {
 		t.Fatalf("ReplaceFromExport() error = %v", err)
 	}
 
@@ -2309,7 +2309,7 @@ func TestSyncRoundTripIncludingEpic(t *testing.T) {
 		t.Fatalf("Unmarshal(export) error = %v", err)
 	}
 	target := openIssueStore(t, ctx)
-	if err := target.ReplaceFromExport(ctx, decoded); err != nil {
+	if _, err := target.ReplaceFromExport(ctx, decoded); err != nil {
 		t.Fatalf("ReplaceFromExport() error = %v", err)
 	}
 	after, err := target.GetIssue(ctx, epic.ID)

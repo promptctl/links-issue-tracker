@@ -379,7 +379,7 @@ func TestDeterministicMapCleanAhead(t *testing.T) {
 
 	dst := filepath.Join(t.TempDir(), "dst")
 	withStore(t, ctx, dst, func(st *Store) {
-		if err := st.ReplaceFromExport(ctx, export); err != nil {
+		if _, err := st.ReplaceFromExport(ctx, export); err != nil {
 			t.Fatalf("ReplaceFromExport: %v", err)
 		}
 		report, err := st.Doctor(ctx)
@@ -457,7 +457,7 @@ func TestDeterministicMapPreGoose(t *testing.T) {
 
 	dst := filepath.Join(t.TempDir(), "dst")
 	withStore(t, ctx, dst, func(st *Store) {
-		if err := st.ReplaceFromExport(ctx, export); err != nil {
+		if _, err := st.ReplaceFromExport(ctx, export); err != nil {
 			t.Fatalf("ReplaceFromExport: %v", err)
 		}
 		report, err := st.Doctor(ctx)

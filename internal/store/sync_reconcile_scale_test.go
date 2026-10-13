@@ -221,7 +221,7 @@ func scaleIssueID(i int) string { return fmt.Sprintf("bench-%05d", i) }
 // plus a long chain of local single-field edits that have never been pushed.
 // B's whole chain is therefore the folded side.
 //
-// The backlog is planted in ONE commit through replaceFromExport rather than
+// The backlog is planted in ONE commit through rebuildFromExport rather than
 // created issue by issue: the chain length under test is the EDIT chain, and
 // paying a thousand commits to set up a five-hundred-commit fold would make the
 // test's cost setup rather than the thing being measured.
@@ -305,8 +305,8 @@ func plantScaleBacklog(t *testing.T, ctx context.Context, st *Store, issues int)
 	// The seed issue's own events and relations reference the id being replaced,
 	// so the planted backlog starts with issue rows only.
 	export.Events, export.Comments, export.Labels, export.Relations = nil, nil, nil, nil
-	if err := st.replaceFromExport(ctx, export, commitStamp{Message: "plant backlog"}); err != nil {
-		t.Fatalf("replaceFromExport(plant %d issues): %v", issues, err)
+	if err := st.rebuildFromExport(ctx, export, commitStamp{Message: "plant backlog"}); err != nil {
+		t.Fatalf("rebuildFromExport(plant %d issues): %v", issues, err)
 	}
 }
 

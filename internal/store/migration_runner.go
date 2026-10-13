@@ -552,7 +552,7 @@ func (s *Store) upByOne(ctx context.Context, provider *goose.Provider) (*goose.M
 // exists because reconcile must read/write a remote or base commit written by
 // an older binary (a schema behind this binary's registry); before the lift the
 // working set at that commit lacks columns this binary's SQL names, so reads
-// (Export) and writes (replaceFromExport) fail with a raw backend "no such
+// (Export) and writes (the replay's delta) fail with a raw backend "no such
 // column" error. Lifting reuses the migration chain rather than reimplementing
 // schema adaptation in the merge engine. [LAW:one-source-of-truth] migrations
 // are the single owned representation of schema change. [LAW:no-silent-failure]

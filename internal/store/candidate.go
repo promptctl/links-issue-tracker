@@ -109,7 +109,7 @@ func RebuildCandidate(ctx context.Context, parentDir string, dump RawDump, mappi
 	if err != nil {
 		return nil, fmt.Errorf("open candidate workspace: %w", err)
 	}
-	if err = st.ReplaceFromExport(ctx, export); err != nil {
+	if err = st.rebuildFromExport(ctx, export, commitStamp{Message: "replace from export"}); err != nil {
 		return nil, fmt.Errorf("load export into candidate: %w", err)
 	}
 

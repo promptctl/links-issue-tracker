@@ -254,11 +254,12 @@ func syncPullLeaf() syncLeaf {
 			}
 			return failure
 		}
+		rehomedMetadata(pullTraceMetadata, result.Rehomed)
 		recordSyncCommandTrace(ws, "lit sync pull", string(result.State), nil, pullTraceMetadata)
 		// A pull that completed without a held state converged (or found nothing to
 		// converge): the divergence episode, if one was notified, is over.
 		endDivergenceEpisode(ws)
-		return printSyncPullOutcome(stdout, syncPullOutcome{remote: remoteName, branch: resolvedBranch, state: result.State}, *verbose)
+		return printSyncPullOutcome(stdout, syncPullOutcome{remote: remoteName, branch: resolvedBranch, state: result.State, rehomed: result.Rehomed}, *verbose)
 	}}
 }
 
@@ -793,6 +794,9 @@ type syncPullOutcome struct {
 	remote string
 	branch string
 	state  storage.SyncPullState
+	// rehomed is the tickets the pull's reconcile moved into an epic; empty for
+	// every pull that merged nothing.
+	rehomed []storage.Rehomed
 }
 
 // printSyncPullOutcome renders a pull outcome. The variance lives entirely in
@@ -824,12 +828,15 @@ func printSyncPullOutcome(w io.Writer, o syncPullOutcome, verbose bool) error {
 		_, err := fmt.Fprintf(w, "skipped pull %s/%s: remote branch missing; run `%s`, then retry `%s`\n", o.remote, o.branch, nextCommand, retryCommand)
 		return err
 	case storage.SyncPullUpToDate, storage.SyncPullFastForwarded, storage.SyncPullLinearized, storage.SyncPullAhead:
-		if !verbose {
-			_, err := fmt.Fprintln(w, "pulled")
+		line := "pulled\n"
+		if verbose {
+			line = fmt.Sprintf("pulled %s/%s (%s)\n", o.remote, o.branch, o.state)
+		}
+		if _, err := io.WriteString(w, line); err != nil {
 			return err
 		}
-		_, err := fmt.Fprintf(w, "pulled %s/%s (%s)\n", o.remote, o.branch, o.state)
-		return err
+		// Printed whatever the verbosity: a moved ticket is never routine.
+		return writeRehomed(w, "the merged backlog", o.rehomed)
 	default:
 		// A SyncPullState this printer does not enumerate must not masquerade as
 		// "pulled" — that would hide a new state behind a bland success, the same

@@ -209,6 +209,10 @@ type SyncPullResult struct {
 	// reconcile that refused the merge, so the pull surface prints the same two
 	// tickets `lit sync reconcile` does. [LAW:one-source-of-truth]
 	Collisions []merge.Collision `json:"collisions,omitempty"`
+	// Rehomed carries the tickets the reconcile moved into an epic, straight
+	// off the reconcile that settled the pull, so the pull names the same moves
+	// `lit sync reconcile` does. [LAW:one-source-of-truth]
+	Rehomed []Rehomed `json:"rehomed,omitempty"`
 }
 
 // GCMode is how deep a compaction pass collects. The depths nest rather than
@@ -464,6 +468,11 @@ type SyncReconcileResult struct {
 	// remote head. Nonzero means local is ahead of the remote by the commit that
 	// carries them, and the next push delivers them; zero for every other outcome.
 	CarriedPurges int
+	// Rehomed names each ticket the settled backlog held outside an epic and
+	// the epic it now lives in (HomeStranded): a purge on one side can drop the
+	// epic a ticket on the other side was just filed under. Empty when nothing
+	// was stranded, and for every non-mutating outcome.
+	Rehomed []Rehomed
 }
 
 // UnrelatedInventory partitions issue ids across the two sides of an

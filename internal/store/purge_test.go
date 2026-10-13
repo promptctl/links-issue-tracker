@@ -38,7 +38,7 @@ func TestRestoreNeverUnpurges(t *testing.T) {
 		t.Fatalf("Purge: %v", err)
 	}
 
-	if err := st.ReplaceFromExport(ctx, backup); err != nil {
+	if _, err := st.ReplaceFromExport(ctx, backup); err != nil {
 		t.Fatalf("ReplaceFromExport(pre-purge backup): %v", err)
 	}
 

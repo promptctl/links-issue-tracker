@@ -327,6 +327,7 @@ func reportTakeOutcome(stdout io.Writer, ws workspace.Info, command string, remo
 	// nothing. [LAW:dataflow-not-control-flow] recorded unconditionally.
 	metadata := map[string]string{"remote": remote, "sync_branch": branch, "replayed": strconv.Itoa(result.Replayed),
 		"carried_purges": strconv.Itoa(result.CarriedPurges), "purged": strconv.Itoa(len(purgedIDs(result.Unrelated)))}
+	rehomedMetadata(metadata, result.Rehomed)
 	decision := string(result.State)
 	status := "ok"
 	// [LAW:one-source-of-truth] a dedicated mapping, not reconcileReasonForState:
@@ -355,16 +356,20 @@ func reportTakeOutcome(stdout io.Writer, ws workspace.Info, command string, remo
 		if result.CarriedPurges > 0 {
 			state = fmt.Sprintf("the local backlog now equals %s less what you purged, with %d purge record(s) carried onto it; run `lit sync push` (or let auto-sync) to deliver them", ref, result.CarriedPurges)
 		}
-		_, err := fmt.Fprintf(stdout,
+		if _, err := fmt.Fprintf(stdout,
 			"took remote: %s.\nDISCARDED the local-only issue(s), by design: %s\nDROPPED the issue(s) a purge on either side names: %s\n",
-			state, describeIDSet(discardedIDs(result.Unrelated, storage.TakeRemote)), describeIDSet(purgedIDs(result.Unrelated)))
-		return err
+			state, describeIDSet(discardedIDs(result.Unrelated, storage.TakeRemote)), describeIDSet(purgedIDs(result.Unrelated))); err != nil {
+			return err
+		}
+		return writeRehomed(stdout, "the adopted backlog", result.Rehomed)
 	case storage.SyncReconcileTookLocal:
 		endDivergenceEpisode(ws)
-		_, err := fmt.Fprintf(stdout,
+		if _, err := fmt.Fprintf(stdout,
 			"took local: your backlog now sits on top of %s — %s replayed with original messages and timestamps; run `lit sync push` (or let auto-sync) to fast-forward the remote onto it.\nDISCARDED the remote-only issue(s), by design: %s\nDROPPED the issue(s) a purge on either side names: %s\n",
-			ref, describeReplayed(result.Replayed), describeIDSet(discardedIDs(result.Unrelated, storage.TakeLocal)), describeIDSet(purgedIDs(result.Unrelated)))
-		return err
+			ref, describeReplayed(result.Replayed), describeIDSet(discardedIDs(result.Unrelated, storage.TakeLocal)), describeIDSet(purgedIDs(result.Unrelated))); err != nil {
+			return err
+		}
+		return writeRehomed(stdout, "your backlog", result.Rehomed)
 	case storage.SyncReconcileNotDiverged:
 		endDivergenceEpisode(ws)
 		_, err := fmt.Fprintln(stdout, "nothing to reconcile: the clone is not diverged from the remote")
@@ -429,6 +434,7 @@ func reportReconcileResult(ctx context.Context, stdout io.Writer, ws workspace.I
 	// "replayed" mirrors reportTakeOutcome: the provenance-replay count is part
 	// of the durable trace for every outcome, zero included.
 	metadata := map[string]string{"remote": remote, "sync_branch": branch, "replayed": strconv.Itoa(result.Replayed)}
+	rehomedMetadata(metadata, result.Rehomed)
 	switch result.State {
 	case storage.SyncReconcileIDCollision:
 		// Routed through the same one sync-failure contract as every other held
@@ -513,6 +519,9 @@ func reportReconcileResult(ctx context.Context, stdout io.Writer, ws workspace.I
 		if _, err := fmt.Fprintf(stdout, "reconciled: the divergence merged into linear history — %s replayed with original messages and timestamps; the next push fast-forwards\n", describeReplayed(result.Replayed)); err != nil {
 			return err
 		}
+		if err := writeRehomed(stdout, "the merged backlog", result.Rehomed); err != nil {
+			return err
+		}
 		// The histories that just merged are exactly the moment
 		// design-docs/work-claims.md's "Distribution, races, and failure
 		// modes" says a partition race first becomes knowable. [LAW:no-silent-failure]
@@ -540,6 +549,9 @@ func reportReconcileResult(ctx context.Context, stdout io.Writer, ws workspace.I
 			describeIDSet(inv.OnlyRemote),
 			describeIDSet(inv.OnBoth),
 			describeIDSet(inv.Purged)); err != nil {
+			return err
+		}
+		if err := writeRehomed(stdout, "the combined backlog", result.Rehomed); err != nil {
 			return err
 		}
 		return reportContestedLanes(ctx, stdout, ws, session.engine)

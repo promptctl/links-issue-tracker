@@ -541,8 +541,8 @@ func seedUnrelatedPairWithShared(t *testing.T, ctx context.Context, rootA, rootB
 	}
 	combined := exportB
 	combined.Issues = append(combined.Issues, sharedIssue)
-	if err := stB.replaceFromExport(ctx, combined, commitStamp{Message: "plant shared issue"}); err != nil {
-		t.Fatalf("replaceFromExport(B): %v", err)
+	if err := stB.rebuildFromExport(ctx, combined, commitStamp{Message: "plant shared issue"}); err != nil {
+		t.Fatalf("rebuildFromExport(B): %v", err)
 	}
 	if err := stB.Close(); err != nil {
 		t.Fatalf("Close(B): %v", err)
@@ -940,8 +940,8 @@ func forkUnrelatedClone(t *testing.T, ctx context.Context, root, remoteURL strin
 	now := time.Now().UTC()
 	epic := model.Issue{ID: "test-fork-epic", Title: "fork-epic", IssueType: model.TypeEpic, Topic: "topic", CreatedAt: now, UpdatedAt: now}
 	export.Issues = append(export.Issues, epic)
-	if err := st.replaceFromExport(ctx, export, commitStamp{Message: forkEpicCommitMessage}); err != nil {
-		t.Fatalf("replaceFromExport(fork epic): %v", err)
+	if err := st.rebuildFromExport(ctx, export, commitStamp{Message: forkEpicCommitMessage}); err != nil {
+		t.Fatalf("rebuildFromExport(fork epic): %v", err)
 	}
 	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "fork-local", Topic: "topic", IssueType: "task", ParentID: epic.ID})
 	if err != nil {
