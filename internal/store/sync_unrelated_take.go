@@ -75,15 +75,17 @@ func (e OwnerApprovalRequiredError) Error() string {
 // this refuses it loudly rather than reset a mergeable backlog. [LAW:no-silent-failure]
 //
 // The chosen side's unique issues survive and the OTHER side's unique issues are
-// discarded BY DESIGN; the both-sides inventory is read off the two anchors and
-// carried on the result so the surface can report exactly what was dropped, never
-// silently. [FRAMING:representation] the result names the discard.
+// discarded BY DESIGN, as is every issue a purge record on either side names; the
+// both-sides inventory is read off the two anchors and carried on the result so the
+// surface can report exactly what was dropped, never silently.
+// [FRAMING:representation] the result names the discard.
 //
 // It is snapshot-guarded and GC-retry-wrapped like the three-way reconcile — the take
 // is destructive, so a pre-mutation recovery point matters even more here. take-local,
 // which authors replay commits on the remote head, also shares the three-way path's
-// schema-ahead refusal (guardCommitSchemaAhead); take-remote, which adopts the remote
-// head wholesale, authors no replay commit and is exempt. CONSTRAINT (embedded Dolt
+// schema-ahead refusal (guardCommitSchemaAhead), and so does a take-remote that carries
+// local purge records onto the remote head; a take-remote with none to carry adopts the
+// remote head wholesale, authors no commit, and is exempt. CONSTRAINT (embedded Dolt
 // one-RW-engine-per-path): runs INLINE/foreground on the caller's own engine, never a
 // background worker.
 //
@@ -174,10 +176,6 @@ func (s *Store) SyncResolveUnrelated(ctx context.Context, remote string, branch 
 func (s *Store) applyUnrelatedTake(ctx context.Context, result *storage.SyncReconcileResult, plan reconcilePlan, remote, branch string, choice storage.UnrelatedResolution) error {
 	switch choice {
 	case storage.TakeRemote:
-		// take-remote adopts the remote head wholesale (resetHardToRef) — no scratch, no
-		// replay commit — so it takes only its own snapshot guard, NOT the full scratch
-		// envelope, and is exempt from the schema-ahead refusal: adopting an ahead head is a
-		// safe recovery (the stale binary gets the newer data), not a regression.
 		carry, err := s.purgesMissingAt(ctx, plan.remoteHead)
 		if err != nil {
 			return err
@@ -192,9 +190,20 @@ func (s *Store) applyUnrelatedTake(ctx context.Context, result *storage.SyncReco
 			// branch is the domain's own: a take that writes, or one that does not.
 			// [LAW:single-enforcer] the same replayUnderGuard every replay runs in.
 			return s.replayUnderGuard(ctx, remote, branch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch) error {
-				return s.takeRemoteCarryingPurges(ctx, result, guard, plan.dataBranch, scratch, plan.localHead, plan.remoteHead)
+				if err := s.takeRemoteCarryingPurges(ctx, result, guard, plan.dataBranch, scratch, plan.localHead, plan.remoteHead); err != nil {
+					return err
+				}
+				result.CarriedPurges = len(carry)
+				return nil
 			})
 		}
+		// With nothing to carry, take-remote adopts the remote head wholesale
+		// (resetHardToRef) — no scratch, no replay commit — so it takes only its own
+		// snapshot guard, NOT the full scratch envelope, and is exempt from the
+		// schema-ahead refusal: adopting an ahead head is a safe recovery (the stale
+		// binary gets the newer data), not a regression. A stale binary holding a
+		// purge the remote lacks is refused instead, since carrying it writes below
+		// the newer schema; upgrading lit is the way on.
 		guard := newSnapshotGuard(s.doltRootDir, migrationSnapshotsDir(s.doltRootDir), formatReconcileSnapshotLabel(time.Now()))
 		trackingRef := fmt.Sprintf("remotes/%s/%s", remote, branch)
 		return retryTransientGCContention(ctx, func(ctx context.Context) error {
@@ -271,42 +280,19 @@ func (s *Store) takeRemoteCarryingPurges(ctx context.Context, result *storage.Sy
 }
 
 // purgesMissingAt is local's purge records that commit does not hold, read AS
-// OF the commit so no branch moves. A commit from before the purges table holds
-// none. [LAW:no-defensive-null-guards] the absent table is a real domain value —
-// a store that never purged — matched at the backend boundary, as
-// issueIDsAtCommit matches an absent issues table.
+// OF the commit so no branch moves.
 func (s *Store) purgesMissingAt(ctx context.Context, commit string) ([]model.Purge, error) {
 	held, err := listPurges(ctx, s.db)
 	if err != nil {
 		return nil, err
 	}
-	if !isDoltCommitHash(commit) {
-		return nil, fmt.Errorf("purge records at commit: %q is not a Dolt commit hash", commit)
+	there, err := purgesAtCommit(ctx, s.db, commit)
+	if err != nil {
+		return nil, fmt.Errorf("read the remote head's purge records: %w", err)
 	}
-	there := map[purgeKey]bool{}
-	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`SELECT issue_id, issue_created_at FROM purges AS OF '%s'`, commit))
-	switch {
-	case err != nil && isMissingTableError(err):
-	case err != nil:
-		return nil, fmt.Errorf("read purge records at %q: %w", commit, err)
-	default:
-		defer rows.Close()
-		for rows.Next() {
-			var p model.Purge
-			var createdAt string
-			if err := rows.Scan(&p.IssueID, &createdAt); err != nil {
-				return nil, err
-			}
-			if p.IssueCreatedAt, err = scanTime(createdAt); err != nil {
-				return nil, err
-			}
-			there[keyOfPurge(p)] = true
-		}
-		if err := rows.Err(); err != nil {
-			return nil, err
-		}
-	}
-	return slices.DeleteFunc(held, func(p model.Purge) bool { return there[keyOfPurge(p)] }), nil
+	return slices.DeleteFunc(held, func(p model.Purge) bool {
+		return slices.ContainsFunc(there, func(t model.Purge) bool { return t.Key() == p.Key() })
+	}), nil
 }
 
 // takeLocalOntoRemoteHead replays the local backlog forward onto the remote head, so

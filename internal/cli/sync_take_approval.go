@@ -35,8 +35,8 @@ func (e ownerApprovalRefusalError) blockString() string {
 	fmt.Fprintf(&b, "lit sync reconcile take %s is DESTRUCTIVE and did not run: it needs the owner's explicit approval.\n\n", e.Approval.Choice)
 
 	fmt.Fprintf(&b,
-		"WHAT IT WOULD DO: keep the %s backlog wholesale and permanently discard every issue only the %s side holds — %s.\n\n",
-		kept, dropped, describeIDSet(discardedIDs(e.Approval.Inventory, e.Approval.Choice)))
+		"WHAT IT WOULD DO: keep the %s backlog wholesale and permanently discard every issue only the %s side holds — %s — and every issue a purge on either side names — %s.\n\n",
+		kept, dropped, describeIDSet(discardedIDs(e.Approval.Inventory, e.Approval.Choice)), describeIDSet(purgedIDs(e.Approval.Inventory)))
 
 	failure := SyncFailure{Inventory: e.Approval.Inventory}
 	for _, line := range failure.inventoryLines() {

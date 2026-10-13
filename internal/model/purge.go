@@ -32,6 +32,19 @@ type Purge struct {
 	PurgedBy       string    `json:"purged_by"`
 }
 
+// PurgeKey is a purge record's identity: the issue id and its birth instant
+// spelled in UTC RFC3339Nano, one spelling per instant, which is also what the
+// store's primary key holds. [LAW:one-source-of-truth] every union, delta and
+// primary key compares records through Key.
+type PurgeKey struct {
+	IssueID, IssueCreatedAt string
+}
+
+// Key is the record's PurgeKey.
+func (p Purge) Key() PurgeKey {
+	return PurgeKey{IssueID: p.IssueID, IssueCreatedAt: p.IssueCreatedAt.UTC().Format(time.RFC3339Nano)}
+}
+
 // Names reports whether this record purged that ticket: the same id, born at
 // the same instant. Equal, not ==, since one instant may be spelled in two
 // offsets.
@@ -46,17 +59,12 @@ func (p Purge) Names(issue Issue) bool {
 // it; the earlier purge is kept, the actor breaking a same-instant tie, so
 // every store keeps the same record whatever order the sets arrive in.
 func UnionPurges(sets ...[]Purge) []Purge {
-	type ticket struct {
-		id   string
-		born int64
-	}
-	byTicket := map[ticket]Purge{}
+	byTicket := map[PurgeKey]Purge{}
 	for _, set := range sets {
 		for _, p := range set {
-			key := ticket{p.IssueID, p.IssueCreatedAt.UnixNano()}
-			held, ok := byTicket[key]
+			held, ok := byTicket[p.Key()]
 			if !ok || purgeOrder(p, held) < 0 {
-				byTicket[key] = p
+				byTicket[p.Key()] = p
 			}
 		}
 	}

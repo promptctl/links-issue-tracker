@@ -62,6 +62,24 @@ func (s *Store) Purge(ctx context.Context, in storage.PurgeInput) (storage.Purge
 	return result, nil
 }
 
+// scanPurge decodes one purges row selected as issue_id, issue_created_at,
+// purged_at, purged_by — the order listPurges and purgesAtCommit both select.
+func scanPurge(rows *sql.Rows) (model.Purge, error) {
+	var p model.Purge
+	var createdAt, purgedAt string
+	if err := rows.Scan(&p.IssueID, &createdAt, &purgedAt, &p.PurgedBy); err != nil {
+		return model.Purge{}, err
+	}
+	var err error
+	if p.IssueCreatedAt, err = scanTime(createdAt); err != nil {
+		return model.Purge{}, err
+	}
+	if p.PurgedAt, err = scanTime(purgedAt); err != nil {
+		return model.Purge{}, err
+	}
+	return p, nil
+}
+
 // detachedChildrenTx reads every child filed under parentID, with the parent
 // edges it keeps once its edge to parentID is gone.
 func detachedChildrenTx(ctx context.Context, tx *sql.Tx, parentID string) ([]storage.DetachedChild, error) {
@@ -91,8 +109,9 @@ GROUP BY r.src_id, c.issue_type`, parentID)
 // a purge writes its record through it, and so do a restore and the replay's
 // delta, which carry records another store wrote.
 func insertPurgeTx(ctx context.Context, tx *sql.Tx, p model.Purge) error {
+	key := p.Key()
 	if _, err := tx.ExecContext(ctx, `INSERT INTO purges(issue_id, issue_created_at, purged_at, purged_by) VALUES (?, ?, ?, ?)`,
-		p.IssueID, p.IssueCreatedAt.Format(time.RFC3339Nano), p.PurgedAt.Format(time.RFC3339Nano), p.PurgedBy); err != nil {
+		key.IssueID, key.IssueCreatedAt, p.PurgedAt.Format(time.RFC3339Nano), p.PurgedBy); err != nil {
 		return fmt.Errorf("record purge of %s: %w", p.IssueID, err)
 	}
 	return nil
@@ -110,15 +129,8 @@ func listPurges(ctx context.Context, q rowQueryer) ([]model.Purge, error) {
 	defer rows.Close()
 	out := []model.Purge{}
 	for rows.Next() {
-		var p model.Purge
-		var createdAt, purgedAt string
-		if err := rows.Scan(&p.IssueID, &createdAt, &purgedAt, &p.PurgedBy); err != nil {
-			return nil, err
-		}
-		if p.IssueCreatedAt, err = scanTime(createdAt); err != nil {
-			return nil, err
-		}
-		if p.PurgedAt, err = scanTime(purgedAt); err != nil {
+		p, err := scanPurge(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, p)

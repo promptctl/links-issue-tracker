@@ -83,3 +83,19 @@ func TestUnionPurgesKeepsTheEarliestRecordOfEachTicket(t *testing.T) {
 		}
 	}
 }
+
+// TestPurgeKeyIsOneSpellingPerInstant pins the identity every union, delta and
+// primary key compares by: one instant spelled in two offsets is one key, in
+// UTC, so two stores holding the same record in different spellings converge on
+// one row instead of trading it back and forth.
+func TestPurgeKeyIsOneSpellingPerInstant(t *testing.T) {
+	born := time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)
+	utc := Purge{IssueID: "x", IssueCreatedAt: born, PurgedAt: born, PurgedBy: "ada"}
+	east := Purge{IssueID: "x", IssueCreatedAt: born.In(time.FixedZone("east", 3600)), PurgedAt: born, PurgedBy: "ada"}
+	if utc.Key() != east.Key() || utc.Key().IssueCreatedAt != "2026-10-13T00:00:00Z" {
+		t.Errorf("keys = %+v and %+v, want one UTC key", utc.Key(), east.Key())
+	}
+	if got := UnionPurges([]Purge{east}, []Purge{utc}); len(got) != 1 {
+		t.Errorf("UnionPurges = %+v, want one record for one instant", got)
+	}
+}

@@ -460,20 +460,26 @@ type SyncReconcileResult struct {
 	// landed). It is read back off the spine after the replay, so it reports what
 	// actually landed, not what was attempted. [FRAMING:representation]
 	Replayed int
+	// CarriedPurges counts the local purge records a take-remote carried onto the
+	// remote head. Nonzero means local is ahead of the remote by the commit that
+	// carries them, and the next push delivers them; zero for every other outcome.
+	CarriedPurges int
 }
 
 // UnrelatedInventory partitions issue ids across the two sides of an
-// unrelated-history divergence by which side holds each: ids only the local head
-// carries, ids only the remote head carries, and ids both carry. The three slices
-// are sorted and mutually disjoint by construction — every id present on either
-// side lands in exactly one — so the partition is total and a consumer renders or
-// resolves it without re-deriving membership. [LAW:types-are-the-program] the type
+// unrelated-history divergence: ids a purge record on either side names, which
+// every resolution drops, and of the rest, ids only the local head carries, ids
+// only the remote head carries, and ids both carry. The four slices are sorted and
+// mutually disjoint by construction — every id present on either side lands in
+// exactly one — so the partition is total and a consumer renders or resolves it
+// without re-deriving membership. [LAW:types-are-the-program] the type
 // is the "what each side holds" answer; the take-one/union resolutions later in the
 // epic read the same partition rather than re-querying both heads.
 type UnrelatedInventory struct {
 	OnlyLocal  []string `json:"only_local,omitempty"`
 	OnlyRemote []string `json:"only_remote,omitempty"`
 	OnBoth     []string `json:"on_both,omitempty"`
+	Purged     []string `json:"purged,omitempty"`
 }
 
 // UnrelatedResolution is the whole-store choice that settles an unrelated-history

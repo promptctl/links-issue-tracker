@@ -30,9 +30,14 @@ func TestSyncResolveUnrelatedTakeLocalKeepsTheRemotesPurge(t *testing.T) {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	token := ownerApprovedTakeToken(t, ctx, syncB, "origin", "master", storage.TakeLocal)
-	if _, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", storage.TakeLocal, token); err != nil {
+	res, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", storage.TakeLocal, token)
+	if err != nil {
 		t.Fatalf("SyncResolveUnrelated(TakeLocal): %v", err)
 	}
+	// The inventory the owner approved names the shared ticket as purged, not
+	// as local work the take keeps.
+	assertIDSet(t, "purged", res.Unrelated.Purged, []string{sharedID})
+	assertIDSet(t, "only-local (kept)", res.Unrelated.OnlyLocal, []string{localEpicID, localIssueID})
 	assertLocalIssueIDs(t, ctx, syncB, []string{localEpicID, localIssueID})
 	assertPurged(t, ctx, syncB, sharedID)
 
@@ -72,8 +77,14 @@ func TestSyncResolveUnrelatedTakeRemoteCarriesTheLocalPurge(t *testing.T) {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	token := ownerApprovedTakeToken(t, ctx, syncB, "origin", "master", storage.TakeRemote)
-	if _, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", storage.TakeRemote, token); err != nil {
+	res, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", storage.TakeRemote, token)
+	if err != nil {
 		t.Fatalf("SyncResolveUnrelated(TakeRemote): %v", err)
+	}
+	assertIDSet(t, "purged", res.Unrelated.Purged, []string{sharedID})
+	assertIDSet(t, "only-remote (kept)", res.Unrelated.OnlyRemote, nil)
+	if res.CarriedPurges != 1 {
+		t.Errorf("CarriedPurges = %d, want 1", res.CarriedPurges)
 	}
 	assertLocalIssueIDs(t, ctx, syncB, nil)
 	assertPurged(t, ctx, syncB, sharedID)
@@ -206,6 +217,9 @@ func TestSyncResolveUnrelatedTakeRemoteAdoptsAPrePurgeRemote(t *testing.T) {
 			}
 			if res.State != storage.SyncReconcileTookRemote {
 				t.Fatalf("state = %q, want %q", res.State, storage.SyncReconcileTookRemote)
+			}
+			if want := map[bool]int{false: 0, true: 1}[tc.purge]; res.CarriedPurges != want {
+				t.Errorf("CarriedPurges = %d, want %d", res.CarriedPurges, want)
 			}
 			assertScratchBranchCleanedUp(t, ctx, syncB)
 			fresh, err := syncB.SyncFreshness(ctx, "origin", "master")

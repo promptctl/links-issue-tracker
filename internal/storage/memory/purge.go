@@ -25,11 +25,11 @@ func (e *Engine) Purge(ctx context.Context, in storage.PurgeInput) (storage.Purg
 	}
 	var result storage.PurgeResult
 	e.comments, result.Comments = removeWhere(e.comments, func(c model.Comment) bool { return c.IssueID == id })
-	e.relations, result.Relations = removeWhere(e.relations, func(r model.Relation) bool { return r.SrcID == id || r.DstID == id })
+	result.Relations = e.dropRelations(func(r model.Relation) bool { return r.SrcID == id || r.DstID == id })
 	e.events, result.Events = removeWhere(e.events, func(ev model.IssueEvent) bool { return ev.IssueID == id })
 	result.Labels = len(e.labels[id])
 	delete(e.labels, id)
-	e.order = slices.DeleteFunc(e.order, func(existing string) bool { return existing == id })
+	e.detach(id)
 	result.Purge = model.Purge{IssueID: id, IssueCreatedAt: e.issues[id].createdAt, PurgedAt: e.clock.Now(), PurgedBy: in.Actor}
 	delete(e.issues, id)
 	e.purges = append(e.purges, result.Purge)
@@ -44,13 +44,7 @@ func (e *Engine) detachedChildren(parentID string) []storage.DetachedChild {
 		if rel.Type != model.RelParentChild || rel.DstID != parentID {
 			continue
 		}
-		parentsLeft := 0
-		for _, other := range e.relations {
-			if other.SrcID == rel.SrcID && other.Type == model.RelParentChild && other.DstID != parentID {
-				parentsLeft++
-			}
-		}
-		out = append(out, storage.DetachedChild{ID: rel.SrcID, Type: e.issues[rel.SrcID].issueType, ParentsLeft: parentsLeft})
+		out = append(out, storage.DetachedChild{ID: rel.SrcID, Type: e.issues[rel.SrcID].issueType, ParentsLeft: e.parentsLeftWithout(rel.SrcID, parentID)})
 	}
 	return out
 }

@@ -334,13 +334,7 @@ func (e *Engine) RemoveRelation(ctx context.Context, srcID, dstID string, relTyp
 		if err != nil {
 			return "", 0, err
 		}
-		parentsLeft := 0
-		for _, rel := range e.relations {
-			if rel.SrcID == srcID && rel.Type == model.RelParentChild && rel.DstID != dstID {
-				parentsLeft++
-			}
-		}
-		return child.issueType, parentsLeft, nil
+		return child.issueType, e.parentsLeftWithout(srcID, dstID), nil
 	}); err != nil {
 		return err
 	}
@@ -470,9 +464,22 @@ func (e *Engine) hasRelation(srcID, dstID string, relType model.RelationType) bo
 // went. The count is what lets a caller tell "removed it" from "there was
 // nothing to remove" without reading the table twice.
 func (e *Engine) dropRelations(matches func(model.Relation) bool) int {
-	before := len(e.relations)
-	e.relations = slices.DeleteFunc(e.relations, matches)
-	return before - len(e.relations)
+	var dropped int
+	e.relations, dropped = removeWhere(e.relations, matches)
+	return dropped
+}
+
+// parentsLeftWithout counts childID's parent-child edges other than the one to
+// parentID: the parents it keeps once that edge is gone, which a detach and a
+// purge of parentID both judge it by.
+func (e *Engine) parentsLeftWithout(childID, parentID string) int {
+	count := 0
+	for _, rel := range e.relations {
+		if rel.SrcID == childID && rel.Type == model.RelParentChild && rel.DstID != parentID {
+			count++
+		}
+	}
+	return count
 }
 
 // bucketRelations sorts the edges incident to focalID into the four structural
