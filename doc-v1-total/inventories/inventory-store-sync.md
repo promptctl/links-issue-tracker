@@ -618,19 +618,27 @@ Test `TestSyncResolveUnrelatedOwnerApprovalBindsForkAndSide` (`sync_unrelated_te
 ### 6.4 `applyUnrelatedTake` dispatch
 
 `applyUnrelatedTake` (`sync_unrelated_take.go`):
-- `storage.TakeRemote` → its **own** snapshot guard (`newSnapshotGuard(..., formatReconcileSnapshotLabel(time.Now()))`), tracking ref `remotes/<remote>/<branch>`, local's purge records read once before the first attempt (`listPurges(ctx, s.db)`, error returned as is), then `retryTransientGCContention(takeRemoteHead)` with those records. **No scratch envelope, no schema-ahead refusal** (`sync_unrelated_take.go`).
+- `storage.TakeRemote` → `carry := s.purgesMissingAt(ctx, plan.remoteHead)` (error returned as is). When `len(carry) > 0` → `s.replayUnderGuard(ctx, remote, branch, plan.remoteHead, takeRemoteCarryingPurges)` — the **full** envelope including the schema-ahead refusal. Otherwise its **own** snapshot guard (`newSnapshotGuard(..., formatReconcileSnapshotLabel(time.Now()))`), tracking ref `remotes/<remote>/<branch>`, then `retryTransientGCContention(takeRemoteHead)`. **No scratch envelope, no schema-ahead refusal** on that path (`sync_unrelated_take.go`).
 - `storage.TakeLocal` → `s.replayUnderGuard(ctx, remote, branch, plan.remoteHead, takeLocalOntoRemoteHead)` — the **full** envelope including the schema-ahead refusal (`sync_unrelated_take.go`).
 - default → `"resolve unrelated histories: unhandled side %q"` (`sync_unrelated_take.go`). The combine resolution never reaches this dispatch; it lives on the reconcile boundary.
 
 ### 6.5 `takeRemoteHead`
 
-`takeRemoteHead(ctx, result, guard, trackingRef, localPurges)` (`sync_unrelated_take.go`):
+`takeRemoteHead(ctx, result, guard, trackingRef)` (`sync_unrelated_take.go`):
 1. `guard.ensure(ctx)`; failure → `"snapshot before take-remote: %w"`.
 2. `resetHardToRef(ctx, s.db, trackingRef)`.
-2a. `s.carryPurges(ctx, localPurges)`; failure → `"take-remote: %w"`. `carryPurges` exports the adopted state (failure → `"read the adopted head to carry purge records onto: %w"`), computes `diffExports(current, current.ApplyPurges(model.UnionPurges(current.Purges, purges)))`, and applies it with `applyExportDelta` in one `withMutation` under `takeRemotePurgesCommitMessage`. An empty delta commits nothing. Afterward local equals the remote head less every ticket local's records name, and holds both sides' records; when local held records the remote lacked, local is one commit ahead of the remote.
 3. `dbsnapshot.PruneMatching(migrationSnapshotsDir(...), 10, IsReconcileSnapshotName)`; failure prints `"lit: take-remote could not prune old recovery snapshots (reset already done): %v"` to stderr, **not** promoted.
 4. `result.State = SyncReconcileTookRemote`.
-Idempotent under retry (cached snapshot, fixed ref, the carry computed from the state the reset left). Tests `TestSyncResolveUnrelatedTakeRemote` (`sync_unrelated_test.go`), `TestSyncResolveUnrelatedTakeRemoteCarriesTheLocalPurge` (`sync_unrelated_purge_test.go`).
+Idempotent under retry (cached snapshot, fixed ref). The session's working set is left at the adopted head's own schema; the next `Open` lifts it. Tests `TestSyncResolveUnrelatedTakeRemote` (`sync_unrelated_test.go`), `TestSyncResolveUnrelatedTakeRemoteAdoptsAPrePurgeRemote` "nothing to carry" (`sync_unrelated_purge_test.go`).
+
+`takeRemoteCarryingPurges(ctx, result, guard, dataBranch, scratch, localHead, remoteHead)` (`sync_unrelated_take.go`), inside `runOnReconcileScratch`:
+1. `local = exportAtCommit(scratch.read, localHead)`; `theirs = exportAtCommit(scratch.read, remoteHead)` (each lifted to the current schema).
+2. `terminal = theirs.ApplyPurges(model.UnionPurges(theirs.Purges, local.Purges))`.
+3. `commitReplayAndAdvance(ctx, guard, dataBranch, scratch, remoteHead, takeRemotePurgesCommitMessage, terminal, foldStepper{store: s, readBranch: scratch.read, base: model.Export{}, theirs: theirs})` — an empty chain, so the spine is the lift commit (none on a current-schema head) and the marker.
+4. `result.State = SyncReconcileTookRemote`.
+Tests `TestSyncResolveUnrelatedTakeRemoteCarriesTheLocalPurge`, `TestSyncResolveUnrelatedTakeRemoteAdoptsAPrePurgeRemote` "a purge to carry" (`sync_unrelated_purge_test.go`).
+
+`purgesMissingAt(ctx, commit)` (`sync_unrelated_take.go`): `listPurges(ctx, s.db)`, then a commit that is not a Dolt hash → `"purge records at commit: %q is not a Dolt commit hash"`; `SELECT issue_id, issue_created_at FROM purges AS OF '<commit>'` — a missing-table error is no records, any other error → `"read purge records at %q: %w"`; returns the local records whose `keyOfPurge` the commit does not hold.
 
 ### 6.6 `takeLocalOntoRemoteHead`
 

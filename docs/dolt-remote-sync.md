@@ -406,8 +406,8 @@ merge automatically — resolving them is a deliberate choice among:
 - `lit sync reconcile take local|remote` — one side survives **wholesale and
   the other side's unique issues are permanently discarded**. Purge records
   are kept from both sides: a ticket either side purged is gone afterward, and
-  when local held records the remote lacked, `take remote` lands them as one
-  commit on the adopted head that the next push carries.
+  when local held records the remote lacked, `take remote` lands them in a
+  commit on top of the remote head that the next push carries.
 
 Because a take destroys one side's work, it refuses to run without the owner's
 explicit approval. Run bare, it exits 5 with a refusal block naming exactly
