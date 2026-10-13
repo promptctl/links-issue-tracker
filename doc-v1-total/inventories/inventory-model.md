@@ -814,21 +814,55 @@ Slug bounds — `slug.go`: `PrefixMinLength = 3`, `PrefixMaxLength = 12`,
 `TopicMinLength = 3`, `TopicMaxLength = 30`.
 
 ## 3.2 ID format
-`GenerateHashID(prefix, topic, title, description, creator string, createdAt time.Time, length, nonce int) string`
+`type Namespace string` — `generate.go`: the text every ID in one id-space
+hangs under. Two constructors:
+- `TopLevelNamespace(prefix, topic string) Namespace` → `prefix + "-" + topic + "-"`.
+- `ChildNamespace(parentID string) Namespace` → `parentID + "."`, so a child ID
+  is `<parentID>.<hash>` and grandchildren nest.
+- No two id-spaces render as one namespace, and a rendered suffix carries
+  neither dot nor dash, so IDs of different spaces never collide (pinned by
+  `TestNamespacesAreDisjoint`, `generate_test.go`).
+
+`type Content struct { Topic, Title, Description, Creator string; CreatedAt time.Time }`
+— `generate.go`: the material an ID is hashed from.
+
+`GenerateHashID(ns Namespace, c Content, length int, nonce int) string`
 — `generate.go`.
-- Content key: `fmt.Sprintf("%s|%s|%s|%s|%d|%d", topic, title, description,
-  creator, createdAt.UnixNano(), nonce)` (`generate.go`) — note `prefix` is
-  **not** part of the hashed content.
+- Content key: `fmt.Sprintf("%s|%s|%s|%s|%d|%d", c.Topic, c.Title,
+  c.Description, c.Creator, c.CreatedAt.UnixNano(), nonce)` (`generate.go`) —
+  the namespace, and so the prefix, is **not** part of the hashed content.
 - `sha256.Sum256(content)`; the first `hashBytesForLength(length)` bytes are
   base-36 encoded to exactly `length` characters (`generate.go`).
-- Result grammar: `<prefix>-<topic>-<hash>` (`generate.go`), where `hash` is
-  `length` characters from `Base36Alphabet`. Deterministic for identical inputs;
-  a different nonce yields a different ID (pinned by `TestGenerateHashID`,
+- Result: `string(ns) + hash`, where `hash` is `length` characters from
+  `Base36Alphabet` (`generate.go`). Deterministic for identical inputs; a
+  different nonce yields a different ID (pinned by `TestGenerateHashID`,
   `generate_test.go`, subtests).
 
-`hashBytesForLength(length int) int` — `generate.go`:
-`3→2`, `4→3`, `5→4`, `6→4`, `7→5`, `8→5`, any other length `→3`.
-Pinned by `TestHashBytesForLength`, `generate_test.go`.
+`type TakenFunc func(candidate string) (bool, error)` — `generate.go`: the
+occupancy probe; an error is never read as "free".
+
+`Mint(ns Namespace, c Content, population int, taken TakenFunc) (string, error)`
+— `generate.go`:
+- Starting length `min(ComputeAdaptiveLength(population), MaxHashLength)`;
+  for each length from there to `MaxHashLength`, nonces `0..NonceAttempts-1`;
+  returns the first `GenerateHashID` candidate `taken` reports unoccupied.
+- A probe error → `check issue id collision: <err>`; exhaustion →
+  `generate unique issue id: exhausted lengths <start>-8`.
+- Pinned by `TestMint`, `generate_test.go` (re-roll past an occupied ID, probe
+  error, exhaustion).
+
+`PrefixOf(id, topic string) (prefix string, ok bool)` — `generate.go`: reads
+the prefix back out of a top-level ID given the topic it was minted with
+(both may contain dashes, so the ID alone cannot say where the prefix ends).
+`ok` is false for an ID with no dash, a child ID, a topic mismatch, an empty prefix, or a tail
+that is not 3–8 base-36 characters (pinned by
+`TestPrefixOfReadsTopLevelNamespaceBackwards`, `generate_test.go`).
+
+`hashBytesForLength(length int) int` — `generate.go`: the fewest digest bytes
+whose value space addresses all `36^length` renderable hashes, capped at
+`sha256.Size` (32): `3→2`, `4→3`, `5→4`, `6→4`, `7→5`, `8→6`. Pinned by
+`TestHashBytesForLength`, `generate_test.go`, which also requires 6 for
+`MaxHashLength` and 32 for length 99.
 
 `encodeBase36(data []byte, length int) string` — `generate.go`:
 - Interprets `data` as a big-endian unsigned big.Int; repeatedly divmod by 36,

@@ -28,7 +28,7 @@ This table is the corpus's single source for the code-to-error-type mapping; `07
 | 0 | `ExitOK` | nil error, including a handled `--help` |
 | 1 | `ExitGeneric` | `BulkFailureError`, transient GC contention, everything else |
 | 2 | `ExitUsage` | `UsageError` |
-| 3 | `ExitValidation` | `UnknownCommandError`, `RetiredCommandError`, `model.ValidationError`, `UnsupportedError`, `templateShapeError`, `OutsideWorkspaceError`, `store.ErrWorkspaceNotInitialized`, `model.ContainerActionError` when not satisfied, `takeoverUnconfirmedError`, `purgeUnconfirmedError` |
+| 3 | `ExitValidation` | `UnknownCommandError`, `RetiredCommandError`, any `model.Refusal` (`model.ValidationError` and the upgrade/downgrade target refusals), `UnsupportedError`, `templateShapeError`, `OutsideWorkspaceError`, `store.ErrWorkspaceNotInitialized`, `*store.UnsupportedSchemaVersionError`, `workspace.ErrIssuePrefixRefused`, `model.ContainerActionError` when not satisfied, `takeoverUnconfirmedError`, `purgeUnconfirmedError` |
 | 4 | `ExitNotFound` | `storage.NotFoundError`, `VersionNotFoundError` |
 | 5 | `ExitConflict` | `MergeConflictError`, `SyncFailureError`, owner-approval refusal |
 | 6 | `ExitNoWork` | `Exhausted`, `NoWork`, `model.ContainerActionError` when `Satisfied()` |

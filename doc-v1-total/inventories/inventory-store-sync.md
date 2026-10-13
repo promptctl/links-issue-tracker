@@ -1298,17 +1298,17 @@ Base: `/Users/bmf/code/links-issue-tracker/internal/store/migrations/`.
 
 ### 12.1 Registry-wide conventions
 
-**Directive syntax.** All five `.sql` files are goose migrations delimited by SQL line comments:
-- `-- +goose Up` begins the up section (`00001_baseline.sql`, `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`).
-- `-- +goose Down` begins the down section (`00001_baseline.sql`, `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`).
-- `-- +goose StatementBegin` / `-- +goose StatementEnd` wrap each individual statement (e.g. `00001_baseline.sql`, `00005_add_event_attribution.sql`). **Every executable statement in every file, in both sections, is inside exactly one such pair** — there are no bare statements (`00001_baseline.sql`, `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`).
+**Directive syntax.** All nine `.sql` files are goose migrations delimited by SQL line comments:
+- `-- +goose Up` begins the up section (`00001_baseline.sql`, `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql`).
+- `-- +goose Down` begins the down section (`00001_baseline.sql`, `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql`).
+- `-- +goose StatementBegin` / `-- +goose StatementEnd` wrap each individual statement (e.g. `00001_baseline.sql`, `00005_add_event_attribution.sql`). **Every executable statement in every file, in both sections, is inside exactly one such pair** — there are no bare statements (`00001_baseline.sql`, `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql`).
 
-**Naming/numbering.** `<NNNNN>_<name>.sql`, 5-digit zero-padded, `00001_baseline.sql` … `00005_add_event_attribution.sql`; the accept-shape is enforced by `bounds.go`. `embed.go` states subsequent migrations append with strictly ascending versions and that only SQL migrations are wired — the embed (`//go:embed *.sql`) and `MaxVersion` (`bounds.go`) both read only `*.sql` entries.
+**Naming/numbering.** `<NNNNN>_<name>.sql`, 5-digit zero-padded, `00001_baseline.sql` … `00009_purges.sql`; the accept-shape is enforced by `bounds.go`. `embed.go` states subsequent migrations append with strictly ascending versions and that only SQL migrations are wired — the embed (`//go:embed *.sql`) and `MaxVersion` (`bounds.go`) both read only `*.sql` entries.
 
 **Idempotency, per statement.**
-- **Up sections: no idempotency guards anywhere.** Every `CREATE TABLE` is bare, no `IF NOT EXISTS` (`00001_baseline.sql`). Every `CREATE INDEX` is bare (`00001_baseline.sql`). Every `ALTER TABLE ... ADD COLUMN` is bare (`00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`). Every `ADD CONSTRAINT` is bare (`00003_add_resolution.sql`, `00004_add_redirect_target.sql`).
+- **Up sections: no idempotency guards anywhere.** Every `CREATE TABLE` is bare, no `IF NOT EXISTS` (`00001_baseline.sql`, `00009_purges.sql`), and so is the one `CREATE TEMPORARY TABLE` (`00006_add_follows_up.sql`). Every `CREATE INDEX` is bare (`00001_baseline.sql`). Every `ALTER TABLE ... ADD COLUMN` is bare (`00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`). Every `ADD CONSTRAINT` is bare (`00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00008_blocked_by_edge.sql`). The guards `00007_every_ticket_inside_a_container.sql` carries are on data, not DDL: it mints the unfiled epic only when no row holds its id, and writes no edge a child already holds.
 - **`00001_baseline.sql` down section: every statement uses `IF EXISTS`** — all seven `DROP TABLE IF EXISTS` (`00001_baseline.sql`).
-- **Down sections of 00002–00005: no `IF EXISTS` on any statement** (`00002_add_lane.sql`; `00003_add_resolution.sql`; `00004_add_redirect_target.sql`; `00005_add_event_attribution.sql`).
+- **Down sections of 00002–00009: no `IF EXISTS` on any statement** (`00002_add_lane.sql`; `00003_add_resolution.sql`; `00004_add_redirect_target.sql`; `00005_add_event_attribution.sql`; `00006_add_follows_up.sql`; `00007_every_ticket_inside_a_container.sql`; `00008_blocked_by_edge.sql`; `00009_purges.sql`).
 - The one insert-conflict tolerance in the registry is `INSERT IGNORE INTO relations(...)` in the 00004 down section (`00004_add_redirect_target.sql`).
 
 ### 12.2 `00001_baseline.sql`
@@ -1446,7 +1446,59 @@ sha256 `ed625b2817365ed357ad477cd0691994a93a65a7ab1005d1b05456c39d159a70`.
 
 **Down** — `ALTER TABLE issue_events DROP COLUMN stream_id;` and `ALTER TABLE issue_events DROP COLUMN workspace_id;`. LOSS CONTRACT: attribution collected on this version is not restored; the claim predicate reads unattributed history as zero claims.
 
-### 12.6a `00009_purges.sql`
+### 12.6a `00006_add_follows_up.sql`
+
+sha256 `f01b4b1ef42071526c8c97bc0acf4bfa4451e0b95981576e63d8170080441b45`.
+
+**Up** — seven statements:
+1. `ALTER TABLE issues ADD COLUMN follows_up VARCHAR(191) NULL;` — nullable, no default, **no foreign key**: the followed-up ticket may later be purged and the link stays true. The comment states the column is written once at creation and never edited, NULL on every ticket not filed as a follow-up.
+2. Backfill UPDATE: every issue holding a `parent-child` edge onto a closed non-epic parent gets `follows_up` = that parent's id, the lowest such id when it has several (`ORDER BY r.dst_id LIMIT 1`). Single-table with correlated subqueries; the comment records that a join onto a second `issues` alias makes the engine check `issues_status_check` against the joined row and refuse the statement.
+3. `CREATE TEMPORARY TABLE followup_dest (child VARCHAR(191) PRIMARY KEY, src VARCHAR(191) NOT NULL, anc VARCHAR(191) NOT NULL);` — the engine accepts a recursive query feeding an INSERT and refuses one feeding an UPDATE.
+4. `INSERT INTO followup_dest … WITH RECURSIVE climb (child, anc, depth)`: starts at each child's `follows_up` and climbs `parent-child` edges while the ancestor is a closed non-epic, cut at `depth < 64`. The destination is the lowest-id ancestor at the deepest depth reached. Rows are kept only when the destination is not itself a closed non-epic (the walk ended on an epic or an open ticket) and the child does not already hold an edge to it.
+5. `UPDATE relations r SET r.dst_id = <followup_dest.anc>` on the child's `parent-child` edge whose `dst_id` is its recorded `follows_up` — only that edge moves, so a two-parent child keeps its other edge for statement 6.
+6. `DELETE FROM relations` every `parent-child` edge from a child with a non-NULL `follows_up` onto a closed non-epic: a walk that ended on a parentless closed leaf (the follow-up becomes top-level), a duplicate of an edge the child already held, or a restored second parent that is itself finished work.
+7. `DROP TEMPORARY TABLE followup_dest;`
+
+Rank keys are untouched: a moved row sorts among its new siblings by the key it has. Test: `TestFollowsUpMigrationBackfill` (`internal/store/migration_follows_up_backfill_test.go`).
+
+**Down** — three statements: `DELETE FROM relations` every `parent-child` edge of an issue whose `follows_up` names an existing issue; `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) SELECT i.id, i.follows_up, 'parent-child', i.created_at, 'links'` for the same issues; `ALTER TABLE issues DROP COLUMN follows_up;`. LOSS CONTRACT: every follow-up is re-nested under the ticket it follows up and loses its place among its epic's children; one whose followed-up ticket has been purged keeps its current parent; a restored second parent is lost; a later Up backfills from closed non-epics alone, so a follow-up filed on an open ticket or an epic returns from a downgrade-then-upgrade as an ordinary child with no `follows_up`.
+
+### 12.6b `00007_every_ticket_inside_a_container.sql`
+
+sha256 `2eb2ae5ab7a43df7116e4dd9137901d8272f03f89a7569bb67b7437182101458`.
+
+No column change. Brings stored data under containment: every task, bug, feature and chore has a parent and every parent is an epic. The comment records why nothing is materialized in a temporary table: the engine corrupts a temporary table that a modifying statement reads through a join or a correlated `EXISTS` (a later join returns each row many times while `COUNT(*)` stays right), which once wrote one edge twenty-six times on a real store.
+
+**Up** — seven statements:
+1. `SET @unfiled := CONCAT(<prefix>, '-unfiled-', LEFT(SHA2(CONCAT(<prefix>, '-unfiled'), 256), 4))`. `<prefix>` is the prefix most top-level ids carry, read back by stripping the `-<topic>-<hash>` tail from ids whose tail matches `^[0-9a-z]{3,8}$` (the reading `issueid.PrefixOf` does), ties to the lower prefix, `'lit'` when no id reads that way. Nothing in the id varies by store, so two checkouts mint one id.
+2. `SET @minted :=` true when no issue holds `@unfiled` and either a non-epic has no `parent-child` edge or some `parent-child` edge points at a non-epic.
+3. `UPDATE issues SET lane = id` on every non-epic with no parent, and on every child of a non-epic that holds no epic parent — a lane of one stays one rather than joining its new epic's default lane.
+4. `INSERT INTO issues (…) SELECT @unfiled, 'Unfiled tickets', <description>, NULL, NULL, 0, 'epic', 'unfiled', '', <rank>, '', '2026-10-12T00:00:00Z', '2026-10-12T00:00:00Z', NULL, … FROM (SELECT 1) one WHERE @minted;` — `<rank>` is `CONCAT(MIN(item_rank), '0')` over the undeleted, ranked, parentless non-epics, `''` when there are none. `created_at` is the authoring date, fixed so two checkouts write one row.
+5. `INSERT INTO relations … WITH RECURSIVE climb` — starts at every child of a non-epic that holds no epic parent and climbs non-epic ancestors, `UNION` (a set, so a fork inside a loop of leaves does not multiply), cut at `depth < 64`. Destination: the nearest epic reached, lowest id at that depth, picked through grouped CTEs (`reached`, `nearest`, `dest`) because a subquery correlated on the recursive member and joined to `issues` returns no rows on this engine. A child that reached no epic goes to `@unfiled` if it is a leaf, and to itself (no edge) if it is an epic; every parentless non-epic goes to `@unfiled`. Each edge is stamped with the child's `created_at` and `'links'`, and is skipped when the child already holds it.
+6. `DELETE r FROM relations r JOIN issues p ON p.id = r.dst_id WHERE r.type = 'parent-child' AND p.issue_type <> 'epic';`
+7. `DELETE FROM issues WHERE id = @unfiled AND @minted AND NOT EXISTS (<a parent-child edge into it>);` — an epic this run minted that nothing landed in is removed; one a peer sent is never removed.
+
+Tests: `TestContainmentMigrationHomesEveryLeaf` and `TestContainmentMigrationIsIdempotentAcrossCheckouts` (`internal/store/migration_containment_test.go`).
+
+**Down** — three statements: `UPDATE issues SET lane = '' WHERE lane = id;`; `DELETE r FROM relations r` every `parent-child` edge onto an epic with `topic = 'unfiled'` and `title = 'Unfiled tickets'`; `DELETE FROM issues` the epics matching the same three columns. LOSS CONTRACT: the unfiled epic's children return to the top level; a child Up moved from a non-epic parent to the epic above it stays there (nothing records its old parent); a lane an agent set to the ticket's own id by hand is reset too; comments, labels and events on the epic go with its row; an unfiled epic renamed since is an ordinary epic and stays.
+
+### 12.6c `00008_blocked_by_edge.sql`
+
+sha256 `2ab61664b7a73c4e36dc0a11d37e2f5b86b261a97aebf67ffa364ae9596e9deb`.
+
+No column change; renames the dependency relation type. The edge was stored as `'blocks'` with `src` the ticket that waits, so the row read the opposite of what it meant; `'blocked-by'` reads the way it means. Every row keeps its `src_id` and `dst_id`.
+
+**Up** — six statements:
+1. `SET @drop_relations_check = (SELECT CONCAT('ALTER TABLE relations DROP CONSTRAINT `', tc.constraint_name, '`') FROM information_schema.table_constraints tc WHERE tc.table_schema = DATABASE() AND tc.table_name = 'relations' AND tc.constraint_type = 'CHECK');` — found by table, not name, because a pre-goose store declared the CHECK inline and the engine named it per store (`relations_chk_<suffix>`).
+2. `PREPARE drop_relations_check FROM @drop_relations_check;` — none, or more than one, CHECK fails the PREPARE and the migration.
+3. `EXECUTE drop_relations_check;`
+4. `DEALLOCATE PREPARE drop_relations_check;`
+5. `UPDATE relations SET type = 'blocked-by' WHERE type = 'blocks';` — no row can already hold `'blocked-by'`, so the rewritten primary keys cannot collide.
+6. `ALTER TABLE relations ADD CONSTRAINT relations_type_check CHECK (type IN ('blocked-by','parent-child','related-to'));`
+
+**Down** — the same six in inverse: the four-statement CHECK drop, `UPDATE relations SET type = 'blocks' WHERE type = 'blocked-by';`, and `ALTER TABLE relations ADD CONSTRAINT relations_type_check CHECK (type IN ('blocks','parent-child','related-to'));`. Lossless: the rename is a bijection on the type column. Test: `TestMigrationRenamesBlocksEdgesKeepingTheirMeaning` (`internal/store/migration_blocked_by_test.go`).
+
+### 12.6d `00009_purges.sql`
 
 sha256 `f3af8e534e5b7fd3d09b310574f4b8925ca281bb942e040c83d25ebd64fdf852`.
 

@@ -425,7 +425,7 @@ Defaults, restated as a table for every column the create path touches:
 
 | Column | Value on create |
 |---|---|
-| `id` | `newIssueID(...)` — `<prefix>-<topic>-<3..8 base36>` for roots (`store_test.go`), `<parentID>.N` for children (`store_test.go`) |
+| `id` | `newIssueID(...)` — `<prefix>-<topic>-<3..8 base36>` for roots (`store_test.go`), `<parentID>.<hash>`, the hash carrying no dot, for children (`store_test.go`) |
 | `title` | trimmed input, required non-empty |
 | `description` | trimmed input |
 | `agent_prompt` | trimmed prompt, `""` stored as SQL NULL |
@@ -1064,6 +1064,7 @@ CREATE TABLE `issues` (
   `lane` text NOT NULL DEFAULT '',
   `resolution` varchar(32),
   `redirect_target` varchar(191),
+  `follows_up` varchar(191),
   PRIMARY KEY (`id`),
   KEY `idx_issues_rank` (`item_rank`(191)),
   KEY `idx_issues_status_priority` (`status`,`priority`,`updated_at`),
@@ -1097,13 +1098,14 @@ Column-by-column provenance and declared form:
 | `lane` | `text` | NOT NULL | `''` | `00002_add_lane.sql` |
 | `resolution` | `VARCHAR(32)` | NULL | none | `00003_add_resolution.sql` |
 | `redirect_target` | `VARCHAR(191)` | NULL | none | `00004_add_redirect_target.sql` |
+| `follows_up` | `VARCHAR(191)` | NULL | none | `00006_add_follows_up.sql` |
 
 - PRIMARY KEY: `(id)` — declared inline as `PRIMARY KEY` on the column (`00001_baseline.sql`).
 - No UNIQUE constraints.
 - Secondary indexes:
   - `idx_issues_status_priority (status, priority, updated_at)` — `00001_baseline.sql`, also created by reconcile at `internal/store/schema_reconcile.go`.
   - `idx_issues_rank (item_rank(191))` — prefix index of length 191 on a `TEXT` column — `00001_baseline.sql`, also `internal/store/schema_reconcile.go`.
-- No FOREIGN KEYs on `issues`. `redirect_target` deliberately has **no** FK to `issues(id)` (`00004_add_redirect_target.sql`).
+- No FOREIGN KEYs on `issues`. `redirect_target` deliberately has **no** FK to `issues(id)` (`00004_add_redirect_target.sql`), and neither has `follows_up` (`00006_add_follows_up.sql`).
 - CHECK constraints (five, all explicitly named so `SHOW CREATE TABLE` is deterministic — `00001_baseline.sql`):
   - `issues_status_check` — `00001_baseline.sql`; the identical clause is generated in Go at `internal/store/schema_reconcile.go` and installed by `ensureStatusConstraint` at `internal/store/schema_reconcile.go`.
   - `issues_priority_check` — `00001_baseline.sql`; Go form at `internal/store/schema_reconcile.go`, installed at `internal/store/schema_reconcile.go`.
@@ -1931,60 +1933,60 @@ Built once at package init by `buildTargetRegistry()` into `var targetRegistry m
 
 Helper `add(c, canonical, opt, fields...)` sets `admits = {canonical: true}` only (shapemap.go). Helper `addMulti(c, canonical, extra, opt, field)` sets `admits = {canonical} ∪ extra` (shapemap.go).
 
-Complete registry (33 entries):
+Complete registry (49 entries; the `add(...)` variadic lines register several fields each, and `line` is the `shapemap.go` line that registers the entry):
 
 | TargetKey | collection | field | canonical | admits | optional | line |
 |---|---|---|---|---|---|---|
-| `issues.id` | issues | id | identity | {identity} | required | 241 |
-| `issues.title` | issues | title | identity | {identity} | required | 241 |
-| `issues.description` | issues | description | identity | {identity} | required | 241 |
-| `issues.priority` | issues | priority | identity | {identity} | required | 241 |
-| `issues.issue_type` | issues | issue_type | identity | {identity} | required | 241 |
-| `issues.prompt` | issues | prompt | identity | {identity} | optional | 242 |
-| `issues.assignee` | issues | assignee | identity | {identity} | optional | 242 |
-| `issues.topic` | issues | topic | identity | {identity} | optional | 242 |
-| `issues.rank` | issues | rank | identity | {identity} | optional | 242 |
-| `issues.lane` | issues | lane | identity | {identity} | optional | 242 |
-| `issues.resolution` | issues | resolution | identity | {identity} | optional | 242 |
-| `issues.redirect_target` | issues | redirect_target | identity | {identity} | optional | 242 |
-| `issues.created_at` | issues | created_at | timestamp | {timestamp} | required | 243 |
-| `issues.updated_at` | issues | updated_at | timestamp | {timestamp} | required | 243 |
-| `issues.closed_at` | issues | closed_at | timestamp | {timestamp} | required | 243 |
-| `issues.archived_at` | issues | archived_at | timestamp | {timestamp} | optional | 244 |
-| `issues.deleted_at` | issues | deleted_at | timestamp | {timestamp} | optional | 244 |
-| `issues.status` | issues | status | legacy_status_value | {legacy_status_value} | required | 245 |
-| `relations.src_id` | relations | src_id | identity | {identity} | required | 246 |
-| `relations.dst_id` | relations | dst_id | identity | {identity} | required | 246 |
-| `relations.type` | relations | type | identity | {identity} | required | 246 |
-| `relations.created_by` | relations | created_by | identity | {identity} | required | 246 |
-| `relations.created_at` | relations | created_at | timestamp | {timestamp} | required | 247 |
-| `comments.id` | comments | id | identity | {identity} | required | 248 |
-| `comments.issue_id` | comments | issue_id | identity | {identity} | required | 248 |
-| `comments.body` | comments | body | identity | {identity} | required | 248 |
-| `comments.created_by` | comments | created_by | identity | {identity} | required | 248 |
-| `comments.created_at` | comments | created_at | timestamp | {timestamp} | required | 249 |
-| `labels.issue_id` | labels | issue_id | identity | {identity} | required | 250 |
-| `labels.name` | labels | name | identity | {identity} | required | 250 |
-| `labels.created_by` | labels | created_by | identity | {identity} | required | 250 |
-| `labels.created_at` | labels | created_at | timestamp | {timestamp} | required | 251 |
-| `events.id` | events | id | identity | {identity} | required | 252 |
-| `events.issue_id` | events | issue_id | identity | {identity} | required | 252 |
-| `events.action` | events | action | identity | {identity, event_action} | optional | 253 |
-| `events.reason` | events | reason | identity | {identity, event_reason} | required | 254 |
-| `events.actor` | events | actor | identity | {identity, event_actor} | required | 255 |
-| `events.created_at` | events | created_at | timestamp | {timestamp} | required | 256 |
-| `events.stream` | events | stream | identity | {identity} | optional | 260 |
-| `events.workspace` | events | workspace | identity | {identity} | optional | 260 |
-| `event_changes.event_id` | event_changes | event_id | identity | {identity} | required | 261 |
-| `event_changes.field` | event_changes | field | identity | {identity} | required | 261 |
-| `event_changes.from` | event_changes | from | identity | {identity, legacy_status_value} | optional | 262 |
-| `event_changes.to` | event_changes | to | identity | {identity, legacy_status_value} | optional | 263 |
-| `purges.issue_id` | purges | issue_id | identity | {identity} | required | shapemap.go |
-| `purges.purged_by` | purges | purged_by | identity | {identity} | required | shapemap.go |
-| `purges.issue_created_at` | purges | issue_created_at | timestamp | {timestamp} | required | shapemap.go |
-| `purges.purged_at` | purges | purged_at | timestamp | {timestamp} | required | shapemap.go |
+| `issues.id` | issues | id | identity | {identity} | required | 242 |
+| `issues.title` | issues | title | identity | {identity} | required | 242 |
+| `issues.description` | issues | description | identity | {identity} | required | 242 |
+| `issues.priority` | issues | priority | identity | {identity} | required | 242 |
+| `issues.issue_type` | issues | issue_type | identity | {identity} | required | 242 |
+| `issues.prompt` | issues | prompt | identity | {identity} | optional | 243 |
+| `issues.assignee` | issues | assignee | identity | {identity} | optional | 243 |
+| `issues.topic` | issues | topic | identity | {identity} | optional | 243 |
+| `issues.rank` | issues | rank | identity | {identity} | optional | 243 |
+| `issues.lane` | issues | lane | identity | {identity} | optional | 243 |
+| `issues.resolution` | issues | resolution | identity | {identity} | optional | 243 |
+| `issues.redirect_target` | issues | redirect_target | identity | {identity} | optional | 243 |
+| `issues.follows_up` | issues | follows_up | identity | {identity} | optional | 243 |
+| `issues.created_at` | issues | created_at | timestamp | {timestamp} | required | 244 |
+| `issues.updated_at` | issues | updated_at | timestamp | {timestamp} | required | 244 |
+| `issues.closed_at` | issues | closed_at | timestamp | {timestamp} | required | 244 |
+| `issues.archived_at` | issues | archived_at | timestamp | {timestamp} | optional | 245 |
+| `issues.deleted_at` | issues | deleted_at | timestamp | {timestamp} | optional | 245 |
+| `issues.status` | issues | status | legacy_status_value | {legacy_status_value} | required | 246 |
+| `relations.src_id` | relations | src_id | identity | {identity} | required | 247 |
+| `relations.dst_id` | relations | dst_id | identity | {identity} | required | 247 |
+| `relations.type` | relations | type | identity | {identity} | required | 247 |
+| `relations.created_by` | relations | created_by | identity | {identity} | required | 247 |
+| `relations.created_at` | relations | created_at | timestamp | {timestamp} | required | 248 |
+| `comments.id` | comments | id | identity | {identity} | required | 249 |
+| `comments.issue_id` | comments | issue_id | identity | {identity} | required | 249 |
+| `comments.body` | comments | body | identity | {identity} | required | 249 |
+| `comments.created_by` | comments | created_by | identity | {identity} | required | 249 |
+| `comments.created_at` | comments | created_at | timestamp | {timestamp} | required | 250 |
+| `labels.issue_id` | labels | issue_id | identity | {identity} | required | 251 |
+| `labels.name` | labels | name | identity | {identity} | required | 251 |
+| `labels.created_by` | labels | created_by | identity | {identity} | required | 251 |
+| `labels.created_at` | labels | created_at | timestamp | {timestamp} | required | 252 |
+| `events.id` | events | id | identity | {identity} | required | 253 |
+| `events.issue_id` | events | issue_id | identity | {identity} | required | 253 |
+| `events.action` | events | action | identity | {identity, event_action} | optional | 254 |
+| `events.reason` | events | reason | identity | {identity, event_reason} | required | 255 |
+| `events.actor` | events | actor | identity | {identity, event_actor} | required | 256 |
+| `events.created_at` | events | created_at | timestamp | {timestamp} | required | 257 |
+| `events.stream` | events | stream | identity | {identity} | optional | 261 |
+| `events.workspace` | events | workspace | identity | {identity} | optional | 261 |
+| `event_changes.event_id` | event_changes | event_id | identity | {identity} | required | 262 |
+| `event_changes.field` | event_changes | field | identity | {identity} | required | 262 |
+| `event_changes.from` | event_changes | from | identity | {identity, legacy_status_value} | optional | 263 |
+| `event_changes.to` | event_changes | to | identity | {identity, legacy_status_value} | optional | 264 |
+| `purges.issue_id` | purges | issue_id | identity | {identity} | required | 265 |
+| `purges.purged_by` | purges | purged_by | identity | {identity} | required | 265 |
+| `purges.issue_created_at` | purges | issue_created_at | timestamp | {timestamp} | required | 266 |
+| `purges.purged_at` | purges | purged_at | timestamp | {timestamp} | required | 266 |
 
-(49 entries total; the `add(...)` variadic lines register several fields each.)
 
 `knownCollections map[collection]bool` is derived from `targetRegistry` values' `coll` (shapemap.go), i.e. exactly the seven collections above.
 
