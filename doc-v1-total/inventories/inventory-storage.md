@@ -261,8 +261,8 @@ The field-axis patch. Only columns the field axis owns are representable, so a s
 
 #### `SortFields` — the closed set (`internal/storage/issues.go`)
 Exactly ten keys: `"id"`, `"title"`, `"status"`, `"priority"`, `"rank"`, `"type"`, `"topic"`, `"assignee"`, `"created_at"`, `"updated_at"`.
-- Exists because each engine binds these names to its own mechanism (Dolt → SQL columns; memory → comparison functions); the set lives in the contract and each engine's binding is checked against it by the conformance suite (`internal/storage/issues.go`).
-- **Documented fault**: `"status"` orders the STORED status encoding, not derived lifecycle state. A container has no stored status, so it carries no value on this axis and orders ahead of every leaf ascending, behind every leaf descending, whatever state it derives to. The same listing's status FILTER reads derived state, so filter and sort disagree about what "status" means. This is stated as shipped behavior so both engines are wrong identically; correcting it is ticket `links-store-seam-q35v.6` (`internal/storage/issues.go`).
+- Exists because each engine binds these names to its own comparisons over hydrated `model.Issue` values (`SortBindings`, `internal/storage/ordering.go`); neither engine orders a listing in SQL. The set lives in the contract and each engine's binding is checked against it by the conformance suite (`internal/storage/issues.go`).
+- `"status"` orders the DERIVED lifecycle state — the reading the status FILTER takes — so one listing means one thing by the word. A container holds no stored status; it sorts among the leaves by the state its children give it (`internal/storage/issues.go`).
 
 #### `ListIssuesFilter` (`internal/storage/issues.go`)
 Rule for the whole struct: **every slice is an OR within itself and an AND against the other criteria**; every zero value means "do not constrain on this axis" (`internal/storage/issues.go`).
@@ -1000,8 +1000,7 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 ### 2.16 Behaviors the memory engine deliberately copies from Dolt rather than improving
 
 Stated in `internal/storage/memory/doc.go`:
-1. Ordering a listing by `"status"` sorts the **stored** status encoding; a container stores none, so it orders ahead of every leaf ascending whatever state it derives to, while the status FILTER reads derived state. Correcting the disagreement is `links-store-seam-q35v.6` (`internal/storage/memory/doc.go`).
-2. History comes back ordered by `(created_at, id)` rather than by recording order. Event ids are random, so on a coarse clock both engines can hand back a title change ahead of the creation that preceded it (`internal/storage/memory/doc.go`).
+1. History comes back ordered by `(created_at, id)` rather than by recording order. Event ids are random, so on a coarse clock both engines can hand back a title change ahead of the creation that preceded it (`internal/storage/memory/doc.go`).
 - Nothing is shared with the Dolt engine — not the field-patch diff, the transition planner, the frame resolution, or the compensating bulk apply — deliberately, because two engines calling one implementation would destroy the proof the conformance suite provides (`internal/storage/memory/doc.go`).
 
 ---
@@ -1069,6 +1068,11 @@ Stated in `internal/storage/memory/doc.go`:
 **`apply_to_container_is_refused`**
 - Applying `model.Start` to an epic with children returns a `model.ContainerActionError` whose `.ID` is the epic's id.
 
+**`apply_to_archived_names_the_typed_verb`**
+- An epic, then a child of it, then `Archive{}` applied to the child: `Apply(child, Reopen{})` is an error.
+- That error's message does not contain `"reopen"` (`string(model.ActionReopen)`, the persisted event encoding).
+- That error's message contains `"cannot open "` (`"cannot " + model.ActionReopen.Verb() + " "`).
+
 **`container_state_follows_live_children`**
 - Epic with two children, one `Done` → epic derives `in_progress`.
 - Archiving the unfinished child takes it out of the epic's reading → epic derives `closed`.
@@ -1081,6 +1085,22 @@ Stated in `internal/storage/memory/doc.go`:
 - Every event's `IssueID` matches the issue mutated.
 - A field write records a change row with `Field == "title"`.
 - Events are oldest-first by `CreatedAt`.
+
+**`every_editable_field_records_history`**
+- For each of eight fields, a fresh `TypeTask` child of one epic is created and given a one-field `UpdateIssueInput` patch (`Actor: "ada"`); each `Apply` succeeds.
+- After each patch, the change rows across all of that issue's `ListEvents` include a `FieldChange` whose `Field` is the patched field name.
+- That row's `To` is the expected value: `title` → `"retitled"`, `description` → `"described"`, `prompt` → `"render at 1024x768"`, `issue_type` (`model.TypeBug`) → `"bug"`, `priority` (`model.PriorityUrgent`) → `"1"`, `assignee` → `"ada"`, `lane` → `"left"`, `labels` (`["beta"]`) → `"beta"`.
+
+**`a_new_checkout_taking_a_ticket_records`**
+- An epic and a child; `AttributeTo("checkout-a")`, then `Start{Assignee: "ada"}` (`Actor: "ada"`) on the child. A second identical `Start` from the same checkout leaves the `ListAllEvents` count unchanged.
+- After `AttributeTo("checkout-b")` and the same `Start{Assignee: "ada"}`, `ListAllEvents` contains an event whose `Attribution.Stream() == "checkout-b"`.
+- The last such event has `IssueID == child.ID`.
+- The last such event has `Action == "start"` (`model.ActionStart`).
+
+**`one_issues_history_matches_the_whole_log`**
+- Fixture: an epic, then children `subject` and `other`; for each title `"one"`, `"two"`, `"three"` in turn, a title patch to `subject` then to `other` (six patches, three per issue), then `Start{Assignee: "ada"}` on each.
+- The case fatals if every event in `ListAllEvents` belongs to `subject`.
+- `ListEvents(subject)` returns, by event `ID` and in order, exactly the `ListAllEvents` events with `IssueID == subject.ID`, sorted by `storage.EventOrdering`.
 
 **`list_defaults_to_rank_order`**
 - Three creates come back in creation order — an unsorted listing is rank ascending with ties broken by id, and `lit backlog` is this order.
@@ -1137,11 +1157,20 @@ Stated in `internal/storage/memory/doc.go`:
 - These six must be **rejected**: `"description"`, `"lane"`, `"labels"`, `"issue_type"`, `"item_rank"`, `"state"` — real model fields the contract omits, plus the storage column names an engine binding its own schema would reach for.
 - The case self-guards: if any of those six is ever added to `SortFields`, the test fatals telling the author to move it.
 
-**`list_sorts_status_by_stored_encoding`**
-- An epic whose only child is in progress derives `in_progress`.
-- Ascending by `status`: **the epic leads** — its absent stored status is the low key, even though `"in_progress"` would not sort before `"in_progress"`.
-- Descending by `status`: the epic trails.
-- The case pins the wrong answer on purpose; deleting it is the first step of `links-store-seam-q35v.6`, not a cleanup.
+**`list_sorts_status_by_derived_state`**
+- Fixture: epic `home` with children `closedLeaf` (then `Done{}`) and `openLeaf`; a second epic with one child that is then `Start{Assignee: "ada"}`. The second epic's `State()` is `in_progress`.
+- `ListIssues{IDs: [closedLeaf, openLeaf, epic], SortBy: [{status}]}` → closedLeaf, epic, openLeaf.
+- The same with `{status, Desc: true}` → openLeaf, epic, closedLeaf.
+
+**`stamps_come_from_the_clock_the_engine_was_given`**
+- With the clock pinned to `2026-01-01T00:00:00.12Z` before an epic and then a child of it are created, the child's returned `CreatedAt` equals the pinned instant (`time.Time.Equal`).
+- The returned `UpdatedAt` equals the pinned instant.
+- The `CreatedAt` read back through `GetIssue` equals the pinned instant.
+
+**`list_orders_timestamps_by_instant_not_spelling`**
+- Fixture: an epic on the unpinned clock; then, under it, `later` created with the clock pinned to `2026-01-01T00:00:00.123456789Z`, then `earlier` created with the clock pinned to `2026-01-01T00:00:00.12Z`. Listings are narrowed to `IDs: [earlier, later]`.
+- `SortBy: [{created_at}]` → earlier, later; `{created_at, Desc: true}` → later, earlier.
+- `SortBy: [{updated_at}]` → earlier, later; `{updated_at, Desc: true}` → later, earlier.
 
 **`events_are_totally_ordered`**
 - After a create plus three title changes, `ListAllEvents` returns at least 4 events.
@@ -1161,15 +1190,91 @@ Stated in `internal/storage/memory/doc.go`:
 - `RankAbove(child, its own epic)` is an error.
 - `RankBelow(epic, its own child)` is an error.
 
+**`rank_to_edge_stays_inside_its_frame`**
+- Fixture: an epic, children `first` then `second`, then a second top-level epic `standalone`. `RankToTop(second)` returns `RankEnd.Frame == storage.Frame(epic.ID)` and `Moved == true`.
+- In the default listing afterwards, `second` precedes `first`, and `epic` precedes `standalone`.
+- A repeated `RankToTop(second)` returns `Moved == false` and `Frame == storage.Frame(epic.ID)`.
+- A new epic `lone` with one child `only`: `RankToTop(only)` and `RankToBottom(only)` each return `Moved == false` and `Frame == storage.Frame(lone.ID)`.
+
+**`rank_to_edge_ignores_a_deleted_frame_mate`**
+- Fixture: an epic with children `gone`, `lead`, `tail` in that order; `Delete{}` applied to `gone`. `RankToTop(lead)` returns `Moved == false`.
+- It returns `Frame == storage.Frame(epic.ID)`.
+- In the default listing, `lead` precedes `tail`.
+
+**`create_at_top_files_inside_its_frame`**
+- Fixture, in creation order: epic `outsider`, epic `firstEpic`, `firstChild` under it, epic `secondEpic`, `secondChild` under it, then `firstLead` under `firstEpic` and `secondLead` under `secondEpic`, both with `Placement: storage.RankTop`. No two issues in the default listing share a non-empty `Rank`.
+- `firstLead` precedes `firstChild`; `secondLead` precedes `secondChild`.
+- `firstLead` precedes `secondLead`.
+- `firstChild` precedes `secondChild`.
+- A further parentless epic `topLead` created with `Placement: storage.RankTop`: no two listed issues share a non-empty `Rank`, and `topLead` precedes both `outsider` and `firstEpic`.
+
+**`create_at_top_of_an_empty_frame_takes_a_distinct_key`**
+- Fixture, in creation order: epics `first`, `epic`, `trailing`; then `only` under `epic` with `Placement: storage.RankTop`. No two issues in the default listing share a non-empty `Rank`.
+- `first` precedes `only`; `epic` precedes `only`.
+- `only` precedes `trailing`.
+- A second child of `epic` created with `Placement: storage.RankTop`: no two listed issues share a non-empty `Rank`, and the second child precedes `only`.
+
+**`placing_at_a_frame_edge_keeps_the_key_beside_its_frame`**
+- Fixture: an epic, `child` under it, epic `trailing`, epic `leading` with `Placement: storage.RankTop`, then `RankBelow(trailing, leading)`. Then `lead` created under the epic with `Placement: storage.RankTop`: no two issues in the default listing share a non-empty `Rank`.
+- `lead` precedes `child`, and `epic` precedes `lead`.
+- A further child `moved` created under the epic with default placement, then `RankToTop(moved)`: no two listed issues share a non-empty `Rank`, `moved` precedes `lead`, and `epic` precedes `moved`.
+
+**`a_relative_move_keeps_every_rank_distinct`**
+- Fixture: epic `epic`, epic `standalone`, then `child` under `epic`. After `RankBelow(child, standalone)`, no two issues in the default listing share a non-empty `Rank`.
+- `standalone` precedes `epic`, and `epic` precedes `child`.
+- After a following `RankAbove(child, standalone)`: no two listed issues share a non-empty `Rank`, `epic` precedes `standalone`, and `epic` precedes `child`.
+
 **`rank_set_imposes_order`**
 - `RankSet([c, a, b])` yields listing order c, a, b.
 - Exactly one resolution per named id, in the order named, with `NamedID == RankedID` for frame-mates.
+
+**`rank_set_stays_inside_its_frame`**
+- Fixture: epic `outsider`, epic `epic`, children `c1`, `c2`, `c3` under `epic`. After `RankSet([c3, c1])`, no two issues in the default listing share a non-empty `Rank`.
+- `c3` precedes `c1`, and `c1` precedes `c2`.
+- `outsider`'s `Rank` (via `GetIssue`) is unchanged.
+- `epic`'s `Rank` (via `GetIssue`) is unchanged.
+
+**`rank_set_over_a_whole_frame_permutes_its_keys`**
+- Fixture: epics `epic`, `outsider`, `low`, `mid`, `high`; then `RankAbove(low, epic)`, `RankAbove(mid, epic)`, `RankBelow(high, low)`; then children `c1`, `c2`, `c3` under `epic`. After `RankSet([c3, c1, c2])`, no two issues in the default listing share a non-empty `Rank`.
+- The three children appear in the default listing in the order c3, c1, c2.
+- Every issue in the pre-`RankSet` default listing other than the three children has the same `Rank` afterwards.
+- The children's `Rank` values, sorted, are the same set before and after.
+
+**`rank_verbs_refuse_a_deleted_issue`**
+- Fixture: an epic with children `gone`, `sibling`, `bystander` in that order; `Delete{}` applied to `gone`. Each of `RankToTop(gone)`, `RankToBottom(gone)`, `RankAbove(gone, sibling)`, `RankBelow(gone, sibling)`, `RankAbove(sibling, gone)`, `RankSet([gone, sibling])` is an error.
+- Each of those errors' `Error()` is exactly `"cannot rank deleted issue <gone.ID>; restore it first"`.
+- `bystander` is still in the default listing afterwards.
+- `bystander`'s `Rank` (via `GetIssue`) is unchanged.
+- `sibling` precedes `bystander` in the default listing.
+
+**`a_container_lists_before_everything_inside_it`**
+- Fixture: epic `outer`, epic `epic`, `child` under `epic`, epic `nested` under `epic`, `grandchild` under `nested`, epic `last`. After `RankBelow(epic, last)`, no two issues in the default listing share a non-empty `Rank`, and the listing is exactly outer, last, epic, child, nested, grandchild.
+- `SortBy: [{rank, Desc: true}]` → exactly grandchild, nested, child, epic, last, outer.
+- `IDs: [outer, last, child, nested, grandchild]` (the epic left out) → exactly outer, last, child, nested, grandchild.
+- After `RankAbove(epic, outer)`, the default listing is exactly epic, child, nested, grandchild, outer, last.
+- After `RankSet([outer, last])`, no two listed issues share a non-empty `Rank`, and the default listing is exactly outer, last, epic, child, nested, grandchild.
+- After `AddRelation` of `outer` `RelBlockedBy` `grandchild`, `epic`, and `last` (in that order), `GetIssueDetail(outer).BlockedBy` is exactly last, epic, grandchild.
 
 **`close_redirects_to_a_canonical`**
 - `Close{Outcome: Duplicate{Of: canonical}}` → `State() == closed`, `ResolutionValue() == ResolutionDuplicate`, `RedirectTargetValue() == canonical.ID`, `ClosedAtValue() != nil`.
 - `Reopen{}` clears the **whole** close payload together: resolution, redirect target, and closed-at all become nil.
 - Closing as a duplicate of a missing issue → `NotFoundError{Entity: "issue"}`.
 - Closing an issue as a duplicate of **itself** is an error.
+
+**`follow_ups_link_both_ways`**
+- Fixture: an epic, `origin` under it, then `first` (`FollowsUp: "  " + origin.ID + "  "`) and `second` (`FollowsUp: origin.ID`) under the same epic. `first`'s returned `FollowsUp == origin.ID`.
+- `GetIssue(first).FollowsUp == origin.ID`.
+- `GetIssue(origin).FollowsUp == ""`.
+- `GetIssueDetail(first).FollowsUp` is non-nil with `ID == origin.ID`.
+- `GetIssueDetail(first).FollowUps` is empty.
+- `GetIssueDetail(first).Parent` is non-nil with `ID == epic.ID`.
+- `GetIssueDetail(origin).FollowUps` is exactly first, second.
+- `GetIssueDetail(origin).FollowsUp` is nil.
+- `GetIssueDetail(origin).Children` is empty.
+- `ListEvents(first)` holds an event with `Action == "created"` carrying a change with `Field == "follows_up"`, `From == ""`, `To == origin.ID`.
+- After a title patch on `first`, the returned issue's `FollowsUp == origin.ID`.
+- `Export().Issues` contains `first` with `FollowsUp == origin.ID`.
+- `CreateIssue` with `FollowsUp: "core-nope"` → `NotFoundError{Entity: "issue"}`.
 
 **`a_purge_removes_the_issue_and_everything_it_owns`** (`internal/storage/conformance/purge.go`)
 - With the clock pinned, `Purge` returns the record `{IssueID, IssueCreatedAt: the issue's CreatedAt, PurgedAt: the pinned instant, PurgedBy: the input actor}`.
@@ -1230,6 +1335,36 @@ Stated in `internal/storage/memory/doc.go`:
 - `ClearParent` on a parentless child → `NotFoundError{Entity: "parent relation"}`.
 - `SetParent` to itself is an error.
 - `SetParent` under a missing parent → `NotFoundError{Entity: "issue"}`.
+
+**`every_ticket_lives_inside_a_container`**
+- Fixture: an epic, `leaf` under it, epic `nested` under it. A parentless `CreateIssue` with `IssueType` `TypeTask`, `TypeBug`, `TypeFeature`, or `TypeChore` returns a `model.ValidationError`.
+- A parentless `CreateIssue` with no `IssueType` is an error.
+- A parentless `CreateIssue` with `IssueType: model.TypeEpic` succeeds.
+- `CreateIssue` with `ParentID: leaf.ID` is an error, both with the default type and with `TypeEpic`.
+- `SetParent{ChildID: nested, ParentID: leaf}` is an error.
+- `AddRelation{SrcID: nested, DstID: leaf, Type: RelParentChild}` is an error.
+- After those refusals, `leaf` has no children and the epic's children are exactly leaf, nested (listing with `IncludeArchived` and `IncludeDeleted`).
+- Each of these returns a `model.ValidationError`: `ImportTree` of an epic plus a parentless `task`; `ImportTree` of epic `e` > task `l` > bug under `l`; `BulkApply` of an epic plus a parentless `task`; `BulkApply` of epic `e` > task `l` > bug under `l`.
+- After the four refused imports, the number of issues listed with `IncludeDeleted` and `IncludeArchived` is unchanged.
+- `ClearParent(leaf)` and `RemoveRelation(leaf, epic, RelParentChild)` each return a `model.ValidationError` whose message contains `"lit parent set"`.
+- After those refusals, the epic's children are still exactly leaf, nested.
+- `RemoveRelation(nested, epic, RelParentChild)` succeeds, and the epic's children become exactly leaf.
+- `ClearParent(nested)` then returns `NotFoundError{Entity: "parent relation"}`.
+- `RemoveRelation(leaf, nested, RelParentChild)` returns `NotFoundError{Entity: "relation"}`.
+
+**`the_hierarchy_stays_a_tree`**
+- Fixture: epic `root`, epic `mid` under `root`, `leaf` under `mid`. Before any refusal, `root`'s children are exactly mid and `mid`'s children are exactly leaf (listing with `IncludeArchived` and `IncludeDeleted`).
+- For each of (child `root`, parent `mid`), (child `root`, parent `leaf`), (child `mid`, parent `leaf`): `SetParent{ChildID, ParentID}` is an error, and `AddRelation{SrcID: child, DstID: parent, Type: RelParentChild}` is an error.
+- After those refusals, `root`'s children are still exactly mid and `mid`'s children are still exactly leaf.
+- A new parentless epic `sibling`: `SetParent{ChildID: leaf, ParentID: sibling}` succeeds; `sibling`'s children become exactly leaf and `mid` has no children.
+
+**`blocks_never_runs_along_the_hierarchy`**
+- Fixture: epic `root`, epic `mid` under `root`, `leaf` under `mid`, `child` under `root`. Each of these `AddRelation{SrcID: dependent, DstID: dependency, Type: RelBlockedBy}` calls is an error that is a `model.ValidationError` and whose message contains `storage.SameEpicBlocksRejectionMessage` (`"Do not set blocked-by relationships between two issues in the same epic.  Use rank to specify that one issue must be completed before another issue"`): (root, leaf), (leaf, root), (root, mid), (mid, root), (mid, leaf), (root, child).
+- Afterwards, `ListRelationsForIssue(id, RelBlockedBy)` is empty for each of root, mid, leaf, child.
+- `AddRelation{SrcID: leaf, DstID: child, Type: RelBlockedBy}` succeeds.
+- With epic `holder` added under `root` and `held` under `holder`, each of these `RelBlockedBy` edges is accepted (each removed again before the next): (holder, mid), (mid, held), (held, mid).
+- `ImportTree` of epic `e` > epic `s` > task `l` with `l` `BlockedBy: ["e"]` is a `model.ValidationError` whose message contains `storage.SameEpicBlocksRejectionMessage`.
+- `BulkApply` of one task with `Parent: mid.ID` and `BlockedBy: [root.ID]` is a `model.ValidationError` whose message contains `storage.SameEpicBlocksRejectionMessage`.
 
 **`topics_derive_from_issues`**
 - Three issues across two topics yield exactly `["parser","renderer"]` — distinct, ascending, never a stored list that could disagree with the issues.

@@ -158,7 +158,7 @@ Rules enforced at every boundary (`model.go`):
 
 ## Identifiers
 
-Issue IDs have the shape `<prefix>-<topic>-<hash>` (`internal/issueid/generate.go`):
+Top-level issue IDs have the shape `<prefix>-<topic>-<hash>` (`internal/issueid/generate.go`):
 
 - **prefix** — the workspace's configured slug, 3–12 chars after normalization; over-long input is truncated to 12 then re-trimmed of dashes (`slug.go`).
 - **topic** — a per-issue slug, 3–30 chars after normalization; over-long input is rejected, not truncated (`slug.go`).
@@ -166,9 +166,9 @@ Issue IDs have the shape `<prefix>-<topic>-<hash>` (`internal/issueid/generate.g
 
 Slug normalization lowercases, passes `a-z0-9` through, collapses every other rune (including Unicode) into a single dash, and trims edge dashes (`slug.go`).
 
-The hash is deterministic content addressing: SHA-256 over `topic|title|description|creator|createdAt.UnixNano()|nonce` (the prefix is *not* hashed), truncated and base-36-encoded to exactly the chosen length (`generate.go`). Hash length adapts to workspace size: the smallest length 3–8 whose birthday-bound collision probability stays ≤ 0.25 for the current issue count, clamping at 8 (`generate.go`). On collision, up to 10 nonces are tried (`generate.go`). Bytes map to characters with left-zero-padding and tail clamping (`generate.go`).
+The hash is deterministic content addressing: SHA-256 over `topic|title|description|creator|createdAt.UnixNano()|nonce` (the prefix is *not* hashed), truncated and base-36-encoded to exactly the chosen length (`generate.go`). Hash length adapts to a population count: the smallest length 3–8 whose birthday-bound collision probability stays ≤ 0.25 for that count, clamping at 8 (`generate.go`). The count is every top-level ID in the workspace for a top-level ID, and the parent's direct children for a child (`internal/store/issue_ids.go`). On collision, up to 10 nonces are tried (`generate.go`). Bytes map to characters with left-zero-padding and tail clamping (`generate.go`).
 
-Children created under a parent may instead get sequential `parent.N` IDs (see the storage layer, `02-storage-contract.md`).
+A child's ID is its parent's ID, a dot, and a hash minted the same way: `<parentID>.<hash>`, so grandchildren nest (`<parentID>.<hash>.<hash>`) (`internal/issueid/generate.go`).
 
 ## Ranking
 

@@ -114,9 +114,9 @@ Each step is gated by an `information_schema` probe (table/index/column existenc
 
 ### ID minting
 
-Top-level IDs are `<prefix>-<topic>-<hash>` (grammar and slug rules in `01-data-model.md`). The store side (`issue_ids.go`): adaptive hash length = smallest 3–8 keeping birthday-collision probability ≤ 0.25 for the current top-level count ("top-level" = id containing no dot; the count includes archived/deleted rows); on a count error the length defaults to 6. For each length from base to 8, up to 10 nonces are tried; the first candidate with zero existing rows (including soft-deleted) and no purge record wins — a purged id is taken for good (`issue_ids.go`); exhaustion errors out.
+Every ID is a namespace followed by a base-36 hash (grammar and slug rules in `01-data-model.md`). A top-level ID's namespace is `<prefix>-<topic>-`; a child's is its parent's ID and a dot, so a child ID is `<parentID>.<hash>` and grandchildren nest (`<parentID>.<hash>.<hash>`). Both are minted by one function, `issueid.Mint`; `idSpace` (`issue_ids.go`) chooses the namespace and its population, and nothing else differs.
 
-**Child IDs** are sequential dotted suffixes: `<parentID>.N`, N = max existing direct-child number + 1, starting at `.1`; non-numeric and nested suffixes are ignored when computing the max; deleted children keep their numbers reserved (`issue_ids.go`). Grandchildren nest (`parent.1.2`).
+The population sets the starting hash length: the smallest of 3–8 that keeps the birthday-collision probability ≤ 0.25. For a top-level ID it is the count of IDs containing no dot, across every topic and including archived/deleted rows; for a child it is the count of `parent-child` edges into the parent (`countChildren`). A failed count fails the create. For each length from that start to 8, up to 10 nonces are tried; the first candidate with no `issues` row (soft-deleted included) and no purge record wins — a purged ID is taken for good (`issue_ids.go`). Exhaustion errors out with `generate unique issue id: exhausted lengths <start>-8` (`internal/issueid/generate.go`).
 
 There is no ID parser/validator on lookup — supplied IDs bind verbatim, with no case normalization.
 
