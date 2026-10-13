@@ -3,13 +3,16 @@ package cli
 import (
 	"fmt"
 	"io"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // contextIndent is the single indent used for every context line printed under
@@ -326,12 +329,19 @@ func printIssueFields(w io.Writer, issue model.Issue, fields []string) error {
 
 // printHistoryEvents renders the field-level transition trail: one
 // "- [actor @ time] action reason" line per event, followed by that event's
-// indented "field: from → to" change lines. This is the single definition of
-// how the transition trail is formatted; the dedicated `lit history` command
-// (printIssueHistory) is its only caller. [LAW:one-source-of-truth] one renderer,
-// so the trail can never render two ways; [LAW:decomposition] carved at the
-// event/detail joint, ready for any future surface that needs the same trail.
+// indented change lines. A scalar field's change reads "field: from → to"; a
+// prose field's reads "field: vN → vN+1", the version numbers fieldVersions
+// assigns, so the trail says that the text moved without reprinting every
+// text it ever held. This is the single definition of how the transition
+// trail is formatted; the dedicated `lit history` command (printIssueHistory)
+// is its only caller. [LAW:one-source-of-truth] one renderer, so the trail
+// can never render two ways; [LAW:decomposition] carved at the event/detail
+// joint, ready for any future surface that needs the same trail.
 func printHistoryEvents(w io.Writer, events []model.IssueEvent) error {
+	prose := storage.ProseFields()
+	// The k-th change to a prose field steps from version k to k+1 — the
+	// numbering fieldVersions indexes by.
+	steps := map[string]int{}
 	for _, event := range events {
 		// Plain field updates carry no Action; "update" is their display label.
 		// [LAW:dataflow-not-control-flow] absence of intent is data, not a mode.
@@ -343,7 +353,12 @@ func printHistoryEvents(w io.Writer, events []model.IssueEvent) error {
 			return err
 		}
 		for _, change := range event.Changes {
-			if _, err := fmt.Fprintf(w, "    %s: %s → %s\n", change.Field, emptyDash(change.From), emptyDash(change.To)); err != nil {
+			from, to := emptyDash(change.From), emptyDash(change.To)
+			if slices.Contains(prose, change.Field) {
+				steps[change.Field]++
+				from, to = fmt.Sprintf("v%d", steps[change.Field]), fmt.Sprintf("v%d", steps[change.Field]+1)
+			}
+			if _, err := fmt.Fprintf(w, "    %s: %s → %s\n", change.Field, from, to); err != nil {
 				return err
 			}
 		}
@@ -353,14 +368,84 @@ func printHistoryEvents(w io.Writer, events []model.IssueEvent) error {
 
 // printIssueHistory renders the standalone `lit history` view: an identifying
 // header (id + title) so the output stands alone, then the field-level
-// transition trail via the shared printHistoryEvents. Every issue carries at
-// least its "created" event, so the trail is never empty in practice; an empty
-// Events slice honestly prints just the header rather than fabricating a line.
+// transition trail via the shared printHistoryEvents, then one line per prose
+// field the trail versions, naming how many versions it holds and the command
+// that prints one. Every issue carries at least its "created" event, so the
+// trail is never empty in practice; an empty Events slice honestly prints just
+// the header rather than fabricating a line.
 func printIssueHistory(w io.Writer, detail model.IssueDetail) error {
 	if _, err := fmt.Fprintf(w, "%s\n%s\n\nhistory:\n", detail.Issue.ID, detail.Issue.Title); err != nil {
 		return err
 	}
-	return printHistoryEvents(w, detail.Events)
+	if err := printHistoryEvents(w, detail.Events); err != nil {
+		return err
+	}
+	var versioned []string
+	for _, field := range storage.ProseFields() {
+		if count := len(fieldVersions(detail.Events, field)); count > 0 {
+			versioned = append(versioned, fmt.Sprintf("    %s: %d versions — lit history %s --version %s@<n> prints one\n", field, count, detail.Issue.ID, field))
+		}
+	}
+	if len(versioned) == 0 {
+		return nil
+	}
+	_, err := fmt.Fprintf(w, "\nversions:\n%s", strings.Join(versioned, ""))
+	return err
+}
+
+// fieldVersions is every text the trail records a prose field holding, oldest
+// first: the text before its first recorded change, then the text each change
+// wrote. Version n is element n-1 — the numbering printHistoryEvents shows. A
+// field the trail never records changing has no versions; its one text is the
+// current value `lit show --field` prints.
+func fieldVersions(events []model.IssueEvent, field string) []string {
+	var versions []string
+	for _, event := range events {
+		for _, change := range event.Changes {
+			if change.Field != field {
+				continue
+			}
+			if len(versions) == 0 {
+				versions = append(versions, change.From)
+			}
+			versions = append(versions, change.To)
+		}
+	}
+	return versions
+}
+
+// versionRef names one recorded text of a prose field, written
+// <field>@<n> — `description@1` is the description before its first change.
+type versionRef struct {
+	field  string
+	number int
+}
+
+// parseVersionRef is the one place a --version value becomes a versionRef:
+// the field must be a prose field and the number a version number, counted
+// from 1. A version past the end of the trail is a lookup miss the trail
+// answers, not a malformed reference. [LAW:parse-dont-validate]
+func parseVersionRef(raw string) (versionRef, error) {
+	field, digits, _ := strings.Cut(raw, "@")
+	number, err := strconv.Atoi(digits)
+	if err != nil || number < 1 || !slices.Contains(storage.ProseFields(), field) {
+		return versionRef{}, UsageError{Message: fmt.Sprintf("--version takes <field>@<n>: a long text field (%s) and a version number lit history shows, counted from 1; got %q", strings.Join(storage.ProseFields(), ", "), raw)}
+	}
+	return versionRef{field: field, number: number}, nil
+}
+
+// printFieldVersion prints the text one version of a prose field held, bare,
+// so it round-trips into `lit update --description` the way `lit show --field`
+// output does.
+func printFieldVersion(w io.Writer, detail model.IssueDetail, ref versionRef) error {
+	versions := fieldVersions(detail.Events, ref.field)
+	if ref.number > len(versions) {
+		return fmt.Errorf("%w: %s records %d versions of %s; `lit show %s --field %s` prints the current text",
+			storage.NotFoundError{Entity: "version", ID: fmt.Sprintf("%s@%d", ref.field, ref.number)},
+			detail.Issue.ID, len(versions), ref.field, detail.Issue.ID, ref.field)
+	}
+	_, err := fmt.Fprintln(w, versions[ref.number-1])
+	return err
 }
 
 // optionalGroup adapts a single optional issue — a redirect target, a parent —

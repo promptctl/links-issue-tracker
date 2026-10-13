@@ -1140,18 +1140,31 @@ func showLeaf() appLeaf {
 // read-only surface. It reads the same GetIssueDetail as `lit show`
 // and renders only the event trail, so the two views share one data source
 // and one formatter (printHistoryEvents). [LAW:one-source-of-truth]
+// --version reads the same trail for the one superseded text the trail
+// itself only numbers.
 func historyLeaf() appLeaf {
 	fs := newCobraFlagSet("history")
-	const usage = "usage: lit history <id>"
+	version := fs.StringOnce("version", "Print the text one version of a long text field held, as <field>@<n> (description@1 is the description before its first change); the trail shows each change to one as vN → vN+1")
+	const usage = "usage: lit history <id> [--version <field>@<n>]"
 	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
 			return UsageError{Message: usage}
+		}
+		// The flag is parsed before the store is read, so a malformed reference
+		// is a usage error whatever the id names. [LAW:parse-dont-validate]
+		render := printIssueHistory
+		if fs.Changed("version") {
+			ref, err := parseVersionRef(*version)
+			if err != nil {
+				return err
+			}
+			render = func(w io.Writer, detail model.IssueDetail) error { return printFieldVersion(w, detail, ref) }
 		}
 		detail, err := ap.Store.GetIssueDetail(ctx, positional[0])
 		if err != nil {
 			return err
 		}
-		return printIssueHistory(stdout, detail)
+		return render(stdout, detail)
 	}}
 }
 

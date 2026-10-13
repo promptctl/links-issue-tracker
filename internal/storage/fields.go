@@ -26,13 +26,42 @@ type issueField struct {
 	// name is the field's history vocabulary, which is the domain's own — the
 	// name the CLI accepts and prints, never a storage column's spelling.
 	name   string
+	text   FieldText
 	apply  func(*model.Issue, UpdateIssueInput) error
 	encode func(model.Issue) string
 }
 
-// patchField builds a row from the three parts that differ per field: which
-// pointer on the patch states it, how a stated value lands on the issue, and
-// how the issue's value encodes for history.
+// FieldText is the shape a field's value takes for the person reading it.
+// History records every value in full whatever the shape; the shape decides
+// only how a change to it is shown.
+type FieldText int
+
+const (
+	// ScalarText reads whole on one line — a name, a number, a label set — so
+	// a change shows as its old value and its new one.
+	ScalarText FieldText = iota
+	// ProseText is free text an author writes and rewrites. A change to it
+	// shows as a step between numbered versions, so a reader of the trail is
+	// not handed every superseded text alongside the current one.
+	ProseText
+)
+
+// ProseFields names the editable fields whose values are prose, in table
+// order. The set is read off the table, so a field joins it by declaring
+// its shape on its row and nowhere else. [LAW:one-source-of-truth]
+func ProseFields() []string {
+	var names []string
+	for _, field := range issueFields {
+		if field.text == ProseText {
+			names = append(names, field.name)
+		}
+	}
+	return names
+}
+
+// patchField builds a row from the parts that differ per field: the shape of
+// its text, which pointer on the patch states it, how a stated value lands on
+// the issue, and how the issue's value encodes for history.
 //
 // A nil pointer means "leave this alone", and this is the one place that
 // sentence is written. Restating it per field in each engine would be eight
@@ -40,12 +69,14 @@ type issueField struct {
 // [LAW:single-enforcer]
 func patchField[T any](
 	name string,
+	text FieldText,
 	stated func(UpdateIssueInput) *T,
 	write func(*model.Issue, T) error,
 	encode func(model.Issue) string,
 ) issueField {
 	return issueField{
 		name: name,
+		text: text,
 		apply: func(issue *model.Issue, in UpdateIssueInput) error {
 			value := stated(in)
 			if value == nil {
@@ -60,7 +91,7 @@ func patchField[T any](
 // issueFields is the editable set, in the order history reports a change to
 // them — fixed, so two reads of one mutation describe it identically.
 var issueFields = []issueField{
-	patchField("title",
+	patchField("title", ScalarText,
 		func(in UpdateIssueInput) *string { return in.Title },
 		func(issue *model.Issue, v string) error {
 			issue.Title = strings.TrimSpace(v)
@@ -70,15 +101,15 @@ var issueFields = []issueField{
 			return nil
 		},
 		func(issue model.Issue) string { return issue.Title }),
-	patchField("description",
+	patchField("description", ProseText,
 		func(in UpdateIssueInput) *string { return in.Description },
 		func(issue *model.Issue, v string) error { issue.Description = strings.TrimSpace(v); return nil },
 		func(issue model.Issue) string { return issue.Description }),
-	patchField("prompt",
+	patchField("prompt", ProseText,
 		func(in UpdateIssueInput) *string { return in.Prompt },
 		func(issue *model.Issue, v string) error { issue.Prompt = strings.TrimSpace(v); return nil },
 		func(issue model.Issue) string { return issue.Prompt }),
-	patchField("issue_type",
+	patchField("issue_type", ScalarText,
 		func(in UpdateIssueInput) *model.IssueType { return in.IssueType },
 		func(issue *model.Issue, v model.IssueType) error {
 			// [LAW:single-enforcer] Container vs leaf decides which lifecycle
@@ -94,24 +125,24 @@ var issueFields = []issueField{
 			return nil
 		},
 		func(issue model.Issue) string { return string(issue.IssueType) }),
-	patchField("priority",
+	patchField("priority", ScalarText,
 		func(in UpdateIssueInput) *model.Priority { return in.Priority },
 		func(issue *model.Issue, v model.Priority) error { issue.Priority = v; return nil },
 		// The numeric wire encoding, not the display name: history keeps what
 		// the field stores, so a replay reads back the value that was written.
 		func(issue model.Issue) string { return strconv.Itoa(int(issue.Priority)) }),
-	patchField("assignee",
+	patchField("assignee", ScalarText,
 		func(in UpdateIssueInput) *string { return in.Assignee },
 		// [LAW:decomposition] Assignee is an issue-level field independent of
 		// the lifecycle; reassigning is a plain field write, not a status
 		// mutation.
 		func(issue *model.Issue, v string) error { issue.Assignee = strings.TrimSpace(v); return nil },
 		func(issue model.Issue) string { return issue.AssigneeValue() }),
-	patchField("lane",
+	patchField("lane", ScalarText,
 		func(in UpdateIssueInput) *string { return in.Lane },
 		func(issue *model.Issue, v string) error { issue.Lane = strings.TrimSpace(v); return nil },
 		func(issue model.Issue) string { return issue.Lane }),
-	patchField("labels",
+	patchField("labels", ScalarText,
 		func(in UpdateIssueInput) *[]string { return in.Labels },
 		func(issue *model.Issue, v []string) error {
 			labels, err := model.CanonicalizeLabels(v)
