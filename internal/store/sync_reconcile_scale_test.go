@@ -188,8 +188,8 @@ func assertCombinedBacklogContents(t *testing.T, ctx context.Context, st *Store,
 	for _, issue := range export.Issues {
 		byID[issue.ID] = issue
 	}
-	if len(byID) != issues {
-		t.Errorf("combined backlog holds %d issues, want %d (both sides planted the same ids, so the union is one backlog)", len(byID), issues)
+	if len(byID) != issues+1 {
+		t.Errorf("combined backlog holds %d issues, want %d and their epic (both sides planted the same ids, so the union is one backlog)", len(byID), issues)
 	}
 	// Each edit i set lane-i on scaleEditTarget(i), and the edits deliberately
 	// overlap, so every edited issue was written more than once and the LAST
@@ -213,6 +213,10 @@ func assertCombinedBacklogContents(t *testing.T, ctx context.Context, st *Store,
 }
 
 func scaleIssueID(i int) string { return fmt.Sprintf("bench-%05d", i) }
+
+// scaleEpicID is the epic every planted issue lives in, fixed so both stores
+// plant the same epic rather than each minting its own.
+const scaleEpicID = "bench-epic"
 
 // seedUnrelatedBacklogPair builds two workspaces that initialised
 // INDEPENDENTLY against one remote, so their histories share no commit. A holds
@@ -284,9 +288,18 @@ func plantScaleBacklog(t *testing.T, ctx context.Context, st *Store, issues int)
 		t.Fatalf("Export(seed): %v", err)
 	}
 	seed := issueByID(t, export, seedIssue.ID)
-	// The planted rows replace the seed and its epic alike; the backlog is
-	// issue rows only, planted below the write boundary.
-	export.Issues = make([]model.Issue, 0, issues)
+	// The planted rows replace the seed and its epic alike, planted below the
+	// write boundary — so they must already hold the shape that boundary
+	// enforces: every ticket inside an epic. A backlog with no epic is one every
+	// sync landing rehomes (storage.HomeStranded), and a stranded ticket is a
+	// lane of one whatever its Lane says (model.LaneOf), so the chain's lane
+	// edits would be edits to a field nothing reads.
+	planted := issueByID(t, export, epic.ID)
+	planted.ID = scaleEpicID
+	planted.CreatedAt = scalePlantedBirth
+	export.Issues = make([]model.Issue, 0, issues+1)
+	export.Issues = append(export.Issues, planted)
+	export.Relations = make([]model.Relation, 0, issues)
 	for i := 0; i < issues; i++ {
 		issue := seed
 		issue.ID = scaleIssueID(i)
@@ -301,10 +314,11 @@ func plantScaleBacklog(t *testing.T, ctx context.Context, st *Store, issues int)
 		// fixture mean what its name says. [LAW:one-source-of-truth]
 		issue.CreatedAt = scalePlantedBirth
 		export.Issues = append(export.Issues, issue)
+		export.Relations = append(export.Relations, model.Relation{SrcID: issue.ID, DstID: scaleEpicID, Type: model.RelParentChild, CreatedAt: scalePlantedBirth, CreatedBy: "links"})
 	}
-	// The seed issue's own events and relations reference the id being replaced,
-	// so the planted backlog starts with issue rows only.
-	export.Events, export.Comments, export.Labels, export.Relations = nil, nil, nil, nil
+	// The seed issue's own events reference the id being replaced, so the
+	// planted backlog starts with issue rows and their parent edges only.
+	export.Events, export.Comments, export.Labels = nil, nil, nil
 	if err := st.rebuildFromExport(ctx, export, commitStamp{Message: "plant backlog"}); err != nil {
 		t.Fatalf("rebuildFromExport(plant %d issues): %v", issues, err)
 	}
