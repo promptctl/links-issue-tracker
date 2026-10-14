@@ -24,16 +24,19 @@ type setFlagCase struct {
 	unwanted  []string
 }
 
-// setFlagFixture seeds three issues that differ on type, id and labels at
-// once, so one fixture serves every set flag: `bugA` is a bug labelled a,
-// `taskAB` a task labelled a and b, `featB` a feature labelled b.
+// setFlagFixture seeds three issues that differ on type, id, labels and
+// assignee at once, so one fixture serves every set flag: `bugA` is a bug
+// labelled a and assigned to ann, `taskAB` a task labelled a and b and
+// assigned to bob, `featB` a feature labelled b and assigned to cy. They rank
+// in that order, each in its own lane, so all three are ready and `lit next`
+// serves the highest-ranked one the filter admits.
 func setFlagFixture(t *testing.T) (h readyTestHarness, bugA, taskAB, featB string) {
 	t.Helper()
 	h = newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Title: "filtering", IssueType: model.TypeEpic, Topic: "filtering"})
-	bug := h.createIssue(storage.CreateIssueInput{Title: "bug a", IssueType: model.TypeBug, Topic: "filtering", Labels: []string{"a"}, ParentID: epic.ID})
-	task := h.createIssue(storage.CreateIssueInput{Title: "task ab", IssueType: model.TypeTask, Topic: "filtering", Labels: []string{"a", "b"}, ParentID: epic.ID})
-	feat := h.createIssue(storage.CreateIssueInput{Title: "feature b", IssueType: model.TypeFeature, Topic: "filtering", Labels: []string{"b"}, ParentID: epic.ID})
+	bug := h.createIssue(storage.CreateIssueInput{Title: "bug a", IssueType: model.TypeBug, Topic: "filtering", Labels: []string{"a"}, Assignee: "ann", ParentID: epic.ID, Lane: "bug"})
+	task := h.createIssue(storage.CreateIssueInput{Title: "task ab", IssueType: model.TypeTask, Topic: "filtering", Labels: []string{"a", "b"}, Assignee: "bob", ParentID: epic.ID, Lane: "task"})
+	feat := h.createIssue(storage.CreateIssueInput{Title: "feature b", IssueType: model.TypeFeature, Topic: "filtering", Labels: []string{"b"}, Assignee: "cy", ParentID: epic.ID, Lane: "feature"})
 	return h, bug.ID, task.ID, feat.ID
 }
 
@@ -90,6 +93,30 @@ func TestListSetFlagsWidenAcrossEverySpelling(t *testing.T) {
 			want:     []string{taskAB},
 			unwanted: []string{bugA, featB},
 		},
+		{
+			flag: "assignee",
+			spellings: []setFlagSpelling{
+				{"flag, comma-joined", []string{"--assignee", "ann,bob"}},
+				{"flag, repeated", []string{"--assignee", "ann", "--assignee", "bob"}},
+				{"query, repeated terms", []string{"--query", "assignee:ann assignee:bob"}},
+				{"flag and query together", []string{"--assignee", "ann", "--query", "assignee:bob"}},
+			},
+			want:     []string{bugA, taskAB},
+			unwanted: []string{featB},
+		},
+		// --search ANDs its terms, so like --labels it narrows as it grows:
+		// "a" alone matches every title (feAture), and the overwrite regression
+		// shows up as "bug a" and "feature b" leaking back in.
+		{
+			flag: "search",
+			spellings: []setFlagSpelling{
+				{"flag, repeated", []string{"--search", "task", "--search", "a"}},
+				{"query, repeated terms", []string{"--query", "task a"}},
+				{"flag and query together", []string{"--search", "task", "--query", "a"}},
+			},
+			want:     []string{taskAB},
+			unwanted: []string{bugA, featB},
+		},
 	}
 	for _, tc := range cases {
 		for _, sp := range tc.spellings {
@@ -139,6 +166,11 @@ func TestListSetFlagsRejectABadMemberLoudly(t *testing.T) {
 		{"--labels", "a", "--labels", ""},
 		{"--labels", "a,"},
 		{"--query", "label:"},
+		{"--assignee", ""},
+		{"--assignee", "ann", "--assignee", ""},
+		{"--assignee", "ann,"},
+		{"--search", ""},
+		{"--search", "task", "--search", " "},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			var out strings.Builder
@@ -169,6 +201,8 @@ func TestListSetFilterRefusalsAreValidationErrors(t *testing.T) {
 		{[]string{"--ids="}, "--ids"},
 		{[]string{"--parent="}, "--parent"},
 		{[]string{"--labels="}, "--labels"},
+		{[]string{"--assignee="}, "--assignee"},
+		{[]string{"--search="}, "--search"},
 		{[]string{"--query", "status:todo"}, "todo"},
 		{[]string{"--query", "type:bogus"}, "bogus"},
 		{[]string{"--query", "id:"}, "id:"},
@@ -185,6 +219,19 @@ func TestListSetFilterRefusalsAreValidationErrors(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), tc.names) {
 			t.Fatalf("lit ls %v error = %q, want it to name %q", tc.args, err, tc.names)
+		}
+	}
+}
+
+// A --search occurrence is one term, commas and all. Split on the comma the
+// way the name sets are, `--search "task,a"` would become the two terms task
+// and a and match "task ab"; kept whole, it is text no title contains.
+func TestListSearchKeepsACommaInsideItsTerm(t *testing.T) {
+	h, bugA, taskAB, featB := setFlagFixture(t)
+	got := runLs(t, h.ap, "--search", "task,a")
+	for _, id := range []string{bugA, taskAB, featB} {
+		if strings.Contains(got, id) {
+			t.Fatalf("lit ls --search task,a listed %q — the comma split one term into two; output:\n%s", id, got)
 		}
 	}
 }

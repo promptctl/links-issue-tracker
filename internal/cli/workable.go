@@ -29,13 +29,10 @@ import (
 // [LAW:dataflow-not-control-flow] downstream stages never ask which knobs
 // exist; they consume the values unconditionally.
 type workableKnobs struct {
-	assignee  string
-	issueType model.IssueType
-	status    model.State
-	labels    []string
-	limit     int
-	columns   []columnSpec
-	all       bool
+	filter  workableFilter
+	limit   int
+	columns []columnSpec
+	all     bool
 }
 
 // workableView is the preset that specializes the one workable runner into a
@@ -141,7 +138,7 @@ func workableLeafFn(view workableView) appLeafFn {
 // [LAW:single-enforcer] the flag surface and its marshaling live only here.
 func workableLeaf(view workableView) appLeaf {
 	fs := newCobraFlagSet(view.name)
-	assignee := fs.String("assignee", "", "Filter by assignee")
+	filterFlags := registerWorkableFilter(fs, view.hasFilters)
 	// [LAW:no-mode-explosion] This flag's cap is the focus label: it selects
 	// between two values of ONE scope, it is deleted the day `focus` is, and no
 	// stage downstream branches on it — runWorkable resolves it to a scope and
@@ -149,17 +146,10 @@ func workableLeaf(view workableView) appLeaf {
 	// way out written on it rather than a wall an agent can only escape by
 	// deleting someone else's label.
 	all := fs.Bool("all", false, "Ignore the focus scope and list the whole queue")
-	issueType := optionalString(fs, view.hasFilters, "type", "Filter by issue type")
-	status := optionalString(fs, view.hasFilters, "status", "Filter by status: open|in_progress")
-	labels := optionalString(fs, view.hasFilters, "labels", "Comma-separated labels all of which must match")
 	limit := optionalInt(fs, view.hasLimit, "limit", "Limit results")
 	columnsExpr := optionalString(fs, view.hasColumns, "columns", columnsFlagUsage())
 	return appLeaf{fs: fs, positionals: 0, usage: view.usage(), work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
-		statusState, err := parseWorkableStatus(*status)
-		if err != nil {
-			return err
-		}
-		issueTypeValue, err := parseWorkableType(*issueType)
+		filter, err := filterFlags.parse()
 		if err != nil {
 			return err
 		}
@@ -182,20 +172,12 @@ func workableLeaf(view workableView) appLeaf {
 			return err
 		}
 		knobs := workableKnobs{
-			assignee:  strings.TrimSpace(*assignee),
-			issueType: issueTypeValue,
-			status:    statusState,
-			labels:    splitCSV(*labels),
-			limit:     limitValue,
-			columns:   columns,
-			all:       *all,
+			filter:  filter,
+			limit:   limitValue,
+			columns: columns,
+			all:     *all,
 		}
-		gathered, err := gatherWorkableAnnotated(ctx, ap, workableFilter{
-			Assignee:  knobs.assignee,
-			IssueType: knobs.issueType,
-			Status:    knobs.status,
-			Labels:    knobs.labels,
-		})
+		gathered, err := gatherWorkableAnnotated(ctx, ap, knobs.filter)
 		if err != nil {
 			return err
 		}
@@ -259,19 +241,52 @@ func parseWorkableStatus(raw string) (model.State, error) {
 	return state, nil
 }
 
-// parseWorkableType is the strict trust boundary for --type on the workable
-// commands: blank means "no narrowing", anything else must be sealed
-// vocabulary. A typo'd type fails loudly instead of flowing into the query and
-// reporting "no ready work". [LAW:no-silent-failure]
-func parseWorkableType(raw string) (model.IssueType, error) {
-	if strings.TrimSpace(raw) == "" {
-		return "", nil
+// workableFilterFlags is the narrowing surface `lit backlog` and `lit next`
+// share: declared once, parsed once, into the one workableFilter both commands
+// gather with. [LAW:single-enforcer] Two copies of this block are how the
+// commands could come to disagree about what `--type bug --type task` means.
+type workableFilterFlags struct {
+	assignee  *[]string
+	issueType *[]string
+	status    *string
+	labels    *[]string
+}
+
+// registerWorkableFilter declares the filter flags. --assignee is on every
+// workable view; --type, --status and --labels only where withFilters says so.
+// The set-valued flags are StringArrays because the filter fields they feed
+// are sets: a second occurrence widens the set rather than replacing the first.
+// [LAW:no-silent-failure]
+func registerWorkableFilter(fs *cobraFlagSet, withFilters bool) workableFilterFlags {
+	return workableFilterFlags{
+		assignee:  fs.StringArray("assignee", assigneeFlagUsage),
+		issueType: optionalStringArray(fs, withFilters, "type", "Filter by issue type, comma-separated or repeated: "+issueTypeChoices()),
+		status:    optionalString(fs, withFilters, "status", "Filter by status: open|in_progress"),
+		labels:    optionalStringArray(fs, withFilters, "labels", "Labels all of which must match, comma-separated or repeated"),
 	}
-	t, err := model.ParseIssueType(raw)
+}
+
+// parse turns the flag occurrences into the filter, through the same set
+// parsers `lit ls` uses, so a type or label the listing refuses is refused here
+// too, with the same exit code.
+func (f workableFilterFlags) parse() (workableFilter, error) {
+	status, err := parseWorkableStatus(*f.status)
 	if err != nil {
-		return "", UsageError{Message: fmt.Sprintf("invalid --type %q: %v", raw, err)}
+		return workableFilter{}, err
 	}
-	return t, nil
+	issueTypes, err := parseIssueTypeSet(*f.issueType)
+	if err != nil {
+		return workableFilter{}, err
+	}
+	assignees, err := parseAssigneeSet(*f.assignee)
+	if err != nil {
+		return workableFilter{}, err
+	}
+	labels, err := parseLabelSet(*f.labels)
+	if err != nil {
+		return workableFilter{}, err
+	}
+	return workableFilter{Assignees: assignees, IssueTypes: issueTypes, Status: status, Labels: labels}, nil
 }
 
 // optionalString registers the flag only when the view exposes it; an
@@ -284,6 +299,13 @@ func optionalString(fs *cobraFlagSet, enabled bool, name, usage string) *string 
 		return new(string)
 	}
 	return fs.String(name, "", usage)
+}
+
+func optionalStringArray(fs *cobraFlagSet, enabled bool, name, usage string) *[]string {
+	if !enabled {
+		return new([]string)
+	}
+	return fs.StringArray(name, usage)
 }
 
 func optionalInt(fs *cobraFlagSet, enabled bool, name, usage string) *int {

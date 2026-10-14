@@ -49,10 +49,10 @@ func benchGather(b *testing.B, rows int, rf workableFilter) {
 
 func BenchmarkGather590Unfiltered(b *testing.B) { benchGather(b, 590, workableFilter{}) }
 func BenchmarkGather590TypeBug(b *testing.B) {
-	benchGather(b, 590, workableFilter{IssueType: model.IssueType("bug")})
+	benchGather(b, 590, workableFilter{IssueTypes: []model.IssueType{"bug"}})
 }
 
 func BenchmarkGather118Unfiltered(b *testing.B) { benchGather(b, 118, workableFilter{}) }
 func BenchmarkGather118TypeBug(b *testing.B) {
-	benchGather(b, 118, workableFilter{IssueType: model.IssueType("bug")})
+	benchGather(b, 118, workableFilter{IssueTypes: []model.IssueType{"bug"}})
 }
