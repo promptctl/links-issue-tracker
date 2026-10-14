@@ -27,10 +27,7 @@ const nextUsage = "usage: lit next [--type ...] [--status ...] [--labels ...] [-
 func nextLeaf() appLeaf {
 	fs := newCobraFlagSet("next")
 	fs.Retire("continue", "--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag")
-	assignee := fs.String("assignee", "", "Filter by assignee")
-	issueType := fs.String("type", "", "Filter by issue type")
-	status := fs.String("status", "", "Filter by status: open|in_progress")
-	labels := fs.String("labels", "", "Comma-separated labels all of which must match")
+	filterFlags := registerWorkableFilter(fs)
 	// Same flag, same meaning, same deletion condition as `lit backlog --all`:
 	// route over the whole queue rather than the focused goal's path.
 	// [LAW:one-source-of-truth] one name for one idea across both surfaces.
@@ -54,11 +51,7 @@ func nextLeaf() appLeaf {
 	// the call. [LAW:one-source-of-truth]
 	actor := registerActor(fs)
 	return appLeaf{fs: fs, positionals: 0, usage: nextUsage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
-		statusState, err := parseWorkableStatus(*status)
-		if err != nil {
-			return err
-		}
-		issueTypeValue, err := parseWorkableType(*issueType)
+		filter, err := filterFlags.parse()
 		if err != nil {
 			return err
 		}
@@ -67,12 +60,7 @@ func nextLeaf() appLeaf {
 		if err := printStalenessWarning(ctx, stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
 			return err
 		}
-		gathered, err := gatherWorkableAnnotated(ctx, ap, workableFilter{
-			Assignee:  strings.TrimSpace(*assignee),
-			IssueType: issueTypeValue,
-			Status:    statusState,
-			Labels:    splitCSV(*labels),
-		})
+		gathered, err := gatherWorkableAnnotated(ctx, ap, filter)
 		if err != nil {
 			return err
 		}

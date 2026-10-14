@@ -551,8 +551,10 @@ func listLeaf(surface listSurface) (leaf[listScope], *string) {
 	// one: a second occurrence widens the set rather than replacing the first.
 	// [LAW:no-silent-failure]
 	issueType := fs.StringArray("type", "Filter by issue type, comma-separated or repeated: "+issueTypeChoices())
-	assignee := fs.String("assignee", "", "Filter by assignee")
-	search := fs.String("search", "", "Search title and description text")
+	assignee := fs.StringArray("assignee", assigneeFlagUsage)
+	// Repeated, never comma-split: search text may itself contain a comma, and
+	// each occurrence is one more term every match must contain.
+	search := fs.StringArray("search", "Search title and description text; repeat to require every term")
 	ids := fs.StringArray("ids", "Issue IDs, comma-separated or repeated")
 	parent := fs.StringArray("parent", "Only direct children of these issue IDs, comma-separated or repeated (lit children <id> is lit ls --parent <id>)")
 	labels := fs.StringArray("labels", "Labels all of which must match, comma-separated or repeated")
@@ -596,11 +598,19 @@ func listLeaf(surface listSurface) (leaf[listScope], *string) {
 		if err != nil {
 			return model.ValidationError{Message: "parse --status: " + err.Error()}
 		}
-		issueTypes, err := model.ParseIssueTypes(*issueType...)
+		issueTypes, err := parseIssueTypeSet(*issueType)
 		if err != nil {
-			return model.ValidationError{Message: "parse --type: " + err.Error()}
+			return err
 		}
-		issueIDs, err := storage.ParseNames("--ids needs an issue id in every slot, e.g. --ids <issue-id>", *ids...)
+		assignees, err := parseAssigneeSet(*assignee)
+		if err != nil {
+			return err
+		}
+		searchTerms, err := parseSearchTerms(*search)
+		if err != nil {
+			return err
+		}
+		issueIDs, err := parseIDSet(*ids)
 		if err != nil {
 			return err
 		}
@@ -610,7 +620,7 @@ func listLeaf(surface listSurface) (leaf[listScope], *string) {
 		if err != nil {
 			return err
 		}
-		labelNames, err := storage.ParseNames("--labels needs a label in every slot, e.g. --labels <label>", *labels...)
+		labelNames, err := parseLabelSet(*labels)
 		if err != nil {
 			return err
 		}
@@ -627,7 +637,8 @@ func listLeaf(surface listSurface) (leaf[listScope], *string) {
 			IDs:             issueIDs,
 			ParentIDs:       parentIDs,
 			LabelsAll:       labelNames,
-			Assignees:       toSlice(strings.TrimSpace(*assignee)),
+			Assignees:       assignees,
+			SearchTerms:     searchTerms,
 			IncludeArchived: *includeArchived,
 			IncludeDeleted:  *includeDeleted,
 			Limit:           limitValue,
@@ -640,9 +651,6 @@ func listLeaf(surface listSurface) (leaf[listScope], *string) {
 				return err
 			}
 			filter.SortBy = sortSpecs
-		}
-		if visited["search"] {
-			filter.SearchTerms = append(filter.SearchTerms, strings.TrimSpace(*search))
 		}
 		if visited["has-comments"] {
 			value := *hasComments
@@ -695,6 +703,48 @@ func listLeaf(surface listSurface) (leaf[listScope], *string) {
 		}
 		return render(stdout, issues, columns, cells)
 	}}, at
+}
+
+// The set-valued flags the listing and bulk commands share parse through the
+// functions below, so `lit ls`, `lit backlog`, `lit next`, `lit orphaned` and
+// `lit bulk` agree on what each flag accepts and on how a bad occurrence
+// fails. A bad member is a validation refusal: it repeats on every retry, so it
+// must not draw retry advice. [LAW:single-enforcer] [LAW:no-silent-failure]
+
+const assigneeFlagUsage = "Filter by assignee, comma-separated or repeated"
+
+func parseIssueTypeSet(raw []string) ([]model.IssueType, error) {
+	types, err := model.ParseIssueTypes(raw...)
+	if err != nil {
+		return nil, model.ValidationError{Message: "parse --type: " + err.Error()}
+	}
+	return types, nil
+}
+
+func parseIDSet(raw []string) ([]string, error) {
+	return storage.ParseNames("--ids needs an issue id in every slot, e.g. --ids <issue-id>", raw...)
+}
+
+func parseAssigneeSet(raw []string) ([]string, error) {
+	return storage.ParseNames("--assignee needs a user in every slot, e.g. --assignee <user>", raw...)
+}
+
+func parseLabelSet(raw []string) ([]string, error) {
+	return storage.ParseNames("--labels needs a label in every slot, e.g. --labels <label>", raw...)
+}
+
+// parseSearchTerms keeps each --search occurrence whole: unlike the name sets
+// above it never splits on a comma, because a comma is ordinary search text.
+func parseSearchTerms(raw []string) ([]string, error) {
+	var terms []string
+	for _, occurrence := range raw {
+		term := strings.TrimSpace(occurrence)
+		if term == "" {
+			return nil, model.ValidationError{Message: "--search needs text in every occurrence, e.g. --search <text>"}
+		}
+		terms = append(terms, term)
+	}
+	return terms, nil
 }
 
 // listDerivedColumns builds the per-issue cells the projected columns render,
@@ -775,15 +825,17 @@ func parentIDOf(rel storage.IssueRelations) string {
 // workableFilter carries the user-supplied narrowing options for the
 // shared workable pipeline. Empty fields mean "no narrowing"; the
 // workable definition (open/in_progress, leaves only) is layered on top
-// by gatherWorkableAnnotated. Status and IssueType are already-parsed
-// values, never raw flag strings — the CLI seam validates before
-// constructing the filter, so unvalidated input cannot reach the query.
-// [LAW:types-are-the-program]
+// by gatherWorkableAnnotated. Every field is an already-parsed value, never
+// a raw flag string — workableFilterFlags.parse is the one seam that builds
+// it, so unvalidated input cannot reach the query.
+// [LAW:types-are-the-program] Assignees, IssueTypes and Labels are sets
+// because the storage criteria they feed are sets; a single value here could
+// hold only one occurrence of a repeated flag.
 type workableFilter struct {
-	Assignee  string
-	IssueType model.IssueType
-	Status    model.State
-	Labels    []string
+	Assignees  []string
+	IssueTypes []model.IssueType
+	Status     model.State
+	Labels     []string
 }
 
 // criteria expresses this filter in the storage layer's own selection
@@ -803,8 +855,8 @@ type workableFilter struct {
 func (f workableFilter) criteria() (storage.IssueCriteria, error) {
 	return storage.ParseIssueCriteria(storage.ListIssuesFilter{
 		Statuses:   toSlice(f.Status),
-		IssueTypes: toSlice(f.IssueType),
-		Assignees:  toSlice(f.Assignee),
+		IssueTypes: f.IssueTypes,
+		Assignees:  f.Assignees,
 		LabelsAll:  f.Labels,
 	})
 }
@@ -1035,11 +1087,15 @@ type annotatedRows struct {
 // not a re-declared local constant.
 func orphanedLeaf() appLeaf {
 	fs := newCobraFlagSet("orphaned")
-	assignee := fs.String("assignee", "", "Filter by assignee")
+	assignee := fs.StringArray("assignee", assigneeFlagUsage)
 	return appLeaf{fs: fs, positionals: 0, usage: "usage: lit orphaned [--assignee <user>]", work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		assignees, err := parseAssigneeSet(*assignee)
+		if err != nil {
+			return err
+		}
 		listFilter := storage.ListIssuesFilter{
 			Statuses:        []model.State{model.StateInProgress},
-			Assignees:       toSlice(strings.TrimSpace(*assignee)),
+			Assignees:       assignees,
 			IncludeArchived: false,
 			IncludeDeleted:  false,
 		}
@@ -1144,7 +1200,7 @@ func showLeaf() appLeaf {
 // itself only numbers.
 func historyLeaf() appLeaf {
 	fs := newCobraFlagSet("history")
-	version := fs.StringOnce("version", "Print the text one version of a long text field held, as <field>@<n>; each text the field has held is numbered once, from 1, in the order its history first shows it, and the trail shows each change as vN → vM. A sync that merges in an older edit renumbers the versions after it")
+	version := fs.String("version", "", "Print the text one version of a long text field held, as <field>@<n>; each text the field has held is numbered once, from 1, in the order its history first shows it, and the trail shows each change as vN → vM. A sync that merges in an older edit renumbers the versions after it")
 	const usage = "usage: lit history <id> [--version <field>@<n>]"
 	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if len(positional) != 1 {

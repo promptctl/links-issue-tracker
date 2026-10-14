@@ -70,16 +70,50 @@ func (fs *cobraFlagSet) Parse(args []string) error {
 	return fs.cmd.ParseFlags(args)
 }
 
+// String, Bool, Int and StringOptional declare single-value flags, and each
+// refuses a second occurrence. pflag's own scalars keep the last of repeated
+// occurrences and drop every earlier value with no error, so `--labels a
+// --labels b` would act on b alone without a word. A flag that holds a set is a
+// StringArray instead, where a repeat widens the set. [LAW:no-silent-failure]
+// [LAW:single-enforcer] the rule lives in the flag set, so no command can
+// declare a flag that forgets it.
 func (fs *cobraFlagSet) String(name string, value string, usage string) *string {
-	return fs.cmd.Flags().String(name, value, usage)
+	p := fs.cmd.Flags().String(name, value, usage)
+	fs.once(name)
+	return p
 }
 
 func (fs *cobraFlagSet) Bool(name string, value bool, usage string) *bool {
-	return fs.cmd.Flags().Bool(name, value, usage)
+	p := fs.cmd.Flags().Bool(name, value, usage)
+	fs.once(name)
+	return p
 }
 
 func (fs *cobraFlagSet) Int(name string, value int, usage string) *int {
-	return fs.cmd.Flags().Int(name, value, usage)
+	p := fs.cmd.Flags().Int(name, value, usage)
+	fs.once(name)
+	return p
+}
+
+// once wraps a declared flag's value so a second Set is refused; pflag reports
+// the refusal as an invalid argument for that flag, which parseFlagSet answers
+// as a UsageError.
+func (fs *cobraFlagSet) once(name string) {
+	flag := fs.cmd.Flags().Lookup(name)
+	flag.Value = &onceValue{Value: flag.Value}
+}
+
+type onceValue struct {
+	pflag.Value
+	set bool
+}
+
+func (v *onceValue) Set(value string) error {
+	if v.set {
+		return errors.New("given more than once")
+	}
+	v.set = true
+	return v.Value.Set(value)
 }
 
 // StringArray declares a repeatable string flag: each occurrence appends one
@@ -89,38 +123,11 @@ func (fs *cobraFlagSet) StringArray(name string, usage string) *[]string {
 	return fs.cmd.Flags().StringArray(name, nil, usage)
 }
 
-// StringOnce declares a string flag that may be given at most once. String
-// keeps the last of repeated occurrences and drops every earlier value with no
-// error; a flag whose repetition reads as a second request refuses the second
-// occurrence as a usage error instead. [LAW:no-silent-failure]
-func (fs *cobraFlagSet) StringOnce(name string, usage string) *string {
-	flag := &onceString{}
-	fs.cmd.Flags().Var(flag, name, usage)
-	return &flag.value
-}
-
-type onceString struct {
-	value string
-	set   bool
-}
-
-func (s *onceString) String() string { return s.value }
-
-func (s *onceString) Type() string { return "string" }
-
-func (s *onceString) Set(value string) error {
-	if s.set {
-		return errors.New("given more than once")
-	}
-	s.value, s.set = value, true
-	return nil
-}
-
 // StringOptional declares a string flag whose value is `defaultIfAbsent` when
 // the flag is not passed, `defaultIfPresent` when the flag is passed with no
 // value (e.g. `--eject`), or the caller-supplied value otherwise.
 func (fs *cobraFlagSet) StringOptional(name, defaultIfPresent, defaultIfAbsent, usage string) *string {
-	p := fs.cmd.Flags().String(name, defaultIfAbsent, usage)
+	p := fs.String(name, defaultIfAbsent, usage)
 	fs.cmd.Flags().Lookup(name).NoOptDefVal = defaultIfPresent
 	return p
 }

@@ -1419,7 +1419,7 @@ A listing that says nothing about retention sees only live issues
 | `status:<v>[,<v>...]` | `model.ParseStates` (comma-split, each fragment lowercased with the `in-progress` alias); appended to `Statuses`; parse error propagates | |
 | `resolution:<v>` | `model.ParseResolution` (trim only); appended to `Resolutions` | |
 | `type:<v>[,<v>...]` | `model.ParseIssueTypes`; appended to `IssueTypes`; a typo or blank member is an error, never an empty result | |
-| `assignee:<v>` | value trimmed, appended to `Assignees` (no validation, empty allowed) | |
+| `assignee:<v>[,<v>...]` | `storage.ParseNames`, as `id:`; appended to `Assignees` (ORed) | |
 | `id:<v>[,<v>...]` | `storage.ParseNames`: comma-split, fragments trimmed; appended to `IDs`; any blank slot → `model.ValidationError` | |
 | `parent:<v>[,<v>...]` | `storage.ParseNames`, as `id:`; appended to `ParentIDs` | |
 | `label:<v>[,<v>...]` | `storage.ParseNames`, as `id:`; appended to `LabelsAll` (AND semantics) | |

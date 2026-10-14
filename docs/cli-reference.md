@@ -19,6 +19,12 @@ needs one field (e.g. `lit workspace | sed -n 's/^traces_dir: //p'`).
 as their sole output, because a full database export / raw dump has no text form. They
 take no flag — the structured output *is* the command.
 
+### Repeated flags
+
+A flag that takes one value takes it once: `--title a --title b` is a usage error
+(exit 2), never a silent choice of one. A flag shown as `<csv>]...` is a set: it takes
+a comma list, may be repeated, and each repeat adds to the set.
+
 ### Exit codes
 
 Exit codes are a contract, not just 0/1:
@@ -174,7 +180,7 @@ surviving intent.
 ### `lit backlog`
 
 ```text
-lit backlog [--assignee <a>] [--labels <csv>] [--status open|in_progress] [--type <t>] [--all] [--limit <n>] [--columns <csv>]
+lit backlog [--assignee <csv>]... [--labels <csv>]... [--status open|in_progress] [--type <csv>]... [--all] [--limit <n>] [--columns <csv>]
 ```
 
 Workable items in rank order with blocked items shown **inline**, so the shape of
@@ -185,10 +191,12 @@ what it is listing on its own line, just before the separator that opens the row
 
 `--status` accepts exactly one of `open` or `in_progress` on the workable commands
 (`backlog`, `next`); anything else — including `closed`, which could only ever match
-nothing — is a usage error (exit 2) naming the legal values. This is narrower than
+nothing — is a validation error (exit 3) naming the legal values. This is narrower than
 `lit ls --status`, which takes a set, and deliberately: a workable row can only be
 `open` or `in_progress`, so the only set these commands could add is both of them,
-which is already what they list when the flag is absent.
+which is already what they list when the flag is absent. `--type`, `--labels` and
+`--assignee` are sets, as on `lit ls`, and refuse an unknown type or a blank slot the
+same way, exit 3.
 
 `--columns` takes the same vocabulary `lit ls` documents below and rejects an unknown
 name the same way, exit 2. Here the rejection lands ahead of the sync-staleness
@@ -208,7 +216,7 @@ evaluates four of the five reasons (see `lit ls` below); what stays particular t
 ### `lit next`
 
 ```text
-lit next [--type <t>] [--status open|in_progress] [--labels <csv>] [--assignee <a>] [--all]
+lit next [--type <csv>]... [--status open|in_progress] [--labels <csv>]... [--assignee <csv>]... [--all]
 ```
 
 Prints the single next workable leaf to `lit start`, narrowed by the same filters as
@@ -279,7 +287,7 @@ way.
 ### `lit orphaned`
 
 ```text
-lit orphaned [--assignee <a>]
+lit orphaned [--assignee <csv>]...
 ```
 
 Lists `in_progress` issues with no recent updates — claimed work that went quiet and
@@ -288,8 +296,8 @@ needs someone to finish or release it.
 ### `lit ls`
 
 ```text
-lit ls [--at <store-dir>] [--ids <csv>]... [--parent <csv>]... [--search <text>] [--query <q>] [--status <csv of open|in_progress|closed>]...
-       [--type <csv of task|feature|bug|chore|epic>]... [--labels <csv>]... [--assignee <a>] [--has-comments]
+lit ls [--at <store-dir>] [--ids <csv>]... [--parent <csv>]... [--search <text>]... [--query <q>] [--status <csv of open|in_progress|closed>]...
+       [--type <csv of task|feature|bug|chore|epic>]... [--labels <csv>]... [--assignee <csv>]... [--has-comments]
        [--updated-after <rfc3339>] [--updated-before <rfc3339>]
        [--include-archived] [--include-deleted]
        [--sort rank:asc,updated_at:desc] [--limit <n>] [--columns <csv>]
@@ -318,13 +326,16 @@ recognized token is a search term. Archived and deleted issues are hidden unless
 explicitly included. Output-shaping flags (`--columns`, `--format`) have no token —
 they are not filter concerns.
 
-`--status`, `--type`, `--ids`, `--parent` and `--labels` are sets: each takes a comma
-list, may be repeated, and a repeat adds to the set rather than replacing it.
-`--status` and `--type` members are checked against their vocabulary, so one bad
-member fails the whole listing and is named. An empty `--ids`, `--parent` or
-`--labels`, a blank slot in one (`--ids a,`), or a bare `id:`, `parent:` or `label:`,
-is refused rather than ignored. Every one of these refusals exits 3.
-`--labels` requires every label named, so each one added narrows the listing.
+`--status`, `--type`, `--ids`, `--parent`, `--labels` and `--assignee` are sets: each
+takes a comma list, may be repeated, and a repeat adds to the set rather than
+replacing it. `--status` and `--type` members are checked against their vocabulary, so
+one bad member fails the whole listing and is named. An empty `--ids`, `--parent`,
+`--labels` or `--assignee`, a blank slot in one (`--ids a,`), or a bare `id:`,
+`parent:`, `label:` or `assignee:`, is refused rather than ignored. `--search` may be
+repeated too, but a comma is ordinary search text, so each occurrence is one term,
+whole; a row must match every term, and a blank `--search` is refused. Every one of
+these refusals exits 3. `--labels` requires every label named, so each one added
+narrows the listing.
 
 `--parent <csv>` (token `parent:<id>`; comma-separated and/or repeated) keeps only the
 direct children of the named issues, read from the parent-child edge, so a grandchild is not listed. An id that
@@ -681,12 +692,14 @@ use `lit ls --parent a,b`.
 ### `lit bulk label` / `lit bulk close` / `lit bulk archive`
 
 ```text
-lit bulk label <add|rm> --ids <csv> --label <label>
-lit bulk close --ids <csv> --resolution <duplicate|superseded|obsolete|wontfix> [--of <canonical-id>] [--reason <text>]
-lit bulk archive --ids <csv> [--reason <text>]
+lit bulk label <add|rm> --ids <csv>... --label <label>
+lit bulk close --ids <csv>... --resolution <duplicate|superseded|obsolete|wontfix> [--of <canonical-id>] [--reason <text>]
+lit bulk archive --ids <csv>... [--reason <text>]
 ```
 
 Apply one label edit or lifecycle transition across many issues in one call.
+`--ids` is a set, so `--ids A --ids B` acts on both; a missing `--ids` or a blank slot
+in one is refused (exit 3) before any issue is touched.
 `bulk close` takes the same resolution flags as `lit close` — every closed
 issue records the shared outcome, so a bulk close cannot produce the
 resolution-less close the close command itself forbids.

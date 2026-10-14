@@ -40,13 +40,13 @@ const edgeFlagsUsage = "--blocked-by <blocker-id> | --related-to <peer-id>"
 // registerEdgeFlags declares every edgeFlags row on fs and returns the reader
 // that turns the parsed flags into the one edge they name. [LAW:single-enforcer]
 // Exactly-one is decided here for both commands; a command names one edge. A
-// flag repeated is refused while parsing (StringOnce), and a flag given counts
+// flag repeated is refused while parsing (as every String flag is), and a flag given counts
 // as naming its edge even when its value is empty, so `--blocked-by ""` beside
 // `--related-to X` is refused rather than read as the related-to edge alone.
 func registerEdgeFlags(fs *cobraFlagSet) func(usage string) (model.RelationType, string, error) {
 	values := make([]*string, len(edgeFlags))
 	for i, row := range edgeFlags {
-		values[i] = fs.StringOnce(row.name, row.usage)
+		values[i] = fs.String(row.name, "", row.usage)
 	}
 	return func(usage string) (model.RelationType, string, error) {
 		var named []int

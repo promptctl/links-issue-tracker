@@ -118,7 +118,7 @@ func TestLaneGateSeesSiblingsHiddenByAssigneeFilter(t *testing.T) {
 
 	// Viewing only alice's work, her later sibling is still gated by bob's open
 	// earlier sibling even though bob's ticket is filtered out of the view.
-	pullable := h.runPullableAnnotated(workableFilter{Assignee: "alice"})
+	pullable := h.runPullableAnnotated(workableFilter{Assignees: []string{"alice"}})
 	if containsID(pullable, mineLater.ID) {
 		t.Fatalf("alice's later sibling should be gated by bob's open earlier sibling; got=%v", ids(pullable))
 	}

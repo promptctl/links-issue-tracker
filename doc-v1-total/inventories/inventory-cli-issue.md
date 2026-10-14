@@ -696,8 +696,8 @@ else ready.
 | `--at` | string | `""` | Declared so the parse accepts it (`cli.go`); `listLeaf` returns its value pointer to `runList` (`cli.go`), which routes on it. The work closure does not read it |
 | `--status` | string array | `nil` | State set via `model.ParseStates` — comma-separated and/or repeated, every fragment parsed; refusal → `ValidationError{"parse --status: " + err}` → exit 3 (`cli.go`) |
 | `--type` | string array | `nil` | Type set via `model.ParseIssueTypes` — comma-separated and/or repeated, every fragment parsed, so a blank or unknown member is refused and named; refusal → `ValidationError{"parse --type: " + err}` → exit 3 (`cli.go`) |
-| `--assignee` | string | `""` | Trimmed, single-element `Assignees`; blank → none (`cli.go`) |
-| `--search` | string | `""` | Trimmed and appended to `SearchTerms` **only if visited** (`cli.go`) |
+| `--assignee` | string array | `nil` | Assignees, comma-separated and/or repeated, read by `storage.ParseNames` (`parseAssigneeSet`) → `Assignees` (ORed); a blank slot → `model.ValidationError{"--assignee needs a user in every slot, e.g. --assignee <user>"}` → exit 3 (`cli.go`) |
+| `--search` | string array | `nil` | One `SearchTerms` entry per occurrence, trimmed and **never comma-split** (`parseSearchTerms`), so every term must match; a blank occurrence → `model.ValidationError{"--search needs text in every occurrence, e.g. --search <text>"}` → exit 3 (`cli.go`) |
 | `--ids` | string array | `nil` | Issue ids, comma-separated and/or repeated, read by `storage.ParseNames` exactly as `--parent` is → `filter.IDs`; a blank slot (`--ids=`, `--ids a,`) → `model.ValidationError{"--ids needs an issue id in every slot, e.g. --ids <issue-id>"}` → exit 3 (`cli.go`; `internal/storage/selects.go`) |
 | `--parent` | string array | `nil` | Issue ids, comma-separated and/or repeated; `storage.ParseNames` splits each occurrence on commas and collects the ids of all occurrences, then the surface's positionals are appended → `filter.ParentIDs` (direct children, ORed). A blank slot (`--parent=`, `--parent ", "`, `--parent a,`) → `model.ValidationError{"--parent needs an issue id in every slot, e.g. --parent <epic-id>"}` → exit 3, checked before the positionals are appended, so `lit children <id> --parent=` is refused too. An id naming no issue → `NotFoundError` from the store → exit 4 (`cli.go`; `store.go`) |
 | `--labels` | string array | `nil` | Labels, comma-separated and/or repeated, read by `storage.ParseNames` → `LabelsAll` (ALL must match, so each added label narrows); a blank slot → `model.ValidationError{"--labels needs a label in every slot, e.g. --labels <label>"}` → exit 3 (`cli.go`) |
@@ -737,9 +737,9 @@ else ready.
   carrying the underlying message, so each exits 3 (`query.go`).
 - Terms (`applyTerm`, `query.go`): `status:<state>[,<state>...]` (via
   `model.ParseStates`), `resolution:<res>` (via `model.ParseResolution`),
-  `type:<type>[,<type>...]` (via `model.ParseIssueTypes`), `assignee:<v>`,
-  `id:<v>[,<v>...]`, `parent:<v>[,<v>...]`, `label:<v>[,<v>...]` (the last
-  three via `storage.ParseNames`, the reader the matching flag uses; a blank
+  `type:<type>[,<type>...]` (via `model.ParseIssueTypes`),
+  `assignee:<v>[,<v>...]`, `id:<v>[,<v>...]`, `parent:<v>[,<v>...]`,
+  `label:<v>[,<v>...]` (the last four via `storage.ParseNames`, the reader the matching flag uses; a blank
   slot, such as bare `parent:` →
   `model.ValidationError{"parent: needs an issue id in every slot, e.g. parent:<epic-id>"}`,
   `query.go`), `has:comments` (any other `has:` →
@@ -951,7 +951,7 @@ Cross-epic dependencies:
 
 - Registration `register.go`, `app.AccessRead`. Handler `historyLeaf`
   (`cli.go`).
-- Flags: `--version <field>@<n>`, given at most once (`StringOnce`).
+- Flags: `--version <field>@<n>`, given at most once (a repeat is refused, as on every `String` flag, `flagset.go`).
 - Refusal: `len(positional) != 1` →
   `UsageError{"usage: lit history <id> [--version <field>@<n>]"}` → exit 2 (`cli.go`).
 - `--version`, when given, is parsed before the store is read
@@ -1260,18 +1260,18 @@ line for `done` and `close`, each group omitted when empty:
 - Registration `register.go`, `app.AccessRead`, handler
   `workableLeafFn(backlogView)`. Summary: "List the full workable backlog in
   priority/rank order (blocked items inline)".
-- `backlogView` preset (`workable.go`): `hasFilters: true`,
+- `backlogView` preset (`workable.go`):
   `hasLimit: true`, `hasColumns: true`, order = `orderCanonical` (no-op,
   `workable.go`), keep = `keepAll` (`workable.go`), render =
   `printBacklogOutput`, occasion = `backlogOccasion()`.
-- Flags (`workableLeaf`, `workable.go`):
+- Flags (`workableLeaf` → `registerWorkableFilter`, `workable.go`):
 
 | Flag | Type | Default | Effect |
 |---|---|---|---|
-| `--assignee` | string | `""` | "Filter by assignee" (always registered) |
-| `--type` | string | `""` | "Filter by issue type" |
+| `--assignee` | string array | `nil` | Assignee set, comma-separated and/or repeated, via `parseAssigneeSet` as on `lit ls` |
+| `--type` | string array | `nil` | Type set, comma-separated and/or repeated, via `parseIssueTypeSet` as on `lit ls` |
 | `--status` | string | `""` | "Filter by status: open\|in_progress" |
-| `--labels` | string | `""` | "Comma-separated labels all of which must match" |
+| `--labels` | string array | `nil` | Label set (ALL must match), comma-separated and/or repeated, via `parseLabelSet` as on `lit ls` |
 | `--limit` | int | `0` | "Limit results" — applied **after** ordering; read by `query.ParseLimit`, so a negative value → `parse --limit: %w` → exit 3 (`workable.go`) |
 | `--columns` | string | `""` | "Comma-separated output columns" |
 
@@ -1279,10 +1279,11 @@ line for `done` and `close`, each group omitted when empty:
   `usage()` builds `"usage: lit backlog [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--limit N] [--columns ...]"`
   (`workable.go`).
 - `--status closed` (or any unparseable state) →
-  `UsageError{"invalid --status \"<x>\" (valid: open, in_progress)"}` → exit 2
+  `model.ValidationError{"invalid --status \"<x>\" (valid: open, in_progress)"}` → exit 3
   (`parseWorkableStatus`, `workable.go`).
-- Bad `--type` → `UsageError{"invalid --type \"<x>\": <err>"}` → exit 2
-  (`parseWorkableType`, `workable.go`).
+- A bad member of `--type`, `--assignee` or `--labels` (unknown type, blank
+  slot) → `model.ValidationError` → exit 3, the same refusal `lit ls` gives
+  (`workableFilterFlags.parse`, `workable.go`; `cli.go`).
 - Prints the sync-staleness warning first (`workable.go`).
 - Runs the shared workable pipeline (§1.18) via `gatherWorkableAnnotated`
   (`workable.go`), then `gatherClaimContext` (`workable.go`).
@@ -1335,19 +1336,19 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
 
 - Registration `register.go`, `app.AccessRead`, handler `nextLeaf`
   (`next.go`). Summary: "Print the next workable leaf to lit start".
-- Flags (`next.go`, and the `--by`):
+- Flags (`registerWorkableFilter` in `next.go`, and the `--by`):
 
 | Flag | Type | Default | Effect |
 |---|---|---|---|
-| `--assignee` | string | `""` | "Filter by assignee" |
-| `--type` | string | `""` | "Filter by issue type" |
+| `--assignee` | string array | `nil` | as `backlog` |
+| `--type` | string array | `nil` | as `backlog` |
 | `--status` | string | `""` | "Filter by status: open\|in_progress" |
-| `--labels` | string | `""` | "Comma-separated labels all of which must match" |
+| `--labels` | string array | `nil` | as `backlog` |
 | `--all` | bool | `false` | "Ignore the focus scope and route over the whole queue" |
 | `--by` | string | `""` | identity fallback (§1.11), read by `resumeAdvice` to say whether work in flight is the reader's (`next.go`) |
 
-- `--status` and `--type` go through the same `parseWorkableStatus` /
-  `parseWorkableType` refusals as `backlog` (`next.go`). **No** `--limit`,
+- The filter flags go through the same `workableFilterFlags.parse` refusals as
+  `backlog` (`next.go`). **No** `--limit`,
   **no** `--columns`.
 - Refusal: any positional → `UsageError{nextUsage}` → exit 2, where `nextUsage` =
   `"usage: lit next [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--all]"`
@@ -1576,7 +1577,8 @@ claim; this command claims nothing.
 
 - Registration `register.go`, `app.AccessRead`. Handler `orphanedLeaf`
   (`cli.go`). Summary: "List in_progress issues with no recent updates".
-- Flags: `--assignee` (string, `""`, "Filter by assignee") (`cli.go`).
+- Flags: `--assignee` (string array, comma-separated and/or repeated, via
+  `parseAssigneeSet` as on `lit ls`; a blank slot → exit 3) (`cli.go`).
 - Refusal: any positional → `UsageError{"usage: lit orphaned [--assignee <user>]"}`
   → exit 2 (`cli.go`).
 - Query: `Statuses = [in_progress]`, assignee filter, no archived, no deleted
@@ -1719,8 +1721,8 @@ Family `depFamily`, usage `"usage: lit dep <add|rm|ls> ..."` (`dependency.go`).
   2. Not exactly one relation flag given → the same `UsageError` → exit 2
      (`registerEdgeFlags`, `dependency.go`). A flag given with an empty value
      still counts as given, and then refuses the same way. A flag given twice is
-     refused while parsing: each edge flag is a `StringOnce` (`flagset.go`),
-     whose second `Set` fails, so the parse returns
+     refused while parsing: each edge flag is a `String`, and every `String`
+     flag's second `Set` fails (`once`, `flagset.go`), so the parse returns
      `UsageError{"invalid argument \"<value>\" for \"--blocked-by\" flag: given more than once"}`
      → exit 2.
   3. Self-loop `id == value` → `model.ValidationError{Message: fmt.Sprintf("dep add: self-loop rejected (%s %s %s)")}`
@@ -1775,6 +1777,13 @@ Family `bulkFamily`, usage `"usage: lit bulk <label|close|archive> ..."`
 Rows: `label` (write), `close` (write), `archive` (write), and hidden
 `import` (`retiredSubcommand`, retired).
 
+**Shared `--ids`** — `registerBulkIDs` (`bulk.go`), declared once for every
+bulk row: a string array, comma-separated and/or repeated, read by
+`storage.ParseNames`, so `--ids A --ids B` acts on both. A blank slot →
+`model.ValidationError{"--ids needs an issue id in every slot, e.g. --ids <issue-id>"}`
+and no flag at all → `model.ValidationError{"--ids is required"}`, each → exit 3
+before any id is acted on.
+
 **Shared failure semantics** — `runBulkOver(stdout, ids, op)` (`bulk.go`):
 - Applies `op` to each id **in order**.
 - Each success writes `"<id> ok\n"` to stdout (`bulk.go`).
@@ -1791,10 +1800,10 @@ Rows: `label` (write), `close` (write), `archive` (write), and hidden
   (`bulk.go`).
 - With zero args after `label` → `errors.New(bulkLabelFamily.usage)` → exit 1
   (`bulk.go`).
-- Flags parsed from `args[1:]`: `--ids` ("Comma-separated issue IDs"),
-  `--label` ("Label name"), `--by` (`bulk.go`).
-- **Error precedence is deliberate** (`bulk.go`): empty `--ids` →
-  `ValidationError{"--ids is required"}` → exit 3; then blank `--label` →
+- Flags parsed from `args[1:]`: `--ids` (`registerBulkIDs`), `--label`
+  ("Label name"), `--by` (`bulk.go`).
+- **Error precedence is deliberate** (`bulk.go`): a bad or missing `--ids`
+  (below) → exit 3; then blank `--label` →
   `ValidationError{"--label is required"}` → exit 3; only *then* is an unknown
   add/rm action resolved (`bulk.go`).
 - `add` calls `Store.AddLabel` with the resolved actor; `rm` calls
@@ -1804,8 +1813,7 @@ Rows: `label` (write), `close` (write), `archive` (write), and hidden
 (`bulkCloseLeaf`, `bulk.go`):
 - Flags: `--ids`, `--reason` ("Lifecycle reason"), `--resolution` + `--of` (via the
   shared `registerCloseOutcomeFlags`), `--by` (`bulk.go`).
-- Empty `--ids` → `ValidationError{"--ids is required"}` → exit 3
-  (`bulk.go`).
+- `--ids` via `registerBulkIDs` (`bulk.go`).
 - Outcome via the same `closeOutcomeFromFlags` gate as `lit close`, with usage
   string `"usage: lit bulk close --ids <id,id,...> --resolution <duplicate|superseded|obsolete|wontfix> [--of <canonical-id>] [--reason <text>]"`
   (`bulk.go`) — so `--resolution` is required and `--of` is required
@@ -1819,7 +1827,7 @@ Rows: `label` (write), `close` (write), `archive` (write), and hidden
 `bulk.go`, registered at `bulk.go`):
 - Flag set name is `"bulk archive"` derived from `action.Name()` (`bulk.go`).
 - Flags: `--ids`, `--reason`, `--by`.
-- Empty `--ids` → `ValidationError{"--ids is required"}` → exit 3 (`bulk.go`).
+- `--ids` via `registerBulkIDs` (`bulk.go`).
 - Applies `model.Archive{}` per id.
 
 **`lit bulk import`** (hidden, retired) →

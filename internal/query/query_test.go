@@ -39,6 +39,7 @@ func TestQueryTokenSupersetOfDiscreteFlags(t *testing.T) {
 		{"type", "--type task", "type:task", storage.ListIssuesFilter{IssueTypes: []model.IssueType{model.TypeTask}}},
 		{"type set", "--type bug,task", "type:bug,task", storage.ListIssuesFilter{IssueTypes: []model.IssueType{model.TypeBug, model.TypeTask}}},
 		{"assignee", "--assignee bmf", "assignee:bmf", storage.ListIssuesFilter{Assignees: []string{"bmf"}}},
+		{"assignee set", "--assignee ann,bob", "assignee:ann,bob", storage.ListIssuesFilter{Assignees: []string{"ann", "bob"}}},
 		{"search", "--search login", "login", storage.ListIssuesFilter{SearchTerms: []string{"login"}}},
 		{"ids", "--ids issue-123", "id:issue-123", storage.ListIssuesFilter{IDs: []string{"issue-123"}}},
 		{"ids set", "--ids issue-123,issue-456", "id:issue-123,issue-456", storage.ListIssuesFilter{IDs: []string{"issue-123", "issue-456"}}},

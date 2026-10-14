@@ -755,7 +755,7 @@ func TestRouteNextKeepsOwnershipUnderADisplayFilter(t *testing.T) {
 	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
 	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicB.ID})
 
-	gathered, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{IssueType: model.TypeBug})
+	gathered, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{IssueTypes: []model.IssueType{model.TypeBug}})
 	if err != nil {
 		t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}

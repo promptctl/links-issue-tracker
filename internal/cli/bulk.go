@@ -97,12 +97,32 @@ var bulkLabelFamily = commandFamily[bulkLabelOp]{
 	},
 }
 
+// registerBulkIDs declares the --ids flag every bulk command acts on and
+// returns its parser. A StringArray, because a bulk command acts on the whole
+// set it was handed: `bulk close --ids A --ids B` closes both, where a
+// single-value flag would close B and skip A without a word.
+// [LAW:no-silent-failure] [LAW:single-enforcer] one declaration, so the bulk
+// commands cannot disagree about which ids they were given.
+func registerBulkIDs(fs *cobraFlagSet) func() ([]string, error) {
+	ids := fs.StringArray("ids", "Issue IDs, comma-separated or repeated")
+	return func() ([]string, error) {
+		issueIDs, err := parseIDSet(*ids)
+		if err != nil {
+			return nil, err
+		}
+		if len(issueIDs) == 0 {
+			return nil, model.ValidationError{Message: "--ids is required"}
+		}
+		return issueIDs, nil
+	}
+}
+
 // bulkLabelLeaf serves the whole `bulk label <add|rm>` surface: the action name
 // is this leaf's one positional, so the nested family resolve reads it from the
 // parse rather than re-slicing raw argv.
 func bulkLabelLeaf() appLeaf {
 	fs := newCobraFlagSet("bulk label")
-	ids := fs.String("ids", "", "Comma-separated issue IDs")
+	issueIDsFlag := registerBulkIDs(fs)
 	label := fs.String("label", "", "Label name")
 	resolveActor := registerActor(fs)
 	// No usage: here, deliberately. Wiring the family's sentence loses --ids and
@@ -113,9 +133,9 @@ func bulkLabelLeaf() appLeaf {
 		if len(positional) == 0 {
 			return UsageError{Message: bulkLabelFamily.usage}
 		}
-		issueIDs := splitCSV(*ids)
-		if len(issueIDs) == 0 {
-			return model.ValidationError{Message: "--ids is required"}
+		issueIDs, err := issueIDsFlag()
+		if err != nil {
+			return err
 		}
 		if strings.TrimSpace(*label) == "" {
 			return model.ValidationError{Message: "--label is required"}
@@ -142,14 +162,14 @@ func bulkLabelLeaf() appLeaf {
 // [LAW:single-enforcer]
 func bulkCloseLeaf() appLeaf {
 	fs := newCobraFlagSet("bulk close")
-	ids := fs.String("ids", "", "Comma-separated issue IDs")
+	issueIDsFlag := registerBulkIDs(fs)
 	reason := fs.String("reason", "", "Lifecycle reason")
 	resolution, target := registerCloseOutcomeFlags(fs)
 	resolveActor := registerActor(fs)
 	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
-		issueIDs := splitCSV(*ids)
-		if len(issueIDs) == 0 {
-			return model.ValidationError{Message: "--ids is required"}
+		issueIDs, err := issueIDsFlag()
+		if err != nil {
+			return err
 		}
 		outcome, err := closeOutcomeFromFlags(*resolution, *target, "usage: lit bulk close --ids <id,id,...> --resolution <duplicate|superseded|obsolete|wontfix> [--of <canonical-id>] [--reason <text>]")
 		if err != nil {
@@ -173,13 +193,13 @@ func bulkCloseLeaf() appLeaf {
 func bulkTransitionLeaf(action model.Action) appLeafFn {
 	return func() appLeaf {
 		fs := newCobraFlagSet("bulk " + action.Name().Verb())
-		ids := fs.String("ids", "", "Comma-separated issue IDs")
+		issueIDsFlag := registerBulkIDs(fs)
 		reason := fs.String("reason", "", "Lifecycle reason")
 		resolveActor := registerActor(fs)
 		return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
-			issueIDs := splitCSV(*ids)
-			if len(issueIDs) == 0 {
-				return model.ValidationError{Message: "--ids is required"}
+			issueIDs, err := issueIDsFlag()
+			if err != nil {
+				return err
 			}
 			actor := resolveActor()
 			return runBulkOver(stdout, issueIDs, func(issueID string) error {
