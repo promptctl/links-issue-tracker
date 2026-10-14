@@ -737,9 +737,9 @@ else ready.
   carrying the underlying message, so each exits 3 (`query.go`).
 - Terms (`applyTerm`, `query.go`): `status:<state>[,<state>...]` (via
   `model.ParseStates`), `resolution:<res>` (via `model.ParseResolution`),
-  `type:<type>[,<type>...]` (via `model.ParseIssueTypes`), `assignee:<v>`,
-  `id:<v>[,<v>...]`, `parent:<v>[,<v>...]`, `label:<v>[,<v>...]` (the last
-  three via `storage.ParseNames`, the reader the matching flag uses; a blank
+  `type:<type>[,<type>...]` (via `model.ParseIssueTypes`),
+  `assignee:<v>[,<v>...]`, `id:<v>[,<v>...]`, `parent:<v>[,<v>...]`,
+  `label:<v>[,<v>...]` (the last four via `storage.ParseNames`, the reader the matching flag uses; a blank
   slot, such as bare `parent:` →
   `model.ValidationError{"parent: needs an issue id in every slot, e.g. parent:<epic-id>"}`,
   `query.go`), `has:comments` (any other `has:` →
