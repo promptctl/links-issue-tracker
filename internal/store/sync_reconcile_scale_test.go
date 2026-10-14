@@ -55,17 +55,20 @@ func scaleEditTarget(i int) string { return scaleIssueID(i % scaleEditedIssues) 
 // commit, HELD until the spine is built; that is live, uncollectable memory,
 // and it is invisible in a measure that garbage dominates.
 //
-// The number: the streamed replay measures ~83 MiB of growth at this scale,
-// and holds a fixed handful of exports whatever the chain's length. The
-// materializing shape would additionally retain scaleFoldedCommits projected
-// exports at roughly 450 KiB each — some 220 MiB — for growth over 300 MiB.
-// 160 MiB sits between the two with margin on both sides: about 1.9x the
-// streamed cost, so ordinary variance cannot fail it, and about 0.53x the
-// materializing one, so a reintroduced materialization cannot pass it. Both
+// The number: the streamed replay measures ~145 MiB of growth at this scale.
+// It holds a fixed handful of exports whatever the chain's length, but the
+// engine still retains ~117 KiB per folded commit (117, 145 and 205 MiB at
+// 250, 500 and 1000 commits), so the bound is a growth at THIS scale and not a
+// flat line. The materializing shape would additionally retain
+// scaleFoldedCommits projected exports at ~450 KiB each — a 1000-issue export
+// with its parent edges — some 220 MiB, for growth near 365 MiB. 240 MiB sits
+// between the two with margin on both sides: about 1.66x the streamed cost,
+// so ordinary variance cannot fail it, and about 0.66x the materializing one,
+// so a reintroduced materialization cannot pass it. Both
 // ratios are given as numbers rather than as adjectives because this paragraph
 // is the arithmetic anyone moving the budget will check it against, and a
 // margin described loosely is one they would have to re-derive to trust.
-const scaleHeapGrowthBudget = 160 << 20 // 160 MiB
+const scaleHeapGrowthBudget = 240 << 20 // 240 MiB
 
 // scaleWallClockBudget bounds how long the combine may take. Unlike the memory
 // bound this is NOT a claim that the cost stopped scaling: reading the backlog
@@ -134,6 +137,12 @@ func TestSyncReconcileCombineIsBoundedOnALargeFoldedChain(t *testing.T) {
 	if res.State != storage.SyncReconcileCombined {
 		t.Fatalf("combine state = %q (pending=%d), want %q", res.State, len(res.Pending), storage.SyncReconcileCombined)
 	}
+	// Every planted ticket is already inside an epic, so a landing that moves
+	// any of them has stopped seeing the planted epic; each moved ticket becomes
+	// a lane of one and its lane edit stops counting.
+	if len(res.Rehomed) != 0 {
+		t.Fatalf("combine rehomed %d planted tickets (first %+v), want none: every planted ticket lives in %s", len(res.Rehomed), res.Rehomed[0], scaleEpicID)
+	}
 	if growth := peakHeap - peak.baseline; growth > scaleHeapGrowthBudget {
 		t.Errorf("combine grew retained heap by %d MiB, over the %d MiB budget: the replay is holding memory proportional to the folded chain again (a projected export per commit, alive at once) instead of streaming one step at a time",
 			growth>>20, scaleHeapGrowthBudget>>20)
@@ -189,7 +198,7 @@ func assertCombinedBacklogContents(t *testing.T, ctx context.Context, st *Store,
 		byID[issue.ID] = issue
 	}
 	if len(byID) != issues+1 {
-		t.Errorf("combined backlog holds %d issues, want %d and their epic (both sides planted the same ids, so the union is one backlog)", len(byID), issues)
+		t.Errorf("combined backlog holds %d issues, want %d, the planted issues and their epic (both sides planted the same ids, so the union is one backlog)", len(byID), issues+1)
 	}
 	// Each edit i set lane-i on scaleEditTarget(i), and the edits deliberately
 	// overlap, so every edited issue was written more than once and the LAST
@@ -268,11 +277,12 @@ func seedUnrelatedBacklogPair(t *testing.T, ctx context.Context, rootA, rootB, r
 	}
 }
 
-// plantScaleBacklog fills a store with issues issues in a single commit by
-// cloning one real, fully-hydrated issue. Cloning a row the store itself
-// produced (rather than assembling model.Issue literals) keeps every derived
-// and unexported field consistent, so the export is one the store could have
-// produced on its own.
+// plantScaleBacklog fills a store with issues issues inside one epic in a
+// single commit, by cloning real, fully-hydrated rows: the epic from a real
+// epic, each issue from one real issue, and each issue's parent edge from that
+// issue's own edge. Cloning rows the store itself produced (rather than
+// assembling model literals) keeps every derived and unexported field
+// consistent, so the export is one the store could have produced on its own.
 func plantScaleBacklog(t *testing.T, ctx context.Context, st *Store, issues int) {
 	t.Helper()
 	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "scale epic", Topic: "scale", IssueType: "epic"})
@@ -288,6 +298,15 @@ func plantScaleBacklog(t *testing.T, ctx context.Context, st *Store, issues int)
 		t.Fatalf("Export(seed): %v", err)
 	}
 	seed := issueByID(t, export, seedIssue.ID)
+	var seedEdge model.Relation
+	for _, rel := range export.Relations {
+		if rel.SrcID == seed.ID && rel.Type == model.RelParentChild {
+			seedEdge = rel
+		}
+	}
+	if seedEdge.SrcID == "" {
+		t.Fatalf("seed %s has no parent edge in the export", seed.ID)
+	}
 	// The planted rows replace the seed and its epic alike, planted below the
 	// write boundary — so they must already hold the shape that boundary
 	// enforces: every ticket inside an epic. A backlog with no epic is one every
@@ -314,7 +333,9 @@ func plantScaleBacklog(t *testing.T, ctx context.Context, st *Store, issues int)
 		// fixture mean what its name says. [LAW:one-source-of-truth]
 		issue.CreatedAt = scalePlantedBirth
 		export.Issues = append(export.Issues, issue)
-		export.Relations = append(export.Relations, model.Relation{SrcID: issue.ID, DstID: scaleEpicID, Type: model.RelParentChild, CreatedAt: scalePlantedBirth, CreatedBy: "links"})
+		edge := seedEdge
+		edge.SrcID, edge.DstID, edge.CreatedAt = issue.ID, scaleEpicID, scalePlantedBirth
+		export.Relations = append(export.Relations, edge)
 	}
 	// The seed issue's own events reference the id being replaced, so the
 	// planted backlog starts with issue rows and their parent edges only.
