@@ -610,7 +610,7 @@ func listLeaf(surface listSurface) (leaf[listScope], *string) {
 		if err != nil {
 			return err
 		}
-		issueIDs, err := storage.ParseNames("--ids needs an issue id in every slot, e.g. --ids <issue-id>", *ids...)
+		issueIDs, err := parseIDSet(*ids)
 		if err != nil {
 			return err
 		}
@@ -705,9 +705,9 @@ func listLeaf(surface listSurface) (leaf[listScope], *string) {
 	}}, at
 }
 
-// The set-valued filter flags every listing command shares parse through the
-// three functions below, so `lit ls`, `lit backlog`, `lit next` and
-// `lit orphaned` agree on what each flag accepts and on how a bad occurrence
+// The set-valued flags the listing and bulk commands share parse through the
+// functions below, so `lit ls`, `lit backlog`, `lit next`, `lit orphaned` and
+// `lit bulk` agree on what each flag accepts and on how a bad occurrence
 // fails. A bad member is a validation refusal: it repeats on every retry, so it
 // must not draw retry advice. [LAW:single-enforcer] [LAW:no-silent-failure]
 
@@ -719,6 +719,10 @@ func parseIssueTypeSet(raw []string) ([]model.IssueType, error) {
 		return nil, model.ValidationError{Message: "parse --type: " + err.Error()}
 	}
 	return types, nil
+}
+
+func parseIDSet(raw []string) ([]string, error) {
+	return storage.ParseNames("--ids needs an issue id in every slot, e.g. --ids <issue-id>", raw...)
 }
 
 func parseAssigneeSet(raw []string) ([]string, error) {
@@ -1196,7 +1200,7 @@ func showLeaf() appLeaf {
 // itself only numbers.
 func historyLeaf() appLeaf {
 	fs := newCobraFlagSet("history")
-	version := fs.StringOnce("version", "Print the text one version of a long text field held, as <field>@<n>; each text the field has held is numbered once, from 1, in the order its history first shows it, and the trail shows each change as vN → vM. A sync that merges in an older edit renumbers the versions after it")
+	version := fs.String("version", "", "Print the text one version of a long text field held, as <field>@<n>; each text the field has held is numbered once, from 1, in the order its history first shows it, and the trail shows each change as vN → vM. A sync that merges in an older edit renumbers the versions after it")
 	const usage = "usage: lit history <id> [--version <field>@<n>]"
 	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if len(positional) != 1 {

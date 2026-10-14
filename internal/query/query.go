@@ -130,12 +130,16 @@ func applyTerm(filter *storage.ListIssuesFilter, term string) error {
 		filter.IssueTypes = append(filter.IssueTypes, parsed...)
 		return nil
 	case strings.HasPrefix(term, "assignee:"):
-		filter.Assignees = append(filter.Assignees, strings.TrimSpace(strings.TrimPrefix(term, "assignee:")))
+		// [LAW:single-enforcer] assignee:, id:, parent: and label: read their
+		// comma lists through the one storage.ParseNames their flags use, so a
+		// term and its flag build the same filter at every arity.
+		assignees, err := storage.ParseNames("assignee: needs a user in every slot, e.g. assignee:<user>", strings.TrimPrefix(term, "assignee:"))
+		if err != nil {
+			return err
+		}
+		filter.Assignees = append(filter.Assignees, assignees...)
 		return nil
 	case strings.HasPrefix(term, "id:"):
-		// [LAW:single-enforcer] id:, parent: and label: read their comma lists
-		// through the one storage.ParseNames their flags use, so a term and its
-		// flag build the same filter at every arity.
 		ids, err := storage.ParseNames("id: needs an issue id in every slot, e.g. id:<issue-id>", strings.TrimPrefix(term, "id:"))
 		if err != nil {
 			return err

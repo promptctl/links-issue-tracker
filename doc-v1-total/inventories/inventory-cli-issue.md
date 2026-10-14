@@ -951,7 +951,7 @@ Cross-epic dependencies:
 
 - Registration `register.go`, `app.AccessRead`. Handler `historyLeaf`
   (`cli.go`).
-- Flags: `--version <field>@<n>`, given at most once (`StringOnce`).
+- Flags: `--version <field>@<n>`, given at most once (a repeat is refused, as on every `String` flag, `flagset.go`).
 - Refusal: `len(positional) != 1` →
   `UsageError{"usage: lit history <id> [--version <field>@<n>]"}` → exit 2 (`cli.go`).
 - `--version`, when given, is parsed before the store is read
@@ -1260,7 +1260,7 @@ line for `done` and `close`, each group omitted when empty:
 - Registration `register.go`, `app.AccessRead`, handler
   `workableLeafFn(backlogView)`. Summary: "List the full workable backlog in
   priority/rank order (blocked items inline)".
-- `backlogView` preset (`workable.go`): `hasFilters: true`,
+- `backlogView` preset (`workable.go`):
   `hasLimit: true`, `hasColumns: true`, order = `orderCanonical` (no-op,
   `workable.go`), keep = `keepAll` (`workable.go`), render =
   `printBacklogOutput`, occasion = `backlogOccasion()`.
@@ -1268,7 +1268,7 @@ line for `done` and `close`, each group omitted when empty:
 
 | Flag | Type | Default | Effect |
 |---|---|---|---|
-| `--assignee` | string array | `nil` | Assignee set, comma-separated and/or repeated, via `parseAssigneeSet` as on `lit ls` (always registered) |
+| `--assignee` | string array | `nil` | Assignee set, comma-separated and/or repeated, via `parseAssigneeSet` as on `lit ls` |
 | `--type` | string array | `nil` | Type set, comma-separated and/or repeated, via `parseIssueTypeSet` as on `lit ls` |
 | `--status` | string | `""` | "Filter by status: open\|in_progress" |
 | `--labels` | string array | `nil` | Label set (ALL must match), comma-separated and/or repeated, via `parseLabelSet` as on `lit ls` |
@@ -1279,7 +1279,7 @@ line for `done` and `close`, each group omitted when empty:
   `usage()` builds `"usage: lit backlog [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--limit N] [--columns ...]"`
   (`workable.go`).
 - `--status closed` (or any unparseable state) →
-  `UsageError{"invalid --status \"<x>\" (valid: open, in_progress)"}` → exit 2
+  `model.ValidationError{"invalid --status \"<x>\" (valid: open, in_progress)"}` → exit 3
   (`parseWorkableStatus`, `workable.go`).
 - A bad member of `--type`, `--assignee` or `--labels` (unknown type, blank
   slot) → `model.ValidationError` → exit 3, the same refusal `lit ls` gives
@@ -1336,7 +1336,7 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
 
 - Registration `register.go`, `app.AccessRead`, handler `nextLeaf`
   (`next.go`). Summary: "Print the next workable leaf to lit start".
-- Flags (`registerWorkableFilter(fs, true)` in `next.go`, and the `--by`):
+- Flags (`registerWorkableFilter` in `next.go`, and the `--by`):
 
 | Flag | Type | Default | Effect |
 |---|---|---|---|
@@ -1721,8 +1721,8 @@ Family `depFamily`, usage `"usage: lit dep <add|rm|ls> ..."` (`dependency.go`).
   2. Not exactly one relation flag given → the same `UsageError` → exit 2
      (`registerEdgeFlags`, `dependency.go`). A flag given with an empty value
      still counts as given, and then refuses the same way. A flag given twice is
-     refused while parsing: each edge flag is a `StringOnce` (`flagset.go`),
-     whose second `Set` fails, so the parse returns
+     refused while parsing: each edge flag is a `String`, and every `String`
+     flag's second `Set` fails (`once`, `flagset.go`), so the parse returns
      `UsageError{"invalid argument \"<value>\" for \"--blocked-by\" flag: given more than once"}`
      → exit 2.
   3. Self-loop `id == value` → `model.ValidationError{Message: fmt.Sprintf("dep add: self-loop rejected (%s %s %s)")}`

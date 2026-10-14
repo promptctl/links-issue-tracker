@@ -98,6 +98,7 @@ func TestListSetFlagsWidenAcrossEverySpelling(t *testing.T) {
 			spellings: []setFlagSpelling{
 				{"flag, comma-joined", []string{"--assignee", "ann,bob"}},
 				{"flag, repeated", []string{"--assignee", "ann", "--assignee", "bob"}},
+				{"query, comma-joined", []string{"--query", "assignee:ann,bob"}},
 				{"query, repeated terms", []string{"--query", "assignee:ann assignee:bob"}},
 				{"flag and query together", []string{"--assignee", "ann", "--query", "assignee:bob"}},
 			},
@@ -169,6 +170,8 @@ func TestListSetFlagsRejectABadMemberLoudly(t *testing.T) {
 		{"--assignee", ""},
 		{"--assignee", "ann", "--assignee", ""},
 		{"--assignee", "ann,"},
+		{"--query", "assignee:"},
+		{"--query", "assignee:ann,"},
 		{"--search", ""},
 		{"--search", "task", "--search", " "},
 	} {
@@ -208,6 +211,7 @@ func TestListSetFilterRefusalsAreValidationErrors(t *testing.T) {
 		{[]string{"--query", "id:"}, "id:"},
 		{[]string{"--query", "parent:"}, "parent:"},
 		{[]string{"--query", "label:"}, "label:"},
+		{[]string{"--query", "assignee:"}, "assignee:"},
 		// Refused while joining a term to the flags rather than while parsing
 		// the term: the join is part of the same request.
 		{[]string{"--has-comments=false", "--query", "has:comments"}, "has-comments"},

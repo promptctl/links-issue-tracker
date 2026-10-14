@@ -106,7 +106,7 @@ var bulkLabelFamily = commandFamily[bulkLabelOp]{
 func registerBulkIDs(fs *cobraFlagSet) func() ([]string, error) {
 	ids := fs.StringArray("ids", "Issue IDs, comma-separated or repeated")
 	return func() ([]string, error) {
-		issueIDs, err := storage.ParseNames("--ids needs an issue id in every slot, e.g. --ids <issue-id>", *ids...)
+		issueIDs, err := parseIDSet(*ids)
 		if err != nil {
 			return nil, err
 		}

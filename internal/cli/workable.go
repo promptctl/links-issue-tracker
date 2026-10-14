@@ -41,7 +41,6 @@ type workableKnobs struct {
 // the runner itself stays branchless.
 type workableView struct {
 	name       string
-	hasFilters bool // --type / --status / --labels
 	hasLimit   bool
 	hasColumns bool
 	order      func(rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, knobs workableKnobs)
@@ -74,11 +73,7 @@ type workableView struct {
 // [LAW:one-source-of-truth] the knobs a view exposes and the usage line that
 // names them cannot drift.
 func (v workableView) usage() string {
-	parts := []string{"usage: lit " + v.name}
-	if v.hasFilters {
-		parts = append(parts, "[--type ...] [--status ...] [--labels ...]")
-	}
-	parts = append(parts, "[--assignee <user>]", "[--all]")
+	parts := []string{"usage: lit " + v.name, "[--type ...] [--status ...] [--labels ...]", "[--assignee <user>]", "[--all]"}
 	if v.hasLimit {
 		parts = append(parts, "[--limit N]")
 	}
@@ -119,8 +114,8 @@ func keepAll(rows []annotation.AnnotatedIssue) []annotation.AnnotatedIssue { ret
 // `backlog` — "why is the queue shaped this way": canonical rank order with
 // blocked items interleaved at their ranked position, full per-row context.
 var backlogView = workableView{
-	name:       "backlog",
-	hasFilters: true, hasLimit: true, hasColumns: true,
+	name:     "backlog",
+	hasLimit: true, hasColumns: true,
 	order:    orderCanonical,
 	keep:     keepAll,
 	render:   printBacklogOutput,
@@ -138,7 +133,7 @@ func workableLeafFn(view workableView) appLeafFn {
 // [LAW:single-enforcer] the flag surface and its marshaling live only here.
 func workableLeaf(view workableView) appLeaf {
 	fs := newCobraFlagSet(view.name)
-	filterFlags := registerWorkableFilter(fs, view.hasFilters)
+	filterFlags := registerWorkableFilter(fs)
 	// [LAW:no-mode-explosion] This flag's cap is the focus label: it selects
 	// between two values of ONE scope, it is deleted the day `focus` is, and no
 	// stage downstream branches on it — runWorkable resolves it to a scope and
@@ -236,7 +231,7 @@ func parseWorkableStatus(raw string) (model.State, error) {
 	}
 	state, err := model.ParseState(raw)
 	if err != nil || state == model.StateClosed {
-		return "", UsageError{Message: fmt.Sprintf("invalid --status %q (valid: open, in_progress)", raw)}
+		return "", model.ValidationError{Message: fmt.Sprintf("invalid --status %q (valid: open, in_progress)", raw)}
 	}
 	return state, nil
 }
@@ -252,17 +247,15 @@ type workableFilterFlags struct {
 	labels    *[]string
 }
 
-// registerWorkableFilter declares the filter flags. --assignee is on every
-// workable view; --type, --status and --labels only where withFilters says so.
-// The set-valued flags are StringArrays because the filter fields they feed
+// registerWorkableFilter declares the filter flags. The set-valued flags are StringArrays because the filter fields they feed
 // are sets: a second occurrence widens the set rather than replacing the first.
 // [LAW:no-silent-failure]
-func registerWorkableFilter(fs *cobraFlagSet, withFilters bool) workableFilterFlags {
+func registerWorkableFilter(fs *cobraFlagSet) workableFilterFlags {
 	return workableFilterFlags{
 		assignee:  fs.StringArray("assignee", assigneeFlagUsage),
-		issueType: optionalStringArray(fs, withFilters, "type", "Filter by issue type, comma-separated or repeated: "+issueTypeChoices()),
-		status:    optionalString(fs, withFilters, "status", "Filter by status: open|in_progress"),
-		labels:    optionalStringArray(fs, withFilters, "labels", "Labels all of which must match, comma-separated or repeated"),
+		issueType: fs.StringArray("type", "Filter by issue type, comma-separated or repeated: "+issueTypeChoices()),
+		status:    fs.String("status", "", "Filter by status: open|in_progress"),
+		labels:    fs.StringArray("labels", "Labels all of which must match, comma-separated or repeated"),
 	}
 }
 
@@ -299,13 +292,6 @@ func optionalString(fs *cobraFlagSet, enabled bool, name, usage string) *string 
 		return new(string)
 	}
 	return fs.String(name, "", usage)
-}
-
-func optionalStringArray(fs *cobraFlagSet, enabled bool, name, usage string) *[]string {
-	if !enabled {
-		return new([]string)
-	}
-	return fs.StringArray(name, usage)
 }
 
 func optionalInt(fs *cobraFlagSet, enabled bool, name, usage string) *int {

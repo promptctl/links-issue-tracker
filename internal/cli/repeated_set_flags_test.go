@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -23,10 +24,10 @@ import (
 func TestBacklogRepeatedSetFlagsWiden(t *testing.T) {
 	h, bugA, taskAB, featB := setFlagFixture(t)
 	for _, tc := range []setFlagCase{
-		{flag: "type", spellings: []setFlagSpelling{{"repeated", []string{"--type", "bug", "--type", "task"}}}, want: []string{bugA, taskAB}, unwanted: []string{featB}},
+		{flag: "type", spellings: []setFlagSpelling{{"repeated", []string{"--type", "bug", "--type", "task"}}, {"comma-joined", []string{"--type", "bug,task"}}}, want: []string{bugA, taskAB}, unwanted: []string{featB}},
 		// ALL-must-match: the overwrite (b alone) leaks featB back in.
-		{flag: "labels", spellings: []setFlagSpelling{{"repeated", []string{"--labels", "a", "--labels", "b"}}}, want: []string{taskAB}, unwanted: []string{bugA, featB}},
-		{flag: "assignee", spellings: []setFlagSpelling{{"repeated", []string{"--assignee", "ann", "--assignee", "bob"}}}, want: []string{bugA, taskAB}, unwanted: []string{featB}},
+		{flag: "labels", spellings: []setFlagSpelling{{"repeated", []string{"--labels", "a", "--labels", "b"}}, {"comma-joined", []string{"--labels", "a,b"}}}, want: []string{taskAB}, unwanted: []string{bugA, featB}},
+		{flag: "assignee", spellings: []setFlagSpelling{{"repeated", []string{"--assignee", "ann", "--assignee", "bob"}}, {"comma-joined", []string{"--assignee", "ann,bob"}}}, want: []string{bugA, taskAB}, unwanted: []string{featB}},
 	} {
 		for _, sp := range tc.spellings {
 			t.Run(tc.flag+"/"+sp.name, func(t *testing.T) {
@@ -170,5 +171,52 @@ func TestBulkBlankIDRefusesBeforeActing(t *testing.T) {
 	}
 	if closed := runLs(t, h.ap, "--status", "closed"); strings.Contains(closed, bugA) {
 		t.Fatalf("lit bulk close closed %q before refusing the blank id:\n%s", bugA, closed)
+	}
+}
+
+// Every single-value flag refuses a second occurrence, whatever its kind.
+// pflag's own scalars keep the last value and drop the earlier ones without a
+// word. Each case also parses its one-occurrence spelling, so the refusal is
+// pinned to the repeat and not to the flag.
+func TestSingleValueFlagRefusesARepeat(t *testing.T) {
+	for _, tc := range []struct {
+		kind    string
+		declare func(fs *cobraFlagSet)
+		once    []string
+		twice   []string
+	}{
+		{"String", func(fs *cobraFlagSet) { fs.String("x", "", "") }, []string{"--x", "a"}, []string{"--x", "a", "--x", "b"}},
+		{"Bool", func(fs *cobraFlagSet) { fs.Bool("x", false, "") }, []string{"--x"}, []string{"--x", "--x=false"}},
+		{"Int", func(fs *cobraFlagSet) { fs.Int("x", 0, "") }, []string{"--x", "1"}, []string{"--x", "1", "--x", "2"}},
+		{"StringOptional", func(fs *cobraFlagSet) { fs.StringOptional("x", "all", "", "") }, []string{"--x=a"}, []string{"--x=a", "--x"}},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			once := newCobraFlagSet("probe")
+			tc.declare(once)
+			if err := parseFlagSet(once, tc.once, io.Discard); err != nil {
+				t.Fatalf("%s flag given once %v: %v, want it parsed", tc.kind, tc.once, err)
+			}
+			twice := newCobraFlagSet("probe")
+			tc.declare(twice)
+			err := parseFlagSet(twice, tc.twice, io.Discard)
+			if err == nil || ExitCode(err) != ExitUsage || !strings.Contains(err.Error(), "given more than once") {
+				t.Fatalf("%s flag given twice %v: error %v, want a usage refusal saying it was given more than once", tc.kind, tc.twice, err)
+			}
+		})
+	}
+}
+
+// The write the single-value refusal exists for: `lit new --labels a --labels
+// b` stored b alone. It is refused before anything is created.
+func TestNewRefusesARepeatedLabelsFlagBeforeWriting(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epic := h.createIssue(storage.CreateIssueInput{Title: "home", IssueType: model.TypeEpic, Topic: "repeat"})
+	var out bytes.Buffer
+	err := runNew(h.ctx, &out, h.ap, []string{"--title", "repeat probe", "--topic", "repeat", "--type", "task", "--parent", epic.ID, "--labels", "a", "--labels", "b"})
+	if got := ExitCode(err); got != ExitUsage {
+		t.Fatalf("lit new --labels a --labels b exit = %d (error %v), want %d", got, err, ExitUsage)
+	}
+	if listed := runLs(t, h.ap, "--search", "repeat probe"); strings.TrimSpace(listed) != "" {
+		t.Fatalf("lit new created an issue before refusing the repeated flag:\n%s", listed)
 	}
 }

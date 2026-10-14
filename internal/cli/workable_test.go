@@ -6,14 +6,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // --status is validated once, at the shared flag seam
 // (parseWorkableStatus), so one table over every workable command is the
-// whole contract: each rejects the same inputs with the same usage error,
-// whether it runs through the workableView preset (backlog) or its own
-// runner (next). [LAW:single-enforcer]
+// whole contract: each rejects the same inputs with the same validation
+// refusal, exit 3 as `lit ls --status` gives, whether it runs through the
+// workableView preset (backlog) or its own runner (next).
+// [LAW:single-enforcer]
 var workableCmds = []struct {
 	name string
 	run  func(h readyTestHarness, args ...string) error
@@ -42,12 +44,12 @@ func TestWorkableStatusRejectsInvalidValues(t *testing.T) {
 	for _, cmd := range workableCmds {
 		for _, value := range []string{"weird", "closed", "CLOSED", "done"} {
 			err := cmd.run(h, "--status", value)
-			var usageErr UsageError
-			if !errors.As(err, &usageErr) {
-				t.Fatalf("lit %s --status %s error = %v, want UsageError", cmd.name, value, err)
+			var validationErr model.ValidationError
+			if !errors.As(err, &validationErr) {
+				t.Fatalf("lit %s --status %s error = %v, want model.ValidationError", cmd.name, value, err)
 			}
-			if got := ExitCode(err); got != ExitUsage {
-				t.Fatalf("lit %s --status %s exit code = %d, want %d", cmd.name, value, got, ExitUsage)
+			if got := ExitCode(err); got != ExitValidation {
+				t.Fatalf("lit %s --status %s exit code = %d, want %d", cmd.name, value, got, ExitValidation)
 			}
 			if !strings.Contains(err.Error(), "open, in_progress") {
 				t.Fatalf("lit %s --status %s error = %q, want the legal values named", cmd.name, value, err)
