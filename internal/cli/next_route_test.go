@@ -891,11 +891,12 @@ func TestExhaustionNamesABlockerOutsideThisViewAsSuch(t *testing.T) {
 	}
 }
 
-// A blocker nobody holds, blocked by a further dependency of its own. It is
-// unreachable for a readiness reason, not a claims reason, so the diagnostic
-// must not name a holder — the agent's next move is down the chain, not to
-// stand down. The further dependency's lane is held elsewhere, so nothing
-// outside the epic is ready and the diagnostic is the whole answer.
+// A blocker nobody holds, blocked by a further dependency of its own whose lane
+// another checkout holds: a chain with nothing takeable anywhere along it. The
+// walk descends to the further dependency and offers nothing, so the diagnostic
+// is the whole answer, and it names each link by its own reach — the blocker as
+// not startable, never as held, since its lane is unclaimed, and the further
+// dependency as held.
 func TestExhaustionNamesAnUnreadyBlockerWithoutNamingAHolder(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
@@ -935,11 +936,11 @@ func TestExhaustionNamesAnUnreadyBlockerWithoutNamingAHolder(t *testing.T) {
 		t.Fatalf("exhausted.Blocked = %v, want it to name %q", exhausted.Blocked, dep.ID)
 	}
 	msg := exhausted.Error()
-	if !strings.Contains(msg, "not startable right now") {
-		t.Fatalf("exhausted.Error() = %q, want %q named as not startable", msg, dep.ID)
+	if want := "blocked by " + dep.ID + " (on your path but not startable right now"; !strings.Contains(msg, want) {
+		t.Fatalf("exhausted.Error() = %q, want %q", msg, want)
 	}
-	if strings.Contains(msg, "claimed by another checkout") {
-		t.Fatalf("exhausted.Error() = %q, want no holder named for %q — its lane is unclaimed", msg, dep.ID)
+	if want := "blocked by " + deeper.ID + " (on your path but claimed by another checkout right now)"; !strings.Contains(msg, want) {
+		t.Fatalf("exhausted.Error() = %q, want %q — the walk reaches the blocker's own blocker and names who holds it", msg, want)
 	}
 	if strings.Contains(msg, "`lit start` it") {
 		t.Fatalf("exhausted.Error() = %q, want no instruction to start %q — it is blocked by %q", msg, dep.ID, deeper.ID)

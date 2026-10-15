@@ -307,15 +307,21 @@ step, so each step below says only which lanes it looks in:
 1. **The checkout's own live claims come first**: ready tickets within claimed
    lanes and the work already in flight there — a ticket in progress in the
    checkout's own lane is handed back to resume rather than started fresh —
-   in backlog order, including its direct prerequisites: a dependency outside
-   the claimed lane that gates one inside it is on the path and is offered on
-   the same terms, announced as the second lane its start claims. An epic
-   cannot be started, so a dependency that is an epic is offered as the ticket
-   under it, at any depth, and the announcement names the epic.
+   in backlog order, including its prerequisites: a dependency outside the
+   claimed lane that gates it, at any depth, is on the path and is offered on
+   the same terms, announced as the second lane its start claims. A dependency
+   that cannot be started is cleared by clearing its own, so the walk descends
+   it to theirs, and the announcement names each dependency between the pick
+   and the row it gates — "(gates B.2, which is on your path, through C.1)".
+   Each row of the lane is taken in backlog order and its chain walked to the
+   end before the next row's, nearest dependency first within it, so the pick
+   serves the highest-ranked blocked row. An epic cannot be started, so a
+   dependency that is an epic is offered as the ticket under it, at any depth,
+   and the announcement names the epic.
 2. **Then the rest of its epic**: the claimed lane's epic's other lanes,
    before any lane of any other epic — the GRANULARITY RULING above, expressed
-   as a routing step rather than a bias. Then the whole epic's direct
-   prerequisites: a dependency outside it that gates any of its lanes is
+   as a routing step rather than a bias. Then the whole epic's prerequisites:
+   a dependency outside it that gates any of its lanes, at any depth, is
    offered as step 1's is, ahead of anything outside the epic, because clearing
    it is how the epic moves again. A parentless (solo) claim has no epic to
    continue into and falls straight to step 3 once its own lane has nothing
