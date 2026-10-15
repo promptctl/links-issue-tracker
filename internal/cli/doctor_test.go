@@ -249,4 +249,10 @@ func TestDoctorPrintsEachWarningItsHealthCheckFinds(t *testing.T) {
 		t.Fatalf("runDoctor(--fix=rank) error = %v, want the rank repair's refusal on the cycle", err)
 	}
 	assertWarnings(t, fixed.String())
+
+	// A report cut short by its own write failure still carries the repair's.
+	err = runDoctor(h.ctx, refusingWriter{}, h.ap, []string{"--fix=rank"})
+	if err == nil || !strings.Contains(err.Error(), "stdout is gone") || !strings.Contains(err.Error(), "lit dep rm") {
+		t.Fatalf("runDoctor(--fix=rank) to a refusing stdout error = %v, want both the write failure and the rank repair's refusal", err)
+	}
 }

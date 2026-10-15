@@ -341,6 +341,49 @@ func printReportWarnings(w io.Writer, warnings []string) error {
 	return nil
 }
 
+// printDoctorReport writes the health report to stdout: the workspace identity,
+// the status line and the lines that name its findings, then sync freshness.
+func printDoctorReport(ctx context.Context, stdout io.Writer, ap *app.App, report storage.HealthReport, syncReport doctorSyncReport) error {
+	census, err := readIDPrefixCensus(ctx, ap.Store)
+	if err != nil {
+		return err
+	}
+	if err := printWorkspaceIdentity(stdout, ap.Workspace, census); err != nil {
+		return err
+	}
+	if err := printPrefixMismatch(stdout, ap.Workspace.IssuePrefix, census); err != nil {
+		return err
+	}
+	// [LAW:one-source-of-truth] version.Info is the only source; resolved here
+	// (not inside a pure renderer) because it is itself a boundary read.
+	if _, err := fmt.Fprintln(stdout, resolveBuildStatusNote(time.Now())); err != nil {
+		return err
+	}
+	dependencyCycle := doctorFieldValue(report, storage.CheckDependencyCycle, joinCycle(report.DependencyCycle))
+	// A parent cycle reads on the same line as the dependency cycle because
+	// it answers the same shape of question about the other graph, and "none"
+	// states a clean check rather than leaving its absence to be read as one.
+	parentCycle := doctorFieldValue(report, "parent_cycle", joinCycle(report.ParentCycle))
+	rankInversions := doctorFieldValue(report, storage.CheckRankInversions, strconv.Itoa(report.RankInversions))
+	waitLoopCount, loops, err := doctorWaitLoops(ctx, ap.Store, report)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(stdout, "integrity_check=%s foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d rank_inversions=%s dependency_cycle=%s parent_cycle=%s wait_loops=%s\n", report.IntegrityCheck, report.ForeignKeyIssues, report.InvalidRelatedRows, report.OrphanHistoryRows, rankInversions, dependencyCycle, parentCycle, waitLoopCount); err != nil {
+		return err
+	}
+	if err := printReportWarnings(stdout, report.Warnings); err != nil {
+		return err
+	}
+	if err := printWaitLoops(stdout, loops); err != nil {
+		return err
+	}
+	if err := printSyncFreshness(stdout, syncReport); err != nil {
+		return err
+	}
+	return printPushOutcomeHealth(stdout, ap.Workspace, time.Now(), runningBinaryVersion())
+}
+
 // diagnoseThenRepair runs the health check, then such repairs as it is safe to
 // run, and reports the state left behind.
 //
@@ -449,50 +492,12 @@ func doctorLeaf() appLeaf {
 		// reads the store, so it runs here, at the boundary, before the pure text
 		// rendering below.
 		syncReport := resolveDoctorSyncFreshness(ctx, ap.Workspace, ap.Store)
-		census, err := readIDPrefixCensus(ctx, ap.Store)
-		if err != nil {
-			return err
-		}
-		if err := printWorkspaceIdentity(stdout, ap.Workspace, census); err != nil {
-			return err
-		}
-		if err := printPrefixMismatch(stdout, ap.Workspace.IssuePrefix, census); err != nil {
-			return err
-		}
-		// [LAW:one-source-of-truth] version.Info is the only source; resolved here
-		// (not inside a pure renderer) because it is itself a boundary read.
-		if _, err := fmt.Fprintln(stdout, resolveBuildStatusNote(time.Now())); err != nil {
-			return err
-		}
-		dependencyCycle := doctorFieldValue(report, storage.CheckDependencyCycle, joinCycle(report.DependencyCycle))
-		// A parent cycle reads on the same line as the dependency cycle because
-		// it answers the same shape of question about the other graph, and "none"
-		// states a clean check rather than leaving its absence to be read as one.
-		parentCycle := doctorFieldValue(report, "parent_cycle", joinCycle(report.ParentCycle))
-		rankInversions := doctorFieldValue(report, storage.CheckRankInversions, strconv.Itoa(report.RankInversions))
-		waitLoopCount, loops, err := doctorWaitLoops(ctx, ap.Store, report)
-		if err != nil {
-			return err
-		}
-		if _, err := fmt.Fprintf(stdout, "integrity_check=%s foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d rank_inversions=%s dependency_cycle=%s parent_cycle=%s wait_loops=%s\n", report.IntegrityCheck, report.ForeignKeyIssues, report.InvalidRelatedRows, report.OrphanHistoryRows, rankInversions, dependencyCycle, parentCycle, waitLoopCount); err != nil {
-			return err
-		}
-		if err := printReportWarnings(stdout, report.Warnings); err != nil {
-			return err
-		}
-		if err := printWaitLoops(stdout, loops); err != nil {
-			return err
-		}
-		if err := printSyncFreshness(stdout, syncReport); err != nil {
-			return err
-		}
-		if err := printPushOutcomeHealth(stdout, ap.Workspace, time.Now(), runningBinaryVersion()); err != nil {
-			return err
-		}
-		// A failed repair is the outcome of the command the operator typed, so it
-		// exits on it — after the report it would otherwise have cost them.
-		if run.repairErr != nil {
-			return run.repairErr
+		// [LAW:no-silent-failure] A failed repair is joined to any error that cuts
+		// the report short, so neither hides the other. A report that prints in full
+		// exits on the repair: it is the outcome of the command the operator typed,
+		// and it outranks the health exits below as it did when it returned first.
+		if err := printDoctorReport(ctx, stdout, ap, report, syncReport); err != nil || run.repairErr != nil {
+			return errors.Join(run.repairErr, err)
 		}
 		// [LAW:single-enforcer] Corruption classification is output-format agnostic and always enforced here.
 		if len(report.Errors) > 0 {
