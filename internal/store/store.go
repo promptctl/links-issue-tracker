@@ -1550,10 +1550,7 @@ func (s *Store) planStatusTransition(ctx context.Context, issue model.Issue, act
 		return transitionWrite{}, err
 	}
 	prior := claims.ClaimantOf(issue, events)
-	post, err := prior.After(action, s.attribution)
-	if err != nil {
-		return transitionWrite{}, err
-	}
+	post := prior.After(action, s.attribution)
 	updated.Assignee = post.Assignee
 	fromStatus := issue.StatusValue()
 	toStatus := updated.StatusValue()

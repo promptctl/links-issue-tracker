@@ -148,8 +148,11 @@ var issueFields = []issueField{
 		// mutation.
 		func(issue *model.Issue, v string) error {
 			assignee, err := model.NormalizeAssignee(v)
+			if err != nil {
+				return err
+			}
 			issue.Assignee = assignee
-			return err
+			return nil
 		},
 		func(issue model.Issue) string { return issue.AssigneeValue() }),
 	patchField("lane", ShortText,

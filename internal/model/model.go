@@ -418,8 +418,9 @@ var _ Refusal = FrozenIssueError{}
 // [LAW:types-are-the-program] No idempotent / from-state branching here: the
 // leaf's Apply is target-state, so same-state inputs round-trip through the
 // leaf and back unchanged; the only rejections that survive are the real
-// invariants (unhydrated lifecycle, container, frozen retention) — the leaf itself cannot
-// fail, since StatusAction makes an unsupported action unrepresentable.
+// invariants (unhydrated lifecycle, container, frozen retention, a start whose
+// assignee no filter could select) — the leaf itself cannot fail, since
+// StatusAction makes an unsupported action unrepresentable.
 func (i Issue) Apply(action lifecycle.StatusAction) (Issue, error) {
 	root, err := i.lifecycleOrError()
 	if err != nil {
@@ -455,6 +456,14 @@ func (i Issue) Apply(action lifecycle.StatusAction) (Issue, error) {
 	// whatever its retention.
 	if thaw, frozen := lifecycle.Thaw(i.Retention()); frozen {
 		return Issue{}, FrozenIssueError{ID: i.ID, Retention: i.Retention(), Thaw: thaw}
+	}
+	// A start assigns the issue to whoever starts it, so the start is refused
+	// here, the check `lit start` runs before its takeover gate and both
+	// engines run before writing. [LAW:single-enforcer]
+	if start, ok := action.(lifecycle.Start); ok {
+		if _, err := NormalizeAssignee(start.Assignee); err != nil {
+			return Issue{}, fmt.Errorf("a start assigns the issue to whoever starts it: %w", err)
+		}
 	}
 	actionable, ok := root.(lifecycle.Actionable)
 	if !ok {
