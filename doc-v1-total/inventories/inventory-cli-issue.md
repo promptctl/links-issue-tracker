@@ -237,23 +237,24 @@ several of these types gets the reason of the earliest one:
     unfinished; for `RetentionError`: the `Retain` cell says so), otherwise
     `validation_refused`
 14. `Exhausted` → `scope_exhausted`
-15. `NoWork` → `no_ready_work`
-16. `UnsupportedError` → `unsupported_flag`
-17. `takeoverUnconfirmedError` → `takeover_unconfirmed`
-18. `purgeUnconfirmedError` → `purge_unconfirmed`
-19. `OutsideWorkspaceError` → `outside_git_workspace`
-20. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → `workspace_not_initialized`
-21. `*store.UnsupportedSchemaVersionError` → `workspace_schema_ahead`
-22. `workspace.StoredPrefixError` → `stored_prefix_refused`
-23. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → `validation_refused`
+15. `Narrowed` → `scope_narrowed`
+16. `NoWork` → `no_ready_work`
+17. `UnsupportedError` → `unsupported_flag`
+18. `takeoverUnconfirmedError` → `takeover_unconfirmed`
+19. `purgeUnconfirmedError` → `purge_unconfirmed`
+20. `OutsideWorkspaceError` → `outside_git_workspace`
+21. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → `workspace_not_initialized`
+22. `*store.UnsupportedSchemaVersionError` → `workspace_schema_ahead`
+23. `workspace.StoredPrefixError` → `stored_prefix_refused`
+24. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → `validation_refused`
     (`StoredPrefixError` unwraps to this sentinel; step 22 catches it first)
-24. `BulkFailureError` → `bulk_partial_failure`
-25. `store.WorkspaceWriteBlockedError` → `workspace_write_blocked` (it unwraps
+25. `BulkFailureError` → `bulk_partial_failure`
+26. `store.WorkspaceWriteBlockedError` → `workspace_write_blocked` (it unwraps
     to `store.ErrTransientGCContention`; this step catches it first)
-26. `errors.Is(err, store.ErrWorkspaceBusy)` or
+27. `errors.Is(err, store.ErrWorkspaceBusy)` or
     `errors.Is(err, workspace.ErrConfigBusy)` → `workspace_busy`
-27. `errors.Is(err, store.ErrTransientGCContention)` → `transient_gc_contention`
-28. anything else → `command_failed`
+28. `errors.Is(err, store.ErrTransientGCContention)` → `transient_gc_contention`
+29. anything else → `command_failed`
 
 `commandErrorRemediation(reason)` (`error_output.go`), verbatim strings. An
 empty string means no `remediation:` line is printed:
@@ -274,6 +275,7 @@ empty string means no `remediation:` line is printed:
 - `corruption_detected`: "Run `lit doctor --fix integrity` and retry. \<agent-instructions>This command is idempotent and safe to run without confirmation.\</agent-instructions>"
 - `transient_gc_contention`: "Retry once. If the error persists, run `lit doctor --fix`. \<agent-instructions>This command is idempotent and safe to run without confirmation.\</agent-instructions>"
 - `workspace_write_blocked`: "Wait a moment and retry — a normal command releases the store in well under a second. If it persists, a lit process is stuck: find it with `ps aux | grep '[l]it'` and terminate it, then retry; if none is running the hold is stale, so run `lit doctor --fix`. \<agent-instructions>This is a mechanical, self-diagnosable state — the steps above resolve it without needing the user's input.\</agent-instructions>"
+- `scope_narrowed`: "Do not retry unchanged — routing is deterministic and repeats this answer while the filter stays. Run `lit next` without the filter, as the message says, to be handed the ticket it names."
 - `scope_exhausted`: "Do not retry unchanged — routing is deterministic and repeats this answer until the work named above moves. Act on what the message names — the route it offers, or the rows off your focus path — or finish or hand off what you already hold."
 - `no_ready_work`: "Do not retry unchanged — routing is deterministic and repeats this answer until something in the backlog moves. That is the backlog's state, not a fault. If `--type`, `--labels`, `--assignee`, or `--status` narrowed this run, drop the filter and ask again. If a `focus` label narrowed it, `lit next --all` routes over the whole queue for one run and `lit label rm <id> focus` lifts the scope. Otherwise `lit backlog --all` shows the whole queue and who holds what, and `lit new` adds work if it is genuinely empty."
 - `state_already_holds`: "No action is needed — the command asked for a state the workspace is already in. Do not retry: running it again cannot change the answer, and `lit doctor` has nothing to diagnose because nothing is broken."
@@ -1358,11 +1360,12 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
   ``"--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag"``
   (`flagset.go`).
 - Prints the sync-staleness warning first (`next.go`).
-- Gathers the workable set — rows, relation details, **and the focus scope** —
-  via `gatherWorkableAnnotated` (`next.go`, `cli.go`), then the claim
+- Parses the filter into `asked` (`workableFilter.criteria`), then gathers the
+  whole workable queue, unfiltered — rows, relation details, **and the focus
+  scope** — via `gatherWorkableQueue` (`next.go`, `cli.go`), then the claim
   context (`next.go`), and then routes (`next.go`), handing the render the
   reader's own identity from `actor()` alongside it:
-  `routeNext(rows, details, cc.standings, cc.self, focus.scopeFor(*all))`.
+  `routeNext(rows, details, epics, cc.standings, cc.self, scope.scopeFor(*all), asked)`.
   `scopeFor(true)` returns the zero `focusScope`, which holds every row
   (`ready_state.go`).
 
@@ -1377,10 +1380,12 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
 | `ServedFromNewLane` | `Row`, `Lane model.LaneID` | a ticket in a lane this checkout does **not** hold — produced by step 4 alone (`next_route.go`) |
 | `ServedFromDependency` | `Row`, `Lane model.LaneID`, `Gates string` | step 1b's or 2b's on-path dependency; `Gates` is the id of the blocked row it unblocks, so the pick explains itself (`next_route.go`) |
 | `ServedPastExhaustion` | `Row`, `Lane model.LaneID`, `Exhaustion Exhausted` | the checkout's own epic(s) have open work, none of it reachable, and the global pool has a ready ticket outside them — step 3 (`next_route.go`) |
+| `ServedPastNarrowing` | `Row`, `Lane model.LaneID`, `Narrowing Narrowed` | steps 1–2b serve nothing the filter selects, the same steps over the whole queue would serve `Narrowing.Hidden`, and the global pool has a ready ticket the filter selects — step 3 (`next_route.go`) |
 | `Exhausted` | `Epics []string`, `Blocked []rowReach`, `Held []rowReach`, `OffPath []rowReach` | the same, with nothing ready in the global pool either — step 3; `OffPath` is the rows outside the scope a focus label withheld from the pool, set only on the terminal answer (`next_route.go`) |
+| `Narrowed` | `Hidden annotation.AnnotatedIssue` | the same, with nothing the filter selects ready in the global pool either — step 3 (`next_route.go`) |
 | `NoWork` | `Unreachable []rowReach` | the global pool produced nothing — step 4 (`next_route.go`) |
 
-`Exhausted` and `NoWork` implement `error` and travel outward as themselves
+`Exhausted`, `Narrowed` and `NoWork` implement `error` and travel outward as themselves
 rather than being rendered into a generic error (`next_route.go`,
 `next_route.go`).
 
@@ -1426,27 +1431,31 @@ rank order is the only tiebreak routing applies (`next_route.go`).
 **standings** and not from the gathered rows (`next_route.go`);
 `mine(lane) = ownLanes[lane]` (`next_route.go`).
 
-If `len(ownLanes) > 0` (`next_route.go`):
+If `len(ownLanes) > 0` (`next_route.go`), steps 1–2b run as one closure,
+`ownSteps(serves)`, first with `serves` = `asked.Selects` and then, if that
+serves nothing, over every row; both dependency walks read every row either way:
 
 1. **Own lanes**, accepting `{serveWork, resumeWork}`, whichever the backlog ranks
    first (`next_route.go`). `resumeWork` → **`ResumedOwnWork{Row}`**;
    `serveWork` → **`ServedFromClaim{Row}`**.
-   - 1b. Else `onPathDependency(gatingDependencies(rows, laneOf, mine, reachFor, workToward), laneOf)`
+   - 1b. Else `onPathDependency(gatingDependencies(rows, laneOf, mine, reachFor, workToward), serves, reachFor, workToward, laneOf)`
      — the first dependency gating one of our own lanes whose `reachKind` is
      `reachTakeable` (`next_route.go`), drawn from `gatingDependencies`, which
      collects the distinct open dependency IDs of the in-scope **open** rows in
      rank order and stamps each with the lowest `reachFor` among
      `workToward[id]`, carried by the first row in rank order with it, or
      `reachOutOfView` when that is empty (`next_route.go`) →
-     **`ServedFromDependency{Row: dep.Row, Lane: laneOf(dep.Row), Gates: dep.Gates, Blocker: dep.ID}`** (`next_route.go`), the `Gates` being the blocked row the dependency gates and `Row` the dependency itself or, for an epic, a ticket under it.
+     **`ServedFromDependency{Row: work, Lane: laneOf(work), Gates: dep.Gates, Via: dep.Via, Blocker: dep.ID}`** (`next_route.go`), the `Gates` being the blocked row the dependency gates and `work` the first row of `workToward[dep.ID]` the run may serve that `reachFor` reads `reachTakeable` — the dependency itself or, for an epic, a ticket under it.
 2. Else **the rest of our epic, in lanes we do not already hold** — predicate
    `lane.Epic() != "" && ownEpics[lane.Epic()] && !mine(lane)`, accepting
    `serveWork` → **`ServedFromEpicLane{Row, Lane: laneOf(row)}`**.
    - 2b. Else, with `gating := gatingDependencies(rows, laneOf, ourScope, reachFor, workToward)`
      where `ourScope` is `func(lane) bool { return mine(lane) || ourEpic(lane) }`,
-     `onPathDependency(gating, laneOf)` →
-     **`ServedFromDependency{Row: dep.Row, Lane: laneOf(dep.Row), Gates: dep.Gates, Blocker: dep.ID}`**.
-3. Else `exhausted := Exhausted{Epics, Blocked, Held}` (`next_route.go`), where
+     `onPathDependency(gating, serves, reachFor, workToward, laneOf)` →
+     **`ServedFromDependency`**, as in step 1b.
+3. Else, if steps 1–2b over every row serve a row, that row is `Hidden`: step
+   4's pick → **`ServedPastNarrowing{Row, Lane: laneOf(row), Narrowing: Narrowed{Hidden}}`**,
+   else → **`Narrowed{Hidden}`**. Otherwise `exhausted := Exhausted{Epics, Blocked, Held}` (`next_route.go`), where
    `Epics` is `slices.Sorted(maps.Keys(ownEpics))` and `Blocked` is
    `blockedRows(gating)` — the walk step 2b declined; `blockedRows` drops the
    gated id. `Held` is `heldByThemselves` over the rows in `ourScope`: in rank order, the rows `reachOf` classifies `reachNotReady` or `reachAwaitingOutside` that `IssueReadiness.HeldByItself()` reports held by a reason about the row itself (a reserved label, a missing field) rather than by a dependency or an earlier sibling. When step 4's pick finds nothing, `OffPath` is set to
@@ -1457,7 +1466,7 @@ If `len(ownLanes) > 0` (`next_route.go`):
 
 Step 4 is reached directly by a checkout holding no lanes:
 
-4. **The global pool, focus-scoped.** `pool, offPath := scope.partition(rows)`
+4. **The global pool, filtered and focus-scoped.** `pool, offPath := scope.partition(<rows asked selects>)`
    (`next_route.go`, `ready_state.go`), then
    `pickFrom(pool, func(model.LaneID) bool { return true }, serveWork)` →
    **`ServedFromNewLane{Row, Lane: laneOf(row)}`**.
@@ -1478,7 +1487,7 @@ now: `reachTakeable`, `reachHeldFresh`, `reachNotReady`, `reachAwaitingOutside`,
 `ClassifyReadiness(row.Annotations).AwaitsOutside()`, `reachHeldFresh` when
 `relationOf(...) == laneHeldForeign`, else `reachNotReady`
 (`next_route.go`). `rowReach{ID string, Row annotation.AnnotatedIssue, Kind reachKind}`
-(`next_route.go`) is what both terminal outcomes carry.
+(`next_route.go`) is what `Exhausted` and `NoWork` carry.
 
 `exhaustedNotes` (`next_route.go`), with no `reachTakeable` entry — exhaustion reports the very walk step 2b declined:
 - `reachHeldFresh`: `"on your path but claimed by another checkout right now"`
@@ -1541,7 +1550,8 @@ Both map to `ExitNoWork` = **6** (`exit.go`), with reasons
   `" (gates %s, which is on your path)"` on `Gates` when `Blocker == Row.ID`,
   else `" (it is in epic %s, which gates %s on your path)"` on `Blocker`, `Gates`.
 - `ServedPastExhaustion` → `"<why()>\n"`, then the `stay()` routes followed by `"move on to the top ready ticket outside it: <startAdvice(o.Row, o.Lane)>"`, joined by `"\nor "`, then `"\n"`.
-- `Exhausted`, `NoWork` → returned as themselves; no ticket printed.
+- `ServedPastNarrowing` → `"<o.Narrowing.Error()>\nor take the top ready ticket the filter selects, which is off your path: <startAdvice(o.Row, o.Lane)>\n"`.
+- `Exhausted`, `Narrowed`, `NoWork` → returned as themselves; no ticket printed.
 - Any other outcome type → panic.
 
 `startAdvice(row, lane)` (`next.go`) is one sentence with an optional
