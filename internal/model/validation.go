@@ -1,5 +1,7 @@
 package model
 
+import "github.com/promptctl/links-issue-tracker/internal/model/lifecycle"
+
 // ValidationError is a refusal of a value the caller supplied: it breaks a
 // domain rule, so the same input is refused the same way on every run. The CLI
 // maps it to exit 3 and to advice to change the input, never to retry.
@@ -28,3 +30,20 @@ type Refusal interface {
 	error
 	RefusesCommand()
 }
+
+// StateRequestError answers a command that asked for a state: Satisfied when
+// the state already holds, so the command ran correctly and had nothing to do,
+// and a refusal of the command as issued otherwise. The CLI maps the first to
+// exit 6 with advice that nothing needs doing, the second to exit 3; neither
+// ever to a retry. An epic's derived state and an issue's retention both
+// answer this way, and the one interface keeps their classification in one arm.
+// [LAW:one-type-per-behavior]
+type StateRequestError interface {
+	error
+	Satisfied() bool
+}
+
+var (
+	_ StateRequestError = ContainerActionError{}
+	_ StateRequestError = lifecycle.RetentionError{}
+)

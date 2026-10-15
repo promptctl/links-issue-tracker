@@ -38,10 +38,10 @@ data — described as assets, not as documentation of behavior).
 | 0 | `ExitOK` (`exit.go`) | nil error |
 | 1 | `ExitGeneric` (`exit.go`) | default; also `BulkFailureError` (`exit.go`), `store.ErrTransientGCContention` (`exit.go`) |
 | 2 | `ExitUsage` (`exit.go`) | `UsageError` (`exit.go`) |
-| 3 | `ExitValidation` (`exit.go`) | `templateShapeError` (`exit.go`), `UnknownCommandError` (`exit.go`), `RetiredCommandError` (`exit.go`), any `model.Refusal` — `model.ValidationError`, `model.FrozenIssueError`, and the upgrade/downgrade target refusals (`exit.go`), `model.ContainerActionError` when not satisfied (`exit.go`), `UnsupportedError` (`exit.go`), `takeoverUnconfirmedError` (`exit.go`), `purgeUnconfirmedError` (`exit.go`), `OutsideWorkspaceError` (`exit.go`), `store.ErrWorkspaceNotInitialized` (`exit.go`), `*store.UnsupportedSchemaVersionError` (`exit.go`), `workspace.ErrIssuePrefixRefused` (`exit.go`) |
+| 3 | `ExitValidation` (`exit.go`) | `templateShapeError` (`exit.go`), `UnknownCommandError` (`exit.go`), `RetiredCommandError` (`exit.go`), any `model.Refusal` — `model.ValidationError`, `model.FrozenIssueError`, and the upgrade/downgrade target refusals (`exit.go`), any `model.StateRequestError` — `model.ContainerActionError`, `lifecycle.RetentionError` — when not `Satisfied()` (`exit.go`), `UnsupportedError` (`exit.go`), `takeoverUnconfirmedError` (`exit.go`), `purgeUnconfirmedError` (`exit.go`), `OutsideWorkspaceError` (`exit.go`), `store.ErrWorkspaceNotInitialized` (`exit.go`), `*store.UnsupportedSchemaVersionError` (`exit.go`), `workspace.ErrIssuePrefixRefused` (`exit.go`) |
 | 4 | `ExitNotFound` (`exit.go`) | `storage.NotFoundError` (`exit.go`), `VersionNotFoundError` (`exit.go`) |
 | 5 | `ExitConflict` (`exit.go`) | `MergeConflictError` (`exit.go`), `SyncFailureError` (`exit.go`), `ownerApprovalRefusalError` (`exit.go`) |
-| 6 | `ExitNoWork` (`exit.go`) | `Exhausted` (`exit.go`), `NoWork` (`exit.go`), `model.ContainerActionError` when `Satisfied()` (`exit.go`) |
+| 6 | `ExitNoWork` (`exit.go`) | `Exhausted` (`exit.go`), `NoWork` (`exit.go`), any `model.StateRequestError` when `Satisfied()` (`exit.go`) |
 | 7 | `ExitCorruption` (`exit.go`) | `CorruptionError` (`exit.go`) |
 
 `ExitCode` runs these checks in a fixed order and the first match wins; the order is listed in `inventory-cli-issue.md` §1.8.

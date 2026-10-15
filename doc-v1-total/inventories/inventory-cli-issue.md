@@ -184,7 +184,7 @@ Constants (`exit.go`):
 9. `UnknownCommandError` → 3 (`exit.go`)
 10. `RetiredCommandError` → 3 (`exit.go`)
 11. `model.Refusal` (every `model.ValidationError`, `model.FrozenIssueError`, and the upgrade/downgrade target refusals) → 3 (`exit.go`)
-12. `model.ContainerActionError` → 6 when `Satisfied()`, else 3 (`exit.go`)
+12. `model.StateRequestError` (`model.ContainerActionError`, `lifecycle.RetentionError`) → 6 when `Satisfied()`, else 3 (`exit.go`)
 13. `UnsupportedError` → 3 (`exit.go`)
 14. `takeoverUnconfirmedError` → 3 (`exit.go`)
 15. `purgeUnconfirmedError` → 3 (`exit.go`)
@@ -231,9 +231,10 @@ several of these types gets the reason of the earliest one:
 10. `UsageError` → `usage_error`
 11. any error implementing `model.Refusal` → `validation_refused`
 12. `templateShapeError` → `template_shape_refused`
-13. `model.ContainerActionError` → `state_already_holds` when its `Satisfied()`
-    is true (the epic has at least one child, its derived state already
-    equals the requested one, and no child remains unfinished), otherwise
+13. `model.StateRequestError` → `state_already_holds` when its `Satisfied()`
+    is true (for `ContainerActionError`: the epic has at least one child, its
+    derived state already equals the requested one, and no child remains
+    unfinished; for `RetentionError`: the `Retain` cell says so), otherwise
     `validation_refused`
 14. `Exhausted` → `scope_exhausted`
 15. `NoWork` → `no_ready_work`
@@ -275,7 +276,7 @@ empty string means no `remediation:` line is printed:
 - `workspace_write_blocked`: "Wait a moment and retry — a normal command releases the store in well under a second. If it persists, a lit process is stuck: find it with `ps aux | grep '[l]it'` and terminate it, then retry; if none is running the hold is stale, so run `lit doctor --fix`. \<agent-instructions>This is a mechanical, self-diagnosable state — the steps above resolve it without needing the user's input.\</agent-instructions>"
 - `scope_exhausted`: "Do not retry unchanged — routing is deterministic and repeats this answer until the work named above moves. Act on what the message names — the route it offers, or the rows off your focus path — or finish or hand off what you already hold."
 - `no_ready_work`: "Do not retry unchanged — routing is deterministic and repeats this answer until something in the backlog moves. That is the backlog's state, not a fault. If `--type`, `--labels`, `--assignee`, or `--status` narrowed this run, drop the filter and ask again. If a `focus` label narrowed it, `lit next --all` routes over the whole queue for one run and `lit label rm <id> focus` lifts the scope. Otherwise `lit backlog --all` shows the whole queue and who holds what, and `lit new` adds work if it is genuinely empty."
-- `state_already_holds`: "No action is needed — the command asked for a state the workspace is already in, and the message above says how that state was reached. Do not retry: running it again cannot change the answer, and `lit doctor` has nothing to diagnose because nothing is broken."
+- `state_already_holds`: "No action is needed — the command asked for a state the workspace is already in. Do not retry: running it again cannot change the answer, and `lit doctor` has nothing to diagnose because nothing is broken."
 - `takeover_unconfirmed`: "Rerun with `--take` to take the lane over, or run `lit next` for work nobody else holds. \<agent-instructions>Taking over a lane another checkout holds right now overrides that checkout's work: pass `--take` only when the user directs the takeover.\</agent-instructions>"
 - `purge_unconfirmed`: "Rerun with `--yes` to purge it, or run `lit delete <id>` to remove it reversibly. \<agent-instructions>A purge cannot be undone and reaches every store lit syncs with: pass `--yes` only when the user directs the purge.\</agent-instructions>"
 - `outside_git_workspace`: "Run the command inside a git repository/worktree with links initialized."
@@ -1629,7 +1630,7 @@ usage string as a `UsageError` → exit 2 (`resolve`, `register.go`).
   `UsageError{"usage: lit comment add <id> --body <text>"}` → exit 2
   (`cli.go`).
 - Store refusal: a blank body (after trim) →
-  `errors.New("comment body is required")` → exit 1
+  `model.ValidationError{Message: "comment body is required"}` → exit 3
   (`internal/store/store.go`). A missing issue → exit 4
   (`store.go`).
 - The comment id is `"cmt-" + uuid` and `CreatedBy` empty is normalized to
@@ -1642,7 +1643,7 @@ usage string as a `UsageError` → exit 2 (`resolve`, `register.go`).
 - No flags (not even `--by`).
 - Refusal: `len(positional) != 1` →
   `UsageError{"usage: lit comment rm <comment-id>"}` → exit 2 (`cli.go`).
-- Store: blank id → `"comment id is required"`; unknown id →
+- Store: blank id → `model.ValidationError` `"comment id is required"` → exit 3; unknown id →
   `storage.NotFoundError{Entity: "comment", ID: id}` → exit 4
   (`internal/store/store.go`).
 - Output: `"<issueID> <commentID>\n"` for the deleted comment (`cli.go`).

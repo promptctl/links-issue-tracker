@@ -1,7 +1,6 @@
 package lifecycle
 
 import (
-	"errors"
 	"fmt"
 	"time"
 )
@@ -100,18 +99,18 @@ func Retain(cur Retention, action RetentionAction, at time.Time) (Retention, err
 		case Live:
 			return Archived{At: at}, nil
 		case Archived:
-			return nil, errors.New("issue is already archived")
+			return nil, alreadyHolds("issue is already archived")
 		case Deleted:
-			return nil, errors.New("cannot archive deleted issue")
+			return nil, refused("cannot archive deleted issue")
 		}
 	case Unarchive:
 		switch cur.(type) {
 		case Live:
-			return nil, errors.New("issue is not archived")
+			return nil, alreadyHolds("issue is not archived")
 		case Archived:
 			return Live{}, nil
 		case Deleted:
-			return nil, errors.New("cannot unarchive deleted issue")
+			return nil, refused("cannot unarchive deleted issue")
 		}
 	case Delete:
 		switch cur.(type) {
@@ -121,12 +120,17 @@ func Retain(cur Retention, action RetentionAction, at time.Time) (Retention, err
 			// lands on Live.
 			return Deleted{At: at}, nil
 		case Deleted:
-			return nil, errors.New("issue is already deleted")
+			return nil, alreadyHolds("issue is already deleted")
 		}
 	case Restore:
 		switch cur.(type) {
-		case Live, Archived:
-			return nil, errors.New("issue is not deleted")
+		case Live:
+			return nil, alreadyHolds("issue is not deleted")
+		case Archived:
+			// Restore asks for Live, and an archived issue is not Live: the
+			// archive axis is unarchive's to move, so this is refused with the
+			// command that does it rather than answered as already holding.
+			return nil, refused("cannot restore archived issue; it is not deleted — unarchive it instead")
 		case Deleted:
 			return Live{}, nil
 		}
@@ -140,6 +144,28 @@ func Retain(cur Retention, action RetentionAction, at time.Time) (Retention, err
 	// an impostor Retention (typed-nil pointer variant, raw nil) reaches here.
 	panic(fmt.Sprintf("illegal Retention value %T", cur))
 }
+
+// RetentionError is a move the retention table has no cell for. Its cells
+// split by what the caller asked for: a state the issue is already in ("issue
+// is already archived", "issue is not deleted" of a live one) needs nothing
+// done, while a move the issue's other axis blocks — archiving or unarchiving
+// a deleted issue, restoring an archived one — is refused with the command
+// that moves that axis. Neither changes on a rerun, so neither is a fault to
+// retry.
+// [LAW:one-source-of-truth] Each cell of Retain says which it is, so the
+// classification is written beside the rule and never re-derived elsewhere.
+type RetentionError struct {
+	message   string
+	satisfied bool
+}
+
+func alreadyHolds(message string) error { return RetentionError{message: message, satisfied: true} }
+func refused(message string) error      { return RetentionError{message: message} }
+
+func (e RetentionError) Error() string { return e.message }
+
+// Satisfied reports whether the state the move asked for already holds.
+func (e RetentionError) Satisfied() bool { return e.satisfied }
 
 // RetentionFromTimestamps decodes the two-nullable-timestamp encoding (the
 // archived_at/deleted_at DB columns and JSON wire keys) into the sum. A legacy

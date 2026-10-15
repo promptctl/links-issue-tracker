@@ -28,10 +28,10 @@ This table is the corpus's single source for the code-to-error-type mapping; `07
 | 0 | `ExitOK` | nil error, including a handled `--help` |
 | 1 | `ExitGeneric` | `BulkFailureError`, transient GC contention, everything else |
 | 2 | `ExitUsage` | `UsageError` |
-| 3 | `ExitValidation` | `UnknownCommandError`, `RetiredCommandError`, any `model.Refusal` (`model.ValidationError`, `model.FrozenIssueError`, and the upgrade/downgrade target refusals), `UnsupportedError`, `templateShapeError`, `OutsideWorkspaceError`, `store.ErrWorkspaceNotInitialized`, `*store.UnsupportedSchemaVersionError`, `workspace.ErrIssuePrefixRefused`, `model.ContainerActionError` when not satisfied, `takeoverUnconfirmedError`, `purgeUnconfirmedError` |
+| 3 | `ExitValidation` | `UnknownCommandError`, `RetiredCommandError`, any `model.Refusal` (`model.ValidationError`, `model.FrozenIssueError`, and the upgrade/downgrade target refusals), `UnsupportedError`, `templateShapeError`, `OutsideWorkspaceError`, `store.ErrWorkspaceNotInitialized`, `*store.UnsupportedSchemaVersionError`, `workspace.ErrIssuePrefixRefused`, any `model.StateRequestError` (`model.ContainerActionError`, `lifecycle.RetentionError`) when not `Satisfied()`, `takeoverUnconfirmedError`, `purgeUnconfirmedError` |
 | 4 | `ExitNotFound` | `storage.NotFoundError`, `VersionNotFoundError` |
 | 5 | `ExitConflict` | `MergeConflictError`, `SyncFailureError`, owner-approval refusal |
-| 6 | `ExitNoWork` | `Exhausted`, `NoWork`, `model.ContainerActionError` when `Satisfied()` |
+| 6 | `ExitNoWork` | `Exhausted`, `NoWork`, any `model.StateRequestError` when `Satisfied()` |
 | 7 | `ExitCorruption` | `CorruptionError` |
 
 On failure the process prints to stderr: `error (code=N, reason=<reason>): <message>`, then a `remediation:` line when the reason has one (`error_output.go`). The reason is how a script tells apart failures that share an exit code. Each error type maps to a reason string (`entity_not_found`, `usage_error`, `corruption_detected`, …) and each reason to a fixed remediation sentence — e.g. not-found → "Verify the target ID exists with `lit ls` or `lit show <id>`."; corruption → "Run `lit doctor --fix integrity` and retry." Several remediations embed literal `<agent-instructions>` tags that tell agent callers whether the fix needs the user: `corruption_detected` and `transient_gc_contention` call it idempotent and safe to run without confirmation, `workspace_write_blocked` calls the state resolvable without the user's input, and `takeover_unconfirmed`, `purge_unconfirmed`, and `workspace_schema_ahead` say to act only when the user directs it (`error_output.go`). Progress/diagnostic text goes to stderr as `lit: <operation>: <text>`; stdout is the result channel (`progress.go`).
@@ -139,7 +139,7 @@ Sequence: read the issue (missing → exit 4) → authorization (only `start` ha
 
 **`lit parent set --child <id> --parent <id>`** / **`lit parent clear <child-id>`** (`issue_relations.go`): `set` prints the edge as `<child> child of <parent>`, and refuses a `--parent` that is not an epic (exit 3); `clear` prints `ok` for an epic, which it lifts to the top level, and refuses a leaf (exit 3, "cannot detach X from its epic: a task lives inside an epic, so move it with lit parent set --child X --parent <epic-id>").
 
-**`lit comment add <id> --body <text>`**: blank body → "comment body is required" (exit 1); comment IDs are `cmt-<uuid>`; prints `<issueID> <commentID>`; no breadcrumb. **`lit comment rm <comment-id>`**: unknown ID → exit 4; prints the deleted pair (`cli.go`).
+**`lit comment add <id> --body <text>`**: blank body → "comment body is required" (exit 3); comment IDs are `cmt-<uuid>`; prints `<issueID> <commentID>`; no breadcrumb. **`lit comment rm <comment-id>`**: blank ID → "comment id is required" (exit 3); unknown ID → exit 4; prints the deleted pair (`cli.go`).
 
 **`lit label add|rm <issue-id> <label>`**: normalizes through the label rules (chapter 01), prints the resulting full label set comma-joined. Reserved labels: `needs-design` and `external` block readiness; `focus` marks a focus-path goal (`issue_relations.go`).
 

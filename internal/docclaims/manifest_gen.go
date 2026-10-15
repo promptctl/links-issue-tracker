@@ -514,6 +514,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-model.md", Text: "all %d are done", Src: "all %d are done"},
 	{Doc: "doc-v1-total/inventories/inventory-model.md", Text: "cannot `%s` epic %s: it is %s, and an epic's state derives from its children rather than from this command (%s)", Src: "cannot `%s` epic %s: it is %s, and an epic's state derives from its children rather than from this command (%s)"},
 	{Doc: "doc-v1-total/inventories/inventory-model.md", Text: "cannot archive deleted issue", Src: "cannot archive deleted issue"},
+	{Doc: "doc-v1-total/inventories/inventory-model.md", Text: "cannot restore archived issue; it is not deleted — unarchive it instead", Src: "cannot restore archived issue; it is not deleted — unarchive it instead"},
 	{Doc: "doc-v1-total/inventories/inventory-model.md", Text: "cannot unarchive deleted issue", Src: "cannot unarchive deleted issue"},
 	{Doc: "doc-v1-total/inventories/inventory-model.md", Text: "close %s trace: %w", Src: "close %s trace: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-model.md", Text: "create %s trace dir: %w", Src: "create %s trace dir: %w"},

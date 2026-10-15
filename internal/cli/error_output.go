@@ -132,18 +132,18 @@ func commandErrorReason(err error) commandReason {
 	if errors.As(err, &templateShape) {
 		return reasonTemplateShapeRefused
 	}
-	// An action on an epic is refused because an epic's state is its children's
-	// to set. Both halves are terminal — no retry of the same command can move
-	// either — so neither may reach the default's "Retry the command", which
-	// would tell the agent closing a finished epic to loop on a condition that
-	// cannot change. They are separate reasons because the act each calls for
-	// is different: one asks for a state that already holds and wants nothing
-	// done at all, the other asks for something only the children can do, and
-	// a single reason could only name one of them.
-	// [LAW:one-type-per-behavior]
-	var containerAction model.ContainerActionError
-	if errors.As(err, &containerAction) {
-		if containerAction.Satisfied() {
+	// A command that asked for a state: an action on an epic, whose state is its
+	// children's to set, or a retention move. Both halves are terminal — no
+	// retry of the same command can move either — so neither may reach the
+	// default's "Retry the command", which would tell the agent closing a
+	// finished epic to loop on a condition that cannot change. They are
+	// separate reasons because the act each calls for is different: one asks
+	// for a state that already holds and wants nothing done at all, the other
+	// asks for something the command as issued cannot do, and a single reason
+	// could only name one of them. [LAW:one-type-per-behavior]
+	var stateRequest model.StateRequestError
+	if errors.As(err, &stateRequest) {
+		if stateRequest.Satisfied() {
 			return reasonStateAlreadyHolds
 		}
 		return reasonValidationRefused
@@ -346,9 +346,10 @@ func commandErrorRemediation(reason commandReason) string {
 		// No act to name, because there is none: the caller asked for a state
 		// the workspace is already in. It must still say "do not retry":
 		// without it, an unattended agent loops on a state nothing it runs can
-		// change. How the state was reached is the message's to say, not this
-		// line's, so nothing here restates it. [LAW:one-source-of-truth]
-		return "No action is needed — the command asked for a state the workspace is already in, and the message above says how that state was reached. Do not retry: running it again cannot change the answer, and `lit doctor` has nothing to diagnose because nothing is broken."
+		// change. Anything about how the state was reached is the message's to
+		// say, and not every message has it to say, so this line neither
+		// restates it nor promises it. [LAW:one-source-of-truth]
+		return "No action is needed — the command asked for a state the workspace is already in. Do not retry: running it again cannot change the answer, and `lit doctor` has nothing to diagnose because nothing is broken."
 	case reasonTakeoverUnconfirmed:
 		// Action-only, like its neighbours: the message names the holder. Both
 		// ways out are named and neither is urged, and the envelope says whose

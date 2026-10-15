@@ -360,11 +360,20 @@ func TestRankAgainstOwnContainerErrors(t *testing.T) {
 	st := openIssueStore(t, ctx)
 	fx := newFrameFixture(t, ctx, st)
 
-	if _, err := st.RankAbove(ctx, fx.children[0].ID, fx.epic.ID); err == nil || !strings.Contains(err.Error(), "inside") {
-		t.Errorf("RankAbove(child, own epic) error = %v, want containment rejection", err)
-	}
-	if _, err := st.RankBelow(ctx, fx.epic.ID, fx.children[0].ID); err == nil || !strings.Contains(err.Error(), "contains") {
-		t.Errorf("RankBelow(epic, own child) error = %v, want containment rejection", err)
+	// Either direction is the one refusal, naming the epic as the container
+	// whichever side of the pair it was given on.
+	want := storage.FrameContainmentError{ContainerID: fx.epic.ID, ContainedID: fx.children[0].ID}
+	for _, tc := range []struct {
+		name string
+		rank func() error
+	}{
+		{"RankAbove(child, own epic)", func() error { _, err := st.RankAbove(ctx, fx.children[0].ID, fx.epic.ID); return err }},
+		{"RankBelow(epic, own child)", func() error { _, err := st.RankBelow(ctx, fx.epic.ID, fx.children[0].ID); return err }},
+	} {
+		var got storage.FrameContainmentError
+		if err := tc.rank(); !errors.As(err, &got) || got != want {
+			t.Errorf("%s error = %v, want %#v", tc.name, err, want)
+		}
 	}
 }
 
@@ -646,9 +655,9 @@ func TestResolveFrameRepresentatives(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			reps, frame, err := resolveFrameRepresentatives(tc.chains)
 			if tc.wantErr {
-				var containment *frameContainmentError
+				var containment storage.FrameContainmentError
 				if !errors.As(err, &containment) {
-					t.Fatalf("resolveFrameRepresentatives() error = %v, want frameContainmentError", err)
+					t.Fatalf("resolveFrameRepresentatives() error = %v, want storage.FrameContainmentError", err)
 				}
 				return
 			}
@@ -1550,6 +1559,12 @@ func TestRankSetOverIssuesSharingAKey(t *testing.T) {
 			if tc.wantError != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantError) || !strings.Contains(err.Error(), "lit rank "+high+" --above "+low) {
 					t.Fatalf("RankSet(%v) error = %v, want a refusal naming the tie and the move that separates it", named, err)
+				}
+				// The tie stays until a different command separates it, so the
+				// refusal is a deterministic one, never advice to retry.
+				var refused model.ValidationError
+				if !errors.As(err, &refused) {
+					t.Fatalf("RankSet(%v) error = %T, want model.ValidationError", named, err)
 				}
 				for i := range after {
 					if after[i].ID != before[i].ID || after[i].Rank != before[i].Rank {

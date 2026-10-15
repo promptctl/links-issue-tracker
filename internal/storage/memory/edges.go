@@ -2,7 +2,6 @@ package memory
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -30,7 +29,7 @@ func (e *Engine) AddComment(ctx context.Context, in storage.AddCommentInput) (mo
 	}
 	body := strings.TrimSpace(in.Body)
 	if body == "" {
-		return model.Comment{}, model.Issue{}, errors.New("comment body is required")
+		return model.Comment{}, model.Issue{}, model.ValidationError{Message: "comment body is required"}
 	}
 	comment := model.Comment{
 		ID:        "cmt-" + uuid.NewString(),
@@ -51,7 +50,7 @@ func (e *Engine) DeleteComment(ctx context.Context, commentID string) (model.Com
 
 	id := strings.TrimSpace(commentID)
 	if id == "" {
-		return model.Comment{}, errors.New("comment id is required")
+		return model.Comment{}, model.ValidationError{Message: "comment id is required"}
 	}
 	index := slices.IndexFunc(e.comments, func(c model.Comment) bool { return c.ID == id })
 	if index < 0 {

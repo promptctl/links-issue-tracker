@@ -96,17 +96,18 @@ func ExitCode(err error) int {
 	if errors.As(err, &refusal) {
 		return ExitValidation
 	}
-	// The two halves of a container refusal are different answers and exit
-	// differently. A request the children already satisfy ran correctly and
-	// changed nothing — the same shape as the router's "nothing to hand back",
-	// so it shares that code rather than inventing a second one for it. A
-	// refusal is a domain-constraint rejection like any other. Neither is
+	// The two halves of a state request are different answers and exit
+	// differently. A state that already holds — an epic its children have
+	// already closed, an issue already archived — means the command ran
+	// correctly and changed nothing: the same shape as the router's "nothing to
+	// hand back", so it shares that code rather than inventing a second one for
+	// it. A refusal is a domain-constraint rejection like any other. Neither is
 	// ExitGeneric, which would make the release-closing `lit done <epic>` report
 	// its workflow's final step as a failure while the state it asked for is
 	// exactly the state that holds. [LAW:no-mode-explosion]
-	var containerAction model.ContainerActionError
-	if errors.As(err, &containerAction) {
-		if containerAction.Satisfied() {
+	var stateRequest model.StateRequestError
+	if errors.As(err, &stateRequest) {
+		if stateRequest.Satisfied() {
 			return ExitNoWork
 		}
 		return ExitValidation
