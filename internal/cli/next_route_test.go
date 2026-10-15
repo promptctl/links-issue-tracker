@@ -830,6 +830,45 @@ func TestRouteNextRoutesAroundOnPathDependencyHeldFresh(t *testing.T) {
 	}
 }
 
+// A row of ours waiting behind an earlier ticket of its own lane waits on our
+// own work, even when a filter keeps that ticket out of view: its lane is the
+// row's own, so it is inside the scope and never a blocker to clear from
+// outside. Collected, it would draw a route to stay that files a ticket in our
+// epic and asks for a blocked-by edge lit refuses between two of its tickets.
+func TestExhaustionNeverNamesAnEarlierLaneMateOutOfViewAsABlocker(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	earlier := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Earlier in our lane", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "ours"})
+	later := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Later in our lane", Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicA.ID, Lane: "ours"})
+
+	rows, details, epics := h.gather()
+	standings := claims.Standings{
+		laneOf(t, details, rowByID(t, rows, later.ID)): heldBy(selfAttribution),
+	}
+	// The narrowed gather `lit next --type bug` makes: the earlier ticket is
+	// open and ready, and simply not in this run's rows.
+	var inView []annotation.AnnotatedIssue
+	for _, row := range rows {
+		if row.ID != earlier.ID {
+			inView = append(inView, row)
+		}
+	}
+
+	outcome := routeNext(inView, details, epics, standings, selfAttribution, focusScope{})
+	exhausted, ok := outcome.(Exhausted)
+	if !ok {
+		t.Fatalf("routeNext = %#v (%T), want Exhausted — the only row in view waits on our own lane", outcome, outcome)
+	}
+	for _, blocked := range exhausted.Blocked {
+		if blocked.ID == earlier.ID {
+			t.Fatalf("exhausted.Blocked = %+v, want no %s — it is the earlier ticket of our own lane", exhausted.Blocked, earlier.ID)
+		}
+	}
+	if msg := exhausted.Error(); strings.Contains(msg, "to stay, file") {
+		t.Fatalf("exhausted.Error() = %q, want no route to stay — nothing outside the scope blocks it", msg)
+	}
+}
+
 // A blocker this run cannot see. gatherWorkableAnnotated narrows rows by
 // --type/--labels/--assignee and to leaves, while the OpenDependency
 // annotation comes from the store, so `lit next --type bug` can be gated by a

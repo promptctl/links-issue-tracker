@@ -665,7 +665,10 @@ func workTowardEach(rows []annotation.AnnotatedIssue, details, epics map[string]
 // open row in scope, so this walk collects what holds it back instead. Naming
 // it would offer a sibling's block to be cleared by a ticket filed beside it,
 // an edge lit refuses inside one epic — and a sibling edge can still exist,
-// written by an import or before that rule.
+// written by an import or before that rule. Where the scope can be read is
+// the prerequisite's lane: an earlier lane-mate's is the lane of the row
+// waiting on it, known even when a filter keeps the lane-mate out of view; a
+// dependency's is known only from work toward it in view.
 func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID, inScope func(model.LaneID) bool, reachFor func(annotation.AnnotatedIssue) reachKind, workToward map[string][]annotation.AnnotatedIssue) []gatedDep {
 	// onPath is a row whose prerequisites gate the scope: an in-scope row, or
 	// work toward a prerequisite its chain already collected, carrying the hops
@@ -686,7 +689,8 @@ func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation
 			if at.row.State() != model.StateOpen {
 				continue
 			}
-			for _, id := range ClassifyReadiness(at.row.Annotations).PrerequisiteIDs() {
+			for _, prerequisite := range ClassifyReadiness(at.row.Annotations).Prerequisites() {
+				id := prerequisite.Detail
 				if seen[id] {
 					continue
 				}
@@ -697,7 +701,9 @@ func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation
 						dep.Row, dep.Kind = work, kind
 					}
 				}
-				if dep.Kind != reachOutOfView && inScope(laneOf(dep.Row)) {
+				inside := prerequisite.inWaitersLane() && inScope(laneOf(at.row)) ||
+					dep.Kind != reachOutOfView && inScope(laneOf(dep.Row))
+				if inside {
 					continue
 				}
 				// gated is the in-scope row the chain started from — the fact

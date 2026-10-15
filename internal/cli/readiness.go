@@ -111,19 +111,27 @@ func (r IssueReadiness) DependencyIDs() []string {
 	return ids
 }
 
-// PrerequisiteIDs returns the ids of every open ticket among the blocking
-// reasons — the dependencies DependencyIDs returns, and an earlier same-lane
-// sibling — so finishing them is everything that stands between this issue and
-// ready but the reasons about the issue itself. [LAW:one-source-of-truth]
-// waitsOnOtherWork is the one list of which reasons those are.
-func (r IssueReadiness) PrerequisiteIDs() []string {
-	var ids []string
+// Prerequisites returns the blocking reasons that are open tickets — the
+// dependencies DependencyIDs names, and an earlier same-lane sibling — each
+// with its ticket's id as Detail, so finishing them is everything that stands
+// between this issue and ready but the reasons about the issue itself.
+// [LAW:one-source-of-truth] waitsOnOtherWork is the one list of which reasons
+// those are.
+func (r IssueReadiness) Prerequisites() []BlockingReason {
+	var prerequisites []BlockingReason
 	for _, reason := range r.blocking {
 		if reason.waitsOnOtherWork() {
-			ids = append(ids, reason.Detail)
+			prerequisites = append(prerequisites, reason)
 		}
 	}
-	return ids
+	return prerequisites
+}
+
+// inWaitersLane reports whether the reason's ticket sits in the lane of the
+// issue waiting on it — an earlier same-lane sibling — so its lane is known
+// from the waiter alone, even where the ticket's own row is not to hand.
+func (r BlockingReason) inWaitersLane() bool {
+	return r.Kind == annotation.EarlierSiblingPending
 }
 
 // waitsOnOtherWork reports whether the reason is another ticket still open — a
