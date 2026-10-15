@@ -108,9 +108,9 @@ Values both formats enforce
   leading or trailing whitespace in any of them is rejected, not trimmed.
 
   A local_id may not be used twice in one file, a record may not name its
-  own local_id in its own blocked_by, parent/blocked_by references
-  within the file may not form a cycle, and a record may not be
-  blocked_by an epic it sits under in the file.
+  own local_id in its own blocked_by or name any entry there twice,
+  parent/blocked_by references within the file may not form a cycle,
+  and a record may not be blocked_by an epic it sits under in the file.
 
   A file with zero records or zero documents is an error.
 
