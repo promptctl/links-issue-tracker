@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 
@@ -57,7 +58,7 @@ func TestDoctorSkipsEveryRepairOnALoopedHierarchy(t *testing.T) {
 	}
 
 	var progress bytes.Buffer
-	report, err := diagnoseThenRepair(context.Background(), &progress, repairer, fixes)
+	run, err := diagnoseThenRepair(context.Background(), &progress, repairer, fixes)
 	if err != nil {
 		t.Fatalf("diagnoseThenRepair() error = %v, want the cycle reported", err)
 	}
@@ -67,7 +68,7 @@ func TestDoctorSkipsEveryRepairOnALoopedHierarchy(t *testing.T) {
 	if !cleaned {
 		t.Error("a repair that never reads the hierarchy was withheld; a loop only blocks the repairs it would crash")
 	}
-	if len(report.ParentCycle) == 0 {
+	if len(run.report.ParentCycle) == 0 {
 		t.Error("the returned report does not name the cycle, so the operator gets no diagnosis")
 	}
 	// [LAW:no-silent-failure] The skip is stated, not inferred from a quiet run.
@@ -123,5 +124,36 @@ func TestDoctorStatusLineSaysUncheckedRatherThanZero(t *testing.T) {
 	}
 	if got := doctorFieldValue(clean, storage.CheckDependencyCycle, "none"); got != "none" {
 		t.Errorf("dependency_cycle rendered %q on a report that ran the check, want \"none\"", got)
+	}
+}
+
+// A repair that fails stops the repairs after it, but the report is still read
+// again and returned beside the failure, so the caller can print the diagnosis
+// before exiting on the repair.
+func TestDoctorKeepsTheReportWhenARepairFails(t *testing.T) {
+	t.Parallel()
+	repairer := &cycleRepairer{report: storage.HealthReport{Warnings: []string{"tickets outside an epic: X (task)"}}}
+	refusal := errors.New("the repair refused")
+	after := false
+	fixes := []doctorFix{
+		{name: "rank", run: func(context.Context, io.Writer, storage.Repairer) error { return refusal }},
+		{name: "integrity", run: func(context.Context, io.Writer, storage.Repairer) error { after = true; return nil }},
+	}
+
+	run, err := diagnoseThenRepair(context.Background(), io.Discard, repairer, fixes)
+	if err != nil {
+		t.Fatalf("diagnoseThenRepair() error = %v, want the report returned with the repair's failure beside it", err)
+	}
+	if !errors.Is(run.repairErr, refusal) {
+		t.Errorf("repairErr = %v, want the failed repair's error", run.repairErr)
+	}
+	if after {
+		t.Error("a repair ran after an earlier one failed")
+	}
+	if !slices.Equal(run.report.Warnings, repairer.report.Warnings) {
+		t.Errorf("report warnings = %v, want %v: a failed repair cost the diagnosis", run.report.Warnings, repairer.report.Warnings)
+	}
+	if repairer.doctorCalls != 2 {
+		t.Errorf("Doctor called %d times, want 2: the report describes what the repairs before the failure left behind", repairer.doctorCalls)
 	}
 }

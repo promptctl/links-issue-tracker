@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -165,16 +166,20 @@ func TestRunDoctorSurfacesUnresolvedFreshness(t *testing.T) {
 }
 
 // A ticket outside an epic has no field on the status line, so the warning line
-// is the only place doctor names it. One ticket is left with no parent and one is
-// put under a task, the two shapes no write accepts, planted the way a recovery
-// rebuild or a lit older than v7 leaves them; doctor prints each by id with the
-// `lit parent set` that moves it, and drops none of the report's warnings.
-func TestDoctorPrintsEachTicketOutsideAnEpic(t *testing.T) {
+// is the only place doctor names it. The store planted here holds every shape
+// that reaches no write path: a ticket with no parent and one under a task, as a
+// recovery rebuild or a lit older than v7 leaves them, and a blocked-by cycle,
+// which also leaves one edge inverted under any rank order. Doctor prints a
+// warning line for each and no other, and a refused --fix still prints them.
+func TestDoctorPrintsEachWarningItsHealthCheckFinds(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Title: "E", Topic: "hier", IssueType: "epic"})
 	loose := h.createIssue(storage.CreateIssueInput{Title: "loose", Topic: "hier", IssueType: "task", ParentID: epic.ID})
 	host := h.createIssue(storage.CreateIssueInput{Title: "host", Topic: "hier", IssueType: "task", ParentID: epic.ID})
 	under := h.createIssue(storage.CreateIssueInput{Title: "under", Topic: "hier", IssueType: "task", ParentID: epic.ID})
+	cycleEpic := h.createIssue(storage.CreateIssueInput{Title: "C", Topic: "dep", IssueType: "epic"})
+	first := h.createIssue(storage.CreateIssueInput{Title: "first", Topic: "dep", IssueType: "task", ParentID: cycleEpic.ID})
+	second := h.createIssue(storage.CreateIssueInput{Title: "second", Topic: "dep", IssueType: "task", ParentID: cycleEpic.ID})
 
 	var clean bytes.Buffer
 	if err := runDoctor(h.ctx, &clean, h.ap, nil); err != nil {
@@ -191,40 +196,57 @@ func TestDoctorPrintsEachTicketOutsideAnEpic(t *testing.T) {
 	if err := raw.ExecRawForTest(h.ctx, `DELETE FROM relations WHERE type = 'parent-child' AND src_id IN (?, ?)`, loose.ID, under.ID); err != nil {
 		t.Fatalf("detach the tickets: %v", err)
 	}
-	if err := raw.ExecRawForTest(h.ctx,
-		`INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'parent-child', ?, 'import')`,
-		under.ID, host.ID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
-		t.Fatalf("plant a ticket under a task: %v", err)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, row := range [][3]string{
+		{under.ID, host.ID, "parent-child"},
+		{first.ID, second.ID, "blocked-by"},
+		{second.ID, first.ID, "blocked-by"},
+	} {
+		if err := raw.ExecRawForTest(h.ctx,
+			`INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, ?, ?, 'import')`,
+			row[0], row[1], row[2], now); err != nil {
+			t.Fatalf("plant %s %s %s: %v", row[0], row[2], row[1], err)
+		}
+	}
+
+	containment := []string{
+		"warning: tickets outside an epic: " + loose.ID + " (task) (every ticket except an epic lives inside one; move each into the epic it belongs to with 'lit parent set --child <id> --parent <epic-id>')",
+		"warning: tickets under a parent that is not an epic: " + under.ID + " under " + host.ID + " (task) (only an epic contains tickets; move each into the epic it belongs to with 'lit parent set --child <id> --parent <epic-id>')",
+		"warning: rank inversions: 1 (dependencies ranked below dependents)",
+	}
+	// The cycle may be named from either member; both rotations are the same cycle.
+	cycleLine := func(a, b string) string {
+		return "warning: blocked-by dependency cycle: " + a + " -> " + b + " -> " + a + " (no rank order exists; remove one edge with 'lit dep rm' to break it)"
+	}
+	assertWarnings := func(t *testing.T, got string) {
+		t.Helper()
+		var printed []string
+		for line := range strings.Lines(got) {
+			if strings.HasPrefix(line, "warning: ") {
+				printed = append(printed, strings.TrimSuffix(line, "\n"))
+			}
+		}
+		for _, cycle := range []string{cycleLine(first.ID, second.ID), cycleLine(second.ID, first.ID)} {
+			if want := append(slices.Clone(containment), cycle); slices.Equal(printed, want) {
+				return
+			}
+		}
+		t.Fatalf("doctor printed these warning lines:\n%s\nwant, in order:\n%s\nthen the cycle %s <-> %s; full output:\n%s",
+			strings.Join(printed, "\n"), strings.Join(containment, "\n"), first.ID, second.ID, got)
 	}
 
 	var buf bytes.Buffer
 	if err := runDoctor(h.ctx, &buf, h.ap, nil); err != nil {
-		t.Fatalf("runDoctor() error = %v, want exit 0: every read still answers over a ticket outside an epic", err)
+		t.Fatalf("runDoctor() error = %v, want exit 0: every read still answers over these warnings", err)
 	}
-	got := buf.String()
-	for _, want := range []string{
-		"warning: tickets outside an epic: " + loose.ID + " (task) (every ticket except an epic lives inside one; move each into the epic it belongs to with 'lit parent set --child <id> --parent <epic-id>')\n",
-		"warning: tickets under a parent that is not an epic: " + under.ID + " under " + host.ID + " (task) (only an epic contains tickets; move each into the epic it belongs to with 'lit parent set --child <id> --parent <epic-id>')\n",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("doctor output missing %q:\n%s", want, got)
-		}
+	assertWarnings(t, buf.String())
+
+	// The rank repair refuses on the cycle. The refusal is the command's
+	// outcome, and the report it would otherwise have cost is still printed.
+	var fixed bytes.Buffer
+	err = runDoctor(h.ctx, &fixed, h.ap, []string{"--fix=rank"})
+	if err == nil || !strings.Contains(err.Error(), "lit dep rm") {
+		t.Fatalf("runDoctor(--fix=rank) error = %v, want the rank repair's refusal on the cycle", err)
 	}
-	repairer, err := storage.Repair.Of(h.ap.Store)
-	if err != nil {
-		t.Fatalf("Repair: %v", err)
-	}
-	report, err := repairer.Doctor(h.ctx)
-	if err != nil {
-		t.Fatalf("Doctor() error = %v", err)
-	}
-	printed := 0
-	for line := range strings.Lines(got) {
-		if strings.HasPrefix(line, "warning: ") {
-			printed++
-		}
-	}
-	if printed != len(report.Warnings) {
-		t.Fatalf("doctor printed %d warning line(s) for a report holding %d: %v\n%s", printed, len(report.Warnings), report.Warnings, got)
-	}
+	assertWarnings(t, fixed.String())
 }

@@ -355,12 +355,15 @@ func printReportWarnings(w io.Writer, warnings []string) error {
 // A loop withholds only the repairs that would crash on it. Repairs that never
 // read the hierarchy still run, because refusing them would strand faults the
 // operator can fix in a workspace they cannot yet climb.
+// A repair that fails stops the repairs after it, never the report: the state
+// the earlier ones left behind is still read and returned beside the failure,
+// so a refused --fix costs the operator the repair and not the diagnosis.
 // [LAW:dataflow-not-control-flow] What runs is decided by the report and by
 // each repair's own declared reach, never by which flag the caller typed.
-func diagnoseThenRepair(ctx context.Context, progress io.Writer, repairer storage.Repairer, fixes []doctorFix) (storage.HealthReport, error) {
+func diagnoseThenRepair(ctx context.Context, progress io.Writer, repairer storage.Repairer, fixes []doctorFix) (doctorRun, error) {
 	report, err := repairer.Doctor(ctx)
 	if err != nil {
-		return storage.HealthReport{}, err
+		return doctorRun{}, err
 	}
 	if len(report.ParentCycle) > 0 {
 		var runnable []doctorFix
@@ -381,15 +384,28 @@ func diagnoseThenRepair(ctx context.Context, progress io.Writer, repairer storag
 		fixes = runnable
 	}
 	if len(fixes) == 0 {
-		return report, nil
+		return doctorRun{report: report}, nil
 	}
+	var repairErr error
 	for _, fix := range fixes {
-		if err := fix.run(ctx, progress, repairer); err != nil {
-			return storage.HealthReport{}, err
+		if repairErr = fix.run(ctx, progress, repairer); repairErr != nil {
+			break
 		}
 	}
 	// Re-read, so the report describes the state the repairs left behind.
-	return repairer.Doctor(ctx)
+	report, err = repairer.Doctor(ctx)
+	if err != nil {
+		return doctorRun{}, errors.Join(repairErr, err)
+	}
+	return doctorRun{report: report, repairErr: repairErr}, nil
+}
+
+// doctorRun is what diagnoseThenRepair leaves behind: the health report of the
+// workspace as the repairs left it, and the error of the repair that failed, if
+// one did. The two travel together because the report is owed either way.
+type doctorRun struct {
+	report    storage.HealthReport
+	repairErr error
 }
 
 func doctorLeaf() appLeaf {
@@ -424,10 +440,11 @@ func doctorLeaf() appLeaf {
 			}
 		}
 		// Fix progress writes to stderr so stdout carries only the health report.
-		report, err := diagnoseThenRepair(ctx, os.Stderr, repairer, fixes)
+		run, err := diagnoseThenRepair(ctx, os.Stderr, repairer, fixes)
 		if err != nil {
 			return err
 		}
+		report := run.report
 		// [LAW:effects-at-boundaries] Freshness resolution shells out to git and
 		// reads the store, so it runs here, at the boundary, before the pure text
 		// rendering below.
@@ -471,6 +488,11 @@ func doctorLeaf() appLeaf {
 		}
 		if err := printPushOutcomeHealth(stdout, ap.Workspace, time.Now(), runningBinaryVersion()); err != nil {
 			return err
+		}
+		// A failed repair is the outcome of the command the operator typed, so it
+		// exits on it — after the report it would otherwise have cost them.
+		if run.repairErr != nil {
+			return run.repairErr
 		}
 		// [LAW:single-enforcer] Corruption classification is output-format agnostic and always enforced here.
 		if len(report.Errors) > 0 {
