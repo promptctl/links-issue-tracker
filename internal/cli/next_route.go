@@ -109,10 +109,11 @@ type ServedFromDependency struct {
 
 // hop is one link of a prerequisite chain: the prerequisite, and the ticket the
 // walk went on through toward the next — the prerequisite itself when it is a
-// ticket, or one under it when it is an epic, since an epic has no prerequisite
-// edges of its own to follow. Both are kept because each is half of what a
-// reader checks: `lit show` on the gated row lists the epic, and `lit show` on
-// the next link lists the ticket.
+// ticket, or one under it when it is an epic, since an epic cannot be started
+// and readiness passes its own prerequisites down to the tickets under it as
+// inherited ones. Both are kept because each is half of what a reader checks:
+// `lit show` on the gated row lists the epic, and `lit show` on the next link
+// lists the ticket.
 type hop struct {
 	Prerequisite string
 	Through      string
