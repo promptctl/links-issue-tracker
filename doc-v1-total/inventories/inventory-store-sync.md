@@ -948,7 +948,7 @@ Tests: `TestPreGooseAdoptionStampsWithoutRerunningBaseline` (`migration_runner_t
 `CheckpointResetError{Version int64; Name string; Checkpoint storage.Checkpoint; Cause error}` (`migration_runner.go`). `Error()` (`migration_runner.go`):
 - `Version == 0` → `"migration failed (version unknown): %v\n\nthe working set was automatically reset to Dolt checkpoint %q\nrestore from the pre-migration recovery snapshot"`.
 - else → `"migration v%d %q failed: %v\n\nthe working set was automatically reset to Dolt checkpoint %q\nto retry after fixing the migration, clear the quarantine:\n  DELETE FROM migration_quarantine WHERE version = %d"`.
-`Unwrap()` at `migration_runner.go`.
+`Unwrap() []error` (`migration_runner.go`): `Version == 0` → `[Cause]`; else → `[Cause, &QuarantineBlockError{Version, Name, ErrorText: Cause.Error()}]`, the quarantine `handleMigrationFailure` committed before returning.
 
 `QuarantineBlockError{Version, Name, ErrorText}` (`migration_runner.go`). `Error()` (`migration_runner.go`):
 `"migration v%d %q is quarantined after a previous failure:\n  %s\n\nto recover, either:\n  (a) restore from a dbsnapshot: lit snapshots restore <name>\n  (b) clear the quarantine row (if transient): DELETE FROM migration_quarantine WHERE version = %d"`.

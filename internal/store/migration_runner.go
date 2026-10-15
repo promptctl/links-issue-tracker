@@ -78,7 +78,17 @@ func (e *CheckpointResetError) Error() string {
 	)
 }
 
-func (e *CheckpointResetError) Unwrap() error { return e.Cause }
+// Unwrap exposes the cause and, when the version is known, the quarantine
+// handleMigrationFailure committed for it before returning: from this run on
+// the workspace is quarantined, so the failure carries the same
+// *QuarantineBlockError every later open refuses with, and a caller
+// classifying it sees one state, not two. [LAW:one-source-of-truth]
+func (e *CheckpointResetError) Unwrap() []error {
+	if e.Version == 0 {
+		return []error{e.Cause}
+	}
+	return []error{e.Cause, &QuarantineBlockError{Version: e.Version, Name: e.Name, ErrorText: e.Cause.Error()}}
+}
 
 // QuarantineBlockError is returned when Open finds a pending migration version
 // that has a quarantine record from a previous failed attempt.

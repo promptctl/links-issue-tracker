@@ -75,7 +75,7 @@ the code it arrives on:
 | `outside_git_workspace` | 3 | The working directory is not in a git repository/worktree |
 | `workspace_not_initialized` | 3 | The repository has no lit workspace (`lit init` has never run) |
 | `workspace_schema_ahead` | 3 | The workspace's schema is newer than this `lit` supports |
-| `migration_quarantined` | 3 | A migration this workspace has pending failed on an earlier run and is quarantined; the message names both ways to recover |
+| `migration_quarantined` | 3 | A migration this workspace has pending failed and is quarantined, on the run that failed and every one after; the message names both ways to recover |
 | `entity_not_found` | 4 | The named issue or resource does not exist |
 | `version_not_found` | 4 | `lit history --version` named a version past the ones the issue's history records |
 | `merge_conflict` | 5 | A sync merge conflict |
