@@ -62,23 +62,17 @@ if [ "$r" -ne 0 ]; then
   exit 1
 fi
 
-# A release tag in this repo is exactly `vX.Y.Z` — the shape release-validate.yml
-# cuts. Matching it strictly is what defines the accept-set: the `^{}` peeled
-# entries annotated tags emit and any hand-made non-release tag fail the match
-# and are gone, rather than being stripped case by case downstream.
-# [LAW:parse-dont-validate]
-REFS=$(echo "$RAW" | awk '{print $2}')
-# The lone masked exit is grep's benign "no lines matched" (1), which is the
-# real state of a repo that has never released. grep gets its own line so that
-# `|| true` covers nothing else. [LAW:no-silent-failure]
-RELEASE_REFS=$(echo "$REFS" | grep -E '^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$' || true)
-if [ -z "$RELEASE_REFS" ]; then
+# A release tag is what release-tags.sh says it is; the `^{}` peeled entries
+# annotated tags emit fail its match and are gone, rather than being stripped
+# case by case downstream. [LAW:parse-dont-validate]
+# shellcheck source=scripts/release-tags.sh
+. "$(dirname "$0")/release-tags.sh"
+TAG=$(echo "$RAW" | awk '{print $2}' | sed 's|^refs/tags/||' | newest_release_tag)
+if [ -z "$TAG" ]; then
   echo "no release tag on origin — nothing has shipped, so no notes are frozen yet"
   exit 0
 fi
-
-VER=$(echo "$RELEASE_REFS" | sed 's|^refs/tags/v||' | sort -V | tail -1)
-TAG="v$VER"
+VER="${TAG#v}"
 
 # `--verify --quiet` is a probe, not a silencer: it asks whether the object is
 # here, and both answers are acted on loudly.

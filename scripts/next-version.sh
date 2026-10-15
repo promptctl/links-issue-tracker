@@ -34,26 +34,18 @@ fi
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-# Latest CLEAN semver tag: `vX.Y.Z` with no prerelease suffix. The `-*-*` in a
-# refname-sorted list would sort a `v0.2.0-rc1` above `v0.1.9`, so filter
-# prereleases out — the bump must build on the last real release, not an rc.
-# [LAW:no-silent-failure] if there is no such tag we stop rather than inventing
-# a base version, because the first release is a deliberate human act.
-LATEST="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname \
-  | grep -vE '-' \
-  | head -1)"
+# The newest release tag is the base: a prerelease or `v0.2.0.1`-shaped tag is
+# not a release, so the bump never builds on one. [LAW:one-source-of-truth]
+# [LAW:no-silent-failure] if there is no release tag we stop rather than
+# inventing a base version, because the first release is a deliberate human act.
+# shellcheck source=scripts/release-tags.sh
+. "$ROOT_DIR/scripts/release-tags.sh"
+LATEST="$(git tag --list | newest_release_tag)"
 if [[ -z "$LATEST" ]]; then
   echo "no vX.Y.Z tag found to bump from; create the first release tag by hand" >&2
   exit 3
 fi
-
-if ! [[ "$LATEST" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-  echo "latest tag is not vMAJOR.MINOR.PATCH: $LATEST" >&2
-  exit 3
-fi
-MAJOR="${BASH_REMATCH[1]}"
-MINOR="${BASH_REMATCH[2]}"
-PATCH="${BASH_REMATCH[3]}"
+IFS=. read -r MAJOR MINOR PATCH <<< "${LATEST#v}"
 
 # Same operations run every time; only the arithmetic differs by bump kind, and
 # the case is over the domain's own two-value enum. [LAW:dataflow-not-control-flow]

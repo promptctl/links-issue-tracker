@@ -111,6 +111,32 @@ Run it when you touch `tools/licenses` or change a dependency; CI does not.
 The install story is the same one end users follow — see
 [README.md](README.md#install).
 
+### Developing a migration
+
+`./scripts/install.sh` (and `just install`) installs only a tree whose schema a
+published release supports. Before building lit, it compares the tree's highest
+migration with the highest in the newest local `vX.Y.Z` tag, and prints the
+comparison on every run:
+
+```text
+schema-release-check: tree=10 release_tag=v0.18.0 release_schema=9 verdict=refuse
+```
+
+It refuses a tree that is ahead (exit 3) and a checkout with no release tag
+(exit 1). A tree that adds a migration stays ahead until the epic's release
+ships it. Until then:
+
+- Develop the migration with `go test`.
+- Run a `go build` or `just build` binary only in a scratch workspace: `lit
+  init` in a temporary git repo. Never run it inside a real workspace, this
+  checkout included. lit opens the store of whatever repo your cwd is in, and
+  this binary would migrate it to a schema no release can open. Nothing
+  enforces this rule. The install guard covers only `install.sh`.
+
+The guard reads local tags. A stale tag list can refuse a tree that a newer
+release supports (`git fetch origin --tags` fixes that), but it never passes a
+tree that is ahead.
+
 ## Performance envelope
 
 Size performance work to **5x the largest `lit` backlog on this device**, and

@@ -10,6 +10,11 @@
 # owns a `lit` if any; otherwise $GOBIN) and run the same stale-binary
 # detector. Switching modes is a single flag, not a different script.
 #
+# The source build refuses a tree whose migrations reach a schema the newest
+# local vX.Y.Z tag does not (exit 3), and a checkout with no such tag (exit 1);
+# install a release instead. A tree no release supports is for go test and
+# scratch workspaces only (CONTRIBUTING.md).
+#
 # [LAW:single-enforcer] One installer, one target-resolution rule, one stale
 # detector. The "what to install" varies; "where + safety checks" do not.
 # [LAW:one-source-of-truth] Source builds inject version/commit/date/origin via
@@ -125,7 +130,7 @@ while [ $# -gt 0 ]; do
             shift
             ;;
         -h|--help)
-            sed -n '3,15p' "$0"
+            sed -n '3,16p' "$0"
             exit 0
             ;;
         *)
@@ -199,6 +204,20 @@ trap 'rm -rf "$tmp"' EXIT
 
 case "$mode" in
     source)
+        # Refuse a tree whose schema no release supports, before lit is built:
+        # an installed lit runs inside real workspaces, and a migration no
+        # release carries would move a workspace's schema past every release.
+        # The newest local release tag is the comparison's "released"; a stale
+        # tag list only lowers it, so it can refuse a tree it should pass and
+        # never passes one that is ahead. The checker prints the comparison on
+        # every run and exits 3 when the tree is ahead, 1 when the tree cannot
+        # be shown released. It is built, not `go run`, because `go run`
+        # reports every failure as 1. [LAW:single-enforcer]
+        # shellcheck source=scripts/release-tags.sh
+        . "$ROOT_DIR/scripts/release-tags.sh"
+        newest_tag="$(git tag --list | newest_release_tag)"
+        GOFLAGS="${GOFLAGS:+$GOFLAGS }-buildvcs=false" go build -o "$tmp/schema-release-check" ./tools/schema-release-check
+        "$tmp/schema-release-check" "$newest_tag"
         # ldflag-stamp the build so `lit version` reports meaningful identity
         # for source builds (releases stamp via goreleaser; this is the
         # equivalent for ad-hoc checkouts). If we have NO git metadata
@@ -290,6 +309,10 @@ case "$mode" in
         # [LAW:types-are-the-program] reject illegal tag shapes at the
         # boundary so downstream code can trust that release_tag is a
         # safe, expected canonical value.
+        # [LAW:one-source-of-truth] exception: this is release-tags.sh's
+        # pattern, copied because this mode runs piped from curl with no
+        # checkout to source it from. TestReleaseModeAcceptsExactlyTheReleaseTags
+        # holds the copy to the same accept-set.
         if [[ ! "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "error: release tag '$release_tag' is not a canonical semver release tag (expected vX.Y.Z)" >&2
             echo "       --from-release accepts only tags published by the release pipeline" >&2
@@ -389,7 +412,7 @@ case "$mode" in
                 while IFS= read -r name; do
                     [ -z "$name" ] && continue
                     case "$name" in
-                        .|..|*/*|/*)
+                        .|..|*/*)
                             echo "error: archive entry has unsafe path: $name" >&2
                             exit 1 ;;
                     esac
@@ -416,7 +439,7 @@ case "$mode" in
                 while IFS= read -r name; do
                     [ -z "$name" ] && continue
                     case "$name" in
-                        .|..|*/*|/*|*\\*)
+                        .|..|*/*|*\\*)
                             echo "error: archive entry has unsafe path: $name" >&2
                             exit 1 ;;
                     esac
