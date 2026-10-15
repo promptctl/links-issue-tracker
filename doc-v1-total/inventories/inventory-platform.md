@@ -664,10 +664,13 @@ Three modes, one target-resolution rule (`scripts/install.sh`):
   → `$HOME/.local/bin`. If `HOME` is unset at that last step it errors
   `error: cannot determine install directory — $HOME is unset …`.
   `mkdir -p "$TARGET_DIR"`.
+- **Staging, every mode**: a temp dir created **inside `$TARGET_DIR`**
+  (`mktemp -d "$TARGET_DIR/.lit-install.XXXXXX"`) so the final `mv` is atomic; `trap rm -rf`
+  on EXIT. Each mode produces `$tmp/$BIN_NAME`.
 - **Source mode**: `ver=$(git describe --tags --always --dirty)` with a leading `v`
   stripped; empty stays empty so `IsDev` remains true; sources `scripts/cgo-env.sh` and
   `scripts/version-ldflags.sh`; builds with
-  `GOFLAGS=…-buildvcs=false go build -ldflags "-X <pkg>.Version=… -X <pkg>.Commit=… -X <pkg>.Date=… -X <pkg>.Origin=…" -o "$TARGET_DIR/$BIN_NAME" ./cmd/lit`.
+  `GOFLAGS=…-buildvcs=false go build -ldflags "-X <pkg>.Version=… -X <pkg>.Commit=… -X <pkg>.Date=… -X <pkg>.Origin=…" -o "$tmp/$BIN_NAME" ./cmd/lit`.
 - **Release/latest mode**:
   - Requires `curl`; `--latest-release` additionally requires `jq` and reads
     `.tag_name` from the GitHub API.
@@ -679,9 +682,7 @@ Three modes, one target-resolution rule (`scripts/install.sh`):
     `error: unsupported architecture`; OS map `linux|darwin→tar.gz`,
     `mingw*|msys*|cygwin*→windows/zip`, else `error: unsupported OS`.
   - Extractor probes: `tar` for `.tar.gz`, `unzip` for `.zip`.
-  - Downloads `<base>/<tag>/<archive>` and `<base>/<tag>/checksums.txt` into a temp dir created
-    **inside `$TARGET_DIR`** (`mktemp -d "$TARGET_DIR/.lit-install.XXXXXX"`) so the final `mv` is
-    atomic; `trap rm -rf` on EXIT.
+  - Downloads `<base>/<tag>/<archive>` and `<base>/<tag>/checksums.txt` into the staging dir.
   - Expected checksum is extracted with `awk '$2 == want'` (exact field match, not grep)
 ; digest computed by `sha256sum` or `shasum -a 256`, else an explicit error
     naming both tools; a mismatch prints expected/actual and exits 1.
@@ -690,12 +691,15 @@ Three modes, one target-resolution rule (`scripts/install.sh`):
     line; zip names are checked for `/`, `\`, `.`, `..`, leading `/`.
   - Extract, then reject a symlink at the binary path
     (`error: extracted '<bin>' is a symlink; archive rejected`), require a regular
-    file, `chmod +x`, require executable, then
-    `mv -f "$tmp/$BIN_NAME" "$TARGET_DIR/$BIN_NAME"`.
+    file, then `chmod +x`.
+- **Install, every mode**: runs `"$tmp/$BIN_NAME" version`, capturing its stdout; if it fails,
+  prints `error: the newly staged lit failed to run 'lit version'; <target> was left unchanged`
+  and exits 1, leaving the installed binary in place. Otherwise
+  `mv -f "$tmp/$BIN_NAME" "$TARGET_DIR/$BIN_NAME"`.
 - Post-install, unconditional: removes any stale `lnks`/`lnks.exe` in the target
   dir; walks every `PATH` entry, canonicalizing each `lit` candidate, and collects those
   whose realpath differs from the just-installed binary; prints
-  `Installed lit -> <path>` and runs `<installed> version` (errors ignored); prints a
+  `Installed lit -> <path>` followed by the captured `version` output; prints a
   `WARNING: other 'lit' binaries found on PATH that were NOT updated:` block listing each
 .
 
