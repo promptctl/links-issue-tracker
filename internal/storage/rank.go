@@ -13,7 +13,8 @@ import (
 // with one of its own ancestors. No comparable frame holds both — the
 // contained issue's representative would be (or sit under) the container
 // itself — so no frame-coherent rank order between them exists, and the same
-// request is refused the same way on every run.
+// request is refused the same way on every run. Its advice holds whichever
+// side was being moved, because a rank set names no moved side to address.
 // [LAW:one-source-of-truth] Both engines resolve frames to this one type and
 // return it unreworded, so they cannot word or classify the refusal
 // differently.
@@ -23,7 +24,7 @@ type FrameContainmentError struct {
 }
 
 func (e FrameContainmentError) Error() string {
-	return fmt.Sprintf("%s is inside %s; no comparable frame contains both — rank it against a sibling instead", e.ContainedID, e.ContainerID)
+	return fmt.Sprintf("%s is inside %s; no comparable frame contains both, so neither can be ranked relative to the other — rank each against its own siblings instead", e.ContainedID, e.ContainerID)
 }
 
 // RefusesCommand marks FrameContainmentError as a model.Refusal.

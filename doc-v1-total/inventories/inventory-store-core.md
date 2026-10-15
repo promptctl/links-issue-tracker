@@ -2892,7 +2892,7 @@ ORDER BY r.dst_id LIMIT 1
 - Revisiting a seen node → `fmt.Errorf("ancestor chain of %s: parent cycle at %s", id, parent)`.
 - Only non-deleted parents are followed, so a soft-deleted parent truncates the chain.
 
-`storage.FrameContainmentError` — `internal/storage/rank.go`, shared with the memory engine: fields `ContainerID`, `ContainedID`; `Error()` = `fmt.Sprintf("%s is inside %s; no comparable frame contains both — rank it against a sibling instead", e.ContainedID, e.ContainerID)`; it is a `model.Refusal`.
+`storage.FrameContainmentError` — `internal/storage/rank.go`, shared with the memory engine: fields `ContainerID`, `ContainedID`; `Error()` = `fmt.Sprintf("%s is inside %s; no comparable frame contains both, so neither can be ranked relative to the other — rank each against its own siblings instead", e.ContainedID, e.ContainerID)`; it is a `model.Refusal`.
 
 `resolveFrameRepresentatives(chains)` — `internal/store/ranking.go`:
 1. Builds per-chain membership maps id→index.

@@ -891,7 +891,7 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 
 **`parentOf(childID)`** — the first `RelParentChild` edge whose `SrcID == childID` and whose parent record exists and is **not** `model.Deleted`. A deleted parent is skipped: work in the trash frames nothing.
 
-**`storage.FrameContainmentError{ContainerID, ContainedID}`** (`internal/storage/rank.go`, shared with the Dolt store) — `Error()` renders `"%s is inside %s; no comparable frame contains both — rank it against a sibling instead"`; it is a `model.Refusal`.
+**`storage.FrameContainmentError{ContainerID, ContainedID}`** (`internal/storage/rank.go`, shared with the Dolt store) — `Error()` renders `"%s is inside %s; no comparable frame contains both, so neither can be ranked relative to the other — rank each against its own siblings instead"`; it is a `model.Refusal`.
 
 **`frameRepresentatives(chains)`**
 - Builds an id→depth map per chain.
