@@ -2274,7 +2274,7 @@ func parentWiring(t *testing.T, ctx context.Context, st storage.Store, clk *cloc
 func anImportFileThatBreaksARuleIsRefusedWhole(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	existing := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "existing", Topic: "core", IssueType: model.TypeEpic})
 	before := mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true, IncludeArchived: true})
-	title, topic, epicType, shortTopic, blank := "imported", "core", "epic", "x", " "
+	title, topic, epicType, taskType, shortTopic, blank := "imported", "core", "epic", "task", "x", " "
 	commaLabel := []string{"a,b"}
 	commaAssignee := "Doe, J"
 	lands := storage.ImportTreeSpec{LocalID: "e", Title: "lands", IssueType: "epic", Topic: "core"}
@@ -2318,6 +2318,16 @@ func anImportFileThatBreaksARuleIsRefusedWhole(t *testing.T, ctx context.Context
 			storage.ImportTreeSpec{LocalID: "a", Title: "a", IssueType: "epic", Topic: "core", BlockedBy: []string{"b"}},
 			storage.ImportTreeSpec{LocalID: "b", Title: "b", IssueType: "epic", Topic: "core", BlockedBy: []string{"a"}},
 		)},
+		{"ImportTree(a blocked_by naming one record twice)", tree(lands,
+			storage.ImportTreeSpec{LocalID: "b", Title: "b", IssueType: "epic", Topic: "core", BlockedBy: []string{"e", "e"}},
+		)},
+		{"ImportTree(a task blocked by the epic it sits under)", tree(lands,
+			storage.ImportTreeSpec{LocalID: "t", Title: "t", IssueType: "task", Topic: "core", Parent: "e", BlockedBy: []string{"e"}},
+		)},
+		{"ImportTree(a task blocked by an epic two levels above it)", tree(lands,
+			storage.ImportTreeSpec{LocalID: "s", Title: "s", IssueType: "epic", Topic: "core", Parent: "e"},
+			storage.ImportTreeSpec{LocalID: "t", Title: "t", IssueType: "task", Topic: "core", Parent: "s", BlockedBy: []string{"e"}},
+		)},
 		{"BulkApply(no documents)", bulk()},
 		{"BulkApply(a create missing its topic)", bulk(storage.BulkIssueSpec{Title: &title, IssueType: &epicType})},
 		{"BulkApply(a topic too short to be one, after a create that would land)", bulk(epic("e", ""),
@@ -2334,6 +2344,10 @@ func anImportFileThatBreaksARuleIsRefusedWhole(t *testing.T, ctx context.Context
 			storage.BulkIssueSpec{ID: existing.ID, Assignee: &commaAssignee})},
 		{"BulkApply(a duplicate local_id)", bulk(epic("a", ""), epic("a", ""))},
 		{"BulkApply(a blocked_by cycle)", bulk(epic("a", "b"), epic("b", "a"))},
+		{"BulkApply(a blocked_by naming one existing issue twice)", bulk(
+			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &epicType, BlockedBy: []string{existing.ID, existing.ID}})},
+		{"BulkApply(a task with no local_id blocked by the epic it sits under)", bulk(epic("e", ""),
+			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &taskType, Parent: "e", BlockedBy: []string{"e"}})},
 	} {
 		assertRefused(t, imp.do(), imp.what)
 	}

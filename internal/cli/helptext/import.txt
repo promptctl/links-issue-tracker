@@ -3,12 +3,20 @@ format: .yaml or .yml is the YAML bulk format, which creates or updates;
 any other extension is the JSON tree spec, which only creates.
 
 Both formats reject any key they do not name, so a misspelled field fails
-the whole file rather than being dropped. Structure is checked before
-anything is written — required keys, duplicate ids, unresolvable
-references, cycles, and (in a JSON file) type and priority. The remaining
-value rules below are enforced as each issue is created, so a bad topic
-or label fails partway through and the creates already made are rolled
-back. See Results for what rollback covers.
+the whole file rather than being dropped. Every rule the file alone can
+answer is checked before anything is written — required keys, duplicate
+ids, and every rule below, about values and about references within the
+file — and a file that breaks one exits 3 with nothing changed. A JSON
+file can name only its own records, so one that passes this check is
+written whole.
+
+A YAML file can also name issues that already exist, and a rule about
+one of those is checked as the file is written: an id, parent or
+blocked_by naming no existing issue, a parent that is not an epic, a
+blocked_by naming an epic the new issue sits under, or an update that
+changes type to or from epic. Every create and update is written before
+any blocked_by, so a file that breaks one of these fails partway
+through. See Results for what rollback covers.
 
 JSON tree spec (creates only)
 
@@ -82,6 +90,8 @@ YAML bulk file (creates and updates)
 
 Values both formats enforce
 
+  title may not be empty or only whitespace, on a create or an update.
+
   type is one of task, feature, bug, chore, epic.
 
   priority is 0 (normal) or 1 (urgent). No other number is accepted.
@@ -92,14 +102,15 @@ Values both formats enforce
 
   labels are lowercased and deduplicated, and may not contain commas.
 
+  assignee may not contain a comma.
+
   id, local_id, parent and blocked_by values are matched literally:
   leading or trailing whitespace in any of them is rejected, not trimmed.
 
   A local_id may not be used twice in one file, a record may not name its
-  own local_id in its own blocked_by, and parent/blocked_by references
-  within the file may not form a cycle. A blocked_by pointing at an issue
-  that already exists is also rejected if it would close a cycle in the
-  blocked-by graph.
+  own local_id in its own blocked_by or name any entry there twice,
+  parent/blocked_by references within the file may not form a cycle,
+  and a record may not be blocked_by an epic it sits under in the file.
 
   A file with zero records or zero documents is an error.
 
