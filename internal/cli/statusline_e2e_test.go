@@ -230,14 +230,17 @@ func TestEachStatuslineWriteRecordsItsFactsOnTheEvent(t *testing.T) {
 	if replaced, ok := facts["statusline.replaced"].(string); !ok || !strings.Contains(replaced, file) {
 		t.Fatalf("next over an unreadable file: statusline.replaced = %v; want the reason, naming %s", facts["statusline.replaced"], file)
 	}
-	if got := facts["statusline.changed"]; !reflect.DeepEqual(got, []any{"next"}) {
-		t.Fatalf("next over an unreadable file: statusline.changed = %v; want [next]", got)
+	if got := facts["statusline.changed"]; !reflect.DeepEqual(got, []any{"working_on", "next"}) {
+		t.Fatalf("next over an unreadable file: statusline.changed = %v; want [working_on next]", got)
 	}
 }
 
 // A statusline write that fails is on the event with its error, beside what
 // the write had done before it failed; the command itself does not fail.
 func TestAFailedStatuslineWriteIsRecordedOnTheEvent(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("a read-only directory does not stop root from writing")
+	}
 	root := t.TempDir()
 	litDir := filepath.Join(root, ".lit")
 	if err := os.MkdirAll(litDir, 0o755); err != nil {

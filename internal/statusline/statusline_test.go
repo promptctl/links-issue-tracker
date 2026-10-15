@@ -165,8 +165,8 @@ func TestFileEncodesTheDocumentedShape(t *testing.T) {
 func TestACommandWithNoFactsWritesNothing(t *testing.T) {
 	loc := testLocation(t)
 	out, err := Write(loc, nil, at)
-	if err != nil || !reflect.DeepEqual(out, Outcome{}) {
-		t.Fatalf("Write(no facts) = %+v, %v; want the zero Outcome", out, err)
+	if want := (Outcome{Changed: []string{}}); err != nil || !reflect.DeepEqual(out, want) {
+		t.Fatalf("Write(no facts) = %+v, %v; want %+v", out, err, want)
 	}
 	for _, path := range []string{loc.File, loc.Exclude} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -235,24 +235,30 @@ func TestTheExcludeEntryIsAppendedOnItsOwnLine(t *testing.T) {
 	}
 }
 
-// Each write names the slots whose records it changed, and only those: a slot
-// it rewrote with the record already there is not changed.
+// Each write names the slots whose records it changed, and only those. A slot
+// its facts did not reach is not changed; one re-recorded with the ticket it
+// already held is, because its recorded_at moved.
 func TestAWriteNamesTheSlotsItChanged(t *testing.T) {
 	loc := testLocation(t)
-	for _, step := range []struct {
+	for i, step := range []struct {
 		facts []Fact
 		want  []string
 	}{
 		{[]Fact{Started{alpha}}, []string{"working_on"}},
 		{[]Fact{Picked{&bravo}}, []string{"next"}},
-		{[]Fact{Started{alpha}}, []string{}},
+		{[]Fact{Started{alpha}}, []string{"working_on"}},
 		{[]Fact{Retitled{Ticket{ID: "t-other", Title: "Other"}}}, []string{}},
+		{[]Fact{Invalidated{"t-other"}}, []string{}},
 		{[]Fact{Retitled{alphaRenamed}}, []string{"working_on"}},
 		{[]Fact{Invalidated{bravo.ID}}, []string{"next"}},
 		{[]Fact{Started{bravo}, Picked{&alpha}}, []string{"working_on", "next"}},
 	} {
-		if got := write(t, loc, step.facts...).Changed; !reflect.DeepEqual(got, step.want) {
-			t.Fatalf("Write(%v).Changed = %q, want %q", step.facts, got, step.want)
+		out, err := Write(loc, step.facts, at.Add(time.Duration(i)*time.Minute))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(out.Changed, step.want) {
+			t.Fatalf("Write(%v).Changed = %q, want %q", step.facts, out.Changed, step.want)
 		}
 	}
 }
@@ -260,6 +266,9 @@ func TestAWriteNamesTheSlotsItChanged(t *testing.T) {
 // A write that fails after adding the exclude entry says it added it: the
 // entry is in the exclude file whether or not the file itself was written.
 func TestAFailedWriteReportsWhatItHadDone(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("a read-only directory does not stop root from writing")
+	}
 	loc := testLocation(t)
 	dir := filepath.Dir(loc.File)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -273,12 +282,39 @@ func TestAFailedWriteReportsWhatItHadDone(t *testing.T) {
 	if err == nil {
 		t.Fatal("Write into a read-only directory succeeded; want an error")
 	}
-	want := Outcome{Created: true, ExcludeAdded: true}
+	want := Outcome{Changed: []string{}, Created: true, ExcludeAdded: true}
 	if !reflect.DeepEqual(out, want) {
 		t.Fatalf("failed Write = %+v, want %+v", out, want)
 	}
 	if raw, readErr := os.ReadFile(loc.Exclude); readErr != nil || !strings.Contains(string(raw), excludeEntry) {
 		t.Fatalf("exclude file = %q, %v; want the entry the Outcome reports", raw, readErr)
+	}
+}
+
+// A rewrite of an unreadable file that fails does not say the file was
+// replaced: the damaged file is still on disk.
+func TestAFailedRewriteOfAnUnreadableFileIsNotReplaced(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("a read-only directory does not stop root from writing")
+	}
+	loc := testLocation(t)
+	dir := filepath.Dir(loc.File)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(loc.File, []byte("{working_on"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	out, err := Write(loc, Facts{Started{alpha}}, at)
+	if err == nil {
+		t.Fatal("Write into a read-only directory succeeded; want an error")
+	}
+	if want := (Outcome{Changed: []string{}}); !reflect.DeepEqual(out, want) {
+		t.Fatalf("failed rewrite = %+v, want %+v", out, want)
 	}
 }
 
@@ -301,6 +337,11 @@ func TestAnUnreadableFileIsReplacedAndReported(t *testing.T) {
 			out := write(t, loc, Picked{&bravo})
 			if out.Replaced == nil || out.Created {
 				t.Fatalf("write over %s = %+v; want Replaced set and Created false", name, out)
+			}
+			// Nothing of the old file could be read, so no slot can be said to
+			// hold what it held before.
+			if want := []string{"working_on", "next"}; !reflect.DeepEqual(out.Changed, want) {
+				t.Fatalf("write over %s changed %q, want %q", name, out.Changed, want)
 			}
 			want := File{SchemaVersion: SchemaVersion, Next: &Next{Ticket: &bravo, RecordedAt: at}}
 			if got := readFile(t, loc); !reflect.DeepEqual(got, want) {

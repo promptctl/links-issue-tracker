@@ -125,15 +125,18 @@ none), and `reach` is what this checkout can do about it:
 
 ## What a statusline-file write records
 
-Every command that opens the workspace's store records what it did to the
-checkout's [statusline file](statusline.md), even when the command itself then
-fails. A command that learned nothing for the file writes nothing to it and
-records zero bytes and no changed slots. A command that never opens the store,
-such as `lit version`, writes none of these keys.
+Every command that opens the store of the workspace it runs in records what it
+did to the checkout's [statusline file](statusline.md) once it has run, even
+when it ends in an error. A command that learned nothing for the file writes
+nothing to it and records zero bytes and no changed slots. None of these keys
+is written by a line whose `outcome` is `panic` or `interrupted`, which never
+reached the write; by a command that never opens that store, such as
+`lit version`; or by one that reads stores by their storage directory, such as
+`lit stores --counts` and `lit ls --at`.
 
 | Key | Meaning |
 | --- | --- |
-| `statusline.changed` | The file's slots whose records this write changed: `working_on`, `next`, both, or `[]`. A slot rewritten with the record it already held is not listed. |
+| `statusline.changed` | The file's slots whose records this write changed: `working_on`, `next`, both, or `[]`. A slot re-recorded with the ticket it already held is listed, since its `recorded_at` moved; a slot the command's facts did not reach is not. When the file was replaced, both are listed. |
 | `statusline.created` | Whether the file did not exist before this write. |
 | `statusline.exclude_added` | Whether this write added the file's entry to the repository's `info/exclude`. Only a write that creates the file adds it, and only when the entry is missing. |
 | `statusline.replaced` | Why the file already on disk could not be read and was rewritten from this command's facts alone, or `null`. |

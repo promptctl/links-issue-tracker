@@ -37,7 +37,7 @@ func recordStatusline(ctx context.Context, ws workspace.Info, facts statusline.F
 // store access and no lock to the write. [LAW:nothing-unseen]
 func recordStatuslineEvent(ctx context.Context, out statusline.Outcome, err error) {
 	telemetry.Count(ctx, "statusline.bytes", out.Bytes)
-	telemetry.Set(ctx, "statusline.changed", append([]string{}, out.Changed...))
+	telemetry.Set(ctx, "statusline.changed", out.Changed)
 	telemetry.Set(ctx, "statusline.created", out.Created)
 	telemetry.Set(ctx, "statusline.exclude_added", out.ExcludeAdded)
 	telemetry.Set(ctx, "statusline.replaced", errorText(out.Replaced))
