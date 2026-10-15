@@ -1394,7 +1394,7 @@ func (s *Store) AddComment(ctx context.Context, in storage.AddCommentInput) (mod
 	}
 	body := strings.TrimSpace(in.Body)
 	if body == "" {
-		return model.Comment{}, model.Issue{}, errors.New("comment body is required")
+		return model.Comment{}, model.Issue{}, model.ValidationError{Message: "comment body is required"}
 	}
 	now := s.clock.Now()
 	comment := model.Comment{ID: "cmt-" + uuid.NewString(), IssueID: in.IssueID, Body: body, CreatedAt: now, CreatedBy: strings.TrimSpace(in.CreatedBy)}

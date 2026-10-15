@@ -9,6 +9,25 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
+// FrameContainmentError refuses a rank request that names an issue together
+// with one of its own ancestors. No comparable frame holds both — the
+// contained issue's representative would be (or sit under) the container
+// itself — so no frame-coherent rank order between them exists, and the same
+// request is refused the same way on every run.
+// [LAW:one-source-of-truth] Both engines resolve frames to this one type, so
+// they cannot word or classify the refusal differently.
+type FrameContainmentError struct {
+	ContainerID string
+	ContainedID string
+}
+
+func (e FrameContainmentError) Error() string {
+	return fmt.Sprintf("%s is inside %s; no comparable frame contains both — rank it against a sibling instead", e.ContainedID, e.ContainerID)
+}
+
+// RefusesCommand marks FrameContainmentError as a model.Refusal.
+func (FrameContainmentError) RefusesCommand() {}
+
 // RankMove reports the pair a relative rank operation actually applied to
 // after frame resolution: MovedID was re-ranked relative to AnchorID. When
 // the named issue and target are frame-mates these are the inputs unchanged;

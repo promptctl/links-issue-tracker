@@ -851,7 +851,7 @@ Evidence: a create/close/reopen/archive sequence yields exactly 4 events with ac
 
 `store.go`:
 1. `s.GetIssue(ctx, in.IssueID)` — validates existence and doubles as the returned issue, avoiding a second read (`store.go`, doc).
-2. `body := strings.TrimSpace(in.Body)`; empty → `errors.New("comment body is required")` (`store.go`).
+2. `body := strings.TrimSpace(in.Body)`; empty → `model.ValidationError{Message: "comment body is required"}` (`store.go`).
 3. `now := time.Now().UTC()`; `comment := model.Comment{ID: "cmt-" + uuid.NewString(), IssueID: in.IssueID, Body: body, CreatedAt: now, CreatedBy: strings.TrimSpace(in.CreatedBy)}`; blank `CreatedBy` → `"unknown"` (`store.go`).
 4. `withMutation(ctx, "add comment", ...)` runs:
 ```sql
@@ -2892,11 +2892,11 @@ ORDER BY r.dst_id LIMIT 1
 - Revisiting a seen node → `fmt.Errorf("ancestor chain of %s: parent cycle at %s", id, parent)`.
 - Only non-deleted parents are followed, so a soft-deleted parent truncates the chain.
 
-`frameContainmentError` — `internal/store/ranking.go`: fields `containerID`, `containedID`; `Error()` = `fmt.Sprintf("%s is inside %s; no comparable frame contains both — rank it against a sibling instead", e.containedID, e.containerID)`.
+`storage.FrameContainmentError` — `internal/storage/rank.go`, shared with the memory engine: fields `ContainerID`, `ContainedID`; `Error()` = `fmt.Sprintf("%s is inside %s; no comparable frame contains both — rank it against a sibling instead", e.ContainedID, e.ContainerID)`; it is a `model.Refusal`.
 
 `resolveFrameRepresentatives(chains)` — `internal/store/ranking.go`:
 1. Builds per-chain membership maps id→index.
-2. Containment check: if any chain's head (`chain[0]`) appears in another chain at index > 0, returns `&frameContainmentError{containerID: chain[0], containedID: chains[j][0]}`.
+2. Containment check: if any chain's head (`chain[0]`) appears in another chain at index > 0, returns `storage.FrameContainmentError{ContainerID: chain[0], ContainedID: chains[j][0]}`.
 3. LCA: the first element of `chains[0]` present in every other chain; `lcaID == ""` means no shared ancestor.
 4. Representatives: with no LCA, each chain's **root** (`chain[len-1]`); with an LCA, the element **one level below** the LCA in each chain: `chain[memberships[i][lcaID]-1]`. Frame-mates therefore resolve to themselves.
 
@@ -2907,17 +2907,17 @@ Pinned cases — `internal/store/ranking_frame_test.go`:
 - `{{c1,e1,p},{c2,e2,p},{x}}` → `[p p x]`
 - `{{c1,e1,p},{c2,e2,p}}` → `[e1 e2]`
 - `{{g,s,e},{c,e}}` → `[s c]`
-- `{{c,e},{e}}`, `{{e},{g,s,e}}`, `{{e},{x},{c,e}}` → `frameContainmentError`
+- `{{c,e},{e}}`, `{{e},{g,s,e}}`, `{{e},{x},{c,e}}` → `storage.FrameContainmentError`
 
-`resolveComparableFrame(issueChain, targetChain)` — `internal/store/ranking.go`: wraps `resolveFrameRepresentatives` for the pair and rewrites containment errors:
-- when the container is the issue itself: `fmt.Errorf("cannot rank %s relative to %s: %s contains it; rank it against a sibling instead", issueChain[0], targetChain[0], issueChain[0])`;
-- otherwise: `fmt.Errorf("cannot rank %s relative to %s: %s is inside %s; rank it against a sibling instead", issueChain[0], targetChain[0], issueChain[0], targetChain[0])`.
+`resolveComparableFrame(issueChain, targetChain)` — `internal/store/ranking.go`: wraps `resolveFrameRepresentatives` for the pair and rewrites containment errors as `model.ValidationError`:
+- when the container is the issue itself: `fmt.Sprintf("cannot rank %s relative to %s: %s contains it; rank it against a sibling instead", issueChain[0], targetChain[0], issueChain[0])`;
+- otherwise: `fmt.Sprintf("cannot rank %s relative to %s: %s is inside %s; rank it against a sibling instead", issueChain[0], targetChain[0], issueChain[0], targetChain[0])`.
 Returns `(reps[0], reps[1])` as `(movedID, anchorID)`.
 
 Pinned pair cases — `internal/store/ranking_frame_test.go`: top-level pair unchanged; same-epic siblings unchanged; standalone vs child → `(x, e)`; child vs standalone → `(e, x)`; two epics' children → `(e1, e2)`; grandchild vs child of shared epic → `(s, c)`; either containment direction errors.
 
 `resolveRankPair(ctx, issueID, targetID)` — `internal/store/ranking.go`:
-- `issueID == targetID` → `errors.New("cannot rank an issue relative to itself")`.
+- `issueID == targetID` → `model.ValidationError` `"cannot rank an issue relative to itself"`.
 - `GetIssue(targetID)` then `GetIssue(issueID)` — in that order.
 - Both ancestor chains, then `resolveComparableFrame`.
 - `GetIssue(anchorID)` for the hydrated anchor whose `Rank` seeds midpoint math.
@@ -2961,16 +2961,16 @@ Frame behavior pinned by tests — `internal/store/ranking_frame_test.go`:
 - `RankAbove(child, own epic)` errors containing `"inside"`; `RankBelow(epic, own child)` errors containing `"contains"`.
 
 **RankSet(ids)** — `internal/store/ranking.go`:
-- Validation `rankSetValidateIDs` — `internal/store/ranking.go`: fewer than 2 ids → `errors.New("rank set: need at least 2 IDs to establish order")`; an empty-string id → `errors.New("rank set: empty ID in input")`; a repeated id → `fmt.Errorf("rank set: duplicate ID %q in input", id)`.
-- `resolveRankSet` — `internal/store/ranking.go`: per id, `GetIssue` then `ancestorChain`; `resolveFrameRepresentatives` errors are wrapped `fmt.Errorf("rank set: %w", err)`; two named ids collapsing to the same representative →
-  `fmt.Errorf("rank set: %s and %s both resolve to %s — their relative order is internal to %s and cannot be set against outside issues; run rank set among siblings instead", prior, id, reps[i], reps[i])`.
+- Validation `rankSetValidateIDs` — `internal/store/ranking.go`: each refusal is a `model.ValidationError`: fewer than 2 ids → `"rank set: need at least 2 IDs to establish order"`; an empty-string id → `"rank set: empty ID in input"`; a repeated id → `"rank set: duplicate ID %q in input"`.
+- `resolveRankSet` — `internal/store/ranking.go`: per id, `GetIssue` then `ancestorChain`; `resolveFrameRepresentatives` errors are wrapped `fmt.Errorf("rank set: %w", err)`; two named ids collapsing to the same representative → `model.ValidationError`
+  `fmt.Sprintf("rank set: %s and %s both resolve to %s — their relative order is internal to %s and cannot be set against outside issues; run rank set among siblings instead", prior, id, reps[i], reps[i])`.
   Returns `[]storage.RankSetResolution{{NamedID, RankedID}}` parallel to the input order.
 - In `withMutation(ctx, "rank set", …)`, `unrankedAmongTx` first reads which representatives are live and hold no key, one `SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank = '' AND id IN (…)` per `idBatches` batch, error → `fmt.Errorf("read which of %v hold no key: %w", batch, err)` wrapped `fmt.Errorf("rank set: %w", err)`; each is placed at the frame's bottom by `bottomEdge.placeBeyondTx`, error wrapped `fmt.Errorf("rank set: %w", err)`. Then the frame's keys are read lowest first, ties by id:
   ```sql
   SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' AND <frame> = ? ORDER BY item_rank ASC, id ASC
   ```
   bound with the frame alone, through `rankRows`; error → `fmt.Errorf("rank set: read the keys of frame %q: %w", f, err)`.
-- A permutation leaves two slots on one key sharing it, and a listing breaks the tie by id. Where adjacent slots share a key and the id of the issue ordered into the later one sorts before the earlier one's, the set is refused: `fmt.Errorf("rank set: %s and %s share the key %q, which a listing breaks by id, so %s cannot be written above %s; separate them first with `lit rank %s --above %s`", …)`.
+- A permutation leaves two slots on one key sharing it, and a listing breaks the tie by id. Where adjacent slots share a key and the id of the issue ordered into the later one sorts before the earlier one's, the set is refused with a `model.ValidationError`: `fmt.Sprintf("rank set: %s and %s share the key %q, which a listing breaks by id, so %s cannot be written above %s; separate them first with `lit rank %s --above %s`", …)`.
 - `storage.RankSetOrder(f, occupants, ranked)` (`internal/storage/rank.go`) names each slot's new occupant: the representatives in the order named, then every other frame member in its current order. A representative that is not one of the frame's ranked members makes the result longer than the frame → `fmt.Errorf("rank set: %d issues resolved into %s but the frame holds %d ranked — refusing to rewrite a partial order", len(ordered), f, len(occupants))`. The memory engine applies the same function to its slots (`internal/storage/memory/rank.go`).
 - Each slot's key passes to its new occupant; a slot whose occupant is unchanged is not written. `writeRanksTx` writes the moved keys in one statement per `idBatches` batch — `UPDATE issues SET item_rank = CASE id WHEN ? THEN ? … END, updated_at = COALESCE(CASE id WHEN ? THEN ? … END, updated_at) WHERE deleted_at IS NULL AND id IN (…)`, error → `fmt.Errorf("rewrite the keys of %v: %w", batch, err)`, wrapped `fmt.Errorf("rank set: %w", err)`. A write is `touched` only for a representative whose key changed; it takes one shared `now`, and every other write is bound NULL, so it keeps its `updated_at`. No key is minted, so the frame holds the same set of keys before and after, and a repeat of an order that has arrived writes nothing.
 - Atomic: all assignments in one mutation.

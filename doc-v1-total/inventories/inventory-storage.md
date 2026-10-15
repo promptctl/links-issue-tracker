@@ -762,7 +762,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 
 **`AddComment`**
 - `getIssue(in.IssueID)` first → missing issue is `NotFoundError`.
-- `body = strings.TrimSpace(in.Body)`; empty → `errors.New("comment body is required")`.
+- `body = strings.TrimSpace(in.Body)`; empty → `model.ValidationError{Message: "comment body is required"}`.
 - Comment: `ID: "cmt-" + uuid.NewString()`, `IssueID`, trimmed `Body`, `CreatedAt: e.now()`, `CreatedBy: authorOr(in.CreatedBy)`.
 - Appends and returns `(comment, issue, nil)` — the issue read is the caller's answer too, since a comment never changes the issue row.
 - **`AddComment` records no history event.**
@@ -866,15 +866,15 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 **`rankRelative(issueID, targetID, at)`**
 - `resolveRankPair`; `detach(move.MovedID)`; `anchor := slices.Index(e.order, move.AnchorID)`; `insertAt(anchor + int(at), move.MovedID)`; returns the move.
 
-**`RankToTop` / `RankToBottom`** — `rankToEdge(issueID, storage.RankTop|RankBottom)` (`internal/storage/memory/rank.go`): `mustRankable` (a missing id is `NotFoundError`; a deleted one → `fmt.Errorf("cannot rank deleted issue %s; restore it first", id)`), then `orderEdgeFor(placement)`. The ends are the issue's own frame's: the result carries `Frame: e.frameOf(issueID)`, and an issue with no frame-mates returns with `Moved` false. An issue already past the edge among its frame-mates returns with `Moved` false; otherwise it is `detach`ed and inserted at `edge.positionIn` of its frame-mates' positions.
+**`RankToTop` / `RankToBottom`** — `rankToEdge(issueID, storage.RankTop|RankBottom)` (`internal/storage/memory/rank.go`): `mustRankable` (a missing id is `NotFoundError`; a deleted one → `model.ValidationError` with message `"cannot rank deleted issue %s; restore it first"`), then `orderEdgeFor(placement)`. The ends are the issue's own frame's: the result carries `Frame: e.frameOf(issueID)`, and an issue with no frame-mates returns with `Moved` false. An issue already past the edge among its frame-mates returns with `Moved` false; otherwise it is `detach`ed and inserted at `edge.positionIn` of its frame-mates' positions.
 
 **`RankSet(ids)`**
-- `len(ids) < 2` → `errors.New("rank set: need at least 2 IDs to establish order")`.
-- Empty id → `errors.New("rank set: empty ID in input")`.
-- Duplicate id → `fmt.Errorf("rank set: duplicate ID %q in input", id)`.
+- `len(ids) < 2` → `model.ValidationError` `"rank set: need at least 2 IDs to establish order"`.
+- Empty id → `model.ValidationError` `"rank set: empty ID in input"`.
+- Duplicate id → `model.ValidationError` `"rank set: duplicate ID %q in input"`.
 - Builds an ancestor chain per id (missing id → `NotFoundError` from `ancestorChain`).
 - `frameRepresentatives(chains)`; error wrapped as `fmt.Errorf("rank set: %w", err)`.
-- **Two named ids collapsing onto one representative is refused**: `"rank set: %s and %s both resolve to %s — their relative order is internal to %s and cannot be set against outside issues; run rank set among siblings instead"`.
+- **Two named ids collapsing onto one representative is refused** with a `model.ValidationError`: `"rank set: %s and %s both resolve to %s — their relative order is internal to %s and cannot be set against outside issues; run rank set among siblings instead"`.
 - Rewrites the frame's own slots in place with `storage.RankSetOrder` — the representatives first, in the order named, then every other frame-mate in its current order; nothing outside the frame moves (`internal/storage/rank.go`).
 - Returns one `RankSetResolution{NamedID, RankedID}` per input, in input order.
 
@@ -882,21 +882,21 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 **`insertAt`** — `slices.Insert`; **clamps nothing**, deliberately: a clamp would turn a resolution bug into a silent placement at the top of the backlog.
 
 **`resolveRankPair(issueID, targetID)`** — both relative verbs route through this one resolution, so cross-frame semantics cannot drift between above and below.
-- `issueID == targetID` → `errors.New("cannot rank an issue relative to itself")`.
+- `issueID == targetID` → `model.ValidationError` `"cannot rank an issue relative to itself"`.
 - `mustRecord(targetID)` **before** `mustRecord(issueID)`.
 - Builds both ancestor chains, calls `frameRepresentatives`.
-- A `*frameContainmentError` is re-worded by which side contains which: if `containment.containerID == issueID` → `"cannot rank %s relative to %s: %s contains it; rank it against a sibling instead"`; else → `"cannot rank %s relative to %s: %s is inside %s; rank it against a sibling instead"`.
+- A `storage.FrameContainmentError` is re-worded, as a `model.ValidationError`, by which side contains which: if `containment.ContainerID == issueID` → `"cannot rank %s relative to %s: %s contains it; rank it against a sibling instead"`; else → `"cannot rank %s relative to %s: %s is inside %s; rank it against a sibling instead"`.
 - Returns `RankMove{MovedID: reps[0], AnchorID: reps[1]}`.
 
 **`ancestorChain(id)`** — self first, root last, following only parents that are still there. Missing id → `NotFoundError`. A parent cycle → `fmt.Errorf("ancestor chain of %s: parent cycle at %s", id, parent)`.
 
 **`parentOf(childID)`** — the first `RelParentChild` edge whose `SrcID == childID` and whose parent record exists and is **not** `model.Deleted`. A deleted parent is skipped: work in the trash frames nothing.
 
-**`frameContainmentError{containerID, containedID}`** — `Error()` renders `"%s is inside %s; no comparable frame contains both — rank it against a sibling instead"`.
+**`storage.FrameContainmentError{ContainerID, ContainedID}`** (`internal/storage/rank.go`, shared with the Dolt store) — `Error()` renders `"%s is inside %s; no comparable frame contains both — rank it against a sibling instead"`; it is a `model.Refusal`.
 
 **`frameRepresentatives(chains)`**
 - Builds an id→depth map per chain.
-- If any chain's head appears at depth > 0 in another chain, returns `&frameContainmentError{containerID: chain[0], containedID: chains[j][0]}`.
+- If any chain's head appears at depth > 0 in another chain, returns `storage.FrameContainmentError{ContainerID: chain[0], ContainedID: chains[j][0]}`.
 - Finds the lowest common ancestor as the first element of chain 0 present in all others (common ancestors form a shared suffix of every chain).
 - With no common ancestor (`lowestCommon == ""`), each chain's representative is its **root** — the top level is the frame that contains everything.
 - Otherwise the representative is the element **one level below** the LCA in that chain: `chain[depths[i][lowestCommon]-1]`.
@@ -1250,7 +1250,7 @@ Stated in `internal/storage/memory/doc.go`:
 
 **`rank_verbs_refuse_a_deleted_issue`**
 - Fixture: an epic with children `gone`, `sibling`, `bystander` in that order; `Delete{}` applied to `gone`. Each of `RankToTop(gone)`, `RankToBottom(gone)`, `RankAbove(gone, sibling)`, `RankBelow(gone, sibling)`, `RankAbove(sibling, gone)`, `RankSet([gone, sibling])` is an error.
-- Each of those errors' `Error()` is exactly `"cannot rank deleted issue <gone.ID>; restore it first"`.
+- Each of those errors' `Error()` is exactly `"cannot rank deleted issue <gone.ID>; restore it first"`, and each is a `model.ValidationError`.
 - `bystander` is still in the default listing afterwards.
 - `bystander`'s `Rank` (via `GetIssue`) is unchanged.
 - `sibling` precedes `bystander` in the default listing.

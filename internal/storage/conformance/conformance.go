@@ -1714,6 +1714,7 @@ func rankVerbsRefuseADeletedIssue(t *testing.T, ctx context.Context, st storage.
 		if err.Error() != wantRefusal {
 			t.Errorf("%s refused with %q; want exactly %q", r.verb, err.Error(), wantRefusal)
 		}
+		assertRefused(t, err, r.verb+"(deleted issue)")
 	}
 
 	// Nothing that was not named may have moved, and nothing may have fallen out
@@ -2031,6 +2032,11 @@ func commentsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk 
 	if withComment.ID != issue.ID {
 		t.Errorf("AddComment returned issue %q, want %q", withComment.ID, issue.ID)
 	}
+	// A blank body is refused, not stored: the rule lives in each engine, so
+	// this is the one place both are held to it. Whitespace-only counts as
+	// blank, because both engines trim before they look.
+	_, _, err = st.AddComment(ctx, storage.AddCommentInput{IssueID: issue.ID, Body: " \t\n", CreatedBy: "ada"})
+	assertRefused(t, err, "AddComment(blank body)")
 
 	detail, err := st.GetIssueDetail(ctx, issue.ID)
 	if err != nil {

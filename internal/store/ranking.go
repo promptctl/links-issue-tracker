@@ -411,7 +411,7 @@ func (s *Store) mustRankable(ctx context.Context, id string) (model.Issue, error
 		return model.Issue{}, err
 	}
 	if _, gone := issue.Retention().(model.Deleted); gone {
-		return model.Issue{}, fmt.Errorf("cannot rank deleted issue %s; restore it first", id)
+		return model.Issue{}, model.ValidationError{Message: fmt.Sprintf("cannot rank deleted issue %s; restore it first", id)}
 	}
 	return issue, nil
 }
@@ -558,15 +558,15 @@ func (e rankEdge) placeBeyondTx(ctx context.Context, tx *sql.Tx, f storage.Frame
 
 func rankSetValidateIDs(ids []string) error {
 	if len(ids) < 2 {
-		return errors.New("rank set: need at least 2 IDs to establish order")
+		return model.ValidationError{Message: "rank set: need at least 2 IDs to establish order"}
 	}
 	seen := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
 		if id == "" {
-			return errors.New("rank set: empty ID in input")
+			return model.ValidationError{Message: "rank set: empty ID in input"}
 		}
 		if _, dup := seen[id]; dup {
-			return fmt.Errorf("rank set: duplicate ID %q in input", id)
+			return model.ValidationError{Message: fmt.Sprintf("rank set: duplicate ID %q in input", id)}
 		}
 		seen[id] = struct{}{}
 	}
@@ -604,7 +604,7 @@ func resolveRankSet(ctx context.Context, q rowQueryer, ids []string) ([]storage.
 	repToNamed := make(map[string]string, len(ids))
 	for i, id := range ids {
 		if prior, dup := repToNamed[reps[i]]; dup {
-			return nil, storage.TopLevel, fmt.Errorf("rank set: %s and %s both resolve to %s — their relative order is internal to %s and cannot be set against outside issues; run rank set among siblings instead", prior, id, reps[i], reps[i])
+			return nil, storage.TopLevel, model.ValidationError{Message: fmt.Sprintf("rank set: %s and %s both resolve to %s — their relative order is internal to %s and cannot be set against outside issues; run rank set among siblings instead", prior, id, reps[i], reps[i])}
 		}
 		repToNamed[reps[i]] = id
 		resolutions[i] = storage.RankSetResolution{NamedID: id, RankedID: reps[i]}
@@ -689,8 +689,8 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 		// their own. [LAW:no-silent-failure]
 		for i := 1; i < len(slots); i++ {
 			if slots[i].rank == slots[i-1].rank && ordered[i] < ordered[i-1] {
-				return storage.RankSetResult{}, fmt.Errorf("rank set: %s and %s share the key %q, which a listing breaks by id, so %s cannot be written above %s; separate them first with `lit rank %s --above %s`",
-					ordered[i-1], ordered[i], slots[i].rank, ordered[i-1], ordered[i], ordered[i-1], ordered[i])
+				return storage.RankSetResult{}, model.ValidationError{Message: fmt.Sprintf("rank set: %s and %s share the key %q, which a listing breaks by id, so %s cannot be written above %s; separate them first with `lit rank %s --above %s`",
+					ordered[i-1], ordered[i], slots[i].rank, ordered[i-1], ordered[i], ordered[i-1], ordered[i])}
 			}
 		}
 		// Each slot's key passes to its new occupant, which is how a permutation
@@ -822,19 +822,6 @@ func ancestorChain(ctx context.Context, q rowQueryer, id string) ([]string, erro
 	}
 }
 
-// frameContainmentError reports a rank request that names an issue together
-// with one of its own ancestors. No comparable frame holds both — the
-// contained issue's representative would be (or sit under) the container
-// itself — so no frame-coherent rank order between them exists.
-type frameContainmentError struct {
-	containerID string
-	containedID string
-}
-
-func (e *frameContainmentError) Error() string {
-	return fmt.Sprintf("%s is inside %s; no comparable frame contains both — rank it against a sibling instead", e.containedID, e.containerID)
-}
-
 // resolveFrameRepresentatives maps each ancestor chain (self first, root
 // last) onto its representative in the chains' comparable frame. Rank meaning
 // is frame-local: an issue's rank is only ever compared against its
@@ -868,7 +855,7 @@ func resolveFrameRepresentatives(chains [][]string) ([]string, storage.Frame, er
 				continue
 			}
 			if idx, ok := m[chain[0]]; ok && idx > 0 {
-				return nil, storage.TopLevel, &frameContainmentError{containerID: chain[0], containedID: chains[j][0]}
+				return nil, storage.TopLevel, storage.FrameContainmentError{ContainerID: chain[0], ContainedID: chains[j][0]}
 			}
 		}
 	}
@@ -910,12 +897,12 @@ func resolveFrameRepresentatives(chains [][]string) ([]string, storage.Frame, er
 // meaning and is rejected. [LAW:no-silent-failure]
 func resolveComparableFrame(issueChain, targetChain []string) (movedID, anchorID string, f storage.Frame, err error) {
 	reps, f, err := resolveFrameRepresentatives([][]string{issueChain, targetChain})
-	var containment *frameContainmentError
+	var containment storage.FrameContainmentError
 	if errors.As(err, &containment) {
-		if containment.containerID == issueChain[0] {
-			return "", "", storage.TopLevel, fmt.Errorf("cannot rank %s relative to %s: %s contains it; rank it against a sibling instead", issueChain[0], targetChain[0], issueChain[0])
+		if containment.ContainerID == issueChain[0] {
+			return "", "", storage.TopLevel, model.ValidationError{Message: fmt.Sprintf("cannot rank %s relative to %s: %s contains it; rank it against a sibling instead", issueChain[0], targetChain[0], issueChain[0])}
 		}
-		return "", "", storage.TopLevel, fmt.Errorf("cannot rank %s relative to %s: %s is inside %s; rank it against a sibling instead", issueChain[0], targetChain[0], issueChain[0], targetChain[0])
+		return "", "", storage.TopLevel, model.ValidationError{Message: fmt.Sprintf("cannot rank %s relative to %s: %s is inside %s; rank it against a sibling instead", issueChain[0], targetChain[0], issueChain[0], targetChain[0])}
 	}
 	if err != nil {
 		return "", "", storage.TopLevel, err
@@ -935,7 +922,7 @@ func resolveComparableFrame(issueChain, targetChain []string) (movedID, anchorID
 // frame for the same reason. [LAW:parse-dont-validate]
 func (s *Store) checkRankPair(ctx context.Context, issueID, targetID string) error {
 	if issueID == targetID {
-		return errors.New("cannot rank an issue relative to itself")
+		return model.ValidationError{Message: "cannot rank an issue relative to itself"}
 	}
 	if _, err := s.mustRankable(ctx, targetID); err != nil {
 		return err

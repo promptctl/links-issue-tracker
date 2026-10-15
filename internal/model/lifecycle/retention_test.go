@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -69,24 +70,27 @@ func TestRetainTransitionTable(t *testing.T) {
 		action  RetentionAction
 		want    Retention // nil means the transition is illegal
 		wantErr string
+		// holds: the rejection reports a state that already holds rather
+		// than refusing the move; the CLI exits 6 for one and 3 for the other.
+		holds bool
 	}{
-		{live, Archive{}, Archived{At: at}, ""},
-		{archived, Archive{}, nil, "issue is already archived"},
-		{deleted, Archive{}, nil, "cannot archive deleted issue"},
+		{live, Archive{}, Archived{At: at}, "", false},
+		{archived, Archive{}, nil, "issue is already archived", true},
+		{deleted, Archive{}, nil, "cannot archive deleted issue", false},
 
-		{live, Unarchive{}, nil, "issue is not archived"},
-		{archived, Unarchive{}, Live{}, ""},
-		{deleted, Unarchive{}, nil, "cannot unarchive deleted issue"},
+		{live, Unarchive{}, nil, "issue is not archived", true},
+		{archived, Unarchive{}, Live{}, "", false},
+		{deleted, Unarchive{}, nil, "cannot unarchive deleted issue", false},
 
-		{live, Delete{}, Deleted{At: at}, ""},
+		{live, Delete{}, Deleted{At: at}, "", false},
 		// The decided delete-on-archived behavior: Deleted carries no
 		// prior-archived bit, so the archive stamp is gone at the type level.
-		{archived, Delete{}, Deleted{At: at}, ""},
-		{deleted, Delete{}, nil, "issue is already deleted"},
+		{archived, Delete{}, Deleted{At: at}, "", false},
+		{deleted, Delete{}, nil, "issue is already deleted", true},
 
-		{live, Restore{}, nil, "issue is not deleted"},
-		{archived, Restore{}, nil, "issue is not deleted"},
-		{deleted, Restore{}, Live{}, ""},
+		{live, Restore{}, nil, "issue is not deleted", true},
+		{archived, Restore{}, nil, "issue is not deleted", true},
+		{deleted, Restore{}, Live{}, "", false},
 	}
 
 	covered := map[string]bool{}
@@ -99,6 +103,13 @@ func TestRetainTransitionTable(t *testing.T) {
 			}
 			if got != nil {
 				t.Fatalf("Retain(%#v, %T) returned %#v alongside an error", tc.cur, tc.action, got)
+			}
+			var rejection RetentionError
+			if !errors.As(err, &rejection) {
+				t.Fatalf("Retain(%#v, %T) error = %T, want RetentionError", tc.cur, tc.action, err)
+			}
+			if rejection.Satisfied() != tc.holds {
+				t.Fatalf("Retain(%#v, %T) Satisfied() = %v, want %v", tc.cur, tc.action, rejection.Satisfied(), tc.holds)
 			}
 			continue
 		}

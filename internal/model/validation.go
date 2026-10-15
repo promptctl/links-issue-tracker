@@ -28,3 +28,15 @@ type Refusal interface {
 	error
 	RefusesCommand()
 }
+
+// StateRequestError answers a command that asked for a state: Satisfied when
+// the state already holds, so the command ran correctly and had nothing to do,
+// and a refusal of the command as issued otherwise. The CLI maps the first to
+// exit 6 with advice that nothing needs doing, the second to exit 3; neither
+// ever to a retry. An epic's derived state and an issue's retention both
+// answer this way, and the one interface keeps their classification in one arm.
+// [LAW:one-type-per-behavior]
+type StateRequestError interface {
+	error
+	Satisfied() bool
+}

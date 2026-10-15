@@ -646,9 +646,9 @@ func TestResolveFrameRepresentatives(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			reps, frame, err := resolveFrameRepresentatives(tc.chains)
 			if tc.wantErr {
-				var containment *frameContainmentError
+				var containment storage.FrameContainmentError
 				if !errors.As(err, &containment) {
-					t.Fatalf("resolveFrameRepresentatives() error = %v, want frameContainmentError", err)
+					t.Fatalf("resolveFrameRepresentatives() error = %v, want storage.FrameContainmentError", err)
 				}
 				return
 			}
@@ -1550,6 +1550,12 @@ func TestRankSetOverIssuesSharingAKey(t *testing.T) {
 			if tc.wantError != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantError) || !strings.Contains(err.Error(), "lit rank "+high+" --above "+low) {
 					t.Fatalf("RankSet(%v) error = %v, want a refusal naming the tie and the move that separates it", named, err)
+				}
+				// The tie stays until a different command separates it, so the
+				// refusal is a deterministic one, never advice to retry.
+				var refused model.ValidationError
+				if !errors.As(err, &refused) {
+					t.Fatalf("RankSet(%v) error = %T, want model.ValidationError", named, err)
 				}
 				for i := range after {
 					if after[i].ID != before[i].ID || after[i].Rank != before[i].Rank {

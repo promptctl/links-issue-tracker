@@ -132,18 +132,18 @@ func commandErrorReason(err error) commandReason {
 	if errors.As(err, &templateShape) {
 		return reasonTemplateShapeRefused
 	}
-	// An action on an epic is refused because an epic's state is its children's
-	// to set. Both halves are terminal — no retry of the same command can move
-	// either — so neither may reach the default's "Retry the command", which
-	// would tell the agent closing a finished epic to loop on a condition that
-	// cannot change. They are separate reasons because the act each calls for
-	// is different: one asks for a state that already holds and wants nothing
-	// done at all, the other asks for something only the children can do, and
-	// a single reason could only name one of them.
-	// [LAW:one-type-per-behavior]
-	var containerAction model.ContainerActionError
-	if errors.As(err, &containerAction) {
-		if containerAction.Satisfied() {
+	// A command that asked for a state: an action on an epic, whose state is its
+	// children's to set, or a retention move. Both halves are terminal — no
+	// retry of the same command can move either — so neither may reach the
+	// default's "Retry the command", which would tell the agent closing a
+	// finished epic to loop on a condition that cannot change. They are
+	// separate reasons because the act each calls for is different: one asks
+	// for a state that already holds and wants nothing done at all, the other
+	// asks for something the command as issued cannot do, and a single reason
+	// could only name one of them. [LAW:one-type-per-behavior]
+	var stateRequest model.StateRequestError
+	if errors.As(err, &stateRequest) {
+		if stateRequest.Satisfied() {
 			return reasonStateAlreadyHolds
 		}
 		return reasonValidationRefused

@@ -312,6 +312,11 @@ Pure (no clock, no store); caller supplies `at`. Complete transition table:
 | `Archived` | err `issue is already archived` | → `Live{}` | → `Deleted{At: at}` | err `issue is not deleted` |
 | `Deleted` | err `cannot archive deleted issue` | err `cannot unarchive deleted issue` | err `issue is already deleted` | → `Live{}` |
 
+- Every err cell is a `RetentionError` (`retention.go`). The `cannot … deleted issue`
+  cells are refusals; every other err cell is `Satisfied()` — the state the action
+  asks for already holds. Pinned per cell by `TestRetainTransitionTable`
+  (`retention_test.go`).
+
 - Deleting an `Archived` issue **drops the archive stamp**, so a later restore
   always lands on `Live` (`retention.go`; pinned by
   `TestRetainArchiveDeleteRestoreLandsLive`, `retention_test.go`).

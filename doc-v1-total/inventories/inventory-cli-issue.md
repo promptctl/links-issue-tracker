@@ -184,7 +184,7 @@ Constants (`exit.go`):
 9. `UnknownCommandError` → 3 (`exit.go`)
 10. `RetiredCommandError` → 3 (`exit.go`)
 11. `model.Refusal` (every `model.ValidationError`, `model.FrozenIssueError`, and the upgrade/downgrade target refusals) → 3 (`exit.go`)
-12. `model.ContainerActionError` → 6 when `Satisfied()`, else 3 (`exit.go`)
+12. `model.StateRequestError` (`model.ContainerActionError`, `lifecycle.RetentionError`) → 6 when `Satisfied()`, else 3 (`exit.go`)
 13. `UnsupportedError` → 3 (`exit.go`)
 14. `takeoverUnconfirmedError` → 3 (`exit.go`)
 15. `purgeUnconfirmedError` → 3 (`exit.go`)
@@ -231,9 +231,10 @@ several of these types gets the reason of the earliest one:
 10. `UsageError` → `usage_error`
 11. any error implementing `model.Refusal` → `validation_refused`
 12. `templateShapeError` → `template_shape_refused`
-13. `model.ContainerActionError` → `state_already_holds` when its `Satisfied()`
-    is true (the epic has at least one child, its derived state already
-    equals the requested one, and no child remains unfinished), otherwise
+13. `model.StateRequestError` → `state_already_holds` when its `Satisfied()`
+    is true (for `ContainerActionError`: the epic has at least one child, its
+    derived state already equals the requested one, and no child remains
+    unfinished; for `RetentionError`: the `Retain` cell says so), otherwise
     `validation_refused`
 14. `Exhausted` → `scope_exhausted`
 15. `NoWork` → `no_ready_work`
@@ -1629,7 +1630,7 @@ usage string as a `UsageError` → exit 2 (`resolve`, `register.go`).
   `UsageError{"usage: lit comment add <id> --body <text>"}` → exit 2
   (`cli.go`).
 - Store refusal: a blank body (after trim) →
-  `errors.New("comment body is required")` → exit 1
+  `model.ValidationError{Message: "comment body is required"}` → exit 3
   (`internal/store/store.go`). A missing issue → exit 4
   (`store.go`).
 - The comment id is `"cmt-" + uuid` and `CreatedBy` empty is normalized to

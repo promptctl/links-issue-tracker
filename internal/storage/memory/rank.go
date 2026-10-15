@@ -211,7 +211,7 @@ func (e *Engine) mustRankable(id string) error {
 		return err
 	}
 	if !e.live(id) {
-		return fmt.Errorf("cannot rank deleted issue %s; restore it first", id)
+		return model.ValidationError{Message: fmt.Sprintf("cannot rank deleted issue %s; restore it first", id)}
 	}
 	return nil
 }
@@ -265,15 +265,15 @@ func (e *Engine) RankSet(ctx context.Context, ids []string) (storage.RankSetResu
 	defer e.mu.Unlock()
 
 	if len(ids) < 2 {
-		return storage.RankSetResult{}, errors.New("rank set: need at least 2 IDs to establish order")
+		return storage.RankSetResult{}, model.ValidationError{Message: "rank set: need at least 2 IDs to establish order"}
 	}
 	seen := map[string]struct{}{}
 	for _, id := range ids {
 		if id == "" {
-			return storage.RankSetResult{}, errors.New("rank set: empty ID in input")
+			return storage.RankSetResult{}, model.ValidationError{Message: "rank set: empty ID in input"}
 		}
 		if _, dup := seen[id]; dup {
-			return storage.RankSetResult{}, fmt.Errorf("rank set: duplicate ID %q in input", id)
+			return storage.RankSetResult{}, model.ValidationError{Message: fmt.Sprintf("rank set: duplicate ID %q in input", id)}
 		}
 		seen[id] = struct{}{}
 		// Unwrapped, unlike the two input-shape errors above: this refusal has a
@@ -305,7 +305,7 @@ func (e *Engine) RankSet(ctx context.Context, ids []string) (storage.RankSetResu
 	resolutions := make([]storage.RankSetResolution, len(ids))
 	for i, id := range ids {
 		if prior, dup := namedByRep[reps[i]]; dup {
-			return storage.RankSetResult{}, fmt.Errorf("rank set: %s and %s both resolve to %s — their relative order is internal to %s and cannot be set against outside issues; run rank set among siblings instead", prior, id, reps[i], reps[i])
+			return storage.RankSetResult{}, model.ValidationError{Message: fmt.Sprintf("rank set: %s and %s both resolve to %s — their relative order is internal to %s and cannot be set against outside issues; run rank set among siblings instead", prior, id, reps[i], reps[i])}
 		}
 		namedByRep[reps[i]] = id
 		resolutions[i] = storage.RankSetResolution{NamedID: id, RankedID: reps[i]}
@@ -361,7 +361,7 @@ func (e *Engine) insertAt(index int, id string) {
 // so cross-frame semantics cannot drift between above and below.
 func (e *Engine) resolveRankPair(issueID, targetID string) (storage.RankMove, error) {
 	if issueID == targetID {
-		return storage.RankMove{}, errors.New("cannot rank an issue relative to itself")
+		return storage.RankMove{}, model.ValidationError{Message: "cannot rank an issue relative to itself"}
 	}
 	if err := e.mustRankable(targetID); err != nil {
 		return storage.RankMove{}, err
@@ -378,12 +378,12 @@ func (e *Engine) resolveRankPair(issueID, targetID string) (storage.RankMove, er
 		return storage.RankMove{}, err
 	}
 	reps, err := frameRepresentatives([][]string{issueChain, targetChain})
-	var containment *frameContainmentError
+	var containment storage.FrameContainmentError
 	if errors.As(err, &containment) {
-		if containment.containerID == issueID {
-			return storage.RankMove{}, fmt.Errorf("cannot rank %s relative to %s: %s contains it; rank it against a sibling instead", issueID, targetID, issueID)
+		if containment.ContainerID == issueID {
+			return storage.RankMove{}, model.ValidationError{Message: fmt.Sprintf("cannot rank %s relative to %s: %s contains it; rank it against a sibling instead", issueID, targetID, issueID)}
 		}
-		return storage.RankMove{}, fmt.Errorf("cannot rank %s relative to %s: %s is inside %s; rank it against a sibling instead", issueID, targetID, issueID, targetID)
+		return storage.RankMove{}, model.ValidationError{Message: fmt.Sprintf("cannot rank %s relative to %s: %s is inside %s; rank it against a sibling instead", issueID, targetID, issueID, targetID)}
 	}
 	if err != nil {
 		return storage.RankMove{}, err
@@ -446,18 +446,6 @@ func (e *Engine) frames(rel model.Relation) bool {
 	return !gone
 }
 
-// frameContainmentError reports a rank request naming an issue together with
-// one of its own ancestors. No comparable frame holds both, so no
-// frame-coherent order between them exists.
-type frameContainmentError struct {
-	containerID string
-	containedID string
-}
-
-func (e *frameContainmentError) Error() string {
-	return fmt.Sprintf("%s is inside %s; no comparable frame contains both — rank it against a sibling instead", e.containedID, e.containerID)
-}
-
 // frameRepresentatives maps each ancestor chain onto its stand-in in the
 // chains' comparable frame.
 //
@@ -483,7 +471,7 @@ func frameRepresentatives(chains [][]string) ([]string, error) {
 				continue
 			}
 			if index, inside := depth[chain[0]]; inside && index > 0 {
-				return nil, &frameContainmentError{containerID: chain[0], containedID: chains[j][0]}
+				return nil, storage.FrameContainmentError{ContainerID: chain[0], ContainedID: chains[j][0]}
 			}
 		}
 	}
