@@ -241,12 +241,12 @@ func TestHelpFlagFollowsItsValue(t *testing.T) {
 	if _, err := run("ls", "--help=false"); !errors.As(err, &outside) {
 		t.Errorf("Run([ls --help=false]) error = %v, want the listing run: OutsideWorkspaceError", err)
 	}
-	// Its value being the request, a repeated help flag is refused like any
-	// other single-value flag, in either order. [LAW:no-silent-failure]
-	for _, args := range [][]string{{"ls", "--help", "--help=false"}, {"ls", "--help=false", "--help"}} {
-		var usage UsageError
-		if got, err := run(args...); !errors.As(err, &usage) || got != "" {
-			t.Errorf("Run(%v) = (err %v, stdout %q), want a UsageError refusing the repeat", args, err, got)
+	// `lit help` appends its own --help to the caller's tokens, so a leaf must
+	// answer a second help flag rather than refuse it.
+	page, _ := run("ls", "--help")
+	for _, flag := range []string{"--help", "-h"} {
+		if got, err := run("help", "ls", flag); err != nil || got != page {
+			t.Errorf("Run([help ls %s]) = (err %v, stdout %q), want the page `ls --help` answers", flag, err, got)
 		}
 	}
 }
