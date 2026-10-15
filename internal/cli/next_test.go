@@ -449,17 +449,24 @@ func TestRunNextServesTheReadyBlockerOfAnEpicOurEpicWaitsOn(t *testing.T) {
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Our epic", Topic: "next", IssueType: "epic", Priority: 1})
 	finished := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "First", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
 	gated := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Second", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
-	h.applyAction(finished.ID, model.Done{}, "finished")
 	blockingEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Blocking epic", Topic: "next", IssueType: "epic", Priority: 0})
 	under := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Its only ticket", Topic: "next", IssueType: "task", Priority: 0, ParentID: blockingEpic.ID})
 	upstreamEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Upstream epic", Topic: "next", IssueType: "epic", Priority: 0})
 	upstream := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Ready upstream", Topic: "next", IssueType: "task", Priority: 0, ParentID: upstreamEpic.ID})
 	h.addDependency(epic.ID, blockingEpic.ID)
 	h.addDependency(blockingEpic.ID, upstream.ID)
+	h.applyAction(finished.ID, model.Done{}, "finished")
 
-	served, ok := h.runNextOutcome().(ServedFromDependency)
-	if !ok || served.Row.ID != upstream.ID || served.Gates != gated.ID || !slices.Equal(served.Via, []hop{{Prerequisite: blockingEpic.ID, Through: under.ID}}) {
-		t.Fatalf("served %+v, want %s gating %s through %s under %s", served, upstream.ID, gated.ID, under.ID, blockingEpic.ID)
+	outcome := h.runNextOutcome()
+	served, ok := outcome.(ServedFromDependency)
+	if !ok {
+		t.Fatalf("routeNext = %#v (%T), want ServedFromDependency", outcome, outcome)
+	}
+	if served.Row.ID != upstream.ID || served.Blocker != upstream.ID || served.Gates != gated.ID || !slices.Equal(served.Via, []hop{{Prerequisite: blockingEpic.ID, Through: under.ID}}) {
+		t.Fatalf("served %s blocking %s, gating %s via %v; want %s blocking itself, gating %s through %s under %s", served.Row.ID, served.Blocker, served.Gates, served.Via, upstream.ID, gated.ID, under.ID, blockingEpic.ID)
+	}
+	if text, want := h.runNextText(), "(gates "+gated.ID+", which is on your path, through "+under.ID+" under "+blockingEpic.ID+")"; !strings.Contains(text, want) {
+		t.Fatalf("next output = %q, want it to contain %q", text, want)
 	}
 }
 
