@@ -99,7 +99,7 @@ filter, writes `"outcome": "error"` and none of these keys.
 | `next.picked` | The ticket id it printed, or `null` when it picked nothing. |
 | `next.dependency_path` | For `served_from_dependency`, how the pick clears the way: the ticket of yours it unblocks, each prerequisite between — an epic followed by the ticket under it the walk went through — then the dependency the pick is work toward, which is the pick itself or the epic it sits under. Empty for every other outcome. |
 | `next.exhausted_epics` | The epics whose open work it found unreachable. |
-| `next.blocked` | The dependencies blocking those epics. |
+| `next.blocked` | The prerequisites from outside those epics that block them, at any depth: dependencies, and the earlier ticket of a blocker's own lane. |
 | `next.held` | Tickets in those epics held by something about the ticket itself, such as a reserved label. |
 | `next.off_path` | Tickets a focus label kept out of the pick. |
 | `next.unreachable` | When it found nothing at all, every ticket it went past. |
@@ -120,7 +120,8 @@ none), and `reach` is what this checkout can do about it:
 | --- | --- |
 | `takeable` | This checkout can start it. |
 | `held_fresh` | Another checkout holds its lane right now. |
-| `not_ready` | Not held elsewhere, but blocked by a further dependency. |
+| `held_by_itself` | Not held elsewhere, but held by something about the ticket itself, such as a reserved label or a missing field. |
+| `not_ready` | Not held elsewhere, but blocked by further open tickets and nothing about itself. |
 | `awaiting_outside` | Labeled `external`: it waits on an event outside this repository. |
 | `out_of_view` | Nothing that would clear it was among the tickets this run read, for example because a filter hid them. |
 | `off_focus_path` | Outside the focus label's scope, so the pick never considered it. |

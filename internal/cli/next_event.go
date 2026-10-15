@@ -12,6 +12,7 @@ import (
 var reachKindNames = [reachKindCount]string{
 	reachTakeable:        "takeable",
 	reachHeldFresh:       "held_fresh",
+	reachHeldByItself:    "held_by_itself",
 	reachNotReady:        "not_ready",
 	reachAwaitingOutside: "awaiting_outside",
 	reachOutOfView:       "out_of_view",
